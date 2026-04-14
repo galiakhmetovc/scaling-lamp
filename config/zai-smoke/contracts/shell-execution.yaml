@@ -1,0 +1,7 @@
+kind: ShellExecutionContractConfig
+version: v1
+id: shell-execution-zai-smoke
+spec:
+  shell_command_policy_path: ../policies/shell-execution/command.yaml
+  shell_approval_policy_path: ../policies/shell-execution/approval.yaml
+  shell_runtime_policy_path: ../policies/shell-execution/runtime.yaml

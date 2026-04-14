@@ -1,0 +1,10 @@
+kind: FilesystemScopePolicyConfig
+version: v1
+id: filesystem-scope-zai-smoke
+spec:
+  enabled: true
+  strategy: workspace_only
+  params:
+    root_path: .
+    read_subpaths: []
+    write_subpaths: []

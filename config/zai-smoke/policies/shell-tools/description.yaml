@@ -1,0 +1,9 @@
+kind: ShellDescriptionPolicyConfig
+version: v1
+id: shell-description-zai-smoke
+spec:
+  enabled: true
+  strategy: static_builtin_descriptions
+  params:
+    include_examples: false
+    include_runtime_limits: true

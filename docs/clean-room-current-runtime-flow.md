@@ -114,6 +114,10 @@ Current resolved areas:
 - `PromptAssetsContract`
 - `PromptAssemblyContract`
 - `ToolContract`
+- `FilesystemToolContract`
+- `FilesystemExecutionContract`
+- `ShellToolContract`
+- `ShellExecutionContract`
 - `PlanToolContract`
 - `ToolExecutionContract`
 - `ProviderTraceContract`
@@ -146,6 +150,8 @@ Current components built:
 - `PromptAssembly`
 - `PromptAssets`
 - `PlanTools`
+- `FilesystemTools`
+- `ShellTools`
 - `ToolCatalog`
 - `ToolExecution`
 - `Transport`
@@ -193,6 +199,8 @@ Current provider pipeline now:
 - build prompt-assembly messages from file-backed system prompt and projection-backed session head
 - resolve selected prompt assets into prepend/append message buckets
 - build built-in plan-tool definitions from `PlanToolContract`
+- build built-in filesystem tool definitions from `FilesystemToolContract`
+- build built-in shell tool definitions from `ShellToolContract`
 - build visible tool surface from `ToolContract`
 - serialize tools for provider payloads
 - build request-shape JSON body
@@ -202,6 +210,8 @@ Current provider pipeline now:
 - parse provider-emitted tool calls when present in non-streaming responses
 - run parsed tool calls through `ToolExecutionContract`
 - execute allowed built-in plan tool calls through the runtime plan-domain service
+- execute allowed filesystem tool calls through the filesystem executor
+- execute allowed shell tool calls through the shell executor
 - append resulting tool-result messages and repeat provider execution until final assistant output
 - extract normalized usage fields
 - feed the combined result into the runtime smoke path when `cmd/agent --smoke` is used
@@ -209,8 +219,7 @@ Current provider pipeline now:
 Current limitation:
 - parser still assumes OpenAI-compatible top-level wire shapes first
 - stream semantics now emit typed `text` and `reasoning` events
-- only the internal plan-tools domain has a real execution backend today
-- non-plan tool backends are still not implemented
+- shell runtime limits are bounded in-process, not enforced by a hard OS sandbox
 
 ## Provider Trace Capture
 

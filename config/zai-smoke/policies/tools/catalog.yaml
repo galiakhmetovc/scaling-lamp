@@ -11,5 +11,12 @@ spec:
       - set_task_status
       - add_task_note
       - edit_task
+      - fs_list
+      - fs_read_text
+      - fs_write_text
+      - fs_patch_text
+      - fs_mkdir
+      - fs_move
+      - shell_exec
     allow_empty: false
     dedupe: true

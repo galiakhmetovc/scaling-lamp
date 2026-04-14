@@ -710,6 +710,24 @@ func TestRepositoryZaiSmokeConfigLoadsAndResolvesContracts(t *testing.T) {
 	if resolved.Chat.Output.Strategy != "streaming_text" {
 		t.Fatalf("chat output strategy = %q, want %q", resolved.Chat.Output.Strategy, "streaming_text")
 	}
+	if resolved.FilesystemTools.Catalog.Params.ToolIDs[0] != "fs_list" {
+		t.Fatalf("first filesystem tool = %q, want %q", resolved.FilesystemTools.Catalog.Params.ToolIDs[0], "fs_list")
+	}
+	if resolved.FilesystemExecution.Scope.Strategy != "workspace_only" {
+		t.Fatalf("filesystem scope strategy = %q, want %q", resolved.FilesystemExecution.Scope.Strategy, "workspace_only")
+	}
+	if resolved.FilesystemExecution.IO.Params.MaxReadBytes != 131072 {
+		t.Fatalf("filesystem max_read_bytes = %d, want %d", resolved.FilesystemExecution.IO.Params.MaxReadBytes, 131072)
+	}
+	if resolved.ShellTools.Catalog.Params.ToolIDs[0] != "shell_exec" {
+		t.Fatalf("first shell tool = %q, want %q", resolved.ShellTools.Catalog.Params.ToolIDs[0], "shell_exec")
+	}
+	if resolved.ShellExecution.Command.Strategy != "static_allowlist" {
+		t.Fatalf("shell command strategy = %q, want %q", resolved.ShellExecution.Command.Strategy, "static_allowlist")
+	}
+	if resolved.ShellExecution.Runtime.Params.Timeout != "30s" {
+		t.Fatalf("shell runtime timeout = %q, want %q", resolved.ShellExecution.Runtime.Params.Timeout, "30s")
+	}
 }
 
 func mustWriteMinimalContracts(t *testing.T, dir string) {

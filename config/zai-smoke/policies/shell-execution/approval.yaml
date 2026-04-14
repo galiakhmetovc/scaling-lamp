@@ -1,0 +1,9 @@
+kind: ShellApprovalPolicyConfig
+version: v1
+id: shell-approval-zai-smoke
+spec:
+  enabled: true
+  strategy: always_allow
+  params:
+    patterns: []
+    approval_message_template: ""

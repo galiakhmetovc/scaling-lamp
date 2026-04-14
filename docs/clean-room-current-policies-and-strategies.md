@@ -39,6 +39,10 @@ Current resolved contracts are:
 - `PromptAssetsContract`
 - `PromptAssemblyContract`
 - `ToolContract`
+- `FilesystemToolContract`
+- `FilesystemExecutionContract`
+- `ShellToolContract`
+- `ShellExecutionContract`
 - `ToolExecutionContract`
 - `ProviderTraceContract`
 - `ChatContract`
@@ -57,6 +61,14 @@ What each contract is responsible for:
   - how top-of-prompt context is assembled before provider request-shape serialization
 - `ToolContract`
   - which tools are visible to the model and how they are serialized into provider payloads
+- `FilesystemToolContract`
+  - which filesystem tools exist and how they are described to the model
+- `FilesystemExecutionContract`
+  - filesystem path scope, mutation safety, and text IO limits
+- `ShellToolContract`
+  - which shell tools exist and how they are described to the model
+- `ShellExecutionContract`
+  - shell command allowlists and runtime limits
 - `ToolExecutionContract`
   - whether provider-emitted tool calls are allowed, require approval, or are denied
 - `ProviderTraceContract`
@@ -814,7 +826,42 @@ This is what the shipped `config/zai-smoke` configuration currently selects.
 - `PromptAssetPolicy.inline_assets`
   - `assets = []`
 
-### 10.5 Chat
+### 9.5 Filesystem
+
+- `FilesystemCatalogPolicy.static_allowlist`
+  - `tool_ids = [fs_list, fs_read_text, fs_write_text, fs_patch_text, fs_mkdir, fs_move]`
+- `FilesystemDescriptionPolicy.static_builtin_descriptions`
+  - `include_examples = false`
+  - `include_scope_hint = true`
+- `FilesystemScopePolicy.workspace_only`
+  - `root_path = .`
+- `FilesystemMutationPolicy.allow_writes`
+  - `allow_write = true`
+  - `allow_move = true`
+  - `allow_mkdir = true`
+- `FilesystemIOPolicy.bounded_text_io`
+  - `max_read_bytes = 131072`
+  - `max_write_bytes = 131072`
+  - `encoding = utf-8`
+
+### 9.6 Shell
+
+- `ShellCatalogPolicy.static_allowlist`
+  - `tool_ids = [shell_exec]`
+- `ShellDescriptionPolicy.static_builtin_descriptions`
+  - `include_examples = false`
+  - `include_runtime_limits = true`
+- `ShellCommandPolicy.static_allowlist`
+  - `allowed_commands = [pwd, ls, cat, rg, go, git]`
+  - `deny_patterns = [" rm ", " curl ", " wget "]`
+- `ShellApprovalPolicy.always_allow`
+- `ShellRuntimePolicy.workspace_write`
+  - `cwd = .`
+  - `timeout = 30s`
+  - `max_output_bytes = 65536`
+  - `allow_network = false`
+
+### 9.7 Chat
 
 - `ChatInputPolicy.multiline_buffer`
   - `primary_prompt = "> "`
@@ -833,7 +880,7 @@ This is what the shipped `config/zai-smoke` configuration currently selects.
 - `ChatResumePolicy.explicit_resume_only`
   - `require_explicit_id = true`
 
-### 10.6 ProviderTrace
+### 9.8 ProviderTrace
 
 - `ProviderTracePolicy.inline_request`
   - `include_raw_body = true`

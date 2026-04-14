@@ -1,0 +1,6 @@
+kind: FilesystemToolContractConfig
+version: v1
+id: filesystem-tools-zai-smoke
+spec:
+  filesystem_catalog_policy_path: ../policies/filesystem-tools/catalog.yaml
+  filesystem_description_policy_path: ../policies/filesystem-tools/description.yaml

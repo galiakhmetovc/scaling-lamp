@@ -27,6 +27,10 @@ spec:
     prompt_assets: ./contracts/prompt-assets.yaml
     prompt_assembly: ./contracts/prompt-assembly.yaml
     tools: ./contracts/tools.yaml
+    filesystem_tools: ./contracts/filesystem-tools.yaml
+    filesystem_execution: ./contracts/filesystem-execution.yaml
+    shell_tools: ./contracts/shell-tools.yaml
+    shell_execution: ./contracts/shell-execution.yaml
     plan_tools: ./contracts/plan-tools.yaml
     tool_execution: ./contracts/tool-execution.yaml
     provider_trace: ./contracts/provider-trace.yaml

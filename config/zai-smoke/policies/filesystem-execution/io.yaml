@@ -1,0 +1,10 @@
+kind: FilesystemIOPolicyConfig
+version: v1
+id: filesystem-io-zai-smoke
+spec:
+  enabled: true
+  strategy: bounded_text_io
+  params:
+    max_read_bytes: 131072
+    max_write_bytes: 131072
+    encoding: utf-8

@@ -1,0 +1,11 @@
+kind: ShellRuntimePolicyConfig
+version: v1
+id: shell-runtime-zai-smoke
+spec:
+  enabled: true
+  strategy: workspace_write
+  params:
+    cwd: .
+    timeout: 30s
+    max_output_bytes: 65536
+    allow_network: false

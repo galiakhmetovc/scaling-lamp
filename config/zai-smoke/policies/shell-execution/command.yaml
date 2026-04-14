@@ -1,0 +1,19 @@
+kind: ShellCommandPolicyConfig
+version: v1
+id: shell-command-zai-smoke
+spec:
+  enabled: true
+  strategy: static_allowlist
+  params:
+    allowed_commands:
+      - pwd
+      - ls
+      - cat
+      - rg
+      - go
+      - git
+    allowed_prefixes: []
+    deny_patterns:
+      - " rm "
+      - " curl "
+      - " wget "

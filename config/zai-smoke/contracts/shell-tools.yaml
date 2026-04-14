@@ -1,0 +1,6 @@
+kind: ShellToolContractConfig
+version: v1
+id: shell-tools-zai-smoke
+spec:
+  shell_catalog_policy_path: ../policies/shell-tools/catalog.yaml
+  shell_description_policy_path: ../policies/shell-tools/description.yaml

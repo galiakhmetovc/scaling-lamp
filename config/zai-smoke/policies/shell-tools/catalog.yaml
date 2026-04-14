@@ -1,0 +1,10 @@
+kind: ShellCatalogPolicyConfig
+version: v1
+id: shell-catalog-zai-smoke
+spec:
+  enabled: true
+  strategy: static_allowlist
+  params:
+    tool_ids:
+      - shell_exec
+    allow_empty: false

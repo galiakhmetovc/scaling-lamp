@@ -1,0 +1,7 @@
+kind: FilesystemExecutionContractConfig
+version: v1
+id: filesystem-execution-zai-smoke
+spec:
+  filesystem_scope_policy_path: ../policies/filesystem-execution/scope.yaml
+  filesystem_mutation_policy_path: ../policies/filesystem-execution/mutation.yaml
+  filesystem_io_policy_path: ../policies/filesystem-execution/io.yaml

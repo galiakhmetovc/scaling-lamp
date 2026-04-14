@@ -1,0 +1,9 @@
+kind: FilesystemDescriptionPolicyConfig
+version: v1
+id: filesystem-description-zai-smoke
+spec:
+  enabled: true
+  strategy: static_builtin_descriptions
+  params:
+    include_examples: false
+    include_scope_hint: true

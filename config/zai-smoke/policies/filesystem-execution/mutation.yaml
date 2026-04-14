@@ -1,0 +1,10 @@
+kind: FilesystemMutationPolicyConfig
+version: v1
+id: filesystem-mutation-zai-smoke
+spec:
+  enabled: true
+  strategy: allow_writes
+  params:
+    allow_write: true
+    allow_move: true
+    allow_mkdir: true

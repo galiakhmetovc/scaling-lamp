@@ -197,6 +197,10 @@ spec:
     memory: ...
     prompt_assembly: ...
     tools: ...
+    filesystem_tools: ...
+    filesystem_execution: ...
+    shell_tools: ...
+    shell_execution: ...
     tool_execution: ...
     prompt_assets: ...
     provider_trace: ...
@@ -303,6 +307,10 @@ Current resolved contract families:
 - `MemoryContract`
 - `PromptAssemblyContract`
 - `ToolContract`
+- `FilesystemToolContract`
+- `FilesystemExecutionContract`
+- `ShellToolContract`
+- `ShellExecutionContract`
 - `ToolExecutionContract`
 - `PromptAssetsContract`
 - `ProviderTraceContract`
@@ -382,6 +390,9 @@ Current runtime `Agent` contains:
 - `Contracts`
 - `PromptAssembly`
 - `PromptAssets`
+- `PlanTools`
+- `FilesystemTools`
+- `ShellTools`
 - `ToolCatalog`
 - `ToolExecution`
 - `Transport`
@@ -445,12 +456,16 @@ Current execution chain:
 ClientInput
   -> PromptAssemblyExecutor.Build(...)
   -> PromptAssetExecutor.Build(...)
+  -> PlanToolExecutor.Build(...)
+  -> FilesystemDefinitionExecutor.Build(...)
+  -> ShellDefinitionExecutor.Build(...)
   -> ToolCatalogExecutor.Build/Serialize(...)
   -> RequestShapeExecutor.Build(...)
   -> optional provider request capture
   -> TransportExecutor.Execute(...)
   -> parseProviderResponse(...)
   -> ToolExecutionGate.Evaluate(...)
+  -> domain tool executors when tool calls are allowed
   -> ClientResult
 ```
 
@@ -458,12 +473,16 @@ ClientInput
 flowchart LR
     A[ClientInput] --> G[PromptAssemblyExecutor]
     G --> B[PromptAssetExecutor]
-    B --> H[ToolCatalogExecutor]
+    B --> J[PlanToolExecutor]
+    J --> K[FilesystemDefinitionExecutor]
+    K --> L[ShellDefinitionExecutor]
+    L --> H[ToolCatalogExecutor]
     H --> C[RequestShapeExecutor]
     C --> D[TransportExecutor]
     D --> E[Provider response parser]
     E --> I[ToolExecutionGate]
-    I --> F[ClientResult]
+    I --> M[Domain Tool Executors]
+    M --> F[ClientResult]
 ```
 
 ### 10.1 Prompt Assembly Executor
