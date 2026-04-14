@@ -74,9 +74,16 @@ This registry is what allows config graph walking to find referenced policy modu
 
 Current role:
 - load contract files from the root config
+- iterate configured contract module paths independently of root config map key names
+- dispatch contract decoding by loaded `kind`
 - load referenced policy files relative to the referencing contract file
 - decode them into typed runtime contracts
 - validate policy strategy names before contracts reach executors
+
+Current resolver shape:
+- generic contract iteration
+- built-in kind-based dispatch
+- generic typed policy loading for referenced policy modules
 
 ### `internal/policies/registry.go`
 
