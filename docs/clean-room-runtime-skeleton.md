@@ -149,6 +149,16 @@ Current limitation:
 - there is still no policy merge layer (`global < session < run`)
 - execution-time application currently covers transport and request-shape only
 
+### `internal/policies/registry.go`
+
+First policy and strategy registry layer.
+
+Current responsibility:
+- define policy families
+- register supported policy kinds
+- register allowed strategies per policy kind
+- validate policy strategies during contract resolution
+
 ### `internal/provider/transport_executor.go`
 
 First provider-facing transport executor.
@@ -184,12 +194,12 @@ These are known temporary shortcuts and should be removed in the next slices.
 4. Contract resolution is still narrow and only covers the first transport/request-shape/memory path.
 5. Provider execution is still split into transport and request-shape pieces with no combined provider client yet.
 6. There is no persistent event store or persistent projections yet.
-7. There is no full policy and strategy registry system yet.
+7. There is only a first built-in policy/strategy registry layer; config-driven registry composition and strategy-driven decoding still do not exist yet.
 
 ## Next Required Slices
 
 1. combined provider client over request-shape and transport executors
-2. persistent event log
-3. persistent projections
-4. policy and strategy registries
+2. config-driven builder composition
+3. persistent event log
+4. persistent projections
 5. prompt asset policy domain

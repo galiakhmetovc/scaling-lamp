@@ -11,6 +11,7 @@ It does not describe the target architecture beyond what already exists in code.
 2. `runtime.BuildAgent` loads the root config.
 3. `config.LoadModuleGraph` walks the config graph using built-in registry metadata.
 4. `runtime.ResolveContracts` decodes typed runtime contracts from contract and policy modules.
+   Policy strategies are validated through the built-in policy registry before contracts are returned.
 5. `BuildAgent` assembles the current runtime instance:
    - in-memory event log
    - built-in projections
@@ -76,6 +77,14 @@ Current role:
 - load contract files from the root config
 - load referenced policy files relative to the referencing contract file
 - decode them into typed runtime contracts
+- validate policy strategy names before contracts reach executors
+
+### `internal/policies/registry.go`
+
+Current role:
+- define the first built-in policy families
+- register allowed strategy names per policy kind
+- validate strategy names during contract resolution
 
 Current resolved areas:
 - `TransportContract`
@@ -234,6 +243,7 @@ These are current known gaps, not hidden assumptions:
 
 - [clean-room-runtime-skeleton.md](/home/admin/AI-AGENT/data/projects/teamD/.worktrees/rewrite-clean-room-root/docs/clean-room-runtime-skeleton.md)
 - [clean-room-contract-resolver.md](/home/admin/AI-AGENT/data/projects/teamD/.worktrees/rewrite-clean-room-root/docs/clean-room-contract-resolver.md)
+- [clean-room-policy-strategy-registries.md](/home/admin/AI-AGENT/data/projects/teamD/.worktrees/rewrite-clean-room-root/docs/clean-room-policy-strategy-registries.md)
 - [clean-room-transport-executor.md](/home/admin/AI-AGENT/data/projects/teamD/.worktrees/rewrite-clean-room-root/docs/clean-room-transport-executor.md)
 - [clean-room-request-shape-executor.md](/home/admin/AI-AGENT/data/projects/teamD/.worktrees/rewrite-clean-room-root/docs/clean-room-request-shape-executor.md)
 - [clean-room-implemented-strategies.md](/home/admin/AI-AGENT/data/projects/teamD/.worktrees/rewrite-clean-room-root/docs/clean-room-implemented-strategies.md)

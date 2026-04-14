@@ -6,9 +6,11 @@ import (
 
 	"teamd/internal/config"
 	"teamd/internal/contracts"
+	"teamd/internal/policies"
 )
 
 type transportContractConfig struct {
+	Kind string `yaml:"kind"`
 	ID   string `yaml:"id"`
 	Spec struct {
 		EndpointPolicyPath string `yaml:"endpoint_policy_path"`
@@ -19,6 +21,7 @@ type transportContractConfig struct {
 }
 
 type endpointPolicyConfig struct {
+	Kind string `yaml:"kind"`
 	ID   string `yaml:"id"`
 	Spec struct {
 		Enabled  bool                     `yaml:"enabled"`
@@ -28,6 +31,7 @@ type endpointPolicyConfig struct {
 }
 
 type memoryContractConfig struct {
+	Kind string `yaml:"kind"`
 	ID   string `yaml:"id"`
 	Spec struct {
 		OffloadPolicyPath string `yaml:"offload_policy_path"`
@@ -35,6 +39,7 @@ type memoryContractConfig struct {
 }
 
 type requestShapeContractConfig struct {
+	Kind string `yaml:"kind"`
 	ID   string `yaml:"id"`
 	Spec struct {
 		ModelPolicyPath          string `yaml:"model_policy_path"`
@@ -47,6 +52,7 @@ type requestShapeContractConfig struct {
 }
 
 type authPolicyConfig struct {
+	Kind string `yaml:"kind"`
 	ID   string `yaml:"id"`
 	Spec struct {
 		Enabled  bool                 `yaml:"enabled"`
@@ -56,6 +62,7 @@ type authPolicyConfig struct {
 }
 
 type retryPolicyConfig struct {
+	Kind string `yaml:"kind"`
 	ID   string `yaml:"id"`
 	Spec struct {
 		Enabled  bool                  `yaml:"enabled"`
@@ -65,6 +72,7 @@ type retryPolicyConfig struct {
 }
 
 type timeoutPolicyConfig struct {
+	Kind string `yaml:"kind"`
 	ID   string `yaml:"id"`
 	Spec struct {
 		Enabled  bool                    `yaml:"enabled"`
@@ -74,6 +82,7 @@ type timeoutPolicyConfig struct {
 }
 
 type offloadPolicyConfig struct {
+	Kind string `yaml:"kind"`
 	ID   string `yaml:"id"`
 	Spec struct {
 		Enabled  bool                    `yaml:"enabled"`
@@ -83,6 +92,7 @@ type offloadPolicyConfig struct {
 }
 
 type modelPolicyConfig struct {
+	Kind string `yaml:"kind"`
 	ID   string `yaml:"id"`
 	Spec struct {
 		Enabled  bool                  `yaml:"enabled"`
@@ -92,6 +102,7 @@ type modelPolicyConfig struct {
 }
 
 type messagePolicyConfig struct {
+	Kind string `yaml:"kind"`
 	ID   string `yaml:"id"`
 	Spec struct {
 		Enabled  bool   `yaml:"enabled"`
@@ -100,6 +111,7 @@ type messagePolicyConfig struct {
 }
 
 type toolShapePolicyConfig struct {
+	Kind string `yaml:"kind"`
 	ID   string `yaml:"id"`
 	Spec struct {
 		Enabled  bool   `yaml:"enabled"`
@@ -108,6 +120,7 @@ type toolShapePolicyConfig struct {
 }
 
 type responseFormatPolicyConfig struct {
+	Kind string `yaml:"kind"`
 	ID   string `yaml:"id"`
 	Spec struct {
 		Enabled  bool                           `yaml:"enabled"`
@@ -117,6 +130,7 @@ type responseFormatPolicyConfig struct {
 }
 
 type streamingPolicyConfig struct {
+	Kind string `yaml:"kind"`
 	ID   string `yaml:"id"`
 	Spec struct {
 		Enabled  bool                      `yaml:"enabled"`
@@ -126,6 +140,7 @@ type streamingPolicyConfig struct {
 }
 
 type samplingPolicyConfig struct {
+	Kind string `yaml:"kind"`
 	ID   string `yaml:"id"`
 	Spec struct {
 		Enabled  bool                     `yaml:"enabled"`
@@ -135,17 +150,21 @@ type samplingPolicyConfig struct {
 }
 
 func ResolveContracts(cfg config.AgentConfig) (contracts.ResolvedContracts, error) {
+	return ResolveContractsWithRegistry(cfg, policies.NewBuiltInRegistry())
+}
+
+func ResolveContractsWithRegistry(cfg config.AgentConfig, policyRegistry *policies.Registry) (contracts.ResolvedContracts, error) {
 	var out contracts.ResolvedContracts
 
 	if transportPath := cfg.Spec.Contracts["transport"]; transportPath != "" {
-		transport, err := resolveTransportContract(transportPath)
+		transport, err := resolveTransportContract(transportPath, policyRegistry)
 		if err != nil {
 			return contracts.ResolvedContracts{}, err
 		}
 		out.ProviderRequest.Transport = transport
 	}
 	if requestShapePath := cfg.Spec.Contracts["request_shape"]; requestShapePath != "" {
-		requestShape, err := resolveRequestShapeContract(requestShapePath)
+		requestShape, err := resolveRequestShapeContract(requestShapePath, policyRegistry)
 		if err != nil {
 			return contracts.ResolvedContracts{}, err
 		}
@@ -153,7 +172,7 @@ func ResolveContracts(cfg config.AgentConfig) (contracts.ResolvedContracts, erro
 	}
 
 	if memoryPath := cfg.Spec.Contracts["memory"]; memoryPath != "" {
-		memory, err := resolveMemoryContract(memoryPath)
+		memory, err := resolveMemoryContract(memoryPath, policyRegistry)
 		if err != nil {
 			return contracts.ResolvedContracts{}, err
 		}
@@ -163,7 +182,7 @@ func ResolveContracts(cfg config.AgentConfig) (contracts.ResolvedContracts, erro
 	return out, nil
 }
 
-func resolveRequestShapeContract(path string) (contracts.RequestShapeContract, error) {
+func resolveRequestShapeContract(path string, policyRegistry *policies.Registry) (contracts.RequestShapeContract, error) {
 	var contract requestShapeContractConfig
 	if err := config.LoadModule(path, &contract); err != nil {
 		return contracts.RequestShapeContract{}, fmt.Errorf("load request-shape contract: %w", err)
@@ -191,25 +210,43 @@ func resolveRequestShapeContract(path string) (contracts.RequestShapeContract, e
 	if err := config.LoadModule(resolveModulePath(path, contract.Spec.ModelPolicyPath), &modelPolicy); err != nil {
 		return contracts.RequestShapeContract{}, fmt.Errorf("load model policy: %w", err)
 	}
+	if err := validatePolicyConfig(policyRegistry, modelPolicy.Kind, modelPolicy.Spec.Strategy); err != nil {
+		return contracts.RequestShapeContract{}, err
+	}
 	var messagePolicy messagePolicyConfig
 	if err := config.LoadModule(resolveModulePath(path, contract.Spec.MessagePolicyPath), &messagePolicy); err != nil {
 		return contracts.RequestShapeContract{}, fmt.Errorf("load message policy: %w", err)
+	}
+	if err := validatePolicyConfig(policyRegistry, messagePolicy.Kind, messagePolicy.Spec.Strategy); err != nil {
+		return contracts.RequestShapeContract{}, err
 	}
 	var toolPolicy toolShapePolicyConfig
 	if err := config.LoadModule(resolveModulePath(path, contract.Spec.ToolPolicyPath), &toolPolicy); err != nil {
 		return contracts.RequestShapeContract{}, fmt.Errorf("load tool policy: %w", err)
 	}
+	if err := validatePolicyConfig(policyRegistry, toolPolicy.Kind, toolPolicy.Spec.Strategy); err != nil {
+		return contracts.RequestShapeContract{}, err
+	}
 	var responseFormatPolicy responseFormatPolicyConfig
 	if err := config.LoadModule(resolveModulePath(path, contract.Spec.ResponseFormatPolicyPath), &responseFormatPolicy); err != nil {
 		return contracts.RequestShapeContract{}, fmt.Errorf("load response-format policy: %w", err)
+	}
+	if err := validatePolicyConfig(policyRegistry, responseFormatPolicy.Kind, responseFormatPolicy.Spec.Strategy); err != nil {
+		return contracts.RequestShapeContract{}, err
 	}
 	var streamingPolicy streamingPolicyConfig
 	if err := config.LoadModule(resolveModulePath(path, contract.Spec.StreamingPolicyPath), &streamingPolicy); err != nil {
 		return contracts.RequestShapeContract{}, fmt.Errorf("load streaming policy: %w", err)
 	}
+	if err := validatePolicyConfig(policyRegistry, streamingPolicy.Kind, streamingPolicy.Spec.Strategy); err != nil {
+		return contracts.RequestShapeContract{}, err
+	}
 	var samplingPolicy samplingPolicyConfig
 	if err := config.LoadModule(resolveModulePath(path, contract.Spec.SamplingPolicyPath), &samplingPolicy); err != nil {
 		return contracts.RequestShapeContract{}, fmt.Errorf("load sampling policy: %w", err)
+	}
+	if err := validatePolicyConfig(policyRegistry, samplingPolicy.Kind, samplingPolicy.Spec.Strategy); err != nil {
+		return contracts.RequestShapeContract{}, err
 	}
 
 	return contracts.RequestShapeContract{
@@ -251,7 +288,7 @@ func resolveRequestShapeContract(path string) (contracts.RequestShapeContract, e
 	}, nil
 }
 
-func resolveTransportContract(path string) (contracts.TransportContract, error) {
+func resolveTransportContract(path string, policyRegistry *policies.Registry) (contracts.TransportContract, error) {
 	var contract transportContractConfig
 	if err := config.LoadModule(path, &contract); err != nil {
 		return contracts.TransportContract{}, fmt.Errorf("load transport contract: %w", err)
@@ -274,20 +311,32 @@ func resolveTransportContract(path string) (contracts.TransportContract, error) 
 	if err := config.LoadModule(policyPath, &policy); err != nil {
 		return contracts.TransportContract{}, fmt.Errorf("load endpoint policy: %w", err)
 	}
+	if err := validatePolicyConfig(policyRegistry, policy.Kind, policy.Spec.Strategy); err != nil {
+		return contracts.TransportContract{}, err
+	}
 	authPath := resolveModulePath(path, contract.Spec.AuthPolicyPath)
 	var authPolicy authPolicyConfig
 	if err := config.LoadModule(authPath, &authPolicy); err != nil {
 		return contracts.TransportContract{}, fmt.Errorf("load auth policy: %w", err)
+	}
+	if err := validatePolicyConfig(policyRegistry, authPolicy.Kind, authPolicy.Spec.Strategy); err != nil {
+		return contracts.TransportContract{}, err
 	}
 	retryPath := resolveModulePath(path, contract.Spec.RetryPolicyPath)
 	var retryPolicy retryPolicyConfig
 	if err := config.LoadModule(retryPath, &retryPolicy); err != nil {
 		return contracts.TransportContract{}, fmt.Errorf("load retry policy: %w", err)
 	}
+	if err := validatePolicyConfig(policyRegistry, retryPolicy.Kind, retryPolicy.Spec.Strategy); err != nil {
+		return contracts.TransportContract{}, err
+	}
 	timeoutPath := resolveModulePath(path, contract.Spec.TimeoutPolicyPath)
 	var timeoutPolicy timeoutPolicyConfig
 	if err := config.LoadModule(timeoutPath, &timeoutPolicy); err != nil {
 		return contracts.TransportContract{}, fmt.Errorf("load timeout policy: %w", err)
+	}
+	if err := validatePolicyConfig(policyRegistry, timeoutPolicy.Kind, timeoutPolicy.Spec.Strategy); err != nil {
+		return contracts.TransportContract{}, err
 	}
 
 	return contracts.TransportContract{
@@ -319,7 +368,7 @@ func resolveTransportContract(path string) (contracts.TransportContract, error) 
 	}, nil
 }
 
-func resolveMemoryContract(path string) (contracts.MemoryContract, error) {
+func resolveMemoryContract(path string, policyRegistry *policies.Registry) (contracts.MemoryContract, error) {
 	var contract memoryContractConfig
 	if err := config.LoadModule(path, &contract); err != nil {
 		return contracts.MemoryContract{}, fmt.Errorf("load memory contract: %w", err)
@@ -332,6 +381,9 @@ func resolveMemoryContract(path string) (contracts.MemoryContract, error) {
 	var policy offloadPolicyConfig
 	if err := config.LoadModule(policyPath, &policy); err != nil {
 		return contracts.MemoryContract{}, fmt.Errorf("load offload policy: %w", err)
+	}
+	if err := validatePolicyConfig(policyRegistry, policy.Kind, policy.Spec.Strategy); err != nil {
+		return contracts.MemoryContract{}, err
 	}
 
 	return contracts.MemoryContract{
@@ -350,4 +402,11 @@ func resolveModulePath(modulePath, refPath string) string {
 		return filepath.Clean(refPath)
 	}
 	return filepath.Clean(filepath.Join(filepath.Dir(modulePath), refPath))
+}
+
+func validatePolicyConfig(policyRegistry *policies.Registry, kind, strategy string) error {
+	if err := policyRegistry.ValidateStrategy(kind, strategy); err != nil {
+		return fmt.Errorf("validate policy %q strategy %q: %w", kind, strategy, err)
+	}
+	return nil
 }

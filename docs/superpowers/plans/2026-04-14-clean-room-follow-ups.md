@@ -16,10 +16,6 @@
 
 - `teamD-5j6`
 
-## Policy And Strategy Registries
-
-- `teamD-7n5`
-
 ## Prompt Asset Policy Domain
 
 - `teamD-rg2`

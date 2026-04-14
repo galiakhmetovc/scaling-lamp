@@ -6,6 +6,7 @@ Current baseline:
 - resolver reads explicit contract module files
 - resolver resolves policy module paths relative to the referencing contract file
 - resolver returns typed runtime contracts, not raw YAML payloads
+- resolver validates policy strategies through the built-in policy registry before contracts are returned
 
 ## Current Files
 
@@ -46,6 +47,7 @@ Does:
   - streaming
   - sampling
 - decode referenced memory offload policy
+- validate loaded policy strategies through `internal/policies`
 - normalize relative policy paths against the contract file location
 - return one typed `ResolvedContracts` object
 
@@ -55,3 +57,4 @@ Does:
 - there is no effective policy merge layer yet
 - resolver is wired into the runtime builder, but higher-level provider composition is still missing
 - policy families are still a narrow subset of the final design
+- policy registries validate strategy names, but they do not yet drive generic policy decoding

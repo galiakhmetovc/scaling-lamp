@@ -2,9 +2,11 @@ package runtime_test
 
 import (
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"teamd/internal/config"
+	"teamd/internal/policies"
 	"teamd/internal/runtime"
 )
 
@@ -207,4 +209,171 @@ func TestResolveContractsBuildsTransportAndMemoryContracts(t *testing.T) {
 	if contracts.Memory.Offload.Params.MaxChars != 1200 {
 		t.Fatalf("max chars = %d, want 1200", contracts.Memory.Offload.Params.MaxChars)
 	}
+}
+
+func TestResolveContractsRejectsUnsupportedPolicyStrategy(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+
+	mustWriteFile(t, filepath.Join(dir, "agent.yaml"), ""+
+		"kind: AgentConfig\n"+
+		"version: v1\n"+
+		"id: agent-test\n"+
+		"spec:\n"+
+		"  contracts:\n"+
+		"    transport: ./contracts/transport.yaml\n")
+
+	mustWriteFile(t, filepath.Join(dir, "contracts", "transport.yaml"), ""+
+		"kind: TransportContractConfig\n"+
+		"version: v1\n"+
+		"id: transport-main\n"+
+		"spec:\n"+
+		"  endpoint_policy_path: ../policies/transport/endpoint.yaml\n"+
+		"  auth_policy_path: ../policies/transport/auth.yaml\n"+
+		"  retry_policy_path: ../policies/transport/retry.yaml\n"+
+		"  timeout_policy_path: ../policies/transport/timeout.yaml\n")
+
+	mustWriteFile(t, filepath.Join(dir, "policies", "transport", "endpoint.yaml"), ""+
+		"kind: EndpointPolicyConfig\n"+
+		"version: v1\n"+
+		"id: endpoint-main\n"+
+		"spec:\n"+
+		"  enabled: true\n"+
+		"  strategy: invalid_endpoint\n"+
+		"  params:\n"+
+		"    base_url: https://api.z.ai\n"+
+		"    path: /api/paas/v4/chat/completions\n")
+
+	mustWriteFile(t, filepath.Join(dir, "policies", "transport", "auth.yaml"), ""+
+		"kind: AuthPolicyConfig\n"+
+		"version: v1\n"+
+		"id: auth-main\n"+
+		"spec:\n"+
+		"  enabled: true\n"+
+		"  strategy: bearer_token\n"+
+		"  params:\n"+
+		"    value_env_var: ZAI_API_KEY\n")
+
+	mustWriteFile(t, filepath.Join(dir, "policies", "transport", "retry.yaml"), ""+
+		"kind: RetryPolicyConfig\n"+
+		"version: v1\n"+
+		"id: retry-main\n"+
+		"spec:\n"+
+		"  enabled: true\n"+
+		"  strategy: none\n")
+
+	mustWriteFile(t, filepath.Join(dir, "policies", "transport", "timeout.yaml"), ""+
+		"kind: TimeoutPolicyConfig\n"+
+		"version: v1\n"+
+		"id: timeout-main\n"+
+		"spec:\n"+
+		"  enabled: true\n"+
+		"  strategy: per_request\n"+
+		"  params:\n"+
+		"    total: 30s\n")
+
+	cfg, err := config.LoadRoot(filepath.Join(dir, "agent.yaml"))
+	if err != nil {
+		t.Fatalf("LoadRoot returned error: %v", err)
+	}
+
+	_, err = runtime.ResolveContracts(cfg)
+	if err == nil {
+		t.Fatal("ResolveContracts error = nil, want invalid strategy error")
+	}
+	if got := err.Error(); got == "" || !containsAll(got, "EndpointPolicyConfig", "invalid_endpoint") {
+		t.Fatalf("ResolveContracts error = %q, want policy kind and invalid strategy", got)
+	}
+}
+
+func TestResolveContractsWithRegistryAllowsExtendedStrategies(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+
+	mustWriteFile(t, filepath.Join(dir, "agent.yaml"), ""+
+		"kind: AgentConfig\n"+
+		"version: v1\n"+
+		"id: agent-test\n"+
+		"spec:\n"+
+		"  contracts:\n"+
+		"    transport: ./contracts/transport.yaml\n")
+
+	mustWriteFile(t, filepath.Join(dir, "contracts", "transport.yaml"), ""+
+		"kind: TransportContractConfig\n"+
+		"version: v1\n"+
+		"id: transport-main\n"+
+		"spec:\n"+
+		"  endpoint_policy_path: ../policies/transport/endpoint.yaml\n"+
+		"  auth_policy_path: ../policies/transport/auth.yaml\n"+
+		"  retry_policy_path: ../policies/transport/retry.yaml\n"+
+		"  timeout_policy_path: ../policies/transport/timeout.yaml\n")
+
+	mustWriteFile(t, filepath.Join(dir, "policies", "transport", "endpoint.yaml"), ""+
+		"kind: EndpointPolicyConfig\n"+
+		"version: v1\n"+
+		"id: endpoint-main\n"+
+		"spec:\n"+
+		"  enabled: true\n"+
+		"  strategy: env_resolved\n"+
+		"  params:\n"+
+		"    base_url: https://api.z.ai\n"+
+		"    path: /api/paas/v4/chat/completions\n")
+
+	mustWriteFile(t, filepath.Join(dir, "policies", "transport", "auth.yaml"), ""+
+		"kind: AuthPolicyConfig\n"+
+		"version: v1\n"+
+		"id: auth-main\n"+
+		"spec:\n"+
+		"  enabled: false\n"+
+		"  strategy: none\n")
+
+	mustWriteFile(t, filepath.Join(dir, "policies", "transport", "retry.yaml"), ""+
+		"kind: RetryPolicyConfig\n"+
+		"version: v1\n"+
+		"id: retry-main\n"+
+		"spec:\n"+
+		"  enabled: false\n"+
+		"  strategy: none\n")
+
+	mustWriteFile(t, filepath.Join(dir, "policies", "transport", "timeout.yaml"), ""+
+		"kind: TimeoutPolicyConfig\n"+
+		"version: v1\n"+
+		"id: timeout-main\n"+
+		"spec:\n"+
+		"  enabled: true\n"+
+		"  strategy: per_request\n"+
+		"  params:\n"+
+		"    total: 30s\n")
+
+	cfg, err := config.LoadRoot(filepath.Join(dir, "agent.yaml"))
+	if err != nil {
+		t.Fatalf("LoadRoot returned error: %v", err)
+	}
+
+	registry := policies.NewBuiltInRegistry()
+	endpointType, err := registry.Type("EndpointPolicyConfig")
+	if err != nil {
+		t.Fatalf("Type returned error: %v", err)
+	}
+	endpointType.Strategy["env_resolved"] = struct{}{}
+	registry.Register(endpointType)
+
+	resolved, err := runtime.ResolveContractsWithRegistry(cfg, registry)
+	if err != nil {
+		t.Fatalf("ResolveContractsWithRegistry returned error: %v", err)
+	}
+	if resolved.ProviderRequest.Transport.Endpoint.Strategy != "env_resolved" {
+		t.Fatalf("endpoint strategy = %q, want %q", resolved.ProviderRequest.Transport.Endpoint.Strategy, "env_resolved")
+	}
+}
+
+func containsAll(s string, want ...string) bool {
+	for _, fragment := range want {
+		if !strings.Contains(s, fragment) {
+			return false
+		}
+	}
+	return true
 }
