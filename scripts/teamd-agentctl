@@ -1,0 +1,166 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+usage() {
+  cat <<'EOF'
+Usage:
+  teamd-agentctl install <name> <workspace>
+  teamd-agentctl uninstall <name>
+  teamd-agentctl cleanup <workspace>
+  teamd-agentctl start <name>
+  teamd-agentctl stop <name>
+  teamd-agentctl restart <name>
+  teamd-agentctl status <name>
+  teamd-agentctl logs <name> [--lines N]
+
+Examples:
+  teamd-agentctl install teamd-main /home/administrator/teamD
+  teamd-agentctl install teamd-helper /home/administrator/teamD-helper
+  teamd-agentctl restart teamd-main
+EOF
+}
+
+die() {
+  echo "error: $*" >&2
+  exit 1
+}
+
+require_workspace() {
+  local workspace="$1"
+  [[ -d "$workspace" ]] || die "workspace not found: $workspace"
+  [[ -x "$workspace/teamd-agent" ]] || die "missing executable: $workspace/teamd-agent"
+  [[ -f "$workspace/.env" ]] || die "missing env file: $workspace/.env"
+}
+
+service_name() {
+  local name="$1"
+  printf '%s.service' "$name"
+}
+
+unit_path() {
+  local name="$1"
+  printf '%s/.config/systemd/user/%s' "$HOME" "$(service_name "$name")"
+}
+
+write_unit() {
+  local name="$1"
+  local workspace="$2"
+  local unit
+  local script_path
+  script_path="$(readlink -f "$0")"
+  unit="$(unit_path "$name")"
+  mkdir -p "$(dirname "$unit")"
+  cat >"$unit" <<EOF
+[Unit]
+Description=teamD agent ($name)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=$workspace
+EnvironmentFile=$workspace/.env
+ExecStartPre=/bin/bash -lc '$script_path cleanup $workspace'
+ExecStartPre=/usr/bin/rm -f $workspace/agent.pid
+ExecStart=/bin/bash -lc 'exec ./teamd-agent'
+ExecStartPost=/bin/bash -lc 'echo \$MAINPID > $workspace/agent.pid'
+ExecStopPost=/bin/bash -lc 'rm -f $workspace/agent.pid'
+Restart=always
+RestartSec=2
+TimeoutStopSec=15
+KillMode=mixed
+
+[Install]
+WantedBy=default.target
+EOF
+}
+
+cmd_cleanup() {
+  local workspace="${1:-}"
+  [[ -n "$workspace" ]] || die "cleanup requires <workspace>"
+  local pid cwd exe
+  while read -r pid; do
+    [[ -n "$pid" ]] || continue
+    cwd="$(readlink -f "/proc/$pid/cwd" 2>/dev/null || true)"
+    exe="$(readlink -f "/proc/$pid/exe" 2>/dev/null || true)"
+    if [[ "$cwd" == "$workspace" || "$exe" == "$workspace/teamd-agent" ]]; then
+      kill "$pid" 2>/dev/null || true
+      sleep 0.2
+      kill -9 "$pid" 2>/dev/null || true
+    fi
+  done < <(pgrep -u "$(id -u)" -x teamd-agent || true)
+}
+
+cmd_install() {
+  local name="${1:-}"
+  local workspace="${2:-}"
+  [[ -n "$name" && -n "$workspace" ]] || die "install requires <name> <workspace>"
+  require_workspace "$workspace"
+  write_unit "$name" "$workspace"
+  systemctl --user daemon-reload
+  systemctl --user enable --now "$(service_name "$name")"
+  sleep 1
+  systemctl --user --no-pager --full status "$(service_name "$name")" || true
+}
+
+cmd_uninstall() {
+  local name="${1:-}"
+  [[ -n "$name" ]] || die "uninstall requires <name>"
+  systemctl --user disable --now "$(service_name "$name")" || true
+  rm -f "$(unit_path "$name")"
+  systemctl --user daemon-reload
+}
+
+cmd_start() {
+  local name="${1:-}"
+  [[ -n "$name" ]] || die "start requires <name>"
+  systemctl --user start "$(service_name "$name")"
+}
+
+cmd_stop() {
+  local name="${1:-}"
+  [[ -n "$name" ]] || die "stop requires <name>"
+  systemctl --user stop "$(service_name "$name")"
+}
+
+cmd_restart() {
+  local name="${1:-}"
+  [[ -n "$name" ]] || die "restart requires <name>"
+  systemctl --user restart "$(service_name "$name")"
+}
+
+cmd_status() {
+  local name="${1:-}"
+  [[ -n "$name" ]] || die "status requires <name>"
+  systemctl --user --no-pager --full status "$(service_name "$name")"
+}
+
+cmd_logs() {
+  local name="${1:-}"
+  shift || true
+  [[ -n "$name" ]] || die "logs requires <name>"
+  local lines=100
+  if [[ "${1:-}" == "--lines" ]]; then
+    lines="${2:-100}"
+  fi
+  journalctl --user -u "$(service_name "$name")" -n "$lines" --no-pager
+}
+
+main() {
+  local cmd="${1:-}"
+  shift || true
+  case "$cmd" in
+    install) cmd_install "$@" ;;
+    uninstall) cmd_uninstall "$@" ;;
+    cleanup) cmd_cleanup "$@" ;;
+    start) cmd_start "$@" ;;
+    stop) cmd_stop "$@" ;;
+    restart) cmd_restart "$@" ;;
+    status) cmd_status "$@" ;;
+    logs) cmd_logs "$@" ;;
+    ""|-h|--help|help) usage ;;
+    *) die "unknown command: $cmd" ;;
+  esac
+}
+
+main "$@"
