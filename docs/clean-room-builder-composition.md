@@ -48,5 +48,5 @@ Current role:
 ## Current Limitation
 
 - component registry is still built-in, not config-composed
-- there is still no combined provider client
+- provider client exists below runtime, but builder still does not construct it
 - root config must now carry explicit runtime composition for builder assembly

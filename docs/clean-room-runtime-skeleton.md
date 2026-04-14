@@ -217,15 +217,14 @@ Current responsibility:
 These are known temporary shortcuts and should be removed in the next slices.
 
 1. Config graph loading still stops at module headers and does not decode effective contracts itself.
-2. Event envelopes are still too small for a serious event-sourced system, even after adding sequence and trace linkage metadata.
-3. Contract resolution is still narrow and only covers the first transport/request-shape/memory path.
-4. Provider client exists, but provider-specific response parsing and higher-level provider semantics are still missing.
-5. Persistent event storage and automatic projection snapshot flushing now exist, but persistence is still snapshot-based only.
-6. There is only a first built-in policy/strategy registry layer; config-driven registry composition and strategy-driven decoding still do not exist yet.
-7. Prompt assets now have separate execution semantics with asset ids and prepend/append placement, but only for inline assets.
-8. Builder composition is config-driven, but only against the built-in component registry.
-9. Provider client result is still transport-level; provider-specific parsing and usage handling are not there yet.
+2. Provider client exists, but builder still does not assemble it into the runtime `Agent`.
+3. Provider-specific response parsing and usage handling are still missing.
+4. Persistent event storage and automatic projection snapshot flushing now exist, but persistence is still snapshot-based only.
+5. There is only a first built-in policy/strategy registry layer; config-driven registry composition and strategy-driven decoding still do not exist yet.
+6. Prompt assets now have separate execution semantics with asset ids and prepend/append placement, but only for inline assets.
+7. Builder composition is config-driven, but only against the built-in component registry.
 
 ## Next Required Slices
 
-1. provider-specific response and usage handling
+1. build provider client into runtime builder
+2. provider-specific response and usage handling
