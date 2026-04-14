@@ -28,7 +28,12 @@ func NewBuiltInModuleRegistry() *ModuleRegistry {
 	registry.Register(ModuleType{
 		Kind:      "TransportContractConfig",
 		Category:  ModuleCategoryContract,
-		RefFields: []string{"endpoint_policy_path"},
+		RefFields: []string{
+			"endpoint_policy_path",
+			"auth_policy_path",
+			"retry_policy_path",
+			"timeout_policy_path",
+		},
 	})
 	registry.Register(ModuleType{
 		Kind:      "MemoryContractConfig",
@@ -37,6 +42,18 @@ func NewBuiltInModuleRegistry() *ModuleRegistry {
 	})
 	registry.Register(ModuleType{
 		Kind:     "EndpointPolicyConfig",
+		Category: ModuleCategoryPolicy,
+	})
+	registry.Register(ModuleType{
+		Kind:     "AuthPolicyConfig",
+		Category: ModuleCategoryPolicy,
+	})
+	registry.Register(ModuleType{
+		Kind:     "RetryPolicyConfig",
+		Category: ModuleCategoryPolicy,
+	})
+	registry.Register(ModuleType{
+		Kind:     "TimeoutPolicyConfig",
 		Category: ModuleCategoryPolicy,
 	})
 	registry.Register(ModuleType{

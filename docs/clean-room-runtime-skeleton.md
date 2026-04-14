@@ -118,14 +118,15 @@ Current responsibility:
 - create in-memory event log
 - validate loaded contract and policy module kinds
 - resolve typed runtime contracts from loaded modules
+- build the first transport executor from resolved transport contracts
 - assemble projections through built-in registries
 - return one built agent instance
 
 Current limitation:
 - builder still chooses default projection composition instead of config-driven composition
-- no executor wiring
+- only the transport executor is wired; higher-level provider/request-shape execution is still absent
 
-### `internal/runtime/contracts.go`
+### `internal/contracts/contracts.go`
 
 Resolved runtime contract types.
 
@@ -145,7 +146,16 @@ Current responsibility:
 Current limitation:
 - only transport and memory are resolved
 - there is still no policy merge layer (`global < session < run`)
-- no execution-time contract application yet
+- execution-time application currently covers transport only
+
+### `internal/provider/transport_executor.go`
+
+First provider-facing transport executor.
+
+Current responsibility:
+- apply resolved transport contract to one outbound HTTP request
+- handle static endpoint, bearer auth, retry, and per-request timeout baseline
+- expose a testable execution surface through injected HTTP doer and timing hooks
 
 ## What Is Good About This Skeleton
 
@@ -163,13 +173,14 @@ These are known temporary shortcuts and should be removed in the next slices.
 2. Config graph loading still stops at module headers and does not decode effective contracts itself.
 3. Event envelopes are still too small for a serious event-sourced system, even after adding sequence and trace linkage metadata.
 4. Contract resolution is still narrow and only covers the first transport and memory path.
-5. There is no persistent event store or persistent projections yet.
-6. There is no full policy and strategy registry system yet.
+5. Provider execution still stops at transport; request-shape and higher-level provider flow are not wired yet.
+6. There is no persistent event store or persistent projections yet.
+7. There is no full policy and strategy registry system yet.
 
 ## Next Required Slices
 
 1. generalize config graph loader
-2. first `TransportContract` executor
+2. provider request-shape executor
 3. persistent event log
 4. persistent projections
 5. policy and strategy registries

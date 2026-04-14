@@ -4,9 +4,9 @@
 
 - `teamD-28p`
 
-## Transport Contract Executor
+## Request-Shape Contract Executor
 
-- `teamD-8fq`
+- `teamD-2z1`
 
 ## Persistent Event Log
 

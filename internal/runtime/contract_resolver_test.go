@@ -27,7 +27,10 @@ func TestResolveContractsBuildsTransportAndMemoryContracts(t *testing.T) {
 		"version: v1\n"+
 		"id: transport-main\n"+
 		"spec:\n"+
-		"  endpoint_policy_path: ../policies/transport/endpoint.yaml\n")
+		"  endpoint_policy_path: ../policies/transport/endpoint.yaml\n"+
+		"  auth_policy_path: ../policies/transport/auth.yaml\n"+
+		"  retry_policy_path: ../policies/transport/retry.yaml\n"+
+		"  timeout_policy_path: ../policies/transport/timeout.yaml\n")
 
 	mustWriteFile(t, filepath.Join(dir, "contracts", "memory.yaml"), ""+
 		"kind: MemoryContractConfig\n"+
@@ -45,7 +48,44 @@ func TestResolveContractsBuildsTransportAndMemoryContracts(t *testing.T) {
 		"  strategy: static\n"+
 		"  params:\n"+
 		"    base_url: https://api.z.ai\n"+
-		"    path: /api/paas/v4/chat/completions\n")
+		"    path: /api/paas/v4/chat/completions\n"+
+		"    method: POST\n")
+
+	mustWriteFile(t, filepath.Join(dir, "policies", "transport", "auth.yaml"), ""+
+		"kind: AuthPolicyConfig\n"+
+		"version: v1\n"+
+		"id: auth-main\n"+
+		"spec:\n"+
+		"  enabled: true\n"+
+		"  strategy: bearer_token\n"+
+		"  params:\n"+
+		"    header: Authorization\n"+
+		"    prefix: Bearer\n"+
+		"    value_env_var: ZAI_API_KEY\n")
+
+	mustWriteFile(t, filepath.Join(dir, "policies", "transport", "retry.yaml"), ""+
+		"kind: RetryPolicyConfig\n"+
+		"version: v1\n"+
+		"id: retry-main\n"+
+		"spec:\n"+
+		"  enabled: true\n"+
+		"  strategy: exponential_jitter\n"+
+		"  params:\n"+
+		"    max_attempts: 3\n"+
+		"    base_delay: 100ms\n"+
+		"    max_delay: 1s\n"+
+		"    retry_on_statuses: [429, 500, 502, 503]\n"+
+		"    retry_on_errors: [transport_error]\n")
+
+	mustWriteFile(t, filepath.Join(dir, "policies", "transport", "timeout.yaml"), ""+
+		"kind: TimeoutPolicyConfig\n"+
+		"version: v1\n"+
+		"id: timeout-main\n"+
+		"spec:\n"+
+		"  enabled: true\n"+
+		"  strategy: per_request\n"+
+		"  params:\n"+
+		"    total: 30s\n")
 
 	mustWriteFile(t, filepath.Join(dir, "policies", "memory", "offload.yaml"), ""+
 		"kind: OffloadPolicyConfig\n"+
@@ -72,6 +112,15 @@ func TestResolveContractsBuildsTransportAndMemoryContracts(t *testing.T) {
 	}
 	if contracts.ProviderRequest.Transport.Endpoint.ID != "endpoint-main" {
 		t.Fatalf("endpoint ID = %q, want %q", contracts.ProviderRequest.Transport.Endpoint.ID, "endpoint-main")
+	}
+	if contracts.ProviderRequest.Transport.Auth.Strategy != "bearer_token" {
+		t.Fatalf("auth strategy = %q, want %q", contracts.ProviderRequest.Transport.Auth.Strategy, "bearer_token")
+	}
+	if contracts.ProviderRequest.Transport.Retry.Params.MaxAttempts != 3 {
+		t.Fatalf("max attempts = %d, want 3", contracts.ProviderRequest.Transport.Retry.Params.MaxAttempts)
+	}
+	if contracts.ProviderRequest.Transport.Timeout.Params.Total != "30s" {
+		t.Fatalf("timeout total = %q, want %q", contracts.ProviderRequest.Transport.Timeout.Params.Total, "30s")
 	}
 	if contracts.Memory.ID != "memory-main" {
 		t.Fatalf("memory ID = %q, want %q", contracts.Memory.ID, "memory-main")

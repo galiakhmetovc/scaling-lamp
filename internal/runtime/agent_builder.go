@@ -4,12 +4,15 @@ import (
 	"fmt"
 
 	"teamd/internal/config"
+	"teamd/internal/contracts"
+	"teamd/internal/provider"
 	"teamd/internal/runtime/projections"
 )
 
 type Agent struct {
 	Config      config.AgentConfig
-	Contracts   ResolvedContracts
+	Contracts   contracts.ResolvedContracts
+	Transport   *provider.TransportExecutor
 	EventLog    EventLog
 	Projections []projections.Projection
 }
@@ -46,9 +49,10 @@ func BuildAgent(configPath string) (*Agent, error) {
 	}
 
 	return &Agent{
-		Config:    cfg,
-		Contracts: contracts,
-		EventLog:  NewInMemoryEventLog(),
+		Config:      cfg,
+		Contracts:   contracts,
+		Transport:   provider.NewTransportExecutor(nil),
+		EventLog:    NewInMemoryEventLog(),
 		Projections: projectionSet,
 	}, nil
 }
