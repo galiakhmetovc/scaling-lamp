@@ -29,9 +29,21 @@ type ToolActivity struct {
 	ErrorText  string
 }
 
-func (a *Agent) executeProviderLoop(ctx context.Context, sessionID, runID, correlationID, source string, input provider.ClientInput, observer func(ToolActivity)) (provider.ClientResult, error) {
+func (a *Agent) executeProviderLoop(ctx context.Context, sessionID, runID, correlationID, source string, input provider.ClientInput, observer func(ToolActivity), maxRoundsOverride int) (provider.ClientResult, error) {
 	currentMessages := append([]contracts.Message{}, input.Messages...)
+	streamObserver := input.StreamObserver
+	input.StreamObserver = func(event provider.StreamEvent) {
+		if streamObserver != nil {
+			streamObserver(event)
+		}
+		if a.UIBus != nil && event.Kind == provider.StreamEventText {
+			a.UIBus.Publish(UIEvent{Kind: UIEventStreamText, SessionID: sessionID, RunID: runID, Text: event.Text})
+		}
+	}
 	maxRounds := a.MaxToolRounds
+	if maxRoundsOverride > 0 {
+		maxRounds = maxRoundsOverride
+	}
 	if maxRounds <= 0 {
 		maxRounds = 4
 	}
@@ -94,6 +106,9 @@ func (a *Agent) executeToolCalls(ctx context.Context, runID, sessionID, correlat
 		if observer != nil {
 			observer(ToolActivity{Phase: ToolActivityPhaseStarted, Name: call.Name, Arguments: call.Arguments})
 		}
+		if a.UIBus != nil {
+			a.UIBus.Publish(UIEvent{Kind: UIEventToolStarted, SessionID: sessionID, RunID: runID, Tool: ToolActivity{Phase: ToolActivityPhaseStarted, Name: call.Name, Arguments: call.Arguments}})
+		}
 		if err := a.RecordEvent(ctx, eventing.Event{
 			ID:            a.newID("evt-tool-call-started"),
 			Kind:          eventing.EventToolCallStarted,
@@ -123,6 +138,9 @@ func (a *Agent) executeToolCalls(ctx context.Context, runID, sessionID, correlat
 			if observer != nil {
 				observer(ToolActivity{Phase: ToolActivityPhaseCompleted, Name: call.Name, Arguments: call.Arguments, ErrorText: "tool call has no execution decision", ResultText: resultText})
 			}
+			if a.UIBus != nil {
+				a.UIBus.Publish(UIEvent{Kind: UIEventToolCompleted, SessionID: sessionID, RunID: runID, Tool: ToolActivity{Phase: ToolActivityPhaseCompleted, Name: call.Name, Arguments: call.Arguments, ErrorText: "tool call has no execution decision", ResultText: resultText}})
+			}
 			out = append(out, contracts.Message{Role: "tool", Name: call.Name, ToolCallID: call.ID, Content: resultText})
 			continue
 		}
@@ -134,6 +152,9 @@ func (a *Agent) executeToolCalls(ctx context.Context, runID, sessionID, correlat
 			}
 			if observer != nil {
 				observer(ToolActivity{Phase: ToolActivityPhaseCompleted, Name: call.Name, Arguments: call.Arguments, ErrorText: reason, ResultText: resultText})
+			}
+			if a.UIBus != nil {
+				a.UIBus.Publish(UIEvent{Kind: UIEventToolCompleted, SessionID: sessionID, RunID: runID, Tool: ToolActivity{Phase: ToolActivityPhaseCompleted, Name: call.Name, Arguments: call.Arguments, ErrorText: reason, ResultText: resultText}})
 			}
 			out = append(out, contracts.Message{Role: "tool", Name: call.Name, ToolCallID: call.ID, Content: resultText})
 			continue
@@ -147,11 +168,14 @@ func (a *Agent) executeToolCalls(ctx context.Context, runID, sessionID, correlat
 			if observer != nil {
 				observer(ToolActivity{Phase: ToolActivityPhaseCompleted, Name: call.Name, Arguments: call.Arguments, ErrorText: reason, ResultText: resultText})
 			}
+			if a.UIBus != nil {
+				a.UIBus.Publish(UIEvent{Kind: UIEventToolCompleted, SessionID: sessionID, RunID: runID, Tool: ToolActivity{Phase: ToolActivityPhaseCompleted, Name: call.Name, Arguments: call.Arguments, ErrorText: reason, ResultText: resultText}})
+			}
 			out = append(out, contracts.Message{Role: "tool", Name: call.Name, ToolCallID: call.ID, Content: resultText})
 			continue
 		}
 
-		events, resultText, err := a.executeToolCommand(activeProjection, service, filesystemExecutor, shellExecutor, source, call)
+		events, resultText, err := a.executeToolCommand(sessionID, activeProjection, service, filesystemExecutor, shellExecutor, source, call)
 		if err != nil {
 			resultText := toolErrorResult(call.Name, err)
 			if recordErr := a.recordToolCallCompleted(ctx, runID, sessionID, correlationID, source, call.Name, call.Arguments, resultText, err.Error()); recordErr != nil {
@@ -159,6 +183,9 @@ func (a *Agent) executeToolCalls(ctx context.Context, runID, sessionID, correlat
 			}
 			if observer != nil {
 				observer(ToolActivity{Phase: ToolActivityPhaseCompleted, Name: call.Name, Arguments: call.Arguments, ErrorText: err.Error(), ResultText: resultText})
+			}
+			if a.UIBus != nil {
+				a.UIBus.Publish(UIEvent{Kind: UIEventToolCompleted, SessionID: sessionID, RunID: runID, Tool: ToolActivity{Phase: ToolActivityPhaseCompleted, Name: call.Name, Arguments: call.Arguments, ErrorText: err.Error(), ResultText: resultText}})
 			}
 			out = append(out, contracts.Message{
 				Role:       "tool",
@@ -190,6 +217,9 @@ func (a *Agent) executeToolCalls(ctx context.Context, runID, sessionID, correlat
 		}
 		if observer != nil {
 			observer(ToolActivity{Phase: ToolActivityPhaseCompleted, Name: call.Name, Arguments: call.Arguments, ResultText: resultText})
+		}
+		if a.UIBus != nil {
+			a.UIBus.Publish(UIEvent{Kind: UIEventToolCompleted, SessionID: sessionID, RunID: runID, Tool: ToolActivity{Phase: ToolActivityPhaseCompleted, Name: call.Name, Arguments: call.Arguments, ResultText: resultText}})
 		}
 		out = append(out, contracts.Message{
 			Role:       "tool",
@@ -229,13 +259,13 @@ func (a *Agent) recordToolCallCompleted(ctx context.Context, runID, sessionID, c
 	})
 }
 
-func (a *Agent) executeToolCommand(activeProjection *projections.ActivePlanProjection, service *plans.Service, filesystemExecutor *filesystem.Executor, shellExecutor *shell.Executor, source string, call provider.ToolCall) ([]eventing.Event, string, error) {
+func (a *Agent) executeToolCommand(sessionID string, activeProjection *projections.ActivePlanProjection, service *plans.Service, filesystemExecutor *filesystem.Executor, shellExecutor *shell.Executor, source string, call provider.ToolCall) ([]eventing.Event, string, error) {
 	switch call.Name {
 	case "init_plan", "add_task", "set_task_status", "add_task_note", "edit_task":
 		if activeProjection == nil {
 			return nil, "", fmt.Errorf("active plan projection is not registered")
 		}
-		return a.executePlanCommand(activeProjection.Snapshot(), service, source, call)
+		return a.executePlanCommand(sessionID, activeProjection.SnapshotForSession(sessionID), service, source, call)
 	case "fs_list", "fs_read_text", "fs_write_text", "fs_patch_text", "fs_mkdir", "fs_move", "fs_trash":
 		resultText, err := filesystemExecutor.Execute(a.Contracts.FilesystemExecution, call.Name, call.Arguments)
 		if err != nil {
@@ -253,14 +283,14 @@ func (a *Agent) executeToolCommand(activeProjection *projections.ActivePlanProje
 	}
 }
 
-func (a *Agent) executePlanCommand(active projections.ActivePlanSnapshot, service *plans.Service, source string, call provider.ToolCall) ([]eventing.Event, string, error) {
+func (a *Agent) executePlanCommand(sessionID string, active projections.ActivePlanSnapshot, service *plans.Service, source string, call provider.ToolCall) ([]eventing.Event, string, error) {
 	switch call.Name {
 	case "init_plan":
 		goal, err := stringArg(call.Arguments, "goal")
 		if err != nil {
 			return nil, "", fmt.Errorf("tool call %q: %w", call.Name, err)
 		}
-		events, err := service.InitPlan(active, plans.InitPlanInput{Goal: goal, Source: source, ActorID: a.Config.ID})
+		events, err := service.InitPlan(active, plans.InitPlanInput{SessionID: sessionID, Goal: goal, Source: source, ActorID: a.Config.ID})
 		if err != nil {
 			return nil, "", fmt.Errorf("tool call %q: %w", call.Name, err)
 		}

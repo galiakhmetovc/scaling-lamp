@@ -713,6 +713,9 @@ func TestRepositoryZaiSmokeConfigLoadsAndResolvesContracts(t *testing.T) {
 	if cfg.Spec.Runtime.MaxToolRounds != 100 {
 		t.Fatalf("runtime max_tool_rounds = %d, want %d", cfg.Spec.Runtime.MaxToolRounds, 100)
 	}
+	if len(cfg.Spec.Runtime.Projections) == 0 || cfg.Spec.Runtime.Projections[1] != "session_catalog" {
+		t.Fatalf("runtime projections = %#v, want session_catalog in shipped config", cfg.Spec.Runtime.Projections)
+	}
 	if resolved.FilesystemTools.Catalog.Params.ToolIDs[0] != "fs_list" {
 		t.Fatalf("first filesystem tool = %q, want %q", resolved.FilesystemTools.Catalog.Params.ToolIDs[0], "fs_list")
 	}

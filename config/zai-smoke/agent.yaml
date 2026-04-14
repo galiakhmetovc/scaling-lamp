@@ -16,6 +16,7 @@ spec:
     provider_client: provider_client_default
     projections:
       - session
+      - session_catalog
       - run
       - transcript
       - active_plan

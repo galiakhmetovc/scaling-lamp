@@ -108,20 +108,21 @@ looks like “nothing happened”.
 
 That is current behavior by design.
 
-### 3.1 Chat CLI Mode
+### 3.1 Chat Mode
 
 Current chat mode:
 
-- `--chat` creates a new chat session
-- `--chat --resume <session-id>` resumes an existing one
-- input is multiline
-- send trigger is double `Enter`
-- assistant output is streamed to stdout
-- assistant output may be post-rendered as terminal markdown after turn completion
-- current slash commands:
-  - `/help`
-  - `/session`
-  - `/exit`
+- `--chat` launches the TUI when stdin is a real terminal
+- `--chat --resume <session-id>` resumes the requested session inside the TUI
+- non-interactive stdin falls back to the older line-based CLI chat loop
+
+Current top-level TUI tabs:
+
+- `Sessions`
+- `Chat`
+- `Plan`
+- `Tools`
+- `Settings`
 
 At startup the CLI prints:
 
@@ -131,18 +132,24 @@ At startup the CLI prints:
 
 After each turn it prints a final status line with token usage.
 
-Current chat terminal layer:
+Current TUI terminal layer:
+
+- file: [app.go](/home/admin/AI-AGENT/data/projects/teamD/.worktrees/rewrite-clean-room-root/internal/runtime/tui/app.go)
+- responsibility:
+  - session manager
+  - tab navigation
+  - mouse-aware workspace UI
+  - streaming chat pane
+  - plan pane from projections
+  - tool log pane from runtime UI events
+  - settings panes for session overrides and config editing
+
+Current line-based fallback layer:
 
 - file: [chat.go](/home/admin/AI-AGENT/data/projects/teamD/.worktrees/rewrite-clean-room-root/internal/runtime/cli/chat.go)
 - responsibility:
-  - prompt rendering
-  - multiline buffering
-  - double-Enter submit
-  - slash command dispatch
-  - streaming text output
-  - header and status printing
-  - short tool activity rendering
-  - compact plan rendering sourced from `PlanHeadProjection`
+  - non-interactive stdin fallback
+  - tests and scripted stdin workflows
 
 Current terminal observability behavior:
 
@@ -151,6 +158,7 @@ Current terminal observability behavior:
 - terminal output only shows short operator-facing summaries
 - plan rendering is derived from current plan projections, not from raw event replay in the CLI
 - markdown rendering, when enabled, happens only after the provider turn completes; it does not interleave with tool/status rendering
+- TUI consumes ephemeral stream/tool/status events from the runtime UI bus instead of reconstructing them from persistent history
 
 ## 4. Environment Loading
 

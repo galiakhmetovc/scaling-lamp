@@ -18,6 +18,7 @@ import (
 
 type Agent struct {
 	Config          config.AgentConfig
+	ConfigPath      string
 	MaxToolRounds   int
 	Contracts       contracts.ResolvedContracts
 	PromptAssembly  *promptassembly.Executor
@@ -33,6 +34,7 @@ type Agent struct {
 	EventLog        EventLog
 	Projections     []projections.Projection
 	ProjectionStore projections.Store
+	UIBus           *UIEventBus
 	Now             func() time.Time
 	NewID           func(prefix string) string
 }
@@ -158,6 +160,7 @@ func BuildAgent(configPath string) (*Agent, error) {
 
 	return &Agent{
 		Config:          cfg,
+		ConfigPath:      configPath,
 		MaxToolRounds:   maxToolRounds,
 		Contracts:       contracts,
 		PromptAssembly:  promptAssemblyExecutor,
@@ -173,6 +176,7 @@ func BuildAgent(configPath string) (*Agent, error) {
 		EventLog:        eventLog,
 		Projections:     projectionSet,
 		ProjectionStore: projectionStore,
+		UIBus:           NewUIEventBus(),
 		Now:             time.Now,
 		NewID: func(prefix string) string {
 			return fmt.Sprintf("%s-%d", prefix, time.Now().UTC().UnixNano())

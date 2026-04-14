@@ -17,10 +17,11 @@ type ChatSession struct {
 }
 
 type ChatTurnInput struct {
-	Prompt               string
-	PromptAssetSelection []string
-	StreamObserver       func(provider.StreamEvent)
-	ToolObserver         func(ToolActivity)
+	Prompt                string
+	PromptAssetSelection  []string
+	StreamObserver        func(provider.StreamEvent)
+	ToolObserver          func(ToolActivity)
+	MaxToolRoundsOverride int
 }
 
 func (a *Agent) NewChatSession() (*ChatSession, error) {
@@ -89,6 +90,9 @@ func (a *Agent) ChatTurn(ctx context.Context, session *ChatSession, input ChatTu
 	now := a.now()
 	runID := a.newID("run-chat")
 	correlationID := runID
+	if a.UIBus != nil {
+		a.UIBus.Publish(UIEvent{Kind: UIEventSessionChanged, SessionID: session.SessionID, RunID: runID, Status: "turn_started"})
+	}
 
 	if !a.sessionExists(session.SessionID) {
 		if err := a.RecordEvent(ctx, eventing.Event{
@@ -139,7 +143,7 @@ func (a *Agent) ChatTurn(ctx context.Context, session *ChatSession, input ChatTu
 		PromptAssetSelection: input.PromptAssetSelection,
 		Messages:             append([]contracts.Message{}, session.Messages...),
 		StreamObserver:       input.StreamObserver,
-	}, input.ToolObserver)
+	}, input.ToolObserver, input.MaxToolRoundsOverride)
 	if err != nil {
 		if recordErr := a.RecordEvent(ctx, eventing.Event{
 			ID:               a.newID("evt-run-failed"),
@@ -160,6 +164,9 @@ func (a *Agent) ChatTurn(ctx context.Context, session *ChatSession, input ChatTu
 			},
 		}); recordErr != nil {
 			return provider.ClientResult{}, fmt.Errorf("execute chat turn: %v; record failure event: %w", err, recordErr)
+		}
+		if a.UIBus != nil {
+			a.UIBus.Publish(UIEvent{Kind: UIEventStatusChanged, SessionID: session.SessionID, RunID: runID, Status: "failed"})
 		}
 		return provider.ClientResult{}, fmt.Errorf("execute chat turn: %w", err)
 	}
@@ -195,6 +202,15 @@ func (a *Agent) ChatTurn(ctx context.Context, session *ChatSession, input ChatTu
 	}); err != nil {
 		return provider.ClientResult{}, fmt.Errorf("record run completed: %w", err)
 	}
+	if a.UIBus != nil {
+		a.UIBus.Publish(UIEvent{
+			Kind:      UIEventRunCompleted,
+			SessionID: session.SessionID,
+			RunID:     runID,
+			Status:    result.Provider.FinishReason,
+			Text:      result.Provider.Message.Content,
+		})
+	}
 
 	return result, nil
 }
@@ -225,7 +241,7 @@ func (a *Agent) assemblePromptMessages(sessionID string, fallback []contracts.Me
 		transcript = projection.Snapshot()
 	}
 	if projection := a.planHeadProjection(); projection != nil {
-		planHead = projection.Snapshot()
+		planHead = projection.SnapshotForSession(sessionID)
 	}
 	messages, err := a.PromptAssembly.Build(a.Contracts.PromptAssembly, promptassembly.Input{
 		SessionID:   sessionID,
@@ -252,12 +268,36 @@ func (a *Agent) planHeadProjection() *projections.PlanHeadProjection {
 	return nil
 }
 
-func (a *Agent) CurrentPlanHead() (projections.PlanHeadSnapshot, bool) {
+func (a *Agent) CurrentPlanHead(sessionID string) (projections.PlanHeadSnapshot, bool) {
 	projection := a.planHeadProjection()
 	if projection == nil {
 		return projections.PlanHeadSnapshot{}, false
 	}
-	return projection.Snapshot(), true
+	return projection.SnapshotForSession(sessionID), true
+}
+
+func (a *Agent) CurrentTranscript(sessionID string) []contracts.Message {
+	if projection := a.transcriptProjection(); projection != nil {
+		return append([]contracts.Message{}, projection.Snapshot().Sessions[sessionID]...)
+	}
+	return nil
+}
+
+func (a *Agent) sessionCatalogProjection() *projections.SessionCatalogProjection {
+	for _, projection := range a.Projections {
+		catalog, ok := projection.(*projections.SessionCatalogProjection)
+		if ok {
+			return catalog
+		}
+	}
+	return nil
+}
+
+func (a *Agent) ListSessions() []projections.SessionCatalogEntry {
+	if projection := a.sessionCatalogProjection(); projection != nil {
+		return projections.SortedSessionEntries(projection.Snapshot())
+	}
+	return nil
 }
 
 func (a *Agent) recordSessionMessage(ctx context.Context, sessionID, correlationID string, message contracts.Message) error {

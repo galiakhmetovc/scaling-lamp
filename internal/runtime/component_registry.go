@@ -95,6 +95,7 @@ func NewBuiltInComponentRegistry() *ComponentRegistry {
 		return provider.NewClient(promptAssets, requestShape, planTools, filesystemTools, shellTools, toolCatalog, toolExecution, transport)
 	})
 	registry.RegisterProjection("session", func() projections.Projection { return projections.NewSessionProjection() })
+	registry.RegisterProjection("session_catalog", func() projections.Projection { return projections.NewSessionCatalogProjection() })
 	registry.RegisterProjection("run", func() projections.Projection { return projections.NewRunProjection() })
 	registry.RegisterProjection("transcript", func() projections.Projection { return projections.NewTranscriptProjection() })
 	registry.RegisterProjection("active_plan", func() projections.Projection { return projections.NewActivePlanProjection() })

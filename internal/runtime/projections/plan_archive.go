@@ -13,46 +13,57 @@ type ArchivedPlanView struct {
 }
 
 type PlanArchiveSnapshot struct {
-	Plans map[string]ArchivedPlanView `json:"plans"`
+	Sessions map[string]map[string]ArchivedPlanView `json:"sessions"`
 }
 
 type PlanArchiveProjection struct {
-	active   ActivePlanSnapshot
+	active   map[string]ActivePlanSnapshot
 	snapshot PlanArchiveSnapshot
 }
 
 func NewPlanArchiveProjection() *PlanArchiveProjection {
 	return &PlanArchiveProjection{
-		active:   ActivePlanSnapshot{Tasks: map[string]PlanTaskView{}},
-		snapshot: PlanArchiveSnapshot{Plans: map[string]ArchivedPlanView{}},
+		active:   map[string]ActivePlanSnapshot{},
+		snapshot: PlanArchiveSnapshot{Sessions: map[string]map[string]ArchivedPlanView{}},
 	}
 }
 
 func (p *PlanArchiveProjection) ID() string { return "plan_archive" }
 
 func (p *PlanArchiveProjection) Apply(event eventing.Event) error {
-	if p.active.Tasks == nil {
-		p.active.Tasks = map[string]PlanTaskView{}
+	sessionID, _ := event.Payload["session_id"].(string)
+	if sessionID == "" {
+		return nil
 	}
-	if p.snapshot.Plans == nil {
-		p.snapshot.Plans = map[string]ArchivedPlanView{}
+	if p.active == nil {
+		p.active = map[string]ActivePlanSnapshot{}
+	}
+	if p.snapshot.Sessions == nil {
+		p.snapshot.Sessions = map[string]map[string]ArchivedPlanView{}
+	}
+	active := p.active[sessionID]
+	if active.Tasks == nil {
+		active.Tasks = map[string]PlanTaskView{}
+	}
+	if p.snapshot.Sessions[sessionID] == nil {
+		p.snapshot.Sessions[sessionID] = map[string]ArchivedPlanView{}
 	}
 	switch event.Kind {
 	case eventing.EventPlanCreated:
 		planID, _ := event.Payload["plan_id"].(string)
 		goal, _ := event.Payload["goal"].(string)
-		p.active = ActivePlanSnapshot{
+		active = ActivePlanSnapshot{
 			Plan:  PlanView{ID: planID, Goal: goal, Status: "active", CreatedAt: event.OccurredAt},
 			Tasks: map[string]PlanTaskView{},
 		}
 	case eventing.EventTaskAdded:
 		task := decodeTaskView(event)
-		if task.PlanID == p.active.Plan.ID {
-			p.active.Tasks[task.ID] = task
+		if task.PlanID == active.Plan.ID {
+			active.Tasks[task.ID] = task
 		}
 	case eventing.EventTaskStatusChanged:
 		taskID, _ := event.Payload["task_id"].(string)
-		task, ok := p.active.Tasks[taskID]
+		task, ok := active.Tasks[taskID]
 		if !ok {
 			return nil
 		}
@@ -62,10 +73,10 @@ func (p *PlanArchiveProjection) Apply(event eventing.Event) error {
 		if blockedReason, ok := event.Payload["blocked_reason"].(string); ok {
 			task.BlockedReason = blockedReason
 		}
-		p.active.Tasks[taskID] = task
+		active.Tasks[taskID] = task
 	case eventing.EventTaskNoteAdded:
 		taskID, _ := event.Payload["task_id"].(string)
-		task, ok := p.active.Tasks[taskID]
+		task, ok := active.Tasks[taskID]
 		if !ok {
 			return nil
 		}
@@ -74,10 +85,10 @@ func (p *PlanArchiveProjection) Apply(event eventing.Event) error {
 			return nil
 		}
 		task.Notes = append(task.Notes, PlanTaskNote{Text: noteText, CreatedAt: event.OccurredAt})
-		p.active.Tasks[taskID] = task
+		active.Tasks[taskID] = task
 	case eventing.EventTaskEdited:
 		taskID, _ := event.Payload["task_id"].(string)
-		task, ok := p.active.Tasks[taskID]
+		task, ok := active.Tasks[taskID]
 		if !ok {
 			return nil
 		}
@@ -90,37 +101,49 @@ func (p *PlanArchiveProjection) Apply(event eventing.Event) error {
 		if dependsOn, ok := payloadStringSlice(event.Payload["depends_on"]); ok {
 			task.DependsOn = dependsOn
 		}
-		p.active.Tasks[taskID] = task
+		active.Tasks[taskID] = task
 	case eventing.EventPlanArchived:
 		planID, _ := event.Payload["plan_id"].(string)
-		if planID != p.active.Plan.ID || planID == "" {
+		if planID != active.Plan.ID || planID == "" {
 			return nil
 		}
-		plan := p.active.Plan
+		plan := active.Plan
 		plan.Status = "archived"
 		plan.ArchivedAt = event.OccurredAt
-		tasks := make(map[string]PlanTaskView, len(p.active.Tasks))
-		for id, task := range p.active.Tasks {
+		tasks := make(map[string]PlanTaskView, len(active.Tasks))
+		for id, task := range active.Tasks {
 			tasks[id] = task
 		}
-		p.snapshot.Plans[planID] = ArchivedPlanView{Plan: plan, Tasks: tasks}
-		p.active = ActivePlanSnapshot{Tasks: map[string]PlanTaskView{}}
+		p.snapshot.Sessions[sessionID][planID] = ArchivedPlanView{Plan: plan, Tasks: tasks}
+		active = ActivePlanSnapshot{Tasks: map[string]PlanTaskView{}}
 	}
+	p.active[sessionID] = active
 	return nil
 }
 
 func (p *PlanArchiveProjection) Snapshot() PlanArchiveSnapshot { return p.snapshot }
 func (p *PlanArchiveProjection) SnapshotValue() any            { return p.snapshot }
 
+func (p *PlanArchiveProjection) SnapshotForSession(sessionID string) map[string]ArchivedPlanView {
+	if p.snapshot.Sessions == nil {
+		return map[string]ArchivedPlanView{}
+	}
+	plans := p.snapshot.Sessions[sessionID]
+	if plans == nil {
+		return map[string]ArchivedPlanView{}
+	}
+	return plans
+}
+
 func (p *PlanArchiveProjection) RestoreSnapshot(raw []byte) error {
 	var snapshot PlanArchiveSnapshot
 	if err := json.Unmarshal(raw, &snapshot); err != nil {
 		return fmt.Errorf("restore plan archive snapshot: %w", err)
 	}
-	if snapshot.Plans == nil {
-		snapshot.Plans = map[string]ArchivedPlanView{}
+	if snapshot.Sessions == nil {
+		snapshot.Sessions = map[string]map[string]ArchivedPlanView{}
 	}
 	p.snapshot = snapshot
-	p.active = ActivePlanSnapshot{Tasks: map[string]PlanTaskView{}}
+	p.active = map[string]ActivePlanSnapshot{}
 	return nil
 }

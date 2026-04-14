@@ -282,8 +282,8 @@ func TestAgentChatTurnExecutesPlanToolCallsAndReturnsFinalAssistantMessage(t *te
 	}
 
 	activePlan := findActivePlanProjection(t, agent.Projections)
-	if activePlan.Snapshot().Plan.Goal != "Refactor auth" {
-		t.Fatalf("active plan goal = %q, want Refactor auth", activePlan.Snapshot().Plan.Goal)
+	if activePlan.SnapshotForSession(session.SessionID).Plan.Goal != "Refactor auth" {
+		t.Fatalf("active plan goal = %q, want Refactor auth", activePlan.SnapshotForSession(session.SessionID).Plan.Goal)
 	}
 	if len(session.Messages) != 2 {
 		t.Fatalf("session messages len = %d, want 2", len(session.Messages))
@@ -452,8 +452,8 @@ func TestAgentChatTurnExecutesStreamedPlanToolCallsAndReturnsFinalAssistantMessa
 		t.Fatalf("transport call count = %d, want 2", call)
 	}
 	activePlan := findActivePlanProjection(t, agent.Projections)
-	if activePlan.Snapshot().Plan.Goal != "Refactor auth" {
-		t.Fatalf("active plan goal = %q, want Refactor auth", activePlan.Snapshot().Plan.Goal)
+	if activePlan.SnapshotForSession(session.SessionID).Plan.Goal != "Refactor auth" {
+		t.Fatalf("active plan goal = %q, want Refactor auth", activePlan.SnapshotForSession(session.SessionID).Plan.Goal)
 	}
 }
 

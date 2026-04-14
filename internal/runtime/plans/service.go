@@ -25,6 +25,7 @@ func NewService(now func() time.Time, newID func(string) string) *Service {
 }
 
 type InitPlanInput struct {
+	SessionID string
 	Goal    string
 	Source  string
 	ActorID string
@@ -64,6 +65,9 @@ type AddTaskNoteInput struct {
 }
 
 func (s *Service) InitPlan(active projections.ActivePlanSnapshot, input InitPlanInput) ([]eventing.Event, error) {
+	if input.SessionID == "" {
+		return nil, fmt.Errorf("session_id is empty")
+	}
 	if input.Goal == "" {
 		return nil, fmt.Errorf("plan goal is empty")
 	}
@@ -77,7 +81,8 @@ func (s *Service) InitPlan(active projections.ActivePlanSnapshot, input InitPlan
 			AggregateID:   active.Plan.ID,
 			AggregateType: eventing.AggregatePlan,
 			Payload: map[string]any{
-				"plan_id": active.Plan.ID,
+				"session_id": input.SessionID,
+				"plan_id":    active.Plan.ID,
 			},
 			Source:  input.Source,
 			ActorID: input.ActorID,
@@ -91,8 +96,9 @@ func (s *Service) InitPlan(active projections.ActivePlanSnapshot, input InitPlan
 		AggregateID:   planID,
 		AggregateType: eventing.AggregatePlan,
 		Payload: map[string]any{
-			"plan_id": planID,
-			"goal":    input.Goal,
+			"session_id": input.SessionID,
+			"plan_id":    planID,
+			"goal":       input.Goal,
 		},
 		Source:  input.Source,
 		ActorID: input.ActorID,

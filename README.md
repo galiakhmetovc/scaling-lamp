@@ -42,12 +42,12 @@ Run modes:
 
 Chat mode baseline:
 
-- multiline input
-- send on double `Enter`
-- `/help`, `/session`, `/exit`
-- streaming text output
+- real TTY:
+  - full TUI workspace with tabs for sessions, chat, plan, tools, and settings
+- non-interactive stdin:
+  - fallback to legacy line-based chat loop
 - transcript-backed resume via `TranscriptProjection`
-- chat UX behavior comes from `ChatContract` strategies and params
+- chat UX behavior still comes from `ChatContract` strategies and params
 
 Current prompt and tool baseline:
 
@@ -60,6 +60,7 @@ Current prompt and tool baseline:
   - workspace filesystem tools
   - bounded shell execution
 - plan-management state is event-sourced and projected back into session head
+- internal planning state is now session-scoped, so each chat session has its own active plan/head view
 
 Current plan-tools docs:
 

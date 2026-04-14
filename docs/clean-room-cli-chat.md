@@ -9,18 +9,11 @@ Entry points:
 
 Current behavior:
 
+- real TTY input runs the workspace TUI in `internal/runtime/tui`
+- non-interactive stdin falls back to the older line-based chat loop in `internal/runtime/cli`
 - `--chat` starts a new session by default
 - `--resume <session-id>` resumes an existing session
-- terminal interaction lives in `internal/runtime/cli`
-- `cmd/agent` only delegates chat mode into that layer
-- chat behavior is controlled by `ChatContract`
-- input is multiline
-- send happens on double `Enter`
-- assistant output is streamed to stdout
-- slash commands:
-  - `/help`
-  - `/session`
-  - `/exit`
+- chat behavior is still controlled by `ChatContract`
 
 Current `zai-smoke` chat strategies:
 
@@ -55,7 +48,7 @@ Current `zai-smoke` chat params:
 - `ChatResumePolicy`
   - `require_explicit_id = true`
 
-Current runtime behavior per turn:
+Current line-based fallback behavior per turn:
 
 1. record user message in session event stream
 2. record run start
@@ -73,6 +66,7 @@ Current terminal observability behavior:
 - terminal output only shows short operator-facing summaries
 - short tool summaries are rendered from `ToolActivity` callbacks in the CLI layer
 - plan rendering is sourced from `PlanHeadProjection`, not from ad hoc string assembly in chat runtime
+- active plan rendering is session-scoped and follows the current chat session, not a global workspace plan
 - when `render_markdown = true`, assistant text is buffered until the turn completes and then post-rendered through a terminal markdown renderer
 - tool/status/plan lanes remain append-only and are not mixed into markdown rendering
 

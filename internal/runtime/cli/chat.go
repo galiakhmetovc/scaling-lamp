@@ -96,7 +96,7 @@ func RunChat(ctx context.Context, agent *runtime.Agent, resumeID string, stdin i
 						_, _ = fmt.Fprintf(stdout, "%s\n", summarizeToolResult(activity))
 					}
 					if agent.Contracts.Chat.Status.Params.ShowPlanAfterPlanTools && isPlanTool(activity.Name) {
-						if head, ok := agent.CurrentPlanHead(); ok {
+						if head, ok := agent.CurrentPlanHead(session.SessionID); ok {
 							if rendered := renderPlan(head); rendered != "" {
 								_, _ = fmt.Fprintln(stdout, rendered)
 							}

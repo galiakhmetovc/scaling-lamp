@@ -23,6 +23,7 @@ func TestServiceInitPlanArchivesPreviousActivePlan(t *testing.T) {
 	}
 
 	events, err := svc.InitPlan(active, plans.InitPlanInput{
+		SessionID: "session-1",
 		Goal:    "New goal",
 		Source:  "agent.chat",
 		ActorID: "zai-smoke",
@@ -41,6 +42,9 @@ func TestServiceInitPlanArchivesPreviousActivePlan(t *testing.T) {
 	}
 	if events[1].Payload["goal"] != "New goal" {
 		t.Fatalf("created goal = %#v", events[1].Payload["goal"])
+	}
+	if events[1].Payload["session_id"] != "session-1" {
+		t.Fatalf("created session_id = %#v, want session-1", events[1].Payload["session_id"])
 	}
 }
 
@@ -94,6 +98,7 @@ func TestPlanProjectionsBuildActiveArchiveAndHeadViews(t *testing.T) {
 			AggregateType: eventing.AggregatePlan,
 			Payload: map[string]any{
 				"plan_id": "plan-1",
+				"session_id": "session-1",
 				"goal":    "Refactor auth",
 			},
 		},
@@ -104,6 +109,7 @@ func TestPlanProjectionsBuildActiveArchiveAndHeadViews(t *testing.T) {
 			AggregateType: eventing.AggregatePlanTask,
 			Payload: map[string]any{
 				"plan_id":     "plan-1",
+				"session_id":  "session-1",
 				"task_id":     "t1",
 				"description": "Design schema",
 				"status":      "done",
@@ -118,6 +124,7 @@ func TestPlanProjectionsBuildActiveArchiveAndHeadViews(t *testing.T) {
 			AggregateType: eventing.AggregatePlanTask,
 			Payload: map[string]any{
 				"plan_id":     "plan-1",
+				"session_id":  "session-1",
 				"task_id":     "t2",
 				"description": "Write middleware",
 				"status":      "todo",
@@ -132,6 +139,7 @@ func TestPlanProjectionsBuildActiveArchiveAndHeadViews(t *testing.T) {
 			AggregateType: eventing.AggregatePlanTask,
 			Payload: map[string]any{
 				"plan_id":     "plan-1",
+				"session_id":  "session-1",
 				"task_id":     "t3",
 				"description": "Integrate routes",
 				"status":      "todo",
@@ -146,6 +154,7 @@ func TestPlanProjectionsBuildActiveArchiveAndHeadViews(t *testing.T) {
 			AggregateType: eventing.AggregatePlanTask,
 			Payload: map[string]any{
 				"plan_id":        "plan-1",
+				"session_id":     "session-1",
 				"task_id":        "t4",
 				"description":    "Write tests",
 				"status":         "blocked",
@@ -161,6 +170,7 @@ func TestPlanProjectionsBuildActiveArchiveAndHeadViews(t *testing.T) {
 			AggregateType: eventing.AggregatePlanTask,
 			Payload: map[string]any{
 				"plan_id":   "plan-1",
+				"session_id": "session-1",
 				"task_id":   "t2",
 				"note_text": "Roles are still cached.",
 			},
@@ -175,16 +185,17 @@ func TestPlanProjectionsBuildActiveArchiveAndHeadViews(t *testing.T) {
 		}
 	}
 
-	if !head.Snapshot().Ready["t2"] {
+	headSnapshot := head.SnapshotForSession("session-1")
+	if !headSnapshot.Ready["t2"] {
 		t.Fatalf("task t2 ready = false, want true")
 	}
-	if !head.Snapshot().WaitingOnDependencies["t3"] {
+	if !headSnapshot.WaitingOnDependencies["t3"] {
 		t.Fatalf("task t3 waiting_on_dependencies = false, want true")
 	}
-	if head.Snapshot().Blocked["t4"] != "waiting for Vasya" {
-		t.Fatalf("task t4 blocked reason = %q", head.Snapshot().Blocked["t4"])
+	if headSnapshot.Blocked["t4"] != "waiting for Vasya" {
+		t.Fatalf("task t4 blocked reason = %q", headSnapshot.Blocked["t4"])
 	}
-	if got := head.Snapshot().Notes["t2"]; len(got) != 1 || got[0] != "Roles are still cached." {
+	if got := headSnapshot.Notes["t2"]; len(got) != 1 || got[0] != "Roles are still cached." {
 		t.Fatalf("task t2 notes = %#v", got)
 	}
 
@@ -195,6 +206,7 @@ func TestPlanProjectionsBuildActiveArchiveAndHeadViews(t *testing.T) {
 		AggregateType: eventing.AggregatePlan,
 		Payload: map[string]any{
 			"plan_id": "plan-1",
+			"session_id": "session-1",
 		},
 	}
 	for _, projection := range []projections.Projection{active, archive, head} {
@@ -203,17 +215,17 @@ func TestPlanProjectionsBuildActiveArchiveAndHeadViews(t *testing.T) {
 		}
 	}
 
-	if active.Snapshot().Plan.ID != "" {
-		t.Fatalf("active plan after archive = %#v, want empty", active.Snapshot().Plan)
+	if active.SnapshotForSession("session-1").Plan.ID != "" {
+		t.Fatalf("active plan after archive = %#v, want empty", active.SnapshotForSession("session-1").Plan)
 	}
-	if len(archive.Snapshot().Plans) != 1 {
-		t.Fatalf("archive plans len = %d, want 1", len(archive.Snapshot().Plans))
+	if len(archive.SnapshotForSession("session-1")) != 1 {
+		t.Fatalf("archive plans len = %d, want 1", len(archive.SnapshotForSession("session-1")))
 	}
-	if head.Snapshot().Plan.ID != "" {
-		t.Fatalf("plan head after archive = %#v, want empty", head.Snapshot().Plan)
+	if head.SnapshotForSession("session-1").Plan.ID != "" {
+		t.Fatalf("plan head after archive = %#v, want empty", head.SnapshotForSession("session-1").Plan)
 	}
-	if len(head.Snapshot().Ready) != 0 || len(head.Snapshot().WaitingOnDependencies) != 0 {
-		t.Fatalf("plan head dependency views after archive = %#v / %#v, want empty", head.Snapshot().Ready, head.Snapshot().WaitingOnDependencies)
+	if len(head.SnapshotForSession("session-1").Ready) != 0 || len(head.SnapshotForSession("session-1").WaitingOnDependencies) != 0 {
+		t.Fatalf("plan head dependency views after archive = %#v / %#v, want empty", head.SnapshotForSession("session-1").Ready, head.SnapshotForSession("session-1").WaitingOnDependencies)
 	}
 }
 

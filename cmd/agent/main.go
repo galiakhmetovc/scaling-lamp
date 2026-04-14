@@ -9,8 +9,10 @@ import (
 	"os"
 	"strings"
 
+	"golang.org/x/term"
 	"teamd/internal/runtime"
 	runtimecli "teamd/internal/runtime/cli"
+	runtimetui "teamd/internal/runtime/tui"
 )
 
 func main() {
@@ -51,6 +53,9 @@ func runWithIO(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 		return fmt.Errorf("build agent: %w", err)
 	}
 	if *chatMode {
+		if file, ok := stdin.(*os.File); ok && term.IsTerminal(int(file.Fd())) {
+			return runtimetui.Run(context.Background(), agent, *resumeID, stdin, stdout)
+		}
 		return runtimecli.RunChat(context.Background(), agent, *resumeID, stdin, stdout)
 	}
 	if *smokePrompt == "" {

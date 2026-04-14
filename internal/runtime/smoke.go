@@ -82,7 +82,7 @@ func (a *Agent) Smoke(ctx context.Context, input SmokeInput) (provider.ClientRes
 		Messages: []contracts.Message{
 			{Role: "user", Content: input.Prompt},
 		},
-	}, nil)
+	}, nil, 0)
 	if err != nil {
 		recordErr := a.RecordEvent(ctx, eventing.Event{
 			ID:               a.newID("evt-run-failed"),
