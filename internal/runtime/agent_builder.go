@@ -9,6 +9,7 @@ import (
 
 type Agent struct {
 	Config      config.AgentConfig
+	Contracts   ResolvedContracts
 	EventLog    EventLog
 	Projections []projections.Projection
 }
@@ -39,10 +40,15 @@ func BuildAgent(configPath string) (*Agent, error) {
 	if err != nil {
 		return nil, fmt.Errorf("build projections: %w", err)
 	}
+	contracts, err := ResolveContracts(cfg)
+	if err != nil {
+		return nil, fmt.Errorf("resolve contracts: %w", err)
+	}
 
 	return &Agent{
-		Config:   cfg,
-		EventLog: NewInMemoryEventLog(),
+		Config:    cfg,
+		Contracts: contracts,
+		EventLog:  NewInMemoryEventLog(),
 		Projections: projectionSet,
 	}, nil
 }

@@ -4,10 +4,6 @@
 
 - `teamD-28p`
 
-## Contract Resolver
-
-- `teamD-9uk`
-
 ## Transport Contract Executor
 
 - `teamD-8fq`

@@ -40,6 +40,17 @@ func LoadModuleHeader(path string) (ModuleHeader, error) {
 	return header, nil
 }
 
+func LoadModule(path string, dst any) error {
+	body, err := os.ReadFile(path)
+	if err != nil {
+		return fmt.Errorf("read module: %w", err)
+	}
+	if err := yaml.Unmarshal(body, dst); err != nil {
+		return fmt.Errorf("decode module: %w", err)
+	}
+	return nil
+}
+
 func LoadModuleGraph(cfg AgentConfig, registry *ModuleRegistry) (ModuleGraph, error) {
 	graph := ModuleGraph{
 		Contracts: map[string]ModuleHeader{},
@@ -109,7 +120,7 @@ func loadModuleReferences(modulePath string, refFields []string) ([]string, erro
 	}
 
 	var raw struct {
-		Spec map[string]string `yaml:"spec"`
+		Spec map[string]any `yaml:"spec"`
 	}
 	if err := yaml.Unmarshal(body, &raw); err != nil {
 		return nil, fmt.Errorf("decode module body: %w", err)
@@ -118,8 +129,12 @@ func loadModuleReferences(modulePath string, refFields []string) ([]string, erro
 	moduleDir := filepath.Dir(modulePath)
 	references := make([]string, 0, len(refFields))
 	for _, field := range refFields {
-		refPath := raw.Spec[field]
-		if refPath == "" {
+		refValue, ok := raw.Spec[field]
+		if !ok {
+			continue
+		}
+		refPath, ok := refValue.(string)
+		if !ok || refPath == "" {
 			continue
 		}
 		references = append(references, resolveModulePath(moduleDir, refPath))

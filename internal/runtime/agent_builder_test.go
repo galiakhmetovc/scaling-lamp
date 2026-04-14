@@ -19,7 +19,8 @@ func TestBuildAgentLoadsRootConfigAndBootstrapsRuntime(t *testing.T) {
 		"id: agent-test\n"+
 		"spec:\n"+
 		"  contracts:\n"+
-		"    transport: ./contracts/transport.yaml\n")
+		"    transport: ./contracts/transport.yaml\n"+
+		"    memory: ./contracts/memory.yaml\n")
 
 	mustWriteFile(t, filepath.Join(dir, "contracts", "transport.yaml"), ""+
 		"kind: TransportContractConfig\n"+
@@ -28,10 +29,33 @@ func TestBuildAgentLoadsRootConfigAndBootstrapsRuntime(t *testing.T) {
 		"spec:\n"+
 		"  endpoint_policy_path: ../policies/transport/endpoint.yaml\n")
 
+	mustWriteFile(t, filepath.Join(dir, "contracts", "memory.yaml"), ""+
+		"kind: MemoryContractConfig\n"+
+		"version: v1\n"+
+		"id: memory-main\n"+
+		"spec:\n"+
+		"  offload_policy_path: ../policies/memory/offload.yaml\n")
+
 	mustWriteFile(t, filepath.Join(dir, "policies", "transport", "endpoint.yaml"), ""+
 		"kind: EndpointPolicyConfig\n"+
 		"version: v1\n"+
-		"id: endpoint-main\n")
+		"id: endpoint-main\n"+
+		"spec:\n"+
+		"  enabled: true\n"+
+		"  strategy: static\n"+
+		"  params:\n"+
+		"    base_url: https://api.z.ai\n"+
+		"    path: /api/paas/v4/chat/completions\n")
+
+	mustWriteFile(t, filepath.Join(dir, "policies", "memory", "offload.yaml"), ""+
+		"kind: OffloadPolicyConfig\n"+
+		"version: v1\n"+
+		"id: offload-main\n"+
+		"spec:\n"+
+		"  enabled: true\n"+
+		"  strategy: old_only\n"+
+		"  params:\n"+
+		"    max_chars: 1200\n")
 
 	agent, err := runtime.BuildAgent(filepath.Join(dir, "agent.yaml"))
 	if err != nil {
@@ -46,6 +70,18 @@ func TestBuildAgentLoadsRootConfigAndBootstrapsRuntime(t *testing.T) {
 	}
 	if len(agent.Projections) != 2 {
 		t.Fatalf("agent projections len = %d, want 2", len(agent.Projections))
+	}
+	if agent.Contracts.ProviderRequest.Transport.ID != "transport-main" {
+		t.Fatalf("transport contract ID = %q, want %q", agent.Contracts.ProviderRequest.Transport.ID, "transport-main")
+	}
+	if agent.Contracts.ProviderRequest.Transport.Endpoint.Strategy != "static" {
+		t.Fatalf("endpoint strategy = %q, want %q", agent.Contracts.ProviderRequest.Transport.Endpoint.Strategy, "static")
+	}
+	if agent.Contracts.ProviderRequest.Transport.Endpoint.Params.BaseURL != "https://api.z.ai" {
+		t.Fatalf("endpoint base URL = %q, want %q", agent.Contracts.ProviderRequest.Transport.Endpoint.Params.BaseURL, "https://api.z.ai")
+	}
+	if agent.Contracts.Memory.Offload.Strategy != "old_only" {
+		t.Fatalf("offload strategy = %q, want %q", agent.Contracts.Memory.Offload.Strategy, "old_only")
 	}
 }
 

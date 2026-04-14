@@ -39,7 +39,7 @@ Current responsibility:
 
 Current limitation:
 - graph stores headers only
-- there is still no effective contract resolution step
+- loader does not decode effective contracts itself; contract decoding now happens in the runtime resolver
 
 ### `internal/config/registry.go`
 
@@ -117,13 +117,35 @@ Current responsibility:
 - load root config
 - create in-memory event log
 - validate loaded contract and policy module kinds
+- resolve typed runtime contracts from loaded modules
 - assemble projections through built-in registries
 - return one built agent instance
 
 Current limitation:
 - builder still chooses default projection composition instead of config-driven composition
-- no contract resolution
 - no executor wiring
+
+### `internal/runtime/contracts.go`
+
+Resolved runtime contract types.
+
+Current responsibility:
+- define the first typed runtime contracts for one built agent instance
+- expose `ProviderRequestContract` and `MemoryContract` as stable runtime surfaces
+
+### `internal/runtime/contract_resolver.go`
+
+First contract resolver.
+
+Current responsibility:
+- decode transport and memory contract modules
+- resolve policy module paths relative to their contract files
+- produce typed resolved contracts for one agent instance
+
+Current limitation:
+- only transport and memory are resolved
+- there is still no policy merge layer (`global < session < run`)
+- no execution-time contract application yet
 
 ## What Is Good About This Skeleton
 
@@ -138,17 +160,16 @@ Current limitation:
 These are known temporary shortcuts and should be removed in the next slices.
 
 1. `AgentBuilder` still chooses the default projection set instead of using config-driven composition.
-2. Config graph loading still stops at module headers and does not decode effective contracts.
+2. Config graph loading still stops at module headers and does not decode effective contracts itself.
 3. Event envelopes are still too small for a serious event-sourced system, even after adding sequence and trace linkage metadata.
-4. There is no contract resolver yet.
+4. Contract resolution is still narrow and only covers the first transport and memory path.
 5. There is no persistent event store or persistent projections yet.
 6. There is no full policy and strategy registry system yet.
 
 ## Next Required Slices
 
 1. generalize config graph loader
-2. contract resolver
-3. first `TransportContract` executor
-4. persistent event log
-5. persistent projections
-6. policy and strategy registries
+2. first `TransportContract` executor
+3. persistent event log
+4. persistent projections
+5. policy and strategy registries
