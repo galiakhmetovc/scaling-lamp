@@ -23,19 +23,22 @@ Current role:
 Current flow:
 1. build provider request body through `RequestShapeExecutor`
 2. execute HTTP request through `TransportExecutor`
+3. parse provider-specific response body into a normalized provider result
 3. return:
    - request body bytes
-   - normalized transport response
+   - raw transport response
+   - normalized provider response
 
 ### `internal/provider/client_test.go`
 
 Current coverage:
 - request-shape and transport composition
 - auth and content-type propagation
-- normalized result shape
+- parsed assistant response
+- usage extraction
+- provider error normalization
 
 ## Current Limitation
 
-- result still exposes raw transport response, not provider-specific parsed output
-- usage parsing is still absent
-- provider errors are still transport/body level, not higher-level normalized provider semantics
+- parser currently assumes an OpenAI-compatible response shape
+- provider result is normalized, but provider-specific reasoning/tool-call parsing is still absent

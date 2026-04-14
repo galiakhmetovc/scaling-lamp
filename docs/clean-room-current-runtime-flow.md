@@ -122,8 +122,10 @@ Current role:
 
 Current components built:
 - `Contracts`
+- `PromptAssets`
 - `Transport`
 - `RequestShape`
+- `ProviderClient`
 - `EventLog`
 - `Projections`
 - optional projection snapshot store
@@ -131,7 +133,6 @@ Current components built:
 Current limitation:
 - builder composition is explicit and config-driven now
 - component selection still comes only from the built-in component registry
-- provider client exists below runtime, but is not yet built into the `Agent` surface
 
 ### `internal/runtime/component_registry.go`
 
@@ -151,10 +152,12 @@ Current provider pipeline now:
 - resolve selected prompt assets into prepend/append message buckets
 - build request-shape JSON body
 - execute transport
+- parse provider-specific response body
+- extract normalized usage fields
 
 Current limitation:
-- runtime builder does not yet assemble this provider client into the built `Agent`
-- returned result is still transport-level, not provider-normalized
+- parser currently assumes an OpenAI-compatible response body
+- provider-specific reasoning and tool-call parsing are still missing
 
 ## Request-Shape Execution
 

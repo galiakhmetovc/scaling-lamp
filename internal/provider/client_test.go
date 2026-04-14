@@ -25,7 +25,22 @@ func TestClientBuildsAndSendsProviderRequest(t *testing.T) {
 				return &http.Response{
 					StatusCode: http.StatusOK,
 					Header:     http.Header{"X-Test": []string{"ok"}},
-					Body:       io.NopCloser(bytes.NewBufferString(`{"id":"resp-1"}`)),
+					Body: io.NopCloser(bytes.NewBufferString(`{
+  "id":"resp-1",
+  "model":"glm-4.6",
+  "choices":[
+    {
+      "index":0,
+      "finish_reason":"stop",
+      "message":{"role":"assistant","content":"Pong"}
+    }
+  ],
+  "usage":{
+    "prompt_tokens":12,
+    "completion_tokens":3,
+    "total_tokens":15
+  }
+}`)),
 				}, nil
 			},
 		}),
@@ -135,8 +150,20 @@ func TestClientBuildsAndSendsProviderRequest(t *testing.T) {
 	if result.Transport.StatusCode != http.StatusOK {
 		t.Fatalf("status = %d, want 200", result.Transport.StatusCode)
 	}
-	if string(result.Transport.Body) != `{"id":"resp-1"}` {
-		t.Fatalf("body = %q", string(result.Transport.Body))
+	if result.Provider.ID != "resp-1" {
+		t.Fatalf("provider id = %q, want resp-1", result.Provider.ID)
+	}
+	if result.Provider.Model != "glm-4.6" {
+		t.Fatalf("provider model = %q, want glm-4.6", result.Provider.Model)
+	}
+	if result.Provider.Message.Role != "assistant" || result.Provider.Message.Content != "Pong" {
+		t.Fatalf("provider message = %#v, want assistant Pong", result.Provider.Message)
+	}
+	if result.Provider.FinishReason != "stop" {
+		t.Fatalf("finish reason = %q, want stop", result.Provider.FinishReason)
+	}
+	if result.Provider.Usage.InputTokens != 12 || result.Provider.Usage.OutputTokens != 3 || result.Provider.Usage.TotalTokens != 15 {
+		t.Fatalf("provider usage = %#v, want 12/3/15", result.Provider.Usage)
 	}
 	if len(result.RequestBody) == 0 {
 		t.Fatal("request body is empty")
@@ -157,5 +184,67 @@ func TestClientBuildsAndSendsProviderRequest(t *testing.T) {
 	lastMessage, ok := messages[2].(map[string]any)
 	if !ok || lastMessage["content"] != "Answer with final text only." {
 		t.Fatalf("last message = %#v, want appended prompt asset", messages[2])
+	}
+}
+
+func TestClientReturnsProviderStatusError(t *testing.T) {
+	t.Setenv("ZAI_API_KEY", "secret-token")
+
+	client := provider.NewClient(
+		provider.NewPromptAssetExecutor(),
+		provider.NewRequestShapeExecutor(),
+		provider.NewTransportExecutor(fakeDoer{
+			do: func(req *http.Request) (*http.Response, error) {
+				return &http.Response{
+					StatusCode: http.StatusTooManyRequests,
+					Body:       io.NopCloser(bytes.NewBufferString(`{"error":"rate limited"}`)),
+					Header:     http.Header{},
+				}, nil
+			},
+		}),
+	)
+
+	_, err := client.Execute(context.Background(), contracts.ResolvedContracts{
+		ProviderRequest: contracts.ProviderRequestContract{
+			Transport: contracts.TransportContract{
+				Endpoint: contracts.EndpointPolicy{
+					Enabled:  true,
+					Strategy: "static",
+					Params: contracts.EndpointParams{
+						BaseURL: "https://api.z.ai",
+						Path:    "/api/paas/v4/chat/completions",
+						Method:  http.MethodPost,
+					},
+				},
+				Auth: contracts.AuthPolicy{
+					Enabled:  true,
+					Strategy: "bearer_token",
+					Params: contracts.AuthParams{
+						Header:      "Authorization",
+						Prefix:      "Bearer",
+						ValueEnvVar: "ZAI_API_KEY",
+					},
+				},
+			},
+			RequestShape: contracts.RequestShapeContract{
+				Model: contracts.ModelPolicy{
+					Enabled:  true,
+					Strategy: "static_model",
+					Params: contracts.ModelParams{Model: "glm-4.6"},
+				},
+				Messages: contracts.MessagePolicy{
+					Enabled:  true,
+					Strategy: "raw_messages",
+				},
+			},
+		},
+	}, provider.ClientInput{
+		Messages: []contracts.Message{{Role: "user", Content: "Ping"}},
+	})
+	if err == nil {
+		t.Fatal("Execute error = nil, want provider status error")
+	}
+	if got := err.Error(); got != `provider returned status 429: {"error":"rate limited"}` {
+		t.Fatalf("Execute error = %q", got)
 	}
 }

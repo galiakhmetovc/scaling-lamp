@@ -25,8 +25,10 @@ func TestBuildAgentLoadsRootConfigAndBootstrapsRuntime(t *testing.T) {
 		"  runtime:\n"+
 		"    event_log: file_jsonl\n"+
 		"    event_log_path: ./var/events.jsonl\n"+
+		"    prompt_asset_executor: prompt_asset_default\n"+
 		"    transport_executor: transport_default\n"+
 		"    request_shape_executor: request_shape_default\n"+
+		"    provider_client: provider_client_default\n"+
 		"    projections: [session, run]\n"+
 		"  contracts:\n"+
 		"    transport: ./contracts/transport.yaml\n"+
@@ -194,8 +196,14 @@ func TestBuildAgentLoadsRootConfigAndBootstrapsRuntime(t *testing.T) {
 	if agent.Transport == nil {
 		t.Fatal("agent Transport is nil")
 	}
+	if agent.PromptAssets == nil {
+		t.Fatal("agent PromptAssets is nil")
+	}
 	if agent.RequestShape == nil {
 		t.Fatal("agent RequestShape is nil")
+	}
+	if agent.ProviderClient == nil {
+		t.Fatal("agent ProviderClient is nil")
 	}
 	if agent.Contracts.ProviderRequest.Transport.ID != "transport-main" {
 		t.Fatalf("transport contract ID = %q, want %q", agent.Contracts.ProviderRequest.Transport.ID, "transport-main")
@@ -240,8 +248,10 @@ func TestBuildAgentUsesConfiguredRuntimeComposition(t *testing.T) {
 		"    event_log: file_jsonl\n"+
 		"    event_log_path: ./var/events.jsonl\n"+
 		"    projection_store_path: ./var/projections.json\n"+
+		"    prompt_asset_executor: prompt_asset_default\n"+
 		"    transport_executor: transport_default\n"+
 		"    request_shape_executor: request_shape_default\n"+
+		"    provider_client: provider_client_default\n"+
 		"    projections: [run]\n"+
 		"  contracts:\n"+
 		"    transport: ./contracts/transport.yaml\n"+
@@ -449,8 +459,10 @@ func TestBuildAgentRestoresProjectionSnapshotsFromStore(t *testing.T) {
 		"    event_log: file_jsonl\n"+
 		"    event_log_path: ./var/events.jsonl\n"+
 		"    projection_store_path: ./var/projections.json\n"+
+		"    prompt_asset_executor: prompt_asset_default\n"+
 		"    transport_executor: transport_default\n"+
 		"    request_shape_executor: request_shape_default\n"+
+		"    provider_client: provider_client_default\n"+
 		"    projections: [session, run]\n"+
 		"  contracts:\n"+
 		"    transport: ./contracts/transport.yaml\n"+
@@ -496,8 +508,10 @@ func TestAgentRecordEventPersistsProjectionSnapshotsAutomatically(t *testing.T) 
 		"    event_log: file_jsonl\n"+
 		"    event_log_path: ./var/events.jsonl\n"+
 		"    projection_store_path: ./var/projections.json\n"+
+		"    prompt_asset_executor: prompt_asset_default\n"+
 		"    transport_executor: transport_default\n"+
 		"    request_shape_executor: request_shape_default\n"+
+		"    provider_client: provider_client_default\n"+
 		"    projections: [session, run]\n"+
 		"  contracts:\n"+
 		"    transport: ./contracts/transport.yaml\n"+

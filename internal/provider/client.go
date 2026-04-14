@@ -2,7 +2,10 @@ package provider
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"net/http"
+	"strings"
 
 	"teamd/internal/contracts"
 )
@@ -16,12 +19,27 @@ type ClientInput struct {
 type ClientResult struct {
 	RequestBody []byte
 	Transport   Response
+	Provider    ProviderResponse
 }
 
 type Client struct {
 	PromptAssets *PromptAssetExecutor
 	RequestShape *RequestShapeExecutor
 	Transport    *TransportExecutor
+}
+
+type Usage struct {
+	InputTokens  int
+	OutputTokens int
+	TotalTokens  int
+}
+
+type ProviderResponse struct {
+	ID           string
+	Model        string
+	Message      contracts.Message
+	FinishReason string
+	Usage        Usage
 }
 
 func NewClient(promptAssets *PromptAssetExecutor, requestShape *RequestShapeExecutor, transport *TransportExecutor) *Client {
@@ -70,9 +88,62 @@ func (c *Client) Execute(ctx context.Context, contractSet contracts.ResolvedCont
 	if err != nil {
 		return ClientResult{}, fmt.Errorf("execute provider transport: %w", err)
 	}
+	parsed, err := parseProviderResponse(response)
+	if err != nil {
+		return ClientResult{}, err
+	}
 
 	return ClientResult{
 		RequestBody: requestBody,
 		Transport:   response,
+		Provider:    parsed,
+	}, nil
+}
+
+func parseProviderResponse(response Response) (ProviderResponse, error) {
+	if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
+		body := strings.TrimSpace(string(response.Body))
+		if body == "" {
+			return ProviderResponse{}, fmt.Errorf("provider returned status %d", response.StatusCode)
+		}
+		return ProviderResponse{}, fmt.Errorf("provider returned status %d: %s", response.StatusCode, body)
+	}
+
+	var raw struct {
+		ID      string `json:"id"`
+		Model   string `json:"model"`
+		Choices []struct {
+			FinishReason string `json:"finish_reason"`
+			Message      struct {
+				Role    string `json:"role"`
+				Content string `json:"content"`
+			} `json:"message"`
+		} `json:"choices"`
+		Usage struct {
+			PromptTokens     int `json:"prompt_tokens"`
+			CompletionTokens int `json:"completion_tokens"`
+			TotalTokens      int `json:"total_tokens"`
+		} `json:"usage"`
+	}
+	if err := json.Unmarshal(response.Body, &raw); err != nil {
+		return ProviderResponse{}, fmt.Errorf("decode provider response: %w", err)
+	}
+	if len(raw.Choices) == 0 {
+		return ProviderResponse{}, fmt.Errorf("provider response has no choices")
+	}
+
+	return ProviderResponse{
+		ID:    raw.ID,
+		Model: raw.Model,
+		Message: contracts.Message{
+			Role:    raw.Choices[0].Message.Role,
+			Content: raw.Choices[0].Message.Content,
+		},
+		FinishReason: raw.Choices[0].FinishReason,
+		Usage: Usage{
+			InputTokens:  raw.Usage.PromptTokens,
+			OutputTokens: raw.Usage.CompletionTokens,
+			TotalTokens:  raw.Usage.TotalTokens,
+		},
 	}, nil
 }

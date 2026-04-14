@@ -12,12 +12,14 @@ import (
 )
 
 type Agent struct {
-	Config       config.AgentConfig
-	Contracts    contracts.ResolvedContracts
-	Transport    *provider.TransportExecutor
-	RequestShape *provider.RequestShapeExecutor
-	EventLog     EventLog
-	Projections  []projections.Projection
+	Config          config.AgentConfig
+	Contracts       contracts.ResolvedContracts
+	PromptAssets    *provider.PromptAssetExecutor
+	Transport       *provider.TransportExecutor
+	RequestShape    *provider.RequestShapeExecutor
+	ProviderClient  *provider.Client
+	EventLog        EventLog
+	Projections     []projections.Projection
 	ProjectionStore projections.Store
 }
 
@@ -91,14 +93,24 @@ func BuildAgent(configPath string) (*Agent, error) {
 	if err != nil {
 		return nil, fmt.Errorf("build request-shape executor: %w", err)
 	}
+	promptAssetExecutor, err := componentRegistry.BuildPromptAssetExecutor(cfg.Spec.Runtime.PromptAssetExecutor)
+	if err != nil {
+		return nil, fmt.Errorf("build prompt-asset executor: %w", err)
+	}
+	providerClient, err := componentRegistry.BuildProviderClient(cfg.Spec.Runtime.ProviderClient, promptAssetExecutor, requestShapeExecutor, transportExecutor)
+	if err != nil {
+		return nil, fmt.Errorf("build provider client: %w", err)
+	}
 
 	return &Agent{
-		Config:       cfg,
-		Contracts:    contracts,
-		Transport:    transportExecutor,
-		RequestShape: requestShapeExecutor,
-		EventLog:     eventLog,
-		Projections:  projectionSet,
+		Config:          cfg,
+		Contracts:       contracts,
+		PromptAssets:    promptAssetExecutor,
+		Transport:       transportExecutor,
+		RequestShape:    requestShapeExecutor,
+		ProviderClient:  providerClient,
+		EventLog:        eventLog,
+		Projections:     projectionSet,
 		ProjectionStore: projectionStore,
 	}, nil
 }

@@ -217,14 +217,12 @@ Current responsibility:
 These are known temporary shortcuts and should be removed in the next slices.
 
 1. Config graph loading still stops at module headers and does not decode effective contracts itself.
-2. Provider client exists, but builder still does not assemble it into the runtime `Agent`.
-3. Provider-specific response parsing and usage handling are still missing.
-4. Persistent event storage and automatic projection snapshot flushing now exist, but persistence is still snapshot-based only.
-5. There is only a first built-in policy/strategy registry layer; config-driven registry composition and strategy-driven decoding still do not exist yet.
-6. Prompt assets now have separate execution semantics with asset ids and prepend/append placement, but only for inline assets.
-7. Builder composition is config-driven, but only against the built-in component registry.
+2. Provider parsing currently assumes an OpenAI-compatible response body and still lacks richer reasoning/tool-call parsing.
+3. Persistent event storage and automatic projection snapshot flushing now exist, but persistence is still snapshot-based only.
+4. There is only a first built-in policy/strategy registry layer; config-driven registry composition and strategy-driven decoding still do not exist yet.
+5. Prompt assets now have separate execution semantics with asset ids and prepend/append placement, but only for inline assets.
+6. Builder composition is config-driven, but only against the built-in component registry.
 
 ## Next Required Slices
 
-1. build provider client into runtime builder
-2. provider-specific response and usage handling
+1. richer provider response semantics beyond the current OpenAI-compatible parser
