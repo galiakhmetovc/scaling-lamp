@@ -23,6 +23,8 @@ This document describes the first runnable `z.ai` smoke path in `rewrite/clean-r
   - `TEAMD_ZAI_API_KEY`
 - model:
   - `glm-5-turbo`
+- smoke timeout:
+  - `120s`
 
 ## What The Smoke Path Does
 
@@ -55,3 +57,6 @@ Observed runtime artifacts:
 - `var/zai-smoke/projections.json`
 
 The live run used `TEAMD_ZAI_API_KEY` transiently from an already running legacy `teamd-agent` process environment, without writing the secret into the repo config.
+
+The smoke timeout is intentionally higher than the original `30s` baseline.
+The current provider latency for ordinary prompts can get close to 30 seconds, and that made Windows/operator runs prone to `context deadline exceeded` even when the provider itself was healthy.

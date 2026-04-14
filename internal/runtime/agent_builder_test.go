@@ -649,6 +649,9 @@ func TestRepositoryZaiSmokeConfigLoadsAndResolvesContracts(t *testing.T) {
 	if resolved.ProviderRequest.Transport.Auth.Params.ValueEnvVar != "TEAMD_ZAI_API_KEY" {
 		t.Fatalf("auth env var = %q, want %q", resolved.ProviderRequest.Transport.Auth.Params.ValueEnvVar, "TEAMD_ZAI_API_KEY")
 	}
+	if resolved.ProviderRequest.Transport.Timeout.Params.Total != "120s" {
+		t.Fatalf("timeout total = %q, want %q", resolved.ProviderRequest.Transport.Timeout.Params.Total, "120s")
+	}
 	if resolved.ProviderRequest.RequestShape.Model.Params.Model != "glm-5-turbo" {
 		t.Fatalf("model = %q, want %q", resolved.ProviderRequest.RequestShape.Model.Params.Model, "glm-5-turbo")
 	}

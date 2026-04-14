@@ -5,4 +5,4 @@ spec:
   enabled: true
   strategy: per_request
   params:
-    total: 30s
+    total: 120s

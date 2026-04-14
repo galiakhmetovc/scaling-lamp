@@ -751,6 +751,8 @@ Current important `z.ai` values:
   - `TEAMD_ZAI_API_KEY`
 - model:
   - `glm-5-turbo`
+- timeout:
+  - `120s`
 
 Current persistence targets:
 
