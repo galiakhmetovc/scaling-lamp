@@ -26,8 +26,8 @@ func NewModuleRegistry() *ModuleRegistry {
 func NewBuiltInModuleRegistry() *ModuleRegistry {
 	registry := NewModuleRegistry()
 	registry.Register(ModuleType{
-		Kind:      "TransportContractConfig",
-		Category:  ModuleCategoryContract,
+		Kind:     "TransportContractConfig",
+		Category: ModuleCategoryContract,
 		RefFields: []string{
 			"endpoint_policy_path",
 			"auth_policy_path",
@@ -39,6 +39,18 @@ func NewBuiltInModuleRegistry() *ModuleRegistry {
 		Kind:      "MemoryContractConfig",
 		Category:  ModuleCategoryContract,
 		RefFields: []string{"offload_policy_path"},
+	})
+	registry.Register(ModuleType{
+		Kind:     "RequestShapeContractConfig",
+		Category: ModuleCategoryContract,
+		RefFields: []string{
+			"model_policy_path",
+			"message_policy_path",
+			"tool_policy_path",
+			"response_format_policy_path",
+			"streaming_policy_path",
+			"sampling_policy_path",
+		},
 	})
 	registry.Register(ModuleType{
 		Kind:     "EndpointPolicyConfig",
@@ -58,6 +70,30 @@ func NewBuiltInModuleRegistry() *ModuleRegistry {
 	})
 	registry.Register(ModuleType{
 		Kind:     "OffloadPolicyConfig",
+		Category: ModuleCategoryPolicy,
+	})
+	registry.Register(ModuleType{
+		Kind:     "ModelPolicyConfig",
+		Category: ModuleCategoryPolicy,
+	})
+	registry.Register(ModuleType{
+		Kind:     "MessagePolicyConfig",
+		Category: ModuleCategoryPolicy,
+	})
+	registry.Register(ModuleType{
+		Kind:     "ToolPolicyConfig",
+		Category: ModuleCategoryPolicy,
+	})
+	registry.Register(ModuleType{
+		Kind:     "ResponseFormatPolicyConfig",
+		Category: ModuleCategoryPolicy,
+	})
+	registry.Register(ModuleType{
+		Kind:     "StreamingPolicyConfig",
+		Category: ModuleCategoryPolicy,
+	})
+	registry.Register(ModuleType{
+		Kind:     "SamplingPolicyConfig",
 		Category: ModuleCategoryPolicy,
 	})
 	return registry

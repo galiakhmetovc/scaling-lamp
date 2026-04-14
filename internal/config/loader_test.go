@@ -53,6 +53,7 @@ func TestLoadRootConfigLoadsExplicitModuleGraph(t *testing.T) {
 		"spec:\n"+
 		"  contracts:\n"+
 		"    transport: ./contracts/transport.yaml\n"+
+		"    request_shape: ./contracts/request-shape.yaml\n"+
 		"    memory: ./contracts/memory.yaml\n")
 
 	mustWriteFile(t, filepath.Join(dir, "contracts", "transport.yaml"), ""+
@@ -69,6 +70,18 @@ func TestLoadRootConfigLoadsExplicitModuleGraph(t *testing.T) {
 		"spec:\n"+
 		"  offload_policy_path: ../policies/memory/offload.yaml\n")
 
+	mustWriteFile(t, filepath.Join(dir, "contracts", "request-shape.yaml"), ""+
+		"kind: RequestShapeContractConfig\n"+
+		"version: v1\n"+
+		"id: request-shape-main\n"+
+		"spec:\n"+
+		"  model_policy_path: ../policies/request-shape/model.yaml\n"+
+		"  message_policy_path: ../policies/request-shape/messages.yaml\n"+
+		"  tool_policy_path: ../policies/request-shape/tools.yaml\n"+
+		"  response_format_policy_path: ../policies/request-shape/response-format.yaml\n"+
+		"  streaming_policy_path: ../policies/request-shape/streaming.yaml\n"+
+		"  sampling_policy_path: ../policies/request-shape/sampling.yaml\n")
+
 	mustWriteFile(t, filepath.Join(dir, "policies", "transport", "endpoint.yaml"), ""+
 		"kind: EndpointPolicyConfig\n"+
 		"version: v1\n"+
@@ -78,6 +91,31 @@ func TestLoadRootConfigLoadsExplicitModuleGraph(t *testing.T) {
 		"kind: OffloadPolicyConfig\n"+
 		"version: v1\n"+
 		"id: offload-main\n")
+
+	mustWriteFile(t, filepath.Join(dir, "policies", "request-shape", "model.yaml"), ""+
+		"kind: ModelPolicyConfig\n"+
+		"version: v1\n"+
+		"id: model-main\n")
+	mustWriteFile(t, filepath.Join(dir, "policies", "request-shape", "messages.yaml"), ""+
+		"kind: MessagePolicyConfig\n"+
+		"version: v1\n"+
+		"id: messages-main\n")
+	mustWriteFile(t, filepath.Join(dir, "policies", "request-shape", "tools.yaml"), ""+
+		"kind: ToolPolicyConfig\n"+
+		"version: v1\n"+
+		"id: tools-main\n")
+	mustWriteFile(t, filepath.Join(dir, "policies", "request-shape", "response-format.yaml"), ""+
+		"kind: ResponseFormatPolicyConfig\n"+
+		"version: v1\n"+
+		"id: response-format-main\n")
+	mustWriteFile(t, filepath.Join(dir, "policies", "request-shape", "streaming.yaml"), ""+
+		"kind: StreamingPolicyConfig\n"+
+		"version: v1\n"+
+		"id: streaming-main\n")
+	mustWriteFile(t, filepath.Join(dir, "policies", "request-shape", "sampling.yaml"), ""+
+		"kind: SamplingPolicyConfig\n"+
+		"version: v1\n"+
+		"id: sampling-main\n")
 
 	got, err := config.LoadRoot(filepath.Join(dir, "agent.yaml"))
 	if err != nil {
@@ -93,14 +131,17 @@ func TestLoadRootConfigLoadsExplicitModuleGraph(t *testing.T) {
 		t.Fatalf("LoadModuleGraph returned error: %v", err)
 	}
 
-	if len(graph.Contracts) != 2 {
-		t.Fatalf("contracts len = %d, want 2", len(graph.Contracts))
+	if len(graph.Contracts) != 3 {
+		t.Fatalf("contracts len = %d, want 3", len(graph.Contracts))
 	}
-	if len(graph.Policies) != 2 {
-		t.Fatalf("policies len = %d, want 2", len(graph.Policies))
+	if len(graph.Policies) != 8 {
+		t.Fatalf("policies len = %d, want 8", len(graph.Policies))
 	}
 	if graph.Policies["endpoint-main"].Kind != "EndpointPolicyConfig" {
 		t.Fatalf("endpoint policy kind = %q, want EndpointPolicyConfig", graph.Policies["endpoint-main"].Kind)
+	}
+	if graph.Policies["model-main"].Kind != "ModelPolicyConfig" {
+		t.Fatalf("model policy kind = %q, want ModelPolicyConfig", graph.Policies["model-main"].Kind)
 	}
 }
 

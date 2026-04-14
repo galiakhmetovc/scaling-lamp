@@ -10,11 +10,12 @@ import (
 )
 
 type Agent struct {
-	Config      config.AgentConfig
-	Contracts   contracts.ResolvedContracts
-	Transport   *provider.TransportExecutor
-	EventLog    EventLog
-	Projections []projections.Projection
+	Config       config.AgentConfig
+	Contracts    contracts.ResolvedContracts
+	Transport    *provider.TransportExecutor
+	RequestShape *provider.RequestShapeExecutor
+	EventLog     EventLog
+	Projections  []projections.Projection
 }
 
 func BuildAgent(configPath string) (*Agent, error) {
@@ -49,10 +50,11 @@ func BuildAgent(configPath string) (*Agent, error) {
 	}
 
 	return &Agent{
-		Config:      cfg,
-		Contracts:   contracts,
-		Transport:   provider.NewTransportExecutor(nil),
-		EventLog:    NewInMemoryEventLog(),
-		Projections: projectionSet,
+		Config:       cfg,
+		Contracts:    contracts,
+		Transport:    provider.NewTransportExecutor(nil),
+		RequestShape: provider.NewRequestShapeExecutor(),
+		EventLog:     NewInMemoryEventLog(),
+		Projections:  projectionSet,
 	}, nil
 }

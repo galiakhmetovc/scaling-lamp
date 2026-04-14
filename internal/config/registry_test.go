@@ -44,4 +44,15 @@ func TestBuiltInModuleRegistryExposesModuleMetadata(t *testing.T) {
 	if moduleType.RefFields[0] != "endpoint_policy_path" || moduleType.RefFields[1] != "auth_policy_path" {
 		t.Fatalf("ref fields = %#v, want transport policy refs", moduleType.RefFields)
 	}
+
+	requestShapeType, err := registry.Type("RequestShapeContractConfig")
+	if err != nil {
+		t.Fatalf("Type returned error for request shape: %v", err)
+	}
+	if requestShapeType.Category != config.ModuleCategoryContract {
+		t.Fatalf("request shape category = %q, want %q", requestShapeType.Category, config.ModuleCategoryContract)
+	}
+	if len(requestShapeType.RefFields) != 6 {
+		t.Fatalf("request shape ref fields len = %d, want 6", len(requestShapeType.RefFields))
+	}
 }

@@ -16,6 +16,7 @@ Defines the first typed runtime contracts:
 - `ResolvedContracts`
 - `ProviderRequestContract`
 - `TransportContract`
+- `RequestShapeContract`
 - `MemoryContract`
 - `EndpointPolicy`
 - `AuthPolicy`
@@ -30,19 +31,27 @@ This is the first runtime boundary between config modules and executors.
 Does:
 
 - load transport contract config
+- load request-shape contract config
 - load memory contract config
 - decode referenced transport baseline policies:
   - endpoint
   - auth
   - retry
   - timeout
+- decode referenced request-shape baseline policies:
+  - model
+  - messages
+  - tools
+  - response format
+  - streaming
+  - sampling
 - decode referenced memory offload policy
 - normalize relative policy paths against the contract file location
 - return one typed `ResolvedContracts` object
 
 ## Current Limitation
 
-- only transport and memory are resolved
+- only transport, request-shape, and memory are resolved
 - there is no effective policy merge layer yet
-- resolver is wired into the runtime builder, but only transport has an execution path so far
+- resolver is wired into the runtime builder, but higher-level provider composition is still missing
 - policy families are still a narrow subset of the final design

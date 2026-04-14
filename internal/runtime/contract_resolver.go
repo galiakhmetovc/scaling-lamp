@@ -34,6 +34,18 @@ type memoryContractConfig struct {
 	} `yaml:"spec"`
 }
 
+type requestShapeContractConfig struct {
+	ID   string `yaml:"id"`
+	Spec struct {
+		ModelPolicyPath          string `yaml:"model_policy_path"`
+		MessagePolicyPath        string `yaml:"message_policy_path"`
+		ToolPolicyPath           string `yaml:"tool_policy_path"`
+		ResponseFormatPolicyPath string `yaml:"response_format_policy_path"`
+		StreamingPolicyPath      string `yaml:"streaming_policy_path"`
+		SamplingPolicyPath       string `yaml:"sampling_policy_path"`
+	} `yaml:"spec"`
+}
+
 type authPolicyConfig struct {
 	ID   string `yaml:"id"`
 	Spec struct {
@@ -70,6 +82,58 @@ type offloadPolicyConfig struct {
 	} `yaml:"spec"`
 }
 
+type modelPolicyConfig struct {
+	ID   string `yaml:"id"`
+	Spec struct {
+		Enabled  bool                  `yaml:"enabled"`
+		Strategy string                `yaml:"strategy"`
+		Params   contracts.ModelParams `yaml:"params"`
+	} `yaml:"spec"`
+}
+
+type messagePolicyConfig struct {
+	ID   string `yaml:"id"`
+	Spec struct {
+		Enabled  bool   `yaml:"enabled"`
+		Strategy string `yaml:"strategy"`
+	} `yaml:"spec"`
+}
+
+type toolShapePolicyConfig struct {
+	ID   string `yaml:"id"`
+	Spec struct {
+		Enabled  bool   `yaml:"enabled"`
+		Strategy string `yaml:"strategy"`
+	} `yaml:"spec"`
+}
+
+type responseFormatPolicyConfig struct {
+	ID   string `yaml:"id"`
+	Spec struct {
+		Enabled  bool                           `yaml:"enabled"`
+		Strategy string                         `yaml:"strategy"`
+		Params   contracts.ResponseFormatParams `yaml:"params"`
+	} `yaml:"spec"`
+}
+
+type streamingPolicyConfig struct {
+	ID   string `yaml:"id"`
+	Spec struct {
+		Enabled  bool                      `yaml:"enabled"`
+		Strategy string                    `yaml:"strategy"`
+		Params   contracts.StreamingParams `yaml:"params"`
+	} `yaml:"spec"`
+}
+
+type samplingPolicyConfig struct {
+	ID   string `yaml:"id"`
+	Spec struct {
+		Enabled  bool                     `yaml:"enabled"`
+		Strategy string                   `yaml:"strategy"`
+		Params   contracts.SamplingParams `yaml:"params"`
+	} `yaml:"spec"`
+}
+
 func ResolveContracts(cfg config.AgentConfig) (contracts.ResolvedContracts, error) {
 	var out contracts.ResolvedContracts
 
@@ -79,6 +143,13 @@ func ResolveContracts(cfg config.AgentConfig) (contracts.ResolvedContracts, erro
 			return contracts.ResolvedContracts{}, err
 		}
 		out.ProviderRequest.Transport = transport
+	}
+	if requestShapePath := cfg.Spec.Contracts["request_shape"]; requestShapePath != "" {
+		requestShape, err := resolveRequestShapeContract(requestShapePath)
+		if err != nil {
+			return contracts.ResolvedContracts{}, err
+		}
+		out.ProviderRequest.RequestShape = requestShape
 	}
 
 	if memoryPath := cfg.Spec.Contracts["memory"]; memoryPath != "" {
@@ -90,6 +161,94 @@ func ResolveContracts(cfg config.AgentConfig) (contracts.ResolvedContracts, erro
 	}
 
 	return out, nil
+}
+
+func resolveRequestShapeContract(path string) (contracts.RequestShapeContract, error) {
+	var contract requestShapeContractConfig
+	if err := config.LoadModule(path, &contract); err != nil {
+		return contracts.RequestShapeContract{}, fmt.Errorf("load request-shape contract: %w", err)
+	}
+	if contract.Spec.ModelPolicyPath == "" {
+		return contracts.RequestShapeContract{}, fmt.Errorf("request-shape contract %q missing model_policy_path", contract.ID)
+	}
+	if contract.Spec.MessagePolicyPath == "" {
+		return contracts.RequestShapeContract{}, fmt.Errorf("request-shape contract %q missing message_policy_path", contract.ID)
+	}
+	if contract.Spec.ToolPolicyPath == "" {
+		return contracts.RequestShapeContract{}, fmt.Errorf("request-shape contract %q missing tool_policy_path", contract.ID)
+	}
+	if contract.Spec.ResponseFormatPolicyPath == "" {
+		return contracts.RequestShapeContract{}, fmt.Errorf("request-shape contract %q missing response_format_policy_path", contract.ID)
+	}
+	if contract.Spec.StreamingPolicyPath == "" {
+		return contracts.RequestShapeContract{}, fmt.Errorf("request-shape contract %q missing streaming_policy_path", contract.ID)
+	}
+	if contract.Spec.SamplingPolicyPath == "" {
+		return contracts.RequestShapeContract{}, fmt.Errorf("request-shape contract %q missing sampling_policy_path", contract.ID)
+	}
+
+	var modelPolicy modelPolicyConfig
+	if err := config.LoadModule(resolveModulePath(path, contract.Spec.ModelPolicyPath), &modelPolicy); err != nil {
+		return contracts.RequestShapeContract{}, fmt.Errorf("load model policy: %w", err)
+	}
+	var messagePolicy messagePolicyConfig
+	if err := config.LoadModule(resolveModulePath(path, contract.Spec.MessagePolicyPath), &messagePolicy); err != nil {
+		return contracts.RequestShapeContract{}, fmt.Errorf("load message policy: %w", err)
+	}
+	var toolPolicy toolShapePolicyConfig
+	if err := config.LoadModule(resolveModulePath(path, contract.Spec.ToolPolicyPath), &toolPolicy); err != nil {
+		return contracts.RequestShapeContract{}, fmt.Errorf("load tool policy: %w", err)
+	}
+	var responseFormatPolicy responseFormatPolicyConfig
+	if err := config.LoadModule(resolveModulePath(path, contract.Spec.ResponseFormatPolicyPath), &responseFormatPolicy); err != nil {
+		return contracts.RequestShapeContract{}, fmt.Errorf("load response-format policy: %w", err)
+	}
+	var streamingPolicy streamingPolicyConfig
+	if err := config.LoadModule(resolveModulePath(path, contract.Spec.StreamingPolicyPath), &streamingPolicy); err != nil {
+		return contracts.RequestShapeContract{}, fmt.Errorf("load streaming policy: %w", err)
+	}
+	var samplingPolicy samplingPolicyConfig
+	if err := config.LoadModule(resolveModulePath(path, contract.Spec.SamplingPolicyPath), &samplingPolicy); err != nil {
+		return contracts.RequestShapeContract{}, fmt.Errorf("load sampling policy: %w", err)
+	}
+
+	return contracts.RequestShapeContract{
+		ID: contract.ID,
+		Model: contracts.ModelPolicy{
+			ID:       modelPolicy.ID,
+			Enabled:  modelPolicy.Spec.Enabled,
+			Strategy: modelPolicy.Spec.Strategy,
+			Params:   modelPolicy.Spec.Params,
+		},
+		Messages: contracts.MessagePolicy{
+			ID:       messagePolicy.ID,
+			Enabled:  messagePolicy.Spec.Enabled,
+			Strategy: messagePolicy.Spec.Strategy,
+		},
+		Tools: contracts.ToolPolicy{
+			ID:       toolPolicy.ID,
+			Enabled:  toolPolicy.Spec.Enabled,
+			Strategy: toolPolicy.Spec.Strategy,
+		},
+		ResponseFormat: contracts.ResponseFormatPolicy{
+			ID:       responseFormatPolicy.ID,
+			Enabled:  responseFormatPolicy.Spec.Enabled,
+			Strategy: responseFormatPolicy.Spec.Strategy,
+			Params:   responseFormatPolicy.Spec.Params,
+		},
+		Streaming: contracts.StreamingPolicy{
+			ID:       streamingPolicy.ID,
+			Enabled:  streamingPolicy.Spec.Enabled,
+			Strategy: streamingPolicy.Spec.Strategy,
+			Params:   streamingPolicy.Spec.Params,
+		},
+		Sampling: contracts.SamplingPolicy{
+			ID:       samplingPolicy.ID,
+			Enabled:  samplingPolicy.Spec.Enabled,
+			Strategy: samplingPolicy.Spec.Strategy,
+			Params:   samplingPolicy.Spec.Params,
+		},
+	}, nil
 }
 
 func resolveTransportContract(path string) (contracts.TransportContract, error) {

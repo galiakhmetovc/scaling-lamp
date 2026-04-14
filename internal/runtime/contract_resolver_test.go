@@ -20,6 +20,7 @@ func TestResolveContractsBuildsTransportAndMemoryContracts(t *testing.T) {
 		"spec:\n"+
 		"  contracts:\n"+
 		"    transport: ./contracts/transport.yaml\n"+
+		"    request_shape: ./contracts/request-shape.yaml\n"+
 		"    memory: ./contracts/memory.yaml\n")
 
 	mustWriteFile(t, filepath.Join(dir, "contracts", "transport.yaml"), ""+
@@ -38,6 +39,18 @@ func TestResolveContractsBuildsTransportAndMemoryContracts(t *testing.T) {
 		"id: memory-main\n"+
 		"spec:\n"+
 		"  offload_policy_path: ../policies/memory/offload.yaml\n")
+
+	mustWriteFile(t, filepath.Join(dir, "contracts", "request-shape.yaml"), ""+
+		"kind: RequestShapeContractConfig\n"+
+		"version: v1\n"+
+		"id: request-shape-main\n"+
+		"spec:\n"+
+		"  model_policy_path: ../policies/request-shape/model.yaml\n"+
+		"  message_policy_path: ../policies/request-shape/messages.yaml\n"+
+		"  tool_policy_path: ../policies/request-shape/tools.yaml\n"+
+		"  response_format_policy_path: ../policies/request-shape/response-format.yaml\n"+
+		"  streaming_policy_path: ../policies/request-shape/streaming.yaml\n"+
+		"  sampling_policy_path: ../policies/request-shape/sampling.yaml\n")
 
 	mustWriteFile(t, filepath.Join(dir, "policies", "transport", "endpoint.yaml"), ""+
 		"kind: EndpointPolicyConfig\n"+
@@ -97,6 +110,63 @@ func TestResolveContractsBuildsTransportAndMemoryContracts(t *testing.T) {
 		"  params:\n"+
 		"    max_chars: 1200\n")
 
+	mustWriteFile(t, filepath.Join(dir, "policies", "request-shape", "model.yaml"), ""+
+		"kind: ModelPolicyConfig\n"+
+		"version: v1\n"+
+		"id: model-main\n"+
+		"spec:\n"+
+		"  enabled: true\n"+
+		"  strategy: static_model\n"+
+		"  params:\n"+
+		"    model: glm-4.6\n")
+
+	mustWriteFile(t, filepath.Join(dir, "policies", "request-shape", "messages.yaml"), ""+
+		"kind: MessagePolicyConfig\n"+
+		"version: v1\n"+
+		"id: messages-main\n"+
+		"spec:\n"+
+		"  enabled: true\n"+
+		"  strategy: raw_messages\n")
+
+	mustWriteFile(t, filepath.Join(dir, "policies", "request-shape", "tools.yaml"), ""+
+		"kind: ToolPolicyConfig\n"+
+		"version: v1\n"+
+		"id: tools-main\n"+
+		"spec:\n"+
+		"  enabled: true\n"+
+		"  strategy: tools_inline\n")
+
+	mustWriteFile(t, filepath.Join(dir, "policies", "request-shape", "response-format.yaml"), ""+
+		"kind: ResponseFormatPolicyConfig\n"+
+		"version: v1\n"+
+		"id: response-format-main\n"+
+		"spec:\n"+
+		"  enabled: true\n"+
+		"  strategy: default\n"+
+		"  params:\n"+
+		"    type: json_object\n")
+
+	mustWriteFile(t, filepath.Join(dir, "policies", "request-shape", "streaming.yaml"), ""+
+		"kind: StreamingPolicyConfig\n"+
+		"version: v1\n"+
+		"id: streaming-main\n"+
+		"spec:\n"+
+		"  enabled: true\n"+
+		"  strategy: static_stream\n"+
+		"  params:\n"+
+		"    stream: false\n")
+
+	mustWriteFile(t, filepath.Join(dir, "policies", "request-shape", "sampling.yaml"), ""+
+		"kind: SamplingPolicyConfig\n"+
+		"version: v1\n"+
+		"id: sampling-main\n"+
+		"spec:\n"+
+		"  enabled: true\n"+
+		"  strategy: static_sampling\n"+
+		"  params:\n"+
+		"    temperature: 0.2\n"+
+		"    max_output_tokens: 2048\n")
+
 	cfg, err := config.LoadRoot(filepath.Join(dir, "agent.yaml"))
 	if err != nil {
 		t.Fatalf("LoadRoot returned error: %v", err)
@@ -121,6 +191,15 @@ func TestResolveContractsBuildsTransportAndMemoryContracts(t *testing.T) {
 	}
 	if contracts.ProviderRequest.Transport.Timeout.Params.Total != "30s" {
 		t.Fatalf("timeout total = %q, want %q", contracts.ProviderRequest.Transport.Timeout.Params.Total, "30s")
+	}
+	if contracts.ProviderRequest.RequestShape.ID != "request-shape-main" {
+		t.Fatalf("request-shape ID = %q, want %q", contracts.ProviderRequest.RequestShape.ID, "request-shape-main")
+	}
+	if contracts.ProviderRequest.RequestShape.Messages.Strategy != "raw_messages" {
+		t.Fatalf("message strategy = %q, want %q", contracts.ProviderRequest.RequestShape.Messages.Strategy, "raw_messages")
+	}
+	if contracts.ProviderRequest.RequestShape.ResponseFormat.Params.Type != "json_object" {
+		t.Fatalf("response format type = %q, want %q", contracts.ProviderRequest.RequestShape.ResponseFormat.Params.Type, "json_object")
 	}
 	if contracts.Memory.ID != "memory-main" {
 		t.Fatalf("memory ID = %q, want %q", contracts.Memory.ID, "memory-main")

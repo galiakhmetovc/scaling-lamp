@@ -119,12 +119,13 @@ Current responsibility:
 - validate loaded contract and policy module kinds
 - resolve typed runtime contracts from loaded modules
 - build the first transport executor from resolved transport contracts
+- build the first request-shape executor from resolved request-shape contracts
 - assemble projections through built-in registries
 - return one built agent instance
 
 Current limitation:
 - builder still chooses default projection composition instead of config-driven composition
-- only the transport executor is wired; higher-level provider/request-shape execution is still absent
+- transport and request-shape executors are wired, but no combined provider client exists yet
 
 ### `internal/contracts/contracts.go`
 
@@ -139,14 +140,14 @@ Current responsibility:
 First contract resolver.
 
 Current responsibility:
-- decode transport and memory contract modules
+- decode transport, request-shape, and memory contract modules
 - resolve policy module paths relative to their contract files
 - produce typed resolved contracts for one agent instance
 
 Current limitation:
-- only transport and memory are resolved
+- only transport, request-shape, and memory are resolved
 - there is still no policy merge layer (`global < session < run`)
-- execution-time application currently covers transport only
+- execution-time application currently covers transport and request-shape only
 
 ### `internal/provider/transport_executor.go`
 
@@ -156,6 +157,14 @@ Current responsibility:
 - apply resolved transport contract to one outbound HTTP request
 - handle static endpoint, bearer auth, retry, and per-request timeout baseline
 - expose a testable execution surface through injected HTTP doer and timing hooks
+
+### `internal/provider/request_shape_executor.go`
+
+First provider request-body executor.
+
+Current responsibility:
+- apply resolved request-shape contract to produce exact provider JSON bytes
+- handle model, raw messages, inline tools, response format, streaming, and sampling baseline
 
 ## What Is Good About This Skeleton
 
@@ -172,14 +181,14 @@ These are known temporary shortcuts and should be removed in the next slices.
 1. `AgentBuilder` still chooses the default projection set instead of using config-driven composition.
 2. Config graph loading still stops at module headers and does not decode effective contracts itself.
 3. Event envelopes are still too small for a serious event-sourced system, even after adding sequence and trace linkage metadata.
-4. Contract resolution is still narrow and only covers the first transport and memory path.
-5. Provider execution still stops at transport; request-shape and higher-level provider flow are not wired yet.
+4. Contract resolution is still narrow and only covers the first transport/request-shape/memory path.
+5. Provider execution is still split into transport and request-shape pieces with no combined provider client yet.
 6. There is no persistent event store or persistent projections yet.
 7. There is no full policy and strategy registry system yet.
 
 ## Next Required Slices
 
-1. provider request-shape executor
+1. combined provider client over request-shape and transport executors
 2. persistent event log
 3. persistent projections
 4. policy and strategy registries
