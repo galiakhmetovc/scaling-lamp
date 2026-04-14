@@ -62,6 +62,40 @@ func NewBuiltInModuleRegistry() *ModuleRegistry {
 		},
 	})
 	registry.Register(ModuleType{
+		Kind:     "FilesystemToolContractConfig",
+		Category: ModuleCategoryContract,
+		RefFields: []string{
+			"filesystem_catalog_policy_path",
+			"filesystem_description_policy_path",
+		},
+	})
+	registry.Register(ModuleType{
+		Kind:     "FilesystemExecutionContractConfig",
+		Category: ModuleCategoryContract,
+		RefFields: []string{
+			"filesystem_scope_policy_path",
+			"filesystem_mutation_policy_path",
+			"filesystem_io_policy_path",
+		},
+	})
+	registry.Register(ModuleType{
+		Kind:     "ShellToolContractConfig",
+		Category: ModuleCategoryContract,
+		RefFields: []string{
+			"shell_catalog_policy_path",
+			"shell_description_policy_path",
+		},
+	})
+	registry.Register(ModuleType{
+		Kind:     "ShellExecutionContractConfig",
+		Category: ModuleCategoryContract,
+		RefFields: []string{
+			"shell_command_policy_path",
+			"shell_approval_policy_path",
+			"shell_runtime_policy_path",
+		},
+	})
+	registry.Register(ModuleType{
 		Kind:     "ToolExecutionContractConfig",
 		Category: ModuleCategoryContract,
 		RefFields: []string{
@@ -166,6 +200,46 @@ func NewBuiltInModuleRegistry() *ModuleRegistry {
 	})
 	registry.Register(ModuleType{
 		Kind:     "ToolSerializationPolicyConfig",
+		Category: ModuleCategoryPolicy,
+	})
+	registry.Register(ModuleType{
+		Kind:     "FilesystemCatalogPolicyConfig",
+		Category: ModuleCategoryPolicy,
+	})
+	registry.Register(ModuleType{
+		Kind:     "FilesystemDescriptionPolicyConfig",
+		Category: ModuleCategoryPolicy,
+	})
+	registry.Register(ModuleType{
+		Kind:     "FilesystemScopePolicyConfig",
+		Category: ModuleCategoryPolicy,
+	})
+	registry.Register(ModuleType{
+		Kind:     "FilesystemMutationPolicyConfig",
+		Category: ModuleCategoryPolicy,
+	})
+	registry.Register(ModuleType{
+		Kind:     "FilesystemIOPolicyConfig",
+		Category: ModuleCategoryPolicy,
+	})
+	registry.Register(ModuleType{
+		Kind:     "ShellCatalogPolicyConfig",
+		Category: ModuleCategoryPolicy,
+	})
+	registry.Register(ModuleType{
+		Kind:     "ShellDescriptionPolicyConfig",
+		Category: ModuleCategoryPolicy,
+	})
+	registry.Register(ModuleType{
+		Kind:     "ShellCommandPolicyConfig",
+		Category: ModuleCategoryPolicy,
+	})
+	registry.Register(ModuleType{
+		Kind:     "ShellApprovalPolicyConfig",
+		Category: ModuleCategoryPolicy,
+	})
+	registry.Register(ModuleType{
+		Kind:     "ShellRuntimePolicyConfig",
 		Category: ModuleCategoryPolicy,
 	})
 	registry.Register(ModuleType{

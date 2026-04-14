@@ -27,7 +27,11 @@ func TestResolveContractsBuildsTransportAndMemoryContracts(t *testing.T) {
 		"    prompt_assets: ./contracts/prompt-assets.yaml\n"+
 		"    prompt_assembly: ./contracts/prompt-assembly.yaml\n"+
 		"    tools: ./contracts/tools.yaml\n"+
-		"    tool_execution: ./contracts/tool-execution.yaml\n")
+		"    tool_execution: ./contracts/tool-execution.yaml\n"+
+		"    filesystem_tools: ./contracts/filesystem-tools.yaml\n"+
+		"    filesystem_execution: ./contracts/filesystem-execution.yaml\n"+
+		"    shell_tools: ./contracts/shell-tools.yaml\n"+
+		"    shell_execution: ./contracts/shell-execution.yaml\n")
 
 	mustWriteFile(t, filepath.Join(dir, "contracts", "transport.yaml"), ""+
 		"kind: TransportContractConfig\n"+
@@ -89,6 +93,40 @@ func TestResolveContractsBuildsTransportAndMemoryContracts(t *testing.T) {
 		"  tool_access_policy_path: ../policies/tool-execution/access.yaml\n"+
 		"  tool_approval_policy_path: ../policies/tool-execution/approval.yaml\n"+
 		"  tool_sandbox_policy_path: ../policies/tool-execution/sandbox.yaml\n")
+
+	mustWriteFile(t, filepath.Join(dir, "contracts", "filesystem-tools.yaml"), ""+
+		"kind: FilesystemToolContractConfig\n"+
+		"version: v1\n"+
+		"id: filesystem-tools-main\n"+
+		"spec:\n"+
+		"  filesystem_catalog_policy_path: ../policies/filesystem-tools/catalog.yaml\n"+
+		"  filesystem_description_policy_path: ../policies/filesystem-tools/description.yaml\n")
+
+	mustWriteFile(t, filepath.Join(dir, "contracts", "filesystem-execution.yaml"), ""+
+		"kind: FilesystemExecutionContractConfig\n"+
+		"version: v1\n"+
+		"id: filesystem-execution-main\n"+
+		"spec:\n"+
+		"  filesystem_scope_policy_path: ../policies/filesystem-execution/scope.yaml\n"+
+		"  filesystem_mutation_policy_path: ../policies/filesystem-execution/mutation.yaml\n"+
+		"  filesystem_io_policy_path: ../policies/filesystem-execution/io.yaml\n")
+
+	mustWriteFile(t, filepath.Join(dir, "contracts", "shell-tools.yaml"), ""+
+		"kind: ShellToolContractConfig\n"+
+		"version: v1\n"+
+		"id: shell-tools-main\n"+
+		"spec:\n"+
+		"  shell_catalog_policy_path: ../policies/shell-tools/catalog.yaml\n"+
+		"  shell_description_policy_path: ../policies/shell-tools/description.yaml\n")
+
+	mustWriteFile(t, filepath.Join(dir, "contracts", "shell-execution.yaml"), ""+
+		"kind: ShellExecutionContractConfig\n"+
+		"version: v1\n"+
+		"id: shell-execution-main\n"+
+		"spec:\n"+
+		"  shell_command_policy_path: ../policies/shell-execution/command.yaml\n"+
+		"  shell_approval_policy_path: ../policies/shell-execution/approval.yaml\n"+
+		"  shell_runtime_policy_path: ../policies/shell-execution/runtime.yaml\n")
 
 	mustWriteFile(t, filepath.Join(dir, "policies", "transport", "endpoint.yaml"), ""+
 		"kind: EndpointPolicyConfig\n"+
@@ -290,6 +328,120 @@ func TestResolveContractsBuildsTransportAndMemoryContracts(t *testing.T) {
 		"    allow_network: false\n"+
 		"    timeout: 30s\n")
 
+	mustWriteFile(t, filepath.Join(dir, "policies", "filesystem-tools", "catalog.yaml"), ""+
+		"kind: FilesystemCatalogPolicyConfig\n"+
+		"version: v1\n"+
+		"id: filesystem-catalog-main\n"+
+		"spec:\n"+
+		"  enabled: true\n"+
+		"  strategy: static_allowlist\n"+
+		"  params:\n"+
+		"    tool_ids: [fs_list, fs_read_text]\n"+
+		"    allow_empty: false\n"+
+		"    dedupe: true\n")
+
+	mustWriteFile(t, filepath.Join(dir, "policies", "filesystem-tools", "description.yaml"), ""+
+		"kind: FilesystemDescriptionPolicyConfig\n"+
+		"version: v1\n"+
+		"id: filesystem-description-main\n"+
+		"spec:\n"+
+		"  enabled: true\n"+
+		"  strategy: static_builtin_descriptions\n"+
+		"  params:\n"+
+		"    include_examples: true\n"+
+		"    include_scope_hint: true\n")
+
+	mustWriteFile(t, filepath.Join(dir, "policies", "filesystem-execution", "scope.yaml"), ""+
+		"kind: FilesystemScopePolicyConfig\n"+
+		"version: v1\n"+
+		"id: filesystem-scope-main\n"+
+		"spec:\n"+
+		"  enabled: true\n"+
+		"  strategy: workspace_only\n"+
+		"  params:\n"+
+		"    root_path: .\n"+
+		"    read_subpaths: [config, internal]\n"+
+		"    write_subpaths: [internal]\n")
+
+	mustWriteFile(t, filepath.Join(dir, "policies", "filesystem-execution", "mutation.yaml"), ""+
+		"kind: FilesystemMutationPolicyConfig\n"+
+		"version: v1\n"+
+		"id: filesystem-mutation-main\n"+
+		"spec:\n"+
+		"  enabled: true\n"+
+		"  strategy: allow_writes\n"+
+		"  params:\n"+
+		"    allow_write: true\n"+
+		"    allow_move: true\n"+
+		"    allow_mkdir: true\n")
+
+	mustWriteFile(t, filepath.Join(dir, "policies", "filesystem-execution", "io.yaml"), ""+
+		"kind: FilesystemIOPolicyConfig\n"+
+		"version: v1\n"+
+		"id: filesystem-io-main\n"+
+		"spec:\n"+
+		"  enabled: true\n"+
+		"  strategy: bounded_text_io\n"+
+		"  params:\n"+
+		"    max_read_bytes: 4096\n"+
+		"    max_write_bytes: 2048\n"+
+		"    encoding: utf-8\n")
+
+	mustWriteFile(t, filepath.Join(dir, "policies", "shell-tools", "catalog.yaml"), ""+
+		"kind: ShellCatalogPolicyConfig\n"+
+		"version: v1\n"+
+		"id: shell-catalog-main\n"+
+		"spec:\n"+
+		"  enabled: true\n"+
+		"  strategy: static_allowlist\n"+
+		"  params:\n"+
+		"    tool_ids: [shell_exec]\n"+
+		"    allow_empty: false\n")
+
+	mustWriteFile(t, filepath.Join(dir, "policies", "shell-tools", "description.yaml"), ""+
+		"kind: ShellDescriptionPolicyConfig\n"+
+		"version: v1\n"+
+		"id: shell-description-main\n"+
+		"spec:\n"+
+		"  enabled: true\n"+
+		"  strategy: static_builtin_descriptions\n"+
+		"  params:\n"+
+		"    include_examples: true\n"+
+		"    include_runtime_limits: true\n")
+
+	mustWriteFile(t, filepath.Join(dir, "policies", "shell-execution", "command.yaml"), ""+
+		"kind: ShellCommandPolicyConfig\n"+
+		"version: v1\n"+
+		"id: shell-command-main\n"+
+		"spec:\n"+
+		"  enabled: true\n"+
+		"  strategy: static_allowlist\n"+
+		"  params:\n"+
+		"    allowed_commands: [go, git]\n"+
+		"    allowed_prefixes: [go test, git status]\n"+
+		"    deny_patterns: [rm -rf]\n")
+
+	mustWriteFile(t, filepath.Join(dir, "policies", "shell-execution", "approval.yaml"), ""+
+		"kind: ShellApprovalPolicyConfig\n"+
+		"version: v1\n"+
+		"id: shell-approval-main\n"+
+		"spec:\n"+
+		"  enabled: true\n"+
+		"  strategy: always_allow\n")
+
+	mustWriteFile(t, filepath.Join(dir, "policies", "shell-execution", "runtime.yaml"), ""+
+		"kind: ShellRuntimePolicyConfig\n"+
+		"version: v1\n"+
+		"id: shell-runtime-main\n"+
+		"spec:\n"+
+		"  enabled: true\n"+
+		"  strategy: workspace_write\n"+
+		"  params:\n"+
+		"    cwd: .\n"+
+		"    timeout: 30s\n"+
+		"    max_output_bytes: 16384\n"+
+		"    allow_network: false\n")
+
 	cfg, err := config.LoadRoot(filepath.Join(dir, "agent.yaml"))
 	if err != nil {
 		t.Fatalf("LoadRoot returned error: %v", err)
@@ -356,6 +508,36 @@ func TestResolveContractsBuildsTransportAndMemoryContracts(t *testing.T) {
 	}
 	if contracts.ToolExecution.Access.Strategy != "deny_all" {
 		t.Fatalf("tool access strategy = %q, want %q", contracts.ToolExecution.Access.Strategy, "deny_all")
+	}
+	if contracts.FilesystemTools.ID != "filesystem-tools-main" {
+		t.Fatalf("filesystem tools ID = %q, want %q", contracts.FilesystemTools.ID, "filesystem-tools-main")
+	}
+	if got, want := len(contracts.FilesystemTools.Catalog.Params.ToolIDs), 2; got != want {
+		t.Fatalf("filesystem tool ids len = %d, want %d", got, want)
+	}
+	if contracts.FilesystemExecution.ID != "filesystem-execution-main" {
+		t.Fatalf("filesystem execution ID = %q, want %q", contracts.FilesystemExecution.ID, "filesystem-execution-main")
+	}
+	if contracts.FilesystemExecution.Scope.Params.RootPath != "." {
+		t.Fatalf("filesystem scope root_path = %q, want %q", contracts.FilesystemExecution.Scope.Params.RootPath, ".")
+	}
+	if contracts.FilesystemExecution.IO.Params.MaxReadBytes != 4096 {
+		t.Fatalf("filesystem max_read_bytes = %d, want 4096", contracts.FilesystemExecution.IO.Params.MaxReadBytes)
+	}
+	if contracts.ShellTools.ID != "shell-tools-main" {
+		t.Fatalf("shell tools ID = %q, want %q", contracts.ShellTools.ID, "shell-tools-main")
+	}
+	if contracts.ShellTools.Description.Params.IncludeRuntimeLimits != true {
+		t.Fatalf("shell include_runtime_limits = %v, want true", contracts.ShellTools.Description.Params.IncludeRuntimeLimits)
+	}
+	if contracts.ShellExecution.ID != "shell-execution-main" {
+		t.Fatalf("shell execution ID = %q, want %q", contracts.ShellExecution.ID, "shell-execution-main")
+	}
+	if contracts.ShellExecution.Command.Params.AllowedCommands[0] != "go" {
+		t.Fatalf("shell allowed_commands[0] = %q, want %q", contracts.ShellExecution.Command.Params.AllowedCommands[0], "go")
+	}
+	if contracts.ShellExecution.Runtime.Params.MaxOutputBytes != 16384 {
+		t.Fatalf("shell max_output_bytes = %d, want 16384", contracts.ShellExecution.Runtime.Params.MaxOutputBytes)
 	}
 }
 

@@ -51,6 +51,28 @@ type toolContractBody struct {
 	ToolSerializationPolicyPath string `yaml:"tool_serialization_policy_path"`
 }
 
+type filesystemToolContractBody struct {
+	FilesystemCatalogPolicyPath     string `yaml:"filesystem_catalog_policy_path"`
+	FilesystemDescriptionPolicyPath string `yaml:"filesystem_description_policy_path"`
+}
+
+type filesystemExecutionContractBody struct {
+	FilesystemScopePolicyPath    string `yaml:"filesystem_scope_policy_path"`
+	FilesystemMutationPolicyPath string `yaml:"filesystem_mutation_policy_path"`
+	FilesystemIOPolicyPath       string `yaml:"filesystem_io_policy_path"`
+}
+
+type shellToolContractBody struct {
+	ShellCatalogPolicyPath     string `yaml:"shell_catalog_policy_path"`
+	ShellDescriptionPolicyPath string `yaml:"shell_description_policy_path"`
+}
+
+type shellExecutionContractBody struct {
+	ShellCommandPolicyPath  string `yaml:"shell_command_policy_path"`
+	ShellApprovalPolicyPath string `yaml:"shell_approval_policy_path"`
+	ShellRuntimePolicyPath  string `yaml:"shell_runtime_policy_path"`
+}
+
 type toolExecutionContractBody struct {
 	ToolAccessPolicyPath   string `yaml:"tool_access_policy_path"`
 	ToolApprovalPolicyPath string `yaml:"tool_approval_policy_path"`
@@ -439,6 +461,162 @@ func resolveToolContract(out *contracts.ResolvedContracts, path string, policyRe
 	return nil
 }
 
+func resolveFilesystemToolContract(out *contracts.ResolvedContracts, path string, policyRegistry *policies.Registry) error {
+	contract, err := loadContract[filesystemToolContractBody](path, "filesystem-tools")
+	if err != nil {
+		return err
+	}
+	if contract.Spec.FilesystemCatalogPolicyPath == "" || contract.Spec.FilesystemDescriptionPolicyPath == "" {
+		return fmt.Errorf("filesystem-tools contract %q missing one or more policy paths", contract.ID)
+	}
+	catalogPolicy, err := loadPolicy[contracts.FilesystemCatalogParams](path, contract.Spec.FilesystemCatalogPolicyPath, "FilesystemCatalogPolicyConfig", "filesystem-catalog", policyRegistry)
+	if err != nil {
+		return err
+	}
+	descriptionPolicy, err := loadPolicy[contracts.FilesystemDescriptionParams](path, contract.Spec.FilesystemDescriptionPolicyPath, "FilesystemDescriptionPolicyConfig", "filesystem-description", policyRegistry)
+	if err != nil {
+		return err
+	}
+	out.FilesystemTools = contracts.FilesystemToolContract{
+		ID: contract.ID,
+		Catalog: contracts.FilesystemCatalogPolicy{
+			ID:       catalogPolicy.ID,
+			Enabled:  catalogPolicy.Spec.Enabled,
+			Strategy: catalogPolicy.Spec.Strategy,
+			Params:   catalogPolicy.Spec.Params,
+		},
+		Description: contracts.FilesystemDescriptionPolicy{
+			ID:       descriptionPolicy.ID,
+			Enabled:  descriptionPolicy.Spec.Enabled,
+			Strategy: descriptionPolicy.Spec.Strategy,
+			Params:   descriptionPolicy.Spec.Params,
+		},
+	}
+	return nil
+}
+
+func resolveFilesystemExecutionContract(out *contracts.ResolvedContracts, path string, policyRegistry *policies.Registry) error {
+	contract, err := loadContract[filesystemExecutionContractBody](path, "filesystem-execution")
+	if err != nil {
+		return err
+	}
+	if contract.Spec.FilesystemScopePolicyPath == "" || contract.Spec.FilesystemMutationPolicyPath == "" || contract.Spec.FilesystemIOPolicyPath == "" {
+		return fmt.Errorf("filesystem-execution contract %q missing one or more policy paths", contract.ID)
+	}
+	scopePolicy, err := loadPolicy[contracts.FilesystemScopeParams](path, contract.Spec.FilesystemScopePolicyPath, "FilesystemScopePolicyConfig", "filesystem-scope", policyRegistry)
+	if err != nil {
+		return err
+	}
+	mutationPolicy, err := loadPolicy[contracts.FilesystemMutationParams](path, contract.Spec.FilesystemMutationPolicyPath, "FilesystemMutationPolicyConfig", "filesystem-mutation", policyRegistry)
+	if err != nil {
+		return err
+	}
+	ioPolicy, err := loadPolicy[contracts.FilesystemIOParams](path, contract.Spec.FilesystemIOPolicyPath, "FilesystemIOPolicyConfig", "filesystem-io", policyRegistry)
+	if err != nil {
+		return err
+	}
+	out.FilesystemExecution = contracts.FilesystemExecutionContract{
+		ID: contract.ID,
+		Scope: contracts.FilesystemScopePolicy{
+			ID:       scopePolicy.ID,
+			Enabled:  scopePolicy.Spec.Enabled,
+			Strategy: scopePolicy.Spec.Strategy,
+			Params:   scopePolicy.Spec.Params,
+		},
+		Mutation: contracts.FilesystemMutationPolicy{
+			ID:       mutationPolicy.ID,
+			Enabled:  mutationPolicy.Spec.Enabled,
+			Strategy: mutationPolicy.Spec.Strategy,
+			Params:   mutationPolicy.Spec.Params,
+		},
+		IO: contracts.FilesystemIOPolicy{
+			ID:       ioPolicy.ID,
+			Enabled:  ioPolicy.Spec.Enabled,
+			Strategy: ioPolicy.Spec.Strategy,
+			Params:   ioPolicy.Spec.Params,
+		},
+	}
+	return nil
+}
+
+func resolveShellToolContract(out *contracts.ResolvedContracts, path string, policyRegistry *policies.Registry) error {
+	contract, err := loadContract[shellToolContractBody](path, "shell-tools")
+	if err != nil {
+		return err
+	}
+	if contract.Spec.ShellCatalogPolicyPath == "" || contract.Spec.ShellDescriptionPolicyPath == "" {
+		return fmt.Errorf("shell-tools contract %q missing one or more policy paths", contract.ID)
+	}
+	catalogPolicy, err := loadPolicy[contracts.ShellCatalogParams](path, contract.Spec.ShellCatalogPolicyPath, "ShellCatalogPolicyConfig", "shell-catalog", policyRegistry)
+	if err != nil {
+		return err
+	}
+	descriptionPolicy, err := loadPolicy[contracts.ShellDescriptionParams](path, contract.Spec.ShellDescriptionPolicyPath, "ShellDescriptionPolicyConfig", "shell-description", policyRegistry)
+	if err != nil {
+		return err
+	}
+	out.ShellTools = contracts.ShellToolContract{
+		ID: contract.ID,
+		Catalog: contracts.ShellCatalogPolicy{
+			ID:       catalogPolicy.ID,
+			Enabled:  catalogPolicy.Spec.Enabled,
+			Strategy: catalogPolicy.Spec.Strategy,
+			Params:   catalogPolicy.Spec.Params,
+		},
+		Description: contracts.ShellDescriptionPolicy{
+			ID:       descriptionPolicy.ID,
+			Enabled:  descriptionPolicy.Spec.Enabled,
+			Strategy: descriptionPolicy.Spec.Strategy,
+			Params:   descriptionPolicy.Spec.Params,
+		},
+	}
+	return nil
+}
+
+func resolveShellExecutionContract(out *contracts.ResolvedContracts, path string, policyRegistry *policies.Registry) error {
+	contract, err := loadContract[shellExecutionContractBody](path, "shell-execution")
+	if err != nil {
+		return err
+	}
+	if contract.Spec.ShellCommandPolicyPath == "" || contract.Spec.ShellApprovalPolicyPath == "" || contract.Spec.ShellRuntimePolicyPath == "" {
+		return fmt.Errorf("shell-execution contract %q missing one or more policy paths", contract.ID)
+	}
+	commandPolicy, err := loadPolicy[contracts.ShellCommandParams](path, contract.Spec.ShellCommandPolicyPath, "ShellCommandPolicyConfig", "shell-command", policyRegistry)
+	if err != nil {
+		return err
+	}
+	approvalPolicy, err := loadPolicy[contracts.ShellApprovalParams](path, contract.Spec.ShellApprovalPolicyPath, "ShellApprovalPolicyConfig", "shell-approval", policyRegistry)
+	if err != nil {
+		return err
+	}
+	runtimePolicy, err := loadPolicy[contracts.ShellRuntimeParams](path, contract.Spec.ShellRuntimePolicyPath, "ShellRuntimePolicyConfig", "shell-runtime", policyRegistry)
+	if err != nil {
+		return err
+	}
+	out.ShellExecution = contracts.ShellExecutionContract{
+		ID: contract.ID,
+		Command: contracts.ShellCommandPolicy{
+			ID:       commandPolicy.ID,
+			Enabled:  commandPolicy.Spec.Enabled,
+			Strategy: commandPolicy.Spec.Strategy,
+			Params:   commandPolicy.Spec.Params,
+		},
+		Approval: contracts.ShellApprovalPolicy{
+			ID:       approvalPolicy.ID,
+			Enabled:  approvalPolicy.Spec.Enabled,
+			Strategy: approvalPolicy.Spec.Strategy,
+			Params:   approvalPolicy.Spec.Params,
+		},
+		Runtime: contracts.ShellRuntimePolicy{
+			ID:       runtimePolicy.ID,
+			Enabled:  runtimePolicy.Spec.Enabled,
+			Strategy: runtimePolicy.Spec.Strategy,
+			Params:   runtimePolicy.Spec.Params,
+		},
+	}
+	return nil
+}
+
 func resolveToolExecutionContract(out *contracts.ResolvedContracts, path string, policyRegistry *policies.Registry) error {
 	contract, err := loadContract[toolExecutionContractBody](path, "tool-execution")
 	if err != nil {
@@ -584,6 +762,14 @@ func resolveContractApplyFunc(kind string) (contractApplyFunc, error) {
 		return resolvePromptAssemblyContract, nil
 	case "ToolContractConfig":
 		return resolveToolContract, nil
+	case "FilesystemToolContractConfig":
+		return resolveFilesystemToolContract, nil
+	case "FilesystemExecutionContractConfig":
+		return resolveFilesystemExecutionContract, nil
+	case "ShellToolContractConfig":
+		return resolveShellToolContract, nil
+	case "ShellExecutionContractConfig":
+		return resolveShellExecutionContract, nil
 	case "ToolExecutionContractConfig":
 		return resolveToolExecutionContract, nil
 	case "PlanToolContractConfig":

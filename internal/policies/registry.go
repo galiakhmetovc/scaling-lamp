@@ -5,33 +5,43 @@ import "fmt"
 type Family string
 
 const (
-	FamilyEndpoint          Family = "endpoint"
-	FamilyAuth              Family = "auth"
-	FamilyRetry             Family = "retry"
-	FamilyTimeout           Family = "timeout"
-	FamilyOffload           Family = "offload"
-	FamilyModel             Family = "model"
-	FamilyMessage           Family = "message"
-	FamilyTool              Family = "tool"
-	FamilyResponseFormat    Family = "response_format"
-	FamilyStreaming         Family = "streaming"
-	FamilySampling          Family = "sampling"
-	FamilyPromptAsset       Family = "prompt_asset"
-	FamilySystemPrompt      Family = "system_prompt"
-	FamilySessionHead       Family = "session_head"
-	FamilyToolCatalog       Family = "tool_catalog"
-	FamilyToolSerialization Family = "tool_serialization"
-	FamilyToolAccess        Family = "tool_access"
-	FamilyToolApproval      Family = "tool_approval"
-	FamilyToolSandbox       Family = "tool_sandbox"
-	FamilyPlanTool          Family = "plan_tool"
-	FamilyProviderTrace     Family = "provider_trace"
-	FamilyChatInput         Family = "chat_input"
-	FamilyChatSubmit        Family = "chat_submit"
-	FamilyChatOutput        Family = "chat_output"
-	FamilyChatStatus        Family = "chat_status"
-	FamilyChatCommand       Family = "chat_command"
-	FamilyChatResume        Family = "chat_resume"
+	FamilyEndpoint              Family = "endpoint"
+	FamilyAuth                  Family = "auth"
+	FamilyRetry                 Family = "retry"
+	FamilyTimeout               Family = "timeout"
+	FamilyOffload               Family = "offload"
+	FamilyModel                 Family = "model"
+	FamilyMessage               Family = "message"
+	FamilyTool                  Family = "tool"
+	FamilyResponseFormat        Family = "response_format"
+	FamilyStreaming             Family = "streaming"
+	FamilySampling              Family = "sampling"
+	FamilyPromptAsset           Family = "prompt_asset"
+	FamilySystemPrompt          Family = "system_prompt"
+	FamilySessionHead           Family = "session_head"
+	FamilyToolCatalog           Family = "tool_catalog"
+	FamilyToolSerialization     Family = "tool_serialization"
+	FamilyFilesystemCatalog     Family = "filesystem_catalog"
+	FamilyFilesystemDescription Family = "filesystem_description"
+	FamilyFilesystemScope       Family = "filesystem_scope"
+	FamilyFilesystemMutation    Family = "filesystem_mutation"
+	FamilyFilesystemIO          Family = "filesystem_io"
+	FamilyShellCatalog          Family = "shell_catalog"
+	FamilyShellDescription      Family = "shell_description"
+	FamilyShellCommand          Family = "shell_command"
+	FamilyShellApproval         Family = "shell_approval"
+	FamilyShellRuntime          Family = "shell_runtime"
+	FamilyToolAccess            Family = "tool_access"
+	FamilyToolApproval          Family = "tool_approval"
+	FamilyToolSandbox           Family = "tool_sandbox"
+	FamilyPlanTool              Family = "plan_tool"
+	FamilyProviderTrace         Family = "provider_trace"
+	FamilyChatInput             Family = "chat_input"
+	FamilyChatSubmit            Family = "chat_submit"
+	FamilyChatOutput            Family = "chat_output"
+	FamilyChatStatus            Family = "chat_status"
+	FamilyChatCommand           Family = "chat_command"
+	FamilyChatResume            Family = "chat_resume"
 )
 
 type Type struct {
@@ -166,6 +176,84 @@ func NewBuiltInRegistry() *Registry {
 		Family: FamilyToolSerialization,
 		Strategy: setOf(
 			"openai_function_tools",
+		),
+	})
+	registry.Register(Type{
+		Kind:   "FilesystemCatalogPolicyConfig",
+		Family: FamilyFilesystemCatalog,
+		Strategy: setOf(
+			"static_allowlist",
+		),
+	})
+	registry.Register(Type{
+		Kind:   "FilesystemDescriptionPolicyConfig",
+		Family: FamilyFilesystemDescription,
+		Strategy: setOf(
+			"static_builtin_descriptions",
+		),
+	})
+	registry.Register(Type{
+		Kind:   "FilesystemScopePolicyConfig",
+		Family: FamilyFilesystemScope,
+		Strategy: setOf(
+			"workspace_only",
+			"allowlist_paths",
+		),
+	})
+	registry.Register(Type{
+		Kind:   "FilesystemMutationPolicyConfig",
+		Family: FamilyFilesystemMutation,
+		Strategy: setOf(
+			"allow_writes",
+			"require_approval_for_writes",
+			"trash_only_delete",
+		),
+	})
+	registry.Register(Type{
+		Kind:   "FilesystemIOPolicyConfig",
+		Family: FamilyFilesystemIO,
+		Strategy: setOf(
+			"bounded_text_io",
+		),
+	})
+	registry.Register(Type{
+		Kind:   "ShellCatalogPolicyConfig",
+		Family: FamilyShellCatalog,
+		Strategy: setOf(
+			"static_allowlist",
+		),
+	})
+	registry.Register(Type{
+		Kind:   "ShellDescriptionPolicyConfig",
+		Family: FamilyShellDescription,
+		Strategy: setOf(
+			"static_builtin_descriptions",
+		),
+	})
+	registry.Register(Type{
+		Kind:   "ShellCommandPolicyConfig",
+		Family: FamilyShellCommand,
+		Strategy: setOf(
+			"static_allowlist",
+			"deny_all",
+		),
+	})
+	registry.Register(Type{
+		Kind:   "ShellApprovalPolicyConfig",
+		Family: FamilyShellApproval,
+		Strategy: setOf(
+			"always_allow",
+			"always_require",
+			"require_for_patterns",
+		),
+	})
+	registry.Register(Type{
+		Kind:   "ShellRuntimePolicyConfig",
+		Family: FamilyShellRuntime,
+		Strategy: setOf(
+			"workspace_write",
+			"read_only",
+			"deny_exec",
 		),
 	})
 	registry.Register(Type{

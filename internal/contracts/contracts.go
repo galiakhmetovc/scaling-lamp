@@ -1,15 +1,19 @@
 package contracts
 
 type ResolvedContracts struct {
-	ProviderRequest ProviderRequestContract
-	Memory          MemoryContract
-	PromptAssets    PromptAssetsContract
-	PromptAssembly  PromptAssemblyContract
-	Tools           ToolContract
-	PlanTools       PlanToolContract
-	ToolExecution   ToolExecutionContract
-	Chat            ChatContract
-	ProviderTrace   ProviderTraceContract
+	ProviderRequest     ProviderRequestContract
+	Memory              MemoryContract
+	PromptAssets        PromptAssetsContract
+	PromptAssembly      PromptAssemblyContract
+	Tools               ToolContract
+	FilesystemTools     FilesystemToolContract
+	FilesystemExecution FilesystemExecutionContract
+	ShellTools          ShellToolContract
+	ShellExecution      ShellExecutionContract
+	PlanTools           PlanToolContract
+	ToolExecution       ToolExecutionContract
+	Chat                ChatContract
+	ProviderTrace       ProviderTraceContract
 }
 
 type ProviderRequestContract struct {
@@ -108,6 +112,32 @@ type ToolContract struct {
 	ID            string
 	Catalog       ToolCatalogPolicy
 	Serialization ToolSerializationPolicy
+}
+
+type FilesystemToolContract struct {
+	ID          string
+	Catalog     FilesystemCatalogPolicy
+	Description FilesystemDescriptionPolicy
+}
+
+type FilesystemExecutionContract struct {
+	ID       string
+	Scope    FilesystemScopePolicy
+	Mutation FilesystemMutationPolicy
+	IO       FilesystemIOPolicy
+}
+
+type ShellToolContract struct {
+	ID          string
+	Catalog     ShellCatalogPolicy
+	Description ShellDescriptionPolicy
+}
+
+type ShellExecutionContract struct {
+	ID       string
+	Command  ShellCommandPolicy
+	Approval ShellApprovalPolicy
+	Runtime  ShellRuntimePolicy
 }
 
 type PlanToolContract struct {
@@ -249,6 +279,76 @@ type PlanToolPolicy struct {
 	Params   PlanToolParams
 }
 
+type FilesystemCatalogPolicy struct {
+	ID       string
+	Enabled  bool
+	Strategy string
+	Params   FilesystemCatalogParams
+}
+
+type FilesystemDescriptionPolicy struct {
+	ID       string
+	Enabled  bool
+	Strategy string
+	Params   FilesystemDescriptionParams
+}
+
+type FilesystemScopePolicy struct {
+	ID       string
+	Enabled  bool
+	Strategy string
+	Params   FilesystemScopeParams
+}
+
+type FilesystemMutationPolicy struct {
+	ID       string
+	Enabled  bool
+	Strategy string
+	Params   FilesystemMutationParams
+}
+
+type FilesystemIOPolicy struct {
+	ID       string
+	Enabled  bool
+	Strategy string
+	Params   FilesystemIOParams
+}
+
+type ShellCatalogPolicy struct {
+	ID       string
+	Enabled  bool
+	Strategy string
+	Params   ShellCatalogParams
+}
+
+type ShellDescriptionPolicy struct {
+	ID       string
+	Enabled  bool
+	Strategy string
+	Params   ShellDescriptionParams
+}
+
+type ShellCommandPolicy struct {
+	ID       string
+	Enabled  bool
+	Strategy string
+	Params   ShellCommandParams
+}
+
+type ShellApprovalPolicy struct {
+	ID       string
+	Enabled  bool
+	Strategy string
+	Params   ShellApprovalParams
+}
+
+type ShellRuntimePolicy struct {
+	ID       string
+	Enabled  bool
+	Strategy string
+	Params   ShellRuntimeParams
+}
+
 type ToolAccessPolicy struct {
 	ID       string
 	Enabled  bool
@@ -307,6 +407,68 @@ type ToolSerializationParams struct {
 
 type PlanToolParams struct {
 	ToolIDs []string `yaml:"tool_ids"`
+}
+
+type FilesystemCatalogParams struct {
+	ToolIDs    []string `yaml:"tool_ids"`
+	AllowEmpty bool     `yaml:"allow_empty"`
+	Dedupe     bool     `yaml:"dedupe"`
+}
+
+type FilesystemDescriptionParams struct {
+	IncludeExamples  bool `yaml:"include_examples"`
+	IncludeScopeHint bool `yaml:"include_scope_hint"`
+}
+
+type FilesystemScopeParams struct {
+	RootPath      string   `yaml:"root_path"`
+	ReadSubpaths  []string `yaml:"read_subpaths"`
+	WriteSubpaths []string `yaml:"write_subpaths"`
+	AllowedPaths  []string `yaml:"allowed_paths"`
+	ReadOnlyPaths []string `yaml:"read_only_paths"`
+	WritePaths    []string `yaml:"write_paths"`
+}
+
+type FilesystemMutationParams struct {
+	AllowWrite              bool   `yaml:"allow_write"`
+	AllowMove               bool   `yaml:"allow_move"`
+	AllowMkdir              bool   `yaml:"allow_mkdir"`
+	ApprovalMessageTemplate string `yaml:"approval_message_template"`
+	TrashDir                string `yaml:"trash_dir"`
+}
+
+type FilesystemIOParams struct {
+	MaxReadBytes  int    `yaml:"max_read_bytes"`
+	MaxWriteBytes int    `yaml:"max_write_bytes"`
+	Encoding      string `yaml:"encoding"`
+}
+
+type ShellCatalogParams struct {
+	ToolIDs    []string `yaml:"tool_ids"`
+	AllowEmpty bool     `yaml:"allow_empty"`
+}
+
+type ShellDescriptionParams struct {
+	IncludeExamples      bool `yaml:"include_examples"`
+	IncludeRuntimeLimits bool `yaml:"include_runtime_limits"`
+}
+
+type ShellCommandParams struct {
+	AllowedCommands []string `yaml:"allowed_commands"`
+	AllowedPrefixes []string `yaml:"allowed_prefixes"`
+	DenyPatterns    []string `yaml:"deny_patterns"`
+}
+
+type ShellApprovalParams struct {
+	Patterns                []string `yaml:"patterns"`
+	ApprovalMessageTemplate string   `yaml:"approval_message_template"`
+}
+
+type ShellRuntimeParams struct {
+	Cwd            string `yaml:"cwd"`
+	Timeout        string `yaml:"timeout"`
+	MaxOutputBytes int    `yaml:"max_output_bytes"`
+	AllowNetwork   bool   `yaml:"allow_network"`
 }
 
 type ToolAccessParams struct {
