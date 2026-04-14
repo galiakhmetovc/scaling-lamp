@@ -852,7 +852,7 @@ This is what the shipped `config/zai-smoke` configuration currently selects.
   - `include_examples = false`
   - `include_runtime_limits = true`
 - `ShellCommandPolicy.static_allowlist`
-  - `allowed_commands = [pwd, ls, cat, rg, go, git]`
+  - `allowed_commands = [pwd, ls, cat, rg, go, git, echo, printf, head, sed, wc, find]`
   - `deny_patterns = [" rm ", " curl ", " wget "]`
 - `ShellApprovalPolicy.always_allow`
 - `ShellRuntimePolicy.workspace_write`

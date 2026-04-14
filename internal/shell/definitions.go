@@ -49,7 +49,7 @@ func defaultDefinitions() []tools.Definition {
 		{
 			ID:          "shell_exec",
 			Name:        "shell_exec",
-			Description: "Run one bounded non-interactive shell command inside the configured workspace scope.",
+			Description: "Run one bounded non-interactive shell command inside the configured workspace scope. Pass the executable name in command and each argument separately in args. Do not send a whole shell snippet in command. Example: {\"command\":\"echo\",\"args\":[\"shell_exec works!\"]}.",
 			Parameters: map[string]any{
 				"type": "object",
 				"properties": map[string]any{

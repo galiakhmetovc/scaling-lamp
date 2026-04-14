@@ -1,6 +1,7 @@
 package shell_test
 
 import (
+	"strings"
 	"testing"
 
 	"teamd/internal/contracts"
@@ -37,6 +38,12 @@ func TestDefinitionExecutorBuildsStaticAllowlistShellTools(t *testing.T) {
 	if got[0].ID != "shell_exec" {
 		t.Fatalf("definition id = %q, want shell_exec", got[0].ID)
 	}
+	if got[0].Description == "" {
+		t.Fatal("shell_exec description is empty")
+	}
+	if want := `{"command":"echo","args":["shell_exec works!"]}`; !contains(got[0].Description, want) {
+		t.Fatalf("shell_exec description = %q, want example %q", got[0].Description, want)
+	}
 	props, ok := got[0].Parameters["properties"].(map[string]any)
 	if !ok {
 		t.Fatalf("shell_exec properties = %#v", got[0].Parameters["properties"])
@@ -68,4 +75,8 @@ func TestDefinitionExecutorRejectsUnknownShellToolID(t *testing.T) {
 	if err == nil {
 		t.Fatal("Build returned nil error, want unknown tool failure")
 	}
+}
+
+func contains(text, want string) bool {
+	return strings.Contains(text, want)
 }

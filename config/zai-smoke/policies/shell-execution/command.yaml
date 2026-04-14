@@ -12,6 +12,12 @@ spec:
       - rg
       - go
       - git
+      - echo
+      - printf
+      - head
+      - sed
+      - wc
+      - find
     allowed_prefixes: []
     deny_patterns:
       - " rm "

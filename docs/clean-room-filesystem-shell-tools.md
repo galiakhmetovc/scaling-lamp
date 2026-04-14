@@ -85,6 +85,12 @@ Current shipped shell command policy:
   - `rg`
   - `go`
   - `git`
+  - `echo`
+  - `printf`
+  - `head`
+  - `sed`
+  - `wc`
+  - `find`
 
 Current shipped shell runtime policy:
 
