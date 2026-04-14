@@ -179,6 +179,7 @@ func TestAgentChatTurnExecutesPlanToolCallsAndReturnsFinalAssistantMessage(t *te
 	var secondRequestBody map[string]any
 	agent := &runtime.Agent{
 		Config:        chatRuntimeConfigForTest(),
+		MaxToolRounds: 2,
 		Contracts:     chatContractsForToolLoopTest(),
 		PromptAssets:  provider.NewPromptAssetExecutor(),
 		RequestShape:  provider.NewRequestShapeExecutor(),
@@ -289,6 +290,77 @@ func TestAgentChatTurnExecutesPlanToolCallsAndReturnsFinalAssistantMessage(t *te
 	}
 	if session.Messages[1].Content != "Plan initialized." {
 		t.Fatalf("assistant session message = %#v", session.Messages[1])
+	}
+}
+
+func TestAgentChatTurnHonorsConfiguredMaxToolRounds(t *testing.T) {
+	t.Setenv("TEAMD_ZAI_API_KEY", "secret-token")
+
+	agent := &runtime.Agent{
+		Config:        chatRuntimeConfigForTest(),
+		MaxToolRounds: 1,
+		Contracts:     chatContractsForToolLoopTest(),
+		PromptAssets:  provider.NewPromptAssetExecutor(),
+		RequestShape:  provider.NewRequestShapeExecutor(),
+		PlanTools:     tools.NewPlanToolExecutor(),
+		ToolCatalog:   tools.NewCatalogExecutor(),
+		ToolExecution: tools.NewExecutionGate(),
+		Transport: provider.NewTransportExecutor(fakeDoer{
+			do: func(req *http.Request) (*http.Response, error) {
+				return &http.Response{
+					StatusCode: http.StatusOK,
+					Header:     http.Header{"Content-Type": []string{"application/json"}},
+					Body: io.NopCloser(bytes.NewBufferString(`{
+  "id":"resp-tools-1",
+  "model":"glm-5-turbo",
+  "choices":[
+    {
+      "finish_reason":"tool_calls",
+      "message":{
+        "role":"assistant",
+        "content":"",
+        "tool_calls":[
+          {
+            "id":"call-1",
+            "function":{
+              "name":"init_plan",
+              "arguments":{"goal":"Refactor auth"}
+            }
+          }
+        ]
+      }
+    }
+  ],
+  "usage":{"prompt_tokens":8,"completion_tokens":2,"total_tokens":10}
+}`)),
+				}, nil
+			},
+		}),
+		EventLog: runtime.NewInMemoryEventLog(),
+		Projections: []projections.Projection{
+			projections.NewSessionProjection(),
+			projections.NewRunProjection(),
+			projections.NewTranscriptProjection(),
+			projections.NewActivePlanProjection(),
+			projections.NewPlanHeadProjection(),
+			projections.NewPlanArchiveProjection(),
+		},
+		Now:   func() time.Time { return time.Date(2026, 4, 14, 19, 20, 0, 0, time.UTC) },
+		NewID: func(prefix string) string { return prefix + "-1" },
+	}
+	agent.ProviderClient = provider.NewClient(agent.PromptAssets, agent.RequestShape, agent.PlanTools, filesystem.NewDefinitionExecutor(), shell.NewDefinitionExecutor(), agent.ToolCatalog, agent.ToolExecution, agent.Transport)
+
+	session, err := agent.NewChatSession()
+	if err != nil {
+		t.Fatalf("NewChatSession returned error: %v", err)
+	}
+
+	_, err = agent.ChatTurn(context.Background(), session, runtime.ChatTurnInput{Prompt: "make a plan"})
+	if err == nil {
+		t.Fatal("ChatTurn returned nil error, want tool loop limit failure")
+	}
+	if !strings.Contains(err.Error(), "provider tool loop exceeded 1 rounds") {
+		t.Fatalf("ChatTurn error = %v, want configured round limit in message", err)
 	}
 }
 

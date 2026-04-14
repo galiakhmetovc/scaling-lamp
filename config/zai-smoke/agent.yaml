@@ -6,6 +6,7 @@ spec:
     event_log: file_jsonl
     event_log_path: ../../var/zai-smoke/events.jsonl
     projection_store_path: ../../var/zai-smoke/projections.json
+    max_tool_rounds: 100
     prompt_assembly_executor: prompt_assembly_default
     prompt_asset_executor: prompt_asset_default
     transport_executor: transport_default

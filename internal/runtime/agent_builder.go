@@ -18,6 +18,7 @@ import (
 
 type Agent struct {
 	Config          config.AgentConfig
+	MaxToolRounds   int
 	Contracts       contracts.ResolvedContracts
 	PromptAssembly  *promptassembly.Executor
 	PromptAssets    *provider.PromptAssetExecutor
@@ -150,9 +151,14 @@ func BuildAgent(configPath string) (*Agent, error) {
 	if err != nil {
 		return nil, fmt.Errorf("build provider client: %w", err)
 	}
+	maxToolRounds := cfg.Spec.Runtime.MaxToolRounds
+	if maxToolRounds <= 0 {
+		maxToolRounds = 4
+	}
 
 	return &Agent{
 		Config:          cfg,
+		MaxToolRounds:   maxToolRounds,
 		Contracts:       contracts,
 		PromptAssembly:  promptAssemblyExecutor,
 		PromptAssets:    promptAssetExecutor,

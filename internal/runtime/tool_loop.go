@@ -14,11 +14,13 @@ import (
 	"teamd/internal/shell"
 )
 
-const maxToolRounds = 4
-
 func (a *Agent) executeProviderLoop(ctx context.Context, sessionID, runID, correlationID, source string, input provider.ClientInput) (provider.ClientResult, error) {
 	currentMessages := append([]contracts.Message{}, input.Messages...)
-	for round := 0; round < maxToolRounds; round++ {
+	maxRounds := a.MaxToolRounds
+	if maxRounds <= 0 {
+		maxRounds = 4
+	}
+	for round := 0; round < maxRounds; round++ {
 		assembledMessages, err := a.assemblePromptMessages(sessionID, append([]contracts.Message{}, currentMessages...))
 		if err != nil {
 			return provider.ClientResult{}, err
@@ -58,7 +60,7 @@ func (a *Agent) executeProviderLoop(ctx context.Context, sessionID, runID, corre
 		currentMessages = append(currentMessages, toolMessages...)
 	}
 
-	return provider.ClientResult{}, fmt.Errorf("provider tool loop exceeded %d rounds", maxToolRounds)
+	return provider.ClientResult{}, fmt.Errorf("provider tool loop exceeded %d rounds", maxRounds)
 }
 
 func (a *Agent) executeToolCalls(ctx context.Context, correlationID, source string, calls []provider.ToolCall, decisions []provider.ToolDecision) ([]contracts.Message, error) {

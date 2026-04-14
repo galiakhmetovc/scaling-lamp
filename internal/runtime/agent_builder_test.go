@@ -710,6 +710,9 @@ func TestRepositoryZaiSmokeConfigLoadsAndResolvesContracts(t *testing.T) {
 	if resolved.Chat.Output.Strategy != "streaming_text" {
 		t.Fatalf("chat output strategy = %q, want %q", resolved.Chat.Output.Strategy, "streaming_text")
 	}
+	if cfg.Spec.Runtime.MaxToolRounds != 100 {
+		t.Fatalf("runtime max_tool_rounds = %d, want %d", cfg.Spec.Runtime.MaxToolRounds, 100)
+	}
 	if resolved.FilesystemTools.Catalog.Params.ToolIDs[0] != "fs_list" {
 		t.Fatalf("first filesystem tool = %q, want %q", resolved.FilesystemTools.Catalog.Params.ToolIDs[0], "fs_list")
 	}
