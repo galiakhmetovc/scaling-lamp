@@ -8,12 +8,7 @@ type AgentConfig struct {
 }
 
 type AgentConfigSpec struct {
-	Contracts ContractRefs `yaml:"contracts"`
-}
-
-type ContractRefs struct {
-	TransportPath string `yaml:"transport"`
-	MemoryPath    string `yaml:"memory"`
+	Contracts map[string]string `yaml:"contracts"`
 }
 
 type ModuleHeader struct {

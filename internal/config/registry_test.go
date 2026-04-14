@@ -10,7 +10,11 @@ func TestModuleRegistryValidatesModuleKind(t *testing.T) {
 	t.Parallel()
 
 	registry := config.NewModuleRegistry()
-	registry.Register("TransportContractConfig")
+	registry.Register(config.ModuleType{
+		Kind:      "TransportContractConfig",
+		Category:  config.ModuleCategoryContract,
+		RefFields: []string{"endpoint_policy_path"},
+	})
 
 	err := registry.ValidateKind("AuthPolicyConfig")
 	if err == nil {
@@ -19,5 +23,22 @@ func TestModuleRegistryValidatesModuleKind(t *testing.T) {
 
 	if err := registry.ValidateKind("TransportContractConfig"); err != nil {
 		t.Fatalf("ValidateKind returned error for registered kind: %v", err)
+	}
+}
+
+func TestBuiltInModuleRegistryExposesModuleMetadata(t *testing.T) {
+	t.Parallel()
+
+	registry := config.NewBuiltInModuleRegistry()
+
+	moduleType, err := registry.Type("TransportContractConfig")
+	if err != nil {
+		t.Fatalf("Type returned error: %v", err)
+	}
+	if moduleType.Category != config.ModuleCategoryContract {
+		t.Fatalf("category = %q, want %q", moduleType.Category, config.ModuleCategoryContract)
+	}
+	if len(moduleType.RefFields) != 1 || moduleType.RefFields[0] != "endpoint_policy_path" {
+		t.Fatalf("ref fields = %#v, want endpoint_policy_path", moduleType.RefFields)
 	}
 }

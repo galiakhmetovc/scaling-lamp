@@ -20,8 +20,9 @@ func LoadRoot(path string) (AgentConfig, error) {
 	}
 
 	baseDir := filepath.Dir(path)
-	cfg.Spec.Contracts.TransportPath = resolveModulePath(baseDir, cfg.Spec.Contracts.TransportPath)
-	cfg.Spec.Contracts.MemoryPath = resolveModulePath(baseDir, cfg.Spec.Contracts.MemoryPath)
+	for contractName, contractPath := range cfg.Spec.Contracts {
+		cfg.Spec.Contracts[contractName] = resolveModulePath(baseDir, contractPath)
+	}
 
 	return cfg, nil
 }
@@ -39,17 +40,53 @@ func LoadModuleHeader(path string) (ModuleHeader, error) {
 	return header, nil
 }
 
-func LoadModuleGraph(cfg AgentConfig) (ModuleGraph, error) {
+func LoadModuleGraph(cfg AgentConfig, registry *ModuleRegistry) (ModuleGraph, error) {
 	graph := ModuleGraph{
 		Contracts: map[string]ModuleHeader{},
 		Policies:  map[string]ModuleHeader{},
 	}
 
-	if err := loadContractAndPolicies(cfg.Spec.Contracts.TransportPath, []string{"endpoint_policy_path"}, graph); err != nil {
-		return ModuleGraph{}, fmt.Errorf("load transport contract graph: %w", err)
+	visited := map[string]struct{}{}
+	queue := make([]string, 0, len(cfg.Spec.Contracts))
+	for _, contractPath := range cfg.Spec.Contracts {
+		if contractPath == "" {
+			continue
+		}
+		queue = append(queue, contractPath)
 	}
-	if err := loadContractAndPolicies(cfg.Spec.Contracts.MemoryPath, []string{"offload_policy_path"}, graph); err != nil {
-		return ModuleGraph{}, fmt.Errorf("load memory contract graph: %w", err)
+
+	for len(queue) > 0 {
+		modulePath := queue[0]
+		queue = queue[1:]
+
+		if _, ok := visited[modulePath]; ok {
+			continue
+		}
+		visited[modulePath] = struct{}{}
+
+		header, err := LoadModuleHeader(modulePath)
+		if err != nil {
+			return ModuleGraph{}, fmt.Errorf("load module header %q: %w", modulePath, err)
+		}
+		moduleType, err := registry.Type(header.Kind)
+		if err != nil {
+			return ModuleGraph{}, fmt.Errorf("load module %q: %w", modulePath, err)
+		}
+
+		switch moduleType.Category {
+		case ModuleCategoryContract:
+			graph.Contracts[header.ID] = header
+		case ModuleCategoryPolicy:
+			graph.Policies[header.ID] = header
+		default:
+			return ModuleGraph{}, fmt.Errorf("module %q has unsupported category %q", header.ID, moduleType.Category)
+		}
+
+		references, err := loadModuleReferences(modulePath, moduleType.RefFields)
+		if err != nil {
+			return ModuleGraph{}, fmt.Errorf("load module references for %q: %w", modulePath, err)
+		}
+		queue = append(queue, references...)
 	}
 
 	return graph, nil
@@ -65,42 +102,27 @@ func resolveModulePath(baseDir, modulePath string) string {
 	return filepath.Clean(filepath.Join(baseDir, modulePath))
 }
 
-func loadContractAndPolicies(contractPath string, policyKeys []string, graph ModuleGraph) error {
-	if contractPath == "" {
-		return nil
-	}
-
-	header, err := LoadModuleHeader(contractPath)
+func loadModuleReferences(modulePath string, refFields []string) ([]string, error) {
+	body, err := os.ReadFile(modulePath)
 	if err != nil {
-		return err
-	}
-	graph.Contracts[header.ID] = header
-
-	body, err := os.ReadFile(contractPath)
-	if err != nil {
-		return fmt.Errorf("read contract body: %w", err)
+		return nil, fmt.Errorf("read module body: %w", err)
 	}
 
 	var raw struct {
 		Spec map[string]string `yaml:"spec"`
 	}
 	if err := yaml.Unmarshal(body, &raw); err != nil {
-		return fmt.Errorf("decode contract body: %w", err)
+		return nil, fmt.Errorf("decode module body: %w", err)
 	}
 
-	contractDir := filepath.Dir(contractPath)
-	for _, key := range policyKeys {
-		policyRef := raw.Spec[key]
-		if policyRef == "" {
+	moduleDir := filepath.Dir(modulePath)
+	references := make([]string, 0, len(refFields))
+	for _, field := range refFields {
+		refPath := raw.Spec[field]
+		if refPath == "" {
 			continue
 		}
-		policyPath := resolveModulePath(contractDir, policyRef)
-		policyHeader, err := LoadModuleHeader(policyPath)
-		if err != nil {
-			return fmt.Errorf("load policy header for %q: %w", key, err)
-		}
-		graph.Policies[policyHeader.ID] = policyHeader
+		references = append(references, resolveModulePath(moduleDir, refPath))
 	}
-
-	return nil
+	return references, nil
 }

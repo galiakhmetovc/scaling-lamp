@@ -7,7 +7,7 @@ Current baseline:
 - explicit policy references inside contract files
 - path resolution relative to the referencing file
 - header-only module graph loading before deeper contract resolution
-- contract and policy kinds validated in the builder
+- contract and policy kinds validated through built-in module registry metadata
 
 ## Current Files
 
@@ -15,7 +15,7 @@ Current baseline:
 
 Defines:
 - root config
-- contract references
+- explicit contract reference map
 - module header
 - module graph
 
@@ -25,25 +25,25 @@ Does:
 - root config loading
 - path normalization
 - module header loading
-- minimal contract-to-policy graph loading
+- registry-driven module graph walking
 
 Current scope:
-- transport contract
-- memory contract
-- endpoint policy ref
-- offload policy ref
-
-This is still a narrow slice, not the final general config graph system.
+- root config provides explicit contract paths
+- module registry decides which reference fields each module kind exposes
+- graph walker resolves referenced module paths relative to the referencing file
+- graph traversal no longer knows contract-family-specific keys
 
 Current limitation:
-- graph traversal is still contract-family-specific
-- adding a new contract family still requires loader changes
-- module kind registry is still populated manually in the builder
+- root config still loads only the first contract layer and does not yet resolve effective contracts
+- module registry is still built-in and not yet a full policy/strategy registry system
+- graph currently stores headers only, not decoded module payloads
 
 ### `internal/config/registry.go`
 
 Does:
 - register supported module kinds
-- validate kinds before builder wiring
+- classify modules as contracts vs policies
+- declare allowed reference fields per module kind
+- validate loaded module headers before runtime wiring
 
-It is currently a minimal runtime guardrail, not yet a full contract/policy/strategy registry system.
+It is still a baseline registry, not yet the final contract/policy/strategy registry system.

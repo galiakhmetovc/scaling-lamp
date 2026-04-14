@@ -36,8 +36,8 @@ func TestLoadRootConfigLoadsExplicitModulePaths(t *testing.T) {
 	if got.ID != "agent-test" {
 		t.Fatalf("LoadRoot ID = %q, want %q", got.ID, "agent-test")
 	}
-	if got.Spec.Contracts.TransportPath != filepath.Join(dir, "contracts", "transport.yaml") {
-		t.Fatalf("LoadRoot transport path = %q, want resolved path", got.Spec.Contracts.TransportPath)
+	if got.Spec.Contracts["transport"] != filepath.Join(dir, "contracts", "transport.yaml") {
+		t.Fatalf("LoadRoot transport path = %q, want resolved path", got.Spec.Contracts["transport"])
 	}
 }
 
@@ -84,11 +84,11 @@ func TestLoadRootConfigLoadsExplicitModuleGraph(t *testing.T) {
 		t.Fatalf("LoadRoot returned error: %v", err)
 	}
 
-	if got.Spec.Contracts.MemoryPath != filepath.Join(dir, "contracts", "memory.yaml") {
-		t.Fatalf("LoadRoot memory path = %q, want resolved path", got.Spec.Contracts.MemoryPath)
+	if got.Spec.Contracts["memory"] != filepath.Join(dir, "contracts", "memory.yaml") {
+		t.Fatalf("LoadRoot memory path = %q, want resolved path", got.Spec.Contracts["memory"])
 	}
 
-	graph, err := config.LoadModuleGraph(got)
+	graph, err := config.LoadModuleGraph(got, config.NewBuiltInModuleRegistry())
 	if err != nil {
 		t.Fatalf("LoadModuleGraph returned error: %v", err)
 	}
@@ -101,6 +101,66 @@ func TestLoadRootConfigLoadsExplicitModuleGraph(t *testing.T) {
 	}
 	if graph.Policies["endpoint-main"].Kind != "EndpointPolicyConfig" {
 		t.Fatalf("endpoint policy kind = %q, want EndpointPolicyConfig", graph.Policies["endpoint-main"].Kind)
+	}
+}
+
+func TestLoadModuleGraphUsesRegistryReferenceMetadata(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+
+	mustWriteFile(t, filepath.Join(dir, "agent.yaml"), ""+
+		"kind: AgentConfig\n"+
+		"version: v1\n"+
+		"id: agent-test\n"+
+		"spec:\n"+
+		"  contracts:\n"+
+		"    transport: ./contracts/transport.yaml\n")
+
+	mustWriteFile(t, filepath.Join(dir, "contracts", "transport.yaml"), ""+
+		"kind: TransportContractConfig\n"+
+		"version: v1\n"+
+		"id: transport-main\n"+
+		"spec:\n"+
+		"  endpoint_policy_path: ../policies/transport/endpoint.yaml\n"+
+		"  retry_policy_path: ../policies/transport/retry.yaml\n")
+
+	mustWriteFile(t, filepath.Join(dir, "policies", "transport", "endpoint.yaml"), ""+
+		"kind: EndpointPolicyConfig\n"+
+		"version: v1\n"+
+		"id: endpoint-main\n")
+
+	mustWriteFile(t, filepath.Join(dir, "policies", "transport", "retry.yaml"), ""+
+		"kind: RetryPolicyConfig\n"+
+		"version: v1\n"+
+		"id: retry-main\n")
+
+	cfg, err := config.LoadRoot(filepath.Join(dir, "agent.yaml"))
+	if err != nil {
+		t.Fatalf("LoadRoot returned error: %v", err)
+	}
+
+	registry := config.NewBuiltInModuleRegistry()
+	registry.Register(config.ModuleType{
+		Kind:      "TransportContractConfig",
+		Category:  config.ModuleCategoryContract,
+		RefFields: []string{"endpoint_policy_path", "retry_policy_path"},
+	})
+	registry.Register(config.ModuleType{
+		Kind:     "RetryPolicyConfig",
+		Category: config.ModuleCategoryPolicy,
+	})
+
+	graph, err := config.LoadModuleGraph(cfg, registry)
+	if err != nil {
+		t.Fatalf("LoadModuleGraph returned error: %v", err)
+	}
+
+	if len(graph.Policies) != 2 {
+		t.Fatalf("policies len = %d, want 2", len(graph.Policies))
+	}
+	if graph.Policies["retry-main"].Kind != "RetryPolicyConfig" {
+		t.Fatalf("retry policy kind = %q, want RetryPolicyConfig", graph.Policies["retry-main"].Kind)
 	}
 }
 

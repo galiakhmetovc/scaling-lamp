@@ -18,16 +18,11 @@ func BuildAgent(configPath string) (*Agent, error) {
 	if err != nil {
 		return nil, err
 	}
-	graph, err := config.LoadModuleGraph(cfg)
+	moduleRegistry := config.NewBuiltInModuleRegistry()
+	graph, err := config.LoadModuleGraph(cfg, moduleRegistry)
 	if err != nil {
 		return nil, err
 	}
-
-	moduleRegistry := config.NewModuleRegistry()
-	moduleRegistry.Register("TransportContractConfig")
-	moduleRegistry.Register("MemoryContractConfig")
-	moduleRegistry.Register("EndpointPolicyConfig")
-	moduleRegistry.Register("OffloadPolicyConfig")
 
 	for _, contractHeader := range graph.Contracts {
 		if err := moduleRegistry.ValidateKind(contractHeader.Kind); err != nil {
@@ -40,10 +35,7 @@ func BuildAgent(configPath string) (*Agent, error) {
 		}
 	}
 
-	projectionRegistry := projections.NewRegistry()
-	projectionRegistry.Register("session", func() projections.Projection { return projections.NewSessionProjection() })
-	projectionRegistry.Register("run", func() projections.Projection { return projections.NewRunProjection() })
-	projectionSet, err := projectionRegistry.Build("session", "run")
+	projectionSet, err := projections.NewBuiltInRegistry().BuildDefaults()
 	if err != nil {
 		return nil, fmt.Errorf("build projections: %w", err)
 	}

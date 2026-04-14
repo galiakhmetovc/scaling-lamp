@@ -12,6 +12,13 @@ func NewRegistry() *Registry {
 	return &Registry{factories: map[string]Factory{}}
 }
 
+func NewBuiltInRegistry() *Registry {
+	registry := NewRegistry()
+	registry.Register("session", func() Projection { return NewSessionProjection() })
+	registry.Register("run", func() Projection { return NewRunProjection() })
+	return registry
+}
+
 func (r *Registry) Register(name string, factory Factory) {
 	r.factories[name] = factory
 }
@@ -26,4 +33,8 @@ func (r *Registry) Build(names ...string) ([]Projection, error) {
 		out = append(out, factory())
 	}
 	return out, nil
+}
+
+func (r *Registry) BuildDefaults() ([]Projection, error) {
+	return r.Build("session", "run")
 }

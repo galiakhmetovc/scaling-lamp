@@ -9,16 +9,14 @@ import (
 func TestRegistryBuildsDefaultProjectionSet(t *testing.T) {
 	t.Parallel()
 
-	registry := projections.NewRegistry()
-	registry.Register("session", func() projections.Projection { return projections.NewSessionProjection() })
-	registry.Register("run", func() projections.Projection { return projections.NewRunProjection() })
+	registry := projections.NewBuiltInRegistry()
 
-	got, err := registry.Build("session", "run")
+	got, err := registry.BuildDefaults()
 	if err != nil {
-		t.Fatalf("Build returned error: %v", err)
+		t.Fatalf("BuildDefaults returned error: %v", err)
 	}
 
 	if len(got) != 2 {
-		t.Fatalf("Build len = %d, want 2", len(got))
+		t.Fatalf("BuildDefaults len = %d, want 2", len(got))
 	}
 }

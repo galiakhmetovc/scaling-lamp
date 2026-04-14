@@ -25,7 +25,7 @@ Root config types for the first skeleton.
 
 Current responsibility:
 - represent one root agent config
-- hold explicit contract references
+- hold explicit contract references as a map
 
 ### `internal/config/loader.go`
 
@@ -35,11 +35,11 @@ Current responsibility:
 - read YAML
 - decode root config
 - resolve explicit module paths relative to the root config location
-- load module headers for validation
+- load module graph through registry metadata
 
 Current limitation:
-- only one contract path is modeled
-- no full module graph loading yet
+- graph stores headers only
+- there is still no effective contract resolution step
 
 ### `internal/config/registry.go`
 
@@ -47,6 +47,8 @@ Minimal module kind registry.
 
 Current responsibility:
 - register supported module kinds
+- classify module kinds
+- declare allowed reference fields
 - validate loaded module headers before builder wiring
 
 ### `internal/runtime/eventing/events.go`
@@ -90,6 +92,7 @@ Minimal projection registry.
 
 Current responsibility:
 - register projection factories
+- expose built-in projection composition
 - build projection sets by name
 
 ### `internal/runtime/projections/session.go`
@@ -114,12 +117,11 @@ Current responsibility:
 - load root config
 - create in-memory event log
 - validate loaded contract and policy module kinds
-- assemble projections through a registry
+- assemble projections through built-in registries
 - return one built agent instance
 
 Current limitation:
-- module registry population is still hardcoded inside the builder
-- projection set is still chosen in the builder instead of config-driven composition
+- builder still chooses default projection composition instead of config-driven composition
 - no contract resolution
 - no executor wiring
 
@@ -135,8 +137,8 @@ Current limitation:
 
 These are known temporary shortcuts and should be removed in the next slices.
 
-1. `AgentBuilder` still hardcodes module-registry population and projection selection.
-2. Config loading still uses contract-family-specific graph traversal instead of registry-driven graph walking.
+1. `AgentBuilder` still chooses the default projection set instead of using config-driven composition.
+2. Config graph loading still stops at module headers and does not decode effective contracts.
 3. Event envelopes are still too small for a serious event-sourced system, even after adding sequence and trace linkage metadata.
 4. There is no contract resolver yet.
 5. There is no persistent event store or persistent projections yet.
