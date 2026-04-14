@@ -140,6 +140,15 @@ Current chat terminal layer:
   - slash command dispatch
   - streaming text output
   - header and status printing
+  - short tool activity rendering
+  - compact plan rendering sourced from `PlanHeadProjection`
+
+Current terminal observability behavior:
+
+- full outbound request bodies remain in `events.jsonl`
+- full tool call arguments and results remain in `events.jsonl`
+- terminal output only shows short operator-facing summaries
+- plan rendering is derived from current plan projections, not from raw event replay in the CLI
 
 ## 4. Environment Loading
 

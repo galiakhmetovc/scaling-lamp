@@ -20,6 +20,7 @@ type ChatTurnInput struct {
 	Prompt               string
 	PromptAssetSelection []string
 	StreamObserver       func(provider.StreamEvent)
+	ToolObserver         func(ToolActivity)
 }
 
 func (a *Agent) NewChatSession() (*ChatSession, error) {
@@ -138,7 +139,7 @@ func (a *Agent) ChatTurn(ctx context.Context, session *ChatSession, input ChatTu
 		PromptAssetSelection: input.PromptAssetSelection,
 		Messages:             append([]contracts.Message{}, session.Messages...),
 		StreamObserver:       input.StreamObserver,
-	})
+	}, input.ToolObserver)
 	if err != nil {
 		if recordErr := a.RecordEvent(ctx, eventing.Event{
 			ID:               a.newID("evt-run-failed"),
@@ -249,6 +250,14 @@ func (a *Agent) planHeadProjection() *projections.PlanHeadProjection {
 		}
 	}
 	return nil
+}
+
+func (a *Agent) CurrentPlanHead() (projections.PlanHeadSnapshot, bool) {
+	projection := a.planHeadProjection()
+	if projection == nil {
+		return projections.PlanHeadSnapshot{}, false
+	}
+	return projection.Snapshot(), true
 }
 
 func (a *Agent) recordSessionMessage(ctx context.Context, sessionID, correlationID string, message contracts.Message) error {

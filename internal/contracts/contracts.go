@@ -223,8 +223,11 @@ type ChatOutputParams struct {
 }
 
 type ChatStatusParams struct {
-	ShowHeader bool `yaml:"show_header"`
-	ShowUsage  bool `yaml:"show_usage"`
+	ShowHeader             bool `yaml:"show_header"`
+	ShowUsage              bool `yaml:"show_usage"`
+	ShowToolCalls          bool `yaml:"show_tool_calls"`
+	ShowToolResults        bool `yaml:"show_tool_results"`
+	ShowPlanAfterPlanTools bool `yaml:"show_plan_after_plan_tools"`
 }
 
 type ChatCommandParams struct {

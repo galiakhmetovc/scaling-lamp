@@ -19,6 +19,8 @@ const (
 	EventRunStarted                EventKind = "run.started"
 	EventProviderRequestCaptured   EventKind = "provider.request.captured"
 	EventTransportAttemptCompleted EventKind = "transport.attempt.completed"
+	EventToolCallStarted           EventKind = "tool.call.started"
+	EventToolCallCompleted         EventKind = "tool.call.completed"
 	EventRunCompleted              EventKind = "run.completed"
 	EventRunFailed                 EventKind = "run.failed"
 	EventPlanCreated               EventKind = "plan.created"

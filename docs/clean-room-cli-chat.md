@@ -43,6 +43,9 @@ Current `zai-smoke` chat params:
 - `ChatStatusPolicy`
   - `show_header = true`
   - `show_usage = true`
+  - `show_tool_calls = true`
+  - `show_tool_results = true`
+  - `show_plan_after_plan_tools = true`
 - `ChatCommandPolicy`
   - `exit_command = /exit`
   - `help_command = /help`
@@ -57,8 +60,22 @@ Current runtime behavior per turn:
 3. execute provider client with streaming enabled
 4. write streamed deltas to stdout
 5. record transport attempt events
-6. record assistant message in session event stream
-7. record run completion
+6. when provider emits tool calls, render short `[tool]` blocks in the terminal
+7. when a plan tool mutates active plan state, render compact `[plan]` projection output in the terminal
+8. record assistant message in session event stream
+9. record run completion
+
+Current terminal observability behavior:
+
+- full request bodies and full tool payloads stay in `events.jsonl`
+- terminal output only shows short operator-facing summaries
+- short tool summaries are rendered from `ToolActivity` callbacks in the CLI layer
+- plan rendering is sourced from `PlanHeadProjection`, not from ad hoc string assembly in chat runtime
+
+Current tool activity events:
+
+- `tool.call.started`
+- `tool.call.completed`
 
 Current resume read model:
 

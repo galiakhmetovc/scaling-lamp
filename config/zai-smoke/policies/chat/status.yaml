@@ -7,3 +7,6 @@ spec:
   params:
     show_header: true
     show_usage: true
+    show_tool_calls: true
+    show_tool_results: true
+    show_plan_after_plan_tools: true

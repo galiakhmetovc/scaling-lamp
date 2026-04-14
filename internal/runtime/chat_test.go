@@ -163,7 +163,7 @@ func TestAgentChatTurnExecutesPlanToolCallsAndReturnsFinalAssistantMessage(t *te
 	idValues := []string{
 		"session-chat-1",
 		"run-chat-1", "evt-session-1", "evt-msg-user-1", "evt-run-start-1",
-		"evt-provider-request-1", "evt-transport-1", "plan-1", "evt-plan-create-1",
+		"evt-provider-request-1", "evt-transport-1", "evt-tool-call-started-1", "plan-1", "evt-plan-create-1", "evt-tool-call-completed-1",
 		"evt-provider-request-2", "evt-transport-2", "evt-msg-assistant-1", "evt-run-complete-1",
 	}
 	nextID := func(prefix string) string {
@@ -371,7 +371,7 @@ func TestAgentChatTurnExecutesStreamedPlanToolCallsAndReturnsFinalAssistantMessa
 	idValues := []string{
 		"session-chat-stream-1",
 		"run-chat-stream-1", "evt-session-stream-1", "evt-msg-user-stream-1", "evt-run-start-stream-1",
-		"evt-provider-request-stream-1", "evt-transport-stream-1", "plan-stream-1", "evt-plan-create-stream-1",
+		"evt-provider-request-stream-1", "evt-transport-stream-1", "evt-tool-call-started-stream-1", "plan-stream-1", "evt-plan-create-stream-1", "evt-tool-call-completed-stream-1",
 		"evt-provider-request-stream-2", "evt-transport-stream-2", "evt-msg-assistant-stream-1", "evt-run-complete-stream-1",
 	}
 	nextID := func(prefix string) string {
@@ -465,7 +465,7 @@ func TestAgentChatTurnExecutesFilesystemToolCallAndReturnsFinalAssistantMessage(
 	idValues := []string{
 		"session-chat-fs-1",
 		"run-chat-fs-1", "evt-session-fs-1", "evt-msg-user-fs-1", "evt-run-start-fs-1",
-		"evt-provider-request-fs-1", "evt-transport-fs-1",
+		"evt-provider-request-fs-1", "evt-transport-fs-1", "evt-tool-call-started-fs-1", "evt-tool-call-completed-fs-1",
 		"evt-provider-request-fs-2", "evt-transport-fs-2", "evt-msg-assistant-fs-1", "evt-run-complete-fs-1",
 	}
 	nextID := func(prefix string) string {
@@ -538,7 +538,7 @@ func TestAgentChatTurnExecutesShellToolCallAndReturnsFinalAssistantMessage(t *te
 	idValues := []string{
 		"session-chat-shell-1",
 		"run-chat-shell-1", "evt-session-shell-1", "evt-msg-user-shell-1", "evt-run-start-shell-1",
-		"evt-provider-request-shell-1", "evt-transport-shell-1",
+		"evt-provider-request-shell-1", "evt-transport-shell-1", "evt-tool-call-started-shell-1", "evt-tool-call-completed-shell-1",
 		"evt-provider-request-shell-2", "evt-transport-shell-2", "evt-msg-assistant-shell-1", "evt-run-complete-shell-1",
 	}
 	nextID := func(prefix string) string {

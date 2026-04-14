@@ -967,7 +967,10 @@ func TestResolveContractsBuildsChatContractWithParams(t *testing.T) {
 		"  strategy: inline_terminal\n"+
 		"  params:\n"+
 		"    show_header: true\n"+
-		"    show_usage: true\n")
+		"    show_usage: true\n"+
+		"    show_tool_calls: true\n"+
+		"    show_tool_results: true\n"+
+		"    show_plan_after_plan_tools: true\n")
 
 	mustWriteFile(t, filepath.Join(dir, "policies", "chat", "command.yaml"), ""+
 		"kind: ChatCommandPolicyConfig\n"+
@@ -1010,7 +1013,7 @@ func TestResolveContractsBuildsChatContractWithParams(t *testing.T) {
 	if got.Chat.Submit.Params.EmptyLineThreshold != 1 {
 		t.Fatalf("empty line threshold = %d, want 1", got.Chat.Submit.Params.EmptyLineThreshold)
 	}
-	if !got.Chat.Status.Params.ShowHeader || !got.Chat.Status.Params.ShowUsage {
+	if !got.Chat.Status.Params.ShowHeader || !got.Chat.Status.Params.ShowUsage || !got.Chat.Status.Params.ShowToolCalls || !got.Chat.Status.Params.ShowToolResults || !got.Chat.Status.Params.ShowPlanAfterPlanTools {
 		t.Fatalf("chat status params = %#v", got.Chat.Status.Params)
 	}
 	if got.Chat.Command.Params.ExitCommand != "/exit" || got.Chat.Command.Params.HelpCommand != "/help" || got.Chat.Command.Params.SessionCommand != "/session" {

@@ -269,7 +269,7 @@ func writeSmokeConfig(t *testing.T, dir, baseURL string) string {
 		"spec:\n"+
 		"  prompt_asset_policy_path: ../policies/prompt-assets/assets.yaml\n")
 
-	mustWriteFile(t, filepath.Join(dir, "policies", "transport", "endpoint.yaml"), fmt.Sprintf("" +
+	mustWriteFile(t, filepath.Join(dir, "policies", "transport", "endpoint.yaml"), fmt.Sprintf(""+
 		"kind: EndpointPolicyConfig\n"+
 		"version: v1\n"+
 		"id: endpoint-zai-smoke\n"+
@@ -421,7 +421,7 @@ func writeChatConfig(t *testing.T, dir, baseURL string) string {
 	mustWriteFile(t, filepath.Join(dir, "policies", "chat", "input.yaml"), "kind: ChatInputPolicyConfig\nversion: v1\nid: chat-input\nspec:\n  enabled: true\n  strategy: multiline_buffer\n  params:\n    primary_prompt: \"> \"\n    continuation_prompt: \". \"\n")
 	mustWriteFile(t, filepath.Join(dir, "policies", "chat", "submit.yaml"), "kind: ChatSubmitPolicyConfig\nversion: v1\nid: chat-submit\nspec:\n  enabled: true\n  strategy: double_enter\n  params:\n    empty_line_threshold: 1\n")
 	mustWriteFile(t, filepath.Join(dir, "policies", "chat", "output.yaml"), "kind: ChatOutputPolicyConfig\nversion: v1\nid: chat-output\nspec:\n  enabled: true\n  strategy: streaming_text\n  params:\n    show_final_newline: true\n")
-	mustWriteFile(t, filepath.Join(dir, "policies", "chat", "status.yaml"), "kind: ChatStatusPolicyConfig\nversion: v1\nid: chat-status\nspec:\n  enabled: true\n  strategy: inline_terminal\n  params:\n    show_header: true\n    show_usage: true\n")
+	mustWriteFile(t, filepath.Join(dir, "policies", "chat", "status.yaml"), "kind: ChatStatusPolicyConfig\nversion: v1\nid: chat-status\nspec:\n  enabled: true\n  strategy: inline_terminal\n  params:\n    show_header: true\n    show_usage: true\n    show_tool_calls: true\n    show_tool_results: true\n    show_plan_after_plan_tools: true\n")
 	mustWriteFile(t, filepath.Join(dir, "policies", "chat", "command.yaml"), "kind: ChatCommandPolicyConfig\nversion: v1\nid: chat-command\nspec:\n  enabled: true\n  strategy: slash_commands\n  params:\n    exit_command: /exit\n    help_command: /help\n    session_command: /session\n")
 	mustWriteFile(t, filepath.Join(dir, "policies", "chat", "resume.yaml"), "kind: ChatResumePolicyConfig\nversion: v1\nid: chat-resume\nspec:\n  enabled: true\n  strategy: explicit_resume_only\n  params:\n    require_explicit_id: true\n")
 

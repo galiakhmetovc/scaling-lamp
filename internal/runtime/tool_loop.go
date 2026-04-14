@@ -14,7 +14,22 @@ import (
 	"teamd/internal/shell"
 )
 
-func (a *Agent) executeProviderLoop(ctx context.Context, sessionID, runID, correlationID, source string, input provider.ClientInput) (provider.ClientResult, error) {
+type ToolActivityPhase string
+
+const (
+	ToolActivityPhaseStarted   ToolActivityPhase = "started"
+	ToolActivityPhaseCompleted ToolActivityPhase = "completed"
+)
+
+type ToolActivity struct {
+	Phase      ToolActivityPhase
+	Name       string
+	Arguments  map[string]any
+	ResultText string
+	ErrorText  string
+}
+
+func (a *Agent) executeProviderLoop(ctx context.Context, sessionID, runID, correlationID, source string, input provider.ClientInput, observer func(ToolActivity)) (provider.ClientResult, error) {
 	currentMessages := append([]contracts.Message{}, input.Messages...)
 	maxRounds := a.MaxToolRounds
 	if maxRounds <= 0 {
@@ -52,7 +67,7 @@ func (a *Agent) executeProviderLoop(ctx context.Context, sessionID, runID, corre
 			return result, nil
 		}
 
-		toolMessages, err := a.executeToolCalls(ctx, correlationID, source, result.Provider.ToolCalls, result.ToolDecisions)
+		toolMessages, err := a.executeToolCalls(ctx, runID, sessionID, correlationID, source, result.Provider.ToolCalls, result.ToolDecisions, observer)
 		if err != nil {
 			return result, err
 		}
@@ -63,7 +78,7 @@ func (a *Agent) executeProviderLoop(ctx context.Context, sessionID, runID, corre
 	return provider.ClientResult{}, fmt.Errorf("provider tool loop exceeded %d rounds", maxRounds)
 }
 
-func (a *Agent) executeToolCalls(ctx context.Context, correlationID, source string, calls []provider.ToolCall, decisions []provider.ToolDecision) ([]contracts.Message, error) {
+func (a *Agent) executeToolCalls(ctx context.Context, runID, sessionID, correlationID, source string, calls []provider.ToolCall, decisions []provider.ToolDecision, observer func(ToolActivity)) ([]contracts.Message, error) {
 	activeProjection := a.activePlanProjection()
 	service := plans.NewService(a.now, a.newID)
 	filesystemExecutor := filesystem.NewExecutor()
@@ -76,6 +91,29 @@ func (a *Agent) executeToolCalls(ctx context.Context, correlationID, source stri
 
 	out := make([]contracts.Message, 0, len(calls))
 	for _, call := range calls {
+		if observer != nil {
+			observer(ToolActivity{Phase: ToolActivityPhaseStarted, Name: call.Name, Arguments: call.Arguments})
+		}
+		if err := a.RecordEvent(ctx, eventing.Event{
+			ID:            a.newID("evt-tool-call-started"),
+			Kind:          eventing.EventToolCallStarted,
+			OccurredAt:    a.now(),
+			AggregateID:   runID,
+			AggregateType: eventing.AggregateRun,
+			CorrelationID: correlationID,
+			CausationID:   runID,
+			Source:        source,
+			ActorID:       a.Config.ID,
+			ActorType:     "agent",
+			TraceSummary:  "tool call started",
+			Payload: map[string]any{
+				"session_id": sessionID,
+				"tool_name":  call.Name,
+				"arguments":  call.Arguments,
+			},
+		}); err != nil {
+			return nil, fmt.Errorf("record tool call started: %w", err)
+		}
 		decision, ok := decisionByTool[call.Name]
 		if !ok {
 			return nil, fmt.Errorf("tool call %q has no execution decision", call.Name)
@@ -89,6 +127,28 @@ func (a *Agent) executeToolCalls(ctx context.Context, correlationID, source stri
 
 		events, resultText, err := a.executeToolCommand(activeProjection, service, filesystemExecutor, shellExecutor, source, call)
 		if err != nil {
+			_ = a.RecordEvent(ctx, eventing.Event{
+				ID:            a.newID("evt-tool-call-completed"),
+				Kind:          eventing.EventToolCallCompleted,
+				OccurredAt:    a.now(),
+				AggregateID:   runID,
+				AggregateType: eventing.AggregateRun,
+				CorrelationID: correlationID,
+				CausationID:   runID,
+				Source:        source,
+				ActorID:       a.Config.ID,
+				ActorType:     "agent",
+				TraceSummary:  "tool call completed",
+				Payload: map[string]any{
+					"session_id": sessionID,
+					"tool_name":  call.Name,
+					"arguments":  call.Arguments,
+					"error":      err.Error(),
+				},
+			})
+			if observer != nil {
+				observer(ToolActivity{Phase: ToolActivityPhaseCompleted, Name: call.Name, Arguments: call.Arguments, ErrorText: err.Error()})
+			}
 			return nil, err
 		}
 		for _, event := range events {
@@ -107,6 +167,30 @@ func (a *Agent) executeToolCalls(ctx context.Context, correlationID, source stri
 			if err := a.RecordEvent(ctx, event); err != nil {
 				return nil, fmt.Errorf("record plan event %q: %w", event.Kind, err)
 			}
+		}
+		if err := a.RecordEvent(ctx, eventing.Event{
+			ID:            a.newID("evt-tool-call-completed"),
+			Kind:          eventing.EventToolCallCompleted,
+			OccurredAt:    a.now(),
+			AggregateID:   runID,
+			AggregateType: eventing.AggregateRun,
+			CorrelationID: correlationID,
+			CausationID:   runID,
+			Source:        source,
+			ActorID:       a.Config.ID,
+			ActorType:     "agent",
+			TraceSummary:  "tool call completed",
+			Payload: map[string]any{
+				"session_id":  sessionID,
+				"tool_name":   call.Name,
+				"arguments":   call.Arguments,
+				"result_text": resultText,
+			},
+		}); err != nil {
+			return nil, fmt.Errorf("record tool call completed: %w", err)
+		}
+		if observer != nil {
+			observer(ToolActivity{Phase: ToolActivityPhaseCompleted, Name: call.Name, Arguments: call.Arguments, ResultText: resultText})
 		}
 		out = append(out, contracts.Message{
 			Role:       "tool",

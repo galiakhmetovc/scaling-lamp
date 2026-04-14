@@ -433,11 +433,16 @@ Supported params:
 
 - `show_header`
 - `show_usage`
+- `show_tool_calls`
+- `show_tool_results`
+- `show_plan_after_plan_tools`
 
 Current implemented strategies:
 
 - `inline_terminal`
   - prints header/status lines directly into the terminal stream
+  - may print short tool activity summaries
+  - may print compact active-plan rendering after plan-tool mutations
 
 ### 7.5 ChatCommandPolicy
 
@@ -873,6 +878,9 @@ This is what the shipped `config/zai-smoke` configuration currently selects.
 - `ChatStatusPolicy.inline_terminal`
   - `show_header = true`
   - `show_usage = true`
+  - `show_tool_calls = true`
+  - `show_tool_results = true`
+  - `show_plan_after_plan_tools = true`
 - `ChatCommandPolicy.slash_commands`
   - `exit_command = /exit`
   - `help_command = /help`
