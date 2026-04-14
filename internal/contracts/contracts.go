@@ -219,7 +219,9 @@ type ChatSubmitParams struct {
 }
 
 type ChatOutputParams struct {
-	ShowFinalNewline bool `yaml:"show_final_newline"`
+	ShowFinalNewline bool   `yaml:"show_final_newline"`
+	RenderMarkdown   bool   `yaml:"render_markdown"`
+	MarkdownStyle    string `yaml:"markdown_style"`
 }
 
 type ChatStatusParams struct {

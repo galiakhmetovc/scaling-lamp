@@ -117,6 +117,7 @@ Current chat mode:
 - input is multiline
 - send trigger is double `Enter`
 - assistant output is streamed to stdout
+- assistant output may be post-rendered as terminal markdown after turn completion
 - current slash commands:
   - `/help`
   - `/session`
@@ -149,6 +150,7 @@ Current terminal observability behavior:
 - full tool call arguments and results remain in `events.jsonl`
 - terminal output only shows short operator-facing summaries
 - plan rendering is derived from current plan projections, not from raw event replay in the CLI
+- markdown rendering, when enabled, happens only after the provider turn completes; it does not interleave with tool/status rendering
 
 ## 4. Environment Loading
 

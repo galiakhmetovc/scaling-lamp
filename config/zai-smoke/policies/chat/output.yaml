@@ -6,3 +6,5 @@ spec:
   strategy: streaming_text
   params:
     show_final_newline: true
+    render_markdown: true
+    markdown_style: dark

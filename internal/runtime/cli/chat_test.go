@@ -5,6 +5,7 @@ import (
 	"context"
 	"io"
 	"net/http"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -148,6 +149,111 @@ func TestRunChatDisplaysToolActivityAndPlan(t *testing.T) {
 	if !strings.Contains(out, "[plan]") || !strings.Contains(out, "goal: Refactor auth") {
 		t.Fatalf("stdout = %q, want plan block", out)
 	}
+}
+
+func TestRunChatPostRendersMarkdownWhenEnabled(t *testing.T) {
+	t.Setenv("TEAMD_ZAI_API_KEY", "secret-token")
+
+	agent := &runtime.Agent{
+		Config: runtimeConfigForCLITest(),
+		Contracts: contracts.ResolvedContracts{
+			ProviderRequest: contracts.ProviderRequestContract{
+				Transport: contracts.TransportContract{
+					Endpoint: contracts.EndpointPolicy{
+						Enabled:  true,
+						Strategy: "static",
+						Params: contracts.EndpointParams{
+							BaseURL: "http://example.invalid",
+							Path:    "/chat/completions",
+							Method:  "POST",
+						},
+					},
+					Auth: contracts.AuthPolicy{Enabled: false, Strategy: "none"},
+				},
+				RequestShape: contracts.RequestShapeContract{
+					Model:     contracts.ModelPolicy{Enabled: true, Strategy: "static_model", Params: contracts.ModelParams{Model: "glm-5-turbo"}},
+					Messages:  contracts.MessagePolicy{Enabled: true, Strategy: "raw_messages"},
+					Tools:     contracts.ToolPolicy{Enabled: true, Strategy: "tools_inline"},
+					Streaming: contracts.StreamingPolicy{Enabled: true, Strategy: "static_stream", Params: contracts.StreamingParams{Stream: true}},
+				},
+			},
+			Tools: contracts.ToolContract{
+				Catalog:       contracts.ToolCatalogPolicy{Enabled: true, Strategy: "static_allowlist", Params: contracts.ToolCatalogParams{AllowEmpty: true, Dedupe: true}},
+				Serialization: contracts.ToolSerializationPolicy{Enabled: true, Strategy: "openai_function_tools"},
+			},
+			ToolExecution: contracts.ToolExecutionContract{
+				Access:   contracts.ToolAccessPolicy{Enabled: true, Strategy: "deny_all"},
+				Approval: contracts.ToolApprovalPolicy{Enabled: true, Strategy: "always_allow"},
+				Sandbox:  contracts.ToolSandboxPolicy{Enabled: true, Strategy: "default_runtime"},
+			},
+			Chat: contracts.ChatContract{
+				Input:   contracts.ChatInputPolicy{Strategy: "multiline_buffer", Params: contracts.ChatInputParams{PrimaryPrompt: "> ", ContinuationPrompt: ". "}},
+				Submit:  contracts.ChatSubmitPolicy{Strategy: "double_enter", Params: contracts.ChatSubmitParams{EmptyLineThreshold: 1}},
+				Output:  contracts.ChatOutputPolicy{Strategy: "streaming_text", Params: contracts.ChatOutputParams{ShowFinalNewline: true, RenderMarkdown: true, MarkdownStyle: "dark"}},
+				Status:  contracts.ChatStatusPolicy{Params: contracts.ChatStatusParams{ShowHeader: false, ShowUsage: false}},
+				Command: contracts.ChatCommandPolicy{Strategy: "slash_commands", Params: contracts.ChatCommandParams{ExitCommand: "/exit", HelpCommand: "/help", SessionCommand: "/session"}},
+			},
+		},
+		MaxToolRounds:   4,
+		PromptAssets:    provider.NewPromptAssetExecutor(),
+		RequestShape:    provider.NewRequestShapeExecutor(),
+		PlanTools:       tools.NewPlanToolExecutor(),
+		FilesystemTools: filesystem.NewDefinitionExecutor(),
+		ShellTools:      shell.NewDefinitionExecutor(),
+		ToolCatalog:     tools.NewCatalogExecutor(),
+		ToolExecution:   tools.NewExecutionGate(),
+		Transport: provider.NewTransportExecutor(fakeDoer{
+			do: func(req *http.Request) (*http.Response, error) {
+				return &http.Response{
+					StatusCode: http.StatusOK,
+					Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
+					Body: io.NopCloser(strings.NewReader(strings.Join([]string{
+						"data: {\"id\":\"resp-md-1\",\"model\":\"glm-5-turbo\",\"choices\":[{\"delta\":{\"role\":\"assistant\",\"content\":\"# Title\\n\\n- one\\n\\n```go\\n\"},\"finish_reason\":\"\"}]}",
+						"",
+						"data: {\"id\":\"resp-md-1\",\"model\":\"glm-5-turbo\",\"choices\":[{\"delta\":{\"content\":\"fmt.Println(\\\"x\\\")\\n```\\n\"},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":12,\"completion_tokens\":3,\"total_tokens\":15}}",
+						"",
+						"data: [DONE]",
+						"",
+					}, "\n"))),
+				}, nil
+			},
+		}),
+		EventLog: runtime.NewInMemoryEventLog(),
+		Projections: []projections.Projection{
+			projections.NewSessionProjection(),
+			projections.NewRunProjection(),
+		},
+		Now: func() time.Time { return time.Date(2026, 4, 14, 19, 50, 0, 0, time.UTC) },
+		NewID: func(prefix string) string {
+			return prefix + "-1"
+		},
+	}
+	agent.ProviderClient = provider.NewClient(agent.PromptAssets, agent.RequestShape, agent.PlanTools, agent.FilesystemTools, agent.ShellTools, agent.ToolCatalog, agent.ToolExecution, agent.Transport)
+
+	var stdout bytes.Buffer
+	err := cli.RunChat(context.Background(), agent, "", strings.NewReader("render markdown\n\n/exit\n"), &stdout)
+	if err != nil {
+		t.Fatalf("RunChat returned error: %v", err)
+	}
+	out := stripANSI(stdout.String())
+	if strings.Contains(out, "# Title") {
+		t.Fatalf("stdout = %q, want rendered markdown without raw heading marker", out)
+	}
+	if strings.Contains(out, "```") {
+		t.Fatalf("stdout = %q, want rendered markdown without code fences", out)
+	}
+	if !strings.Contains(out, "Title") {
+		t.Fatalf("stdout = %q, want rendered title text", out)
+	}
+	if !strings.Contains(out, "fmt.Println(\"x\")") {
+		t.Fatalf("stdout = %q, want rendered code block text", out)
+	}
+}
+
+var ansiPattern = regexp.MustCompile(`\x1b\[[0-9;]*m`)
+
+func stripANSI(input string) string {
+	return ansiPattern.ReplaceAllString(input, "")
 }
 
 type fakeDoer struct {

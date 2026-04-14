@@ -956,7 +956,9 @@ func TestResolveContractsBuildsChatContractWithParams(t *testing.T) {
 		"  enabled: true\n"+
 		"  strategy: streaming_text\n"+
 		"  params:\n"+
-		"    show_final_newline: true\n")
+		"    show_final_newline: true\n"+
+		"    render_markdown: true\n"+
+		"    markdown_style: dark\n")
 
 	mustWriteFile(t, filepath.Join(dir, "policies", "chat", "status.yaml"), ""+
 		"kind: ChatStatusPolicyConfig\n"+

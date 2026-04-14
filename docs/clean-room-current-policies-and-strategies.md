@@ -416,12 +416,15 @@ Responsibility:
 Supported params:
 
 - `show_final_newline`
+- `render_markdown`
+- `markdown_style`
 
 Current implemented strategies:
 
 - `streaming_text`
   - prints streamed text chunks as they arrive
   - may add a final newline after the streamed answer
+  - may suppress raw streamed text and post-render final assistant markdown after the turn completes
 
 ### 7.4 ChatStatusPolicy
 
@@ -875,6 +878,8 @@ This is what the shipped `config/zai-smoke` configuration currently selects.
   - `empty_line_threshold = 1`
 - `ChatOutputPolicy.streaming_text`
   - `show_final_newline = true`
+  - `render_markdown = true`
+  - `markdown_style = dark`
 - `ChatStatusPolicy.inline_terminal`
   - `show_header = true`
   - `show_usage = true`

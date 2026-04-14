@@ -9,6 +9,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/charmbracelet/glamour"
 	"teamd/internal/provider"
 	"teamd/internal/runtime"
 	"teamd/internal/runtime/projections"
@@ -78,6 +79,9 @@ func RunChat(ctx context.Context, agent *runtime.Agent, resumeID string, stdin i
 			Prompt: prompt,
 			StreamObserver: func(event provider.StreamEvent) {
 				if event.Kind == provider.StreamEventText {
+					if agent.Contracts.Chat.Output.Params.RenderMarkdown {
+						return
+					}
 					_, _ = io.WriteString(stdout, event.Text)
 				}
 			},
@@ -106,6 +110,15 @@ func RunChat(ctx context.Context, agent *runtime.Agent, resumeID string, stdin i
 		}
 		if result.Provider.Message.Content == "" {
 			return fmt.Errorf("chat turn returned empty assistant content")
+		}
+		if agent.Contracts.Chat.Output.Params.RenderMarkdown {
+			rendered, err := renderMarkdown(result.Provider.Message.Content, agent.Contracts.Chat.Output.Params.MarkdownStyle)
+			if err != nil {
+				return fmt.Errorf("render markdown: %w", err)
+			}
+			if _, err := fmt.Fprint(stdout, rendered); err != nil {
+				return err
+			}
 		}
 		if agent.Contracts.Chat.Output.Params.ShowFinalNewline {
 			if _, err := fmt.Fprintln(stdout); err != nil {
@@ -187,6 +200,23 @@ func RunChat(ctx context.Context, agent *runtime.Agent, resumeID string, stdin i
 		}
 	}
 	return nil
+}
+
+func renderMarkdown(input, style string) (string, error) {
+	if strings.TrimSpace(input) == "" {
+		return "", nil
+	}
+	options := []glamour.TermRendererOption{glamour.WithWordWrap(0)}
+	if strings.TrimSpace(style) != "" {
+		options = append(options, glamour.WithStandardStyle(style))
+	} else {
+		options = append(options, glamour.WithAutoStyle())
+	}
+	renderer, err := glamour.NewTermRenderer(options...)
+	if err != nil {
+		return "", err
+	}
+	return renderer.Render(input)
 }
 
 func isPlanTool(name string) bool {
