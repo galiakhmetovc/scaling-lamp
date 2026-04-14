@@ -18,16 +18,26 @@ func BuildAgent(configPath string) (*Agent, error) {
 	if err != nil {
 		return nil, err
 	}
-
-	moduleRegistry := config.NewModuleRegistry()
-	moduleRegistry.Register("TransportContractConfig")
-
-	transportHeader, err := config.LoadModuleHeader(cfg.Spec.Contracts.TransportPath)
+	graph, err := config.LoadModuleGraph(cfg)
 	if err != nil {
 		return nil, err
 	}
-	if err := moduleRegistry.ValidateKind(transportHeader.Kind); err != nil {
-		return nil, fmt.Errorf("validate transport module: %w", err)
+
+	moduleRegistry := config.NewModuleRegistry()
+	moduleRegistry.Register("TransportContractConfig")
+	moduleRegistry.Register("MemoryContractConfig")
+	moduleRegistry.Register("EndpointPolicyConfig")
+	moduleRegistry.Register("OffloadPolicyConfig")
+
+	for _, contractHeader := range graph.Contracts {
+		if err := moduleRegistry.ValidateKind(contractHeader.Kind); err != nil {
+			return nil, fmt.Errorf("validate contract module %q: %w", contractHeader.ID, err)
+		}
+	}
+	for _, policyHeader := range graph.Policies {
+		if err := moduleRegistry.ValidateKind(policyHeader.Kind); err != nil {
+			return nil, fmt.Errorf("validate policy module %q: %w", policyHeader.ID, err)
+		}
 	}
 
 	projectionRegistry := projections.NewRegistry()

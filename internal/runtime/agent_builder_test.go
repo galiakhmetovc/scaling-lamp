@@ -26,7 +26,12 @@ func TestBuildAgentLoadsRootConfigAndBootstrapsRuntime(t *testing.T) {
 		"version: v1\n"+
 		"id: transport-main\n"+
 		"spec:\n"+
-		"  endpoint_policy_path: ./policies/endpoint.yaml\n")
+		"  endpoint_policy_path: ../policies/transport/endpoint.yaml\n")
+
+	mustWriteFile(t, filepath.Join(dir, "policies", "transport", "endpoint.yaml"), ""+
+		"kind: EndpointPolicyConfig\n"+
+		"version: v1\n"+
+		"id: endpoint-main\n")
 
 	agent, err := runtime.BuildAgent(filepath.Join(dir, "agent.yaml"))
 	if err != nil {
