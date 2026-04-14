@@ -229,7 +229,7 @@ func writeSmokeConfig(t *testing.T, dir, baseURL string) string {
 		"    transport_executor: transport_default\n"+
 		"    request_shape_executor: request_shape_default\n"+
 		"    provider_client: provider_client_default\n"+
-		"    projections: [session, run]\n"+
+		"    projections: [session, run, transcript]\n"+
 		"  contracts:\n"+
 		"    transport: ./contracts/transport.yaml\n"+
 		"    request_shape: ./contracts/request-shape.yaml\n"+
@@ -401,7 +401,7 @@ func writeChatConfig(t *testing.T, dir, baseURL string) string {
 		"    transport_executor: transport_default\n"+
 		"    request_shape_executor: request_shape_default\n"+
 		"    provider_client: provider_client_default\n"+
-		"    projections: [session, run]\n"+
+		"    projections: [session, run, transcript]\n"+
 		"  contracts:\n"+
 		"    transport: ./contracts/transport.yaml\n"+
 		"    request_shape: ./contracts/request-shape.yaml\n"+
@@ -418,12 +418,12 @@ func writeChatConfig(t *testing.T, dir, baseURL string) string {
 		"  resume_policy_path: ../policies/chat/resume.yaml\n")
 	mustWriteFile(t, filepath.Join(dir, "policies", "request-shape", "streaming.yaml"), ""+
 		"kind: StreamingPolicyConfig\nversion: v1\nid: streaming-zai-chat\nspec:\n  enabled: true\n  strategy: static_stream\n  params:\n    stream: true\n")
-	mustWriteFile(t, filepath.Join(dir, "policies", "chat", "input.yaml"), "kind: ChatInputPolicyConfig\nversion: v1\nid: chat-input\nspec:\n  enabled: true\n  strategy: multiline_buffer\n")
-	mustWriteFile(t, filepath.Join(dir, "policies", "chat", "submit.yaml"), "kind: ChatSubmitPolicyConfig\nversion: v1\nid: chat-submit\nspec:\n  enabled: true\n  strategy: double_enter\n")
-	mustWriteFile(t, filepath.Join(dir, "policies", "chat", "output.yaml"), "kind: ChatOutputPolicyConfig\nversion: v1\nid: chat-output\nspec:\n  enabled: true\n  strategy: streaming_text\n")
-	mustWriteFile(t, filepath.Join(dir, "policies", "chat", "status.yaml"), "kind: ChatStatusPolicyConfig\nversion: v1\nid: chat-status\nspec:\n  enabled: true\n  strategy: inline_terminal\n")
-	mustWriteFile(t, filepath.Join(dir, "policies", "chat", "command.yaml"), "kind: ChatCommandPolicyConfig\nversion: v1\nid: chat-command\nspec:\n  enabled: true\n  strategy: slash_commands\n")
-	mustWriteFile(t, filepath.Join(dir, "policies", "chat", "resume.yaml"), "kind: ChatResumePolicyConfig\nversion: v1\nid: chat-resume\nspec:\n  enabled: true\n  strategy: explicit_resume_only\n")
+	mustWriteFile(t, filepath.Join(dir, "policies", "chat", "input.yaml"), "kind: ChatInputPolicyConfig\nversion: v1\nid: chat-input\nspec:\n  enabled: true\n  strategy: multiline_buffer\n  params:\n    primary_prompt: \"> \"\n    continuation_prompt: \". \"\n")
+	mustWriteFile(t, filepath.Join(dir, "policies", "chat", "submit.yaml"), "kind: ChatSubmitPolicyConfig\nversion: v1\nid: chat-submit\nspec:\n  enabled: true\n  strategy: double_enter\n  params:\n    empty_line_threshold: 1\n")
+	mustWriteFile(t, filepath.Join(dir, "policies", "chat", "output.yaml"), "kind: ChatOutputPolicyConfig\nversion: v1\nid: chat-output\nspec:\n  enabled: true\n  strategy: streaming_text\n  params:\n    show_final_newline: true\n")
+	mustWriteFile(t, filepath.Join(dir, "policies", "chat", "status.yaml"), "kind: ChatStatusPolicyConfig\nversion: v1\nid: chat-status\nspec:\n  enabled: true\n  strategy: inline_terminal\n  params:\n    show_header: true\n    show_usage: true\n")
+	mustWriteFile(t, filepath.Join(dir, "policies", "chat", "command.yaml"), "kind: ChatCommandPolicyConfig\nversion: v1\nid: chat-command\nspec:\n  enabled: true\n  strategy: slash_commands\n  params:\n    exit_command: /exit\n    help_command: /help\n    session_command: /session\n")
+	mustWriteFile(t, filepath.Join(dir, "policies", "chat", "resume.yaml"), "kind: ChatResumePolicyConfig\nversion: v1\nid: chat-resume\nspec:\n  enabled: true\n  strategy: explicit_resume_only\n  params:\n    require_explicit_id: true\n")
 
 	return configPath
 }

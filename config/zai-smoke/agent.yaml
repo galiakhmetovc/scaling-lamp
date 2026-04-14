@@ -13,6 +13,7 @@ spec:
     projections:
       - session
       - run
+      - transcript
   contracts:
     transport: ./contracts/transport.yaml
     request_shape: ./contracts/request-shape.yaml

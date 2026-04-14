@@ -11,6 +11,8 @@ Current behavior:
 
 - `--chat` starts a new session by default
 - `--resume <session-id>` resumes an existing session
+- terminal interaction lives in `internal/runtime/cli`
+- `cmd/agent` only delegates chat mode into that layer
 - chat behavior is controlled by `ChatContract`
 - input is multiline
 - send happens on double `Enter`
@@ -29,6 +31,25 @@ Current `zai-smoke` chat strategies:
 - `ChatCommandPolicy.slash_commands`
 - `ChatResumePolicy.explicit_resume_only`
 
+Current `zai-smoke` chat params:
+
+- `ChatInputPolicy`
+  - `primary_prompt = "> "`
+  - `continuation_prompt = ". "`
+- `ChatSubmitPolicy`
+  - `empty_line_threshold = 1`
+- `ChatOutputPolicy`
+  - `show_final_newline = true`
+- `ChatStatusPolicy`
+  - `show_header = true`
+  - `show_usage = true`
+- `ChatCommandPolicy`
+  - `exit_command = /exit`
+  - `help_command = /help`
+  - `session_command = /session`
+- `ChatResumePolicy`
+  - `require_explicit_id = true`
+
 Current runtime behavior per turn:
 
 1. record user message in session event stream
@@ -38,3 +59,8 @@ Current runtime behavior per turn:
 5. record transport attempt events
 6. record assistant message in session event stream
 7. record run completion
+
+Current resume read model:
+
+- `TranscriptProjection` is the primary source for chat history reconstruction
+- raw session-event replay remains only as a fallback path

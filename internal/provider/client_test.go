@@ -188,6 +188,106 @@ func TestClientBuildsAndSendsProviderRequest(t *testing.T) {
 	}
 }
 
+func TestClientStreamsTypedTextAndReasoningEvents(t *testing.T) {
+	t.Setenv("ZAI_API_KEY", "secret-token")
+
+	client := provider.NewClient(
+		provider.NewPromptAssetExecutor(),
+		provider.NewRequestShapeExecutor(),
+		provider.NewTransportExecutor(fakeDoer{
+			do: func(req *http.Request) (*http.Response, error) {
+				return &http.Response{
+					StatusCode: http.StatusOK,
+					Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
+					Body: io.NopCloser(bytes.NewBufferString(strings.Join([]string{
+						`data: {"id":"resp-1","model":"glm-5-turbo","choices":[{"delta":{"role":"assistant","reasoning_content":"Thinking...","content":"Po"},"finish_reason":""}]}`,
+						"",
+						`data: {"choices":[{"delta":{"content":"ng"},"finish_reason":""}]}`,
+						"",
+						`data: {"output_text":"!" ,"usage":{"prompt_tokens":12,"completion_tokens":4,"total_tokens":16}}`,
+						"",
+						"data: [DONE]",
+						"",
+					}, "\n"))),
+				}, nil
+			},
+		}),
+	)
+
+	var got []provider.StreamEvent
+	result, err := client.Execute(context.Background(), contracts.ResolvedContracts{
+		ProviderRequest: contracts.ProviderRequestContract{
+			Transport: contracts.TransportContract{
+				Endpoint: contracts.EndpointPolicy{
+					Enabled:  true,
+					Strategy: "static",
+					Params: contracts.EndpointParams{
+						BaseURL: "https://api.z.ai",
+						Path:    "/api/paas/v4/chat/completions",
+						Method:  http.MethodPost,
+					},
+				},
+				Auth: contracts.AuthPolicy{
+					Enabled:  true,
+					Strategy: "bearer_token",
+					Params: contracts.AuthParams{
+						Header:      "Authorization",
+						Prefix:      "Bearer",
+						ValueEnvVar: "ZAI_API_KEY",
+					},
+				},
+			},
+			RequestShape: contracts.RequestShapeContract{
+				Model:     contracts.ModelPolicy{Enabled: true, Strategy: "static_model", Params: contracts.ModelParams{Model: "glm-5-turbo"}},
+				Messages:  contracts.MessagePolicy{Enabled: true, Strategy: "raw_messages"},
+				Tools:     contracts.ToolPolicy{Enabled: true, Strategy: "tools_inline"},
+				Streaming: contracts.StreamingPolicy{Enabled: true, Strategy: "static_stream", Params: contracts.StreamingParams{Stream: true}},
+			},
+		},
+		PromptAssets: contracts.PromptAssetsContract{
+			PromptAsset: contracts.PromptAssetPolicy{Enabled: true, Strategy: "inline_assets"},
+		},
+	}, provider.ClientInput{
+		Messages: []contracts.Message{{Role: "user", Content: "Ping"}},
+		StreamObserver: func(event provider.StreamEvent) {
+			got = append(got, event)
+		},
+	})
+	if err != nil {
+		t.Fatalf("Execute returned error: %v", err)
+	}
+
+	if result.Provider.Message.Content != "Pong!" {
+		t.Fatalf("provider content = %q, want Pong!", result.Provider.Message.Content)
+	}
+	if result.Provider.Usage.TotalTokens != 16 {
+		t.Fatalf("usage total = %d, want 16", result.Provider.Usage.TotalTokens)
+	}
+	if len(got) != 4 {
+		t.Fatalf("event count = %d, want 4", len(got))
+	}
+	var (
+		sawReasoning bool
+		texts        []string
+	)
+	for _, event := range got {
+		switch event.Kind {
+		case provider.StreamEventReasoning:
+			if event.Text == "Thinking..." {
+				sawReasoning = true
+			}
+		case provider.StreamEventText:
+			texts = append(texts, event.Text)
+		}
+	}
+	if !sawReasoning {
+		t.Fatalf("reasoning event not found in %#v", got)
+	}
+	if strings.Join(texts, "") != "Pong!" {
+		t.Fatalf("text events = %#v, want Pong!", texts)
+	}
+}
+
 func TestClientReturnsProviderStatusError(t *testing.T) {
 	t.Setenv("ZAI_API_KEY", "secret-token")
 
@@ -315,8 +415,10 @@ func TestClientStreamsOpenAICompatibleResponse(t *testing.T) {
 		},
 	}, provider.ClientInput{
 		Messages: []contracts.Message{{Role: "user", Content: "Ping"}},
-		StreamObserver: func(delta string) {
-			deltas = append(deltas, delta)
+		StreamObserver: func(event provider.StreamEvent) {
+			if event.Kind == provider.StreamEventText {
+				deltas = append(deltas, event.Text)
+			}
 		},
 	})
 	if err != nil {

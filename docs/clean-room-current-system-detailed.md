@@ -69,7 +69,7 @@ flowchart TD
 ```
 
 The important thing is that `main` does not assemble runtime pieces itself.
-It delegates assembly to `runtime.BuildAgent`.
+It delegates runtime assembly to `runtime.BuildAgent`, and terminal chat interaction to `internal/runtime/cli`.
 
 ## 3. Entry Point
 
@@ -83,7 +83,7 @@ What it currently does:
 2. autoloads `./.env` if present
 3. builds the runtime agent from `--config`
 4. if `--smoke` is given, sends one smoke request
-5. if `--chat` is given, starts an interactive chat loop
+5. if `--chat` is given, delegates to the dedicated terminal chat layer
 6. prints provider output to stdout
 
 Current CLI surface:
@@ -129,6 +129,17 @@ At startup the CLI prints:
 - `mode: new|resumed`
 
 After each turn it prints a final status line with token usage.
+
+Current chat terminal layer:
+
+- file: [chat.go](/home/admin/AI-AGENT/data/projects/teamD/.worktrees/rewrite-clean-room-root/internal/runtime/cli/chat.go)
+- responsibility:
+  - prompt rendering
+  - multiline buffering
+  - double-Enter submit
+  - slash command dispatch
+  - streaming text output
+  - header and status printing
 
 ## 4. Environment Loading
 
@@ -182,6 +193,7 @@ spec:
     request_shape: ...
     memory: ...
     prompt_assets: ...
+    chat: ...
 ```
 
 Current meaning:
@@ -283,12 +295,24 @@ Current resolved contract families:
 - `RequestShapeContract`
 - `MemoryContract`
 - `PromptAssetsContract`
+- `ChatContract`
 
 Current policy validation:
 
 - each loaded policy module has a `kind`
 - each policy kind has allowed strategy names
 - invalid strategy names fail resolution before runtime execution begins
+
+Current chat contract support:
+
+- `ChatInputPolicy`
+- `ChatSubmitPolicy`
+- `ChatOutputPolicy`
+- `ChatStatusPolicy`
+- `ChatCommandPolicy`
+- `ChatResumePolicy`
+
+Each of these now carries explicit params, not only a strategy name.
 
 ## 8. Runtime Builder
 
@@ -364,6 +388,7 @@ The component registry currently knows how to build:
 - projections:
   - `session`
   - `run`
+  - `transcript`
 
 Current limitation:
 
@@ -518,9 +543,15 @@ Current normalized provider response contains:
   - `output_tokens`
   - `total_tokens`
 
+Current stream semantics:
+
+- `text` events for assistant-visible output
+- `reasoning` events when compatible chunks expose reasoning fields
+- current terminal CLI prints only `text`
+
 Current limitation:
 
-- parsing assumes an OpenAI-compatible response shape
+- parsing still assumes OpenAI-compatible top-level response shapes first
 - richer provider semantics are still tracked as follow-up work
 
 ## 11. Smoke Runtime Path
@@ -668,6 +699,7 @@ Current built-in projections:
 
 - [session.go](/home/admin/AI-AGENT/data/projects/teamD/.worktrees/rewrite-clean-room-root/internal/runtime/projections/session.go)
 - [run.go](/home/admin/AI-AGENT/data/projects/teamD/.worktrees/rewrite-clean-room-root/internal/runtime/projections/run.go)
+- [transcript.go](/home/admin/AI-AGENT/data/projects/teamD/.worktrees/rewrite-clean-room-root/internal/runtime/projections/transcript.go)
 
 ### 14.1 Session Projection
 
@@ -732,6 +764,18 @@ So projections are currently:
 
 - event-driven
 - persisted after each recorded event
+
+### 14.4 Transcript Projection
+
+Current role:
+
+- project `message.recorded` into ordered `contracts.Message` lists by `session_id`
+- provide the primary read model for `--resume`
+
+Current runtime behavior:
+
+- `ResumeChatSession(...)` reads transcript snapshot first
+- raw session event replay remains as a fallback recovery path
 
 ## 15. The Real z.ai Config Graph
 

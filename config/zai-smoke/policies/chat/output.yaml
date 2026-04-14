@@ -4,3 +4,5 @@ id: chat-output-zai-smoke
 spec:
   enabled: true
   strategy: streaming_text
+  params:
+    show_final_newline: true

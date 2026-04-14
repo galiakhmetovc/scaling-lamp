@@ -107,36 +107,70 @@ type ChatInputPolicy struct {
 	ID       string
 	Enabled  bool
 	Strategy string
+	Params   ChatInputParams
 }
 
 type ChatSubmitPolicy struct {
 	ID       string
 	Enabled  bool
 	Strategy string
+	Params   ChatSubmitParams
 }
 
 type ChatOutputPolicy struct {
 	ID       string
 	Enabled  bool
 	Strategy string
+	Params   ChatOutputParams
 }
 
 type ChatStatusPolicy struct {
 	ID       string
 	Enabled  bool
 	Strategy string
+	Params   ChatStatusParams
 }
 
 type ChatCommandPolicy struct {
 	ID       string
 	Enabled  bool
 	Strategy string
+	Params   ChatCommandParams
 }
 
 type ChatResumePolicy struct {
 	ID       string
 	Enabled  bool
 	Strategy string
+	Params   ChatResumeParams
+}
+
+type ChatInputParams struct {
+	PrimaryPrompt      string `yaml:"primary_prompt"`
+	ContinuationPrompt string `yaml:"continuation_prompt"`
+}
+
+type ChatSubmitParams struct {
+	EmptyLineThreshold int `yaml:"empty_line_threshold"`
+}
+
+type ChatOutputParams struct {
+	ShowFinalNewline bool `yaml:"show_final_newline"`
+}
+
+type ChatStatusParams struct {
+	ShowHeader bool `yaml:"show_header"`
+	ShowUsage  bool `yaml:"show_usage"`
+}
+
+type ChatCommandParams struct {
+	ExitCommand    string `yaml:"exit_command"`
+	HelpCommand    string `yaml:"help_command"`
+	SessionCommand string `yaml:"session_command"`
+}
+
+type ChatResumeParams struct {
+	RequireExplicitID bool `yaml:"require_explicit_id"`
 }
 
 type PromptAssetPolicy struct {

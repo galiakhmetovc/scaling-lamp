@@ -4,3 +4,6 @@ id: chat-status-zai-smoke
 spec:
   enabled: true
   strategy: inline_terminal
+  params:
+    show_header: true
+    show_usage: true

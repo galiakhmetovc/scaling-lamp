@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"teamd/internal/runtime"
+	runtimecli "teamd/internal/runtime/cli"
 )
 
 func main() {
@@ -50,7 +51,7 @@ func runWithIO(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 		return fmt.Errorf("build agent: %w", err)
 	}
 	if *chatMode {
-		return runChat(context.Background(), agent, *resumeID, stdin, stdout)
+		return runtimecli.RunChat(context.Background(), agent, *resumeID, stdin, stdout)
 	}
 	if *smokePrompt == "" {
 		return nil
@@ -62,126 +63,6 @@ func runWithIO(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 	}
 	if _, err := fmt.Fprintln(stdout, result.Provider.Message.Content); err != nil {
 		return fmt.Errorf("write smoke response: %w", err)
-	}
-	return nil
-}
-
-func runChat(ctx context.Context, agent *runtime.Agent, resumeID string, stdin io.Reader, stdout io.Writer) error {
-	if agent.Contracts.Chat.Input.Strategy == "" {
-		return fmt.Errorf("chat mode requires chat contract configuration")
-	}
-	var (
-		session *runtime.ChatSession
-		err     error
-		mode    = "new"
-	)
-	if strings.TrimSpace(resumeID) != "" {
-		session, err = agent.ResumeChatSession(ctx, resumeID)
-		mode = "resumed"
-	} else {
-		session, err = agent.NewChatSession()
-	}
-	if err != nil {
-		return err
-	}
-
-	if _, err := fmt.Fprintf(stdout, "agent: %s\nsession: %s\nmode: %s\nenter twice to send, /exit to quit\n", agent.Config.ID, session.SessionID, mode); err != nil {
-		return err
-	}
-
-	scanner := bufio.NewScanner(stdin)
-	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
-	buffer := make([]string, 0, 8)
-	printPrompt := func(continuation bool) error {
-		prefix := "> "
-		if continuation {
-			prefix = ". "
-		}
-		_, err := fmt.Fprint(stdout, prefix)
-		return err
-	}
-	if err := printPrompt(false); err != nil {
-		return err
-	}
-	sendBuffer := func() error {
-		prompt := strings.Join(buffer, "\n")
-		buffer = buffer[:0]
-		if strings.TrimSpace(prompt) == "" {
-			return nil
-		}
-		if _, err := fmt.Fprintln(stdout, "\nstatus: sending"); err != nil {
-			return err
-		}
-		result, err := agent.ChatTurn(ctx, session, runtime.ChatTurnInput{
-			Prompt: prompt,
-			StreamObserver: func(delta string) {
-				_, _ = io.WriteString(stdout, delta)
-			},
-		})
-		if err != nil {
-			return err
-		}
-		if result.Provider.Message.Content == "" {
-			return fmt.Errorf("chat turn returned empty assistant content")
-		}
-		if _, err := fmt.Fprintf(stdout, "\nstatus: done | input %d | output %d | total %d\n", result.Provider.Usage.InputTokens, result.Provider.Usage.OutputTokens, result.Provider.Usage.TotalTokens); err != nil {
-			return err
-		}
-		return nil
-	}
-
-	for scanner.Scan() {
-		line := scanner.Text()
-		if len(buffer) == 0 && strings.HasPrefix(line, "/") {
-			switch strings.TrimSpace(line) {
-			case "/exit":
-				_, err := fmt.Fprintln(stdout)
-				return err
-			case "/help":
-				if _, err := fmt.Fprintln(stdout, "\ncommands: /help /session /exit"); err != nil {
-					return err
-				}
-			case "/session":
-				if _, err := fmt.Fprintf(stdout, "\nsession: %s\n", session.SessionID); err != nil {
-					return err
-				}
-			default:
-				if _, err := fmt.Fprintf(stdout, "\nunknown command: %s\n", strings.TrimSpace(line)); err != nil {
-					return err
-				}
-			}
-			if err := printPrompt(false); err != nil {
-				return err
-			}
-			continue
-		}
-		if line == "" {
-			if len(buffer) == 0 {
-				if err := printPrompt(false); err != nil {
-					return err
-				}
-				continue
-			}
-			if err := sendBuffer(); err != nil {
-				return err
-			}
-			if err := printPrompt(false); err != nil {
-				return err
-			}
-			continue
-		}
-		buffer = append(buffer, line)
-		if err := printPrompt(true); err != nil {
-			return err
-		}
-	}
-	if err := scanner.Err(); err != nil {
-		return err
-	}
-	if len(buffer) > 0 {
-		if err := sendBuffer(); err != nil {
-			return err
-		}
 	}
 	return nil
 }

@@ -19,8 +19,8 @@ func TestRegistryBuildsDefaultProjectionSet(t *testing.T) {
 		t.Fatalf("BuildDefaults returned error: %v", err)
 	}
 
-	if len(got) != 2 {
-		t.Fatalf("BuildDefaults len = %d, want 2", len(got))
+	if len(got) != 3 {
+		t.Fatalf("BuildDefaults len = %d, want 3", len(got))
 	}
 }
 

@@ -4,3 +4,5 @@ id: chat-resume-zai-smoke
 spec:
   enabled: true
   strategy: explicit_resume_only
+  params:
+    require_explicit_id: true

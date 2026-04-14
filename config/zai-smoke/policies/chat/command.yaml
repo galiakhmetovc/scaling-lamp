@@ -4,3 +4,7 @@ id: chat-command-zai-smoke
 spec:
   enabled: true
   strategy: slash_commands
+  params:
+    exit_command: /exit
+    help_command: /help
+    session_command: /session

@@ -276,39 +276,39 @@ func resolveChatContract(out *contracts.ResolvedContracts, path string, policyRe
 	if contract.Spec.InputPolicyPath == "" || contract.Spec.SubmitPolicyPath == "" || contract.Spec.OutputPolicyPath == "" || contract.Spec.StatusPolicyPath == "" || contract.Spec.CommandPolicyPath == "" || contract.Spec.ResumePolicyPath == "" {
 		return fmt.Errorf("chat contract %q missing one or more policy paths", contract.ID)
 	}
-	inputPolicy, err := loadPolicy[struct{}](path, contract.Spec.InputPolicyPath, "ChatInputPolicyConfig", "chat-input", policyRegistry)
+	inputPolicy, err := loadPolicy[contracts.ChatInputParams](path, contract.Spec.InputPolicyPath, "ChatInputPolicyConfig", "chat-input", policyRegistry)
 	if err != nil {
 		return err
 	}
-	submitPolicy, err := loadPolicy[struct{}](path, contract.Spec.SubmitPolicyPath, "ChatSubmitPolicyConfig", "chat-submit", policyRegistry)
+	submitPolicy, err := loadPolicy[contracts.ChatSubmitParams](path, contract.Spec.SubmitPolicyPath, "ChatSubmitPolicyConfig", "chat-submit", policyRegistry)
 	if err != nil {
 		return err
 	}
-	outputPolicy, err := loadPolicy[struct{}](path, contract.Spec.OutputPolicyPath, "ChatOutputPolicyConfig", "chat-output", policyRegistry)
+	outputPolicy, err := loadPolicy[contracts.ChatOutputParams](path, contract.Spec.OutputPolicyPath, "ChatOutputPolicyConfig", "chat-output", policyRegistry)
 	if err != nil {
 		return err
 	}
-	statusPolicy, err := loadPolicy[struct{}](path, contract.Spec.StatusPolicyPath, "ChatStatusPolicyConfig", "chat-status", policyRegistry)
+	statusPolicy, err := loadPolicy[contracts.ChatStatusParams](path, contract.Spec.StatusPolicyPath, "ChatStatusPolicyConfig", "chat-status", policyRegistry)
 	if err != nil {
 		return err
 	}
-	commandPolicy, err := loadPolicy[struct{}](path, contract.Spec.CommandPolicyPath, "ChatCommandPolicyConfig", "chat-command", policyRegistry)
+	commandPolicy, err := loadPolicy[contracts.ChatCommandParams](path, contract.Spec.CommandPolicyPath, "ChatCommandPolicyConfig", "chat-command", policyRegistry)
 	if err != nil {
 		return err
 	}
-	resumePolicy, err := loadPolicy[struct{}](path, contract.Spec.ResumePolicyPath, "ChatResumePolicyConfig", "chat-resume", policyRegistry)
+	resumePolicy, err := loadPolicy[contracts.ChatResumeParams](path, contract.Spec.ResumePolicyPath, "ChatResumePolicyConfig", "chat-resume", policyRegistry)
 	if err != nil {
 		return err
 	}
 
 	out.Chat = contracts.ChatContract{
 		ID: contract.ID,
-		Input: contracts.ChatInputPolicy{ID: inputPolicy.ID, Enabled: inputPolicy.Spec.Enabled, Strategy: inputPolicy.Spec.Strategy},
-		Submit: contracts.ChatSubmitPolicy{ID: submitPolicy.ID, Enabled: submitPolicy.Spec.Enabled, Strategy: submitPolicy.Spec.Strategy},
-		Output: contracts.ChatOutputPolicy{ID: outputPolicy.ID, Enabled: outputPolicy.Spec.Enabled, Strategy: outputPolicy.Spec.Strategy},
-		Status: contracts.ChatStatusPolicy{ID: statusPolicy.ID, Enabled: statusPolicy.Spec.Enabled, Strategy: statusPolicy.Spec.Strategy},
-		Command: contracts.ChatCommandPolicy{ID: commandPolicy.ID, Enabled: commandPolicy.Spec.Enabled, Strategy: commandPolicy.Spec.Strategy},
-		Resume: contracts.ChatResumePolicy{ID: resumePolicy.ID, Enabled: resumePolicy.Spec.Enabled, Strategy: resumePolicy.Spec.Strategy},
+		Input: contracts.ChatInputPolicy{ID: inputPolicy.ID, Enabled: inputPolicy.Spec.Enabled, Strategy: inputPolicy.Spec.Strategy, Params: inputPolicy.Spec.Params},
+		Submit: contracts.ChatSubmitPolicy{ID: submitPolicy.ID, Enabled: submitPolicy.Spec.Enabled, Strategy: submitPolicy.Spec.Strategy, Params: submitPolicy.Spec.Params},
+		Output: contracts.ChatOutputPolicy{ID: outputPolicy.ID, Enabled: outputPolicy.Spec.Enabled, Strategy: outputPolicy.Spec.Strategy, Params: outputPolicy.Spec.Params},
+		Status: contracts.ChatStatusPolicy{ID: statusPolicy.ID, Enabled: statusPolicy.Spec.Enabled, Strategy: statusPolicy.Spec.Strategy, Params: statusPolicy.Spec.Params},
+		Command: contracts.ChatCommandPolicy{ID: commandPolicy.ID, Enabled: commandPolicy.Spec.Enabled, Strategy: commandPolicy.Spec.Strategy, Params: commandPolicy.Spec.Params},
+		Resume: contracts.ChatResumePolicy{ID: resumePolicy.ID, Enabled: resumePolicy.Spec.Enabled, Strategy: resumePolicy.Spec.Strategy, Params: resumePolicy.Spec.Params},
 	}
 	return nil
 }

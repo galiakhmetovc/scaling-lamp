@@ -76,8 +76,10 @@ func TestAgentChatTurnAndResumeSession(t *testing.T) {
 	var deltas []string
 	first, err := agent.ChatTurn(context.Background(), session, runtime.ChatTurnInput{
 		Prompt: "Ping",
-		StreamObserver: func(delta string) {
-			deltas = append(deltas, delta)
+		StreamObserver: func(event provider.StreamEvent) {
+			if event.Kind == provider.StreamEventText {
+				deltas = append(deltas, event.Text)
+			}
 		},
 	})
 	if err != nil {

@@ -7,6 +7,7 @@ import (
 	"teamd/internal/contracts"
 	"teamd/internal/provider"
 	"teamd/internal/runtime/eventing"
+	"teamd/internal/runtime/projections"
 )
 
 type ChatSession struct {
@@ -17,7 +18,7 @@ type ChatSession struct {
 type ChatTurnInput struct {
 	Prompt               string
 	PromptAssetSelection []string
-	StreamObserver       func(string)
+	StreamObserver       func(provider.StreamEvent)
 }
 
 func (a *Agent) NewChatSession() (*ChatSession, error) {
@@ -36,6 +37,16 @@ func (a *Agent) ResumeChatSession(ctx context.Context, sessionID string) (*ChatS
 	}
 	if sessionID == "" {
 		return nil, fmt.Errorf("resume session id is empty")
+	}
+	if transcript := a.transcriptProjection(); transcript != nil {
+		messages, ok := transcript.Snapshot().Sessions[sessionID]
+		if !ok {
+			return nil, fmt.Errorf("session %q not found", sessionID)
+		}
+		return &ChatSession{
+			SessionID: sessionID,
+			Messages:  append([]contracts.Message{}, messages...),
+		}, nil
 	}
 	events, err := a.EventLog.ListByAggregate(ctx, eventing.AggregateSession, sessionID)
 	if err != nil {
@@ -191,6 +202,16 @@ func (a *Agent) ChatTurn(ctx context.Context, session *ChatSession, input ChatTu
 	}
 
 	return result, nil
+}
+
+func (a *Agent) transcriptProjection() *projections.TranscriptProjection {
+	for _, projection := range a.Projections {
+		transcript, ok := projection.(*projections.TranscriptProjection)
+		if ok {
+			return transcript
+		}
+	}
+	return nil
 }
 
 func (a *Agent) recordSessionMessage(ctx context.Context, sessionID, correlationID string, message contracts.Message) error {

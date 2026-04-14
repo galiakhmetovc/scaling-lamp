@@ -15,7 +15,7 @@ type ClientInput struct {
 	Messages             []contracts.Message
 	Tools                []map[string]any
 	AttemptObserver      func(AttemptTrace)
-	StreamObserver       func(string)
+	StreamObserver       func(StreamEvent)
 }
 
 type ClientResult struct {
@@ -131,7 +131,7 @@ func (c *Client) Execute(ctx context.Context, contractSet contracts.ResolvedCont
 	}, nil
 }
 
-func applyProviderStreamChunk(out *ProviderResponse, data []byte, onDelta func(string)) error {
+func applyProviderStreamChunk(out *ProviderResponse, data []byte, onEvent func(StreamEvent)) error {
 	var raw struct {
 		ID      string `json:"id"`
 		Model   string `json:"model"`
@@ -140,8 +140,15 @@ func applyProviderStreamChunk(out *ProviderResponse, data []byte, onDelta func(s
 			Delta        struct {
 				Role    string `json:"role"`
 				Content string `json:"content"`
+				ReasoningContent string `json:"reasoning_content"`
+				Reasoning string `json:"reasoning"`
 			} `json:"delta"`
+			Message struct {
+				Role    string `json:"role"`
+				Content any    `json:"content"`
+			} `json:"message"`
 		} `json:"choices"`
+		OutputText string `json:"output_text"`
 		Usage struct {
 			PromptTokens     int `json:"prompt_tokens"`
 			CompletionTokens int `json:"completion_tokens"`
@@ -163,12 +170,31 @@ func applyProviderStreamChunk(out *ProviderResponse, data []byte, onDelta func(s
 		}
 		if raw.Choices[0].Delta.Content != "" {
 			out.Message.Content += raw.Choices[0].Delta.Content
-			if onDelta != nil {
-				onDelta(raw.Choices[0].Delta.Content)
+			if onEvent != nil {
+				onEvent(StreamEvent{Kind: StreamEventText, Text: raw.Choices[0].Delta.Content})
+			}
+		}
+		if raw.Choices[0].Delta.ReasoningContent != "" && onEvent != nil {
+			onEvent(StreamEvent{Kind: StreamEventReasoning, Text: raw.Choices[0].Delta.ReasoningContent})
+		}
+		if raw.Choices[0].Delta.Reasoning != "" && onEvent != nil {
+			onEvent(StreamEvent{Kind: StreamEventReasoning, Text: raw.Choices[0].Delta.Reasoning})
+		}
+		if text := extractMessageContentText(raw.Choices[0].Message.Content); text != "" {
+			out.Message.Role = raw.Choices[0].Message.Role
+			out.Message.Content += text
+			if onEvent != nil {
+				onEvent(StreamEvent{Kind: StreamEventText, Text: text})
 			}
 		}
 		if raw.Choices[0].FinishReason != "" {
 			out.FinishReason = raw.Choices[0].FinishReason
+		}
+	}
+	if raw.OutputText != "" {
+		out.Message.Content += raw.OutputText
+		if onEvent != nil {
+			onEvent(StreamEvent{Kind: StreamEventText, Text: raw.OutputText})
 		}
 	}
 	if raw.Usage.TotalTokens > 0 {
@@ -182,6 +208,27 @@ func applyProviderStreamChunk(out *ProviderResponse, data []byte, onDelta func(s
 		out.Message.Role = "assistant"
 	}
 	return nil
+}
+
+func extractMessageContentText(value any) string {
+	switch typed := value.(type) {
+	case string:
+		return typed
+	case []any:
+		var out strings.Builder
+		for _, item := range typed {
+			part, ok := item.(map[string]any)
+			if !ok {
+				continue
+			}
+			if text, ok := part["text"].(string); ok {
+				out.WriteString(text)
+			}
+		}
+		return out.String()
+	default:
+		return ""
+	}
 }
 
 func parseProviderResponse(response Response) (ProviderResponse, error) {

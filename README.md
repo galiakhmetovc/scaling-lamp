@@ -44,3 +44,5 @@ Chat mode baseline:
 - send on double `Enter`
 - `/help`, `/session`, `/exit`
 - streaming text output
+- transcript-backed resume via `TranscriptProjection`
+- chat UX behavior comes from `ChatContract` strategies and params

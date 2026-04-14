@@ -4,3 +4,6 @@ id: chat-input-zai-smoke
 spec:
   enabled: true
   strategy: multiline_buffer
+  params:
+    primary_prompt: "> "
+    continuation_prompt: ". "

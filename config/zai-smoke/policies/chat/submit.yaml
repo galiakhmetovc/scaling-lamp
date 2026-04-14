@@ -4,3 +4,5 @@ id: chat-submit-zai-smoke
 spec:
   enabled: true
   strategy: double_enter
+  params:
+    empty_line_threshold: 1

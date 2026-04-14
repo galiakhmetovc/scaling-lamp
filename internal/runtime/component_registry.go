@@ -56,6 +56,7 @@ func NewBuiltInComponentRegistry() *ComponentRegistry {
 	})
 	registry.RegisterProjection("session", func() projections.Projection { return projections.NewSessionProjection() })
 	registry.RegisterProjection("run", func() projections.Projection { return projections.NewRunProjection() })
+	registry.RegisterProjection("transcript", func() projections.Projection { return projections.NewTranscriptProjection() })
 	return registry
 }
 

@@ -8,7 +8,7 @@ It does not describe the target architecture beyond what already exists in code.
 ## Current End-To-End Flow
 
 1. `cmd/agent` starts with one explicit `--config` path.
-   It can also run one explicit smoke request through `--smoke`.
+   It can run a smoke request through `--smoke` or an interactive chat loop through `--chat`.
 2. `runtime.BuildAgent` loads the root config.
 3. `config.LoadModuleGraph` walks the config graph using built-in registry metadata.
 4. `runtime.ResolveContracts` decodes typed runtime contracts from contract and policy modules.
@@ -16,11 +16,14 @@ It does not describe the target architecture beyond what already exists in code.
 5. `BuildAgent` assembles the current runtime instance from `spec.runtime`:
    - configured event log
    - configured projections
+   - configured prompt-asset executor
    - configured transport executor
    - configured request-shape executor
+   - configured provider client
 6. prompt-asset execution can resolve selected prompt assets from the dedicated prompt-asset contract.
 7. request-shape execution can build provider JSON body bytes from resolved request-shape contract.
 8. the combined provider client composes prompt-asset execution, request-shape execution, and transport execution into one provider call.
+9. `internal/runtime/cli` owns terminal chat UX for `--chat` and `--resume`.
 
 ## Process Entry
 
@@ -29,8 +32,10 @@ It does not describe the target architecture beyond what already exists in code.
 Current role:
 - accept `--config`
 - optionally accept `--smoke`
+- optionally accept `--chat` and `--resume`
 - call `runtime.BuildAgent`
 - optionally execute one smoke request through the built runtime agent
+- optionally delegate terminal chat to `internal/runtime/cli`
 - fail fast on invalid config, build errors, or smoke execution errors
 
 Current boundary:
@@ -100,6 +105,7 @@ Current resolved areas:
 - `RequestShapeContract`
 - `MemoryContract`
 - `PromptAssetsContract`
+- `ChatContract`
 
 ### `internal/contracts/contracts.go`
 
@@ -132,6 +138,11 @@ Current components built:
 - `EventLog`
 - `Projections`
 - optional projection snapshot store
+
+Current built-in projections:
+- `session`
+- `run`
+- `transcript`
 
 ### `internal/runtime/smoke.go`
 
@@ -168,8 +179,9 @@ Current provider pipeline now:
 - feed the combined result into the runtime smoke path when `cmd/agent --smoke` is used
 
 Current limitation:
-- parser currently assumes an OpenAI-compatible response body
-- provider-specific reasoning and tool-call parsing are still missing
+- parser still assumes OpenAI-compatible top-level wire shapes first
+- stream semantics now emit typed `text` and `reasoning` events
+- provider-specific tool-call parsing is still missing
 
 ## Request-Shape Execution
 
@@ -258,6 +270,14 @@ Current implication:
   - `TraceSummary`
   - `TraceRefs`
   - `ArtifactRefs`
+
+## Chat Resume Read Model
+
+`TranscriptProjection` now stores ordered `message.recorded` messages by `session_id`.
+
+Current runtime behavior:
+- `ResumeChatSession(...)` reads from transcript snapshot first
+- raw event replay is used only as a fallback recovery path
 
 ## Projections
 

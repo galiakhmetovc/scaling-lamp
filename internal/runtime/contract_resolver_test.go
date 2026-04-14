@@ -598,6 +598,125 @@ func TestResolveContractsWithRegistryAllowsExtendedStrategies(t *testing.T) {
 	}
 }
 
+func TestResolveContractsBuildsChatContractWithParams(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+
+	mustWriteFile(t, filepath.Join(dir, "agent.yaml"), ""+
+		"kind: AgentConfig\n"+
+		"version: v1\n"+
+		"id: agent-chat\n"+
+		"spec:\n"+
+		"  contracts:\n"+
+		"    chat: ./contracts/chat.yaml\n")
+
+	mustWriteFile(t, filepath.Join(dir, "contracts", "chat.yaml"), ""+
+		"kind: ChatContractConfig\n"+
+		"version: v1\n"+
+		"id: chat-main\n"+
+		"spec:\n"+
+		"  input_policy_path: ../policies/chat/input.yaml\n"+
+		"  submit_policy_path: ../policies/chat/submit.yaml\n"+
+		"  output_policy_path: ../policies/chat/output.yaml\n"+
+		"  status_policy_path: ../policies/chat/status.yaml\n"+
+		"  command_policy_path: ../policies/chat/command.yaml\n"+
+		"  resume_policy_path: ../policies/chat/resume.yaml\n")
+
+	mustWriteFile(t, filepath.Join(dir, "policies", "chat", "input.yaml"), ""+
+		"kind: ChatInputPolicyConfig\n"+
+		"version: v1\n"+
+		"id: chat-input\n"+
+		"spec:\n"+
+		"  enabled: true\n"+
+		"  strategy: multiline_buffer\n"+
+		"  params:\n"+
+		"    primary_prompt: \"> \"\n"+
+		"    continuation_prompt: \". \"\n")
+
+	mustWriteFile(t, filepath.Join(dir, "policies", "chat", "submit.yaml"), ""+
+		"kind: ChatSubmitPolicyConfig\n"+
+		"version: v1\n"+
+		"id: chat-submit\n"+
+		"spec:\n"+
+		"  enabled: true\n"+
+		"  strategy: double_enter\n"+
+		"  params:\n"+
+		"    empty_line_threshold: 1\n")
+
+	mustWriteFile(t, filepath.Join(dir, "policies", "chat", "output.yaml"), ""+
+		"kind: ChatOutputPolicyConfig\n"+
+		"version: v1\n"+
+		"id: chat-output\n"+
+		"spec:\n"+
+		"  enabled: true\n"+
+		"  strategy: streaming_text\n"+
+		"  params:\n"+
+		"    show_final_newline: true\n")
+
+	mustWriteFile(t, filepath.Join(dir, "policies", "chat", "status.yaml"), ""+
+		"kind: ChatStatusPolicyConfig\n"+
+		"version: v1\n"+
+		"id: chat-status\n"+
+		"spec:\n"+
+		"  enabled: true\n"+
+		"  strategy: inline_terminal\n"+
+		"  params:\n"+
+		"    show_header: true\n"+
+		"    show_usage: true\n")
+
+	mustWriteFile(t, filepath.Join(dir, "policies", "chat", "command.yaml"), ""+
+		"kind: ChatCommandPolicyConfig\n"+
+		"version: v1\n"+
+		"id: chat-command\n"+
+		"spec:\n"+
+		"  enabled: true\n"+
+		"  strategy: slash_commands\n"+
+		"  params:\n"+
+		"    exit_command: /exit\n"+
+		"    help_command: /help\n"+
+		"    session_command: /session\n")
+
+	mustWriteFile(t, filepath.Join(dir, "policies", "chat", "resume.yaml"), ""+
+		"kind: ChatResumePolicyConfig\n"+
+		"version: v1\n"+
+		"id: chat-resume\n"+
+		"spec:\n"+
+		"  enabled: true\n"+
+		"  strategy: explicit_resume_only\n"+
+		"  params:\n"+
+		"    require_explicit_id: true\n")
+
+	cfg, err := config.LoadRoot(filepath.Join(dir, "agent.yaml"))
+	if err != nil {
+		t.Fatalf("LoadRoot returned error: %v", err)
+	}
+
+	got, err := runtime.ResolveContracts(cfg)
+	if err != nil {
+		t.Fatalf("ResolveContracts returned error: %v", err)
+	}
+
+	if got.Chat.ID != "chat-main" {
+		t.Fatalf("chat ID = %q, want chat-main", got.Chat.ID)
+	}
+	if got.Chat.Input.Params.PrimaryPrompt != "> " || got.Chat.Input.Params.ContinuationPrompt != ". " {
+		t.Fatalf("chat input params = %#v", got.Chat.Input.Params)
+	}
+	if got.Chat.Submit.Params.EmptyLineThreshold != 1 {
+		t.Fatalf("empty line threshold = %d, want 1", got.Chat.Submit.Params.EmptyLineThreshold)
+	}
+	if !got.Chat.Status.Params.ShowHeader || !got.Chat.Status.Params.ShowUsage {
+		t.Fatalf("chat status params = %#v", got.Chat.Status.Params)
+	}
+	if got.Chat.Command.Params.ExitCommand != "/exit" || got.Chat.Command.Params.HelpCommand != "/help" || got.Chat.Command.Params.SessionCommand != "/session" {
+		t.Fatalf("chat command params = %#v", got.Chat.Command.Params)
+	}
+	if !got.Chat.Resume.Params.RequireExplicitID {
+		t.Fatalf("chat resume params = %#v", got.Chat.Resume.Params)
+	}
+}
+
 func containsAll(s string, want ...string) bool {
 	for _, fragment := range want {
 		if !strings.Contains(s, fragment) {

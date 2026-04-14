@@ -16,6 +16,7 @@ func NewBuiltInRegistry() *Registry {
 	registry := NewRegistry()
 	registry.Register("session", func() Projection { return NewSessionProjection() })
 	registry.Register("run", func() Projection { return NewRunProjection() })
+	registry.Register("transcript", func() Projection { return NewTranscriptProjection() })
 	return registry
 }
 
@@ -36,5 +37,5 @@ func (r *Registry) Build(names ...string) ([]Projection, error) {
 }
 
 func (r *Registry) BuildDefaults() ([]Projection, error) {
-	return r.Build("session", "run")
+	return r.Build("session", "run", "transcript")
 }
