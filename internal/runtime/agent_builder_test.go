@@ -34,11 +34,12 @@ func TestBuildAgentLoadsRootConfigAndBootstrapsRuntime(t *testing.T) {
 		"    transport_executor: transport_default\n"+
 		"    request_shape_executor: request_shape_default\n"+
 		"    provider_client: provider_client_default\n"+
-		"    projections: [session, run]\n"+
+		"    projections: [session, run, transcript, active_plan, plan_archive, plan_head]\n"+
 		"  contracts:\n"+
 		"    transport: ./contracts/transport.yaml\n"+
 		"    request_shape: ./contracts/request-shape.yaml\n"+
 		"    memory: ./contracts/memory.yaml\n"+
+		"    plan_tools: ./contracts/plan-tools.yaml\n"+
 		"    provider_trace: ./contracts/provider-trace.yaml\n")
 
 	mustWriteFile(t, filepath.Join(dir, "contracts", "transport.yaml"), ""+
@@ -64,6 +65,13 @@ func TestBuildAgentLoadsRootConfigAndBootstrapsRuntime(t *testing.T) {
 		"id: provider-trace-main\n"+
 		"spec:\n"+
 		"  provider_trace_policy_path: ../policies/provider-trace/request.yaml\n")
+
+	mustWriteFile(t, filepath.Join(dir, "contracts", "plan-tools.yaml"), ""+
+		"kind: PlanToolContractConfig\n"+
+		"version: v1\n"+
+		"id: plan-tools-main\n"+
+		"spec:\n"+
+		"  plan_tool_policy_path: ../policies/tools/plan-tools.yaml\n")
 
 	mustWriteFile(t, filepath.Join(dir, "contracts", "request-shape.yaml"), ""+
 		"kind: RequestShapeContractConfig\n"+
@@ -146,6 +154,16 @@ func TestBuildAgentLoadsRootConfigAndBootstrapsRuntime(t *testing.T) {
 		"    include_raw_body: true\n"+
 		"    include_decoded_payload: true\n")
 
+	mustWriteFile(t, filepath.Join(dir, "policies", "tools", "plan-tools.yaml"), ""+
+		"kind: PlanToolPolicyConfig\n"+
+		"version: v1\n"+
+		"id: plan-tools-main\n"+
+		"spec:\n"+
+		"  enabled: true\n"+
+		"  strategy: default_plan_tools\n"+
+		"  params:\n"+
+		"    tool_ids: [init_plan]\n")
+
 	mustWriteFile(t, filepath.Join(dir, "policies", "request-shape", "model.yaml"), ""+
 		"kind: ModelPolicyConfig\n"+
 		"version: v1\n"+
@@ -214,8 +232,8 @@ func TestBuildAgentLoadsRootConfigAndBootstrapsRuntime(t *testing.T) {
 	if agent.EventLog == nil {
 		t.Fatal("agent EventLog is nil")
 	}
-	if len(agent.Projections) != 2 {
-		t.Fatalf("agent projections len = %d, want 2", len(agent.Projections))
+	if len(agent.Projections) != 6 {
+		t.Fatalf("agent projections len = %d, want 6", len(agent.Projections))
 	}
 	if agent.Transport == nil {
 		t.Fatal("agent Transport is nil")
@@ -228,6 +246,9 @@ func TestBuildAgentLoadsRootConfigAndBootstrapsRuntime(t *testing.T) {
 	}
 	if agent.ProviderClient == nil {
 		t.Fatal("agent ProviderClient is nil")
+	}
+	if agent.Contracts.PlanTools.PlanTool.Strategy != "default_plan_tools" {
+		t.Fatalf("plan tool strategy = %q, want default_plan_tools", agent.Contracts.PlanTools.PlanTool.Strategy)
 	}
 	if agent.Contracts.ProviderRequest.Transport.ID != "transport-main" {
 		t.Fatalf("transport contract ID = %q, want %q", agent.Contracts.ProviderRequest.Transport.ID, "transport-main")

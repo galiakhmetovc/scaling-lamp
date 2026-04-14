@@ -114,6 +114,7 @@ Current resolved areas:
 - `PromptAssetsContract`
 - `PromptAssemblyContract`
 - `ToolContract`
+- `PlanToolContract`
 - `ToolExecutionContract`
 - `ProviderTraceContract`
 - `ChatContract`
@@ -144,6 +145,7 @@ Current components built:
 - `Contracts`
 - `PromptAssembly`
 - `PromptAssets`
+- `PlanTools`
 - `ToolCatalog`
 - `ToolExecution`
 - `Transport`
@@ -157,6 +159,9 @@ Current built-in projections:
 - `session`
 - `run`
 - `transcript`
+- `active_plan`
+- `plan_archive`
+- `plan_head`
 
 ### `internal/runtime/smoke.go`
 
@@ -187,6 +192,7 @@ Current role:
 Current provider pipeline now:
 - build prompt-assembly messages from file-backed system prompt and projection-backed session head
 - resolve selected prompt assets into prepend/append message buckets
+- build built-in plan-tool definitions from `PlanToolContract`
 - build visible tool surface from `ToolContract`
 - serialize tools for provider payloads
 - build request-shape JSON body
@@ -195,14 +201,16 @@ Current provider pipeline now:
 - parse provider-specific response body
 - parse provider-emitted tool calls when present in non-streaming responses
 - run parsed tool calls through `ToolExecutionContract`
+- execute allowed built-in plan tool calls through the runtime plan-domain service
+- append resulting tool-result messages and repeat provider execution until final assistant output
 - extract normalized usage fields
 - feed the combined result into the runtime smoke path when `cmd/agent --smoke` is used
 
 Current limitation:
 - parser still assumes OpenAI-compatible top-level wire shapes first
 - stream semantics now emit typed `text` and `reasoning` events
-- actual tool execution runtime is still missing after an allowed tool call
-- current runtime denies, approval-blocks, or honestly fails allowed tool calls with “execution path is not implemented yet”
+- only the internal plan-tools domain has a real execution backend today
+- non-plan tool backends are still not implemented
 
 ## Provider Trace Capture
 

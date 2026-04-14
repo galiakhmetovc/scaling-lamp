@@ -71,6 +71,11 @@ func NewBuiltInModuleRegistry() *ModuleRegistry {
 		},
 	})
 	registry.Register(ModuleType{
+		Kind:      "PlanToolContractConfig",
+		Category:  ModuleCategoryContract,
+		RefFields: []string{"plan_tool_policy_path"},
+	})
+	registry.Register(ModuleType{
 		Kind:      "ProviderTraceContractConfig",
 		Category:  ModuleCategoryContract,
 		RefFields: []string{"provider_trace_policy_path"},
@@ -173,6 +178,10 @@ func NewBuiltInModuleRegistry() *ModuleRegistry {
 	})
 	registry.Register(ModuleType{
 		Kind:     "ToolSandboxPolicyConfig",
+		Category: ModuleCategoryPolicy,
+	})
+	registry.Register(ModuleType{
+		Kind:     "PlanToolPolicyConfig",
 		Category: ModuleCategoryPolicy,
 	})
 	registry.Register(ModuleType{

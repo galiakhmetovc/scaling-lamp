@@ -17,6 +17,9 @@ func NewBuiltInRegistry() *Registry {
 	registry.Register("session", func() Projection { return NewSessionProjection() })
 	registry.Register("run", func() Projection { return NewRunProjection() })
 	registry.Register("transcript", func() Projection { return NewTranscriptProjection() })
+	registry.Register("active_plan", func() Projection { return NewActivePlanProjection() })
+	registry.Register("plan_archive", func() Projection { return NewPlanArchiveProjection() })
+	registry.Register("plan_head", func() Projection { return NewPlanHeadProjection() })
 	return registry
 }
 

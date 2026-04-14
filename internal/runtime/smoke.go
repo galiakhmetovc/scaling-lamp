@@ -77,24 +77,13 @@ func (a *Agent) Smoke(ctx context.Context, input SmokeInput) (provider.ClientRes
 		return provider.ClientResult{}, fmt.Errorf("record run started: %w", err)
 	}
 
-	assembledMessages, err := a.assemblePromptMessages(sessionID, []contracts.Message{
-		{Role: "user", Content: input.Prompt},
-	})
-	if err != nil {
-		return provider.ClientResult{}, fmt.Errorf("assemble smoke prompt: %w", err)
-	}
-
-	result, err := a.ProviderClient.Execute(ctx, a.Contracts, provider.ClientInput{
+	result, err := a.executeProviderLoop(ctx, sessionID, runID, correlationID, "agent.smoke", provider.ClientInput{
 		PromptAssetSelection: input.PromptAssetSelection,
-		Messages:             assembledMessages,
+		Messages: []contracts.Message{
+			{Role: "user", Content: input.Prompt},
+		},
 	})
 	if err != nil {
-		if recordErr := a.recordProviderRequestEvent(ctx, runID, sessionID, correlationID, "agent.smoke", result.RequestBody); recordErr != nil {
-			return provider.ClientResult{}, fmt.Errorf("execute smoke request: %v; record provider request: %w", err, recordErr)
-		}
-		if recordErr := a.recordTransportAttemptEvents(ctx, runID, sessionID, correlationID, result.TransportAttempts); recordErr != nil {
-			return provider.ClientResult{}, fmt.Errorf("execute smoke request: %v; record transport attempts: %w", err, recordErr)
-		}
 		recordErr := a.RecordEvent(ctx, eventing.Event{
 			ID:               a.newID("evt-run-failed"),
 			Kind:             eventing.EventRunFailed,
@@ -117,13 +106,6 @@ func (a *Agent) Smoke(ctx context.Context, input SmokeInput) (provider.ClientRes
 			return provider.ClientResult{}, fmt.Errorf("execute smoke request: %v; record failure event: %w", err, recordErr)
 		}
 		return provider.ClientResult{}, fmt.Errorf("execute smoke request: %w", err)
-	}
-
-	if err := a.recordProviderRequestEvent(ctx, runID, sessionID, correlationID, "agent.smoke", result.RequestBody); err != nil {
-		return provider.ClientResult{}, fmt.Errorf("record provider request: %w", err)
-	}
-	if err := a.recordTransportAttemptEvents(ctx, runID, sessionID, correlationID, result.TransportAttempts); err != nil {
-		return provider.ClientResult{}, fmt.Errorf("record transport attempts: %w", err)
 	}
 
 	if err := a.RecordEvent(ctx, eventing.Event{
@@ -183,17 +165,17 @@ func (a *Agent) sessionExists(sessionID string) bool {
 func (a *Agent) recordTransportAttemptEvents(ctx context.Context, runID, sessionID, correlationID string, attempts []provider.AttemptTrace) error {
 	for _, attempt := range attempts {
 		payload := map[string]any{
-			"session_id":         sessionID,
-			"attempt":            attempt.Attempt,
-			"attempt_started_at": attempt.StartedAt,
+			"session_id":          sessionID,
+			"attempt":             attempt.Attempt,
+			"attempt_started_at":  attempt.StartedAt,
 			"attempt_finished_at": attempt.FinishedAt,
-			"duration_ms":        attempt.Duration.Milliseconds(),
-			"status_code":        attempt.StatusCode,
-			"error":              attempt.Error,
-			"attempt_timeout_ms": attempt.AttemptTimeout.Milliseconds(),
+			"duration_ms":         attempt.Duration.Milliseconds(),
+			"status_code":         attempt.StatusCode,
+			"error":               attempt.Error,
+			"attempt_timeout_ms":  attempt.AttemptTimeout.Milliseconds(),
 			"operation_budget_ms": attempt.OperationBudget.Milliseconds(),
-			"retry_decision":     attempt.RetryDecision,
-			"retry_reason":       attempt.RetryReason,
+			"retry_decision":      attempt.RetryDecision,
+			"retry_reason":        attempt.RetryReason,
 			"computed_backoff_ms": attempt.ComputedBackoff.Milliseconds(),
 			"final_attempt_count": attempt.FinalAttemptCount,
 		}

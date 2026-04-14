@@ -134,23 +134,12 @@ func (a *Agent) ChatTurn(ctx context.Context, session *ChatSession, input ChatTu
 		return provider.ClientResult{}, fmt.Errorf("record run started: %w", err)
 	}
 
-	assembledMessages, err := a.assemblePromptMessages(session.SessionID, append([]contracts.Message{}, session.Messages...))
-	if err != nil {
-		return provider.ClientResult{}, fmt.Errorf("assemble chat prompt: %w", err)
-	}
-
-	result, err := a.ProviderClient.Execute(ctx, a.Contracts, provider.ClientInput{
+	result, err := a.executeProviderLoop(ctx, session.SessionID, runID, correlationID, "agent.chat", provider.ClientInput{
 		PromptAssetSelection: input.PromptAssetSelection,
-		Messages:             assembledMessages,
+		Messages:             append([]contracts.Message{}, session.Messages...),
 		StreamObserver:       input.StreamObserver,
 	})
 	if err != nil {
-		if recordErr := a.recordProviderRequestEvent(ctx, runID, session.SessionID, correlationID, "agent.chat", result.RequestBody); recordErr != nil {
-			return provider.ClientResult{}, fmt.Errorf("execute chat turn: %v; record provider request: %w", err, recordErr)
-		}
-		if recordErr := a.recordTransportAttemptEvents(ctx, runID, session.SessionID, correlationID, result.TransportAttempts); recordErr != nil {
-			return provider.ClientResult{}, fmt.Errorf("execute chat turn: %v; record transport attempts: %w", err, recordErr)
-		}
 		if recordErr := a.RecordEvent(ctx, eventing.Event{
 			ID:               a.newID("evt-run-failed"),
 			Kind:             eventing.EventRunFailed,
@@ -172,13 +161,6 @@ func (a *Agent) ChatTurn(ctx context.Context, session *ChatSession, input ChatTu
 			return provider.ClientResult{}, fmt.Errorf("execute chat turn: %v; record failure event: %w", err, recordErr)
 		}
 		return provider.ClientResult{}, fmt.Errorf("execute chat turn: %w", err)
-	}
-
-	if err := a.recordProviderRequestEvent(ctx, runID, session.SessionID, correlationID, "agent.chat", result.RequestBody); err != nil {
-		return provider.ClientResult{}, fmt.Errorf("record provider request: %w", err)
-	}
-	if err := a.recordTransportAttemptEvents(ctx, runID, session.SessionID, correlationID, result.TransportAttempts); err != nil {
-		return provider.ClientResult{}, fmt.Errorf("record transport attempts: %w", err)
 	}
 
 	if err := a.recordSessionMessage(ctx, session.SessionID, correlationID, result.Provider.Message); err != nil {
@@ -231,12 +213,23 @@ func (a *Agent) assemblePromptMessages(sessionID string, fallback []contracts.Me
 		return fallback, nil
 	}
 	transcript := projections.TranscriptSnapshot{Sessions: map[string][]contracts.Message{}}
+	planHead := projections.PlanHeadSnapshot{
+		Tasks:                 map[string]projections.PlanTaskView{},
+		Ready:                 map[string]bool{},
+		WaitingOnDependencies: map[string]bool{},
+		Blocked:               map[string]string{},
+		Notes:                 map[string][]string{},
+	}
 	if projection := a.transcriptProjection(); projection != nil {
 		transcript = projection.Snapshot()
 	}
+	if projection := a.planHeadProjection(); projection != nil {
+		planHead = projection.Snapshot()
+	}
 	messages, err := a.PromptAssembly.Build(a.Contracts.PromptAssembly, promptassembly.Input{
-		SessionID:  sessionID,
-		Transcript: transcript,
+		SessionID:   sessionID,
+		Transcript:  transcript,
+		PlanHead:    planHead,
 		RawMessages: append([]contracts.Message{}, fallback...),
 	})
 	if err != nil {
@@ -246,6 +239,16 @@ func (a *Agent) assemblePromptMessages(sessionID string, fallback []contracts.Me
 		return fallback, nil
 	}
 	return messages, nil
+}
+
+func (a *Agent) planHeadProjection() *projections.PlanHeadProjection {
+	for _, projection := range a.Projections {
+		planHead, ok := projection.(*projections.PlanHeadProjection)
+		if ok {
+			return planHead
+		}
+	}
+	return nil
 }
 
 func (a *Agent) recordSessionMessage(ctx context.Context, sessionID, correlationID string, message contracts.Message) error {

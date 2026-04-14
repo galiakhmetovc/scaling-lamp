@@ -5,37 +5,45 @@ import "time"
 type AggregateType string
 
 const (
-	AggregateSession AggregateType = "session"
-	AggregateRun     AggregateType = "run"
+	AggregateSession  AggregateType = "session"
+	AggregateRun      AggregateType = "run"
+	AggregatePlan     AggregateType = "plan"
+	AggregatePlanTask AggregateType = "plan_task"
 )
 
 type EventKind string
 
 const (
-	EventSessionCreated EventKind = "session.created"
-	EventMessageRecorded EventKind = "message.recorded"
-	EventRunStarted     EventKind = "run.started"
-	EventProviderRequestCaptured EventKind = "provider.request.captured"
+	EventSessionCreated            EventKind = "session.created"
+	EventMessageRecorded           EventKind = "message.recorded"
+	EventRunStarted                EventKind = "run.started"
+	EventProviderRequestCaptured   EventKind = "provider.request.captured"
 	EventTransportAttemptCompleted EventKind = "transport.attempt.completed"
-	EventRunCompleted   EventKind = "run.completed"
-	EventRunFailed      EventKind = "run.failed"
+	EventRunCompleted              EventKind = "run.completed"
+	EventRunFailed                 EventKind = "run.failed"
+	EventPlanCreated               EventKind = "plan.created"
+	EventPlanArchived              EventKind = "plan.archived"
+	EventTaskAdded                 EventKind = "task.added"
+	EventTaskStatusChanged         EventKind = "task.status_changed"
+	EventTaskNoteAdded             EventKind = "task.note_added"
+	EventTaskEdited                EventKind = "task.edited"
 )
 
 type Event struct {
-	Sequence      uint64
-	ID            string
-	Kind          EventKind
-	OccurredAt    time.Time
-	AggregateID   string
-	AggregateType AggregateType
+	Sequence         uint64
+	ID               string
+	Kind             EventKind
+	OccurredAt       time.Time
+	AggregateID      string
+	AggregateType    AggregateType
 	AggregateVersion uint64
-	CorrelationID string
-	CausationID   string
-	Source        string
-	ActorID       string
-	ActorType     string
-	TraceSummary  string
-	TraceRefs     []string
-	ArtifactRefs  []string
-	Payload       map[string]any
+	CorrelationID    string
+	CausationID      string
+	Source           string
+	ActorID          string
+	ActorType        string
+	TraceSummary     string
+	TraceRefs        []string
+	ArtifactRefs     []string
+	Payload          map[string]any
 }

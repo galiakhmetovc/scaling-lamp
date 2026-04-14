@@ -6,6 +6,7 @@ type ResolvedContracts struct {
 	PromptAssets    PromptAssetsContract
 	PromptAssembly  PromptAssemblyContract
 	Tools           ToolContract
+	PlanTools       PlanToolContract
 	ToolExecution   ToolExecutionContract
 	Chat            ChatContract
 	ProviderTrace   ProviderTraceContract
@@ -107,6 +108,11 @@ type ToolContract struct {
 	ID            string
 	Catalog       ToolCatalogPolicy
 	Serialization ToolSerializationPolicy
+}
+
+type PlanToolContract struct {
+	ID       string
+	PlanTool PlanToolPolicy
 }
 
 type ToolExecutionContract struct {
@@ -236,6 +242,13 @@ type ToolSerializationPolicy struct {
 	Params   ToolSerializationParams
 }
 
+type PlanToolPolicy struct {
+	ID       string
+	Enabled  bool
+	Strategy string
+	Params   PlanToolParams
+}
+
 type ToolAccessPolicy struct {
 	ID       string
 	Enabled  bool
@@ -272,13 +285,13 @@ type SystemPromptParams struct {
 }
 
 type SessionHeadParams struct {
-	Placement                string `yaml:"placement"`
-	Title                    string `yaml:"title"`
-	MaxItems                 int    `yaml:"max_items"`
-	IncludeSessionID         bool   `yaml:"include_session_id"`
-	IncludeOpenLoops         bool   `yaml:"include_open_loops"`
-	IncludeLastUserMessage   bool   `yaml:"include_last_user_message"`
-	IncludeLastAssistantMessage bool `yaml:"include_last_assistant_message"`
+	Placement                   string `yaml:"placement"`
+	Title                       string `yaml:"title"`
+	MaxItems                    int    `yaml:"max_items"`
+	IncludeSessionID            bool   `yaml:"include_session_id"`
+	IncludeOpenLoops            bool   `yaml:"include_open_loops"`
+	IncludeLastUserMessage      bool   `yaml:"include_last_user_message"`
+	IncludeLastAssistantMessage bool   `yaml:"include_last_assistant_message"`
 }
 
 type ToolCatalogParams struct {
@@ -288,8 +301,12 @@ type ToolCatalogParams struct {
 }
 
 type ToolSerializationParams struct {
-	StrictJSONSchema   bool `yaml:"strict_json_schema"`
+	StrictJSONSchema    bool `yaml:"strict_json_schema"`
 	IncludeDescriptions bool `yaml:"include_descriptions"`
+}
+
+type PlanToolParams struct {
+	ToolIDs []string `yaml:"tool_ids"`
 }
 
 type ToolAccessParams struct {
@@ -302,15 +319,15 @@ type ToolApprovalParams struct {
 }
 
 type ToolSandboxParams struct {
-	AllowNetwork   bool     `yaml:"allow_network"`
+	AllowNetwork    bool     `yaml:"allow_network"`
 	AllowWritePaths []string `yaml:"allow_write_paths"`
 	DenyWritePaths  []string `yaml:"deny_write_paths"`
-	Timeout        string   `yaml:"timeout"`
-	MaxOutputBytes int      `yaml:"max_output_bytes"`
+	Timeout         string   `yaml:"timeout"`
+	MaxOutputBytes  int      `yaml:"max_output_bytes"`
 }
 
 type ProviderTraceParams struct {
-	IncludeRawBody       bool `yaml:"include_raw_body"`
+	IncludeRawBody        bool `yaml:"include_raw_body"`
 	IncludeDecodedPayload bool `yaml:"include_decoded_payload"`
 }
 
@@ -319,9 +336,9 @@ type PromptAssetParams struct {
 }
 
 type PromptAsset struct {
-	ID      string `yaml:"id" json:"id"`
-	Role    string `yaml:"role" json:"role"`
-	Content string `yaml:"content" json:"content"`
+	ID        string `yaml:"id" json:"id"`
+	Role      string `yaml:"role" json:"role"`
+	Content   string `yaml:"content" json:"content"`
 	Placement string `yaml:"placement" json:"placement"`
 }
 
@@ -384,8 +401,22 @@ type SamplingParams struct {
 }
 
 type Message struct {
-	Role    string `json:"role"`
-	Content string `json:"content"`
+	Role       string            `json:"role"`
+	Content    string            `json:"content"`
+	Name       string            `json:"name,omitempty"`
+	ToolCallID string            `json:"tool_call_id,omitempty"`
+	ToolCalls  []MessageToolCall `json:"tool_calls,omitempty"`
+}
+
+type MessageToolCall struct {
+	ID       string              `json:"id"`
+	Type     string              `json:"type,omitempty"`
+	Function MessageToolFunction `json:"function"`
+}
+
+type MessageToolFunction struct {
+	Name      string `json:"name"`
+	Arguments string `json:"arguments"`
 }
 
 type MemoryContract struct {

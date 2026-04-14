@@ -20,9 +20,9 @@ type policySpec[T any] struct {
 	Kind string `yaml:"kind"`
 	ID   string `yaml:"id"`
 	Spec struct {
-		Enabled  bool `yaml:"enabled"`
+		Enabled  bool   `yaml:"enabled"`
 		Strategy string `yaml:"strategy"`
-		Params   T    `yaml:"params"`
+		Params   T      `yaml:"params"`
 	} `yaml:"spec"`
 }
 
@@ -55,6 +55,10 @@ type toolExecutionContractBody struct {
 	ToolAccessPolicyPath   string `yaml:"tool_access_policy_path"`
 	ToolApprovalPolicyPath string `yaml:"tool_approval_policy_path"`
 	ToolSandboxPolicyPath  string `yaml:"tool_sandbox_policy_path"`
+}
+
+type planToolContractBody struct {
+	PlanToolPolicyPath string `yaml:"plan_tool_policy_path"`
 }
 
 type providerTraceContractBody struct {
@@ -322,13 +326,13 @@ func resolveChatContract(out *contracts.ResolvedContracts, path string, policyRe
 	}
 
 	out.Chat = contracts.ChatContract{
-		ID: contract.ID,
-		Input: contracts.ChatInputPolicy{ID: inputPolicy.ID, Enabled: inputPolicy.Spec.Enabled, Strategy: inputPolicy.Spec.Strategy, Params: inputPolicy.Spec.Params},
-		Submit: contracts.ChatSubmitPolicy{ID: submitPolicy.ID, Enabled: submitPolicy.Spec.Enabled, Strategy: submitPolicy.Spec.Strategy, Params: submitPolicy.Spec.Params},
-		Output: contracts.ChatOutputPolicy{ID: outputPolicy.ID, Enabled: outputPolicy.Spec.Enabled, Strategy: outputPolicy.Spec.Strategy, Params: outputPolicy.Spec.Params},
-		Status: contracts.ChatStatusPolicy{ID: statusPolicy.ID, Enabled: statusPolicy.Spec.Enabled, Strategy: statusPolicy.Spec.Strategy, Params: statusPolicy.Spec.Params},
+		ID:      contract.ID,
+		Input:   contracts.ChatInputPolicy{ID: inputPolicy.ID, Enabled: inputPolicy.Spec.Enabled, Strategy: inputPolicy.Spec.Strategy, Params: inputPolicy.Spec.Params},
+		Submit:  contracts.ChatSubmitPolicy{ID: submitPolicy.ID, Enabled: submitPolicy.Spec.Enabled, Strategy: submitPolicy.Spec.Strategy, Params: submitPolicy.Spec.Params},
+		Output:  contracts.ChatOutputPolicy{ID: outputPolicy.ID, Enabled: outputPolicy.Spec.Enabled, Strategy: outputPolicy.Spec.Strategy, Params: outputPolicy.Spec.Params},
+		Status:  contracts.ChatStatusPolicy{ID: statusPolicy.ID, Enabled: statusPolicy.Spec.Enabled, Strategy: statusPolicy.Spec.Strategy, Params: statusPolicy.Spec.Params},
 		Command: contracts.ChatCommandPolicy{ID: commandPolicy.ID, Enabled: commandPolicy.Spec.Enabled, Strategy: commandPolicy.Spec.Strategy, Params: commandPolicy.Spec.Params},
-		Resume: contracts.ChatResumePolicy{ID: resumePolicy.ID, Enabled: resumePolicy.Spec.Enabled, Strategy: resumePolicy.Spec.Strategy, Params: resumePolicy.Spec.Params},
+		Resume:  contracts.ChatResumePolicy{ID: resumePolicy.ID, Enabled: resumePolicy.Spec.Enabled, Strategy: resumePolicy.Spec.Strategy, Params: resumePolicy.Spec.Params},
 	}
 	return nil
 }
@@ -479,6 +483,30 @@ func resolveToolExecutionContract(out *contracts.ResolvedContracts, path string,
 	return nil
 }
 
+func resolvePlanToolContract(out *contracts.ResolvedContracts, path string, policyRegistry *policies.Registry) error {
+	contract, err := loadContract[planToolContractBody](path, "plan-tools")
+	if err != nil {
+		return err
+	}
+	if contract.Spec.PlanToolPolicyPath == "" {
+		return fmt.Errorf("plan-tools contract %q missing plan_tool_policy_path", contract.ID)
+	}
+	policy, err := loadPolicy[contracts.PlanToolParams](path, contract.Spec.PlanToolPolicyPath, "PlanToolPolicyConfig", "plan-tool", policyRegistry)
+	if err != nil {
+		return err
+	}
+	out.PlanTools = contracts.PlanToolContract{
+		ID: contract.ID,
+		PlanTool: contracts.PlanToolPolicy{
+			ID:       policy.ID,
+			Enabled:  policy.Spec.Enabled,
+			Strategy: policy.Spec.Strategy,
+			Params:   policy.Spec.Params,
+		},
+	}
+	return nil
+}
+
 func resolveProviderTraceContract(out *contracts.ResolvedContracts, path string, policyRegistry *policies.Registry) error {
 	contract, err := loadContract[providerTraceContractBody](path, "provider-trace")
 	if err != nil {
@@ -558,6 +586,8 @@ func resolveContractApplyFunc(kind string) (contractApplyFunc, error) {
 		return resolveToolContract, nil
 	case "ToolExecutionContractConfig":
 		return resolveToolExecutionContract, nil
+	case "PlanToolContractConfig":
+		return resolvePlanToolContract, nil
 	case "ProviderTraceContractConfig":
 		return resolveProviderTraceContract, nil
 	case "ChatContractConfig":

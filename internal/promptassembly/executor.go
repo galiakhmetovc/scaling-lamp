@@ -3,6 +3,7 @@ package promptassembly
 import (
 	"fmt"
 	"os"
+	"slices"
 	"strings"
 
 	"teamd/internal/contracts"
@@ -10,8 +11,9 @@ import (
 )
 
 type Input struct {
-	SessionID  string
-	Transcript projections.TranscriptSnapshot
+	SessionID   string
+	Transcript  projections.TranscriptSnapshot
+	PlanHead    projections.PlanHeadSnapshot
 	RawMessages []contracts.Message
 }
 
@@ -32,7 +34,7 @@ func (e *Executor) Build(contract contracts.PromptAssemblyContract, input Input)
 	if err != nil {
 		return nil, err
 	}
-	sessionHead, err := e.buildSessionHead(contract.SessionHead, input.SessionID, transcript)
+	sessionHead, err := e.buildSessionHead(contract.SessionHead, input.SessionID, transcript, input.PlanHead)
 	if err != nil {
 		return nil, err
 	}
@@ -90,7 +92,7 @@ func (e *Executor) buildSystemPrompt(policy contracts.SystemPromptPolicy) (contr
 	return contracts.Message{Role: role, Content: content}, nil
 }
 
-func (e *Executor) buildSessionHead(policy contracts.SessionHeadPolicy, sessionID string, transcript []contracts.Message) (contracts.Message, error) {
+func (e *Executor) buildSessionHead(policy contracts.SessionHeadPolicy, sessionID string, transcript []contracts.Message, planHead projections.PlanHeadSnapshot) (contracts.Message, error) {
 	if !policy.Enabled {
 		return contracts.Message{}, nil
 	}
@@ -117,6 +119,7 @@ func (e *Executor) buildSessionHead(policy contracts.SessionHeadPolicy, sessionI
 			lines = append(lines, "last_assistant: "+msg.Content)
 		}
 	}
+	lines = append(lines, buildPlanHeadLines(planHead)...)
 	if policy.Params.MaxItems > 0 && len(lines) > policy.Params.MaxItems {
 		lines = lines[:policy.Params.MaxItems]
 	}
@@ -127,6 +130,45 @@ func (e *Executor) buildSessionHead(policy contracts.SessionHeadPolicy, sessionI
 		Role:    "system",
 		Content: strings.Join(lines, "\n"),
 	}, nil
+}
+
+func buildPlanHeadLines(snapshot projections.PlanHeadSnapshot) []string {
+	if snapshot.Plan.ID == "" || snapshot.Plan.Goal == "" {
+		return nil
+	}
+	lines := []string{"🎯 Цель: " + snapshot.Plan.Goal}
+	ordered := make([]projections.PlanTaskView, 0, len(snapshot.Tasks))
+	for _, task := range snapshot.Tasks {
+		ordered = append(ordered, task)
+	}
+	slices.SortFunc(ordered, func(a, b projections.PlanTaskView) int {
+		if a.Order != b.Order {
+			return a.Order - b.Order
+		}
+		if a.ID < b.ID {
+			return -1
+		}
+		if a.ID > b.ID {
+			return 1
+		}
+		return 0
+	})
+	for _, task := range ordered {
+		switch {
+		case snapshot.Ready[task.ID]:
+			lines = append(lines, "⬜ ["+task.ID+"] "+task.Description)
+		case snapshot.Blocked[task.ID] != "":
+			lines = append(lines, "🚫 ["+task.ID+"] "+task.Description+" (Blocked: "+snapshot.Blocked[task.ID]+")")
+		case task.Status == "done":
+			lines = append(lines, "✅ ["+task.ID+"] "+task.Description)
+		case task.Status == "in_progress":
+			lines = append(lines, "🏃 ["+task.ID+"] "+task.Description)
+		}
+		for _, note := range snapshot.Notes[task.ID] {
+			lines = append(lines, "📝 "+note)
+		}
+	}
+	return lines
 }
 
 func lastMessageByRole(messages []contracts.Message, role string) (contracts.Message, bool) {

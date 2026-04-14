@@ -21,6 +21,7 @@ func TestClientBuildsAndSendsProviderRequest(t *testing.T) {
 	client := provider.NewClient(
 		provider.NewPromptAssetExecutor(),
 		provider.NewRequestShapeExecutor(),
+		tools.NewPlanToolExecutor(),
 		tools.NewCatalogExecutor(),
 		tools.NewExecutionGate(),
 		provider.NewTransportExecutor(fakeDoer{
@@ -80,7 +81,7 @@ func TestClientBuildsAndSendsProviderRequest(t *testing.T) {
 				Model: contracts.ModelPolicy{
 					Enabled:  true,
 					Strategy: "static_model",
-					Params: contracts.ModelParams{Model: "glm-4.6"},
+					Params:   contracts.ModelParams{Model: "glm-4.6"},
 				},
 				Messages: contracts.MessagePolicy{
 					Enabled:  true,
@@ -93,12 +94,12 @@ func TestClientBuildsAndSendsProviderRequest(t *testing.T) {
 				ResponseFormat: contracts.ResponseFormatPolicy{
 					Enabled:  true,
 					Strategy: "default",
-					Params: contracts.ResponseFormatParams{Type: "json_object"},
+					Params:   contracts.ResponseFormatParams{Type: "json_object"},
 				},
 				Streaming: contracts.StreamingPolicy{
 					Enabled:  true,
 					Strategy: "static_stream",
-					Params: contracts.StreamingParams{Stream: false},
+					Params:   contracts.StreamingParams{Stream: false},
 				},
 				Sampling: contracts.SamplingPolicy{
 					Enabled:  true,
@@ -128,7 +129,7 @@ func TestClientBuildsAndSendsProviderRequest(t *testing.T) {
 				Enabled:  true,
 				Strategy: "static_allowlist",
 				Params: contracts.ToolCatalogParams{
-					ToolIDs: []string{"list_dir"},
+					ToolIDs: []string{"list_dir", "init_plan"},
 				},
 			},
 			Serialization: contracts.ToolSerializationPolicy{
@@ -136,6 +137,15 @@ func TestClientBuildsAndSendsProviderRequest(t *testing.T) {
 				Strategy: "openai_function_tools",
 				Params: contracts.ToolSerializationParams{
 					IncludeDescriptions: true,
+				},
+			},
+		},
+		PlanTools: contracts.PlanToolContract{
+			PlanTool: contracts.PlanToolPolicy{
+				Enabled:  true,
+				Strategy: "default_plan_tools",
+				Params: contracts.PlanToolParams{
+					ToolIDs: []string{"init_plan"},
 				},
 			},
 		},
@@ -204,6 +214,10 @@ func TestClientBuildsAndSendsProviderRequest(t *testing.T) {
 	if !ok || lastMessage["content"] != "Answer with final text only." {
 		t.Fatalf("last message = %#v, want appended prompt asset", messages[2])
 	}
+	toolsPayload, ok := payload["tools"].([]any)
+	if !ok || len(toolsPayload) != 2 {
+		t.Fatalf("tools payload = %#v", payload["tools"])
+	}
 }
 
 func TestClientStreamsTypedTextAndReasoningEvents(t *testing.T) {
@@ -212,6 +226,7 @@ func TestClientStreamsTypedTextAndReasoningEvents(t *testing.T) {
 	client := provider.NewClient(
 		provider.NewPromptAssetExecutor(),
 		provider.NewRequestShapeExecutor(),
+		tools.NewPlanToolExecutor(),
 		tools.NewCatalogExecutor(),
 		tools.NewExecutionGate(),
 		provider.NewTransportExecutor(fakeDoer{
@@ -314,6 +329,7 @@ func TestClientReturnsProviderStatusError(t *testing.T) {
 	client := provider.NewClient(
 		provider.NewPromptAssetExecutor(),
 		provider.NewRequestShapeExecutor(),
+		tools.NewPlanToolExecutor(),
 		tools.NewCatalogExecutor(),
 		tools.NewExecutionGate(),
 		provider.NewTransportExecutor(fakeDoer{
@@ -353,7 +369,7 @@ func TestClientReturnsProviderStatusError(t *testing.T) {
 				Model: contracts.ModelPolicy{
 					Enabled:  true,
 					Strategy: "static_model",
-					Params: contracts.ModelParams{Model: "glm-4.6"},
+					Params:   contracts.ModelParams{Model: "glm-4.6"},
 				},
 				Messages: contracts.MessagePolicy{
 					Enabled:  true,
@@ -378,6 +394,7 @@ func TestClientRejectsProviderToolCallThroughExecutionGate(t *testing.T) {
 	client := provider.NewClient(
 		provider.NewPromptAssetExecutor(),
 		provider.NewRequestShapeExecutor(),
+		tools.NewPlanToolExecutor(),
 		tools.NewCatalogExecutor(),
 		tools.NewExecutionGate(),
 		provider.NewTransportExecutor(fakeDoer{
@@ -463,6 +480,109 @@ func TestClientRejectsProviderToolCallThroughExecutionGate(t *testing.T) {
 	}
 }
 
+func TestClientReturnsAllowedProviderToolCallsForRuntimeExecution(t *testing.T) {
+	t.Setenv("ZAI_API_KEY", "secret-token")
+
+	client := provider.NewClient(
+		provider.NewPromptAssetExecutor(),
+		provider.NewRequestShapeExecutor(),
+		tools.NewPlanToolExecutor(),
+		tools.NewCatalogExecutor(),
+		tools.NewExecutionGate(),
+		provider.NewTransportExecutor(fakeDoer{
+			do: func(req *http.Request) (*http.Response, error) {
+				return &http.Response{
+					StatusCode: http.StatusOK,
+					Header:     http.Header{"Content-Type": []string{"application/json"}},
+					Body: io.NopCloser(bytes.NewBufferString(`{
+  "id":"resp-tools-1",
+  "model":"glm-5-turbo",
+  "choices":[
+    {
+      "finish_reason":"tool_calls",
+      "message":{
+        "role":"assistant",
+        "content":"",
+        "tool_calls":[
+          {
+            "id":"call-1",
+            "function":{
+              "name":"init_plan",
+              "arguments":{"goal":"Refactor auth"}
+            }
+          }
+        ]
+      }
+    }
+  ],
+  "usage":{"prompt_tokens":8,"completion_tokens":2,"total_tokens":10}
+}`)),
+				}, nil
+			},
+		}),
+	)
+
+	result, err := client.Execute(context.Background(), contracts.ResolvedContracts{
+		ProviderRequest: contracts.ProviderRequestContract{
+			Transport: contracts.TransportContract{
+				Endpoint: contracts.EndpointPolicy{
+					Enabled:  true,
+					Strategy: "static",
+					Params: contracts.EndpointParams{
+						BaseURL: "https://api.z.ai",
+						Path:    "/api/paas/v4/chat/completions",
+						Method:  http.MethodPost,
+					},
+				},
+				Auth: contracts.AuthPolicy{
+					Enabled:  true,
+					Strategy: "bearer_token",
+					Params: contracts.AuthParams{
+						Header:      "Authorization",
+						Prefix:      "Bearer",
+						ValueEnvVar: "ZAI_API_KEY",
+					},
+				},
+			},
+			RequestShape: contracts.RequestShapeContract{
+				Model:    contracts.ModelPolicy{Enabled: true, Strategy: "static_model", Params: contracts.ModelParams{Model: "glm-5-turbo"}},
+				Messages: contracts.MessagePolicy{Enabled: true, Strategy: "raw_messages"},
+			},
+		},
+		ToolExecution: contracts.ToolExecutionContract{
+			Access: contracts.ToolAccessPolicy{
+				Enabled:  true,
+				Strategy: "static_allowlist",
+				Params: contracts.ToolAccessParams{
+					ToolIDs: []string{"init_plan"},
+				},
+			},
+			Approval: contracts.ToolApprovalPolicy{
+				Enabled:  true,
+				Strategy: "always_allow",
+			},
+			Sandbox: contracts.ToolSandboxPolicy{
+				Enabled:  true,
+				Strategy: "default_runtime",
+			},
+		},
+	}, provider.ClientInput{
+		Messages: []contracts.Message{{Role: "user", Content: "plan this"}},
+	})
+	if err != nil {
+		t.Fatalf("Execute returned error: %v", err)
+	}
+	if len(result.Provider.ToolCalls) != 1 {
+		t.Fatalf("provider tool calls len = %d, want 1", len(result.Provider.ToolCalls))
+	}
+	if result.Provider.ToolCalls[0].Name != "init_plan" {
+		t.Fatalf("tool call name = %q, want init_plan", result.Provider.ToolCalls[0].Name)
+	}
+	if len(result.ToolDecisions) != 1 || !result.ToolDecisions[0].Decision.Allowed {
+		t.Fatalf("tool decisions = %#v, want one allowed decision", result.ToolDecisions)
+	}
+}
+
 func TestClientStreamsOpenAICompatibleResponse(t *testing.T) {
 	t.Setenv("ZAI_API_KEY", "secret-token")
 
@@ -470,6 +590,7 @@ func TestClientStreamsOpenAICompatibleResponse(t *testing.T) {
 	client := provider.NewClient(
 		provider.NewPromptAssetExecutor(),
 		provider.NewRequestShapeExecutor(),
+		tools.NewPlanToolExecutor(),
 		tools.NewCatalogExecutor(),
 		tools.NewExecutionGate(),
 		provider.NewTransportExecutor(fakeDoer{
@@ -516,7 +637,7 @@ func TestClientStreamsOpenAICompatibleResponse(t *testing.T) {
 				Model: contracts.ModelPolicy{
 					Enabled:  true,
 					Strategy: "static_model",
-					Params: contracts.ModelParams{Model: "glm-5-turbo"},
+					Params:   contracts.ModelParams{Model: "glm-5-turbo"},
 				},
 				Messages:  contracts.MessagePolicy{Enabled: true, Strategy: "raw_messages"},
 				Tools:     contracts.ToolPolicy{Enabled: true, Strategy: "tools_inline"},

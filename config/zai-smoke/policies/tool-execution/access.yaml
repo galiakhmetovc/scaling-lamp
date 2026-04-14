@@ -3,6 +3,11 @@ version: v1
 id: tool-access-zai-smoke
 spec:
   enabled: true
-  strategy: deny_all
+  strategy: static_allowlist
   params:
-    tool_ids: []
+    tool_ids:
+      - init_plan
+      - add_task
+      - set_task_status
+      - add_task_note
+      - edit_task

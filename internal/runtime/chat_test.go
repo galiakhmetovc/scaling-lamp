@@ -3,6 +3,7 @@ package runtime_test
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"io"
 	"net/http"
 	"testing"
@@ -37,11 +38,11 @@ func TestAgentChatTurnAndResumeSession(t *testing.T) {
 
 	call := 0
 	agent := &runtime.Agent{
-		Config:      chatRuntimeConfigForTest(),
-		Contracts:   chatContractsForTest(),
-		PromptAssets: provider.NewPromptAssetExecutor(),
-		RequestShape: provider.NewRequestShapeExecutor(),
-		ToolCatalog:  tools.NewCatalogExecutor(),
+		Config:        chatRuntimeConfigForTest(),
+		Contracts:     chatContractsForTest(),
+		PromptAssets:  provider.NewPromptAssetExecutor(),
+		RequestShape:  provider.NewRequestShapeExecutor(),
+		ToolCatalog:   tools.NewCatalogExecutor(),
 		ToolExecution: tools.NewExecutionGate(),
 		Transport: provider.NewTransportExecutor(fakeDoer{
 			do: func(req *http.Request) (*http.Response, error) {
@@ -66,7 +67,7 @@ func TestAgentChatTurnAndResumeSession(t *testing.T) {
 		Now:         func() time.Time { return clock },
 		NewID:       nextID,
 	}
-	agent.ProviderClient = provider.NewClient(agent.PromptAssets, agent.RequestShape, agent.ToolCatalog, agent.ToolExecution, agent.Transport)
+	agent.ProviderClient = provider.NewClient(agent.PromptAssets, agent.RequestShape, tools.NewPlanToolExecutor(), agent.ToolCatalog, agent.ToolExecution, agent.Transport)
 
 	session, err := agent.NewChatSession()
 	if err != nil {
@@ -150,6 +151,142 @@ func TestAgentChatTurnAndResumeSession(t *testing.T) {
 	}
 }
 
+func TestAgentChatTurnExecutesPlanToolCallsAndReturnsFinalAssistantMessage(t *testing.T) {
+	t.Setenv("TEAMD_ZAI_API_KEY", "secret-token")
+
+	clock := time.Date(2026, 4, 14, 18, 0, 0, 0, time.UTC)
+	idValues := []string{
+		"session-chat-1",
+		"run-chat-1", "evt-session-1", "evt-msg-user-1", "evt-run-start-1",
+		"evt-provider-request-1", "evt-transport-1", "plan-1", "evt-plan-create-1",
+		"evt-provider-request-2", "evt-transport-2", "evt-msg-assistant-1", "evt-run-complete-1",
+	}
+	nextID := func(prefix string) string {
+		if len(idValues) == 0 {
+			t.Fatalf("unexpected id request for prefix %q", prefix)
+		}
+		id := idValues[0]
+		idValues = idValues[1:]
+		return id
+	}
+
+	call := 0
+	var secondRequestBody map[string]any
+	agent := &runtime.Agent{
+		Config:        chatRuntimeConfigForTest(),
+		Contracts:     chatContractsForToolLoopTest(),
+		PromptAssets:  provider.NewPromptAssetExecutor(),
+		RequestShape:  provider.NewRequestShapeExecutor(),
+		PlanTools:     tools.NewPlanToolExecutor(),
+		ToolCatalog:   tools.NewCatalogExecutor(),
+		ToolExecution: tools.NewExecutionGate(),
+		Transport: provider.NewTransportExecutor(fakeDoer{
+			do: func(req *http.Request) (*http.Response, error) {
+				call++
+				if call == 2 {
+					defer req.Body.Close()
+					if err := json.NewDecoder(req.Body).Decode(&secondRequestBody); err != nil {
+						t.Fatalf("decode second request body: %v", err)
+					}
+				}
+				if call == 1 {
+					return &http.Response{
+						StatusCode: http.StatusOK,
+						Header:     http.Header{"Content-Type": []string{"application/json"}},
+						Body: io.NopCloser(bytes.NewBufferString(`{
+  "id":"resp-tools-1",
+  "model":"glm-5-turbo",
+  "choices":[
+    {
+      "finish_reason":"tool_calls",
+      "message":{
+        "role":"assistant",
+        "content":"",
+        "tool_calls":[
+          {
+            "id":"call-1",
+            "function":{
+              "name":"init_plan",
+              "arguments":{"goal":"Refactor auth"}
+            }
+          }
+        ]
+      }
+    }
+  ],
+  "usage":{"prompt_tokens":8,"completion_tokens":2,"total_tokens":10}
+}`)),
+					}, nil
+				}
+				return &http.Response{
+					StatusCode: http.StatusOK,
+					Header:     http.Header{"Content-Type": []string{"application/json"}},
+					Body: io.NopCloser(bytes.NewBufferString(`{
+  "id":"resp-final-1",
+  "model":"glm-5-turbo",
+  "choices":[
+    {
+      "finish_reason":"stop",
+      "message":{"role":"assistant","content":"Plan initialized."}
+    }
+  ],
+  "usage":{"prompt_tokens":12,"completion_tokens":4,"total_tokens":16}
+}`)),
+				}, nil
+			},
+		}),
+		EventLog: runtime.NewInMemoryEventLog(),
+		Projections: []projections.Projection{
+			projections.NewSessionProjection(),
+			projections.NewRunProjection(),
+			projections.NewTranscriptProjection(),
+			projections.NewActivePlanProjection(),
+			projections.NewPlanHeadProjection(),
+			projections.NewPlanArchiveProjection(),
+		},
+		Now:   func() time.Time { return clock },
+		NewID: nextID,
+	}
+	agent.ProviderClient = provider.NewClient(agent.PromptAssets, agent.RequestShape, agent.PlanTools, agent.ToolCatalog, agent.ToolExecution, agent.Transport)
+
+	session, err := agent.NewChatSession()
+	if err != nil {
+		t.Fatalf("NewChatSession returned error: %v", err)
+	}
+	result, err := agent.ChatTurn(context.Background(), session, runtime.ChatTurnInput{Prompt: "Plan auth refactor"})
+	if err != nil {
+		t.Fatalf("ChatTurn returned error: %v", err)
+	}
+	if result.Provider.Message.Content != "Plan initialized." {
+		t.Fatalf("final response = %q, want Plan initialized.", result.Provider.Message.Content)
+	}
+	if call != 2 {
+		t.Fatalf("transport call count = %d, want 2", call)
+	}
+	if secondRequestBody == nil {
+		t.Fatal("second request body is nil")
+	}
+	messages, ok := secondRequestBody["messages"].([]any)
+	if !ok || len(messages) < 3 {
+		t.Fatalf("second request messages = %#v", secondRequestBody["messages"])
+	}
+	lastMessage, ok := messages[len(messages)-1].(map[string]any)
+	if !ok || lastMessage["role"] != "tool" {
+		t.Fatalf("last message = %#v, want tool message", messages[len(messages)-1])
+	}
+
+	activePlan := findActivePlanProjection(t, agent.Projections)
+	if activePlan.Snapshot().Plan.Goal != "Refactor auth" {
+		t.Fatalf("active plan goal = %q, want Refactor auth", activePlan.Snapshot().Plan.Goal)
+	}
+	if len(session.Messages) != 2 {
+		t.Fatalf("session messages len = %d, want 2", len(session.Messages))
+	}
+	if session.Messages[1].Content != "Plan initialized." {
+		t.Fatalf("assistant session message = %#v", session.Messages[1])
+	}
+}
+
 func chatRuntimeConfigForTest() config.AgentConfig {
 	return config.AgentConfig{ID: "agent-chat-test"}
 }
@@ -189,9 +326,9 @@ func chatContractsForTest() contracts.ResolvedContracts {
 		PromptAssets: contracts.PromptAssetsContract{
 			ID: "prompt-assets-chat",
 			PromptAsset: contracts.PromptAssetPolicy{
-				Enabled: true,
+				Enabled:  true,
 				Strategy: "inline_assets",
-				Params: contracts.PromptAssetParams{Assets: []contracts.PromptAsset{}},
+				Params:   contracts.PromptAssetParams{Assets: []contracts.PromptAsset{}},
 			},
 		},
 		ProviderTrace: contracts.ProviderTraceContract{
@@ -200,10 +337,78 @@ func chatContractsForTest() contracts.ResolvedContracts {
 				Enabled:  true,
 				Strategy: "inline_request",
 				Params: contracts.ProviderTraceParams{
-					IncludeRawBody:       true,
+					IncludeRawBody:        true,
 					IncludeDecodedPayload: true,
 				},
 			},
 		},
 	}
+}
+
+func chatContractsForToolLoopTest() contracts.ResolvedContracts {
+	out := chatContractsForTest()
+	out.ProviderRequest.RequestShape.Streaming = contracts.StreamingPolicy{
+		Enabled:  true,
+		Strategy: "static_stream",
+		Params: contracts.StreamingParams{
+			Stream: false,
+		},
+	}
+	out.Tools = contracts.ToolContract{
+		Catalog: contracts.ToolCatalogPolicy{
+			Enabled:  true,
+			Strategy: "static_allowlist",
+			Params: contracts.ToolCatalogParams{
+				ToolIDs:    []string{"init_plan"},
+				AllowEmpty: false,
+				Dedupe:     true,
+			},
+		},
+		Serialization: contracts.ToolSerializationPolicy{
+			Enabled:  true,
+			Strategy: "openai_function_tools",
+			Params: contracts.ToolSerializationParams{
+				IncludeDescriptions: true,
+			},
+		},
+	}
+	out.PlanTools = contracts.PlanToolContract{
+		PlanTool: contracts.PlanToolPolicy{
+			Enabled:  true,
+			Strategy: "default_plan_tools",
+			Params: contracts.PlanToolParams{
+				ToolIDs: []string{"init_plan"},
+			},
+		},
+	}
+	out.ToolExecution = contracts.ToolExecutionContract{
+		Access: contracts.ToolAccessPolicy{
+			Enabled:  true,
+			Strategy: "static_allowlist",
+			Params: contracts.ToolAccessParams{
+				ToolIDs: []string{"init_plan"},
+			},
+		},
+		Approval: contracts.ToolApprovalPolicy{
+			Enabled:  true,
+			Strategy: "always_allow",
+		},
+		Sandbox: contracts.ToolSandboxPolicy{
+			Enabled:  true,
+			Strategy: "default_runtime",
+		},
+	}
+	return out
+}
+
+func findActivePlanProjection(t *testing.T, projectionsList []projections.Projection) *projections.ActivePlanProjection {
+	t.Helper()
+	for _, projection := range projectionsList {
+		active, ok := projection.(*projections.ActivePlanProjection)
+		if ok {
+			return active
+		}
+	}
+	t.Fatal("active plan projection not found")
+	return nil
 }

@@ -5,32 +5,33 @@ import "fmt"
 type Family string
 
 const (
-	FamilyEndpoint       Family = "endpoint"
-	FamilyAuth           Family = "auth"
-	FamilyRetry          Family = "retry"
-	FamilyTimeout        Family = "timeout"
-	FamilyOffload        Family = "offload"
-	FamilyModel          Family = "model"
-	FamilyMessage        Family = "message"
-	FamilyTool           Family = "tool"
-	FamilyResponseFormat Family = "response_format"
-	FamilyStreaming      Family = "streaming"
-	FamilySampling       Family = "sampling"
-	FamilyPromptAsset    Family = "prompt_asset"
-	FamilySystemPrompt   Family = "system_prompt"
-	FamilySessionHead    Family = "session_head"
-	FamilyToolCatalog    Family = "tool_catalog"
+	FamilyEndpoint          Family = "endpoint"
+	FamilyAuth              Family = "auth"
+	FamilyRetry             Family = "retry"
+	FamilyTimeout           Family = "timeout"
+	FamilyOffload           Family = "offload"
+	FamilyModel             Family = "model"
+	FamilyMessage           Family = "message"
+	FamilyTool              Family = "tool"
+	FamilyResponseFormat    Family = "response_format"
+	FamilyStreaming         Family = "streaming"
+	FamilySampling          Family = "sampling"
+	FamilyPromptAsset       Family = "prompt_asset"
+	FamilySystemPrompt      Family = "system_prompt"
+	FamilySessionHead       Family = "session_head"
+	FamilyToolCatalog       Family = "tool_catalog"
 	FamilyToolSerialization Family = "tool_serialization"
-	FamilyToolAccess     Family = "tool_access"
-	FamilyToolApproval   Family = "tool_approval"
-	FamilyToolSandbox    Family = "tool_sandbox"
-	FamilyProviderTrace  Family = "provider_trace"
-	FamilyChatInput      Family = "chat_input"
-	FamilyChatSubmit     Family = "chat_submit"
-	FamilyChatOutput     Family = "chat_output"
-	FamilyChatStatus     Family = "chat_status"
-	FamilyChatCommand    Family = "chat_command"
-	FamilyChatResume     Family = "chat_resume"
+	FamilyToolAccess        Family = "tool_access"
+	FamilyToolApproval      Family = "tool_approval"
+	FamilyToolSandbox       Family = "tool_sandbox"
+	FamilyPlanTool          Family = "plan_tool"
+	FamilyProviderTrace     Family = "provider_trace"
+	FamilyChatInput         Family = "chat_input"
+	FamilyChatSubmit        Family = "chat_submit"
+	FamilyChatOutput        Family = "chat_output"
+	FamilyChatStatus        Family = "chat_status"
+	FamilyChatCommand       Family = "chat_command"
+	FamilyChatResume        Family = "chat_resume"
 )
 
 type Type struct {
@@ -192,6 +193,13 @@ func NewBuiltInRegistry() *Registry {
 			"read_only",
 			"workspace_write",
 			"deny_exec",
+		),
+	})
+	registry.Register(Type{
+		Kind:   "PlanToolPolicyConfig",
+		Family: FamilyPlanTool,
+		Strategy: setOf(
+			"default_plan_tools",
 		),
 	})
 	registry.Register(Type{

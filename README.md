@@ -55,4 +55,11 @@ Current prompt and tool baseline:
 - session head is assembled from projections and placed at `messages[0]`
 - visible tools are selected through `ToolContract`
 - provider-emitted tool calls are gated through `ToolExecutionContract`
-- actual allowed tool execution is not implemented yet; allowed calls fail honestly after gating
+- current built-in allowed tool execution supports the internal plan-tools domain
+- plan-management state is event-sourced and projected back into session head
+
+Current plan-tools docs:
+
+- `docs/clean-room-plan-tools.md`
+- `docs/superpowers/specs/2026-04-14-plan-tools-design.md`
+- `docs/superpowers/plans/2026-04-14-plan-tools-implementation.md`

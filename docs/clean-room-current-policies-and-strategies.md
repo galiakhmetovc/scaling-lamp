@@ -629,13 +629,43 @@ Current implemented strategies:
 
 Important current limitation:
 
-- tool-call execution runtime is not implemented yet
 - current clean-room runtime already parses provider-emitted tool calls and runs them through `ToolExecutionContract`
 - denied calls fail immediately
 - approval-required calls fail immediately with an approval-needed error
-- even allowed calls currently fail honestly with “execution path is not implemented yet”
+- allowed plan-tool calls are executed through the internal plan-domain service
+- non-plan tool backends are still not implemented
 
-## 11. ProviderTrace Contract
+## 11. PlanTool Contract
+
+`PlanToolContract` answers:
+
+- which built-in internal plan-management tools exist at all
+- which of those definitions are available to the general `ToolContract`
+
+### 11.1 PlanToolPolicy
+
+Responsibility:
+
+- build the runtime definitions for internal planning tools
+
+Supported params:
+
+- `tool_ids`
+
+Current implemented strategies:
+
+- `default_plan_tools`
+  - exposes built-in internal planning tools:
+    - `init_plan`
+    - `add_task`
+    - `set_task_status`
+    - `add_task_note`
+    - `edit_task`
+  - current schemas also support:
+    - `add_task.depends_on[]`
+    - `edit_task.new_depends_on[]`
+
+## 12. ProviderTrace Contract
 
 `ProviderTraceContract` answers:
 
@@ -643,7 +673,7 @@ Important current limitation:
 - should raw assembled request JSON be kept
 - should decoded request payload be kept inline in the event
 
-### 8.1 ProviderTracePolicy
+### 12.1 ProviderTracePolicy
 
 Responsibility:
 
@@ -665,7 +695,7 @@ Current runtime event:
 
 - `provider.request.captured`
 
-## 12. Current Built-In Strategy Registry
+## 13. Current Built-In Strategy Registry
 
 These are the current built-in policy kinds and allowed strategies validated during contract resolution:
 
@@ -707,6 +737,8 @@ These are the current built-in policy kinds and allowed strategies validated dur
   - `static_allowlist`
 - `ToolSerializationPolicyConfig`
   - `openai_function_tools`
+- `PlanToolPolicyConfig`
+  - `default_plan_tools`
 - `ToolAccessPolicyConfig`
   - `static_allowlist`
   - `deny_all`

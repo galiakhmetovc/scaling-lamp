@@ -1,9 +1,9 @@
-kind: ToolCatalogPolicyConfig
+kind: PlanToolPolicyConfig
 version: v1
-id: tool-catalog-zai-smoke
+id: plan-tools-zai-smoke
 spec:
   enabled: true
-  strategy: static_allowlist
+  strategy: default_plan_tools
   params:
     tool_ids:
       - init_plan
@@ -11,5 +11,3 @@ spec:
       - set_task_status
       - add_task_note
       - edit_task
-    allow_empty: false
-    dedupe: true

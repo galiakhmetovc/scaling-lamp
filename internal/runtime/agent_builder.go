@@ -21,6 +21,7 @@ type Agent struct {
 	PromptAssets    *provider.PromptAssetExecutor
 	Transport       *provider.TransportExecutor
 	RequestShape    *provider.RequestShapeExecutor
+	PlanTools       *tools.PlanToolExecutor
 	ToolCatalog     *tools.CatalogExecutor
 	ToolExecution   *tools.ExecutionGate
 	ProviderClient  *provider.Client
@@ -113,6 +114,10 @@ func BuildAgent(configPath string) (*Agent, error) {
 	if toolCatalogName == "" {
 		toolCatalogName = "tool_catalog_default"
 	}
+	planToolExecutor, err := componentRegistry.BuildPlanToolExecutor("plan_tool_default")
+	if err != nil {
+		return nil, fmt.Errorf("build plan tool executor: %w", err)
+	}
 	toolCatalogExecutor, err := componentRegistry.BuildToolCatalogExecutor(toolCatalogName)
 	if err != nil {
 		return nil, fmt.Errorf("build tool catalog executor: %w", err)
@@ -129,7 +134,7 @@ func BuildAgent(configPath string) (*Agent, error) {
 	if err != nil {
 		return nil, fmt.Errorf("build prompt-asset executor: %w", err)
 	}
-	providerClient, err := componentRegistry.BuildProviderClient(cfg.Spec.Runtime.ProviderClient, promptAssetExecutor, requestShapeExecutor, toolCatalogExecutor, toolExecutionGate, transportExecutor)
+	providerClient, err := componentRegistry.BuildProviderClient(cfg.Spec.Runtime.ProviderClient, promptAssetExecutor, requestShapeExecutor, planToolExecutor, toolCatalogExecutor, toolExecutionGate, transportExecutor)
 	if err != nil {
 		return nil, fmt.Errorf("build provider client: %w", err)
 	}
@@ -141,6 +146,7 @@ func BuildAgent(configPath string) (*Agent, error) {
 		PromptAssets:    promptAssetExecutor,
 		Transport:       transportExecutor,
 		RequestShape:    requestShapeExecutor,
+		PlanTools:       planToolExecutor,
 		ToolCatalog:     toolCatalogExecutor,
 		ToolExecution:   toolExecutionGate,
 		ProviderClient:  providerClient,

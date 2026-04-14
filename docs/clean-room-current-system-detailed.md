@@ -699,8 +699,9 @@ Current shipped config deliberately exposes no tools:
 
 That means:
 
-- outbound request bodies currently include no tools for `zai-smoke`
-- if a provider response somehow still contains tool calls, the execution gate denies them
+- outbound request bodies for `zai-smoke` now include the built-in plan tools
+- provider-emitted plan tool calls can pass through the gate and be executed against the internal plan domain
+- non-plan tools still have no execution backend today
 
 ## 11. Smoke Runtime Path
 
@@ -718,7 +719,7 @@ Agent.Smoke(prompt)
   -> create session if projection does not already show one
   -> record session.created
   -> record run.started
-  -> ProviderClient.Execute(...)
+  -> execute provider/tool loop
   -> record transport.attempt.completed for each transport attempt
   -> if error:
        record run.failed
@@ -736,7 +737,7 @@ flowchart TD
     C -- yes --> E[skip bootstrap]
     D --> F[record run.started]
     E --> F
-    F --> G[ProviderClient.Execute]
+    F --> G[execute provider/tool loop]
     G --> H{error?}
     H -- yes --> I[record run.failed]
     H -- no --> J[record run.completed]
@@ -770,14 +771,24 @@ Current aggregate types:
 
 - `session`
 - `run`
+- `plan`
+- `plan_task`
 
 Current event kinds:
 
 - `session.created`
+- `message.recorded`
 - `run.started`
 - `provider.request.captured`
+- `transport.attempt.completed`
 - `run.completed`
 - `run.failed`
+- `plan.created`
+- `plan.archived`
+- `task.added`
+- `task.status_changed`
+- `task.note_added`
+- `task.edited`
 
 Current event envelope fields:
 

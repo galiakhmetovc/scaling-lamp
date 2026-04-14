@@ -36,6 +36,7 @@ This document describes the first runnable `z.ai` smoke path in `rewrite/clean-r
 2. create a smoke session if one does not already exist
 3. record run start event
 4. send one user message through prompt assets, request-shape, transport, and provider parsing
+5. if the provider emits built-in plan tool calls, execute them through the internal plan domain and continue the provider loop
 5. record run completion or failure event
 6. print the assistant text to stdout
 

@@ -1,0 +1,5 @@
+kind: PlanToolContractConfig
+version: v1
+id: plan-tools-zai-smoke
+spec:
+  plan_tool_policy_path: ../policies/tools/plan-tools-catalog.yaml

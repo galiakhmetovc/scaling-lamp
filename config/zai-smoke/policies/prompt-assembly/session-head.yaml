@@ -10,4 +10,4 @@ spec:
     include_session_id: true
     include_last_user_message: true
     include_last_assistant_message: true
-    max_items: 4
+    max_items: 8

@@ -20,19 +20,20 @@ type ClientInput struct {
 }
 
 type ClientResult struct {
-	RequestBody      []byte
-	Transport        Response
-	Provider         ProviderResponse
+	RequestBody       []byte
+	Transport         Response
+	Provider          ProviderResponse
 	TransportAttempts []AttemptTrace
-	ToolDecisions    []ToolDecision
+	ToolDecisions     []ToolDecision
 }
 
 type Client struct {
-	PromptAssets *PromptAssetExecutor
-	RequestShape *RequestShapeExecutor
-	ToolCatalog  *itools.CatalogExecutor
+	PromptAssets  *PromptAssetExecutor
+	RequestShape  *RequestShapeExecutor
+	PlanTools     *itools.PlanToolExecutor
+	ToolCatalog   *itools.CatalogExecutor
 	ToolExecution *itools.ExecutionGate
-	Transport    *TransportExecutor
+	Transport     *TransportExecutor
 }
 
 type Usage struct {
@@ -61,13 +62,14 @@ type ToolDecision struct {
 	Decision itools.ExecutionDecision
 }
 
-func NewClient(promptAssets *PromptAssetExecutor, requestShape *RequestShapeExecutor, toolCatalog *itools.CatalogExecutor, toolExecution *itools.ExecutionGate, transport *TransportExecutor) *Client {
+func NewClient(promptAssets *PromptAssetExecutor, requestShape *RequestShapeExecutor, planTools *itools.PlanToolExecutor, toolCatalog *itools.CatalogExecutor, toolExecution *itools.ExecutionGate, transport *TransportExecutor) *Client {
 	return &Client{
-		PromptAssets: promptAssets,
-		RequestShape: requestShape,
-		ToolCatalog:  toolCatalog,
+		PromptAssets:  promptAssets,
+		RequestShape:  requestShape,
+		PlanTools:     planTools,
+		ToolCatalog:   toolCatalog,
 		ToolExecution: toolExecution,
-		Transport:    transport,
+		Transport:     transport,
 	}
 }
 
@@ -80,6 +82,9 @@ func (c *Client) Execute(ctx context.Context, contractSet contracts.ResolvedCont
 	}
 	if c.RequestShape == nil {
 		return ClientResult{}, fmt.Errorf("provider client request-shape executor is nil")
+	}
+	if c.PlanTools == nil {
+		return ClientResult{}, fmt.Errorf("provider client plan tool executor is nil")
 	}
 	if c.ToolCatalog == nil {
 		return ClientResult{}, fmt.Errorf("provider client tool catalog executor is nil")
@@ -98,8 +103,15 @@ func (c *Client) Execute(ctx context.Context, contractSet contracts.ResolvedCont
 		return ClientResult{}, fmt.Errorf("build prompt assets: %w", err)
 	}
 
+	planTools, err := c.PlanTools.Build(contractSet.PlanTools)
+	if err != nil {
+		return ClientResult{}, fmt.Errorf("build plan tools: %w", err)
+	}
+	availableTools := make([]itools.Definition, 0, len(planTools)+len(input.Tools))
+	availableTools = append(availableTools, planTools...)
+	availableTools = append(availableTools, input.Tools...)
 	visibleTools, err := c.ToolCatalog.Build(contractSet.Tools, itools.CatalogInput{
-		Available: input.Tools,
+		Available: availableTools,
 	})
 	if err != nil {
 		return ClientResult{}, fmt.Errorf("build visible tools: %w", err)
@@ -160,11 +172,11 @@ func (c *Client) Execute(ctx context.Context, contractSet contracts.ResolvedCont
 	decisions, err := c.evaluateToolCalls(contractSet.ToolExecution, parsed.ToolCalls)
 	if err != nil {
 		return ClientResult{
-			RequestBody:        requestBody,
-			Transport:          response,
-			Provider:           parsed,
-			TransportAttempts:  attempts,
-			ToolDecisions:      decisions,
+			RequestBody:       requestBody,
+			Transport:         response,
+			Provider:          parsed,
+			TransportAttempts: attempts,
+			ToolDecisions:     decisions,
 		}, err
 	}
 
@@ -194,7 +206,6 @@ func (c *Client) evaluateToolCalls(contract contracts.ToolExecutionContract, cal
 		if decision.ApprovalRequired {
 			return out, fmt.Errorf("tool call %q requires approval", call.Name)
 		}
-		return out, fmt.Errorf("tool call %q allowed but execution path is not implemented yet", call.Name)
 	}
 	return out, nil
 }
@@ -206,10 +217,10 @@ func applyProviderStreamChunk(out *ProviderResponse, data []byte, onEvent func(S
 		Choices []struct {
 			FinishReason string `json:"finish_reason"`
 			Delta        struct {
-				Role    string `json:"role"`
-				Content string `json:"content"`
+				Role             string `json:"role"`
+				Content          string `json:"content"`
 				ReasoningContent string `json:"reasoning_content"`
-				Reasoning string `json:"reasoning"`
+				Reasoning        string `json:"reasoning"`
 			} `json:"delta"`
 			Message struct {
 				Role    string `json:"role"`
@@ -217,7 +228,7 @@ func applyProviderStreamChunk(out *ProviderResponse, data []byte, onEvent func(S
 			} `json:"message"`
 		} `json:"choices"`
 		OutputText string `json:"output_text"`
-		Usage struct {
+		Usage      struct {
 			PromptTokens     int `json:"prompt_tokens"`
 			CompletionTokens int `json:"completion_tokens"`
 			TotalTokens      int `json:"total_tokens"`
@@ -314,8 +325,8 @@ func parseProviderResponse(response Response) (ProviderResponse, error) {
 		Choices []struct {
 			FinishReason string `json:"finish_reason"`
 			Message      struct {
-				Role    string `json:"role"`
-				Content string `json:"content"`
+				Role      string `json:"role"`
+				Content   string `json:"content"`
 				ToolCalls []struct {
 					ID       string `json:"id"`
 					Function struct {

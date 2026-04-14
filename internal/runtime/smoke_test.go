@@ -34,11 +34,11 @@ func TestAgentSmokeExecutesProviderClientAndRecordsEvents(t *testing.T) {
 	}
 
 	agent := &runtime.Agent{
-		Config: runtimeConfigForSmokeTest(),
-		Contracts: smokeContractsForTest(),
-		PromptAssets: provider.NewPromptAssetExecutor(),
-		RequestShape: provider.NewRequestShapeExecutor(),
-		ToolCatalog:  tools.NewCatalogExecutor(),
+		Config:        runtimeConfigForSmokeTest(),
+		Contracts:     smokeContractsForTest(),
+		PromptAssets:  provider.NewPromptAssetExecutor(),
+		RequestShape:  provider.NewRequestShapeExecutor(),
+		ToolCatalog:   tools.NewCatalogExecutor(),
 		ToolExecution: tools.NewExecutionGate(),
 		Transport: provider.NewTransportExecutor(fakeDoer{
 			do: func(req *http.Request) (*http.Response, error) {
@@ -59,7 +59,7 @@ func TestAgentSmokeExecutesProviderClientAndRecordsEvents(t *testing.T) {
 		Now:         func() time.Time { return clock },
 		NewID:       nextID,
 	}
-	agent.ProviderClient = provider.NewClient(agent.PromptAssets, agent.RequestShape, agent.ToolCatalog, agent.ToolExecution, agent.Transport)
+	agent.ProviderClient = provider.NewClient(agent.PromptAssets, agent.RequestShape, tools.NewPlanToolExecutor(), agent.ToolCatalog, agent.ToolExecution, agent.Transport)
 
 	result, err := agent.Smoke(context.Background(), runtime.SmokeInput{Prompt: "ping"})
 	if err != nil {
@@ -164,7 +164,7 @@ func TestAgentSmokeWithPromptAssemblyStillIncludesCurrentPromptInOutboundRequest
 		EventLog:    runtime.NewInMemoryEventLog(),
 		Projections: []projections.Projection{projections.NewSessionProjection(), projections.NewRunProjection(), projections.NewTranscriptProjection()},
 	}
-	agent.ProviderClient = provider.NewClient(agent.PromptAssets, agent.RequestShape, agent.ToolCatalog, agent.ToolExecution, agent.Transport)
+	agent.ProviderClient = provider.NewClient(agent.PromptAssets, agent.RequestShape, tools.NewPlanToolExecutor(), agent.ToolCatalog, agent.ToolExecution, agent.Transport)
 
 	if _, err := agent.Smoke(context.Background(), runtime.SmokeInput{Prompt: "ping"}); err != nil {
 		t.Fatalf("Smoke returned error: %v", err)
@@ -198,38 +198,38 @@ func smokeContractsForTest() contracts.ResolvedContracts {
 			Transport: contracts.TransportContract{
 				ID: "transport-smoke",
 				Endpoint: contracts.EndpointPolicy{
-					Enabled: true,
+					Enabled:  true,
 					Strategy: "static",
 					Params: contracts.EndpointParams{
 						BaseURL: "https://api.z.ai/api/coding/paas/v4",
-						Path: "/chat/completions",
-						Method: http.MethodPost,
+						Path:    "/chat/completions",
+						Method:  http.MethodPost,
 					},
 				},
 				Auth: contracts.AuthPolicy{
-					Enabled: true,
+					Enabled:  true,
 					Strategy: "bearer_token",
 					Params: contracts.AuthParams{
-						Header: "Authorization",
-						Prefix: "Bearer",
+						Header:      "Authorization",
+						Prefix:      "Bearer",
 						ValueEnvVar: "TEAMD_ZAI_API_KEY",
 					},
 				},
 			},
 			RequestShape: contracts.RequestShapeContract{
-				ID: "request-shape-smoke",
-				Model: contracts.ModelPolicy{Enabled: true, Strategy: "static_model", Params: contracts.ModelParams{Model: "glm-5-turbo"}},
-				Messages: contracts.MessagePolicy{Enabled: true, Strategy: "raw_messages"},
-				Tools: contracts.ToolPolicy{Enabled: true, Strategy: "tools_inline"},
+				ID:        "request-shape-smoke",
+				Model:     contracts.ModelPolicy{Enabled: true, Strategy: "static_model", Params: contracts.ModelParams{Model: "glm-5-turbo"}},
+				Messages:  contracts.MessagePolicy{Enabled: true, Strategy: "raw_messages"},
+				Tools:     contracts.ToolPolicy{Enabled: true, Strategy: "tools_inline"},
 				Streaming: contracts.StreamingPolicy{Enabled: true, Strategy: "static_stream", Params: contracts.StreamingParams{Stream: false}},
 			},
 		},
 		PromptAssets: contracts.PromptAssetsContract{
 			ID: "prompt-assets-smoke",
 			PromptAsset: contracts.PromptAssetPolicy{
-				Enabled: true,
+				Enabled:  true,
 				Strategy: "inline_assets",
-				Params: contracts.PromptAssetParams{Assets: []contracts.PromptAsset{}},
+				Params:   contracts.PromptAssetParams{Assets: []contracts.PromptAsset{}},
 			},
 		},
 		ProviderTrace: contracts.ProviderTraceContract{
@@ -238,7 +238,7 @@ func smokeContractsForTest() contracts.ResolvedContracts {
 				Enabled:  true,
 				Strategy: "inline_request",
 				Params: contracts.ProviderTraceParams{
-					IncludeRawBody:       true,
+					IncludeRawBody:        true,
 					IncludeDecodedPayload: true,
 				},
 			},
