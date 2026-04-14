@@ -113,12 +113,13 @@ First runtime builder shell.
 Current responsibility:
 - load root config
 - create in-memory event log
-- validate transport contract module kind
+- validate loaded contract and policy module kinds
 - assemble projections through a registry
 - return one built agent instance
 
 Current limitation:
-- no module registry
+- module registry population is still hardcoded inside the builder
+- projection set is still chosen in the builder instead of config-driven composition
 - no contract resolution
 - no executor wiring
 
@@ -134,16 +135,18 @@ Current limitation:
 
 These are known temporary shortcuts and should be removed in the next slices.
 
-1. `AgentBuilder` hardcodes projection registration.
-2. Config loading is not yet module-driven beyond the root contract path and header validation.
+1. `AgentBuilder` still hardcodes module-registry population and projection selection.
+2. Config loading still uses contract-family-specific graph traversal instead of registry-driven graph walking.
 3. Event envelopes are still too small for a serious event-sourced system, even after adding sequence and trace linkage metadata.
-4. There is no contract registry, policy registry, or strategy registry yet.
+4. There is no contract resolver yet.
 5. There is no persistent event store or persistent projections yet.
+6. There is no full policy and strategy registry system yet.
 
 ## Next Required Slices
 
-1. full contract and policy module graph loading
-2. richer event envelope and persistent event log contract
-3. contract resolver
-4. first `TransportContract` executor
+1. generalize config graph loader
+2. contract resolver
+3. first `TransportContract` executor
+4. persistent event log
 5. persistent projections
+6. policy and strategy registries

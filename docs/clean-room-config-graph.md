@@ -7,6 +7,7 @@ Current baseline:
 - explicit policy references inside contract files
 - path resolution relative to the referencing file
 - header-only module graph loading before deeper contract resolution
+- contract and policy kinds validated in the builder
 
 ## Current Files
 
@@ -33,6 +34,11 @@ Current scope:
 - offload policy ref
 
 This is still a narrow slice, not the final general config graph system.
+
+Current limitation:
+- graph traversal is still contract-family-specific
+- adding a new contract family still requires loader changes
+- module kind registry is still populated manually in the builder
 
 ### `internal/config/registry.go`
 
