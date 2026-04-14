@@ -1,0 +1,45 @@
+package projections
+
+import (
+	"fmt"
+
+	"teamd/internal/runtime/eventing"
+)
+
+type RunStatus string
+
+const (
+	RunStatusRunning RunStatus = "running"
+)
+
+type RunSnapshot struct {
+	RunID     string
+	SessionID string
+	Status    RunStatus
+}
+
+type RunProjection struct {
+	snapshot RunSnapshot
+}
+
+func NewRunProjection() *RunProjection {
+	return &RunProjection{}
+}
+
+func (p *RunProjection) Apply(event eventing.Event) error {
+	switch event.Kind {
+	case eventing.EventRunStarted:
+		p.snapshot.RunID = event.AggregateID
+		if sessionID, ok := event.Payload["session_id"].(string); ok {
+			p.snapshot.SessionID = sessionID
+		}
+		p.snapshot.Status = RunStatusRunning
+		return nil
+	default:
+		return fmt.Errorf("unsupported event kind %q", event.Kind)
+	}
+}
+
+func (p *RunProjection) Snapshot() RunSnapshot {
+	return p.snapshot
+}
