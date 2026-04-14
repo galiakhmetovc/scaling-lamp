@@ -619,6 +619,98 @@ func TestAgentChatTurnExecutesShellToolCallAndReturnsFinalAssistantMessage(t *te
 	}
 }
 
+func TestAgentChatTurnContinuesAfterShellToolError(t *testing.T) {
+	t.Setenv("TEAMD_ZAI_API_KEY", "secret-token")
+
+	dir := t.TempDir()
+	clock := time.Date(2026, 4, 14, 19, 10, 0, 0, time.UTC)
+	idValues := []string{
+		"session-chat-shell-err-1",
+		"run-chat-shell-err-1", "evt-session-shell-err-1", "evt-msg-user-shell-err-1", "evt-run-start-shell-err-1",
+		"evt-provider-request-shell-err-1", "evt-transport-shell-err-1", "evt-tool-call-started-shell-err-1", "evt-tool-call-completed-shell-err-1",
+		"evt-provider-request-shell-err-2", "evt-transport-shell-err-2", "evt-msg-assistant-shell-err-1", "evt-run-complete-shell-err-1",
+	}
+	nextID := func(prefix string) string {
+		if len(idValues) == 0 {
+			t.Fatalf("unexpected id request for prefix %q", prefix)
+		}
+		id := idValues[0]
+		idValues = idValues[1:]
+		return id
+	}
+
+	call := 0
+	var secondRequest map[string]any
+	agent := &runtime.Agent{
+		Config:        chatRuntimeConfigForTest(),
+		Contracts:     chatContractsForShellToolErrorLoopTest(dir),
+		PromptAssets:  provider.NewPromptAssetExecutor(),
+		RequestShape:  provider.NewRequestShapeExecutor(),
+		PlanTools:     tools.NewPlanToolExecutor(),
+		ToolCatalog:   tools.NewCatalogExecutor(),
+		ToolExecution: tools.NewExecutionGate(),
+		Transport: provider.NewTransportExecutor(fakeDoer{
+			do: func(req *http.Request) (*http.Response, error) {
+				call++
+				if call == 1 {
+					return &http.Response{
+						StatusCode: http.StatusOK,
+						Header:     http.Header{"Content-Type": []string{"application/json"}},
+						Body:       io.NopCloser(bytes.NewBufferString(`{"id":"resp-shell-err-1","model":"glm-5-turbo","choices":[{"finish_reason":"tool_calls","message":{"role":"assistant","content":"","tool_calls":[{"id":"call-shell-err-1","function":{"name":"shell_exec","arguments":{"command":"missing-binary"}}}]}}]}`)),
+					}, nil
+				}
+				defer req.Body.Close()
+				if err := json.NewDecoder(req.Body).Decode(&secondRequest); err != nil {
+					t.Fatalf("decode second request body: %v", err)
+				}
+				return &http.Response{
+					StatusCode: http.StatusOK,
+					Header:     http.Header{"Content-Type": []string{"application/json"}},
+					Body:       io.NopCloser(bytes.NewBufferString(`{"id":"resp-shell-err-2","model":"glm-5-turbo","choices":[{"finish_reason":"stop","message":{"role":"assistant","content":"Shell failed, trying fallback."}}]}`)),
+				}, nil
+			},
+		}),
+		EventLog:    runtime.NewInMemoryEventLog(),
+		Projections: []projections.Projection{projections.NewSessionProjection(), projections.NewRunProjection()},
+		Now:         func() time.Time { return clock },
+		NewID:       nextID,
+	}
+	agent.ProviderClient = provider.NewClient(agent.PromptAssets, agent.RequestShape, agent.PlanTools, filesystem.NewDefinitionExecutor(), shell.NewDefinitionExecutor(), agent.ToolCatalog, agent.ToolExecution, agent.Transport)
+
+	session, err := agent.NewChatSession()
+	if err != nil {
+		t.Fatalf("NewChatSession returned error: %v", err)
+	}
+	result, err := agent.ChatTurn(context.Background(), session, runtime.ChatTurnInput{Prompt: "run missing binary"})
+	if err != nil {
+		t.Fatalf("ChatTurn returned error: %v", err)
+	}
+	if result.Provider.Message.Content != "Shell failed, trying fallback." {
+		t.Fatalf("assistant response = %q, want fallback reply", result.Provider.Message.Content)
+	}
+	messages, ok := secondRequest["messages"].([]any)
+	if !ok {
+		t.Fatalf("second request messages = %#v", secondRequest["messages"])
+	}
+	foundToolError := false
+	for _, raw := range messages {
+		msg, ok := raw.(map[string]any)
+		if !ok {
+			continue
+		}
+		if msg["role"] == "tool" && msg["name"] == "shell_exec" {
+			content, _ := msg["content"].(string)
+			if strings.Contains(content, `"status":"error"`) && strings.Contains(content, `"tool":"shell_exec"`) {
+				foundToolError = true
+				break
+			}
+		}
+	}
+	if !foundToolError {
+		t.Fatalf("second request missing shell tool error result: %#v", messages)
+	}
+}
+
 func chatRuntimeConfigForTest() config.AgentConfig {
 	return config.AgentConfig{ID: "agent-chat-test"}
 }
@@ -863,6 +955,12 @@ func chatContractsForShellToolLoopTest(root string) contracts.ResolvedContracts 
 			},
 		},
 	}
+	return out
+}
+
+func chatContractsForShellToolErrorLoopTest(root string) contracts.ResolvedContracts {
+	out := chatContractsForShellToolLoopTest(root)
+	out.ShellExecution.Command.Params.AllowedCommands = []string{"missing-binary"}
 	return out
 }
 

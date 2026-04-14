@@ -116,40 +116,57 @@ func (a *Agent) executeToolCalls(ctx context.Context, runID, sessionID, correlat
 		}
 		decision, ok := decisionByTool[call.Name]
 		if !ok {
-			return nil, fmt.Errorf("tool call %q has no execution decision", call.Name)
+			resultText := toolErrorResult(call.Name, fmt.Errorf("tool call %q has no execution decision", call.Name))
+			if err := a.recordToolCallCompleted(ctx, runID, sessionID, correlationID, source, call.Name, call.Arguments, resultText, "tool call has no execution decision"); err != nil {
+				return nil, fmt.Errorf("record tool call completed: %w", err)
+			}
+			if observer != nil {
+				observer(ToolActivity{Phase: ToolActivityPhaseCompleted, Name: call.Name, Arguments: call.Arguments, ErrorText: "tool call has no execution decision", ResultText: resultText})
+			}
+			out = append(out, contracts.Message{Role: "tool", Name: call.Name, ToolCallID: call.ID, Content: resultText})
+			continue
 		}
 		if !decision.Decision.Allowed {
-			return nil, fmt.Errorf("tool call %q denied: %s", call.Name, decision.Decision.Reason)
+			reason := fmt.Sprintf("tool call %q denied: %s", call.Name, decision.Decision.Reason)
+			resultText := toolErrorResult(call.Name, fmt.Errorf("%s", reason))
+			if err := a.recordToolCallCompleted(ctx, runID, sessionID, correlationID, source, call.Name, call.Arguments, resultText, reason); err != nil {
+				return nil, fmt.Errorf("record tool call completed: %w", err)
+			}
+			if observer != nil {
+				observer(ToolActivity{Phase: ToolActivityPhaseCompleted, Name: call.Name, Arguments: call.Arguments, ErrorText: reason, ResultText: resultText})
+			}
+			out = append(out, contracts.Message{Role: "tool", Name: call.Name, ToolCallID: call.ID, Content: resultText})
+			continue
 		}
 		if decision.Decision.ApprovalRequired {
-			return nil, fmt.Errorf("tool call %q requires approval", call.Name)
+			reason := fmt.Sprintf("tool call %q requires approval", call.Name)
+			resultText := toolErrorResult(call.Name, fmt.Errorf("%s", reason))
+			if err := a.recordToolCallCompleted(ctx, runID, sessionID, correlationID, source, call.Name, call.Arguments, resultText, reason); err != nil {
+				return nil, fmt.Errorf("record tool call completed: %w", err)
+			}
+			if observer != nil {
+				observer(ToolActivity{Phase: ToolActivityPhaseCompleted, Name: call.Name, Arguments: call.Arguments, ErrorText: reason, ResultText: resultText})
+			}
+			out = append(out, contracts.Message{Role: "tool", Name: call.Name, ToolCallID: call.ID, Content: resultText})
+			continue
 		}
 
 		events, resultText, err := a.executeToolCommand(activeProjection, service, filesystemExecutor, shellExecutor, source, call)
 		if err != nil {
-			_ = a.RecordEvent(ctx, eventing.Event{
-				ID:            a.newID("evt-tool-call-completed"),
-				Kind:          eventing.EventToolCallCompleted,
-				OccurredAt:    a.now(),
-				AggregateID:   runID,
-				AggregateType: eventing.AggregateRun,
-				CorrelationID: correlationID,
-				CausationID:   runID,
-				Source:        source,
-				ActorID:       a.Config.ID,
-				ActorType:     "agent",
-				TraceSummary:  "tool call completed",
-				Payload: map[string]any{
-					"session_id": sessionID,
-					"tool_name":  call.Name,
-					"arguments":  call.Arguments,
-					"error":      err.Error(),
-				},
-			})
-			if observer != nil {
-				observer(ToolActivity{Phase: ToolActivityPhaseCompleted, Name: call.Name, Arguments: call.Arguments, ErrorText: err.Error()})
+			resultText := toolErrorResult(call.Name, err)
+			if recordErr := a.recordToolCallCompleted(ctx, runID, sessionID, correlationID, source, call.Name, call.Arguments, resultText, err.Error()); recordErr != nil {
+				return nil, fmt.Errorf("record tool call completed: %w", recordErr)
 			}
-			return nil, err
+			if observer != nil {
+				observer(ToolActivity{Phase: ToolActivityPhaseCompleted, Name: call.Name, Arguments: call.Arguments, ErrorText: err.Error(), ResultText: resultText})
+			}
+			out = append(out, contracts.Message{
+				Role:       "tool",
+				Name:       call.Name,
+				ToolCallID: call.ID,
+				Content:    resultText,
+			})
+			continue
 		}
 		for _, event := range events {
 			if event.CorrelationID == "" {
@@ -168,25 +185,7 @@ func (a *Agent) executeToolCalls(ctx context.Context, runID, sessionID, correlat
 				return nil, fmt.Errorf("record plan event %q: %w", event.Kind, err)
 			}
 		}
-		if err := a.RecordEvent(ctx, eventing.Event{
-			ID:            a.newID("evt-tool-call-completed"),
-			Kind:          eventing.EventToolCallCompleted,
-			OccurredAt:    a.now(),
-			AggregateID:   runID,
-			AggregateType: eventing.AggregateRun,
-			CorrelationID: correlationID,
-			CausationID:   runID,
-			Source:        source,
-			ActorID:       a.Config.ID,
-			ActorType:     "agent",
-			TraceSummary:  "tool call completed",
-			Payload: map[string]any{
-				"session_id":  sessionID,
-				"tool_name":   call.Name,
-				"arguments":   call.Arguments,
-				"result_text": resultText,
-			},
-		}); err != nil {
+		if err := a.recordToolCallCompleted(ctx, runID, sessionID, correlationID, source, call.Name, call.Arguments, resultText, ""); err != nil {
 			return nil, fmt.Errorf("record tool call completed: %w", err)
 		}
 		if observer != nil {
@@ -200,6 +199,34 @@ func (a *Agent) executeToolCalls(ctx context.Context, runID, sessionID, correlat
 		})
 	}
 	return out, nil
+}
+
+func (a *Agent) recordToolCallCompleted(ctx context.Context, runID, sessionID, correlationID, source, toolName string, arguments map[string]any, resultText, errorText string) error {
+	payload := map[string]any{
+		"session_id": sessionID,
+		"tool_name":  toolName,
+		"arguments":  arguments,
+	}
+	if resultText != "" {
+		payload["result_text"] = resultText
+	}
+	if errorText != "" {
+		payload["error"] = errorText
+	}
+	return a.RecordEvent(ctx, eventing.Event{
+		ID:            a.newID("evt-tool-call-completed"),
+		Kind:          eventing.EventToolCallCompleted,
+		OccurredAt:    a.now(),
+		AggregateID:   runID,
+		AggregateType: eventing.AggregateRun,
+		CorrelationID: correlationID,
+		CausationID:   runID,
+		Source:        source,
+		ActorID:       a.Config.ID,
+		ActorType:     "agent",
+		TraceSummary:  "tool call completed",
+		Payload:       payload,
+	})
 }
 
 func (a *Agent) executeToolCommand(activeProjection *projections.ActivePlanProjection, service *plans.Service, filesystemExecutor *filesystem.Executor, shellExecutor *shell.Executor, source string, call provider.ToolCall) ([]eventing.Event, string, error) {
@@ -410,4 +437,12 @@ func jsonString(value map[string]any) string {
 		return `{"status":"error","error":"marshal"}`
 	}
 	return string(body)
+}
+
+func toolErrorResult(toolName string, err error) string {
+	return jsonString(map[string]any{
+		"status": "error",
+		"tool":   toolName,
+		"error":  err.Error(),
+	})
 }
