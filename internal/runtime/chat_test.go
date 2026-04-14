@@ -6,6 +6,8 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -383,6 +385,168 @@ func TestAgentChatTurnExecutesStreamedPlanToolCallsAndReturnsFinalAssistantMessa
 	}
 }
 
+func TestAgentChatTurnExecutesFilesystemToolCallAndReturnsFinalAssistantMessage(t *testing.T) {
+	t.Setenv("TEAMD_ZAI_API_KEY", "secret-token")
+
+	dir := t.TempDir()
+	clock := time.Date(2026, 4, 14, 19, 0, 0, 0, time.UTC)
+	idValues := []string{
+		"session-chat-fs-1",
+		"run-chat-fs-1", "evt-session-fs-1", "evt-msg-user-fs-1", "evt-run-start-fs-1",
+		"evt-provider-request-fs-1", "evt-transport-fs-1",
+		"evt-provider-request-fs-2", "evt-transport-fs-2", "evt-msg-assistant-fs-1", "evt-run-complete-fs-1",
+	}
+	nextID := func(prefix string) string {
+		if len(idValues) == 0 {
+			t.Fatalf("unexpected id request for prefix %q", prefix)
+		}
+		id := idValues[0]
+		idValues = idValues[1:]
+		return id
+	}
+
+	call := 0
+	agent := &runtime.Agent{
+		Config:        chatRuntimeConfigForTest(),
+		Contracts:     chatContractsForFilesystemToolLoopTest(dir),
+		PromptAssets:  provider.NewPromptAssetExecutor(),
+		RequestShape:  provider.NewRequestShapeExecutor(),
+		PlanTools:     tools.NewPlanToolExecutor(),
+		ToolCatalog:   tools.NewCatalogExecutor(),
+		ToolExecution: tools.NewExecutionGate(),
+		Transport: provider.NewTransportExecutor(fakeDoer{
+			do: func(req *http.Request) (*http.Response, error) {
+				call++
+				if call == 1 {
+					return &http.Response{
+						StatusCode: http.StatusOK,
+						Header:     http.Header{"Content-Type": []string{"application/json"}},
+						Body:       io.NopCloser(bytes.NewBufferString(`{"id":"resp-fs-1","model":"glm-5-turbo","choices":[{"finish_reason":"tool_calls","message":{"role":"assistant","content":"","tool_calls":[{"id":"call-fs-1","function":{"name":"fs_write_text","arguments":{"path":"notes/plan.txt","content":"hello from tool"}}}]}}]}`)),
+					}, nil
+				}
+				return &http.Response{
+					StatusCode: http.StatusOK,
+					Header:     http.Header{"Content-Type": []string{"application/json"}},
+					Body:       io.NopCloser(bytes.NewBufferString(`{"id":"resp-fs-2","model":"glm-5-turbo","choices":[{"finish_reason":"stop","message":{"role":"assistant","content":"File written."}}]}`)),
+				}, nil
+			},
+		}),
+		EventLog:    runtime.NewInMemoryEventLog(),
+		Projections: []projections.Projection{projections.NewSessionProjection(), projections.NewRunProjection()},
+		Now:         func() time.Time { return clock },
+		NewID:       nextID,
+	}
+	agent.ProviderClient = provider.NewClient(agent.PromptAssets, agent.RequestShape, agent.PlanTools, filesystem.NewDefinitionExecutor(), shell.NewDefinitionExecutor(), agent.ToolCatalog, agent.ToolExecution, agent.Transport)
+
+	session, err := agent.NewChatSession()
+	if err != nil {
+		t.Fatalf("NewChatSession returned error: %v", err)
+	}
+	result, err := agent.ChatTurn(context.Background(), session, runtime.ChatTurnInput{Prompt: "write file"})
+	if err != nil {
+		t.Fatalf("ChatTurn returned error: %v", err)
+	}
+	if result.Provider.Message.Content != "File written." {
+		t.Fatalf("assistant response = %q, want File written.", result.Provider.Message.Content)
+	}
+	data, err := os.ReadFile(filepath.Join(dir, "notes", "plan.txt"))
+	if err != nil {
+		t.Fatalf("ReadFile returned error: %v", err)
+	}
+	if string(data) != "hello from tool" {
+		t.Fatalf("file content = %q, want hello from tool", string(data))
+	}
+}
+
+func TestAgentChatTurnExecutesShellToolCallAndReturnsFinalAssistantMessage(t *testing.T) {
+	t.Setenv("TEAMD_ZAI_API_KEY", "secret-token")
+
+	dir := t.TempDir()
+	clock := time.Date(2026, 4, 14, 19, 5, 0, 0, time.UTC)
+	idValues := []string{
+		"session-chat-shell-1",
+		"run-chat-shell-1", "evt-session-shell-1", "evt-msg-user-shell-1", "evt-run-start-shell-1",
+		"evt-provider-request-shell-1", "evt-transport-shell-1",
+		"evt-provider-request-shell-2", "evt-transport-shell-2", "evt-msg-assistant-shell-1", "evt-run-complete-shell-1",
+	}
+	nextID := func(prefix string) string {
+		if len(idValues) == 0 {
+			t.Fatalf("unexpected id request for prefix %q", prefix)
+		}
+		id := idValues[0]
+		idValues = idValues[1:]
+		return id
+	}
+
+	call := 0
+	var secondRequest map[string]any
+	agent := &runtime.Agent{
+		Config:        chatRuntimeConfigForTest(),
+		Contracts:     chatContractsForShellToolLoopTest(dir),
+		PromptAssets:  provider.NewPromptAssetExecutor(),
+		RequestShape:  provider.NewRequestShapeExecutor(),
+		PlanTools:     tools.NewPlanToolExecutor(),
+		ToolCatalog:   tools.NewCatalogExecutor(),
+		ToolExecution: tools.NewExecutionGate(),
+		Transport: provider.NewTransportExecutor(fakeDoer{
+			do: func(req *http.Request) (*http.Response, error) {
+				call++
+				if call == 1 {
+					return &http.Response{
+						StatusCode: http.StatusOK,
+						Header:     http.Header{"Content-Type": []string{"application/json"}},
+						Body:       io.NopCloser(bytes.NewBufferString(`{"id":"resp-shell-1","model":"glm-5-turbo","choices":[{"finish_reason":"tool_calls","message":{"role":"assistant","content":"","tool_calls":[{"id":"call-shell-1","function":{"name":"shell_exec","arguments":{"command":"pwd"}}}]}}]}`)),
+					}, nil
+				}
+				defer req.Body.Close()
+				if err := json.NewDecoder(req.Body).Decode(&secondRequest); err != nil {
+					t.Fatalf("decode second request body: %v", err)
+				}
+				return &http.Response{
+					StatusCode: http.StatusOK,
+					Header:     http.Header{"Content-Type": []string{"application/json"}},
+					Body:       io.NopCloser(bytes.NewBufferString(`{"id":"resp-shell-2","model":"glm-5-turbo","choices":[{"finish_reason":"stop","message":{"role":"assistant","content":"Shell done."}}]}`)),
+				}, nil
+			},
+		}),
+		EventLog:    runtime.NewInMemoryEventLog(),
+		Projections: []projections.Projection{projections.NewSessionProjection(), projections.NewRunProjection()},
+		Now:         func() time.Time { return clock },
+		NewID:       nextID,
+	}
+	agent.ProviderClient = provider.NewClient(agent.PromptAssets, agent.RequestShape, agent.PlanTools, filesystem.NewDefinitionExecutor(), shell.NewDefinitionExecutor(), agent.ToolCatalog, agent.ToolExecution, agent.Transport)
+
+	session, err := agent.NewChatSession()
+	if err != nil {
+		t.Fatalf("NewChatSession returned error: %v", err)
+	}
+	result, err := agent.ChatTurn(context.Background(), session, runtime.ChatTurnInput{Prompt: "run pwd"})
+	if err != nil {
+		t.Fatalf("ChatTurn returned error: %v", err)
+	}
+	if result.Provider.Message.Content != "Shell done." {
+		t.Fatalf("assistant response = %q, want Shell done.", result.Provider.Message.Content)
+	}
+	messages, ok := secondRequest["messages"].([]any)
+	if !ok {
+		t.Fatalf("second request messages = %#v", secondRequest["messages"])
+	}
+	foundTool := false
+	for _, raw := range messages {
+		msg, ok := raw.(map[string]any)
+		if !ok {
+			continue
+		}
+		if msg["role"] == "tool" && msg["name"] == "shell_exec" {
+			foundTool = true
+			break
+		}
+	}
+	if !foundTool {
+		t.Fatalf("second request missing shell tool result: %#v", messages)
+	}
+}
+
 func chatRuntimeConfigForTest() config.AgentConfig {
 	return config.AgentConfig{ID: "agent-chat-test"}
 }
@@ -504,6 +668,127 @@ func chatContractsForToolLoopStreamTest() contracts.ResolvedContracts {
 		Strategy: "static_stream",
 		Params: contracts.StreamingParams{
 			Stream: true,
+		},
+	}
+	return out
+}
+
+func chatContractsForFilesystemToolLoopTest(root string) contracts.ResolvedContracts {
+	out := chatContractsForTest()
+	out.ProviderRequest.RequestShape.Streaming = contracts.StreamingPolicy{
+		Enabled:  true,
+		Strategy: "static_stream",
+		Params:   contracts.StreamingParams{Stream: false},
+	}
+	out.Tools = contracts.ToolContract{
+		Catalog: contracts.ToolCatalogPolicy{
+			Enabled:  true,
+			Strategy: "static_allowlist",
+			Params:   contracts.ToolCatalogParams{ToolIDs: []string{"fs_write_text"}},
+		},
+		Serialization: contracts.ToolSerializationPolicy{
+			Enabled:  true,
+			Strategy: "openai_function_tools",
+			Params:   contracts.ToolSerializationParams{IncludeDescriptions: true},
+		},
+	}
+	out.ToolExecution = contracts.ToolExecutionContract{
+		Access: contracts.ToolAccessPolicy{
+			Enabled:  true,
+			Strategy: "static_allowlist",
+			Params:   contracts.ToolAccessParams{ToolIDs: []string{"fs_write_text"}},
+		},
+		Approval: contracts.ToolApprovalPolicy{Enabled: true, Strategy: "always_allow"},
+		Sandbox:  contracts.ToolSandboxPolicy{Enabled: true, Strategy: "workspace_write"},
+	}
+	out.FilesystemTools = contracts.FilesystemToolContract{
+		Catalog: contracts.FilesystemCatalogPolicy{
+			Enabled:  true,
+			Strategy: "static_allowlist",
+			Params:   contracts.FilesystemCatalogParams{ToolIDs: []string{"fs_write_text"}},
+		},
+		Description: contracts.FilesystemDescriptionPolicy{
+			Enabled:  true,
+			Strategy: "static_builtin_descriptions",
+		},
+	}
+	out.FilesystemExecution = contracts.FilesystemExecutionContract{
+		Scope: contracts.FilesystemScopePolicy{
+			Enabled:  true,
+			Strategy: "workspace_only",
+			Params: contracts.FilesystemScopeParams{
+				RootPath:      root,
+				WriteSubpaths: []string{"notes"},
+			},
+		},
+		Mutation: contracts.FilesystemMutationPolicy{
+			Enabled:  true,
+			Strategy: "allow_writes",
+			Params:   contracts.FilesystemMutationParams{AllowWrite: true},
+		},
+		IO: contracts.FilesystemIOPolicy{
+			Enabled:  true,
+			Strategy: "bounded_text_io",
+			Params:   contracts.FilesystemIOParams{MaxWriteBytes: 1024, Encoding: "utf-8"},
+		},
+	}
+	return out
+}
+
+func chatContractsForShellToolLoopTest(root string) contracts.ResolvedContracts {
+	out := chatContractsForTest()
+	out.ProviderRequest.RequestShape.Streaming = contracts.StreamingPolicy{
+		Enabled:  true,
+		Strategy: "static_stream",
+		Params:   contracts.StreamingParams{Stream: false},
+	}
+	out.Tools = contracts.ToolContract{
+		Catalog: contracts.ToolCatalogPolicy{
+			Enabled:  true,
+			Strategy: "static_allowlist",
+			Params:   contracts.ToolCatalogParams{ToolIDs: []string{"shell_exec"}},
+		},
+		Serialization: contracts.ToolSerializationPolicy{
+			Enabled:  true,
+			Strategy: "openai_function_tools",
+			Params:   contracts.ToolSerializationParams{IncludeDescriptions: true},
+		},
+	}
+	out.ToolExecution = contracts.ToolExecutionContract{
+		Access: contracts.ToolAccessPolicy{
+			Enabled:  true,
+			Strategy: "static_allowlist",
+			Params:   contracts.ToolAccessParams{ToolIDs: []string{"shell_exec"}},
+		},
+		Approval: contracts.ToolApprovalPolicy{Enabled: true, Strategy: "always_allow"},
+		Sandbox:  contracts.ToolSandboxPolicy{Enabled: true, Strategy: "workspace_write"},
+	}
+	out.ShellTools = contracts.ShellToolContract{
+		Catalog: contracts.ShellCatalogPolicy{
+			Enabled:  true,
+			Strategy: "static_allowlist",
+			Params:   contracts.ShellCatalogParams{ToolIDs: []string{"shell_exec"}},
+		},
+		Description: contracts.ShellDescriptionPolicy{
+			Enabled:  true,
+			Strategy: "static_builtin_descriptions",
+		},
+	}
+	out.ShellExecution = contracts.ShellExecutionContract{
+		Command: contracts.ShellCommandPolicy{
+			Enabled:  true,
+			Strategy: "static_allowlist",
+			Params:   contracts.ShellCommandParams{AllowedCommands: []string{"pwd"}},
+		},
+		Approval: contracts.ShellApprovalPolicy{Enabled: true, Strategy: "always_allow"},
+		Runtime: contracts.ShellRuntimePolicy{
+			Enabled:  true,
+			Strategy: "workspace_write",
+			Params: contracts.ShellRuntimeParams{
+				Cwd:            root,
+				Timeout:        "5s",
+				MaxOutputBytes: 4096,
+			},
 		},
 	}
 	return out

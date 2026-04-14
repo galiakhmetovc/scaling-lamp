@@ -6,17 +6,19 @@ import (
 	"fmt"
 
 	"teamd/internal/contracts"
+	"teamd/internal/filesystem"
 	"teamd/internal/provider"
 	"teamd/internal/runtime/eventing"
 	"teamd/internal/runtime/plans"
 	"teamd/internal/runtime/projections"
+	"teamd/internal/shell"
 )
 
-const maxPlanToolRounds = 4
+const maxToolRounds = 4
 
 func (a *Agent) executeProviderLoop(ctx context.Context, sessionID, runID, correlationID, source string, input provider.ClientInput) (provider.ClientResult, error) {
 	currentMessages := append([]contracts.Message{}, input.Messages...)
-	for round := 0; round < maxPlanToolRounds; round++ {
+	for round := 0; round < maxToolRounds; round++ {
 		assembledMessages, err := a.assemblePromptMessages(sessionID, append([]contracts.Message{}, currentMessages...))
 		if err != nil {
 			return provider.ClientResult{}, err
@@ -48,7 +50,7 @@ func (a *Agent) executeProviderLoop(ctx context.Context, sessionID, runID, corre
 			return result, nil
 		}
 
-		toolMessages, err := a.executePlanToolCalls(ctx, correlationID, source, result.Provider.ToolCalls, result.ToolDecisions)
+		toolMessages, err := a.executeToolCalls(ctx, correlationID, source, result.Provider.ToolCalls, result.ToolDecisions)
 		if err != nil {
 			return result, err
 		}
@@ -56,15 +58,14 @@ func (a *Agent) executeProviderLoop(ctx context.Context, sessionID, runID, corre
 		currentMessages = append(currentMessages, toolMessages...)
 	}
 
-	return provider.ClientResult{}, fmt.Errorf("provider tool loop exceeded %d rounds", maxPlanToolRounds)
+	return provider.ClientResult{}, fmt.Errorf("provider tool loop exceeded %d rounds", maxToolRounds)
 }
 
-func (a *Agent) executePlanToolCalls(ctx context.Context, correlationID, source string, calls []provider.ToolCall, decisions []provider.ToolDecision) ([]contracts.Message, error) {
+func (a *Agent) executeToolCalls(ctx context.Context, correlationID, source string, calls []provider.ToolCall, decisions []provider.ToolDecision) ([]contracts.Message, error) {
 	activeProjection := a.activePlanProjection()
-	if activeProjection == nil {
-		return nil, fmt.Errorf("active plan projection is not registered")
-	}
 	service := plans.NewService(a.now, a.newID)
+	filesystemExecutor := filesystem.NewExecutor()
+	shellExecutor := shell.NewExecutor()
 
 	decisionByTool := make(map[string]provider.ToolDecision, len(decisions))
 	for _, decision := range decisions {
@@ -84,7 +85,7 @@ func (a *Agent) executePlanToolCalls(ctx context.Context, correlationID, source 
 			return nil, fmt.Errorf("tool call %q requires approval", call.Name)
 		}
 
-		events, resultText, err := a.executePlanCommand(activeProjection.Snapshot(), service, source, call)
+		events, resultText, err := a.executeToolCommand(activeProjection, service, filesystemExecutor, shellExecutor, source, call)
 		if err != nil {
 			return nil, err
 		}
@@ -113,6 +114,30 @@ func (a *Agent) executePlanToolCalls(ctx context.Context, correlationID, source 
 		})
 	}
 	return out, nil
+}
+
+func (a *Agent) executeToolCommand(activeProjection *projections.ActivePlanProjection, service *plans.Service, filesystemExecutor *filesystem.Executor, shellExecutor *shell.Executor, source string, call provider.ToolCall) ([]eventing.Event, string, error) {
+	switch call.Name {
+	case "init_plan", "add_task", "set_task_status", "add_task_note", "edit_task":
+		if activeProjection == nil {
+			return nil, "", fmt.Errorf("active plan projection is not registered")
+		}
+		return a.executePlanCommand(activeProjection.Snapshot(), service, source, call)
+	case "fs_list", "fs_read_text", "fs_write_text", "fs_patch_text", "fs_mkdir", "fs_move", "fs_trash":
+		resultText, err := filesystemExecutor.Execute(a.Contracts.FilesystemExecution, call.Name, call.Arguments)
+		if err != nil {
+			return nil, "", fmt.Errorf("tool call %q: %w", call.Name, err)
+		}
+		return nil, resultText, nil
+	case "shell_exec":
+		resultText, err := shellExecutor.Execute(a.Contracts.ShellExecution, call.Name, call.Arguments)
+		if err != nil {
+			return nil, "", fmt.Errorf("tool call %q: %w", call.Name, err)
+		}
+		return nil, resultText, nil
+	default:
+		return nil, "", fmt.Errorf("tool call %q is not implemented", call.Name)
+	}
 }
 
 func (a *Agent) executePlanCommand(active projections.ActivePlanSnapshot, service *plans.Service, source string, call provider.ToolCall) ([]eventing.Event, string, error) {
@@ -216,9 +241,8 @@ func (a *Agent) executePlanCommand(active projections.ActivePlanSnapshot, servic
 			return nil, "", fmt.Errorf("tool call %q: %w", call.Name, err)
 		}
 		return events, jsonString(map[string]any{"status": "ok", "tool": call.Name, "task_id": taskID}), nil
-	default:
-		return nil, "", fmt.Errorf("tool call %q is not implemented", call.Name)
 	}
+	return nil, "", fmt.Errorf("tool call %q is not implemented", call.Name)
 }
 
 func assistantToolCallMessage(calls []provider.ToolCall) contracts.Message {
