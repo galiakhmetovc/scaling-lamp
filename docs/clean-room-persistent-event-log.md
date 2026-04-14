@@ -22,6 +22,18 @@ Current behavior:
 Current file format:
 - one JSON-encoded `eventing.Event` per line
 
+Current envelope baseline includes:
+- global event `Sequence`
+- per-aggregate `AggregateVersion`
+- `CorrelationID`
+- `CausationID`
+- `Source`
+- `ActorID`
+- `ActorType`
+- `TraceSummary`
+- `TraceRefs`
+- `ArtifactRefs`
+
 ## Current Config Surface
 
 ### `spec.runtime.event_log`
@@ -53,3 +65,4 @@ Current role:
 - file log is local filesystem only
 - reads still scan the whole JSONL file
 - there is no compaction, index, or projection checkpointing yet
+- envelope is stronger now, but it still lacks a richer replay/debug model beyond the current baseline

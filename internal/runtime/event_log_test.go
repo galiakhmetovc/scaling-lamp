@@ -22,9 +22,15 @@ func TestInMemoryEventLogAppendsAndListsEvents(t *testing.T) {
 		OccurredAt:    now,
 		AggregateID:   "session-1",
 		AggregateType: eventing.AggregateSession,
+		AggregateVersion: 1,
 		CorrelationID: "corr-1",
 		CausationID:   "cause-1",
 		Source:        "test",
+		ActorID:       "agent-1",
+		ActorType:     "agent",
+		TraceSummary:  "session bootstrap",
+		TraceRefs:     []string{"trace/provider-request-1.json"},
+		ArtifactRefs:  []string{"artifacts/session-created.txt"},
 		Payload: map[string]any{
 			"session_id": "session-1",
 		},
@@ -60,6 +66,24 @@ func TestInMemoryEventLogAppendsAndListsEvents(t *testing.T) {
 	if got[0].Source != "test" {
 		t.Fatalf("event source = %q, want %q", got[0].Source, "test")
 	}
+	if got[0].AggregateVersion != 1 {
+		t.Fatalf("event aggregate version = %d, want 1", got[0].AggregateVersion)
+	}
+	if got[0].ActorID != "agent-1" {
+		t.Fatalf("event actor id = %q, want %q", got[0].ActorID, "agent-1")
+	}
+	if got[0].ActorType != "agent" {
+		t.Fatalf("event actor type = %q, want %q", got[0].ActorType, "agent")
+	}
+	if got[0].TraceSummary != "session bootstrap" {
+		t.Fatalf("event trace summary = %q, want %q", got[0].TraceSummary, "session bootstrap")
+	}
+	if len(got[0].TraceRefs) != 1 || got[0].TraceRefs[0] != "trace/provider-request-1.json" {
+		t.Fatalf("event trace refs = %#v, want single provider trace ref", got[0].TraceRefs)
+	}
+	if len(got[0].ArtifactRefs) != 1 || got[0].ArtifactRefs[0] != "artifacts/session-created.txt" {
+		t.Fatalf("event artifact refs = %#v, want single artifact ref", got[0].ArtifactRefs)
+	}
 }
 
 func TestFileEventLogPersistsEventsAcrossReopen(t *testing.T) {
@@ -79,9 +103,15 @@ func TestFileEventLogPersistsEventsAcrossReopen(t *testing.T) {
 		OccurredAt:    now,
 		AggregateID:   "session-1",
 		AggregateType: eventing.AggregateSession,
+		AggregateVersion: 1,
 		CorrelationID: "corr-1",
 		CausationID:   "cause-1",
 		Source:        "test",
+		ActorID:       "agent-1",
+		ActorType:     "agent",
+		TraceSummary:  "session bootstrap",
+		TraceRefs:     []string{"trace/provider-request-1.json"},
+		ArtifactRefs:  []string{"artifacts/session-created.txt"},
 		Payload: map[string]any{
 			"session_id": "session-1",
 		},
@@ -108,5 +138,23 @@ func TestFileEventLogPersistsEventsAcrossReopen(t *testing.T) {
 	}
 	if got[0].ID != "evt-1" {
 		t.Fatalf("event ID = %q, want %q", got[0].ID, "evt-1")
+	}
+	if got[0].AggregateVersion != 1 {
+		t.Fatalf("event aggregate version = %d, want 1", got[0].AggregateVersion)
+	}
+	if got[0].ActorID != "agent-1" {
+		t.Fatalf("event actor id = %q, want %q", got[0].ActorID, "agent-1")
+	}
+	if got[0].ActorType != "agent" {
+		t.Fatalf("event actor type = %q, want %q", got[0].ActorType, "agent")
+	}
+	if got[0].TraceSummary != "session bootstrap" {
+		t.Fatalf("event trace summary = %q, want %q", got[0].TraceSummary, "session bootstrap")
+	}
+	if len(got[0].TraceRefs) != 1 || got[0].TraceRefs[0] != "trace/provider-request-1.json" {
+		t.Fatalf("event trace refs = %#v, want single provider trace ref", got[0].TraceRefs)
+	}
+	if len(got[0].ArtifactRefs) != 1 || got[0].ArtifactRefs[0] != "artifacts/session-created.txt" {
+		t.Fatalf("event artifact refs = %#v, want single artifact ref", got[0].ArtifactRefs)
 	}
 }

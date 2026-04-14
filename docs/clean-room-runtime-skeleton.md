@@ -65,9 +65,15 @@ This package exists to prevent import cycles between runtime and projections.
 
 Current baseline now includes:
 - `Sequence`
+- `AggregateVersion`
 - `CorrelationID`
 - `CausationID`
 - `Source`
+- `ActorID`
+- `ActorType`
+- `TraceSummary`
+- `TraceRefs`
+- `ArtifactRefs`
 
 ### `internal/runtime/event_log.go`
 

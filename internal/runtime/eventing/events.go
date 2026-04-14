@@ -23,8 +23,14 @@ type Event struct {
 	OccurredAt    time.Time
 	AggregateID   string
 	AggregateType AggregateType
+	AggregateVersion uint64
 	CorrelationID string
 	CausationID   string
 	Source        string
+	ActorID       string
+	ActorType     string
+	TraceSummary  string
+	TraceRefs     []string
+	ArtifactRefs  []string
 	Payload       map[string]any
 }

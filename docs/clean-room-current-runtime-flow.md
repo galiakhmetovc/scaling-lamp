@@ -215,7 +215,17 @@ Current implementations:
 
 Current implication:
 - file-backed event logs can survive reopen/restart
-- projections are still not persistent
+- event envelopes now carry:
+  - `Sequence`
+  - `AggregateVersion`
+  - `CorrelationID`
+  - `CausationID`
+  - `Source`
+  - `ActorID`
+  - `ActorType`
+  - `TraceSummary`
+  - `TraceRefs`
+  - `ArtifactRefs`
 
 ## Projections
 
