@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"strings"
 	"testing"
 	"time"
 
@@ -287,6 +288,99 @@ func TestAgentChatTurnExecutesPlanToolCallsAndReturnsFinalAssistantMessage(t *te
 	}
 }
 
+func TestAgentChatTurnExecutesStreamedPlanToolCallsAndReturnsFinalAssistantMessage(t *testing.T) {
+	t.Setenv("TEAMD_ZAI_API_KEY", "secret-token")
+
+	clock := time.Date(2026, 4, 14, 18, 30, 0, 0, time.UTC)
+	idValues := []string{
+		"session-chat-stream-1",
+		"run-chat-stream-1", "evt-session-stream-1", "evt-msg-user-stream-1", "evt-run-start-stream-1",
+		"evt-provider-request-stream-1", "evt-transport-stream-1", "plan-stream-1", "evt-plan-create-stream-1",
+		"evt-provider-request-stream-2", "evt-transport-stream-2", "evt-msg-assistant-stream-1", "evt-run-complete-stream-1",
+	}
+	nextID := func(prefix string) string {
+		if len(idValues) == 0 {
+			t.Fatalf("unexpected id request for prefix %q", prefix)
+		}
+		id := idValues[0]
+		idValues = idValues[1:]
+		return id
+	}
+
+	call := 0
+	agent := &runtime.Agent{
+		Config:        chatRuntimeConfigForTest(),
+		Contracts:     chatContractsForToolLoopStreamTest(),
+		PromptAssets:  provider.NewPromptAssetExecutor(),
+		RequestShape:  provider.NewRequestShapeExecutor(),
+		PlanTools:     tools.NewPlanToolExecutor(),
+		ToolCatalog:   tools.NewCatalogExecutor(),
+		ToolExecution: tools.NewExecutionGate(),
+		Transport: provider.NewTransportExecutor(fakeDoer{
+			do: func(req *http.Request) (*http.Response, error) {
+				call++
+				if call == 1 {
+					return &http.Response{
+						StatusCode: http.StatusOK,
+						Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
+						Body: io.NopCloser(bytes.NewBufferString(strings.Join([]string{
+							`data: {"id":"resp-tools-1","model":"glm-5-turbo","choices":[{"index":0,"delta":{"role":"assistant","tool_calls":[{"id":"call-1","index":0,"type":"function","function":{"name":"init_plan","arguments":"{\"goal\":\"Refactor auth\"}"}}]}}]}`,
+							"",
+							`data: {"id":"resp-tools-1","model":"glm-5-turbo","choices":[{"index":0,"finish_reason":"tool_calls","delta":{"content":""}}],"usage":{"prompt_tokens":8,"completion_tokens":2,"total_tokens":10}}`,
+							"",
+							`data: [DONE]`,
+							"",
+						}, "\n"))),
+					}, nil
+				}
+				return &http.Response{
+					StatusCode: http.StatusOK,
+					Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
+					Body: io.NopCloser(bytes.NewBufferString(strings.Join([]string{
+						`data: {"id":"resp-final-1","model":"glm-5-turbo","choices":[{"index":0,"delta":{"role":"assistant","content":"Plan "},"finish_reason":""}]}`,
+						"",
+						`data: {"id":"resp-final-1","model":"glm-5-turbo","choices":[{"index":0,"delta":{"content":"initialized."},"finish_reason":"stop"}],"usage":{"prompt_tokens":12,"completion_tokens":4,"total_tokens":16}}`,
+						"",
+						`data: [DONE]`,
+						"",
+					}, "\n"))),
+				}, nil
+			},
+		}),
+		EventLog: runtime.NewInMemoryEventLog(),
+		Projections: []projections.Projection{
+			projections.NewSessionProjection(),
+			projections.NewRunProjection(),
+			projections.NewTranscriptProjection(),
+			projections.NewActivePlanProjection(),
+			projections.NewPlanHeadProjection(),
+			projections.NewPlanArchiveProjection(),
+		},
+		Now:   func() time.Time { return clock },
+		NewID: nextID,
+	}
+	agent.ProviderClient = provider.NewClient(agent.PromptAssets, agent.RequestShape, agent.PlanTools, agent.ToolCatalog, agent.ToolExecution, agent.Transport)
+
+	session, err := agent.NewChatSession()
+	if err != nil {
+		t.Fatalf("NewChatSession returned error: %v", err)
+	}
+	result, err := agent.ChatTurn(context.Background(), session, runtime.ChatTurnInput{Prompt: "Plan auth refactor"})
+	if err != nil {
+		t.Fatalf("ChatTurn returned error: %v", err)
+	}
+	if result.Provider.Message.Content != "Plan initialized." {
+		t.Fatalf("final response = %q, want Plan initialized.", result.Provider.Message.Content)
+	}
+	if call != 2 {
+		t.Fatalf("transport call count = %d, want 2", call)
+	}
+	activePlan := findActivePlanProjection(t, agent.Projections)
+	if activePlan.Snapshot().Plan.Goal != "Refactor auth" {
+		t.Fatalf("active plan goal = %q, want Refactor auth", activePlan.Snapshot().Plan.Goal)
+	}
+}
+
 func chatRuntimeConfigForTest() config.AgentConfig {
 	return config.AgentConfig{ID: "agent-chat-test"}
 }
@@ -396,6 +490,18 @@ func chatContractsForToolLoopTest() contracts.ResolvedContracts {
 		Sandbox: contracts.ToolSandboxPolicy{
 			Enabled:  true,
 			Strategy: "default_runtime",
+		},
+	}
+	return out
+}
+
+func chatContractsForToolLoopStreamTest() contracts.ResolvedContracts {
+	out := chatContractsForToolLoopTest()
+	out.ProviderRequest.RequestShape.Streaming = contracts.StreamingPolicy{
+		Enabled:  true,
+		Strategy: "static_stream",
+		Params: contracts.StreamingParams{
+			Stream: true,
 		},
 	}
 	return out

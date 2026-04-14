@@ -17,6 +17,9 @@ spec:
       - session
       - run
       - transcript
+      - active_plan
+      - plan_archive
+      - plan_head
   contracts:
     transport: ./contracts/transport.yaml
     request_shape: ./contracts/request-shape.yaml

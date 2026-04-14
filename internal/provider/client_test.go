@@ -670,3 +670,99 @@ func TestClientStreamsOpenAICompatibleResponse(t *testing.T) {
 		t.Fatalf("usage total = %d, want 15", result.Provider.Usage.TotalTokens)
 	}
 }
+
+func TestClientStreamsToolCallsAndReturnsAllowedDecisions(t *testing.T) {
+	t.Setenv("ZAI_API_KEY", "secret-token")
+
+	client := provider.NewClient(
+		provider.NewPromptAssetExecutor(),
+		provider.NewRequestShapeExecutor(),
+		tools.NewPlanToolExecutor(),
+		tools.NewCatalogExecutor(),
+		tools.NewExecutionGate(),
+		provider.NewTransportExecutor(fakeDoer{
+			do: func(req *http.Request) (*http.Response, error) {
+				return &http.Response{
+					StatusCode: http.StatusOK,
+					Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
+					Body: io.NopCloser(bytes.NewBufferString(strings.Join([]string{
+						`data: {"id":"resp-1","model":"glm-5-turbo","choices":[{"index":0,"delta":{"role":"assistant","tool_calls":[{"id":"call-1","index":0,"type":"function","function":{"name":"init_plan","arguments":"{\"goal\":\"Refactor auth\"}"}}]}}]}`,
+						"",
+						`data: {"id":"resp-1","model":"glm-5-turbo","choices":[{"index":0,"finish_reason":"tool_calls","delta":{"content":""}}],"usage":{"prompt_tokens":12,"completion_tokens":3,"total_tokens":15}}`,
+						"",
+						`data: [DONE]`,
+						"",
+					}, "\n"))),
+				}, nil
+			},
+		}),
+	)
+
+	result, err := client.Execute(context.Background(), contracts.ResolvedContracts{
+		ProviderRequest: contracts.ProviderRequestContract{
+			Transport: contracts.TransportContract{
+				Endpoint: contracts.EndpointPolicy{
+					Enabled:  true,
+					Strategy: "static",
+					Params: contracts.EndpointParams{
+						BaseURL: "https://api.z.ai",
+						Path:    "/api/paas/v4/chat/completions",
+						Method:  http.MethodPost,
+					},
+				},
+				Auth: contracts.AuthPolicy{
+					Enabled:  true,
+					Strategy: "bearer_token",
+					Params: contracts.AuthParams{
+						Header:      "Authorization",
+						Prefix:      "Bearer",
+						ValueEnvVar: "ZAI_API_KEY",
+					},
+				},
+			},
+			RequestShape: contracts.RequestShapeContract{
+				Model:     contracts.ModelPolicy{Enabled: true, Strategy: "static_model", Params: contracts.ModelParams{Model: "glm-5-turbo"}},
+				Messages:  contracts.MessagePolicy{Enabled: true, Strategy: "raw_messages"},
+				Tools:     contracts.ToolPolicy{Enabled: true, Strategy: "tools_inline"},
+				Streaming: contracts.StreamingPolicy{Enabled: true, Strategy: "static_stream", Params: contracts.StreamingParams{Stream: true}},
+			},
+		},
+		ToolExecution: contracts.ToolExecutionContract{
+			Access: contracts.ToolAccessPolicy{
+				Enabled:  true,
+				Strategy: "static_allowlist",
+				Params: contracts.ToolAccessParams{
+					ToolIDs: []string{"init_plan"},
+				},
+			},
+			Approval: contracts.ToolApprovalPolicy{
+				Enabled:  true,
+				Strategy: "always_allow",
+			},
+			Sandbox: contracts.ToolSandboxPolicy{
+				Enabled:  true,
+				Strategy: "default_runtime",
+			},
+		},
+	}, provider.ClientInput{
+		Messages: []contracts.Message{{Role: "user", Content: "plan this"}},
+	})
+	if err != nil {
+		t.Fatalf("Execute returned error: %v", err)
+	}
+	if result.Provider.FinishReason != "tool_calls" {
+		t.Fatalf("finish reason = %q, want tool_calls", result.Provider.FinishReason)
+	}
+	if len(result.Provider.ToolCalls) != 1 {
+		t.Fatalf("provider tool calls len = %d, want 1", len(result.Provider.ToolCalls))
+	}
+	if result.Provider.ToolCalls[0].Name != "init_plan" {
+		t.Fatalf("tool call name = %q, want init_plan", result.Provider.ToolCalls[0].Name)
+	}
+	if goal, _ := result.Provider.ToolCalls[0].Arguments["goal"].(string); goal != "Refactor auth" {
+		t.Fatalf("tool call arguments = %#v", result.Provider.ToolCalls[0].Arguments)
+	}
+	if len(result.ToolDecisions) != 1 || !result.ToolDecisions[0].Decision.Allowed {
+		t.Fatalf("tool decisions = %#v", result.ToolDecisions)
+	}
+}

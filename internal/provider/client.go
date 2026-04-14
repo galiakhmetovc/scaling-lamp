@@ -160,7 +160,7 @@ func (c *Client) Execute(ctx context.Context, contractSet contracts.ResolvedCont
 	}
 	parsed := streamed
 	if contractSet.ProviderRequest.RequestShape.Streaming.Enabled && contractSet.ProviderRequest.RequestShape.Streaming.Params.Stream {
-		if parsed.Message.Content == "" {
+		if parsed.Message.Content == "" && len(parsed.ToolCalls) == 0 {
 			return ClientResult{}, fmt.Errorf("provider stream returned no content")
 		}
 	} else {
@@ -221,10 +221,26 @@ func applyProviderStreamChunk(out *ProviderResponse, data []byte, onEvent func(S
 				Content          string `json:"content"`
 				ReasoningContent string `json:"reasoning_content"`
 				Reasoning        string `json:"reasoning"`
+				ToolCalls        []struct {
+					ID       string `json:"id"`
+					Index    int    `json:"index"`
+					Type     string `json:"type"`
+					Function struct {
+						Name      string `json:"name"`
+						Arguments string `json:"arguments"`
+					} `json:"function"`
+				} `json:"tool_calls"`
 			} `json:"delta"`
 			Message struct {
-				Role    string `json:"role"`
-				Content any    `json:"content"`
+				Role      string `json:"role"`
+				Content   any    `json:"content"`
+				ToolCalls []struct {
+					ID       string `json:"id"`
+					Function struct {
+						Name      string          `json:"name"`
+						Arguments json.RawMessage `json:"arguments"`
+					} `json:"function"`
+				} `json:"tool_calls"`
 			} `json:"message"`
 		} `json:"choices"`
 		OutputText string `json:"output_text"`
@@ -259,12 +275,22 @@ func applyProviderStreamChunk(out *ProviderResponse, data []byte, onEvent func(S
 		if raw.Choices[0].Delta.Reasoning != "" && onEvent != nil {
 			onEvent(StreamEvent{Kind: StreamEventReasoning, Text: raw.Choices[0].Delta.Reasoning})
 		}
+		if len(raw.Choices[0].Delta.ToolCalls) > 0 {
+			mergeStreamToolCalls(&out.ToolCalls, raw.Choices[0].Delta.ToolCalls)
+		}
 		if text := extractMessageContentText(raw.Choices[0].Message.Content); text != "" {
 			out.Message.Role = raw.Choices[0].Message.Role
 			out.Message.Content += text
 			if onEvent != nil {
 				onEvent(StreamEvent{Kind: StreamEventText, Text: text})
 			}
+		}
+		if len(raw.Choices[0].Message.ToolCalls) > 0 {
+			toolCalls, err := decodeToolCalls(raw.Choices[0].Message.ToolCalls)
+			if err != nil {
+				return err
+			}
+			out.ToolCalls = toolCalls
 		}
 		if raw.Choices[0].FinishReason != "" {
 			out.FinishReason = raw.Choices[0].FinishReason
@@ -287,6 +313,40 @@ func applyProviderStreamChunk(out *ProviderResponse, data []byte, onEvent func(S
 		out.Message.Role = "assistant"
 	}
 	return nil
+}
+
+func mergeStreamToolCalls(out *[]ToolCall, rawCalls []struct {
+	ID       string `json:"id"`
+	Index    int    `json:"index"`
+	Type     string `json:"type"`
+	Function struct {
+		Name      string `json:"name"`
+		Arguments string `json:"arguments"`
+	} `json:"function"`
+}) {
+	for _, raw := range rawCalls {
+		if raw.Index < 0 {
+			continue
+		}
+		for len(*out) <= raw.Index {
+			*out = append(*out, ToolCall{})
+		}
+		call := (*out)[raw.Index]
+		if raw.ID != "" {
+			call.ID = raw.ID
+		}
+		if raw.Function.Name != "" {
+			call.Name = raw.Function.Name
+		}
+		fragment := strings.TrimSpace(raw.Function.Arguments)
+		if fragment != "" {
+			var decoded map[string]any
+			if err := json.Unmarshal([]byte(fragment), &decoded); err == nil {
+				call.Arguments = decoded
+			}
+		}
+		(*out)[raw.Index] = call
+	}
 }
 
 func extractMessageContentText(value any) string {
