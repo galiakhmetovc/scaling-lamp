@@ -1,0 +1,9 @@
+kind: ProviderTracePolicyConfig
+version: v1
+id: provider-trace-request-zai-smoke
+spec:
+  enabled: true
+  strategy: inline_request
+  params:
+    include_raw_body: true
+    include_decoded_payload: true

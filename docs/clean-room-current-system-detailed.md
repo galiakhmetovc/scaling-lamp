@@ -295,6 +295,7 @@ Current resolved contract families:
 - `RequestShapeContract`
 - `MemoryContract`
 - `PromptAssetsContract`
+- `ProviderTraceContract`
 - `ChatContract`
 
 Current policy validation:
@@ -313,6 +314,11 @@ Current chat contract support:
 - `ChatResumePolicy`
 
 Each of these now carries explicit params, not only a strategy name.
+
+Current provider trace contract support:
+
+- `ProviderTracePolicy`
+  - controls whether exact outbound provider requests are recorded into run events
 
 ## 8. Runtime Builder
 
@@ -413,6 +419,7 @@ Current execution chain:
 ClientInput
   -> PromptAssetExecutor.Build(...)
   -> RequestShapeExecutor.Build(...)
+  -> optional provider request capture
   -> TransportExecutor.Execute(...)
   -> parseProviderResponse(...)
   -> ClientResult
@@ -554,6 +561,22 @@ Current limitation:
 - parsing still assumes OpenAI-compatible top-level response shapes first
 - richer provider semantics are still tracked as follow-up work
 
+### 10.5 Provider Trace Capture
+
+Current file:
+
+- [provider_trace.go](/home/admin/AI-AGENT/data/projects/teamD/.worktrees/rewrite-clean-room-root/internal/runtime/provider_trace.go)
+
+Current behavior:
+
+- runtime checks resolved `ProviderTracePolicy`
+- if strategy is `inline_request`, runtime records the exact assembled provider request into the `run` aggregate
+- capture uses the request bytes returned by `ProviderClient.Execute(...)`
+
+Current runtime event:
+
+- `provider.request.captured`
+
 ## 11. Smoke Runtime Path
 
 Current file:
@@ -627,6 +650,7 @@ Current event kinds:
 
 - `session.created`
 - `run.started`
+- `provider.request.captured`
 - `run.completed`
 - `run.failed`
 

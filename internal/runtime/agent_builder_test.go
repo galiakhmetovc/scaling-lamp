@@ -38,7 +38,8 @@ func TestBuildAgentLoadsRootConfigAndBootstrapsRuntime(t *testing.T) {
 		"  contracts:\n"+
 		"    transport: ./contracts/transport.yaml\n"+
 		"    request_shape: ./contracts/request-shape.yaml\n"+
-		"    memory: ./contracts/memory.yaml\n")
+		"    memory: ./contracts/memory.yaml\n"+
+		"    provider_trace: ./contracts/provider-trace.yaml\n")
 
 	mustWriteFile(t, filepath.Join(dir, "contracts", "transport.yaml"), ""+
 		"kind: TransportContractConfig\n"+
@@ -56,6 +57,13 @@ func TestBuildAgentLoadsRootConfigAndBootstrapsRuntime(t *testing.T) {
 		"id: memory-main\n"+
 		"spec:\n"+
 		"  offload_policy_path: ../policies/memory/offload.yaml\n")
+
+	mustWriteFile(t, filepath.Join(dir, "contracts", "provider-trace.yaml"), ""+
+		"kind: ProviderTraceContractConfig\n"+
+		"version: v1\n"+
+		"id: provider-trace-main\n"+
+		"spec:\n"+
+		"  provider_trace_policy_path: ../policies/provider-trace/request.yaml\n")
 
 	mustWriteFile(t, filepath.Join(dir, "contracts", "request-shape.yaml"), ""+
 		"kind: RequestShapeContractConfig\n"+
@@ -126,6 +134,17 @@ func TestBuildAgentLoadsRootConfigAndBootstrapsRuntime(t *testing.T) {
 		"  strategy: old_only\n"+
 		"  params:\n"+
 		"    max_chars: 1200\n")
+
+	mustWriteFile(t, filepath.Join(dir, "policies", "provider-trace", "request.yaml"), ""+
+		"kind: ProviderTracePolicyConfig\n"+
+		"version: v1\n"+
+		"id: provider-trace-request-main\n"+
+		"spec:\n"+
+		"  enabled: true\n"+
+		"  strategy: inline_request\n"+
+		"  params:\n"+
+		"    include_raw_body: true\n"+
+		"    include_decoded_payload: true\n")
 
 	mustWriteFile(t, filepath.Join(dir, "policies", "request-shape", "model.yaml"), ""+
 		"kind: ModelPolicyConfig\n"+
@@ -230,6 +249,9 @@ func TestBuildAgentLoadsRootConfigAndBootstrapsRuntime(t *testing.T) {
 	}
 	if agent.Contracts.Memory.Offload.Strategy != "old_only" {
 		t.Fatalf("offload strategy = %q, want %q", agent.Contracts.Memory.Offload.Strategy, "old_only")
+	}
+	if agent.Contracts.ProviderTrace.Request.Strategy != "inline_request" {
+		t.Fatalf("provider trace strategy = %q, want %q", agent.Contracts.ProviderTrace.Request.Strategy, "inline_request")
 	}
 	if agent.Contracts.ProviderRequest.RequestShape.ID != "request-shape-main" {
 		t.Fatalf("request-shape ID = %q, want %q", agent.Contracts.ProviderRequest.RequestShape.ID, "request-shape-main")

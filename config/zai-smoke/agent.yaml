@@ -19,4 +19,5 @@ spec:
     request_shape: ./contracts/request-shape.yaml
     memory: ./contracts/memory.yaml
     prompt_assets: ./contracts/prompt-assets.yaml
+    provider_trace: ./contracts/provider-trace.yaml
     chat: ./contracts/chat.yaml

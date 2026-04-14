@@ -37,6 +37,7 @@ Current resolved contracts are:
   - `RequestShapeContract`
 - `MemoryContract`
 - `PromptAssetsContract`
+- `ProviderTraceContract`
 - `ChatContract`
 
 What each contract is responsible for:
@@ -49,6 +50,8 @@ What each contract is responsible for:
   - how prompt history may be offloaded/compacted
 - `PromptAssetsContract`
   - how static prompt fragments are stored and selected
+- `ProviderTraceContract`
+  - how outbound provider request traces are captured
 - `ChatContract`
   - how terminal chat UX behaves
 
@@ -447,7 +450,37 @@ Current implemented strategies:
 - `explicit_resume_only`
   - resume requires explicit `--resume <session-id>`
 
-## 8. Current Built-In Strategy Registry
+## 8. ProviderTrace Contract
+
+`ProviderTraceContract` answers:
+
+- should the outbound provider request be captured at all
+- should raw assembled request JSON be kept
+- should decoded request payload be kept inline in the event
+
+### 8.1 ProviderTracePolicy
+
+Responsibility:
+
+- capture the exact assembled outbound provider request
+
+Supported params:
+
+- `include_raw_body`
+- `include_decoded_payload`
+
+Current implemented strategies:
+
+- `none`
+  - do not record provider request capture
+- `inline_request`
+  - write provider request capture into the run event stream
+
+Current runtime event:
+
+- `provider.request.captured`
+
+## 9. Current Built-In Strategy Registry
 
 These are the current built-in policy kinds and allowed strategies validated during contract resolution:
 
@@ -480,6 +513,9 @@ These are the current built-in policy kinds and allowed strategies validated dur
   - `static_sampling`
 - `PromptAssetPolicyConfig`
   - `inline_assets`
+- `ProviderTracePolicyConfig`
+  - `none`
+  - `inline_request`
 - `ChatInputPolicyConfig`
   - `multiline_buffer`
 - `ChatSubmitPolicyConfig`
@@ -493,7 +529,7 @@ These are the current built-in policy kinds and allowed strategies validated dur
 - `ChatResumePolicyConfig`
   - `explicit_resume_only`
 
-## 9. Current z.ai Smoke Selections
+## 10. Current z.ai Smoke Selections
 
 This is what the shipped `config/zai-smoke` configuration currently selects.
 
@@ -540,7 +576,7 @@ This is what the shipped `config/zai-smoke` configuration currently selects.
 - `PromptAssetPolicy.inline_assets`
   - `assets = []`
 
-### 9.5 Chat
+### 10.5 Chat
 
 - `ChatInputPolicy.multiline_buffer`
   - `primary_prompt = "> "`
@@ -559,7 +595,13 @@ This is what the shipped `config/zai-smoke` configuration currently selects.
 - `ChatResumePolicy.explicit_resume_only`
   - `require_explicit_id = true`
 
-## 10. Runtime Boundaries
+### 10.6 ProviderTrace
+
+- `ProviderTracePolicy.inline_request`
+  - `include_raw_body = true`
+  - `include_decoded_payload = true`
+
+## 11. Runtime Boundaries
 
 Current boundary between layers:
 

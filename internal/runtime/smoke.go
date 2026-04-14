@@ -84,6 +84,9 @@ func (a *Agent) Smoke(ctx context.Context, input SmokeInput) (provider.ClientRes
 		},
 	})
 	if err != nil {
+		if recordErr := a.recordProviderRequestEvent(ctx, runID, sessionID, correlationID, "agent.smoke", result.RequestBody); recordErr != nil {
+			return provider.ClientResult{}, fmt.Errorf("execute smoke request: %v; record provider request: %w", err, recordErr)
+		}
 		if recordErr := a.recordTransportAttemptEvents(ctx, runID, sessionID, correlationID, result.TransportAttempts); recordErr != nil {
 			return provider.ClientResult{}, fmt.Errorf("execute smoke request: %v; record transport attempts: %w", err, recordErr)
 		}
@@ -111,6 +114,9 @@ func (a *Agent) Smoke(ctx context.Context, input SmokeInput) (provider.ClientRes
 		return provider.ClientResult{}, fmt.Errorf("execute smoke request: %w", err)
 	}
 
+	if err := a.recordProviderRequestEvent(ctx, runID, sessionID, correlationID, "agent.smoke", result.RequestBody); err != nil {
+		return provider.ClientResult{}, fmt.Errorf("record provider request: %w", err)
+	}
 	if err := a.recordTransportAttemptEvents(ctx, runID, sessionID, correlationID, result.TransportAttempts); err != nil {
 		return provider.ClientResult{}, fmt.Errorf("record transport attempts: %w", err)
 	}

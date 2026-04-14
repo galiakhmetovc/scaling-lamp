@@ -17,6 +17,7 @@ const (
 	FamilyStreaming      Family = "streaming"
 	FamilySampling       Family = "sampling"
 	FamilyPromptAsset    Family = "prompt_asset"
+	FamilyProviderTrace  Family = "provider_trace"
 	FamilyChatInput      Family = "chat_input"
 	FamilyChatSubmit     Family = "chat_submit"
 	FamilyChatOutput     Family = "chat_output"
@@ -128,6 +129,14 @@ func NewBuiltInRegistry() *Registry {
 		Family: FamilyPromptAsset,
 		Strategy: setOf(
 			"inline_assets",
+		),
+	})
+	registry.Register(Type{
+		Kind:   "ProviderTracePolicyConfig",
+		Family: FamilyProviderTrace,
+		Strategy: setOf(
+			"none",
+			"inline_request",
 		),
 	})
 	registry.Register(Type{

@@ -105,6 +105,7 @@ Current resolved areas:
 - `RequestShapeContract`
 - `MemoryContract`
 - `PromptAssetsContract`
+- `ProviderTraceContract`
 - `ChatContract`
 
 ### `internal/contracts/contracts.go`
@@ -173,6 +174,7 @@ Current role:
 Current provider pipeline now:
 - resolve selected prompt assets into prepend/append message buckets
 - build request-shape JSON body
+- optionally capture the exact outbound provider request through `ProviderTraceContract`
 - execute transport
 - parse provider-specific response body
 - extract normalized usage fields
@@ -182,6 +184,28 @@ Current limitation:
 - parser still assumes OpenAI-compatible top-level wire shapes first
 - stream semantics now emit typed `text` and `reasoning` events
 - provider-specific tool-call parsing is still missing
+
+## Provider Trace Capture
+
+Current provider trace support is policy-driven.
+
+Current contract:
+- `ProviderTraceContract`
+
+Current policy family:
+- `ProviderTracePolicy`
+
+Current strategies:
+- `none`
+- `inline_request`
+
+Current runtime event:
+- `provider.request.captured`
+
+Current behavior:
+- if enabled, runtime records the exact assembled outbound provider request into the run event stream
+- capture happens in both `--smoke` and `--chat`
+- shipped `zai-smoke` config enables inline request capture
 
 ## Request-Shape Execution
 

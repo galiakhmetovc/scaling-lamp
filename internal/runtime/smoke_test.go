@@ -20,7 +20,7 @@ func TestAgentSmokeExecutesProviderClientAndRecordsEvents(t *testing.T) {
 	t.Setenv("TEAMD_ZAI_API_KEY", "secret-token")
 
 	clock := time.Date(2026, 4, 14, 14, 0, 0, 0, time.UTC)
-	idValues := []string{"run-smoke-1", "evt-session-1", "evt-run-start-1", "evt-transport-1", "evt-run-complete-1"}
+	idValues := []string{"run-smoke-1", "evt-session-1", "evt-run-start-1", "evt-provider-request-1", "evt-transport-1", "evt-run-complete-1"}
 	nextID := func(prefix string) string {
 		if len(idValues) == 0 {
 			t.Fatalf("unexpected id request for prefix %q", prefix)
@@ -96,17 +96,34 @@ func TestAgentSmokeExecutesProviderClientAndRecordsEvents(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ListByAggregate run returned error: %v", err)
 	}
-	if len(runEvents) != 3 {
-		t.Fatalf("run events len = %d, want 3", len(runEvents))
+	if len(runEvents) != 4 {
+		t.Fatalf("run events len = %d, want 4", len(runEvents))
 	}
 	if runEvents[0].Kind != eventing.EventRunStarted {
 		t.Fatalf("first run event kind = %q, want %q", runEvents[0].Kind, eventing.EventRunStarted)
 	}
-	if runEvents[1].Kind != eventing.EventTransportAttemptCompleted {
-		t.Fatalf("second run event kind = %q, want %q", runEvents[1].Kind, eventing.EventTransportAttemptCompleted)
+	if runEvents[1].Kind != eventing.EventProviderRequestCaptured {
+		t.Fatalf("second run event kind = %q, want %q", runEvents[1].Kind, eventing.EventProviderRequestCaptured)
 	}
-	if runEvents[2].Kind != eventing.EventRunCompleted {
-		t.Fatalf("third run event kind = %q, want %q", runEvents[2].Kind, eventing.EventRunCompleted)
+	if runEvents[2].Kind != eventing.EventTransportAttemptCompleted {
+		t.Fatalf("third run event kind = %q, want %q", runEvents[2].Kind, eventing.EventTransportAttemptCompleted)
+	}
+	if runEvents[3].Kind != eventing.EventRunCompleted {
+		t.Fatalf("fourth run event kind = %q, want %q", runEvents[3].Kind, eventing.EventRunCompleted)
+	}
+	payload := runEvents[1].Payload
+	if payload["session_id"] != "smoke:agent-smoke-test" {
+		t.Fatalf("captured request session_id = %#v", payload["session_id"])
+	}
+	if payload["raw_body"] == "" {
+		t.Fatalf("captured request raw_body = %#v, want non-empty", payload["raw_body"])
+	}
+	requestPayload, ok := payload["request_payload"].(map[string]any)
+	if !ok {
+		t.Fatalf("captured request payload = %#v, want map", payload["request_payload"])
+	}
+	if requestPayload["model"] != "glm-5-turbo" {
+		t.Fatalf("captured request model = %#v, want glm-5-turbo", requestPayload["model"])
 	}
 }
 
@@ -154,6 +171,17 @@ func smokeContractsForTest() contracts.ResolvedContracts {
 				Enabled: true,
 				Strategy: "inline_assets",
 				Params: contracts.PromptAssetParams{Assets: []contracts.PromptAsset{}},
+			},
+		},
+		ProviderTrace: contracts.ProviderTraceContract{
+			ID: "provider-trace-smoke",
+			Request: contracts.ProviderTracePolicy{
+				Enabled:  true,
+				Strategy: "inline_request",
+				Params: contracts.ProviderTraceParams{
+					IncludeRawBody:       true,
+					IncludeDecodedPayload: true,
+				},
 			},
 		},
 	}

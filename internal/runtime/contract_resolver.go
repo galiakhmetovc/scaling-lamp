@@ -41,6 +41,10 @@ type promptAssetsContractBody struct {
 	PromptAssetPolicyPath string `yaml:"prompt_asset_policy_path"`
 }
 
+type providerTraceContractBody struct {
+	ProviderTracePolicyPath string `yaml:"provider_trace_policy_path"`
+}
+
 type chatContractBody struct {
 	InputPolicyPath   string `yaml:"input_policy_path"`
 	SubmitPolicyPath  string `yaml:"submit_policy_path"`
@@ -340,6 +344,33 @@ func resolvePromptAssetsContract(out *contracts.ResolvedContracts, path string, 
 	return nil
 }
 
+func resolveProviderTraceContract(out *contracts.ResolvedContracts, path string, policyRegistry *policies.Registry) error {
+	contract, err := loadContract[providerTraceContractBody](path, "provider-trace")
+	if err != nil {
+		return err
+	}
+	if contract.Spec.ProviderTracePolicyPath == "" {
+		return fmt.Errorf("provider-trace contract %q missing provider_trace_policy_path", contract.ID)
+	}
+
+	policy, err := loadPolicy[contracts.ProviderTraceParams](path, contract.Spec.ProviderTracePolicyPath, "ProviderTracePolicyConfig", "provider-trace", policyRegistry)
+	if err != nil {
+		return err
+	}
+
+	out.ProviderTrace = contracts.ProviderTraceContract{
+		ID: contract.ID,
+		Request: contracts.ProviderTracePolicy{
+			ID:       policy.ID,
+			Enabled:  policy.Spec.Enabled,
+			Strategy: policy.Spec.Strategy,
+			Params:   policy.Spec.Params,
+		},
+	}
+
+	return nil
+}
+
 func loadContract[T any](path, label string) (contractSpec[T], error) {
 	var contract contractSpec[T]
 	if err := config.LoadModule(path, &contract); err != nil {
@@ -386,6 +417,8 @@ func resolveContractApplyFunc(kind string) (contractApplyFunc, error) {
 		return resolveMemoryContract, nil
 	case "PromptAssetsContractConfig":
 		return resolvePromptAssetsContract, nil
+	case "ProviderTraceContractConfig":
+		return resolveProviderTraceContract, nil
 	case "ChatContractConfig":
 		return resolveChatContract, nil
 	default:

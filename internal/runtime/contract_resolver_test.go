@@ -717,6 +717,58 @@ func TestResolveContractsBuildsChatContractWithParams(t *testing.T) {
 	}
 }
 
+func TestResolveContractsBuildsProviderTraceContract(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+
+	mustWriteFile(t, filepath.Join(dir, "agent.yaml"), ""+
+		"kind: AgentConfig\n"+
+		"version: v1\n"+
+		"id: agent-trace\n"+
+		"spec:\n"+
+		"  contracts:\n"+
+		"    provider_trace: ./contracts/provider-trace.yaml\n")
+
+	mustWriteFile(t, filepath.Join(dir, "contracts", "provider-trace.yaml"), ""+
+		"kind: ProviderTraceContractConfig\n"+
+		"version: v1\n"+
+		"id: provider-trace-main\n"+
+		"spec:\n"+
+		"  provider_trace_policy_path: ../policies/provider-trace/request.yaml\n")
+
+	mustWriteFile(t, filepath.Join(dir, "policies", "provider-trace", "request.yaml"), ""+
+		"kind: ProviderTracePolicyConfig\n"+
+		"version: v1\n"+
+		"id: provider-trace-request-main\n"+
+		"spec:\n"+
+		"  enabled: true\n"+
+		"  strategy: inline_request\n"+
+		"  params:\n"+
+		"    include_raw_body: true\n"+
+		"    include_decoded_payload: true\n")
+
+	cfg, err := config.LoadRoot(filepath.Join(dir, "agent.yaml"))
+	if err != nil {
+		t.Fatalf("LoadRoot returned error: %v", err)
+	}
+
+	got, err := runtime.ResolveContracts(cfg)
+	if err != nil {
+		t.Fatalf("ResolveContracts returned error: %v", err)
+	}
+
+	if got.ProviderTrace.ID != "provider-trace-main" {
+		t.Fatalf("provider trace ID = %q, want provider-trace-main", got.ProviderTrace.ID)
+	}
+	if got.ProviderTrace.Request.Strategy != "inline_request" {
+		t.Fatalf("provider trace strategy = %q, want inline_request", got.ProviderTrace.Request.Strategy)
+	}
+	if !got.ProviderTrace.Request.Params.IncludeRawBody || !got.ProviderTrace.Request.Params.IncludeDecodedPayload {
+		t.Fatalf("provider trace params = %#v", got.ProviderTrace.Request.Params)
+	}
+}
+
 func containsAll(s string, want ...string) bool {
 	for _, fragment := range want {
 		if !strings.Contains(s, fragment) {

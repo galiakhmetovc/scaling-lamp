@@ -1,0 +1,5 @@
+kind: ProviderTraceContractConfig
+version: v1
+id: provider-trace-zai-smoke
+spec:
+  provider_trace_policy_path: ../policies/provider-trace/request.yaml

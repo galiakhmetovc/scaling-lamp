@@ -5,6 +5,7 @@ type ResolvedContracts struct {
 	Memory          MemoryContract
 	PromptAssets    PromptAssetsContract
 	Chat            ChatContract
+	ProviderTrace   ProviderTraceContract
 }
 
 type ProviderRequestContract struct {
@@ -93,6 +94,11 @@ type PromptAssetsContract struct {
 	PromptAsset PromptAssetPolicy
 }
 
+type ProviderTraceContract struct {
+	ID      string
+	Request ProviderTracePolicy
+}
+
 type ChatContract struct {
 	ID      string
 	Input   ChatInputPolicy
@@ -178,6 +184,18 @@ type PromptAssetPolicy struct {
 	Enabled  bool
 	Strategy string
 	Params   PromptAssetParams
+}
+
+type ProviderTracePolicy struct {
+	ID       string
+	Enabled  bool
+	Strategy string
+	Params   ProviderTraceParams
+}
+
+type ProviderTraceParams struct {
+	IncludeRawBody       bool `yaml:"include_raw_body"`
+	IncludeDecodedPayload bool `yaml:"include_decoded_payload"`
 }
 
 type PromptAssetParams struct {

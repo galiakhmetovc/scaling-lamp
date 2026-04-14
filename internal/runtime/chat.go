@@ -139,6 +139,9 @@ func (a *Agent) ChatTurn(ctx context.Context, session *ChatSession, input ChatTu
 		StreamObserver:       input.StreamObserver,
 	})
 	if err != nil {
+		if recordErr := a.recordProviderRequestEvent(ctx, runID, session.SessionID, correlationID, "agent.chat", result.RequestBody); recordErr != nil {
+			return provider.ClientResult{}, fmt.Errorf("execute chat turn: %v; record provider request: %w", err, recordErr)
+		}
 		if recordErr := a.recordTransportAttemptEvents(ctx, runID, session.SessionID, correlationID, result.TransportAttempts); recordErr != nil {
 			return provider.ClientResult{}, fmt.Errorf("execute chat turn: %v; record transport attempts: %w", err, recordErr)
 		}
@@ -165,6 +168,9 @@ func (a *Agent) ChatTurn(ctx context.Context, session *ChatSession, input ChatTu
 		return provider.ClientResult{}, fmt.Errorf("execute chat turn: %w", err)
 	}
 
+	if err := a.recordProviderRequestEvent(ctx, runID, session.SessionID, correlationID, "agent.chat", result.RequestBody); err != nil {
+		return provider.ClientResult{}, fmt.Errorf("record provider request: %w", err)
+	}
 	if err := a.recordTransportAttemptEvents(ctx, runID, session.SessionID, correlationID, result.TransportAttempts); err != nil {
 		return provider.ClientResult{}, fmt.Errorf("record transport attempts: %w", err)
 	}

@@ -22,8 +22,8 @@ func TestAgentChatTurnAndResumeSession(t *testing.T) {
 	clock := time.Date(2026, 4, 14, 16, 10, 0, 0, time.UTC)
 	idValues := []string{
 		"session-chat-1",
-		"run-chat-1", "evt-session-1", "evt-msg-user-1", "evt-run-start-1", "evt-transport-1", "evt-msg-assistant-1", "evt-run-complete-1",
-		"run-chat-2", "evt-msg-user-2", "evt-run-start-2", "evt-transport-2", "evt-msg-assistant-2", "evt-run-complete-2",
+		"run-chat-1", "evt-session-1", "evt-msg-user-1", "evt-run-start-1", "evt-provider-request-1", "evt-transport-1", "evt-msg-assistant-1", "evt-run-complete-1",
+		"run-chat-2", "evt-msg-user-2", "evt-run-start-2", "evt-provider-request-2", "evt-transport-2", "evt-msg-assistant-2", "evt-run-complete-2",
 	}
 	nextID := func(prefix string) string {
 		if len(idValues) == 0 {
@@ -127,6 +127,24 @@ func TestAgentChatTurnAndResumeSession(t *testing.T) {
 	if sessionEvents[1].Kind != eventing.EventMessageRecorded || sessionEvents[2].Kind != eventing.EventMessageRecorded {
 		t.Fatalf("session message events = %#v", sessionEvents)
 	}
+	runEvents, err := agent.EventLog.ListByAggregate(context.Background(), eventing.AggregateRun, "run-chat-1")
+	if err != nil {
+		t.Fatalf("ListByAggregate run returned error: %v", err)
+	}
+	if len(runEvents) != 4 {
+		t.Fatalf("run events len = %d, want 4", len(runEvents))
+	}
+	if runEvents[1].Kind != eventing.EventProviderRequestCaptured {
+		t.Fatalf("second run event kind = %q, want %q", runEvents[1].Kind, eventing.EventProviderRequestCaptured)
+	}
+	requestPayload, ok := runEvents[1].Payload["request_payload"].(map[string]any)
+	if !ok {
+		t.Fatalf("captured request payload = %#v, want map", runEvents[1].Payload["request_payload"])
+	}
+	messages, ok := requestPayload["messages"].([]any)
+	if !ok || len(messages) != 1 {
+		t.Fatalf("captured request messages = %#v", requestPayload["messages"])
+	}
 }
 
 func chatRuntimeConfigForTest() config.AgentConfig {
@@ -171,6 +189,17 @@ func chatContractsForTest() contracts.ResolvedContracts {
 				Enabled: true,
 				Strategy: "inline_assets",
 				Params: contracts.PromptAssetParams{Assets: []contracts.PromptAsset{}},
+			},
+		},
+		ProviderTrace: contracts.ProviderTraceContract{
+			ID: "provider-trace-chat",
+			Request: contracts.ProviderTracePolicy{
+				Enabled:  true,
+				Strategy: "inline_request",
+				Params: contracts.ProviderTraceParams{
+					IncludeRawBody:       true,
+					IncludeDecodedPayload: true,
+				},
 			},
 		},
 	}

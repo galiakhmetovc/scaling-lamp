@@ -46,6 +46,11 @@ func NewBuiltInModuleRegistry() *ModuleRegistry {
 		RefFields: []string{"prompt_asset_policy_path"},
 	})
 	registry.Register(ModuleType{
+		Kind:      "ProviderTraceContractConfig",
+		Category:  ModuleCategoryContract,
+		RefFields: []string{"provider_trace_policy_path"},
+	})
+	registry.Register(ModuleType{
 		Kind:     "ChatContractConfig",
 		Category: ModuleCategoryContract,
 		RefFields: []string{
@@ -115,6 +120,10 @@ func NewBuiltInModuleRegistry() *ModuleRegistry {
 	})
 	registry.Register(ModuleType{
 		Kind:     "PromptAssetPolicyConfig",
+		Category: ModuleCategoryPolicy,
+	})
+	registry.Register(ModuleType{
+		Kind:     "ProviderTracePolicyConfig",
 		Category: ModuleCategoryPolicy,
 	})
 	registry.Register(ModuleType{

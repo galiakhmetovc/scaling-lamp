@@ -15,6 +15,7 @@ const (
 	EventSessionCreated EventKind = "session.created"
 	EventMessageRecorded EventKind = "message.recorded"
 	EventRunStarted     EventKind = "run.started"
+	EventProviderRequestCaptured EventKind = "provider.request.captured"
 	EventTransportAttemptCompleted EventKind = "transport.attempt.completed"
 	EventRunCompleted   EventKind = "run.completed"
 	EventRunFailed      EventKind = "run.failed"
