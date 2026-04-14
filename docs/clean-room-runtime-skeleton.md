@@ -220,7 +220,7 @@ These are known temporary shortcuts and should be removed in the next slices.
 2. Event envelopes are still too small for a serious event-sourced system, even after adding sequence and trace linkage metadata.
 3. Contract resolution is still narrow and only covers the first transport/request-shape/memory path.
 4. Provider client exists, but provider-specific response parsing and higher-level provider semantics are still missing.
-5. Persistent event storage and projection snapshot restore both exist, but projection persistence is still snapshot-based only.
+5. Persistent event storage and automatic projection snapshot flushing now exist, but persistence is still snapshot-based only.
 6. There is only a first built-in policy/strategy registry layer; config-driven registry composition and strategy-driven decoding still do not exist yet.
 7. Prompt assets exist as a separate domain, but only as inline assets prepended during request-shape execution.
 8. Builder composition is config-driven, but only against the built-in component registry.
@@ -229,5 +229,4 @@ These are known temporary shortcuts and should be removed in the next slices.
 ## Next Required Slices
 
 1. richer prompt asset execution and selection
-2. automatic projection snapshot lifecycle
-3. provider-specific response and usage handling
+2. provider-specific response and usage handling

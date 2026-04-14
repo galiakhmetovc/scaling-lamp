@@ -41,7 +41,7 @@ func (p *RunProjection) Apply(event eventing.Event) error {
 		p.snapshot.Status = RunStatusRunning
 		return nil
 	default:
-		return fmt.Errorf("unsupported event kind %q", event.Kind)
+		return nil
 	}
 }
 

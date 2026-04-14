@@ -32,7 +32,7 @@ func (p *SessionProjection) Apply(event eventing.Event) error {
 		p.snapshot.CreatedAt = event.OccurredAt
 		return nil
 	default:
-		return fmt.Errorf("unsupported event kind %q", event.Kind)
+		return nil
 	}
 }
 

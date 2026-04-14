@@ -480,14 +480,60 @@ func TestBuildAgentRestoresProjectionSnapshotsFromStore(t *testing.T) {
 	if runProjection.Snapshot().RunID != "run-1" {
 		t.Fatalf("RunID = %q, want %q", runProjection.Snapshot().RunID, "run-1")
 	}
+}
 
-	if err := agent.EventLog.Append(context.Background(), eventing.Event{
-		Kind:          eventing.EventSessionCreated,
-		OccurredAt:    now,
-		AggregateID:   "session-2",
-		AggregateType: eventing.AggregateSession,
+func TestAgentRecordEventPersistsProjectionSnapshotsAutomatically(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+
+	mustWriteFile(t, filepath.Join(dir, "agent.yaml"), ""+
+		"kind: AgentConfig\n"+
+		"version: v1\n"+
+		"id: agent-test\n"+
+		"spec:\n"+
+		"  runtime:\n"+
+		"    event_log: file_jsonl\n"+
+		"    event_log_path: ./var/events.jsonl\n"+
+		"    projection_store_path: ./var/projections.json\n"+
+		"    transport_executor: transport_default\n"+
+		"    request_shape_executor: request_shape_default\n"+
+		"    projections: [session, run]\n"+
+		"  contracts:\n"+
+		"    transport: ./contracts/transport.yaml\n"+
+		"    request_shape: ./contracts/request-shape.yaml\n"+
+		"    memory: ./contracts/memory.yaml\n")
+
+	mustWriteMinimalContracts(t, dir)
+
+	agent, err := runtime.BuildAgent(filepath.Join(dir, "agent.yaml"))
+	if err != nil {
+		t.Fatalf("BuildAgent returned error: %v", err)
+	}
+
+	now := time.Date(2026, 4, 14, 12, 45, 0, 0, time.UTC)
+	if err := agent.RecordEvent(context.Background(), eventing.Event{
+		ID:               "evt-session-1",
+		Kind:             eventing.EventSessionCreated,
+		OccurredAt:       now,
+		AggregateID:      "session-1",
+		AggregateType:    eventing.AggregateSession,
+		AggregateVersion: 1,
 	}); err != nil {
-		t.Fatalf("event log append returned error: %v", err)
+		t.Fatalf("RecordEvent returned error: %v", err)
+	}
+
+	reloaded, err := runtime.BuildAgent(filepath.Join(dir, "agent.yaml"))
+	if err != nil {
+		t.Fatalf("BuildAgent reload returned error: %v", err)
+	}
+
+	sessionProjection, ok := reloaded.Projections[0].(*projections.SessionProjection)
+	if !ok {
+		t.Fatalf("projection type = %T, want *SessionProjection", reloaded.Projections[0])
+	}
+	if sessionProjection.Snapshot().SessionID != "session-1" {
+		t.Fatalf("SessionID = %q, want %q", sessionProjection.Snapshot().SessionID, "session-1")
 	}
 }
 

@@ -10,6 +10,7 @@ Current flow:
 - projections are built from the configured projection registry
 - builder optionally opens a projection snapshot store
 - stored snapshots are loaded into the built projection set during startup
+- `Agent.RecordEvent(...)` now applies events to projections and flushes snapshots automatically when a store is configured
 
 ## Current Files
 
@@ -36,6 +37,7 @@ Current role:
 - build projection set from runtime config
 - open snapshot store when `projection_store_path` is configured
 - restore snapshots during startup
+- expose `Agent.RecordEvent(...)` as the runtime path that keeps snapshots current
 
 ## Current Config Surface
 
@@ -47,5 +49,4 @@ Current role:
 ## Current Limitation
 
 - persistence stores snapshots, not replay indexes
-- snapshots are not auto-flushed after every event yet
-- builder restores snapshots, but runtime still needs a higher-level projection lifecycle for continuous persistence
+- snapshot flushing now happens through `Agent.RecordEvent(...)`, but there is still no richer batching, compaction, or replay-index layer

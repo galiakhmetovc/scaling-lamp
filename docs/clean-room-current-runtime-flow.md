@@ -251,7 +251,16 @@ Current role:
 
 Current limitation:
 - projection persistence is snapshot-based only
-- runtime still needs a higher-level save lifecycle after event application
+- higher-level batching, compaction, and replay-indexing are still missing
+
+### `internal/runtime/agent_builder.go` and `Agent.RecordEvent(...)`
+
+Current role:
+- restore projection snapshots at startup when a store is configured
+- provide the runtime entrypoint that:
+  - appends events to the event log
+  - applies them to projections
+  - auto-saves projection snapshots
 
 ## What Works Today
 

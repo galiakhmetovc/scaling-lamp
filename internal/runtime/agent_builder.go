@@ -1,11 +1,13 @@
 package runtime
 
 import (
+	"context"
 	"fmt"
 
 	"teamd/internal/config"
 	"teamd/internal/contracts"
 	"teamd/internal/provider"
+	"teamd/internal/runtime/eventing"
 	"teamd/internal/runtime/projections"
 )
 
@@ -17,6 +19,23 @@ type Agent struct {
 	EventLog     EventLog
 	Projections  []projections.Projection
 	ProjectionStore projections.Store
+}
+
+func (a *Agent) RecordEvent(ctx context.Context, event eventing.Event) error {
+	if err := a.EventLog.Append(ctx, event); err != nil {
+		return fmt.Errorf("append event: %w", err)
+	}
+	for _, projection := range a.Projections {
+		if err := projection.Apply(event); err != nil {
+			return fmt.Errorf("apply event to projection %q: %w", projection.ID(), err)
+		}
+	}
+	if a.ProjectionStore != nil {
+		if err := a.ProjectionStore.Save(a.Projections); err != nil {
+			return fmt.Errorf("save projection snapshots: %w", err)
+		}
+	}
+	return nil
 }
 
 func BuildAgent(configPath string) (*Agent, error) {
