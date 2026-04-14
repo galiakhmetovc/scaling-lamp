@@ -48,6 +48,26 @@ cmd/agent
      -> persist snapshots
 ```
 
+```mermaid
+flowchart TD
+    A[cmd/agent] --> B[autoload .env]
+    B --> C[parse CLI flags]
+    C --> D[BuildAgent(config)]
+    D --> E[load root config]
+    E --> F[load module graph]
+    F --> G[validate module kinds]
+    G --> H[resolve contracts]
+    H --> I[build runtime components]
+    I --> J{--smoke?}
+    J -- no --> K[exit]
+    J -- yes --> L[Agent.Smoke]
+    L --> M[record events]
+    L --> N[provider pipeline]
+    L --> O[update projections]
+    L --> P[persist snapshots]
+    L --> Q[print assistant text]
+```
+
 The important thing is that `main` does not assemble runtime pieces itself.
 It delegates assembly to `runtime.BuildAgent`.
 
@@ -184,6 +204,18 @@ Current limitation:
 - it does not itself decode full typed contract bodies
 - typed decoding happens later in the contract resolver
 
+```mermaid
+flowchart TD
+    A[agent.yaml] --> B[contracts/transport.yaml]
+    A --> C[contracts/request-shape.yaml]
+    A --> D[contracts/memory.yaml]
+    A --> E[contracts/prompt-assets.yaml]
+    B --> F[transport policies]
+    C --> G[request-shape policies]
+    D --> H[memory policies]
+    E --> I[prompt-asset policies]
+```
+
 ## 7. Contract Resolution
 
 Current files:
@@ -202,6 +234,15 @@ root config
         -> referenced policy modules
           -> strategy validation
             -> typed resolved contracts
+```
+
+```mermaid
+flowchart LR
+    A[root config contract paths] --> B[load contract modules]
+    B --> C[dispatch by contract kind]
+    C --> D[load referenced policy modules]
+    D --> E[validate policy strategies]
+    E --> F[decode typed contracts]
 ```
 
 Important current design point:
@@ -246,6 +287,22 @@ LoadRoot
   -> build prompt-asset executor
   -> build provider client
   -> return Agent
+```
+
+```mermaid
+flowchart TD
+    A[BuildAgent] --> B[LoadRoot]
+    B --> C[LoadModuleGraph]
+    C --> D[Validate module kinds]
+    D --> E[ResolveContracts]
+    E --> F[Build EventLog]
+    F --> G[Build Projections]
+    G --> H[Load snapshot store]
+    H --> I[Build TransportExecutor]
+    I --> J[Build RequestShapeExecutor]
+    J --> K[Build PromptAssetExecutor]
+    K --> L[Build ProviderClient]
+    L --> M[Return Agent]
 ```
 
 Current runtime `Agent` contains:
@@ -309,6 +366,15 @@ ClientInput
   -> TransportExecutor.Execute(...)
   -> parseProviderResponse(...)
   -> ClientResult
+```
+
+```mermaid
+flowchart LR
+    A[ClientInput] --> B[PromptAssetExecutor]
+    B --> C[RequestShapeExecutor]
+    C --> D[TransportExecutor]
+    D --> E[Provider response parser]
+    E --> F[ClientResult]
 ```
 
 ### 10.1 Prompt Asset Executor
@@ -452,8 +518,24 @@ Agent.Smoke(prompt)
        record run.failed
        return error
      else:
-       record run.completed
-       return provider result
+     record run.completed
+     return provider result
+```
+
+```mermaid
+flowchart TD
+    A[Agent.Smoke] --> B[ensure session id]
+    B --> C{session exists?}
+    C -- no --> D[record session.created]
+    C -- yes --> E[skip bootstrap]
+    D --> F[record run.started]
+    E --> F
+    F --> G[ProviderClient.Execute]
+    G --> H{error?}
+    H -- yes --> I[record run.failed]
+    H -- no --> J[record run.completed]
+    I --> K[return error]
+    J --> L[return provider result]
 ```
 
 Important current behavior:
@@ -610,6 +692,15 @@ RecordEvent(...)
        save all snapshots
 ```
 
+```mermaid
+flowchart LR
+    A[domain action] --> B[EventLog.Append]
+    B --> C[Projection.Apply]
+    C --> D[ProjectionStore.Save]
+    D --> E[session snapshot]
+    D --> F[run snapshot]
+```
+
 So projections are currently:
 
 - event-driven
@@ -704,6 +795,28 @@ Current verified live response was:
 
 ```text
 Pong! How can I help you today?
+```
+
+```mermaid
+sequenceDiagram
+    participant U as Operator
+    participant CLI as cmd/agent
+    participant RT as Agent.Smoke
+    participant PC as ProviderClient
+    participant ZA as z.ai
+    participant EV as EventLog/Projections
+
+    U->>CLI: --config ... --smoke ping
+    CLI->>RT: Smoke("ping")
+    RT->>EV: session.created if needed
+    RT->>EV: run.started
+    RT->>PC: Execute(...)
+    PC->>ZA: POST /chat/completions
+    ZA-->>PC: provider response
+    PC-->>RT: normalized result
+    RT->>EV: run.completed
+    RT-->>CLI: assistant text
+    CLI-->>U: Pong! How can I help you today?
 ```
 
 Current verified artifacts were:
