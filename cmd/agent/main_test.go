@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -42,6 +43,86 @@ func TestRunExecutesSmokeAndPrintsAssistantMessage(t *testing.T) {
 
 	if got := stdout.String(); got != "pong\n" {
 		t.Fatalf("stdout = %q, want %q", got, "pong\n")
+	}
+}
+
+func TestRunAutoloadsDotEnvWithoutOverridingExistingEnv(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if got := r.Header.Get("Authorization"); got != "Bearer shell-token" {
+			t.Fatalf("authorization = %q, want Bearer shell-token", got)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{
+  "id":"resp-1",
+  "model":"glm-5-turbo",
+  "choices":[{"index":0,"finish_reason":"stop","message":{"role":"assistant","content":"pong"}}],
+  "usage":{"prompt_tokens":12,"completion_tokens":3,"total_tokens":15}
+}`))
+	}))
+	defer server.Close()
+
+	dir := t.TempDir()
+	configPath := writeSmokeConfig(t, dir, server.URL)
+	mustWriteFile(t, filepath.Join(dir, ".env"), "TEAMD_ZAI_API_KEY=dotenv-token\n")
+
+	oldWD, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("Getwd returned error: %v", err)
+	}
+	if err := os.Chdir(dir); err != nil {
+		t.Fatalf("Chdir returned error: %v", err)
+	}
+	defer func() {
+		_ = os.Chdir(oldWD)
+	}()
+
+	t.Setenv("TEAMD_ZAI_API_KEY", "shell-token")
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	if err := run([]string{"--config", configPath, "--smoke", "ping"}, &stdout, &stderr); err != nil {
+		t.Fatalf("run returned error: %v", err)
+	}
+}
+
+func TestRunAutoloadsDotEnvWhenProcessEnvMissing(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if got := r.Header.Get("Authorization"); got != "Bearer dotenv-token" {
+			t.Fatalf("authorization = %q, want Bearer dotenv-token", got)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{
+  "id":"resp-1",
+  "model":"glm-5-turbo",
+  "choices":[{"index":0,"finish_reason":"stop","message":{"role":"assistant","content":"pong"}}],
+  "usage":{"prompt_tokens":12,"completion_tokens":3,"total_tokens":15}
+}`))
+	}))
+	defer server.Close()
+
+	dir := t.TempDir()
+	configPath := writeSmokeConfig(t, dir, server.URL)
+	mustWriteFile(t, filepath.Join(dir, ".env"), strings.Join([]string{
+		"# comment",
+		"TEAMD_ZAI_API_KEY=dotenv-token",
+		"",
+	}, "\n"))
+
+	oldWD, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("Getwd returned error: %v", err)
+	}
+	if err := os.Chdir(dir); err != nil {
+		t.Fatalf("Chdir returned error: %v", err)
+	}
+	defer func() {
+		_ = os.Chdir(oldWD)
+	}()
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	if err := run([]string{"--config", configPath, "--smoke", "ping"}, &stdout, &stderr); err != nil {
+		t.Fatalf("run returned error: %v", err)
 	}
 }
 

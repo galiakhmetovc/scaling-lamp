@@ -1,11 +1,13 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"flag"
 	"fmt"
 	"io"
 	"os"
+	"strings"
 
 	"teamd/internal/runtime"
 )
@@ -30,6 +32,9 @@ func run(args []string, stdout, stderr io.Writer) error {
 	if *configPath == "" {
 		return fmt.Errorf("missing required --config")
 	}
+	if err := loadDotEnv(".env"); err != nil {
+		return fmt.Errorf("autoload .env: %w", err)
+	}
 
 	agent, err := runtime.BuildAgent(*configPath)
 	if err != nil {
@@ -45,6 +50,43 @@ func run(args []string, stdout, stderr io.Writer) error {
 	}
 	if _, err := fmt.Fprintln(stdout, result.Provider.Message.Content); err != nil {
 		return fmt.Errorf("write smoke response: %w", err)
+	}
+	return nil
+}
+
+func loadDotEnv(path string) error {
+	file, err := os.Open(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+	defer file.Close()
+
+	scanner := bufio.NewScanner(file)
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		name, value, ok := strings.Cut(line, "=")
+		if !ok {
+			continue
+		}
+		name = strings.TrimSpace(name)
+		if name == "" {
+			continue
+		}
+		if _, exists := os.LookupEnv(name); exists {
+			continue
+		}
+		if err := os.Setenv(name, strings.TrimSpace(value)); err != nil {
+			return err
+		}
+	}
+	if err := scanner.Err(); err != nil {
+		return err
 	}
 	return nil
 }

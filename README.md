@@ -22,6 +22,7 @@ Operational baseline:
   - `config/zai-smoke/agent.yaml`
 - environment template:
   - `.env.example`
+  - loaded automatically from `.env` by `cmd/agent` without overriding already-set env vars
 - GitHub artifact workflow:
   - `.github/workflows/build-agent-artifact.yml`
   - uploads:
