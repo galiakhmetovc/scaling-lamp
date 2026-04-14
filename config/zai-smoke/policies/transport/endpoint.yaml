@@ -1,0 +1,10 @@
+kind: EndpointPolicyConfig
+version: v1
+id: endpoint-zai-smoke
+spec:
+  enabled: true
+  strategy: static
+  params:
+    base_url: https://api.z.ai/api/coding/paas/v4
+    path: /chat/completions
+    method: POST

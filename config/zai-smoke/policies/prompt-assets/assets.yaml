@@ -1,0 +1,8 @@
+kind: PromptAssetPolicyConfig
+version: v1
+id: prompt-assets-zai-smoke
+spec:
+  enabled: true
+  strategy: inline_assets
+  params:
+    assets: []

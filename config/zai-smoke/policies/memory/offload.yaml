@@ -1,0 +1,8 @@
+kind: OffloadPolicyConfig
+version: v1
+id: offload-zai-smoke
+spec:
+  enabled: true
+  strategy: old_only
+  params:
+    max_chars: 1200

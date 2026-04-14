@@ -1,0 +1,8 @@
+kind: ModelPolicyConfig
+version: v1
+id: model-zai-smoke
+spec:
+  enabled: true
+  strategy: static_model
+  params:
+    model: glm-5-turbo

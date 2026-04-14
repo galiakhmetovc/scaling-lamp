@@ -1,0 +1,10 @@
+kind: AuthPolicyConfig
+version: v1
+id: auth-zai-smoke
+spec:
+  enabled: true
+  strategy: bearer_token
+  params:
+    header: Authorization
+    prefix: Bearer
+    value_env_var: TEAMD_ZAI_API_KEY

@@ -1,0 +1,5 @@
+kind: MemoryContractConfig
+version: v1
+id: memory-zai-smoke
+spec:
+  offload_policy_path: ../policies/memory/offload.yaml

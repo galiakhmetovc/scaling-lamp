@@ -3,6 +3,7 @@ package runtime
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"teamd/internal/config"
 	"teamd/internal/contracts"
@@ -21,6 +22,8 @@ type Agent struct {
 	EventLog        EventLog
 	Projections     []projections.Projection
 	ProjectionStore projections.Store
+	Now             func() time.Time
+	NewID           func(prefix string) string
 }
 
 func (a *Agent) RecordEvent(ctx context.Context, event eventing.Event) error {
@@ -112,5 +115,9 @@ func BuildAgent(configPath string) (*Agent, error) {
 		EventLog:        eventLog,
 		Projections:     projectionSet,
 		ProjectionStore: projectionStore,
+		Now:             time.Now,
+		NewID: func(prefix string) string {
+			return fmt.Sprintf("%s-%d", prefix, time.Now().UTC().UnixNano())
+		},
 	}, nil
 }

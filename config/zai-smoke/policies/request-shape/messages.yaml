@@ -1,0 +1,6 @@
+kind: MessagePolicyConfig
+version: v1
+id: messages-zai-smoke
+spec:
+  enabled: true
+  strategy: raw_messages

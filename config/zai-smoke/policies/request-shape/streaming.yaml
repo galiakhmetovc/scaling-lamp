@@ -1,0 +1,8 @@
+kind: StreamingPolicyConfig
+version: v1
+id: streaming-zai-smoke
+spec:
+  enabled: true
+  strategy: static_stream
+  params:
+    stream: false

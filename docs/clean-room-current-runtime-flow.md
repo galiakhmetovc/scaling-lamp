@@ -8,6 +8,7 @@ It does not describe the target architecture beyond what already exists in code.
 ## Current End-To-End Flow
 
 1. `cmd/agent` starts with one explicit `--config` path.
+   It can also run one explicit smoke request through `--smoke`.
 2. `runtime.BuildAgent` loads the root config.
 3. `config.LoadModuleGraph` walks the config graph using built-in registry metadata.
 4. `runtime.ResolveContracts` decodes typed runtime contracts from contract and policy modules.
@@ -27,8 +28,10 @@ It does not describe the target architecture beyond what already exists in code.
 
 Current role:
 - accept `--config`
+- optionally accept `--smoke`
 - call `runtime.BuildAgent`
-- fail fast on invalid config or build errors
+- optionally execute one smoke request through the built runtime agent
+- fail fast on invalid config, build errors, or smoke execution errors
 
 Current boundary:
 - no runtime assembly logic in `main`
@@ -130,6 +133,14 @@ Current components built:
 - `Projections`
 - optional projection snapshot store
 
+### `internal/runtime/smoke.go`
+
+Current role:
+- define one runtime smoke seam above `ProviderClient`
+- create session and run events for a smoke call
+- record run start and run completion/failure through the event log and projections
+- send one user prompt through the configured provider client
+
 Current limitation:
 - builder composition is explicit and config-driven now
 - component selection still comes only from the built-in component registry
@@ -154,6 +165,7 @@ Current provider pipeline now:
 - execute transport
 - parse provider-specific response body
 - extract normalized usage fields
+- feed the combined result into the runtime smoke path when `cmd/agent --smoke` is used
 
 Current limitation:
 - parser currently assumes an OpenAI-compatible response body

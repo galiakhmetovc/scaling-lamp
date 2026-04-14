@@ -1,0 +1,20 @@
+kind: AgentConfig
+version: v1
+id: zai-smoke
+spec:
+  runtime:
+    event_log: file_jsonl
+    event_log_path: ../../var/zai-smoke/events.jsonl
+    projection_store_path: ../../var/zai-smoke/projections.json
+    prompt_asset_executor: prompt_asset_default
+    transport_executor: transport_default
+    request_shape_executor: request_shape_default
+    provider_client: provider_client_default
+    projections:
+      - session
+      - run
+  contracts:
+    transport: ./contracts/transport.yaml
+    request_shape: ./contracts/request-shape.yaml
+    memory: ./contracts/memory.yaml
+    prompt_assets: ./contracts/prompt-assets.yaml

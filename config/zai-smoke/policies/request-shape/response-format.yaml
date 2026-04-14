@@ -1,0 +1,6 @@
+kind: ResponseFormatPolicyConfig
+version: v1
+id: response-format-zai-smoke
+spec:
+  enabled: false
+  strategy: default

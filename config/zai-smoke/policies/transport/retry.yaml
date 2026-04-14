@@ -1,0 +1,17 @@
+kind: RetryPolicyConfig
+version: v1
+id: retry-zai-smoke
+spec:
+  enabled: true
+  strategy: exponential_jitter
+  params:
+    max_attempts: 3
+    base_delay: 100ms
+    max_delay: 1s
+    retry_on_statuses:
+      - 429
+      - 500
+      - 502
+      - 503
+    retry_on_errors:
+      - transport_error

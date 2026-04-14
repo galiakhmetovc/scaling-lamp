@@ -2,11 +2,16 @@ package runtime_test
 
 import (
 	"context"
+	"encoding/json"
+	"io"
+	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
+	"teamd/internal/config"
 	"teamd/internal/runtime"
 	"teamd/internal/runtime/eventing"
 	"teamd/internal/runtime/projections"
@@ -548,6 +553,104 @@ func TestAgentRecordEventPersistsProjectionSnapshotsAutomatically(t *testing.T) 
 	}
 	if sessionProjection.Snapshot().SessionID != "session-1" {
 		t.Fatalf("SessionID = %q, want %q", sessionProjection.Snapshot().SessionID, "session-1")
+	}
+}
+
+func TestAgentSmokeUsesProviderClient(t *testing.T) {
+	dir := t.TempDir()
+
+	mustWriteFile(t, filepath.Join(dir, "agent.yaml"), ""+
+		"kind: AgentConfig\n"+
+		"version: v1\n"+
+		"id: agent-test\n"+
+		"spec:\n"+
+		"  runtime:\n"+
+		"    event_log: file_jsonl\n"+
+		"    event_log_path: ./var/events.jsonl\n"+
+		"    prompt_asset_executor: prompt_asset_default\n"+
+		"    transport_executor: transport_default\n"+
+		"    request_shape_executor: request_shape_default\n"+
+		"    provider_client: provider_client_default\n"+
+		"    projections: [session, run]\n"+
+		"  contracts:\n"+
+		"    transport: ./contracts/transport.yaml\n"+
+		"    request_shape: ./contracts/request-shape.yaml\n"+
+		"    memory: ./contracts/memory.yaml\n")
+
+	mustWriteMinimalContracts(t, dir)
+	t.Setenv("ZAI_API_KEY", "secret-token")
+
+	agent, err := runtime.BuildAgent(filepath.Join(dir, "agent.yaml"))
+	if err != nil {
+		t.Fatalf("BuildAgent returned error: %v", err)
+	}
+
+	agent.Transport.Doer = fakeDoer{
+		do: func(req *http.Request) (*http.Response, error) {
+			return &http.Response{
+				StatusCode: 200,
+				Header:     http.Header{},
+				Body: io.NopCloser(strings.NewReader(`{
+  "id":"resp-smoke-1",
+  "model":"glm-4.6",
+  "choices":[{"index":0,"finish_reason":"stop","message":{"role":"assistant","content":"pong"}}],
+  "usage":{"prompt_tokens":5,"completion_tokens":1,"total_tokens":6}
+}`)),
+			}, nil
+		},
+	}
+
+	result, err := agent.Smoke(context.Background(), runtime.SmokeInput{Prompt: "ping"})
+	if err != nil {
+		t.Fatalf("Smoke returned error: %v", err)
+	}
+	if result.Provider.Message.Content != "pong" {
+		t.Fatalf("provider message = %q, want pong", result.Provider.Message.Content)
+	}
+
+	var payload map[string]any
+	if err := json.Unmarshal(result.RequestBody, &payload); err != nil {
+		t.Fatalf("Unmarshal returned error: %v", err)
+	}
+	messages, ok := payload["messages"].([]any)
+	if !ok || len(messages) != 1 {
+		t.Fatalf("messages = %#v", payload["messages"])
+	}
+	msg, ok := messages[0].(map[string]any)
+	if !ok || msg["content"] != "ping" {
+		t.Fatalf("message = %#v, want user ping", messages[0])
+	}
+}
+
+func TestRepositoryZaiSmokeConfigLoadsAndResolvesContracts(t *testing.T) {
+	t.Parallel()
+
+	configPath := filepath.Join("..", "..", "config", "zai-smoke", "agent.yaml")
+	cfg, err := config.LoadRoot(configPath)
+	if err != nil {
+		t.Fatalf("LoadRoot returned error: %v", err)
+	}
+
+	if cfg.ID != "zai-smoke" {
+		t.Fatalf("config ID = %q, want %q", cfg.ID, "zai-smoke")
+	}
+	if cfg.Spec.Runtime.ProviderClient != "provider_client_default" {
+		t.Fatalf("provider client = %q, want %q", cfg.Spec.Runtime.ProviderClient, "provider_client_default")
+	}
+
+	resolved, err := runtime.ResolveContracts(cfg)
+	if err != nil {
+		t.Fatalf("ResolveContracts returned error: %v", err)
+	}
+
+	if resolved.ProviderRequest.Transport.Endpoint.Params.BaseURL != "https://api.z.ai/api/coding/paas/v4" {
+		t.Fatalf("base URL = %q, want %q", resolved.ProviderRequest.Transport.Endpoint.Params.BaseURL, "https://api.z.ai/api/coding/paas/v4")
+	}
+	if resolved.ProviderRequest.Transport.Auth.Params.ValueEnvVar != "TEAMD_ZAI_API_KEY" {
+		t.Fatalf("auth env var = %q, want %q", resolved.ProviderRequest.Transport.Auth.Params.ValueEnvVar, "TEAMD_ZAI_API_KEY")
+	}
+	if resolved.ProviderRequest.RequestShape.Model.Params.Model != "glm-5-turbo" {
+		t.Fatalf("model = %q, want %q", resolved.ProviderRequest.RequestShape.Model.Params.Model, "glm-5-turbo")
 	}
 }
 

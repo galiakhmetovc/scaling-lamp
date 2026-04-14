@@ -1,0 +1,5 @@
+kind: PromptAssetsContractConfig
+version: v1
+id: prompt-assets-zai-smoke
+spec:
+  prompt_asset_policy_path: ../policies/prompt-assets/assets.yaml

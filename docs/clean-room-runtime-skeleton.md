@@ -14,7 +14,9 @@ Process entrypoint.
 
 Current responsibility:
 - accept `--config`
+- optionally accept `--smoke`
 - call `runtime.BuildAgent`
+- optionally execute one smoke request through the built agent
 - fail fast on invalid config or build errors
 
 It is intentionally thin. Runtime assembly belongs in the builder, not in `main`.
@@ -154,6 +156,13 @@ Current responsibility:
 - register built-in runtime components by id
 - build event log, executors, and projections from explicit config ids
 
+### `internal/runtime/smoke.go`
+
+Current responsibility:
+- define the runtime-level smoke request path
+- keep smoke execution above the provider client instead of burying it in `main`
+- record session/run lifecycle events during smoke execution
+
 ### `internal/contracts/contracts.go`
 
 Resolved runtime contract types.
@@ -222,6 +231,7 @@ These are known temporary shortcuts and should be removed in the next slices.
 4. There is only a first built-in policy/strategy registry layer; config-driven registry composition and strategy-driven decoding still do not exist yet.
 5. Prompt assets now have separate execution semantics with asset ids and prepend/append placement, but only for inline assets.
 6. Builder composition is config-driven, but only against the built-in component registry.
+7. The first live `z.ai` smoke request still depends on `TEAMD_ZAI_API_KEY` being present in the process environment.
 
 ## Next Required Slices
 

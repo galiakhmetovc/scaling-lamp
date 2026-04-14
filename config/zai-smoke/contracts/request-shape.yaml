@@ -1,0 +1,10 @@
+kind: RequestShapeContractConfig
+version: v1
+id: request-shape-zai-smoke
+spec:
+  model_policy_path: ../policies/request-shape/model.yaml
+  message_policy_path: ../policies/request-shape/messages.yaml
+  tool_policy_path: ../policies/request-shape/tools.yaml
+  response_format_policy_path: ../policies/request-shape/response-format.yaml
+  streaming_policy_path: ../policies/request-shape/streaming.yaml
+  sampling_policy_path: ../policies/request-shape/sampling.yaml

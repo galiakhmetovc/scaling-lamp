@@ -1,0 +1,8 @@
+kind: TransportContractConfig
+version: v1
+id: transport-zai-smoke
+spec:
+  endpoint_policy_path: ../policies/transport/endpoint.yaml
+  auth_policy_path: ../policies/transport/auth.yaml
+  retry_policy_path: ../policies/transport/retry.yaml
+  timeout_policy_path: ../policies/transport/timeout.yaml

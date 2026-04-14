@@ -10,7 +10,9 @@ import (
 type RunStatus string
 
 const (
-	RunStatusRunning RunStatus = "running"
+	RunStatusRunning   RunStatus = "running"
+	RunStatusCompleted RunStatus = "completed"
+	RunStatusFailed    RunStatus = "failed"
 )
 
 type RunSnapshot struct {
@@ -39,6 +41,20 @@ func (p *RunProjection) Apply(event eventing.Event) error {
 			p.snapshot.SessionID = sessionID
 		}
 		p.snapshot.Status = RunStatusRunning
+		return nil
+	case eventing.EventRunCompleted:
+		p.snapshot.RunID = event.AggregateID
+		if sessionID, ok := event.Payload["session_id"].(string); ok {
+			p.snapshot.SessionID = sessionID
+		}
+		p.snapshot.Status = RunStatusCompleted
+		return nil
+	case eventing.EventRunFailed:
+		p.snapshot.RunID = event.AggregateID
+		if sessionID, ok := event.Payload["session_id"].(string); ok {
+			p.snapshot.SessionID = sessionID
+		}
+		p.snapshot.Status = RunStatusFailed
 		return nil
 	default:
 		return nil

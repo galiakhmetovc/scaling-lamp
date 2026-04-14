@@ -1,0 +1,6 @@
+kind: ToolPolicyConfig
+version: v1
+id: tools-zai-smoke
+spec:
+  enabled: true
+  strategy: tools_inline

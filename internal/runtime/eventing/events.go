@@ -14,6 +14,8 @@ type EventKind string
 const (
 	EventSessionCreated EventKind = "session.created"
 	EventRunStarted     EventKind = "run.started"
+	EventRunCompleted   EventKind = "run.completed"
+	EventRunFailed      EventKind = "run.failed"
 )
 
 type Event struct {

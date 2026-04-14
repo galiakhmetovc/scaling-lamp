@@ -24,10 +24,12 @@ Current flow:
 1. build provider request body through `RequestShapeExecutor`
 2. execute HTTP request through `TransportExecutor`
 3. parse provider-specific response body into a normalized provider result
-3. return:
+4. return:
    - request body bytes
    - raw transport response
    - normalized provider response
+
+This provider client is now the execution core behind the runtime smoke path in `internal/runtime/smoke.go`.
 
 ### `internal/provider/client_test.go`
 

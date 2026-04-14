@@ -1,0 +1,8 @@
+kind: TimeoutPolicyConfig
+version: v1
+id: timeout-zai-smoke
+spec:
+  enabled: true
+  strategy: per_request
+  params:
+    total: 30s
