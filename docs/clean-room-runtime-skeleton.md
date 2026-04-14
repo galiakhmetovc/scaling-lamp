@@ -138,7 +138,7 @@ Current responsibility:
 
 Current limitation:
 - component selection is config-driven now, but only through the built-in component registry
-- transport and request-shape executors are still separate pieces with no combined provider client yet
+- provider client now exists, but runtime assembly still exposes transport and request-shape executors separately too
 
 ### `internal/runtime/component_registry.go`
 
@@ -213,14 +213,15 @@ These are known temporary shortcuts and should be removed in the next slices.
 1. Config graph loading still stops at module headers and does not decode effective contracts itself.
 2. Event envelopes are still too small for a serious event-sourced system, even after adding sequence and trace linkage metadata.
 3. Contract resolution is still narrow and only covers the first transport/request-shape/memory path.
-4. Provider execution is still split into transport and request-shape pieces with no combined provider client yet.
+4. Provider client exists, but provider-specific response parsing and higher-level provider semantics are still missing.
 5. Persistent event storage and projection snapshot restore both exist, but projection persistence is still snapshot-based only.
 6. There is only a first built-in policy/strategy registry layer; config-driven registry composition and strategy-driven decoding still do not exist yet.
 7. Prompt assets exist as a separate domain, but only as inline assets prepended during request-shape execution.
 8. Builder composition is config-driven, but only against the built-in component registry.
+9. Provider client result is still transport-level; provider-specific parsing and usage handling are not there yet.
 
 ## Next Required Slices
 
-1. combined provider client over request-shape and transport executors
-2. richer prompt asset execution and selection
-3. automatic projection snapshot lifecycle
+1. richer prompt asset execution and selection
+2. automatic projection snapshot lifecycle
+3. provider-specific response and usage handling

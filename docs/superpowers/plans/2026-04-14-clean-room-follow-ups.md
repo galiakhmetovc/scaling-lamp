@@ -1,5 +1,17 @@
 # Clean-Room Follow-Ups
 
-## Combined Provider Client Pipeline
+## Mature Event Envelope
 
-- `teamD-1m1`
+- `teamD-nuu`
+
+## Generalized Contract Decoding
+
+- `teamD-vtn`
+
+## Automatic Projection Snapshot Lifecycle
+
+- `teamD-1ay`
+
+## Richer Prompt Asset Domain
+
+- `teamD-q1k`

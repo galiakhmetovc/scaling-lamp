@@ -19,10 +19,7 @@ It does not describe the target architecture beyond what already exists in code.
    - configured request-shape executor
 6. request-shape execution can build provider JSON body bytes from resolved request-shape contract.
    Prompt assets can now be prepended into the message list through the dedicated prompt asset domain.
-7. transport execution can send a request over HTTP from resolved transport contract.
-
-At the moment, steps 6 and 7 are still separate executors.
-There is not yet one combined provider client pipeline that composes them automatically.
+7. the combined provider client composes request-shape and transport execution into one provider call.
 
 ## Process Entry
 
@@ -120,6 +117,7 @@ Current components built:
 - `Contracts`
 - `Transport`
 - `RequestShape`
+- `ProviderClient`
 - `EventLog`
 - `Projections`
 - optional projection snapshot store
@@ -133,6 +131,14 @@ Current limitation:
 Current role:
 - register built-in runtime component factories
 - map config ids to event log, executor, and projection construction
+
+## Provider Client
+
+### `internal/provider/client.go`
+
+Current role:
+- combine request-shape execution and transport execution
+- return one normalized result object for a provider call
 
 ## Request-Shape Execution
 
@@ -194,7 +200,6 @@ It does not yet:
 - parse provider-specific responses
 - apply TLS policy family
 - apply rate-limit policy family
-- act as part of one combined provider client
 
 ## Event Log
 
@@ -247,7 +252,6 @@ Today the clean-room branch can already do this:
 
 These are current known gaps, not hidden assumptions:
 
-- combined provider client pipeline
 - combined prompt asset execution path in builder/runtime assembly
 - richer event-log indexing/compaction
 - automatic projection snapshot flushing
@@ -261,6 +265,7 @@ These are current known gaps, not hidden assumptions:
 - [clean-room-prompt-assets.md](/home/admin/AI-AGENT/data/projects/teamD/.worktrees/rewrite-clean-room-root/docs/clean-room-prompt-assets.md)
 - [clean-room-persistent-event-log.md](/home/admin/AI-AGENT/data/projects/teamD/.worktrees/rewrite-clean-room-root/docs/clean-room-persistent-event-log.md)
 - [clean-room-persistent-projections.md](/home/admin/AI-AGENT/data/projects/teamD/.worktrees/rewrite-clean-room-root/docs/clean-room-persistent-projections.md)
+- [clean-room-provider-client.md](/home/admin/AI-AGENT/data/projects/teamD/.worktrees/rewrite-clean-room-root/docs/clean-room-provider-client.md)
 - [clean-room-transport-executor.md](/home/admin/AI-AGENT/data/projects/teamD/.worktrees/rewrite-clean-room-root/docs/clean-room-transport-executor.md)
 - [clean-room-request-shape-executor.md](/home/admin/AI-AGENT/data/projects/teamD/.worktrees/rewrite-clean-room-root/docs/clean-room-request-shape-executor.md)
 - [clean-room-implemented-strategies.md](/home/admin/AI-AGENT/data/projects/teamD/.worktrees/rewrite-clean-room-root/docs/clean-room-implemented-strategies.md)
