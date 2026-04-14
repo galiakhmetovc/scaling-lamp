@@ -2,17 +2,17 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Rewrite the context/runtime behavior layer into a policy-driven contract system where all non-essential behavior is optional, strategy-based, merged into resolved contracts, and applied consistently by transport, prompt assembly, memory handling, tool execution, and web display.
+**Goal:** Replace the entire legacy context/runtime behavior layer with a policy-driven contract system where all non-essential behavior is optional, strategy-based, merged into resolved contracts, and applied consistently by transport, prompt assembly, memory handling, tool execution, and web display.
 
-**Architecture:** Keep canonical data objects (`SessionHead`, `WorkspacePointer`, `ArtifactRegistry`, `Transcript`, `Plan`) separate from behavior policy families. Resolve policy families into four runtime contracts: `ProviderRequestContract`, `MemoryContract`, `ExecutionContract`, and `DisplayContract`. Apply those contracts through dedicated executors instead of scattered conditionals. Start from the bottom of the stack with transport/request delivery policy, then move upward into prompt, memory, tools, and web surfaces.
+**Architecture:** Treat the current system as legacy and replace it bottom-up. Keep canonical data objects (`SessionHead`, `WorkspacePointer`, `ArtifactRegistry`, `Transcript`, `Plan`) separate from behavior policy families. Resolve policy families into four runtime contracts: `ProviderRequestContract`, `MemoryContract`, `ExecutionContract`, and `DisplayContract`. Apply those contracts through dedicated executors instead of scattered conditionals. Start from the bottom of the stack with transport/request delivery policy, then move upward into prompt, memory, tools, and web surfaces until legacy paths can be removed.
 
 **Tech Stack:** Go, SQLite/Postgres runtime store, `internal/runtime`, `internal/provider`, `internal/api`, `internal/transport/telegram`, embedded web shell, stdlib.
 
 ---
 
-## Current System Inventory To Migrate
+## Legacy System Inventory To Replace
 
-The rewrite is not scoped to one package. It translates all currently active context/runtime behavior into policy families, strategies, and resolved contracts.
+The rewrite is not scoped to one package. It replaces all currently active legacy context/runtime behavior with policy families, strategies, and resolved contracts.
 
 Current behavior that must be migrated:
 
@@ -34,9 +34,9 @@ Current behavior that must be migrated:
 - raw tool execution path
 - web test bench display trimming and panel visibility
 
-Anything new added to these areas during the rewrite must enter through policy families and contracts, not new ad hoc conditionals.
+Anything new added to these areas during the rewrite must enter through policy families and contracts, not new legacy-style conditionals.
 
-## Migration Mapping
+## Replacement Mapping
 
 ### Data Objects
 
@@ -75,14 +75,15 @@ Anything new added to these areas during the rewrite must enter through policy f
 - tool gate/executor
 - display adapter
 
-## Migration Rules
+## Rewrite Rules
 
 1. No new behavior lands as transport-specific branching if it can be expressed as policy + strategy + contract.
 2. Presence in store never implies inclusion in prompt.
 3. Prompt preview and actual request application must stay aligned.
 4. Display trimming must not silently mutate runtime behavior.
 5. Offloaded content must remain addressable by tools.
-6. Each migration slice must leave a working system behind; no “half-switched” subsystem without adapter compatibility.
+6. Each rewrite slice must leave a working system behind; no “half-switched” subsystem without adapter compatibility.
+7. Existing legacy paths are transitional only and should be deleted once the contract-backed path is proven.
 
 ## File Structure And Responsibility
 
@@ -141,9 +142,9 @@ Anything new added to these areas during the rewrite must enter through policy f
 - Modify: `docs/agent/05-memory-and-recall.md`
   Responsibility: document policy-driven runtime behavior
 
-## Rollout Strategy
+## Replacement Strategy
 
-The system must be rewritten bottom-up and shipped with compatibility layers.
+The system must be rewritten bottom-up and shipped with compatibility layers only as temporary migration scaffolding.
 
 ### Phase A: Transport And Request Contracts
 
@@ -226,7 +227,7 @@ Remove:
 - [ ] **Step 4: Re-run targeted store tests**
 - [ ] **Step 5: Commit**
 
-### Task 2A: Inventory existing behavior and map it to policy/contract targets
+### Task 2A: Inventory legacy behavior and map it to policy/contract replacements
 
 **Files:**
 - Modify: `docs/superpowers/plans/2026-04-14-context-policy-implementation.md`
@@ -235,9 +236,9 @@ Remove:
 - Verify: `internal/api`
 - Verify: `internal/transport/telegram`
 
-- [ ] **Step 1: Enumerate all currently hardcoded behavior that affects transport, request shape, prompt composition, memory, tools, and display**
-- [ ] **Step 2: Add a checked migration mapping row for each discovered behavior**
-- [ ] **Step 3: Verify no active subsystem is left outside the migration inventory**
+- [ ] **Step 1: Enumerate all currently hardcoded legacy behavior that affects transport, request shape, prompt composition, memory, tools, and display**
+- [ ] **Step 2: Add a checked replacement mapping row for each discovered behavior**
+- [ ] **Step 3: Verify no active legacy subsystem is left outside the replacement inventory**
 - [ ] **Step 4: Commit**
 
 ### Task 3: Add resolver from policy families to effective contracts
@@ -272,7 +273,7 @@ Remove:
   - header strategy
   - timeout strategy
   - retry strategy placeholder**
-- [ ] **Step 4: Ensure raw conversation request path uses `ProviderRequestContract.Transport` instead of ad hoc request assembly**
+- [ ] **Step 4: Ensure raw conversation request path uses `ProviderRequestContract.Transport` instead of legacy request assembly**
 - [ ] **Step 5: Re-run targeted provider tests**
 - [ ] **Step 6: Commit**
 
@@ -361,7 +362,7 @@ Remove:
 - [ ] **Step 5: Verify references with `rg -n 'ContextPolicy|WorkspacePointer|ProviderRequestContract|MemoryContract|ExecutionContract|DisplayContract' internal docs/agent`**
 - [ ] **Step 6: Commit**
 
-### Task 10: Remove legacy ad hoc behavior after contract adoption
+### Task 10: Remove legacy behavior after contract adoption
 
 **Files:**
 - Modify: `internal/provider`
@@ -371,7 +372,7 @@ Remove:
 
 - [ ] **Step 1: Identify remaining hardcoded policy logic that duplicates resolved contracts**
 - [ ] **Step 2: Delete or collapse obsolete helper paths after contract-backed coverage is in place**
-- [ ] **Step 3: Re-run targeted migration tests**
+- [ ] **Step 3: Re-run targeted rewrite tests**
 - [ ] **Step 4: Commit**
 
 ### Task 11: Full verification and controlled rollout

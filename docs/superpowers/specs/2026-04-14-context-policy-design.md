@@ -2,7 +2,7 @@
 
 ## Goal
 
-Add one policy-driven context system that makes every non-essential context layer optional, strategy-based, and observable.
+Replace the current legacy context/runtime behavior model with one policy-driven context system where every non-essential layer is optional, strategy-based, and observable.
 
 The design must let `teamD` decide per global/session/run scope:
 
@@ -28,7 +28,15 @@ The design must let `teamD` decide per global/session/run scope:
 They work, but they are still mostly encoded as behavior in code paths instead of one explicit resolved policy.
 
 The immediate problem is not “missing memory”.  
-The immediate problem is that context composition, offload, summarization, tool exposure, and display are only partially configurable and not modeled as one first-class policy surface.
+The immediate problem is that the current system is legacy:
+
+- context composition is scattered
+- offload is partially hardcoded
+- summarization is not a first-class contract
+- tool exposure and execution still mix policy with transport logic
+- display has knobs that are not rooted in one resolved policy surface
+
+This work is a full replacement of that legacy model, not a patch series on top of it.
 
 ## Core Principles
 
@@ -46,7 +54,7 @@ The immediate problem is that context composition, offload, summarization, tool 
 
 ## Scope
 
-This slice defines the model and integration shape for a configurable context system.
+This slice defines the replacement model and integration shape for a configurable context system.
 
 It adds:
 
@@ -135,7 +143,7 @@ Candidate fields:
 
 ### 4. Transcript
 
-Conversation history remains canonical conversation data, but prompt inclusion is policy-driven.
+Conversation history remains canonical conversation data, but prompt inclusion is policy-driven and no legacy inclusion path should survive the rewrite.
 
 ### 5. Plan
 
@@ -467,7 +475,12 @@ Examples:
 - effective policy can be resolved and displayed
 - `SessionHead` stays short
 - `WorkspacePointer` remains stored state, not prompt dump
-- offload and summarization become policy-driven instead of hardcoded behavior
+- offload and summarization replace legacy hardcoded behavior with policy-driven execution
+- no new behavior lands in the legacy style
+
+## Legacy Position
+
+Everything in the current system that shapes transport, prompt, memory, tool execution, and display outside resolved contracts should be treated as legacy behavior pending replacement.
 
 ## Non-goals
 
