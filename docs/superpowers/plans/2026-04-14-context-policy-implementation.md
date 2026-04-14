@@ -10,6 +10,191 @@
 
 ---
 
+## Current System Inventory To Migrate
+
+The rewrite is not scoped to one package. It translates all currently active context/runtime behavior into policy families, strategies, and resolved contracts.
+
+Current behavior that must be migrated:
+
+- provider transport defaults and overrides
+- provider request body shaping
+- raw conversation request preview and transport path
+- `SessionHead` projection and prompt rendering
+- recent work projection
+- memory recall inclusion
+- checkpoint/continuity inclusion
+- workspace inclusion
+- skills inclusion
+- artifact offload thresholds and preview format
+- raw conversation old-tool-output offload
+- raw conversation model-driven history summarization
+- workspace tracking and VFS-derived focus
+- plan projection into `SessionHead`
+- tool allowlist and approval semantics
+- raw tool execution path
+- web test bench display trimming and panel visibility
+
+Anything new added to these areas during the rewrite must enter through policy families and contracts, not new ad hoc conditionals.
+
+## Migration Mapping
+
+### Data Objects
+
+- `SessionHead`
+- `WorkspacePointer`
+- `ArtifactRegistry`
+- `Transcript`
+- `Plan`
+
+### Policy Families
+
+- `TransportPolicy`
+- `RequestShapePolicy`
+- `PromptPolicy`
+- `OffloadPolicy`
+- `SummarizationPolicy`
+- `WorkspacePolicy`
+- `ToolPolicy`
+- `DisplayPolicy`
+
+### Resolved Contracts
+
+- `ProviderRequestContract`
+- `MemoryContract`
+- `ExecutionContract`
+- `DisplayContract`
+
+### Executors
+
+- provider transport executor
+- provider request-shape executor
+- prompt assembler
+- workspace tracker
+- offloader
+- summarizer
+- tool gate/executor
+- display adapter
+
+## Migration Rules
+
+1. No new behavior lands as transport-specific branching if it can be expressed as policy + strategy + contract.
+2. Presence in store never implies inclusion in prompt.
+3. Prompt preview and actual request application must stay aligned.
+4. Display trimming must not silently mutate runtime behavior.
+5. Offloaded content must remain addressable by tools.
+6. Each migration slice must leave a working system behind; no “half-switched” subsystem without adapter compatibility.
+
+## File Structure And Responsibility
+
+### Runtime Policy Core
+
+- Create: `internal/runtime/context_policy.go`
+  Responsibility: policy family data model and validation
+- Create: `internal/runtime/context_contracts.go`
+  Responsibility: resolved contract shapes
+- Create: `internal/runtime/context_policy_resolver.go`
+  Responsibility: merge and resolve `global < session < run`
+- Create: `internal/runtime/workspace_pointer.go`
+  Responsibility: persisted workspace pointer model
+- Create: `internal/runtime/workspace_pointer_service.go`
+  Responsibility: reactive workspace updates from tools and runtime events
+- Create: `internal/runtime/history_summary_service.go`
+  Responsibility: model-driven history summarization
+
+### Provider Transport And Request Shape
+
+- Create: `internal/provider/transport_policy.go`
+  Responsibility: apply transport contract to HTTP request delivery
+- Create: `internal/provider/request_shape_policy.go`
+  Responsibility: apply request-shape contract to provider JSON body
+- Modify: `internal/provider/provider.go`
+  Responsibility: canonical provider request structs and contract-aware request inputs
+- Modify: `internal/provider/zai/client.go`
+  Responsibility: contract-aware provider execution
+
+### Runtime Application Points
+
+- Modify: `internal/runtime/execution_service.go`
+  Responsibility: attach resolved contracts to run context
+- Modify: `internal/runtime/prompt_context_assembler.go`
+  Responsibility: contract-driven prompt layer application
+- Modify: `internal/runtime/recent_work.go`
+  Responsibility: recent-work projection under prompt contract
+- Modify: `internal/runtime/store.go`
+- Modify: `internal/runtime/sqlite_store.go`
+- Modify: `internal/runtime/postgres_store.go`
+  Responsibility: persist session policy and workspace pointer
+
+### Tool And Transport Surfaces
+
+- Modify: `internal/transport/telegram/provider_tools.go`
+  Responsibility: contract-driven tool exposure
+- Modify: `internal/api/server.go`
+  Responsibility: raw conversation/web routes, raw tool execution, policy/debug endpoints
+- Modify: `internal/api/types.go`
+  Responsibility: API types for configured/effective policy and contract views
+
+### Docs And Web
+
+- Modify: `docs/agent/http-api.md`
+- Modify: `docs/agent/operator-chat.md`
+- Modify: `docs/agent/05-memory-and-recall.md`
+  Responsibility: document policy-driven runtime behavior
+
+## Rollout Strategy
+
+The system must be rewritten bottom-up and shipped with compatibility layers.
+
+### Phase A: Transport And Request Contracts
+
+Replace:
+- hardcoded provider URL/auth/header/timeout choices
+- ad hoc request-shape serialization
+
+With:
+- `ProviderRequestContract.Transport`
+- `ProviderRequestContract.RequestShape`
+
+### Phase B: Prompt Contract
+
+Replace:
+- hardcoded prompt-layer assembly toggles
+
+With:
+- `ProviderRequestContract.Prompt`
+
+### Phase C: Memory Contract
+
+Replace:
+- hardcoded offload thresholds
+- hardcoded raw old-tool-output logic
+- ad hoc history summary and workspace focus behavior
+
+With:
+- `MemoryContract`
+
+### Phase D: Execution Contract
+
+Replace:
+- scattered tool allowlists and approval rules
+
+With:
+- `ExecutionContract`
+
+### Phase E: Display Contract
+
+Replace:
+- hardcoded web display trimming and panel logic
+
+With:
+- `DisplayContract`
+
+### Phase F: Cleanup
+
+Remove:
+- legacy branching that duplicates resolved contract behavior
+- obsolete helper paths that recompute policy locally
+
 ### Task 1: Define policy families, contracts, and validation rules
 
 **Files:**
@@ -40,6 +225,20 @@
 - [ ] **Step 3: Add DB schema, migrations, runtime API accessors, and save/load methods**
 - [ ] **Step 4: Re-run targeted store tests**
 - [ ] **Step 5: Commit**
+
+### Task 2A: Inventory existing behavior and map it to policy/contract targets
+
+**Files:**
+- Modify: `docs/superpowers/plans/2026-04-14-context-policy-implementation.md`
+- Verify: `internal/provider`
+- Verify: `internal/runtime`
+- Verify: `internal/api`
+- Verify: `internal/transport/telegram`
+
+- [ ] **Step 1: Enumerate all currently hardcoded behavior that affects transport, request shape, prompt composition, memory, tools, and display**
+- [ ] **Step 2: Add a checked migration mapping row for each discovered behavior**
+- [ ] **Step 3: Verify no active subsystem is left outside the migration inventory**
+- [ ] **Step 4: Commit**
 
 ### Task 3: Add resolver from policy families to effective contracts
 
@@ -162,7 +361,20 @@
 - [ ] **Step 5: Verify references with `rg -n 'ContextPolicy|WorkspacePointer|ProviderRequestContract|MemoryContract|ExecutionContract|DisplayContract' internal docs/agent`**
 - [ ] **Step 6: Commit**
 
-### Task 10: Full verification and controlled rollout
+### Task 10: Remove legacy ad hoc behavior after contract adoption
+
+**Files:**
+- Modify: `internal/provider`
+- Modify: `internal/runtime`
+- Modify: `internal/api`
+- Modify: `internal/transport/telegram`
+
+- [ ] **Step 1: Identify remaining hardcoded policy logic that duplicates resolved contracts**
+- [ ] **Step 2: Delete or collapse obsolete helper paths after contract-backed coverage is in place**
+- [ ] **Step 3: Re-run targeted migration tests**
+- [ ] **Step 4: Commit**
+
+### Task 11: Full verification and controlled rollout
 
 **Files:**
 - No new files expected
