@@ -54,11 +54,12 @@ type RetryPolicy struct {
 }
 
 type RetryParams struct {
-	MaxAttempts     int      `yaml:"max_attempts"`
-	BaseDelay       string   `yaml:"base_delay"`
-	MaxDelay        string   `yaml:"max_delay"`
-	RetryOnStatuses []int    `yaml:"retry_on_statuses"`
-	RetryOnErrors   []string `yaml:"retry_on_errors"`
+	MaxAttempts        int      `yaml:"max_attempts"`
+	BaseDelay          string   `yaml:"base_delay"`
+	MaxDelay           string   `yaml:"max_delay"`
+	RetryOnStatuses    []int    `yaml:"retry_on_statuses"`
+	RetryOnErrors      []string `yaml:"retry_on_errors"`
+	EarlyFailureWindow string   `yaml:"early_failure_window"`
 }
 
 type TimeoutPolicy struct {
@@ -69,9 +70,11 @@ type TimeoutPolicy struct {
 }
 
 type TimeoutParams struct {
-	Total   string `yaml:"total"`
-	Connect string `yaml:"connect"`
-	Idle    string `yaml:"idle"`
+	Total           string `yaml:"total"`
+	Connect         string `yaml:"connect"`
+	Idle            string `yaml:"idle"`
+	OperationBudget string `yaml:"operation_budget"`
+	AttemptTimeout  string `yaml:"attempt_timeout"`
 }
 
 type RequestShapeContract struct {

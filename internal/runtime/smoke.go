@@ -84,6 +84,9 @@ func (a *Agent) Smoke(ctx context.Context, input SmokeInput) (provider.ClientRes
 		},
 	})
 	if err != nil {
+		if recordErr := a.recordTransportAttemptEvents(ctx, runID, sessionID, correlationID, result.TransportAttempts); recordErr != nil {
+			return provider.ClientResult{}, fmt.Errorf("execute smoke request: %v; record transport attempts: %w", err, recordErr)
+		}
 		recordErr := a.RecordEvent(ctx, eventing.Event{
 			ID:               a.newID("evt-run-failed"),
 			Kind:             eventing.EventRunFailed,
@@ -106,6 +109,10 @@ func (a *Agent) Smoke(ctx context.Context, input SmokeInput) (provider.ClientRes
 			return provider.ClientResult{}, fmt.Errorf("execute smoke request: %v; record failure event: %w", err, recordErr)
 		}
 		return provider.ClientResult{}, fmt.Errorf("execute smoke request: %w", err)
+	}
+
+	if err := a.recordTransportAttemptEvents(ctx, runID, sessionID, correlationID, result.TransportAttempts); err != nil {
+		return provider.ClientResult{}, fmt.Errorf("record transport attempts: %w", err)
 	}
 
 	if err := a.RecordEvent(ctx, eventing.Event{
@@ -160,4 +167,42 @@ func (a *Agent) sessionExists(sessionID string) bool {
 		return sessionProjection.Snapshot().SessionID == sessionID
 	}
 	return false
+}
+
+func (a *Agent) recordTransportAttemptEvents(ctx context.Context, runID, sessionID, correlationID string, attempts []provider.AttemptTrace) error {
+	for _, attempt := range attempts {
+		payload := map[string]any{
+			"session_id":         sessionID,
+			"attempt":            attempt.Attempt,
+			"attempt_started_at": attempt.StartedAt,
+			"attempt_finished_at": attempt.FinishedAt,
+			"duration_ms":        attempt.Duration.Milliseconds(),
+			"status_code":        attempt.StatusCode,
+			"error":              attempt.Error,
+			"attempt_timeout_ms": attempt.AttemptTimeout.Milliseconds(),
+			"operation_budget_ms": attempt.OperationBudget.Milliseconds(),
+			"retry_decision":     attempt.RetryDecision,
+			"retry_reason":       attempt.RetryReason,
+			"computed_backoff_ms": attempt.ComputedBackoff.Milliseconds(),
+			"final_attempt_count": attempt.FinalAttemptCount,
+		}
+		if err := a.RecordEvent(ctx, eventing.Event{
+			ID:               a.newID("evt-transport-attempt"),
+			Kind:             eventing.EventTransportAttemptCompleted,
+			OccurredAt:       attempt.FinishedAt,
+			AggregateID:      runID,
+			AggregateType:    eventing.AggregateRun,
+			AggregateVersion: 2,
+			CorrelationID:    correlationID,
+			CausationID:      runID,
+			Source:           "agent.smoke",
+			ActorID:          a.Config.ID,
+			ActorType:        "agent",
+			TraceSummary:     "transport attempt completed",
+			Payload:          payload,
+		}); err != nil {
+			return err
+		}
+	}
+	return nil
 }

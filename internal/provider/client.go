@@ -14,12 +14,14 @@ type ClientInput struct {
 	PromptAssetSelection []string
 	Messages             []contracts.Message
 	Tools                []map[string]any
+	AttemptObserver      func(AttemptTrace)
 }
 
 type ClientResult struct {
-	RequestBody []byte
-	Transport   Response
-	Provider    ProviderResponse
+	RequestBody      []byte
+	Transport        Response
+	Provider         ProviderResponse
+	TransportAttempts []AttemptTrace
 }
 
 type Client struct {
@@ -81,12 +83,24 @@ func (c *Client) Execute(ctx context.Context, contractSet contracts.ResolvedCont
 		return ClientResult{}, fmt.Errorf("build provider request body: %w", err)
 	}
 
+	attempts := make([]AttemptTrace, 0, 4)
+	observer := func(trace AttemptTrace) {
+		attempts = append(attempts, trace)
+		if input.AttemptObserver != nil {
+			input.AttemptObserver(trace)
+		}
+	}
+
 	response, err := c.Transport.Execute(ctx, contractSet.ProviderRequest.Transport, Request{
-		Body:        requestBody,
-		ContentType: "application/json",
+		Body:            requestBody,
+		ContentType:     "application/json",
+		AttemptObserver: observer,
 	})
 	if err != nil {
-		return ClientResult{}, fmt.Errorf("execute provider transport: %w", err)
+		return ClientResult{
+			RequestBody:       requestBody,
+			TransportAttempts: attempts,
+		}, fmt.Errorf("execute provider transport: %w", err)
 	}
 	parsed, err := parseProviderResponse(response)
 	if err != nil {
@@ -94,9 +108,10 @@ func (c *Client) Execute(ctx context.Context, contractSet contracts.ResolvedCont
 	}
 
 	return ClientResult{
-		RequestBody: requestBody,
-		Transport:   response,
-		Provider:    parsed,
+		RequestBody:       requestBody,
+		Transport:         response,
+		Provider:          parsed,
+		TransportAttempts: attempts,
 	}, nil
 }
 

@@ -124,6 +124,7 @@ Current params:
 - `max_delay`
 - `retry_on_statuses`
 - `retry_on_errors`
+- `early_failure_window`
 
 ### `RetryPolicy.exponential`
 
@@ -175,6 +176,24 @@ Current behavior:
 
 Current params:
 - `total`
+
+Current runtime boundary:
+- resolved in `contract_resolver`
+- applied in `transport_executor`
+
+### `TimeoutPolicy.long_running_non_streaming`
+
+Status:
+- implemented
+
+Current behavior:
+- applies an optional overall `operation_budget` for the whole provider call
+- does not force a short per-attempt deadline unless `attempt_timeout` is explicitly configured
+- is intended for non-streaming provider calls that may legitimately run for a long time
+
+Current params:
+- `operation_budget`
+- `attempt_timeout`
 
 Current runtime boundary:
 - resolved in `contract_resolver`

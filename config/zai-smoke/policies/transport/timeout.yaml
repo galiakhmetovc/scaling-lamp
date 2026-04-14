@@ -3,6 +3,6 @@ version: v1
 id: timeout-zai-smoke
 spec:
   enabled: true
-  strategy: per_request
+  strategy: long_running_non_streaming
   params:
-    total: 120s
+    operation_budget: 1h

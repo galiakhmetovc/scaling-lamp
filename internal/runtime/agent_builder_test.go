@@ -649,8 +649,14 @@ func TestRepositoryZaiSmokeConfigLoadsAndResolvesContracts(t *testing.T) {
 	if resolved.ProviderRequest.Transport.Auth.Params.ValueEnvVar != "TEAMD_ZAI_API_KEY" {
 		t.Fatalf("auth env var = %q, want %q", resolved.ProviderRequest.Transport.Auth.Params.ValueEnvVar, "TEAMD_ZAI_API_KEY")
 	}
-	if resolved.ProviderRequest.Transport.Timeout.Params.Total != "120s" {
-		t.Fatalf("timeout total = %q, want %q", resolved.ProviderRequest.Transport.Timeout.Params.Total, "120s")
+	if resolved.ProviderRequest.Transport.Timeout.Strategy != "long_running_non_streaming" {
+		t.Fatalf("timeout strategy = %q, want %q", resolved.ProviderRequest.Transport.Timeout.Strategy, "long_running_non_streaming")
+	}
+	if resolved.ProviderRequest.Transport.Timeout.Params.OperationBudget != "1h" {
+		t.Fatalf("operation budget = %q, want %q", resolved.ProviderRequest.Transport.Timeout.Params.OperationBudget, "1h")
+	}
+	if resolved.ProviderRequest.Transport.Retry.Params.EarlyFailureWindow != "5s" {
+		t.Fatalf("early failure window = %q, want %q", resolved.ProviderRequest.Transport.Retry.Params.EarlyFailureWindow, "5s")
 	}
 	if resolved.ProviderRequest.RequestShape.Model.Params.Model != "glm-5-turbo" {
 		t.Fatalf("model = %q, want %q", resolved.ProviderRequest.RequestShape.Model.Params.Model, "glm-5-turbo")

@@ -460,6 +460,7 @@ Current supported transport behavior:
   - `exponential_jitter`
 - timeout strategy:
   - `per_request`
+  - `long_running_non_streaming`
 
 Current unsupported transport areas:
 
@@ -514,6 +515,7 @@ Agent.Smoke(prompt)
   -> record session.created
   -> record run.started
   -> ProviderClient.Execute(...)
+  -> record transport.attempt.completed for each transport attempt
   -> if error:
        record run.failed
        return error
@@ -751,8 +753,12 @@ Current important `z.ai` values:
   - `TEAMD_ZAI_API_KEY`
 - model:
   - `glm-5-turbo`
-- timeout:
-  - `120s`
+- timeout strategy:
+  - `long_running_non_streaming`
+- operation budget:
+  - `1h`
+- retry early failure window:
+  - `5s`
 
 Current persistence targets:
 

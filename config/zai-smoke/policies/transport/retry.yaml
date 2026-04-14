@@ -8,6 +8,7 @@ spec:
     max_attempts: 3
     base_delay: 100ms
     max_delay: 1s
+    early_failure_window: 5s
     retry_on_statuses:
       - 429
       - 500

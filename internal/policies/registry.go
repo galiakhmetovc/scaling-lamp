@@ -65,6 +65,7 @@ func NewBuiltInRegistry() *Registry {
 		Family: FamilyTimeout,
 		Strategy: setOf(
 			"per_request",
+			"long_running_non_streaming",
 		),
 	})
 	registry.Register(Type{

@@ -20,14 +20,30 @@ type HTTPDoer interface {
 }
 
 type Request struct {
-	Body        []byte
-	ContentType string
+	Body            []byte
+	ContentType     string
+	AttemptObserver func(AttemptTrace)
 }
 
 type Response struct {
 	StatusCode int
 	Headers    http.Header
 	Body       []byte
+}
+
+type AttemptTrace struct {
+	Attempt          int
+	StartedAt        time.Time
+	FinishedAt       time.Time
+	Duration         time.Duration
+	StatusCode       int
+	Error            string
+	AttemptTimeout   time.Duration
+	OperationBudget  time.Duration
+	RetryDecision    bool
+	RetryReason      string
+	ComputedBackoff  time.Duration
+	FinalAttemptCount int
 }
 
 type TransportExecutor struct {
@@ -63,17 +79,57 @@ func (e *TransportExecutor) Execute(ctx context.Context, contract contracts.Tran
 		return Response{}, fmt.Errorf("unsupported endpoint strategy %q", contract.Endpoint.Strategy)
 	}
 
+	executionCtx := ctx
+	executionCancel := func() {}
+	operationBudget, err := operationBudget(contract.Timeout)
+	if err != nil {
+		return Response{}, err
+	}
+	if operationBudget > 0 {
+		executionCtx, executionCancel = context.WithTimeout(ctx, operationBudget)
+	}
+	defer executionCancel()
+
 	maxAttempts := retryAttempts(contract.Retry)
 	var lastErr error
 	for attempt := 1; attempt <= maxAttempts; attempt++ {
-		response, err := e.executeOnce(ctx, contract, request)
+		startedAt := time.Now().UTC()
+		attemptTimeout, err := attemptTimeout(contract.Timeout)
+		if err != nil {
+			return Response{}, err
+		}
+
+		response, err := e.executeOnce(executionCtx, contract, request, attemptTimeout)
+		finishedAt := time.Now().UTC()
+		trace := AttemptTrace{
+			Attempt:         attempt,
+			StartedAt:       startedAt,
+			FinishedAt:      finishedAt,
+			Duration:        finishedAt.Sub(startedAt),
+			AttemptTimeout:  attemptTimeout,
+			OperationBudget: operationBudget,
+		}
 		if err == nil {
-			if !shouldRetryStatus(contract.Retry, response.StatusCode) || attempt == maxAttempts {
+			trace.StatusCode = response.StatusCode
+			trace.RetryDecision = shouldRetryStatus(contract.Retry, response.StatusCode) && attempt < maxAttempts
+			if trace.RetryDecision {
+				trace.RetryReason = fmt.Sprintf("status:%d", response.StatusCode)
+			}
+			if !trace.RetryDecision {
+				trace.FinalAttemptCount = attempt
+				emitAttemptTrace(request, trace)
 				return response, nil
 			}
 		} else {
 			lastErr = err
-			if !shouldRetryError(contract.Retry, err) || attempt == maxAttempts {
+			trace.Error = err.Error()
+			trace.RetryDecision = shouldRetryError(contract.Retry, err, trace.Duration) && attempt < maxAttempts
+			if trace.RetryDecision {
+				trace.RetryReason = retryReason(err)
+			}
+			if !trace.RetryDecision {
+				trace.FinalAttemptCount = attempt
+				emitAttemptTrace(request, trace)
 				return Response{}, err
 			}
 		}
@@ -88,6 +144,9 @@ func (e *TransportExecutor) Execute(ctx context.Context, contract contracts.Tran
 				delay = maxDelay
 			}
 		}
+		trace.ComputedBackoff = delay
+		trace.FinalAttemptCount = maxAttempts
+		emitAttemptTrace(request, trace)
 		e.Sleep(delay)
 	}
 
@@ -97,15 +156,11 @@ func (e *TransportExecutor) Execute(ctx context.Context, contract contracts.Tran
 	return Response{}, fmt.Errorf("transport execution exhausted retries without response")
 }
 
-func (e *TransportExecutor) executeOnce(ctx context.Context, contract contracts.TransportContract, request Request) (Response, error) {
+func (e *TransportExecutor) executeOnce(ctx context.Context, contract contracts.TransportContract, request Request, timeout time.Duration) (Response, error) {
 	requestCtx := ctx
 	cancel := func() {}
-	if contract.Timeout.Enabled && contract.Timeout.Strategy == "per_request" && contract.Timeout.Params.Total != "" {
-		total, err := time.ParseDuration(contract.Timeout.Params.Total)
-		if err != nil {
-			return Response{}, fmt.Errorf("parse timeout total: %w", err)
-		}
-		requestCtx, cancel = context.WithTimeout(ctx, total)
+	if timeout > 0 {
+		requestCtx, cancel = context.WithTimeout(ctx, timeout)
 	}
 	defer cancel()
 
@@ -189,9 +244,18 @@ func shouldRetryStatus(policy contracts.RetryPolicy, status int) bool {
 	return slices.Contains(policy.Params.RetryOnStatuses, status)
 }
 
-func shouldRetryError(policy contracts.RetryPolicy, err error) bool {
+func shouldRetryError(policy contracts.RetryPolicy, err error, elapsed time.Duration) bool {
 	if !policy.Enabled || err == nil {
 		return false
+	}
+	if policy.Params.EarlyFailureWindow != "" {
+		window, parseErr := time.ParseDuration(policy.Params.EarlyFailureWindow)
+		if parseErr != nil {
+			return false
+		}
+		if elapsed > window {
+			return false
+		}
 	}
 	return slices.Contains(policy.Params.RetryOnErrors, "transport_error")
 }
@@ -228,4 +292,58 @@ func retryDelay(policy contracts.RetryPolicy, attempt int) (time.Duration, error
 		delay = maxDelay
 	}
 	return delay, nil
+}
+
+func attemptTimeout(policy contracts.TimeoutPolicy) (time.Duration, error) {
+	if !policy.Enabled {
+		return 0, nil
+	}
+	switch policy.Strategy {
+	case "", "none":
+		return 0, nil
+	case "per_request":
+		if policy.Params.Total == "" {
+			return 0, nil
+		}
+		total, err := time.ParseDuration(policy.Params.Total)
+		if err != nil {
+			return 0, fmt.Errorf("parse timeout total: %w", err)
+		}
+		return total, nil
+	case "long_running_non_streaming":
+		if policy.Params.AttemptTimeout == "" {
+			return 0, nil
+		}
+		total, err := time.ParseDuration(policy.Params.AttemptTimeout)
+		if err != nil {
+			return 0, fmt.Errorf("parse timeout attempt_timeout: %w", err)
+		}
+		return total, nil
+	default:
+		return 0, fmt.Errorf("unsupported timeout strategy %q", policy.Strategy)
+	}
+}
+
+func operationBudget(policy contracts.TimeoutPolicy) (time.Duration, error) {
+	if !policy.Enabled || policy.Strategy != "long_running_non_streaming" || policy.Params.OperationBudget == "" {
+		return 0, nil
+	}
+	total, err := time.ParseDuration(policy.Params.OperationBudget)
+	if err != nil {
+		return 0, fmt.Errorf("parse timeout operation_budget: %w", err)
+	}
+	return total, nil
+}
+
+func retryReason(err error) string {
+	if err == nil {
+		return ""
+	}
+	return "transport_error"
+}
+
+func emitAttemptTrace(request Request, trace AttemptTrace) {
+	if request.AttemptObserver != nil {
+		request.AttemptObserver(trace)
+	}
 }
