@@ -24,3 +24,6 @@ Operational baseline:
   - `.env.example`
 - GitHub artifact workflow:
   - `.github/workflows/build-agent-artifact.yml`
+  - uploads:
+    - `teamd-agent-linux-amd64`
+    - `teamd-agent-windows-amd64`

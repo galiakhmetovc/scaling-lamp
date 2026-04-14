@@ -10,6 +10,18 @@ on:
 jobs:
   build-agent:
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - goos: linux
+            goarch: amd64
+            artifact_name: teamd-agent-linux-amd64
+            output_name: teamd-agent-linux-amd64
+          - goos: windows
+            goarch: amd64
+            artifact_name: teamd-agent-windows-amd64
+            output_name: teamd-agent-windows-amd64.exe
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -25,11 +37,11 @@ jobs:
       - name: Build agent binary
         run: |
           mkdir -p dist
-          GOOS=linux GOARCH=amd64 go build -o dist/teamd-agent-linux-amd64 ./cmd/agent
+          GOOS=${{ matrix.goos }} GOARCH=${{ matrix.goarch }} go build -o dist/${{ matrix.output_name }} ./cmd/agent
 
       - name: Upload agent artifact
         uses: actions/upload-artifact@v4
         with:
-          name: teamd-agent-linux-amd64
-          path: dist/teamd-agent-linux-amd64
+          name: ${{ matrix.artifact_name }}
+          path: dist/${{ matrix.output_name }}
           if-no-files-found: error
