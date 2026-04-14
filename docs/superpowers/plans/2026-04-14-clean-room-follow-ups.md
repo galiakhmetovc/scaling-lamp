@@ -11,7 +11,3 @@
 ## Persistent Projections
 
 - `teamD-5j6`
-
-## Prompt Asset Policy Domain
-
-- `teamD-rg2`

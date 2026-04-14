@@ -3,6 +3,7 @@ package contracts
 type ResolvedContracts struct {
 	ProviderRequest ProviderRequestContract
 	Memory          MemoryContract
+	PromptAssets    PromptAssetsContract
 }
 
 type ProviderRequestContract struct {
@@ -81,6 +82,27 @@ type RequestShapeContract struct {
 	ResponseFormat ResponseFormatPolicy
 	Streaming      StreamingPolicy
 	Sampling       SamplingPolicy
+}
+
+type PromptAssetsContract struct {
+	ID          string
+	PromptAsset PromptAssetPolicy
+}
+
+type PromptAssetPolicy struct {
+	ID       string
+	Enabled  bool
+	Strategy string
+	Params   PromptAssetParams
+}
+
+type PromptAssetParams struct {
+	Assets []PromptAsset `yaml:"assets"`
+}
+
+type PromptAsset struct {
+	Role    string `yaml:"role" json:"role"`
+	Content string `yaml:"content" json:"content"`
 }
 
 type ModelPolicy struct {

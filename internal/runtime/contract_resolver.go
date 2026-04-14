@@ -38,6 +38,14 @@ type memoryContractConfig struct {
 	} `yaml:"spec"`
 }
 
+type promptAssetsContractConfig struct {
+	Kind string `yaml:"kind"`
+	ID   string `yaml:"id"`
+	Spec struct {
+		PromptAssetPolicyPath string `yaml:"prompt_asset_policy_path"`
+	} `yaml:"spec"`
+}
+
 type requestShapeContractConfig struct {
 	Kind string `yaml:"kind"`
 	ID   string `yaml:"id"`
@@ -149,6 +157,16 @@ type samplingPolicyConfig struct {
 	} `yaml:"spec"`
 }
 
+type promptAssetPolicyConfig struct {
+	Kind string `yaml:"kind"`
+	ID   string `yaml:"id"`
+	Spec struct {
+		Enabled  bool                         `yaml:"enabled"`
+		Strategy string                       `yaml:"strategy"`
+		Params   contracts.PromptAssetParams `yaml:"params"`
+	} `yaml:"spec"`
+}
+
 func ResolveContracts(cfg config.AgentConfig) (contracts.ResolvedContracts, error) {
 	return ResolveContractsWithRegistry(cfg, policies.NewBuiltInRegistry())
 }
@@ -177,6 +195,13 @@ func ResolveContractsWithRegistry(cfg config.AgentConfig, policyRegistry *polici
 			return contracts.ResolvedContracts{}, err
 		}
 		out.Memory = memory
+	}
+	if promptAssetsPath := cfg.Spec.Contracts["prompt_assets"]; promptAssetsPath != "" {
+		promptAssets, err := resolvePromptAssetsContract(promptAssetsPath, policyRegistry)
+		if err != nil {
+			return contracts.ResolvedContracts{}, err
+		}
+		out.PromptAssets = promptAssets
 	}
 
 	return out, nil
@@ -389,6 +414,35 @@ func resolveMemoryContract(path string, policyRegistry *policies.Registry) (cont
 	return contracts.MemoryContract{
 		ID: contract.ID,
 		Offload: contracts.OffloadPolicy{
+			ID:       policy.ID,
+			Enabled:  policy.Spec.Enabled,
+			Strategy: policy.Spec.Strategy,
+			Params:   policy.Spec.Params,
+		},
+	}, nil
+}
+
+func resolvePromptAssetsContract(path string, policyRegistry *policies.Registry) (contracts.PromptAssetsContract, error) {
+	var contract promptAssetsContractConfig
+	if err := config.LoadModule(path, &contract); err != nil {
+		return contracts.PromptAssetsContract{}, fmt.Errorf("load prompt-assets contract: %w", err)
+	}
+	if contract.Spec.PromptAssetPolicyPath == "" {
+		return contracts.PromptAssetsContract{}, fmt.Errorf("prompt-assets contract %q missing prompt_asset_policy_path", contract.ID)
+	}
+	policyPath := resolveModulePath(path, contract.Spec.PromptAssetPolicyPath)
+
+	var policy promptAssetPolicyConfig
+	if err := config.LoadModule(policyPath, &policy); err != nil {
+		return contracts.PromptAssetsContract{}, fmt.Errorf("load prompt-asset policy: %w", err)
+	}
+	if err := validatePolicyConfig(policyRegistry, policy.Kind, policy.Spec.Strategy); err != nil {
+		return contracts.PromptAssetsContract{}, err
+	}
+
+	return contracts.PromptAssetsContract{
+		ID: contract.ID,
+		PromptAsset: contracts.PromptAssetPolicy{
 			ID:       policy.ID,
 			Enabled:  policy.Spec.Enabled,
 			Strategy: policy.Spec.Strategy,

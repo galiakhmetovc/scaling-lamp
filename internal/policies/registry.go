@@ -16,6 +16,7 @@ const (
 	FamilyResponseFormat Family = "response_format"
 	FamilyStreaming      Family = "streaming"
 	FamilySampling       Family = "sampling"
+	FamilyPromptAsset    Family = "prompt_asset"
 )
 
 type Type struct {
@@ -115,6 +116,13 @@ func NewBuiltInRegistry() *Registry {
 			"static_sampling",
 		),
 	})
+	registry.Register(Type{
+		Kind:   "PromptAssetPolicyConfig",
+		Family: FamilyPromptAsset,
+		Strategy: setOf(
+			"inline_assets",
+		),
+	})
 	return registry
 }
 
@@ -148,4 +156,3 @@ func setOf(values ...string) map[string]struct{} {
 	}
 	return out
 }
-

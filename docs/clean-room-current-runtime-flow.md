@@ -18,6 +18,7 @@ It does not describe the target architecture beyond what already exists in code.
    - configured transport executor
    - configured request-shape executor
 6. request-shape execution can build provider JSON body bytes from resolved request-shape contract.
+   Prompt assets can now be prepended into the message list through the dedicated prompt asset domain.
 7. transport execution can send a request over HTTP from resolved transport contract.
 
 At the moment, steps 6 and 7 are still separate executors.
@@ -91,6 +92,7 @@ Current resolved areas:
 - `TransportContract`
 - `RequestShapeContract`
 - `MemoryContract`
+- `PromptAssetsContract`
 
 ### `internal/contracts/contracts.go`
 
@@ -150,6 +152,7 @@ Current supported fields:
   - `max_output_tokens`
 
 Current input boundary:
+- prompt assets can come in as semantic prompt messages
 - raw messages come in as `contracts.Message`
 - tools come in as raw inline tool definitions
 
@@ -160,6 +163,9 @@ It does not yet:
 - assemble prompt-policy layers
 - add provider-specific reasoning fields
 - return a richer provider request object
+
+It now does:
+- prepend prompt asset messages before raw conversation messages when they are supplied in input
 
 ## Transport Execution
 
@@ -239,11 +245,9 @@ Today the clean-room branch can already do this:
 These are current known gaps, not hidden assumptions:
 
 - combined provider client pipeline
-- config-driven builder composition
 - persistent event log
 - persistent projections
-- full policy and strategy registries
-- prompt asset policy domain
+- combined prompt asset execution path in builder/runtime assembly
 
 ## Related Documents
 
@@ -251,6 +255,7 @@ These are current known gaps, not hidden assumptions:
 - [clean-room-contract-resolver.md](/home/admin/AI-AGENT/data/projects/teamD/.worktrees/rewrite-clean-room-root/docs/clean-room-contract-resolver.md)
 - [clean-room-builder-composition.md](/home/admin/AI-AGENT/data/projects/teamD/.worktrees/rewrite-clean-room-root/docs/clean-room-builder-composition.md)
 - [clean-room-policy-strategy-registries.md](/home/admin/AI-AGENT/data/projects/teamD/.worktrees/rewrite-clean-room-root/docs/clean-room-policy-strategy-registries.md)
+- [clean-room-prompt-assets.md](/home/admin/AI-AGENT/data/projects/teamD/.worktrees/rewrite-clean-room-root/docs/clean-room-prompt-assets.md)
 - [clean-room-transport-executor.md](/home/admin/AI-AGENT/data/projects/teamD/.worktrees/rewrite-clean-room-root/docs/clean-room-transport-executor.md)
 - [clean-room-request-shape-executor.md](/home/admin/AI-AGENT/data/projects/teamD/.worktrees/rewrite-clean-room-root/docs/clean-room-request-shape-executor.md)
 - [clean-room-implemented-strategies.md](/home/admin/AI-AGENT/data/projects/teamD/.worktrees/rewrite-clean-room-root/docs/clean-room-implemented-strategies.md)

@@ -154,7 +154,7 @@ Current responsibility:
 - produce typed resolved contracts for one agent instance
 
 Current limitation:
-- only transport, request-shape, and memory are resolved
+- only transport, request-shape, memory, and prompt-assets are resolved
 - there is still no policy merge layer (`global < session < run`)
 - execution-time application currently covers transport and request-shape only
 
@@ -184,6 +184,7 @@ First provider request-body executor.
 Current responsibility:
 - apply resolved request-shape contract to produce exact provider JSON bytes
 - handle model, raw messages, inline tools, response format, streaming, and sampling baseline
+- prepend prompt asset messages when supplied by the prompt asset domain
 
 ## What Is Good About This Skeleton
 
@@ -203,11 +204,12 @@ These are known temporary shortcuts and should be removed in the next slices.
 4. Provider execution is still split into transport and request-shape pieces with no combined provider client yet.
 5. There is no persistent event store or persistent projections yet.
 6. There is only a first built-in policy/strategy registry layer; config-driven registry composition and strategy-driven decoding still do not exist yet.
-7. Builder composition is config-driven, but only against the built-in component registry.
+7. Prompt assets exist as a separate domain, but only as inline assets prepended during request-shape execution.
+8. Builder composition is config-driven, but only against the built-in component registry.
 
 ## Next Required Slices
 
 1. combined provider client over request-shape and transport executors
 2. persistent event log
 3. persistent projections
-4. prompt asset policy domain
+4. richer prompt asset execution and selection

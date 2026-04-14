@@ -23,7 +23,8 @@ func TestResolveContractsBuildsTransportAndMemoryContracts(t *testing.T) {
 		"  contracts:\n"+
 		"    transport: ./contracts/transport.yaml\n"+
 		"    request_shape: ./contracts/request-shape.yaml\n"+
-		"    memory: ./contracts/memory.yaml\n")
+		"    memory: ./contracts/memory.yaml\n"+
+		"    prompt_assets: ./contracts/prompt-assets.yaml\n")
 
 	mustWriteFile(t, filepath.Join(dir, "contracts", "transport.yaml"), ""+
 		"kind: TransportContractConfig\n"+
@@ -53,6 +54,13 @@ func TestResolveContractsBuildsTransportAndMemoryContracts(t *testing.T) {
 		"  response_format_policy_path: ../policies/request-shape/response-format.yaml\n"+
 		"  streaming_policy_path: ../policies/request-shape/streaming.yaml\n"+
 		"  sampling_policy_path: ../policies/request-shape/sampling.yaml\n")
+
+	mustWriteFile(t, filepath.Join(dir, "contracts", "prompt-assets.yaml"), ""+
+		"kind: PromptAssetsContractConfig\n"+
+		"version: v1\n"+
+		"id: prompt-assets-main\n"+
+		"spec:\n"+
+		"  prompt_asset_policy_path: ../policies/prompt-assets/inline.yaml\n")
 
 	mustWriteFile(t, filepath.Join(dir, "policies", "transport", "endpoint.yaml"), ""+
 		"kind: EndpointPolicyConfig\n"+
@@ -169,6 +177,18 @@ func TestResolveContractsBuildsTransportAndMemoryContracts(t *testing.T) {
 		"    temperature: 0.2\n"+
 		"    max_output_tokens: 2048\n")
 
+	mustWriteFile(t, filepath.Join(dir, "policies", "prompt-assets", "inline.yaml"), ""+
+		"kind: PromptAssetPolicyConfig\n"+
+		"version: v1\n"+
+		"id: prompt-assets-inline\n"+
+		"spec:\n"+
+		"  enabled: true\n"+
+		"  strategy: inline_assets\n"+
+		"  params:\n"+
+		"    assets:\n"+
+		"      - role: system\n"+
+		"        content: You are terse.\n")
+
 	cfg, err := config.LoadRoot(filepath.Join(dir, "agent.yaml"))
 	if err != nil {
 		t.Fatalf("LoadRoot returned error: %v", err)
@@ -208,6 +228,12 @@ func TestResolveContractsBuildsTransportAndMemoryContracts(t *testing.T) {
 	}
 	if contracts.Memory.Offload.Params.MaxChars != 1200 {
 		t.Fatalf("max chars = %d, want 1200", contracts.Memory.Offload.Params.MaxChars)
+	}
+	if contracts.PromptAssets.ID != "prompt-assets-main" {
+		t.Fatalf("prompt-assets ID = %q, want %q", contracts.PromptAssets.ID, "prompt-assets-main")
+	}
+	if len(contracts.PromptAssets.PromptAsset.Params.Assets) != 1 {
+		t.Fatalf("prompt asset count = %d, want 1", len(contracts.PromptAssets.PromptAsset.Params.Assets))
 	}
 }
 

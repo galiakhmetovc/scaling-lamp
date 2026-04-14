@@ -54,7 +54,8 @@ func TestLoadRootConfigLoadsExplicitModuleGraph(t *testing.T) {
 		"  contracts:\n"+
 		"    transport: ./contracts/transport.yaml\n"+
 		"    request_shape: ./contracts/request-shape.yaml\n"+
-		"    memory: ./contracts/memory.yaml\n")
+		"    memory: ./contracts/memory.yaml\n"+
+		"    prompt_assets: ./contracts/prompt-assets.yaml\n")
 
 	mustWriteFile(t, filepath.Join(dir, "contracts", "transport.yaml"), ""+
 		"kind: TransportContractConfig\n"+
@@ -81,6 +82,13 @@ func TestLoadRootConfigLoadsExplicitModuleGraph(t *testing.T) {
 		"  response_format_policy_path: ../policies/request-shape/response-format.yaml\n"+
 		"  streaming_policy_path: ../policies/request-shape/streaming.yaml\n"+
 		"  sampling_policy_path: ../policies/request-shape/sampling.yaml\n")
+
+	mustWriteFile(t, filepath.Join(dir, "contracts", "prompt-assets.yaml"), ""+
+		"kind: PromptAssetsContractConfig\n"+
+		"version: v1\n"+
+		"id: prompt-assets-main\n"+
+		"spec:\n"+
+		"  prompt_asset_policy_path: ../policies/prompt-assets/inline.yaml\n")
 
 	mustWriteFile(t, filepath.Join(dir, "policies", "transport", "endpoint.yaml"), ""+
 		"kind: EndpointPolicyConfig\n"+
@@ -116,6 +124,10 @@ func TestLoadRootConfigLoadsExplicitModuleGraph(t *testing.T) {
 		"kind: SamplingPolicyConfig\n"+
 		"version: v1\n"+
 		"id: sampling-main\n")
+	mustWriteFile(t, filepath.Join(dir, "policies", "prompt-assets", "inline.yaml"), ""+
+		"kind: PromptAssetPolicyConfig\n"+
+		"version: v1\n"+
+		"id: prompt-assets-inline\n")
 
 	got, err := config.LoadRoot(filepath.Join(dir, "agent.yaml"))
 	if err != nil {
@@ -131,17 +143,20 @@ func TestLoadRootConfigLoadsExplicitModuleGraph(t *testing.T) {
 		t.Fatalf("LoadModuleGraph returned error: %v", err)
 	}
 
-	if len(graph.Contracts) != 3 {
-		t.Fatalf("contracts len = %d, want 3", len(graph.Contracts))
+	if len(graph.Contracts) != 4 {
+		t.Fatalf("contracts len = %d, want 4", len(graph.Contracts))
 	}
-	if len(graph.Policies) != 8 {
-		t.Fatalf("policies len = %d, want 8", len(graph.Policies))
+	if len(graph.Policies) != 9 {
+		t.Fatalf("policies len = %d, want 9", len(graph.Policies))
 	}
 	if graph.Policies["endpoint-main"].Kind != "EndpointPolicyConfig" {
 		t.Fatalf("endpoint policy kind = %q, want EndpointPolicyConfig", graph.Policies["endpoint-main"].Kind)
 	}
 	if graph.Policies["model-main"].Kind != "ModelPolicyConfig" {
 		t.Fatalf("model policy kind = %q, want ModelPolicyConfig", graph.Policies["model-main"].Kind)
+	}
+	if graph.Policies["prompt-assets-inline"].Kind != "PromptAssetPolicyConfig" {
+		t.Fatalf("prompt asset policy kind = %q, want PromptAssetPolicyConfig", graph.Policies["prompt-assets-inline"].Kind)
 	}
 }
 

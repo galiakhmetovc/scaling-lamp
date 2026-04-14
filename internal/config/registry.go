@@ -41,6 +41,11 @@ func NewBuiltInModuleRegistry() *ModuleRegistry {
 		RefFields: []string{"offload_policy_path"},
 	})
 	registry.Register(ModuleType{
+		Kind:      "PromptAssetsContractConfig",
+		Category:  ModuleCategoryContract,
+		RefFields: []string{"prompt_asset_policy_path"},
+	})
+	registry.Register(ModuleType{
 		Kind:     "RequestShapeContractConfig",
 		Category: ModuleCategoryContract,
 		RefFields: []string{
@@ -94,6 +99,10 @@ func NewBuiltInModuleRegistry() *ModuleRegistry {
 	})
 	registry.Register(ModuleType{
 		Kind:     "SamplingPolicyConfig",
+		Category: ModuleCategoryPolicy,
+	})
+	registry.Register(ModuleType{
+		Kind:     "PromptAssetPolicyConfig",
 		Category: ModuleCategoryPolicy,
 	})
 	return registry

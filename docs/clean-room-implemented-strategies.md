@@ -24,6 +24,27 @@ Primary code files:
 Current note:
 - implemented strategy names are now centrally validated during contract resolution through the built-in policy registry
 
+## Prompt Asset Strategies
+
+### `PromptAssetPolicy.inline_assets`
+
+Status:
+- implemented
+
+Current behavior:
+- stores prompt assets inline in the prompt asset policy module
+- each asset carries:
+  - `role`
+  - `content`
+- request-shape execution prepends these assets before raw conversation messages
+
+Current params:
+- `assets`
+
+Current runtime boundary:
+- resolved in `contract_resolver`
+- applied in `request_shape_executor`
+
 ## Transport Strategies
 
 ### `EndpointPolicy.static`
