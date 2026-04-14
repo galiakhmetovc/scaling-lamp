@@ -26,6 +26,10 @@ func NewRunProjection() *RunProjection {
 	return &RunProjection{}
 }
 
+func (p *RunProjection) ID() string {
+	return "run"
+}
+
 func (p *RunProjection) Apply(event eventing.Event) error {
 	switch event.Kind {
 	case eventing.EventRunStarted:

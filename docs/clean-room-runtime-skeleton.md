@@ -26,6 +26,7 @@ Root config types for the first skeleton.
 Current responsibility:
 - represent one root agent config
 - hold explicit contract references as a map
+- hold explicit runtime composition under `spec.runtime`
 
 ### `internal/config/loader.go`
 
@@ -115,17 +116,25 @@ First runtime builder shell.
 
 Current responsibility:
 - load root config
-- create in-memory event log
 - validate loaded contract and policy module kinds
 - resolve typed runtime contracts from loaded modules
-- build the first transport executor from resolved transport contracts
-- build the first request-shape executor from resolved request-shape contracts
-- assemble projections through built-in registries
+- build the configured event log from `spec.runtime`
+- build the configured transport executor from `spec.runtime`
+- build the configured request-shape executor from `spec.runtime`
+- assemble configured projections from `spec.runtime`
 - return one built agent instance
 
 Current limitation:
-- builder still chooses default projection composition instead of config-driven composition
-- transport and request-shape executors are wired, but no combined provider client exists yet
+- component selection is config-driven now, but only through the built-in component registry
+- transport and request-shape executors are still separate pieces with no combined provider client yet
+
+### `internal/runtime/component_registry.go`
+
+Current builder-component registry.
+
+Current responsibility:
+- register built-in runtime components by id
+- build event log, executors, and projections from explicit config ids
 
 ### `internal/contracts/contracts.go`
 
@@ -188,18 +197,17 @@ Current responsibility:
 
 These are known temporary shortcuts and should be removed in the next slices.
 
-1. `AgentBuilder` still chooses the default projection set instead of using config-driven composition.
-2. Config graph loading still stops at module headers and does not decode effective contracts itself.
-3. Event envelopes are still too small for a serious event-sourced system, even after adding sequence and trace linkage metadata.
-4. Contract resolution is still narrow and only covers the first transport/request-shape/memory path.
-5. Provider execution is still split into transport and request-shape pieces with no combined provider client yet.
-6. There is no persistent event store or persistent projections yet.
-7. There is only a first built-in policy/strategy registry layer; config-driven registry composition and strategy-driven decoding still do not exist yet.
+1. Config graph loading still stops at module headers and does not decode effective contracts itself.
+2. Event envelopes are still too small for a serious event-sourced system, even after adding sequence and trace linkage metadata.
+3. Contract resolution is still narrow and only covers the first transport/request-shape/memory path.
+4. Provider execution is still split into transport and request-shape pieces with no combined provider client yet.
+5. There is no persistent event store or persistent projections yet.
+6. There is only a first built-in policy/strategy registry layer; config-driven registry composition and strategy-driven decoding still do not exist yet.
+7. Builder composition is config-driven, but only against the built-in component registry.
 
 ## Next Required Slices
 
 1. combined provider client over request-shape and transport executors
-2. config-driven builder composition
-3. persistent event log
-4. persistent projections
-5. prompt asset policy domain
+2. persistent event log
+3. persistent projections
+4. prompt asset policy domain

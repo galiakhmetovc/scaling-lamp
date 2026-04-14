@@ -8,7 +8,15 @@ type AgentConfig struct {
 }
 
 type AgentConfigSpec struct {
+	Runtime   AgentRuntimeConfig  `yaml:"runtime"`
 	Contracts map[string]string `yaml:"contracts"`
+}
+
+type AgentRuntimeConfig struct {
+	EventLog             string   `yaml:"event_log"`
+	TransportExecutor    string   `yaml:"transport_executor"`
+	RequestShapeExecutor string   `yaml:"request_shape_executor"`
+	Projections          []string `yaml:"projections"`
 }
 
 type ModuleHeader struct {

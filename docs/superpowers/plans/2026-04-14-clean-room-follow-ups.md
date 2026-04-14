@@ -4,10 +4,6 @@
 
 - `teamD-1m1`
 
-## Config-Driven Builder Composition
-
-- `teamD-ega`
-
 ## Persistent Event Log
 
 - `teamD-5rr`

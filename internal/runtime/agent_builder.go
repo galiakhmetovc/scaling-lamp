@@ -40,21 +40,34 @@ func BuildAgent(configPath string) (*Agent, error) {
 		}
 	}
 
-	projectionSet, err := projections.NewBuiltInRegistry().BuildDefaults()
-	if err != nil {
-		return nil, fmt.Errorf("build projections: %w", err)
-	}
+	componentRegistry := NewBuiltInComponentRegistry()
 	contracts, err := ResolveContracts(cfg)
 	if err != nil {
 		return nil, fmt.Errorf("resolve contracts: %w", err)
+	}
+	eventLog, err := componentRegistry.BuildEventLog(cfg.Spec.Runtime.EventLog)
+	if err != nil {
+		return nil, fmt.Errorf("build event log: %w", err)
+	}
+	projectionSet, err := componentRegistry.BuildProjections(cfg.Spec.Runtime.Projections...)
+	if err != nil {
+		return nil, fmt.Errorf("build projections: %w", err)
+	}
+	transportExecutor, err := componentRegistry.BuildTransportExecutor(cfg.Spec.Runtime.TransportExecutor)
+	if err != nil {
+		return nil, fmt.Errorf("build transport executor: %w", err)
+	}
+	requestShapeExecutor, err := componentRegistry.BuildRequestShapeExecutor(cfg.Spec.Runtime.RequestShapeExecutor)
+	if err != nil {
+		return nil, fmt.Errorf("build request-shape executor: %w", err)
 	}
 
 	return &Agent{
 		Config:       cfg,
 		Contracts:    contracts,
-		Transport:    provider.NewTransportExecutor(nil),
-		RequestShape: provider.NewRequestShapeExecutor(),
-		EventLog:     NewInMemoryEventLog(),
+		Transport:    transportExecutor,
+		RequestShape: requestShapeExecutor,
+		EventLog:     eventLog,
 		Projections:  projectionSet,
 	}, nil
 }

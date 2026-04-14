@@ -20,6 +20,10 @@ func NewSessionProjection() *SessionProjection {
 	return &SessionProjection{}
 }
 
+func (p *SessionProjection) ID() string {
+	return "session"
+}
+
 func (p *SessionProjection) Apply(event eventing.Event) error {
 	switch event.Kind {
 	case eventing.EventSessionCreated:

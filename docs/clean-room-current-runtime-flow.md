@@ -12,11 +12,11 @@ It does not describe the target architecture beyond what already exists in code.
 3. `config.LoadModuleGraph` walks the config graph using built-in registry metadata.
 4. `runtime.ResolveContracts` decodes typed runtime contracts from contract and policy modules.
    Policy strategies are validated through the built-in policy registry before contracts are returned.
-5. `BuildAgent` assembles the current runtime instance:
-   - in-memory event log
-   - built-in projections
-   - transport executor
-   - request-shape executor
+5. `BuildAgent` assembles the current runtime instance from `spec.runtime`:
+   - configured event log
+   - configured projections
+   - configured transport executor
+   - configured request-shape executor
 6. request-shape execution can build provider JSON body bytes from resolved request-shape contract.
 7. transport execution can send a request over HTTP from resolved transport contract.
 
@@ -45,6 +45,7 @@ Root config currently defines explicit contract module paths.
 Current shape:
 - one agent config
 - one map of contract references
+- one explicit runtime composition block
 - no implicit imports
 - no inheritance
 
@@ -111,7 +112,7 @@ Current role:
 - build module graph
 - validate loaded kinds through the built-in module registry
 - resolve typed contracts
-- build runtime components
+- build runtime components from `spec.runtime`
 
 Current components built:
 - `Contracts`
@@ -121,9 +122,14 @@ Current components built:
 - `Projections`
 
 Current limitation:
-- builder still chooses default projection composition directly
-- builder still wires executors directly
-- this is not config-driven composition yet
+- builder composition is explicit and config-driven now
+- component selection still comes only from the built-in component registry
+
+### `internal/runtime/component_registry.go`
+
+Current role:
+- register built-in runtime component factories
+- map config ids to event log, executor, and projection construction
 
 ## Request-Shape Execution
 
@@ -243,6 +249,7 @@ These are current known gaps, not hidden assumptions:
 
 - [clean-room-runtime-skeleton.md](/home/admin/AI-AGENT/data/projects/teamD/.worktrees/rewrite-clean-room-root/docs/clean-room-runtime-skeleton.md)
 - [clean-room-contract-resolver.md](/home/admin/AI-AGENT/data/projects/teamD/.worktrees/rewrite-clean-room-root/docs/clean-room-contract-resolver.md)
+- [clean-room-builder-composition.md](/home/admin/AI-AGENT/data/projects/teamD/.worktrees/rewrite-clean-room-root/docs/clean-room-builder-composition.md)
 - [clean-room-policy-strategy-registries.md](/home/admin/AI-AGENT/data/projects/teamD/.worktrees/rewrite-clean-room-root/docs/clean-room-policy-strategy-registries.md)
 - [clean-room-transport-executor.md](/home/admin/AI-AGENT/data/projects/teamD/.worktrees/rewrite-clean-room-root/docs/clean-room-transport-executor.md)
 - [clean-room-request-shape-executor.md](/home/admin/AI-AGENT/data/projects/teamD/.worktrees/rewrite-clean-room-root/docs/clean-room-request-shape-executor.md)
