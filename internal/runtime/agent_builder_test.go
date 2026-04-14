@@ -19,7 +19,8 @@ func TestBuildAgentLoadsRootConfigAndBootstrapsRuntime(t *testing.T) {
 		"id: agent-test\n"+
 		"spec:\n"+
 		"  runtime:\n"+
-		"    event_log: in_memory\n"+
+		"    event_log: file_jsonl\n"+
+		"    event_log_path: ./var/events.jsonl\n"+
 		"    transport_executor: transport_default\n"+
 		"    request_shape_executor: request_shape_default\n"+
 		"    projections: [session, run]\n"+
@@ -232,7 +233,8 @@ func TestBuildAgentUsesConfiguredRuntimeComposition(t *testing.T) {
 		"id: agent-test\n"+
 		"spec:\n"+
 		"  runtime:\n"+
-		"    event_log: in_memory\n"+
+		"    event_log: file_jsonl\n"+
+		"    event_log_path: ./var/events.jsonl\n"+
 		"    transport_executor: transport_default\n"+
 		"    request_shape_executor: request_shape_default\n"+
 		"    projections: [run]\n"+

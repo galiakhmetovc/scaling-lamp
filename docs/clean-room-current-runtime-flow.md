@@ -203,12 +203,13 @@ Current role:
 - append events
 - list events by aggregate
 
-Current implementation:
-- in-memory only
+Current implementations:
+- `in_memory`
+- `file_jsonl`
 
 Current implication:
-- runtime state does not survive restart
-- event log is useful for shape and tests, not durability
+- file-backed event logs can survive reopen/restart
+- projections are still not persistent
 
 ## Projections
 
@@ -248,6 +249,7 @@ These are current known gaps, not hidden assumptions:
 - persistent event log
 - persistent projections
 - combined prompt asset execution path in builder/runtime assembly
+- richer event-log indexing/compaction
 
 ## Related Documents
 
@@ -256,6 +258,7 @@ These are current known gaps, not hidden assumptions:
 - [clean-room-builder-composition.md](/home/admin/AI-AGENT/data/projects/teamD/.worktrees/rewrite-clean-room-root/docs/clean-room-builder-composition.md)
 - [clean-room-policy-strategy-registries.md](/home/admin/AI-AGENT/data/projects/teamD/.worktrees/rewrite-clean-room-root/docs/clean-room-policy-strategy-registries.md)
 - [clean-room-prompt-assets.md](/home/admin/AI-AGENT/data/projects/teamD/.worktrees/rewrite-clean-room-root/docs/clean-room-prompt-assets.md)
+- [clean-room-persistent-event-log.md](/home/admin/AI-AGENT/data/projects/teamD/.worktrees/rewrite-clean-room-root/docs/clean-room-persistent-event-log.md)
 - [clean-room-transport-executor.md](/home/admin/AI-AGENT/data/projects/teamD/.worktrees/rewrite-clean-room-root/docs/clean-room-transport-executor.md)
 - [clean-room-request-shape-executor.md](/home/admin/AI-AGENT/data/projects/teamD/.worktrees/rewrite-clean-room-root/docs/clean-room-request-shape-executor.md)
 - [clean-room-implemented-strategies.md](/home/admin/AI-AGENT/data/projects/teamD/.worktrees/rewrite-clean-room-root/docs/clean-room-implemented-strategies.md)

@@ -14,6 +14,7 @@ type AgentConfigSpec struct {
 
 type AgentRuntimeConfig struct {
 	EventLog             string   `yaml:"event_log"`
+	EventLogPath         string   `yaml:"event_log_path"`
 	TransportExecutor    string   `yaml:"transport_executor"`
 	RequestShapeExecutor string   `yaml:"request_shape_executor"`
 	Projections          []string `yaml:"projections"`

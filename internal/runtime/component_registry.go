@@ -3,11 +3,12 @@ package runtime
 import (
 	"fmt"
 
+	"teamd/internal/config"
 	"teamd/internal/provider"
 	"teamd/internal/runtime/projections"
 )
 
-type EventLogFactory func() EventLog
+type EventLogFactory func(runtimeConfig config.AgentRuntimeConfig) (EventLog, error)
 type TransportExecutorFactory func() *provider.TransportExecutor
 type RequestShapeExecutorFactory func() *provider.RequestShapeExecutor
 
@@ -29,7 +30,12 @@ func NewComponentRegistry() *ComponentRegistry {
 
 func NewBuiltInComponentRegistry() *ComponentRegistry {
 	registry := NewComponentRegistry()
-	registry.RegisterEventLog("in_memory", func() EventLog { return NewInMemoryEventLog() })
+	registry.RegisterEventLog("in_memory", func(_ config.AgentRuntimeConfig) (EventLog, error) {
+		return NewInMemoryEventLog(), nil
+	})
+	registry.RegisterEventLog("file_jsonl", func(runtimeConfig config.AgentRuntimeConfig) (EventLog, error) {
+		return NewFileEventLog(runtimeConfig.EventLogPath)
+	})
 	registry.RegisterTransportExecutor("transport_default", func() *provider.TransportExecutor {
 		return provider.NewTransportExecutor(nil)
 	})
@@ -57,12 +63,12 @@ func (r *ComponentRegistry) RegisterProjection(name string, factory projections.
 	r.projections.Register(name, factory)
 }
 
-func (r *ComponentRegistry) BuildEventLog(name string) (EventLog, error) {
+func (r *ComponentRegistry) BuildEventLog(name string, runtimeConfig config.AgentRuntimeConfig) (EventLog, error) {
 	factory, ok := r.eventLogs[name]
 	if !ok {
 		return nil, fmt.Errorf("event log %q is not registered", name)
 	}
-	return factory(), nil
+	return factory(runtimeConfig)
 }
 
 func (r *ComponentRegistry) BuildTransportExecutor(name string) (*provider.TransportExecutor, error) {
@@ -84,4 +90,3 @@ func (r *ComponentRegistry) BuildRequestShapeExecutor(name string) (*provider.Re
 func (r *ComponentRegistry) BuildProjections(names ...string) ([]projections.Projection, error) {
 	return r.projections.Build(names...)
 }
-

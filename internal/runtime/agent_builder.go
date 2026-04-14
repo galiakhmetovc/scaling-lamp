@@ -45,7 +45,7 @@ func BuildAgent(configPath string) (*Agent, error) {
 	if err != nil {
 		return nil, fmt.Errorf("resolve contracts: %w", err)
 	}
-	eventLog, err := componentRegistry.BuildEventLog(cfg.Spec.Runtime.EventLog)
+	eventLog, err := componentRegistry.BuildEventLog(cfg.Spec.Runtime.EventLog, cfg.Spec.Runtime)
 	if err != nil {
 		return nil, fmt.Errorf("build event log: %w", err)
 	}

@@ -77,8 +77,12 @@ Current responsibility:
 - append events
 - list events by aggregate
 
+Current implementations:
+- `InMemoryEventLog`
+- `FileEventLog`
+
 Current limitation:
-- no persistence
+- persistent storage exists, but only as append-only local JSONL
 
 ### `internal/runtime/projections/projection.go`
 
@@ -202,7 +206,7 @@ These are known temporary shortcuts and should be removed in the next slices.
 2. Event envelopes are still too small for a serious event-sourced system, even after adding sequence and trace linkage metadata.
 3. Contract resolution is still narrow and only covers the first transport/request-shape/memory path.
 4. Provider execution is still split into transport and request-shape pieces with no combined provider client yet.
-5. There is no persistent event store or persistent projections yet.
+5. Persistent event storage exists, but projections are still not persistent.
 6. There is only a first built-in policy/strategy registry layer; config-driven registry composition and strategy-driven decoding still do not exist yet.
 7. Prompt assets exist as a separate domain, but only as inline assets prepended during request-shape execution.
 8. Builder composition is config-driven, but only against the built-in component registry.
@@ -210,6 +214,5 @@ These are known temporary shortcuts and should be removed in the next slices.
 ## Next Required Slices
 
 1. combined provider client over request-shape and transport executors
-2. persistent event log
-3. persistent projections
-4. richer prompt asset execution and selection
+2. persistent projections
+3. richer prompt asset execution and selection
