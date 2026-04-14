@@ -1,12 +1,12 @@
 # Clean-Room Follow-Ups
 
-## Full Config Module Graph Loader
-
-- `teamD-28p`
-
 ## Combined Provider Client Pipeline
 
 - `teamD-1m1`
+
+## Config-Driven Builder Composition
+
+- `teamD-ega`
 
 ## Persistent Event Log
 
