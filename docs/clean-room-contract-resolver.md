@@ -9,7 +9,7 @@ Current baseline:
 
 ## Current Files
 
-### `internal/runtime/contracts.go`
+### `internal/contracts/contracts.go`
 
 Defines the first typed runtime contracts:
 
@@ -18,6 +18,9 @@ Defines the first typed runtime contracts:
 - `TransportContract`
 - `MemoryContract`
 - `EndpointPolicy`
+- `AuthPolicy`
+- `RetryPolicy`
+- `TimeoutPolicy`
 - `OffloadPolicy`
 
 This is the first runtime boundary between config modules and executors.
@@ -28,7 +31,12 @@ Does:
 
 - load transport contract config
 - load memory contract config
-- decode referenced endpoint and offload policies
+- decode referenced transport baseline policies:
+  - endpoint
+  - auth
+  - retry
+  - timeout
+- decode referenced memory offload policy
 - normalize relative policy paths against the contract file location
 - return one typed `ResolvedContracts` object
 
@@ -36,5 +44,5 @@ Does:
 
 - only transport and memory are resolved
 - there is no effective policy merge layer yet
-- resolver is not yet connected to any executor
+- resolver is wired into the runtime builder, but only transport has an execution path so far
 - policy families are still a narrow subset of the final design

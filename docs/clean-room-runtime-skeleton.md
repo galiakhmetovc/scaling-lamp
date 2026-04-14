@@ -179,8 +179,8 @@ These are known temporary shortcuts and should be removed in the next slices.
 
 ## Next Required Slices
 
-1. generalize config graph loader
-2. provider request-shape executor
-3. persistent event log
-4. persistent projections
-5. policy and strategy registries
+1. provider request-shape executor
+2. persistent event log
+3. persistent projections
+4. policy and strategy registries
+5. prompt asset policy domain
