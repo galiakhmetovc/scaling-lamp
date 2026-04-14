@@ -8,6 +8,8 @@ import (
 	"strings"
 
 	"teamd/internal/contracts"
+	"teamd/internal/filesystem"
+	"teamd/internal/shell"
 	itools "teamd/internal/tools"
 )
 
@@ -28,12 +30,14 @@ type ClientResult struct {
 }
 
 type Client struct {
-	PromptAssets  *PromptAssetExecutor
-	RequestShape  *RequestShapeExecutor
-	PlanTools     *itools.PlanToolExecutor
-	ToolCatalog   *itools.CatalogExecutor
-	ToolExecution *itools.ExecutionGate
-	Transport     *TransportExecutor
+	PromptAssets    *PromptAssetExecutor
+	RequestShape    *RequestShapeExecutor
+	PlanTools       *itools.PlanToolExecutor
+	FilesystemTools *filesystem.DefinitionExecutor
+	ShellTools      *shell.DefinitionExecutor
+	ToolCatalog     *itools.CatalogExecutor
+	ToolExecution   *itools.ExecutionGate
+	Transport       *TransportExecutor
 }
 
 type Usage struct {
@@ -62,14 +66,16 @@ type ToolDecision struct {
 	Decision itools.ExecutionDecision
 }
 
-func NewClient(promptAssets *PromptAssetExecutor, requestShape *RequestShapeExecutor, planTools *itools.PlanToolExecutor, toolCatalog *itools.CatalogExecutor, toolExecution *itools.ExecutionGate, transport *TransportExecutor) *Client {
+func NewClient(promptAssets *PromptAssetExecutor, requestShape *RequestShapeExecutor, planTools *itools.PlanToolExecutor, filesystemTools *filesystem.DefinitionExecutor, shellTools *shell.DefinitionExecutor, toolCatalog *itools.CatalogExecutor, toolExecution *itools.ExecutionGate, transport *TransportExecutor) *Client {
 	return &Client{
-		PromptAssets:  promptAssets,
-		RequestShape:  requestShape,
-		PlanTools:     planTools,
-		ToolCatalog:   toolCatalog,
-		ToolExecution: toolExecution,
-		Transport:     transport,
+		PromptAssets:    promptAssets,
+		RequestShape:    requestShape,
+		PlanTools:       planTools,
+		FilesystemTools: filesystemTools,
+		ShellTools:      shellTools,
+		ToolCatalog:     toolCatalog,
+		ToolExecution:   toolExecution,
+		Transport:       transport,
 	}
 }
 
@@ -85,6 +91,12 @@ func (c *Client) Execute(ctx context.Context, contractSet contracts.ResolvedCont
 	}
 	if c.PlanTools == nil {
 		return ClientResult{}, fmt.Errorf("provider client plan tool executor is nil")
+	}
+	if c.FilesystemTools == nil {
+		return ClientResult{}, fmt.Errorf("provider client filesystem tool executor is nil")
+	}
+	if c.ShellTools == nil {
+		return ClientResult{}, fmt.Errorf("provider client shell tool executor is nil")
 	}
 	if c.ToolCatalog == nil {
 		return ClientResult{}, fmt.Errorf("provider client tool catalog executor is nil")
@@ -107,8 +119,18 @@ func (c *Client) Execute(ctx context.Context, contractSet contracts.ResolvedCont
 	if err != nil {
 		return ClientResult{}, fmt.Errorf("build plan tools: %w", err)
 	}
-	availableTools := make([]itools.Definition, 0, len(planTools)+len(input.Tools))
+	filesystemTools, err := c.FilesystemTools.Build(contractSet.FilesystemTools)
+	if err != nil {
+		return ClientResult{}, fmt.Errorf("build filesystem tools: %w", err)
+	}
+	shellTools, err := c.ShellTools.Build(contractSet.ShellTools)
+	if err != nil {
+		return ClientResult{}, fmt.Errorf("build shell tools: %w", err)
+	}
+	availableTools := make([]itools.Definition, 0, len(planTools)+len(filesystemTools)+len(shellTools)+len(input.Tools))
 	availableTools = append(availableTools, planTools...)
+	availableTools = append(availableTools, filesystemTools...)
+	availableTools = append(availableTools, shellTools...)
 	availableTools = append(availableTools, input.Tools...)
 	visibleTools, err := c.ToolCatalog.Build(contractSet.Tools, itools.CatalogInput{
 		Available: availableTools,

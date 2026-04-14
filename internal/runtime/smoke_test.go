@@ -11,11 +11,13 @@ import (
 
 	"teamd/internal/config"
 	"teamd/internal/contracts"
+	"teamd/internal/filesystem"
 	"teamd/internal/promptassembly"
 	"teamd/internal/provider"
 	"teamd/internal/runtime"
 	"teamd/internal/runtime/eventing"
 	"teamd/internal/runtime/projections"
+	"teamd/internal/shell"
 	"teamd/internal/tools"
 )
 
@@ -59,7 +61,7 @@ func TestAgentSmokeExecutesProviderClientAndRecordsEvents(t *testing.T) {
 		Now:         func() time.Time { return clock },
 		NewID:       nextID,
 	}
-	agent.ProviderClient = provider.NewClient(agent.PromptAssets, agent.RequestShape, tools.NewPlanToolExecutor(), agent.ToolCatalog, agent.ToolExecution, agent.Transport)
+	agent.ProviderClient = provider.NewClient(agent.PromptAssets, agent.RequestShape, tools.NewPlanToolExecutor(), filesystem.NewDefinitionExecutor(), shell.NewDefinitionExecutor(), agent.ToolCatalog, agent.ToolExecution, agent.Transport)
 
 	result, err := agent.Smoke(context.Background(), runtime.SmokeInput{Prompt: "ping"})
 	if err != nil {
@@ -164,7 +166,7 @@ func TestAgentSmokeWithPromptAssemblyStillIncludesCurrentPromptInOutboundRequest
 		EventLog:    runtime.NewInMemoryEventLog(),
 		Projections: []projections.Projection{projections.NewSessionProjection(), projections.NewRunProjection(), projections.NewTranscriptProjection()},
 	}
-	agent.ProviderClient = provider.NewClient(agent.PromptAssets, agent.RequestShape, tools.NewPlanToolExecutor(), agent.ToolCatalog, agent.ToolExecution, agent.Transport)
+	agent.ProviderClient = provider.NewClient(agent.PromptAssets, agent.RequestShape, tools.NewPlanToolExecutor(), filesystem.NewDefinitionExecutor(), shell.NewDefinitionExecutor(), agent.ToolCatalog, agent.ToolExecution, agent.Transport)
 
 	if _, err := agent.Smoke(context.Background(), runtime.SmokeInput{Prompt: "ping"}); err != nil {
 		t.Fatalf("Smoke returned error: %v", err)

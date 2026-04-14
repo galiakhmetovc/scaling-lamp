@@ -10,7 +10,9 @@ import (
 	"testing"
 
 	"teamd/internal/contracts"
+	"teamd/internal/filesystem"
 	"teamd/internal/provider"
+	"teamd/internal/shell"
 	"teamd/internal/tools"
 )
 
@@ -22,6 +24,8 @@ func TestClientBuildsAndSendsProviderRequest(t *testing.T) {
 		provider.NewPromptAssetExecutor(),
 		provider.NewRequestShapeExecutor(),
 		tools.NewPlanToolExecutor(),
+		filesystem.NewDefinitionExecutor(),
+		shell.NewDefinitionExecutor(),
 		tools.NewCatalogExecutor(),
 		tools.NewExecutionGate(),
 		provider.NewTransportExecutor(fakeDoer{
@@ -227,6 +231,8 @@ func TestClientStreamsTypedTextAndReasoningEvents(t *testing.T) {
 		provider.NewPromptAssetExecutor(),
 		provider.NewRequestShapeExecutor(),
 		tools.NewPlanToolExecutor(),
+		filesystem.NewDefinitionExecutor(),
+		shell.NewDefinitionExecutor(),
 		tools.NewCatalogExecutor(),
 		tools.NewExecutionGate(),
 		provider.NewTransportExecutor(fakeDoer{
@@ -330,6 +336,8 @@ func TestClientReturnsProviderStatusError(t *testing.T) {
 		provider.NewPromptAssetExecutor(),
 		provider.NewRequestShapeExecutor(),
 		tools.NewPlanToolExecutor(),
+		filesystem.NewDefinitionExecutor(),
+		shell.NewDefinitionExecutor(),
 		tools.NewCatalogExecutor(),
 		tools.NewExecutionGate(),
 		provider.NewTransportExecutor(fakeDoer{
@@ -395,6 +403,8 @@ func TestClientRejectsProviderToolCallThroughExecutionGate(t *testing.T) {
 		provider.NewPromptAssetExecutor(),
 		provider.NewRequestShapeExecutor(),
 		tools.NewPlanToolExecutor(),
+		filesystem.NewDefinitionExecutor(),
+		shell.NewDefinitionExecutor(),
 		tools.NewCatalogExecutor(),
 		tools.NewExecutionGate(),
 		provider.NewTransportExecutor(fakeDoer{
@@ -487,6 +497,8 @@ func TestClientReturnsAllowedProviderToolCallsForRuntimeExecution(t *testing.T) 
 		provider.NewPromptAssetExecutor(),
 		provider.NewRequestShapeExecutor(),
 		tools.NewPlanToolExecutor(),
+		filesystem.NewDefinitionExecutor(),
+		shell.NewDefinitionExecutor(),
 		tools.NewCatalogExecutor(),
 		tools.NewExecutionGate(),
 		provider.NewTransportExecutor(fakeDoer{
@@ -591,6 +603,8 @@ func TestClientStreamsOpenAICompatibleResponse(t *testing.T) {
 		provider.NewPromptAssetExecutor(),
 		provider.NewRequestShapeExecutor(),
 		tools.NewPlanToolExecutor(),
+		filesystem.NewDefinitionExecutor(),
+		shell.NewDefinitionExecutor(),
 		tools.NewCatalogExecutor(),
 		tools.NewExecutionGate(),
 		provider.NewTransportExecutor(fakeDoer{
@@ -678,6 +692,8 @@ func TestClientStreamsToolCallsAndReturnsAllowedDecisions(t *testing.T) {
 		provider.NewPromptAssetExecutor(),
 		provider.NewRequestShapeExecutor(),
 		tools.NewPlanToolExecutor(),
+		filesystem.NewDefinitionExecutor(),
+		shell.NewDefinitionExecutor(),
 		tools.NewCatalogExecutor(),
 		tools.NewExecutionGate(),
 		provider.NewTransportExecutor(fakeDoer{
@@ -764,5 +780,126 @@ func TestClientStreamsToolCallsAndReturnsAllowedDecisions(t *testing.T) {
 	}
 	if len(result.ToolDecisions) != 1 || !result.ToolDecisions[0].Decision.Allowed {
 		t.Fatalf("tool decisions = %#v", result.ToolDecisions)
+	}
+}
+
+func TestClientIncludesFilesystemAndShellToolsInVisibleToolPayload(t *testing.T) {
+	t.Setenv("ZAI_API_KEY", "secret-token")
+
+	var captured *http.Request
+	client := provider.NewClient(
+		provider.NewPromptAssetExecutor(),
+		provider.NewRequestShapeExecutor(),
+		tools.NewPlanToolExecutor(),
+		filesystem.NewDefinitionExecutor(),
+		shell.NewDefinitionExecutor(),
+		tools.NewCatalogExecutor(),
+		tools.NewExecutionGate(),
+		provider.NewTransportExecutor(fakeDoer{
+			do: func(req *http.Request) (*http.Response, error) {
+				captured = req
+				return &http.Response{
+					StatusCode: http.StatusOK,
+					Header:     http.Header{"Content-Type": []string{"application/json"}},
+					Body:       io.NopCloser(bytes.NewBufferString(`{"id":"resp-1","model":"glm-5-turbo","choices":[{"index":0,"finish_reason":"stop","message":{"role":"assistant","content":"ok"}}]}`)),
+				}, nil
+			},
+		}),
+	)
+
+	_, err := client.Execute(context.Background(), contracts.ResolvedContracts{
+		ProviderRequest: contracts.ProviderRequestContract{
+			Transport: contracts.TransportContract{
+				Endpoint: contracts.EndpointPolicy{
+					Enabled:  true,
+					Strategy: "static",
+					Params: contracts.EndpointParams{
+						BaseURL: "https://api.z.ai",
+						Path:    "/api/paas/v4/chat/completions",
+						Method:  http.MethodPost,
+					},
+				},
+				Auth: contracts.AuthPolicy{
+					Enabled:  true,
+					Strategy: "bearer_token",
+					Params: contracts.AuthParams{
+						Header:      "Authorization",
+						Prefix:      "Bearer",
+						ValueEnvVar: "ZAI_API_KEY",
+					},
+				},
+			},
+			RequestShape: contracts.RequestShapeContract{
+				Model:     contracts.ModelPolicy{Enabled: true, Strategy: "static_model", Params: contracts.ModelParams{Model: "glm-5-turbo"}},
+				Messages:  contracts.MessagePolicy{Enabled: true, Strategy: "raw_messages"},
+				Tools:     contracts.ToolPolicy{Enabled: true, Strategy: "tools_inline"},
+				Streaming: contracts.StreamingPolicy{Enabled: true, Strategy: "static_stream", Params: contracts.StreamingParams{Stream: false}},
+			},
+		},
+		Tools: contracts.ToolContract{
+			Catalog: contracts.ToolCatalogPolicy{
+				Enabled:  true,
+				Strategy: "static_allowlist",
+				Params: contracts.ToolCatalogParams{
+					ToolIDs: []string{"fs_list", "shell_exec"},
+				},
+			},
+			Serialization: contracts.ToolSerializationPolicy{
+				Enabled:  true,
+				Strategy: "openai_function_tools",
+				Params: contracts.ToolSerializationParams{
+					IncludeDescriptions: true,
+				},
+			},
+		},
+		PlanTools: contracts.PlanToolContract{
+			PlanTool: contracts.PlanToolPolicy{
+				Enabled:  true,
+				Strategy: "default_plan_tools",
+			},
+		},
+		FilesystemTools: contracts.FilesystemToolContract{
+			Catalog: contracts.FilesystemCatalogPolicy{
+				Enabled:  true,
+				Strategy: "static_allowlist",
+				Params:   contracts.FilesystemCatalogParams{ToolIDs: []string{"fs_list"}},
+			},
+			Description: contracts.FilesystemDescriptionPolicy{
+				Enabled:  true,
+				Strategy: "static_builtin_descriptions",
+			},
+		},
+		ShellTools: contracts.ShellToolContract{
+			Catalog: contracts.ShellCatalogPolicy{
+				Enabled:  true,
+				Strategy: "static_allowlist",
+				Params:   contracts.ShellCatalogParams{ToolIDs: []string{"shell_exec"}},
+			},
+			Description: contracts.ShellDescriptionPolicy{
+				Enabled:  true,
+				Strategy: "static_builtin_descriptions",
+			},
+		},
+	}, provider.ClientInput{
+		Messages: []contracts.Message{{Role: "user", Content: "inspect repo"}},
+	})
+	if err != nil {
+		t.Fatalf("Execute returned error: %v", err)
+	}
+	if captured == nil {
+		t.Fatal("captured request is nil")
+	}
+	var payload map[string]any
+	if err := json.NewDecoder(captured.Body).Decode(&payload); err != nil {
+		t.Fatalf("Decode returned error: %v", err)
+	}
+	toolsPayload, ok := payload["tools"].([]any)
+	if !ok || len(toolsPayload) != 2 {
+		t.Fatalf("tools payload = %#v", payload["tools"])
+	}
+	first := toolsPayload[0].(map[string]any)["function"].(map[string]any)["name"]
+	second := toolsPayload[1].(map[string]any)["function"].(map[string]any)["name"]
+	if first != "fs_list" || second != "shell_exec" {
+		t.Fatalf("tool names = %#v, %#v", first, second)
 	}
 }

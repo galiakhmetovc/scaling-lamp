@@ -7,10 +7,12 @@ import (
 
 	"teamd/internal/config"
 	"teamd/internal/contracts"
+	"teamd/internal/filesystem"
 	"teamd/internal/promptassembly"
 	"teamd/internal/provider"
 	"teamd/internal/runtime/eventing"
 	"teamd/internal/runtime/projections"
+	"teamd/internal/shell"
 	"teamd/internal/tools"
 )
 
@@ -22,6 +24,8 @@ type Agent struct {
 	Transport       *provider.TransportExecutor
 	RequestShape    *provider.RequestShapeExecutor
 	PlanTools       *tools.PlanToolExecutor
+	FilesystemTools *filesystem.DefinitionExecutor
+	ShellTools      *shell.DefinitionExecutor
 	ToolCatalog     *tools.CatalogExecutor
 	ToolExecution   *tools.ExecutionGate
 	ProviderClient  *provider.Client
@@ -118,6 +122,14 @@ func BuildAgent(configPath string) (*Agent, error) {
 	if err != nil {
 		return nil, fmt.Errorf("build plan tool executor: %w", err)
 	}
+	filesystemToolExecutor, err := componentRegistry.BuildFilesystemToolExecutor("filesystem_tool_default")
+	if err != nil {
+		return nil, fmt.Errorf("build filesystem tool executor: %w", err)
+	}
+	shellToolExecutor, err := componentRegistry.BuildShellToolExecutor("shell_tool_default")
+	if err != nil {
+		return nil, fmt.Errorf("build shell tool executor: %w", err)
+	}
 	toolCatalogExecutor, err := componentRegistry.BuildToolCatalogExecutor(toolCatalogName)
 	if err != nil {
 		return nil, fmt.Errorf("build tool catalog executor: %w", err)
@@ -134,7 +146,7 @@ func BuildAgent(configPath string) (*Agent, error) {
 	if err != nil {
 		return nil, fmt.Errorf("build prompt-asset executor: %w", err)
 	}
-	providerClient, err := componentRegistry.BuildProviderClient(cfg.Spec.Runtime.ProviderClient, promptAssetExecutor, requestShapeExecutor, planToolExecutor, toolCatalogExecutor, toolExecutionGate, transportExecutor)
+	providerClient, err := componentRegistry.BuildProviderClient(cfg.Spec.Runtime.ProviderClient, promptAssetExecutor, requestShapeExecutor, planToolExecutor, filesystemToolExecutor, shellToolExecutor, toolCatalogExecutor, toolExecutionGate, transportExecutor)
 	if err != nil {
 		return nil, fmt.Errorf("build provider client: %w", err)
 	}
@@ -147,6 +159,8 @@ func BuildAgent(configPath string) (*Agent, error) {
 		Transport:       transportExecutor,
 		RequestShape:    requestShapeExecutor,
 		PlanTools:       planToolExecutor,
+		FilesystemTools: filesystemToolExecutor,
+		ShellTools:      shellToolExecutor,
 		ToolCatalog:     toolCatalogExecutor,
 		ToolExecution:   toolExecutionGate,
 		ProviderClient:  providerClient,

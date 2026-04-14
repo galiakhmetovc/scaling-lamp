@@ -12,10 +12,12 @@ import (
 
 	"teamd/internal/config"
 	"teamd/internal/contracts"
+	"teamd/internal/filesystem"
 	"teamd/internal/provider"
 	"teamd/internal/runtime"
 	"teamd/internal/runtime/eventing"
 	"teamd/internal/runtime/projections"
+	"teamd/internal/shell"
 	"teamd/internal/tools"
 )
 
@@ -68,7 +70,7 @@ func TestAgentChatTurnAndResumeSession(t *testing.T) {
 		Now:         func() time.Time { return clock },
 		NewID:       nextID,
 	}
-	agent.ProviderClient = provider.NewClient(agent.PromptAssets, agent.RequestShape, tools.NewPlanToolExecutor(), agent.ToolCatalog, agent.ToolExecution, agent.Transport)
+	agent.ProviderClient = provider.NewClient(agent.PromptAssets, agent.RequestShape, tools.NewPlanToolExecutor(), filesystem.NewDefinitionExecutor(), shell.NewDefinitionExecutor(), agent.ToolCatalog, agent.ToolExecution, agent.Transport)
 
 	session, err := agent.NewChatSession()
 	if err != nil {
@@ -248,7 +250,7 @@ func TestAgentChatTurnExecutesPlanToolCallsAndReturnsFinalAssistantMessage(t *te
 		Now:   func() time.Time { return clock },
 		NewID: nextID,
 	}
-	agent.ProviderClient = provider.NewClient(agent.PromptAssets, agent.RequestShape, agent.PlanTools, agent.ToolCatalog, agent.ToolExecution, agent.Transport)
+	agent.ProviderClient = provider.NewClient(agent.PromptAssets, agent.RequestShape, agent.PlanTools, filesystem.NewDefinitionExecutor(), shell.NewDefinitionExecutor(), agent.ToolCatalog, agent.ToolExecution, agent.Transport)
 
 	session, err := agent.NewChatSession()
 	if err != nil {
@@ -359,7 +361,7 @@ func TestAgentChatTurnExecutesStreamedPlanToolCallsAndReturnsFinalAssistantMessa
 		Now:   func() time.Time { return clock },
 		NewID: nextID,
 	}
-	agent.ProviderClient = provider.NewClient(agent.PromptAssets, agent.RequestShape, agent.PlanTools, agent.ToolCatalog, agent.ToolExecution, agent.Transport)
+	agent.ProviderClient = provider.NewClient(agent.PromptAssets, agent.RequestShape, agent.PlanTools, filesystem.NewDefinitionExecutor(), shell.NewDefinitionExecutor(), agent.ToolCatalog, agent.ToolExecution, agent.Transport)
 
 	session, err := agent.NewChatSession()
 	if err != nil {
