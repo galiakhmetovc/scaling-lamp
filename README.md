@@ -13,3 +13,14 @@ Current baseline documents:
 
 - `docs/superpowers/specs/2026-04-14-context-policy-design.md`
 - `docs/superpowers/plans/2026-04-14-context-policy-implementation.md`
+
+Operational baseline:
+
+- build local binary:
+  - `go build -o ./agent ./cmd/agent`
+- smoke config:
+  - `config/zai-smoke/agent.yaml`
+- environment template:
+  - `.env.example`
+- GitHub artifact workflow:
+  - `.github/workflows/build-agent-artifact.yml`

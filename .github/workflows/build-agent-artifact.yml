@@ -1,0 +1,35 @@
+name: Build Agent Artifact
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - master
+      - rewrite/clean-room-root
+
+jobs:
+  build-agent:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Test
+        run: go test ./cmd/agent ./internal/runtime ./internal/provider ./internal/config ./internal/contracts ./internal/policies ./internal/runtime/projections -count=1
+
+      - name: Build agent binary
+        run: |
+          mkdir -p dist
+          GOOS=linux GOARCH=amd64 go build -o dist/teamd-agent-linux-amd64 ./cmd/agent
+
+      - name: Upload agent artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: teamd-agent-linux-amd64
+          path: dist/teamd-agent-linux-amd64
+          if-no-files-found: error
