@@ -55,11 +55,14 @@ func TestRequestShapeExecutorBuildsProviderPayload(t *testing.T) {
 			},
 		},
 	}, provider.RequestShapeInput{
-		PromptAssets: []contracts.Message{
+		PrependPromptAssets: []contracts.Message{
 			{Role: "system", Content: "You are terse."},
 		},
 		Messages: []contracts.Message{
 			{Role: "user", Content: "Ping"},
+		},
+		AppendPromptAssets: []contracts.Message{
+			{Role: "system", Content: "Answer with final text only."},
 		},
 		Tools: []map[string]any{
 			{
@@ -92,12 +95,16 @@ func TestRequestShapeExecutorBuildsProviderPayload(t *testing.T) {
 		t.Fatalf("max_output_tokens = %#v", payload["max_output_tokens"])
 	}
 	messages, ok := payload["messages"].([]any)
-	if !ok || len(messages) != 2 {
+	if !ok || len(messages) != 3 {
 		t.Fatalf("messages = %#v", payload["messages"])
 	}
 	firstMessage, ok := messages[0].(map[string]any)
 	if !ok || firstMessage["role"] != "system" {
 		t.Fatalf("first message = %#v, want system prompt asset", messages[0])
+	}
+	lastMessage, ok := messages[2].(map[string]any)
+	if !ok || lastMessage["content"] != "Answer with final text only." {
+		t.Fatalf("last message = %#v, want appended prompt asset", messages[2])
 	}
 	tools, ok := payload["tools"].([]any)
 	if !ok || len(tools) != 1 {

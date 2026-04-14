@@ -101,8 +101,10 @@ type PromptAssetParams struct {
 }
 
 type PromptAsset struct {
+	ID      string `yaml:"id" json:"id"`
 	Role    string `yaml:"role" json:"role"`
 	Content string `yaml:"content" json:"content"`
+	Placement string `yaml:"placement" json:"placement"`
 }
 
 type ModelPolicy struct {

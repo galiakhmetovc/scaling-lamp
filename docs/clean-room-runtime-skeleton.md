@@ -202,7 +202,7 @@ First provider request-body executor.
 Current responsibility:
 - apply resolved request-shape contract to produce exact provider JSON bytes
 - handle model, raw messages, inline tools, response format, streaming, and sampling baseline
-- prepend prompt asset messages when supplied by the prompt asset domain
+- place prepend and append prompt asset messages around the raw conversation body
 
 ## What Is Good About This Skeleton
 
@@ -222,11 +222,10 @@ These are known temporary shortcuts and should be removed in the next slices.
 4. Provider client exists, but provider-specific response parsing and higher-level provider semantics are still missing.
 5. Persistent event storage and automatic projection snapshot flushing now exist, but persistence is still snapshot-based only.
 6. There is only a first built-in policy/strategy registry layer; config-driven registry composition and strategy-driven decoding still do not exist yet.
-7. Prompt assets exist as a separate domain, but only as inline assets prepended during request-shape execution.
+7. Prompt assets now have separate execution semantics with asset ids and prepend/append placement, but only for inline assets.
 8. Builder composition is config-driven, but only against the built-in component registry.
 9. Provider client result is still transport-level; provider-specific parsing and usage handling are not there yet.
 
 ## Next Required Slices
 
-1. richer prompt asset execution and selection
-2. provider-specific response and usage handling
+1. provider-specific response and usage handling

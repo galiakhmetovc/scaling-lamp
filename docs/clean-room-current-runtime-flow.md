@@ -17,9 +17,9 @@ It does not describe the target architecture beyond what already exists in code.
    - configured projections
    - configured transport executor
    - configured request-shape executor
-6. request-shape execution can build provider JSON body bytes from resolved request-shape contract.
-   Prompt assets can now be prepended into the message list through the dedicated prompt asset domain.
-7. the combined provider client composes request-shape and transport execution into one provider call.
+6. prompt-asset execution can resolve selected prompt assets from the dedicated prompt-asset contract.
+7. request-shape execution can build provider JSON body bytes from resolved request-shape contract.
+8. the combined provider client composes prompt-asset execution, request-shape execution, and transport execution into one provider call.
 
 ## Process Entry
 
@@ -147,6 +147,11 @@ Current role:
 - combine request-shape execution and transport execution
 - return one normalized result object for a provider call
 
+Current provider pipeline now:
+- resolve selected prompt assets into prepend/append message buckets
+- build request-shape JSON body
+- execute transport
+
 ## Request-Shape Execution
 
 ### `internal/provider/request_shape_executor.go`
@@ -166,7 +171,7 @@ Current supported fields:
   - `max_output_tokens`
 
 Current input boundary:
-- prompt assets can come in as semantic prompt messages
+- prompt assets now arrive as prepend/append message buckets from the dedicated prompt-asset executor
 - raw messages come in as `contracts.Message`
 - tools come in as raw inline tool definitions
 
@@ -179,7 +184,8 @@ It does not yet:
 - return a richer provider request object
 
 It now does:
-- prepend prompt asset messages before raw conversation messages when they are supplied in input
+- prepend selected prompt asset messages before raw conversation messages
+- append selected prompt asset messages after raw conversation messages
 
 ## Transport Execution
 
@@ -278,9 +284,8 @@ Today the clean-room branch can already do this:
 
 These are current known gaps, not hidden assumptions:
 
-- combined prompt asset execution path in builder/runtime assembly
 - richer event-log indexing/compaction
-- automatic projection snapshot flushing
+- provider-specific response and usage handling
 
 ## Related Documents
 

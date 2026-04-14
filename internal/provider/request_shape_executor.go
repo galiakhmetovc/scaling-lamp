@@ -8,9 +8,10 @@ import (
 )
 
 type RequestShapeInput struct {
-	PromptAssets []contracts.Message
-	Messages     []contracts.Message
-	Tools        []map[string]any
+	PrependPromptAssets []contracts.Message
+	AppendPromptAssets  []contracts.Message
+	Messages            []contracts.Message
+	Tools               []map[string]any
 }
 
 type RequestShapeExecutor struct{}
@@ -38,7 +39,7 @@ func (e *RequestShapeExecutor) Build(contract contracts.RequestShapeContract, in
 
 	payload := map[string]any{
 		"model":    contract.Model.Params.Model,
-		"messages": append(append([]contracts.Message{}, input.PromptAssets...), input.Messages...),
+		"messages": append(append(append([]contracts.Message{}, input.PrependPromptAssets...), input.Messages...), input.AppendPromptAssets...),
 	}
 
 	if contract.Tools.Enabled {

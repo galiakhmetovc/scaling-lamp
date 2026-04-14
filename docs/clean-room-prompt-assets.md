@@ -10,7 +10,7 @@ There is now a dedicated domain for prompt assets:
 - separate contract
 - separate policy kind
 - separate strategy validation
-- explicit request-shape injection point
+- explicit prompt-asset execution point before request-shape build
 
 ## Current Files
 
@@ -42,11 +42,18 @@ Current role:
 - validate prompt asset strategy through the policy registry
 - expose resolved prompt asset assets in runtime contracts
 
-### `internal/provider/request_shape_executor.go`
+### `internal/provider/prompt_asset_executor.go`
 
 Current role:
-- accept `PromptAssets` in request-shape input
-- prepend prompt asset messages before raw conversation messages
+- resolve prompt assets from the prompt-asset contract
+- select assets by `id`
+- split them into prepend/append buckets by `placement`
+
+### `internal/provider/client.go`
+
+Current role:
+- call the prompt-asset executor before request-shape execution
+- pass resolved prepend/append prompt messages into request-shape execution
 
 ## Current Strategy
 
@@ -55,12 +62,17 @@ Current role:
 Current behavior:
 - assets are declared inline in the policy module
 - each asset has:
+  - `id`
   - `role`
   - `content`
-- request-shape execution prepends them ahead of raw input messages
+  - `placement`
+- provider client can select assets by `id`
+- placement currently supports:
+  - `prepend`
+  - `append`
 
 ## Current Limitation
 
 - prompt assets are still plain inline text assets only
-- there is no asset selection, filtering, templating, or merge policy yet
-- builder does not yet create a separate prompt-asset executor; current application happens in request-shape execution
+- there is still no templating or richer rule-based selection yet
+- builder does not yet construct a dedicated prompt-asset executor as a first-class runtime component
