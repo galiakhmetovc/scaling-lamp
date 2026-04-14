@@ -25,6 +25,19 @@ func LoadRoot(path string) (AgentConfig, error) {
 	return cfg, nil
 }
 
+func LoadModuleHeader(path string) (ModuleHeader, error) {
+	var header ModuleHeader
+
+	body, err := os.ReadFile(path)
+	if err != nil {
+		return ModuleHeader{}, fmt.Errorf("read module header: %w", err)
+	}
+	if err := yaml.Unmarshal(body, &header); err != nil {
+		return ModuleHeader{}, fmt.Errorf("decode module header: %w", err)
+	}
+	return header, nil
+}
+
 func resolveModulePath(baseDir, modulePath string) string {
 	if modulePath == "" {
 		return ""

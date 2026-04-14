@@ -14,6 +14,7 @@ type EventLog interface {
 
 type InMemoryEventLog struct {
 	mu     sync.RWMutex
+	next   uint64
 	events []eventing.Event
 }
 
@@ -25,6 +26,10 @@ func (l *InMemoryEventLog) Append(_ context.Context, event eventing.Event) error
 	l.mu.Lock()
 	defer l.mu.Unlock()
 
+	l.next++
+	if event.Sequence == 0 {
+		event.Sequence = l.next
+	}
 	l.events = append(l.events, event)
 	return nil
 }

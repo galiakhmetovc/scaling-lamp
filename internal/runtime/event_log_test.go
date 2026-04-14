@@ -21,6 +21,9 @@ func TestInMemoryEventLogAppendsAndListsEvents(t *testing.T) {
 		OccurredAt:    now,
 		AggregateID:   "session-1",
 		AggregateType: eventing.AggregateSession,
+		CorrelationID: "corr-1",
+		CausationID:   "cause-1",
+		Source:        "test",
 		Payload: map[string]any{
 			"session_id": "session-1",
 		},
@@ -43,5 +46,17 @@ func TestInMemoryEventLogAppendsAndListsEvents(t *testing.T) {
 	}
 	if got[0].Kind != eventing.EventSessionCreated {
 		t.Fatalf("event kind = %q, want %q", got[0].Kind, eventing.EventSessionCreated)
+	}
+	if got[0].Sequence != 1 {
+		t.Fatalf("event sequence = %d, want 1", got[0].Sequence)
+	}
+	if got[0].CorrelationID != "corr-1" {
+		t.Fatalf("event correlation = %q, want %q", got[0].CorrelationID, "corr-1")
+	}
+	if got[0].CausationID != "cause-1" {
+		t.Fatalf("event causation = %q, want %q", got[0].CausationID, "cause-1")
+	}
+	if got[0].Source != "test" {
+		t.Fatalf("event source = %q, want %q", got[0].Source, "test")
 	}
 }

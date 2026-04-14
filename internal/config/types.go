@@ -14,3 +14,8 @@ type AgentConfigSpec struct {
 type ContractRefs struct {
 	TransportPath string `yaml:"transport"`
 }
+
+type ModuleHeader struct {
+	Kind string `yaml:"kind"`
+	ID   string `yaml:"id"`
+}

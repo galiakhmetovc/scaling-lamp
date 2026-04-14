@@ -17,10 +17,14 @@ const (
 )
 
 type Event struct {
+	Sequence      uint64
 	ID            string
 	Kind          EventKind
 	OccurredAt    time.Time
 	AggregateID   string
 	AggregateType AggregateType
+	CorrelationID string
+	CausationID   string
+	Source        string
 	Payload       map[string]any
 }
