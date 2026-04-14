@@ -33,10 +33,25 @@ This document describes the first runnable `z.ai` smoke path in `rewrite/clean-r
 5. record run completion or failure event
 6. print the assistant text to stdout
 
-## Current Operational Blocker
+## Verified Live Smoke
 
-The code path is ready, but the first live request still requires:
+The first live smoke request has now been verified successfully.
 
-- `TEAMD_ZAI_API_KEY` in the process environment
+Observed command shape:
 
-Without that env var, transport auth fails before the request is sent.
+```bash
+./agent --config ./config/zai-smoke/agent.yaml --smoke ping
+```
+
+Observed assistant output:
+
+```text
+Pong! How can I help you today?
+```
+
+Observed runtime artifacts:
+
+- `var/zai-smoke/events.jsonl`
+- `var/zai-smoke/projections.json`
+
+The live run used `TEAMD_ZAI_API_KEY` transiently from an already running legacy `teamd-agent` process environment, without writing the secret into the repo config.
