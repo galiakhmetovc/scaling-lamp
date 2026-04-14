@@ -46,6 +46,18 @@ func NewBuiltInModuleRegistry() *ModuleRegistry {
 		RefFields: []string{"prompt_asset_policy_path"},
 	})
 	registry.Register(ModuleType{
+		Kind:     "ChatContractConfig",
+		Category: ModuleCategoryContract,
+		RefFields: []string{
+			"input_policy_path",
+			"submit_policy_path",
+			"output_policy_path",
+			"status_policy_path",
+			"command_policy_path",
+			"resume_policy_path",
+		},
+	})
+	registry.Register(ModuleType{
 		Kind:     "RequestShapeContractConfig",
 		Category: ModuleCategoryContract,
 		RefFields: []string{
@@ -103,6 +115,30 @@ func NewBuiltInModuleRegistry() *ModuleRegistry {
 	})
 	registry.Register(ModuleType{
 		Kind:     "PromptAssetPolicyConfig",
+		Category: ModuleCategoryPolicy,
+	})
+	registry.Register(ModuleType{
+		Kind:     "ChatInputPolicyConfig",
+		Category: ModuleCategoryPolicy,
+	})
+	registry.Register(ModuleType{
+		Kind:     "ChatSubmitPolicyConfig",
+		Category: ModuleCategoryPolicy,
+	})
+	registry.Register(ModuleType{
+		Kind:     "ChatOutputPolicyConfig",
+		Category: ModuleCategoryPolicy,
+	})
+	registry.Register(ModuleType{
+		Kind:     "ChatStatusPolicyConfig",
+		Category: ModuleCategoryPolicy,
+	})
+	registry.Register(ModuleType{
+		Kind:     "ChatCommandPolicyConfig",
+		Category: ModuleCategoryPolicy,
+	})
+	registry.Register(ModuleType{
+		Kind:     "ChatResumePolicyConfig",
 		Category: ModuleCategoryPolicy,
 	})
 	return registry

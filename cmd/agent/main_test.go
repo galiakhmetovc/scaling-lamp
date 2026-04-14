@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -123,6 +124,92 @@ func TestRunAutoloadsDotEnvWhenProcessEnvMissing(t *testing.T) {
 	var stderr bytes.Buffer
 	if err := run([]string{"--config", configPath, "--smoke", "ping"}, &stdout, &stderr); err != nil {
 		t.Fatalf("run returned error: %v", err)
+	}
+}
+
+func TestRunChatStreamsReplyAndExitsOnSlashExit(t *testing.T) {
+	t.Setenv("TEAMD_ZAI_API_KEY", "secret-token")
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = w.Write([]byte(strings.Join([]string{
+			`data: {"id":"resp-1","model":"glm-5-turbo","choices":[{"delta":{"role":"assistant","content":"Po"},"finish_reason":""}]}`,
+			"",
+			`data: {"id":"resp-1","model":"glm-5-turbo","choices":[{"delta":{"content":"ng"},"finish_reason":"stop"}],"usage":{"prompt_tokens":12,"completion_tokens":3,"total_tokens":15}}`,
+			"",
+			"data: [DONE]",
+			"",
+		}, "\n")))
+	}))
+	defer server.Close()
+
+	dir := t.TempDir()
+	configPath := writeChatConfig(t, dir, server.URL)
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	stdin := strings.NewReader("ping\n\n/exit\n")
+	err := runWithIO([]string{"--config", configPath, "--chat"}, stdin, &stdout, &stderr)
+	if err != nil {
+		t.Fatalf("runWithIO returned error: %v", err)
+	}
+
+	got := stdout.String()
+	if !strings.Contains(got, "session:") {
+		t.Fatalf("stdout = %q, want session header", got)
+	}
+	if !strings.Contains(got, "Pong") {
+		t.Fatalf("stdout = %q, want streamed Pong", got)
+	}
+}
+
+func TestRunChatResumeUsesExistingSession(t *testing.T) {
+	t.Setenv("TEAMD_ZAI_API_KEY", "secret-token")
+
+	call := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		call++
+		w.Header().Set("Content-Type", "text/event-stream")
+		body := strings.Join([]string{
+			`data: {"id":"resp-1","model":"glm-5-turbo","choices":[{"delta":{"role":"assistant","content":"Po"},"finish_reason":""}]}`,
+			"",
+			`data: {"id":"resp-1","model":"glm-5-turbo","choices":[{"delta":{"content":"ng"},"finish_reason":"stop"}],"usage":{"prompt_tokens":12,"completion_tokens":3,"total_tokens":15}}`,
+			"",
+			"data: [DONE]",
+			"",
+		}, "\n")
+		if call == 2 {
+			body = strings.Join([]string{
+				`data: {"id":"resp-2","model":"glm-5-turbo","choices":[{"delta":{"role":"assistant","content":"Pa"},"finish_reason":""}]}`,
+				"",
+				`data: {"id":"resp-2","model":"glm-5-turbo","choices":[{"delta":{"content":"th"},"finish_reason":"stop"}],"usage":{"prompt_tokens":18,"completion_tokens":4,"total_tokens":22}}`,
+				"",
+				"data: [DONE]",
+				"",
+			}, "\n")
+		}
+		_, _ = w.Write([]byte(body))
+	}))
+	defer server.Close()
+
+	dir := t.TempDir()
+	configPath := writeChatConfig(t, dir, server.URL)
+
+	var firstOut bytes.Buffer
+	if err := runWithIO([]string{"--config", configPath, "--chat"}, strings.NewReader("ping\n\n/exit\n"), &firstOut, io.Discard); err != nil {
+		t.Fatalf("first chat run returned error: %v", err)
+	}
+	sessionID := extractSessionID(firstOut.String())
+	if sessionID == "" {
+		t.Fatalf("failed to extract session id from %q", firstOut.String())
+	}
+
+	var secondOut bytes.Buffer
+	if err := runWithIO([]string{"--config", configPath, "--chat", "--resume", sessionID}, strings.NewReader("again\n\n/exit\n"), &secondOut, io.Discard); err != nil {
+		t.Fatalf("resume chat run returned error: %v", err)
+	}
+	if !strings.Contains(secondOut.String(), "Path") {
+		t.Fatalf("stdout = %q, want resumed reply Path", secondOut.String())
 	}
 }
 
@@ -295,6 +382,59 @@ func writeSmokeConfig(t *testing.T, dir, baseURL string) string {
 		"    assets: []\n")
 
 	return filepath.Join(dir, "agent.yaml")
+}
+
+func writeChatConfig(t *testing.T, dir, baseURL string) string {
+	t.Helper()
+	configPath := writeSmokeConfig(t, dir, baseURL)
+
+	mustWriteFile(t, filepath.Join(dir, "agent.yaml"), ""+
+		"kind: AgentConfig\n"+
+		"version: v1\n"+
+		"id: zai-chat\n"+
+		"spec:\n"+
+		"  runtime:\n"+
+		"    event_log: file_jsonl\n"+
+		"    event_log_path: ./var/events.jsonl\n"+
+		"    projection_store_path: ./var/projections.json\n"+
+		"    prompt_asset_executor: prompt_asset_default\n"+
+		"    transport_executor: transport_default\n"+
+		"    request_shape_executor: request_shape_default\n"+
+		"    provider_client: provider_client_default\n"+
+		"    projections: [session, run]\n"+
+		"  contracts:\n"+
+		"    transport: ./contracts/transport.yaml\n"+
+		"    request_shape: ./contracts/request-shape.yaml\n"+
+		"    memory: ./contracts/memory.yaml\n"+
+		"    prompt_assets: ./contracts/prompt-assets.yaml\n"+
+		"    chat: ./contracts/chat.yaml\n")
+	mustWriteFile(t, filepath.Join(dir, "contracts", "chat.yaml"), ""+
+		"kind: ChatContractConfig\nversion: v1\nid: chat-main\nspec:\n"+
+		"  input_policy_path: ../policies/chat/input.yaml\n"+
+		"  submit_policy_path: ../policies/chat/submit.yaml\n"+
+		"  output_policy_path: ../policies/chat/output.yaml\n"+
+		"  status_policy_path: ../policies/chat/status.yaml\n"+
+		"  command_policy_path: ../policies/chat/command.yaml\n"+
+		"  resume_policy_path: ../policies/chat/resume.yaml\n")
+	mustWriteFile(t, filepath.Join(dir, "policies", "request-shape", "streaming.yaml"), ""+
+		"kind: StreamingPolicyConfig\nversion: v1\nid: streaming-zai-chat\nspec:\n  enabled: true\n  strategy: static_stream\n  params:\n    stream: true\n")
+	mustWriteFile(t, filepath.Join(dir, "policies", "chat", "input.yaml"), "kind: ChatInputPolicyConfig\nversion: v1\nid: chat-input\nspec:\n  enabled: true\n  strategy: multiline_buffer\n")
+	mustWriteFile(t, filepath.Join(dir, "policies", "chat", "submit.yaml"), "kind: ChatSubmitPolicyConfig\nversion: v1\nid: chat-submit\nspec:\n  enabled: true\n  strategy: double_enter\n")
+	mustWriteFile(t, filepath.Join(dir, "policies", "chat", "output.yaml"), "kind: ChatOutputPolicyConfig\nversion: v1\nid: chat-output\nspec:\n  enabled: true\n  strategy: streaming_text\n")
+	mustWriteFile(t, filepath.Join(dir, "policies", "chat", "status.yaml"), "kind: ChatStatusPolicyConfig\nversion: v1\nid: chat-status\nspec:\n  enabled: true\n  strategy: inline_terminal\n")
+	mustWriteFile(t, filepath.Join(dir, "policies", "chat", "command.yaml"), "kind: ChatCommandPolicyConfig\nversion: v1\nid: chat-command\nspec:\n  enabled: true\n  strategy: slash_commands\n")
+	mustWriteFile(t, filepath.Join(dir, "policies", "chat", "resume.yaml"), "kind: ChatResumePolicyConfig\nversion: v1\nid: chat-resume\nspec:\n  enabled: true\n  strategy: explicit_resume_only\n")
+
+	return configPath
+}
+
+func extractSessionID(output string) string {
+	for _, line := range strings.Split(output, "\n") {
+		if strings.HasPrefix(line, "session: ") {
+			return strings.TrimSpace(strings.TrimPrefix(line, "session: "))
+		}
+	}
+	return ""
 }
 
 func mustWriteFile(t *testing.T, path, body string) {

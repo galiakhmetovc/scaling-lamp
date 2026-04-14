@@ -15,6 +15,7 @@ type ClientInput struct {
 	Messages             []contracts.Message
 	Tools                []map[string]any
 	AttemptObserver      func(AttemptTrace)
+	StreamObserver       func(string)
 }
 
 type ClientResult struct {
@@ -84,17 +85,25 @@ func (c *Client) Execute(ctx context.Context, contractSet contracts.ResolvedCont
 	}
 
 	attempts := make([]AttemptTrace, 0, 4)
+	var streamed ProviderResponse
 	observer := func(trace AttemptTrace) {
 		attempts = append(attempts, trace)
 		if input.AttemptObserver != nil {
 			input.AttemptObserver(trace)
 		}
 	}
+	streamObserver := func(data []byte) error {
+		if !contractSet.ProviderRequest.RequestShape.Streaming.Enabled || !contractSet.ProviderRequest.RequestShape.Streaming.Params.Stream {
+			return nil
+		}
+		return applyProviderStreamChunk(&streamed, data, input.StreamObserver)
+	}
 
 	response, err := c.Transport.Execute(ctx, contractSet.ProviderRequest.Transport, Request{
 		Body:            requestBody,
 		ContentType:     "application/json",
 		AttemptObserver: observer,
+		StreamObserver:  streamObserver,
 	})
 	if err != nil {
 		return ClientResult{
@@ -102,9 +111,16 @@ func (c *Client) Execute(ctx context.Context, contractSet contracts.ResolvedCont
 			TransportAttempts: attempts,
 		}, fmt.Errorf("execute provider transport: %w", err)
 	}
-	parsed, err := parseProviderResponse(response)
-	if err != nil {
-		return ClientResult{}, err
+	parsed := streamed
+	if contractSet.ProviderRequest.RequestShape.Streaming.Enabled && contractSet.ProviderRequest.RequestShape.Streaming.Params.Stream {
+		if parsed.Message.Content == "" {
+			return ClientResult{}, fmt.Errorf("provider stream returned no content")
+		}
+	} else {
+		parsed, err = parseProviderResponse(response)
+		if err != nil {
+			return ClientResult{}, err
+		}
 	}
 
 	return ClientResult{
@@ -113,6 +129,59 @@ func (c *Client) Execute(ctx context.Context, contractSet contracts.ResolvedCont
 		Provider:          parsed,
 		TransportAttempts: attempts,
 	}, nil
+}
+
+func applyProviderStreamChunk(out *ProviderResponse, data []byte, onDelta func(string)) error {
+	var raw struct {
+		ID      string `json:"id"`
+		Model   string `json:"model"`
+		Choices []struct {
+			FinishReason string `json:"finish_reason"`
+			Delta        struct {
+				Role    string `json:"role"`
+				Content string `json:"content"`
+			} `json:"delta"`
+		} `json:"choices"`
+		Usage struct {
+			PromptTokens     int `json:"prompt_tokens"`
+			CompletionTokens int `json:"completion_tokens"`
+			TotalTokens      int `json:"total_tokens"`
+		} `json:"usage"`
+	}
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return fmt.Errorf("decode provider stream chunk: %w", err)
+	}
+	if raw.ID != "" {
+		out.ID = raw.ID
+	}
+	if raw.Model != "" {
+		out.Model = raw.Model
+	}
+	if len(raw.Choices) > 0 {
+		if raw.Choices[0].Delta.Role != "" {
+			out.Message.Role = raw.Choices[0].Delta.Role
+		}
+		if raw.Choices[0].Delta.Content != "" {
+			out.Message.Content += raw.Choices[0].Delta.Content
+			if onDelta != nil {
+				onDelta(raw.Choices[0].Delta.Content)
+			}
+		}
+		if raw.Choices[0].FinishReason != "" {
+			out.FinishReason = raw.Choices[0].FinishReason
+		}
+	}
+	if raw.Usage.TotalTokens > 0 {
+		out.Usage = Usage{
+			InputTokens:  raw.Usage.PromptTokens,
+			OutputTokens: raw.Usage.CompletionTokens,
+			TotalTokens:  raw.Usage.TotalTokens,
+		}
+	}
+	if out.Message.Role == "" {
+		out.Message.Role = "assistant"
+	}
+	return nil
 }
 
 func parseProviderResponse(response Response) (ProviderResponse, error) {

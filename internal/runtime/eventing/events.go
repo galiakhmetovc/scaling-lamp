@@ -13,6 +13,7 @@ type EventKind string
 
 const (
 	EventSessionCreated EventKind = "session.created"
+	EventMessageRecorded EventKind = "message.recorded"
 	EventRunStarted     EventKind = "run.started"
 	EventTransportAttemptCompleted EventKind = "transport.attempt.completed"
 	EventRunCompleted   EventKind = "run.completed"

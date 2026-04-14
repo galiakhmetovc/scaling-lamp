@@ -1,6 +1,7 @@
 package provider
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"fmt"
@@ -23,6 +24,7 @@ type Request struct {
 	Body            []byte
 	ContentType     string
 	AttemptObserver func(AttemptTrace)
+	StreamObserver  func([]byte) error
 }
 
 type Response struct {
@@ -195,9 +197,17 @@ func (e *TransportExecutor) executeOnce(ctx context.Context, contract contracts.
 	}
 	defer resp.Body.Close()
 
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return Response{}, fmt.Errorf("read response body: %w", err)
+	var body []byte
+	if request.StreamObserver != nil {
+		body, err = consumeEventStream(resp.Body, request.StreamObserver)
+		if err != nil {
+			return Response{}, fmt.Errorf("consume event stream: %w", err)
+		}
+	} else {
+		body, err = io.ReadAll(resp.Body)
+		if err != nil {
+			return Response{}, fmt.Errorf("read response body: %w", err)
+		}
 	}
 
 	return Response{
@@ -205,6 +215,40 @@ func (e *TransportExecutor) executeOnce(ctx context.Context, contract contracts.
 		Headers:    resp.Header.Clone(),
 		Body:       body,
 	}, nil
+}
+
+func consumeEventStream(reader io.Reader, onData func([]byte) error) ([]byte, error) {
+	scanner := bufio.NewScanner(reader)
+	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+	var dataLines []string
+	var raw bytes.Buffer
+	for scanner.Scan() {
+		line := scanner.Text()
+		raw.WriteString(line)
+		raw.WriteByte('\n')
+		switch {
+		case line == "":
+			if len(dataLines) == 0 {
+				continue
+			}
+			payload := strings.Join(dataLines, "\n")
+			dataLines = dataLines[:0]
+			if payload == "[DONE]" {
+				continue
+			}
+			if err := onData([]byte(payload)); err != nil {
+				return nil, err
+			}
+		case strings.HasPrefix(line, ":"):
+			continue
+		case strings.HasPrefix(line, "data:"):
+			dataLines = append(dataLines, strings.TrimSpace(strings.TrimPrefix(line, "data:")))
+		}
+	}
+	if err := scanner.Err(); err != nil {
+		return nil, err
+	}
+	return raw.Bytes(), nil
 }
 
 func applyAuth(req *http.Request, policy contracts.AuthPolicy) error {

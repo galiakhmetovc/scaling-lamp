@@ -83,14 +83,17 @@ What it currently does:
 2. autoloads `./.env` if present
 3. builds the runtime agent from `--config`
 4. if `--smoke` is given, sends one smoke request
-5. prints the assistant message to stdout
+5. if `--chat` is given, starts an interactive chat loop
+6. prints provider output to stdout
 
 Current CLI surface:
 
 - `--config <path>` is required
 - `--smoke "<text>"` is optional
+- `--chat` is optional
+- `--resume <session-id>` is optional and only applies to `--chat`
 
-If `--smoke` is omitted:
+If neither `--smoke` nor `--chat` is given:
 
 - the binary only validates that the config can be loaded and the runtime can be built
 - then it exits without output
@@ -104,6 +107,28 @@ That is why running only:
 looks like “nothing happened”.
 
 That is current behavior by design.
+
+### 3.1 Chat CLI Mode
+
+Current chat mode:
+
+- `--chat` creates a new chat session
+- `--chat --resume <session-id>` resumes an existing one
+- input is multiline
+- send trigger is double `Enter`
+- assistant output is streamed to stdout
+- current slash commands:
+  - `/help`
+  - `/session`
+  - `/exit`
+
+At startup the CLI prints:
+
+- `agent: <agent-id>`
+- `session: <session-id>`
+- `mode: new|resumed`
+
+After each turn it prints a final status line with token usage.
 
 ## 4. Environment Loading
 

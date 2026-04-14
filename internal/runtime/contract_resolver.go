@@ -41,6 +41,15 @@ type promptAssetsContractBody struct {
 	PromptAssetPolicyPath string `yaml:"prompt_asset_policy_path"`
 }
 
+type chatContractBody struct {
+	InputPolicyPath   string `yaml:"input_policy_path"`
+	SubmitPolicyPath  string `yaml:"submit_policy_path"`
+	OutputPolicyPath  string `yaml:"output_policy_path"`
+	StatusPolicyPath  string `yaml:"status_policy_path"`
+	CommandPolicyPath string `yaml:"command_policy_path"`
+	ResumePolicyPath  string `yaml:"resume_policy_path"`
+}
+
 type requestShapeContractBody struct {
 	ModelPolicyPath          string `yaml:"model_policy_path"`
 	MessagePolicyPath        string `yaml:"message_policy_path"`
@@ -259,6 +268,51 @@ func resolveMemoryContract(out *contracts.ResolvedContracts, path string, policy
 	return nil
 }
 
+func resolveChatContract(out *contracts.ResolvedContracts, path string, policyRegistry *policies.Registry) error {
+	contract, err := loadContract[chatContractBody](path, "chat")
+	if err != nil {
+		return err
+	}
+	if contract.Spec.InputPolicyPath == "" || contract.Spec.SubmitPolicyPath == "" || contract.Spec.OutputPolicyPath == "" || contract.Spec.StatusPolicyPath == "" || contract.Spec.CommandPolicyPath == "" || contract.Spec.ResumePolicyPath == "" {
+		return fmt.Errorf("chat contract %q missing one or more policy paths", contract.ID)
+	}
+	inputPolicy, err := loadPolicy[struct{}](path, contract.Spec.InputPolicyPath, "ChatInputPolicyConfig", "chat-input", policyRegistry)
+	if err != nil {
+		return err
+	}
+	submitPolicy, err := loadPolicy[struct{}](path, contract.Spec.SubmitPolicyPath, "ChatSubmitPolicyConfig", "chat-submit", policyRegistry)
+	if err != nil {
+		return err
+	}
+	outputPolicy, err := loadPolicy[struct{}](path, contract.Spec.OutputPolicyPath, "ChatOutputPolicyConfig", "chat-output", policyRegistry)
+	if err != nil {
+		return err
+	}
+	statusPolicy, err := loadPolicy[struct{}](path, contract.Spec.StatusPolicyPath, "ChatStatusPolicyConfig", "chat-status", policyRegistry)
+	if err != nil {
+		return err
+	}
+	commandPolicy, err := loadPolicy[struct{}](path, contract.Spec.CommandPolicyPath, "ChatCommandPolicyConfig", "chat-command", policyRegistry)
+	if err != nil {
+		return err
+	}
+	resumePolicy, err := loadPolicy[struct{}](path, contract.Spec.ResumePolicyPath, "ChatResumePolicyConfig", "chat-resume", policyRegistry)
+	if err != nil {
+		return err
+	}
+
+	out.Chat = contracts.ChatContract{
+		ID: contract.ID,
+		Input: contracts.ChatInputPolicy{ID: inputPolicy.ID, Enabled: inputPolicy.Spec.Enabled, Strategy: inputPolicy.Spec.Strategy},
+		Submit: contracts.ChatSubmitPolicy{ID: submitPolicy.ID, Enabled: submitPolicy.Spec.Enabled, Strategy: submitPolicy.Spec.Strategy},
+		Output: contracts.ChatOutputPolicy{ID: outputPolicy.ID, Enabled: outputPolicy.Spec.Enabled, Strategy: outputPolicy.Spec.Strategy},
+		Status: contracts.ChatStatusPolicy{ID: statusPolicy.ID, Enabled: statusPolicy.Spec.Enabled, Strategy: statusPolicy.Spec.Strategy},
+		Command: contracts.ChatCommandPolicy{ID: commandPolicy.ID, Enabled: commandPolicy.Spec.Enabled, Strategy: commandPolicy.Spec.Strategy},
+		Resume: contracts.ChatResumePolicy{ID: resumePolicy.ID, Enabled: resumePolicy.Spec.Enabled, Strategy: resumePolicy.Spec.Strategy},
+	}
+	return nil
+}
+
 func resolvePromptAssetsContract(out *contracts.ResolvedContracts, path string, policyRegistry *policies.Registry) error {
 	contract, err := loadContract[promptAssetsContractBody](path, "prompt-assets")
 	if err != nil {
@@ -332,6 +386,8 @@ func resolveContractApplyFunc(kind string) (contractApplyFunc, error) {
 		return resolveMemoryContract, nil
 	case "PromptAssetsContractConfig":
 		return resolvePromptAssetsContract, nil
+	case "ChatContractConfig":
+		return resolveChatContract, nil
 	default:
 		return nil, fmt.Errorf("unsupported contract kind %q", kind)
 	}

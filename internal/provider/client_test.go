@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"strings"
 	"testing"
 
 	"teamd/internal/contracts"
@@ -246,5 +247,88 @@ func TestClientReturnsProviderStatusError(t *testing.T) {
 	}
 	if got := err.Error(); got != `provider returned status 429: {"error":"rate limited"}` {
 		t.Fatalf("Execute error = %q", got)
+	}
+}
+
+func TestClientStreamsOpenAICompatibleResponse(t *testing.T) {
+	t.Setenv("ZAI_API_KEY", "secret-token")
+
+	var deltas []string
+	client := provider.NewClient(
+		provider.NewPromptAssetExecutor(),
+		provider.NewRequestShapeExecutor(),
+		provider.NewTransportExecutor(fakeDoer{
+			do: func(req *http.Request) (*http.Response, error) {
+				return &http.Response{
+					StatusCode: http.StatusOK,
+					Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
+					Body: io.NopCloser(bytes.NewBufferString(strings.Join([]string{
+						"data: {\"id\":\"resp-1\",\"model\":\"glm-5-turbo\",\"choices\":[{\"delta\":{\"role\":\"assistant\",\"content\":\"Po\"},\"finish_reason\":\"\"}]}",
+						"",
+						"data: {\"id\":\"resp-1\",\"model\":\"glm-5-turbo\",\"choices\":[{\"delta\":{\"content\":\"ng\"},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":12,\"completion_tokens\":3,\"total_tokens\":15}}",
+						"",
+						"data: [DONE]",
+						"",
+					}, "\n"))),
+				}, nil
+			},
+		}),
+	)
+
+	result, err := client.Execute(context.Background(), contracts.ResolvedContracts{
+		ProviderRequest: contracts.ProviderRequestContract{
+			Transport: contracts.TransportContract{
+				Endpoint: contracts.EndpointPolicy{
+					Enabled:  true,
+					Strategy: "static",
+					Params: contracts.EndpointParams{
+						BaseURL: "https://api.z.ai",
+						Path:    "/api/paas/v4/chat/completions",
+						Method:  http.MethodPost,
+					},
+				},
+				Auth: contracts.AuthPolicy{
+					Enabled:  true,
+					Strategy: "bearer_token",
+					Params: contracts.AuthParams{
+						Header:      "Authorization",
+						Prefix:      "Bearer",
+						ValueEnvVar: "ZAI_API_KEY",
+					},
+				},
+			},
+			RequestShape: contracts.RequestShapeContract{
+				Model: contracts.ModelPolicy{
+					Enabled:  true,
+					Strategy: "static_model",
+					Params: contracts.ModelParams{Model: "glm-5-turbo"},
+				},
+				Messages:  contracts.MessagePolicy{Enabled: true, Strategy: "raw_messages"},
+				Tools:     contracts.ToolPolicy{Enabled: true, Strategy: "tools_inline"},
+				Streaming: contracts.StreamingPolicy{Enabled: true, Strategy: "static_stream", Params: contracts.StreamingParams{Stream: true}},
+			},
+		},
+		PromptAssets: contracts.PromptAssetsContract{
+			PromptAsset: contracts.PromptAssetPolicy{
+				Enabled: true, Strategy: "inline_assets",
+			},
+		},
+	}, provider.ClientInput{
+		Messages: []contracts.Message{{Role: "user", Content: "Ping"}},
+		StreamObserver: func(delta string) {
+			deltas = append(deltas, delta)
+		},
+	})
+	if err != nil {
+		t.Fatalf("Execute returned error: %v", err)
+	}
+	if result.Provider.Message.Content != "Pong" {
+		t.Fatalf("provider message = %q, want Pong", result.Provider.Message.Content)
+	}
+	if len(deltas) != 2 || deltas[0] != "Po" || deltas[1] != "ng" {
+		t.Fatalf("deltas = %#v, want [Po ng]", deltas)
+	}
+	if result.Provider.Usage.TotalTokens != 15 {
+		t.Fatalf("usage total = %d, want 15", result.Provider.Usage.TotalTokens)
 	}
 }

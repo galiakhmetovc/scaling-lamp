@@ -1,0 +1,6 @@
+kind: ChatInputPolicyConfig
+version: v1
+id: chat-input-zai-smoke
+spec:
+  enabled: true
+  strategy: multiline_buffer

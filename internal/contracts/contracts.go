@@ -4,6 +4,7 @@ type ResolvedContracts struct {
 	ProviderRequest ProviderRequestContract
 	Memory          MemoryContract
 	PromptAssets    PromptAssetsContract
+	Chat            ChatContract
 }
 
 type ProviderRequestContract struct {
@@ -90,6 +91,52 @@ type RequestShapeContract struct {
 type PromptAssetsContract struct {
 	ID          string
 	PromptAsset PromptAssetPolicy
+}
+
+type ChatContract struct {
+	ID      string
+	Input   ChatInputPolicy
+	Submit  ChatSubmitPolicy
+	Output  ChatOutputPolicy
+	Status  ChatStatusPolicy
+	Command ChatCommandPolicy
+	Resume  ChatResumePolicy
+}
+
+type ChatInputPolicy struct {
+	ID       string
+	Enabled  bool
+	Strategy string
+}
+
+type ChatSubmitPolicy struct {
+	ID       string
+	Enabled  bool
+	Strategy string
+}
+
+type ChatOutputPolicy struct {
+	ID       string
+	Enabled  bool
+	Strategy string
+}
+
+type ChatStatusPolicy struct {
+	ID       string
+	Enabled  bool
+	Strategy string
+}
+
+type ChatCommandPolicy struct {
+	ID       string
+	Enabled  bool
+	Strategy string
+}
+
+type ChatResumePolicy struct {
+	ID       string
+	Enabled  bool
+	Strategy string
 }
 
 type PromptAssetPolicy struct {

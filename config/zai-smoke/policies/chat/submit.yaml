@@ -1,0 +1,6 @@
+kind: ChatSubmitPolicyConfig
+version: v1
+id: chat-submit-zai-smoke
+spec:
+  enabled: true
+  strategy: double_enter

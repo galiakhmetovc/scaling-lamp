@@ -18,3 +18,4 @@ spec:
     request_shape: ./contracts/request-shape.yaml
     memory: ./contracts/memory.yaml
     prompt_assets: ./contracts/prompt-assets.yaml
+    chat: ./contracts/chat.yaml

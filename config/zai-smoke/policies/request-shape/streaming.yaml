@@ -5,4 +5,4 @@ spec:
   enabled: true
   strategy: static_stream
   params:
-    stream: false
+    stream: true

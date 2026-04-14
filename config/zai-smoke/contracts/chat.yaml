@@ -1,0 +1,10 @@
+kind: ChatContractConfig
+version: v1
+id: chat-zai-smoke
+spec:
+  input_policy_path: ../policies/chat/input.yaml
+  submit_policy_path: ../policies/chat/submit.yaml
+  output_policy_path: ../policies/chat/output.yaml
+  status_policy_path: ../policies/chat/status.yaml
+  command_policy_path: ../policies/chat/command.yaml
+  resume_policy_path: ../policies/chat/resume.yaml

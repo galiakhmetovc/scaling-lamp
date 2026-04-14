@@ -28,3 +28,19 @@ Operational baseline:
   - uploads:
     - `teamd-agent-linux-amd64`
     - `teamd-agent-windows-amd64`
+
+Run modes:
+
+- smoke:
+  - `./agent --config ./config/zai-smoke/agent.yaml --smoke "ping"`
+- interactive chat:
+  - `./agent --config ./config/zai-smoke/agent.yaml --chat`
+- resume chat:
+  - `./agent --config ./config/zai-smoke/agent.yaml --chat --resume <session-id>`
+
+Chat mode baseline:
+
+- multiline input
+- send on double `Enter`
+- `/help`, `/session`, `/exit`
+- streaming text output

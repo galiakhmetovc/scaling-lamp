@@ -661,6 +661,12 @@ func TestRepositoryZaiSmokeConfigLoadsAndResolvesContracts(t *testing.T) {
 	if resolved.ProviderRequest.RequestShape.Model.Params.Model != "glm-5-turbo" {
 		t.Fatalf("model = %q, want %q", resolved.ProviderRequest.RequestShape.Model.Params.Model, "glm-5-turbo")
 	}
+	if resolved.Chat.Submit.Strategy != "double_enter" {
+		t.Fatalf("chat submit strategy = %q, want %q", resolved.Chat.Submit.Strategy, "double_enter")
+	}
+	if resolved.Chat.Output.Strategy != "streaming_text" {
+		t.Fatalf("chat output strategy = %q, want %q", resolved.Chat.Output.Strategy, "streaming_text")
+	}
 }
 
 func mustWriteMinimalContracts(t *testing.T, dir string) {

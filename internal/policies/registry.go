@@ -17,6 +17,12 @@ const (
 	FamilyStreaming      Family = "streaming"
 	FamilySampling       Family = "sampling"
 	FamilyPromptAsset    Family = "prompt_asset"
+	FamilyChatInput      Family = "chat_input"
+	FamilyChatSubmit     Family = "chat_submit"
+	FamilyChatOutput     Family = "chat_output"
+	FamilyChatStatus     Family = "chat_status"
+	FamilyChatCommand    Family = "chat_command"
+	FamilyChatResume     Family = "chat_resume"
 )
 
 type Type struct {
@@ -122,6 +128,48 @@ func NewBuiltInRegistry() *Registry {
 		Family: FamilyPromptAsset,
 		Strategy: setOf(
 			"inline_assets",
+		),
+	})
+	registry.Register(Type{
+		Kind:   "ChatInputPolicyConfig",
+		Family: FamilyChatInput,
+		Strategy: setOf(
+			"multiline_buffer",
+		),
+	})
+	registry.Register(Type{
+		Kind:   "ChatSubmitPolicyConfig",
+		Family: FamilyChatSubmit,
+		Strategy: setOf(
+			"double_enter",
+		),
+	})
+	registry.Register(Type{
+		Kind:   "ChatOutputPolicyConfig",
+		Family: FamilyChatOutput,
+		Strategy: setOf(
+			"streaming_text",
+		),
+	})
+	registry.Register(Type{
+		Kind:   "ChatStatusPolicyConfig",
+		Family: FamilyChatStatus,
+		Strategy: setOf(
+			"inline_terminal",
+		),
+	})
+	registry.Register(Type{
+		Kind:   "ChatCommandPolicyConfig",
+		Family: FamilyChatCommand,
+		Strategy: setOf(
+			"slash_commands",
+		),
+	})
+	registry.Register(Type{
+		Kind:   "ChatResumePolicyConfig",
+		Family: FamilyChatResume,
+		Strategy: setOf(
+			"explicit_resume_only",
 		),
 	})
 	return registry

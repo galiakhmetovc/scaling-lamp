@@ -1,0 +1,6 @@
+kind: ChatStatusPolicyConfig
+version: v1
+id: chat-status-zai-smoke
+spec:
+  enabled: true
+  strategy: inline_terminal

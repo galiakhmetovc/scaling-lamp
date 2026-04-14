@@ -1,0 +1,6 @@
+kind: ChatResumePolicyConfig
+version: v1
+id: chat-resume-zai-smoke
+spec:
+  enabled: true
+  strategy: explicit_resume_only

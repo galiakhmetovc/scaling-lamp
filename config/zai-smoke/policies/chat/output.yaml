@@ -1,0 +1,6 @@
+kind: ChatOutputPolicyConfig
+version: v1
+id: chat-output-zai-smoke
+spec:
+  enabled: true
+  strategy: streaming_text
