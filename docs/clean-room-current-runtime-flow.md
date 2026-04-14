@@ -122,6 +122,7 @@ Current components built:
 - `RequestShape`
 - `EventLog`
 - `Projections`
+- optional projection snapshot store
 
 Current limitation:
 - builder composition is explicit and config-driven now
@@ -223,11 +224,12 @@ Current built-in projections:
 
 Current role:
 - register projection factories
-- build the default projection set
+- build configured projection sets
+- serve as the construction source for persistent snapshot restore
 
 Current limitation:
-- projection selection is still hardcoded through built-in defaults
-- no config-driven projection composition yet
+- projection persistence is snapshot-based only
+- runtime still needs a higher-level save lifecycle after event application
 
 ## What Works Today
 
@@ -246,10 +248,9 @@ Today the clean-room branch can already do this:
 These are current known gaps, not hidden assumptions:
 
 - combined provider client pipeline
-- persistent event log
-- persistent projections
 - combined prompt asset execution path in builder/runtime assembly
 - richer event-log indexing/compaction
+- automatic projection snapshot flushing
 
 ## Related Documents
 
@@ -259,6 +260,7 @@ These are current known gaps, not hidden assumptions:
 - [clean-room-policy-strategy-registries.md](/home/admin/AI-AGENT/data/projects/teamD/.worktrees/rewrite-clean-room-root/docs/clean-room-policy-strategy-registries.md)
 - [clean-room-prompt-assets.md](/home/admin/AI-AGENT/data/projects/teamD/.worktrees/rewrite-clean-room-root/docs/clean-room-prompt-assets.md)
 - [clean-room-persistent-event-log.md](/home/admin/AI-AGENT/data/projects/teamD/.worktrees/rewrite-clean-room-root/docs/clean-room-persistent-event-log.md)
+- [clean-room-persistent-projections.md](/home/admin/AI-AGENT/data/projects/teamD/.worktrees/rewrite-clean-room-root/docs/clean-room-persistent-projections.md)
 - [clean-room-transport-executor.md](/home/admin/AI-AGENT/data/projects/teamD/.worktrees/rewrite-clean-room-root/docs/clean-room-transport-executor.md)
 - [clean-room-request-shape-executor.md](/home/admin/AI-AGENT/data/projects/teamD/.worktrees/rewrite-clean-room-root/docs/clean-room-request-shape-executor.md)
 - [clean-room-implemented-strategies.md](/home/admin/AI-AGENT/data/projects/teamD/.worktrees/rewrite-clean-room-root/docs/clean-room-implemented-strategies.md)

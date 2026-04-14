@@ -16,6 +16,7 @@ type Agent struct {
 	RequestShape *provider.RequestShapeExecutor
 	EventLog     EventLog
 	Projections  []projections.Projection
+	ProjectionStore projections.Store
 }
 
 func BuildAgent(configPath string) (*Agent, error) {
@@ -53,6 +54,16 @@ func BuildAgent(configPath string) (*Agent, error) {
 	if err != nil {
 		return nil, fmt.Errorf("build projections: %w", err)
 	}
+	var projectionStore projections.Store
+	if cfg.Spec.Runtime.ProjectionStorePath != "" {
+		projectionStore, err = projections.NewJSONFileStore(cfg.Spec.Runtime.ProjectionStorePath)
+		if err != nil {
+			return nil, fmt.Errorf("build projection store: %w", err)
+		}
+		if err := projectionStore.Load(projectionSet); err != nil {
+			return nil, fmt.Errorf("load projection store: %w", err)
+		}
+	}
 	transportExecutor, err := componentRegistry.BuildTransportExecutor(cfg.Spec.Runtime.TransportExecutor)
 	if err != nil {
 		return nil, fmt.Errorf("build transport executor: %w", err)
@@ -69,5 +80,6 @@ func BuildAgent(configPath string) (*Agent, error) {
 		RequestShape: requestShapeExecutor,
 		EventLog:     eventLog,
 		Projections:  projectionSet,
+		ProjectionStore: projectionStore,
 	}, nil
 }

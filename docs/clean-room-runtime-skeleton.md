@@ -100,6 +100,14 @@ Current responsibility:
 - expose built-in projection composition
 - build projection sets by name
 
+### `internal/runtime/projections/store.go`
+
+Current projection snapshot store.
+
+Current responsibility:
+- save projection snapshots to JSON
+- restore snapshots into a built projection set
+
 ### `internal/runtime/projections/session.go`
 
 Minimal `SessionProjection`.
@@ -206,7 +214,7 @@ These are known temporary shortcuts and should be removed in the next slices.
 2. Event envelopes are still too small for a serious event-sourced system, even after adding sequence and trace linkage metadata.
 3. Contract resolution is still narrow and only covers the first transport/request-shape/memory path.
 4. Provider execution is still split into transport and request-shape pieces with no combined provider client yet.
-5. Persistent event storage exists, but projections are still not persistent.
+5. Persistent event storage and projection snapshot restore both exist, but projection persistence is still snapshot-based only.
 6. There is only a first built-in policy/strategy registry layer; config-driven registry composition and strategy-driven decoding still do not exist yet.
 7. Prompt assets exist as a separate domain, but only as inline assets prepended during request-shape execution.
 8. Builder composition is config-driven, but only against the built-in component registry.
@@ -214,5 +222,5 @@ These are known temporary shortcuts and should be removed in the next slices.
 ## Next Required Slices
 
 1. combined provider client over request-shape and transport executors
-2. persistent projections
-3. richer prompt asset execution and selection
+2. richer prompt asset execution and selection
+3. automatic projection snapshot lifecycle

@@ -23,6 +23,8 @@ func LoadRoot(path string) (AgentConfig, error) {
 	for contractName, contractPath := range cfg.Spec.Contracts {
 		cfg.Spec.Contracts[contractName] = resolveModulePath(baseDir, contractPath)
 	}
+	cfg.Spec.Runtime.EventLogPath = resolveModulePath(baseDir, cfg.Spec.Runtime.EventLogPath)
+	cfg.Spec.Runtime.ProjectionStorePath = resolveModulePath(baseDir, cfg.Spec.Runtime.ProjectionStorePath)
 
 	return cfg, nil
 }

@@ -1,6 +1,7 @@
 package projections
 
 import (
+	"encoding/json"
 	"fmt"
 	"time"
 
@@ -37,4 +38,17 @@ func (p *SessionProjection) Apply(event eventing.Event) error {
 
 func (p *SessionProjection) Snapshot() SessionSnapshot {
 	return p.snapshot
+}
+
+func (p *SessionProjection) SnapshotValue() any {
+	return p.snapshot
+}
+
+func (p *SessionProjection) RestoreSnapshot(raw []byte) error {
+	var snapshot SessionSnapshot
+	if err := json.Unmarshal(raw, &snapshot); err != nil {
+		return fmt.Errorf("restore session snapshot: %w", err)
+	}
+	p.snapshot = snapshot
+	return nil
 }

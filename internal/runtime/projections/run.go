@@ -1,6 +1,7 @@
 package projections
 
 import (
+	"encoding/json"
 	"fmt"
 
 	"teamd/internal/runtime/eventing"
@@ -46,4 +47,17 @@ func (p *RunProjection) Apply(event eventing.Event) error {
 
 func (p *RunProjection) Snapshot() RunSnapshot {
 	return p.snapshot
+}
+
+func (p *RunProjection) SnapshotValue() any {
+	return p.snapshot
+}
+
+func (p *RunProjection) RestoreSnapshot(raw []byte) error {
+	var snapshot RunSnapshot
+	if err := json.Unmarshal(raw, &snapshot); err != nil {
+		return fmt.Errorf("restore run snapshot: %w", err)
+	}
+	p.snapshot = snapshot
+	return nil
 }
