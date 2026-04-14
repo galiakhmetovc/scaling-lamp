@@ -1,0 +1,8 @@
+kind: ToolAccessPolicyConfig
+version: v1
+id: tool-access-zai-smoke
+spec:
+  enabled: true
+  strategy: deny_all
+  params:
+    tool_ids: []

@@ -1,0 +1,11 @@
+kind: SystemPromptPolicyConfig
+version: v1
+id: system-prompt-zai-smoke
+spec:
+  enabled: true
+  strategy: file_static
+  params:
+    path: ../../prompts/system.md
+    role: system
+    required: true
+    trim_trailing_whitespace: true

@@ -1,0 +1,13 @@
+kind: SessionHeadPolicyConfig
+version: v1
+id: session-head-zai-smoke
+spec:
+  enabled: true
+  strategy: projection_summary
+  params:
+    placement: message0
+    title: Session head
+    include_session_id: true
+    include_last_user_message: true
+    include_last_assistant_message: true
+    max_items: 4

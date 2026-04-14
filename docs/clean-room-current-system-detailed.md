@@ -183,7 +183,10 @@ spec:
     event_log: ...
     event_log_path: ...
     projection_store_path: ...
+    prompt_assembly_executor: ...
     prompt_asset_executor: ...
+    tool_catalog_executor: ...
+    tool_execution_gate: ...
     transport_executor: ...
     request_shape_executor: ...
     provider_client: ...
@@ -192,7 +195,11 @@ spec:
     transport: ...
     request_shape: ...
     memory: ...
+    prompt_assembly: ...
+    tools: ...
+    tool_execution: ...
     prompt_assets: ...
+    provider_trace: ...
     chat: ...
 ```
 
@@ -294,6 +301,9 @@ Current resolved contract families:
 - `TransportContract`
 - `RequestShapeContract`
 - `MemoryContract`
+- `PromptAssemblyContract`
+- `ToolContract`
+- `ToolExecutionContract`
 - `PromptAssetsContract`
 - `ProviderTraceContract`
 - `ChatContract`
@@ -337,9 +347,12 @@ LoadRoot
   -> build event log
   -> build projections
   -> optionally load projection snapshots
+  -> build prompt-assembly executor
   -> build transport executor
   -> build request-shape executor
   -> build prompt-asset executor
+  -> build tool-catalog executor
+  -> build tool-execution gate
   -> build provider client
   -> return Agent
 ```
@@ -353,18 +366,24 @@ flowchart TD
     E --> F[Build EventLog]
     F --> G[Build Projections]
     G --> H[Load snapshot store]
-    H --> I[Build TransportExecutor]
-    I --> J[Build RequestShapeExecutor]
-    J --> K[Build PromptAssetExecutor]
-    K --> L[Build ProviderClient]
-    L --> M[Return Agent]
+    H --> I[Build PromptAssemblyExecutor]
+    I --> J[Build TransportExecutor]
+    J --> K[Build RequestShapeExecutor]
+    K --> L[Build PromptAssetExecutor]
+    L --> M[Build ToolCatalogExecutor]
+    M --> N[Build ToolExecutionGate]
+    N --> O[Build ProviderClient]
+    O --> P[Return Agent]
 ```
 
 Current runtime `Agent` contains:
 
 - `Config`
 - `Contracts`
+- `PromptAssembly`
 - `PromptAssets`
+- `ToolCatalog`
+- `ToolExecution`
 - `Transport`
 - `RequestShape`
 - `ProviderClient`
@@ -383,8 +402,14 @@ The component registry currently knows how to build:
 - event logs:
   - `in_memory`
   - `file_jsonl`
+- prompt-assembly executor:
+  - `prompt_assembly_default`
 - prompt-asset executor:
   - `prompt_asset_default`
+- tool-catalog executor:
+  - `tool_catalog_default`
+- tool-execution gate:
+  - `tool_execution_default`
 - transport executor:
   - `transport_default`
 - request-shape executor:
@@ -408,6 +433,7 @@ This is the most important operational path in the current clean-room runtime.
 
 Current files:
 
+- [executor.go](/home/admin/AI-AGENT/data/projects/teamD/.worktrees/rewrite-clean-room-root/internal/promptassembly/executor.go)
 - [prompt_asset_executor.go](/home/admin/AI-AGENT/data/projects/teamD/.worktrees/rewrite-clean-room-root/internal/provider/prompt_asset_executor.go)
 - [request_shape_executor.go](/home/admin/AI-AGENT/data/projects/teamD/.worktrees/rewrite-clean-room-root/internal/provider/request_shape_executor.go)
 - [transport_executor.go](/home/admin/AI-AGENT/data/projects/teamD/.worktrees/rewrite-clean-room-root/internal/provider/transport_executor.go)
@@ -417,24 +443,53 @@ Current execution chain:
 
 ```text
 ClientInput
+  -> PromptAssemblyExecutor.Build(...)
   -> PromptAssetExecutor.Build(...)
+  -> ToolCatalogExecutor.Build/Serialize(...)
   -> RequestShapeExecutor.Build(...)
   -> optional provider request capture
   -> TransportExecutor.Execute(...)
   -> parseProviderResponse(...)
+  -> ToolExecutionGate.Evaluate(...)
   -> ClientResult
 ```
 
 ```mermaid
 flowchart LR
-    A[ClientInput] --> B[PromptAssetExecutor]
-    B --> C[RequestShapeExecutor]
+    A[ClientInput] --> G[PromptAssemblyExecutor]
+    G --> B[PromptAssetExecutor]
+    B --> H[ToolCatalogExecutor]
+    H --> C[RequestShapeExecutor]
     C --> D[TransportExecutor]
     D --> E[Provider response parser]
-    E --> F[ClientResult]
+    E --> I[ToolExecutionGate]
+    I --> F[ClientResult]
 ```
 
-### 10.1 Prompt Asset Executor
+### 10.1 Prompt Assembly Executor
+
+Input:
+
+- resolved `PromptAssemblyContract`
+- current `session_id`
+- transcript/session projection state
+- fallback raw messages
+
+Output:
+
+- prompt-assembly messages placed ahead of regular conversation content
+
+Current behavior:
+
+- `SystemPromptPolicy.file_static`
+  - reads system prompt text from configured file path
+  - emits a separate system message
+- `SessionHeadPolicy.projection_summary`
+  - builds compact summary text from projections
+  - shipped config uses `placement: message0`
+  - session head therefore becomes outbound `messages[0]`
+
+### 10.2 Prompt Asset Executor
 
 Input:
 
@@ -455,15 +510,16 @@ Current behavior:
   - `append`
 - unknown selected ids are errors
 
-### 10.2 Request Shape Executor
+### 10.3 Request Shape Executor
 
 Input:
 
+- prompt-assembly messages
 - resolved `RequestShapeContract`
 - prepend prompt assets
 - append prompt assets
 - raw user/assistant messages
-- tools
+- serialized tools
 
 Output:
 
@@ -483,12 +539,13 @@ Current supported payload fields:
 Current message assembly:
 
 ```text
-prepend prompt assets
+prompt-assembly messages
+  + prepend prompt assets
   + raw messages
   + append prompt assets
 ```
 
-### 10.3 Transport Executor
+### 10.4 Transport Executor
 
 Input:
 
@@ -524,7 +581,7 @@ Current unsupported transport areas:
 - TLS policy execution
 - rate-limit policy execution
 
-### 10.4 Provider Client
+### 10.5 Provider Client
 
 Input:
 
@@ -549,6 +606,10 @@ Current normalized provider response contains:
   - `input_tokens`
   - `output_tokens`
   - `total_tokens`
+- parsed tool calls:
+  - `id`
+  - `name`
+  - `arguments`
 
 Current stream semantics:
 
@@ -559,9 +620,56 @@ Current stream semantics:
 Current limitation:
 
 - parsing still assumes OpenAI-compatible top-level response shapes first
+- streaming tool-call parsing is not implemented yet
 - richer provider semantics are still tracked as follow-up work
 
-### 10.5 Provider Trace Capture
+### 10.6 Tool Catalog
+
+Current file:
+
+- [catalog.go](/home/admin/AI-AGENT/data/projects/teamD/.worktrees/rewrite-clean-room-root/internal/tools/catalog.go)
+
+Current role:
+
+- take runtime tool definitions
+- apply `ToolCatalogPolicy`
+- serialize visible tools through `ToolSerializationPolicy`
+
+Current baseline behavior:
+
+- `ToolCatalogPolicy.static_allowlist`
+  - selects tool ids in configured order
+  - errors on unknown tool ids
+  - can allow empty tool surface
+- `ToolSerializationPolicy.openai_function_tools`
+  - emits OpenAI-compatible function tools
+
+### 10.7 Tool Execution Gate
+
+Current file:
+
+- [execution_gate.go](/home/admin/AI-AGENT/data/projects/teamD/.worktrees/rewrite-clean-room-root/internal/tools/execution_gate.go)
+
+Current role:
+
+- evaluate provider-emitted tool calls against:
+  - access policy
+  - approval policy
+  - sandbox policy
+
+Current baseline behavior:
+
+- denied calls fail immediately
+- approval-required calls fail immediately with an approval-needed error
+- allowed calls resolve a sandbox descriptor
+
+Current critical limitation:
+
+- actual tool execution is not implemented yet
+- if a tool call passes the gate, runtime still fails honestly with:
+  - `tool call "<name>" allowed but execution path is not implemented yet`
+
+### 10.8 Provider Trace Capture
 
 Current file:
 
@@ -576,6 +684,23 @@ Current behavior:
 Current runtime event:
 
 - `provider.request.captured`
+
+### 10.9 Current Shipped `zai-smoke` Tool Posture
+
+Current shipped config deliberately exposes no tools:
+
+- `ToolCatalogPolicy.static_allowlist`
+  - `tool_ids: []`
+  - `allow_empty: true`
+- `ToolExecutionContract`
+  - access: `deny_all`
+  - approval: `always_allow`
+  - sandbox: `default_runtime`
+
+That means:
+
+- outbound request bodies currently include no tools for `zai-smoke`
+- if a provider response somehow still contains tool calls, the execution gate denies them
 
 ## 11. Smoke Runtime Path
 

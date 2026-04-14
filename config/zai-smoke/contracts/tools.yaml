@@ -1,0 +1,6 @@
+kind: ToolContractConfig
+version: v1
+id: tools-zai-smoke
+spec:
+  tool_catalog_policy_path: ../policies/tools/catalog.yaml
+  tool_serialization_policy_path: ../policies/tools/serialization.yaml

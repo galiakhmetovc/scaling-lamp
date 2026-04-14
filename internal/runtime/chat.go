@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	"teamd/internal/contracts"
+	"teamd/internal/promptassembly"
 	"teamd/internal/provider"
 	"teamd/internal/runtime/eventing"
 	"teamd/internal/runtime/projections"
@@ -133,9 +134,14 @@ func (a *Agent) ChatTurn(ctx context.Context, session *ChatSession, input ChatTu
 		return provider.ClientResult{}, fmt.Errorf("record run started: %w", err)
 	}
 
+	assembledMessages, err := a.assemblePromptMessages(session.SessionID, append([]contracts.Message{}, session.Messages...))
+	if err != nil {
+		return provider.ClientResult{}, fmt.Errorf("assemble chat prompt: %w", err)
+	}
+
 	result, err := a.ProviderClient.Execute(ctx, a.Contracts, provider.ClientInput{
 		PromptAssetSelection: input.PromptAssetSelection,
-		Messages:             append([]contracts.Message{}, session.Messages...),
+		Messages:             assembledMessages,
 		StreamObserver:       input.StreamObserver,
 	})
 	if err != nil {
@@ -218,6 +224,28 @@ func (a *Agent) transcriptProjection() *projections.TranscriptProjection {
 		}
 	}
 	return nil
+}
+
+func (a *Agent) assemblePromptMessages(sessionID string, fallback []contracts.Message) ([]contracts.Message, error) {
+	if a == nil || a.PromptAssembly == nil {
+		return fallback, nil
+	}
+	transcript := projections.TranscriptSnapshot{Sessions: map[string][]contracts.Message{}}
+	if projection := a.transcriptProjection(); projection != nil {
+		transcript = projection.Snapshot()
+	}
+	messages, err := a.PromptAssembly.Build(a.Contracts.PromptAssembly, promptassembly.Input{
+		SessionID:  sessionID,
+		Transcript: transcript,
+		RawMessages: append([]contracts.Message{}, fallback...),
+	})
+	if err != nil {
+		return nil, err
+	}
+	if len(messages) == 0 {
+		return fallback, nil
+	}
+	return messages, nil
 }
 
 func (a *Agent) recordSessionMessage(ctx context.Context, sessionID, correlationID string, message contracts.Message) error {

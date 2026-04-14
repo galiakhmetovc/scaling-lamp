@@ -16,14 +16,21 @@ It does not describe the target architecture beyond what already exists in code.
 5. `BuildAgent` assembles the current runtime instance from `spec.runtime`:
    - configured event log
    - configured projections
+   - configured prompt-assembly executor
    - configured prompt-asset executor
+   - configured tool-catalog executor
+   - configured tool-execution gate
    - configured transport executor
    - configured request-shape executor
    - configured provider client
-6. prompt-asset execution can resolve selected prompt assets from the dedicated prompt-asset contract.
-7. request-shape execution can build provider JSON body bytes from resolved request-shape contract.
-8. the combined provider client composes prompt-asset execution, request-shape execution, and transport execution into one provider call.
-9. `internal/runtime/cli` owns terminal chat UX for `--chat` and `--resume`.
+6. prompt-assembly execution can build top-of-prompt messages from:
+   - file-backed system prompt
+   - projection-backed session head
+7. prompt-asset execution can resolve selected prompt assets from the dedicated prompt-asset contract.
+8. tool-catalog execution can choose visible tools and serialize them for provider request bodies.
+9. request-shape execution can build provider JSON body bytes from resolved request-shape contract.
+10. the combined provider client composes prompt-assembly, prompt-asset execution, tool-catalog execution, request-shape execution, and transport execution into one provider call.
+11. `internal/runtime/cli` owns terminal chat UX for `--chat` and `--resume`.
 
 ## Process Entry
 
@@ -105,6 +112,9 @@ Current resolved areas:
 - `RequestShapeContract`
 - `MemoryContract`
 - `PromptAssetsContract`
+- `PromptAssemblyContract`
+- `ToolContract`
+- `ToolExecutionContract`
 - `ProviderTraceContract`
 - `ChatContract`
 
@@ -132,7 +142,10 @@ Current role:
 
 Current components built:
 - `Contracts`
+- `PromptAssembly`
 - `PromptAssets`
+- `ToolCatalog`
+- `ToolExecution`
 - `Transport`
 - `RequestShape`
 - `ProviderClient`
@@ -168,22 +181,28 @@ Current role:
 ### `internal/provider/client.go`
 
 Current role:
-- combine request-shape execution and transport execution
+- combine prompt assembly, prompt-asset execution, tool selection, request-shape execution, and transport execution
 - return one normalized result object for a provider call
 
 Current provider pipeline now:
+- build prompt-assembly messages from file-backed system prompt and projection-backed session head
 - resolve selected prompt assets into prepend/append message buckets
+- build visible tool surface from `ToolContract`
+- serialize tools for provider payloads
 - build request-shape JSON body
 - optionally capture the exact outbound provider request through `ProviderTraceContract`
 - execute transport
 - parse provider-specific response body
+- parse provider-emitted tool calls when present in non-streaming responses
+- run parsed tool calls through `ToolExecutionContract`
 - extract normalized usage fields
 - feed the combined result into the runtime smoke path when `cmd/agent --smoke` is used
 
 Current limitation:
 - parser still assumes OpenAI-compatible top-level wire shapes first
 - stream semantics now emit typed `text` and `reasoning` events
-- provider-specific tool-call parsing is still missing
+- actual tool execution runtime is still missing after an allowed tool call
+- current runtime denies, approval-blocks, or honestly fails allowed tool calls with “execution path is not implemented yet”
 
 ## Provider Trace Capture
 
@@ -226,17 +245,64 @@ Current supported fields:
   - `max_output_tokens`
 
 Current input boundary:
-- prompt assets now arrive as prepend/append message buckets from the dedicated prompt-asset executor
+- top-of-prompt messages now arrive from the dedicated prompt-assembly executor
+- prompt assets arrive as prepend/append message buckets from the dedicated prompt-asset executor
 - raw messages come in as `contracts.Message`
-- tools come in as raw inline tool definitions
+- tools arrive as serialized provider tool entries from `ToolContract`
 
 Current output boundary:
 - JSON body bytes only
 
 It does not yet:
-- assemble prompt-policy layers
 - add provider-specific reasoning fields
 - return a richer provider request object
+
+## Prompt Assembly
+
+### `internal/promptassembly/executor.go`
+
+Current role:
+- load system prompt text from file
+- build a projection-backed session head
+- place session head at outbound `messages[0]`
+- keep system prompt as a separate message layer
+
+Current behavior:
+- `SystemPromptPolicy.file_static`
+  - reads text from file configured in policy params
+- `SessionHeadPolicy.projection_summary`
+  - builds a compact summary from transcript/session state
+  - with shipped config, emits it at `placement: message0`
+
+This means the clean-room runtime now has an explicit prompt-assembly layer ahead of request-shape execution.
+
+## Tool Surface And Safety
+
+### `internal/tools/catalog.go`
+
+Current role:
+- choose visible tool definitions from runtime input
+- serialize them into provider-compatible `tools` payload entries
+
+Current behavior:
+- `ToolCatalogPolicy.static_allowlist`
+  - selects listed tool ids in configured order
+- `ToolSerializationPolicy.openai_function_tools`
+  - emits OpenAI-compatible function tools
+
+### `internal/tools/execution_gate.go`
+
+Current role:
+- evaluate parsed provider-emitted tool calls through access, approval, and sandbox policies
+
+Current behavior:
+- denied calls fail immediately
+- approval-required calls fail immediately
+- allowed calls carry resolved sandbox descriptor
+
+Current limitation:
+- there is still no actual tool execution runtime after the gate
+- tool execution contract currently protects the boundary, but does not yet run tools
 
 It now does:
 - prepend selected prompt asset messages before raw conversation messages

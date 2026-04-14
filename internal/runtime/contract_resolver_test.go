@@ -24,7 +24,10 @@ func TestResolveContractsBuildsTransportAndMemoryContracts(t *testing.T) {
 		"    transport: ./contracts/transport.yaml\n"+
 		"    request_shape: ./contracts/request-shape.yaml\n"+
 		"    memory: ./contracts/memory.yaml\n"+
-		"    prompt_assets: ./contracts/prompt-assets.yaml\n")
+		"    prompt_assets: ./contracts/prompt-assets.yaml\n"+
+		"    prompt_assembly: ./contracts/prompt-assembly.yaml\n"+
+		"    tools: ./contracts/tools.yaml\n"+
+		"    tool_execution: ./contracts/tool-execution.yaml\n")
 
 	mustWriteFile(t, filepath.Join(dir, "contracts", "transport.yaml"), ""+
 		"kind: TransportContractConfig\n"+
@@ -61,6 +64,31 @@ func TestResolveContractsBuildsTransportAndMemoryContracts(t *testing.T) {
 		"id: prompt-assets-main\n"+
 		"spec:\n"+
 		"  prompt_asset_policy_path: ../policies/prompt-assets/inline.yaml\n")
+
+	mustWriteFile(t, filepath.Join(dir, "contracts", "prompt-assembly.yaml"), ""+
+		"kind: PromptAssemblyContractConfig\n"+
+		"version: v1\n"+
+		"id: prompt-assembly-main\n"+
+		"spec:\n"+
+		"  system_prompt_policy_path: ../policies/prompt-assembly/system-prompt.yaml\n"+
+		"  session_head_policy_path: ../policies/prompt-assembly/session-head.yaml\n")
+
+	mustWriteFile(t, filepath.Join(dir, "contracts", "tools.yaml"), ""+
+		"kind: ToolContractConfig\n"+
+		"version: v1\n"+
+		"id: tools-main\n"+
+		"spec:\n"+
+		"  tool_catalog_policy_path: ../policies/tools/catalog.yaml\n"+
+		"  tool_serialization_policy_path: ../policies/tools/serialization.yaml\n")
+
+	mustWriteFile(t, filepath.Join(dir, "contracts", "tool-execution.yaml"), ""+
+		"kind: ToolExecutionContractConfig\n"+
+		"version: v1\n"+
+		"id: tool-execution-main\n"+
+		"spec:\n"+
+		"  tool_access_policy_path: ../policies/tool-execution/access.yaml\n"+
+		"  tool_approval_policy_path: ../policies/tool-execution/approval.yaml\n"+
+		"  tool_sandbox_policy_path: ../policies/tool-execution/sandbox.yaml\n")
 
 	mustWriteFile(t, filepath.Join(dir, "policies", "transport", "endpoint.yaml"), ""+
 		"kind: EndpointPolicyConfig\n"+
@@ -189,6 +217,79 @@ func TestResolveContractsBuildsTransportAndMemoryContracts(t *testing.T) {
 		"      - role: system\n"+
 		"        content: You are terse.\n")
 
+	mustWriteFile(t, filepath.Join(dir, "policies", "prompt-assembly", "system-prompt.yaml"), ""+
+		"kind: SystemPromptPolicyConfig\n"+
+		"version: v1\n"+
+		"id: system-prompt-main\n"+
+		"spec:\n"+
+		"  enabled: true\n"+
+		"  strategy: file_static\n"+
+		"  params:\n"+
+		"    path: ./prompts/system.md\n"+
+		"    role: system\n"+
+		"    required: true\n"+
+		"    trim_trailing_whitespace: true\n")
+
+	mustWriteFile(t, filepath.Join(dir, "policies", "prompt-assembly", "session-head.yaml"), ""+
+		"kind: SessionHeadPolicyConfig\n"+
+		"version: v1\n"+
+		"id: session-head-main\n"+
+		"spec:\n"+
+		"  enabled: true\n"+
+		"  strategy: projection_summary\n"+
+		"  params:\n"+
+		"    placement: message0\n"+
+		"    title: Session head\n"+
+		"    max_items: 5\n")
+
+	mustWriteFile(t, filepath.Join(dir, "policies", "tools", "catalog.yaml"), ""+
+		"kind: ToolCatalogPolicyConfig\n"+
+		"version: v1\n"+
+		"id: tool-catalog-main\n"+
+		"spec:\n"+
+		"  enabled: true\n"+
+		"  strategy: static_allowlist\n"+
+		"  params:\n"+
+		"    tool_ids: []\n"+
+		"    allow_empty: true\n")
+
+	mustWriteFile(t, filepath.Join(dir, "policies", "tools", "serialization.yaml"), ""+
+		"kind: ToolSerializationPolicyConfig\n"+
+		"version: v1\n"+
+		"id: tool-serialization-main\n"+
+		"spec:\n"+
+		"  enabled: true\n"+
+		"  strategy: openai_function_tools\n"+
+		"  params:\n"+
+		"    include_descriptions: true\n")
+
+	mustWriteFile(t, filepath.Join(dir, "policies", "tool-execution", "access.yaml"), ""+
+		"kind: ToolAccessPolicyConfig\n"+
+		"version: v1\n"+
+		"id: tool-access-main\n"+
+		"spec:\n"+
+		"  enabled: true\n"+
+		"  strategy: deny_all\n")
+
+	mustWriteFile(t, filepath.Join(dir, "policies", "tool-execution", "approval.yaml"), ""+
+		"kind: ToolApprovalPolicyConfig\n"+
+		"version: v1\n"+
+		"id: tool-approval-main\n"+
+		"spec:\n"+
+		"  enabled: true\n"+
+		"  strategy: always_allow\n")
+
+	mustWriteFile(t, filepath.Join(dir, "policies", "tool-execution", "sandbox.yaml"), ""+
+		"kind: ToolSandboxPolicyConfig\n"+
+		"version: v1\n"+
+		"id: tool-sandbox-main\n"+
+		"spec:\n"+
+		"  enabled: true\n"+
+		"  strategy: default_runtime\n"+
+		"  params:\n"+
+		"    allow_network: false\n"+
+		"    timeout: 30s\n")
+
 	cfg, err := config.LoadRoot(filepath.Join(dir, "agent.yaml"))
 	if err != nil {
 		t.Fatalf("LoadRoot returned error: %v", err)
@@ -234,6 +335,27 @@ func TestResolveContractsBuildsTransportAndMemoryContracts(t *testing.T) {
 	}
 	if len(contracts.PromptAssets.PromptAsset.Params.Assets) != 1 {
 		t.Fatalf("prompt asset count = %d, want 1", len(contracts.PromptAssets.PromptAsset.Params.Assets))
+	}
+	if contracts.PromptAssembly.ID != "prompt-assembly-main" {
+		t.Fatalf("prompt-assembly ID = %q, want %q", contracts.PromptAssembly.ID, "prompt-assembly-main")
+	}
+	if contracts.PromptAssembly.SystemPrompt.Strategy != "file_static" {
+		t.Fatalf("system prompt strategy = %q, want %q", contracts.PromptAssembly.SystemPrompt.Strategy, "file_static")
+	}
+	if contracts.PromptAssembly.SessionHead.Params.Placement != "message0" {
+		t.Fatalf("session head placement = %q, want %q", contracts.PromptAssembly.SessionHead.Params.Placement, "message0")
+	}
+	if contracts.Tools.ID != "tools-main" {
+		t.Fatalf("tools ID = %q, want %q", contracts.Tools.ID, "tools-main")
+	}
+	if contracts.Tools.Catalog.Strategy != "static_allowlist" {
+		t.Fatalf("tool catalog strategy = %q, want %q", contracts.Tools.Catalog.Strategy, "static_allowlist")
+	}
+	if contracts.ToolExecution.ID != "tool-execution-main" {
+		t.Fatalf("tool execution ID = %q, want %q", contracts.ToolExecution.ID, "tool-execution-main")
+	}
+	if contracts.ToolExecution.Access.Strategy != "deny_all" {
+		t.Fatalf("tool access strategy = %q, want %q", contracts.ToolExecution.Access.Strategy, "deny_all")
 	}
 }
 

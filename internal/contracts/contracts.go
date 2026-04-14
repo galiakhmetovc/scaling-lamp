@@ -4,6 +4,9 @@ type ResolvedContracts struct {
 	ProviderRequest ProviderRequestContract
 	Memory          MemoryContract
 	PromptAssets    PromptAssetsContract
+	PromptAssembly  PromptAssemblyContract
+	Tools           ToolContract
+	ToolExecution   ToolExecutionContract
 	Chat            ChatContract
 	ProviderTrace   ProviderTraceContract
 }
@@ -92,6 +95,25 @@ type RequestShapeContract struct {
 type PromptAssetsContract struct {
 	ID          string
 	PromptAsset PromptAssetPolicy
+}
+
+type PromptAssemblyContract struct {
+	ID           string
+	SystemPrompt SystemPromptPolicy
+	SessionHead  SessionHeadPolicy
+}
+
+type ToolContract struct {
+	ID            string
+	Catalog       ToolCatalogPolicy
+	Serialization ToolSerializationPolicy
+}
+
+type ToolExecutionContract struct {
+	ID       string
+	Access   ToolAccessPolicy
+	Approval ToolApprovalPolicy
+	Sandbox  ToolSandboxPolicy
 }
 
 type ProviderTraceContract struct {
@@ -186,11 +208,105 @@ type PromptAssetPolicy struct {
 	Params   PromptAssetParams
 }
 
+type SystemPromptPolicy struct {
+	ID       string
+	Enabled  bool
+	Strategy string
+	Params   SystemPromptParams
+}
+
+type SessionHeadPolicy struct {
+	ID       string
+	Enabled  bool
+	Strategy string
+	Params   SessionHeadParams
+}
+
+type ToolCatalogPolicy struct {
+	ID       string
+	Enabled  bool
+	Strategy string
+	Params   ToolCatalogParams
+}
+
+type ToolSerializationPolicy struct {
+	ID       string
+	Enabled  bool
+	Strategy string
+	Params   ToolSerializationParams
+}
+
+type ToolAccessPolicy struct {
+	ID       string
+	Enabled  bool
+	Strategy string
+	Params   ToolAccessParams
+}
+
+type ToolApprovalPolicy struct {
+	ID       string
+	Enabled  bool
+	Strategy string
+	Params   ToolApprovalParams
+}
+
+type ToolSandboxPolicy struct {
+	ID       string
+	Enabled  bool
+	Strategy string
+	Params   ToolSandboxParams
+}
+
 type ProviderTracePolicy struct {
 	ID       string
 	Enabled  bool
 	Strategy string
 	Params   ProviderTraceParams
+}
+
+type SystemPromptParams struct {
+	Path                   string `yaml:"path"`
+	Role                   string `yaml:"role"`
+	Required               bool   `yaml:"required"`
+	TrimTrailingWhitespace bool   `yaml:"trim_trailing_whitespace"`
+}
+
+type SessionHeadParams struct {
+	Placement                string `yaml:"placement"`
+	Title                    string `yaml:"title"`
+	MaxItems                 int    `yaml:"max_items"`
+	IncludeSessionID         bool   `yaml:"include_session_id"`
+	IncludeOpenLoops         bool   `yaml:"include_open_loops"`
+	IncludeLastUserMessage   bool   `yaml:"include_last_user_message"`
+	IncludeLastAssistantMessage bool `yaml:"include_last_assistant_message"`
+}
+
+type ToolCatalogParams struct {
+	ToolIDs    []string `yaml:"tool_ids"`
+	AllowEmpty bool     `yaml:"allow_empty"`
+	Dedupe     bool     `yaml:"dedupe"`
+}
+
+type ToolSerializationParams struct {
+	StrictJSONSchema   bool `yaml:"strict_json_schema"`
+	IncludeDescriptions bool `yaml:"include_descriptions"`
+}
+
+type ToolAccessParams struct {
+	ToolIDs []string `yaml:"tool_ids"`
+}
+
+type ToolApprovalParams struct {
+	DestructiveToolIDs      []string `yaml:"destructive_tool_ids"`
+	ApprovalMessageTemplate string   `yaml:"approval_message_template"`
+}
+
+type ToolSandboxParams struct {
+	AllowNetwork   bool     `yaml:"allow_network"`
+	AllowWritePaths []string `yaml:"allow_write_paths"`
+	DenyWritePaths  []string `yaml:"deny_write_paths"`
+	Timeout        string   `yaml:"timeout"`
+	MaxOutputBytes int      `yaml:"max_output_bytes"`
 }
 
 type ProviderTraceParams struct {

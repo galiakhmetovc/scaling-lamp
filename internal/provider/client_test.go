@@ -11,6 +11,7 @@ import (
 
 	"teamd/internal/contracts"
 	"teamd/internal/provider"
+	"teamd/internal/tools"
 )
 
 func TestClientBuildsAndSendsProviderRequest(t *testing.T) {
@@ -20,6 +21,8 @@ func TestClientBuildsAndSendsProviderRequest(t *testing.T) {
 	client := provider.NewClient(
 		provider.NewPromptAssetExecutor(),
 		provider.NewRequestShapeExecutor(),
+		tools.NewCatalogExecutor(),
+		tools.NewExecutionGate(),
 		provider.NewTransportExecutor(fakeDoer{
 			do: func(req *http.Request) (*http.Response, error) {
 				captured = req
@@ -120,17 +123,32 @@ func TestClientBuildsAndSendsProviderRequest(t *testing.T) {
 				},
 			},
 		},
-	}, provider.ClientInput{
-		PromptAssetSelection: []string{"system-core", "tail-guard"},
-		Messages:             []contracts.Message{{Role: "user", Content: "Ping"}},
-		Tools: []map[string]any{
-			{
-				"type": "function",
-				"function": map[string]any{
-					"name": "list_dir",
+		Tools: contracts.ToolContract{
+			Catalog: contracts.ToolCatalogPolicy{
+				Enabled:  true,
+				Strategy: "static_allowlist",
+				Params: contracts.ToolCatalogParams{
+					ToolIDs: []string{"list_dir"},
+				},
+			},
+			Serialization: contracts.ToolSerializationPolicy{
+				Enabled:  true,
+				Strategy: "openai_function_tools",
+				Params: contracts.ToolSerializationParams{
+					IncludeDescriptions: true,
 				},
 			},
 		},
+	}, provider.ClientInput{
+		PromptAssetSelection: []string{"system-core", "tail-guard"},
+		Messages:             []contracts.Message{{Role: "user", Content: "Ping"}},
+		Tools: []tools.Definition{{
+			ID:   "list_dir",
+			Name: "list_dir",
+			Parameters: map[string]any{
+				"type": "object",
+			},
+		}},
 	})
 	if err != nil {
 		t.Fatalf("Execute returned error: %v", err)
@@ -194,6 +212,8 @@ func TestClientStreamsTypedTextAndReasoningEvents(t *testing.T) {
 	client := provider.NewClient(
 		provider.NewPromptAssetExecutor(),
 		provider.NewRequestShapeExecutor(),
+		tools.NewCatalogExecutor(),
+		tools.NewExecutionGate(),
 		provider.NewTransportExecutor(fakeDoer{
 			do: func(req *http.Request) (*http.Response, error) {
 				return &http.Response{
@@ -294,6 +314,8 @@ func TestClientReturnsProviderStatusError(t *testing.T) {
 	client := provider.NewClient(
 		provider.NewPromptAssetExecutor(),
 		provider.NewRequestShapeExecutor(),
+		tools.NewCatalogExecutor(),
+		tools.NewExecutionGate(),
 		provider.NewTransportExecutor(fakeDoer{
 			do: func(req *http.Request) (*http.Response, error) {
 				return &http.Response{
@@ -350,6 +372,97 @@ func TestClientReturnsProviderStatusError(t *testing.T) {
 	}
 }
 
+func TestClientRejectsProviderToolCallThroughExecutionGate(t *testing.T) {
+	t.Setenv("ZAI_API_KEY", "secret-token")
+
+	client := provider.NewClient(
+		provider.NewPromptAssetExecutor(),
+		provider.NewRequestShapeExecutor(),
+		tools.NewCatalogExecutor(),
+		tools.NewExecutionGate(),
+		provider.NewTransportExecutor(fakeDoer{
+			do: func(req *http.Request) (*http.Response, error) {
+				return &http.Response{
+					StatusCode: http.StatusOK,
+					Header:     http.Header{"Content-Type": []string{"application/json"}},
+					Body: io.NopCloser(bytes.NewBufferString(`{
+  "id":"resp-tools-1",
+  "model":"glm-5-turbo",
+  "choices":[
+    {
+      "finish_reason":"tool_calls",
+      "message":{
+        "role":"assistant",
+        "content":"",
+        "tool_calls":[
+          {
+            "id":"call-1",
+            "function":{
+              "name":"shell.exec",
+              "arguments":{"command":"pwd"}
+            }
+          }
+        ]
+      }
+    }
+  ],
+  "usage":{"prompt_tokens":8,"completion_tokens":2,"total_tokens":10}
+}`)),
+				}, nil
+			},
+		}),
+	)
+
+	result, err := client.Execute(context.Background(), contracts.ResolvedContracts{
+		ProviderRequest: contracts.ProviderRequestContract{
+			Transport: contracts.TransportContract{
+				Endpoint: contracts.EndpointPolicy{
+					Enabled:  true,
+					Strategy: "static",
+					Params: contracts.EndpointParams{
+						BaseURL: "https://api.z.ai",
+						Path:    "/api/paas/v4/chat/completions",
+						Method:  http.MethodPost,
+					},
+				},
+				Auth: contracts.AuthPolicy{
+					Enabled:  true,
+					Strategy: "bearer_token",
+					Params: contracts.AuthParams{
+						Header:      "Authorization",
+						Prefix:      "Bearer",
+						ValueEnvVar: "ZAI_API_KEY",
+					},
+				},
+			},
+			RequestShape: contracts.RequestShapeContract{
+				Model:    contracts.ModelPolicy{Enabled: true, Strategy: "static_model", Params: contracts.ModelParams{Model: "glm-5-turbo"}},
+				Messages: contracts.MessagePolicy{Enabled: true, Strategy: "raw_messages"},
+			},
+		},
+		ToolExecution: contracts.ToolExecutionContract{
+			Access: contracts.ToolAccessPolicy{
+				Enabled:  true,
+				Strategy: "deny_all",
+			},
+		},
+	}, provider.ClientInput{
+		Messages: []contracts.Message{{Role: "user", Content: "run pwd"}},
+	})
+	if err == nil {
+		t.Fatal("Execute error = nil, want denied tool call error")
+	}
+	if !strings.Contains(err.Error(), `tool call "shell.exec" denied`) {
+		t.Fatalf("Execute error = %q", err)
+	}
+	if len(result.ToolDecisions) != 1 {
+		t.Fatalf("tool decisions len = %d, want 1", len(result.ToolDecisions))
+	}
+	if result.ToolDecisions[0].Decision.Allowed {
+		t.Fatalf("tool decision = %#v, want denied", result.ToolDecisions[0])
+	}
+}
+
 func TestClientStreamsOpenAICompatibleResponse(t *testing.T) {
 	t.Setenv("ZAI_API_KEY", "secret-token")
 
@@ -357,6 +470,8 @@ func TestClientStreamsOpenAICompatibleResponse(t *testing.T) {
 	client := provider.NewClient(
 		provider.NewPromptAssetExecutor(),
 		provider.NewRequestShapeExecutor(),
+		tools.NewCatalogExecutor(),
+		tools.NewExecutionGate(),
 		provider.NewTransportExecutor(fakeDoer{
 			do: func(req *http.Request) (*http.Response, error) {
 				return &http.Response{

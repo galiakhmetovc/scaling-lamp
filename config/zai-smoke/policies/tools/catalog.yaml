@@ -1,0 +1,10 @@
+kind: ToolCatalogPolicyConfig
+version: v1
+id: tool-catalog-zai-smoke
+spec:
+  enabled: true
+  strategy: static_allowlist
+  params:
+    tool_ids: []
+    allow_empty: true
+    dedupe: true

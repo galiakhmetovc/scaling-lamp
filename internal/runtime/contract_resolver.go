@@ -41,6 +41,22 @@ type promptAssetsContractBody struct {
 	PromptAssetPolicyPath string `yaml:"prompt_asset_policy_path"`
 }
 
+type promptAssemblyContractBody struct {
+	SystemPromptPolicyPath string `yaml:"system_prompt_policy_path"`
+	SessionHeadPolicyPath  string `yaml:"session_head_policy_path"`
+}
+
+type toolContractBody struct {
+	ToolCatalogPolicyPath       string `yaml:"tool_catalog_policy_path"`
+	ToolSerializationPolicyPath string `yaml:"tool_serialization_policy_path"`
+}
+
+type toolExecutionContractBody struct {
+	ToolAccessPolicyPath   string `yaml:"tool_access_policy_path"`
+	ToolApprovalPolicyPath string `yaml:"tool_approval_policy_path"`
+	ToolSandboxPolicyPath  string `yaml:"tool_sandbox_policy_path"`
+}
+
 type providerTraceContractBody struct {
 	ProviderTracePolicyPath string `yaml:"provider_trace_policy_path"`
 }
@@ -344,6 +360,125 @@ func resolvePromptAssetsContract(out *contracts.ResolvedContracts, path string, 
 	return nil
 }
 
+func resolvePromptAssemblyContract(out *contracts.ResolvedContracts, path string, policyRegistry *policies.Registry) error {
+	contract, err := loadContract[promptAssemblyContractBody](path, "prompt-assembly")
+	if err != nil {
+		return err
+	}
+	if contract.Spec.SystemPromptPolicyPath == "" || contract.Spec.SessionHeadPolicyPath == "" {
+		return fmt.Errorf("prompt-assembly contract %q missing one or more policy paths", contract.ID)
+	}
+
+	systemPromptPolicy, err := loadPolicy[contracts.SystemPromptParams](path, contract.Spec.SystemPromptPolicyPath, "SystemPromptPolicyConfig", "system-prompt", policyRegistry)
+	if err != nil {
+		return err
+	}
+	systemPromptPolicyPath := resolveModulePath(path, contract.Spec.SystemPromptPolicyPath)
+	if systemPromptPolicy.Spec.Params.Path != "" {
+		systemPromptPolicy.Spec.Params.Path = resolveModulePath(systemPromptPolicyPath, systemPromptPolicy.Spec.Params.Path)
+	}
+	sessionHeadPolicy, err := loadPolicy[contracts.SessionHeadParams](path, contract.Spec.SessionHeadPolicyPath, "SessionHeadPolicyConfig", "session-head", policyRegistry)
+	if err != nil {
+		return err
+	}
+
+	out.PromptAssembly = contracts.PromptAssemblyContract{
+		ID: contract.ID,
+		SystemPrompt: contracts.SystemPromptPolicy{
+			ID:       systemPromptPolicy.ID,
+			Enabled:  systemPromptPolicy.Spec.Enabled,
+			Strategy: systemPromptPolicy.Spec.Strategy,
+			Params:   systemPromptPolicy.Spec.Params,
+		},
+		SessionHead: contracts.SessionHeadPolicy{
+			ID:       sessionHeadPolicy.ID,
+			Enabled:  sessionHeadPolicy.Spec.Enabled,
+			Strategy: sessionHeadPolicy.Spec.Strategy,
+			Params:   sessionHeadPolicy.Spec.Params,
+		},
+	}
+
+	return nil
+}
+
+func resolveToolContract(out *contracts.ResolvedContracts, path string, policyRegistry *policies.Registry) error {
+	contract, err := loadContract[toolContractBody](path, "tools")
+	if err != nil {
+		return err
+	}
+	if contract.Spec.ToolCatalogPolicyPath == "" || contract.Spec.ToolSerializationPolicyPath == "" {
+		return fmt.Errorf("tools contract %q missing one or more policy paths", contract.ID)
+	}
+	catalogPolicy, err := loadPolicy[contracts.ToolCatalogParams](path, contract.Spec.ToolCatalogPolicyPath, "ToolCatalogPolicyConfig", "tool-catalog", policyRegistry)
+	if err != nil {
+		return err
+	}
+	serializationPolicy, err := loadPolicy[contracts.ToolSerializationParams](path, contract.Spec.ToolSerializationPolicyPath, "ToolSerializationPolicyConfig", "tool-serialization", policyRegistry)
+	if err != nil {
+		return err
+	}
+	out.Tools = contracts.ToolContract{
+		ID: contract.ID,
+		Catalog: contracts.ToolCatalogPolicy{
+			ID:       catalogPolicy.ID,
+			Enabled:  catalogPolicy.Spec.Enabled,
+			Strategy: catalogPolicy.Spec.Strategy,
+			Params:   catalogPolicy.Spec.Params,
+		},
+		Serialization: contracts.ToolSerializationPolicy{
+			ID:       serializationPolicy.ID,
+			Enabled:  serializationPolicy.Spec.Enabled,
+			Strategy: serializationPolicy.Spec.Strategy,
+			Params:   serializationPolicy.Spec.Params,
+		},
+	}
+	return nil
+}
+
+func resolveToolExecutionContract(out *contracts.ResolvedContracts, path string, policyRegistry *policies.Registry) error {
+	contract, err := loadContract[toolExecutionContractBody](path, "tool-execution")
+	if err != nil {
+		return err
+	}
+	if contract.Spec.ToolAccessPolicyPath == "" || contract.Spec.ToolApprovalPolicyPath == "" || contract.Spec.ToolSandboxPolicyPath == "" {
+		return fmt.Errorf("tool-execution contract %q missing one or more policy paths", contract.ID)
+	}
+	accessPolicy, err := loadPolicy[contracts.ToolAccessParams](path, contract.Spec.ToolAccessPolicyPath, "ToolAccessPolicyConfig", "tool-access", policyRegistry)
+	if err != nil {
+		return err
+	}
+	approvalPolicy, err := loadPolicy[contracts.ToolApprovalParams](path, contract.Spec.ToolApprovalPolicyPath, "ToolApprovalPolicyConfig", "tool-approval", policyRegistry)
+	if err != nil {
+		return err
+	}
+	sandboxPolicy, err := loadPolicy[contracts.ToolSandboxParams](path, contract.Spec.ToolSandboxPolicyPath, "ToolSandboxPolicyConfig", "tool-sandbox", policyRegistry)
+	if err != nil {
+		return err
+	}
+	out.ToolExecution = contracts.ToolExecutionContract{
+		ID: contract.ID,
+		Access: contracts.ToolAccessPolicy{
+			ID:       accessPolicy.ID,
+			Enabled:  accessPolicy.Spec.Enabled,
+			Strategy: accessPolicy.Spec.Strategy,
+			Params:   accessPolicy.Spec.Params,
+		},
+		Approval: contracts.ToolApprovalPolicy{
+			ID:       approvalPolicy.ID,
+			Enabled:  approvalPolicy.Spec.Enabled,
+			Strategy: approvalPolicy.Spec.Strategy,
+			Params:   approvalPolicy.Spec.Params,
+		},
+		Sandbox: contracts.ToolSandboxPolicy{
+			ID:       sandboxPolicy.ID,
+			Enabled:  sandboxPolicy.Spec.Enabled,
+			Strategy: sandboxPolicy.Spec.Strategy,
+			Params:   sandboxPolicy.Spec.Params,
+		},
+	}
+	return nil
+}
+
 func resolveProviderTraceContract(out *contracts.ResolvedContracts, path string, policyRegistry *policies.Registry) error {
 	contract, err := loadContract[providerTraceContractBody](path, "provider-trace")
 	if err != nil {
@@ -417,6 +552,12 @@ func resolveContractApplyFunc(kind string) (contractApplyFunc, error) {
 		return resolveMemoryContract, nil
 	case "PromptAssetsContractConfig":
 		return resolvePromptAssetsContract, nil
+	case "PromptAssemblyContractConfig":
+		return resolvePromptAssemblyContract, nil
+	case "ToolContractConfig":
+		return resolveToolContract, nil
+	case "ToolExecutionContractConfig":
+		return resolveToolExecutionContract, nil
 	case "ProviderTraceContractConfig":
 		return resolveProviderTraceContract, nil
 	case "ChatContractConfig":

@@ -6,9 +6,12 @@ spec:
     event_log: file_jsonl
     event_log_path: ../../var/zai-smoke/events.jsonl
     projection_store_path: ../../var/zai-smoke/projections.json
+    prompt_assembly_executor: prompt_assembly_default
     prompt_asset_executor: prompt_asset_default
     transport_executor: transport_default
     request_shape_executor: request_shape_default
+    tool_catalog_executor: tool_catalog_default
+    tool_execution_gate: tool_execution_default
     provider_client: provider_client_default
     projections:
       - session
@@ -19,5 +22,8 @@ spec:
     request_shape: ./contracts/request-shape.yaml
     memory: ./contracts/memory.yaml
     prompt_assets: ./contracts/prompt-assets.yaml
+    prompt_assembly: ./contracts/prompt-assembly.yaml
+    tools: ./contracts/tools.yaml
+    tool_execution: ./contracts/tool-execution.yaml
     provider_trace: ./contracts/provider-trace.yaml
     chat: ./contracts/chat.yaml

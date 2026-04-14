@@ -1,0 +1,12 @@
+kind: ToolSandboxPolicyConfig
+version: v1
+id: tool-sandbox-zai-smoke
+spec:
+  enabled: true
+  strategy: default_runtime
+  params:
+    allow_network: false
+    allow_write_paths: []
+    deny_write_paths: []
+    timeout: 30s
+    max_output_bytes: 65536

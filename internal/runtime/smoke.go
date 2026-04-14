@@ -77,11 +77,16 @@ func (a *Agent) Smoke(ctx context.Context, input SmokeInput) (provider.ClientRes
 		return provider.ClientResult{}, fmt.Errorf("record run started: %w", err)
 	}
 
+	assembledMessages, err := a.assemblePromptMessages(sessionID, []contracts.Message{
+		{Role: "user", Content: input.Prompt},
+	})
+	if err != nil {
+		return provider.ClientResult{}, fmt.Errorf("assemble smoke prompt: %w", err)
+	}
+
 	result, err := a.ProviderClient.Execute(ctx, a.Contracts, provider.ClientInput{
 		PromptAssetSelection: input.PromptAssetSelection,
-		Messages: []contracts.Message{
-			{Role: "user", Content: input.Prompt},
-		},
+		Messages:             assembledMessages,
 	})
 	if err != nil {
 		if recordErr := a.recordProviderRequestEvent(ctx, runID, sessionID, correlationID, "agent.smoke", result.RequestBody); recordErr != nil {

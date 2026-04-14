@@ -14,6 +14,7 @@ import (
 	"teamd/internal/runtime"
 	"teamd/internal/runtime/eventing"
 	"teamd/internal/runtime/projections"
+	"teamd/internal/tools"
 )
 
 func TestAgentChatTurnAndResumeSession(t *testing.T) {
@@ -40,6 +41,8 @@ func TestAgentChatTurnAndResumeSession(t *testing.T) {
 		Contracts:   chatContractsForTest(),
 		PromptAssets: provider.NewPromptAssetExecutor(),
 		RequestShape: provider.NewRequestShapeExecutor(),
+		ToolCatalog:  tools.NewCatalogExecutor(),
+		ToolExecution: tools.NewExecutionGate(),
 		Transport: provider.NewTransportExecutor(fakeDoer{
 			do: func(req *http.Request) (*http.Response, error) {
 				call++
@@ -63,7 +66,7 @@ func TestAgentChatTurnAndResumeSession(t *testing.T) {
 		Now:         func() time.Time { return clock },
 		NewID:       nextID,
 	}
-	agent.ProviderClient = provider.NewClient(agent.PromptAssets, agent.RequestShape, agent.Transport)
+	agent.ProviderClient = provider.NewClient(agent.PromptAssets, agent.RequestShape, agent.ToolCatalog, agent.ToolExecution, agent.Transport)
 
 	session, err := agent.NewChatSession()
 	if err != nil {

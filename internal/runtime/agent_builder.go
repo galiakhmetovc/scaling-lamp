@@ -7,17 +7,22 @@ import (
 
 	"teamd/internal/config"
 	"teamd/internal/contracts"
+	"teamd/internal/promptassembly"
 	"teamd/internal/provider"
 	"teamd/internal/runtime/eventing"
 	"teamd/internal/runtime/projections"
+	"teamd/internal/tools"
 )
 
 type Agent struct {
 	Config          config.AgentConfig
 	Contracts       contracts.ResolvedContracts
+	PromptAssembly  *promptassembly.Executor
 	PromptAssets    *provider.PromptAssetExecutor
 	Transport       *provider.TransportExecutor
 	RequestShape    *provider.RequestShapeExecutor
+	ToolCatalog     *tools.CatalogExecutor
+	ToolExecution   *tools.ExecutionGate
 	ProviderClient  *provider.Client
 	EventLog        EventLog
 	Projections     []projections.Projection
@@ -88,6 +93,14 @@ func BuildAgent(configPath string) (*Agent, error) {
 			return nil, fmt.Errorf("load projection store: %w", err)
 		}
 	}
+	promptAssemblyName := cfg.Spec.Runtime.PromptAssemblyExecutor
+	if promptAssemblyName == "" {
+		promptAssemblyName = "prompt_assembly_default"
+	}
+	promptAssemblyExecutor, err := componentRegistry.BuildPromptAssemblyExecutor(promptAssemblyName)
+	if err != nil {
+		return nil, fmt.Errorf("build prompt-assembly executor: %w", err)
+	}
 	transportExecutor, err := componentRegistry.BuildTransportExecutor(cfg.Spec.Runtime.TransportExecutor)
 	if err != nil {
 		return nil, fmt.Errorf("build transport executor: %w", err)
@@ -96,11 +109,27 @@ func BuildAgent(configPath string) (*Agent, error) {
 	if err != nil {
 		return nil, fmt.Errorf("build request-shape executor: %w", err)
 	}
+	toolCatalogName := cfg.Spec.Runtime.ToolCatalogExecutor
+	if toolCatalogName == "" {
+		toolCatalogName = "tool_catalog_default"
+	}
+	toolCatalogExecutor, err := componentRegistry.BuildToolCatalogExecutor(toolCatalogName)
+	if err != nil {
+		return nil, fmt.Errorf("build tool catalog executor: %w", err)
+	}
+	toolExecutionName := cfg.Spec.Runtime.ToolExecutionGate
+	if toolExecutionName == "" {
+		toolExecutionName = "tool_execution_default"
+	}
+	toolExecutionGate, err := componentRegistry.BuildToolExecutionGate(toolExecutionName)
+	if err != nil {
+		return nil, fmt.Errorf("build tool execution gate: %w", err)
+	}
 	promptAssetExecutor, err := componentRegistry.BuildPromptAssetExecutor(cfg.Spec.Runtime.PromptAssetExecutor)
 	if err != nil {
 		return nil, fmt.Errorf("build prompt-asset executor: %w", err)
 	}
-	providerClient, err := componentRegistry.BuildProviderClient(cfg.Spec.Runtime.ProviderClient, promptAssetExecutor, requestShapeExecutor, transportExecutor)
+	providerClient, err := componentRegistry.BuildProviderClient(cfg.Spec.Runtime.ProviderClient, promptAssetExecutor, requestShapeExecutor, toolCatalogExecutor, toolExecutionGate, transportExecutor)
 	if err != nil {
 		return nil, fmt.Errorf("build provider client: %w", err)
 	}
@@ -108,9 +137,12 @@ func BuildAgent(configPath string) (*Agent, error) {
 	return &Agent{
 		Config:          cfg,
 		Contracts:       contracts,
+		PromptAssembly:  promptAssemblyExecutor,
 		PromptAssets:    promptAssetExecutor,
 		Transport:       transportExecutor,
 		RequestShape:    requestShapeExecutor,
+		ToolCatalog:     toolCatalogExecutor,
+		ToolExecution:   toolExecutionGate,
 		ProviderClient:  providerClient,
 		EventLog:        eventLog,
 		Projections:     projectionSet,

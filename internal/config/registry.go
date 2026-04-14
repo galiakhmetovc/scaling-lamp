@@ -46,6 +46,31 @@ func NewBuiltInModuleRegistry() *ModuleRegistry {
 		RefFields: []string{"prompt_asset_policy_path"},
 	})
 	registry.Register(ModuleType{
+		Kind:     "PromptAssemblyContractConfig",
+		Category: ModuleCategoryContract,
+		RefFields: []string{
+			"system_prompt_policy_path",
+			"session_head_policy_path",
+		},
+	})
+	registry.Register(ModuleType{
+		Kind:     "ToolContractConfig",
+		Category: ModuleCategoryContract,
+		RefFields: []string{
+			"tool_catalog_policy_path",
+			"tool_serialization_policy_path",
+		},
+	})
+	registry.Register(ModuleType{
+		Kind:     "ToolExecutionContractConfig",
+		Category: ModuleCategoryContract,
+		RefFields: []string{
+			"tool_access_policy_path",
+			"tool_approval_policy_path",
+			"tool_sandbox_policy_path",
+		},
+	})
+	registry.Register(ModuleType{
 		Kind:      "ProviderTraceContractConfig",
 		Category:  ModuleCategoryContract,
 		RefFields: []string{"provider_trace_policy_path"},
@@ -120,6 +145,34 @@ func NewBuiltInModuleRegistry() *ModuleRegistry {
 	})
 	registry.Register(ModuleType{
 		Kind:     "PromptAssetPolicyConfig",
+		Category: ModuleCategoryPolicy,
+	})
+	registry.Register(ModuleType{
+		Kind:     "SystemPromptPolicyConfig",
+		Category: ModuleCategoryPolicy,
+	})
+	registry.Register(ModuleType{
+		Kind:     "SessionHeadPolicyConfig",
+		Category: ModuleCategoryPolicy,
+	})
+	registry.Register(ModuleType{
+		Kind:     "ToolCatalogPolicyConfig",
+		Category: ModuleCategoryPolicy,
+	})
+	registry.Register(ModuleType{
+		Kind:     "ToolSerializationPolicyConfig",
+		Category: ModuleCategoryPolicy,
+	})
+	registry.Register(ModuleType{
+		Kind:     "ToolAccessPolicyConfig",
+		Category: ModuleCategoryPolicy,
+	})
+	registry.Register(ModuleType{
+		Kind:     "ToolApprovalPolicyConfig",
+		Category: ModuleCategoryPolicy,
+	})
+	registry.Register(ModuleType{
+		Kind:     "ToolSandboxPolicyConfig",
 		Category: ModuleCategoryPolicy,
 	})
 	registry.Register(ModuleType{

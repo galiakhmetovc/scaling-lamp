@@ -37,6 +37,9 @@ Current resolved contracts are:
   - `RequestShapeContract`
 - `MemoryContract`
 - `PromptAssetsContract`
+- `PromptAssemblyContract`
+- `ToolContract`
+- `ToolExecutionContract`
 - `ProviderTraceContract`
 - `ChatContract`
 
@@ -50,6 +53,12 @@ What each contract is responsible for:
   - how prompt history may be offloaded/compacted
 - `PromptAssetsContract`
   - how static prompt fragments are stored and selected
+- `PromptAssemblyContract`
+  - how top-of-prompt context is assembled before provider request-shape serialization
+- `ToolContract`
+  - which tools are visible to the model and how they are serialized into provider payloads
+- `ToolExecutionContract`
+  - whether provider-emitted tool calls are allowed, require approval, or are denied
 - `ProviderTraceContract`
   - how outbound provider request traces are captured
 - `ChatContract`
@@ -450,7 +459,183 @@ Current implemented strategies:
 - `explicit_resume_only`
   - resume requires explicit `--resume <session-id>`
 
-## 8. ProviderTrace Contract
+## 8. PromptAssembly Contract
+
+`PromptAssemblyContract` answers:
+
+- how file-backed system prompt is loaded
+- whether a projection-backed session head is built
+- what becomes the first outbound conversation message
+
+### 8.1 SystemPromptPolicy
+
+Responsibility:
+
+- load system prompt text from a file on disk
+
+Supported params:
+
+- `path`
+- `role`
+- `required`
+- `trim_trailing_whitespace`
+
+Current implemented strategies:
+
+- `file_static`
+  - loads prompt text from `path`
+  - emits it as one `contracts.Message`
+  - current shipped config uses `role: system`
+
+### 8.2 SessionHeadPolicy
+
+Responsibility:
+
+- build a compact session head message from projections and transcript state
+
+Supported params:
+
+- `placement`
+- `title`
+- `max_items`
+- `include_session_id`
+- `include_open_loops`
+- `include_last_user_message`
+- `include_last_assistant_message`
+
+Current implemented strategies:
+
+- `off`
+  - do not emit session head
+- `projection_summary`
+  - reads transcript/session state
+  - emits one summary message
+  - current shipped baseline uses `placement: message0`
+  - this means session head becomes outbound `messages[0]`
+
+## 9. Tool Contract
+
+`ToolContract` answers:
+
+- which tools are exposed to the model
+- in what order they appear
+- how they are serialized into provider request bodies
+
+### 9.1 ToolCatalogPolicy
+
+Responsibility:
+
+- choose visible tool definitions from a supplied runtime catalog
+
+Supported params:
+
+- `tool_ids`
+- `allow_empty`
+- `dedupe`
+
+Current implemented strategies:
+
+- `static_allowlist`
+  - selects configured `tool_ids` in configured order
+  - errors on unknown ids
+  - can allow empty tool surface when `allow_empty` is true
+
+### 9.2 ToolSerializationPolicy
+
+Responsibility:
+
+- convert internal tool definitions into provider payload shape
+
+Supported params:
+
+- `strict_json_schema`
+- `include_descriptions`
+
+Current implemented strategies:
+
+- `openai_function_tools`
+  - emits OpenAI-compatible `tools` entries with `type=function`
+  - serializes function name, description, and JSON schema parameters
+
+## 10. ToolExecution Contract
+
+`ToolExecutionContract` answers:
+
+- whether a provider-emitted tool call is allowed to run
+- whether human approval is required first
+- which sandbox/runtime restrictions apply if execution is permitted
+
+### 10.1 ToolAccessPolicy
+
+Responsibility:
+
+- decide whether a tool id is allowed at all
+
+Supported params:
+
+- `tool_ids`
+
+Current implemented strategies:
+
+- `static_allowlist`
+  - only listed tool ids are allowed
+- `deny_all`
+  - all tool calls are denied
+
+### 10.2 ToolApprovalPolicy
+
+Responsibility:
+
+- decide whether an allowed tool call still requires approval
+
+Supported params:
+
+- `destructive_tool_ids`
+- `approval_message_template`
+
+Current implemented strategies:
+
+- `always_allow`
+  - no extra approval step
+- `always_require`
+  - every allowed tool call still requires approval
+- `require_for_destructive`
+  - only listed destructive tool ids require approval
+
+### 10.3 ToolSandboxPolicy
+
+Responsibility:
+
+- describe runtime restrictions for allowed tool execution
+
+Supported params:
+
+- `allow_network`
+- `allow_write_paths`
+- `deny_write_paths`
+- `timeout`
+- `max_output_bytes`
+
+Current implemented strategies:
+
+- `default_runtime`
+  - permissive baseline runtime descriptor
+- `read_only`
+  - execution descriptor forbids writes
+- `workspace_write`
+  - execution descriptor allows bounded workspace writes
+- `deny_exec`
+  - execution descriptor forbids execution entirely
+
+Important current limitation:
+
+- tool-call execution runtime is not implemented yet
+- current clean-room runtime already parses provider-emitted tool calls and runs them through `ToolExecutionContract`
+- denied calls fail immediately
+- approval-required calls fail immediately with an approval-needed error
+- even allowed calls currently fail honestly with “execution path is not implemented yet”
+
+## 11. ProviderTrace Contract
 
 `ProviderTraceContract` answers:
 
@@ -480,7 +665,7 @@ Current runtime event:
 
 - `provider.request.captured`
 
-## 9. Current Built-In Strategy Registry
+## 12. Current Built-In Strategy Registry
 
 These are the current built-in policy kinds and allowed strategies validated during contract resolution:
 
@@ -513,6 +698,27 @@ These are the current built-in policy kinds and allowed strategies validated dur
   - `static_sampling`
 - `PromptAssetPolicyConfig`
   - `inline_assets`
+- `SystemPromptPolicyConfig`
+  - `file_static`
+- `SessionHeadPolicyConfig`
+  - `off`
+  - `projection_summary`
+- `ToolCatalogPolicyConfig`
+  - `static_allowlist`
+- `ToolSerializationPolicyConfig`
+  - `openai_function_tools`
+- `ToolAccessPolicyConfig`
+  - `static_allowlist`
+  - `deny_all`
+- `ToolApprovalPolicyConfig`
+  - `always_allow`
+  - `always_require`
+  - `require_for_destructive`
+- `ToolSandboxPolicyConfig`
+  - `default_runtime`
+  - `read_only`
+  - `workspace_write`
+  - `deny_exec`
 - `ProviderTracePolicyConfig`
   - `none`
   - `inline_request`

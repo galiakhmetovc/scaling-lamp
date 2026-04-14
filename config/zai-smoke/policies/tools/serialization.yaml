@@ -1,0 +1,9 @@
+kind: ToolSerializationPolicyConfig
+version: v1
+id: tool-serialization-zai-smoke
+spec:
+  enabled: true
+  strategy: openai_function_tools
+  params:
+    strict_json_schema: false
+    include_descriptions: true

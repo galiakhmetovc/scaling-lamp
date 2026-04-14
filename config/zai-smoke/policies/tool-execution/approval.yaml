@@ -1,0 +1,9 @@
+kind: ToolApprovalPolicyConfig
+version: v1
+id: tool-approval-zai-smoke
+spec:
+  enabled: true
+  strategy: always_allow
+  params:
+    destructive_tool_ids: []
+    approval_message_template: ""

@@ -1,0 +1,7 @@
+kind: ToolExecutionContractConfig
+version: v1
+id: tool-execution-zai-smoke
+spec:
+  tool_access_policy_path: ../policies/tool-execution/access.yaml
+  tool_approval_policy_path: ../policies/tool-execution/approval.yaml
+  tool_sandbox_policy_path: ../policies/tool-execution/sandbox.yaml

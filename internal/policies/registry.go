@@ -17,6 +17,13 @@ const (
 	FamilyStreaming      Family = "streaming"
 	FamilySampling       Family = "sampling"
 	FamilyPromptAsset    Family = "prompt_asset"
+	FamilySystemPrompt   Family = "system_prompt"
+	FamilySessionHead    Family = "session_head"
+	FamilyToolCatalog    Family = "tool_catalog"
+	FamilyToolSerialization Family = "tool_serialization"
+	FamilyToolAccess     Family = "tool_access"
+	FamilyToolApproval   Family = "tool_approval"
+	FamilyToolSandbox    Family = "tool_sandbox"
 	FamilyProviderTrace  Family = "provider_trace"
 	FamilyChatInput      Family = "chat_input"
 	FamilyChatSubmit     Family = "chat_submit"
@@ -129,6 +136,62 @@ func NewBuiltInRegistry() *Registry {
 		Family: FamilyPromptAsset,
 		Strategy: setOf(
 			"inline_assets",
+		),
+	})
+	registry.Register(Type{
+		Kind:   "SystemPromptPolicyConfig",
+		Family: FamilySystemPrompt,
+		Strategy: setOf(
+			"file_static",
+		),
+	})
+	registry.Register(Type{
+		Kind:   "SessionHeadPolicyConfig",
+		Family: FamilySessionHead,
+		Strategy: setOf(
+			"off",
+			"projection_summary",
+		),
+	})
+	registry.Register(Type{
+		Kind:   "ToolCatalogPolicyConfig",
+		Family: FamilyToolCatalog,
+		Strategy: setOf(
+			"static_allowlist",
+		),
+	})
+	registry.Register(Type{
+		Kind:   "ToolSerializationPolicyConfig",
+		Family: FamilyToolSerialization,
+		Strategy: setOf(
+			"openai_function_tools",
+		),
+	})
+	registry.Register(Type{
+		Kind:   "ToolAccessPolicyConfig",
+		Family: FamilyToolAccess,
+		Strategy: setOf(
+			"static_allowlist",
+			"deny_all",
+		),
+	})
+	registry.Register(Type{
+		Kind:   "ToolApprovalPolicyConfig",
+		Family: FamilyToolApproval,
+		Strategy: setOf(
+			"always_allow",
+			"always_require",
+			"require_for_destructive",
+		),
+	})
+	registry.Register(Type{
+		Kind:   "ToolSandboxPolicyConfig",
+		Family: FamilyToolSandbox,
+		Strategy: setOf(
+			"default_runtime",
+			"read_only",
+			"workspace_write",
+			"deny_exec",
 		),
 	})
 	registry.Register(Type{

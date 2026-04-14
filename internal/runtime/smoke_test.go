@@ -3,6 +3,7 @@ package runtime_test
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"io"
 	"net/http"
 	"testing"
@@ -10,10 +11,12 @@ import (
 
 	"teamd/internal/config"
 	"teamd/internal/contracts"
+	"teamd/internal/promptassembly"
 	"teamd/internal/provider"
 	"teamd/internal/runtime"
 	"teamd/internal/runtime/eventing"
 	"teamd/internal/runtime/projections"
+	"teamd/internal/tools"
 )
 
 func TestAgentSmokeExecutesProviderClientAndRecordsEvents(t *testing.T) {
@@ -35,6 +38,8 @@ func TestAgentSmokeExecutesProviderClientAndRecordsEvents(t *testing.T) {
 		Contracts: smokeContractsForTest(),
 		PromptAssets: provider.NewPromptAssetExecutor(),
 		RequestShape: provider.NewRequestShapeExecutor(),
+		ToolCatalog:  tools.NewCatalogExecutor(),
+		ToolExecution: tools.NewExecutionGate(),
 		Transport: provider.NewTransportExecutor(fakeDoer{
 			do: func(req *http.Request) (*http.Response, error) {
 				return &http.Response{
@@ -54,7 +59,7 @@ func TestAgentSmokeExecutesProviderClientAndRecordsEvents(t *testing.T) {
 		Now:         func() time.Time { return clock },
 		NewID:       nextID,
 	}
-	agent.ProviderClient = provider.NewClient(agent.PromptAssets, agent.RequestShape, agent.Transport)
+	agent.ProviderClient = provider.NewClient(agent.PromptAssets, agent.RequestShape, agent.ToolCatalog, agent.ToolExecution, agent.Transport)
 
 	result, err := agent.Smoke(context.Background(), runtime.SmokeInput{Prompt: "ping"})
 	if err != nil {
@@ -127,6 +132,60 @@ func TestAgentSmokeExecutesProviderClientAndRecordsEvents(t *testing.T) {
 	}
 }
 
+func TestAgentSmokeWithPromptAssemblyStillIncludesCurrentPromptInOutboundRequest(t *testing.T) {
+	t.Setenv("TEAMD_ZAI_API_KEY", "secret-token")
+
+	var captured map[string]any
+	agent := &runtime.Agent{
+		Config:         runtimeConfigForSmokeTest(),
+		Contracts:      smokeContractsForPromptAssemblyTest(),
+		PromptAssembly: promptassembly.NewExecutor(),
+		PromptAssets:   provider.NewPromptAssetExecutor(),
+		RequestShape:   provider.NewRequestShapeExecutor(),
+		ToolCatalog:    tools.NewCatalogExecutor(),
+		ToolExecution:  tools.NewExecutionGate(),
+		Transport: provider.NewTransportExecutor(fakeDoer{
+			do: func(req *http.Request) (*http.Response, error) {
+				if err := json.NewDecoder(req.Body).Decode(&captured); err != nil {
+					t.Fatalf("Decode request body: %v", err)
+				}
+				return &http.Response{
+					StatusCode: http.StatusOK,
+					Header:     http.Header{"X-Test": []string{"ok"}},
+					Body: io.NopCloser(bytes.NewBufferString(`{
+  "id":"resp-1",
+  "model":"glm-5-turbo",
+  "choices":[{"index":0,"finish_reason":"stop","message":{"role":"assistant","content":"pong"}}],
+  "usage":{"prompt_tokens":12,"completion_tokens":3,"total_tokens":15}
+}`)),
+				}, nil
+			},
+		}),
+		EventLog:    runtime.NewInMemoryEventLog(),
+		Projections: []projections.Projection{projections.NewSessionProjection(), projections.NewRunProjection(), projections.NewTranscriptProjection()},
+	}
+	agent.ProviderClient = provider.NewClient(agent.PromptAssets, agent.RequestShape, agent.ToolCatalog, agent.ToolExecution, agent.Transport)
+
+	if _, err := agent.Smoke(context.Background(), runtime.SmokeInput{Prompt: "ping"}); err != nil {
+		t.Fatalf("Smoke returned error: %v", err)
+	}
+
+	messages, ok := captured["messages"].([]any)
+	if !ok {
+		t.Fatalf("captured messages = %#v, want []any", captured["messages"])
+	}
+	if len(messages) != 2 {
+		t.Fatalf("captured messages len = %d, want 2", len(messages))
+	}
+	last, ok := messages[1].(map[string]any)
+	if !ok {
+		t.Fatalf("last message = %#v, want map", messages[1])
+	}
+	if last["role"] != "user" || last["content"] != "ping" {
+		t.Fatalf("last message = %#v, want user ping", last)
+	}
+}
+
 func runtimeConfigForSmokeTest() config.AgentConfig {
 	return config.AgentConfig{
 		ID: "agent-smoke-test",
@@ -182,6 +241,30 @@ func smokeContractsForTest() contracts.ResolvedContracts {
 					IncludeRawBody:       true,
 					IncludeDecodedPayload: true,
 				},
+			},
+		},
+	}
+}
+
+func smokeContractsForPromptAssemblyTest() contracts.ResolvedContracts {
+	contracts := smokeContractsForTest()
+	contracts.PromptAssembly = contractsPkgPromptAssemblyForTest()
+	return contracts
+}
+
+func contractsPkgPromptAssemblyForTest() contracts.PromptAssemblyContract {
+	return contracts.PromptAssemblyContract{
+		ID: "prompt-assembly-smoke",
+		SystemPrompt: contracts.SystemPromptPolicy{
+			Enabled: false,
+		},
+		SessionHead: contracts.SessionHeadPolicy{
+			Enabled:  true,
+			Strategy: "projection_summary",
+			Params: contracts.SessionHeadParams{
+				Placement:        "message0",
+				Title:            "Session head",
+				IncludeSessionID: true,
 			},
 		},
 	}

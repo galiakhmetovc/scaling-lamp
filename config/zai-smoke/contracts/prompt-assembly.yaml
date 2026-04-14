@@ -1,0 +1,6 @@
+kind: PromptAssemblyContractConfig
+version: v1
+id: prompt-assembly-zai-smoke
+spec:
+  system_prompt_policy_path: ../policies/prompt-assembly/system-prompt.yaml
+  session_head_policy_path: ../policies/prompt-assembly/session-head.yaml

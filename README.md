@@ -13,6 +13,8 @@ Current baseline documents:
 
 - `docs/superpowers/specs/2026-04-14-context-policy-design.md`
 - `docs/superpowers/plans/2026-04-14-context-policy-implementation.md`
+- `docs/superpowers/specs/2026-04-14-prompt-tools-policy-design.md`
+- `docs/superpowers/plans/2026-04-14-prompt-tools-policy-implementation.md`
 
 Operational baseline:
 
@@ -46,3 +48,11 @@ Chat mode baseline:
 - streaming text output
 - transcript-backed resume via `TranscriptProjection`
 - chat UX behavior comes from `ChatContract` strategies and params
+
+Current prompt and tool baseline:
+
+- system prompt comes from file through `PromptAssemblyContract`
+- session head is assembled from projections and placed at `messages[0]`
+- visible tools are selected through `ToolContract`
+- provider-emitted tool calls are gated through `ToolExecutionContract`
+- actual allowed tool execution is not implemented yet; allowed calls fail honestly after gating
