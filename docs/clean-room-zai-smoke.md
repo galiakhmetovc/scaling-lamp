@@ -60,6 +60,14 @@ Observed runtime artifacts:
 - `var/zai-smoke/events.jsonl`
 - `var/zai-smoke/projections.json`
 
+Current event log note:
+
+- newly appended JSONL events contain both:
+  - `OccurredAt`
+  - `timestamp`
+- `timestamp` is a top-level alias of `OccurredAt`
+- older lines written before this change may still lack `timestamp`
+
 The live run used `TEAMD_ZAI_API_KEY` transiently from an already running legacy `teamd-agent` process environment, without writing the secret into the repo config.
 
 The original fixed `30s` timeout proved too brittle for real prompts. The current smoke config does not guess a small per-request ceiling anymore; it uses `long_running_non_streaming` with a `1h` operation budget and retries only on early failures inside a `5s` window.

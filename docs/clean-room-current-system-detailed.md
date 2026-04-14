@@ -673,6 +673,14 @@ Current event envelope fields:
 - `ArtifactRefs`
 - `Payload`
 
+Current persisted JSONL convenience field:
+
+- `timestamp`
+  - top-level alias of `OccurredAt`
+  - same RFC3339 UTC value
+  - added to make JSONL easier to scan and parse externally
+  - older lines written before this change may still have only `OccurredAt`
+
 This is the current event-sourced backbone of the runtime.
 
 ## 13. Event Log Implementations

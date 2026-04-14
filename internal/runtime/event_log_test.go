@@ -2,6 +2,8 @@ package runtime_test
 
 import (
 	"context"
+	"encoding/json"
+	"os"
 	"path/filepath"
 	"testing"
 	"time"
@@ -156,5 +158,45 @@ func TestFileEventLogPersistsEventsAcrossReopen(t *testing.T) {
 	}
 	if len(got[0].ArtifactRefs) != 1 || got[0].ArtifactRefs[0] != "artifacts/session-created.txt" {
 		t.Fatalf("event artifact refs = %#v, want single artifact ref", got[0].ArtifactRefs)
+	}
+}
+
+func TestFileEventLogWritesTimestampAlias(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join(t.TempDir(), "events.jsonl")
+	now := time.Date(2026, 4, 14, 15, 0, 0, 123456000, time.UTC)
+
+	log, err := runtime.NewFileEventLog(path)
+	if err != nil {
+		t.Fatalf("NewFileEventLog returned error: %v", err)
+	}
+
+	if err := log.Append(context.Background(), eventing.Event{
+		ID:               "evt-1",
+		Kind:             eventing.EventSessionCreated,
+		OccurredAt:       now,
+		AggregateID:      "session-1",
+		AggregateType:    eventing.AggregateSession,
+		AggregateVersion: 1,
+	}); err != nil {
+		t.Fatalf("Append returned error: %v", err)
+	}
+
+	body, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile returned error: %v", err)
+	}
+
+	var raw map[string]any
+	if err := json.Unmarshal(body[:len(body)-1], &raw); err != nil {
+		t.Fatalf("Unmarshal returned error: %v", err)
+	}
+
+	if raw["timestamp"] != now.Format(time.RFC3339Nano) {
+		t.Fatalf("timestamp = %#v, want %q", raw["timestamp"], now.Format(time.RFC3339Nano))
+	}
+	if raw["OccurredAt"] != now.Format(time.RFC3339Nano) {
+		t.Fatalf("OccurredAt = %#v, want %q", raw["OccurredAt"], now.Format(time.RFC3339Nano))
 	}
 }

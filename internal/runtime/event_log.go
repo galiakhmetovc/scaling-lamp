@@ -8,9 +8,15 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"time"
 
 	"teamd/internal/runtime/eventing"
 )
+
+type eventJSONRecord struct {
+	Timestamp string `json:"timestamp"`
+	eventing.Event
+}
 
 type EventLog interface {
 	Append(ctx context.Context, event eventing.Event) error
@@ -97,7 +103,10 @@ func (l *FileEventLog) Append(_ context.Context, event eventing.Event) error {
 	}
 	defer file.Close()
 
-	encoded, err := json.Marshal(event)
+	encoded, err := json.Marshal(eventJSONRecord{
+		Timestamp: event.OccurredAt.Format(time.RFC3339Nano),
+		Event:     event,
+	})
 	if err != nil {
 		return fmt.Errorf("marshal event: %w", err)
 	}
