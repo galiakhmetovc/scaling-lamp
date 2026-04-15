@@ -150,12 +150,12 @@ func (m *model) updatePlan(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 func (m *model) viewPlan() string {
 	head, ok := m.agent.CurrentPlanHead(m.activeSessionID)
 	if !ok || head.Plan.ID == "" {
-		left := "No active plan\n\nPress c to create one."
+		left := renderPlanMarkdownPane("# Plan\n\nNo active plan.\n\nPress `c` to create one.", max(20, m.width/2-2))
 		right := m.renderPlanEditor(projections.PlanHeadSnapshot{}, false, projections.PlanTaskView{})
 		leftWidth, rightWidth := splitPaneWidths(m.width, max(30, m.width/2), max(26, m.width/3))
 		return lipgloss.JoinHorizontal(lipgloss.Top, lipgloss.NewStyle().Width(leftWidth).MaxWidth(leftWidth).Render(left), lipgloss.NewStyle().Width(rightWidth).MaxWidth(rightWidth).Render(right))
 	}
-	lines := []string{"Plan", "", "goal: " + head.Plan.Goal}
+	lines := []string{"# Plan", "", "**Goal:** " + head.Plan.Goal, ""}
 	m.mousePlanTop = len(lines)
 	ordered := orderedPlanTasks(head.Tasks)
 	selected, hasSelection := m.selectedPlanTask(head)
@@ -166,7 +166,7 @@ func (m *model) viewPlan() string {
 		}
 		renderPlanTaskWithSelection(&lines, head, task, ordered, 0, &flatIndex, m.planCursor)
 	}
-	m.planView.SetContent(strings.Join(lines, "\n"))
+	m.planView.SetContent(renderPlanMarkdownPane(strings.Join(lines, "\n"), m.planView.Width-1))
 	left := m.planView.View()
 	right := m.renderPlanEditor(head, hasSelection, selected)
 	leftWidth, rightWidth := splitPaneWidths(m.width, max(30, m.width/2), max(26, m.width/3))
@@ -240,9 +240,9 @@ func flattenedPlanTasks(head projections.PlanHeadSnapshot) []projections.PlanTas
 }
 
 func renderPlanTaskWithSelection(lines *[]string, head projections.PlanHeadSnapshot, task projections.PlanTaskView, all []projections.PlanTaskView, depth int, flatIndex *int, selectedIndex int) {
-	prefix := "  "
+	prefix := "- "
 	if *flatIndex == selectedIndex {
-		prefix = "> "
+		prefix = "- **selected** "
 	}
 	rendered := fmt.Sprintf("%s%s", prefix, planTaskLine(head, task, depth))
 	*lines = append(*lines, rendered)
@@ -259,18 +259,20 @@ func planTaskLine(head projections.PlanHeadSnapshot, task projections.PlanTaskVi
 	status := "[todo]"
 	switch task.Status {
 	case "done":
-		status = "[done]"
+		status = "`done`"
 	case "in_progress":
-		status = "[doing]"
+		status = "`doing`"
 	case "blocked":
-		status = "[blocked]"
+		status = "`blocked`"
 	case "cancelled":
-		status = "[cancelled]"
+		status = "`cancelled`"
 	default:
 		if head.WaitingOnDependencies[task.ID] {
-			status = "[waiting]"
+			status = "`waiting`"
 		} else if head.Ready[task.ID] {
-			status = "[ready]"
+			status = "`ready`"
+		} else {
+			status = "`todo`"
 		}
 	}
 	return fmt.Sprintf("%s%s %s", prefix, status, task.Description)
@@ -320,25 +322,36 @@ func (m *model) renderPlanEditor(head projections.PlanHeadSnapshot, hasSelection
 				computed = "ready"
 			}
 			lines = append(lines,
-				"Selected Task",
+				"## Selected Task",
 				"",
-				"ID: "+selected.ID,
-				"Description: "+selected.Description,
-				"Status: "+selected.Status,
-				"Computed: "+computed,
-				"Depends on: "+strings.Join(selected.DependsOn, ", "),
+				"- **ID:** "+selected.ID,
+				"- **Description:** "+selected.Description,
+				"- **Status:** "+selected.Status,
+				"- **Computed:** "+computed,
+				"- **Depends on:** "+strings.Join(selected.DependsOn, ", "),
 			)
 			if selected.BlockedReason != "" {
-				lines = append(lines, "Blocked reason: "+selected.BlockedReason)
+				lines = append(lines, "- **Blocked reason:** "+selected.BlockedReason)
 			}
 			if notes := head.Notes[selected.ID]; len(notes) > 0 {
-				lines = append(lines, fmt.Sprintf("Notes: %d", len(notes)), "Latest note: "+notes[len(notes)-1])
+				lines = append(lines, fmt.Sprintf("- **Notes:** %d", len(notes)), "- **Latest note:** "+notes[len(notes)-1])
 			}
 		} else {
-			lines = append(lines, "No task selected")
+			lines = append(lines, "## Selected Task", "", "No task selected.")
 		}
 	}
+	if m.planMode == planEditorBrowse {
+		return renderPlanMarkdownPane(strings.Join(lines, "\n"), max(20, m.width/3-2))
+	}
 	return strings.Join(lines, "\n")
+}
+
+func renderPlanMarkdownPane(input string, width int) string {
+	rendered, err := renderMarkdown(input, "dark", max(20, width))
+	if err != nil {
+		return wrapText(input, max(20, width))
+	}
+	return strings.TrimRight(rendered, "\n")
 }
 
 func planStatuses() []string { return []string{"todo", "in_progress", "done", "blocked", "cancelled"} }

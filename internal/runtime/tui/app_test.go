@@ -247,10 +247,10 @@ func TestPlanViewShowsNotesAndComputedStateForSelectedTask(t *testing.T) {
 	m.tab = tabPlan
 	modelAfter, _ := (&m).Update(tea.WindowSizeMsg{Width: 120, Height: 40})
 	got := modelAfter.View()
-	if !strings.Contains(got, "Computed: ready") {
+	if !strings.Contains(got, "Computed:") || !strings.Contains(got, "ready") {
 		t.Fatalf("view missing computed state: %q", got)
 	}
-	if !strings.Contains(got, "Latest note: Roles are cached.") {
+	if !strings.Contains(got, "Latest note:") || !strings.Contains(got, "Roles are") || !strings.Contains(got, "cached.") {
 		t.Fatalf("view missing latest note: %q", got)
 	}
 }
@@ -504,6 +504,140 @@ func TestF6TogglesMouseCaptureAndFooterIndicator(t *testing.T) {
 	}
 	if !strings.Contains(mm.viewFooter(), "Mouse: on") {
 		t.Fatalf("footer missing mouse re-enabled indicator: %q", mm.viewFooter())
+	}
+}
+
+func TestChatTimelineToolLinesDoNotIntroduceDoubleBlankSpacing(t *testing.T) {
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "agent.yaml")
+	if err := os.WriteFile(configPath, []byte("kind: AgentConfig\nversion: v1\nid: tui-test\nspec:\n  runtime:\n    max_tool_rounds: 7\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile config: %v", err)
+	}
+
+	agent := &runtime.Agent{
+		ConfigPath: configPath,
+		Config:     config.AgentConfig{ID: "tui-test", Spec: config.AgentConfigSpec{Runtime: config.AgentRuntimeConfig{MaxToolRounds: 7}}},
+		Contracts: contracts.ResolvedContracts{
+			Chat: contracts.ChatContract{
+				Output: contracts.ChatOutputPolicy{Params: contracts.ChatOutputParams{RenderMarkdown: true, MarkdownStyle: "dark"}},
+				Status: contracts.ChatStatusPolicy{Params: contracts.ChatStatusParams{ShowToolCalls: true, ShowToolResults: true, ShowPlanAfterPlanTools: true}},
+			},
+		},
+		EventLog: runtime.NewInMemoryEventLog(),
+		Projections: []projections.Projection{
+			projections.NewSessionCatalogProjection(),
+			projections.NewTranscriptProjection(),
+			projections.NewChatTimelineProjection(),
+			projections.NewPlanHeadProjection(),
+			projections.NewActivePlanProjection(),
+		},
+		UIBus: runtime.NewUIEventBus(),
+		Now:   func() time.Time { return time.Date(2026, 4, 15, 10, 20, 0, 0, time.UTC) },
+		NewID: func(prefix string) string { return prefix + "-1" },
+	}
+	if err := agent.RecordEvent(context.Background(), eventSessionCreated("session-1")); err != nil {
+		t.Fatalf("RecordEvent session created: %v", err)
+	}
+	if err := agent.RecordEvent(context.Background(), eventToolStarted("session-1", "fs_list")); err != nil {
+		t.Fatalf("RecordEvent tool started: %v", err)
+	}
+	if err := agent.RecordEvent(context.Background(), eventing.Event{
+		Kind:          eventing.EventToolCallCompleted,
+		AggregateID:   "run-1",
+		AggregateType: eventing.AggregateRun,
+		Payload:       map[string]any{"session_id": "session-1", "tool_name": "fs_list", "result_text": "ok"},
+	}); err != nil {
+		t.Fatalf("RecordEvent tool completed: %v", err)
+	}
+
+	m, err := newModel(context.Background(), agent, "session-1")
+	if err != nil {
+		t.Fatalf("newModel returned error: %v", err)
+	}
+	modelAfter, _ := (&m).Update(tea.WindowSizeMsg{Width: 100, Height: 30})
+	mm := modelAfter.(*model)
+	state := mm.currentSessionState()
+	if state == nil {
+		t.Fatal("current session state is nil")
+	}
+	mm.renderChatViewport(state)
+	content := state.ChatView.View()
+	if strings.Contains(content, "Tool: `fs_list`\n\n\n") || strings.Contains(content, "Tool result: `ok`\n\n\n") {
+		t.Fatalf("chat timeline still contains excessive blank spacing: %q", content)
+	}
+}
+
+func TestPlanViewRendersMarkdownFormattingInBrowseMode(t *testing.T) {
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "agent.yaml")
+	if err := os.WriteFile(configPath, []byte("kind: AgentConfig\nversion: v1\nid: tui-test\nspec:\n  runtime:\n    max_tool_rounds: 7\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile config: %v", err)
+	}
+
+	agent := &runtime.Agent{
+		ConfigPath: configPath,
+		Config:     config.AgentConfig{ID: "tui-test", Spec: config.AgentConfigSpec{Runtime: config.AgentRuntimeConfig{MaxToolRounds: 7}}},
+		Contracts: contracts.ResolvedContracts{
+			Chat: contracts.ChatContract{
+				Output: contracts.ChatOutputPolicy{Params: contracts.ChatOutputParams{RenderMarkdown: true, MarkdownStyle: "dark"}},
+				Status: contracts.ChatStatusPolicy{Params: contracts.ChatStatusParams{ShowToolCalls: true, ShowToolResults: true, ShowPlanAfterPlanTools: true}},
+			},
+		},
+		EventLog: runtime.NewInMemoryEventLog(),
+		Projections: []projections.Projection{
+			projections.NewSessionCatalogProjection(),
+			projections.NewTranscriptProjection(),
+			projections.NewChatTimelineProjection(),
+			projections.NewPlanHeadProjection(),
+			projections.NewActivePlanProjection(),
+		},
+		UIBus: runtime.NewUIEventBus(),
+		Now:   func() time.Time { return time.Date(2026, 4, 15, 10, 21, 0, 0, time.UTC) },
+		NewID: func(prefix string) string { return prefix + "-1" },
+	}
+	m, err := newModel(context.Background(), agent, "")
+	if err != nil {
+		t.Fatalf("newModel returned error: %v", err)
+	}
+	sessionID := m.activeSessionID
+	events := []eventing.Event{
+		{
+			Kind:          eventing.EventPlanCreated,
+			AggregateID:   "plan-1",
+			AggregateType: eventing.AggregatePlan,
+			Payload:       map[string]any{"session_id": sessionID, "plan_id": "plan-1", "goal": "Refactor **auth**"},
+		},
+		{
+			Kind:          eventing.EventTaskAdded,
+			AggregateID:   "task-1",
+			AggregateType: eventing.AggregatePlanTask,
+			Payload: map[string]any{
+				"session_id":  sessionID,
+				"plan_id":     "plan-1",
+				"task_id":     "task-1",
+				"description": "Audit `middleware`",
+				"status":      "todo",
+				"order":       1,
+				"depends_on":  []any{},
+			},
+		},
+	}
+	for _, event := range events {
+		if err := agent.RecordEvent(context.Background(), event); err != nil {
+			t.Fatalf("RecordEvent %s: %v", event.Kind, err)
+		}
+	}
+	m.tab = tabPlan
+	modelAfter, _ := (&m).Update(tea.WindowSizeMsg{Width: 120, Height: 40})
+	got := modelAfter.View()
+	if strings.Contains(got, "**auth**") {
+		t.Fatalf("plan goal still shows raw markdown syntax: %q", got)
+	}
+	if strings.Contains(got, "`middleware`") {
+		t.Fatalf("plan task still shows raw markdown syntax: %q", got)
+	}
+	if !strings.Contains(got, "auth") || !strings.Contains(got, "middleware") {
+		t.Fatalf("plan view missing rendered content: %q", got)
 	}
 }
 

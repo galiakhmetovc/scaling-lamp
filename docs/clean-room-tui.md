@@ -21,10 +21,11 @@ Current behavior:
   - `Ctrl+S` sends the current multiline prompt
   - assistant text streams through the runtime UI bus
   - chat history is rendered as a markdown timeline for the active session
-  - tool and plan activity is persisted into that timeline as short markdown lines
+  - tool and plan activity is persisted into that timeline as compact one-line markdown entries
   - final assistant messages render as terminal markdown
 - `Plan`
   - shows the current active session `plan_head` projection
+  - renders the browse/details view through terminal markdown instead of raw plain text
   - supports form-based editing for plan/task operations
   - selected task details include computed state and latest notes
 - `Tools`

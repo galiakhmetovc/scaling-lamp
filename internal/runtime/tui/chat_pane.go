@@ -75,12 +75,7 @@ func (m *model) renderChatViewport(state *sessionState) {
 			}
 			lines = append(lines, content, "")
 		default:
-			rendered, err := renderMarkdown(item.Content, state.Overrides.MarkdownStyle, contentWidth)
-			if err == nil {
-				lines = append(lines, strings.TrimRight(rendered, "\n"), "")
-			} else {
-				lines = append(lines, wrapText(item.Content, contentWidth), "")
-			}
+			lines = append(lines, wrapText(item.Content, contentWidth))
 		}
 	}
 	if state.Streaming.Len() > 0 {
