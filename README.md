@@ -31,6 +31,16 @@ Operational baseline:
     - `teamd-agent-linux-amd64`
     - `teamd-agent-windows-amd64`
 
+Build:
+
+- Linux/macOS artifact in repo root:
+  - `go build -o ./teamd-agent ./cmd/agent`
+- Windows artifact in repo root:
+  - `go build -o ./teamd-agent.exe ./cmd/agent`
+- clean temporary cache build:
+  - `mkdir -p .tmp-goexec .tmp-goexec/gocache`
+  - `TMPDIR=$PWD/.tmp-goexec GOCACHE=$PWD/.tmp-goexec/gocache go build -o ./teamd-agent ./cmd/agent`
+
 Run modes:
 
 - smoke:
