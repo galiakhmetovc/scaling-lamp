@@ -283,3 +283,53 @@ func TestFileEventLogListsAllEventsInSequenceOrder(t *testing.T) {
 		t.Fatalf("ListAll sequences = [%d %d], want [1 2]", got[0].Sequence, got[1].Sequence)
 	}
 }
+
+func TestFileEventLogLoadsLargeEventRecords(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join(t.TempDir(), "events.jsonl")
+	log, err := runtime.NewFileEventLog(path)
+	if err != nil {
+		t.Fatalf("NewFileEventLog returned error: %v", err)
+	}
+
+	largePayload := make([]byte, 128*1024)
+	for i := range largePayload {
+		largePayload[i] = 'a'
+	}
+
+	if err := log.Append(context.Background(), eventing.Event{
+		ID:               "evt-large",
+		Kind:             eventing.EventSessionCreated,
+		OccurredAt:       time.Date(2026, 4, 15, 12, 30, 0, 0, time.UTC),
+		AggregateID:      "session-large",
+		AggregateType:    eventing.AggregateSession,
+		AggregateVersion: 1,
+		Payload: map[string]any{
+			"blob": string(largePayload),
+		},
+	}); err != nil {
+		t.Fatalf("Append returned error: %v", err)
+	}
+
+	reopened, err := runtime.NewFileEventLog(path)
+	if err != nil {
+		t.Fatalf("NewFileEventLog reopen returned error: %v", err)
+	}
+
+	events, err := reopened.ListAll(context.Background())
+	if err != nil {
+		t.Fatalf("ListAll returned error: %v", err)
+	}
+	if len(events) != 1 {
+		t.Fatalf("ListAll len = %d, want 1", len(events))
+	}
+
+	payload, ok := events[0].Payload["blob"].(string)
+	if !ok {
+		t.Fatalf("payload blob type = %T, want string", events[0].Payload["blob"])
+	}
+	if len(payload) != len(largePayload) {
+		t.Fatalf("payload blob len = %d, want %d", len(payload), len(largePayload))
+	}
+}

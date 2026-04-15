@@ -13,6 +13,8 @@ import (
 	"teamd/internal/runtime/eventing"
 )
 
+const maxEventLogRecordSize = 8 * 1024 * 1024
+
 type eventJSONRecord struct {
 	Timestamp string `json:"timestamp"`
 	eventing.Event
@@ -172,6 +174,7 @@ func (l *FileEventLog) readAllEventsLocked() ([]eventing.Event, error) {
 
 	var out []eventing.Event
 	scanner := bufio.NewScanner(file)
+	scanner.Buffer(make([]byte, 64*1024), maxEventLogRecordSize)
 	for scanner.Scan() {
 		var event eventing.Event
 		if err := json.Unmarshal(scanner.Bytes(), &event); err != nil {
