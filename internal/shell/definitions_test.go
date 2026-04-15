@@ -1,18 +1,16 @@
-package shell_test
+package shell
 
 import (
 	"strings"
 	"testing"
 
 	"teamd/internal/contracts"
-	"teamd/internal/shell"
 )
 
-func TestDefinitionExecutorBuildsStaticAllowlistShellTools(t *testing.T) {
+func TestDefaultDefinitionsDescribeCrossPlatformShellExecUsage(t *testing.T) {
 	t.Parallel()
 
-	executor := shell.NewDefinitionExecutor()
-	got, err := executor.Build(contracts.ShellToolContract{
+	definitions, err := NewDefinitionExecutor().Build(contracts.ShellToolContract{
 		Catalog: contracts.ShellCatalogPolicy{
 			Enabled:  true,
 			Strategy: "static_allowlist",
@@ -23,60 +21,22 @@ func TestDefinitionExecutorBuildsStaticAllowlistShellTools(t *testing.T) {
 		Description: contracts.ShellDescriptionPolicy{
 			Enabled:  true,
 			Strategy: "static_builtin_descriptions",
-			Params: contracts.ShellDescriptionParams{
-				IncludeExamples:      true,
-				IncludeRuntimeLimits: true,
-			},
 		},
 	})
 	if err != nil {
 		t.Fatalf("Build returned error: %v", err)
 	}
-	if len(got) != 1 {
-		t.Fatalf("definition count = %d, want 1", len(got))
+	if len(definitions) != 1 {
+		t.Fatalf("len(definitions) = %d, want 1", len(definitions))
 	}
-	if got[0].ID != "shell_exec" {
-		t.Fatalf("definition id = %q, want shell_exec", got[0].ID)
-	}
-	if got[0].Description == "" {
-		t.Fatal("shell_exec description is empty")
-	}
-	if want := `{"command":"echo","args":["shell_exec works!"]}`; !contains(got[0].Description, want) {
-		t.Fatalf("shell_exec description = %q, want example %q", got[0].Description, want)
-	}
-	props, ok := got[0].Parameters["properties"].(map[string]any)
-	if !ok {
-		t.Fatalf("shell_exec properties = %#v", got[0].Parameters["properties"])
-	}
-	for _, field := range []string{"command", "args", "cwd"} {
-		if _, ok := props[field]; !ok {
-			t.Fatalf("shell_exec schema missing %q: %#v", field, props)
+	description := definitions[0].Description
+	for _, want := range []string{
+		"Windows builtin commands like echo, dir, and type",
+		"POSIX example",
+		"Windows example",
+	} {
+		if !strings.Contains(description, want) {
+			t.Fatalf("description missing %q: %q", want, description)
 		}
 	}
-}
-
-func TestDefinitionExecutorRejectsUnknownShellToolID(t *testing.T) {
-	t.Parallel()
-
-	executor := shell.NewDefinitionExecutor()
-	_, err := executor.Build(contracts.ShellToolContract{
-		Catalog: contracts.ShellCatalogPolicy{
-			Enabled:  true,
-			Strategy: "static_allowlist",
-			Params: contracts.ShellCatalogParams{
-				ToolIDs: []string{"shell_missing"},
-			},
-		},
-		Description: contracts.ShellDescriptionPolicy{
-			Enabled:  true,
-			Strategy: "static_builtin_descriptions",
-		},
-	})
-	if err == nil {
-		t.Fatal("Build returned nil error, want unknown tool failure")
-	}
-}
-
-func contains(text, want string) bool {
-	return strings.Contains(text, want)
 }

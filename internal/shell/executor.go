@@ -32,12 +32,14 @@ type invocation struct {
 type Executor struct {
 	run        runFunc
 	lookupPath lookupPathFunc
+	goos       string
 }
 
 func NewExecutor() *Executor {
 	return &Executor{
 		run:        defaultRunCommand,
 		lookupPath: exec.LookPath,
+		goos:       runtime.GOOS,
 	}
 }
 
@@ -112,11 +114,16 @@ func (e *Executor) Execute(contract contracts.ShellExecutionContract, toolName s
 }
 
 func (e *Executor) resolveInvocation(policy contracts.ShellRuntimePolicy, command string, args []string) (invocation, error) {
+	if e.platform() == "windows" {
+		if builtin, ok := windowsBuiltinInvocation(command, args); ok {
+			return builtin, nil
+		}
+	}
 	if !policy.Enabled || policy.Params.AllowNetwork {
 		return invocation{executable: command, args: args}, nil
 	}
-	if runtime.GOOS != "linux" {
-		return invocation{}, fmt.Errorf("shell network isolation requires linux; current platform is %s", runtime.GOOS)
+	if e.platform() != "linux" {
+		return invocation{}, fmt.Errorf("shell network isolation requires linux; current platform is %s", e.platform())
 	}
 	lookup := e.lookupPath
 	if lookup == nil {
@@ -133,6 +140,26 @@ func (e *Executor) resolveInvocation(policy contracts.ShellRuntimePolicy, comman
 		args:       argv,
 		isolated:   true,
 	}, nil
+}
+
+func (e *Executor) platform() string {
+	if e != nil && e.goos != "" {
+		return e.goos
+	}
+	return runtime.GOOS
+}
+
+func windowsBuiltinInvocation(command string, args []string) (invocation, bool) {
+	switch strings.ToLower(command) {
+	case "echo", "dir", "type":
+		argv := append([]string{"/C", command}, args...)
+		return invocation{
+			executable: "cmd",
+			args:       argv,
+		}, true
+	default:
+		return invocation{}, false
+	}
 }
 
 func defaultRunCommand(ctx context.Context, cwd, executable string, args []string) (runResult, error) {

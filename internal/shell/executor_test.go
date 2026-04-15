@@ -203,3 +203,57 @@ func TestExecutorUsesIsolationLauncherWhenNetworkDisabled(t *testing.T) {
 		t.Fatalf("status = %#v, want ok", payload["status"])
 	}
 }
+
+func TestExecutorRunsWindowsBuiltinViaCmdLauncher(t *testing.T) {
+	t.Parallel()
+
+	var gotExecutable string
+	var gotArgs []string
+	executor := &Executor{
+		goos: "windows",
+		run: func(_ context.Context, _ string, executable string, args []string) (runResult, error) {
+			gotExecutable = executable
+			gotArgs = append([]string{}, args...)
+			return runResult{stdout: "Hello", exitCode: 0}, nil
+		},
+	}
+
+	out, err := executor.Execute(contracts.ShellExecutionContract{
+		Command: contracts.ShellCommandPolicy{
+			Enabled:  true,
+			Strategy: "static_allowlist",
+			Params: contracts.ShellCommandParams{
+				AllowedCommands: []string{"echo"},
+			},
+		},
+		Runtime: contracts.ShellRuntimePolicy{
+			Enabled:  true,
+			Strategy: "workspace_write",
+			Params: contracts.ShellRuntimeParams{
+				Cwd:            t.TempDir(),
+				Timeout:        "5s",
+				MaxOutputBytes: 4096,
+				AllowNetwork:   true,
+			},
+		},
+	}, "shell_exec", map[string]any{
+		"command": "echo",
+		"args":    []any{"Hello"},
+	})
+	if err != nil {
+		t.Fatalf("Execute returned error: %v", err)
+	}
+	if gotExecutable != "cmd" {
+		t.Fatalf("executable = %q, want cmd", gotExecutable)
+	}
+	if len(gotArgs) != 3 || gotArgs[0] != "/C" || gotArgs[1] != "echo" || gotArgs[2] != "Hello" {
+		t.Fatalf("args = %#v, want cmd /C echo Hello shape", gotArgs)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal([]byte(out), &payload); err != nil {
+		t.Fatalf("unmarshal result: %v", err)
+	}
+	if payload["command"] != "echo" {
+		t.Fatalf("command = %#v, want echo", payload["command"])
+	}
+}
