@@ -53,4 +53,11 @@ func TestNewModelCreatesSessionAndRendersTopTabs(t *testing.T) {
 			t.Fatalf("view missing tab %q: %q", tab, got)
 		}
 	}
+	state := m.sessions[m.activeSessionID]
+	if state == nil {
+		t.Fatal("active session state is nil")
+	}
+	if !state.Input.Focused() {
+		t.Fatal("chat input is not focused")
+	}
 }

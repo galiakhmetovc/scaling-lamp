@@ -344,6 +344,9 @@ func (m *model) updateSessions(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		m.activeSessionID = m.sessionOrder[m.sessionCursor]
+		if state := m.currentSessionState(); state != nil {
+			state.Input.Focus()
+		}
 		m.tab = tabChat
 	case "n":
 		session, err := m.agent.NewChatSession()
@@ -777,6 +780,7 @@ func newSessionState(overrides sessionOverrides) *sessionState {
 	input := textarea.New()
 	input.Prompt = ""
 	input.SetHeight(6)
+	input.Focus()
 	view := viewport.New(80, 20)
 	return &sessionState{
 		Input:       input,
