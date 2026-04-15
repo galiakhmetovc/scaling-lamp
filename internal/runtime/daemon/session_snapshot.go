@@ -14,6 +14,8 @@ type SessionSnapshot struct {
 	CreatedAt        time.Time                      `json:"created_at"`
 	LastActivity     time.Time                      `json:"last_activity"`
 	MessageCount     int                            `json:"message_count"`
+	MainRunActive    bool                           `json:"main_run_active"`
+	QueuedDrafts     []QueuedDraft                  `json:"queued_drafts"`
 	Transcript       []contracts.Message            `json:"transcript"`
 	Timeline         []projections.ChatTimelineItem `json:"timeline"`
 	Plan             projections.PlanHeadSnapshot   `json:"plan"`
@@ -33,6 +35,8 @@ func (s *Server) buildSessionSnapshot(sessionID string) (SessionSnapshot, error)
 		CreatedAt:        entry.CreatedAt,
 		LastActivity:     entry.LastActivity,
 		MessageCount:     entry.MessageCount,
+		MainRunActive:    s.mainRunActive(sessionID),
+		QueuedDrafts:     s.queuedDrafts(sessionID),
 		Transcript:       s.agent.CurrentTranscript(sessionID),
 		Timeline:         s.agent.CurrentChatTimeline(sessionID),
 		Plan:             plan,

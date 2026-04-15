@@ -22,3 +22,9 @@ type CommandRequest struct {
 	Command string         `json:"command"`
 	Payload map[string]any `json:"payload,omitempty"`
 }
+
+type QueuedDraft struct {
+	ID       string    `json:"id"`
+	Text     string    `json:"text"`
+	QueuedAt time.Time `json:"queued_at"`
+}

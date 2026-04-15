@@ -47,20 +47,36 @@ func (s *Server) executeCommand(ctx context.Context, req CommandRequest) (any, e
 		if err != nil {
 			return nil, err
 		}
+		if !s.startMainRun(sessionID) {
+			draft := s.enqueueDraft(sessionID, prompt)
+			payload, err := s.sessionPayload(sessionID)
+			if err != nil {
+				return nil, err
+			}
+			payload["queued"] = true
+			payload["draft"] = draft
+			s.publishDaemon(WebsocketEnvelope{Type: "draft_queued", Payload: map[string]any{"session_id": sessionID, "draft": draft}})
+			return payload, nil
+		}
 		session, err := s.agent.ResumeChatSession(ctx, sessionID)
 		if err != nil {
+			s.finishMainRun(sessionID)
 			return nil, err
 		}
 		result, err := s.agent.ChatTurn(ctx, session, runtime.ChatTurnInput{Prompt: prompt})
 		if err != nil {
+			s.finishMainRun(sessionID)
 			return nil, err
 		}
+		s.finishMainRun(sessionID)
 		snapshot, err := s.buildSessionSnapshot(sessionID)
 		if err != nil {
 			return nil, err
 		}
+		s.maybeDispatchQueuedDrafts(sessionID)
 		return map[string]any{
 			"session": snapshot,
+			"queued":  false,
 			"result": providerResultPayload{
 				Provider:     s.providerLabel(),
 				Model:        result.Provider.Model,
@@ -70,6 +86,49 @@ func (s *Server) executeCommand(ctx context.Context, req CommandRequest) (any, e
 				Content:      result.Provider.Message.Content,
 			},
 		}, nil
+	case "draft.enqueue":
+		sessionID, err := requiredString(req.Payload, "session_id")
+		if err != nil {
+			return nil, err
+		}
+		text, err := requiredString(req.Payload, "text")
+		if err != nil {
+			return nil, err
+		}
+		draft := s.enqueueDraft(sessionID, text)
+		payload, err := s.sessionPayload(sessionID)
+		if err != nil {
+			return nil, err
+		}
+		payload["draft"] = draft
+		s.publishDaemon(WebsocketEnvelope{Type: "draft_queued", Payload: map[string]any{"session_id": sessionID, "draft": draft}})
+		return payload, nil
+	case "draft.list":
+		sessionID, err := requiredString(req.Payload, "session_id")
+		if err != nil {
+			return nil, err
+		}
+		return s.sessionPayload(sessionID)
+	case "draft.recall":
+		sessionID, err := requiredString(req.Payload, "session_id")
+		if err != nil {
+			return nil, err
+		}
+		draftID, err := requiredString(req.Payload, "draft_id")
+		if err != nil {
+			return nil, err
+		}
+		draft, ok := s.recallDraft(sessionID, draftID)
+		if !ok {
+			return nil, fmt.Errorf("draft %q not found", draftID)
+		}
+		payload, err := s.sessionPayload(sessionID)
+		if err != nil {
+			return nil, err
+		}
+		payload["draft"] = draft
+		s.publishDaemon(WebsocketEnvelope{Type: "draft_recalled", Payload: map[string]any{"session_id": sessionID, "draft": draft}})
+		return payload, nil
 	case "chat.btw":
 		sessionID, err := requiredString(req.Payload, "session_id")
 		if err != nil {

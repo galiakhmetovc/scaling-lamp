@@ -296,6 +296,131 @@ func TestWebsocketChatSendCommandCompletesWithUpdatedSessionSnapshot(t *testing.
 	}
 }
 
+func TestWebsocketDraftCommandsRoundTripQueueState(t *testing.T) {
+	t.Parallel()
+
+	agent := buildAgentWithOperatorSurface(t)
+	server, err := daemon.New(agent)
+	if err != nil {
+		t.Fatalf("new daemon server: %v", err)
+	}
+	httpServer := httptest.NewServer(server.Handler())
+	defer httpServer.Close()
+
+	conn := dialWebsocket(t, httpServer.URL, "/ws")
+	defer conn.Close()
+	_ = readEnvelopeJSON(t, conn)
+
+	writeCommandEnvelope(t, conn, map[string]any{"type": "command", "id": "cmd-1", "command": "session.create"})
+	_ = readEnvelopeJSON(t, conn)
+	created := readEnvelopeJSON(t, conn)
+	sessionID := mapPayload(t, mapPayload(t, created["payload"])["session"])["session_id"]
+
+	writeCommandEnvelope(t, conn, map[string]any{
+		"type":    "command",
+		"id":      "cmd-2",
+		"command": "draft.enqueue",
+		"payload": map[string]any{"session_id": sessionID, "text": "later"},
+	})
+	_, completed := waitForEventAndCommandCompleted(t, conn, "draft_queued", "cmd-2")
+	session := mapPayload(t, mapPayload(t, completed["payload"])["session"])
+	queue, ok := session["queued_drafts"].([]any)
+	if !ok || len(queue) != 1 {
+		t.Fatalf("queued_drafts = %#v, want single draft", session["queued_drafts"])
+	}
+	draft := mapPayload(t, queue[0])
+
+	writeCommandEnvelope(t, conn, map[string]any{
+		"type":    "command",
+		"id":      "cmd-3",
+		"command": "draft.recall",
+		"payload": map[string]any{"session_id": sessionID, "draft_id": draft["id"]},
+	})
+	_, recalled := waitForEventAndCommandCompleted(t, conn, "draft_recalled", "cmd-3")
+	session = mapPayload(t, mapPayload(t, recalled["payload"])["session"])
+	queue, _ = session["queued_drafts"].([]any)
+	if len(queue) != 0 {
+		t.Fatalf("queued_drafts after recall = %#v, want empty", session["queued_drafts"])
+	}
+}
+
+func TestWebsocketChatSendQueuesWhileActiveAndAutoDispatchesNextDraft(t *testing.T) {
+	providerStarted := make(chan struct{}, 1)
+	releaseFirst := make(chan struct{})
+	requests := 0
+	provider := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		if requests == 1 {
+			providerStarted <- struct{}{}
+			<-releaseFirst
+		}
+		w.Header().Set("Content-Type", "application/json")
+		content := "First response"
+		if requests == 2 {
+			content = "Queued response"
+		}
+		_, _ = w.Write([]byte(fmt.Sprintf(`{"id":"resp-%d","model":"glm-5-turbo","choices":[{"index":0,"finish_reason":"stop","message":{"role":"assistant","content":"%s"}}],"usage":{"prompt_tokens":8,"completion_tokens":4,"total_tokens":12}}`, requests, content)))
+	}))
+	defer provider.Close()
+
+	agent := buildChatDaemonAgent(t, provider.URL)
+	server, err := daemon.New(agent)
+	if err != nil {
+		t.Fatalf("new daemon server: %v", err)
+	}
+	httpServer := httptest.NewServer(server.Handler())
+	defer httpServer.Close()
+
+	conn := dialWebsocket(t, httpServer.URL, "/ws")
+	defer conn.Close()
+	_ = readEnvelopeJSON(t, conn)
+
+	writeCommandEnvelope(t, conn, map[string]any{"type": "command", "id": "cmd-1", "command": "session.create"})
+	_ = readEnvelopeJSON(t, conn)
+	created := readEnvelopeJSON(t, conn)
+	sessionID := mapPayload(t, mapPayload(t, created["payload"])["session"])["session_id"]
+
+	writeCommandEnvelope(t, conn, map[string]any{
+		"type":    "command",
+		"id":      "cmd-2",
+		"command": "chat.send",
+		"payload": map[string]any{"session_id": sessionID, "prompt": "first"},
+	})
+	_ = readEnvelopeJSON(t, conn)
+	<-providerStarted
+
+	writeCommandEnvelope(t, conn, map[string]any{
+		"type":    "command",
+		"id":      "cmd-3",
+		"command": "chat.send",
+		"payload": map[string]any{"session_id": sessionID, "prompt": "second"},
+	})
+	queuedEvent, queuedCompleted := waitForDraftQueuedAndCommandCompleted(t, conn, "cmd-3")
+	queuedPayload := mapPayload(t, queuedCompleted["payload"])
+	if queuedPayload["queued"] != true {
+		t.Fatalf("queued payload = %#v, want queued=true", queuedPayload)
+	}
+	queuedDraft := mapPayload(t, queuedEvent["payload"])["draft"]
+
+	close(releaseFirst)
+
+	firstCompleted, started, queuedRunDone := waitForQueuedRunProgress(t, conn, "cmd-2")
+	_ = firstCompleted
+	startedDraft := mapPayload(t, started["payload"])["draft"]
+	if mapPayload(t, startedDraft)["id"] != mapPayload(t, queuedDraft)["id"] {
+		t.Fatalf("started queued draft = %#v, want %#v", startedDraft, queuedDraft)
+	}
+	payload := mapPayload(t, queuedRunDone["payload"])
+	result := mapPayload(t, payload["result"])
+	if result["content"] != "Queued response" {
+		t.Fatalf("queued result content = %#v, want Queued response", result["content"])
+	}
+	session := mapPayload(t, payload["session"])
+	if session["main_run_active"] != false {
+		t.Fatalf("session main_run_active = %#v, want false", session["main_run_active"])
+	}
+}
+
 func buildAgentWithOperatorSurface(t *testing.T) *runtime.Agent {
 	t.Helper()
 	return buildChatDaemonAgent(t, "http://127.0.0.1:1")
@@ -353,7 +478,7 @@ func readEnvelopeJSON(t *testing.T, conn *websocket.Conn) map[string]any {
 
 func waitForEnvelopeType(t *testing.T, conn *websocket.Conn, want string) map[string]any {
 	t.Helper()
-	for i := 0; i < 8; i++ {
+	for i := 0; i < 16; i++ {
 		payload := readEnvelopeJSON(t, conn)
 		if payload["type"] == "command_failed" {
 			t.Fatalf("received command_failed envelope: %+v", payload)
@@ -364,6 +489,81 @@ func waitForEnvelopeType(t *testing.T, conn *websocket.Conn, want string) map[st
 	}
 	t.Fatalf("did not receive websocket envelope type %q", want)
 	return nil
+}
+
+func waitForCommandCompleted(t *testing.T, conn *websocket.Conn, commandID string) map[string]any {
+	t.Helper()
+	for i := 0; i < 16; i++ {
+		payload := readEnvelopeJSON(t, conn)
+		if payload["type"] == "command_failed" {
+			t.Fatalf("received command_failed envelope: %+v", payload)
+		}
+		if payload["type"] != "command_completed" {
+			continue
+		}
+		if payload["id"] == commandID {
+			return payload
+		}
+	}
+	t.Fatalf("did not receive command_completed envelope for %q", commandID)
+	return nil
+}
+
+func waitForDraftQueuedAndCommandCompleted(t *testing.T, conn *websocket.Conn, commandID string) (map[string]any, map[string]any) {
+	return waitForEventAndCommandCompleted(t, conn, "draft_queued", commandID)
+}
+
+func waitForQueuedRunProgress(t *testing.T, conn *websocket.Conn, commandID string) (map[string]any, map[string]any, map[string]any) {
+	t.Helper()
+	var completed map[string]any
+	var started map[string]any
+	var queuedDone map[string]any
+	for i := 0; i < 24; i++ {
+		payload := readEnvelopeJSON(t, conn)
+		if payload["type"] == "command_failed" {
+			t.Fatalf("received command_failed envelope: %+v", payload)
+		}
+		switch payload["type"] {
+		case "command_completed":
+			if payload["id"] == commandID {
+				completed = payload
+			}
+		case "queue_draft_started":
+			started = payload
+		case "queue_draft_completed":
+			queuedDone = payload
+		}
+		if completed != nil && started != nil && queuedDone != nil {
+			return completed, started, queuedDone
+		}
+	}
+	t.Fatalf("did not receive queued run progress for %q", commandID)
+	return nil, nil, nil
+}
+
+func waitForEventAndCommandCompleted(t *testing.T, conn *websocket.Conn, eventType, commandID string) (map[string]any, map[string]any) {
+	t.Helper()
+	var event map[string]any
+	var completed map[string]any
+	for i := 0; i < 16; i++ {
+		payload := readEnvelopeJSON(t, conn)
+		if payload["type"] == "command_failed" {
+			t.Fatalf("received command_failed envelope: %+v", payload)
+		}
+		switch payload["type"] {
+		case eventType:
+			event = payload
+		case "command_completed":
+			if payload["id"] == commandID {
+				completed = payload
+			}
+		}
+		if event != nil && completed != nil {
+			return event, completed
+		}
+	}
+	t.Fatalf("did not receive both %q and command_completed for %q", eventType, commandID)
+	return nil, nil
 }
 
 func mapPayload(t *testing.T, value any) map[string]any {

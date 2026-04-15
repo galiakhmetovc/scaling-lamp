@@ -24,9 +24,12 @@ import (
 var embeddedAssets embed.FS
 
 type Server struct {
-	agent      *runtime.Agent
-	httpServer *http.Server
-	listenAddr string
+	agent          *runtime.Agent
+	httpServer     *http.Server
+	listenAddr     string
+	runtimeMu      sync.RWMutex
+	sessionRuntime map[string]*sessionRuntimeState
+	daemonBus      *daemonBus
 }
 
 type BootstrapPayload struct {
@@ -91,8 +94,10 @@ func New(agent *runtime.Agent) (*Server, error) {
 	}
 
 	server := &Server{
-		agent:      agent,
-		listenAddr: net.JoinHostPort(params.ListenHost, fmt.Sprintf("%d", params.ListenPort)),
+		agent:          agent,
+		listenAddr:     net.JoinHostPort(params.ListenHost, fmt.Sprintf("%d", params.ListenPort)),
+		sessionRuntime: map[string]*sessionRuntimeState{},
+		daemonBus:      newDaemonBus(),
 	}
 	server.httpServer = &http.Server{
 		Addr:    server.listenAddr,
@@ -220,6 +225,8 @@ func (s *Server) websocketHandler() http.Handler {
 
 			subID, ch := s.agent.UIBus.Subscribe(128)
 			defer s.agent.UIBus.Unsubscribe(subID)
+			daemonSubID, daemonCh := s.daemonBus.Subscribe(128)
+			defer s.daemonBus.Unsubscribe(daemonSubID)
 
 			outbound := make(chan WebsocketEnvelope, 256)
 			var writeWG sync.WaitGroup
@@ -257,6 +264,11 @@ func (s *Server) websocketHandler() http.Handler {
 							return
 						}
 						send(WebsocketEnvelope{Type: "ui_event", Event: &event})
+					case envelope, ok := <-daemonCh:
+						if !ok {
+							return
+						}
+						send(envelope)
 					}
 				}
 			}()
@@ -356,4 +368,12 @@ func (s *Server) providerLabel() string {
 		return s.agent.Contracts.ProviderRequest.Transport.ID
 	}
 	return "provider"
+}
+
+func (s *Server) publishDaemon(envelope WebsocketEnvelope) {
+	if s == nil || s.daemonBus == nil {
+		return
+	}
+	envelope.GeneratedAt = s.agent.Now().UTC()
+	s.daemonBus.Publish(envelope)
 }
