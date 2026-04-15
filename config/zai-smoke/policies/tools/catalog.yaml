@@ -21,5 +21,10 @@ spec:
       - shell_start
       - shell_poll
       - shell_kill
+      - delegate_spawn
+      - delegate_message
+      - delegate_wait
+      - delegate_close
+      - delegate_handoff
     allow_empty: false
     dedupe: true

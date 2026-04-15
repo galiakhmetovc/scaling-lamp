@@ -3,6 +3,7 @@ package runtime
 import (
 	"context"
 	"fmt"
+	"sync"
 	"time"
 
 	"teamd/internal/config"
@@ -31,6 +32,7 @@ type Agent struct {
 	ShellTools      *shell.DefinitionExecutor
 	DelegationTools *delegation.DefinitionExecutor
 	ShellRuntime    *shell.Executor
+	DelegateRuntime DelegateRuntime
 	ToolCatalog     *tools.CatalogExecutor
 	ToolExecution   *tools.ExecutionGate
 	ProviderClient  *provider.Client
@@ -40,9 +42,13 @@ type Agent struct {
 	UIBus           *UIEventBus
 	Now             func() time.Time
 	NewID           func(prefix string) string
+	recordMu        sync.Mutex
 }
 
 func (a *Agent) RecordEvent(ctx context.Context, event eventing.Event) error {
+	a.recordMu.Lock()
+	defer a.recordMu.Unlock()
+
 	if err := a.EventLog.Append(ctx, event); err != nil {
 		return fmt.Errorf("append event: %w", err)
 	}
@@ -165,7 +171,7 @@ func BuildAgent(configPath string) (*Agent, error) {
 		maxToolRounds = 4
 	}
 
-	return &Agent{
+	agent := &Agent{
 		Config:          cfg,
 		ConfigPath:      configPath,
 		MaxToolRounds:   maxToolRounds,
@@ -190,5 +196,7 @@ func BuildAgent(configPath string) (*Agent, error) {
 		NewID: func(prefix string) string {
 			return fmt.Sprintf("%s-%d", prefix, time.Now().UTC().UnixNano())
 		},
-	}, nil
+	}
+	agent.DelegateRuntime = NewLocalDelegateRuntime(agent)
+	return agent, nil
 }

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"time"
 
 	"teamd/internal/contracts"
 	"teamd/internal/filesystem"
@@ -99,6 +100,11 @@ func (a *Agent) executeToolCalls(ctx context.Context, runID, sessionID, correlat
 		shellExecutor = shell.NewExecutor()
 		a.ShellRuntime = shellExecutor
 	}
+	delegateRuntime := a.DelegateRuntime
+	if delegateRuntime == nil {
+		delegateRuntime = NewLocalDelegateRuntime(a)
+		a.DelegateRuntime = delegateRuntime
+	}
 
 	decisionByTool := make(map[string]provider.ToolDecision, len(decisions))
 	for _, decision := range decisions {
@@ -179,7 +185,7 @@ func (a *Agent) executeToolCalls(ctx context.Context, runID, sessionID, correlat
 			continue
 		}
 
-		events, resultText, err := a.executeToolCommand(ctx, runID, sessionID, activeProjection, service, filesystemExecutor, shellExecutor, source, call)
+		events, resultText, err := a.executeToolCommand(ctx, runID, sessionID, activeProjection, service, filesystemExecutor, shellExecutor, delegateRuntime, source, call)
 		if err != nil {
 			resultText := toolErrorResult(call.Name, err)
 			if recordErr := a.recordToolCallCompleted(ctx, runID, sessionID, correlationID, source, call.Name, call.Arguments, resultText, err.Error()); recordErr != nil {
@@ -263,7 +269,7 @@ func (a *Agent) recordToolCallCompleted(ctx context.Context, runID, sessionID, c
 	})
 }
 
-func (a *Agent) executeToolCommand(ctx context.Context, runID, sessionID string, activeProjection *projections.ActivePlanProjection, service *plans.Service, filesystemExecutor *filesystem.Executor, shellExecutor *shell.Executor, source string, call provider.ToolCall) ([]eventing.Event, string, error) {
+func (a *Agent) executeToolCommand(ctx context.Context, runID, sessionID string, activeProjection *projections.ActivePlanProjection, service *plans.Service, filesystemExecutor *filesystem.Executor, shellExecutor *shell.Executor, delegateRuntime DelegateRuntime, source string, call provider.ToolCall) ([]eventing.Event, string, error) {
 	switch call.Name {
 	case "init_plan", "add_task", "set_task_status", "add_task_note", "edit_task":
 		if activeProjection == nil {
@@ -291,8 +297,176 @@ func (a *Agent) executeToolCommand(ctx context.Context, runID, sessionID string,
 			return nil, "", fmt.Errorf("tool call %q: %w", call.Name, err)
 		}
 		return nil, resultText, nil
+	case "delegate_spawn", "delegate_message", "delegate_wait", "delegate_close", "delegate_handoff":
+		resultText, err := a.executeDelegationCommand(ctx, sessionID, delegateRuntime, call)
+		if err != nil {
+			return nil, "", fmt.Errorf("tool call %q: %w", call.Name, err)
+		}
+		return nil, resultText, nil
 	default:
 		return nil, "", fmt.Errorf("tool call %q is not implemented", call.Name)
+	}
+}
+
+func (a *Agent) executeDelegationCommand(ctx context.Context, sessionID string, delegateRuntime DelegateRuntime, call provider.ToolCall) (string, error) {
+	if delegateRuntime == nil {
+		return "", fmt.Errorf("delegate runtime is not configured")
+	}
+	backendPolicy := a.Contracts.DelegationExecution.Backend
+	resultPolicy := a.Contracts.DelegationExecution.Result
+
+	switch call.Name {
+	case "delegate_spawn":
+		prompt, err := stringArg(call.Arguments, "prompt")
+		if err != nil {
+			return "", err
+		}
+		delegateID, _ := optionalStringArg(call.Arguments, "delegate_id")
+		backendValue, _ := optionalStringArg(call.Arguments, "backend")
+		if backendValue == "" {
+			backendValue = backendPolicy.Params.DefaultBackend
+		}
+		if backendValue == "" {
+			backendValue = string(DelegateBackendLocalWorker)
+		}
+		if !containsString(backendPolicy.Params.AllowedBackends, backendValue) {
+			return "", fmt.Errorf("delegate backend %q is not allowed", backendValue)
+		}
+		view, err := delegateRuntime.Spawn(ctx, DelegateSpawnRequest{
+			DelegateID:     delegateID,
+			Backend:        DelegateBackend(backendValue),
+			OwnerSessionID: sessionID,
+			Prompt:         prompt,
+			PolicySnapshot: map[string]any{"backend": backendValue},
+		})
+		if err != nil {
+			return "", err
+		}
+		return jsonString(map[string]any{
+			"status":      "ok",
+			"tool":        call.Name,
+			"delegate_id": view.DelegateID,
+			"backend":     string(view.Backend),
+			"state":       string(view.Status),
+		}), nil
+	case "delegate_message":
+		delegateID, err := stringArg(call.Arguments, "delegate_id")
+		if err != nil {
+			return "", err
+		}
+		content, err := stringArg(call.Arguments, "content")
+		if err != nil {
+			return "", err
+		}
+		view, err := delegateRuntime.Message(ctx, delegateID, DelegateMessageRequest{Content: content})
+		if err != nil {
+			return "", err
+		}
+		return jsonString(map[string]any{
+			"status":      "ok",
+			"tool":        call.Name,
+			"delegate_id": view.DelegateID,
+			"state":       string(view.Status),
+		}), nil
+	case "delegate_wait":
+		delegateID, err := stringArg(call.Arguments, "delegate_id")
+		if err != nil {
+			return "", err
+		}
+		afterCursor, err := optionalIntArg(call.Arguments, "after_cursor")
+		if err != nil {
+			return "", err
+		}
+		afterEventID, err := optionalInt64Arg(call.Arguments, "after_event_id")
+		if err != nil {
+			return "", err
+		}
+		eventLimit, err := optionalIntArg(call.Arguments, "event_limit")
+		if err != nil {
+			return "", err
+		}
+		if eventLimit <= 0 {
+			eventLimit = resultPolicy.Params.DefaultEventLimit
+		}
+		if max := resultPolicy.Params.MaxEventLimit; max > 0 && eventLimit > max {
+			eventLimit = max
+		}
+		result, ok, err := delegateRuntime.Wait(ctx, DelegateWaitRequest{
+			DelegateID:   delegateID,
+			AfterCursor:  afterCursor,
+			AfterEventID: afterEventID,
+			EventLimit:   eventLimit,
+		})
+		if err != nil {
+			return "", err
+		}
+		if !ok {
+			return "", fmt.Errorf("delegate %q not found", delegateID)
+		}
+		payload := map[string]any{
+			"status":           "ok",
+			"tool":             call.Name,
+			"delegate_id":      result.Delegate.DelegateID,
+			"backend":          string(result.Delegate.Backend),
+			"state":            string(result.Delegate.Status),
+			"messages":         delegateMessagesPayload(result.Messages),
+			"next_cursor":      result.NextCursor,
+			"next_event_after": result.NextEventAfter,
+		}
+		if resultPolicy.Params.IncludeEvents {
+			payload["events"] = delegateEventsPayload(result.Events)
+		}
+		if result.Handoff != nil {
+			payload["handoff"] = delegateHandoffPayload(*result.Handoff, resultPolicy.Params.IncludeArtifacts)
+		}
+		if resultPolicy.Params.IncludePolicySnapshot && result.Delegate.PolicySnapshot != nil {
+			payload["policy_snapshot"] = result.Delegate.PolicySnapshot
+		}
+		if resultPolicy.Params.IncludeArtifacts {
+			payload["artifacts"] = delegateArtifactsPayload(result.Delegate.ArtifactRefs)
+		}
+		return jsonString(payload), nil
+	case "delegate_close":
+		delegateID, err := stringArg(call.Arguments, "delegate_id")
+		if err != nil {
+			return "", err
+		}
+		view, ok, err := delegateRuntime.Close(ctx, delegateID)
+		if err != nil {
+			return "", err
+		}
+		if !ok {
+			return "", fmt.Errorf("delegate %q not found", delegateID)
+		}
+		return jsonString(map[string]any{
+			"status":      "ok",
+			"tool":        call.Name,
+			"delegate_id": view.DelegateID,
+			"state":       string(view.Status),
+		}), nil
+	case "delegate_handoff":
+		delegateID, err := stringArg(call.Arguments, "delegate_id")
+		if err != nil {
+			return "", err
+		}
+		handoff, ok, err := delegateRuntime.Handoff(ctx, delegateID)
+		if err != nil {
+			return "", err
+		}
+		if !ok {
+			return "", fmt.Errorf("delegate %q has no handoff", delegateID)
+		}
+		payload := map[string]any{
+			"status":      "ok",
+			"tool":        call.Name,
+			"delegate_id": handoff.DelegateID,
+			"backend":     string(handoff.Backend),
+			"summary":     handoff.Summary,
+		}
+		payload["handoff"] = delegateHandoffPayload(handoff, resultPolicy.Params.IncludeArtifacts)
+		return jsonString(payload), nil
+	default:
+		return "", fmt.Errorf("tool call %q is not implemented", call.Name)
 	}
 }
 
@@ -476,6 +650,114 @@ func optionalStringSliceArg(args map[string]any, key string) ([]string, error) {
 	default:
 		return nil, fmt.Errorf("argument %q must be a string array", key)
 	}
+}
+
+func optionalIntArg(args map[string]any, key string) (int, error) {
+	value, ok := args[key]
+	if !ok || value == nil {
+		return 0, nil
+	}
+	switch typed := value.(type) {
+	case int:
+		return typed, nil
+	case int64:
+		return int(typed), nil
+	case float64:
+		return int(typed), nil
+	default:
+		return 0, fmt.Errorf("argument %q must be an integer", key)
+	}
+}
+
+func optionalInt64Arg(args map[string]any, key string) (int64, error) {
+	value, ok := args[key]
+	if !ok || value == nil {
+		return 0, nil
+	}
+	switch typed := value.(type) {
+	case int:
+		return int64(typed), nil
+	case int64:
+		return typed, nil
+	case float64:
+		return int64(typed), nil
+	default:
+		return 0, fmt.Errorf("argument %q must be an integer", key)
+	}
+}
+
+func containsString(items []string, target string) bool {
+	for _, item := range items {
+		if item == target {
+			return true
+		}
+	}
+	return false
+}
+
+func delegateMessagesPayload(messages []DelegateMessage) []map[string]any {
+	if len(messages) == 0 {
+		return nil
+	}
+	out := make([]map[string]any, 0, len(messages))
+	for _, message := range messages {
+		out = append(out, map[string]any{
+			"cursor":       message.Cursor,
+			"role":         message.Role,
+			"content":      message.Content,
+			"name":         message.Name,
+			"tool_call_id": message.ToolCallID,
+		})
+	}
+	return out
+}
+
+func delegateEventsPayload(events []DelegateEventRef) []map[string]any {
+	if len(events) == 0 {
+		return nil
+	}
+	out := make([]map[string]any, 0, len(events))
+	for _, event := range events {
+		out = append(out, map[string]any{
+			"event_id": event.EventID,
+			"kind":     event.Kind,
+		})
+	}
+	return out
+}
+
+func delegateArtifactsPayload(artifacts []DelegateArtifactRef) []map[string]any {
+	if len(artifacts) == 0 {
+		return nil
+	}
+	out := make([]map[string]any, 0, len(artifacts))
+	for _, artifact := range artifacts {
+		out = append(out, map[string]any{
+			"ref":          artifact.Ref,
+			"kind":         artifact.Kind,
+			"label":        artifact.Label,
+			"content_type": artifact.ContentType,
+		})
+	}
+	return out
+}
+
+func delegateHandoffPayload(handoff DelegateHandoff, includeArtifacts bool) map[string]any {
+	payload := map[string]any{
+		"delegate_id":            handoff.DelegateID,
+		"backend":                string(handoff.Backend),
+		"last_run_id":            handoff.LastRunID,
+		"summary":                handoff.Summary,
+		"promoted_facts":         append([]string(nil), handoff.PromotedFacts...),
+		"open_questions":         append([]string(nil), handoff.OpenQuestions...),
+		"recommended_next_step":  handoff.RecommendedNextStep,
+		"created_at":             handoff.CreatedAt.Format(time.RFC3339Nano),
+		"updated_at":             handoff.UpdatedAt.Format(time.RFC3339Nano),
+	}
+	if includeArtifacts {
+		payload["artifacts"] = delegateArtifactsPayload(handoff.Artifacts)
+	}
+	return payload
 }
 
 func jsonString(value map[string]any) string {

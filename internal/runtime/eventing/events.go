@@ -10,6 +10,7 @@ const (
 	AggregatePlan         AggregateType = "plan"
 	AggregatePlanTask     AggregateType = "plan_task"
 	AggregateShellCommand AggregateType = "shell_command"
+	AggregateDelegate     AggregateType = "delegate"
 )
 
 type EventKind string
@@ -30,6 +31,13 @@ const (
 	EventTaskStatusChanged             EventKind = "task.status_changed"
 	EventTaskNoteAdded                 EventKind = "task.note_added"
 	EventTaskEdited                    EventKind = "task.edited"
+	EventDelegateSpawned               EventKind = "delegate.spawned"
+	EventDelegateMessageReceived       EventKind = "delegate.message_received"
+	EventDelegateRunStarted            EventKind = "delegate.run_started"
+	EventDelegateCompleted             EventKind = "delegate.completed"
+	EventDelegateFailed                EventKind = "delegate.failed"
+	EventDelegateClosed                EventKind = "delegate.closed"
+	EventDelegateHandoffCreated        EventKind = "delegate.handoff_created"
 	EventShellCommandStarted           EventKind = "shell.command.started"
 	EventShellCommandApprovalRequested EventKind = "shell.command.approval_requested"
 	EventShellCommandApprovalGranted   EventKind = "shell.command.approval_granted"

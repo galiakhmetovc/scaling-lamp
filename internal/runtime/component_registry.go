@@ -106,6 +106,7 @@ func NewBuiltInComponentRegistry() *ComponentRegistry {
 	registry.RegisterProjection("run", func() projections.Projection { return projections.NewRunProjection() })
 	registry.RegisterProjection("transcript", func() projections.Projection { return projections.NewTranscriptProjection() })
 	registry.RegisterProjection("chat_timeline", func() projections.Projection { return projections.NewChatTimelineProjection() })
+	registry.RegisterProjection("delegate", func() projections.Projection { return projections.NewDelegateProjection() })
 	registry.RegisterProjection("shell_command", func() projections.Projection { return projections.NewShellCommandProjection() })
 	registry.RegisterProjection("active_plan", func() projections.Projection { return projections.NewActivePlanProjection() })
 	registry.RegisterProjection("plan_archive", func() projections.Projection { return projections.NewPlanArchiveProjection() })
