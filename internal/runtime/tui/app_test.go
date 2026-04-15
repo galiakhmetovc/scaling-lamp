@@ -121,6 +121,61 @@ func TestChatViewRendersTimelineEntries(t *testing.T) {
 	}
 }
 
+func TestToolsViewRendersSelectedEntryDetails(t *testing.T) {
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "agent.yaml")
+	if err := os.WriteFile(configPath, []byte("kind: AgentConfig\nversion: v1\nid: tui-test\nspec:\n  runtime:\n    max_tool_rounds: 7\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile config: %v", err)
+	}
+
+	agent := &runtime.Agent{
+		ConfigPath: configPath,
+		Config:     config.AgentConfig{ID: "tui-test", Spec: config.AgentConfigSpec{Runtime: config.AgentRuntimeConfig{MaxToolRounds: 7}}},
+		Contracts: contracts.ResolvedContracts{
+			Chat: contracts.ChatContract{
+				Output: contracts.ChatOutputPolicy{Params: contracts.ChatOutputParams{RenderMarkdown: true, MarkdownStyle: "dark"}},
+				Status: contracts.ChatStatusPolicy{Params: contracts.ChatStatusParams{ShowToolCalls: true, ShowToolResults: true, ShowPlanAfterPlanTools: true}},
+			},
+		},
+		EventLog: runtime.NewInMemoryEventLog(),
+		Projections: []projections.Projection{
+			projections.NewSessionCatalogProjection(),
+			projections.NewTranscriptProjection(),
+			projections.NewChatTimelineProjection(),
+			projections.NewPlanHeadProjection(),
+			projections.NewActivePlanProjection(),
+		},
+		UIBus: runtime.NewUIEventBus(),
+		Now:   func() time.Time { return time.Date(2026, 4, 15, 5, 0, 0, 0, time.UTC) },
+		NewID: func(prefix string) string { return prefix + "-1" },
+	}
+	if err := agent.RecordEvent(context.Background(), eventSessionCreated("session-1")); err != nil {
+		t.Fatalf("RecordEvent session created: %v", err)
+	}
+
+	m, err := newModel(context.Background(), agent, "session-1")
+	if err != nil {
+		t.Fatalf("newModel returned error: %v", err)
+	}
+	m.tab = tabTools
+	state := m.sessions[m.activeSessionID]
+	if state == nil {
+		t.Fatal("active session state is nil")
+	}
+	state.ToolLog = []toolLogEntry{
+		{Activity: runtime.ToolActivity{Phase: runtime.ToolActivityPhaseStarted, Name: "fs_list", Arguments: map[string]any{"path": "."}}},
+		{Activity: runtime.ToolActivity{Phase: runtime.ToolActivityPhaseCompleted, Name: "shell_exec", Arguments: map[string]any{"command": "rg"}, ResultText: "ok"}},
+	}
+	modelAfter, _ := (&m).Update(tea.WindowSizeMsg{Width: 120, Height: 40})
+	got := modelAfter.View()
+	if !strings.Contains(got, "Tool Details") {
+		t.Fatalf("view missing details pane: %q", got)
+	}
+	if !strings.Contains(got, "shell_exec") {
+		t.Fatalf("view missing selected tool details: %q", got)
+	}
+}
+
 func eventSessionCreated(sessionID string) eventing.Event {
 	return eventing.Event{
 		Kind:          eventing.EventSessionCreated,

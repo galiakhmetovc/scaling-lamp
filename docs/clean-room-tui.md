@@ -28,6 +28,7 @@ Current behavior:
   - supports form-based editing for plan/task operations
 - `Tools`
   - shows tool lifecycle events for the active session
+  - includes a selected-entry details pane with summarized args/result/error text
 - `Settings`
   - `Session Overrides`
   - `Config Form`
@@ -71,6 +72,8 @@ Current runtime architecture:
 Current interaction notes:
 
 - `Chat`, `Plan`, `Tools`, and settings forms use pane-local scrolling
+- mouse wheel scrolling is wired for `Chat`, `Plan`, `Tools`, and `Settings`
+- the TUI code is decomposed into pane-focused modules under `internal/runtime/tui`
 - `Plan` keeps the full task tree out of the main chat timeline
 
 Compatibility rule:
