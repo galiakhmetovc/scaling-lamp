@@ -50,13 +50,20 @@ func (a *Agent) ResumeChatSession(ctx context.Context, sessionID string) (*ChatS
 	}
 	if transcript := a.transcriptProjection(); transcript != nil {
 		messages, ok := transcript.Snapshot().Sessions[sessionID]
-		if !ok {
-			return nil, fmt.Errorf("session %q not found", sessionID)
+		if ok {
+			return &ChatSession{
+				SessionID: sessionID,
+				Messages:  append([]contracts.Message{}, messages...),
+			}, nil
 		}
-		return &ChatSession{
-			SessionID: sessionID,
-			Messages:  append([]contracts.Message{}, messages...),
-		}, nil
+		if catalog := a.sessionCatalogProjection(); catalog != nil {
+			if _, exists := catalog.Snapshot().Sessions[sessionID]; exists {
+				return &ChatSession{
+					SessionID: sessionID,
+					Messages:  []contracts.Message{},
+				}, nil
+			}
+		}
 	}
 	events, err := a.EventLog.ListByAggregate(ctx, eventing.AggregateSession, sessionID)
 	if err != nil {

@@ -13,6 +13,7 @@ import (
 	"path"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 
 	"golang.org/x/net/websocket"
@@ -52,12 +53,6 @@ type runtimeSessionSnapshot struct {
 	CreatedAt    time.Time `json:"created_at"`
 	LastActivity time.Time `json:"last_activity"`
 	MessageCount int       `json:"message_count"`
-}
-
-type WebsocketEnvelope struct {
-	Type        string           `json:"type"`
-	Event       *runtime.UIEvent `json:"event,omitempty"`
-	GeneratedAt time.Time        `json:"generated_at"`
 }
 
 func New(agent *runtime.Agent) (*Server, error) {
@@ -220,33 +215,81 @@ func (s *Server) websocketHandler() http.Handler {
 		}
 		websocket.Handler(func(conn *websocket.Conn) {
 			defer conn.Close()
+			ctx, cancel := context.WithCancel(r.Context())
+			defer cancel()
+
 			subID, ch := s.agent.UIBus.Subscribe(128)
 			defer s.agent.UIBus.Unsubscribe(subID)
 
-			encoder := json.NewEncoder(conn)
-			if err := encoder.Encode(WebsocketEnvelope{
-				Type:        "hello",
-				GeneratedAt: s.agent.Now().UTC(),
-			}); err != nil {
-				return
-			}
-			for {
-				select {
-				case <-r.Context().Done():
-					return
-				case event, ok := <-ch:
-					if !ok {
-						return
-					}
-					if err := encoder.Encode(WebsocketEnvelope{
-						Type:        "ui_event",
-						Event:       &event,
-						GeneratedAt: s.agent.Now().UTC(),
-					}); err != nil {
+			outbound := make(chan WebsocketEnvelope, 256)
+			var writeWG sync.WaitGroup
+			writeWG.Add(1)
+			go func() {
+				defer writeWG.Done()
+				encoder := json.NewEncoder(conn)
+				for envelope := range outbound {
+					if err := encoder.Encode(envelope); err != nil {
+						cancel()
 						return
 					}
 				}
+			}()
+
+			send := func(envelope WebsocketEnvelope) {
+				envelope.GeneratedAt = s.agent.Now().UTC()
+				select {
+				case <-ctx.Done():
+				case outbound <- envelope:
+				}
 			}
+			send(WebsocketEnvelope{Type: "hello"})
+
+			var producerWG sync.WaitGroup
+			producerWG.Add(1)
+			go func() {
+				defer producerWG.Done()
+				for {
+					select {
+					case <-ctx.Done():
+						return
+					case event, ok := <-ch:
+						if !ok {
+							return
+						}
+						send(WebsocketEnvelope{Type: "ui_event", Event: &event})
+					}
+				}
+			}()
+
+			decoder := json.NewDecoder(conn)
+			var commandWG sync.WaitGroup
+			for {
+				var req CommandRequest
+				if err := decoder.Decode(&req); err != nil {
+					cancel()
+					break
+				}
+				if req.Type != "command" {
+					send(WebsocketEnvelope{Type: "command_failed", ID: req.ID, Command: req.Command, Error: fmt.Sprintf("unsupported websocket message type %q", req.Type)})
+					continue
+				}
+				send(WebsocketEnvelope{Type: "command_accepted", ID: req.ID, Command: req.Command})
+				commandWG.Add(1)
+				go func(req CommandRequest) {
+					defer commandWG.Done()
+					payload, err := s.executeCommand(ctx, req)
+					if err != nil {
+						send(WebsocketEnvelope{Type: "command_failed", ID: req.ID, Command: req.Command, Error: err.Error()})
+						return
+					}
+					send(WebsocketEnvelope{Type: "command_completed", ID: req.ID, Command: req.Command, Payload: payload})
+				}(req)
+			}
+
+			commandWG.Wait()
+			producerWG.Wait()
+			close(outbound)
+			writeWG.Wait()
 		}).ServeHTTP(w, r)
 	})
 }
@@ -299,4 +342,18 @@ func (s *Server) assetsHandler() (http.Handler, error) {
 	default:
 		return nil, fmt.Errorf("unsupported web asset mode %q", assets.Mode)
 	}
+}
+
+func (s *Server) providerLabel() string {
+	if s == nil || s.agent == nil {
+		return "provider"
+	}
+	baseURL := s.agent.Contracts.ProviderRequest.Transport.Endpoint.Params.BaseURL
+	if parsed, err := url.Parse(baseURL); err == nil && parsed.Host != "" {
+		return parsed.Host
+	}
+	if s.agent.Contracts.ProviderRequest.Transport.ID != "" {
+		return s.agent.Contracts.ProviderRequest.Transport.ID
+	}
+	return "provider"
 }

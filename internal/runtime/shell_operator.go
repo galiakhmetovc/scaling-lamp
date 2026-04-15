@@ -31,6 +31,24 @@ func (a *Agent) PendingShellApprovals(sessionID string) []shell.PendingApprovalV
 	return out
 }
 
+func (a *Agent) PendingShellApproval(approvalID string) (shell.PendingApprovalView, bool) {
+	view, err := a.pendingShellApproval(approvalID)
+	if err != nil {
+		return shell.PendingApprovalView{}, false
+	}
+	return shell.PendingApprovalView{
+		ApprovalID: view.ApprovalID,
+		CommandID:  view.CommandID,
+		SessionID:  view.SessionID,
+		RunID:      view.RunID,
+		ToolName:   view.ToolName,
+		Command:    view.Command,
+		Args:       append([]string{}, view.Args...),
+		Cwd:        view.Cwd,
+		Message:    view.Message,
+	}, true
+}
+
 func (a *Agent) ApproveShellCommand(ctx context.Context, approvalID string) (string, error) {
 	view, err := a.pendingShellApproval(approvalID)
 	if err != nil {
@@ -62,6 +80,22 @@ func (a *Agent) ApproveShellCommand(ctx context.Context, approvalID string) (str
 		return "", err
 	}
 	return a.ShellRuntime.Approve(ctx, approvalID)
+}
+
+func (a *Agent) KillShellCommand(ctx context.Context, commandID string) (string, error) {
+	if a.ShellRuntime == nil {
+		return "", fmt.Errorf("shell runtime is nil")
+	}
+	return a.ShellRuntime.ExecuteWithMeta(ctx, a.Contracts.ShellExecution, "shell_kill", map[string]any{
+		"command_id": commandID,
+	}, shell.ExecutionMeta{
+		Source:      "runtime.shell_operator",
+		ActorID:     a.Config.ID,
+		ActorType:   "operator",
+		RecordEvent: a.RecordEvent,
+		Now:         a.Now,
+		NewID:       a.NewID,
+	})
 }
 
 func (a *Agent) DenyShellCommand(ctx context.Context, approvalID string) error {

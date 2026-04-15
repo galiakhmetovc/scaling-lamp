@@ -152,6 +152,10 @@ func (a *Agent) newID(prefix string) string {
 }
 
 func (a *Agent) sessionExists(sessionID string) bool {
+	if catalog := a.sessionCatalogProjection(); catalog != nil {
+		_, ok := catalog.Snapshot().Sessions[sessionID]
+		return ok
+	}
 	for _, projection := range a.Projections {
 		sessionProjection, ok := projection.(*projections.SessionProjection)
 		if !ok {

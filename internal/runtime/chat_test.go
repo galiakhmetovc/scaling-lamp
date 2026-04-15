@@ -157,6 +157,47 @@ func TestAgentChatTurnAndResumeSession(t *testing.T) {
 	}
 }
 
+func TestAgentResumeChatSessionAllowsEmptyPersistedSession(t *testing.T) {
+	clock := time.Date(2026, 4, 15, 18, 40, 0, 0, time.UTC)
+	idValues := []string{"session-chat-empty-1", "evt-session-created-1"}
+	nextID := func(prefix string) string {
+		if len(idValues) == 0 {
+			t.Fatalf("unexpected id request for prefix %q", prefix)
+		}
+		id := idValues[0]
+		idValues = idValues[1:]
+		return id
+	}
+
+	agent := &runtime.Agent{
+		Config:   runtimeConfigForSmokeTest(),
+		EventLog: runtime.NewInMemoryEventLog(),
+		Projections: []projections.Projection{
+			projections.NewSessionProjection(),
+			projections.NewSessionCatalogProjection(),
+			projections.NewTranscriptProjection(),
+		},
+		Now:   func() time.Time { return clock },
+		NewID: nextID,
+	}
+
+	session, err := agent.CreateChatSession(context.Background())
+	if err != nil {
+		t.Fatalf("CreateChatSession returned error: %v", err)
+	}
+
+	resumed, err := agent.ResumeChatSession(context.Background(), session.SessionID)
+	if err != nil {
+		t.Fatalf("ResumeChatSession returned error: %v", err)
+	}
+	if resumed.SessionID != session.SessionID {
+		t.Fatalf("resumed session id = %q, want %q", resumed.SessionID, session.SessionID)
+	}
+	if len(resumed.Messages) != 0 {
+		t.Fatalf("resumed messages len = %d, want 0", len(resumed.Messages))
+	}
+}
+
 func TestAgentChatTurnExecutesPlanToolCallsAndReturnsFinalAssistantMessage(t *testing.T) {
 	t.Setenv("TEAMD_ZAI_API_KEY", "secret-token")
 
