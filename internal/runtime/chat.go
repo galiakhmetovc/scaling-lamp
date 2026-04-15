@@ -303,6 +303,16 @@ func (a *Agent) chatTimelineProjection() *projections.ChatTimelineProjection {
 	return nil
 }
 
+func (a *Agent) shellCommandProjection() *projections.ShellCommandProjection {
+	for _, projection := range a.Projections {
+		shellCommands, ok := projection.(*projections.ShellCommandProjection)
+		if ok {
+			return shellCommands
+		}
+	}
+	return nil
+}
+
 func (a *Agent) ListSessions() []projections.SessionCatalogEntry {
 	if projection := a.sessionCatalogProjection(); projection != nil {
 		return projections.SortedSessionEntries(projection.Snapshot())
@@ -313,6 +323,13 @@ func (a *Agent) ListSessions() []projections.SessionCatalogEntry {
 func (a *Agent) CurrentChatTimeline(sessionID string) []projections.ChatTimelineItem {
 	if projection := a.chatTimelineProjection(); projection != nil {
 		return projection.SnapshotForSession(sessionID)
+	}
+	return nil
+}
+
+func (a *Agent) CurrentRunningShellCommands(sessionID string) []projections.ShellCommandView {
+	if projection := a.shellCommandProjection(); projection != nil {
+		return projection.ActiveForSession(sessionID)
 	}
 	return nil
 }

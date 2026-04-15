@@ -937,6 +937,61 @@ func TestToolsViewCanKillRunningShellCommand(t *testing.T) {
 	}
 }
 
+func TestToolsViewReadsRunningCommandsFromProjection(t *testing.T) {
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "agent.yaml")
+	if err := os.WriteFile(configPath, []byte("kind: AgentConfig\nversion: v1\nid: tui-test\nspec:\n  runtime:\n    max_tool_rounds: 7\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile config: %v", err)
+	}
+
+	agent := &runtime.Agent{
+		ConfigPath: configPath,
+		Config:     config.AgentConfig{ID: "tui-test", Spec: config.AgentConfigSpec{Runtime: config.AgentRuntimeConfig{MaxToolRounds: 7}}},
+		EventLog:   runtime.NewInMemoryEventLog(),
+		Projections: []projections.Projection{
+			projections.NewSessionCatalogProjection(),
+			projections.NewTranscriptProjection(),
+			projections.NewChatTimelineProjection(),
+			projections.NewPlanHeadProjection(),
+			projections.NewActivePlanProjection(),
+			projections.NewShellCommandProjection(),
+		},
+		UIBus: runtime.NewUIEventBus(),
+		Contracts: contracts.ResolvedContracts{
+			Chat: contracts.ChatContract{
+				Output: contracts.ChatOutputPolicy{Params: contracts.ChatOutputParams{RenderMarkdown: true, MarkdownStyle: "dark"}},
+				Status: contracts.ChatStatusPolicy{Params: contracts.ChatStatusParams{ShowToolCalls: true, ShowToolResults: true, ShowPlanAfterPlanTools: true}},
+			},
+		},
+		Now:   func() time.Time { return time.Date(2026, 4, 15, 12, 10, 0, 0, time.UTC) },
+		NewID: func(prefix string) string { return prefix + "-1" },
+	}
+	m, err := newModel(context.Background(), agent, "")
+	if err != nil {
+		t.Fatalf("newModel returned error: %v", err)
+	}
+	if err := agent.RecordEvent(context.Background(), eventing.Event{
+		Kind:          eventing.EventShellCommandStarted,
+		AggregateID:   "cmd-1",
+		AggregateType: eventing.AggregateShellCommand,
+		Payload: map[string]any{
+			"session_id": m.activeSessionID,
+			"run_id":     "run-1",
+			"command":    "sleep",
+			"args":       []string{"2"},
+			"cwd":        dir,
+		},
+	}); err != nil {
+		t.Fatalf("RecordEvent shell command started: %v", err)
+	}
+	m.tab = tabTools
+	modelAfter, _ := (&m).Update(tea.WindowSizeMsg{Width: 120, Height: 40})
+	got := modelAfter.View()
+	if !strings.Contains(got, "Running Shell Commands") || !strings.Contains(got, "sleep 2") {
+		t.Fatalf("tools view missing projection-backed command: %q", got)
+	}
+}
+
 func eventSessionCreated(sessionID string) eventing.Event {
 	return eventing.Event{
 		Kind:          eventing.EventSessionCreated,

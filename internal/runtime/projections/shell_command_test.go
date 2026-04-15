@@ -22,6 +22,8 @@ func TestShellCommandProjectionTracksLifecycle(t *testing.T) {
 				"session_id": "session-1",
 				"run_id":     "run-1",
 				"command":    "go",
+				"args":       []string{"test", "./..."},
+				"cwd":        "/workspace",
 			},
 		},
 		{
@@ -43,6 +45,8 @@ func TestShellCommandProjectionTracksLifecycle(t *testing.T) {
 				"session_id": "session-1",
 				"run_id":     "run-1",
 				"command":    "go",
+				"args":       []string{"test", "./..."},
+				"cwd":        "/workspace",
 			},
 		},
 		{
@@ -88,6 +92,12 @@ func TestShellCommandProjectionTracksLifecycle(t *testing.T) {
 	if view.Status != "killed" {
 		t.Fatalf("status = %q, want killed", view.Status)
 	}
+	if len(view.Args) != 2 || view.Args[0] != "test" || view.Args[1] != "./..." {
+		t.Fatalf("args = %#v, want test ./...", view.Args)
+	}
+	if view.Cwd != "/workspace" {
+		t.Fatalf("cwd = %q, want /workspace", view.Cwd)
+	}
 	if view.NextOffset != 1 {
 		t.Fatalf("next offset = %d, want 1", view.NextOffset)
 	}
@@ -99,5 +109,8 @@ func TestShellCommandProjectionTracksLifecycle(t *testing.T) {
 	}
 	if view.KillPending {
 		t.Fatalf("kill pending = true, want false after completion")
+	}
+	if got := projection.ActiveForSession("session-1"); len(got) != 0 {
+		t.Fatalf("active commands after completion = %d, want 0", len(got))
 	}
 }

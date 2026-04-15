@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -104,6 +105,7 @@ type activeCommand struct {
 	cancel           context.CancelFunc
 	recordedOffset   int
 	terminalRecorded bool
+	completedAt      time.Time
 	meta             ExecutionMeta
 }
 
@@ -122,9 +124,15 @@ type Executor struct {
 
 	mu        sync.RWMutex
 	commands  map[string]*activeCommand
+	completed map[string]*activeCommand
 	approvals map[string]*pendingApproval
 	nextID    atomic.Uint64
 }
+
+const (
+	completedCommandRetention = 5 * time.Minute
+	maxCompletedCommands      = 64
+)
 
 func NewExecutor() *Executor {
 	return &Executor{
@@ -133,6 +141,7 @@ func NewExecutor() *Executor {
 		start:      defaultStartCommand,
 		goos:       runtime.GOOS,
 		commands:   map[string]*activeCommand{},
+		completed:  map[string]*activeCommand{},
 		approvals:  map[string]*pendingApproval{},
 	}
 }
@@ -147,6 +156,9 @@ func (e *Executor) ExecuteWithMeta(ctx context.Context, contract contracts.Shell
 	}
 	if e.commands == nil {
 		e.commands = map[string]*activeCommand{}
+	}
+	if e.completed == nil {
+		e.completed = map[string]*activeCommand{}
 	}
 	if e.approvals == nil {
 		e.approvals = map[string]*pendingApproval{}
@@ -410,6 +422,12 @@ func (e *Executor) ActiveCommands(sessionID string) []ActiveCommandView {
 	out := make([]ActiveCommandView, 0, len(e.commands))
 	for _, active := range e.commands {
 		active.mu.RLock()
+		switch active.status {
+		case "running", "killing":
+		default:
+			active.mu.RUnlock()
+			continue
+		}
 		if sessionID != "" && active.meta.SessionID != sessionID {
 			active.mu.RUnlock()
 			continue
@@ -433,7 +451,17 @@ func (e *Executor) ActiveCommands(sessionID string) []ActiveCommandView {
 		})
 		active.mu.RUnlock()
 	}
+	sort.Slice(out, func(i, j int) bool {
+		return out[i].CommandID < out[j].CommandID
+	})
 	return out
+}
+
+func (e *Executor) lookupCompletedCommand(commandID string) (*activeCommand, bool) {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+	command, ok := e.completed[commandID]
+	return command, ok
 }
 
 func (e *Executor) Approve(ctx context.Context, approvalID string) (string, error) {
@@ -469,7 +497,6 @@ func (e *Executor) waitForCommand(active *activeCommand) {
 	}
 	err := active.process.Wait()
 	active.mu.Lock()
-	defer active.mu.Unlock()
 
 	var exitCode *int
 	var errorText string
@@ -499,6 +526,46 @@ func (e *Executor) waitForCommand(active *activeCommand) {
 	}
 	active.exitCode = exitCode
 	active.errorText = errorText
+	active.completedAt = time.Now().UTC()
+	active.mu.Unlock()
+	e.archiveCompletedCommand(active)
+}
+
+func (e *Executor) archiveCompletedCommand(active *activeCommand) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	delete(e.commands, active.id)
+	if e.completed == nil {
+		e.completed = map[string]*activeCommand{}
+	}
+	e.completed[active.id] = active
+	e.reapCompletedLocked(time.Now().UTC())
+}
+
+func (e *Executor) reapCompletedLocked(now time.Time) {
+	for id, command := range e.completed {
+		if !command.completedAt.IsZero() && now.Sub(command.completedAt) > completedCommandRetention {
+			delete(e.completed, id)
+		}
+	}
+	if len(e.completed) <= maxCompletedCommands {
+		return
+	}
+	type completedEntry struct {
+		id          string
+		completedAt time.Time
+	}
+	entries := make([]completedEntry, 0, len(e.completed))
+	for id, command := range e.completed {
+		entries = append(entries, completedEntry{id: id, completedAt: command.completedAt})
+	}
+	sort.Slice(entries, func(i, j int) bool {
+		return entries[i].completedAt.Before(entries[j].completedAt)
+	})
+	for len(e.completed) > maxCompletedCommands && len(entries) > 0 {
+		delete(e.completed, entries[0].id)
+		entries = entries[1:]
+	}
 }
 
 func (e *Executor) captureOutput(active *activeCommand, stream string, reader io.ReadCloser) {
@@ -544,6 +611,8 @@ func (e *Executor) recordStarted(ctx context.Context, active *activeCommand) err
 			"run_id":     active.meta.RunID,
 			"command_id": active.id,
 			"command":    active.command,
+			"args":       append([]string{}, active.args...),
+			"cwd":        active.cwd,
 			"status":     "running",
 		},
 	})
@@ -568,6 +637,8 @@ func (e *Executor) recordApprovalRequested(ctx context.Context, approval *pendin
 			"run_id":      approval.RunID,
 			"approval_id": approval.ApprovalID,
 			"command":     approval.Command,
+			"args":        append([]string{}, approval.Args...),
+			"cwd":         approval.Cwd,
 		},
 	})
 }
@@ -708,12 +779,15 @@ func (e *Executor) recordKillRequested(ctx context.Context, active *activeComman
 
 func (e *Executor) lookupCommand(commandID string) (*activeCommand, error) {
 	e.mu.RLock()
-	defer e.mu.RUnlock()
 	active, ok := e.commands[commandID]
-	if !ok {
-		return nil, fmt.Errorf("shell command %q not found", commandID)
+	e.mu.RUnlock()
+	if ok {
+		return active, nil
 	}
-	return active, nil
+	if completed, ok := e.lookupCompletedCommand(commandID); ok {
+		return completed, nil
+	}
+	return nil, fmt.Errorf("shell command %q not found", commandID)
 }
 
 func (e *Executor) resolveInvocation(policy contracts.ShellRuntimePolicy, command string, args []string) (invocation, error) {

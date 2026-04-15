@@ -572,6 +572,79 @@ func TestExecutorDeniesPendingApproval(t *testing.T) {
 	}
 }
 
+func TestExecutorActiveCommandsExcludesCompletedCommands(t *testing.T) {
+	t.Parallel()
+
+	stdoutReader, stdoutWriter := io.Pipe()
+	stderrReader, stderrWriter := io.Pipe()
+	waitCh := make(chan error, 1)
+	process := &fakeProcess{
+		stdout: stdoutReader,
+		stderr: stderrReader,
+		wait: func() error {
+			return <-waitCh
+		},
+		kill: func() error { return nil },
+	}
+	executor := &Executor{
+		goos: "linux",
+		start: func(_ context.Context, _ string, _ string, _ []string) (processHandle, error) {
+			return process, nil
+		},
+		commands:  map[string]*activeCommand{},
+		completed: map[string]*activeCommand{},
+	}
+	contract := contracts.ShellExecutionContract{
+		Command: contracts.ShellCommandPolicy{
+			Enabled:  true,
+			Strategy: "static_allowlist",
+			Params:   contracts.ShellCommandParams{AllowedCommands: []string{"printf"}},
+		},
+		Runtime: contracts.ShellRuntimePolicy{
+			Enabled:  true,
+			Strategy: "workspace_write",
+			Params: contracts.ShellRuntimeParams{
+				Cwd:            t.TempDir(),
+				Timeout:        "5s",
+				MaxOutputBytes: 4096,
+				AllowNetwork:   true,
+			},
+		},
+	}
+
+	startOut, err := executor.ExecuteWithMeta(context.Background(), contract, "shell_start", map[string]any{
+		"command": "printf",
+	}, ExecutionMeta{SessionID: "session-1"})
+	if err != nil {
+		t.Fatalf("ExecuteWithMeta returned error: %v", err)
+	}
+	commandID := decodeField(t, startOut, "command_id")
+	if commandID == "" {
+		t.Fatalf("command_id missing from %s", startOut)
+	}
+	if got := executor.ActiveCommands("session-1"); len(got) != 1 {
+		t.Fatalf("ActiveCommands before completion = %d, want 1", len(got))
+	}
+
+	_ = stdoutWriter.Close()
+	_ = stderrWriter.Close()
+	waitCh <- nil
+	time.Sleep(20 * time.Millisecond)
+
+	if got := executor.ActiveCommands("session-1"); len(got) != 0 {
+		t.Fatalf("ActiveCommands after completion = %d, want 0", len(got))
+	}
+	pollOut, err := executor.Execute(contract, "shell_poll", map[string]any{
+		"command_id": commandID,
+	})
+	if err != nil {
+		t.Fatalf("shell_poll after completion returned error: %v", err)
+	}
+	if decodeField(t, pollOut, "status") != "completed" {
+		t.Fatalf("poll status after completion = %s, want completed", pollOut)
+	}
+}
+
 type fakeProcess struct {
 	stdout io.ReadCloser
 	stderr io.ReadCloser
