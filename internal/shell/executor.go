@@ -166,7 +166,7 @@ func (e *Executor) ExecuteWithMeta(ctx context.Context, contract contracts.Shell
 	}
 	switch toolName {
 	case "shell_exec":
-		return e.executeSync(contract, toolName, argsMap)
+		return e.executeSync(ctx, contract, toolName, argsMap)
 	case "shell_start":
 		return e.executeStart(ctx, contract, argsMap, meta)
 	case "shell_poll":
@@ -178,7 +178,10 @@ func (e *Executor) ExecuteWithMeta(ctx context.Context, contract contracts.Shell
 	}
 }
 
-func (e *Executor) executeSync(contract contracts.ShellExecutionContract, toolName string, argsMap map[string]any) (string, error) {
+func (e *Executor) executeSync(ctx context.Context, contract contracts.ShellExecutionContract, toolName string, argsMap map[string]any) (string, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	command, err := stringArg(argsMap, "command")
 	if err != nil {
 		return "", err
@@ -199,19 +202,22 @@ func (e *Executor) executeSync(contract contracts.ShellExecutionContract, toolNa
 		return "", err
 	}
 	if approvalRequired, message := e.evaluateApproval(contract.Approval, command, args); approvalRequired {
-		return e.queueApproval(context.Background(), toolName, contract, ExecutionMeta{}, command, args, cwd, invocation, message)
+		return e.queueApproval(ctx, toolName, contract, ExecutionMeta{}, command, args, cwd, invocation, message)
 	}
 	timeout, err := parseTimeout(contract.Runtime)
 	if err != nil {
 		return "", err
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	runCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	start := time.Now()
-	result, err := e.run(ctx, cwd, invocation.executable, invocation.args)
+	result, err := e.run(runCtx, cwd, invocation.executable, invocation.args)
 	duration := time.Since(start)
-	if ctx.Err() == context.DeadlineExceeded {
+	if runCtx.Err() == context.DeadlineExceeded {
 		return "", fmt.Errorf("shell command timed out")
+	}
+	if runCtx.Err() == context.Canceled {
+		return "", fmt.Errorf("shell command canceled")
 	}
 	maxOutput := contract.Runtime.Params.MaxOutputBytes
 	if maxOutput > 0 && len(result.stdout)+len(result.stderr) > maxOutput {
@@ -268,13 +274,16 @@ func (e *Executor) executeStart(ctx context.Context, contract contracts.ShellExe
 }
 
 func (e *Executor) startCommand(ctx context.Context, contract contracts.ShellExecutionContract, meta ExecutionMeta, commandID string, command string, args []string, cwd string, invocation invocation, toolName string, beforeStart func() error) (string, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	timeout, err := parseTimeout(contract.Runtime)
 	if err != nil {
 		return "", err
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), timeout)
-	proc, err := e.start(ctx, cwd, invocation.executable, invocation.args)
+	runCtx, cancel := context.WithTimeout(ctx, timeout)
+	proc, err := e.start(runCtx, cwd, invocation.executable, invocation.args)
 	if err != nil {
 		cancel()
 		return "", fmt.Errorf("start shell command: %w", err)

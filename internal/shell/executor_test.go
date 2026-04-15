@@ -7,6 +7,7 @@ import (
 	"errors"
 	"io"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -789,6 +790,46 @@ func TestExecutorApproveKeepsPendingApprovalWhenStartFails(t *testing.T) {
 		if kind == eventing.EventShellCommandApprovalGranted {
 			t.Fatalf("recorded approval_granted despite failed start: %#v", recorded)
 		}
+	}
+}
+
+func TestExecutorSyncHonorsCanceledContext(t *testing.T) {
+	t.Parallel()
+
+	executor := &Executor{
+		goos: "linux",
+		run: func(ctx context.Context, _ string, _ string, _ []string) (runResult, error) {
+			<-ctx.Done()
+			return runResult{}, ctx.Err()
+		},
+		commands:  map[string]*activeCommand{},
+		completed: map[string]*activeCommand{},
+	}
+	contract := contracts.ShellExecutionContract{
+		Command: contracts.ShellCommandPolicy{
+			Enabled:  true,
+			Strategy: "static_allowlist",
+			Params:   contracts.ShellCommandParams{AllowedCommands: []string{"printf"}},
+		},
+		Runtime: contracts.ShellRuntimePolicy{
+			Enabled:  true,
+			Strategy: "workspace_write",
+			Params: contracts.ShellRuntimeParams{
+				Cwd:            t.TempDir(),
+				Timeout:        "5s",
+				MaxOutputBytes: 4096,
+				AllowNetwork:   true,
+			},
+		},
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	_, err := executor.ExecuteWithMeta(ctx, contract, "shell_exec", map[string]any{
+		"command": "printf",
+	}, ExecutionMeta{})
+	if err == nil || !strings.Contains(err.Error(), "canceled") {
+		t.Fatalf("ExecuteWithMeta error = %v, want canceled", err)
 	}
 }
 
