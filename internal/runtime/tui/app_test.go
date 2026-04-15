@@ -17,6 +17,7 @@ import (
 	"teamd/internal/runtime"
 	"teamd/internal/runtime/eventing"
 	"teamd/internal/runtime/projections"
+	"teamd/internal/shell"
 )
 
 func TestNewModelCreatesSessionAndRendersTopTabs(t *testing.T) {
@@ -491,7 +492,7 @@ func TestF6TogglesMouseCaptureAndFooterIndicator(t *testing.T) {
 	}
 	gotTypes := []string{fmt.Sprintf("%T", batch[0]()), fmt.Sprintf("%T", batch[1]())}
 	wantOff := map[string]bool{
-		fmt.Sprintf("%T", tea.DisableMouse()): true,
+		fmt.Sprintf("%T", tea.DisableMouse()):  true,
 		fmt.Sprintf("%T", tea.ExitAltScreen()): true,
 	}
 	for _, got := range gotTypes {
@@ -519,7 +520,7 @@ func TestF6TogglesMouseCaptureAndFooterIndicator(t *testing.T) {
 	gotTypes = []string{fmt.Sprintf("%T", batch[0]()), fmt.Sprintf("%T", batch[1]())}
 	wantOn := map[string]bool{
 		fmt.Sprintf("%T", tea.EnableMouseCellMotion()): true,
-		fmt.Sprintf("%T", tea.EnterAltScreen()): true,
+		fmt.Sprintf("%T", tea.EnterAltScreen()):        true,
 	}
 	for _, got := range gotTypes {
 		if !wantOn[got] {
@@ -792,6 +793,77 @@ func TestPlanArrowNavigationChangesSelectedTaskAndViewportFitsPane(t *testing.T)
 		if !strings.Contains(firstLine, tab) {
 			t.Fatalf("top tabs missing %q after plan render: %q", tab, firstLine)
 		}
+	}
+}
+
+func TestToolsViewShowsPendingShellApproval(t *testing.T) {
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "agent.yaml")
+	if err := os.WriteFile(configPath, []byte("kind: AgentConfig\nversion: v1\nid: tui-test\nspec:\n  runtime:\n    max_tool_rounds: 7\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile config: %v", err)
+	}
+
+	agent := &runtime.Agent{
+		ConfigPath:   configPath,
+		Config:       config.AgentConfig{ID: "tui-test", Spec: config.AgentConfigSpec{Runtime: config.AgentRuntimeConfig{MaxToolRounds: 7}}},
+		EventLog:     runtime.NewInMemoryEventLog(),
+		Projections:  []projections.Projection{projections.NewSessionCatalogProjection(), projections.NewTranscriptProjection(), projections.NewChatTimelineProjection(), projections.NewPlanHeadProjection(), projections.NewActivePlanProjection()},
+		UIBus:        runtime.NewUIEventBus(),
+		ShellRuntime: shell.NewExecutor(),
+		Contracts: contracts.ResolvedContracts{
+			Chat: contracts.ChatContract{
+				Output: contracts.ChatOutputPolicy{Params: contracts.ChatOutputParams{RenderMarkdown: true, MarkdownStyle: "dark"}},
+				Status: contracts.ChatStatusPolicy{Params: contracts.ChatStatusParams{ShowToolCalls: true, ShowToolResults: true, ShowPlanAfterPlanTools: true}},
+			},
+			ShellExecution: contracts.ShellExecutionContract{
+				Command: contracts.ShellCommandPolicy{
+					Enabled:  true,
+					Strategy: "static_allowlist",
+					Params:   contracts.ShellCommandParams{AllowedCommands: []string{"go"}},
+				},
+				Approval: contracts.ShellApprovalPolicy{
+					Enabled:  true,
+					Strategy: "always_require",
+				},
+				Runtime: contracts.ShellRuntimePolicy{
+					Enabled:  true,
+					Strategy: "workspace_write",
+					Params: contracts.ShellRuntimeParams{
+						Cwd:            dir,
+						Timeout:        "5s",
+						MaxOutputBytes: 4096,
+						AllowNetwork:   true,
+					},
+				},
+			},
+		},
+		Now:   func() time.Time { return time.Date(2026, 4, 15, 12, 0, 0, 0, time.UTC) },
+		NewID: func(prefix string) string { return prefix + "-1" },
+	}
+
+	m, err := newModel(context.Background(), agent, "")
+	if err != nil {
+		t.Fatalf("newModel returned error: %v", err)
+	}
+
+	if _, err := agent.ShellRuntime.ExecuteWithMeta(context.Background(), agent.Contracts.ShellExecution, "shell_start", map[string]any{
+		"command": "go",
+		"args":    []any{"test"},
+	}, shell.ExecutionMeta{SessionID: m.activeSessionID, RunID: "run-1"}); err != nil {
+		t.Fatalf("ExecuteWithMeta returned error: %v", err)
+	}
+
+	m.tab = tabTools
+	modelAfter, _ := (&m).Update(tea.WindowSizeMsg{Width: 120, Height: 40})
+	got := modelAfter.View()
+	if !strings.Contains(got, "Pending Approvals") {
+		t.Fatalf("tools view missing approvals section: %q", got)
+	}
+	if !strings.Contains(got, "shell_start") {
+		t.Fatalf("tools view missing approval tool name: %q", got)
+	}
+	if !strings.Contains(got, "approve") {
+		t.Fatalf("tools details missing approval actions: %q", got)
 	}
 }
 

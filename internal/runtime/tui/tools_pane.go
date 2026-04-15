@@ -1,11 +1,14 @@
 package tui
 
 import (
+	"context"
 	"fmt"
 	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+
+	"teamd/internal/shell"
 )
 
 func (m *model) updateTools(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
@@ -13,18 +16,49 @@ func (m *model) updateTools(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if state == nil {
 		return m, nil
 	}
+	approvals := m.currentApprovals()
 	switch msg.String() {
 	case "pgup":
 		state.ToolsView.LineUp(max(1, state.ToolsView.Height/2))
 	case "pgdown":
 		state.ToolsView.LineDown(max(1, state.ToolsView.Height/2))
+	case "a":
+		if len(approvals) > 0 && m.toolsApprovalFocus && m.agent.ShellRuntime != nil {
+			if _, err := m.agent.ShellRuntime.Approve(context.Background(), approvals[m.approvalCursor].ApprovalID); err != nil {
+				m.errMessage = err.Error()
+			} else {
+				m.statusMessage = "shell approval granted"
+			}
+		}
+	case "x":
+		if len(approvals) > 0 && m.toolsApprovalFocus && m.agent.ShellRuntime != nil {
+			if err := m.agent.ShellRuntime.Deny(context.Background(), approvals[m.approvalCursor].ApprovalID); err != nil {
+				m.errMessage = err.Error()
+			} else {
+				m.statusMessage = "shell approval denied"
+			}
+		}
 	case "up", "k":
-		if m.toolCursor < len(state.ToolLog)-1 {
+		if len(approvals) > 0 && m.toolsApprovalFocus {
+			if m.approvalCursor > 0 {
+				m.approvalCursor--
+			}
+		} else if m.toolCursor < len(state.ToolLog)-1 {
 			m.toolCursor++
+		} else if len(approvals) > 0 {
+			m.toolsApprovalFocus = true
 		}
 	case "down", "j":
-		if m.toolCursor > 0 {
+		if len(approvals) > 0 && m.toolsApprovalFocus {
+			if m.approvalCursor < len(approvals)-1 {
+				m.approvalCursor++
+			} else if len(state.ToolLog) > 0 {
+				m.toolsApprovalFocus = false
+			}
+		} else if m.toolCursor > 0 {
 			m.toolCursor--
+		} else if len(approvals) > 0 {
+			m.toolsApprovalFocus = true
 		}
 	}
 	return m, nil
@@ -51,6 +85,20 @@ func (m *model) renderToolsViewport(state *sessionState) {
 		return
 	}
 	lines := []string{"Tools", ""}
+	approvals := m.currentApprovals()
+	if len(approvals) > 0 {
+		lines = append(lines, "Pending Approvals")
+		for i, approval := range approvals {
+			line := fmt.Sprintf("[%s] %s", approval.ToolName, approval.Command)
+			if m.toolsApprovalFocus && i == m.approvalCursor {
+				line = "> " + line
+			} else {
+				line = "  " + line
+			}
+			lines = append(lines, line)
+		}
+		lines = append(lines, "")
+	}
 	m.mouseToolTop = len(lines)
 	entries := reverseToolEntries(state.ToolLog)
 	if m.toolCursor >= len(entries) && len(entries) > 0 {
@@ -74,6 +122,21 @@ func (m *model) renderToolsViewport(state *sessionState) {
 }
 
 func (m *model) renderToolDetails(state *sessionState) string {
+	approvals := m.currentApprovals()
+	if len(approvals) > 0 && m.toolsApprovalFocus && m.approvalCursor >= 0 && m.approvalCursor < len(approvals) {
+		approval := approvals[m.approvalCursor]
+		return strings.Join([]string{
+			"Pending Approval",
+			"",
+			"Tool: " + approval.ToolName,
+			"Command: " + approval.Command,
+			"Args: " + strings.Join(approval.Args, " "),
+			"Cwd: " + approval.Cwd,
+			"Message: " + approval.Message,
+			"",
+			"`a` approve  `x` deny",
+		}, "\n")
+	}
 	entries := reverseToolEntries(state.ToolLog)
 	if len(entries) == 0 || m.toolCursor < 0 || m.toolCursor >= len(entries) {
 		return "Tool Details\n\nNo tool activity yet."
@@ -96,6 +159,27 @@ func (m *model) renderToolDetails(state *sessionState) string {
 	}
 	lines = append(lines, "", "PgUp/PgDn scroll list, Up/Down select")
 	return strings.Join(lines, "\n")
+}
+
+func (m *model) currentApprovals() []shell.PendingApprovalView {
+	if m.agent == nil || m.agent.ShellRuntime == nil {
+		return nil
+	}
+	state := m.currentSessionState()
+	if state == nil || state.Session == nil {
+		return nil
+	}
+	approvals := m.agent.ShellRuntime.PendingApprovals(state.Session.SessionID)
+	if m.approvalCursor >= len(approvals) && len(approvals) > 0 {
+		m.approvalCursor = len(approvals) - 1
+	}
+	if len(approvals) == 0 {
+		m.approvalCursor = 0
+		m.toolsApprovalFocus = false
+	} else if len(state.ToolLog) == 0 {
+		m.toolsApprovalFocus = true
+	}
+	return approvals
 }
 
 func reverseToolEntries(entries []toolLogEntry) []toolLogEntry {

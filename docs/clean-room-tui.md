@@ -30,7 +30,10 @@ Current behavior:
   - selected task details include computed state and latest notes
 - `Tools`
   - shows tool lifecycle events for the active session
+  - shows pending shell approvals before normal tool log entries
   - includes a selected-entry details pane with summarized args/result/error text
+  - `a` approves the selected pending shell command
+  - `x` denies the selected pending shell command
 - `Settings`
   - `Session Overrides`
   - `Config Form`

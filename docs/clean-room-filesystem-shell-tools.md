@@ -136,8 +136,22 @@ Current async shell lifecycle:
 4. `shell_kill` requests termination for a running command
 5. active command state is held inside the runtime shell executor for the life of the agent process
 
+Current shell approval lifecycle:
+
+1. `shell_exec` and `shell_start` also evaluate `ShellApprovalPolicy`
+2. when approval is required, runtime returns `status: approval_pending`
+3. the payload includes:
+   - `approval_id`
+   - `command_id`
+   - `message`
+4. operator approval/denial is handled through the TUI `Tools` pane
+5. `Approve(...)` starts the reserved command and `Deny(...)` persists a denial result
+
 Current persisted shell lifecycle events:
 
+- `shell.command.approval_requested`
+- `shell.command.approval_granted`
+- `shell.command.approval_denied`
 - `shell.command.started`
 - `shell.command.output.chunk`
 - `shell.command.kill_requested`
@@ -146,7 +160,7 @@ Current persisted shell lifecycle events:
 Current persisted shell projection:
 
 - `shell_command`
-- tracks command status, latest offset, latest output chunk, exit code, and kill-pending state
+- tracks approval state, command status, latest offset, latest output chunk, exit code, and kill-pending state
 
 ## Current Limits
 

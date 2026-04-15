@@ -367,6 +367,125 @@ func TestExecutorStartPollAndKillCommandLifecycle(t *testing.T) {
 	}
 }
 
+func TestExecutorQueuesApprovalAndStartsAfterApprove(t *testing.T) {
+	t.Parallel()
+
+	stdoutReader, stdoutWriter := io.Pipe()
+	stderrReader, stderrWriter := io.Pipe()
+	waitCh := make(chan error, 1)
+	process := &fakeProcess{
+		stdout: stdoutReader,
+		stderr: stderrReader,
+		wait: func() error {
+			return <-waitCh
+		},
+		kill: func() error { return nil },
+	}
+	executor := &Executor{
+		goos: "linux",
+		start: func(_ context.Context, _ string, executable string, args []string) (processHandle, error) {
+			return process, nil
+		},
+		commands:  map[string]*activeCommand{},
+		approvals: map[string]*pendingApproval{},
+	}
+	contract := contracts.ShellExecutionContract{
+		Command: contracts.ShellCommandPolicy{
+			Enabled:  true,
+			Strategy: "static_allowlist",
+			Params:   contracts.ShellCommandParams{AllowedCommands: []string{"go"}},
+		},
+		Approval: contracts.ShellApprovalPolicy{
+			Enabled:  true,
+			Strategy: "always_require",
+			Params:   contracts.ShellApprovalParams{ApprovalMessageTemplate: "approve {{command}}"},
+		},
+		Runtime: contracts.ShellRuntimePolicy{
+			Enabled:  true,
+			Strategy: "workspace_write",
+			Params: contracts.ShellRuntimeParams{
+				Cwd:            t.TempDir(),
+				Timeout:        "5s",
+				MaxOutputBytes: 4096,
+			},
+		},
+	}
+
+	startOut, err := executor.ExecuteWithMeta(context.Background(), contract, "shell_start", map[string]any{
+		"command": "go",
+		"args":    []any{"test"},
+	}, ExecutionMeta{SessionID: "session-1", RunID: "run-1"})
+	if err != nil {
+		t.Fatalf("ExecuteWithMeta returned error: %v", err)
+	}
+	if decodeField(t, startOut, "status") != "approval_pending" {
+		t.Fatalf("status = %s, want approval_pending", startOut)
+	}
+	approvalID := decodeField(t, startOut, "approval_id")
+	if approvalID == "" {
+		t.Fatalf("approval_id missing: %s", startOut)
+	}
+	if len(executor.PendingApprovals("session-1")) != 1 {
+		t.Fatalf("pending approvals = %d, want 1", len(executor.PendingApprovals("session-1")))
+	}
+
+	approveOut, err := executor.Approve(context.Background(), approvalID)
+	if err != nil {
+		t.Fatalf("Approve returned error: %v", err)
+	}
+	if decodeField(t, approveOut, "status") != "running" {
+		t.Fatalf("approve status = %s, want running", approveOut)
+	}
+
+	_, _ = io.Copy(stdoutWriter, bytes.NewBufferString("ok\n"))
+	_ = stdoutWriter.Close()
+	_ = stderrWriter.Close()
+	waitCh <- nil
+}
+
+func TestExecutorDeniesPendingApproval(t *testing.T) {
+	t.Parallel()
+
+	executor := &Executor{
+		goos:      "linux",
+		commands:  map[string]*activeCommand{},
+		approvals: map[string]*pendingApproval{},
+	}
+	contract := contracts.ShellExecutionContract{
+		Command: contracts.ShellCommandPolicy{
+			Enabled:  true,
+			Strategy: "static_allowlist",
+			Params:   contracts.ShellCommandParams{AllowedCommands: []string{"go"}},
+		},
+		Approval: contracts.ShellApprovalPolicy{
+			Enabled:  true,
+			Strategy: "always_require",
+		},
+		Runtime: contracts.ShellRuntimePolicy{
+			Enabled:  true,
+			Strategy: "workspace_write",
+			Params: contracts.ShellRuntimeParams{
+				Cwd:            t.TempDir(),
+				Timeout:        "5s",
+				MaxOutputBytes: 4096,
+			},
+		},
+	}
+	startOut, err := executor.ExecuteWithMeta(context.Background(), contract, "shell_start", map[string]any{
+		"command": "go",
+	}, ExecutionMeta{SessionID: "session-1"})
+	if err != nil {
+		t.Fatalf("ExecuteWithMeta returned error: %v", err)
+	}
+	approvalID := decodeField(t, startOut, "approval_id")
+	if err := executor.Deny(context.Background(), approvalID); err != nil {
+		t.Fatalf("Deny returned error: %v", err)
+	}
+	if len(executor.PendingApprovals("session-1")) != 0 {
+		t.Fatalf("pending approvals still present after deny")
+	}
+}
+
 type fakeProcess struct {
 	stdout io.ReadCloser
 	stderr io.ReadCloser

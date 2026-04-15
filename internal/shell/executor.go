@@ -62,6 +62,18 @@ type ExecutionMeta struct {
 	NewID       func(string) string
 }
 
+type PendingApprovalView struct {
+	ApprovalID string
+	CommandID  string
+	SessionID  string
+	RunID      string
+	ToolName   string
+	Command    string
+	Args       []string
+	Cwd        string
+	Message    string
+}
+
 type activeCommand struct {
 	mu               sync.RWMutex
 	id               string
@@ -81,15 +93,23 @@ type activeCommand struct {
 	meta             ExecutionMeta
 }
 
+type pendingApproval struct {
+	PendingApprovalView
+	contract   contracts.ShellExecutionContract
+	invocation invocation
+	meta       ExecutionMeta
+}
+
 type Executor struct {
 	run        runFunc
 	lookupPath lookupPathFunc
 	start      startFunc
 	goos       string
 
-	mu       sync.RWMutex
-	commands map[string]*activeCommand
-	nextID   atomic.Uint64
+	mu        sync.RWMutex
+	commands  map[string]*activeCommand
+	approvals map[string]*pendingApproval
+	nextID    atomic.Uint64
 }
 
 func NewExecutor() *Executor {
@@ -99,6 +119,7 @@ func NewExecutor() *Executor {
 		start:      defaultStartCommand,
 		goos:       runtime.GOOS,
 		commands:   map[string]*activeCommand{},
+		approvals:  map[string]*pendingApproval{},
 	}
 }
 
@@ -112,6 +133,9 @@ func (e *Executor) ExecuteWithMeta(ctx context.Context, contract contracts.Shell
 	}
 	if e.commands == nil {
 		e.commands = map[string]*activeCommand{}
+	}
+	if e.approvals == nil {
+		e.approvals = map[string]*pendingApproval{}
 	}
 	switch toolName {
 	case "shell_exec":
@@ -146,6 +170,9 @@ func (e *Executor) executeSync(contract contracts.ShellExecutionContract, toolNa
 	invocation, err := e.resolveInvocation(contract.Runtime, command, args)
 	if err != nil {
 		return "", err
+	}
+	if approvalRequired, message := e.evaluateApproval(contract.Approval, command, args); approvalRequired {
+		return e.queueApproval(context.Background(), toolName, contract, ExecutionMeta{}, command, args, cwd, invocation, message)
 	}
 	timeout, err := parseTimeout(contract.Runtime)
 	if err != nil {
@@ -207,6 +234,13 @@ func (e *Executor) executeStart(ctx context.Context, contract contracts.ShellExe
 	if err != nil {
 		return "", err
 	}
+	if approvalRequired, message := e.evaluateApproval(contract.Approval, command, args); approvalRequired {
+		return e.queueApproval(ctx, "shell_start", contract, meta, command, args, cwd, invocation, message)
+	}
+	return e.startCommand(ctx, contract, meta, command, args, cwd, invocation, "shell_start")
+}
+
+func (e *Executor) startCommand(ctx context.Context, contract contracts.ShellExecutionContract, meta ExecutionMeta, command string, args []string, cwd string, invocation invocation, toolName string) (string, error) {
 	timeout, err := parseTimeout(contract.Runtime)
 	if err != nil {
 		return "", err
@@ -257,7 +291,7 @@ func (e *Executor) executeStart(ctx context.Context, contract contracts.ShellExe
 
 	return jsonText(map[string]any{
 		"status":      "running",
-		"tool":        "shell_start",
+		"tool":        toolName,
 		"command_id":  commandID,
 		"command":     command,
 		"args":        args,
@@ -343,6 +377,46 @@ func (e *Executor) executeKill(ctx context.Context, argsMap map[string]any) (str
 	}), nil
 }
 
+func (e *Executor) PendingApprovals(sessionID string) []PendingApprovalView {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+	out := make([]PendingApprovalView, 0, len(e.approvals))
+	for _, approval := range e.approvals {
+		if sessionID != "" && approval.SessionID != sessionID {
+			continue
+		}
+		out = append(out, approval.PendingApprovalView)
+	}
+	return out
+}
+
+func (e *Executor) Approve(ctx context.Context, approvalID string) (string, error) {
+	e.mu.Lock()
+	approval, ok := e.approvals[approvalID]
+	if !ok {
+		e.mu.Unlock()
+		return "", fmt.Errorf("shell approval %q not found", approvalID)
+	}
+	delete(e.approvals, approvalID)
+	e.mu.Unlock()
+	if err := e.recordApprovalGranted(ctx, approval); err != nil {
+		return "", err
+	}
+	return e.startCommand(ctx, approval.contract, approval.meta, approval.Command, approval.Args, approval.Cwd, approval.invocation, approval.ToolName)
+}
+
+func (e *Executor) Deny(ctx context.Context, approvalID string) error {
+	e.mu.Lock()
+	approval, ok := e.approvals[approvalID]
+	if !ok {
+		e.mu.Unlock()
+		return fmt.Errorf("shell approval %q not found", approvalID)
+	}
+	delete(e.approvals, approvalID)
+	e.mu.Unlock()
+	return e.recordApprovalDenied(ctx, approval, "shell command denied by operator")
+}
+
 func (e *Executor) waitForCommand(active *activeCommand) {
 	if active.cancel != nil {
 		defer active.cancel()
@@ -425,6 +499,74 @@ func (e *Executor) recordStarted(ctx context.Context, active *activeCommand) err
 			"command_id": active.id,
 			"command":    active.command,
 			"status":     "running",
+		},
+	})
+}
+
+func (e *Executor) recordApprovalRequested(ctx context.Context, approval *pendingApproval) error {
+	if approval.meta.RecordEvent == nil {
+		return nil
+	}
+	return approval.meta.RecordEvent(ctx, eventing.Event{
+		ID:            metaID(approval.meta, "evt-shell-command-approval-requested"),
+		Kind:          eventing.EventShellCommandApprovalRequested,
+		OccurredAt:    metaNow(approval.meta),
+		AggregateID:   approval.CommandID,
+		AggregateType: eventing.AggregateShellCommand,
+		Source:        approval.meta.Source,
+		ActorID:       approval.meta.ActorID,
+		ActorType:     firstNonEmpty(approval.meta.ActorType, "agent"),
+		TraceSummary:  "shell command approval requested",
+		Payload: map[string]any{
+			"session_id":  approval.SessionID,
+			"run_id":      approval.RunID,
+			"approval_id": approval.ApprovalID,
+			"command":     approval.Command,
+		},
+	})
+}
+
+func (e *Executor) recordApprovalGranted(ctx context.Context, approval *pendingApproval) error {
+	if approval.meta.RecordEvent == nil {
+		return nil
+	}
+	return approval.meta.RecordEvent(ctx, eventing.Event{
+		ID:            metaID(approval.meta, "evt-shell-command-approval-granted"),
+		Kind:          eventing.EventShellCommandApprovalGranted,
+		OccurredAt:    metaNow(approval.meta),
+		AggregateID:   approval.CommandID,
+		AggregateType: eventing.AggregateShellCommand,
+		Source:        approval.meta.Source,
+		ActorID:       approval.meta.ActorID,
+		ActorType:     "operator",
+		TraceSummary:  "shell command approval granted",
+		Payload: map[string]any{
+			"session_id":  approval.SessionID,
+			"run_id":      approval.RunID,
+			"approval_id": approval.ApprovalID,
+		},
+	})
+}
+
+func (e *Executor) recordApprovalDenied(ctx context.Context, approval *pendingApproval, reason string) error {
+	if approval.meta.RecordEvent == nil {
+		return nil
+	}
+	return approval.meta.RecordEvent(ctx, eventing.Event{
+		ID:            metaID(approval.meta, "evt-shell-command-approval-denied"),
+		Kind:          eventing.EventShellCommandApprovalDenied,
+		OccurredAt:    metaNow(approval.meta),
+		AggregateID:   approval.CommandID,
+		AggregateType: eventing.AggregateShellCommand,
+		Source:        approval.meta.Source,
+		ActorID:       approval.meta.ActorID,
+		ActorType:     "operator",
+		TraceSummary:  "shell command approval denied",
+		Payload: map[string]any{
+			"session_id":  approval.SessionID,
+			"run_id":      approval.RunID,
+			"approval_id": approval.ApprovalID,
+			"reason":      reason,
 		},
 	})
 }
@@ -759,6 +901,72 @@ func optionalIntArg(args map[string]any, key string) (int, error) {
 func jsonText(value any) string {
 	data, _ := json.Marshal(value)
 	return string(data)
+}
+
+func (e *Executor) evaluateApproval(policy contracts.ShellApprovalPolicy, command string, args []string) (bool, string) {
+	if !policy.Enabled {
+		return false, ""
+	}
+	full := strings.TrimSpace(strings.Join(append([]string{command}, args...), " "))
+	switch policy.Strategy {
+	case "always_allow":
+		return false, ""
+	case "always_require":
+		return true, approvalMessage(policy, full)
+	case "require_for_patterns":
+		for _, pattern := range policy.Params.Patterns {
+			if pattern != "" && strings.Contains(full, pattern) {
+				return true, approvalMessage(policy, full)
+			}
+		}
+		return false, ""
+	default:
+		return false, ""
+	}
+}
+
+func approvalMessage(policy contracts.ShellApprovalPolicy, full string) string {
+	if strings.TrimSpace(policy.Params.ApprovalMessageTemplate) != "" {
+		return strings.ReplaceAll(policy.Params.ApprovalMessageTemplate, "{{command}}", full)
+	}
+	return "shell command requires operator approval: " + full
+}
+
+func (e *Executor) queueApproval(ctx context.Context, toolName string, contract contracts.ShellExecutionContract, meta ExecutionMeta, command string, args []string, cwd string, invocation invocation, message string) (string, error) {
+	commandID := fmt.Sprintf("cmd-%d", e.nextID.Add(1))
+	approvalID := fmt.Sprintf("approval-%d", e.nextID.Add(1))
+	approval := &pendingApproval{
+		PendingApprovalView: PendingApprovalView{
+			ApprovalID: approvalID,
+			CommandID:  commandID,
+			SessionID:  meta.SessionID,
+			RunID:      meta.RunID,
+			ToolName:   toolName,
+			Command:    command,
+			Args:       append([]string{}, args...),
+			Cwd:        cwd,
+			Message:    message,
+		},
+		contract:   contract,
+		invocation: invocation,
+		meta:       meta,
+	}
+	e.mu.Lock()
+	e.approvals[approvalID] = approval
+	e.mu.Unlock()
+	if err := e.recordApprovalRequested(ctx, approval); err != nil {
+		return "", err
+	}
+	return jsonText(map[string]any{
+		"status":      "approval_pending",
+		"tool":        toolName,
+		"approval_id": approvalID,
+		"command_id":  commandID,
+		"command":     command,
+		"args":        args,
+		"cwd":         cwd,
+		"message":     message,
+	}), nil
 }
 
 func isExitError(err error) bool {

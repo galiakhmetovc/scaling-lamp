@@ -14,6 +14,27 @@ func TestShellCommandProjectionTracksLifecycle(t *testing.T) {
 	projection := projections.NewShellCommandProjection()
 	events := []eventing.Event{
 		{
+			Kind:          eventing.EventShellCommandApprovalRequested,
+			OccurredAt:    time.Date(2026, 4, 15, 18, 29, 0, 0, time.UTC),
+			AggregateID:   "cmd-1",
+			AggregateType: eventing.AggregateShellCommand,
+			Payload: map[string]any{
+				"session_id": "session-1",
+				"run_id":     "run-1",
+				"command":    "go",
+			},
+		},
+		{
+			Kind:          eventing.EventShellCommandApprovalGranted,
+			OccurredAt:    time.Date(2026, 4, 15, 18, 29, 30, 0, time.UTC),
+			AggregateID:   "cmd-1",
+			AggregateType: eventing.AggregateShellCommand,
+			Payload: map[string]any{
+				"session_id": "session-1",
+				"run_id":     "run-1",
+			},
+		},
+		{
 			Kind:          eventing.EventShellCommandStarted,
 			OccurredAt:    time.Date(2026, 4, 15, 18, 30, 0, 0, time.UTC),
 			AggregateID:   "cmd-1",

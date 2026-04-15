@@ -41,6 +41,31 @@ func (p *ShellCommandProjection) Apply(event eventing.Event) error {
 		p.snapshot.Commands = map[string]ShellCommandView{}
 	}
 	switch event.Kind {
+	case eventing.EventShellCommandApprovalRequested:
+		view := ShellCommandView{
+			CommandID: event.AggregateID,
+			SessionID: stringPayload(event.Payload, "session_id"),
+			RunID:     stringPayload(event.Payload, "run_id"),
+			Command:   stringPayload(event.Payload, "command"),
+			Status:    "approval_pending",
+		}
+		p.snapshot.Commands[event.AggregateID] = view
+	case eventing.EventShellCommandApprovalGranted:
+		view := p.snapshot.Commands[event.AggregateID]
+		view.CommandID = event.AggregateID
+		view.SessionID = firstNonEmpty(view.SessionID, stringPayload(event.Payload, "session_id"))
+		view.RunID = firstNonEmpty(view.RunID, stringPayload(event.Payload, "run_id"))
+		view.Status = "approved"
+		p.snapshot.Commands[event.AggregateID] = view
+	case eventing.EventShellCommandApprovalDenied:
+		view := p.snapshot.Commands[event.AggregateID]
+		view.CommandID = event.AggregateID
+		view.SessionID = firstNonEmpty(view.SessionID, stringPayload(event.Payload, "session_id"))
+		view.RunID = firstNonEmpty(view.RunID, stringPayload(event.Payload, "run_id"))
+		view.Status = "approval_denied"
+		view.Error = firstNonEmpty(stringPayload(event.Payload, "reason"), "shell command denied by operator")
+		view.KillPending = false
+		p.snapshot.Commands[event.AggregateID] = view
 	case eventing.EventShellCommandStarted:
 		view := ShellCommandView{
 			CommandID: event.AggregateID,

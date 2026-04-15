@@ -80,47 +80,49 @@ type configFormDraft struct {
 }
 
 type model struct {
-	ctx             context.Context
-	agent           *runtime.Agent
-	width           int
-	height          int
-	tab             tabIndex
-	sessions        map[string]*sessionState
-	sessionOrder    []string
-	activeSessionID string
-	sessionCursor   int
-	toolCursor      int
+	ctx                context.Context
+	agent              *runtime.Agent
+	width              int
+	height             int
+	tab                tabIndex
+	sessions           map[string]*sessionState
+	sessionOrder       []string
+	activeSessionID    string
+	sessionCursor      int
+	toolCursor         int
+	approvalCursor     int
+	toolsApprovalFocus bool
 
 	uiSubID int
 	uiCh    <-chan runtime.UIEvent
 
-	rawFiles        []string
-	rawCursor       int
-	rawEditor       textarea.Model
-	rawLoadedPath   string
-	settingsMode    settingsMode
-	sessionField    int
-	formField       int
-	formDraft       configFormDraft
-	formMaxRounds   textinput.Model
-	formStyle       textinput.Model
-	planView        viewport.Model
-	settingsView    viewport.Model
-	planMode        planEditorMode
-	planCursor      int
-	planGoalInput   textinput.Model
-	planDescInput   textinput.Model
-	planDepsInput   textinput.Model
-	planNoteInput   textinput.Model
-	planStatusIndex int
+	rawFiles            []string
+	rawCursor           int
+	rawEditor           textarea.Model
+	rawLoadedPath       string
+	settingsMode        settingsMode
+	sessionField        int
+	formField           int
+	formDraft           configFormDraft
+	formMaxRounds       textinput.Model
+	formStyle           textinput.Model
+	planView            viewport.Model
+	settingsView        viewport.Model
+	planMode            planEditorMode
+	planCursor          int
+	planGoalInput       textinput.Model
+	planDescInput       textinput.Model
+	planDepsInput       textinput.Model
+	planNoteInput       textinput.Model
+	planStatusIndex     int
 	mouseCaptureEnabled bool
-	statusMessage   string
-	errMessage      string
-	mouseTabBounds  []tabBound
-	mouseSessionTop int
-	mouseToolTop    int
-	mousePlanTop    int
-	mousePlanLeftWidth int
+	statusMessage       string
+	errMessage          string
+	mouseTabBounds      []tabBound
+	mouseSessionTop     int
+	mouseToolTop        int
+	mousePlanTop        int
+	mousePlanLeftWidth  int
 }
 
 type tabBound struct {
