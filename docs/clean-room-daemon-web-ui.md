@@ -272,12 +272,15 @@ Must preserve current TUI semantics:
 
 - read from `plan_head`
 - form-based editing through daemon actions
+- markdown-aware goal, selected task details, and latest task note rendering
+- explicit selected-task state in the client instead of “first task only”
 
 ### Tools
 
 - pending approvals
 - running shell commands
-- tool log and details
+- delegate summaries
+- richer compact detail cards for approvals, commands, and tool log
 - approve/deny/kill actions
 
 ### Settings
@@ -285,6 +288,8 @@ Must preserve current TUI semantics:
 - session overrides
 - config form
 - raw YAML editor
+- dirty-state indicators for form and raw drafts
+- revision-conflict errors surfaced without discarding local edits
 
 ## WebSocket Protocol
 

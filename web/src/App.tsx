@@ -11,6 +11,10 @@ import {
   syncMainRunFromUIEvent,
   type SessionUIState,
 } from "./chat/model";
+import { defaultSelectedTaskID } from "./plan/model";
+import { PlanPane } from "./plan/PlanPane";
+import { SettingsPane } from "./settings/SettingsPane";
+import { ToolsPane } from "./tools/ToolsPane";
 import { DaemonClient, loadRuntimeClientConfig } from "./lib/client";
 import type {
   BootstrapPayload,
@@ -19,6 +23,7 @@ import type {
   SettingsRawFileContent,
   SettingsSnapshot,
   UIEvent,
+  WebsocketEnvelope,
 } from "./lib/types";
 
 type TabKey = "sessions" | "chat" | "plan" | "tools" | "settings";
@@ -36,10 +41,13 @@ export function App() {
   const [planGoal, setPlanGoal] = useState("");
   const [planTask, setPlanTask] = useState("");
   const [planNote, setPlanNote] = useState("");
+  const [selectedPlanTaskID, setSelectedPlanTaskID] = useState("");
   const [settings, setSettings] = useState<SettingsSnapshot | null>(null);
   const [settingsDraft, setSettingsDraft] = useState<Record<string, unknown>>({});
   const [rawFile, setRawFile] = useState<SettingsRawFileContent | null>(null);
+  const [rawDraft, setRawDraft] = useState("");
   const [selectedRawPath, setSelectedRawPath] = useState("");
+  const [settingsError, setSettingsError] = useState("");
   const [clockNow, setClockNow] = useState(() => new Date());
   const [statusMessage, setStatusMessage] = useState("booting");
   const [errorMessage, setErrorMessage] = useState("");
@@ -110,6 +118,7 @@ export function App() {
     setSessionSnapshots((current) => ({ ...current, [snapshot.session_id]: snapshot }));
     setSessions((current) => upsertSessionSummary(current, snapshot));
     setSelectedSessionID((current) => current || snapshot.session_id);
+    setSelectedPlanTaskID((current) => current || defaultSelectedTaskID(snapshot.plan));
   }
 
   function applyUIEvent(event: UIEvent) {
@@ -173,6 +182,7 @@ export function App() {
     }
     const result = await client.command("settings.raw.get", { path });
     setRawFile(result.file);
+    setRawDraft(result.file.content);
   }
 
   async function handleCreateSession() {
@@ -315,13 +325,18 @@ export function App() {
     if (!client || !settings) {
       return;
     }
-    const result = await client.command("settings.form.apply", {
-      base_revision: settings.revision,
-      values: settingsDraft,
-    });
-    setSettings(result.settings);
-    setSettingsDraft(fieldDraftFromSnapshot(result.settings));
-    setStatusMessage("settings applied");
+    try {
+      const result = await client.command("settings.form.apply", {
+        base_revision: settings.revision,
+        values: settingsDraft,
+      });
+      setSettings(result.settings);
+      setSettingsDraft(fieldDraftFromSnapshot(result.settings));
+      setSettingsError("");
+      setStatusMessage("settings applied");
+    } catch (error) {
+      setSettingsError(String(error));
+    }
   }
 
   async function handleApplyRaw() {
@@ -329,15 +344,20 @@ export function App() {
     if (!client || !rawFile) {
       return;
     }
-    const result = await client.command("settings.raw.apply", {
-      path: rawFile.path,
-      base_revision: rawFile.revision,
-      content: rawFile.content,
-    });
-    setSettings(result.settings);
-    setSettingsDraft(fieldDraftFromSnapshot(result.settings));
-    await loadRawFile(rawFile.path);
-    setStatusMessage("raw config applied");
+    try {
+      const result = await client.command("settings.raw.apply", {
+        path: rawFile.path,
+        base_revision: rawFile.revision,
+        content: rawFile.content,
+      });
+      setSettings(result.settings);
+      setSettingsDraft(fieldDraftFromSnapshot(result.settings));
+      await loadRawFile(rawFile.path);
+      setSettingsError("");
+      setStatusMessage("raw config applied");
+    } catch (error) {
+      setSettingsError(String(error));
+    }
   }
 
   return (
@@ -399,14 +419,16 @@ export function App() {
             />
           )}
           {activeTab === "plan" && (
-            <PlanView
+            <PlanPane
               session={selectedSession}
               goal={planGoal}
               task={planTask}
               note={planNote}
+              selectedTaskID={selectedPlanTaskID}
               onGoal={setPlanGoal}
               onTask={setPlanTask}
               onNote={setPlanNote}
+              onSelectTask={setSelectedPlanTaskID}
               onCreatePlan={() => void handleCreatePlan()}
               onAddTask={() => void handleAddTask()}
               onSetTaskStatus={(taskID, status) => void handleSetTaskStatus(taskID, status)}
@@ -414,7 +436,7 @@ export function App() {
             />
           )}
           {activeTab === "tools" && (
-            <ToolsView
+            <ToolsPane
               approvals={selectedSession?.pending_approvals ?? []}
               commands={selectedSession?.running_commands ?? []}
               toolLog={selectedUI.toolLog}
@@ -425,15 +447,20 @@ export function App() {
             />
           )}
           {activeTab === "settings" && (
-            <SettingsView
+            <SettingsPane
               settings={settings}
               draft={settingsDraft}
               rawFile={rawFile}
               selectedRawPath={selectedRawPath}
+              rawDraft={rawDraft}
+              error={settingsError}
               onDraftChange={setSettingsDraft}
               onApply={() => void handleApplySettings()}
               onSelectRaw={(path) => setSelectedRawPath(path)}
-              onRawChange={(content) => setRawFile((current) => (current ? { ...current, content } : current))}
+              onRawChange={(content) => {
+                setRawDraft(content);
+                setRawFile((current) => (current ? { ...current, content } : current));
+              }}
               onApplyRaw={() => void handleApplyRaw()}
             />
           )}
@@ -476,214 +503,6 @@ function SessionsView({ bootstrap }: { bootstrap: BootstrapPayload | null }) {
             <dd>{bootstrap?.transport.websocket_path ?? "-"}</dd>
           </div>
         </dl>
-      </section>
-    </div>
-  );
-}
-
-function PlanView(props: {
-  session: SessionSnapshot | null;
-  goal: string;
-  task: string;
-  note: string;
-  onGoal: (value: string) => void;
-  onTask: (value: string) => void;
-  onNote: (value: string) => void;
-  onCreatePlan: () => void;
-  onAddTask: () => void;
-  onSetTaskStatus: (taskID: string, status: string) => void;
-  onAddTaskNote: (taskID: string) => void;
-}) {
-  const { session, goal, task, note, onGoal, onTask, onNote, onCreatePlan, onAddTask, onSetTaskStatus, onAddTaskNote } = props;
-  const tasks = Object.values(session?.plan.tasks ?? {}).sort((left, right) => left.order - right.order);
-  return (
-    <div className="two-column">
-      <section className="panel">
-        <div className="section-title">
-          <span>Plan</span>
-          <span className="muted">{session?.plan.plan.goal || "none"}</span>
-        </div>
-        {!session?.plan.plan.id ? (
-          <div className="form-stack">
-            <input value={goal} onChange={(event) => onGoal(event.target.value)} placeholder="Create plan goal" />
-            <button onClick={onCreatePlan}>Create plan</button>
-          </div>
-        ) : (
-          <>
-            <div className="form-stack inline">
-              <input value={task} onChange={(event) => onTask(event.target.value)} placeholder="Add task description" />
-              <button onClick={onAddTask}>Add task</button>
-            </div>
-            <div className="task-list">
-              {tasks.map((item) => (
-                <article key={item.id} className="task-item">
-                  <div>
-                    <strong>{item.description}</strong>
-                    <div className="muted">{item.id}</div>
-                    {session.plan.notes[item.id]?.length ? <div className="note-preview">{session.plan.notes[item.id].at(-1)}</div> : null}
-                  </div>
-                  <select value={item.status} onChange={(event) => onSetTaskStatus(item.id, event.target.value)}>
-                    <option value="todo">todo</option>
-                    <option value="doing">doing</option>
-                    <option value="done">done</option>
-                    <option value="blocked">blocked</option>
-                  </select>
-                </article>
-              ))}
-            </div>
-          </>
-        )}
-      </section>
-      <section className="panel">
-        <div className="section-title">
-          <span>Notes</span>
-          <span className="muted">append note to the first selected task from the list above</span>
-        </div>
-        {tasks[0] ? (
-          <div className="form-stack">
-            <textarea value={note} onChange={(event) => onNote(event.target.value)} placeholder="Task note" />
-            <button onClick={() => onAddTaskNote(tasks[0].id)}>Add note to {tasks[0].id}</button>
-          </div>
-        ) : (
-          <p className="muted">No task selected yet.</p>
-        )}
-      </section>
-    </div>
-  );
-}
-
-function ToolsView(props: {
-  approvals: PendingApprovalView[];
-  commands: ShellCommandView[];
-  toolLog: ToolLogEntry[];
-  delegates: { delegate_id: string; status: string; task?: string }[];
-  onApprove: (approvalID: string) => void;
-  onDeny: (approvalID: string) => void;
-  onKill: (commandID: string) => void;
-}) {
-  const { approvals, commands, toolLog, delegates, onApprove, onDeny, onKill } = props;
-  return (
-    <div className="three-stack">
-      <section className="panel">
-        <div className="section-title">
-          <span>Pending approvals</span>
-          <span className="muted">{approvals.length}</span>
-        </div>
-        {approvals.length === 0 ? <p className="muted">No pending approvals.</p> : approvals.map((approval) => (
-          <article key={approval.approval_id} className="list-item">
-            <div>
-              <strong>{approval.command} {(approval.args ?? []).join(" ")}</strong>
-              <div className="muted">{approval.message}</div>
-            </div>
-            <div className="action-row">
-              <button onClick={() => onApprove(approval.approval_id)}>Approve</button>
-              <button className="secondary" onClick={() => onDeny(approval.approval_id)}>Deny</button>
-            </div>
-          </article>
-        ))}
-      </section>
-      <section className="panel">
-        <div className="section-title">
-          <span>Running commands</span>
-          <span className="muted">{commands.length}</span>
-        </div>
-        {commands.length === 0 ? <p className="muted">No running shell commands.</p> : commands.map((command) => (
-          <article key={command.command_id} className="list-item">
-            <div>
-              <strong>{command.command} {(command.args ?? []).join(" ")}</strong>
-              <div className="muted">{command.status}</div>
-              {command.last_chunk ? <pre>{command.last_chunk}</pre> : null}
-            </div>
-            <button className="secondary" onClick={() => onKill(command.command_id)}>Kill</button>
-          </article>
-        ))}
-      </section>
-      <section className="panel">
-        <div className="section-title">
-          <span>Delegates and tool log</span>
-        </div>
-        {delegates.length > 0 && (
-          <div className="delegate-list">
-            {delegates.map((delegate) => (
-              <div key={delegate.delegate_id} className="delegate-item">
-                <strong>{delegate.delegate_id}</strong>
-                <span>{delegate.status}</span>
-                {delegate.task ? <span className="muted">{delegate.task}</span> : null}
-              </div>
-            ))}
-          </div>
-        )}
-        <div className="tool-log">
-          {toolLog.length === 0 ? <p className="muted">No tool activity yet.</p> : toolLog.slice().reverse().map((item, index) => (
-            <article key={`${item.name}-${index}`} className="tool-log-item">
-              <strong>{item.name}</strong>
-              <span>{item.phase}</span>
-              {item.result_text ? <pre>{item.result_text}</pre> : null}
-              {item.error_text ? <div className="error">{item.error_text}</div> : null}
-            </article>
-          ))}
-        </div>
-      </section>
-    </div>
-  );
-}
-
-function SettingsView(props: {
-  settings: SettingsSnapshot | null;
-  draft: Record<string, unknown>;
-  rawFile: SettingsRawFileContent | null;
-  selectedRawPath: string;
-  onDraftChange: React.Dispatch<React.SetStateAction<Record<string, unknown>>>;
-  onApply: () => void;
-  onSelectRaw: (path: string) => void;
-  onRawChange: (content: string) => void;
-  onApplyRaw: () => void;
-}) {
-  const { settings, draft, rawFile, selectedRawPath, onDraftChange, onApply, onSelectRaw, onRawChange, onApplyRaw } = props;
-  return (
-    <div className="two-column">
-      <section className="panel">
-        <div className="section-title">
-          <span>Settings form</span>
-          <span className="muted">{settings?.revision ?? "-"}</span>
-        </div>
-        <div className="form-grid">
-          {(settings?.form_fields ?? []).map((field) => (
-            <label key={field.key}>
-              <span>{field.label}</span>
-              {field.type === "bool" ? (
-                <input
-                  type="checkbox"
-                  checked={Boolean(draft[field.key])}
-                  onChange={(event) => onDraftChange((current) => ({ ...current, [field.key]: event.target.checked }))}
-                />
-              ) : (
-                <input
-                  value={String(draft[field.key] ?? "")}
-                  onChange={(event) => onDraftChange((current) => ({ ...current, [field.key]: event.target.value }))}
-                />
-              )}
-            </label>
-          ))}
-        </div>
-        <button onClick={onApply}>Apply settings</button>
-      </section>
-
-      <section className="panel">
-        <div className="section-title">
-          <span>Raw YAML</span>
-          <span className="muted">{selectedRawPath || "no file selected"}</span>
-        </div>
-        <select value={selectedRawPath} onChange={(event) => onSelectRaw(event.target.value)}>
-          <option value="">Select raw file</option>
-          {(settings?.raw_files ?? []).map((file) => (
-            <option key={file.path} value={file.path}>
-              {file.path}
-            </option>
-          ))}
-        </select>
-        <textarea value={rawFile?.content ?? ""} onChange={(event) => onRawChange(event.target.value)} placeholder="Raw YAML content" />
-        <button onClick={onApplyRaw} disabled={!rawFile}>Apply raw file</button>
       </section>
     </div>
   );

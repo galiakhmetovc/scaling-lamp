@@ -313,6 +313,57 @@ pre {
   background: rgba(7, 16, 24, 0.55);
 }
 
+.detail-card {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  align-items: start;
+  border: 1px solid rgba(35, 53, 70, 0.9);
+  border-radius: 18px;
+  padding: 0.9rem 1rem;
+  background: rgba(7, 16, 24, 0.55);
+}
+
+.detail-card.compact {
+  padding: 0.75rem 0.9rem;
+}
+
+.detail-main {
+  display: grid;
+  gap: 0.25rem;
+}
+
+.markdown-block {
+  border: 1px solid rgba(35, 53, 70, 0.9);
+  border-radius: 18px;
+  padding: 0.9rem 1rem;
+  background: rgba(7, 16, 24, 0.55);
+}
+
+.active-card {
+  border-color: var(--accent);
+}
+
+.ghost-button {
+  all: unset;
+  cursor: pointer;
+  display: grid;
+  gap: 0.2rem;
+  min-width: 0;
+}
+
+.error-banner {
+  border: 1px solid rgba(252, 165, 165, 0.45);
+  border-radius: 16px;
+  padding: 0.75rem 0.9rem;
+  color: var(--danger);
+  background: rgba(252, 165, 165, 0.08);
+}
+
+.error-banner.conflict {
+  border-color: rgba(125, 211, 252, 0.45);
+}
+
 .delegate-item,
 .tool-log-item {
   display: grid;
