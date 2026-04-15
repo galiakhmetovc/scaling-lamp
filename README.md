@@ -43,6 +43,8 @@ Build:
 
 Run modes:
 
+- daemon:
+  - `./agent --config ./config/zai-smoke/agent.yaml --daemon`
 - smoke:
   - `./agent --config ./config/zai-smoke/agent.yaml --smoke "ping"`
 - interactive chat:
@@ -54,6 +56,7 @@ Chat mode baseline:
 
 - real TTY:
   - full TUI workspace with tabs for sessions, chat, plan, tools, and settings
+  - TUI connects to the configured daemon control plane; start `--daemon` first
 - non-interactive stdin:
   - fallback to legacy line-based chat loop
 - transcript-backed resume via `TranscriptProjection`

@@ -12,7 +12,7 @@ import (
 )
 
 func (m *model) updatePlan(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	head, ok := m.agent.CurrentPlanHead(m.activeSessionID)
+	head, ok := m.currentPlanHead()
 	flat := flattenedPlanTasks(head)
 	selected, _ := m.selectedPlanTask(head)
 	switch msg.String() {
@@ -87,30 +87,31 @@ func (m *model) updatePlan(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		var err error
 		switch m.planMode {
 		case planEditorCreatePlan:
-			err = m.agent.CreatePlan(m.ctx, m.activeSessionID, strings.TrimSpace(m.planGoalInput.Value()))
+			_, err = m.client.CreatePlan(m.ctx, m.activeSessionID, strings.TrimSpace(m.planGoalInput.Value()))
 		case planEditorAddTask:
-			err = m.agent.AddPlanTask(m.ctx, m.activeSessionID, strings.TrimSpace(m.planDescInput.Value()), "", nil)
+			_, err = m.client.AddPlanTask(m.ctx, m.activeSessionID, strings.TrimSpace(m.planDescInput.Value()))
 		case planEditorEditTask:
 			if ok {
-				err = m.agent.EditPlanTask(m.ctx, m.activeSessionID, selected.ID, strings.TrimSpace(m.planDescInput.Value()), selected.DependsOn)
+				_, err = m.client.EditPlanTask(m.ctx, m.activeSessionID, selected.ID, strings.TrimSpace(m.planDescInput.Value()), selected.DependsOn)
 			}
 		case planEditorEditDeps:
 			if ok {
-				err = m.agent.EditPlanTask(m.ctx, m.activeSessionID, selected.ID, selected.Description, parseCSV(m.planDepsInput.Value()))
+				_, err = m.client.EditPlanTask(m.ctx, m.activeSessionID, selected.ID, selected.Description, parseCSV(m.planDepsInput.Value()))
 			}
 		case planEditorStatus:
 			if ok {
-				err = m.agent.SetPlanTaskStatus(m.ctx, m.activeSessionID, selected.ID, planStatuses()[m.planStatusIndex], "")
+				_, err = m.client.SetPlanTaskStatus(m.ctx, m.activeSessionID, selected.ID, planStatuses()[m.planStatusIndex], "")
 			}
 		case planEditorNote:
 			if ok {
-				err = m.agent.AddPlanTaskNote(m.ctx, m.activeSessionID, selected.ID, strings.TrimSpace(m.planNoteInput.Value()))
+				_, err = m.client.AddPlanTaskNote(m.ctx, m.activeSessionID, selected.ID, strings.TrimSpace(m.planNoteInput.Value()))
 			}
 		}
 		if err != nil {
 			m.errMessage = err.Error()
 			return m, nil
 		}
+		_ = m.reloadSessionSnapshot(m.activeSessionID)
 		m.planMode = planEditorBrowse
 		if state := m.currentSessionState(); state != nil {
 			m.renderChatViewport(state)
@@ -153,7 +154,7 @@ func (m *model) viewPlan() string {
 	leftWidth, rightWidth := splitPaneWidths(m.width, max(30, m.width/2), max(26, m.width/3))
 	m.mousePlanLeftWidth = leftWidth
 	m.planView.Width = leftWidth
-	head, ok := m.agent.CurrentPlanHead(m.activeSessionID)
+	head, ok := m.currentPlanHead()
 	if !ok || head.Plan.ID == "" {
 		left := "Plan\n\nNo active plan.\n\nPress c to create one."
 		right := m.renderPlanEditor(projections.PlanHeadSnapshot{}, false, projections.PlanTaskView{})
@@ -191,7 +192,7 @@ func (m *model) handleMousePlan(msg tea.MouseMsg) bool {
 		if msg.X >= m.mousePlanLeftWidth {
 			return false
 		}
-		head, ok := m.agent.CurrentPlanHead(m.activeSessionID)
+		head, ok := m.currentPlanHead()
 		if !ok {
 			return false
 		}

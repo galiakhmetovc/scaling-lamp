@@ -14,12 +14,13 @@ Implemented in Phase 1:
 - WebSocket live subscription on configured `websocket_path`
 - embedded asset shell for control-plane bootstrap and live UI bus visibility
 - `dev_proxy` asset mode support for future frontend development
+- shared WebSocket command protocol for sessions/chat/plan/tools/settings
+- TUI as a daemon client over the shared operator-surface transport
 
 Not implemented yet:
 
-- TUI as a daemon client
 - React/Vite embedded production frontend
-- full client command protocol for chat/plan/tools/settings mutations
+- richer web client protocol coverage for queued-draft UX and settings conflict UX
 
 ## Phase 1 Usage
 

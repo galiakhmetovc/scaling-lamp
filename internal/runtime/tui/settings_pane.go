@@ -2,15 +2,11 @@ package tui
 
 import (
 	"fmt"
-	"io/fs"
-	"os"
 	"path/filepath"
-	"slices"
 	"strconv"
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
-	"gopkg.in/yaml.v3"
 
 	tea "github.com/charmbracelet/bubbletea"
 )
@@ -186,14 +182,15 @@ func (m *model) updateConfigForm(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if err := m.saveFormDraft(); err != nil {
 			m.errMessage = err.Error()
 		} else {
-			m.statusMessage = "config draft saved"
+			m.statusMessage = "config applied"
 		}
 	case "ctrl+a":
 		if err := m.saveFormDraft(); err != nil {
 			m.errMessage = err.Error()
-			return m, nil
+		} else {
+			m.statusMessage = "config applied"
 		}
-		return m, rebuildAgentCmd(m.agent.ConfigPath)
+		return m, nil
 	case "r":
 		m.resetFormDraft()
 		m.statusMessage = "config form reset"
@@ -219,15 +216,16 @@ func (m *model) updateRawEditor(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if err := m.saveRawEditor(); err != nil {
 			m.errMessage = err.Error()
 		} else {
-			m.statusMessage = "raw config saved"
+			m.statusMessage = "raw config applied"
 		}
 		return m, nil
 	case "ctrl+a":
 		if err := m.saveRawEditor(); err != nil {
 			m.errMessage = err.Error()
-			return m, nil
+		} else {
+			m.statusMessage = "raw config applied"
 		}
-		return m, rebuildAgentCmd(m.agent.ConfigPath)
+		return m, nil
 	}
 	var cmd tea.Cmd
 	m.rawEditor, cmd = m.rawEditor.Update(msg)
@@ -268,8 +266,8 @@ func (m *model) viewSettings() string {
 			fmt.Sprintf("%s show_tool_results: %t", cursor(m.formField, 4), m.formDraft.ShowToolResults),
 			fmt.Sprintf("%s show_plan_after_plan_tools: %t", cursor(m.formField, 5), m.formDraft.ShowPlanAfterPlanTools),
 			"",
-			"Ctrl+S save to disk",
-			"Ctrl+A save and reload agent",
+			"Ctrl+S apply",
+			"Ctrl+A apply",
 			"r reset form to loaded config",
 		}
 		m.settingsView.SetContent(head + "\n\n" + strings.Join(rows, "\n"))
@@ -281,33 +279,22 @@ func (m *model) viewSettings() string {
 			fileLines = append(fileLines, prefix+filepath.Base(path))
 		}
 		left := "Files\n" + strings.Join(fileLines, "\n")
-		right := "Editor\n" + m.rawEditor.View() + "\nCtrl+S save  Ctrl+A save+reload"
+		right := "Editor\n" + m.rawEditor.View() + "\nCtrl+S apply  Ctrl+A apply"
 		leftWidth, rightWidth := splitPaneWidths(m.width, max(24, m.width/4), max(30, m.width-(m.width/4)-4))
 		return head + "\n\n" + lipgloss.JoinHorizontal(lipgloss.Top, lipgloss.NewStyle().Width(leftWidth).MaxWidth(leftWidth).Render(left), lipgloss.NewStyle().Width(rightWidth).MaxWidth(rightWidth).Render(right))
 	}
 }
 
 func (m *model) loadRawFileList() error {
-	root := filepath.Dir(m.agent.ConfigPath)
-	files := []string{m.agent.ConfigPath}
-	if err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		if d.IsDir() {
-			return nil
-		}
-		if path == m.agent.ConfigPath {
-			return nil
-		}
-		if strings.HasSuffix(path, ".yaml") || strings.HasSuffix(path, ".yml") {
-			files = append(files, path)
-		}
-		return nil
-	}); err != nil {
+	settings, err := m.client.GetSettings(m.ctx)
+	if err != nil {
 		return err
 	}
-	slices.Sort(files)
+	m.settingsSnapshot = settings
+	files := make([]string, 0, len(settings.RawFiles))
+	for _, file := range settings.RawFiles {
+		files = append(files, file.Path)
+	}
 	m.rawFiles = files
 	if m.rawCursor >= len(m.rawFiles) {
 		m.rawCursor = 0
@@ -322,12 +309,12 @@ func (m *model) loadRawEditorFile() error {
 		return nil
 	}
 	path := m.rawFiles[m.rawCursor]
-	body, err := os.ReadFile(path)
+	file, err := m.client.GetSettingsRaw(m.ctx, path)
 	if err != nil {
 		return err
 	}
 	m.rawLoadedPath = path
-	m.rawEditor.SetValue(string(body))
+	m.rawEditor.SetValue(file.Content)
 	return nil
 }
 
@@ -335,136 +322,85 @@ func (m *model) saveRawEditor() error {
 	if m.rawLoadedPath == "" {
 		return nil
 	}
-	return os.WriteFile(m.rawLoadedPath, []byte(m.rawEditor.Value()), 0o644)
+	base := ""
+	for _, file := range m.settingsSnapshot.RawFiles {
+		if file.Path == m.rawLoadedPath {
+			base = file.Revision
+			break
+		}
+	}
+	settings, err := m.client.ApplySettingsRaw(m.ctx, m.rawLoadedPath, base, m.rawEditor.Value())
+	if err != nil {
+		return err
+	}
+	m.settingsSnapshot = settings
+	return m.loadRawFileList()
 }
 
 func (m *model) resetFormDraft() {
+	values := map[string]any{}
+	for _, field := range m.settingsSnapshot.FormFields {
+		values[field.Key] = field.Value
+	}
 	m.formDraft = configFormDraft{
-		MaxToolRounds:          strconv.Itoa(m.agent.Config.Spec.Runtime.MaxToolRounds),
-		RenderMarkdown:         m.agent.Contracts.Chat.Output.Params.RenderMarkdown,
-		MarkdownStyle:          coalesce(m.agent.Contracts.Chat.Output.Params.MarkdownStyle, "dark"),
-		ShowToolCalls:          m.agent.Contracts.Chat.Status.Params.ShowToolCalls,
-		ShowToolResults:        m.agent.Contracts.Chat.Status.Params.ShowToolResults,
-		ShowPlanAfterPlanTools: m.agent.Contracts.Chat.Status.Params.ShowPlanAfterPlanTools,
+		MaxToolRounds:          stringifySetting(values["max_tool_rounds"]),
+		RenderMarkdown:         boolSetting(values["render_markdown"]),
+		MarkdownStyle:          coalesce(stringifySetting(values["markdown_style"]), "dark"),
+		ShowToolCalls:          boolSetting(values["show_tool_calls"]),
+		ShowToolResults:        boolSetting(values["show_tool_results"]),
+		ShowPlanAfterPlanTools: boolSetting(values["show_plan_after_plan_tools"]),
 	}
 	m.formMaxRounds.SetValue(m.formDraft.MaxToolRounds)
 	m.formStyle.SetValue(m.formDraft.MarkdownStyle)
 }
 
 func (m *model) formDraftDirty() bool {
-	expected := configFormDraft{
-		MaxToolRounds:          strconv.Itoa(m.agent.Config.Spec.Runtime.MaxToolRounds),
-		RenderMarkdown:         m.agent.Contracts.Chat.Output.Params.RenderMarkdown,
-		MarkdownStyle:          coalesce(m.agent.Contracts.Chat.Output.Params.MarkdownStyle, "dark"),
-		ShowToolCalls:          m.agent.Contracts.Chat.Status.Params.ShowToolCalls,
-		ShowToolResults:        m.agent.Contracts.Chat.Status.Params.ShowToolResults,
-		ShowPlanAfterPlanTools: m.agent.Contracts.Chat.Status.Params.ShowPlanAfterPlanTools,
-	}
-	return m.formDraft != expected
+	current := m.formDraft
+	m.resetFormDraft()
+	expected := m.formDraft
+	m.formDraft = current
+	return current != expected
 }
 
 func (m *model) saveFormDraft() error {
-	if err := updateAgentRuntimeMaxToolRounds(m.agent.ConfigPath, m.formDraft.MaxToolRounds); err != nil {
+	values := map[string]any{
+		"max_tool_rounds":            m.formDraft.MaxToolRounds,
+		"render_markdown":            m.formDraft.RenderMarkdown,
+		"markdown_style":             m.formDraft.MarkdownStyle,
+		"show_tool_calls":            m.formDraft.ShowToolCalls,
+		"show_tool_results":          m.formDraft.ShowToolResults,
+		"show_plan_after_plan_tools": m.formDraft.ShowPlanAfterPlanTools,
+	}
+	settings, err := m.client.ApplySettingsForm(m.ctx, m.settingsSnapshot.Revision, values)
+	if err != nil {
 		return err
 	}
-	root := filepath.Dir(m.agent.ConfigPath)
-	if err := updateChatOutputPolicy(filepath.Join(root, "policies", "chat", "output.yaml"), m.formDraft.RenderMarkdown, m.formDraft.MarkdownStyle); err != nil {
-		return err
-	}
-	if err := updateChatStatusPolicy(filepath.Join(root, "policies", "chat", "status.yaml"), m.formDraft.ShowToolCalls, m.formDraft.ShowToolResults, m.formDraft.ShowPlanAfterPlanTools); err != nil {
-		return err
-	}
+	m.settingsSnapshot = settings
+	m.resetFormDraft()
 	return nil
 }
 
-func updateAgentRuntimeMaxToolRounds(path, value string) error {
-	var cfg struct {
-		Kind    string `yaml:"kind"`
-		Version string `yaml:"version"`
-		ID      string `yaml:"id"`
-		Spec    struct {
-			Runtime   map[string]any    `yaml:"runtime"`
-			Contracts map[string]string `yaml:"contracts"`
-		} `yaml:"spec"`
+func stringifySetting(value any) string {
+	switch typed := value.(type) {
+	case string:
+		return typed
+	case float64:
+		return strconv.Itoa(int(typed))
+	case int:
+		return strconv.Itoa(typed)
+	default:
+		return fmt.Sprint(value)
 	}
-	body, err := os.ReadFile(path)
-	if err != nil {
-		return err
-	}
-	if err := yaml.Unmarshal(body, &cfg); err != nil {
-		return err
-	}
-	if cfg.Spec.Runtime == nil {
-		cfg.Spec.Runtime = map[string]any{}
-	}
-	parsed, err := strconv.Atoi(strings.TrimSpace(value))
-	if err != nil {
-		return err
-	}
-	cfg.Spec.Runtime["max_tool_rounds"] = parsed
-	out, err := yaml.Marshal(&cfg)
-	if err != nil {
-		return err
-	}
-	return os.WriteFile(path, out, 0o644)
 }
 
-func updateChatOutputPolicy(path string, renderMarkdown bool, style string) error {
-	var doc map[string]any
-	body, err := os.ReadFile(path)
-	if err != nil {
-		return err
+func boolSetting(value any) bool {
+	switch typed := value.(type) {
+	case bool:
+		return typed
+	case string:
+		parsed, _ := strconv.ParseBool(typed)
+		return parsed
+	default:
+		return false
 	}
-	if err := yaml.Unmarshal(body, &doc); err != nil {
-		return err
-	}
-	spec := ensureMap(doc, "spec")
-	params := ensureMap(spec, "params")
-	params["render_markdown"] = renderMarkdown
-	params["markdown_style"] = style
-	out, err := yaml.Marshal(doc)
-	if err != nil {
-		return err
-	}
-	return os.WriteFile(path, out, 0o644)
-}
-
-func updateChatStatusPolicy(path string, showToolCalls, showToolResults, showPlanAfter bool) error {
-	var doc map[string]any
-	body, err := os.ReadFile(path)
-	if err != nil {
-		return err
-	}
-	if err := yaml.Unmarshal(body, &doc); err != nil {
-		return err
-	}
-	spec := ensureMap(doc, "spec")
-	params := ensureMap(spec, "params")
-	params["show_tool_calls"] = showToolCalls
-	params["show_tool_results"] = showToolResults
-	params["show_plan_after_plan_tools"] = showPlanAfter
-	out, err := yaml.Marshal(doc)
-	if err != nil {
-		return err
-	}
-	return os.WriteFile(path, out, 0o644)
-}
-
-func ensureMap(parent map[string]any, key string) map[string]any {
-	if existing, ok := parent[key].(map[string]any); ok {
-		return existing
-	}
-	if existing, ok := parent[key].(map[any]any); ok {
-		out := map[string]any{}
-		for k, v := range existing {
-			if text, ok := k.(string); ok {
-				out[text] = v
-			}
-		}
-		parent[key] = out
-		return out
-	}
-	out := map[string]any{}
-	parent[key] = out
-	return out
 }

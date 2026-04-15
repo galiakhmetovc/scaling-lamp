@@ -10,6 +10,7 @@ import (
 	"github.com/charmbracelet/bubbles/viewport"
 
 	"teamd/internal/runtime"
+	"teamd/internal/runtime/daemon"
 )
 
 var topTabs = []string{"Sessions", "Chat", "Plan", "Tools", "Settings"}
@@ -97,7 +98,8 @@ type btwRun struct {
 }
 
 type sessionState struct {
-	Session   *runtime.ChatSession
+	SessionID string
+	Snapshot  daemon.SessionSnapshot
 	Input     textarea.Model
 	Streaming strings.Builder
 	ToolLog   []toolLogEntry
@@ -111,7 +113,7 @@ type sessionState struct {
 	MainRun   runMeta
 	Queue     []queuedDraft
 	QueueCursor int
-	BtwRuns   []btwRun
+	BtwRuns      []btwRun
 }
 
 type configFormDraft struct {
@@ -125,7 +127,7 @@ type configFormDraft struct {
 
 type model struct {
 	ctx             context.Context
-	agent           *runtime.Agent
+	client          OperatorClient
 	now             func() time.Time
 	width           int
 	height          int
@@ -139,8 +141,10 @@ type model struct {
 	commandCursor   int
 	toolsFocus      toolsFocusMode
 
-	uiSubID int
-	uiCh    <-chan runtime.UIEvent
+	wsCh    <-chan daemon.WebsocketEnvelope
+	stopWS  func()
+
+	settingsSnapshot daemon.SettingsSnapshot
 
 	rawFiles            []string
 	rawCursor           int
@@ -187,11 +191,14 @@ type runtimeResultMeta struct {
 	Content      string
 }
 
-type uiEventMsg runtime.UIEvent
+type daemonEnvelopeMsg daemon.WebsocketEnvelope
 
 type chatTurnFinishedMsg struct {
 	SessionID string
 	Result    runtimeResultMeta
+	Queued    bool
+	Draft     *daemon.QueuedDraft
+	Session   daemon.SessionSnapshot
 	Err       error
 }
 
@@ -201,11 +208,6 @@ type btwTurnFinishedMsg struct {
 	Prompt    string
 	Result    runtimeResultMeta
 	Err       error
-}
-
-type rebuildFinishedMsg struct {
-	Agent *runtime.Agent
-	Err   error
 }
 
 type clockTickMsg time.Time

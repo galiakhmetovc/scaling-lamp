@@ -7,73 +7,44 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
-	"teamd/internal/contracts"
 	"teamd/internal/runtime"
+	"teamd/internal/runtime/daemon"
 )
 
-func waitForUIEvent(ch <-chan runtime.UIEvent) tea.Cmd {
+func waitForDaemonEnvelope(ch <-chan daemon.WebsocketEnvelope) tea.Cmd {
 	return func() tea.Msg {
-		event, ok := <-ch
+		envelope, ok := <-ch
 		if !ok {
 			return nil
 		}
-		return uiEventMsg(event)
+		return daemonEnvelopeMsg(envelope)
 	}
 }
 
-func runChatTurnCmd(agent *runtime.Agent, session *runtime.ChatSession, prompt string, overrides sessionOverrides) tea.Cmd {
+func runChatTurnClientCmd(client OperatorClient, sessionID, prompt string, overrides sessionOverrides) tea.Cmd {
 	return func() tea.Msg {
-		working := &runtime.ChatSession{
-			SessionID: session.SessionID,
-			Messages:  append([]contracts.Message{}, session.Messages...),
-		}
-		result, err := agent.ChatTurn(context.Background(), working, runtime.ChatTurnInput{
-			Prompt:                prompt,
-			MaxToolRoundsOverride: overrides.MaxToolRounds,
-		})
+		result, err := client.SendChat(context.Background(), sessionID, prompt)
 		return chatTurnFinishedMsg{
-			SessionID: session.SessionID,
-			Result: runtimeResultMeta{
-				Provider:     providerLabel(agent),
-				Model:        result.Provider.Model,
-				InputTokens:  result.Provider.Usage.InputTokens,
-				OutputTokens: result.Provider.Usage.OutputTokens,
-				TotalTokens:  result.Provider.Usage.TotalTokens,
-				Content:      result.Provider.Message.Content,
-			},
-			Err: err,
+			SessionID: sessionID,
+			Result:    result.Result,
+			Queued:    result.Queued,
+			Draft:     result.Draft,
+			Session:   result.Session,
+			Err:       err,
 		}
 	}
 }
 
-func runBtwTurnCmd(agent *runtime.Agent, session *runtime.ChatSession, prompt, runID string) tea.Cmd {
+func runBtwTurnClientCmd(client OperatorClient, sessionID, prompt, runID string) tea.Cmd {
 	return func() tea.Msg {
-		working := &runtime.ChatSession{
-			SessionID: session.SessionID,
-			Messages:  append([]contracts.Message{}, session.Messages...),
-		}
-		result, err := agent.BtwTurn(context.Background(), working, runtime.BtwTurnInput{Prompt: prompt})
+		result, err := client.SendBtw(context.Background(), sessionID, prompt)
 		return btwTurnFinishedMsg{
-			SessionID: session.SessionID,
+			SessionID: sessionID,
 			RunID:     runID,
 			Prompt:    prompt,
-			Result: runtimeResultMeta{
-				Provider:     providerLabel(agent),
-				Model:        result.Provider.Model,
-				InputTokens:  result.Provider.Usage.InputTokens,
-				OutputTokens: result.Provider.Usage.OutputTokens,
-				TotalTokens:  result.Provider.Usage.TotalTokens,
-				Content:      result.Provider.Message.Content,
-			},
-			Err: err,
+			Result:    result.Result,
+			Err:       err,
 		}
-	}
-}
-
-func rebuildAgentCmd(configPath string) tea.Cmd {
-	return func() tea.Msg {
-		agent, err := runtime.BuildAgent(configPath)
-		return rebuildFinishedMsg{Agent: agent, Err: err}
 	}
 }
 

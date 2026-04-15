@@ -49,7 +49,7 @@ func (m *model) viewChat() string {
 		return "No active session"
 	}
 	m.renderChatViewport(state)
-	header := fmt.Sprintf("session: %s", state.Session.SessionID)
+	header := fmt.Sprintf("session: %s", state.SessionID)
 	queue := m.viewQueue(state)
 	status := m.viewChatStatusBar(state)
 	return lipgloss.JoinVertical(
@@ -65,13 +65,13 @@ func (m *model) viewChat() string {
 }
 
 func (m *model) renderChatViewport(state *sessionState) {
-	if state == nil || state.Session == nil {
+	if state == nil {
 		return
 	}
 	wasAtBottom := state.ChatView.AtBottom() || state.ChatView.TotalLineCount() == 0
 	contentWidth := max(20, state.ChatView.Width-1)
 	lines := []string{}
-	for _, item := range m.agent.CurrentChatTimeline(state.Session.SessionID) {
+	for _, item := range state.Snapshot.Timeline {
 		switch item.Kind {
 		case projections.ChatTimelineItemMessage:
 			lines = append(lines, strings.ToUpper(item.Role)+":")
@@ -166,7 +166,7 @@ func (m *model) stageOrRecallDraft(state *sessionState) tea.Cmd {
 
 func (m *model) handleChatCommand(state *sessionState, prompt string) (bool, tea.Cmd) {
 	trimmed := strings.TrimSpace(prompt)
-	cmds := m.agent.Contracts.Chat.Command.Params
+	cmds := m.client.ChatCommandPolicy()
 	exitCmd := coalesce(cmds.ExitCommand, "/exit")
 	helpCmd := coalesce(cmds.HelpCommand, "/help")
 	sessionCmd := coalesce(cmds.SessionCommand, "/session")
@@ -174,8 +174,8 @@ func (m *model) handleChatCommand(state *sessionState, prompt string) (bool, tea
 
 	switch {
 	case trimmed == exitCmd:
-		if m.agent.UIBus != nil {
-			m.agent.UIBus.Unsubscribe(m.uiSubID)
+		if m.stopWS != nil {
+			m.stopWS()
 		}
 		return true, tea.Quit
 	case trimmed == helpCmd:
@@ -184,7 +184,7 @@ func (m *model) handleChatCommand(state *sessionState, prompt string) (bool, tea
 		return true, nil
 	case trimmed == sessionCmd:
 		state.Input.Reset()
-		m.statusMessage = "session: " + state.Session.SessionID
+		m.statusMessage = "session: " + state.SessionID
 		return true, nil
 	case strings.HasPrefix(trimmed, btwCmd+" "):
 		promptText := strings.TrimSpace(strings.TrimPrefix(trimmed, btwCmd))
@@ -201,7 +201,7 @@ func (m *model) handleChatCommand(state *sessionState, prompt string) (bool, tea
 			Active:    true,
 		})
 		m.renderChatViewport(state)
-		return true, tea.Batch(runBtwTurnCmd(m.agent, state.Session, promptText, runID), tickClockCmd())
+		return true, tea.Batch(runBtwTurnClientCmd(m.client, state.SessionID, promptText, runID), tickClockCmd())
 	case trimmed == btwCmd:
 		m.errMessage = "usage: " + btwCmd + " <question>"
 		return true, nil
@@ -219,10 +219,9 @@ func (m *model) startMainRun(state *sessionState, prompt string) tea.Cmd {
 	state.MainRun.Active = true
 	state.MainRun.StartedAt = m.now()
 	state.MainRun.CompletedAt = time.Time{}
-	state.MainRun.Provider = providerLabel(m.agent)
-	state.MainRun.Model = coalesce(m.agent.Contracts.ProviderRequest.RequestShape.Model.Params.Model, state.MainRun.Model)
+	state.MainRun.Provider = m.client.ProviderLabel()
 	m.renderChatViewport(state)
-	return tea.Batch(runChatTurnCmd(m.agent, state.Session, prompt, state.Overrides), tickClockCmd())
+	return tea.Batch(runChatTurnClientCmd(m.client, state.SessionID, prompt, state.Overrides), tickClockCmd())
 }
 
 func (m *model) dispatchNextQueued(state *sessionState) tea.Cmd {
@@ -267,8 +266,8 @@ func (m *model) viewChatStatusBar(state *sessionState) string {
 	if state.MainRun.Active {
 		runText = "running " + formatElapsed(now.Sub(state.MainRun.StartedAt))
 	}
-	provider := coalesce(state.MainRun.Provider, providerLabel(m.agent))
-	model := coalesce(state.MainRun.Model, m.agent.Contracts.ProviderRequest.RequestShape.Model.Params.Model)
+	provider := coalesce(state.MainRun.Provider, m.client.ProviderLabel())
+	model := coalesce(state.MainRun.Model, "model")
 	ctxTokens := approximateContextTokens(state)
 	lastUsage := ""
 	if state.MainRun.TotalTokens > 0 {
@@ -346,11 +345,11 @@ func formatElapsed(d time.Duration) string {
 }
 
 func approximateContextTokens(state *sessionState) int {
-	if state == nil || state.Session == nil {
+	if state == nil {
 		return 0
 	}
 	totalChars := 0
-	for _, msg := range state.Session.Messages {
+	for _, msg := range state.Snapshot.Transcript {
 		totalChars += len([]rune(msg.Content))
 	}
 	totalChars += len([]rune(state.Input.Value()))

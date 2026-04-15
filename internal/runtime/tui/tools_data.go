@@ -3,40 +3,7 @@ package tui
 import (
 	"fmt"
 	"strings"
-
-	"teamd/internal/runtime/projections"
-	"teamd/internal/shell"
 )
-
-func (m *model) currentApprovals() []shell.PendingApprovalView {
-	if m.agent == nil || m.agent.ShellRuntime == nil {
-		return nil
-	}
-	state := m.currentSessionState()
-	if state == nil || state.Session == nil {
-		return nil
-	}
-	approvals := m.agent.PendingShellApprovals(state.Session.SessionID)
-	if m.approvalCursor >= len(approvals) && len(approvals) > 0 {
-		m.approvalCursor = len(approvals) - 1
-	}
-	return approvals
-}
-
-func (m *model) currentRunningCommands() []projections.ShellCommandView {
-	if m.agent == nil {
-		return nil
-	}
-	state := m.currentSessionState()
-	if state == nil || state.Session == nil {
-		return nil
-	}
-	commands := m.agent.CurrentRunningShellCommands(state.Session.SessionID)
-	if m.commandCursor >= len(commands) && len(commands) > 0 {
-		m.commandCursor = len(commands) - 1
-	}
-	return commands
-}
 
 func reverseToolEntries(entries []toolLogEntry) []toolLogEntry {
 	out := make([]toolLogEntry, 0, len(entries))

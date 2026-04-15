@@ -13,10 +13,15 @@ import (
 	"github.com/charmbracelet/lipgloss"
 
 	"teamd/internal/runtime"
+	"teamd/internal/runtime/daemon"
 )
 
 func Run(ctx context.Context, agent *runtime.Agent, resumeID string, stdin io.Reader, stdout io.Writer) error {
-	m, err := newModel(ctx, agent, resumeID)
+	client, err := newDaemonClientFromAgent(agent)
+	if err != nil {
+		return err
+	}
+	m, err := newModelWithClient(ctx, client, resumeID)
 	if err != nil {
 		return err
 	}
@@ -26,9 +31,13 @@ func Run(ctx context.Context, agent *runtime.Agent, resumeID string, stdin io.Re
 }
 
 func newModel(ctx context.Context, agent *runtime.Agent, resumeID string) (model, error) {
+	return newModelWithClient(ctx, newLocalClient(agent), resumeID)
+}
+
+func newModelWithClient(ctx context.Context, client OperatorClient, resumeID string) (model, error) {
 	m := model{
 		ctx:      ctx,
-		agent:    agent,
+		client:   client,
 		now:      time.Now,
 		tab:      tabChat,
 		sessions: map[string]*sessionState{},
@@ -51,13 +60,19 @@ func newModel(ctx context.Context, agent *runtime.Agent, resumeID string) (model
 	m.settingsView = viewport.New(80, 20)
 	m.settingsView.MouseWheelEnabled = true
 	m.settingsView.MouseWheelDelta = 3
-
-	id, ch := agent.UIBus.Subscribe(128)
-	m.uiSubID, m.uiCh = id, ch
+	wsCh, stopWS, err := client.Subscribe(ctx)
+	if err != nil {
+		return model{}, err
+	}
+	m.wsCh, m.stopWS = wsCh, stopWS
 	if err := m.loadSessions(resumeID); err != nil {
 		return model{}, err
 	}
-	if err := m.loadRawFileList(); err != nil {
+	settings, err := client.GetSettings(ctx)
+	if err == nil {
+		m.settingsSnapshot = settings
+	}
+	if err := m.loadRawFileList(); err != nil && !strings.Contains(err.Error(), "unsupported") {
 		return model{}, err
 	}
 	m.resetFormDraft()
@@ -65,7 +80,11 @@ func newModel(ctx context.Context, agent *runtime.Agent, resumeID string) (model
 }
 
 func (m *model) Init() tea.Cmd {
-	return tea.Batch(waitForUIEvent(m.uiCh), tickClockCmd())
+	cmds := []tea.Cmd{tickClockCmd()}
+	if m.wsCh != nil {
+		cmds = append(cmds, waitForDaemonEnvelope(m.wsCh))
+	}
+	return tea.Batch(cmds...)
 }
 
 func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -93,8 +112,8 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case tea.KeyMsg:
 		if msg.String() == "ctrl+c" || msg.String() == "ctrl+q" {
-			if m.agent.UIBus != nil {
-				m.agent.UIBus.Unsubscribe(m.uiSubID)
+			if m.stopWS != nil {
+				m.stopWS()
 			}
 			return m, tea.Quit
 		}
@@ -132,27 +151,10 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.tab == tabSettings && m.handleMouseSettings(msg) {
 			return m, nil
 		}
-	case uiEventMsg:
-		event := runtime.UIEvent(msg)
-		if state := m.sessions[event.SessionID]; state != nil {
-			switch event.Kind {
-			case runtime.UIEventStreamText:
-				state.Streaming.WriteString(event.Text)
-			case runtime.UIEventToolStarted, runtime.UIEventToolCompleted:
-				state.ToolLog = append(state.ToolLog, toolLogEntry{Activity: event.Tool})
-				if len(state.ToolLog) > 200 {
-					state.ToolLog = state.ToolLog[len(state.ToolLog)-200:]
-				}
-				m.renderToolsViewport(state)
-			case runtime.UIEventStatusChanged:
-				state.Status = event.Status
-			case runtime.UIEventRunCompleted:
-				state.Status = "done"
-				state.Streaming.Reset()
-			}
-			m.renderChatViewport(state)
-		}
-		return m, waitForUIEvent(m.uiCh)
+	case daemonEnvelopeMsg:
+		envelope := daemon.WebsocketEnvelope(msg)
+		m.handleDaemonEnvelope(envelope)
+		return m, waitForDaemonEnvelope(m.wsCh)
 	case clockTickMsg:
 		m.clockNow = time.Time(msg)
 		if m.hasActiveRuns() {
@@ -184,16 +186,14 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			return m, nil
 		}
-		resumed, err := m.agent.ResumeChatSession(context.Background(), msg.SessionID)
-		if err == nil {
-			state.Session = resumed
+		if msg.Queued && msg.Draft != nil {
+			state.Queue = append(state.Queue, queuedDraft{Text: msg.Draft.Text, QueuedAt: msg.Draft.QueuedAt})
 		}
+		state.Snapshot = msg.Session
+		state.SessionID = msg.SessionID
 		state.Status = "idle"
 		m.renderChatViewport(state)
 		m.renderToolsViewport(state)
-		if cmd := m.dispatchNextQueued(state); cmd != nil {
-			return m, tea.Batch(cmd, tickClockCmd())
-		}
 		return m, nil
 	case btwTurnFinishedMsg:
 		state := m.sessions[msg.SessionID]
@@ -223,29 +223,6 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, tickClockCmd()
 		}
 		return m, nil
-	case rebuildFinishedMsg:
-		if msg.Err != nil {
-			m.errMessage = msg.Err.Error()
-			return m, nil
-		}
-		if m.agent.UIBus != nil {
-			m.agent.UIBus.Unsubscribe(m.uiSubID)
-		}
-		m.agent = msg.Agent
-		m.uiSubID, m.uiCh = m.agent.UIBus.Subscribe(128)
-		if err := m.loadRawFileList(); err != nil {
-			m.errMessage = err.Error()
-		}
-		for sessionID, state := range m.sessions {
-			if resumed, err := m.agent.ResumeChatSession(context.Background(), sessionID); err == nil {
-				state.Session = resumed
-				m.renderChatViewport(state)
-				m.renderToolsViewport(state)
-			}
-		}
-		m.resetFormDraft()
-		m.statusMessage = "config applied and agent reloaded"
-		return m, waitForUIEvent(m.uiCh)
 	}
 	return m, nil
 }

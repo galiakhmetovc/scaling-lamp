@@ -29,13 +29,14 @@ func (m *model) updateSessions(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		m.tab = tabChat
 	case "n":
-		session, err := m.agent.NewChatSession()
+		session, err := m.client.CreateSession(m.ctx)
 		if err != nil {
 			m.errMessage = err.Error()
 			return m, nil
 		}
 		state := newSessionState(m.defaultOverrides())
-		state.Session = session
+		state.SessionID = session.SessionID
+		state.Snapshot = session
 		state.Loaded = true
 		m.sessions[session.SessionID] = state
 		m.sessionOrder = append([]string{session.SessionID}, m.sessionOrder...)
@@ -78,18 +79,24 @@ func (m *model) handleMouseSessions(msg tea.MouseMsg) bool {
 }
 
 func (m *model) loadSessions(resumeID string) error {
-	entries := m.agent.ListSessions()
+	entries, err := m.client.ListSessions(context.Background())
+	if err != nil {
+		return err
+	}
 	for _, entry := range entries {
 		state := newSessionState(m.defaultOverrides())
-		resumed, err := m.agent.ResumeChatSession(context.Background(), entry.SessionID)
-		if err == nil {
-			state.Session = resumed
-			state.Loaded = true
-			m.renderChatViewport(state)
-			m.renderToolsViewport(state)
-			m.sessions[entry.SessionID] = state
-			m.sessionOrder = append(m.sessionOrder, entry.SessionID)
+		snapshot, err := m.client.GetSession(context.Background(), entry.SessionID)
+		if err != nil {
+			continue
 		}
+		state.SessionID = entry.SessionID
+		state.Snapshot = snapshot
+		state.Status = "idle"
+		state.Loaded = true
+		m.renderChatViewport(state)
+		m.renderToolsViewport(state)
+		m.sessions[entry.SessionID] = state
+		m.sessionOrder = append(m.sessionOrder, entry.SessionID)
 	}
 	if resumeID != "" {
 		if state, ok := m.sessions[resumeID]; ok {
@@ -98,12 +105,13 @@ func (m *model) loadSessions(resumeID string) error {
 			return nil
 		}
 	}
-	session, err := m.agent.NewChatSession()
+	session, err := m.client.CreateSession(context.Background())
 	if err != nil {
 		return err
 	}
 	state := newSessionState(m.defaultOverrides())
-	state.Session = session
+	state.SessionID = session.SessionID
+	state.Snapshot = session
 	state.Loaded = true
 	m.sessions[session.SessionID] = state
 	m.sessionOrder = append([]string{session.SessionID}, m.sessionOrder...)
@@ -132,19 +140,41 @@ func newSessionState(overrides sessionOverrides) *sessionState {
 }
 
 func (m *model) defaultOverrides() sessionOverrides {
-	return sessionOverrides{
-		MaxToolRounds:          m.agent.MaxToolRounds,
-		RenderMarkdown:         m.agent.Contracts.Chat.Output.Params.RenderMarkdown,
-		MarkdownStyle:          coalesce(m.agent.Contracts.Chat.Output.Params.MarkdownStyle, "dark"),
-		ShowToolCalls:          m.agent.Contracts.Chat.Status.Params.ShowToolCalls,
-		ShowToolResults:        m.agent.Contracts.Chat.Status.Params.ShowToolResults,
-		ShowPlanAfterPlanTools: m.agent.Contracts.Chat.Status.Params.ShowPlanAfterPlanTools,
-	}
+	return m.client.DefaultOverrides()
 }
 
 func (m *model) currentSessionState() *sessionState {
 	if m.activeSessionID == "" {
 		return nil
 	}
-	return m.sessions[m.activeSessionID]
+	state := m.sessions[m.activeSessionID]
+	if state == nil {
+		return nil
+	}
+	if _, ok := m.client.(*localClient); ok {
+		if snapshot, err := m.client.GetSession(context.Background(), m.activeSessionID); err == nil {
+			state.Snapshot = snapshot
+		}
+	}
+	return state
+}
+
+func (m *model) reloadSessionSnapshot(sessionID string) error {
+	snapshot, err := m.client.GetSession(context.Background(), sessionID)
+	if err != nil {
+		return err
+	}
+	state := m.sessions[sessionID]
+	if state == nil {
+		state = newSessionState(m.defaultOverrides())
+		state.SessionID = sessionID
+		m.sessions[sessionID] = state
+		m.sessionOrder = append(m.sessionOrder, sessionID)
+	}
+	state.SessionID = sessionID
+	state.Snapshot = snapshot
+	state.Loaded = true
+	m.renderChatViewport(state)
+	m.renderToolsViewport(state)
+	return nil
 }

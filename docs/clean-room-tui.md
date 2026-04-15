@@ -2,6 +2,13 @@
 
 `--chat` now launches the terminal workspace UI when stdin is a real TTY.
 
+Current launch model:
+
+- start the daemon first with `--daemon`
+- then start `--chat`
+- the TUI connects to the daemon over the configured operator-surface HTTP/WebSocket transport
+- non-interactive stdin still falls back to the legacy line-based chat loop
+
 Top-level tabs:
 
 - `Sessions`
@@ -23,7 +30,7 @@ Current behavior:
   - `Tab` stages the current draft into the queue, or recalls the selected queued draft back into the editor when the input is empty
   - `Alt+Up` / `Alt+Down` move the queued-draft cursor
   - `Shift+Enter` keeps multiline editing behavior
-  - assistant text streams through the runtime UI bus
+  - assistant text streams through daemon-published `ui_event` envelopes
   - chat history is rendered as a markdown timeline for the active session
   - tool and plan activity is persisted into that timeline as markdown-rendered blocks
   - final assistant messages render as terminal markdown
@@ -78,7 +85,7 @@ Current runtime architecture:
   - `transcript`
   - session-scoped `plan_head`
 - ephemeral UI state:
-  - runtime UI bus
+  - daemon WebSocket stream
   - streamed text deltas
   - tool lifecycle events
   - turn status changes
@@ -97,7 +104,8 @@ Current interaction notes:
 Compatibility rule:
 
 - real terminal / TTY:
-  - `--chat` runs the TUI
+  - `--daemon` owns runtime state
+  - `--chat` runs the TUI client
 - non-interactive stdin:
   - `--chat` falls back to the legacy line-based chat loop
 

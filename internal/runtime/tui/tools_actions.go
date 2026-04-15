@@ -1,12 +1,10 @@
 package tui
 
 import (
-	"context"
 	"fmt"
 	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
-	"teamd/internal/shell"
 )
 
 func (m *model) updateTools(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
@@ -23,38 +21,33 @@ func (m *model) updateTools(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "pgdown":
 		state.ToolsView.LineDown(max(1, state.ToolsView.Height/2))
 	case "a":
-		if len(approvals) > 0 && m.toolsFocus == toolsFocusApprovals && m.agent != nil {
-			if _, err := m.agent.ApproveShellCommand(context.Background(), approvals[m.approvalCursor].ApprovalID); err != nil {
+		if len(approvals) > 0 && m.toolsFocus == toolsFocusApprovals {
+			result, err := m.client.ApproveShell(m.ctx, approvals[m.approvalCursor].ApprovalID)
+			if err != nil {
 				m.errMessage = err.Error()
 			} else {
+				state.Snapshot = result.Session
 				m.statusMessage = "shell approval granted"
 			}
 		}
 	case "x":
-		if len(approvals) > 0 && m.toolsFocus == toolsFocusApprovals && m.agent != nil {
-			if err := m.agent.DenyShellCommand(context.Background(), approvals[m.approvalCursor].ApprovalID); err != nil {
+		if len(approvals) > 0 && m.toolsFocus == toolsFocusApprovals {
+			result, err := m.client.DenyShell(m.ctx, approvals[m.approvalCursor].ApprovalID)
+			if err != nil {
 				m.errMessage = err.Error()
 			} else {
+				state.Snapshot = result.Session
 				m.statusMessage = "shell approval denied"
 			}
 		}
 	case "k":
-		if len(commands) > 0 && m.toolsFocus == toolsFocusCommands && m.agent != nil && m.agent.ShellRuntime != nil {
+		if len(commands) > 0 && m.toolsFocus == toolsFocusCommands {
 			command := commands[m.commandCursor]
-			if _, err := m.agent.ShellRuntime.ExecuteWithMeta(context.Background(), m.agent.Contracts.ShellExecution, "shell_kill", map[string]any{
-				"command_id": command.CommandID,
-			}, shell.ExecutionMeta{
-				SessionID:   command.SessionID,
-				RunID:       command.RunID,
-				Source:      "tui.tools",
-				ActorID:     m.agent.Config.ID,
-				ActorType:   "operator",
-				RecordEvent: m.agent.RecordEvent,
-				Now:         m.agent.Now,
-				NewID:       m.agent.NewID,
-			}); err != nil {
+			result, err := m.client.KillShell(m.ctx, command.CommandID)
+			if err != nil {
 				m.errMessage = err.Error()
 			} else {
+				state.Snapshot = result.Session
 				m.statusMessage = "shell command kill requested"
 			}
 		}
