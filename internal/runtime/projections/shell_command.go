@@ -12,6 +12,9 @@ type ShellCommandView struct {
 	CommandID   string   `json:"command_id"`
 	SessionID   string   `json:"session_id"`
 	RunID       string   `json:"run_id"`
+	ApprovalID  string   `json:"approval_id,omitempty"`
+	ToolName    string   `json:"tool_name,omitempty"`
+	Message     string   `json:"message,omitempty"`
 	Command     string   `json:"command"`
 	Args        []string `json:"args,omitempty"`
 	Cwd         string   `json:"cwd,omitempty"`
@@ -46,13 +49,16 @@ func (p *ShellCommandProjection) Apply(event eventing.Event) error {
 	switch event.Kind {
 	case eventing.EventShellCommandApprovalRequested:
 		view := ShellCommandView{
-			CommandID: event.AggregateID,
-			SessionID: stringPayload(event.Payload, "session_id"),
-			RunID:     stringPayload(event.Payload, "run_id"),
-			Command:   stringPayload(event.Payload, "command"),
-			Args:      stringSlicePayload(event.Payload, "args"),
-			Cwd:       stringPayload(event.Payload, "cwd"),
-			Status:    "approval_pending",
+			CommandID:  event.AggregateID,
+			SessionID:  stringPayload(event.Payload, "session_id"),
+			RunID:      stringPayload(event.Payload, "run_id"),
+			ApprovalID: stringPayload(event.Payload, "approval_id"),
+			ToolName:   stringPayload(event.Payload, "tool_name"),
+			Message:    stringPayload(event.Payload, "approval_message"),
+			Command:    stringPayload(event.Payload, "command"),
+			Args:       stringSlicePayload(event.Payload, "args"),
+			Cwd:        stringPayload(event.Payload, "cwd"),
+			Status:     "approval_pending",
 		}
 		p.snapshot.Commands[event.AggregateID] = view
 	case eventing.EventShellCommandApprovalGranted:
@@ -135,6 +141,17 @@ func (p *ShellCommandProjection) SnapshotForSession(sessionID string) []ShellCom
 	sort.Slice(out, func(i, j int) bool {
 		return out[i].CommandID < out[j].CommandID
 	})
+	return out
+}
+
+func (p *ShellCommandProjection) PendingForSession(sessionID string) []ShellCommandView {
+	commands := p.SnapshotForSession(sessionID)
+	out := make([]ShellCommandView, 0, len(commands))
+	for _, command := range commands {
+		if command.Status == "approval_pending" {
+			out = append(out, command)
+		}
+	}
 	return out
 }
 

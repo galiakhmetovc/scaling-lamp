@@ -23,16 +23,16 @@ func (m *model) updateTools(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "pgdown":
 		state.ToolsView.LineDown(max(1, state.ToolsView.Height/2))
 	case "a":
-		if len(approvals) > 0 && m.toolsFocus == toolsFocusApprovals && m.agent.ShellRuntime != nil {
-			if _, err := m.agent.ShellRuntime.Approve(context.Background(), approvals[m.approvalCursor].ApprovalID); err != nil {
+		if len(approvals) > 0 && m.toolsFocus == toolsFocusApprovals && m.agent != nil {
+			if _, err := m.agent.ApproveShellCommand(context.Background(), approvals[m.approvalCursor].ApprovalID); err != nil {
 				m.errMessage = err.Error()
 			} else {
 				m.statusMessage = "shell approval granted"
 			}
 		}
 	case "x":
-		if len(approvals) > 0 && m.toolsFocus == toolsFocusApprovals && m.agent.ShellRuntime != nil {
-			if err := m.agent.ShellRuntime.Deny(context.Background(), approvals[m.approvalCursor].ApprovalID); err != nil {
+		if len(approvals) > 0 && m.toolsFocus == toolsFocusApprovals && m.agent != nil {
+			if err := m.agent.DenyShellCommand(context.Background(), approvals[m.approvalCursor].ApprovalID); err != nil {
 				m.errMessage = err.Error()
 			} else {
 				m.statusMessage = "shell approval denied"

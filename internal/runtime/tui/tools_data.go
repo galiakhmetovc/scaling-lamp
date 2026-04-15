@@ -16,7 +16,7 @@ func (m *model) currentApprovals() []shell.PendingApprovalView {
 	if state == nil || state.Session == nil {
 		return nil
 	}
-	approvals := m.agent.ShellRuntime.PendingApprovals(state.Session.SessionID)
+	approvals := m.agent.PendingShellApprovals(state.Session.SessionID)
 	if m.approvalCursor >= len(approvals) && len(approvals) > 0 {
 		m.approvalCursor = len(approvals) - 1
 	}

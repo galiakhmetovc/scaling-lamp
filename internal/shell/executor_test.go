@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"teamd/internal/contracts"
+	"teamd/internal/runtime/eventing"
 )
 
 func TestExecutorRunsAllowlistedCommand(t *testing.T) {
@@ -642,6 +643,152 @@ func TestExecutorActiveCommandsExcludesCompletedCommands(t *testing.T) {
 	}
 	if decodeField(t, pollOut, "status") != "completed" {
 		t.Fatalf("poll status after completion = %s, want completed", pollOut)
+	}
+}
+
+func TestExecutorRecordsCompletionWithoutPoll(t *testing.T) {
+	t.Parallel()
+
+	stdoutReader, stdoutWriter := io.Pipe()
+	stderrReader, stderrWriter := io.Pipe()
+	waitCh := make(chan error, 1)
+	process := &fakeProcess{
+		stdout: stdoutReader,
+		stderr: stderrReader,
+		wait: func() error {
+			return <-waitCh
+		},
+		kill: func() error { return nil },
+	}
+	var kinds []eventing.EventKind
+	executor := &Executor{
+		goos: "linux",
+		start: func(_ context.Context, _ string, _ string, _ []string) (processHandle, error) {
+			return process, nil
+		},
+		commands:  map[string]*activeCommand{},
+		completed: map[string]*activeCommand{},
+	}
+	contract := contracts.ShellExecutionContract{
+		Command: contracts.ShellCommandPolicy{
+			Enabled:  true,
+			Strategy: "static_allowlist",
+			Params:   contracts.ShellCommandParams{AllowedCommands: []string{"printf"}},
+		},
+		Runtime: contracts.ShellRuntimePolicy{
+			Enabled:  true,
+			Strategy: "workspace_write",
+			Params: contracts.ShellRuntimeParams{
+				Cwd:            t.TempDir(),
+				Timeout:        "5s",
+				MaxOutputBytes: 4096,
+				AllowNetwork:   true,
+			},
+		},
+	}
+
+	_, err := executor.ExecuteWithMeta(context.Background(), contract, "shell_start", map[string]any{
+		"command": "printf",
+	}, ExecutionMeta{
+		SessionID: "session-1",
+		RunID:     "run-1",
+		RecordEvent: func(_ context.Context, event eventing.Event) error {
+			kinds = append(kinds, event.Kind)
+			return nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("ExecuteWithMeta returned error: %v", err)
+	}
+	_, _ = io.Copy(stdoutWriter, bytes.NewBufferString("done\n"))
+	_ = stdoutWriter.Close()
+	_ = stderrWriter.Close()
+	waitCh <- nil
+	time.Sleep(20 * time.Millisecond)
+
+	if len(kinds) < 2 {
+		t.Fatalf("recorded kinds = %#v, want started and completed", kinds)
+	}
+	if kinds[0] != eventing.EventShellCommandStarted {
+		t.Fatalf("first event kind = %q, want %q", kinds[0], eventing.EventShellCommandStarted)
+	}
+	foundCompleted := false
+	for _, kind := range kinds {
+		if kind == eventing.EventShellCommandCompleted {
+			foundCompleted = true
+			break
+		}
+	}
+	if !foundCompleted {
+		t.Fatalf("recorded kinds = %#v, want completed event", kinds)
+	}
+}
+
+func TestExecutorApproveKeepsPendingApprovalWhenStartFails(t *testing.T) {
+	t.Parallel()
+
+	var recorded []eventing.EventKind
+	executor := &Executor{
+		goos:      "linux",
+		commands:  map[string]*activeCommand{},
+		completed: map[string]*activeCommand{},
+		approvals: map[string]*pendingApproval{},
+		start: func(_ context.Context, _ string, _ string, _ []string) (processHandle, error) {
+			return nil, errors.New("boom")
+		},
+	}
+	contract := contracts.ShellExecutionContract{
+		Command: contracts.ShellCommandPolicy{
+			Enabled:  true,
+			Strategy: "static_allowlist",
+			Params:   contracts.ShellCommandParams{AllowedCommands: []string{"go"}},
+		},
+		Approval: contracts.ShellApprovalPolicy{
+			Enabled:  true,
+			Strategy: "always_require",
+		},
+		Runtime: contracts.ShellRuntimePolicy{
+			Enabled:  true,
+			Strategy: "workspace_write",
+			Params: contracts.ShellRuntimeParams{
+				Cwd:            t.TempDir(),
+				Timeout:        "5s",
+				MaxOutputBytes: 4096,
+				AllowNetwork:   true,
+			},
+		},
+	}
+
+	startOut, err := executor.ExecuteWithMeta(context.Background(), contract, "shell_start", map[string]any{
+		"command": "go",
+		"args":    []any{"test"},
+	}, ExecutionMeta{
+		SessionID: "session-1",
+		RunID:     "run-1",
+		RecordEvent: func(_ context.Context, event eventing.Event) error {
+			recorded = append(recorded, event.Kind)
+			return nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("ExecuteWithMeta returned error: %v", err)
+	}
+	approvalID := decodeField(t, startOut, "approval_id")
+	if approvalID == "" {
+		t.Fatalf("approval_id missing from %s", startOut)
+	}
+
+	_, err = executor.Approve(context.Background(), approvalID)
+	if err == nil {
+		t.Fatal("Approve returned nil error, want start failure")
+	}
+	if len(executor.PendingApprovals("session-1")) != 1 {
+		t.Fatalf("pending approvals after failed approve = %d, want 1", len(executor.PendingApprovals("session-1")))
+	}
+	for _, kind := range recorded {
+		if kind == eventing.EventShellCommandApprovalGranted {
+			t.Fatalf("recorded approval_granted despite failed start: %#v", recorded)
+		}
 	}
 }
 

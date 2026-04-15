@@ -122,6 +122,7 @@ type Executor struct {
 	start      startFunc
 	goos       string
 
+	eventMu   sync.Mutex
 	mu        sync.RWMutex
 	commands  map[string]*activeCommand
 	completed map[string]*activeCommand
@@ -263,10 +264,10 @@ func (e *Executor) executeStart(ctx context.Context, contract contracts.ShellExe
 	if approvalRequired, message := e.evaluateApproval(contract.Approval, command, args); approvalRequired {
 		return e.queueApproval(ctx, "shell_start", contract, meta, command, args, cwd, invocation, message)
 	}
-	return e.startCommand(ctx, contract, meta, command, args, cwd, invocation, "shell_start")
+	return e.startCommand(ctx, contract, meta, "", command, args, cwd, invocation, "shell_start", nil)
 }
 
-func (e *Executor) startCommand(ctx context.Context, contract contracts.ShellExecutionContract, meta ExecutionMeta, command string, args []string, cwd string, invocation invocation, toolName string) (string, error) {
+func (e *Executor) startCommand(ctx context.Context, contract contracts.ShellExecutionContract, meta ExecutionMeta, commandID string, command string, args []string, cwd string, invocation invocation, toolName string, beforeStart func() error) (string, error) {
 	timeout, err := parseTimeout(contract.Runtime)
 	if err != nil {
 		return "", err
@@ -293,7 +294,9 @@ func (e *Executor) startCommand(ctx context.Context, contract contracts.ShellExe
 		return "", fmt.Errorf("start shell process: %w", err)
 	}
 
-	commandID := fmt.Sprintf("cmd-%d", e.nextID.Add(1))
+	if commandID == "" {
+		commandID = fmt.Sprintf("cmd-%d", e.nextID.Add(1))
+	}
 	active := &activeCommand{
 		id:      commandID,
 		command: command,
@@ -304,6 +307,18 @@ func (e *Executor) startCommand(ctx context.Context, contract contracts.ShellExe
 		cancel:  cancel,
 		meta:    meta,
 	}
+	if beforeStart != nil {
+		if err := beforeStart(); err != nil {
+			_ = proc.Kill()
+			cancel()
+			return "", err
+		}
+	}
+	if err := e.recordStarted(ctx, active); err != nil {
+		_ = proc.Kill()
+		cancel()
+		return "", err
+	}
 	e.mu.Lock()
 	e.commands[commandID] = active
 	e.mu.Unlock()
@@ -311,9 +326,6 @@ func (e *Executor) startCommand(ctx context.Context, contract contracts.ShellExe
 	go e.captureOutput(active, "stdout", stdoutPipe)
 	go e.captureOutput(active, "stderr", stderrPipe)
 	go e.waitForCommand(active)
-	if err := e.recordStarted(ctx, active); err != nil {
-		return "", err
-	}
 
 	return jsonText(map[string]any{
 		"status":      "running",
@@ -457,6 +469,41 @@ func (e *Executor) ActiveCommands(sessionID string) []ActiveCommandView {
 	return out
 }
 
+func (e *Executor) RecoverApproval(contract contracts.ShellExecutionContract, view PendingApprovalView, meta ExecutionMeta) error {
+	if e == nil {
+		return fmt.Errorf("shell executor is nil")
+	}
+	if strings.TrimSpace(view.ApprovalID) == "" {
+		return fmt.Errorf("approval id is empty")
+	}
+	invocation, err := e.resolveInvocation(contract.Runtime, view.Command, view.Args)
+	if err != nil {
+		return err
+	}
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if _, ok := e.approvals[view.ApprovalID]; ok {
+		return nil
+	}
+	e.approvals[view.ApprovalID] = &pendingApproval{
+		PendingApprovalView: PendingApprovalView{
+			ApprovalID: view.ApprovalID,
+			CommandID:  view.CommandID,
+			SessionID:  view.SessionID,
+			RunID:      view.RunID,
+			ToolName:   firstNonEmpty(view.ToolName, "shell_start"),
+			Command:    view.Command,
+			Args:       append([]string{}, view.Args...),
+			Cwd:        view.Cwd,
+			Message:    view.Message,
+		},
+		contract:   contract,
+		invocation: invocation,
+		meta:       meta,
+	}
+	return nil
+}
+
 func (e *Executor) lookupCompletedCommand(commandID string) (*activeCommand, bool) {
 	e.mu.RLock()
 	defer e.mu.RUnlock()
@@ -465,18 +512,23 @@ func (e *Executor) lookupCompletedCommand(commandID string) (*activeCommand, boo
 }
 
 func (e *Executor) Approve(ctx context.Context, approvalID string) (string, error) {
-	e.mu.Lock()
+	e.mu.RLock()
 	approval, ok := e.approvals[approvalID]
 	if !ok {
-		e.mu.Unlock()
+		e.mu.RUnlock()
 		return "", fmt.Errorf("shell approval %q not found", approvalID)
 	}
-	delete(e.approvals, approvalID)
-	e.mu.Unlock()
-	if err := e.recordApprovalGranted(ctx, approval); err != nil {
+	e.mu.RUnlock()
+	out, err := e.startCommand(ctx, approval.contract, approval.meta, approval.CommandID, approval.Command, approval.Args, approval.Cwd, approval.invocation, approval.ToolName, func() error {
+		return e.recordApprovalGranted(ctx, approval)
+	})
+	if err != nil {
 		return "", err
 	}
-	return e.startCommand(ctx, approval.contract, approval.meta, approval.Command, approval.Args, approval.Cwd, approval.invocation, approval.ToolName)
+	e.mu.Lock()
+	delete(e.approvals, approvalID)
+	e.mu.Unlock()
+	return out, nil
 }
 
 func (e *Executor) Deny(ctx context.Context, approvalID string) error {
@@ -528,6 +580,7 @@ func (e *Executor) waitForCommand(active *activeCommand) {
 	active.errorText = errorText
 	active.completedAt = time.Now().UTC()
 	active.mu.Unlock()
+	_ = e.recordCompleted(context.Background(), active)
 	e.archiveCompletedCommand(active)
 }
 
@@ -583,10 +636,17 @@ func (e *Executor) captureOutput(active *activeCommand, stream string, reader io
 
 func (e *Executor) appendChunk(active *activeCommand, stream, text string) {
 	active.mu.Lock()
-	defer active.mu.Unlock()
 	active.nextOffset++
+	offset := active.nextOffset
 	active.chunks = append(active.chunks, commandChunk{
-		Offset: active.nextOffset,
+		Offset: offset,
+		Stream: stream,
+		Text:   text,
+	})
+	active.recordedOffset = offset
+	active.mu.Unlock()
+	_ = e.recordChunk(context.Background(), active, commandChunk{
+		Offset: offset,
 		Stream: stream,
 		Text:   text,
 	})
@@ -596,7 +656,7 @@ func (e *Executor) recordStarted(ctx context.Context, active *activeCommand) err
 	if active.meta.RecordEvent == nil {
 		return nil
 	}
-	return active.meta.RecordEvent(ctx, eventing.Event{
+	return e.emitEvent(ctx, active.meta, eventing.Event{
 		ID:            metaID(active.meta, "evt-shell-command-started"),
 		Kind:          eventing.EventShellCommandStarted,
 		OccurredAt:    metaNow(active.meta),
@@ -622,7 +682,7 @@ func (e *Executor) recordApprovalRequested(ctx context.Context, approval *pendin
 	if approval.meta.RecordEvent == nil {
 		return nil
 	}
-	return approval.meta.RecordEvent(ctx, eventing.Event{
+	return e.emitEvent(ctx, approval.meta, eventing.Event{
 		ID:            metaID(approval.meta, "evt-shell-command-approval-requested"),
 		Kind:          eventing.EventShellCommandApprovalRequested,
 		OccurredAt:    metaNow(approval.meta),
@@ -633,12 +693,14 @@ func (e *Executor) recordApprovalRequested(ctx context.Context, approval *pendin
 		ActorType:     firstNonEmpty(approval.meta.ActorType, "agent"),
 		TraceSummary:  "shell command approval requested",
 		Payload: map[string]any{
-			"session_id":  approval.SessionID,
-			"run_id":      approval.RunID,
-			"approval_id": approval.ApprovalID,
-			"command":     approval.Command,
-			"args":        append([]string{}, approval.Args...),
-			"cwd":         approval.Cwd,
+			"session_id":       approval.SessionID,
+			"run_id":           approval.RunID,
+			"approval_id":      approval.ApprovalID,
+			"tool_name":        approval.ToolName,
+			"command":          approval.Command,
+			"args":             append([]string{}, approval.Args...),
+			"cwd":              approval.Cwd,
+			"approval_message": approval.Message,
 		},
 	})
 }
@@ -647,7 +709,7 @@ func (e *Executor) recordApprovalGranted(ctx context.Context, approval *pendingA
 	if approval.meta.RecordEvent == nil {
 		return nil
 	}
-	return approval.meta.RecordEvent(ctx, eventing.Event{
+	return e.emitEvent(ctx, approval.meta, eventing.Event{
 		ID:            metaID(approval.meta, "evt-shell-command-approval-granted"),
 		Kind:          eventing.EventShellCommandApprovalGranted,
 		OccurredAt:    metaNow(approval.meta),
@@ -669,7 +731,7 @@ func (e *Executor) recordApprovalDenied(ctx context.Context, approval *pendingAp
 	if approval.meta.RecordEvent == nil {
 		return nil
 	}
-	return approval.meta.RecordEvent(ctx, eventing.Event{
+	return e.emitEvent(ctx, approval.meta, eventing.Event{
 		ID:            metaID(approval.meta, "evt-shell-command-approval-denied"),
 		Kind:          eventing.EventShellCommandApprovalDenied,
 		OccurredAt:    metaNow(approval.meta),
@@ -689,39 +751,41 @@ func (e *Executor) recordApprovalDenied(ctx context.Context, approval *pendingAp
 }
 
 func (e *Executor) recordPollEvents(ctx context.Context, active *activeCommand) error {
+	return nil
+}
+
+func (e *Executor) recordChunk(ctx context.Context, active *activeCommand, chunk commandChunk) error {
+	if active.meta.RecordEvent == nil {
+		return nil
+	}
+	return e.emitEvent(ctx, active.meta, eventing.Event{
+		ID:            metaID(active.meta, "evt-shell-command-chunk"),
+		Kind:          eventing.EventShellCommandOutputChunk,
+		OccurredAt:    metaNow(active.meta),
+		AggregateID:   active.id,
+		AggregateType: eventing.AggregateShellCommand,
+		Source:        active.meta.Source,
+		ActorID:       active.meta.ActorID,
+		ActorType:     firstNonEmpty(active.meta.ActorType, "agent"),
+		TraceSummary:  "shell command output chunk",
+		Payload: map[string]any{
+			"session_id": active.meta.SessionID,
+			"run_id":     active.meta.RunID,
+			"command_id": active.id,
+			"offset":     chunk.Offset,
+			"stream":     chunk.Stream,
+			"text":       chunk.Text,
+		},
+	})
+}
+
+func (e *Executor) recordCompleted(ctx context.Context, active *activeCommand) error {
 	if active.meta.RecordEvent == nil {
 		return nil
 	}
 	active.mu.Lock()
-	defer active.mu.Unlock()
-	for _, chunk := range active.chunks {
-		if chunk.Offset <= active.recordedOffset {
-			continue
-		}
-		if err := active.meta.RecordEvent(ctx, eventing.Event{
-			ID:            metaID(active.meta, "evt-shell-command-chunk"),
-			Kind:          eventing.EventShellCommandOutputChunk,
-			OccurredAt:    metaNow(active.meta),
-			AggregateID:   active.id,
-			AggregateType: eventing.AggregateShellCommand,
-			Source:        active.meta.Source,
-			ActorID:       active.meta.ActorID,
-			ActorType:     firstNonEmpty(active.meta.ActorType, "agent"),
-			TraceSummary:  "shell command output chunk",
-			Payload: map[string]any{
-				"session_id": active.meta.SessionID,
-				"run_id":     active.meta.RunID,
-				"command_id": active.id,
-				"offset":     chunk.Offset,
-				"stream":     chunk.Stream,
-				"text":       chunk.Text,
-			},
-		}); err != nil {
-			return err
-		}
-		active.recordedOffset = chunk.Offset
-	}
-	if active.terminalRecorded || active.status == "running" || active.status == "killing" {
+	if active.terminalRecorded {
+		active.mu.Unlock()
 		return nil
 	}
 	payload := map[string]any{
@@ -736,7 +800,9 @@ func (e *Executor) recordPollEvents(ctx context.Context, active *activeCommand) 
 	if active.errorText != "" {
 		payload["error"] = active.errorText
 	}
-	if err := active.meta.RecordEvent(ctx, eventing.Event{
+	active.terminalRecorded = true
+	active.mu.Unlock()
+	return e.emitEvent(ctx, active.meta, eventing.Event{
 		ID:            metaID(active.meta, "evt-shell-command-completed"),
 		Kind:          eventing.EventShellCommandCompleted,
 		OccurredAt:    metaNow(active.meta),
@@ -747,18 +813,14 @@ func (e *Executor) recordPollEvents(ctx context.Context, active *activeCommand) 
 		ActorType:     firstNonEmpty(active.meta.ActorType, "agent"),
 		TraceSummary:  "shell command completed",
 		Payload:       payload,
-	}); err != nil {
-		return err
-	}
-	active.terminalRecorded = true
-	return nil
+	})
 }
 
 func (e *Executor) recordKillRequested(ctx context.Context, active *activeCommand) error {
 	if active.meta.RecordEvent == nil {
 		return nil
 	}
-	return active.meta.RecordEvent(ctx, eventing.Event{
+	return e.emitEvent(ctx, active.meta, eventing.Event{
 		ID:            metaID(active.meta, "evt-shell-command-kill-requested"),
 		Kind:          eventing.EventShellCommandKillRequested,
 		OccurredAt:    metaNow(active.meta),
@@ -1181,4 +1243,13 @@ func firstNonEmpty(values ...string) string {
 		}
 	}
 	return ""
+}
+
+func (e *Executor) emitEvent(ctx context.Context, meta ExecutionMeta, event eventing.Event) error {
+	if meta.RecordEvent == nil {
+		return nil
+	}
+	e.eventMu.Lock()
+	defer e.eventMu.Unlock()
+	return meta.RecordEvent(ctx, event)
 }

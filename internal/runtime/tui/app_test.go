@@ -807,7 +807,7 @@ func TestToolsViewShowsPendingShellApproval(t *testing.T) {
 		ConfigPath:   configPath,
 		Config:       config.AgentConfig{ID: "tui-test", Spec: config.AgentConfigSpec{Runtime: config.AgentRuntimeConfig{MaxToolRounds: 7}}},
 		EventLog:     runtime.NewInMemoryEventLog(),
-		Projections:  []projections.Projection{projections.NewSessionCatalogProjection(), projections.NewTranscriptProjection(), projections.NewChatTimelineProjection(), projections.NewPlanHeadProjection(), projections.NewActivePlanProjection()},
+		Projections:  []projections.Projection{projections.NewSessionCatalogProjection(), projections.NewTranscriptProjection(), projections.NewChatTimelineProjection(), projections.NewPlanHeadProjection(), projections.NewActivePlanProjection(), projections.NewShellCommandProjection()},
 		UIBus:        runtime.NewUIEventBus(),
 		ShellRuntime: shell.NewExecutor(),
 		Contracts: contracts.ResolvedContracts{
@@ -849,7 +849,7 @@ func TestToolsViewShowsPendingShellApproval(t *testing.T) {
 	if _, err := agent.ShellRuntime.ExecuteWithMeta(context.Background(), agent.Contracts.ShellExecution, "shell_start", map[string]any{
 		"command": "go",
 		"args":    []any{"test"},
-	}, shell.ExecutionMeta{SessionID: m.activeSessionID, RunID: "run-1"}); err != nil {
+	}, shell.ExecutionMeta{SessionID: m.activeSessionID, RunID: "run-1", RecordEvent: agent.RecordEvent, Now: agent.Now, NewID: agent.NewID}); err != nil {
 		t.Fatalf("ExecuteWithMeta returned error: %v", err)
 	}
 
