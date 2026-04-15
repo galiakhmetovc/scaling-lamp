@@ -18,6 +18,9 @@ spec:
       - sed
       - wc
       - find
+      - powershell
+      - pwsh
+      - cmd
     allowed_prefixes: []
     deny_patterns:
       - " rm "

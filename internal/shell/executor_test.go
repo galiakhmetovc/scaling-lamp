@@ -175,6 +175,64 @@ func TestExecutorAllowsCommandWhenArgumentsMatchRule(t *testing.T) {
 	}
 }
 
+func TestExecutorAllowsWindowsShellLaunchersWhenAllowlisted(t *testing.T) {
+	t.Parallel()
+
+	executor := &Executor{
+		run: func(_ context.Context, _ string, executable string, args []string) (runResult, error) {
+			return runResult{
+				stdout:   executable + " " + strings.Join(args, " "),
+				exitCode: 0,
+			}, nil
+		},
+		lookupPath: func(file string) (string, error) { return file, nil },
+		start:      defaultStartCommand,
+		goos:       "windows",
+		commands:   map[string]*activeCommand{},
+		completed:  map[string]*activeCommand{},
+		approvals:  map[string]*pendingApproval{},
+	}
+	out, err := executor.Execute(contracts.ShellExecutionContract{
+		Command: contracts.ShellCommandPolicy{
+			Enabled:  true,
+			Strategy: "static_allowlist",
+			Params: contracts.ShellCommandParams{
+				AllowedCommands: []string{"powershell", "pwsh", "cmd"},
+			},
+		},
+		Approval: contracts.ShellApprovalPolicy{
+			Enabled:  true,
+			Strategy: "always_allow",
+		},
+		Runtime: contracts.ShellRuntimePolicy{
+			Enabled:  true,
+			Strategy: "workspace_write",
+			Params: contracts.ShellRuntimeParams{
+				Cwd:            t.TempDir(),
+				Timeout:        "5s",
+				MaxOutputBytes: 4096,
+				AllowNetwork:   true,
+			},
+		},
+	}, "shell_exec", map[string]any{
+		"command": "pwsh",
+		"args":    []any{"-NoProfile", "-Command", "Invoke-WebRequest", "https://example.com"},
+	})
+	if err != nil {
+		t.Fatalf("Execute returned error: %v", err)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal([]byte(out), &payload); err != nil {
+		t.Fatalf("unmarshal result: %v", err)
+	}
+	if payload["status"] != "ok" {
+		t.Fatalf("status = %#v, want ok", payload["status"])
+	}
+	if payload["command"] != "pwsh" {
+		t.Fatalf("command = %#v, want pwsh", payload["command"])
+	}
+}
+
 func TestExecutorRejectsCwdOutsideRuntimeScope(t *testing.T) {
 	t.Parallel()
 

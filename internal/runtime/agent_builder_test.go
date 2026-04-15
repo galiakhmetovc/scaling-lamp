@@ -731,7 +731,7 @@ func TestRepositoryZaiSmokeConfigLoadsAndResolvesContracts(t *testing.T) {
 	if resolved.ShellExecution.Command.Strategy != "static_allowlist" {
 		t.Fatalf("shell command strategy = %q, want %q", resolved.ShellExecution.Command.Strategy, "static_allowlist")
 	}
-	wantCommands := []string{"pwd", "ls", "cat", "rg", "go", "git", "echo", "printf", "head", "sed", "wc", "find"}
+	wantCommands := []string{"pwd", "ls", "cat", "rg", "go", "git", "echo", "printf", "head", "sed", "wc", "find", "powershell", "pwsh", "cmd"}
 	if got, want := len(resolved.ShellExecution.Command.Params.AllowedCommands), len(wantCommands); got != want {
 		t.Fatalf("shell allowed commands len = %d, want %d", got, want)
 	}
