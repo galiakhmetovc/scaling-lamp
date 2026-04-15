@@ -2,6 +2,7 @@ package tui
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -437,6 +438,72 @@ func TestChatViewWrapsLongLinesToViewportWidth(t *testing.T) {
 		if lipgloss.Width(line) > state.ChatView.Width {
 			t.Fatalf("chat line width %d exceeds viewport width %d: %q", lipgloss.Width(line), state.ChatView.Width, line)
 		}
+	}
+}
+
+func TestF6TogglesMouseCaptureAndFooterIndicator(t *testing.T) {
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "agent.yaml")
+	if err := os.WriteFile(configPath, []byte("kind: AgentConfig\nversion: v1\nid: tui-test\nspec:\n  runtime:\n    max_tool_rounds: 7\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile config: %v", err)
+	}
+
+	agent := &runtime.Agent{
+		ConfigPath: configPath,
+		Config:     config.AgentConfig{ID: "tui-test", Spec: config.AgentConfigSpec{Runtime: config.AgentRuntimeConfig{MaxToolRounds: 7}}},
+		Contracts: contracts.ResolvedContracts{
+			Chat: contracts.ChatContract{
+				Output: contracts.ChatOutputPolicy{Params: contracts.ChatOutputParams{RenderMarkdown: true, MarkdownStyle: "dark"}},
+				Status: contracts.ChatStatusPolicy{Params: contracts.ChatStatusParams{ShowToolCalls: true, ShowToolResults: true, ShowPlanAfterPlanTools: true}},
+			},
+		},
+		EventLog:    runtime.NewInMemoryEventLog(),
+		Projections: []projections.Projection{projections.NewSessionCatalogProjection(), projections.NewTranscriptProjection(), projections.NewChatTimelineProjection(), projections.NewPlanHeadProjection(), projections.NewActivePlanProjection()},
+		UIBus:       runtime.NewUIEventBus(),
+		Now:         func() time.Time { return time.Date(2026, 4, 15, 10, 0, 0, 0, time.UTC) },
+		NewID:       func(prefix string) string { return prefix + "-1" },
+	}
+	m, err := newModel(context.Background(), agent, "")
+	if err != nil {
+		t.Fatalf("newModel returned error: %v", err)
+	}
+	modelAfter, _ := (&m).Update(tea.WindowSizeMsg{Width: 80, Height: 20})
+	mm := modelAfter.(*model)
+	if !mm.mouseCaptureEnabled {
+		t.Fatal("mouse capture should start enabled")
+	}
+	if !strings.Contains(mm.viewFooter(), "Mouse: on") {
+		t.Fatalf("footer missing mouse enabled indicator: %q", mm.viewFooter())
+	}
+
+	modelAfter, cmd := mm.Update(tea.KeyMsg{Type: tea.KeyF6})
+	mm = modelAfter.(*model)
+	if mm.mouseCaptureEnabled {
+		t.Fatal("mouse capture should be disabled after F6")
+	}
+	if cmd == nil {
+		t.Fatal("toggle off returned nil command")
+	}
+	if got, want := fmt.Sprintf("%T", cmd()), fmt.Sprintf("%T", tea.DisableMouse()); got != want {
+		t.Fatalf("toggle off returned %s, want %s", got, want)
+	}
+	if !strings.Contains(mm.viewFooter(), "Mouse: off") {
+		t.Fatalf("footer missing mouse disabled indicator: %q", mm.viewFooter())
+	}
+
+	modelAfter, cmd = mm.Update(tea.KeyMsg{Type: tea.KeyF6})
+	mm = modelAfter.(*model)
+	if !mm.mouseCaptureEnabled {
+		t.Fatal("mouse capture should be re-enabled after second F6")
+	}
+	if cmd == nil {
+		t.Fatal("toggle on returned nil command")
+	}
+	if got, want := fmt.Sprintf("%T", cmd()), fmt.Sprintf("%T", tea.EnableMouseCellMotion()); got != want {
+		t.Fatalf("toggle on returned %s, want %s", got, want)
+	}
+	if !strings.Contains(mm.viewFooter(), "Mouse: on") {
+		t.Fatalf("footer missing mouse re-enabled indicator: %q", mm.viewFooter())
 	}
 }
 

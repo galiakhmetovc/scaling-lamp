@@ -113,6 +113,7 @@ type model struct {
 	planDepsInput   textinput.Model
 	planNoteInput   textinput.Model
 	planStatusIndex int
+	mouseCaptureEnabled bool
 	statusMessage   string
 	errMessage      string
 	mouseTabBounds  []tabBound

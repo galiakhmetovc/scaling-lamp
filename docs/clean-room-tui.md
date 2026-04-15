@@ -75,6 +75,9 @@ Current interaction notes:
 
 - `Chat`, `Plan`, `Tools`, and settings forms use pane-local scrolling
 - mouse wheel scrolling is wired for `Chat`, `Plan`, `Tools`, and `Settings`
+- `F6` toggles mouse capture:
+  - `Mouse: on` keeps wheel and click handling inside the TUI
+  - `Mouse: off` disables capture so the terminal can do native text selection
 - the TUI code is decomposed into pane-focused modules under `internal/runtime/tui`
 - `Plan` keeps the full task tree out of the main chat timeline
 

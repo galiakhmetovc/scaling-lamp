@@ -19,7 +19,7 @@ func Run(ctx context.Context, agent *runtime.Agent, resumeID string, stdin io.Re
 	if err != nil {
 		return err
 	}
-	program := tea.NewProgram(&m, tea.WithAltScreen(), tea.WithMouseAllMotion(), tea.WithInput(stdin), tea.WithOutput(stdout))
+	program := tea.NewProgram(&m, tea.WithAltScreen(), tea.WithMouseCellMotion(), tea.WithInput(stdin), tea.WithOutput(stdout))
 	_, err = program.Run()
 	return err
 }
@@ -30,6 +30,7 @@ func newModel(ctx context.Context, agent *runtime.Agent, resumeID string) (model
 		agent:    agent,
 		tab:      tabChat,
 		sessions: map[string]*sessionState{},
+		mouseCaptureEnabled: true,
 	}
 	m.rawEditor = textarea.New()
 	m.rawEditor.SetHeight(20)
@@ -217,6 +218,14 @@ func (m *model) handleGlobalKey(msg tea.KeyMsg) tea.Cmd {
 		m.tab = tabTools
 	case "f5":
 		m.tab = tabSettings
+	case "f6":
+		m.mouseCaptureEnabled = !m.mouseCaptureEnabled
+		if m.mouseCaptureEnabled {
+			m.statusMessage = "mouse capture enabled"
+			return enableMouseCaptureCmd()
+		}
+		m.statusMessage = "mouse capture disabled; native text selection available"
+		return disableMouseCaptureCmd()
 	}
 	return nil
 }
@@ -270,8 +279,24 @@ func (m *model) viewFooter() string {
 	if m.errMessage != "" {
 		parts = append(parts, "error: "+m.errMessage)
 	}
-	parts = append(parts, "Tabs: F1..F5, Ctrl+Q quit")
+	mouseMode := "Mouse: on (F6 toggle)"
+	if !m.mouseCaptureEnabled {
+		mouseMode = "Mouse: off (F6 toggle, select text)"
+	}
+	parts = append(parts, mouseMode, "Tabs: F1..F5, Ctrl+Q quit")
 	return strings.Join(parts, " | ")
+}
+
+func enableMouseCaptureCmd() tea.Cmd {
+	return func() tea.Msg {
+		return tea.EnableMouseCellMotion()
+	}
+}
+
+func disableMouseCaptureCmd() tea.Cmd {
+	return func() tea.Msg {
+		return tea.DisableMouse()
+	}
 }
 
 func (m *model) handleMouseTabs(msg tea.MouseMsg) bool {
