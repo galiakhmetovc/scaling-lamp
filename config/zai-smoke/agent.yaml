@@ -20,6 +20,7 @@ spec:
       - run
       - transcript
       - chat_timeline
+      - shell_command
       - active_plan
       - plan_archive
       - plan_head

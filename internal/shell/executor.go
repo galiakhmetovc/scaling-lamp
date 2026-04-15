@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"teamd/internal/contracts"
+	"teamd/internal/runtime/eventing"
 )
 
 type runResult struct {
@@ -50,20 +51,34 @@ type commandChunk struct {
 	Text   string `json:"text"`
 }
 
+type ExecutionMeta struct {
+	SessionID   string
+	RunID       string
+	Source      string
+	ActorID     string
+	ActorType   string
+	RecordEvent func(context.Context, eventing.Event) error
+	Now         func() time.Time
+	NewID       func(string) string
+}
+
 type activeCommand struct {
-	mu            sync.RWMutex
-	id            string
-	command       string
-	args          []string
-	cwd           string
-	status        string
-	exitCode      *int
-	errorText     string
-	nextOffset    int
-	chunks        []commandChunk
-	process       processHandle
-	killRequested bool
-	cancel        context.CancelFunc
+	mu               sync.RWMutex
+	id               string
+	command          string
+	args             []string
+	cwd              string
+	status           string
+	exitCode         *int
+	errorText        string
+	nextOffset       int
+	chunks           []commandChunk
+	process          processHandle
+	killRequested    bool
+	cancel           context.CancelFunc
+	recordedOffset   int
+	terminalRecorded bool
+	meta             ExecutionMeta
 }
 
 type Executor struct {
@@ -88,6 +103,10 @@ func NewExecutor() *Executor {
 }
 
 func (e *Executor) Execute(contract contracts.ShellExecutionContract, toolName string, argsMap map[string]any) (string, error) {
+	return e.ExecuteWithMeta(context.Background(), contract, toolName, argsMap, ExecutionMeta{})
+}
+
+func (e *Executor) ExecuteWithMeta(ctx context.Context, contract contracts.ShellExecutionContract, toolName string, argsMap map[string]any, meta ExecutionMeta) (string, error) {
 	if e == nil {
 		return "", fmt.Errorf("shell executor is nil")
 	}
@@ -98,11 +117,11 @@ func (e *Executor) Execute(contract contracts.ShellExecutionContract, toolName s
 	case "shell_exec":
 		return e.executeSync(contract, toolName, argsMap)
 	case "shell_start":
-		return e.executeStart(contract, argsMap)
+		return e.executeStart(ctx, contract, argsMap, meta)
 	case "shell_poll":
-		return e.executePoll(argsMap)
+		return e.executePoll(ctx, argsMap)
 	case "shell_kill":
-		return e.executeKill(argsMap)
+		return e.executeKill(ctx, argsMap)
 	default:
 		return "", fmt.Errorf("shell tool %q is not implemented", toolName)
 	}
@@ -168,7 +187,7 @@ func (e *Executor) executeSync(contract contracts.ShellExecutionContract, toolNa
 	}), nil
 }
 
-func (e *Executor) executeStart(contract contracts.ShellExecutionContract, argsMap map[string]any) (string, error) {
+func (e *Executor) executeStart(ctx context.Context, contract contracts.ShellExecutionContract, argsMap map[string]any, meta ExecutionMeta) (string, error) {
 	command, err := stringArg(argsMap, "command")
 	if err != nil {
 		return "", err
@@ -223,6 +242,7 @@ func (e *Executor) executeStart(contract contracts.ShellExecutionContract, argsM
 		status:  "running",
 		process: proc,
 		cancel:  cancel,
+		meta:    meta,
 	}
 	e.mu.Lock()
 	e.commands[commandID] = active
@@ -231,6 +251,9 @@ func (e *Executor) executeStart(contract contracts.ShellExecutionContract, argsM
 	go e.captureOutput(active, "stdout", stdoutPipe)
 	go e.captureOutput(active, "stderr", stderrPipe)
 	go e.waitForCommand(active)
+	if err := e.recordStarted(ctx, active); err != nil {
+		return "", err
+	}
 
 	return jsonText(map[string]any{
 		"status":      "running",
@@ -243,7 +266,7 @@ func (e *Executor) executeStart(contract contracts.ShellExecutionContract, argsM
 	}), nil
 }
 
-func (e *Executor) executePoll(argsMap map[string]any) (string, error) {
+func (e *Executor) executePoll(ctx context.Context, argsMap map[string]any) (string, error) {
 	commandID, err := stringArg(argsMap, "command_id")
 	if err != nil {
 		return "", err
@@ -257,31 +280,38 @@ func (e *Executor) executePoll(argsMap map[string]any) (string, error) {
 		return "", err
 	}
 	active.mu.RLock()
-	defer active.mu.RUnlock()
-
 	chunks := make([]commandChunk, 0)
 	for _, chunk := range active.chunks {
 		if chunk.Offset > afterOffset {
 			chunks = append(chunks, chunk)
 		}
 	}
+	status := active.status
+	nextOffset := active.nextOffset
+	exitCode := active.exitCode
+	errorText := active.errorText
+	active.mu.RUnlock()
+
 	payload := map[string]any{
 		"tool":        "shell_poll",
 		"command_id":  commandID,
-		"status":      active.status,
+		"status":      status,
 		"chunks":      chunks,
-		"next_offset": active.nextOffset,
+		"next_offset": nextOffset,
 	}
-	if active.exitCode != nil {
-		payload["exit_code"] = *active.exitCode
+	if exitCode != nil {
+		payload["exit_code"] = *exitCode
 	}
-	if active.errorText != "" {
-		payload["error"] = active.errorText
+	if errorText != "" {
+		payload["error"] = errorText
+	}
+	if err := e.recordPollEvents(ctx, active); err != nil {
+		return "", err
 	}
 	return jsonText(payload), nil
 }
 
-func (e *Executor) executeKill(argsMap map[string]any) (string, error) {
+func (e *Executor) executeKill(ctx context.Context, argsMap map[string]any) (string, error) {
 	commandID, err := stringArg(argsMap, "command_id")
 	if err != nil {
 		return "", err
@@ -302,6 +332,9 @@ func (e *Executor) executeKill(argsMap map[string]any) (string, error) {
 	active.killRequested = true
 	if err := active.process.Kill(); err != nil {
 		return "", fmt.Errorf("kill shell command: %w", err)
+	}
+	if err := e.recordKillRequested(ctx, active); err != nil {
+		return "", err
 	}
 	return jsonText(map[string]any{
 		"tool":       "shell_kill",
@@ -369,6 +402,119 @@ func (e *Executor) appendChunk(active *activeCommand, stream, text string) {
 		Offset: active.nextOffset,
 		Stream: stream,
 		Text:   text,
+	})
+}
+
+func (e *Executor) recordStarted(ctx context.Context, active *activeCommand) error {
+	if active.meta.RecordEvent == nil {
+		return nil
+	}
+	return active.meta.RecordEvent(ctx, eventing.Event{
+		ID:            metaID(active.meta, "evt-shell-command-started"),
+		Kind:          eventing.EventShellCommandStarted,
+		OccurredAt:    metaNow(active.meta),
+		AggregateID:   active.id,
+		AggregateType: eventing.AggregateShellCommand,
+		Source:        active.meta.Source,
+		ActorID:       active.meta.ActorID,
+		ActorType:     firstNonEmpty(active.meta.ActorType, "agent"),
+		TraceSummary:  "shell command started",
+		Payload: map[string]any{
+			"session_id": active.meta.SessionID,
+			"run_id":     active.meta.RunID,
+			"command_id": active.id,
+			"command":    active.command,
+			"status":     "running",
+		},
+	})
+}
+
+func (e *Executor) recordPollEvents(ctx context.Context, active *activeCommand) error {
+	if active.meta.RecordEvent == nil {
+		return nil
+	}
+	active.mu.Lock()
+	defer active.mu.Unlock()
+	for _, chunk := range active.chunks {
+		if chunk.Offset <= active.recordedOffset {
+			continue
+		}
+		if err := active.meta.RecordEvent(ctx, eventing.Event{
+			ID:            metaID(active.meta, "evt-shell-command-chunk"),
+			Kind:          eventing.EventShellCommandOutputChunk,
+			OccurredAt:    metaNow(active.meta),
+			AggregateID:   active.id,
+			AggregateType: eventing.AggregateShellCommand,
+			Source:        active.meta.Source,
+			ActorID:       active.meta.ActorID,
+			ActorType:     firstNonEmpty(active.meta.ActorType, "agent"),
+			TraceSummary:  "shell command output chunk",
+			Payload: map[string]any{
+				"session_id": active.meta.SessionID,
+				"run_id":     active.meta.RunID,
+				"command_id": active.id,
+				"offset":     chunk.Offset,
+				"stream":     chunk.Stream,
+				"text":       chunk.Text,
+			},
+		}); err != nil {
+			return err
+		}
+		active.recordedOffset = chunk.Offset
+	}
+	if active.terminalRecorded || active.status == "running" || active.status == "killing" {
+		return nil
+	}
+	payload := map[string]any{
+		"session_id": active.meta.SessionID,
+		"run_id":     active.meta.RunID,
+		"command_id": active.id,
+		"status":     active.status,
+	}
+	if active.exitCode != nil {
+		payload["exit_code"] = *active.exitCode
+	}
+	if active.errorText != "" {
+		payload["error"] = active.errorText
+	}
+	if err := active.meta.RecordEvent(ctx, eventing.Event{
+		ID:            metaID(active.meta, "evt-shell-command-completed"),
+		Kind:          eventing.EventShellCommandCompleted,
+		OccurredAt:    metaNow(active.meta),
+		AggregateID:   active.id,
+		AggregateType: eventing.AggregateShellCommand,
+		Source:        active.meta.Source,
+		ActorID:       active.meta.ActorID,
+		ActorType:     firstNonEmpty(active.meta.ActorType, "agent"),
+		TraceSummary:  "shell command completed",
+		Payload:       payload,
+	}); err != nil {
+		return err
+	}
+	active.terminalRecorded = true
+	return nil
+}
+
+func (e *Executor) recordKillRequested(ctx context.Context, active *activeCommand) error {
+	if active.meta.RecordEvent == nil {
+		return nil
+	}
+	return active.meta.RecordEvent(ctx, eventing.Event{
+		ID:            metaID(active.meta, "evt-shell-command-kill-requested"),
+		Kind:          eventing.EventShellCommandKillRequested,
+		OccurredAt:    metaNow(active.meta),
+		AggregateID:   active.id,
+		AggregateType: eventing.AggregateShellCommand,
+		Source:        active.meta.Source,
+		ActorID:       active.meta.ActorID,
+		ActorType:     firstNonEmpty(active.meta.ActorType, "agent"),
+		TraceSummary:  "shell command kill requested",
+		Payload: map[string]any{
+			"session_id": active.meta.SessionID,
+			"run_id":     active.meta.RunID,
+			"command_id": active.id,
+			"status":     "killing",
+		},
 	})
 }
 
@@ -629,4 +775,27 @@ func exitCodeOf(err error) int {
 		return status.ExitStatus()
 	}
 	return exitErr.ExitCode()
+}
+
+func metaNow(meta ExecutionMeta) time.Time {
+	if meta.Now != nil {
+		return meta.Now().UTC()
+	}
+	return time.Now().UTC()
+}
+
+func metaID(meta ExecutionMeta, prefix string) string {
+	if meta.NewID != nil {
+		return meta.NewID(prefix)
+	}
+	return fmt.Sprintf("%s-%d", prefix, time.Now().UTC().UnixNano())
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if value != "" {
+			return value
+		}
+	}
+	return ""
 }

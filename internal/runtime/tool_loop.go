@@ -179,7 +179,7 @@ func (a *Agent) executeToolCalls(ctx context.Context, runID, sessionID, correlat
 			continue
 		}
 
-		events, resultText, err := a.executeToolCommand(sessionID, activeProjection, service, filesystemExecutor, shellExecutor, source, call)
+		events, resultText, err := a.executeToolCommand(ctx, runID, sessionID, activeProjection, service, filesystemExecutor, shellExecutor, source, call)
 		if err != nil {
 			resultText := toolErrorResult(call.Name, err)
 			if recordErr := a.recordToolCallCompleted(ctx, runID, sessionID, correlationID, source, call.Name, call.Arguments, resultText, err.Error()); recordErr != nil {
@@ -263,7 +263,7 @@ func (a *Agent) recordToolCallCompleted(ctx context.Context, runID, sessionID, c
 	})
 }
 
-func (a *Agent) executeToolCommand(sessionID string, activeProjection *projections.ActivePlanProjection, service *plans.Service, filesystemExecutor *filesystem.Executor, shellExecutor *shell.Executor, source string, call provider.ToolCall) ([]eventing.Event, string, error) {
+func (a *Agent) executeToolCommand(ctx context.Context, runID, sessionID string, activeProjection *projections.ActivePlanProjection, service *plans.Service, filesystemExecutor *filesystem.Executor, shellExecutor *shell.Executor, source string, call provider.ToolCall) ([]eventing.Event, string, error) {
 	switch call.Name {
 	case "init_plan", "add_task", "set_task_status", "add_task_note", "edit_task":
 		if activeProjection == nil {
@@ -277,7 +277,16 @@ func (a *Agent) executeToolCommand(sessionID string, activeProjection *projectio
 		}
 		return nil, resultText, nil
 	case "shell_exec", "shell_start", "shell_poll", "shell_kill":
-		resultText, err := shellExecutor.Execute(a.Contracts.ShellExecution, call.Name, call.Arguments)
+		resultText, err := shellExecutor.ExecuteWithMeta(ctx, a.Contracts.ShellExecution, call.Name, call.Arguments, shell.ExecutionMeta{
+			SessionID:   sessionID,
+			RunID:       runID,
+			Source:      source,
+			ActorID:     a.Config.ID,
+			ActorType:   "agent",
+			RecordEvent: a.RecordEvent,
+			Now:         a.now,
+			NewID:       a.newID,
+		})
 		if err != nil {
 			return nil, "", fmt.Errorf("tool call %q: %w", call.Name, err)
 		}

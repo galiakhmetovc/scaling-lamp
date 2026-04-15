@@ -1,29 +1,44 @@
 package runtime
 
 import (
+	"context"
 	"encoding/json"
 	"testing"
+	"time"
 
 	"teamd/internal/contracts"
-	"teamd/internal/provider"
+	"teamd/internal/runtime/eventing"
+	"teamd/internal/runtime/projections"
 	"teamd/internal/shell"
 )
 
-func TestExecuteToolCommandMaintainsShellLifecycleAcrossCalls(t *testing.T) {
+func TestShellLifecyclePersistsEventsAcrossCalls(t *testing.T) {
 	t.Parallel()
 
 	root := t.TempDir()
 	agent := &Agent{
 		Contracts:    shellContractsForLifecycleTest(root),
 		ShellRuntime: shell.NewExecutor(),
+		EventLog:     NewInMemoryEventLog(),
+		Projections:  []projections.Projection{projections.NewShellCommandProjection()},
+		Now:          func() time.Time { return time.Date(2026, 4, 15, 18, 0, 0, 0, time.UTC) },
+		NewID: func(prefix string) string {
+			return prefix + "-1"
+		},
 	}
 
-	_, startText, err := agent.executeToolCommand("session-1", nil, nil, nil, agent.ShellRuntime, "test", provider.ToolCall{
-		Name: "shell_start",
-		Arguments: map[string]any{
-			"command": "go",
-			"args":    []any{"env", "GOROOT"},
-		},
+	startText, err := agent.ShellRuntime.ExecuteWithMeta(context.Background(), agent.Contracts.ShellExecution, "shell_start", map[string]any{
+		"command": "go",
+		"args":    []any{"env", "GOROOT"},
+	}, shell.ExecutionMeta{
+		SessionID:   "session-1",
+		RunID:       "run-1",
+		Source:      "test",
+		ActorID:     "agent-test",
+		ActorType:   "agent",
+		RecordEvent: agent.RecordEvent,
+		Now:         agent.now,
+		NewID:       agent.newID,
 	})
 	if err != nil {
 		t.Fatalf("shell_start returned error: %v", err)
@@ -33,13 +48,11 @@ func TestExecuteToolCommandMaintainsShellLifecycleAcrossCalls(t *testing.T) {
 		t.Fatalf("command_id missing from %s", startText)
 	}
 
-	_, pollText, err := agent.executeToolCommand("session-1", nil, nil, nil, agent.ShellRuntime, "test", provider.ToolCall{
-		Name: "shell_poll",
-		Arguments: map[string]any{
-			"command_id":   commandID,
-			"after_offset": 0,
-		},
-	})
+	time.Sleep(100 * time.Millisecond)
+	pollText, err := agent.ShellRuntime.ExecuteWithMeta(context.Background(), agent.Contracts.ShellExecution, "shell_poll", map[string]any{
+		"command_id":   commandID,
+		"after_offset": 0,
+	}, shell.ExecutionMeta{})
 	if err != nil {
 		t.Fatalf("shell_poll returned error: %v", err)
 	}
@@ -51,17 +64,44 @@ func TestExecuteToolCommandMaintainsShellLifecycleAcrossCalls(t *testing.T) {
 		t.Fatalf("poll status missing from %s", pollText)
 	}
 
-	_, killText, err := agent.executeToolCommand("session-1", nil, nil, nil, agent.ShellRuntime, "test", provider.ToolCall{
-		Name: "shell_kill",
-		Arguments: map[string]any{
-			"command_id": commandID,
-		},
-	})
+	finalPollText, err := agent.ShellRuntime.ExecuteWithMeta(context.Background(), agent.Contracts.ShellExecution, "shell_poll", map[string]any{
+		"command_id":   commandID,
+		"after_offset": 0,
+	}, shell.ExecutionMeta{})
 	if err != nil {
-		t.Fatalf("shell_kill returned error: %v", err)
+		t.Fatalf("final shell_poll returned error: %v", err)
 	}
-	if status := decodeJSONStringField(t, killText, "status"); status == "" {
-		t.Fatalf("kill status missing from %s", killText)
+	if status := decodeJSONStringField(t, finalPollText, "status"); status == "" {
+		t.Fatalf("final poll status missing from %s", finalPollText)
+	}
+
+	events, err := agent.EventLog.ListByAggregate(context.Background(), eventing.AggregateShellCommand, commandID)
+	if err != nil {
+		t.Fatalf("ListByAggregate returned error: %v", err)
+	}
+	if len(events) == 0 {
+		t.Fatal("expected persisted shell command events")
+	}
+	if events[0].Kind != eventing.EventShellCommandStarted {
+		t.Fatalf("first shell event kind = %q, want %q", events[0].Kind, eventing.EventShellCommandStarted)
+	}
+
+	projection := agent.Projections[0].(*projections.ShellCommandProjection)
+	view := projection.Snapshot().Commands[commandID]
+	if view.CommandID != commandID {
+		t.Fatalf("projection command id = %q, want %q", view.CommandID, commandID)
+	}
+	if view.Status != "completed" {
+		t.Fatalf("projection status = %q, want completed", view.Status)
+	}
+	if view.NextOffset == 0 {
+		t.Fatalf("projection next offset = %d, want > 0", view.NextOffset)
+	}
+	if view.LastChunk == "" {
+		t.Fatalf("projection last chunk missing")
+	}
+	if view.ExitCode == nil || *view.ExitCode != 0 {
+		t.Fatalf("projection exit code = %#v, want 0", view.ExitCode)
 	}
 }
 

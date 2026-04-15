@@ -5,10 +5,11 @@ import "time"
 type AggregateType string
 
 const (
-	AggregateSession  AggregateType = "session"
-	AggregateRun      AggregateType = "run"
-	AggregatePlan     AggregateType = "plan"
-	AggregatePlanTask AggregateType = "plan_task"
+	AggregateSession      AggregateType = "session"
+	AggregateRun          AggregateType = "run"
+	AggregatePlan         AggregateType = "plan"
+	AggregatePlanTask     AggregateType = "plan_task"
+	AggregateShellCommand AggregateType = "shell_command"
 )
 
 type EventKind string
@@ -29,6 +30,10 @@ const (
 	EventTaskStatusChanged         EventKind = "task.status_changed"
 	EventTaskNoteAdded             EventKind = "task.note_added"
 	EventTaskEdited                EventKind = "task.edited"
+	EventShellCommandStarted       EventKind = "shell.command.started"
+	EventShellCommandOutputChunk   EventKind = "shell.command.output.chunk"
+	EventShellCommandKillRequested EventKind = "shell.command.kill_requested"
+	EventShellCommandCompleted     EventKind = "shell.command.completed"
 )
 
 type Event struct {

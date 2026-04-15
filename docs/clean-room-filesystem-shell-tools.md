@@ -136,6 +136,18 @@ Current async shell lifecycle:
 4. `shell_kill` requests termination for a running command
 5. active command state is held inside the runtime shell executor for the life of the agent process
 
+Current persisted shell lifecycle events:
+
+- `shell.command.started`
+- `shell.command.output.chunk`
+- `shell.command.kill_requested`
+- `shell.command.completed`
+
+Current persisted shell projection:
+
+- `shell_command`
+- tracks command status, latest offset, latest output chunk, exit code, and kill-pending state
+
 ## Current Limits
 
 What is implemented now:
@@ -143,6 +155,7 @@ What is implemented now:
 - all first-slice filesystem backends
 - one bounded `shell_exec` backend
 - async shell lifecycle via `shell_start` / `shell_poll` / `shell_kill`
+- persisted shell lifecycle events and `shell_command` projection
 
 What is still intentionally limited:
 
@@ -150,4 +163,3 @@ What is still intentionally limited:
 - no hard OS-level network sandbox
 - no unrestricted shell command execution
 - no binary file tooling
-- active shell command state is runtime-local; persisted command event projections are still a follow-up
