@@ -32,6 +32,7 @@ func TestDefaultDefinitionsDescribeCrossPlatformShellExecUsage(t *testing.T) {
 	description := definitions[0].Description
 	for _, want := range []string{
 		"Windows builtin commands like echo, dir, and type",
+		"argument shapes are allowed",
 		"POSIX example",
 		"Windows example",
 	} {

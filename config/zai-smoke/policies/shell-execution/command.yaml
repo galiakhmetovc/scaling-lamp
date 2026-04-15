@@ -23,3 +23,23 @@ spec:
       - " rm "
       - " curl "
       - " wget "
+    command_rules:
+      - command: go
+        allowed_arg_prefixes:
+          - test
+          - build
+          - env
+          - version
+          - list
+        denied_arg_patterns:
+          - "env -w"
+      - command: git
+        allowed_arg_prefixes:
+          - status
+          - diff
+          - log
+          - rev-parse
+          - branch
+        denied_arg_patterns:
+          - push
+          - "reset --hard"

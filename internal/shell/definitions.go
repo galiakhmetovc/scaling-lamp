@@ -49,7 +49,7 @@ func defaultDefinitions() []tools.Definition {
 		{
 			ID:          "shell_exec",
 			Name:        "shell_exec",
-			Description: "Run one bounded non-interactive shell command inside the configured workspace scope. Pass the executable name in command and each argument separately in args. Do not send a whole shell snippet in command. Windows builtin commands like echo, dir, and type are supported and may be launched through cmd automatically. POSIX example: {\"command\":\"printf\",\"args\":[\"hello\\n\"]}. Windows example: {\"command\":\"echo\",\"args\":[\"hello\"]}.",
+			Description: "Run one bounded non-interactive shell command inside the configured workspace scope. Pass the executable name in command and each argument separately in args. Do not send a whole shell snippet in command. Shell policy may also restrict which argument shapes are allowed for a given command. Windows builtin commands like echo, dir, and type are supported and may be launched through cmd automatically. POSIX example: {\"command\":\"printf\",\"args\":[\"hello\\n\"]}. Windows example: {\"command\":\"echo\",\"args\":[\"hello\"]}.",
 			Parameters: map[string]any{
 				"type": "object",
 				"properties": map[string]any{
@@ -66,7 +66,7 @@ func defaultDefinitions() []tools.Definition {
 		{
 			ID:          "shell_start",
 			Name:        "shell_start",
-			Description: "Start a bounded shell command asynchronously and return a command_id. Use shell_poll to fetch intermediate stdout/stderr chunks and shell_kill to stop it if needed.",
+			Description: "Start a bounded shell command asynchronously and return a command_id. Use shell_poll to fetch intermediate stdout/stderr chunks and shell_kill to stop it if needed. Shell policy may also restrict which argument shapes are allowed for a given command.",
 			Parameters: map[string]any{
 				"type": "object",
 				"properties": map[string]any{

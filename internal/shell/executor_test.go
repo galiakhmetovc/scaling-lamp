@@ -87,6 +87,92 @@ func TestExecutorRejectsCommandOutsideAllowlist(t *testing.T) {
 	}
 }
 
+func TestExecutorRejectsCommandByArgumentRule(t *testing.T) {
+	t.Parallel()
+
+	executor := NewExecutor()
+	_, err := executor.Execute(contracts.ShellExecutionContract{
+		Command: contracts.ShellCommandPolicy{
+			Enabled:  true,
+			Strategy: "static_allowlist",
+			Params: contracts.ShellCommandParams{
+				AllowedCommands: []string{"go"},
+				CommandRules: []contracts.ShellCommandRule{
+					{
+						Command:            "go",
+						DeniedArgPatterns:  []string{"env -w"},
+						AllowedArgPrefixes: []string{"test ", "env ", "version"},
+					},
+				},
+			},
+		},
+		Runtime: contracts.ShellRuntimePolicy{
+			Enabled:  true,
+			Strategy: "workspace_write",
+			Params: contracts.ShellRuntimeParams{
+				Cwd:            t.TempDir(),
+				Timeout:        "5s",
+				MaxOutputBytes: 4096,
+			},
+		},
+	}, "shell_exec", map[string]any{
+		"command": "go",
+		"args":    []any{"env", "-w", "GOMODCACHE=/tmp/cache"},
+	})
+	if err == nil {
+		t.Fatal("Execute returned nil error, want argument rule denial")
+	}
+}
+
+func TestExecutorAllowsCommandWhenArgumentsMatchRule(t *testing.T) {
+	t.Parallel()
+
+	executor := NewExecutor()
+	out, err := executor.Execute(contracts.ShellExecutionContract{
+		Command: contracts.ShellCommandPolicy{
+			Enabled:  true,
+			Strategy: "static_allowlist",
+			Params: contracts.ShellCommandParams{
+				AllowedCommands: []string{"git"},
+				CommandRules: []contracts.ShellCommandRule{
+					{
+						Command:            "git",
+						AllowedArgPrefixes: []string{"status", "diff", "log"},
+						DeniedArgPatterns:  []string{"push", "reset --hard"},
+					},
+				},
+			},
+		},
+		Approval: contracts.ShellApprovalPolicy{
+			Enabled:  true,
+			Strategy: "always_allow",
+		},
+		Runtime: contracts.ShellRuntimePolicy{
+			Enabled:  true,
+			Strategy: "workspace_write",
+			Params: contracts.ShellRuntimeParams{
+				Cwd:            t.TempDir(),
+				Timeout:        "5s",
+				MaxOutputBytes: 4096,
+				AllowNetwork:   true,
+			},
+		},
+	}, "shell_exec", map[string]any{
+		"command": "git",
+		"args":    []any{"status", "--short"},
+	})
+	if err != nil {
+		t.Fatalf("Execute returned error: %v", err)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal([]byte(out), &payload); err != nil {
+		t.Fatalf("unmarshal result: %v", err)
+	}
+	if payload["status"] != "ok" && payload["status"] != "error" {
+		t.Fatalf("status = %#v, want shell_exec payload", payload["status"])
+	}
+}
+
 func TestExecutorRejectsCwdOutsideRuntimeScope(t *testing.T) {
 	t.Parallel()
 

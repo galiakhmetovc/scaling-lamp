@@ -798,9 +798,64 @@ func validateCommand(policy contracts.ShellCommandPolicy, command string, args [
 					return fmt.Errorf("shell command %q does not match allowed prefixes", full)
 				}
 			}
+			if err := validateCommandRules(policy.Params.CommandRules, command, args); err != nil {
+				return err
+			}
 		default:
 			return fmt.Errorf("unsupported shell command strategy %q", policy.Strategy)
 		}
+	}
+	return nil
+}
+
+func validateCommandRules(rules []contracts.ShellCommandRule, command string, args []string) error {
+	if len(rules) == 0 {
+		return nil
+	}
+	argLine := strings.TrimSpace(strings.Join(args, " "))
+	matched := false
+	for _, rule := range rules {
+		if rule.Command != "" && rule.Command != command {
+			continue
+		}
+		matched = true
+		for _, pattern := range rule.DeniedArgPatterns {
+			if pattern != "" && strings.Contains(argLine, pattern) {
+				return fmt.Errorf("shell command arguments for %q match denied pattern", command)
+			}
+		}
+		for _, prefix := range rule.DeniedArgPrefixes {
+			if prefix != "" && strings.HasPrefix(argLine, prefix) {
+				return fmt.Errorf("shell command arguments for %q match denied prefix", command)
+			}
+		}
+		if len(rule.AllowedArgPatterns) == 0 && len(rule.AllowedArgPrefixes) == 0 {
+			continue
+		}
+		allowed := false
+		for _, pattern := range rule.AllowedArgPatterns {
+			if pattern != "" && strings.Contains(argLine, pattern) {
+				allowed = true
+				break
+			}
+		}
+		if !allowed {
+			for _, prefix := range rule.AllowedArgPrefixes {
+				if prefix == "" {
+					continue
+				}
+				if argLine == prefix || strings.HasPrefix(argLine, prefix) {
+					allowed = true
+					break
+				}
+			}
+		}
+		if !allowed {
+			return fmt.Errorf("shell command arguments for %q do not match allowed rule set", command)
+		}
+	}
+	if matched {
+		return nil
 	}
 	return nil
 }

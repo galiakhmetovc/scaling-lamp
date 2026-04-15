@@ -98,6 +98,28 @@ Current shipped shell command policy:
   - `wc`
   - `find`
 
+Current shipped richer command argument rules:
+
+- `go`
+  - allowed argument prefixes:
+    - `test`
+    - `build`
+    - `env`
+    - `version`
+    - `list`
+  - denied argument patterns:
+    - `env -w`
+- `git`
+  - allowed argument prefixes:
+    - `status`
+    - `diff`
+    - `log`
+    - `rev-parse`
+    - `branch`
+  - denied argument patterns:
+    - `push`
+    - `reset --hard`
+
 Current shipped shell runtime policy:
 
 - strategy: `workspace_write`
@@ -170,6 +192,7 @@ What is implemented now:
 - one bounded `shell_exec` backend
 - async shell lifecycle via `shell_start` / `shell_poll` / `shell_kill`
 - persisted shell lifecycle events and `shell_command` projection
+- richer per-command shell argument policies through `command_rules`
 
 What is still intentionally limited:
 

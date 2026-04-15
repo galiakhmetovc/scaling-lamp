@@ -459,9 +459,18 @@ type ShellDescriptionParams struct {
 }
 
 type ShellCommandParams struct {
-	AllowedCommands []string `yaml:"allowed_commands"`
-	AllowedPrefixes []string `yaml:"allowed_prefixes"`
-	DenyPatterns    []string `yaml:"deny_patterns"`
+	AllowedCommands []string           `yaml:"allowed_commands"`
+	AllowedPrefixes []string           `yaml:"allowed_prefixes"`
+	DenyPatterns    []string           `yaml:"deny_patterns"`
+	CommandRules    []ShellCommandRule `yaml:"command_rules"`
+}
+
+type ShellCommandRule struct {
+	Command            string   `yaml:"command"`
+	AllowedArgPrefixes []string `yaml:"allowed_arg_prefixes"`
+	AllowedArgPatterns []string `yaml:"allowed_arg_patterns"`
+	DeniedArgPrefixes  []string `yaml:"denied_arg_prefixes"`
+	DeniedArgPatterns  []string `yaml:"denied_arg_patterns"`
 }
 
 type ShellApprovalParams struct {
