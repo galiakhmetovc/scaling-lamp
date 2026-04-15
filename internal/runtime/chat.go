@@ -25,6 +25,12 @@ type ChatTurnInput struct {
 	ContractsOverride     *contracts.ResolvedContracts
 }
 
+type BtwTurnInput struct {
+	Prompt               string
+	PromptAssetSelection []string
+	StreamObserver       func(provider.StreamEvent)
+}
+
 func (a *Agent) NewChatSession() (*ChatSession, error) {
 	if a == nil {
 		return nil, fmt.Errorf("agent is nil")
@@ -220,6 +226,37 @@ func (a *Agent) ChatTurn(ctx context.Context, session *ChatSession, input ChatTu
 	return result, nil
 }
 
+func (a *Agent) BtwTurn(ctx context.Context, session *ChatSession, input BtwTurnInput) (provider.ClientResult, error) {
+	if a == nil {
+		return provider.ClientResult{}, fmt.Errorf("agent is nil")
+	}
+	if a.ProviderClient == nil {
+		return provider.ClientResult{}, fmt.Errorf("agent provider client is nil")
+	}
+	if session == nil {
+		return provider.ClientResult{}, fmt.Errorf("chat session is nil")
+	}
+	if input.Prompt == "" {
+		return provider.ClientResult{}, fmt.Errorf("btw prompt is empty")
+	}
+
+	userMessage := contracts.Message{Role: "user", Content: input.Prompt}
+	rawMessages := append([]contracts.Message{}, session.Messages...)
+	rawMessages = append(rawMessages, userMessage)
+
+	contractSet := disableBuiltinTools(a.Contracts)
+	assembledMessages, err := a.assemblePromptMessages(session.SessionID, rawMessages)
+	if err != nil {
+		return provider.ClientResult{}, err
+	}
+
+	return a.ProviderClient.Execute(ctx, contractSet, provider.ClientInput{
+		PromptAssetSelection: input.PromptAssetSelection,
+		Messages:             assembledMessages,
+		StreamObserver:       input.StreamObserver,
+	})
+}
+
 func (a *Agent) transcriptProjection() *projections.TranscriptProjection {
 	for _, projection := range a.Projections {
 		transcript, ok := projection.(*projections.TranscriptProjection)
@@ -261,6 +298,23 @@ func (a *Agent) assemblePromptMessages(sessionID string, fallback []contracts.Me
 		return fallback, nil
 	}
 	return messages, nil
+}
+
+func disableBuiltinTools(in contracts.ResolvedContracts) contracts.ResolvedContracts {
+	out := in
+	out.Tools.Catalog.Enabled = false
+	out.Tools.Serialization.Enabled = false
+	out.PlanTools.PlanTool.Enabled = false
+	out.FilesystemTools.Catalog.Enabled = false
+	out.FilesystemTools.Description.Enabled = false
+	out.ShellTools.Catalog.Enabled = false
+	out.ShellTools.Description.Enabled = false
+	out.DelegationTools.Catalog.Enabled = false
+	out.DelegationTools.Description.Enabled = false
+	out.ToolExecution.Access.Enabled = false
+	out.ToolExecution.Approval.Enabled = false
+	out.ToolExecution.Sandbox.Enabled = false
+	return out
 }
 
 func (a *Agent) planHeadProjection() *projections.PlanHeadProjection {

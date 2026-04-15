@@ -3,6 +3,7 @@ package tui
 import (
 	"context"
 	"strings"
+	"time"
 
 	"github.com/charmbracelet/bubbles/textarea"
 	"github.com/charmbracelet/bubbles/textinput"
@@ -64,6 +65,37 @@ type toolLogEntry struct {
 	Activity runtime.ToolActivity
 }
 
+type runMeta struct {
+	Active       bool
+	StartedAt    time.Time
+	CompletedAt  time.Time
+	Provider     string
+	Model        string
+	InputTokens  int
+	OutputTokens int
+	TotalTokens  int
+}
+
+type queuedDraft struct {
+	Text     string
+	QueuedAt time.Time
+}
+
+type btwRun struct {
+	ID           string
+	Prompt       string
+	Response     string
+	Error        string
+	StartedAt    time.Time
+	CompletedAt  time.Time
+	Active       bool
+	Provider     string
+	Model        string
+	InputTokens  int
+	OutputTokens int
+	TotalTokens  int
+}
+
 type sessionState struct {
 	Session   *runtime.ChatSession
 	Input     textarea.Model
@@ -76,6 +108,10 @@ type sessionState struct {
 	Loaded    bool
 	ChatView  viewport.Model
 	ToolsView viewport.Model
+	MainRun   runMeta
+	Queue     []queuedDraft
+	QueueCursor int
+	BtwRuns   []btwRun
 }
 
 type configFormDraft struct {
@@ -90,6 +126,7 @@ type configFormDraft struct {
 type model struct {
 	ctx             context.Context
 	agent           *runtime.Agent
+	now             func() time.Time
 	width           int
 	height          int
 	tab             tabIndex
@@ -132,6 +169,7 @@ type model struct {
 	mouseToolTop        int
 	mousePlanTop        int
 	mousePlanLeftWidth  int
+	clockNow            time.Time
 }
 
 type tabBound struct {
@@ -140,10 +178,28 @@ type tabBound struct {
 	tab   tabIndex
 }
 
+type runtimeResultMeta struct {
+	Provider     string
+	Model        string
+	InputTokens  int
+	OutputTokens int
+	TotalTokens  int
+	Content      string
+}
+
 type uiEventMsg runtime.UIEvent
 
 type chatTurnFinishedMsg struct {
 	SessionID string
+	Result    runtimeResultMeta
+	Err       error
+}
+
+type btwTurnFinishedMsg struct {
+	SessionID string
+	RunID     string
+	Prompt    string
+	Result    runtimeResultMeta
 	Err       error
 }
 
@@ -151,3 +207,5 @@ type rebuildFinishedMsg struct {
 	Agent *runtime.Agent
 	Err   error
 }
+
+type clockTickMsg time.Time

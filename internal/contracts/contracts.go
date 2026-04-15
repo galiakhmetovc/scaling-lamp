@@ -250,6 +250,7 @@ type ChatCommandParams struct {
 	ExitCommand    string `yaml:"exit_command"`
 	HelpCommand    string `yaml:"help_command"`
 	SessionCommand string `yaml:"session_command"`
+	BtwCommand     string `yaml:"btw_command"`
 }
 
 type ChatResumeParams struct {

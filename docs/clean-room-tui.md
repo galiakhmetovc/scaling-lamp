@@ -18,11 +18,17 @@ Current behavior:
   - `Enter` activates the selected session
 - `Chat`
   - uses the active session
-  - `Ctrl+S` sends the current multiline prompt
+  - `Enter` sends the current prompt immediately when the main run is idle
+  - `Enter` queues the current prompt when the main run is still active, and the queued draft is sent as early as possible after completion
+  - `Tab` stages the current draft into the queue, or recalls the selected queued draft back into the editor when the input is empty
+  - `Alt+Up` / `Alt+Down` move the queued-draft cursor
+  - `Shift+Enter` keeps multiline editing behavior
   - assistant text streams through the runtime UI bus
   - chat history is rendered as a markdown timeline for the active session
-  - tool and plan activity is persisted into that timeline as compact one-line markdown entries
+  - tool and plan activity is persisted into that timeline as markdown-rendered blocks
   - final assistant messages render as terminal markdown
+  - `/btw <question>` runs a separate no-tools side query against a snapshot of the current session context and renders its answer in a separate branch block inside `Chat`
+  - a session-local status bar is shown directly under the input and includes provider, model, wall-clock time, main-run elapsed timer, approximate context tokens, queue length, and active `/btw` count
 - `Plan`
   - shows the current active session `plan_head` projection
   - renders the browse/details view through terminal markdown instead of raw plain text
@@ -81,6 +87,7 @@ Current interaction notes:
 
 - `Chat`, `Plan`, `Tools`, and settings forms use pane-local scrolling
 - mouse wheel scrolling is wired for `Chat`, `Plan`, `Tools`, and `Settings`
+- queued drafts stay editable while the main run is active because the chat input is no longer blocked during a provider turn
 - `F6` toggles mouse capture:
   - `Mouse: on` keeps wheel and click handling inside the TUI and uses alt-screen
   - `Mouse: off` disables capture and exits alt-screen so the terminal can do native text selection

@@ -294,6 +294,101 @@ func TestAgentChatTurnExecutesPlanToolCallsAndReturnsFinalAssistantMessage(t *te
 	}
 }
 
+func TestAgentBtwTurnUsesNoToolsAndDoesNotMutateTranscript(t *testing.T) {
+	t.Setenv("TEAMD_ZAI_API_KEY", "secret-token")
+
+	clock := time.Date(2026, 4, 15, 17, 0, 0, 0, time.UTC)
+	idValues := []string{
+		"session-chat-1",
+		"run-chat-1", "evt-session-1", "evt-msg-user-1", "evt-run-start-1", "evt-provider-request-1", "evt-transport-1", "evt-msg-assistant-1", "evt-run-complete-1",
+	}
+	nextID := func(prefix string) string {
+		if len(idValues) == 0 {
+			t.Fatalf("unexpected id request for prefix %q", prefix)
+		}
+		id := idValues[0]
+		idValues = idValues[1:]
+		return id
+	}
+
+	var btwRequestBody map[string]any
+	agent := &runtime.Agent{
+		Config:        chatRuntimeConfigForTest(),
+		Contracts:     chatContractsForToolLoopTest(),
+		PromptAssets:  provider.NewPromptAssetExecutor(),
+		RequestShape:  provider.NewRequestShapeExecutor(),
+		PlanTools:     tools.NewPlanToolExecutor(),
+		ToolCatalog:   tools.NewCatalogExecutor(),
+		ToolExecution: tools.NewExecutionGate(),
+		Transport: provider.NewTransportExecutor(fakeDoer{
+			do: func(req *http.Request) (*http.Response, error) {
+				defer req.Body.Close()
+				if err := json.NewDecoder(req.Body).Decode(&btwRequestBody); err != nil {
+					t.Fatalf("decode btw request body: %v", err)
+				}
+				return &http.Response{
+					StatusCode: http.StatusOK,
+					Header:     http.Header{"Content-Type": []string{"application/json"}},
+					Body: io.NopCloser(bytes.NewBufferString(`{
+  "id":"resp-btw-1",
+  "model":"glm-5-turbo",
+  "choices":[
+    {
+      "finish_reason":"stop",
+      "message":{"role":"assistant","content":"Side answer."}
+    }
+  ],
+  "usage":{"prompt_tokens":9,"completion_tokens":3,"total_tokens":12}
+}`)),
+				}, nil
+			},
+		}),
+		EventLog: runtime.NewInMemoryEventLog(),
+		Projections: []projections.Projection{
+			projections.NewSessionProjection(),
+			projections.NewRunProjection(),
+			projections.NewTranscriptProjection(),
+		},
+		Now:   func() time.Time { return clock },
+		NewID: nextID,
+	}
+	agent.ProviderClient = provider.NewClient(agent.PromptAssets, agent.RequestShape, agent.PlanTools, filesystem.NewDefinitionExecutor(), shell.NewDefinitionExecutor(), delegation.NewDefinitionExecutor(), agent.ToolCatalog, agent.ToolExecution, agent.Transport)
+
+	session, err := agent.NewChatSession()
+	if err != nil {
+		t.Fatalf("NewChatSession returned error: %v", err)
+	}
+	if _, err := agent.ChatTurn(context.Background(), session, runtime.ChatTurnInput{Prompt: "Ping"}); err != nil {
+		t.Fatalf("ChatTurn returned error: %v", err)
+	}
+	before := len(session.Messages)
+
+	result, err := agent.BtwTurn(context.Background(), session, runtime.BtwTurnInput{Prompt: "Quick side question"})
+	if err != nil {
+		t.Fatalf("BtwTurn returned error: %v", err)
+	}
+	if result.Provider.Message.Content != "Side answer." {
+		t.Fatalf("btw response = %q, want Side answer.", result.Provider.Message.Content)
+	}
+	if len(session.Messages) != before {
+		t.Fatalf("session messages len = %d, want %d", len(session.Messages), before)
+	}
+
+	if toolsRaw, ok := btwRequestBody["tools"]; ok {
+		if tools, ok := toolsRaw.([]any); ok && len(tools) != 0 {
+			t.Fatalf("btw tools = %#v, want none", toolsRaw)
+		}
+	}
+	messages, ok := btwRequestBody["messages"].([]any)
+	if !ok || len(messages) < 2 {
+		t.Fatalf("btw request messages = %#v", btwRequestBody["messages"])
+	}
+	last, ok := messages[len(messages)-1].(map[string]any)
+	if !ok || last["content"] != "Quick side question" {
+		t.Fatalf("btw last message = %#v", last)
+	}
+}
+
 func TestAgentChatTurnHonorsConfiguredMaxToolRounds(t *testing.T) {
 	t.Setenv("TEAMD_ZAI_API_KEY", "secret-token")
 

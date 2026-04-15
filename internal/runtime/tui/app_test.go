@@ -116,10 +116,10 @@ func TestChatViewRendersTimelineEntries(t *testing.T) {
 	if !strings.Contains(got, "Ping") {
 		t.Fatalf("view missing user message: %q", got)
 	}
-	if !strings.Contains(got, "Tool:") {
+	if !strings.Contains(got, "Tool") {
 		t.Fatalf("view missing tool timeline line: %q", got)
 	}
-	if !strings.Contains(got, "Task: added") {
+	if !strings.Contains(got, "Task added") {
 		t.Fatalf("view missing plan timeline line: %q", got)
 	}
 }
@@ -439,6 +439,110 @@ func TestChatViewWrapsLongLinesToViewportWidth(t *testing.T) {
 		if lipgloss.Width(line) > state.ChatView.Width {
 			t.Fatalf("chat line width %d exceeds viewport width %d: %q", lipgloss.Width(line), state.ChatView.Width, line)
 		}
+	}
+}
+
+func TestChatViewShowsSessionStatusBarAndQueuedDrafts(t *testing.T) {
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "agent.yaml")
+	if err := os.WriteFile(configPath, []byte("kind: AgentConfig\nversion: v1\nid: tui-test\nspec:\n  runtime:\n    max_tool_rounds: 7\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile config: %v", err)
+	}
+
+	agent := &runtime.Agent{
+		ConfigPath: configPath,
+		Config:     config.AgentConfig{ID: "tui-test", Spec: config.AgentConfigSpec{Runtime: config.AgentRuntimeConfig{MaxToolRounds: 7}}},
+		Contracts: contracts.ResolvedContracts{
+			ProviderRequest: contracts.ProviderRequestContract{
+				Transport: contracts.TransportContract{
+					ID: "transport-zai",
+					Endpoint: contracts.EndpointPolicy{
+						Params: contracts.EndpointParams{BaseURL: "https://api.z.ai/api/paas/v4"},
+					},
+				},
+				RequestShape: contracts.RequestShapeContract{
+					Model: contracts.ModelPolicy{Params: contracts.ModelParams{Model: "glm-5-turbo"}},
+				},
+			},
+			Chat: contracts.ChatContract{
+				Output: contracts.ChatOutputPolicy{Params: contracts.ChatOutputParams{RenderMarkdown: true, MarkdownStyle: "dark"}},
+				Status: contracts.ChatStatusPolicy{Params: contracts.ChatStatusParams{ShowToolCalls: true, ShowToolResults: true, ShowPlanAfterPlanTools: true}},
+			},
+		},
+		EventLog:    runtime.NewInMemoryEventLog(),
+		Projections: []projections.Projection{projections.NewSessionCatalogProjection(), projections.NewTranscriptProjection(), projections.NewChatTimelineProjection(), projections.NewPlanHeadProjection(), projections.NewActivePlanProjection()},
+		UIBus:       runtime.NewUIEventBus(),
+		Now:         func() time.Time { return time.Date(2026, 4, 15, 18, 0, 0, 0, time.UTC) },
+		NewID:       func(prefix string) string { return prefix + "-1" },
+	}
+
+	m, err := newModel(context.Background(), agent, "")
+	if err != nil {
+		t.Fatalf("newModel returned error: %v", err)
+	}
+	m.now = func() time.Time { return time.Date(2026, 4, 15, 18, 1, 0, 0, time.UTC) }
+	m.clockNow = m.now()
+	state := m.sessions[m.activeSessionID]
+	state.MainRun = runMeta{
+		Active:      true,
+		StartedAt:   time.Date(2026, 4, 15, 18, 0, 30, 0, time.UTC),
+		Provider:    "api.z.ai",
+		Model:       "glm-5-turbo",
+		TotalTokens: 42,
+	}
+	state.Queue = []queuedDraft{{Text: "Second question"}, {Text: "Third question"}}
+
+	modelAfter, _ := (&m).Update(tea.WindowSizeMsg{Width: 120, Height: 40})
+	got := modelAfter.View()
+	for _, want := range []string{"provider: api.z.ai", "model: glm-5-turbo", "run: running 00:30", "ctx≈", "queue: 2", "Queued drafts:"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("view missing %q: %q", want, got)
+		}
+	}
+}
+
+func TestChatEnterQueuesDraftWhileMainRunActive(t *testing.T) {
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "agent.yaml")
+	if err := os.WriteFile(configPath, []byte("kind: AgentConfig\nversion: v1\nid: tui-test\nspec:\n  runtime:\n    max_tool_rounds: 7\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile config: %v", err)
+	}
+
+	agent := &runtime.Agent{
+		ConfigPath: configPath,
+		Config:     config.AgentConfig{ID: "tui-test", Spec: config.AgentConfigSpec{Runtime: config.AgentRuntimeConfig{MaxToolRounds: 7}}},
+		Contracts: contracts.ResolvedContracts{
+			Chat: contracts.ChatContract{
+				Output: contracts.ChatOutputPolicy{Params: contracts.ChatOutputParams{RenderMarkdown: true, MarkdownStyle: "dark"}},
+				Status: contracts.ChatStatusPolicy{Params: contracts.ChatStatusParams{ShowToolCalls: true, ShowToolResults: true, ShowPlanAfterPlanTools: true}},
+			},
+		},
+		EventLog:    runtime.NewInMemoryEventLog(),
+		Projections: []projections.Projection{projections.NewSessionCatalogProjection(), projections.NewTranscriptProjection(), projections.NewChatTimelineProjection(), projections.NewPlanHeadProjection(), projections.NewActivePlanProjection()},
+		UIBus:       runtime.NewUIEventBus(),
+		Now:         func() time.Time { return time.Date(2026, 4, 15, 18, 5, 0, 0, time.UTC) },
+		NewID:       func(prefix string) string { return prefix + "-1" },
+	}
+
+	m, err := newModel(context.Background(), agent, "")
+	if err != nil {
+		t.Fatalf("newModel returned error: %v", err)
+	}
+	state := m.sessions[m.activeSessionID]
+	state.MainRun.Active = true
+	state.Input.SetValue("Queued while running")
+
+	modelAfter, _ := (&m).Update(tea.KeyMsg{Type: tea.KeyEnter})
+	mm := modelAfter.(*model)
+	state = mm.sessions[mm.activeSessionID]
+	if len(state.Queue) != 1 {
+		t.Fatalf("queue len = %d, want 1", len(state.Queue))
+	}
+	if state.Queue[0].Text != "Queued while running" {
+		t.Fatalf("queued draft = %q", state.Queue[0].Text)
+	}
+	if strings.TrimSpace(state.Input.Value()) != "" {
+		t.Fatalf("input value = %q, want cleared", state.Input.Value())
 	}
 }
 

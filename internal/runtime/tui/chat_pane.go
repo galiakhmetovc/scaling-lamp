@@ -3,6 +3,7 @@ package tui
 import (
 	"fmt"
 	"strings"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -22,20 +23,20 @@ func (m *model) updateChat(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "pgdown":
 		state.ChatView.LineDown(max(1, state.ChatView.Height/2))
 		return m, nil
-	case "ctrl+s":
-		if state.Busy {
-			return m, nil
+	case "alt+up":
+		if len(state.Queue) > 0 && state.QueueCursor > 0 {
+			state.QueueCursor--
 		}
-		prompt := strings.TrimSpace(state.Input.Value())
-		if prompt == "" {
-			return m, nil
+		return m, nil
+	case "alt+down":
+		if len(state.Queue) > 0 && state.QueueCursor < len(state.Queue)-1 {
+			state.QueueCursor++
 		}
-		state.Input.Reset()
-		state.Streaming.Reset()
-		state.LastError = ""
-		state.Status = "sending"
-		state.Busy = true
-		return m, runChatTurnCmd(m.agent, state.Session, prompt, state.Overrides)
+		return m, nil
+	case "tab":
+		return m, m.stageOrRecallDraft(state)
+	case "enter", "ctrl+s":
+		return m, m.submitChatInput(state)
 	}
 	var cmd tea.Cmd
 	state.Input, cmd = state.Input.Update(msg)
@@ -48,8 +49,19 @@ func (m *model) viewChat() string {
 		return "No active session"
 	}
 	m.renderChatViewport(state)
-	header := fmt.Sprintf("session: %s\nstatus: %s", state.Session.SessionID, coalesce(state.Status, "idle"))
-	return lipgloss.JoinVertical(lipgloss.Left, header, state.ChatView.View(), "\nInput (Ctrl+S send, PgUp/PgDn scroll):", state.Input.View())
+	header := fmt.Sprintf("session: %s", state.Session.SessionID)
+	queue := m.viewQueue(state)
+	status := m.viewChatStatusBar(state)
+	return lipgloss.JoinVertical(
+		lipgloss.Left,
+		header,
+		state.ChatView.View(),
+		"",
+		"Input (Enter send, Tab queue/recall, Shift+Enter newline, Alt+Up/Down queue select):",
+		state.Input.View(),
+		status,
+		queue,
+	)
 }
 
 func (m *model) renderChatViewport(state *sessionState) {
@@ -64,7 +76,7 @@ func (m *model) renderChatViewport(state *sessionState) {
 		case projections.ChatTimelineItemMessage:
 			lines = append(lines, strings.ToUpper(item.Role)+":")
 			content := item.Content
-			if item.Role == "assistant" && state.Overrides.RenderMarkdown {
+			if state.Overrides.RenderMarkdown {
 				rendered, err := renderMarkdown(content, state.Overrides.MarkdownStyle, contentWidth)
 				if err == nil {
 					content = strings.TrimRight(rendered, "\n")
@@ -76,13 +88,16 @@ func (m *model) renderChatViewport(state *sessionState) {
 			}
 			lines = append(lines, content, "")
 		default:
-			lines = append(lines, wrapText(item.Content, contentWidth))
+			lines = append(lines, m.renderMarkdownBlock(item.Content, state.Overrides.MarkdownStyle, contentWidth), "")
 		}
 	}
 	if state.Streaming.Len() > 0 {
 		lines = append(lines, "ASSISTANT:", wrapText(state.Streaming.String(), contentWidth), "")
 	}
-	state.ChatView.SetContent(strings.Join(lines, "\n"))
+	for _, run := range state.BtwRuns {
+		lines = append(lines, m.renderBtwBlock(run, state.Overrides.MarkdownStyle, contentWidth), "")
+	}
+	state.ChatView.SetContent(strings.TrimRight(strings.Join(lines, "\n"), "\n"))
 	if wasAtBottom {
 		state.ChatView.GotoBottom()
 	}
@@ -102,4 +117,253 @@ func (m *model) handleMouseChat(msg tea.MouseMsg) bool {
 		return true
 	}
 	return false
+}
+
+func (m *model) submitChatInput(state *sessionState) tea.Cmd {
+	prompt := strings.TrimSpace(state.Input.Value())
+	if prompt == "" {
+		return nil
+	}
+	if handled, cmd := m.handleChatCommand(state, prompt); handled {
+		return cmd
+	}
+	if state.MainRun.Active {
+		m.enqueueDraft(state, prompt)
+		state.Input.Reset()
+		m.statusMessage = "draft queued"
+		return nil
+	}
+	return m.startMainRun(state, prompt)
+}
+
+func (m *model) stageOrRecallDraft(state *sessionState) tea.Cmd {
+	prompt := strings.TrimSpace(state.Input.Value())
+	if prompt != "" {
+		m.enqueueDraft(state, prompt)
+		state.Input.Reset()
+		m.statusMessage = "draft queued"
+		return nil
+	}
+	if len(state.Queue) == 0 {
+		return nil
+	}
+	if state.QueueCursor < 0 {
+		state.QueueCursor = 0
+	}
+	if state.QueueCursor >= len(state.Queue) {
+		state.QueueCursor = len(state.Queue) - 1
+	}
+	item := state.Queue[state.QueueCursor]
+	state.Queue = append(state.Queue[:state.QueueCursor], state.Queue[state.QueueCursor+1:]...)
+	if state.QueueCursor >= len(state.Queue) && state.QueueCursor > 0 {
+		state.QueueCursor--
+	}
+	state.Input.SetValue(item.Text)
+	state.Input.Focus()
+	m.statusMessage = "draft loaded from queue"
+	return nil
+}
+
+func (m *model) handleChatCommand(state *sessionState, prompt string) (bool, tea.Cmd) {
+	trimmed := strings.TrimSpace(prompt)
+	cmds := m.agent.Contracts.Chat.Command.Params
+	exitCmd := coalesce(cmds.ExitCommand, "/exit")
+	helpCmd := coalesce(cmds.HelpCommand, "/help")
+	sessionCmd := coalesce(cmds.SessionCommand, "/session")
+	btwCmd := coalesce(cmds.BtwCommand, "/btw")
+
+	switch {
+	case trimmed == exitCmd:
+		if m.agent.UIBus != nil {
+			m.agent.UIBus.Unsubscribe(m.uiSubID)
+		}
+		return true, tea.Quit
+	case trimmed == helpCmd:
+		state.Input.Reset()
+		m.statusMessage = fmt.Sprintf("commands: %s %s %s %s", helpCmd, sessionCmd, btwCmd, exitCmd)
+		return true, nil
+	case trimmed == sessionCmd:
+		state.Input.Reset()
+		m.statusMessage = "session: " + state.Session.SessionID
+		return true, nil
+	case strings.HasPrefix(trimmed, btwCmd+" "):
+		promptText := strings.TrimSpace(strings.TrimPrefix(trimmed, btwCmd))
+		if promptText == "" {
+			m.errMessage = "btw prompt is empty"
+			return true, nil
+		}
+		state.Input.Reset()
+		runID := fmt.Sprintf("btw-%d", len(state.BtwRuns)+1)
+		state.BtwRuns = append(state.BtwRuns, btwRun{
+			ID:        runID,
+			Prompt:    promptText,
+			StartedAt: m.now(),
+			Active:    true,
+		})
+		m.renderChatViewport(state)
+		return true, tea.Batch(runBtwTurnCmd(m.agent, state.Session, promptText, runID), tickClockCmd())
+	case trimmed == btwCmd:
+		m.errMessage = "usage: " + btwCmd + " <question>"
+		return true, nil
+	default:
+		return false, nil
+	}
+}
+
+func (m *model) startMainRun(state *sessionState, prompt string) tea.Cmd {
+	state.Input.Reset()
+	state.Streaming.Reset()
+	state.LastError = ""
+	state.Status = "running"
+	state.Busy = true
+	state.MainRun.Active = true
+	state.MainRun.StartedAt = m.now()
+	state.MainRun.CompletedAt = time.Time{}
+	state.MainRun.Provider = providerLabel(m.agent)
+	state.MainRun.Model = coalesce(m.agent.Contracts.ProviderRequest.RequestShape.Model.Params.Model, state.MainRun.Model)
+	m.renderChatViewport(state)
+	return tea.Batch(runChatTurnCmd(m.agent, state.Session, prompt, state.Overrides), tickClockCmd())
+}
+
+func (m *model) dispatchNextQueued(state *sessionState) tea.Cmd {
+	if state == nil || state.MainRun.Active || len(state.Queue) == 0 {
+		return nil
+	}
+	next := state.Queue[0]
+	state.Queue = state.Queue[1:]
+	if state.QueueCursor >= len(state.Queue) && state.QueueCursor > 0 {
+		state.QueueCursor--
+	}
+	return m.startMainRun(state, next.Text)
+}
+
+func (m *model) enqueueDraft(state *sessionState, prompt string) {
+	state.Queue = append(state.Queue, queuedDraft{Text: prompt, QueuedAt: m.now()})
+	if len(state.Queue) == 1 {
+		state.QueueCursor = 0
+	}
+}
+
+func (m *model) hasActiveRuns() bool {
+	for _, state := range m.sessions {
+		if state.MainRun.Active {
+			return true
+		}
+		for _, run := range state.BtwRuns {
+			if run.Active {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func (m *model) viewChatStatusBar(state *sessionState) string {
+	now := m.clockNow
+	if now.IsZero() {
+		now = m.now()
+	}
+	runText := "idle"
+	if state.MainRun.Active {
+		runText = "running " + formatElapsed(now.Sub(state.MainRun.StartedAt))
+	}
+	provider := coalesce(state.MainRun.Provider, providerLabel(m.agent))
+	model := coalesce(state.MainRun.Model, m.agent.Contracts.ProviderRequest.RequestShape.Model.Params.Model)
+	ctxTokens := approximateContextTokens(state)
+	lastUsage := ""
+	if state.MainRun.TotalTokens > 0 {
+		lastUsage = fmt.Sprintf(" | last=%d", state.MainRun.TotalTokens)
+	}
+	activeBtw := 0
+	for _, run := range state.BtwRuns {
+		if run.Active {
+			activeBtw++
+		}
+	}
+	parts := []string{
+		"provider: " + provider,
+		"model: " + model,
+		"time: " + now.UTC().Format("15:04:05"),
+		"run: " + runText,
+		fmt.Sprintf("ctx≈%d tok%s", ctxTokens, lastUsage),
+		fmt.Sprintf("queue: %d", len(state.Queue)),
+	}
+	if activeBtw > 0 {
+		parts = append(parts, fmt.Sprintf("btw: %d", activeBtw))
+	}
+	if state.LastError != "" {
+		parts = append(parts, "error: "+state.LastError)
+	}
+	return strings.Join(parts, " | ")
+}
+
+func (m *model) viewQueue(state *sessionState) string {
+	if len(state.Queue) == 0 {
+		return ""
+	}
+	lines := []string{"Queued drafts:"}
+	for i, item := range state.Queue {
+		prefix := "  "
+		if i == state.QueueCursor {
+			prefix = "> "
+		}
+		lines = append(lines, prefix+summarizeChatText(item.Text))
+	}
+	return strings.Join(lines, "\n")
+}
+
+func (m *model) renderMarkdownBlock(content, style string, width int) string {
+	if rendered, err := renderMarkdown(content, style, width); err == nil {
+		return strings.TrimRight(rendered, "\n")
+	}
+	return wrapText(content, width)
+}
+
+func (m *model) renderBtwBlock(run btwRun, style string, width int) string {
+	status := "running"
+	if !run.Active {
+		status = "done"
+	}
+	body := run.Response
+	if run.Error != "" {
+		body = "Error: " + run.Error
+	} else if run.Active {
+		body = "_Waiting for response..._"
+	}
+	markdown := fmt.Sprintf("#### /btw\n**Q:** %s\n\n**Status:** %s\n\n%s", run.Prompt, status, body)
+	if !run.CompletedAt.IsZero() && run.TotalTokens > 0 {
+		markdown += fmt.Sprintf("\n\n`%s | %s | %d tok`", coalesce(run.Provider, "provider"), coalesce(run.Model, "model"), run.TotalTokens)
+	}
+	return m.renderMarkdownBlock(markdown, style, width)
+}
+
+func formatElapsed(d time.Duration) string {
+	if d < 0 {
+		d = 0
+	}
+	total := int(d.Seconds())
+	return fmt.Sprintf("%02d:%02d", total/60, total%60)
+}
+
+func approximateContextTokens(state *sessionState) int {
+	if state == nil || state.Session == nil {
+		return 0
+	}
+	totalChars := 0
+	for _, msg := range state.Session.Messages {
+		totalChars += len([]rune(msg.Content))
+	}
+	totalChars += len([]rune(state.Input.Value()))
+	for _, item := range state.Queue {
+		totalChars += len([]rune(item.Text))
+	}
+	return max(1, totalChars/4)
+}
+
+func summarizeChatText(input string) string {
+	text := strings.TrimSpace(strings.ReplaceAll(input, "\n", " "))
+	if len(text) > 80 {
+		return text[:77] + "..."
+	}
+	return text
 }

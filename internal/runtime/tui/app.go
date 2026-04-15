@@ -4,6 +4,7 @@ import (
 	"context"
 	"io"
 	"strings"
+	"time"
 
 	"github.com/charmbracelet/bubbles/textarea"
 	"github.com/charmbracelet/bubbles/textinput"
@@ -28,10 +29,12 @@ func newModel(ctx context.Context, agent *runtime.Agent, resumeID string) (model
 	m := model{
 		ctx:      ctx,
 		agent:    agent,
+		now:      time.Now,
 		tab:      tabChat,
 		sessions: map[string]*sessionState{},
 		mouseCaptureEnabled: true,
 	}
+	m.clockNow = m.now()
 	m.rawEditor = textarea.New()
 	m.rawEditor.SetHeight(20)
 	m.rawEditor.ShowLineNumbers = true
@@ -62,7 +65,7 @@ func newModel(ctx context.Context, agent *runtime.Agent, resumeID string) (model
 }
 
 func (m *model) Init() tea.Cmd {
-	return waitForUIEvent(m.uiCh)
+	return tea.Batch(waitForUIEvent(m.uiCh), tickClockCmd())
 }
 
 func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -150,15 +153,35 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.renderChatViewport(state)
 		}
 		return m, waitForUIEvent(m.uiCh)
+	case clockTickMsg:
+		m.clockNow = time.Time(msg)
+		if m.hasActiveRuns() {
+			return m, tickClockCmd()
+		}
+		return m, nil
 	case chatTurnFinishedMsg:
 		state := m.sessions[msg.SessionID]
 		if state == nil {
 			return m, nil
 		}
 		state.Busy = false
+		state.MainRun.Active = false
+		state.MainRun.CompletedAt = m.now()
+		if msg.Result.Provider != "" {
+			state.MainRun.Provider = msg.Result.Provider
+		}
+		if msg.Result.Model != "" {
+			state.MainRun.Model = msg.Result.Model
+		}
+		state.MainRun.InputTokens = msg.Result.InputTokens
+		state.MainRun.OutputTokens = msg.Result.OutputTokens
+		state.MainRun.TotalTokens = msg.Result.TotalTokens
 		if msg.Err != nil {
 			state.LastError = msg.Err.Error()
 			m.errMessage = msg.Err.Error()
+			if cmd := m.dispatchNextQueued(state); cmd != nil {
+				return m, tea.Batch(cmd, tickClockCmd())
+			}
 			return m, nil
 		}
 		resumed, err := m.agent.ResumeChatSession(context.Background(), msg.SessionID)
@@ -168,6 +191,37 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		state.Status = "idle"
 		m.renderChatViewport(state)
 		m.renderToolsViewport(state)
+		if cmd := m.dispatchNextQueued(state); cmd != nil {
+			return m, tea.Batch(cmd, tickClockCmd())
+		}
+		return m, nil
+	case btwTurnFinishedMsg:
+		state := m.sessions[msg.SessionID]
+		if state == nil {
+			return m, nil
+		}
+		for i := range state.BtwRuns {
+			if state.BtwRuns[i].ID != msg.RunID {
+				continue
+			}
+			state.BtwRuns[i].Active = false
+			state.BtwRuns[i].CompletedAt = m.now()
+			state.BtwRuns[i].Provider = msg.Result.Provider
+			state.BtwRuns[i].Model = msg.Result.Model
+			state.BtwRuns[i].InputTokens = msg.Result.InputTokens
+			state.BtwRuns[i].OutputTokens = msg.Result.OutputTokens
+			state.BtwRuns[i].TotalTokens = msg.Result.TotalTokens
+			if msg.Err != nil {
+				state.BtwRuns[i].Error = msg.Err.Error()
+			} else {
+				state.BtwRuns[i].Response = msg.Result.Content
+			}
+			break
+		}
+		m.renderChatViewport(state)
+		if m.hasActiveRuns() {
+			return m, tickClockCmd()
+		}
 		return m, nil
 	case rebuildFinishedMsg:
 		if msg.Err != nil {

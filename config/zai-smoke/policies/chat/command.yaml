@@ -8,3 +8,4 @@ spec:
     exit_command: /exit
     help_command: /help
     session_command: /session
+    btw_command: /btw
