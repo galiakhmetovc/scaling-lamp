@@ -56,6 +56,26 @@ func (m *model) handleMouseSettings(msg tea.MouseMsg) bool {
 		}
 		return true
 	}
+	if isWheelUp(msg) {
+		if m.settingsMode == settingsRaw {
+			for i := 0; i < 3; i++ {
+				m.rawEditor.CursorUp()
+			}
+		} else {
+			m.settingsView.LineUp(3)
+		}
+		return true
+	}
+	if isWheelDown(msg) {
+		if m.settingsMode == settingsRaw {
+			for i := 0; i < 3; i++ {
+				m.rawEditor.CursorDown()
+			}
+		} else {
+			m.settingsView.LineDown(3)
+		}
+		return true
+	}
 	return false
 }
 
@@ -262,7 +282,8 @@ func (m *model) viewSettings() string {
 		}
 		left := "Files\n" + strings.Join(fileLines, "\n")
 		right := "Editor\n" + m.rawEditor.View() + "\nCtrl+S save  Ctrl+A save+reload"
-		return head + "\n\n" + lipgloss.JoinHorizontal(lipgloss.Top, lipgloss.NewStyle().Width(max(24, m.width/4)).Render(left), lipgloss.NewStyle().Width(max(30, m.width-(m.width/4)-4)).Render(right))
+		leftWidth, rightWidth := splitPaneWidths(m.width, max(24, m.width/4), max(30, m.width-(m.width/4)-4))
+		return head + "\n\n" + lipgloss.JoinHorizontal(lipgloss.Top, lipgloss.NewStyle().Width(leftWidth).MaxWidth(leftWidth).Render(left), lipgloss.NewStyle().Width(rightWidth).MaxWidth(rightWidth).Render(right))
 	}
 }
 

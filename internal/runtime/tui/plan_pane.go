@@ -152,7 +152,8 @@ func (m *model) viewPlan() string {
 	if !ok || head.Plan.ID == "" {
 		left := "No active plan\n\nPress c to create one."
 		right := m.renderPlanEditor(projections.PlanHeadSnapshot{}, false, projections.PlanTaskView{})
-		return lipgloss.JoinHorizontal(lipgloss.Top, lipgloss.NewStyle().Width(max(30, m.width/2)).Render(left), lipgloss.NewStyle().Width(max(26, m.width/3)).Render(right))
+		leftWidth, rightWidth := splitPaneWidths(m.width, max(30, m.width/2), max(26, m.width/3))
+		return lipgloss.JoinHorizontal(lipgloss.Top, lipgloss.NewStyle().Width(leftWidth).MaxWidth(leftWidth).Render(left), lipgloss.NewStyle().Width(rightWidth).MaxWidth(rightWidth).Render(right))
 	}
 	lines := []string{"Plan", "", "goal: " + head.Plan.Goal}
 	m.mousePlanTop = len(lines)
@@ -168,7 +169,8 @@ func (m *model) viewPlan() string {
 	m.planView.SetContent(strings.Join(lines, "\n"))
 	left := m.planView.View()
 	right := m.renderPlanEditor(head, hasSelection, selected)
-	return lipgloss.JoinHorizontal(lipgloss.Top, lipgloss.NewStyle().Width(max(30, m.width/2)).Render(left), lipgloss.NewStyle().Width(max(26, m.width/3)).Render(right))
+	leftWidth, rightWidth := splitPaneWidths(m.width, max(30, m.width/2), max(26, m.width/3))
+	return lipgloss.JoinHorizontal(lipgloss.Top, lipgloss.NewStyle().Width(leftWidth).MaxWidth(leftWidth).Render(left), lipgloss.NewStyle().Width(rightWidth).MaxWidth(rightWidth).Render(right))
 }
 
 func (m *model) handleMousePlan(msg tea.MouseMsg) bool {
@@ -193,6 +195,14 @@ func (m *model) handleMousePlan(msg tea.MouseMsg) bool {
 			return false
 		}
 		m.planCursor = row
+		return true
+	}
+	if isWheelUp(msg) {
+		m.planView.LineUp(3)
+		return true
+	}
+	if isWheelDown(msg) {
+		m.planView.LineDown(3)
 		return true
 	}
 	return false

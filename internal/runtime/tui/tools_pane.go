@@ -38,10 +38,11 @@ func (m *model) viewTools() string {
 	m.renderToolsViewport(state)
 	left := state.ToolsView.View()
 	right := m.renderToolDetails(state)
+	leftWidth, rightWidth := splitPaneWidths(m.width, max(30, (m.width*2)/3), max(24, m.width/3))
 	return lipgloss.JoinHorizontal(
 		lipgloss.Top,
-		lipgloss.NewStyle().Width(max(30, (m.width*2)/3)).Render(left),
-		lipgloss.NewStyle().Width(max(24, m.width/3)).Render(right),
+		lipgloss.NewStyle().Width(leftWidth).MaxWidth(leftWidth).Render(left),
+		lipgloss.NewStyle().Width(rightWidth).MaxWidth(rightWidth).Render(right),
 	)
 }
 
@@ -158,6 +159,14 @@ func (m *model) handleMouseTools(msg tea.MouseMsg) bool {
 			return false
 		}
 		m.toolCursor = row
+		return true
+	}
+	if isWheelUp(msg) {
+		state.ToolsView.LineUp(3)
+		return true
+	}
+	if isWheelDown(msg) {
+		state.ToolsView.LineDown(3)
 		return true
 	}
 	return false

@@ -297,6 +297,96 @@ func TestSettingsFormShowsDirtyStateAndResets(t *testing.T) {
 	}
 }
 
+func TestMouseWheelScrollsChatViewportFromLegacyMouseType(t *testing.T) {
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "agent.yaml")
+	if err := os.WriteFile(configPath, []byte("kind: AgentConfig\nversion: v1\nid: tui-test\nspec:\n  runtime:\n    max_tool_rounds: 7\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile config: %v", err)
+	}
+
+	agent := &runtime.Agent{
+		ConfigPath: configPath,
+		Config:     config.AgentConfig{ID: "tui-test", Spec: config.AgentConfigSpec{Runtime: config.AgentRuntimeConfig{MaxToolRounds: 7}}},
+		Contracts: contracts.ResolvedContracts{
+			Chat: contracts.ChatContract{
+				Output: contracts.ChatOutputPolicy{Params: contracts.ChatOutputParams{RenderMarkdown: true, MarkdownStyle: "dark"}},
+				Status: contracts.ChatStatusPolicy{Params: contracts.ChatStatusParams{ShowToolCalls: true, ShowToolResults: true, ShowPlanAfterPlanTools: true}},
+			},
+		},
+		EventLog:    runtime.NewInMemoryEventLog(),
+		Projections: []projections.Projection{projections.NewSessionCatalogProjection(), projections.NewTranscriptProjection(), projections.NewChatTimelineProjection(), projections.NewPlanHeadProjection(), projections.NewActivePlanProjection()},
+		UIBus:       runtime.NewUIEventBus(),
+		Now:         func() time.Time { return time.Date(2026, 4, 15, 8, 30, 0, 0, time.UTC) },
+		NewID:       func(prefix string) string { return prefix + "-1" },
+	}
+	m, err := newModel(context.Background(), agent, "")
+	if err != nil {
+		t.Fatalf("newModel returned error: %v", err)
+	}
+	modelAfter, _ := (&m).Update(tea.WindowSizeMsg{Width: 80, Height: 20})
+	mm := modelAfter.(*model)
+	mm.tab = tabChat
+	state := mm.sessions[mm.activeSessionID]
+	state.ChatView.SetContent(strings.Repeat("line\n", 100))
+	state.ChatView.GotoBottom()
+	before := state.ChatView.YOffset
+	if before == 0 {
+		t.Fatal("chat viewport did not move to bottom in test setup")
+	}
+	modelAfter, _ = mm.Update(tea.MouseMsg{Type: tea.MouseWheelUp})
+	mm = modelAfter.(*model)
+	after := mm.sessions[mm.activeSessionID].ChatView.YOffset
+	if after >= before {
+		t.Fatalf("wheel up did not scroll chat viewport: before=%d after=%d", before, after)
+	}
+}
+
+func TestPlanViewKeepsTopTabsOnNarrowWidth(t *testing.T) {
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "agent.yaml")
+	if err := os.WriteFile(configPath, []byte("kind: AgentConfig\nversion: v1\nid: tui-test\nspec:\n  runtime:\n    max_tool_rounds: 7\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile config: %v", err)
+	}
+
+	agent := &runtime.Agent{
+		ConfigPath: configPath,
+		Config:     config.AgentConfig{ID: "tui-test", Spec: config.AgentConfigSpec{Runtime: config.AgentRuntimeConfig{MaxToolRounds: 7}}},
+		Contracts: contracts.ResolvedContracts{
+			Chat: contracts.ChatContract{
+				Output: contracts.ChatOutputPolicy{Params: contracts.ChatOutputParams{RenderMarkdown: true, MarkdownStyle: "dark"}},
+				Status: contracts.ChatStatusPolicy{Params: contracts.ChatStatusParams{ShowToolCalls: true, ShowToolResults: true, ShowPlanAfterPlanTools: true}},
+			},
+		},
+		EventLog:    runtime.NewInMemoryEventLog(),
+		Projections: []projections.Projection{projections.NewSessionCatalogProjection(), projections.NewTranscriptProjection(), projections.NewChatTimelineProjection(), projections.NewPlanHeadProjection(), projections.NewActivePlanProjection()},
+		UIBus:       runtime.NewUIEventBus(),
+		Now:         func() time.Time { return time.Date(2026, 4, 15, 8, 31, 0, 0, time.UTC) },
+		NewID:       func(prefix string) string { return prefix + "-1" },
+	}
+	m, err := newModel(context.Background(), agent, "")
+	if err != nil {
+		t.Fatalf("newModel returned error: %v", err)
+	}
+	sessionID := m.activeSessionID
+	if err := agent.RecordEvent(context.Background(), eventing.Event{
+		Kind:          eventing.EventPlanCreated,
+		AggregateID:   "plan-1",
+		AggregateType: eventing.AggregatePlan,
+		Payload:       map[string]any{"session_id": sessionID, "plan_id": "plan-1", "goal": "Refactor auth"},
+	}); err != nil {
+		t.Fatalf("RecordEvent plan: %v", err)
+	}
+	m.tab = tabPlan
+	modelAfter, _ := (&m).Update(tea.WindowSizeMsg{Width: 50, Height: 20})
+	got := modelAfter.View()
+	firstLine := strings.SplitN(got, "\n", 2)[0]
+	for _, tab := range []string{"Sessions", "Chat", "Plan", "Tools", "Settings"} {
+		if !strings.Contains(firstLine, tab) {
+			t.Fatalf("top tab line missing %q on narrow width: %q", tab, firstLine)
+		}
+	}
+}
+
 func eventSessionCreated(sessionID string) eventing.Event {
 	return eventing.Event{
 		Kind:          eventing.EventSessionCreated,

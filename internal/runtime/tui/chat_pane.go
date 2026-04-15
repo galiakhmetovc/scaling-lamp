@@ -98,5 +98,13 @@ func (m *model) handleMouseChat(msg tea.MouseMsg) bool {
 		state.ChatView.LineDown(3)
 		return true
 	}
+	if isWheelUp(msg) {
+		state.ChatView.LineUp(3)
+		return true
+	}
+	if isWheelDown(msg) {
+		state.ChatView.LineDown(3)
+		return true
+	}
 	return false
 }
