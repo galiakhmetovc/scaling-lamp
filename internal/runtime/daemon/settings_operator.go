@@ -218,6 +218,11 @@ func (s *Server) reloadAgentFromDisk(ctx context.Context) error {
 	}
 	reloaded.UIBus = current.UIBus
 	s.swapAgent(reloaded)
+	return nil
+}
+
+func (s *Server) publishSettingsApplied() {
+	reloaded := s.currentAgent()
 	s.publishDaemon(WebsocketEnvelope{
 		Type: "settings_applied",
 		Payload: map[string]any{
@@ -226,7 +231,6 @@ func (s *Server) reloadAgentFromDisk(ctx context.Context) error {
 			"generated_at": reloaded.Now().UTC(),
 		},
 	})
-	return nil
 }
 
 func (s *Server) ensureSettingsApplyAllowed() error {

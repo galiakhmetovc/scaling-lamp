@@ -59,6 +59,15 @@ Chat mode baseline:
   - TUI connects to the configured daemon control plane; start `--daemon` first
 - non-interactive stdin:
   - fallback to legacy line-based chat loop
+
+Web UI:
+
+- browser client is served from the same daemon process at `http://<host>:8080/`
+- production assets are built from `web/` and embedded into the Go binary
+- local frontend development:
+  - `cd web && npm install`
+  - `cd web && npm run dev`
+  - switch `operator_surface.web_assets.mode` to `dev_proxy`
 - transcript-backed resume via `TranscriptProjection`
 - chat UX behavior still comes from `ChatContract` strategies and params
 

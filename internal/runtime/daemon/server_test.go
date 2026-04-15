@@ -119,6 +119,30 @@ func TestClientConfigScriptUsesConfiguredTransportPaths(t *testing.T) {
 	}
 }
 
+func TestEmbeddedAssetsServeWebAppShell(t *testing.T) {
+	t.Parallel()
+
+	agent := buildAgentWithOperatorSurface(t)
+	server, err := daemon.New(agent)
+	if err != nil {
+		t.Fatalf("new daemon server: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	rec := httptest.NewRecorder()
+	server.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rec.Code)
+	}
+	body := rec.Body.String()
+	if !strings.Contains(body, `<div id="root"></div>`) {
+		t.Fatalf("expected embedded web app shell, got: %s", body)
+	}
+	if strings.Contains(body, "Phase 1 control plane shell") {
+		t.Fatalf("legacy daemon shell still served: %s", body)
+	}
+}
+
 func TestWebsocketStreamsUIBusEvents(t *testing.T) {
 	t.Parallel()
 
@@ -462,8 +486,8 @@ func TestWebsocketSettingsFormApplyReloadsAgentAndRejectsStaleRevision(t *testin
 		},
 	})
 	_ = readEnvelopeJSON(t, conn)
-	_ = waitForEnvelopeType(t, conn, "settings_applied")
-	applyCompleted := waitForCommandCompleted(t, conn, "cmd-2")
+		applyCompleted := waitForCommandCompleted(t, conn, "cmd-2")
+		_ = waitForEnvelopeType(t, conn, "settings_applied")
 	applied := mapPayload(t, mapPayload(t, applyCompleted["payload"])["settings"])
 	if applied["revision"] == baseRevision {
 		t.Fatalf("settings revision did not change after apply")
@@ -531,8 +555,8 @@ func TestWebsocketSettingsRawApplyUsesRevisionChecks(t *testing.T) {
 		},
 	})
 	_ = readEnvelopeJSON(t, conn)
-	_ = waitForEnvelopeType(t, conn, "settings_applied")
 	_ = waitForCommandCompleted(t, conn, "cmd-2")
+	_ = waitForEnvelopeType(t, conn, "settings_applied")
 
 	writeCommandEnvelope(t, conn, map[string]any{"type": "command", "id": "cmd-3", "command": "settings.raw.get", "payload": map[string]any{"path": "policies/chat/output.yaml"}})
 	_ = readEnvelopeJSON(t, conn)

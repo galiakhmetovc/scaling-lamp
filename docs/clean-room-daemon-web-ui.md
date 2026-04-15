@@ -2,7 +2,7 @@
 
 ## Current Status
 
-Implemented in Phase 1:
+Implemented now:
 
 - config-graph-driven `operator_surface` contract
 - `--daemon` entrypoint in `cmd/agent`
@@ -12,17 +12,17 @@ Implemented in Phase 1:
   - `<endpoint_path>/bootstrap`
   - `/config.js`
 - WebSocket live subscription on configured `websocket_path`
-- embedded asset shell for control-plane bootstrap and live UI bus visibility
+- embedded React/Vite production web client served from Go `embed`
 - `dev_proxy` asset mode support for future frontend development
 - shared WebSocket command protocol for sessions/chat/plan/tools/settings
 - TUI as a daemon client over the shared operator-surface transport
 
 Not implemented yet:
 
-- React/Vite embedded production frontend
 - richer web client protocol coverage for queued-draft UX and settings conflict UX
+- full revision-conflict UX in the browser for concurrent plan/settings edits
 
-## Phase 1 Usage
+## Usage
 
 With shipped `zai-smoke` config:
 
@@ -40,6 +40,13 @@ The daemon bind and transport paths are read from the current config graph:
 Open:
 
 - `http://<host>:8080/`
+
+For frontend development:
+
+- run `npm install` once in `web/`
+- run `npm run dev` in `web/`
+- switch `operator_surface.web_assets.mode` to `dev_proxy`
+- point `operator_surface.web_assets.dev_proxy_url` at the Vite dev server
 
 If `operator_surface` bind config is missing or invalid, daemon startup fails closed.
 
@@ -197,7 +204,7 @@ Target process model:
 - browser
   - connects to the same daemon API
 
-Short-term migration may allow in-process fallback for TUI while the daemon client path is being completed, but the target architecture is daemon-first for both clients.
+Current shipped behavior is daemon-first for both TUI and web.
 
 ## Concurrency Rules
 
@@ -224,6 +231,16 @@ Frontend stack:
 - `React`
 - `Vite`
 - embedded static assets in Go via `embed`
+
+Current web client behavior:
+
+- bootstrap via `<endpoint_path>/bootstrap`
+- live updates and commands through the configured WebSocket path
+- tabs for `Sessions`, `Chat`, `Plan`, `Tools`, and `Settings`
+- session-scoped chat timeline with queued drafts and `/btw`
+- plan mutations through daemon plan commands
+- approvals / deny / kill through shell commands
+- revisioned settings form and raw YAML editing
 
 Top-level tabs mirror the TUI:
 

@@ -310,6 +310,9 @@ func (s *Server) websocketHandler() http.Handler {
 						return
 					}
 					send(WebsocketEnvelope{Type: "command_completed", ID: req.ID, Command: req.Command, Payload: payload})
+					if req.Command == "settings.form.apply" || req.Command == "settings.raw.apply" {
+						s.publishSettingsApplied()
+					}
 				}(req)
 			}
 
