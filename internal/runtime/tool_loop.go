@@ -30,7 +30,7 @@ type ToolActivity struct {
 	ErrorText  string
 }
 
-func (a *Agent) executeProviderLoop(ctx context.Context, sessionID, runID, correlationID, source string, input provider.ClientInput, observer func(ToolActivity), maxRoundsOverride int) (provider.ClientResult, error) {
+func (a *Agent) executeProviderLoop(ctx context.Context, contractSet contracts.ResolvedContracts, sessionID, runID, correlationID, source string, input provider.ClientInput, observer func(ToolActivity), maxRoundsOverride int) (provider.ClientResult, error) {
 	currentMessages := append([]contracts.Message{}, input.Messages...)
 	streamObserver := input.StreamObserver
 	input.StreamObserver = func(event provider.StreamEvent) {
@@ -54,7 +54,7 @@ func (a *Agent) executeProviderLoop(ctx context.Context, sessionID, runID, corre
 			return provider.ClientResult{}, err
 		}
 
-		result, err := a.ProviderClient.Execute(ctx, a.Contracts, provider.ClientInput{
+		result, err := a.ProviderClient.Execute(ctx, contractSet, provider.ClientInput{
 			PromptAssetSelection: input.PromptAssetSelection,
 			Messages:             assembledMessages,
 			Tools:                input.Tools,
@@ -80,7 +80,7 @@ func (a *Agent) executeProviderLoop(ctx context.Context, sessionID, runID, corre
 			return result, nil
 		}
 
-		toolMessages, err := a.executeToolCalls(ctx, runID, sessionID, correlationID, source, result.Provider.ToolCalls, result.ToolDecisions, observer)
+		toolMessages, err := a.executeToolCalls(ctx, contractSet, runID, sessionID, correlationID, source, result.Provider.ToolCalls, result.ToolDecisions, observer)
 		if err != nil {
 			return result, err
 		}
@@ -91,7 +91,7 @@ func (a *Agent) executeProviderLoop(ctx context.Context, sessionID, runID, corre
 	return provider.ClientResult{}, fmt.Errorf("provider tool loop exceeded %d rounds", maxRounds)
 }
 
-func (a *Agent) executeToolCalls(ctx context.Context, runID, sessionID, correlationID, source string, calls []provider.ToolCall, decisions []provider.ToolDecision, observer func(ToolActivity)) ([]contracts.Message, error) {
+func (a *Agent) executeToolCalls(ctx context.Context, contractSet contracts.ResolvedContracts, runID, sessionID, correlationID, source string, calls []provider.ToolCall, decisions []provider.ToolDecision, observer func(ToolActivity)) ([]contracts.Message, error) {
 	activeProjection := a.activePlanProjection()
 	service := plans.NewService(a.now, a.newID)
 	filesystemExecutor := filesystem.NewExecutor()
@@ -185,7 +185,7 @@ func (a *Agent) executeToolCalls(ctx context.Context, runID, sessionID, correlat
 			continue
 		}
 
-		events, resultText, err := a.executeToolCommand(ctx, runID, sessionID, activeProjection, service, filesystemExecutor, shellExecutor, delegateRuntime, source, call)
+		events, resultText, err := a.executeToolCommand(ctx, contractSet, runID, sessionID, activeProjection, service, filesystemExecutor, shellExecutor, delegateRuntime, source, call)
 		if err != nil {
 			resultText := toolErrorResult(call.Name, err)
 			if recordErr := a.recordToolCallCompleted(ctx, runID, sessionID, correlationID, source, call.Name, call.Arguments, resultText, err.Error()); recordErr != nil {
@@ -269,7 +269,7 @@ func (a *Agent) recordToolCallCompleted(ctx context.Context, runID, sessionID, c
 	})
 }
 
-func (a *Agent) executeToolCommand(ctx context.Context, runID, sessionID string, activeProjection *projections.ActivePlanProjection, service *plans.Service, filesystemExecutor *filesystem.Executor, shellExecutor *shell.Executor, delegateRuntime DelegateRuntime, source string, call provider.ToolCall) ([]eventing.Event, string, error) {
+func (a *Agent) executeToolCommand(ctx context.Context, contractSet contracts.ResolvedContracts, runID, sessionID string, activeProjection *projections.ActivePlanProjection, service *plans.Service, filesystemExecutor *filesystem.Executor, shellExecutor *shell.Executor, delegateRuntime DelegateRuntime, source string, call provider.ToolCall) ([]eventing.Event, string, error) {
 	switch call.Name {
 	case "init_plan", "add_task", "set_task_status", "add_task_note", "edit_task":
 		if activeProjection == nil {
@@ -277,13 +277,13 @@ func (a *Agent) executeToolCommand(ctx context.Context, runID, sessionID string,
 		}
 		return a.executePlanCommand(sessionID, activeProjection.SnapshotForSession(sessionID), service, source, call)
 	case "fs_list", "fs_read_text", "fs_write_text", "fs_patch_text", "fs_mkdir", "fs_move", "fs_trash":
-		resultText, err := filesystemExecutor.Execute(a.Contracts.FilesystemExecution, call.Name, call.Arguments)
+		resultText, err := filesystemExecutor.Execute(contractSet.FilesystemExecution, call.Name, call.Arguments)
 		if err != nil {
 			return nil, "", fmt.Errorf("tool call %q: %w", call.Name, err)
 		}
 		return nil, resultText, nil
 	case "shell_exec", "shell_start", "shell_poll", "shell_kill":
-		resultText, err := shellExecutor.ExecuteWithMeta(ctx, a.Contracts.ShellExecution, call.Name, call.Arguments, shell.ExecutionMeta{
+		resultText, err := shellExecutor.ExecuteWithMeta(ctx, contractSet.ShellExecution, call.Name, call.Arguments, shell.ExecutionMeta{
 			SessionID:   sessionID,
 			RunID:       runID,
 			Source:      source,
@@ -298,7 +298,7 @@ func (a *Agent) executeToolCommand(ctx context.Context, runID, sessionID string,
 		}
 		return nil, resultText, nil
 	case "delegate_spawn", "delegate_message", "delegate_wait", "delegate_close", "delegate_handoff":
-		resultText, err := a.executeDelegationCommand(ctx, sessionID, delegateRuntime, call)
+		resultText, err := a.executeDelegationCommand(ctx, contractSet, runID, sessionID, delegateRuntime, call)
 		if err != nil {
 			return nil, "", fmt.Errorf("tool call %q: %w", call.Name, err)
 		}
@@ -308,12 +308,12 @@ func (a *Agent) executeToolCommand(ctx context.Context, runID, sessionID string,
 	}
 }
 
-func (a *Agent) executeDelegationCommand(ctx context.Context, sessionID string, delegateRuntime DelegateRuntime, call provider.ToolCall) (string, error) {
+func (a *Agent) executeDelegationCommand(ctx context.Context, contractSet contracts.ResolvedContracts, runID, sessionID string, delegateRuntime DelegateRuntime, call provider.ToolCall) (string, error) {
 	if delegateRuntime == nil {
 		return "", fmt.Errorf("delegate runtime is not configured")
 	}
-	backendPolicy := a.Contracts.DelegationExecution.Backend
-	resultPolicy := a.Contracts.DelegationExecution.Result
+	backendPolicy := contractSet.DelegationExecution.Backend
+	resultPolicy := contractSet.DelegationExecution.Result
 
 	switch call.Name {
 	case "delegate_spawn":
@@ -337,7 +337,12 @@ func (a *Agent) executeDelegationCommand(ctx context.Context, sessionID string, 
 			Backend:        DelegateBackend(backendValue),
 			OwnerSessionID: sessionID,
 			Prompt:         prompt,
-			PolicySnapshot: map[string]any{"backend": backendValue},
+			PolicySnapshot: mustDelegatePolicySnapshotMap(a, contractSet),
+			Metadata: map[string]any{
+				"owner_run_id":     runID,
+				"owner_session_id": sessionID,
+				"backend":          backendValue,
+			},
 		})
 		if err != nil {
 			return "", err
@@ -758,6 +763,27 @@ func delegateHandoffPayload(handoff DelegateHandoff, includeArtifacts bool) map[
 		payload["artifacts"] = delegateArtifactsPayload(handoff.Artifacts)
 	}
 	return payload
+}
+
+func mustDelegatePolicySnapshotMap(a *Agent, contractSet contracts.ResolvedContracts) map[string]any {
+	snapshot, err := encodeDelegatePolicySnapshot(DelegatePolicySnapshot{
+		Tools:               contractSet.Tools,
+		FilesystemTools:     contractSet.FilesystemTools,
+		FilesystemExecution: contractSet.FilesystemExecution,
+		ShellTools:          contractSet.ShellTools,
+		ShellExecution:      contractSet.ShellExecution,
+		DelegationTools:     contractSet.DelegationTools,
+		DelegationExecution: contractSet.DelegationExecution,
+		PlanTools:           contractSet.PlanTools,
+		ToolExecution:       contractSet.ToolExecution,
+	})
+	if err != nil {
+		if a != nil {
+			return map[string]any{"encode_error": err.Error()}
+		}
+		return nil
+	}
+	return snapshot
 }
 
 func jsonString(value map[string]any) string {

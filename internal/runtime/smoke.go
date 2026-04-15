@@ -77,7 +77,7 @@ func (a *Agent) Smoke(ctx context.Context, input SmokeInput) (provider.ClientRes
 		return provider.ClientResult{}, fmt.Errorf("record run started: %w", err)
 	}
 
-	result, err := a.executeProviderLoop(ctx, sessionID, runID, correlationID, "agent.smoke", provider.ClientInput{
+	result, err := a.executeProviderLoop(ctx, a.Contracts, sessionID, runID, correlationID, "agent.smoke", provider.ClientInput{
 		PromptAssetSelection: input.PromptAssetSelection,
 		Messages: []contracts.Message{
 			{Role: "user", Content: input.Prompt},

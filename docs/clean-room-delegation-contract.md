@@ -47,6 +47,12 @@ These tools describe the canonical lifecycle for both:
 - `delegate_wait` returns incremental transcript messages, lifecycle events, and optional handoff
 - `delegate_close` and `delegate_handoff` use the same canonical aggregate
 
+Delegates now also carry a typed policy snapshot:
+
+- delegate sub-runs execute with per-delegate contract overrides instead of blindly reusing the parent global contracts
+- tool visibility, tool execution access, and shell approval semantics propagate through the delegate snapshot
+- the local backend reconstructs its runtime contract boundary from the persisted `policy_snapshot`
+
 Persisted delegate lifecycle events now include:
 
 - `delegate.spawned`
@@ -62,6 +68,16 @@ Persisted delegate lifecycle events now include:
 - visible delegation tools in the global tool catalog
 - matching tool-execution allowlist entries
 - the `delegate` projection in runtime projections
+
+## Policy And Approval Propagation
+
+The local backend now treats the delegation policy snapshot as an execution boundary:
+
+- `delegate_spawn` captures the current tool and execution contracts into the delegate snapshot
+- local delegate turns run with those contract overrides
+- delegate shell approvals therefore follow the delegated snapshot, not the ambient parent defaults
+
+This is the reference shape future remote delegates must match.
 
 ## What This Enables Next
 

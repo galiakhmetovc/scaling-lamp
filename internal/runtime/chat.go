@@ -22,6 +22,7 @@ type ChatTurnInput struct {
 	StreamObserver        func(provider.StreamEvent)
 	ToolObserver          func(ToolActivity)
 	MaxToolRoundsOverride int
+	ContractsOverride     *contracts.ResolvedContracts
 }
 
 func (a *Agent) NewChatSession() (*ChatSession, error) {
@@ -86,6 +87,10 @@ func (a *Agent) ChatTurn(ctx context.Context, session *ChatSession, input ChatTu
 	if input.Prompt == "" {
 		return provider.ClientResult{}, fmt.Errorf("chat prompt is empty")
 	}
+	contractSet := a.Contracts
+	if input.ContractsOverride != nil {
+		contractSet = *input.ContractsOverride
+	}
 
 	now := a.now()
 	runID := a.newID("run-chat")
@@ -139,7 +144,7 @@ func (a *Agent) ChatTurn(ctx context.Context, session *ChatSession, input ChatTu
 		return provider.ClientResult{}, fmt.Errorf("record run started: %w", err)
 	}
 
-	result, err := a.executeProviderLoop(ctx, session.SessionID, runID, correlationID, "agent.chat", provider.ClientInput{
+	result, err := a.executeProviderLoop(ctx, contractSet, session.SessionID, runID, correlationID, "agent.chat", provider.ClientInput{
 		PromptAssetSelection: input.PromptAssetSelection,
 		Messages:             append([]contracts.Message{}, session.Messages...),
 		StreamObserver:       input.StreamObserver,

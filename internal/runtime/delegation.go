@@ -3,6 +3,8 @@ package runtime
 import (
 	"context"
 	"time"
+
+	"teamd/internal/contracts"
 )
 
 type DelegateBackend string
@@ -30,6 +32,18 @@ type DelegateSpawnRequest struct {
 	Prompt         string
 	PolicySnapshot map[string]any
 	Metadata       map[string]any
+}
+
+type DelegatePolicySnapshot struct {
+	Tools               contracts.ToolContract               `json:"tools"`
+	FilesystemTools     contracts.FilesystemToolContract     `json:"filesystem_tools"`
+	FilesystemExecution contracts.FilesystemExecutionContract `json:"filesystem_execution"`
+	ShellTools          contracts.ShellToolContract          `json:"shell_tools"`
+	ShellExecution      contracts.ShellExecutionContract     `json:"shell_execution"`
+	DelegationTools     contracts.DelegationToolContract     `json:"delegation_tools"`
+	DelegationExecution contracts.DelegationExecutionContract `json:"delegation_execution"`
+	PlanTools           contracts.PlanToolContract           `json:"plan_tools"`
+	ToolExecution       contracts.ToolExecutionContract      `json:"tool_execution"`
 }
 
 type DelegateMessageRequest struct {

@@ -6,6 +6,7 @@ import (
 	"sync"
 	"time"
 
+	"teamd/internal/contracts"
 	"teamd/internal/runtime/eventing"
 )
 
@@ -15,6 +16,7 @@ type localDelegateState struct {
 	OwnerSessionID    string
 	DelegateSessionID string
 	PolicySnapshot    map[string]any
+	Contracts         *contracts.ResolvedContracts
 	Session           *ChatSession
 	Running           bool
 	Closed            bool
@@ -59,6 +61,11 @@ func (r *LocalDelegateRuntime) Spawn(ctx context.Context, req DelegateSpawnReque
 		PolicySnapshot:    cloneAnyMap(req.PolicySnapshot),
 		Session:           session,
 	}
+	contractsSnapshot, err := r.contractsFromPolicySnapshot(req.PolicySnapshot)
+	if err != nil {
+		return DelegateView{}, err
+	}
+	state.Contracts = contractsSnapshot
 
 	r.mu.Lock()
 	if _, exists := r.delegates[delegateID]; exists {
@@ -261,6 +268,11 @@ func (r *LocalDelegateRuntime) materializeState(ctx context.Context, delegateID 
 		Closed:         view.Status == DelegateStatusClosed,
 		Running:        view.Status == DelegateStatusRunning,
 	}
+	contractsSnapshot, err := r.contractsFromPolicySnapshot(view.PolicySnapshot)
+	if err != nil {
+		return nil, err
+	}
+	state.Contracts = contractsSnapshot
 	if projection := r.agent.delegateProjection(); projection != nil {
 		if stored, ok := projection.View(delegateID); ok {
 			state.DelegateSessionID = stored.DelegateSessionID
@@ -352,7 +364,11 @@ func (r *LocalDelegateRuntime) startTurn(ctx context.Context, state *localDelega
 }
 
 func (r *LocalDelegateRuntime) finishTurn(state *localDelegateState, session *ChatSession, runID, prompt string) {
-	_, err := r.agent.ChatTurn(context.Background(), session, ChatTurnInput{Prompt: prompt})
+	turnInput := ChatTurnInput{Prompt: prompt}
+	if state.Contracts != nil {
+		turnInput.ContractsOverride = state.Contracts
+	}
+	_, err := r.agent.ChatTurn(context.Background(), session, turnInput)
 	if err != nil {
 		_ = r.agent.RecordEvent(context.Background(), eventing.Event{
 			ID:            r.agent.newID("evt-delegate-failed"),
@@ -422,3 +438,16 @@ func (r *LocalDelegateRuntime) finishTurn(state *localDelegateState, session *Ch
 }
 
 const timeFormatRFC3339Nano = "2006-01-02T15:04:05.999999999Z07:00"
+
+func (r *LocalDelegateRuntime) contractsFromPolicySnapshot(raw map[string]any) (*contracts.ResolvedContracts, error) {
+	if raw == nil {
+		base := r.agent.Contracts
+		return &base, nil
+	}
+	snapshot, err := decodeDelegatePolicySnapshot(raw)
+	if err != nil {
+		return nil, fmt.Errorf("decode delegate policy snapshot: %w", err)
+	}
+	resolved := snapshot.Apply(r.agent.Contracts)
+	return &resolved, nil
+}
