@@ -63,5 +63,47 @@ func defaultDefinitions() []tools.Definition {
 				"required": []string{"command"},
 			},
 		},
+		{
+			ID:          "shell_start",
+			Name:        "shell_start",
+			Description: "Start a bounded shell command asynchronously and return a command_id. Use shell_poll to fetch intermediate stdout/stderr chunks and shell_kill to stop it if needed.",
+			Parameters: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"command": map[string]any{"type": "string"},
+					"args": map[string]any{
+						"type":  "array",
+						"items": map[string]any{"type": "string"},
+					},
+					"cwd": map[string]any{"type": "string"},
+				},
+				"required": []string{"command"},
+			},
+		},
+		{
+			ID:          "shell_poll",
+			Name:        "shell_poll",
+			Description: "Fetch new output chunks and current status for a previously started shell command. Pass after_offset to receive only chunks after the last seen offset.",
+			Parameters: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"command_id":   map[string]any{"type": "string"},
+					"after_offset": map[string]any{"type": "integer"},
+				},
+				"required": []string{"command_id"},
+			},
+		},
+		{
+			ID:          "shell_kill",
+			Name:        "shell_kill",
+			Description: "Request termination of a previously started shell command by command_id.",
+			Parameters: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"command_id": map[string]any{"type": "string"},
+				},
+				"required": []string{"command_id"},
+			},
+		},
 	}
 }

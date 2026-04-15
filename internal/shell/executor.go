@@ -1,14 +1,20 @@
 package shell
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
+	"sync/atomic"
+	"syscall"
 	"time"
 
 	"teamd/internal/contracts"
@@ -22,6 +28,7 @@ type runResult struct {
 
 type runFunc func(ctx context.Context, cwd, executable string, args []string) (runResult, error)
 type lookupPathFunc func(file string) (string, error)
+type startFunc func(ctx context.Context, cwd, executable string, args []string) (processHandle, error)
 
 type invocation struct {
 	executable string
@@ -29,17 +36,54 @@ type invocation struct {
 	isolated   bool
 }
 
+type processHandle interface {
+	StdoutPipe() (io.ReadCloser, error)
+	StderrPipe() (io.ReadCloser, error)
+	Start() error
+	Wait() error
+	Kill() error
+}
+
+type commandChunk struct {
+	Offset int    `json:"offset"`
+	Stream string `json:"stream"`
+	Text   string `json:"text"`
+}
+
+type activeCommand struct {
+	mu            sync.RWMutex
+	id            string
+	command       string
+	args          []string
+	cwd           string
+	status        string
+	exitCode      *int
+	errorText     string
+	nextOffset    int
+	chunks        []commandChunk
+	process       processHandle
+	killRequested bool
+	cancel        context.CancelFunc
+}
+
 type Executor struct {
 	run        runFunc
 	lookupPath lookupPathFunc
+	start      startFunc
 	goos       string
+
+	mu       sync.RWMutex
+	commands map[string]*activeCommand
+	nextID   atomic.Uint64
 }
 
 func NewExecutor() *Executor {
 	return &Executor{
 		run:        defaultRunCommand,
 		lookupPath: exec.LookPath,
+		start:      defaultStartCommand,
 		goos:       runtime.GOOS,
+		commands:   map[string]*activeCommand{},
 	}
 }
 
@@ -47,9 +91,24 @@ func (e *Executor) Execute(contract contracts.ShellExecutionContract, toolName s
 	if e == nil {
 		return "", fmt.Errorf("shell executor is nil")
 	}
-	if toolName != "shell_exec" {
+	if e.commands == nil {
+		e.commands = map[string]*activeCommand{}
+	}
+	switch toolName {
+	case "shell_exec":
+		return e.executeSync(contract, toolName, argsMap)
+	case "shell_start":
+		return e.executeStart(contract, argsMap)
+	case "shell_poll":
+		return e.executePoll(argsMap)
+	case "shell_kill":
+		return e.executeKill(argsMap)
+	default:
 		return "", fmt.Errorf("shell tool %q is not implemented", toolName)
 	}
+}
+
+func (e *Executor) executeSync(contract contracts.ShellExecutionContract, toolName string, argsMap map[string]any) (string, error) {
 	command, err := stringArg(argsMap, "command")
 	if err != nil {
 		return "", err
@@ -69,13 +128,9 @@ func (e *Executor) Execute(contract contracts.ShellExecutionContract, toolName s
 	if err != nil {
 		return "", err
 	}
-	timeout := 30 * time.Second
-	if contract.Runtime.Params.Timeout != "" {
-		parsed, err := time.ParseDuration(contract.Runtime.Params.Timeout)
-		if err != nil {
-			return "", fmt.Errorf("parse shell timeout: %w", err)
-		}
-		timeout = parsed
+	timeout, err := parseTimeout(contract.Runtime)
+	if err != nil {
+		return "", err
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
@@ -111,6 +166,220 @@ func (e *Executor) Execute(contract contracts.ShellExecutionContract, toolName s
 		"duration_ms": duration.Milliseconds(),
 		"timed_out":   false,
 	}), nil
+}
+
+func (e *Executor) executeStart(contract contracts.ShellExecutionContract, argsMap map[string]any) (string, error) {
+	command, err := stringArg(argsMap, "command")
+	if err != nil {
+		return "", err
+	}
+	args, err := optionalStringSlice(argsMap, "args")
+	if err != nil {
+		return "", err
+	}
+	if err := validateCommand(contract.Command, command, args); err != nil {
+		return "", err
+	}
+	cwd, err := resolveCwd(contract.Runtime, argsMap)
+	if err != nil {
+		return "", err
+	}
+	invocation, err := e.resolveInvocation(contract.Runtime, command, args)
+	if err != nil {
+		return "", err
+	}
+	timeout, err := parseTimeout(contract.Runtime)
+	if err != nil {
+		return "", err
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	proc, err := e.start(ctx, cwd, invocation.executable, invocation.args)
+	if err != nil {
+		cancel()
+		return "", fmt.Errorf("start shell command: %w", err)
+	}
+	stdoutPipe, err := proc.StdoutPipe()
+	if err != nil {
+		cancel()
+		return "", fmt.Errorf("attach shell stdout: %w", err)
+	}
+	stderrPipe, err := proc.StderrPipe()
+	if err != nil {
+		cancel()
+		return "", fmt.Errorf("attach shell stderr: %w", err)
+	}
+	if err := proc.Start(); err != nil {
+		cancel()
+		return "", fmt.Errorf("start shell process: %w", err)
+	}
+
+	commandID := fmt.Sprintf("cmd-%d", e.nextID.Add(1))
+	active := &activeCommand{
+		id:      commandID,
+		command: command,
+		args:    append([]string{}, args...),
+		cwd:     cwd,
+		status:  "running",
+		process: proc,
+		cancel:  cancel,
+	}
+	e.mu.Lock()
+	e.commands[commandID] = active
+	e.mu.Unlock()
+
+	go e.captureOutput(active, "stdout", stdoutPipe)
+	go e.captureOutput(active, "stderr", stderrPipe)
+	go e.waitForCommand(active)
+
+	return jsonText(map[string]any{
+		"status":      "running",
+		"tool":        "shell_start",
+		"command_id":  commandID,
+		"command":     command,
+		"args":        args,
+		"cwd":         cwd,
+		"next_offset": 0,
+	}), nil
+}
+
+func (e *Executor) executePoll(argsMap map[string]any) (string, error) {
+	commandID, err := stringArg(argsMap, "command_id")
+	if err != nil {
+		return "", err
+	}
+	afterOffset, err := optionalIntArg(argsMap, "after_offset")
+	if err != nil {
+		return "", err
+	}
+	active, err := e.lookupCommand(commandID)
+	if err != nil {
+		return "", err
+	}
+	active.mu.RLock()
+	defer active.mu.RUnlock()
+
+	chunks := make([]commandChunk, 0)
+	for _, chunk := range active.chunks {
+		if chunk.Offset > afterOffset {
+			chunks = append(chunks, chunk)
+		}
+	}
+	payload := map[string]any{
+		"tool":        "shell_poll",
+		"command_id":  commandID,
+		"status":      active.status,
+		"chunks":      chunks,
+		"next_offset": active.nextOffset,
+	}
+	if active.exitCode != nil {
+		payload["exit_code"] = *active.exitCode
+	}
+	if active.errorText != "" {
+		payload["error"] = active.errorText
+	}
+	return jsonText(payload), nil
+}
+
+func (e *Executor) executeKill(argsMap map[string]any) (string, error) {
+	commandID, err := stringArg(argsMap, "command_id")
+	if err != nil {
+		return "", err
+	}
+	active, err := e.lookupCommand(commandID)
+	if err != nil {
+		return "", err
+	}
+	active.mu.Lock()
+	defer active.mu.Unlock()
+	if active.status != "running" {
+		return jsonText(map[string]any{
+			"tool":       "shell_kill",
+			"command_id": commandID,
+			"status":     active.status,
+		}), nil
+	}
+	active.killRequested = true
+	if err := active.process.Kill(); err != nil {
+		return "", fmt.Errorf("kill shell command: %w", err)
+	}
+	return jsonText(map[string]any{
+		"tool":       "shell_kill",
+		"command_id": commandID,
+		"status":     "killing",
+	}), nil
+}
+
+func (e *Executor) waitForCommand(active *activeCommand) {
+	if active.cancel != nil {
+		defer active.cancel()
+	}
+	err := active.process.Wait()
+	active.mu.Lock()
+	defer active.mu.Unlock()
+
+	var exitCode *int
+	var errorText string
+	switch {
+	case err == nil:
+		code := 0
+		exitCode = &code
+		if active.killRequested {
+			active.status = "killed"
+		} else {
+			active.status = "completed"
+		}
+	case isExitError(err):
+		code := exitCodeOf(err)
+		exitCode = &code
+		if active.killRequested {
+			active.status = "killed"
+		} else {
+			active.status = "failed"
+		}
+	case active.killRequested:
+		active.status = "killed"
+		errorText = err.Error()
+	default:
+		active.status = "failed"
+		errorText = err.Error()
+	}
+	active.exitCode = exitCode
+	active.errorText = errorText
+}
+
+func (e *Executor) captureOutput(active *activeCommand, stream string, reader io.ReadCloser) {
+	defer reader.Close()
+	scanner := bufio.NewScanner(reader)
+	buffer := make([]byte, 0, 64*1024)
+	scanner.Buffer(buffer, 1024*1024)
+	for scanner.Scan() {
+		e.appendChunk(active, stream, scanner.Text())
+	}
+	if err := scanner.Err(); err != nil {
+		e.appendChunk(active, stream, "scanner error: "+err.Error())
+	}
+}
+
+func (e *Executor) appendChunk(active *activeCommand, stream, text string) {
+	active.mu.Lock()
+	defer active.mu.Unlock()
+	active.nextOffset++
+	active.chunks = append(active.chunks, commandChunk{
+		Offset: active.nextOffset,
+		Stream: stream,
+		Text:   text,
+	})
+}
+
+func (e *Executor) lookupCommand(commandID string) (*activeCommand, error) {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+	active, ok := e.commands[commandID]
+	if !ok {
+		return nil, fmt.Errorf("shell command %q not found", commandID)
+	}
+	return active, nil
 }
 
 func (e *Executor) resolveInvocation(policy contracts.ShellRuntimePolicy, command string, args []string) (invocation, error) {
@@ -186,6 +455,27 @@ func defaultRunCommand(ctx context.Context, cwd, executable string, args []strin
 	}, nil
 }
 
+func defaultStartCommand(ctx context.Context, cwd, executable string, args []string) (processHandle, error) {
+	cmd := exec.CommandContext(ctx, executable, args...)
+	cmd.Dir = cwd
+	return &execProcess{cmd: cmd}, nil
+}
+
+type execProcess struct {
+	cmd *exec.Cmd
+}
+
+func (p *execProcess) StdoutPipe() (io.ReadCloser, error) { return p.cmd.StdoutPipe() }
+func (p *execProcess) StderrPipe() (io.ReadCloser, error) { return p.cmd.StderrPipe() }
+func (p *execProcess) Start() error                       { return p.cmd.Start() }
+func (p *execProcess) Wait() error                        { return p.cmd.Wait() }
+func (p *execProcess) Kill() error {
+	if p.cmd.Process == nil {
+		return fmt.Errorf("process is not running")
+	}
+	return p.cmd.Process.Kill()
+}
+
 func validateCommand(policy contracts.ShellCommandPolicy, command string, args []string) error {
 	if policy.Enabled {
 		switch policy.Strategy {
@@ -258,6 +548,18 @@ func resolveCwd(policy contracts.ShellRuntimePolicy, args map[string]any) (strin
 	return requested, nil
 }
 
+func parseTimeout(policy contracts.ShellRuntimePolicy) (time.Duration, error) {
+	timeout := 30 * time.Second
+	if policy.Params.Timeout == "" {
+		return timeout, nil
+	}
+	parsed, err := time.ParseDuration(policy.Params.Timeout)
+	if err != nil {
+		return 0, fmt.Errorf("parse shell timeout: %w", err)
+	}
+	return parsed, nil
+}
+
 func stringArg(args map[string]any, key string) (string, error) {
 	value, ok := args[key]
 	if !ok {
@@ -293,7 +595,38 @@ func optionalStringSlice(args map[string]any, key string) ([]string, error) {
 	return out, nil
 }
 
+func optionalIntArg(args map[string]any, key string) (int, error) {
+	value, ok := args[key]
+	if !ok || value == nil {
+		return 0, nil
+	}
+	switch typed := value.(type) {
+	case int:
+		return typed, nil
+	case float64:
+		return int(typed), nil
+	default:
+		return 0, fmt.Errorf("argument %q must be an integer", key)
+	}
+}
+
 func jsonText(value any) string {
 	data, _ := json.Marshal(value)
 	return string(data)
+}
+
+func isExitError(err error) bool {
+	var exitErr *exec.ExitError
+	return errors.As(err, &exitErr)
+}
+
+func exitCodeOf(err error) int {
+	var exitErr *exec.ExitError
+	if !errors.As(err, &exitErr) {
+		return 1
+	}
+	if status, ok := exitErr.Sys().(syscall.WaitStatus); ok {
+		return status.ExitStatus()
+	}
+	return exitErr.ExitCode()
 }

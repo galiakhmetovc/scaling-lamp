@@ -28,6 +28,7 @@ type Agent struct {
 	PlanTools       *tools.PlanToolExecutor
 	FilesystemTools *filesystem.DefinitionExecutor
 	ShellTools      *shell.DefinitionExecutor
+	ShellRuntime    *shell.Executor
 	ToolCatalog     *tools.CatalogExecutor
 	ToolExecution   *tools.ExecutionGate
 	ProviderClient  *provider.Client
@@ -170,6 +171,7 @@ func BuildAgent(configPath string) (*Agent, error) {
 		PlanTools:       planToolExecutor,
 		FilesystemTools: filesystemToolExecutor,
 		ShellTools:      shellToolExecutor,
+		ShellRuntime:    shell.NewExecutor(),
 		ToolCatalog:     toolCatalogExecutor,
 		ToolExecution:   toolExecutionGate,
 		ProviderClient:  providerClient,

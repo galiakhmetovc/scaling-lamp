@@ -18,5 +18,8 @@ spec:
       - fs_mkdir
       - fs_move
       - shell_exec
+      - shell_start
+      - shell_poll
+      - shell_kill
     allow_empty: false
     dedupe: true

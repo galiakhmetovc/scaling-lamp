@@ -1,11 +1,14 @@
 package shell
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"teamd/internal/contracts"
 )
@@ -256,4 +259,133 @@ func TestExecutorRunsWindowsBuiltinViaCmdLauncher(t *testing.T) {
 	if payload["command"] != "echo" {
 		t.Fatalf("command = %#v, want echo", payload["command"])
 	}
+}
+
+func TestExecutorStartPollAndKillCommandLifecycle(t *testing.T) {
+	t.Parallel()
+
+	stdoutReader, stdoutWriter := io.Pipe()
+	stderrReader, stderrWriter := io.Pipe()
+	waitCh := make(chan error, 1)
+	process := &fakeProcess{
+		stdout: stdoutReader,
+		stderr: stderrReader,
+		wait: func() error {
+			return <-waitCh
+		},
+		kill: func() error {
+			waitCh <- errors.New("killed")
+			return nil
+		},
+	}
+	executor := &Executor{
+		goos: "linux",
+		start: func(_ context.Context, _ string, executable string, args []string) (processHandle, error) {
+			if executable != "printf" {
+				t.Fatalf("executable = %q, want printf", executable)
+			}
+			if len(args) != 1 || args[0] != "hello" {
+				t.Fatalf("args = %#v, want [hello]", args)
+			}
+			return process, nil
+		},
+		commands: map[string]*activeCommand{},
+	}
+	contract := contracts.ShellExecutionContract{
+		Command: contracts.ShellCommandPolicy{
+			Enabled:  true,
+			Strategy: "static_allowlist",
+			Params:   contracts.ShellCommandParams{AllowedCommands: []string{"printf"}},
+		},
+		Runtime: contracts.ShellRuntimePolicy{
+			Enabled:  true,
+			Strategy: "workspace_write",
+			Params: contracts.ShellRuntimeParams{
+				Cwd:            t.TempDir(),
+				Timeout:        "5s",
+				MaxOutputBytes: 4096,
+				AllowNetwork:   true,
+			},
+		},
+	}
+
+	startOut, err := executor.Execute(contract, "shell_start", map[string]any{
+		"command": "printf",
+		"args":    []any{"hello"},
+	})
+	if err != nil {
+		t.Fatalf("shell_start returned error: %v", err)
+	}
+	commandID := decodeField(t, startOut, "command_id")
+	if commandID == "" {
+		t.Fatalf("command_id missing from %s", startOut)
+	}
+
+	_, _ = io.Copy(stdoutWriter, bytes.NewBufferString("first line\n"))
+	_ = stdoutWriter.Close()
+	_, _ = io.Copy(stderrWriter, bytes.NewBufferString("warn line\n"))
+	_ = stderrWriter.Close()
+	time.Sleep(20 * time.Millisecond)
+
+	pollOut, err := executor.Execute(contract, "shell_poll", map[string]any{
+		"command_id":   commandID,
+		"after_offset": 0,
+	})
+	if err != nil {
+		t.Fatalf("shell_poll returned error: %v", err)
+	}
+	var pollPayload map[string]any
+	if err := json.Unmarshal([]byte(pollOut), &pollPayload); err != nil {
+		t.Fatalf("unmarshal poll result: %v", err)
+	}
+	if pollPayload["status"] != "running" {
+		t.Fatalf("poll status = %#v, want running", pollPayload["status"])
+	}
+	chunks, ok := pollPayload["chunks"].([]any)
+	if !ok || len(chunks) != 2 {
+		t.Fatalf("chunks = %#v, want 2 output chunks", pollPayload["chunks"])
+	}
+
+	killOut, err := executor.Execute(contract, "shell_kill", map[string]any{"command_id": commandID})
+	if err != nil {
+		t.Fatalf("shell_kill returned error: %v", err)
+	}
+	if decodeField(t, killOut, "status") != "killing" {
+		t.Fatalf("kill status = %s, want killing", killOut)
+	}
+	time.Sleep(20 * time.Millisecond)
+
+	finalOut, err := executor.Execute(contract, "shell_poll", map[string]any{
+		"command_id":   commandID,
+		"after_offset": 2,
+	})
+	if err != nil {
+		t.Fatalf("final shell_poll returned error: %v", err)
+	}
+	if decodeField(t, finalOut, "status") != "killed" {
+		t.Fatalf("final poll status = %s, want killed", finalOut)
+	}
+}
+
+type fakeProcess struct {
+	stdout io.ReadCloser
+	stderr io.ReadCloser
+	wait   func() error
+	kill   func() error
+}
+
+func (p *fakeProcess) StdoutPipe() (io.ReadCloser, error) { return p.stdout, nil }
+func (p *fakeProcess) StderrPipe() (io.ReadCloser, error) { return p.stderr, nil }
+func (p *fakeProcess) Start() error                       { return nil }
+func (p *fakeProcess) Wait() error                        { return p.wait() }
+func (p *fakeProcess) Kill() error                        { return p.kill() }
+
+func decodeField(t *testing.T, body string, field string) string {
+	t.Helper()
+	var payload map[string]any
+	if err := json.Unmarshal([]byte(body), &payload); err != nil {
+		t.Fatalf("unmarshal %s: %v", body, err)
+	}
+	value, _ := payload[field].(string)
+	return value
 }

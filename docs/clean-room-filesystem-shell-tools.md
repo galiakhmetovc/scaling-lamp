@@ -18,6 +18,9 @@ Current built-in filesystem tools:
 Current built-in shell tools:
 
 - `shell_exec`
+- `shell_start`
+- `shell_poll`
+- `shell_kill`
 
 These tools are:
 
@@ -46,6 +49,9 @@ Current tool exposure allowlist includes:
   - `fs_mkdir`
   - `fs_move`
 - `shell_exec`
+- `shell_start`
+- `shell_poll`
+- `shell_kill`
 
 ## Current Filesystem Execution Safety
 
@@ -119,8 +125,16 @@ Current provider path:
 4. `ToolExecutionContract` decides allow or deny by tool id
 5. runtime dispatches:
    - filesystem calls to `internal/filesystem.Executor`
-   - shell calls to `internal/shell.Executor`
+   - shell calls to a persistent `internal/shell.Executor`
 6. tool result payloads are returned into the provider loop as `tool` messages
+
+Current async shell lifecycle:
+
+1. `shell_start` validates command policy and starts a bounded background process
+2. runtime returns a `command_id`
+3. `shell_poll` returns current status plus output chunks after an optional `after_offset`
+4. `shell_kill` requests termination for a running command
+5. active command state is held inside the runtime shell executor for the life of the agent process
 
 ## Current Limits
 
@@ -128,6 +142,7 @@ What is implemented now:
 
 - all first-slice filesystem backends
 - one bounded `shell_exec` backend
+- async shell lifecycle via `shell_start` / `shell_poll` / `shell_kill`
 
 What is still intentionally limited:
 
@@ -135,3 +150,4 @@ What is still intentionally limited:
 - no hard OS-level network sandbox
 - no unrestricted shell command execution
 - no binary file tooling
+- active shell command state is runtime-local; persisted command event projections are still a follow-up

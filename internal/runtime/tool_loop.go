@@ -94,7 +94,11 @@ func (a *Agent) executeToolCalls(ctx context.Context, runID, sessionID, correlat
 	activeProjection := a.activePlanProjection()
 	service := plans.NewService(a.now, a.newID)
 	filesystemExecutor := filesystem.NewExecutor()
-	shellExecutor := shell.NewExecutor()
+	shellExecutor := a.ShellRuntime
+	if shellExecutor == nil {
+		shellExecutor = shell.NewExecutor()
+		a.ShellRuntime = shellExecutor
+	}
 
 	decisionByTool := make(map[string]provider.ToolDecision, len(decisions))
 	for _, decision := range decisions {
@@ -272,7 +276,7 @@ func (a *Agent) executeToolCommand(sessionID string, activeProjection *projectio
 			return nil, "", fmt.Errorf("tool call %q: %w", call.Name, err)
 		}
 		return nil, resultText, nil
-	case "shell_exec":
+	case "shell_exec", "shell_start", "shell_poll", "shell_kill":
 		resultText, err := shellExecutor.Execute(a.Contracts.ShellExecution, call.Name, call.Arguments)
 		if err != nil {
 			return nil, "", fmt.Errorf("tool call %q: %w", call.Name, err)
@@ -354,10 +358,10 @@ func (a *Agent) executePlanCommand(sessionID string, active projections.ActivePl
 		}
 		events, err := service.AddTaskNote(active, plans.AddTaskNoteInput{
 			SessionID: sessionID,
-			TaskID:   taskID,
-			NoteText: noteText,
-			Source:   source,
-			ActorID:  a.Config.ID,
+			TaskID:    taskID,
+			NoteText:  noteText,
+			Source:    source,
+			ActorID:   a.Config.ID,
 		})
 		if err != nil {
 			return nil, "", fmt.Errorf("tool call %q: %w", call.Name, err)
@@ -377,7 +381,7 @@ func (a *Agent) executePlanCommand(sessionID string, active projections.ActivePl
 			return nil, "", fmt.Errorf("tool call %q: %w", call.Name, err)
 		}
 		events, err := service.EditTask(active, plans.EditTaskInput{
-			SessionID:       sessionID,
+			SessionID:      sessionID,
 			TaskID:         taskID,
 			NewDescription: newDescription,
 			NewDependsOn:   newDependsOn,

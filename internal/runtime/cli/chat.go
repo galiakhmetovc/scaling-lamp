@@ -251,6 +251,15 @@ func summarizeToolArgs(activity runtime.ToolActivity) string {
 			return "command: " + command
 		}
 		return fmt.Sprintf("command: %s | args: %s", command, strings.Join(args, " "))
+	case "shell_start":
+		command := stringArg(activity.Arguments, "command")
+		args := stringSliceArg(activity.Arguments, "args")
+		if len(args) == 0 {
+			return "command: " + command
+		}
+		return fmt.Sprintf("command: %s | args: %s", command, strings.Join(args, " "))
+	case "shell_poll", "shell_kill":
+		return "command_id: " + stringArg(activity.Arguments, "command_id")
 	default:
 		return "args: (see events.jsonl)"
 	}
