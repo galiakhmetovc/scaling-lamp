@@ -5,7 +5,7 @@ spec:
   enabled: true
   strategy: default_runtime
   params:
-    allow_network: false
+    allow_network: true
     allow_write_paths: []
     deny_write_paths: []
     timeout: 30s
