@@ -308,6 +308,7 @@ func (a *Agent) executePlanCommand(sessionID string, active projections.ActivePl
 			return nil, "", fmt.Errorf("tool call %q: %w", call.Name, err)
 		}
 		events, err := service.AddTask(active, plans.AddTaskInput{
+			SessionID:    sessionID,
 			PlanID:       planID,
 			Description:  description,
 			ParentTaskID: parentTaskID,
@@ -331,6 +332,7 @@ func (a *Agent) executePlanCommand(sessionID string, active projections.ActivePl
 		}
 		blockedReason, _ := optionalStringArg(call.Arguments, "blocked_reason")
 		events, err := service.SetTaskStatus(active, plans.SetTaskStatusInput{
+			SessionID:     sessionID,
 			TaskID:        taskID,
 			NewStatus:     newStatus,
 			BlockedReason: blockedReason,
@@ -351,6 +353,7 @@ func (a *Agent) executePlanCommand(sessionID string, active projections.ActivePl
 			return nil, "", fmt.Errorf("tool call %q: %w", call.Name, err)
 		}
 		events, err := service.AddTaskNote(active, plans.AddTaskNoteInput{
+			SessionID: sessionID,
 			TaskID:   taskID,
 			NoteText: noteText,
 			Source:   source,
@@ -374,6 +377,7 @@ func (a *Agent) executePlanCommand(sessionID string, active projections.ActivePl
 			return nil, "", fmt.Errorf("tool call %q: %w", call.Name, err)
 		}
 		events, err := service.EditTask(active, plans.EditTaskInput{
+			SessionID:       sessionID,
 			TaskID:         taskID,
 			NewDescription: newDescription,
 			NewDependsOn:   newDependsOn,

@@ -44,6 +44,18 @@ const (
 	settingsRaw
 )
 
+type planEditorMode int
+
+const (
+	planEditorBrowse planEditorMode = iota
+	planEditorCreatePlan
+	planEditorAddTask
+	planEditorEditTask
+	planEditorEditDeps
+	planEditorStatus
+	planEditorNote
+)
+
 type sessionOverrides struct {
 	MaxToolRounds          int
 	RenderMarkdown         bool
@@ -67,7 +79,8 @@ type sessionState struct {
 	Busy        bool
 	Overrides   sessionOverrides
 	Loaded      bool
-	MessageView viewport.Model
+	ChatView    viewport.Model
+	ToolsView   viewport.Model
 }
 
 type configFormDraft struct {
@@ -103,6 +116,15 @@ type model struct {
 	formDraft       configFormDraft
 	formMaxRounds   textinput.Model
 	formStyle       textinput.Model
+	planView        viewport.Model
+	settingsView    viewport.Model
+	planMode        planEditorMode
+	planCursor      int
+	planGoalInput   textinput.Model
+	planDescInput   textinput.Model
+	planDepsInput   textinput.Model
+	planNoteInput   textinput.Model
+	planStatusIndex int
 	statusMessage   string
 	errMessage      string
 	mouseTabBounds  []tabBound
@@ -150,6 +172,12 @@ func newModel(ctx context.Context, agent *runtime.Agent, resumeID string) (model
 	m.rawEditor.Prompt = ""
 	m.formMaxRounds = textinput.New()
 	m.formStyle = textinput.New()
+	m.planGoalInput = textinput.New()
+	m.planDescInput = textinput.New()
+	m.planDepsInput = textinput.New()
+	m.planNoteInput = textinput.New()
+	m.planView = viewport.New(80, 20)
+	m.settingsView = viewport.New(80, 20)
 
 	id, ch := agent.UIBus.Subscribe(128)
 	m.uiSubID, m.uiCh = id, ch
@@ -205,9 +233,19 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		for _, state := range m.sessions {
 			state.Input.SetWidth(max(20, m.width-6))
 			state.Input.SetHeight(6)
-			state.MessageView.Width = max(20, m.width-6)
-			state.MessageView.Height = max(10, m.height-14)
+			state.ChatView.Width = max(20, m.width-6)
+			state.ChatView.Height = max(10, m.height-14)
+			state.ToolsView.Width = max(20, m.width-6)
+			state.ToolsView.Height = max(10, m.height-8)
 		}
+		m.planView.Width = max(20, m.width-6)
+		m.planView.Height = max(10, m.height-8)
+		m.settingsView.Width = max(20, m.width-6)
+		m.settingsView.Height = max(10, m.height-8)
+		m.planGoalInput.Width = max(20, m.width/3)
+		m.planDescInput.Width = max(20, m.width/3)
+		m.planDepsInput.Width = max(20, m.width/3)
+		m.planNoteInput.Width = max(20, m.width/3)
 		m.rawEditor.SetWidth(max(20, m.width/2))
 		m.rawEditor.SetHeight(max(10, m.height-12))
 		return m, nil
@@ -227,9 +265,9 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case tabChat:
 			return m.updateChat(msg)
 		case tabPlan:
-			return m, nil
+			return m.updatePlan(msg)
 		case tabTools:
-			return m, nil
+			return m.updateTools(msg)
 		case tabSettings:
 			return m.updateSettings(msg)
 		}
@@ -251,12 +289,14 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				if len(state.ToolLog) > 200 {
 					state.ToolLog = state.ToolLog[len(state.ToolLog)-200:]
 				}
+				m.renderToolsViewport(state)
 			case runtime.UIEventStatusChanged:
 				state.Status = event.Status
 			case runtime.UIEventRunCompleted:
 				state.Status = "done"
 				state.Streaming.Reset()
 			}
+			m.renderChatViewport(state)
 		}
 		return m, waitForUIEvent(m.uiCh)
 	case chatTurnFinishedMsg:
@@ -275,7 +315,8 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			state.Session = resumed
 		}
 		state.Status = "idle"
-		m.renderSessionViewport(state)
+		m.renderChatViewport(state)
+		m.renderToolsViewport(state)
 		return m, nil
 	case rebuildFinishedMsg:
 		if msg.Err != nil {
@@ -293,7 +334,8 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		for sessionID, state := range m.sessions {
 			if resumed, err := m.agent.ResumeChatSession(context.Background(), sessionID); err == nil {
 				state.Session = resumed
-				m.renderSessionViewport(state)
+				m.renderChatViewport(state)
+				m.renderToolsViewport(state)
 			}
 		}
 		m.resetFormDraft()
@@ -372,6 +414,12 @@ func (m *model) updateChat(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	switch msg.String() {
+	case "pgup":
+		state.ChatView.LineUp(max(1, state.ChatView.Height/2))
+		return m, nil
+	case "pgdown":
+		state.ChatView.LineDown(max(1, state.ChatView.Height/2))
+		return m, nil
 	case "ctrl+s":
 		if state.Busy {
 			return m, nil
@@ -390,6 +438,149 @@ func (m *model) updateChat(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	var cmd tea.Cmd
 	state.Input, cmd = state.Input.Update(msg)
 	return m, cmd
+}
+
+func (m *model) updatePlan(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	head, ok := m.agent.CurrentPlanHead(m.activeSessionID)
+	flat := flattenedPlanTasks(head)
+	selected, _ := m.selectedPlanTask(head)
+	switch msg.String() {
+	case "pgup":
+		m.planView.LineUp(max(1, m.planView.Height/2))
+	case "pgdown":
+		m.planView.LineDown(max(1, m.planView.Height/2))
+	case "up", "k":
+		if m.planMode == planEditorBrowse {
+			if m.planCursor > 0 {
+				m.planCursor--
+			}
+			return m, nil
+		}
+	case "down", "j":
+		if m.planMode == planEditorBrowse {
+			if m.planCursor < len(flat)-1 {
+				m.planCursor++
+			}
+			return m, nil
+		}
+	case "c":
+		m.planMode = planEditorCreatePlan
+		m.planGoalInput.Focus()
+		m.planGoalInput.SetValue("")
+		return m, nil
+	case "a":
+		m.planMode = planEditorAddTask
+		m.planDescInput.Focus()
+		m.planDescInput.SetValue("")
+		return m, nil
+	case "e":
+		if ok {
+			m.planMode = planEditorEditTask
+			m.planDescInput.Focus()
+			m.planDescInput.SetValue(selected.Description)
+		}
+		return m, nil
+	case "d":
+		if ok {
+			m.planMode = planEditorEditDeps
+			m.planDepsInput.Focus()
+			m.planDepsInput.SetValue(strings.Join(selected.DependsOn, ","))
+		}
+		return m, nil
+	case "n":
+		if ok {
+			m.planMode = planEditorNote
+			m.planNoteInput.Focus()
+			m.planNoteInput.SetValue("")
+		}
+		return m, nil
+	case "s":
+		if ok {
+			m.planMode = planEditorStatus
+			m.planStatusIndex = indexOfPlanStatus(selected.Status)
+		}
+		return m, nil
+	case "esc":
+		m.planMode = planEditorBrowse
+		return m, nil
+	case "ctrl+s":
+		var err error
+		switch m.planMode {
+		case planEditorCreatePlan:
+			err = m.agent.CreatePlan(m.ctx, m.activeSessionID, strings.TrimSpace(m.planGoalInput.Value()))
+		case planEditorAddTask:
+			err = m.agent.AddPlanTask(m.ctx, m.activeSessionID, strings.TrimSpace(m.planDescInput.Value()), "", nil)
+		case planEditorEditTask:
+			if ok {
+				err = m.agent.EditPlanTask(m.ctx, m.activeSessionID, selected.ID, strings.TrimSpace(m.planDescInput.Value()), selected.DependsOn)
+			}
+		case planEditorEditDeps:
+			if ok {
+				err = m.agent.EditPlanTask(m.ctx, m.activeSessionID, selected.ID, selected.Description, parseCSV(m.planDepsInput.Value()))
+			}
+		case planEditorStatus:
+			if ok {
+				err = m.agent.SetPlanTaskStatus(m.ctx, m.activeSessionID, selected.ID, planStatuses()[m.planStatusIndex], "")
+			}
+		case planEditorNote:
+			if ok {
+				err = m.agent.AddPlanTaskNote(m.ctx, m.activeSessionID, selected.ID, strings.TrimSpace(m.planNoteInput.Value()))
+			}
+		}
+		if err != nil {
+			m.errMessage = err.Error()
+			return m, nil
+		}
+		m.planMode = planEditorBrowse
+		if state := m.currentSessionState(); state != nil {
+			m.renderChatViewport(state)
+		}
+		m.statusMessage = "plan updated"
+		return m, nil
+	case "left", "h":
+		if m.planMode == planEditorStatus && m.planStatusIndex > 0 {
+			m.planStatusIndex--
+			return m, nil
+		}
+	case "right", "l":
+		if m.planMode == planEditorStatus && m.planStatusIndex < len(planStatuses())-1 {
+			m.planStatusIndex++
+			return m, nil
+		}
+	}
+	switch m.planMode {
+	case planEditorCreatePlan:
+		var cmd tea.Cmd
+		m.planGoalInput, cmd = m.planGoalInput.Update(msg)
+		return m, cmd
+	case planEditorAddTask, planEditorEditTask:
+		var cmd tea.Cmd
+		m.planDescInput, cmd = m.planDescInput.Update(msg)
+		return m, cmd
+	case planEditorEditDeps:
+		var cmd tea.Cmd
+		m.planDepsInput, cmd = m.planDepsInput.Update(msg)
+		return m, cmd
+	case planEditorNote:
+		var cmd tea.Cmd
+		m.planNoteInput, cmd = m.planNoteInput.Update(msg)
+		return m, cmd
+	}
+	return m, nil
+}
+
+func (m *model) updateTools(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	state := m.currentSessionState()
+	if state == nil {
+		return m, nil
+	}
+	switch msg.String() {
+	case "pgup":
+		state.ToolsView.LineUp(max(1, state.ToolsView.Height/2))
+	case "pgdown":
+		state.ToolsView.LineDown(max(1, state.ToolsView.Height/2))
+	}
+	return m, nil
 }
 
 func (m *model) updateSettings(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
@@ -418,6 +609,12 @@ func (m *model) updateSessionOverrides(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	switch msg.String() {
+	case "pgup":
+		m.settingsView.LineUp(max(1, m.settingsView.Height/2))
+		return m, nil
+	case "pgdown":
+		m.settingsView.LineDown(max(1, m.settingsView.Height/2))
+		return m, nil
 	case "up", "k":
 		if m.sessionField > 0 {
 			m.sessionField--
@@ -459,6 +656,12 @@ func (m *model) updateSessionOverrides(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 func (m *model) updateConfigForm(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
+	case "pgup":
+		m.settingsView.LineUp(max(1, m.settingsView.Height/2))
+		return m, nil
+	case "pgdown":
+		m.settingsView.LineDown(max(1, m.settingsView.Height/2))
+		return m, nil
 	case "up", "k":
 		if m.formField > 0 {
 			m.formField--
@@ -616,28 +819,33 @@ func (m *model) viewChat() string {
 	if state == nil {
 		return "No active session"
 	}
-	m.renderSessionViewport(state)
+	m.renderChatViewport(state)
 	header := fmt.Sprintf("session: %s\nstatus: %s", state.Session.SessionID, coalesce(state.Status, "idle"))
-	body := state.MessageView.View()
-	if state.Streaming.Len() > 0 {
-		body += "\n\n[stream]\n" + state.Streaming.String()
-	}
-	return lipgloss.JoinVertical(lipgloss.Left, header, body, "\nInput (Ctrl+S send):", state.Input.View())
+	return lipgloss.JoinVertical(lipgloss.Left, header, state.ChatView.View(), "\nInput (Ctrl+S send, PgUp/PgDn scroll):", state.Input.View())
 }
 
 func (m *model) viewPlan() string {
 	head, ok := m.agent.CurrentPlanHead(m.activeSessionID)
 	if !ok || head.Plan.ID == "" {
-		return "No active plan"
+		left := "No active plan\n\nPress c to create one."
+		right := m.renderPlanEditor(false, projections.PlanTaskView{})
+		return lipgloss.JoinHorizontal(lipgloss.Top, lipgloss.NewStyle().Width(max(30, m.width/2)).Render(left), lipgloss.NewStyle().Width(max(26, m.width/3)).Render(right))
 	}
 	lines := []string{"Plan", "", "goal: " + head.Plan.Goal}
-	for _, task := range orderedPlanTasks(head.Tasks) {
+	ordered := orderedPlanTasks(head.Tasks)
+	flat := flattenedPlanTasks(head)
+	selected, hasSelection := m.selectedPlanTask(head)
+	flatIndex := 0
+	for _, task := range ordered {
 		if task.ParentTaskID != "" {
 			continue
 		}
-		renderPlanTask(&lines, head, task, orderedPlanTasks(head.Tasks), 0)
+		renderPlanTaskWithSelection(&lines, head, task, ordered, 0, flat, &flatIndex, m.planCursor)
 	}
-	return strings.Join(lines, "\n")
+	m.planView.SetContent(strings.Join(lines, "\n"))
+	left := m.planView.View()
+	right := m.renderPlanEditor(hasSelection, selected)
+	return lipgloss.JoinHorizontal(lipgloss.Top, lipgloss.NewStyle().Width(max(30, m.width/2)).Render(left), lipgloss.NewStyle().Width(max(26, m.width/3)).Render(right))
 }
 
 func (m *model) viewTools() string {
@@ -656,7 +864,8 @@ func (m *model) viewTools() string {
 		}
 		lines = append(lines, line)
 	}
-	return strings.Join(lines, "\n")
+	state.ToolsView.SetContent(strings.Join(lines, "\n"))
+	return state.ToolsView.View()
 }
 
 func (m *model) viewSettings() string {
@@ -676,7 +885,8 @@ func (m *model) viewSettings() string {
 			fmt.Sprintf("%s show_tool_results: %t", cursor(m.sessionField, 4), state.Overrides.ShowToolResults),
 			fmt.Sprintf("%s show_plan_after_plan_tools: %t", cursor(m.sessionField, 5), state.Overrides.ShowPlanAfterPlanTools),
 		}
-		return head + "\n\n" + strings.Join(rows, "\n")
+		m.settingsView.SetContent(head + "\n\n" + strings.Join(rows, "\n"))
+		return m.settingsView.View()
 	case settingsForm:
 		rows := []string{
 			fmt.Sprintf("%s max_tool_rounds: %s", cursor(m.formField, 0), m.formDraft.MaxToolRounds),
@@ -689,7 +899,8 @@ func (m *model) viewSettings() string {
 			"Ctrl+S save to disk",
 			"Ctrl+A save and reload agent",
 		}
-		return head + "\n\n" + strings.Join(rows, "\n")
+		m.settingsView.SetContent(head + "\n\n" + strings.Join(rows, "\n"))
+		return m.settingsView.View()
 	default:
 		var fileLines []string
 		for i, path := range m.rawFiles {
@@ -751,7 +962,8 @@ func (m *model) loadSessions(resumeID string) error {
 		if err == nil {
 			state.Session = resumed
 			state.Loaded = true
-			m.renderSessionViewport(state)
+			m.renderChatViewport(state)
+			m.renderToolsViewport(state)
 			m.sessions[entry.SessionID] = state
 			m.sessionOrder = append(m.sessionOrder, entry.SessionID)
 		}
@@ -781,11 +993,13 @@ func newSessionState(overrides sessionOverrides) *sessionState {
 	input.Prompt = ""
 	input.SetHeight(6)
 	input.Focus()
-	view := viewport.New(80, 20)
+	chatView := viewport.New(80, 20)
+	toolsView := viewport.New(80, 20)
 	return &sessionState{
 		Input:       input,
 		Overrides:   overrides,
-		MessageView: view,
+		ChatView:    chatView,
+		ToolsView:   toolsView,
 		Status:      "idle",
 	}
 }
@@ -808,24 +1022,55 @@ func (m *model) currentSessionState() *sessionState {
 	return m.sessions[m.activeSessionID]
 }
 
-func (m *model) renderSessionViewport(state *sessionState) {
+func (m *model) renderChatViewport(state *sessionState) {
 	if state == nil || state.Session == nil {
 		return
 	}
-	lines := make([]string, 0, len(state.Session.Messages)*2)
-	for _, message := range state.Session.Messages {
-		lines = append(lines, strings.ToUpper(message.Role)+":")
-		content := message.Content
-		if message.Role == "assistant" && state.Overrides.RenderMarkdown {
-			rendered, err := renderMarkdown(content, state.Overrides.MarkdownStyle)
+	lines := []string{}
+	for _, item := range m.agent.CurrentChatTimeline(state.Session.SessionID) {
+		switch item.Kind {
+		case projections.ChatTimelineItemMessage:
+			lines = append(lines, strings.ToUpper(item.Role)+":")
+			content := item.Content
+			if item.Role == "assistant" && state.Overrides.RenderMarkdown {
+				rendered, err := renderMarkdown(content, state.Overrides.MarkdownStyle)
+				if err == nil {
+					content = strings.TrimRight(rendered, "\n")
+				}
+			}
+			lines = append(lines, content, "")
+		default:
+			rendered, err := renderMarkdown(item.Content, state.Overrides.MarkdownStyle)
 			if err == nil {
-				content = strings.TrimRight(rendered, "\n")
+				lines = append(lines, strings.TrimRight(rendered, "\n"), "")
+			} else {
+				lines = append(lines, item.Content, "")
 			}
 		}
-		lines = append(lines, content, "")
 	}
-	state.MessageView.SetContent(strings.Join(lines, "\n"))
-	state.MessageView.GotoBottom()
+	if state.Streaming.Len() > 0 {
+		lines = append(lines, "ASSISTANT:", state.Streaming.String(), "")
+	}
+	state.ChatView.SetContent(strings.Join(lines, "\n"))
+	state.ChatView.GotoBottom()
+}
+
+func (m *model) renderToolsViewport(state *sessionState) {
+	if state == nil {
+		return
+	}
+	lines := []string{"Tools", ""}
+	for i := len(state.ToolLog) - 1; i >= 0; i-- {
+		entry := state.ToolLog[i]
+		line := fmt.Sprintf("[%s] %s", entry.Activity.Phase, entry.Activity.Name)
+		if entry.Activity.ErrorText != "" {
+			line += " | error: " + entry.Activity.ErrorText
+		} else if entry.Activity.ResultText != "" {
+			line += " | ok"
+		}
+		lines = append(lines, line)
+	}
+	state.ToolsView.SetContent(strings.Join(lines, "\n"))
 }
 
 func renderMarkdown(input, style string) (string, error) {
@@ -1060,6 +1305,137 @@ func orderedPlanTasks(tasks map[string]projections.PlanTaskView) []projections.P
 		}
 		return a.Order - b.Order
 	})
+	return out
+}
+
+func flattenedPlanTasks(head projections.PlanHeadSnapshot) []projections.PlanTaskView {
+	ordered := orderedPlanTasks(head.Tasks)
+	out := make([]projections.PlanTaskView, 0, len(ordered))
+	var walk func(parent string)
+	walk = func(parent string) {
+		for _, task := range ordered {
+			if task.ParentTaskID != parent {
+				continue
+			}
+			out = append(out, task)
+			walk(task.ID)
+		}
+	}
+	walk("")
+	return out
+}
+
+func renderPlanTaskWithSelection(lines *[]string, head projections.PlanHeadSnapshot, task projections.PlanTaskView, all []projections.PlanTaskView, depth int, flat []projections.PlanTaskView, flatIndex *int, selectedIndex int) {
+	prefix := "  "
+	if *flatIndex == selectedIndex {
+		prefix = "> "
+	}
+	rendered := fmt.Sprintf("%s%s", prefix, planTaskLine(head, task, depth))
+	*lines = append(*lines, rendered)
+	*flatIndex++
+	for _, child := range all {
+		if child.ParentTaskID == task.ID {
+			renderPlanTaskWithSelection(lines, head, child, all, depth+1, flat, flatIndex, selectedIndex)
+		}
+	}
+}
+
+func planTaskLine(head projections.PlanHeadSnapshot, task projections.PlanTaskView, depth int) string {
+	prefix := strings.Repeat("  ", depth)
+	status := "[todo]"
+	switch task.Status {
+	case "done":
+		status = "[done]"
+	case "in_progress":
+		status = "[doing]"
+	case "blocked":
+		status = "[blocked]"
+	case "cancelled":
+		status = "[cancelled]"
+	default:
+		if head.WaitingOnDependencies[task.ID] {
+			status = "[waiting]"
+		} else if head.Ready[task.ID] {
+			status = "[ready]"
+		}
+	}
+	return fmt.Sprintf("%s%s %s", prefix, status, task.Description)
+}
+
+func (m *model) selectedPlanTask(head projections.PlanHeadSnapshot) (projections.PlanTaskView, bool) {
+	flat := flattenedPlanTasks(head)
+	if len(flat) == 0 || m.planCursor < 0 || m.planCursor >= len(flat) {
+		return projections.PlanTaskView{}, false
+	}
+	return flat[m.planCursor], true
+}
+
+func (m *model) renderPlanEditor(hasSelection bool, selected projections.PlanTaskView) string {
+	lines := []string{
+		"Plan Editor",
+		"",
+		"c=create plan  a=add task  e=edit task  d=deps  s=status  n=note  Esc=close  Ctrl+S=apply",
+		"",
+	}
+	switch m.planMode {
+	case planEditorCreatePlan:
+		lines = append(lines, "Create Plan", "", "Goal:", m.planGoalInput.View())
+	case planEditorAddTask:
+		lines = append(lines, "Add Task", "", "Description:", m.planDescInput.View())
+	case planEditorEditTask:
+		lines = append(lines, "Edit Task", "", "Task ID: "+selected.ID, "Description:", m.planDescInput.View())
+	case planEditorEditDeps:
+		lines = append(lines, "Edit Dependencies", "", "Task ID: "+selected.ID, "Depends on (comma-separated ids):", m.planDepsInput.View())
+	case planEditorStatus:
+		status := "todo"
+		if index := m.planStatusIndex; index >= 0 && index < len(planStatuses()) {
+			status = planStatuses()[index]
+		}
+		lines = append(lines, "Set Status", "", "Task ID: "+selected.ID, "Use h/l then Ctrl+S", "Status: "+status)
+	case planEditorNote:
+		lines = append(lines, "Add Note", "", "Task ID: "+selected.ID, "Note:", m.planNoteInput.View())
+	default:
+		if hasSelection {
+			lines = append(lines,
+				"Selected Task",
+				"",
+				"ID: "+selected.ID,
+				"Description: "+selected.Description,
+				"Status: "+selected.Status,
+				"Depends on: "+strings.Join(selected.DependsOn, ", "),
+			)
+		} else {
+			lines = append(lines, "No task selected")
+		}
+	}
+	return strings.Join(lines, "\n")
+}
+
+func planStatuses() []string {
+	return []string{"todo", "in_progress", "done", "blocked", "cancelled"}
+}
+
+func indexOfPlanStatus(status string) int {
+	for idx, item := range planStatuses() {
+		if item == status {
+			return idx
+		}
+	}
+	return 0
+}
+
+func parseCSV(input string) []string {
+	if strings.TrimSpace(input) == "" {
+		return nil
+	}
+	parts := strings.Split(input, ",")
+	out := make([]string, 0, len(parts))
+	for _, part := range parts {
+		text := strings.TrimSpace(part)
+		if text != "" {
+			out = append(out, text)
+		}
+	}
 	return out
 }
 

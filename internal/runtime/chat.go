@@ -293,9 +293,26 @@ func (a *Agent) sessionCatalogProjection() *projections.SessionCatalogProjection
 	return nil
 }
 
+func (a *Agent) chatTimelineProjection() *projections.ChatTimelineProjection {
+	for _, projection := range a.Projections {
+		timeline, ok := projection.(*projections.ChatTimelineProjection)
+		if ok {
+			return timeline
+		}
+	}
+	return nil
+}
+
 func (a *Agent) ListSessions() []projections.SessionCatalogEntry {
 	if projection := a.sessionCatalogProjection(); projection != nil {
 		return projections.SortedSessionEntries(projection.Snapshot())
+	}
+	return nil
+}
+
+func (a *Agent) CurrentChatTimeline(sessionID string) []projections.ChatTimelineItem {
+	if projection := a.chatTimelineProjection(); projection != nil {
+		return projection.SnapshotForSession(sessionID)
 	}
 	return nil
 }

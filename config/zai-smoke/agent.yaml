@@ -19,6 +19,7 @@ spec:
       - session_catalog
       - run
       - transcript
+      - chat_timeline
       - active_plan
       - plan_archive
       - plan_head

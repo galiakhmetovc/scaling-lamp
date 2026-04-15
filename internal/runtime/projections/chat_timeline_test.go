@@ -1,0 +1,69 @@
+package projections_test
+
+import (
+	"testing"
+
+	"teamd/internal/runtime/eventing"
+	"teamd/internal/runtime/projections"
+)
+
+func TestChatTimelineProjectionBuildsSessionScopedTimeline(t *testing.T) {
+	t.Parallel()
+
+	projection := projections.NewChatTimelineProjection()
+	events := []eventing.Event{
+		{
+			Kind: eventing.EventMessageRecorded,
+			Payload: map[string]any{
+				"session_id": "session-1",
+				"role":       "user",
+				"content":    "Ping",
+			},
+		},
+		{
+			Kind: eventing.EventToolCallStarted,
+			Payload: map[string]any{
+				"session_id": "session-1",
+				"tool_name":  "fs_list",
+			},
+		},
+		{
+			Kind: eventing.EventTaskAdded,
+			Payload: map[string]any{
+				"session_id":  "session-1",
+				"description": "Audit middleware",
+			},
+		},
+		{
+			Kind: eventing.EventMessageRecorded,
+			Payload: map[string]any{
+				"session_id": "session-2",
+				"role":       "user",
+				"content":    "Other",
+			},
+		},
+	}
+	for _, event := range events {
+		if err := projection.Apply(event); err != nil {
+			t.Fatalf("Apply returned error: %v", err)
+		}
+	}
+
+	session1 := projection.SnapshotForSession("session-1")
+	session2 := projection.SnapshotForSession("session-2")
+	if len(session1) != 3 {
+		t.Fatalf("session-1 item count = %d, want 3", len(session1))
+	}
+	if session1[0].Kind != projections.ChatTimelineItemMessage || session1[0].Role != "user" {
+		t.Fatalf("session-1 first item = %#v", session1[0])
+	}
+	if session1[1].Kind != projections.ChatTimelineItemTool {
+		t.Fatalf("session-1 second item = %#v", session1[1])
+	}
+	if session1[2].Kind != projections.ChatTimelineItemPlan {
+		t.Fatalf("session-1 third item = %#v", session1[2])
+	}
+	if len(session2) != 1 || session2[0].Content != "Other" {
+		t.Fatalf("session-2 items = %#v", session2)
+	}
+}

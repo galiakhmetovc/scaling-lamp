@@ -98,6 +98,7 @@ func NewBuiltInComponentRegistry() *ComponentRegistry {
 	registry.RegisterProjection("session_catalog", func() projections.Projection { return projections.NewSessionCatalogProjection() })
 	registry.RegisterProjection("run", func() projections.Projection { return projections.NewRunProjection() })
 	registry.RegisterProjection("transcript", func() projections.Projection { return projections.NewTranscriptProjection() })
+	registry.RegisterProjection("chat_timeline", func() projections.Projection { return projections.NewChatTimelineProjection() })
 	registry.RegisterProjection("active_plan", func() projections.Projection { return projections.NewActivePlanProjection() })
 	registry.RegisterProjection("plan_archive", func() projections.Projection { return projections.NewPlanArchiveProjection() })
 	registry.RegisterProjection("plan_head", func() projections.Projection { return projections.NewPlanHeadProjection() })

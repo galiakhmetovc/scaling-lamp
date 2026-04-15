@@ -61,6 +61,7 @@ func TestServiceAddTaskRejectsSelfDependencyAndCycles(t *testing.T) {
 	}
 
 	if _, err := svc.AddTask(active, plans.AddTaskInput{
+		SessionID:   "session-1",
 		PlanID:      "plan-1",
 		TaskID:      "t3",
 		Description: "bad self",
@@ -72,6 +73,7 @@ func TestServiceAddTaskRejectsSelfDependencyAndCycles(t *testing.T) {
 	}
 
 	if _, err := svc.EditTask(active, plans.EditTaskInput{
+		SessionID:       "session-1",
 		TaskID:         "t1",
 		NewDescription: "root edited",
 		NewDependsOn:   []string{"t2"},

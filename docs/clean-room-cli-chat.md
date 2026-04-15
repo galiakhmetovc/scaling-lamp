@@ -63,9 +63,9 @@ Current line-based fallback behavior per turn:
 Current terminal observability behavior:
 
 - full request bodies and full tool payloads stay in `events.jsonl`
-- terminal output only shows short operator-facing summaries
+- the TUI `Chat` tab shows short operator-facing markdown timeline entries for tools and plan mutations
 - short tool summaries are rendered from `ToolActivity` callbacks in the CLI layer
-- plan rendering is sourced from `PlanHeadProjection`, not from ad hoc string assembly in chat runtime
+- the full plan remains in the dedicated `Plan` tab; chat only keeps one-line plan mutation history
 - active plan rendering is session-scoped and follows the current chat session, not a global workspace plan
 - when `render_markdown = true`, assistant text is buffered until the turn completes and then post-rendered through a terminal markdown renderer
 - tool/status/plan lanes remain append-only and are not mixed into markdown rendering

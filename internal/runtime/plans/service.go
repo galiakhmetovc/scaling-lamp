@@ -32,6 +32,7 @@ type InitPlanInput struct {
 }
 
 type AddTaskInput struct {
+	SessionID    string
 	PlanID       string
 	TaskID       string
 	Description  string
@@ -42,6 +43,7 @@ type AddTaskInput struct {
 }
 
 type EditTaskInput struct {
+	SessionID       string
 	TaskID         string
 	NewDescription string
 	NewDependsOn   []string
@@ -50,6 +52,7 @@ type EditTaskInput struct {
 }
 
 type SetTaskStatusInput struct {
+	SessionID     string
 	TaskID        string
 	NewStatus     string
 	BlockedReason string
@@ -58,6 +61,7 @@ type SetTaskStatusInput struct {
 }
 
 type AddTaskNoteInput struct {
+	SessionID string
 	TaskID   string
 	NoteText string
 	Source   string
@@ -107,6 +111,9 @@ func (s *Service) InitPlan(active projections.ActivePlanSnapshot, input InitPlan
 }
 
 func (s *Service) AddTask(active projections.ActivePlanSnapshot, input AddTaskInput) ([]eventing.Event, error) {
+	if input.SessionID == "" {
+		return nil, fmt.Errorf("session_id is empty")
+	}
 	if active.Plan.ID == "" {
 		return nil, fmt.Errorf("no active plan")
 	}
@@ -137,6 +144,7 @@ func (s *Service) AddTask(active projections.ActivePlanSnapshot, input AddTaskIn
 		AggregateID:   taskID,
 		AggregateType: eventing.AggregatePlanTask,
 		Payload: map[string]any{
+			"session_id":     input.SessionID,
 			"plan_id":        input.PlanID,
 			"task_id":        taskID,
 			"parent_task_id": input.ParentTaskID,
@@ -151,6 +159,9 @@ func (s *Service) AddTask(active projections.ActivePlanSnapshot, input AddTaskIn
 }
 
 func (s *Service) EditTask(active projections.ActivePlanSnapshot, input EditTaskInput) ([]eventing.Event, error) {
+	if input.SessionID == "" {
+		return nil, fmt.Errorf("session_id is empty")
+	}
 	task, ok := active.Tasks[input.TaskID]
 	if !ok {
 		return nil, fmt.Errorf("task %q not found", input.TaskID)
@@ -176,6 +187,7 @@ func (s *Service) EditTask(active projections.ActivePlanSnapshot, input EditTask
 		AggregateID:   input.TaskID,
 		AggregateType: eventing.AggregatePlanTask,
 		Payload: map[string]any{
+			"session_id":     input.SessionID,
 			"plan_id":        task.PlanID,
 			"task_id":        input.TaskID,
 			"parent_task_id": task.ParentTaskID,
@@ -188,6 +200,9 @@ func (s *Service) EditTask(active projections.ActivePlanSnapshot, input EditTask
 }
 
 func (s *Service) SetTaskStatus(active projections.ActivePlanSnapshot, input SetTaskStatusInput) ([]eventing.Event, error) {
+	if input.SessionID == "" {
+		return nil, fmt.Errorf("session_id is empty")
+	}
 	task, ok := active.Tasks[input.TaskID]
 	if !ok {
 		return nil, fmt.Errorf("task %q not found", input.TaskID)
@@ -202,6 +217,7 @@ func (s *Service) SetTaskStatus(active projections.ActivePlanSnapshot, input Set
 		AggregateID:   input.TaskID,
 		AggregateType: eventing.AggregatePlanTask,
 		Payload: map[string]any{
+			"session_id":     input.SessionID,
 			"plan_id":        task.PlanID,
 			"task_id":        input.TaskID,
 			"new_status":     input.NewStatus,
@@ -213,6 +229,9 @@ func (s *Service) SetTaskStatus(active projections.ActivePlanSnapshot, input Set
 }
 
 func (s *Service) AddTaskNote(active projections.ActivePlanSnapshot, input AddTaskNoteInput) ([]eventing.Event, error) {
+	if input.SessionID == "" {
+		return nil, fmt.Errorf("session_id is empty")
+	}
 	task, ok := active.Tasks[input.TaskID]
 	if !ok {
 		return nil, fmt.Errorf("task %q not found", input.TaskID)
@@ -227,6 +246,7 @@ func (s *Service) AddTaskNote(active projections.ActivePlanSnapshot, input AddTa
 		AggregateID:   input.TaskID,
 		AggregateType: eventing.AggregatePlanTask,
 		Payload: map[string]any{
+			"session_id": input.SessionID,
 			"plan_id":   task.PlanID,
 			"task_id":   input.TaskID,
 			"note_text": input.NoteText,

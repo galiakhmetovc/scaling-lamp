@@ -20,9 +20,12 @@ Current behavior:
   - uses the active session
   - `Ctrl+S` sends the current multiline prompt
   - assistant text streams through the runtime UI bus
-  - final assistant messages may render as terminal markdown
+  - chat history is rendered as a markdown timeline for the active session
+  - tool and plan activity is persisted into that timeline as short markdown lines
+  - final assistant messages render as terminal markdown
 - `Plan`
   - shows the current active session `plan_head` projection
+  - supports form-based editing for plan/task operations
 - `Tools`
   - shows tool lifecycle events for the active session
 - `Settings`
@@ -64,6 +67,11 @@ Current runtime architecture:
   - streamed text deltas
   - tool lifecycle events
   - turn status changes
+
+Current interaction notes:
+
+- `Chat`, `Plan`, `Tools`, and settings forms use pane-local scrolling
+- `Plan` keeps the full task tree out of the main chat timeline
 
 Compatibility rule:
 
