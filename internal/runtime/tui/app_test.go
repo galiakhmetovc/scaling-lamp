@@ -484,8 +484,20 @@ func TestF6TogglesMouseCaptureAndFooterIndicator(t *testing.T) {
 	if cmd == nil {
 		t.Fatal("toggle off returned nil command")
 	}
-	if got, want := fmt.Sprintf("%T", cmd()), fmt.Sprintf("%T", tea.DisableMouse()); got != want {
-		t.Fatalf("toggle off returned %s, want %s", got, want)
+	msg := cmd()
+	batch, ok := msg.(tea.BatchMsg)
+	if !ok || len(batch) != 2 {
+		t.Fatalf("toggle off returned %#v, want BatchMsg with 2 commands", msg)
+	}
+	gotTypes := []string{fmt.Sprintf("%T", batch[0]()), fmt.Sprintf("%T", batch[1]())}
+	wantOff := map[string]bool{
+		fmt.Sprintf("%T", tea.DisableMouse()): true,
+		fmt.Sprintf("%T", tea.ExitAltScreen()): true,
+	}
+	for _, got := range gotTypes {
+		if !wantOff[got] {
+			t.Fatalf("toggle off returned unexpected command types: %v", gotTypes)
+		}
 	}
 	if !strings.Contains(mm.viewFooter(), "Mouse: off") {
 		t.Fatalf("footer missing mouse disabled indicator: %q", mm.viewFooter())
@@ -499,8 +511,20 @@ func TestF6TogglesMouseCaptureAndFooterIndicator(t *testing.T) {
 	if cmd == nil {
 		t.Fatal("toggle on returned nil command")
 	}
-	if got, want := fmt.Sprintf("%T", cmd()), fmt.Sprintf("%T", tea.EnableMouseCellMotion()); got != want {
-		t.Fatalf("toggle on returned %s, want %s", got, want)
+	msg = cmd()
+	batch, ok = msg.(tea.BatchMsg)
+	if !ok || len(batch) != 2 {
+		t.Fatalf("toggle on returned %#v, want BatchMsg with 2 commands", msg)
+	}
+	gotTypes = []string{fmt.Sprintf("%T", batch[0]()), fmt.Sprintf("%T", batch[1]())}
+	wantOn := map[string]bool{
+		fmt.Sprintf("%T", tea.EnableMouseCellMotion()): true,
+		fmt.Sprintf("%T", tea.EnterAltScreen()): true,
+	}
+	for _, got := range gotTypes {
+		if !wantOn[got] {
+			t.Fatalf("toggle on returned unexpected command types: %v", gotTypes)
+		}
 	}
 	if !strings.Contains(mm.viewFooter(), "Mouse: on") {
 		t.Fatalf("footer missing mouse re-enabled indicator: %q", mm.viewFooter())

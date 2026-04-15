@@ -221,10 +221,10 @@ func (m *model) handleGlobalKey(msg tea.KeyMsg) tea.Cmd {
 	case "f6":
 		m.mouseCaptureEnabled = !m.mouseCaptureEnabled
 		if m.mouseCaptureEnabled {
-			m.statusMessage = "mouse capture enabled"
+			m.statusMessage = "interactive mouse mode enabled"
 			return enableMouseCaptureCmd()
 		}
-		m.statusMessage = "mouse capture disabled; native text selection available"
+		m.statusMessage = "selection mode enabled"
 		return disableMouseCaptureCmd()
 	}
 	return nil
@@ -288,15 +288,17 @@ func (m *model) viewFooter() string {
 }
 
 func enableMouseCaptureCmd() tea.Cmd {
-	return func() tea.Msg {
-		return tea.EnableMouseCellMotion()
-	}
+	return tea.Batch(
+		func() tea.Msg { return tea.EnterAltScreen() },
+		func() tea.Msg { return tea.EnableMouseCellMotion() },
+	)
 }
 
 func disableMouseCaptureCmd() tea.Cmd {
-	return func() tea.Msg {
-		return tea.DisableMouse()
-	}
+	return tea.Batch(
+		func() tea.Msg { return tea.DisableMouse() },
+		func() tea.Msg { return tea.ExitAltScreen() },
+	)
 }
 
 func (m *model) handleMouseTabs(msg tea.MouseMsg) bool {
