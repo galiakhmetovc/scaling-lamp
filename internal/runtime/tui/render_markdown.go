@@ -4,14 +4,18 @@ import (
 	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/glamour"
 )
 
-func renderMarkdown(input, style string) (string, error) {
+func renderMarkdown(input, style string, width int) (string, error) {
 	if strings.TrimSpace(input) == "" {
 		return "", nil
 	}
-	options := []glamour.TermRendererOption{glamour.WithWordWrap(0)}
+	if width <= 0 {
+		width = 80
+	}
+	options := []glamour.TermRendererOption{glamour.WithWordWrap(width)}
 	if strings.TrimSpace(style) != "" {
 		options = append(options, glamour.WithStandardStyle(style))
 	} else {
@@ -22,6 +26,16 @@ func renderMarkdown(input, style string) (string, error) {
 		return "", err
 	}
 	return renderer.Render(input)
+}
+
+func wrapText(input string, width int) string {
+	if strings.TrimSpace(input) == "" {
+		return input
+	}
+	if width <= 0 {
+		width = 80
+	}
+	return strings.TrimRight(lipgloss.NewStyle().Width(width).Render(input), "\n")
 }
 
 func coalesce(value, fallback string) string {

@@ -56,6 +56,7 @@ func (m *model) renderChatViewport(state *sessionState) {
 	if state == nil || state.Session == nil {
 		return
 	}
+	contentWidth := max(20, state.ChatView.Width-1)
 	lines := []string{}
 	for _, item := range m.agent.CurrentChatTimeline(state.Session.SessionID) {
 		switch item.Kind {
@@ -63,23 +64,27 @@ func (m *model) renderChatViewport(state *sessionState) {
 			lines = append(lines, strings.ToUpper(item.Role)+":")
 			content := item.Content
 			if item.Role == "assistant" && state.Overrides.RenderMarkdown {
-				rendered, err := renderMarkdown(content, state.Overrides.MarkdownStyle)
+				rendered, err := renderMarkdown(content, state.Overrides.MarkdownStyle, contentWidth)
 				if err == nil {
 					content = strings.TrimRight(rendered, "\n")
+				} else {
+					content = wrapText(content, contentWidth)
 				}
+			} else {
+				content = wrapText(content, contentWidth)
 			}
 			lines = append(lines, content, "")
 		default:
-			rendered, err := renderMarkdown(item.Content, state.Overrides.MarkdownStyle)
+			rendered, err := renderMarkdown(item.Content, state.Overrides.MarkdownStyle, contentWidth)
 			if err == nil {
 				lines = append(lines, strings.TrimRight(rendered, "\n"), "")
 			} else {
-				lines = append(lines, item.Content, "")
+				lines = append(lines, wrapText(item.Content, contentWidth), "")
 			}
 		}
 	}
 	if state.Streaming.Len() > 0 {
-		lines = append(lines, "ASSISTANT:", state.Streaming.String(), "")
+		lines = append(lines, "ASSISTANT:", wrapText(state.Streaming.String(), contentWidth), "")
 	}
 	state.ChatView.SetContent(strings.Join(lines, "\n"))
 	state.ChatView.GotoBottom()
@@ -90,20 +95,12 @@ func (m *model) handleMouseChat(msg tea.MouseMsg) bool {
 	if state == nil {
 		return false
 	}
-	switch msg.Button {
-	case tea.MouseButtonWheelUp:
-		state.ChatView.LineUp(3)
-		return true
-	case tea.MouseButtonWheelDown:
-		state.ChatView.LineDown(3)
-		return true
-	}
-	if isWheelUp(msg) {
-		state.ChatView.LineUp(3)
-		return true
-	}
-	if isWheelDown(msg) {
-		state.ChatView.LineDown(3)
+	if isWheelUp(msg) || isWheelDown(msg) {
+		if isWheelUp(msg) {
+			state.ChatView.ScrollUp(state.ChatView.MouseWheelDelta)
+		} else {
+			state.ChatView.ScrollDown(state.ChatView.MouseWheelDelta)
+		}
 		return true
 	}
 	return false

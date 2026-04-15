@@ -9,6 +9,7 @@ import (
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 
 	"teamd/internal/config"
 	"teamd/internal/contracts"
@@ -383,6 +384,58 @@ func TestPlanViewKeepsTopTabsOnNarrowWidth(t *testing.T) {
 	for _, tab := range []string{"Sessions", "Chat", "Plan", "Tools", "Settings"} {
 		if !strings.Contains(firstLine, tab) {
 			t.Fatalf("top tab line missing %q on narrow width: %q", tab, firstLine)
+		}
+	}
+}
+
+func TestChatViewWrapsLongLinesToViewportWidth(t *testing.T) {
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "agent.yaml")
+	if err := os.WriteFile(configPath, []byte("kind: AgentConfig\nversion: v1\nid: tui-test\nspec:\n  runtime:\n    max_tool_rounds: 7\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile config: %v", err)
+	}
+
+	agent := &runtime.Agent{
+		ConfigPath: configPath,
+		Config:     config.AgentConfig{ID: "tui-test", Spec: config.AgentConfigSpec{Runtime: config.AgentRuntimeConfig{MaxToolRounds: 7}}},
+		Contracts: contracts.ResolvedContracts{
+			Chat: contracts.ChatContract{
+				Output: contracts.ChatOutputPolicy{Params: contracts.ChatOutputParams{RenderMarkdown: true, MarkdownStyle: "dark"}},
+				Status: contracts.ChatStatusPolicy{Params: contracts.ChatStatusParams{ShowToolCalls: true, ShowToolResults: true, ShowPlanAfterPlanTools: true}},
+			},
+		},
+		EventLog: runtime.NewInMemoryEventLog(),
+		Projections: []projections.Projection{
+			projections.NewSessionCatalogProjection(),
+			projections.NewTranscriptProjection(),
+			projections.NewChatTimelineProjection(),
+			projections.NewPlanHeadProjection(),
+			projections.NewActivePlanProjection(),
+		},
+		UIBus: runtime.NewUIEventBus(),
+		Now:   func() time.Time { return time.Date(2026, 4, 15, 9, 18, 0, 0, time.UTC) },
+		NewID: func(prefix string) string { return prefix + "-1" },
+	}
+	if err := agent.RecordEvent(context.Background(), eventSessionCreated("session-1")); err != nil {
+		t.Fatalf("RecordEvent session created: %v", err)
+	}
+	if err := agent.RecordEvent(context.Background(), eventMessage("session-1", "assistant", strings.Repeat("verylongword", 10))); err != nil {
+		t.Fatalf("RecordEvent assistant message: %v", err)
+	}
+	m, err := newModel(context.Background(), agent, "session-1")
+	if err != nil {
+		t.Fatalf("newModel returned error: %v", err)
+	}
+	modelAfter, _ := (&m).Update(tea.WindowSizeMsg{Width: 40, Height: 20})
+	mm := modelAfter.(*model)
+	state := mm.sessions[mm.activeSessionID]
+	if state == nil {
+		t.Fatal("active session state is nil")
+	}
+	mm.renderChatViewport(state)
+	for _, line := range strings.Split(state.ChatView.View(), "\n") {
+		if lipgloss.Width(line) > state.ChatView.Width {
+			t.Fatalf("chat line width %d exceeds viewport width %d: %q", lipgloss.Width(line), state.ChatView.Width, line)
 		}
 	}
 }

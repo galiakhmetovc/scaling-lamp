@@ -42,7 +42,11 @@ func newModel(ctx context.Context, agent *runtime.Agent, resumeID string) (model
 	m.planDepsInput = textinput.New()
 	m.planNoteInput = textinput.New()
 	m.planView = viewport.New(80, 20)
+	m.planView.MouseWheelEnabled = true
+	m.planView.MouseWheelDelta = 3
 	m.settingsView = viewport.New(80, 20)
+	m.settingsView.MouseWheelEnabled = true
+	m.settingsView.MouseWheelDelta = 3
 
 	id, ch := agent.UIBus.Subscribe(128)
 	m.uiSubID, m.uiCh = id, ch

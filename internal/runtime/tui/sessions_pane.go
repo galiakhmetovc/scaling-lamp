@@ -117,7 +117,11 @@ func newSessionState(overrides sessionOverrides) *sessionState {
 	input.SetHeight(6)
 	input.Focus()
 	chatView := viewport.New(80, 20)
+	chatView.MouseWheelEnabled = true
+	chatView.MouseWheelDelta = 3
 	toolsView := viewport.New(80, 20)
+	toolsView.MouseWheelEnabled = true
+	toolsView.MouseWheelDelta = 3
 	return &sessionState{
 		Input:     input,
 		Overrides: overrides,
