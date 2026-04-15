@@ -56,6 +56,7 @@ func (m *model) renderChatViewport(state *sessionState) {
 	if state == nil || state.Session == nil {
 		return
 	}
+	wasAtBottom := state.ChatView.AtBottom() || state.ChatView.TotalLineCount() == 0
 	contentWidth := max(20, state.ChatView.Width-1)
 	lines := []string{}
 	for _, item := range m.agent.CurrentChatTimeline(state.Session.SessionID) {
@@ -82,7 +83,9 @@ func (m *model) renderChatViewport(state *sessionState) {
 		lines = append(lines, "ASSISTANT:", wrapText(state.Streaming.String(), contentWidth), "")
 	}
 	state.ChatView.SetContent(strings.Join(lines, "\n"))
-	state.ChatView.GotoBottom()
+	if wasAtBottom {
+		state.ChatView.GotoBottom()
+	}
 }
 
 func (m *model) handleMouseChat(msg tea.MouseMsg) bool {

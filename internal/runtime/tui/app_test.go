@@ -641,6 +641,136 @@ func TestPlanViewRendersMarkdownFormattingInBrowseMode(t *testing.T) {
 	}
 }
 
+func TestChatViewDoesNotResetManualScrollToBottomOnRender(t *testing.T) {
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "agent.yaml")
+	if err := os.WriteFile(configPath, []byte("kind: AgentConfig\nversion: v1\nid: tui-test\nspec:\n  runtime:\n    max_tool_rounds: 7\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile config: %v", err)
+	}
+
+	agent := &runtime.Agent{
+		ConfigPath: configPath,
+		Config:     config.AgentConfig{ID: "tui-test", Spec: config.AgentConfigSpec{Runtime: config.AgentRuntimeConfig{MaxToolRounds: 7}}},
+		Contracts: contracts.ResolvedContracts{
+			Chat: contracts.ChatContract{
+				Output: contracts.ChatOutputPolicy{Params: contracts.ChatOutputParams{RenderMarkdown: true, MarkdownStyle: "dark"}},
+				Status: contracts.ChatStatusPolicy{Params: contracts.ChatStatusParams{ShowToolCalls: true, ShowToolResults: true, ShowPlanAfterPlanTools: true}},
+			},
+		},
+		EventLog: runtime.NewInMemoryEventLog(),
+		Projections: []projections.Projection{
+			projections.NewSessionCatalogProjection(),
+			projections.NewTranscriptProjection(),
+			projections.NewChatTimelineProjection(),
+			projections.NewPlanHeadProjection(),
+			projections.NewActivePlanProjection(),
+		},
+		UIBus: runtime.NewUIEventBus(),
+		Now:   func() time.Time { return time.Date(2026, 4, 15, 10, 40, 0, 0, time.UTC) },
+		NewID: func(prefix string) string { return prefix + "-1" },
+	}
+	if err := agent.RecordEvent(context.Background(), eventSessionCreated("session-1")); err != nil {
+		t.Fatalf("RecordEvent session created: %v", err)
+	}
+	for i := range 60 {
+		if err := agent.RecordEvent(context.Background(), eventMessage("session-1", "assistant", fmt.Sprintf("line %02d", i))); err != nil {
+			t.Fatalf("RecordEvent message %d: %v", i, err)
+		}
+	}
+	m, err := newModel(context.Background(), agent, "session-1")
+	if err != nil {
+		t.Fatalf("newModel returned error: %v", err)
+	}
+	modelAfter, _ := (&m).Update(tea.WindowSizeMsg{Width: 80, Height: 20})
+	mm := modelAfter.(*model)
+	state := mm.currentSessionState()
+	if state == nil {
+		t.Fatal("current session state is nil")
+	}
+	mm.renderChatViewport(state)
+	state.ChatView.GotoBottom()
+	state.ChatView.LineUp(10)
+	before := state.ChatView.YOffset
+	if before <= 0 {
+		t.Fatalf("expected non-zero offset after manual scroll, got %d", before)
+	}
+	_ = mm.viewChat()
+	after := state.ChatView.YOffset
+	if after != before {
+		t.Fatalf("chat render reset manual scroll: before=%d after=%d", before, after)
+	}
+}
+
+func TestPlanArrowNavigationChangesSelectedTaskAndViewportFitsPane(t *testing.T) {
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "agent.yaml")
+	if err := os.WriteFile(configPath, []byte("kind: AgentConfig\nversion: v1\nid: tui-test\nspec:\n  runtime:\n    max_tool_rounds: 7\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile config: %v", err)
+	}
+
+	agent := &runtime.Agent{
+		ConfigPath: configPath,
+		Config:     config.AgentConfig{ID: "tui-test", Spec: config.AgentConfigSpec{Runtime: config.AgentRuntimeConfig{MaxToolRounds: 7}}},
+		Contracts: contracts.ResolvedContracts{
+			Chat: contracts.ChatContract{
+				Output: contracts.ChatOutputPolicy{Params: contracts.ChatOutputParams{RenderMarkdown: true, MarkdownStyle: "dark"}},
+				Status: contracts.ChatStatusPolicy{Params: contracts.ChatStatusParams{ShowToolCalls: true, ShowToolResults: true, ShowPlanAfterPlanTools: true}},
+			},
+		},
+		EventLog: runtime.NewInMemoryEventLog(),
+		Projections: []projections.Projection{
+			projections.NewSessionCatalogProjection(),
+			projections.NewTranscriptProjection(),
+			projections.NewChatTimelineProjection(),
+			projections.NewPlanHeadProjection(),
+			projections.NewActivePlanProjection(),
+		},
+		UIBus: runtime.NewUIEventBus(),
+		Now:   func() time.Time { return time.Date(2026, 4, 15, 10, 41, 0, 0, time.UTC) },
+		NewID: func(prefix string) string { return prefix + "-1" },
+	}
+	m, err := newModel(context.Background(), agent, "")
+	if err != nil {
+		t.Fatalf("newModel returned error: %v", err)
+	}
+	sessionID := m.activeSessionID
+	events := []eventing.Event{
+		{Kind: eventing.EventPlanCreated, AggregateID: "plan-1", AggregateType: eventing.AggregatePlan, Payload: map[string]any{"session_id": sessionID, "plan_id": "plan-1", "goal": "Refactor auth"}},
+		{Kind: eventing.EventTaskAdded, AggregateID: "task-1", AggregateType: eventing.AggregatePlanTask, Payload: map[string]any{"session_id": sessionID, "plan_id": "plan-1", "task_id": "task-1", "description": "First task", "status": "todo", "order": 1, "depends_on": []any{}}},
+		{Kind: eventing.EventTaskAdded, AggregateID: "task-2", AggregateType: eventing.AggregatePlanTask, Payload: map[string]any{"session_id": sessionID, "plan_id": "plan-1", "task_id": "task-2", "description": "Second task", "status": "todo", "order": 2, "depends_on": []any{}}},
+	}
+	for _, event := range events {
+		if err := agent.RecordEvent(context.Background(), event); err != nil {
+			t.Fatalf("RecordEvent %s: %v", event.Kind, err)
+		}
+	}
+	m.tab = tabPlan
+	modelAfter, _ := (&m).Update(tea.WindowSizeMsg{Width: 70, Height: 20})
+	mm := modelAfter.(*model)
+	before := mm.View()
+	if !strings.Contains(before, "First task") {
+		t.Fatalf("initial plan view missing first task: %q", before)
+	}
+	if mm.planCursor != 0 {
+		t.Fatalf("expected initial plan cursor 0, got %d", mm.planCursor)
+	}
+	modelAfter, _ = mm.Update(tea.KeyMsg{Type: tea.KeyDown})
+	mm = modelAfter.(*model)
+	after := mm.View()
+	if mm.planCursor != 1 {
+		t.Fatalf("expected plan cursor 1 after down key, got %d", mm.planCursor)
+	}
+	if !strings.Contains(after, "Second task") {
+		t.Fatalf("plan view missing second task after navigation: %q", after)
+	}
+	firstLine := strings.SplitN(after, "\n", 2)[0]
+	for _, tab := range []string{"Sessions", "Chat", "Plan", "Tools", "Settings"} {
+		if !strings.Contains(firstLine, tab) {
+			t.Fatalf("top tabs missing %q after plan render: %q", tab, firstLine)
+		}
+	}
+}
+
 func eventSessionCreated(sessionID string) eventing.Event {
 	return eventing.Event{
 		Kind:          eventing.EventSessionCreated,

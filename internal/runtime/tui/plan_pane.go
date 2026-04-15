@@ -25,6 +25,7 @@ func (m *model) updatePlan(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			if m.planCursor > 0 {
 				m.planCursor--
 			}
+			m.ensurePlanCursorVisible()
 			return m, nil
 		}
 	case "down", "j":
@@ -32,6 +33,7 @@ func (m *model) updatePlan(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			if m.planCursor < len(flat)-1 {
 				m.planCursor++
 			}
+			m.ensurePlanCursorVisible()
 			return m, nil
 		}
 	case "c":
@@ -148,14 +150,16 @@ func (m *model) updatePlan(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 }
 
 func (m *model) viewPlan() string {
+	leftWidth, rightWidth := splitPaneWidths(m.width, max(30, m.width/2), max(26, m.width/3))
+	m.mousePlanLeftWidth = leftWidth
+	m.planView.Width = leftWidth
 	head, ok := m.agent.CurrentPlanHead(m.activeSessionID)
 	if !ok || head.Plan.ID == "" {
-		left := renderPlanMarkdownPane("# Plan\n\nNo active plan.\n\nPress `c` to create one.", max(20, m.width/2-2))
+		left := "Plan\n\nNo active plan.\n\nPress c to create one."
 		right := m.renderPlanEditor(projections.PlanHeadSnapshot{}, false, projections.PlanTaskView{})
-		leftWidth, rightWidth := splitPaneWidths(m.width, max(30, m.width/2), max(26, m.width/3))
 		return lipgloss.JoinHorizontal(lipgloss.Top, lipgloss.NewStyle().Width(leftWidth).MaxWidth(leftWidth).Render(left), lipgloss.NewStyle().Width(rightWidth).MaxWidth(rightWidth).Render(right))
 	}
-	lines := []string{"# Plan", "", "**Goal:** " + head.Plan.Goal, ""}
+	lines := []string{"Plan", "", "Goal: " + stripInlineMarkdown(head.Plan.Goal), ""}
 	m.mousePlanTop = len(lines)
 	ordered := orderedPlanTasks(head.Tasks)
 	selected, hasSelection := m.selectedPlanTask(head)
@@ -166,10 +170,9 @@ func (m *model) viewPlan() string {
 		}
 		renderPlanTaskWithSelection(&lines, head, task, ordered, 0, &flatIndex, m.planCursor)
 	}
-	m.planView.SetContent(renderPlanMarkdownPane(strings.Join(lines, "\n"), m.planView.Width-1))
+	m.planView.SetContent(strings.Join(lines, "\n"))
 	left := m.planView.View()
 	right := m.renderPlanEditor(head, hasSelection, selected)
-	leftWidth, rightWidth := splitPaneWidths(m.width, max(30, m.width/2), max(26, m.width/3))
 	return lipgloss.JoinHorizontal(lipgloss.Top, lipgloss.NewStyle().Width(leftWidth).MaxWidth(leftWidth).Render(left), lipgloss.NewStyle().Width(rightWidth).MaxWidth(rightWidth).Render(right))
 }
 
@@ -185,11 +188,14 @@ func (m *model) handleMousePlan(msg tea.MouseMsg) bool {
 		if msg.Action != tea.MouseActionRelease {
 			return false
 		}
+		if msg.X >= m.mousePlanLeftWidth {
+			return false
+		}
 		head, ok := m.agent.CurrentPlanHead(m.activeSessionID)
 		if !ok {
 			return false
 		}
-		row := msg.Y - 4
+		row := (msg.Y - 1 - m.mousePlanTop) + m.planView.YOffset
 		flat := flattenedPlanTasks(head)
 		if row < 0 || row >= len(flat) {
 			return false
@@ -240,9 +246,9 @@ func flattenedPlanTasks(head projections.PlanHeadSnapshot) []projections.PlanTas
 }
 
 func renderPlanTaskWithSelection(lines *[]string, head projections.PlanHeadSnapshot, task projections.PlanTaskView, all []projections.PlanTaskView, depth int, flatIndex *int, selectedIndex int) {
-	prefix := "- "
+	prefix := "  "
 	if *flatIndex == selectedIndex {
-		prefix = "- **selected** "
+		prefix = "> "
 	}
 	rendered := fmt.Sprintf("%s%s", prefix, planTaskLine(head, task, depth))
 	*lines = append(*lines, rendered)
@@ -275,7 +281,7 @@ func planTaskLine(head projections.PlanHeadSnapshot, task projections.PlanTaskVi
 			status = "`todo`"
 		}
 	}
-	return fmt.Sprintf("%s%s %s", prefix, status, task.Description)
+	return fmt.Sprintf("%s%s %s", prefix, status, stripInlineMarkdown(task.Description))
 }
 
 func (m *model) selectedPlanTask(head projections.PlanHeadSnapshot) (projections.PlanTaskView, bool) {
@@ -346,12 +352,34 @@ func (m *model) renderPlanEditor(head projections.PlanHeadSnapshot, hasSelection
 	return strings.Join(lines, "\n")
 }
 
+func (m *model) ensurePlanCursorVisible() {
+	absoluteLine := m.mousePlanTop + m.planCursor
+	if absoluteLine < m.planView.YOffset {
+		m.planView.SetYOffset(absoluteLine)
+		return
+	}
+	if absoluteLine >= m.planView.YOffset+m.planView.Height {
+		m.planView.SetYOffset(absoluteLine - m.planView.Height + 1)
+	}
+}
+
 func renderPlanMarkdownPane(input string, width int) string {
 	rendered, err := renderMarkdown(input, "dark", max(20, width))
 	if err != nil {
 		return wrapText(input, max(20, width))
 	}
 	return strings.TrimRight(rendered, "\n")
+}
+
+func stripInlineMarkdown(input string) string {
+	replacer := strings.NewReplacer(
+		"**", "",
+		"__", "",
+		"`", "",
+		"*", "",
+		"_", "",
+	)
+	return replacer.Replace(input)
 }
 
 func planStatuses() []string { return []string{"todo", "in_progress", "done", "blocked", "cancelled"} }

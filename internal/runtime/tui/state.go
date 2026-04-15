@@ -120,6 +120,7 @@ type model struct {
 	mouseSessionTop int
 	mouseToolTop    int
 	mousePlanTop    int
+	mousePlanLeftWidth int
 }
 
 type tabBound struct {
