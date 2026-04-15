@@ -273,6 +273,22 @@ pre {
   padding: 0.25rem 0.6rem;
 }
 
+.chat-statusbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.55rem;
+  border-top: 1px solid rgba(35, 53, 70, 0.9);
+  padding-top: 0.75rem;
+}
+
+.chat-statusbar span {
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 0.25rem 0.6rem;
+  color: var(--muted);
+  background: rgba(7, 16, 24, 0.55);
+}
+
 .queue-list,
 .task-list,
 .tool-log,

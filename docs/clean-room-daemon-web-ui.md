@@ -256,6 +256,7 @@ Must preserve current TUI semantics:
 
 - markdown timeline
 - tool and plan blocks rendered as markdown
+- daemon `session` snapshot carries explicit `main_run` metadata so clients do not infer provider/model/timer state from transient websocket timing
 - status bar with:
   - provider
   - model
@@ -264,7 +265,7 @@ Must preserve current TUI semantics:
   - approximate context tokens
   - queue length
   - active `/btw` count
-- queued drafts
+- queued drafts with recall-back-into-input editing flow
 - `/btw` side-runs rendered separately
 
 ### Plan

@@ -107,6 +107,15 @@ export type SessionSnapshot = {
   last_activity: string;
   message_count: number;
   main_run_active: boolean;
+  main_run: {
+    active: boolean;
+    started_at: string;
+    provider: string;
+    model: string;
+    input_tokens: number;
+    output_tokens: number;
+    total_tokens: number;
+  };
   queued_drafts: QueuedDraft[];
   transcript: ChatMessage[];
   timeline: ChatTimelineItem[];

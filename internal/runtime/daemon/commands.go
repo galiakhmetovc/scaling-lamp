@@ -61,15 +61,23 @@ func (s *Server) executeCommand(ctx context.Context, req CommandRequest) (any, e
 		}
 		session, err := agent.ResumeChatSession(ctx, sessionID)
 		if err != nil {
-			s.finishMainRun(sessionID)
+			s.finishMainRun(sessionID, nil)
 			return nil, err
 		}
 		result, err := agent.ChatTurn(ctx, session, runtime.ChatTurnInput{Prompt: prompt})
 		if err != nil {
-			s.finishMainRun(sessionID)
+			s.finishMainRun(sessionID, nil)
 			return nil, err
 		}
-		s.finishMainRun(sessionID)
+		resultPayload := providerResultPayload{
+			Provider:     s.providerLabel(),
+			Model:        result.Provider.Model,
+			InputTokens:  result.Provider.Usage.InputTokens,
+			OutputTokens: result.Provider.Usage.OutputTokens,
+			TotalTokens:  result.Provider.Usage.TotalTokens,
+			Content:      result.Provider.Message.Content,
+		}
+		s.finishMainRun(sessionID, &resultPayload)
 		snapshot, err := s.buildSessionSnapshot(sessionID)
 		if err != nil {
 			return nil, err
@@ -78,14 +86,7 @@ func (s *Server) executeCommand(ctx context.Context, req CommandRequest) (any, e
 		return map[string]any{
 			"session": snapshot,
 			"queued":  false,
-			"result": providerResultPayload{
-				Provider:     s.providerLabel(),
-				Model:        result.Provider.Model,
-				InputTokens:  result.Provider.Usage.InputTokens,
-				OutputTokens: result.Provider.Usage.OutputTokens,
-				TotalTokens:  result.Provider.Usage.TotalTokens,
-				Content:      result.Provider.Message.Content,
-			},
+			"result":  resultPayload,
 		}, nil
 	case "draft.enqueue":
 		sessionID, err := requiredString(req.Payload, "session_id")

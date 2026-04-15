@@ -241,7 +241,7 @@ func (s *Server) ensureSettingsApplyAllowed() error {
 	s.runtimeMu.RLock()
 	defer s.runtimeMu.RUnlock()
 	for sessionID, state := range s.sessionRuntime {
-		if state.active {
+		if state.mainRun.Active {
 			return fmt.Errorf("cannot apply settings while session %q is running", sessionID)
 		}
 		if len(state.queue) > 0 {

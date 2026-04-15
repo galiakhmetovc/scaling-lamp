@@ -1,39 +1,27 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import ReactMarkdown from "react-markdown";
-import remarkGfm from "remark-gfm";
+import { ChatPane } from "./chat/ChatPane";
+import {
+  appendBtwRun,
+  applySessionUIEvent,
+  approximateContextTokens,
+  emptySessionUIState,
+  markMainRunStarted,
+  resolveBtwRun,
+  storeMainRunResult,
+  syncMainRunFromUIEvent,
+  type SessionUIState,
+} from "./chat/model";
 import { DaemonClient, loadRuntimeClientConfig } from "./lib/client";
 import type {
   BootstrapPayload,
-  PendingApprovalView,
-  ProviderResultPayload,
   SessionSnapshot,
   SessionSummary,
   SettingsRawFileContent,
   SettingsSnapshot,
-  ShellCommandView,
   UIEvent,
-  WebsocketEnvelope,
 } from "./lib/types";
 
 type TabKey = "sessions" | "chat" | "plan" | "tools" | "settings";
-
-type ToolLogEntry = NonNullable<UIEvent["tool"]>;
-
-type BtwRun = {
-  id: string;
-  prompt: string;
-  active: boolean;
-  error?: string;
-  result?: ProviderResultPayload;
-};
-
-type SessionUIState = {
-  streaming: string;
-  status: string;
-  toolLog: ToolLogEntry[];
-  btwRuns: BtwRun[];
-  lastResult?: ProviderResultPayload;
-};
 
 export function App() {
   const clientRef = useRef<DaemonClient | null>(null);
@@ -52,6 +40,7 @@ export function App() {
   const [settingsDraft, setSettingsDraft] = useState<Record<string, unknown>>({});
   const [rawFile, setRawFile] = useState<SettingsRawFileContent | null>(null);
   const [selectedRawPath, setSelectedRawPath] = useState("");
+  const [clockNow, setClockNow] = useState(() => new Date());
   const [statusMessage, setStatusMessage] = useState("booting");
   const [errorMessage, setErrorMessage] = useState("");
 
@@ -108,14 +97,14 @@ export function App() {
     void loadRawFile(selectedRawPath);
   }, [selectedRawPath]);
 
+  useEffect(() => {
+    const timer = window.setInterval(() => setClockNow(new Date()), 1000);
+    return () => window.clearInterval(timer);
+  }, []);
+
   const selectedSession = selectedSessionID ? sessionSnapshots[selectedSessionID] : null;
   const selectedUI = selectedSessionID ? sessionUI[selectedSessionID] ?? emptySessionUIState() : emptySessionUIState();
-  const approxTokens = useMemo(() => {
-    if (!selectedSession) {
-      return 0;
-    }
-    return selectedSession.transcript.reduce((sum, item) => sum + Math.ceil((item.content || "").length / 4), 0);
-  }, [selectedSession]);
+  const approxTokens = useMemo(() => approximateContextTokens(selectedSession, chatInput), [selectedSession, chatInput]);
 
   function applySessionSnapshot(snapshot: SessionSnapshot) {
     setSessionSnapshots((current) => ({ ...current, [snapshot.session_id]: snapshot }));
@@ -127,35 +116,23 @@ export function App() {
     if (!event.session_id) {
       return;
     }
-    setSessionUI((current) => {
-      const next = { ...current };
-      const state = { ...emptySessionUIState(), ...next[event.session_id] };
-      switch (event.kind) {
-        case "stream.text":
-          state.streaming += event.text || "";
-          break;
-        case "tool.started":
-        case "tool.completed":
-          if (event.tool) {
-            state.toolLog = [...state.toolLog, event.tool].slice(-200);
-          }
-          break;
-        case "status.changed":
-          state.status = event.status || state.status;
-          break;
-        case "run.completed":
-          state.status = "done";
-          state.streaming = "";
-          break;
-      }
-      next[event.session_id] = state;
-      return next;
-    });
+    setSessionUI((current) => ({ ...current, [event.session_id]: applySessionUIEvent(current[event.session_id], event) }));
   }
 
   function handleEnvelope(envelope: WebsocketEnvelope) {
     if (envelope.type === "ui_event" && envelope.event) {
       applyUIEvent(envelope.event);
+      setSessionSnapshots((current) => {
+        const existing = current[envelope.event!.session_id];
+        const next = syncMainRunFromUIEvent(existing ?? null, envelope.event!, new Date());
+        if (!next) {
+          return current;
+        }
+        return { ...current, [next.session_id]: next };
+      });
+      if (envelope.event.kind === "run.completed") {
+        void refreshSession(envelope.event.session_id);
+      }
       return;
     }
     if (envelope.type === "settings_applied") {
@@ -219,57 +196,26 @@ export function App() {
       const btwPrompt = prompt.slice(5).trim();
       if (btwPrompt) {
         const runID = `btw-${Date.now()}`;
-        setSessionUI((current) => ({
-          ...current,
-          [selectedSessionID]: {
-            ...emptySessionUIState(),
-            ...current[selectedSessionID],
-            btwRuns: [...(current[selectedSessionID]?.btwRuns ?? []), { id: runID, prompt: btwPrompt, active: true }],
-          },
-        }));
+        setSessionUI((current) => ({ ...current, [selectedSessionID]: appendBtwRun(current[selectedSessionID], { id: runID, prompt: btwPrompt, active: true }) }));
         setChatInput("");
         try {
           const result = await client.command("chat.btw", { session_id: selectedSessionID, prompt: btwPrompt });
-          setSessionUI((current) => ({
-            ...current,
-            [selectedSessionID]: {
-              ...emptySessionUIState(),
-              ...current[selectedSessionID],
-              btwRuns: (current[selectedSessionID]?.btwRuns ?? []).map((run) =>
-                run.id === runID ? { ...run, active: false, result: result.result } : run,
-              ),
-            },
-          }));
+          setSessionUI((current) => ({ ...current, [selectedSessionID]: resolveBtwRun(current[selectedSessionID], runID, { active: false, result: result.result }) }));
         } catch (error) {
-          setSessionUI((current) => ({
-            ...current,
-            [selectedSessionID]: {
-              ...emptySessionUIState(),
-              ...current[selectedSessionID],
-              btwRuns: (current[selectedSessionID]?.btwRuns ?? []).map((run) =>
-                run.id === runID ? { ...run, active: false, error: String(error) } : run,
-              ),
-            },
-          }));
+          setSessionUI((current) => ({ ...current, [selectedSessionID]: resolveBtwRun(current[selectedSessionID], runID, { active: false, error: String(error) }) }));
         }
       }
       return;
     }
     setChatInput("");
     try {
+      if (selectedSession) {
+        applySessionSnapshot(markMainRunStarted(selectedSession, new Date()));
+      }
       const result = await client.command("chat.send", { session_id: selectedSessionID, prompt });
       applySessionSnapshot(result.session);
       if (result.result) {
-        setSessionUI((current) => ({
-          ...current,
-          [selectedSessionID]: {
-            ...emptySessionUIState(),
-            ...current[selectedSessionID],
-            streaming: "",
-            status: "idle",
-            lastResult: result.result,
-          },
-        }));
+        setSessionUI((current) => ({ ...current, [selectedSessionID]: storeMainRunResult(current[selectedSessionID], result.result) }));
       }
       setStatusMessage(result.queued ? "queued" : "sent");
     } catch (error) {
@@ -439,11 +385,13 @@ export function App() {
         <section className="main-panel">
           {activeTab === "sessions" && <SessionsView bootstrap={bootstrap} />}
           {activeTab === "chat" && (
-            <ChatView
+            <ChatPane
               session={selectedSession}
-              ui={selectedUI}
+              streaming={selectedUI.streaming}
+              status={selectedUI.status}
               input={chatInput}
-              approxTokens={approxTokens}
+              now={clockNow}
+              btwRuns={selectedUI.btwRuns}
               onInput={setChatInput}
               onSend={() => void handleSendChat()}
               onQueue={() => void handleQueueDraft()}
@@ -496,8 +444,8 @@ export function App() {
         <span>{statusMessage}</span>
         {selectedSession && <span>queue {selectedSession.queued_drafts.length}</span>}
         {selectedSession && <span>tokens ~{approxTokens}</span>}
-        {selectedUI.lastResult && <span>{selectedUI.lastResult.provider}</span>}
-        {selectedUI.lastResult && <span>{selectedUI.lastResult.model}</span>}
+        {selectedSession && <span>{selectedSession.main_run.provider}</span>}
+        {selectedSession && <span>{selectedSession.main_run.model}</span>}
         {errorMessage && <span className="error">{errorMessage}</span>}
       </footer>
     </div>
@@ -528,75 +476,6 @@ function SessionsView({ bootstrap }: { bootstrap: BootstrapPayload | null }) {
             <dd>{bootstrap?.transport.websocket_path ?? "-"}</dd>
           </div>
         </dl>
-      </section>
-    </div>
-  );
-}
-
-function ChatView(props: {
-  session: SessionSnapshot | null;
-  ui: SessionUIState;
-  input: string;
-  approxTokens: number;
-  onInput: (value: string) => void;
-  onSend: () => void;
-  onQueue: () => void;
-  onRecallDraft: (draftID: string) => void;
-}) {
-  const { session, ui, input, approxTokens, onInput, onSend, onQueue, onRecallDraft } = props;
-  return (
-    <div className="chat-layout">
-      <section className="panel timeline-panel">
-        <div className="section-title">
-          <span>Chat</span>
-          <span className="muted">{session?.session_id ?? "no session"}</span>
-        </div>
-        <div className="timeline">
-          {(session?.timeline ?? []).map((item, index) => (
-            <article key={`${item.kind}-${index}`} className={`timeline-item ${item.kind}`}>
-              {item.role && <div className="item-role">{item.role}</div>}
-              <ReactMarkdown remarkPlugins={[remarkGfm]}>{item.content}</ReactMarkdown>
-            </article>
-          ))}
-          {ui.streaming && (
-            <article className="timeline-item streaming">
-              <div className="item-role">assistant</div>
-              <pre>{ui.streaming}</pre>
-            </article>
-          )}
-          {ui.btwRuns.map((run) => (
-            <article key={run.id} className="timeline-item btw">
-              <div className="item-role">/btw</div>
-              <strong>{run.prompt}</strong>
-              {run.active && <div className="muted">running</div>}
-              {run.error && <div className="error">{run.error}</div>}
-              {run.result && <ReactMarkdown remarkPlugins={[remarkGfm]}>{run.result.content}</ReactMarkdown>}
-            </article>
-          ))}
-        </div>
-      </section>
-
-      <section className="panel composer-panel">
-        <textarea value={input} onChange={(event) => onInput(event.target.value)} placeholder="Send a message or /btw question" />
-        <div className="composer-actions">
-          <button onClick={onSend}>Send</button>
-          <button className="secondary" onClick={onQueue}>Queue</button>
-        </div>
-        <div className="status-chip-row">
-          <span>{session?.main_run_active ? "main run active" : "idle"}</span>
-          <span>{ui.status || "ready"}</span>
-          <span>queue {session?.queued_drafts.length ?? 0}</span>
-          <span>/btw {ui.btwRuns.filter((run) => run.active).length}</span>
-          <span>tokens ~{approxTokens}</span>
-        </div>
-        <div className="queue-list">
-          {(session?.queued_drafts ?? []).map((draft) => (
-            <button key={draft.id} className="queue-item" onClick={() => onRecallDraft(draft.id)}>
-              <strong>{draft.text}</strong>
-              <span>{new Date(draft.queued_at).toLocaleTimeString()}</span>
-            </button>
-          ))}
-        </div>
       </section>
     </div>
   );
