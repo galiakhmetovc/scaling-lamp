@@ -10,6 +10,10 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
+
+	"teamd/internal/runtime"
+	"teamd/internal/runtime/eventing"
 )
 
 func TestRunExecutesSmokeAndPrintsAssistantMessage(t *testing.T) {
@@ -213,6 +217,139 @@ func TestRunChatResumeUsesExistingSession(t *testing.T) {
 	}
 }
 
+func TestRunInspectSessionPrintsFailureSummaryAndCorrelatedEvents(t *testing.T) {
+	dir := t.TempDir()
+	configPath := writeSmokeConfig(t, dir, "http://127.0.0.1:1")
+
+	agent, err := runtime.BuildAgent(configPath)
+	if err != nil {
+		t.Fatalf("BuildAgent returned error: %v", err)
+	}
+	events := []eventing.Event{
+		{
+			ID:            "evt-1",
+			Sequence:      1,
+			Kind:          eventing.EventSessionCreated,
+			OccurredAt:    mustTime(t, "2026-04-15T10:50:00Z"),
+			AggregateID:   "session-1",
+			AggregateType: eventing.AggregateSession,
+			Payload:       map[string]any{"session_id": "session-1"},
+		},
+		{
+			ID:            "evt-2",
+			Sequence:      2,
+			Kind:          eventing.EventRunStarted,
+			OccurredAt:    mustTime(t, "2026-04-15T10:50:01Z"),
+			AggregateID:   "run-1",
+			AggregateType: eventing.AggregateRun,
+			Payload:       map[string]any{"session_id": "session-1", "prompt": "ping"},
+		},
+		{
+			ID:            "evt-3",
+			Sequence:      3,
+			Kind:          eventing.EventToolCallCompleted,
+			OccurredAt:    mustTime(t, "2026-04-15T10:50:02Z"),
+			AggregateID:   "run-1",
+			AggregateType: eventing.AggregateRun,
+			Payload:       map[string]any{"session_id": "session-1", "tool_name": "shell_exec", "error": "command denied"},
+		},
+		{
+			ID:            "evt-4",
+			Sequence:      4,
+			Kind:          eventing.EventRunFailed,
+			OccurredAt:    mustTime(t, "2026-04-15T10:50:03Z"),
+			AggregateID:   "run-1",
+			AggregateType: eventing.AggregateRun,
+			Payload:       map[string]any{"session_id": "session-1", "error": "provider tool loop exceeded 1 rounds"},
+		},
+	}
+	for _, event := range events {
+		if err := agent.RecordEvent(t.Context(), event); err != nil {
+			t.Fatalf("RecordEvent %s returned error: %v", event.Kind, err)
+		}
+	}
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	if err := run([]string{"--config", configPath, "--inspect-session", "session-1"}, &stdout, &stderr); err != nil {
+		t.Fatalf("run returned error: %v", err)
+	}
+
+	got := stdout.String()
+	for _, want := range []string{
+		"Inspection: session session-1",
+		"Failure Summary",
+		"provider tool loop exceeded 1 rounds",
+		"shell_exec",
+		"run.failed",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("stdout missing %q: %q", want, got)
+		}
+	}
+}
+
+func TestRunInspectRunSupportsKindFilterAndLimit(t *testing.T) {
+	dir := t.TempDir()
+	configPath := writeSmokeConfig(t, dir, "http://127.0.0.1:1")
+
+	agent, err := runtime.BuildAgent(configPath)
+	if err != nil {
+		t.Fatalf("BuildAgent returned error: %v", err)
+	}
+	events := []eventing.Event{
+		{
+			ID:            "evt-1",
+			Sequence:      1,
+			Kind:          eventing.EventRunStarted,
+			OccurredAt:    mustTime(t, "2026-04-15T10:51:00Z"),
+			AggregateID:   "run-2",
+			AggregateType: eventing.AggregateRun,
+			Payload:       map[string]any{"session_id": "session-2"},
+		},
+		{
+			ID:            "evt-2",
+			Sequence:      2,
+			Kind:          eventing.EventToolCallCompleted,
+			OccurredAt:    mustTime(t, "2026-04-15T10:51:01Z"),
+			AggregateID:   "run-2",
+			AggregateType: eventing.AggregateRun,
+			Payload:       map[string]any{"session_id": "session-2", "tool_name": "fs_list", "result_text": "ok"},
+		},
+		{
+			ID:            "evt-3",
+			Sequence:      3,
+			Kind:          eventing.EventToolCallCompleted,
+			OccurredAt:    mustTime(t, "2026-04-15T10:51:02Z"),
+			AggregateID:   "run-2",
+			AggregateType: eventing.AggregateRun,
+			Payload:       map[string]any{"session_id": "session-2", "tool_name": "shell_exec", "result_text": "done"},
+		},
+	}
+	for _, event := range events {
+		if err := agent.RecordEvent(t.Context(), event); err != nil {
+			t.Fatalf("RecordEvent %s returned error: %v", event.Kind, err)
+		}
+	}
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	if err := run([]string{"--config", configPath, "--inspect-run", "run-2", "--inspect-kind", "tool.call.completed", "--inspect-limit", "1"}, &stdout, &stderr); err != nil {
+		t.Fatalf("run returned error: %v", err)
+	}
+
+	got := stdout.String()
+	if strings.Contains(got, "run.started") {
+		t.Fatalf("stdout unexpectedly contains filtered-out event: %q", got)
+	}
+	if strings.Contains(got, "fs_list") {
+		t.Fatalf("stdout unexpectedly contains older limited-out event: %q", got)
+	}
+	if !strings.Contains(got, "shell_exec") || !strings.Contains(got, "tool.call.completed") {
+		t.Fatalf("stdout missing filtered event: %q", got)
+	}
+}
+
 func writeSmokeConfig(t *testing.T, dir, baseURL string) string {
 	t.Helper()
 
@@ -382,6 +519,15 @@ func writeSmokeConfig(t *testing.T, dir, baseURL string) string {
 		"    assets: []\n")
 
 	return filepath.Join(dir, "agent.yaml")
+}
+
+func mustTime(t *testing.T, value string) time.Time {
+	t.Helper()
+	out, err := time.Parse(time.RFC3339, value)
+	if err != nil {
+		t.Fatalf("time.Parse(%q) returned error: %v", value, err)
+	}
+	return out
 }
 
 func writeChatConfig(t *testing.T, dir, baseURL string) string {

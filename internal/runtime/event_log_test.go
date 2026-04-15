@@ -19,20 +19,20 @@ func TestInMemoryEventLogAppendsAndListsEvents(t *testing.T) {
 	now := time.Date(2026, 4, 14, 8, 15, 0, 0, time.UTC)
 
 	event := eventing.Event{
-		ID:            "evt-1",
-		Kind:          eventing.EventSessionCreated,
-		OccurredAt:    now,
-		AggregateID:   "session-1",
-		AggregateType: eventing.AggregateSession,
+		ID:               "evt-1",
+		Kind:             eventing.EventSessionCreated,
+		OccurredAt:       now,
+		AggregateID:      "session-1",
+		AggregateType:    eventing.AggregateSession,
 		AggregateVersion: 1,
-		CorrelationID: "corr-1",
-		CausationID:   "cause-1",
-		Source:        "test",
-		ActorID:       "agent-1",
-		ActorType:     "agent",
-		TraceSummary:  "session bootstrap",
-		TraceRefs:     []string{"trace/provider-request-1.json"},
-		ArtifactRefs:  []string{"artifacts/session-created.txt"},
+		CorrelationID:    "corr-1",
+		CausationID:      "cause-1",
+		Source:           "test",
+		ActorID:          "agent-1",
+		ActorType:        "agent",
+		TraceSummary:     "session bootstrap",
+		TraceRefs:        []string{"trace/provider-request-1.json"},
+		ArtifactRefs:     []string{"artifacts/session-created.txt"},
 		Payload: map[string]any{
 			"session_id": "session-1",
 		},
@@ -88,6 +88,46 @@ func TestInMemoryEventLogAppendsAndListsEvents(t *testing.T) {
 	}
 }
 
+func TestInMemoryEventLogListsAllEventsInSequenceOrder(t *testing.T) {
+	t.Parallel()
+
+	log := runtime.NewInMemoryEventLog()
+	now := time.Date(2026, 4, 15, 11, 0, 0, 0, time.UTC)
+	events := []eventing.Event{
+		{
+			ID:            "evt-1",
+			Kind:          eventing.EventSessionCreated,
+			OccurredAt:    now,
+			AggregateID:   "session-1",
+			AggregateType: eventing.AggregateSession,
+		},
+		{
+			ID:            "evt-2",
+			Kind:          eventing.EventRunStarted,
+			OccurredAt:    now.Add(time.Second),
+			AggregateID:   "run-1",
+			AggregateType: eventing.AggregateRun,
+		},
+	}
+
+	for _, event := range events {
+		if err := log.Append(context.Background(), event); err != nil {
+			t.Fatalf("Append returned error: %v", err)
+		}
+	}
+
+	got, err := log.ListAll(context.Background())
+	if err != nil {
+		t.Fatalf("ListAll returned error: %v", err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("ListAll len = %d, want 2", len(got))
+	}
+	if got[0].Sequence != 1 || got[1].Sequence != 2 {
+		t.Fatalf("ListAll sequences = [%d %d], want [1 2]", got[0].Sequence, got[1].Sequence)
+	}
+}
+
 func TestFileEventLogPersistsEventsAcrossReopen(t *testing.T) {
 	t.Parallel()
 
@@ -100,20 +140,20 @@ func TestFileEventLogPersistsEventsAcrossReopen(t *testing.T) {
 	}
 
 	event := eventing.Event{
-		ID:            "evt-1",
-		Kind:          eventing.EventSessionCreated,
-		OccurredAt:    now,
-		AggregateID:   "session-1",
-		AggregateType: eventing.AggregateSession,
+		ID:               "evt-1",
+		Kind:             eventing.EventSessionCreated,
+		OccurredAt:       now,
+		AggregateID:      "session-1",
+		AggregateType:    eventing.AggregateSession,
 		AggregateVersion: 1,
-		CorrelationID: "corr-1",
-		CausationID:   "cause-1",
-		Source:        "test",
-		ActorID:       "agent-1",
-		ActorType:     "agent",
-		TraceSummary:  "session bootstrap",
-		TraceRefs:     []string{"trace/provider-request-1.json"},
-		ArtifactRefs:  []string{"artifacts/session-created.txt"},
+		CorrelationID:    "corr-1",
+		CausationID:      "cause-1",
+		Source:           "test",
+		ActorID:          "agent-1",
+		ActorType:        "agent",
+		TraceSummary:     "session bootstrap",
+		TraceRefs:        []string{"trace/provider-request-1.json"},
+		ArtifactRefs:     []string{"artifacts/session-created.txt"},
 		Payload: map[string]any{
 			"session_id": "session-1",
 		},
@@ -198,5 +238,48 @@ func TestFileEventLogWritesTimestampAlias(t *testing.T) {
 	}
 	if raw["OccurredAt"] != now.Format(time.RFC3339Nano) {
 		t.Fatalf("OccurredAt = %#v, want %q", raw["OccurredAt"], now.Format(time.RFC3339Nano))
+	}
+}
+
+func TestFileEventLogListsAllEventsInSequenceOrder(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join(t.TempDir(), "events.jsonl")
+	log, err := runtime.NewFileEventLog(path)
+	if err != nil {
+		t.Fatalf("NewFileEventLog returned error: %v", err)
+	}
+	now := time.Date(2026, 4, 15, 12, 0, 0, 0, time.UTC)
+	events := []eventing.Event{
+		{
+			ID:            "evt-1",
+			Kind:          eventing.EventSessionCreated,
+			OccurredAt:    now,
+			AggregateID:   "session-1",
+			AggregateType: eventing.AggregateSession,
+		},
+		{
+			ID:            "evt-2",
+			Kind:          eventing.EventRunStarted,
+			OccurredAt:    now.Add(time.Second),
+			AggregateID:   "run-1",
+			AggregateType: eventing.AggregateRun,
+		},
+	}
+	for _, event := range events {
+		if err := log.Append(context.Background(), event); err != nil {
+			t.Fatalf("Append returned error: %v", err)
+		}
+	}
+
+	got, err := log.ListAll(context.Background())
+	if err != nil {
+		t.Fatalf("ListAll returned error: %v", err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("ListAll len = %d, want 2", len(got))
+	}
+	if got[0].Sequence != 1 || got[1].Sequence != 2 {
+		t.Fatalf("ListAll sequences = [%d %d], want [1 2]", got[0].Sequence, got[1].Sequence)
 	}
 }

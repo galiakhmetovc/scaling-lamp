@@ -20,6 +20,7 @@ type eventJSONRecord struct {
 
 type EventLog interface {
 	Append(ctx context.Context, event eventing.Event) error
+	ListAll(ctx context.Context) ([]eventing.Event, error)
 	ListByAggregate(ctx context.Context, aggregateType eventing.AggregateType, aggregateID string) ([]eventing.Event, error)
 }
 
@@ -86,6 +87,15 @@ func (l *InMemoryEventLog) ListByAggregate(_ context.Context, aggregateType even
 	return out, nil
 }
 
+func (l *InMemoryEventLog) ListAll(_ context.Context) ([]eventing.Event, error) {
+	l.mu.RLock()
+	defer l.mu.RUnlock()
+
+	out := make([]eventing.Event, len(l.events))
+	copy(out, l.events)
+	return out, nil
+}
+
 func (l *FileEventLog) Append(_ context.Context, event eventing.Event) error {
 	l.mu.Lock()
 	defer l.mu.Unlock()
@@ -120,6 +130,40 @@ func (l *FileEventLog) ListByAggregate(_ context.Context, aggregateType eventing
 	l.mu.RLock()
 	defer l.mu.RUnlock()
 
+	events, err := l.readAllEventsLocked()
+	if err != nil {
+		return nil, err
+	}
+	var out []eventing.Event
+	for _, event := range events {
+		if event.AggregateType == aggregateType && event.AggregateID == aggregateID {
+			out = append(out, event)
+		}
+	}
+	return out, nil
+}
+
+func (l *FileEventLog) ListAll(_ context.Context) ([]eventing.Event, error) {
+	l.mu.RLock()
+	defer l.mu.RUnlock()
+
+	return l.readAllEventsLocked()
+}
+
+func (l *FileEventLog) loadSequence() error {
+	events, err := l.readAllEventsLocked()
+	if err != nil {
+		return err
+	}
+	for _, event := range events {
+		if event.Sequence > l.next {
+			l.next = event.Sequence
+		}
+	}
+	return nil
+}
+
+func (l *FileEventLog) readAllEventsLocked() ([]eventing.Event, error) {
 	file, err := os.Open(l.path)
 	if err != nil {
 		return nil, fmt.Errorf("open event log for read: %w", err)
@@ -133,35 +177,10 @@ func (l *FileEventLog) ListByAggregate(_ context.Context, aggregateType eventing
 		if err := json.Unmarshal(scanner.Bytes(), &event); err != nil {
 			return nil, fmt.Errorf("decode event log line: %w", err)
 		}
-		if event.AggregateType == aggregateType && event.AggregateID == aggregateID {
-			out = append(out, event)
-		}
+		out = append(out, event)
 	}
 	if err := scanner.Err(); err != nil {
 		return nil, fmt.Errorf("scan event log: %w", err)
 	}
 	return out, nil
-}
-
-func (l *FileEventLog) loadSequence() error {
-	file, err := os.Open(l.path)
-	if err != nil {
-		return fmt.Errorf("open event log for sequence load: %w", err)
-	}
-	defer file.Close()
-
-	scanner := bufio.NewScanner(file)
-	for scanner.Scan() {
-		var event eventing.Event
-		if err := json.Unmarshal(scanner.Bytes(), &event); err != nil {
-			return fmt.Errorf("decode event log line: %w", err)
-		}
-		if event.Sequence > l.next {
-			l.next = event.Sequence
-		}
-	}
-	if err := scanner.Err(); err != nil {
-		return fmt.Errorf("scan event log for sequence load: %w", err)
-	}
-	return nil
 }
