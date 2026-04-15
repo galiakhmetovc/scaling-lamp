@@ -867,6 +867,76 @@ func TestToolsViewShowsPendingShellApproval(t *testing.T) {
 	}
 }
 
+func TestToolsViewCanKillRunningShellCommand(t *testing.T) {
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "agent.yaml")
+	if err := os.WriteFile(configPath, []byte("kind: AgentConfig\nversion: v1\nid: tui-test\nspec:\n  runtime:\n    max_tool_rounds: 7\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile config: %v", err)
+	}
+
+	agent := &runtime.Agent{
+		ConfigPath:   configPath,
+		Config:       config.AgentConfig{ID: "tui-test", Spec: config.AgentConfigSpec{Runtime: config.AgentRuntimeConfig{MaxToolRounds: 7}}},
+		EventLog:     runtime.NewInMemoryEventLog(),
+		Projections:  []projections.Projection{projections.NewSessionCatalogProjection(), projections.NewTranscriptProjection(), projections.NewChatTimelineProjection(), projections.NewPlanHeadProjection(), projections.NewActivePlanProjection(), projections.NewShellCommandProjection()},
+		UIBus:        runtime.NewUIEventBus(),
+		ShellRuntime: shell.NewExecutor(),
+		Contracts: contracts.ResolvedContracts{
+			Chat: contracts.ChatContract{
+				Output: contracts.ChatOutputPolicy{Params: contracts.ChatOutputParams{RenderMarkdown: true, MarkdownStyle: "dark"}},
+				Status: contracts.ChatStatusPolicy{Params: contracts.ChatStatusParams{ShowToolCalls: true, ShowToolResults: true, ShowPlanAfterPlanTools: true}},
+			},
+			ShellExecution: contracts.ShellExecutionContract{
+				Command: contracts.ShellCommandPolicy{
+					Enabled:  true,
+					Strategy: "static_allowlist",
+					Params:   contracts.ShellCommandParams{AllowedCommands: []string{"sleep"}},
+				},
+				Approval: contracts.ShellApprovalPolicy{
+					Enabled:  true,
+					Strategy: "always_allow",
+				},
+				Runtime: contracts.ShellRuntimePolicy{
+					Enabled:  true,
+					Strategy: "workspace_write",
+					Params: contracts.ShellRuntimeParams{
+						Cwd:            dir,
+						Timeout:        "5s",
+						MaxOutputBytes: 4096,
+						AllowNetwork:   true,
+					},
+				},
+			},
+		},
+		Now:   func() time.Time { return time.Date(2026, 4, 15, 12, 5, 0, 0, time.UTC) },
+		NewID: func(prefix string) string { return prefix + "-1" },
+	}
+
+	m, err := newModel(context.Background(), agent, "")
+	if err != nil {
+		t.Fatalf("newModel returned error: %v", err)
+	}
+
+	if _, err := agent.ShellRuntime.ExecuteWithMeta(context.Background(), agent.Contracts.ShellExecution, "shell_start", map[string]any{
+		"command": "sleep",
+		"args":    []any{"2"},
+	}, shell.ExecutionMeta{SessionID: m.activeSessionID, RunID: "run-1", RecordEvent: agent.RecordEvent, Now: agent.Now, NewID: agent.NewID}); err != nil {
+		t.Fatalf("ExecuteWithMeta returned error: %v", err)
+	}
+
+	m.tab = tabTools
+	modelAfter, _ := (&m).Update(tea.WindowSizeMsg{Width: 120, Height: 40})
+	mm := modelAfter.(*model)
+	if got := mm.View(); !strings.Contains(got, "Running Shell Commands") || !strings.Contains(got, "sleep") {
+		t.Fatalf("tools view missing running command: %q", got)
+	}
+	modelAfter, _ = mm.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("k")})
+	mm = modelAfter.(*model)
+	if !strings.Contains(mm.statusMessage, "kill requested") {
+		t.Fatalf("statusMessage = %q, want kill requested", mm.statusMessage)
+	}
+}
+
 func eventSessionCreated(sessionID string) eventing.Event {
 	return eventing.Event{
 		Kind:          eventing.EventSessionCreated,

@@ -31,9 +31,11 @@ Current behavior:
 - `Tools`
   - shows tool lifecycle events for the active session
   - shows pending shell approvals before normal tool log entries
+  - shows active running shell commands before the normal tool log
   - includes a selected-entry details pane with summarized args/result/error text
   - `a` approves the selected pending shell command
   - `x` denies the selected pending shell command
+  - `k` requests kill for the selected running shell command
 - `Settings`
   - `Session Overrides`
   - `Config Form`

@@ -74,6 +74,20 @@ type PendingApprovalView struct {
 	Message    string
 }
 
+type ActiveCommandView struct {
+	CommandID   string
+	SessionID   string
+	RunID       string
+	Command     string
+	Args        []string
+	Cwd         string
+	Status      string
+	NextOffset  int
+	LastChunk   string
+	KillPending bool
+	Error       string
+}
+
 type activeCommand struct {
 	mu               sync.RWMutex
 	id               string
@@ -386,6 +400,38 @@ func (e *Executor) PendingApprovals(sessionID string) []PendingApprovalView {
 			continue
 		}
 		out = append(out, approval.PendingApprovalView)
+	}
+	return out
+}
+
+func (e *Executor) ActiveCommands(sessionID string) []ActiveCommandView {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+	out := make([]ActiveCommandView, 0, len(e.commands))
+	for _, active := range e.commands {
+		active.mu.RLock()
+		if sessionID != "" && active.meta.SessionID != sessionID {
+			active.mu.RUnlock()
+			continue
+		}
+		lastChunk := ""
+		if n := len(active.chunks); n > 0 {
+			lastChunk = active.chunks[n-1].Text
+		}
+		out = append(out, ActiveCommandView{
+			CommandID:   active.id,
+			SessionID:   active.meta.SessionID,
+			RunID:       active.meta.RunID,
+			Command:     active.command,
+			Args:        append([]string{}, active.args...),
+			Cwd:         active.cwd,
+			Status:      active.status,
+			NextOffset:  active.nextOffset,
+			LastChunk:   lastChunk,
+			KillPending: active.killRequested,
+			Error:       active.errorText,
+		})
+		active.mu.RUnlock()
 	}
 	return out
 }

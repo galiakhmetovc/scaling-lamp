@@ -350,6 +350,75 @@ func TestRunInspectRunSupportsKindFilterAndLimit(t *testing.T) {
 	}
 }
 
+func TestRunInspectSessionPrintsDiagnosticsAndRecoveryHints(t *testing.T) {
+	dir := t.TempDir()
+	configPath := writeSmokeConfig(t, dir, "http://127.0.0.1:1")
+
+	agent, err := runtime.BuildAgent(configPath)
+	if err != nil {
+		t.Fatalf("BuildAgent returned error: %v", err)
+	}
+	events := []eventing.Event{
+		{
+			ID:            "evt-1",
+			Sequence:      1,
+			Kind:          eventing.EventSessionCreated,
+			OccurredAt:    mustTime(t, "2026-04-15T11:00:00Z"),
+			AggregateID:   "session-3",
+			AggregateType: eventing.AggregateSession,
+			Payload:       map[string]any{"session_id": "session-3"},
+		},
+		{
+			ID:            "evt-2",
+			Sequence:      2,
+			Kind:          eventing.EventRunStarted,
+			OccurredAt:    mustTime(t, "2026-04-15T11:00:01Z"),
+			AggregateID:   "run-3",
+			AggregateType: eventing.AggregateRun,
+			Payload:       map[string]any{"session_id": "session-3"},
+		},
+		{
+			ID:            "evt-3",
+			Sequence:      3,
+			Kind:          eventing.EventShellCommandStarted,
+			OccurredAt:    mustTime(t, "2026-04-15T11:00:02Z"),
+			AggregateID:   "cmd-3",
+			AggregateType: eventing.AggregateShellCommand,
+			Payload: map[string]any{
+				"session_id": "session-3",
+				"run_id":     "run-3",
+				"command_id": "cmd-3",
+				"command":    "sleep",
+				"status":     "running",
+			},
+		},
+	}
+	for _, event := range events {
+		if err := agent.RecordEvent(t.Context(), event); err != nil {
+			t.Fatalf("RecordEvent %s returned error: %v", event.Kind, err)
+		}
+	}
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	if err := run([]string{"--config", configPath, "--inspect-session", "session-3"}, &stdout, &stderr); err != nil {
+		t.Fatalf("run returned error: %v", err)
+	}
+
+	got := stdout.String()
+	for _, want := range []string{
+		"Diagnostics",
+		"stuck run: run-3",
+		"shell command: cmd-3 status=running",
+		"Recovery Hints",
+		"press k to kill",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("stdout missing %q: %q", want, got)
+		}
+	}
+}
+
 func writeSmokeConfig(t *testing.T, dir, baseURL string) string {
 	t.Helper()
 

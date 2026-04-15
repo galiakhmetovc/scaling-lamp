@@ -138,6 +138,44 @@ func renderInspection(stdout io.Writer, report runtime.InspectionReport) error {
 			}
 		}
 	}
+	if report.Diagnostics != nil {
+		if _, err := fmt.Fprintln(stdout, ""); err != nil {
+			return err
+		}
+		if _, err := fmt.Fprintln(stdout, "Diagnostics"); err != nil {
+			return err
+		}
+		for _, runID := range report.Diagnostics.StuckRuns {
+			if _, err := fmt.Fprintf(stdout, "- stuck run: %s\n", runID); err != nil {
+				return err
+			}
+		}
+		for _, command := range report.Diagnostics.ShellCommands {
+			line := fmt.Sprintf("- shell command: %s status=%s", command.CommandID, command.Status)
+			if command.Command != "" {
+				line += " command=" + strconv.Quote(command.Command)
+			}
+			if command.LastChunk != "" {
+				line += " last_chunk=" + strconv.Quote(command.LastChunk)
+			}
+			if command.Error != "" {
+				line += " error=" + strconv.Quote(command.Error)
+			}
+			if _, err := fmt.Fprintln(stdout, line); err != nil {
+				return err
+			}
+		}
+		if len(report.Diagnostics.RecoveryHints) > 0 {
+			if _, err := fmt.Fprintln(stdout, "Recovery Hints"); err != nil {
+				return err
+			}
+			for _, hint := range report.Diagnostics.RecoveryHints {
+				if _, err := fmt.Fprintf(stdout, "- %s\n", hint); err != nil {
+					return err
+				}
+			}
+		}
+	}
 	if _, err := fmt.Fprintln(stdout, ""); err != nil {
 		return err
 	}
@@ -208,6 +246,12 @@ func inspectionEventSummary(event eventing.Event) string {
 	}
 	if toolName := payloadValue(event.Payload, "tool_name"); toolName != "" {
 		parts = append(parts, "tool="+toolName)
+	}
+	if commandID := payloadValue(event.Payload, "command_id"); commandID != "" {
+		parts = append(parts, "command_id="+commandID)
+	}
+	if command := payloadValue(event.Payload, "command"); command != "" {
+		parts = append(parts, "command="+strconv.Quote(command))
 	}
 	if errText := payloadValue(event.Payload, "error"); errText != "" {
 		parts = append(parts, "error="+strconv.Quote(errText))

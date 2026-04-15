@@ -43,6 +43,14 @@ const (
 	planEditorNote
 )
 
+type toolsFocusMode int
+
+const (
+	toolsFocusApprovals toolsFocusMode = iota
+	toolsFocusCommands
+	toolsFocusLog
+)
+
 type sessionOverrides struct {
 	MaxToolRounds          int
 	RenderMarkdown         bool
@@ -80,18 +88,19 @@ type configFormDraft struct {
 }
 
 type model struct {
-	ctx                context.Context
-	agent              *runtime.Agent
-	width              int
-	height             int
-	tab                tabIndex
-	sessions           map[string]*sessionState
-	sessionOrder       []string
-	activeSessionID    string
-	sessionCursor      int
-	toolCursor         int
-	approvalCursor     int
-	toolsApprovalFocus bool
+	ctx             context.Context
+	agent           *runtime.Agent
+	width           int
+	height          int
+	tab             tabIndex
+	sessions        map[string]*sessionState
+	sessionOrder    []string
+	activeSessionID string
+	sessionCursor   int
+	toolCursor      int
+	approvalCursor  int
+	commandCursor   int
+	toolsFocus      toolsFocusMode
 
 	uiSubID int
 	uiCh    <-chan runtime.UIEvent
