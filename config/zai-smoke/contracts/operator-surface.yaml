@@ -1,0 +1,7 @@
+kind: OperatorSurfaceContractConfig
+version: v1
+id: operator-surface-zai-smoke
+spec:
+  daemon_server_policy_path: ../policies/operator-surface/daemon-server.yaml
+  web_assets_policy_path: ../policies/operator-surface/web-assets.yaml
+  client_transport_policy_path: ../policies/operator-surface/client-transport.yaml

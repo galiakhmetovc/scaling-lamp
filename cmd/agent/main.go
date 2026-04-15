@@ -13,6 +13,7 @@ import (
 	"golang.org/x/term"
 	"teamd/internal/runtime"
 	runtimecli "teamd/internal/runtime/cli"
+	runtimedaemon "teamd/internal/runtime/daemon"
 	"teamd/internal/runtime/eventing"
 	runtimetui "teamd/internal/runtime/tui"
 )
@@ -35,6 +36,7 @@ func runWithIO(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 	configPath := fs.String("config", "", "path to root agent config")
 	smokePrompt := fs.String("smoke", "", "send one smoke prompt through the configured provider pipeline")
 	chatMode := fs.Bool("chat", false, "start interactive chat mode")
+	daemonMode := fs.Bool("daemon", false, "start daemon control-plane server")
 	resumeID := fs.String("resume", "", "resume an existing chat session by id")
 	inspectSessionID := fs.String("inspect-session", "", "inspect recorded events for a session")
 	inspectRunID := fs.String("inspect-run", "", "inspect recorded events for a run")
@@ -50,14 +52,17 @@ func runWithIO(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 	if err := loadDotEnv(".env"); err != nil {
 		return fmt.Errorf("autoload .env: %w", err)
 	}
-	if *chatMode && *smokePrompt != "" {
-		return fmt.Errorf("--chat and --smoke are mutually exclusive")
+	modeCount := 0
+	for _, enabled := range []bool{*chatMode, *daemonMode, *smokePrompt != "", *inspectSessionID != "", *inspectRunID != ""} {
+		if enabled {
+			modeCount++
+		}
+	}
+	if modeCount > 1 {
+		return fmt.Errorf("--chat, --daemon, --smoke, and inspect flags are mutually exclusive")
 	}
 	if *inspectSessionID != "" && *inspectRunID != "" {
 		return fmt.Errorf("--inspect-session and --inspect-run are mutually exclusive")
-	}
-	if (*inspectSessionID != "" || *inspectRunID != "") && (*chatMode || *smokePrompt != "") {
-		return fmt.Errorf("inspect flags cannot be combined with --chat or --smoke")
 	}
 	if *inspectLimit < 0 {
 		return fmt.Errorf("--inspect-limit must be >= 0")
@@ -85,6 +90,16 @@ func runWithIO(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 			return fmt.Errorf("write inspection output: %w", err)
 		}
 		return nil
+	}
+	if *daemonMode {
+		server, err := runtimedaemon.New(agent)
+		if err != nil {
+			return fmt.Errorf("build daemon server: %w", err)
+		}
+		if _, err := fmt.Fprintf(stdout, "daemon listening on %s\n", server.ListenAddr()); err != nil {
+			return fmt.Errorf("write daemon startup line: %w", err)
+		}
+		return server.ListenAndServe(context.Background())
 	}
 	if *chatMode {
 		if file, ok := stdin.(*os.File); ok && term.IsTerminal(int(file.Fd())) {

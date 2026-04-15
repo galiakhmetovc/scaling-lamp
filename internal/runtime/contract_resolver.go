@@ -106,6 +106,12 @@ type chatContractBody struct {
 	ResumePolicyPath  string `yaml:"resume_policy_path"`
 }
 
+type operatorSurfaceContractBody struct {
+	DaemonServerPolicyPath    string `yaml:"daemon_server_policy_path"`
+	WebAssetsPolicyPath       string `yaml:"web_assets_policy_path"`
+	ClientTransportPolicyPath string `yaml:"client_transport_policy_path"`
+}
+
 type requestShapeContractBody struct {
 	ModelPolicyPath          string `yaml:"model_policy_path"`
 	MessagePolicyPath        string `yaml:"message_policy_path"`
@@ -790,6 +796,52 @@ func resolveProviderTraceContract(out *contracts.ResolvedContracts, path string,
 	return nil
 }
 
+func resolveOperatorSurfaceContract(out *contracts.ResolvedContracts, path string, policyRegistry *policies.Registry) error {
+	contract, err := loadContract[operatorSurfaceContractBody](path, "operator-surface")
+	if err != nil {
+		return err
+	}
+	if contract.Spec.DaemonServerPolicyPath == "" || contract.Spec.WebAssetsPolicyPath == "" || contract.Spec.ClientTransportPolicyPath == "" {
+		return fmt.Errorf("operator-surface contract %q missing one or more policy paths", contract.ID)
+	}
+
+	serverPolicy, err := loadPolicy[contracts.DaemonServerParams](path, contract.Spec.DaemonServerPolicyPath, "DaemonServerPolicyConfig", "daemon-server", policyRegistry)
+	if err != nil {
+		return err
+	}
+	assetsPolicy, err := loadPolicy[contracts.WebAssetsParams](path, contract.Spec.WebAssetsPolicyPath, "WebAssetsPolicyConfig", "web-assets", policyRegistry)
+	if err != nil {
+		return err
+	}
+	clientPolicy, err := loadPolicy[contracts.ClientTransportParams](path, contract.Spec.ClientTransportPolicyPath, "ClientTransportPolicyConfig", "client-transport", policyRegistry)
+	if err != nil {
+		return err
+	}
+
+	out.OperatorSurface = contracts.OperatorSurfaceContract{
+		ID: contract.ID,
+		DaemonServer: contracts.DaemonServerPolicy{
+			ID:       serverPolicy.ID,
+			Enabled:  serverPolicy.Spec.Enabled,
+			Strategy: serverPolicy.Spec.Strategy,
+			Params:   serverPolicy.Spec.Params,
+		},
+		WebAssets: contracts.WebAssetsPolicy{
+			ID:       assetsPolicy.ID,
+			Enabled:  assetsPolicy.Spec.Enabled,
+			Strategy: assetsPolicy.Spec.Strategy,
+			Params:   assetsPolicy.Spec.Params,
+		},
+		ClientTransport: contracts.ClientTransportPolicy{
+			ID:       clientPolicy.ID,
+			Enabled:  clientPolicy.Spec.Enabled,
+			Strategy: clientPolicy.Spec.Strategy,
+			Params:   clientPolicy.Spec.Params,
+		},
+	}
+	return nil
+}
+
 func loadContract[T any](path, label string) (contractSpec[T], error) {
 	var contract contractSpec[T]
 	if err := config.LoadModule(path, &contract); err != nil {
@@ -860,6 +912,8 @@ func resolveContractApplyFunc(kind string) (contractApplyFunc, error) {
 		return resolveProviderTraceContract, nil
 	case "ChatContractConfig":
 		return resolveChatContract, nil
+	case "OperatorSurfaceContractConfig":
+		return resolveOperatorSurfaceContract, nil
 	default:
 		return nil, fmt.Errorf("unsupported contract kind %q", kind)
 	}

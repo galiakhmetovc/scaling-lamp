@@ -42,3 +42,4 @@ spec:
     tool_execution: ./contracts/tool-execution.yaml
     provider_trace: ./contracts/provider-trace.yaml
     chat: ./contracts/chat.yaml
+    operator_surface: ./contracts/operator-surface.yaml

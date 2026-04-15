@@ -46,6 +46,9 @@ const (
 	FamilyChatStatus            Family = "chat_status"
 	FamilyChatCommand           Family = "chat_command"
 	FamilyChatResume            Family = "chat_resume"
+	FamilyDaemonServer          Family = "daemon_server"
+	FamilyWebAssets             Family = "web_assets"
+	FamilyClientTransport       Family = "client_transport"
 )
 
 type Type struct {
@@ -370,6 +373,28 @@ func NewBuiltInRegistry() *Registry {
 		Family: FamilyChatResume,
 		Strategy: setOf(
 			"explicit_resume_only",
+		),
+	})
+	registry.Register(Type{
+		Kind:   "DaemonServerPolicyConfig",
+		Family: FamilyDaemonServer,
+		Strategy: setOf(
+			"websocket_http",
+		),
+	})
+	registry.Register(Type{
+		Kind:   "WebAssetsPolicyConfig",
+		Family: FamilyWebAssets,
+		Strategy: setOf(
+			"embedded_assets",
+			"dev_proxy",
+		),
+	})
+	registry.Register(Type{
+		Kind:   "ClientTransportPolicyConfig",
+		Family: FamilyClientTransport,
+		Strategy: setOf(
+			"websocket_http",
 		),
 	})
 	return registry

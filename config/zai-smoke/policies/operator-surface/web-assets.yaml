@@ -1,0 +1,9 @@
+kind: WebAssetsPolicyConfig
+version: v1
+id: web-assets-zai-smoke
+spec:
+  enabled: true
+  strategy: embedded_assets
+  params:
+    mode: embedded_assets
+    dev_proxy_url: ""

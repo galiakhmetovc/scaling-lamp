@@ -1,0 +1,9 @@
+kind: ClientTransportPolicyConfig
+version: v1
+id: client-transport-zai-smoke
+spec:
+  enabled: true
+  strategy: websocket_http
+  params:
+    endpoint_path: /api
+    websocket_path: /ws

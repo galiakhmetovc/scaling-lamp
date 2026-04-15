@@ -16,6 +16,7 @@ type ResolvedContracts struct {
 	ToolExecution       ToolExecutionContract
 	Chat                ChatContract
 	ProviderTrace       ProviderTraceContract
+	OperatorSurface     OperatorSurfaceContract
 }
 
 type ProviderRequestContract struct {
@@ -169,6 +170,13 @@ type ToolExecutionContract struct {
 type ProviderTraceContract struct {
 	ID      string
 	Request ProviderTracePolicy
+}
+
+type OperatorSurfaceContract struct {
+	ID              string
+	DaemonServer    DaemonServerPolicy
+	WebAssets       WebAssetsPolicy
+	ClientTransport ClientTransportPolicy
 }
 
 type ChatContract struct {
@@ -425,6 +433,27 @@ type ProviderTracePolicy struct {
 	Params   ProviderTraceParams
 }
 
+type DaemonServerPolicy struct {
+	ID       string
+	Enabled  bool
+	Strategy string
+	Params   DaemonServerParams
+}
+
+type WebAssetsPolicy struct {
+	ID       string
+	Enabled  bool
+	Strategy string
+	Params   WebAssetsParams
+}
+
+type ClientTransportPolicy struct {
+	ID       string
+	Enabled  bool
+	Strategy string
+	Params   ClientTransportParams
+}
+
 type SystemPromptParams struct {
 	Path                   string `yaml:"path"`
 	Role                   string `yaml:"role"`
@@ -572,6 +601,24 @@ type ToolSandboxParams struct {
 type ProviderTraceParams struct {
 	IncludeRawBody        bool `yaml:"include_raw_body"`
 	IncludeDecodedPayload bool `yaml:"include_decoded_payload"`
+}
+
+type DaemonServerParams struct {
+	ListenHost      string   `yaml:"listen_host"`
+	ListenPort      int      `yaml:"listen_port"`
+	EnableWebSocket bool     `yaml:"enable_websocket"`
+	PublicBaseURL   string   `yaml:"public_base_url"`
+	AllowedOrigins  []string `yaml:"allowed_origins"`
+}
+
+type WebAssetsParams struct {
+	Mode        string `yaml:"mode"`
+	DevProxyURL string `yaml:"dev_proxy_url"`
+}
+
+type ClientTransportParams struct {
+	EndpointPath  string `yaml:"endpoint_path"`
+	WebSocketPath string `yaml:"websocket_path"`
 }
 
 type PromptAssetParams struct {

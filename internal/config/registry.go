@@ -143,6 +143,15 @@ func NewBuiltInModuleRegistry() *ModuleRegistry {
 		},
 	})
 	registry.Register(ModuleType{
+		Kind:     "OperatorSurfaceContractConfig",
+		Category: ModuleCategoryContract,
+		RefFields: []string{
+			"daemon_server_policy_path",
+			"web_assets_policy_path",
+			"client_transport_policy_path",
+		},
+	})
+	registry.Register(ModuleType{
 		Kind:     "RequestShapeContractConfig",
 		Category: ModuleCategoryContract,
 		RefFields: []string{
@@ -316,6 +325,18 @@ func NewBuiltInModuleRegistry() *ModuleRegistry {
 	})
 	registry.Register(ModuleType{
 		Kind:     "ChatResumePolicyConfig",
+		Category: ModuleCategoryPolicy,
+	})
+	registry.Register(ModuleType{
+		Kind:     "DaemonServerPolicyConfig",
+		Category: ModuleCategoryPolicy,
+	})
+	registry.Register(ModuleType{
+		Kind:     "WebAssetsPolicyConfig",
+		Category: ModuleCategoryPolicy,
+	})
+	registry.Register(ModuleType{
+		Kind:     "ClientTransportPolicyConfig",
 		Category: ModuleCategoryPolicy,
 	})
 	return registry
