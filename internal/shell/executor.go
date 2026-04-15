@@ -7,16 +7,38 @@ import (
 	"fmt"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"time"
 
 	"teamd/internal/contracts"
 )
 
-type Executor struct{}
+type runResult struct {
+	stdout   string
+	stderr   string
+	exitCode int
+}
+
+type runFunc func(ctx context.Context, cwd, executable string, args []string) (runResult, error)
+type lookupPathFunc func(file string) (string, error)
+
+type invocation struct {
+	executable string
+	args       []string
+	isolated   bool
+}
+
+type Executor struct {
+	run        runFunc
+	lookupPath lookupPathFunc
+}
 
 func NewExecutor() *Executor {
-	return &Executor{}
+	return &Executor{
+		run:        defaultRunCommand,
+		lookupPath: exec.LookPath,
+	}
 }
 
 func (e *Executor) Execute(contract contracts.ShellExecutionContract, toolName string, argsMap map[string]any) (string, error) {
@@ -41,6 +63,10 @@ func (e *Executor) Execute(contract contracts.ShellExecutionContract, toolName s
 	if err != nil {
 		return "", err
 	}
+	invocation, err := e.resolveInvocation(contract.Runtime, command, args)
+	if err != nil {
+		return "", err
+	}
 	timeout := 30 * time.Second
 	if contract.Runtime.Params.Timeout != "" {
 		parsed, err := time.ParseDuration(contract.Runtime.Params.Timeout)
@@ -51,31 +77,25 @@ func (e *Executor) Execute(contract contracts.ShellExecutionContract, toolName s
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
-
-	cmd := exec.CommandContext(ctx, command, args...)
-	cmd.Dir = cwd
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
 	start := time.Now()
-	err = cmd.Run()
+	result, err := e.run(ctx, cwd, invocation.executable, invocation.args)
 	duration := time.Since(start)
 	if ctx.Err() == context.DeadlineExceeded {
 		return "", fmt.Errorf("shell command timed out")
 	}
 	maxOutput := contract.Runtime.Params.MaxOutputBytes
-	if maxOutput > 0 && stdout.Len()+stderr.Len() > maxOutput {
+	if maxOutput > 0 && len(result.stdout)+len(result.stderr) > maxOutput {
 		return "", fmt.Errorf("shell output exceeds max_output_bytes")
 	}
-	exitCode := 0
-	status := "ok"
 	if err != nil {
-		if exitErr, ok := err.(*exec.ExitError); ok {
-			exitCode = exitErr.ExitCode()
-			status = "error"
-		} else {
-			return "", fmt.Errorf("run shell command: %w", err)
-		}
+		return "", fmt.Errorf("run shell command: %w", err)
+	}
+	if invocation.isolated && result.exitCode != 0 && strings.Contains(result.stderr, "unshare:") {
+		return "", fmt.Errorf("shell network isolation unavailable: %s", strings.TrimSpace(result.stderr))
+	}
+	status := "ok"
+	if result.exitCode != 0 {
+		status = "error"
 	}
 	return jsonText(map[string]any{
 		"status":      status,
@@ -83,12 +103,60 @@ func (e *Executor) Execute(contract contracts.ShellExecutionContract, toolName s
 		"command":     command,
 		"args":        args,
 		"cwd":         cwd,
-		"exit_code":   exitCode,
-		"stdout":      stdout.String(),
-		"stderr":      stderr.String(),
+		"exit_code":   result.exitCode,
+		"stdout":      result.stdout,
+		"stderr":      result.stderr,
 		"duration_ms": duration.Milliseconds(),
 		"timed_out":   false,
 	}), nil
+}
+
+func (e *Executor) resolveInvocation(policy contracts.ShellRuntimePolicy, command string, args []string) (invocation, error) {
+	if !policy.Enabled || policy.Params.AllowNetwork {
+		return invocation{executable: command, args: args}, nil
+	}
+	if runtime.GOOS != "linux" {
+		return invocation{}, fmt.Errorf("shell network isolation requires linux; current platform is %s", runtime.GOOS)
+	}
+	lookup := e.lookupPath
+	if lookup == nil {
+		lookup = exec.LookPath
+	}
+	launcher, err := lookup("unshare")
+	if err != nil {
+		return invocation{}, fmt.Errorf("shell network isolation requires linux unshare launcher: %w", err)
+	}
+	argv := []string{"--fork", "--kill-child", "--net", "--", command}
+	argv = append(argv, args...)
+	return invocation{
+		executable: launcher,
+		args:       argv,
+		isolated:   true,
+	}, nil
+}
+
+func defaultRunCommand(ctx context.Context, cwd, executable string, args []string) (runResult, error) {
+	cmd := exec.CommandContext(ctx, executable, args...)
+	cmd.Dir = cwd
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	err := cmd.Run()
+	if err != nil {
+		if exitErr, ok := err.(*exec.ExitError); ok {
+			return runResult{
+				stdout:   stdout.String(),
+				stderr:   stderr.String(),
+				exitCode: exitErr.ExitCode(),
+			}, nil
+		}
+		return runResult{}, err
+	}
+	return runResult{
+		stdout:   stdout.String(),
+		stderr:   stderr.String(),
+		exitCode: 0,
+	}, nil
 }
 
 func validateCommand(policy contracts.ShellCommandPolicy, command string, args []string) error {

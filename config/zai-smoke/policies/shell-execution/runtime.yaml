@@ -8,4 +8,4 @@ spec:
     cwd: .
     timeout: 30s
     max_output_bytes: 65536
-    allow_network: false
+    allow_network: true

@@ -743,6 +743,9 @@ func TestRepositoryZaiSmokeConfigLoadsAndResolvesContracts(t *testing.T) {
 	if resolved.ShellExecution.Runtime.Params.Timeout != "30s" {
 		t.Fatalf("shell runtime timeout = %q, want %q", resolved.ShellExecution.Runtime.Params.Timeout, "30s")
 	}
+	if !resolved.ShellExecution.Runtime.Params.AllowNetwork {
+		t.Fatal("shell runtime allow_network = false, want true for shipped zai-smoke config")
+	}
 }
 
 func mustWriteMinimalContracts(t *testing.T, dir string) {

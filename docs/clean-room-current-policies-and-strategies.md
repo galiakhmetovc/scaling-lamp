@@ -867,7 +867,7 @@ This is what the shipped `config/zai-smoke` configuration currently selects.
   - `cwd = .`
   - `timeout = 30s`
   - `max_output_bytes = 65536`
-  - `allow_network = false`
+  - `allow_network = true`
 
 ### 9.7 Chat
 

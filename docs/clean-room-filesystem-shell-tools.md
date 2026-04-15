@@ -98,12 +98,16 @@ Current shipped shell runtime policy:
 - `cwd: .`
 - `timeout: 30s`
 - `max_output_bytes: 65536`
-- `allow_network: false`
+- `allow_network: true`
 
-Important limit:
+Hard-isolation behavior:
 
-- `allow_network: false` is currently a policy-level contract only
-- it is not enforced by OS sandboxing in the current backend
+- when `allow_network: false`, the shell backend now requires a real Linux `unshare --net` launcher path
+- if that launcher is unavailable or blocked by host permissions, shell execution fails closed with an explicit isolation error
+
+Current shipped limit:
+
+- `zai-smoke` keeps `allow_network: true` so the default shell tool remains usable on hosts where namespace isolation is not available
 
 ## Current Runtime Path
 
