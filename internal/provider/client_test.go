@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"teamd/internal/contracts"
+	"teamd/internal/delegation"
 	"teamd/internal/filesystem"
 	"teamd/internal/provider"
 	"teamd/internal/shell"
@@ -26,6 +27,7 @@ func TestClientBuildsAndSendsProviderRequest(t *testing.T) {
 		tools.NewPlanToolExecutor(),
 		filesystem.NewDefinitionExecutor(),
 		shell.NewDefinitionExecutor(),
+		delegation.NewDefinitionExecutor(),
 		tools.NewCatalogExecutor(),
 		tools.NewExecutionGate(),
 		provider.NewTransportExecutor(fakeDoer{
@@ -133,7 +135,7 @@ func TestClientBuildsAndSendsProviderRequest(t *testing.T) {
 				Enabled:  true,
 				Strategy: "static_allowlist",
 				Params: contracts.ToolCatalogParams{
-					ToolIDs: []string{"list_dir", "init_plan"},
+					ToolIDs: []string{"list_dir", "init_plan", "delegate_spawn"},
 				},
 			},
 			Serialization: contracts.ToolSerializationPolicy{
@@ -151,6 +153,19 @@ func TestClientBuildsAndSendsProviderRequest(t *testing.T) {
 				Params: contracts.PlanToolParams{
 					ToolIDs: []string{"init_plan"},
 				},
+			},
+		},
+		DelegationTools: contracts.DelegationToolContract{
+			Catalog: contracts.DelegationCatalogPolicy{
+				Enabled:  true,
+				Strategy: "static_allowlist",
+				Params: contracts.DelegationCatalogParams{
+					ToolIDs: []string{"delegate_spawn"},
+				},
+			},
+			Description: contracts.DelegationDescriptionPolicy{
+				Enabled:  true,
+				Strategy: "static_builtin_descriptions",
 			},
 		},
 	}, provider.ClientInput{
@@ -219,8 +234,22 @@ func TestClientBuildsAndSendsProviderRequest(t *testing.T) {
 		t.Fatalf("last message = %#v, want appended prompt asset", messages[2])
 	}
 	toolsPayload, ok := payload["tools"].([]any)
-	if !ok || len(toolsPayload) != 2 {
+	if !ok || len(toolsPayload) != 3 {
 		t.Fatalf("tools payload = %#v", payload["tools"])
+	}
+	var sawDelegateSpawn bool
+	for _, raw := range toolsPayload {
+		item, ok := raw.(map[string]any)
+		if !ok {
+			continue
+		}
+		function, _ := item["function"].(map[string]any)
+		if function["name"] == "delegate_spawn" {
+			sawDelegateSpawn = true
+		}
+	}
+	if !sawDelegateSpawn {
+		t.Fatalf("serialized tools missing delegate_spawn: %#v", toolsPayload)
 	}
 }
 
@@ -233,6 +262,7 @@ func TestClientStreamsTypedTextAndReasoningEvents(t *testing.T) {
 		tools.NewPlanToolExecutor(),
 		filesystem.NewDefinitionExecutor(),
 		shell.NewDefinitionExecutor(),
+		delegation.NewDefinitionExecutor(),
 		tools.NewCatalogExecutor(),
 		tools.NewExecutionGate(),
 		provider.NewTransportExecutor(fakeDoer{
@@ -338,6 +368,7 @@ func TestClientReturnsProviderStatusError(t *testing.T) {
 		tools.NewPlanToolExecutor(),
 		filesystem.NewDefinitionExecutor(),
 		shell.NewDefinitionExecutor(),
+		delegation.NewDefinitionExecutor(),
 		tools.NewCatalogExecutor(),
 		tools.NewExecutionGate(),
 		provider.NewTransportExecutor(fakeDoer{
@@ -405,6 +436,7 @@ func TestClientRejectsProviderToolCallThroughExecutionGate(t *testing.T) {
 		tools.NewPlanToolExecutor(),
 		filesystem.NewDefinitionExecutor(),
 		shell.NewDefinitionExecutor(),
+		delegation.NewDefinitionExecutor(),
 		tools.NewCatalogExecutor(),
 		tools.NewExecutionGate(),
 		provider.NewTransportExecutor(fakeDoer{
@@ -499,6 +531,7 @@ func TestClientReturnsAllowedProviderToolCallsForRuntimeExecution(t *testing.T) 
 		tools.NewPlanToolExecutor(),
 		filesystem.NewDefinitionExecutor(),
 		shell.NewDefinitionExecutor(),
+		delegation.NewDefinitionExecutor(),
 		tools.NewCatalogExecutor(),
 		tools.NewExecutionGate(),
 		provider.NewTransportExecutor(fakeDoer{
@@ -605,6 +638,7 @@ func TestClientStreamsOpenAICompatibleResponse(t *testing.T) {
 		tools.NewPlanToolExecutor(),
 		filesystem.NewDefinitionExecutor(),
 		shell.NewDefinitionExecutor(),
+		delegation.NewDefinitionExecutor(),
 		tools.NewCatalogExecutor(),
 		tools.NewExecutionGate(),
 		provider.NewTransportExecutor(fakeDoer{
@@ -694,6 +728,7 @@ func TestClientStreamsToolCallsAndReturnsAllowedDecisions(t *testing.T) {
 		tools.NewPlanToolExecutor(),
 		filesystem.NewDefinitionExecutor(),
 		shell.NewDefinitionExecutor(),
+		delegation.NewDefinitionExecutor(),
 		tools.NewCatalogExecutor(),
 		tools.NewExecutionGate(),
 		provider.NewTransportExecutor(fakeDoer{
@@ -793,6 +828,7 @@ func TestClientIncludesFilesystemAndShellToolsInVisibleToolPayload(t *testing.T)
 		tools.NewPlanToolExecutor(),
 		filesystem.NewDefinitionExecutor(),
 		shell.NewDefinitionExecutor(),
+		delegation.NewDefinitionExecutor(),
 		tools.NewCatalogExecutor(),
 		tools.NewExecutionGate(),
 		provider.NewTransportExecutor(fakeDoer{

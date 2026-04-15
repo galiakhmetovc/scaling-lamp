@@ -7,6 +7,7 @@ import (
 
 	"teamd/internal/config"
 	"teamd/internal/contracts"
+	"teamd/internal/delegation"
 	"teamd/internal/filesystem"
 	"teamd/internal/promptassembly"
 	"teamd/internal/provider"
@@ -28,6 +29,7 @@ type Agent struct {
 	PlanTools       *tools.PlanToolExecutor
 	FilesystemTools *filesystem.DefinitionExecutor
 	ShellTools      *shell.DefinitionExecutor
+	DelegationTools *delegation.DefinitionExecutor
 	ShellRuntime    *shell.Executor
 	ToolCatalog     *tools.CatalogExecutor
 	ToolExecution   *tools.ExecutionGate
@@ -134,6 +136,10 @@ func BuildAgent(configPath string) (*Agent, error) {
 	if err != nil {
 		return nil, fmt.Errorf("build shell tool executor: %w", err)
 	}
+	delegationToolExecutor, err := componentRegistry.BuildDelegationToolExecutor("delegation_tool_default")
+	if err != nil {
+		return nil, fmt.Errorf("build delegation tool executor: %w", err)
+	}
 	toolCatalogExecutor, err := componentRegistry.BuildToolCatalogExecutor(toolCatalogName)
 	if err != nil {
 		return nil, fmt.Errorf("build tool catalog executor: %w", err)
@@ -150,7 +156,7 @@ func BuildAgent(configPath string) (*Agent, error) {
 	if err != nil {
 		return nil, fmt.Errorf("build prompt-asset executor: %w", err)
 	}
-	providerClient, err := componentRegistry.BuildProviderClient(cfg.Spec.Runtime.ProviderClient, promptAssetExecutor, requestShapeExecutor, planToolExecutor, filesystemToolExecutor, shellToolExecutor, toolCatalogExecutor, toolExecutionGate, transportExecutor)
+	providerClient, err := componentRegistry.BuildProviderClient(cfg.Spec.Runtime.ProviderClient, promptAssetExecutor, requestShapeExecutor, planToolExecutor, filesystemToolExecutor, shellToolExecutor, delegationToolExecutor, toolCatalogExecutor, toolExecutionGate, transportExecutor)
 	if err != nil {
 		return nil, fmt.Errorf("build provider client: %w", err)
 	}
@@ -171,6 +177,7 @@ func BuildAgent(configPath string) (*Agent, error) {
 		PlanTools:       planToolExecutor,
 		FilesystemTools: filesystemToolExecutor,
 		ShellTools:      shellToolExecutor,
+		DelegationTools: delegationToolExecutor,
 		ShellRuntime:    shell.NewExecutor(),
 		ToolCatalog:     toolCatalogExecutor,
 		ToolExecution:   toolExecutionGate,

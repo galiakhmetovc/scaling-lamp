@@ -4,6 +4,7 @@ import (
 	"fmt"
 
 	"teamd/internal/config"
+	"teamd/internal/delegation"
 	"teamd/internal/filesystem"
 	"teamd/internal/promptassembly"
 	"teamd/internal/provider"
@@ -20,9 +21,10 @@ type RequestShapeExecutorFactory func() *provider.RequestShapeExecutor
 type PlanToolExecutorFactory func() *tools.PlanToolExecutor
 type FilesystemToolExecutorFactory func() *filesystem.DefinitionExecutor
 type ShellToolExecutorFactory func() *shell.DefinitionExecutor
+type DelegationToolExecutorFactory func() *delegation.DefinitionExecutor
 type ToolCatalogExecutorFactory func() *tools.CatalogExecutor
 type ToolExecutionGateFactory func() *tools.ExecutionGate
-type ProviderClientFactory func(*provider.PromptAssetExecutor, *provider.RequestShapeExecutor, *tools.PlanToolExecutor, *filesystem.DefinitionExecutor, *shell.DefinitionExecutor, *tools.CatalogExecutor, *tools.ExecutionGate, *provider.TransportExecutor) *provider.Client
+type ProviderClientFactory func(*provider.PromptAssetExecutor, *provider.RequestShapeExecutor, *tools.PlanToolExecutor, *filesystem.DefinitionExecutor, *shell.DefinitionExecutor, *delegation.DefinitionExecutor, *tools.CatalogExecutor, *tools.ExecutionGate, *provider.TransportExecutor) *provider.Client
 
 type ComponentRegistry struct {
 	eventLogs               map[string]EventLogFactory
@@ -33,6 +35,7 @@ type ComponentRegistry struct {
 	planToolExecutors       map[string]PlanToolExecutorFactory
 	filesystemToolExecutors map[string]FilesystemToolExecutorFactory
 	shellToolExecutors      map[string]ShellToolExecutorFactory
+	delegationToolExecutors map[string]DelegationToolExecutorFactory
 	toolCatalogExecutors    map[string]ToolCatalogExecutorFactory
 	toolExecutionGates      map[string]ToolExecutionGateFactory
 	providerClients         map[string]ProviderClientFactory
@@ -49,6 +52,7 @@ func NewComponentRegistry() *ComponentRegistry {
 		planToolExecutors:       map[string]PlanToolExecutorFactory{},
 		filesystemToolExecutors: map[string]FilesystemToolExecutorFactory{},
 		shellToolExecutors:      map[string]ShellToolExecutorFactory{},
+		delegationToolExecutors: map[string]DelegationToolExecutorFactory{},
 		toolCatalogExecutors:    map[string]ToolCatalogExecutorFactory{},
 		toolExecutionGates:      map[string]ToolExecutionGateFactory{},
 		providerClients:         map[string]ProviderClientFactory{},
@@ -88,11 +92,14 @@ func NewBuiltInComponentRegistry() *ComponentRegistry {
 	registry.RegisterShellToolExecutor("shell_tool_default", func() *shell.DefinitionExecutor {
 		return shell.NewDefinitionExecutor()
 	})
+	registry.RegisterDelegationToolExecutor("delegation_tool_default", func() *delegation.DefinitionExecutor {
+		return delegation.NewDefinitionExecutor()
+	})
 	registry.RegisterToolExecutionGate("tool_execution_default", func() *tools.ExecutionGate {
 		return tools.NewExecutionGate()
 	})
-	registry.RegisterProviderClient("provider_client_default", func(promptAssets *provider.PromptAssetExecutor, requestShape *provider.RequestShapeExecutor, planTools *tools.PlanToolExecutor, filesystemTools *filesystem.DefinitionExecutor, shellTools *shell.DefinitionExecutor, toolCatalog *tools.CatalogExecutor, toolExecution *tools.ExecutionGate, transport *provider.TransportExecutor) *provider.Client {
-		return provider.NewClient(promptAssets, requestShape, planTools, filesystemTools, shellTools, toolCatalog, toolExecution, transport)
+	registry.RegisterProviderClient("provider_client_default", func(promptAssets *provider.PromptAssetExecutor, requestShape *provider.RequestShapeExecutor, planTools *tools.PlanToolExecutor, filesystemTools *filesystem.DefinitionExecutor, shellTools *shell.DefinitionExecutor, delegationTools *delegation.DefinitionExecutor, toolCatalog *tools.CatalogExecutor, toolExecution *tools.ExecutionGate, transport *provider.TransportExecutor) *provider.Client {
+		return provider.NewClient(promptAssets, requestShape, planTools, filesystemTools, shellTools, delegationTools, toolCatalog, toolExecution, transport)
 	})
 	registry.RegisterProjection("session", func() projections.Projection { return projections.NewSessionProjection() })
 	registry.RegisterProjection("session_catalog", func() projections.Projection { return projections.NewSessionCatalogProjection() })
@@ -140,6 +147,10 @@ func (r *ComponentRegistry) RegisterFilesystemToolExecutor(name string, factory 
 
 func (r *ComponentRegistry) RegisterShellToolExecutor(name string, factory ShellToolExecutorFactory) {
 	r.shellToolExecutors[name] = factory
+}
+
+func (r *ComponentRegistry) RegisterDelegationToolExecutor(name string, factory DelegationToolExecutorFactory) {
+	r.delegationToolExecutors[name] = factory
 }
 
 func (r *ComponentRegistry) RegisterToolExecutionGate(name string, factory ToolExecutionGateFactory) {
@@ -226,6 +237,14 @@ func (r *ComponentRegistry) BuildShellToolExecutor(name string) (*shell.Definiti
 	return factory(), nil
 }
 
+func (r *ComponentRegistry) BuildDelegationToolExecutor(name string) (*delegation.DefinitionExecutor, error) {
+	factory, ok := r.delegationToolExecutors[name]
+	if !ok {
+		return nil, fmt.Errorf("delegation tool executor %q is not registered", name)
+	}
+	return factory(), nil
+}
+
 func (r *ComponentRegistry) BuildToolExecutionGate(name string) (*tools.ExecutionGate, error) {
 	factory, ok := r.toolExecutionGates[name]
 	if !ok {
@@ -234,12 +253,12 @@ func (r *ComponentRegistry) BuildToolExecutionGate(name string) (*tools.Executio
 	return factory(), nil
 }
 
-func (r *ComponentRegistry) BuildProviderClient(name string, promptAssets *provider.PromptAssetExecutor, requestShape *provider.RequestShapeExecutor, planTools *tools.PlanToolExecutor, filesystemTools *filesystem.DefinitionExecutor, shellTools *shell.DefinitionExecutor, toolCatalog *tools.CatalogExecutor, toolExecution *tools.ExecutionGate, transport *provider.TransportExecutor) (*provider.Client, error) {
+func (r *ComponentRegistry) BuildProviderClient(name string, promptAssets *provider.PromptAssetExecutor, requestShape *provider.RequestShapeExecutor, planTools *tools.PlanToolExecutor, filesystemTools *filesystem.DefinitionExecutor, shellTools *shell.DefinitionExecutor, delegationTools *delegation.DefinitionExecutor, toolCatalog *tools.CatalogExecutor, toolExecution *tools.ExecutionGate, transport *provider.TransportExecutor) (*provider.Client, error) {
 	factory, ok := r.providerClients[name]
 	if !ok {
 		return nil, fmt.Errorf("provider client %q is not registered", name)
 	}
-	return factory(promptAssets, requestShape, planTools, filesystemTools, shellTools, toolCatalog, toolExecution, transport), nil
+	return factory(promptAssets, requestShape, planTools, filesystemTools, shellTools, delegationTools, toolCatalog, toolExecution, transport), nil
 }
 
 func (r *ComponentRegistry) BuildProjections(names ...string) ([]projections.Projection, error) {

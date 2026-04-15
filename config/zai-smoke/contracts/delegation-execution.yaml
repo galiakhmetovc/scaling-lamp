@@ -1,0 +1,6 @@
+kind: DelegationExecutionContractConfig
+version: v1
+id: delegation-execution-zai-smoke
+spec:
+  delegation_backend_policy_path: ../policies/delegation-execution/backend.yaml
+  delegation_result_policy_path: ../policies/delegation-execution/result.yaml

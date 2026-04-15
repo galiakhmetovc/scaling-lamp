@@ -35,6 +35,8 @@ spec:
     filesystem_execution: ./contracts/filesystem-execution.yaml
     shell_tools: ./contracts/shell-tools.yaml
     shell_execution: ./contracts/shell-execution.yaml
+    delegation_tools: ./contracts/delegation-tools.yaml
+    delegation_execution: ./contracts/delegation-execution.yaml
     plan_tools: ./contracts/plan-tools.yaml
     tool_execution: ./contracts/tool-execution.yaml
     provider_trace: ./contracts/provider-trace.yaml

@@ -1,0 +1,6 @@
+kind: DelegationToolContractConfig
+version: v1
+id: delegation-tools-zai-smoke
+spec:
+  delegation_catalog_policy_path: ../policies/delegation-tools/catalog.yaml
+  delegation_description_policy_path: ../policies/delegation-tools/description.yaml

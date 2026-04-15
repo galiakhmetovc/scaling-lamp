@@ -12,6 +12,7 @@ import (
 
 	"teamd/internal/config"
 	"teamd/internal/contracts"
+	"teamd/internal/delegation"
 	"teamd/internal/filesystem"
 	"teamd/internal/provider"
 	"teamd/internal/runtime"
@@ -89,6 +90,7 @@ func TestRunChatDisplaysToolActivityAndPlan(t *testing.T) {
 		PlanTools:       tools.NewPlanToolExecutor(),
 		FilesystemTools: filesystem.NewDefinitionExecutor(),
 		ShellTools:      shell.NewDefinitionExecutor(),
+		DelegationTools: delegation.NewDefinitionExecutor(),
 		ToolCatalog:     tools.NewCatalogExecutor(),
 		ToolExecution:   tools.NewExecutionGate(),
 		Transport: provider.NewTransportExecutor(fakeDoer{
@@ -132,7 +134,7 @@ func TestRunChatDisplaysToolActivityAndPlan(t *testing.T) {
 			return prefix + "-1"
 		},
 	}
-	agent.ProviderClient = provider.NewClient(agent.PromptAssets, agent.RequestShape, agent.PlanTools, agent.FilesystemTools, agent.ShellTools, agent.ToolCatalog, agent.ToolExecution, agent.Transport)
+	agent.ProviderClient = provider.NewClient(agent.PromptAssets, agent.RequestShape, agent.PlanTools, agent.FilesystemTools, agent.ShellTools, agent.DelegationTools, agent.ToolCatalog, agent.ToolExecution, agent.Transport)
 
 	var stdout bytes.Buffer
 	err := cli.RunChat(context.Background(), agent, "", strings.NewReader("make a plan\n\n/exit\n"), &stdout)
@@ -200,6 +202,7 @@ func TestRunChatPostRendersMarkdownWhenEnabled(t *testing.T) {
 		PlanTools:       tools.NewPlanToolExecutor(),
 		FilesystemTools: filesystem.NewDefinitionExecutor(),
 		ShellTools:      shell.NewDefinitionExecutor(),
+		DelegationTools: delegation.NewDefinitionExecutor(),
 		ToolCatalog:     tools.NewCatalogExecutor(),
 		ToolExecution:   tools.NewExecutionGate(),
 		Transport: provider.NewTransportExecutor(fakeDoer{
@@ -228,7 +231,7 @@ func TestRunChatPostRendersMarkdownWhenEnabled(t *testing.T) {
 			return prefix + "-1"
 		},
 	}
-	agent.ProviderClient = provider.NewClient(agent.PromptAssets, agent.RequestShape, agent.PlanTools, agent.FilesystemTools, agent.ShellTools, agent.ToolCatalog, agent.ToolExecution, agent.Transport)
+	agent.ProviderClient = provider.NewClient(agent.PromptAssets, agent.RequestShape, agent.PlanTools, agent.FilesystemTools, agent.ShellTools, agent.DelegationTools, agent.ToolCatalog, agent.ToolExecution, agent.Transport)
 
 	var stdout bytes.Buffer
 	err := cli.RunChat(context.Background(), agent, "", strings.NewReader("render markdown\n\n/exit\n"), &stdout)

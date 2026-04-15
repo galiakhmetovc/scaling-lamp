@@ -1,0 +1,11 @@
+kind: DelegationBackendPolicyConfig
+version: v1
+id: delegation-backend-zai-smoke
+spec:
+  enabled: true
+  strategy: backend_allowlist
+  params:
+    allowed_backends:
+      - local_worker
+      - remote_mesh
+    default_backend: local_worker

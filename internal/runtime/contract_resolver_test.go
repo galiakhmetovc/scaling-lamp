@@ -541,6 +541,95 @@ func TestResolveContractsBuildsTransportAndMemoryContracts(t *testing.T) {
 	}
 }
 
+func TestResolveContractsBuildsDelegationContracts(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	mustWriteFile(t, filepath.Join(dir, "agent.yaml"), ""+
+		"kind: AgentConfig\n"+
+		"version: v1\n"+
+		"id: agent-test\n"+
+		"spec:\n"+
+		"  contracts:\n"+
+		"    delegation_tools: ./contracts/delegation-tools.yaml\n"+
+		"    delegation_execution: ./contracts/delegation-execution.yaml\n")
+	mustWriteFile(t, filepath.Join(dir, "contracts", "delegation-tools.yaml"), ""+
+		"kind: DelegationToolContractConfig\n"+
+		"version: v1\n"+
+		"id: delegation-tools-main\n"+
+		"spec:\n"+
+		"  delegation_catalog_policy_path: ../policies/delegation/catalog.yaml\n"+
+		"  delegation_description_policy_path: ../policies/delegation/description.yaml\n")
+	mustWriteFile(t, filepath.Join(dir, "contracts", "delegation-execution.yaml"), ""+
+		"kind: DelegationExecutionContractConfig\n"+
+		"version: v1\n"+
+		"id: delegation-execution-main\n"+
+		"spec:\n"+
+		"  delegation_backend_policy_path: ../policies/delegation/backend.yaml\n"+
+		"  delegation_result_policy_path: ../policies/delegation/result.yaml\n")
+	mustWriteFile(t, filepath.Join(dir, "policies", "delegation", "catalog.yaml"), ""+
+		"kind: DelegationCatalogPolicyConfig\n"+
+		"version: v1\n"+
+		"id: delegation-catalog-main\n"+
+		"spec:\n"+
+		"  enabled: true\n"+
+		"  strategy: static_allowlist\n"+
+		"  params:\n"+
+		"    tool_ids: [delegate_spawn, delegate_wait, delegate_handoff]\n")
+	mustWriteFile(t, filepath.Join(dir, "policies", "delegation", "description.yaml"), ""+
+		"kind: DelegationDescriptionPolicyConfig\n"+
+		"version: v1\n"+
+		"id: delegation-description-main\n"+
+		"spec:\n"+
+		"  enabled: true\n"+
+		"  strategy: static_builtin_descriptions\n"+
+		"  params:\n"+
+		"    include_examples: true\n"+
+		"    include_backend_hints: true\n"+
+		"    include_lifecycle_notes: true\n")
+	mustWriteFile(t, filepath.Join(dir, "policies", "delegation", "backend.yaml"), ""+
+		"kind: DelegationBackendPolicyConfig\n"+
+		"version: v1\n"+
+		"id: delegation-backend-main\n"+
+		"spec:\n"+
+		"  enabled: true\n"+
+		"  strategy: backend_allowlist\n"+
+		"  params:\n"+
+		"    allowed_backends: [local_worker, remote_mesh]\n"+
+		"    default_backend: local_worker\n")
+	mustWriteFile(t, filepath.Join(dir, "policies", "delegation", "result.yaml"), ""+
+		"kind: DelegationResultPolicyConfig\n"+
+		"version: v1\n"+
+		"id: delegation-result-main\n"+
+		"spec:\n"+
+		"  enabled: true\n"+
+		"  strategy: bounded_wait_results\n"+
+		"  params:\n"+
+		"    include_events: true\n"+
+		"    include_artifacts: true\n"+
+		"    include_policy_snapshot: true\n"+
+		"    default_event_limit: 25\n"+
+		"    max_event_limit: 100\n")
+
+	cfg, err := config.LoadRoot(filepath.Join(dir, "agent.yaml"))
+	if err != nil {
+		t.Fatalf("LoadRoot returned error: %v", err)
+	}
+	got, err := runtime.ResolveContractsWithRegistry(cfg, policies.NewBuiltInRegistry())
+	if err != nil {
+		t.Fatalf("ResolveContractsWithRegistry returned error: %v", err)
+	}
+	if got.DelegationTools.ID != "delegation-tools-main" {
+		t.Fatalf("delegation tools contract id = %q", got.DelegationTools.ID)
+	}
+	if got.DelegationExecution.Backend.Params.DefaultBackend != "local_worker" {
+		t.Fatalf("default backend = %q", got.DelegationExecution.Backend.Params.DefaultBackend)
+	}
+	if len(got.DelegationTools.Catalog.Params.ToolIDs) != 3 {
+		t.Fatalf("delegation tool ids = %#v", got.DelegationTools.Catalog.Params.ToolIDs)
+	}
+}
+
 func TestResolveContractsUsesContractKindsNotContractMapKeys(t *testing.T) {
 	t.Parallel()
 

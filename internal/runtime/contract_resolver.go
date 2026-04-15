@@ -73,6 +73,16 @@ type shellExecutionContractBody struct {
 	ShellRuntimePolicyPath  string `yaml:"shell_runtime_policy_path"`
 }
 
+type delegationToolContractBody struct {
+	DelegationCatalogPolicyPath     string `yaml:"delegation_catalog_policy_path"`
+	DelegationDescriptionPolicyPath string `yaml:"delegation_description_policy_path"`
+}
+
+type delegationExecutionContractBody struct {
+	DelegationBackendPolicyPath string `yaml:"delegation_backend_policy_path"`
+	DelegationResultPolicyPath  string `yaml:"delegation_result_policy_path"`
+}
+
 type toolExecutionContractBody struct {
 	ToolAccessPolicyPath   string `yaml:"tool_access_policy_path"`
 	ToolApprovalPolicyPath string `yaml:"tool_approval_policy_path"`
@@ -617,6 +627,74 @@ func resolveShellExecutionContract(out *contracts.ResolvedContracts, path string
 	return nil
 }
 
+func resolveDelegationToolContract(out *contracts.ResolvedContracts, path string, policyRegistry *policies.Registry) error {
+	contract, err := loadContract[delegationToolContractBody](path, "delegation-tools")
+	if err != nil {
+		return err
+	}
+	if contract.Spec.DelegationCatalogPolicyPath == "" || contract.Spec.DelegationDescriptionPolicyPath == "" {
+		return fmt.Errorf("delegation-tools contract %q missing one or more policy paths", contract.ID)
+	}
+	catalogPolicy, err := loadPolicy[contracts.DelegationCatalogParams](path, contract.Spec.DelegationCatalogPolicyPath, "DelegationCatalogPolicyConfig", "delegation-catalog", policyRegistry)
+	if err != nil {
+		return err
+	}
+	descriptionPolicy, err := loadPolicy[contracts.DelegationDescriptionParams](path, contract.Spec.DelegationDescriptionPolicyPath, "DelegationDescriptionPolicyConfig", "delegation-description", policyRegistry)
+	if err != nil {
+		return err
+	}
+	out.DelegationTools = contracts.DelegationToolContract{
+		ID: contract.ID,
+		Catalog: contracts.DelegationCatalogPolicy{
+			ID:       catalogPolicy.ID,
+			Enabled:  catalogPolicy.Spec.Enabled,
+			Strategy: catalogPolicy.Spec.Strategy,
+			Params:   catalogPolicy.Spec.Params,
+		},
+		Description: contracts.DelegationDescriptionPolicy{
+			ID:       descriptionPolicy.ID,
+			Enabled:  descriptionPolicy.Spec.Enabled,
+			Strategy: descriptionPolicy.Spec.Strategy,
+			Params:   descriptionPolicy.Spec.Params,
+		},
+	}
+	return nil
+}
+
+func resolveDelegationExecutionContract(out *contracts.ResolvedContracts, path string, policyRegistry *policies.Registry) error {
+	contract, err := loadContract[delegationExecutionContractBody](path, "delegation-execution")
+	if err != nil {
+		return err
+	}
+	if contract.Spec.DelegationBackendPolicyPath == "" || contract.Spec.DelegationResultPolicyPath == "" {
+		return fmt.Errorf("delegation-execution contract %q missing one or more policy paths", contract.ID)
+	}
+	backendPolicy, err := loadPolicy[contracts.DelegationBackendParams](path, contract.Spec.DelegationBackendPolicyPath, "DelegationBackendPolicyConfig", "delegation-backend", policyRegistry)
+	if err != nil {
+		return err
+	}
+	resultPolicy, err := loadPolicy[contracts.DelegationResultParams](path, contract.Spec.DelegationResultPolicyPath, "DelegationResultPolicyConfig", "delegation-result", policyRegistry)
+	if err != nil {
+		return err
+	}
+	out.DelegationExecution = contracts.DelegationExecutionContract{
+		ID: contract.ID,
+		Backend: contracts.DelegationBackendPolicy{
+			ID:       backendPolicy.ID,
+			Enabled:  backendPolicy.Spec.Enabled,
+			Strategy: backendPolicy.Spec.Strategy,
+			Params:   backendPolicy.Spec.Params,
+		},
+		Result: contracts.DelegationResultPolicy{
+			ID:       resultPolicy.ID,
+			Enabled:  resultPolicy.Spec.Enabled,
+			Strategy: resultPolicy.Spec.Strategy,
+			Params:   resultPolicy.Spec.Params,
+		},
+	}
+	return nil
+}
+
 func resolveToolExecutionContract(out *contracts.ResolvedContracts, path string, policyRegistry *policies.Registry) error {
 	contract, err := loadContract[toolExecutionContractBody](path, "tool-execution")
 	if err != nil {
@@ -770,6 +848,10 @@ func resolveContractApplyFunc(kind string) (contractApplyFunc, error) {
 		return resolveShellToolContract, nil
 	case "ShellExecutionContractConfig":
 		return resolveShellExecutionContract, nil
+	case "DelegationToolContractConfig":
+		return resolveDelegationToolContract, nil
+	case "DelegationExecutionContractConfig":
+		return resolveDelegationExecutionContract, nil
 	case "ToolExecutionContractConfig":
 		return resolveToolExecutionContract, nil
 	case "PlanToolContractConfig":

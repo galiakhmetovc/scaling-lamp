@@ -1,0 +1,14 @@
+kind: DelegationCatalogPolicyConfig
+version: v1
+id: delegation-catalog-zai-smoke
+spec:
+  enabled: true
+  strategy: static_allowlist
+  params:
+    tool_ids:
+      - delegate_spawn
+      - delegate_message
+      - delegate_wait
+      - delegate_close
+      - delegate_handoff
+    allow_empty: false

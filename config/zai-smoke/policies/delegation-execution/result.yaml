@@ -1,0 +1,12 @@
+kind: DelegationResultPolicyConfig
+version: v1
+id: delegation-result-zai-smoke
+spec:
+  enabled: true
+  strategy: bounded_wait_results
+  params:
+    include_events: true
+    include_artifacts: true
+    include_policy_snapshot: true
+    default_event_limit: 25
+    max_event_limit: 100

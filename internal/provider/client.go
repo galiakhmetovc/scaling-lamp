@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"teamd/internal/contracts"
+	"teamd/internal/delegation"
 	"teamd/internal/filesystem"
 	"teamd/internal/shell"
 	itools "teamd/internal/tools"
@@ -35,6 +36,7 @@ type Client struct {
 	PlanTools       *itools.PlanToolExecutor
 	FilesystemTools *filesystem.DefinitionExecutor
 	ShellTools      *shell.DefinitionExecutor
+	DelegationTools *delegation.DefinitionExecutor
 	ToolCatalog     *itools.CatalogExecutor
 	ToolExecution   *itools.ExecutionGate
 	Transport       *TransportExecutor
@@ -66,13 +68,14 @@ type ToolDecision struct {
 	Decision itools.ExecutionDecision
 }
 
-func NewClient(promptAssets *PromptAssetExecutor, requestShape *RequestShapeExecutor, planTools *itools.PlanToolExecutor, filesystemTools *filesystem.DefinitionExecutor, shellTools *shell.DefinitionExecutor, toolCatalog *itools.CatalogExecutor, toolExecution *itools.ExecutionGate, transport *TransportExecutor) *Client {
+func NewClient(promptAssets *PromptAssetExecutor, requestShape *RequestShapeExecutor, planTools *itools.PlanToolExecutor, filesystemTools *filesystem.DefinitionExecutor, shellTools *shell.DefinitionExecutor, delegationTools *delegation.DefinitionExecutor, toolCatalog *itools.CatalogExecutor, toolExecution *itools.ExecutionGate, transport *TransportExecutor) *Client {
 	return &Client{
 		PromptAssets:    promptAssets,
 		RequestShape:    requestShape,
 		PlanTools:       planTools,
 		FilesystemTools: filesystemTools,
 		ShellTools:      shellTools,
+		DelegationTools: delegationTools,
 		ToolCatalog:     toolCatalog,
 		ToolExecution:   toolExecution,
 		Transport:       transport,
@@ -97,6 +100,9 @@ func (c *Client) Execute(ctx context.Context, contractSet contracts.ResolvedCont
 	}
 	if c.ShellTools == nil {
 		return ClientResult{}, fmt.Errorf("provider client shell tool executor is nil")
+	}
+	if c.DelegationTools == nil {
+		return ClientResult{}, fmt.Errorf("provider client delegation tool executor is nil")
 	}
 	if c.ToolCatalog == nil {
 		return ClientResult{}, fmt.Errorf("provider client tool catalog executor is nil")
@@ -127,10 +133,15 @@ func (c *Client) Execute(ctx context.Context, contractSet contracts.ResolvedCont
 	if err != nil {
 		return ClientResult{}, fmt.Errorf("build shell tools: %w", err)
 	}
-	availableTools := make([]itools.Definition, 0, len(planTools)+len(filesystemTools)+len(shellTools)+len(input.Tools))
+	delegationTools, err := c.DelegationTools.Build(contractSet.DelegationTools)
+	if err != nil {
+		return ClientResult{}, fmt.Errorf("build delegation tools: %w", err)
+	}
+	availableTools := make([]itools.Definition, 0, len(planTools)+len(filesystemTools)+len(shellTools)+len(delegationTools)+len(input.Tools))
 	availableTools = append(availableTools, planTools...)
 	availableTools = append(availableTools, filesystemTools...)
 	availableTools = append(availableTools, shellTools...)
+	availableTools = append(availableTools, delegationTools...)
 	availableTools = append(availableTools, input.Tools...)
 	visibleTools, err := c.ToolCatalog.Build(contractSet.Tools, itools.CatalogInput{
 		Available: availableTools,

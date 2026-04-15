@@ -10,6 +10,8 @@ type ResolvedContracts struct {
 	FilesystemExecution FilesystemExecutionContract
 	ShellTools          ShellToolContract
 	ShellExecution      ShellExecutionContract
+	DelegationTools     DelegationToolContract
+	DelegationExecution DelegationExecutionContract
 	PlanTools           PlanToolContract
 	ToolExecution       ToolExecutionContract
 	Chat                ChatContract
@@ -138,6 +140,18 @@ type ShellExecutionContract struct {
 	Command  ShellCommandPolicy
 	Approval ShellApprovalPolicy
 	Runtime  ShellRuntimePolicy
+}
+
+type DelegationToolContract struct {
+	ID          string
+	Catalog     DelegationCatalogPolicy
+	Description DelegationDescriptionPolicy
+}
+
+type DelegationExecutionContract struct {
+	ID      string
+	Backend DelegationBackendPolicy
+	Result  DelegationResultPolicy
 }
 
 type PlanToolContract struct {
@@ -354,6 +368,34 @@ type ShellRuntimePolicy struct {
 	Params   ShellRuntimeParams
 }
 
+type DelegationCatalogPolicy struct {
+	ID       string
+	Enabled  bool
+	Strategy string
+	Params   DelegationCatalogParams
+}
+
+type DelegationDescriptionPolicy struct {
+	ID       string
+	Enabled  bool
+	Strategy string
+	Params   DelegationDescriptionParams
+}
+
+type DelegationBackendPolicy struct {
+	ID       string
+	Enabled  bool
+	Strategy string
+	Params   DelegationBackendParams
+}
+
+type DelegationResultPolicy struct {
+	ID       string
+	Enabled  bool
+	Strategy string
+	Params   DelegationResultParams
+}
+
 type ToolAccessPolicy struct {
 	ID       string
 	Enabled  bool
@@ -483,6 +525,30 @@ type ShellRuntimeParams struct {
 	Timeout        string `yaml:"timeout"`
 	MaxOutputBytes int    `yaml:"max_output_bytes"`
 	AllowNetwork   bool   `yaml:"allow_network"`
+}
+
+type DelegationCatalogParams struct {
+	ToolIDs    []string `yaml:"tool_ids"`
+	AllowEmpty bool     `yaml:"allow_empty"`
+}
+
+type DelegationDescriptionParams struct {
+	IncludeExamples       bool `yaml:"include_examples"`
+	IncludeBackendHints   bool `yaml:"include_backend_hints"`
+	IncludeLifecycleNotes bool `yaml:"include_lifecycle_notes"`
+}
+
+type DelegationBackendParams struct {
+	AllowedBackends []string `yaml:"allowed_backends"`
+	DefaultBackend  string   `yaml:"default_backend"`
+}
+
+type DelegationResultParams struct {
+	IncludeEvents         bool `yaml:"include_events"`
+	IncludeArtifacts      bool `yaml:"include_artifacts"`
+	IncludePolicySnapshot bool `yaml:"include_policy_snapshot"`
+	DefaultEventLimit     int  `yaml:"default_event_limit"`
+	MaxEventLimit         int  `yaml:"max_event_limit"`
 }
 
 type ToolAccessParams struct {

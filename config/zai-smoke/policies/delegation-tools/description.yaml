@@ -1,0 +1,10 @@
+kind: DelegationDescriptionPolicyConfig
+version: v1
+id: delegation-description-zai-smoke
+spec:
+  enabled: true
+  strategy: static_builtin_descriptions
+  params:
+    include_examples: true
+    include_backend_hints: true
+    include_lifecycle_notes: true

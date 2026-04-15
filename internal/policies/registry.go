@@ -31,6 +31,10 @@ const (
 	FamilyShellCommand          Family = "shell_command"
 	FamilyShellApproval         Family = "shell_approval"
 	FamilyShellRuntime          Family = "shell_runtime"
+	FamilyDelegationCatalog     Family = "delegation_catalog"
+	FamilyDelegationDescription Family = "delegation_description"
+	FamilyDelegationBackend     Family = "delegation_backend"
+	FamilyDelegationResult      Family = "delegation_result"
 	FamilyToolAccess            Family = "tool_access"
 	FamilyToolApproval          Family = "tool_approval"
 	FamilyToolSandbox           Family = "tool_sandbox"
@@ -254,6 +258,34 @@ func NewBuiltInRegistry() *Registry {
 			"workspace_write",
 			"read_only",
 			"deny_exec",
+		),
+	})
+	registry.Register(Type{
+		Kind:   "DelegationCatalogPolicyConfig",
+		Family: FamilyDelegationCatalog,
+		Strategy: setOf(
+			"static_allowlist",
+		),
+	})
+	registry.Register(Type{
+		Kind:   "DelegationDescriptionPolicyConfig",
+		Family: FamilyDelegationDescription,
+		Strategy: setOf(
+			"static_builtin_descriptions",
+		),
+	})
+	registry.Register(Type{
+		Kind:   "DelegationBackendPolicyConfig",
+		Family: FamilyDelegationBackend,
+		Strategy: setOf(
+			"backend_allowlist",
+		),
+	})
+	registry.Register(Type{
+		Kind:   "DelegationResultPolicyConfig",
+		Family: FamilyDelegationResult,
+		Strategy: setOf(
+			"bounded_wait_results",
 		),
 	})
 	registry.Register(Type{

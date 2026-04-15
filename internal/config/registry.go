@@ -96,6 +96,22 @@ func NewBuiltInModuleRegistry() *ModuleRegistry {
 		},
 	})
 	registry.Register(ModuleType{
+		Kind:     "DelegationToolContractConfig",
+		Category: ModuleCategoryContract,
+		RefFields: []string{
+			"delegation_catalog_policy_path",
+			"delegation_description_policy_path",
+		},
+	})
+	registry.Register(ModuleType{
+		Kind:     "DelegationExecutionContractConfig",
+		Category: ModuleCategoryContract,
+		RefFields: []string{
+			"delegation_backend_policy_path",
+			"delegation_result_policy_path",
+		},
+	})
+	registry.Register(ModuleType{
 		Kind:     "ToolExecutionContractConfig",
 		Category: ModuleCategoryContract,
 		RefFields: []string{
@@ -240,6 +256,22 @@ func NewBuiltInModuleRegistry() *ModuleRegistry {
 	})
 	registry.Register(ModuleType{
 		Kind:     "ShellRuntimePolicyConfig",
+		Category: ModuleCategoryPolicy,
+	})
+	registry.Register(ModuleType{
+		Kind:     "DelegationCatalogPolicyConfig",
+		Category: ModuleCategoryPolicy,
+	})
+	registry.Register(ModuleType{
+		Kind:     "DelegationDescriptionPolicyConfig",
+		Category: ModuleCategoryPolicy,
+	})
+	registry.Register(ModuleType{
+		Kind:     "DelegationBackendPolicyConfig",
+		Category: ModuleCategoryPolicy,
+	})
+	registry.Register(ModuleType{
+		Kind:     "DelegationResultPolicyConfig",
 		Category: ModuleCategoryPolicy,
 	})
 	registry.Register(ModuleType{
