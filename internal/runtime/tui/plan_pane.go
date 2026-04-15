@@ -71,6 +71,13 @@ func (m *model) updatePlan(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.planStatusIndex = indexOfPlanStatus(selected.Status)
 		}
 		return m, nil
+	case "enter":
+		if m.planMode == planEditorBrowse && ok {
+			m.planMode = planEditorEditTask
+			m.planDescInput.Focus()
+			m.planDescInput.SetValue(selected.Description)
+			return m, nil
+		}
 	case "esc":
 		m.planMode = planEditorBrowse
 		return m, nil
@@ -144,7 +151,7 @@ func (m *model) viewPlan() string {
 	head, ok := m.agent.CurrentPlanHead(m.activeSessionID)
 	if !ok || head.Plan.ID == "" {
 		left := "No active plan\n\nPress c to create one."
-		right := m.renderPlanEditor(false, projections.PlanTaskView{})
+		right := m.renderPlanEditor(projections.PlanHeadSnapshot{}, false, projections.PlanTaskView{})
 		return lipgloss.JoinHorizontal(lipgloss.Top, lipgloss.NewStyle().Width(max(30, m.width/2)).Render(left), lipgloss.NewStyle().Width(max(26, m.width/3)).Render(right))
 	}
 	lines := []string{"Plan", "", "goal: " + head.Plan.Goal}
@@ -160,7 +167,7 @@ func (m *model) viewPlan() string {
 	}
 	m.planView.SetContent(strings.Join(lines, "\n"))
 	left := m.planView.View()
-	right := m.renderPlanEditor(hasSelection, selected)
+	right := m.renderPlanEditor(head, hasSelection, selected)
 	return lipgloss.JoinHorizontal(lipgloss.Top, lipgloss.NewStyle().Width(max(30, m.width/2)).Render(left), lipgloss.NewStyle().Width(max(26, m.width/3)).Render(right))
 }
 
@@ -267,7 +274,7 @@ func (m *model) selectedPlanTask(head projections.PlanHeadSnapshot) (projections
 	return flat[m.planCursor], true
 }
 
-func (m *model) renderPlanEditor(hasSelection bool, selected projections.PlanTaskView) string {
+func (m *model) renderPlanEditor(head projections.PlanHeadSnapshot, hasSelection bool, selected projections.PlanTaskView) string {
 	lines := []string{
 		"Plan Editor",
 		"",
@@ -293,14 +300,30 @@ func (m *model) renderPlanEditor(hasSelection bool, selected projections.PlanTas
 		lines = append(lines, "Add Note", "", "Task ID: "+selected.ID, "Note:", m.planNoteInput.View())
 	default:
 		if hasSelection {
+			computed := "none"
+			switch {
+			case selected.Status == "blocked":
+				computed = "blocked"
+			case head.WaitingOnDependencies[selected.ID]:
+				computed = "waiting_on_dependencies"
+			case head.Ready[selected.ID]:
+				computed = "ready"
+			}
 			lines = append(lines,
 				"Selected Task",
 				"",
 				"ID: "+selected.ID,
 				"Description: "+selected.Description,
 				"Status: "+selected.Status,
+				"Computed: "+computed,
 				"Depends on: "+strings.Join(selected.DependsOn, ", "),
 			)
+			if selected.BlockedReason != "" {
+				lines = append(lines, "Blocked reason: "+selected.BlockedReason)
+			}
+			if notes := head.Notes[selected.ID]; len(notes) > 0 {
+				lines = append(lines, fmt.Sprintf("Notes: %d", len(notes)), "Latest note: "+notes[len(notes)-1])
+			}
 		} else {
 			lines = append(lines, "No task selected")
 		}

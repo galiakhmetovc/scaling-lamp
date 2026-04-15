@@ -174,6 +174,9 @@ func (m *model) updateConfigForm(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		return m, rebuildAgentCmd(m.agent.ConfigPath)
+	case "r":
+		m.resetFormDraft()
+		m.statusMessage = "config form reset"
 	}
 	return m, nil
 }
@@ -231,7 +234,13 @@ func (m *model) viewSettings() string {
 		m.settingsView.SetContent(head + "\n\n" + strings.Join(rows, "\n"))
 		return m.settingsView.View()
 	case settingsForm:
+		status := "clean"
+		if m.formDraftDirty() {
+			status = "modified"
+		}
 		rows := []string{
+			"Draft: " + status,
+			"",
 			fmt.Sprintf("%s max_tool_rounds: %s", cursor(m.formField, 0), m.formDraft.MaxToolRounds),
 			fmt.Sprintf("%s render_markdown: %t", cursor(m.formField, 1), m.formDraft.RenderMarkdown),
 			fmt.Sprintf("%s markdown_style: %s", cursor(m.formField, 2), m.formDraft.MarkdownStyle),
@@ -241,6 +250,7 @@ func (m *model) viewSettings() string {
 			"",
 			"Ctrl+S save to disk",
 			"Ctrl+A save and reload agent",
+			"r reset form to loaded config",
 		}
 		m.settingsView.SetContent(head + "\n\n" + strings.Join(rows, "\n"))
 		return m.settingsView.View()
@@ -318,6 +328,18 @@ func (m *model) resetFormDraft() {
 	}
 	m.formMaxRounds.SetValue(m.formDraft.MaxToolRounds)
 	m.formStyle.SetValue(m.formDraft.MarkdownStyle)
+}
+
+func (m *model) formDraftDirty() bool {
+	expected := configFormDraft{
+		MaxToolRounds:          strconv.Itoa(m.agent.Config.Spec.Runtime.MaxToolRounds),
+		RenderMarkdown:         m.agent.Contracts.Chat.Output.Params.RenderMarkdown,
+		MarkdownStyle:          coalesce(m.agent.Contracts.Chat.Output.Params.MarkdownStyle, "dark"),
+		ShowToolCalls:          m.agent.Contracts.Chat.Status.Params.ShowToolCalls,
+		ShowToolResults:        m.agent.Contracts.Chat.Status.Params.ShowToolResults,
+		ShowPlanAfterPlanTools: m.agent.Contracts.Chat.Status.Params.ShowPlanAfterPlanTools,
+	}
+	return m.formDraft != expected
 }
 
 func (m *model) saveFormDraft() error {

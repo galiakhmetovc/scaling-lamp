@@ -26,6 +26,7 @@ Current behavior:
 - `Plan`
   - shows the current active session `plan_head` projection
   - supports form-based editing for plan/task operations
+  - selected task details include computed state and latest notes
 - `Tools`
   - shows tool lifecycle events for the active session
   - includes a selected-entry details pane with summarized args/result/error text
@@ -49,6 +50,7 @@ Current settings behavior:
     - `show_plan_after_plan_tools`
   - `Ctrl+S` saves to disk
   - `Ctrl+A` saves and rebuilds the agent
+  - `r` resets the form back to the loaded config values
 - `Raw YAML`
   - enumerates YAML files under the current config root
   - edits raw file content directly
