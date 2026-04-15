@@ -70,6 +70,9 @@ func TestBootstrapEndpointReturnsConfigDrivenSnapshot(t *testing.T) {
 	if payload.Assets.Mode != "embedded_assets" {
 		t.Fatalf("assets mode = %q", payload.Assets.Mode)
 	}
+	if payload.Settings.Revision == "" || len(payload.Settings.FormFields) == 0 {
+		t.Fatalf("settings snapshot = %+v, want populated revisioned settings", payload.Settings)
+	}
 	if len(payload.Sessions) != 1 || payload.Sessions[0].SessionID != "session-1" {
 		t.Fatalf("sessions = %+v", payload.Sessions)
 	}
@@ -421,6 +424,191 @@ func TestWebsocketChatSendQueuesWhileActiveAndAutoDispatchesNextDraft(t *testing
 	}
 }
 
+func TestWebsocketSettingsFormApplyReloadsAgentAndRejectsStaleRevision(t *testing.T) {
+	t.Parallel()
+
+	agent := buildAgentWithOperatorSurface(t)
+	server, err := daemon.New(agent)
+	if err != nil {
+		t.Fatalf("new daemon server: %v", err)
+	}
+	httpServer := httptest.NewServer(server.Handler())
+	defer httpServer.Close()
+
+	conn := dialWebsocket(t, httpServer.URL, "/ws")
+	defer conn.Close()
+	_ = readEnvelopeJSON(t, conn)
+
+	writeCommandEnvelope(t, conn, map[string]any{"type": "command", "id": "cmd-1", "command": "settings.get"})
+	_ = readEnvelopeJSON(t, conn)
+	getCompleted := waitForCommandCompleted(t, conn, "cmd-1")
+	settings := mapPayload(t, mapPayload(t, getCompleted["payload"])["settings"])
+	baseRevision := settings["revision"]
+	fields, ok := settings["form_fields"].([]any)
+	if !ok || len(fields) == 0 {
+		t.Fatalf("form fields = %#v, want populated", settings["form_fields"])
+	}
+
+	writeCommandEnvelope(t, conn, map[string]any{
+		"type":    "command",
+		"id":      "cmd-2",
+		"command": "settings.form.apply",
+		"payload": map[string]any{
+			"base_revision": baseRevision,
+			"values": map[string]any{
+				"max_tool_rounds": 7,
+				"markdown_style":  "light",
+			},
+		},
+	})
+	_ = readEnvelopeJSON(t, conn)
+	_ = waitForEnvelopeType(t, conn, "settings_applied")
+	applyCompleted := waitForCommandCompleted(t, conn, "cmd-2")
+	applied := mapPayload(t, mapPayload(t, applyCompleted["payload"])["settings"])
+	if applied["revision"] == baseRevision {
+		t.Fatalf("settings revision did not change after apply")
+	}
+
+	writeCommandEnvelope(t, conn, map[string]any{
+		"type":    "command",
+		"id":      "cmd-3",
+		"command": "settings.get",
+	})
+	_ = readEnvelopeJSON(t, conn)
+	reloaded := mapPayload(t, mapPayload(t, waitForCommandCompleted(t, conn, "cmd-3")["payload"])["settings"])
+	assertSettingValue(t, reloaded["form_fields"], "max_tool_rounds", float64(7))
+	assertSettingValue(t, reloaded["form_fields"], "markdown_style", "light")
+
+	writeCommandEnvelope(t, conn, map[string]any{
+		"type":    "command",
+		"id":      "cmd-4",
+		"command": "settings.form.apply",
+		"payload": map[string]any{
+			"base_revision": baseRevision,
+			"values": map[string]any{
+				"show_tool_calls": false,
+			},
+		},
+	})
+	_ = readEnvelopeJSON(t, conn)
+	failed := waitForCommandFailed(t, conn, "cmd-4")
+	if !strings.Contains(fmt.Sprint(failed["error"]), "revision conflict") {
+		t.Fatalf("stale apply error = %#v, want revision conflict", failed["error"])
+	}
+}
+
+func TestWebsocketSettingsRawApplyUsesRevisionChecks(t *testing.T) {
+	t.Parallel()
+
+	agent := buildAgentWithOperatorSurface(t)
+	server, err := daemon.New(agent)
+	if err != nil {
+		t.Fatalf("new daemon server: %v", err)
+	}
+	httpServer := httptest.NewServer(server.Handler())
+	defer httpServer.Close()
+
+	conn := dialWebsocket(t, httpServer.URL, "/ws")
+	defer conn.Close()
+	_ = readEnvelopeJSON(t, conn)
+
+	writeCommandEnvelope(t, conn, map[string]any{"type": "command", "id": "cmd-1", "command": "settings.raw.get", "payload": map[string]any{"path": "policies/chat/output.yaml"}})
+	_ = readEnvelopeJSON(t, conn)
+	filePayload := mapPayload(t, waitForCommandCompleted(t, conn, "cmd-1")["payload"])
+	file := mapPayload(t, filePayload["file"])
+	revision := file["revision"]
+	content := fmt.Sprint(file["content"])
+
+	updatedContent := strings.Replace(content, "markdown_style: dark", "markdown_style: light", 1)
+	writeCommandEnvelope(t, conn, map[string]any{
+		"type":    "command",
+		"id":      "cmd-2",
+		"command": "settings.raw.apply",
+		"payload": map[string]any{
+			"path":          "policies/chat/output.yaml",
+			"base_revision": revision,
+			"content":       updatedContent,
+		},
+	})
+	_ = readEnvelopeJSON(t, conn)
+	_ = waitForEnvelopeType(t, conn, "settings_applied")
+	_ = waitForCommandCompleted(t, conn, "cmd-2")
+
+	writeCommandEnvelope(t, conn, map[string]any{"type": "command", "id": "cmd-3", "command": "settings.raw.get", "payload": map[string]any{"path": "policies/chat/output.yaml"}})
+	_ = readEnvelopeJSON(t, conn)
+	reloaded := mapPayload(t, waitForCommandCompleted(t, conn, "cmd-3")["payload"])
+	file = mapPayload(t, reloaded["file"])
+	if !strings.Contains(fmt.Sprint(file["content"]), "markdown_style: light") {
+		t.Fatalf("raw settings content not updated: %s", file["content"])
+	}
+
+	writeCommandEnvelope(t, conn, map[string]any{
+		"type":    "command",
+		"id":      "cmd-4",
+		"command": "settings.raw.apply",
+		"payload": map[string]any{
+			"path":          "policies/chat/output.yaml",
+			"base_revision": revision,
+			"content":       content,
+		},
+	})
+	_ = readEnvelopeJSON(t, conn)
+	failed := waitForCommandFailed(t, conn, "cmd-4")
+	if !strings.Contains(fmt.Sprint(failed["error"]), "revision conflict") {
+		t.Fatalf("stale raw apply error = %#v, want revision conflict", failed["error"])
+	}
+}
+
+func TestWebsocketSettingsRawApplyRollsBackOnInvalidConfig(t *testing.T) {
+	t.Parallel()
+
+	agent := buildAgentWithOperatorSurface(t)
+	server, err := daemon.New(agent)
+	if err != nil {
+		t.Fatalf("new daemon server: %v", err)
+	}
+	httpServer := httptest.NewServer(server.Handler())
+	defer httpServer.Close()
+
+	conn := dialWebsocket(t, httpServer.URL, "/ws")
+	defer conn.Close()
+	_ = readEnvelopeJSON(t, conn)
+
+	writeCommandEnvelope(t, conn, map[string]any{"type": "command", "id": "cmd-1", "command": "settings.raw.get", "payload": map[string]any{"path": "policies/chat/output.yaml"}})
+	_ = readEnvelopeJSON(t, conn)
+	filePayload := mapPayload(t, waitForCommandCompleted(t, conn, "cmd-1")["payload"])
+	file := mapPayload(t, filePayload["file"])
+	originalRevision := fmt.Sprint(file["revision"])
+	originalContent := fmt.Sprint(file["content"])
+
+	writeCommandEnvelope(t, conn, map[string]any{
+		"type":    "command",
+		"id":      "cmd-2",
+		"command": "settings.raw.apply",
+		"payload": map[string]any{
+			"path":          "policies/chat/output.yaml",
+			"base_revision": originalRevision,
+			"content":       "kind: ChatOutputPolicyConfig\nspec:\n  params: [\n",
+		},
+	})
+	_ = readEnvelopeJSON(t, conn)
+	failed := waitForCommandFailed(t, conn, "cmd-2")
+	if !strings.Contains(fmt.Sprint(failed["error"]), "yaml") {
+		t.Fatalf("invalid raw apply error = %#v, want yaml parse/build failure", failed["error"])
+	}
+
+	writeCommandEnvelope(t, conn, map[string]any{"type": "command", "id": "cmd-3", "command": "settings.raw.get", "payload": map[string]any{"path": "policies/chat/output.yaml"}})
+	_ = readEnvelopeJSON(t, conn)
+	reloaded := mapPayload(t, waitForCommandCompleted(t, conn, "cmd-3")["payload"])
+	file = mapPayload(t, reloaded["file"])
+	if fmt.Sprint(file["revision"]) != originalRevision {
+		t.Fatalf("raw settings revision changed after failed apply: got %s want %s", file["revision"], originalRevision)
+	}
+	if fmt.Sprint(file["content"]) != originalContent {
+		t.Fatalf("raw settings content changed after failed apply")
+	}
+}
+
 func buildAgentWithOperatorSurface(t *testing.T) *runtime.Agent {
 	t.Helper()
 	return buildChatDaemonAgent(t, "http://127.0.0.1:1")
@@ -509,6 +697,21 @@ func waitForCommandCompleted(t *testing.T, conn *websocket.Conn, commandID strin
 	return nil
 }
 
+func waitForCommandFailed(t *testing.T, conn *websocket.Conn, commandID string) map[string]any {
+	t.Helper()
+	for i := 0; i < 16; i++ {
+		payload := readEnvelopeJSON(t, conn)
+		if payload["type"] != "command_failed" {
+			continue
+		}
+		if payload["id"] == commandID {
+			return payload
+		}
+	}
+	t.Fatalf("did not receive command_failed envelope for %q", commandID)
+	return nil
+}
+
 func waitForDraftQueuedAndCommandCompleted(t *testing.T, conn *websocket.Conn, commandID string) (map[string]any, map[string]any) {
 	return waitForEventAndCommandCompleted(t, conn, "draft_queued", commandID)
 }
@@ -575,6 +778,25 @@ func mapPayload(t *testing.T, value any) map[string]any {
 	return out
 }
 
+func assertSettingValue(t *testing.T, fieldsValue any, key string, want any) {
+	t.Helper()
+	fields, ok := fieldsValue.([]any)
+	if !ok {
+		t.Fatalf("form fields = %#v, want []any", fieldsValue)
+	}
+	for _, item := range fields {
+		field := mapPayload(t, item)
+		if field["key"] != key {
+			continue
+		}
+		if field["value"] != want {
+			t.Fatalf("field %q value = %#v, want %#v", key, field["value"], want)
+		}
+		return
+	}
+	t.Fatalf("field %q not found in %#v", key, fieldsValue)
+}
+
 func buildChatDaemonAgent(t *testing.T, baseURL string) *runtime.Agent {
 	t.Helper()
 	dir := t.TempDir()
@@ -585,6 +807,7 @@ func buildChatDaemonAgent(t *testing.T, baseURL string) *runtime.Agent {
 		"id: daemon-chat\n"+
 		"spec:\n"+
 		"  runtime:\n"+
+		"    max_tool_rounds: 4\n"+
 		"    event_log: file_jsonl\n"+
 		"    event_log_path: ./var/events.jsonl\n"+
 		"    projection_store_path: ./var/projections.json\n"+
@@ -605,7 +828,7 @@ func buildChatDaemonAgent(t *testing.T, baseURL string) *runtime.Agent {
 	mustWriteFile(t, filepath.Join(dir, "contracts", "memory.yaml"), "kind: MemoryContractConfig\nversion: v1\nid: memory-main\nspec:\n  offload_policy_path: ../policies/memory/offload.yaml\n")
 	mustWriteFile(t, filepath.Join(dir, "contracts", "prompt-assets.yaml"), "kind: PromptAssetsContractConfig\nversion: v1\nid: prompt-assets-main\nspec:\n  prompt_asset_policy_path: ../policies/prompt-assets/assets.yaml\n")
 	mustWriteFile(t, filepath.Join(dir, "contracts", "chat.yaml"), "kind: ChatContractConfig\nversion: v1\nid: chat-main\nspec:\n  input_policy_path: ../policies/chat/input.yaml\n  submit_policy_path: ../policies/chat/submit.yaml\n  output_policy_path: ../policies/chat/output.yaml\n  status_policy_path: ../policies/chat/status.yaml\n  command_policy_path: ../policies/chat/command.yaml\n  resume_policy_path: ../policies/chat/resume.yaml\n")
-	mustWriteFile(t, filepath.Join(dir, "contracts", "operator-surface.yaml"), "kind: OperatorSurfaceContractConfig\nversion: v1\nid: operator-surface-main\nspec:\n  daemon_server_policy_path: ../policies/operator-surface/daemon-server.yaml\n  web_assets_policy_path: ../policies/operator-surface/web-assets.yaml\n  client_transport_policy_path: ../policies/operator-surface/client-transport.yaml\n")
+	mustWriteFile(t, filepath.Join(dir, "contracts", "operator-surface.yaml"), "kind: OperatorSurfaceContractConfig\nversion: v1\nid: operator-surface-main\nspec:\n  daemon_server_policy_path: ../policies/operator-surface/daemon-server.yaml\n  web_assets_policy_path: ../policies/operator-surface/web-assets.yaml\n  client_transport_policy_path: ../policies/operator-surface/client-transport.yaml\n  settings_policy_path: ../policies/operator-surface/settings.yaml\n")
 
 	mustWriteFile(t, filepath.Join(dir, "policies", "transport", "endpoint.yaml"), fmt.Sprintf("kind: EndpointPolicyConfig\nversion: v1\nid: endpoint-main\nspec:\n  enabled: true\n  strategy: static\n  params:\n    base_url: %s\n    path: /chat/completions\n    method: POST\n", baseURL))
 	mustWriteFile(t, filepath.Join(dir, "policies", "transport", "auth.yaml"), "kind: AuthPolicyConfig\nversion: v1\nid: auth-main\nspec:\n  enabled: false\n  strategy: bearer_token\n  params:\n    header: Authorization\n    prefix: Bearer\n    value_env_var: TEAMD_ZAI_API_KEY\n")
@@ -628,6 +851,7 @@ func buildChatDaemonAgent(t *testing.T, baseURL string) *runtime.Agent {
 	mustWriteFile(t, filepath.Join(dir, "policies", "operator-surface", "daemon-server.yaml"), "kind: DaemonServerPolicyConfig\nversion: v1\nid: daemon-server-main\nspec:\n  enabled: true\n  strategy: websocket_http\n  params:\n    listen_host: 0.0.0.0\n    listen_port: 8080\n    enable_websocket: true\n    public_base_url: \"\"\n    allowed_origins: []\n")
 	mustWriteFile(t, filepath.Join(dir, "policies", "operator-surface", "web-assets.yaml"), "kind: WebAssetsPolicyConfig\nversion: v1\nid: web-assets-main\nspec:\n  enabled: true\n  strategy: embedded_assets\n  params:\n    mode: embedded_assets\n    dev_proxy_url: \"\"\n")
 	mustWriteFile(t, filepath.Join(dir, "policies", "operator-surface", "client-transport.yaml"), "kind: ClientTransportPolicyConfig\nversion: v1\nid: client-transport-main\nspec:\n  enabled: true\n  strategy: websocket_http\n  params:\n    endpoint_path: /api\n    websocket_path: /ws\n")
+	mustWriteFile(t, filepath.Join(dir, "policies", "operator-surface", "settings.yaml"), "kind: SettingsSurfacePolicyConfig\nversion: v1\nid: settings-main\nspec:\n  enabled: true\n  strategy: revisioned_yaml_files\n  params:\n    require_idle_for_apply: true\n    form_fields:\n      - key: max_tool_rounds\n        label: Max Tool Rounds\n        type: int\n        file_path: agent.yaml\n        yaml_path: [spec, runtime, max_tool_rounds]\n      - key: render_markdown\n        label: Render Markdown\n        type: bool\n        file_path: policies/chat/output.yaml\n        yaml_path: [spec, params, render_markdown]\n      - key: markdown_style\n        label: Markdown Style\n        type: string\n        file_path: policies/chat/output.yaml\n        yaml_path: [spec, params, markdown_style]\n        enum: [dark, light]\n      - key: show_tool_calls\n        label: Show Tool Calls\n        type: bool\n        file_path: policies/chat/status.yaml\n        yaml_path: [spec, params, show_tool_calls]\n      - key: show_tool_results\n        label: Show Tool Results\n        type: bool\n        file_path: policies/chat/status.yaml\n        yaml_path: [spec, params, show_tool_results]\n      - key: show_plan_after_plan_tools\n        label: Show Plan After Plan Tools\n        type: bool\n        file_path: policies/chat/status.yaml\n        yaml_path: [spec, params, show_plan_after_plan_tools]\n    raw_file_globs:\n      - agent.yaml\n      - contracts/*.yaml\n      - policies/**/*.yaml\n")
 
 	agent, err := runtime.BuildAgent(filepath.Join(dir, "agent.yaml"))
 	if err != nil {

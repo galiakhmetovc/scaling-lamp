@@ -1,0 +1,44 @@
+kind: SettingsSurfacePolicyConfig
+version: v1
+id: settings-surface-zai-smoke
+spec:
+  enabled: true
+  strategy: revisioned_yaml_files
+  params:
+    require_idle_for_apply: true
+    form_fields:
+      - key: max_tool_rounds
+        label: Max Tool Rounds
+        type: int
+        file_path: agent.yaml
+        yaml_path: [spec, runtime, max_tool_rounds]
+      - key: render_markdown
+        label: Render Markdown
+        type: bool
+        file_path: policies/chat/output.yaml
+        yaml_path: [spec, params, render_markdown]
+      - key: markdown_style
+        label: Markdown Style
+        type: string
+        file_path: policies/chat/output.yaml
+        yaml_path: [spec, params, markdown_style]
+        enum: [dark, light]
+      - key: show_tool_calls
+        label: Show Tool Calls
+        type: bool
+        file_path: policies/chat/status.yaml
+        yaml_path: [spec, params, show_tool_calls]
+      - key: show_tool_results
+        label: Show Tool Results
+        type: bool
+        file_path: policies/chat/status.yaml
+        yaml_path: [spec, params, show_tool_results]
+      - key: show_plan_after_plan_tools
+        label: Show Plan After Plan Tools
+        type: bool
+        file_path: policies/chat/status.yaml
+        yaml_path: [spec, params, show_plan_after_plan_tools]
+    raw_file_globs:
+      - agent.yaml
+      - contracts/*.yaml
+      - policies/**/*.yaml

@@ -90,7 +90,8 @@ func (s *Server) enqueueDraft(sessionID, text string) QueuedDraft {
 	s.runtimeMu.Lock()
 	defer s.runtimeMu.Unlock()
 	state := s.ensureSessionRuntimeLocked(sessionID)
-	draft := QueuedDraft{ID: s.agent.NewID("draft"), Text: text, QueuedAt: s.agent.Now().UTC()}
+	agent := s.currentAgent()
+	draft := QueuedDraft{ID: agent.NewID("draft"), Text: text, QueuedAt: agent.Now().UTC()}
 	state.queue = append(state.queue, draft)
 	return draft
 }
@@ -155,13 +156,14 @@ func (s *Server) maybeDispatchQueuedDrafts(sessionID string) {
 
 func (s *Server) dispatchQueuedDraft(ctx context.Context, sessionID string, draft QueuedDraft) {
 	s.publishDaemon(WebsocketEnvelope{Type: "queue_draft_started", Payload: map[string]any{"session_id": sessionID, "draft": draft}})
-	session, err := s.agent.ResumeChatSession(ctx, sessionID)
+	agent := s.currentAgent()
+	session, err := agent.ResumeChatSession(ctx, sessionID)
 	if err != nil {
 		s.finishMainRun(sessionID)
 		s.publishDaemon(WebsocketEnvelope{Type: "queue_draft_failed", Payload: map[string]any{"session_id": sessionID, "draft": draft}, Error: err.Error()})
 		return
 	}
-	result, err := s.agent.ChatTurn(ctx, session, runtime.ChatTurnInput{Prompt: draft.Text})
+	result, err := agent.ChatTurn(ctx, session, runtime.ChatTurnInput{Prompt: draft.Text})
 	s.finishMainRun(sessionID)
 	if err != nil {
 		s.publishDaemon(WebsocketEnvelope{Type: "queue_draft_failed", Payload: map[string]any{"session_id": sessionID, "draft": draft}, Error: err.Error()})

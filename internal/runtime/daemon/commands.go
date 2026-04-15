@@ -17,9 +17,10 @@ type providerResultPayload struct {
 }
 
 func (s *Server) executeCommand(ctx context.Context, req CommandRequest) (any, error) {
+	agent := s.currentAgent()
 	switch req.Command {
 	case "session.create":
-		session, err := s.agent.CreateChatSession(ctx)
+		session, err := agent.CreateChatSession(ctx)
 		if err != nil {
 			return nil, err
 		}
@@ -58,12 +59,12 @@ func (s *Server) executeCommand(ctx context.Context, req CommandRequest) (any, e
 			s.publishDaemon(WebsocketEnvelope{Type: "draft_queued", Payload: map[string]any{"session_id": sessionID, "draft": draft}})
 			return payload, nil
 		}
-		session, err := s.agent.ResumeChatSession(ctx, sessionID)
+		session, err := agent.ResumeChatSession(ctx, sessionID)
 		if err != nil {
 			s.finishMainRun(sessionID)
 			return nil, err
 		}
-		result, err := s.agent.ChatTurn(ctx, session, runtime.ChatTurnInput{Prompt: prompt})
+		result, err := agent.ChatTurn(ctx, session, runtime.ChatTurnInput{Prompt: prompt})
 		if err != nil {
 			s.finishMainRun(sessionID)
 			return nil, err
@@ -138,11 +139,11 @@ func (s *Server) executeCommand(ctx context.Context, req CommandRequest) (any, e
 		if err != nil {
 			return nil, err
 		}
-		session, err := s.agent.ResumeChatSession(ctx, sessionID)
+		session, err := agent.ResumeChatSession(ctx, sessionID)
 		if err != nil {
 			return nil, err
 		}
-		result, err := s.agent.BtwTurn(ctx, session, runtime.BtwTurnInput{Prompt: prompt})
+		result, err := agent.BtwTurn(ctx, session, runtime.BtwTurnInput{Prompt: prompt})
 		if err != nil {
 			return nil, err
 		}
@@ -167,7 +168,7 @@ func (s *Server) executeCommand(ctx context.Context, req CommandRequest) (any, e
 		if err != nil {
 			return nil, err
 		}
-		if err := s.agent.CreatePlan(ctx, sessionID, goal); err != nil {
+		if err := agent.CreatePlan(ctx, sessionID, goal); err != nil {
 			return nil, err
 		}
 		return s.sessionPayload(sessionID)
@@ -185,7 +186,7 @@ func (s *Server) executeCommand(ctx context.Context, req CommandRequest) (any, e
 		if err != nil {
 			return nil, err
 		}
-		if err := s.agent.AddPlanTask(ctx, sessionID, description, parentTaskID, dependsOn); err != nil {
+		if err := agent.AddPlanTask(ctx, sessionID, description, parentTaskID, dependsOn); err != nil {
 			return nil, err
 		}
 		return s.sessionPayload(sessionID)
@@ -206,7 +207,7 @@ func (s *Server) executeCommand(ctx context.Context, req CommandRequest) (any, e
 		if err != nil {
 			return nil, err
 		}
-		if err := s.agent.EditPlanTask(ctx, sessionID, taskID, description, dependsOn); err != nil {
+		if err := agent.EditPlanTask(ctx, sessionID, taskID, description, dependsOn); err != nil {
 			return nil, err
 		}
 		return s.sessionPayload(sessionID)
@@ -224,7 +225,7 @@ func (s *Server) executeCommand(ctx context.Context, req CommandRequest) (any, e
 			return nil, err
 		}
 		blockedReason, _ := optionalString(req.Payload, "blocked_reason")
-		if err := s.agent.SetPlanTaskStatus(ctx, sessionID, taskID, status, blockedReason); err != nil {
+		if err := agent.SetPlanTaskStatus(ctx, sessionID, taskID, status, blockedReason); err != nil {
 			return nil, err
 		}
 		return s.sessionPayload(sessionID)
@@ -241,7 +242,7 @@ func (s *Server) executeCommand(ctx context.Context, req CommandRequest) (any, e
 		if err != nil {
 			return nil, err
 		}
-		if err := s.agent.AddPlanTaskNote(ctx, sessionID, taskID, note); err != nil {
+		if err := agent.AddPlanTaskNote(ctx, sessionID, taskID, note); err != nil {
 			return nil, err
 		}
 		return s.sessionPayload(sessionID)
@@ -250,11 +251,11 @@ func (s *Server) executeCommand(ctx context.Context, req CommandRequest) (any, e
 		if err != nil {
 			return nil, err
 		}
-		view, ok := s.agent.PendingShellApproval(approvalID)
+		view, ok := agent.PendingShellApproval(approvalID)
 		if !ok {
 			return nil, fmt.Errorf("shell approval %q not found", approvalID)
 		}
-		commandID, err := s.agent.ApproveShellCommand(ctx, approvalID)
+		commandID, err := agent.ApproveShellCommand(ctx, approvalID)
 		if err != nil {
 			return nil, err
 		}
@@ -269,11 +270,11 @@ func (s *Server) executeCommand(ctx context.Context, req CommandRequest) (any, e
 		if err != nil {
 			return nil, err
 		}
-		view, ok := s.agent.PendingShellApproval(approvalID)
+		view, ok := agent.PendingShellApproval(approvalID)
 		if !ok {
 			return nil, fmt.Errorf("shell approval %q not found", approvalID)
 		}
-		if err := s.agent.DenyShellCommand(ctx, approvalID); err != nil {
+		if err := agent.DenyShellCommand(ctx, approvalID); err != nil {
 			return nil, err
 		}
 		return s.sessionPayload(view.SessionID)
@@ -282,14 +283,62 @@ func (s *Server) executeCommand(ctx context.Context, req CommandRequest) (any, e
 		if err != nil {
 			return nil, err
 		}
-		view, ok := s.agent.CurrentShellCommand(commandID)
+		view, ok := agent.CurrentShellCommand(commandID)
 		if !ok {
 			return nil, fmt.Errorf("shell command %q not found", commandID)
 		}
-		if _, err := s.agent.KillShellCommand(ctx, commandID); err != nil {
+		if _, err := agent.KillShellCommand(ctx, commandID); err != nil {
 			return nil, err
 		}
 		return s.sessionPayload(view.SessionID)
+	case "settings.get":
+		settings, err := s.settingsSnapshot()
+		if err != nil {
+			return nil, err
+		}
+		return map[string]any{"settings": settings}, nil
+	case "settings.form.apply":
+		baseRevision, err := requiredString(req.Payload, "base_revision")
+		if err != nil {
+			return nil, err
+		}
+		values, ok := req.Payload["values"].(map[string]any)
+		if !ok {
+			return nil, fmt.Errorf("settings.form.apply requires values object")
+		}
+		settings, err := s.applyFormSettings(ctx, baseRevision, values)
+		if err != nil {
+			return nil, err
+		}
+		return map[string]any{"settings": settings}, nil
+	case "settings.raw.get":
+		path, err := requiredString(req.Payload, "path")
+		if err != nil {
+			return nil, err
+		}
+		file, err := s.settingsRawFile(path)
+		if err != nil {
+			return nil, err
+		}
+		return map[string]any{"file": file}, nil
+	case "settings.raw.apply":
+		path, err := requiredString(req.Payload, "path")
+		if err != nil {
+			return nil, err
+		}
+		baseRevision, err := requiredString(req.Payload, "base_revision")
+		if err != nil {
+			return nil, err
+		}
+		content, err := requiredString(req.Payload, "content")
+		if err != nil {
+			return nil, err
+		}
+		settings, err := s.applyRawSettings(ctx, path, baseRevision, content)
+		if err != nil {
+			return nil, err
+		}
+		return map[string]any{"settings": settings}, nil
 	default:
 		return nil, fmt.Errorf("unsupported daemon command %q", req.Command)
 	}

@@ -24,6 +24,7 @@ import (
 var embeddedAssets embed.FS
 
 type Server struct {
+	agentMu        sync.RWMutex
 	agent          *runtime.Agent
 	httpServer     *http.Server
 	listenAddr     string
@@ -38,6 +39,7 @@ type BootstrapPayload struct {
 	ListenAddr  string                   `json:"listen_addr"`
 	Transport   ClientTransportSnapshot  `json:"transport"`
 	Assets      WebAssetsSnapshot        `json:"assets"`
+	Settings    SettingsSnapshot         `json:"settings"`
 	Sessions    []runtimeSessionSnapshot `json:"sessions"`
 	GeneratedAt time.Time                `json:"generated_at"`
 }
@@ -71,6 +73,9 @@ func New(agent *runtime.Agent) (*Server, error) {
 	}
 	if strings.TrimSpace(operatorSurface.ClientTransport.ID) == "" {
 		return nil, fmt.Errorf("daemon mode requires client transport policy")
+	}
+	if strings.TrimSpace(operatorSurface.Settings.ID) == "" {
+		return nil, fmt.Errorf("daemon mode requires settings policy")
 	}
 	if strings.TrimSpace(operatorSurface.WebAssets.ID) == "" {
 		return nil, fmt.Errorf("daemon mode requires web assets policy")
@@ -145,7 +150,7 @@ func (s *Server) Handler() http.Handler {
 
 func (s *Server) routes() http.Handler {
 	mux := http.NewServeMux()
-	operatorSurface := s.agent.Contracts.OperatorSurface
+	operatorSurface := s.currentAgent().Contracts.OperatorSurface
 	transport := operatorSurface.ClientTransport.Params
 
 	mux.HandleFunc("/healthz", s.handleHealthz)
@@ -164,30 +169,32 @@ func (s *Server) routes() http.Handler {
 }
 
 func (s *Server) handleHealthz(w http.ResponseWriter, _ *http.Request) {
+	agent := s.currentAgent()
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]any{
 		"ok":           true,
-		"agent_id":     s.agent.Config.ID,
-		"generated_at": s.agent.Now().UTC(),
+		"agent_id":     agent.Config.ID,
+		"generated_at": agent.Now().UTC(),
 	})
 }
 
 func (s *Server) handleBootstrap(w http.ResponseWriter, _ *http.Request) {
+	agent := s.currentAgent()
 	w.Header().Set("Content-Type", "application/json")
 	payload := BootstrapPayload{
-		AgentID:    s.agent.Config.ID,
-		ConfigPath: s.agent.ConfigPath,
+		AgentID:    agent.Config.ID,
+		ConfigPath: agent.ConfigPath,
 		ListenAddr: s.listenAddr,
 		Transport: ClientTransportSnapshot{
-			EndpointPath:  s.agent.Contracts.OperatorSurface.ClientTransport.Params.EndpointPath,
-			WebsocketPath: s.agent.Contracts.OperatorSurface.ClientTransport.Params.WebSocketPath,
+			EndpointPath:  agent.Contracts.OperatorSurface.ClientTransport.Params.EndpointPath,
+			WebsocketPath: agent.Contracts.OperatorSurface.ClientTransport.Params.WebSocketPath,
 		},
 		Assets: WebAssetsSnapshot{
-			Mode: s.agent.Contracts.OperatorSurface.WebAssets.Params.Mode,
+			Mode: agent.Contracts.OperatorSurface.WebAssets.Params.Mode,
 		},
-		GeneratedAt: s.agent.Now().UTC(),
+		GeneratedAt: agent.Now().UTC(),
 	}
-	for _, session := range s.agent.ListSessions() {
+	for _, session := range agent.ListSessions() {
 		payload.Sessions = append(payload.Sessions, runtimeSessionSnapshot{
 			SessionID:    session.SessionID,
 			CreatedAt:    session.CreatedAt,
@@ -195,14 +202,21 @@ func (s *Server) handleBootstrap(w http.ResponseWriter, _ *http.Request) {
 			MessageCount: session.MessageCount,
 		})
 	}
+	settings, err := s.settingsSnapshot()
+	if err != nil {
+		http.Error(w, fmt.Sprintf("build settings snapshot: %v", err), http.StatusInternalServerError)
+		return
+	}
+	payload.Settings = settings
 	_ = json.NewEncoder(w).Encode(payload)
 }
 
 func (s *Server) handleClientConfig(w http.ResponseWriter, _ *http.Request) {
+	agent := s.currentAgent()
 	w.Header().Set("Content-Type", "application/javascript")
 	payload := map[string]any{
-		"endpointPath":  s.agent.Contracts.OperatorSurface.ClientTransport.Params.EndpointPath,
-		"websocketPath": s.agent.Contracts.OperatorSurface.ClientTransport.Params.WebSocketPath,
+		"endpointPath":  agent.Contracts.OperatorSurface.ClientTransport.Params.EndpointPath,
+		"websocketPath": agent.Contracts.OperatorSurface.ClientTransport.Params.WebSocketPath,
 	}
 	body, err := json.Marshal(payload)
 	if err != nil {
@@ -223,8 +237,9 @@ func (s *Server) websocketHandler() http.Handler {
 			ctx, cancel := context.WithCancel(r.Context())
 			defer cancel()
 
-			subID, ch := s.agent.UIBus.Subscribe(128)
-			defer s.agent.UIBus.Unsubscribe(subID)
+			agent := s.currentAgent()
+			subID, ch := agent.UIBus.Subscribe(128)
+			defer agent.UIBus.Unsubscribe(subID)
 			daemonSubID, daemonCh := s.daemonBus.Subscribe(128)
 			defer s.daemonBus.Unsubscribe(daemonSubID)
 
@@ -243,7 +258,7 @@ func (s *Server) websocketHandler() http.Handler {
 			}()
 
 			send := func(envelope WebsocketEnvelope) {
-				envelope.GeneratedAt = s.agent.Now().UTC()
+				envelope.GeneratedAt = s.currentAgent().Now().UTC()
 				select {
 				case <-ctx.Done():
 				case outbound <- envelope:
@@ -307,7 +322,7 @@ func (s *Server) websocketHandler() http.Handler {
 }
 
 func (s *Server) validateWebsocketOrigin(r *http.Request) error {
-	allowed := s.agent.Contracts.OperatorSurface.DaemonServer.Params.AllowedOrigins
+	allowed := s.currentAgent().Contracts.OperatorSurface.DaemonServer.Params.AllowedOrigins
 	if len(allowed) == 0 {
 		return nil
 	}
@@ -327,7 +342,7 @@ func (s *Server) validateWebsocketOrigin(r *http.Request) error {
 }
 
 func (s *Server) assetsHandler() (http.Handler, error) {
-	assets := s.agent.Contracts.OperatorSurface.WebAssets.Params
+	assets := s.currentAgent().Contracts.OperatorSurface.WebAssets.Params
 	switch assets.Mode {
 	case "embedded_assets":
 		subFS, err := fs.Sub(embeddedAssets, "assets")
@@ -357,15 +372,16 @@ func (s *Server) assetsHandler() (http.Handler, error) {
 }
 
 func (s *Server) providerLabel() string {
-	if s == nil || s.agent == nil {
+	agent := s.currentAgent()
+	if s == nil || agent == nil {
 		return "provider"
 	}
-	baseURL := s.agent.Contracts.ProviderRequest.Transport.Endpoint.Params.BaseURL
+	baseURL := agent.Contracts.ProviderRequest.Transport.Endpoint.Params.BaseURL
 	if parsed, err := url.Parse(baseURL); err == nil && parsed.Host != "" {
 		return parsed.Host
 	}
-	if s.agent.Contracts.ProviderRequest.Transport.ID != "" {
-		return s.agent.Contracts.ProviderRequest.Transport.ID
+	if agent.Contracts.ProviderRequest.Transport.ID != "" {
+		return agent.Contracts.ProviderRequest.Transport.ID
 	}
 	return "provider"
 }
@@ -374,6 +390,18 @@ func (s *Server) publishDaemon(envelope WebsocketEnvelope) {
 	if s == nil || s.daemonBus == nil {
 		return
 	}
-	envelope.GeneratedAt = s.agent.Now().UTC()
+	envelope.GeneratedAt = s.currentAgent().Now().UTC()
 	s.daemonBus.Publish(envelope)
+}
+
+func (s *Server) currentAgent() *runtime.Agent {
+	s.agentMu.RLock()
+	defer s.agentMu.RUnlock()
+	return s.agent
+}
+
+func (s *Server) swapAgent(agent *runtime.Agent) {
+	s.agentMu.Lock()
+	defer s.agentMu.Unlock()
+	s.agent = agent
 }

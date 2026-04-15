@@ -177,6 +177,7 @@ type OperatorSurfaceContract struct {
 	DaemonServer    DaemonServerPolicy
 	WebAssets       WebAssetsPolicy
 	ClientTransport ClientTransportPolicy
+	Settings        SettingsSurfacePolicy
 }
 
 type ChatContract struct {
@@ -454,6 +455,13 @@ type ClientTransportPolicy struct {
 	Params   ClientTransportParams
 }
 
+type SettingsSurfacePolicy struct {
+	ID       string
+	Enabled  bool
+	Strategy string
+	Params   SettingsSurfaceParams
+}
+
 type SystemPromptParams struct {
 	Path                   string `yaml:"path"`
 	Role                   string `yaml:"role"`
@@ -619,6 +627,21 @@ type WebAssetsParams struct {
 type ClientTransportParams struct {
 	EndpointPath  string `yaml:"endpoint_path"`
 	WebSocketPath string `yaml:"websocket_path"`
+}
+
+type SettingsSurfaceParams struct {
+	RequireIdleForApply bool                `yaml:"require_idle_for_apply"`
+	FormFields          []SettingsFormField `yaml:"form_fields"`
+	RawFileGlobs        []string            `yaml:"raw_file_globs"`
+}
+
+type SettingsFormField struct {
+	Key      string   `yaml:"key"`
+	Label    string   `yaml:"label"`
+	Type     string   `yaml:"type"`
+	FilePath string   `yaml:"file_path"`
+	YAMLPath []string `yaml:"yaml_path"`
+	Enum     []string `yaml:"enum"`
 }
 
 type PromptAssetParams struct {

@@ -49,6 +49,7 @@ const (
 	FamilyDaemonServer          Family = "daemon_server"
 	FamilyWebAssets             Family = "web_assets"
 	FamilyClientTransport       Family = "client_transport"
+	FamilySettingsSurface       Family = "settings_surface"
 )
 
 type Type struct {
@@ -395,6 +396,13 @@ func NewBuiltInRegistry() *Registry {
 		Family: FamilyClientTransport,
 		Strategy: setOf(
 			"websocket_http",
+		),
+	})
+	registry.Register(Type{
+		Kind:   "SettingsSurfacePolicyConfig",
+		Family: FamilySettingsSurface,
+		Strategy: setOf(
+			"revisioned_yaml_files",
 		),
 	})
 	return registry

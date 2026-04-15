@@ -110,6 +110,7 @@ type operatorSurfaceContractBody struct {
 	DaemonServerPolicyPath    string `yaml:"daemon_server_policy_path"`
 	WebAssetsPolicyPath       string `yaml:"web_assets_policy_path"`
 	ClientTransportPolicyPath string `yaml:"client_transport_policy_path"`
+	SettingsPolicyPath        string `yaml:"settings_policy_path"`
 }
 
 type requestShapeContractBody struct {
@@ -801,7 +802,7 @@ func resolveOperatorSurfaceContract(out *contracts.ResolvedContracts, path strin
 	if err != nil {
 		return err
 	}
-	if contract.Spec.DaemonServerPolicyPath == "" || contract.Spec.WebAssetsPolicyPath == "" || contract.Spec.ClientTransportPolicyPath == "" {
+	if contract.Spec.DaemonServerPolicyPath == "" || contract.Spec.WebAssetsPolicyPath == "" || contract.Spec.ClientTransportPolicyPath == "" || contract.Spec.SettingsPolicyPath == "" {
 		return fmt.Errorf("operator-surface contract %q missing one or more policy paths", contract.ID)
 	}
 
@@ -814,6 +815,10 @@ func resolveOperatorSurfaceContract(out *contracts.ResolvedContracts, path strin
 		return err
 	}
 	clientPolicy, err := loadPolicy[contracts.ClientTransportParams](path, contract.Spec.ClientTransportPolicyPath, "ClientTransportPolicyConfig", "client-transport", policyRegistry)
+	if err != nil {
+		return err
+	}
+	settingsPolicy, err := loadPolicy[contracts.SettingsSurfaceParams](path, contract.Spec.SettingsPolicyPath, "SettingsSurfacePolicyConfig", "settings-surface", policyRegistry)
 	if err != nil {
 		return err
 	}
@@ -837,6 +842,12 @@ func resolveOperatorSurfaceContract(out *contracts.ResolvedContracts, path strin
 			Enabled:  clientPolicy.Spec.Enabled,
 			Strategy: clientPolicy.Spec.Strategy,
 			Params:   clientPolicy.Spec.Params,
+		},
+		Settings: contracts.SettingsSurfacePolicy{
+			ID:       settingsPolicy.ID,
+			Enabled:  settingsPolicy.Spec.Enabled,
+			Strategy: settingsPolicy.Spec.Strategy,
+			Params:   settingsPolicy.Spec.Params,
 		},
 	}
 	return nil

@@ -122,6 +122,7 @@ That contract resolves policy families such as:
 - `daemon_server`
 - `web_assets`
 - `client_transport`
+- `settings`
 
 ### Daemon Server Policy
 
@@ -158,6 +159,31 @@ Mode params:
   - serve compiled static assets from `embed.FS`
 - `dev_proxy`
   - proxy to a Vite dev server during development
+
+### Settings Policy
+
+The operator surface now also resolves a revisioned settings policy.
+
+Required params:
+
+- `require_idle_for_apply`
+- `form_fields`
+- `raw_file_globs`
+
+Form fields are schema-driven and define:
+
+- user-facing `key`
+- `type`
+- target `file_path`
+- target `yaml_path`
+- optional `enum`
+
+Rules:
+
+- settings writes are revision-aware
+- stale writes fail with a revision conflict
+- apply is fail-closed when idle is required and daemon runtime still has active work
+- disk writes roll back if agent rebuild fails
 
 ## CLI And Process Model
 
@@ -257,7 +283,7 @@ Command categories:
 - `/btw`
 - plan mutations
 - approve / deny / kill
-- settings save / apply
+- settings get / form.apply / raw.get / raw.apply
 - session selection / creation
 
 Event categories:

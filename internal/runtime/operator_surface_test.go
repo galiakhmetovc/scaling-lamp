@@ -24,7 +24,7 @@ func TestResolveContractsBuildsOperatorSurfaceContract(t *testing.T) {
 	if contracts.OperatorSurface.ID == "" {
 		t.Fatalf("operator surface contract is nil")
 	}
-	if contracts.OperatorSurface.DaemonServer.ID == "" || contracts.OperatorSurface.WebAssets.ID == "" || contracts.OperatorSurface.ClientTransport.ID == "" {
+	if contracts.OperatorSurface.DaemonServer.ID == "" || contracts.OperatorSurface.WebAssets.ID == "" || contracts.OperatorSurface.ClientTransport.ID == "" || contracts.OperatorSurface.Settings.ID == "" {
 		t.Fatalf("operator surface contract missing sub-policies: %+v", contracts.OperatorSurface)
 	}
 	if got := contracts.OperatorSurface.DaemonServer.Params.ListenHost; got != "0.0.0.0" {
@@ -35,5 +35,8 @@ func TestResolveContractsBuildsOperatorSurfaceContract(t *testing.T) {
 	}
 	if got := contracts.OperatorSurface.ClientTransport.Params.EndpointPath; got != "/api" {
 		t.Fatalf("endpoint path = %q, want /api", got)
+	}
+	if len(contracts.OperatorSurface.Settings.Params.FormFields) == 0 {
+		t.Fatalf("settings form fields missing: %+v", contracts.OperatorSurface.Settings)
 	}
 }

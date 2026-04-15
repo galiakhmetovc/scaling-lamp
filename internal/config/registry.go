@@ -339,6 +339,10 @@ func NewBuiltInModuleRegistry() *ModuleRegistry {
 		Kind:     "ClientTransportPolicyConfig",
 		Category: ModuleCategoryPolicy,
 	})
+	registry.Register(ModuleType{
+		Kind:     "SettingsSurfacePolicyConfig",
+		Category: ModuleCategoryPolicy,
+	})
 	return registry
 }
 

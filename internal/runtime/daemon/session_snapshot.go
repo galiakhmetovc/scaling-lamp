@@ -29,7 +29,8 @@ func (s *Server) buildSessionSnapshot(sessionID string) (SessionSnapshot, error)
 	if !ok {
 		return SessionSnapshot{}, fmt.Errorf("session %q not found", sessionID)
 	}
-	plan, _ := s.agent.CurrentPlanHead(sessionID)
+	agent := s.currentAgent()
+	plan, _ := agent.CurrentPlanHead(sessionID)
 	return SessionSnapshot{
 		SessionID:        entry.SessionID,
 		CreatedAt:        entry.CreatedAt,
@@ -37,17 +38,17 @@ func (s *Server) buildSessionSnapshot(sessionID string) (SessionSnapshot, error)
 		MessageCount:     entry.MessageCount,
 		MainRunActive:    s.mainRunActive(sessionID),
 		QueuedDrafts:     s.queuedDrafts(sessionID),
-		Transcript:       s.agent.CurrentTranscript(sessionID),
-		Timeline:         s.agent.CurrentChatTimeline(sessionID),
+		Transcript:       agent.CurrentTranscript(sessionID),
+		Timeline:         agent.CurrentChatTimeline(sessionID),
 		Plan:             plan,
-		PendingApprovals: s.agent.PendingShellApprovals(sessionID),
-		RunningCommands:  s.agent.CurrentRunningShellCommands(sessionID),
-		Delegates:        s.agent.CurrentDelegates(sessionID),
+		PendingApprovals: agent.PendingShellApprovals(sessionID),
+		RunningCommands:  agent.CurrentRunningShellCommands(sessionID),
+		Delegates:        agent.CurrentDelegates(sessionID),
 	}, nil
 }
 
 func (s *Server) lookupSessionSummary(sessionID string) (projections.SessionCatalogEntry, bool) {
-	for _, entry := range s.agent.ListSessions() {
+	for _, entry := range s.currentAgent().ListSessions() {
 		if entry.SessionID == sessionID {
 			return entry, true
 		}
