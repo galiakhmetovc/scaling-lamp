@@ -16,7 +16,7 @@ const bootstrap: BootstrapPayload = {
   generated_at: "2026-04-16T05:10:00Z",
   transport: { endpoint_path: "/api", websocket_path: "/ws" },
   assets: { mode: "embedded_assets" },
-  settings: { revision: "rev-1", form_fields: [], raw_files: [] },
+  settings: { revision: "rev-1", form_fields: [], quick_controls: [], raw_files: [] },
   sessions,
 };
 

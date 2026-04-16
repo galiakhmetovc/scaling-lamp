@@ -24,6 +24,7 @@ import type {
   BootstrapPayload,
   SessionSnapshot,
   SessionSummary,
+  SettingsFieldState,
   SettingsRawFileContent,
   SettingsSnapshot,
   UIEvent,
@@ -380,6 +381,27 @@ export function App() {
     }
   }
 
+  async function handleQuickControlChange(key: string, value: unknown) {
+    const client = clientRef.current;
+    if (!client || !settings) {
+      return;
+    }
+    const nextValues = { ...settingsDraft, [key]: value };
+    setSettingsDraft(nextValues);
+    try {
+      const result = await client.command("settings.form.apply", {
+        base_revision: settings.revision,
+        values: nextValues,
+      });
+      setSettings(result.settings);
+      setSettingsDraft(fieldDraftFromSnapshot(result.settings));
+      setSettingsError("");
+      setStatusMessage("settings applied");
+    } catch (error) {
+      setSettingsError(String(error));
+    }
+  }
+
   async function handleApplyRaw() {
     const client = clientRef.current;
     if (!client || !rawFile) {
@@ -389,7 +411,7 @@ export function App() {
       const result = await client.command("settings.raw.apply", {
         path: rawFile.path,
         base_revision: rawFile.revision,
-        content: rawFile.content,
+        content: rawDraft,
       });
       setSettings(result.settings);
       setSettingsDraft(fieldDraftFromSnapshot(result.settings));
@@ -454,6 +476,9 @@ export function App() {
               onQueue={() => void handleQueueDraft()}
               onRecallDraft={(id) => void handleRecallDraft(id)}
               onLoadOlder={() => void handleLoadOlderHistory()}
+              quickControls={buildQuickControls(settings, settingsDraft)}
+              settingsError={settingsError}
+              onQuickControlChange={(key, value) => void handleQuickControlChange(key, value)}
             />
           )}
           {activeTab === "plan" && (
@@ -497,7 +522,6 @@ export function App() {
               onSelectRaw={(path) => setSelectedRawPath(path)}
               onRawChange={(content) => {
                 setRawDraft(content);
-                setRawFile((current) => (current ? { ...current, content } : current));
               }}
               onApplyRaw={() => void handleApplyRaw()}
             />
@@ -525,4 +549,14 @@ function fieldDraftFromSnapshot(settings: SettingsSnapshot): Record<string, unkn
     next[field.key] = field.value;
   }
   return next;
+}
+
+function buildQuickControls(settings: SettingsSnapshot | null, draft: Record<string, unknown>): SettingsFieldState[] {
+  if (!settings) {
+    return [];
+  }
+  return settings.quick_controls.map((field) => ({
+    ...field,
+    value: Object.prototype.hasOwnProperty.call(draft, field.key) ? draft[field.key] : field.value,
+  }));
 }

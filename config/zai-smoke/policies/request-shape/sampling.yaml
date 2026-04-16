@@ -2,5 +2,7 @@ kind: SamplingPolicyConfig
 version: v1
 id: sampling-zai-smoke
 spec:
-  enabled: false
+  enabled: true
   strategy: static_sampling
+  params:
+    reasoning_effort: medium

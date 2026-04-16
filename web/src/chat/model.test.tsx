@@ -3,6 +3,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { ChatPane } from "./ChatPane";
 import { approximateContextTokens, applySessionUIEvent, buildChatStatus, buildBtwRuns, buildTimelineMarkdownBlock, syncMainRunFromUIEvent } from "./model";
 import type { ProviderResultPayload, SessionSnapshot } from "../lib/types";
+import type { SettingsFieldState } from "../lib/types";
 
 function makeSessionSnapshot(overrides: Partial<SessionSnapshot> = {}): SessionSnapshot {
   return {
@@ -51,6 +52,11 @@ function makeSessionSnapshot(overrides: Partial<SessionSnapshot> = {}): SessionS
     ...overrides,
   };
 }
+
+const quickControls: SettingsFieldState[] = [
+  { key: "model", label: "Model", type: "string", value: "glm-5-turbo", file_path: "policies/request-shape/model.yaml", revision: "rev-1", enum: ["glm-5-turbo", "glm-4.6"] },
+  { key: "allow_network", label: "Network", type: "bool", value: true, file_path: "policies/tool-execution/sandbox.yaml", revision: "rev-2" },
+];
 
 describe("chat model helpers", () => {
   it("counts base context tokens, input, and queued drafts for approximate context tokens", () => {
@@ -185,6 +191,9 @@ describe("ChatPane", () => {
         onQueue={() => {}}
         onRecallDraft={() => {}}
         onLoadOlder={() => {}}
+        quickControls={quickControls}
+        settingsError=""
+        onQuickControlChange={() => {}}
       />,
     );
 
@@ -202,6 +211,8 @@ describe("ChatPane", () => {
     expect(markup).toContain("surface-secondary");
     expect(markup).toContain("timeline-scroll");
     expect(markup).toContain("ops-scroll");
+    expect(markup).toContain("Run controls");
+    expect(markup).toContain("allow_network");
   });
 
   it("renders a load older affordance when more history is available", () => {
@@ -225,6 +236,9 @@ describe("ChatPane", () => {
         onQueue={() => {}}
         onRecallDraft={() => {}}
         onLoadOlder={() => {}}
+        quickControls={[]}
+        settingsError=""
+        onQuickControlChange={() => {}}
       />,
     );
 

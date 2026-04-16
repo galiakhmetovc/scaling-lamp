@@ -63,6 +63,9 @@ func (e *RequestShapeExecutor) Build(contract contracts.RequestShapeContract, in
 		if contract.Sampling.Params.MaxOutputTokens != nil {
 			payload["max_output_tokens"] = *contract.Sampling.Params.MaxOutputTokens
 		}
+		if contract.Sampling.Params.ReasoningEffort != "" {
+			payload["reasoning_effort"] = contract.Sampling.Params.ReasoningEffort
+		}
 	}
 
 	body, err := json.Marshal(payload)

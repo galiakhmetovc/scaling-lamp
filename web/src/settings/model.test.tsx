@@ -7,8 +7,12 @@ import type { SettingsRawFileContent, SettingsSnapshot } from "../lib/types";
 const settings: SettingsSnapshot = {
   revision: "rev-1",
   form_fields: [
-    { key: "markdown_style", label: "Markdown Style", type: "string", value: "dark", file_path: "policies/chat/output.yaml", revision: "rev-a" },
+    { key: "model", label: "Model", type: "string", value: "glm-5-turbo", file_path: "policies/request-shape/model.yaml", revision: "rev-model", enum: ["glm-5-turbo", "glm-4.6"] },
+    { key: "markdown_style", label: "Markdown Style", type: "string", value: "dark", file_path: "policies/chat/output.yaml", revision: "rev-a", enum: ["dark", "light"] },
     { key: "show_tool_calls", label: "Show Tool Calls", type: "bool", value: true, file_path: "policies/chat/status.yaml", revision: "rev-b" },
+  ],
+  quick_controls: [
+    { key: "model", label: "Model", type: "string", value: "glm-5-turbo", file_path: "policies/request-shape/model.yaml", revision: "rev-model", enum: ["glm-5-turbo", "glm-4.6"] },
   ],
   raw_files: [{ path: "policies/chat/output.yaml", revision: "raw-1", size: 12 }],
 };
@@ -57,5 +61,6 @@ describe("SettingsPane", () => {
     expect(markup).toContain("policies/chat/output.yaml");
     expect(markup).toContain("surface-primary");
     expect(markup).toContain("surface-secondary");
+    expect(markup).toContain("select");
   });
 });

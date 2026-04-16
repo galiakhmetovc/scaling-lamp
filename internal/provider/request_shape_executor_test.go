@@ -52,6 +52,7 @@ func TestRequestShapeExecutorBuildsProviderPayload(t *testing.T) {
 			Params: contracts.SamplingParams{
 				Temperature:     &temperature,
 				MaxOutputTokens: &maxOutputTokens,
+				ReasoningEffort: "medium",
 			},
 		},
 	}, provider.RequestShapeInput{
@@ -93,6 +94,9 @@ func TestRequestShapeExecutorBuildsProviderPayload(t *testing.T) {
 	}
 	if payload["max_output_tokens"] != float64(2048) {
 		t.Fatalf("max_output_tokens = %#v", payload["max_output_tokens"])
+	}
+	if payload["reasoning_effort"] != "medium" {
+		t.Fatalf("reasoning_effort = %#v", payload["reasoning_effort"])
 	}
 	messages, ok := payload["messages"].([]any)
 	if !ok || len(messages) != 3 {

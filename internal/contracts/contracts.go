@@ -631,9 +631,10 @@ type ClientTransportParams struct {
 }
 
 type SettingsSurfaceParams struct {
-	RequireIdleForApply bool                `yaml:"require_idle_for_apply"`
-	FormFields          []SettingsFormField `yaml:"form_fields"`
-	RawFileGlobs        []string            `yaml:"raw_file_globs"`
+	RequireIdleForApply bool                   `yaml:"require_idle_for_apply"`
+	FormFields          []SettingsFormField    `yaml:"form_fields"`
+	QuickControls       []SettingsQuickControl `yaml:"quick_controls"`
+	RawFileGlobs        []string               `yaml:"raw_file_globs"`
 }
 
 type SettingsFormField struct {
@@ -643,6 +644,12 @@ type SettingsFormField struct {
 	FilePath string   `yaml:"file_path"`
 	YAMLPath []string `yaml:"yaml_path"`
 	Enum     []string `yaml:"enum"`
+}
+
+type SettingsQuickControl struct {
+	Key     string `yaml:"key"`
+	Surface string `yaml:"surface"`
+	Order   int    `yaml:"order"`
 }
 
 type PromptAssetParams struct {
@@ -712,6 +719,7 @@ type SamplingParams struct {
 	Temperature     *float64 `yaml:"temperature"`
 	TopP            *float64 `yaml:"top_p"`
 	MaxOutputTokens *int     `yaml:"max_output_tokens"`
+	ReasoningEffort string   `yaml:"reasoning_effort"`
 }
 
 type Message struct {

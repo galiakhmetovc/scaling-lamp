@@ -139,6 +139,7 @@ export type SettingsFieldState = {
   value: unknown;
   file_path: string;
   revision: string;
+  enum?: string[];
 };
 
 export type SettingsRawFileState = {
@@ -150,6 +151,7 @@ export type SettingsRawFileState = {
 export type SettingsSnapshot = {
   revision: string;
   form_fields: SettingsFieldState[];
+  quick_controls: SettingsFieldState[];
   raw_files: SettingsRawFileState[];
 };
 

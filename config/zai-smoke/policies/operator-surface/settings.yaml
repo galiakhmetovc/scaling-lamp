@@ -7,6 +7,29 @@ spec:
   params:
     require_idle_for_apply: true
     form_fields:
+      - key: model
+        label: Model
+        type: string
+        file_path: policies/request-shape/model.yaml
+        yaml_path: [spec, params, model]
+        enum: [glm-5-turbo, glm-4.6]
+      - key: reasoning_effort
+        label: Thinking
+        type: string
+        file_path: policies/request-shape/sampling.yaml
+        yaml_path: [spec, params, reasoning_effort]
+        enum: [minimal, low, medium, high]
+      - key: approval_mode
+        label: Approval Mode
+        type: string
+        file_path: policies/tool-execution/approval.yaml
+        yaml_path: [spec, strategy]
+        enum: [always_allow, always_require, require_for_destructive]
+      - key: allow_network
+        label: Network
+        type: bool
+        file_path: policies/tool-execution/sandbox.yaml
+        yaml_path: [spec, params, allow_network]
       - key: max_tool_rounds
         label: Max Tool Rounds
         type: int
@@ -38,6 +61,19 @@ spec:
         type: bool
         file_path: policies/chat/status.yaml
         yaml_path: [spec, params, show_plan_after_plan_tools]
+    quick_controls:
+      - key: model
+        surface: chat
+        order: 1
+      - key: reasoning_effort
+        surface: chat
+        order: 2
+      - key: approval_mode
+        surface: chat
+        order: 3
+      - key: allow_network
+        surface: chat
+        order: 4
     raw_file_globs:
       - agent.yaml
       - contracts/*.yaml

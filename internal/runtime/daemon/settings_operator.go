@@ -19,18 +19,20 @@ import (
 )
 
 type SettingsSnapshot struct {
-	Revision   string                 `json:"revision"`
-	FormFields []SettingsFieldState   `json:"form_fields"`
-	RawFiles   []SettingsRawFileState `json:"raw_files"`
+	Revision      string                 `json:"revision"`
+	FormFields    []SettingsFieldState   `json:"form_fields"`
+	QuickControls []SettingsFieldState   `json:"quick_controls"`
+	RawFiles      []SettingsRawFileState `json:"raw_files"`
 }
 
 type SettingsFieldState struct {
-	Key      string `json:"key"`
-	Label    string `json:"label"`
-	Type     string `json:"type"`
-	Value    any    `json:"value"`
-	FilePath string `json:"file_path"`
-	Revision string `json:"revision"`
+	Key      string   `json:"key"`
+	Label    string   `json:"label"`
+	Type     string   `json:"type"`
+	Value    any      `json:"value"`
+	FilePath string   `json:"file_path"`
+	Revision string   `json:"revision"`
+	Enum     []string `json:"enum,omitempty"`
 }
 
 type SettingsRawFileState struct {
@@ -55,19 +57,38 @@ func (s *Server) settingsSnapshot() (SettingsSnapshot, error) {
 		return SettingsSnapshot{}, err
 	}
 	fields := make([]SettingsFieldState, 0, len(params.FormFields))
+	fieldsByKey := make(map[string]SettingsFieldState, len(params.FormFields))
 	for _, field := range params.FormFields {
 		value, err := readYAMLScalar(filepath.Join(root, field.FilePath), field.YAMLPath)
 		if err != nil {
 			return SettingsSnapshot{}, fmt.Errorf("read settings field %q: %w", field.Key, err)
 		}
-		fields = append(fields, SettingsFieldState{
+		state := SettingsFieldState{
 			Key:      field.Key,
 			Label:    field.Label,
 			Type:     field.Type,
 			Value:    value,
 			FilePath: field.FilePath,
 			Revision: fileRevisions[field.FilePath],
-		})
+			Enum:     append([]string{}, field.Enum...),
+		}
+		fields = append(fields, state)
+		fieldsByKey[field.Key] = state
+	}
+	quickControls := make([]SettingsFieldState, 0, len(params.QuickControls))
+	sortedQuickControls := append([]contracts.SettingsQuickControl{}, params.QuickControls...)
+	slices.SortFunc(sortedQuickControls, func(a, b contracts.SettingsQuickControl) int {
+		return a.Order - b.Order
+	})
+	for _, quick := range sortedQuickControls {
+		if quick.Surface != "" && quick.Surface != "chat" {
+			continue
+		}
+		field, ok := fieldsByKey[quick.Key]
+		if !ok {
+			return SettingsSnapshot{}, fmt.Errorf("quick control %q is not present in form_fields", quick.Key)
+		}
+		quickControls = append(quickControls, field)
 	}
 	rawFiles, err := s.discoverRawFiles(root, params.RawFileGlobs)
 	if err != nil {
@@ -86,9 +107,10 @@ func (s *Server) settingsSnapshot() (SettingsSnapshot, error) {
 		})
 	}
 	return SettingsSnapshot{
-		Revision:   hashSettingsSnapshot(fields, raw),
-		FormFields: fields,
-		RawFiles:   raw,
+		Revision:      hashSettingsSnapshot(fields, raw),
+		FormFields:    fields,
+		QuickControls: quickControls,
+		RawFiles:      raw,
 	}, nil
 }
 

@@ -1,4 +1,4 @@
-import type { SettingsRawFileContent, SettingsSnapshot } from "../lib/types";
+import type { SettingsFieldState, SettingsRawFileContent, SettingsSnapshot } from "../lib/types";
 
 export function detectSettingsDirty(
   settings: SettingsSnapshot | null,
@@ -13,4 +13,19 @@ export function detectSettingsDirty(
 
 export function isRevisionConflict(error: string): boolean {
   return error.toLowerCase().includes("revision conflict");
+}
+
+export function partitionSettingsFields(settings: SettingsSnapshot | null): {
+  quickControls: SettingsFieldState[];
+  advancedFields: SettingsFieldState[];
+} {
+  if (!settings) {
+    return { quickControls: [], advancedFields: [] };
+  }
+
+  const quickControlKeys = new Set(settings.quick_controls.map((field) => field.key));
+  return {
+    quickControls: settings.quick_controls,
+    advancedFields: settings.form_fields.filter((field) => !quickControlKeys.has(field.key)),
+  };
 }

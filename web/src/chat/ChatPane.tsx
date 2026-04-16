@@ -1,6 +1,6 @@
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import type { SessionSnapshot } from "../lib/types";
+import type { SessionSnapshot, SettingsFieldState } from "../lib/types";
 import { buildBtwRuns, buildChatStatus, buildTimelineMarkdownBlock, type BtwRun } from "./model";
 
 type ChatPaneProps = {
@@ -15,10 +15,13 @@ type ChatPaneProps = {
   onQueue: () => void;
   onRecallDraft: (draftID: string) => void;
   onLoadOlder: () => void;
+  quickControls: SettingsFieldState[];
+  settingsError: string;
+  onQuickControlChange: (key: string, value: unknown) => void;
 };
 
 export function ChatPane(props: ChatPaneProps) {
-  const { session, streaming, status, input, now, btwRuns, onInput, onSend, onQueue, onRecallDraft, onLoadOlder } = props;
+  const { session, streaming, status, input, now, btwRuns, onInput, onSend, onQueue, onRecallDraft, onLoadOlder, quickControls, settingsError, onQuickControlChange } = props;
   const activeBtwCount = btwRuns.filter((run) => run.active).length;
   const statusView = buildChatStatus({ session, input, now, activeBtwCount, uiStatus: status });
   const btwViews = buildBtwRuns(btwRuns);
@@ -60,6 +63,50 @@ export function ChatPane(props: ChatPaneProps) {
 
       <div className="chat-ops-column surface surface-secondary">
         <div className="ops-scroll">
+          <section className="quick-controls-panel">
+            <div className="section-title">
+              <span>Run controls</span>
+              <span className="muted">{quickControls.length}</span>
+            </div>
+            {settingsError ? <div className="error-banner">{settingsError}</div> : null}
+            <div className="quick-controls-grid">
+              {quickControls.map((field) => (
+                <label key={field.key}>
+                  <span>{field.label}</span>
+                  {field.type === "bool" ? (
+                    <input
+                      aria-label={field.key}
+                      type="checkbox"
+                      checked={Boolean(field.value)}
+                      onChange={(event) => onQuickControlChange(field.key, event.target.checked)}
+                    />
+                  ) : field.type === "int" ? (
+                    <input
+                      aria-label={field.key}
+                      type="number"
+                      value={String(field.value ?? "")}
+                      onChange={(event) => onQuickControlChange(field.key, event.target.value)}
+                    />
+                  ) : field.enum && field.enum.length > 0 ? (
+                    <select aria-label={field.key} value={String(field.value ?? "")} onChange={(event) => onQuickControlChange(field.key, event.target.value)}>
+                      {field.enum.map((option) => (
+                        <option key={option} value={option}>
+                          {option}
+                        </option>
+                      ))}
+                    </select>
+                  ) : (
+                    <input
+                      aria-label={field.key}
+                      value={String(field.value ?? "")}
+                      onChange={(event) => onQuickControlChange(field.key, event.target.value)}
+                    />
+                  )}
+                </label>
+              ))}
+            </div>
+          </section>
+
           <section className="composer-panel">
             <textarea value={input} onChange={(event) => onInput(event.target.value)} placeholder="Send a message or /btw question" />
             <div className="composer-actions">
