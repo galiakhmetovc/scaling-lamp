@@ -1,5 +1,7 @@
 # Filesystem and Shell Tools Design
 
+Historical note: this spec captures the original first-slice filesystem tool design. The current shipped default path has since moved to bounded line-based primitives such as `fs_read_lines`, `fs_search_text`, `fs_find_in_files`, `fs_replace_in_line`, `fs_replace_lines`, and `fs_insert_text`. Whole-file tools mentioned below remain compatibility-only.
+
 This document defines the next clean-room tool domains after internal planning tools.
 
 It adds project-local filesystem tools and restricted shell tools to the existing tool pipeline.

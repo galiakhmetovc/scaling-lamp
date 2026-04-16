@@ -826,8 +826,12 @@ This is what the shipped `config/zai-smoke` configuration currently selects.
 
 ### 9.3 Memory
 
-- `OffloadPolicy.old_only`
+- `OffloadPolicy.artifact_store`
   - `max_chars = 1200`
+  - `preview_chars = 400`
+  - `storage_path = ../../var/zai-smoke/artifacts`
+  - `expose_retrieval_tools = true`
+  - `search_limit = 8`
 
 ### 9.4 PromptAssets
 
@@ -837,7 +841,7 @@ This is what the shipped `config/zai-smoke` configuration currently selects.
 ### 9.5 Filesystem
 
 - `FilesystemCatalogPolicy.static_allowlist`
-  - `tool_ids = [fs_list, fs_read_text, fs_write_text, fs_patch_text, fs_mkdir, fs_move]`
+  - `tool_ids = [fs_list, fs_read_lines, fs_search_text, fs_find_in_files, fs_replace_in_line, fs_replace_lines, fs_insert_text, fs_replace_in_files, fs_mkdir, fs_move, fs_trash]`
 - `FilesystemDescriptionPolicy.static_builtin_descriptions`
   - `include_examples = false`
   - `include_scope_hint = true`
@@ -850,6 +854,10 @@ This is what the shipped `config/zai-smoke` configuration currently selects.
 - `FilesystemIOPolicy.bounded_text_io`
   - `max_read_bytes = 131072`
   - `max_write_bytes = 131072`
+  - `max_search_files = 64`
+  - `max_search_hits = 200`
+  - `max_replace_files = 32`
+  - `max_replace_hits = 200`
   - `encoding = utf-8`
 
 ### 9.6 Shell

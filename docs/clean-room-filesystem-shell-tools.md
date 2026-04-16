@@ -8,12 +8,24 @@ It is an implementation snapshot of what exists today in code and in shipped `za
 
 Current built-in filesystem tools:
 
-- `fs_list`
-- `fs_read_text`
-- `fs_write_text`
-- `fs_patch_text`
-- `fs_mkdir`
-- `fs_move`
+- bounded navigation and reads:
+  - `fs_list`
+  - `fs_read_lines`
+  - `fs_search_text`
+  - `fs_find_in_files`
+- bounded edits:
+  - `fs_replace_in_line`
+  - `fs_replace_lines`
+  - `fs_insert_text`
+  - `fs_replace_in_files`
+- structural tools:
+  - `fs_mkdir`
+  - `fs_move`
+  - `fs_trash`
+- legacy compatibility tools:
+  - `fs_read_text`
+  - `fs_write_text`
+  - `fs_patch_text`
 
 Current built-in shell tools:
 
@@ -43,11 +55,16 @@ Current tool exposure allowlist includes:
 - plan tools
 - shipped filesystem tools:
   - `fs_list`
-  - `fs_read_text`
-  - `fs_write_text`
-  - `fs_patch_text`
+  - `fs_read_lines`
+  - `fs_search_text`
+  - `fs_find_in_files`
+  - `fs_replace_in_line`
+  - `fs_replace_lines`
+  - `fs_insert_text`
+  - `fs_replace_in_files`
   - `fs_mkdir`
   - `fs_move`
+  - `fs_trash`
 - `shell_exec`
 - `shell_start`
 - `shell_poll`
@@ -74,10 +91,10 @@ Current shipped filesystem IO policy:
 - `max_write_bytes: 131072`
 - `encoding: utf-8`
 
-Important limit:
+Important note:
 
-- `fs_trash` exists in the backend but is not currently shipped in `zai-smoke`
-- current shipped mutation policy is `allow_writes`, so shipped visible tools are limited to the operations that are actually allowed by that policy
+- `fs_trash` is now part of the shipped default path
+- with current `allow_writes` + `allow_move`, trash works as a move into `.trash/`, not a permanent delete
 
 ## Current Shell Execution Safety
 
@@ -188,7 +205,8 @@ Current persisted shell projection:
 
 What is implemented now:
 
-- all first-slice filesystem backends
+- bounded line-based filesystem reads, search, and edit primitives
+- legacy whole-file filesystem compatibility tools
 - one bounded `shell_exec` backend
 - async shell lifecycle via `shell_start` / `shell_poll` / `shell_kill`
 - persisted shell lifecycle events and `shell_command` projection

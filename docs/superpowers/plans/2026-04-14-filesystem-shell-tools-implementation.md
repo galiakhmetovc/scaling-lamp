@@ -1,5 +1,7 @@
 # Filesystem and Shell Tools Implementation Plan
 
+Historical note: this plan records the original first-slice implementation. The current shipped default path now prefers bounded line-based filesystem primitives; references below to whole-file reads and rewrites are historical, not current operator guidance.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Add clean-room filesystem and shell tool domains with policy-driven exposure and execution safety on top of the existing tool pipeline.

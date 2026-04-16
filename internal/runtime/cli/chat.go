@@ -280,8 +280,10 @@ func summarizeToolResult(activity runtime.ToolActivity) string {
 		return fmt.Sprintf("status: ok | plan_id: %v", payload["plan_id"])
 	case "add_task":
 		return fmt.Sprintf("status: ok | task_id: %v", payload["task_id"])
-	case "set_task_status", "add_task_note", "edit_task", "fs_write_text", "fs_patch_text", "fs_replace_lines", "fs_replace_in_line", "fs_insert_text", "fs_replace_in_files", "fs_mkdir", "fs_move", "fs_trash":
+	case "set_task_status", "add_task_note", "edit_task", "fs_write_text", "fs_patch_text", "fs_replace_lines", "fs_replace_in_line", "fs_insert_text", "fs_mkdir", "fs_move", "fs_trash":
 		return "status: ok"
+	case "fs_replace_in_files":
+		return fmt.Sprintf("status: ok | files: %v | hits: %v", payload["changed_files"], payload["replace_hits"])
 	case "fs_list":
 		if entries, ok := payload["entries"].([]any); ok {
 			return fmt.Sprintf("status: ok | entries: %d", len(entries))
