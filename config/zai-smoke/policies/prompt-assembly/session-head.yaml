@@ -10,4 +10,7 @@ spec:
     include_session_id: true
     include_last_user_message: true
     include_last_assistant_message: true
+    max_user_chars: 200
+    max_assistant_chars: 300
+    compact_plan: true
     max_items: 8

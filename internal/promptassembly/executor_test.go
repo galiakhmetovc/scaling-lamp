@@ -170,6 +170,95 @@ func TestExecutorBuildIncludesCompactPlanSummaryInSessionHead(t *testing.T) {
 	}
 }
 
+func TestExecutorBuildTrimsLastUserAndAssistantMessagesPerPolicy(t *testing.T) {
+	t.Parallel()
+
+	executor := promptassembly.NewExecutor()
+	got, err := executor.Build(contracts.PromptAssemblyContract{
+		SessionHead: contracts.SessionHeadPolicy{
+			Enabled:  true,
+			Strategy: "projection_summary",
+			Params: contracts.SessionHeadParams{
+				Placement:                   "message0",
+				Title:                       "Session head",
+				IncludeLastUserMessage:      true,
+				IncludeLastAssistantMessage: true,
+				MaxUserChars:                8,
+				MaxAssistantChars:           10,
+			},
+		},
+	}, promptassembly.Input{
+		SessionID: "session-123",
+		Transcript: projections.TranscriptSnapshot{
+			Sessions: map[string][]contracts.Message{
+				"session-123": {
+					{Role: "user", Content: "1234567890"},
+					{Role: "assistant", Content: "abcdefghijklm"},
+				},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("Build returned error: %v", err)
+	}
+	if got[0].Content != "Session head\nlast_user: 12345678…\nlast_assistant: abcdefghij…" {
+		t.Fatalf("trimmed session head = %q", got[0].Content)
+	}
+}
+
+func TestExecutorBuildUsesCompactPlanSummaryWhenEnabled(t *testing.T) {
+	t.Parallel()
+
+	executor := promptassembly.NewExecutor()
+	got, err := executor.Build(contracts.PromptAssemblyContract{
+		SessionHead: contracts.SessionHeadPolicy{
+			Enabled:  true,
+			Strategy: "projection_summary",
+			Params: contracts.SessionHeadParams{
+				Placement:                   "message0",
+				Title:                       "Session head",
+				IncludeSessionID:            true,
+				IncludeLastUserMessage:      true,
+				IncludeLastAssistantMessage: true,
+				CompactPlan:                 true,
+			},
+		},
+	}, promptassembly.Input{
+		SessionID: "session-123",
+		Transcript: projections.TranscriptSnapshot{
+			Sessions: map[string][]contracts.Message{
+				"session-123": {
+					{Role: "user", Content: "older"},
+					{Role: "assistant", Content: "done"},
+				},
+			},
+		},
+		PlanHead: projections.PlanHeadSnapshot{
+			Plan: projections.PlanView{
+				ID:     "plan-1",
+				Goal:   "Refactor auth",
+				Status: "active",
+			},
+			Tasks: map[string]projections.PlanTaskView{
+				"t1": {ID: "t1", Description: "Design schema", Status: "done", Order: 1},
+				"t2": {ID: "t2", Description: "Write middleware", Status: "todo", Order: 2},
+				"t3": {ID: "t3", Description: "Write tests", Status: "blocked", Order: 3, BlockedReason: "waiting for Vasya"},
+				"t4": {ID: "t4", Description: "Review rollout", Status: "in_progress", Order: 4},
+			},
+			Ready:                 map[string]bool{"t2": true},
+			WaitingOnDependencies: map[string]bool{},
+			Blocked:               map[string]string{"t3": "waiting for Vasya"},
+			Notes:                 map[string][]string{"t2": {"Roles are still cached."}},
+		},
+	})
+	if err != nil {
+		t.Fatalf("Build returned error: %v", err)
+	}
+	if got[0].Content != "Session head\nsession_id: session-123\nlast_user: older\nlast_assistant: done\n🎯 Цель: Refactor auth\n📊 Прогресс: 1 todo | 1 in_progress | 1 done | 1 blocked\n🏃 Текущая: [t4] Review rollout\n⚠️ Blocked: [t3] waiting for Vasya" {
+		t.Fatalf("compact session head = %q", got[0].Content)
+	}
+}
+
 func TestExecutorBuildFailsWhenRequiredSystemPromptFileIsMissing(t *testing.T) {
 	t.Parallel()
 

@@ -111,15 +111,15 @@ func (e *Executor) buildSessionHead(policy contracts.SessionHeadPolicy, sessionI
 	}
 	if policy.Params.IncludeLastUserMessage {
 		if msg, ok := lastMessageByRole(transcript, "user"); ok {
-			lines = append(lines, "last_user: "+msg.Content)
+			lines = append(lines, "last_user: "+trimForSessionHead(msg.Content, policy.Params.MaxUserChars))
 		}
 	}
 	if policy.Params.IncludeLastAssistantMessage {
 		if msg, ok := lastMessageByRole(transcript, "assistant"); ok {
-			lines = append(lines, "last_assistant: "+msg.Content)
+			lines = append(lines, "last_assistant: "+trimForSessionHead(msg.Content, policy.Params.MaxAssistantChars))
 		}
 	}
-	lines = append(lines, buildPlanHeadLines(planHead)...)
+	lines = append(lines, buildPlanHeadLines(planHead, policy.Params.CompactPlan)...)
 	if policy.Params.MaxItems > 0 && len(lines) > policy.Params.MaxItems {
 		lines = lines[:policy.Params.MaxItems]
 	}
@@ -132,9 +132,12 @@ func (e *Executor) buildSessionHead(policy contracts.SessionHeadPolicy, sessionI
 	}, nil
 }
 
-func buildPlanHeadLines(snapshot projections.PlanHeadSnapshot) []string {
+func buildPlanHeadLines(snapshot projections.PlanHeadSnapshot, compact bool) []string {
 	if snapshot.Plan.ID == "" || snapshot.Plan.Goal == "" {
 		return nil
+	}
+	if compact {
+		return buildCompactPlanHeadLines(snapshot)
 	}
 	lines := []string{"🎯 Цель: " + snapshot.Plan.Goal}
 	ordered := make([]projections.PlanTaskView, 0, len(snapshot.Tasks))
@@ -169,6 +172,55 @@ func buildPlanHeadLines(snapshot projections.PlanHeadSnapshot) []string {
 		}
 	}
 	return lines
+}
+
+func buildCompactPlanHeadLines(snapshot projections.PlanHeadSnapshot) []string {
+	lines := []string{"🎯 Цель: " + snapshot.Plan.Goal}
+	var todo, inProgress, done, blocked int
+	var current *projections.PlanTaskView
+	blockedItems := make([]projections.PlanTaskView, 0)
+
+	for _, task := range snapshot.Tasks {
+		switch {
+		case snapshot.Blocked[task.ID] != "":
+			blocked++
+			blockedItems = append(blockedItems, task)
+		case task.Status == "done":
+			done++
+		case task.Status == "in_progress":
+			inProgress++
+			candidate := task
+			if current == nil || candidate.Order < current.Order {
+				current = &candidate
+			}
+		default:
+			todo++
+		}
+	}
+
+	lines = append(lines, fmt.Sprintf("📊 Прогресс: %d todo | %d in_progress | %d done | %d blocked", todo, inProgress, done, blocked))
+	if current != nil {
+		lines = append(lines, fmt.Sprintf("🏃 Текущая: [%s] %s", current.ID, current.Description))
+	}
+	if len(blockedItems) > 0 {
+		slices.SortFunc(blockedItems, func(a, b projections.PlanTaskView) int {
+			if a.Order != b.Order {
+				return a.Order - b.Order
+			}
+			return strings.Compare(a.ID, b.ID)
+		})
+		blockedTask := blockedItems[0]
+		lines = append(lines, fmt.Sprintf("⚠️ Blocked: [%s] %s", blockedTask.ID, snapshot.Blocked[blockedTask.ID]))
+	}
+	return lines
+}
+
+func trimForSessionHead(content string, limit int) string {
+	content = strings.TrimSpace(content)
+	if limit <= 0 || len(content) <= limit {
+		return content
+	}
+	return strings.TrimSpace(content[:limit]) + "…"
 }
 
 func lastMessageByRole(messages []contracts.Message, role string) (contracts.Message, bool) {

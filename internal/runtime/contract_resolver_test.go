@@ -278,7 +278,10 @@ func TestResolveContractsBuildsTransportAndMemoryContracts(t *testing.T) {
 		"  params:\n"+
 		"    placement: message0\n"+
 		"    title: Session head\n"+
-		"    max_items: 5\n")
+		"    max_items: 5\n"+
+		"    max_user_chars: 160\n"+
+		"    max_assistant_chars: 240\n"+
+		"    compact_plan: true\n")
 
 	mustWriteFile(t, filepath.Join(dir, "policies", "tools", "catalog.yaml"), ""+
 		"kind: ToolCatalogPolicyConfig\n"+
@@ -496,6 +499,15 @@ func TestResolveContractsBuildsTransportAndMemoryContracts(t *testing.T) {
 	}
 	if contracts.PromptAssembly.SessionHead.Params.Placement != "message0" {
 		t.Fatalf("session head placement = %q, want %q", contracts.PromptAssembly.SessionHead.Params.Placement, "message0")
+	}
+	if contracts.PromptAssembly.SessionHead.Params.MaxUserChars != 160 {
+		t.Fatalf("session head max_user_chars = %d, want 160", contracts.PromptAssembly.SessionHead.Params.MaxUserChars)
+	}
+	if contracts.PromptAssembly.SessionHead.Params.MaxAssistantChars != 240 {
+		t.Fatalf("session head max_assistant_chars = %d, want 240", contracts.PromptAssembly.SessionHead.Params.MaxAssistantChars)
+	}
+	if !contracts.PromptAssembly.SessionHead.Params.CompactPlan {
+		t.Fatal("expected compact_plan to be true")
 	}
 	if contracts.Tools.ID != "tools-main" {
 		t.Fatalf("tools ID = %q, want %q", contracts.Tools.ID, "tools-main")

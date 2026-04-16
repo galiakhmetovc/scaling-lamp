@@ -473,6 +473,9 @@ type SessionHeadParams struct {
 	Placement                   string `yaml:"placement"`
 	Title                       string `yaml:"title"`
 	MaxItems                    int    `yaml:"max_items"`
+	MaxUserChars                int    `yaml:"max_user_chars"`
+	MaxAssistantChars           int    `yaml:"max_assistant_chars"`
+	CompactPlan                 bool   `yaml:"compact_plan"`
 	IncludeSessionID            bool   `yaml:"include_session_id"`
 	IncludeOpenLoops            bool   `yaml:"include_open_loops"`
 	IncludeLastUserMessage      bool   `yaml:"include_last_user_message"`
