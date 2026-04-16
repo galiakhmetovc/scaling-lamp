@@ -1,7 +1,7 @@
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import type { SessionSnapshot } from "../lib/types";
-import { buildBtwRuns, buildChatStatus, type BtwRun } from "./model";
+import { buildBtwRuns, buildChatStatus, buildTimelineMarkdownBlock, type BtwRun } from "./model";
 
 type ChatPaneProps = {
   session: SessionSnapshot | null;
@@ -38,12 +38,9 @@ export function ChatPane(props: ChatPaneProps) {
               </button>
             </div>
           )}
-        <div className="timeline">
+          <div className="timeline">
           {(session?.timeline ?? []).map((item, index) => (
-            <article key={`${item.kind}-${index}`} className={`timeline-item ${item.kind}`}>
-              {item.role && <div className="item-role">{item.role}</div>}
-              <ReactMarkdown remarkPlugins={[remarkGfm]}>{item.content}</ReactMarkdown>
-            </article>
+            <TimelineItem key={`${item.kind}-${index}`} kind={item.kind} role={item.role} content={item.content} />
           ))}
           {streaming && (
             <article className="timeline-item streaming">
@@ -100,5 +97,30 @@ export function ChatPane(props: ChatPaneProps) {
         </div>
       </div>
     </div>
+  );
+}
+
+function TimelineItem(props: { kind: "message" | "tool" | "plan"; role?: string; content: string }) {
+  const { kind, role, content } = props;
+  const block = buildTimelineMarkdownBlock(kind, content);
+  if (kind === "tool" && block.collapsible) {
+    return (
+      <article className={`timeline-item ${kind}`}>
+        <details className="tool-result-toggle">
+          <summary>
+            <ReactMarkdown remarkPlugins={[remarkGfm]}>{block.summary}</ReactMarkdown>
+          </summary>
+          <div className="tool-result-body">
+            <ReactMarkdown remarkPlugins={[remarkGfm]}>{block.body}</ReactMarkdown>
+          </div>
+        </details>
+      </article>
+    );
+  }
+  return (
+    <article className={`timeline-item ${kind}`}>
+      {role && <div className="item-role">{role}</div>}
+      <ReactMarkdown remarkPlugins={[remarkGfm]}>{content}</ReactMarkdown>
+    </article>
   );
 }

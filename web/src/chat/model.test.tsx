@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
 import { ChatPane } from "./ChatPane";
-import { approximateContextTokens, applySessionUIEvent, buildChatStatus, buildBtwRuns, syncMainRunFromUIEvent } from "./model";
+import { approximateContextTokens, applySessionUIEvent, buildChatStatus, buildBtwRuns, buildTimelineMarkdownBlock, syncMainRunFromUIEvent } from "./model";
 import type { ProviderResultPayload, SessionSnapshot } from "../lib/types";
 
 function makeSessionSnapshot(overrides: Partial<SessionSnapshot> = {}): SessionSnapshot {
@@ -34,7 +34,7 @@ function makeSessionSnapshot(overrides: Partial<SessionSnapshot> = {}): SessionS
     ],
     timeline: [
       { kind: "message", role: "user", content: "hello" },
-      { kind: "tool", content: "**Tool** `shell_exec`" },
+      { kind: "tool", content: "**Tool result** `shell_exec`\n\n`stdout line`" },
       { kind: "plan", content: "**Task added**\n\n`Ship daemon UI`" },
     ],
     plan: {
@@ -112,6 +112,13 @@ describe("chat model helpers", () => {
     expect(runs[1].statusText).toBe("running");
   });
 
+  it("splits tool timeline content into collapsible summary and body", () => {
+    const block = buildTimelineMarkdownBlock("tool", "**Tool result** `shell_exec`\n\n`line one\\nline two`");
+    expect(block.collapsible).toBe(true);
+    expect(block.summary).toContain("Tool result");
+    expect(block.body).toContain("line one");
+  });
+
   it("marks the main run active when a running status event arrives", () => {
     const snapshot = makeSessionSnapshot();
     const next = syncMainRunFromUIEvent(
@@ -187,6 +194,8 @@ describe("ChatPane", () => {
     expect(markup).toContain("/btw");
     expect(markup).toContain("branch answer");
     expect(markup).toContain("shell_exec");
+    expect(markup).toContain("tool-result-toggle");
+    expect(markup).toContain("<summary>");
     expect(markup).not.toContain("time ");
     expect(markup).toContain("chat-workspace");
     expect(markup).toContain("surface-primary");

@@ -35,6 +35,12 @@ export type BtwRunView = {
   providerMeta?: string;
 };
 
+export type TimelineMarkdownBlock = {
+  summary: string;
+  body: string;
+  collapsible: boolean;
+};
+
 export function emptySessionUIState(): SessionUIState {
   return { streaming: "", status: "idle", toolLog: [], btwRuns: [] };
 }
@@ -99,6 +105,21 @@ export function buildBtwRuns(runs: BtwRun[]): BtwRunView[] {
       providerMeta,
     };
   });
+}
+
+export function buildTimelineMarkdownBlock(kind: "message" | "tool" | "plan", content: string): TimelineMarkdownBlock {
+  const trimmed = content.trim();
+  if (kind !== "tool") {
+    return { summary: trimmed, body: "", collapsible: false };
+  }
+  const parts = trimmed.split(/\n\s*\n/, 2);
+  const summary = parts[0]?.trim() ?? trimmed;
+  const body = parts[1]?.trim() ?? "";
+  return {
+    summary,
+    body,
+    collapsible: body.length > 0,
+  };
 }
 
 export function applySessionUIEvent(current: SessionUIState | undefined, event: UIEvent): SessionUIState {

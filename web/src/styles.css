@@ -310,6 +310,29 @@ pre {
   padding: 0.95rem 1rem;
 }
 
+.tool-result-toggle {
+  display: grid;
+  gap: 0.8rem;
+}
+
+.tool-result-toggle summary {
+  cursor: pointer;
+  list-style: none;
+}
+
+.tool-result-toggle summary::-webkit-details-marker {
+  display: none;
+}
+
+.tool-result-toggle summary > * {
+  margin: 0;
+}
+
+.tool-result-body {
+  border-top: 1px solid rgba(88, 117, 143, 0.22);
+  padding-top: 0.8rem;
+}
+
 .item-role {
   color: var(--accent);
   text-transform: uppercase;
