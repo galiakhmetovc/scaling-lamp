@@ -134,7 +134,7 @@ func (m *model) renderToolDetails(state *sessionState) string {
 		lines = append(lines, "Error: "+entry.Activity.ErrorText)
 	}
 	if entry.Activity.ResultText != "" {
-		lines = append(lines, "Result: "+summarizeToolText(entry.Activity.ResultText))
+		lines = append(lines, "Result:", entry.Activity.ResultText)
 	}
 	lines = append(lines, "", "PgUp/PgDn scroll list, Up/Down select")
 	return strings.Join(lines, "\n")

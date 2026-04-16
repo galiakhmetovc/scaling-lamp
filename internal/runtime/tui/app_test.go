@@ -583,11 +583,49 @@ func TestChatViewShowsLiveToolActivity(t *testing.T) {
 
 	mm.renderChatViewport(state)
 	got := state.ChatView.View()
-	if !strings.Contains(got, "Tool started") {
+	if !strings.Contains(got, "tool started: shell_start") {
 		t.Fatalf("chat view missing live tool start: %q", got)
 	}
-	if !strings.Contains(got, "Approval required") {
+	if !strings.Contains(got, "approval required: shell_start") {
 		t.Fatalf("chat view missing live tool approval state: %q", got)
+	}
+}
+
+func TestToolDetailsShowFullResultText(t *testing.T) {
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "agent.yaml")
+	if err := os.WriteFile(configPath, []byte("kind: AgentConfig\nversion: v1\nid: tui-test\nspec:\n  runtime:\n    max_tool_rounds: 7\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile config: %v", err)
+	}
+
+	agent := &runtime.Agent{
+		ConfigPath: configPath,
+		Config:     config.AgentConfig{ID: "tui-test", Spec: config.AgentConfigSpec{Runtime: config.AgentRuntimeConfig{MaxToolRounds: 7}}},
+		Contracts: contracts.ResolvedContracts{
+			Chat: contracts.ChatContract{
+				Output: contracts.ChatOutputPolicy{Params: contracts.ChatOutputParams{RenderMarkdown: true, MarkdownStyle: "dark"}},
+				Status: contracts.ChatStatusPolicy{Params: contracts.ChatStatusParams{ShowToolCalls: true, ShowToolResults: true, ShowPlanAfterPlanTools: true}},
+			},
+		},
+		EventLog:    runtime.NewInMemoryEventLog(),
+		Projections: []projections.Projection{projections.NewSessionCatalogProjection(), projections.NewTranscriptProjection(), projections.NewChatTimelineProjection(), projections.NewPlanHeadProjection(), projections.NewActivePlanProjection()},
+		UIBus:       runtime.NewUIEventBus(),
+		Now:         func() time.Time { return time.Date(2026, 4, 16, 8, 0, 0, 0, time.UTC) },
+		NewID:       func(prefix string) string { return prefix + "-1" },
+	}
+
+	m, err := newModel(context.Background(), agent, "")
+	if err != nil {
+		t.Fatalf("newModel returned error: %v", err)
+	}
+	state := m.sessions[m.activeSessionID]
+	longResult := strings.Repeat("line with payload\n", 20)
+	state.ToolLog = []toolLogEntry{
+		{Activity: runtime.ToolActivity{Phase: runtime.ToolActivityPhaseCompleted, Name: "shell_exec", ResultText: longResult}},
+	}
+	details := m.renderToolDetails(state)
+	if !strings.Contains(details, longResult) {
+		t.Fatalf("tool details truncated result: %q", details)
 	}
 }
 

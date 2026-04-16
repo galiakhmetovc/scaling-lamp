@@ -307,25 +307,30 @@ func (m *model) renderLiveToolLog(state *sessionState, width int) []string {
 	lines := []string{}
 	for _, entry := range state.ToolLog[start:] {
 		activity := entry.Activity
-		title := fmt.Sprintf("**Tool started** `%s`", activity.Name)
-		body := ""
+		summary := fmt.Sprintf("tool started: %s", activity.Name)
 		if activity.Phase == "completed" {
-			if strings.Contains(activity.ErrorText, "requires approval") {
-				title = fmt.Sprintf("**Approval required** `%s`", activity.Name)
-				body = activity.ErrorText
-			} else if activity.ErrorText != "" {
-				title = fmt.Sprintf("**Tool failed** `%s`", activity.Name)
-				body = activity.ErrorText
-			} else {
-				title = fmt.Sprintf("**Tool done** `%s`", activity.Name)
-				body = activity.ResultText
+			switch {
+			case strings.Contains(activity.ErrorText, "requires approval"):
+				summary = fmt.Sprintf("approval required: %s", activity.Name)
+			case activity.ErrorText != "":
+				summary = fmt.Sprintf("tool failed: %s", activity.Name)
+			default:
+				summary = fmt.Sprintf("tool done: %s", activity.Name)
 			}
 		}
-		block := title
-		if strings.TrimSpace(body) != "" {
-			block += "\n\n" + strings.TrimSpace(body)
+		lines = append(lines, wrapText(summary, width))
+		detail := ""
+		switch {
+		case activity.ErrorText != "":
+			detail = summarizeToolText(activity.ErrorText)
+		case activity.ResultText != "":
+			detail = summarizeToolText(activity.ResultText)
+		case len(activity.Arguments) > 0:
+			detail = summarizeToolArguments(activity.Arguments)
 		}
-		lines = append(lines, m.renderMarkdownBlock(block, state.Overrides.MarkdownStyle, width))
+		if strings.TrimSpace(detail) != "" {
+			lines = append(lines, wrapText("  "+detail, width))
+		}
 	}
 	return lines
 }
