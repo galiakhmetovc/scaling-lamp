@@ -9,4 +9,7 @@ spec:
       - fs_read_text
       - fs_write_text
       - fs_patch_text
+      - fs_replace_in_files
+      - fs_move
+      - fs_trash
     approval_message_template: ""

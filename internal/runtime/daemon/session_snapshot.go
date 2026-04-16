@@ -15,6 +15,7 @@ type SessionSnapshot struct {
 	CreatedAt         time.Time                      `json:"created_at"`
 	LastActivity      time.Time                      `json:"last_activity"`
 	MessageCount      int                            `json:"message_count"`
+	ArtifactStorePath string                         `json:"artifact_store_path"`
 	MainRunActive     bool                           `json:"main_run_active"`
 	MainRun           MainRunSnapshot                `json:"main_run"`
 	QueuedDrafts      []QueuedDraft                  `json:"queued_drafts"`
@@ -74,14 +75,15 @@ func (s *Server) buildSessionSnapshot(sessionID string) (SessionSnapshot, error)
 	transcriptWindow := tailMessages(transcript, windowLimit)
 	timelineWindow := tailTimeline(timeline, windowLimit)
 	return SessionSnapshot{
-		SessionID:     entry.SessionID,
-		Title:         entry.Title,
-		CreatedAt:     entry.CreatedAt,
-		LastActivity:  entry.LastActivity,
-		MessageCount:  entry.MessageCount,
-		MainRunActive: s.mainRunActive(sessionID),
-		MainRun:       s.mainRunSnapshot(sessionID),
-		QueuedDrafts:  s.queuedDrafts(sessionID),
+		SessionID:         entry.SessionID,
+		Title:             entry.Title,
+		CreatedAt:         entry.CreatedAt,
+		LastActivity:      entry.LastActivity,
+		MessageCount:      entry.MessageCount,
+		ArtifactStorePath: s.artifactStorePath(),
+		MainRunActive:     s.mainRunActive(sessionID),
+		MainRun:           s.mainRunSnapshot(sessionID),
+		QueuedDrafts:      s.queuedDrafts(sessionID),
 		History: ChatHistorySnapshot{
 			LoadedCount: len(timelineWindow),
 			TotalCount:  len(timeline),
@@ -97,6 +99,14 @@ func (s *Server) buildSessionSnapshot(sessionID string) (SessionSnapshot, error)
 		RunningCommands:   agent.CurrentRunningShellCommands(sessionID),
 		Delegates:         agent.CurrentDelegates(sessionID),
 	}, nil
+}
+
+func (s *Server) artifactStorePath() string {
+	path, err := s.currentAgent().ArtifactStorePath()
+	if err != nil {
+		return ""
+	}
+	return path
 }
 
 func (s *Server) contextBudgetSnapshot(sessionID string, transcript []contracts.Message) ContextBudgetSnapshot {

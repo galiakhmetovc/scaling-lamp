@@ -75,6 +75,10 @@ export function SessionsPane(props: SessionsPaneProps) {
             <dt>WebSocket</dt>
             <dd>{bootstrap?.transport.websocket_path ?? "-"}</dd>
           </div>
+          <div>
+            <dt>Artifacts</dt>
+            <dd>{bootstrap?.artifact_store_path ?? "-"}</dd>
+          </div>
         </dl>
       </section>
     </div>

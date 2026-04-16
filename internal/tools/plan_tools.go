@@ -43,7 +43,7 @@ func defaultPlanToolDefinitions() []Definition {
 		{
 			ID:          "init_plan",
 			Name:        "init_plan",
-			Description: "Create a new active internal plan and archive the previous one if it exists.",
+			Description: "Create a new active internal plan only when no active plan exists yet. Do not use this to replace or archive an existing plan.",
 			Parameters: map[string]any{
 				"type": "object",
 				"properties": map[string]any{

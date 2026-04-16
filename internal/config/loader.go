@@ -19,7 +19,10 @@ func LoadRoot(path string) (AgentConfig, error) {
 		return AgentConfig{}, fmt.Errorf("decode root config: %w", err)
 	}
 
-	baseDir := filepath.Dir(path)
+	baseDir, err := filepath.Abs(filepath.Dir(path))
+	if err != nil {
+		return AgentConfig{}, fmt.Errorf("resolve root config dir: %w", err)
+	}
 	for contractName, contractPath := range cfg.Spec.Contracts {
 		cfg.Spec.Contracts[contractName] = resolveModulePath(baseDir, contractPath)
 	}

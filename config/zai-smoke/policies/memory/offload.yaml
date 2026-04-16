@@ -7,6 +7,6 @@ spec:
   params:
     max_chars: 1200
     preview_chars: 400
-    storage_path: ../../var/zai-smoke/artifacts
+    storage_path: ../../../../var/zai-smoke/artifacts
     expose_retrieval_tools: true
     search_limit: 8

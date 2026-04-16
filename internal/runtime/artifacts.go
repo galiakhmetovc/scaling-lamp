@@ -15,6 +15,27 @@ func (a *Agent) artifactToolDefinitions(contractSet contracts.ResolvedContracts)
 	return artifacts.NewDefinitionExecutor().Build(contractSet.Memory)
 }
 
+func (a *Agent) artifactStorePath(contractSet contracts.ResolvedContracts) (string, error) {
+	if a == nil {
+		return "", fmt.Errorf("agent is nil")
+	}
+	if !contractSet.Memory.Offload.Enabled || contractSet.Memory.Offload.Strategy != "artifact_store" {
+		return "", nil
+	}
+	root := contractSet.Memory.Offload.Params.StoragePath
+	if root != "" {
+		return root, nil
+	}
+	if a.ConfigPath == "" {
+		return "", fmt.Errorf("artifact storage path is not configured")
+	}
+	return filepath.Join(filepath.Dir(a.ConfigPath), "var", "artifacts"), nil
+}
+
+func (a *Agent) ArtifactStorePath() (string, error) {
+	return a.artifactStorePath(a.Contracts)
+}
+
 func (a *Agent) ensureArtifactStore(contractSet contracts.ResolvedContracts) (*artifacts.Store, error) {
 	if a == nil {
 		return nil, fmt.Errorf("agent is nil")
@@ -25,12 +46,9 @@ func (a *Agent) ensureArtifactStore(contractSet contracts.ResolvedContracts) (*a
 	if !contractSet.Memory.Offload.Enabled || contractSet.Memory.Offload.Strategy != "artifact_store" {
 		return nil, nil
 	}
-	root := contractSet.Memory.Offload.Params.StoragePath
-	if root == "" {
-		if a.ConfigPath == "" {
-			return nil, fmt.Errorf("artifact storage path is not configured")
-		}
-		root = filepath.Join(filepath.Dir(a.ConfigPath), "var", "artifacts")
+	root, err := a.artifactStorePath(contractSet)
+	if err != nil {
+		return nil, err
 	}
 	store, err := artifacts.NewStore(root)
 	if err != nil {
@@ -71,8 +89,8 @@ func (a *Agent) maybeOffloadToolResult(ctx context.Context, contractSet contract
 		"size_chars":     record.SizeChars,
 		"size_bytes":     record.SizeBytes,
 		"preview":        record.Preview,
-			"retrieval_hint": fmt.Sprintf("Use artifact_read with artifact_ref %q to inspect the full content.", record.Ref),
-		}), []string{record.Ref}, nil
+		"retrieval_hint": fmt.Sprintf("Use artifact_read with artifact_ref %q to inspect the full content.", record.Ref),
+	}), []string{record.Ref}, nil
 }
 
 func (a *Agent) executeArtifactCommand(ctx context.Context, contractSet contracts.ResolvedContracts, callName string, args map[string]any) (string, error) {

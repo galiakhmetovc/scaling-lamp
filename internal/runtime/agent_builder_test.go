@@ -546,7 +546,7 @@ func TestBuildAgentLoadsShippedFilesystemCompatibilityApprovalGuard(t *testing.T
 	if got.Strategy != "require_for_destructive" {
 		t.Fatalf("approval strategy = %q, want require_for_destructive", got.Strategy)
 	}
-	for _, toolID := range []string{"fs_read_text", "fs_write_text", "fs_patch_text"} {
+	for _, toolID := range []string{"fs_read_text", "fs_write_text", "fs_patch_text", "fs_replace_in_files", "fs_move", "fs_trash"} {
 		found := false
 		for _, candidate := range got.Params.DestructiveToolIDs {
 			if candidate == toolID {
@@ -604,6 +604,26 @@ func TestBuildAgentLoadsShippedContextBudgetProjections(t *testing.T) {
 	}
 	if !sawSummary {
 		t.Fatal("context_summary projection is missing from shipped BuildAgent")
+	}
+}
+
+func TestResolveContractsLoadsShippedArtifactStorePathAtRepoVar(t *testing.T) {
+	t.Parallel()
+
+	cfg, err := config.LoadRoot(filepath.Join("..", "..", "config", "zai-smoke", "agent.yaml"))
+	if err != nil {
+		t.Fatalf("LoadRoot returned error: %v", err)
+	}
+	contracts, err := runtime.ResolveContracts(cfg)
+	if err != nil {
+		t.Fatalf("ResolveContracts returned error: %v", err)
+	}
+	want, err := filepath.Abs(filepath.Join("..", "..", "var", "zai-smoke", "artifacts"))
+	if err != nil {
+		t.Fatalf("Abs returned error: %v", err)
+	}
+	if contracts.Memory.Offload.Params.StoragePath != want {
+		t.Fatalf("storage path = %q, want %q", contracts.Memory.Offload.Params.StoragePath, want)
 	}
 }
 

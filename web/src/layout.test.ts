@@ -7,6 +7,7 @@ function makeBootstrap(): BootstrapPayload {
     agent_id: "zai-smoke",
     config_path: "./config/zai-smoke/agent.yaml",
     listen_addr: "0.0.0.0:18080",
+    artifact_store_path: "/tmp/artifacts",
     generated_at: "2026-04-16T05:10:00Z",
     transport: { endpoint_path: "/api", websocket_path: "/ws" },
     assets: { mode: "embedded_assets" },

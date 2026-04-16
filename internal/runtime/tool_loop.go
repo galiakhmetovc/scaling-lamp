@@ -489,6 +489,9 @@ func (a *Agent) executeDelegationCommand(ctx context.Context, contractSet contra
 func (a *Agent) executePlanCommand(sessionID string, active projections.ActivePlanSnapshot, service *plans.Service, source string, call provider.ToolCall) ([]eventing.Event, string, error) {
 	switch call.Name {
 	case "init_plan":
+		if active.Plan.ID != "" {
+			return nil, "", fmt.Errorf("tool call %q: active plan already exists; continue the active plan instead of reinitializing it", call.Name)
+		}
 		goal, err := stringArg(call.Arguments, "goal")
 		if err != nil {
 			return nil, "", fmt.Errorf("tool call %q: %w", call.Name, err)

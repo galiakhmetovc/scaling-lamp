@@ -43,6 +43,9 @@ func TestBootstrapEndpointReturnsConfigDrivenSnapshot(t *testing.T) {
 	t.Parallel()
 
 	agent := buildAgentWithOperatorSurface(t)
+	agent.Contracts.Memory.Offload.Enabled = true
+	agent.Contracts.Memory.Offload.Strategy = "artifact_store"
+	agent.Contracts.Memory.Offload.Params.StoragePath = filepath.Join(t.TempDir(), "artifacts")
 	if err := agent.RecordEvent(context.Background(), eventing.Event{
 		ID:               "evt-session-created",
 		Kind:             eventing.EventSessionCreated,
@@ -74,6 +77,9 @@ func TestBootstrapEndpointReturnsConfigDrivenSnapshot(t *testing.T) {
 	if payload.ListenAddr != "0.0.0.0:8080" {
 		t.Fatalf("listen addr = %q, want 0.0.0.0:8080", payload.ListenAddr)
 	}
+	if payload.ArtifactStorePath == "" {
+		t.Fatalf("artifact store path = %q, want populated path", payload.ArtifactStorePath)
+	}
 	if payload.Transport.EndpointPath != "/api" || payload.Transport.WebsocketPath != "/ws" {
 		t.Fatalf("transport snapshot = %+v", payload.Transport)
 	}
@@ -88,6 +94,39 @@ func TestBootstrapEndpointReturnsConfigDrivenSnapshot(t *testing.T) {
 	}
 	if len(payload.Sessions) != 1 || payload.Sessions[0].SessionID != "session-1" {
 		t.Fatalf("sessions = %+v", payload.Sessions)
+	}
+}
+
+func TestSessionSnapshotIncludesArtifactStorePath(t *testing.T) {
+	t.Parallel()
+
+	agent := buildAgentWithOperatorSurface(t)
+	agent.Contracts.Memory.Offload.Enabled = true
+	agent.Contracts.Memory.Offload.Strategy = "artifact_store"
+	agent.Contracts.Memory.Offload.Params.StoragePath = filepath.Join(t.TempDir(), "artifacts")
+	server, err := daemon.New(agent)
+	if err != nil {
+		t.Fatalf("new daemon server: %v", err)
+	}
+	httpServer := httptest.NewServer(server.Handler())
+	defer httpServer.Close()
+
+	conn := dialWebsocket(t, httpServer.URL, "/ws")
+	defer conn.Close()
+	_ = readEnvelopeJSON(t, conn)
+
+	writeCommandEnvelope(t, conn, map[string]any{
+		"type":    "command",
+		"id":      "cmd-artifact-path",
+		"command": "session.create",
+	})
+
+	_ = waitForEnvelopeType(t, conn, "command_accepted")
+	completed := waitForCommandCompleted(t, conn, "cmd-artifact-path")
+	payload := mapPayload(t, completed["payload"])
+	session := mapPayload(t, payload["session"])
+	if session["artifact_store_path"] == "" {
+		t.Fatalf("artifact_store_path = %#v, want populated path", session["artifact_store_path"])
 	}
 }
 

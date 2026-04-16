@@ -6,11 +6,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"io/fs"
+	"log/slog"
 	"net"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
-	"log/slog"
 	"path"
 	"slices"
 	"strings"
@@ -36,14 +36,15 @@ type Server struct {
 }
 
 type BootstrapPayload struct {
-	AgentID     string                   `json:"agent_id"`
-	ConfigPath  string                   `json:"config_path"`
-	ListenAddr  string                   `json:"listen_addr"`
-	Transport   ClientTransportSnapshot  `json:"transport"`
-	Assets      WebAssetsSnapshot        `json:"assets"`
-	Settings    SettingsSnapshot         `json:"settings"`
-	Sessions    []runtimeSessionSnapshot `json:"sessions"`
-	GeneratedAt time.Time                `json:"generated_at"`
+	AgentID           string                   `json:"agent_id"`
+	ConfigPath        string                   `json:"config_path"`
+	ListenAddr        string                   `json:"listen_addr"`
+	ArtifactStorePath string                   `json:"artifact_store_path"`
+	Transport         ClientTransportSnapshot  `json:"transport"`
+	Assets            WebAssetsSnapshot        `json:"assets"`
+	Settings          SettingsSnapshot         `json:"settings"`
+	Sessions          []runtimeSessionSnapshot `json:"sessions"`
+	GeneratedAt       time.Time                `json:"generated_at"`
 }
 
 type ClientTransportSnapshot struct {
@@ -222,6 +223,9 @@ func (s *Server) handleBootstrap(w http.ResponseWriter, _ *http.Request) {
 		},
 		Sessions:    []runtimeSessionSnapshot{},
 		GeneratedAt: agent.Now().UTC(),
+	}
+	if artifactStorePath, err := agent.ArtifactStorePath(); err == nil {
+		payload.ArtifactStorePath = artifactStorePath
 	}
 	for _, session := range agent.ListSessions() {
 		payload.Sessions = append(payload.Sessions, runtimeSessionSnapshot{

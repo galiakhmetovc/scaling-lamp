@@ -2,6 +2,7 @@ export type BootstrapPayload = {
   agent_id: string;
   config_path: string;
   listen_addr: string;
+  artifact_store_path: string;
   generated_at: string;
   transport: {
     endpoint_path: string;
@@ -108,6 +109,7 @@ export type SessionSnapshot = {
   created_at: string;
   last_activity: string;
   message_count: number;
+  artifact_store_path: string;
   main_run_active: boolean;
   main_run: {
     active: boolean;
