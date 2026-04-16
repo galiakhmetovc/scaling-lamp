@@ -21,6 +21,13 @@ function makeSessionSnapshot(overrides: Partial<SessionSnapshot> = {}): SessionS
       total_tokens: 12,
     },
     queued_drafts: [],
+    history: {
+      loaded_count: 3,
+      total_count: 3,
+      has_more: false,
+      window_limit: 40,
+    },
+    base_context_tokens: 7,
     transcript: [
       { role: "user", content: "hello" },
       { role: "assistant", content: "world" },
@@ -46,16 +53,13 @@ function makeSessionSnapshot(overrides: Partial<SessionSnapshot> = {}): SessionS
 }
 
 describe("chat model helpers", () => {
-  it("counts transcript, input, and queued drafts for approximate context tokens", () => {
+  it("counts base context tokens, input, and queued drafts for approximate context tokens", () => {
     const snapshot = makeSessionSnapshot({
-      transcript: [
-        { role: "user", content: "abcd" },
-        { role: "assistant", content: "abcdefgh" },
-      ],
+      base_context_tokens: 12,
       queued_drafts: [{ id: "draft-1", text: "queued text", queued_at: "2026-04-15T21:01:30Z" }],
     });
 
-    expect(approximateContextTokens(snapshot, "typing now")).toBeGreaterThanOrEqual(7);
+    expect(approximateContextTokens(snapshot, "typing now")).toBeGreaterThanOrEqual(17);
   });
 
   it("builds a status bar model from main run metadata and btw runs", () => {
@@ -173,6 +177,7 @@ describe("ChatPane", () => {
         onSend={() => {}}
         onQueue={() => {}}
         onRecallDraft={() => {}}
+        onLoadOlder={() => {}}
       />,
     );
 
@@ -186,5 +191,35 @@ describe("ChatPane", () => {
     expect(markup).toContain("chat-workspace");
     expect(markup).toContain("surface-primary");
     expect(markup).toContain("surface-secondary");
+    expect(markup).toContain("timeline-scroll");
+    expect(markup).toContain("ops-scroll");
+  });
+
+  it("renders a load older affordance when more history is available", () => {
+    const markup = renderToStaticMarkup(
+      <ChatPane
+        session={makeSessionSnapshot({
+          history: {
+            loaded_count: 40,
+            total_count: 52,
+            has_more: true,
+            window_limit: 40,
+          },
+        })}
+        streaming=""
+        status="ready"
+        input=""
+        now={new Date("2026-04-15T21:01:20Z")}
+        btwRuns={[]}
+        onInput={() => {}}
+        onSend={() => {}}
+        onQueue={() => {}}
+        onRecallDraft={() => {}}
+        onLoadOlder={() => {}}
+      />,
+    );
+
+    expect(markup).toContain("Load older");
+    expect(markup).toContain("12 older");
   });
 });

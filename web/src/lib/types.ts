@@ -117,6 +117,13 @@ export type SessionSnapshot = {
     total_tokens: number;
   };
   queued_drafts: QueuedDraft[];
+  history: {
+    loaded_count: number;
+    total_count: number;
+    has_more: boolean;
+    window_limit: number;
+  };
+  base_context_tokens: number;
   transcript: ChatMessage[];
   timeline: ChatTimelineItem[];
   plan: PlanHeadSnapshot;
@@ -189,6 +196,14 @@ export type ProviderResultPayload = {
 export type CommandPayloadMap = {
   "session.create": { session: SessionSnapshot };
   "session.get": { session: SessionSnapshot };
+  "session.history": {
+    session_id: string;
+    timeline: ChatTimelineItem[];
+    loaded_count: number;
+    total_count: number;
+    has_more: boolean;
+    window_limit: number;
+  };
   "chat.send": { session: SessionSnapshot; queued: boolean; draft?: QueuedDraft; result?: ProviderResultPayload };
   "chat.btw": { session_id: string; prompt: string; result: ProviderResultPayload };
   "draft.enqueue": { session: SessionSnapshot; draft: QueuedDraft };

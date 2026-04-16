@@ -612,11 +612,12 @@ type ProviderTraceParams struct {
 }
 
 type DaemonServerParams struct {
-	ListenHost      string   `yaml:"listen_host"`
-	ListenPort      int      `yaml:"listen_port"`
-	EnableWebSocket bool     `yaml:"enable_websocket"`
-	PublicBaseURL   string   `yaml:"public_base_url"`
-	AllowedOrigins  []string `yaml:"allowed_origins"`
+	ListenHost              string   `yaml:"listen_host"`
+	ListenPort              int      `yaml:"listen_port"`
+	EnableWebSocket         bool     `yaml:"enable_websocket"`
+	PublicBaseURL           string   `yaml:"public_base_url"`
+	AllowedOrigins          []string `yaml:"allowed_origins"`
+	InitialChatHistoryLimit int      `yaml:"initial_chat_history_limit"`
 }
 
 type WebAssetsParams struct {

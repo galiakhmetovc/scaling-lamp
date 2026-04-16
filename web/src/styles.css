@@ -25,12 +25,13 @@
 html,
 body,
 #root {
-  min-height: 100%;
+  height: 100%;
 }
 
 body {
   margin: 0;
   min-height: 100vh;
+  overflow: hidden;
   background:
     radial-gradient(circle at top left, rgba(125, 211, 252, 0.12), transparent 28%),
     radial-gradient(circle at top right, rgba(182, 240, 156, 0.08), transparent 18%),
@@ -87,11 +88,12 @@ pre {
 }
 
 .app-shell {
-  min-height: 100vh;
+  height: 100vh;
   display: grid;
   grid-template-rows: auto 1fr;
   gap: 1rem;
   padding: 1rem 1.5rem 1.5rem;
+  overflow: hidden;
 }
 
 .surface {
@@ -202,10 +204,12 @@ pre {
 
 .workspace {
   min-height: 0;
+  overflow: hidden;
 }
 
 .main-panel {
   min-height: 0;
+  height: 100%;
 }
 
 .sessions-layout {
@@ -219,7 +223,8 @@ pre {
   display: grid;
   grid-template-columns: minmax(0, 1.5fr) minmax(21rem, 0.72fr);
   gap: 1rem;
-  min-height: calc(100vh - 13rem);
+  height: 100%;
+  min-height: 0;
 }
 
 .chat-ops-column,
@@ -250,12 +255,29 @@ pre {
   min-height: 0;
 }
 
-.timeline {
+.timeline-panel {
+  display: grid;
+  grid-template-rows: auto 1fr;
+}
+
+.timeline-scroll,
+.ops-scroll {
+  min-height: 0;
   overflow: auto;
+}
+
+.timeline-scroll {
   display: flex;
   flex-direction: column;
   gap: 0.9rem;
-  min-height: 24rem;
+}
+
+.timeline {
+  display: flex;
+  flex-direction: column;
+  gap: 0.9rem;
+  min-height: 0;
+  flex: 1 1 auto;
 }
 
 .timeline-item {
@@ -299,6 +321,23 @@ pre {
 .composer-panel {
   display: grid;
   gap: 0.85rem;
+  padding: 0;
+}
+
+.chat-ops-column {
+  min-height: 0;
+  padding: 1rem 1.1rem;
+}
+
+.ops-scroll {
+  display: grid;
+  align-content: start;
+  gap: 1rem;
+}
+
+.history-controls {
+  display: flex;
+  justify-content: center;
 }
 
 .chat-statusbar {
@@ -500,6 +539,7 @@ pre {
   .sessions-layout,
   .two-column {
     min-height: auto;
+    height: auto;
   }
 
   .timeline {

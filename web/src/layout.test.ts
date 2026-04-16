@@ -24,6 +24,8 @@ function makeSession(): SessionSnapshot {
     main_run_active: false,
     main_run: { active: false, started_at: "", provider: "api.z.ai", model: "glm-5-turbo", input_tokens: 0, output_tokens: 0, total_tokens: 0 },
     queued_drafts: [],
+    history: { loaded_count: 0, total_count: 0, has_more: false, window_limit: 40 },
+    base_context_tokens: 0,
     transcript: [],
     timeline: [],
     plan: {

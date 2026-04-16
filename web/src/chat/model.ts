@@ -43,15 +43,12 @@ export function approximateContextTokens(session: SessionSnapshot | null, input:
   if (!session) {
     return 0;
   }
-  let chars = 0;
-  for (const message of session.transcript) {
-    chars += message.content.length;
-  }
-  chars += input.length;
+  let tokens = session.base_context_tokens;
+  tokens += Math.max(0, Math.ceil(input.length / 4));
   for (const draft of session.queued_drafts) {
-    chars += draft.text.length;
+    tokens += Math.max(0, Math.ceil(draft.text.length / 4));
   }
-  return Math.max(1, Math.ceil(chars / 4));
+  return Math.max(1, tokens);
 }
 
 export function buildChatStatus(input: {
@@ -172,5 +169,44 @@ export function resolveBtwRun(current: SessionUIState | undefined, runID: string
   return {
     ...next,
     btwRuns: next.btwRuns.map((run) => (run.id === runID ? { ...run, ...patch } : run)),
+  };
+}
+
+export function mergeSessionHistory(current: SessionSnapshot | undefined, incoming: SessionSnapshot): SessionSnapshot {
+  if (!current || current.session_id !== incoming.session_id) {
+    return incoming;
+  }
+  const preservedCount = Math.max(0, incoming.history.total_count - incoming.history.loaded_count);
+  const olderPrefix = current.timeline.slice(0, Math.min(current.timeline.length, preservedCount));
+  return {
+    ...incoming,
+    timeline: [...olderPrefix, ...incoming.timeline],
+    history: {
+      ...incoming.history,
+      loaded_count: olderPrefix.length + incoming.timeline.length,
+      has_more: olderPrefix.length+incoming.timeline.length < incoming.history.total_count,
+    },
+  };
+}
+
+export function prependOlderTimeline(
+  session: SessionSnapshot,
+  payload: {
+    timeline: SessionSnapshot["timeline"];
+    loaded_count: number;
+    total_count: number;
+    has_more: boolean;
+    window_limit: number;
+  },
+): SessionSnapshot {
+  return {
+    ...session,
+    timeline: [...payload.timeline, ...session.timeline],
+    history: {
+      loaded_count: payload.loaded_count,
+      total_count: payload.total_count,
+      has_more: payload.has_more,
+      window_limit: payload.window_limit,
+    },
   };
 }

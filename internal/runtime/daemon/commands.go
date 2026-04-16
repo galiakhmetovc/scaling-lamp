@@ -39,6 +39,17 @@ func (s *Server) executeCommand(ctx context.Context, req CommandRequest) (any, e
 			return nil, err
 		}
 		return map[string]any{"session": snapshot}, nil
+	case "session.history":
+		sessionID, err := requiredString(req.Payload, "session_id")
+		if err != nil {
+			return nil, err
+		}
+		loadedCount, err := requiredInt(req.Payload, "loaded_count")
+		if err != nil {
+			return nil, err
+		}
+		historyLimit, _ := optionalInt(req.Payload, "history_limit")
+		return s.buildSessionHistoryChunk(sessionID, loadedCount, historyLimit)
 	case "chat.send":
 		sessionID, err := requiredString(req.Payload, "session_id")
 		if err != nil {
@@ -367,6 +378,33 @@ func optionalString(payload map[string]any, key string) (string, bool) {
 		return "", false
 	}
 	return value, value != ""
+}
+
+func requiredInt(payload map[string]any, key string) (int, error) {
+	value, ok := optionalInt(payload, key)
+	if !ok {
+		return 0, fmt.Errorf("missing required int payload field %q", key)
+	}
+	return value, nil
+}
+
+func optionalInt(payload map[string]any, key string) (int, bool) {
+	raw, ok := payload[key]
+	if !ok || raw == nil {
+		return 0, false
+	}
+	switch typed := raw.(type) {
+	case int:
+		return typed, true
+	case int32:
+		return int(typed), true
+	case int64:
+		return int(typed), true
+	case float64:
+		return int(typed), true
+	default:
+		return 0, false
+	}
 }
 
 func optionalStringSlice(payload map[string]any, key string) ([]string, error) {

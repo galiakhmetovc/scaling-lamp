@@ -10,3 +10,4 @@ spec:
     enable_websocket: true
     public_base_url: ""
     allowed_origins: []
+    initial_chat_history_limit: 40

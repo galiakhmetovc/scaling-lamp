@@ -398,6 +398,106 @@ func TestWebsocketChatSendCommandCompletesWithUpdatedSessionSnapshot(t *testing.
 	}
 }
 
+func TestWebsocketSessionGetReturnsLimitedRecentHistory(t *testing.T) {
+	t.Parallel()
+
+	agent := buildAgentWithOperatorSurface(t)
+	sessionID := seedSessionHistory(t, agent, 52)
+	server, err := daemon.New(agent)
+	if err != nil {
+		t.Fatalf("new daemon server: %v", err)
+	}
+	httpServer := httptest.NewServer(server.Handler())
+	defer httpServer.Close()
+
+	conn := dialWebsocket(t, httpServer.URL, "/ws")
+	defer conn.Close()
+	_ = readEnvelopeJSON(t, conn)
+
+	writeCommandEnvelope(t, conn, map[string]any{
+		"type":    "command",
+		"id":      "cmd-history-window",
+		"command": "session.get",
+		"payload": map[string]any{"session_id": sessionID},
+	})
+	_ = readEnvelopeJSON(t, conn)
+	completed := waitForCommandCompleted(t, conn, "cmd-history-window")
+	session := mapPayload(t, mapPayload(t, completed["payload"])["session"])
+
+	timeline, ok := session["timeline"].([]any)
+	if !ok {
+		t.Fatalf("timeline = %#v, want []any", session["timeline"])
+	}
+	if len(timeline) != 40 {
+		t.Fatalf("timeline len = %d, want 40", len(timeline))
+	}
+	first := mapPayload(t, timeline[0])
+	if got := first["content"]; got != "user-13" {
+		t.Fatalf("first visible content = %#v, want user-13", got)
+	}
+	history := mapPayload(t, session["history"])
+	if history["has_more"] != true {
+		t.Fatalf("history.has_more = %#v, want true", history["has_more"])
+	}
+	if history["loaded_count"] != float64(40) {
+		t.Fatalf("history.loaded_count = %#v, want 40", history["loaded_count"])
+	}
+	if history["total_count"] != float64(52) {
+		t.Fatalf("history.total_count = %#v, want 52", history["total_count"])
+	}
+	if session["base_context_tokens"] == nil || session["base_context_tokens"] == float64(0) {
+		t.Fatalf("base_context_tokens = %#v, want populated", session["base_context_tokens"])
+	}
+}
+
+func TestWebsocketSessionHistoryReturnsOlderTimelineChunk(t *testing.T) {
+	t.Parallel()
+
+	agent := buildAgentWithOperatorSurface(t)
+	sessionID := seedSessionHistory(t, agent, 52)
+	server, err := daemon.New(agent)
+	if err != nil {
+		t.Fatalf("new daemon server: %v", err)
+	}
+	httpServer := httptest.NewServer(server.Handler())
+	defer httpServer.Close()
+
+	conn := dialWebsocket(t, httpServer.URL, "/ws")
+	defer conn.Close()
+	_ = readEnvelopeJSON(t, conn)
+
+	writeCommandEnvelope(t, conn, map[string]any{
+		"type":    "command",
+		"id":      "cmd-history-chunk",
+		"command": "session.history",
+		"payload": map[string]any{
+			"session_id":    sessionID,
+			"loaded_count":  40,
+			"history_limit": 40,
+		},
+	})
+	_ = readEnvelopeJSON(t, conn)
+	completed := waitForCommandCompleted(t, conn, "cmd-history-chunk")
+	payload := mapPayload(t, completed["payload"])
+	timeline, ok := payload["timeline"].([]any)
+	if !ok {
+		t.Fatalf("history timeline = %#v, want []any", payload["timeline"])
+	}
+	if len(timeline) != 12 {
+		t.Fatalf("history timeline len = %d, want 12", len(timeline))
+	}
+	first := mapPayload(t, timeline[0])
+	if got := first["content"]; got != "user-01" {
+		t.Fatalf("first older content = %#v, want user-01", got)
+	}
+	if payload["loaded_count"] != float64(52) {
+		t.Fatalf("payload.loaded_count = %#v, want 52", payload["loaded_count"])
+	}
+	if payload["has_more"] != false {
+		t.Fatalf("payload.has_more = %#v, want false", payload["has_more"])
+	}
+}
+
 func TestWebsocketDraftCommandsRoundTripQueueState(t *testing.T) {
 	t.Parallel()
 
@@ -561,8 +661,8 @@ func TestWebsocketSettingsFormApplyReloadsAgentAndRejectsStaleRevision(t *testin
 		},
 	})
 	_ = readEnvelopeJSON(t, conn)
-		applyCompleted := waitForCommandCompleted(t, conn, "cmd-2")
-		_ = waitForEnvelopeType(t, conn, "settings_applied")
+	applyCompleted := waitForCommandCompleted(t, conn, "cmd-2")
+	_ = waitForEnvelopeType(t, conn, "settings_applied")
 	applied := mapPayload(t, mapPayload(t, applyCompleted["payload"])["settings"])
 	if applied["revision"] == baseRevision {
 		t.Fatalf("settings revision did not change after apply")
@@ -711,6 +811,45 @@ func TestWebsocketSettingsRawApplyRollsBackOnInvalidConfig(t *testing.T) {
 func buildAgentWithOperatorSurface(t *testing.T) *runtime.Agent {
 	t.Helper()
 	return buildChatDaemonAgent(t, "http://127.0.0.1:1")
+}
+
+func seedSessionHistory(t *testing.T, agent *runtime.Agent, itemCount int) string {
+	t.Helper()
+	sessionID := "session-history"
+	if err := agent.RecordEvent(context.Background(), eventing.Event{
+		ID:               "evt-session-history-created",
+		Kind:             eventing.EventSessionCreated,
+		OccurredAt:       time.Date(2026, 4, 16, 6, 0, 0, 0, time.UTC),
+		AggregateID:      sessionID,
+		AggregateType:    eventing.AggregateSession,
+		AggregateVersion: 1,
+		Payload:          map[string]any{"session_id": sessionID},
+	}); err != nil {
+		t.Fatalf("record session created: %v", err)
+	}
+	for i := 1; i <= itemCount; i++ {
+		role := "assistant"
+		if i%2 == 1 {
+			role = "user"
+		}
+		content := fmt.Sprintf("%s-%02d", role, i)
+		if err := agent.RecordEvent(context.Background(), eventing.Event{
+			ID:               fmt.Sprintf("evt-msg-%02d", i),
+			Kind:             eventing.EventMessageRecorded,
+			OccurredAt:       time.Date(2026, 4, 16, 6, 0, i, 0, time.UTC),
+			AggregateID:      sessionID,
+			AggregateType:    eventing.AggregateSession,
+			AggregateVersion: uint64(i + 1),
+			Payload: map[string]any{
+				"session_id": sessionID,
+				"role":       role,
+				"content":    content,
+			},
+		}); err != nil {
+			t.Fatalf("record message %d: %v", i, err)
+		}
+	}
+	return sessionID
 }
 
 func websocketURL(t *testing.T, baseURL, route string) string {
@@ -947,7 +1086,7 @@ func buildChatDaemonAgent(t *testing.T, baseURL string) *runtime.Agent {
 	mustWriteFile(t, filepath.Join(dir, "policies", "chat", "status.yaml"), "kind: ChatStatusPolicyConfig\nversion: v1\nid: chat-status\nspec:\n  enabled: true\n  strategy: inline_terminal\n  params:\n    show_header: true\n    show_usage: true\n    show_tool_calls: true\n    show_tool_results: true\n    show_plan_after_plan_tools: true\n")
 	mustWriteFile(t, filepath.Join(dir, "policies", "chat", "command.yaml"), "kind: ChatCommandPolicyConfig\nversion: v1\nid: chat-command\nspec:\n  enabled: true\n  strategy: slash_commands\n  params:\n    exit_command: /exit\n    help_command: /help\n    session_command: /session\n    btw_command: /btw\n")
 	mustWriteFile(t, filepath.Join(dir, "policies", "chat", "resume.yaml"), "kind: ChatResumePolicyConfig\nversion: v1\nid: chat-resume\nspec:\n  enabled: true\n  strategy: explicit_resume_only\n  params:\n    require_explicit_id: true\n")
-	mustWriteFile(t, filepath.Join(dir, "policies", "operator-surface", "daemon-server.yaml"), "kind: DaemonServerPolicyConfig\nversion: v1\nid: daemon-server-main\nspec:\n  enabled: true\n  strategy: websocket_http\n  params:\n    listen_host: 0.0.0.0\n    listen_port: 8080\n    enable_websocket: true\n    public_base_url: \"\"\n    allowed_origins: []\n")
+	mustWriteFile(t, filepath.Join(dir, "policies", "operator-surface", "daemon-server.yaml"), "kind: DaemonServerPolicyConfig\nversion: v1\nid: daemon-server-main\nspec:\n  enabled: true\n  strategy: websocket_http\n  params:\n    listen_host: 0.0.0.0\n    listen_port: 8080\n    enable_websocket: true\n    public_base_url: \"\"\n    allowed_origins: []\n    initial_chat_history_limit: 40\n")
 	mustWriteFile(t, filepath.Join(dir, "policies", "operator-surface", "web-assets.yaml"), "kind: WebAssetsPolicyConfig\nversion: v1\nid: web-assets-main\nspec:\n  enabled: true\n  strategy: embedded_assets\n  params:\n    mode: embedded_assets\n    dev_proxy_url: \"\"\n")
 	mustWriteFile(t, filepath.Join(dir, "policies", "operator-surface", "client-transport.yaml"), "kind: ClientTransportPolicyConfig\nversion: v1\nid: client-transport-main\nspec:\n  enabled: true\n  strategy: websocket_http\n  params:\n    endpoint_path: /api\n    websocket_path: /ws\n")
 	mustWriteFile(t, filepath.Join(dir, "policies", "operator-surface", "settings.yaml"), "kind: SettingsSurfacePolicyConfig\nversion: v1\nid: settings-main\nspec:\n  enabled: true\n  strategy: revisioned_yaml_files\n  params:\n    require_idle_for_apply: true\n    form_fields:\n      - key: max_tool_rounds\n        label: Max Tool Rounds\n        type: int\n        file_path: agent.yaml\n        yaml_path: [spec, runtime, max_tool_rounds]\n      - key: render_markdown\n        label: Render Markdown\n        type: bool\n        file_path: policies/chat/output.yaml\n        yaml_path: [spec, params, render_markdown]\n      - key: markdown_style\n        label: Markdown Style\n        type: string\n        file_path: policies/chat/output.yaml\n        yaml_path: [spec, params, markdown_style]\n        enum: [dark, light]\n      - key: show_tool_calls\n        label: Show Tool Calls\n        type: bool\n        file_path: policies/chat/status.yaml\n        yaml_path: [spec, params, show_tool_calls]\n      - key: show_tool_results\n        label: Show Tool Results\n        type: bool\n        file_path: policies/chat/status.yaml\n        yaml_path: [spec, params, show_tool_results]\n      - key: show_plan_after_plan_tools\n        label: Show Plan After Plan Tools\n        type: bool\n        file_path: policies/chat/status.yaml\n        yaml_path: [spec, params, show_plan_after_plan_tools]\n    raw_file_globs:\n      - agent.yaml\n      - contracts/*.yaml\n      - policies/**/*.yaml\n")

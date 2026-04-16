@@ -3,9 +3,10 @@ import { ChatPane } from "./chat/ChatPane";
 import {
   appendBtwRun,
   applySessionUIEvent,
-  approximateContextTokens,
   emptySessionUIState,
+  mergeSessionHistory,
   markMainRunStarted,
+  prependOlderTimeline,
   resolveBtwRun,
   storeMainRunResult,
   syncMainRunFromUIEvent,
@@ -123,7 +124,10 @@ export function App() {
   }, [selectedSession?.main_run.active, selectedSession?.main_run.started_at]);
 
   function applySessionSnapshot(snapshot: SessionSnapshot) {
-    setSessionSnapshots((current) => ({ ...current, [snapshot.session_id]: snapshot }));
+    setSessionSnapshots((current) => ({
+      ...current,
+      [snapshot.session_id]: mergeSessionHistory(current[snapshot.session_id], snapshot),
+    }));
     setSessions((current) => upsertSessionSummary(current, snapshot));
     setSelectedSessionID((current) => current || snapshot.session_id);
     setSelectedPlanTaskID((current) => current || defaultSelectedTaskID(snapshot.plan));
@@ -260,6 +264,28 @@ export function App() {
     const result = await client.command("draft.recall", { session_id: selectedSessionID, draft_id: draftID });
     applySessionSnapshot(result.session);
     setChatInput(result.draft.text);
+  }
+
+  async function handleLoadOlderHistory() {
+    const client = clientRef.current;
+    if (!client || !selectedSession) {
+      return;
+    }
+    const result = await client.command("session.history", {
+      session_id: selectedSession.session_id,
+      loaded_count: selectedSession.history.loaded_count,
+      history_limit: selectedSession.history.window_limit,
+    });
+    setSessionSnapshots((current) => {
+      const session = current[selectedSession.session_id];
+      if (!session) {
+        return current;
+      }
+      return {
+        ...current,
+        [selectedSession.session_id]: prependOlderTimeline(session, result),
+      };
+    });
   }
 
   async function handleCreatePlan() {
@@ -420,6 +446,7 @@ export function App() {
               onSend={() => void handleSendChat()}
               onQueue={() => void handleQueueDraft()}
               onRecallDraft={(id) => void handleRecallDraft(id)}
+              onLoadOlder={() => void handleLoadOlderHistory()}
             />
           )}
           {activeTab === "plan" && (
@@ -472,10 +499,6 @@ export function App() {
       </main>
     </div>
   );
-}
-
-function emptySessionUIState(): SessionUIState {
-  return { streaming: "", status: "idle", toolLog: [], btwRuns: [] };
 }
 
 function upsertSessionSummary(current: SessionSummary[], snapshot: SessionSnapshot): SessionSummary[] {
