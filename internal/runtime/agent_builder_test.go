@@ -531,6 +531,35 @@ func TestBuildAgentInitializesArtifactStoreForArtifactOffload(t *testing.T) {
 	}
 }
 
+func TestBuildAgentLoadsShippedFilesystemCompatibilityApprovalGuard(t *testing.T) {
+	t.Parallel()
+
+	cfg, err := config.LoadRoot(filepath.Join("..", "..", "config", "zai-smoke", "agent.yaml"))
+	if err != nil {
+		t.Fatalf("LoadRoot returned error: %v", err)
+	}
+	contracts, err := runtime.ResolveContracts(cfg)
+	if err != nil {
+		t.Fatalf("ResolveContracts returned error: %v", err)
+	}
+	got := contracts.ToolExecution.Approval
+	if got.Strategy != "require_for_destructive" {
+		t.Fatalf("approval strategy = %q, want require_for_destructive", got.Strategy)
+	}
+	for _, toolID := range []string{"fs_read_text", "fs_write_text", "fs_patch_text"} {
+		found := false
+		for _, candidate := range got.Params.DestructiveToolIDs {
+			if candidate == toolID {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Fatalf("destructive tool ids = %#v, want %q included", got.Params.DestructiveToolIDs, toolID)
+		}
+	}
+}
+
 func TestBuildAgentRestoresProjectionSnapshotsFromStore(t *testing.T) {
 	t.Parallel()
 

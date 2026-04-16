@@ -3,7 +3,10 @@ version: v1
 id: tool-approval-zai-smoke
 spec:
   enabled: true
-  strategy: always_allow
+  strategy: require_for_destructive
   params:
-    destructive_tool_ids: []
+    destructive_tool_ids:
+      - fs_read_text
+      - fs_write_text
+      - fs_patch_text
     approval_message_template: ""
