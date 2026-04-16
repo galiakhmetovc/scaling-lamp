@@ -15,6 +15,7 @@ import (
 	"teamd/internal/config"
 	"teamd/internal/contracts"
 	"teamd/internal/runtime"
+	"teamd/internal/runtime/daemon"
 	"teamd/internal/runtime/eventing"
 	"teamd/internal/runtime/projections"
 	"teamd/internal/shell"
@@ -490,11 +491,18 @@ func TestChatViewShowsSessionStatusBarAndQueuedDrafts(t *testing.T) {
 		Model:       "glm-5-turbo",
 		TotalTokens: 42,
 	}
+	state.Snapshot.ContextBudget = daemon.ContextBudgetSnapshot{
+		LastTotalTokens:          42,
+		CurrentContextTokens:     120,
+		EstimatedNextInputTokens: 133,
+		Source:                   "mixed",
+		BudgetState:              "healthy",
+	}
 	state.Queue = []queuedDraft{{Text: "Second question"}, {Text: "Third question"}}
 
 	modelAfter, _ := (&m).Update(tea.WindowSizeMsg{Width: 120, Height: 40})
 	got := modelAfter.View()
-	for _, want := range []string{"provider: api.z.ai", "model: glm-5-turbo", "run: running 00:30", "ctx≈", "queue: 2", "Queued drafts:"} {
+	for _, want := range []string{"provider: api.z.ai", "model: glm-5-turbo", "run: running 00:30", "ctx=120", "next≈133", "queue: 2", "Queued drafts:"} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("view missing %q: %q", want, got)
 		}

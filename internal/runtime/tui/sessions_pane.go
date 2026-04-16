@@ -7,6 +7,8 @@ import (
 	"github.com/charmbracelet/bubbles/textarea"
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
+
+	"teamd/internal/runtime/daemon"
 )
 
 func (m *model) updateSessions(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
@@ -142,6 +144,47 @@ func newSessionState(overrides sessionOverrides) *sessionState {
 	}
 }
 
+func mergeSessionSnapshot(current, refreshed daemon.SessionSnapshot) daemon.SessionSnapshot {
+	merged := refreshed
+	if merged.ContextBudget.LastInputTokens <= 0 {
+		merged.ContextBudget.LastInputTokens = current.ContextBudget.LastInputTokens
+	}
+	if merged.ContextBudget.LastOutputTokens <= 0 {
+		merged.ContextBudget.LastOutputTokens = current.ContextBudget.LastOutputTokens
+	}
+	if merged.ContextBudget.LastTotalTokens <= 0 {
+		merged.ContextBudget.LastTotalTokens = current.ContextBudget.LastTotalTokens
+	}
+	if merged.ContextBudget.CurrentContextTokens <= 0 {
+		merged.ContextBudget.CurrentContextTokens = current.ContextBudget.CurrentContextTokens
+	}
+	if merged.ContextBudget.EstimatedNextInputTokens <= 0 {
+		merged.ContextBudget.EstimatedNextInputTokens = current.ContextBudget.EstimatedNextInputTokens
+	}
+	if merged.ContextBudget.DraftTokens <= 0 {
+		merged.ContextBudget.DraftTokens = current.ContextBudget.DraftTokens
+	}
+	if merged.ContextBudget.QueuedDraftTokens <= 0 {
+		merged.ContextBudget.QueuedDraftTokens = current.ContextBudget.QueuedDraftTokens
+	}
+	if merged.ContextBudget.SummaryTokens <= 0 {
+		merged.ContextBudget.SummaryTokens = current.ContextBudget.SummaryTokens
+	}
+	if merged.ContextBudget.SummarizationCount <= 0 {
+		merged.ContextBudget.SummarizationCount = current.ContextBudget.SummarizationCount
+	}
+	if merged.ContextBudget.CompactedMessageCount <= 0 {
+		merged.ContextBudget.CompactedMessageCount = current.ContextBudget.CompactedMessageCount
+	}
+	if merged.ContextBudget.Source == "" {
+		merged.ContextBudget.Source = current.ContextBudget.Source
+	}
+	if merged.ContextBudget.BudgetState == "" {
+		merged.ContextBudget.BudgetState = current.ContextBudget.BudgetState
+	}
+	return merged
+}
+
 func (m *model) defaultOverrides() sessionOverrides {
 	return m.client.DefaultOverrides()
 }
@@ -156,7 +199,7 @@ func (m *model) currentSessionState() *sessionState {
 	}
 	if _, ok := m.client.(*localClient); ok {
 		if snapshot, err := m.client.GetSession(context.Background(), m.activeSessionID); err == nil {
-			state.Snapshot = snapshot
+			state.Snapshot = mergeSessionSnapshot(state.Snapshot, snapshot)
 		}
 	}
 	return state

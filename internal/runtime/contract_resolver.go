@@ -46,6 +46,13 @@ type promptAssemblyContractBody struct {
 	SessionHeadPolicyPath  string `yaml:"session_head_policy_path"`
 }
 
+type contextBudgetContractBody struct {
+	AccountingPolicyPath     string `yaml:"accounting_policy_path"`
+	EstimationPolicyPath     string `yaml:"estimation_policy_path"`
+	CompactionPolicyPath     string `yaml:"compaction_policy_path"`
+	SummaryDisplayPolicyPath string `yaml:"summary_display_policy_path"`
+}
+
 type toolContractBody struct {
 	ToolCatalogPolicyPath       string `yaml:"tool_catalog_policy_path"`
 	ToolSerializationPolicyPath string `yaml:"tool_serialization_policy_path"`
@@ -445,6 +452,60 @@ func resolvePromptAssemblyContract(out *contracts.ResolvedContracts, path string
 		},
 	}
 
+	return nil
+}
+
+func resolveContextBudgetContract(out *contracts.ResolvedContracts, path string, policyRegistry *policies.Registry) error {
+	contract, err := loadContract[contextBudgetContractBody](path, "context-budget")
+	if err != nil {
+		return err
+	}
+	if contract.Spec.AccountingPolicyPath == "" || contract.Spec.EstimationPolicyPath == "" || contract.Spec.CompactionPolicyPath == "" || contract.Spec.SummaryDisplayPolicyPath == "" {
+		return fmt.Errorf("context-budget contract %q missing required policy paths", contract.ID)
+	}
+	accountingPolicy, err := loadPolicy[contracts.ContextBudgetAccountingParams](path, contract.Spec.AccountingPolicyPath, "ContextBudgetAccountingPolicyConfig", "context-budget-accounting", policyRegistry)
+	if err != nil {
+		return err
+	}
+	estimationPolicy, err := loadPolicy[contracts.ContextBudgetEstimationParams](path, contract.Spec.EstimationPolicyPath, "ContextBudgetEstimationPolicyConfig", "context-budget-estimation", policyRegistry)
+	if err != nil {
+		return err
+	}
+	compactionPolicy, err := loadPolicy[contracts.ContextBudgetCompactionParams](path, contract.Spec.CompactionPolicyPath, "ContextBudgetCompactionPolicyConfig", "context-budget-compaction", policyRegistry)
+	if err != nil {
+		return err
+	}
+	summaryDisplayPolicy, err := loadPolicy[contracts.ContextBudgetSummaryDisplayParams](path, contract.Spec.SummaryDisplayPolicyPath, "ContextBudgetSummaryDisplayPolicyConfig", "context-budget-summary-display", policyRegistry)
+	if err != nil {
+		return err
+	}
+	out.ContextBudget = contracts.ContextBudgetContract{
+		ID: contract.ID,
+		Accounting: contracts.ContextBudgetAccountingPolicy{
+			ID:       accountingPolicy.ID,
+			Enabled:  accountingPolicy.Spec.Enabled,
+			Strategy: accountingPolicy.Spec.Strategy,
+			Params:   accountingPolicy.Spec.Params,
+		},
+		Estimation: contracts.ContextBudgetEstimationPolicy{
+			ID:       estimationPolicy.ID,
+			Enabled:  estimationPolicy.Spec.Enabled,
+			Strategy: estimationPolicy.Spec.Strategy,
+			Params:   estimationPolicy.Spec.Params,
+		},
+		Compaction: contracts.ContextBudgetCompactionPolicy{
+			ID:       compactionPolicy.ID,
+			Enabled:  compactionPolicy.Spec.Enabled,
+			Strategy: compactionPolicy.Spec.Strategy,
+			Params:   compactionPolicy.Spec.Params,
+		},
+		SummaryDisplay: contracts.ContextBudgetSummaryDisplayPolicy{
+			ID:       summaryDisplayPolicy.ID,
+			Enabled:  summaryDisplayPolicy.Spec.Enabled,
+			Strategy: summaryDisplayPolicy.Spec.Strategy,
+			Params:   summaryDisplayPolicy.Spec.Params,
+		},
+	}
 	return nil
 }
 
@@ -905,6 +966,8 @@ func resolveContractApplyFunc(kind string) (contractApplyFunc, error) {
 		return resolvePromptAssetsContract, nil
 	case "PromptAssemblyContractConfig":
 		return resolvePromptAssemblyContract, nil
+	case "ContextBudgetContractConfig":
+		return resolveContextBudgetContract, nil
 	case "ToolContractConfig":
 		return resolveToolContract, nil
 	case "FilesystemToolContractConfig":

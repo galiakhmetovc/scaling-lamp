@@ -37,6 +37,7 @@ func TestSessionSnapshotIncludesMainRunMetadata(t *testing.T) {
 			projections.NewSessionCatalogProjection(),
 			projections.NewTranscriptProjection(),
 			projections.NewChatTimelineProjection(),
+			projections.NewContextBudgetProjection(),
 			projections.NewPlanHeadProjection(),
 			projections.NewShellCommandProjection(),
 			projections.NewDelegateProjection(),
@@ -101,5 +102,8 @@ func TestSessionSnapshotIncludesMainRunMetadata(t *testing.T) {
 	}
 	if completed.MainRun.InputTokens != 8 || completed.MainRun.OutputTokens != 4 || completed.MainRun.TotalTokens != 12 {
 		t.Fatalf("completed token usage = %+v", completed.MainRun)
+	}
+	if completed.ContextBudget.LastTotalTokens != 12 {
+		t.Fatalf("context budget last_total_tokens = %d, want 12", completed.ContextBudget.LastTotalTokens)
 	}
 }

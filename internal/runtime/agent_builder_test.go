@@ -811,6 +811,15 @@ func TestRepositoryZaiSmokeConfigLoadsAndResolvesContracts(t *testing.T) {
 	if resolved.Chat.Output.Strategy != "streaming_text" {
 		t.Fatalf("chat output strategy = %q, want %q", resolved.Chat.Output.Strategy, "streaming_text")
 	}
+	if resolved.ContextBudget.ID != "context-budget-zai-smoke" {
+		t.Fatalf("context budget ID = %q, want %q", resolved.ContextBudget.ID, "context-budget-zai-smoke")
+	}
+	if resolved.ContextBudget.Estimation.Params.CharsPerToken != 4 {
+		t.Fatalf("context budget chars_per_token = %d, want %d", resolved.ContextBudget.Estimation.Params.CharsPerToken, 4)
+	}
+	if !resolved.ContextBudget.SummaryDisplay.Params.IncludeSummaryCount {
+		t.Fatal("context budget summary display include_summary_count = false, want true")
+	}
 	if cfg.Spec.Runtime.MaxToolRounds != 100 {
 		t.Fatalf("runtime max_tool_rounds = %d, want %d", cfg.Spec.Runtime.MaxToolRounds, 100)
 	}

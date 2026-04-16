@@ -20,6 +20,7 @@ spec:
       - run
       - transcript
       - chat_timeline
+      - context_budget
       - filesystem_head
       - delegate
       - shell_command
@@ -32,6 +33,7 @@ spec:
     memory: ./contracts/memory.yaml
     prompt_assets: ./contracts/prompt-assets.yaml
     prompt_assembly: ./contracts/prompt-assembly.yaml
+    context_budget: ./contracts/context-budget.yaml
     tools: ./contracts/tools.yaml
     filesystem_tools: ./contracts/filesystem-tools.yaml
     filesystem_execution: ./contracts/filesystem-execution.yaml

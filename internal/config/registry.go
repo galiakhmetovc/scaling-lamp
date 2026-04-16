@@ -54,6 +54,16 @@ func NewBuiltInModuleRegistry() *ModuleRegistry {
 		},
 	})
 	registry.Register(ModuleType{
+		Kind:     "ContextBudgetContractConfig",
+		Category: ModuleCategoryContract,
+		RefFields: []string{
+			"accounting_policy_path",
+			"estimation_policy_path",
+			"compaction_policy_path",
+			"summary_display_policy_path",
+		},
+	})
+	registry.Register(ModuleType{
 		Kind:     "ToolContractConfig",
 		Category: ModuleCategoryContract,
 		RefFields: []string{
@@ -217,6 +227,22 @@ func NewBuiltInModuleRegistry() *ModuleRegistry {
 	})
 	registry.Register(ModuleType{
 		Kind:     "SessionHeadPolicyConfig",
+		Category: ModuleCategoryPolicy,
+	})
+	registry.Register(ModuleType{
+		Kind:     "ContextBudgetAccountingPolicyConfig",
+		Category: ModuleCategoryPolicy,
+	})
+	registry.Register(ModuleType{
+		Kind:     "ContextBudgetEstimationPolicyConfig",
+		Category: ModuleCategoryPolicy,
+	})
+	registry.Register(ModuleType{
+		Kind:     "ContextBudgetCompactionPolicyConfig",
+		Category: ModuleCategoryPolicy,
+	})
+	registry.Register(ModuleType{
+		Kind:     "ContextBudgetSummaryDisplayPolicyConfig",
 		Category: ModuleCategoryPolicy,
 	})
 	registry.Register(ModuleType{

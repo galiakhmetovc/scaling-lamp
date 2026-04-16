@@ -1,0 +1,8 @@
+kind: ContextBudgetContractConfig
+version: v1
+id: context-budget-zai-smoke
+spec:
+  accounting_policy_path: ../policies/context-budget/accounting.yaml
+  estimation_policy_path: ../policies/context-budget/estimation.yaml
+  compaction_policy_path: ../policies/context-budget/compaction.yaml
+  summary_display_policy_path: ../policies/context-budget/summary-display.yaml

@@ -1,0 +1,10 @@
+kind: ContextBudgetAccountingPolicyConfig
+version: v1
+id: context-budget-accounting-zai-smoke
+spec:
+  enabled: true
+  strategy: provider_usage_v1
+  params:
+    trust_input_tokens: true
+    trust_output_tokens: true
+    trust_total_tokens: true

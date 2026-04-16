@@ -5,51 +5,55 @@ import "fmt"
 type Family string
 
 const (
-	FamilyEndpoint              Family = "endpoint"
-	FamilyAuth                  Family = "auth"
-	FamilyRetry                 Family = "retry"
-	FamilyTimeout               Family = "timeout"
-	FamilyOffload               Family = "offload"
-	FamilyModel                 Family = "model"
-	FamilyMessage               Family = "message"
-	FamilyTool                  Family = "tool"
-	FamilyResponseFormat        Family = "response_format"
-	FamilyStreaming             Family = "streaming"
-	FamilySampling              Family = "sampling"
-	FamilyPromptAsset           Family = "prompt_asset"
-	FamilySystemPrompt          Family = "system_prompt"
-	FamilySessionHead           Family = "session_head"
-	FamilyToolCatalog           Family = "tool_catalog"
-	FamilyToolSerialization     Family = "tool_serialization"
-	FamilyFilesystemCatalog     Family = "filesystem_catalog"
-	FamilyFilesystemDescription Family = "filesystem_description"
-	FamilyFilesystemScope       Family = "filesystem_scope"
-	FamilyFilesystemMutation    Family = "filesystem_mutation"
-	FamilyFilesystemIO          Family = "filesystem_io"
-	FamilyShellCatalog          Family = "shell_catalog"
-	FamilyShellDescription      Family = "shell_description"
-	FamilyShellCommand          Family = "shell_command"
-	FamilyShellApproval         Family = "shell_approval"
-	FamilyShellRuntime          Family = "shell_runtime"
-	FamilyDelegationCatalog     Family = "delegation_catalog"
-	FamilyDelegationDescription Family = "delegation_description"
-	FamilyDelegationBackend     Family = "delegation_backend"
-	FamilyDelegationResult      Family = "delegation_result"
-	FamilyToolAccess            Family = "tool_access"
-	FamilyToolApproval          Family = "tool_approval"
-	FamilyToolSandbox           Family = "tool_sandbox"
-	FamilyPlanTool              Family = "plan_tool"
-	FamilyProviderTrace         Family = "provider_trace"
-	FamilyChatInput             Family = "chat_input"
-	FamilyChatSubmit            Family = "chat_submit"
-	FamilyChatOutput            Family = "chat_output"
-	FamilyChatStatus            Family = "chat_status"
-	FamilyChatCommand           Family = "chat_command"
-	FamilyChatResume            Family = "chat_resume"
-	FamilyDaemonServer          Family = "daemon_server"
-	FamilyWebAssets             Family = "web_assets"
-	FamilyClientTransport       Family = "client_transport"
-	FamilySettingsSurface       Family = "settings_surface"
+	FamilyEndpoint                    Family = "endpoint"
+	FamilyAuth                        Family = "auth"
+	FamilyRetry                       Family = "retry"
+	FamilyTimeout                     Family = "timeout"
+	FamilyOffload                     Family = "offload"
+	FamilyModel                       Family = "model"
+	FamilyMessage                     Family = "message"
+	FamilyTool                        Family = "tool"
+	FamilyResponseFormat              Family = "response_format"
+	FamilyStreaming                   Family = "streaming"
+	FamilySampling                    Family = "sampling"
+	FamilyPromptAsset                 Family = "prompt_asset"
+	FamilySystemPrompt                Family = "system_prompt"
+	FamilySessionHead                 Family = "session_head"
+	FamilyContextBudgetAccounting     Family = "context_budget_accounting"
+	FamilyContextBudgetEstimation     Family = "context_budget_estimation"
+	FamilyContextBudgetCompaction     Family = "context_budget_compaction"
+	FamilyContextBudgetSummaryDisplay Family = "context_budget_summary_display"
+	FamilyToolCatalog                 Family = "tool_catalog"
+	FamilyToolSerialization           Family = "tool_serialization"
+	FamilyFilesystemCatalog           Family = "filesystem_catalog"
+	FamilyFilesystemDescription       Family = "filesystem_description"
+	FamilyFilesystemScope             Family = "filesystem_scope"
+	FamilyFilesystemMutation          Family = "filesystem_mutation"
+	FamilyFilesystemIO                Family = "filesystem_io"
+	FamilyShellCatalog                Family = "shell_catalog"
+	FamilyShellDescription            Family = "shell_description"
+	FamilyShellCommand                Family = "shell_command"
+	FamilyShellApproval               Family = "shell_approval"
+	FamilyShellRuntime                Family = "shell_runtime"
+	FamilyDelegationCatalog           Family = "delegation_catalog"
+	FamilyDelegationDescription       Family = "delegation_description"
+	FamilyDelegationBackend           Family = "delegation_backend"
+	FamilyDelegationResult            Family = "delegation_result"
+	FamilyToolAccess                  Family = "tool_access"
+	FamilyToolApproval                Family = "tool_approval"
+	FamilyToolSandbox                 Family = "tool_sandbox"
+	FamilyPlanTool                    Family = "plan_tool"
+	FamilyProviderTrace               Family = "provider_trace"
+	FamilyChatInput                   Family = "chat_input"
+	FamilyChatSubmit                  Family = "chat_submit"
+	FamilyChatOutput                  Family = "chat_output"
+	FamilyChatStatus                  Family = "chat_status"
+	FamilyChatCommand                 Family = "chat_command"
+	FamilyChatResume                  Family = "chat_resume"
+	FamilyDaemonServer                Family = "daemon_server"
+	FamilyWebAssets                   Family = "web_assets"
+	FamilyClientTransport             Family = "client_transport"
+	FamilySettingsSurface             Family = "settings_surface"
 )
 
 type Type struct {
@@ -171,6 +175,34 @@ func NewBuiltInRegistry() *Registry {
 		Strategy: setOf(
 			"off",
 			"projection_summary",
+		),
+	})
+	registry.Register(Type{
+		Kind:   "ContextBudgetAccountingPolicyConfig",
+		Family: FamilyContextBudgetAccounting,
+		Strategy: setOf(
+			"provider_usage_v1",
+		),
+	})
+	registry.Register(Type{
+		Kind:   "ContextBudgetEstimationPolicyConfig",
+		Family: FamilyContextBudgetEstimation,
+		Strategy: setOf(
+			"chars_div4",
+		),
+	})
+	registry.Register(Type{
+		Kind:   "ContextBudgetCompactionPolicyConfig",
+		Family: FamilyContextBudgetCompaction,
+		Strategy: setOf(
+			"threshold_state_only",
+		),
+	})
+	registry.Register(Type{
+		Kind:   "ContextBudgetSummaryDisplayPolicyConfig",
+		Family: FamilyContextBudgetSummaryDisplay,
+		Strategy: setOf(
+			"counter_only",
 		),
 	})
 	registry.Register(Type{

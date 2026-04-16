@@ -1,0 +1,10 @@
+kind: ContextBudgetEstimationPolicyConfig
+version: v1
+id: context-budget-estimation-zai-smoke
+spec:
+  enabled: true
+  strategy: chars_div4
+  params:
+    chars_per_token: 4
+    include_drafts: true
+    include_queue: true

@@ -29,6 +29,20 @@ function makeSessionSnapshot(overrides: Partial<SessionSnapshot> = {}): SessionS
       window_limit: 40,
     },
     base_context_tokens: 7,
+    context_budget: {
+      last_input_tokens: 8,
+      last_output_tokens: 4,
+      last_total_tokens: 12,
+      current_context_tokens: 21,
+      estimated_next_input_tokens: 26,
+      draft_tokens: 0,
+      queued_draft_tokens: 5,
+      summary_tokens: 0,
+      summarization_count: 0,
+      compacted_message_count: 0,
+      source: "mixed",
+      budget_state: "healthy",
+    },
     transcript: [
       { role: "user", content: "hello" },
       { role: "assistant", content: "world" },
@@ -95,7 +109,9 @@ describe("chat model helpers", () => {
     expect(status.runText).toBe("running 01:20");
     expect(status.queueCount).toBe(1);
     expect(status.activeBtwCount).toBe(1);
-    expect(status.contextTokens).toBeGreaterThan(0);
+    expect(status.contextTokens).toBe(21);
+    expect(status.lastUsageText).toContain("last=12");
+    expect(status.lastUsageText).toContain("next≈26");
     expect("currentTime" in status).toBe(false);
   });
 

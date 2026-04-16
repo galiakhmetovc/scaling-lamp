@@ -20,6 +20,7 @@ type SessionSnapshot struct {
 	QueuedDrafts      []QueuedDraft                  `json:"queued_drafts"`
 	History           ChatHistorySnapshot            `json:"history"`
 	BaseContextTokens int                            `json:"base_context_tokens"`
+	ContextBudget     ContextBudgetSnapshot          `json:"context_budget"`
 	Transcript        []contracts.Message            `json:"transcript"`
 	Timeline          []projections.ChatTimelineItem `json:"timeline"`
 	Plan              projections.PlanHeadSnapshot   `json:"plan"`
@@ -43,6 +44,21 @@ type MainRunSnapshot struct {
 	InputTokens  int       `json:"input_tokens"`
 	OutputTokens int       `json:"output_tokens"`
 	TotalTokens  int       `json:"total_tokens"`
+}
+
+type ContextBudgetSnapshot struct {
+	LastInputTokens          int    `json:"last_input_tokens"`
+	LastOutputTokens         int    `json:"last_output_tokens"`
+	LastTotalTokens          int    `json:"last_total_tokens"`
+	CurrentContextTokens     int    `json:"current_context_tokens"`
+	EstimatedNextInputTokens int    `json:"estimated_next_input_tokens"`
+	DraftTokens              int    `json:"draft_tokens"`
+	QueuedDraftTokens        int    `json:"queued_draft_tokens"`
+	SummaryTokens            int    `json:"summary_tokens"`
+	SummarizationCount       int    `json:"summarization_count"`
+	CompactedMessageCount    int    `json:"compacted_message_count"`
+	Source                   string `json:"source"`
+	BudgetState              string `json:"budget_state"`
 }
 
 func (s *Server) buildSessionSnapshot(sessionID string) (SessionSnapshot, error) {
@@ -73,6 +89,7 @@ func (s *Server) buildSessionSnapshot(sessionID string) (SessionSnapshot, error)
 			WindowLimit: windowLimit,
 		},
 		BaseContextTokens: approximateContextTokens(transcript),
+		ContextBudget:     s.contextBudgetSnapshot(sessionID, transcript),
 		Transcript:        transcriptWindow,
 		Timeline:          timelineWindow,
 		Plan:              plan,
@@ -80,6 +97,56 @@ func (s *Server) buildSessionSnapshot(sessionID string) (SessionSnapshot, error)
 		RunningCommands:   agent.CurrentRunningShellCommands(sessionID),
 		Delegates:         agent.CurrentDelegates(sessionID),
 	}, nil
+}
+
+func (s *Server) contextBudgetSnapshot(sessionID string, transcript []contracts.Message) ContextBudgetSnapshot {
+	view := s.currentAgent().CurrentContextBudget(sessionID)
+	mainRun := s.mainRunSnapshot(sessionID)
+	if view.LastTotalTokens == 0 && (mainRun.TotalTokens > 0 || mainRun.InputTokens > 0 || mainRun.OutputTokens > 0) {
+		view.LastInputTokens = mainRun.InputTokens
+		view.LastOutputTokens = mainRun.OutputTokens
+		view.LastTotalTokens = mainRun.TotalTokens
+		if view.Source == "" {
+			view.Source = "provider"
+		}
+	}
+	current := approximateContextTokens(transcript)
+	queueTokens := 0
+	for _, draft := range s.queuedDrafts(sessionID) {
+		queueTokens += approximateTextTokens(draft.Text)
+	}
+	source := view.Source
+	if source == "" {
+		source = "mixed"
+	}
+	state := "healthy"
+	warning := s.currentAgent().Contracts.ContextBudget.Compaction.Params.WarningTokens
+	if warning > 0 && current >= warning {
+		state = "approaching_limit"
+	}
+	compaction := s.currentAgent().Contracts.ContextBudget.Compaction.Params.CompactionTokens
+	if compaction > 0 && current >= compaction {
+		state = "needs_compaction"
+	}
+	return ContextBudgetSnapshot{
+		LastInputTokens:          view.LastInputTokens,
+		LastOutputTokens:         view.LastOutputTokens,
+		LastTotalTokens:          view.LastTotalTokens,
+		CurrentContextTokens:     current,
+		EstimatedNextInputTokens: current + queueTokens,
+		QueuedDraftTokens:        queueTokens,
+		SummaryTokens:            view.SummaryTokens,
+		SummarizationCount:       view.SummarizationCount,
+		Source:                   source,
+		BudgetState:              state,
+	}
+}
+
+func approximateTextTokens(text string) int {
+	if text == "" {
+		return 0
+	}
+	return maxInt(1, (len(text)+3)/4)
 }
 
 func (s *Server) buildSessionHistoryChunk(sessionID string, loadedCount, historyLimit int) (map[string]any, error) {

@@ -1,0 +1,8 @@
+kind: ContextBudgetSummaryDisplayPolicyConfig
+version: v1
+id: context-budget-summary-display-zai-smoke
+spec:
+  enabled: true
+  strategy: counter_only
+  params:
+    include_summary_count: true

@@ -73,6 +73,9 @@ export function approximateContextTokens(session: SessionSnapshot | null, input:
   if (!session) {
     return 0;
   }
+  if (session.context_budget.current_context_tokens > 0) {
+    return session.context_budget.current_context_tokens;
+  }
   let tokens = session.base_context_tokens;
   tokens += Math.max(0, Math.ceil(input.length / 4));
   for (const draft of session.queued_drafts) {
@@ -97,7 +100,8 @@ export function buildChatStatus(input: {
   const elapsedMs = running && startedAt ? Math.max(0, now.getTime() - startedAt.getTime()) : 0;
   const totalSeconds = Math.floor(elapsedMs / 1000);
   const runText = running ? `running ${String(Math.floor(totalSeconds / 60)).padStart(2, "0")}:${String(totalSeconds % 60).padStart(2, "0")}` : "idle";
-  const totalTokens = session?.main_run.total_tokens ?? 0;
+  const totalTokens = session?.context_budget.last_total_tokens ?? session?.main_run.total_tokens ?? 0;
+  const nextTokens = session?.context_budget.estimated_next_input_tokens ?? 0;
 
   return {
     provider,
@@ -107,7 +111,7 @@ export function buildChatStatus(input: {
     queueCount: session?.queued_drafts.length ?? 0,
     activeBtwCount,
     statusText: uiStatus || "ready",
-    lastUsageText: totalTokens > 0 ? `last=${totalTokens}` : "",
+    lastUsageText: `${totalTokens > 0 ? `last=${totalTokens}` : ""}${nextTokens > 0 ? `${totalTokens > 0 ? " | " : ""}next≈${nextTokens}` : ""}`,
   };
 }
 

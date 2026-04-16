@@ -31,7 +31,8 @@ func TestResolveContractsBuildsTransportAndMemoryContracts(t *testing.T) {
 		"    filesystem_tools: ./contracts/filesystem-tools.yaml\n"+
 		"    filesystem_execution: ./contracts/filesystem-execution.yaml\n"+
 		"    shell_tools: ./contracts/shell-tools.yaml\n"+
-		"    shell_execution: ./contracts/shell-execution.yaml\n")
+		"    shell_execution: ./contracts/shell-execution.yaml\n"+
+		"    context_budget: ./contracts/context-budget.yaml\n")
 
 	mustWriteFile(t, filepath.Join(dir, "contracts", "transport.yaml"), ""+
 		"kind: TransportContractConfig\n"+
@@ -127,6 +128,16 @@ func TestResolveContractsBuildsTransportAndMemoryContracts(t *testing.T) {
 		"  shell_command_policy_path: ../policies/shell-execution/command.yaml\n"+
 		"  shell_approval_policy_path: ../policies/shell-execution/approval.yaml\n"+
 		"  shell_runtime_policy_path: ../policies/shell-execution/runtime.yaml\n")
+
+	mustWriteFile(t, filepath.Join(dir, "contracts", "context-budget.yaml"), ""+
+		"kind: ContextBudgetContractConfig\n"+
+		"version: v1\n"+
+		"id: context-budget-main\n"+
+		"spec:\n"+
+		"  accounting_policy_path: ../policies/context-budget/accounting.yaml\n"+
+		"  estimation_policy_path: ../policies/context-budget/estimation.yaml\n"+
+		"  compaction_policy_path: ../policies/context-budget/compaction.yaml\n"+
+		"  summary_display_policy_path: ../policies/context-budget/summary-display.yaml\n")
 
 	mustWriteFile(t, filepath.Join(dir, "policies", "transport", "endpoint.yaml"), ""+
 		"kind: EndpointPolicyConfig\n"+
@@ -451,6 +462,51 @@ func TestResolveContractsBuildsTransportAndMemoryContracts(t *testing.T) {
 		"    max_output_bytes: 16384\n"+
 		"    allow_network: false\n")
 
+	mustWriteFile(t, filepath.Join(dir, "policies", "context-budget", "accounting.yaml"), ""+
+		"kind: ContextBudgetAccountingPolicyConfig\n"+
+		"version: v1\n"+
+		"id: context-budget-accounting-main\n"+
+		"spec:\n"+
+		"  enabled: true\n"+
+		"  strategy: provider_usage_v1\n"+
+		"  params:\n"+
+		"    trust_input_tokens: true\n"+
+		"    trust_output_tokens: true\n"+
+		"    trust_total_tokens: true\n")
+
+	mustWriteFile(t, filepath.Join(dir, "policies", "context-budget", "estimation.yaml"), ""+
+		"kind: ContextBudgetEstimationPolicyConfig\n"+
+		"version: v1\n"+
+		"id: context-budget-estimation-main\n"+
+		"spec:\n"+
+		"  enabled: true\n"+
+		"  strategy: chars_div4\n"+
+		"  params:\n"+
+		"    chars_per_token: 4\n"+
+		"    include_drafts: true\n"+
+		"    include_queue: true\n")
+
+	mustWriteFile(t, filepath.Join(dir, "policies", "context-budget", "compaction.yaml"), ""+
+		"kind: ContextBudgetCompactionPolicyConfig\n"+
+		"version: v1\n"+
+		"id: context-budget-compaction-main\n"+
+		"spec:\n"+
+		"  enabled: true\n"+
+		"  strategy: threshold_state_only\n"+
+		"  params:\n"+
+		"    warning_tokens: 16000\n"+
+		"    compaction_tokens: 24000\n")
+
+	mustWriteFile(t, filepath.Join(dir, "policies", "context-budget", "summary-display.yaml"), ""+
+		"kind: ContextBudgetSummaryDisplayPolicyConfig\n"+
+		"version: v1\n"+
+		"id: context-budget-summary-display-main\n"+
+		"spec:\n"+
+		"  enabled: true\n"+
+		"  strategy: counter_only\n"+
+		"  params:\n"+
+		"    include_summary_count: true\n")
+
 	cfg, err := config.LoadRoot(filepath.Join(dir, "agent.yaml"))
 	if err != nil {
 		t.Fatalf("LoadRoot returned error: %v", err)
@@ -526,6 +582,21 @@ func TestResolveContractsBuildsTransportAndMemoryContracts(t *testing.T) {
 	}
 	if contracts.PromptAssembly.SessionHead.Params.FilesystemTreeMaxEntries != 8 {
 		t.Fatalf("filesystem tree max entries = %d, want 8", contracts.PromptAssembly.SessionHead.Params.FilesystemTreeMaxEntries)
+	}
+	if contracts.ContextBudget.ID != "context-budget-main" {
+		t.Fatalf("context budget ID = %q, want %q", contracts.ContextBudget.ID, "context-budget-main")
+	}
+	if contracts.ContextBudget.Accounting.Strategy != "provider_usage_v1" {
+		t.Fatalf("context budget accounting strategy = %q, want %q", contracts.ContextBudget.Accounting.Strategy, "provider_usage_v1")
+	}
+	if contracts.ContextBudget.Estimation.Params.CharsPerToken != 4 {
+		t.Fatalf("context budget chars_per_token = %d, want 4", contracts.ContextBudget.Estimation.Params.CharsPerToken)
+	}
+	if contracts.ContextBudget.Compaction.Params.WarningTokens != 16000 {
+		t.Fatalf("context budget warning_tokens = %d, want 16000", contracts.ContextBudget.Compaction.Params.WarningTokens)
+	}
+	if !contracts.ContextBudget.SummaryDisplay.Params.IncludeSummaryCount {
+		t.Fatal("expected include_summary_count to be true")
 	}
 	if contracts.Tools.ID != "tools-main" {
 		t.Fatalf("tools ID = %q, want %q", contracts.Tools.ID, "tools-main")

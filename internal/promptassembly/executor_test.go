@@ -332,6 +332,34 @@ func TestExecutorBuildOmitsFilesystemSectionsWhenDisabled(t *testing.T) {
 	}
 }
 
+func TestExecutorBuildIncludesSummaryCounterWhenEnabled(t *testing.T) {
+	t.Parallel()
+
+	executor := promptassembly.NewExecutor()
+	got, err := executor.Build(contracts.PromptAssemblyContract{
+		SessionHead: contracts.SessionHeadPolicy{
+			Enabled:  true,
+			Strategy: "projection_summary",
+			Params: contracts.SessionHeadParams{
+				Placement:             "message0",
+				Title:                 "Session head",
+				IncludeSummaryCounter: true,
+			},
+		},
+	}, promptassembly.Input{
+		SessionID: "session-123",
+		ContextBudget: promptassembly.ContextBudgetHeadInput{
+			SummarizationCount: 2,
+		},
+	})
+	if err != nil {
+		t.Fatalf("Build returned error: %v", err)
+	}
+	if got[0].Content != "Session head\n🧠 Summaries: 2" {
+		t.Fatalf("session head = %q", got[0].Content)
+	}
+}
+
 func TestExecutorBuildFailsWhenRequiredSystemPromptFileIsMissing(t *testing.T) {
 	t.Parallel()
 

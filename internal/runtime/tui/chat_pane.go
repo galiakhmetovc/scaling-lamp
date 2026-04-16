@@ -271,9 +271,15 @@ func (m *model) viewChatStatusBar(state *sessionState) string {
 	}
 	provider := coalesce(state.MainRun.Provider, m.client.ProviderLabel())
 	model := coalesce(state.MainRun.Model, "model")
-	ctxTokens := approximateContextTokens(state)
+	ctxTokens := state.Snapshot.ContextBudget.CurrentContextTokens
+	if ctxTokens <= 0 {
+		ctxTokens = approximateContextTokens(state)
+	}
+	nextTokens := state.Snapshot.ContextBudget.EstimatedNextInputTokens
 	lastUsage := ""
-	if state.MainRun.TotalTokens > 0 {
+	if state.Snapshot.ContextBudget.LastTotalTokens > 0 {
+		lastUsage = fmt.Sprintf(" | last=%d", state.Snapshot.ContextBudget.LastTotalTokens)
+	} else if state.MainRun.TotalTokens > 0 {
 		lastUsage = fmt.Sprintf(" | last=%d", state.MainRun.TotalTokens)
 	}
 	activeBtw := 0
@@ -287,7 +293,8 @@ func (m *model) viewChatStatusBar(state *sessionState) string {
 		"model: " + model,
 		"time: " + now.UTC().Format("15:04:05"),
 		"run: " + runText,
-		fmt.Sprintf("approx ctx≈%d tok%s", ctxTokens, lastUsage),
+		fmt.Sprintf("ctx=%d%s", ctxTokens, lastUsage),
+		fmt.Sprintf("next≈%d", nextTokens),
 		fmt.Sprintf("queue: %d", len(state.Queue)),
 	}
 	if activeBtw > 0 {

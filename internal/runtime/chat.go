@@ -305,6 +305,7 @@ func (a *Agent) assemblePromptMessages(contractSet contracts.ResolvedContracts, 
 		SessionID:      sessionID,
 		Transcript:     transcript,
 		PlanHead:       planHead,
+		ContextBudget:  promptassembly.ContextBudgetHeadInput{SummarizationCount: a.CurrentContextBudget(sessionID).SummarizationCount},
 		FilesystemHead: filesystemHead,
 		RawMessages:    append([]contracts.Message{}, fallback...),
 	})
@@ -357,6 +358,23 @@ func (a *Agent) CurrentTranscript(sessionID string) []contracts.Message {
 		return append([]contracts.Message{}, projection.Snapshot().Sessions[sessionID]...)
 	}
 	return nil
+}
+
+func (a *Agent) contextBudgetProjection() *projections.ContextBudgetProjection {
+	for _, projection := range a.Projections {
+		contextBudget, ok := projection.(*projections.ContextBudgetProjection)
+		if ok {
+			return contextBudget
+		}
+	}
+	return nil
+}
+
+func (a *Agent) CurrentContextBudget(sessionID string) projections.ContextBudgetView {
+	if projection := a.contextBudgetProjection(); projection != nil {
+		return projection.SnapshotForSession(sessionID)
+	}
+	return projections.ContextBudgetView{}
 }
 
 func (a *Agent) sessionCatalogProjection() *projections.SessionCatalogProjection {

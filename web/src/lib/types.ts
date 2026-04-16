@@ -126,6 +126,20 @@ export type SessionSnapshot = {
     window_limit: number;
   };
   base_context_tokens: number;
+  context_budget: {
+    last_input_tokens: number;
+    last_output_tokens: number;
+    last_total_tokens: number;
+    current_context_tokens: number;
+    estimated_next_input_tokens: number;
+    draft_tokens: number;
+    queued_draft_tokens: number;
+    summary_tokens: number;
+    summarization_count: number;
+    compacted_message_count: number;
+    source: string;
+    budget_state: string;
+  };
   transcript: ChatMessage[];
   timeline: ChatTimelineItem[];
   plan: PlanHeadSnapshot;

@@ -5,6 +5,10 @@ type FilesystemHeadInput struct {
 	Tree   []FilesystemTreeEntry
 }
 
+type ContextBudgetHeadInput struct {
+	SummarizationCount int
+}
+
 type FilesystemRecentHeadInput struct {
 	Edited  []string
 	Read    []string

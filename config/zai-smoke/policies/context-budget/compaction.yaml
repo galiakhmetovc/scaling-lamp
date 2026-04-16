@@ -1,0 +1,9 @@
+kind: ContextBudgetCompactionPolicyConfig
+version: v1
+id: context-budget-compaction-zai-smoke
+spec:
+  enabled: true
+  strategy: threshold_state_only
+  params:
+    warning_tokens: 48000
+    compaction_tokens: 64000

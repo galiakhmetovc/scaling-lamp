@@ -5,6 +5,7 @@ type ResolvedContracts struct {
 	Memory              MemoryContract
 	PromptAssets        PromptAssetsContract
 	PromptAssembly      PromptAssemblyContract
+	ContextBudget       ContextBudgetContract
 	Tools               ToolContract
 	FilesystemTools     FilesystemToolContract
 	FilesystemExecution FilesystemExecutionContract
@@ -109,6 +110,14 @@ type PromptAssemblyContract struct {
 	ID           string
 	SystemPrompt SystemPromptPolicy
 	SessionHead  SessionHeadPolicy
+}
+
+type ContextBudgetContract struct {
+	ID             string
+	Accounting     ContextBudgetAccountingPolicy
+	Estimation     ContextBudgetEstimationPolicy
+	Compaction     ContextBudgetCompactionPolicy
+	SummaryDisplay ContextBudgetSummaryDisplayPolicy
 }
 
 type ToolContract struct {
@@ -486,6 +495,56 @@ type SessionHeadParams struct {
 	FilesystemTreeMaxEntries    int    `yaml:"filesystem_tree_max_entries"`
 	FilesystemTreeIncludeFiles  bool   `yaml:"filesystem_tree_include_files"`
 	FilesystemTreeIncludeDirs   bool   `yaml:"filesystem_tree_include_dirs"`
+	IncludeSummaryCounter       bool   `yaml:"include_summary_counter"`
+}
+
+type ContextBudgetAccountingPolicy struct {
+	ID       string
+	Enabled  bool
+	Strategy string
+	Params   ContextBudgetAccountingParams
+}
+
+type ContextBudgetEstimationPolicy struct {
+	ID       string
+	Enabled  bool
+	Strategy string
+	Params   ContextBudgetEstimationParams
+}
+
+type ContextBudgetCompactionPolicy struct {
+	ID       string
+	Enabled  bool
+	Strategy string
+	Params   ContextBudgetCompactionParams
+}
+
+type ContextBudgetSummaryDisplayPolicy struct {
+	ID       string
+	Enabled  bool
+	Strategy string
+	Params   ContextBudgetSummaryDisplayParams
+}
+
+type ContextBudgetAccountingParams struct {
+	TrustInputTokens  bool `yaml:"trust_input_tokens"`
+	TrustOutputTokens bool `yaml:"trust_output_tokens"`
+	TrustTotalTokens  bool `yaml:"trust_total_tokens"`
+}
+
+type ContextBudgetEstimationParams struct {
+	CharsPerToken int  `yaml:"chars_per_token"`
+	IncludeDrafts bool `yaml:"include_drafts"`
+	IncludeQueue  bool `yaml:"include_queue"`
+}
+
+type ContextBudgetCompactionParams struct {
+	WarningTokens    int `yaml:"warning_tokens"`
+	CompactionTokens int `yaml:"compaction_tokens"`
+}
+
+type ContextBudgetSummaryDisplayParams struct {
+	IncludeSummaryCount bool `yaml:"include_summary_count"`
 }
 
 type ToolCatalogParams struct {

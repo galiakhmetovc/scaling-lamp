@@ -14,6 +14,7 @@ type Input struct {
 	SessionID      string
 	Transcript     projections.TranscriptSnapshot
 	PlanHead       projections.PlanHeadSnapshot
+	ContextBudget  ContextBudgetHeadInput
 	FilesystemHead FilesystemHeadInput
 	RawMessages    []contracts.Message
 }
@@ -35,7 +36,7 @@ func (e *Executor) Build(contract contracts.PromptAssemblyContract, input Input)
 	if err != nil {
 		return nil, err
 	}
-	sessionHead, err := e.buildSessionHead(contract.SessionHead, input.SessionID, transcript, input.PlanHead, input.FilesystemHead)
+	sessionHead, err := e.buildSessionHead(contract.SessionHead, input.SessionID, transcript, input.PlanHead, input.ContextBudget, input.FilesystemHead)
 	if err != nil {
 		return nil, err
 	}
@@ -93,7 +94,7 @@ func (e *Executor) buildSystemPrompt(policy contracts.SystemPromptPolicy) (contr
 	return contracts.Message{Role: role, Content: content}, nil
 }
 
-func (e *Executor) buildSessionHead(policy contracts.SessionHeadPolicy, sessionID string, transcript []contracts.Message, planHead projections.PlanHeadSnapshot, filesystemHead FilesystemHeadInput) (contracts.Message, error) {
+func (e *Executor) buildSessionHead(policy contracts.SessionHeadPolicy, sessionID string, transcript []contracts.Message, planHead projections.PlanHeadSnapshot, contextBudget ContextBudgetHeadInput, filesystemHead FilesystemHeadInput) (contracts.Message, error) {
 	if !policy.Enabled {
 		return contracts.Message{}, nil
 	}
@@ -121,6 +122,9 @@ func (e *Executor) buildSessionHead(policy contracts.SessionHeadPolicy, sessionI
 		}
 	}
 	lines = append(lines, buildPlanHeadLines(planHead, policy.Params.CompactPlan)...)
+	if policy.Params.IncludeSummaryCounter && contextBudget.SummarizationCount > 0 {
+		lines = append(lines, fmt.Sprintf("🧠 Summaries: %d", contextBudget.SummarizationCount))
+	}
 	lines = append(lines, buildFilesystemHeadLines(policy.Params, filesystemHead)...)
 	if policy.Params.MaxItems > 0 && len(lines) > policy.Params.MaxItems {
 		lines = lines[:policy.Params.MaxItems]

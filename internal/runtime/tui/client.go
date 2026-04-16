@@ -324,10 +324,12 @@ func (c *localClient) DefaultOverrides() sessionOverrides {
 		ShowPlanAfterPlanTools: c.agent.Contracts.Chat.Status.Params.ShowPlanAfterPlanTools,
 	}
 }
-func (c *localClient) ChatCommandPolicy() contracts.ChatCommandParams { return c.agent.Contracts.Chat.Command.Params }
-func (c *localClient) ProviderLabel() string                          { return providerLabel(c.agent) }
-func (c *localClient) ConfigPath() string                             { return c.agent.ConfigPath }
-func (c *localClient) ConfigID() string                               { return c.agent.Config.ID }
+func (c *localClient) ChatCommandPolicy() contracts.ChatCommandParams {
+	return c.agent.Contracts.Chat.Command.Params
+}
+func (c *localClient) ProviderLabel() string { return providerLabel(c.agent) }
+func (c *localClient) ConfigPath() string    { return c.agent.ConfigPath }
+func (c *localClient) ConfigID() string      { return c.agent.Config.ID }
 
 func (c *localClient) settingsSnapshot() daemon.SettingsSnapshot {
 	params := c.agent.Contracts.OperatorSurface.Settings.Params
@@ -481,62 +483,86 @@ func (c *daemonClient) SendBtw(ctx context.Context, sessionID, prompt string) (B
 }
 
 func (c *daemonClient) CreatePlan(ctx context.Context, sessionID, goal string) (PlanMutation, error) {
-	var result struct{ Session daemon.SessionSnapshot `json:"session"` }
+	var result struct {
+		Session daemon.SessionSnapshot `json:"session"`
+	}
 	err := c.command(ctx, daemon.CommandRequest{Type: "command", ID: "cmd-plan-create", Command: "plan.create", Payload: map[string]any{"session_id": sessionID, "goal": goal}}, &result)
 	return PlanMutation{Session: result.Session}, err
 }
 func (c *daemonClient) AddPlanTask(ctx context.Context, sessionID, description string) (PlanMutation, error) {
-	var result struct{ Session daemon.SessionSnapshot `json:"session"` }
+	var result struct {
+		Session daemon.SessionSnapshot `json:"session"`
+	}
 	err := c.command(ctx, daemon.CommandRequest{Type: "command", ID: "cmd-plan-add", Command: "plan.add_task", Payload: map[string]any{"session_id": sessionID, "description": description}}, &result)
 	return PlanMutation{Session: result.Session}, err
 }
 func (c *daemonClient) EditPlanTask(ctx context.Context, sessionID, taskID, description string, dependsOn []string) (PlanMutation, error) {
-	var result struct{ Session daemon.SessionSnapshot `json:"session"` }
+	var result struct {
+		Session daemon.SessionSnapshot `json:"session"`
+	}
 	err := c.command(ctx, daemon.CommandRequest{Type: "command", ID: "cmd-plan-edit", Command: "plan.edit_task", Payload: map[string]any{"session_id": sessionID, "task_id": taskID, "description": description, "depends_on": dependsOn}}, &result)
 	return PlanMutation{Session: result.Session}, err
 }
 func (c *daemonClient) SetPlanTaskStatus(ctx context.Context, sessionID, taskID, status, blockedReason string) (PlanMutation, error) {
-	var result struct{ Session daemon.SessionSnapshot `json:"session"` }
+	var result struct {
+		Session daemon.SessionSnapshot `json:"session"`
+	}
 	err := c.command(ctx, daemon.CommandRequest{Type: "command", ID: "cmd-plan-status", Command: "plan.set_task_status", Payload: map[string]any{"session_id": sessionID, "task_id": taskID, "status": status, "blocked_reason": blockedReason}}, &result)
 	return PlanMutation{Session: result.Session}, err
 }
 func (c *daemonClient) AddPlanTaskNote(ctx context.Context, sessionID, taskID, note string) (PlanMutation, error) {
-	var result struct{ Session daemon.SessionSnapshot `json:"session"` }
+	var result struct {
+		Session daemon.SessionSnapshot `json:"session"`
+	}
 	err := c.command(ctx, daemon.CommandRequest{Type: "command", ID: "cmd-plan-note", Command: "plan.add_task_note", Payload: map[string]any{"session_id": sessionID, "task_id": taskID, "note": note}}, &result)
 	return PlanMutation{Session: result.Session}, err
 }
 func (c *daemonClient) ApproveShell(ctx context.Context, approvalID string) (ShellActionResult, error) {
-	var result struct{ Session daemon.SessionSnapshot `json:"session"` }
+	var result struct {
+		Session daemon.SessionSnapshot `json:"session"`
+	}
 	err := c.command(ctx, daemon.CommandRequest{Type: "command", ID: "cmd-shell-approve", Command: "shell.approve", Payload: map[string]any{"approval_id": approvalID}}, &result)
 	return ShellActionResult{Session: result.Session}, err
 }
 func (c *daemonClient) DenyShell(ctx context.Context, approvalID string) (ShellActionResult, error) {
-	var result struct{ Session daemon.SessionSnapshot `json:"session"` }
+	var result struct {
+		Session daemon.SessionSnapshot `json:"session"`
+	}
 	err := c.command(ctx, daemon.CommandRequest{Type: "command", ID: "cmd-shell-deny", Command: "shell.deny", Payload: map[string]any{"approval_id": approvalID}}, &result)
 	return ShellActionResult{Session: result.Session}, err
 }
 func (c *daemonClient) KillShell(ctx context.Context, commandID string) (ShellActionResult, error) {
-	var result struct{ Session daemon.SessionSnapshot `json:"session"` }
+	var result struct {
+		Session daemon.SessionSnapshot `json:"session"`
+	}
 	err := c.command(ctx, daemon.CommandRequest{Type: "command", ID: "cmd-shell-kill", Command: "shell.kill", Payload: map[string]any{"command_id": commandID}}, &result)
 	return ShellActionResult{Session: result.Session}, err
 }
 func (c *daemonClient) GetSettings(ctx context.Context) (daemon.SettingsSnapshot, error) {
-	var result struct{ Settings daemon.SettingsSnapshot `json:"settings"` }
+	var result struct {
+		Settings daemon.SettingsSnapshot `json:"settings"`
+	}
 	err := c.command(ctx, daemon.CommandRequest{Type: "command", ID: "cmd-settings-get", Command: "settings.get"}, &result)
 	return result.Settings, err
 }
 func (c *daemonClient) ApplySettingsForm(ctx context.Context, base string, values map[string]any) (daemon.SettingsSnapshot, error) {
-	var result struct{ Settings daemon.SettingsSnapshot `json:"settings"` }
+	var result struct {
+		Settings daemon.SettingsSnapshot `json:"settings"`
+	}
 	err := c.command(ctx, daemon.CommandRequest{Type: "command", ID: "cmd-settings-form-apply", Command: "settings.form.apply", Payload: map[string]any{"base_revision": base, "values": values}}, &result)
 	return result.Settings, err
 }
 func (c *daemonClient) GetSettingsRaw(ctx context.Context, file string) (daemon.SettingsRawFileContent, error) {
-	var result struct{ File daemon.SettingsRawFileContent `json:"file"` }
+	var result struct {
+		File daemon.SettingsRawFileContent `json:"file"`
+	}
 	err := c.command(ctx, daemon.CommandRequest{Type: "command", ID: "cmd-settings-raw-get", Command: "settings.raw.get", Payload: map[string]any{"path": file}}, &result)
 	return result.File, err
 }
 func (c *daemonClient) ApplySettingsRaw(ctx context.Context, file, base, content string) (daemon.SettingsSnapshot, error) {
-	var result struct{ Settings daemon.SettingsSnapshot `json:"settings"` }
+	var result struct {
+		Settings daemon.SettingsSnapshot `json:"settings"`
+	}
 	err := c.command(ctx, daemon.CommandRequest{Type: "command", ID: "cmd-settings-raw-apply", Command: "settings.raw.apply", Payload: map[string]any{"path": file, "base_revision": base, "content": content}}, &result)
 	return result.Settings, err
 }
@@ -579,11 +605,11 @@ func (c *daemonClient) Subscribe(ctx context.Context) (<-chan daemon.WebsocketEn
 	}, nil
 }
 
-func (c *daemonClient) DefaultOverrides() sessionOverrides   { return c.overrides }
+func (c *daemonClient) DefaultOverrides() sessionOverrides             { return c.overrides }
 func (c *daemonClient) ChatCommandPolicy() contracts.ChatCommandParams { return c.commandPolicy }
-func (c *daemonClient) ProviderLabel() string                { return c.providerLabel }
-func (c *daemonClient) ConfigPath() string                   { return c.configPath }
-func (c *daemonClient) ConfigID() string                     { return c.configID }
+func (c *daemonClient) ProviderLabel() string                          { return c.providerLabel }
+func (c *daemonClient) ConfigPath() string                             { return c.configPath }
+func (c *daemonClient) ConfigID() string                               { return c.configID }
 
 func (c *daemonClient) websocketURL() string {
 	parsed, _ := url.Parse(c.baseURL)
@@ -678,10 +704,21 @@ func buildLocalSessionSnapshot(agent *runtime.Agent, sessionID string) (daemon.S
 	}
 	plan, _ := agent.CurrentPlanHead(sessionID)
 	return daemon.SessionSnapshot{
-		SessionID:        entry.SessionID,
-		CreatedAt:        entry.CreatedAt,
-		LastActivity:     entry.LastActivity,
-		MessageCount:     entry.MessageCount,
+		SessionID:    entry.SessionID,
+		CreatedAt:    entry.CreatedAt,
+		LastActivity: entry.LastActivity,
+		MessageCount: entry.MessageCount,
+		ContextBudget: daemon.ContextBudgetSnapshot{
+			LastInputTokens:          agent.CurrentContextBudget(sessionID).LastInputTokens,
+			LastOutputTokens:         agent.CurrentContextBudget(sessionID).LastOutputTokens,
+			LastTotalTokens:          agent.CurrentContextBudget(sessionID).LastTotalTokens,
+			CurrentContextTokens:     approximateTextTokensFromMessages(agent.CurrentTranscript(sessionID)),
+			EstimatedNextInputTokens: approximateTextTokensFromMessages(agent.CurrentTranscript(sessionID)),
+			SummaryTokens:            agent.CurrentContextBudget(sessionID).SummaryTokens,
+			SummarizationCount:       agent.CurrentContextBudget(sessionID).SummarizationCount,
+			Source:                   coalesce(agent.CurrentContextBudget(sessionID).Source, "mixed"),
+			BudgetState:              "healthy",
+		},
 		Transcript:       agent.CurrentTranscript(sessionID),
 		Timeline:         agent.CurrentChatTimeline(sessionID),
 		Plan:             plan,
@@ -689,4 +726,15 @@ func buildLocalSessionSnapshot(agent *runtime.Agent, sessionID string) (daemon.S
 		RunningCommands:  agent.CurrentRunningShellCommands(sessionID),
 		Delegates:        agent.CurrentDelegates(sessionID),
 	}, nil
+}
+
+func approximateTextTokensFromMessages(messages []contracts.Message) int {
+	chars := 0
+	for _, message := range messages {
+		chars += len(message.Content)
+	}
+	if chars <= 0 {
+		return 0
+	}
+	return (chars + 3) / 4
 }
