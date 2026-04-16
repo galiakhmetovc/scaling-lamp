@@ -111,7 +111,7 @@ func (s *Server) queuedDrafts(sessionID string) []QueuedDraft {
 	defer s.runtimeMu.RUnlock()
 	state, ok := s.sessionRuntime[sessionID]
 	if !ok || len(state.queue) == 0 {
-		return nil
+		return []QueuedDraft{}
 	}
 	out := make([]QueuedDraft, len(state.queue))
 	copy(out, state.queue)

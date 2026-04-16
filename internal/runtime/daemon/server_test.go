@@ -253,6 +253,13 @@ func TestWebsocketSessionCreateCommandReturnsSessionSnapshot(t *testing.T) {
 	if session["session_id"] == "" {
 		t.Fatalf("session snapshot missing session_id: %+v", session)
 	}
+	queuedDrafts, ok := session["queued_drafts"].([]any)
+	if !ok {
+		t.Fatalf("queued_drafts type = %T, want []any", session["queued_drafts"])
+	}
+	if len(queuedDrafts) != 0 {
+		t.Fatalf("queued_drafts len = %d, want 0", len(queuedDrafts))
+	}
 }
 
 func TestWebsocketPlanCreateCommandUpdatesSessionSnapshot(t *testing.T) {
