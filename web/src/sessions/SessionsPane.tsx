@@ -1,5 +1,5 @@
 import type { BootstrapPayload, SessionSummary } from "../lib/types";
-import { buildSessionList } from "./model";
+import { buildSessionList, sessionSelectionIntent } from "./model";
 
 type SessionsPaneProps = {
   bootstrap: BootstrapPayload | null;
@@ -22,7 +22,11 @@ export function SessionsPane(props: SessionsPaneProps) {
         </div>
         <div className="session-list">
           {items.map((item) => (
-            <button key={item.id} className={`session-item ${item.active ? "active" : ""}`} onClick={() => onSelectSession(item.id)}>
+            <button
+              key={item.id}
+              className={`session-item ${item.active ? "active" : ""}`}
+              onClick={() => onSelectSession(sessionSelectionIntent(item.id).sessionID)}
+            >
               <div className="session-item-main">
                 <strong>{item.title}</strong>
                 <span>{item.meta}</span>

@@ -15,6 +15,7 @@ import {
 import { defaultSelectedTaskID } from "./plan/model";
 import { PlanPane } from "./plan/PlanPane";
 import { SessionsPane } from "./sessions/SessionsPane";
+import { sessionSelectionIntent } from "./sessions/model";
 import { SettingsPane } from "./settings/SettingsPane";
 import { ToolsPane } from "./tools/ToolsPane";
 import { DaemonClient, loadRuntimeClientConfig } from "./lib/client";
@@ -206,6 +207,12 @@ export function App() {
     applySessionSnapshot(result.session);
     setSelectedSessionID(result.session.session_id);
     setActiveTab("chat");
+  }
+
+  function handleSelectSession(sessionID: string) {
+    const intent = sessionSelectionIntent(sessionID);
+    setSelectedSessionID(intent.sessionID);
+    setActiveTab(intent.nextTab);
   }
 
   async function handleSendChat() {
@@ -430,7 +437,7 @@ export function App() {
               bootstrap={bootstrap}
               sessions={sessions}
               selectedSessionID={selectedSessionID}
-              onSelectSession={setSelectedSessionID}
+              onSelectSession={handleSelectSession}
               onCreateSession={() => void handleCreateSession()}
             />
           )}

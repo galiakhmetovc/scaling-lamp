@@ -1,4 +1,5 @@
 import type { SessionSummary } from "../lib/types";
+import type { TabKey } from "../layout";
 
 export type SessionListItem = {
   id: string;
@@ -6,6 +7,11 @@ export type SessionListItem = {
   title: string;
   meta: string;
   activityText: string;
+};
+
+export type SessionSelectionIntent = {
+  sessionID: string;
+  nextTab: TabKey;
 };
 
 export function buildSessionList(sessions: SessionSummary[], selectedSessionID: string): SessionListItem[] {
@@ -26,4 +32,11 @@ export function formatLastActivity(timestamp: string): string {
   }
   const date = new Date(timestamp);
   return `active ${date.toLocaleString()}`;
+}
+
+export function sessionSelectionIntent(sessionID: string): SessionSelectionIntent {
+  return {
+    sessionID,
+    nextTab: "chat",
+  };
 }

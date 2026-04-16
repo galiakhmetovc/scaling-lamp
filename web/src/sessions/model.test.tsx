@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
-import { buildSessionList, formatLastActivity } from "./model";
+import { buildSessionList, formatLastActivity, sessionSelectionIntent } from "./model";
 import { SessionsPane } from "./SessionsPane";
 import type { BootstrapPayload, SessionSummary } from "../lib/types";
 
@@ -31,6 +31,13 @@ describe("sessions model", () => {
 
   it("formats last activity text for compact session cards", () => {
     expect(formatLastActivity("2026-04-16T05:03:00Z")).toContain("active");
+  });
+
+  it("switches into chat when a session is selected from the catalog", () => {
+    expect(sessionSelectionIntent("session-newer")).toEqual({
+      sessionID: "session-newer",
+      nextTab: "chat",
+    });
   });
 });
 
