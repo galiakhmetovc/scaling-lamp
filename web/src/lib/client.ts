@@ -16,6 +16,7 @@ export class DaemonClient {
   private readonly endpointPath: string;
   private readonly websocketPath: string;
   private socket: WebSocket | null = null;
+  private connectPromise: Promise<void> | null = null;
   private listeners = new Set<EnvelopeListener>();
   private pending = new Map<string, PendingCommand>();
   private nextCommandID = 1;
@@ -34,13 +35,17 @@ export class DaemonClient {
   }
 
   async connect(): Promise<void> {
-    if (this.socket && (this.socket.readyState === WebSocket.OPEN || this.socket.readyState === WebSocket.CONNECTING)) {
+    if (this.socket?.readyState === WebSocket.OPEN) {
       return;
+    }
+    if (this.connectPromise) {
+      return this.connectPromise;
     }
     const scheme = window.location.protocol === "https:" ? "wss" : "ws";
     this.socket = new WebSocket(`${scheme}://${window.location.host}${this.websocketPath}`);
-    await new Promise<void>((resolve, reject) => {
+    this.connectPromise = new Promise<void>((resolve, reject) => {
       if (!this.socket) {
+        this.connectPromise = null;
         reject(new Error("websocket not created"));
         return;
       }
@@ -50,10 +55,12 @@ export class DaemonClient {
       };
       const handleOpen = () => {
         cleanup();
+        this.connectPromise = null;
         resolve();
       };
       const handleError = () => {
         cleanup();
+        this.connectPromise = null;
         reject(new Error("websocket connection failed"));
       };
       this.socket.addEventListener("open", handleOpen);
@@ -77,6 +84,7 @@ export class DaemonClient {
         this.listeners.forEach((listener) => listener(envelope));
       });
       this.socket.addEventListener("close", () => {
+        this.connectPromise = null;
         const error = new Error("websocket disconnected");
         for (const [id, pending] of this.pending) {
           this.pending.delete(id);
@@ -84,11 +92,13 @@ export class DaemonClient {
         }
       });
     });
+    await this.connectPromise;
   }
 
   disconnect(): void {
     this.socket?.close();
     this.socket = null;
+    this.connectPromise = null;
   }
 
   onEnvelope(listener: EnvelopeListener): () => void {
