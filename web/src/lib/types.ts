@@ -140,6 +140,7 @@ export type SettingsFieldState = {
   file_path: string;
   revision: string;
   enum?: string[];
+  apply_scope?: string;
 };
 
 export type SettingsRawFileState = {
@@ -221,6 +222,7 @@ export type CommandPayloadMap = {
   "shell.kill": { session: SessionSnapshot };
   "settings.get": { settings: SettingsSnapshot };
   "settings.form.apply": { settings: SettingsSnapshot };
+  "settings.quick.apply": { settings: SettingsSnapshot };
   "settings.raw.get": { file: SettingsRawFileContent };
   "settings.raw.apply": { settings: SettingsSnapshot };
 };

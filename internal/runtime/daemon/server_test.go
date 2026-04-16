@@ -700,6 +700,92 @@ func TestWebsocketSettingsFormApplyReloadsAgentAndRejectsStaleRevision(t *testin
 	}
 }
 
+func TestWebsocketSettingsQuickApplyAllowsNextRunWhileBusy(t *testing.T) {
+	t.Parallel()
+
+	agent := buildAgentWithOperatorSurface(t)
+	session, err := agent.CreateChatSession(context.Background())
+	if err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+	server, err := daemon.New(agent)
+	if err != nil {
+		t.Fatalf("new daemon server: %v", err)
+	}
+	httpServer := httptest.NewServer(server.Handler())
+	defer httpServer.Close()
+
+	conn := dialWebsocket(t, httpServer.URL, "/ws")
+	defer conn.Close()
+	_ = readEnvelopeJSON(t, conn)
+
+	writeCommandEnvelope(t, conn, map[string]any{"type": "command", "id": "cmd-1", "command": "settings.get"})
+	_ = readEnvelopeJSON(t, conn)
+	getCompleted := waitForCommandCompleted(t, conn, "cmd-1")
+	settings := mapPayload(t, mapPayload(t, getCompleted["payload"])["settings"])
+	baseRevision := settings["revision"]
+
+	writeCommandEnvelope(t, conn, map[string]any{
+		"type":    "command",
+		"id":      "cmd-draft",
+		"command": "draft.enqueue",
+		"payload": map[string]any{"session_id": session.SessionID, "text": "queued while idle guard exists"},
+	})
+	_ = readEnvelopeJSON(t, conn)
+	_ = waitForCommandCompleted(t, conn, "cmd-draft")
+
+	writeCommandEnvelope(t, conn, map[string]any{
+		"type":    "command",
+		"id":      "cmd-2",
+		"command": "settings.form.apply",
+		"payload": map[string]any{
+			"base_revision": baseRevision,
+			"values": map[string]any{
+				"model": "glm-4.6",
+			},
+		},
+	})
+	_ = readEnvelopeJSON(t, conn)
+	failed := waitForCommandFailed(t, conn, "cmd-2")
+	if !strings.Contains(fmt.Sprint(failed["error"]), "queued drafts") {
+		t.Fatalf("busy form apply error = %#v, want queued drafts", failed["error"])
+	}
+
+	writeCommandEnvelope(t, conn, map[string]any{
+		"type":    "command",
+		"id":      "cmd-3",
+		"command": "settings.quick.apply",
+		"payload": map[string]any{
+			"base_revision": baseRevision,
+			"values": map[string]any{
+				"model": "glm-4.6",
+			},
+		},
+	})
+	_ = readEnvelopeJSON(t, conn)
+	completed := waitForCommandCompleted(t, conn, "cmd-3")
+	_ = waitForEnvelopeType(t, conn, "settings_applied")
+	applied := mapPayload(t, mapPayload(t, completed["payload"])["settings"])
+	assertSettingValue(t, applied["quick_controls"], "model", "glm-4.6")
+
+	writeCommandEnvelope(t, conn, map[string]any{
+		"type":    "command",
+		"id":      "cmd-4",
+		"command": "settings.quick.apply",
+		"payload": map[string]any{
+			"base_revision": baseRevision,
+			"values": map[string]any{
+				"max_tool_rounds": 9,
+			},
+		},
+	})
+	_ = readEnvelopeJSON(t, conn)
+	disallowed := waitForCommandFailed(t, conn, "cmd-4")
+	if !strings.Contains(fmt.Sprint(disallowed["error"]), "not allowed") {
+		t.Fatalf("non-quick apply error = %#v, want not allowed", disallowed["error"])
+	}
+}
+
 func TestWebsocketSettingsRawApplyUsesRevisionChecks(t *testing.T) {
 	t.Parallel()
 
@@ -1093,7 +1179,7 @@ func buildChatDaemonAgent(t *testing.T, baseURL string) *runtime.Agent {
 	mustWriteFile(t, filepath.Join(dir, "policies", "operator-surface", "daemon-server.yaml"), "kind: DaemonServerPolicyConfig\nversion: v1\nid: daemon-server-main\nspec:\n  enabled: true\n  strategy: websocket_http\n  params:\n    listen_host: 0.0.0.0\n    listen_port: 8080\n    enable_websocket: true\n    public_base_url: \"\"\n    allowed_origins: []\n    initial_chat_history_limit: 40\n")
 	mustWriteFile(t, filepath.Join(dir, "policies", "operator-surface", "web-assets.yaml"), "kind: WebAssetsPolicyConfig\nversion: v1\nid: web-assets-main\nspec:\n  enabled: true\n  strategy: embedded_assets\n  params:\n    mode: embedded_assets\n    dev_proxy_url: \"\"\n")
 	mustWriteFile(t, filepath.Join(dir, "policies", "operator-surface", "client-transport.yaml"), "kind: ClientTransportPolicyConfig\nversion: v1\nid: client-transport-main\nspec:\n  enabled: true\n  strategy: websocket_http\n  params:\n    endpoint_path: /api\n    websocket_path: /ws\n")
-	mustWriteFile(t, filepath.Join(dir, "policies", "operator-surface", "settings.yaml"), "kind: SettingsSurfacePolicyConfig\nversion: v1\nid: settings-main\nspec:\n  enabled: true\n  strategy: revisioned_yaml_files\n  params:\n    require_idle_for_apply: true\n    form_fields:\n      - key: model\n        label: Model\n        type: string\n        file_path: policies/request-shape/model.yaml\n        yaml_path: [spec, params, model]\n        enum: [glm-5-turbo, glm-4.6]\n      - key: reasoning_effort\n        label: Thinking\n        type: string\n        file_path: policies/request-shape/sampling.yaml\n        yaml_path: [spec, params, reasoning_effort]\n        enum: [minimal, low, medium, high]\n      - key: approval_mode\n        label: Approval Mode\n        type: string\n        file_path: policies/tool-execution/approval.yaml\n        yaml_path: [spec, strategy]\n        enum: [always_allow, always_require, require_for_destructive]\n      - key: allow_network\n        label: Network\n        type: bool\n        file_path: policies/tool-execution/sandbox.yaml\n        yaml_path: [spec, params, allow_network]\n      - key: max_tool_rounds\n        label: Max Tool Rounds\n        type: int\n        file_path: agent.yaml\n        yaml_path: [spec, runtime, max_tool_rounds]\n      - key: render_markdown\n        label: Render Markdown\n        type: bool\n        file_path: policies/chat/output.yaml\n        yaml_path: [spec, params, render_markdown]\n      - key: markdown_style\n        label: Markdown Style\n        type: string\n        file_path: policies/chat/output.yaml\n        yaml_path: [spec, params, markdown_style]\n        enum: [dark, light]\n      - key: show_tool_calls\n        label: Show Tool Calls\n        type: bool\n        file_path: policies/chat/status.yaml\n        yaml_path: [spec, params, show_tool_calls]\n      - key: show_tool_results\n        label: Show Tool Results\n        type: bool\n        file_path: policies/chat/status.yaml\n        yaml_path: [spec, params, show_tool_results]\n      - key: show_plan_after_plan_tools\n        label: Show Plan After Plan Tools\n        type: bool\n        file_path: policies/chat/status.yaml\n        yaml_path: [spec, params, show_plan_after_plan_tools]\n    quick_controls:\n      - key: model\n        surface: chat\n        order: 10\n      - key: reasoning_effort\n        surface: chat\n        order: 20\n      - key: approval_mode\n        surface: chat\n        order: 30\n      - key: allow_network\n        surface: chat\n        order: 40\n    raw_file_globs:\n      - agent.yaml\n      - contracts/*.yaml\n      - policies/**/*.yaml\n")
+	mustWriteFile(t, filepath.Join(dir, "policies", "operator-surface", "settings.yaml"), "kind: SettingsSurfacePolicyConfig\nversion: v1\nid: settings-main\nspec:\n  enabled: true\n  strategy: revisioned_yaml_files\n  params:\n    require_idle_for_apply: true\n    form_fields:\n      - key: model\n        label: Model\n        type: string\n        file_path: policies/request-shape/model.yaml\n        yaml_path: [spec, params, model]\n        enum: [glm-5-turbo, glm-4.6]\n      - key: reasoning_effort\n        label: Thinking\n        type: string\n        file_path: policies/request-shape/sampling.yaml\n        yaml_path: [spec, params, reasoning_effort]\n        enum: [minimal, low, medium, high]\n      - key: approval_mode\n        label: Approval Mode\n        type: string\n        file_path: policies/tool-execution/approval.yaml\n        yaml_path: [spec, strategy]\n        enum: [always_allow, always_require, require_for_destructive]\n      - key: allow_network\n        label: Network\n        type: bool\n        file_path: policies/tool-execution/sandbox.yaml\n        yaml_path: [spec, params, allow_network]\n      - key: max_tool_rounds\n        label: Max Tool Rounds\n        type: int\n        file_path: agent.yaml\n        yaml_path: [spec, runtime, max_tool_rounds]\n      - key: render_markdown\n        label: Render Markdown\n        type: bool\n        file_path: policies/chat/output.yaml\n        yaml_path: [spec, params, render_markdown]\n      - key: markdown_style\n        label: Markdown Style\n        type: string\n        file_path: policies/chat/output.yaml\n        yaml_path: [spec, params, markdown_style]\n        enum: [dark, light]\n      - key: show_tool_calls\n        label: Show Tool Calls\n        type: bool\n        file_path: policies/chat/status.yaml\n        yaml_path: [spec, params, show_tool_calls]\n      - key: show_tool_results\n        label: Show Tool Results\n        type: bool\n        file_path: policies/chat/status.yaml\n        yaml_path: [spec, params, show_tool_results]\n      - key: show_plan_after_plan_tools\n        label: Show Plan After Plan Tools\n        type: bool\n        file_path: policies/chat/status.yaml\n        yaml_path: [spec, params, show_plan_after_plan_tools]\n    quick_controls:\n      - key: model\n        surface: chat\n        order: 10\n        apply_scope: next_run\n      - key: reasoning_effort\n        surface: chat\n        order: 20\n        apply_scope: next_run\n      - key: approval_mode\n        surface: chat\n        order: 30\n        apply_scope: next_run\n      - key: allow_network\n        surface: chat\n        order: 40\n        apply_scope: next_run\n    raw_file_globs:\n      - agent.yaml\n      - contracts/*.yaml\n      - policies/**/*.yaml\n")
 	mustWriteFile(t, filepath.Join(dir, "policies", "tool-execution", "approval.yaml"), "kind: ToolExecutionGatePolicyConfig\nversion: v1\nid: approval-main\nspec:\n  enabled: true\n  strategy: always_allow\n")
 	mustWriteFile(t, filepath.Join(dir, "policies", "tool-execution", "sandbox.yaml"), "kind: SandboxPolicyConfig\nversion: v1\nid: sandbox-main\nspec:\n  enabled: true\n  strategy: static_sandbox\n  params:\n    mode: workspace-write\n    allow_network: true\n")
 

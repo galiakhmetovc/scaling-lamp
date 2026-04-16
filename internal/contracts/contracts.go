@@ -647,9 +647,10 @@ type SettingsFormField struct {
 }
 
 type SettingsQuickControl struct {
-	Key     string `yaml:"key"`
-	Surface string `yaml:"surface"`
-	Order   int    `yaml:"order"`
+	Key        string `yaml:"key"`
+	Surface    string `yaml:"surface"`
+	Order      int    `yaml:"order"`
+	ApplyScope string `yaml:"apply_scope"`
 }
 
 type PromptAssetParams struct {

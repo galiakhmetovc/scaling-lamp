@@ -26,13 +26,14 @@ type SettingsSnapshot struct {
 }
 
 type SettingsFieldState struct {
-	Key      string   `json:"key"`
-	Label    string   `json:"label"`
-	Type     string   `json:"type"`
-	Value    any      `json:"value"`
-	FilePath string   `json:"file_path"`
-	Revision string   `json:"revision"`
-	Enum     []string `json:"enum,omitempty"`
+	Key        string   `json:"key"`
+	Label      string   `json:"label"`
+	Type       string   `json:"type"`
+	Value      any      `json:"value"`
+	FilePath   string   `json:"file_path"`
+	Revision   string   `json:"revision"`
+	Enum       []string `json:"enum,omitempty"`
+	ApplyScope string   `json:"apply_scope,omitempty"`
 }
 
 type SettingsRawFileState struct {
@@ -88,6 +89,7 @@ func (s *Server) settingsSnapshot() (SettingsSnapshot, error) {
 		if !ok {
 			return SettingsSnapshot{}, fmt.Errorf("quick control %q is not present in form_fields", quick.Key)
 		}
+		field.ApplyScope = quick.ApplyScope
 		quickControls = append(quickControls, field)
 	}
 	rawFiles, err := s.discoverRawFiles(root, params.RawFileGlobs)
@@ -140,6 +142,36 @@ func (s *Server) applyFormSettings(ctx context.Context, baseRevision string, val
 	if err := s.ensureSettingsApplyAllowed(); err != nil {
 		return SettingsSnapshot{}, err
 	}
+	return s.applySettingsFields(ctx, baseRevision, values, nil)
+}
+
+func (s *Server) applyQuickControlSettings(ctx context.Context, baseRevision string, values map[string]any) (SettingsSnapshot, error) {
+	agent := s.currentAgent()
+	quickControlsByKey := make(map[string]contracts.SettingsQuickControl, len(agent.Contracts.OperatorSurface.Settings.Params.QuickControls))
+	for _, control := range agent.Contracts.OperatorSurface.Settings.Params.QuickControls {
+		quickControlsByKey[control.Key] = control
+	}
+	allowedFields := make(map[string]contracts.SettingsFormField, len(agent.Contracts.OperatorSurface.Settings.Params.FormFields))
+	for _, field := range agent.Contracts.OperatorSurface.Settings.Params.FormFields {
+		if _, ok := quickControlsByKey[field.Key]; ok {
+			allowedFields[field.Key] = field
+		}
+	}
+	if len(values) == 0 {
+		return SettingsSnapshot{}, fmt.Errorf("settings.quick.apply requires values object")
+	}
+	for key := range values {
+		if _, ok := allowedFields[key]; !ok {
+			return SettingsSnapshot{}, fmt.Errorf("settings quick control %q is not allowed", key)
+		}
+	}
+	if err := s.ensureQuickControlApplyAllowed(quickControlsByKey, values); err != nil {
+		return SettingsSnapshot{}, err
+	}
+	return s.applySettingsFields(ctx, baseRevision, values, allowedFields)
+}
+
+func (s *Server) applySettingsFields(ctx context.Context, baseRevision string, values map[string]any, allowedFields map[string]contracts.SettingsFormField) (SettingsSnapshot, error) {
 	current, err := s.settingsSnapshot()
 	if err != nil {
 		return SettingsSnapshot{}, err
@@ -154,6 +186,11 @@ func (s *Server) applyFormSettings(ctx context.Context, baseRevision string, val
 	root := filepath.Dir(agent.ConfigPath)
 	fieldsByKey := map[string]contracts.SettingsFormField{}
 	for _, field := range agent.Contracts.OperatorSurface.Settings.Params.FormFields {
+		if allowedFields != nil {
+			if _, ok := allowedFields[field.Key]; !ok {
+				continue
+			}
+		}
 		fieldsByKey[field.Key] = field
 	}
 	updatesByFile := map[string]map[string]any{}
@@ -260,6 +297,27 @@ func (s *Server) ensureSettingsApplyAllowed() error {
 	if !agent.Contracts.OperatorSurface.Settings.Params.RequireIdleForApply {
 		return nil
 	}
+	return s.ensureRuntimeIdle()
+}
+
+func (s *Server) ensureQuickControlApplyAllowed(quickControls map[string]contracts.SettingsQuickControl, values map[string]any) error {
+	if err := s.ensureRuntimeIdle(); err == nil {
+		return nil
+	}
+	for key := range values {
+		scope := strings.TrimSpace(quickControls[key].ApplyScope)
+		if scope == "" {
+			scope = "full_apply"
+		}
+		if scope != "next_run" {
+			return s.ensureRuntimeIdle()
+		}
+	}
+	return nil
+}
+
+func (s *Server) ensureRuntimeIdle() error {
+	agent := s.currentAgent()
 	s.runtimeMu.RLock()
 	defer s.runtimeMu.RUnlock()
 	for sessionID, state := range s.sessionRuntime {

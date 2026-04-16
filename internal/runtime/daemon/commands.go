@@ -323,6 +323,20 @@ func (s *Server) executeCommand(ctx context.Context, req CommandRequest) (any, e
 			return nil, err
 		}
 		return map[string]any{"settings": settings}, nil
+	case "settings.quick.apply":
+		baseRevision, err := requiredString(req.Payload, "base_revision")
+		if err != nil {
+			return nil, err
+		}
+		values, ok := req.Payload["values"].(map[string]any)
+		if !ok {
+			return nil, fmt.Errorf("settings.quick.apply requires values object")
+		}
+		settings, err := s.applyQuickControlSettings(ctx, baseRevision, values)
+		if err != nil {
+			return nil, err
+		}
+		return map[string]any{"settings": settings}, nil
 	case "settings.raw.get":
 		path, err := requiredString(req.Payload, "path")
 		if err != nil {

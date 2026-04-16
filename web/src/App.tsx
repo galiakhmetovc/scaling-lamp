@@ -392,14 +392,14 @@ export function App() {
     const nextValues = { ...settingsDraft, [key]: value };
     setSettingsDraft(nextValues);
     try {
-      const result = await client.command("settings.form.apply", {
+      const result = await client.command("settings.quick.apply", {
         base_revision: settings.revision,
-        values: nextValues,
+        values: { [key]: value },
       });
       setSettings(result.settings);
       setSettingsDraft(fieldDraftFromSnapshot(result.settings));
       setSettingsError("");
-      setStatusMessage("settings applied");
+      setStatusMessage("quick control applied");
     } catch (error) {
       setSettingsError(String(error));
     }

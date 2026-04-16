@@ -65,15 +65,19 @@ spec:
       - key: model
         surface: chat
         order: 1
+        apply_scope: next_run
       - key: reasoning_effort
         surface: chat
         order: 2
+        apply_scope: next_run
       - key: approval_mode
         surface: chat
         order: 3
+        apply_scope: next_run
       - key: allow_network
         surface: chat
         order: 4
+        apply_scope: next_run
     raw_file_globs:
       - agent.yaml
       - contracts/*.yaml
