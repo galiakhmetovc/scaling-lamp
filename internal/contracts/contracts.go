@@ -480,6 +480,12 @@ type SessionHeadParams struct {
 	IncludeOpenLoops            bool   `yaml:"include_open_loops"`
 	IncludeLastUserMessage      bool   `yaml:"include_last_user_message"`
 	IncludeLastAssistantMessage bool   `yaml:"include_last_assistant_message"`
+	IncludeFilesystemRecent     bool   `yaml:"include_filesystem_recent"`
+	FilesystemRecentMaxItems    int    `yaml:"filesystem_recent_max_items"`
+	IncludeFilesystemTree       bool   `yaml:"include_filesystem_tree"`
+	FilesystemTreeMaxEntries    int    `yaml:"filesystem_tree_max_entries"`
+	FilesystemTreeIncludeFiles  bool   `yaml:"filesystem_tree_include_files"`
+	FilesystemTreeIncludeDirs   bool   `yaml:"filesystem_tree_include_dirs"`
 }
 
 type ToolCatalogParams struct {

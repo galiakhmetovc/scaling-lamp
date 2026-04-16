@@ -13,4 +13,10 @@ spec:
     max_user_chars: 200
     max_assistant_chars: 300
     compact_plan: true
+    include_filesystem_recent: true
+    filesystem_recent_max_items: 3
+    include_filesystem_tree: true
+    filesystem_tree_max_entries: 8
+    filesystem_tree_include_files: true
+    filesystem_tree_include_dirs: true
     max_items: 8

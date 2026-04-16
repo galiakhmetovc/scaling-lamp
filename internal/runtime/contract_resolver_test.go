@@ -281,7 +281,13 @@ func TestResolveContractsBuildsTransportAndMemoryContracts(t *testing.T) {
 		"    max_items: 5\n"+
 		"    max_user_chars: 160\n"+
 		"    max_assistant_chars: 240\n"+
-		"    compact_plan: true\n")
+		"    compact_plan: true\n"+
+		"    include_filesystem_recent: true\n"+
+		"    filesystem_recent_max_items: 3\n"+
+		"    include_filesystem_tree: true\n"+
+		"    filesystem_tree_max_entries: 8\n"+
+		"    filesystem_tree_include_files: true\n"+
+		"    filesystem_tree_include_dirs: true\n")
 
 	mustWriteFile(t, filepath.Join(dir, "policies", "tools", "catalog.yaml"), ""+
 		"kind: ToolCatalogPolicyConfig\n"+
@@ -508,6 +514,18 @@ func TestResolveContractsBuildsTransportAndMemoryContracts(t *testing.T) {
 	}
 	if !contracts.PromptAssembly.SessionHead.Params.CompactPlan {
 		t.Fatal("expected compact_plan to be true")
+	}
+	if !contracts.PromptAssembly.SessionHead.Params.IncludeFilesystemRecent {
+		t.Fatal("expected include_filesystem_recent to be true")
+	}
+	if contracts.PromptAssembly.SessionHead.Params.FilesystemRecentMaxItems != 3 {
+		t.Fatalf("filesystem recent max items = %d, want 3", contracts.PromptAssembly.SessionHead.Params.FilesystemRecentMaxItems)
+	}
+	if !contracts.PromptAssembly.SessionHead.Params.IncludeFilesystemTree {
+		t.Fatal("expected include_filesystem_tree to be true")
+	}
+	if contracts.PromptAssembly.SessionHead.Params.FilesystemTreeMaxEntries != 8 {
+		t.Fatalf("filesystem tree max entries = %d, want 8", contracts.PromptAssembly.SessionHead.Params.FilesystemTreeMaxEntries)
 	}
 	if contracts.Tools.ID != "tools-main" {
 		t.Fatalf("tools ID = %q, want %q", contracts.Tools.ID, "tools-main")

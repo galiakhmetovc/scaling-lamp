@@ -257,7 +257,7 @@ func (a *Agent) BtwTurn(ctx context.Context, session *ChatSession, input BtwTurn
 	rawMessages = append(rawMessages, userMessage)
 
 	contractSet := disableBuiltinTools(a.Contracts)
-	assembledMessages, err := a.assemblePromptMessages(session.SessionID, rawMessages)
+	assembledMessages, err := a.assemblePromptMessages(contractSet, session.SessionID, rawMessages)
 	if err != nil {
 		return provider.ClientResult{}, err
 	}
@@ -279,7 +279,7 @@ func (a *Agent) transcriptProjection() *projections.TranscriptProjection {
 	return nil
 }
 
-func (a *Agent) assemblePromptMessages(sessionID string, fallback []contracts.Message) ([]contracts.Message, error) {
+func (a *Agent) assemblePromptMessages(contractSet contracts.ResolvedContracts, sessionID string, fallback []contracts.Message) ([]contracts.Message, error) {
 	if a == nil || a.PromptAssembly == nil {
 		return fallback, nil
 	}
@@ -297,11 +297,16 @@ func (a *Agent) assemblePromptMessages(sessionID string, fallback []contracts.Me
 	if projection := a.planHeadProjection(); projection != nil {
 		planHead = projection.SnapshotForSession(sessionID)
 	}
-	messages, err := a.PromptAssembly.Build(a.Contracts.PromptAssembly, promptassembly.Input{
-		SessionID:   sessionID,
-		Transcript:  transcript,
-		PlanHead:    planHead,
-		RawMessages: append([]contracts.Message{}, fallback...),
+	filesystemHead, err := a.buildFilesystemHeadInput(contractSet, sessionID, fallback)
+	if err != nil {
+		return nil, err
+	}
+	messages, err := a.PromptAssembly.Build(contractSet.PromptAssembly, promptassembly.Input{
+		SessionID:      sessionID,
+		Transcript:     transcript,
+		PlanHead:       planHead,
+		FilesystemHead: filesystemHead,
+		RawMessages:    append([]contracts.Message{}, fallback...),
 	})
 	if err != nil {
 		return nil, err

@@ -20,6 +20,7 @@ spec:
       - run
       - transcript
       - chat_timeline
+      - filesystem_head
       - delegate
       - shell_command
       - active_plan

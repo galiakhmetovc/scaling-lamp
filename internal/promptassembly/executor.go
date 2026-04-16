@@ -11,10 +11,11 @@ import (
 )
 
 type Input struct {
-	SessionID   string
-	Transcript  projections.TranscriptSnapshot
-	PlanHead    projections.PlanHeadSnapshot
-	RawMessages []contracts.Message
+	SessionID      string
+	Transcript     projections.TranscriptSnapshot
+	PlanHead       projections.PlanHeadSnapshot
+	FilesystemHead FilesystemHeadInput
+	RawMessages    []contracts.Message
 }
 
 type Executor struct{}
@@ -34,7 +35,7 @@ func (e *Executor) Build(contract contracts.PromptAssemblyContract, input Input)
 	if err != nil {
 		return nil, err
 	}
-	sessionHead, err := e.buildSessionHead(contract.SessionHead, input.SessionID, transcript, input.PlanHead)
+	sessionHead, err := e.buildSessionHead(contract.SessionHead, input.SessionID, transcript, input.PlanHead, input.FilesystemHead)
 	if err != nil {
 		return nil, err
 	}
@@ -92,7 +93,7 @@ func (e *Executor) buildSystemPrompt(policy contracts.SystemPromptPolicy) (contr
 	return contracts.Message{Role: role, Content: content}, nil
 }
 
-func (e *Executor) buildSessionHead(policy contracts.SessionHeadPolicy, sessionID string, transcript []contracts.Message, planHead projections.PlanHeadSnapshot) (contracts.Message, error) {
+func (e *Executor) buildSessionHead(policy contracts.SessionHeadPolicy, sessionID string, transcript []contracts.Message, planHead projections.PlanHeadSnapshot, filesystemHead FilesystemHeadInput) (contracts.Message, error) {
 	if !policy.Enabled {
 		return contracts.Message{}, nil
 	}
@@ -120,6 +121,7 @@ func (e *Executor) buildSessionHead(policy contracts.SessionHeadPolicy, sessionI
 		}
 	}
 	lines = append(lines, buildPlanHeadLines(planHead, policy.Params.CompactPlan)...)
+	lines = append(lines, buildFilesystemHeadLines(policy.Params, filesystemHead)...)
 	if policy.Params.MaxItems > 0 && len(lines) > policy.Params.MaxItems {
 		lines = lines[:policy.Params.MaxItems]
 	}
@@ -130,6 +132,65 @@ func (e *Executor) buildSessionHead(policy contracts.SessionHeadPolicy, sessionI
 		Role:    "system",
 		Content: strings.Join(lines, "\n"),
 	}, nil
+}
+
+func buildFilesystemHeadLines(params contracts.SessionHeadParams, snapshot FilesystemHeadInput) []string {
+	lines := make([]string, 0, 6)
+	if params.IncludeFilesystemRecent {
+		lines = append(lines, compactFilesystemRecentLines(snapshot.Recent, params.FilesystemRecentMaxItems)...)
+	}
+	if params.IncludeFilesystemTree {
+		if line := compactFilesystemTreeLine(snapshot.Tree, params.FilesystemTreeMaxEntries, params.FilesystemTreeIncludeFiles, params.FilesystemTreeIncludeDirs); line != "" {
+			lines = append(lines, line)
+		}
+	}
+	return lines
+}
+
+func compactFilesystemRecentLines(snapshot FilesystemRecentHeadInput, maxItems int) []string {
+	lines := make([]string, 0, 5)
+	appendLine := func(prefix string, items []string) {
+		if len(items) == 0 {
+			return
+		}
+		if maxItems > 0 && len(items) > maxItems {
+			items = items[:maxItems]
+		}
+		lines = append(lines, prefix+strings.Join(items, ", "))
+	}
+	appendLine("📝 Edited: ", snapshot.Edited)
+	appendLine("📖 Read: ", snapshot.Read)
+	appendLine("🔎 Found: ", snapshot.Found)
+	appendLine("↔️ Moved: ", snapshot.Moved)
+	appendLine("🗑 Trashed: ", snapshot.Trashed)
+	return lines
+}
+
+func compactFilesystemTreeLine(entries []FilesystemTreeEntry, maxEntries int, includeFiles, includeDirs bool) string {
+	items := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		if entry.IsDir && !includeDirs {
+			continue
+		}
+		if !entry.IsDir && !includeFiles {
+			continue
+		}
+		name := entry.Name
+		if strings.TrimSpace(name) == "" {
+			continue
+		}
+		if entry.IsDir {
+			name += "/"
+		}
+		items = append(items, name)
+		if maxEntries > 0 && len(items) >= maxEntries {
+			break
+		}
+	}
+	if len(items) == 0 {
+		return ""
+	}
+	return "🗂 Tree: " + strings.Join(items, ", ")
 }
 
 func buildPlanHeadLines(snapshot projections.PlanHeadSnapshot, compact bool) []string {

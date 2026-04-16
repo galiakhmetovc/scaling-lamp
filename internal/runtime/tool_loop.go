@@ -49,7 +49,7 @@ func (a *Agent) executeProviderLoop(ctx context.Context, contractSet contracts.R
 		maxRounds = 4
 	}
 	for round := 0; round < maxRounds; round++ {
-		assembledMessages, err := a.assemblePromptMessages(sessionID, append([]contracts.Message{}, currentMessages...))
+		assembledMessages, err := a.assemblePromptMessages(contractSet, sessionID, append([]contracts.Message{}, currentMessages...))
 		if err != nil {
 			return provider.ClientResult{}, err
 		}
@@ -760,15 +760,15 @@ func delegateArtifactsPayload(artifacts []DelegateArtifactRef) []map[string]any 
 
 func delegateHandoffPayload(handoff DelegateHandoff, includeArtifacts bool) map[string]any {
 	payload := map[string]any{
-		"delegate_id":            handoff.DelegateID,
-		"backend":                string(handoff.Backend),
-		"last_run_id":            handoff.LastRunID,
-		"summary":                handoff.Summary,
-		"promoted_facts":         append([]string(nil), handoff.PromotedFacts...),
-		"open_questions":         append([]string(nil), handoff.OpenQuestions...),
-		"recommended_next_step":  handoff.RecommendedNextStep,
-		"created_at":             handoff.CreatedAt.Format(time.RFC3339Nano),
-		"updated_at":             handoff.UpdatedAt.Format(time.RFC3339Nano),
+		"delegate_id":           handoff.DelegateID,
+		"backend":               string(handoff.Backend),
+		"last_run_id":           handoff.LastRunID,
+		"summary":               handoff.Summary,
+		"promoted_facts":        append([]string(nil), handoff.PromotedFacts...),
+		"open_questions":        append([]string(nil), handoff.OpenQuestions...),
+		"recommended_next_step": handoff.RecommendedNextStep,
+		"created_at":            handoff.CreatedAt.Format(time.RFC3339Nano),
+		"updated_at":            handoff.UpdatedAt.Format(time.RFC3339Nano),
 	}
 	if includeArtifacts {
 		payload["artifacts"] = delegateArtifactsPayload(handoff.Artifacts)

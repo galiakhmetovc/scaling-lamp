@@ -259,6 +259,79 @@ func TestExecutorBuildUsesCompactPlanSummaryWhenEnabled(t *testing.T) {
 	}
 }
 
+func TestExecutorBuildIncludesFilesystemRecentAndTreeSectionsWhenEnabled(t *testing.T) {
+	t.Parallel()
+
+	executor := promptassembly.NewExecutor()
+	got, err := executor.Build(contracts.PromptAssemblyContract{
+		SessionHead: contracts.SessionHeadPolicy{
+			Enabled:  true,
+			Strategy: "projection_summary",
+			Params: contracts.SessionHeadParams{
+				Placement:                  "message0",
+				Title:                      "Session head",
+				IncludeFilesystemRecent:    true,
+				FilesystemRecentMaxItems:   2,
+				IncludeFilesystemTree:      true,
+				FilesystemTreeMaxEntries:   3,
+				FilesystemTreeIncludeDirs:  true,
+				FilesystemTreeIncludeFiles: true,
+			},
+		},
+	}, promptassembly.Input{
+		SessionID: "session-123",
+		FilesystemHead: promptassembly.FilesystemHeadInput{
+			Recent: promptassembly.FilesystemRecentHeadInput{
+				Edited: []string{"internal/promptassembly/executor.go", "config/zai-smoke/policies/prompt-assembly/session-head.yaml"},
+				Read:   []string{"internal/contracts/contracts.go"},
+			},
+			Tree: []promptassembly.FilesystemTreeEntry{
+				{Name: "cmd", IsDir: true},
+				{Name: "config", IsDir: true},
+				{Name: "go.mod", IsDir: false},
+				{Name: "internal", IsDir: true},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("Build returned error: %v", err)
+	}
+	want := "Session head\n📝 Edited: internal/promptassembly/executor.go, config/zai-smoke/policies/prompt-assembly/session-head.yaml\n📖 Read: internal/contracts/contracts.go\n🗂 Tree: cmd/, config/, go.mod"
+	if got[0].Content != want {
+		t.Fatalf("filesystem session head = %q", got[0].Content)
+	}
+}
+
+func TestExecutorBuildOmitsFilesystemSectionsWhenDisabled(t *testing.T) {
+	t.Parallel()
+
+	executor := promptassembly.NewExecutor()
+	got, err := executor.Build(contracts.PromptAssemblyContract{
+		SessionHead: contracts.SessionHeadPolicy{
+			Enabled:  true,
+			Strategy: "projection_summary",
+			Params: contracts.SessionHeadParams{
+				Placement: "message0",
+				Title:     "Session head",
+			},
+		},
+	}, promptassembly.Input{
+		SessionID: "session-123",
+		FilesystemHead: promptassembly.FilesystemHeadInput{
+			Recent: promptassembly.FilesystemRecentHeadInput{
+				Edited: []string{"internal/promptassembly/executor.go"},
+			},
+			Tree: []promptassembly.FilesystemTreeEntry{{Name: "internal", IsDir: true}},
+		},
+	})
+	if err != nil {
+		t.Fatalf("Build returned error: %v", err)
+	}
+	if got[0].Content != "Session head" {
+		t.Fatalf("session head = %q, want filesystem blocks omitted", got[0].Content)
+	}
+}
+
 func TestExecutorBuildFailsWhenRequiredSystemPromptFileIsMissing(t *testing.T) {
 	t.Parallel()
 
