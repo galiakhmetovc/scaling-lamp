@@ -921,6 +921,60 @@ func TestResolveContractsRejectsUnsupportedPolicyStrategy(t *testing.T) {
 	}
 }
 
+func TestResolveContractsResolvesArtifactOffloadParams(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+
+	mustWriteFile(t, filepath.Join(dir, "agent.yaml"), ""+
+		"kind: AgentConfig\n"+
+		"version: v1\n"+
+		"id: agent-test\n"+
+		"spec:\n"+
+		"  contracts:\n"+
+		"    memory: ./contracts/memory.yaml\n")
+	mustWriteFile(t, filepath.Join(dir, "contracts", "memory.yaml"), ""+
+		"kind: MemoryContractConfig\n"+
+		"version: v1\n"+
+		"id: memory-main\n"+
+		"spec:\n"+
+		"  offload_policy_path: ../policies/memory/offload.yaml\n")
+	mustWriteFile(t, filepath.Join(dir, "policies", "memory", "offload.yaml"), ""+
+		"kind: OffloadPolicyConfig\n"+
+		"version: v1\n"+
+		"id: offload-main\n"+
+		"spec:\n"+
+		"  enabled: true\n"+
+		"  strategy: artifact_store\n"+
+		"  params:\n"+
+		"    max_chars: 512\n"+
+		"    preview_chars: 80\n"+
+		"    storage_path: ../../var/artifacts\n"+
+		"    expose_retrieval_tools: true\n"+
+		"    search_limit: 4\n")
+
+	cfg, err := config.LoadRoot(filepath.Join(dir, "agent.yaml"))
+	if err != nil {
+		t.Fatalf("LoadRoot returned error: %v", err)
+	}
+	got, err := runtime.ResolveContracts(cfg)
+	if err != nil {
+		t.Fatalf("ResolveContracts returned error: %v", err)
+	}
+	if got.Memory.Offload.Strategy != "artifact_store" {
+		t.Fatalf("offload strategy = %q, want artifact_store", got.Memory.Offload.Strategy)
+	}
+	if got.Memory.Offload.Params.StoragePath != filepath.Join(dir, "var", "artifacts") {
+		t.Fatalf("storage path = %q, want %q", got.Memory.Offload.Params.StoragePath, filepath.Join(dir, "var", "artifacts"))
+	}
+	if !got.Memory.Offload.Params.ExposeRetrievalTools {
+		t.Fatal("expose retrieval tools = false, want true")
+	}
+	if got.Memory.Offload.Params.SearchLimit != 4 {
+		t.Fatalf("search limit = %d, want 4", got.Memory.Offload.Params.SearchLimit)
+	}
+}
+
 func TestResolveContractsWithRegistryAllowsExtendedStrategies(t *testing.T) {
 	t.Parallel()
 

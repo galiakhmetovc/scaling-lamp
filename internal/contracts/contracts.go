@@ -761,5 +761,9 @@ type OffloadPolicy struct {
 }
 
 type OffloadParams struct {
-	MaxChars int `yaml:"max_chars"`
+	MaxChars             int    `yaml:"max_chars"`
+	PreviewChars         int    `yaml:"preview_chars"`
+	StoragePath          string `yaml:"storage_path"`
+	ExposeRetrievalTools bool   `yaml:"expose_retrieval_tools"`
+	SearchLimit          int    `yaml:"search_limit"`
 }

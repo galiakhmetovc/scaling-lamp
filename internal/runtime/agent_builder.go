@@ -6,6 +6,7 @@ import (
 	"sync"
 	"time"
 
+	"teamd/internal/artifacts"
 	"teamd/internal/config"
 	"teamd/internal/contracts"
 	"teamd/internal/delegation"
@@ -31,6 +32,7 @@ type Agent struct {
 	FilesystemTools *filesystem.DefinitionExecutor
 	ShellTools      *shell.DefinitionExecutor
 	DelegationTools *delegation.DefinitionExecutor
+	ArtifactStore   *artifacts.Store
 	ShellRuntime    *shell.Executor
 	DelegateRuntime DelegateRuntime
 	ToolCatalog     *tools.CatalogExecutor
@@ -196,6 +198,11 @@ func BuildAgent(configPath string) (*Agent, error) {
 		NewID: func(prefix string) string {
 			return fmt.Sprintf("%s-%d", prefix, time.Now().UTC().UnixNano())
 		},
+	}
+	if store, err := agent.ensureArtifactStore(contracts); err != nil {
+		return nil, fmt.Errorf("build artifact store: %w", err)
+	} else {
+		agent.ArtifactStore = store
 	}
 	agent.DelegateRuntime = NewLocalDelegateRuntime(agent)
 	return agent, nil

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"os"
@@ -848,6 +849,224 @@ func TestAgentChatTurnContinuesAfterShellToolError(t *testing.T) {
 	}
 }
 
+func TestAgentChatTurnOffloadsLargeFilesystemToolResultIntoArtifactPlaceholder(t *testing.T) {
+	t.Setenv("TEAMD_ZAI_API_KEY", "secret-token")
+
+	dir := t.TempDir()
+	largeContent := strings.Repeat("large artifact line\n", 120)
+	if err := os.MkdirAll(filepath.Join(dir, "notes"), 0o755); err != nil {
+		t.Fatalf("MkdirAll returned error: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "notes", "large.txt"), []byte(largeContent), 0o644); err != nil {
+		t.Fatalf("WriteFile returned error: %v", err)
+	}
+
+	clock := time.Date(2026, 4, 16, 9, 0, 0, 0, time.UTC)
+	idValues := []string{
+		"session-chat-artifact-1",
+		"run-chat-artifact-1", "evt-session-artifact-1", "evt-msg-user-artifact-1", "evt-run-start-artifact-1",
+		"evt-provider-request-artifact-1", "evt-transport-artifact-1", "evt-tool-call-started-artifact-1", "evt-tool-call-completed-artifact-1",
+		"evt-provider-request-artifact-2", "evt-transport-artifact-2", "evt-msg-assistant-artifact-1", "evt-run-complete-artifact-1",
+	}
+	nextID := func(prefix string) string {
+		if len(idValues) == 0 {
+			t.Fatalf("unexpected id request for prefix %q", prefix)
+		}
+		id := idValues[0]
+		idValues = idValues[1:]
+		return id
+	}
+
+	call := 0
+	var secondRequest map[string]any
+	agent := &runtime.Agent{
+		Config:        chatRuntimeConfigForTest(),
+		ConfigPath:    filepath.Join(dir, "agent.yaml"),
+		Contracts:     chatContractsForArtifactToolLoopTest(dir),
+		PromptAssets:  provider.NewPromptAssetExecutor(),
+		RequestShape:  provider.NewRequestShapeExecutor(),
+		PlanTools:     tools.NewPlanToolExecutor(),
+		ToolCatalog:   tools.NewCatalogExecutor(),
+		ToolExecution: tools.NewExecutionGate(),
+		Transport: provider.NewTransportExecutor(fakeDoer{
+			do: func(req *http.Request) (*http.Response, error) {
+				call++
+				if call == 1 {
+					return &http.Response{
+						StatusCode: http.StatusOK,
+						Header:     http.Header{"Content-Type": []string{"application/json"}},
+						Body:       io.NopCloser(bytes.NewBufferString(`{"id":"resp-artifact-1","model":"glm-5-turbo","choices":[{"finish_reason":"tool_calls","message":{"role":"assistant","content":"","tool_calls":[{"id":"call-artifact-1","function":{"name":"fs_read_text","arguments":{"path":"notes/large.txt"}}}]}}]}`)),
+					}, nil
+				}
+				defer req.Body.Close()
+				if err := json.NewDecoder(req.Body).Decode(&secondRequest); err != nil {
+					t.Fatalf("decode second request body: %v", err)
+				}
+				return &http.Response{
+					StatusCode: http.StatusOK,
+					Header:     http.Header{"Content-Type": []string{"application/json"}},
+					Body:       io.NopCloser(bytes.NewBufferString(`{"id":"resp-artifact-2","model":"glm-5-turbo","choices":[{"finish_reason":"stop","message":{"role":"assistant","content":"Artifact placeholder observed."}}]}`)),
+				}, nil
+			},
+		}),
+		EventLog:    runtime.NewInMemoryEventLog(),
+		Projections: []projections.Projection{projections.NewSessionProjection(), projections.NewRunProjection()},
+		Now:         func() time.Time { return clock },
+		NewID:       nextID,
+	}
+	agent.ProviderClient = provider.NewClient(agent.PromptAssets, agent.RequestShape, agent.PlanTools, filesystem.NewDefinitionExecutor(), shell.NewDefinitionExecutor(), delegation.NewDefinitionExecutor(), agent.ToolCatalog, agent.ToolExecution, agent.Transport)
+
+	session, err := agent.NewChatSession()
+	if err != nil {
+		t.Fatalf("NewChatSession returned error: %v", err)
+	}
+	result, err := agent.ChatTurn(context.Background(), session, runtime.ChatTurnInput{Prompt: "read large file"})
+	if err != nil {
+		t.Fatalf("ChatTurn returned error: %v", err)
+	}
+	if result.Provider.Message.Content != "Artifact placeholder observed." {
+		t.Fatalf("assistant response = %q, want artifact placeholder response", result.Provider.Message.Content)
+	}
+	content := toolMessageContentFromRequest(t, secondRequest, "fs_read_text")
+	if strings.Contains(content, largeContent) {
+		t.Fatalf("tool message still contains full large content")
+	}
+	if !strings.Contains(content, `"offloaded":true`) {
+		t.Fatalf("tool message missing offloaded marker: %s", content)
+	}
+	if !strings.Contains(content, `"artifact_ref":"artifact://`) {
+		t.Fatalf("tool message missing artifact ref: %s", content)
+	}
+	if !strings.Contains(content, "artifact_read") {
+		t.Fatalf("tool message missing artifact_read guidance: %s", content)
+	}
+}
+
+func TestAgentChatTurnAllowsArtifactReadOnNextToolRound(t *testing.T) {
+	t.Setenv("TEAMD_ZAI_API_KEY", "secret-token")
+
+	dir := t.TempDir()
+	largeContent := strings.Repeat("artifact body\n", 150)
+	if err := os.MkdirAll(filepath.Join(dir, "notes"), 0o755); err != nil {
+		t.Fatalf("MkdirAll returned error: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "notes", "large.txt"), []byte(largeContent), 0o644); err != nil {
+		t.Fatalf("WriteFile returned error: %v", err)
+	}
+
+	clock := time.Date(2026, 4, 16, 9, 30, 0, 0, time.UTC)
+	idValues := []string{
+		"session-chat-artifact-2",
+		"run-chat-artifact-2", "evt-session-artifact-2", "evt-msg-user-artifact-2", "evt-run-start-artifact-2",
+		"evt-provider-request-artifact-3", "evt-transport-artifact-3", "evt-tool-call-started-artifact-2", "evt-tool-call-completed-artifact-2",
+		"evt-provider-request-artifact-4", "evt-transport-artifact-4", "evt-tool-call-started-artifact-3", "evt-tool-call-completed-artifact-3",
+		"evt-provider-request-artifact-5", "evt-transport-artifact-5", "evt-msg-assistant-artifact-2", "evt-run-complete-artifact-2",
+	}
+	nextID := func(prefix string) string {
+		if len(idValues) == 0 {
+			t.Fatalf("unexpected id request for prefix %q", prefix)
+		}
+		id := idValues[0]
+		idValues = idValues[1:]
+		return id
+	}
+
+	call := 0
+	var thirdRequest map[string]any
+	agent := &runtime.Agent{
+		Config:        chatRuntimeConfigForTest(),
+		ConfigPath:    filepath.Join(dir, "agent.yaml"),
+		MaxToolRounds: 3,
+		Contracts:     chatContractsForArtifactToolLoopTest(dir),
+		PromptAssets:  provider.NewPromptAssetExecutor(),
+		RequestShape:  provider.NewRequestShapeExecutor(),
+		PlanTools:     tools.NewPlanToolExecutor(),
+		ToolCatalog:   tools.NewCatalogExecutor(),
+		ToolExecution: tools.NewExecutionGate(),
+		Transport: provider.NewTransportExecutor(fakeDoer{
+			do: func(req *http.Request) (*http.Response, error) {
+				call++
+				switch call {
+				case 1:
+					return &http.Response{
+						StatusCode: http.StatusOK,
+						Header:     http.Header{"Content-Type": []string{"application/json"}},
+						Body:       io.NopCloser(bytes.NewBufferString(`{"id":"resp-artifact-loop-1","model":"glm-5-turbo","choices":[{"finish_reason":"tool_calls","message":{"role":"assistant","content":"","tool_calls":[{"id":"call-artifact-loop-1","function":{"name":"fs_read_text","arguments":{"path":"notes/large.txt"}}}]}}]}`)),
+					}, nil
+				case 2:
+					var secondRequest map[string]any
+					defer req.Body.Close()
+					if err := json.NewDecoder(req.Body).Decode(&secondRequest); err != nil {
+						t.Fatalf("decode second request body: %v", err)
+					}
+					content := toolMessageContentFromRequest(t, secondRequest, "fs_read_text")
+					artifactRef := artifactRefFromToolMessage(t, content)
+					return &http.Response{
+						StatusCode: http.StatusOK,
+						Header:     http.Header{"Content-Type": []string{"application/json"}},
+						Body:       io.NopCloser(bytes.NewBufferString(fmt.Sprintf(`{"id":"resp-artifact-loop-2","model":"glm-5-turbo","choices":[{"finish_reason":"tool_calls","message":{"role":"assistant","content":"","tool_calls":[{"id":"call-artifact-loop-2","function":{"name":"artifact_read","arguments":{"artifact_ref":%q}}}]}}]}`, artifactRef))),
+					}, nil
+				default:
+					defer req.Body.Close()
+					if err := json.NewDecoder(req.Body).Decode(&thirdRequest); err != nil {
+						t.Fatalf("decode third request body: %v", err)
+					}
+					return &http.Response{
+						StatusCode: http.StatusOK,
+						Header:     http.Header{"Content-Type": []string{"application/json"}},
+						Body:       io.NopCloser(bytes.NewBufferString(`{"id":"resp-artifact-loop-3","model":"glm-5-turbo","choices":[{"finish_reason":"stop","message":{"role":"assistant","content":"Artifact retrieved."}}]}`)),
+					}, nil
+				}
+			},
+		}),
+		EventLog:    runtime.NewInMemoryEventLog(),
+		Projections: []projections.Projection{projections.NewSessionProjection(), projections.NewRunProjection()},
+		Now:         func() time.Time { return clock },
+		NewID:       nextID,
+	}
+	agent.ProviderClient = provider.NewClient(agent.PromptAssets, agent.RequestShape, agent.PlanTools, filesystem.NewDefinitionExecutor(), shell.NewDefinitionExecutor(), delegation.NewDefinitionExecutor(), agent.ToolCatalog, agent.ToolExecution, agent.Transport)
+
+	session, err := agent.NewChatSession()
+	if err != nil {
+		t.Fatalf("NewChatSession returned error: %v", err)
+	}
+	result, err := agent.ChatTurn(context.Background(), session, runtime.ChatTurnInput{Prompt: "read artifact back"})
+	if err != nil {
+		t.Fatalf("ChatTurn returned error: %v", err)
+	}
+	if result.Provider.Message.Content != "Artifact retrieved." {
+		t.Fatalf("assistant response = %q, want Artifact retrieved.", result.Provider.Message.Content)
+	}
+	content := toolMessageContentFromRequest(t, thirdRequest, "artifact_read")
+	var payload map[string]any
+	if err := json.Unmarshal([]byte(content), &payload); err != nil {
+		t.Fatalf("unmarshal artifact_read content: %v", err)
+	}
+	readBack, _ := payload["content"].(string)
+	var nested map[string]any
+	if err := json.Unmarshal([]byte(readBack), &nested); err != nil {
+		t.Fatalf("unmarshal nested artifact_read content: %v", err)
+	}
+	nestedContent, _ := nested["content"].(string)
+	if !strings.Contains(nestedContent, largeContent[:64]) {
+		t.Fatalf("artifact_read tool message missing restored content: %s", content)
+	}
+	runEvents, err := agent.EventLog.ListByAggregate(context.Background(), eventing.AggregateRun, "run-chat-artifact-2")
+	if err != nil {
+		t.Fatalf("ListByAggregate returned error: %v", err)
+	}
+	foundArtifactRef := false
+	for _, event := range runEvents {
+		if event.Kind == eventing.EventToolCallCompleted && len(event.ArtifactRefs) > 0 {
+			foundArtifactRef = true
+			break
+		}
+	}
+	if !foundArtifactRef {
+		t.Fatalf("run events missing artifact refs on tool completion")
+	}
+}
+
 func chatRuntimeConfigForTest() config.AgentConfig {
 	return config.AgentConfig{ID: "agent-chat-test"}
 }
@@ -1034,6 +1253,120 @@ func chatContractsForFilesystemToolLoopTest(root string) contracts.ResolvedContr
 		},
 	}
 	return out
+}
+
+func chatContractsForArtifactToolLoopTest(root string) contracts.ResolvedContracts {
+	out := chatContractsForTest()
+	out.ProviderRequest.RequestShape.Streaming = contracts.StreamingPolicy{
+		Enabled:  true,
+		Strategy: "static_stream",
+		Params:   contracts.StreamingParams{Stream: false},
+	}
+	out.Memory = contracts.MemoryContract{
+		ID: "memory-artifact",
+		Offload: contracts.OffloadPolicy{
+			Enabled:  true,
+			Strategy: "artifact_store",
+			Params: contracts.OffloadParams{
+				MaxChars:             120,
+				PreviewChars:         200,
+				ExposeRetrievalTools: true,
+			},
+		},
+	}
+	out.Tools = contracts.ToolContract{
+		Catalog: contracts.ToolCatalogPolicy{
+			Enabled:  true,
+			Strategy: "static_allowlist",
+			Params: contracts.ToolCatalogParams{
+				ToolIDs: []string{"fs_read_text", "artifact_read", "artifact_search"},
+			},
+		},
+		Serialization: contracts.ToolSerializationPolicy{
+			Enabled:  true,
+			Strategy: "openai_function_tools",
+			Params:   contracts.ToolSerializationParams{IncludeDescriptions: true},
+		},
+	}
+	out.ToolExecution = contracts.ToolExecutionContract{
+		Access: contracts.ToolAccessPolicy{
+			Enabled:  true,
+			Strategy: "static_allowlist",
+			Params: contracts.ToolAccessParams{
+				ToolIDs: []string{"fs_read_text", "artifact_read", "artifact_search"},
+			},
+		},
+		Approval: contracts.ToolApprovalPolicy{Enabled: true, Strategy: "always_allow"},
+		Sandbox:  contracts.ToolSandboxPolicy{Enabled: true, Strategy: "workspace_write"},
+	}
+	out.FilesystemTools = contracts.FilesystemToolContract{
+		Catalog: contracts.FilesystemCatalogPolicy{
+			Enabled:  true,
+			Strategy: "static_allowlist",
+			Params:   contracts.FilesystemCatalogParams{ToolIDs: []string{"fs_read_text"}},
+		},
+		Description: contracts.FilesystemDescriptionPolicy{
+			Enabled:  true,
+			Strategy: "static_builtin_descriptions",
+		},
+	}
+	out.FilesystemExecution = contracts.FilesystemExecutionContract{
+		Scope: contracts.FilesystemScopePolicy{
+			Enabled:  true,
+			Strategy: "workspace_only",
+			Params: contracts.FilesystemScopeParams{
+				RootPath: root,
+			},
+		},
+		Mutation: contracts.FilesystemMutationPolicy{
+			Enabled:  true,
+			Strategy: "allow_writes",
+			Params:   contracts.FilesystemMutationParams{AllowWrite: true},
+		},
+		IO: contracts.FilesystemIOPolicy{
+			Enabled:  true,
+			Strategy: "bounded_text_io",
+			Params: contracts.FilesystemIOParams{
+				MaxReadBytes:  1 << 20,
+				MaxWriteBytes: 1 << 20,
+				Encoding:      "utf-8",
+			},
+		},
+	}
+	return out
+}
+
+func toolMessageContentFromRequest(t *testing.T, requestBody map[string]any, toolName string) string {
+	t.Helper()
+	messages, ok := requestBody["messages"].([]any)
+	if !ok {
+		t.Fatalf("request messages = %#v", requestBody["messages"])
+	}
+	for _, raw := range messages {
+		msg, ok := raw.(map[string]any)
+		if !ok {
+			continue
+		}
+		if msg["role"] == "tool" && msg["name"] == toolName {
+			content, _ := msg["content"].(string)
+			return content
+		}
+	}
+	t.Fatalf("request missing tool message for %q: %#v", toolName, messages)
+	return ""
+}
+
+func artifactRefFromToolMessage(t *testing.T, content string) string {
+	t.Helper()
+	var payload map[string]any
+	if err := json.Unmarshal([]byte(content), &payload); err != nil {
+		t.Fatalf("unmarshal tool content: %v", err)
+	}
+	artifactRef, _ := payload["artifact_ref"].(string)
+	if artifactRef == "" {
+		t.Fatalf("tool content missing artifact_ref: %#v", payload)
+	}
+	return artifactRef
 }
 
 func chatContractsForShellToolLoopTest(root string) contracts.ResolvedContracts {

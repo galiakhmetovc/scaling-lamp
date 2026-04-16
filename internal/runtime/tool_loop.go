@@ -142,7 +142,7 @@ func (a *Agent) executeToolCalls(ctx context.Context, contractSet contracts.Reso
 		decision, ok := decisionByTool[call.Name]
 		if !ok {
 			resultText := toolErrorResult(call.Name, fmt.Errorf("tool call %q has no execution decision", call.Name))
-			if err := a.recordToolCallCompleted(ctx, runID, sessionID, correlationID, source, call.Name, call.Arguments, resultText, "tool call has no execution decision"); err != nil {
+			if err := a.recordToolCallCompleted(ctx, runID, sessionID, correlationID, source, call.Name, call.Arguments, resultText, "tool call has no execution decision", nil); err != nil {
 				return nil, fmt.Errorf("record tool call completed: %w", err)
 			}
 			if observer != nil {
@@ -157,7 +157,7 @@ func (a *Agent) executeToolCalls(ctx context.Context, contractSet contracts.Reso
 		if !decision.Decision.Allowed {
 			reason := fmt.Sprintf("tool call %q denied: %s", call.Name, decision.Decision.Reason)
 			resultText := toolErrorResult(call.Name, fmt.Errorf("%s", reason))
-			if err := a.recordToolCallCompleted(ctx, runID, sessionID, correlationID, source, call.Name, call.Arguments, resultText, reason); err != nil {
+			if err := a.recordToolCallCompleted(ctx, runID, sessionID, correlationID, source, call.Name, call.Arguments, resultText, reason, nil); err != nil {
 				return nil, fmt.Errorf("record tool call completed: %w", err)
 			}
 			if observer != nil {
@@ -172,7 +172,7 @@ func (a *Agent) executeToolCalls(ctx context.Context, contractSet contracts.Reso
 		if decision.Decision.ApprovalRequired {
 			reason := fmt.Sprintf("tool call %q requires approval", call.Name)
 			resultText := toolErrorResult(call.Name, fmt.Errorf("%s", reason))
-			if err := a.recordToolCallCompleted(ctx, runID, sessionID, correlationID, source, call.Name, call.Arguments, resultText, reason); err != nil {
+			if err := a.recordToolCallCompleted(ctx, runID, sessionID, correlationID, source, call.Name, call.Arguments, resultText, reason, nil); err != nil {
 				return nil, fmt.Errorf("record tool call completed: %w", err)
 			}
 			if observer != nil {
@@ -188,7 +188,7 @@ func (a *Agent) executeToolCalls(ctx context.Context, contractSet contracts.Reso
 		events, resultText, err := a.executeToolCommand(ctx, contractSet, runID, sessionID, activeProjection, service, filesystemExecutor, shellExecutor, delegateRuntime, source, call)
 		if err != nil {
 			resultText := toolErrorResult(call.Name, err)
-			if recordErr := a.recordToolCallCompleted(ctx, runID, sessionID, correlationID, source, call.Name, call.Arguments, resultText, err.Error()); recordErr != nil {
+			if recordErr := a.recordToolCallCompleted(ctx, runID, sessionID, correlationID, source, call.Name, call.Arguments, resultText, err.Error(), nil); recordErr != nil {
 				return nil, fmt.Errorf("record tool call completed: %w", recordErr)
 			}
 			if observer != nil {
@@ -222,26 +222,30 @@ func (a *Agent) executeToolCalls(ctx context.Context, contractSet contracts.Reso
 				return nil, fmt.Errorf("record plan event %q: %w", event.Kind, err)
 			}
 		}
-		if err := a.recordToolCallCompleted(ctx, runID, sessionID, correlationID, source, call.Name, call.Arguments, resultText, ""); err != nil {
+		displayText, artifactRefs, err := a.maybeOffloadToolResult(ctx, contractSet, call.Name, resultText)
+		if err != nil {
+			return nil, fmt.Errorf("offload tool result: %w", err)
+		}
+		if err := a.recordToolCallCompleted(ctx, runID, sessionID, correlationID, source, call.Name, call.Arguments, displayText, "", artifactRefs); err != nil {
 			return nil, fmt.Errorf("record tool call completed: %w", err)
 		}
 		if observer != nil {
-			observer(ToolActivity{Phase: ToolActivityPhaseCompleted, Name: call.Name, Arguments: call.Arguments, ResultText: resultText})
+			observer(ToolActivity{Phase: ToolActivityPhaseCompleted, Name: call.Name, Arguments: call.Arguments, ResultText: displayText})
 		}
 		if a.UIBus != nil {
-			a.UIBus.Publish(UIEvent{Kind: UIEventToolCompleted, SessionID: sessionID, RunID: runID, Tool: ToolActivity{Phase: ToolActivityPhaseCompleted, Name: call.Name, Arguments: call.Arguments, ResultText: resultText}})
+			a.UIBus.Publish(UIEvent{Kind: UIEventToolCompleted, SessionID: sessionID, RunID: runID, Tool: ToolActivity{Phase: ToolActivityPhaseCompleted, Name: call.Name, Arguments: call.Arguments, ResultText: displayText}})
 		}
 		out = append(out, contracts.Message{
 			Role:       "tool",
 			Name:       call.Name,
 			ToolCallID: call.ID,
-			Content:    resultText,
+			Content:    displayText,
 		})
 	}
 	return out, nil
 }
 
-func (a *Agent) recordToolCallCompleted(ctx context.Context, runID, sessionID, correlationID, source, toolName string, arguments map[string]any, resultText, errorText string) error {
+func (a *Agent) recordToolCallCompleted(ctx context.Context, runID, sessionID, correlationID, source, toolName string, arguments map[string]any, resultText, errorText string, artifactRefs []string) error {
 	payload := map[string]any{
 		"session_id": sessionID,
 		"tool_name":  toolName,
@@ -265,6 +269,7 @@ func (a *Agent) recordToolCallCompleted(ctx context.Context, runID, sessionID, c
 		ActorID:       a.Config.ID,
 		ActorType:     "agent",
 		TraceSummary:  "tool call completed",
+		ArtifactRefs:  append([]string(nil), artifactRefs...),
 		Payload:       payload,
 	})
 }
@@ -299,6 +304,12 @@ func (a *Agent) executeToolCommand(ctx context.Context, contractSet contracts.Re
 		return nil, resultText, nil
 	case "delegate_spawn", "delegate_message", "delegate_wait", "delegate_close", "delegate_handoff":
 		resultText, err := a.executeDelegationCommand(ctx, contractSet, runID, sessionID, delegateRuntime, call)
+		if err != nil {
+			return nil, "", fmt.Errorf("tool call %q: %w", call.Name, err)
+		}
+		return nil, resultText, nil
+	case "artifact_read", "artifact_search":
+		resultText, err := a.executeArtifactCommand(ctx, contractSet, call.Name, call.Arguments)
 		if err != nil {
 			return nil, "", fmt.Errorf("tool call %q: %w", call.Name, err)
 		}

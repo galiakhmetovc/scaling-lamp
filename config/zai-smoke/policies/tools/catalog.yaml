@@ -17,6 +17,8 @@ spec:
       - fs_patch_text
       - fs_mkdir
       - fs_move
+      - artifact_read
+      - artifact_search
       - shell_exec
       - shell_start
       - shell_poll

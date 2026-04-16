@@ -317,6 +317,10 @@ func resolveMemoryContract(out *contracts.ResolvedContracts, path string, policy
 	if err != nil {
 		return err
 	}
+	policyPath := resolveModulePath(path, contract.Spec.OffloadPolicyPath)
+	if policy.Spec.Params.StoragePath != "" {
+		policy.Spec.Params.StoragePath = resolveModulePath(policyPath, policy.Spec.Params.StoragePath)
+	}
 
 	out.Memory = contracts.MemoryContract{
 		ID: contract.ID,

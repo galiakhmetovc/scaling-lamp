@@ -459,6 +459,78 @@ func TestBuildAgentUsesConfiguredRuntimeComposition(t *testing.T) {
 	}
 }
 
+func TestBuildAgentInitializesArtifactStoreForArtifactOffload(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+
+	mustWriteFile(t, filepath.Join(dir, "agent.yaml"), ""+
+		"kind: AgentConfig\n"+
+		"version: v1\n"+
+		"id: agent-test\n"+
+		"spec:\n"+
+		"  runtime:\n"+
+		"    event_log: in_memory\n"+
+		"    prompt_asset_executor: prompt_asset_default\n"+
+		"    transport_executor: transport_default\n"+
+		"    request_shape_executor: request_shape_default\n"+
+		"    tool_catalog_executor: tool_catalog_default\n"+
+		"    tool_execution_gate: tool_execution_default\n"+
+		"    provider_client: provider_client_default\n"+
+		"    projections: [session]\n"+
+		"  contracts:\n"+
+		"    transport: ./contracts/transport.yaml\n"+
+		"    request_shape: ./contracts/request-shape.yaml\n"+
+		"    memory: ./contracts/memory.yaml\n")
+
+	mustWriteFile(t, filepath.Join(dir, "contracts", "transport.yaml"), ""+
+		"kind: TransportContractConfig\n"+
+		"version: v1\n"+
+		"id: transport-main\n"+
+		"spec:\n"+
+		"  endpoint_policy_path: ../policies/transport/endpoint.yaml\n"+
+		"  auth_policy_path: ../policies/transport/auth.yaml\n"+
+		"  retry_policy_path: ../policies/transport/retry.yaml\n"+
+		"  timeout_policy_path: ../policies/transport/timeout.yaml\n")
+	mustWriteFile(t, filepath.Join(dir, "contracts", "request-shape.yaml"), ""+
+		"kind: RequestShapeContractConfig\n"+
+		"version: v1\n"+
+		"id: request-shape-main\n"+
+		"spec:\n"+
+		"  model_policy_path: ../policies/request-shape/model.yaml\n"+
+		"  message_policy_path: ../policies/request-shape/messages.yaml\n"+
+		"  tool_policy_path: ../policies/request-shape/tools.yaml\n"+
+		"  response_format_policy_path: ../policies/request-shape/response-format.yaml\n"+
+		"  streaming_policy_path: ../policies/request-shape/streaming.yaml\n"+
+		"  sampling_policy_path: ../policies/request-shape/sampling.yaml\n")
+	mustWriteFile(t, filepath.Join(dir, "contracts", "memory.yaml"), ""+
+		"kind: MemoryContractConfig\n"+
+		"version: v1\n"+
+		"id: memory-main\n"+
+		"spec:\n"+
+		"  offload_policy_path: ../policies/memory/offload.yaml\n")
+
+	mustWriteFile(t, filepath.Join(dir, "policies", "transport", "endpoint.yaml"), "kind: EndpointPolicyConfig\nversion: v1\nid: endpoint-main\nspec:\n  enabled: true\n  strategy: static\n  params:\n    base_url: https://api.z.ai\n    path: /api/paas/v4/chat/completions\n    method: POST\n")
+	mustWriteFile(t, filepath.Join(dir, "policies", "transport", "auth.yaml"), "kind: AuthPolicyConfig\nversion: v1\nid: auth-main\nspec:\n  enabled: true\n  strategy: bearer_token\n  params:\n    header: Authorization\n    prefix: Bearer\n    value_env_var: ZAI_API_KEY\n")
+	mustWriteFile(t, filepath.Join(dir, "policies", "transport", "retry.yaml"), "kind: RetryPolicyConfig\nversion: v1\nid: retry-main\nspec:\n  enabled: true\n  strategy: fixed\n  params:\n    max_attempts: 1\n")
+	mustWriteFile(t, filepath.Join(dir, "policies", "transport", "timeout.yaml"), "kind: TimeoutPolicyConfig\nversion: v1\nid: timeout-main\nspec:\n  enabled: true\n  strategy: per_request\n  params:\n    total: 30s\n")
+	mustWriteFile(t, filepath.Join(dir, "policies", "request-shape", "model.yaml"), "kind: ModelPolicyConfig\nversion: v1\nid: model-main\nspec:\n  enabled: true\n  strategy: static_model\n  params:\n    model: glm-5-turbo\n")
+	mustWriteFile(t, filepath.Join(dir, "policies", "request-shape", "messages.yaml"), "kind: MessagePolicyConfig\nversion: v1\nid: messages-main\nspec:\n  enabled: true\n  strategy: raw_messages\n")
+	mustWriteFile(t, filepath.Join(dir, "policies", "request-shape", "tools.yaml"), "kind: ToolPolicyConfig\nversion: v1\nid: tools-main\nspec:\n  enabled: true\n  strategy: tools_inline\n")
+	mustWriteFile(t, filepath.Join(dir, "policies", "request-shape", "response-format.yaml"), "kind: ResponseFormatPolicyConfig\nversion: v1\nid: response-format-main\nspec:\n  enabled: true\n  strategy: default\n  params:\n    type: text\n")
+	mustWriteFile(t, filepath.Join(dir, "policies", "request-shape", "streaming.yaml"), "kind: StreamingPolicyConfig\nversion: v1\nid: streaming-main\nspec:\n  enabled: true\n  strategy: static_stream\n  params:\n    stream: false\n")
+	mustWriteFile(t, filepath.Join(dir, "policies", "request-shape", "sampling.yaml"), "kind: SamplingPolicyConfig\nversion: v1\nid: sampling-main\nspec:\n  enabled: true\n  strategy: static_sampling\n  params:\n    temperature: 0.2\n")
+	mustWriteFile(t, filepath.Join(dir, "policies", "memory", "offload.yaml"), "kind: OffloadPolicyConfig\nversion: v1\nid: offload-main\nspec:\n  enabled: true\n  strategy: artifact_store\n  params:\n    max_chars: 128\n    preview_chars: 40\n    storage_path: ../../var/artifacts\n    expose_retrieval_tools: true\n    search_limit: 3\n")
+
+	agent, err := runtime.BuildAgent(filepath.Join(dir, "agent.yaml"))
+	if err != nil {
+		t.Fatalf("BuildAgent returned error: %v", err)
+	}
+	if agent.ArtifactStore == nil {
+		t.Fatal("agent ArtifactStore is nil")
+	}
+}
+
 func TestBuildAgentRestoresProjectionSnapshotsFromStore(t *testing.T) {
 	t.Parallel()
 

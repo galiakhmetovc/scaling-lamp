@@ -104,6 +104,10 @@ func (a *Agent) ChatTurn(ctx context.Context, session *ChatSession, input ChatTu
 	if input.ContractsOverride != nil {
 		contractSet = *input.ContractsOverride
 	}
+	extraTools, err := a.artifactToolDefinitions(contractSet)
+	if err != nil {
+		return provider.ClientResult{}, fmt.Errorf("build artifact tools: %w", err)
+	}
 
 	now := a.now()
 	runID := a.newID("run-chat")
@@ -160,6 +164,7 @@ func (a *Agent) ChatTurn(ctx context.Context, session *ChatSession, input ChatTu
 	result, err := a.executeProviderLoop(ctx, contractSet, session.SessionID, runID, correlationID, "agent.chat", provider.ClientInput{
 		PromptAssetSelection: input.PromptAssetSelection,
 		Messages:             append([]contracts.Message{}, session.Messages...),
+		Tools:                extraTools,
 		StreamObserver:       input.StreamObserver,
 	}, input.ToolObserver, input.MaxToolRoundsOverride)
 	if err != nil {

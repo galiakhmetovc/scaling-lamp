@@ -106,6 +106,7 @@ func NewBuiltInRegistry() *Registry {
 		Family: FamilyOffload,
 		Strategy: setOf(
 			"old_only",
+			"artifact_store",
 		),
 	})
 	registry.Register(Type{
