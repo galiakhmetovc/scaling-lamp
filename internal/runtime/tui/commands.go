@@ -21,9 +21,9 @@ func waitForDaemonEnvelope(ch <-chan daemon.WebsocketEnvelope) tea.Cmd {
 	}
 }
 
-func runChatTurnClientCmd(client OperatorClient, sessionID, prompt string, overrides sessionOverrides) tea.Cmd {
+func runChatTurnClientCmd(ctx context.Context, client OperatorClient, sessionID, prompt string, overrides sessionOverrides) tea.Cmd {
 	return func() tea.Msg {
-		result, err := client.SendChat(context.Background(), sessionID, prompt)
+		result, err := client.SendChat(ctx, sessionID, prompt)
 		return chatTurnFinishedMsg{
 			SessionID: sessionID,
 			Result:    result.Result,

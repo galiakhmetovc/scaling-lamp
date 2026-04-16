@@ -92,10 +92,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height
 		for _, state := range m.sessions {
-			state.Input.SetWidth(max(20, m.width-6))
-			state.Input.SetHeight(6)
-			state.ChatView.Width = max(20, m.width-6)
-			state.ChatView.Height = max(10, m.height-14)
+			m.resizeChatState(state)
 			state.ToolsView.Width = max(20, m.width-6)
 			state.ToolsView.Height = max(10, m.height-8)
 		}
@@ -168,6 +165,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		state.Busy = false
 		state.MainRun.Active = false
+		state.RunCancel = nil
 		state.MainRun.CompletedAt = m.now()
 		if msg.Result.Provider != "" {
 			state.MainRun.Provider = msg.Result.Provider
@@ -194,6 +192,9 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		state.Status = "idle"
 		m.renderChatViewport(state)
 		m.renderToolsViewport(state)
+		if cmd := m.dispatchNextQueued(state); cmd != nil {
+			return m, tea.Batch(cmd, tickClockCmd())
+		}
 		return m, nil
 	case btwTurnFinishedMsg:
 		state := m.sessions[msg.SessionID]
@@ -229,14 +230,14 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 func (m *model) handleGlobalKey(msg tea.KeyMsg) tea.Cmd {
 	switch msg.String() {
-	case "shift+tab", "left":
+	case "ctrl+left":
 		if m.tab == 0 {
 			m.tab = tabIndex(len(topTabs) - 1)
 		} else {
 			m.tab--
 		}
 		return nil
-	case "tab", "right":
+	case "ctrl+right":
 		m.tab = tabIndex((int(m.tab) + 1) % len(topTabs))
 		return nil
 	case "f1":
@@ -314,8 +315,34 @@ func (m *model) viewFooter() string {
 	if !m.mouseCaptureEnabled {
 		mouseMode = "Mouse: off (F6 toggle, select text)"
 	}
-	parts = append(parts, mouseMode, "Tabs: F1..F5, Ctrl+Q quit")
+	parts = append(parts, mouseMode, "Tabs: F1..F5 or Ctrl+Left/Right, Ctrl+Q quit")
 	return strings.Join(parts, " | ")
+}
+
+func (m *model) resizeChatState(state *sessionState) {
+	if state == nil {
+		return
+	}
+	inputHeight := state.Input.Height()
+	if inputHeight <= 0 {
+		inputHeight = 5
+	}
+	state.Input.SetWidth(max(20, m.width-2))
+	state.ChatView.Width = max(20, m.width-2)
+	queueHeight := queueDisplayLines(state)
+	reserved := 1 + 1 + 1 + inputHeight + 1 + queueHeight
+	state.ChatView.Height = max(4, m.height-2-reserved)
+}
+
+func queueDisplayLines(state *sessionState) int {
+	if state == nil || len(state.Queue) == 0 {
+		return 0
+	}
+	lines := 1 + min(len(state.Queue), 4)
+	if len(state.Queue) > 4 {
+		lines++
+	}
+	return lines
 }
 
 func enableMouseCaptureCmd() tea.Cmd {

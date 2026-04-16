@@ -554,6 +554,256 @@ func TestChatEnterQueuesDraftWhileMainRunActive(t *testing.T) {
 	}
 }
 
+func TestChatTabQueuesDraftWithoutSwitchingPanels(t *testing.T) {
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "agent.yaml")
+	if err := os.WriteFile(configPath, []byte("kind: AgentConfig\nversion: v1\nid: tui-test\nspec:\n  runtime:\n    max_tool_rounds: 7\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile config: %v", err)
+	}
+
+	agent := &runtime.Agent{
+		ConfigPath: configPath,
+		Config:     config.AgentConfig{ID: "tui-test", Spec: config.AgentConfigSpec{Runtime: config.AgentRuntimeConfig{MaxToolRounds: 7}}},
+		Contracts: contracts.ResolvedContracts{
+			Chat: contracts.ChatContract{
+				Output: contracts.ChatOutputPolicy{Params: contracts.ChatOutputParams{RenderMarkdown: true, MarkdownStyle: "dark"}},
+				Status: contracts.ChatStatusPolicy{Params: contracts.ChatStatusParams{ShowToolCalls: true, ShowToolResults: true, ShowPlanAfterPlanTools: true}},
+			},
+		},
+		EventLog:    runtime.NewInMemoryEventLog(),
+		Projections: []projections.Projection{projections.NewSessionCatalogProjection(), projections.NewTranscriptProjection(), projections.NewChatTimelineProjection(), projections.NewPlanHeadProjection(), projections.NewActivePlanProjection()},
+		UIBus:       runtime.NewUIEventBus(),
+		Now:         func() time.Time { return time.Date(2026, 4, 16, 14, 0, 0, 0, time.UTC) },
+		NewID:       func(prefix string) string { return prefix + "-1" },
+	}
+
+	m, err := newModel(context.Background(), agent, "")
+	if err != nil {
+		t.Fatalf("newModel returned error: %v", err)
+	}
+	m.tab = tabChat
+	state := m.sessions[m.activeSessionID]
+	state.Input.SetValue("Queue with tab")
+
+	modelAfter, _ := (&m).Update(tea.KeyMsg{Type: tea.KeyTab})
+	mm := modelAfter.(*model)
+	if mm.tab != tabChat {
+		t.Fatalf("tab switched panel to %v, want chat", mm.tab)
+	}
+	if len(mm.sessions[mm.activeSessionID].Queue) != 1 {
+		t.Fatalf("queue len = %d, want 1", len(mm.sessions[mm.activeSessionID].Queue))
+	}
+}
+
+func TestChatRunCompletionDispatchesNextQueuedDraft(t *testing.T) {
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "agent.yaml")
+	if err := os.WriteFile(configPath, []byte("kind: AgentConfig\nversion: v1\nid: tui-test\nspec:\n  runtime:\n    max_tool_rounds: 7\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile config: %v", err)
+	}
+
+	agent := &runtime.Agent{
+		ConfigPath: configPath,
+		Config:     config.AgentConfig{ID: "tui-test", Spec: config.AgentConfigSpec{Runtime: config.AgentRuntimeConfig{MaxToolRounds: 7}}},
+		Contracts: contracts.ResolvedContracts{
+			Chat: contracts.ChatContract{
+				Output: contracts.ChatOutputPolicy{Params: contracts.ChatOutputParams{RenderMarkdown: true, MarkdownStyle: "dark"}},
+				Status: contracts.ChatStatusPolicy{Params: contracts.ChatStatusParams{ShowToolCalls: true, ShowToolResults: true, ShowPlanAfterPlanTools: true}},
+			},
+		},
+		EventLog:    runtime.NewInMemoryEventLog(),
+		Projections: []projections.Projection{projections.NewSessionCatalogProjection(), projections.NewTranscriptProjection(), projections.NewChatTimelineProjection(), projections.NewPlanHeadProjection(), projections.NewActivePlanProjection()},
+		UIBus:       runtime.NewUIEventBus(),
+		Now:         func() time.Time { return time.Date(2026, 4, 16, 14, 5, 0, 0, time.UTC) },
+		NewID:       func(prefix string) string { return prefix + "-1" },
+	}
+
+	m, err := newModel(context.Background(), agent, "")
+	if err != nil {
+		t.Fatalf("newModel returned error: %v", err)
+	}
+	state := m.sessions[m.activeSessionID]
+	state.MainRun.Active = true
+	state.Queue = []queuedDraft{{Text: "follow-up"}}
+
+	modelAfter, cmd := (&m).Update(chatTurnFinishedMsg{
+		SessionID: m.activeSessionID,
+		Result:    runtimeResultMeta{Provider: "api.z.ai", Model: "glm-5-turbo", TotalTokens: 12},
+		Session:   state.Snapshot,
+	})
+	mm := modelAfter.(*model)
+	next := mm.sessions[mm.activeSessionID]
+	if !next.MainRun.Active {
+		t.Fatal("next queued draft was not dispatched")
+	}
+	if len(next.Queue) != 0 {
+		t.Fatalf("queue len = %d, want 0 after dispatch", len(next.Queue))
+	}
+	if cmd == nil {
+		t.Fatal("dispatch returned nil command")
+	}
+}
+
+func TestChatDeleteRemovesSelectedQueuedDraft(t *testing.T) {
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "agent.yaml")
+	if err := os.WriteFile(configPath, []byte("kind: AgentConfig\nversion: v1\nid: tui-test\nspec:\n  runtime:\n    max_tool_rounds: 7\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile config: %v", err)
+	}
+
+	agent := &runtime.Agent{
+		ConfigPath: configPath,
+		Config:     config.AgentConfig{ID: "tui-test", Spec: config.AgentConfigSpec{Runtime: config.AgentRuntimeConfig{MaxToolRounds: 7}}},
+		Contracts: contracts.ResolvedContracts{
+			Chat: contracts.ChatContract{
+				Output: contracts.ChatOutputPolicy{Params: contracts.ChatOutputParams{RenderMarkdown: true, MarkdownStyle: "dark"}},
+				Status: contracts.ChatStatusPolicy{Params: contracts.ChatStatusParams{ShowToolCalls: true, ShowToolResults: true, ShowPlanAfterPlanTools: true}},
+			},
+		},
+		EventLog:    runtime.NewInMemoryEventLog(),
+		Projections: []projections.Projection{projections.NewSessionCatalogProjection(), projections.NewTranscriptProjection(), projections.NewChatTimelineProjection(), projections.NewPlanHeadProjection(), projections.NewActivePlanProjection()},
+		UIBus:       runtime.NewUIEventBus(),
+		Now:         func() time.Time { return time.Date(2026, 4, 16, 14, 10, 0, 0, time.UTC) },
+		NewID:       func(prefix string) string { return prefix + "-1" },
+	}
+
+	m, err := newModel(context.Background(), agent, "")
+	if err != nil {
+		t.Fatalf("newModel returned error: %v", err)
+	}
+	state := m.sessions[m.activeSessionID]
+	state.Queue = []queuedDraft{{Text: "one"}, {Text: "two"}}
+	state.QueueCursor = 1
+
+	modelAfter, _ := (&m).Update(tea.KeyMsg{Type: tea.KeyCtrlD})
+	mm := modelAfter.(*model)
+	queue := mm.sessions[mm.activeSessionID].Queue
+	if len(queue) != 1 || queue[0].Text != "one" {
+		t.Fatalf("queue after delete = %#v, want only first draft", queue)
+	}
+}
+
+func TestChatViewKeepsLayoutWithinWindowHeight(t *testing.T) {
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "agent.yaml")
+	if err := os.WriteFile(configPath, []byte("kind: AgentConfig\nversion: v1\nid: tui-test\nspec:\n  runtime:\n    max_tool_rounds: 7\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile config: %v", err)
+	}
+
+	agent := &runtime.Agent{
+		ConfigPath: configPath,
+		Config:     config.AgentConfig{ID: "tui-test", Spec: config.AgentConfigSpec{Runtime: config.AgentRuntimeConfig{MaxToolRounds: 7}}},
+		Contracts: contracts.ResolvedContracts{
+			Chat: contracts.ChatContract{
+				Output: contracts.ChatOutputPolicy{Params: contracts.ChatOutputParams{RenderMarkdown: true, MarkdownStyle: "dark"}},
+				Status: contracts.ChatStatusPolicy{Params: contracts.ChatStatusParams{ShowToolCalls: true, ShowToolResults: true, ShowPlanAfterPlanTools: true}},
+			},
+		},
+		EventLog:    runtime.NewInMemoryEventLog(),
+		Projections: []projections.Projection{projections.NewSessionCatalogProjection(), projections.NewTranscriptProjection(), projections.NewChatTimelineProjection(), projections.NewPlanHeadProjection(), projections.NewActivePlanProjection()},
+		UIBus:       runtime.NewUIEventBus(),
+		Now:         func() time.Time { return time.Date(2026, 4, 16, 14, 15, 0, 0, time.UTC) },
+		NewID:       func(prefix string) string { return prefix + "-1" },
+	}
+
+	m, err := newModel(context.Background(), agent, "")
+	if err != nil {
+		t.Fatalf("newModel returned error: %v", err)
+	}
+	state := m.sessions[m.activeSessionID]
+	state.Queue = []queuedDraft{
+		{Text: "one"}, {Text: "two"}, {Text: "three"}, {Text: "four"}, {Text: "five"}, {Text: "six"},
+	}
+
+	modelAfter, _ := (&m).Update(tea.WindowSizeMsg{Width: 80, Height: 20})
+	got := modelAfter.View()
+	if lines := len(strings.Split(got, "\n")); lines > 20 {
+		t.Fatalf("view line count = %d, want <= 20\n%s", lines, got)
+	}
+}
+
+func TestGlobalCtrlArrowSwitchesTabs(t *testing.T) {
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "agent.yaml")
+	if err := os.WriteFile(configPath, []byte("kind: AgentConfig\nversion: v1\nid: tui-test\nspec:\n  runtime:\n    max_tool_rounds: 7\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile config: %v", err)
+	}
+	agent := &runtime.Agent{
+		ConfigPath: configPath,
+		Config:     config.AgentConfig{ID: "tui-test", Spec: config.AgentConfigSpec{Runtime: config.AgentRuntimeConfig{MaxToolRounds: 7}}},
+		Contracts: contracts.ResolvedContracts{
+			Chat: contracts.ChatContract{
+				Output: contracts.ChatOutputPolicy{Params: contracts.ChatOutputParams{RenderMarkdown: true, MarkdownStyle: "dark"}},
+				Status: contracts.ChatStatusPolicy{Params: contracts.ChatStatusParams{ShowToolCalls: true, ShowToolResults: true, ShowPlanAfterPlanTools: true}},
+			},
+		},
+		EventLog:    runtime.NewInMemoryEventLog(),
+		Projections: []projections.Projection{projections.NewSessionCatalogProjection(), projections.NewTranscriptProjection(), projections.NewChatTimelineProjection(), projections.NewPlanHeadProjection(), projections.NewActivePlanProjection()},
+		UIBus:       runtime.NewUIEventBus(),
+		Now:         func() time.Time { return time.Date(2026, 4, 16, 14, 20, 0, 0, time.UTC) },
+		NewID:       func(prefix string) string { return prefix + "-1" },
+	}
+	m, err := newModel(context.Background(), agent, "")
+	if err != nil {
+		t.Fatalf("newModel returned error: %v", err)
+	}
+	m.tab = tabChat
+	modelAfter, _ := (&m).Update(tea.KeyMsg{Type: tea.KeyCtrlRight})
+	mm := modelAfter.(*model)
+	if mm.tab != tabPlan {
+		t.Fatalf("tab after ctrl+right = %v, want plan", mm.tab)
+	}
+	modelAfter, _ = mm.Update(tea.KeyMsg{Type: tea.KeyCtrlLeft})
+	mm = modelAfter.(*model)
+	if mm.tab != tabChat {
+		t.Fatalf("tab after ctrl+left = %v, want chat", mm.tab)
+	}
+}
+
+func TestChatCtrlXCancelsActiveRun(t *testing.T) {
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "agent.yaml")
+	if err := os.WriteFile(configPath, []byte("kind: AgentConfig\nversion: v1\nid: tui-test\nspec:\n  runtime:\n    max_tool_rounds: 7\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile config: %v", err)
+	}
+	agent := &runtime.Agent{
+		ConfigPath: configPath,
+		Config:     config.AgentConfig{ID: "tui-test", Spec: config.AgentConfigSpec{Runtime: config.AgentRuntimeConfig{MaxToolRounds: 7}}},
+		Contracts: contracts.ResolvedContracts{
+			Chat: contracts.ChatContract{
+				Output: contracts.ChatOutputPolicy{Params: contracts.ChatOutputParams{RenderMarkdown: true, MarkdownStyle: "dark"}},
+				Status: contracts.ChatStatusPolicy{Params: contracts.ChatStatusParams{ShowToolCalls: true, ShowToolResults: true, ShowPlanAfterPlanTools: true}},
+			},
+		},
+		EventLog:    runtime.NewInMemoryEventLog(),
+		Projections: []projections.Projection{projections.NewSessionCatalogProjection(), projections.NewTranscriptProjection(), projections.NewChatTimelineProjection(), projections.NewPlanHeadProjection(), projections.NewActivePlanProjection()},
+		UIBus:       runtime.NewUIEventBus(),
+		Now:         func() time.Time { return time.Date(2026, 4, 16, 14, 21, 0, 0, time.UTC) },
+		NewID:       func(prefix string) string { return prefix + "-1" },
+	}
+	m, err := newModel(context.Background(), agent, "")
+	if err != nil {
+		t.Fatalf("newModel returned error: %v", err)
+	}
+	cancelled := false
+	state := m.sessions[m.activeSessionID]
+	state.MainRun.Active = true
+	state.RunCancel = func() { cancelled = true }
+
+	modelAfter, _ := (&m).Update(tea.KeyMsg{Type: tea.KeyCtrlX})
+	mm := modelAfter.(*model)
+	next := mm.sessions[mm.activeSessionID]
+	if !cancelled {
+		t.Fatal("run cancel func was not called")
+	}
+	if next.MainRun.Active {
+		t.Fatal("main run still active after ctrl+x")
+	}
+	if next.Status != "cancelled" {
+		t.Fatalf("status = %q, want cancelled", next.Status)
+	}
+}
+
 func TestChatViewShowsLiveToolActivity(t *testing.T) {
 	dir := t.TempDir()
 	configPath := filepath.Join(dir, "agent.yaml")

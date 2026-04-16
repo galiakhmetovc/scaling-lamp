@@ -646,6 +646,15 @@ func (c *daemonClient) command(ctx context.Context, req daemon.CommandRequest, o
 		return err
 	}
 	defer conn.Close()
+	done := make(chan struct{})
+	go func() {
+		select {
+		case <-ctx.Done():
+			_ = conn.Close()
+		case <-done:
+		}
+	}()
+	defer close(done)
 	decoder := json.NewDecoder(conn)
 	encoder := json.NewEncoder(conn)
 	for {

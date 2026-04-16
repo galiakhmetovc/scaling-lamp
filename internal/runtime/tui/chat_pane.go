@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"context"
 	"fmt"
 	"strings"
 	"time"
@@ -33,6 +34,13 @@ func (m *model) updateChat(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			state.QueueCursor++
 		}
 		return m, nil
+	case "ctrl+e":
+		return m, m.recallSelectedDraft(state)
+	case "ctrl+d", "delete":
+		m.deleteSelectedDraft(state)
+		return m, nil
+	case "ctrl+x":
+		return m, m.cancelMainRun(state)
 	case "tab":
 		return m, m.stageOrRecallDraft(state)
 	case "enter", "ctrl+s":
@@ -48,19 +56,24 @@ func (m *model) viewChat() string {
 	if state == nil {
 		return "No active session"
 	}
+	m.resizeChatState(state)
 	m.renderChatViewport(state)
 	header := fmt.Sprintf("session: %s", state.SessionID)
 	queue := m.viewQueue(state)
 	status := m.viewChatStatusBar(state)
-	return lipgloss.JoinVertical(
-		lipgloss.Left,
+	parts := []string{
 		header,
 		state.ChatView.View(),
-		"",
-		"Input (Enter send, Tab queue/recall, Shift+Enter newline, Alt+Up/Down queue select):",
+		"Input (Enter send, Tab queue, Ctrl+E recall, Ctrl+D delete, Ctrl+X stop run, Shift+Enter newline, Alt+Up/Down queue select):",
 		state.Input.View(),
 		status,
-		queue,
+	}
+	if queue != "" {
+		parts = append(parts, queue)
+	}
+	return lipgloss.JoinVertical(
+		lipgloss.Left,
+		parts...,
 	)
 }
 
@@ -133,7 +146,7 @@ func (m *model) submitChatInput(state *sessionState) tea.Cmd {
 	if state.MainRun.Active {
 		m.enqueueDraft(state, prompt)
 		state.Input.Reset()
-		m.statusMessage = "draft queued"
+		m.statusMessage = "draft queued for next run"
 		return nil
 	}
 	return m.startMainRun(state, prompt)
@@ -147,6 +160,10 @@ func (m *model) stageOrRecallDraft(state *sessionState) tea.Cmd {
 		m.statusMessage = "draft queued"
 		return nil
 	}
+	return m.recallSelectedDraft(state)
+}
+
+func (m *model) recallSelectedDraft(state *sessionState) tea.Cmd {
 	if len(state.Queue) == 0 {
 		return nil
 	}
@@ -163,7 +180,7 @@ func (m *model) stageOrRecallDraft(state *sessionState) tea.Cmd {
 	}
 	state.Input.SetValue(item.Text)
 	state.Input.Focus()
-	m.statusMessage = "draft loaded from queue"
+	m.statusMessage = "draft recalled for editing"
 	return nil
 }
 
@@ -219,12 +236,17 @@ func (m *model) startMainRun(state *sessionState, prompt string) tea.Cmd {
 	state.LastError = ""
 	state.Status = "running"
 	state.Busy = true
+	if state.RunCancel != nil {
+		state.RunCancel()
+	}
+	runCtx, cancel := context.WithCancel(m.ctx)
+	state.RunCancel = cancel
 	state.MainRun.Active = true
 	state.MainRun.StartedAt = m.now()
 	state.MainRun.CompletedAt = time.Time{}
 	state.MainRun.Provider = m.client.ProviderLabel()
 	m.renderChatViewport(state)
-	return tea.Batch(runChatTurnClientCmd(m.client, state.SessionID, prompt, state.Overrides), tickClockCmd())
+	return tea.Batch(runChatTurnClientCmd(runCtx, m.client, state.SessionID, prompt, state.Overrides), tickClockCmd())
 }
 
 func (m *model) dispatchNextQueued(state *sessionState) tea.Cmd {
@@ -244,6 +266,36 @@ func (m *model) enqueueDraft(state *sessionState, prompt string) {
 	if len(state.Queue) == 1 {
 		state.QueueCursor = 0
 	}
+}
+
+func (m *model) deleteSelectedDraft(state *sessionState) {
+	if state == nil || len(state.Queue) == 0 {
+		return
+	}
+	if state.QueueCursor < 0 {
+		state.QueueCursor = 0
+	}
+	if state.QueueCursor >= len(state.Queue) {
+		state.QueueCursor = len(state.Queue) - 1
+	}
+	state.Queue = append(state.Queue[:state.QueueCursor], state.Queue[state.QueueCursor+1:]...)
+	if state.QueueCursor >= len(state.Queue) && state.QueueCursor > 0 {
+		state.QueueCursor--
+	}
+	m.statusMessage = "draft deleted"
+}
+
+func (m *model) cancelMainRun(state *sessionState) tea.Cmd {
+	if state == nil || !state.MainRun.Active || state.RunCancel == nil {
+		return nil
+	}
+	state.RunCancel()
+	state.RunCancel = nil
+	state.MainRun.Active = false
+	state.Busy = false
+	state.Status = "cancelled"
+	m.statusMessage = "run cancelled"
+	return nil
 }
 
 func (m *model) hasActiveRuns() bool {
@@ -347,12 +399,18 @@ func (m *model) viewQueue(state *sessionState) string {
 		return ""
 	}
 	lines := []string{"Queued drafts:"}
-	for i, item := range state.Queue {
+	start := max(0, min(state.QueueCursor, max(0, len(state.Queue)-4)))
+	end := min(len(state.Queue), start+4)
+	for i := start; i < end; i++ {
+		item := state.Queue[i]
 		prefix := "  "
 		if i == state.QueueCursor {
 			prefix = "> "
 		}
 		lines = append(lines, prefix+summarizeChatText(item.Text))
+	}
+	if len(state.Queue) > end {
+		lines = append(lines, fmt.Sprintf("  … %d more", len(state.Queue)-end))
 	}
 	return strings.Join(lines, "\n")
 }

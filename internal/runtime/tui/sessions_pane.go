@@ -127,7 +127,8 @@ func (m *model) loadSessions(resumeID string) error {
 func newSessionState(overrides sessionOverrides) *sessionState {
 	input := textarea.New()
 	input.Prompt = ""
-	input.SetHeight(6)
+	input.CharLimit = 0
+	input.SetHeight(5)
 	input.Focus()
 	chatView := viewport.New(80, 20)
 	chatView.MouseWheelEnabled = true

@@ -106,6 +106,7 @@ type sessionState struct {
 	Status    string
 	LastError string
 	Busy      bool
+	RunCancel context.CancelFunc
 	Overrides sessionOverrides
 	Loaded    bool
 	ChatView  viewport.Model
