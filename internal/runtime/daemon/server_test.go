@@ -78,6 +78,36 @@ func TestBootstrapEndpointReturnsConfigDrivenSnapshot(t *testing.T) {
 	}
 }
 
+func TestBootstrapEndpointReturnsEmptySessionsArrayWhenNoSessionsExist(t *testing.T) {
+	t.Parallel()
+
+	agent := buildAgentWithOperatorSurface(t)
+	server, err := daemon.New(agent)
+	if err != nil {
+		t.Fatalf("new daemon server: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/api/bootstrap", nil)
+	rec := httptest.NewRecorder()
+	server.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rec.Code)
+	}
+
+	var payload struct {
+		Sessions []map[string]any `json:"sessions"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("decode bootstrap: %v", err)
+	}
+	if payload.Sessions == nil {
+		t.Fatal("bootstrap sessions = nil, want empty array")
+	}
+	if len(payload.Sessions) != 0 {
+		t.Fatalf("bootstrap sessions len = %d, want 0", len(payload.Sessions))
+	}
+}
+
 func TestHealthzEndpointIsAvailable(t *testing.T) {
 	t.Parallel()
 

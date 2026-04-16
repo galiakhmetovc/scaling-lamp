@@ -192,6 +192,7 @@ func (s *Server) handleBootstrap(w http.ResponseWriter, _ *http.Request) {
 		Assets: WebAssetsSnapshot{
 			Mode: agent.Contracts.OperatorSurface.WebAssets.Params.Mode,
 		},
+		Sessions:    []runtimeSessionSnapshot{},
 		GeneratedAt: agent.Now().UTC(),
 	}
 	for _, session := range agent.ListSessions() {

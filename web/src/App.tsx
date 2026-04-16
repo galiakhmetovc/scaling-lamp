@@ -62,12 +62,13 @@ export function App() {
         localClient = new DaemonClient(config);
         clientRef.current = localClient;
         const boot = await localClient.bootstrap(abort.signal);
-        setBootstrap(boot);
-        setSessions(boot.sessions);
+        const bootSessions = boot.sessions ?? [];
+        setBootstrap({ ...boot, sessions: bootSessions });
+        setSessions(bootSessions);
         setSettings(boot.settings);
         setSettingsDraft(fieldDraftFromSnapshot(boot.settings));
-        if (boot.sessions.length > 0) {
-          setSelectedSessionID((current) => current || boot.sessions[0].session_id);
+        if (bootSessions.length > 0) {
+          setSelectedSessionID((current) => current || bootSessions[0].session_id);
         }
         await localClient.connect();
         setConnected(true);
