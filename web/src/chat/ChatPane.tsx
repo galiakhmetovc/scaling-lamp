@@ -11,6 +11,7 @@ type ChatPaneProps = {
   now: Date;
   btwRuns: BtwRun[];
   toolLog: Array<NonNullable<import("../lib/types").UIEvent["tool"]>>;
+  outgoing: Array<{ id: string; content: string; queued: boolean }>;
   onInput: (value: string) => void;
   onSend: () => void;
   onQueue: () => void;
@@ -22,7 +23,7 @@ type ChatPaneProps = {
 };
 
 export function ChatPane(props: ChatPaneProps) {
-  const { session, streaming, status, input, now, btwRuns, toolLog, onInput, onSend, onQueue, onRecallDraft, onLoadOlder, quickControls, settingsError, onQuickControlChange } = props;
+  const { session, streaming, status, input, now, btwRuns, toolLog, outgoing = [], onInput, onSend, onQueue, onRecallDraft, onLoadOlder, quickControls, settingsError, onQuickControlChange } = props;
   const activeBtwCount = btwRuns.filter((run) => run.active).length;
   const statusView = buildChatStatus({ session, input, now, activeBtwCount, uiStatus: status });
   const btwViews = buildBtwRuns(btwRuns);
@@ -46,6 +47,12 @@ export function ChatPane(props: ChatPaneProps) {
           <div className="timeline">
           {liveTools.map((tool) => (
             <LiveToolItem key={tool.key} tool={tool} />
+          ))}
+          {outgoing.map((item) => (
+            <article key={item.id} className="timeline-item message outgoing">
+              <div className="item-role">YOU</div>
+              <ReactMarkdown remarkPlugins={[remarkGfm]}>{item.content}</ReactMarkdown>
+            </article>
           ))}
           {(session?.timeline ?? []).map((item, index) => (
             <TimelineItem key={`${item.kind}-${index}`} kind={item.kind} role={item.role} content={item.content} />
@@ -113,18 +120,41 @@ export function ChatPane(props: ChatPaneProps) {
           </section>
 
           <section className="composer-panel">
-            <textarea value={input} onChange={(event) => onInput(event.target.value)} placeholder="Send a message or /btw question" />
+            <textarea
+              value={input}
+              onChange={(event) => onInput(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === "Enter" && !event.shiftKey) {
+                  event.preventDefault();
+                  onSend();
+                  return;
+                }
+                if (event.key === "Tab") {
+                  event.preventDefault();
+                  if (input.trim() !== "" || (session?.queued_drafts.length ?? 0) === 0) {
+                    onQueue();
+                    return;
+                  }
+                  const firstQueued = session?.queued_drafts[0];
+                  if (firstQueued) {
+                    onRecallDraft(firstQueued.id);
+                  }
+                }
+              }}
+              placeholder="Send a message or /btw question"
+            />
             <div className="composer-actions">
               <button onClick={onSend}>Send</button>
               <button className="secondary" onClick={onQueue}>
                 Queue
               </button>
             </div>
+            <div className="composer-hint muted">Enter send, Shift+Enter newline, Tab queue/recall</div>
             <div className="chat-statusbar">
               <span>{`provider ${statusView.provider}`}</span>
               <span>{`model ${statusView.model}`}</span>
               <span>{`run ${statusView.runText}`}</span>
-              <span>{`ctx ~${statusView.contextTokens}`}</span>
+              <span title="Approximate transcript, current draft, and queued drafts">{`approx ctx ~${statusView.contextTokens}`}</span>
               <span>{`queue ${statusView.queueCount}`}</span>
               <span>{`/btw ${statusView.activeBtwCount}`}</span>
               {statusView.lastUsageText && <span>{statusView.lastUsageText}</span>}

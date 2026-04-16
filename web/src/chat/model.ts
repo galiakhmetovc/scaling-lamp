@@ -13,7 +13,14 @@ export type SessionUIState = {
   status: string;
   toolLog: NonNullable<UIEvent["tool"]>[];
   btwRuns: BtwRun[];
+  outgoing: OutgoingMessage[];
   lastResult?: ProviderResultPayload;
+};
+
+export type OutgoingMessage = {
+  id: string;
+  content: string;
+  queued: boolean;
 };
 
 export type ChatStatusView = {
@@ -59,7 +66,7 @@ export type CompactToolActivityItem = {
 const MAX_VISIBLE_TOOL_ACTIVITY = 6;
 
 export function emptySessionUIState(): SessionUIState {
-  return { streaming: "", status: "idle", toolLog: [], btwRuns: [] };
+  return { streaming: "", status: "idle", toolLog: [], btwRuns: [], outgoing: [] };
 }
 
 export function approximateContextTokens(session: SessionSnapshot | null, input: string): number {
@@ -124,6 +131,14 @@ export function buildBtwRuns(runs: BtwRun[]): BtwRunView[] {
   });
 }
 
+export function pushOptimisticOutgoingMessage(current: SessionUIState | undefined, content: string): SessionUIState {
+  const next = { ...emptySessionUIState(), ...current };
+  return {
+    ...next,
+    outgoing: [...next.outgoing, { id: `out-${Date.now()}`, content, queued: false }],
+  };
+}
+
 export function buildTimelineMarkdownBlock(kind: "message" | "tool" | "plan", content: string): TimelineMarkdownBlock {
   const trimmed = content.trim();
   if (kind !== "tool") {
@@ -186,6 +201,7 @@ export function storeMainRunResult(current: SessionUIState | undefined, result: 
     ...current,
     streaming: "",
     status: "idle",
+    outgoing: [],
     lastResult: result,
   };
 }

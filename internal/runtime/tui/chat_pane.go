@@ -71,6 +71,9 @@ func (m *model) renderChatViewport(state *sessionState) {
 	wasAtBottom := state.ChatView.AtBottom() || state.ChatView.TotalLineCount() == 0
 	contentWidth := max(20, state.ChatView.Width-1)
 	lines := []string{}
+	for _, item := range m.renderLiveToolLog(state, contentWidth) {
+		lines = append(lines, item, "")
+	}
 	for _, item := range state.Snapshot.Timeline {
 		switch item.Kind {
 		case projections.ChatTimelineItemMessage:
@@ -284,7 +287,7 @@ func (m *model) viewChatStatusBar(state *sessionState) string {
 		"model: " + model,
 		"time: " + now.UTC().Format("15:04:05"),
 		"run: " + runText,
-		fmt.Sprintf("ctx≈%d tok%s", ctxTokens, lastUsage),
+		fmt.Sprintf("approx ctx≈%d tok%s", ctxTokens, lastUsage),
 		fmt.Sprintf("queue: %d", len(state.Queue)),
 	}
 	if activeBtw > 0 {
@@ -294,6 +297,37 @@ func (m *model) viewChatStatusBar(state *sessionState) string {
 		parts = append(parts, "error: "+state.LastError)
 	}
 	return strings.Join(parts, " | ")
+}
+
+func (m *model) renderLiveToolLog(state *sessionState, width int) []string {
+	if state == nil || len(state.ToolLog) == 0 {
+		return nil
+	}
+	start := max(0, len(state.ToolLog)-6)
+	lines := []string{}
+	for _, entry := range state.ToolLog[start:] {
+		activity := entry.Activity
+		title := fmt.Sprintf("**Tool started** `%s`", activity.Name)
+		body := ""
+		if activity.Phase == "completed" {
+			if strings.Contains(activity.ErrorText, "requires approval") {
+				title = fmt.Sprintf("**Approval required** `%s`", activity.Name)
+				body = activity.ErrorText
+			} else if activity.ErrorText != "" {
+				title = fmt.Sprintf("**Tool failed** `%s`", activity.Name)
+				body = activity.ErrorText
+			} else {
+				title = fmt.Sprintf("**Tool done** `%s`", activity.Name)
+				body = activity.ResultText
+			}
+		}
+		block := title
+		if strings.TrimSpace(body) != "" {
+			block += "\n\n" + strings.TrimSpace(body)
+		}
+		lines = append(lines, m.renderMarkdownBlock(block, state.Overrides.MarkdownStyle, width))
+	}
+	return lines
 }
 
 func (m *model) viewQueue(state *sessionState) string {

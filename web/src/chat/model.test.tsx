@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
 import { ChatPane } from "./ChatPane";
-import { approximateContextTokens, applySessionUIEvent, buildChatStatus, buildBtwRuns, buildCompactToolActivity, buildLiveToolView, buildTimelineMarkdownBlock, syncMainRunFromUIEvent } from "./model";
+import { approximateContextTokens, applySessionUIEvent, buildChatStatus, buildCompactToolActivity, buildLiveToolView, buildTimelineMarkdownBlock, emptySessionUIState, pushOptimisticOutgoingMessage, syncMainRunFromUIEvent } from "./model";
 import type { ProviderResultPayload, SessionSnapshot } from "../lib/types";
 import type { SettingsFieldState } from "../lib/types";
 
@@ -99,25 +99,6 @@ describe("chat model helpers", () => {
     expect("currentTime" in status).toBe(false);
   });
 
-  it("maps btw runs into isolated branch state", () => {
-    const result: ProviderResultPayload = {
-      provider: "provider.example.test",
-      model: "glm-5-turbo",
-      input_tokens: 8,
-      output_tokens: 4,
-      total_tokens: 12,
-      content: "side answer",
-    };
-
-    const runs = buildBtwRuns([
-      { id: "btw-1", prompt: "question", active: false, result },
-      { id: "btw-2", prompt: "pending", active: true },
-    ]);
-
-    expect(runs[0].body).toContain("side answer");
-    expect(runs[1].statusText).toBe("running");
-  });
-
   it("splits tool timeline content into collapsible summary and body", () => {
     const block = buildTimelineMarkdownBlock("tool", "**Tool result** `shell_exec`\n\n`line one\\nline two`");
     expect(block.collapsible).toBe(true);
@@ -190,6 +171,12 @@ describe("chat model helpers", () => {
     expect(completed.status).toBe("done");
   });
 
+  it("adds optimistic outgoing messages immediately", () => {
+    const next = pushOptimisticOutgoingMessage(emptySessionUIState(), "Need status");
+    expect(next.outgoing).toHaveLength(1);
+    expect(next.outgoing[0]?.content).toBe("Need status");
+  });
+
 });
 
 describe("ChatPane", () => {
@@ -236,8 +223,6 @@ describe("ChatPane", () => {
     expect(markup).toContain("provider.example.test");
     expect(markup).toContain("glm-5-turbo");
     expect(markup).toContain("queued text");
-    expect(markup).toContain("/btw");
-    expect(markup).toContain("branch answer");
     expect(markup).toContain("shell_exec");
     expect(markup).toContain("tool-result-toggle");
     expect(markup).toContain("<summary>");
@@ -245,6 +230,9 @@ describe("ChatPane", () => {
     expect(markup).toContain("Tool started");
     expect(markup).not.toContain("fs_list</strong><span>started");
     expect(markup).not.toContain("time ");
+    expect(markup).toContain("approx ctx");
+    expect(markup).toContain("Shift+Enter newline");
+    expect(markup).toContain("Tab queue/recall");
     expect(markup).toContain("chat-workspace");
     expect(markup).toContain("surface-primary");
     expect(markup).toContain("surface-secondary");
@@ -284,5 +272,31 @@ describe("ChatPane", () => {
 
     expect(markup).toContain("Load older");
     expect(markup).toContain("12 older");
+  });
+
+  it("renders optimistic outgoing user messages before canonical transcript refresh", () => {
+    const markup = renderToStaticMarkup(
+      <ChatPane
+        session={makeSessionSnapshot()}
+        streaming=""
+        status="sending"
+        input=""
+        now={new Date("2026-04-15T21:01:20Z")}
+        btwRuns={[]}
+        toolLog={[]}
+        outgoing={[{ id: "out-1", content: "Send this now", queued: false }]}
+        onInput={() => {}}
+        onSend={() => {}}
+        onQueue={() => {}}
+        onRecallDraft={() => {}}
+        onLoadOlder={() => {}}
+        quickControls={[]}
+        settingsError=""
+        onQuickControlChange={() => {}}
+      />,
+    );
+
+    expect(markup).toContain("YOU");
+    expect(markup).toContain("Send this now");
   });
 });

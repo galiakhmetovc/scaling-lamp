@@ -7,6 +7,7 @@ import {
   mergeSessionHistory,
   markMainRunStarted,
   prependOlderTimeline,
+  pushOptimisticOutgoingMessage,
   resolveBtwRun,
   storeMainRunResult,
   syncMainRunFromUIEvent,
@@ -130,6 +131,14 @@ export function App() {
       ...current,
       [snapshot.session_id]: mergeSessionHistory(current[snapshot.session_id], snapshot),
     }));
+    setSessionUI((current) => ({
+      ...current,
+      [snapshot.session_id]: {
+        ...emptySessionUIState(),
+        ...current[snapshot.session_id],
+        outgoing: [],
+      },
+    }));
     setSessions((current) => upsertSessionSummary(current, snapshot));
     setSelectedSessionID((current) => current || snapshot.session_id);
     setSelectedPlanTaskID((current) => current || defaultSelectedTaskID(snapshot.plan));
@@ -245,6 +254,9 @@ export function App() {
       if (selectedSession) {
         applySessionSnapshot(markMainRunStarted(selectedSession, new Date()));
       }
+      if (!selectedSession?.main_run.active) {
+        setSessionUI((current) => ({ ...current, [selectedSessionID]: pushOptimisticOutgoingMessage(current[selectedSessionID], prompt) }));
+      }
       const result = await client.command("chat.send", { session_id: selectedSessionID, prompt });
       applySessionSnapshot(result.session);
       if (result.result) {
@@ -252,6 +264,7 @@ export function App() {
       }
       setStatusMessage(result.queued ? "queued" : "sent");
     } catch (error) {
+      setSessionUI((current) => ({ ...current, [selectedSessionID]: { ...emptySessionUIState(), ...current[selectedSessionID], outgoing: [] } }));
       setErrorMessage(String(error));
     }
   }
@@ -475,6 +488,7 @@ export function App() {
               now={clockNow}
               btwRuns={selectedUI.btwRuns}
               toolLog={selectedUI.toolLog}
+              outgoing={selectedUI.outgoing}
               onInput={setChatInput}
               onSend={() => void handleSendChat()}
               onQueue={() => void handleQueueDraft()}
