@@ -1445,3 +1445,15 @@ func findActivePlanProjection(t *testing.T, projectionsList []projections.Projec
 	t.Fatal("active plan projection not found")
 	return nil
 }
+
+func findPlanArchiveProjection(t *testing.T, projectionsList []projections.Projection) *projections.PlanArchiveProjection {
+	t.Helper()
+	for _, projection := range projectionsList {
+		archive, ok := projection.(*projections.PlanArchiveProjection)
+		if ok {
+			return archive
+		}
+	}
+	t.Fatal("plan archive projection not found")
+	return nil
+}
