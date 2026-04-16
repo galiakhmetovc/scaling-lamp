@@ -818,6 +818,91 @@ func TestClientStreamsToolCallsAndReturnsAllowedDecisions(t *testing.T) {
 	}
 }
 
+func TestClientAllowsReasoningOnlyStreamWithoutVisibleContent(t *testing.T) {
+	t.Setenv("ZAI_API_KEY", "secret-token")
+
+	var reasoning []string
+	client := provider.NewClient(
+		provider.NewPromptAssetExecutor(),
+		provider.NewRequestShapeExecutor(),
+		tools.NewPlanToolExecutor(),
+		filesystem.NewDefinitionExecutor(),
+		shell.NewDefinitionExecutor(),
+		delegation.NewDefinitionExecutor(),
+		tools.NewCatalogExecutor(),
+		tools.NewExecutionGate(),
+		provider.NewTransportExecutor(fakeDoer{
+			do: func(req *http.Request) (*http.Response, error) {
+				return &http.Response{
+					StatusCode: http.StatusOK,
+					Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
+					Body: io.NopCloser(bytes.NewBufferString(strings.Join([]string{
+						`data: {"id":"resp-1","model":"glm-5-turbo","choices":[{"index":0,"delta":{"role":"assistant","reasoning_content":"checking tools"},"finish_reason":""}]}`,
+						"",
+						`data: {"id":"resp-1","model":"glm-5-turbo","choices":[{"index":0,"finish_reason":"stop","delta":{"content":""}}],"usage":{"prompt_tokens":12,"completion_tokens":3,"total_tokens":15}}`,
+						"",
+						`data: [DONE]`,
+						"",
+					}, "\n"))),
+				}, nil
+			},
+		}),
+	)
+
+	result, err := client.Execute(context.Background(), contracts.ResolvedContracts{
+		ProviderRequest: contracts.ProviderRequestContract{
+			Transport: contracts.TransportContract{
+				Endpoint: contracts.EndpointPolicy{
+					Enabled:  true,
+					Strategy: "static",
+					Params: contracts.EndpointParams{
+						BaseURL: "https://api.z.ai",
+						Path:    "/api/paas/v4/chat/completions",
+						Method:  http.MethodPost,
+					},
+				},
+				Auth: contracts.AuthPolicy{
+					Enabled:  true,
+					Strategy: "bearer_token",
+					Params: contracts.AuthParams{
+						Header:      "Authorization",
+						Prefix:      "Bearer",
+						ValueEnvVar: "ZAI_API_KEY",
+					},
+				},
+			},
+			RequestShape: contracts.RequestShapeContract{
+				Model:     contracts.ModelPolicy{Enabled: true, Strategy: "static_model", Params: contracts.ModelParams{Model: "glm-5-turbo"}},
+				Messages:  contracts.MessagePolicy{Enabled: true, Strategy: "raw_messages"},
+				Tools:     contracts.ToolPolicy{Enabled: true, Strategy: "tools_inline"},
+				Streaming: contracts.StreamingPolicy{Enabled: true, Strategy: "static_stream", Params: contracts.StreamingParams{Stream: true}},
+			},
+		},
+	}, provider.ClientInput{
+		Messages: []contracts.Message{{Role: "user", Content: "Check tools"}},
+		StreamObserver: func(event provider.StreamEvent) {
+			if event.Kind == provider.StreamEventReasoning {
+				reasoning = append(reasoning, event.Text)
+			}
+		},
+	})
+	if err != nil {
+		t.Fatalf("Execute returned error: %v", err)
+	}
+	if len(reasoning) != 1 || reasoning[0] != "checking tools" {
+		t.Fatalf("reasoning = %#v, want [checking tools]", reasoning)
+	}
+	if result.Provider.Message.Content != "" {
+		t.Fatalf("provider message = %q, want empty", result.Provider.Message.Content)
+	}
+	if result.Provider.FinishReason != "stop" {
+		t.Fatalf("finish reason = %q, want stop", result.Provider.FinishReason)
+	}
+	if result.Provider.Usage.TotalTokens != 15 {
+		t.Fatalf("usage total = %d, want 15", result.Provider.Usage.TotalTokens)
+	}
+}
+
 func TestClientIncludesFilesystemAndShellToolsInVisibleToolPayload(t *testing.T) {
 	t.Setenv("ZAI_API_KEY", "secret-token")
 

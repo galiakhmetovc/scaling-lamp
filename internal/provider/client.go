@@ -193,7 +193,7 @@ func (c *Client) Execute(ctx context.Context, contractSet contracts.ResolvedCont
 	}
 	parsed := streamed
 	if contractSet.ProviderRequest.RequestShape.Streaming.Enabled && contractSet.ProviderRequest.RequestShape.Streaming.Params.Stream {
-		if parsed.Message.Content == "" && len(parsed.ToolCalls) == 0 {
+		if parsed.Message.Content == "" && len(parsed.ToolCalls) == 0 && parsed.FinishReason == "" && parsed.Usage.TotalTokens == 0 {
 			return ClientResult{}, fmt.Errorf("provider stream returned no content")
 		}
 	} else {
