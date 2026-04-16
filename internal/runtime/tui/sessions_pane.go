@@ -57,6 +57,9 @@ func (m *model) viewSessions() string {
 			prefix = "> "
 		}
 		title := sessionID
+		if state != nil && strings.TrimSpace(state.Snapshot.Title) != "" {
+			title = state.Snapshot.Title
+		}
 		if state != nil && state.Status != "" {
 			title += " [" + state.Status + "]"
 		}

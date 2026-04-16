@@ -11,6 +11,7 @@ import (
 
 type SessionCatalogEntry struct {
 	SessionID    string    `json:"session_id"`
+	Title        string    `json:"title"`
 	CreatedAt    time.Time `json:"created_at"`
 	LastActivity time.Time `json:"last_activity"`
 	MessageCount int       `json:"message_count"`
@@ -43,6 +44,20 @@ func (p *SessionCatalogProjection) Apply(event eventing.Event) error {
 			CreatedAt:    event.OccurredAt,
 			LastActivity: event.OccurredAt,
 		}
+	case eventing.EventSessionRenamed:
+		if p.snapshot.Sessions == nil {
+			p.snapshot.Sessions = map[string]SessionCatalogEntry{}
+		}
+		entry := p.snapshot.Sessions[event.AggregateID]
+		if entry.SessionID == "" {
+			entry.SessionID = event.AggregateID
+			entry.CreatedAt = event.OccurredAt
+		}
+		if title, _ := event.Payload["title"].(string); title != "" {
+			entry.Title = title
+		}
+		entry.LastActivity = event.OccurredAt
+		p.snapshot.Sessions[event.AggregateID] = entry
 	case eventing.EventMessageRecorded:
 		sessionID, _ := event.Payload["session_id"].(string)
 		if sessionID == "" {

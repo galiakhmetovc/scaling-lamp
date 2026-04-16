@@ -16,6 +16,7 @@ export type BootstrapPayload = {
 
 export type SessionSummary = {
   session_id: string;
+  title: string;
   created_at: string;
   last_activity: string;
   message_count: number;
@@ -103,6 +104,7 @@ export type DelegateView = {
 
 export type SessionSnapshot = {
   session_id: string;
+  title: string;
   created_at: string;
   last_activity: string;
   message_count: number;
@@ -138,6 +140,7 @@ export type SettingsFieldState = {
   type: string;
   value: unknown;
   file_path: string;
+  yaml_path?: string[];
   revision: string;
   enum?: string[];
   apply_scope?: string;
@@ -154,6 +157,23 @@ export type SettingsSnapshot = {
   form_fields: SettingsFieldState[];
   quick_controls: SettingsFieldState[];
   raw_files: SettingsRawFileState[];
+  tree: SettingsTreeNode[];
+};
+
+export type SettingsTreeReference = {
+  label: string;
+  target_path: string;
+};
+
+export type SettingsTreeNode = {
+  id: string;
+  label: string;
+  kind: string;
+  path?: string;
+  field_key?: string;
+  value_text?: string;
+  refs?: SettingsTreeReference[];
+  children?: SettingsTreeNode[];
 };
 
 export type SettingsRawFileContent = {
@@ -199,6 +219,7 @@ export type ProviderResultPayload = {
 export type CommandPayloadMap = {
   "session.create": { session: SessionSnapshot };
   "session.get": { session: SessionSnapshot };
+  "session.rename": { session: SessionSnapshot };
   "session.history": {
     session_id: string;
     timeline: ChatTimelineItem[];

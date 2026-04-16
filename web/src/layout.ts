@@ -25,9 +25,9 @@ export function buildControlHeaderView(args: {
   errorMessage?: string;
 }): ControlHeaderView {
   const { bootstrap, connected, selectedSession, errorMessage } = args;
-  const sessionLabel = selectedSession ? selectedSession.session_id : "No active session";
+  const sessionLabel = selectedSession ? (selectedSession.title || selectedSession.session_id) : "No active session";
   const sessionMeta = selectedSession
-    ? `${selectedSession.message_count} messages`
+    ? `${selectedSession.message_count} messages · ${selectedSession.session_id}`
     : "Create or select a session to start working";
   const statusChips = [
     connected ? "websocket up" : "websocket down",

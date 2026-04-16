@@ -39,6 +39,19 @@ func (s *Server) executeCommand(ctx context.Context, req CommandRequest) (any, e
 			return nil, err
 		}
 		return map[string]any{"session": snapshot}, nil
+	case "session.rename":
+		sessionID, err := requiredString(req.Payload, "session_id")
+		if err != nil {
+			return nil, err
+		}
+		title, err := requiredString(req.Payload, "title")
+		if err != nil {
+			return nil, err
+		}
+		if err := agent.RenameSession(ctx, sessionID, title); err != nil {
+			return nil, err
+		}
+		return s.sessionPayload(sessionID)
 	case "session.history":
 		sessionID, err := requiredString(req.Payload, "session_id")
 		if err != nil {

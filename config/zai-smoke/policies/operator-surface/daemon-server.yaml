@@ -11,3 +11,6 @@ spec:
     public_base_url: ""
     allowed_origins: []
     initial_chat_history_limit: 40
+    log_format: json
+    log_level: info
+    log_add_source: false

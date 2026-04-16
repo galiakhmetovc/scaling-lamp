@@ -22,7 +22,20 @@ export function SettingsPane(props: SettingsPaneProps) {
   const { quickControls, advancedFields } = partitionSettingsFields(settings);
 
   return (
-    <div className="two-column">
+    <div className="settings-layout">
+      <section className="surface surface-secondary settings-tree-panel">
+        <div className="section-title">
+          <span>Settings tree</span>
+          <span className="muted">{settings?.tree?.length ?? 0}</span>
+        </div>
+        <div className="settings-tree">
+          {((settings?.tree ?? [])).map((node) => (
+            <SettingsTreeNodeView key={node.id} node={node} selectedRawPath={selectedRawPath} onSelectRaw={onSelectRaw} />
+          ))}
+        </div>
+      </section>
+
+      <div className="two-column">
       <section className="surface surface-primary">
         <div className="section-title">
           <span>Settings form</span>
@@ -79,7 +92,54 @@ export function SettingsPane(props: SettingsPaneProps) {
         <textarea value={rawDraft} onChange={(event) => onRawChange(event.target.value)} placeholder="Raw YAML content" />
         <button onClick={onApplyRaw} disabled={!rawFile}>Apply raw file</button>
       </section>
+      </div>
     </div>
+  );
+}
+
+function SettingsTreeNodeView(props: {
+  node: NonNullable<SettingsPaneProps["settings"]>["tree"][number];
+  selectedRawPath: string;
+  onSelectRaw: (path: string) => void;
+}) {
+  const { node, selectedRawPath, onSelectRaw } = props;
+  const selectable = Boolean(node.path);
+  const active = selectable && node.path === selectedRawPath;
+
+  return (
+    <details className={`settings-tree-node kind-${node.kind}`} open={node.kind !== "field"}>
+      <summary>
+        <button
+          type="button"
+          className={`tree-node-button ${active ? "active" : ""}`}
+          onClick={(event) => {
+            event.preventDefault();
+            if (node.path) {
+              onSelectRaw(node.path);
+            }
+          }}
+        >
+          <span>{node.label}</span>
+          {node.value_text ? <span className="muted">{node.value_text}</span> : null}
+        </button>
+      </summary>
+      {node.refs && node.refs.length > 0 ? (
+        <div className="settings-tree-refs">
+          {node.refs.map((ref) => (
+            <button key={ref.target_path} className="secondary small" onClick={() => onSelectRaw(ref.target_path)}>
+              {`ref ${ref.label}`}
+            </button>
+          ))}
+        </div>
+      ) : null}
+      {node.children && node.children.length > 0 ? (
+        <div className="settings-tree-children">
+          {node.children.map((child) => (
+            <SettingsTreeNodeView key={child.id} node={child} selectedRawPath={selectedRawPath} onSelectRaw={onSelectRaw} />
+          ))}
+        </div>
+      ) : null}
+    </details>
   );
 }
 

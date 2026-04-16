@@ -20,7 +20,7 @@ export function buildSessionList(sessions: SessionSummary[], selectedSessionID: 
     .map((session) => ({
       id: session.session_id,
       active: session.session_id === selectedSessionID,
-      title: session.session_id,
+      title: session.title || session.session_id,
       meta: `${session.message_count} messages`,
       activityText: formatLastActivity(session.last_activity),
     }));

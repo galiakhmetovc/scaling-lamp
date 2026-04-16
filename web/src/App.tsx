@@ -222,6 +222,16 @@ export function App() {
     setActiveTab("chat");
   }
 
+  async function handleRenameSession(sessionID: string, title: string) {
+    const client = clientRef.current;
+    if (!client || !sessionID || !title.trim()) {
+      return;
+    }
+    const result = await client.command("session.rename", { session_id: sessionID, title: title.trim() });
+    applySessionSnapshot(result.session);
+    setStatusMessage("session renamed");
+  }
+
   function handleSelectSession(sessionID: string) {
     const intent = sessionSelectionIntent(sessionID);
     setSelectedSessionID(intent.sessionID);
@@ -477,6 +487,7 @@ export function App() {
               selectedSessionID={selectedSessionID}
               onSelectSession={handleSelectSession}
               onCreateSession={() => void handleCreateSession()}
+              onRenameSession={(sessionID, title) => void handleRenameSession(sessionID, title)}
             />
           )}
           {activeTab === "chat" && (
@@ -554,6 +565,7 @@ function upsertSessionSummary(current: SessionSummary[], snapshot: SessionSnapsh
   const next = current.filter((entry) => entry.session_id !== snapshot.session_id);
   next.unshift({
     session_id: snapshot.session_id,
+    title: snapshot.title,
     created_at: snapshot.created_at,
     last_activity: snapshot.last_activity,
     message_count: snapshot.message_count,

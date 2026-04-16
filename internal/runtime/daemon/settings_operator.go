@@ -23,6 +23,7 @@ type SettingsSnapshot struct {
 	FormFields    []SettingsFieldState   `json:"form_fields"`
 	QuickControls []SettingsFieldState   `json:"quick_controls"`
 	RawFiles      []SettingsRawFileState `json:"raw_files"`
+	Tree          []SettingsTreeNode     `json:"tree"`
 }
 
 type SettingsFieldState struct {
@@ -31,6 +32,7 @@ type SettingsFieldState struct {
 	Type       string   `json:"type"`
 	Value      any      `json:"value"`
 	FilePath   string   `json:"file_path"`
+	YAMLPath   []string `json:"yaml_path,omitempty"`
 	Revision   string   `json:"revision"`
 	Enum       []string `json:"enum,omitempty"`
 	ApplyScope string   `json:"apply_scope,omitempty"`
@@ -46,6 +48,35 @@ type SettingsRawFileContent struct {
 	Path     string `json:"path"`
 	Revision string `json:"revision"`
 	Content  string `json:"content"`
+}
+
+type SettingsTreeNode struct {
+	ID        string                  `json:"id"`
+	Label     string                  `json:"label"`
+	Kind      string                  `json:"kind"`
+	Path      string                  `json:"path,omitempty"`
+	FieldKey  string                  `json:"field_key,omitempty"`
+	Children  []SettingsTreeNode      `json:"children,omitempty"`
+	Refs      []SettingsTreeReference `json:"refs,omitempty"`
+	ValueText string                  `json:"value_text,omitempty"`
+}
+
+type SettingsTreeReference struct {
+	Label      string `json:"label"`
+	TargetPath string `json:"target_path"`
+}
+
+type settingsTreeBuilderNode struct {
+	id       string
+	label    string
+	kind     string
+	path     string
+	fieldKey string
+	value    string
+	refs     []SettingsTreeReference
+	order    int
+	children []*settingsTreeBuilderNode
+	index    map[string]*settingsTreeBuilderNode
 }
 
 func (s *Server) settingsSnapshot() (SettingsSnapshot, error) {
@@ -70,6 +101,7 @@ func (s *Server) settingsSnapshot() (SettingsSnapshot, error) {
 			Type:     field.Type,
 			Value:    value,
 			FilePath: field.FilePath,
+			YAMLPath: append([]string{}, field.YAMLPath...),
 			Revision: fileRevisions[field.FilePath],
 			Enum:     append([]string{}, field.Enum...),
 		}
@@ -97,11 +129,13 @@ func (s *Server) settingsSnapshot() (SettingsSnapshot, error) {
 		return SettingsSnapshot{}, err
 	}
 	raw := make([]SettingsRawFileState, 0, len(rawFiles))
+	rawBodies := make(map[string]string, len(rawFiles))
 	for _, rel := range rawFiles {
 		body, err := os.ReadFile(filepath.Join(root, rel))
 		if err != nil {
 			return SettingsSnapshot{}, err
 		}
+		rawBodies[rel] = string(body)
 		raw = append(raw, SettingsRawFileState{
 			Path:     rel,
 			Revision: hashBytes(body),
@@ -113,6 +147,7 @@ func (s *Server) settingsSnapshot() (SettingsSnapshot, error) {
 		FormFields:    fields,
 		QuickControls: quickControls,
 		RawFiles:      raw,
+		Tree:          buildSettingsTree(fields, raw, rawBodies),
 	}, nil
 }
 
@@ -142,6 +177,7 @@ func (s *Server) applyFormSettings(ctx context.Context, baseRevision string, val
 	if err := s.ensureSettingsApplyAllowed(); err != nil {
 		return SettingsSnapshot{}, err
 	}
+	s.logSettingsApply("form", len(values), baseRevision)
 	return s.applySettingsFields(ctx, baseRevision, values, nil)
 }
 
@@ -168,6 +204,7 @@ func (s *Server) applyQuickControlSettings(ctx context.Context, baseRevision str
 	if err := s.ensureQuickControlApplyAllowed(quickControlsByKey, values); err != nil {
 		return SettingsSnapshot{}, err
 	}
+	s.logSettingsApply("quick", len(values), baseRevision)
 	return s.applySettingsFields(ctx, baseRevision, values, allowedFields)
 }
 
@@ -227,11 +264,13 @@ func (s *Server) applySettingsFields(ctx context.Context, baseRevision string, v
 		}
 	}
 	if err := s.reloadAgentFromDisk(ctx); err != nil {
+		s.logSettingsReload("failed")
 		if rollbackErr := restoreFiles(root, originalByFile); rollbackErr != nil {
 			return SettingsSnapshot{}, fmt.Errorf("%w (rollback failed: %v)", err, rollbackErr)
 		}
 		return SettingsSnapshot{}, err
 	}
+	s.logSettingsReload("completed")
 	return s.settingsSnapshot()
 }
 
@@ -239,6 +278,7 @@ func (s *Server) applyRawSettings(ctx context.Context, path, baseRevision, conte
 	if err := s.ensureSettingsApplyAllowed(); err != nil {
 		return SettingsSnapshot{}, err
 	}
+	s.logSettingsApply("raw", 1, baseRevision)
 	current, err := s.settingsRawFile(path)
 	if err != nil {
 		return SettingsSnapshot{}, err
@@ -260,11 +300,13 @@ func (s *Server) applyRawSettings(ctx context.Context, path, baseRevision, conte
 		return SettingsSnapshot{}, err
 	}
 	if err := s.reloadAgentFromDisk(ctx); err != nil {
+		s.logSettingsReload("failed")
 		if rollbackErr := os.WriteFile(filepath.Join(root, clean), original, 0o644); rollbackErr != nil {
 			return SettingsSnapshot{}, fmt.Errorf("%w (rollback failed: %v)", err, rollbackErr)
 		}
 		return SettingsSnapshot{}, err
 	}
+	s.logSettingsReload("completed")
 	return s.settingsSnapshot()
 }
 
@@ -588,6 +630,175 @@ func hashSettingsSnapshot(fields []SettingsFieldState, raw []SettingsRawFileStat
 		builder.WriteString("\n")
 	}
 	return hashBytes([]byte(builder.String()))
+}
+
+func buildSettingsTree(fields []SettingsFieldState, raw []SettingsRawFileState, rawBodies map[string]string) []SettingsTreeNode {
+	newNode := func(id, label, kind, path string, order int) *settingsTreeBuilderNode {
+		return &settingsTreeBuilderNode{id: id, label: label, kind: kind, path: path, order: order, index: map[string]*settingsTreeBuilderNode{}}
+	}
+	root := newNode("root", "Settings", "root", "", 0)
+	rawSet := make(map[string]struct{}, len(raw))
+	for _, file := range raw {
+		rawSet[file.Path] = struct{}{}
+		segments := strings.Split(file.Path, "/")
+		parent := root
+		prefix := ""
+		for i, segment := range segments {
+			if prefix == "" {
+				prefix = segment
+			} else {
+				prefix = prefix + "/" + segment
+			}
+			kind := "folder"
+			if i == len(segments)-1 {
+				kind = "file"
+			}
+			child, ok := parent.index[prefix]
+			if !ok {
+				child = newNode(prefix, segment, kind, prefix, i)
+				parent.index[prefix] = child
+				parent.children = append(parent.children, child)
+			}
+			parent = child
+		}
+		parent.refs = discoverSettingsReferences(file.Path, rawBodies[file.Path], rawSet)
+	}
+	fieldOrder := 0
+	for _, field := range fields {
+		fileNode := ensureTreePath(root, field.FilePath)
+		parent := fileNode
+		yamlPrefix := field.FilePath
+		for _, segment := range fieldPathLabels(field) {
+			yamlPrefix += "#" + segment
+			child, ok := parent.index[yamlPrefix]
+			if !ok {
+				child = newNode(yamlPrefix, segment, "section", field.FilePath, fieldOrder)
+				parent.index[yamlPrefix] = child
+				parent.children = append(parent.children, child)
+			}
+			parent = child
+		}
+		leafID := field.FilePath + "#field:" + field.Key
+		parent.children = append(parent.children, &settingsTreeBuilderNode{
+			id:       leafID,
+			label:    field.Label,
+			kind:     "field",
+			path:     field.FilePath,
+			fieldKey: field.Key,
+			value:    fmt.Sprintf("%v", field.Value),
+			order:    fieldOrder,
+			index:    map[string]*settingsTreeBuilderNode{},
+		})
+		fieldOrder++
+	}
+	return exportSettingsTree(root.children)
+}
+
+func ensureTreePath(root *settingsTreeBuilderNode, filePath string) *settingsTreeBuilderNode {
+	parent := root
+	prefix := ""
+	segments := strings.Split(filePath, "/")
+	for i, segment := range segments {
+		if prefix == "" {
+			prefix = segment
+		} else {
+			prefix += "/" + segment
+		}
+		kind := "folder"
+		if i == len(segments)-1 {
+			kind = "file"
+		}
+		child, ok := parent.index[prefix]
+		if !ok {
+			child = &settingsTreeBuilderNode{id: prefix, label: segment, kind: kind, path: prefix, order: i, index: map[string]*settingsTreeBuilderNode{}}
+			parent.index[prefix] = child
+			parent.children = append(parent.children, child)
+		}
+		parent = child
+	}
+	return parent
+}
+
+func fieldPathLabels(field SettingsFieldState) []string {
+	if len(field.YAMLPath) <= 1 {
+		return nil
+	}
+	return append([]string{}, field.YAMLPath[:len(field.YAMLPath)-1]...)
+}
+
+func exportSettingsTree(nodes []*settingsTreeBuilderNode) []SettingsTreeNode {
+	slices.SortFunc(nodes, func(left, right *settingsTreeBuilderNode) int {
+		if left.kind != right.kind {
+			if left.kind == "folder" {
+				return -1
+			}
+			if right.kind == "folder" {
+				return 1
+			}
+		}
+		if left.order != right.order {
+			return left.order - right.order
+		}
+		return strings.Compare(left.label, right.label)
+	})
+	out := make([]SettingsTreeNode, 0, len(nodes))
+	for _, node := range nodes {
+		out = append(out, SettingsTreeNode{
+			ID:        node.id,
+			Label:     node.label,
+			Kind:      node.kind,
+			Path:      node.path,
+			FieldKey:  node.fieldKey,
+			ValueText: node.value,
+			Refs:      append([]SettingsTreeReference{}, node.refs...),
+			Children:  exportSettingsTree(node.children),
+		})
+	}
+	return out
+}
+
+func discoverSettingsReferences(filePath, body string, rawSet map[string]struct{}) []SettingsTreeReference {
+	if strings.TrimSpace(body) == "" {
+		return nil
+	}
+	var document any
+	if err := yaml.Unmarshal([]byte(body), &document); err != nil {
+		return nil
+	}
+	refs := map[string]SettingsTreeReference{}
+	walkSettingsReferences(document, func(value string) {
+		value = path.Clean(path.Join(path.Dir(filePath), value))
+		if _, ok := rawSet[value]; ok && value != filePath {
+			refs[value] = SettingsTreeReference{Label: filepath.Base(value), TargetPath: value}
+		}
+	})
+	out := make([]SettingsTreeReference, 0, len(refs))
+	for _, ref := range refs {
+		out = append(out, ref)
+	}
+	slices.SortFunc(out, func(a, b SettingsTreeReference) int { return strings.Compare(a.TargetPath, b.TargetPath) })
+	return out
+}
+
+func walkSettingsReferences(node any, visit func(string)) {
+	switch typed := node.(type) {
+	case map[string]any:
+		for _, value := range typed {
+			walkSettingsReferences(value, visit)
+		}
+	case map[any]any:
+		for _, value := range typed {
+			walkSettingsReferences(value, visit)
+		}
+	case []any:
+		for _, value := range typed {
+			walkSettingsReferences(value, visit)
+		}
+	case string:
+		if strings.HasSuffix(strings.TrimSpace(typed), ".yaml") {
+			visit(typed)
+		}
+	}
 }
 
 func hashBytes(body []byte) string {

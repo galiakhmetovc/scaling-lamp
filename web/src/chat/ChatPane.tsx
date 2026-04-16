@@ -34,7 +34,7 @@ export function ChatPane(props: ChatPaneProps) {
       <section className="surface surface-primary timeline-panel">
         <div className="section-title">
           <span>Chat</span>
-          <span className="muted">{session?.session_id ?? "no session"}</span>
+          <span className="muted">{session ? `${session.title || session.session_id} · ${session.session_id}` : "no session"}</span>
         </div>
         <div className="timeline-scroll">
           {session?.history.has_more && (

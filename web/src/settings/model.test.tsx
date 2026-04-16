@@ -15,6 +15,22 @@ const settings: SettingsSnapshot = {
     { key: "model", label: "Model", type: "string", value: "glm-5-turbo", file_path: "policies/request-shape/model.yaml", revision: "rev-model", enum: ["glm-5-turbo", "glm-4.6"] },
   ],
   raw_files: [{ path: "policies/chat/output.yaml", revision: "raw-1", size: 12 }],
+  tree: [
+    {
+      id: "policies",
+      label: "policies",
+      kind: "folder",
+      children: [
+        {
+          id: "policies/chat/output.yaml",
+          label: "output.yaml",
+          kind: "file",
+          path: "policies/chat/output.yaml",
+          refs: [{ label: "model.yaml", target_path: "policies/request-shape/model.yaml" }],
+        },
+      ],
+    },
+  ],
 };
 
 const rawFile: SettingsRawFileContent = {
@@ -59,6 +75,8 @@ describe("SettingsPane", () => {
     expect(markup).toContain("dirty");
     expect(markup).toContain("revision conflict");
     expect(markup).toContain("policies/chat/output.yaml");
+    expect(markup).toContain("Settings tree");
+    expect(markup).toContain("ref model.yaml");
     expect(markup).toContain("surface-primary");
     expect(markup).toContain("surface-secondary");
     expect(markup).toContain("select");

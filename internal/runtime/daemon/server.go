@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/http/httputil"
 	"net/url"
+	"log/slog"
 	"path"
 	"slices"
 	"strings"
@@ -31,6 +32,7 @@ type Server struct {
 	runtimeMu      sync.RWMutex
 	sessionRuntime map[string]*sessionRuntimeState
 	daemonBus      *daemonBus
+	logger         *slog.Logger
 }
 
 type BootstrapPayload struct {
@@ -55,6 +57,7 @@ type WebAssetsSnapshot struct {
 
 type runtimeSessionSnapshot struct {
 	SessionID    string    `json:"session_id"`
+	Title        string    `json:"title"`
 	CreatedAt    time.Time `json:"created_at"`
 	LastActivity time.Time `json:"last_activity"`
 	MessageCount int       `json:"message_count"`
@@ -87,6 +90,9 @@ func New(agent *runtime.Agent) (*Server, error) {
 	if params.ListenPort <= 0 {
 		return nil, fmt.Errorf("daemon mode requires operator_surface.daemon_server.listen_port > 0")
 	}
+	if err := validateDaemonLogging(params); err != nil {
+		return nil, err
+	}
 	transport := operatorSurface.ClientTransport.Params
 	if !strings.HasPrefix(strings.TrimSpace(transport.EndpointPath), "/") {
 		return nil, fmt.Errorf("daemon mode requires operator_surface.client_transport.endpoint_path to start with '/'")
@@ -103,11 +109,19 @@ func New(agent *runtime.Agent) (*Server, error) {
 		listenAddr:     net.JoinHostPort(params.ListenHost, fmt.Sprintf("%d", params.ListenPort)),
 		sessionRuntime: map[string]*sessionRuntimeState{},
 		daemonBus:      newDaemonBus(),
+		logger:         newDaemonLogger(agent.Contracts.OperatorSurface.DaemonServer.Params),
 	}
 	server.httpServer = &http.Server{
 		Addr:    server.listenAddr,
 		Handler: server.routes(),
 	}
+	server.logInfo("daemon.server.initialized",
+		slog.String("agent_id", agent.Config.ID),
+		slog.String("listen_addr", server.listenAddr),
+		slog.String("endpoint_path", operatorSurface.ClientTransport.Params.EndpointPath),
+		slog.String("websocket_path", operatorSurface.ClientTransport.Params.WebSocketPath),
+		slog.String("assets_mode", operatorSurface.WebAssets.Params.Mode),
+	)
 	return server, nil
 }
 
@@ -116,6 +130,7 @@ func (s *Server) ListenAndServe(ctx context.Context) error {
 		return fmt.Errorf("daemon server is not initialized")
 	}
 	errCh := make(chan error, 1)
+	s.logInfo("daemon.server.listen.start", slog.String("listen_addr", s.listenAddr))
 	go func() {
 		err := s.httpServer.ListenAndServe()
 		if err == http.ErrServerClosed {
@@ -126,14 +141,27 @@ func (s *Server) ListenAndServe(ctx context.Context) error {
 
 	select {
 	case err := <-errCh:
+		if err != nil {
+			s.logError("daemon.server.listen.failed", err, slog.String("listen_addr", s.listenAddr))
+		} else {
+			s.logInfo("daemon.server.listen.stopped", slog.String("listen_addr", s.listenAddr))
+		}
 		return err
 	case <-ctx.Done():
+		s.logInfo("daemon.server.shutdown.requested", slog.String("listen_addr", s.listenAddr))
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 		if err := s.httpServer.Shutdown(shutdownCtx); err != nil {
+			s.logError("daemon.server.shutdown.failed", err, slog.String("listen_addr", s.listenAddr))
 			return fmt.Errorf("shutdown daemon server: %w", err)
 		}
-		return <-errCh
+		err := <-errCh
+		if err != nil {
+			s.logError("daemon.server.shutdown.listen_error", err, slog.String("listen_addr", s.listenAddr))
+		} else {
+			s.logInfo("daemon.server.shutdown.completed", slog.String("listen_addr", s.listenAddr))
+		}
+		return err
 	}
 }
 
@@ -165,7 +193,7 @@ func (s *Server) routes() http.Handler {
 		})
 	}
 	mux.Handle("/", assetsHandler)
-	return mux
+	return s.loggingMiddleware(mux)
 }
 
 func (s *Server) handleHealthz(w http.ResponseWriter, _ *http.Request) {
@@ -198,6 +226,7 @@ func (s *Server) handleBootstrap(w http.ResponseWriter, _ *http.Request) {
 	for _, session := range agent.ListSessions() {
 		payload.Sessions = append(payload.Sessions, runtimeSessionSnapshot{
 			SessionID:    session.SessionID,
+			Title:        session.Title,
 			CreatedAt:    session.CreatedAt,
 			LastActivity: session.LastActivity,
 			MessageCount: session.MessageCount,
@@ -237,6 +266,16 @@ func (s *Server) websocketHandler() http.Handler {
 			defer conn.Close()
 			ctx, cancel := context.WithCancel(r.Context())
 			defer cancel()
+			s.logInfo("daemon.websocket.connected",
+				slog.String("remote_addr", r.RemoteAddr),
+				slog.String("origin", r.Header.Get("Origin")),
+				slog.String("path", r.URL.Path),
+			)
+			defer s.logInfo("daemon.websocket.disconnected",
+				slog.String("remote_addr", r.RemoteAddr),
+				slog.String("origin", r.Header.Get("Origin")),
+				slog.String("path", r.URL.Path),
+			)
 
 			agent := s.currentAgent()
 			subID, ch := agent.UIBus.Subscribe(128)
@@ -298,18 +337,37 @@ func (s *Server) websocketHandler() http.Handler {
 					break
 				}
 				if req.Type != "command" {
+					s.logError("daemon.command.rejected", fmt.Errorf("unsupported websocket message type %q", req.Type),
+						slog.String("command_id", req.ID),
+						slog.String("command", req.Command),
+					)
 					send(WebsocketEnvelope{Type: "command_failed", ID: req.ID, Command: req.Command, Error: fmt.Sprintf("unsupported websocket message type %q", req.Type)})
 					continue
 				}
+				s.logInfo("daemon.command.accepted",
+					slog.String("command_id", req.ID),
+					slog.String("command", req.Command),
+					slog.String("session_id", commandSessionID(req.Payload)),
+				)
 				send(WebsocketEnvelope{Type: "command_accepted", ID: req.ID, Command: req.Command})
 				commandWG.Add(1)
 				go func(req CommandRequest) {
 					defer commandWG.Done()
 					payload, err := s.executeCommand(ctx, req)
 					if err != nil {
+						s.logError("daemon.command.failed", err,
+							slog.String("command_id", req.ID),
+							slog.String("command", req.Command),
+							slog.String("session_id", commandSessionID(req.Payload)),
+						)
 						send(WebsocketEnvelope{Type: "command_failed", ID: req.ID, Command: req.Command, Error: err.Error()})
 						return
 					}
+					s.logInfo("daemon.command.completed",
+						slog.String("command_id", req.ID),
+						slog.String("command", req.Command),
+						slog.String("session_id", payloadSessionID(payload)),
+					)
 					send(WebsocketEnvelope{Type: "command_completed", ID: req.ID, Command: req.Command, Payload: payload})
 					if req.Command == "settings.form.apply" || req.Command == "settings.quick.apply" || req.Command == "settings.raw.apply" {
 						s.publishSettingsApplied()

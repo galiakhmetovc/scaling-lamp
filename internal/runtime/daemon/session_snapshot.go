@@ -11,6 +11,7 @@ import (
 
 type SessionSnapshot struct {
 	SessionID         string                         `json:"session_id"`
+	Title             string                         `json:"title"`
 	CreatedAt         time.Time                      `json:"created_at"`
 	LastActivity      time.Time                      `json:"last_activity"`
 	MessageCount      int                            `json:"message_count"`
@@ -58,6 +59,7 @@ func (s *Server) buildSessionSnapshot(sessionID string) (SessionSnapshot, error)
 	timelineWindow := tailTimeline(timeline, windowLimit)
 	return SessionSnapshot{
 		SessionID:     entry.SessionID,
+		Title:         entry.Title,
 		CreatedAt:     entry.CreatedAt,
 		LastActivity:  entry.LastActivity,
 		MessageCount:  entry.MessageCount,

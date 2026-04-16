@@ -22,6 +22,7 @@ import (
 
 type SessionSummary struct {
 	SessionID    string
+	Title        string
 	CreatedAt    time.Time
 	LastActivity time.Time
 	MessageCount int

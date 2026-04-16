@@ -7,10 +7,11 @@ type SessionsPaneProps = {
   selectedSessionID: string;
   onSelectSession: (sessionID: string) => void;
   onCreateSession: () => void;
+  onRenameSession: (sessionID: string, title: string) => void;
 };
 
 export function SessionsPane(props: SessionsPaneProps) {
-  const { bootstrap, sessions, selectedSessionID, onSelectSession, onCreateSession } = props;
+  const { bootstrap, sessions, selectedSessionID, onSelectSession, onCreateSession, onRenameSession } = props;
   const items = buildSessionList(sessions, selectedSessionID);
 
   return (
@@ -32,6 +33,21 @@ export function SessionsPane(props: SessionsPaneProps) {
                 <span>{item.meta}</span>
               </div>
               <div className="session-item-meta">{item.activityText}</div>
+              <div className="session-item-actions">
+                <button
+                  className="secondary small"
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    const nextTitle = window.prompt("Rename session", item.title);
+                    if (!nextTitle || nextTitle.trim() === "" || nextTitle.trim() === item.title) {
+                      return;
+                    }
+                    onRenameSession(item.id, nextTitle.trim());
+                  }}
+                >
+                  Rename
+                </button>
+              </div>
             </button>
           ))}
         </div>

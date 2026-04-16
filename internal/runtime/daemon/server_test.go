@@ -29,6 +29,16 @@ func TestNewFailsClosedWithoutOperatorSurfaceContract(t *testing.T) {
 	}
 }
 
+func TestNewFailsClosedWithoutStructuredLoggingConfig(t *testing.T) {
+	t.Parallel()
+
+	agent := buildAgentWithOperatorSurface(t)
+	agent.Contracts.OperatorSurface.DaemonServer.Params.LogFormat = ""
+	if _, err := daemon.New(agent); err == nil || !strings.Contains(err.Error(), "log_format") {
+		t.Fatalf("expected log_format validation error, got %v", err)
+	}
+}
+
 func TestBootstrapEndpointReturnsConfigDrivenSnapshot(t *testing.T) {
 	t.Parallel()
 
@@ -72,6 +82,9 @@ func TestBootstrapEndpointReturnsConfigDrivenSnapshot(t *testing.T) {
 	}
 	if payload.Settings.Revision == "" || len(payload.Settings.FormFields) == 0 {
 		t.Fatalf("settings snapshot = %+v, want populated revisioned settings", payload.Settings)
+	}
+	if len(payload.Settings.Tree) == 0 {
+		t.Fatalf("settings tree = %+v, want non-empty tree", payload.Settings.Tree)
 	}
 	if len(payload.Sessions) != 1 || payload.Sessions[0].SessionID != "session-1" {
 		t.Fatalf("sessions = %+v", payload.Sessions)
@@ -297,6 +310,47 @@ func TestWebsocketSessionCreateCommandReturnsSessionSnapshot(t *testing.T) {
 	}
 	if len(queuedDrafts) != 0 {
 		t.Fatalf("queued_drafts len = %d, want 0", len(queuedDrafts))
+	}
+}
+
+func TestWebsocketSessionRenameUpdatesSessionSnapshot(t *testing.T) {
+	t.Parallel()
+
+	agent := buildAgentWithOperatorSurface(t)
+	server, err := daemon.New(agent)
+	if err != nil {
+		t.Fatalf("new daemon server: %v", err)
+	}
+	httpServer := httptest.NewServer(server.Handler())
+	defer httpServer.Close()
+
+	conn := dialWebsocket(t, httpServer.URL, "/ws")
+	defer conn.Close()
+	_ = readEnvelopeJSON(t, conn)
+
+	writeCommandEnvelope(t, conn, map[string]any{
+		"type":    "command",
+		"id":      "cmd-create",
+		"command": "session.create",
+	})
+	_ = readEnvelopeJSON(t, conn)
+	created := readEnvelopeJSON(t, conn)
+	sessionID := mapPayload(t, mapPayload(t, created["payload"])["session"])["session_id"]
+
+	writeCommandEnvelope(t, conn, map[string]any{
+		"type":    "command",
+		"id":      "cmd-rename",
+		"command": "session.rename",
+		"payload": map[string]any{
+			"session_id": sessionID,
+			"title":      "Release work",
+		},
+	})
+	_ = readEnvelopeJSON(t, conn)
+	completed := readEnvelopeJSON(t, conn)
+	session := mapPayload(t, mapPayload(t, completed["payload"])["session"])
+	if got := session["title"]; got != "Release work" {
+		t.Fatalf("session title = %#v, want Release work", got)
 	}
 }
 
@@ -1176,7 +1230,7 @@ func buildChatDaemonAgent(t *testing.T, baseURL string) *runtime.Agent {
 	mustWriteFile(t, filepath.Join(dir, "policies", "chat", "status.yaml"), "kind: ChatStatusPolicyConfig\nversion: v1\nid: chat-status\nspec:\n  enabled: true\n  strategy: inline_terminal\n  params:\n    show_header: true\n    show_usage: true\n    show_tool_calls: true\n    show_tool_results: true\n    show_plan_after_plan_tools: true\n")
 	mustWriteFile(t, filepath.Join(dir, "policies", "chat", "command.yaml"), "kind: ChatCommandPolicyConfig\nversion: v1\nid: chat-command\nspec:\n  enabled: true\n  strategy: slash_commands\n  params:\n    exit_command: /exit\n    help_command: /help\n    session_command: /session\n    btw_command: /btw\n")
 	mustWriteFile(t, filepath.Join(dir, "policies", "chat", "resume.yaml"), "kind: ChatResumePolicyConfig\nversion: v1\nid: chat-resume\nspec:\n  enabled: true\n  strategy: explicit_resume_only\n  params:\n    require_explicit_id: true\n")
-	mustWriteFile(t, filepath.Join(dir, "policies", "operator-surface", "daemon-server.yaml"), "kind: DaemonServerPolicyConfig\nversion: v1\nid: daemon-server-main\nspec:\n  enabled: true\n  strategy: websocket_http\n  params:\n    listen_host: 0.0.0.0\n    listen_port: 8080\n    enable_websocket: true\n    public_base_url: \"\"\n    allowed_origins: []\n    initial_chat_history_limit: 40\n")
+	mustWriteFile(t, filepath.Join(dir, "policies", "operator-surface", "daemon-server.yaml"), "kind: DaemonServerPolicyConfig\nversion: v1\nid: daemon-server-main\nspec:\n  enabled: true\n  strategy: websocket_http\n  params:\n    listen_host: 0.0.0.0\n    listen_port: 8080\n    enable_websocket: true\n    public_base_url: \"\"\n    allowed_origins: []\n    initial_chat_history_limit: 40\n    log_format: json\n    log_level: info\n    log_add_source: false\n")
 	mustWriteFile(t, filepath.Join(dir, "policies", "operator-surface", "web-assets.yaml"), "kind: WebAssetsPolicyConfig\nversion: v1\nid: web-assets-main\nspec:\n  enabled: true\n  strategy: embedded_assets\n  params:\n    mode: embedded_assets\n    dev_proxy_url: \"\"\n")
 	mustWriteFile(t, filepath.Join(dir, "policies", "operator-surface", "client-transport.yaml"), "kind: ClientTransportPolicyConfig\nversion: v1\nid: client-transport-main\nspec:\n  enabled: true\n  strategy: websocket_http\n  params:\n    endpoint_path: /api\n    websocket_path: /ws\n")
 	mustWriteFile(t, filepath.Join(dir, "policies", "operator-surface", "settings.yaml"), "kind: SettingsSurfacePolicyConfig\nversion: v1\nid: settings-main\nspec:\n  enabled: true\n  strategy: revisioned_yaml_files\n  params:\n    require_idle_for_apply: true\n    form_fields:\n      - key: model\n        label: Model\n        type: string\n        file_path: policies/request-shape/model.yaml\n        yaml_path: [spec, params, model]\n        enum: [glm-5-turbo, glm-4.6]\n      - key: reasoning_effort\n        label: Thinking\n        type: string\n        file_path: policies/request-shape/sampling.yaml\n        yaml_path: [spec, params, reasoning_effort]\n        enum: [minimal, low, medium, high]\n      - key: approval_mode\n        label: Approval Mode\n        type: string\n        file_path: policies/tool-execution/approval.yaml\n        yaml_path: [spec, strategy]\n        enum: [always_allow, always_require, require_for_destructive]\n      - key: allow_network\n        label: Network\n        type: bool\n        file_path: policies/tool-execution/sandbox.yaml\n        yaml_path: [spec, params, allow_network]\n      - key: max_tool_rounds\n        label: Max Tool Rounds\n        type: int\n        file_path: agent.yaml\n        yaml_path: [spec, runtime, max_tool_rounds]\n      - key: render_markdown\n        label: Render Markdown\n        type: bool\n        file_path: policies/chat/output.yaml\n        yaml_path: [spec, params, render_markdown]\n      - key: markdown_style\n        label: Markdown Style\n        type: string\n        file_path: policies/chat/output.yaml\n        yaml_path: [spec, params, markdown_style]\n        enum: [dark, light]\n      - key: show_tool_calls\n        label: Show Tool Calls\n        type: bool\n        file_path: policies/chat/status.yaml\n        yaml_path: [spec, params, show_tool_calls]\n      - key: show_tool_results\n        label: Show Tool Results\n        type: bool\n        file_path: policies/chat/status.yaml\n        yaml_path: [spec, params, show_tool_results]\n      - key: show_plan_after_plan_tools\n        label: Show Plan After Plan Tools\n        type: bool\n        file_path: policies/chat/status.yaml\n        yaml_path: [spec, params, show_plan_after_plan_tools]\n    quick_controls:\n      - key: model\n        surface: chat\n        order: 10\n        apply_scope: next_run\n      - key: reasoning_effort\n        surface: chat\n        order: 20\n        apply_scope: next_run\n      - key: approval_mode\n        surface: chat\n        order: 30\n        apply_scope: next_run\n      - key: allow_network\n        surface: chat\n        order: 40\n        apply_scope: next_run\n    raw_file_globs:\n      - agent.yaml\n      - contracts/*.yaml\n      - policies/**/*.yaml\n")

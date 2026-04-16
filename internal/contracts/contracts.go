@@ -618,6 +618,9 @@ type DaemonServerParams struct {
 	PublicBaseURL           string   `yaml:"public_base_url"`
 	AllowedOrigins          []string `yaml:"allowed_origins"`
 	InitialChatHistoryLimit int      `yaml:"initial_chat_history_limit"`
+	LogFormat               string   `yaml:"log_format"`
+	LogLevel                string   `yaml:"log_level"`
+	LogAddSource            bool     `yaml:"log_add_source"`
 }
 
 type WebAssetsParams struct {
