@@ -101,6 +101,7 @@ func (s *Server) buildSessionSnapshot(sessionID string) (SessionSnapshot, error)
 
 func (s *Server) contextBudgetSnapshot(sessionID string, transcript []contracts.Message) ContextBudgetSnapshot {
 	view := s.currentAgent().CurrentContextBudget(sessionID)
+	compactedTranscript := s.currentAgent().CompactedMessagesForSession(sessionID, transcript)
 	mainRun := s.mainRunSnapshot(sessionID)
 	if view.LastTotalTokens == 0 && (mainRun.TotalTokens > 0 || mainRun.InputTokens > 0 || mainRun.OutputTokens > 0) {
 		view.LastInputTokens = mainRun.InputTokens
@@ -110,7 +111,7 @@ func (s *Server) contextBudgetSnapshot(sessionID string, transcript []contracts.
 			view.Source = "provider"
 		}
 	}
-	current := approximateContextTokens(transcript)
+	current := approximateContextTokens(compactedTranscript)
 	queueTokens := 0
 	for _, draft := range s.queuedDrafts(sessionID) {
 		queueTokens += approximateTextTokens(draft.Text)
@@ -137,6 +138,7 @@ func (s *Server) contextBudgetSnapshot(sessionID string, transcript []contracts.
 		QueuedDraftTokens:        queueTokens,
 		SummaryTokens:            view.SummaryTokens,
 		SummarizationCount:       view.SummarizationCount,
+		CompactedMessageCount:    view.CompactedMessageCount,
 		Source:                   source,
 		BudgetState:              state,
 	}

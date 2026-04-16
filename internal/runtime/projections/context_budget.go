@@ -13,6 +13,7 @@ type ContextBudgetView struct {
 	LastTotalTokens    int    `json:"last_total_tokens"`
 	SummaryTokens      int    `json:"summary_tokens"`
 	SummarizationCount int    `json:"summarization_count"`
+	CompactedMessageCount int `json:"compacted_message_count"`
 	Source             string `json:"source,omitempty"`
 }
 
@@ -58,6 +59,26 @@ func (p *ContextBudgetProjection) Apply(event eventing.Event) error {
 		}
 		if tokens, ok := contextBudgetOptionalIntPayload(event.Payload, "summary_tokens"); ok {
 			view.SummaryTokens = tokens
+		}
+		p.snapshot.Sessions[sessionID] = view
+	case eventing.EventContextSummaryUpdated:
+		sessionID, _ := event.Payload["session_id"].(string)
+		if sessionID == "" {
+			return nil
+		}
+		p.ensureSessions()
+		view := p.snapshot.Sessions[sessionID]
+		if count, ok := contextBudgetOptionalIntPayload(event.Payload, "summarization_count"); ok {
+			view.SummarizationCount = count
+		}
+		if tokens, ok := contextBudgetOptionalIntPayload(event.Payload, "summary_tokens"); ok {
+			view.SummaryTokens = tokens
+		}
+		if compacted, ok := contextBudgetOptionalIntPayload(event.Payload, "compacted_message_count"); ok {
+			view.CompactedMessageCount = compacted
+		}
+		if view.Source == "" {
+			view.Source = "mixed"
 		}
 		p.snapshot.Sessions[sessionID] = view
 	}

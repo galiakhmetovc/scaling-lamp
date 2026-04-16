@@ -20,6 +20,7 @@ func NewBuiltInRegistry() *Registry {
 	registry.Register("transcript", func() Projection { return NewTranscriptProjection() })
 	registry.Register("chat_timeline", func() Projection { return NewChatTimelineProjection() })
 	registry.Register("context_budget", func() Projection { return NewContextBudgetProjection() })
+	registry.Register("context_summary", func() Projection { return NewContextSummaryProjection() })
 	registry.Register("filesystem_head", func() Projection { return NewFilesystemHeadProjection() })
 	registry.Register("delegate", func() Projection { return NewDelegateProjection() })
 	registry.Register("shell_command", func() Projection { return NewShellCommandProjection() })

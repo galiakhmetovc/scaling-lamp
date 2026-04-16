@@ -257,7 +257,7 @@ func (a *Agent) BtwTurn(ctx context.Context, session *ChatSession, input BtwTurn
 	rawMessages = append(rawMessages, userMessage)
 
 	contractSet := disableBuiltinTools(a.Contracts)
-	assembledMessages, err := a.assemblePromptMessages(contractSet, session.SessionID, rawMessages)
+	assembledMessages, err := a.preparePromptMessages(ctx, contractSet, session.SessionID, rawMessages, false)
 	if err != nil {
 		return provider.ClientResult{}, err
 	}

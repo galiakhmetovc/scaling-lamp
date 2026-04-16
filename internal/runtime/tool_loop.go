@@ -49,7 +49,7 @@ func (a *Agent) executeProviderLoop(ctx context.Context, contractSet contracts.R
 		maxRounds = 4
 	}
 	for round := 0; round < maxRounds; round++ {
-		assembledMessages, err := a.assemblePromptMessages(contractSet, sessionID, append([]contracts.Message{}, currentMessages...))
+		assembledMessages, err := a.preparePromptMessages(ctx, contractSet, sessionID, append([]contracts.Message{}, currentMessages...), true)
 		if err != nil {
 			return provider.ClientResult{}, err
 		}

@@ -21,6 +21,7 @@ spec:
       - transcript
       - chat_timeline
       - context_budget
+      - context_summary
       - filesystem_head
       - delegate
       - shell_command

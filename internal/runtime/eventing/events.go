@@ -21,6 +21,7 @@ const (
 	EventMessageRecorded               EventKind = "message.recorded"
 	EventRunStarted                    EventKind = "run.started"
 	EventProviderRequestCaptured       EventKind = "provider.request.captured"
+	EventContextSummaryUpdated         EventKind = "context.summary.updated"
 	EventTransportAttemptCompleted     EventKind = "transport.attempt.completed"
 	EventToolCallStarted               EventKind = "tool.call.started"
 	EventToolCallCompleted             EventKind = "tool.call.completed"

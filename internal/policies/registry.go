@@ -196,6 +196,7 @@ func NewBuiltInRegistry() *Registry {
 		Family: FamilyContextBudgetCompaction,
 		Strategy: setOf(
 			"threshold_state_only",
+			"rolling_summary_v1",
 		),
 	})
 	registry.Register(Type{

@@ -703,6 +703,7 @@ func buildLocalSessionSnapshot(agent *runtime.Agent, sessionID string) (daemon.S
 		return daemon.SessionSnapshot{}, fmt.Errorf("session %q not found", sessionID)
 	}
 	plan, _ := agent.CurrentPlanHead(sessionID)
+	compactedTranscript := agent.CompactedMessagesForSession(sessionID, agent.CurrentTranscript(sessionID))
 	return daemon.SessionSnapshot{
 		SessionID:    entry.SessionID,
 		CreatedAt:    entry.CreatedAt,
@@ -712,10 +713,11 @@ func buildLocalSessionSnapshot(agent *runtime.Agent, sessionID string) (daemon.S
 			LastInputTokens:          agent.CurrentContextBudget(sessionID).LastInputTokens,
 			LastOutputTokens:         agent.CurrentContextBudget(sessionID).LastOutputTokens,
 			LastTotalTokens:          agent.CurrentContextBudget(sessionID).LastTotalTokens,
-			CurrentContextTokens:     approximateTextTokensFromMessages(agent.CurrentTranscript(sessionID)),
-			EstimatedNextInputTokens: approximateTextTokensFromMessages(agent.CurrentTranscript(sessionID)),
+			CurrentContextTokens:     approximateTextTokensFromMessages(compactedTranscript),
+			EstimatedNextInputTokens: approximateTextTokensFromMessages(compactedTranscript),
 			SummaryTokens:            agent.CurrentContextBudget(sessionID).SummaryTokens,
 			SummarizationCount:       agent.CurrentContextBudget(sessionID).SummarizationCount,
+			CompactedMessageCount:    agent.CurrentContextBudget(sessionID).CompactedMessageCount,
 			Source:                   coalesce(agent.CurrentContextBudget(sessionID).Source, "mixed"),
 			BudgetState:              "healthy",
 		},

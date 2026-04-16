@@ -3,7 +3,13 @@ version: v1
 id: context-budget-compaction-zai-smoke
 spec:
   enabled: true
-  strategy: threshold_state_only
+  strategy: rolling_summary_v1
   params:
     warning_tokens: 48000
     compaction_tokens: 64000
+    keep_recent_messages: 6
+    min_messages_to_summarize: 12
+    refresh_every_messages: 4
+    max_summary_chars: 1200
+    instructions: Summarize earlier conversation faithfully for continued coding work. Preserve decisions, changed files, verification results, open risks, and unresolved follow-ups.
+    store_artifacts: true

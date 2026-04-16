@@ -539,8 +539,14 @@ type ContextBudgetEstimationParams struct {
 }
 
 type ContextBudgetCompactionParams struct {
-	WarningTokens    int `yaml:"warning_tokens"`
-	CompactionTokens int `yaml:"compaction_tokens"`
+	WarningTokens          int    `yaml:"warning_tokens"`
+	CompactionTokens       int    `yaml:"compaction_tokens"`
+	KeepRecentMessages     int    `yaml:"keep_recent_messages"`
+	MinMessagesToSummarize int    `yaml:"min_messages_to_summarize"`
+	RefreshEveryMessages   int    `yaml:"refresh_every_messages"`
+	MaxSummaryChars        int    `yaml:"max_summary_chars"`
+	Instructions           string `yaml:"instructions"`
+	StoreArtifacts         bool   `yaml:"store_artifacts"`
 }
 
 type ContextBudgetSummaryDisplayParams struct {
