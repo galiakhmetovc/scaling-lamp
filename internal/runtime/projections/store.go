@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"time"
 )
 
 type Store interface {
@@ -56,7 +57,10 @@ func (s *JSONFileStore) Load(projectionSet []Projection) error {
 
 	var raw map[string]json.RawMessage
 	if err := json.Unmarshal(body, &raw); err != nil {
-		return fmt.Errorf("decode projection store: %w", err)
+		if recoverErr := s.quarantineCorruptStore(body); recoverErr != nil {
+			return fmt.Errorf("decode projection store: %w (quarantine failed: %v)", err, recoverErr)
+		}
+		return nil
 	}
 
 	for _, projection := range projectionSet {
@@ -71,3 +75,13 @@ func (s *JSONFileStore) Load(projectionSet []Projection) error {
 	return nil
 }
 
+func (s *JSONFileStore) quarantineCorruptStore(body []byte) error {
+	corruptPath := fmt.Sprintf("%s.corrupt-%d", s.path, time.Now().UTC().UnixNano())
+	if err := os.WriteFile(corruptPath, body, 0o644); err != nil {
+		return fmt.Errorf("write corrupt projection backup: %w", err)
+	}
+	if err := os.Remove(s.path); err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("remove corrupt projection store: %w", err)
+	}
+	return nil
+}

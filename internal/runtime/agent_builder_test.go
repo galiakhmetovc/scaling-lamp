@@ -560,6 +560,53 @@ func TestBuildAgentLoadsShippedFilesystemCompatibilityApprovalGuard(t *testing.T
 	}
 }
 
+func TestBuildAgentLoadsShippedContextBudgetProjections(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	sourceRoot := filepath.Join("..", "..", "config", "zai-smoke")
+	targetRoot := filepath.Join(dir, "zai-smoke")
+	copyDir(t, sourceRoot, targetRoot)
+
+	agentPath := filepath.Join(targetRoot, "agent.yaml")
+	agentYAML, err := os.ReadFile(agentPath)
+	if err != nil {
+		t.Fatalf("ReadFile(%q): %v", agentPath, err)
+	}
+	patched := strings.Replace(
+		string(agentYAML),
+		"    projection_store_path: ../../var/zai-smoke/projections.json\n",
+		"    projection_store_path: ./var/projections.json\n",
+		1,
+	)
+	if patched == string(agentYAML) {
+		t.Fatalf("failed to patch projection_store_path in %q", agentPath)
+	}
+	mustWriteFile(t, agentPath, patched)
+
+	agent, err := runtime.BuildAgent(agentPath)
+	if err != nil {
+		t.Fatalf("BuildAgent returned error: %v", err)
+	}
+
+	var sawBudget bool
+	var sawSummary bool
+	for _, projection := range agent.Projections {
+		switch projection.ID() {
+		case "context_budget":
+			sawBudget = true
+		case "context_summary":
+			sawSummary = true
+		}
+	}
+	if !sawBudget {
+		t.Fatal("context_budget projection is missing from shipped BuildAgent")
+	}
+	if !sawSummary {
+		t.Fatal("context_summary projection is missing from shipped BuildAgent")
+	}
+}
+
 func TestBuildAgentRestoresProjectionSnapshotsFromStore(t *testing.T) {
 	t.Parallel()
 
@@ -919,5 +966,33 @@ func mustWriteFile(t *testing.T, path, content string) {
 	}
 	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
 		t.Fatalf("WriteFile(%q): %v", path, err)
+	}
+}
+
+func copyDir(t *testing.T, sourceRoot, targetRoot string) {
+	t.Helper()
+
+	if err := filepath.Walk(sourceRoot, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+		relative, err := filepath.Rel(sourceRoot, path)
+		if err != nil {
+			return err
+		}
+		targetPath := filepath.Join(targetRoot, relative)
+		if info.IsDir() {
+			return os.MkdirAll(targetPath, info.Mode())
+		}
+		content, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		if err := os.MkdirAll(filepath.Dir(targetPath), 0o755); err != nil {
+			return err
+		}
+		return os.WriteFile(targetPath, content, info.Mode())
+	}); err != nil {
+		t.Fatalf("copyDir(%q, %q): %v", sourceRoot, targetRoot, err)
 	}
 }
