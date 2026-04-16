@@ -41,7 +41,7 @@ describe("plan model", () => {
 });
 
 describe("PlanPane", () => {
-  it("renders markdown goal, task details, and latest note", () => {
+  it("renders markdown goal, task details, and tiered surfaces", () => {
     const markup = renderToStaticMarkup(
       <PlanPane
         session={makeSession()}
@@ -65,5 +65,7 @@ describe("PlanPane", () => {
     expect(markup).toContain("First");
     expect(markup).toContain("latest");
     expect(markup).toContain("waiting");
+    expect(markup).toContain("surface-primary");
+    expect(markup).toContain("surface-secondary");
   });
 });

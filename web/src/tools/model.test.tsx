@@ -10,7 +10,7 @@ describe("tools model", () => {
 });
 
 describe("ToolsPane", () => {
-  it("renders approvals, running commands, delegates, and tool log", () => {
+  it("renders approvals, running commands, delegates, and tool log with tiered surfaces", () => {
     const markup = renderToStaticMarkup(
       <ToolsPane
         approvals={[{ approval_id: "ap-1", command_id: "cmd-1", tool_name: "shell_start", message: "Need approval", command: "git", args: ["push"], cwd: "/repo" }]}
@@ -28,5 +28,7 @@ describe("ToolsPane", () => {
     expect(markup).toContain("PASS");
     expect(markup).toContain("delegate-1");
     expect(markup).toContain("started");
+    expect(markup).toContain("surface-primary");
+    expect(markup).toContain("surface-secondary");
   });
 });

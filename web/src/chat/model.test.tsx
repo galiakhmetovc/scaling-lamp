@@ -2,7 +2,6 @@ import { describe, expect, it } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
 import { ChatPane } from "./ChatPane";
 import { approximateContextTokens, applySessionUIEvent, buildChatStatus, buildBtwRuns, syncMainRunFromUIEvent } from "./model";
-import { shouldShowSessionRail } from "../layout";
 import type { ProviderResultPayload, SessionSnapshot } from "../lib/types";
 
 function makeSessionSnapshot(overrides: Partial<SessionSnapshot> = {}): SessionSnapshot {
@@ -142,15 +141,10 @@ describe("chat model helpers", () => {
     expect(completed.status).toBe("done");
   });
 
-  it("shows session rail only on sessions tab", () => {
-    expect(shouldShowSessionRail("sessions")).toBe(true);
-    expect(shouldShowSessionRail("chat")).toBe(false);
-    expect(shouldShowSessionRail("plan")).toBe(false);
-  });
 });
 
 describe("ChatPane", () => {
-  it("renders markdown timeline blocks, status bar, queue, and btw branches", () => {
+  it("renders a chat-first workspace with primary timeline and operational sidebar", () => {
     const markup = renderToStaticMarkup(
       <ChatPane
         session={makeSessionSnapshot({
@@ -189,5 +183,8 @@ describe("ChatPane", () => {
     expect(markup).toContain("branch answer");
     expect(markup).toContain("shell_exec");
     expect(markup).not.toContain("time ");
+    expect(markup).toContain("chat-workspace");
+    expect(markup).toContain("surface-primary");
+    expect(markup).toContain("surface-secondary");
   });
 });

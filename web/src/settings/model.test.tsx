@@ -34,7 +34,7 @@ describe("settings model", () => {
 });
 
 describe("SettingsPane", () => {
-  it("renders revision and conflict UI", () => {
+  it("renders revision, conflict UI, and tiered surfaces", () => {
     const markup = renderToStaticMarkup(
       <SettingsPane
         settings={settings}
@@ -55,5 +55,7 @@ describe("SettingsPane", () => {
     expect(markup).toContain("dirty");
     expect(markup).toContain("revision conflict");
     expect(markup).toContain("policies/chat/output.yaml");
+    expect(markup).toContain("surface-primary");
+    expect(markup).toContain("surface-secondary");
   });
 });

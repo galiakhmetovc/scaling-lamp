@@ -16,6 +16,11 @@ Implemented now:
 - `dev_proxy` asset mode support for future frontend development
 - shared WebSocket command protocol for sessions/chat/plan/tools/settings
 - TUI as a daemon client over the shared operator-surface transport
+- operator-console web shell with:
+  - control header instead of a flat topbar
+  - dedicated `Sessions` catalog tab instead of a persistent rail
+  - chat-first workspace with a dominant timeline and secondary ops column
+  - tiered primary/secondary surfaces shared across `Plan`, `Tools`, and `Settings`
 
 Not implemented yet:
 
@@ -237,6 +242,7 @@ Current web client behavior:
 - bootstrap via `<endpoint_path>/bootstrap`
 - live updates and commands through the configured WebSocket path
 - tabs for `Sessions`, `Chat`, `Plan`, `Tools`, and `Settings`
+- `Sessions` as a standalone catalog view rather than a global side rail
 - session-scoped chat timeline with queued drafts and `/btw`
 - plan mutations through daemon plan commands
 - approvals / deny / kill through shell commands
@@ -260,13 +266,18 @@ Must preserve current TUI semantics:
 - status bar with:
   - provider
   - model
-  - wall-clock time
   - active main-run timer
   - approximate context tokens
   - queue length
   - active `/btw` count
 - queued drafts with recall-back-into-input editing flow
 - `/btw` side-runs rendered separately
+
+Current layout direction:
+
+- `Chat` owns the main workspace without sharing it with session navigation
+- the secondary column is reserved for composer, queue, and operator metadata
+- daemon/session identity lives in the control header instead of being repeated as loose page chrome
 
 ### Plan
 

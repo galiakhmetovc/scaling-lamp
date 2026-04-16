@@ -19,7 +19,7 @@ export function ToolsPane(props: ToolsPaneProps) {
 
   return (
     <div className="three-stack">
-      <section className="panel">
+      <section className="surface surface-primary">
         <div className="section-title">
           <span>Pending approvals</span>
           <span className="muted">{approvals.length}</span>
@@ -38,7 +38,7 @@ export function ToolsPane(props: ToolsPaneProps) {
           </article>
         ))}
       </section>
-      <section className="panel">
+      <section className="surface surface-secondary">
         <div className="section-title">
           <span>Running commands</span>
           <span className="muted">{commands.length}</span>
@@ -55,7 +55,7 @@ export function ToolsPane(props: ToolsPaneProps) {
           </article>
         ))}
       </section>
-      <section className="panel">
+      <section className="surface surface-secondary">
         <div className="section-title">
           <span>Delegates</span>
           <span className="muted">{delegates.length}</span>
@@ -74,7 +74,7 @@ export function ToolsPane(props: ToolsPaneProps) {
           </div>
         )}
       </section>
-      <section className="panel">
+      <section className="surface surface-secondary">
         <div className="section-title">
           <span>Tool log</span>
           <span className="muted">{orderedToolLog.length}</span>

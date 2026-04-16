@@ -13,10 +13,11 @@ import {
 } from "./chat/model";
 import { defaultSelectedTaskID } from "./plan/model";
 import { PlanPane } from "./plan/PlanPane";
+import { SessionsPane } from "./sessions/SessionsPane";
 import { SettingsPane } from "./settings/SettingsPane";
 import { ToolsPane } from "./tools/ToolsPane";
 import { DaemonClient, loadRuntimeClientConfig } from "./lib/client";
-import { shouldShowSessionRail, type TabKey } from "./layout";
+import { buildControlHeaderView, tabs, type TabKey } from "./layout";
 import type {
   BootstrapPayload,
   SessionSnapshot,
@@ -107,7 +108,10 @@ export function App() {
 
   const selectedSession = selectedSessionID ? sessionSnapshots[selectedSessionID] : null;
   const selectedUI = selectedSessionID ? sessionUI[selectedSessionID] ?? emptySessionUIState() : emptySessionUIState();
-  const approxTokens = useMemo(() => approximateContextTokens(selectedSession, chatInput), [selectedSession, chatInput]);
+  const headerView = useMemo(
+    () => buildControlHeaderView({ bootstrap, connected, selectedSession, errorMessage }),
+    [bootstrap, connected, selectedSession, errorMessage],
+  );
 
   useEffect(() => {
     if (!selectedSession?.main_run.active) {
@@ -366,50 +370,44 @@ export function App() {
 
   return (
     <div className="app-shell">
-      <header className="topbar">
-        <div>
-          <div className="eyebrow">teamD operator surface</div>
-          <h1>Daemon Console</h1>
+      <header className="control-header surface surface-utility">
+        <div className="control-header-main">
+          <div className="brand-lockup">
+            <div className="eyebrow">{headerView.eyebrow}</div>
+            <h1>{headerView.title}</h1>
+          </div>
+          <div className="active-session-badge">
+            <strong>{headerView.sessionLabel}</strong>
+            <span>{headerView.sessionMeta}</span>
+          </div>
         </div>
-        <div className="topbar-meta">
-          <span className={`signal ${connected ? "ok" : "down"}`}>{connected ? "websocket up" : "websocket down"}</span>
-          <span>{bootstrap?.listen_addr ?? "listen pending"}</span>
-          <span>{bootstrap?.agent_id ?? "agent loading"}</span>
+        <div className="control-header-meta">
+          {headerView.statusChips.map((chip) => (
+            <span key={chip} className={`status-pill ${chip === "websocket up" ? "ok" : ""} ${chip === errorMessage ? "danger" : ""}`}>
+              {chip}
+            </span>
+          ))}
         </div>
+        <nav className="control-tabs">
+          {tabs.map((tab) => (
+            <button key={tab.key} className={tab.key === activeTab ? "active" : ""} onClick={() => setActiveTab(tab.key)}>
+              {tab.label}
+            </button>
+          ))}
+        </nav>
       </header>
 
-      <nav className="tabs">
-        {(["sessions", "chat", "plan", "tools", "settings"] as TabKey[]).map((tab) => (
-          <button key={tab} className={tab === activeTab ? "active" : ""} onClick={() => setActiveTab(tab)}>
-            {tab}
-          </button>
-        ))}
-      </nav>
-
-      <main className="workspace">
-        {shouldShowSessionRail(activeTab) && (
-          <aside className="session-rail">
-            <div className="section-title">
-              <span>Sessions</span>
-              <button onClick={() => void handleCreateSession()}>New</button>
-            </div>
-            <div className="session-list">
-              {sessions.map((session) => (
-                <button
-                  key={session.session_id}
-                  className={`session-item ${session.session_id === selectedSessionID ? "active" : ""}`}
-                  onClick={() => setSelectedSessionID(session.session_id)}
-                >
-                  <strong>{session.session_id}</strong>
-                  <span>{session.message_count} messages</span>
-                </button>
-              ))}
-            </div>
-          </aside>
-        )}
-
+      <main className={`workspace workspace-${activeTab}`}>
         <section className="main-panel">
-          {activeTab === "sessions" && <SessionsView bootstrap={bootstrap} />}
+          {activeTab === "sessions" && (
+            <SessionsPane
+              bootstrap={bootstrap}
+              sessions={sessions}
+              selectedSessionID={selectedSessionID}
+              onSelectSession={setSelectedSessionID}
+              onCreateSession={() => void handleCreateSession()}
+            />
+          )}
           {activeTab === "chat" && (
             <ChatPane
               session={selectedSession}
@@ -472,44 +470,6 @@ export function App() {
           )}
         </section>
       </main>
-
-      <footer className="statusline">
-        <span>{statusMessage}</span>
-        {selectedSession && <span>queue {selectedSession.queued_drafts.length}</span>}
-        {selectedSession && <span>tokens ~{approxTokens}</span>}
-        {selectedSession && <span>{selectedSession.main_run.provider}</span>}
-        {selectedSession && <span>{selectedSession.main_run.model}</span>}
-        {errorMessage && <span className="error">{errorMessage}</span>}
-      </footer>
-    </div>
-  );
-}
-
-function SessionsView({ bootstrap }: { bootstrap: BootstrapPayload | null }) {
-  return (
-    <div className="panel-stack">
-      <section className="panel">
-        <h2>Control Plane</h2>
-        <p className="muted">Shared daemon state for TUI, web, and future remote clients.</p>
-        <dl className="kv-grid">
-          <div>
-            <dt>Listen</dt>
-            <dd>{bootstrap?.listen_addr ?? "-"}</dd>
-          </div>
-          <div>
-            <dt>Assets</dt>
-            <dd>{bootstrap?.assets.mode ?? "-"}</dd>
-          </div>
-          <div>
-            <dt>Endpoint</dt>
-            <dd>{bootstrap?.transport.endpoint_path ?? "-"}</dd>
-          </div>
-          <div>
-            <dt>WebSocket</dt>
-            <dd>{bootstrap?.transport.websocket_path ?? "-"}</dd>
-          </div>
-        </dl>
-      </section>
     </div>
   );
 }

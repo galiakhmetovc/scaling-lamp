@@ -29,7 +29,7 @@ export function PlanPane(props: PlanPaneProps) {
 
   return (
     <div className="two-column">
-      <section className="panel">
+      <section className="surface surface-primary">
         <div className="section-title">
           <span>Plan</span>
           <span className="muted">{plan?.plan.id ?? "none"}</span>
@@ -67,7 +67,7 @@ export function PlanPane(props: PlanPaneProps) {
           </>
         )}
       </section>
-      <section className="panel">
+      <section className="surface surface-secondary">
         <div className="section-title">
           <span>Task details</span>
           <span className="muted">{selectedTask?.id ?? "none"}</span>

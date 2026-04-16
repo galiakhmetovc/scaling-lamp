@@ -22,7 +22,7 @@ export function SettingsPane(props: SettingsPaneProps) {
 
   return (
     <div className="two-column">
-      <section className="panel">
+      <section className="surface surface-primary">
         <div className="section-title">
           <span>Settings form</span>
           <span className="muted">{settings?.revision ?? "-"}</span>
@@ -54,7 +54,7 @@ export function SettingsPane(props: SettingsPaneProps) {
         <button onClick={onApply}>Apply settings</button>
       </section>
 
-      <section className="panel">
+      <section className="surface surface-secondary">
         <div className="section-title">
           <span>Raw YAML</span>
           <span className="muted">{selectedRawPath || "no file selected"}</span>
