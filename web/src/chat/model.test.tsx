@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
 import { ChatPane } from "./ChatPane";
-import { approximateContextTokens, applySessionUIEvent, buildChatStatus, buildBtwRuns, buildTimelineMarkdownBlock, syncMainRunFromUIEvent } from "./model";
+import { approximateContextTokens, applySessionUIEvent, buildChatStatus, buildBtwRuns, buildLiveToolView, buildTimelineMarkdownBlock, syncMainRunFromUIEvent } from "./model";
 import type { ProviderResultPayload, SessionSnapshot } from "../lib/types";
 import type { SettingsFieldState } from "../lib/types";
 
@@ -125,6 +125,19 @@ describe("chat model helpers", () => {
     expect(block.body).toContain("line one");
   });
 
+  it("builds compact live tool views and marks approval-required tools as errors", () => {
+    const approvalView = buildLiveToolView({
+      phase: "completed",
+      name: "shell_start",
+      arguments: { command: "rm" },
+      error_text: `tool call "shell_start" requires approval`,
+      result_text: `{"status":"approval_pending"}`,
+    });
+    expect(approvalView.summary).toContain("Approval required");
+    expect(approvalView.collapsible).toBe(true);
+    expect(approvalView.state).toBe("error");
+  });
+
   it("marks the main run active when a running status event arrives", () => {
     const snapshot = makeSessionSnapshot();
     const next = syncMainRunFromUIEvent(
@@ -186,6 +199,10 @@ describe("ChatPane", () => {
             },
           },
         ]}
+        toolLog={[
+          { phase: "started", name: "fs_list", arguments: { path: "." } },
+          { phase: "completed", name: "shell_start", arguments: { command: "curl" }, error_text: `tool call "shell_start" requires approval`, result_text: `{"status":"approval_pending"}` },
+        ]}
         onInput={() => {}}
         onSend={() => {}}
         onQueue={() => {}}
@@ -205,6 +222,8 @@ describe("ChatPane", () => {
     expect(markup).toContain("shell_exec");
     expect(markup).toContain("tool-result-toggle");
     expect(markup).toContain("<summary>");
+    expect(markup).toContain("Approval required");
+    expect(markup).toContain("Tool started");
     expect(markup).not.toContain("time ");
     expect(markup).toContain("chat-workspace");
     expect(markup).toContain("surface-primary");
@@ -231,6 +250,7 @@ describe("ChatPane", () => {
         input=""
         now={new Date("2026-04-15T21:01:20Z")}
         btwRuns={[]}
+        toolLog={[]}
         onInput={() => {}}
         onSend={() => {}}
         onQueue={() => {}}

@@ -41,6 +41,13 @@ export type TimelineMarkdownBlock = {
   collapsible: boolean;
 };
 
+export type LiveToolView = {
+  summary: string;
+  body: string;
+  collapsible: boolean;
+  state: "running" | "done" | "error";
+};
+
 export function emptySessionUIState(): SessionUIState {
   return { streaming: "", status: "idle", toolLog: [], btwRuns: [] };
 }
@@ -136,6 +143,9 @@ export function applySessionUIEvent(current: SessionUIState | undefined, event: 
       break;
     case "status.changed":
       next.status = event.status || next.status;
+      if (event.status === "running") {
+        next.toolLog = [];
+      }
       break;
     case "run.completed":
       next.status = "done";
@@ -230,4 +240,46 @@ export function prependOlderTimeline(
       window_limit: payload.window_limit,
     },
   };
+}
+
+export function buildLiveToolView(tool: NonNullable<UIEvent["tool"]>): LiveToolView {
+  const name = tool.name || "tool";
+  if (tool.phase === "started") {
+    return {
+      summary: `Tool started: \`${name}\``,
+      body: tool.arguments && Object.keys(tool.arguments).length > 0 ? summarizeObject(tool.arguments) : "",
+      collapsible: Boolean(tool.arguments && Object.keys(tool.arguments).length > 0),
+      state: "running",
+    };
+  }
+  if (tool.error_text) {
+    return {
+      summary: tool.error_text.includes("requires approval") ? `Approval required: \`${name}\`` : `Tool failed: \`${name}\``,
+      body: summarizeLines(tool.error_text, tool.result_text),
+      collapsible: summarizeLines(tool.error_text, tool.result_text).length > 0,
+      state: "error",
+    };
+  }
+  return {
+    summary: `Tool done: \`${name}\``,
+    body: summarizeLines(tool.result_text),
+    collapsible: summarizeLines(tool.result_text).length > 0,
+    state: "done",
+  };
+}
+
+function summarizeObject(value: Record<string, unknown>): string {
+  const text = JSON.stringify(value, null, 2);
+  return text.length > 240 ? `${text.slice(0, 237)}...` : text;
+}
+
+function summarizeLines(...parts: Array<string | undefined>): string {
+  const text = parts
+    .map((part) => (part ?? "").trim())
+    .filter(Boolean)
+    .join("\n\n");
+  if (text.length <= 240) {
+    return text;
+  }
+  return `${text.slice(0, 237)}...`;
 }

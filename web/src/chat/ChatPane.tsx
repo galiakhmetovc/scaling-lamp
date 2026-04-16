@@ -1,7 +1,7 @@
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import type { SessionSnapshot, SettingsFieldState } from "../lib/types";
-import { buildBtwRuns, buildChatStatus, buildTimelineMarkdownBlock, type BtwRun } from "./model";
+import { buildBtwRuns, buildChatStatus, buildLiveToolView, buildTimelineMarkdownBlock, type BtwRun } from "./model";
 
 type ChatPaneProps = {
   session: SessionSnapshot | null;
@@ -10,6 +10,7 @@ type ChatPaneProps = {
   input: string;
   now: Date;
   btwRuns: BtwRun[];
+  toolLog: Array<NonNullable<import("../lib/types").UIEvent["tool"]>>;
   onInput: (value: string) => void;
   onSend: () => void;
   onQueue: () => void;
@@ -21,7 +22,7 @@ type ChatPaneProps = {
 };
 
 export function ChatPane(props: ChatPaneProps) {
-  const { session, streaming, status, input, now, btwRuns, onInput, onSend, onQueue, onRecallDraft, onLoadOlder, quickControls, settingsError, onQuickControlChange } = props;
+  const { session, streaming, status, input, now, btwRuns, toolLog, onInput, onSend, onQueue, onRecallDraft, onLoadOlder, quickControls, settingsError, onQuickControlChange } = props;
   const activeBtwCount = btwRuns.filter((run) => run.active).length;
   const statusView = buildChatStatus({ session, input, now, activeBtwCount, uiStatus: status });
   const btwViews = buildBtwRuns(btwRuns);
@@ -42,6 +43,9 @@ export function ChatPane(props: ChatPaneProps) {
             </div>
           )}
           <div className="timeline">
+          {toolLog.map((tool, index) => (
+            <LiveToolItem key={`live-tool-${tool.name}-${tool.phase}-${index}`} tool={tool} />
+          ))}
           {(session?.timeline ?? []).map((item, index) => (
             <TimelineItem key={`${item.kind}-${index}`} kind={item.kind} role={item.role} content={item.content} />
           ))}
@@ -144,6 +148,25 @@ export function ChatPane(props: ChatPaneProps) {
         </div>
       </div>
     </div>
+  );
+}
+
+function LiveToolItem(props: { tool: NonNullable<import("../lib/types").UIEvent["tool"]> }) {
+  const view = buildLiveToolView(props.tool);
+  if (view.collapsible) {
+    return (
+      <article className={`timeline-item tool live-tool ${view.state}`}>
+        <details className="tool-result-toggle">
+          <summary>{view.summary}</summary>
+          <pre className="tool-result-body-text">{view.body}</pre>
+        </details>
+      </article>
+    );
+  }
+  return (
+    <article className={`timeline-item tool live-tool ${view.state}`}>
+      <div className="live-tool-summary">{view.summary}</div>
+    </article>
   );
 }
 

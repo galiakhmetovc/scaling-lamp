@@ -153,6 +153,9 @@ export function App() {
         }
         return { ...current, [next.session_id]: next };
       });
+      if (envelope.event.kind === "tool.completed") {
+        void refreshSession(envelope.event.session_id);
+      }
       if (envelope.event.kind === "run.completed") {
         void refreshSession(envelope.event.session_id);
       }
@@ -471,6 +474,7 @@ export function App() {
               input={chatInput}
               now={clockNow}
               btwRuns={selectedUI.btwRuns}
+              toolLog={selectedUI.toolLog}
               onInput={setChatInput}
               onSend={() => void handleSendChat()}
               onQueue={() => void handleQueueDraft()}
