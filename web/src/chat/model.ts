@@ -19,7 +19,6 @@ export type SessionUIState = {
 export type ChatStatusView = {
   provider: string;
   model: string;
-  currentTime: string;
   runText: string;
   contextTokens: number;
   queueCount: number;
@@ -76,7 +75,6 @@ export function buildChatStatus(input: {
   return {
     provider,
     model,
-    currentTime: now.toISOString().slice(11, 19),
     runText,
     contextTokens,
     queueCount: session?.queued_drafts.length ?? 0,

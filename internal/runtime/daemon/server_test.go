@@ -219,6 +219,44 @@ func TestWebsocketStreamsUIBusEvents(t *testing.T) {
 	}
 }
 
+func TestWebsocketStreamsUIBusEventsWithStableJSONKeys(t *testing.T) {
+	t.Parallel()
+
+	agent := buildAgentWithOperatorSurface(t)
+	server, err := daemon.New(agent)
+	if err != nil {
+		t.Fatalf("new daemon server: %v", err)
+	}
+	httpServer := httptest.NewServer(server.Handler())
+	defer httpServer.Close()
+
+	conn := dialWebsocket(t, httpServer.URL, "/ws")
+	defer conn.Close()
+	_ = readEnvelopeJSON(t, conn)
+
+	agent.UIBus.Publish(runtime.UIEvent{
+		Kind:      runtime.UIEventStreamText,
+		SessionID: "session-1",
+		RunID:     "run-1",
+		Text:      "partial",
+	})
+
+	envelope := readEnvelopeJSON(t, conn)
+	if envelope["type"] != "ui_event" {
+		t.Fatalf("type = %#v, want ui_event", envelope["type"])
+	}
+	event := mapPayload(t, envelope["event"])
+	if event["kind"] != "stream.text" {
+		t.Fatalf("event.kind = %#v, want stream.text", event["kind"])
+	}
+	if event["session_id"] != "session-1" {
+		t.Fatalf("event.session_id = %#v, want session-1", event["session_id"])
+	}
+	if event["text"] != "partial" {
+		t.Fatalf("event.text = %#v, want partial", event["text"])
+	}
+}
+
 func TestWebsocketSessionCreateCommandReturnsSessionSnapshot(t *testing.T) {
 	t.Parallel()
 

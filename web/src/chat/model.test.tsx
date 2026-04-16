@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
 import { ChatPane } from "./ChatPane";
 import { approximateContextTokens, applySessionUIEvent, buildChatStatus, buildBtwRuns, syncMainRunFromUIEvent } from "./model";
+import { shouldShowSessionRail } from "../layout";
 import type { ProviderResultPayload, SessionSnapshot } from "../lib/types";
 
 function makeSessionSnapshot(overrides: Partial<SessionSnapshot> = {}): SessionSnapshot {
@@ -86,6 +87,7 @@ describe("chat model helpers", () => {
     expect(status.queueCount).toBe(1);
     expect(status.activeBtwCount).toBe(1);
     expect(status.contextTokens).toBeGreaterThan(0);
+    expect("currentTime" in status).toBe(false);
   });
 
   it("maps btw runs into isolated branch state", () => {
@@ -139,6 +141,12 @@ describe("chat model helpers", () => {
     expect(completed.streaming).toBe("");
     expect(completed.status).toBe("done");
   });
+
+  it("shows session rail only on sessions tab", () => {
+    expect(shouldShowSessionRail("sessions")).toBe(true);
+    expect(shouldShowSessionRail("chat")).toBe(false);
+    expect(shouldShowSessionRail("plan")).toBe(false);
+  });
 });
 
 describe("ChatPane", () => {
@@ -180,5 +188,6 @@ describe("ChatPane", () => {
     expect(markup).toContain("/btw");
     expect(markup).toContain("branch answer");
     expect(markup).toContain("shell_exec");
+    expect(markup).not.toContain("time ");
   });
 });

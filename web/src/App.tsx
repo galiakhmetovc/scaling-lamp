@@ -16,6 +16,7 @@ import { PlanPane } from "./plan/PlanPane";
 import { SettingsPane } from "./settings/SettingsPane";
 import { ToolsPane } from "./tools/ToolsPane";
 import { DaemonClient, loadRuntimeClientConfig } from "./lib/client";
+import { shouldShowSessionRail, type TabKey } from "./layout";
 import type {
   BootstrapPayload,
   SessionSnapshot,
@@ -25,8 +26,6 @@ import type {
   UIEvent,
   WebsocketEnvelope,
 } from "./lib/types";
-
-type TabKey = "sessions" | "chat" | "plan" | "tools" | "settings";
 
 export function App() {
   const clientRef = useRef<DaemonClient | null>(null);
@@ -106,14 +105,18 @@ export function App() {
     void loadRawFile(selectedRawPath);
   }, [selectedRawPath]);
 
-  useEffect(() => {
-    const timer = window.setInterval(() => setClockNow(new Date()), 1000);
-    return () => window.clearInterval(timer);
-  }, []);
-
   const selectedSession = selectedSessionID ? sessionSnapshots[selectedSessionID] : null;
   const selectedUI = selectedSessionID ? sessionUI[selectedSessionID] ?? emptySessionUIState() : emptySessionUIState();
   const approxTokens = useMemo(() => approximateContextTokens(selectedSession, chatInput), [selectedSession, chatInput]);
+
+  useEffect(() => {
+    if (!selectedSession?.main_run.active) {
+      setClockNow(new Date());
+      return;
+    }
+    const timer = window.setInterval(() => setClockNow(new Date()), 1000);
+    return () => window.clearInterval(timer);
+  }, [selectedSession?.main_run.active, selectedSession?.main_run.started_at]);
 
   function applySessionSnapshot(snapshot: SessionSnapshot) {
     setSessionSnapshots((current) => ({ ...current, [snapshot.session_id]: snapshot }));
@@ -384,24 +387,26 @@ export function App() {
       </nav>
 
       <main className="workspace">
-        <aside className="session-rail">
-          <div className="section-title">
-            <span>Sessions</span>
-            <button onClick={() => void handleCreateSession()}>New</button>
-          </div>
-          <div className="session-list">
-            {sessions.map((session) => (
-              <button
-                key={session.session_id}
-                className={`session-item ${session.session_id === selectedSessionID ? "active" : ""}`}
-                onClick={() => setSelectedSessionID(session.session_id)}
-              >
-                <strong>{session.session_id}</strong>
-                <span>{session.message_count} messages</span>
-              </button>
-            ))}
-          </div>
-        </aside>
+        {shouldShowSessionRail(activeTab) && (
+          <aside className="session-rail">
+            <div className="section-title">
+              <span>Sessions</span>
+              <button onClick={() => void handleCreateSession()}>New</button>
+            </div>
+            <div className="session-list">
+              {sessions.map((session) => (
+                <button
+                  key={session.session_id}
+                  className={`session-item ${session.session_id === selectedSessionID ? "active" : ""}`}
+                  onClick={() => setSelectedSessionID(session.session_id)}
+                >
+                  <strong>{session.session_id}</strong>
+                  <span>{session.message_count} messages</span>
+                </button>
+              ))}
+            </div>
+          </aside>
+        )}
 
         <section className="main-panel">
           {activeTab === "sessions" && <SessionsView bootstrap={bootstrap} />}

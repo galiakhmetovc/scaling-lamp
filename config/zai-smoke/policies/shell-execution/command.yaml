@@ -18,13 +18,13 @@ spec:
       - sed
       - wc
       - find
+      - curl
       - powershell
       - pwsh
       - cmd
     allowed_prefixes: []
     deny_patterns:
       - " rm "
-      - " curl "
       - " wget "
     command_rules:
       - command: go

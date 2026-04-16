@@ -23,11 +23,11 @@ const (
 )
 
 type ToolActivity struct {
-	Phase      ToolActivityPhase
-	Name       string
-	Arguments  map[string]any
-	ResultText string
-	ErrorText  string
+	Phase      ToolActivityPhase `json:"phase"`
+	Name       string            `json:"name"`
+	Arguments  map[string]any    `json:"arguments,omitempty"`
+	ResultText string            `json:"result_text,omitempty"`
+	ErrorText  string            `json:"error_text,omitempty"`
 }
 
 func (a *Agent) executeProviderLoop(ctx context.Context, contractSet contracts.ResolvedContracts, sessionID, runID, correlationID, source string, input provider.ClientInput, observer func(ToolActivity), maxRoundsOverride int) (provider.ClientResult, error) {

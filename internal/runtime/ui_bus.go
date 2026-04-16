@@ -14,12 +14,12 @@ const (
 )
 
 type UIEvent struct {
-	Kind      UIEventKind
-	SessionID string
-	RunID     string
-	Text      string
-	Status    string
-	Tool      ToolActivity
+	Kind      UIEventKind   `json:"kind"`
+	SessionID string        `json:"session_id"`
+	RunID     string        `json:"run_id"`
+	Text      string        `json:"text"`
+	Status    string        `json:"status"`
+	Tool      ToolActivity  `json:"tool,omitempty"`
 }
 
 type UIEventBus struct {

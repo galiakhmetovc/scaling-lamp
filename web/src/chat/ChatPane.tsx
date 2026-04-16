@@ -62,7 +62,6 @@ export function ChatPane(props: ChatPaneProps) {
         <div className="chat-statusbar">
           <span>{`provider ${statusView.provider}`}</span>
           <span>{`model ${statusView.model}`}</span>
-          <span>{`time ${statusView.currentTime}`}</span>
           <span>{`run ${statusView.runText}`}</span>
           <span>{`ctx ~${statusView.contextTokens}`}</span>
           <span>{`queue ${statusView.queueCount}`}</span>
