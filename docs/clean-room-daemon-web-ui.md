@@ -278,6 +278,7 @@ Current layout direction:
 - `Chat` owns the main workspace without sharing it with session navigation
 - the secondary column is reserved for composer, queue, and operator metadata
 - daemon/session identity lives in the control header instead of being repeated as loose page chrome
+- on small screens the ops column stacks under the timeline, tabs stay horizontally scrollable, and composer actions expand to touch-friendly full-width controls
 
 ### Plan
 

@@ -5,6 +5,7 @@ export type SessionListItem = {
   active: boolean;
   title: string;
   meta: string;
+  activityText: string;
 };
 
 export function buildSessionList(sessions: SessionSummary[], selectedSessionID: string): SessionListItem[] {
@@ -15,5 +16,14 @@ export function buildSessionList(sessions: SessionSummary[], selectedSessionID: 
       active: session.session_id === selectedSessionID,
       title: session.session_id,
       meta: `${session.message_count} messages`,
+      activityText: formatLastActivity(session.last_activity),
     }));
+}
+
+export function formatLastActivity(timestamp: string): string {
+  if (!timestamp) {
+    return "no activity";
+  }
+  const date = new Date(timestamp);
+  return `active ${date.toLocaleString()}`;
 }

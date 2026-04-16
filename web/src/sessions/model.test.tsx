@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
-import { buildSessionList } from "./model";
+import { buildSessionList, formatLastActivity } from "./model";
 import { SessionsPane } from "./SessionsPane";
 import type { BootstrapPayload, SessionSummary } from "../lib/types";
 
@@ -26,6 +26,11 @@ describe("sessions model", () => {
     expect(list[0].id).toBe("session-newer");
     expect(list[0].active).toBe(true);
     expect(list[1].active).toBe(false);
+    expect(list[0].activityText).toContain("active");
+  });
+
+  it("formats last activity text for compact session cards", () => {
+    expect(formatLastActivity("2026-04-16T05:03:00Z")).toContain("active");
   });
 });
 
@@ -46,5 +51,6 @@ describe("SessionsPane", () => {
     expect(markup).toContain("session-newer");
     expect(markup).toContain("surface-primary");
     expect(markup).toContain("surface-secondary");
+    expect(markup).toContain("active");
   });
 });

@@ -23,8 +23,11 @@ export function SessionsPane(props: SessionsPaneProps) {
         <div className="session-list">
           {items.map((item) => (
             <button key={item.id} className={`session-item ${item.active ? "active" : ""}`} onClick={() => onSelectSession(item.id)}>
-              <strong>{item.title}</strong>
-              <span>{item.meta}</span>
+              <div className="session-item-main">
+                <strong>{item.title}</strong>
+                <span>{item.meta}</span>
+              </div>
+              <div className="session-item-meta">{item.activityText}</div>
             </button>
           ))}
         </div>
