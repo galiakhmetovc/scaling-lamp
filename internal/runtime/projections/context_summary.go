@@ -13,6 +13,7 @@ type ContextSummaryView struct {
 	ArtifactRef           string `json:"artifact_ref,omitempty"`
 	SummarizationCount    int    `json:"summarization_count"`
 	CompactedMessageCount int    `json:"compacted_message_count"`
+	LastGuardPercent      int    `json:"last_guard_percent"`
 }
 
 type ContextSummarySnapshot struct {
@@ -32,33 +33,47 @@ func NewContextSummaryProjection() *ContextSummaryProjection {
 func (p *ContextSummaryProjection) ID() string { return "context_summary" }
 
 func (p *ContextSummaryProjection) Apply(event eventing.Event) error {
-	if event.Kind != eventing.EventContextSummaryUpdated {
-		return nil
+	switch event.Kind {
+	case eventing.EventContextSummaryUpdated:
+		sessionID, _ := event.Payload["session_id"].(string)
+		if sessionID == "" {
+			return nil
+		}
+		if p.snapshot.Sessions == nil {
+			p.snapshot.Sessions = map[string]ContextSummaryView{}
+		}
+		view := p.snapshot.Sessions[sessionID]
+		if summaryText, ok := event.Payload["summary_text"].(string); ok {
+			view.SummaryText = summaryText
+		}
+		if covered, ok := contextBudgetOptionalIntPayload(event.Payload, "covered_messages"); ok {
+			view.CoveredMessages = covered
+		}
+		if artifactRef, ok := event.Payload["artifact_ref"].(string); ok {
+			view.ArtifactRef = artifactRef
+		}
+		if count, ok := contextBudgetOptionalIntPayload(event.Payload, "summarization_count"); ok {
+			view.SummarizationCount = count
+		}
+		if compacted, ok := contextBudgetOptionalIntPayload(event.Payload, "compacted_message_count"); ok {
+			view.CompactedMessageCount = compacted
+		}
+		view.LastGuardPercent = 0
+		p.snapshot.Sessions[sessionID] = view
+	case eventing.EventContextGuardTriggered:
+		sessionID, _ := event.Payload["session_id"].(string)
+		if sessionID == "" {
+			return nil
+		}
+		if p.snapshot.Sessions == nil {
+			p.snapshot.Sessions = map[string]ContextSummaryView{}
+		}
+		view := p.snapshot.Sessions[sessionID]
+		if percent, ok := contextBudgetOptionalIntPayload(event.Payload, "guard_percent"); ok {
+			view.LastGuardPercent = percent
+		}
+		p.snapshot.Sessions[sessionID] = view
 	}
-	sessionID, _ := event.Payload["session_id"].(string)
-	if sessionID == "" {
-		return nil
-	}
-	if p.snapshot.Sessions == nil {
-		p.snapshot.Sessions = map[string]ContextSummaryView{}
-	}
-	view := p.snapshot.Sessions[sessionID]
-	if summaryText, ok := event.Payload["summary_text"].(string); ok {
-		view.SummaryText = summaryText
-	}
-	if covered, ok := contextBudgetOptionalIntPayload(event.Payload, "covered_messages"); ok {
-		view.CoveredMessages = covered
-	}
-	if artifactRef, ok := event.Payload["artifact_ref"].(string); ok {
-		view.ArtifactRef = artifactRef
-	}
-	if count, ok := contextBudgetOptionalIntPayload(event.Payload, "summarization_count"); ok {
-		view.SummarizationCount = count
-	}
-	if compacted, ok := contextBudgetOptionalIntPayload(event.Payload, "compacted_message_count"); ok {
-		view.CompactedMessageCount = compacted
-	}
-	p.snapshot.Sessions[sessionID] = view
 	return nil
 }
 

@@ -3,6 +3,7 @@ package runtime
 import (
 	"context"
 	"fmt"
+	"slices"
 	"strings"
 
 	"teamd/internal/contracts"
@@ -29,13 +30,14 @@ func (a *Agent) CurrentContextSummary(sessionID string) projections.ContextSumma
 }
 
 func (a *Agent) preparePromptMessages(ctx context.Context, contractSet contracts.ResolvedContracts, sessionID string, rawMessages []contracts.Message, allowSummary bool) ([]contracts.Message, error) {
-	if allowSummary {
-		if err := a.maybeRefreshContextSummary(ctx, contractSet, sessionID, rawMessages); err != nil {
-			return nil, err
-		}
+	guardMessages, err := a.applyContextGuards(ctx, contractSet, sessionID, rawMessages, allowSummary)
+	if err != nil {
+		return nil, err
 	}
 	compacted := a.compactedMessagesForPrompt(contractSet, sessionID, rawMessages)
-	return a.assemblePromptMessages(contractSet, sessionID, compacted)
+	withGuards := append([]contracts.Message{}, guardMessages...)
+	withGuards = append(withGuards, compacted...)
+	return a.assemblePromptMessages(contractSet, sessionID, withGuards)
 }
 
 func (a *Agent) compactedMessagesForPrompt(contractSet contracts.ResolvedContracts, sessionID string, rawMessages []contracts.Message) []contracts.Message {
@@ -63,6 +65,38 @@ func (a *Agent) CompactedMessagesForSession(sessionID string, rawMessages []cont
 	return a.compactedMessagesForPrompt(a.Contracts, sessionID, rawMessages)
 }
 
+func (a *Agent) applyContextGuards(ctx context.Context, contractSet contracts.ResolvedContracts, sessionID string, rawMessages []contracts.Message, allowSummary bool) ([]contracts.Message, error) {
+	if a == nil || a.ProviderClient == nil {
+		return nil, nil
+	}
+	policy := contractSet.ContextBudget.Compaction
+	if !policy.Enabled || policy.Strategy != "rolling_summary_v1" {
+		return nil, nil
+	}
+	currentTokens := approximateMessagesTokens(rawMessages, contractSet.ContextBudget.Estimation.Params.CharsPerToken)
+	rule, ok := selectContextGuardRule(policy.Params, a.CurrentContextSummary(sessionID), currentTokens)
+	if !ok {
+		if allowSummary {
+			if err := a.maybeRefreshContextSummary(ctx, contractSet, sessionID, rawMessages); err != nil {
+				return nil, err
+			}
+		}
+		return nil, nil
+	}
+	if err := a.recordContextGuardTriggered(ctx, sessionID, rule.Percent); err != nil {
+		return nil, err
+	}
+	if rule.Action == "refresh_summary" && allowSummary {
+		if err := a.maybeRefreshContextSummary(ctx, contractSet, sessionID, rawMessages); err != nil {
+			return nil, err
+		}
+	}
+	if strings.TrimSpace(rule.Message) == "" {
+		return nil, nil
+	}
+	return []contracts.Message{{Role: "system", Content: strings.TrimSpace(rule.Message)}}, nil
+}
+
 func (a *Agent) maybeRefreshContextSummary(ctx context.Context, contractSet contracts.ResolvedContracts, sessionID string, rawMessages []contracts.Message) error {
 	if a == nil || a.ProviderClient == nil {
 		return nil
@@ -72,7 +106,7 @@ func (a *Agent) maybeRefreshContextSummary(ctx context.Context, contractSet cont
 		return nil
 	}
 	params := policy.Params
-	if params.CompactionTokens <= 0 || len(rawMessages) == 0 {
+	if len(rawMessages) == 0 {
 		return nil
 	}
 	if params.MinMessagesToSummarize <= 0 {
@@ -84,7 +118,7 @@ func (a *Agent) maybeRefreshContextSummary(ctx context.Context, contractSet cont
 	if params.RefreshEveryMessages <= 0 {
 		params.RefreshEveryMessages = 1
 	}
-	if approximateMessagesTokens(rawMessages, contractSet.ContextBudget.Estimation.Params.CharsPerToken) < params.CompactionTokens {
+	if !summaryRefreshRequired(params, approximateMessagesTokens(rawMessages, contractSet.ContextBudget.Estimation.Params.CharsPerToken)) {
 		return nil
 	}
 	coverUntil := len(rawMessages) - params.KeepRecentMessages
@@ -139,6 +173,66 @@ func (a *Agent) maybeRefreshContextSummary(ctx context.Context, contractSet cont
 			"summarization_count":     existing.SummarizationCount + 1,
 			"compacted_message_count": coverUntil,
 			"artifact_ref":            artifactRef,
+		},
+	})
+}
+
+func selectContextGuardRule(params contracts.ContextBudgetCompactionParams, summary projections.ContextSummaryView, currentTokens int) (contracts.ContextBudgetGuardRule, bool) {
+	if params.MaxContextTokens <= 0 || len(params.Guards) == 0 || currentTokens <= 0 {
+		return contracts.ContextBudgetGuardRule{}, false
+	}
+	rules := append([]contracts.ContextBudgetGuardRule{}, params.Guards...)
+	slices.SortFunc(rules, func(a, b contracts.ContextBudgetGuardRule) int {
+		return a.Percent - b.Percent
+	})
+	currentPercent := currentTokens * 100 / params.MaxContextTokens
+	selected := contracts.ContextBudgetGuardRule{}
+	found := false
+	for _, rule := range rules {
+		if rule.Percent <= 0 {
+			continue
+		}
+		if currentPercent < rule.Percent {
+			continue
+		}
+		if rule.OncePerSummaryCycle && rule.Percent <= summary.LastGuardPercent {
+			continue
+		}
+		selected = rule
+		found = true
+	}
+	return selected, found
+}
+
+func summaryRefreshRequired(params contracts.ContextBudgetCompactionParams, currentTokens int) bool {
+	if params.MaxContextTokens > 0 {
+		for _, rule := range params.Guards {
+			if rule.Action != "refresh_summary" || rule.Percent <= 0 {
+				continue
+			}
+			if currentTokens*100 >= params.MaxContextTokens*rule.Percent {
+				return true
+			}
+		}
+	}
+	return params.CompactionTokens > 0 && currentTokens >= params.CompactionTokens
+}
+
+func (a *Agent) recordContextGuardTriggered(ctx context.Context, sessionID string, percent int) error {
+	return a.RecordEvent(ctx, eventing.Event{
+		ID:               a.newID("evt-context-guard"),
+		Kind:             eventing.EventContextGuardTriggered,
+		OccurredAt:       a.now(),
+		AggregateID:      sessionID,
+		AggregateType:    eventing.AggregateSession,
+		CorrelationID:    sessionID,
+		Source:           "agent.context_budget",
+		ActorID:          a.Config.ID,
+		ActorType:        "agent",
+		TraceSummary:     "context guard triggered",
+		Payload: map[string]any{
+			"session_id":    sessionID,
+			"guard_percent": percent,
 		},
 	})
 }

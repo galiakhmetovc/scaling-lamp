@@ -176,6 +176,233 @@ func TestAgentChatTurnCompactsPromptWithRollingSummaryWhenBudgetExceeded(t *test
 	}
 }
 
+func TestAgentChatTurnInjectsFiftyPercentGuardMessage(t *testing.T) {
+	t.Setenv("TEAMD_ZAI_API_KEY", "secret-token")
+
+	clock := time.Date(2026, 4, 16, 14, 0, 0, 0, time.UTC)
+	idValues := []string{
+		"session-chat-guard-50", "evt-session-guard-50",
+		"evt-msg-seed-50-1", "evt-msg-seed-50-2",
+		"run-chat-guard-50", "evt-msg-user-guard-50", "evt-run-start-guard-50",
+		"evt-context-guard-50", "evt-provider-request-guard-50", "evt-transport-guard-50",
+		"evt-msg-assistant-guard-50", "evt-run-complete-guard-50",
+	}
+	nextID := func(prefix string) string {
+		if len(idValues) == 0 {
+			t.Fatalf("unexpected id request for prefix %q", prefix)
+		}
+		id := idValues[0]
+		idValues = idValues[1:]
+		return id
+	}
+
+	var requestBody map[string]any
+	agent := &runtime.Agent{
+		Config:        config.AgentConfig{ID: "guard-50-test"},
+		ConfigPath:    t.TempDir() + "/agent.yaml",
+		MaxToolRounds: 2,
+		Contracts:     chatContractsForGuardBandTest(180),
+		PromptAssets:  provider.NewPromptAssetExecutor(),
+		RequestShape:  provider.NewRequestShapeExecutor(),
+		PlanTools:     tools.NewPlanToolExecutor(),
+		ToolCatalog:   tools.NewCatalogExecutor(),
+		ToolExecution: tools.NewExecutionGate(),
+		Transport: provider.NewTransportExecutor(fakeDoer{
+			do: func(req *http.Request) (*http.Response, error) {
+				defer req.Body.Close()
+				if err := json.NewDecoder(req.Body).Decode(&requestBody); err != nil {
+					t.Fatalf("decode request body: %v", err)
+				}
+				return &http.Response{
+					StatusCode: http.StatusOK,
+					Header:     http.Header{"Content-Type": []string{"application/json"}},
+					Body:       io.NopCloser(bytes.NewBufferString(`{"id":"resp-guard-50","model":"glm-5-turbo","choices":[{"finish_reason":"stop","message":{"role":"assistant","content":"Guard noted."}}],"usage":{"prompt_tokens":80,"completion_tokens":8,"total_tokens":88}}`)),
+				}, nil
+			},
+		}),
+		EventLog: runtime.NewInMemoryEventLog(),
+		Projections: []projections.Projection{
+			projections.NewSessionProjection(),
+			projections.NewRunProjection(),
+			projections.NewTranscriptProjection(),
+			projections.NewContextBudgetProjection(),
+			projections.NewContextSummaryProjection(),
+		},
+		Now:   func() time.Time { return clock },
+		NewID: nextID,
+	}
+	agent.ProviderClient = provider.NewClient(agent.PromptAssets, agent.RequestShape, agent.PlanTools, filesystem.NewDefinitionExecutor(), shell.NewDefinitionExecutor(), delegation.NewDefinitionExecutor(), agent.ToolCatalog, agent.ToolExecution, agent.Transport)
+
+	session, err := agent.CreateChatSession(context.Background())
+	if err != nil {
+		t.Fatalf("CreateChatSession returned error: %v", err)
+	}
+	seedMessages := []contracts.Message{
+		{Role: "user", Content: strings.Repeat("audit middleware ", 10)},
+		{Role: "assistant", Content: strings.Repeat("middleware audited ", 8)},
+	}
+	for _, message := range seedMessages {
+		if err := agent.RecordEvent(context.Background(), eventing.Event{
+			ID:            nextID("evt-msg-seed"),
+			Kind:          eventing.EventMessageRecorded,
+			OccurredAt:    clock,
+			AggregateID:   session.SessionID,
+			AggregateType: eventing.AggregateSession,
+			CorrelationID: session.SessionID,
+			Source:        "runtime.test",
+			ActorID:       agent.Config.ID,
+			ActorType:     "agent",
+			TraceSummary:  "seed transcript",
+			Payload: map[string]any{
+				"session_id": session.SessionID,
+				"role":       message.Role,
+				"content":    message.Content,
+			},
+		}); err != nil {
+			t.Fatalf("RecordEvent seed message: %v", err)
+		}
+		session.Messages = append(session.Messages, message)
+	}
+
+	if _, err := agent.ChatTurn(context.Background(), session, runtime.ChatTurnInput{Prompt: strings.Repeat("continue ", 6)}); err != nil {
+		t.Fatalf("ChatTurn returned error: %v", err)
+	}
+
+	messages := requestBody["messages"].([]any)
+	found := false
+	for _, raw := range messages {
+		msg, ok := raw.(map[string]any)
+		if !ok {
+			continue
+		}
+		content, _ := msg["content"].(string)
+		if strings.Contains(content, "Write a concise running summary of completed work") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("request missing 50%% guard message: %#v", messages)
+	}
+}
+
+func TestAgentChatTurnInjectsSeventyPercentGuardMessageWithoutRefreshingSummary(t *testing.T) {
+	t.Setenv("TEAMD_ZAI_API_KEY", "secret-token")
+
+	clock := time.Date(2026, 4, 16, 14, 10, 0, 0, time.UTC)
+	idValues := []string{
+		"session-chat-guard-70", "evt-session-guard-70",
+		"evt-msg-seed-70-1", "evt-msg-seed-70-2", "evt-msg-seed-70-3",
+		"run-chat-guard-70", "evt-msg-user-guard-70", "evt-run-start-guard-70",
+		"evt-context-guard-70", "evt-provider-request-guard-70", "evt-transport-guard-70",
+		"evt-msg-assistant-guard-70", "evt-run-complete-guard-70",
+	}
+	nextID := func(prefix string) string {
+		if len(idValues) == 0 {
+			t.Fatalf("unexpected id request for prefix %q", prefix)
+		}
+		id := idValues[0]
+		idValues = idValues[1:]
+		return id
+	}
+
+	callCount := 0
+	var requestBody map[string]any
+	agent := &runtime.Agent{
+		Config:        config.AgentConfig{ID: "guard-70-test"},
+		ConfigPath:    t.TempDir() + "/agent.yaml",
+		MaxToolRounds: 2,
+		Contracts:     chatContractsForGuardBandTest(280),
+		PromptAssets:  provider.NewPromptAssetExecutor(),
+		RequestShape:  provider.NewRequestShapeExecutor(),
+		PlanTools:     tools.NewPlanToolExecutor(),
+		ToolCatalog:   tools.NewCatalogExecutor(),
+		ToolExecution: tools.NewExecutionGate(),
+		Transport: provider.NewTransportExecutor(fakeDoer{
+			do: func(req *http.Request) (*http.Response, error) {
+				callCount++
+				defer req.Body.Close()
+				if err := json.NewDecoder(req.Body).Decode(&requestBody); err != nil {
+					t.Fatalf("decode request body: %v", err)
+				}
+				return &http.Response{
+					StatusCode: http.StatusOK,
+					Header:     http.Header{"Content-Type": []string{"application/json"}},
+					Body:       io.NopCloser(bytes.NewBufferString(`{"id":"resp-guard-70","model":"glm-5-turbo","choices":[{"finish_reason":"stop","message":{"role":"assistant","content":"Guard noted."}}],"usage":{"prompt_tokens":92,"completion_tokens":7,"total_tokens":99}}`)),
+				}, nil
+			},
+		}),
+		EventLog: runtime.NewInMemoryEventLog(),
+		Projections: []projections.Projection{
+			projections.NewSessionProjection(),
+			projections.NewRunProjection(),
+			projections.NewTranscriptProjection(),
+			projections.NewContextBudgetProjection(),
+			projections.NewContextSummaryProjection(),
+		},
+		Now:   func() time.Time { return clock },
+		NewID: nextID,
+	}
+	agent.ProviderClient = provider.NewClient(agent.PromptAssets, agent.RequestShape, agent.PlanTools, filesystem.NewDefinitionExecutor(), shell.NewDefinitionExecutor(), delegation.NewDefinitionExecutor(), agent.ToolCatalog, agent.ToolExecution, agent.Transport)
+
+	session, err := agent.CreateChatSession(context.Background())
+	if err != nil {
+		t.Fatalf("CreateChatSession returned error: %v", err)
+	}
+	seedMessages := []contracts.Message{
+		{Role: "user", Content: strings.Repeat("audit middleware ", 14)},
+		{Role: "assistant", Content: strings.Repeat("middleware audited ", 12)},
+		{Role: "user", Content: strings.Repeat("check websocket status handling ", 10)},
+	}
+	for _, message := range seedMessages {
+		if err := agent.RecordEvent(context.Background(), eventing.Event{
+			ID:            nextID("evt-msg-seed"),
+			Kind:          eventing.EventMessageRecorded,
+			OccurredAt:    clock,
+			AggregateID:   session.SessionID,
+			AggregateType: eventing.AggregateSession,
+			CorrelationID: session.SessionID,
+			Source:        "runtime.test",
+			ActorID:       agent.Config.ID,
+			ActorType:     "agent",
+			TraceSummary:  "seed transcript",
+			Payload: map[string]any{
+				"session_id": session.SessionID,
+				"role":       message.Role,
+				"content":    message.Content,
+			},
+		}); err != nil {
+			t.Fatalf("RecordEvent seed message: %v", err)
+		}
+		session.Messages = append(session.Messages, message)
+	}
+
+	if _, err := agent.ChatTurn(context.Background(), session, runtime.ChatTurnInput{Prompt: strings.Repeat("continue ", 8)}); err != nil {
+		t.Fatalf("ChatTurn returned error: %v", err)
+	}
+	if callCount != 1 {
+		t.Fatalf("provider call count = %d, want 1 without summary refresh", callCount)
+	}
+	messages := requestBody["messages"].([]any)
+	found := false
+	for _, raw := range messages {
+		msg, ok := raw.(map[string]any)
+		if !ok {
+			continue
+		}
+		content, _ := msg["content"].(string)
+		if strings.Contains(content, "Context is getting tight") {
+			found = true
+		}
+		if strings.Contains(content, "Conversation summary covering earlier context") {
+			t.Fatalf("unexpected summary refresh in 70%% guard path: %#v", messages)
+		}
+	}
+	if !found {
+		t.Fatalf("request missing 70%% guard message: %#v", messages)
+	}
+}
+
 func chatContractsForSummaryCompactionTest() contracts.ResolvedContracts {
 	out := chatContractsForTest()
 	out.ProviderRequest.RequestShape.Streaming = contracts.StreamingPolicy{
@@ -233,6 +460,57 @@ func chatContractsForSummaryCompactionTest() contracts.ResolvedContracts {
 			Enabled:  true,
 			Strategy: "counter_only",
 			Params: contracts.ContextBudgetSummaryDisplayParams{IncludeSummaryCount: true},
+		},
+	}
+	return out
+}
+
+func chatContractsForGuardBandTest(maxContextTokens int) contracts.ResolvedContracts {
+	out := chatContractsForTest()
+	out.ProviderRequest.RequestShape.Streaming = contracts.StreamingPolicy{
+		Enabled:  true,
+		Strategy: "static_stream",
+		Params:   contracts.StreamingParams{Stream: false},
+	}
+	out.ContextBudget = contracts.ContextBudgetContract{
+		ID: "context-budget-guard",
+		Accounting: contracts.ContextBudgetAccountingPolicy{
+			Enabled:  true,
+			Strategy: "provider_usage_v1",
+			Params: contracts.ContextBudgetAccountingParams{
+				TrustInputTokens:  true,
+				TrustOutputTokens: true,
+				TrustTotalTokens:  true,
+			},
+		},
+		Estimation: contracts.ContextBudgetEstimationPolicy{
+			Enabled:  true,
+			Strategy: "chars_div4",
+			Params: contracts.ContextBudgetEstimationParams{
+				CharsPerToken: 4,
+			},
+		},
+		Compaction: contracts.ContextBudgetCompactionPolicy{
+			Enabled:  true,
+			Strategy: "rolling_summary_v1",
+			Params: contracts.ContextBudgetCompactionParams{
+				MaxContextTokens:       maxContextTokens,
+				KeepRecentMessages:     2,
+				MinMessagesToSummarize: 6,
+				RefreshEveryMessages:   1,
+				MaxSummaryChars:        300,
+				Instructions:           "Summarize earlier conversation faithfully for continued coding work.",
+				Guards: []contracts.ContextBudgetGuardRule{
+					{Percent: 50, Action: "advisory", Message: "Write a concise running summary of completed work, lessons learned, and useful intermediate findings before context gets tight.", OncePerSummaryCycle: true},
+					{Percent: 70, Action: "warning", Message: "Context is getting tight. Optimize for brevity and avoid replaying large details unless needed.", OncePerSummaryCycle: true},
+					{Percent: 85, Action: "refresh_summary", Message: "Refresh the rolling summary now and continue from the compacted context.", OncePerSummaryCycle: true},
+				},
+			},
+		},
+		SummaryDisplay: contracts.ContextBudgetSummaryDisplayPolicy{
+			Enabled:  true,
+			Strategy: "counter_only",
+			Params:   contracts.ContextBudgetSummaryDisplayParams{IncludeSummaryCount: true},
 		},
 	}
 	return out

@@ -120,15 +120,7 @@ func (s *Server) contextBudgetSnapshot(sessionID string, transcript []contracts.
 	if source == "" {
 		source = "mixed"
 	}
-	state := "healthy"
-	warning := s.currentAgent().Contracts.ContextBudget.Compaction.Params.WarningTokens
-	if warning > 0 && current >= warning {
-		state = "approaching_limit"
-	}
-	compaction := s.currentAgent().Contracts.ContextBudget.Compaction.Params.CompactionTokens
-	if compaction > 0 && current >= compaction {
-		state = "needs_compaction"
-	}
+	state := contextBudgetState(s.currentAgent().Contracts.ContextBudget.Compaction.Params, current)
 	return ContextBudgetSnapshot{
 		LastInputTokens:          view.LastInputTokens,
 		LastOutputTokens:         view.LastOutputTokens,
@@ -142,6 +134,36 @@ func (s *Server) contextBudgetSnapshot(sessionID string, transcript []contracts.
 		Source:                   source,
 		BudgetState:              state,
 	}
+}
+
+func contextBudgetState(params contracts.ContextBudgetCompactionParams, currentTokens int) string {
+	if params.MaxContextTokens > 0 && currentTokens > 0 {
+		highest := 0
+		for _, guard := range params.Guards {
+			if guard.Percent <= 0 {
+				continue
+			}
+			if currentTokens*100 >= params.MaxContextTokens*guard.Percent && guard.Percent > highest {
+				highest = guard.Percent
+			}
+		}
+		switch {
+		case highest >= 85:
+			return "needs_compaction"
+		case highest >= 70:
+			return "approaching_limit"
+		default:
+			return "healthy"
+		}
+	}
+	state := "healthy"
+	if params.WarningTokens > 0 && currentTokens >= params.WarningTokens {
+		state = "approaching_limit"
+	}
+	if params.CompactionTokens > 0 && currentTokens >= params.CompactionTokens {
+		state = "needs_compaction"
+	}
+	return state
 }
 
 func approximateTextTokens(text string) int {

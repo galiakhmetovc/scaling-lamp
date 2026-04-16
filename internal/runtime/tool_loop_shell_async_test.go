@@ -48,31 +48,29 @@ func TestShellLifecyclePersistsEventsAcrossCalls(t *testing.T) {
 		t.Fatalf("command_id missing from %s", startText)
 	}
 
-	time.Sleep(100 * time.Millisecond)
-	pollText, err := agent.ShellRuntime.ExecuteWithMeta(context.Background(), agent.Contracts.ShellExecution, "shell_poll", map[string]any{
-		"command_id":   commandID,
-		"after_offset": 0,
-	}, shell.ExecutionMeta{})
-	if err != nil {
-		t.Fatalf("shell_poll returned error: %v", err)
-	}
-	var pollPayload map[string]any
-	if err := json.Unmarshal([]byte(pollText), &pollPayload); err != nil {
-		t.Fatalf("unmarshal poll result: %v", err)
-	}
-	if pollPayload["status"] == "" {
-		t.Fatalf("poll status missing from %s", pollText)
-	}
-
-	finalPollText, err := agent.ShellRuntime.ExecuteWithMeta(context.Background(), agent.Contracts.ShellExecution, "shell_poll", map[string]any{
-		"command_id":   commandID,
-		"after_offset": 0,
-	}, shell.ExecutionMeta{})
-	if err != nil {
-		t.Fatalf("final shell_poll returned error: %v", err)
-	}
-	if status := decodeJSONStringField(t, finalPollText, "status"); status == "" {
-		t.Fatalf("final poll status missing from %s", finalPollText)
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		pollText, err := agent.ShellRuntime.ExecuteWithMeta(context.Background(), agent.Contracts.ShellExecution, "shell_poll", map[string]any{
+			"command_id":   commandID,
+			"after_offset": 0,
+		}, shell.ExecutionMeta{})
+		if err != nil {
+			t.Fatalf("shell_poll returned error: %v", err)
+		}
+		var pollPayload map[string]any
+		if err := json.Unmarshal([]byte(pollText), &pollPayload); err != nil {
+			t.Fatalf("unmarshal poll result: %v", err)
+		}
+		if pollPayload["status"] == "" {
+			t.Fatalf("poll status missing from %s", pollText)
+		}
+		if status, _ := pollPayload["status"].(string); status == "completed" {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("shell command did not complete before deadline; last poll = %s", pollText)
+		}
+		time.Sleep(20 * time.Millisecond)
 	}
 
 	events, err := agent.EventLog.ListByAggregate(context.Background(), eventing.AggregateShellCommand, commandID)

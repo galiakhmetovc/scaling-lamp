@@ -5,11 +5,25 @@ spec:
   enabled: true
   strategy: rolling_summary_v1
   params:
+    max_context_tokens: 128000
     warning_tokens: 48000
     compaction_tokens: 64000
-    keep_recent_messages: 6
+    keep_recent_messages: 8
     min_messages_to_summarize: 12
     refresh_every_messages: 4
     max_summary_chars: 1200
     instructions: Summarize earlier conversation faithfully for continued coding work. Preserve decisions, changed files, verification results, open risks, and unresolved follow-ups.
     store_artifacts: true
+    guards:
+      - percent: 50
+        action: advisory
+        message: Write a concise running summary of completed work, lessons learned, useful intermediate findings, and decisions worth preserving before context gets tight.
+        once_per_summary_cycle: true
+      - percent: 70
+        action: warning
+        message: Context is getting tight. Be deliberate about what you repeat, prefer concise references to earlier work, and avoid replaying large details unless they are needed.
+        once_per_summary_cycle: true
+      - percent: 85
+        action: refresh_summary
+        message: Refresh the rolling summary now and continue from the compacted context while keeping only the most recent raw messages verbatim.
+        once_per_summary_cycle: true

@@ -45,4 +45,24 @@ func TestContextSummaryProjectionTracksLatestRollingSummary(t *testing.T) {
 	if got.CompactedMessageCount != 6 {
 		t.Fatalf("compacted_message_count = %d, want 6", got.CompactedMessageCount)
 	}
+	if got.LastGuardPercent != 0 {
+		t.Fatalf("last_guard_percent = %d, want 0 after summary refresh", got.LastGuardPercent)
+	}
+	if err := projection.Apply(eventing.Event{
+		ID:            "evt-guard-1",
+		Kind:          eventing.EventContextGuardTriggered,
+		OccurredAt:    time.Date(2026, 4, 16, 13, 5, 0, 0, time.UTC),
+		AggregateID:   "session-1",
+		AggregateType: eventing.AggregateSession,
+		Payload: map[string]any{
+			"session_id":    "session-1",
+			"guard_percent": 70,
+		},
+	}); err != nil {
+		t.Fatalf("Apply guard returned error: %v", err)
+	}
+	got = projection.SnapshotForSession("session-1")
+	if got.LastGuardPercent != 70 {
+		t.Fatalf("last_guard_percent = %d, want 70", got.LastGuardPercent)
+	}
 }
