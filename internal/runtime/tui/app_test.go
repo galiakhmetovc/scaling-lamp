@@ -912,6 +912,83 @@ func TestChatQueueViewShowsInterjectionAffordances(t *testing.T) {
 	}
 }
 
+func TestChatHeaderShowsRunAndQueueBadges(t *testing.T) {
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "agent.yaml")
+	if err := os.WriteFile(configPath, []byte("kind: AgentConfig\nversion: v1\nid: tui-test\nspec:\n  runtime:\n    max_tool_rounds: 7\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile config: %v", err)
+	}
+	agent := &runtime.Agent{
+		ConfigPath: configPath,
+		Config:     config.AgentConfig{ID: "tui-test", Spec: config.AgentConfigSpec{Runtime: config.AgentRuntimeConfig{MaxToolRounds: 7}}},
+		Contracts: contracts.ResolvedContracts{
+			Chat: contracts.ChatContract{
+				Output: contracts.ChatOutputPolicy{Params: contracts.ChatOutputParams{RenderMarkdown: true, MarkdownStyle: "dark"}},
+				Status: contracts.ChatStatusPolicy{Params: contracts.ChatStatusParams{ShowToolCalls: true, ShowToolResults: true, ShowPlanAfterPlanTools: true}},
+			},
+		},
+		EventLog:    runtime.NewInMemoryEventLog(),
+		Projections: []projections.Projection{projections.NewSessionCatalogProjection(), projections.NewTranscriptProjection(), projections.NewChatTimelineProjection(), projections.NewPlanHeadProjection(), projections.NewActivePlanProjection()},
+		UIBus:       runtime.NewUIEventBus(),
+		Now:         func() time.Time { return time.Date(2026, 4, 16, 14, 30, 0, 0, time.UTC) },
+		NewID:       func(prefix string) string { return prefix + "-1" },
+	}
+	m, err := newModel(context.Background(), agent, "")
+	if err != nil {
+		t.Fatalf("newModel returned error: %v", err)
+	}
+	state := m.sessions[m.activeSessionID]
+	state.MainRun.Active = true
+	state.Queue = []queuedDraft{{Text: "one"}, {Text: "two"}}
+	got := m.chatHeader(state)
+	for _, want := range []string{"[RUNNING]", "[QUEUED:2]"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("header missing %q: %q", want, got)
+		}
+	}
+}
+
+func TestChatViewShowsInterjectionHistory(t *testing.T) {
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "agent.yaml")
+	if err := os.WriteFile(configPath, []byte("kind: AgentConfig\nversion: v1\nid: tui-test\nspec:\n  runtime:\n    max_tool_rounds: 7\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile config: %v", err)
+	}
+	agent := &runtime.Agent{
+		ConfigPath: configPath,
+		Config:     config.AgentConfig{ID: "tui-test", Spec: config.AgentConfigSpec{Runtime: config.AgentRuntimeConfig{MaxToolRounds: 7}}},
+		Contracts: contracts.ResolvedContracts{
+			Chat: contracts.ChatContract{
+				Output: contracts.ChatOutputPolicy{Params: contracts.ChatOutputParams{RenderMarkdown: true, MarkdownStyle: "dark"}},
+				Status: contracts.ChatStatusPolicy{Params: contracts.ChatStatusParams{ShowToolCalls: true, ShowToolResults: true, ShowPlanAfterPlanTools: true}},
+			},
+		},
+		EventLog:    runtime.NewInMemoryEventLog(),
+		Projections: []projections.Projection{projections.NewSessionCatalogProjection(), projections.NewTranscriptProjection(), projections.NewChatTimelineProjection(), projections.NewPlanHeadProjection(), projections.NewActivePlanProjection()},
+		UIBus:       runtime.NewUIEventBus(),
+		Now:         func() time.Time { return time.Date(2026, 4, 16, 14, 31, 0, 0, time.UTC) },
+		NewID:       func(prefix string) string { return prefix + "-1" },
+	}
+	m, err := newModel(context.Background(), agent, "")
+	if err != nil {
+		t.Fatalf("newModel returned error: %v", err)
+	}
+	state := m.sessions[m.activeSessionID]
+	state.MainRun.Active = true
+	state.Interjections = []interjectionEntry{
+		{Text: "stop after current tool", Status: "queued"},
+		{Text: "also check auth", Status: "sent"},
+	}
+
+	modelAfter, _ := (&m).Update(tea.WindowSizeMsg{Width: 100, Height: 24})
+	got := modelAfter.View()
+	for _, want := range []string{"OPERATOR:", "[QUEUED] stop after current tool", "[SENT] also check auth"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("view missing %q: %q", want, got)
+		}
+	}
+}
+
 func TestChatViewShowsLiveToolActivity(t *testing.T) {
 	dir := t.TempDir()
 	configPath := filepath.Join(dir, "agent.yaml")

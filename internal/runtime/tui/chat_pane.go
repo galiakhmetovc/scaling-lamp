@@ -58,7 +58,7 @@ func (m *model) viewChat() string {
 	}
 	m.resizeChatState(state)
 	m.renderChatViewport(state)
-	header := fmt.Sprintf("session: %s", state.SessionID)
+	header := m.chatHeader(state)
 	queue := m.viewQueue(state)
 	status := m.viewChatStatusBar(state)
 	hint := m.chatComposerHint(state)
@@ -85,6 +85,9 @@ func (m *model) renderChatViewport(state *sessionState) {
 	wasAtBottom := state.ChatView.AtBottom() || state.ChatView.TotalLineCount() == 0
 	contentWidth := max(20, state.ChatView.Width-1)
 	lines := []string{}
+	for _, item := range m.renderInterjectionHistory(state, contentWidth) {
+		lines = append(lines, item, "")
+	}
 	for _, item := range m.renderLiveToolLog(state, contentWidth) {
 		lines = append(lines, item, "")
 	}
@@ -146,6 +149,7 @@ func (m *model) submitChatInput(state *sessionState) tea.Cmd {
 	}
 	if state.MainRun.Active {
 		m.enqueueDraft(state, prompt)
+		m.recordInterjection(state, prompt, "queued")
 		state.Input.Reset()
 		m.statusMessage = "interjection queued for next turn"
 		return nil
@@ -179,6 +183,7 @@ func (m *model) recallSelectedDraft(state *sessionState) tea.Cmd {
 	if state.QueueCursor >= len(state.Queue) && state.QueueCursor > 0 {
 		state.QueueCursor--
 	}
+	m.markInterjectionStatus(state, item.Text, "editing")
 	state.Input.SetValue(item.Text)
 	state.Input.Focus()
 	m.statusMessage = "queued draft recalled for editing"
@@ -259,6 +264,7 @@ func (m *model) dispatchNextQueued(state *sessionState) tea.Cmd {
 	if state.QueueCursor >= len(state.Queue) && state.QueueCursor > 0 {
 		state.QueueCursor--
 	}
+	m.markNextInterjectionStarted(state, next.Text)
 	return m.startMainRun(state, next.Text)
 }
 
@@ -279,10 +285,12 @@ func (m *model) deleteSelectedDraft(state *sessionState) {
 	if state.QueueCursor >= len(state.Queue) {
 		state.QueueCursor = len(state.Queue) - 1
 	}
+	removed := state.Queue[state.QueueCursor]
 	state.Queue = append(state.Queue[:state.QueueCursor], state.Queue[state.QueueCursor+1:]...)
 	if state.QueueCursor >= len(state.Queue) && state.QueueCursor > 0 {
 		state.QueueCursor--
 	}
+	m.markInterjectionStatus(state, removed.Text, "dropped")
 	m.statusMessage = "draft deleted"
 }
 
@@ -422,6 +430,77 @@ func (m *model) viewQueue(state *sessionState) string {
 		lines = append(lines, fmt.Sprintf("  … %d more", len(state.Queue)-end))
 	}
 	return strings.Join(lines, "\n")
+}
+
+func (m *model) chatHeader(state *sessionState) string {
+	if state == nil {
+		return "session"
+	}
+	parts := []string{fmt.Sprintf("session: %s", state.SessionID)}
+	if state.MainRun.Active {
+		parts = append(parts, "[RUNNING]")
+	} else if state.Status == "cancelled" {
+		parts = append(parts, "[CANCELLED]")
+	}
+	if len(state.Queue) > 0 {
+		parts = append(parts, fmt.Sprintf("[QUEUED:%d]", len(state.Queue)))
+	}
+	return strings.Join(parts, " ")
+}
+
+func (m *model) renderInterjectionHistory(state *sessionState, width int) []string {
+	if state == nil || len(state.Interjections) == 0 {
+		return nil
+	}
+	start := max(0, len(state.Interjections)-3)
+	lines := []string{"OPERATOR:"}
+	for _, item := range state.Interjections[start:] {
+		status := strings.ToUpper(item.Status)
+		if status == "" {
+			status = "QUEUED"
+		}
+		lines = append(lines, wrapText(fmt.Sprintf("[%s] %s", status, summarizeChatText(item.Text)), width))
+	}
+	return lines
+}
+
+func (m *model) recordInterjection(state *sessionState, text, status string) {
+	if state == nil {
+		return
+	}
+	state.Interjections = append(state.Interjections, interjectionEntry{
+		Text:     text,
+		QueuedAt: m.now(),
+		Status:   status,
+	})
+	if len(state.Interjections) > 24 {
+		state.Interjections = state.Interjections[len(state.Interjections)-24:]
+	}
+}
+
+func (m *model) markNextInterjectionStarted(state *sessionState, text string) {
+	if state == nil {
+		return
+	}
+	for i := range state.Interjections {
+		if state.Interjections[i].Text == text && state.Interjections[i].Status == "queued" {
+			state.Interjections[i].Status = "sent"
+			state.Interjections[i].StartedAt = m.now()
+			return
+		}
+	}
+}
+
+func (m *model) markInterjectionStatus(state *sessionState, text, status string) {
+	if state == nil {
+		return
+	}
+	for i := len(state.Interjections) - 1; i >= 0; i-- {
+		if state.Interjections[i].Text == text {
+			state.Interjections[i].Status = status
+			return
+		}
+	}
 }
 
 func (m *model) chatComposerHint(state *sessionState) string {

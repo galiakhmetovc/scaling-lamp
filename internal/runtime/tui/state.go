@@ -82,6 +82,13 @@ type queuedDraft struct {
 	QueuedAt time.Time
 }
 
+type interjectionEntry struct {
+	Text      string
+	QueuedAt  time.Time
+	StartedAt time.Time
+	Status    string
+}
+
 type btwRun struct {
 	ID           string
 	Prompt       string
@@ -115,6 +122,7 @@ type sessionState struct {
 	Queue     []queuedDraft
 	QueueCursor int
 	BtwRuns      []btwRun
+	Interjections []interjectionEntry
 }
 
 type configFormDraft struct {
