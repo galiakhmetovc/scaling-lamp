@@ -281,7 +281,7 @@ func (a *Agent) executeToolCommand(ctx context.Context, contractSet contracts.Re
 			return nil, "", fmt.Errorf("active plan projection is not registered")
 		}
 		return a.executePlanCommand(sessionID, activeProjection.SnapshotForSession(sessionID), service, source, call)
-	case "fs_list", "fs_read_text", "fs_write_text", "fs_patch_text", "fs_mkdir", "fs_move", "fs_trash":
+	case "fs_list", "fs_read_text", "fs_read_lines", "fs_search_text", "fs_find_in_files", "fs_write_text", "fs_patch_text", "fs_replace_lines", "fs_replace_in_line", "fs_insert_text", "fs_replace_in_files", "fs_mkdir", "fs_move", "fs_trash":
 		resultText, err := filesystemExecutor.Execute(contractSet.FilesystemExecution, call.Name, call.Arguments)
 		if err != nil {
 			return nil, "", fmt.Errorf("tool call %q: %w", call.Name, err)

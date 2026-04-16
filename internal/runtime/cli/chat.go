@@ -240,8 +240,10 @@ func summarizeToolArgs(activity runtime.ToolActivity) string {
 		return fmt.Sprintf("task: %s | note: %s", stringArg(activity.Arguments, "task_id"), stringArg(activity.Arguments, "note_text"))
 	case "edit_task":
 		return fmt.Sprintf("task: %s | description: %s", stringArg(activity.Arguments, "task_id"), stringArg(activity.Arguments, "new_description"))
-	case "fs_list", "fs_read_text", "fs_write_text", "fs_patch_text", "fs_mkdir", "fs_trash":
+	case "fs_list", "fs_read_text", "fs_read_lines", "fs_search_text", "fs_write_text", "fs_patch_text", "fs_replace_lines", "fs_replace_in_line", "fs_insert_text", "fs_mkdir", "fs_trash":
 		return "path: " + stringArg(activity.Arguments, "path")
+	case "fs_find_in_files", "fs_replace_in_files":
+		return fmt.Sprintf("query: %s | glob: %s", stringArg(activity.Arguments, "query"), stringArg(activity.Arguments, "glob"))
 	case "fs_move":
 		return fmt.Sprintf("src: %s | dest: %s", stringArg(activity.Arguments, "src"), stringArg(activity.Arguments, "dest"))
 	case "shell_exec":
@@ -278,7 +280,7 @@ func summarizeToolResult(activity runtime.ToolActivity) string {
 		return fmt.Sprintf("status: ok | plan_id: %v", payload["plan_id"])
 	case "add_task":
 		return fmt.Sprintf("status: ok | task_id: %v", payload["task_id"])
-	case "set_task_status", "add_task_note", "edit_task", "fs_write_text", "fs_patch_text", "fs_mkdir", "fs_move", "fs_trash":
+	case "set_task_status", "add_task_note", "edit_task", "fs_write_text", "fs_patch_text", "fs_replace_lines", "fs_replace_in_line", "fs_insert_text", "fs_replace_in_files", "fs_mkdir", "fs_move", "fs_trash":
 		return "status: ok"
 	case "fs_list":
 		if entries, ok := payload["entries"].([]any); ok {
@@ -288,6 +290,16 @@ func summarizeToolResult(activity runtime.ToolActivity) string {
 	case "fs_read_text":
 		if size, ok := payload["bytes"]; ok {
 			return fmt.Sprintf("status: ok | bytes: %v", size)
+		}
+		return "status: ok"
+	case "fs_read_lines":
+		if lines, ok := payload["lines"].([]any); ok {
+			return fmt.Sprintf("status: ok | lines: %d", len(lines))
+		}
+		return "status: ok"
+	case "fs_search_text", "fs_find_in_files":
+		if matches, ok := payload["matches"].([]any); ok {
+			return fmt.Sprintf("status: ok | matches: %d", len(matches))
 		}
 		return "status: ok"
 	case "shell_exec":

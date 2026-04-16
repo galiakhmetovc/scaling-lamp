@@ -12,11 +12,16 @@ spec:
       - add_task_note
       - edit_task
       - fs_list
-      - fs_read_text
-      - fs_write_text
-      - fs_patch_text
+      - fs_read_lines
+      - fs_search_text
+      - fs_find_in_files
+      - fs_replace_in_line
+      - fs_replace_lines
+      - fs_insert_text
+      - fs_replace_in_files
       - fs_mkdir
       - fs_move
+      - fs_trash
       - artifact_read
       - artifact_search
       - shell_exec

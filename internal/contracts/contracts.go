@@ -526,9 +526,13 @@ type FilesystemMutationParams struct {
 }
 
 type FilesystemIOParams struct {
-	MaxReadBytes  int    `yaml:"max_read_bytes"`
-	MaxWriteBytes int    `yaml:"max_write_bytes"`
-	Encoding      string `yaml:"encoding"`
+	MaxReadBytes    int    `yaml:"max_read_bytes"`
+	MaxWriteBytes   int    `yaml:"max_write_bytes"`
+	MaxSearchFiles  int    `yaml:"max_search_files"`
+	MaxSearchHits   int    `yaml:"max_search_hits"`
+	MaxReplaceFiles int    `yaml:"max_replace_files"`
+	MaxReplaceHits  int    `yaml:"max_replace_hits"`
+	Encoding        string `yaml:"encoding"`
 }
 
 type ShellCatalogParams struct {

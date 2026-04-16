@@ -7,4 +7,8 @@ spec:
   params:
     max_read_bytes: 131072
     max_write_bytes: 131072
+    max_search_files: 64
+    max_search_hits: 200
+    max_replace_files: 32
+    max_replace_hits: 200
     encoding: utf-8
