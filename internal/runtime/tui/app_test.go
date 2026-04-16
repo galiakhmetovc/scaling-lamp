@@ -502,7 +502,7 @@ func TestChatViewShowsSessionStatusBarAndQueuedDrafts(t *testing.T) {
 
 	modelAfter, _ := (&m).Update(tea.WindowSizeMsg{Width: 120, Height: 40})
 	got := modelAfter.View()
-	for _, want := range []string{"provider: api.z.ai", "model: glm-5-turbo", "run: running 00:30", "ctx=120", "next≈133", "queue: 2", "Queued drafts:"} {
+	for _, want := range []string{"provider: api.z.ai", "model: glm-5-turbo", "run: running 00:30", "ctx=120", "next≈133", "queue: 2", "Queued interjections:"} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("view missing %q: %q", want, got)
 		}
@@ -801,6 +801,114 @@ func TestChatCtrlXCancelsActiveRun(t *testing.T) {
 	}
 	if next.Status != "cancelled" {
 		t.Fatalf("status = %q, want cancelled", next.Status)
+	}
+}
+
+func TestChatViewShowsInterjectionHintWhileRunActive(t *testing.T) {
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "agent.yaml")
+	if err := os.WriteFile(configPath, []byte("kind: AgentConfig\nversion: v1\nid: tui-test\nspec:\n  runtime:\n    max_tool_rounds: 7\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile config: %v", err)
+	}
+	agent := &runtime.Agent{
+		ConfigPath: configPath,
+		Config:     config.AgentConfig{ID: "tui-test", Spec: config.AgentConfigSpec{Runtime: config.AgentRuntimeConfig{MaxToolRounds: 7}}},
+		Contracts: contracts.ResolvedContracts{
+			Chat: contracts.ChatContract{
+				Output: contracts.ChatOutputPolicy{Params: contracts.ChatOutputParams{RenderMarkdown: true, MarkdownStyle: "dark"}},
+				Status: contracts.ChatStatusPolicy{Params: contracts.ChatStatusParams{ShowToolCalls: true, ShowToolResults: true, ShowPlanAfterPlanTools: true}},
+			},
+		},
+		EventLog:    runtime.NewInMemoryEventLog(),
+		Projections: []projections.Projection{projections.NewSessionCatalogProjection(), projections.NewTranscriptProjection(), projections.NewChatTimelineProjection(), projections.NewPlanHeadProjection(), projections.NewActivePlanProjection()},
+		UIBus:       runtime.NewUIEventBus(),
+		Now:         func() time.Time { return time.Date(2026, 4, 16, 14, 22, 0, 0, time.UTC) },
+		NewID:       func(prefix string) string { return prefix + "-1" },
+	}
+	m, err := newModel(context.Background(), agent, "")
+	if err != nil {
+		t.Fatalf("newModel returned error: %v", err)
+	}
+	state := m.sessions[m.activeSessionID]
+	state.MainRun.Active = true
+
+	modelAfter, _ := (&m).Update(tea.WindowSizeMsg{Width: 100, Height: 24})
+	got := modelAfter.View()
+	if !strings.Contains(got, "Enter queue interjection") {
+		t.Fatalf("view missing interjection hint: %q", got)
+	}
+}
+
+func TestChatEnterWhileRunActiveReportsQueuedInterjection(t *testing.T) {
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "agent.yaml")
+	if err := os.WriteFile(configPath, []byte("kind: AgentConfig\nversion: v1\nid: tui-test\nspec:\n  runtime:\n    max_tool_rounds: 7\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile config: %v", err)
+	}
+	agent := &runtime.Agent{
+		ConfigPath: configPath,
+		Config:     config.AgentConfig{ID: "tui-test", Spec: config.AgentConfigSpec{Runtime: config.AgentRuntimeConfig{MaxToolRounds: 7}}},
+		Contracts: contracts.ResolvedContracts{
+			Chat: contracts.ChatContract{
+				Output: contracts.ChatOutputPolicy{Params: contracts.ChatOutputParams{RenderMarkdown: true, MarkdownStyle: "dark"}},
+				Status: contracts.ChatStatusPolicy{Params: contracts.ChatStatusParams{ShowToolCalls: true, ShowToolResults: true, ShowPlanAfterPlanTools: true}},
+			},
+		},
+		EventLog:    runtime.NewInMemoryEventLog(),
+		Projections: []projections.Projection{projections.NewSessionCatalogProjection(), projections.NewTranscriptProjection(), projections.NewChatTimelineProjection(), projections.NewPlanHeadProjection(), projections.NewActivePlanProjection()},
+		UIBus:       runtime.NewUIEventBus(),
+		Now:         func() time.Time { return time.Date(2026, 4, 16, 14, 23, 0, 0, time.UTC) },
+		NewID:       func(prefix string) string { return prefix + "-1" },
+	}
+	m, err := newModel(context.Background(), agent, "")
+	if err != nil {
+		t.Fatalf("newModel returned error: %v", err)
+	}
+	state := m.sessions[m.activeSessionID]
+	state.MainRun.Active = true
+	state.Input.SetValue("Please stop after this tool")
+
+	modelAfter, _ := (&m).Update(tea.KeyMsg{Type: tea.KeyEnter})
+	mm := modelAfter.(*model)
+	if mm.statusMessage != "interjection queued for next turn" {
+		t.Fatalf("status message = %q", mm.statusMessage)
+	}
+}
+
+func TestChatQueueViewShowsInterjectionAffordances(t *testing.T) {
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "agent.yaml")
+	if err := os.WriteFile(configPath, []byte("kind: AgentConfig\nversion: v1\nid: tui-test\nspec:\n  runtime:\n    max_tool_rounds: 7\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile config: %v", err)
+	}
+	agent := &runtime.Agent{
+		ConfigPath: configPath,
+		Config:     config.AgentConfig{ID: "tui-test", Spec: config.AgentConfigSpec{Runtime: config.AgentRuntimeConfig{MaxToolRounds: 7}}},
+		Contracts: contracts.ResolvedContracts{
+			Chat: contracts.ChatContract{
+				Output: contracts.ChatOutputPolicy{Params: contracts.ChatOutputParams{RenderMarkdown: true, MarkdownStyle: "dark"}},
+				Status: contracts.ChatStatusPolicy{Params: contracts.ChatStatusParams{ShowToolCalls: true, ShowToolResults: true, ShowPlanAfterPlanTools: true}},
+			},
+		},
+		EventLog:    runtime.NewInMemoryEventLog(),
+		Projections: []projections.Projection{projections.NewSessionCatalogProjection(), projections.NewTranscriptProjection(), projections.NewChatTimelineProjection(), projections.NewPlanHeadProjection(), projections.NewActivePlanProjection()},
+		UIBus:       runtime.NewUIEventBus(),
+		Now:         func() time.Time { return time.Date(2026, 4, 16, 14, 24, 0, 0, time.UTC) },
+		NewID:       func(prefix string) string { return prefix + "-1" },
+	}
+	m, err := newModel(context.Background(), agent, "")
+	if err != nil {
+		t.Fatalf("newModel returned error: %v", err)
+	}
+	state := m.sessions[m.activeSessionID]
+	state.MainRun.Active = true
+	state.Queue = []queuedDraft{{Text: "first"}, {Text: "second"}}
+
+	got := m.viewQueue(state)
+	for _, want := range []string{"Queued interjections:", "Ctrl+E edit", "Ctrl+D drop", "[next]"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("queue view missing %q: %q", want, got)
+		}
 	}
 }
 

@@ -61,10 +61,11 @@ func (m *model) viewChat() string {
 	header := fmt.Sprintf("session: %s", state.SessionID)
 	queue := m.viewQueue(state)
 	status := m.viewChatStatusBar(state)
+	hint := m.chatComposerHint(state)
 	parts := []string{
 		header,
 		state.ChatView.View(),
-		"Input (Enter send, Tab queue, Ctrl+E recall, Ctrl+D delete, Ctrl+X stop run, Shift+Enter newline, Alt+Up/Down queue select):",
+		hint,
 		state.Input.View(),
 		status,
 	}
@@ -146,7 +147,7 @@ func (m *model) submitChatInput(state *sessionState) tea.Cmd {
 	if state.MainRun.Active {
 		m.enqueueDraft(state, prompt)
 		state.Input.Reset()
-		m.statusMessage = "draft queued for next run"
+		m.statusMessage = "interjection queued for next turn"
 		return nil
 	}
 	return m.startMainRun(state, prompt)
@@ -180,7 +181,7 @@ func (m *model) recallSelectedDraft(state *sessionState) tea.Cmd {
 	}
 	state.Input.SetValue(item.Text)
 	state.Input.Focus()
-	m.statusMessage = "draft recalled for editing"
+	m.statusMessage = "queued draft recalled for editing"
 	return nil
 }
 
@@ -398,7 +399,11 @@ func (m *model) viewQueue(state *sessionState) string {
 	if len(state.Queue) == 0 {
 		return ""
 	}
-	lines := []string{"Queued drafts:"}
+	header := "Queued drafts:"
+	if state.MainRun.Active {
+		header = "Queued interjections:"
+	}
+	lines := []string{header, "Alt+Up/Down select | Ctrl+E edit | Ctrl+D drop"}
 	start := max(0, min(state.QueueCursor, max(0, len(state.Queue)-4)))
 	end := min(len(state.Queue), start+4)
 	for i := start; i < end; i++ {
@@ -407,12 +412,26 @@ func (m *model) viewQueue(state *sessionState) string {
 		if i == state.QueueCursor {
 			prefix = "> "
 		}
-		lines = append(lines, prefix+summarizeChatText(item.Text))
+		label := summarizeChatText(item.Text)
+		if i == 0 {
+			label += "  [next]"
+		}
+		lines = append(lines, prefix+label)
 	}
 	if len(state.Queue) > end {
 		lines = append(lines, fmt.Sprintf("  … %d more", len(state.Queue)-end))
 	}
 	return strings.Join(lines, "\n")
+}
+
+func (m *model) chatComposerHint(state *sessionState) string {
+	if state == nil {
+		return "Input"
+	}
+	if state.MainRun.Active {
+		return "Input (Enter queue interjection, Tab stage draft, Ctrl+E recall, Ctrl+D delete, Ctrl+X stop run, Shift+Enter newline, Alt+Up/Down queue select):"
+	}
+	return "Input (Enter send, Tab queue, Ctrl+E recall, Ctrl+D delete, Shift+Enter newline, Alt+Up/Down queue select):"
 }
 
 func (m *model) renderMarkdownBlock(content, style string, width int) string {

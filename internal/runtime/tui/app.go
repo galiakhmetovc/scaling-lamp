@@ -331,14 +331,14 @@ func (m *model) resizeChatState(state *sessionState) {
 	state.ChatView.Width = max(20, m.width-2)
 	queueHeight := queueDisplayLines(state)
 	reserved := 1 + 1 + 1 + inputHeight + 1 + queueHeight
-	state.ChatView.Height = max(4, m.height-2-reserved)
+	state.ChatView.Height = max(1, m.height-4-reserved)
 }
 
 func queueDisplayLines(state *sessionState) int {
 	if state == nil || len(state.Queue) == 0 {
 		return 0
 	}
-	lines := 1 + min(len(state.Queue), 4)
+	lines := 2 + min(len(state.Queue), 4)
 	if len(state.Queue) > 4 {
 		lines++
 	}
