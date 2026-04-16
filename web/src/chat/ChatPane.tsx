@@ -1,7 +1,7 @@
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import type { SessionSnapshot, SettingsFieldState } from "../lib/types";
-import { buildBtwRuns, buildChatStatus, buildLiveToolView, buildTimelineMarkdownBlock, type BtwRun } from "./model";
+import { buildBtwRuns, buildChatStatus, buildCompactToolActivity, buildTimelineMarkdownBlock, type BtwRun } from "./model";
 
 type ChatPaneProps = {
   session: SessionSnapshot | null;
@@ -26,6 +26,7 @@ export function ChatPane(props: ChatPaneProps) {
   const activeBtwCount = btwRuns.filter((run) => run.active).length;
   const statusView = buildChatStatus({ session, input, now, activeBtwCount, uiStatus: status });
   const btwViews = buildBtwRuns(btwRuns);
+  const liveTools = buildCompactToolActivity(toolLog);
 
   return (
     <div className="chat-workspace">
@@ -43,8 +44,8 @@ export function ChatPane(props: ChatPaneProps) {
             </div>
           )}
           <div className="timeline">
-          {toolLog.map((tool, index) => (
-            <LiveToolItem key={`live-tool-${tool.name}-${tool.phase}-${index}`} tool={tool} />
+          {liveTools.map((tool) => (
+            <LiveToolItem key={tool.key} tool={tool} />
           ))}
           {(session?.timeline ?? []).map((item, index) => (
             <TimelineItem key={`${item.kind}-${index}`} kind={item.kind} role={item.role} content={item.content} />
@@ -151,21 +152,21 @@ export function ChatPane(props: ChatPaneProps) {
   );
 }
 
-function LiveToolItem(props: { tool: NonNullable<import("../lib/types").UIEvent["tool"]> }) {
-  const view = buildLiveToolView(props.tool);
-  if (view.collapsible) {
+function LiveToolItem(props: { tool: ReturnType<typeof buildCompactToolActivity>[number] }) {
+  const { tool } = props;
+  if (tool.collapsible) {
     return (
-      <article className={`timeline-item tool live-tool ${view.state}`}>
+      <article className={`timeline-item tool live-tool ${tool.state}`}>
         <details className="tool-result-toggle">
-          <summary>{view.summary}</summary>
-          <pre className="tool-result-body-text">{view.body}</pre>
+          <summary>{tool.summary}</summary>
+          <pre className="tool-result-body-text">{tool.body}</pre>
         </details>
       </article>
     );
   }
   return (
-    <article className={`timeline-item tool live-tool ${view.state}`}>
-      <div className="live-tool-summary">{view.summary}</div>
+    <article className={`timeline-item tool live-tool ${tool.state}`}>
+      <div className="live-tool-summary">{tool.summary}</div>
     </article>
   );
 }

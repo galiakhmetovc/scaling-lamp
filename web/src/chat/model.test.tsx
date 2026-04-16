@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
 import { ChatPane } from "./ChatPane";
-import { approximateContextTokens, applySessionUIEvent, buildChatStatus, buildBtwRuns, buildLiveToolView, buildTimelineMarkdownBlock, syncMainRunFromUIEvent } from "./model";
+import { approximateContextTokens, applySessionUIEvent, buildChatStatus, buildBtwRuns, buildCompactToolActivity, buildLiveToolView, buildTimelineMarkdownBlock, syncMainRunFromUIEvent } from "./model";
 import type { ProviderResultPayload, SessionSnapshot } from "../lib/types";
 import type { SettingsFieldState } from "../lib/types";
 
@@ -138,6 +138,25 @@ describe("chat model helpers", () => {
     expect(approvalView.state).toBe("error");
   });
 
+  it("compacts live tool activity by dropping superseded starts and limiting visible items", () => {
+    const compact = buildCompactToolActivity([
+      { phase: "started", name: "fs_read", arguments: { path: "a" } },
+      { phase: "completed", name: "fs_read", arguments: { path: "a" }, result_text: "{\"status\":\"ok\"}" },
+      { phase: "started", name: "shell_start", arguments: { command: "curl" } },
+      { phase: "started", name: "fs_list", arguments: { path: "." } },
+      { phase: "completed", name: "plan_add_task", arguments: { description: "x" }, result_text: "{\"status\":\"ok\"}" },
+      { phase: "completed", name: "plan_set_task_status", arguments: { task_id: "1" }, result_text: "{\"status\":\"ok\"}" },
+      { phase: "completed", name: "plan_add_task_note", arguments: { task_id: "1" }, result_text: "{\"status\":\"ok\"}" },
+      { phase: "completed", name: "delegate_spawn", arguments: { task: "x" }, result_text: "{\"status\":\"ok\"}" },
+      { phase: "completed", name: "delegate_wait", arguments: { delegate_id: "d1" }, result_text: "{\"status\":\"ok\"}" },
+    ]);
+
+    expect(compact).toHaveLength(6);
+    expect(compact.some((item) => item.summary.includes("fs_read") && item.summary.includes("started"))).toBe(false);
+    expect(compact.some((item) => item.summary.includes("Tool done") && item.summary.includes("delegate_wait"))).toBe(true);
+    expect(compact.some((item) => item.state === "running")).toBe(true);
+  });
+
   it("marks the main run active when a running status event arrives", () => {
     const snapshot = makeSessionSnapshot();
     const next = syncMainRunFromUIEvent(
@@ -224,6 +243,7 @@ describe("ChatPane", () => {
     expect(markup).toContain("<summary>");
     expect(markup).toContain("Approval required");
     expect(markup).toContain("Tool started");
+    expect(markup).not.toContain("fs_list</strong><span>started");
     expect(markup).not.toContain("time ");
     expect(markup).toContain("chat-workspace");
     expect(markup).toContain("surface-primary");

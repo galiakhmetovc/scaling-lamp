@@ -48,6 +48,16 @@ export type LiveToolView = {
   state: "running" | "done" | "error";
 };
 
+export type CompactToolActivityItem = {
+  key: string;
+  summary: string;
+  body: string;
+  collapsible: boolean;
+  state: "running" | "done" | "error";
+};
+
+const MAX_VISIBLE_TOOL_ACTIVITY = 6;
+
 export function emptySessionUIState(): SessionUIState {
   return { streaming: "", status: "idle", toolLog: [], btwRuns: [] };
 }
@@ -268,6 +278,41 @@ export function buildLiveToolView(tool: NonNullable<UIEvent["tool"]>): LiveToolV
   };
 }
 
+export function buildCompactToolActivity(toolLog: NonNullable<UIEvent["tool"]>[]): CompactToolActivityItem[] {
+  const items: CompactToolActivityItem[] = [];
+  const completedKeys = new Set<string>();
+
+  for (let index = toolLog.length - 1; index >= 0; index -= 1) {
+    const tool = toolLog[index];
+    const signature = toolSignature(tool);
+    if (tool.phase === "completed") {
+      completedKeys.add(signature);
+      const view = buildLiveToolView(tool);
+      items.push({
+        key: `${signature}:completed:${index}`,
+        summary: view.summary,
+        body: view.body,
+        collapsible: view.collapsible,
+        state: view.state,
+      });
+      continue;
+    }
+    if (completedKeys.has(signature)) {
+      continue;
+    }
+    const view = buildLiveToolView(tool);
+    items.push({
+      key: `${signature}:started:${index}`,
+      summary: view.summary,
+      body: view.body,
+      collapsible: view.collapsible,
+      state: view.state,
+    });
+  }
+
+  return items.reverse().slice(-MAX_VISIBLE_TOOL_ACTIVITY);
+}
+
 function summarizeObject(value: Record<string, unknown>): string {
   const text = JSON.stringify(value, null, 2);
   return text.length > 240 ? `${text.slice(0, 237)}...` : text;
@@ -282,4 +327,13 @@ function summarizeLines(...parts: Array<string | undefined>): string {
     return text;
   }
   return `${text.slice(0, 237)}...`;
+}
+
+function toolSignature(tool: NonNullable<UIEvent["tool"]>): string {
+  const parts = [tool.name || "tool"];
+  const args = tool.arguments && Object.keys(tool.arguments).length > 0 ? JSON.stringify(tool.arguments) : "";
+  if (args) {
+    parts.push(args);
+  }
+  return parts.join("|");
 }
