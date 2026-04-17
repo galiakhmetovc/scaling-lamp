@@ -57,6 +57,12 @@ func TestExecutorWritesTextInsideWorkspaceScope(t *testing.T) {
 	if payload["status"] != "ok" {
 		t.Fatalf("status = %#v, want ok", payload["status"])
 	}
+	if payload["created"] != true {
+		t.Fatalf("created = %#v, want true", payload["created"])
+	}
+	if payload["overwritten"] != false {
+		t.Fatalf("overwritten = %#v, want false", payload["overwritten"])
+	}
 }
 
 func TestExecutorRejectsWriteOutsideWorkspaceScope(t *testing.T) {
@@ -217,6 +223,126 @@ func TestExecutorListsDirectoryEntriesInsideWorkspaceScope(t *testing.T) {
 	entries, ok := payload["entries"].([]any)
 	if !ok || len(entries) != 2 {
 		t.Fatalf("entries = %#v", payload["entries"])
+	}
+	if payload["entry_count"] != float64(2) {
+		t.Fatalf("entry_count = %#v, want 2", payload["entry_count"])
+	}
+}
+
+func TestExecutorWriteTextCreateModeRejectsExistingFile(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, "src", "hello.txt")
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	if err := os.WriteFile(path, []byte("old"), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	executor := filesystem.NewExecutor()
+	_, err := executor.Execute(contracts.FilesystemExecutionContract{
+		Scope: contracts.FilesystemScopePolicy{
+			Enabled:  true,
+			Strategy: "workspace_only",
+			Params: contracts.FilesystemScopeParams{
+				RootPath:      dir,
+				WriteSubpaths: []string{"src"},
+			},
+		},
+		Mutation: contracts.FilesystemMutationPolicy{
+			Enabled:  true,
+			Strategy: "allow_writes",
+			Params:   contracts.FilesystemMutationParams{AllowWrite: true},
+		},
+	}, "fs_write_text", map[string]any{
+		"path":    "src/hello.txt",
+		"content": "new",
+		"mode":    "create",
+	})
+	if err == nil {
+		t.Fatal("Execute returned nil error, want create-mode conflict")
+	}
+}
+
+func TestExecutorWriteTextOverwriteModeRejectsMissingFile(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	executor := filesystem.NewExecutor()
+	_, err := executor.Execute(contracts.FilesystemExecutionContract{
+		Scope: contracts.FilesystemScopePolicy{
+			Enabled:  true,
+			Strategy: "workspace_only",
+			Params: contracts.FilesystemScopeParams{
+				RootPath:      dir,
+				WriteSubpaths: []string{"src"},
+			},
+		},
+		Mutation: contracts.FilesystemMutationPolicy{
+			Enabled:  true,
+			Strategy: "allow_writes",
+			Params:   contracts.FilesystemMutationParams{AllowWrite: true},
+		},
+	}, "fs_write_text", map[string]any{
+		"path":    "src/hello.txt",
+		"content": "new",
+		"mode":    "overwrite",
+	})
+	if err == nil {
+		t.Fatal("Execute returned nil error, want overwrite-mode missing-file failure")
+	}
+}
+
+func TestExecutorWriteTextOverwriteModeMarksOverwrite(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, "src", "hello.txt")
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	if err := os.WriteFile(path, []byte("old"), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	executor := filesystem.NewExecutor()
+	out, err := executor.Execute(contracts.FilesystemExecutionContract{
+		Scope: contracts.FilesystemScopePolicy{
+			Enabled:  true,
+			Strategy: "workspace_only",
+			Params: contracts.FilesystemScopeParams{
+				RootPath:      dir,
+				WriteSubpaths: []string{"src"},
+			},
+		},
+		Mutation: contracts.FilesystemMutationPolicy{
+			Enabled:  true,
+			Strategy: "allow_writes",
+			Params:   contracts.FilesystemMutationParams{AllowWrite: true},
+		},
+	}, "fs_write_text", map[string]any{
+		"path":    "src/hello.txt",
+		"content": "new",
+		"mode":    "overwrite",
+	})
+	if err != nil {
+		t.Fatalf("Execute returned error: %v", err)
+	}
+	if got := mustReadFile(t, path); got != "new" {
+		t.Fatalf("file content = %q, want new", got)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal([]byte(out), &payload); err != nil {
+		t.Fatalf("unmarshal result: %v", err)
+	}
+	if payload["created"] != false {
+		t.Fatalf("created = %#v, want false", payload["created"])
+	}
+	if payload["overwritten"] != true {
+		t.Fatalf("overwritten = %#v, want true", payload["overwritten"])
+	}
+	if payload["mode"] != "overwrite" {
+		t.Fatalf("mode = %#v, want overwrite", payload["mode"])
 	}
 }
 

@@ -110,11 +110,12 @@ func defaultDefinitions() []tools.Definition {
 		{
 			ID:          "fs_write_text",
 			Name:        "fs_write_text",
-			Description: "Write full text content to a file inside the configured workspace scope.",
+			Description: "Write full text content to a file inside the configured workspace scope with explicit create, overwrite, or upsert semantics.",
 			Parameters: objectSchema(
 				map[string]any{
 					"path":    map[string]any{"type": "string"},
 					"content": map[string]any{"type": "string"},
+					"mode":    map[string]any{"type": "string", "enum": []string{"create", "overwrite", "upsert"}},
 				},
 				"path", "content",
 			),

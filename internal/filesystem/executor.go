@@ -44,7 +44,7 @@ func (e *Executor) Execute(contract contracts.FilesystemExecutionContract, toolN
 				"is_dir": entry.IsDir(),
 			})
 		}
-		return jsonString(map[string]any{"status": "ok", "tool": toolName, "path": path, "entries": out}), nil
+		return jsonString(map[string]any{"status": "ok", "tool": toolName, "path": path, "entry_count": len(out), "entries": out}), nil
 	case "fs_read_text":
 		rawPath, err := stringValue(args, "path")
 		if err != nil {
@@ -178,11 +178,33 @@ func (e *Executor) Execute(contract contracts.FilesystemExecutionContract, toolN
 		if err != nil {
 			return "", err
 		}
+		mode, _ := optionalStringValue(args, "mode")
+		if mode == "" {
+			mode = "upsert"
+		}
+		if mode != "create" && mode != "overwrite" && mode != "upsert" {
+			return "", fmt.Errorf("mode must be one of create, overwrite, upsert")
+		}
 		if contract.IO.Enabled && contract.IO.Strategy == "bounded_text_io" && contract.IO.Params.MaxWriteBytes > 0 && len(content) > contract.IO.Params.MaxWriteBytes {
 			return "", fmt.Errorf("write content exceeds max_write_bytes")
 		}
 		if !allowWrites(contract.Mutation) {
 			return "", fmt.Errorf("filesystem writes are denied by mutation policy")
+		}
+		_, statErr := os.Stat(path)
+		exists := statErr == nil
+		if statErr != nil && !os.IsNotExist(statErr) {
+			return "", fmt.Errorf("stat write target: %w", statErr)
+		}
+		switch mode {
+		case "create":
+			if exists {
+				return "", fmt.Errorf("write target already exists")
+			}
+		case "overwrite":
+			if !exists {
+				return "", fmt.Errorf("write target does not exist")
+			}
 		}
 		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 			return "", fmt.Errorf("create parent dirs: %w", err)
@@ -190,7 +212,16 @@ func (e *Executor) Execute(contract contracts.FilesystemExecutionContract, toolN
 		if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
 			return "", fmt.Errorf("write file: %w", err)
 		}
-		return jsonString(map[string]any{"status": "ok", "tool": toolName, "path": path, "bytes": len(content), "changed": true}), nil
+		return jsonString(map[string]any{
+			"status":      "ok",
+			"tool":        toolName,
+			"path":        path,
+			"mode":        mode,
+			"bytes":       len(content),
+			"changed":     true,
+			"created":     !exists,
+			"overwritten": exists,
+		}), nil
 	case "fs_patch_text":
 		rawPath, err := stringValue(args, "path")
 		if err != nil {
