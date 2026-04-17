@@ -5,6 +5,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"path/filepath"
+	"slices"
+	"strconv"
+	"strings"
 
 	"teamd/internal/artifacts"
 	"teamd/internal/contracts"
@@ -81,13 +84,18 @@ func (a *Agent) maybeOffloadToolResult(ctx context.Context, contractSet contract
 	if err != nil {
 		return "", nil, err
 	}
+	summary := summarizeOffloadedToolResult(toolName, resultText)
 	return jsonString(map[string]any{
 		"status":         "ok",
 		"tool":           toolName,
 		"offloaded":      true,
 		"artifact_ref":   record.Ref,
+		"summary":        summary,
 		"size_chars":     record.SizeChars,
 		"size_bytes":     record.SizeBytes,
+		"line_count":     countLines(resultText),
+		"token_estimate": approximateTextTokens(resultText, 4),
+		"truncated":      true,
 		"preview":        record.Preview,
 		"retrieval_hint": fmt.Sprintf("Use artifact_read with artifact_ref %q to inspect the full content.", record.Ref),
 	}), []string{record.Ref}, nil
@@ -152,5 +160,124 @@ func (a *Agent) executeArtifactCommand(ctx context.Context, contractSet contract
 		return string(body), nil
 	default:
 		return "", fmt.Errorf("artifact tool %q is not implemented", callName)
+	}
+}
+
+func summarizeOffloadedToolResult(toolName, content string) string {
+	if summary := summarizeJSONContent(content); summary != "" {
+		return summary
+	}
+	lineCount := countLines(content)
+	switch toolName {
+	case "shell_exec", "shell.exec":
+		return summarizeShellOutput(content, lineCount)
+	default:
+		return summarizeTextOutput(content, lineCount)
+	}
+}
+
+func summarizeJSONContent(content string) string {
+	trimmed := strings.TrimSpace(content)
+	if trimmed == "" || !strings.HasPrefix(trimmed, "{") {
+		return ""
+	}
+	var obj map[string]any
+	if err := json.Unmarshal([]byte(trimmed), &obj); err != nil {
+		return ""
+	}
+	keys := make([]string, 0, len(obj))
+	for key := range obj {
+		keys = append(keys, key)
+	}
+	slices.Sort(keys)
+	if len(keys) > 4 {
+		keys = keys[:4]
+	}
+	parts := []string{"json object offloaded"}
+	if len(keys) > 0 {
+		parts = append(parts, "keys="+strings.Join(keys, ","))
+	}
+	if status, ok := stringValue(obj["status"]); ok && status != "" {
+		parts = append(parts, "status="+status)
+	}
+	if count, ok := numberValue(obj["count"]); ok {
+		parts = append(parts, "count="+strconv.Itoa(count))
+	}
+	return strings.Join(parts, "; ")
+}
+
+func summarizeShellOutput(content string, lineCount int) string {
+	parts := []string{fmt.Sprintf("shell output offloaded; %d lines", lineCount)}
+	if markers := detectSeverityMarkers(content); len(markers) > 0 {
+		parts = append(parts, "markers="+strings.Join(markers, ","))
+	}
+	if line := firstSignificantLine(content); line != "" {
+		parts = append(parts, "sample="+quoteSummary(line))
+	}
+	return strings.Join(parts, "; ")
+}
+
+func summarizeTextOutput(content string, lineCount int) string {
+	parts := []string{fmt.Sprintf("text output offloaded; %d lines", lineCount)}
+	if markers := detectSeverityMarkers(content); len(markers) > 0 {
+		parts = append(parts, "markers="+strings.Join(markers, ","))
+	}
+	if line := firstSignificantLine(content); line != "" {
+		parts = append(parts, "sample="+quoteSummary(line))
+	}
+	return strings.Join(parts, "; ")
+}
+
+func detectSeverityMarkers(content string) []string {
+	lower := strings.ToLower(content)
+	out := make([]string, 0, 3)
+	for _, marker := range []string{"error", "warn", "fail"} {
+		if strings.Contains(lower, marker) {
+			out = append(out, marker)
+		}
+	}
+	return out
+}
+
+func firstSignificantLine(content string) string {
+	for _, line := range strings.Split(content, "\n") {
+		line = strings.TrimSpace(line)
+		if line != "" {
+			return line
+		}
+	}
+	return ""
+}
+
+func quoteSummary(v string) string {
+	v = strings.TrimSpace(v)
+	if len(v) > 72 {
+		v = strings.TrimSpace(v[:72]) + "..."
+	}
+	return strconv.Quote(v)
+}
+
+func countLines(text string) int {
+	if text == "" {
+		return 0
+	}
+	return strings.Count(text, "\n") + 1
+}
+
+func stringValue(v any) (string, bool) {
+	s, ok := v.(string)
+	return s, ok
+}
+
+func numberValue(v any) (int, bool) {
+	switch n := v.(type) {
+	case float64:
+		return int(n), true
+	case int:
+		return n, true
+	case int64:
+		return int(n), true
+	default:
+		return 0, false
 	}
 }
