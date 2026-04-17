@@ -178,17 +178,9 @@ func (m *model) loadSessions(resumeID string) error {
 			return nil
 		}
 	}
-	session, err := m.client.CreateSession(context.Background())
-	if err != nil {
-		return err
+	if len(m.sessionOrder) > 0 {
+		m.activeSessionID = m.sessionOrder[0]
 	}
-	state := newSessionState(m.defaultOverrides())
-	state.SessionID = session.SessionID
-	state.Snapshot = session
-	state.Loaded = true
-	m.sessions[session.SessionID] = state
-	m.sessionOrder = append([]string{session.SessionID}, m.sessionOrder...)
-	m.activeSessionID = session.SessionID
 	return nil
 }
 

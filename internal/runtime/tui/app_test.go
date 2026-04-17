@@ -43,8 +43,20 @@ func TestNewModelCreatesSessionAndRendersTopTabs(t *testing.T) {
 		Now:         func() time.Time { return time.Date(2026, 4, 14, 20, 35, 0, 0, time.UTC) },
 		NewID:       func(prefix string) string { return prefix + "-1" },
 	}
+	if err := agent.RecordEvent(context.Background(), eventing.Event{
+		ID:               "evt-session-created",
+		Kind:             eventing.EventSessionCreated,
+		OccurredAt:       agent.Now(),
+		AggregateID:      "session-1",
+		AggregateType:    eventing.AggregateSession,
+		AggregateVersion: 1,
+		Payload:          map[string]any{"session_id": "session-1"},
+	}); err != nil {
+		t.Fatalf("RecordEvent session created: %v", err)
+	}
 
-	m, err := newModel(context.Background(), agent, "")
+	sessionID := seedSessionForTUITest(t, agent)
+	m, err := newModel(context.Background(), agent, sessionID)
 	if err != nil {
 		t.Fatalf("newModel returned error: %v", err)
 	}
@@ -208,11 +220,11 @@ func TestPlanViewShowsNotesAndComputedStateForSelectedTask(t *testing.T) {
 		Now:   func() time.Time { return time.Date(2026, 4, 15, 5, 5, 0, 0, time.UTC) },
 		NewID: func(prefix string) string { return prefix + "-1" },
 	}
-	m, err := newModel(context.Background(), agent, "")
+	sessionID := seedSessionForTUITest(t, agent)
+	m, err := newModel(context.Background(), agent, sessionID)
 	if err != nil {
 		t.Fatalf("newModel returned error: %v", err)
 	}
-	sessionID := m.activeSessionID
 	events := []eventing.Event{
 		{
 			Kind:          eventing.EventPlanCreated,
@@ -280,7 +292,8 @@ func TestSettingsFormShowsDirtyStateAndResets(t *testing.T) {
 		NewID:       func(prefix string) string { return prefix + "-1" },
 	}
 
-	m, err := newModel(context.Background(), agent, "")
+	resumeID := seedSessionForTUITest(t, agent)
+	m, err := newModel(context.Background(), agent, resumeID)
 	if err != nil {
 		t.Fatalf("newModel returned error: %v", err)
 	}
@@ -323,7 +336,8 @@ func TestMouseWheelScrollsChatViewportFromLegacyMouseType(t *testing.T) {
 		Now:         func() time.Time { return time.Date(2026, 4, 15, 8, 30, 0, 0, time.UTC) },
 		NewID:       func(prefix string) string { return prefix + "-1" },
 	}
-	m, err := newModel(context.Background(), agent, "")
+	sessionID := seedSessionForTUITest(t, agent)
+	m, err := newModel(context.Background(), agent, sessionID)
 	if err != nil {
 		t.Fatalf("newModel returned error: %v", err)
 	}
@@ -367,7 +381,8 @@ func TestPlanViewKeepsTopTabsOnNarrowWidth(t *testing.T) {
 		Now:         func() time.Time { return time.Date(2026, 4, 15, 8, 31, 0, 0, time.UTC) },
 		NewID:       func(prefix string) string { return prefix + "-1" },
 	}
-	m, err := newModel(context.Background(), agent, "")
+	resumeID := seedSessionForTUITest(t, agent)
+	m, err := newModel(context.Background(), agent, resumeID)
 	if err != nil {
 		t.Fatalf("newModel returned error: %v", err)
 	}
@@ -477,7 +492,8 @@ func TestChatViewShowsSessionStatusBarAndQueuedDrafts(t *testing.T) {
 		NewID:       func(prefix string) string { return prefix + "-1" },
 	}
 
-	m, err := newModel(context.Background(), agent, "")
+	resumeID := seedSessionForTUITest(t, agent)
+	m, err := newModel(context.Background(), agent, resumeID)
 	if err != nil {
 		t.Fatalf("newModel returned error: %v", err)
 	}
@@ -532,7 +548,8 @@ func TestChatEnterQueuesDraftWhileMainRunActive(t *testing.T) {
 		NewID:       func(prefix string) string { return prefix + "-1" },
 	}
 
-	m, err := newModel(context.Background(), agent, "")
+	resumeID := seedSessionForTUITest(t, agent)
+	m, err := newModel(context.Background(), agent, resumeID)
 	if err != nil {
 		t.Fatalf("newModel returned error: %v", err)
 	}
@@ -577,7 +594,8 @@ func TestChatTabQueuesDraftWithoutSwitchingPanels(t *testing.T) {
 		NewID:       func(prefix string) string { return prefix + "-1" },
 	}
 
-	m, err := newModel(context.Background(), agent, "")
+	resumeID := seedSessionForTUITest(t, agent)
+	m, err := newModel(context.Background(), agent, resumeID)
 	if err != nil {
 		t.Fatalf("newModel returned error: %v", err)
 	}
@@ -618,7 +636,8 @@ func TestChatRunCompletionDispatchesNextQueuedDraft(t *testing.T) {
 		NewID:       func(prefix string) string { return prefix + "-1" },
 	}
 
-	m, err := newModel(context.Background(), agent, "")
+	resumeID := seedSessionForTUITest(t, agent)
+	m, err := newModel(context.Background(), agent, resumeID)
 	if err != nil {
 		t.Fatalf("newModel returned error: %v", err)
 	}
@@ -667,7 +686,8 @@ func TestChatDeleteRemovesSelectedQueuedDraft(t *testing.T) {
 		NewID:       func(prefix string) string { return prefix + "-1" },
 	}
 
-	m, err := newModel(context.Background(), agent, "")
+	resumeID := seedSessionForTUITest(t, agent)
+	m, err := newModel(context.Background(), agent, resumeID)
 	if err != nil {
 		t.Fatalf("newModel returned error: %v", err)
 	}
@@ -706,7 +726,8 @@ func TestChatViewKeepsLayoutWithinWindowHeight(t *testing.T) {
 		NewID:       func(prefix string) string { return prefix + "-1" },
 	}
 
-	m, err := newModel(context.Background(), agent, "")
+	resumeID := seedSessionForTUITest(t, agent)
+	m, err := newModel(context.Background(), agent, resumeID)
 	if err != nil {
 		t.Fatalf("newModel returned error: %v", err)
 	}
@@ -743,7 +764,8 @@ func TestGlobalCtrlArrowSwitchesTabs(t *testing.T) {
 		Now:         func() time.Time { return time.Date(2026, 4, 16, 14, 20, 0, 0, time.UTC) },
 		NewID:       func(prefix string) string { return prefix + "-1" },
 	}
-	m, err := newModel(context.Background(), agent, "")
+	resumeID := seedSessionForTUITest(t, agent)
+	m, err := newModel(context.Background(), agent, resumeID)
 	if err != nil {
 		t.Fatalf("newModel returned error: %v", err)
 	}
@@ -781,7 +803,8 @@ func TestChatCtrlXCancelsActiveRun(t *testing.T) {
 		Now:         func() time.Time { return time.Date(2026, 4, 16, 14, 21, 0, 0, time.UTC) },
 		NewID:       func(prefix string) string { return prefix + "-1" },
 	}
-	m, err := newModel(context.Background(), agent, "")
+	resumeID := seedSessionForTUITest(t, agent)
+	m, err := newModel(context.Background(), agent, resumeID)
 	if err != nil {
 		t.Fatalf("newModel returned error: %v", err)
 	}
@@ -825,7 +848,8 @@ func TestChatViewShowsInterjectionHintWhileRunActive(t *testing.T) {
 		Now:         func() time.Time { return time.Date(2026, 4, 16, 14, 22, 0, 0, time.UTC) },
 		NewID:       func(prefix string) string { return prefix + "-1" },
 	}
-	m, err := newModel(context.Background(), agent, "")
+	resumeID := seedSessionForTUITest(t, agent)
+	m, err := newModel(context.Background(), agent, resumeID)
 	if err != nil {
 		t.Fatalf("newModel returned error: %v", err)
 	}
@@ -860,7 +884,8 @@ func TestChatEnterWhileRunActiveReportsQueuedInterjection(t *testing.T) {
 		Now:         func() time.Time { return time.Date(2026, 4, 16, 14, 23, 0, 0, time.UTC) },
 		NewID:       func(prefix string) string { return prefix + "-1" },
 	}
-	m, err := newModel(context.Background(), agent, "")
+	resumeID := seedSessionForTUITest(t, agent)
+	m, err := newModel(context.Background(), agent, resumeID)
 	if err != nil {
 		t.Fatalf("newModel returned error: %v", err)
 	}
@@ -896,7 +921,8 @@ func TestChatQueueViewShowsInterjectionAffordances(t *testing.T) {
 		Now:         func() time.Time { return time.Date(2026, 4, 16, 14, 24, 0, 0, time.UTC) },
 		NewID:       func(prefix string) string { return prefix + "-1" },
 	}
-	m, err := newModel(context.Background(), agent, "")
+	resumeID := seedSessionForTUITest(t, agent)
+	m, err := newModel(context.Background(), agent, resumeID)
 	if err != nil {
 		t.Fatalf("newModel returned error: %v", err)
 	}
@@ -933,7 +959,8 @@ func TestChatHeaderShowsRunAndQueueBadges(t *testing.T) {
 		Now:         func() time.Time { return time.Date(2026, 4, 16, 14, 30, 0, 0, time.UTC) },
 		NewID:       func(prefix string) string { return prefix + "-1" },
 	}
-	m, err := newModel(context.Background(), agent, "")
+	resumeID := seedSessionForTUITest(t, agent)
+	m, err := newModel(context.Background(), agent, resumeID)
 	if err != nil {
 		t.Fatalf("newModel returned error: %v", err)
 	}
@@ -969,7 +996,8 @@ func TestChatViewShowsInterjectionHistory(t *testing.T) {
 		Now:         func() time.Time { return time.Date(2026, 4, 16, 14, 31, 0, 0, time.UTC) },
 		NewID:       func(prefix string) string { return prefix + "-1" },
 	}
-	m, err := newModel(context.Background(), agent, "")
+	resumeID := seedSessionForTUITest(t, agent)
+	m, err := newModel(context.Background(), agent, resumeID)
 	if err != nil {
 		t.Fatalf("newModel returned error: %v", err)
 	}
@@ -1012,7 +1040,8 @@ func TestChatViewShowsLiveToolActivity(t *testing.T) {
 		NewID:       func(prefix string) string { return prefix + "-1" },
 	}
 
-	m, err := newModel(context.Background(), agent, "")
+	resumeID := seedSessionForTUITest(t, agent)
+	m, err := newModel(context.Background(), agent, resumeID)
 	if err != nil {
 		t.Fatalf("newModel returned error: %v", err)
 	}
@@ -1057,7 +1086,8 @@ func TestToolDetailsShowFullResultText(t *testing.T) {
 		NewID:       func(prefix string) string { return prefix + "-1" },
 	}
 
-	m, err := newModel(context.Background(), agent, "")
+	resumeID := seedSessionForTUITest(t, agent)
+	m, err := newModel(context.Background(), agent, resumeID)
 	if err != nil {
 		t.Fatalf("newModel returned error: %v", err)
 	}
@@ -1094,7 +1124,8 @@ func TestF6TogglesMouseCaptureAndFooterIndicator(t *testing.T) {
 		Now:         func() time.Time { return time.Date(2026, 4, 15, 10, 0, 0, 0, time.UTC) },
 		NewID:       func(prefix string) string { return prefix + "-1" },
 	}
-	m, err := newModel(context.Background(), agent, "")
+	resumeID := seedSessionForTUITest(t, agent)
+	m, err := newModel(context.Background(), agent, resumeID)
 	if err != nil {
 		t.Fatalf("newModel returned error: %v", err)
 	}
@@ -1250,11 +1281,11 @@ func TestPlanViewRendersMarkdownFormattingInBrowseMode(t *testing.T) {
 		Now:   func() time.Time { return time.Date(2026, 4, 15, 10, 21, 0, 0, time.UTC) },
 		NewID: func(prefix string) string { return prefix + "-1" },
 	}
-	m, err := newModel(context.Background(), agent, "")
+	sessionID := seedSessionForTUITest(t, agent)
+	m, err := newModel(context.Background(), agent, sessionID)
 	if err != nil {
 		t.Fatalf("newModel returned error: %v", err)
 	}
-	sessionID := m.activeSessionID
 	events := []eventing.Event{
 		{
 			Kind:          eventing.EventPlanCreated,
@@ -1384,11 +1415,11 @@ func TestPlanArrowNavigationChangesSelectedTaskAndViewportFitsPane(t *testing.T)
 		Now:   func() time.Time { return time.Date(2026, 4, 15, 10, 41, 0, 0, time.UTC) },
 		NewID: func(prefix string) string { return prefix + "-1" },
 	}
-	m, err := newModel(context.Background(), agent, "")
+	sessionID := seedSessionForTUITest(t, agent)
+	m, err := newModel(context.Background(), agent, sessionID)
 	if err != nil {
 		t.Fatalf("newModel returned error: %v", err)
 	}
-	sessionID := m.activeSessionID
 	events := []eventing.Event{
 		{Kind: eventing.EventPlanCreated, AggregateID: "plan-1", AggregateType: eventing.AggregatePlan, Payload: map[string]any{"session_id": sessionID, "plan_id": "plan-1", "goal": "Refactor auth"}},
 		{Kind: eventing.EventTaskAdded, AggregateID: "task-1", AggregateType: eventing.AggregatePlanTask, Payload: map[string]any{"session_id": sessionID, "plan_id": "plan-1", "task_id": "task-1", "description": "First task", "status": "todo", "order": 1, "depends_on": []any{}}},
@@ -1470,8 +1501,8 @@ func TestToolsViewShowsPendingShellApproval(t *testing.T) {
 		Now:   func() time.Time { return time.Date(2026, 4, 15, 12, 0, 0, 0, time.UTC) },
 		NewID: func(prefix string) string { return prefix + "-1" },
 	}
-
-	m, err := newModel(context.Background(), agent, "")
+	sessionID := seedSessionForTUITest(t, agent)
+	m, err := newModel(context.Background(), agent, sessionID)
 	if err != nil {
 		t.Fatalf("newModel returned error: %v", err)
 	}
@@ -1544,8 +1575,8 @@ func TestToolsViewCanKillRunningShellCommand(t *testing.T) {
 		Now:   func() time.Time { return time.Date(2026, 4, 15, 12, 5, 0, 0, time.UTC) },
 		NewID: func(prefix string) string { return prefix + "-1" },
 	}
-
-	m, err := newModel(context.Background(), agent, "")
+	sessionID := seedSessionForTUITest(t, agent)
+	m, err := newModel(context.Background(), agent, sessionID)
 	if err != nil {
 		t.Fatalf("newModel returned error: %v", err)
 	}
@@ -1599,7 +1630,8 @@ func TestToolsViewReadsRunningCommandsFromProjection(t *testing.T) {
 		Now:   func() time.Time { return time.Date(2026, 4, 15, 12, 10, 0, 0, time.UTC) },
 		NewID: func(prefix string) string { return prefix + "-1" },
 	}
-	m, err := newModel(context.Background(), agent, "")
+	sessionID := seedSessionForTUITest(t, agent)
+	m, err := newModel(context.Background(), agent, sessionID)
 	if err != nil {
 		t.Fatalf("newModel returned error: %v", err)
 	}
@@ -1608,7 +1640,7 @@ func TestToolsViewReadsRunningCommandsFromProjection(t *testing.T) {
 		AggregateID:   "cmd-1",
 		AggregateType: eventing.AggregateShellCommand,
 		Payload: map[string]any{
-			"session_id": m.activeSessionID,
+			"session_id": sessionID,
 			"run_id":     "run-1",
 			"command":    "sleep",
 			"args":       []string{"2"},
@@ -1632,6 +1664,15 @@ func eventSessionCreated(sessionID string) eventing.Event {
 		AggregateType: eventing.AggregateSession,
 		Payload:       map[string]any{"session_id": sessionID},
 	}
+}
+
+func seedSessionForTUITest(t *testing.T, agent *runtime.Agent) string {
+	t.Helper()
+	sessionID := "session-1"
+	if err := agent.RecordEvent(context.Background(), eventSessionCreated(sessionID)); err != nil {
+		t.Fatalf("RecordEvent session created: %v", err)
+	}
+	return sessionID
 }
 
 func eventMessage(sessionID, role, content string) eventing.Event {

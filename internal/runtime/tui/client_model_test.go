@@ -24,6 +24,7 @@ type stubOperatorClient struct {
 	ws        <-chan daemon.WebsocketEnvelope
 	history   SessionHistoryChunk
 	historyCalls int
+	createCalls int
 	renamedTo string
 	deletedSessionID string
 	savedPrompt string
@@ -45,6 +46,7 @@ func (c *stubOperatorClient) ListSessions(context.Context) ([]SessionSummary, er
 }
 
 func (c *stubOperatorClient) CreateSession(context.Context) (daemon.SessionSnapshot, error) {
+	c.createCalls++
 	return c.snapshot, nil
 }
 
@@ -220,6 +222,41 @@ func TestNewModelWithClientInitializesWithoutRuntimeAgent(t *testing.T) {
 	got := modelAfter.View()
 	if got == "" {
 		t.Fatalf("View returned empty output")
+	}
+}
+
+func TestNewModelWithClientDoesNotAutoCreateSessionWhenCatalogEmpty(t *testing.T) {
+	ws := make(chan daemon.WebsocketEnvelope)
+	close(ws)
+	client := &stubOperatorClient{
+		sessions: nil,
+		snapshot: daemon.SessionSnapshot{
+			SessionID: "session-created",
+			Prompt: daemon.SessionPromptSnapshot{
+				Default:   "default prompt",
+				Effective: "default prompt",
+			},
+		},
+		ws: ws,
+	}
+
+	m, err := newModelWithClient(context.Background(), client, "")
+	if err != nil {
+		t.Fatalf("newModelWithClient returned error: %v", err)
+	}
+	if client.createCalls != 0 {
+		t.Fatalf("createCalls = %d, want 0", client.createCalls)
+	}
+	if m.activeSessionID != "" {
+		t.Fatalf("activeSessionID = %q, want empty", m.activeSessionID)
+	}
+	if len(m.sessionOrder) != 0 {
+		t.Fatalf("sessionOrder len = %d, want 0", len(m.sessionOrder))
+	}
+	modelAfter, _ := (&m).Update(tea.WindowSizeMsg{Width: 100, Height: 30})
+	got := modelAfter.View()
+	if !strings.Contains(got, "No active session") {
+		t.Fatalf("view missing empty-state text: %q", got)
 	}
 }
 
