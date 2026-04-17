@@ -11,6 +11,8 @@ spec:
       - set_task_status
       - add_task_note
       - edit_task
+      - plan_snapshot
+      - plan_lint
       - fs_list
       - fs_read_lines
       - fs_search_text

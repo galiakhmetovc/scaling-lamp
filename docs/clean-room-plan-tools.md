@@ -36,11 +36,14 @@ Currently exposed built-in plan tools:
 - `set_task_status`
 - `add_task_note`
 - `edit_task`
+- `plan_snapshot`
+- `plan_lint`
 
 Current built-in tool schema support:
 
 - `add_task.depends_on[]`
 - `edit_task.new_depends_on[]`
+- read-only snapshot and lint tools with empty parameter objects
 
 ## Current Execution Path
 
@@ -95,7 +98,7 @@ Current shipped `zai-smoke` config enables:
 
 - `PlanToolContract`
 - `ToolContract` allowlist for the five plan tools
-- `ToolExecutionContract` allowlist for the same plan tools
+- `ToolExecutionContract` allowlist for the same plan tools plus read-only `plan_snapshot` and `plan_lint`
 - `plan_head` projection in runtime
 
 So the live `zai-smoke` agent can now:

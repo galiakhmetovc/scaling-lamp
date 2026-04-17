@@ -487,6 +487,7 @@ func (a *Agent) executeDelegationCommand(ctx context.Context, contractSet contra
 }
 
 func (a *Agent) executePlanCommand(sessionID string, active projections.ActivePlanSnapshot, service *plans.Service, source string, call provider.ToolCall) ([]eventing.Event, string, error) {
+	head, _ := a.CurrentPlanHead(sessionID)
 	switch call.Name {
 	case "init_plan":
 		if active.Plan.ID != "" {
@@ -594,6 +595,10 @@ func (a *Agent) executePlanCommand(sessionID string, active projections.ActivePl
 			return nil, "", fmt.Errorf("tool call %q: %w", call.Name, err)
 		}
 		return events, jsonString(map[string]any{"status": "ok", "tool": call.Name, "task_id": taskID}), nil
+	case "plan_snapshot":
+		return nil, jsonString(buildPlanSnapshotPayload(active, head)), nil
+	case "plan_lint":
+		return nil, jsonString(buildPlanLintPayload(active, head)), nil
 	}
 	return nil, "", fmt.Errorf("tool call %q is not implemented", call.Name)
 }

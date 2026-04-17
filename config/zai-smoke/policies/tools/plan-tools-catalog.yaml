@@ -11,3 +11,5 @@ spec:
       - set_task_status
       - add_task_note
       - edit_task
+      - plan_snapshot
+      - plan_lint

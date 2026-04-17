@@ -114,5 +114,23 @@ func defaultPlanToolDefinitions() []Definition {
 				"required": []string{"task_id", "new_description"},
 			},
 		},
+		{
+			ID:          "plan_snapshot",
+			Name:        "plan_snapshot",
+			Description: "Read the full current active plan state, including tasks, statuses, dependencies, blocked reasons, notes, and computed readiness.",
+			Parameters: map[string]any{
+				"type":       "object",
+				"properties": map[string]any{},
+			},
+		},
+		{
+			ID:          "plan_lint",
+			Name:        "plan_lint",
+			Description: "Run read-only diagnostics against the active plan and return issues such as blocked tasks without reasons, dangling dependencies, multiple in-progress tasks, and stale structure.",
+			Parameters: map[string]any{
+				"type":       "object",
+				"properties": map[string]any{},
+			},
+		},
 	}
 }
