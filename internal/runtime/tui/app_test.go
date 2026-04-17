@@ -129,6 +129,9 @@ func TestChatViewRendersTimelineEntries(t *testing.T) {
 	if !strings.Contains(got, "Ping") {
 		t.Fatalf("view missing user message: %q", got)
 	}
+	if !strings.Contains(got, "2026-04-14 20:40 USER:") {
+		t.Fatalf("view missing user timestamp: %q", got)
+	}
 	if !strings.Contains(got, "Tool") {
 		t.Fatalf("view missing tool timeline line: %q", got)
 	}
@@ -179,13 +182,16 @@ func TestToolsViewRendersSelectedEntryDetails(t *testing.T) {
 		t.Fatal("active session state is nil")
 	}
 	state.ToolLog = []toolLogEntry{
-		{Activity: runtime.ToolActivity{Phase: runtime.ToolActivityPhaseStarted, Name: "fs_list", Arguments: map[string]any{"path": "."}}},
-		{Activity: runtime.ToolActivity{Phase: runtime.ToolActivityPhaseCompleted, Name: "shell_exec", Arguments: map[string]any{"command": "rg"}, ResultText: "ok"}},
+		{Activity: runtime.ToolActivity{Phase: runtime.ToolActivityPhaseStarted, OccurredAt: time.Date(2026, 4, 15, 4, 59, 0, 0, time.UTC), Name: "fs_list", Arguments: map[string]any{"path": "."}}},
+		{Activity: runtime.ToolActivity{Phase: runtime.ToolActivityPhaseCompleted, OccurredAt: time.Date(2026, 4, 15, 5, 0, 0, 0, time.UTC), Name: "shell_exec", Arguments: map[string]any{"command": "rg"}, ResultText: "ok"}},
 	}
 	modelAfter, _ := (&m).Update(tea.WindowSizeMsg{Width: 120, Height: 40})
 	got := modelAfter.View()
 	if !strings.Contains(got, "Tool Details") {
 		t.Fatalf("view missing details pane: %q", got)
+	}
+	if !strings.Contains(got, "Time: 2026-04-15 05:00") {
+		t.Fatalf("view missing tool timestamp details: %q", got)
 	}
 	if !strings.Contains(got, "shell_exec") {
 		t.Fatalf("view missing selected tool details: %q", got)
@@ -1532,6 +1538,9 @@ func TestToolsViewShowsPendingShellApproval(t *testing.T) {
 	if !strings.Contains(got, "allow forever") || !strings.Contains(got, "deny forever") {
 		t.Fatalf("tools details missing persistent approval actions: %q", got)
 	}
+	if !strings.Contains(got, "Time: 2026-04-15 12:00") {
+		t.Fatalf("tools details missing approval timestamp: %q", got)
+	}
 }
 
 func TestToolsViewCanKillRunningShellCommand(t *testing.T) {
@@ -1681,6 +1690,7 @@ func seedSessionForTUITest(t *testing.T, agent *runtime.Agent) string {
 func eventMessage(sessionID, role, content string) eventing.Event {
 	return eventing.Event{
 		Kind:          eventing.EventMessageRecorded,
+		OccurredAt:    time.Date(2026, 4, 14, 20, 40, 0, 0, time.UTC),
 		AggregateID:   sessionID,
 		AggregateType: eventing.AggregateSession,
 		Payload: map[string]any{
@@ -1694,6 +1704,7 @@ func eventMessage(sessionID, role, content string) eventing.Event {
 func eventToolStarted(sessionID, toolName string) eventing.Event {
 	return eventing.Event{
 		Kind:          eventing.EventToolCallStarted,
+		OccurredAt:    time.Date(2026, 4, 14, 20, 40, 1, 0, time.UTC),
 		AggregateID:   "run-1",
 		AggregateType: eventing.AggregateRun,
 		Payload: map[string]any{
@@ -1706,6 +1717,7 @@ func eventToolStarted(sessionID, toolName string) eventing.Event {
 func eventTaskAdded(sessionID, description string) eventing.Event {
 	return eventing.Event{
 		Kind:          eventing.EventTaskAdded,
+		OccurredAt:    time.Date(2026, 4, 14, 20, 40, 2, 0, time.UTC),
 		AggregateID:   "task-1",
 		AggregateType: eventing.AggregatePlanTask,
 		Payload: map[string]any{

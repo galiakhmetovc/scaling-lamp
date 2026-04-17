@@ -68,6 +68,7 @@ type PendingApprovalView struct {
 	CommandID  string
 	SessionID  string
 	RunID      string
+	OccurredAt time.Time
 	ToolName   string
 	Command    string
 	Args       []string
@@ -514,6 +515,7 @@ func (e *Executor) RecoverApproval(contract contracts.ShellExecutionContract, vi
 			CommandID:  view.CommandID,
 			SessionID:  view.SessionID,
 			RunID:      view.RunID,
+			OccurredAt: view.OccurredAt,
 			ToolName:   firstNonEmpty(view.ToolName, "shell_start"),
 			Command:    view.Command,
 			Args:       append([]string{}, view.Args...),
@@ -1217,6 +1219,7 @@ func (e *Executor) queueApproval(ctx context.Context, toolName string, contract 
 			CommandID:  commandID,
 			SessionID:  meta.SessionID,
 			RunID:      meta.RunID,
+			OccurredAt: metaNow(meta),
 			ToolName:   toolName,
 			Command:    command,
 			Args:       append([]string{}, args...),

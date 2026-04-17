@@ -104,7 +104,7 @@ func (m *model) renderChatViewport(state *sessionState) {
 	for _, item := range state.Snapshot.Timeline {
 		switch item.Kind {
 		case projections.ChatTimelineItemMessage:
-			lines = append(lines, strings.ToUpper(item.Role)+":")
+			lines = append(lines, prefixTimestamp(item.OccurredAt, strings.ToUpper(item.Role)+":"))
 			content := item.Content
 			if state.Overrides.RenderMarkdown {
 				rendered, err := renderMarkdown(content, state.Overrides.MarkdownStyle, contentWidth)
@@ -118,9 +118,9 @@ func (m *model) renderChatViewport(state *sessionState) {
 			}
 			lines = append(lines, content, "")
 		case projections.ChatTimelineItemTool:
-			lines = append(lines, ellipsizeForWidth(item.Content, contentWidth), "")
+			lines = append(lines, ellipsizeForWidth(prefixTimestamp(item.OccurredAt, item.Content), contentWidth), "")
 		default:
-			lines = append(lines, m.renderMarkdownBlock(item.Content, state.Overrides.MarkdownStyle, contentWidth), "")
+			lines = append(lines, prefixTimestamp(item.OccurredAt, ""), m.renderMarkdownBlock(item.Content, state.Overrides.MarkdownStyle, contentWidth), "")
 		}
 	}
 	if state.Streaming.Len() > 0 {

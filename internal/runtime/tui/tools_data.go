@@ -40,6 +40,7 @@ func compactToolActivityLine(activity runtime.ToolActivity, width int) string {
 	default:
 		line = base
 	}
+	line = prefixTimestamp(activity.OccurredAt, line)
 	return ellipsizeForWidth(line, width)
 }
 

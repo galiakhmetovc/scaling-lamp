@@ -507,3 +507,41 @@ func TestChatInputApproveShortcutHandlesPendingApproval(t *testing.T) {
 		t.Fatalf("statusMessage = %q, want approval granted", mm.statusMessage)
 	}
 }
+
+func TestSessionsViewShowsHumanReadableTimestamps(t *testing.T) {
+	ws := make(chan daemon.WebsocketEnvelope)
+	close(ws)
+	now := time.Date(2026, 4, 17, 12, 5, 0, 0, time.UTC)
+	client := &stubOperatorClient{
+		sessions: []SessionSummary{{
+			SessionID:    "session-1",
+			Title:        "Main session",
+			CreatedAt:    now.Add(-2 * time.Hour),
+			LastActivity: now,
+			MessageCount: 3,
+		}},
+		snapshot: daemon.SessionSnapshot{
+			SessionID:    "session-1",
+			Title:        "Main session",
+			CreatedAt:    now.Add(-2 * time.Hour),
+			LastActivity: now,
+			Prompt: daemon.SessionPromptSnapshot{
+				Default:   "default prompt",
+				Effective: "default prompt",
+			},
+		},
+		ws: ws,
+	}
+
+	m, err := newModelWithClient(context.Background(), client, "")
+	if err != nil {
+		t.Fatalf("newModelWithClient returned error: %v", err)
+	}
+	view := m.viewSessions()
+	if !strings.Contains(view, "created 2026-04-17 10:05") {
+		t.Fatalf("sessions view missing created timestamp: %q", view)
+	}
+	if !strings.Contains(view, "active 2026-04-17 12:05") {
+		t.Fatalf("sessions view missing activity timestamp: %q", view)
+	}
+}

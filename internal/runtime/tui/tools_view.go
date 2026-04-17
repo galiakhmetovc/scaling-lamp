@@ -34,7 +34,7 @@ func (m *model) renderToolsViewport(state *sessionState) {
 	if len(approvals) > 0 {
 		lines = append(lines, "Pending Approvals")
 		for i, approval := range approvals {
-			line := toolLineForCommand(approval.CommandID, approval.ToolName, approval.Command, approval.Args)
+			line := prefixTimestamp(approval.OccurredAt, toolLineForCommand(approval.CommandID, approval.ToolName, approval.Command, approval.Args))
 			if m.toolsFocus == toolsFocusApprovals && i == m.approvalCursor {
 				line = "> " + line
 			} else {
@@ -47,7 +47,7 @@ func (m *model) renderToolsViewport(state *sessionState) {
 	if len(commands) > 0 {
 		lines = append(lines, "Running Shell Commands")
 		for i, command := range commands {
-			line := toolLineForCommand(command.CommandID, command.Status, command.Command, command.Args)
+			line := prefixTimestamp(command.OccurredAt, toolLineForCommand(command.CommandID, command.Status, command.Command, command.Args))
 			if m.toolsFocus == toolsFocusCommands && i == m.commandCursor {
 				line = "> " + line
 			} else {
@@ -63,7 +63,7 @@ func (m *model) renderToolsViewport(state *sessionState) {
 		m.toolCursor = len(entries) - 1
 	}
 	for i, entry := range entries {
-		line := "[" + string(entry.Activity.Phase) + "] " + entry.Activity.Name
+		line := prefixTimestamp(entry.Activity.OccurredAt, "["+string(entry.Activity.Phase)+"] "+entry.Activity.Name)
 		if entry.Activity.ErrorText != "" {
 			line += " | error: " + entry.Activity.ErrorText
 		} else if entry.Activity.ResultText != "" {
@@ -86,6 +86,7 @@ func (m *model) renderToolDetails(state *sessionState) string {
 		return strings.Join([]string{
 			"Pending Approval",
 			"",
+			"Time: " + humanTimestamp(approval.OccurredAt),
 			"Tool: " + approval.ToolName,
 			"Command: " + approval.Command,
 			"Args: " + strings.Join(approval.Args, " "),
@@ -102,6 +103,7 @@ func (m *model) renderToolDetails(state *sessionState) string {
 		lines := []string{
 			"Running Shell Command",
 			"",
+			"Time: " + humanTimestamp(command.OccurredAt),
 			"Command ID: " + command.CommandID,
 			"Command: " + command.Command,
 			"Args: " + strings.Join(command.Args, " "),
@@ -125,6 +127,7 @@ func (m *model) renderToolDetails(state *sessionState) string {
 	lines := []string{
 		"Tool Details",
 		"",
+		"Time: " + humanTimestamp(entry.Activity.OccurredAt),
 		"Name: " + entry.Activity.Name,
 		"Phase: " + string(entry.Activity.Phase),
 	}

@@ -4,26 +4,28 @@ import (
 	"encoding/json"
 	"fmt"
 	"sort"
+	"time"
 
 	"teamd/internal/runtime/eventing"
 )
 
 type ShellCommandView struct {
-	CommandID   string   `json:"command_id"`
-	SessionID   string   `json:"session_id"`
-	RunID       string   `json:"run_id"`
-	ApprovalID  string   `json:"approval_id,omitempty"`
-	ToolName    string   `json:"tool_name,omitempty"`
-	Message     string   `json:"message,omitempty"`
-	Command     string   `json:"command"`
-	Args        []string `json:"args,omitempty"`
-	Cwd         string   `json:"cwd,omitempty"`
-	Status      string   `json:"status"`
-	NextOffset  int      `json:"next_offset"`
-	LastChunk   string   `json:"last_chunk"`
-	ExitCode    *int     `json:"exit_code,omitempty"`
-	Error       string   `json:"error,omitempty"`
-	KillPending bool     `json:"kill_pending,omitempty"`
+	CommandID   string    `json:"command_id"`
+	SessionID   string    `json:"session_id"`
+	RunID       string    `json:"run_id"`
+	OccurredAt  time.Time `json:"occurred_at"`
+	ApprovalID  string    `json:"approval_id,omitempty"`
+	ToolName    string    `json:"tool_name,omitempty"`
+	Message     string    `json:"message,omitempty"`
+	Command     string    `json:"command"`
+	Args        []string  `json:"args,omitempty"`
+	Cwd         string    `json:"cwd,omitempty"`
+	Status      string    `json:"status"`
+	NextOffset  int       `json:"next_offset"`
+	LastChunk   string    `json:"last_chunk"`
+	ExitCode    *int      `json:"exit_code,omitempty"`
+	Error       string    `json:"error,omitempty"`
+	KillPending bool      `json:"kill_pending,omitempty"`
 }
 
 type ShellCommandSnapshot struct {
@@ -52,6 +54,7 @@ func (p *ShellCommandProjection) Apply(event eventing.Event) error {
 			CommandID:  event.AggregateID,
 			SessionID:  stringPayload(event.Payload, "session_id"),
 			RunID:      stringPayload(event.Payload, "run_id"),
+			OccurredAt: event.OccurredAt,
 			ApprovalID: stringPayload(event.Payload, "approval_id"),
 			ToolName:   stringPayload(event.Payload, "tool_name"),
 			Message:    stringPayload(event.Payload, "approval_message"),
@@ -66,6 +69,7 @@ func (p *ShellCommandProjection) Apply(event eventing.Event) error {
 		view.CommandID = event.AggregateID
 		view.SessionID = firstNonEmpty(view.SessionID, stringPayload(event.Payload, "session_id"))
 		view.RunID = firstNonEmpty(view.RunID, stringPayload(event.Payload, "run_id"))
+		view.OccurredAt = event.OccurredAt
 		view.Status = "approved"
 		p.snapshot.Commands[event.AggregateID] = view
 	case eventing.EventShellCommandApprovalDenied:
@@ -73,19 +77,21 @@ func (p *ShellCommandProjection) Apply(event eventing.Event) error {
 		view.CommandID = event.AggregateID
 		view.SessionID = firstNonEmpty(view.SessionID, stringPayload(event.Payload, "session_id"))
 		view.RunID = firstNonEmpty(view.RunID, stringPayload(event.Payload, "run_id"))
+		view.OccurredAt = event.OccurredAt
 		view.Status = "approval_denied"
 		view.Error = firstNonEmpty(stringPayload(event.Payload, "reason"), "shell command denied by operator")
 		view.KillPending = false
 		p.snapshot.Commands[event.AggregateID] = view
 	case eventing.EventShellCommandStarted:
 		view := ShellCommandView{
-			CommandID: event.AggregateID,
-			SessionID: stringPayload(event.Payload, "session_id"),
-			RunID:     stringPayload(event.Payload, "run_id"),
-			Command:   stringPayload(event.Payload, "command"),
-			Args:      stringSlicePayload(event.Payload, "args"),
-			Cwd:       stringPayload(event.Payload, "cwd"),
-			Status:    "running",
+			CommandID:  event.AggregateID,
+			SessionID:  stringPayload(event.Payload, "session_id"),
+			RunID:      stringPayload(event.Payload, "run_id"),
+			OccurredAt: event.OccurredAt,
+			Command:    stringPayload(event.Payload, "command"),
+			Args:       stringSlicePayload(event.Payload, "args"),
+			Cwd:        stringPayload(event.Payload, "cwd"),
+			Status:     "running",
 		}
 		p.snapshot.Commands[event.AggregateID] = view
 	case eventing.EventShellCommandOutputChunk:
@@ -93,6 +99,7 @@ func (p *ShellCommandProjection) Apply(event eventing.Event) error {
 		view.CommandID = event.AggregateID
 		view.SessionID = firstNonEmpty(view.SessionID, stringPayload(event.Payload, "session_id"))
 		view.RunID = firstNonEmpty(view.RunID, stringPayload(event.Payload, "run_id"))
+		view.OccurredAt = event.OccurredAt
 		view.Status = firstNonEmpty(view.Status, "running")
 		view.NextOffset = intPayload(event.Payload, "offset")
 		view.LastChunk = stringPayload(event.Payload, "text")
@@ -102,6 +109,7 @@ func (p *ShellCommandProjection) Apply(event eventing.Event) error {
 		view.CommandID = event.AggregateID
 		view.SessionID = firstNonEmpty(view.SessionID, stringPayload(event.Payload, "session_id"))
 		view.RunID = firstNonEmpty(view.RunID, stringPayload(event.Payload, "run_id"))
+		view.OccurredAt = event.OccurredAt
 		view.Status = "killing"
 		view.KillPending = true
 		p.snapshot.Commands[event.AggregateID] = view
@@ -110,6 +118,7 @@ func (p *ShellCommandProjection) Apply(event eventing.Event) error {
 		view.CommandID = event.AggregateID
 		view.SessionID = firstNonEmpty(view.SessionID, stringPayload(event.Payload, "session_id"))
 		view.RunID = firstNonEmpty(view.RunID, stringPayload(event.Payload, "run_id"))
+		view.OccurredAt = event.OccurredAt
 		view.Status = firstNonEmpty(stringPayload(event.Payload, "status"), "completed")
 		if value, ok := event.Payload["exit_code"].(int); ok {
 			view.ExitCode = &value

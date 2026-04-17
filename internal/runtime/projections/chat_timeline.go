@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 
 	"teamd/internal/runtime/eventing"
 )
@@ -19,9 +20,10 @@ const (
 )
 
 type ChatTimelineItem struct {
-	Kind    ChatTimelineItemKind `json:"kind"`
-	Role    string               `json:"role,omitempty"`
-	Content string               `json:"content"`
+	OccurredAt time.Time            `json:"occurred_at"`
+	Kind       ChatTimelineItemKind `json:"kind"`
+	Role       string               `json:"role,omitempty"`
+	Content    string               `json:"content"`
 }
 
 type ChatTimelineSnapshot struct {
@@ -63,7 +65,7 @@ func (p *ChatTimelineProjection) Apply(event eventing.Event) error {
 }
 
 func (p *ChatTimelineProjection) Snapshot() ChatTimelineSnapshot { return p.snapshot }
-func (p *ChatTimelineProjection) SnapshotValue() any            { return p.snapshot }
+func (p *ChatTimelineProjection) SnapshotValue() any             { return p.snapshot }
 
 func (p *ChatTimelineProjection) SnapshotForSession(sessionID string) []ChatTimelineItem {
 	if p.snapshot.Sessions == nil {
@@ -111,15 +113,16 @@ func buildTimelineItem(event eventing.Event) (ChatTimelineItem, bool) {
 		if strings.TrimSpace(role) == "" || content == "" {
 			return ChatTimelineItem{}, false
 		}
-		return ChatTimelineItem{Kind: ChatTimelineItemMessage, Role: role, Content: content}, true
+		return ChatTimelineItem{OccurredAt: event.OccurredAt, Kind: ChatTimelineItemMessage, Role: role, Content: content}, true
 	case eventing.EventToolCallStarted:
 		name, _ := event.Payload["tool_name"].(string)
 		if strings.TrimSpace(name) == "" {
 			return ChatTimelineItem{}, false
 		}
 		return ChatTimelineItem{
-			Kind:    ChatTimelineItemTool,
-			Content: compactTimelineToolLine(name, payloadMap(event.Payload["arguments"]), "", "", true),
+			Kind:       ChatTimelineItemTool,
+			OccurredAt: event.OccurredAt,
+			Content:    compactTimelineToolLine(name, payloadMap(event.Payload["arguments"]), "", "", true),
 		}, true
 	case eventing.EventToolCallCompleted:
 		name, _ := event.Payload["tool_name"].(string)
@@ -128,41 +131,43 @@ func buildTimelineItem(event eventing.Event) (ChatTimelineItem, bool) {
 		}
 		if errText, _ := event.Payload["error"].(string); strings.TrimSpace(errText) != "" {
 			return ChatTimelineItem{
-				Kind:    ChatTimelineItemTool,
-				Content: compactTimelineToolLine(name, payloadMap(event.Payload["arguments"]), "", errText, false),
+				Kind:       ChatTimelineItemTool,
+				OccurredAt: event.OccurredAt,
+				Content:    compactTimelineToolLine(name, payloadMap(event.Payload["arguments"]), "", errText, false),
 			}, true
 		}
 		if resultText, _ := event.Payload["result_text"].(string); strings.TrimSpace(resultText) != "" {
 			return ChatTimelineItem{
-				Kind:    ChatTimelineItemTool,
-				Content: compactTimelineToolLine(name, payloadMap(event.Payload["arguments"]), resultText, "", false),
+				Kind:       ChatTimelineItemTool,
+				OccurredAt: event.OccurredAt,
+				Content:    compactTimelineToolLine(name, payloadMap(event.Payload["arguments"]), resultText, "", false),
 			}, true
 		}
-		return ChatTimelineItem{Kind: ChatTimelineItemTool, Content: compactTimelineToolLine(name, payloadMap(event.Payload["arguments"]), "", "", false)}, true
+		return ChatTimelineItem{OccurredAt: event.OccurredAt, Kind: ChatTimelineItemTool, Content: compactTimelineToolLine(name, payloadMap(event.Payload["arguments"]), "", "", false)}, true
 	case eventing.EventPlanCreated:
 		goal, _ := event.Payload["goal"].(string)
 		if strings.TrimSpace(goal) == "" {
 			goal = "plan"
 		}
-		return ChatTimelineItem{Kind: ChatTimelineItemPlan, Content: fmt.Sprintf("**Plan created**\n\n`%s`", goal)}, true
+		return ChatTimelineItem{OccurredAt: event.OccurredAt, Kind: ChatTimelineItemPlan, Content: fmt.Sprintf("**Plan created**\n\n`%s`", goal)}, true
 	case eventing.EventPlanArchived:
 		planID, _ := event.Payload["plan_id"].(string)
 		if strings.TrimSpace(planID) == "" {
 			planID = "plan"
 		}
-		return ChatTimelineItem{Kind: ChatTimelineItemPlan, Content: fmt.Sprintf("**Plan archived** `%s`", planID)}, true
+		return ChatTimelineItem{OccurredAt: event.OccurredAt, Kind: ChatTimelineItemPlan, Content: fmt.Sprintf("**Plan archived** `%s`", planID)}, true
 	case eventing.EventTaskAdded:
 		description, _ := event.Payload["description"].(string)
 		if strings.TrimSpace(description) == "" {
 			description = "task"
 		}
-		return ChatTimelineItem{Kind: ChatTimelineItemPlan, Content: fmt.Sprintf("**Task added**\n\n`%s`", description)}, true
+		return ChatTimelineItem{OccurredAt: event.OccurredAt, Kind: ChatTimelineItemPlan, Content: fmt.Sprintf("**Task added**\n\n`%s`", description)}, true
 	case eventing.EventTaskEdited:
 		description, _ := event.Payload["description"].(string)
 		if strings.TrimSpace(description) == "" {
 			description = "task"
 		}
-		return ChatTimelineItem{Kind: ChatTimelineItemPlan, Content: fmt.Sprintf("**Task edited**\n\n`%s`", description)}, true
+		return ChatTimelineItem{OccurredAt: event.OccurredAt, Kind: ChatTimelineItemPlan, Content: fmt.Sprintf("**Task edited**\n\n`%s`", description)}, true
 	case eventing.EventTaskStatusChanged:
 		taskID, _ := event.Payload["task_id"].(string)
 		newStatus, _ := event.Payload["new_status"].(string)
@@ -172,7 +177,7 @@ func buildTimelineItem(event eventing.Event) (ChatTimelineItem, bool) {
 		if strings.TrimSpace(newStatus) == "" {
 			newStatus = "updated"
 		}
-		return ChatTimelineItem{Kind: ChatTimelineItemPlan, Content: fmt.Sprintf("**Task status** `%s` → `%s`", taskID, newStatus)}, true
+		return ChatTimelineItem{OccurredAt: event.OccurredAt, Kind: ChatTimelineItemPlan, Content: fmt.Sprintf("**Task status** `%s` → `%s`", taskID, newStatus)}, true
 	case eventing.EventTaskNoteAdded:
 		taskID, _ := event.Payload["task_id"].(string)
 		noteText, _ := event.Payload["note_text"].(string)
@@ -182,7 +187,7 @@ func buildTimelineItem(event eventing.Event) (ChatTimelineItem, bool) {
 		if strings.TrimSpace(noteText) == "" {
 			noteText = "note"
 		}
-		return ChatTimelineItem{Kind: ChatTimelineItemPlan, Content: fmt.Sprintf("**Task note** `%s`\n\n%s", taskID, summarizeTimelineText(noteText))}, true
+		return ChatTimelineItem{OccurredAt: event.OccurredAt, Kind: ChatTimelineItemPlan, Content: fmt.Sprintf("**Task note** `%s`\n\n%s", taskID, summarizeTimelineText(noteText))}, true
 	default:
 		return ChatTimelineItem{}, false
 	}

@@ -24,6 +24,7 @@ const (
 
 type ToolActivity struct {
 	Phase      ToolActivityPhase `json:"phase"`
+	OccurredAt time.Time         `json:"occurred_at"`
 	Name       string            `json:"name"`
 	Arguments  map[string]any    `json:"arguments,omitempty"`
 	ResultText string            `json:"result_text,omitempty"`
@@ -114,10 +115,10 @@ func (a *Agent) executeToolCalls(ctx context.Context, contractSet contracts.Reso
 	out := make([]contracts.Message, 0, len(calls))
 	for _, call := range calls {
 		if observer != nil {
-			observer(ToolActivity{Phase: ToolActivityPhaseStarted, Name: call.Name, Arguments: call.Arguments})
+			observer(ToolActivity{Phase: ToolActivityPhaseStarted, OccurredAt: a.now(), Name: call.Name, Arguments: call.Arguments})
 		}
 		if a.UIBus != nil {
-			a.UIBus.Publish(UIEvent{Kind: UIEventToolStarted, SessionID: sessionID, RunID: runID, Tool: ToolActivity{Phase: ToolActivityPhaseStarted, Name: call.Name, Arguments: call.Arguments}})
+			a.UIBus.Publish(UIEvent{Kind: UIEventToolStarted, SessionID: sessionID, RunID: runID, Tool: ToolActivity{Phase: ToolActivityPhaseStarted, OccurredAt: a.now(), Name: call.Name, Arguments: call.Arguments}})
 		}
 		if err := a.RecordEvent(ctx, eventing.Event{
 			ID:            a.newID("evt-tool-call-started"),
@@ -146,10 +147,10 @@ func (a *Agent) executeToolCalls(ctx context.Context, contractSet contracts.Reso
 				return nil, fmt.Errorf("record tool call completed: %w", err)
 			}
 			if observer != nil {
-				observer(ToolActivity{Phase: ToolActivityPhaseCompleted, Name: call.Name, Arguments: call.Arguments, ErrorText: "tool call has no execution decision", ResultText: resultText})
+				observer(ToolActivity{Phase: ToolActivityPhaseCompleted, OccurredAt: a.now(), Name: call.Name, Arguments: call.Arguments, ErrorText: "tool call has no execution decision", ResultText: resultText})
 			}
 			if a.UIBus != nil {
-				a.UIBus.Publish(UIEvent{Kind: UIEventToolCompleted, SessionID: sessionID, RunID: runID, Tool: ToolActivity{Phase: ToolActivityPhaseCompleted, Name: call.Name, Arguments: call.Arguments, ErrorText: "tool call has no execution decision", ResultText: resultText}})
+				a.UIBus.Publish(UIEvent{Kind: UIEventToolCompleted, SessionID: sessionID, RunID: runID, Tool: ToolActivity{Phase: ToolActivityPhaseCompleted, OccurredAt: a.now(), Name: call.Name, Arguments: call.Arguments, ErrorText: "tool call has no execution decision", ResultText: resultText}})
 			}
 			out = append(out, contracts.Message{Role: "tool", Name: call.Name, ToolCallID: call.ID, Content: resultText})
 			continue
@@ -161,10 +162,10 @@ func (a *Agent) executeToolCalls(ctx context.Context, contractSet contracts.Reso
 				return nil, fmt.Errorf("record tool call completed: %w", err)
 			}
 			if observer != nil {
-				observer(ToolActivity{Phase: ToolActivityPhaseCompleted, Name: call.Name, Arguments: call.Arguments, ErrorText: reason, ResultText: resultText})
+				observer(ToolActivity{Phase: ToolActivityPhaseCompleted, OccurredAt: a.now(), Name: call.Name, Arguments: call.Arguments, ErrorText: reason, ResultText: resultText})
 			}
 			if a.UIBus != nil {
-				a.UIBus.Publish(UIEvent{Kind: UIEventToolCompleted, SessionID: sessionID, RunID: runID, Tool: ToolActivity{Phase: ToolActivityPhaseCompleted, Name: call.Name, Arguments: call.Arguments, ErrorText: reason, ResultText: resultText}})
+				a.UIBus.Publish(UIEvent{Kind: UIEventToolCompleted, SessionID: sessionID, RunID: runID, Tool: ToolActivity{Phase: ToolActivityPhaseCompleted, OccurredAt: a.now(), Name: call.Name, Arguments: call.Arguments, ErrorText: reason, ResultText: resultText}})
 			}
 			out = append(out, contracts.Message{Role: "tool", Name: call.Name, ToolCallID: call.ID, Content: resultText})
 			continue
@@ -176,10 +177,10 @@ func (a *Agent) executeToolCalls(ctx context.Context, contractSet contracts.Reso
 				return nil, fmt.Errorf("record tool call completed: %w", err)
 			}
 			if observer != nil {
-				observer(ToolActivity{Phase: ToolActivityPhaseCompleted, Name: call.Name, Arguments: call.Arguments, ErrorText: reason, ResultText: resultText})
+				observer(ToolActivity{Phase: ToolActivityPhaseCompleted, OccurredAt: a.now(), Name: call.Name, Arguments: call.Arguments, ErrorText: reason, ResultText: resultText})
 			}
 			if a.UIBus != nil {
-				a.UIBus.Publish(UIEvent{Kind: UIEventToolCompleted, SessionID: sessionID, RunID: runID, Tool: ToolActivity{Phase: ToolActivityPhaseCompleted, Name: call.Name, Arguments: call.Arguments, ErrorText: reason, ResultText: resultText}})
+				a.UIBus.Publish(UIEvent{Kind: UIEventToolCompleted, SessionID: sessionID, RunID: runID, Tool: ToolActivity{Phase: ToolActivityPhaseCompleted, OccurredAt: a.now(), Name: call.Name, Arguments: call.Arguments, ErrorText: reason, ResultText: resultText}})
 			}
 			out = append(out, contracts.Message{Role: "tool", Name: call.Name, ToolCallID: call.ID, Content: resultText})
 			continue
@@ -192,10 +193,10 @@ func (a *Agent) executeToolCalls(ctx context.Context, contractSet contracts.Reso
 				return nil, fmt.Errorf("record tool call completed: %w", recordErr)
 			}
 			if observer != nil {
-				observer(ToolActivity{Phase: ToolActivityPhaseCompleted, Name: call.Name, Arguments: call.Arguments, ErrorText: err.Error(), ResultText: resultText})
+				observer(ToolActivity{Phase: ToolActivityPhaseCompleted, OccurredAt: a.now(), Name: call.Name, Arguments: call.Arguments, ErrorText: err.Error(), ResultText: resultText})
 			}
 			if a.UIBus != nil {
-				a.UIBus.Publish(UIEvent{Kind: UIEventToolCompleted, SessionID: sessionID, RunID: runID, Tool: ToolActivity{Phase: ToolActivityPhaseCompleted, Name: call.Name, Arguments: call.Arguments, ErrorText: err.Error(), ResultText: resultText}})
+				a.UIBus.Publish(UIEvent{Kind: UIEventToolCompleted, SessionID: sessionID, RunID: runID, Tool: ToolActivity{Phase: ToolActivityPhaseCompleted, OccurredAt: a.now(), Name: call.Name, Arguments: call.Arguments, ErrorText: err.Error(), ResultText: resultText}})
 			}
 			out = append(out, contracts.Message{
 				Role:       "tool",
@@ -230,10 +231,10 @@ func (a *Agent) executeToolCalls(ctx context.Context, contractSet contracts.Reso
 			return nil, fmt.Errorf("record tool call completed: %w", err)
 		}
 		if observer != nil {
-			observer(ToolActivity{Phase: ToolActivityPhaseCompleted, Name: call.Name, Arguments: call.Arguments, ResultText: displayText})
+			observer(ToolActivity{Phase: ToolActivityPhaseCompleted, OccurredAt: a.now(), Name: call.Name, Arguments: call.Arguments, ResultText: displayText})
 		}
 		if a.UIBus != nil {
-			a.UIBus.Publish(UIEvent{Kind: UIEventToolCompleted, SessionID: sessionID, RunID: runID, Tool: ToolActivity{Phase: ToolActivityPhaseCompleted, Name: call.Name, Arguments: call.Arguments, ResultText: displayText}})
+			a.UIBus.Publish(UIEvent{Kind: UIEventToolCompleted, SessionID: sessionID, RunID: runID, Tool: ToolActivity{Phase: ToolActivityPhaseCompleted, OccurredAt: a.now(), Name: call.Name, Arguments: call.Arguments, ResultText: displayText}})
 		}
 		out = append(out, contracts.Message{
 			Role:       "tool",

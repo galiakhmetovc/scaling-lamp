@@ -133,6 +133,9 @@ func (m *model) viewSessions() string {
 		if state != nil && state.Status != "" {
 			title += " [" + state.Status + "]"
 		}
+		if state != nil {
+			title += fmt.Sprintf(" | created %s | active %s", humanTimestamp(state.Snapshot.CreatedAt), humanTimestamp(state.Snapshot.LastActivity))
+		}
 		lines = append(lines, prefix+title)
 	}
 	return strings.Join(lines, "\n")
