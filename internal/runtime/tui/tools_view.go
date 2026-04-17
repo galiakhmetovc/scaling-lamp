@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"fmt"
 	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -14,12 +15,12 @@ func (m *model) viewTools() string {
 	}
 	m.renderToolsViewport(state)
 	left := state.ToolsView.View()
-	right := m.renderToolDetails(state)
+	right := clampLines(m.renderToolDetails(state), state.ToolsView.Height)
 	leftWidth, rightWidth := splitPaneWidths(m.width, max(30, (m.width*2)/3), max(24, m.width/3))
 	return lipgloss.JoinHorizontal(
 		lipgloss.Top,
 		lipgloss.NewStyle().Width(leftWidth).MaxWidth(leftWidth).Render(left),
-		lipgloss.NewStyle().Width(rightWidth).MaxWidth(rightWidth).Render(right),
+		lipgloss.NewStyle().Width(rightWidth).MaxWidth(rightWidth).Height(state.ToolsView.Height).MaxHeight(state.ToolsView.Height).Render(right),
 	)
 }
 
@@ -65,9 +66,13 @@ func (m *model) renderToolsViewport(state *sessionState) {
 	for i, entry := range entries {
 		line := prefixTimestamp(entry.Activity.OccurredAt, "["+string(entry.Activity.Phase)+"] "+entry.Activity.Name)
 		if entry.Activity.ErrorText != "" {
-			line += " | error: " + entry.Activity.ErrorText
+			if strings.Contains(entry.Activity.ErrorText, "requires approval") {
+				line += " | " + ansiToolAccent("approval required", "1;38;5;214")
+			} else {
+				line += " | " + ansiToolAccent("error: "+entry.Activity.ErrorText, "1;38;5;203")
+			}
 		} else if entry.Activity.ResultText != "" {
-			line += " | ok"
+			line += " | " + ansiToolAccent("ok", "1;38;5;120")
 		}
 		if m.toolsFocus == toolsFocusLog && i == m.toolCursor {
 			line = "> " + line
@@ -135,13 +140,33 @@ func (m *model) renderToolDetails(state *sessionState) string {
 		lines = append(lines, "Args: "+summarizeToolArguments(entry.Activity.Arguments))
 	}
 	if entry.Activity.ErrorText != "" {
-		lines = append(lines, "Error: "+entry.Activity.ErrorText)
+		lines = append(lines, ansiToolAccent("Error: "+entry.Activity.ErrorText, "1;38;5;203"))
 	}
 	if entry.Activity.ResultText != "" {
-		lines = append(lines, "Result:", entry.Activity.ResultText)
+		lines = append(lines, ansiToolAccent("Result:", "1;38;5;120"), entry.Activity.ResultText)
 	}
 	lines = append(lines, "", "PgUp/PgDn scroll list, Up/Down select")
 	return strings.Join(lines, "\n")
+}
+
+func ansiToolAccent(text, sgr string) string {
+	return "\x1b[" + sgr + "m" + text + "\x1b[0m"
+}
+
+func clampLines(input string, height int) string {
+	if height <= 0 {
+		return input
+	}
+	lines := strings.Split(input, "\n")
+	if len(lines) <= height {
+		return input
+	}
+	if height == 1 {
+		return lines[0]
+	}
+	clamped := append([]string{}, lines[:height-1]...)
+	clamped = append(clamped, fmt.Sprintf("… (%d more lines)", len(lines)-height+1))
+	return strings.Join(clamped, "\n")
 }
 
 func (m *model) handleMouseTools(msg tea.MouseMsg) bool {
