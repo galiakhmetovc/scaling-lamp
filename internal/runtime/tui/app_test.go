@@ -1055,10 +1055,10 @@ func TestChatViewShowsLiveToolActivity(t *testing.T) {
 
 	mm.renderChatViewport(state)
 	got := state.ChatView.View()
-	if !strings.Contains(got, "tool started: shell_start") {
+	if !strings.Contains(got, "shell_start curl started") {
 		t.Fatalf("chat view missing live tool start: %q", got)
 	}
-	if !strings.Contains(got, "approval required: shell_start") {
+	if !strings.Contains(got, "shell_start curl approval required") {
 		t.Fatalf("chat view missing live tool approval state: %q", got)
 	}
 }
@@ -1248,8 +1248,11 @@ func TestChatTimelineToolLinesDoNotIntroduceDoubleBlankSpacing(t *testing.T) {
 	}
 	mm.renderChatViewport(state)
 	content := state.ChatView.View()
-	if strings.Contains(content, "Tool: `fs_list`\n\n\n") || strings.Contains(content, "Tool result: `ok`\n\n\n") {
+	if strings.Contains(content, "\n\n\n") {
 		t.Fatalf("chat timeline still contains excessive blank spacing: %q", content)
+	}
+	if !strings.Contains(content, "fs_list ok") {
+		t.Fatalf("chat timeline missing compact tool line: %q", content)
 	}
 }
 

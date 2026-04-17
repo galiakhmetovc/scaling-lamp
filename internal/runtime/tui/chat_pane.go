@@ -92,7 +92,10 @@ func (m *model) renderChatViewport(state *sessionState) {
 		lines = append(lines, item, "")
 	}
 	for _, item := range m.renderLiveToolLog(state, contentWidth) {
-		lines = append(lines, item, "")
+		lines = append(lines, item)
+	}
+	if len(state.ToolLog) > 0 {
+		lines = append(lines, "")
 	}
 	if strings.TrimSpace(state.PendingPrompt) != "" {
 		lines = append(lines, "USER [pending]:")
@@ -114,6 +117,8 @@ func (m *model) renderChatViewport(state *sessionState) {
 				content = wrapText(content, contentWidth)
 			}
 			lines = append(lines, content, "")
+		case projections.ChatTimelineItemTool:
+			lines = append(lines, ellipsizeForWidth(item.Content, contentWidth), "")
 		default:
 			lines = append(lines, m.renderMarkdownBlock(item.Content, state.Overrides.MarkdownStyle, contentWidth), "")
 		}
@@ -441,31 +446,7 @@ func (m *model) renderLiveToolLog(state *sessionState, width int) []string {
 	start := max(0, len(state.ToolLog)-6)
 	lines := []string{}
 	for _, entry := range state.ToolLog[start:] {
-		activity := entry.Activity
-		summary := fmt.Sprintf("tool started: %s", activity.Name)
-		if activity.Phase == "completed" {
-			switch {
-			case strings.Contains(activity.ErrorText, "requires approval"):
-				summary = fmt.Sprintf("approval required: %s", activity.Name)
-			case activity.ErrorText != "":
-				summary = fmt.Sprintf("tool failed: %s", activity.Name)
-			default:
-				summary = fmt.Sprintf("tool done: %s", activity.Name)
-			}
-		}
-		lines = append(lines, wrapText(summary, width))
-		detail := ""
-		switch {
-		case activity.ErrorText != "":
-			detail = summarizeToolText(activity.ErrorText)
-		case activity.ResultText != "":
-			detail = summarizeToolText(activity.ResultText)
-		case len(activity.Arguments) > 0:
-			detail = summarizeToolArguments(activity.Arguments)
-		}
-		if strings.TrimSpace(detail) != "" {
-			lines = append(lines, wrapText("  "+detail, width))
-		}
+		lines = append(lines, compactToolActivityLine(entry.Activity, width))
 	}
 	return lines
 }
