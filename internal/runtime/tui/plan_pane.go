@@ -263,26 +263,56 @@ func renderPlanTaskWithSelection(lines *[]string, head projections.PlanHeadSnaps
 
 func planTaskLine(head projections.PlanHeadSnapshot, task projections.PlanTaskView, depth int) string {
 	prefix := strings.Repeat("  ", depth)
-	status := "[todo]"
+	statusKey := "todo"
+	statusText := "todo"
 	switch task.Status {
 	case "done":
-		status = "`done`"
+		statusKey = "done"
+		statusText = "done"
 	case "in_progress":
-		status = "`doing`"
+		statusKey = "in_progress"
+		statusText = "doing"
 	case "blocked":
-		status = "`blocked`"
+		statusKey = "blocked"
+		statusText = "blocked"
 	case "cancelled":
-		status = "`cancelled`"
+		statusKey = "cancelled"
+		statusText = "cancelled"
 	default:
 		if head.WaitingOnDependencies[task.ID] {
-			status = "`waiting`"
+			statusKey = "waiting"
+			statusText = "waiting"
 		} else if head.Ready[task.ID] {
-			status = "`ready`"
-		} else {
-			status = "`todo`"
+			statusKey = "ready"
+			statusText = "ready"
 		}
 	}
+	status := renderPlanStatus(statusKey, statusText)
 	return fmt.Sprintf("%s%s %s", prefix, status, stripInlineMarkdown(task.Description))
+}
+
+func renderPlanStatus(statusKey, text string) string {
+	label := "[" + text + "]"
+	switch statusKey {
+	case "done":
+		return ansiStatus(label, "1;38;5;120")
+	case "in_progress":
+		return ansiStatus(label, "1;38;5;214")
+	case "blocked":
+		return ansiStatus(label, "1;38;5;203")
+	case "cancelled":
+		return ansiStatus(label, "9;38;5;245")
+	case "ready":
+		return ansiStatus(label, "1;38;5;81")
+	case "waiting":
+		return ansiStatus(label, "38;5;111")
+	default:
+		return ansiStatus(label, "38;5;250")
+	}
+}
+
+func ansiStatus(label, sgr string) string {
+	return "\x1b[" + sgr + "m" + label + "\x1b[0m"
 }
 
 func (m *model) selectedPlanTask(head projections.PlanHeadSnapshot) (projections.PlanTaskView, bool) {
