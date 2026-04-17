@@ -719,8 +719,11 @@ func lineRange(totalLines, startLine, endLine int) (int, int, error) {
 	if totalLines == 0 {
 		return 0, 0, fmt.Errorf("file has no lines")
 	}
+	if startLine > totalLines {
+		return 0, 0, fmt.Errorf("start_line exceeds file length")
+	}
 	if endLine > totalLines {
-		return 0, 0, fmt.Errorf("end_line exceeds file length")
+		endLine = totalLines
 	}
 	return startLine - 1, endLine - 1, nil
 }

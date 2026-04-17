@@ -689,6 +689,61 @@ func TestExecutorRejectsInvalidLineRanges(t *testing.T) {
 	}
 }
 
+func TestExecutorClampsEndLineToFileLength(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, "src", "note.txt")
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	if err := os.WriteFile(path, []byte("one\ntwo\nthree\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	executor := filesystem.NewExecutor()
+	out, err := executor.Execute(contracts.FilesystemExecutionContract{
+		Scope: contracts.FilesystemScopePolicy{
+			Enabled:  true,
+			Strategy: "workspace_only",
+			Params: contracts.FilesystemScopeParams{
+				RootPath:     dir,
+				ReadSubpaths: []string{"src"},
+			},
+		},
+		IO: contracts.FilesystemIOPolicy{
+			Enabled:  true,
+			Strategy: "bounded_text_io",
+			Params: contracts.FilesystemIOParams{
+				MaxReadBytes: 1024,
+				Encoding:     "utf-8",
+			},
+		},
+	}, "fs_read_lines", map[string]any{
+		"path":       "src/note.txt",
+		"start_line": 2,
+		"end_line":   999,
+	})
+	if err != nil {
+		t.Fatalf("Execute returned error: %v", err)
+	}
+	var payload struct {
+		Status string `json:"status"`
+		Lines  []struct {
+			Line int    `json:"line"`
+			Text string `json:"text"`
+		} `json:"lines"`
+	}
+	if err := json.Unmarshal([]byte(out), &payload); err != nil {
+		t.Fatalf("unmarshal result: %v", err)
+	}
+	if payload.Status != "ok" {
+		t.Fatalf("status = %q, want ok", payload.Status)
+	}
+	if len(payload.Lines) != 2 || payload.Lines[0].Line != 2 || payload.Lines[0].Text != "two" || payload.Lines[1].Line != 3 || payload.Lines[1].Text != "three" {
+		t.Fatalf("lines = %#v", payload.Lines)
+	}
+}
+
 func TestExecutorFindsInFilesWithinScope(t *testing.T) {
 	t.Parallel()
 
