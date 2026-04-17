@@ -118,6 +118,7 @@ type sessionState struct {
 	SessionID string
 	Snapshot  daemon.SessionSnapshot
 	Input     textarea.Model
+	PendingPrompt string
 	Streaming strings.Builder
 	ToolLog   []toolLogEntry
 	Status    string

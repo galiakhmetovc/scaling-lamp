@@ -190,6 +190,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if state == nil {
 			return m, nil
 		}
+		state.PendingPrompt = ""
 		state.Busy = false
 		state.MainRun.Active = false
 		state.RunCancel = nil

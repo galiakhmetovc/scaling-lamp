@@ -13,6 +13,7 @@ import (
 	"teamd/internal/runtime/daemon"
 	"teamd/internal/runtime/eventing"
 	"teamd/internal/runtime/projections"
+	"teamd/internal/shell"
 )
 
 type stubOperatorClient struct {
@@ -27,6 +28,12 @@ type stubOperatorClient struct {
 	deletedSessionID string
 	savedPrompt string
 	resetPromptSessionID string
+	sentChatSessionID string
+	sentChatPrompt string
+	approvedShellID string
+	approvedAlwaysShellID string
+	deniedShellID string
+	deniedAlwaysShellID string
 }
 
 func (c *stubOperatorClient) Bootstrap(context.Context) (daemon.BootstrapPayload, error) {
@@ -78,7 +85,9 @@ func (c *stubOperatorClient) ClearSessionPromptOverride(_ context.Context, sessi
 	return c.snapshot, nil
 }
 
-func (c *stubOperatorClient) SendChat(context.Context, string, string) (ChatSendResult, error) {
+func (c *stubOperatorClient) SendChat(_ context.Context, sessionID, prompt string) (ChatSendResult, error) {
+	c.sentChatSessionID = sessionID
+	c.sentChatPrompt = prompt
 	return ChatSendResult{}, nil
 }
 
@@ -106,20 +115,24 @@ func (c *stubOperatorClient) AddPlanTaskNote(context.Context, string, string, st
 	return PlanMutation{}, nil
 }
 
-func (c *stubOperatorClient) ApproveShell(context.Context, string) (ShellActionResult, error) {
-	return ShellActionResult{}, nil
+func (c *stubOperatorClient) ApproveShell(_ context.Context, approvalID string) (ShellActionResult, error) {
+	c.approvedShellID = approvalID
+	return ShellActionResult{Session: c.snapshot}, nil
 }
 
-func (c *stubOperatorClient) ApproveShellAlways(context.Context, string) (ShellActionResult, error) {
-	return ShellActionResult{}, nil
+func (c *stubOperatorClient) ApproveShellAlways(_ context.Context, approvalID string) (ShellActionResult, error) {
+	c.approvedAlwaysShellID = approvalID
+	return ShellActionResult{Session: c.snapshot}, nil
 }
 
-func (c *stubOperatorClient) DenyShell(context.Context, string) (ShellActionResult, error) {
-	return ShellActionResult{}, nil
+func (c *stubOperatorClient) DenyShell(_ context.Context, approvalID string) (ShellActionResult, error) {
+	c.deniedShellID = approvalID
+	return ShellActionResult{Session: c.snapshot}, nil
 }
 
-func (c *stubOperatorClient) DenyShellAlways(context.Context, string) (ShellActionResult, error) {
-	return ShellActionResult{}, nil
+func (c *stubOperatorClient) DenyShellAlways(_ context.Context, approvalID string) (ShellActionResult, error) {
+	c.deniedAlwaysShellID = approvalID
+	return ShellActionResult{Session: c.snapshot}, nil
 }
 
 func (c *stubOperatorClient) KillShell(context.Context, string) (ShellActionResult, error) {
@@ -368,5 +381,92 @@ func TestLocalSessionSnapshotStartsWithHistoryWindow(t *testing.T) {
 	}
 	if snapshot.Timeline[0].Content != "message-05" {
 		t.Fatalf("first timeline item = %q, want message-05", snapshot.Timeline[0].Content)
+	}
+}
+
+func TestChatSubmitShowsPendingPromptBeforeTurnCompletes(t *testing.T) {
+	ws := make(chan daemon.WebsocketEnvelope)
+	close(ws)
+	now := time.Date(2026, 4, 17, 12, 0, 0, 0, time.UTC)
+	client := &stubOperatorClient{
+		sessions: []SessionSummary{{SessionID: "session-1", CreatedAt: now, LastActivity: now, MessageCount: 0}},
+		snapshot: daemon.SessionSnapshot{
+			SessionID: "session-1",
+			Prompt: daemon.SessionPromptSnapshot{
+				Default:   "default prompt",
+				Effective: "default prompt",
+			},
+		},
+		ws: ws,
+	}
+
+	m, err := newModelWithClient(context.Background(), client, "")
+	if err != nil {
+		t.Fatalf("newModelWithClient returned error: %v", err)
+	}
+	m.now = func() time.Time { return now }
+	modelAfter, _ := (&m).Update(tea.WindowSizeMsg{Width: 100, Height: 30})
+	mm := modelAfter.(*model)
+	state := mm.currentSessionState()
+	state.Input.SetValue("ship it")
+
+	modelAfter, cmd := mm.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if cmd == nil {
+		t.Fatal("submit did not return chat command")
+	}
+	mm = modelAfter.(*model)
+	state = mm.currentSessionState()
+	if state.PendingPrompt != "ship it" {
+		t.Fatalf("pending prompt = %q, want ship it", state.PendingPrompt)
+	}
+	if strings.TrimSpace(state.Input.Value()) != "" {
+		t.Fatalf("input value = %q, want cleared", state.Input.Value())
+	}
+	if !strings.Contains(state.ChatView.View(), "USER [pending]:") || !strings.Contains(state.ChatView.View(), "ship it") {
+		t.Fatalf("chat view missing pending prompt: %q", state.ChatView.View())
+	}
+}
+
+func TestChatInputApproveShortcutHandlesPendingApproval(t *testing.T) {
+	ws := make(chan daemon.WebsocketEnvelope)
+	close(ws)
+	now := time.Date(2026, 4, 17, 12, 5, 0, 0, time.UTC)
+	client := &stubOperatorClient{
+		sessions: []SessionSummary{{SessionID: "session-1", CreatedAt: now, LastActivity: now, MessageCount: 0}},
+		snapshot: daemon.SessionSnapshot{
+			SessionID: "session-1",
+			PendingApprovals: []shell.PendingApprovalView{{
+				ApprovalID: "approval-1",
+				Command:    "go",
+				Args:       []string{"test"},
+			}},
+			Prompt: daemon.SessionPromptSnapshot{
+				Default:   "default prompt",
+				Effective: "default prompt",
+			},
+		},
+		ws: ws,
+	}
+
+	m, err := newModelWithClient(context.Background(), client, "")
+	if err != nil {
+		t.Fatalf("newModelWithClient returned error: %v", err)
+	}
+	state := m.currentSessionState()
+	state.Input.SetValue("y")
+
+	modelAfter, cmd := (&m).Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if cmd != nil {
+		t.Fatalf("approval shortcut returned unexpected cmd")
+	}
+	mm := modelAfter.(*model)
+	if client.approvedShellID != "approval-1" {
+		t.Fatalf("approved shell id = %q, want approval-1", client.approvedShellID)
+	}
+	if got := mm.currentSessionState().Input.Value(); strings.TrimSpace(got) != "" {
+		t.Fatalf("input value = %q, want cleared", got)
+	}
+	if !strings.Contains(mm.statusMessage, "approval granted") {
+		t.Fatalf("statusMessage = %q, want approval granted", mm.statusMessage)
 	}
 }

@@ -94,6 +94,10 @@ func (m *model) renderChatViewport(state *sessionState) {
 	for _, item := range m.renderLiveToolLog(state, contentWidth) {
 		lines = append(lines, item, "")
 	}
+	if strings.TrimSpace(state.PendingPrompt) != "" {
+		lines = append(lines, "USER [pending]:")
+		lines = append(lines, wrapText(state.PendingPrompt, contentWidth), "")
+	}
 	for _, item := range state.Snapshot.Timeline {
 		switch item.Kind {
 		case projections.ChatTimelineItemMessage:
@@ -160,6 +164,9 @@ func (m *model) submitChatInput(state *sessionState) tea.Cmd {
 	if prompt == "" {
 		return nil
 	}
+	if handled, cmd := m.handleChatApprovalShortcut(state, prompt); handled {
+		return cmd
+	}
 	if handled, cmd := m.handleChatCommand(state, prompt); handled {
 		return cmd
 	}
@@ -171,6 +178,48 @@ func (m *model) submitChatInput(state *sessionState) tea.Cmd {
 		return nil
 	}
 	return m.startMainRun(state, prompt)
+}
+
+func (m *model) handleChatApprovalShortcut(state *sessionState, prompt string) (bool, tea.Cmd) {
+	approvals := m.currentApprovals()
+	if state == nil || len(approvals) == 0 {
+		return false, nil
+	}
+	trimmed := strings.TrimSpace(prompt)
+	approvalIndex := 0
+	if m.approvalCursor >= 0 && m.approvalCursor < len(approvals) {
+		approvalIndex = m.approvalCursor
+	}
+	approvalID := approvals[approvalIndex].ApprovalID
+	var (
+		result ShellActionResult
+		err    error
+		status string
+	)
+	switch trimmed {
+	case "y":
+		result, err = m.client.ApproveShell(m.ctx, approvalID)
+		status = "shell approval granted"
+	case "n":
+		result, err = m.client.DenyShell(m.ctx, approvalID)
+		status = "shell approval denied"
+	case "a":
+		result, err = m.client.ApproveShellAlways(m.ctx, approvalID)
+		status = "shell approval granted and saved"
+	case "d":
+		result, err = m.client.DenyShellAlways(m.ctx, approvalID)
+		status = "shell approval denied and saved"
+	default:
+		return false, nil
+	}
+	state.Input.Reset()
+	if err != nil {
+		m.errMessage = err.Error()
+		return true, nil
+	}
+	state.Snapshot = result.Session
+	m.statusMessage = status
+	return true, nil
 }
 
 func (m *model) stageOrRecallDraft(state *sessionState) tea.Cmd {
@@ -253,6 +302,7 @@ func (m *model) handleChatCommand(state *sessionState, prompt string) (bool, tea
 }
 
 func (m *model) startMainRun(state *sessionState, prompt string) tea.Cmd {
+	state.PendingPrompt = prompt
 	state.Input.Reset()
 	state.Streaming.Reset()
 	state.LastError = ""
@@ -316,6 +366,7 @@ func (m *model) cancelMainRun(state *sessionState) tea.Cmd {
 	}
 	state.RunCancel()
 	state.RunCancel = nil
+	state.PendingPrompt = ""
 	state.MainRun.Active = false
 	state.Busy = false
 	state.Status = "cancelled"
@@ -522,6 +573,9 @@ func (m *model) markInterjectionStatus(state *sessionState, text, status string)
 func (m *model) chatComposerHint(state *sessionState) string {
 	if state == nil {
 		return "Input"
+	}
+	if len(state.Snapshot.PendingApprovals) > 0 {
+		return "Input (`y` approve, `n` deny, `a` allow forever, `d` deny forever; otherwise Enter send, Tab queue):"
 	}
 	if state.MainRun.Active {
 		return "Input (Enter queue interjection, Tab stage draft, Ctrl+E recall, Ctrl+D delete, Ctrl+X stop run, Shift+Enter newline, Alt+Up/Down queue select):"
