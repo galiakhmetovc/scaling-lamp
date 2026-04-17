@@ -2,13 +2,16 @@ package tui
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"teamd/internal/contracts"
+	"teamd/internal/runtime"
 	"teamd/internal/runtime/daemon"
+	"teamd/internal/runtime/eventing"
 	"teamd/internal/runtime/projections"
 )
 
@@ -300,5 +303,70 @@ func TestChatPgUpLoadsOlderHistoryWhenAtTop(t *testing.T) {
 	}
 	if got.Timeline[0].Content != "older" {
 		t.Fatalf("first timeline item = %q, want older", got.Timeline[0].Content)
+	}
+}
+
+func TestLocalSessionSnapshotStartsWithHistoryWindow(t *testing.T) {
+	now := time.Date(2026, 4, 17, 11, 0, 0, 0, time.UTC)
+	agent := &runtime.Agent{
+		EventLog: runtime.NewInMemoryEventLog(),
+		Projections: []projections.Projection{
+			projections.NewSessionCatalogProjection(),
+			projections.NewTranscriptProjection(),
+			projections.NewChatTimelineProjection(),
+			projections.NewPlanHeadProjection(),
+			projections.NewShellCommandProjection(),
+			projections.NewDelegateProjection(),
+		},
+		Now:   func() time.Time { return now },
+		NewID: func(prefix string) string { return prefix + "-1" },
+	}
+	if err := agent.RecordEvent(context.Background(), eventing.Event{
+		ID:               "evt-session-created",
+		Kind:             eventing.EventSessionCreated,
+		OccurredAt:       now,
+		AggregateID:      "session-1",
+		AggregateType:    eventing.AggregateSession,
+		AggregateVersion: 1,
+		Payload:          map[string]any{"session_id": "session-1"},
+	}); err != nil {
+		t.Fatalf("record session created: %v", err)
+	}
+	for i := 0; i < 45; i++ {
+		if err := agent.RecordEvent(context.Background(), eventing.Event{
+			ID:               fmt.Sprintf("evt-message-%d", i),
+			Kind:             eventing.EventMessageRecorded,
+			OccurredAt:       now.Add(time.Duration(i) * time.Minute),
+			AggregateID:      "session-1",
+			AggregateType:    eventing.AggregateSession,
+			AggregateVersion: uint64(i + 2),
+			Payload: map[string]any{
+				"session_id": "session-1",
+				"role":       "assistant",
+				"content":    fmt.Sprintf("message-%02d", i),
+			},
+		}); err != nil {
+			t.Fatalf("record message %d: %v", i, err)
+		}
+	}
+
+	snapshot, err := buildLocalSessionSnapshot(agent, "session-1")
+	if err != nil {
+		t.Fatalf("buildLocalSessionSnapshot returned error: %v", err)
+	}
+	if snapshot.History.LoadedCount != 40 {
+		t.Fatalf("loaded_count = %d, want 40", snapshot.History.LoadedCount)
+	}
+	if snapshot.History.TotalCount != 45 {
+		t.Fatalf("total_count = %d, want 45", snapshot.History.TotalCount)
+	}
+	if !snapshot.History.HasMore {
+		t.Fatalf("has_more = false, want true")
+	}
+	if len(snapshot.Timeline) != 40 {
+		t.Fatalf("timeline len = %d, want 40", len(snapshot.Timeline))
+	}
+	if snapshot.Timeline[0].Content != "message-05" {
+		t.Fatalf("first timeline item = %q, want message-05", snapshot.Timeline[0].Content)
 	}
 }

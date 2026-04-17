@@ -875,7 +875,12 @@ func buildLocalSessionSnapshot(agent *runtime.Agent, sessionID string) (daemon.S
 		return daemon.SessionSnapshot{}, fmt.Errorf("session %q not found", sessionID)
 	}
 	plan, _ := agent.CurrentPlanHead(sessionID)
-	compactedTranscript := agent.CompactedMessagesForSession(sessionID, agent.CurrentTranscript(sessionID))
+	fullTranscript := agent.CurrentTranscript(sessionID)
+	compactedTranscript := agent.CompactedMessagesForSession(sessionID, fullTranscript)
+	fullTimeline := agent.CurrentChatTimeline(sessionID)
+	windowLimit := 40
+	transcriptWindow := tailMessagesLocal(fullTranscript, windowLimit)
+	timelineWindow := tailTimelineLocal(fullTimeline, windowLimit)
 	return daemon.SessionSnapshot{
 		SessionID:    entry.SessionID,
 		Title:        entry.Title,
@@ -900,8 +905,14 @@ func buildLocalSessionSnapshot(agent *runtime.Agent, sessionID string) (daemon.S
 			Effective:   effectivePromptForLocalClient(agent, sessionID),
 			HasOverride: strings.TrimSpace(agent.CurrentSessionPromptOverride(sessionID)) != "",
 		},
-		Transcript:       agent.CurrentTranscript(sessionID),
-		Timeline:         agent.CurrentChatTimeline(sessionID),
+		History: daemon.ChatHistorySnapshot{
+			LoadedCount: len(timelineWindow),
+			TotalCount:  len(fullTimeline),
+			HasMore:     len(timelineWindow) < len(fullTimeline),
+			WindowLimit: windowLimit,
+		},
+		Transcript:       transcriptWindow,
+		Timeline:         timelineWindow,
 		Plan:             plan,
 		ToolGovernance:   daemon.BuildToolGovernanceSnapshot(agent),
 		PendingApprovals: agent.PendingShellApprovals(sessionID),
@@ -933,4 +944,18 @@ func approximateTextTokensFromMessages(messages []contracts.Message) int {
 		return 0
 	}
 	return (chars + 3) / 4
+}
+
+func tailMessagesLocal(messages []contracts.Message, limit int) []contracts.Message {
+	if limit <= 0 || len(messages) <= limit {
+		return append([]contracts.Message{}, messages...)
+	}
+	return append([]contracts.Message{}, messages[len(messages)-limit:]...)
+}
+
+func tailTimelineLocal(items []projections.ChatTimelineItem, limit int) []projections.ChatTimelineItem {
+	if limit <= 0 || len(items) <= limit {
+		return append([]projections.ChatTimelineItem{}, items...)
+	}
+	return append([]projections.ChatTimelineItem{}, items[len(items)-limit:]...)
 }
