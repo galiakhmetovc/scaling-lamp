@@ -293,12 +293,10 @@ func (e *Executor) startCommand(ctx context.Context, contract contracts.ShellExe
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	timeout, err := parseTimeout(contract.Runtime)
-	if err != nil {
-		return "", err
+	if err := ctx.Err(); err != nil {
+		return "", fmt.Errorf("start shell command: %w", err)
 	}
-
-	runCtx, cancel := context.WithTimeout(ctx, timeout)
+	runCtx, cancel := context.WithCancel(context.Background())
 	proc, err := e.start(runCtx, cwd, invocation.executable, invocation.args)
 	if err != nil {
 		cancel()

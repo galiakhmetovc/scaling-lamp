@@ -856,6 +856,76 @@ func TestExecutorRecordsCompletionWithoutPoll(t *testing.T) {
 	}
 }
 
+func TestShellStartDoesNotAttachRuntimeDeadlineToProcessContext(t *testing.T) {
+	t.Parallel()
+
+	stdoutReader, stdoutWriter := io.Pipe()
+	stderrReader, stderrWriter := io.Pipe()
+	waitCh := make(chan error, 1)
+	process := &fakeProcess{
+		stdout: stdoutReader,
+		stderr: stderrReader,
+		wait: func() error {
+			return <-waitCh
+		},
+		kill: func() error { return nil },
+	}
+
+	var startCtx context.Context
+	executor := &Executor{
+		goos: "linux",
+		start: func(ctx context.Context, _ string, _ string, _ []string) (processHandle, error) {
+			startCtx = ctx
+			return process, nil
+		},
+		commands: map[string]*activeCommand{},
+	}
+	contract := contracts.ShellExecutionContract{
+		Command: contracts.ShellCommandPolicy{
+			Enabled:  true,
+			Strategy: "static_allowlist",
+			Params:   contracts.ShellCommandParams{AllowedCommands: []string{"printf"}},
+		},
+		Runtime: contracts.ShellRuntimePolicy{
+			Enabled:  true,
+			Strategy: "workspace_write",
+			Params: contracts.ShellRuntimeParams{
+				Cwd:            t.TempDir(),
+				Timeout:        "5ms",
+				MaxOutputBytes: 4096,
+				AllowNetwork:   true,
+			},
+		},
+	}
+
+	startOut, err := executor.ExecuteWithMeta(context.Background(), contract, "shell_start", map[string]any{
+		"command": "printf",
+	}, ExecutionMeta{SessionID: "session-1"})
+	if err != nil {
+		t.Fatalf("ExecuteWithMeta returned error: %v", err)
+	}
+	if startCtx == nil {
+		t.Fatal("start ctx was not captured")
+	}
+	if _, hasDeadline := startCtx.Deadline(); hasDeadline {
+		t.Fatal("shell_start process ctx unexpectedly has deadline")
+	}
+	commandID := decodeField(t, startOut, "command_id")
+	if commandID == "" {
+		t.Fatalf("command_id missing from %s", startOut)
+	}
+
+	time.Sleep(20 * time.Millisecond)
+	if got := executor.ActiveCommands("session-1"); len(got) != 1 {
+		t.Fatalf("ActiveCommands after timeout window = %d, want 1", len(got))
+	}
+
+	_ = stdoutWriter.Close()
+	_ = stderrWriter.Close()
+	waitCh <- nil
+	time.Sleep(20 * time.Millisecond)
+}
+
 func TestExecutorApproveKeepsPendingApprovalWhenStartFails(t *testing.T) {
 	t.Parallel()
 
