@@ -26,8 +26,7 @@ func (m *model) updateTools(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			if err != nil {
 				m.errMessage = err.Error()
 			} else {
-				state.Snapshot = result.Session
-				m.statusMessage = "shell approval granted"
+				return m, m.applyShellActionResult(state, result, "shell approval granted")
 			}
 		}
 	case "A":
@@ -36,8 +35,7 @@ func (m *model) updateTools(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			if err != nil {
 				m.errMessage = err.Error()
 			} else {
-				state.Snapshot = result.Session
-				m.statusMessage = "shell approval granted and saved"
+				return m, m.applyShellActionResult(state, result, "shell approval granted and saved")
 			}
 		}
 	case "x":
@@ -46,8 +44,7 @@ func (m *model) updateTools(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			if err != nil {
 				m.errMessage = err.Error()
 			} else {
-				state.Snapshot = result.Session
-				m.statusMessage = "shell approval denied"
+				return m, m.applyShellActionResult(state, result, "shell approval denied")
 			}
 		}
 	case "X":
@@ -56,8 +53,7 @@ func (m *model) updateTools(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			if err != nil {
 				m.errMessage = err.Error()
 			} else {
-				state.Snapshot = result.Session
-				m.statusMessage = "shell approval denied and saved"
+				return m, m.applyShellActionResult(state, result, "shell approval denied and saved")
 			}
 		}
 	case "k":

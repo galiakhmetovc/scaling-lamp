@@ -1,40 +1,52 @@
 package tui
 
 import (
+	"bytes"
 	"context"
 	"fmt"
+	"io"
+	"net/http"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"teamd/internal/contracts"
+	"teamd/internal/delegation"
+	"teamd/internal/filesystem"
+	"teamd/internal/provider"
 	"teamd/internal/runtime"
 	"teamd/internal/runtime/daemon"
 	"teamd/internal/runtime/eventing"
 	"teamd/internal/runtime/projections"
 	"teamd/internal/shell"
+	"teamd/internal/tools"
 )
 
 type stubOperatorClient struct {
-	bootstrap daemon.BootstrapPayload
-	sessions  []SessionSummary
-	snapshot  daemon.SessionSnapshot
-	settings  daemon.SettingsSnapshot
-	ws        <-chan daemon.WebsocketEnvelope
-	history   SessionHistoryChunk
-	historyCalls int
-	createCalls int
-	renamedTo string
-	deletedSessionID string
-	savedPrompt string
-	resetPromptSessionID string
-	sentChatSessionID string
-	sentChatPrompt string
-	approvedShellID string
+	bootstrap             daemon.BootstrapPayload
+	sessions              []SessionSummary
+	snapshot              daemon.SessionSnapshot
+	approveShellResult    *daemon.SessionSnapshot
+	approveAlwaysResult   *daemon.SessionSnapshot
+	denyShellResult       *daemon.SessionSnapshot
+	denyAlwaysResult      *daemon.SessionSnapshot
+	settings              daemon.SettingsSnapshot
+	ws                    <-chan daemon.WebsocketEnvelope
+	history               SessionHistoryChunk
+	historyCalls          int
+	createCalls           int
+	renamedTo             string
+	deletedSessionID      string
+	savedPrompt           string
+	resetPromptSessionID  string
+	sentChatSessionID     string
+	sentChatPrompt        string
+	approvedShellID       string
 	approvedAlwaysShellID string
-	deniedShellID string
-	deniedAlwaysShellID string
+	deniedShellID         string
+	deniedAlwaysShellID   string
 }
 
 func (c *stubOperatorClient) Bootstrap(context.Context) (daemon.BootstrapPayload, error) {
@@ -119,21 +131,33 @@ func (c *stubOperatorClient) AddPlanTaskNote(context.Context, string, string, st
 
 func (c *stubOperatorClient) ApproveShell(_ context.Context, approvalID string) (ShellActionResult, error) {
 	c.approvedShellID = approvalID
+	if c.approveShellResult != nil {
+		return ShellActionResult{Session: *c.approveShellResult}, nil
+	}
 	return ShellActionResult{Session: c.snapshot}, nil
 }
 
 func (c *stubOperatorClient) ApproveShellAlways(_ context.Context, approvalID string) (ShellActionResult, error) {
 	c.approvedAlwaysShellID = approvalID
+	if c.approveAlwaysResult != nil {
+		return ShellActionResult{Session: *c.approveAlwaysResult}, nil
+	}
 	return ShellActionResult{Session: c.snapshot}, nil
 }
 
 func (c *stubOperatorClient) DenyShell(_ context.Context, approvalID string) (ShellActionResult, error) {
 	c.deniedShellID = approvalID
+	if c.denyShellResult != nil {
+		return ShellActionResult{Session: *c.denyShellResult}, nil
+	}
 	return ShellActionResult{Session: c.snapshot}, nil
 }
 
 func (c *stubOperatorClient) DenyShellAlways(_ context.Context, approvalID string) (ShellActionResult, error) {
 	c.deniedAlwaysShellID = approvalID
+	if c.denyAlwaysResult != nil {
+		return ShellActionResult{Session: *c.denyAlwaysResult}, nil
+	}
 	return ShellActionResult{Session: c.snapshot}, nil
 }
 
@@ -421,6 +445,192 @@ func TestLocalSessionSnapshotStartsWithHistoryWindow(t *testing.T) {
 	}
 }
 
+func TestLocalClientApproveShellContinuesChatRun(t *testing.T) {
+	t.Setenv("TEAMD_ZAI_API_KEY", "secret-token")
+
+	dir := t.TempDir()
+	now := time.Date(2026, 4, 17, 18, 0, 0, 0, time.UTC)
+	call := 0
+	agent := &runtime.Agent{
+		ConfigPath:    filepath.Join(dir, "agent.yaml"),
+		Contracts:     localClientChatContractsForTest(dir),
+		PromptAssets:  provider.NewPromptAssetExecutor(),
+		RequestShape:  provider.NewRequestShapeExecutor(),
+		PlanTools:     tools.NewPlanToolExecutor(),
+		ToolCatalog:   tools.NewCatalogExecutor(),
+		ToolExecution: tools.NewExecutionGate(),
+		Transport: provider.NewTransportExecutor(localClientFakeDoer{
+			do: func(req *http.Request) (*http.Response, error) {
+				call++
+				if call == 1 {
+					return &http.Response{
+						StatusCode: http.StatusOK,
+						Header:     http.Header{"Content-Type": []string{"application/json"}},
+						Body:       io.NopCloser(bytes.NewBufferString(`{"id":"resp-local-approval-1","model":"glm-5-turbo","choices":[{"finish_reason":"tool_calls","message":{"role":"assistant","content":"","tool_calls":[{"id":"call-local-approval-1","function":{"name":"shell_exec","arguments":{"command":"pwd"}}}]}}]}`)),
+					}, nil
+				}
+				return &http.Response{
+					StatusCode: http.StatusOK,
+					Header:     http.Header{"Content-Type": []string{"application/json"}},
+					Body:       io.NopCloser(bytes.NewBufferString(`{"id":"resp-local-approval-2","model":"glm-5-turbo","choices":[{"finish_reason":"stop","message":{"role":"assistant","content":"done after approval"}}]}`)),
+				}, nil
+			},
+		}),
+		EventLog: runtime.NewInMemoryEventLog(),
+		Projections: []projections.Projection{
+			projections.NewSessionCatalogProjection(),
+			projections.NewTranscriptProjection(),
+			projections.NewChatTimelineProjection(),
+			projections.NewPlanHeadProjection(),
+			projections.NewShellCommandProjection(),
+			projections.NewDelegateProjection(),
+			projections.NewRunProjection(),
+		},
+		Now:   func() time.Time { return now },
+		NewID: func(prefix string) string { return fmt.Sprintf("%s-%d", prefix, time.Now().UTC().UnixNano()) },
+	}
+	agent.ProviderClient = provider.NewClient(agent.PromptAssets, agent.RequestShape, agent.PlanTools, filesystem.NewDefinitionExecutor(), shell.NewDefinitionExecutor(), delegation.NewDefinitionExecutor(), agent.ToolCatalog, agent.ToolExecution, agent.Transport)
+	agent.ShellRuntime = shell.NewExecutor()
+	agent.Contracts.ShellExecution.Approval = contracts.ShellApprovalPolicy{Enabled: true, Strategy: "always_require"}
+	agent.Contracts.ShellExecution.Runtime.Params.AllowNetwork = true
+
+	client := newLocalClient(agent)
+	session, err := agent.NewChatSession()
+	if err != nil {
+		t.Fatalf("NewChatSession returned error: %v", err)
+	}
+	if err := agent.RecordEvent(context.Background(), eventing.Event{
+		ID:               "evt-session-created-local-client",
+		Kind:             eventing.EventSessionCreated,
+		OccurredAt:       now,
+		AggregateID:      session.SessionID,
+		AggregateType:    eventing.AggregateSession,
+		AggregateVersion: 1,
+		Payload:          map[string]any{"session_id": session.SessionID},
+	}); err != nil {
+		t.Fatalf("record session created: %v", err)
+	}
+
+	sendResult, err := client.SendChat(context.Background(), session.SessionID, "run pwd")
+	if err != nil {
+		t.Fatalf("SendChat returned error: %v", err)
+	}
+	if len(sendResult.Session.PendingApprovals) != 1 {
+		t.Fatalf("pending approvals = %d, want 1", len(sendResult.Session.PendingApprovals))
+	}
+	if call != 1 {
+		t.Fatalf("provider call count after send = %d, want 1", call)
+	}
+
+	approvalID := sendResult.Session.PendingApprovals[0].ApprovalID
+	approveResult, err := client.ApproveShell(context.Background(), approvalID)
+	if err != nil {
+		t.Fatalf("ApproveShell returned error: %v", err)
+	}
+	if call != 2 {
+		t.Fatalf("provider call count after approve = %d, want 2", call)
+	}
+	if len(approveResult.Session.PendingApprovals) != 0 {
+		t.Fatalf("pending approvals after approve = %d, want 0", len(approveResult.Session.PendingApprovals))
+	}
+	if got := approveResult.Session.Timeline[len(approveResult.Session.Timeline)-1].Content; !strings.Contains(got, "done after approval") {
+		t.Fatalf("final timeline item = %q, want done after approval", got)
+	}
+}
+
+type localClientFakeDoer struct {
+	do func(*http.Request) (*http.Response, error)
+}
+
+func (d localClientFakeDoer) Do(req *http.Request) (*http.Response, error) {
+	return d.do(req)
+}
+
+func localClientChatContractsForTest(root string) contracts.ResolvedContracts {
+	out := contracts.ResolvedContracts{
+		ProviderRequest: contracts.ProviderRequestContract{
+			Transport: contracts.TransportContract{
+				ID: "transport-local-client-test",
+				Endpoint: contracts.EndpointPolicy{
+					Enabled:  true,
+					Strategy: "static",
+					Params: contracts.EndpointParams{
+						BaseURL: "https://api.z.ai/api/coding/paas/v4",
+						Path:    "/chat/completions",
+						Method:  http.MethodPost,
+					},
+				},
+				Auth: contracts.AuthPolicy{
+					Enabled:  true,
+					Strategy: "bearer_token",
+					Params: contracts.AuthParams{
+						Header:      "Authorization",
+						Prefix:      "Bearer",
+						ValueEnvVar: "TEAMD_ZAI_API_KEY",
+					},
+				},
+			},
+			RequestShape: contracts.RequestShapeContract{
+				ID:        "request-shape-local-client-test",
+				Model:     contracts.ModelPolicy{Enabled: true, Strategy: "static_model", Params: contracts.ModelParams{Model: "glm-5-turbo"}},
+				Messages:  contracts.MessagePolicy{Enabled: true, Strategy: "raw_messages"},
+				Tools:     contracts.ToolPolicy{Enabled: true, Strategy: "tools_inline"},
+				Streaming: contracts.StreamingPolicy{Enabled: true, Strategy: "static_stream", Params: contracts.StreamingParams{Stream: false}},
+			},
+		},
+	}
+	out.Tools = contracts.ToolContract{
+		Catalog: contracts.ToolCatalogPolicy{
+			Enabled:  true,
+			Strategy: "static_allowlist",
+			Params:   contracts.ToolCatalogParams{ToolIDs: []string{"shell_exec"}},
+		},
+		Serialization: contracts.ToolSerializationPolicy{
+			Enabled:  true,
+			Strategy: "openai_function_tools",
+			Params:   contracts.ToolSerializationParams{IncludeDescriptions: true},
+		},
+	}
+	out.ToolExecution = contracts.ToolExecutionContract{
+		Access: contracts.ToolAccessPolicy{
+			Enabled:  true,
+			Strategy: "static_allowlist",
+			Params:   contracts.ToolAccessParams{ToolIDs: []string{"shell_exec"}},
+		},
+		Approval: contracts.ToolApprovalPolicy{Enabled: true, Strategy: "always_allow"},
+		Sandbox:  contracts.ToolSandboxPolicy{Enabled: true, Strategy: "workspace_write"},
+	}
+	out.ShellTools = contracts.ShellToolContract{
+		Catalog: contracts.ShellCatalogPolicy{
+			Enabled:  true,
+			Strategy: "static_allowlist",
+			Params:   contracts.ShellCatalogParams{ToolIDs: []string{"shell_exec"}},
+		},
+		Description: contracts.ShellDescriptionPolicy{
+			Enabled:  true,
+			Strategy: "static_builtin_descriptions",
+		},
+	}
+	out.ShellExecution = contracts.ShellExecutionContract{
+		Command: contracts.ShellCommandPolicy{
+			Enabled:  true,
+			Strategy: "static_allowlist",
+			Params:   contracts.ShellCommandParams{AllowedCommands: []string{"pwd"}},
+		},
+		Approval: contracts.ShellApprovalPolicy{Enabled: true, Strategy: "always_allow"},
+		Runtime: contracts.ShellRuntimePolicy{
+			Enabled:  true,
+			Strategy: "workspace_write",
+			Params: contracts.ShellRuntimeParams{
+				Cwd:            root,
+				Timeout:        "5s",
+				MaxOutputBytes: 4096,
+			},
+		},
+	}
+	return out
+}
+
 func TestChatSubmitShowsPendingPromptBeforeTurnCompletes(t *testing.T) {
 	ws := make(chan daemon.WebsocketEnvelope)
 	close(ws)
@@ -505,6 +715,85 @@ func TestChatInputApproveShortcutHandlesPendingApproval(t *testing.T) {
 	}
 	if !strings.Contains(mm.statusMessage, "approval granted") {
 		t.Fatalf("statusMessage = %q, want approval granted", mm.statusMessage)
+	}
+}
+
+func TestChatInputApproveShortcutCompletesPendingRunState(t *testing.T) {
+	ws := make(chan daemon.WebsocketEnvelope)
+	close(ws)
+	now := time.Date(2026, 4, 17, 12, 6, 0, 0, time.UTC)
+	finalSnapshot := daemon.SessionSnapshot{
+		SessionID:        "session-1",
+		PendingApprovals: nil,
+		Timeline: []projections.ChatTimelineItem{
+			{
+				Kind:       projections.ChatTimelineItemMessage,
+				Role:       "assistant",
+				Content:    "done after approval",
+				OccurredAt: now,
+			},
+		},
+		Prompt: daemon.SessionPromptSnapshot{
+			Default:   "default prompt",
+			Effective: "default prompt",
+		},
+	}
+	client := &stubOperatorClient{
+		sessions: []SessionSummary{{SessionID: "session-1", CreatedAt: now, LastActivity: now, MessageCount: 0}},
+		snapshot: daemon.SessionSnapshot{
+			SessionID: "session-1",
+			PendingApprovals: []shell.PendingApprovalView{{
+				ApprovalID: "approval-1",
+				Command:    "rm",
+				Args:       []string{"-rf", "tmp"},
+			}},
+			Prompt: daemon.SessionPromptSnapshot{
+				Default:   "default prompt",
+				Effective: "default prompt",
+			},
+		},
+		approveAlwaysResult: &finalSnapshot,
+		ws:                  ws,
+	}
+
+	m, err := newModelWithClient(context.Background(), client, "")
+	if err != nil {
+		t.Fatalf("newModelWithClient returned error: %v", err)
+	}
+	state := m.currentSessionState()
+	state.PendingPrompt = "run rm"
+	state.Busy = true
+	state.MainRun.Active = true
+	state.RunCancel = func() {}
+	state.Input.SetValue("a")
+
+	modelAfter, cmd := (&m).Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if cmd != nil {
+		t.Fatalf("approval shortcut returned unexpected cmd")
+	}
+	mm := modelAfter.(*model)
+	state = mm.currentSessionState()
+
+	if client.approvedAlwaysShellID != "approval-1" {
+		t.Fatalf("approvedAlways shell id = %q, want approval-1", client.approvedAlwaysShellID)
+	}
+	if state.PendingPrompt != "" {
+		t.Fatalf("pending prompt = %q, want cleared", state.PendingPrompt)
+	}
+	if state.Busy {
+		t.Fatal("state.Busy = true, want false")
+	}
+	if state.MainRun.Active {
+		t.Fatal("state.MainRun.Active = true, want false")
+	}
+	if state.RunCancel != nil {
+		t.Fatal("state.RunCancel != nil, want nil")
+	}
+	if got := state.Snapshot.Timeline[len(state.Snapshot.Timeline)-1].Content; got != "done after approval" {
+		t.Fatalf("last timeline content = %q, want done after approval", got)
+	}
+	if strings.Contains(state.ChatView.View(), "USER [pending]:") {
+		t.Fatalf("chat view still shows pending prompt after approval: %q", state.ChatView.View())
 	}
 }
 

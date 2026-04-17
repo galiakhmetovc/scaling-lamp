@@ -222,9 +222,7 @@ func (m *model) handleChatApprovalShortcut(state *sessionState, prompt string) (
 		m.errMessage = err.Error()
 		return true, nil
 	}
-	state.Snapshot = result.Session
-	m.statusMessage = status
-	return true, nil
+	return true, m.applyShellActionResult(state, result, status)
 }
 
 func (m *model) stageOrRecallDraft(state *sessionState) tea.Cmd {
