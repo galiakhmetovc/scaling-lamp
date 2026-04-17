@@ -642,6 +642,8 @@ type ShellCommandRule struct {
 
 type ShellApprovalParams struct {
 	Patterns                []string `yaml:"patterns"`
+	AllowPrefixes           []string `yaml:"allow_prefixes"`
+	DenyPrefixes            []string `yaml:"deny_prefixes"`
 	ApprovalMessageTemplate string   `yaml:"approval_message_template"`
 }
 

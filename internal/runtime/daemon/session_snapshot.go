@@ -27,6 +27,7 @@ type SessionSnapshot struct {
 	Transcript        []contracts.Message            `json:"transcript"`
 	Timeline          []projections.ChatTimelineItem `json:"timeline"`
 	Plan              projections.PlanHeadSnapshot   `json:"plan"`
+	ToolGovernance    ToolGovernanceSnapshot         `json:"tool_governance"`
 	PendingApprovals  []shell.PendingApprovalView    `json:"pending_approvals"`
 	RunningCommands   []projections.ShellCommandView `json:"running_commands"`
 	Delegates         []projections.DelegateView     `json:"delegates"`
@@ -106,6 +107,7 @@ func (s *Server) buildSessionSnapshot(sessionID string) (SessionSnapshot, error)
 		Transcript:        transcriptWindow,
 		Timeline:          timelineWindow,
 		Plan:              plan,
+		ToolGovernance:    buildToolGovernanceSnapshot(agent),
 		PendingApprovals:  agent.PendingShellApprovals(sessionID),
 		RunningCommands:   agent.CurrentRunningShellCommands(sessionID),
 		Delegates:         agent.CurrentDelegates(sessionID),

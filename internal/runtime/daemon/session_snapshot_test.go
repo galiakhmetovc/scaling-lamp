@@ -184,3 +184,89 @@ func TestSessionSnapshotIncludesPromptOverride(t *testing.T) {
 		t.Fatalf("prompt has_override = false, want true")
 	}
 }
+
+func TestSessionSnapshotIncludesToolGovernance(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 4, 17, 11, 0, 0, 0, time.UTC)
+	agent := &runtime.Agent{
+		Config: config.AgentConfig{ID: "daemon-chat"},
+		Contracts: contracts.ResolvedContracts{
+			ToolExecution: contracts.ToolExecutionContract{
+				Access: contracts.ToolAccessPolicy{
+					Enabled:  true,
+					Strategy: "static_allowlist",
+					Params:   contracts.ToolAccessParams{ToolIDs: []string{"fs_read_text", "shell_exec"}},
+				},
+				Approval: contracts.ToolApprovalPolicy{
+					Enabled:  true,
+					Strategy: "require_for_destructive",
+					Params:   contracts.ToolApprovalParams{DestructiveToolIDs: []string{"shell_exec"}},
+				},
+			},
+			ShellExecution: contracts.ShellExecutionContract{
+				Approval: contracts.ShellApprovalPolicy{
+					Enabled:  true,
+					Strategy: "always_require",
+					Params: contracts.ShellApprovalParams{
+						AllowPrefixes: []string{"go test"},
+						DenyPrefixes:  []string{"go env"},
+					},
+				},
+				Runtime: contracts.ShellRuntimePolicy{
+					Enabled:  true,
+					Strategy: "workspace_write",
+					Params: contracts.ShellRuntimeParams{
+						Timeout:        "5s",
+						MaxOutputBytes: 4096,
+						AllowNetwork:   true,
+					},
+				},
+			},
+		},
+		EventLog: runtime.NewInMemoryEventLog(),
+		Projections: []projections.Projection{
+			projections.NewSessionCatalogProjection(),
+			projections.NewTranscriptProjection(),
+			projections.NewChatTimelineProjection(),
+			projections.NewPlanHeadProjection(),
+			projections.NewShellCommandProjection(),
+			projections.NewDelegateProjection(),
+		},
+		Now:   func() time.Time { return now },
+		NewID: func(prefix string) string { return prefix + "-1" },
+	}
+	server := &Server{
+		agent:          agent,
+		sessionRuntime: map[string]*sessionRuntimeState{},
+		daemonBus:      newDaemonBus(),
+	}
+	if err := agent.RecordEvent(context.Background(), eventing.Event{
+		ID:               "evt-session-created",
+		Kind:             eventing.EventSessionCreated,
+		OccurredAt:       now,
+		AggregateID:      "session-1",
+		AggregateType:    eventing.AggregateSession,
+		AggregateVersion: 1,
+		Payload:          map[string]any{"session_id": "session-1"},
+	}); err != nil {
+		t.Fatalf("record session created: %v", err)
+	}
+
+	snapshot, err := server.buildSessionSnapshot("session-1")
+	if err != nil {
+		t.Fatalf("build session snapshot: %v", err)
+	}
+	if snapshot.ToolGovernance.ApprovalMode != "require_for_destructive" {
+		t.Fatalf("approval_mode = %q, want require_for_destructive", snapshot.ToolGovernance.ApprovalMode)
+	}
+	if len(snapshot.ToolGovernance.AllowedTools) != 2 {
+		t.Fatalf("allowed_tools = %#v", snapshot.ToolGovernance.AllowedTools)
+	}
+	if len(snapshot.ToolGovernance.ShellAllowPrefixes) != 1 || snapshot.ToolGovernance.ShellAllowPrefixes[0] != "go test" {
+		t.Fatalf("shell allow prefixes = %#v", snapshot.ToolGovernance.ShellAllowPrefixes)
+	}
+	if len(snapshot.ToolGovernance.ShellDenyPrefixes) != 1 || snapshot.ToolGovernance.ShellDenyPrefixes[0] != "go env" {
+		t.Fatalf("shell deny prefixes = %#v", snapshot.ToolGovernance.ShellDenyPrefixes)
+	}
+}

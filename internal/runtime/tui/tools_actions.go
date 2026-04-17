@@ -30,6 +30,16 @@ func (m *model) updateTools(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				m.statusMessage = "shell approval granted"
 			}
 		}
+	case "A":
+		if len(approvals) > 0 && m.toolsFocus == toolsFocusApprovals {
+			result, err := m.client.ApproveShellAlways(m.ctx, approvals[m.approvalCursor].ApprovalID)
+			if err != nil {
+				m.errMessage = err.Error()
+			} else {
+				state.Snapshot = result.Session
+				m.statusMessage = "shell approval granted and saved"
+			}
+		}
 	case "x":
 		if len(approvals) > 0 && m.toolsFocus == toolsFocusApprovals {
 			result, err := m.client.DenyShell(m.ctx, approvals[m.approvalCursor].ApprovalID)
@@ -38,6 +48,16 @@ func (m *model) updateTools(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			} else {
 				state.Snapshot = result.Session
 				m.statusMessage = "shell approval denied"
+			}
+		}
+	case "X":
+		if len(approvals) > 0 && m.toolsFocus == toolsFocusApprovals {
+			result, err := m.client.DenyShellAlways(m.ctx, approvals[m.approvalCursor].ApprovalID)
+			if err != nil {
+				m.errMessage = err.Error()
+			} else {
+				state.Snapshot = result.Session
+				m.statusMessage = "shell approval denied and saved"
 			}
 		}
 	case "k":

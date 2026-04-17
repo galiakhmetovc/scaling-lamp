@@ -1495,6 +1495,9 @@ func TestToolsViewShowsPendingShellApproval(t *testing.T) {
 	if !strings.Contains(got, "approve") {
 		t.Fatalf("tools details missing approval actions: %q", got)
 	}
+	if !strings.Contains(got, "allow forever") || !strings.Contains(got, "deny forever") {
+		t.Fatalf("tools details missing persistent approval actions: %q", got)
+	}
 }
 
 func TestToolsViewCanKillRunningShellCommand(t *testing.T) {

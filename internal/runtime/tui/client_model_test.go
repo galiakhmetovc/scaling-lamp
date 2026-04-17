@@ -107,7 +107,15 @@ func (c *stubOperatorClient) ApproveShell(context.Context, string) (ShellActionR
 	return ShellActionResult{}, nil
 }
 
+func (c *stubOperatorClient) ApproveShellAlways(context.Context, string) (ShellActionResult, error) {
+	return ShellActionResult{}, nil
+}
+
 func (c *stubOperatorClient) DenyShell(context.Context, string) (ShellActionResult, error) {
+	return ShellActionResult{}, nil
+}
+
+func (c *stubOperatorClient) DenyShellAlways(context.Context, string) (ShellActionResult, error) {
 	return ShellActionResult{}, nil
 }
 

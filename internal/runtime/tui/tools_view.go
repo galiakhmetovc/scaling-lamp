@@ -93,6 +93,7 @@ func (m *model) renderToolDetails(state *sessionState) string {
 			"Message: " + approval.Message,
 			"",
 			"`a` approve  `x` deny",
+			"`A` allow forever  `X` deny forever",
 		}, "\n")
 	}
 	commands := m.currentRunningCommands()

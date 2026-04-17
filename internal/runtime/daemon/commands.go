@@ -321,6 +321,32 @@ func (s *Server) executeCommand(ctx context.Context, req CommandRequest) (any, e
 		}
 		payload["command_id"] = commandID
 		return payload, nil
+	case "shell.approve_always":
+		approvalID, err := requiredString(req.Payload, "approval_id")
+		if err != nil {
+			return nil, err
+		}
+		view, ok := agent.PendingShellApproval(approvalID)
+		if !ok {
+			return nil, fmt.Errorf("shell approval %q not found", approvalID)
+		}
+		reloaded, err := PersistShellApprovalRuleAndReload(agent.ConfigPath, "allow", shellApprovalPrefix(view.Command, view.Args))
+		if err != nil {
+			return nil, err
+		}
+		reloaded.UIBus = agent.UIBus
+		s.swapAgent(reloaded)
+		agent = s.currentAgent()
+		commandID, err := agent.ApproveShellCommand(ctx, approvalID)
+		if err != nil {
+			return nil, err
+		}
+		payload, err := s.sessionPayload(view.SessionID)
+		if err != nil {
+			return nil, err
+		}
+		payload["command_id"] = commandID
+		return payload, nil
 	case "shell.deny":
 		approvalID, err := requiredString(req.Payload, "approval_id")
 		if err != nil {
@@ -330,6 +356,26 @@ func (s *Server) executeCommand(ctx context.Context, req CommandRequest) (any, e
 		if !ok {
 			return nil, fmt.Errorf("shell approval %q not found", approvalID)
 		}
+		if err := agent.DenyShellCommand(ctx, approvalID); err != nil {
+			return nil, err
+		}
+		return s.sessionPayload(view.SessionID)
+	case "shell.deny_always":
+		approvalID, err := requiredString(req.Payload, "approval_id")
+		if err != nil {
+			return nil, err
+		}
+		view, ok := agent.PendingShellApproval(approvalID)
+		if !ok {
+			return nil, fmt.Errorf("shell approval %q not found", approvalID)
+		}
+		reloaded, err := PersistShellApprovalRuleAndReload(agent.ConfigPath, "deny", shellApprovalPrefix(view.Command, view.Args))
+		if err != nil {
+			return nil, err
+		}
+		reloaded.UIBus = agent.UIBus
+		s.swapAgent(reloaded)
+		agent = s.currentAgent()
 		if err := agent.DenyShellCommand(ctx, approvalID); err != nil {
 			return nil, err
 		}

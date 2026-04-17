@@ -40,6 +40,7 @@ type BootstrapPayload struct {
 	ConfigPath        string                   `json:"config_path"`
 	ListenAddr        string                   `json:"listen_addr"`
 	ArtifactStorePath string                   `json:"artifact_store_path"`
+	ToolGovernance    ToolGovernanceSnapshot   `json:"tool_governance"`
 	Transport         ClientTransportSnapshot  `json:"transport"`
 	Assets            WebAssetsSnapshot        `json:"assets"`
 	Settings          SettingsSnapshot         `json:"settings"`
@@ -214,6 +215,7 @@ func (s *Server) handleBootstrap(w http.ResponseWriter, _ *http.Request) {
 		AgentID:    agent.Config.ID,
 		ConfigPath: agent.ConfigPath,
 		ListenAddr: s.listenAddr,
+		ToolGovernance: buildToolGovernanceSnapshot(agent),
 		Transport: ClientTransportSnapshot{
 			EndpointPath:  agent.Contracts.OperatorSurface.ClientTransport.Params.EndpointPath,
 			WebsocketPath: agent.Contracts.OperatorSurface.ClientTransport.Params.WebSocketPath,

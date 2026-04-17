@@ -74,7 +74,9 @@ type OperatorClient interface {
 	SetPlanTaskStatus(context.Context, string, string, string, string) (PlanMutation, error)
 	AddPlanTaskNote(context.Context, string, string, string) (PlanMutation, error)
 	ApproveShell(context.Context, string) (ShellActionResult, error)
+	ApproveShellAlways(context.Context, string) (ShellActionResult, error)
 	DenyShell(context.Context, string) (ShellActionResult, error)
+	DenyShellAlways(context.Context, string) (ShellActionResult, error)
 	KillShell(context.Context, string) (ShellActionResult, error)
 	GetSettings(context.Context) (daemon.SettingsSnapshot, error)
 	ApplySettingsForm(context.Context, string, map[string]any) (daemon.SettingsSnapshot, error)
@@ -100,9 +102,10 @@ func (c *localClient) Bootstrap(ctx context.Context) (daemon.BootstrapPayload, e
 	_ = ctx
 	settings := daemon.SettingsSnapshot{}
 	return daemon.BootstrapPayload{
-		AgentID:    c.agent.Config.ID,
-		ConfigPath: c.agent.ConfigPath,
-		Settings:   settings,
+		AgentID:        c.agent.Config.ID,
+		ConfigPath:     c.agent.ConfigPath,
+		ToolGovernance: daemon.BuildToolGovernanceSnapshot(c.agent),
+		Settings:       settings,
 	}, nil
 }
 
@@ -288,11 +291,47 @@ func (c *localClient) ApproveShell(ctx context.Context, approvalID string) (Shel
 	return ShellActionResult{Session: session}, err
 }
 
+func (c *localClient) ApproveShellAlways(ctx context.Context, approvalID string) (ShellActionResult, error) {
+	view, ok := c.agent.PendingShellApproval(approvalID)
+	if !ok {
+		return ShellActionResult{}, fmt.Errorf("shell approval %q not found", approvalID)
+	}
+	reloaded, err := daemon.PersistShellApprovalRuleAndReload(c.agent.ConfigPath, "allow", daemonShellApprovalPrefix(view.Command, view.Args))
+	if err != nil {
+		return ShellActionResult{}, err
+	}
+	reloaded.UIBus = c.agent.UIBus
+	c.agent = reloaded
+	if _, err := c.agent.ApproveShellCommand(ctx, approvalID); err != nil {
+		return ShellActionResult{}, err
+	}
+	session, err := c.GetSession(ctx, view.SessionID)
+	return ShellActionResult{Session: session}, err
+}
+
 func (c *localClient) DenyShell(ctx context.Context, approvalID string) (ShellActionResult, error) {
 	view, ok := c.agent.PendingShellApproval(approvalID)
 	if !ok {
 		return ShellActionResult{}, fmt.Errorf("shell approval %q not found", approvalID)
 	}
+	if err := c.agent.DenyShellCommand(ctx, approvalID); err != nil {
+		return ShellActionResult{}, err
+	}
+	session, err := c.GetSession(ctx, view.SessionID)
+	return ShellActionResult{Session: session}, err
+}
+
+func (c *localClient) DenyShellAlways(ctx context.Context, approvalID string) (ShellActionResult, error) {
+	view, ok := c.agent.PendingShellApproval(approvalID)
+	if !ok {
+		return ShellActionResult{}, fmt.Errorf("shell approval %q not found", approvalID)
+	}
+	reloaded, err := daemon.PersistShellApprovalRuleAndReload(c.agent.ConfigPath, "deny", daemonShellApprovalPrefix(view.Command, view.Args))
+	if err != nil {
+		return ShellActionResult{}, err
+	}
+	reloaded.UIBus = c.agent.UIBus
+	c.agent = reloaded
 	if err := c.agent.DenyShellCommand(ctx, approvalID); err != nil {
 		return ShellActionResult{}, err
 	}
@@ -634,11 +673,25 @@ func (c *daemonClient) ApproveShell(ctx context.Context, approvalID string) (She
 	err := c.command(ctx, daemon.CommandRequest{Type: "command", ID: "cmd-shell-approve", Command: "shell.approve", Payload: map[string]any{"approval_id": approvalID}}, &result)
 	return ShellActionResult{Session: result.Session}, err
 }
+func (c *daemonClient) ApproveShellAlways(ctx context.Context, approvalID string) (ShellActionResult, error) {
+	var result struct {
+		Session daemon.SessionSnapshot `json:"session"`
+	}
+	err := c.command(ctx, daemon.CommandRequest{Type: "command", ID: "cmd-shell-approve-always", Command: "shell.approve_always", Payload: map[string]any{"approval_id": approvalID}}, &result)
+	return ShellActionResult{Session: result.Session}, err
+}
 func (c *daemonClient) DenyShell(ctx context.Context, approvalID string) (ShellActionResult, error) {
 	var result struct {
 		Session daemon.SessionSnapshot `json:"session"`
 	}
 	err := c.command(ctx, daemon.CommandRequest{Type: "command", ID: "cmd-shell-deny", Command: "shell.deny", Payload: map[string]any{"approval_id": approvalID}}, &result)
+	return ShellActionResult{Session: result.Session}, err
+}
+func (c *daemonClient) DenyShellAlways(ctx context.Context, approvalID string) (ShellActionResult, error) {
+	var result struct {
+		Session daemon.SessionSnapshot `json:"session"`
+	}
+	err := c.command(ctx, daemon.CommandRequest{Type: "command", ID: "cmd-shell-deny-always", Command: "shell.deny_always", Payload: map[string]any{"approval_id": approvalID}}, &result)
 	return ShellActionResult{Session: result.Session}, err
 }
 func (c *daemonClient) KillShell(ctx context.Context, commandID string) (ShellActionResult, error) {
@@ -850,10 +903,15 @@ func buildLocalSessionSnapshot(agent *runtime.Agent, sessionID string) (daemon.S
 		Transcript:       agent.CurrentTranscript(sessionID),
 		Timeline:         agent.CurrentChatTimeline(sessionID),
 		Plan:             plan,
+		ToolGovernance:   daemon.BuildToolGovernanceSnapshot(agent),
 		PendingApprovals: agent.PendingShellApprovals(sessionID),
 		RunningCommands:  agent.CurrentRunningShellCommands(sessionID),
 		Delegates:        agent.CurrentDelegates(sessionID),
 	}, nil
+}
+
+func daemonShellApprovalPrefix(command string, args []string) string {
+	return strings.TrimSpace(strings.Join(append([]string{command}, args...), " "))
 }
 
 func defaultPromptForLocalClient(agent *runtime.Agent) string {

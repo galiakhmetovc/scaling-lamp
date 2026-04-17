@@ -6,4 +6,6 @@ spec:
   strategy: always_allow
   params:
     patterns: []
+    allow_prefixes: []
+    deny_prefixes: []
     approval_message_template: ""

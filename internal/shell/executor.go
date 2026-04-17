@@ -116,6 +116,14 @@ type pendingApproval struct {
 	meta       ExecutionMeta
 }
 
+type approvalDecision string
+
+const (
+	approvalDecisionAllow   approvalDecision = "allow"
+	approvalDecisionRequire approvalDecision = "require"
+	approvalDecisionDeny    approvalDecision = "deny"
+)
+
 type Executor struct {
 	run        runFunc
 	lookupPath lookupPathFunc
@@ -201,7 +209,11 @@ func (e *Executor) executeSync(ctx context.Context, contract contracts.ShellExec
 	if err != nil {
 		return "", err
 	}
-	if approvalRequired, message := e.evaluateApproval(contract.Approval, command, args); approvalRequired {
+	approval, message := e.evaluateApproval(contract.Approval, command, args)
+	if approval == approvalDecisionDeny {
+		return "", fmt.Errorf("%s", message)
+	}
+	if approval == approvalDecisionRequire {
 		return e.queueApproval(ctx, toolName, contract, ExecutionMeta{}, command, args, cwd, invocation, message)
 	}
 	timeout, err := parseTimeout(contract.Runtime)
@@ -267,7 +279,11 @@ func (e *Executor) executeStart(ctx context.Context, contract contracts.ShellExe
 	if err != nil {
 		return "", err
 	}
-	if approvalRequired, message := e.evaluateApproval(contract.Approval, command, args); approvalRequired {
+	approval, message := e.evaluateApproval(contract.Approval, command, args)
+	if approval == approvalDecisionDeny {
+		return "", fmt.Errorf("%s", message)
+	}
+	if approval == approvalDecisionRequire {
 		return e.queueApproval(ctx, "shell_start", contract, meta, command, args, cwd, invocation, message)
 	}
 	return e.startCommand(ctx, contract, meta, "", command, args, cwd, invocation, "shell_start", nil)
@@ -1149,25 +1165,37 @@ func jsonText(value any) string {
 	return string(data)
 }
 
-func (e *Executor) evaluateApproval(policy contracts.ShellApprovalPolicy, command string, args []string) (bool, string) {
+func (e *Executor) evaluateApproval(policy contracts.ShellApprovalPolicy, command string, args []string) (approvalDecision, string) {
 	if !policy.Enabled {
-		return false, ""
+		return approvalDecisionAllow, ""
 	}
-	full := strings.TrimSpace(strings.Join(append([]string{command}, args...), " "))
+	full := commandPrefix(command, args)
+	for _, prefix := range policy.Params.DenyPrefixes {
+		prefix = strings.TrimSpace(prefix)
+		if prefix != "" && strings.HasPrefix(full, prefix) {
+			return approvalDecisionDeny, "shell command denied by persistent policy: " + full
+		}
+	}
+	for _, prefix := range policy.Params.AllowPrefixes {
+		prefix = strings.TrimSpace(prefix)
+		if prefix != "" && strings.HasPrefix(full, prefix) {
+			return approvalDecisionAllow, ""
+		}
+	}
 	switch policy.Strategy {
 	case "always_allow":
-		return false, ""
+		return approvalDecisionAllow, ""
 	case "always_require":
-		return true, approvalMessage(policy, full)
+		return approvalDecisionRequire, approvalMessage(policy, full)
 	case "require_for_patterns":
 		for _, pattern := range policy.Params.Patterns {
 			if pattern != "" && strings.Contains(full, pattern) {
-				return true, approvalMessage(policy, full)
+				return approvalDecisionRequire, approvalMessage(policy, full)
 			}
 		}
-		return false, ""
+		return approvalDecisionAllow, ""
 	default:
-		return false, ""
+		return approvalDecisionAllow, ""
 	}
 }
 
@@ -1176,6 +1204,10 @@ func approvalMessage(policy contracts.ShellApprovalPolicy, full string) string {
 		return strings.ReplaceAll(policy.Params.ApprovalMessageTemplate, "{{command}}", full)
 	}
 	return "shell command requires operator approval: " + full
+}
+
+func commandPrefix(command string, args []string) string {
+	return strings.TrimSpace(strings.Join(append([]string{command}, args...), " "))
 }
 
 func (e *Executor) queueApproval(ctx context.Context, toolName string, contract contracts.ShellExecutionContract, meta ExecutionMeta, command string, args []string, cwd string, invocation invocation, message string) (string, error) {

@@ -632,6 +632,79 @@ func TestExecutorDeniesPendingApproval(t *testing.T) {
 	}
 }
 
+func TestExecutorAllowsPersistentApprovalPrefix(t *testing.T) {
+	t.Parallel()
+
+	executor := NewExecutor()
+	out, err := executor.Execute(contracts.ShellExecutionContract{
+		Command: contracts.ShellCommandPolicy{
+			Enabled:  true,
+			Strategy: "static_allowlist",
+			Params:   contracts.ShellCommandParams{AllowedCommands: []string{"go"}},
+		},
+		Approval: contracts.ShellApprovalPolicy{
+			Enabled:  true,
+			Strategy: "always_require",
+			Params:   contracts.ShellApprovalParams{AllowPrefixes: []string{"go test"}},
+		},
+		Runtime: contracts.ShellRuntimePolicy{
+			Enabled:  true,
+			Strategy: "workspace_write",
+			Params: contracts.ShellRuntimeParams{
+				Cwd:            t.TempDir(),
+				Timeout:        "5s",
+				MaxOutputBytes: 4096,
+				AllowNetwork:   true,
+			},
+		},
+	}, "shell_exec", map[string]any{
+		"command": "go",
+		"args":    []any{"test", "./..."},
+	})
+	if err != nil {
+		t.Fatalf("Execute returned error: %v", err)
+	}
+	if decodeField(t, out, "status") == "approval_pending" {
+		t.Fatalf("allow prefix still triggered approval: %s", out)
+	}
+}
+
+func TestExecutorDeniesPersistentApprovalPrefix(t *testing.T) {
+	t.Parallel()
+
+	executor := NewExecutor()
+	_, err := executor.Execute(contracts.ShellExecutionContract{
+		Command: contracts.ShellCommandPolicy{
+			Enabled:  true,
+			Strategy: "static_allowlist",
+			Params:   contracts.ShellCommandParams{AllowedCommands: []string{"go"}},
+		},
+		Approval: contracts.ShellApprovalPolicy{
+			Enabled:  true,
+			Strategy: "always_allow",
+			Params:   contracts.ShellApprovalParams{DenyPrefixes: []string{"go env"}},
+		},
+		Runtime: contracts.ShellRuntimePolicy{
+			Enabled:  true,
+			Strategy: "workspace_write",
+			Params: contracts.ShellRuntimeParams{
+				Cwd:            t.TempDir(),
+				Timeout:        "5s",
+				MaxOutputBytes: 4096,
+			},
+		},
+	}, "shell_exec", map[string]any{
+		"command": "go",
+		"args":    []any{"env", "GOROOT"},
+	})
+	if err == nil {
+		t.Fatal("Execute returned nil error, want persistent deny")
+	}
+	if !strings.Contains(err.Error(), "denied by persistent policy") {
+		t.Fatalf("Execute error = %q", err)
+	}
+}
+
 func TestExecutorActiveCommandsExcludesCompletedCommands(t *testing.T) {
 	t.Parallel()
 
