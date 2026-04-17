@@ -103,6 +103,12 @@ func (p *PlanHeadProjection) Apply(event eventing.Event) error {
 		if planID == active.Plan.ID {
 			active = ActivePlanSnapshot{Tasks: map[string]PlanTaskView{}}
 		}
+	case eventing.EventSessionDeleted:
+		delete(p.active, sessionID)
+		if p.snapshot.Sessions != nil {
+			delete(p.snapshot.Sessions, sessionID)
+		}
+		return nil
 	}
 	p.active[sessionID] = active
 	p.rebuildSession(sessionID)

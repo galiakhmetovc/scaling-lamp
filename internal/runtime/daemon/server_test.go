@@ -160,6 +160,79 @@ func TestBootstrapEndpointReturnsEmptySessionsArrayWhenNoSessionsExist(t *testin
 	}
 }
 
+func TestSessionDeleteCommandRemovesSessionFromOperatorSurface(t *testing.T) {
+	t.Parallel()
+
+	agent := buildAgentWithOperatorSurface(t)
+	server, err := daemon.New(agent)
+	if err != nil {
+		t.Fatalf("new daemon server: %v", err)
+	}
+	httpServer := httptest.NewServer(server.Handler())
+	defer httpServer.Close()
+
+	conn := dialWebsocket(t, httpServer.URL, "/ws")
+	defer conn.Close()
+	_ = readEnvelopeJSON(t, conn)
+
+	writeCommandEnvelope(t, conn, map[string]any{
+		"type":    "command",
+		"id":      "cmd-create",
+		"command": "session.create",
+	})
+	created := waitForCommandCompleted(t, conn, "cmd-create")
+	createdPayload := mapPayload(t, created["payload"])
+	session := mapPayload(t, createdPayload["session"])
+	sessionID, _ := session["session_id"].(string)
+	if sessionID == "" {
+		t.Fatalf("created session_id = %#v, want populated id", session["session_id"])
+	}
+
+	writeCommandEnvelope(t, conn, map[string]any{
+		"type":    "command",
+		"id":      "cmd-delete",
+		"command": "session.delete",
+		"payload": map[string]any{"session_id": sessionID},
+	})
+	_ = waitForCommandCompleted(t, conn, "cmd-delete")
+
+	req := httptest.NewRequest(http.MethodGet, "/api/bootstrap", nil)
+	rec := httptest.NewRecorder()
+	server.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("bootstrap status = %d, want 200", rec.Code)
+	}
+	var payload daemon.BootstrapPayload
+	if err := json.Unmarshal(rec.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("decode bootstrap: %v", err)
+	}
+	for _, entry := range payload.Sessions {
+		if entry.SessionID == sessionID {
+			t.Fatalf("deleted session %q still present in bootstrap sessions", sessionID)
+		}
+	}
+
+	writeCommandEnvelope(t, conn, map[string]any{
+		"type":    "command",
+		"id":      "cmd-get-deleted",
+		"command": "session.get",
+		"payload": map[string]any{"session_id": sessionID},
+	})
+	var failed map[string]any
+	for i := 0; i < 4; i++ {
+		failed = readEnvelopeJSON(t, conn)
+		if failed["type"] == "command_failed" {
+			break
+		}
+	}
+	if failed["type"] != "command_failed" {
+		t.Fatalf("delete follow-up envelope type = %#v, want command_failed", failed["type"])
+	}
+	if !strings.Contains(fmt.Sprint(failed["error"]), "not found") {
+		t.Fatalf("deleted session get error = %#v, want not found", failed["error"])
+	}
+}
+
 func TestHealthzEndpointIsAvailable(t *testing.T) {
 	t.Parallel()
 

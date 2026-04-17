@@ -58,6 +58,10 @@ func (p *SessionCatalogProjection) Apply(event eventing.Event) error {
 		}
 		entry.LastActivity = event.OccurredAt
 		p.snapshot.Sessions[event.AggregateID] = entry
+	case eventing.EventSessionDeleted:
+		if p.snapshot.Sessions != nil {
+			delete(p.snapshot.Sessions, event.AggregateID)
+		}
 	case eventing.EventMessageRecorded:
 		sessionID, _ := event.Payload["session_id"].(string)
 		if sessionID == "" {

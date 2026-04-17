@@ -17,6 +17,7 @@ spec:
     projections:
       - session
       - session_catalog
+      - session_prompt
       - run
       - transcript
       - chat_timeline

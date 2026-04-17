@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"fmt"
+	"strings"
 	"time"
 
 	"teamd/internal/contracts"
@@ -22,12 +23,20 @@ type SessionSnapshot struct {
 	History           ChatHistorySnapshot            `json:"history"`
 	BaseContextTokens int                            `json:"base_context_tokens"`
 	ContextBudget     ContextBudgetSnapshot          `json:"context_budget"`
+	Prompt            SessionPromptSnapshot          `json:"prompt"`
 	Transcript        []contracts.Message            `json:"transcript"`
 	Timeline          []projections.ChatTimelineItem `json:"timeline"`
 	Plan              projections.PlanHeadSnapshot   `json:"plan"`
 	PendingApprovals  []shell.PendingApprovalView    `json:"pending_approvals"`
 	RunningCommands   []projections.ShellCommandView `json:"running_commands"`
 	Delegates         []projections.DelegateView     `json:"delegates"`
+}
+
+type SessionPromptSnapshot struct {
+	Default     string `json:"default"`
+	Override    string `json:"override"`
+	Effective   string `json:"effective"`
+	HasOverride bool   `json:"has_override"`
 }
 
 type ChatHistorySnapshot struct {
@@ -74,6 +83,7 @@ func (s *Server) buildSessionSnapshot(sessionID string) (SessionSnapshot, error)
 	windowLimit := s.chatHistoryWindowLimit()
 	transcriptWindow := tailMessages(transcript, windowLimit)
 	timelineWindow := tailTimeline(timeline, windowLimit)
+	prompt := s.sessionPromptSnapshot(sessionID)
 	return SessionSnapshot{
 		SessionID:         entry.SessionID,
 		Title:             entry.Title,
@@ -92,6 +102,7 @@ func (s *Server) buildSessionSnapshot(sessionID string) (SessionSnapshot, error)
 		},
 		BaseContextTokens: approximateContextTokens(transcript),
 		ContextBudget:     s.contextBudgetSnapshot(sessionID, transcript),
+		Prompt:            prompt,
 		Transcript:        transcriptWindow,
 		Timeline:          timelineWindow,
 		Plan:              plan,
@@ -99,6 +110,21 @@ func (s *Server) buildSessionSnapshot(sessionID string) (SessionSnapshot, error)
 		RunningCommands:   agent.CurrentRunningShellCommands(sessionID),
 		Delegates:         agent.CurrentDelegates(sessionID),
 	}, nil
+}
+
+func (s *Server) sessionPromptSnapshot(sessionID string) SessionPromptSnapshot {
+	defaultPrompt, _ := s.currentAgent().DefaultSystemPrompt()
+	override := s.currentAgent().CurrentSessionPromptOverride(sessionID)
+	effective := defaultPrompt
+	if strings.TrimSpace(override) != "" {
+		effective = override
+	}
+	return SessionPromptSnapshot{
+		Default:     defaultPrompt,
+		Override:    override,
+		Effective:   effective,
+		HasOverride: strings.TrimSpace(override) != "",
+	}
 }
 
 func (s *Server) artifactStorePath() string {

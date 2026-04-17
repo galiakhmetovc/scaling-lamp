@@ -29,6 +29,12 @@ func (p *TranscriptProjection) ID() string {
 }
 
 func (p *TranscriptProjection) Apply(event eventing.Event) error {
+	if event.Kind == eventing.EventSessionDeleted {
+		if p.snapshot.Sessions != nil {
+			delete(p.snapshot.Sessions, event.AggregateID)
+		}
+		return nil
+	}
 	if event.Kind != eventing.EventMessageRecorded {
 		return nil
 	}

@@ -2,6 +2,7 @@ package tui
 
 import (
 	"context"
+	"fmt"
 	"strings"
 
 	"github.com/charmbracelet/bubbles/textarea"
@@ -12,6 +13,40 @@ import (
 )
 
 func (m *model) updateSessions(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	if m.sessionMode == sessionsModeRename {
+		switch msg.String() {
+		case "esc":
+			m.sessionMode = sessionsModeBrowse
+			return m, nil
+		case "enter":
+			if len(m.sessionOrder) == 0 {
+				m.sessionMode = sessionsModeBrowse
+				return m, nil
+			}
+			title := strings.TrimSpace(m.sessionTitleInput.Value())
+			if title == "" {
+				m.errMessage = "session label is empty"
+				return m, nil
+			}
+			return m, renameSessionCmd(m.ctx, m.client, m.sessionOrder[m.sessionCursor], title)
+		}
+		var cmd tea.Cmd
+		m.sessionTitleInput, cmd = m.sessionTitleInput.Update(msg)
+		return m, cmd
+	}
+	if m.sessionMode == sessionsModeDeleteConfirm {
+		switch msg.String() {
+		case "y":
+			if len(m.sessionOrder) == 0 {
+				m.sessionMode = sessionsModeBrowse
+				return m, nil
+			}
+			return m, deleteSessionCmd(m.ctx, m.client, m.sessionOrder[m.sessionCursor])
+		case "n", "esc":
+			m.sessionMode = sessionsModeBrowse
+		}
+		return m, nil
+	}
 	switch msg.String() {
 	case "up", "k":
 		if m.sessionCursor > 0 {
@@ -45,12 +80,45 @@ func (m *model) updateSessions(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.activeSessionID = session.SessionID
 		m.sessionCursor = 0
 		m.tab = tabChat
+	case "r":
+		if len(m.sessionOrder) == 0 {
+			return m, nil
+		}
+		sessionID := m.sessionOrder[m.sessionCursor]
+		title := sessionID
+		if state := m.sessions[sessionID]; state != nil && strings.TrimSpace(state.Snapshot.Title) != "" {
+			title = state.Snapshot.Title
+		}
+		m.sessionTitleInput.SetValue(title)
+		m.sessionTitleInput.CursorEnd()
+		m.sessionTitleInput.Focus()
+		m.sessionMode = sessionsModeRename
+	case "d":
+		if len(m.sessionOrder) == 0 {
+			return m, nil
+		}
+		m.sessionMode = sessionsModeDeleteConfirm
 	}
 	return m, nil
 }
 
 func (m *model) viewSessions() string {
-	lines := []string{"Sessions", "", "n = new session, Enter = activate"}
+	lines := []string{"Sessions", "", "n = new session, Enter = activate, r = rename label, d = delete"}
+	if m.sessionMode == sessionsModeRename {
+		lines = append(lines, "", "Rename session label:", m.sessionTitleInput.View(), "Enter save, Esc cancel")
+		return strings.Join(lines, "\n")
+	}
+	if m.sessionMode == sessionsModeDeleteConfirm {
+		target := ""
+		if len(m.sessionOrder) > 0 {
+			target = m.sessionOrder[m.sessionCursor]
+			if state := m.sessions[target]; state != nil && strings.TrimSpace(state.Snapshot.Title) != "" {
+				target = state.Snapshot.Title
+			}
+		}
+		lines = append(lines, "", fmt.Sprintf("Delete %q permanently? y/n", target))
+		return strings.Join(lines, "\n")
+	}
 	m.mouseSessionTop = len(lines)
 	for i, sessionID := range m.sessionOrder {
 		state := m.sessions[sessionID]
@@ -122,6 +190,20 @@ func (m *model) loadSessions(resumeID string) error {
 	m.sessionOrder = append([]string{session.SessionID}, m.sessionOrder...)
 	m.activeSessionID = session.SessionID
 	return nil
+}
+
+func renameSessionCmd(ctx context.Context, client OperatorClient, sessionID, title string) tea.Cmd {
+	return func() tea.Msg {
+		session, err := client.RenameSession(ctx, sessionID, title)
+		return sessionRenamedMsg{Session: session, Err: err}
+	}
+}
+
+func deleteSessionCmd(ctx context.Context, client OperatorClient, sessionID string) tea.Cmd {
+	return func() tea.Msg {
+		err := client.DeleteSession(ctx, sessionID)
+		return sessionDeletedMsg{SessionID: sessionID, Err: err}
+	}
 }
 
 func newSessionState(overrides sessionOverrides) *sessionState {

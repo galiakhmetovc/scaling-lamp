@@ -74,6 +74,34 @@ func (a *Agent) RenameSession(ctx context.Context, sessionID, title string) erro
 	})
 }
 
+func (a *Agent) DeleteSession(ctx context.Context, sessionID string) error {
+	if a == nil {
+		return fmt.Errorf("agent is nil")
+	}
+	if strings.TrimSpace(sessionID) == "" {
+		return fmt.Errorf("session id is empty")
+	}
+	if !a.sessionExists(sessionID) {
+		return fmt.Errorf("session %q not found", sessionID)
+	}
+	return a.RecordEvent(ctx, eventing.Event{
+		ID:               a.newID("evt-session-deleted"),
+		Kind:             eventing.EventSessionDeleted,
+		OccurredAt:       a.now(),
+		AggregateID:      sessionID,
+		AggregateType:    eventing.AggregateSession,
+		AggregateVersion: 5,
+		CorrelationID:    sessionID,
+		Source:           "runtime.session",
+		ActorID:          a.Config.ID,
+		ActorType:        "agent",
+		TraceSummary:     "chat session deleted",
+		Payload: map[string]any{
+			"session_id": sessionID,
+		},
+	})
+}
+
 func (a *Agent) CurrentShellCommand(commandID string) (projections.ShellCommandView, bool) {
 	projection := a.shellCommandProjection()
 	if projection == nil {

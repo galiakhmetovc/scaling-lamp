@@ -53,7 +53,7 @@ func TestNewModelCreatesSessionAndRendersTopTabs(t *testing.T) {
 	}
 	modelAfter, _ := (&m).Update(tea.WindowSizeMsg{Width: 120, Height: 40})
 	got := modelAfter.View()
-	for _, tab := range []string{"Sessions", "Chat", "Plan", "Tools", "Settings"} {
+	for _, tab := range []string{"Sessions", "Chat", "Head", "Prompt", "Plan", "Tools", "Settings"} {
 		if !strings.Contains(got, tab) {
 			t.Fatalf("view missing tab %q: %q", tab, got)
 		}
@@ -750,8 +750,8 @@ func TestGlobalCtrlArrowSwitchesTabs(t *testing.T) {
 	m.tab = tabChat
 	modelAfter, _ := (&m).Update(tea.KeyMsg{Type: tea.KeyCtrlRight})
 	mm := modelAfter.(*model)
-	if mm.tab != tabPlan {
-		t.Fatalf("tab after ctrl+right = %v, want plan", mm.tab)
+	if mm.tab != tabHead {
+		t.Fatalf("tab after ctrl+right = %v, want head", mm.tab)
 	}
 	modelAfter, _ = mm.Update(tea.KeyMsg{Type: tea.KeyCtrlLeft})
 	mm = modelAfter.(*model)
@@ -1107,10 +1107,10 @@ func TestF6TogglesMouseCaptureAndFooterIndicator(t *testing.T) {
 		t.Fatalf("footer missing mouse enabled indicator: %q", mm.viewFooter())
 	}
 
-	modelAfter, cmd := mm.Update(tea.KeyMsg{Type: tea.KeyF6})
+	modelAfter, cmd := mm.Update(tea.KeyMsg{Type: tea.KeyF8})
 	mm = modelAfter.(*model)
 	if mm.mouseCaptureEnabled {
-		t.Fatal("mouse capture should be disabled after F6")
+		t.Fatal("mouse capture should be disabled after F8")
 	}
 	if cmd == nil {
 		t.Fatal("toggle off returned nil command")
@@ -1134,10 +1134,10 @@ func TestF6TogglesMouseCaptureAndFooterIndicator(t *testing.T) {
 		t.Fatalf("footer missing mouse disabled indicator: %q", mm.viewFooter())
 	}
 
-	modelAfter, cmd = mm.Update(tea.KeyMsg{Type: tea.KeyF6})
+	modelAfter, cmd = mm.Update(tea.KeyMsg{Type: tea.KeyF8})
 	mm = modelAfter.(*model)
 	if !mm.mouseCaptureEnabled {
-		t.Fatal("mouse capture should be re-enabled after second F6")
+		t.Fatal("mouse capture should be re-enabled after second F8")
 	}
 	if cmd == nil {
 		t.Fatal("toggle on returned nil command")

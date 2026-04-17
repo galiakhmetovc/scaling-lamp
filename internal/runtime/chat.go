@@ -48,6 +48,9 @@ func (a *Agent) ResumeChatSession(ctx context.Context, sessionID string) (*ChatS
 	if sessionID == "" {
 		return nil, fmt.Errorf("resume session id is empty")
 	}
+	if !a.sessionExists(sessionID) {
+		return nil, fmt.Errorf("session %q not found", sessionID)
+	}
 	if transcript := a.transcriptProjection(); transcript != nil {
 		messages, ok := transcript.Snapshot().Sessions[sessionID]
 		if ok {
@@ -302,12 +305,13 @@ func (a *Agent) assemblePromptMessages(contractSet contracts.ResolvedContracts, 
 		return nil, err
 	}
 	messages, err := a.PromptAssembly.Build(contractSet.PromptAssembly, promptassembly.Input{
-		SessionID:      sessionID,
-		Transcript:     transcript,
-		PlanHead:       planHead,
-		ContextBudget:  promptassembly.ContextBudgetHeadInput{SummarizationCount: a.CurrentContextBudget(sessionID).SummarizationCount},
-		FilesystemHead: filesystemHead,
-		RawMessages:    append([]contracts.Message{}, fallback...),
+		SessionID:            sessionID,
+		Transcript:           transcript,
+		PlanHead:             planHead,
+		ContextBudget:        promptassembly.ContextBudgetHeadInput{SummarizationCount: a.CurrentContextBudget(sessionID).SummarizationCount},
+		FilesystemHead:       filesystemHead,
+		RawMessages:          append([]contracts.Message{}, fallback...),
+		SystemPromptOverride: a.CurrentSessionPromptOverride(sessionID),
 	})
 	if err != nil {
 		return nil, err

@@ -39,6 +39,12 @@ func NewChatTimelineProjection() *ChatTimelineProjection {
 func (p *ChatTimelineProjection) ID() string { return "chat_timeline" }
 
 func (p *ChatTimelineProjection) Apply(event eventing.Event) error {
+	if event.Kind == eventing.EventSessionDeleted {
+		if p.snapshot.Sessions != nil {
+			delete(p.snapshot.Sessions, event.AggregateID)
+		}
+		return nil
+	}
 	sessionID, ok := sessionIDForTimelineEvent(event)
 	if !ok {
 		return nil

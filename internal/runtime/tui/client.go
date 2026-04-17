@@ -43,6 +43,15 @@ type PlanMutation struct {
 	Session daemon.SessionSnapshot
 }
 
+type SessionHistoryChunk struct {
+	SessionID   string
+	Timeline    []projections.ChatTimelineItem
+	LoadedCount int
+	TotalCount  int
+	HasMore     bool
+	WindowLimit int
+}
+
 type ShellActionResult struct {
 	Session daemon.SessionSnapshot
 }
@@ -52,6 +61,11 @@ type OperatorClient interface {
 	ListSessions(context.Context) ([]SessionSummary, error)
 	CreateSession(context.Context) (daemon.SessionSnapshot, error)
 	GetSession(context.Context, string) (daemon.SessionSnapshot, error)
+	RenameSession(context.Context, string, string) (daemon.SessionSnapshot, error)
+	DeleteSession(context.Context, string) error
+	GetSessionHistory(context.Context, string, int, int) (SessionHistoryChunk, error)
+	SetSessionPromptOverride(context.Context, string, string) (daemon.SessionSnapshot, error)
+	ClearSessionPromptOverride(context.Context, string) (daemon.SessionSnapshot, error)
 	SendChat(context.Context, string, string) (ChatSendResult, error)
 	SendBtw(context.Context, string, string) (BtwResult, error)
 	CreatePlan(context.Context, string, string) (PlanMutation, error)
@@ -113,6 +127,68 @@ func (c *localClient) CreateSession(ctx context.Context) (daemon.SessionSnapshot
 func (c *localClient) GetSession(ctx context.Context, sessionID string) (daemon.SessionSnapshot, error) {
 	_ = ctx
 	return buildLocalSessionSnapshot(c.agent, sessionID)
+}
+
+func (c *localClient) RenameSession(ctx context.Context, sessionID, title string) (daemon.SessionSnapshot, error) {
+	if err := c.agent.RenameSession(ctx, sessionID, title); err != nil {
+		return daemon.SessionSnapshot{}, err
+	}
+	return c.GetSession(ctx, sessionID)
+}
+
+func (c *localClient) DeleteSession(ctx context.Context, sessionID string) error {
+	return c.agent.DeleteSession(ctx, sessionID)
+}
+
+func (c *localClient) GetSessionHistory(_ context.Context, sessionID string, loadedCount, historyLimit int) (SessionHistoryChunk, error) {
+	if loadedCount < 0 {
+		return SessionHistoryChunk{}, fmt.Errorf("loaded_count must be >= 0")
+	}
+	found := false
+	for _, entry := range c.agent.ListSessions() {
+		if entry.SessionID == sessionID {
+			found = true
+			break
+		}
+	}
+	if !found {
+		return SessionHistoryChunk{}, fmt.Errorf("session %q not found", sessionID)
+	}
+	timeline := c.agent.CurrentChatTimeline(sessionID)
+	totalCount := len(timeline)
+	if loadedCount > totalCount {
+		loadedCount = totalCount
+	}
+	if historyLimit <= 0 {
+		historyLimit = 40
+	}
+	remaining := totalCount - loadedCount
+	chunkSize := min(historyLimit, remaining)
+	start := max(0, totalCount-loadedCount-chunkSize)
+	end := max(start, totalCount-loadedCount)
+	chunk := append([]projections.ChatTimelineItem{}, timeline[start:end]...)
+	return SessionHistoryChunk{
+		SessionID:   sessionID,
+		Timeline:    chunk,
+		LoadedCount: loadedCount + len(chunk),
+		TotalCount:  totalCount,
+		HasMore:     start > 0,
+		WindowLimit: historyLimit,
+	}, nil
+}
+
+func (c *localClient) SetSessionPromptOverride(ctx context.Context, sessionID, content string) (daemon.SessionSnapshot, error) {
+	if err := c.agent.SetSessionPromptOverride(ctx, sessionID, content); err != nil {
+		return daemon.SessionSnapshot{}, err
+	}
+	return c.GetSession(ctx, sessionID)
+}
+
+func (c *localClient) ClearSessionPromptOverride(ctx context.Context, sessionID string) (daemon.SessionSnapshot, error) {
+	if err := c.agent.ClearSessionPromptOverride(ctx, sessionID); err != nil {
+		return daemon.SessionSnapshot{}, err
+	}
+	return c.GetSession(ctx, sessionID)
 }
 
 func (c *localClient) SendChat(ctx context.Context, sessionID, prompt string) (ChatSendResult, error) {
@@ -463,6 +539,40 @@ func (c *daemonClient) GetSession(ctx context.Context, sessionID string) (daemon
 	return result.Session, err
 }
 
+func (c *daemonClient) RenameSession(ctx context.Context, sessionID, title string) (daemon.SessionSnapshot, error) {
+	var result struct {
+		Session daemon.SessionSnapshot `json:"session"`
+	}
+	err := c.command(ctx, daemon.CommandRequest{Type: "command", ID: "cmd-session-rename", Command: "session.rename", Payload: map[string]any{"session_id": sessionID, "title": title}}, &result)
+	return result.Session, err
+}
+
+func (c *daemonClient) DeleteSession(ctx context.Context, sessionID string) error {
+	return c.command(ctx, daemon.CommandRequest{Type: "command", ID: "cmd-session-delete", Command: "session.delete", Payload: map[string]any{"session_id": sessionID}}, nil)
+}
+
+func (c *daemonClient) GetSessionHistory(ctx context.Context, sessionID string, loadedCount, historyLimit int) (SessionHistoryChunk, error) {
+	var result SessionHistoryChunk
+	err := c.command(ctx, daemon.CommandRequest{Type: "command", ID: "cmd-session-history", Command: "session.history", Payload: map[string]any{"session_id": sessionID, "loaded_count": loadedCount, "history_limit": historyLimit}}, &result)
+	return result, err
+}
+
+func (c *daemonClient) SetSessionPromptOverride(ctx context.Context, sessionID, content string) (daemon.SessionSnapshot, error) {
+	var result struct {
+		Session daemon.SessionSnapshot `json:"session"`
+	}
+	err := c.command(ctx, daemon.CommandRequest{Type: "command", ID: "cmd-session-prompt-set", Command: "session.prompt.set", Payload: map[string]any{"session_id": sessionID, "content": content}}, &result)
+	return result.Session, err
+}
+
+func (c *daemonClient) ClearSessionPromptOverride(ctx context.Context, sessionID string) (daemon.SessionSnapshot, error) {
+	var result struct {
+		Session daemon.SessionSnapshot `json:"session"`
+	}
+	err := c.command(ctx, daemon.CommandRequest{Type: "command", ID: "cmd-session-prompt-clear", Command: "session.prompt.clear", Payload: map[string]any{"session_id": sessionID}}, &result)
+	return result.Session, err
+}
+
 func (c *daemonClient) SendChat(ctx context.Context, sessionID, prompt string) (ChatSendResult, error) {
 	var result struct {
 		Session daemon.SessionSnapshot `json:"session"`
@@ -715,6 +825,7 @@ func buildLocalSessionSnapshot(agent *runtime.Agent, sessionID string) (daemon.S
 	compactedTranscript := agent.CompactedMessagesForSession(sessionID, agent.CurrentTranscript(sessionID))
 	return daemon.SessionSnapshot{
 		SessionID:    entry.SessionID,
+		Title:        entry.Title,
 		CreatedAt:    entry.CreatedAt,
 		LastActivity: entry.LastActivity,
 		MessageCount: entry.MessageCount,
@@ -730,6 +841,12 @@ func buildLocalSessionSnapshot(agent *runtime.Agent, sessionID string) (daemon.S
 			Source:                   coalesce(agent.CurrentContextBudget(sessionID).Source, "mixed"),
 			BudgetState:              "healthy",
 		},
+		Prompt: daemon.SessionPromptSnapshot{
+			Default:     defaultPromptForLocalClient(agent),
+			Override:    agent.CurrentSessionPromptOverride(sessionID),
+			Effective:   effectivePromptForLocalClient(agent, sessionID),
+			HasOverride: strings.TrimSpace(agent.CurrentSessionPromptOverride(sessionID)) != "",
+		},
 		Transcript:       agent.CurrentTranscript(sessionID),
 		Timeline:         agent.CurrentChatTimeline(sessionID),
 		Plan:             plan,
@@ -737,6 +854,16 @@ func buildLocalSessionSnapshot(agent *runtime.Agent, sessionID string) (daemon.S
 		RunningCommands:  agent.CurrentRunningShellCommands(sessionID),
 		Delegates:        agent.CurrentDelegates(sessionID),
 	}, nil
+}
+
+func defaultPromptForLocalClient(agent *runtime.Agent) string {
+	content, _ := agent.DefaultSystemPrompt()
+	return content
+}
+
+func effectivePromptForLocalClient(agent *runtime.Agent, sessionID string) string {
+	content, _ := agent.EffectiveSystemPrompt(sessionID)
+	return content
 }
 
 func approximateTextTokensFromMessages(messages []contracts.Message) int {

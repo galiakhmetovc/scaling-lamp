@@ -13,16 +13,26 @@ import (
 	"teamd/internal/runtime/daemon"
 )
 
-var topTabs = []string{"Sessions", "Chat", "Plan", "Tools", "Settings"}
+var topTabs = []string{"Sessions", "Chat", "Head", "Prompt", "Plan", "Tools", "Settings"}
 
 type tabIndex int
 
 const (
 	tabSessions tabIndex = iota
 	tabChat
+	tabHead
+	tabPrompt
 	tabPlan
 	tabTools
 	tabSettings
+)
+
+type sessionsMode int
+
+const (
+	sessionsModeBrowse sessionsMode = iota
+	sessionsModeRename
+	sessionsModeDeleteConfirm
 )
 
 type settingsMode int
@@ -161,12 +171,20 @@ type model struct {
 	rawLoadedPath       string
 	settingsMode        settingsMode
 	sessionField        int
+	sessionMode         sessionsMode
+	sessionTitleInput   textinput.Model
 	formField           int
 	formDraft           configFormDraft
 	formMaxRounds       textinput.Model
 	formStyle           textinput.Model
 	planView            viewport.Model
+	headView            viewport.Model
 	settingsView        viewport.Model
+	headExpanded        map[string]bool
+	headCursor          int
+	promptEditor        textarea.Model
+	promptLoadedSession string
+	promptDirty         bool
 	planMode            planEditorMode
 	planCursor          int
 	planGoalInput       textinput.Model
@@ -220,3 +238,29 @@ type btwTurnFinishedMsg struct {
 }
 
 type clockTickMsg time.Time
+
+type historyLoadedMsg struct {
+	SessionID string
+	Chunk     SessionHistoryChunk
+	Err       error
+}
+
+type sessionRenamedMsg struct {
+	Session daemon.SessionSnapshot
+	Err     error
+}
+
+type sessionDeletedMsg struct {
+	SessionID string
+	Err       error
+}
+
+type promptSavedMsg struct {
+	Session daemon.SessionSnapshot
+	Err     error
+}
+
+type promptResetMsg struct {
+	Session daemon.SessionSnapshot
+	Err     error
+}

@@ -16,6 +16,7 @@ func NewBuiltInRegistry() *Registry {
 	registry := NewRegistry()
 	registry.Register("session", func() Projection { return NewSessionProjection() })
 	registry.Register("session_catalog", func() Projection { return NewSessionCatalogProjection() })
+	registry.Register("session_prompt", func() Projection { return NewSessionPromptProjection() })
 	registry.Register("run", func() Projection { return NewRunProjection() })
 	registry.Register("transcript", func() Projection { return NewTranscriptProjection() })
 	registry.Register("chat_timeline", func() Projection { return NewChatTimelineProjection() })

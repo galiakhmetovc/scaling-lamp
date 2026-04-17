@@ -18,6 +18,8 @@ type EventKind string
 const (
 	EventSessionCreated                EventKind = "session.created"
 	EventSessionRenamed                EventKind = "session.renamed"
+	EventSessionDeleted                EventKind = "session.deleted"
+	EventSessionPromptOverrideSet      EventKind = "session.prompt_override_set"
 	EventMessageRecorded               EventKind = "message.recorded"
 	EventRunStarted                    EventKind = "run.started"
 	EventProviderRequestCaptured       EventKind = "provider.request.captured"

@@ -2,6 +2,8 @@ package daemon
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -105,5 +107,80 @@ func TestSessionSnapshotIncludesMainRunMetadata(t *testing.T) {
 	}
 	if completed.ContextBudget.LastTotalTokens != 12 {
 		t.Fatalf("context budget last_total_tokens = %d, want 12", completed.ContextBudget.LastTotalTokens)
+	}
+}
+
+func TestSessionSnapshotIncludesPromptOverride(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 4, 17, 9, 0, 0, 0, time.UTC)
+	dir := t.TempDir()
+	promptPath := filepath.Join(dir, "system.txt")
+	if err := os.WriteFile(promptPath, []byte("default system prompt"), 0o644); err != nil {
+		t.Fatalf("write prompt file: %v", err)
+	}
+
+	agent := &runtime.Agent{
+		Config: config.AgentConfig{ID: "daemon-chat"},
+		Contracts: contracts.ResolvedContracts{
+			PromptAssembly: contracts.PromptAssemblyContract{
+				SystemPrompt: contracts.SystemPromptPolicy{
+					Enabled:  true,
+					Strategy: "file_static",
+					Params: contracts.SystemPromptParams{
+						Path:     promptPath,
+						Role:     "system",
+						Required: true,
+					},
+				},
+			},
+		},
+		EventLog: runtime.NewInMemoryEventLog(),
+		Projections: []projections.Projection{
+			projections.NewSessionCatalogProjection(),
+			projections.NewTranscriptProjection(),
+			projections.NewChatTimelineProjection(),
+			projections.NewPlanHeadProjection(),
+			projections.NewSessionPromptProjection(),
+		},
+		Now:   func() time.Time { return now },
+		NewID: func(prefix string) string { return prefix + "-1" },
+	}
+	server := &Server{
+		agent:          agent,
+		sessionRuntime: map[string]*sessionRuntimeState{},
+		daemonBus:      newDaemonBus(),
+	}
+
+	if err := agent.RecordEvent(context.Background(), eventing.Event{
+		ID:               "evt-session-created",
+		Kind:             eventing.EventSessionCreated,
+		OccurredAt:       now,
+		AggregateID:      "session-1",
+		AggregateType:    eventing.AggregateSession,
+		AggregateVersion: 1,
+		Payload:          map[string]any{"session_id": "session-1"},
+	}); err != nil {
+		t.Fatalf("record session created: %v", err)
+	}
+	if err := agent.SetSessionPromptOverride(context.Background(), "session-1", "session override prompt"); err != nil {
+		t.Fatalf("SetSessionPromptOverride: %v", err)
+	}
+
+	snapshot, err := server.buildSessionSnapshot("session-1")
+	if err != nil {
+		t.Fatalf("build session snapshot: %v", err)
+	}
+	if snapshot.Prompt.Default != "default system prompt" {
+		t.Fatalf("prompt default = %q, want default system prompt", snapshot.Prompt.Default)
+	}
+	if snapshot.Prompt.Override != "session override prompt" {
+		t.Fatalf("prompt override = %q, want session override prompt", snapshot.Prompt.Override)
+	}
+	if snapshot.Prompt.Effective != "session override prompt" {
+		t.Fatalf("prompt effective = %q, want session override prompt", snapshot.Prompt.Effective)
+	}
+	if !snapshot.Prompt.HasOverride {
+		t.Fatalf("prompt has_override = false, want true")
 	}
 }

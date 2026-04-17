@@ -52,6 +52,37 @@ func (s *Server) executeCommand(ctx context.Context, req CommandRequest) (any, e
 			return nil, err
 		}
 		return s.sessionPayload(sessionID)
+	case "session.delete":
+		sessionID, err := requiredString(req.Payload, "session_id")
+		if err != nil {
+			return nil, err
+		}
+		if err := agent.DeleteSession(ctx, sessionID); err != nil {
+			return nil, err
+		}
+		return map[string]any{"session_id": sessionID, "deleted": true}, nil
+	case "session.prompt.set":
+		sessionID, err := requiredString(req.Payload, "session_id")
+		if err != nil {
+			return nil, err
+		}
+		content, err := requiredString(req.Payload, "content")
+		if err != nil {
+			return nil, err
+		}
+		if err := agent.SetSessionPromptOverride(ctx, sessionID, content); err != nil {
+			return nil, err
+		}
+		return s.sessionPayload(sessionID)
+	case "session.prompt.clear":
+		sessionID, err := requiredString(req.Payload, "session_id")
+		if err != nil {
+			return nil, err
+		}
+		if err := agent.ClearSessionPromptOverride(ctx, sessionID); err != nil {
+			return nil, err
+		}
+		return s.sessionPayload(sessionID)
 	case "session.history":
 		sessionID, err := requiredString(req.Payload, "session_id")
 		if err != nil {

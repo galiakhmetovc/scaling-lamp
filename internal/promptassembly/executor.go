@@ -17,6 +17,7 @@ type Input struct {
 	ContextBudget  ContextBudgetHeadInput
 	FilesystemHead FilesystemHeadInput
 	RawMessages    []contracts.Message
+	SystemPromptOverride string
 }
 
 type Executor struct{}
@@ -32,7 +33,7 @@ func (e *Executor) Build(contract contracts.PromptAssemblyContract, input Input)
 	transcript := append([]contracts.Message{}, input.Transcript.Sessions[input.SessionID]...)
 	rawMessages := append([]contracts.Message{}, input.RawMessages...)
 
-	systemPrompt, err := e.buildSystemPrompt(contract.SystemPrompt)
+	systemPrompt, err := e.buildSystemPrompt(contract.SystemPrompt, input.SystemPromptOverride)
 	if err != nil {
 		return nil, err
 	}
@@ -60,9 +61,16 @@ func (e *Executor) Build(contract contracts.PromptAssemblyContract, input Input)
 	return out, nil
 }
 
-func (e *Executor) buildSystemPrompt(policy contracts.SystemPromptPolicy) (contracts.Message, error) {
+func (e *Executor) buildSystemPrompt(policy contracts.SystemPromptPolicy, override string) (contracts.Message, error) {
 	if !policy.Enabled {
 		return contracts.Message{}, nil
+	}
+	if strings.TrimSpace(override) != "" {
+		role := policy.Params.Role
+		if role == "" {
+			role = "system"
+		}
+		return contracts.Message{Role: role, Content: override}, nil
 	}
 	if policy.Strategy != "file_static" {
 		return contracts.Message{}, fmt.Errorf("unsupported system prompt strategy %q", policy.Strategy)

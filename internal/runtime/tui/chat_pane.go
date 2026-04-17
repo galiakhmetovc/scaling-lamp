@@ -20,6 +20,9 @@ func (m *model) updateChat(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "pgup":
 		state.ChatView.LineUp(max(1, state.ChatView.Height/2))
+		if state.ChatView.YOffset == 0 && state.Snapshot.History.HasMore {
+			return m, loadOlderHistoryCmd(m.ctx, m.client, state)
+		}
 		return m, nil
 	case "pgdown":
 		state.ChatView.LineDown(max(1, state.ChatView.Height/2))
@@ -131,12 +134,25 @@ func (m *model) handleMouseChat(msg tea.MouseMsg) bool {
 	if isWheelUp(msg) || isWheelDown(msg) {
 		if isWheelUp(msg) {
 			state.ChatView.ScrollUp(state.ChatView.MouseWheelDelta)
+			if state.ChatView.YOffset == 0 && state.Snapshot.History.HasMore {
+				return false
+			}
 		} else {
 			state.ChatView.ScrollDown(state.ChatView.MouseWheelDelta)
 		}
 		return true
 	}
 	return false
+}
+
+func loadOlderHistoryCmd(ctx context.Context, client OperatorClient, state *sessionState) tea.Cmd {
+	if state == nil || !state.Snapshot.History.HasMore {
+		return nil
+	}
+	return func() tea.Msg {
+		chunk, err := client.GetSessionHistory(ctx, state.SessionID, state.Snapshot.History.LoadedCount, state.Snapshot.History.WindowLimit)
+		return historyLoadedMsg{SessionID: state.SessionID, Chunk: chunk, Err: err}
+	}
 }
 
 func (m *model) submitChatInput(state *sessionState) tea.Cmd {

@@ -14,6 +14,7 @@ import (
 
 	"teamd/internal/runtime"
 	"teamd/internal/runtime/daemon"
+	"teamd/internal/runtime/projections"
 )
 
 func Run(ctx context.Context, agent *runtime.Agent, resumeID string, stdin io.Reader, stdout io.Writer) error {
@@ -50,6 +51,7 @@ func newModelWithClient(ctx context.Context, client OperatorClient, resumeID str
 	m.rawEditor.Prompt = ""
 	m.formMaxRounds = textinput.New()
 	m.formStyle = textinput.New()
+	m.sessionTitleInput = textinput.New()
 	m.planGoalInput = textinput.New()
 	m.planDescInput = textinput.New()
 	m.planDepsInput = textinput.New()
@@ -57,9 +59,16 @@ func newModelWithClient(ctx context.Context, client OperatorClient, resumeID str
 	m.planView = viewport.New(80, 20)
 	m.planView.MouseWheelEnabled = true
 	m.planView.MouseWheelDelta = 3
+	m.headView = viewport.New(80, 20)
+	m.headView.MouseWheelEnabled = true
+	m.headView.MouseWheelDelta = 3
 	m.settingsView = viewport.New(80, 20)
 	m.settingsView.MouseWheelEnabled = true
 	m.settingsView.MouseWheelDelta = 3
+	m.promptEditor = textarea.New()
+	m.promptEditor.Prompt = ""
+	m.promptEditor.SetHeight(20)
+	m.headExpanded = map[string]bool{}
 	wsCh, stopWS, err := client.Subscribe(ctx)
 	if err != nil {
 		return model{}, err
@@ -98,6 +107,8 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.planView.Width = max(20, m.width-6)
 		m.planView.Height = max(10, m.height-8)
+		m.headView.Width = max(20, m.width-6)
+		m.headView.Height = max(10, m.height-8)
 		m.settingsView.Width = max(20, m.width-6)
 		m.settingsView.Height = max(10, m.height-8)
 		m.planGoalInput.Width = max(20, m.width/3)
@@ -106,6 +117,9 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.planNoteInput.Width = max(20, m.width/3)
 		m.rawEditor.SetWidth(max(20, m.width/2))
 		m.rawEditor.SetHeight(max(10, m.height-12))
+		m.promptEditor.SetWidth(max(20, m.width-6))
+		m.promptEditor.SetHeight(max(10, m.height-12))
+		m.sessionTitleInput.Width = max(20, m.width/3)
 		return m, nil
 	case tea.KeyMsg:
 		if msg.String() == "ctrl+c" || msg.String() == "ctrl+q" {
@@ -122,6 +136,10 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m.updateSessions(msg)
 		case tabChat:
 			return m.updateChat(msg)
+		case tabHead:
+			return m.updateHead(msg)
+		case tabPrompt:
+			return m.updatePrompt(msg)
 		case tabPlan:
 			return m.updatePlan(msg)
 		case tabTools:
@@ -141,6 +159,15 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if m.tab == tabPlan && m.handleMousePlan(msg) {
 			return m, nil
+		}
+		if m.tab == tabChat {
+			if state := m.currentSessionState(); state != nil && isWheelUp(msg) {
+				state.ChatView.ScrollUp(state.ChatView.MouseWheelDelta)
+				if state.ChatView.YOffset == 0 && state.Snapshot.History.HasMore {
+					return m, loadOlderHistoryCmd(m.ctx, m.client, state)
+				}
+				return m, nil
+			}
 		}
 		if m.tab == tabChat && m.handleMouseChat(msg) {
 			return m, nil
@@ -224,6 +251,83 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, tickClockCmd()
 		}
 		return m, nil
+	case historyLoadedMsg:
+		state := m.sessions[msg.SessionID]
+		if state == nil {
+			return m, nil
+		}
+		if msg.Err != nil {
+			m.errMessage = msg.Err.Error()
+			return m, nil
+		}
+		state.Snapshot.Timeline = append(append([]projections.ChatTimelineItem{}, msg.Chunk.Timeline...), state.Snapshot.Timeline...)
+		state.Snapshot.History.LoadedCount = msg.Chunk.LoadedCount
+		state.Snapshot.History.TotalCount = msg.Chunk.TotalCount
+		state.Snapshot.History.HasMore = msg.Chunk.HasMore
+		state.Snapshot.History.WindowLimit = msg.Chunk.WindowLimit
+		m.renderChatViewport(state)
+		return m, nil
+	case sessionRenamedMsg:
+		if msg.Err != nil {
+			m.errMessage = msg.Err.Error()
+			return m, nil
+		}
+		state := m.sessions[msg.Session.SessionID]
+		if state != nil {
+			state.Snapshot = mergeSessionSnapshot(state.Snapshot, msg.Session)
+		}
+		m.sessionMode = sessionsModeBrowse
+		m.statusMessage = "session renamed"
+		return m, nil
+	case sessionDeletedMsg:
+		if msg.Err != nil {
+			m.errMessage = msg.Err.Error()
+			return m, nil
+		}
+		delete(m.sessions, msg.SessionID)
+		nextOrder := m.sessionOrder[:0]
+		for _, sessionID := range m.sessionOrder {
+			if sessionID != msg.SessionID {
+				nextOrder = append(nextOrder, sessionID)
+			}
+		}
+		m.sessionOrder = nextOrder
+		if m.sessionCursor >= len(m.sessionOrder) && m.sessionCursor > 0 {
+			m.sessionCursor--
+		}
+		if m.activeSessionID == msg.SessionID {
+			m.activeSessionID = ""
+			if len(m.sessionOrder) > 0 {
+				m.activeSessionID = m.sessionOrder[min(m.sessionCursor, len(m.sessionOrder)-1)]
+			}
+		}
+		m.sessionMode = sessionsModeBrowse
+		m.statusMessage = "session deleted"
+		return m, nil
+	case promptSavedMsg:
+		if msg.Err != nil {
+			m.errMessage = msg.Err.Error()
+			return m, nil
+		}
+		if state := m.sessions[msg.Session.SessionID]; state != nil {
+			state.Snapshot = mergeSessionSnapshot(state.Snapshot, msg.Session)
+		}
+		m.promptLoadedSession = ""
+		m.promptDirty = false
+		m.statusMessage = "prompt override saved"
+		return m, nil
+	case promptResetMsg:
+		if msg.Err != nil {
+			m.errMessage = msg.Err.Error()
+			return m, nil
+		}
+		if state := m.sessions[msg.Session.SessionID]; state != nil {
+			state.Snapshot = mergeSessionSnapshot(state.Snapshot, msg.Session)
+		}
+		m.promptLoadedSession = ""
+		m.promptDirty = false
+		m.statusMessage = "prompt override reset"
+		return m, nil
 	}
 	return m, nil
 }
@@ -245,12 +349,16 @@ func (m *model) handleGlobalKey(msg tea.KeyMsg) tea.Cmd {
 	case "f2":
 		m.tab = tabChat
 	case "f3":
-		m.tab = tabPlan
+		m.tab = tabHead
 	case "f4":
-		m.tab = tabTools
+		m.tab = tabPrompt
 	case "f5":
-		m.tab = tabSettings
+		m.tab = tabPlan
 	case "f6":
+		m.tab = tabTools
+	case "f7":
+		m.tab = tabSettings
+	case "f8":
 		m.mouseCaptureEnabled = !m.mouseCaptureEnabled
 		if m.mouseCaptureEnabled {
 			m.statusMessage = "interactive mouse mode enabled"
@@ -273,6 +381,10 @@ func (m *model) View() string {
 		body = m.viewSessions()
 	case tabChat:
 		body = m.viewChat()
+	case tabHead:
+		body = m.viewHead()
+	case tabPrompt:
+		body = m.viewPrompt()
 	case tabPlan:
 		body = m.viewPlan()
 	case tabTools:
@@ -311,11 +423,11 @@ func (m *model) viewFooter() string {
 	if m.errMessage != "" {
 		parts = append(parts, "error: "+m.errMessage)
 	}
-	mouseMode := "Mouse: on (F6 toggle)"
+	mouseMode := "Mouse: on (F8 toggle)"
 	if !m.mouseCaptureEnabled {
-		mouseMode = "Mouse: off (F6 toggle, select text)"
+		mouseMode = "Mouse: off (F8 toggle, select text)"
 	}
-	parts = append(parts, mouseMode, "Tabs: F1..F5 or Ctrl+Left/Right, Ctrl+Q quit")
+	parts = append(parts, mouseMode, "Tabs: F1..F7 or Ctrl+Left/Right, Ctrl+Q quit")
 	return strings.Join(parts, " | ")
 }
 
