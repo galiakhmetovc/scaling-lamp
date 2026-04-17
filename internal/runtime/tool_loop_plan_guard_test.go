@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"teamd/internal/contracts"
 	"teamd/internal/provider"
 	"teamd/internal/runtime/plans"
 	"teamd/internal/runtime/projections"
@@ -149,5 +150,67 @@ func TestExecutePlanCommandReturnsPlanLintDiagnostics(t *testing.T) {
 	issues := payload["issues"].([]any)
 	if len(issues) < 3 {
 		t.Fatalf("issues = %#v, want diagnostics", issues)
+	}
+}
+
+func TestExecuteToolCommandDispatchesPlanSnapshot(t *testing.T) {
+	t.Parallel()
+
+	agent := &Agent{
+		MaxToolRounds: 2,
+		Now:           func() time.Time { return time.Date(2026, 4, 17, 12, 0, 0, 0, time.UTC) },
+		NewID:         func(prefix string) string { return prefix + "-1" },
+	}
+	service := plans.NewService(agent.now, agent.newID)
+	activeProjection := projections.NewActivePlanProjection()
+	if err := activeProjection.RestoreSnapshot([]byte(`{
+		"sessions": {
+			"session-1": {
+				"plan": {
+					"id": "plan-1",
+					"goal": "Refactor auth",
+					"status": "active",
+					"created_at": "2026-04-17T11:00:00Z"
+				},
+				"tasks": {
+					"t1": {
+						"id": "t1",
+						"plan_id": "plan-1",
+						"description": "Audit middleware",
+						"status": "in_progress",
+						"order": 1
+					}
+				}
+			}
+		}
+	}`)); err != nil {
+		t.Fatalf("RestoreSnapshot returned error: %v", err)
+	}
+
+	events, result, err := agent.executeToolCommand(
+		t.Context(),
+		contracts.ResolvedContracts{},
+		"run-1",
+		"session-1",
+		activeProjection,
+		service,
+		nil,
+		nil,
+		nil,
+		"runtime.test",
+		provider.ToolCall{ID: "call-1", Name: "plan_snapshot", Arguments: map[string]any{}},
+	)
+	if err != nil {
+		t.Fatalf("executeToolCommand returned error: %v", err)
+	}
+	if len(events) != 0 {
+		t.Fatalf("events = %#v, want none", events)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal([]byte(result), &payload); err != nil {
+		t.Fatalf("unmarshal result: %v", err)
+	}
+	if payload["tool"] != "plan_snapshot" {
+		t.Fatalf("tool = %#v, want plan_snapshot", payload["tool"])
 	}
 }

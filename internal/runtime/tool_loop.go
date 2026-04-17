@@ -276,7 +276,7 @@ func (a *Agent) recordToolCallCompleted(ctx context.Context, runID, sessionID, c
 
 func (a *Agent) executeToolCommand(ctx context.Context, contractSet contracts.ResolvedContracts, runID, sessionID string, activeProjection *projections.ActivePlanProjection, service *plans.Service, filesystemExecutor *filesystem.Executor, shellExecutor *shell.Executor, delegateRuntime DelegateRuntime, source string, call provider.ToolCall) ([]eventing.Event, string, error) {
 	switch call.Name {
-	case "init_plan", "add_task", "set_task_status", "add_task_note", "edit_task":
+	case "init_plan", "add_task", "set_task_status", "add_task_note", "edit_task", "plan_snapshot", "plan_lint":
 		if activeProjection == nil {
 			return nil, "", fmt.Errorf("active plan projection is not registered")
 		}
