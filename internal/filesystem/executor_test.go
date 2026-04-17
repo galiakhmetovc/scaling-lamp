@@ -689,6 +689,48 @@ func TestExecutorRejectsInvalidLineRanges(t *testing.T) {
 	}
 }
 
+func TestExecutorInsertTextCreatesMissingFile(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	executor := filesystem.NewExecutor()
+	_, err := executor.Execute(contracts.FilesystemExecutionContract{
+		Scope: contracts.FilesystemScopePolicy{
+			Enabled:  true,
+			Strategy: "workspace_only",
+			Params: contracts.FilesystemScopeParams{
+				RootPath:      dir,
+				WriteSubpaths: []string{"src"},
+			},
+		},
+		Mutation: contracts.FilesystemMutationPolicy{
+			Enabled:  true,
+			Strategy: "allow_writes",
+			Params: contracts.FilesystemMutationParams{
+				AllowWrite: true,
+			},
+		},
+		IO: contracts.FilesystemIOPolicy{
+			Enabled:  true,
+			Strategy: "bounded_text_io",
+			Params: contracts.FilesystemIOParams{
+				MaxWriteBytes: 1024,
+				Encoding:      "utf-8",
+			},
+		},
+	}, "fs_insert_text", map[string]any{
+		"path":     "src/new.txt",
+		"position": "append",
+		"content":  "hello\nworld\n",
+	})
+	if err != nil {
+		t.Fatalf("Execute returned error: %v", err)
+	}
+	if got := mustReadFile(t, filepath.Join(dir, "src", "new.txt")); got != "hello\nworld\n" {
+		t.Fatalf("inserted content = %q, want %q", got, "hello\nworld\n")
+	}
+}
+
 func TestExecutorClampsEndLineToFileLength(t *testing.T) {
 	t.Parallel()
 

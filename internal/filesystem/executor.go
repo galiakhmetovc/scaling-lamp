@@ -330,8 +330,11 @@ func (e *Executor) Execute(contract contracts.FilesystemExecutionContract, toolN
 			return "", fmt.Errorf("filesystem writes are denied by mutation policy")
 		}
 		data, err := os.ReadFile(path)
-		if err != nil {
+		if err != nil && !os.IsNotExist(err) {
 			return "", fmt.Errorf("read file for insert: %w", err)
+		}
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			return "", fmt.Errorf("mkdir parents for insert: %w", err)
 		}
 		lines, trailingNewline := splitLines(string(data))
 		insertLines, insertTrailing := splitLines(content)
