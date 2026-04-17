@@ -23,9 +23,7 @@ spec:
       - pwsh
       - cmd
     allowed_prefixes: []
-    deny_patterns:
-      - " rm "
-      - " wget "
+    deny_patterns: []
     command_rules:
       - command: go
         allowed_arg_prefixes:

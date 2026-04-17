@@ -922,6 +922,9 @@ func TestRepositoryZaiSmokeConfigLoadsAndResolvesContracts(t *testing.T) {
 			t.Fatalf("shell allowed command[%d] = %q, want %q", i, got, want)
 		}
 	}
+	if got := len(resolved.ShellExecution.Command.Params.DenyPatterns); got != 0 {
+		t.Fatalf("shell deny patterns len = %d, want %d", got, 0)
+	}
 	if resolved.ShellExecution.Runtime.Params.Timeout != "30s" {
 		t.Fatalf("shell runtime timeout = %q, want %q", resolved.ShellExecution.Runtime.Params.Timeout, "30s")
 	}

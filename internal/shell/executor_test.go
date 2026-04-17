@@ -60,17 +60,21 @@ func TestExecutorRunsAllowlistedCommand(t *testing.T) {
 	}
 }
 
-func TestExecutorRejectsCommandOutsideAllowlist(t *testing.T) {
+func TestExecutorRoutesCommandOutsideAllowlistToApproval(t *testing.T) {
 	t.Parallel()
 
 	executor := NewExecutor()
-	_, err := executor.Execute(contracts.ShellExecutionContract{
+	out, err := executor.Execute(contracts.ShellExecutionContract{
 		Command: contracts.ShellCommandPolicy{
 			Enabled:  true,
 			Strategy: "static_allowlist",
 			Params: contracts.ShellCommandParams{
 				AllowedCommands: []string{"pwd"},
 			},
+		},
+		Approval: contracts.ShellApprovalPolicy{
+			Enabled:  true,
+			Strategy: "always_allow",
 		},
 		Runtime: contracts.ShellRuntimePolicy{
 			Enabled:  true,
@@ -84,8 +88,11 @@ func TestExecutorRejectsCommandOutsideAllowlist(t *testing.T) {
 	}, "shell_exec", map[string]any{
 		"command": "ls",
 	})
-	if err == nil {
-		t.Fatal("Execute returned nil error, want allowlist failure")
+	if err != nil {
+		t.Fatalf("Execute returned error: %v", err)
+	}
+	if decodeField(t, out, "status") != "approval_pending" {
+		t.Fatalf("status = %s, want approval_pending", out)
 	}
 }
 
@@ -172,6 +179,51 @@ func TestExecutorAllowsCommandWhenArgumentsMatchRule(t *testing.T) {
 	}
 	if payload["status"] != "ok" && payload["status"] != "error" {
 		t.Fatalf("status = %#v, want shell_exec payload", payload["status"])
+	}
+}
+
+func TestExecutorRoutesCommandOutsideAllowedRuleSetToApproval(t *testing.T) {
+	t.Parallel()
+
+	executor := NewExecutor()
+	out, err := executor.Execute(contracts.ShellExecutionContract{
+		Command: contracts.ShellCommandPolicy{
+			Enabled:  true,
+			Strategy: "static_allowlist",
+			Params: contracts.ShellCommandParams{
+				AllowedCommands: []string{"git"},
+				CommandRules: []contracts.ShellCommandRule{
+					{
+						Command:            "git",
+						AllowedArgPrefixes: []string{"status", "diff", "log"},
+						DeniedArgPatterns:  []string{"push", "reset --hard"},
+					},
+				},
+			},
+		},
+		Approval: contracts.ShellApprovalPolicy{
+			Enabled:  true,
+			Strategy: "always_allow",
+		},
+		Runtime: contracts.ShellRuntimePolicy{
+			Enabled:  true,
+			Strategy: "workspace_write",
+			Params: contracts.ShellRuntimeParams{
+				Cwd:            t.TempDir(),
+				Timeout:        "5s",
+				MaxOutputBytes: 4096,
+				AllowNetwork:   true,
+			},
+		},
+	}, "shell_exec", map[string]any{
+		"command": "git",
+		"args":    []any{"commit", "-m", "msg"},
+	})
+	if err != nil {
+		t.Fatalf("Execute returned error: %v", err)
+	}
+	if decodeField(t, out, "status") != "approval_pending" {
+		t.Fatalf("status = %s, want approval_pending", out)
 	}
 }
 

@@ -125,6 +125,14 @@ const (
 	approvalDecisionDeny    approvalDecision = "deny"
 )
 
+type commandPolicyDecision string
+
+const (
+	commandPolicyAllow   commandPolicyDecision = "allow"
+	commandPolicyRequire commandPolicyDecision = "require"
+	commandPolicyDeny    commandPolicyDecision = "deny"
+)
+
 type Executor struct {
 	run        runFunc
 	lookupPath lookupPathFunc
@@ -199,8 +207,28 @@ func (e *Executor) executeSync(ctx context.Context, contract contracts.ShellExec
 	if err != nil {
 		return "", err
 	}
-	if err := validateCommand(contract.Command, command, args); err != nil {
-		return "", err
+	commandDecision, commandMessage := evaluateCommandPolicy(contract.Command, command, args)
+	switch commandDecision {
+	case commandPolicyDeny:
+		return "", fmt.Errorf("%s", commandMessage)
+	case commandPolicyRequire:
+		full := commandPrefix(command, args)
+		if allow, message, matched := evaluatePersistentApprovalPrefixes(contract.Approval, full); matched {
+			if !allow {
+				return "", fmt.Errorf("%s", message)
+			}
+		} else {
+			commandMessage = approvalMessage(contract.Approval, full)
+		}
+		cwd, err := resolveCwd(contract.Runtime, argsMap)
+		if err != nil {
+			return "", err
+		}
+		invocation, err := e.resolveInvocation(contract.Runtime, command, args)
+		if err != nil {
+			return "", err
+		}
+		return e.queueApproval(ctx, toolName, contract, ExecutionMeta{}, command, args, cwd, invocation, commandMessage)
 	}
 	cwd, err := resolveCwd(contract.Runtime, argsMap)
 	if err != nil {
@@ -269,8 +297,28 @@ func (e *Executor) executeStart(ctx context.Context, contract contracts.ShellExe
 	if err != nil {
 		return "", err
 	}
-	if err := validateCommand(contract.Command, command, args); err != nil {
-		return "", err
+	commandDecision, commandMessage := evaluateCommandPolicy(contract.Command, command, args)
+	switch commandDecision {
+	case commandPolicyDeny:
+		return "", fmt.Errorf("%s", commandMessage)
+	case commandPolicyRequire:
+		full := commandPrefix(command, args)
+		if allow, message, matched := evaluatePersistentApprovalPrefixes(contract.Approval, full); matched {
+			if !allow {
+				return "", fmt.Errorf("%s", message)
+			}
+		} else {
+			commandMessage = approvalMessage(contract.Approval, full)
+		}
+		cwd, err := resolveCwd(contract.Runtime, argsMap)
+		if err != nil {
+			return "", err
+		}
+		invocation, err := e.resolveInvocation(contract.Runtime, command, args)
+		if err != nil {
+			return "", err
+		}
+		return e.queueApproval(ctx, "shell_start", contract, meta, command, args, cwd, invocation, commandMessage)
 	}
 	cwd, err := resolveCwd(contract.Runtime, argsMap)
 	if err != nil {
@@ -971,11 +1019,11 @@ func (p *execProcess) Kill() error {
 	return p.cmd.Process.Kill()
 }
 
-func validateCommand(policy contracts.ShellCommandPolicy, command string, args []string) error {
+func evaluateCommandPolicy(policy contracts.ShellCommandPolicy, command string, args []string) (commandPolicyDecision, string) {
 	if policy.Enabled {
 		switch policy.Strategy {
 		case "deny_all":
-			return fmt.Errorf("shell commands are denied by policy")
+			return commandPolicyDeny, "shell commands are denied by policy"
 		case "static_allowlist":
 			allowed := len(policy.Params.AllowedCommands) == 0
 			for _, candidate := range policy.Params.AllowedCommands {
@@ -985,12 +1033,12 @@ func validateCommand(policy contracts.ShellCommandPolicy, command string, args [
 				}
 			}
 			if !allowed {
-				return fmt.Errorf("shell command %q is not in allowlist", command)
+				return commandPolicyRequire, "shell command requires operator approval: " + commandPrefix(command, args)
 			}
 			full := strings.TrimSpace(strings.Join(append([]string{command}, args...), " "))
 			for _, pattern := range policy.Params.DenyPatterns {
 				if pattern != "" && strings.Contains(full, pattern) {
-					return fmt.Errorf("shell command matches denied pattern")
+					return commandPolicyDeny, "shell command matches denied pattern"
 				}
 			}
 			if len(policy.Params.AllowedPrefixes) > 0 {
@@ -1002,22 +1050,23 @@ func validateCommand(policy contracts.ShellCommandPolicy, command string, args [
 					}
 				}
 				if !prefixAllowed {
-					return fmt.Errorf("shell command %q does not match allowed prefixes", full)
+					return commandPolicyRequire, "shell command requires operator approval: " + full
 				}
 			}
-			if err := validateCommandRules(policy.Params.CommandRules, command, args); err != nil {
-				return err
+			ruleDecision, message := evaluateCommandRules(policy.Params.CommandRules, command, args)
+			if ruleDecision != commandPolicyAllow {
+				return ruleDecision, message
 			}
 		default:
-			return fmt.Errorf("unsupported shell command strategy %q", policy.Strategy)
+			return commandPolicyDeny, fmt.Sprintf("unsupported shell command strategy %q", policy.Strategy)
 		}
 	}
-	return nil
+	return commandPolicyAllow, ""
 }
 
-func validateCommandRules(rules []contracts.ShellCommandRule, command string, args []string) error {
+func evaluateCommandRules(rules []contracts.ShellCommandRule, command string, args []string) (commandPolicyDecision, string) {
 	if len(rules) == 0 {
-		return nil
+		return commandPolicyAllow, ""
 	}
 	argLine := strings.TrimSpace(strings.Join(args, " "))
 	matched := false
@@ -1028,12 +1077,12 @@ func validateCommandRules(rules []contracts.ShellCommandRule, command string, ar
 		matched = true
 		for _, pattern := range rule.DeniedArgPatterns {
 			if pattern != "" && strings.Contains(argLine, pattern) {
-				return fmt.Errorf("shell command arguments for %q match denied pattern", command)
+				return commandPolicyDeny, fmt.Sprintf("shell command arguments for %q match denied pattern", command)
 			}
 		}
 		for _, prefix := range rule.DeniedArgPrefixes {
 			if prefix != "" && strings.HasPrefix(argLine, prefix) {
-				return fmt.Errorf("shell command arguments for %q match denied prefix", command)
+				return commandPolicyDeny, fmt.Sprintf("shell command arguments for %q match denied prefix", command)
 			}
 		}
 		if len(rule.AllowedArgPatterns) == 0 && len(rule.AllowedArgPrefixes) == 0 {
@@ -1058,13 +1107,13 @@ func validateCommandRules(rules []contracts.ShellCommandRule, command string, ar
 			}
 		}
 		if !allowed {
-			return fmt.Errorf("shell command arguments for %q do not match allowed rule set", command)
+			return commandPolicyRequire, "shell command requires operator approval: " + commandPrefix(command, args)
 		}
 	}
 	if matched {
-		return nil
+		return commandPolicyAllow, ""
 	}
-	return nil
+	return commandPolicyAllow, ""
 }
 
 func resolveCwd(policy contracts.ShellRuntimePolicy, args map[string]any) (string, error) {
@@ -1170,17 +1219,11 @@ func (e *Executor) evaluateApproval(policy contracts.ShellApprovalPolicy, comman
 		return approvalDecisionAllow, ""
 	}
 	full := commandPrefix(command, args)
-	for _, prefix := range policy.Params.DenyPrefixes {
-		prefix = strings.TrimSpace(prefix)
-		if prefix != "" && strings.HasPrefix(full, prefix) {
-			return approvalDecisionDeny, "shell command denied by persistent policy: " + full
-		}
-	}
-	for _, prefix := range policy.Params.AllowPrefixes {
-		prefix = strings.TrimSpace(prefix)
-		if prefix != "" && strings.HasPrefix(full, prefix) {
+	if allow, message, matched := evaluatePersistentApprovalPrefixes(policy, full); matched {
+		if allow {
 			return approvalDecisionAllow, ""
 		}
+		return approvalDecisionDeny, message
 	}
 	switch policy.Strategy {
 	case "always_allow":
@@ -1197,6 +1240,22 @@ func (e *Executor) evaluateApproval(policy contracts.ShellApprovalPolicy, comman
 	default:
 		return approvalDecisionAllow, ""
 	}
+}
+
+func evaluatePersistentApprovalPrefixes(policy contracts.ShellApprovalPolicy, full string) (allow bool, message string, matched bool) {
+	for _, prefix := range policy.Params.DenyPrefixes {
+		prefix = strings.TrimSpace(prefix)
+		if prefix != "" && strings.HasPrefix(full, prefix) {
+			return false, "shell command denied by persistent policy: " + full, true
+		}
+	}
+	for _, prefix := range policy.Params.AllowPrefixes {
+		prefix = strings.TrimSpace(prefix)
+		if prefix != "" && strings.HasPrefix(full, prefix) {
+			return true, "", true
+		}
+	}
+	return false, "", false
 }
 
 func approvalMessage(policy contracts.ShellApprovalPolicy, full string) string {
