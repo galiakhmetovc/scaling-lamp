@@ -233,12 +233,6 @@ func (c *Client) evaluateToolCalls(contract contracts.ToolExecutionContract, cal
 			return out, err
 		}
 		out = append(out, ToolDecision{ToolID: call.Name, Decision: decision})
-		if !decision.Allowed {
-			return out, fmt.Errorf("tool call %q denied: %s", call.Name, decision.Reason)
-		}
-		if decision.ApprovalRequired {
-			return out, fmt.Errorf("tool call %q requires approval", call.Name)
-		}
 	}
 	return out, nil
 }

@@ -508,17 +508,89 @@ func TestClientRejectsProviderToolCallThroughExecutionGate(t *testing.T) {
 	}, provider.ClientInput{
 		Messages: []contracts.Message{{Role: "user", Content: "run pwd"}},
 	})
-	if err == nil {
-		t.Fatal("Execute error = nil, want denied tool call error")
-	}
-	if !strings.Contains(err.Error(), `tool call "shell.exec" denied`) {
-		t.Fatalf("Execute error = %q", err)
+	if err != nil {
+		t.Fatalf("Execute returned error: %v", err)
 	}
 	if len(result.ToolDecisions) != 1 {
 		t.Fatalf("tool decisions len = %d, want 1", len(result.ToolDecisions))
 	}
 	if result.ToolDecisions[0].Decision.Allowed {
 		t.Fatalf("tool decision = %#v, want denied", result.ToolDecisions[0])
+	}
+}
+
+func TestClientReturnsApprovalRequiredDecisionWithoutError(t *testing.T) {
+	t.Setenv("ZAI_API_KEY", "secret-token")
+
+	client := provider.NewClient(
+		provider.NewPromptAssetExecutor(),
+		provider.NewRequestShapeExecutor(),
+		tools.NewPlanToolExecutor(),
+		filesystem.NewDefinitionExecutor(),
+		shell.NewDefinitionExecutor(),
+		delegation.NewDefinitionExecutor(),
+		tools.NewCatalogExecutor(),
+		tools.NewExecutionGate(),
+		provider.NewTransportExecutor(fakeDoer{
+			do: func(req *http.Request) (*http.Response, error) {
+				return &http.Response{
+					StatusCode: http.StatusOK,
+					Header:     http.Header{"Content-Type": []string{"application/json"}},
+					Body:       io.NopCloser(bytes.NewBufferString(`{"id":"resp-approval","model":"glm-5-turbo","choices":[{"finish_reason":"tool_calls","message":{"role":"assistant","content":"","tool_calls":[{"id":"call-shell-approval","function":{"name":"shell.exec","arguments":{"command":"pwd"}}}]}}]}`)),
+				}, nil
+			},
+		}),
+	)
+
+	result, err := client.Execute(context.Background(), contracts.ResolvedContracts{
+		ProviderRequest: contracts.ProviderRequestContract{
+			Transport: contracts.TransportContract{
+				Endpoint: contracts.EndpointPolicy{
+					Enabled:  true,
+					Strategy: "static",
+					Params: contracts.EndpointParams{
+						BaseURL: "https://api.z.ai",
+						Path:    "/api/paas/v4/chat/completions",
+						Method:  http.MethodPost,
+					},
+				},
+				Auth: contracts.AuthPolicy{
+					Enabled:  true,
+					Strategy: "bearer_token",
+					Params: contracts.AuthParams{
+						Header:      "Authorization",
+						Prefix:      "Bearer",
+						ValueEnvVar: "ZAI_API_KEY",
+					},
+				},
+			},
+			RequestShape: contracts.RequestShapeContract{
+				Model:    contracts.ModelPolicy{Enabled: true, Strategy: "static_model", Params: contracts.ModelParams{Model: "glm-5-turbo"}},
+				Messages: contracts.MessagePolicy{Enabled: true, Strategy: "raw_messages"},
+			},
+		},
+		ToolExecution: contracts.ToolExecutionContract{
+			Access: contracts.ToolAccessPolicy{
+				Enabled:  true,
+				Strategy: "static_allowlist",
+				Params: contracts.ToolAccessParams{ToolIDs: []string{"shell.exec"}},
+			},
+			Approval: contracts.ToolApprovalPolicy{
+				Enabled:  true,
+				Strategy: "always_require",
+			},
+		},
+	}, provider.ClientInput{
+		Messages: []contracts.Message{{Role: "user", Content: "run pwd"}},
+	})
+	if err != nil {
+		t.Fatalf("Execute returned error: %v", err)
+	}
+	if len(result.ToolDecisions) != 1 {
+		t.Fatalf("tool decisions len = %d, want 1", len(result.ToolDecisions))
+	}
+	if !result.ToolDecisions[0].Decision.ApprovalRequired {
+		t.Fatalf("tool decision = %#v, want approval required", result.ToolDecisions[0])
 	}
 }
 

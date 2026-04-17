@@ -546,7 +546,7 @@ func TestBuildAgentLoadsShippedFilesystemCompatibilityApprovalGuard(t *testing.T
 	if got.Strategy != "require_for_destructive" {
 		t.Fatalf("approval strategy = %q, want require_for_destructive", got.Strategy)
 	}
-	for _, toolID := range []string{"fs_read_text", "fs_write_text", "fs_patch_text", "fs_replace_in_files", "fs_move", "fs_trash"} {
+	for _, toolID := range []string{"fs_write_text", "fs_patch_text", "fs_replace_in_files", "fs_move", "fs_trash"} {
 		found := false
 		for _, candidate := range got.Params.DestructiveToolIDs {
 			if candidate == toolID {
@@ -556,6 +556,11 @@ func TestBuildAgentLoadsShippedFilesystemCompatibilityApprovalGuard(t *testing.T
 		}
 		if !found {
 			t.Fatalf("destructive tool ids = %#v, want %q included", got.Params.DestructiveToolIDs, toolID)
+		}
+	}
+	for _, toolID := range got.Params.DestructiveToolIDs {
+		if toolID == "fs_read_text" {
+			t.Fatalf("destructive tool ids = %#v, fs_read_text should not require approval by default", got.Params.DestructiveToolIDs)
 		}
 	}
 }

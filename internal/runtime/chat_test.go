@@ -1067,6 +1067,83 @@ func TestAgentChatTurnAllowsArtifactReadOnNextToolRound(t *testing.T) {
 	}
 }
 
+func TestAgentChatTurnContinuesAfterApprovalRequiredToolDecision(t *testing.T) {
+	t.Setenv("TEAMD_ZAI_API_KEY", "secret-token")
+
+	dir := t.TempDir()
+	clock := time.Date(2026, 4, 17, 14, 0, 0, 0, time.UTC)
+	idValues := []string{
+		"session-chat-approval-runtime",
+		"run-chat-approval-runtime", "evt-session-approval-runtime", "evt-msg-user-approval-runtime", "evt-run-start-approval-runtime",
+		"evt-provider-request-approval-runtime-1", "evt-transport-approval-runtime-1", "evt-tool-call-started-approval-runtime", "evt-tool-call-completed-approval-runtime",
+		"evt-provider-request-approval-runtime-2", "evt-transport-approval-runtime-2", "evt-msg-assistant-approval-runtime", "evt-run-complete-approval-runtime",
+	}
+	nextID := func(prefix string) string {
+		if len(idValues) == 0 {
+			t.Fatalf("unexpected id request for prefix %q", prefix)
+		}
+		id := idValues[0]
+		idValues = idValues[1:]
+		return id
+	}
+
+	call := 0
+	var secondRequest map[string]any
+	agent := &runtime.Agent{
+		Config:        chatRuntimeConfigForTest(),
+		ConfigPath:    filepath.Join(dir, "agent.yaml"),
+		Contracts:     chatContractsForShellToolLoopTest(dir),
+		PromptAssets:  provider.NewPromptAssetExecutor(),
+		RequestShape:  provider.NewRequestShapeExecutor(),
+		PlanTools:     tools.NewPlanToolExecutor(),
+		ToolCatalog:   tools.NewCatalogExecutor(),
+		ToolExecution: tools.NewExecutionGate(),
+		Transport: provider.NewTransportExecutor(fakeDoer{
+			do: func(req *http.Request) (*http.Response, error) {
+				call++
+				if call == 1 {
+					return &http.Response{
+						StatusCode: http.StatusOK,
+						Header:     http.Header{"Content-Type": []string{"application/json"}},
+						Body:       io.NopCloser(bytes.NewBufferString(`{"id":"resp-approval-runtime-1","model":"glm-5-turbo","choices":[{"finish_reason":"tool_calls","message":{"role":"assistant","content":"","tool_calls":[{"id":"call-shell-approval-runtime","function":{"name":"shell_exec","arguments":{"command":"pwd"}}}]}}]}`)),
+					}, nil
+				}
+				defer req.Body.Close()
+				if err := json.NewDecoder(req.Body).Decode(&secondRequest); err != nil {
+					t.Fatalf("decode second request body: %v", err)
+				}
+				return &http.Response{
+					StatusCode: http.StatusOK,
+					Header:     http.Header{"Content-Type": []string{"application/json"}},
+					Body:       io.NopCloser(bytes.NewBufferString(`{"id":"resp-approval-runtime-2","model":"glm-5-turbo","choices":[{"finish_reason":"stop","message":{"role":"assistant","content":"Need approval."}}]}`)),
+				}, nil
+			},
+		}),
+		EventLog:    runtime.NewInMemoryEventLog(),
+		Projections: []projections.Projection{projections.NewSessionProjection(), projections.NewRunProjection()},
+		Now:         func() time.Time { return clock },
+		NewID:       nextID,
+	}
+	agent.ProviderClient = provider.NewClient(agent.PromptAssets, agent.RequestShape, agent.PlanTools, filesystem.NewDefinitionExecutor(), shell.NewDefinitionExecutor(), delegation.NewDefinitionExecutor(), agent.ToolCatalog, agent.ToolExecution, agent.Transport)
+	agent.Contracts.ToolExecution.Approval = contracts.ToolApprovalPolicy{Enabled: true, Strategy: "always_require"}
+
+	session, err := agent.NewChatSession()
+	if err != nil {
+		t.Fatalf("NewChatSession returned error: %v", err)
+	}
+	result, err := agent.ChatTurn(context.Background(), session, runtime.ChatTurnInput{Prompt: "run pwd"})
+	if err != nil {
+		t.Fatalf("ChatTurn returned error: %v", err)
+	}
+	if result.Provider.Message.Content != "Need approval." {
+		t.Fatalf("assistant response = %q, want Need approval.", result.Provider.Message.Content)
+	}
+	content := toolMessageContentFromRequest(t, secondRequest, "shell_exec")
+	if !strings.Contains(content, "requires approval") {
+		t.Fatalf("tool message missing approval error: %s", content)
+	}
+}
+
 func chatRuntimeConfigForTest() config.AgentConfig {
 	return config.AgentConfig{ID: "agent-chat-test"}
 }

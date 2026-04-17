@@ -6,7 +6,6 @@ spec:
   strategy: require_for_destructive
   params:
     destructive_tool_ids:
-      - fs_read_text
       - fs_write_text
       - fs_patch_text
       - fs_replace_in_files
