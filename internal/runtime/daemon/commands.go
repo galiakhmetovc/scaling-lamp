@@ -335,6 +335,7 @@ func (s *Server) executeCommand(ctx context.Context, req CommandRequest) (any, e
 			return nil, err
 		}
 		reloaded.UIBus = agent.UIBus
+		agent.CopySuspendedToolLoopTo(approvalID, reloaded)
 		s.swapAgent(reloaded)
 		agent = s.currentAgent()
 		commandID, err := agent.ApproveShellCommand(ctx, approvalID)
@@ -374,6 +375,7 @@ func (s *Server) executeCommand(ctx context.Context, req CommandRequest) (any, e
 			return nil, err
 		}
 		reloaded.UIBus = agent.UIBus
+		agent.CopySuspendedToolLoopTo(approvalID, reloaded)
 		s.swapAgent(reloaded)
 		agent = s.currentAgent()
 		if err := agent.DenyShellCommand(ctx, approvalID); err != nil {

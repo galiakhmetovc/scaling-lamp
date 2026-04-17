@@ -82,7 +82,14 @@ func (a *Agent) ApproveShellCommand(ctx context.Context, approvalID string) (str
 	}); err != nil {
 		return "", err
 	}
-	return a.ShellRuntime.Approve(ctx, approvalID)
+	out, err := a.ShellRuntime.Approve(ctx, approvalID)
+	if err != nil {
+		return "", err
+	}
+	if err := a.resumeSuspendedToolLoopAfterApproval(ctx, approvalID, out); err != nil {
+		return "", err
+	}
+	return out, nil
 }
 
 func (a *Agent) KillShellCommand(ctx context.Context, commandID string) (string, error) {
@@ -132,7 +139,10 @@ func (a *Agent) DenyShellCommand(ctx context.Context, approvalID string) error {
 	}); err != nil {
 		return err
 	}
-	return a.ShellRuntime.Deny(ctx, approvalID)
+	if err := a.ShellRuntime.Deny(ctx, approvalID); err != nil {
+		return err
+	}
+	return a.resumeSuspendedToolLoopAfterDenial(ctx, approvalID, "shell command denied by operator")
 }
 
 func (a *Agent) pendingShellApproval(approvalID string) (projections.ShellCommandView, error) {

@@ -641,6 +641,71 @@ func TestExecutorQueuesApprovalAndStartsAfterApprove(t *testing.T) {
 	waitCh <- nil
 }
 
+func TestExecutorApproveRunsShellExecSynchronously(t *testing.T) {
+	t.Parallel()
+
+	executor := &Executor{
+		goos: "linux",
+		run: func(_ context.Context, cwd, executable string, args []string) (runResult, error) {
+			if executable == "" {
+				t.Fatal("executable is empty")
+			}
+			return runResult{stdout: "approved output\n", stderr: "", exitCode: 0}, nil
+		},
+		lookupPath: func(file string) (string, error) { return file, nil },
+		commands:   map[string]*activeCommand{},
+		completed:  map[string]*activeCommand{},
+		approvals:  map[string]*pendingApproval{},
+	}
+	contract := contracts.ShellExecutionContract{
+		Command: contracts.ShellCommandPolicy{
+			Enabled:  true,
+			Strategy: "static_allowlist",
+			Params:   contracts.ShellCommandParams{AllowedCommands: []string{"go"}},
+		},
+		Approval: contracts.ShellApprovalPolicy{
+			Enabled:  true,
+			Strategy: "always_require",
+		},
+		Runtime: contracts.ShellRuntimePolicy{
+			Enabled:  true,
+			Strategy: "workspace_write",
+			Params: contracts.ShellRuntimeParams{
+				Cwd:            t.TempDir(),
+				Timeout:        "5s",
+				MaxOutputBytes: 4096,
+				AllowNetwork:   true,
+			},
+		},
+	}
+
+	startOut, err := executor.ExecuteWithMeta(context.Background(), contract, "shell_exec", map[string]any{
+		"command": "go",
+		"args":    []any{"version"},
+	}, ExecutionMeta{SessionID: "session-1", RunID: "run-1"})
+	if err != nil {
+		t.Fatalf("ExecuteWithMeta returned error: %v", err)
+	}
+	if decodeField(t, startOut, "status") != "approval_pending" {
+		t.Fatalf("status = %s, want approval_pending", startOut)
+	}
+	approvalID := decodeField(t, startOut, "approval_id")
+	if approvalID == "" {
+		t.Fatalf("approval_id missing from %s", startOut)
+	}
+
+	approveOut, err := executor.Approve(context.Background(), approvalID)
+	if err != nil {
+		t.Fatalf("Approve returned error: %v", err)
+	}
+	if decodeField(t, approveOut, "status") != "ok" {
+		t.Fatalf("approve status = %s, want ok", approveOut)
+	}
+	if decodeField(t, approveOut, "stdout") != "approved output\n" {
+		t.Fatalf("stdout = %q, want approved output", decodeField(t, approveOut, "stdout"))
+	}
+}
+
 func TestExecutorDeniesPendingApproval(t *testing.T) {
 	t.Parallel()
 

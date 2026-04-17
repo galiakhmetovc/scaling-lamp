@@ -1072,19 +1072,10 @@ func TestAgentChatTurnContinuesAfterApprovalRequiredToolDecision(t *testing.T) {
 
 	dir := t.TempDir()
 	clock := time.Date(2026, 4, 17, 14, 0, 0, 0, time.UTC)
-	idValues := []string{
-		"session-chat-approval-runtime",
-		"run-chat-approval-runtime", "evt-session-approval-runtime", "evt-msg-user-approval-runtime", "evt-run-start-approval-runtime",
-		"evt-provider-request-approval-runtime-1", "evt-transport-approval-runtime-1", "evt-tool-call-started-approval-runtime", "evt-tool-call-completed-approval-runtime",
-		"evt-provider-request-approval-runtime-2", "evt-transport-approval-runtime-2", "evt-msg-assistant-approval-runtime", "evt-run-complete-approval-runtime",
-	}
+	idCounter := 0
 	nextID := func(prefix string) string {
-		if len(idValues) == 0 {
-			t.Fatalf("unexpected id request for prefix %q", prefix)
-		}
-		id := idValues[0]
-		idValues = idValues[1:]
-		return id
+		idCounter++
+		return fmt.Sprintf("%s-%d", prefix, idCounter)
 	}
 
 	call := 0
@@ -1120,12 +1111,14 @@ func TestAgentChatTurnContinuesAfterApprovalRequiredToolDecision(t *testing.T) {
 			},
 		}),
 		EventLog:    runtime.NewInMemoryEventLog(),
-		Projections: []projections.Projection{projections.NewSessionProjection(), projections.NewRunProjection()},
+		Projections: []projections.Projection{projections.NewSessionProjection(), projections.NewRunProjection(), projections.NewTranscriptProjection(), projections.NewShellCommandProjection()},
 		Now:         func() time.Time { return clock },
 		NewID:       nextID,
 	}
 	agent.ProviderClient = provider.NewClient(agent.PromptAssets, agent.RequestShape, agent.PlanTools, filesystem.NewDefinitionExecutor(), shell.NewDefinitionExecutor(), delegation.NewDefinitionExecutor(), agent.ToolCatalog, agent.ToolExecution, agent.Transport)
-	agent.Contracts.ToolExecution.Approval = contracts.ToolApprovalPolicy{Enabled: true, Strategy: "always_require"}
+	agent.ShellRuntime = shell.NewExecutor()
+	agent.Contracts.ShellExecution.Approval = contracts.ShellApprovalPolicy{Enabled: true, Strategy: "always_require"}
+	agent.Contracts.ShellExecution.Runtime.Params.AllowNetwork = true
 
 	session, err := agent.NewChatSession()
 	if err != nil {
@@ -1135,12 +1128,35 @@ func TestAgentChatTurnContinuesAfterApprovalRequiredToolDecision(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ChatTurn returned error: %v", err)
 	}
-	if result.Provider.Message.Content != "Need approval." {
-		t.Fatalf("assistant response = %q, want Need approval.", result.Provider.Message.Content)
+	if result.Provider.FinishReason != "approval_pending" {
+		t.Fatalf("finish_reason = %q, want approval_pending", result.Provider.FinishReason)
+	}
+	if secondRequest != nil {
+		t.Fatal("provider loop continued before approval")
+	}
+	approvals := agent.PendingShellApprovals(session.SessionID)
+	if len(approvals) != 1 {
+		t.Fatalf("pending approvals = %d, want 1", len(approvals))
+	}
+	if _, err := agent.ApproveShellCommand(context.Background(), approvals[0].ApprovalID); err != nil {
+		t.Fatalf("ApproveShellCommand returned error: %v", err)
+	}
+	if secondRequest == nil {
+		t.Fatal("provider loop did not resume after approval")
 	}
 	content := toolMessageContentFromRequest(t, secondRequest, "shell_exec")
-	if !strings.Contains(content, "requires approval") {
-		t.Fatalf("tool message missing approval error: %s", content)
+	if strings.Contains(content, `"approval_pending"`) {
+		t.Fatalf("tool message still contains approval_pending: %s", content)
+	}
+	if !strings.Contains(content, `"stdout"`) {
+		t.Fatalf("tool message missing shell result payload: %s", content)
+	}
+	resumed, err := agent.ResumeChatSession(context.Background(), session.SessionID)
+	if err != nil {
+		t.Fatalf("ResumeChatSession returned error: %v", err)
+	}
+	if len(resumed.Messages) == 0 || resumed.Messages[len(resumed.Messages)-1].Content != "Need approval." {
+		t.Fatalf("assistant response = %#v, want final assistant message", resumed.Messages)
 	}
 }
 

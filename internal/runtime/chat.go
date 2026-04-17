@@ -171,37 +171,60 @@ func (a *Agent) ChatTurn(ctx context.Context, session *ChatSession, input ChatTu
 		StreamObserver:       input.StreamObserver,
 	}, input.ToolObserver, input.MaxToolRoundsOverride)
 	if err != nil {
-		if recordErr := a.RecordEvent(ctx, eventing.Event{
-			ID:               a.newID("evt-run-failed"),
-			Kind:             eventing.EventRunFailed,
-			OccurredAt:       a.now(),
-			AggregateID:      runID,
-			AggregateType:    eventing.AggregateRun,
-			AggregateVersion: 2,
-			CorrelationID:    correlationID,
-			CausationID:      runID,
-			Source:           "agent.chat",
-			ActorID:          a.Config.ID,
-			ActorType:        "agent",
-			TraceSummary:     "chat provider request failed",
-			Payload: map[string]any{
-				"session_id": session.SessionID,
-				"error":      err.Error(),
-			},
-		}); recordErr != nil {
+		if recordErr := a.recordChatRunFailure(ctx, session.SessionID, runID, correlationID, err); recordErr != nil {
 			return provider.ClientResult{}, fmt.Errorf("execute chat turn: %v; record failure event: %w", err, recordErr)
-		}
-		if a.UIBus != nil {
-			a.UIBus.Publish(UIEvent{Kind: UIEventStatusChanged, SessionID: session.SessionID, RunID: runID, Status: "failed"})
 		}
 		return provider.ClientResult{}, fmt.Errorf("execute chat turn: %w", err)
 	}
+	if result.Provider.FinishReason == "approval_pending" {
+		if a.UIBus != nil {
+			a.UIBus.Publish(UIEvent{Kind: UIEventStatusChanged, SessionID: session.SessionID, RunID: runID, Status: "approval_pending"})
+		}
+		return result, nil
+	}
 
+	if err := a.completeChatRun(ctx, session, runID, correlationID, result); err != nil {
+		return provider.ClientResult{}, err
+	}
+
+	return result, nil
+}
+
+func (a *Agent) recordChatRunFailure(ctx context.Context, sessionID, runID, correlationID string, err error) error {
+	if recordErr := a.RecordEvent(ctx, eventing.Event{
+		ID:               a.newID("evt-run-failed"),
+		Kind:             eventing.EventRunFailed,
+		OccurredAt:       a.now(),
+		AggregateID:      runID,
+		AggregateType:    eventing.AggregateRun,
+		AggregateVersion: 2,
+		CorrelationID:    correlationID,
+		CausationID:      runID,
+		Source:           "agent.chat",
+		ActorID:          a.Config.ID,
+		ActorType:        "agent",
+		TraceSummary:     "chat provider request failed",
+		Payload: map[string]any{
+			"session_id": sessionID,
+			"error":      err.Error(),
+		},
+	}); recordErr != nil {
+		return recordErr
+	}
+	if a.UIBus != nil {
+		a.UIBus.Publish(UIEvent{Kind: UIEventStatusChanged, SessionID: sessionID, RunID: runID, Status: "failed"})
+	}
+	return nil
+}
+
+func (a *Agent) completeChatRun(ctx context.Context, session *ChatSession, runID, correlationID string, result provider.ClientResult) error {
+	if session == nil {
+		return fmt.Errorf("chat session is nil")
+	}
 	if err := a.recordSessionMessage(ctx, session.SessionID, correlationID, result.Provider.Message); err != nil {
-		return provider.ClientResult{}, fmt.Errorf("record assistant message: %w", err)
+		return fmt.Errorf("record assistant message: %w", err)
 	}
 	session.Messages = append(session.Messages, result.Provider.Message)
-
 	if err := a.RecordEvent(ctx, eventing.Event{
 		ID:               a.newID("evt-run-completed"),
 		Kind:             eventing.EventRunCompleted,
@@ -226,7 +249,7 @@ func (a *Agent) ChatTurn(ctx context.Context, session *ChatSession, input ChatTu
 			"total_tokens":   result.Provider.Usage.TotalTokens,
 		},
 	}); err != nil {
-		return provider.ClientResult{}, fmt.Errorf("record run completed: %w", err)
+		return fmt.Errorf("record run completed: %w", err)
 	}
 	if a.UIBus != nil {
 		a.UIBus.Publish(UIEvent{
@@ -237,8 +260,7 @@ func (a *Agent) ChatTurn(ctx context.Context, session *ChatSession, input ChatTu
 			Text:      result.Provider.Message.Content,
 		})
 	}
-
-	return result, nil
+	return nil
 }
 
 func (a *Agent) BtwTurn(ctx context.Context, session *ChatSession, input BtwTurnInput) (provider.ClientResult, error) {

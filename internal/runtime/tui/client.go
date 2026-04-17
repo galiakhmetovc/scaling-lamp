@@ -301,6 +301,7 @@ func (c *localClient) ApproveShellAlways(ctx context.Context, approvalID string)
 		return ShellActionResult{}, err
 	}
 	reloaded.UIBus = c.agent.UIBus
+	c.agent.CopySuspendedToolLoopTo(approvalID, reloaded)
 	c.agent = reloaded
 	if _, err := c.agent.ApproveShellCommand(ctx, approvalID); err != nil {
 		return ShellActionResult{}, err
@@ -331,6 +332,7 @@ func (c *localClient) DenyShellAlways(ctx context.Context, approvalID string) (S
 		return ShellActionResult{}, err
 	}
 	reloaded.UIBus = c.agent.UIBus
+	c.agent.CopySuspendedToolLoopTo(approvalID, reloaded)
 	c.agent = reloaded
 	if err := c.agent.DenyShellCommand(ctx, approvalID); err != nil {
 		return ShellActionResult{}, err

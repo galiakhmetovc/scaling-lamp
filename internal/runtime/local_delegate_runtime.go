@@ -368,7 +368,7 @@ func (r *LocalDelegateRuntime) finishTurn(state *localDelegateState, session *Ch
 	if state.Contracts != nil {
 		turnInput.ContractsOverride = state.Contracts
 	}
-	_, err := r.agent.ChatTurn(context.Background(), session, turnInput)
+	result, err := r.agent.ChatTurn(context.Background(), session, turnInput)
 	if err != nil {
 		_ = r.agent.RecordEvent(context.Background(), eventing.Event{
 			ID:            r.agent.newID("evt-delegate-failed"),
@@ -392,7 +392,9 @@ func (r *LocalDelegateRuntime) finishTurn(state *localDelegateState, session *Ch
 	}
 
 	summary := "delegate completed"
-	if len(session.Messages) > 0 {
+	if result.Provider.FinishReason == "approval_pending" {
+		summary = "Need approval."
+	} else if len(session.Messages) > 0 {
 		summary = session.Messages[len(session.Messages)-1].Content
 	}
 	_ = r.agent.RecordEvent(context.Background(), eventing.Event{

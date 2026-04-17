@@ -183,7 +183,7 @@ func (e *Executor) ExecuteWithMeta(ctx context.Context, contract contracts.Shell
 	}
 	switch toolName {
 	case "shell_exec":
-		return e.executeSync(ctx, contract, toolName, argsMap)
+		return e.executeSync(ctx, contract, toolName, argsMap, meta)
 	case "shell_start":
 		return e.executeStart(ctx, contract, argsMap, meta)
 	case "shell_poll":
@@ -195,7 +195,7 @@ func (e *Executor) ExecuteWithMeta(ctx context.Context, contract contracts.Shell
 	}
 }
 
-func (e *Executor) executeSync(ctx context.Context, contract contracts.ShellExecutionContract, toolName string, argsMap map[string]any) (string, error) {
+func (e *Executor) executeSync(ctx context.Context, contract contracts.ShellExecutionContract, toolName string, argsMap map[string]any, meta ExecutionMeta) (string, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -228,7 +228,7 @@ func (e *Executor) executeSync(ctx context.Context, contract contracts.ShellExec
 		if err != nil {
 			return "", err
 		}
-		return e.queueApproval(ctx, toolName, contract, ExecutionMeta{}, command, args, cwd, invocation, commandMessage)
+		return e.queueApproval(ctx, toolName, contract, meta, command, args, cwd, invocation, commandMessage)
 	}
 	cwd, err := resolveCwd(contract.Runtime, argsMap)
 	if err != nil {
@@ -243,8 +243,12 @@ func (e *Executor) executeSync(ctx context.Context, contract contracts.ShellExec
 		return "", fmt.Errorf("%s", message)
 	}
 	if approval == approvalDecisionRequire {
-		return e.queueApproval(ctx, toolName, contract, ExecutionMeta{}, command, args, cwd, invocation, message)
+		return e.queueApproval(ctx, toolName, contract, meta, command, args, cwd, invocation, message)
 	}
+	return e.runSyncApproved(ctx, contract, toolName, command, args, cwd, invocation)
+}
+
+func (e *Executor) runSyncApproved(ctx context.Context, contract contracts.ShellExecutionContract, toolName, command string, args []string, cwd string, invocation invocation) (string, error) {
 	timeout, err := parseTimeout(contract.Runtime)
 	if err != nil {
 		return "", err
@@ -592,9 +596,21 @@ func (e *Executor) Approve(ctx context.Context, approvalID string) (string, erro
 		return "", fmt.Errorf("shell approval %q not found", approvalID)
 	}
 	e.mu.RUnlock()
-	out, err := e.startCommand(ctx, approval.contract, approval.meta, approval.CommandID, approval.Command, approval.Args, approval.Cwd, approval.invocation, approval.ToolName, func() error {
-		return e.recordApprovalGranted(ctx, approval)
-	})
+	var (
+		out string
+		err error
+	)
+	switch approval.ToolName {
+	case "shell_exec":
+		if err := e.recordApprovalGranted(ctx, approval); err != nil {
+			return "", err
+		}
+		out, err = e.runSyncApproved(ctx, approval.contract, approval.ToolName, approval.Command, approval.Args, approval.Cwd, approval.invocation)
+	default:
+		out, err = e.startCommand(ctx, approval.contract, approval.meta, approval.CommandID, approval.Command, approval.Args, approval.Cwd, approval.invocation, approval.ToolName, func() error {
+			return e.recordApprovalGranted(ctx, approval)
+		})
+	}
 	if err != nil {
 		return "", err
 	}

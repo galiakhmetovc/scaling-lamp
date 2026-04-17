@@ -45,6 +45,8 @@ type Agent struct {
 	Now             func() time.Time
 	NewID           func(prefix string) string
 	recordMu        sync.Mutex
+	suspendedToolMu sync.Mutex
+	suspendedTools  map[string]suspendedToolLoop
 }
 
 func (a *Agent) RecordEvent(ctx context.Context, event eventing.Event) error {
@@ -198,6 +200,7 @@ func BuildAgent(configPath string) (*Agent, error) {
 		NewID: func(prefix string) string {
 			return fmt.Sprintf("%s-%d", prefix, time.Now().UTC().UnixNano())
 		},
+		suspendedTools: map[string]suspendedToolLoop{},
 	}
 	if store, err := agent.ensureArtifactStore(contracts); err != nil {
 		return nil, fmt.Errorf("build artifact store: %w", err)
