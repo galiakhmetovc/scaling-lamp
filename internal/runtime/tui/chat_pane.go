@@ -3,6 +3,7 @@ package tui
 import (
 	"context"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -553,17 +554,17 @@ func (m *model) viewChatStatusBar(state *sessionState) string {
 }
 
 func (m *model) renderLiveToolLog(state *sessionState, width int) []string {
-	if state == nil || len(state.ToolLog) == 0 {
+	if state == nil {
 		return nil
 	}
-	activities := collapseLiveToolActivities(state.ToolLog)
-	if len(activities) == 0 {
+	items := m.buildLiveToolItems(state, width)
+	if len(items) == 0 {
 		return nil
 	}
-	start, end := liveToolWindowBounds(activities, m.currentApprovals(), m.approvalCursor)
+	start, end := liveToolItemWindowBounds(items, m.approvalCursor)
 	lines := []string{}
-	for _, activity := range activities[start:end] {
-		lines = append(lines, compactLiveToolActivityLine(activity, m.currentApprovals(), m.approvalCursor, width))
+	for _, item := range items[start:end] {
+		lines = append(lines, item.Line)
 	}
 	return lines
 }
@@ -747,6 +748,148 @@ func (m *model) renderBtwBlock(run btwRun, style string, width int) string {
 		markdown += fmt.Sprintf("\n\n`%s | %s | %d tok`", coalesce(run.Provider, "provider"), coalesce(run.Model, "model"), run.TotalTokens)
 	}
 	return m.renderMarkdownBlock(markdown, style, width)
+}
+
+type liveToolItem struct {
+	OccurredAt  time.Time
+	Line        string
+	ApprovalID  string
+	DisplayKey  string
+	CurrentLive bool
+}
+
+func (m *model) buildLiveToolItems(state *sessionState, width int) []liveToolItem {
+	if state == nil {
+		return nil
+	}
+	approvals := m.currentApprovals()
+	commands := m.currentRunningCommands()
+	items := make([]liveToolItem, 0, len(approvals)+len(commands)+3)
+	currentKeys := map[string]struct{}{}
+	selectedApproval := min(max(m.approvalCursor, 0), max(0, len(approvals)-1))
+	for idx, approval := range approvals {
+		base := compactApprovalInvocation(approval)
+		line := composeLiveStatusLine(approval.OccurredAt, base, "APPROVAL", "1;30;48;5;214", width)
+		if idx == selectedApproval {
+			line = "> " + line
+		} else if len(approvals) > 1 {
+			line = "  " + line
+		}
+		items = append(items, liveToolItem{
+			OccurredAt:  approval.OccurredAt,
+			Line:        line,
+			ApprovalID:  approval.ApprovalID,
+			DisplayKey:  base,
+			CurrentLive: true,
+		})
+		currentKeys[base] = struct{}{}
+	}
+	for _, command := range commands {
+		base := compactRunningCommandInvocation(command)
+		line := composeLiveStatusLine(command.OccurredAt, base, compactShellCommandStatus(command), compactShellCommandStatusSGR(command), width)
+		items = append(items, liveToolItem{
+			OccurredAt:  command.OccurredAt,
+			Line:        line,
+			DisplayKey:  base,
+			CurrentLive: true,
+		})
+		currentKeys[base] = struct{}{}
+	}
+	for _, activity := range collapseLiveToolActivities(state.ToolLog) {
+		if compactToolStatusKey(activity) == "run" {
+			continue
+		}
+		base := compactToolInvocation(activity.Name, activity.Arguments)
+		if _, dup := currentKeys[base]; dup {
+			continue
+		}
+		items = append(items, liveToolItem{
+			OccurredAt: activity.OccurredAt,
+			Line:       compactLiveToolActivityLine(activity, approvals, m.approvalCursor, width),
+			DisplayKey: base,
+		})
+	}
+	sort.SliceStable(items, func(i, j int) bool {
+		if items[i].OccurredAt.Equal(items[j].OccurredAt) {
+			if items[i].CurrentLive != items[j].CurrentLive {
+				return items[i].CurrentLive
+			}
+			return items[i].DisplayKey < items[j].DisplayKey
+		}
+		return items[i].OccurredAt.Before(items[j].OccurredAt)
+	})
+	return items
+}
+
+func liveToolItemWindowBounds(items []liveToolItem, approvalCursor int) (int, int) {
+	if len(items) <= 3 {
+		return 0, len(items)
+	}
+	selectedIndex := -1
+	currentApproval := 0
+	for i, item := range items {
+		if item.ApprovalID == "" {
+			continue
+		}
+		if currentApproval == approvalCursor {
+			selectedIndex = i
+			break
+		}
+		currentApproval++
+	}
+	if selectedIndex < 0 {
+		return len(items) - 3, len(items)
+	}
+	start := selectedIndex - 1
+	if start < 0 {
+		start = 0
+	}
+	if start > len(items)-3 {
+		start = len(items) - 3
+	}
+	return start, start + 3
+}
+
+func compactRunningCommandInvocation(command projections.ShellCommandView) string {
+	toolName := strings.TrimSpace(command.ToolName)
+	if toolName == "" {
+		toolName = "shell_start"
+	}
+	return compactShellInvocation(toolName, map[string]any{
+		"command": command.Command,
+		"args":    command.Args,
+	})
+}
+
+func compactShellCommandStatus(command projections.ShellCommandView) string {
+	switch strings.TrimSpace(command.Status) {
+	case "killing":
+		return "KILLING"
+	default:
+		return "RUNNING"
+	}
+}
+
+func compactShellCommandStatusSGR(command projections.ShellCommandView) string {
+	switch strings.TrimSpace(command.Status) {
+	case "killing":
+		return "1;38;5;245"
+	default:
+		return "1;38;5;81"
+	}
+}
+
+func composeLiveStatusLine(occurredAt time.Time, base, status, sgr string, width int) string {
+	suffix := " | " + ansiToolAccent(status, sgr)
+	if width <= 0 {
+		return prefixTimestamp(occurredAt, base) + suffix
+	}
+	visibleSuffix := " | " + status
+	baseWidth := width - len(visibleSuffix)
+	if baseWidth < 8 {
+		baseWidth = 8
+	}
+	return ellipsizeForWidth(prefixTimestamp(occurredAt, base), baseWidth) + suffix
 }
 
 func formatElapsed(d time.Duration) string {

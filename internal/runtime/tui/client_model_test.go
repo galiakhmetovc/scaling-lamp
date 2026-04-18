@@ -1605,6 +1605,91 @@ func TestWaitingShellSnapshotKeepsRunActiveAndSuppressesEndTurnMarker(t *testing
 	}
 }
 
+func TestChatLiveRailUsesSnapshotApprovalsWithoutToolLog(t *testing.T) {
+	ws := make(chan daemon.WebsocketEnvelope)
+	close(ws)
+	now := time.Date(2026, 4, 18, 16, 30, 0, 0, time.UTC)
+	client := &stubOperatorClient{
+		sessions: []SessionSummary{{SessionID: "session-1", CreatedAt: now, LastActivity: now, MessageCount: 0}},
+		snapshot: daemon.SessionSnapshot{
+			SessionID: "session-1",
+			MainRun: daemon.MainRunSnapshot{
+				Active:    true,
+				Phase:     "waiting_approval",
+				StartedAt: now.Add(-45 * time.Second),
+			},
+			PendingApprovals: []shell.PendingApprovalView{{
+				ApprovalID: "approval-1",
+				ToolName:   "shell_exec",
+				Command:    "ansible-playbook",
+				Args:       []string{"site.yml"},
+				OccurredAt: now,
+			}},
+			Prompt: daemon.SessionPromptSnapshot{
+				Default:   "default prompt",
+				Effective: "default prompt",
+			},
+		},
+		ws: ws,
+	}
+
+	m, err := newModelWithClient(context.Background(), client, "")
+	if err != nil {
+		t.Fatalf("newModelWithClient returned error: %v", err)
+	}
+	state := m.currentSessionState()
+	state.ToolLog = nil
+
+	m.renderChatViewport(state)
+	got := stripANSI(state.ChatView.View())
+	if !strings.Contains(got, "shell_exec ansible-playbook site.yml | APPROVAL") {
+		t.Fatalf("chat live rail missing snapshot approval: %q", got)
+	}
+}
+
+func TestChatLiveRailUsesRunningCommandsSnapshotWhileWaitingShell(t *testing.T) {
+	ws := make(chan daemon.WebsocketEnvelope)
+	close(ws)
+	now := time.Date(2026, 4, 18, 16, 31, 0, 0, time.UTC)
+	client := &stubOperatorClient{
+		sessions: []SessionSummary{{SessionID: "session-1", CreatedAt: now, LastActivity: now, MessageCount: 0}},
+		snapshot: daemon.SessionSnapshot{
+			SessionID: "session-1",
+			MainRun: daemon.MainRunSnapshot{
+				Active:    true,
+				Phase:     "waiting_shell",
+				StartedAt: now.Add(-2 * time.Minute),
+			},
+			RunningCommands: []projections.ShellCommandView{{
+				CommandID:  "cmd-1",
+				OccurredAt: now,
+				Command:    "ansible-playbook",
+				Args:       []string{"playbooks/reinstall_adcm.yml", "-i", "inventory.ini"},
+				Status:     "running",
+			}},
+			Prompt: daemon.SessionPromptSnapshot{
+				Default:   "default prompt",
+				Effective: "default prompt",
+			},
+		},
+		ws: ws,
+	}
+
+	m, err := newModelWithClient(context.Background(), client, "")
+	if err != nil {
+		t.Fatalf("newModelWithClient returned error: %v", err)
+	}
+	state := m.currentSessionState()
+	state.ToolLog = nil
+	m.syncRunStateFromSnapshot(state, false)
+
+	m.renderChatViewport(state)
+	got := stripANSI(state.ChatView.View())
+	if !strings.Contains(got, "shell_start ansible-playbook") || !strings.Contains(got, "| RUNNING") {
+		t.Fatalf("chat live rail missing running shell command from snapshot: %q", got)
+	}
+}
+
 func TestDaemonEnvelopeApprovalReloadSessionDetectsApprovalEvents(t *testing.T) {
 	var m model
 	sessionID, ok := m.daemonEnvelopeApprovalReloadSession(daemon.WebsocketEnvelope{
