@@ -41,6 +41,7 @@ func (m *model) updateChat(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			if len(m.currentApprovals()) > 0 && m.approvalCursor > 0 {
 				m.approvalCursor--
 				m.renderChatViewport(state)
+				m.traceApprovalMenuState(state, "left")
 			}
 			return m, nil
 		}
@@ -49,6 +50,7 @@ func (m *model) updateChat(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			if approvals := m.currentApprovals(); len(approvals) > 0 && m.approvalCursor < len(approvals)-1 {
 				m.approvalCursor++
 				m.renderChatViewport(state)
+				m.traceApprovalMenuState(state, "right")
 			}
 			return m, nil
 		}
@@ -57,6 +59,7 @@ func (m *model) updateChat(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			if state.ApprovalMenu.ActionIndex > 0 {
 				state.ApprovalMenu.ActionIndex--
 				m.renderChatViewport(state)
+				m.traceApprovalMenuState(state, "up")
 			}
 			return m, nil
 		}
@@ -65,6 +68,7 @@ func (m *model) updateChat(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			if state.ApprovalMenu.ActionIndex < len(approvalMenuActions)-1 {
 				state.ApprovalMenu.ActionIndex++
 				m.renderChatViewport(state)
+				m.traceApprovalMenuState(state, "down")
 			}
 			return m, nil
 		}
@@ -73,6 +77,7 @@ func (m *model) updateChat(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			state.ApprovalMenu.ComposeMode = false
 			state.Input.Reset()
 			m.renderChatViewport(state)
+			m.traceApprovalMenuState(state, "esc")
 			return m, nil
 		}
 	case "alt+up":
@@ -202,6 +207,7 @@ func (m *model) renderChatViewport(state *sessionState) {
 		lines = append(lines, marker, "")
 	}
 	state.ChatView.SetContent(strings.TrimRight(strings.Join(lines, "\n"), "\n"))
+	m.traceApprovalMenuState(state, "render")
 	if wasAtBottom || state.MainRun.Active || strings.TrimSpace(state.PendingPrompt) != "" {
 		state.ChatView.GotoBottom()
 	}
@@ -264,6 +270,7 @@ func (m *model) performChatApprovalAction(state *sessionState, action string) te
 		approvalIndex = m.approvalCursor
 	}
 	approvalID := approvals[approvalIndex].ApprovalID
+	m.traceApprovalMenuAction(state, "tui.approval_menu.submitted", map[string]any{"action": action, "approval_id": approvalID})
 	state.ApprovalInFlightID = approvalID
 	state.Status = "running"
 	return tea.Batch(runShellActionCmd(m.ctx, m.client, state.SessionID, approvalID, action), tickClockCmd())
@@ -283,6 +290,7 @@ func (m *model) submitApprovalMenuSelection(state *sessionState) tea.Cmd {
 	case 3:
 		return m.performChatApprovalAction(state, "deny_forever")
 	case 4:
+		m.traceApprovalMenuAction(state, "tui.approval_menu.compose_started", nil)
 		state.ApprovalMenu.ComposeMode = true
 		state.Input.Reset()
 		state.Input.Focus()
@@ -307,6 +315,7 @@ func (m *model) submitApprovalCancelMessage(state *sessionState) tea.Cmd {
 	}
 	approval := approvals[min(max(m.approvalCursor, 0), len(approvals)-1)]
 	state.ApprovalMenu.ComposeMode = false
+	m.traceApprovalMenuAction(state, "tui.approval_menu.cancel_and_send_submitted", map[string]any{"approval_id": approval.ApprovalID})
 	return m.startMainRunWithCmd(state, prompt, func(runCtx context.Context) tea.Cmd {
 		return runCancelApprovalAndSendCmd(runCtx, m.client, state.SessionID, approval.ApprovalID, prompt)
 	})

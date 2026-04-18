@@ -5,9 +5,12 @@ import (
 	"fmt"
 	"log/slog"
 	"runtime/debug"
+	"strings"
 	"sync"
+	"time"
 
 	"teamd/internal/runtime"
+	"teamd/internal/runtime/eventing"
 	"teamd/internal/runtime/workspace"
 	"teamd/internal/shell"
 )
@@ -588,6 +591,21 @@ func (s *Server) executeCommand(ctx context.Context, req CommandRequest) (any, e
 			return nil, err
 		}
 		return s.sessionPayload(view.SessionID)
+	case "debug.trace":
+		sessionID, err := requiredString(req.Payload, "session_id")
+		if err != nil {
+			return nil, err
+		}
+		traceName, err := requiredString(req.Payload, "trace")
+		if err != nil {
+			return nil, err
+		}
+		fields, _ := req.Payload["fields"].(map[string]any)
+		runID, _ := optionalString(req.Payload, "run_id")
+		if err := s.recordTraceEvent(ctx, "operator.tui", sessionID, runID, traceName, fields); err != nil {
+			return nil, err
+		}
+		return map[string]any{"ok": true}, nil
 	case "settings.get":
 		settings, err := s.settingsSnapshot()
 		if err != nil {
@@ -734,54 +752,74 @@ func (s *Server) optimisticShellApprovalPayload(sessionID, approvalID string) (m
 }
 
 func (s *Server) approveShellAsync(agent *runtime.Agent, approvalID, sessionID string) {
+	s.traceApprovalContinuation(sessionID, "", approvalID, "daemon.shell.approve.started", nil)
 	if _, err := agent.ApproveShellCommand(context.Background(), approvalID); err != nil {
+		s.traceApprovalContinuation(sessionID, "", approvalID, "daemon.shell.approve.failed", map[string]any{"error": err.Error()})
 		s.publishDaemon(WebsocketEnvelope{Type: "shell_approval_failed", Payload: map[string]any{"session_id": sessionID}, Error: err.Error()})
 		s.failMainRun(sessionID, nil)
 		return
 	}
+	s.traceApprovalContinuation(sessionID, "", approvalID, "daemon.shell.approve.completed", nil)
 	s.syncMainRunAfterShellContinuation(agent, sessionID)
 }
 
 func (s *Server) approveShellAlwaysAsync(agent *runtime.Agent, approvalID string, view shell.PendingApprovalView) {
+	s.traceApprovalContinuation(view.SessionID, view.RunID, approvalID, "daemon.shell.approve_always.started", map[string]any{"command": view.Command})
+	s.traceApprovalContinuation(view.SessionID, view.RunID, approvalID, "daemon.shell.reload.started", nil)
 	reloaded, err := PersistShellApprovalRuleAndReload(agent.ConfigPath, "allow", shellApprovalPrefix(view.Command, view.Args))
 	if err != nil {
+		s.traceApprovalContinuation(view.SessionID, view.RunID, approvalID, "daemon.shell.reload.failed", map[string]any{"error": err.Error()})
 		s.publishDaemon(WebsocketEnvelope{Type: "shell_approval_failed", Payload: map[string]any{"session_id": view.SessionID}, Error: err.Error()})
 		return
 	}
+	s.traceApprovalContinuation(view.SessionID, view.RunID, approvalID, "daemon.shell.reload.completed", nil)
 	reloaded.UIBus = agent.UIBus
 	agent.CopySuspendedToolLoopTo(approvalID, reloaded)
 	s.swapAgent(reloaded)
+	s.traceApprovalContinuation(view.SessionID, view.RunID, approvalID, "daemon.shell.resume.started", nil)
 	if _, err := reloaded.ApproveShellCommand(context.Background(), approvalID); err != nil {
+		s.traceApprovalContinuation(view.SessionID, view.RunID, approvalID, "daemon.shell.resume.failed", map[string]any{"error": err.Error()})
 		s.publishDaemon(WebsocketEnvelope{Type: "shell_approval_failed", Payload: map[string]any{"session_id": view.SessionID}, Error: err.Error()})
 		s.failMainRun(view.SessionID, nil)
 		return
 	}
+	s.traceApprovalContinuation(view.SessionID, view.RunID, approvalID, "daemon.shell.resume.completed", nil)
 	s.syncMainRunAfterShellContinuation(reloaded, view.SessionID)
 }
 
 func (s *Server) denyShellAsync(agent *runtime.Agent, approvalID, sessionID string) {
+	s.traceApprovalContinuation(sessionID, "", approvalID, "daemon.shell.deny.started", nil)
 	if err := agent.DenyShellCommand(context.Background(), approvalID); err != nil {
+		s.traceApprovalContinuation(sessionID, "", approvalID, "daemon.shell.deny.failed", map[string]any{"error": err.Error()})
 		s.publishDaemon(WebsocketEnvelope{Type: "shell_approval_failed", Payload: map[string]any{"session_id": sessionID}, Error: err.Error()})
 		s.failMainRun(sessionID, nil)
 		return
 	}
+	s.traceApprovalContinuation(sessionID, "", approvalID, "daemon.shell.deny.completed", nil)
 	s.syncMainRunAfterShellContinuation(agent, sessionID)
 }
 
 func (s *Server) denyShellAlwaysAsync(agent *runtime.Agent, approvalID string, view shell.PendingApprovalView) {
+	s.traceApprovalContinuation(view.SessionID, view.RunID, approvalID, "daemon.shell.deny_always.started", map[string]any{"command": view.Command})
+	s.traceApprovalContinuation(view.SessionID, view.RunID, approvalID, "daemon.shell.reload.started", nil)
 	reloaded, err := PersistShellApprovalRuleAndReload(agent.ConfigPath, "deny", shellApprovalPrefix(view.Command, view.Args))
 	if err != nil {
+		s.traceApprovalContinuation(view.SessionID, view.RunID, approvalID, "daemon.shell.reload.failed", map[string]any{"error": err.Error()})
 		s.publishDaemon(WebsocketEnvelope{Type: "shell_approval_failed", Payload: map[string]any{"session_id": view.SessionID}, Error: err.Error()})
 		return
 	}
+	s.traceApprovalContinuation(view.SessionID, view.RunID, approvalID, "daemon.shell.reload.completed", nil)
 	reloaded.UIBus = agent.UIBus
 	agent.CopySuspendedToolLoopTo(approvalID, reloaded)
 	s.swapAgent(reloaded)
+	s.traceApprovalContinuation(view.SessionID, view.RunID, approvalID, "daemon.shell.resume.started", nil)
 	if err := reloaded.DenyShellCommand(context.Background(), approvalID); err != nil {
+		s.traceApprovalContinuation(view.SessionID, view.RunID, approvalID, "daemon.shell.resume.failed", map[string]any{"error": err.Error()})
 		s.publishDaemon(WebsocketEnvelope{Type: "shell_approval_failed", Payload: map[string]any{"session_id": view.SessionID}, Error: err.Error()})
 		s.failMainRun(view.SessionID, nil)
 		return
 	}
+	s.traceApprovalContinuation(view.SessionID, view.RunID, approvalID, "daemon.shell.resume.completed", nil)
 	s.syncMainRunAfterShellContinuation(reloaded, view.SessionID)
 }
 
@@ -790,9 +828,11 @@ func (s *Server) runGuardedShellApproval(sessionID string, fn func()) {
 		lock := s.sessionApprovalLock(sessionID)
 		lock.Lock()
 		defer lock.Unlock()
+		s.traceApprovalContinuation(sessionID, "", "", "daemon.shell.approval_continuation.started", nil)
 		defer func() {
 			if recovered := recover(); recovered != nil {
 				err := fmt.Errorf("panic in shell approval continuation: %v", recovered)
+				s.traceApprovalContinuation(sessionID, "", "", "daemon.shell.approval_continuation.panicked", map[string]any{"error": err.Error()})
 				s.logError("daemon.shell_approval.panic", err,
 					slog.String("session_id", sessionID),
 					slog.String("stack", string(debug.Stack())),
@@ -806,6 +846,7 @@ func (s *Server) runGuardedShellApproval(sessionID string, fn func()) {
 			}
 		}()
 		fn()
+		s.traceApprovalContinuation(sessionID, "", "", "daemon.shell.approval_continuation.completed", nil)
 	}()
 }
 
@@ -821,6 +862,91 @@ func (s *Server) sessionApprovalLock(sessionID string) *sync.Mutex {
 		s.approvalLocks[sessionID] = lock
 	}
 	return lock
+}
+
+func (s *Server) traceApprovalContinuation(sessionID, runID, approvalID, traceName string, fields map[string]any) {
+	if strings.TrimSpace(sessionID) == "" || strings.TrimSpace(traceName) == "" {
+		return
+	}
+	payload := cloneTracePayload(fields)
+	if approvalID != "" {
+		payload["approval_id"] = approvalID
+	}
+	if runID != "" {
+		payload["run_id"] = runID
+	}
+	if err := s.recordTraceEvent(context.Background(), "daemon.approval", sessionID, runID, traceName, payload); err != nil {
+		s.logError("daemon.trace.record.failed", err,
+			slog.String("session_id", sessionID),
+			slog.String("run_id", runID),
+			slog.String("approval_id", approvalID),
+			slog.String("trace", traceName),
+		)
+	}
+}
+
+func (s *Server) recordTraceEvent(ctx context.Context, source, sessionID, runID, traceName string, fields map[string]any) error {
+	if strings.TrimSpace(sessionID) == "" || strings.TrimSpace(traceName) == "" {
+		return nil
+	}
+	agent := s.currentAgent()
+	if agent == nil {
+		return fmt.Errorf("agent is nil")
+	}
+	if agent.EventLog == nil {
+		return nil
+	}
+	eventID := fmt.Sprintf("evt-trace-%d", time.Now().UTC().UnixNano())
+	if agent.NewID != nil {
+		eventID = agent.NewID("evt-trace")
+	}
+	occurredAt := time.Now().UTC()
+	if agent.Now != nil {
+		occurredAt = agent.Now().UTC()
+	}
+	payload := map[string]any{
+		"session_id": sessionID,
+		"trace":      traceName,
+		"fields":     cloneTracePayload(fields),
+	}
+	if runID != "" {
+		payload["run_id"] = runID
+	}
+	if err := agent.RecordEvent(ctx, eventing.Event{
+		ID:               eventID,
+		Kind:             eventing.EventTraceRecorded,
+		OccurredAt:       occurredAt,
+		AggregateID:      sessionID,
+		AggregateType:    eventing.AggregateSession,
+		AggregateVersion: 1,
+		CorrelationID:    runID,
+		Source:           source,
+		ActorID:          agent.Config.ID,
+		ActorType:        "operator",
+		TraceSummary:     traceName,
+		Payload:          payload,
+	}); err != nil {
+		return err
+	}
+	s.logInfo("trace.recorded",
+		slog.String("source", source),
+		slog.String("session_id", sessionID),
+		slog.String("run_id", runID),
+		slog.String("trace", traceName),
+		slog.Any("fields", payload["fields"]),
+	)
+	return nil
+}
+
+func cloneTracePayload(fields map[string]any) map[string]any {
+	if len(fields) == 0 {
+		return map[string]any{}
+	}
+	out := make(map[string]any, len(fields))
+	for k, v := range fields {
+		out[k] = v
+	}
+	return out
 }
 
 func requiredString(payload map[string]any, key string) (string, error) {

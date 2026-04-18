@@ -71,22 +71,38 @@ func (a *Agent) CopySuspendedToolLoopTo(approvalID string, target *Agent) {
 func (a *Agent) resumeSuspendedToolLoopAfterApproval(ctx context.Context, approvalID, resultText string) error {
 	state, ok := a.popSuspendedToolLoop(approvalID)
 	if !ok {
+		_ = a.RecordTraceEvent(ctx, "", "", "runtime.approval", "runtime.approval.resume.missing_state", map[string]any{
+			"approval_id": approvalID,
+		})
 		return nil
 	}
+	_ = a.RecordTraceEvent(ctx, state.SessionID, state.RunID, "runtime.approval", "runtime.approval.resume.after_approval.started", map[string]any{
+		"approval_id": approvalID,
+	})
 	return a.resumeSuspendedToolLoop(ctx, state, resultText, "")
 }
 
 func (a *Agent) resumeSuspendedToolLoopAfterDenial(ctx context.Context, approvalID, reason string) error {
 	state, ok := a.popSuspendedToolLoop(approvalID)
 	if !ok {
+		_ = a.RecordTraceEvent(ctx, "", "", "runtime.approval", "runtime.approval.resume.missing_state", map[string]any{
+			"approval_id": approvalID,
+		})
 		return nil
 	}
+	_ = a.RecordTraceEvent(ctx, state.SessionID, state.RunID, "runtime.approval", "runtime.approval.resume.after_denial.started", map[string]any{
+		"approval_id": approvalID,
+	})
 	call := state.Calls[state.PendingIndex]
 	resultText := toolErrorResult(call.Name, fmt.Errorf("%s", reason))
 	return a.resumeSuspendedToolLoop(ctx, state, resultText, reason)
 }
 
 func (a *Agent) resumeSuspendedToolLoop(ctx context.Context, state suspendedToolLoop, resultText, errorText string) error {
+	_ = a.RecordTraceEvent(ctx, state.SessionID, state.RunID, "runtime.approval", "runtime.approval.resume.started", map[string]any{
+		"approval_id": state.ApprovalID,
+		"pending_index": state.PendingIndex,
+	})
 	call := state.Calls[state.PendingIndex]
 	toolContent := resultText
 	displayText := resultText
@@ -138,6 +154,9 @@ func (a *Agent) resumeSuspendedToolLoop(ctx context.Context, state suspendedTool
 		}
 		if suspension != nil {
 			a.storeSuspendedToolLoop(*suspension)
+			_ = a.RecordTraceEvent(ctx, state.SessionID, state.RunID, "runtime.approval", "runtime.approval.resume.next_approval_pending", map[string]any{
+				"approval_id": suspension.ApprovalID,
+			})
 			if a.UIBus != nil {
 				a.UIBus.Publish(UIEvent{Kind: UIEventStatusChanged, SessionID: state.SessionID, RunID: state.RunID, Status: "approval_pending"})
 			}
@@ -152,17 +171,28 @@ func (a *Agent) resumeSuspendedToolLoop(ctx context.Context, state suspendedTool
 		Tools:                state.Tools,
 	}, nil, 0)
 	if err != nil {
+		_ = a.RecordTraceEvent(ctx, state.SessionID, state.RunID, "runtime.approval", "runtime.approval.resume.provider_loop.failed", map[string]any{
+			"approval_id": state.ApprovalID,
+			"error":       err.Error(),
+		})
 		if state.Source == "agent.chat" {
 			_ = a.recordChatRunFailure(ctx, state.SessionID, state.RunID, state.CorrelationID, err)
 		}
 		return err
 	}
 	if result.Provider.FinishReason == "approval_pending" {
+		_ = a.RecordTraceEvent(ctx, state.SessionID, state.RunID, "runtime.approval", "runtime.approval.resume.provider_loop.approval_pending", map[string]any{
+			"approval_id": state.ApprovalID,
+		})
 		if a.UIBus != nil {
 			a.UIBus.Publish(UIEvent{Kind: UIEventStatusChanged, SessionID: state.SessionID, RunID: state.RunID, Status: "approval_pending"})
 		}
 		return nil
 	}
+	_ = a.RecordTraceEvent(ctx, state.SessionID, state.RunID, "runtime.approval", "runtime.approval.resume.provider_loop.completed", map[string]any{
+		"approval_id":   state.ApprovalID,
+		"finish_reason": result.Provider.FinishReason,
+	})
 	if state.Source != "agent.chat" {
 		return nil
 	}

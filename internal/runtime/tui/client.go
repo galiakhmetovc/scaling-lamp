@@ -17,6 +17,7 @@ import (
 	"teamd/internal/contracts"
 	"teamd/internal/runtime"
 	"teamd/internal/runtime/daemon"
+	"teamd/internal/runtime/eventing"
 	"teamd/internal/runtime/projections"
 	"teamd/internal/runtime/workspace"
 )
@@ -84,6 +85,7 @@ type OperatorClient interface {
 	DenyShell(context.Context, string) (ShellActionResult, error)
 	DenyShellAlways(context.Context, string) (ShellActionResult, error)
 	KillShell(context.Context, string) (ShellActionResult, error)
+	DebugTrace(context.Context, string, string, map[string]any) error
 	WorkspacePTYOpen(context.Context, string, int, int) (WorkspacePTYResult, error)
 	WorkspacePTYInput(context.Context, string, string) error
 	WorkspacePTYSnapshot(context.Context, string) (WorkspacePTYResult, error)
@@ -443,6 +445,37 @@ func (c *localClient) KillShell(ctx context.Context, commandID string) (ShellAct
 	}
 	session, err := c.GetSession(ctx, view.SessionID)
 	return ShellActionResult{Session: session}, err
+}
+
+func (c *localClient) DebugTrace(ctx context.Context, sessionID, trace string, fields map[string]any) error {
+	if c.agent == nil || strings.TrimSpace(sessionID) == "" || strings.TrimSpace(trace) == "" {
+		return nil
+	}
+	eventID := fmt.Sprintf("evt-trace-%d", time.Now().UTC().UnixNano())
+	if c.agent.NewID != nil {
+		eventID = c.agent.NewID("evt-trace")
+	}
+	now := time.Now().UTC()
+	if c.agent.Now != nil {
+		now = c.agent.Now().UTC()
+	}
+	return c.agent.RecordEvent(ctx, eventing.Event{
+		ID:               eventID,
+		Kind:             eventing.EventTraceRecorded,
+		OccurredAt:       now,
+		AggregateID:      sessionID,
+		AggregateType:    eventing.AggregateSession,
+		AggregateVersion: 1,
+		Source:           "operator.tui",
+		ActorID:          c.agent.Config.ID,
+		ActorType:        "operator",
+		TraceSummary:     trace,
+		Payload: map[string]any{
+			"session_id": sessionID,
+			"trace":      trace,
+			"fields":     cloneTraceFields(fields),
+		},
+	})
 }
 
 func (c *localClient) WorkspacePTYOpen(_ context.Context, sessionID string, cols, rows int) (WorkspacePTYResult, error) {
@@ -890,6 +923,18 @@ func (c *daemonClient) KillShell(ctx context.Context, commandID string) (ShellAc
 	err := c.command(ctx, daemon.CommandRequest{Type: "command", ID: "cmd-shell-kill", Command: "shell.kill", Payload: map[string]any{"command_id": commandID}}, &result)
 	return ShellActionResult{Session: result.Session}, err
 }
+func (c *daemonClient) DebugTrace(ctx context.Context, sessionID, trace string, fields map[string]any) error {
+	return c.command(ctx, daemon.CommandRequest{
+		Type:    "command",
+		ID:      "cmd-debug-trace",
+		Command: "debug.trace",
+		Payload: map[string]any{
+			"session_id": sessionID,
+			"trace":      trace,
+			"fields":     cloneTraceFields(fields),
+		},
+	}, nil)
+}
 func (c *daemonClient) WorkspacePTYOpen(ctx context.Context, sessionID string, cols, rows int) (WorkspacePTYResult, error) {
 	var result struct {
 		PTY workspace.PTYSnapshot `json:"pty"`
@@ -1121,6 +1166,17 @@ func (c *daemonClient) command(ctx context.Context, req daemon.CommandRequest, o
 			return fmt.Errorf("%s", envelope.Error)
 		}
 	}
+}
+
+func cloneTraceFields(fields map[string]any) map[string]any {
+	if len(fields) == 0 {
+		return map[string]any{}
+	}
+	out := make(map[string]any, len(fields))
+	for k, v := range fields {
+		out[k] = v
+	}
+	return out
 }
 
 func buildLocalSessionSnapshot(agent *runtime.Agent, sessionID string) (daemon.SessionSnapshot, error) {

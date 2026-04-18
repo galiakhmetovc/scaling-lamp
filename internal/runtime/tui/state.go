@@ -141,6 +141,7 @@ type sessionState struct {
 	BtwRuns               []btwRun
 	Interjections         []interjectionEntry
 	Workspace             workspaceSessionState
+	ApprovalTrace         approvalMenuTraceState
 }
 
 type workspaceMode int
@@ -190,6 +191,14 @@ type workspaceArtifactsState struct {
 type approvalMenuState struct {
 	ActionIndex int
 	ComposeMode bool
+}
+
+type approvalMenuTraceState struct {
+	Visible       bool
+	ApprovalID    string
+	ActionIndex   int
+	ComposeMode   bool
+	ApprovalCount int
 }
 
 type configFormDraft struct {

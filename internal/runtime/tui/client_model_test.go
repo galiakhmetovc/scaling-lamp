@@ -52,6 +52,7 @@ type stubOperatorClient struct {
 	deniedShellID                  string
 	deniedAlwaysShellID            string
 	killedShellID                  string
+	debugTraces                    []debugTraceCall
 	killShellResult                *daemon.SessionSnapshot
 	workspaceOpenCalls             []string
 	workspaceInputCalls            []workspaceInputCall
@@ -105,6 +106,12 @@ type workspaceEditorSaveCall struct {
 type workspaceArtifactOpenCall struct {
 	SessionID string
 	Ref       string
+}
+
+type debugTraceCall struct {
+	SessionID string
+	Trace     string
+	Fields    map[string]any
 }
 
 func (c *stubOperatorClient) Bootstrap(context.Context) (daemon.BootstrapPayload, error) {
@@ -232,6 +239,15 @@ func (c *stubOperatorClient) KillShell(_ context.Context, commandID string) (She
 		return ShellActionResult{Session: *c.killShellResult}, nil
 	}
 	return ShellActionResult{Session: c.snapshot}, nil
+}
+
+func (c *stubOperatorClient) DebugTrace(_ context.Context, sessionID, trace string, fields map[string]any) error {
+	c.debugTraces = append(c.debugTraces, debugTraceCall{
+		SessionID: sessionID,
+		Trace:     trace,
+		Fields:    fields,
+	})
+	return nil
 }
 
 func (c *stubOperatorClient) WorkspacePTYOpen(_ context.Context, sessionID string, cols, rows int) (WorkspacePTYResult, error) {
@@ -1197,6 +1213,63 @@ func TestChatApprovalSelectionCyclesAcrossPendingApprovals(t *testing.T) {
 	got := state.ChatView.View()
 	if !strings.Contains(got, "> ") || !strings.Contains(got, "ansible-playbook site.yml") {
 		t.Fatalf("chat approval selection missing second approval: %q", got)
+	}
+}
+
+func TestApprovalMenuTraceRecordsShownAndSelection(t *testing.T) {
+	t.Parallel()
+
+	client := &stubOperatorClient{
+		bootstrap: daemon.BootstrapPayload{
+			Transport: daemon.ClientTransportSnapshot{
+				EndpointPath:  "/api",
+				WebsocketPath: "/ws",
+			},
+			ToolGovernance: daemon.ToolGovernanceSnapshot{},
+			Settings:       daemon.SettingsSnapshot{Revision: "rev-1"},
+		},
+		sessions: []SessionSummary{{SessionID: "session-1", Title: "Session 1"}},
+		snapshot: daemon.SessionSnapshot{
+			SessionID: "session-1",
+			MainRun: daemon.MainRunSnapshot{
+				Active:    true,
+				Phase:     "waiting_approval",
+				StartedAt: time.Date(2026, 4, 18, 19, 0, 0, 0, time.UTC),
+			},
+			PendingApprovals: []shell.PendingApprovalView{
+				{ApprovalID: "approval-1", ToolName: "shell_exec", Command: "ansible", Args: []string{"localhost", "-m", "ping"}},
+				{ApprovalID: "approval-2", ToolName: "shell_exec", Command: "ansible-playbook", Args: []string{"site.yml"}},
+			},
+		},
+	}
+
+	m, err := newModelWithClient(context.Background(), client, "session-1")
+	if err != nil {
+		t.Fatalf("newModelWithClient returned error: %v", err)
+	}
+	state := m.currentSessionState()
+	if state == nil {
+		t.Fatal("currentSessionState returned nil")
+	}
+
+	m.traceApprovalMenuState(state, "render")
+	m.approvalCursor = 1
+	m.traceApprovalMenuState(state, "cursor")
+
+	if len(client.debugTraces) != 2 {
+		t.Fatalf("debug trace calls = %d, want 2", len(client.debugTraces))
+	}
+	if client.debugTraces[0].Trace != "tui.approval_menu.shown" {
+		t.Fatalf("first trace = %q, want tui.approval_menu.shown", client.debugTraces[0].Trace)
+	}
+	if got := client.debugTraces[0].Fields["approval_id"]; got != "approval-1" {
+		t.Fatalf("first approval_id = %#v, want approval-1", got)
+	}
+	if client.debugTraces[1].Trace != "tui.approval_menu.selection_changed" {
+		t.Fatalf("second trace = %q, want tui.approval_menu.selection_changed", client.debugTraces[1].Trace)
+	}
+	if got := client.debugTraces[1].Fields["approval_id"]; got != "approval-2" {
+		t.Fatalf("second approval_id = %#v, want approval-2", got)
 	}
 }
 

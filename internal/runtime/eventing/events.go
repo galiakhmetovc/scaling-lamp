@@ -50,6 +50,7 @@ const (
 	EventShellCommandOutputChunk       EventKind = "shell.command.output.chunk"
 	EventShellCommandKillRequested     EventKind = "shell.command.kill_requested"
 	EventShellCommandCompleted         EventKind = "shell.command.completed"
+	EventTraceRecorded                 EventKind = "trace.recorded"
 )
 
 type Event struct {
