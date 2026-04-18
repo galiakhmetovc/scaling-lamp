@@ -36,6 +36,14 @@ func ansiRunEnded(text string) string {
 	return "\x1b[1;38;5;120m" + text + "\x1b[0m"
 }
 
+func ansiRunRunning(text string) string {
+	return "\x1b[1;38;5;120m" + text + "\x1b[0m"
+}
+
+func ansiRunIdle(text string) string {
+	return "\x1b[1;38;5;203m" + text + "\x1b[0m"
+}
+
 func renderChatRoleLabel(role string) string {
 	switch role {
 	case "user":

@@ -495,6 +495,10 @@ func (m *model) viewChatStatusBar(state *sessionState) string {
 	if state.MainRun.Active {
 		runText = "running " + formatElapsed(now.Sub(state.MainRun.StartedAt))
 	}
+	runValue := ansiRunIdle(runText)
+	if state.MainRun.Active {
+		runValue = ansiRunRunning(runText)
+	}
 	provider := coalesce(state.MainRun.Provider, m.client.ProviderLabel())
 	model := coalesce(state.MainRun.Model, "model")
 	ctxTokens := state.Snapshot.ContextBudget.CurrentContextTokens
@@ -518,7 +522,7 @@ func (m *model) viewChatStatusBar(state *sessionState) string {
 		"provider: " + provider,
 		"model: " + model,
 		"time: " + now.UTC().Format("15:04:05"),
-		"run: " + runText,
+		"run: " + runValue,
 		fmt.Sprintf("ctx=%d%s", ctxTokens, lastUsage),
 		fmt.Sprintf("next≈%d", nextTokens),
 		fmt.Sprintf("queue: %d", len(state.Queue)),

@@ -596,9 +596,21 @@ func TestChatViewShowsSessionStatusBarAndQueuedDrafts(t *testing.T) {
 	modelAfter, _ := (&m).Update(tea.WindowSizeMsg{Width: 120, Height: 40})
 	got := modelAfter.View()
 	for _, want := range []string{"provider: api.z.ai", "model: glm-5-turbo", "run: running 00:30", "ctx=120", "next≈133", "queue: 2", "Queued interjections:"} {
-		if !strings.Contains(got, want) {
+		if !strings.Contains(stripANSI(got), want) {
 			t.Fatalf("view missing %q: %q", want, got)
 		}
+	}
+	if !strings.Contains(got, ansiRunRunning("running 00:30")) {
+		t.Fatalf("view missing colored running status: %q", got)
+	}
+	state.MainRun.Active = false
+	modelAfter, _ = (&m).Update(tea.WindowSizeMsg{Width: 120, Height: 40})
+	got = modelAfter.View()
+	if !strings.Contains(stripANSI(got), "run: idle") {
+		t.Fatalf("view missing idle status: %q", got)
+	}
+	if !strings.Contains(got, ansiRunIdle("idle")) {
+		t.Fatalf("view missing colored idle status: %q", got)
 	}
 }
 
