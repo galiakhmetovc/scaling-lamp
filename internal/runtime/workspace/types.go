@@ -10,6 +10,7 @@ type PTYSnapshot struct {
 	Cols       int      `json:"cols"`
 	Rows       int      `json:"rows"`
 	Alive      bool     `json:"alive"`
+	CWD        string   `json:"cwd,omitempty"`
 	ExitCode   *int     `json:"exit_code,omitempty"`
 	Scrollback []string `json:"scrollback,omitempty"`
 }

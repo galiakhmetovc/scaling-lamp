@@ -118,6 +118,37 @@ func TestPTYInputWritesToPTY(t *testing.T) {
 	}
 }
 
+func TestPTYTracksCWDFromCdInput(t *testing.T) {
+	requireLinuxPTY(t)
+
+	mgr := NewWorkspacePTYManager()
+	t.Cleanup(func() { closePTYSessions(t, mgr, "session-1") })
+
+	opened, err := mgr.Open("session-1", 80, 24)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	if opened.CWD == "" {
+		t.Fatal("opened PTY CWD is empty")
+	}
+
+	target := filepath.Join(t.TempDir(), "shell-here")
+	if err := os.MkdirAll(target, 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	if err := mgr.Input(opened.PTYID, []byte("cd "+target+"\r")); err != nil {
+		t.Fatalf("Input cd: %v", err)
+	}
+
+	snap, ok := mgr.Snapshot("session-1")
+	if !ok {
+		t.Fatal("Snapshot missing after cd input")
+	}
+	if snap.CWD != target {
+		t.Fatalf("snapshot cwd = %q, want %q", snap.CWD, target)
+	}
+}
+
 func TestPTYCloseAndResetTearDownCleanly(t *testing.T) {
 	requireLinuxPTY(t)
 

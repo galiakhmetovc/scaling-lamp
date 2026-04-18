@@ -62,6 +62,9 @@ func (m *model) renderWorkspaceTerminalPane(state *sessionState) string {
 		"PTY: "+state.Workspace.PTY.PTYID,
 		fmt.Sprintf("Size: %dx%d", state.Workspace.PTY.Cols, state.Workspace.PTY.Rows),
 	)
+	if state.Workspace.PTY.CWD != "" {
+		lines = append(lines, "CWD: "+state.Workspace.PTY.CWD)
+	}
 	if state.Workspace.PTY.PID > 0 {
 		lines = append(lines, fmt.Sprintf("PID: %d", state.Workspace.PTY.PID))
 	}

@@ -2,6 +2,7 @@ package tui
 
 import (
 	"context"
+	"path/filepath"
 	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -68,6 +69,23 @@ func (m *model) updateWorkspaceFiles(state *sessionState, msg tea.KeyMsg) (tea.M
 		if cmd := m.ensureWorkspacePTY(state); cmd != nil {
 			return m, cmd
 		}
+	case "s":
+		node, ok := state.workspaceFilesSelectedNode()
+		if !ok || !node.IsDir {
+			return m, nil
+		}
+		if state.Workspace.PTY.PTYID == "" {
+			if cmd := m.ensureWorkspacePTY(state); cmd != nil {
+				return m, cmd
+			}
+		}
+		absPath := workspaceFilesAbsPath(state.Workspace.Files.Snapshot.RootPath, node.Path)
+		if absPath == "" {
+			return m, nil
+		}
+		state.Workspace.PTY.CWD = absPath
+		state.Workspace.Files.CurrentPath = node.Path
+		return m, workspacePTYInputCmd(m.ctx, m.client, state.SessionID, state.Workspace.PTY.PTYID, "cd "+shellQuoteWorkspacePath(absPath)+"\r")
 	}
 	return m, nil
 }
@@ -113,6 +131,9 @@ func (m *model) viewWorkspaceFiles(state *sessionState) string {
 	}
 	for i, item := range state.Workspace.Files.Snapshot.Items {
 		prefix := "  "
+		if item.Path != "" && item.Path == state.Workspace.Files.CurrentPath {
+			prefix = "* "
+		}
 		if i == cursor {
 			prefix = "> "
 		}
@@ -159,4 +180,46 @@ func (m *model) workspaceFilesView(state *sessionState) string {
 		MaxHeight(m.workspaceFilesPaneHeight()).
 		Render(clampLines(m.viewWorkspaceFiles(state), m.workspaceFilesPaneHeight()))
 	return lipgloss.JoinHorizontal(lipgloss.Top, navigator, files)
+}
+
+func (m *model) syncWorkspaceFilesCurrentPath(state *sessionState) {
+	if state == nil || !state.Workspace.Files.Loaded {
+		return
+	}
+	state.Workspace.Files.CurrentPath = workspaceFilesCurrentPath(state.Workspace.Files.Snapshot.RootPath, state.Workspace.PTY.CWD)
+}
+
+func workspaceFilesCurrentPath(rootPath, cwd string) string {
+	if rootPath == "" || cwd == "" {
+		return ""
+	}
+	rel, err := filepath.Rel(rootPath, cwd)
+	if err != nil {
+		return ""
+	}
+	rel = filepath.ToSlash(filepath.Clean(rel))
+	if rel == "." {
+		return rel
+	}
+	if rel == ".." || strings.HasPrefix(rel, "../") {
+		return ""
+	}
+	return rel
+}
+
+func workspaceFilesAbsPath(rootPath, relPath string) string {
+	if rootPath == "" || relPath == "" {
+		return ""
+	}
+	if filepath.IsAbs(relPath) {
+		return filepath.Clean(relPath)
+	}
+	return filepath.Clean(filepath.Join(rootPath, filepath.FromSlash(relPath)))
+}
+
+func shellQuoteWorkspacePath(path string) string {
+	if path == "" {
+		return "''"
+	}
+	return "'" + strings.ReplaceAll(path, "'", "'\\''") + "'"
 }

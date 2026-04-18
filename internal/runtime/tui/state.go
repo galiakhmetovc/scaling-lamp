@@ -161,10 +161,11 @@ type workspaceSessionState struct {
 }
 
 type workspaceFilesState struct {
-	Snapshot workspace.FileTreeSnapshot
-	Loaded   bool
-	Cursor   int
-	LastSync time.Time
+	Snapshot    workspace.FileTreeSnapshot
+	Loaded      bool
+	Cursor      int
+	CurrentPath string
+	LastSync    time.Time
 }
 
 type workspaceEditorState struct {

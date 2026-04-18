@@ -156,6 +156,93 @@ func TestWorkspaceFilesExpandsSelectedDirOnEnter(t *testing.T) {
 	}
 }
 
+func TestWorkspaceTerminalFilesSyncHighlightsCurrentCWD(t *testing.T) {
+	m, _ := newWorkspaceTerminalTestModel(t)
+	m = runWorkspaceTerminalStep(t, m, tea.KeyMsg{Type: tea.KeyF5})
+	m = runWorkspaceTerminalStep(t, m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'2'}})
+
+	state := m.currentSessionState()
+	state.Workspace.Files.Cursor = 1
+	cwd := filepath.Join(state.Workspace.Files.Snapshot.RootPath, "dir")
+	m = runWorkspaceTerminalStep(t, m, workspacePTYRefreshedMsg{
+		SessionID: state.SessionID,
+		Result: WorkspacePTYResult{PTY: workspace.PTYSnapshot{
+			PTYID:     "pty-session-1",
+			SessionID: state.SessionID,
+			Alive:     true,
+			CWD:       cwd,
+		}},
+	})
+
+	if got := state.Workspace.Files.CurrentPath; got != "dir" {
+		t.Fatalf("workspace files current path = %q, want dir", got)
+	}
+	if state.Workspace.Files.Cursor != 1 {
+		t.Fatalf("workspace files cursor = %d, want 1", state.Workspace.Files.Cursor)
+	}
+	got := m.View()
+	if !strings.Contains(got, "* + dir/") {
+		t.Fatalf("workspace view missing soft cwd highlight: %q", got)
+	}
+	if !strings.Contains(got, ">   go.mod") && !strings.Contains(got, "> go.mod") {
+		t.Fatalf("workspace view missing cursor highlight on go.mod: %q", got)
+	}
+}
+
+func TestWorkspaceFilesShellHereSendsCdToPTY(t *testing.T) {
+	m, client := newWorkspaceTerminalTestModel(t)
+	m = runWorkspaceTerminalStep(t, m, tea.KeyMsg{Type: tea.KeyF5})
+	m = runWorkspaceTerminalStep(t, m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'2'}})
+
+	state := m.currentSessionState()
+	state.Workspace.Files.Cursor = 0
+	dirPath := filepath.Join(state.Workspace.Files.Snapshot.RootPath, "dir")
+	m = runWorkspaceTerminalStep(t, m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'s'}})
+
+	if len(client.workspaceInputCalls) != 1 {
+		t.Fatalf("workspace input calls = %#v, want 1", client.workspaceInputCalls)
+	}
+	gotInput := client.workspaceInputCalls[0]
+	if gotInput.PTYID != "pty-session-1" {
+		t.Fatalf("workspace input pty id = %q, want pty-session-1", gotInput.PTYID)
+	}
+	if gotInput.Data != "cd "+shellQuotePath(dirPath)+"\r" {
+		t.Fatalf("workspace input data = %q, want cd to dir", gotInput.Data)
+	}
+	if state.Workspace.Mode != workspaceModeFiles {
+		t.Fatalf("workspace mode = %v, want files", state.Workspace.Mode)
+	}
+	if state.Workspace.PTY.CWD != dirPath {
+		t.Fatalf("workspace PTY cwd = %q, want %q", state.Workspace.PTY.CWD, dirPath)
+	}
+}
+
+func TestWorkspaceTerminalFilesSyncDoesNotStealFocusOnCWDChange(t *testing.T) {
+	m, _ := newWorkspaceTerminalTestModel(t)
+	m = runWorkspaceTerminalStep(t, m, tea.KeyMsg{Type: tea.KeyF5})
+	m = runWorkspaceTerminalStep(t, m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'2'}})
+
+	state := m.currentSessionState()
+	state.Workspace.Files.Cursor = 1
+	cwd := filepath.Join(state.Workspace.Files.Snapshot.RootPath, "dir")
+	m = runWorkspaceTerminalStep(t, m, workspacePTYRefreshedMsg{
+		SessionID: state.SessionID,
+		Result: WorkspacePTYResult{PTY: workspace.PTYSnapshot{
+			PTYID:     "pty-session-1",
+			SessionID: state.SessionID,
+			Alive:     true,
+			CWD:       cwd,
+		}},
+	})
+
+	if state.Workspace.Mode != workspaceModeFiles {
+		t.Fatalf("workspace mode = %v, want files", state.Workspace.Mode)
+	}
+	if state.Workspace.Files.Cursor != 1 {
+		t.Fatalf("workspace files cursor = %d, want unchanged 1", state.Workspace.Files.Cursor)
+	}
+}
+
 func TestWorkspaceArtifactsSwitchesModeWithKey4(t *testing.T) {
 	m, client := newWorkspaceTerminalTestModel(t)
 	m = runWorkspaceTerminalStep(t, m, tea.KeyMsg{Type: tea.KeyF5})
@@ -537,4 +624,11 @@ func newWorkspaceTerminalTestModel(t *testing.T) (model, *stubOperatorClient) {
 	}
 	m = runWorkspaceTerminalStep(t, m, tea.WindowSizeMsg{Width: 120, Height: 40})
 	return m, client
+}
+
+func shellQuotePath(path string) string {
+	if path == "" {
+		return "''"
+	}
+	return "'" + strings.ReplaceAll(path, "'", "'\\''") + "'"
 }

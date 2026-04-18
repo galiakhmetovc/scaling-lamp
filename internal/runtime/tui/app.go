@@ -364,6 +364,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		state.Workspace.Loaded = true
 		state.Workspace.PTY = msg.Result.PTY
 		state.Workspace.LastSync = m.now()
+		m.syncWorkspaceFilesCurrentPath(state)
 		return m, nil
 	case workspacePTYInputMsg:
 		if msg.Err != nil {
@@ -382,6 +383,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		state.Workspace.Loaded = true
 		state.Workspace.PTY = msg.Result.PTY
 		state.Workspace.LastSync = m.now()
+		m.syncWorkspaceFilesCurrentPath(state)
 		return m, nil
 	case workspaceEditorOpenedMsg:
 		state := m.sessions[msg.SessionID]
@@ -438,6 +440,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		} else if state.Workspace.Files.Cursor >= len(state.Workspace.Files.Snapshot.Items) {
 			state.Workspace.Files.Cursor = len(state.Workspace.Files.Snapshot.Items) - 1
 		}
+		m.syncWorkspaceFilesCurrentPath(state)
 		m.applyWorkspaceFilesJumpTarget(state)
 		return m, nil
 	case workspaceFilesExpandedMsg:
@@ -458,6 +461,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		} else if state.Workspace.Files.Cursor >= len(state.Workspace.Files.Snapshot.Items) {
 			state.Workspace.Files.Cursor = len(state.Workspace.Files.Snapshot.Items) - 1
 		}
+		m.syncWorkspaceFilesCurrentPath(state)
 		m.applyWorkspaceFilesJumpTarget(state)
 		return m, nil
 	case workspaceArtifactsSnapshotMsg:

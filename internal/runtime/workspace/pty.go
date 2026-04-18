@@ -7,6 +7,8 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"path/filepath"
+	"strings"
 	"sync"
 
 	"github.com/creack/pty"
@@ -31,6 +33,8 @@ type ptySession struct {
 	sessionID string
 	cols      int
 	rows      int
+	cwd       string
+	inputLine string
 	cmd       *exec.Cmd
 	file      *os.File
 	output    bytes.Buffer
@@ -179,9 +183,17 @@ func (s *ptySession) ensureRunning(cols, rows int, clear bool) error {
 		s.output.Reset()
 	}
 	s.exitCode = nil
+	if s.cwd == "" {
+		if cwd, err := os.Getwd(); err == nil {
+			s.cwd = cwd
+		}
+	}
 
 	shellPath := defaultShellPath()
 	cmd := exec.Command(shellPath, "-l")
+	if s.cwd != "" {
+		cmd.Dir = s.cwd
+	}
 	cmd.Env = os.Environ()
 	f, err := pty.StartWithSize(cmd, &pty.Winsize{Cols: uint16(cols), Rows: uint16(rows)})
 	if err != nil {
@@ -192,6 +204,7 @@ func (s *ptySession) ensureRunning(cols, rows int, clear bool) error {
 	s.file = f
 	s.cols = cols
 	s.rows = rows
+	s.inputLine = ""
 	s.alive = true
 	go s.captureOutput(f)
 	return nil
@@ -245,6 +258,12 @@ func (s *ptySession) writeInput(data []byte) error {
 		return errPTYNotFound
 	}
 	_, err := file.Write(data)
+	if err != nil {
+		return err
+	}
+	s.mu.Lock()
+	s.applyInputLocked(data)
+	s.mu.Unlock()
 	return err
 }
 
@@ -271,6 +290,7 @@ func (s *ptySession) snapshot() PTYSnapshot {
 		Cols:       s.cols,
 		Rows:       s.rows,
 		Alive:      s.alive,
+		CWD:        s.cwd,
 		ExitCode:   cloneInt(s.exitCode),
 		Scrollback: splitScrollback(s.output.Bytes()),
 	}
@@ -332,6 +352,130 @@ func splitScrollback(raw []byte) []string {
 		out = append(out, string(line))
 	}
 	return out
+}
+
+func (s *ptySession) applyInputLocked(data []byte) {
+	for _, b := range data {
+		switch b {
+		case '\r', '\n':
+			s.processInputLineLocked(strings.TrimSpace(s.inputLine))
+			s.inputLine = ""
+		case '\x7f', '\b':
+			if len(s.inputLine) > 0 {
+				s.inputLine = s.inputLine[:len(s.inputLine)-1]
+			}
+		default:
+			s.inputLine += string(b)
+		}
+	}
+}
+
+func (s *ptySession) processInputLineLocked(line string) {
+	if line == "" {
+		return
+	}
+	if line == "cd" {
+		if home, err := os.UserHomeDir(); err == nil && home != "" {
+			s.cwd = home
+		}
+		return
+	}
+	if !strings.HasPrefix(line, "cd ") && !strings.HasPrefix(line, "cd\t") {
+		return
+	}
+	rest := strings.TrimSpace(strings.TrimPrefix(line, "cd"))
+	if rest == "" {
+		if home, err := os.UserHomeDir(); err == nil && home != "" {
+			s.cwd = home
+		}
+		return
+	}
+	target := parseShellPath(rest)
+	if target == "" {
+		return
+	}
+	if !filepath.IsAbs(target) {
+		base := s.cwd
+		if base == "" {
+			if cwd, err := os.Getwd(); err == nil {
+				base = cwd
+			}
+		}
+		if base != "" {
+			target = filepath.Join(base, target)
+		}
+	}
+	if abs, err := filepath.Abs(target); err == nil {
+		s.cwd = abs
+		return
+	}
+	s.cwd = filepath.Clean(target)
+}
+
+func parseShellPath(raw string) string {
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" {
+		return ""
+	}
+	if trimmed[0] == '\'' {
+		return parseSingleQuotedShellPath(trimmed)
+	}
+	if trimmed[0] == '"' {
+		return parseDoubleQuotedShellPath(trimmed)
+	}
+	fields := strings.Fields(trimmed)
+	if len(fields) == 0 {
+		return ""
+	}
+	return fields[0]
+}
+
+func parseSingleQuotedShellPath(raw string) string {
+	if len(raw) < 2 {
+		return ""
+	}
+	var out strings.Builder
+	for i := 1; i < len(raw); i++ {
+		switch raw[i] {
+		case '\'':
+			return out.String()
+		case '\\':
+			if i+3 < len(raw) && raw[i+1] == '\'' && raw[i+2] == '\\' && raw[i+3] == '\'' {
+				out.WriteByte('\'')
+				i += 3
+				continue
+			}
+			out.WriteByte(raw[i])
+		default:
+			out.WriteByte(raw[i])
+		}
+	}
+	return out.String()
+}
+
+func parseDoubleQuotedShellPath(raw string) string {
+	if len(raw) < 2 {
+		return ""
+	}
+	var out strings.Builder
+	escaped := false
+	for i := 1; i < len(raw); i++ {
+		ch := raw[i]
+		if escaped {
+			out.WriteByte(ch)
+			escaped = false
+			continue
+		}
+		switch ch {
+		case '"':
+			return out.String()
+		case '\\':
+			escaped = true
+		default:
+			out.WriteByte(ch)
+		}
+	}
+	return out.String()
 }
 
 func cloneInt(v *int) *int {
