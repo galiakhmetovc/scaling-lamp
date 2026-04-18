@@ -26,32 +26,35 @@ import (
 )
 
 type stubOperatorClient struct {
-	bootstrap             daemon.BootstrapPayload
-	sessions              []SessionSummary
-	snapshot              daemon.SessionSnapshot
-	approveShellResult    *daemon.SessionSnapshot
-	approveAlwaysResult   *daemon.SessionSnapshot
-	denyShellResult       *daemon.SessionSnapshot
-	denyAlwaysResult      *daemon.SessionSnapshot
-	settings              daemon.SettingsSnapshot
-	ws                    <-chan daemon.WebsocketEnvelope
-	history               SessionHistoryChunk
-	historyCalls          int
-	createCalls           int
-	renamedTo             string
-	deletedSessionID      string
-	savedPrompt           string
-	resetPromptSessionID  string
-	sentChatSessionID     string
-	sentChatPrompt        string
-	approvedShellID       string
-	approvedAlwaysShellID string
-	deniedShellID         string
-	deniedAlwaysShellID   string
-	workspaceOpenCalls    []string
-	workspaceInputCalls   []workspaceInputCall
-	workspaceResizeCalls  []workspaceResizeCall
-	workspaceSnapshots    map[string]workspace.PTYSnapshot
+	bootstrap                  daemon.BootstrapPayload
+	sessions                   []SessionSummary
+	snapshot                   daemon.SessionSnapshot
+	approveShellResult         *daemon.SessionSnapshot
+	approveAlwaysResult        *daemon.SessionSnapshot
+	denyShellResult            *daemon.SessionSnapshot
+	denyAlwaysResult           *daemon.SessionSnapshot
+	settings                   daemon.SettingsSnapshot
+	ws                         <-chan daemon.WebsocketEnvelope
+	history                    SessionHistoryChunk
+	historyCalls               int
+	createCalls                int
+	renamedTo                  string
+	deletedSessionID           string
+	savedPrompt                string
+	resetPromptSessionID       string
+	sentChatSessionID          string
+	sentChatPrompt             string
+	approvedShellID            string
+	approvedAlwaysShellID      string
+	deniedShellID              string
+	deniedAlwaysShellID        string
+	workspaceOpenCalls         []string
+	workspaceInputCalls        []workspaceInputCall
+	workspaceResizeCalls       []workspaceResizeCall
+	workspaceSnapshots         map[string]workspace.PTYSnapshot
+	workspaceFileSnapshots     map[string]workspace.FileTreeSnapshot
+	workspaceFileSnapshotCalls []string
+	workspaceFileExpandCalls   []workspaceFileExpandCall
 }
 
 type workspaceInputCall struct {
@@ -63,6 +66,11 @@ type workspaceResizeCall struct {
 	PTYID string
 	Cols  int
 	Rows  int
+}
+
+type workspaceFileExpandCall struct {
+	SessionID string
+	RelPath   string
 }
 
 func (c *stubOperatorClient) Bootstrap(context.Context) (daemon.BootstrapPayload, error) {
@@ -228,6 +236,46 @@ func (c *stubOperatorClient) WorkspacePTYResize(_ context.Context, ptyID string,
 		}
 	}
 	return WorkspacePTYResult{}, nil
+}
+
+func (c *stubOperatorClient) WorkspaceFilesSnapshot(_ context.Context, sessionID string) (workspace.FileTreeSnapshot, error) {
+	c.workspaceFileSnapshotCalls = append(c.workspaceFileSnapshotCalls, sessionID)
+	if c.workspaceFileSnapshots == nil {
+		c.workspaceFileSnapshots = map[string]workspace.FileTreeSnapshot{}
+	}
+	snap, ok := c.workspaceFileSnapshots[sessionID]
+	if !ok {
+		return workspace.FileTreeSnapshot{}, fmt.Errorf("workspace files for session %q not found", sessionID)
+	}
+	return snap, nil
+}
+
+func (c *stubOperatorClient) WorkspaceFilesExpand(_ context.Context, sessionID, relPath string) (workspace.FileTreeSnapshot, error) {
+	c.workspaceFileExpandCalls = append(c.workspaceFileExpandCalls, workspaceFileExpandCall{SessionID: sessionID, RelPath: relPath})
+	if c.workspaceFileSnapshots == nil {
+		c.workspaceFileSnapshots = map[string]workspace.FileTreeSnapshot{}
+	}
+	snap, ok := c.workspaceFileSnapshots[sessionID]
+	if !ok {
+		return workspace.FileTreeSnapshot{}, fmt.Errorf("workspace files for session %q not found", sessionID)
+	}
+	if len(snap.Items) > 0 && snap.Items[0].Path == relPath {
+		expanded := snap.Items[0]
+		expanded.Expanded = true
+		expanded.ChildrenLoaded = true
+		child := workspace.FileNode{
+			Path:           "dir/child.txt",
+			Name:           "child.txt",
+			IsDir:          false,
+			Size:           15,
+			ModTime:        time.Date(2026, 4, 18, 12, 0, 0, 0, time.UTC),
+			Expanded:       false,
+			ChildrenLoaded: false,
+		}
+		snap.Items = append([]workspace.FileNode{expanded, child}, snap.Items[1:]...)
+	}
+	c.workspaceFileSnapshots[sessionID] = snap
+	return snap, nil
 }
 
 func (c *stubOperatorClient) GetSettings(context.Context) (daemon.SettingsSnapshot, error) {

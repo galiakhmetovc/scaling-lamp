@@ -84,7 +84,12 @@ func (m *model) renderWorkspaceNavigator(state *sessionState) string {
 	lines = append(lines, workspaceNavigatorLine("Files", mode == workspaceModeFiles))
 	lines = append(lines, workspaceNavigatorLine("Editor", mode == workspaceModeEditor))
 	lines = append(lines, workspaceNavigatorLine("Artifacts", mode == workspaceModeArtifacts))
-	lines = append(lines, "", "F5 toggle workspace", "Type to send input")
+	lines = append(lines, "", "1 = Terminal", "2 = Files", "F5 toggle workspace")
+	if mode == workspaceModeFiles {
+		lines = append(lines, "Enter expand selected dir")
+	} else {
+		lines = append(lines, "Type to send input")
+	}
 	return strings.Join(lines, "\n")
 }
 

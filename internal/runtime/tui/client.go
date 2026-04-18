@@ -87,6 +87,8 @@ type OperatorClient interface {
 	WorkspacePTYInput(context.Context, string, string) error
 	WorkspacePTYSnapshot(context.Context, string) (WorkspacePTYResult, error)
 	WorkspacePTYResize(context.Context, string, int, int) (WorkspacePTYResult, error)
+	WorkspaceFilesSnapshot(context.Context, string) (workspace.FileTreeSnapshot, error)
+	WorkspaceFilesExpand(context.Context, string, string) (workspace.FileTreeSnapshot, error)
 	GetSettings(context.Context) (daemon.SettingsSnapshot, error)
 	ApplySettingsForm(context.Context, string, map[string]any) (daemon.SettingsSnapshot, error)
 	GetSettingsRaw(context.Context, string) (daemon.SettingsRawFileContent, error)
@@ -100,12 +102,32 @@ type OperatorClient interface {
 }
 
 type localClient struct {
-	agent        *runtime.Agent
-	workspacePTY *workspace.WorkspacePTYManager
+	agent          *runtime.Agent
+	workspacePTY   *workspace.WorkspacePTYManager
+	workspaceFiles *workspace.WorkspaceFilesManager
 }
 
 func newLocalClient(agent *runtime.Agent) OperatorClient {
-	return &localClient{agent: agent, workspacePTY: workspace.NewWorkspacePTYManager()}
+	return &localClient{
+		agent:          agent,
+		workspacePTY:   workspace.NewWorkspacePTYManager(),
+		workspaceFiles: newLocalWorkspaceFilesManager(agent),
+	}
+}
+
+func newLocalWorkspaceFilesManager(agent *runtime.Agent) *workspace.WorkspaceFilesManager {
+	root := "."
+	if agent != nil {
+		root = strings.TrimSpace(agent.Contracts.FilesystemExecution.Scope.Params.RootPath)
+		if root == "" {
+			root = "."
+		}
+	}
+	mgr, err := workspace.NewWorkspaceFilesManager(root)
+	if err != nil {
+		return nil
+	}
+	return mgr
 }
 
 func (c *localClient) Bootstrap(ctx context.Context) (daemon.BootstrapPayload, error) {
@@ -391,6 +413,20 @@ func (c *localClient) WorkspacePTYResize(_ context.Context, ptyID string, cols, 
 		}
 	}
 	return WorkspacePTYResult{}, fmt.Errorf("workspace pty %q not found", ptyID)
+}
+
+func (c *localClient) WorkspaceFilesSnapshot(_ context.Context, sessionID string) (workspace.FileTreeSnapshot, error) {
+	if c.workspaceFiles == nil {
+		return workspace.FileTreeSnapshot{}, fmt.Errorf("workspace files manager not available")
+	}
+	return c.workspaceFiles.Snapshot(sessionID)
+}
+
+func (c *localClient) WorkspaceFilesExpand(_ context.Context, sessionID, relPath string) (workspace.FileTreeSnapshot, error) {
+	if c.workspaceFiles == nil {
+		return workspace.FileTreeSnapshot{}, fmt.Errorf("workspace files manager not available")
+	}
+	return c.workspaceFiles.Expand(sessionID, relPath)
 }
 
 func (c *localClient) GetSettings(ctx context.Context) (daemon.SettingsSnapshot, error) {
@@ -766,6 +802,12 @@ func (c *daemonClient) WorkspacePTYResize(ctx context.Context, ptyID string, col
 	}
 	err := c.command(ctx, daemon.CommandRequest{Type: "command", ID: "cmd-workspace-pty-resize", Command: "workspace.pty.resize", Payload: map[string]any{"pty_id": ptyID, "cols": cols, "rows": rows}}, &result)
 	return WorkspacePTYResult(result), err
+}
+func (c *daemonClient) WorkspaceFilesSnapshot(context.Context, string) (workspace.FileTreeSnapshot, error) {
+	return workspace.FileTreeSnapshot{}, fmt.Errorf("workspace files are not supported by daemon client")
+}
+func (c *daemonClient) WorkspaceFilesExpand(context.Context, string, string) (workspace.FileTreeSnapshot, error) {
+	return workspace.FileTreeSnapshot{}, fmt.Errorf("workspace files are not supported by daemon client")
 }
 func (c *daemonClient) GetSettings(ctx context.Context) (daemon.SettingsSnapshot, error) {
 	var result struct {

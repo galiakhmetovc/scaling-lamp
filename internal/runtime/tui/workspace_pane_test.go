@@ -16,6 +16,7 @@ import (
 	"teamd/internal/runtime/daemon"
 	"teamd/internal/runtime/eventing"
 	"teamd/internal/runtime/projections"
+	"teamd/internal/runtime/workspace"
 )
 
 func TestWorkspaceTabScaffold(t *testing.T) {
@@ -106,6 +107,55 @@ func TestWorkspaceTerminalSwitchesPTYContextWhenSessionChanges(t *testing.T) {
 	}
 }
 
+func TestWorkspaceFilesSwitchesModeWithKey2(t *testing.T) {
+	m, client := newWorkspaceTerminalTestModel(t)
+	m = runWorkspaceTerminalStep(t, m, tea.KeyMsg{Type: tea.KeyF5})
+	m = runWorkspaceTerminalStep(t, m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'2'}})
+
+	state := m.currentSessionState()
+	if state.Workspace.Mode != workspaceModeFiles {
+		t.Fatalf("workspace mode = %v, want files", state.Workspace.Mode)
+	}
+	if len(client.workspaceFileSnapshotCalls) != 1 || client.workspaceFileSnapshotCalls[0] != "session-1" {
+		t.Fatalf("workspace file snapshot calls = %#v, want first entry for session-1", client.workspaceFileSnapshotCalls)
+	}
+}
+
+func TestWorkspaceFilesRendersRootTreeForActiveSession(t *testing.T) {
+	m, _ := newWorkspaceTerminalTestModel(t)
+	m = runWorkspaceTerminalStep(t, m, tea.KeyMsg{Type: tea.KeyF5})
+	m = runWorkspaceTerminalStep(t, m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'2'}})
+
+	got := m.View()
+	if !strings.Contains(got, "Files") {
+		t.Fatalf("workspace view missing files mode: %q", got)
+	}
+	if !strings.Contains(got, "dir/") {
+		t.Fatalf("workspace view missing directory tree entry: %q", got)
+	}
+	if !strings.Contains(got, "go.mod") {
+		t.Fatalf("workspace view missing file tree entry: %q", got)
+	}
+}
+
+func TestWorkspaceFilesExpandsSelectedDirOnEnter(t *testing.T) {
+	m, client := newWorkspaceTerminalTestModel(t)
+	m = runWorkspaceTerminalStep(t, m, tea.KeyMsg{Type: tea.KeyF5})
+	m = runWorkspaceTerminalStep(t, m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'2'}})
+	m = runWorkspaceTerminalStep(t, m, tea.KeyMsg{Type: tea.KeyEnter})
+
+	if len(client.workspaceFileExpandCalls) != 1 {
+		t.Fatalf("workspace file expand calls = %#v, want 1", client.workspaceFileExpandCalls)
+	}
+	if got := client.workspaceFileExpandCalls[0]; got.SessionID != "session-1" || got.RelPath != "dir" {
+		t.Fatalf("workspace file expand call = %#v, want session-1 dir", got)
+	}
+	got := m.View()
+	if !strings.Contains(got, "child.txt") {
+		t.Fatalf("workspace view missing expanded child item: %q", got)
+	}
+}
+
 func runWorkspaceTerminalStep(t *testing.T, m model, msg tea.Msg) model {
 	t.Helper()
 	next, cmd := (&m).Update(msg)
@@ -156,6 +206,16 @@ func newWorkspaceTerminalTestModel(t *testing.T) (model, *stubOperatorClient) {
 			Prompt: daemon.SessionPromptSnapshot{
 				Default:   "default prompt",
 				Effective: "default prompt",
+			},
+		},
+		workspaceFileSnapshots: map[string]workspace.FileTreeSnapshot{
+			"session-1": {
+				SessionID: "session-1",
+				RootPath:  filepath.Join(dir, "workspace-root"),
+				Items: []workspace.FileNode{
+					{Path: "dir", Name: "dir", IsDir: true, Size: 0, ModTime: now},
+					{Path: "go.mod", Name: "go.mod", IsDir: false, Size: 13, ModTime: now},
+				},
 			},
 		},
 	}

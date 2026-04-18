@@ -122,11 +122,18 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.sessionTitleInput.Width = max(20, m.width/3)
 		if m.tab == tabWorkspace {
 			if state := m.currentSessionState(); state != nil {
-				if state.Workspace.Loaded && state.Workspace.PTY.PTYID != "" {
-					return m, workspacePTYSnapshotCmd(m.ctx, m.client, state.SessionID)
-				}
-				if cmd := m.ensureWorkspacePTY(state); cmd != nil {
-					return m, cmd
+				switch state.Workspace.Mode {
+				case workspaceModeFiles:
+					if state.Workspace.Files.Loaded {
+						return m, nil
+					}
+				default:
+					if state.Workspace.Loaded && state.Workspace.PTY.PTYID != "" {
+						return m, workspacePTYSnapshotCmd(m.ctx, m.client, state.SessionID)
+					}
+					if cmd := m.ensureWorkspacePTY(state); cmd != nil {
+						return m, cmd
+					}
 				}
 			}
 		}
@@ -371,6 +378,47 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		state.Workspace.Loaded = true
 		state.Workspace.PTY = msg.Result.PTY
 		state.Workspace.LastSync = m.now()
+		return m, nil
+	case workspaceFilesSnapshotMsg:
+		state := m.sessions[msg.SessionID]
+		if state == nil {
+			return m, nil
+		}
+		if msg.Err != nil {
+			m.errMessage = msg.Err.Error()
+			return m, nil
+		}
+		state.Workspace.Mode = workspaceModeFiles
+		state.Workspace.Files.Snapshot = msg.Result
+		state.Workspace.Files.Loaded = true
+		state.Workspace.Files.LastSync = m.now()
+		if state.Workspace.Files.Cursor < 0 {
+			state.Workspace.Files.Cursor = 0
+		}
+		if len(state.Workspace.Files.Snapshot.Items) == 0 {
+			state.Workspace.Files.Cursor = 0
+		} else if state.Workspace.Files.Cursor >= len(state.Workspace.Files.Snapshot.Items) {
+			state.Workspace.Files.Cursor = len(state.Workspace.Files.Snapshot.Items) - 1
+		}
+		return m, nil
+	case workspaceFilesExpandedMsg:
+		state := m.sessions[msg.SessionID]
+		if state == nil {
+			return m, nil
+		}
+		if msg.Err != nil {
+			m.errMessage = msg.Err.Error()
+			return m, nil
+		}
+		state.Workspace.Mode = workspaceModeFiles
+		state.Workspace.Files.Snapshot = msg.Result
+		state.Workspace.Files.Loaded = true
+		state.Workspace.Files.LastSync = m.now()
+		if len(state.Workspace.Files.Snapshot.Items) == 0 {
+			state.Workspace.Files.Cursor = 0
+		} else if state.Workspace.Files.Cursor >= len(state.Workspace.Files.Snapshot.Items) {
+			state.Workspace.Files.Cursor = len(state.Workspace.Files.Snapshot.Items) - 1
+		}
 		return m, nil
 	}
 	return m, nil

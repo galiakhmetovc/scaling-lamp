@@ -151,7 +151,15 @@ const (
 type workspaceSessionState struct {
 	Mode     workspaceMode
 	PTY      workspace.PTYSnapshot
+	Files    workspaceFilesState
 	Loaded   bool
+	LastSync time.Time
+}
+
+type workspaceFilesState struct {
+	Snapshot workspace.FileTreeSnapshot
+	Loaded   bool
+	Cursor   int
 	LastSync time.Time
 }
 
@@ -299,5 +307,17 @@ type workspacePTYInputMsg struct {
 type workspacePTYRefreshedMsg struct {
 	SessionID string
 	Result    WorkspacePTYResult
+	Err       error
+}
+
+type workspaceFilesSnapshotMsg struct {
+	SessionID string
+	Result    workspace.FileTreeSnapshot
+	Err       error
+}
+
+type workspaceFilesExpandedMsg struct {
+	SessionID string
+	Result    workspace.FileTreeSnapshot
 	Err       error
 }
