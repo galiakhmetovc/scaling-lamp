@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -14,6 +16,10 @@ import (
 )
 
 const maxEventLogRecordSize = 8 * 1024 * 1024
+const (
+	defaultEventLogRotateMaxBytes int64 = 128 * 1024 * 1024
+	defaultEventLogRotateKeep           = 4
+)
 
 type eventJSONRecord struct {
 	Timestamp string `json:"timestamp"`
@@ -37,12 +43,19 @@ func NewInMemoryEventLog() *InMemoryEventLog {
 }
 
 type FileEventLog struct {
-	mu   sync.RWMutex
-	path string
-	next uint64
+	mu         sync.RWMutex
+	path       string
+	next       uint64
+	rotateMax  int64
+	rotateKeep int
 }
 
-func NewFileEventLog(path string) (*FileEventLog, error) {
+type FileEventLogOptions struct {
+	RotateMaxBytes int64
+	RotateKeep     int
+}
+
+func NewFileEventLog(path string, opts ...FileEventLogOptions) (*FileEventLog, error) {
 	if path == "" {
 		return nil, fmt.Errorf("file event log path is empty")
 	}
@@ -57,7 +70,23 @@ func NewFileEventLog(path string) (*FileEventLog, error) {
 		return nil, fmt.Errorf("close event log file: %w", err)
 	}
 
-	log := &FileEventLog{path: path}
+	options := FileEventLogOptions{
+		RotateMaxBytes: defaultEventLogRotateMaxBytes,
+		RotateKeep:     defaultEventLogRotateKeep,
+	}
+	if len(opts) > 0 {
+		if opts[0].RotateMaxBytes > 0 {
+			options.RotateMaxBytes = opts[0].RotateMaxBytes
+		}
+		if opts[0].RotateKeep > 0 {
+			options.RotateKeep = opts[0].RotateKeep
+		}
+	}
+	log := &FileEventLog{
+		path:       path,
+		rotateMax:  options.RotateMaxBytes,
+		rotateKeep: options.RotateKeep,
+	}
 	if err := log.loadSequence(); err != nil {
 		return nil, err
 	}
@@ -107,6 +136,9 @@ func (l *FileEventLog) Append(_ context.Context, event eventing.Event) error {
 		event.Sequence = l.next
 	} else if event.Sequence > l.next {
 		l.next = event.Sequence
+	}
+	if err := l.rotateIfNeededLocked(); err != nil {
+		return err
 	}
 
 	file, err := os.OpenFile(l.path, os.O_APPEND|os.O_WRONLY, 0o644)
@@ -166,7 +198,39 @@ func (l *FileEventLog) loadSequence() error {
 }
 
 func (l *FileEventLog) readAllEventsLocked() ([]eventing.Event, error) {
-	file, err := os.Open(l.path)
+	var out []eventing.Event
+	paths, err := l.readPathsLocked()
+	if err != nil {
+		return nil, err
+	}
+	for _, path := range paths {
+		events, err := readEventsFromPath(path)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, events...)
+	}
+	return out, nil
+}
+
+func (l *FileEventLog) readPathsLocked() ([]string, error) {
+	archivePaths, err := filepath.Glob(l.path + ".*")
+	if err != nil {
+		return nil, fmt.Errorf("glob event log archives: %w", err)
+	}
+	paths := make([]string, 0, len(archivePaths)+1)
+	for _, path := range archivePaths {
+		if strings.HasPrefix(filepath.Base(path), filepath.Base(l.path)+".") {
+			paths = append(paths, path)
+		}
+	}
+	sort.Strings(paths)
+	paths = append(paths, l.path)
+	return paths, nil
+}
+
+func readEventsFromPath(path string) ([]eventing.Event, error) {
+	file, err := os.Open(path)
 	if err != nil {
 		return nil, fmt.Errorf("open event log for read: %w", err)
 	}
@@ -186,4 +250,59 @@ func (l *FileEventLog) readAllEventsLocked() ([]eventing.Event, error) {
 		return nil, fmt.Errorf("scan event log: %w", err)
 	}
 	return out, nil
+}
+
+func (l *FileEventLog) rotateIfNeededLocked() error {
+	if l.rotateMax <= 0 {
+		return nil
+	}
+	info, err := os.Stat(l.path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return fmt.Errorf("stat event log: %w", err)
+	}
+	if info.Size() < l.rotateMax {
+		return nil
+	}
+	archivePath := fmt.Sprintf("%s.%s", l.path, time.Now().UTC().Format("20060102T150405.000000000"))
+	if err := os.Rename(l.path, archivePath); err != nil {
+		return fmt.Errorf("rotate event log: %w", err)
+	}
+	file, err := os.OpenFile(l.path, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o644)
+	if err != nil {
+		return fmt.Errorf("create fresh event log after rotation: %w", err)
+	}
+	if err := file.Close(); err != nil {
+		return fmt.Errorf("close fresh event log after rotation: %w", err)
+	}
+	if err := l.pruneArchivesLocked(); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (l *FileEventLog) pruneArchivesLocked() error {
+	if l.rotateKeep <= 0 {
+		return nil
+	}
+	archivePaths, err := filepath.Glob(l.path + ".*")
+	if err != nil {
+		return fmt.Errorf("glob event log archives for prune: %w", err)
+	}
+	filtered := make([]string, 0, len(archivePaths))
+	for _, path := range archivePaths {
+		if strings.HasPrefix(filepath.Base(path), filepath.Base(l.path)+".") {
+			filtered = append(filtered, path)
+		}
+	}
+	sort.Strings(filtered)
+	for len(filtered) > l.rotateKeep {
+		if err := os.Remove(filtered[0]); err != nil && !os.IsNotExist(err) {
+			return fmt.Errorf("remove rotated event log %q: %w", filtered[0], err)
+		}
+		filtered = filtered[1:]
+	}
+	return nil
 }

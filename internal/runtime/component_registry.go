@@ -66,7 +66,10 @@ func NewBuiltInComponentRegistry() *ComponentRegistry {
 		return NewInMemoryEventLog(), nil
 	})
 	registry.RegisterEventLog("file_jsonl", func(runtimeConfig config.AgentRuntimeConfig) (EventLog, error) {
-		return NewFileEventLog(runtimeConfig.EventLogPath)
+		return NewFileEventLog(runtimeConfig.EventLogPath, FileEventLogOptions{
+			RotateMaxBytes: runtimeConfig.EventLogRotateMaxBytes,
+			RotateKeep:     runtimeConfig.EventLogRotateKeep,
+		})
 	})
 	registry.RegisterPromptAssemblyExecutor("prompt_assembly_default", func() *promptassembly.Executor {
 		return promptassembly.NewExecutor()

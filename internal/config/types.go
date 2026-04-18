@@ -15,6 +15,8 @@ type AgentConfigSpec struct {
 type AgentRuntimeConfig struct {
 	EventLog               string   `yaml:"event_log"`
 	EventLogPath           string   `yaml:"event_log_path"`
+	EventLogRotateMaxBytes int64    `yaml:"event_log_rotate_max_bytes"`
+	EventLogRotateKeep     int      `yaml:"event_log_rotate_keep"`
 	ProjectionStorePath    string   `yaml:"projection_store_path"`
 	MaxToolRounds          int      `yaml:"max_tool_rounds"`
 	PromptAssemblyExecutor string   `yaml:"prompt_assembly_executor"`

@@ -3,8 +3,10 @@ package runtime_test
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -331,5 +333,92 @@ func TestFileEventLogLoadsLargeEventRecords(t *testing.T) {
 	}
 	if len(payload) != len(largePayload) {
 		t.Fatalf("payload blob len = %d, want %d", len(payload), len(largePayload))
+	}
+}
+
+func TestFileEventLogRotatesAndPreservesHistoryAcrossArchives(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join(t.TempDir(), "events.jsonl")
+	log, err := runtime.NewFileEventLog(path, runtime.FileEventLogOptions{
+		RotateMaxBytes: 512,
+		RotateKeep:     4,
+	})
+	if err != nil {
+		t.Fatalf("NewFileEventLog returned error: %v", err)
+	}
+
+	now := time.Date(2026, 4, 18, 17, 0, 0, 0, time.UTC)
+	for i := 0; i < 8; i++ {
+		if err := log.Append(context.Background(), eventing.Event{
+			ID:            fmt.Sprintf("evt-%d", i),
+			Kind:          eventing.EventMessageRecorded,
+			OccurredAt:    now.Add(time.Duration(i) * time.Second),
+			AggregateID:   "session-1",
+			AggregateType: eventing.AggregateSession,
+			Payload: map[string]any{
+				"text": strings.Repeat("x", 128),
+			},
+		}); err != nil {
+			t.Fatalf("Append %d returned error: %v", i, err)
+		}
+	}
+
+	matches, err := filepath.Glob(path + ".*")
+	if err != nil {
+		t.Fatalf("Glob returned error: %v", err)
+	}
+	if len(matches) == 0 {
+		t.Fatal("expected rotated archive files, found none")
+	}
+
+	events, err := log.ListAll(context.Background())
+	if err != nil {
+		t.Fatalf("ListAll returned error: %v", err)
+	}
+	if len(events) != 8 {
+		t.Fatalf("ListAll len = %d, want 8", len(events))
+	}
+	for i, event := range events {
+		if got, want := event.Sequence, uint64(i+1); got != want {
+			t.Fatalf("event %d sequence = %d, want %d", i, got, want)
+		}
+	}
+}
+
+func TestFileEventLogPrunesOldArchives(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join(t.TempDir(), "events.jsonl")
+	log, err := runtime.NewFileEventLog(path, runtime.FileEventLogOptions{
+		RotateMaxBytes: 256,
+		RotateKeep:     2,
+	})
+	if err != nil {
+		t.Fatalf("NewFileEventLog returned error: %v", err)
+	}
+
+	now := time.Date(2026, 4, 18, 17, 30, 0, 0, time.UTC)
+	for i := 0; i < 20; i++ {
+		if err := log.Append(context.Background(), eventing.Event{
+			ID:            fmt.Sprintf("evt-%d", i),
+			Kind:          eventing.EventMessageRecorded,
+			OccurredAt:    now.Add(time.Duration(i) * time.Second),
+			AggregateID:   "session-1",
+			AggregateType: eventing.AggregateSession,
+			Payload: map[string]any{
+				"text": strings.Repeat("x", 96),
+			},
+		}); err != nil {
+			t.Fatalf("Append %d returned error: %v", i, err)
+		}
+	}
+
+	matches, err := filepath.Glob(path + ".*")
+	if err != nil {
+		t.Fatalf("Glob returned error: %v", err)
+	}
+	if len(matches) > 2 {
+		t.Fatalf("archive count = %d, want <= 2", len(matches))
 	}
 }
