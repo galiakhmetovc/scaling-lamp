@@ -371,7 +371,7 @@ func (e *Executor) startCommand(ctx context.Context, contract contracts.ShellExe
 	}
 
 	if commandID == "" {
-		commandID = fmt.Sprintf("cmd-%d", e.nextID.Add(1))
+		commandID = shellEntityID(meta, "cmd", &e.nextID)
 	}
 	active := &activeCommand{
 		id:      commandID,
@@ -1392,8 +1392,8 @@ func commandPrefix(command string, args []string) string {
 }
 
 func (e *Executor) queueApproval(ctx context.Context, toolName string, contract contracts.ShellExecutionContract, meta ExecutionMeta, command string, args []string, cwd string, invocation invocation, message string) (string, error) {
-	commandID := fmt.Sprintf("cmd-%d", e.nextID.Add(1))
-	approvalID := fmt.Sprintf("approval-%d", e.nextID.Add(1))
+	commandID := shellEntityID(meta, "cmd", &e.nextID)
+	approvalID := shellEntityID(meta, "approval", &e.nextID)
 	approval := &pendingApproval{
 		PendingApprovalView: PendingApprovalView{
 			ApprovalID: approvalID,
@@ -1457,6 +1457,13 @@ func metaID(meta ExecutionMeta, prefix string) string {
 		return meta.NewID(prefix)
 	}
 	return fmt.Sprintf("%s-%d", prefix, time.Now().UTC().UnixNano())
+}
+
+func shellEntityID(meta ExecutionMeta, prefix string, counter *atomic.Uint64) string {
+	if meta.NewID != nil {
+		return meta.NewID(prefix)
+	}
+	return fmt.Sprintf("%s-%d", prefix, counter.Add(1))
 }
 
 func firstNonEmpty(values ...string) string {

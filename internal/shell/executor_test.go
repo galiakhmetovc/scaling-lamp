@@ -7,6 +7,7 @@ import (
 	"errors"
 	"io"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -146,6 +147,67 @@ func TestExecutorApproveRunsShellSnippetCommand(t *testing.T) {
 	}
 	if got := strings.TrimSpace(decodeField(t, result, "stdout")); got != dir {
 		t.Fatalf("stdout = %q, want %q", got, dir)
+	}
+}
+
+func TestExecutorUsesMetaNewIDForShellCommandAndApprovalIDs(t *testing.T) {
+	t.Parallel()
+
+	nextID := uint64(0)
+	newID := func(prefix string) string {
+		nextID++
+		return prefix + "-" + strconv.FormatUint(nextID, 10)
+	}
+	contract := contracts.ShellExecutionContract{
+		Command: contracts.ShellCommandPolicy{
+			Enabled:  true,
+			Strategy: "static_allowlist",
+			Params: contracts.ShellCommandParams{
+				AllowedCommands: []string{"pwd"},
+			},
+		},
+		Approval: contracts.ShellApprovalPolicy{
+			Enabled:  true,
+			Strategy: "always_require",
+		},
+		Runtime: contracts.ShellRuntimePolicy{
+			Enabled:  true,
+			Strategy: "workspace_write",
+			Params: contracts.ShellRuntimeParams{
+				Cwd:            t.TempDir(),
+				Timeout:        "5s",
+				MaxOutputBytes: 4096,
+			},
+		},
+	}
+
+	first := NewExecutor()
+	firstOut, err := first.ExecuteWithMeta(context.Background(), contract, "shell_exec", map[string]any{
+		"command": "pwd",
+	}, ExecutionMeta{NewID: newID})
+	if err != nil {
+		t.Fatalf("first ExecuteWithMeta returned error: %v", err)
+	}
+
+	second := NewExecutor()
+	secondOut, err := second.ExecuteWithMeta(context.Background(), contract, "shell_exec", map[string]any{
+		"command": "pwd",
+	}, ExecutionMeta{NewID: newID})
+	if err != nil {
+		t.Fatalf("second ExecuteWithMeta returned error: %v", err)
+	}
+
+	if got, want := decodeField(t, firstOut, "command_id"), "cmd-1"; got != want {
+		t.Fatalf("first command_id = %q, want %q", got, want)
+	}
+	if got, want := decodeField(t, firstOut, "approval_id"), "approval-2"; got != want {
+		t.Fatalf("first approval_id = %q, want %q", got, want)
+	}
+	if got, want := decodeField(t, secondOut, "command_id"), "cmd-3"; got != want {
+		t.Fatalf("second command_id = %q, want %q", got, want)
+	}
+	if got, want := decodeField(t, secondOut, "approval_id"), "approval-4"; got != want {
+		t.Fatalf("second approval_id = %q, want %q", got, want)
 	}
 }
 
