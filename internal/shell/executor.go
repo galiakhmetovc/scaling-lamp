@@ -64,16 +64,18 @@ type ExecutionMeta struct {
 }
 
 type PendingApprovalView struct {
-	ApprovalID string
-	CommandID  string
-	SessionID  string
-	RunID      string
-	OccurredAt time.Time
-	ToolName   string
-	Command    string
-	Args       []string
-	Cwd        string
-	Message    string
+	ApprovalID           string
+	CommandID            string
+	SessionID            string
+	RunID                string
+	OccurredAt           time.Time
+	ToolName             string
+	Command              string
+	Args                 []string
+	Cwd                  string
+	Message              string
+	InvocationExecutable string
+	InvocationArgs       []string
 }
 
 type ActiveCommandView struct {
@@ -552,9 +554,13 @@ func (e *Executor) RecoverApproval(contract contracts.ShellExecutionContract, vi
 	if strings.TrimSpace(view.ApprovalID) == "" {
 		return fmt.Errorf("approval id is empty")
 	}
-	invocation, err := e.resolveInvocation(contract.Runtime, view.Command, view.Args)
-	if err != nil {
-		return err
+	invocation := invocation{executable: view.InvocationExecutable, args: append([]string{}, view.InvocationArgs...)}
+	if strings.TrimSpace(invocation.executable) == "" {
+		var err error
+		invocation, err = e.resolveInvocation(contract.Runtime, view.Command, view.Args)
+		if err != nil {
+			return err
+		}
 	}
 	e.mu.Lock()
 	defer e.mu.Unlock()
@@ -563,16 +569,18 @@ func (e *Executor) RecoverApproval(contract contracts.ShellExecutionContract, vi
 	}
 	e.approvals[view.ApprovalID] = &pendingApproval{
 		PendingApprovalView: PendingApprovalView{
-			ApprovalID: view.ApprovalID,
-			CommandID:  view.CommandID,
-			SessionID:  view.SessionID,
-			RunID:      view.RunID,
-			OccurredAt: view.OccurredAt,
-			ToolName:   firstNonEmpty(view.ToolName, "shell_start"),
-			Command:    view.Command,
-			Args:       append([]string{}, view.Args...),
-			Cwd:        view.Cwd,
-			Message:    view.Message,
+			ApprovalID:           view.ApprovalID,
+			CommandID:            view.CommandID,
+			SessionID:            view.SessionID,
+			RunID:                view.RunID,
+			OccurredAt:           view.OccurredAt,
+			ToolName:             firstNonEmpty(view.ToolName, "shell_start"),
+			Command:              view.Command,
+			Args:                 append([]string{}, view.Args...),
+			Cwd:                  view.Cwd,
+			Message:              view.Message,
+			InvocationExecutable: invocation.executable,
+			InvocationArgs:       append([]string{}, invocation.args...),
 		},
 		contract:   contract,
 		invocation: invocation,
@@ -782,14 +790,16 @@ func (e *Executor) recordApprovalRequested(ctx context.Context, approval *pendin
 		ActorType:     firstNonEmpty(approval.meta.ActorType, "agent"),
 		TraceSummary:  "shell command approval requested",
 		Payload: map[string]any{
-			"session_id":       approval.SessionID,
-			"run_id":           approval.RunID,
-			"approval_id":      approval.ApprovalID,
-			"tool_name":        approval.ToolName,
-			"command":          approval.Command,
-			"args":             append([]string{}, approval.Args...),
-			"cwd":              approval.Cwd,
-			"approval_message": approval.Message,
+			"session_id":            approval.SessionID,
+			"run_id":                approval.RunID,
+			"approval_id":           approval.ApprovalID,
+			"tool_name":             approval.ToolName,
+			"command":               approval.Command,
+			"args":                  append([]string{}, approval.Args...),
+			"cwd":                   approval.Cwd,
+			"approval_message":      approval.Message,
+			"invocation_executable": approval.invocation.executable,
+			"invocation_args":       append([]string{}, approval.invocation.args...),
 		},
 	})
 }
@@ -943,7 +953,7 @@ func (e *Executor) lookupCommand(commandID string) (*activeCommand, error) {
 
 func (e *Executor) resolveInvocation(policy contracts.ShellRuntimePolicy, command string, args []string) (invocation, error) {
 	if e.platform() != "windows" && isShellSnippetCommand(command, args) {
-		return invocation{executable: "sh", args: []string{"-lc", command}}, nil
+		return invocation{executable: "sh", args: []string{"-lc", shellSnippetText(command, args)}}, nil
 	}
 	if e.platform() == "windows" {
 		if builtin, ok := windowsBuiltinInvocation(command, args); ok {
@@ -994,18 +1004,36 @@ func windowsBuiltinInvocation(command string, args []string) (invocation, bool) 
 }
 
 func isShellSnippetCommand(command string, args []string) bool {
-	if len(args) != 0 {
-		return false
+	return shellSnippetText(command, args) != ""
+}
+
+func shellSnippetText(command string, args []string) string {
+	full := commandPrefix(command, args)
+	if len(args) != 0 && !containsShellOperatorArg(args) {
+		return ""
 	}
-	command = strings.TrimSpace(command)
-	if command == "" {
-		return false
+	full = strings.TrimSpace(full)
+	if full == "" {
+		return ""
 	}
-	return strings.Contains(command, "&&") ||
-		strings.Contains(command, "||") ||
-		strings.Contains(command, ";") ||
-		strings.Contains(command, "\n") ||
-		strings.Contains(command, "|")
+	if strings.Contains(full, "&&") ||
+		strings.Contains(full, "||") ||
+		strings.Contains(full, ";") ||
+		strings.Contains(full, "\n") ||
+		strings.Contains(full, "|") {
+		return full
+	}
+	return ""
+}
+
+func containsShellOperatorArg(args []string) bool {
+	for _, arg := range args {
+		switch strings.TrimSpace(arg) {
+		case "&&", "||", ";", "|":
+			return true
+		}
+	}
+	return false
 }
 
 func shellSnippetExecutable(command string) string {
@@ -1345,7 +1373,7 @@ func (e *Executor) evaluateApproval(policy contracts.ShellApprovalPolicy, comman
 
 func evaluatePersistentApprovalPrefixes(policy contracts.ShellApprovalPolicy, command string, args []string) (allow bool, message string, matched bool) {
 	full := commandPrefix(command, args)
-	normalizedFull := commandPrefix(normalizedApprovalCommand(command), args)
+	normalizedFull := normalizedApprovalPrefixText(command, args)
 	for _, prefix := range policy.Params.DenyPrefixes {
 		prefix = strings.TrimSpace(prefix)
 		if prefix != "" && persistentApprovalPrefixMatches(prefix, full, normalizedFull) {
@@ -1359,6 +1387,24 @@ func evaluatePersistentApprovalPrefixes(policy contracts.ShellApprovalPolicy, co
 		}
 	}
 	return false, "", false
+}
+
+func normalizedApprovalPrefixText(command string, args []string) string {
+	command = strings.TrimSpace(command)
+	if command == "" {
+		return ""
+	}
+	full := commandPrefix(command, args)
+	if extracted := shellSnippetExecutable(full); extracted != "" {
+		command = extracted
+		args = nil
+	} else {
+		command = normalizedApprovalCommand(command)
+	}
+	if command == "" {
+		return ""
+	}
+	return commandPrefix(command, args)
 }
 
 func normalizedApprovalCommand(command string) string {
@@ -1396,16 +1442,18 @@ func (e *Executor) queueApproval(ctx context.Context, toolName string, contract 
 	approvalID := shellEntityID(meta, "approval", &e.nextID)
 	approval := &pendingApproval{
 		PendingApprovalView: PendingApprovalView{
-			ApprovalID: approvalID,
-			CommandID:  commandID,
-			SessionID:  meta.SessionID,
-			RunID:      meta.RunID,
-			OccurredAt: metaNow(meta),
-			ToolName:   toolName,
-			Command:    command,
-			Args:       append([]string{}, args...),
-			Cwd:        cwd,
-			Message:    message,
+			ApprovalID:           approvalID,
+			CommandID:            commandID,
+			SessionID:            meta.SessionID,
+			RunID:                meta.RunID,
+			OccurredAt:           metaNow(meta),
+			ToolName:             toolName,
+			Command:              command,
+			Args:                 append([]string{}, args...),
+			Cwd:                  cwd,
+			Message:              message,
+			InvocationExecutable: invocation.executable,
+			InvocationArgs:       append([]string{}, invocation.args...),
 		},
 		contract:   contract,
 		invocation: invocation,

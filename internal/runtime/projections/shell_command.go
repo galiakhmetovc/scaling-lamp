@@ -10,22 +10,24 @@ import (
 )
 
 type ShellCommandView struct {
-	CommandID   string    `json:"command_id"`
-	SessionID   string    `json:"session_id"`
-	RunID       string    `json:"run_id"`
-	OccurredAt  time.Time `json:"occurred_at"`
-	ApprovalID  string    `json:"approval_id,omitempty"`
-	ToolName    string    `json:"tool_name,omitempty"`
-	Message     string    `json:"message,omitempty"`
-	Command     string    `json:"command"`
-	Args        []string  `json:"args,omitempty"`
-	Cwd         string    `json:"cwd,omitempty"`
-	Status      string    `json:"status"`
-	NextOffset  int       `json:"next_offset"`
-	LastChunk   string    `json:"last_chunk"`
-	ExitCode    *int      `json:"exit_code,omitempty"`
-	Error       string    `json:"error,omitempty"`
-	KillPending bool      `json:"kill_pending,omitempty"`
+	CommandID            string    `json:"command_id"`
+	SessionID            string    `json:"session_id"`
+	RunID                string    `json:"run_id"`
+	OccurredAt           time.Time `json:"occurred_at"`
+	ApprovalID           string    `json:"approval_id,omitempty"`
+	ToolName             string    `json:"tool_name,omitempty"`
+	Message              string    `json:"message,omitempty"`
+	Command              string    `json:"command"`
+	Args                 []string  `json:"args,omitempty"`
+	InvocationExecutable string    `json:"invocation_executable,omitempty"`
+	InvocationArgs       []string  `json:"invocation_args,omitempty"`
+	Cwd                  string    `json:"cwd,omitempty"`
+	Status               string    `json:"status"`
+	NextOffset           int       `json:"next_offset"`
+	LastChunk            string    `json:"last_chunk"`
+	ExitCode             *int      `json:"exit_code,omitempty"`
+	Error                string    `json:"error,omitempty"`
+	KillPending          bool      `json:"kill_pending,omitempty"`
 }
 
 type ShellCommandSnapshot struct {
@@ -51,17 +53,19 @@ func (p *ShellCommandProjection) Apply(event eventing.Event) error {
 	switch event.Kind {
 	case eventing.EventShellCommandApprovalRequested:
 		view := ShellCommandView{
-			CommandID:  event.AggregateID,
-			SessionID:  stringPayload(event.Payload, "session_id"),
-			RunID:      stringPayload(event.Payload, "run_id"),
-			OccurredAt: event.OccurredAt,
-			ApprovalID: stringPayload(event.Payload, "approval_id"),
-			ToolName:   stringPayload(event.Payload, "tool_name"),
-			Message:    stringPayload(event.Payload, "approval_message"),
-			Command:    stringPayload(event.Payload, "command"),
-			Args:       stringSlicePayload(event.Payload, "args"),
-			Cwd:        stringPayload(event.Payload, "cwd"),
-			Status:     "approval_pending",
+			CommandID:            event.AggregateID,
+			SessionID:            stringPayload(event.Payload, "session_id"),
+			RunID:                stringPayload(event.Payload, "run_id"),
+			OccurredAt:           event.OccurredAt,
+			ApprovalID:           stringPayload(event.Payload, "approval_id"),
+			ToolName:             stringPayload(event.Payload, "tool_name"),
+			Message:              stringPayload(event.Payload, "approval_message"),
+			Command:              stringPayload(event.Payload, "command"),
+			Args:                 stringSlicePayload(event.Payload, "args"),
+			InvocationExecutable: stringPayload(event.Payload, "invocation_executable"),
+			InvocationArgs:       stringSlicePayload(event.Payload, "invocation_args"),
+			Cwd:                  stringPayload(event.Payload, "cwd"),
+			Status:               "approval_pending",
 		}
 		p.snapshot.Commands[event.AggregateID] = view
 	case eventing.EventShellCommandApprovalGranted:

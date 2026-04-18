@@ -17,16 +17,18 @@ func (a *Agent) PendingShellApprovals(sessionID string) []shell.PendingApprovalV
 	out := make([]shell.PendingApprovalView, 0, len(views))
 	for _, view := range views {
 		out = append(out, shell.PendingApprovalView{
-			ApprovalID: view.ApprovalID,
-			CommandID:  view.CommandID,
-			SessionID:  view.SessionID,
-			RunID:      view.RunID,
-			OccurredAt: view.OccurredAt,
-			ToolName:   view.ToolName,
-			Command:    view.Command,
-			Args:       append([]string{}, view.Args...),
-			Cwd:        view.Cwd,
-			Message:    view.Message,
+			ApprovalID:           view.ApprovalID,
+			CommandID:            view.CommandID,
+			SessionID:            view.SessionID,
+			RunID:                view.RunID,
+			OccurredAt:           view.OccurredAt,
+			ToolName:             view.ToolName,
+			Command:              view.Command,
+			Args:                 append([]string{}, view.Args...),
+			Cwd:                  view.Cwd,
+			Message:              view.Message,
+			InvocationExecutable: view.InvocationExecutable,
+			InvocationArgs:       append([]string{}, view.InvocationArgs...),
 		})
 	}
 	return out
@@ -38,16 +40,18 @@ func (a *Agent) PendingShellApproval(approvalID string) (shell.PendingApprovalVi
 		return shell.PendingApprovalView{}, false
 	}
 	return shell.PendingApprovalView{
-		ApprovalID: view.ApprovalID,
-		CommandID:  view.CommandID,
-		SessionID:  view.SessionID,
-		RunID:      view.RunID,
-		OccurredAt: view.OccurredAt,
-		ToolName:   view.ToolName,
-		Command:    view.Command,
-		Args:       append([]string{}, view.Args...),
-		Cwd:        view.Cwd,
-		Message:    view.Message,
+		ApprovalID:           view.ApprovalID,
+		CommandID:            view.CommandID,
+		SessionID:            view.SessionID,
+		RunID:                view.RunID,
+		OccurredAt:           view.OccurredAt,
+		ToolName:             view.ToolName,
+		Command:              view.Command,
+		Args:                 append([]string{}, view.Args...),
+		Cwd:                  view.Cwd,
+		Message:              view.Message,
+		InvocationExecutable: view.InvocationExecutable,
+		InvocationArgs:       append([]string{}, view.InvocationArgs...),
 	}, true
 }
 
@@ -60,16 +64,18 @@ func (a *Agent) ApproveShellCommand(ctx context.Context, approvalID string) (str
 		return "", fmt.Errorf("shell runtime is nil")
 	}
 	if err := a.ShellRuntime.RecoverApproval(a.Contracts.ShellExecution, shell.PendingApprovalView{
-		ApprovalID: view.ApprovalID,
-		CommandID:  view.CommandID,
-		SessionID:  view.SessionID,
-		RunID:      view.RunID,
-		OccurredAt: view.OccurredAt,
-		ToolName:   view.ToolName,
-		Command:    view.Command,
-		Args:       append([]string{}, view.Args...),
-		Cwd:        view.Cwd,
-		Message:    view.Message,
+		ApprovalID:           view.ApprovalID,
+		CommandID:            view.CommandID,
+		SessionID:            view.SessionID,
+		RunID:                view.RunID,
+		OccurredAt:           view.OccurredAt,
+		ToolName:             view.ToolName,
+		Command:              view.Command,
+		Args:                 append([]string{}, view.Args...),
+		Cwd:                  view.Cwd,
+		Message:              view.Message,
+		InvocationExecutable: view.InvocationExecutable,
+		InvocationArgs:       append([]string{}, view.InvocationArgs...),
 	}, shell.ExecutionMeta{
 		SessionID:   view.SessionID,
 		RunID:       view.RunID,
@@ -117,16 +123,18 @@ func (a *Agent) DenyShellCommand(ctx context.Context, approvalID string) error {
 		return fmt.Errorf("shell runtime is nil")
 	}
 	if err := a.ShellRuntime.RecoverApproval(a.Contracts.ShellExecution, shell.PendingApprovalView{
-		ApprovalID: view.ApprovalID,
-		CommandID:  view.CommandID,
-		SessionID:  view.SessionID,
-		RunID:      view.RunID,
-		OccurredAt: view.OccurredAt,
-		ToolName:   view.ToolName,
-		Command:    view.Command,
-		Args:       append([]string{}, view.Args...),
-		Cwd:        view.Cwd,
-		Message:    view.Message,
+		ApprovalID:           view.ApprovalID,
+		CommandID:            view.CommandID,
+		SessionID:            view.SessionID,
+		RunID:                view.RunID,
+		OccurredAt:           view.OccurredAt,
+		ToolName:             view.ToolName,
+		Command:              view.Command,
+		Args:                 append([]string{}, view.Args...),
+		Cwd:                  view.Cwd,
+		Message:              view.Message,
+		InvocationExecutable: view.InvocationExecutable,
+		InvocationArgs:       append([]string{}, view.InvocationArgs...),
 	}, shell.ExecutionMeta{
 		SessionID:   view.SessionID,
 		RunID:       view.RunID,
@@ -154,16 +162,18 @@ func (a *Agent) CancelShellApproval(ctx context.Context, approvalID string) erro
 		return fmt.Errorf("shell runtime is nil")
 	}
 	if err := a.ShellRuntime.RecoverApproval(a.Contracts.ShellExecution, shell.PendingApprovalView{
-		ApprovalID: view.ApprovalID,
-		CommandID:  view.CommandID,
-		SessionID:  view.SessionID,
-		RunID:      view.RunID,
-		OccurredAt: view.OccurredAt,
-		ToolName:   view.ToolName,
-		Command:    view.Command,
-		Args:       append([]string{}, view.Args...),
-		Cwd:        view.Cwd,
-		Message:    view.Message,
+		ApprovalID:           view.ApprovalID,
+		CommandID:            view.CommandID,
+		SessionID:            view.SessionID,
+		RunID:                view.RunID,
+		OccurredAt:           view.OccurredAt,
+		ToolName:             view.ToolName,
+		Command:              view.Command,
+		Args:                 append([]string{}, view.Args...),
+		Cwd:                  view.Cwd,
+		Message:              view.Message,
+		InvocationExecutable: view.InvocationExecutable,
+		InvocationArgs:       append([]string{}, view.InvocationArgs...),
 	}, shell.ExecutionMeta{
 		SessionID:   view.SessionID,
 		RunID:       view.RunID,

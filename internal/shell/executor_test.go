@@ -150,6 +150,114 @@ func TestExecutorApproveRunsShellSnippetCommand(t *testing.T) {
 	}
 }
 
+func TestExecutorTreatsCommandPlusShellOperatorArgsAsShellSnippet(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	executor := &Executor{
+		goos: "linux",
+		run: func(_ context.Context, cwd, executable string, args []string) (runResult, error) {
+			if executable != "sh" {
+				t.Fatalf("executable = %q, want sh", executable)
+			}
+			if len(args) != 2 || args[0] != "-lc" {
+				t.Fatalf("args = %#v, want sh -lc invocation", args)
+			}
+			if want := "cd " + dir + " && pwd"; args[1] != want {
+				t.Fatalf("snippet = %q, want %q", args[1], want)
+			}
+			return runResult{stdout: dir + "\n", exitCode: 0}, nil
+		},
+		lookupPath: func(file string) (string, error) { return file, nil },
+		commands:   map[string]*activeCommand{},
+		completed:  map[string]*activeCommand{},
+		approvals:  map[string]*pendingApproval{},
+	}
+	out, err := executor.Execute(contracts.ShellExecutionContract{
+		Command: contracts.ShellCommandPolicy{
+			Enabled:  true,
+			Strategy: "static_allowlist",
+			Params: contracts.ShellCommandParams{
+				AllowedCommands: []string{"cd"},
+			},
+		},
+		Approval: contracts.ShellApprovalPolicy{
+			Enabled:  true,
+			Strategy: "always_allow",
+		},
+		Runtime: contracts.ShellRuntimePolicy{
+			Enabled:  true,
+			Strategy: "workspace_write",
+			Params: contracts.ShellRuntimeParams{
+				Cwd:            dir,
+				Timeout:        "5s",
+				MaxOutputBytes: 4096,
+				AllowNetwork:   true,
+			},
+		},
+	}, "shell_exec", map[string]any{
+		"command": "cd",
+		"args":    []any{dir, "&&", "pwd"},
+	})
+	if err != nil {
+		t.Fatalf("Execute returned error: %v", err)
+	}
+	if got := strings.TrimSpace(decodeField(t, out, "stdout")); got != dir {
+		t.Fatalf("stdout = %q, want %q", got, dir)
+	}
+}
+
+func TestRecoverApprovalUsesPersistedInvocation(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	executor := &Executor{
+		goos: "linux",
+		run: func(_ context.Context, cwd, executable string, args []string) (runResult, error) {
+			if executable != "sh" {
+				t.Fatalf("executable = %q, want sh", executable)
+			}
+			if len(args) != 2 || args[0] != "-lc" {
+				t.Fatalf("args = %#v, want sh -lc invocation", args)
+			}
+			return runResult{stdout: dir + "\n", exitCode: 0}, nil
+		},
+		lookupPath: func(file string) (string, error) { return file, nil },
+		commands:   map[string]*activeCommand{},
+		completed:  map[string]*activeCommand{},
+		approvals:  map[string]*pendingApproval{},
+	}
+	view := PendingApprovalView{
+		ApprovalID:           "approval-1",
+		CommandID:            "cmd-1",
+		SessionID:            "session-1",
+		RunID:                "run-1",
+		OccurredAt:           time.Now().UTC(),
+		ToolName:             "shell_exec",
+		Command:              "cd",
+		Args:                 []string{dir, "&&", "pwd"},
+		Cwd:                  dir,
+		Message:              "approval needed",
+		InvocationExecutable: "sh",
+		InvocationArgs:       []string{"-lc", "cd " + dir + " && pwd"},
+	}
+	contract := contracts.ShellExecutionContract{
+		Command:  contracts.ShellCommandPolicy{Enabled: true, Strategy: "static_allowlist", Params: contracts.ShellCommandParams{AllowedCommands: []string{"cd"}}},
+		Approval: contracts.ShellApprovalPolicy{Enabled: true, Strategy: "always_require"},
+		Runtime:  contracts.ShellRuntimePolicy{Enabled: true, Strategy: "workspace_write", Params: contracts.ShellRuntimeParams{Cwd: dir, Timeout: "5s", MaxOutputBytes: 4096, AllowNetwork: true}},
+	}
+	if err := executor.RecoverApproval(contract, view, ExecutionMeta{}); err != nil {
+		t.Fatalf("RecoverApproval returned error: %v", err)
+	}
+	out, err := executor.Approve(context.Background(), "approval-1")
+	if err != nil {
+		t.Fatalf("Approve returned error: %v", err)
+	}
+	if got := strings.TrimSpace(decodeField(t, out, "stdout")); got != dir {
+		t.Fatalf("stdout = %q, want %q", got, dir)
+	}
+}
+
 func TestExecutorUsesMetaNewIDForShellCommandAndApprovalIDs(t *testing.T) {
 	t.Parallel()
 
@@ -934,6 +1042,53 @@ func TestExecutorAllowsPersistentApprovalByExecutablePrefix(t *testing.T) {
 	}
 	if decodeField(t, out, "status") == "approval_pending" {
 		t.Fatalf("executable allow prefix still triggered approval: %s", out)
+	}
+}
+
+func TestExecutorAllowsPersistentApprovalByExecutablePrefixForShellSnippetArgs(t *testing.T) {
+	t.Parallel()
+
+	executor := &Executor{
+		goos: "linux",
+		run: func(_ context.Context, _ string, executable string, args []string) (runResult, error) {
+			return runResult{stdout: executable + " " + strings.Join(args, " "), exitCode: 0}, nil
+		},
+		lookupPath: func(file string) (string, error) { return file, nil },
+		commands:   map[string]*activeCommand{},
+		completed:  map[string]*activeCommand{},
+		approvals:  map[string]*pendingApproval{},
+	}
+	dir := t.TempDir()
+	out, err := executor.Execute(contracts.ShellExecutionContract{
+		Command: contracts.ShellCommandPolicy{
+			Enabled:  true,
+			Strategy: "static_allowlist",
+			Params:   contracts.ShellCommandParams{AllowedCommands: []string{"cd"}},
+		},
+		Approval: contracts.ShellApprovalPolicy{
+			Enabled:  true,
+			Strategy: "always_require",
+			Params:   contracts.ShellApprovalParams{AllowPrefixes: []string{"pwd"}},
+		},
+		Runtime: contracts.ShellRuntimePolicy{
+			Enabled:  true,
+			Strategy: "workspace_write",
+			Params: contracts.ShellRuntimeParams{
+				Cwd:            dir,
+				Timeout:        "5s",
+				MaxOutputBytes: 4096,
+				AllowNetwork:   true,
+			},
+		},
+	}, "shell_exec", map[string]any{
+		"command": "cd",
+		"args":    []any{dir, "&&", "pwd"},
+	})
+	if err != nil {
+		t.Fatalf("Execute returned error: %v", err)
+	}
+	if decodeField(t, out, "status") == "approval_pending" {
+		t.Fatalf("snippet allow prefix still triggered approval: %s", out)
 	}
 }
 
