@@ -105,6 +105,9 @@ func TestShellApprovalPrefixUsesExecutableOnly(t *testing.T) {
 	if got := shellApprovalPrefix("/usr/bin/ansible", []string{"localhost", "-m", "ping"}); got != "ansible" {
 		t.Fatalf("shellApprovalPrefix(/usr/bin/ansible) = %q, want ansible", got)
 	}
+	if got := shellApprovalPrefix(`cd "/tmp/work" && ansible-playbook site.yml`, nil); got != "ansible-playbook" {
+		t.Fatalf("shellApprovalPrefix(shell snippet) = %q, want ansible-playbook", got)
+	}
 }
 
 func copyDir(t *testing.T, sourceRoot, targetRoot string) {

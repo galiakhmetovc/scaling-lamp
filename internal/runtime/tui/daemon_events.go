@@ -70,6 +70,24 @@ func (m *model) handleDaemonEnvelope(envelope daemon.WebsocketEnvelope) {
 	}
 }
 
+func (m *model) daemonEnvelopeApprovalReloadSession(envelope daemon.WebsocketEnvelope) (string, bool) {
+	if envelope.Type != "ui_event" || envelope.Event == nil {
+		return "", false
+	}
+	event := *envelope.Event
+	switch event.Kind {
+	case runtime.UIEventToolCompleted:
+		if toolActivityNeedsApprovalReload(event.Tool) {
+			return event.SessionID, true
+		}
+	case runtime.UIEventStatusChanged:
+		if event.Status == "approval_pending" {
+			return event.SessionID, true
+		}
+	}
+	return "", false
+}
+
 func toolActivityNeedsApprovalReload(activity runtime.ToolActivity) bool {
 	if strings.Contains(activity.ErrorText, "requires approval") {
 		return true

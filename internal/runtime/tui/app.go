@@ -201,7 +201,11 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case daemonEnvelopeMsg:
 		envelope := daemon.WebsocketEnvelope(msg)
 		m.handleDaemonEnvelope(envelope)
-		return m, waitForDaemonEnvelope(m.wsCh)
+		cmds := []tea.Cmd{waitForDaemonEnvelope(m.wsCh)}
+		if sessionID, ok := m.daemonEnvelopeApprovalReloadSession(envelope); ok {
+			cmds = append(cmds, reloadSessionSnapshotAfterDelayCmd(m.ctx, m.client, sessionID, 150*time.Millisecond))
+		}
+		return m, tea.Batch(cmds...)
 	case clockTickMsg:
 		m.clockNow = time.Time(msg)
 		cmds := make([]tea.Cmd, 0, 2)

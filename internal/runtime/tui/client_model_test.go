@@ -1559,6 +1559,36 @@ func TestChatShowsExplicitEndTurnMarkerAfterRunCompletes(t *testing.T) {
 	}
 }
 
+func TestDaemonEnvelopeApprovalReloadSessionDetectsApprovalEvents(t *testing.T) {
+	var m model
+	sessionID, ok := m.daemonEnvelopeApprovalReloadSession(daemon.WebsocketEnvelope{
+		Type: "ui_event",
+		Event: &runtime.UIEvent{
+			SessionID: "session-1",
+			Kind:      runtime.UIEventToolCompleted,
+			Tool: runtime.ToolActivity{
+				Phase:     runtime.ToolActivityPhaseCompleted,
+				Name:      "shell_exec",
+				ErrorText: `tool call "shell_exec" requires approval`,
+			},
+		},
+	})
+	if !ok || sessionID != "session-1" {
+		t.Fatalf("approval reload session = (%q, %v), want (session-1, true)", sessionID, ok)
+	}
+	sessionID, ok = m.daemonEnvelopeApprovalReloadSession(daemon.WebsocketEnvelope{
+		Type: "ui_event",
+		Event: &runtime.UIEvent{
+			SessionID: "session-2",
+			Kind:      runtime.UIEventStatusChanged,
+			Status:    "approval_pending",
+		},
+	})
+	if !ok || sessionID != "session-2" {
+		t.Fatalf("status approval reload session = (%q, %v), want (session-2, true)", sessionID, ok)
+	}
+}
+
 func TestSessionsViewShowsHumanReadableTimestamps(t *testing.T) {
 	ws := make(chan daemon.WebsocketEnvelope)
 	close(ws)

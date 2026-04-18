@@ -96,6 +96,59 @@ func TestExecutorRoutesCommandOutsideAllowlistToApproval(t *testing.T) {
 	}
 }
 
+func TestExecutorApproveRunsShellSnippetCommand(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	executor := NewExecutor()
+	out, err := executor.ExecuteWithMeta(context.Background(), contracts.ShellExecutionContract{
+		Command: contracts.ShellCommandPolicy{
+			Enabled:  true,
+			Strategy: "static_allowlist",
+			Params: contracts.ShellCommandParams{
+				AllowedCommands: []string{"pwd"},
+			},
+		},
+		Approval: contracts.ShellApprovalPolicy{
+			Enabled:  true,
+			Strategy: "always_require",
+		},
+		Runtime: contracts.ShellRuntimePolicy{
+			Enabled:  true,
+			Strategy: "workspace_write",
+			Params: contracts.ShellRuntimeParams{
+				Cwd:            dir,
+				Timeout:        "5s",
+				MaxOutputBytes: 4096,
+				AllowNetwork:   true,
+			},
+		},
+	}, "shell_exec", map[string]any{
+		"command": `cd "` + dir + `" && pwd`,
+	}, ExecutionMeta{})
+	if err != nil {
+		t.Fatalf("ExecuteWithMeta returned error: %v", err)
+	}
+	if decodeField(t, out, "status") != "approval_pending" {
+		t.Fatalf("status = %s, want approval_pending", out)
+	}
+	approvalID := decodeField(t, out, "approval_id")
+	if approvalID == "" {
+		t.Fatalf("approval_id missing from %s", out)
+	}
+
+	result, err := executor.Approve(context.Background(), approvalID)
+	if err != nil {
+		t.Fatalf("Approve returned error: %v", err)
+	}
+	if decodeField(t, result, "status") != "ok" {
+		t.Fatalf("approved result = %s, want ok", result)
+	}
+	if got := strings.TrimSpace(decodeField(t, result, "stdout")); got != dir {
+		t.Fatalf("stdout = %q, want %q", got, dir)
+	}
+}
+
 func TestExecutorRejectsCommandByArgumentRule(t *testing.T) {
 	t.Parallel()
 

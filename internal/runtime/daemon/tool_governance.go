@@ -114,11 +114,89 @@ func shellApprovalPrefix(command string, args []string) string {
 	if command == "" {
 		return strings.TrimSpace(strings.Join(args, " "))
 	}
+	if extracted := daemonShellSnippetExecutable(command); extracted != "" {
+		command = extracted
+	}
 	base := filepath.Base(command)
 	if base == "." || base == string(filepath.Separator) {
 		return command
 	}
 	return strings.TrimSpace(base)
+}
+
+func daemonShellSnippetExecutable(command string) string {
+	command = strings.TrimSpace(command)
+	if command == "" || !daemonIsShellSnippet(command) {
+		return ""
+	}
+	separators := []string{"&&", "||", ";", "|", "\n"}
+	start := 0
+	for {
+		segment := strings.TrimSpace(command[start:])
+		if segment == "" {
+			return ""
+		}
+		if strings.HasPrefix(segment, "cd ") || strings.HasPrefix(segment, "cd\t") {
+			next := len(segment)
+			for _, sep := range separators {
+				if idx := strings.Index(segment, sep); idx >= 0 && idx < next {
+					next = idx + len(sep)
+				}
+			}
+			if next >= len(segment) {
+				return ""
+			}
+			start = len(command) - len(segment) + next
+			continue
+		}
+		return daemonFirstShellToken(segment)
+	}
+}
+
+func daemonIsShellSnippet(command string) bool {
+	return strings.Contains(command, "&&") ||
+		strings.Contains(command, "||") ||
+		strings.Contains(command, ";") ||
+		strings.Contains(command, "\n") ||
+		strings.Contains(command, "|")
+}
+
+func daemonFirstShellToken(command string) string {
+	command = strings.TrimSpace(command)
+	if command == "" {
+		return ""
+	}
+	var (
+		quote  rune
+		escape bool
+		token  []rune
+	)
+	for _, r := range command {
+		if escape {
+			token = append(token, r)
+			escape = false
+			continue
+		}
+		switch {
+		case r == '\\':
+			escape = true
+		case quote != 0:
+			if r == quote {
+				quote = 0
+				continue
+			}
+			token = append(token, r)
+		case r == '\'' || r == '"':
+			quote = r
+		case r == ' ' || r == '\t':
+			if len(token) > 0 {
+				return string(token)
+			}
+		default:
+			token = append(token, r)
+		}
+	}
+	return string(token)
 }
 
 func removeString(values []string, target string) []string {

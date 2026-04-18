@@ -942,6 +942,9 @@ func (e *Executor) lookupCommand(commandID string) (*activeCommand, error) {
 }
 
 func (e *Executor) resolveInvocation(policy contracts.ShellRuntimePolicy, command string, args []string) (invocation, error) {
+	if e.platform() != "windows" && isShellSnippetCommand(command, args) {
+		return invocation{executable: "sh", args: []string{"-lc", command}}, nil
+	}
 	if e.platform() == "windows" {
 		if builtin, ok := windowsBuiltinInvocation(command, args); ok {
 			return builtin, nil
@@ -988,6 +991,88 @@ func windowsBuiltinInvocation(command string, args []string) (invocation, bool) 
 	default:
 		return invocation{}, false
 	}
+}
+
+func isShellSnippetCommand(command string, args []string) bool {
+	if len(args) != 0 {
+		return false
+	}
+	command = strings.TrimSpace(command)
+	if command == "" {
+		return false
+	}
+	return strings.Contains(command, "&&") ||
+		strings.Contains(command, "||") ||
+		strings.Contains(command, ";") ||
+		strings.Contains(command, "\n") ||
+		strings.Contains(command, "|")
+}
+
+func shellSnippetExecutable(command string) string {
+	if !isShellSnippetCommand(command, nil) {
+		return ""
+	}
+	trimmed := strings.TrimSpace(command)
+	separators := []string{"&&", "||", ";", "|", "\n"}
+	start := 0
+	for {
+		segment := strings.TrimSpace(trimmed[start:])
+		if segment == "" {
+			return ""
+		}
+		if strings.HasPrefix(segment, "cd ") || strings.HasPrefix(segment, "cd\t") {
+			next := len(segment)
+			for _, sep := range separators {
+				if idx := strings.Index(segment, sep); idx >= 0 && idx < next {
+					next = idx + len(sep)
+				}
+			}
+			if next >= len(segment) {
+				return ""
+			}
+			start = len(trimmed) - len(segment) + next
+			continue
+		}
+		return firstShellToken(segment)
+	}
+}
+
+func firstShellToken(command string) string {
+	command = strings.TrimSpace(command)
+	if command == "" {
+		return ""
+	}
+	var (
+		quote  rune
+		escape bool
+		token  []rune
+	)
+	for _, r := range command {
+		if escape {
+			token = append(token, r)
+			escape = false
+			continue
+		}
+		switch {
+		case r == '\\':
+			escape = true
+		case quote != 0:
+			if r == quote {
+				quote = 0
+				continue
+			}
+			token = append(token, r)
+		case r == '\'' || r == '"':
+			quote = r
+		case r == ' ' || r == '\t':
+			if len(token) > 0 {
+				return string(token)
+			}
+		default:
+			token = append(token, r)
+		}
+	}
+	return string(token)
 }
 
 func defaultRunCommand(ctx context.Context, cwd, executable string, args []string) (runResult, error) {
@@ -1280,6 +1365,9 @@ func normalizedApprovalCommand(command string) string {
 	command = strings.TrimSpace(command)
 	if command == "" {
 		return ""
+	}
+	if extracted := shellSnippetExecutable(command); extracted != "" {
+		command = extracted
 	}
 	base := filepath.Base(command)
 	if base == "." || base == string(filepath.Separator) {
