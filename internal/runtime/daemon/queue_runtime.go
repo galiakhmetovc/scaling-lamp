@@ -181,6 +181,24 @@ func (s *Server) finishMainRun(sessionID string, result *providerResultPayload) 
 	state.mainRun.TotalTokens = result.TotalTokens
 }
 
+func (s *Server) settleMainRunAfterChatTurn(sessionID string, result providerResultPayload, finishReason string) bool {
+	if finishReason == "approval_pending" {
+		return true
+	}
+	s.finishMainRun(sessionID, &result)
+	return false
+}
+
+func (s *Server) syncMainRunAfterShellContinuation(agent *runtime.Agent, sessionID string) {
+	if len(agent.PendingShellApprovals(sessionID)) > 0 {
+		s.publishDaemon(WebsocketEnvelope{Type: "shell_approval_updated", Payload: map[string]any{"session_id": sessionID}})
+		return
+	}
+	s.finishMainRun(sessionID, nil)
+	s.publishDaemon(WebsocketEnvelope{Type: "shell_approval_updated", Payload: map[string]any{"session_id": sessionID}})
+	s.maybeDispatchQueuedDrafts(sessionID)
+}
+
 func (s *Server) popNextQueuedDraft(sessionID string) (QueuedDraft, bool) {
 	s.runtimeMu.Lock()
 	defer s.runtimeMu.Unlock()
@@ -229,11 +247,13 @@ func (s *Server) dispatchQueuedDraft(ctx context.Context, sessionID string, draf
 		TotalTokens:  result.Provider.Usage.TotalTokens,
 		Content:      result.Provider.Message.Content,
 	}
-	s.finishMainRun(sessionID, &resultPayload)
+	stillRunning := s.settleMainRunAfterChatTurn(sessionID, resultPayload, result.Provider.FinishReason)
 	snapshot, snapshotErr := s.buildSessionSnapshot(sessionID)
 	if snapshotErr != nil {
 		s.publishDaemon(WebsocketEnvelope{Type: "queue_draft_failed", Payload: map[string]any{"session_id": sessionID, "draft": draft}, Error: snapshotErr.Error()})
-		s.maybeDispatchQueuedDrafts(sessionID)
+		if !stillRunning {
+			s.maybeDispatchQueuedDrafts(sessionID)
+		}
 		return
 	}
 	s.publishDaemon(WebsocketEnvelope{
@@ -244,5 +264,7 @@ func (s *Server) dispatchQueuedDraft(ctx context.Context, sessionID string, draf
 			"result":  resultPayload,
 		},
 	})
-	s.maybeDispatchQueuedDrafts(sessionID)
+	if !stillRunning {
+		s.maybeDispatchQueuedDrafts(sessionID)
+	}
 }

@@ -110,6 +110,125 @@ func TestSessionSnapshotIncludesMainRunMetadata(t *testing.T) {
 	}
 }
 
+func TestSettleMainRunAfterChatTurnKeepsRunActiveForApprovalPending(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 4, 18, 13, 30, 0, 0, time.UTC)
+	agent := &runtime.Agent{
+		Config: config.AgentConfig{ID: "daemon-chat"},
+		Contracts: contracts.ResolvedContracts{
+			ProviderRequest: contracts.ProviderRequestContract{
+				Transport: contracts.TransportContract{
+					ID: "provider_client",
+					Endpoint: contracts.EndpointPolicy{
+						Params: contracts.EndpointParams{BaseURL: "https://provider.example.test"},
+					},
+				},
+				RequestShape: contracts.RequestShapeContract{
+					Model: contracts.ModelPolicy{Params: contracts.ModelParams{Model: "glm-5-turbo"}},
+				},
+			},
+		},
+		EventLog: runtime.NewInMemoryEventLog(),
+		Projections: []projections.Projection{
+			projections.NewSessionProjection(),
+			projections.NewSessionCatalogProjection(),
+			projections.NewTranscriptProjection(),
+			projections.NewChatTimelineProjection(),
+			projections.NewContextBudgetProjection(),
+			projections.NewPlanHeadProjection(),
+			projections.NewShellCommandProjection(),
+			projections.NewDelegateProjection(),
+		},
+		Now:   func() time.Time { return now },
+		NewID: func(prefix string) string { return prefix + "-1" },
+	}
+	server := &Server{
+		agent:          agent,
+		sessionRuntime: map[string]*sessionRuntimeState{},
+		daemonBus:      newDaemonBus(),
+	}
+
+	if err := agent.RecordEvent(context.Background(), eventing.Event{
+		ID:               "evt-session-created",
+		Kind:             eventing.EventSessionCreated,
+		OccurredAt:       now,
+		AggregateID:      "session-1",
+		AggregateType:    eventing.AggregateSession,
+		AggregateVersion: 1,
+		Payload:          map[string]any{"session_id": "session-1"},
+	}); err != nil {
+		t.Fatalf("record session created: %v", err)
+	}
+
+	if !server.startMainRun("session-1") {
+		t.Fatalf("startMainRun returned false, want true")
+	}
+	if !server.settleMainRunAfterChatTurn("session-1", providerResultPayload{}, "approval_pending") {
+		t.Fatal("settleMainRunAfterChatTurn returned false, want active run preserved")
+	}
+
+	snapshot, err := server.buildSessionSnapshot("session-1")
+	if err != nil {
+		t.Fatalf("build session snapshot: %v", err)
+	}
+	if !snapshot.MainRunActive || !snapshot.MainRun.Active {
+		t.Fatalf("main run flags = %+v, want active while approval is pending", snapshot.MainRun)
+	}
+}
+
+func TestSyncMainRunAfterShellContinuationFinishesWhenNoApprovalsRemain(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 4, 18, 13, 31, 0, 0, time.UTC)
+	agent := &runtime.Agent{
+		Config:   config.AgentConfig{ID: "daemon-chat"},
+		EventLog: runtime.NewInMemoryEventLog(),
+		Projections: []projections.Projection{
+			projections.NewSessionProjection(),
+			projections.NewSessionCatalogProjection(),
+			projections.NewTranscriptProjection(),
+			projections.NewChatTimelineProjection(),
+			projections.NewContextBudgetProjection(),
+			projections.NewPlanHeadProjection(),
+			projections.NewShellCommandProjection(),
+			projections.NewDelegateProjection(),
+		},
+		Now:   func() time.Time { return now },
+		NewID: func(prefix string) string { return prefix + "-1" },
+	}
+	server := &Server{
+		agent:          agent,
+		sessionRuntime: map[string]*sessionRuntimeState{},
+		daemonBus:      newDaemonBus(),
+	}
+
+	if err := agent.RecordEvent(context.Background(), eventing.Event{
+		ID:               "evt-session-created",
+		Kind:             eventing.EventSessionCreated,
+		OccurredAt:       now,
+		AggregateID:      "session-1",
+		AggregateType:    eventing.AggregateSession,
+		AggregateVersion: 1,
+		Payload:          map[string]any{"session_id": "session-1"},
+	}); err != nil {
+		t.Fatalf("record session created: %v", err)
+	}
+
+	if !server.startMainRun("session-1") {
+		t.Fatalf("startMainRun returned false, want true")
+	}
+	server.syncMainRunAfterShellContinuation(agent, "session-1")
+
+	snapshot, err := server.buildSessionSnapshot("session-1")
+	if err != nil {
+		t.Fatalf("build session snapshot: %v", err)
+	}
+	if snapshot.MainRunActive || snapshot.MainRun.Active {
+		t.Fatalf("main run flags = %+v, want inactive after continuation without more approvals", snapshot.MainRun)
+	}
+}
+
 func TestSessionSnapshotIncludesPromptOverride(t *testing.T) {
 	t.Parallel()
 
