@@ -1720,6 +1720,112 @@ func TestDaemonEnvelopeApprovalReloadSessionDetectsApprovalEvents(t *testing.T) 
 	}
 }
 
+func TestStatusChangedEventDoesNotOverrideWaitingShellSnapshot(t *testing.T) {
+	ws := make(chan daemon.WebsocketEnvelope)
+	close(ws)
+	now := time.Date(2026, 4, 18, 16, 45, 0, 0, time.UTC)
+	client := &stubOperatorClient{
+		sessions: []SessionSummary{{SessionID: "session-1", CreatedAt: now, LastActivity: now, MessageCount: 0}},
+		snapshot: daemon.SessionSnapshot{
+			SessionID: "session-1",
+			MainRun: daemon.MainRunSnapshot{
+				Active:    true,
+				Phase:     "waiting_shell",
+				StartedAt: now.Add(-90 * time.Second),
+			},
+			RunningCommands: []projections.ShellCommandView{{
+				CommandID:  "cmd-1",
+				OccurredAt: now,
+				Command:    "ansible-playbook",
+				Args:       []string{"site.yml"},
+				Status:     "running",
+			}},
+			Prompt: daemon.SessionPromptSnapshot{Default: "default prompt", Effective: "default prompt"},
+		},
+		ws: ws,
+	}
+
+	m, err := newModelWithClient(context.Background(), client, "")
+	if err != nil {
+		t.Fatalf("newModelWithClient returned error: %v", err)
+	}
+	state := m.currentSessionState()
+	m.syncRunStateFromSnapshot(state, false)
+
+	modelAfter, _ := (&m).Update(daemonEnvelopeMsg(daemon.WebsocketEnvelope{
+		Type: "ui_event",
+		Event: &runtime.UIEvent{
+			Kind:      runtime.UIEventStatusChanged,
+			SessionID: "session-1",
+			Status:    "idle",
+		},
+	}))
+	mm := modelAfter.(*model)
+	state = mm.currentSessionState()
+	if !state.MainRun.Active {
+		t.Fatal("state.MainRun.Active = false, want true")
+	}
+	if state.Status != "waiting_shell" {
+		t.Fatalf("state.Status = %q, want waiting_shell", state.Status)
+	}
+	if !strings.Contains(stripANSI(mm.viewChatStatusBar(state)), "run: waiting_shell") {
+		t.Fatalf("status bar missing waiting_shell after idle event: %q", mm.viewChatStatusBar(state))
+	}
+}
+
+func TestRunCompletedEventDoesNotForceEndTurnWhileSnapshotStillActive(t *testing.T) {
+	ws := make(chan daemon.WebsocketEnvelope)
+	close(ws)
+	now := time.Date(2026, 4, 18, 16, 46, 0, 0, time.UTC)
+	client := &stubOperatorClient{
+		sessions: []SessionSummary{{SessionID: "session-1", CreatedAt: now, LastActivity: now, MessageCount: 0}},
+		snapshot: daemon.SessionSnapshot{
+			SessionID: "session-1",
+			MainRun: daemon.MainRunSnapshot{
+				Active:    true,
+				Phase:     "waiting_shell",
+				StartedAt: now.Add(-2 * time.Minute),
+			},
+			RunningCommands: []projections.ShellCommandView{{
+				CommandID:  "cmd-1",
+				OccurredAt: now,
+				Command:    "ansible-playbook",
+				Args:       []string{"site.yml"},
+				Status:     "running",
+			}},
+			Prompt: daemon.SessionPromptSnapshot{Default: "default prompt", Effective: "default prompt"},
+		},
+		ws: ws,
+	}
+
+	m, err := newModelWithClient(context.Background(), client, "")
+	if err != nil {
+		t.Fatalf("newModelWithClient returned error: %v", err)
+	}
+	state := m.currentSessionState()
+	m.syncRunStateFromSnapshot(state, false)
+	state.Streaming.WriteString("partial")
+
+	modelAfter, _ := (&m).Update(daemonEnvelopeMsg(daemon.WebsocketEnvelope{
+		Type: "ui_event",
+		Event: &runtime.UIEvent{
+			Kind:      runtime.UIEventRunCompleted,
+			SessionID: "session-1",
+		},
+	}))
+	mm := modelAfter.(*model)
+	state = mm.currentSessionState()
+	if !state.MainRun.Active {
+		t.Fatal("state.MainRun.Active = false, want true")
+	}
+	if strings.Contains(state.ChatView.View(), "AGENT END TURN") {
+		t.Fatalf("chat view shows end-turn marker while snapshot still active: %q", state.ChatView.View())
+	}
+	if state.Status != "waiting_shell" {
+		t.Fatalf("state.Status = %q, want waiting_shell", state.Status)
+	}
+}
+
 func TestSessionsViewShowsHumanReadableTimestamps(t *testing.T) {
 	ws := make(chan daemon.WebsocketEnvelope)
 	close(ws)

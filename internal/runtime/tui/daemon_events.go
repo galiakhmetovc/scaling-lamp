@@ -16,6 +16,7 @@ func (m *model) handleDaemonEnvelope(envelope daemon.WebsocketEnvelope) {
 		}
 		event := *envelope.Event
 		if state := m.sessions[event.SessionID]; state != nil {
+			reloadSnapshot := false
 			switch event.Kind {
 			case runtime.UIEventStreamText:
 				state.Streaming.WriteString(event.Text)
@@ -25,27 +26,22 @@ func (m *model) handleDaemonEnvelope(envelope daemon.WebsocketEnvelope) {
 					state.ToolLog = state.ToolLog[len(state.ToolLog)-200:]
 				}
 				if event.Kind == runtime.UIEventToolCompleted && toolActivityNeedsApprovalReload(event.Tool) {
-					_ = m.reloadSessionSnapshot(event.SessionID)
+					reloadSnapshot = true
 				}
 			case runtime.UIEventStatusChanged:
-				state.Status = event.Status
-				if event.Status == "approval_pending" {
-					_ = m.reloadSessionSnapshot(event.SessionID)
+				if uiEventStatusNeedsSnapshotReload(event.Status) {
+					reloadSnapshot = true
 				}
 			case runtime.UIEventRunCompleted:
-				state.Status = "done"
 				state.Streaming.Reset()
-				state.AwaitingRunCompletion = false
-				state.LastTurnEndedAt = m.now()
 				state.ApprovalInFlightID = ""
+				reloadSnapshot = true
+			}
+			if reloadSnapshot {
+				_ = m.reloadSessionSnapshot(event.SessionID)
 			}
 			m.renderChatViewport(state)
 			m.renderToolsViewport(state)
-			if event.Kind == runtime.UIEventRunCompleted {
-				_ = m.reloadSessionSnapshot(event.SessionID)
-				m.renderChatViewport(state)
-				m.renderToolsViewport(state)
-			}
 		}
 	case "draft_queued", "draft_recalled", "queue_draft_started", "queue_draft_completed", "queue_draft_failed", "shell_approval_updated", "shell_approval_failed":
 		if sessionID, ok := envelopeSessionID(envelope.Payload); ok {
@@ -93,6 +89,15 @@ func toolActivityNeedsApprovalReload(activity runtime.ToolActivity) bool {
 		return true
 	}
 	return strings.Contains(activity.ResultText, `"approval_pending"`)
+}
+
+func uiEventStatusNeedsSnapshotReload(status string) bool {
+	switch strings.TrimSpace(status) {
+	case "approval_pending", "waiting_shell", "running", "resuming", "idle", "done", "failed":
+		return true
+	default:
+		return false
+	}
 }
 
 func envelopeSessionID(payload any) (string, bool) {
