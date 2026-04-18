@@ -358,6 +358,10 @@ func (c *localClient) AddPlanTaskNote(ctx context.Context, sessionID, taskID, no
 func (c *localClient) ApproveShell(ctx context.Context, approvalID string) (ShellActionResult, error) {
 	view, ok := c.agent.PendingShellApproval(approvalID)
 	if !ok {
+		if existing, ok := c.agent.ShellCommandByApprovalID(approvalID); ok {
+			session, err := c.GetSession(ctx, existing.SessionID)
+			return ShellActionResult{Session: session}, err
+		}
 		return ShellActionResult{}, fmt.Errorf("shell approval %q not found", approvalID)
 	}
 	if _, err := c.agent.ApproveShellCommand(ctx, approvalID); err != nil {
@@ -370,6 +374,10 @@ func (c *localClient) ApproveShell(ctx context.Context, approvalID string) (Shel
 func (c *localClient) ApproveShellAlways(ctx context.Context, approvalID string) (ShellActionResult, error) {
 	view, ok := c.agent.PendingShellApproval(approvalID)
 	if !ok {
+		if existing, ok := c.agent.ShellCommandByApprovalID(approvalID); ok {
+			session, err := c.GetSession(ctx, existing.SessionID)
+			return ShellActionResult{Session: session}, err
+		}
 		return ShellActionResult{}, fmt.Errorf("shell approval %q not found", approvalID)
 	}
 	reloaded, err := daemon.PersistShellApprovalRuleAndReload(c.agent.ConfigPath, "allow", daemonShellApprovalPrefix(view.Command, view.Args))
@@ -389,6 +397,10 @@ func (c *localClient) ApproveShellAlways(ctx context.Context, approvalID string)
 func (c *localClient) DenyShell(ctx context.Context, approvalID string) (ShellActionResult, error) {
 	view, ok := c.agent.PendingShellApproval(approvalID)
 	if !ok {
+		if existing, ok := c.agent.ShellCommandByApprovalID(approvalID); ok {
+			session, err := c.GetSession(ctx, existing.SessionID)
+			return ShellActionResult{Session: session}, err
+		}
 		return ShellActionResult{}, fmt.Errorf("shell approval %q not found", approvalID)
 	}
 	if err := c.agent.DenyShellCommand(ctx, approvalID); err != nil {
@@ -401,6 +413,10 @@ func (c *localClient) DenyShell(ctx context.Context, approvalID string) (ShellAc
 func (c *localClient) DenyShellAlways(ctx context.Context, approvalID string) (ShellActionResult, error) {
 	view, ok := c.agent.PendingShellApproval(approvalID)
 	if !ok {
+		if existing, ok := c.agent.ShellCommandByApprovalID(approvalID); ok {
+			session, err := c.GetSession(ctx, existing.SessionID)
+			return ShellActionResult{Session: session}, err
+		}
 		return ShellActionResult{}, fmt.Errorf("shell approval %q not found", approvalID)
 	}
 	reloaded, err := daemon.PersistShellApprovalRuleAndReload(c.agent.ConfigPath, "deny", daemonShellApprovalPrefix(view.Command, view.Args))

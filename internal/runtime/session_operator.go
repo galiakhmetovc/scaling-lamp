@@ -115,6 +115,19 @@ func (a *Agent) CurrentShellCommand(commandID string) (projections.ShellCommandV
 	return projections.ShellCommandView{}, false
 }
 
+func (a *Agent) ShellCommandByApprovalID(approvalID string) (projections.ShellCommandView, bool) {
+	projection := a.shellCommandProjection()
+	if projection == nil {
+		return projections.ShellCommandView{}, false
+	}
+	for _, view := range projection.SnapshotForSession("") {
+		if view.ApprovalID == approvalID {
+			return view, true
+		}
+	}
+	return projections.ShellCommandView{}, false
+}
+
 func (a *Agent) CurrentDelegates(sessionID string) []projections.DelegateView {
 	for _, projection := range a.Projections {
 		delegates, ok := projection.(*projections.DelegateProjection)

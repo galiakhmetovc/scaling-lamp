@@ -1985,6 +1985,62 @@ func TestCtrlXCancelsWaitingShellByKillingRunningCommands(t *testing.T) {
 	}
 }
 
+func TestStaleApprovalNotFoundErrorReloadsSnapshotInsteadOfPoisoningChat(t *testing.T) {
+	ws := make(chan daemon.WebsocketEnvelope)
+	close(ws)
+	now := time.Date(2026, 4, 18, 17, 10, 0, 0, time.UTC)
+	client := &stubOperatorClient{
+		sessions: []SessionSummary{{SessionID: "session-1", CreatedAt: now, LastActivity: now, MessageCount: 0}},
+		snapshot: daemon.SessionSnapshot{
+			SessionID: "session-1",
+			MainRun: daemon.MainRunSnapshot{
+				Active: false,
+				Phase:  "completed",
+			},
+			Prompt: daemon.SessionPromptSnapshot{Default: "default prompt", Effective: "default prompt"},
+		},
+		ws: ws,
+	}
+
+	m, err := newModelWithClient(context.Background(), client, "")
+	if err != nil {
+		t.Fatalf("newModelWithClient returned error: %v", err)
+	}
+	state := m.currentSessionState()
+	state.ApprovalInFlightID = "approval-2"
+	state.Snapshot.PendingApprovals = []shell.PendingApprovalView{{
+		ApprovalID: "approval-2",
+		Command:    "ansible-playbook",
+		Args:       []string{"site.yml"},
+		OccurredAt: now,
+	}}
+	m.renderChatViewport(state)
+
+	modelAfter, cmd := (&m).Update(shellActionFinishedMsg{
+		SessionID: "session-1",
+		Err:       fmt.Errorf(`shell approval "approval-2" not found`),
+	})
+	if cmd == nil {
+		t.Fatal("stale approval error should trigger snapshot reload")
+	}
+	reloadMsg, ok := cmd().(sessionSnapshotReloadedMsg)
+	if !ok {
+		t.Fatalf("stale approval cmd returned %T, want sessionSnapshotReloadedMsg", cmd())
+	}
+	modelAfter, _ = modelAfter.(*model).Update(reloadMsg)
+	mm := modelAfter.(*model)
+	state = mm.currentSessionState()
+	if mm.errMessage != "" {
+		t.Fatalf("errMessage = %q, want empty for stale approval", mm.errMessage)
+	}
+	if state.LastError != "" {
+		t.Fatalf("state.LastError = %q, want empty for stale approval", state.LastError)
+	}
+	if mm.chatApprovalMenuVisible(state) {
+		t.Fatal("approval menu still visible after stale approval reload")
+	}
+}
+
 func TestSessionsViewShowsHumanReadableTimestamps(t *testing.T) {
 	ws := make(chan daemon.WebsocketEnvelope)
 	close(ws)

@@ -493,6 +493,9 @@ func (s *Server) executeCommand(ctx context.Context, req CommandRequest) (any, e
 		}
 		view, ok := agent.PendingShellApproval(approvalID)
 		if !ok {
+			if existing, ok := agent.ShellCommandByApprovalID(approvalID); ok {
+				return s.sessionPayload(existing.SessionID)
+			}
 			return nil, fmt.Errorf("shell approval %q not found", approvalID)
 		}
 		payload, err := s.optimisticShellApprovalPayload(view.SessionID, approvalID)
@@ -510,6 +513,9 @@ func (s *Server) executeCommand(ctx context.Context, req CommandRequest) (any, e
 		}
 		view, ok := agent.PendingShellApproval(approvalID)
 		if !ok {
+			if existing, ok := agent.ShellCommandByApprovalID(approvalID); ok {
+				return s.sessionPayload(existing.SessionID)
+			}
 			return nil, fmt.Errorf("shell approval %q not found", approvalID)
 		}
 		payload, err := s.optimisticShellApprovalPayload(view.SessionID, approvalID)
@@ -527,6 +533,9 @@ func (s *Server) executeCommand(ctx context.Context, req CommandRequest) (any, e
 		}
 		view, ok := agent.PendingShellApproval(approvalID)
 		if !ok {
+			if existing, ok := agent.ShellCommandByApprovalID(approvalID); ok {
+				return s.sessionPayload(existing.SessionID)
+			}
 			return nil, fmt.Errorf("shell approval %q not found", approvalID)
 		}
 		payload, err := s.optimisticShellApprovalPayload(view.SessionID, approvalID)
@@ -543,6 +552,9 @@ func (s *Server) executeCommand(ctx context.Context, req CommandRequest) (any, e
 		}
 		view, ok := agent.PendingShellApproval(approvalID)
 		if !ok {
+			if existing, ok := agent.ShellCommandByApprovalID(approvalID); ok {
+				return s.sessionPayload(existing.SessionID)
+			}
 			return nil, fmt.Errorf("shell approval %q not found", approvalID)
 		}
 		payload, err := s.optimisticShellApprovalPayload(view.SessionID, approvalID)

@@ -48,6 +48,9 @@ func (m *model) handleDaemonEnvelope(envelope daemon.WebsocketEnvelope) {
 			_ = m.reloadSessionSnapshot(sessionID)
 		}
 		if envelope.Type == "shell_approval_failed" && envelope.Error != "" {
+			if isStaleApprovalNotFoundErrorString(envelope.Error) {
+				return
+			}
 			m.errMessage = envelope.Error
 			if sessionID, ok := envelopeSessionID(envelope.Payload); ok {
 				if state := m.sessions[sessionID]; state != nil {
@@ -98,6 +101,11 @@ func uiEventStatusNeedsSnapshotReload(status string) bool {
 	default:
 		return false
 	}
+}
+
+func isStaleApprovalNotFoundErrorString(text string) bool {
+	text = strings.TrimSpace(text)
+	return strings.Contains(text, "shell approval") && strings.Contains(text, "not found")
 }
 
 func envelopeSessionID(payload any) (string, bool) {

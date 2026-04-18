@@ -327,6 +327,12 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		if msg.Err != nil {
+			if isStaleApprovalNotFoundError(msg.Err) {
+				state.ApprovalInFlightID = ""
+				state.LastError = ""
+				m.errMessage = ""
+				return m, reloadSessionSnapshotCmd(m.ctx, m.client, msg.SessionID)
+			}
 			state.LastError = msg.Err.Error()
 			state.ApprovalInFlightID = ""
 			m.errMessage = msg.Err.Error()
@@ -565,6 +571,14 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	return m, nil
+}
+
+func isStaleApprovalNotFoundError(err error) bool {
+	if err == nil {
+		return false
+	}
+	text := strings.TrimSpace(err.Error())
+	return strings.Contains(text, "shell approval") && strings.Contains(text, "not found")
 }
 
 func (m *model) handleGlobalKey(msg tea.KeyMsg) tea.Cmd {
