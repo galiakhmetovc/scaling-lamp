@@ -2,6 +2,7 @@ package tui
 
 import (
 	"encoding/json"
+	"strings"
 
 	"teamd/internal/runtime"
 	"teamd/internal/runtime/daemon"
@@ -22,6 +23,9 @@ func (m *model) handleDaemonEnvelope(envelope daemon.WebsocketEnvelope) {
 				state.ToolLog = append(state.ToolLog, toolLogEntry{Activity: event.Tool})
 				if len(state.ToolLog) > 200 {
 					state.ToolLog = state.ToolLog[len(state.ToolLog)-200:]
+				}
+				if event.Kind == runtime.UIEventToolCompleted && toolActivityNeedsApprovalReload(event.Tool) {
+					_ = m.reloadSessionSnapshot(event.SessionID)
 				}
 			case runtime.UIEventStatusChanged:
 				state.Status = event.Status
@@ -61,6 +65,13 @@ func (m *model) handleDaemonEnvelope(envelope daemon.WebsocketEnvelope) {
 			m.resetFormDraft()
 		}
 	}
+}
+
+func toolActivityNeedsApprovalReload(activity runtime.ToolActivity) bool {
+	if strings.Contains(activity.ErrorText, "requires approval") {
+		return true
+	}
+	return strings.Contains(activity.ResultText, `"approval_pending"`)
 }
 
 func envelopeSessionID(payload any) (string, bool) {

@@ -1251,6 +1251,62 @@ func TestApprovalPendingEventReloadsSnapshotAndRestoresApprovalMenu(t *testing.T
 	}
 }
 
+func TestToolCompletedApprovalEventReloadsSnapshotAndRestoresApprovalMenu(t *testing.T) {
+	ws := make(chan daemon.WebsocketEnvelope)
+	close(ws)
+	now := time.Date(2026, 4, 18, 13, 7, 0, 0, time.UTC)
+	client := &stubOperatorClient{
+		sessions: []SessionSummary{{SessionID: "session-1", CreatedAt: now, LastActivity: now, MessageCount: 0}},
+		snapshot: daemon.SessionSnapshot{
+			SessionID: "session-1",
+			PendingApprovals: []shell.PendingApprovalView{{
+				ApprovalID: "approval-ssh-1",
+				Command:    "ssh",
+				Args:       []string{"-o", "StrictHostKeyChecking=no", "administrator@10.31.211.26", "sudo", "docker", "logs", "adcm", "2>&1", "|", "head", "-100"},
+				OccurredAt: now,
+			}},
+			Prompt: daemon.SessionPromptSnapshot{
+				Default:   "default prompt",
+				Effective: "default prompt",
+			},
+		},
+		ws: ws,
+	}
+
+	m, err := newModelWithClient(context.Background(), client, "")
+	if err != nil {
+		t.Fatalf("newModelWithClient returned error: %v", err)
+	}
+	state := m.currentSessionState()
+	state.Snapshot.PendingApprovals = nil
+
+	modelAfter, _ := (&m).Update(daemonEnvelopeMsg(daemon.WebsocketEnvelope{
+		Type: "ui_event",
+		Event: &runtime.UIEvent{
+			Kind:      runtime.UIEventToolCompleted,
+			SessionID: "session-1",
+			Tool: runtime.ToolActivity{
+				Phase:      runtime.ToolActivityPhaseCompleted,
+				OccurredAt: now,
+				Name:       "shell_exec",
+				Arguments:  map[string]any{"command": "ssh", "args": []string{"-o", "StrictHostKeyChecking=no", "administrator@10.31.211.26", "sudo", "docker", "logs", "adcm", "2>&1", "|", "head", "-100"}},
+				ErrorText:  `tool call "shell_exec" requires approval`,
+			},
+		},
+	}))
+	mm := modelAfter.(*model)
+	state = mm.currentSessionState()
+	if !mm.chatApprovalMenuVisible(state) {
+		t.Fatal("chat approval menu hidden, want visible after approval-like tool completion")
+	}
+	if len(state.Snapshot.PendingApprovals) != 1 || state.Snapshot.PendingApprovals[0].ApprovalID != "approval-ssh-1" {
+		t.Fatalf("pending approvals = %#v, want approval-ssh-1 after tool completion reload", state.Snapshot.PendingApprovals)
+	}
+	if !strings.Contains(state.ChatView.View(), "Approve once") || !strings.Contains(state.ChatView.View(), "ssh -o StrictHostKeyChecking=no") {
+		t.Fatalf("chat view missing approval menu after tool completion reload: %q", state.ChatView.View())
+	}
+}
+
 func TestSessionsViewShowsHumanReadableTimestamps(t *testing.T) {
 	ws := make(chan daemon.WebsocketEnvelope)
 	close(ws)
