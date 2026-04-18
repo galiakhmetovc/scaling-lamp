@@ -3,6 +3,7 @@ package tui
 import (
 	"fmt"
 	"strings"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 )
@@ -45,13 +46,11 @@ func (m *model) updateTools(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "k":
 		if len(commands) > 0 && m.toolsFocus == toolsFocusCommands {
 			command := commands[m.commandCursor]
-			result, err := m.client.KillShell(m.ctx, command.CommandID)
-			if err != nil {
-				m.errMessage = err.Error()
-			} else {
-				state.Snapshot = result.Session
-				m.statusMessage = "shell command kill requested"
-			}
+			return m, tea.Batch(
+				runKillShellCmd(m.ctx, m.client, state.SessionID, command.CommandID),
+				reloadSessionSnapshotAfterDelayCmd(m.ctx, m.client, state.SessionID, 250*time.Millisecond),
+				tickClockCmd(),
+			)
 		}
 	case "up":
 		m.moveToolsSelection(-1, len(approvals), len(commands), len(state.ToolLog))

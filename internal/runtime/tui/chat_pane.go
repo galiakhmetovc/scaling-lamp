@@ -460,12 +460,25 @@ func (m *model) deleteSelectedDraft(state *sessionState) {
 }
 
 func (m *model) cancelMainRun(state *sessionState) tea.Cmd {
-	if state == nil || !state.MainRun.Active || state.RunCancel == nil {
+	if state == nil || !state.MainRun.Active {
 		return nil
 	}
-	state.RunCancel()
-	state.RunCancel = nil
+	if state.RunCancel != nil {
+		state.RunCancel()
+		state.RunCancel = nil
+	}
+	commands := m.currentRunningCommands()
 	state.PendingPrompt = ""
+	if len(commands) > 0 {
+		cmds := make([]tea.Cmd, 0, len(commands)+2)
+		for _, command := range commands {
+			cmds = append(cmds, runKillShellCmd(m.ctx, m.client, state.SessionID, command.CommandID))
+		}
+		cmds = append(cmds, reloadSessionSnapshotAfterDelayCmd(m.ctx, m.client, state.SessionID, 250*time.Millisecond), tickClockCmd())
+		m.statusMessage = "stopping run and shell commands"
+		m.renderChatViewport(state)
+		return tea.Batch(cmds...)
+	}
 	state.MainRun.Active = false
 	state.Busy = false
 	state.Status = "cancelled"

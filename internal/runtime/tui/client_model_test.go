@@ -51,6 +51,8 @@ type stubOperatorClient struct {
 	approvedAlwaysShellID          string
 	deniedShellID                  string
 	deniedAlwaysShellID            string
+	killedShellID                  string
+	killShellResult                *daemon.SessionSnapshot
 	workspaceOpenCalls             []string
 	workspaceInputCalls            []workspaceInputCall
 	workspacePTYSnapshotCalls      []string
@@ -224,8 +226,12 @@ func (c *stubOperatorClient) DenyShellAlways(_ context.Context, approvalID strin
 	return ShellActionResult{Session: c.snapshot}, nil
 }
 
-func (c *stubOperatorClient) KillShell(context.Context, string) (ShellActionResult, error) {
-	return ShellActionResult{}, nil
+func (c *stubOperatorClient) KillShell(_ context.Context, commandID string) (ShellActionResult, error) {
+	c.killedShellID = commandID
+	if c.killShellResult != nil {
+		return ShellActionResult{Session: *c.killShellResult}, nil
+	}
+	return ShellActionResult{Session: c.snapshot}, nil
 }
 
 func (c *stubOperatorClient) WorkspacePTYOpen(_ context.Context, sessionID string, cols, rows int) (WorkspacePTYResult, error) {
@@ -1823,6 +1829,159 @@ func TestRunCompletedEventDoesNotForceEndTurnWhileSnapshotStillActive(t *testing
 	}
 	if state.Status != "waiting_shell" {
 		t.Fatalf("state.Status = %q, want waiting_shell", state.Status)
+	}
+}
+
+func TestClockTickReloadsSnapshotWhileWaitingShell(t *testing.T) {
+	ws := make(chan daemon.WebsocketEnvelope)
+	close(ws)
+	now := time.Date(2026, 4, 18, 17, 0, 0, 0, time.UTC)
+	client := &stubOperatorClient{
+		sessions: []SessionSummary{{SessionID: "session-1", CreatedAt: now, LastActivity: now, MessageCount: 0}},
+		snapshot: daemon.SessionSnapshot{
+			SessionID: "session-1",
+			MainRun: daemon.MainRunSnapshot{
+				Active:    true,
+				Phase:     "waiting_shell",
+				StartedAt: now.Add(-30 * time.Second),
+			},
+			RunningCommands: []projections.ShellCommandView{{
+				CommandID:  "cmd-1",
+				OccurredAt: now,
+				Command:    "ansible-playbook",
+				Status:     "running",
+			}},
+			Prompt: daemon.SessionPromptSnapshot{Default: "default prompt", Effective: "default prompt"},
+		},
+		ws: ws,
+	}
+
+	m, err := newModelWithClient(context.Background(), client, "")
+	if err != nil {
+		t.Fatalf("newModelWithClient returned error: %v", err)
+	}
+	state := m.currentSessionState()
+	m.syncRunStateFromSnapshot(state, false)
+	client.snapshot = daemon.SessionSnapshot{
+		SessionID: "session-1",
+		MainRun: daemon.MainRunSnapshot{
+			Active: false,
+			Phase:  "completed",
+		},
+		Prompt: daemon.SessionPromptSnapshot{Default: "default prompt", Effective: "default prompt"},
+	}
+
+	modelAfter, cmd := (&m).Update(clockTickMsg(now.Add(time.Second)))
+	if cmd == nil {
+		t.Fatal("clock tick returned nil cmd, want reload while waiting_shell")
+	}
+	msg := cmd()
+	batch, ok := msg.(tea.BatchMsg)
+	if !ok {
+		t.Fatalf("clock tick cmd returned %T, want tea.BatchMsg", msg)
+	}
+	var reloadMsg sessionSnapshotReloadedMsg
+	found := false
+	for _, next := range batch {
+		if next == nil {
+			continue
+		}
+		if msg, ok := next().(sessionSnapshotReloadedMsg); ok {
+			reloadMsg = msg
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatal("clock tick batch missing session snapshot reload")
+	}
+	modelAfter, _ = modelAfter.(*model).Update(reloadMsg)
+	mm := modelAfter.(*model)
+	state = mm.currentSessionState()
+	if state.MainRun.Active {
+		t.Fatal("state.MainRun.Active = true, want false after waiting_shell reload")
+	}
+	if state.Status != "idle" {
+		t.Fatalf("state.Status = %q, want idle after waiting_shell reload", state.Status)
+	}
+}
+
+func TestCtrlXCancelsWaitingShellByKillingRunningCommands(t *testing.T) {
+	ws := make(chan daemon.WebsocketEnvelope)
+	close(ws)
+	now := time.Date(2026, 4, 18, 17, 1, 0, 0, time.UTC)
+	client := &stubOperatorClient{
+		sessions: []SessionSummary{{SessionID: "session-1", CreatedAt: now, LastActivity: now, MessageCount: 0}},
+		snapshot: daemon.SessionSnapshot{
+			SessionID: "session-1",
+			MainRun: daemon.MainRunSnapshot{
+				Active:    true,
+				Phase:     "waiting_shell",
+				StartedAt: now.Add(-45 * time.Second),
+			},
+			RunningCommands: []projections.ShellCommandView{{
+				CommandID:  "cmd-1",
+				OccurredAt: now,
+				Command:    "ansible-playbook",
+				Args:       []string{"site.yml"},
+				Status:     "running",
+			}},
+			Prompt: daemon.SessionPromptSnapshot{Default: "default prompt", Effective: "default prompt"},
+		},
+		killShellResult: &daemon.SessionSnapshot{
+			SessionID: "session-1",
+			MainRun: daemon.MainRunSnapshot{
+				Active:    true,
+				Phase:     "waiting_shell",
+				StartedAt: now.Add(-45 * time.Second),
+			},
+			RunningCommands: []projections.ShellCommandView{{
+				CommandID:  "cmd-1",
+				OccurredAt: now,
+				Command:    "ansible-playbook",
+				Args:       []string{"site.yml"},
+				Status:     "killing",
+			}},
+			Prompt: daemon.SessionPromptSnapshot{Default: "default prompt", Effective: "default prompt"},
+		},
+		ws: ws,
+	}
+
+	m, err := newModelWithClient(context.Background(), client, "")
+	if err != nil {
+		t.Fatalf("newModelWithClient returned error: %v", err)
+	}
+	state := m.currentSessionState()
+	m.syncRunStateFromSnapshot(state, false)
+
+	modelAfter, cmd := (&m).Update(tea.KeyMsg{Type: tea.KeyCtrlX})
+	if cmd == nil {
+		t.Fatal("ctrl+x returned nil cmd, want shell kill")
+	}
+	msg := cmd()
+	batch, ok := msg.(tea.BatchMsg)
+	if !ok {
+		t.Fatalf("ctrl+x cmd returned %T, want tea.BatchMsg", msg)
+	}
+	for _, next := range batch {
+		if next == nil {
+			continue
+		}
+		if killMsg, ok := next().(shellActionFinishedMsg); ok {
+			modelAfter, _ = modelAfter.(*model).Update(killMsg)
+			break
+		}
+	}
+	mm := modelAfter.(*model)
+	if client.killedShellID != "cmd-1" {
+		t.Fatalf("killedShellID = %q, want cmd-1", client.killedShellID)
+	}
+	state = mm.currentSessionState()
+	if !state.MainRun.Active {
+		t.Fatal("state.MainRun.Active = false, want true until kill settles")
+	}
+	if state.Status != "waiting_shell" {
+		t.Fatalf("state.Status = %q, want waiting_shell while kill settles", state.Status)
 	}
 }
 

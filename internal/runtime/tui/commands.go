@@ -95,6 +95,18 @@ func runShellActionCmd(ctx context.Context, client OperatorClient, sessionID, ap
 	}
 }
 
+func runKillShellCmd(ctx context.Context, client OperatorClient, sessionID, commandID string) tea.Cmd {
+	return func() tea.Msg {
+		result, err := client.KillShell(ctx, commandID)
+		return shellActionFinishedMsg{
+			SessionID: sessionID,
+			Result:    result,
+			Status:    "shell command kill requested",
+			Err:       err,
+		}
+	}
+}
+
 func reloadSessionSnapshotCmd(ctx context.Context, client OperatorClient, sessionID string) tea.Cmd {
 	return func() tea.Msg {
 		session, err := client.GetSession(ctx, sessionID)

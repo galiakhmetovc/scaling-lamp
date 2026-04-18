@@ -1766,7 +1766,22 @@ func TestToolsViewCanKillRunningShellCommand(t *testing.T) {
 	if got := mm.View(); !strings.Contains(got, "Running Shell Commands") || !strings.Contains(got, "sleep") {
 		t.Fatalf("tools view missing running command: %q", got)
 	}
-	modelAfter, _ = mm.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("k")})
+	modelAfter, cmd := mm.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("k")})
+	if cmd == nil {
+		t.Fatal("kill command returned nil cmd")
+	}
+	msg := cmd()
+	if batch, ok := msg.(tea.BatchMsg); ok {
+		for _, next := range batch {
+			if next == nil {
+				continue
+			}
+			if killMsg, ok := next().(shellActionFinishedMsg); ok {
+				modelAfter, _ = modelAfter.(*model).Update(killMsg)
+				break
+			}
+		}
+	}
 	mm = modelAfter.(*model)
 	if !strings.Contains(mm.statusMessage, "kill requested") {
 		t.Fatalf("statusMessage = %q, want kill requested", mm.statusMessage)

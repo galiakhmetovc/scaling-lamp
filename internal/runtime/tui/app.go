@@ -212,6 +212,9 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if state := m.activeWorkspaceTerminalState(); state != nil {
 			cmds = append(cmds, workspacePTYSnapshotCmd(m.ctx, m.client, state.SessionID))
 		}
+		if state := m.currentSessionState(); state != nil && strings.TrimSpace(state.Snapshot.MainRun.Phase) == "waiting_shell" {
+			cmds = append(cmds, reloadSessionSnapshotCmd(m.ctx, m.client, state.SessionID))
+		}
 		if m.shouldTickClock() {
 			cmds = append(cmds, tickClockCmd())
 		}
