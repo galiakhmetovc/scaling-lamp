@@ -84,9 +84,11 @@ func (m *model) renderWorkspaceNavigator(state *sessionState) string {
 	lines = append(lines, workspaceNavigatorLine("Files", mode == workspaceModeFiles))
 	lines = append(lines, workspaceNavigatorLine("Editor", mode == workspaceModeEditor))
 	lines = append(lines, workspaceNavigatorLine("Artifacts", mode == workspaceModeArtifacts))
-	lines = append(lines, "", "1 = Terminal", "2 = Files", "4 = Artifacts", "F5 toggle workspace")
+	lines = append(lines, "", "1 = Terminal", "2 = Files", "3 = Editor", "4 = Artifacts", "F5 toggle workspace")
 	if mode == workspaceModeFiles {
 		lines = append(lines, "Enter expand selected dir")
+	} else if mode == workspaceModeEditor {
+		lines = append(lines, "Type to edit, Ctrl+S save")
 	} else if mode == workspaceModeArtifacts {
 		lines = append(lines, "Enter open selected artifact")
 	} else {

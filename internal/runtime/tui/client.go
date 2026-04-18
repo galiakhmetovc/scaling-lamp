@@ -87,6 +87,9 @@ type OperatorClient interface {
 	WorkspacePTYInput(context.Context, string, string) error
 	WorkspacePTYSnapshot(context.Context, string) (WorkspacePTYResult, error)
 	WorkspacePTYResize(context.Context, string, int, int) (WorkspacePTYResult, error)
+	WorkspaceEditorOpen(context.Context, string, string) (workspace.EditorBuffer, error)
+	WorkspaceEditorUpdate(context.Context, string, string, string) (workspace.EditorBuffer, error)
+	WorkspaceEditorSave(context.Context, string, string) (workspace.EditorBuffer, error)
 	WorkspaceFilesSnapshot(context.Context, string) (workspace.FileTreeSnapshot, error)
 	WorkspaceFilesExpand(context.Context, string, string) (workspace.FileTreeSnapshot, error)
 	WorkspaceArtifactsSnapshot(context.Context, string) (workspace.ArtifactSnapshot, error)
@@ -104,9 +107,10 @@ type OperatorClient interface {
 }
 
 type localClient struct {
-	agent          *runtime.Agent
-	workspacePTY   *workspace.WorkspacePTYManager
-	workspaceFiles *workspace.WorkspaceFilesManager
+	agent              *runtime.Agent
+	workspacePTY       *workspace.WorkspacePTYManager
+	workspaceFiles     *workspace.WorkspaceFilesManager
+	workspaceEditor    *workspace.WorkspaceEditorManager
 	workspaceArtifacts *workspace.WorkspaceArtifactsManager
 }
 
@@ -115,11 +119,12 @@ func newLocalClient(agent *runtime.Agent) OperatorClient {
 		agent:              agent,
 		workspacePTY:       workspace.NewWorkspacePTYManager(),
 		workspaceFiles:     newLocalWorkspaceFilesManager(agent),
+		workspaceEditor:    newLocalWorkspaceEditorManager(agent),
 		workspaceArtifacts: newLocalWorkspaceArtifactsManager(agent),
 	}
 }
 
-func newLocalWorkspaceFilesManager(agent *runtime.Agent) *workspace.WorkspaceFilesManager {
+func localWorkspaceRoot(agent *runtime.Agent) string {
 	root := "."
 	if agent != nil {
 		root = strings.TrimSpace(agent.Contracts.FilesystemExecution.Scope.Params.RootPath)
@@ -127,7 +132,19 @@ func newLocalWorkspaceFilesManager(agent *runtime.Agent) *workspace.WorkspaceFil
 			root = "."
 		}
 	}
-	mgr, err := workspace.NewWorkspaceFilesManager(root)
+	return root
+}
+
+func newLocalWorkspaceFilesManager(agent *runtime.Agent) *workspace.WorkspaceFilesManager {
+	mgr, err := workspace.NewWorkspaceFilesManager(localWorkspaceRoot(agent))
+	if err != nil {
+		return nil
+	}
+	return mgr
+}
+
+func newLocalWorkspaceEditorManager(agent *runtime.Agent) *workspace.WorkspaceEditorManager {
+	mgr, err := workspace.NewWorkspaceEditorManager(localWorkspaceRoot(agent))
 	if err != nil {
 		return nil
 	}
@@ -432,6 +449,27 @@ func (c *localClient) WorkspacePTYResize(_ context.Context, ptyID string, cols, 
 		}
 	}
 	return WorkspacePTYResult{}, fmt.Errorf("workspace pty %q not found", ptyID)
+}
+
+func (c *localClient) WorkspaceEditorOpen(_ context.Context, sessionID, relPath string) (workspace.EditorBuffer, error) {
+	if c.workspaceEditor == nil {
+		return workspace.EditorBuffer{}, fmt.Errorf("workspace editor manager not available")
+	}
+	return c.workspaceEditor.Open(sessionID, relPath)
+}
+
+func (c *localClient) WorkspaceEditorUpdate(_ context.Context, sessionID, relPath, content string) (workspace.EditorBuffer, error) {
+	if c.workspaceEditor == nil {
+		return workspace.EditorBuffer{}, fmt.Errorf("workspace editor manager not available")
+	}
+	return c.workspaceEditor.Update(sessionID, relPath, content)
+}
+
+func (c *localClient) WorkspaceEditorSave(_ context.Context, sessionID, relPath string) (workspace.EditorBuffer, error) {
+	if c.workspaceEditor == nil {
+		return workspace.EditorBuffer{}, fmt.Errorf("workspace editor manager not available")
+	}
+	return c.workspaceEditor.Save(sessionID, relPath)
 }
 
 func (c *localClient) WorkspaceFilesSnapshot(_ context.Context, sessionID string) (workspace.FileTreeSnapshot, error) {
@@ -835,6 +873,15 @@ func (c *daemonClient) WorkspacePTYResize(ctx context.Context, ptyID string, col
 	}
 	err := c.command(ctx, daemon.CommandRequest{Type: "command", ID: "cmd-workspace-pty-resize", Command: "workspace.pty.resize", Payload: map[string]any{"pty_id": ptyID, "cols": cols, "rows": rows}}, &result)
 	return WorkspacePTYResult(result), err
+}
+func (c *daemonClient) WorkspaceEditorOpen(context.Context, string, string) (workspace.EditorBuffer, error) {
+	return workspace.EditorBuffer{}, fmt.Errorf("workspace editor is not supported by daemon client")
+}
+func (c *daemonClient) WorkspaceEditorUpdate(context.Context, string, string, string) (workspace.EditorBuffer, error) {
+	return workspace.EditorBuffer{}, fmt.Errorf("workspace editor is not supported by daemon client")
+}
+func (c *daemonClient) WorkspaceEditorSave(context.Context, string, string) (workspace.EditorBuffer, error) {
+	return workspace.EditorBuffer{}, fmt.Errorf("workspace editor is not supported by daemon client")
 }
 func (c *daemonClient) WorkspaceFilesSnapshot(context.Context, string) (workspace.FileTreeSnapshot, error) {
 	return workspace.FileTreeSnapshot{}, fmt.Errorf("workspace files are not supported by daemon client")

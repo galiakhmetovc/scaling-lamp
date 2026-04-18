@@ -26,38 +26,42 @@ import (
 )
 
 type stubOperatorClient struct {
-	bootstrap                  daemon.BootstrapPayload
-	sessions                   []SessionSummary
-	snapshot                   daemon.SessionSnapshot
-	approveShellResult         *daemon.SessionSnapshot
-	approveAlwaysResult        *daemon.SessionSnapshot
-	denyShellResult            *daemon.SessionSnapshot
-	denyAlwaysResult           *daemon.SessionSnapshot
-	settings                   daemon.SettingsSnapshot
-	ws                         <-chan daemon.WebsocketEnvelope
-	history                    SessionHistoryChunk
-	historyCalls               int
-	createCalls                int
-	renamedTo                  string
-	deletedSessionID           string
-	savedPrompt                string
-	resetPromptSessionID       string
-	sentChatSessionID          string
-	sentChatPrompt             string
-	approvedShellID            string
-	approvedAlwaysShellID      string
-	deniedShellID              string
-	deniedAlwaysShellID        string
-	workspaceOpenCalls         []string
-	workspaceInputCalls        []workspaceInputCall
-	workspaceResizeCalls       []workspaceResizeCall
-	workspaceSnapshots         map[string]workspace.PTYSnapshot
-	workspaceFileSnapshots     map[string]workspace.FileTreeSnapshot
-	workspaceFileSnapshotCalls []string
-	workspaceFileExpandCalls   []workspaceFileExpandCall
-	workspaceArtifactSnapshots map[string]workspace.ArtifactSnapshot
+	bootstrap                      daemon.BootstrapPayload
+	sessions                       []SessionSummary
+	snapshot                       daemon.SessionSnapshot
+	approveShellResult             *daemon.SessionSnapshot
+	approveAlwaysResult            *daemon.SessionSnapshot
+	denyShellResult                *daemon.SessionSnapshot
+	denyAlwaysResult               *daemon.SessionSnapshot
+	settings                       daemon.SettingsSnapshot
+	ws                             <-chan daemon.WebsocketEnvelope
+	history                        SessionHistoryChunk
+	historyCalls                   int
+	createCalls                    int
+	renamedTo                      string
+	deletedSessionID               string
+	savedPrompt                    string
+	resetPromptSessionID           string
+	sentChatSessionID              string
+	sentChatPrompt                 string
+	approvedShellID                string
+	approvedAlwaysShellID          string
+	deniedShellID                  string
+	deniedAlwaysShellID            string
+	workspaceOpenCalls             []string
+	workspaceInputCalls            []workspaceInputCall
+	workspaceResizeCalls           []workspaceResizeCall
+	workspaceSnapshots             map[string]workspace.PTYSnapshot
+	workspaceFileSnapshots         map[string]workspace.FileTreeSnapshot
+	workspaceFileSnapshotCalls     []string
+	workspaceFileExpandCalls       []workspaceFileExpandCall
+	workspaceEditorSnapshots       map[string]workspace.EditorBuffer
+	workspaceEditorOpenCalls       []workspaceEditorOpenCall
+	workspaceEditorUpdateCalls     []workspaceEditorUpdateCall
+	workspaceEditorSaveCalls       []workspaceEditorSaveCall
+	workspaceArtifactSnapshots     map[string]workspace.ArtifactSnapshot
 	workspaceArtifactSnapshotCalls []string
-	workspaceArtifactOpenCalls []workspaceArtifactOpenCall
+	workspaceArtifactOpenCalls     []workspaceArtifactOpenCall
 }
 
 type workspaceInputCall struct {
@@ -72,6 +76,22 @@ type workspaceResizeCall struct {
 }
 
 type workspaceFileExpandCall struct {
+	SessionID string
+	RelPath   string
+}
+
+type workspaceEditorOpenCall struct {
+	SessionID string
+	RelPath   string
+}
+
+type workspaceEditorUpdateCall struct {
+	SessionID string
+	RelPath   string
+	Content   string
+}
+
+type workspaceEditorSaveCall struct {
 	SessionID string
 	RelPath   string
 }
@@ -244,6 +264,46 @@ func (c *stubOperatorClient) WorkspacePTYResize(_ context.Context, ptyID string,
 		}
 	}
 	return WorkspacePTYResult{}, nil
+}
+
+func (c *stubOperatorClient) WorkspaceEditorOpen(_ context.Context, sessionID, relPath string) (workspace.EditorBuffer, error) {
+	c.workspaceEditorOpenCalls = append(c.workspaceEditorOpenCalls, workspaceEditorOpenCall{SessionID: sessionID, RelPath: relPath})
+	if c.workspaceEditorSnapshots == nil {
+		c.workspaceEditorSnapshots = map[string]workspace.EditorBuffer{}
+	}
+	key := sessionID + "\x00" + relPath
+	buf, ok := c.workspaceEditorSnapshots[key]
+	if !ok {
+		buf = workspace.EditorBuffer{SessionID: sessionID, Path: relPath, Content: "hello\n"}
+		c.workspaceEditorSnapshots[key] = buf
+	}
+	return buf, nil
+}
+
+func (c *stubOperatorClient) WorkspaceEditorUpdate(_ context.Context, sessionID, relPath, content string) (workspace.EditorBuffer, error) {
+	c.workspaceEditorUpdateCalls = append(c.workspaceEditorUpdateCalls, workspaceEditorUpdateCall{SessionID: sessionID, RelPath: relPath, Content: content})
+	if c.workspaceEditorSnapshots == nil {
+		c.workspaceEditorSnapshots = map[string]workspace.EditorBuffer{}
+	}
+	key := sessionID + "\x00" + relPath
+	buf := workspace.EditorBuffer{SessionID: sessionID, Path: relPath, Content: content, Dirty: true}
+	c.workspaceEditorSnapshots[key] = buf
+	return buf, nil
+}
+
+func (c *stubOperatorClient) WorkspaceEditorSave(_ context.Context, sessionID, relPath string) (workspace.EditorBuffer, error) {
+	c.workspaceEditorSaveCalls = append(c.workspaceEditorSaveCalls, workspaceEditorSaveCall{SessionID: sessionID, RelPath: relPath})
+	if c.workspaceEditorSnapshots == nil {
+		c.workspaceEditorSnapshots = map[string]workspace.EditorBuffer{}
+	}
+	key := sessionID + "\x00" + relPath
+	buf, ok := c.workspaceEditorSnapshots[key]
+	if !ok {
+		buf = workspace.EditorBuffer{SessionID: sessionID, Path: relPath}
+	}
+	buf.Dirty = false
+	c.workspaceEditorSnapshots[key] = buf
+	return buf, nil
 }
 
 func (c *stubOperatorClient) WorkspaceFilesSnapshot(_ context.Context, sessionID string) (workspace.FileTreeSnapshot, error) {

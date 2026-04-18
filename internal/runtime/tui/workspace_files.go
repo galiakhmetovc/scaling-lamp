@@ -53,10 +53,16 @@ func (m *model) updateWorkspaceFiles(state *sessionState, msg tea.KeyMsg) (tea.M
 		}
 	case "enter":
 		node, ok := state.workspaceFilesSelectedNode()
-		if !ok || !node.IsDir {
+		if !ok {
 			return m, nil
 		}
-		return m, workspaceFilesExpandCmd(m.ctx, m.client, state.SessionID, node.Path)
+		if node.IsDir {
+			return m, workspaceFilesExpandCmd(m.ctx, m.client, state.SessionID, node.Path)
+		}
+		state.Workspace.Mode = workspaceModeEditor
+		state.Workspace.PendingFilesPath = ""
+		state.Workspace.PendingEditorPath = node.Path
+		return m, workspaceEditorOpenCmd(m.ctx, m.client, state.SessionID, node.Path)
 	case "1":
 		state.Workspace.Mode = workspaceModeTerminal
 		if cmd := m.ensureWorkspacePTY(state); cmd != nil {

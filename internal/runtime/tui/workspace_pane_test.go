@@ -228,9 +228,9 @@ func TestWorkspaceJumpFromToolLogOpensArtifacts(t *testing.T) {
 			Name:       "fs_read_text",
 			Arguments: map[string]any{
 				"path":         "go.mod",
-				"artifact_ref":  "artifact://1",
-				"command_id":    "cmd-123",
-				"irrelevant":    "value",
+				"artifact_ref": "artifact://1",
+				"command_id":   "cmd-123",
+				"irrelevant":   "value",
 			},
 			ResultText: `{"artifact_ref":"artifact://1"}`,
 		},
@@ -263,7 +263,7 @@ func TestWorkspaceJumpFromToolLogOpensFiles(t *testing.T) {
 			Phase:      runtime.ToolActivityPhaseCompleted,
 			OccurredAt: time.Date(2026, 4, 15, 11, 5, 0, 0, time.UTC),
 			Name:       "fs_read_text",
-			Arguments: map[string]any{"path": "go.mod"},
+			Arguments:  map[string]any{"path": "go.mod"},
 		},
 	}}
 	m.tab = tabTools
@@ -323,7 +323,7 @@ func TestWorkspaceJumpFromChatOpensArtifacts(t *testing.T) {
 			OccurredAt: time.Date(2026, 4, 15, 11, 15, 0, 0, time.UTC),
 			Name:       "fs_read_text",
 			Arguments: map[string]any{
-				"path":        "go.mod",
+				"path":         "go.mod",
 				"artifact_ref": "artifact://2",
 			},
 			ResultText: `{"artifact_ref":"artifact://2"}`,
@@ -345,6 +345,87 @@ func TestWorkspaceJumpFromChatOpensArtifacts(t *testing.T) {
 	}
 	if got := client.workspaceArtifactOpenCalls[0]; got.SessionID != "session-1" || got.Ref != "artifact://2" {
 		t.Fatalf("workspace artifact open call = %#v, want session-1 artifact://2", got)
+	}
+}
+
+func TestWorkspaceFilesEnterOnFileOpensEditor(t *testing.T) {
+	m, client := newWorkspaceTerminalTestModel(t)
+	m = runWorkspaceTerminalStep(t, m, tea.KeyMsg{Type: tea.KeyF5})
+	m = runWorkspaceTerminalStep(t, m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'2'}})
+	state := m.currentSessionState()
+	state.Workspace.Files.Cursor = 1
+
+	m = runWorkspaceTerminalStep(t, m, tea.KeyMsg{Type: tea.KeyEnter})
+
+	if state.Workspace.Mode != workspaceModeEditor {
+		t.Fatalf("workspace mode = %v, want editor", state.Workspace.Mode)
+	}
+	if len(client.workspaceEditorOpenCalls) != 1 {
+		t.Fatalf("workspace editor open calls = %#v, want 1", client.workspaceEditorOpenCalls)
+	}
+	if got := client.workspaceEditorOpenCalls[0]; got.SessionID != "session-1" || got.RelPath != "go.mod" {
+		t.Fatalf("workspace editor open call = %#v, want session-1 go.mod", got)
+	}
+}
+
+func TestWorkspaceEditorTypingChangesBuffer(t *testing.T) {
+	m, client := newWorkspaceTerminalTestModel(t)
+	m = runWorkspaceTerminalStep(t, m, tea.KeyMsg{Type: tea.KeyF5})
+	m = runWorkspaceTerminalStep(t, m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'2'}})
+	state := m.currentSessionState()
+	state.Workspace.Files.Cursor = 1
+	m = runWorkspaceTerminalStep(t, m, tea.KeyMsg{Type: tea.KeyEnter})
+
+	m = runWorkspaceTerminalStep(t, m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'x'}})
+
+	if len(client.workspaceEditorUpdateCalls) != 1 {
+		t.Fatalf("workspace editor update calls = %#v, want 1", client.workspaceEditorUpdateCalls)
+	}
+	if got := state.Workspace.Editor.Buffer.Content; !strings.Contains(got, "x") {
+		t.Fatalf("editor buffer content = %q, want typed x", got)
+	}
+	if !state.Workspace.Editor.Buffer.Dirty {
+		t.Fatal("editor buffer dirty = false, want true")
+	}
+}
+
+func TestWorkspaceEditorCtrlSSaves(t *testing.T) {
+	m, client := newWorkspaceTerminalTestModel(t)
+	m = runWorkspaceTerminalStep(t, m, tea.KeyMsg{Type: tea.KeyF5})
+	m = runWorkspaceTerminalStep(t, m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'2'}})
+	state := m.currentSessionState()
+	state.Workspace.Files.Cursor = 1
+	m = runWorkspaceTerminalStep(t, m, tea.KeyMsg{Type: tea.KeyEnter})
+	m = runWorkspaceTerminalStep(t, m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'x'}})
+
+	m = runWorkspaceTerminalStep(t, m, tea.KeyMsg{Type: tea.KeyCtrlS})
+
+	if len(client.workspaceEditorSaveCalls) != 1 {
+		t.Fatalf("workspace editor save calls = %#v, want 1", client.workspaceEditorSaveCalls)
+	}
+	if state.Workspace.Editor.Buffer.Dirty {
+		t.Fatal("editor buffer dirty = true, want false")
+	}
+}
+
+func TestWorkspaceEditorStatusShowsPathAndDirtyState(t *testing.T) {
+	m, _ := newWorkspaceTerminalTestModel(t)
+	m = runWorkspaceTerminalStep(t, m, tea.KeyMsg{Type: tea.KeyF5})
+	m = runWorkspaceTerminalStep(t, m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'2'}})
+	state := m.currentSessionState()
+	state.Workspace.Files.Cursor = 1
+	m = runWorkspaceTerminalStep(t, m, tea.KeyMsg{Type: tea.KeyEnter})
+	m = runWorkspaceTerminalStep(t, m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'x'}})
+
+	got := m.View()
+	if !strings.Contains(got, "Editor") {
+		t.Fatalf("workspace view missing editor mode: %q", got)
+	}
+	if !strings.Contains(got, "go.mod") {
+		t.Fatalf("workspace view missing file path: %q", got)
+	}
+	if !strings.Contains(strings.ToLower(got), "dirty") {
+		t.Fatalf("workspace view missing dirty state: %q", got)
 	}
 }
 

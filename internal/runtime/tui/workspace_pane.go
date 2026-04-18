@@ -13,6 +13,11 @@ func (m *model) updateWorkspace(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if cmd := m.ensureWorkspaceFiles(state); cmd != nil {
 			return m, cmd
 		}
+	case "3":
+		state.Workspace.Mode = workspaceModeEditor
+		if cmd := m.ensureWorkspaceEditor(state); cmd != nil {
+			return m, cmd
+		}
 	case "4":
 		state.Workspace.Mode = workspaceModeArtifacts
 		if cmd := m.ensureWorkspaceArtifacts(state); cmd != nil {
@@ -22,6 +27,8 @@ func (m *model) updateWorkspace(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch state.Workspace.Mode {
 	case workspaceModeFiles:
 		return m.updateWorkspaceFiles(state, msg)
+	case workspaceModeEditor:
+		return m.updateWorkspaceEditor(state, msg)
 	case workspaceModeArtifacts:
 		return m.updateWorkspaceArtifacts(state, msg)
 	default:
@@ -48,6 +55,8 @@ func (m *model) viewWorkspace() string {
 	switch state.Workspace.Mode {
 	case workspaceModeFiles:
 		return m.workspaceFilesView(state)
+	case workspaceModeEditor:
+		return m.viewWorkspaceEditor(state)
 	case workspaceModeArtifacts:
 		return m.viewWorkspaceArtifacts(state)
 	default:

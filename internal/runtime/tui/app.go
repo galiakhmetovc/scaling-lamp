@@ -104,6 +104,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.resizeChatState(state)
 			state.ToolsView.Width = max(20, m.width-6)
 			state.ToolsView.Height = max(10, m.height-8)
+			m.resizeWorkspaceEditor(state)
 		}
 		m.planView.Width = max(20, m.width-6)
 		m.planView.Height = max(10, m.height-8)
@@ -127,6 +128,9 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					if state.Workspace.Files.Loaded {
 						return m, nil
 					}
+				case workspaceModeEditor:
+					m.resizeWorkspaceEditor(state)
+					return m, nil
 				default:
 					if state.Workspace.Loaded && state.Workspace.PTY.PTYID != "" {
 						return m, workspacePTYSnapshotCmd(m.ctx, m.client, state.SessionID)
@@ -378,6 +382,40 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		state.Workspace.Loaded = true
 		state.Workspace.PTY = msg.Result.PTY
 		state.Workspace.LastSync = m.now()
+		return m, nil
+	case workspaceEditorOpenedMsg:
+		state := m.sessions[msg.SessionID]
+		if state == nil {
+			return m, nil
+		}
+		if msg.Err != nil {
+			m.errMessage = msg.Err.Error()
+			return m, nil
+		}
+		m.applyWorkspaceEditorBuffer(state, msg.Result)
+		return m, nil
+	case workspaceEditorUpdatedMsg:
+		state := m.sessions[msg.SessionID]
+		if state == nil {
+			return m, nil
+		}
+		if msg.Err != nil {
+			m.errMessage = msg.Err.Error()
+			return m, nil
+		}
+		m.applyWorkspaceEditorBuffer(state, msg.Result)
+		return m, nil
+	case workspaceEditorSavedMsg:
+		state := m.sessions[msg.SessionID]
+		if state == nil {
+			return m, nil
+		}
+		if msg.Err != nil {
+			m.errMessage = msg.Err.Error()
+			return m, nil
+		}
+		m.applyWorkspaceEditorBuffer(state, msg.Result)
+		m.statusMessage = "editor saved"
 		return m, nil
 	case workspaceFilesSnapshotMsg:
 		state := m.sessions[msg.SessionID]

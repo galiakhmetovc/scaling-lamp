@@ -152,8 +152,10 @@ type workspaceSessionState struct {
 	Mode              workspaceMode
 	PTY               workspace.PTYSnapshot
 	Files             workspaceFilesState
+	Editor            workspaceEditorState
 	Artifacts         workspaceArtifactsState
 	PendingFilesPath  string
+	PendingEditorPath string
 	Loaded            bool
 	LastSync          time.Time
 }
@@ -163,6 +165,14 @@ type workspaceFilesState struct {
 	Loaded   bool
 	Cursor   int
 	LastSync time.Time
+}
+
+type workspaceEditorState struct {
+	Buffer      workspace.EditorBuffer
+	Editor      textarea.Model
+	Loaded      bool
+	Initialized bool
+	LastSync    time.Time
 }
 
 type workspaceArtifactsState struct {
@@ -316,6 +326,27 @@ type workspacePTYInputMsg struct {
 type workspacePTYRefreshedMsg struct {
 	SessionID string
 	Result    WorkspacePTYResult
+	Err       error
+}
+
+type workspaceEditorOpenedMsg struct {
+	SessionID string
+	Path      string
+	Result    workspace.EditorBuffer
+	Err       error
+}
+
+type workspaceEditorUpdatedMsg struct {
+	SessionID string
+	Path      string
+	Result    workspace.EditorBuffer
+	Err       error
+}
+
+type workspaceEditorSavedMsg struct {
+	SessionID string
+	Path      string
+	Result    workspace.EditorBuffer
 	Err       error
 }
 
