@@ -13,8 +13,20 @@ type sessionRuntimeState struct {
 	queue   []QueuedDraft
 }
 
+type mainRunPhase string
+
+const (
+	mainRunPhaseIdle            mainRunPhase = "idle"
+	mainRunPhaseRunning         mainRunPhase = "running"
+	mainRunPhaseWaitingApproval mainRunPhase = "waiting_approval"
+	mainRunPhaseWaitingShell    mainRunPhase = "waiting_shell"
+	mainRunPhaseCompleted       mainRunPhase = "completed"
+	mainRunPhaseFailed          mainRunPhase = "failed"
+)
+
 type mainRunState struct {
 	Active       bool
+	Phase        mainRunPhase
 	StartedAt    time.Time
 	Provider     string
 	Model        string
@@ -82,7 +94,7 @@ func (s *Server) mainRunActive(sessionID string) bool {
 	s.runtimeMu.RLock()
 	defer s.runtimeMu.RUnlock()
 	state, ok := s.sessionRuntime[sessionID]
-	return ok && state.mainRun.Active
+	return ok && state.mainRun.isActive()
 }
 
 func (s *Server) mainRunSnapshot(sessionID string) MainRunSnapshot {
@@ -96,7 +108,8 @@ func (s *Server) mainRunSnapshot(sessionID string) MainRunSnapshot {
 		}
 	}
 	return MainRunSnapshot{
-		Active:       state.mainRun.Active,
+		Active:       state.mainRun.isActive(),
+		Phase:        string(state.mainRun.effectivePhase()),
 		StartedAt:    state.mainRun.StartedAt,
 		Provider:     state.mainRun.Provider,
 		Model:        state.mainRun.Model,
@@ -153,6 +166,7 @@ func (s *Server) startMainRun(sessionID string) bool {
 		return false
 	}
 	state.mainRun.Active = true
+	state.mainRun.Phase = mainRunPhaseRunning
 	state.mainRun.StartedAt = s.currentAgent().Now().UTC()
 	state.mainRun.Provider = s.providerLabel()
 	state.mainRun.Model = s.currentAgent().Contracts.ProviderRequest.RequestShape.Model.Params.Model
@@ -163,10 +177,19 @@ func (s *Server) startMainRun(sessionID string) bool {
 }
 
 func (s *Server) finishMainRun(sessionID string, result *providerResultPayload) {
+	s.finishMainRunWithPhase(sessionID, result, mainRunPhaseCompleted)
+}
+
+func (s *Server) failMainRun(sessionID string, result *providerResultPayload) {
+	s.finishMainRunWithPhase(sessionID, result, mainRunPhaseFailed)
+}
+
+func (s *Server) finishMainRunWithPhase(sessionID string, result *providerResultPayload, phase mainRunPhase) {
 	s.runtimeMu.Lock()
 	defer s.runtimeMu.Unlock()
 	state := s.ensureSessionRuntimeLocked(sessionID)
 	state.mainRun.Active = false
+	state.mainRun.Phase = phase
 	if result == nil {
 		return
 	}
@@ -183,20 +206,77 @@ func (s *Server) finishMainRun(sessionID string, result *providerResultPayload) 
 
 func (s *Server) settleMainRunAfterChatTurn(sessionID string, result providerResultPayload, finishReason string) bool {
 	if finishReason == "approval_pending" {
+		s.setMainRunPhase(sessionID, mainRunPhaseWaitingApproval)
 		return true
 	}
-	s.finishMainRun(sessionID, &result)
+	if len(s.currentAgent().CurrentRunningShellCommands(sessionID)) > 0 {
+		s.updateMainRunResult(sessionID, &result)
+		s.setMainRunPhase(sessionID, mainRunPhaseWaitingShell)
+		return true
+	}
+	s.finishMainRunWithPhase(sessionID, &result, mainRunPhaseCompleted)
 	return false
 }
 
 func (s *Server) syncMainRunAfterShellContinuation(agent *runtime.Agent, sessionID string) {
 	if len(agent.PendingShellApprovals(sessionID)) > 0 {
+		s.setMainRunPhase(sessionID, mainRunPhaseWaitingApproval)
+		s.publishDaemon(WebsocketEnvelope{Type: "shell_approval_updated", Payload: map[string]any{"session_id": sessionID}})
+		return
+	}
+	if len(agent.CurrentRunningShellCommands(sessionID)) > 0 {
+		s.setMainRunPhase(sessionID, mainRunPhaseWaitingShell)
 		s.publishDaemon(WebsocketEnvelope{Type: "shell_approval_updated", Payload: map[string]any{"session_id": sessionID}})
 		return
 	}
 	s.finishMainRun(sessionID, nil)
 	s.publishDaemon(WebsocketEnvelope{Type: "shell_approval_updated", Payload: map[string]any{"session_id": sessionID}})
 	s.maybeDispatchQueuedDrafts(sessionID)
+}
+
+func (s *Server) setMainRunPhase(sessionID string, phase mainRunPhase) {
+	s.runtimeMu.Lock()
+	defer s.runtimeMu.Unlock()
+	state := s.ensureSessionRuntimeLocked(sessionID)
+	state.mainRun.Phase = phase
+	state.mainRun.Active = phase == mainRunPhaseRunning || phase == mainRunPhaseWaitingApproval || phase == mainRunPhaseWaitingShell
+}
+
+func (s *Server) updateMainRunResult(sessionID string, result *providerResultPayload) {
+	if result == nil {
+		return
+	}
+	s.runtimeMu.Lock()
+	defer s.runtimeMu.Unlock()
+	state := s.ensureSessionRuntimeLocked(sessionID)
+	if result.Provider != "" {
+		state.mainRun.Provider = result.Provider
+	}
+	if result.Model != "" {
+		state.mainRun.Model = result.Model
+	}
+	state.mainRun.InputTokens = result.InputTokens
+	state.mainRun.OutputTokens = result.OutputTokens
+	state.mainRun.TotalTokens = result.TotalTokens
+}
+
+func (m mainRunState) effectivePhase() mainRunPhase {
+	if m.Phase != "" {
+		return m.Phase
+	}
+	if m.Active {
+		return mainRunPhaseRunning
+	}
+	return mainRunPhaseIdle
+}
+
+func (m mainRunState) isActive() bool {
+	switch m.effectivePhase() {
+	case mainRunPhaseRunning, mainRunPhaseWaitingApproval, mainRunPhaseWaitingShell:
+		return true
+	default:
+		return false
+	}
 }
 
 func (s *Server) popNextQueuedDraft(sessionID string) (QueuedDraft, bool) {
@@ -228,13 +308,13 @@ func (s *Server) dispatchQueuedDraft(ctx context.Context, sessionID string, draf
 	agent := s.currentAgent()
 	session, err := agent.ResumeChatSession(ctx, sessionID)
 	if err != nil {
-		s.finishMainRun(sessionID, nil)
+		s.failMainRun(sessionID, nil)
 		s.publishDaemon(WebsocketEnvelope{Type: "queue_draft_failed", Payload: map[string]any{"session_id": sessionID, "draft": draft}, Error: err.Error()})
 		return
 	}
 	result, err := agent.ChatTurn(ctx, session, runtime.ChatTurnInput{Prompt: draft.Text})
 	if err != nil {
-		s.finishMainRun(sessionID, nil)
+		s.failMainRun(sessionID, nil)
 		s.publishDaemon(WebsocketEnvelope{Type: "queue_draft_failed", Payload: map[string]any{"session_id": sessionID, "draft": draft}, Error: err.Error()})
 		s.maybeDispatchQueuedDrafts(sessionID)
 		return

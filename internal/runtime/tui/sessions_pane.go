@@ -272,6 +272,10 @@ func (m *model) syncRunStateFromSnapshot(state *sessionState, preserveActive boo
 		return
 	}
 	active := state.Snapshot.MainRunActive || state.Snapshot.MainRun.Active
+	phase := strings.TrimSpace(state.Snapshot.MainRun.Phase)
+	if phase == "running" || phase == "waiting_approval" || phase == "waiting_shell" || phase == "resuming" {
+		active = true
+	}
 	if (preserveActive || state.AwaitingRunCompletion) && state.MainRun.Active && !active {
 		active = true
 	}
@@ -296,8 +300,15 @@ func (m *model) syncRunStateFromSnapshot(state *sessionState, preserveActive boo
 	if active {
 		state.MainRun.Active = true
 		state.Busy = true
-		if state.Status == "" || state.Status == "idle" || state.Status == "done" {
-			state.Status = "running"
+		switch phase {
+		case "waiting_approval":
+			state.Status = "approval_pending"
+		case "waiting_shell":
+			state.Status = "waiting_shell"
+		default:
+			if state.Status == "" || state.Status == "idle" || state.Status == "done" || state.Status == "waiting_shell" {
+				state.Status = "running"
+			}
 		}
 		return
 	}
@@ -308,7 +319,7 @@ func (m *model) syncRunStateFromSnapshot(state *sessionState, preserveActive boo
 	state.MainRun.CompletedAt = m.now()
 	state.AwaitingRunCompletion = false
 	state.LastTurnEndedAt = state.MainRun.CompletedAt
-	if state.Status == "" || state.Status == "running" || state.Status == "approval_pending" {
+	if state.Status == "" || state.Status == "running" || state.Status == "approval_pending" || state.Status == "waiting_shell" {
 		state.Status = "idle"
 	}
 }

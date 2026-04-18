@@ -492,7 +492,23 @@ func (m *model) viewChatStatusBar(state *sessionState) string {
 		now = m.now()
 	}
 	runText := "idle"
-	if state.MainRun.Active {
+	switch strings.TrimSpace(state.Snapshot.MainRun.Phase) {
+	case "waiting_shell":
+		runText = "waiting_shell " + formatElapsed(now.Sub(state.MainRun.StartedAt))
+	case "waiting_approval":
+		runText = "waiting_approval " + formatElapsed(now.Sub(state.MainRun.StartedAt))
+	case "running", "resuming":
+		runText = "running " + formatElapsed(now.Sub(state.MainRun.StartedAt))
+	case "":
+		if state.MainRun.Active {
+			runText = "running " + formatElapsed(now.Sub(state.MainRun.StartedAt))
+		}
+	default:
+		if state.MainRun.Active {
+			runText = strings.TrimSpace(state.Snapshot.MainRun.Phase) + " " + formatElapsed(now.Sub(state.MainRun.StartedAt))
+		}
+	}
+	if runText == "idle" && state.MainRun.Active {
 		runText = "running " + formatElapsed(now.Sub(state.MainRun.StartedAt))
 	}
 	runValue := ansiRunIdle(runText)

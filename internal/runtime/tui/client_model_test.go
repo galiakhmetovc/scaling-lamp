@@ -600,6 +600,8 @@ func TestChatPgUpLoadsOlderHistoryWhenAtTop(t *testing.T) {
 	if err != nil {
 		t.Fatalf("newModelWithClient returned error: %v", err)
 	}
+	m.now = func() time.Time { return now }
+	m.clockNow = now
 	state := m.currentSessionState()
 	state.ChatView.SetYOffset(0)
 
@@ -1556,6 +1558,50 @@ func TestChatShowsExplicitEndTurnMarkerAfterRunCompletes(t *testing.T) {
 	got := state.ChatView.View()
 	if !strings.Contains(got, "AGENT END TURN") {
 		t.Fatalf("chat view missing end-turn marker: %q", got)
+	}
+}
+
+func TestWaitingShellSnapshotKeepsRunActiveAndSuppressesEndTurnMarker(t *testing.T) {
+	ws := make(chan daemon.WebsocketEnvelope)
+	close(ws)
+	now := time.Date(2026, 4, 18, 16, 17, 0, 0, time.UTC)
+	client := &stubOperatorClient{
+		sessions: []SessionSummary{{SessionID: "session-1", CreatedAt: now, LastActivity: now, MessageCount: 0}},
+		snapshot: daemon.SessionSnapshot{
+			SessionID:     "session-1",
+			MainRunActive: true,
+			MainRun: daemon.MainRunSnapshot{
+				Active:    true,
+				Phase:     "waiting_shell",
+				StartedAt: now.Add(-2 * time.Minute),
+			},
+			Prompt: daemon.SessionPromptSnapshot{
+				Default:   "default prompt",
+				Effective: "default prompt",
+			},
+		},
+		ws: ws,
+	}
+
+	m, err := newModelWithClient(context.Background(), client, "")
+	if err != nil {
+		t.Fatalf("newModelWithClient returned error: %v", err)
+	}
+	state := m.currentSessionState()
+	m.syncRunStateFromSnapshot(state, false)
+	m.renderChatViewport(state)
+	got := state.ChatView.View()
+	if !state.MainRun.Active {
+		t.Fatal("state.MainRun.Active = false, want true")
+	}
+	if state.Status != "waiting_shell" {
+		t.Fatalf("state.Status = %q, want waiting_shell", state.Status)
+	}
+	if strings.Contains(got, "AGENT END TURN") {
+		t.Fatalf("chat view should not show end-turn marker while waiting on shell: %q", got)
+	}
+	if !strings.Contains(stripANSI(m.viewChatStatusBar(state)), "run: waiting_shell") {
+		t.Fatalf("status bar missing waiting_shell state: %q", m.viewChatStatusBar(state))
 	}
 }
 

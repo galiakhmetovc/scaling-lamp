@@ -76,6 +76,9 @@ func TestSessionSnapshotIncludesMainRunMetadata(t *testing.T) {
 	if !running.MainRunActive || !running.MainRun.Active {
 		t.Fatalf("running main run flags = %+v", running.MainRun)
 	}
+	if running.MainRun.Phase != "running" {
+		t.Fatalf("running main run phase = %q, want running", running.MainRun.Phase)
+	}
 	if running.MainRun.Provider != "provider.example.test" {
 		t.Fatalf("running provider = %q, want provider.example.test", running.MainRun.Provider)
 	}
@@ -101,6 +104,9 @@ func TestSessionSnapshotIncludesMainRunMetadata(t *testing.T) {
 	}
 	if completed.MainRunActive || completed.MainRun.Active {
 		t.Fatalf("completed main run flags = %+v, want inactive", completed.MainRun)
+	}
+	if completed.MainRun.Phase != "completed" {
+		t.Fatalf("completed main run phase = %q, want completed", completed.MainRun.Phase)
 	}
 	if completed.MainRun.InputTokens != 8 || completed.MainRun.OutputTokens != 4 || completed.MainRun.TotalTokens != 12 {
 		t.Fatalf("completed token usage = %+v", completed.MainRun)
@@ -175,6 +181,9 @@ func TestSettleMainRunAfterChatTurnKeepsRunActiveForApprovalPending(t *testing.T
 	if !snapshot.MainRunActive || !snapshot.MainRun.Active {
 		t.Fatalf("main run flags = %+v, want active while approval is pending", snapshot.MainRun)
 	}
+	if snapshot.MainRun.Phase != "waiting_approval" {
+		t.Fatalf("main run phase = %q, want waiting_approval", snapshot.MainRun.Phase)
+	}
 }
 
 func TestSyncMainRunAfterShellContinuationFinishesWhenNoApprovalsRemain(t *testing.T) {
@@ -226,6 +235,98 @@ func TestSyncMainRunAfterShellContinuationFinishesWhenNoApprovalsRemain(t *testi
 	}
 	if snapshot.MainRunActive || snapshot.MainRun.Active {
 		t.Fatalf("main run flags = %+v, want inactive after continuation without more approvals", snapshot.MainRun)
+	}
+	if snapshot.MainRun.Phase != "completed" {
+		t.Fatalf("main run phase = %q, want completed", snapshot.MainRun.Phase)
+	}
+}
+
+func TestSettleMainRunAfterChatTurnKeepsRunActiveForWaitingShell(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 4, 18, 16, 17, 0, 0, time.UTC)
+	agent := &runtime.Agent{
+		Config: config.AgentConfig{ID: "daemon-chat"},
+		Contracts: contracts.ResolvedContracts{
+			ProviderRequest: contracts.ProviderRequestContract{
+				Transport: contracts.TransportContract{
+					ID: "provider_client",
+					Endpoint: contracts.EndpointPolicy{
+						Params: contracts.EndpointParams{BaseURL: "https://provider.example.test"},
+					},
+				},
+				RequestShape: contracts.RequestShapeContract{
+					Model: contracts.ModelPolicy{Params: contracts.ModelParams{Model: "glm-5-turbo"}},
+				},
+			},
+		},
+		EventLog: runtime.NewInMemoryEventLog(),
+		Projections: []projections.Projection{
+			projections.NewSessionProjection(),
+			projections.NewSessionCatalogProjection(),
+			projections.NewTranscriptProjection(),
+			projections.NewChatTimelineProjection(),
+			projections.NewContextBudgetProjection(),
+			projections.NewPlanHeadProjection(),
+			projections.NewShellCommandProjection(),
+			projections.NewDelegateProjection(),
+		},
+		Now:   func() time.Time { return now },
+		NewID: func(prefix string) string { return prefix + "-1" },
+	}
+	server := &Server{
+		agent:          agent,
+		sessionRuntime: map[string]*sessionRuntimeState{},
+		daemonBus:      newDaemonBus(),
+	}
+
+	if err := agent.RecordEvent(context.Background(), eventing.Event{
+		ID:               "evt-session-created",
+		Kind:             eventing.EventSessionCreated,
+		OccurredAt:       now,
+		AggregateID:      "session-1",
+		AggregateType:    eventing.AggregateSession,
+		AggregateVersion: 1,
+		Payload:          map[string]any{"session_id": "session-1"},
+	}); err != nil {
+		t.Fatalf("record session created: %v", err)
+	}
+	if err := agent.RecordEvent(context.Background(), eventing.Event{
+		ID:               "evt-shell-started",
+		Kind:             eventing.EventShellCommandStarted,
+		OccurredAt:       now,
+		AggregateID:      "cmd-1",
+		AggregateType:    eventing.AggregateShellCommand,
+		AggregateVersion: 1,
+		Payload: map[string]any{
+			"session_id": "session-1",
+			"run_id":     "run-chat-1",
+			"command_id": "cmd-1",
+			"command":    "ansible-playbook",
+			"args":       []string{"site.yml"},
+			"cwd":        "/tmp",
+			"status":     "running",
+		},
+	}); err != nil {
+		t.Fatalf("record shell started: %v", err)
+	}
+
+	if !server.startMainRun("session-1") {
+		t.Fatalf("startMainRun returned false, want true")
+	}
+	if !server.settleMainRunAfterChatTurn("session-1", providerResultPayload{Provider: "provider.example.test", Model: "glm-5-turbo"}, "stop") {
+		t.Fatal("settleMainRunAfterChatTurn returned false, want waiting_shell to keep run active")
+	}
+
+	snapshot, err := server.buildSessionSnapshot("session-1")
+	if err != nil {
+		t.Fatalf("build session snapshot: %v", err)
+	}
+	if !snapshot.MainRunActive || !snapshot.MainRun.Active {
+		t.Fatalf("main run flags = %+v, want active while waiting on shell", snapshot.MainRun)
+	}
+	if snapshot.MainRun.Phase != "waiting_shell" {
+		t.Fatalf("main run phase = %q, want waiting_shell", snapshot.MainRun.Phase)
 	}
 }
 

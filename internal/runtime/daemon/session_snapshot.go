@@ -49,6 +49,7 @@ type ChatHistorySnapshot struct {
 
 type MainRunSnapshot struct {
 	Active       bool      `json:"active"`
+	Phase        string    `json:"phase"`
 	StartedAt    time.Time `json:"started_at"`
 	Provider     string    `json:"provider"`
 	Model        string    `json:"model"`

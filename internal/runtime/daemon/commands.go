@@ -664,12 +664,12 @@ func (s *Server) executeChatSend(ctx context.Context, agent *runtime.Agent, sess
 	}
 	session, err := agent.ResumeChatSession(ctx, sessionID)
 	if err != nil {
-		s.finishMainRun(sessionID, nil)
+		s.failMainRun(sessionID, nil)
 		return nil, err
 	}
 	result, err := agent.ChatTurn(ctx, session, runtime.ChatTurnInput{Prompt: prompt})
 	if err != nil {
-		s.finishMainRun(sessionID, nil)
+		s.failMainRun(sessionID, nil)
 		return nil, err
 	}
 	resultPayload := providerResultPayload{
@@ -713,7 +713,7 @@ func (s *Server) optimisticShellApprovalPayload(sessionID, approvalID string) (m
 func (s *Server) approveShellAsync(agent *runtime.Agent, approvalID, sessionID string) {
 	if _, err := agent.ApproveShellCommand(context.Background(), approvalID); err != nil {
 		s.publishDaemon(WebsocketEnvelope{Type: "shell_approval_failed", Payload: map[string]any{"session_id": sessionID}, Error: err.Error()})
-		s.finishMainRun(sessionID, nil)
+		s.failMainRun(sessionID, nil)
 		return
 	}
 	s.syncMainRunAfterShellContinuation(agent, sessionID)
@@ -730,7 +730,7 @@ func (s *Server) approveShellAlwaysAsync(agent *runtime.Agent, approvalID string
 	s.swapAgent(reloaded)
 	if _, err := reloaded.ApproveShellCommand(context.Background(), approvalID); err != nil {
 		s.publishDaemon(WebsocketEnvelope{Type: "shell_approval_failed", Payload: map[string]any{"session_id": view.SessionID}, Error: err.Error()})
-		s.finishMainRun(view.SessionID, nil)
+		s.failMainRun(view.SessionID, nil)
 		return
 	}
 	s.syncMainRunAfterShellContinuation(reloaded, view.SessionID)
@@ -739,7 +739,7 @@ func (s *Server) approveShellAlwaysAsync(agent *runtime.Agent, approvalID string
 func (s *Server) denyShellAsync(agent *runtime.Agent, approvalID, sessionID string) {
 	if err := agent.DenyShellCommand(context.Background(), approvalID); err != nil {
 		s.publishDaemon(WebsocketEnvelope{Type: "shell_approval_failed", Payload: map[string]any{"session_id": sessionID}, Error: err.Error()})
-		s.finishMainRun(sessionID, nil)
+		s.failMainRun(sessionID, nil)
 		return
 	}
 	s.syncMainRunAfterShellContinuation(agent, sessionID)
@@ -756,7 +756,7 @@ func (s *Server) denyShellAlwaysAsync(agent *runtime.Agent, approvalID string, v
 	s.swapAgent(reloaded)
 	if err := reloaded.DenyShellCommand(context.Background(), approvalID); err != nil {
 		s.publishDaemon(WebsocketEnvelope{Type: "shell_approval_failed", Payload: map[string]any{"session_id": view.SessionID}, Error: err.Error()})
-		s.finishMainRun(view.SessionID, nil)
+		s.failMainRun(view.SessionID, nil)
 		return
 	}
 	s.syncMainRunAfterShellContinuation(reloaded, view.SessionID)
