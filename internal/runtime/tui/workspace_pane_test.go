@@ -89,6 +89,17 @@ func TestWorkspaceTerminalForwardsInputToPTYClientMethods(t *testing.T) {
 	}
 }
 
+func TestWorkspaceTerminalRefreshesAfterInput(t *testing.T) {
+	m, _ := newWorkspaceTerminalTestModel(t)
+	m = runWorkspaceTerminalStep(t, m, tea.KeyMsg{Type: tea.KeyF5})
+	m = runWorkspaceTerminalStep(t, m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'x'}})
+
+	got := m.View()
+	if !strings.Contains(got, "typed: x") {
+		t.Fatalf("workspace terminal view missing refreshed PTY output after input: %q", got)
+	}
+}
+
 func TestWorkspaceTerminalSwitchesPTYContextWhenSessionChanges(t *testing.T) {
 	m, client := newWorkspaceTerminalTestModel(t)
 	m = runWorkspaceTerminalStep(t, m, tea.KeyMsg{Type: tea.KeyF5})
@@ -523,25 +534,36 @@ func runWorkspaceTerminalStep(t *testing.T, m model, msg tea.Msg) model {
 	if !ok {
 		t.Fatalf("Update returned %T, want tui.model", next)
 	}
+	return drainWorkspaceCmds(t, *updated, cmd, 0)
+}
+
+func drainWorkspaceCmds(t *testing.T, m model, cmd tea.Cmd, depth int) model {
+	t.Helper()
 	if cmd == nil {
-		return *updated
+		return m
 	}
-	next, cmd = updated.Update(cmd())
-	updated, ok = next.(*model)
+	if depth > 8 {
+		t.Fatalf("workspace command chain exceeded depth: %d", depth)
+	}
+	msg := cmd()
+	if msg == nil {
+		return m
+	}
+	if batch, ok := msg.(tea.BatchMsg); ok {
+		for _, batchCmd := range batch {
+			m = drainWorkspaceCmds(t, m, batchCmd, depth+1)
+		}
+		return m
+	}
+	if _, ok := msg.(clockTickMsg); ok {
+		return m
+	}
+	next, nextCmd := (&m).Update(msg)
+	updated, ok := next.(*model)
 	if !ok {
 		t.Fatalf("command Update returned %T, want tui.model", next)
 	}
-	if cmd != nil {
-		next, cmd = updated.Update(cmd())
-		updated, ok = next.(*model)
-		if !ok {
-			t.Fatalf("second command Update returned %T, want tui.model", next)
-		}
-		if cmd != nil {
-			t.Fatalf("unexpected third workspace command %T", cmd)
-		}
-	}
-	return *updated
+	return drainWorkspaceCmds(t, *updated, nextCmd, depth+1)
 }
 
 func newWorkspaceTerminalTestModel(t *testing.T) (model, *stubOperatorClient) {

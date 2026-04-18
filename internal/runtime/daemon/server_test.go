@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"golang.org/x/net/websocket"
+	"teamd/internal/artifacts"
 	"teamd/internal/runtime"
 	"teamd/internal/runtime/daemon"
 	"teamd/internal/runtime/eventing"
@@ -391,6 +392,82 @@ func TestWorkspacePTYCommandsRoundTripThroughDaemon(t *testing.T) {
 	}
 	if got := openedAgainPTY["rows"]; got != float64(30) {
 		t.Fatalf("reopened rows = %#v, want 30", got)
+	}
+}
+
+func TestWorkspaceArtifactCommandsRoundTripThroughDaemon(t *testing.T) {
+	t.Parallel()
+
+	artifactDir := filepath.Join(t.TempDir(), "artifacts")
+	store, err := artifacts.NewStore(artifactDir)
+	if err != nil {
+		t.Fatalf("new artifact store: %v", err)
+	}
+	record, err := store.Write(context.Background(), "shell_exec", "artifact output\nline 2\n", 64)
+	if err != nil {
+		t.Fatalf("write artifact: %v", err)
+	}
+
+	agent := buildAgentWithOperatorSurface(t)
+	agent.Contracts.Memory.Offload.Enabled = true
+	agent.Contracts.Memory.Offload.Strategy = "artifact_store"
+	agent.Contracts.Memory.Offload.Params.StoragePath = artifactDir
+
+	server, err := daemon.New(agent)
+	if err != nil {
+		t.Fatalf("new daemon server: %v", err)
+	}
+	httpServer := httptest.NewServer(server.Handler())
+	defer httpServer.Close()
+
+	conn := dialWebsocket(t, httpServer.URL, "/ws")
+	defer conn.Close()
+	_ = readEnvelopeJSON(t, conn)
+
+	writeCommandEnvelope(t, conn, map[string]any{
+		"type":    "command",
+		"id":      "cmd-artifacts-snapshot",
+		"command": "workspace.artifacts.snapshot",
+		"payload": map[string]any{
+			"session_id": "session-1",
+		},
+	})
+	_ = readEnvelopeJSON(t, conn)
+	snapshotCompleted := waitForCommandCompleted(t, conn, "cmd-artifacts-snapshot")
+	snapshotPayload := mapPayload(t, snapshotCompleted["payload"])
+	snapshot := mapPayload(t, snapshotPayload["artifacts"])
+	if got := snapshot["session_id"]; got != "session-1" {
+		t.Fatalf("artifacts snapshot session_id = %#v, want session-1", got)
+	}
+	if got := snapshot["selected_ref"]; got != record.Ref {
+		t.Fatalf("artifacts snapshot selected_ref = %#v, want %q", got, record.Ref)
+	}
+	items, _ := snapshot["items"].([]any)
+	if len(items) == 0 {
+		t.Fatalf("artifacts snapshot items = %#v, want non-empty", snapshot["items"])
+	}
+	if got := snapshot["content"]; !strings.Contains(fmt.Sprint(got), "artifact output") {
+		t.Fatalf("artifacts snapshot content = %#v, want artifact output", got)
+	}
+
+	writeCommandEnvelope(t, conn, map[string]any{
+		"type":    "command",
+		"id":      "cmd-artifacts-open",
+		"command": "workspace.artifacts.open",
+		"payload": map[string]any{
+			"session_id":   "session-1",
+			"artifact_ref": record.Ref,
+		},
+	})
+	_ = readEnvelopeJSON(t, conn)
+	openCompleted := waitForCommandCompleted(t, conn, "cmd-artifacts-open")
+	openPayload := mapPayload(t, openCompleted["payload"])
+	opened := mapPayload(t, openPayload["artifacts"])
+	if got := opened["selected_ref"]; got != record.Ref {
+		t.Fatalf("opened artifact selected_ref = %#v, want %q", got, record.Ref)
+	}
+	if got := opened["content"]; !strings.Contains(fmt.Sprint(got), "line 2") {
+		t.Fatalf("opened artifact content = %#v, want full artifact body", got)
 	}
 }
 

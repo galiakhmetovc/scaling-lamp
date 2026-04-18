@@ -67,7 +67,7 @@ func (m *model) updateWorkspaceFiles(state *sessionState, msg tea.KeyMsg) (tea.M
 	case "1":
 		state.Workspace.Mode = workspaceModeTerminal
 		if cmd := m.ensureWorkspacePTY(state); cmd != nil {
-			return m, cmd
+			return m, tea.Batch(cmd, tickClockCmd())
 		}
 	case "s":
 		node, ok := state.workspaceFilesSelectedNode()
@@ -85,7 +85,7 @@ func (m *model) updateWorkspaceFiles(state *sessionState, msg tea.KeyMsg) (tea.M
 		}
 		state.Workspace.PTY.CWD = absPath
 		state.Workspace.Files.CurrentPath = node.Path
-		return m, workspacePTYInputCmd(m.ctx, m.client, state.SessionID, state.Workspace.PTY.PTYID, "cd "+shellQuoteWorkspacePath(absPath)+"\r")
+		return m, tea.Batch(workspacePTYInputCmd(m.ctx, m.client, state.SessionID, state.Workspace.PTY.PTYID, "cd "+shellQuoteWorkspacePath(absPath)+"\r"), tickClockCmd())
 	}
 	return m, nil
 }

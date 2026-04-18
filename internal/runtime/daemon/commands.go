@@ -358,6 +358,134 @@ func (s *Server) executeCommand(ctx context.Context, req CommandRequest) (any, e
 			return nil, fmt.Errorf("workspace pty for session %q not found after reset", sessionID)
 		}
 		return map[string]any{"pty": pty}, nil
+	case "workspace.files.snapshot":
+		sessionID, err := requiredString(req.Payload, "session_id")
+		if err != nil {
+			return nil, err
+		}
+		mgr, err := s.workspaceFilesManager()
+		if err != nil {
+			return nil, err
+		}
+		snapshot, err := mgr.Snapshot(sessionID)
+		if err != nil {
+			return nil, err
+		}
+		return map[string]any{"files": snapshot}, nil
+	case "workspace.files.expand":
+		sessionID, err := requiredString(req.Payload, "session_id")
+		if err != nil {
+			return nil, err
+		}
+		relPath, err := requiredString(req.Payload, "rel_path")
+		if err != nil {
+			return nil, err
+		}
+		mgr, err := s.workspaceFilesManager()
+		if err != nil {
+			return nil, err
+		}
+		snapshot, err := mgr.Expand(sessionID, relPath)
+		if err != nil {
+			return nil, err
+		}
+		return map[string]any{"files": snapshot}, nil
+	case "workspace.editor.open":
+		sessionID, err := requiredString(req.Payload, "session_id")
+		if err != nil {
+			return nil, err
+		}
+		relPath, err := requiredString(req.Payload, "rel_path")
+		if err != nil {
+			return nil, err
+		}
+		mgr, err := s.workspaceEditorManager()
+		if err != nil {
+			return nil, err
+		}
+		buffer, err := mgr.Open(sessionID, relPath)
+		if err != nil {
+			return nil, err
+		}
+		return map[string]any{"buffer": buffer}, nil
+	case "workspace.editor.update":
+		sessionID, err := requiredString(req.Payload, "session_id")
+		if err != nil {
+			return nil, err
+		}
+		relPath, err := requiredString(req.Payload, "rel_path")
+		if err != nil {
+			return nil, err
+		}
+		content, err := requiredString(req.Payload, "content")
+		if err != nil {
+			return nil, err
+		}
+		mgr, err := s.workspaceEditorManager()
+		if err != nil {
+			return nil, err
+		}
+		buffer, err := mgr.Update(sessionID, relPath, content)
+		if err != nil {
+			return nil, err
+		}
+		return map[string]any{"buffer": buffer}, nil
+	case "workspace.editor.save":
+		sessionID, err := requiredString(req.Payload, "session_id")
+		if err != nil {
+			return nil, err
+		}
+		relPath, err := requiredString(req.Payload, "rel_path")
+		if err != nil {
+			return nil, err
+		}
+		mgr, err := s.workspaceEditorManager()
+		if err != nil {
+			return nil, err
+		}
+		buffer, err := mgr.Save(sessionID, relPath)
+		if err != nil {
+			return nil, err
+		}
+		return map[string]any{"buffer": buffer}, nil
+	case "workspace.artifacts.snapshot":
+		sessionID, err := requiredString(req.Payload, "session_id")
+		if err != nil {
+			return nil, err
+		}
+		mgr, err := s.workspaceArtifactsManager()
+		if err != nil {
+			return nil, err
+		}
+		if mgr == nil {
+			return map[string]any{"artifacts": workspace.ArtifactSnapshot{SessionID: sessionID}}, nil
+		}
+		snapshot, err := mgr.Snapshot(sessionID)
+		if err != nil {
+			return nil, err
+		}
+		return map[string]any{"artifacts": snapshot}, nil
+	case "workspace.artifacts.open":
+		sessionID, err := requiredString(req.Payload, "session_id")
+		if err != nil {
+			return nil, err
+		}
+		artifactRef, err := requiredString(req.Payload, "artifact_ref")
+		if err != nil {
+			return nil, err
+		}
+		mgr, err := s.workspaceArtifactsManager()
+		if err != nil {
+			return nil, err
+		}
+		if mgr == nil {
+			return map[string]any{"artifacts": workspace.ArtifactSnapshot{SessionID: sessionID, SelectedRef: artifactRef}}, nil
+		}
+		snapshot, err := mgr.Open(sessionID, artifactRef)
+		if err != nil {
+			return nil, err
+		}
+		return map[string]any{"artifacts": snapshot}, nil
 	case "shell.approve":
 		approvalID, err := requiredString(req.Payload, "approval_id")
 		if err != nil {

@@ -26,15 +26,22 @@ import (
 var embeddedAssets embed.FS
 
 type Server struct {
-	agentMu        sync.RWMutex
-	agent          *runtime.Agent
-	httpServer     *http.Server
-	listenAddr     string
-	runtimeMu      sync.RWMutex
-	sessionRuntime map[string]*sessionRuntimeState
-	workspacePTY   *workspace.WorkspacePTYManager
-	daemonBus      *daemonBus
-	logger         *slog.Logger
+	agentMu                sync.RWMutex
+	agent                  *runtime.Agent
+	httpServer             *http.Server
+	listenAddr             string
+	runtimeMu              sync.RWMutex
+	sessionRuntime         map[string]*sessionRuntimeState
+	workspaceMu            sync.Mutex
+	workspacePTY           *workspace.WorkspacePTYManager
+	workspaceFiles         *workspace.WorkspaceFilesManager
+	workspaceEditor        *workspace.WorkspaceEditorManager
+	workspaceArtifacts     *workspace.WorkspaceArtifactsManager
+	workspaceFilesRoot     string
+	workspaceEditorRoot    string
+	workspaceArtifactsRoot string
+	daemonBus              *daemonBus
+	logger                 *slog.Logger
 }
 
 type BootstrapPayload struct {

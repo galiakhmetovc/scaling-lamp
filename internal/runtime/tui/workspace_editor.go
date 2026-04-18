@@ -106,7 +106,7 @@ func (m *model) updateWorkspaceEditor(state *sessionState, msg tea.KeyMsg) (tea.
 	case "1":
 		state.Workspace.Mode = workspaceModeTerminal
 		if cmd := m.ensureWorkspacePTY(state); cmd != nil {
-			return m, cmd
+			return m, tea.Batch(cmd, tickClockCmd())
 		}
 	case "2":
 		state.Workspace.Mode = workspaceModeFiles

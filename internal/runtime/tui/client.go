@@ -898,26 +898,54 @@ func (c *daemonClient) WorkspacePTYResize(ctx context.Context, ptyID string, col
 	err := c.command(ctx, daemon.CommandRequest{Type: "command", ID: "cmd-workspace-pty-resize", Command: "workspace.pty.resize", Payload: map[string]any{"pty_id": ptyID, "cols": cols, "rows": rows}}, &result)
 	return WorkspacePTYResult(result), err
 }
-func (c *daemonClient) WorkspaceEditorOpen(context.Context, string, string) (workspace.EditorBuffer, error) {
-	return workspace.EditorBuffer{}, fmt.Errorf("workspace editor is not supported by daemon client")
+func (c *daemonClient) WorkspaceEditorOpen(ctx context.Context, sessionID, relPath string) (workspace.EditorBuffer, error) {
+	var result struct {
+		Buffer workspace.EditorBuffer `json:"buffer"`
+	}
+	err := c.command(ctx, daemon.CommandRequest{Type: "command", ID: "cmd-workspace-editor-open", Command: "workspace.editor.open", Payload: map[string]any{"session_id": sessionID, "rel_path": relPath}}, &result)
+	return result.Buffer, err
 }
-func (c *daemonClient) WorkspaceEditorUpdate(context.Context, string, string, string) (workspace.EditorBuffer, error) {
-	return workspace.EditorBuffer{}, fmt.Errorf("workspace editor is not supported by daemon client")
+func (c *daemonClient) WorkspaceEditorUpdate(ctx context.Context, sessionID, relPath, content string) (workspace.EditorBuffer, error) {
+	var result struct {
+		Buffer workspace.EditorBuffer `json:"buffer"`
+	}
+	err := c.command(ctx, daemon.CommandRequest{Type: "command", ID: "cmd-workspace-editor-update", Command: "workspace.editor.update", Payload: map[string]any{"session_id": sessionID, "rel_path": relPath, "content": content}}, &result)
+	return result.Buffer, err
 }
-func (c *daemonClient) WorkspaceEditorSave(context.Context, string, string) (workspace.EditorBuffer, error) {
-	return workspace.EditorBuffer{}, fmt.Errorf("workspace editor is not supported by daemon client")
+func (c *daemonClient) WorkspaceEditorSave(ctx context.Context, sessionID, relPath string) (workspace.EditorBuffer, error) {
+	var result struct {
+		Buffer workspace.EditorBuffer `json:"buffer"`
+	}
+	err := c.command(ctx, daemon.CommandRequest{Type: "command", ID: "cmd-workspace-editor-save", Command: "workspace.editor.save", Payload: map[string]any{"session_id": sessionID, "rel_path": relPath}}, &result)
+	return result.Buffer, err
 }
-func (c *daemonClient) WorkspaceFilesSnapshot(context.Context, string) (workspace.FileTreeSnapshot, error) {
-	return workspace.FileTreeSnapshot{}, fmt.Errorf("workspace files are not supported by daemon client")
+func (c *daemonClient) WorkspaceFilesSnapshot(ctx context.Context, sessionID string) (workspace.FileTreeSnapshot, error) {
+	var result struct {
+		Files workspace.FileTreeSnapshot `json:"files"`
+	}
+	err := c.command(ctx, daemon.CommandRequest{Type: "command", ID: "cmd-workspace-files-snapshot", Command: "workspace.files.snapshot", Payload: map[string]any{"session_id": sessionID}}, &result)
+	return result.Files, err
 }
-func (c *daemonClient) WorkspaceFilesExpand(context.Context, string, string) (workspace.FileTreeSnapshot, error) {
-	return workspace.FileTreeSnapshot{}, fmt.Errorf("workspace files are not supported by daemon client")
+func (c *daemonClient) WorkspaceFilesExpand(ctx context.Context, sessionID, relPath string) (workspace.FileTreeSnapshot, error) {
+	var result struct {
+		Files workspace.FileTreeSnapshot `json:"files"`
+	}
+	err := c.command(ctx, daemon.CommandRequest{Type: "command", ID: "cmd-workspace-files-expand", Command: "workspace.files.expand", Payload: map[string]any{"session_id": sessionID, "rel_path": relPath}}, &result)
+	return result.Files, err
 }
-func (c *daemonClient) WorkspaceArtifactsSnapshot(context.Context, string) (workspace.ArtifactSnapshot, error) {
-	return workspace.ArtifactSnapshot{}, fmt.Errorf("workspace artifacts are not supported by daemon client")
+func (c *daemonClient) WorkspaceArtifactsSnapshot(ctx context.Context, sessionID string) (workspace.ArtifactSnapshot, error) {
+	var result struct {
+		Artifacts workspace.ArtifactSnapshot `json:"artifacts"`
+	}
+	err := c.command(ctx, daemon.CommandRequest{Type: "command", ID: "cmd-workspace-artifacts-snapshot", Command: "workspace.artifacts.snapshot", Payload: map[string]any{"session_id": sessionID}}, &result)
+	return result.Artifacts, err
 }
-func (c *daemonClient) WorkspaceArtifactsOpen(context.Context, string, string) (workspace.ArtifactSnapshot, error) {
-	return workspace.ArtifactSnapshot{}, fmt.Errorf("workspace artifacts are not supported by daemon client")
+func (c *daemonClient) WorkspaceArtifactsOpen(ctx context.Context, sessionID, artifactRef string) (workspace.ArtifactSnapshot, error) {
+	var result struct {
+		Artifacts workspace.ArtifactSnapshot `json:"artifacts"`
+	}
+	err := c.command(ctx, daemon.CommandRequest{Type: "command", ID: "cmd-workspace-artifacts-open", Command: "workspace.artifacts.open", Payload: map[string]any{"session_id": sessionID, "artifact_ref": artifactRef}}, &result)
+	return result.Artifacts, err
 }
 func (c *daemonClient) GetSettings(ctx context.Context) (daemon.SettingsSnapshot, error) {
 	var result struct {

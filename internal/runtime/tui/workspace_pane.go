@@ -34,14 +34,14 @@ func (m *model) updateWorkspace(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	default:
 		if !state.Workspace.Loaded || state.Workspace.PTY.PTYID == "" || state.Workspace.PTY.SessionID != state.SessionID {
 			if cmd := m.ensureWorkspacePTY(state); cmd != nil {
-				return m, cmd
+				return m, tea.Batch(cmd, tickClockCmd())
 			}
 		}
 		if data, ok := workspaceTerminalInput(msg); ok {
-			return m, workspacePTYInputCmd(m.ctx, m.client, state.SessionID, state.Workspace.PTY.PTYID, data)
+			return m, tea.Batch(workspacePTYInputCmd(m.ctx, m.client, state.SessionID, state.Workspace.PTY.PTYID, data), tickClockCmd())
 		}
 		if msg.String() == "ctrl+l" {
-			return m, m.workspaceTerminalShellRefresh(state)
+			return m, tea.Batch(m.workspaceTerminalShellRefresh(state), tickClockCmd())
 		}
 	}
 	return m, nil

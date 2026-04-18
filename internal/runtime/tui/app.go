@@ -204,8 +204,15 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, waitForDaemonEnvelope(m.wsCh)
 	case clockTickMsg:
 		m.clockNow = time.Time(msg)
-		if m.hasActiveRuns() {
-			return m, tickClockCmd()
+		cmds := make([]tea.Cmd, 0, 2)
+		if state := m.activeWorkspaceTerminalState(); state != nil {
+			cmds = append(cmds, workspacePTYSnapshotCmd(m.ctx, m.client, state.SessionID))
+		}
+		if m.shouldTickClock() {
+			cmds = append(cmds, tickClockCmd())
+		}
+		if len(cmds) > 0 {
+			return m, tea.Batch(cmds...)
 		}
 		return m, nil
 	case chatTurnFinishedMsg:

@@ -36,8 +36,11 @@ func workspacePTYOpenCmd(ctx context.Context, client OperatorClient, sessionID s
 
 func workspacePTYInputCmd(ctx context.Context, client OperatorClient, sessionID, ptyID, data string) tea.Cmd {
 	return func() tea.Msg {
-		err := client.WorkspacePTYInput(ctx, ptyID, data)
-		return workspacePTYInputMsg{SessionID: sessionID, Err: err}
+		if err := client.WorkspacePTYInput(ctx, ptyID, data); err != nil {
+			return workspacePTYInputMsg{SessionID: sessionID, Err: err}
+		}
+		result, err := client.WorkspacePTYSnapshot(ctx, sessionID)
+		return workspacePTYRefreshedMsg{SessionID: sessionID, Result: result, Err: err}
 	}
 }
 
@@ -167,4 +170,25 @@ func (m *model) workspaceTerminalView(state *sessionState) string {
 		MaxHeight(m.workspaceTerminalPaneHeight()).
 		Render(clampLines(m.renderWorkspaceTerminalPane(state), m.workspaceTerminalPaneHeight()))
 	return lipgloss.JoinHorizontal(lipgloss.Top, navigator, terminal)
+}
+
+func (m *model) activeWorkspaceTerminalState() *sessionState {
+	if m == nil || m.tab != tabWorkspace {
+		return nil
+	}
+	state := m.currentSessionState()
+	if state == nil || state.Workspace.Mode != workspaceModeTerminal {
+		return nil
+	}
+	if !state.Workspace.Loaded || state.Workspace.PTY.PTYID == "" || state.Workspace.PTY.SessionID != state.SessionID {
+		return nil
+	}
+	return state
+}
+
+func (m *model) shouldTickClock() bool {
+	if m.hasActiveRuns() {
+		return true
+	}
+	return m.activeWorkspaceTerminalState() != nil
 }

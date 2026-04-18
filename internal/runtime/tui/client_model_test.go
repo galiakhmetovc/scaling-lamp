@@ -53,6 +53,7 @@ type stubOperatorClient struct {
 	deniedAlwaysShellID            string
 	workspaceOpenCalls             []string
 	workspaceInputCalls            []workspaceInputCall
+	workspacePTYSnapshotCalls      []string
 	workspaceResizeCalls           []workspaceResizeCall
 	workspaceSnapshots             map[string]workspace.PTYSnapshot
 	workspaceFileSnapshots         map[string]workspace.FileTreeSnapshot
@@ -248,10 +249,27 @@ func (c *stubOperatorClient) WorkspacePTYOpen(_ context.Context, sessionID strin
 
 func (c *stubOperatorClient) WorkspacePTYInput(_ context.Context, ptyID, data string) error {
 	c.workspaceInputCalls = append(c.workspaceInputCalls, workspaceInputCall{PTYID: ptyID, Data: data})
+	for sessionID, snap := range c.workspaceSnapshots {
+		if snap.PTYID != ptyID {
+			continue
+		}
+		text := strings.TrimSpace(data)
+		if text != "" {
+			snap.Scrollback = append(snap.Scrollback, "typed: "+text)
+			if strings.HasPrefix(text, "cd ") {
+				cwd := strings.TrimSpace(strings.TrimPrefix(text, "cd "))
+				cwd = strings.Trim(cwd, "'")
+				snap.CWD = cwd
+			}
+		}
+		c.workspaceSnapshots[sessionID] = snap
+		break
+	}
 	return nil
 }
 
 func (c *stubOperatorClient) WorkspacePTYSnapshot(_ context.Context, sessionID string) (WorkspacePTYResult, error) {
+	c.workspacePTYSnapshotCalls = append(c.workspacePTYSnapshotCalls, sessionID)
 	if c.workspaceSnapshots == nil {
 		c.workspaceSnapshots = map[string]workspace.PTYSnapshot{}
 	}
@@ -1213,7 +1231,7 @@ func TestApprovalPendingEventReloadsSnapshotAndRestoresApprovalMenu(t *testing.T
 	})
 	mm := modelAfter.(*model)
 	client.snapshot = daemon.SessionSnapshot{
-		SessionID: "session-1",
+		SessionID:     "session-1",
 		MainRunActive: true,
 		MainRun: daemon.MainRunSnapshot{
 			Active:    true,
