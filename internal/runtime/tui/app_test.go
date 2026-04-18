@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -20,6 +21,12 @@ import (
 	"teamd/internal/runtime/projections"
 	"teamd/internal/shell"
 )
+
+var chatANSIPattern = regexp.MustCompile(`\x1b\[[0-9;]*m`)
+
+func stripANSI(input string) string {
+	return chatANSIPattern.ReplaceAllString(input, "")
+}
 
 func TestNewModelCreatesSessionAndRendersTopTabs(t *testing.T) {
 	dir := t.TempDir()
@@ -129,8 +136,11 @@ func TestChatViewRendersTimelineEntries(t *testing.T) {
 	if !strings.Contains(got, "Ping") {
 		t.Fatalf("view missing user message: %q", got)
 	}
-	if !strings.Contains(got, "2026-04-14 20:40 USER:") {
+	if !strings.Contains(stripANSI(got), "2026-04-14 20:40 USER:") {
 		t.Fatalf("view missing user timestamp: %q", got)
+	}
+	if !strings.Contains(got, "\x1b[1;38;5;159mUSER:\x1b[0m") {
+		t.Fatalf("view missing colored user label: %q", got)
 	}
 	if !strings.Contains(got, "Task added") {
 		t.Fatalf("view missing plan timeline line: %q", got)
@@ -1143,6 +1153,67 @@ func TestChatViewShowsLiveToolActivity(t *testing.T) {
 	}
 	if strings.Contains(got, "artifact_read") {
 		t.Fatalf("chat view should keep only the latest 3 tool runs: %q", got)
+	}
+}
+
+func TestChatViewRendersPendingPromptBeforeLiveToolsAtBottom(t *testing.T) {
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "agent.yaml")
+	if err := os.WriteFile(configPath, []byte("kind: AgentConfig\nversion: v1\nid: tui-test\nspec:\n  runtime:\n    max_tool_rounds: 7\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile config: %v", err)
+	}
+
+	agent := &runtime.Agent{
+		ConfigPath: configPath,
+		Config:     config.AgentConfig{ID: "tui-test", Spec: config.AgentConfigSpec{Runtime: config.AgentRuntimeConfig{MaxToolRounds: 7}}},
+		Contracts: contracts.ResolvedContracts{
+			Chat: contracts.ChatContract{
+				Output: contracts.ChatOutputPolicy{Params: contracts.ChatOutputParams{RenderMarkdown: true, MarkdownStyle: "dark"}},
+				Status: contracts.ChatStatusPolicy{Params: contracts.ChatStatusParams{ShowToolCalls: true, ShowToolResults: true, ShowPlanAfterPlanTools: true}},
+			},
+		},
+		EventLog: runtime.NewInMemoryEventLog(),
+		Projections: []projections.Projection{
+			projections.NewSessionCatalogProjection(),
+			projections.NewTranscriptProjection(),
+			projections.NewChatTimelineProjection(),
+			projections.NewPlanHeadProjection(),
+			projections.NewActivePlanProjection(),
+		},
+		UIBus: runtime.NewUIEventBus(),
+		Now:   func() time.Time { return time.Date(2026, 4, 18, 12, 30, 0, 0, time.UTC) },
+		NewID: func(prefix string) string { return prefix + "-1" },
+	}
+	if err := agent.RecordEvent(context.Background(), eventSessionCreated("session-1")); err != nil {
+		t.Fatalf("RecordEvent session created: %v", err)
+	}
+	if err := agent.RecordEvent(context.Background(), eventMessage("session-1", "assistant", "previous answer")); err != nil {
+		t.Fatalf("RecordEvent assistant message: %v", err)
+	}
+
+	m, err := newModel(context.Background(), agent, "session-1")
+	if err != nil {
+		t.Fatalf("newModel returned error: %v", err)
+	}
+	modelAfter, _ := (&m).Update(tea.WindowSizeMsg{Width: 100, Height: 30})
+	mm := modelAfter.(*model)
+	state := mm.currentSessionState()
+	state.PendingPrompt = "run ansible"
+	state.MainRun.StartedAt = time.Date(2026, 4, 18, 12, 31, 0, 0, time.UTC)
+	state.ToolLog = []toolLogEntry{
+		{Activity: runtime.ToolActivity{Phase: runtime.ToolActivityPhaseCompleted, OccurredAt: time.Date(2026, 4, 18, 12, 31, 1, 0, time.UTC), Name: "shell_exec", Arguments: map[string]any{"command": "ansible-playbook", "args": []string{"site.yml"}}, ErrorText: "tool call \"shell_exec\" requires approval"}},
+	}
+
+	mm.renderChatViewport(state)
+	got := stripANSI(state.ChatView.View())
+	prev := strings.Index(got, "previous answer")
+	pending := strings.Index(got, "run ansible")
+	tools := strings.Index(got, "ansible-playbook site.yml")
+	if prev < 0 || pending < 0 || tools < 0 {
+		t.Fatalf("chat view missing expected sections: %q", got)
+	}
+	if !(prev < pending && pending < tools) {
+		t.Fatalf("chat ordering wrong, want history < pending prompt < tools: %q", got)
 	}
 }
 

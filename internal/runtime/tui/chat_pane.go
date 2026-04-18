@@ -110,23 +110,10 @@ func (m *model) renderChatViewport(state *sessionState) {
 	wasAtBottom := state.ChatView.AtBottom() || state.ChatView.TotalLineCount() == 0
 	contentWidth := max(20, state.ChatView.Width-1)
 	lines := []string{}
-	for _, item := range m.renderInterjectionHistory(state, contentWidth) {
-		lines = append(lines, item, "")
-	}
-	for _, item := range m.renderLiveToolLog(state, contentWidth) {
-		lines = append(lines, item)
-	}
-	if len(state.ToolLog) > 0 {
-		lines = append(lines, "")
-	}
-	if strings.TrimSpace(state.PendingPrompt) != "" {
-		lines = append(lines, "USER [pending]:")
-		lines = append(lines, wrapText(state.PendingPrompt, contentWidth), "")
-	}
 	for _, item := range state.Snapshot.Timeline {
 		switch item.Kind {
 		case projections.ChatTimelineItemMessage:
-			lines = append(lines, prefixTimestamp(item.OccurredAt, strings.ToUpper(item.Role)+":"))
+			lines = append(lines, prefixTimestamp(item.OccurredAt, renderChatRoleLabel(item.Role)))
 			content := item.Content
 			if state.Overrides.RenderMarkdown {
 				rendered, err := renderMarkdown(content, state.Overrides.MarkdownStyle, contentWidth)
@@ -145,14 +132,27 @@ func (m *model) renderChatViewport(state *sessionState) {
 			lines = append(lines, prefixTimestamp(item.OccurredAt, ""), m.renderMarkdownBlock(item.Content, state.Overrides.MarkdownStyle, contentWidth), "")
 		}
 	}
+	if strings.TrimSpace(state.PendingPrompt) != "" {
+		lines = append(lines, prefixTimestamp(state.MainRun.StartedAt, ansiChatUser("USER [pending]:")))
+		lines = append(lines, wrapText(state.PendingPrompt, contentWidth), "")
+	}
+	for _, item := range m.renderLiveToolLog(state, contentWidth) {
+		lines = append(lines, item)
+	}
+	if len(state.ToolLog) > 0 {
+		lines = append(lines, "")
+	}
 	if state.Streaming.Len() > 0 {
 		lines = append(lines, "ASSISTANT:", wrapText(state.Streaming.String(), contentWidth), "")
+	}
+	for _, item := range m.renderInterjectionHistory(state, contentWidth) {
+		lines = append(lines, item, "")
 	}
 	for _, run := range state.BtwRuns {
 		lines = append(lines, m.renderBtwBlock(run, state.Overrides.MarkdownStyle, contentWidth), "")
 	}
 	state.ChatView.SetContent(strings.TrimRight(strings.Join(lines, "\n"), "\n"))
-	if wasAtBottom {
+	if wasAtBottom || state.MainRun.Active || strings.TrimSpace(state.PendingPrompt) != "" {
 		state.ChatView.GotoBottom()
 	}
 }
@@ -214,32 +214,8 @@ func (m *model) performChatApprovalAction(state *sessionState, action string) te
 		approvalIndex = m.approvalCursor
 	}
 	approvalID := approvals[approvalIndex].ApprovalID
-	var (
-		result ShellActionResult
-		err    error
-		status string
-	)
-	switch action {
-	case "approve":
-		result, err = m.client.ApproveShell(m.ctx, approvalID)
-		status = "shell approval granted"
-	case "deny":
-		result, err = m.client.DenyShell(m.ctx, approvalID)
-		status = "shell approval denied"
-	case "allow_forever":
-		result, err = m.client.ApproveShellAlways(m.ctx, approvalID)
-		status = "shell approval granted and saved"
-	case "deny_forever":
-		result, err = m.client.DenyShellAlways(m.ctx, approvalID)
-		status = "shell approval denied and saved"
-	default:
-		return nil
-	}
-	if err != nil {
-		m.errMessage = err.Error()
-		return nil
-	}
-	return m.applyShellActionResult(state, result, status)
+	state.Status = "running"
+	return tea.Batch(runShellActionCmd(m.ctx, m.client, state.SessionID, approvalID, action), tickClockCmd())
 }
 
 func (m *model) stageOrRecallDraft(state *sessionState) tea.Cmd {
@@ -463,7 +439,7 @@ func (m *model) renderLiveToolLog(state *sessionState, width int) []string {
 		return nil
 	}
 	start, end := liveToolWindowBounds(activities, m.currentApprovals(), m.approvalCursor)
-	lines := []string{"TOOLS:"}
+	lines := []string{}
 	for _, activity := range activities[start:end] {
 		lines = append(lines, compactLiveToolActivityLine(activity, m.currentApprovals(), m.approvalCursor, width))
 	}

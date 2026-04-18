@@ -24,39 +24,23 @@ func (m *model) updateTools(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, m.jumpToWorkspaceFromTools()
 	case "a":
 		if len(approvals) > 0 && m.toolsFocus == toolsFocusApprovals {
-			result, err := m.client.ApproveShell(m.ctx, approvals[m.approvalCursor].ApprovalID)
-			if err != nil {
-				m.errMessage = err.Error()
-			} else {
-				return m, m.applyShellActionResult(state, result, "shell approval granted")
-			}
+			state.Status = "running"
+			return m, tea.Batch(runShellActionCmd(m.ctx, m.client, state.SessionID, approvals[m.approvalCursor].ApprovalID, "approve"), tickClockCmd())
 		}
 	case "A":
 		if len(approvals) > 0 && m.toolsFocus == toolsFocusApprovals {
-			result, err := m.client.ApproveShellAlways(m.ctx, approvals[m.approvalCursor].ApprovalID)
-			if err != nil {
-				m.errMessage = err.Error()
-			} else {
-				return m, m.applyShellActionResult(state, result, "shell approval granted and saved")
-			}
+			state.Status = "running"
+			return m, tea.Batch(runShellActionCmd(m.ctx, m.client, state.SessionID, approvals[m.approvalCursor].ApprovalID, "allow_forever"), tickClockCmd())
 		}
 	case "x":
 		if len(approvals) > 0 && m.toolsFocus == toolsFocusApprovals {
-			result, err := m.client.DenyShell(m.ctx, approvals[m.approvalCursor].ApprovalID)
-			if err != nil {
-				m.errMessage = err.Error()
-			} else {
-				return m, m.applyShellActionResult(state, result, "shell approval denied")
-			}
+			state.Status = "running"
+			return m, tea.Batch(runShellActionCmd(m.ctx, m.client, state.SessionID, approvals[m.approvalCursor].ApprovalID, "deny"), tickClockCmd())
 		}
 	case "X":
 		if len(approvals) > 0 && m.toolsFocus == toolsFocusApprovals {
-			result, err := m.client.DenyShellAlways(m.ctx, approvals[m.approvalCursor].ApprovalID)
-			if err != nil {
-				m.errMessage = err.Error()
-			} else {
-				return m, m.applyShellActionResult(state, result, "shell approval denied and saved")
-			}
+			state.Status = "running"
+			return m, tea.Batch(runShellActionCmd(m.ctx, m.client, state.SessionID, approvals[m.approvalCursor].ApprovalID, "deny_forever"), tickClockCmd())
 		}
 	case "k":
 		if len(commands) > 0 && m.toolsFocus == toolsFocusCommands {

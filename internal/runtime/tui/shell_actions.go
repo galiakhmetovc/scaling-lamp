@@ -6,17 +6,37 @@ func (m *model) applyShellActionResult(state *sessionState, result ShellActionRe
 	if state == nil {
 		return nil
 	}
-	state.Snapshot = mergeSessionSnapshot(state.Snapshot, result.Session)
-	state.PendingPrompt = ""
-	state.Busy = false
-	state.Status = "idle"
+	if result.Session.SessionID != "" {
+		state.Snapshot = mergeSessionSnapshot(state.Snapshot, result.Session)
+	}
 	state.LastError = ""
-	state.MainRun.Active = false
-	state.MainRun.CompletedAt = m.now()
-	state.RunCancel = nil
+	if result.Session.MainRunActive || result.Session.MainRun.Active {
+		state.Busy = true
+		state.Status = "running"
+		state.MainRun.Active = true
+		if !result.Session.MainRun.StartedAt.IsZero() {
+			state.MainRun.StartedAt = result.Session.MainRun.StartedAt
+		}
+		if result.Session.MainRun.Provider != "" {
+			state.MainRun.Provider = result.Session.MainRun.Provider
+		}
+		if result.Session.MainRun.Model != "" {
+			state.MainRun.Model = result.Session.MainRun.Model
+		}
+	} else {
+		state.PendingPrompt = ""
+		state.Busy = false
+		state.Status = "idle"
+		state.MainRun.Active = false
+		state.MainRun.CompletedAt = m.now()
+		state.RunCancel = nil
+	}
 	m.renderChatViewport(state)
 	m.renderToolsViewport(state)
 	m.statusMessage = status
+	if state.MainRun.Active {
+		return nil
+	}
 	if cmd := m.dispatchNextQueued(state); cmd != nil {
 		return tea.Batch(cmd, tickClockCmd())
 	}

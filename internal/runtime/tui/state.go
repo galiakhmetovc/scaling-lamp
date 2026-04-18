@@ -293,6 +293,13 @@ type historyLoadedMsg struct {
 	Err       error
 }
 
+type shellActionFinishedMsg struct {
+	SessionID string
+	Result    ShellActionResult
+	Status    string
+	Err       error
+}
+
 type sessionRenamedMsg struct {
 	Session daemon.SessionSnapshot
 	Err     error

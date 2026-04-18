@@ -291,6 +291,18 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		state.Snapshot.History.WindowLimit = msg.Chunk.WindowLimit
 		m.renderChatViewport(state)
 		return m, nil
+	case shellActionFinishedMsg:
+		state := m.sessions[msg.SessionID]
+		if state == nil {
+			return m, nil
+		}
+		if msg.Err != nil {
+			state.LastError = msg.Err.Error()
+			m.errMessage = msg.Err.Error()
+			m.renderChatViewport(state)
+			return m, nil
+		}
+		return m, m.applyShellActionResult(state, msg.Result, msg.Status)
 	case sessionRenamedMsg:
 		if msg.Err != nil {
 			m.errMessage = msg.Err.Error()

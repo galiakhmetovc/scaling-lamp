@@ -920,13 +920,19 @@ func TestChatApprovalShortcutHandlesPendingApprovalWithoutConsumingComposer(t *t
 	state.Input.SetValue("ship it after approve")
 
 	modelAfter, cmd := (&m).Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'y'}, Alt: true})
-	if cmd != nil {
-		t.Fatalf("approval shortcut returned unexpected cmd")
+	if cmd == nil {
+		t.Fatal("approval shortcut returned nil cmd")
 	}
 	mm := modelAfter.(*model)
-	if client.approvedShellID != "approval-1" {
-		t.Fatalf("approved shell id = %q, want approval-1", client.approvedShellID)
+	if client.approvedShellID != "" {
+		t.Fatalf("approved shell id = %q before completion, want empty", client.approvedShellID)
 	}
+	modelAfter, _ = mm.Update(shellActionFinishedMsg{
+		SessionID: "session-1",
+		Result:    ShellActionResult{Session: client.snapshot},
+		Status:    "shell approval granted",
+	})
+	mm = modelAfter.(*model)
 	if got := mm.currentSessionState().Input.Value(); strings.TrimSpace(got) != "ship it after approve" {
 		t.Fatalf("input value = %q, want preserved", got)
 	}
@@ -985,15 +991,21 @@ func TestChatInputApproveShortcutCompletesPendingRunState(t *testing.T) {
 	state.Input.SetValue("follow up after approval")
 
 	modelAfter, cmd := (&m).Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'a'}, Alt: true})
-	if cmd != nil {
-		t.Fatalf("approval shortcut returned unexpected cmd")
+	if cmd == nil {
+		t.Fatal("approval shortcut returned nil cmd")
 	}
 	mm := modelAfter.(*model)
+	if client.approvedAlwaysShellID != "" {
+		t.Fatalf("approvedAlways shell id = %q before completion, want empty", client.approvedAlwaysShellID)
+	}
+	modelAfter, _ = mm.Update(shellActionFinishedMsg{
+		SessionID: "session-1",
+		Result:    ShellActionResult{Session: finalSnapshot},
+		Status:    "shell approval granted and saved",
+	})
+	mm = modelAfter.(*model)
 	state = mm.currentSessionState()
 
-	if client.approvedAlwaysShellID != "approval-1" {
-		t.Fatalf("approvedAlways shell id = %q, want approval-1", client.approvedAlwaysShellID)
-	}
 	if state.PendingPrompt != "" {
 		t.Fatalf("pending prompt = %q, want cleared", state.PendingPrompt)
 	}

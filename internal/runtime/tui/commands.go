@@ -48,6 +48,39 @@ func runBtwTurnClientCmd(client OperatorClient, sessionID, prompt, runID string)
 	}
 }
 
+func runShellActionCmd(ctx context.Context, client OperatorClient, sessionID, approvalID, action string) tea.Cmd {
+	return func() tea.Msg {
+		var (
+			result ShellActionResult
+			err    error
+			status string
+		)
+		switch action {
+		case "approve":
+			result, err = client.ApproveShell(ctx, approvalID)
+			status = "shell approval granted"
+		case "deny":
+			result, err = client.DenyShell(ctx, approvalID)
+			status = "shell approval denied"
+		case "allow_forever":
+			result, err = client.ApproveShellAlways(ctx, approvalID)
+			status = "shell approval granted and saved"
+		case "deny_forever":
+			result, err = client.DenyShellAlways(ctx, approvalID)
+			status = "shell approval denied and saved"
+		default:
+			err = nil
+			status = ""
+		}
+		return shellActionFinishedMsg{
+			SessionID: sessionID,
+			Result:    result,
+			Status:    status,
+			Err:       err,
+		}
+	}
+}
+
 func tickClockCmd() tea.Cmd {
 	return tea.Tick(time.Second, func(t time.Time) tea.Msg { return clockTickMsg(t) })
 }

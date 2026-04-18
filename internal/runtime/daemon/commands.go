@@ -6,6 +6,7 @@ import (
 
 	"teamd/internal/runtime"
 	"teamd/internal/runtime/workspace"
+	"teamd/internal/shell"
 )
 
 type providerResultPayload struct {
@@ -387,15 +388,13 @@ func (s *Server) executeCommand(ctx context.Context, req CommandRequest) (any, e
 		if !ok {
 			return nil, fmt.Errorf("shell approval %q not found", approvalID)
 		}
-		commandID, err := agent.ApproveShellCommand(ctx, approvalID)
+		payload, err := s.optimisticShellApprovalPayload(view.SessionID, approvalID)
 		if err != nil {
 			return nil, err
 		}
-		payload, err := s.sessionPayload(view.SessionID)
-		if err != nil {
-			return nil, err
-		}
-		payload["command_id"] = commandID
+		payload["command_id"] = view.CommandID
+		s.publishDaemon(WebsocketEnvelope{Type: "shell_approval_updated", Payload: map[string]any{"session_id": view.SessionID}})
+		go s.approveShellAsync(s.currentAgent(), approvalID, view.SessionID)
 		return payload, nil
 	case "shell.approve_always":
 		approvalID, err := requiredString(req.Payload, "approval_id")
@@ -406,23 +405,13 @@ func (s *Server) executeCommand(ctx context.Context, req CommandRequest) (any, e
 		if !ok {
 			return nil, fmt.Errorf("shell approval %q not found", approvalID)
 		}
-		reloaded, err := PersistShellApprovalRuleAndReload(agent.ConfigPath, "allow", shellApprovalPrefix(view.Command, view.Args))
+		payload, err := s.optimisticShellApprovalPayload(view.SessionID, approvalID)
 		if err != nil {
 			return nil, err
 		}
-		reloaded.UIBus = agent.UIBus
-		agent.CopySuspendedToolLoopTo(approvalID, reloaded)
-		s.swapAgent(reloaded)
-		agent = s.currentAgent()
-		commandID, err := agent.ApproveShellCommand(ctx, approvalID)
-		if err != nil {
-			return nil, err
-		}
-		payload, err := s.sessionPayload(view.SessionID)
-		if err != nil {
-			return nil, err
-		}
-		payload["command_id"] = commandID
+		payload["command_id"] = view.CommandID
+		s.publishDaemon(WebsocketEnvelope{Type: "shell_approval_updated", Payload: map[string]any{"session_id": view.SessionID}})
+		go s.approveShellAlwaysAsync(agent, approvalID, view)
 		return payload, nil
 	case "shell.deny":
 		approvalID, err := requiredString(req.Payload, "approval_id")
@@ -433,10 +422,13 @@ func (s *Server) executeCommand(ctx context.Context, req CommandRequest) (any, e
 		if !ok {
 			return nil, fmt.Errorf("shell approval %q not found", approvalID)
 		}
-		if err := agent.DenyShellCommand(ctx, approvalID); err != nil {
+		payload, err := s.optimisticShellApprovalPayload(view.SessionID, approvalID)
+		if err != nil {
 			return nil, err
 		}
-		return s.sessionPayload(view.SessionID)
+		s.publishDaemon(WebsocketEnvelope{Type: "shell_approval_updated", Payload: map[string]any{"session_id": view.SessionID}})
+		go s.denyShellAsync(s.currentAgent(), approvalID, view.SessionID)
+		return payload, nil
 	case "shell.deny_always":
 		approvalID, err := requiredString(req.Payload, "approval_id")
 		if err != nil {
@@ -446,18 +438,13 @@ func (s *Server) executeCommand(ctx context.Context, req CommandRequest) (any, e
 		if !ok {
 			return nil, fmt.Errorf("shell approval %q not found", approvalID)
 		}
-		reloaded, err := PersistShellApprovalRuleAndReload(agent.ConfigPath, "deny", shellApprovalPrefix(view.Command, view.Args))
+		payload, err := s.optimisticShellApprovalPayload(view.SessionID, approvalID)
 		if err != nil {
 			return nil, err
 		}
-		reloaded.UIBus = agent.UIBus
-		agent.CopySuspendedToolLoopTo(approvalID, reloaded)
-		s.swapAgent(reloaded)
-		agent = s.currentAgent()
-		if err := agent.DenyShellCommand(ctx, approvalID); err != nil {
-			return nil, err
-		}
-		return s.sessionPayload(view.SessionID)
+		s.publishDaemon(WebsocketEnvelope{Type: "shell_approval_updated", Payload: map[string]any{"session_id": view.SessionID}})
+		go s.denyShellAlwaysAsync(agent, approvalID, view)
+		return payload, nil
 	case "shell.kill":
 		commandID, err := requiredString(req.Payload, "command_id")
 		if err != nil {
@@ -554,6 +541,61 @@ func (s *Server) sessionPayload(sessionID string) (map[string]any, error) {
 		return nil, err
 	}
 	return map[string]any{"session": snapshot}, nil
+}
+
+func (s *Server) optimisticShellApprovalPayload(sessionID, approvalID string) (map[string]any, error) {
+	snapshot, err := s.buildSessionSnapshot(sessionID)
+	if err != nil {
+		return nil, err
+	}
+	filtered := snapshot.PendingApprovals[:0]
+	for _, approval := range snapshot.PendingApprovals {
+		if approval.ApprovalID != approvalID {
+			filtered = append(filtered, approval)
+		}
+	}
+	snapshot.PendingApprovals = filtered
+	return map[string]any{"session": snapshot}, nil
+}
+
+func (s *Server) approveShellAsync(agent *runtime.Agent, approvalID, sessionID string) {
+	if _, err := agent.ApproveShellCommand(context.Background(), approvalID); err != nil {
+		s.publishDaemon(WebsocketEnvelope{Type: "shell_approval_failed", Payload: map[string]any{"session_id": sessionID}, Error: err.Error()})
+	}
+}
+
+func (s *Server) approveShellAlwaysAsync(agent *runtime.Agent, approvalID string, view shell.PendingApprovalView) {
+	reloaded, err := PersistShellApprovalRuleAndReload(agent.ConfigPath, "allow", shellApprovalPrefix(view.Command, view.Args))
+	if err != nil {
+		s.publishDaemon(WebsocketEnvelope{Type: "shell_approval_failed", Payload: map[string]any{"session_id": view.SessionID}, Error: err.Error()})
+		return
+	}
+	reloaded.UIBus = agent.UIBus
+	agent.CopySuspendedToolLoopTo(approvalID, reloaded)
+	s.swapAgent(reloaded)
+	if _, err := reloaded.ApproveShellCommand(context.Background(), approvalID); err != nil {
+		s.publishDaemon(WebsocketEnvelope{Type: "shell_approval_failed", Payload: map[string]any{"session_id": view.SessionID}, Error: err.Error()})
+	}
+}
+
+func (s *Server) denyShellAsync(agent *runtime.Agent, approvalID, sessionID string) {
+	if err := agent.DenyShellCommand(context.Background(), approvalID); err != nil {
+		s.publishDaemon(WebsocketEnvelope{Type: "shell_approval_failed", Payload: map[string]any{"session_id": sessionID}, Error: err.Error()})
+	}
+}
+
+func (s *Server) denyShellAlwaysAsync(agent *runtime.Agent, approvalID string, view shell.PendingApprovalView) {
+	reloaded, err := PersistShellApprovalRuleAndReload(agent.ConfigPath, "deny", shellApprovalPrefix(view.Command, view.Args))
+	if err != nil {
+		s.publishDaemon(WebsocketEnvelope{Type: "shell_approval_failed", Payload: map[string]any{"session_id": view.SessionID}, Error: err.Error()})
+		return
+	}
+	reloaded.UIBus = agent.UIBus
+	agent.CopySuspendedToolLoopTo(approvalID, reloaded)
+	s.swapAgent(reloaded)
+	if err := reloaded.DenyShellCommand(context.Background(), approvalID); err != nil {
+		s.publishDaemon(WebsocketEnvelope{Type: "shell_approval_failed", Payload: map[string]any{"session_id": view.SessionID}, Error: err.Error()})
+	}
 }
 
 func requiredString(payload map[string]any, key string) (string, error) {

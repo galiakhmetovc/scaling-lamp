@@ -16,7 +16,7 @@ func (m *model) handleDaemonEnvelope(envelope daemon.WebsocketEnvelope) {
 		event := *envelope.Event
 		if state := m.sessions[event.SessionID]; state != nil {
 			switch event.Kind {
-			case  runtime.UIEventStreamText:
+			case runtime.UIEventStreamText:
 				state.Streaming.WriteString(event.Text)
 			case runtime.UIEventToolStarted, runtime.UIEventToolCompleted:
 				state.ToolLog = append(state.ToolLog, toolLogEntry{Activity: event.Tool})
@@ -31,10 +31,25 @@ func (m *model) handleDaemonEnvelope(envelope daemon.WebsocketEnvelope) {
 			}
 			m.renderChatViewport(state)
 			m.renderToolsViewport(state)
+			if event.Kind == runtime.UIEventRunCompleted {
+				_ = m.reloadSessionSnapshot(event.SessionID)
+				m.renderChatViewport(state)
+				m.renderToolsViewport(state)
+			}
 		}
-	case "draft_queued", "draft_recalled", "queue_draft_started", "queue_draft_completed", "queue_draft_failed":
+	case "draft_queued", "draft_recalled", "queue_draft_started", "queue_draft_completed", "queue_draft_failed", "shell_approval_updated", "shell_approval_failed":
 		if sessionID, ok := envelopeSessionID(envelope.Payload); ok {
 			_ = m.reloadSessionSnapshot(sessionID)
+		}
+		if envelope.Type == "shell_approval_failed" && envelope.Error != "" {
+			m.errMessage = envelope.Error
+			if sessionID, ok := envelopeSessionID(envelope.Payload); ok {
+				if state := m.sessions[sessionID]; state != nil {
+					state.LastError = envelope.Error
+					m.renderChatViewport(state)
+					m.renderToolsViewport(state)
+				}
+			}
 		}
 	case "settings_applied":
 		settings, err := m.client.GetSettings(m.ctx)
