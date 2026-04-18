@@ -864,6 +864,82 @@ func TestExecutorQueuesApprovalAndStartsAfterApprove(t *testing.T) {
 	waitCh <- nil
 }
 
+func TestExecutorPollWaitsBrieflyForSilentRunningCommand(t *testing.T) {
+	t.Parallel()
+
+	stdoutReader, stdoutWriter := io.Pipe()
+	stderrReader, stderrWriter := io.Pipe()
+	waitCh := make(chan error)
+	process := &fakeProcess{
+		stdout: stdoutReader,
+		stderr: stderrReader,
+		wait: func() error {
+			return <-waitCh
+		},
+		kill: func() error {
+			close(waitCh)
+			return nil
+		},
+	}
+	executor := &Executor{
+		goos:     "linux",
+		pollWait: 75 * time.Millisecond,
+		start: func(_ context.Context, _ string, executable string, args []string) (processHandle, error) {
+			return process, nil
+		},
+		commands:  map[string]*activeCommand{},
+		approvals: map[string]*pendingApproval{},
+	}
+	contract := contracts.ShellExecutionContract{
+		Command: contracts.ShellCommandPolicy{
+			Enabled:  true,
+			Strategy: "static_allowlist",
+			Params:   contracts.ShellCommandParams{AllowedCommands: []string{"go"}},
+		},
+		Approval: contracts.ShellApprovalPolicy{
+			Enabled:  true,
+			Strategy: "always_allow",
+		},
+		Runtime: contracts.ShellRuntimePolicy{
+			Enabled:  true,
+			Strategy: "workspace_write",
+			Params: contracts.ShellRuntimeParams{
+				Cwd:            t.TempDir(),
+				Timeout:        "5s",
+				MaxOutputBytes: 4096,
+			},
+		},
+	}
+
+	startOut, err := executor.Execute(contract, "shell_start", map[string]any{
+		"command": "go",
+		"args":    []any{"test"},
+	})
+	if err != nil {
+		t.Fatalf("shell_start returned error: %v", err)
+	}
+	commandID := decodeField(t, startOut, "command_id")
+	startedAt := time.Now()
+	pollOut, err := executor.Execute(contract, "shell_poll", map[string]any{
+		"command_id":   commandID,
+		"after_offset": 0,
+	})
+	elapsed := time.Since(startedAt)
+	if err != nil {
+		t.Fatalf("shell_poll returned error: %v", err)
+	}
+	if elapsed < 60*time.Millisecond {
+		t.Fatalf("shell_poll elapsed = %v, want >= 60ms for silent running command", elapsed)
+	}
+	if decodeField(t, pollOut, "status") != "running" {
+		t.Fatalf("poll status = %s, want running", pollOut)
+	}
+
+	_ = stdoutWriter.Close()
+	_ = stderrWriter.Close()
+	_ = process.Kill()
+}
+
 func TestExecutorApproveRunsShellExecSynchronously(t *testing.T) {
 	t.Parallel()
 

@@ -110,6 +110,7 @@ type activeCommand struct {
 	terminalRecorded bool
 	completedAt      time.Time
 	meta             ExecutionMeta
+	updateCh         chan struct{}
 }
 
 type pendingApproval struct {
@@ -147,6 +148,7 @@ type Executor struct {
 	completed map[string]*activeCommand
 	approvals map[string]*pendingApproval
 	nextID    atomic.Uint64
+	pollWait  time.Duration
 }
 
 const (
@@ -163,6 +165,7 @@ func NewExecutor() *Executor {
 		commands:   map[string]*activeCommand{},
 		completed:  map[string]*activeCommand{},
 		approvals:  map[string]*pendingApproval{},
+		pollWait:   750 * time.Millisecond,
 	}
 }
 
@@ -384,6 +387,7 @@ func (e *Executor) startCommand(ctx context.Context, contract contracts.ShellExe
 		process: proc,
 		cancel:  cancel,
 		meta:    meta,
+		updateCh: make(chan struct{}, 1),
 	}
 	if beforeStart != nil {
 		if err := beforeStart(); err != nil {
@@ -429,6 +433,9 @@ func (e *Executor) executePoll(ctx context.Context, argsMap map[string]any) (str
 	if err != nil {
 		return "", err
 	}
+	if e.shouldWaitForPoll(active, afterOffset) {
+		e.waitForPollUpdate(ctx, active)
+	}
 	active.mu.RLock()
 	chunks := make([]commandChunk, 0)
 	for _, chunk := range active.chunks {
@@ -461,6 +468,32 @@ func (e *Executor) executePoll(ctx context.Context, argsMap map[string]any) (str
 	return jsonText(payload), nil
 }
 
+func (e *Executor) shouldWaitForPoll(active *activeCommand, afterOffset int) bool {
+	active.mu.RLock()
+	defer active.mu.RUnlock()
+	if active.status != "running" {
+		return false
+	}
+	return active.nextOffset <= afterOffset
+}
+
+func (e *Executor) waitForPollUpdate(ctx context.Context, active *activeCommand) {
+	waitFor := e.pollWait
+	if waitFor <= 0 {
+		waitFor = 750 * time.Millisecond
+	}
+	timer := time.NewTimer(waitFor)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return
+	case <-active.updateCh:
+		return
+	case <-timer.C:
+		return
+	}
+}
+
 func (e *Executor) executeKill(ctx context.Context, argsMap map[string]any) (string, error) {
 	commandID, err := stringArg(argsMap, "command_id")
 	if err != nil {
@@ -486,6 +519,7 @@ func (e *Executor) executeKill(ctx context.Context, argsMap map[string]any) (str
 	if err := e.recordKillRequested(ctx, active); err != nil {
 		return "", err
 	}
+	e.notifyCommandUpdated(active)
 	return jsonText(map[string]any{
 		"tool":       "shell_kill",
 		"command_id": commandID,
@@ -677,6 +711,7 @@ func (e *Executor) waitForCommand(active *activeCommand) {
 	active.errorText = errorText
 	active.completedAt = time.Now().UTC()
 	active.mu.Unlock()
+	e.notifyCommandUpdated(active)
 	_ = e.recordCompleted(context.Background(), active)
 	e.archiveCompletedCommand(active)
 }
@@ -742,11 +777,22 @@ func (e *Executor) appendChunk(active *activeCommand, stream, text string) {
 	})
 	active.recordedOffset = offset
 	active.mu.Unlock()
+	e.notifyCommandUpdated(active)
 	_ = e.recordChunk(context.Background(), active, commandChunk{
 		Offset: offset,
 		Stream: stream,
 		Text:   text,
 	})
+}
+
+func (e *Executor) notifyCommandUpdated(active *activeCommand) {
+	if active == nil || active.updateCh == nil {
+		return
+	}
+	select {
+	case active.updateCh <- struct{}{}:
+	default:
+	}
 }
 
 func (e *Executor) recordStarted(ctx context.Context, active *activeCommand) error {
