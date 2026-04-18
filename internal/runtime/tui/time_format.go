@@ -28,6 +28,14 @@ func ansiChatUser(text string) string {
 	return "\x1b[1;38;5;159m" + text + "\x1b[0m"
 }
 
+func ansiApprovalApplying(text string) string {
+	return "\x1b[1;38;5;220m" + text + "\x1b[0m"
+}
+
+func ansiRunEnded(text string) string {
+	return "\x1b[1;38;5;120m" + text + "\x1b[0m"
+}
+
 func renderChatRoleLabel(role string) string {
 	switch role {
 	case "user":

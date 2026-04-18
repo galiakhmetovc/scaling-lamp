@@ -272,7 +272,7 @@ func (m *model) syncRunStateFromSnapshot(state *sessionState, preserveActive boo
 		return
 	}
 	active := state.Snapshot.MainRunActive || state.Snapshot.MainRun.Active
-	if preserveActive && state.MainRun.Active && !active {
+	if (preserveActive || state.AwaitingRunCompletion) && state.MainRun.Active && !active {
 		active = true
 	}
 	if !state.Snapshot.MainRun.StartedAt.IsZero() {
@@ -306,6 +306,8 @@ func (m *model) syncRunStateFromSnapshot(state *sessionState, preserveActive boo
 	state.PendingPrompt = ""
 	state.RunCancel = nil
 	state.MainRun.CompletedAt = m.now()
+	state.AwaitingRunCompletion = false
+	state.LastTurnEndedAt = state.MainRun.CompletedAt
 	if state.Status == "" || state.Status == "running" || state.Status == "approval_pending" {
 		state.Status = "idle"
 	}

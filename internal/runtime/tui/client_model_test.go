@@ -973,6 +973,65 @@ func TestChatApprovalMenuEnterApprovesSelectedActionWithoutConsumingComposer(t *
 	}
 }
 
+func TestChatApprovalMenuEnterAllowForeverIsSingleShotWhileActionInFlight(t *testing.T) {
+	ws := make(chan daemon.WebsocketEnvelope)
+	close(ws)
+	now := time.Date(2026, 4, 18, 14, 48, 0, 0, time.UTC)
+	client := &stubOperatorClient{
+		sessions: []SessionSummary{{SessionID: "session-1", CreatedAt: now, LastActivity: now, MessageCount: 0}},
+		snapshot: daemon.SessionSnapshot{
+			SessionID: "session-1",
+			PendingApprovals: []shell.PendingApprovalView{{
+				ApprovalID: "approval-1",
+				Command:    "ansible-playbook",
+				Args:       []string{"site.yml"},
+				OccurredAt: now,
+			}},
+			Prompt: daemon.SessionPromptSnapshot{
+				Default:   "default prompt",
+				Effective: "default prompt",
+			},
+		},
+		ws: ws,
+	}
+
+	m, err := newModelWithClient(context.Background(), client, "")
+	if err != nil {
+		t.Fatalf("newModelWithClient returned error: %v", err)
+	}
+	state := m.currentSessionState()
+	state.ApprovalMenu.ActionIndex = 1
+
+	modelAfter, cmd := (&m).Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if cmd == nil {
+		t.Fatal("approval allow forever returned nil cmd")
+	}
+	mm := modelAfter.(*model)
+	if client.approvedAlwaysShellID != "" {
+		t.Fatalf("approved always shell id = %q before completion, want empty", client.approvedAlwaysShellID)
+	}
+	msg := cmd()
+	if batch, ok := msg.(tea.BatchMsg); ok {
+		if len(batch) == 0 {
+			t.Fatal("allow forever batch is empty")
+		}
+		msg = batch[0]()
+	}
+	modelAfter, _ = mm.Update(msg)
+	mm = modelAfter.(*model)
+	if client.approvedAlwaysShellID != "approval-1" {
+		t.Fatalf("approved always shell id = %q, want approval-1", client.approvedAlwaysShellID)
+	}
+
+	modelAfter, cmd = mm.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if cmd != nil {
+		t.Fatalf("second enter while approval action in flight returned unexpected cmd %#v", cmd)
+	}
+	if client.approvedAlwaysShellID != "approval-1" {
+		t.Fatalf("approved always shell id changed after repeated enter: %q", client.approvedAlwaysShellID)
+	}
+}
+
 func TestChatApprovalMenuCancelAndSendRunsNewPrompt(t *testing.T) {
 	ws := make(chan daemon.WebsocketEnvelope)
 	close(ws)
@@ -1396,6 +1455,107 @@ func TestChatTurnFinishedKeepsRunActiveWhenSessionStillHasPendingApproval(t *tes
 	}
 	if strings.Contains(state.ChatView.View(), "USER [pending]:") {
 		t.Fatalf("chat view still shows pending prompt after server returned approval snapshot: %q", state.ChatView.View())
+	}
+}
+
+func TestReloadSessionSnapshotDoesNotDropRunToIdleBeforeCompletionSignal(t *testing.T) {
+	ws := make(chan daemon.WebsocketEnvelope)
+	close(ws)
+	now := time.Date(2026, 4, 18, 15, 0, 0, 0, time.UTC)
+	client := &stubOperatorClient{
+		sessions: []SessionSummary{{SessionID: "session-1", CreatedAt: now, LastActivity: now, MessageCount: 0}},
+		snapshot: daemon.SessionSnapshot{
+			SessionID: "session-1",
+			Prompt: daemon.SessionPromptSnapshot{
+				Default:   "default prompt",
+				Effective: "default prompt",
+			},
+		},
+		ws: ws,
+	}
+
+	m, err := newModelWithClient(context.Background(), client, "")
+	if err != nil {
+		t.Fatalf("newModelWithClient returned error: %v", err)
+	}
+	state := m.currentSessionState()
+	state.Status = "running"
+	state.Busy = true
+	state.MainRun.Active = true
+	state.MainRun.StartedAt = now
+	state.AwaitingRunCompletion = true
+	state.PendingPrompt = "run something"
+
+	client.snapshot = daemon.SessionSnapshot{
+		SessionID: "session-1",
+		Prompt: daemon.SessionPromptSnapshot{
+			Default:   "default prompt",
+			Effective: "default prompt",
+		},
+	}
+
+	if err := m.reloadSessionSnapshot("session-1"); err != nil {
+		t.Fatalf("reloadSessionSnapshot: %v", err)
+	}
+	state = m.currentSessionState()
+	if !state.MainRun.Active {
+		t.Fatal("state.MainRun.Active = false, want true before explicit completion signal")
+	}
+	if state.Status == "idle" {
+		t.Fatalf("state.Status = %q, want non-idle before explicit completion signal", state.Status)
+	}
+}
+
+func TestChatShowsExplicitEndTurnMarkerAfterRunCompletes(t *testing.T) {
+	ws := make(chan daemon.WebsocketEnvelope)
+	close(ws)
+	now := time.Date(2026, 4, 18, 15, 1, 0, 0, time.UTC)
+	client := &stubOperatorClient{
+		sessions: []SessionSummary{{SessionID: "session-1", CreatedAt: now, LastActivity: now, MessageCount: 0}},
+		snapshot: daemon.SessionSnapshot{
+			SessionID: "session-1",
+			Prompt: daemon.SessionPromptSnapshot{
+				Default:   "default prompt",
+				Effective: "default prompt",
+			},
+		},
+		ws: ws,
+	}
+
+	m, err := newModelWithClient(context.Background(), client, "")
+	if err != nil {
+		t.Fatalf("newModelWithClient returned error: %v", err)
+	}
+	state := m.currentSessionState()
+	state.MainRun.Active = true
+	state.Busy = true
+	state.Status = "running"
+	state.MainRun.StartedAt = now.Add(-5 * time.Second)
+
+	modelAfter, _ := (&m).Update(chatTurnFinishedMsg{
+		SessionID: "session-1",
+		Result: runtimeResultMeta{
+			Content: "done",
+		},
+		Session: daemon.SessionSnapshot{
+			SessionID: "session-1",
+			Prompt: daemon.SessionPromptSnapshot{
+				Default:   "default prompt",
+				Effective: "default prompt",
+			},
+			Timeline: []projections.ChatTimelineItem{{
+				Kind:       projections.ChatTimelineItemMessage,
+				Role:       "assistant",
+				Content:    "done",
+				OccurredAt: now,
+			}},
+		},
+	})
+	mm := modelAfter.(*model)
+	state = mm.currentSessionState()
+	got := state.ChatView.View()
+	if !strings.Contains(got, "AGENT END TURN") {
+		t.Fatalf("chat view missing end-turn marker: %q", got)
 	}
 }
 

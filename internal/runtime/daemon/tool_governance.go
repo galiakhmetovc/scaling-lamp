@@ -9,6 +9,7 @@ import (
 
 	"gopkg.in/yaml.v3"
 
+	"teamd/internal/contracts"
 	"teamd/internal/runtime"
 )
 
@@ -66,14 +67,12 @@ func PersistShellApprovalRuleAndReload(configPath, action, prefix string) (*runt
 	if err != nil {
 		return nil, fmt.Errorf("read shell approval policy: %w", err)
 	}
-	var doc map[string]any
+	var doc shellApprovalPolicyDocument
 	if err := yaml.Unmarshal(original, &doc); err != nil {
 		return nil, fmt.Errorf("decode shell approval policy: %w", err)
 	}
-	spec := ensureMap(doc, "spec")
-	params := ensureMap(spec, "params")
-	allowPrefixes := yamlStringSlice(params["allow_prefixes"])
-	denyPrefixes := yamlStringSlice(params["deny_prefixes"])
+	allowPrefixes := append([]string(nil), doc.Spec.Params.AllowPrefixes...)
+	denyPrefixes := append([]string(nil), doc.Spec.Params.DenyPrefixes...)
 	allowPrefixes = removeString(allowPrefixes, prefix)
 	denyPrefixes = removeString(denyPrefixes, prefix)
 	switch action {
@@ -82,8 +81,8 @@ func PersistShellApprovalRuleAndReload(configPath, action, prefix string) (*runt
 	case "deny":
 		denyPrefixes = appendIfMissing(denyPrefixes, prefix)
 	}
-	params["allow_prefixes"] = allowPrefixes
-	params["deny_prefixes"] = denyPrefixes
+	doc.Spec.Params.AllowPrefixes = allowPrefixes
+	doc.Spec.Params.DenyPrefixes = denyPrefixes
 	body, err := yaml.Marshal(doc)
 	if err != nil {
 		return nil, fmt.Errorf("encode shell approval policy: %w", err)
@@ -99,6 +98,17 @@ func PersistShellApprovalRuleAndReload(configPath, action, prefix string) (*runt
 	return reloaded, nil
 }
 
+type shellApprovalPolicyDocument struct {
+	Kind    string `yaml:"kind"`
+	Version string `yaml:"version"`
+	ID      string `yaml:"id"`
+	Spec    struct {
+		Enabled  bool                          `yaml:"enabled"`
+		Strategy string                        `yaml:"strategy"`
+		Params   contracts.ShellApprovalParams `yaml:"params"`
+	} `yaml:"spec"`
+}
+
 func shellApprovalPrefix(command string, args []string) string {
 	command = strings.TrimSpace(command)
 	if command == "" {
@@ -109,34 +119,6 @@ func shellApprovalPrefix(command string, args []string) string {
 		return command
 	}
 	return strings.TrimSpace(base)
-}
-
-func ensureMap(parent map[string]any, key string) map[string]any {
-	if existing, ok := parent[key].(map[string]any); ok {
-		return existing
-	}
-	created := map[string]any{}
-	parent[key] = created
-	return created
-}
-
-func yamlStringSlice(raw any) []string {
-	values, ok := raw.([]any)
-	if !ok {
-		if typed, ok := raw.([]string); ok {
-			return append([]string(nil), typed...)
-		}
-		return nil
-	}
-	out := make([]string, 0, len(values))
-	for _, item := range values {
-		text, ok := item.(string)
-		if !ok || strings.TrimSpace(text) == "" {
-			continue
-		}
-		out = append(out, text)
-	}
-	return out
 }
 
 func removeString(values []string, target string) []string {

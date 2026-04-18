@@ -50,6 +50,52 @@ func TestPersistShellApprovalRuleAndReloadUpdatesPrefixes(t *testing.T) {
 	}
 }
 
+func TestPersistShellApprovalRuleAndReloadPreservesPolicyHeader(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	sourceRoot := filepath.Join("..", "..", "..", "config", "zai-smoke")
+	targetRoot := filepath.Join(dir, "zai-smoke")
+	copyDir(t, sourceRoot, targetRoot)
+
+	agentPath := filepath.Join(targetRoot, "agent.yaml")
+	agentYAML, err := os.ReadFile(agentPath)
+	if err != nil {
+		t.Fatalf("ReadFile(%q): %v", agentPath, err)
+	}
+	patched := strings.Replace(
+		string(agentYAML),
+		"    projection_store_path: ../../var/zai-smoke/projections.json\n",
+		"    projection_store_path: ./var/projections.json\n",
+		1,
+	)
+	if err := os.WriteFile(agentPath, []byte(patched), 0o644); err != nil {
+		t.Fatalf("WriteFile(%q): %v", agentPath, err)
+	}
+
+	if _, err := PersistShellApprovalRuleAndReload(agentPath, "allow", "ansible-playbook"); err != nil {
+		t.Fatalf("PersistShellApprovalRuleAndReload: %v", err)
+	}
+
+	policyPath := filepath.Join(targetRoot, "policies", "shell-execution", "approval.yaml")
+	body, err := os.ReadFile(policyPath)
+	if err != nil {
+		t.Fatalf("ReadFile(%q): %v", policyPath, err)
+	}
+	text := string(body)
+	for _, needle := range []string{
+		"kind: ShellApprovalPolicyConfig",
+		"version: v1",
+		"id: shell-approval-zai-smoke",
+		"strategy: always_allow",
+		"- ansible-playbook",
+	} {
+		if !strings.Contains(text, needle) {
+			t.Fatalf("updated approval policy missing %q:\n%s", needle, text)
+		}
+	}
+}
+
 func TestShellApprovalPrefixUsesExecutableOnly(t *testing.T) {
 	t.Parallel()
 

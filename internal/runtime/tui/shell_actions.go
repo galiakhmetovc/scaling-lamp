@@ -10,6 +10,18 @@ func (m *model) applyShellActionResult(state *sessionState, result ShellActionRe
 		state.Snapshot = mergeSessionSnapshot(state.Snapshot, result.Session)
 	}
 	state.LastError = ""
+	if state.ApprovalInFlightID != "" {
+		found := false
+		for _, approval := range state.Snapshot.PendingApprovals {
+			if approval.ApprovalID == state.ApprovalInFlightID {
+				found = true
+				break
+			}
+		}
+		if !found {
+			state.ApprovalInFlightID = ""
+		}
+	}
 	m.syncRunStateFromSnapshot(state, true)
 	m.renderChatViewport(state)
 	m.renderToolsViewport(state)

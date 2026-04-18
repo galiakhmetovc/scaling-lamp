@@ -225,7 +225,10 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			state.Busy = false
 			state.MainRun.Active = false
 			state.RunCancel = nil
+			state.AwaitingRunCompletion = false
+			state.ApprovalInFlightID = ""
 			state.MainRun.CompletedAt = m.now()
+			state.LastTurnEndedAt = state.MainRun.CompletedAt
 			if msg.Result.Provider != "" {
 				state.MainRun.Provider = msg.Result.Provider
 			}
@@ -245,9 +248,13 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.Queued && msg.Draft != nil {
 			state.Queue = append(state.Queue, queuedDraft{Text: msg.Draft.Text, QueuedAt: msg.Draft.QueuedAt})
 		}
+		state.ApprovalInFlightID = ""
 		state.PendingPrompt = ""
 		state.Snapshot = mergeSessionSnapshot(state.Snapshot, msg.Session)
 		state.SessionID = msg.SessionID
+		if !(msg.Session.MainRunActive || msg.Session.MainRun.Active) && len(msg.Session.PendingApprovals) == 0 {
+			state.AwaitingRunCompletion = false
+		}
 		m.syncRunStateFromSnapshot(state, false)
 		m.renderChatViewport(state)
 		m.renderToolsViewport(state)
@@ -314,6 +321,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if msg.Err != nil {
 			state.LastError = msg.Err.Error()
+			state.ApprovalInFlightID = ""
 			m.errMessage = msg.Err.Error()
 			m.renderChatViewport(state)
 			return m, nil
@@ -330,6 +338,9 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		state.Snapshot = mergeSessionSnapshot(state.Snapshot, msg.Session)
+		if !(msg.Session.MainRunActive || msg.Session.MainRun.Active) && len(msg.Session.PendingApprovals) == 0 {
+			state.AwaitingRunCompletion = false
+		}
 		m.syncRunStateFromSnapshot(state, false)
 		m.renderChatViewport(state)
 		m.renderToolsViewport(state)

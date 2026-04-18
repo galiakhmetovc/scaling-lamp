@@ -117,27 +117,30 @@ type btwRun struct {
 }
 
 type sessionState struct {
-	SessionID     string
-	Snapshot      daemon.SessionSnapshot
-	Input         textarea.Model
-	PendingPrompt string
-	ApprovalMenu  approvalMenuState
-	Streaming     strings.Builder
-	ToolLog       []toolLogEntry
-	Status        string
-	LastError     string
-	Busy          bool
-	RunCancel     context.CancelFunc
-	Overrides     sessionOverrides
-	Loaded        bool
-	ChatView      viewport.Model
-	ToolsView     viewport.Model
-	MainRun       runMeta
-	Queue         []queuedDraft
-	QueueCursor   int
-	BtwRuns       []btwRun
-	Interjections []interjectionEntry
-	Workspace     workspaceSessionState
+	SessionID             string
+	Snapshot              daemon.SessionSnapshot
+	Input                 textarea.Model
+	PendingPrompt         string
+	ApprovalMenu          approvalMenuState
+	ApprovalInFlightID    string
+	Streaming             strings.Builder
+	ToolLog               []toolLogEntry
+	Status                string
+	LastError             string
+	Busy                  bool
+	RunCancel             context.CancelFunc
+	AwaitingRunCompletion bool
+	Overrides             sessionOverrides
+	Loaded                bool
+	ChatView              viewport.Model
+	ToolsView             viewport.Model
+	MainRun               runMeta
+	LastTurnEndedAt       time.Time
+	Queue                 []queuedDraft
+	QueueCursor           int
+	BtwRuns               []btwRun
+	Interjections         []interjectionEntry
+	Workspace             workspaceSessionState
 }
 
 type workspaceMode int

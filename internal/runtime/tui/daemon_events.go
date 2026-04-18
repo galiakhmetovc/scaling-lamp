@@ -35,6 +35,9 @@ func (m *model) handleDaemonEnvelope(envelope daemon.WebsocketEnvelope) {
 			case runtime.UIEventRunCompleted:
 				state.Status = "done"
 				state.Streaming.Reset()
+				state.AwaitingRunCompletion = false
+				state.LastTurnEndedAt = m.now()
+				state.ApprovalInFlightID = ""
 			}
 			m.renderChatViewport(state)
 			m.renderToolsViewport(state)

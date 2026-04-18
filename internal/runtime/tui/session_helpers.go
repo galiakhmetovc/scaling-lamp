@@ -19,6 +19,29 @@ func (m *model) currentApprovals() []shell.PendingApprovalView {
 		return nil
 	}
 	approvals := append([]shell.PendingApprovalView(nil), state.Snapshot.PendingApprovals...)
+	if len(approvals) == 0 {
+		m.approvalCursor = 0
+		state.ApprovalInFlightID = ""
+		state.ApprovalMenu.ComposeMode = false
+		state.ApprovalMenu.ActionIndex = 0
+		return nil
+	}
+	if state.ApprovalInFlightID != "" {
+		found := false
+		for _, approval := range approvals {
+			if approval.ApprovalID == state.ApprovalInFlightID {
+				found = true
+				break
+			}
+		}
+		if !found {
+			state.ApprovalInFlightID = ""
+			state.ApprovalMenu.ComposeMode = false
+			if state.ApprovalMenu.ActionIndex >= len(approvalMenuActions) {
+				state.ApprovalMenu.ActionIndex = 0
+			}
+		}
+	}
 	if m.approvalCursor >= len(approvals) && len(approvals) > 0 {
 		m.approvalCursor = len(approvals) - 1
 	}

@@ -36,7 +36,7 @@ func (m *model) updateChat(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		state.ChatView.LineDown(max(1, state.ChatView.Height/2))
 		return m, nil
 	case "left":
-		if m.chatApprovalMenuVisible(state) && !state.ApprovalMenu.ComposeMode {
+		if m.chatApprovalMenuVisible(state) && !state.ApprovalMenu.ComposeMode && state.ApprovalInFlightID == "" {
 			if len(m.currentApprovals()) > 0 && m.approvalCursor > 0 {
 				m.approvalCursor--
 				m.renderChatViewport(state)
@@ -44,7 +44,7 @@ func (m *model) updateChat(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 	case "right":
-		if m.chatApprovalMenuVisible(state) && !state.ApprovalMenu.ComposeMode {
+		if m.chatApprovalMenuVisible(state) && !state.ApprovalMenu.ComposeMode && state.ApprovalInFlightID == "" {
 			if approvals := m.currentApprovals(); len(approvals) > 0 && m.approvalCursor < len(approvals)-1 {
 				m.approvalCursor++
 				m.renderChatViewport(state)
@@ -52,7 +52,7 @@ func (m *model) updateChat(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 	case "up":
-		if m.chatApprovalMenuVisible(state) && !state.ApprovalMenu.ComposeMode {
+		if m.chatApprovalMenuVisible(state) && !state.ApprovalMenu.ComposeMode && state.ApprovalInFlightID == "" {
 			if state.ApprovalMenu.ActionIndex > 0 {
 				state.ApprovalMenu.ActionIndex--
 				m.renderChatViewport(state)
@@ -60,7 +60,7 @@ func (m *model) updateChat(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 	case "down":
-		if m.chatApprovalMenuVisible(state) && !state.ApprovalMenu.ComposeMode {
+		if m.chatApprovalMenuVisible(state) && !state.ApprovalMenu.ComposeMode && state.ApprovalInFlightID == "" {
 			if state.ApprovalMenu.ActionIndex < len(approvalMenuActions)-1 {
 				state.ApprovalMenu.ActionIndex++
 				m.renderChatViewport(state)
@@ -99,6 +99,9 @@ func (m *model) updateChat(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if m.chatApprovalMenuVisible(state) {
 			if state.ApprovalMenu.ComposeMode {
 				return m, m.submitApprovalCancelMessage(state)
+			}
+			if state.ApprovalInFlightID != "" {
+				return m, nil
 			}
 			return m, m.submitApprovalMenuSelection(state)
 		}
@@ -194,6 +197,9 @@ func (m *model) renderChatViewport(state *sessionState) {
 	for _, run := range state.BtwRuns {
 		lines = append(lines, m.renderBtwBlock(run, state.Overrides.MarkdownStyle, contentWidth), "")
 	}
+	if marker := m.renderRunCompletedMarker(state); marker != "" {
+		lines = append(lines, marker, "")
+	}
 	state.ChatView.SetContent(strings.TrimRight(strings.Join(lines, "\n"), "\n"))
 	if wasAtBottom || state.MainRun.Active || strings.TrimSpace(state.PendingPrompt) != "" {
 		state.ChatView.GotoBottom()
@@ -257,6 +263,7 @@ func (m *model) performChatApprovalAction(state *sessionState, action string) te
 		approvalIndex = m.approvalCursor
 	}
 	approvalID := approvals[approvalIndex].ApprovalID
+	state.ApprovalInFlightID = approvalID
 	state.Status = "running"
 	return tea.Batch(runShellActionCmd(m.ctx, m.client, state.SessionID, approvalID, action), tickClockCmd())
 }
@@ -394,6 +401,7 @@ func (m *model) startMainRunWithCmd(state *sessionState, prompt string, buildCmd
 	state.Input.Reset()
 	state.Streaming.Reset()
 	state.LastError = ""
+	state.LastTurnEndedAt = time.Time{}
 	state.Status = "running"
 	state.Busy = true
 	if state.RunCancel != nil {
@@ -402,6 +410,8 @@ func (m *model) startMainRunWithCmd(state *sessionState, prompt string, buildCmd
 	runCtx, cancel := context.WithCancel(m.ctx)
 	state.RunCancel = cancel
 	state.MainRun.Active = true
+	state.ApprovalInFlightID = ""
+	state.AwaitingRunCompletion = true
 	state.MainRun.StartedAt = m.now()
 	state.MainRun.CompletedAt = time.Time{}
 	state.MainRun.Provider = m.client.ProviderLabel()
@@ -550,6 +560,10 @@ func (m *model) renderApprovalMenu(state *sessionState, width int) []string {
 	lines := []string{
 		prefixTimestamp(approval.OccurredAt, fmt.Sprintf("APPROVAL %d/%d %s", m.approvalCursor+1, len(approvals), compactApprovalInvocation(approval))),
 	}
+	if state.ApprovalInFlightID == approval.ApprovalID {
+		lines = append(lines, ansiApprovalApplying("Applying approval..."))
+		return lines
+	}
 	for i, label := range approvalMenuActions {
 		prefix := "  "
 		if i == state.ApprovalMenu.ActionIndex {
@@ -681,6 +695,13 @@ func (m *model) chatComposerHint(state *sessionState) string {
 
 func (m *model) chatApprovalMenuVisible(state *sessionState) bool {
 	return state != nil && len(state.Snapshot.PendingApprovals) > 0
+}
+
+func (m *model) renderRunCompletedMarker(state *sessionState) string {
+	if state == nil || state.MainRun.Active || state.AwaitingRunCompletion || state.LastTurnEndedAt.IsZero() {
+		return ""
+	}
+	return prefixTimestamp(state.LastTurnEndedAt, ansiRunEnded("AGENT END TURN"))
 }
 
 func (m *model) renderMarkdownBlock(content, style string, width int) string {
