@@ -213,7 +213,7 @@ func (e *Executor) executeSync(ctx context.Context, contract contracts.ShellExec
 		return "", fmt.Errorf("%s", commandMessage)
 	case commandPolicyRequire:
 		full := commandPrefix(command, args)
-		if allow, message, matched := evaluatePersistentApprovalPrefixes(contract.Approval, full); matched {
+		if allow, message, matched := evaluatePersistentApprovalPrefixes(contract.Approval, command, args); matched {
 			if !allow {
 				return "", fmt.Errorf("%s", message)
 			}
@@ -307,7 +307,7 @@ func (e *Executor) executeStart(ctx context.Context, contract contracts.ShellExe
 		return "", fmt.Errorf("%s", commandMessage)
 	case commandPolicyRequire:
 		full := commandPrefix(command, args)
-		if allow, message, matched := evaluatePersistentApprovalPrefixes(contract.Approval, full); matched {
+		if allow, message, matched := evaluatePersistentApprovalPrefixes(contract.Approval, command, args); matched {
 			if !allow {
 				return "", fmt.Errorf("%s", message)
 			}
@@ -1235,7 +1235,7 @@ func (e *Executor) evaluateApproval(policy contracts.ShellApprovalPolicy, comman
 		return approvalDecisionAllow, ""
 	}
 	full := commandPrefix(command, args)
-	if allow, message, matched := evaluatePersistentApprovalPrefixes(policy, full); matched {
+	if allow, message, matched := evaluatePersistentApprovalPrefixes(policy, command, args); matched {
 		if allow {
 			return approvalDecisionAllow, ""
 		}
@@ -1258,20 +1258,38 @@ func (e *Executor) evaluateApproval(policy contracts.ShellApprovalPolicy, comman
 	}
 }
 
-func evaluatePersistentApprovalPrefixes(policy contracts.ShellApprovalPolicy, full string) (allow bool, message string, matched bool) {
+func evaluatePersistentApprovalPrefixes(policy contracts.ShellApprovalPolicy, command string, args []string) (allow bool, message string, matched bool) {
+	full := commandPrefix(command, args)
+	normalizedFull := commandPrefix(normalizedApprovalCommand(command), args)
 	for _, prefix := range policy.Params.DenyPrefixes {
 		prefix = strings.TrimSpace(prefix)
-		if prefix != "" && strings.HasPrefix(full, prefix) {
+		if prefix != "" && persistentApprovalPrefixMatches(prefix, full, normalizedFull) {
 			return false, "shell command denied by persistent policy: " + full, true
 		}
 	}
 	for _, prefix := range policy.Params.AllowPrefixes {
 		prefix = strings.TrimSpace(prefix)
-		if prefix != "" && strings.HasPrefix(full, prefix) {
+		if prefix != "" && persistentApprovalPrefixMatches(prefix, full, normalizedFull) {
 			return true, "", true
 		}
 	}
 	return false, "", false
+}
+
+func normalizedApprovalCommand(command string) string {
+	command = strings.TrimSpace(command)
+	if command == "" {
+		return ""
+	}
+	base := filepath.Base(command)
+	if base == "." || base == string(filepath.Separator) {
+		return command
+	}
+	return base
+}
+
+func persistentApprovalPrefixMatches(prefix, full, normalizedFull string) bool {
+	return strings.HasPrefix(full, prefix) || (normalizedFull != "" && strings.HasPrefix(normalizedFull, prefix))
 }
 
 func approvalMessage(policy contracts.ShellApprovalPolicy, full string) string {

@@ -132,11 +132,11 @@ func TestChatViewRendersTimelineEntries(t *testing.T) {
 	if !strings.Contains(got, "2026-04-14 20:40 USER:") {
 		t.Fatalf("view missing user timestamp: %q", got)
 	}
-	if !strings.Contains(got, "Tool") {
-		t.Fatalf("view missing tool timeline line: %q", got)
-	}
 	if !strings.Contains(got, "Task added") {
 		t.Fatalf("view missing plan timeline line: %q", got)
+	}
+	if strings.Contains(got, "fs_list") {
+		t.Fatalf("view should not duplicate tool timeline lines in chat: %q", got)
 	}
 }
 
@@ -1116,17 +1116,33 @@ func TestChatViewShowsLiveToolActivity(t *testing.T) {
 	mm := modelAfter.(*model)
 	state := mm.sessions[mm.activeSessionID]
 	state.ToolLog = []toolLogEntry{
-		{Activity: runtime.ToolActivity{Phase: runtime.ToolActivityPhaseStarted, Name: "shell_start", Arguments: map[string]any{"command": "curl"}}},
-		{Activity: runtime.ToolActivity{Phase: runtime.ToolActivityPhaseCompleted, Name: "shell_start", Arguments: map[string]any{"command": "curl"}, ErrorText: "tool call \"shell_start\" requires approval"}},
+		{Activity: runtime.ToolActivity{Phase: runtime.ToolActivityPhaseStarted, OccurredAt: time.Date(2026, 4, 16, 8, 0, 0, 0, time.UTC), Name: "artifact_read", Arguments: map[string]any{"artifact_ref": "a1"}}},
+		{Activity: runtime.ToolActivity{Phase: runtime.ToolActivityPhaseCompleted, OccurredAt: time.Date(2026, 4, 16, 8, 0, 1, 0, time.UTC), Name: "artifact_read", Arguments: map[string]any{"artifact_ref": "a1"}, ResultText: `{"fields":["path"]}`}},
+		{Activity: runtime.ToolActivity{Phase: runtime.ToolActivityPhaseStarted, OccurredAt: time.Date(2026, 4, 16, 8, 0, 2, 0, time.UTC), Name: "fs_list", Arguments: map[string]any{"path": "ansible/playbooks"}}},
+		{Activity: runtime.ToolActivity{Phase: runtime.ToolActivityPhaseCompleted, OccurredAt: time.Date(2026, 4, 16, 8, 0, 3, 0, time.UTC), Name: "fs_list", Arguments: map[string]any{"path": "ansible/playbooks"}, ResultText: `{"entry_count":8}`}},
+		{Activity: runtime.ToolActivity{Phase: runtime.ToolActivityPhaseStarted, OccurredAt: time.Date(2026, 4, 16, 8, 0, 4, 0, time.UTC), Name: "shell_start", Arguments: map[string]any{"command": "ansible-playbook", "args": []string{"site.yml"}}}},
+		{Activity: runtime.ToolActivity{Phase: runtime.ToolActivityPhaseCompleted, OccurredAt: time.Date(2026, 4, 16, 8, 0, 5, 0, time.UTC), Name: "shell_start", Arguments: map[string]any{"command": "ansible-playbook", "args": []string{"site.yml"}}, ErrorText: "tool call \"shell_start\" requires approval"}},
+		{Activity: runtime.ToolActivity{Phase: runtime.ToolActivityPhaseStarted, OccurredAt: time.Date(2026, 4, 16, 8, 0, 6, 0, time.UTC), Name: "fs_read_lines", Arguments: map[string]any{"path": "playbooks/start.yml", "start_line": 1, "end_line": 80}}},
+		{Activity: runtime.ToolActivity{Phase: runtime.ToolActivityPhaseCompleted, OccurredAt: time.Date(2026, 4, 16, 8, 0, 7, 0, time.UTC), Name: "fs_read_lines", Arguments: map[string]any{"path": "playbooks/start.yml", "start_line": 1, "end_line": 80}, ResultText: `{"lines":["a","b"]}`}},
 	}
 
 	mm.renderChatViewport(state)
 	got := state.ChatView.View()
-	if !strings.Contains(got, "shell_start curl started") {
-		t.Fatalf("chat view missing live tool start: %q", got)
+	if strings.Contains(got, "started") {
+		t.Fatalf("chat view should not show separate started rows: %q", got)
 	}
-	if !strings.Contains(got, "shell_start curl approval required") {
-		t.Fatalf("chat view missing live tool approval state: %q", got)
+	for _, want := range []string{
+		"fs_list ansible/playbooks",
+		"shell_start ansible-playbook site.yml",
+		"APPROVAL",
+		"fs_read_lines playbooks/start.yml:1-80",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("chat view missing %q: %q", want, got)
+		}
+	}
+	if strings.Contains(got, "artifact_read") {
+		t.Fatalf("chat view should keep only the latest 3 tool runs: %q", got)
 	}
 }
 
@@ -1318,8 +1334,8 @@ func TestChatTimelineToolLinesDoNotIntroduceDoubleBlankSpacing(t *testing.T) {
 	if strings.Contains(content, "\n\n\n") {
 		t.Fatalf("chat timeline still contains excessive blank spacing: %q", content)
 	}
-	if !strings.Contains(content, "fs_list ok") {
-		t.Fatalf("chat timeline missing compact tool line: %q", content)
+	if strings.Contains(content, "fs_list") {
+		t.Fatalf("chat timeline should not render tool history lines directly: %q", content)
 	}
 }
 

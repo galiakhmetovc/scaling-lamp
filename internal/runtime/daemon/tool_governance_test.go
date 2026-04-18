@@ -50,6 +50,17 @@ func TestPersistShellApprovalRuleAndReloadUpdatesPrefixes(t *testing.T) {
 	}
 }
 
+func TestShellApprovalPrefixUsesExecutableOnly(t *testing.T) {
+	t.Parallel()
+
+	if got := shellApprovalPrefix("ansible-playbook", []string{"--syntax-check", "site.yml"}); got != "ansible-playbook" {
+		t.Fatalf("shellApprovalPrefix(ansible-playbook) = %q, want ansible-playbook", got)
+	}
+	if got := shellApprovalPrefix("/usr/bin/ansible", []string{"localhost", "-m", "ping"}); got != "ansible" {
+		t.Fatalf("shellApprovalPrefix(/usr/bin/ansible) = %q, want ansible", got)
+	}
+}
+
 func copyDir(t *testing.T, sourceRoot, targetRoot string) {
 	t.Helper()
 	if err := filepath.Walk(sourceRoot, func(sourcePath string, info os.FileInfo, err error) error {

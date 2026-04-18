@@ -13,15 +13,15 @@ import (
 )
 
 type ToolGovernanceSnapshot struct {
-	AllowedTools           []string `json:"allowed_tools"`
-	ApprovalRequiredTools  []string `json:"approval_required_tools"`
-	ApprovalMode           string   `json:"approval_mode"`
-	ShellApprovalMode      string   `json:"shell_approval_mode"`
-	ShellAllowPrefixes     []string `json:"shell_allow_prefixes,omitempty"`
-	ShellDenyPrefixes      []string `json:"shell_deny_prefixes,omitempty"`
-	ShellTimeout           string   `json:"shell_timeout,omitempty"`
-	ShellMaxOutputBytes    int      `json:"shell_max_output_bytes,omitempty"`
-	ShellAllowNetwork      bool     `json:"shell_allow_network"`
+	AllowedTools          []string `json:"allowed_tools"`
+	ApprovalRequiredTools []string `json:"approval_required_tools"`
+	ApprovalMode          string   `json:"approval_mode"`
+	ShellApprovalMode     string   `json:"shell_approval_mode"`
+	ShellAllowPrefixes    []string `json:"shell_allow_prefixes,omitempty"`
+	ShellDenyPrefixes     []string `json:"shell_deny_prefixes,omitempty"`
+	ShellTimeout          string   `json:"shell_timeout,omitempty"`
+	ShellMaxOutputBytes   int      `json:"shell_max_output_bytes,omitempty"`
+	ShellAllowNetwork     bool     `json:"shell_allow_network"`
 }
 
 func buildToolGovernanceSnapshot(agent *runtime.Agent) ToolGovernanceSnapshot {
@@ -100,7 +100,15 @@ func PersistShellApprovalRuleAndReload(configPath, action, prefix string) (*runt
 }
 
 func shellApprovalPrefix(command string, args []string) string {
-	return strings.TrimSpace(strings.Join(append([]string{command}, args...), " "))
+	command = strings.TrimSpace(command)
+	if command == "" {
+		return strings.TrimSpace(strings.Join(args, " "))
+	}
+	base := filepath.Base(command)
+	if base == "." || base == string(filepath.Separator) {
+		return command
+	}
+	return strings.TrimSpace(base)
 }
 
 func ensureMap(parent map[string]any, key string) map[string]any {

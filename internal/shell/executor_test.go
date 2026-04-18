@@ -786,6 +786,42 @@ func TestExecutorAllowsPersistentApprovalPrefix(t *testing.T) {
 	}
 }
 
+func TestExecutorAllowsPersistentApprovalByExecutablePrefix(t *testing.T) {
+	t.Parallel()
+
+	executor := NewExecutor()
+	out, err := executor.Execute(contracts.ShellExecutionContract{
+		Command: contracts.ShellCommandPolicy{
+			Enabled:  true,
+			Strategy: "static_allowlist",
+			Params:   contracts.ShellCommandParams{AllowedCommands: []string{"/bin/pwd"}},
+		},
+		Approval: contracts.ShellApprovalPolicy{
+			Enabled:  true,
+			Strategy: "always_require",
+			Params:   contracts.ShellApprovalParams{AllowPrefixes: []string{"pwd"}},
+		},
+		Runtime: contracts.ShellRuntimePolicy{
+			Enabled:  true,
+			Strategy: "workspace_write",
+			Params: contracts.ShellRuntimeParams{
+				Cwd:            t.TempDir(),
+				Timeout:        "5s",
+				MaxOutputBytes: 4096,
+				AllowNetwork:   true,
+			},
+		},
+	}, "shell_exec", map[string]any{
+		"command": "/bin/pwd",
+	})
+	if err != nil {
+		t.Fatalf("Execute returned error: %v", err)
+	}
+	if decodeField(t, out, "status") == "approval_pending" {
+		t.Fatalf("executable allow prefix still triggered approval: %s", out)
+	}
+}
+
 func TestExecutorDeniesPersistentApprovalPrefix(t *testing.T) {
 	t.Parallel()
 

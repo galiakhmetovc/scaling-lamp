@@ -891,7 +891,7 @@ func TestChatSubmitShowsPendingPromptBeforeTurnCompletes(t *testing.T) {
 	}
 }
 
-func TestChatInputApproveShortcutHandlesPendingApproval(t *testing.T) {
+func TestChatApprovalShortcutHandlesPendingApprovalWithoutConsumingComposer(t *testing.T) {
 	ws := make(chan daemon.WebsocketEnvelope)
 	close(ws)
 	now := time.Date(2026, 4, 17, 12, 5, 0, 0, time.UTC)
@@ -917,9 +917,9 @@ func TestChatInputApproveShortcutHandlesPendingApproval(t *testing.T) {
 		t.Fatalf("newModelWithClient returned error: %v", err)
 	}
 	state := m.currentSessionState()
-	state.Input.SetValue("y")
+	state.Input.SetValue("ship it after approve")
 
-	modelAfter, cmd := (&m).Update(tea.KeyMsg{Type: tea.KeyEnter})
+	modelAfter, cmd := (&m).Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'y'}, Alt: true})
 	if cmd != nil {
 		t.Fatalf("approval shortcut returned unexpected cmd")
 	}
@@ -927,8 +927,8 @@ func TestChatInputApproveShortcutHandlesPendingApproval(t *testing.T) {
 	if client.approvedShellID != "approval-1" {
 		t.Fatalf("approved shell id = %q, want approval-1", client.approvedShellID)
 	}
-	if got := mm.currentSessionState().Input.Value(); strings.TrimSpace(got) != "" {
-		t.Fatalf("input value = %q, want cleared", got)
+	if got := mm.currentSessionState().Input.Value(); strings.TrimSpace(got) != "ship it after approve" {
+		t.Fatalf("input value = %q, want preserved", got)
 	}
 	if !strings.Contains(mm.statusMessage, "approval granted") {
 		t.Fatalf("statusMessage = %q, want approval granted", mm.statusMessage)
@@ -982,9 +982,9 @@ func TestChatInputApproveShortcutCompletesPendingRunState(t *testing.T) {
 	state.Busy = true
 	state.MainRun.Active = true
 	state.RunCancel = func() {}
-	state.Input.SetValue("a")
+	state.Input.SetValue("follow up after approval")
 
-	modelAfter, cmd := (&m).Update(tea.KeyMsg{Type: tea.KeyEnter})
+	modelAfter, cmd := (&m).Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'a'}, Alt: true})
 	if cmd != nil {
 		t.Fatalf("approval shortcut returned unexpected cmd")
 	}
@@ -1011,6 +1011,9 @@ func TestChatInputApproveShortcutCompletesPendingRunState(t *testing.T) {
 	}
 	if strings.Contains(state.ChatView.View(), "USER [pending]:") {
 		t.Fatalf("chat view still shows pending prompt after approval: %q", state.ChatView.View())
+	}
+	if got := state.Input.Value(); strings.TrimSpace(got) != "follow up after approval" {
+		t.Fatalf("input value = %q, want preserved", got)
 	}
 }
 

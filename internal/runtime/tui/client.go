@@ -1116,7 +1116,15 @@ func buildLocalSessionSnapshot(agent *runtime.Agent, sessionID string) (daemon.S
 }
 
 func daemonShellApprovalPrefix(command string, args []string) string {
-	return strings.TrimSpace(strings.Join(append([]string{command}, args...), " "))
+	command = strings.TrimSpace(command)
+	if command == "" {
+		return strings.TrimSpace(strings.Join(args, " "))
+	}
+	base := path.Base(command)
+	if base == "." || base == "/" {
+		return command
+	}
+	return strings.TrimSpace(base)
 }
 
 func defaultPromptForLocalClient(agent *runtime.Agent) string {

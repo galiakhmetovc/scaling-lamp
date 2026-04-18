@@ -46,6 +46,14 @@ func (m *model) updateChat(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, m.cancelMainRun(state)
 	case "o":
 		return m, m.jumpToWorkspaceFromChat()
+	case "alt+y":
+		return m, m.performChatApprovalAction(state, "approve")
+	case "alt+n":
+		return m, m.performChatApprovalAction(state, "deny")
+	case "alt+a":
+		return m, m.performChatApprovalAction(state, "allow_forever")
+	case "alt+d":
+		return m, m.performChatApprovalAction(state, "deny_forever")
 	case "tab":
 		return m, m.stageOrRecallDraft(state)
 	case "enter", "ctrl+s":
@@ -120,7 +128,7 @@ func (m *model) renderChatViewport(state *sessionState) {
 			}
 			lines = append(lines, content, "")
 		case projections.ChatTimelineItemTool:
-			lines = append(lines, ellipsizeForWidth(prefixTimestamp(item.OccurredAt, item.Content), contentWidth), "")
+			continue
 		default:
 			lines = append(lines, prefixTimestamp(item.OccurredAt, ""), m.renderMarkdownBlock(item.Content, state.Overrides.MarkdownStyle, contentWidth), "")
 		}
@@ -171,9 +179,6 @@ func (m *model) submitChatInput(state *sessionState) tea.Cmd {
 	if prompt == "" {
 		return nil
 	}
-	if handled, cmd := m.handleChatApprovalShortcut(state, prompt); handled {
-		return cmd
-	}
 	if handled, cmd := m.handleChatCommand(state, prompt); handled {
 		return cmd
 	}
@@ -187,12 +192,11 @@ func (m *model) submitChatInput(state *sessionState) tea.Cmd {
 	return m.startMainRun(state, prompt)
 }
 
-func (m *model) handleChatApprovalShortcut(state *sessionState, prompt string) (bool, tea.Cmd) {
+func (m *model) performChatApprovalAction(state *sessionState, action string) tea.Cmd {
 	approvals := m.currentApprovals()
 	if state == nil || len(approvals) == 0 {
-		return false, nil
+		return nil
 	}
-	trimmed := strings.TrimSpace(prompt)
 	approvalIndex := 0
 	if m.approvalCursor >= 0 && m.approvalCursor < len(approvals) {
 		approvalIndex = m.approvalCursor
@@ -203,28 +207,27 @@ func (m *model) handleChatApprovalShortcut(state *sessionState, prompt string) (
 		err    error
 		status string
 	)
-	switch trimmed {
-	case "y":
+	switch action {
+	case "approve":
 		result, err = m.client.ApproveShell(m.ctx, approvalID)
 		status = "shell approval granted"
-	case "n":
+	case "deny":
 		result, err = m.client.DenyShell(m.ctx, approvalID)
 		status = "shell approval denied"
-	case "a":
+	case "allow_forever":
 		result, err = m.client.ApproveShellAlways(m.ctx, approvalID)
 		status = "shell approval granted and saved"
-	case "d":
+	case "deny_forever":
 		result, err = m.client.DenyShellAlways(m.ctx, approvalID)
 		status = "shell approval denied and saved"
 	default:
-		return false, nil
+		return nil
 	}
-	state.Input.Reset()
 	if err != nil {
 		m.errMessage = err.Error()
-		return true, nil
+		return nil
 	}
-	return true, m.applyShellActionResult(state, result, status)
+	return m.applyShellActionResult(state, result, status)
 }
 
 func (m *model) stageOrRecallDraft(state *sessionState) tea.Cmd {
@@ -443,10 +446,14 @@ func (m *model) renderLiveToolLog(state *sessionState, width int) []string {
 	if state == nil || len(state.ToolLog) == 0 {
 		return nil
 	}
-	start := max(0, len(state.ToolLog)-6)
-	lines := []string{}
-	for _, entry := range state.ToolLog[start:] {
-		lines = append(lines, compactToolActivityLine(entry.Activity, width))
+	activities := collapseLiveToolActivities(state.ToolLog)
+	if len(activities) == 0 {
+		return nil
+	}
+	start := max(0, len(activities)-3)
+	lines := []string{"TOOLS:"}
+	for _, activity := range activities[start:] {
+		lines = append(lines, compactLiveToolActivityLine(activity, width))
 	}
 	return lines
 }
@@ -556,7 +563,7 @@ func (m *model) chatComposerHint(state *sessionState) string {
 		return "Input"
 	}
 	if len(state.Snapshot.PendingApprovals) > 0 {
-		return "Input (`y` approve, `n` deny, `a` allow forever, `d` deny forever; otherwise Enter send, Tab queue):"
+		return "Input (Alt+Y approve, Alt+N deny, Alt+A allow forever, Alt+D deny forever; Enter send, Tab queue, Ctrl+E recall, Ctrl+D delete, Shift+Enter newline, Alt+Up/Down queue select):"
 	}
 	if state.MainRun.Active {
 		return "Input (Enter queue interjection, Tab stage draft, Ctrl+E recall, Ctrl+D delete, Ctrl+X stop run, Shift+Enter newline, Alt+Up/Down queue select):"

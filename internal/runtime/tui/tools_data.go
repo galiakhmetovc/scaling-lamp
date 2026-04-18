@@ -26,30 +26,58 @@ func reverseToolEntries(entries []toolLogEntry) []toolLogEntry {
 	return out
 }
 
-func compactToolActivityLine(activity runtime.ToolActivity, width int) string {
+func collapseLiveToolActivities(entries []toolLogEntry) []runtime.ToolActivity {
+	if len(entries) == 0 {
+		return nil
+	}
+	out := make([]runtime.ToolActivity, 0, len(entries))
+	for _, entry := range entries {
+		activity := entry.Activity
+		if len(out) > 0 && compactToolInvocation(out[len(out)-1].Name, out[len(out)-1].Arguments) == compactToolInvocation(activity.Name, activity.Arguments) {
+			out[len(out)-1] = activity
+			continue
+		}
+		out = append(out, activity)
+	}
+	return out
+}
+
+func compactLiveToolActivityLine(activity runtime.ToolActivity, width int) string {
 	base := compactToolInvocation(activity.Name, activity.Arguments)
-	var line string
+	statusText, statusSGR := compactToolStatus(activity)
+	line := prefixTimestamp(activity.OccurredAt, base)
+	if statusText != "" {
+		line += " | " + ansiToolAccent(statusText, statusSGR)
+	}
+	return ellipsizeForWidth(line, width)
+}
+
+func compactToolActivityLine(activity runtime.ToolActivity, width int) string {
+	line := prefixTimestamp(activity.OccurredAt, compactToolInvocation(activity.Name, activity.Arguments))
+	if statusText, statusSGR := compactToolStatus(activity); statusText != "" {
+		line += " | " + ansiToolAccent(statusText, statusSGR)
+	}
+	return ellipsizeForWidth(line, width)
+}
+
+func compactToolStatus(activity runtime.ToolActivity) (string, string) {
 	switch activity.Phase {
 	case runtime.ToolActivityPhaseStarted:
-		line = base + " started"
+		return "RUN", "1;38;5;81"
 	case runtime.ToolActivityPhaseCompleted:
 		switch {
 		case strings.Contains(activity.ErrorText, "requires approval"):
-			line = base + " approval required"
+			return "APPROVAL", "1;30;48;5;214"
 		case strings.TrimSpace(activity.ErrorText) != "":
-			line = base + " error: " + sanitizeToolError(activity.Name, activity.ErrorText)
+			return "ERROR " + sanitizeToolError(activity.Name, activity.ErrorText), "1;38;5;203"
 		default:
 			if summary := compactToolResult(activity.Name, activity.ResultText); summary != "" {
-				line = base + " " + summary
-			} else {
-				line = base + " ok"
+				return strings.ToUpper(summary), "1;38;5;120"
 			}
+			return "OK", "1;38;5;120"
 		}
-	default:
-		line = base
 	}
-	line = prefixTimestamp(activity.OccurredAt, line)
-	return ellipsizeForWidth(line, width)
+	return "", ""
 }
 
 func compactToolInvocation(toolName string, arguments map[string]any) string {
