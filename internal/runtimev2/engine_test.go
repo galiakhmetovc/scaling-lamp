@@ -196,3 +196,67 @@ func TestRunStore(t *testing.T) {
 		t.Fatal("expected run-2 to be deleted")
 	}
 }
+
+func TestRunStoreCreateNormalizesIdentifiers(t *testing.T) {
+	store := NewRunStore()
+
+	snapshot := RunSnapshotV2{
+		RunID:     "  run-1  ",
+		SessionID: "  session-1  ",
+		Status:    RunStatusRunning,
+	}
+	if err := store.Create(snapshot); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+
+	got, ok := store.Get("run-1")
+	if !ok {
+		t.Fatal("expected lookup by normalized key to succeed")
+	}
+	if got.RunID != "run-1" {
+		t.Fatalf("run id = %q, want %q", got.RunID, "run-1")
+	}
+	if got.SessionID != "session-1" {
+		t.Fatalf("session id = %q, want %q", got.SessionID, "session-1")
+	}
+
+	active := store.ListActiveBySession("session-1")
+	if len(active) != 1 {
+		t.Fatalf("active runs = %d, want 1", len(active))
+	}
+	if active[0].RunID != "run-1" {
+		t.Fatalf("active run id = %q, want %q", active[0].RunID, "run-1")
+	}
+
+	if _, ok := store.Get("  run-1  "); ok {
+		t.Fatal("expected padded lookup to miss after normalization")
+	}
+}
+
+func TestRunStoreUpdateRejectsKeyFieldChanges(t *testing.T) {
+	store := NewRunStore()
+	if err := store.Create(RunSnapshotV2{RunID: "run-1", SessionID: "session-1", Status: RunStatusRunning}); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+
+	err := store.Update("run-1", func(snapshot *RunSnapshotV2) error {
+		snapshot.RunID = "run-2"
+		snapshot.SessionID = "session-2"
+		return nil
+	})
+	if err == nil {
+		t.Fatal("expected update to reject key field changes")
+	}
+
+	got, ok := store.Get("run-1")
+	if !ok {
+		t.Fatal("expected original run to remain present")
+	}
+	if got.RunID != "run-1" || got.SessionID != "session-1" {
+		t.Fatalf("snapshot mutated after rejected update: %+v", got)
+	}
+
+	if _, ok := store.Get("run-2"); ok {
+		t.Fatal("unexpected new key created after rejected update")
+	}
+}

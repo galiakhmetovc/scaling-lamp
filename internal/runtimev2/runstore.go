@@ -25,10 +25,12 @@ func NewRunStore() *RunStore {
 }
 
 func (s *RunStore) Create(snapshot RunSnapshotV2) error {
-	if strings.TrimSpace(snapshot.RunID) == "" {
+	snapshot.RunID = strings.TrimSpace(snapshot.RunID)
+	snapshot.SessionID = strings.TrimSpace(snapshot.SessionID)
+	if snapshot.RunID == "" {
 		return fmt.Errorf("run id is required")
 	}
-	if strings.TrimSpace(snapshot.SessionID) == "" {
+	if snapshot.SessionID == "" {
 		return fmt.Errorf("session id is required")
 	}
 
@@ -65,6 +67,9 @@ func (s *RunStore) Update(runID string, fn func(*RunSnapshotV2) error) error {
 	updated := cloneRunSnapshotV2(snapshot)
 	if err := fn(&updated); err != nil {
 		return err
+	}
+	if updated.RunID != snapshot.RunID || updated.SessionID != snapshot.SessionID {
+		return fmt.Errorf("run key fields cannot be updated")
 	}
 	s.runs[runID] = cloneRunSnapshotV2(updated)
 	return nil
