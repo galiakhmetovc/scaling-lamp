@@ -22,119 +22,106 @@ import (
 func TestRunVersionCutover(t *testing.T) {
 	t.Parallel()
 
-	providerServer := newBlockingProviderServer(t)
-	server, _ := newRunVersionTestServer(t, providerServer.URL)
+	providerServer := newImmediateProviderServer(t)
+	server := newRunVersionTestServer(t, providerServer.URL)
 	sessionID := createRunVersionSession(t, server)
 
-	done := make(chan error, 1)
-	go func() {
-		_, err := server.executeCommand(context.Background(), CommandRequest{
-			Command: "chat.send",
-			Payload: map[string]any{
-				"session_id":        sessionID,
-				"prompt":            "ping",
-				"execution_version": string(executionVersionV2),
-			},
-		})
-		done <- err
-	}()
-
-	waitForProviderRequest(t, providerServer.started)
-	server.migrateSessionExecutionVersion(sessionID, executionVersionV1)
-
-	snapshot, err := server.buildSessionSnapshot(sessionID)
+	payload, err := server.executeCommand(context.Background(), CommandRequest{
+		Command: "chat.send",
+		Payload: map[string]any{
+			"session_id":        sessionID,
+			"prompt":            "ping",
+			"execution_version": string(executionVersionV2),
+		},
+	})
 	if err != nil {
-		t.Fatalf("build session snapshot: %v", err)
+		t.Fatalf("chat.send returned error: %v", err)
 	}
+	snapshot := mapPayloadForRunVersionTest(t, payload)["session"].(SessionSnapshot)
 	if snapshot.ExecutionVersion != string(executionVersionV2) {
 		t.Fatalf("snapshot execution version = %q, want %q", snapshot.ExecutionVersion, executionVersionV2)
 	}
 	if snapshot.MainRun.ExecutionVersion != string(executionVersionV2) {
 		t.Fatalf("main run execution version = %q, want %q", snapshot.MainRun.ExecutionVersion, executionVersionV2)
 	}
-	if !snapshot.MainRunActive || !snapshot.MainRun.Active {
-		t.Fatalf("main run flags = %+v, want active while provider request is in flight", snapshot.MainRun)
-	}
-
-	close(providerServer.release)
-	if err := <-done; err != nil {
-		t.Fatalf("chat.send returned error: %v", err)
-	}
-
-	finished, err := server.buildSessionSnapshot(sessionID)
-	if err != nil {
-		t.Fatalf("build finished session snapshot: %v", err)
-	}
-	if finished.ExecutionVersion != string(executionVersionV2) {
-		t.Fatalf("finished snapshot execution version = %q, want %q", finished.ExecutionVersion, executionVersionV2)
+	if snapshot.MainRunActive || snapshot.MainRun.Active {
+		t.Fatalf("main run flags = %+v, want inactive after completion", snapshot.MainRun)
 	}
 }
 
 func TestNoMixedRunVersion(t *testing.T) {
 	t.Parallel()
 
-	providerServer := newImmediateProviderServer(t)
-	server, _ := newRunVersionTestServer(t, providerServer.URL)
+	providerServer := newQueuedProviderServer(t)
+	server := newRunVersionTestServer(t, providerServer.URL)
 	sessionID := createRunVersionSession(t, server)
 
-	first, err := server.executeCommand(context.Background(), CommandRequest{
+	firstDone := make(chan error, 1)
+	go func() {
+		_, err := server.executeCommand(context.Background(), CommandRequest{
+			Command: "chat.send",
+			Payload: map[string]any{
+				"session_id": sessionID,
+				"prompt":     "first",
+			},
+		})
+		firstDone <- err
+	}()
+
+	waitForRequest(t, providerServer.firstStarted)
+
+	secondPayload, err := server.executeCommand(context.Background(), CommandRequest{
 		Command: "chat.send",
 		Payload: map[string]any{
-			"session_id": sessionID,
-			"prompt":     "first",
+			"session_id":        sessionID,
+			"prompt":            "second",
+			"execution_version": string(executionVersionV2),
 		},
 	})
 	if err != nil {
+		t.Fatalf("queued chat.send returned error: %v", err)
+	}
+	secondSnapshot := mapPayloadForRunVersionTest(t, secondPayload)["session"].(SessionSnapshot)
+	if secondSnapshot.ExecutionVersion != string(executionVersionV1) {
+		t.Fatalf("queued snapshot execution version = %q, want %q", secondSnapshot.ExecutionVersion, executionVersionV1)
+	}
+	if queued, _ := mapPayloadForRunVersionTest(t, secondPayload)["queued"].(bool); !queued {
+		t.Fatalf("queued payload = %#v, want queued=true", secondPayload)
+	}
+
+	close(providerServer.firstRelease)
+	if err := <-firstDone; err != nil {
 		t.Fatalf("first chat.send returned error: %v", err)
 	}
-	firstSession := mapPayloadForRunVersionTest(t, first)["session"].(SessionSnapshot)
-	if firstSession.ExecutionVersion != string(executionVersionV1) {
-		t.Fatalf("first run execution version = %q, want %q", firstSession.ExecutionVersion, executionVersionV1)
-	}
 
-	server.migrateSessionExecutionVersion(sessionID, executionVersionV2)
-
-	second, err := server.executeCommand(context.Background(), CommandRequest{
-		Command: "chat.send",
-		Payload: map[string]any{
-			"session_id": sessionID,
-			"prompt":     "second",
-		},
-	})
+	waitForRequest(t, providerServer.secondStarted)
+	activeSnapshot, err := server.buildSessionSnapshot(sessionID)
 	if err != nil {
-		t.Fatalf("second chat.send returned error: %v", err)
+		t.Fatalf("build active snapshot: %v", err)
 	}
-	secondSession := mapPayloadForRunVersionTest(t, second)["session"].(SessionSnapshot)
-	if secondSession.ExecutionVersion != string(executionVersionV2) {
-		t.Fatalf("second run execution version = %q, want %q", secondSession.ExecutionVersion, executionVersionV2)
+	if activeSnapshot.ExecutionVersion != string(executionVersionV1) {
+		t.Fatalf("active snapshot execution version = %q, want %q", activeSnapshot.ExecutionVersion, executionVersionV1)
 	}
-	if secondSession.MainRun.ExecutionVersion != string(executionVersionV2) {
-		t.Fatalf("second main run execution version = %q, want %q", secondSession.MainRun.ExecutionVersion, executionVersionV2)
+	if activeSnapshot.MainRun.ExecutionVersion != string(executionVersionV1) {
+		t.Fatalf("active main run execution version = %q, want %q", activeSnapshot.MainRun.ExecutionVersion, executionVersionV1)
+	}
+
+	close(providerServer.secondRelease)
+	finishedSnapshot, err := server.buildSessionSnapshot(sessionID)
+	if err != nil {
+		t.Fatalf("build finished snapshot: %v", err)
+	}
+	if finishedSnapshot.ExecutionVersion != string(executionVersionV1) {
+		t.Fatalf("finished snapshot execution version = %q, want %q", finishedSnapshot.ExecutionVersion, executionVersionV1)
 	}
 }
 
 type runVersionTestProvider struct {
-	URL     string
-	started chan struct{}
-	release chan struct{}
-}
-
-func newBlockingProviderServer(t *testing.T) runVersionTestProvider {
-	t.Helper()
-
-	started := make(chan struct{}, 1)
-	release := make(chan struct{})
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		select {
-		case started <- struct{}{}:
-		default:
-		}
-		<-release
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = fmt.Fprint(w, `{"id":"resp-1","model":"glm-5-turbo","choices":[{"index":0,"finish_reason":"stop","message":{"role":"assistant","content":"pong"}}],"usage":{"prompt_tokens":8,"completion_tokens":4,"total_tokens":12}}`)
-	}))
-	t.Cleanup(server.Close)
-	return runVersionTestProvider{URL: server.URL, started: started, release: release}
+	URL           string
+	firstStarted  chan struct{}
+	firstRelease  chan struct{}
+	secondStarted chan struct{}
+	secondRelease chan struct{}
 }
 
 func newImmediateProviderServer(t *testing.T) runVersionTestProvider {
@@ -145,10 +132,46 @@ func newImmediateProviderServer(t *testing.T) runVersionTestProvider {
 		_, _ = fmt.Fprint(w, `{"id":"resp-1","model":"glm-5-turbo","choices":[{"index":0,"finish_reason":"stop","message":{"role":"assistant","content":"pong"}}],"usage":{"prompt_tokens":8,"completion_tokens":4,"total_tokens":12}}`)
 	}))
 	t.Cleanup(server.Close)
-	return runVersionTestProvider{URL: server.URL, started: make(chan struct{}, 1), release: make(chan struct{})}
+	return runVersionTestProvider{URL: server.URL}
 }
 
-func waitForProviderRequest(t *testing.T, started <-chan struct{}) {
+func newQueuedProviderServer(t *testing.T) runVersionTestProvider {
+	t.Helper()
+
+	state := &runVersionTestProvider{
+		firstStarted:  make(chan struct{}, 1),
+		firstRelease:  make(chan struct{}),
+		secondStarted: make(chan struct{}, 1),
+		secondRelease: make(chan struct{}),
+	}
+	var requestCount int
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		requestCount++
+		switch requestCount {
+		case 1:
+			select {
+			case state.firstStarted <- struct{}{}:
+			default:
+			}
+			<-state.firstRelease
+		case 2:
+			select {
+			case state.secondStarted <- struct{}{}:
+			default:
+			}
+			<-state.secondRelease
+		default:
+			t.Fatalf("unexpected provider request count %d", requestCount)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = fmt.Fprint(w, `{"id":"resp-1","model":"glm-5-turbo","choices":[{"index":0,"finish_reason":"stop","message":{"role":"assistant","content":"pong"}}],"usage":{"prompt_tokens":8,"completion_tokens":4,"total_tokens":12}}`)
+	}))
+	t.Cleanup(server.Close)
+	state.URL = server.URL
+	return *state
+}
+
+func waitForRequest(t *testing.T, started <-chan struct{}) {
 	t.Helper()
 
 	select {
@@ -158,7 +181,7 @@ func waitForProviderRequest(t *testing.T, started <-chan struct{}) {
 	}
 }
 
-func newRunVersionTestServer(t *testing.T, providerURL string) (*Server, *runtime.Agent) {
+func newRunVersionTestServer(t *testing.T, providerURL string) *Server {
 	t.Helper()
 
 	now := time.Date(2026, 4, 18, 20, 0, 0, 0, time.UTC)
@@ -234,12 +257,11 @@ func newRunVersionTestServer(t *testing.T, providerURL string) (*Server, *runtim
 		provider.NewTransportExecutor(http.DefaultClient),
 	)
 
-	server := &Server{
+	return &Server{
 		agent:          agent,
 		sessionRuntime: map[string]*sessionRuntimeState{},
 		daemonBus:      newDaemonBus(),
 	}
-	return server, agent
 }
 
 func createRunVersionSession(t *testing.T, server *Server) string {

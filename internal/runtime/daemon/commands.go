@@ -111,16 +111,16 @@ func (s *Server) executeCommand(ctx context.Context, req CommandRequest) (any, e
 		if err != nil {
 			return nil, err
 		}
+		var requestedVersion executionVersion
 		if executionVersionString, ok := optionalString(req.Payload, "execution_version"); ok && executionVersionString != "" {
-			executionVersion := executionVersion(executionVersionString)
-			switch executionVersion {
+			requestedVersion = executionVersion(executionVersionString)
+			switch requestedVersion {
 			case executionVersionV1, executionVersionV2:
-				s.migrateSessionExecutionVersion(sessionID, executionVersion)
 			default:
 				return nil, fmt.Errorf("unsupported execution_version %q", executionVersionString)
 			}
 		}
-		return s.executeChatSend(ctx, agent, sessionID, prompt)
+		return s.executeChatSend(ctx, agent, sessionID, prompt, requestedVersion)
 	case "chat.cancel_approval_and_send":
 		sessionID, err := requiredString(req.Payload, "session_id")
 		if err != nil {
@@ -138,7 +138,7 @@ func (s *Server) executeCommand(ctx context.Context, req CommandRequest) (any, e
 			return nil, err
 		}
 		s.finishMainRun(sessionID, nil)
-		return s.executeChatSend(ctx, agent, sessionID, prompt)
+		return s.executeChatSend(ctx, agent, sessionID, prompt, "")
 	case "draft.enqueue":
 		sessionID, err := requiredString(req.Payload, "session_id")
 		if err != nil {
@@ -700,8 +700,14 @@ func (s *Server) sessionPayload(sessionID string) (map[string]any, error) {
 	return map[string]any{"session": snapshot}, nil
 }
 
-func (s *Server) executeChatSend(ctx context.Context, agent *runtime.Agent, sessionID, prompt string) (map[string]any, error) {
-	if !s.startMainRun(sessionID) {
+func (s *Server) executeChatSend(ctx context.Context, agent *runtime.Agent, sessionID, prompt string, requestedVersion executionVersion) (map[string]any, error) {
+	started := false
+	if requestedVersion != "" {
+		started = s.startMainRunWithVersion(sessionID, requestedVersion)
+	} else {
+		started = s.startMainRun(sessionID)
+	}
+	if !started {
 		draft := s.enqueueDraft(sessionID, prompt)
 		payload, err := s.sessionPayload(sessionID)
 		if err != nil {
