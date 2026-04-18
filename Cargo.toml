@@ -1,0 +1,10 @@
+[workspace]
+members = ["cmd/*", "crates/*"]
+resolver = "2"
+
+[workspace.package]
+edition = "2024"
+license = "MIT"
+repository = "https://github.com/galiakhmetovc/scaling-lamp"
+rust-version = "1.95"
+version = "0.1.0"
