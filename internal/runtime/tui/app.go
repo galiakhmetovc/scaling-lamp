@@ -303,6 +303,21 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		return m, m.applyShellActionResult(state, msg.Result, msg.Status)
+	case sessionSnapshotReloadedMsg:
+		state := m.sessions[msg.SessionID]
+		if state == nil {
+			return m, nil
+		}
+		if msg.Err != nil {
+			state.LastError = msg.Err.Error()
+			m.errMessage = msg.Err.Error()
+			return m, nil
+		}
+		state.Snapshot = mergeSessionSnapshot(state.Snapshot, msg.Session)
+		m.syncRunStateFromSnapshot(state, false)
+		m.renderChatViewport(state)
+		m.renderToolsViewport(state)
+		return m, nil
 	case sessionRenamedMsg:
 		if msg.Err != nil {
 			m.errMessage = msg.Err.Error()

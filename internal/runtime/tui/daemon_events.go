@@ -25,6 +25,9 @@ func (m *model) handleDaemonEnvelope(envelope daemon.WebsocketEnvelope) {
 				}
 			case runtime.UIEventStatusChanged:
 				state.Status = event.Status
+				if event.Status == "approval_pending" {
+					_ = m.reloadSessionSnapshot(event.SessionID)
+				}
 			case runtime.UIEventRunCompleted:
 				state.Status = "done"
 				state.Streaming.Reset()

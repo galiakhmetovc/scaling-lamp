@@ -267,6 +267,50 @@ func (m *model) defaultOverrides() sessionOverrides {
 	return m.client.DefaultOverrides()
 }
 
+func (m *model) syncRunStateFromSnapshot(state *sessionState, preserveActive bool) {
+	if state == nil {
+		return
+	}
+	active := state.Snapshot.MainRunActive || state.Snapshot.MainRun.Active
+	if preserveActive && state.MainRun.Active && !active {
+		active = true
+	}
+	if !state.Snapshot.MainRun.StartedAt.IsZero() {
+		state.MainRun.StartedAt = state.Snapshot.MainRun.StartedAt
+	}
+	if state.Snapshot.MainRun.Provider != "" {
+		state.MainRun.Provider = state.Snapshot.MainRun.Provider
+	}
+	if state.Snapshot.MainRun.Model != "" {
+		state.MainRun.Model = state.Snapshot.MainRun.Model
+	}
+	if state.Snapshot.MainRun.InputTokens > 0 {
+		state.MainRun.InputTokens = state.Snapshot.MainRun.InputTokens
+	}
+	if state.Snapshot.MainRun.OutputTokens > 0 {
+		state.MainRun.OutputTokens = state.Snapshot.MainRun.OutputTokens
+	}
+	if state.Snapshot.MainRun.TotalTokens > 0 {
+		state.MainRun.TotalTokens = state.Snapshot.MainRun.TotalTokens
+	}
+	if active {
+		state.MainRun.Active = true
+		state.Busy = true
+		if state.Status == "" || state.Status == "idle" || state.Status == "done" {
+			state.Status = "running"
+		}
+		return
+	}
+	state.MainRun.Active = false
+	state.Busy = false
+	state.PendingPrompt = ""
+	state.RunCancel = nil
+	state.MainRun.CompletedAt = m.now()
+	if state.Status == "" || state.Status == "running" || state.Status == "approval_pending" {
+		state.Status = "idle"
+	}
+}
+
 func (m *model) currentSessionState() *sessionState {
 	if m.activeSessionID == "" {
 		return nil
@@ -297,6 +341,7 @@ func (m *model) reloadSessionSnapshot(sessionID string) error {
 	}
 	state.SessionID = sessionID
 	state.Snapshot = snapshot
+	m.syncRunStateFromSnapshot(state, false)
 	state.Loaded = true
 	m.renderChatViewport(state)
 	m.renderToolsViewport(state)

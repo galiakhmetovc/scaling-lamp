@@ -95,6 +95,17 @@ func runShellActionCmd(ctx context.Context, client OperatorClient, sessionID, ap
 	}
 }
 
+func reloadSessionSnapshotCmd(ctx context.Context, client OperatorClient, sessionID string) tea.Cmd {
+	return func() tea.Msg {
+		session, err := client.GetSession(ctx, sessionID)
+		return sessionSnapshotReloadedMsg{
+			SessionID: sessionID,
+			Session:   session,
+			Err:       err,
+		}
+	}
+}
+
 func tickClockCmd() tea.Cmd {
 	return tea.Tick(time.Second, func(t time.Time) tea.Msg { return clockTickMsg(t) })
 }

@@ -1115,6 +1115,142 @@ func TestChatApprovalSelectionCyclesAcrossPendingApprovals(t *testing.T) {
 	}
 }
 
+func TestShellApprovalResultDoesNotForceRunIdleWhileContinuationIsStillInFlight(t *testing.T) {
+	ws := make(chan daemon.WebsocketEnvelope)
+	close(ws)
+	now := time.Date(2026, 4, 18, 11, 30, 0, 0, time.UTC)
+	client := &stubOperatorClient{
+		sessions: []SessionSummary{{SessionID: "session-1", CreatedAt: now, LastActivity: now, MessageCount: 0}},
+		snapshot: daemon.SessionSnapshot{
+			SessionID: "session-1",
+			Prompt: daemon.SessionPromptSnapshot{
+				Default:   "default prompt",
+				Effective: "default prompt",
+			},
+		},
+		ws: ws,
+	}
+
+	m, err := newModelWithClient(context.Background(), client, "")
+	if err != nil {
+		t.Fatalf("newModelWithClient returned error: %v", err)
+	}
+	state := m.currentSessionState()
+	state.PendingPrompt = "run ansible"
+	state.Busy = true
+	state.Status = "approval_pending"
+	state.MainRun.Active = true
+	state.MainRun.StartedAt = now
+	state.RunCancel = func() {}
+
+	modelAfter, cmd := (&m).Update(shellActionFinishedMsg{
+		SessionID: "session-1",
+		Result: ShellActionResult{Session: daemon.SessionSnapshot{
+			SessionID: "session-1",
+			Prompt: daemon.SessionPromptSnapshot{
+				Default:   "default prompt",
+				Effective: "default prompt",
+			},
+		}},
+		Status: "shell approval granted and saved",
+	})
+	if cmd == nil {
+		t.Fatal("shell approval should schedule follow-up work")
+	}
+	mm := modelAfter.(*model)
+	state = mm.currentSessionState()
+	if !state.MainRun.Active {
+		t.Fatal("state.MainRun.Active = false, want true")
+	}
+	if !state.Busy {
+		t.Fatal("state.Busy = false, want true")
+	}
+	if state.Status == "idle" {
+		t.Fatalf("state.Status = %q, want non-idle while resumed run is still in flight", state.Status)
+	}
+	if state.PendingPrompt != "run ansible" {
+		t.Fatalf("pending prompt = %q, want preserved", state.PendingPrompt)
+	}
+}
+
+func TestApprovalPendingEventReloadsSnapshotAndRestoresApprovalMenu(t *testing.T) {
+	ws := make(chan daemon.WebsocketEnvelope)
+	close(ws)
+	now := time.Date(2026, 4, 18, 11, 31, 0, 0, time.UTC)
+	client := &stubOperatorClient{
+		sessions: []SessionSummary{{SessionID: "session-1", CreatedAt: now, LastActivity: now, MessageCount: 0}},
+		snapshot: daemon.SessionSnapshot{
+			SessionID: "session-1",
+			Prompt: daemon.SessionPromptSnapshot{
+				Default:   "default prompt",
+				Effective: "default prompt",
+			},
+		},
+		ws: ws,
+	}
+
+	m, err := newModelWithClient(context.Background(), client, "")
+	if err != nil {
+		t.Fatalf("newModelWithClient returned error: %v", err)
+	}
+	state := m.currentSessionState()
+	state.PendingPrompt = "run ansible"
+	state.Busy = true
+	state.Status = "running"
+	state.MainRun.Active = true
+	state.MainRun.StartedAt = now
+
+	modelAfter, _ := (&m).Update(shellActionFinishedMsg{
+		SessionID: "session-1",
+		Result: ShellActionResult{Session: daemon.SessionSnapshot{
+			SessionID: "session-1",
+			Prompt: daemon.SessionPromptSnapshot{
+				Default:   "default prompt",
+				Effective: "default prompt",
+			},
+		}},
+		Status: "shell approval granted",
+	})
+	mm := modelAfter.(*model)
+	client.snapshot = daemon.SessionSnapshot{
+		SessionID: "session-1",
+		MainRunActive: true,
+		MainRun: daemon.MainRunSnapshot{
+			Active:    true,
+			StartedAt: now,
+		},
+		PendingApprovals: []shell.PendingApprovalView{{
+			ApprovalID: "approval-2",
+			Command:    "ansible-playbook",
+			Args:       []string{"site.yml"},
+		}},
+		Prompt: daemon.SessionPromptSnapshot{
+			Default:   "default prompt",
+			Effective: "default prompt",
+		},
+	}
+
+	modelAfter, _ = mm.Update(daemonEnvelopeMsg(daemon.WebsocketEnvelope{
+		Type: "ui_event",
+		Event: &runtime.UIEvent{
+			Kind:      runtime.UIEventStatusChanged,
+			SessionID: "session-1",
+			Status:    "approval_pending",
+		},
+	}))
+	mm = modelAfter.(*model)
+	state = mm.currentSessionState()
+	if !mm.chatApprovalMenuVisible(state) {
+		t.Fatal("chat approval menu hidden, want visible after follow-up approval")
+	}
+	if len(state.Snapshot.PendingApprovals) != 1 || state.Snapshot.PendingApprovals[0].ApprovalID != "approval-2" {
+		t.Fatalf("pending approvals = %#v, want approval-2 after snapshot reload", state.Snapshot.PendingApprovals)
+	}
+	if !strings.Contains(state.ChatView.View(), "Approve once") || !strings.Contains(state.ChatView.View(), "ansible-playbook site.yml") {
+		t.Fatalf("chat view missing reloaded approval menu: %q", state.ChatView.View())
+	}
+}
+
 func TestSessionsViewShowsHumanReadableTimestamps(t *testing.T) {
 	ws := make(chan daemon.WebsocketEnvelope)
 	close(ws)

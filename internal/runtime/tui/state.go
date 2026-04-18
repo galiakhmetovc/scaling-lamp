@@ -316,6 +316,12 @@ type sessionDeletedMsg struct {
 	Err       error
 }
 
+type sessionSnapshotReloadedMsg struct {
+	SessionID string
+	Session   daemon.SessionSnapshot
+	Err       error
+}
+
 type promptSavedMsg struct {
 	Session daemon.SessionSnapshot
 	Err     error
