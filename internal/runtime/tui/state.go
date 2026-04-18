@@ -11,6 +11,7 @@ import (
 
 	"teamd/internal/runtime"
 	"teamd/internal/runtime/daemon"
+	"teamd/internal/runtime/workspace"
 )
 
 var topTabs = []string{"Sessions", "Chat", "Head", "Prompt", "Workspace", "Plan", "Tools", "Settings"}
@@ -135,6 +136,23 @@ type sessionState struct {
 	QueueCursor   int
 	BtwRuns       []btwRun
 	Interjections []interjectionEntry
+	Workspace     workspaceSessionState
+}
+
+type workspaceMode int
+
+const (
+	workspaceModeTerminal workspaceMode = iota
+	workspaceModeFiles
+	workspaceModeEditor
+	workspaceModeArtifacts
+)
+
+type workspaceSessionState struct {
+	Mode     workspaceMode
+	PTY      workspace.PTYSnapshot
+	Loaded   bool
+	LastSync time.Time
 }
 
 type configFormDraft struct {
@@ -265,4 +283,21 @@ type promptSavedMsg struct {
 type promptResetMsg struct {
 	Session daemon.SessionSnapshot
 	Err     error
+}
+
+type workspacePTYOpenedMsg struct {
+	SessionID string
+	Result    WorkspacePTYResult
+	Err       error
+}
+
+type workspacePTYInputMsg struct {
+	SessionID string
+	Err       error
+}
+
+type workspacePTYRefreshedMsg struct {
+	SessionID string
+	Result    WorkspacePTYResult
+	Err       error
 }

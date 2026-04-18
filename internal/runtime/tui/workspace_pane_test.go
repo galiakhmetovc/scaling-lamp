@@ -13,52 +13,14 @@ import (
 	"teamd/internal/config"
 	"teamd/internal/contracts"
 	"teamd/internal/runtime"
+	"teamd/internal/runtime/daemon"
 	"teamd/internal/runtime/eventing"
 	"teamd/internal/runtime/projections"
 )
 
 func TestWorkspaceTabScaffold(t *testing.T) {
-	dir := t.TempDir()
-	configPath := filepath.Join(dir, "agent.yaml")
-	if err := os.WriteFile(configPath, []byte("kind: AgentConfig\nversion: v1\nid: tui-test\nspec:\n  runtime:\n    max_tool_rounds: 7\n"), 0o644); err != nil {
-		t.Fatalf("WriteFile config: %v", err)
-	}
-
-	agent := &runtime.Agent{
-		ConfigPath: configPath,
-		Config:     config.AgentConfig{ID: "tui-test", Spec: config.AgentConfigSpec{Runtime: config.AgentRuntimeConfig{MaxToolRounds: 7}}},
-		Contracts: contracts.ResolvedContracts{
-			Chat: contracts.ChatContract{
-				Output: contracts.ChatOutputPolicy{Params: contracts.ChatOutputParams{RenderMarkdown: true, MarkdownStyle: "dark"}},
-				Status: contracts.ChatStatusPolicy{Params: contracts.ChatStatusParams{ShowToolCalls: true, ShowToolResults: true, ShowPlanAfterPlanTools: true}},
-			},
-		},
-		EventLog:    runtime.NewInMemoryEventLog(),
-		Projections: []projections.Projection{projections.NewSessionCatalogProjection(), projections.NewTranscriptProjection(), projections.NewChatTimelineProjection(), projections.NewPlanHeadProjection(), projections.NewActivePlanProjection()},
-		UIBus:       runtime.NewUIEventBus(),
-		Now:         func() time.Time { return time.Date(2026, 4, 14, 20, 35, 0, 0, time.UTC) },
-		NewID:       func(prefix string) string { return prefix + "-1" },
-	}
-	if err := agent.RecordEvent(context.Background(), eventing.Event{
-		ID:               "evt-session-created",
-		Kind:             eventing.EventSessionCreated,
-		OccurredAt:       agent.Now(),
-		AggregateID:      "session-1",
-		AggregateType:    eventing.AggregateSession,
-		AggregateVersion: 1,
-		Payload:          map[string]any{"session_id": "session-1"},
-	}); err != nil {
-		t.Fatalf("RecordEvent session created: %v", err)
-	}
-
-	sessionID := seedSessionForTUITest(t, agent)
-	m, err := newModel(context.Background(), agent, sessionID)
-	if err != nil {
-		t.Fatalf("newModel returned error: %v", err)
-	}
-
-	modelAfter, _ := (&m).Update(tea.WindowSizeMsg{Width: 120, Height: 40})
-	got := modelAfter.View()
+	m, _ := newWorkspaceTerminalTestModel(t)
+	got := m.View()
 	for _, tab := range []string{"Sessions", "Chat", "Head", "Prompt", "Workspace", "Plan", "Tools", "Settings"} {
 		if !strings.Contains(got, tab) {
 			t.Fatalf("view missing tab %q: %q", tab, got)
@@ -78,13 +40,156 @@ func TestWorkspaceTabScaffold(t *testing.T) {
 		last = idx
 	}
 
-	m.tab = tabWorkspace
-	modelAfter, _ = (&m).Update(tea.WindowSizeMsg{Width: 120, Height: 40})
-	got = modelAfter.View()
-	if !strings.Contains(got, "Workspace pane") {
-		t.Fatalf("workspace tab did not render placeholder view: %q", got)
+	m = runWorkspaceTerminalStep(t, m, tea.KeyMsg{Type: tea.KeyF5})
+	got = m.View()
+	if !strings.Contains(got, "Terminal") {
+		t.Fatalf("workspace tab did not render terminal view: %q", got)
 	}
-	if strings.Contains(got, "No active plan") || strings.Contains(got, "Goal:") {
-		t.Fatalf("workspace tab fell through to the plan pane: %q", got)
+}
+
+func TestWorkspaceTerminalDefaultsToTerminal(t *testing.T) {
+	m, client := newWorkspaceTerminalTestModel(t)
+	m = runWorkspaceTerminalStep(t, m, tea.KeyMsg{Type: tea.KeyF5})
+
+	if m.tab != tabWorkspace {
+		t.Fatalf("tab = %v, want workspace", m.tab)
 	}
+	got := m.View()
+	if !strings.Contains(got, "Terminal") {
+		t.Fatalf("workspace view missing terminal mode: %q", got)
+	}
+	if len(client.workspaceOpenCalls) != 1 || client.workspaceOpenCalls[0] != "session-1" {
+		t.Fatalf("workspace open calls = %#v, want first entry for session-1", client.workspaceOpenCalls)
+	}
+}
+
+func TestWorkspaceTerminalOpensPTYOnFirstEntry(t *testing.T) {
+	m, client := newWorkspaceTerminalTestModel(t)
+	m = runWorkspaceTerminalStep(t, m, tea.KeyMsg{Type: tea.KeyF5})
+
+	if len(client.workspaceOpenCalls) != 1 {
+		t.Fatalf("workspace open calls = %d, want 1", len(client.workspaceOpenCalls))
+	}
+	if client.workspaceOpenCalls[0] != "session-1" {
+		t.Fatalf("workspace opened for %q, want session-1", client.workspaceOpenCalls[0])
+	}
+}
+
+func TestWorkspaceTerminalForwardsInputToPTYClientMethods(t *testing.T) {
+	m, client := newWorkspaceTerminalTestModel(t)
+	m = runWorkspaceTerminalStep(t, m, tea.KeyMsg{Type: tea.KeyF5})
+	m = runWorkspaceTerminalStep(t, m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'x'}})
+
+	if len(client.workspaceInputCalls) != 1 {
+		t.Fatalf("workspace input calls = %d, want 1", len(client.workspaceInputCalls))
+	}
+	if got := client.workspaceInputCalls[0]; got.PTYID != "pty-session-1" || got.Data != "x" {
+		t.Fatalf("workspace input call = %#v, want pty-session-1 with x", got)
+	}
+}
+
+func TestWorkspaceTerminalSwitchesPTYContextWhenSessionChanges(t *testing.T) {
+	m, client := newWorkspaceTerminalTestModel(t)
+	m = runWorkspaceTerminalStep(t, m, tea.KeyMsg{Type: tea.KeyF5})
+
+	m.tab = tabSessions
+	m.sessionCursor = 1
+	m = runWorkspaceTerminalStep(t, m, tea.KeyMsg{Type: tea.KeyEnter})
+
+	m = runWorkspaceTerminalStep(t, m, tea.KeyMsg{Type: tea.KeyF5})
+
+	if len(client.workspaceOpenCalls) != 2 {
+		t.Fatalf("workspace open calls = %#v, want two opens", client.workspaceOpenCalls)
+	}
+	if client.workspaceOpenCalls[1] != "session-2" {
+		t.Fatalf("second workspace open = %q, want session-2", client.workspaceOpenCalls[1])
+	}
+}
+
+func runWorkspaceTerminalStep(t *testing.T, m model, msg tea.Msg) model {
+	t.Helper()
+	next, cmd := (&m).Update(msg)
+	updated, ok := next.(*model)
+	if !ok {
+		t.Fatalf("Update returned %T, want tui.model", next)
+	}
+	if cmd == nil {
+		return *updated
+	}
+	next, cmd = updated.Update(cmd())
+	updated, ok = next.(*model)
+	if !ok {
+		t.Fatalf("command Update returned %T, want tui.model", next)
+	}
+	if cmd != nil {
+		next, cmd = updated.Update(cmd())
+		updated, ok = next.(*model)
+		if !ok {
+			t.Fatalf("second command Update returned %T, want tui.model", next)
+		}
+		if cmd != nil {
+			t.Fatalf("unexpected third workspace command %T", cmd)
+		}
+	}
+	return *updated
+}
+
+func newWorkspaceTerminalTestModel(t *testing.T) (model, *stubOperatorClient) {
+	t.Helper()
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "agent.yaml")
+	if err := os.WriteFile(configPath, []byte("kind: AgentConfig\nversion: v1\nid: tui-test\nspec:\n  runtime:\n    max_tool_rounds: 7\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile config: %v", err)
+	}
+
+	now := time.Date(2026, 4, 15, 10, 0, 0, 0, time.UTC)
+	client := &stubOperatorClient{
+		sessions: []SessionSummary{
+			{SessionID: "session-1", CreatedAt: now, LastActivity: now, MessageCount: 1},
+			{SessionID: "session-2", CreatedAt: now, LastActivity: now, MessageCount: 2},
+		},
+		snapshot: daemon.SessionSnapshot{
+			SessionID:    "session-1",
+			CreatedAt:    now,
+			LastActivity: now,
+			MessageCount: 1,
+			Prompt: daemon.SessionPromptSnapshot{
+				Default:   "default prompt",
+				Effective: "default prompt",
+			},
+		},
+	}
+	agent := &runtime.Agent{
+		ConfigPath: configPath,
+		Config:     config.AgentConfig{ID: "tui-test", Spec: config.AgentConfigSpec{Runtime: config.AgentRuntimeConfig{MaxToolRounds: 7}}},
+		Contracts: contracts.ResolvedContracts{
+			Chat: contracts.ChatContract{
+				Output: contracts.ChatOutputPolicy{Params: contracts.ChatOutputParams{RenderMarkdown: true, MarkdownStyle: "dark"}},
+				Status: contracts.ChatStatusPolicy{Params: contracts.ChatStatusParams{ShowToolCalls: true, ShowToolResults: true, ShowPlanAfterPlanTools: true}},
+			},
+		},
+		EventLog:    runtime.NewInMemoryEventLog(),
+		Projections: []projections.Projection{projections.NewSessionCatalogProjection(), projections.NewTranscriptProjection(), projections.NewChatTimelineProjection(), projections.NewPlanHeadProjection(), projections.NewActivePlanProjection()},
+		UIBus:       runtime.NewUIEventBus(),
+		Now:         func() time.Time { return now },
+		NewID:       func(prefix string) string { return prefix + "-1" },
+	}
+	if err := agent.RecordEvent(context.Background(), eventing.Event{
+		ID:               "evt-session-created",
+		Kind:             eventing.EventSessionCreated,
+		OccurredAt:       agent.Now(),
+		AggregateID:      "session-1",
+		AggregateType:    eventing.AggregateSession,
+		AggregateVersion: 1,
+		Payload:          map[string]any{"session_id": "session-1"},
+	}); err != nil {
+		t.Fatalf("RecordEvent session created: %v", err)
+	}
+
+	m, err := newModelWithClient(context.Background(), client, "session-1")
+	if err != nil {
+		t.Fatalf("newModelWithClient returned error: %v", err)
+	}
+	m = runWorkspaceTerminalStep(t, m, tea.WindowSizeMsg{Width: 120, Height: 40})
+	return m, client
 }

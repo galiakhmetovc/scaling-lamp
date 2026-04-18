@@ -20,6 +20,7 @@ import (
 	"teamd/internal/runtime/daemon"
 	"teamd/internal/runtime/eventing"
 	"teamd/internal/runtime/projections"
+	"teamd/internal/runtime/workspace"
 	"teamd/internal/shell"
 	"teamd/internal/tools"
 )
@@ -47,6 +48,21 @@ type stubOperatorClient struct {
 	approvedAlwaysShellID string
 	deniedShellID         string
 	deniedAlwaysShellID   string
+	workspaceOpenCalls    []string
+	workspaceInputCalls   []workspaceInputCall
+	workspaceResizeCalls  []workspaceResizeCall
+	workspaceSnapshots    map[string]workspace.PTYSnapshot
+}
+
+type workspaceInputCall struct {
+	PTYID string
+	Data  string
+}
+
+type workspaceResizeCall struct {
+	PTYID string
+	Cols  int
+	Rows  int
 }
 
 func (c *stubOperatorClient) Bootstrap(context.Context) (daemon.BootstrapPayload, error) {
@@ -163,6 +179,55 @@ func (c *stubOperatorClient) DenyShellAlways(_ context.Context, approvalID strin
 
 func (c *stubOperatorClient) KillShell(context.Context, string) (ShellActionResult, error) {
 	return ShellActionResult{}, nil
+}
+
+func (c *stubOperatorClient) WorkspacePTYOpen(_ context.Context, sessionID string, cols, rows int) (WorkspacePTYResult, error) {
+	c.workspaceOpenCalls = append(c.workspaceOpenCalls, sessionID)
+	if c.workspaceSnapshots == nil {
+		c.workspaceSnapshots = map[string]workspace.PTYSnapshot{}
+	}
+	snap := workspace.PTYSnapshot{
+		PTYID:     "pty-" + sessionID,
+		SessionID: sessionID,
+		Cols:      cols,
+		Rows:      rows,
+		Alive:     true,
+		Scrollback: []string{
+			"workspace ready for " + sessionID,
+		},
+	}
+	c.workspaceSnapshots[sessionID] = snap
+	return WorkspacePTYResult{PTY: snap}, nil
+}
+
+func (c *stubOperatorClient) WorkspacePTYInput(_ context.Context, ptyID, data string) error {
+	c.workspaceInputCalls = append(c.workspaceInputCalls, workspaceInputCall{PTYID: ptyID, Data: data})
+	return nil
+}
+
+func (c *stubOperatorClient) WorkspacePTYSnapshot(_ context.Context, sessionID string) (WorkspacePTYResult, error) {
+	if c.workspaceSnapshots == nil {
+		c.workspaceSnapshots = map[string]workspace.PTYSnapshot{}
+	}
+	snap, ok := c.workspaceSnapshots[sessionID]
+	if !ok {
+		snap = workspace.PTYSnapshot{PTYID: "pty-" + sessionID, SessionID: sessionID, Alive: true}
+		c.workspaceSnapshots[sessionID] = snap
+	}
+	return WorkspacePTYResult{PTY: snap}, nil
+}
+
+func (c *stubOperatorClient) WorkspacePTYResize(_ context.Context, ptyID string, cols, rows int) (WorkspacePTYResult, error) {
+	c.workspaceResizeCalls = append(c.workspaceResizeCalls, workspaceResizeCall{PTYID: ptyID, Cols: cols, Rows: rows})
+	for sessionID, snap := range c.workspaceSnapshots {
+		if snap.PTYID == ptyID {
+			snap.Cols = cols
+			snap.Rows = rows
+			c.workspaceSnapshots[sessionID] = snap
+			return WorkspacePTYResult{PTY: snap}, nil
+		}
+	}
+	return WorkspacePTYResult{}, nil
 }
 
 func (c *stubOperatorClient) GetSettings(context.Context) (daemon.SettingsSnapshot, error) {

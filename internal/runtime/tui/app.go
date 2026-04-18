@@ -120,6 +120,16 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.promptEditor.SetWidth(max(20, m.width-6))
 		m.promptEditor.SetHeight(max(10, m.height-12))
 		m.sessionTitleInput.Width = max(20, m.width/3)
+		if m.tab == tabWorkspace {
+			if state := m.currentSessionState(); state != nil {
+				if state.Workspace.Loaded && state.Workspace.PTY.PTYID != "" {
+					return m, workspacePTYSnapshotCmd(m.ctx, m.client, state.SessionID)
+				}
+				if cmd := m.ensureWorkspacePTY(state); cmd != nil {
+					return m, cmd
+				}
+			}
+		}
 		return m, nil
 	case tea.KeyMsg:
 		if msg.String() == "ctrl+c" || msg.String() == "ctrl+q" {
@@ -331,6 +341,37 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.promptDirty = false
 		m.statusMessage = "prompt override reset"
 		return m, nil
+	case workspacePTYOpenedMsg:
+		state := m.sessions[msg.SessionID]
+		if state == nil {
+			return m, nil
+		}
+		if msg.Err != nil {
+			m.errMessage = msg.Err.Error()
+			return m, nil
+		}
+		state.Workspace.Loaded = true
+		state.Workspace.PTY = msg.Result.PTY
+		state.Workspace.LastSync = m.now()
+		return m, nil
+	case workspacePTYInputMsg:
+		if msg.Err != nil {
+			m.errMessage = msg.Err.Error()
+		}
+		return m, nil
+	case workspacePTYRefreshedMsg:
+		state := m.sessions[msg.SessionID]
+		if state == nil {
+			return m, nil
+		}
+		if msg.Err != nil {
+			m.errMessage = msg.Err.Error()
+			return m, nil
+		}
+		state.Workspace.Loaded = true
+		state.Workspace.PTY = msg.Result.PTY
+		state.Workspace.LastSync = m.now()
+		return m, nil
 	}
 	return m, nil
 }
@@ -357,6 +398,9 @@ func (m *model) handleGlobalKey(msg tea.KeyMsg) tea.Cmd {
 		m.tab = tabPrompt
 	case "f5":
 		m.tab = tabWorkspace
+		if state := m.currentSessionState(); state != nil {
+			return m.ensureWorkspacePTY(state)
+		}
 	case "f6":
 		m.tab = tabPlan
 	case "f7":

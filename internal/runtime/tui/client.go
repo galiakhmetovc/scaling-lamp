@@ -18,6 +18,7 @@ import (
 	"teamd/internal/runtime"
 	"teamd/internal/runtime/daemon"
 	"teamd/internal/runtime/projections"
+	"teamd/internal/runtime/workspace"
 )
 
 type SessionSummary struct {
@@ -56,6 +57,10 @@ type ShellActionResult struct {
 	Session daemon.SessionSnapshot
 }
 
+type WorkspacePTYResult struct {
+	PTY workspace.PTYSnapshot
+}
+
 type OperatorClient interface {
 	Bootstrap(context.Context) (daemon.BootstrapPayload, error)
 	ListSessions(context.Context) ([]SessionSummary, error)
@@ -78,6 +83,10 @@ type OperatorClient interface {
 	DenyShell(context.Context, string) (ShellActionResult, error)
 	DenyShellAlways(context.Context, string) (ShellActionResult, error)
 	KillShell(context.Context, string) (ShellActionResult, error)
+	WorkspacePTYOpen(context.Context, string, int, int) (WorkspacePTYResult, error)
+	WorkspacePTYInput(context.Context, string, string) error
+	WorkspacePTYSnapshot(context.Context, string) (WorkspacePTYResult, error)
+	WorkspacePTYResize(context.Context, string, int, int) (WorkspacePTYResult, error)
 	GetSettings(context.Context) (daemon.SettingsSnapshot, error)
 	ApplySettingsForm(context.Context, string, map[string]any) (daemon.SettingsSnapshot, error)
 	GetSettingsRaw(context.Context, string) (daemon.SettingsRawFileContent, error)
@@ -91,11 +100,12 @@ type OperatorClient interface {
 }
 
 type localClient struct {
-	agent *runtime.Agent
+	agent        *runtime.Agent
+	workspacePTY *workspace.WorkspacePTYManager
 }
 
 func newLocalClient(agent *runtime.Agent) OperatorClient {
-	return &localClient{agent: agent}
+	return &localClient{agent: agent, workspacePTY: workspace.NewWorkspacePTYManager()}
 }
 
 func (c *localClient) Bootstrap(ctx context.Context) (daemon.BootstrapPayload, error) {
@@ -351,6 +361,36 @@ func (c *localClient) KillShell(ctx context.Context, commandID string) (ShellAct
 	}
 	session, err := c.GetSession(ctx, view.SessionID)
 	return ShellActionResult{Session: session}, err
+}
+
+func (c *localClient) WorkspacePTYOpen(_ context.Context, sessionID string, cols, rows int) (WorkspacePTYResult, error) {
+	pty, err := c.workspacePTY.Open(sessionID, cols, rows)
+	return WorkspacePTYResult{PTY: pty}, err
+}
+
+func (c *localClient) WorkspacePTYInput(_ context.Context, ptyID, data string) error {
+	return c.workspacePTY.Input(ptyID, []byte(data))
+}
+
+func (c *localClient) WorkspacePTYSnapshot(_ context.Context, sessionID string) (WorkspacePTYResult, error) {
+	pty, ok := c.workspacePTY.Snapshot(sessionID)
+	if !ok {
+		return WorkspacePTYResult{}, fmt.Errorf("workspace pty for session %q not found", sessionID)
+	}
+	return WorkspacePTYResult{PTY: pty}, nil
+}
+
+func (c *localClient) WorkspacePTYResize(_ context.Context, ptyID string, cols, rows int) (WorkspacePTYResult, error) {
+	if err := c.workspacePTY.Resize(ptyID, cols, rows); err != nil {
+		return WorkspacePTYResult{}, err
+	}
+	for _, sessionID := range c.workspacePTY.SessionIDs() {
+		pty, ok := c.workspacePTY.Snapshot(sessionID)
+		if ok && pty.PTYID == ptyID {
+			return WorkspacePTYResult{PTY: pty}, nil
+		}
+	}
+	return WorkspacePTYResult{}, fmt.Errorf("workspace pty %q not found", ptyID)
 }
 
 func (c *localClient) GetSettings(ctx context.Context) (daemon.SettingsSnapshot, error) {
@@ -702,6 +742,30 @@ func (c *daemonClient) KillShell(ctx context.Context, commandID string) (ShellAc
 	}
 	err := c.command(ctx, daemon.CommandRequest{Type: "command", ID: "cmd-shell-kill", Command: "shell.kill", Payload: map[string]any{"command_id": commandID}}, &result)
 	return ShellActionResult{Session: result.Session}, err
+}
+func (c *daemonClient) WorkspacePTYOpen(ctx context.Context, sessionID string, cols, rows int) (WorkspacePTYResult, error) {
+	var result struct {
+		PTY workspace.PTYSnapshot `json:"pty"`
+	}
+	err := c.command(ctx, daemon.CommandRequest{Type: "command", ID: "cmd-workspace-pty-open", Command: "workspace.pty.open", Payload: map[string]any{"session_id": sessionID, "cols": cols, "rows": rows}}, &result)
+	return WorkspacePTYResult(result), err
+}
+func (c *daemonClient) WorkspacePTYInput(ctx context.Context, ptyID, data string) error {
+	return c.command(ctx, daemon.CommandRequest{Type: "command", ID: "cmd-workspace-pty-input", Command: "workspace.pty.input", Payload: map[string]any{"pty_id": ptyID, "data": data}}, nil)
+}
+func (c *daemonClient) WorkspacePTYSnapshot(ctx context.Context, sessionID string) (WorkspacePTYResult, error) {
+	var result struct {
+		PTY workspace.PTYSnapshot `json:"pty"`
+	}
+	err := c.command(ctx, daemon.CommandRequest{Type: "command", ID: "cmd-workspace-pty-snapshot", Command: "workspace.pty.snapshot", Payload: map[string]any{"session_id": sessionID}}, &result)
+	return WorkspacePTYResult(result), err
+}
+func (c *daemonClient) WorkspacePTYResize(ctx context.Context, ptyID string, cols, rows int) (WorkspacePTYResult, error) {
+	var result struct {
+		PTY workspace.PTYSnapshot `json:"pty"`
+	}
+	err := c.command(ctx, daemon.CommandRequest{Type: "command", ID: "cmd-workspace-pty-resize", Command: "workspace.pty.resize", Payload: map[string]any{"pty_id": ptyID, "cols": cols, "rows": rows}}, &result)
+	return WorkspacePTYResult(result), err
 }
 func (c *daemonClient) GetSettings(ctx context.Context) (daemon.SettingsSnapshot, error) {
 	var result struct {
