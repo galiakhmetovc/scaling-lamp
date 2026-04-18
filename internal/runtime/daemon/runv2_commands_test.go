@@ -2,123 +2,163 @@ package daemon
 
 import (
 	"context"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"testing"
 	"time"
 
 	"teamd/internal/config"
 	"teamd/internal/contracts"
+	"teamd/internal/delegation"
+	"teamd/internal/filesystem"
+	"teamd/internal/provider"
 	"teamd/internal/runtime"
-	"teamd/internal/runtime/eventing"
 	"teamd/internal/runtime/projections"
+	"teamd/internal/shell"
+	"teamd/internal/tools"
 )
 
 func TestRunVersionCutover(t *testing.T) {
 	t.Parallel()
 
-	t.Run("explicit V2 creation", func(t *testing.T) {
-		t.Parallel()
+	providerServer := newBlockingProviderServer(t)
+	server, _ := newRunVersionTestServer(t, providerServer.URL)
+	sessionID := createRunVersionSession(t, server)
 
-		server, agent := newRunVersionTestServer(t)
-		mustCreateRunVersionSession(t, agent, "session-v2-create")
+	done := make(chan error, 1)
+	go func() {
+		_, err := server.executeCommand(context.Background(), CommandRequest{
+			Command: "chat.send",
+			Payload: map[string]any{
+				"session_id":        sessionID,
+				"prompt":            "ping",
+				"execution_version": string(executionVersionV2),
+			},
+		})
+		done <- err
+	}()
 
-		if !server.startMainRunV2("session-v2-create") {
-			t.Fatal("startMainRunV2 returned false, want true for explicit V2 creation")
-		}
+	waitForProviderRequest(t, providerServer.started)
+	server.migrateSessionExecutionVersion(sessionID, executionVersionV1)
 
-		snapshot, err := server.buildSessionSnapshot("session-v2-create")
-		if err != nil {
-			t.Fatalf("build session snapshot: %v", err)
-		}
-		if snapshot.ExecutionVersion != string(executionVersionV2) {
-			t.Fatalf("snapshot execution version = %q, want %q", snapshot.ExecutionVersion, executionVersionV2)
-		}
-		if snapshot.MainRun.ExecutionVersion != string(executionVersionV2) {
-			t.Fatalf("main run execution version = %q, want %q", snapshot.MainRun.ExecutionVersion, executionVersionV2)
-		}
-	})
+	snapshot, err := server.buildSessionSnapshot(sessionID)
+	if err != nil {
+		t.Fatalf("build session snapshot: %v", err)
+	}
+	if snapshot.ExecutionVersion != string(executionVersionV2) {
+		t.Fatalf("snapshot execution version = %q, want %q", snapshot.ExecutionVersion, executionVersionV2)
+	}
+	if snapshot.MainRun.ExecutionVersion != string(executionVersionV2) {
+		t.Fatalf("main run execution version = %q, want %q", snapshot.MainRun.ExecutionVersion, executionVersionV2)
+	}
+	if !snapshot.MainRunActive || !snapshot.MainRun.Active {
+		t.Fatalf("main run flags = %+v, want active while provider request is in flight", snapshot.MainRun)
+	}
 
-	t.Run("existing V1 session remains V1 until migrated", func(t *testing.T) {
-		t.Parallel()
+	close(providerServer.release)
+	if err := <-done; err != nil {
+		t.Fatalf("chat.send returned error: %v", err)
+	}
 
-		server, agent := newRunVersionTestServer(t)
-		mustCreateRunVersionSession(t, agent, "session-v1")
-
-		if !server.startMainRun("session-v1") {
-			t.Fatal("startMainRun returned false, want true")
-		}
-		server.finishMainRun("session-v1", nil)
-
-		snapshot, err := server.buildSessionSnapshot("session-v1")
-		if err != nil {
-			t.Fatalf("build session snapshot: %v", err)
-		}
-		if snapshot.ExecutionVersion != string(executionVersionV1) {
-			t.Fatalf("snapshot execution version = %q, want %q", snapshot.ExecutionVersion, executionVersionV1)
-		}
-
-		if server.startMainRunV2("session-v1") {
-			t.Fatal("startMainRunV2 returned true for V1 session without explicit migration")
-		}
-		if got := server.sessionExecutionVersion("session-v1"); got != executionVersionV1 {
-			t.Fatalf("session execution version = %q, want %q", got, executionVersionV1)
-		}
-
-		server.migrateSessionExecutionVersion("session-v1", executionVersionV2)
-		if !server.startMainRunV2("session-v1") {
-			t.Fatal("startMainRunV2 returned false after explicit migration to V2")
-		}
-	})
+	finished, err := server.buildSessionSnapshot(sessionID)
+	if err != nil {
+		t.Fatalf("build finished session snapshot: %v", err)
+	}
+	if finished.ExecutionVersion != string(executionVersionV2) {
+		t.Fatalf("finished snapshot execution version = %q, want %q", finished.ExecutionVersion, executionVersionV2)
+	}
 }
 
 func TestNoMixedRunVersion(t *testing.T) {
 	t.Parallel()
 
-	t.Run("V2 run rejects V1 handler", func(t *testing.T) {
-		t.Parallel()
+	providerServer := newImmediateProviderServer(t)
+	server, _ := newRunVersionTestServer(t, providerServer.URL)
+	sessionID := createRunVersionSession(t, server)
 
-		server, agent := newRunVersionTestServer(t)
-		mustCreateRunVersionSession(t, agent, "session-mixed-v2")
-
-		if !server.startMainRunV2("session-mixed-v2") {
-			t.Fatal("startMainRunV2 returned false, want true")
-		}
-		if server.startMainRun("session-mixed-v2") {
-			t.Fatal("startMainRun returned true for session already owned by V2")
-		}
-
-		snapshot, err := server.buildSessionSnapshot("session-mixed-v2")
-		if err != nil {
-			t.Fatalf("build session snapshot: %v", err)
-		}
-		if snapshot.ExecutionVersion != string(executionVersionV2) {
-			t.Fatalf("snapshot execution version = %q, want %q", snapshot.ExecutionVersion, executionVersionV2)
-		}
+	first, err := server.executeCommand(context.Background(), CommandRequest{
+		Command: "chat.send",
+		Payload: map[string]any{
+			"session_id": sessionID,
+			"prompt":     "first",
+		},
 	})
+	if err != nil {
+		t.Fatalf("first chat.send returned error: %v", err)
+	}
+	firstSession := mapPayloadForRunVersionTest(t, first)["session"].(SessionSnapshot)
+	if firstSession.ExecutionVersion != string(executionVersionV1) {
+		t.Fatalf("first run execution version = %q, want %q", firstSession.ExecutionVersion, executionVersionV1)
+	}
 
-	t.Run("V1 run rejects V2 handler", func(t *testing.T) {
-		t.Parallel()
+	server.migrateSessionExecutionVersion(sessionID, executionVersionV2)
 
-		server, agent := newRunVersionTestServer(t)
-		mustCreateRunVersionSession(t, agent, "session-mixed-v1")
-
-		if !server.startMainRun("session-mixed-v1") {
-			t.Fatal("startMainRun returned false, want true")
-		}
-		if server.startMainRunV2("session-mixed-v1") {
-			t.Fatal("startMainRunV2 returned true for session already owned by V1")
-		}
-
-		snapshot, err := server.buildSessionSnapshot("session-mixed-v1")
-		if err != nil {
-			t.Fatalf("build session snapshot: %v", err)
-		}
-		if snapshot.ExecutionVersion != string(executionVersionV1) {
-			t.Fatalf("snapshot execution version = %q, want %q", snapshot.ExecutionVersion, executionVersionV1)
-		}
+	second, err := server.executeCommand(context.Background(), CommandRequest{
+		Command: "chat.send",
+		Payload: map[string]any{
+			"session_id": sessionID,
+			"prompt":     "second",
+		},
 	})
+	if err != nil {
+		t.Fatalf("second chat.send returned error: %v", err)
+	}
+	secondSession := mapPayloadForRunVersionTest(t, second)["session"].(SessionSnapshot)
+	if secondSession.ExecutionVersion != string(executionVersionV2) {
+		t.Fatalf("second run execution version = %q, want %q", secondSession.ExecutionVersion, executionVersionV2)
+	}
+	if secondSession.MainRun.ExecutionVersion != string(executionVersionV2) {
+		t.Fatalf("second main run execution version = %q, want %q", secondSession.MainRun.ExecutionVersion, executionVersionV2)
+	}
 }
 
-func newRunVersionTestServer(t *testing.T) (*Server, *runtime.Agent) {
+type runVersionTestProvider struct {
+	URL     string
+	started chan struct{}
+	release chan struct{}
+}
+
+func newBlockingProviderServer(t *testing.T) runVersionTestProvider {
+	t.Helper()
+
+	started := make(chan struct{}, 1)
+	release := make(chan struct{})
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		select {
+		case started <- struct{}{}:
+		default:
+		}
+		<-release
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = fmt.Fprint(w, `{"id":"resp-1","model":"glm-5-turbo","choices":[{"index":0,"finish_reason":"stop","message":{"role":"assistant","content":"pong"}}],"usage":{"prompt_tokens":8,"completion_tokens":4,"total_tokens":12}}`)
+	}))
+	t.Cleanup(server.Close)
+	return runVersionTestProvider{URL: server.URL, started: started, release: release}
+}
+
+func newImmediateProviderServer(t *testing.T) runVersionTestProvider {
+	t.Helper()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = fmt.Fprint(w, `{"id":"resp-1","model":"glm-5-turbo","choices":[{"index":0,"finish_reason":"stop","message":{"role":"assistant","content":"pong"}}],"usage":{"prompt_tokens":8,"completion_tokens":4,"total_tokens":12}}`)
+	}))
+	t.Cleanup(server.Close)
+	return runVersionTestProvider{URL: server.URL, started: make(chan struct{}, 1), release: make(chan struct{})}
+}
+
+func waitForProviderRequest(t *testing.T, started <-chan struct{}) {
+	t.Helper()
+
+	select {
+	case <-started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for provider request to start")
+	}
+}
+
+func newRunVersionTestServer(t *testing.T, providerURL string) (*Server, *runtime.Agent) {
 	t.Helper()
 
 	now := time.Date(2026, 4, 18, 20, 0, 0, 0, time.UTC)
@@ -129,13 +169,36 @@ func newRunVersionTestServer(t *testing.T) (*Server, *runtime.Agent) {
 				Transport: contracts.TransportContract{
 					ID: "provider_client",
 					Endpoint: contracts.EndpointPolicy{
-						Params: contracts.EndpointParams{BaseURL: "https://provider.example.test"},
+						Enabled:  true,
+						Strategy: "static",
+						Params: contracts.EndpointParams{
+							BaseURL: providerURL,
+							Path:    "/chat/completions",
+							Method:  "POST",
+						},
 					},
 				},
 				RequestShape: contracts.RequestShapeContract{
-					Model: contracts.ModelPolicy{Params: contracts.ModelParams{Model: "glm-5-turbo"}},
+					Model: contracts.ModelPolicy{
+						Enabled:  true,
+						Strategy: "static_model",
+						Params: contracts.ModelParams{
+							Model: "glm-5-turbo",
+						},
+					},
 				},
 			},
+			PromptAssembly: contracts.PromptAssemblyContract{},
+			Memory:         contracts.MemoryContract{},
+			Tools: contracts.ToolContract{
+				Catalog:       contracts.ToolCatalogPolicy{},
+				Serialization: contracts.ToolSerializationPolicy{},
+			},
+			PlanTools:       contracts.PlanToolContract{},
+			FilesystemTools: contracts.FilesystemToolContract{},
+			ShellTools:      contracts.ShellToolContract{},
+			DelegationTools: contracts.DelegationToolContract{},
+			ToolExecution:   contracts.ToolExecutionContract{},
 		},
 		EventLog: runtime.NewInMemoryEventLog(),
 		Projections: []projections.Projection{
@@ -151,6 +214,26 @@ func newRunVersionTestServer(t *testing.T) (*Server, *runtime.Agent) {
 		Now:   func() time.Time { return now },
 		NewID: func(prefix string) string { return prefix + "-1" },
 	}
+	agent.PromptAssets = provider.NewPromptAssetExecutor()
+	agent.RequestShape = provider.NewRequestShapeExecutor()
+	agent.PlanTools = tools.NewPlanToolExecutor()
+	agent.FilesystemTools = filesystem.NewDefinitionExecutor()
+	agent.ShellTools = shell.NewDefinitionExecutor()
+	agent.DelegationTools = delegation.NewDefinitionExecutor()
+	agent.ToolCatalog = tools.NewCatalogExecutor()
+	agent.ToolExecution = tools.NewExecutionGate()
+	agent.ProviderClient = provider.NewClient(
+		agent.PromptAssets,
+		agent.RequestShape,
+		agent.PlanTools,
+		agent.FilesystemTools,
+		agent.ShellTools,
+		agent.DelegationTools,
+		agent.ToolCatalog,
+		agent.ToolExecution,
+		provider.NewTransportExecutor(http.DefaultClient),
+	)
+
 	server := &Server{
 		agent:          agent,
 		sessionRuntime: map[string]*sessionRuntimeState{},
@@ -159,18 +242,26 @@ func newRunVersionTestServer(t *testing.T) (*Server, *runtime.Agent) {
 	return server, agent
 }
 
-func mustCreateRunVersionSession(t *testing.T, agent *runtime.Agent, sessionID string) {
+func createRunVersionSession(t *testing.T, server *Server) string {
 	t.Helper()
 
-	if err := agent.RecordEvent(context.Background(), eventing.Event{
-		ID:               "evt-" + sessionID,
-		Kind:             eventing.EventSessionCreated,
-		OccurredAt:       time.Date(2026, 4, 18, 20, 0, 0, 0, time.UTC),
-		AggregateID:      sessionID,
-		AggregateType:    eventing.AggregateSession,
-		AggregateVersion: 1,
-		Payload:          map[string]any{"session_id": sessionID},
-	}); err != nil {
-		t.Fatalf("record session created: %v", err)
+	payload, err := server.executeCommand(context.Background(), CommandRequest{Command: "session.create"})
+	if err != nil {
+		t.Fatalf("session.create returned error: %v", err)
 	}
+	session := mapPayloadForRunVersionTest(t, payload)["session"].(SessionSnapshot)
+	if session.SessionID == "" {
+		t.Fatal("created session id is empty")
+	}
+	return session.SessionID
+}
+
+func mapPayloadForRunVersionTest(t *testing.T, payload any) map[string]any {
+	t.Helper()
+
+	m, ok := payload.(map[string]any)
+	if !ok {
+		t.Fatalf("payload type = %T, want map[string]any", payload)
+	}
+	return m
 }

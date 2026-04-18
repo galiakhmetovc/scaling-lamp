@@ -88,6 +88,7 @@ func (s *Server) buildSessionSnapshot(sessionID string) (SessionSnapshot, error)
 	transcriptWindow := tailMessages(transcript, windowLimit)
 	timelineWindow := tailTimeline(timeline, windowLimit)
 	prompt := s.sessionPromptSnapshot(sessionID)
+	mainRun := s.mainRunSnapshot(sessionID)
 	return SessionSnapshot{
 		SessionID:         entry.SessionID,
 		Title:             entry.Title,
@@ -95,9 +96,9 @@ func (s *Server) buildSessionSnapshot(sessionID string) (SessionSnapshot, error)
 		LastActivity:      entry.LastActivity,
 		MessageCount:      entry.MessageCount,
 		ArtifactStorePath: s.artifactStorePath(),
-		ExecutionVersion:  string(s.sessionExecutionVersion(sessionID)),
+		ExecutionVersion:  mainRun.ExecutionVersion,
 		MainRunActive:     s.mainRunActive(sessionID),
-		MainRun:           s.mainRunSnapshot(sessionID),
+		MainRun:           mainRun,
 		QueuedDrafts:      s.queuedDrafts(sessionID),
 		History: ChatHistorySnapshot{
 			LoadedCount: len(timelineWindow),

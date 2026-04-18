@@ -111,6 +111,15 @@ func (s *Server) executeCommand(ctx context.Context, req CommandRequest) (any, e
 		if err != nil {
 			return nil, err
 		}
+		if executionVersionString, ok := optionalString(req.Payload, "execution_version"); ok && executionVersionString != "" {
+			executionVersion := executionVersion(executionVersionString)
+			switch executionVersion {
+			case executionVersionV1, executionVersionV2:
+				s.migrateSessionExecutionVersion(sessionID, executionVersion)
+			default:
+				return nil, fmt.Errorf("unsupported execution_version %q", executionVersionString)
+			}
+		}
 		return s.executeChatSend(ctx, agent, sessionID, prompt)
 	case "chat.cancel_approval_and_send":
 		sessionID, err := requiredString(req.Payload, "session_id")

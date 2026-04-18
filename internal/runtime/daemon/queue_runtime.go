@@ -25,14 +25,15 @@ const (
 )
 
 type mainRunState struct {
-	Active       bool
-	Phase        mainRunPhase
-	StartedAt    time.Time
-	Provider     string
-	Model        string
-	InputTokens  int
-	OutputTokens int
-	TotalTokens  int
+	Active           bool
+	Phase            mainRunPhase
+	StartedAt        time.Time
+	ExecutionVersion executionVersion
+	Provider         string
+	Model            string
+	InputTokens      int
+	OutputTokens     int
+	TotalTokens      int
 }
 
 type daemonBus struct {
@@ -108,11 +109,15 @@ func (s *Server) mainRunSnapshot(sessionID string) MainRunSnapshot {
 			ExecutionVersion: string(s.sessionExecutionVersion(sessionID)),
 		}
 	}
+	executionVersion := state.mainRun.ExecutionVersion
+	if executionVersion == "" {
+		executionVersion = s.sessionExecutionVersion(sessionID)
+	}
 	return MainRunSnapshot{
 		Active:           state.mainRun.isActive(),
 		Phase:            string(state.mainRun.effectivePhase()),
 		StartedAt:        state.mainRun.StartedAt,
-		ExecutionVersion: string(s.sessionExecutionVersion(sessionID)),
+		ExecutionVersion: string(executionVersion),
 		Provider:         state.mainRun.Provider,
 		Model:            state.mainRun.Model,
 		InputTokens:      state.mainRun.InputTokens,
@@ -161,7 +166,7 @@ func (s *Server) recallDraft(sessionID, draftID string) (QueuedDraft, bool) {
 }
 
 func (s *Server) startMainRun(sessionID string) bool {
-	return s.startMainRunWithVersion(sessionID, s.defaultChatRunExecutionVersion())
+	return s.startMainRunWithVersion(sessionID, s.sessionExecutionVersion(sessionID))
 }
 
 func (s *Server) startMainRunWithVersion(sessionID string, version executionVersion) bool {
@@ -172,6 +177,13 @@ func (s *Server) startMainRunWithVersion(sessionID string, version executionVers
 	if s.sessionExecutionVersions != nil {
 		if stored, ok := s.sessionExecutionVersions[sessionID]; ok && stored != "" {
 			currentVersion = stored
+		}
+	}
+	if version == "" {
+		if currentVersion != "" {
+			version = currentVersion
+		} else {
+			version = s.defaultChatRunExecutionVersion()
 		}
 	}
 	if currentVersion != "" && currentVersion != version {
@@ -190,6 +202,7 @@ func (s *Server) startMainRunWithVersion(sessionID string, version executionVers
 	state.mainRun.Active = true
 	state.mainRun.Phase = mainRunPhaseRunning
 	state.mainRun.StartedAt = s.currentAgent().Now().UTC()
+	state.mainRun.ExecutionVersion = version
 	state.mainRun.Provider = s.providerLabel()
 	state.mainRun.Model = s.currentAgent().Contracts.ProviderRequest.RequestShape.Model.Params.Model
 	state.mainRun.InputTokens = 0
@@ -314,6 +327,13 @@ func (s *Server) popNextQueuedDraft(sessionID string) (QueuedDraft, bool) {
 }
 
 func (s *Server) maybeDispatchQueuedDrafts(sessionID string) {
+	s.runtimeMu.RLock()
+	state, ok := s.sessionRuntime[sessionID]
+	hasQueued := ok && len(state.queue) > 0
+	s.runtimeMu.RUnlock()
+	if !hasQueued {
+		return
+	}
 	if !s.startMainRun(sessionID) {
 		return
 	}
