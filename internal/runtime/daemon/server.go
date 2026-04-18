@@ -32,6 +32,8 @@ type Server struct {
 	listenAddr             string
 	runtimeMu              sync.RWMutex
 	sessionRuntime         map[string]*sessionRuntimeState
+	approvalMu             sync.Mutex
+	approvalLocks          map[string]*sync.Mutex
 	workspaceMu            sync.Mutex
 	workspacePTY           *workspace.WorkspacePTYManager
 	workspaceFiles         *workspace.WorkspaceFilesManager
@@ -119,6 +121,7 @@ func New(agent *runtime.Agent) (*Server, error) {
 		agent:          agent,
 		listenAddr:     net.JoinHostPort(params.ListenHost, fmt.Sprintf("%d", params.ListenPort)),
 		sessionRuntime: map[string]*sessionRuntimeState{},
+		approvalLocks:  map[string]*sync.Mutex{},
 		workspacePTY:   workspace.NewWorkspacePTYManager(),
 		daemonBus:      newDaemonBus(),
 		logger:         newDaemonLogger(agent.Contracts.OperatorSurface.DaemonServer.Params),

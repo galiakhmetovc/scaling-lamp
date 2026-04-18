@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"runtime/debug"
+	"sync"
 
 	"teamd/internal/runtime"
 	"teamd/internal/runtime/workspace"
@@ -786,6 +787,9 @@ func (s *Server) denyShellAlwaysAsync(agent *runtime.Agent, approvalID string, v
 
 func (s *Server) runGuardedShellApproval(sessionID string, fn func()) {
 	go func() {
+		lock := s.sessionApprovalLock(sessionID)
+		lock.Lock()
+		defer lock.Unlock()
 		defer func() {
 			if recovered := recover(); recovered != nil {
 				err := fmt.Errorf("panic in shell approval continuation: %v", recovered)
@@ -803,6 +807,20 @@ func (s *Server) runGuardedShellApproval(sessionID string, fn func()) {
 		}()
 		fn()
 	}()
+}
+
+func (s *Server) sessionApprovalLock(sessionID string) *sync.Mutex {
+	s.approvalMu.Lock()
+	defer s.approvalMu.Unlock()
+	if s.approvalLocks == nil {
+		s.approvalLocks = map[string]*sync.Mutex{}
+	}
+	lock, ok := s.approvalLocks[sessionID]
+	if !ok {
+		lock = &sync.Mutex{}
+		s.approvalLocks[sessionID] = lock
+	}
+	return lock
 }
 
 func requiredString(payload map[string]any, key string) (string, error) {
