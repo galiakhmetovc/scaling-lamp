@@ -35,6 +35,20 @@ func runChatTurnClientCmd(ctx context.Context, client OperatorClient, sessionID,
 	}
 }
 
+func runCancelApprovalAndSendCmd(ctx context.Context, client OperatorClient, sessionID, approvalID, prompt string) tea.Cmd {
+	return func() tea.Msg {
+		result, err := client.CancelApprovalAndSend(ctx, sessionID, approvalID, prompt)
+		return chatTurnFinishedMsg{
+			SessionID: sessionID,
+			Result:    result.Result,
+			Queued:    result.Queued,
+			Draft:     result.Draft,
+			Session:   result.Session,
+			Err:       err,
+		}
+	}
+}
+
 func runBtwTurnClientCmd(client OperatorClient, sessionID, prompt, runID string) tea.Cmd {
 	return func() tea.Msg {
 		result, err := client.SendBtw(context.Background(), sessionID, prompt)

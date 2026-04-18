@@ -12,6 +12,14 @@ import (
 	"teamd/internal/runtime/projections"
 )
 
+var approvalMenuActions = []string{
+	"Approve once",
+	"Allow forever",
+	"Deny once",
+	"Deny forever",
+	"Cancel tool and send message...",
+}
+
 func (m *model) updateChat(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	state := m.currentSessionState()
 	if state == nil {
@@ -27,6 +35,45 @@ func (m *model) updateChat(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "pgdown":
 		state.ChatView.LineDown(max(1, state.ChatView.Height/2))
 		return m, nil
+	case "left":
+		if m.chatApprovalMenuVisible(state) && !state.ApprovalMenu.ComposeMode {
+			if len(m.currentApprovals()) > 0 && m.approvalCursor > 0 {
+				m.approvalCursor--
+				m.renderChatViewport(state)
+			}
+			return m, nil
+		}
+	case "right":
+		if m.chatApprovalMenuVisible(state) && !state.ApprovalMenu.ComposeMode {
+			if approvals := m.currentApprovals(); len(approvals) > 0 && m.approvalCursor < len(approvals)-1 {
+				m.approvalCursor++
+				m.renderChatViewport(state)
+			}
+			return m, nil
+		}
+	case "up":
+		if m.chatApprovalMenuVisible(state) && !state.ApprovalMenu.ComposeMode {
+			if state.ApprovalMenu.ActionIndex > 0 {
+				state.ApprovalMenu.ActionIndex--
+				m.renderChatViewport(state)
+			}
+			return m, nil
+		}
+	case "down":
+		if m.chatApprovalMenuVisible(state) && !state.ApprovalMenu.ComposeMode {
+			if state.ApprovalMenu.ActionIndex < len(approvalMenuActions)-1 {
+				state.ApprovalMenu.ActionIndex++
+				m.renderChatViewport(state)
+			}
+			return m, nil
+		}
+	case "esc":
+		if m.chatApprovalMenuVisible(state) && state.ApprovalMenu.ComposeMode {
+			state.ApprovalMenu.ComposeMode = false
+			state.Input.Reset()
+			m.renderChatViewport(state)
+			return m, nil
+		}
 	case "alt+up":
 		if len(state.Queue) > 0 && state.QueueCursor > 0 {
 			state.QueueCursor--
@@ -35,18 +82,6 @@ func (m *model) updateChat(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "alt+down":
 		if len(state.Queue) > 0 && state.QueueCursor < len(state.Queue)-1 {
 			state.QueueCursor++
-		}
-		return m, nil
-	case "alt+left":
-		if len(m.currentApprovals()) > 0 && m.approvalCursor > 0 {
-			m.approvalCursor--
-			m.renderChatViewport(state)
-		}
-		return m, nil
-	case "alt+right":
-		if approvals := m.currentApprovals(); len(approvals) > 0 && m.approvalCursor < len(approvals)-1 {
-			m.approvalCursor++
-			m.renderChatViewport(state)
 		}
 		return m, nil
 	case "ctrl+e":
@@ -58,18 +93,19 @@ func (m *model) updateChat(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, m.cancelMainRun(state)
 	case "o":
 		return m, m.jumpToWorkspaceFromChat()
-	case "alt+y":
-		return m, m.performChatApprovalAction(state, "approve")
-	case "alt+n":
-		return m, m.performChatApprovalAction(state, "deny")
-	case "alt+a":
-		return m, m.performChatApprovalAction(state, "allow_forever")
-	case "alt+d":
-		return m, m.performChatApprovalAction(state, "deny_forever")
 	case "tab":
 		return m, m.stageOrRecallDraft(state)
 	case "enter", "ctrl+s":
+		if m.chatApprovalMenuVisible(state) {
+			if state.ApprovalMenu.ComposeMode {
+				return m, m.submitApprovalCancelMessage(state)
+			}
+			return m, m.submitApprovalMenuSelection(state)
+		}
 		return m, m.submitChatInput(state)
+	}
+	if m.chatApprovalMenuVisible(state) && !state.ApprovalMenu.ComposeMode {
+		return m, nil
 	}
 	var cmd tea.Cmd
 	state.Input, cmd = state.Input.Update(msg)
@@ -90,10 +126,14 @@ func (m *model) viewChat() string {
 	parts := []string{
 		header,
 		state.ChatView.View(),
-		hint,
-		state.Input.View(),
-		status,
 	}
+	if hint != "" {
+		parts = append(parts, hint)
+	}
+	if !m.chatApprovalMenuVisible(state) || state.ApprovalMenu.ComposeMode {
+		parts = append(parts, state.Input.View())
+	}
+	parts = append(parts, status)
 	if queue != "" {
 		parts = append(parts, queue)
 	}
@@ -139,7 +179,10 @@ func (m *model) renderChatViewport(state *sessionState) {
 	for _, item := range m.renderLiveToolLog(state, contentWidth) {
 		lines = append(lines, item)
 	}
-	if len(state.ToolLog) > 0 {
+	if menu := m.renderApprovalMenu(state, contentWidth); len(menu) > 0 {
+		lines = append(lines, menu...)
+	}
+	if len(state.ToolLog) > 0 || m.chatApprovalMenuVisible(state) {
 		lines = append(lines, "")
 	}
 	if state.Streaming.Len() > 0 {
@@ -216,6 +259,49 @@ func (m *model) performChatApprovalAction(state *sessionState, action string) te
 	approvalID := approvals[approvalIndex].ApprovalID
 	state.Status = "running"
 	return tea.Batch(runShellActionCmd(m.ctx, m.client, state.SessionID, approvalID, action), tickClockCmd())
+}
+
+func (m *model) submitApprovalMenuSelection(state *sessionState) tea.Cmd {
+	if state == nil || !m.chatApprovalMenuVisible(state) {
+		return nil
+	}
+	switch state.ApprovalMenu.ActionIndex {
+	case 0:
+		return m.performChatApprovalAction(state, "approve")
+	case 1:
+		return m.performChatApprovalAction(state, "allow_forever")
+	case 2:
+		return m.performChatApprovalAction(state, "deny")
+	case 3:
+		return m.performChatApprovalAction(state, "deny_forever")
+	case 4:
+		state.ApprovalMenu.ComposeMode = true
+		state.Input.Reset()
+		state.Input.Focus()
+		m.renderChatViewport(state)
+		return nil
+	default:
+		return nil
+	}
+}
+
+func (m *model) submitApprovalCancelMessage(state *sessionState) tea.Cmd {
+	if state == nil || !m.chatApprovalMenuVisible(state) || !state.ApprovalMenu.ComposeMode {
+		return nil
+	}
+	prompt := strings.TrimSpace(state.Input.Value())
+	if prompt == "" {
+		return nil
+	}
+	approvals := m.currentApprovals()
+	if len(approvals) == 0 {
+		return nil
+	}
+	approval := approvals[min(max(m.approvalCursor, 0), len(approvals)-1)]
+	state.ApprovalMenu.ComposeMode = false
+	return m.startMainRunWithCmd(state, prompt, func(runCtx context.Context) tea.Cmd {
+		return runCancelApprovalAndSendCmd(runCtx, m.client, state.SessionID, approval.ApprovalID, prompt)
+	})
 }
 
 func (m *model) stageOrRecallDraft(state *sessionState) tea.Cmd {
@@ -298,6 +384,12 @@ func (m *model) handleChatCommand(state *sessionState, prompt string) (bool, tea
 }
 
 func (m *model) startMainRun(state *sessionState, prompt string) tea.Cmd {
+	return m.startMainRunWithCmd(state, prompt, func(runCtx context.Context) tea.Cmd {
+		return runChatTurnClientCmd(runCtx, m.client, state.SessionID, prompt, state.Overrides)
+	})
+}
+
+func (m *model) startMainRunWithCmd(state *sessionState, prompt string, buildCmd func(context.Context) tea.Cmd) tea.Cmd {
 	state.PendingPrompt = prompt
 	state.Input.Reset()
 	state.Streaming.Reset()
@@ -314,7 +406,7 @@ func (m *model) startMainRun(state *sessionState, prompt string) tea.Cmd {
 	state.MainRun.CompletedAt = time.Time{}
 	state.MainRun.Provider = m.client.ProviderLabel()
 	m.renderChatViewport(state)
-	return tea.Batch(runChatTurnClientCmd(runCtx, m.client, state.SessionID, prompt, state.Overrides), tickClockCmd())
+	return tea.Batch(buildCmd(runCtx), tickClockCmd())
 }
 
 func (m *model) dispatchNextQueued(state *sessionState) tea.Cmd {
@@ -446,6 +538,31 @@ func (m *model) renderLiveToolLog(state *sessionState, width int) []string {
 	return lines
 }
 
+func (m *model) renderApprovalMenu(state *sessionState, width int) []string {
+	if !m.chatApprovalMenuVisible(state) {
+		return nil
+	}
+	approvals := m.currentApprovals()
+	if len(approvals) == 0 {
+		return nil
+	}
+	approval := approvals[min(max(m.approvalCursor, 0), len(approvals)-1)]
+	lines := []string{
+		prefixTimestamp(approval.OccurredAt, fmt.Sprintf("APPROVAL %d/%d %s", m.approvalCursor+1, len(approvals), compactApprovalInvocation(approval))),
+	}
+	for i, label := range approvalMenuActions {
+		prefix := "  "
+		if i == state.ApprovalMenu.ActionIndex {
+			prefix = "> "
+		}
+		lines = append(lines, prefix+label)
+	}
+	if state.ApprovalMenu.ComposeMode {
+		lines = append(lines, wrapText("Write a normal user message to send after cancelling this tool call.", width))
+	}
+	return lines
+}
+
 func (m *model) viewQueue(state *sessionState) string {
 	if len(state.Queue) == 0 {
 		return ""
@@ -550,13 +667,20 @@ func (m *model) chatComposerHint(state *sessionState) string {
 	if state == nil {
 		return "Input"
 	}
-	if len(state.Snapshot.PendingApprovals) > 0 {
-		return "Input (Alt+Left/Right select approval, Alt+Y approve, Alt+N deny, Alt+A allow forever, Alt+D deny forever; Enter send, Tab queue, Ctrl+E recall, Ctrl+D delete, Shift+Enter newline, Alt+Up/Down queue select):"
+	if m.chatApprovalMenuVisible(state) {
+		if state.ApprovalMenu.ComposeMode {
+			return "Cancel tool and send message (Enter send, Esc back):"
+		}
+		return "Approval menu (Left/Right select request, Up/Down choose action, Enter confirm):"
 	}
 	if state.MainRun.Active {
 		return "Input (Enter queue interjection, Tab stage draft, Ctrl+E recall, Ctrl+D delete, Ctrl+X stop run, Shift+Enter newline, Alt+Up/Down queue select):"
 	}
 	return "Input (Enter send, Tab queue, Ctrl+E recall, Ctrl+D delete, Shift+Enter newline, Alt+Up/Down queue select):"
+}
+
+func (m *model) chatApprovalMenuVisible(state *sessionState) bool {
+	return state != nil && len(state.Snapshot.PendingApprovals) > 0
 }
 
 func (m *model) renderMarkdownBlock(content, style string, width int) string {

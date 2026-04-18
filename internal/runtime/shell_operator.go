@@ -145,6 +145,44 @@ func (a *Agent) DenyShellCommand(ctx context.Context, approvalID string) error {
 	return a.resumeSuspendedToolLoopAfterDenial(ctx, approvalID, "shell command denied by operator")
 }
 
+func (a *Agent) CancelShellApproval(ctx context.Context, approvalID string) error {
+	view, err := a.pendingShellApproval(approvalID)
+	if err != nil {
+		return err
+	}
+	if a.ShellRuntime == nil {
+		return fmt.Errorf("shell runtime is nil")
+	}
+	if err := a.ShellRuntime.RecoverApproval(a.Contracts.ShellExecution, shell.PendingApprovalView{
+		ApprovalID: view.ApprovalID,
+		CommandID:  view.CommandID,
+		SessionID:  view.SessionID,
+		RunID:      view.RunID,
+		OccurredAt: view.OccurredAt,
+		ToolName:   view.ToolName,
+		Command:    view.Command,
+		Args:       append([]string{}, view.Args...),
+		Cwd:        view.Cwd,
+		Message:    view.Message,
+	}, shell.ExecutionMeta{
+		SessionID:   view.SessionID,
+		RunID:       view.RunID,
+		Source:      "runtime.shell_operator",
+		ActorID:     a.Config.ID,
+		ActorType:   "operator",
+		RecordEvent: a.RecordEvent,
+		Now:         a.Now,
+		NewID:       a.NewID,
+	}); err != nil {
+		return err
+	}
+	if err := a.ShellRuntime.Deny(ctx, approvalID); err != nil {
+		return err
+	}
+	a.discardSuspendedToolLoop(approvalID)
+	return nil
+}
+
 func (a *Agent) pendingShellApproval(approvalID string) (projections.ShellCommandView, error) {
 	projection := a.shellCommandProjection()
 	if projection == nil {

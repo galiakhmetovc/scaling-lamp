@@ -105,46 +105,25 @@ func (s *Server) executeCommand(ctx context.Context, req CommandRequest) (any, e
 		if err != nil {
 			return nil, err
 		}
-		if !s.startMainRun(sessionID) {
-			draft := s.enqueueDraft(sessionID, prompt)
-			payload, err := s.sessionPayload(sessionID)
-			if err != nil {
-				return nil, err
-			}
-			payload["queued"] = true
-			payload["draft"] = draft
-			s.publishDaemon(WebsocketEnvelope{Type: "draft_queued", Payload: map[string]any{"session_id": sessionID, "draft": draft}})
-			return payload, nil
-		}
-		session, err := agent.ResumeChatSession(ctx, sessionID)
-		if err != nil {
-			s.finishMainRun(sessionID, nil)
-			return nil, err
-		}
-		result, err := agent.ChatTurn(ctx, session, runtime.ChatTurnInput{Prompt: prompt})
-		if err != nil {
-			s.finishMainRun(sessionID, nil)
-			return nil, err
-		}
-		resultPayload := providerResultPayload{
-			Provider:     s.providerLabel(),
-			Model:        result.Provider.Model,
-			InputTokens:  result.Provider.Usage.InputTokens,
-			OutputTokens: result.Provider.Usage.OutputTokens,
-			TotalTokens:  result.Provider.Usage.TotalTokens,
-			Content:      result.Provider.Message.Content,
-		}
-		s.finishMainRun(sessionID, &resultPayload)
-		snapshot, err := s.buildSessionSnapshot(sessionID)
+		return s.executeChatSend(ctx, agent, sessionID, prompt)
+	case "chat.cancel_approval_and_send":
+		sessionID, err := requiredString(req.Payload, "session_id")
 		if err != nil {
 			return nil, err
 		}
-		s.maybeDispatchQueuedDrafts(sessionID)
-		return map[string]any{
-			"session": snapshot,
-			"queued":  false,
-			"result":  resultPayload,
-		}, nil
+		approvalID, err := requiredString(req.Payload, "approval_id")
+		if err != nil {
+			return nil, err
+		}
+		prompt, err := requiredString(req.Payload, "prompt")
+		if err != nil {
+			return nil, err
+		}
+		if err := agent.CancelShellApproval(ctx, approvalID); err != nil {
+			return nil, err
+		}
+		s.finishMainRun(sessionID, nil)
+		return s.executeChatSend(ctx, agent, sessionID, prompt)
 	case "draft.enqueue":
 		sessionID, err := requiredString(req.Payload, "session_id")
 		if err != nil {
@@ -541,6 +520,49 @@ func (s *Server) sessionPayload(sessionID string) (map[string]any, error) {
 		return nil, err
 	}
 	return map[string]any{"session": snapshot}, nil
+}
+
+func (s *Server) executeChatSend(ctx context.Context, agent *runtime.Agent, sessionID, prompt string) (map[string]any, error) {
+	if !s.startMainRun(sessionID) {
+		draft := s.enqueueDraft(sessionID, prompt)
+		payload, err := s.sessionPayload(sessionID)
+		if err != nil {
+			return nil, err
+		}
+		payload["queued"] = true
+		payload["draft"] = draft
+		s.publishDaemon(WebsocketEnvelope{Type: "draft_queued", Payload: map[string]any{"session_id": sessionID, "draft": draft}})
+		return payload, nil
+	}
+	session, err := agent.ResumeChatSession(ctx, sessionID)
+	if err != nil {
+		s.finishMainRun(sessionID, nil)
+		return nil, err
+	}
+	result, err := agent.ChatTurn(ctx, session, runtime.ChatTurnInput{Prompt: prompt})
+	if err != nil {
+		s.finishMainRun(sessionID, nil)
+		return nil, err
+	}
+	resultPayload := providerResultPayload{
+		Provider:     s.providerLabel(),
+		Model:        result.Provider.Model,
+		InputTokens:  result.Provider.Usage.InputTokens,
+		OutputTokens: result.Provider.Usage.OutputTokens,
+		TotalTokens:  result.Provider.Usage.TotalTokens,
+		Content:      result.Provider.Message.Content,
+	}
+	s.finishMainRun(sessionID, &resultPayload)
+	snapshot, err := s.buildSessionSnapshot(sessionID)
+	if err != nil {
+		return nil, err
+	}
+	s.maybeDispatchQueuedDrafts(sessionID)
+	return map[string]any{
+		"session": snapshot,
+		"queued":  false,
+		"result":  resultPayload,
+	}, nil
 }
 
 func (s *Server) optimisticShellApprovalPayload(sessionID, approvalID string) (map[string]any, error) {

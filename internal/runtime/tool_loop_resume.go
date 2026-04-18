@@ -51,6 +51,10 @@ func (a *Agent) popSuspendedToolLoop(approvalID string) (suspendedToolLoop, bool
 	return state, ok
 }
 
+func (a *Agent) discardSuspendedToolLoop(approvalID string) (suspendedToolLoop, bool) {
+	return a.popSuspendedToolLoop(approvalID)
+}
+
 func (a *Agent) CopySuspendedToolLoopTo(approvalID string, target *Agent) {
 	if target == nil {
 		return

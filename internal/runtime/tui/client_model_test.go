@@ -44,6 +44,9 @@ type stubOperatorClient struct {
 	resetPromptSessionID           string
 	sentChatSessionID              string
 	sentChatPrompt                 string
+	cancelApprovalSessionID        string
+	cancelApprovalID               string
+	cancelApprovalPrompt           string
 	approvedShellID                string
 	approvedAlwaysShellID          string
 	deniedShellID                  string
@@ -154,6 +157,13 @@ func (c *stubOperatorClient) ClearSessionPromptOverride(_ context.Context, sessi
 func (c *stubOperatorClient) SendChat(_ context.Context, sessionID, prompt string) (ChatSendResult, error) {
 	c.sentChatSessionID = sessionID
 	c.sentChatPrompt = prompt
+	return ChatSendResult{}, nil
+}
+
+func (c *stubOperatorClient) CancelApprovalAndSend(_ context.Context, sessionID, approvalID, prompt string) (ChatSendResult, error) {
+	c.cancelApprovalSessionID = sessionID
+	c.cancelApprovalID = approvalID
+	c.cancelApprovalPrompt = prompt
 	return ChatSendResult{}, nil
 }
 
@@ -891,7 +901,7 @@ func TestChatSubmitShowsPendingPromptBeforeTurnCompletes(t *testing.T) {
 	}
 }
 
-func TestChatApprovalShortcutHandlesPendingApprovalWithoutConsumingComposer(t *testing.T) {
+func TestChatApprovalMenuEnterApprovesSelectedActionWithoutConsumingComposer(t *testing.T) {
 	ws := make(chan daemon.WebsocketEnvelope)
 	close(ws)
 	now := time.Date(2026, 4, 17, 12, 5, 0, 0, time.UTC)
@@ -918,10 +928,14 @@ func TestChatApprovalShortcutHandlesPendingApprovalWithoutConsumingComposer(t *t
 	}
 	state := m.currentSessionState()
 	state.Input.SetValue("ship it after approve")
+	m.renderChatViewport(state)
+	if got := state.ChatView.View(); !strings.Contains(got, "Approve once") || !strings.Contains(got, "Cancel tool and send message") {
+		t.Fatalf("chat approval menu missing expected actions: %q", got)
+	}
 
-	modelAfter, cmd := (&m).Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'y'}, Alt: true})
+	modelAfter, cmd := (&m).Update(tea.KeyMsg{Type: tea.KeyEnter})
 	if cmd == nil {
-		t.Fatal("approval shortcut returned nil cmd")
+		t.Fatal("approval menu enter returned nil cmd")
 	}
 	mm := modelAfter.(*model)
 	if client.approvedShellID != "" {
@@ -941,7 +955,7 @@ func TestChatApprovalShortcutHandlesPendingApprovalWithoutConsumingComposer(t *t
 	}
 }
 
-func TestChatInputApproveShortcutCompletesPendingRunState(t *testing.T) {
+func TestChatApprovalMenuCancelAndSendRunsNewPrompt(t *testing.T) {
 	ws := make(chan daemon.WebsocketEnvelope)
 	close(ws)
 	now := time.Date(2026, 4, 17, 12, 6, 0, 0, time.UTC)
@@ -952,7 +966,7 @@ func TestChatInputApproveShortcutCompletesPendingRunState(t *testing.T) {
 			{
 				Kind:       projections.ChatTimelineItemMessage,
 				Role:       "assistant",
-				Content:    "done after approval",
+				Content:    "done after cancel",
 				OccurredAt: now,
 			},
 		},
@@ -988,20 +1002,51 @@ func TestChatInputApproveShortcutCompletesPendingRunState(t *testing.T) {
 	state.Busy = true
 	state.MainRun.Active = true
 	state.RunCancel = func() {}
-	state.Input.SetValue("follow up after approval")
 
-	modelAfter, cmd := (&m).Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'a'}, Alt: true})
-	if cmd == nil {
-		t.Fatal("approval shortcut returned nil cmd")
+	modelAfter, _ := (&m).Update(tea.KeyMsg{Type: tea.KeyDown})
+	modelAfter, _ = modelAfter.(*model).Update(tea.KeyMsg{Type: tea.KeyDown})
+	modelAfter, _ = modelAfter.(*model).Update(tea.KeyMsg{Type: tea.KeyDown})
+	modelAfter, _ = modelAfter.(*model).Update(tea.KeyMsg{Type: tea.KeyDown})
+	modelAfter, cmd := modelAfter.(*model).Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if cmd != nil {
+		t.Fatal("approval menu should enter compose mode before sending")
 	}
 	mm := modelAfter.(*model)
-	if client.approvedAlwaysShellID != "" {
-		t.Fatalf("approvedAlways shell id = %q before completion, want empty", client.approvedAlwaysShellID)
+	state = mm.currentSessionState()
+	if got := mm.chatComposerHint(state); !strings.Contains(strings.ToLower(got), "cancel") {
+		t.Fatalf("composer hint = %q, want cancel/send mode", got)
 	}
-	modelAfter, _ = mm.Update(shellActionFinishedMsg{
+	state.Input.SetValue("follow up after cancel")
+
+	modelAfter, cmd = mm.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if cmd == nil {
+		t.Fatal("cancel-and-send returned nil cmd")
+	}
+	mm = modelAfter.(*model)
+	if client.cancelApprovalID != "" {
+		t.Fatalf("cancel approval id = %q before completion, want empty", client.cancelApprovalID)
+	}
+	msg := cmd()
+	if batch, ok := msg.(tea.BatchMsg); ok {
+		if len(batch) == 0 {
+			t.Fatal("cancel-and-send batch is empty")
+		}
+		msg = batch[0]()
+	}
+	modelAfter, _ = mm.Update(msg)
+	mm = modelAfter.(*model)
+	if client.cancelApprovalID != "approval-1" {
+		t.Fatalf("cancel approval id = %q, want approval-1", client.cancelApprovalID)
+	}
+	if client.cancelApprovalPrompt != "follow up after cancel" {
+		t.Fatalf("cancel approval prompt = %q, want follow up after cancel", client.cancelApprovalPrompt)
+	}
+	modelAfter, _ = mm.Update(chatTurnFinishedMsg{
 		SessionID: "session-1",
-		Result:    ShellActionResult{Session: finalSnapshot},
-		Status:    "shell approval granted and saved",
+		Result: runtimeResultMeta{
+			Content: "done after cancel",
+		},
+		Session: finalSnapshot,
 	})
 	mm = modelAfter.(*model)
 	state = mm.currentSessionState()
@@ -1018,14 +1063,11 @@ func TestChatInputApproveShortcutCompletesPendingRunState(t *testing.T) {
 	if state.RunCancel != nil {
 		t.Fatal("state.RunCancel != nil, want nil")
 	}
-	if got := state.Snapshot.Timeline[len(state.Snapshot.Timeline)-1].Content; got != "done after approval" {
-		t.Fatalf("last timeline content = %q, want done after approval", got)
+	if got := state.Snapshot.Timeline[len(state.Snapshot.Timeline)-1].Content; got != "done after cancel" {
+		t.Fatalf("last timeline content = %q, want done after cancel", got)
 	}
 	if strings.Contains(state.ChatView.View(), "USER [pending]:") {
-		t.Fatalf("chat view still shows pending prompt after approval: %q", state.ChatView.View())
-	}
-	if got := state.Input.Value(); strings.TrimSpace(got) != "follow up after approval" {
-		t.Fatalf("input value = %q, want preserved", got)
+		t.Fatalf("chat view still shows pending prompt after cancel/send: %q", state.ChatView.View())
 	}
 }
 
@@ -1060,7 +1102,7 @@ func TestChatApprovalSelectionCyclesAcrossPendingApprovals(t *testing.T) {
 		t.Fatalf("initial chat approval selection missing first approval: %q", state.ChatView.View())
 	}
 
-	modelAfter, _ := (&m).Update(tea.KeyMsg{Type: tea.KeyRight, Alt: true})
+	modelAfter, _ := (&m).Update(tea.KeyMsg{Type: tea.KeyRight})
 	mm := modelAfter.(*model)
 	if mm.approvalCursor != 1 {
 		t.Fatalf("approvalCursor = %d, want 1", mm.approvalCursor)

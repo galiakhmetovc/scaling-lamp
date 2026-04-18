@@ -72,6 +72,7 @@ type OperatorClient interface {
 	SetSessionPromptOverride(context.Context, string, string) (daemon.SessionSnapshot, error)
 	ClearSessionPromptOverride(context.Context, string) (daemon.SessionSnapshot, error)
 	SendChat(context.Context, string, string) (ChatSendResult, error)
+	CancelApprovalAndSend(context.Context, string, string, string) (ChatSendResult, error)
 	SendBtw(context.Context, string, string) (BtwResult, error)
 	CreatePlan(context.Context, string, string) (PlanMutation, error)
 	AddPlanTask(context.Context, string, string) (PlanMutation, error)
@@ -286,6 +287,13 @@ func (c *localClient) SendChat(ctx context.Context, sessionID, prompt string) (C
 			Content:      result.Provider.Message.Content,
 		},
 	}, nil
+}
+
+func (c *localClient) CancelApprovalAndSend(ctx context.Context, sessionID, approvalID, prompt string) (ChatSendResult, error) {
+	if err := c.agent.CancelShellApproval(ctx, approvalID); err != nil {
+		return ChatSendResult{}, err
+	}
+	return c.SendChat(ctx, sessionID, prompt)
 }
 
 func (c *localClient) SendBtw(ctx context.Context, sessionID, prompt string) (BtwResult, error) {
@@ -769,6 +777,22 @@ func (c *daemonClient) SendChat(ctx context.Context, sessionID, prompt string) (
 		Result  runtimeResultMeta      `json:"result"`
 	}
 	err := c.command(ctx, daemon.CommandRequest{Type: "command", ID: "cmd-chat-send", Command: "chat.send", Payload: map[string]any{"session_id": sessionID, "prompt": prompt}}, &result)
+	return ChatSendResult(result), err
+}
+
+func (c *daemonClient) CancelApprovalAndSend(ctx context.Context, sessionID, approvalID, prompt string) (ChatSendResult, error) {
+	var result struct {
+		Session daemon.SessionSnapshot `json:"session"`
+		Queued  bool                   `json:"queued"`
+		Draft   *daemon.QueuedDraft    `json:"draft"`
+		Result  runtimeResultMeta      `json:"result"`
+	}
+	err := c.command(ctx, daemon.CommandRequest{
+		Type:    "command",
+		ID:      "cmd-chat-cancel-approval-send",
+		Command: "chat.cancel_approval_and_send",
+		Payload: map[string]any{"session_id": sessionID, "approval_id": approvalID, "prompt": prompt},
+	}, &result)
 	return ChatSendResult(result), err
 }
 

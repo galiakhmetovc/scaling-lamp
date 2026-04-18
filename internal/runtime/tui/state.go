@@ -121,6 +121,7 @@ type sessionState struct {
 	Snapshot      daemon.SessionSnapshot
 	Input         textarea.Model
 	PendingPrompt string
+	ApprovalMenu  approvalMenuState
 	Streaming     strings.Builder
 	ToolLog       []toolLogEntry
 	Status        string
@@ -181,6 +182,11 @@ type workspaceArtifactsState struct {
 	Loaded   bool
 	Cursor   int
 	LastSync time.Time
+}
+
+type approvalMenuState struct {
+	ActionIndex int
+	ComposeMode bool
 }
 
 type configFormDraft struct {
