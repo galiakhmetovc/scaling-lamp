@@ -13,7 +13,7 @@ import (
 	"teamd/internal/runtime/daemon"
 )
 
-var topTabs = []string{"Sessions", "Chat", "Head", "Prompt", "Plan", "Tools", "Settings"}
+var topTabs = []string{"Sessions", "Chat", "Head", "Prompt", "Workspace", "Plan", "Tools", "Settings"}
 
 type tabIndex int
 
@@ -22,6 +22,7 @@ const (
 	tabChat
 	tabHead
 	tabPrompt
+	tabWorkspace
 	tabPlan
 	tabTools
 	tabSettings
@@ -115,24 +116,24 @@ type btwRun struct {
 }
 
 type sessionState struct {
-	SessionID string
-	Snapshot  daemon.SessionSnapshot
-	Input     textarea.Model
+	SessionID     string
+	Snapshot      daemon.SessionSnapshot
+	Input         textarea.Model
 	PendingPrompt string
-	Streaming strings.Builder
-	ToolLog   []toolLogEntry
-	Status    string
-	LastError string
-	Busy      bool
-	RunCancel context.CancelFunc
-	Overrides sessionOverrides
-	Loaded    bool
-	ChatView  viewport.Model
-	ToolsView viewport.Model
-	MainRun   runMeta
-	Queue     []queuedDraft
-	QueueCursor int
-	BtwRuns      []btwRun
+	Streaming     strings.Builder
+	ToolLog       []toolLogEntry
+	Status        string
+	LastError     string
+	Busy          bool
+	RunCancel     context.CancelFunc
+	Overrides     sessionOverrides
+	Loaded        bool
+	ChatView      viewport.Model
+	ToolsView     viewport.Model
+	MainRun       runMeta
+	Queue         []queuedDraft
+	QueueCursor   int
+	BtwRuns       []btwRun
 	Interjections []interjectionEntry
 }
 
@@ -161,8 +162,8 @@ type model struct {
 	commandCursor   int
 	toolsFocus      toolsFocusMode
 
-	wsCh    <-chan daemon.WebsocketEnvelope
-	stopWS  func()
+	wsCh   <-chan daemon.WebsocketEnvelope
+	stopWS func()
 
 	settingsSnapshot daemon.SettingsSnapshot
 

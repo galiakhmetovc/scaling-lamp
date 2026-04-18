@@ -37,11 +37,11 @@ func newModel(ctx context.Context, agent *runtime.Agent, resumeID string) (model
 
 func newModelWithClient(ctx context.Context, client OperatorClient, resumeID string) (model, error) {
 	m := model{
-		ctx:      ctx,
-		client:   client,
-		now:      time.Now,
-		tab:      tabChat,
-		sessions: map[string]*sessionState{},
+		ctx:                 ctx,
+		client:              client,
+		now:                 time.Now,
+		tab:                 tabChat,
+		sessions:            map[string]*sessionState{},
 		mouseCaptureEnabled: true,
 	}
 	m.clockNow = m.now()
@@ -140,6 +140,8 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m.updateHead(msg)
 		case tabPrompt:
 			return m.updatePrompt(msg)
+		case tabWorkspace:
+			return m.updateWorkspace(msg)
 		case tabPlan:
 			return m.updatePlan(msg)
 		case tabTools:
@@ -354,12 +356,14 @@ func (m *model) handleGlobalKey(msg tea.KeyMsg) tea.Cmd {
 	case "f4":
 		m.tab = tabPrompt
 	case "f5":
-		m.tab = tabPlan
+		m.tab = tabWorkspace
 	case "f6":
-		m.tab = tabTools
+		m.tab = tabPlan
 	case "f7":
-		m.tab = tabSettings
+		m.tab = tabTools
 	case "f8":
+		m.tab = tabSettings
+	case "f9":
 		m.mouseCaptureEnabled = !m.mouseCaptureEnabled
 		if m.mouseCaptureEnabled {
 			m.statusMessage = "interactive mouse mode enabled"
@@ -386,6 +390,8 @@ func (m *model) View() string {
 		body = m.viewHead()
 	case tabPrompt:
 		body = m.viewPrompt()
+	case tabWorkspace:
+		body = m.viewWorkspace()
 	case tabPlan:
 		body = m.viewPlan()
 	case tabTools:
@@ -424,11 +430,11 @@ func (m *model) viewFooter() string {
 	if m.errMessage != "" {
 		parts = append(parts, "error: "+m.errMessage)
 	}
-	mouseMode := "Mouse: on (F8 toggle)"
+	mouseMode := "Mouse: on (F9 toggle)"
 	if !m.mouseCaptureEnabled {
-		mouseMode = "Mouse: off (F8 toggle, select text)"
+		mouseMode = "Mouse: off (F9 toggle, select text)"
 	}
-	parts = append(parts, mouseMode, "Tabs: F1..F7 or Ctrl+Left/Right, Ctrl+Q quit")
+	parts = append(parts, mouseMode, "Tabs: F1..F8 or Ctrl+Left/Right, Ctrl+Q quit")
 	return strings.Join(parts, " | ")
 }
 

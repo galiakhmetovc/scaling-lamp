@@ -1205,10 +1205,10 @@ func TestF6TogglesMouseCaptureAndFooterIndicator(t *testing.T) {
 		t.Fatalf("footer missing mouse enabled indicator: %q", mm.viewFooter())
 	}
 
-	modelAfter, cmd := mm.Update(tea.KeyMsg{Type: tea.KeyF8})
+	modelAfter, cmd := mm.Update(tea.KeyMsg{Type: tea.KeyF9})
 	mm = modelAfter.(*model)
 	if mm.mouseCaptureEnabled {
-		t.Fatal("mouse capture should be disabled after F8")
+		t.Fatal("mouse capture should be disabled after F9")
 	}
 	if cmd == nil {
 		t.Fatal("toggle off returned nil command")
@@ -1232,10 +1232,10 @@ func TestF6TogglesMouseCaptureAndFooterIndicator(t *testing.T) {
 		t.Fatalf("footer missing mouse disabled indicator: %q", mm.viewFooter())
 	}
 
-	modelAfter, cmd = mm.Update(tea.KeyMsg{Type: tea.KeyF8})
+	modelAfter, cmd = mm.Update(tea.KeyMsg{Type: tea.KeyF9})
 	mm = modelAfter.(*model)
 	if !mm.mouseCaptureEnabled {
-		t.Fatal("mouse capture should be re-enabled after second F8")
+		t.Fatal("mouse capture should be re-enabled after second F9")
 	}
 	if cmd == nil {
 		t.Fatal("toggle on returned nil command")
