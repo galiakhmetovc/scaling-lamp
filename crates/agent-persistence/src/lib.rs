@@ -1,10 +1,19 @@
 pub mod audit;
 pub mod config;
+pub mod records;
 pub mod recovery;
+pub mod repository;
 pub mod store;
 
 pub use config::{AppConfig, ConfigEnv, ConfigError};
-pub use store::StoreLayout;
+pub use records::{
+    ArtifactRecord, JobRecord, MissionRecord, RunRecord, SessionRecord, TranscriptRecord,
+};
+pub use repository::{
+    ArtifactRepository, JobRepository, MissionRepository, RunRepository, SessionRepository,
+    TranscriptRepository,
+};
+pub use store::{PersistenceStore, StoreError, StoreLayout};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PersistenceScaffold {
