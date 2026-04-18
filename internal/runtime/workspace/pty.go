@@ -144,6 +144,17 @@ func (m *WorkspacePTYManager) Close(sessionID string) error {
 	return session.shutdown()
 }
 
+func (m *WorkspacePTYManager) SessionIDs() []string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	out := make([]string, 0, len(m.sessions))
+	for sessionID := range m.sessions {
+		out = append(out, sessionID)
+	}
+	return out
+}
+
 func newPTYSession(sessionID string) *ptySession {
 	return &ptySession{
 		id:        sessionPTYID(sessionID),

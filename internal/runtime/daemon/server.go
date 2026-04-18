@@ -19,6 +19,7 @@ import (
 
 	"golang.org/x/net/websocket"
 	"teamd/internal/runtime"
+	"teamd/internal/runtime/workspace"
 )
 
 //go:embed assets/*
@@ -31,6 +32,7 @@ type Server struct {
 	listenAddr     string
 	runtimeMu      sync.RWMutex
 	sessionRuntime map[string]*sessionRuntimeState
+	workspacePTY   *workspace.WorkspacePTYManager
 	daemonBus      *daemonBus
 	logger         *slog.Logger
 }
@@ -110,6 +112,7 @@ func New(agent *runtime.Agent) (*Server, error) {
 		agent:          agent,
 		listenAddr:     net.JoinHostPort(params.ListenHost, fmt.Sprintf("%d", params.ListenPort)),
 		sessionRuntime: map[string]*sessionRuntimeState{},
+		workspacePTY:   workspace.NewWorkspacePTYManager(),
 		daemonBus:      newDaemonBus(),
 		logger:         newDaemonLogger(agent.Contracts.OperatorSurface.DaemonServer.Params),
 	}
@@ -212,9 +215,9 @@ func (s *Server) handleBootstrap(w http.ResponseWriter, _ *http.Request) {
 	agent := s.currentAgent()
 	w.Header().Set("Content-Type", "application/json")
 	payload := BootstrapPayload{
-		AgentID:    agent.Config.ID,
-		ConfigPath: agent.ConfigPath,
-		ListenAddr: s.listenAddr,
+		AgentID:        agent.Config.ID,
+		ConfigPath:     agent.ConfigPath,
+		ListenAddr:     s.listenAddr,
 		ToolGovernance: buildToolGovernanceSnapshot(agent),
 		Transport: ClientTransportSnapshot{
 			EndpointPath:  agent.Contracts.OperatorSurface.ClientTransport.Params.EndpointPath,

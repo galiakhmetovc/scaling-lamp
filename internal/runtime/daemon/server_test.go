@@ -233,6 +233,196 @@ func TestSessionDeleteCommandRemovesSessionFromOperatorSurface(t *testing.T) {
 	}
 }
 
+func TestWorkspacePTYCommandsRoundTripThroughDaemon(t *testing.T) {
+	t.Parallel()
+
+	agent := buildAgentWithOperatorSurface(t)
+	server, err := daemon.New(agent)
+	if err != nil {
+		t.Fatalf("new daemon server: %v", err)
+	}
+	httpServer := httptest.NewServer(server.Handler())
+	defer httpServer.Close()
+
+	conn := dialWebsocket(t, httpServer.URL, "/ws")
+	defer conn.Close()
+	_ = readEnvelopeJSON(t, conn)
+
+	writeCommandEnvelope(t, conn, map[string]any{
+		"type":    "command",
+		"id":      "cmd-create",
+		"command": "session.create",
+	})
+	_ = readEnvelopeJSON(t, conn)
+	created := waitForCommandCompleted(t, conn, "cmd-create")
+	sessionID, _ := mapPayload(t, mapPayload(t, created["payload"])["session"])["session_id"].(string)
+	if sessionID == "" {
+		t.Fatal("session_id is empty")
+	}
+
+	writeCommandEnvelope(t, conn, map[string]any{
+		"type":    "command",
+		"id":      "cmd-open",
+		"command": "workspace.pty.open",
+		"payload": map[string]any{
+			"session_id": sessionID,
+			"cols":       80,
+			"rows":       24,
+		},
+	})
+	_ = readEnvelopeJSON(t, conn)
+	opened := waitForCommandCompleted(t, conn, "cmd-open")
+	pty := mapPayload(t, opened["payload"])["pty"]
+	ptySnapshot := mapPayload(t, pty)
+	if got := ptySnapshot["session_id"]; got != sessionID {
+		t.Fatalf("pty session_id = %#v, want %q", got, sessionID)
+	}
+	if got := ptySnapshot["cols"]; got != float64(80) {
+		t.Fatalf("pty cols = %#v, want 80", got)
+	}
+	if got := ptySnapshot["rows"]; got != float64(24) {
+		t.Fatalf("pty rows = %#v, want 24", got)
+	}
+	ptyID, _ := ptySnapshot["pty_id"].(string)
+	if ptyID == "" {
+		t.Fatal("pty_id is empty")
+	}
+	if got := ptySnapshot["alive"]; got != true {
+		t.Fatalf("pty alive = %#v, want true", got)
+	}
+	if got := ptySnapshot["pid"]; got == nil || got == float64(0) {
+		t.Fatalf("pty pid = %#v, want non-zero", got)
+	}
+
+	writeCommandEnvelope(t, conn, map[string]any{
+		"type":    "command",
+		"id":      "cmd-input",
+		"command": "workspace.pty.input",
+		"payload": map[string]any{
+			"pty_id": ptyID,
+			"data":   "printf 'workspace daemon\\n'\n",
+		},
+	})
+	_ = readEnvelopeJSON(t, conn)
+	_ = waitForCommandCompleted(t, conn, "cmd-input")
+
+	writeCommandEnvelope(t, conn, map[string]any{
+		"type":    "command",
+		"id":      "cmd-snapshot",
+		"command": "workspace.pty.snapshot",
+		"payload": map[string]any{
+			"session_id": sessionID,
+		},
+	})
+	_ = readEnvelopeJSON(t, conn)
+	snapshotPTY := waitForWorkspacePTYScrollback(t, conn, sessionID, "workspace daemon")
+	if got := snapshotPTY["session_id"]; got != sessionID {
+		t.Fatalf("snapshot session_id = %#v, want %q", got, sessionID)
+	}
+	if got := snapshotPTY["pty_id"]; got != ptyID {
+		t.Fatalf("snapshot pty_id = %#v, want %q", got, ptyID)
+	}
+
+	writeCommandEnvelope(t, conn, map[string]any{
+		"type":    "command",
+		"id":      "cmd-resize",
+		"command": "workspace.pty.resize",
+		"payload": map[string]any{
+			"pty_id": ptyID,
+			"cols":   120,
+			"rows":   50,
+		},
+	})
+	_ = readEnvelopeJSON(t, conn)
+	resized := waitForCommandCompleted(t, conn, "cmd-resize")
+	resizedPTY := mapPayload(t, mapPayload(t, resized["payload"])["pty"])
+	if got := resizedPTY["cols"]; got != float64(120) {
+		t.Fatalf("resized cols = %#v, want 120", got)
+	}
+	if got := resizedPTY["rows"]; got != float64(50) {
+		t.Fatalf("resized rows = %#v, want 50", got)
+	}
+
+	writeCommandEnvelope(t, conn, map[string]any{
+		"type":    "command",
+		"id":      "cmd-reset",
+		"command": "workspace.pty.reset",
+		"payload": map[string]any{
+			"session_id": sessionID,
+		},
+	})
+	_ = readEnvelopeJSON(t, conn)
+	resetCompleted := waitForCommandCompleted(t, conn, "cmd-reset")
+	resetPTY := mapPayload(t, mapPayload(t, resetCompleted["payload"])["pty"])
+	if got := resetPTY["pty_id"]; got != ptyID {
+		t.Fatalf("reset pty_id = %#v, want %q", got, ptyID)
+	}
+	if got := resetPTY["session_id"]; got != sessionID {
+		t.Fatalf("reset session_id = %#v, want %q", got, sessionID)
+	}
+	if got := resetPTY["alive"]; got != true {
+		t.Fatalf("reset alive = %#v, want true", got)
+	}
+	if got := resetPTY["pid"]; got == nil || got == float64(0) {
+		t.Fatalf("reset pid = %#v, want non-zero", got)
+	}
+	if scrollback, _ := resetPTY["scrollback"].([]any); len(scrollback) != 0 {
+		t.Fatalf("reset scrollback = %#v, want empty", resetPTY["scrollback"])
+	}
+
+	writeCommandEnvelope(t, conn, map[string]any{
+		"type":    "command",
+		"id":      "cmd-open-again",
+		"command": "workspace.pty.open",
+		"payload": map[string]any{
+			"session_id": sessionID,
+			"cols":       100,
+			"rows":       30,
+		},
+	})
+	_ = readEnvelopeJSON(t, conn)
+	openedAgain := waitForCommandCompleted(t, conn, "cmd-open-again")
+	openedAgainPTY := mapPayload(t, mapPayload(t, openedAgain["payload"])["pty"])
+	if got := openedAgainPTY["pty_id"]; got != ptyID {
+		t.Fatalf("reopened pty_id = %#v, want %q", got, ptyID)
+	}
+	if got := openedAgainPTY["cols"]; got != float64(100) {
+		t.Fatalf("reopened cols = %#v, want 100", got)
+	}
+	if got := openedAgainPTY["rows"]; got != float64(30) {
+		t.Fatalf("reopened rows = %#v, want 30", got)
+	}
+}
+
+func waitForWorkspacePTYScrollback(t *testing.T, conn *websocket.Conn, sessionID, needle string) map[string]any {
+	t.Helper()
+
+	deadline := time.Now().Add(3 * time.Second)
+	for attempt := 0; time.Now().Before(deadline); attempt++ {
+		commandID := fmt.Sprintf("cmd-snapshot-%d", attempt)
+		writeCommandEnvelope(t, conn, map[string]any{
+			"type":    "command",
+			"id":      commandID,
+			"command": "workspace.pty.snapshot",
+			"payload": map[string]any{
+				"session_id": sessionID,
+			},
+		})
+		_ = readEnvelopeJSON(t, conn)
+		completed := waitForCommandCompleted(t, conn, commandID)
+		pty := mapPayload(t, mapPayload(t, completed["payload"])["pty"])
+		scrollback, _ := pty["scrollback"].([]any)
+		for _, line := range scrollback {
+			if strings.Contains(fmt.Sprint(line), needle) {
+				return pty
+			}
+		}
+		time.Sleep(25 * time.Millisecond)
+	}
+	t.Fatalf("workspace PTY scrollback never contained %q", needle)
+	return nil
+}
+
 func TestHealthzEndpointIsAvailable(t *testing.T) {
 	t.Parallel()
 

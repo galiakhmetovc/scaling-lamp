@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	"teamd/internal/runtime"
+	"teamd/internal/runtime/workspace"
 )
 
 type providerResultPayload struct {
@@ -302,6 +303,81 @@ func (s *Server) executeCommand(ctx context.Context, req CommandRequest) (any, e
 			return nil, err
 		}
 		return s.sessionPayload(sessionID)
+	case "workspace.pty.open":
+		sessionID, err := requiredString(req.Payload, "session_id")
+		if err != nil {
+			return nil, err
+		}
+		cols, err := requiredInt(req.Payload, "cols")
+		if err != nil {
+			return nil, err
+		}
+		rows, err := requiredInt(req.Payload, "rows")
+		if err != nil {
+			return nil, err
+		}
+		pty, err := s.workspacePTY.Open(sessionID, cols, rows)
+		if err != nil {
+			return nil, err
+		}
+		return map[string]any{"pty": pty}, nil
+	case "workspace.pty.input":
+		ptyID, err := requiredString(req.Payload, "pty_id")
+		if err != nil {
+			return nil, err
+		}
+		data, err := requiredString(req.Payload, "data")
+		if err != nil {
+			return nil, err
+		}
+		if err := s.workspacePTY.Input(ptyID, []byte(data)); err != nil {
+			return nil, err
+		}
+		return map[string]any{"pty_id": ptyID, "ok": true}, nil
+	case "workspace.pty.resize":
+		ptyID, err := requiredString(req.Payload, "pty_id")
+		if err != nil {
+			return nil, err
+		}
+		cols, err := requiredInt(req.Payload, "cols")
+		if err != nil {
+			return nil, err
+		}
+		rows, err := requiredInt(req.Payload, "rows")
+		if err != nil {
+			return nil, err
+		}
+		if err := s.workspacePTY.Resize(ptyID, cols, rows); err != nil {
+			return nil, err
+		}
+		pty, err := s.findWorkspacePTYSnapshotByID(ptyID)
+		if err != nil {
+			return nil, err
+		}
+		return map[string]any{"pty": pty}, nil
+	case "workspace.pty.snapshot":
+		sessionID, err := requiredString(req.Payload, "session_id")
+		if err != nil {
+			return nil, err
+		}
+		pty, ok := s.workspacePTY.Snapshot(sessionID)
+		if !ok {
+			return nil, fmt.Errorf("workspace pty for session %q not found", sessionID)
+		}
+		return map[string]any{"pty": pty}, nil
+	case "workspace.pty.reset":
+		sessionID, err := requiredString(req.Payload, "session_id")
+		if err != nil {
+			return nil, err
+		}
+		if err := s.workspacePTY.Reset(sessionID); err != nil {
+			return nil, err
+		}
+		pty, ok := s.workspacePTY.Snapshot(sessionID)
+		if !ok {
+			return nil, fmt.Errorf("workspace pty for session %q not found after reset", sessionID)
+		}
+		return map[string]any{"pty": pty}, nil
 	case "shell.approve":
 		approvalID, err := requiredString(req.Payload, "approval_id")
 		if err != nil {
@@ -460,6 +536,16 @@ func (s *Server) executeCommand(ctx context.Context, req CommandRequest) (any, e
 	default:
 		return nil, fmt.Errorf("unsupported daemon command %q", req.Command)
 	}
+}
+
+func (s *Server) findWorkspacePTYSnapshotByID(ptyID string) (workspace.PTYSnapshot, error) {
+	for _, sessionID := range s.workspacePTY.SessionIDs() {
+		snap, ok := s.workspacePTY.Snapshot(sessionID)
+		if ok && snap.PTYID == ptyID {
+			return snap, nil
+		}
+	}
+	return workspace.PTYSnapshot{}, fmt.Errorf("workspace pty %q not found", ptyID)
 }
 
 func (s *Server) sessionPayload(sessionID string) (map[string]any, error) {
