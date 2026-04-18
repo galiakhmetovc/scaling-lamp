@@ -9,3 +9,6 @@ version.workspace = true
 [dependencies]
 agent-persistence = { path = "../../crates/agent-persistence" }
 agent-runtime = { path = "../../crates/agent-runtime" }
+
+[dev-dependencies]
+tempfile.workspace = true

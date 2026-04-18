@@ -5,6 +5,7 @@ use std::path::PathBuf;
 pub struct StoreLayout {
     pub artifacts_dir: PathBuf,
     pub metadata_db: PathBuf,
+    pub runs_dir: PathBuf,
     pub transcripts_dir: PathBuf,
 }
 
@@ -15,6 +16,7 @@ impl StoreLayout {
         Self {
             artifacts_dir: root.join("artifacts"),
             metadata_db: root.join("state.sqlite"),
+            runs_dir: root.join("runs"),
             transcripts_dir: root.join("transcripts"),
         }
     }

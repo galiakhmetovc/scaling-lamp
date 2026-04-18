@@ -3,6 +3,9 @@ pub mod config;
 pub mod recovery;
 pub mod store;
 
+pub use config::{AppConfig, ConfigEnv, ConfigError};
+pub use store::StoreLayout;
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PersistenceScaffold {
     pub audit: audit::AuditLogConfig,
@@ -13,7 +16,12 @@ pub struct PersistenceScaffold {
 
 impl Default for PersistenceScaffold {
     fn default() -> Self {
-        let config = config::AppConfig::default();
+        Self::from_config(config::AppConfig::default())
+    }
+}
+
+impl PersistenceScaffold {
+    pub fn from_config(config: config::AppConfig) -> Self {
         let stores = store::StoreLayout::from_config(&config);
 
         Self {
@@ -40,6 +48,7 @@ mod tests {
             Some(OsStr::new("teamd"))
         );
         assert!(scaffold.stores.metadata_db.ends_with("teamd/state.sqlite"));
+        assert!(scaffold.stores.runs_dir.ends_with("teamd/runs"));
         assert!(scaffold.audit.path.ends_with("teamd/audit/runtime.jsonl"));
     }
 }
