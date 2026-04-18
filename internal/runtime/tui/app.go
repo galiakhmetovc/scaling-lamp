@@ -213,21 +213,21 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if state == nil {
 			return m, nil
 		}
-		state.PendingPrompt = ""
-		state.Busy = false
-		state.MainRun.Active = false
-		state.RunCancel = nil
-		state.MainRun.CompletedAt = m.now()
-		if msg.Result.Provider != "" {
-			state.MainRun.Provider = msg.Result.Provider
-		}
-		if msg.Result.Model != "" {
-			state.MainRun.Model = msg.Result.Model
-		}
-		state.MainRun.InputTokens = msg.Result.InputTokens
-		state.MainRun.OutputTokens = msg.Result.OutputTokens
-		state.MainRun.TotalTokens = msg.Result.TotalTokens
 		if msg.Err != nil {
+			state.PendingPrompt = ""
+			state.Busy = false
+			state.MainRun.Active = false
+			state.RunCancel = nil
+			state.MainRun.CompletedAt = m.now()
+			if msg.Result.Provider != "" {
+				state.MainRun.Provider = msg.Result.Provider
+			}
+			if msg.Result.Model != "" {
+				state.MainRun.Model = msg.Result.Model
+			}
+			state.MainRun.InputTokens = msg.Result.InputTokens
+			state.MainRun.OutputTokens = msg.Result.OutputTokens
+			state.MainRun.TotalTokens = msg.Result.TotalTokens
 			state.LastError = msg.Err.Error()
 			m.errMessage = msg.Err.Error()
 			if cmd := m.dispatchNextQueued(state); cmd != nil {
@@ -238,11 +238,20 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.Queued && msg.Draft != nil {
 			state.Queue = append(state.Queue, queuedDraft{Text: msg.Draft.Text, QueuedAt: msg.Draft.QueuedAt})
 		}
-		state.Snapshot = msg.Session
+		state.PendingPrompt = ""
+		state.Snapshot = mergeSessionSnapshot(state.Snapshot, msg.Session)
 		state.SessionID = msg.SessionID
-		state.Status = "idle"
+		m.syncRunStateFromSnapshot(state, false)
 		m.renderChatViewport(state)
 		m.renderToolsViewport(state)
+		if !state.MainRun.Active {
+			if cmd := m.dispatchNextQueued(state); cmd != nil {
+				return m, tea.Batch(cmd, tickClockCmd())
+			}
+		}
+		if state.MainRun.Active {
+			return m, tickClockCmd()
+		}
 		if cmd := m.dispatchNextQueued(state); cmd != nil {
 			return m, tea.Batch(cmd, tickClockCmd())
 		}
