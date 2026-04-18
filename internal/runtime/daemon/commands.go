@@ -3,6 +3,8 @@ package daemon
 import (
 	"context"
 	"fmt"
+	"log/slog"
+	"runtime/debug"
 
 	"teamd/internal/runtime"
 	"teamd/internal/runtime/workspace"
@@ -504,7 +506,9 @@ func (s *Server) executeCommand(ctx context.Context, req CommandRequest) (any, e
 		}
 		payload["command_id"] = view.CommandID
 		s.publishDaemon(WebsocketEnvelope{Type: "shell_approval_updated", Payload: map[string]any{"session_id": view.SessionID}})
-		go s.approveShellAsync(s.currentAgent(), approvalID, view.SessionID)
+		s.runGuardedShellApproval(view.SessionID, func() {
+			s.approveShellAsync(s.currentAgent(), approvalID, view.SessionID)
+		})
 		return payload, nil
 	case "shell.approve_always":
 		approvalID, err := requiredString(req.Payload, "approval_id")
@@ -524,7 +528,9 @@ func (s *Server) executeCommand(ctx context.Context, req CommandRequest) (any, e
 		}
 		payload["command_id"] = view.CommandID
 		s.publishDaemon(WebsocketEnvelope{Type: "shell_approval_updated", Payload: map[string]any{"session_id": view.SessionID}})
-		go s.approveShellAlwaysAsync(agent, approvalID, view)
+		s.runGuardedShellApproval(view.SessionID, func() {
+			s.approveShellAlwaysAsync(agent, approvalID, view)
+		})
 		return payload, nil
 	case "shell.deny":
 		approvalID, err := requiredString(req.Payload, "approval_id")
@@ -543,7 +549,9 @@ func (s *Server) executeCommand(ctx context.Context, req CommandRequest) (any, e
 			return nil, err
 		}
 		s.publishDaemon(WebsocketEnvelope{Type: "shell_approval_updated", Payload: map[string]any{"session_id": view.SessionID}})
-		go s.denyShellAsync(s.currentAgent(), approvalID, view.SessionID)
+		s.runGuardedShellApproval(view.SessionID, func() {
+			s.denyShellAsync(s.currentAgent(), approvalID, view.SessionID)
+		})
 		return payload, nil
 	case "shell.deny_always":
 		approvalID, err := requiredString(req.Payload, "approval_id")
@@ -562,7 +570,9 @@ func (s *Server) executeCommand(ctx context.Context, req CommandRequest) (any, e
 			return nil, err
 		}
 		s.publishDaemon(WebsocketEnvelope{Type: "shell_approval_updated", Payload: map[string]any{"session_id": view.SessionID}})
-		go s.denyShellAlwaysAsync(agent, approvalID, view)
+		s.runGuardedShellApproval(view.SessionID, func() {
+			s.denyShellAlwaysAsync(agent, approvalID, view)
+		})
 		return payload, nil
 	case "shell.kill":
 		commandID, err := requiredString(req.Payload, "command_id")
@@ -772,6 +782,27 @@ func (s *Server) denyShellAlwaysAsync(agent *runtime.Agent, approvalID string, v
 		return
 	}
 	s.syncMainRunAfterShellContinuation(reloaded, view.SessionID)
+}
+
+func (s *Server) runGuardedShellApproval(sessionID string, fn func()) {
+	go func() {
+		defer func() {
+			if recovered := recover(); recovered != nil {
+				err := fmt.Errorf("panic in shell approval continuation: %v", recovered)
+				s.logError("daemon.shell_approval.panic", err,
+					slog.String("session_id", sessionID),
+					slog.String("stack", string(debug.Stack())),
+				)
+				s.publishDaemon(WebsocketEnvelope{
+					Type:    "shell_approval_failed",
+					Payload: map[string]any{"session_id": sessionID},
+					Error:   err.Error(),
+				})
+				s.failMainRun(sessionID, nil)
+			}
+		}()
+		fn()
+	}()
 }
 
 func requiredString(payload map[string]any, key string) (string, error) {
