@@ -21,18 +21,18 @@ func TestPlanTaskLineUsesColoredStatusTokens(t *testing.T) {
 		task     projections.PlanTaskView
 		wantText string
 	}{
-		{name: "todo", task: projections.PlanTaskView{ID: "todo-task", Description: "Todo task"}, wantText: "[todo] Todo task"},
-		{name: "ready", task: projections.PlanTaskView{ID: "ready-task", Description: "Ready task"}, wantText: "[ready] Ready task"},
-		{name: "waiting", task: projections.PlanTaskView{ID: "waiting-task", Description: "Waiting task"}, wantText: "[waiting] Waiting task"},
-		{name: "doing", task: projections.PlanTaskView{ID: "doing-task", Description: "Doing task", Status: "in_progress"}, wantText: "[doing] Doing task"},
-		{name: "done", task: projections.PlanTaskView{ID: "done-task", Description: "Done task", Status: "done"}, wantText: "[done] Done task"},
-		{name: "blocked", task: projections.PlanTaskView{ID: "blocked-task", Description: "Blocked task", Status: "blocked"}, wantText: "[blocked] Blocked task"},
-		{name: "cancelled", task: projections.PlanTaskView{ID: "cancelled-task", Description: "Cancelled task", Status: "cancelled"}, wantText: "[cancelled] Cancelled task"},
+		{name: "todo", task: projections.PlanTaskView{ID: "todo-task", Description: "Todo task"}, wantText: "1 [todo] Todo task"},
+		{name: "ready", task: projections.PlanTaskView{ID: "ready-task", Description: "Ready task"}, wantText: "1 [ready] Ready task"},
+		{name: "waiting", task: projections.PlanTaskView{ID: "waiting-task", Description: "Waiting task"}, wantText: "1 [waiting] Waiting task"},
+		{name: "doing", task: projections.PlanTaskView{ID: "doing-task", Description: "Doing task", Status: "in_progress"}, wantText: "1 [doing] Doing task"},
+		{name: "done", task: projections.PlanTaskView{ID: "done-task", Description: "Done task", Status: "done"}, wantText: "1 [done] Done task"},
+		{name: "blocked", task: projections.PlanTaskView{ID: "blocked-task", Description: "Blocked task", Status: "blocked"}, wantText: "1 [blocked] Blocked task"},
+		{name: "cancelled", task: projections.PlanTaskView{ID: "cancelled-task", Description: "Cancelled task", Status: "cancelled"}, wantText: "1 [cancelled] Cancelled task"},
 	}
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got := planTaskLine(head, tc.task, 0)
+			got := planTaskLine(head, tc.task, 0, "1")
 			if plain := ansiPattern.ReplaceAllString(got, ""); plain != tc.wantText {
 				t.Fatalf("plain line = %q, want %q", plain, tc.wantText)
 			}
@@ -40,5 +40,13 @@ func TestPlanTaskLineUsesColoredStatusTokens(t *testing.T) {
 				t.Fatalf("line = %q, want ANSI color escape", got)
 			}
 		})
+	}
+}
+
+func TestPlanTaskLineRendersHierarchicalNumbering(t *testing.T) {
+	head := projections.PlanHeadSnapshot{}
+	got := planTaskLine(head, projections.PlanTaskView{ID: "task-1", Description: "Child task"}, 1, "1.2")
+	if plain := ansiPattern.ReplaceAllString(got, ""); plain != "  1.2 [todo] Child task" {
+		t.Fatalf("plain line = %q, want hierarchical numbering", plain)
 	}
 }

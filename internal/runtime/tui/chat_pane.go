@@ -37,6 +37,18 @@ func (m *model) updateChat(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			state.QueueCursor++
 		}
 		return m, nil
+	case "alt+left":
+		if len(m.currentApprovals()) > 0 && m.approvalCursor > 0 {
+			m.approvalCursor--
+			m.renderChatViewport(state)
+		}
+		return m, nil
+	case "alt+right":
+		if approvals := m.currentApprovals(); len(approvals) > 0 && m.approvalCursor < len(approvals)-1 {
+			m.approvalCursor++
+			m.renderChatViewport(state)
+		}
+		return m, nil
 	case "ctrl+e":
 		return m, m.recallSelectedDraft(state)
 	case "ctrl+d", "delete":
@@ -450,10 +462,10 @@ func (m *model) renderLiveToolLog(state *sessionState, width int) []string {
 	if len(activities) == 0 {
 		return nil
 	}
-	start := max(0, len(activities)-3)
+	start, end := liveToolWindowBounds(activities, m.currentApprovals(), m.approvalCursor)
 	lines := []string{"TOOLS:"}
-	for _, activity := range activities[start:] {
-		lines = append(lines, compactLiveToolActivityLine(activity, width))
+	for _, activity := range activities[start:end] {
+		lines = append(lines, compactLiveToolActivityLine(activity, m.currentApprovals(), m.approvalCursor, width))
 	}
 	return lines
 }
@@ -563,7 +575,7 @@ func (m *model) chatComposerHint(state *sessionState) string {
 		return "Input"
 	}
 	if len(state.Snapshot.PendingApprovals) > 0 {
-		return "Input (Alt+Y approve, Alt+N deny, Alt+A allow forever, Alt+D deny forever; Enter send, Tab queue, Ctrl+E recall, Ctrl+D delete, Shift+Enter newline, Alt+Up/Down queue select):"
+		return "Input (Alt+Left/Right select approval, Alt+Y approve, Alt+N deny, Alt+A allow forever, Alt+D deny forever; Enter send, Tab queue, Ctrl+E recall, Ctrl+D delete, Shift+Enter newline, Alt+Up/Down queue select):"
 	}
 	if state.MainRun.Active {
 		return "Input (Enter queue interjection, Tab stage draft, Ctrl+E recall, Ctrl+D delete, Ctrl+X stop run, Shift+Enter newline, Alt+Up/Down queue select):"

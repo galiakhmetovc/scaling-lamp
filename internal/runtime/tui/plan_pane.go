@@ -163,13 +163,14 @@ func (m *model) viewPlan() string {
 	lines := []string{"Plan", "", "Goal: " + stripInlineMarkdown(head.Plan.Goal), ""}
 	m.mousePlanTop = len(lines)
 	ordered := orderedPlanTasks(head.Tasks)
+	numbers := buildPlanTaskNumbers(head)
 	selected, hasSelection := m.selectedPlanTask(head)
 	flatIndex := 0
 	for _, task := range ordered {
 		if task.ParentTaskID != "" {
 			continue
 		}
-		renderPlanTaskWithSelection(&lines, head, task, ordered, 0, &flatIndex, m.planCursor)
+		renderPlanTaskWithSelection(&lines, head, task, ordered, numbers, 0, &flatIndex, m.planCursor)
 	}
 	m.planView.SetContent(strings.Join(lines, "\n"))
 	left := m.planView.View()
@@ -246,22 +247,45 @@ func flattenedPlanTasks(head projections.PlanHeadSnapshot) []projections.PlanTas
 	return out
 }
 
-func renderPlanTaskWithSelection(lines *[]string, head projections.PlanHeadSnapshot, task projections.PlanTaskView, all []projections.PlanTaskView, depth int, flatIndex *int, selectedIndex int) {
+func renderPlanTaskWithSelection(lines *[]string, head projections.PlanHeadSnapshot, task projections.PlanTaskView, all []projections.PlanTaskView, numbers map[string]string, depth int, flatIndex *int, selectedIndex int) {
 	prefix := "  "
 	if *flatIndex == selectedIndex {
 		prefix = "> "
 	}
-	rendered := fmt.Sprintf("%s%s", prefix, planTaskLine(head, task, depth))
+	rendered := fmt.Sprintf("%s%s", prefix, planTaskLine(head, task, depth, numbers[task.ID]))
 	*lines = append(*lines, rendered)
 	*flatIndex++
 	for _, child := range all {
 		if child.ParentTaskID == task.ID {
-			renderPlanTaskWithSelection(lines, head, child, all, depth+1, flatIndex, selectedIndex)
+			renderPlanTaskWithSelection(lines, head, child, all, numbers, depth+1, flatIndex, selectedIndex)
 		}
 	}
 }
 
-func planTaskLine(head projections.PlanHeadSnapshot, task projections.PlanTaskView, depth int) string {
+func buildPlanTaskNumbers(head projections.PlanHeadSnapshot) map[string]string {
+	ordered := orderedPlanTasks(head.Tasks)
+	out := make(map[string]string, len(ordered))
+	var walk func(parentID, prefix string)
+	walk = func(parentID, prefix string) {
+		index := 0
+		for _, task := range ordered {
+			if task.ParentTaskID != parentID {
+				continue
+			}
+			index++
+			number := fmt.Sprintf("%d", index)
+			if prefix != "" {
+				number = prefix + "." + number
+			}
+			out[task.ID] = number
+			walk(task.ID, number)
+		}
+	}
+	walk("", "")
+	return out
+}
+
+func planTaskLine(head projections.PlanHeadSnapshot, task projections.PlanTaskView, depth int, number string) string {
 	prefix := strings.Repeat("  ", depth)
 	statusKey := "todo"
 	statusText := "todo"
@@ -288,7 +312,11 @@ func planTaskLine(head projections.PlanHeadSnapshot, task projections.PlanTaskVi
 		}
 	}
 	status := renderPlanStatus(statusKey, statusText)
-	return fmt.Sprintf("%s%s %s", prefix, status, stripInlineMarkdown(task.Description))
+	numberText := strings.TrimSpace(number)
+	if numberText != "" {
+		numberText += " "
+	}
+	return fmt.Sprintf("%s%s%s %s", prefix, numberText, status, stripInlineMarkdown(task.Description))
 }
 
 func renderPlanStatus(statusKey, text string) string {

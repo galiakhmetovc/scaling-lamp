@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"teamd/internal/runtime"
+	"teamd/internal/shell"
 )
 
 func toolActivityJumpTarget(activity runtime.ToolActivity) (workspaceJumpTarget, bool) {
@@ -42,10 +43,17 @@ func collapseLiveToolActivities(entries []toolLogEntry) []runtime.ToolActivity {
 	return out
 }
 
-func compactLiveToolActivityLine(activity runtime.ToolActivity, width int) string {
+func compactLiveToolActivityLine(activity runtime.ToolActivity, approvals []shell.PendingApprovalView, approvalCursor, width int) string {
 	base := compactToolInvocation(activity.Name, activity.Arguments)
 	statusText, statusSGR := compactToolStatus(activity)
 	line := prefixTimestamp(activity.OccurredAt, base)
+	if compactToolStatusKey(activity) == "approval" {
+		if isSelectedLiveApproval(activity, approvals, approvalCursor) {
+			line = "> " + line
+		} else if len(approvals) > 1 {
+			line = "  " + line
+		}
+	}
 	if statusText != "" {
 		line += " | " + ansiToolAccent(statusText, statusSGR)
 	}
@@ -60,24 +68,97 @@ func compactToolActivityLine(activity runtime.ToolActivity, width int) string {
 	return ellipsizeForWidth(line, width)
 }
 
-func compactToolStatus(activity runtime.ToolActivity) (string, string) {
+func compactToolStatusKey(activity runtime.ToolActivity) string {
 	switch activity.Phase {
 	case runtime.ToolActivityPhaseStarted:
-		return "RUN", "1;38;5;81"
+		return "run"
 	case runtime.ToolActivityPhaseCompleted:
 		switch {
 		case strings.Contains(activity.ErrorText, "requires approval"):
-			return "APPROVAL", "1;30;48;5;214"
+			return "approval"
 		case strings.TrimSpace(activity.ErrorText) != "":
-			return "ERROR " + sanitizeToolError(activity.Name, activity.ErrorText), "1;38;5;203"
+			return "error"
 		default:
-			if summary := compactToolResult(activity.Name, activity.ResultText); summary != "" {
-				return strings.ToUpper(summary), "1;38;5;120"
-			}
-			return "OK", "1;38;5;120"
+			return "ok"
 		}
+	default:
+		return ""
+	}
+}
+
+func compactToolStatus(activity runtime.ToolActivity) (string, string) {
+	switch compactToolStatusKey(activity) {
+	case "run":
+		return "RUN", "1;38;5;81"
+	case "approval":
+		return "APPROVAL", "1;30;48;5;214"
+	case "error":
+		return "ERROR " + sanitizeToolError(activity.Name, activity.ErrorText), "1;38;5;203"
+	case "ok":
+		if summary := compactToolResult(activity.Name, activity.ResultText); summary != "" {
+			return strings.ToUpper(summary), "1;38;5;120"
+		}
+		return "OK", "1;38;5;120"
 	}
 	return "", ""
+}
+
+func liveToolWindowBounds(activities []runtime.ToolActivity, approvals []shell.PendingApprovalView, approvalCursor int) (int, int) {
+	if len(activities) <= 3 {
+		return 0, len(activities)
+	}
+	selectedIndex := selectedLiveApprovalIndex(activities, approvals, approvalCursor)
+	if selectedIndex < 0 {
+		return len(activities) - 3, len(activities)
+	}
+	start := selectedIndex - 1
+	if start < 0 {
+		start = 0
+	}
+	if start > len(activities)-3 {
+		start = len(activities) - 3
+	}
+	return start, start + 3
+}
+
+func selectedLiveApprovalIndex(activities []runtime.ToolActivity, approvals []shell.PendingApprovalView, approvalCursor int) int {
+	if approvalCursor < 0 || approvalCursor >= len(approvals) {
+		return -1
+	}
+	target := compactApprovalInvocation(approvals[approvalCursor])
+	if target == "" {
+		return -1
+	}
+	for i, activity := range activities {
+		if compactToolStatusKey(activity) != "approval" {
+			continue
+		}
+		if compactToolInvocation(activity.Name, activity.Arguments) == target {
+			return i
+		}
+	}
+	return -1
+}
+
+func isSelectedLiveApproval(activity runtime.ToolActivity, approvals []shell.PendingApprovalView, approvalCursor int) bool {
+	if compactToolStatusKey(activity) != "approval" {
+		return false
+	}
+	if approvalCursor < 0 || approvalCursor >= len(approvals) {
+		return false
+	}
+	return compactToolInvocation(activity.Name, activity.Arguments) == compactApprovalInvocation(approvals[approvalCursor])
+}
+
+func compactApprovalInvocation(approval shell.PendingApprovalView) string {
+	toolName := approval.ToolName
+	if strings.TrimSpace(toolName) == "" {
+		toolName = "shell_exec"
+	}
+	return compactToolInvocation(toolName, map[string]any{
+		"command": approval.Command,
+		"args":    approval.Args,
+	})
 }
 
 func compactToolInvocation(toolName string, arguments map[string]any) string {

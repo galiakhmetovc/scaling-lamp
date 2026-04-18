@@ -1017,6 +1017,50 @@ func TestChatInputApproveShortcutCompletesPendingRunState(t *testing.T) {
 	}
 }
 
+func TestChatApprovalSelectionCyclesAcrossPendingApprovals(t *testing.T) {
+	ws := make(chan daemon.WebsocketEnvelope)
+	close(ws)
+	now := time.Date(2026, 4, 17, 12, 7, 0, 0, time.UTC)
+	client := &stubOperatorClient{
+		sessions: []SessionSummary{{SessionID: "session-1", CreatedAt: now, LastActivity: now, MessageCount: 0}},
+		snapshot: daemon.SessionSnapshot{
+			SessionID: "session-1",
+			PendingApprovals: []shell.PendingApprovalView{
+				{ApprovalID: "approval-1", ToolName: "shell_exec", Command: "ansible", Args: []string{"localhost", "-m", "ping"}},
+				{ApprovalID: "approval-2", ToolName: "shell_exec", Command: "ansible-playbook", Args: []string{"site.yml"}},
+			},
+			Prompt: daemon.SessionPromptSnapshot{Default: "default prompt", Effective: "default prompt"},
+		},
+		ws: ws,
+	}
+
+	m, err := newModelWithClient(context.Background(), client, "")
+	if err != nil {
+		t.Fatalf("newModelWithClient returned error: %v", err)
+	}
+	state := m.currentSessionState()
+	state.ToolLog = []toolLogEntry{
+		{Activity: runtime.ToolActivity{Phase: runtime.ToolActivityPhaseCompleted, OccurredAt: now, Name: "shell_exec", Arguments: map[string]any{"command": "ansible", "args": []string{"localhost", "-m", "ping"}}, ErrorText: "tool call \"shell_exec\" requires approval"}},
+		{Activity: runtime.ToolActivity{Phase: runtime.ToolActivityPhaseCompleted, OccurredAt: now.Add(time.Second), Name: "shell_exec", Arguments: map[string]any{"command": "ansible-playbook", "args": []string{"site.yml"}}, ErrorText: "tool call \"shell_exec\" requires approval"}},
+	}
+	m.renderChatViewport(state)
+	if !strings.Contains(state.ChatView.View(), "> ") || !strings.Contains(state.ChatView.View(), "ansible localhost -m ping") {
+		t.Fatalf("initial chat approval selection missing first approval: %q", state.ChatView.View())
+	}
+
+	modelAfter, _ := (&m).Update(tea.KeyMsg{Type: tea.KeyRight, Alt: true})
+	mm := modelAfter.(*model)
+	if mm.approvalCursor != 1 {
+		t.Fatalf("approvalCursor = %d, want 1", mm.approvalCursor)
+	}
+	state = mm.currentSessionState()
+	mm.renderChatViewport(state)
+	got := state.ChatView.View()
+	if !strings.Contains(got, "> ") || !strings.Contains(got, "ansible-playbook site.yml") {
+		t.Fatalf("chat approval selection missing second approval: %q", got)
+	}
+}
+
 func TestSessionsViewShowsHumanReadableTimestamps(t *testing.T) {
 	ws := make(chan daemon.WebsocketEnvelope)
 	close(ws)
