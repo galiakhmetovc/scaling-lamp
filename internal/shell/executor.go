@@ -306,6 +306,9 @@ func (e *Executor) executeStart(ctx context.Context, contract contracts.ShellExe
 	if err != nil {
 		return "", err
 	}
+	if err := validateStructuredExecStart(command, args); err != nil {
+		return "", err
+	}
 	commandDecision, commandMessage := evaluateCommandPolicy(contract.Command, command, args)
 	switch commandDecision {
 	case commandPolicyDeny:
@@ -347,6 +350,13 @@ func (e *Executor) executeStart(ctx context.Context, contract contracts.ShellExe
 	return e.startCommand(ctx, contract, meta, "", command, args, cwd, invocation, "shell_start", nil)
 }
 
+func validateStructuredExecStart(command string, args []string) error {
+	if !isShellManagedInvocation(command, args) {
+		return nil
+	}
+	return fmt.Errorf("shell-managed invocation must not be expressed through args")
+}
+
 func (e *Executor) startCommand(ctx context.Context, contract contracts.ShellExecutionContract, meta ExecutionMeta, commandID string, command string, args []string, cwd string, invocation invocation, toolName string, beforeStart func() error) (string, error) {
 	if ctx == nil {
 		ctx = context.Background()
@@ -379,14 +389,14 @@ func (e *Executor) startCommand(ctx context.Context, contract contracts.ShellExe
 		commandID = shellEntityID(meta, "cmd", &e.nextID)
 	}
 	active := &activeCommand{
-		id:      commandID,
-		command: command,
-		args:    append([]string{}, args...),
-		cwd:     cwd,
-		status:  "running",
-		process: proc,
-		cancel:  cancel,
-		meta:    meta,
+		id:       commandID,
+		command:  command,
+		args:     append([]string{}, args...),
+		cwd:      cwd,
+		status:   "running",
+		process:  proc,
+		cancel:   cancel,
+		meta:     meta,
 		updateCh: make(chan struct{}, 1),
 	}
 	if beforeStart != nil {
@@ -1080,6 +1090,29 @@ func containsShellOperatorArg(args []string) bool {
 		}
 	}
 	return false
+}
+
+func isShellManagedInvocation(command string, args []string) bool {
+	if len(args) < 2 {
+		return false
+	}
+	switch strings.ToLower(strings.TrimSpace(filepath.Base(command))) {
+	case "sh", "bash", "zsh", "dash", "ksh", "fish":
+		return shellLauncherExecFlag(args[0])
+	case "cmd", "cmd.exe", "powershell", "powershell.exe", "pwsh", "pwsh.exe":
+		return shellLauncherExecFlag(args[0])
+	default:
+		return false
+	}
+}
+
+func shellLauncherExecFlag(arg string) bool {
+	switch strings.ToLower(strings.TrimSpace(arg)) {
+	case "-c", "-lc", "/c", "/k", "-command", "-encodedcommand":
+		return true
+	default:
+		return false
+	}
 }
 
 func shellSnippetExecutable(command string) string {

@@ -150,6 +150,44 @@ func TestExecutorApproveRunsShellSnippetCommand(t *testing.T) {
 	}
 }
 
+func TestExecutorRejectsShellManagedInvocationViaArgs(t *testing.T) {
+	t.Parallel()
+
+	executor := NewExecutor()
+	_, err := executor.Execute(contracts.ShellExecutionContract{
+		Command: contracts.ShellCommandPolicy{
+			Enabled:  true,
+			Strategy: "static_allowlist",
+			Params: contracts.ShellCommandParams{
+				AllowedCommands: []string{"sh"},
+			},
+		},
+		Approval: contracts.ShellApprovalPolicy{
+			Enabled:  true,
+			Strategy: "always_allow",
+		},
+		Runtime: contracts.ShellRuntimePolicy{
+			Enabled:  true,
+			Strategy: "workspace_write",
+			Params: contracts.ShellRuntimeParams{
+				Cwd:            t.TempDir(),
+				Timeout:        "5s",
+				MaxOutputBytes: 4096,
+				AllowNetwork:   true,
+			},
+		},
+	}, "shell_start", map[string]any{
+		"command": "sh",
+		"args":    []any{"-c", "cd /tmp && pwd"},
+	})
+	if err == nil {
+		t.Fatal("expected shell_start to reject shell-managed args")
+	}
+	if got := err.Error(); !strings.Contains(got, "shell-managed invocation") {
+		t.Fatalf("error = %q, want shell-managed invocation rejection", got)
+	}
+}
+
 func TestExecutorTreatsCommandPlusShellOperatorArgsAsShellSnippet(t *testing.T) {
 	t.Parallel()
 
