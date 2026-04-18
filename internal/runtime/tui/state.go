@@ -152,12 +152,20 @@ type workspaceSessionState struct {
 	Mode     workspaceMode
 	PTY      workspace.PTYSnapshot
 	Files    workspaceFilesState
+	Artifacts workspaceArtifactsState
 	Loaded   bool
 	LastSync time.Time
 }
 
 type workspaceFilesState struct {
 	Snapshot workspace.FileTreeSnapshot
+	Loaded   bool
+	Cursor   int
+	LastSync time.Time
+}
+
+type workspaceArtifactsState struct {
+	Snapshot workspace.ArtifactSnapshot
 	Loaded   bool
 	Cursor   int
 	LastSync time.Time
@@ -319,5 +327,17 @@ type workspaceFilesSnapshotMsg struct {
 type workspaceFilesExpandedMsg struct {
 	SessionID string
 	Result    workspace.FileTreeSnapshot
+	Err       error
+}
+
+type workspaceArtifactsSnapshotMsg struct {
+	SessionID string
+	Result    workspace.ArtifactSnapshot
+	Err       error
+}
+
+type workspaceArtifactsOpenedMsg struct {
+	SessionID string
+	Result    workspace.ArtifactSnapshot
 	Err       error
 }

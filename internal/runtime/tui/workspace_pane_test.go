@@ -156,6 +156,68 @@ func TestWorkspaceFilesExpandsSelectedDirOnEnter(t *testing.T) {
 	}
 }
 
+func TestWorkspaceArtifactsSwitchesModeWithKey4(t *testing.T) {
+	m, client := newWorkspaceTerminalTestModel(t)
+	m = runWorkspaceTerminalStep(t, m, tea.KeyMsg{Type: tea.KeyF5})
+	m = runWorkspaceTerminalStep(t, m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'4'}})
+
+	state := m.currentSessionState()
+	if state.Workspace.Mode != workspaceModeArtifacts {
+		t.Fatalf("workspace mode = %v, want artifacts", state.Workspace.Mode)
+	}
+	if len(client.workspaceArtifactSnapshotCalls) != 1 || client.workspaceArtifactSnapshotCalls[0] != "session-1" {
+		t.Fatalf("workspace artifact snapshot calls = %#v, want first entry for session-1", client.workspaceArtifactSnapshotCalls)
+	}
+}
+
+func TestWorkspaceArtifactsRendersListAndViewer(t *testing.T) {
+	m, _ := newWorkspaceTerminalTestModel(t)
+	m = runWorkspaceTerminalStep(t, m, tea.KeyMsg{Type: tea.KeyF5})
+	m = runWorkspaceTerminalStep(t, m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'4'}})
+
+	got := m.View()
+	if !strings.Contains(got, "Artifacts") {
+		t.Fatalf("workspace view missing artifacts mode: %q", got)
+	}
+	if !strings.Contains(got, "artifact://2") {
+		t.Fatalf("workspace view missing artifact list entry: %q", got)
+	}
+	if !strings.Contains(got, "line 1") {
+		t.Fatalf("workspace view missing raw content: %q", got)
+	}
+}
+
+func TestWorkspaceArtifactsOpensSelectedArtifactOnEnter(t *testing.T) {
+	m, client := newWorkspaceTerminalTestModel(t)
+	m = runWorkspaceTerminalStep(t, m, tea.KeyMsg{Type: tea.KeyF5})
+	m = runWorkspaceTerminalStep(t, m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'4'}})
+	m = runWorkspaceTerminalStep(t, m, tea.KeyMsg{Type: tea.KeyDown})
+	m = runWorkspaceTerminalStep(t, m, tea.KeyMsg{Type: tea.KeyEnter})
+
+	if len(client.workspaceArtifactOpenCalls) != 1 {
+		t.Fatalf("workspace artifact open calls = %#v, want 1", client.workspaceArtifactOpenCalls)
+	}
+	if got := client.workspaceArtifactOpenCalls[0]; got.SessionID != "session-1" || got.Ref != "artifact://1" {
+		t.Fatalf("workspace artifact open call = %#v, want session-1 artifact://1", got)
+	}
+	got := m.View()
+	if !strings.Contains(got, "older artifact output") {
+		t.Fatalf("workspace view missing opened artifact content: %q", got)
+	}
+}
+
+func TestWorkspaceArtifactsViewerClampsToPaneHeight(t *testing.T) {
+	m, _ := newWorkspaceTerminalTestModel(t)
+	m = runWorkspaceTerminalStep(t, m, tea.WindowSizeMsg{Width: 120, Height: 14})
+	m = runWorkspaceTerminalStep(t, m, tea.KeyMsg{Type: tea.KeyF5})
+	m = runWorkspaceTerminalStep(t, m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'4'}})
+
+	got := m.View()
+	if strings.Contains(got, "line 20") {
+		t.Fatalf("workspace artifacts viewer did not clamp to pane height: %q", got)
+	}
+}
+
 func runWorkspaceTerminalStep(t *testing.T, m model, msg tea.Msg) model {
 	t.Helper()
 	next, cmd := (&m).Update(msg)
@@ -215,6 +277,18 @@ func newWorkspaceTerminalTestModel(t *testing.T) (model, *stubOperatorClient) {
 				Items: []workspace.FileNode{
 					{Path: "dir", Name: "dir", IsDir: true, Size: 0, ModTime: now},
 					{Path: "go.mod", Name: "go.mod", IsDir: false, Size: 13, ModTime: now},
+				},
+			},
+		},
+		workspaceArtifactSnapshots: map[string]workspace.ArtifactSnapshot{
+			"session-1": {
+				SessionID:   "session-1",
+				RootPath:    filepath.Join(dir, "artifacts"),
+				SelectedRef: "artifact://2",
+				Content:     "line 1\nline 2\nline 3\nline 4\nline 5\nline 6\nline 7\nline 8\nline 9\nline 10\nline 11\nline 12\nline 13\nline 14\nline 15\nline 16\nline 17\nline 18\nline 19\nline 20\n",
+				Items: []workspace.ArtifactListItem{
+					{Ref: "artifact://2", ToolName: "shell_exec", CreatedAt: now.Add(time.Minute), SizeChars: 120, SizeBytes: 120, Preview: "line 1"},
+					{Ref: "artifact://1", ToolName: "fs_read_lines", CreatedAt: now, SizeChars: 32, SizeBytes: 32, Preview: "older artifact output"},
 				},
 			},
 		},

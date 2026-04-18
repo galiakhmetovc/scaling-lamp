@@ -13,10 +13,17 @@ func (m *model) updateWorkspace(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if cmd := m.ensureWorkspaceFiles(state); cmd != nil {
 			return m, cmd
 		}
+	case "4":
+		state.Workspace.Mode = workspaceModeArtifacts
+		if cmd := m.ensureWorkspaceArtifacts(state); cmd != nil {
+			return m, cmd
+		}
 	}
 	switch state.Workspace.Mode {
 	case workspaceModeFiles:
 		return m.updateWorkspaceFiles(state, msg)
+	case workspaceModeArtifacts:
+		return m.updateWorkspaceArtifacts(state, msg)
 	default:
 		if !state.Workspace.Loaded || state.Workspace.PTY.PTYID == "" || state.Workspace.PTY.SessionID != state.SessionID {
 			if cmd := m.ensureWorkspacePTY(state); cmd != nil {
@@ -41,6 +48,8 @@ func (m *model) viewWorkspace() string {
 	switch state.Workspace.Mode {
 	case workspaceModeFiles:
 		return m.workspaceFilesView(state)
+	case workspaceModeArtifacts:
+		return m.viewWorkspaceArtifacts(state)
 	default:
 		return m.workspaceTerminalView(state)
 	}

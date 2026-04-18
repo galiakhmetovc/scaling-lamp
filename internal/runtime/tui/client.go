@@ -89,6 +89,8 @@ type OperatorClient interface {
 	WorkspacePTYResize(context.Context, string, int, int) (WorkspacePTYResult, error)
 	WorkspaceFilesSnapshot(context.Context, string) (workspace.FileTreeSnapshot, error)
 	WorkspaceFilesExpand(context.Context, string, string) (workspace.FileTreeSnapshot, error)
+	WorkspaceArtifactsSnapshot(context.Context, string) (workspace.ArtifactSnapshot, error)
+	WorkspaceArtifactsOpen(context.Context, string, string) (workspace.ArtifactSnapshot, error)
 	GetSettings(context.Context) (daemon.SettingsSnapshot, error)
 	ApplySettingsForm(context.Context, string, map[string]any) (daemon.SettingsSnapshot, error)
 	GetSettingsRaw(context.Context, string) (daemon.SettingsRawFileContent, error)
@@ -105,13 +107,15 @@ type localClient struct {
 	agent          *runtime.Agent
 	workspacePTY   *workspace.WorkspacePTYManager
 	workspaceFiles *workspace.WorkspaceFilesManager
+	workspaceArtifacts *workspace.WorkspaceArtifactsManager
 }
 
 func newLocalClient(agent *runtime.Agent) OperatorClient {
 	return &localClient{
-		agent:          agent,
-		workspacePTY:   workspace.NewWorkspacePTYManager(),
-		workspaceFiles: newLocalWorkspaceFilesManager(agent),
+		agent:              agent,
+		workspacePTY:       workspace.NewWorkspacePTYManager(),
+		workspaceFiles:     newLocalWorkspaceFilesManager(agent),
+		workspaceArtifacts: newLocalWorkspaceArtifactsManager(agent),
 	}
 }
 
@@ -124,6 +128,21 @@ func newLocalWorkspaceFilesManager(agent *runtime.Agent) *workspace.WorkspaceFil
 		}
 	}
 	mgr, err := workspace.NewWorkspaceFilesManager(root)
+	if err != nil {
+		return nil
+	}
+	return mgr
+}
+
+func newLocalWorkspaceArtifactsManager(agent *runtime.Agent) *workspace.WorkspaceArtifactsManager {
+	if agent == nil {
+		return nil
+	}
+	root, err := agent.ArtifactStorePath()
+	if err != nil || strings.TrimSpace(root) == "" {
+		return nil
+	}
+	mgr, err := workspace.NewWorkspaceArtifactsManager(root)
 	if err != nil {
 		return nil
 	}
@@ -427,6 +446,20 @@ func (c *localClient) WorkspaceFilesExpand(_ context.Context, sessionID, relPath
 		return workspace.FileTreeSnapshot{}, fmt.Errorf("workspace files manager not available")
 	}
 	return c.workspaceFiles.Expand(sessionID, relPath)
+}
+
+func (c *localClient) WorkspaceArtifactsSnapshot(_ context.Context, sessionID string) (workspace.ArtifactSnapshot, error) {
+	if c.workspaceArtifacts == nil {
+		return workspace.ArtifactSnapshot{SessionID: sessionID}, nil
+	}
+	return c.workspaceArtifacts.Snapshot(sessionID)
+}
+
+func (c *localClient) WorkspaceArtifactsOpen(_ context.Context, sessionID, artifactRef string) (workspace.ArtifactSnapshot, error) {
+	if c.workspaceArtifacts == nil {
+		return workspace.ArtifactSnapshot{SessionID: sessionID}, nil
+	}
+	return c.workspaceArtifacts.Open(sessionID, artifactRef)
 }
 
 func (c *localClient) GetSettings(ctx context.Context) (daemon.SettingsSnapshot, error) {
@@ -808,6 +841,12 @@ func (c *daemonClient) WorkspaceFilesSnapshot(context.Context, string) (workspac
 }
 func (c *daemonClient) WorkspaceFilesExpand(context.Context, string, string) (workspace.FileTreeSnapshot, error) {
 	return workspace.FileTreeSnapshot{}, fmt.Errorf("workspace files are not supported by daemon client")
+}
+func (c *daemonClient) WorkspaceArtifactsSnapshot(context.Context, string) (workspace.ArtifactSnapshot, error) {
+	return workspace.ArtifactSnapshot{}, fmt.Errorf("workspace artifacts are not supported by daemon client")
+}
+func (c *daemonClient) WorkspaceArtifactsOpen(context.Context, string, string) (workspace.ArtifactSnapshot, error) {
+	return workspace.ArtifactSnapshot{}, fmt.Errorf("workspace artifacts are not supported by daemon client")
 }
 func (c *daemonClient) GetSettings(ctx context.Context) (daemon.SettingsSnapshot, error) {
 	var result struct {

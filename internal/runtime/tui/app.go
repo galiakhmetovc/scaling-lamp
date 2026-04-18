@@ -420,6 +420,44 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			state.Workspace.Files.Cursor = len(state.Workspace.Files.Snapshot.Items) - 1
 		}
 		return m, nil
+	case workspaceArtifactsSnapshotMsg:
+		state := m.sessions[msg.SessionID]
+		if state == nil {
+			return m, nil
+		}
+		if msg.Err != nil {
+			m.errMessage = msg.Err.Error()
+			return m, nil
+		}
+		state.Workspace.Mode = workspaceModeArtifacts
+		state.Workspace.Artifacts.Snapshot = msg.Result
+		state.Workspace.Artifacts.Loaded = true
+		state.Workspace.Artifacts.LastSync = m.now()
+		if len(state.Workspace.Artifacts.Snapshot.Items) == 0 {
+			state.Workspace.Artifacts.Cursor = 0
+		} else if state.Workspace.Artifacts.Cursor >= len(state.Workspace.Artifacts.Snapshot.Items) {
+			state.Workspace.Artifacts.Cursor = len(state.Workspace.Artifacts.Snapshot.Items) - 1
+		}
+		return m, nil
+	case workspaceArtifactsOpenedMsg:
+		state := m.sessions[msg.SessionID]
+		if state == nil {
+			return m, nil
+		}
+		if msg.Err != nil {
+			m.errMessage = msg.Err.Error()
+			return m, nil
+		}
+		state.Workspace.Mode = workspaceModeArtifacts
+		state.Workspace.Artifacts.Snapshot = msg.Result
+		state.Workspace.Artifacts.Loaded = true
+		state.Workspace.Artifacts.LastSync = m.now()
+		if len(state.Workspace.Artifacts.Snapshot.Items) == 0 {
+			state.Workspace.Artifacts.Cursor = 0
+		} else if state.Workspace.Artifacts.Cursor >= len(state.Workspace.Artifacts.Snapshot.Items) {
+			state.Workspace.Artifacts.Cursor = len(state.Workspace.Artifacts.Snapshot.Items) - 1
+		}
+		return m, nil
 	}
 	return m, nil
 }

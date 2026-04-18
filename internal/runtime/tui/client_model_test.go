@@ -55,6 +55,9 @@ type stubOperatorClient struct {
 	workspaceFileSnapshots     map[string]workspace.FileTreeSnapshot
 	workspaceFileSnapshotCalls []string
 	workspaceFileExpandCalls   []workspaceFileExpandCall
+	workspaceArtifactSnapshots map[string]workspace.ArtifactSnapshot
+	workspaceArtifactSnapshotCalls []string
+	workspaceArtifactOpenCalls []workspaceArtifactOpenCall
 }
 
 type workspaceInputCall struct {
@@ -71,6 +74,11 @@ type workspaceResizeCall struct {
 type workspaceFileExpandCall struct {
 	SessionID string
 	RelPath   string
+}
+
+type workspaceArtifactOpenCall struct {
+	SessionID string
+	Ref       string
 }
 
 func (c *stubOperatorClient) Bootstrap(context.Context) (daemon.BootstrapPayload, error) {
@@ -275,6 +283,42 @@ func (c *stubOperatorClient) WorkspaceFilesExpand(_ context.Context, sessionID, 
 		snap.Items = append([]workspace.FileNode{expanded, child}, snap.Items[1:]...)
 	}
 	c.workspaceFileSnapshots[sessionID] = snap
+	return snap, nil
+}
+
+func (c *stubOperatorClient) WorkspaceArtifactsSnapshot(_ context.Context, sessionID string) (workspace.ArtifactSnapshot, error) {
+	c.workspaceArtifactSnapshotCalls = append(c.workspaceArtifactSnapshotCalls, sessionID)
+	if c.workspaceArtifactSnapshots == nil {
+		c.workspaceArtifactSnapshots = map[string]workspace.ArtifactSnapshot{}
+	}
+	snap, ok := c.workspaceArtifactSnapshots[sessionID]
+	if !ok {
+		return workspace.ArtifactSnapshot{}, fmt.Errorf("workspace artifacts for session %q not found", sessionID)
+	}
+	return snap, nil
+}
+
+func (c *stubOperatorClient) WorkspaceArtifactsOpen(_ context.Context, sessionID, artifactRef string) (workspace.ArtifactSnapshot, error) {
+	c.workspaceArtifactOpenCalls = append(c.workspaceArtifactOpenCalls, workspaceArtifactOpenCall{SessionID: sessionID, Ref: artifactRef})
+	if c.workspaceArtifactSnapshots == nil {
+		c.workspaceArtifactSnapshots = map[string]workspace.ArtifactSnapshot{}
+	}
+	snap, ok := c.workspaceArtifactSnapshots[sessionID]
+	if !ok {
+		return workspace.ArtifactSnapshot{}, fmt.Errorf("workspace artifacts for session %q not found", sessionID)
+	}
+	snap.SelectedRef = artifactRef
+	for _, item := range snap.Items {
+		if item.Ref == artifactRef {
+			if artifactRef == "artifact://1" {
+				snap.Content = "older artifact output\n"
+			} else {
+				snap.Content = "line 1\nline 2\nline 3\nline 4\nline 5\nline 6\nline 7\nline 8\nline 9\nline 10\nline 11\nline 12\nline 13\nline 14\nline 15\nline 16\nline 17\nline 18\nline 19\nline 20\n"
+			}
+			break
+		}
+	}
+	c.workspaceArtifactSnapshots[sessionID] = snap
 	return snap, nil
 }
 
