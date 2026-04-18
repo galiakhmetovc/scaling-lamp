@@ -20,6 +20,8 @@ func (m *model) updateTools(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		state.ToolsView.LineUp(max(1, state.ToolsView.Height/2))
 	case "pgdown":
 		state.ToolsView.LineDown(max(1, state.ToolsView.Height/2))
+	case "o", "enter":
+		return m, m.jumpToWorkspaceFromTools()
 	case "a":
 		if len(approvals) > 0 && m.toolsFocus == toolsFocusApprovals {
 			result, err := m.client.ApproveShell(m.ctx, approvals[m.approvalCursor].ApprovalID)

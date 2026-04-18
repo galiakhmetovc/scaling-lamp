@@ -400,6 +400,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		} else if state.Workspace.Files.Cursor >= len(state.Workspace.Files.Snapshot.Items) {
 			state.Workspace.Files.Cursor = len(state.Workspace.Files.Snapshot.Items) - 1
 		}
+		m.applyWorkspaceFilesJumpTarget(state)
 		return m, nil
 	case workspaceFilesExpandedMsg:
 		state := m.sessions[msg.SessionID]
@@ -419,6 +420,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		} else if state.Workspace.Files.Cursor >= len(state.Workspace.Files.Snapshot.Items) {
 			state.Workspace.Files.Cursor = len(state.Workspace.Files.Snapshot.Items) - 1
 		}
+		m.applyWorkspaceFilesJumpTarget(state)
 		return m, nil
 	case workspaceArtifactsSnapshotMsg:
 		state := m.sessions[msg.SessionID]

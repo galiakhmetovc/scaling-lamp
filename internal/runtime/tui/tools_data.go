@@ -10,6 +10,14 @@ import (
 	"teamd/internal/runtime"
 )
 
+func toolActivityJumpTarget(activity runtime.ToolActivity) (workspaceJumpTarget, bool) {
+	arguments := activity.Arguments
+	if target := workspaceJumpTargetFromToolFields(arguments, activity.ResultText); target.isValid() {
+		return target, true
+	}
+	return workspaceJumpTarget{}, false
+}
+
 func reverseToolEntries(entries []toolLogEntry) []toolLogEntry {
 	out := make([]toolLogEntry, 0, len(entries))
 	for i := len(entries) - 1; i >= 0; i-- {
@@ -273,4 +281,50 @@ func stringSliceArg(args map[string]any, key string) []string {
 		}
 	}
 	return out
+}
+
+func workspaceJumpTargetFromToolFields(arguments map[string]any, resultText string) workspaceJumpTarget {
+	target := workspaceJumpTarget{}
+	if ref := compactString(arguments["artifact_ref"]); ref != "" {
+		target.Kind = workspaceJumpArtifact
+		target.ArtifactRef = ref
+		return target
+	}
+	if ref := compactResultString(resultText, "artifact_ref"); ref != "" {
+		target.Kind = workspaceJumpArtifact
+		target.ArtifactRef = ref
+		return target
+	}
+	if commandID := compactString(arguments["command_id"]); commandID != "" {
+		target.Kind = workspaceJumpCommand
+		target.CommandID = commandID
+		return target
+	}
+	if commandID := compactResultString(resultText, "command_id"); commandID != "" {
+		target.Kind = workspaceJumpCommand
+		target.CommandID = commandID
+		return target
+	}
+	if path := compactPath(arguments["path"]); path != "" {
+		target.Kind = workspaceJumpPath
+		target.Path = path
+		return target
+	}
+	if path := compactResultString(resultText, "path"); path != "" {
+		target.Kind = workspaceJumpPath
+		target.Path = path
+		return target
+	}
+	return target
+}
+
+func compactResultString(resultText, key string) string {
+	if strings.TrimSpace(resultText) == "" {
+		return ""
+	}
+	var payload map[string]any
+	if err := json.Unmarshal([]byte(resultText), &payload); err != nil {
+		return ""
+	}
+	return compactString(payload[key])
 }

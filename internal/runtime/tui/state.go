@@ -149,12 +149,13 @@ const (
 )
 
 type workspaceSessionState struct {
-	Mode     workspaceMode
-	PTY      workspace.PTYSnapshot
-	Files    workspaceFilesState
-	Artifacts workspaceArtifactsState
-	Loaded   bool
-	LastSync time.Time
+	Mode              workspaceMode
+	PTY               workspace.PTYSnapshot
+	Files             workspaceFilesState
+	Artifacts         workspaceArtifactsState
+	PendingFilesPath  string
+	Loaded            bool
+	LastSync          time.Time
 }
 
 type workspaceFilesState struct {

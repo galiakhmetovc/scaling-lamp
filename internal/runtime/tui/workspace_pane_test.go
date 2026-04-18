@@ -218,6 +218,136 @@ func TestWorkspaceArtifactsViewerClampsToPaneHeight(t *testing.T) {
 	}
 }
 
+func TestWorkspaceJumpFromToolLogOpensArtifacts(t *testing.T) {
+	m, client := newWorkspaceTerminalTestModel(t)
+	state := m.currentSessionState()
+	state.ToolLog = []toolLogEntry{{
+		Activity: runtime.ToolActivity{
+			Phase:      runtime.ToolActivityPhaseCompleted,
+			OccurredAt: time.Date(2026, 4, 15, 11, 0, 0, 0, time.UTC),
+			Name:       "fs_read_text",
+			Arguments: map[string]any{
+				"path":         "go.mod",
+				"artifact_ref":  "artifact://1",
+				"command_id":    "cmd-123",
+				"irrelevant":    "value",
+			},
+			ResultText: `{"artifact_ref":"artifact://1"}`,
+		},
+	}}
+	m.tab = tabTools
+	m.toolsFocus = toolsFocusLog
+	m.toolCursor = 0
+
+	m = runWorkspaceTerminalStep(t, m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'o'}})
+
+	if m.tab != tabWorkspace {
+		t.Fatalf("tab = %v, want workspace", m.tab)
+	}
+	if state.Workspace.Mode != workspaceModeArtifacts {
+		t.Fatalf("workspace mode = %v, want artifacts", state.Workspace.Mode)
+	}
+	if len(client.workspaceArtifactOpenCalls) != 1 {
+		t.Fatalf("workspace artifact open calls = %#v, want 1", client.workspaceArtifactOpenCalls)
+	}
+	if got := client.workspaceArtifactOpenCalls[0]; got.SessionID != "session-1" || got.Ref != "artifact://1" {
+		t.Fatalf("workspace artifact open call = %#v, want session-1 artifact://1", got)
+	}
+}
+
+func TestWorkspaceJumpFromToolLogOpensFiles(t *testing.T) {
+	m, client := newWorkspaceTerminalTestModel(t)
+	state := m.currentSessionState()
+	state.ToolLog = []toolLogEntry{{
+		Activity: runtime.ToolActivity{
+			Phase:      runtime.ToolActivityPhaseCompleted,
+			OccurredAt: time.Date(2026, 4, 15, 11, 5, 0, 0, time.UTC),
+			Name:       "fs_read_text",
+			Arguments: map[string]any{"path": "go.mod"},
+		},
+	}}
+	m.tab = tabTools
+	m.toolsFocus = toolsFocusLog
+	m.toolCursor = 0
+
+	m = runWorkspaceTerminalStep(t, m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'o'}})
+
+	if m.tab != tabWorkspace {
+		t.Fatalf("tab = %v, want workspace", m.tab)
+	}
+	if state.Workspace.Mode != workspaceModeFiles {
+		t.Fatalf("workspace mode = %v, want files", state.Workspace.Mode)
+	}
+	if len(client.workspaceFileSnapshotCalls) != 1 || client.workspaceFileSnapshotCalls[0] != "session-1" {
+		t.Fatalf("workspace file snapshot calls = %#v, want session-1", client.workspaceFileSnapshotCalls)
+	}
+	if state.Workspace.Files.Cursor != 1 {
+		t.Fatalf("workspace files cursor = %d, want go.mod", state.Workspace.Files.Cursor)
+	}
+}
+
+func TestWorkspaceJumpFromToolLogOpensTerminal(t *testing.T) {
+	m, client := newWorkspaceTerminalTestModel(t)
+	state := m.currentSessionState()
+	state.ToolLog = []toolLogEntry{{
+		Activity: runtime.ToolActivity{
+			Phase:      runtime.ToolActivityPhaseCompleted,
+			OccurredAt: time.Date(2026, 4, 15, 11, 10, 0, 0, time.UTC),
+			Name:       "shell_poll",
+			Arguments:  map[string]any{"command_id": "cmd-123"},
+		},
+	}}
+	m.tab = tabTools
+	m.toolsFocus = toolsFocusLog
+	m.toolCursor = 0
+
+	m = runWorkspaceTerminalStep(t, m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'o'}})
+
+	if m.tab != tabWorkspace {
+		t.Fatalf("tab = %v, want workspace", m.tab)
+	}
+	if state.Workspace.Mode != workspaceModeTerminal {
+		t.Fatalf("workspace mode = %v, want terminal", state.Workspace.Mode)
+	}
+	if len(client.workspaceOpenCalls) != 1 || client.workspaceOpenCalls[0] != "session-1" {
+		t.Fatalf("workspace open calls = %#v, want session-1", client.workspaceOpenCalls)
+	}
+}
+
+func TestWorkspaceJumpFromChatOpensArtifacts(t *testing.T) {
+	m, client := newWorkspaceTerminalTestModel(t)
+	state := m.currentSessionState()
+	state.ToolLog = []toolLogEntry{{
+		Activity: runtime.ToolActivity{
+			Phase:      runtime.ToolActivityPhaseCompleted,
+			OccurredAt: time.Date(2026, 4, 15, 11, 15, 0, 0, time.UTC),
+			Name:       "fs_read_text",
+			Arguments: map[string]any{
+				"path":        "go.mod",
+				"artifact_ref": "artifact://2",
+			},
+			ResultText: `{"artifact_ref":"artifact://2"}`,
+		},
+	}}
+	m.tab = tabChat
+	m.toolCursor = 0
+
+	m = runWorkspaceTerminalStep(t, m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'o'}})
+
+	if m.tab != tabWorkspace {
+		t.Fatalf("tab = %v, want workspace", m.tab)
+	}
+	if state.Workspace.Mode != workspaceModeArtifacts {
+		t.Fatalf("workspace mode = %v, want artifacts", state.Workspace.Mode)
+	}
+	if len(client.workspaceArtifactOpenCalls) != 1 {
+		t.Fatalf("workspace artifact open calls = %#v, want 1", client.workspaceArtifactOpenCalls)
+	}
+	if got := client.workspaceArtifactOpenCalls[0]; got.SessionID != "session-1" || got.Ref != "artifact://2" {
+		t.Fatalf("workspace artifact open call = %#v, want session-1 artifact://2", got)
+	}
+}
+
 func runWorkspaceTerminalStep(t *testing.T, m model, msg tea.Msg) model {
 	t.Helper()
 	next, cmd := (&m).Update(msg)

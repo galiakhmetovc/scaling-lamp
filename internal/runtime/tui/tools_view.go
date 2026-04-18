@@ -145,7 +145,7 @@ func (m *model) renderToolDetails(state *sessionState) string {
 	if entry.Activity.ResultText != "" {
 		lines = append(lines, ansiToolAccent("Result:", "1;38;5;120"), entry.Activity.ResultText)
 	}
-	lines = append(lines, "", "PgUp/PgDn scroll list, Up/Down select")
+	lines = append(lines, "", "PgUp/PgDn scroll list, Up/Down select", "`o` open selected item in Workspace")
 	return strings.Join(lines, "\n")
 }
 

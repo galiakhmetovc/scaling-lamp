@@ -44,6 +44,8 @@ func (m *model) updateChat(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case "ctrl+x":
 		return m, m.cancelMainRun(state)
+	case "o":
+		return m, m.jumpToWorkspaceFromChat()
 	case "tab":
 		return m, m.stageOrRecallDraft(state)
 	case "enter", "ctrl+s":
