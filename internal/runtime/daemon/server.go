@@ -26,24 +26,25 @@ import (
 var embeddedAssets embed.FS
 
 type Server struct {
-	agentMu                sync.RWMutex
-	agent                  *runtime.Agent
-	httpServer             *http.Server
-	listenAddr             string
-	runtimeMu              sync.RWMutex
-	sessionRuntime         map[string]*sessionRuntimeState
-	approvalMu             sync.Mutex
-	approvalLocks          map[string]*sync.Mutex
-	workspaceMu            sync.Mutex
-	workspacePTY           *workspace.WorkspacePTYManager
-	workspaceFiles         *workspace.WorkspaceFilesManager
-	workspaceEditor        *workspace.WorkspaceEditorManager
-	workspaceArtifacts     *workspace.WorkspaceArtifactsManager
-	workspaceFilesRoot     string
-	workspaceEditorRoot    string
-	workspaceArtifactsRoot string
-	daemonBus              *daemonBus
-	logger                 *slog.Logger
+	agentMu                  sync.RWMutex
+	agent                    *runtime.Agent
+	httpServer               *http.Server
+	listenAddr               string
+	runtimeMu                sync.RWMutex
+	sessionRuntime           map[string]*sessionRuntimeState
+	sessionExecutionVersions map[string]executionVersion
+	approvalMu               sync.Mutex
+	approvalLocks            map[string]*sync.Mutex
+	workspaceMu              sync.Mutex
+	workspacePTY             *workspace.WorkspacePTYManager
+	workspaceFiles           *workspace.WorkspaceFilesManager
+	workspaceEditor          *workspace.WorkspaceEditorManager
+	workspaceArtifacts       *workspace.WorkspaceArtifactsManager
+	workspaceFilesRoot       string
+	workspaceEditorRoot      string
+	workspaceArtifactsRoot   string
+	daemonBus                *daemonBus
+	logger                   *slog.Logger
 }
 
 type BootstrapPayload struct {
@@ -118,13 +119,14 @@ func New(agent *runtime.Agent) (*Server, error) {
 	}
 
 	server := &Server{
-		agent:          agent,
-		listenAddr:     net.JoinHostPort(params.ListenHost, fmt.Sprintf("%d", params.ListenPort)),
-		sessionRuntime: map[string]*sessionRuntimeState{},
-		approvalLocks:  map[string]*sync.Mutex{},
-		workspacePTY:   workspace.NewWorkspacePTYManager(),
-		daemonBus:      newDaemonBus(),
-		logger:         newDaemonLogger(agent.Contracts.OperatorSurface.DaemonServer.Params),
+		agent:                    agent,
+		listenAddr:               net.JoinHostPort(params.ListenHost, fmt.Sprintf("%d", params.ListenPort)),
+		sessionRuntime:           map[string]*sessionRuntimeState{},
+		sessionExecutionVersions: map[string]executionVersion{},
+		approvalLocks:            map[string]*sync.Mutex{},
+		workspacePTY:             workspace.NewWorkspacePTYManager(),
+		daemonBus:                newDaemonBus(),
+		logger:                   newDaemonLogger(agent.Contracts.OperatorSurface.DaemonServer.Params),
 	}
 	server.httpServer = &http.Server{
 		Addr:    server.listenAddr,

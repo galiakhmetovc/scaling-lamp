@@ -17,6 +17,7 @@ type SessionSnapshot struct {
 	LastActivity      time.Time                      `json:"last_activity"`
 	MessageCount      int                            `json:"message_count"`
 	ArtifactStorePath string                         `json:"artifact_store_path"`
+	ExecutionVersion  string                         `json:"execution_version"`
 	MainRunActive     bool                           `json:"main_run_active"`
 	MainRun           MainRunSnapshot                `json:"main_run"`
 	QueuedDrafts      []QueuedDraft                  `json:"queued_drafts"`
@@ -48,14 +49,15 @@ type ChatHistorySnapshot struct {
 }
 
 type MainRunSnapshot struct {
-	Active       bool      `json:"active"`
-	Phase        string    `json:"phase"`
-	StartedAt    time.Time `json:"started_at"`
-	Provider     string    `json:"provider"`
-	Model        string    `json:"model"`
-	InputTokens  int       `json:"input_tokens"`
-	OutputTokens int       `json:"output_tokens"`
-	TotalTokens  int       `json:"total_tokens"`
+	Active           bool      `json:"active"`
+	Phase            string    `json:"phase"`
+	StartedAt        time.Time `json:"started_at"`
+	ExecutionVersion string    `json:"execution_version"`
+	Provider         string    `json:"provider"`
+	Model            string    `json:"model"`
+	InputTokens      int       `json:"input_tokens"`
+	OutputTokens     int       `json:"output_tokens"`
+	TotalTokens      int       `json:"total_tokens"`
 }
 
 type ContextBudgetSnapshot struct {
@@ -93,6 +95,7 @@ func (s *Server) buildSessionSnapshot(sessionID string) (SessionSnapshot, error)
 		LastActivity:      entry.LastActivity,
 		MessageCount:      entry.MessageCount,
 		ArtifactStorePath: s.artifactStorePath(),
+		ExecutionVersion:  string(s.sessionExecutionVersion(sessionID)),
 		MainRunActive:     s.mainRunActive(sessionID),
 		MainRun:           s.mainRunSnapshot(sessionID),
 		QueuedDrafts:      s.queuedDrafts(sessionID),

@@ -103,19 +103,21 @@ func (s *Server) mainRunSnapshot(sessionID string) MainRunSnapshot {
 	state, ok := s.sessionRuntime[sessionID]
 	if !ok {
 		return MainRunSnapshot{
-			Provider: s.providerLabel(),
-			Model:    s.currentAgent().Contracts.ProviderRequest.RequestShape.Model.Params.Model,
+			Provider:         s.providerLabel(),
+			Model:            s.currentAgent().Contracts.ProviderRequest.RequestShape.Model.Params.Model,
+			ExecutionVersion: string(s.sessionExecutionVersion(sessionID)),
 		}
 	}
 	return MainRunSnapshot{
-		Active:       state.mainRun.isActive(),
-		Phase:        string(state.mainRun.effectivePhase()),
-		StartedAt:    state.mainRun.StartedAt,
-		Provider:     state.mainRun.Provider,
-		Model:        state.mainRun.Model,
-		InputTokens:  state.mainRun.InputTokens,
-		OutputTokens: state.mainRun.OutputTokens,
-		TotalTokens:  state.mainRun.TotalTokens,
+		Active:           state.mainRun.isActive(),
+		Phase:            string(state.mainRun.effectivePhase()),
+		StartedAt:        state.mainRun.StartedAt,
+		ExecutionVersion: string(s.sessionExecutionVersion(sessionID)),
+		Provider:         state.mainRun.Provider,
+		Model:            state.mainRun.Model,
+		InputTokens:      state.mainRun.InputTokens,
+		OutputTokens:     state.mainRun.OutputTokens,
+		TotalTokens:      state.mainRun.TotalTokens,
 	}
 }
 
@@ -159,12 +161,32 @@ func (s *Server) recallDraft(sessionID, draftID string) (QueuedDraft, bool) {
 }
 
 func (s *Server) startMainRun(sessionID string) bool {
+	return s.startMainRunWithVersion(sessionID, s.defaultChatRunExecutionVersion())
+}
+
+func (s *Server) startMainRunWithVersion(sessionID string, version executionVersion) bool {
 	s.runtimeMu.Lock()
 	defer s.runtimeMu.Unlock()
 	state := s.ensureSessionRuntimeLocked(sessionID)
+	currentVersion := executionVersion("")
+	if s.sessionExecutionVersions != nil {
+		if stored, ok := s.sessionExecutionVersions[sessionID]; ok && stored != "" {
+			currentVersion = stored
+		}
+	}
+	if currentVersion != "" && currentVersion != version {
+		return false
+	}
 	if state.mainRun.Active {
 		return false
 	}
+	if s.sessionExecutionVersions == nil {
+		s.sessionExecutionVersions = map[string]executionVersion{}
+	}
+	if version == "" {
+		version = s.defaultChatRunExecutionVersion()
+	}
+	s.sessionExecutionVersions[sessionID] = version
 	state.mainRun.Active = true
 	state.mainRun.Phase = mainRunPhaseRunning
 	state.mainRun.StartedAt = s.currentAgent().Now().UTC()
