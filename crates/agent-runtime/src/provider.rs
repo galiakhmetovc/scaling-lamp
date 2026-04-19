@@ -208,9 +208,16 @@ struct OpenAiResponsesUsage {
 struct ZaiChatCompletionsRequest<'a> {
     model: &'a str,
     messages: Vec<ZaiChatCompletionMessage<'a>>,
+    thinking: ZaiThinkingConfig<'static>,
     #[serde(skip_serializing_if = "Option::is_none")]
     max_tokens: Option<u32>,
     stream: bool,
+}
+
+#[derive(Debug, Serialize)]
+struct ZaiThinkingConfig<'a> {
+    #[serde(rename = "type")]
+    thinking_type: &'a str,
 }
 
 #[derive(Debug, Serialize)]
@@ -462,6 +469,9 @@ impl ZaiChatCompletionsDriver {
         Ok(ZaiChatCompletionsRequest {
             model,
             messages,
+            thinking: ZaiThinkingConfig {
+                thinking_type: "disabled",
+            },
             max_tokens: request.max_output_tokens,
             stream: false,
         })
@@ -815,6 +825,7 @@ mod tests {
         assert!(normalized_request.contains("\"content\":\"be brief\""));
         assert!(normalized_request.contains("\"role\":\"user\""));
         assert!(normalized_request.contains("\"content\":\"say hi\""));
+        assert!(normalized_request.contains("\"thinking\":{\"type\":\"disabled\"}"));
         assert!(normalized_request.contains("\"stream\":false"));
     }
 
