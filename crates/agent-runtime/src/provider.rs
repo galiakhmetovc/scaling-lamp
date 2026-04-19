@@ -72,20 +72,20 @@ pub struct ProviderToolDefinition {
     pub parameters: Value,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ProviderToolCall {
     pub call_id: String,
     pub name: String,
     pub arguments: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ProviderToolOutput {
     pub call_id: String,
     pub output: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ProviderContinuationMessage {
     AssistantToolCalls {
         tool_calls: Vec<ProviderToolCall>,

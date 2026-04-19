@@ -1,3 +1,4 @@
+use crate::provider::{ProviderContinuationMessage, ProviderToolOutput};
 use crate::verification::EvidenceBundle;
 use serde::{Deserialize, Serialize};
 use std::error::Error;
@@ -35,6 +36,7 @@ pub struct RunSnapshot {
     pub active_processes: Vec<ActiveProcess>,
     pub recent_steps: Vec<RunStep>,
     pub provider_stream: Option<ProviderStreamState>,
+    pub provider_loop: Option<ProviderLoopState>,
     pub delegate_runs: Vec<DelegateRun>,
     pub evidence_refs: Vec<String>,
 }
@@ -69,6 +71,24 @@ pub struct ProviderStreamState {
     pub output_text: String,
     pub started_at: i64,
     pub updated_at: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub struct ProviderLoopState {
+    pub next_round: usize,
+    pub previous_response_id: Option<String>,
+    pub continuation_messages: Vec<ProviderContinuationMessage>,
+    pub pending_tool_outputs: Vec<ProviderToolOutput>,
+    pub seen_tool_signatures: Vec<String>,
+    pub pending_approval: Option<PendingToolApproval>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PendingToolApproval {
+    pub approval_id: String,
+    pub provider_tool_call_id: String,
+    pub tool_name: String,
+    pub tool_arguments: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -143,6 +163,7 @@ impl Default for RunSnapshot {
             active_processes: Vec::new(),
             recent_steps: Vec::new(),
             provider_stream: None,
+            provider_loop: None,
             delegate_runs: Vec::new(),
             evidence_refs: Vec::new(),
         }
@@ -207,6 +228,22 @@ impl ApprovalRequest {
             tool_call_id: tool_call_id.into(),
             reason: reason.into(),
             requested_at,
+        }
+    }
+}
+
+impl PendingToolApproval {
+    pub fn new(
+        approval_id: impl Into<String>,
+        provider_tool_call_id: impl Into<String>,
+        tool_name: impl Into<String>,
+        tool_arguments: impl Into<String>,
+    ) -> Self {
+        Self {
+            approval_id: approval_id.into(),
+            provider_tool_call_id: provider_tool_call_id.into(),
+            tool_name: tool_name.into(),
+            tool_arguments: tool_arguments.into(),
         }
     }
 }
@@ -301,6 +338,24 @@ impl RunEngine {
             "provider stream started",
             at,
         );
+        Ok(())
+    }
+
+    pub fn set_provider_loop_state(
+        &mut self,
+        state: ProviderLoopState,
+        at: i64,
+    ) -> Result<(), RunTransitionError> {
+        self.require_not_terminal("set_provider_loop_state")?;
+        self.snapshot.provider_loop = Some(state);
+        self.touch(at);
+        Ok(())
+    }
+
+    pub fn clear_provider_loop_state(&mut self, at: i64) -> Result<(), RunTransitionError> {
+        self.require_not_terminal("clear_provider_loop_state")?;
+        self.snapshot.provider_loop = None;
+        self.touch(at);
         Ok(())
     }
 
@@ -506,6 +561,7 @@ impl RunEngine {
         self.snapshot.result = Some(result.into());
         self.snapshot.finished_at = Some(at);
         self.snapshot.provider_stream = None;
+        self.snapshot.provider_loop = None;
         self.snapshot.pending_approvals.clear();
         self.snapshot.active_processes.clear();
         self.snapshot.delegate_runs.clear();
@@ -520,6 +576,7 @@ impl RunEngine {
         self.snapshot.error = Some(error.into());
         self.snapshot.finished_at = Some(at);
         self.snapshot.provider_stream = None;
+        self.snapshot.provider_loop = None;
         self.touch(at);
         self.push_step(RunStepKind::Failed, "run failed", at);
         Ok(())
@@ -531,6 +588,7 @@ impl RunEngine {
         self.snapshot.error = Some(reason.into());
         self.snapshot.finished_at = Some(at);
         self.snapshot.provider_stream = None;
+        self.snapshot.provider_loop = None;
         self.touch(at);
         self.push_step(RunStepKind::Cancelled, "run cancelled", at);
         Ok(())
@@ -546,6 +604,7 @@ impl RunEngine {
         self.snapshot.error = Some(reason.into());
         self.snapshot.finished_at = Some(at);
         self.snapshot.provider_stream = None;
+        self.snapshot.provider_loop = None;
         self.touch(at);
         self.push_step(RunStepKind::Interrupted, "run interrupted", at);
         Ok(())

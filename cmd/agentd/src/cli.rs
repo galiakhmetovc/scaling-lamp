@@ -1,11 +1,11 @@
 use crate::bootstrap::{App, BootstrapError};
 use agent_persistence::{
-    JobRepository, MissionRecord, MissionRepository, PersistenceStore, RunRecord, RunRepository,
+    JobRepository, MissionRecord, MissionRepository, PersistenceStore, RunRepository,
     SessionRecord, SessionRepository,
 };
 use agent_runtime::mission::{MissionExecutionIntent, MissionSchedule, MissionSpec, MissionStatus};
 use agent_runtime::provider::{FinishReason, ProviderMessage, ProviderRequest, ProviderStreamMode};
-use agent_runtime::run::{RunEngine, RunSnapshot};
+use agent_runtime::run::RunSnapshot;
 use agent_runtime::session::{MessageRole, Session, SessionSettings};
 use rusqlite::Connection;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -99,7 +99,7 @@ where
         Command::ApprovalApprove {
             run_id,
             approval_id,
-        } => approve_run(&app.store()?, &run_id, &approval_id),
+        } => approve_run(app, &run_id, &approval_id),
         Command::DelegateList { run_id } => list_delegates(&app.store()?, &run_id),
         Command::VerificationShow { run_id } => show_verification(&app.store()?, &run_id),
     }
@@ -417,20 +417,17 @@ fn list_approvals(store: &PersistenceStore, run_id: &str) -> Result<String, Boot
     Ok(format!("approval run_id={} {}", run_id, approvals))
 }
 
-fn approve_run(
-    store: &PersistenceStore,
-    run_id: &str,
-    approval_id: &str,
-) -> Result<String, BootstrapError> {
-    let snapshot = load_run_snapshot(store, run_id)?;
-    let mut engine = RunEngine::from_snapshot(snapshot);
-    engine
-        .resolve_approval(approval_id, unix_timestamp()?)
-        .map_err(BootstrapError::RunTransition)?;
-    let record =
-        RunRecord::try_from(engine.snapshot()).map_err(BootstrapError::RecordConversion)?;
-    store.put_run(&record)?;
-    Ok(format!("approved {} on run {}", approval_id, run_id))
+fn approve_run(app: &App, run_id: &str, approval_id: &str) -> Result<String, BootstrapError> {
+    let report = app.approve_run(run_id, approval_id, unix_timestamp()?)?;
+    Ok(format!(
+        "approved {} on run {} status={} response_id={} output={} next_approval={}",
+        approval_id,
+        report.run_id,
+        report.run_status.as_str(),
+        report.response_id.as_deref().unwrap_or("<none>"),
+        report.output_text.as_deref().unwrap_or("<none>"),
+        report.approval_id.as_deref().unwrap_or("<none>")
+    ))
 }
 
 fn list_delegates(store: &PersistenceStore, run_id: &str) -> Result<String, BootstrapError> {

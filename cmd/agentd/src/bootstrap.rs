@@ -1,11 +1,11 @@
 use crate::{cli, execution};
 use agent_persistence::{
     AppConfig, ConfigError, PersistenceScaffold, PersistenceStore, RecordConversionError,
-    SessionRepository, StoreError, TranscriptRepository, recovery,
+    RunRecord, RunRepository, SessionRepository, StoreError, TranscriptRepository, recovery,
 };
 use agent_runtime::RuntimeScaffold;
 use agent_runtime::provider::{ProviderBuildError, ProviderDriver, ProviderError, build_driver};
-use agent_runtime::run::RunTransitionError;
+use agent_runtime::run::{RunEngine, RunSnapshot, RunTransitionError};
 use agent_runtime::scheduler::MissionVerificationSummary;
 use agent_runtime::session::TranscriptEntry;
 use agent_runtime::tool::ToolCall;
@@ -166,6 +166,46 @@ impl App {
         self.execution_service()
             .execute_chat_turn(&store, provider.as_ref(), session_id, message, now)
             .map_err(BootstrapError::Execution)
+    }
+
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub fn approve_run(
+        &self,
+        run_id: &str,
+        approval_id: &str,
+        now: i64,
+    ) -> Result<execution::ApprovalContinuationReport, BootstrapError> {
+        let store = self.store()?;
+        let snapshot = RunSnapshot::try_from(store.get_run(run_id)?.ok_or_else(|| {
+            BootstrapError::MissingRecord {
+                kind: "run",
+                id: run_id.to_string(),
+            }
+        })?)
+        .map_err(BootstrapError::RecordConversion)?;
+
+        if snapshot.provider_loop.is_some() {
+            let provider = self.provider_driver()?;
+            return self
+                .execution_service()
+                .approve_model_run(&store, provider.as_ref(), run_id, approval_id, now)
+                .map_err(BootstrapError::Execution);
+        }
+
+        let mut engine = RunEngine::from_snapshot(snapshot);
+        engine
+            .resolve_approval(approval_id, now)
+            .map_err(BootstrapError::RunTransition)?;
+        let record =
+            RunRecord::try_from(engine.snapshot()).map_err(BootstrapError::RecordConversion)?;
+        store.put_run(&record)?;
+        Ok(execution::ApprovalContinuationReport {
+            run_id: run_id.to_string(),
+            run_status: engine.snapshot().status,
+            response_id: None,
+            output_text: None,
+            approval_id: None,
+        })
     }
 
     #[cfg_attr(not(test), allow(dead_code))]
@@ -703,6 +743,7 @@ mod tests {
                 result: None,
                 evidence_refs_json: "[]".to_string(),
                 pending_approvals_json: "[]".to_string(),
+                provider_loop_json: "null".to_string(),
                 delegate_runs_json: "[]".to_string(),
                 started_at: 3,
                 updated_at: 4,
@@ -717,6 +758,7 @@ mod tests {
                 result: None,
                 evidence_refs_json: "[]".to_string(),
                 pending_approvals_json: "[]".to_string(),
+                provider_loop_json: "null".to_string(),
                 delegate_runs_json: "[]".to_string(),
                 started_at: 5,
                 updated_at: 6,
@@ -731,6 +773,7 @@ mod tests {
                 result: None,
                 evidence_refs_json: "[]".to_string(),
                 pending_approvals_json: "[]".to_string(),
+                provider_loop_json: "null".to_string(),
                 delegate_runs_json: "[]".to_string(),
                 started_at: 7,
                 updated_at: 8,
@@ -745,6 +788,7 @@ mod tests {
                 result: None,
                 evidence_refs_json: "[]".to_string(),
                 pending_approvals_json: "[]".to_string(),
+                provider_loop_json: "null".to_string(),
                 delegate_runs_json: serde_json::to_string(&vec![DelegateRun::new(
                     "delegate-1",
                     "worker-a",
@@ -770,6 +814,7 @@ mod tests {
                     11,
                 )])
                 .expect("serialize approvals"),
+                provider_loop_json: "null".to_string(),
                 delegate_runs_json: "[]".to_string(),
                 started_at: 11,
                 updated_at: 12,
@@ -847,6 +892,7 @@ mod tests {
                 result: None,
                 evidence_refs_json: "[]".to_string(),
                 pending_approvals_json: "[]".to_string(),
+                provider_loop_json: "null".to_string(),
                 delegate_runs_json: "[]".to_string(),
                 started_at: 3,
                 updated_at: 4,
@@ -1050,6 +1096,7 @@ mod tests {
                 result: Some("done".to_string()),
                 evidence_refs_json: "[]".to_string(),
                 pending_approvals_json: "[]".to_string(),
+                provider_loop_json: "null".to_string(),
                 delegate_runs_json: "[]".to_string(),
                 started_at: 20,
                 updated_at: 21,
@@ -2082,6 +2129,492 @@ mod tests {
         assert!(normalized_second.contains("\"tool_call_id\":\"call_web_fetch\""));
         assert!(normalized_second.contains("local doc"));
 
+        let normalized_web = web_request.to_ascii_lowercase();
+        assert!(normalized_web.contains("get /doc http/1.1"));
+    }
+
+    #[test]
+    fn approval_approve_resumes_an_openai_chat_tool_call_and_completes_the_run() {
+        let (web_base, web_requests, web_handle) = spawn_text_server("/doc", "approved doc");
+        let first_provider_response = format!(
+            r#"{{
+                "id":"resp_tool_approval_call",
+                "model":"gpt-5.4",
+                "output":[
+                    {{
+                        "id":"fc_1",
+                        "type":"function_call",
+                        "status":"completed",
+                        "call_id":"call_web_fetch",
+                        "name":"web_fetch",
+                        "arguments":"{{\"url\":\"{}\"}}"
+                    }}
+                ],
+                "usage":{{"input_tokens":19,"output_tokens":7,"total_tokens":26}}
+            }}"#,
+            web_base
+        );
+        let (provider_api_base, provider_requests, provider_handle) =
+            spawn_json_server_sequence(vec![
+                first_provider_response,
+                r#"{
+                    "id":"resp_tool_approval_final",
+                    "model":"gpt-5.4",
+                    "output":[
+                        {
+                            "id":"msg_1",
+                            "type":"message",
+                            "status":"completed",
+                            "role":"assistant",
+                            "content":[
+                                {
+                                    "type":"output_text",
+                                    "text":"Fetched approved doc after approval"
+                                }
+                            ]
+                        }
+                    ],
+                    "usage":{"input_tokens":31,"output_tokens":4,"total_tokens":35}
+                }"#
+                .to_string(),
+            ]);
+        let temp = tempfile::tempdir().expect("tempdir");
+        let app = build_from_config(AppConfig {
+            data_dir: temp.path().join("state-root"),
+            provider: ConfiguredProvider {
+                kind: ProviderKind::OpenAiResponses,
+                api_base: Some(format!("{provider_api_base}/v1")),
+                api_key: Some("test-key".to_string()),
+                default_model: Some("gpt-5.4".to_string()),
+            },
+            permissions: PermissionConfig {
+                mode: PermissionMode::Auto,
+                rules: vec![PermissionRule {
+                    action: PermissionAction::Ask,
+                    tool: Some("web_fetch".to_string()),
+                    family: None,
+                    path_prefix: None,
+                }],
+            },
+        })
+        .expect("build app");
+        let store = PersistenceStore::open(&app.persistence).expect("open store");
+
+        store
+            .put_session(&SessionRecord {
+                id: "session-chat-approval".to_string(),
+                title: "Chat approval session".to_string(),
+                prompt_override: Some("Use tools when useful.".to_string()),
+                settings_json: serde_json::to_string(&SessionSettings::default())
+                    .expect("serialize settings"),
+                active_mission_id: None,
+                created_at: 1,
+                updated_at: 1,
+            })
+            .expect("put session");
+
+        let error = app
+            .execute_chat_turn("session-chat-approval", "Fetch the approved doc", 10)
+            .expect_err("chat turn should pause for approval");
+        assert!(error.to_string().contains("approval"));
+
+        let waiting_run = store
+            .get_run("run-chat-session-chat-approval-10")
+            .expect("get waiting run")
+            .expect("waiting run exists");
+        assert_eq!(waiting_run.status, "waiting_approval");
+
+        let approvals = app
+            .run_with_args(["approval", "list", "run-chat-session-chat-approval-10"])
+            .expect("approval list");
+        assert!(approvals.contains("approval-run-chat-session-chat-approval-10-web_fetch"));
+        assert!(approvals.contains("call_web_fetch"));
+
+        let approved = app
+            .run_with_args([
+                "approval",
+                "approve",
+                "run-chat-session-chat-approval-10",
+                "approval-run-chat-session-chat-approval-10-web_fetch",
+            ])
+            .expect("approval approve");
+        let first_request = provider_requests.recv().expect("first provider request");
+        let second_request = provider_requests.recv().expect("second provider request");
+        let web_request = web_requests.recv().expect("web request");
+        provider_handle.join().expect("join provider server");
+        web_handle.join().expect("join web server");
+
+        assert!(approved.contains("run-chat-session-chat-approval-10"));
+        assert!(approved.contains("resp_tool_approval_final"));
+        assert!(approved.contains("Fetched approved doc after approval"));
+
+        let completed_run = store
+            .get_run("run-chat-session-chat-approval-10")
+            .expect("get completed run")
+            .expect("completed run exists");
+        assert_eq!(completed_run.status, "completed");
+        assert_eq!(
+            completed_run.result.as_deref(),
+            Some("Fetched approved doc after approval")
+        );
+
+        let transcript = app
+            .session_transcript("session-chat-approval")
+            .expect("load transcript");
+        assert_eq!(transcript.entries.len(), 2);
+        assert_eq!(transcript.entries[0].content, "Fetch the approved doc");
+        assert_eq!(
+            transcript.entries[1].content,
+            "Fetched approved doc after approval"
+        );
+
+        let normalized_first = first_request.to_ascii_lowercase();
+        assert!(normalized_first.contains("\"name\":\"web_fetch\""));
+        assert!(normalized_first.contains("\"text\":\"fetch the approved doc\""));
+
+        let normalized_second = second_request.to_ascii_lowercase();
+        assert!(normalized_second.contains("\"previous_response_id\":\"resp_tool_approval_call\""));
+        assert!(normalized_second.contains("\"type\":\"function_call_output\""));
+        assert!(normalized_second.contains("approved doc"));
+
+        let normalized_web = web_request.to_ascii_lowercase();
+        assert!(normalized_web.contains("get /doc http/1.1"));
+    }
+
+    #[test]
+    fn approval_approve_resumes_a_zai_chat_tool_call_and_completes_the_run() {
+        let (web_base, web_requests, web_handle) = spawn_text_server("/doc", "approved zai doc");
+        let first_provider_response = format!(
+            r#"{{
+                "id":"chatcmpl-approval-zai-1",
+                "model":"glm-5.1",
+                "choices":[
+                    {{
+                        "index":0,
+                        "finish_reason":"tool_calls",
+                        "message":{{
+                            "role":"assistant",
+                            "content":"",
+                            "tool_calls":[
+                                {{
+                                    "id":"call_web_fetch",
+                                    "type":"function",
+                                    "function":{{
+                                        "name":"web_fetch",
+                                        "arguments":"{{\"url\":\"{}\"}}"
+                                    }}
+                                }}
+                            ]
+                        }}
+                    }}
+                ],
+                "usage":{{"prompt_tokens":19,"completion_tokens":7,"total_tokens":26}}
+            }}"#,
+            web_base
+        );
+        let (provider_api_base, provider_requests, provider_handle) =
+            spawn_json_server_sequence(vec![
+                first_provider_response,
+                r#"{
+                    "id":"chatcmpl-approval-zai-2",
+                    "model":"glm-5.1",
+                    "choices":[
+                        {
+                            "index":0,
+                            "finish_reason":"stop",
+                            "message":{
+                                "role":"assistant",
+                                "content":"Fetched approved zai doc after approval"
+                            }
+                        }
+                    ],
+                    "usage":{"prompt_tokens":31,"completion_tokens":4,"total_tokens":35}
+                }"#
+                .to_string(),
+            ]);
+        let temp = tempfile::tempdir().expect("tempdir");
+        let app = build_from_config(AppConfig {
+            data_dir: temp.path().join("state-root"),
+            provider: ConfiguredProvider {
+                kind: ProviderKind::ZaiChatCompletions,
+                api_base: Some(format!("{provider_api_base}/v1")),
+                api_key: Some("test-key".to_string()),
+                default_model: Some("glm-5.1".to_string()),
+            },
+            permissions: PermissionConfig {
+                mode: PermissionMode::Auto,
+                rules: vec![PermissionRule {
+                    action: PermissionAction::Ask,
+                    tool: Some("web_fetch".to_string()),
+                    family: None,
+                    path_prefix: None,
+                }],
+            },
+        })
+        .expect("build app");
+        let store = PersistenceStore::open(&app.persistence).expect("open store");
+
+        store
+            .put_session(&SessionRecord {
+                id: "session-chat-approval-zai".to_string(),
+                title: "Chat approval zai session".to_string(),
+                prompt_override: Some("Use tools when useful.".to_string()),
+                settings_json: serde_json::to_string(&SessionSettings::default())
+                    .expect("serialize settings"),
+                active_mission_id: None,
+                created_at: 1,
+                updated_at: 1,
+            })
+            .expect("put session");
+
+        let error = app
+            .execute_chat_turn(
+                "session-chat-approval-zai",
+                "Fetch the approved zai doc",
+                10,
+            )
+            .expect_err("chat turn should pause for approval");
+        assert!(error.to_string().contains("approval"));
+
+        let approvals = app
+            .run_with_args(["approval", "list", "run-chat-session-chat-approval-zai-10"])
+            .expect("approval list");
+        assert!(approvals.contains("approval-run-chat-session-chat-approval-zai-10-web_fetch"));
+        assert!(approvals.contains("call_web_fetch"));
+
+        let approved = app
+            .run_with_args([
+                "approval",
+                "approve",
+                "run-chat-session-chat-approval-zai-10",
+                "approval-run-chat-session-chat-approval-zai-10-web_fetch",
+            ])
+            .expect("approval approve");
+        let first_request = provider_requests.recv().expect("first provider request");
+        let second_request = provider_requests.recv().expect("second provider request");
+        let web_request = web_requests.recv().expect("web request");
+        provider_handle.join().expect("join provider server");
+        web_handle.join().expect("join web server");
+
+        assert!(approved.contains("run-chat-session-chat-approval-zai-10"));
+        assert!(approved.contains("chatcmpl-approval-zai-2"));
+        assert!(approved.contains("Fetched approved zai doc after approval"));
+
+        let completed_run = store
+            .get_run("run-chat-session-chat-approval-zai-10")
+            .expect("get completed run")
+            .expect("completed run exists");
+        assert_eq!(completed_run.status, "completed");
+        assert_eq!(
+            completed_run.result.as_deref(),
+            Some("Fetched approved zai doc after approval")
+        );
+
+        let transcript = app
+            .session_transcript("session-chat-approval-zai")
+            .expect("load transcript");
+        assert_eq!(transcript.entries.len(), 2);
+        assert_eq!(transcript.entries[0].content, "Fetch the approved zai doc");
+        assert_eq!(
+            transcript.entries[1].content,
+            "Fetched approved zai doc after approval"
+        );
+
+        let normalized_first = first_request.to_ascii_lowercase();
+        assert!(normalized_first.contains("\"tool_choice\":\"auto\""));
+        assert!(normalized_first.contains("\"name\":\"web_fetch\""));
+        assert!(normalized_first.contains("\"content\":\"fetch the approved zai doc\""));
+
+        let normalized_second = second_request.to_ascii_lowercase();
+        assert!(normalized_second.contains("\"role\":\"assistant\""));
+        assert!(normalized_second.contains("\"tool_calls\""));
+        assert!(normalized_second.contains("\"tool_call_id\":\"call_web_fetch\""));
+        assert!(normalized_second.contains("approved zai doc"));
+
+        let normalized_web = web_request.to_ascii_lowercase();
+        assert!(normalized_web.contains("get /doc http/1.1"));
+    }
+
+    #[test]
+    fn approval_approve_resumes_a_mission_turn_and_completes_the_job() {
+        let (web_base, web_requests, web_handle) =
+            spawn_text_server("/doc", "mission approved doc");
+        let first_provider_response = format!(
+            r#"{{
+                "id":"resp_mission_approval_call",
+                "model":"gpt-5.4",
+                "output":[
+                    {{
+                        "id":"fc_1",
+                        "type":"function_call",
+                        "status":"completed",
+                        "call_id":"call_web_fetch",
+                        "name":"web_fetch",
+                        "arguments":"{{\"url\":\"{}\"}}"
+                    }}
+                ],
+                "usage":{{"input_tokens":19,"output_tokens":7,"total_tokens":26}}
+            }}"#,
+            web_base
+        );
+        let (provider_api_base, provider_requests, provider_handle) =
+            spawn_json_server_sequence(vec![
+                first_provider_response,
+                r#"{
+                    "id":"resp_mission_approval_final",
+                    "model":"gpt-5.4",
+                    "output":[
+                        {
+                            "id":"msg_1",
+                            "type":"message",
+                            "status":"completed",
+                            "role":"assistant",
+                            "content":[
+                                {
+                                    "type":"output_text",
+                                    "text":"Mission fetched approved doc"
+                                }
+                            ]
+                        }
+                    ],
+                    "usage":{"input_tokens":31,"output_tokens":4,"total_tokens":35}
+                }"#
+                .to_string(),
+            ]);
+        let temp = tempfile::tempdir().expect("tempdir");
+        let app = build_from_config(AppConfig {
+            data_dir: temp.path().join("state-root"),
+            provider: ConfiguredProvider {
+                kind: ProviderKind::OpenAiResponses,
+                api_base: Some(format!("{provider_api_base}/v1")),
+                api_key: Some("test-key".to_string()),
+                default_model: Some("gpt-5.4".to_string()),
+            },
+            permissions: PermissionConfig {
+                mode: PermissionMode::Auto,
+                rules: vec![PermissionRule {
+                    action: PermissionAction::Ask,
+                    tool: Some("web_fetch".to_string()),
+                    family: None,
+                    path_prefix: None,
+                }],
+            },
+        })
+        .expect("build app");
+        let store = PersistenceStore::open(&app.persistence).expect("open store");
+
+        store
+            .put_session(&SessionRecord {
+                id: "session-mission-approval".to_string(),
+                title: "Mission approval session".to_string(),
+                prompt_override: Some("Use tools when useful.".to_string()),
+                settings_json: serde_json::to_string(&SessionSettings::default())
+                    .expect("serialize settings"),
+                active_mission_id: None,
+                created_at: 1,
+                updated_at: 1,
+            })
+            .expect("put session");
+        store
+            .put_mission(&MissionRecord {
+                id: "mission-approval".to_string(),
+                session_id: "session-mission-approval".to_string(),
+                objective: "Fetch an approved doc".to_string(),
+                status: MissionStatus::Ready.as_str().to_string(),
+                execution_intent: MissionExecutionIntent::Autonomous.as_str().to_string(),
+                schedule_json: serde_json::to_string(&MissionSchedule::once())
+                    .expect("serialize schedule"),
+                acceptance_json: "[]".to_string(),
+                created_at: 2,
+                updated_at: 2,
+                completed_at: None,
+            })
+            .expect("put mission");
+        store
+            .put_job(
+                &JobRecord::try_from(&JobSpec::mission_turn(
+                    "job-mission-approval",
+                    "mission-approval",
+                    None,
+                    None,
+                    "Fetch the approved mission doc",
+                    3,
+                ))
+                .expect("job record"),
+            )
+            .expect("put job");
+
+        let error = app
+            .execute_mission_turn_job("job-mission-approval", 10)
+            .expect_err("mission turn should pause for approval");
+        assert!(error.to_string().contains("approval"));
+
+        let approval_output = app
+            .run_with_args(["approval", "list", "run-job-mission-approval"])
+            .expect("approval list");
+        assert!(approval_output.contains("approval-run-job-mission-approval-web_fetch"));
+
+        let approved = app
+            .run_with_args([
+                "approval",
+                "approve",
+                "run-job-mission-approval",
+                "approval-run-job-mission-approval-web_fetch",
+            ])
+            .expect("approval approve");
+        let first_request = provider_requests.recv().expect("first provider request");
+        let second_request = provider_requests.recv().expect("second provider request");
+        let web_request = web_requests.recv().expect("web request");
+        provider_handle.join().expect("join provider server");
+        web_handle.join().expect("join web server");
+
+        assert!(approved.contains("status=completed"));
+        assert!(approved.contains("resp_mission_approval_final"));
+        assert!(approved.contains("Mission fetched approved doc"));
+
+        let completed_run = store
+            .get_run("run-job-mission-approval")
+            .expect("get completed run")
+            .expect("completed run exists");
+        assert_eq!(completed_run.status, "completed");
+        assert_eq!(
+            completed_run.result.as_deref(),
+            Some("Mission fetched approved doc")
+        );
+
+        let completed_job = store
+            .get_job("job-mission-approval")
+            .expect("get completed job")
+            .expect("completed job exists");
+        assert_eq!(completed_job.status, "completed");
+        assert!(
+            completed_job
+                .result_json
+                .as_deref()
+                .unwrap_or_default()
+                .contains("Mission fetched approved doc")
+        );
+
+        let transcript = app
+            .session_transcript("session-mission-approval")
+            .expect("load transcript");
+        assert_eq!(transcript.entries.len(), 2);
+        assert_eq!(
+            transcript.entries[0].content,
+            "Fetch the approved mission doc"
+        );
+        assert_eq!(
+            transcript.entries[1].content,
+            "Mission fetched approved doc"
+        );
+
+        let normalized_first = first_request.to_ascii_lowercase();
+        assert!(normalized_first.contains("\"name\":\"web_fetch\""));
+        let normalized_second = second_request.to_ascii_lowercase();
+        assert!(
+            normalized_second.contains("\"previous_response_id\":\"resp_mission_approval_call\"")
+        );
+        assert!(normalized_second.contains("mission approved doc"));
         let normalized_web = web_request.to_ascii_lowercase();
         assert!(normalized_web.contains("get /doc http/1.1"));
     }

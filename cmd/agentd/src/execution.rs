@@ -14,7 +14,8 @@ use agent_runtime::provider::{
     ProviderResponse, ProviderStreamMode, ProviderToolDefinition, ProviderToolOutput,
 };
 use agent_runtime::run::{
-    ActiveProcess, ApprovalRequest, RunEngine, RunSnapshot, RunStatus, RunTransitionError,
+    ActiveProcess, ApprovalRequest, PendingToolApproval, ProviderLoopState, RunEngine, RunSnapshot,
+    RunStatus, RunTransitionError,
 };
 use agent_runtime::scheduler::{
     MissionVerificationSummary, SupervisorAction, SupervisorLoop, SupervisorTickInput,
@@ -55,6 +56,15 @@ pub struct ChatTurnExecutionReport {
     pub run_id: String,
     pub response_id: String,
     pub output_text: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ApprovalContinuationReport {
+    pub run_id: String,
+    pub run_status: RunStatus,
+    pub response_id: Option<String>,
+    pub output_text: Option<String>,
+    pub approval_id: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -201,6 +211,22 @@ impl ExecutionService {
             .map_err(ExecutionError::Store)
     }
 
+    fn find_job_by_run_id(
+        &self,
+        store: &PersistenceStore,
+        run_id: &str,
+    ) -> Result<Option<JobSpec>, ExecutionError> {
+        store
+            .load_execution_state()
+            .map_err(ExecutionError::Store)?
+            .jobs
+            .into_iter()
+            .find(|record| record.run_id.as_deref() == Some(run_id))
+            .map(JobSpec::try_from)
+            .transpose()
+            .map_err(ExecutionError::RecordConversion)
+    }
+
     fn apply_provider_response(
         &self,
         run: &mut RunEngine,
@@ -218,6 +244,7 @@ impl ExecutionService {
         Ok(())
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn execute_provider_turn_loop(
         &self,
         store: &PersistenceStore,
@@ -225,22 +252,45 @@ impl ExecutionService {
         session_id: &str,
         instructions: Option<String>,
         run: &mut RunEngine,
+        initial_loop_state: Option<ProviderLoopState>,
         now: i64,
     ) -> Result<ProviderResponse, ExecutionError> {
         let base_messages = self.transcript_messages(store, session_id)?;
         let catalog = ToolCatalog::default();
         let tools = self.automatic_provider_tools(provider);
-        let mut pending_tool_outputs = Vec::new();
-        let mut continuation_messages = Vec::new();
+        let mut pending_tool_outputs = initial_loop_state
+            .as_ref()
+            .map(|state| state.pending_tool_outputs.clone())
+            .unwrap_or_default();
+        let mut continuation_messages = initial_loop_state
+            .as_ref()
+            .map(|state| state.continuation_messages.clone())
+            .unwrap_or_default();
         let mut tool_runtime = ToolRuntime::new(self.workspace.clone());
-        let mut previous_response_id = None;
-        let mut seen_tool_signatures = BTreeMap::new();
+        let mut previous_response_id = initial_loop_state
+            .as_ref()
+            .and_then(|state| state.previous_response_id.clone());
+        let mut seen_tool_signatures = initial_loop_state
+            .as_ref()
+            .map(|state| {
+                state
+                    .seen_tool_signatures
+                    .iter()
+                    .enumerate()
+                    .map(|(index, signature)| (signature.clone(), index))
+                    .collect::<BTreeMap<_, _>>()
+            })
+            .unwrap_or_default();
+        let starting_round = initial_loop_state
+            .as_ref()
+            .map(|state| state.next_round)
+            .unwrap_or(0);
         let supports_previous_response_id = provider
             .descriptor()
             .capabilities
             .supports_previous_response_id;
 
-        for round in 0..MAX_PROVIDER_TOOL_ROUNDS {
+        for round in starting_round..MAX_PROVIDER_TOOL_ROUNDS {
             let request = ProviderRequest {
                 model: None,
                 instructions: instructions.clone(),
@@ -340,10 +390,31 @@ impl ExecutionService {
                         run.wait_for_approval(
                             ApprovalRequest::new(
                                 approval_id.clone(),
-                                parsed.name().as_str(),
+                                tool_call.call_id.as_str(),
                                 &reason,
                                 now,
                             ),
+                            now,
+                        )
+                        .map_err(ExecutionError::RunTransition)?;
+                        run.set_provider_loop_state(
+                            ProviderLoopState {
+                                next_round: round + 1,
+                                previous_response_id: supports_previous_response_id
+                                    .then(|| response.response_id.clone()),
+                                continuation_messages: continuation_messages.clone(),
+                                pending_tool_outputs: next_tool_outputs.clone(),
+                                seen_tool_signatures: seen_tool_signatures
+                                    .keys()
+                                    .cloned()
+                                    .collect(),
+                                pending_approval: Some(PendingToolApproval::new(
+                                    approval_id.clone(),
+                                    tool_call.call_id.clone(),
+                                    tool_call.name.clone(),
+                                    tool_call.arguments.clone(),
+                                )),
+                            },
                             now,
                         )
                         .map_err(ExecutionError::RunTransition)?;
@@ -618,6 +689,7 @@ impl ExecutionService {
             &session.id,
             session.prompt_override.clone(),
             &mut run,
+            None,
             now,
         ) {
             Ok(response) => response,
@@ -741,6 +813,7 @@ impl ExecutionService {
             &session.id,
             session.prompt_override.clone(),
             &mut run,
+            None,
             now,
         ) {
             Ok(response) => response,
@@ -778,6 +851,296 @@ impl ExecutionService {
             run_id,
             response_id: response.response_id,
             output_text: response.output_text,
+        })
+    }
+
+    pub fn approve_model_run(
+        &self,
+        store: &PersistenceStore,
+        provider: &dyn ProviderDriver,
+        run_id: &str,
+        approval_id: &str,
+        now: i64,
+    ) -> Result<ApprovalContinuationReport, ExecutionError> {
+        let run_snapshot = RunSnapshot::try_from(
+            store
+                .get_run(run_id)
+                .map_err(ExecutionError::Store)?
+                .ok_or_else(|| ExecutionError::MissingRun {
+                    id: run_id.to_string(),
+                })?,
+        )
+        .map_err(ExecutionError::RecordConversion)?;
+        let mut run = RunEngine::from_snapshot(run_snapshot);
+        let loop_state =
+            run.snapshot()
+                .provider_loop
+                .clone()
+                .ok_or_else(|| ExecutionError::ProviderLoop {
+                    reason: format!("run {run_id} has no persisted provider continuation state"),
+                })?;
+        let pending_approval =
+            loop_state
+                .pending_approval
+                .clone()
+                .ok_or_else(|| ExecutionError::ProviderLoop {
+                    reason: format!("run {run_id} has no pending provider approval to resume"),
+                })?;
+        if pending_approval.approval_id != approval_id {
+            return Err(ExecutionError::ProviderLoop {
+                reason: format!(
+                    "approval {approval_id} does not match pending provider approval {}",
+                    pending_approval.approval_id
+                ),
+            });
+        }
+
+        let session = store
+            .get_session(&run.snapshot().session_id)
+            .map_err(ExecutionError::Store)?
+            .ok_or_else(|| ExecutionError::MissingSession {
+                id: run.snapshot().session_id.clone(),
+            })?;
+        let mut job = self.find_job_by_run_id(store, run_id)?;
+        let mut mission = if let Some(job) = job.as_ref() {
+            Some(
+                MissionSpec::try_from(
+                    store
+                        .get_mission(&job.mission_id)
+                        .map_err(ExecutionError::Store)?
+                        .ok_or_else(|| ExecutionError::MissingMission {
+                            id: job.mission_id.clone(),
+                        })?,
+                )
+                .map_err(ExecutionError::RecordConversion)?,
+            )
+        } else {
+            None
+        };
+
+        let parsed = ToolCall::from_openai_function(
+            &pending_approval.tool_name,
+            &pending_approval.tool_arguments,
+        )
+        .map_err(|source| ExecutionError::ToolCallParse {
+            name: pending_approval.tool_name.clone(),
+            reason: source.to_string(),
+        })?;
+        let catalog = ToolCatalog::default();
+        let definition =
+            catalog
+                .definition_for_call(&parsed)
+                .ok_or_else(|| ExecutionError::ToolCallParse {
+                    name: pending_approval.tool_name.clone(),
+                    reason: "tool is not in the catalog".to_string(),
+                })?;
+        let permission = self.permissions.resolve(definition, &parsed);
+        if matches!(permission.action, PermissionAction::Deny) {
+            let reason = format!(
+                "tool {} denied by permission policy: {}",
+                parsed.name().as_str(),
+                permission.reason
+            );
+            run.fail(reason.clone(), now)
+                .map_err(ExecutionError::RunTransition)?;
+            self.persist_run(store, &run)?;
+            if let Some(job) = job.as_mut() {
+                job.status = JobStatus::Failed;
+                job.error = Some(reason.clone());
+                job.finished_at = Some(now);
+                job.updated_at = now;
+                store
+                    .put_job(&JobRecord::try_from(&*job).map_err(ExecutionError::RecordConversion)?)
+                    .map_err(ExecutionError::Store)?;
+            }
+            if let Some(mission) = mission.as_mut() {
+                mission.updated_at = now;
+                store
+                    .put_mission(
+                        &MissionRecord::try_from(&*mission)
+                            .map_err(ExecutionError::RecordConversion)?,
+                    )
+                    .map_err(ExecutionError::Store)?;
+            }
+            return Err(ExecutionError::PermissionDenied {
+                tool: parsed.name().as_str().to_string(),
+                reason,
+            });
+        }
+
+        run.resolve_approval(approval_id, now)
+            .map_err(ExecutionError::RunTransition)?;
+        if run.snapshot().status == RunStatus::Resuming {
+            run.resume(now).map_err(ExecutionError::RunTransition)?;
+        }
+
+        if let Some(job) = job.as_mut() {
+            job.status = JobStatus::Running;
+            job.error = None;
+            job.updated_at = now;
+            if job.started_at.is_none() {
+                job.started_at = Some(now);
+            }
+            store
+                .put_job(&JobRecord::try_from(&*job).map_err(ExecutionError::RecordConversion)?)
+                .map_err(ExecutionError::Store)?;
+        }
+        if let Some(mission) = mission.as_mut() {
+            mission.status = MissionStatus::Running;
+            mission.updated_at = now;
+            store
+                .put_mission(
+                    &MissionRecord::try_from(&*mission)
+                        .map_err(ExecutionError::RecordConversion)?,
+                )
+                .map_err(ExecutionError::Store)?;
+        }
+
+        let output = ToolRuntime::new(self.workspace.clone())
+            .invoke(parsed.clone())
+            .map_err(ExecutionError::Tool)?;
+        let summary = output.summary();
+        let model_output = output.model_output();
+        run.record_tool_completion(summary, now)
+            .map_err(ExecutionError::RunTransition)?;
+
+        let mut resumed_loop_state = loop_state;
+        resumed_loop_state.pending_approval = None;
+        if provider
+            .descriptor()
+            .capabilities
+            .supports_previous_response_id
+        {
+            resumed_loop_state
+                .pending_tool_outputs
+                .push(ProviderToolOutput {
+                    call_id: pending_approval.provider_tool_call_id.clone(),
+                    output: model_output,
+                });
+        } else {
+            resumed_loop_state.continuation_messages.push(
+                ProviderContinuationMessage::ToolResult {
+                    tool_call_id: pending_approval.provider_tool_call_id.clone(),
+                    content: model_output,
+                },
+            );
+        }
+        run.set_provider_loop_state(resumed_loop_state.clone(), now)
+            .map_err(ExecutionError::RunTransition)?;
+        self.persist_run(store, &run)?;
+
+        let response = match self.execute_provider_turn_loop(
+            store,
+            provider,
+            &session.id,
+            session.prompt_override.clone(),
+            &mut run,
+            Some(resumed_loop_state),
+            now,
+        ) {
+            Ok(response) => response,
+            Err(
+                ref source @ ExecutionError::ApprovalRequired {
+                    approval_id: ref next_approval_id,
+                    ..
+                },
+            ) => {
+                if let Some(job) = job.as_mut() {
+                    job.status = JobStatus::Blocked;
+                    job.error = Some(source.to_string());
+                    job.updated_at = now;
+                    store
+                        .put_job(
+                            &JobRecord::try_from(&*job)
+                                .map_err(ExecutionError::RecordConversion)?,
+                        )
+                        .map_err(ExecutionError::Store)?;
+                }
+                if let Some(mission) = mission.as_mut() {
+                    mission.updated_at = now;
+                    store
+                        .put_mission(
+                            &MissionRecord::try_from(&*mission)
+                                .map_err(ExecutionError::RecordConversion)?,
+                        )
+                        .map_err(ExecutionError::Store)?;
+                }
+                return Ok(ApprovalContinuationReport {
+                    run_id: run_id.to_string(),
+                    run_status: RunStatus::WaitingApproval,
+                    response_id: None,
+                    output_text: None,
+                    approval_id: Some(next_approval_id.clone()),
+                });
+            }
+            Err(source) => {
+                if !matches!(
+                    source,
+                    ExecutionError::PermissionDenied { .. }
+                        | ExecutionError::ApprovalRequired { .. }
+                ) {
+                    run.fail(source.to_string(), now)
+                        .map_err(ExecutionError::RunTransition)?;
+                    self.persist_run(store, &run)?;
+                }
+                if let Some(job) = job.as_mut() {
+                    job.status = JobStatus::Failed;
+                    job.error = Some(source.to_string());
+                    job.finished_at = Some(now);
+                    job.updated_at = now;
+                    store
+                        .put_job(
+                            &JobRecord::try_from(&*job)
+                                .map_err(ExecutionError::RecordConversion)?,
+                        )
+                        .map_err(ExecutionError::Store)?;
+                }
+                if let Some(mission) = mission.as_mut() {
+                    mission.updated_at = now;
+                    store
+                        .put_mission(
+                            &MissionRecord::try_from(&*mission)
+                                .map_err(ExecutionError::RecordConversion)?,
+                        )
+                        .map_err(ExecutionError::Store)?;
+                }
+                return Err(source);
+            }
+        };
+
+        run.complete(&response.output_text, now)
+            .map_err(ExecutionError::RunTransition)?;
+        self.persist_run(store, &run)?;
+
+        let assistant_entry = TranscriptEntry::assistant(
+            format!("transcript-run-{run_id}-{now}-assistant"),
+            session.id.clone(),
+            Some(run_id),
+            &response.output_text,
+            now,
+        );
+        store
+            .put_transcript(&TranscriptRecord::from(&assistant_entry))
+            .map_err(ExecutionError::Store)?;
+
+        if let Some(job) = job.as_mut() {
+            job.status = JobStatus::Completed;
+            job.result = Some(JobResult::Summary {
+                outcome: response.output_text.clone(),
+            });
+            job.finished_at = Some(now);
+            job.updated_at = now;
+            store
+                .put_job(&JobRecord::try_from(&*job).map_err(ExecutionError::RecordConversion)?)
+                .map_err(ExecutionError::Store)?;
+        }
+
+        Ok(ApprovalContinuationReport {
+            run_id: run_id.to_string(),
+            run_status: RunStatus::Completed,
+            response_id: Some(response.response_id),
+            output_text: Some(response.output_text),
+            approval_id: None,
         })
     }
 

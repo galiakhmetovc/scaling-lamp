@@ -45,6 +45,7 @@ pub struct RunRecord {
     pub result: Option<String>,
     pub evidence_refs_json: String,
     pub pending_approvals_json: String,
+    pub provider_loop_json: String,
     pub delegate_runs_json: String,
     pub started_at: i64,
     pub updated_at: i64,
@@ -105,6 +106,7 @@ pub enum RecordConversionError {
     InvalidPromptOverride(SessionError),
     InvalidRunDelegateRuns(serde_json::Error),
     InvalidRunPendingApprovals(serde_json::Error),
+    InvalidRunProviderLoop(serde_json::Error),
     InvalidRunEvidenceRefs(serde_json::Error),
     InvalidRunStatus(RunStatusParseError),
     InvalidSessionSettings(serde_json::Error),
@@ -115,6 +117,7 @@ pub enum RecordConversionError {
     SerializeRunDelegateRuns(serde_json::Error),
     SerializeRunEvidenceRefs(serde_json::Error),
     SerializeRunPendingApprovals(serde_json::Error),
+    SerializeRunProviderLoop(serde_json::Error),
     SerializeSessionSettings(serde_json::Error),
 }
 
@@ -236,6 +239,8 @@ impl TryFrom<&RunSnapshot> for RunRecord {
                 .map_err(RecordConversionError::SerializeRunEvidenceRefs)?,
             pending_approvals_json: serde_json::to_string(&snapshot.pending_approvals)
                 .map_err(RecordConversionError::SerializeRunPendingApprovals)?,
+            provider_loop_json: serde_json::to_string(&snapshot.provider_loop)
+                .map_err(RecordConversionError::SerializeRunProviderLoop)?,
             delegate_runs_json: serde_json::to_string(&snapshot.delegate_runs)
                 .map_err(RecordConversionError::SerializeRunDelegateRuns)?,
             started_at: snapshot.started_at,
@@ -264,6 +269,8 @@ impl TryFrom<RunRecord> for RunSnapshot {
                 .map_err(RecordConversionError::InvalidRunEvidenceRefs)?,
             pending_approvals: serde_json::from_str(&record.pending_approvals_json)
                 .map_err(RecordConversionError::InvalidRunPendingApprovals)?,
+            provider_loop: serde_json::from_str(&record.provider_loop_json)
+                .map_err(RecordConversionError::InvalidRunProviderLoop)?,
             delegate_runs: serde_json::from_str(&record.delegate_runs_json)
                 .map_err(RecordConversionError::InvalidRunDelegateRuns)?,
             ..RunSnapshot::default()
@@ -397,6 +404,9 @@ impl fmt::Display for RecordConversionError {
             Self::InvalidRunPendingApprovals(source) => {
                 write!(formatter, "invalid run pending approvals: {source}")
             }
+            Self::InvalidRunProviderLoop(source) => {
+                write!(formatter, "invalid run provider loop state: {source}")
+            }
             Self::InvalidRunEvidenceRefs(source) => {
                 write!(formatter, "invalid run evidence refs: {source}")
             }
@@ -433,6 +443,12 @@ impl fmt::Display for RecordConversionError {
                     "failed to serialize run pending approvals: {source}"
                 )
             }
+            Self::SerializeRunProviderLoop(source) => {
+                write!(
+                    formatter,
+                    "failed to serialize run provider loop state: {source}"
+                )
+            }
             Self::SerializeSessionSettings(source) => {
                 write!(formatter, "failed to serialize session settings: {source}")
             }
@@ -455,6 +471,7 @@ impl Error for RecordConversionError {
             Self::InvalidPromptOverride(source) => Some(source),
             Self::InvalidRunDelegateRuns(source) => Some(source),
             Self::InvalidRunPendingApprovals(source) => Some(source),
+            Self::InvalidRunProviderLoop(source) => Some(source),
             Self::InvalidRunEvidenceRefs(source) => Some(source),
             Self::InvalidRunStatus(source) => Some(source),
             Self::InvalidSessionSettings(source) => Some(source),
@@ -465,6 +482,7 @@ impl Error for RecordConversionError {
             Self::SerializeRunDelegateRuns(source) => Some(source),
             Self::SerializeRunEvidenceRefs(source) => Some(source),
             Self::SerializeRunPendingApprovals(source) => Some(source),
+            Self::SerializeRunProviderLoop(source) => Some(source),
             Self::SerializeSessionSettings(source) => Some(source),
             Self::InvalidMessageRole { .. } | Self::MissingJobInput => None,
         }

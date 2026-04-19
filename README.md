@@ -100,7 +100,8 @@ tool loop for auto-allowed tools:
 
 - exposed automatically: `fs_read`, `fs_list`, `fs_glob`, `fs_search`,
   `web_fetch`, `web_search`
-- approval-gated tools are still kept out of the automatic loop
+- if a surfaced tool resolves to `ask`, `approval approve <run-id> <approval-id>`
+  now resumes the same provider loop instead of leaving the run stranded
 - continuation uses `previous_response_id` instead of replaying the whole
   transcript on every tool step
 - the loop is bounded and rejects repeated tool-call signatures instead of
@@ -146,9 +147,21 @@ cargo run -p agentd -- chat send session-tool "Fetch https://example.com and sum
 cargo run -p agentd -- chat show session-tool
 ```
 
-Current limitation: approval-gated tools such as `fs_write`, `fs_patch`, and
-`exec_start` still use the explicit operator approval/resume path rather than
-the automatic chat continuation loop.
+Approval-resume smoke for the canonical chat path:
+
+1. Add a permission rule that turns a surfaced tool such as `web_fetch` into
+   `ask`.
+2. Send a prompt that triggers that tool.
+3. Inspect and approve the run:
+
+```bash
+cargo run -p agentd -- approval list <run-id>
+cargo run -p agentd -- approval approve <run-id> <approval-id>
+cargo run -p agentd -- chat show <session-id>
+```
+
+The approval command now continues the same model turn and appends the final
+assistant reply when the provider returns a completion.
 
 ## Core Principles
 
