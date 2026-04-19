@@ -14,7 +14,7 @@ pub use repository::{
     ArtifactRepository, JobRepository, MissionRepository, RunRepository, SessionRepository,
     TranscriptRepository,
 };
-pub use store::{PersistenceStore, StoreError, StoreLayout};
+pub use store::{ExecutionStateSnapshot, PersistenceStore, StoreError, StoreLayout};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PersistenceScaffold {

@@ -64,6 +64,14 @@ pub struct PersistenceStore {
     connection: Connection,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ExecutionStateSnapshot {
+    pub sessions: Vec<SessionRecord>,
+    pub missions: Vec<MissionRecord>,
+    pub jobs: Vec<JobRecord>,
+    pub runs: Vec<RunRecord>,
+}
+
 type TranscriptRow = (
     String,
     String,
@@ -145,6 +153,15 @@ impl PersistenceStore {
         store.reconcile_orphan_payloads()?;
 
         Ok(store)
+    }
+
+    pub fn load_execution_state(&self) -> Result<ExecutionStateSnapshot, StoreError> {
+        Ok(ExecutionStateSnapshot {
+            sessions: self.list_sessions()?,
+            missions: self.list_missions()?,
+            jobs: self.list_jobs()?,
+            runs: self.list_runs()?,
+        })
     }
 
     fn transcript_path(&self, id: &str) -> Result<PathBuf, StoreError> {
@@ -249,6 +266,30 @@ impl SessionRepository for PersistenceStore {
             .optional()
             .map_err(StoreError::from)
     }
+
+    fn list_sessions(&self) -> Result<Vec<SessionRecord>, StoreError> {
+        let mut statement = self.connection.prepare(
+            "SELECT id, title, prompt_override, settings_json, active_mission_id, created_at, updated_at
+             FROM sessions
+             ORDER BY created_at ASC, id ASC",
+        )?;
+        let mut rows = statement.query([])?;
+        let mut sessions = Vec::new();
+
+        while let Some(row) = rows.next()? {
+            sessions.push(SessionRecord {
+                id: row.get(0)?,
+                title: row.get(1)?,
+                prompt_override: row.get(2)?,
+                settings_json: row.get(3)?,
+                active_mission_id: row.get(4)?,
+                created_at: row.get(5)?,
+                updated_at: row.get(6)?,
+            });
+        }
+
+        Ok(sessions)
+    }
 }
 
 impl MissionRepository for PersistenceStore {
@@ -308,6 +349,34 @@ impl MissionRepository for PersistenceStore {
             )
             .optional()
             .map_err(StoreError::from)
+    }
+
+    fn list_missions(&self) -> Result<Vec<MissionRecord>, StoreError> {
+        let mut statement = self.connection.prepare(
+            "SELECT id, session_id, objective, status, execution_intent, schedule_json,
+                    acceptance_json, created_at, updated_at, completed_at
+             FROM missions
+             ORDER BY created_at ASC, id ASC",
+        )?;
+        let mut rows = statement.query([])?;
+        let mut missions = Vec::new();
+
+        while let Some(row) = rows.next()? {
+            missions.push(MissionRecord {
+                id: row.get(0)?,
+                session_id: row.get(1)?,
+                objective: row.get(2)?,
+                status: row.get(3)?,
+                execution_intent: row.get(4)?,
+                schedule_json: row.get(5)?,
+                acceptance_json: row.get(6)?,
+                created_at: row.get(7)?,
+                updated_at: row.get(8)?,
+                completed_at: row.get(9)?,
+            });
+        }
+
+        Ok(missions)
     }
 }
 
@@ -473,6 +542,37 @@ impl JobRepository for PersistenceStore {
             )
             .optional()
             .map_err(StoreError::from)
+    }
+
+    fn list_jobs(&self) -> Result<Vec<JobRecord>, StoreError> {
+        let mut statement = self.connection.prepare(
+            "SELECT id, mission_id, run_id, parent_job_id, kind, status, input_json,
+                    result_json, error, created_at, updated_at, started_at, finished_at
+             FROM jobs
+             ORDER BY created_at ASC, id ASC",
+        )?;
+        let mut rows = statement.query([])?;
+        let mut jobs = Vec::new();
+
+        while let Some(row) = rows.next()? {
+            jobs.push(JobRecord {
+                id: row.get(0)?,
+                mission_id: row.get(1)?,
+                run_id: row.get(2)?,
+                parent_job_id: row.get(3)?,
+                kind: row.get(4)?,
+                status: row.get(5)?,
+                input_json: row.get(6)?,
+                result_json: row.get(7)?,
+                error: row.get(8)?,
+                created_at: row.get(9)?,
+                updated_at: row.get(10)?,
+                started_at: row.get(11)?,
+                finished_at: row.get(12)?,
+            });
+        }
+
+        Ok(jobs)
     }
 }
 
@@ -1810,6 +1910,251 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec!["transcript-a", "transcript-b", "transcript-c"]
         );
+    }
+
+    #[test]
+    fn list_execution_records_orders_sessions_missions_jobs_and_runs_stably() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let scaffold = PersistenceScaffold::from_config(crate::AppConfig {
+            data_dir: temp.path().join("state-root"),
+            ..crate::AppConfig::default()
+        });
+        let store = super::PersistenceStore::open(&scaffold).expect("open store");
+
+        let session_b = SessionRecord {
+            id: "session-b".to_string(),
+            title: "Second session".to_string(),
+            prompt_override: None,
+            settings_json: "{}".to_string(),
+            active_mission_id: None,
+            created_at: 2,
+            updated_at: 2,
+        };
+        let session_a = SessionRecord {
+            id: "session-a".to_string(),
+            title: "First session".to_string(),
+            prompt_override: None,
+            settings_json: "{}".to_string(),
+            active_mission_id: None,
+            created_at: 2,
+            updated_at: 2,
+        };
+        store.put_session(&session_b).expect("put session b");
+        store.put_session(&session_a).expect("put session a");
+
+        let mission_b = MissionRecord {
+            id: "mission-b".to_string(),
+            session_id: session_b.id.clone(),
+            objective: "Second mission".to_string(),
+            status: "ready".to_string(),
+            execution_intent: "autonomous".to_string(),
+            schedule_json: DEFAULT_MISSION_SCHEDULE_JSON.to_string(),
+            acceptance_json: DEFAULT_MISSION_ACCEPTANCE_JSON.to_string(),
+            created_at: 3,
+            updated_at: 3,
+            completed_at: None,
+        };
+        let mission_a = MissionRecord {
+            id: "mission-a".to_string(),
+            session_id: session_a.id.clone(),
+            objective: "First mission".to_string(),
+            status: "ready".to_string(),
+            execution_intent: "autonomous".to_string(),
+            schedule_json: DEFAULT_MISSION_SCHEDULE_JSON.to_string(),
+            acceptance_json: DEFAULT_MISSION_ACCEPTANCE_JSON.to_string(),
+            created_at: 3,
+            updated_at: 3,
+            completed_at: None,
+        };
+        store.put_mission(&mission_b).expect("put mission b");
+        store.put_mission(&mission_a).expect("put mission a");
+
+        let run_b = RunRecord {
+            id: "run-b".to_string(),
+            session_id: session_b.id.clone(),
+            mission_id: Some(mission_b.id.clone()),
+            status: "queued".to_string(),
+            error: None,
+            result: None,
+            evidence_refs_json: "[]".to_string(),
+            pending_approvals_json: "[]".to_string(),
+            delegate_runs_json: "[]".to_string(),
+            started_at: 5,
+            updated_at: 5,
+            finished_at: None,
+        };
+        let run_a = RunRecord {
+            id: "run-a".to_string(),
+            session_id: session_a.id.clone(),
+            mission_id: Some(mission_a.id.clone()),
+            status: "queued".to_string(),
+            error: None,
+            result: None,
+            evidence_refs_json: "[]".to_string(),
+            pending_approvals_json: "[]".to_string(),
+            delegate_runs_json: "[]".to_string(),
+            started_at: 5,
+            updated_at: 5,
+            finished_at: None,
+        };
+        store.put_run(&run_b).expect("put run b");
+        store.put_run(&run_a).expect("put run a");
+
+        let job_b = JobRecord {
+            id: "job-b".to_string(),
+            mission_id: mission_b.id.clone(),
+            run_id: Some(run_b.id.clone()),
+            parent_job_id: None,
+            kind: "mission_turn".to_string(),
+            status: "queued".to_string(),
+            input_json: Some(
+                serde_json::to_string(&JobExecutionInput::MissionTurn {
+                    mission_id: mission_b.id.clone(),
+                    goal: "second".to_string(),
+                })
+                .expect("serialize input b"),
+            ),
+            result_json: None,
+            error: None,
+            created_at: 4,
+            updated_at: 4,
+            started_at: None,
+            finished_at: None,
+        };
+        let job_a = JobRecord {
+            id: "job-a".to_string(),
+            mission_id: mission_a.id.clone(),
+            run_id: Some(run_a.id.clone()),
+            parent_job_id: None,
+            kind: "mission_turn".to_string(),
+            status: "queued".to_string(),
+            input_json: Some(
+                serde_json::to_string(&JobExecutionInput::MissionTurn {
+                    mission_id: mission_a.id.clone(),
+                    goal: "first".to_string(),
+                })
+                .expect("serialize input a"),
+            ),
+            result_json: None,
+            error: None,
+            created_at: 4,
+            updated_at: 4,
+            started_at: None,
+            finished_at: None,
+        };
+        store.put_job(&job_b).expect("put job b");
+        store.put_job(&job_a).expect("put job a");
+
+        let sessions = store.list_sessions().expect("list sessions");
+        let missions = store.list_missions().expect("list missions");
+        let jobs = store.list_jobs().expect("list jobs");
+        let runs = store.list_runs().expect("list runs");
+
+        assert_eq!(
+            sessions
+                .iter()
+                .map(|record| record.id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["session-a", "session-b"]
+        );
+        assert_eq!(
+            missions
+                .iter()
+                .map(|record| record.id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["mission-a", "mission-b"]
+        );
+        assert_eq!(
+            jobs.iter()
+                .map(|record| record.id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["job-a", "job-b"]
+        );
+        assert_eq!(
+            runs.iter()
+                .map(|record| record.id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["run-a", "run-b"]
+        );
+    }
+
+    #[test]
+    fn load_execution_state_returns_one_typed_snapshot_for_scheduler_inputs() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let scaffold = PersistenceScaffold::from_config(crate::AppConfig {
+            data_dir: temp.path().join("state-root"),
+            ..crate::AppConfig::default()
+        });
+        let store = super::PersistenceStore::open(&scaffold).expect("open store");
+
+        let session = SessionRecord {
+            id: "session-1".to_string(),
+            title: "Execution session".to_string(),
+            prompt_override: None,
+            settings_json: "{}".to_string(),
+            active_mission_id: None,
+            created_at: 1,
+            updated_at: 2,
+        };
+        let mission = MissionRecord {
+            id: "mission-1".to_string(),
+            session_id: session.id.clone(),
+            objective: "Tick the mission loop".to_string(),
+            status: "ready".to_string(),
+            execution_intent: "autonomous".to_string(),
+            schedule_json: DEFAULT_MISSION_SCHEDULE_JSON.to_string(),
+            acceptance_json: DEFAULT_MISSION_ACCEPTANCE_JSON.to_string(),
+            created_at: 2,
+            updated_at: 3,
+            completed_at: None,
+        };
+        let job = JobRecord {
+            id: "job-1".to_string(),
+            mission_id: mission.id.clone(),
+            run_id: None,
+            parent_job_id: None,
+            kind: "mission_turn".to_string(),
+            status: "queued".to_string(),
+            input_json: Some(
+                serde_json::to_string(&JobExecutionInput::MissionTurn {
+                    mission_id: mission.id.clone(),
+                    goal: "advance".to_string(),
+                })
+                .expect("serialize mission turn"),
+            ),
+            result_json: None,
+            error: None,
+            created_at: 4,
+            updated_at: 4,
+            started_at: None,
+            finished_at: None,
+        };
+        let run = RunRecord {
+            id: "run-1".to_string(),
+            session_id: session.id.clone(),
+            mission_id: Some(mission.id.clone()),
+            status: "queued".to_string(),
+            error: None,
+            result: None,
+            evidence_refs_json: "[]".to_string(),
+            pending_approvals_json: "[]".to_string(),
+            delegate_runs_json: "[]".to_string(),
+            started_at: 5,
+            updated_at: 5,
+            finished_at: None,
+        };
+
+        store.put_session(&session).expect("put session");
+        store.put_mission(&mission).expect("put mission");
+        store.put_job(&job).expect("put job");
+        store.put_run(&run).expect("put run");
+
+        let snapshot = store.load_execution_state().expect("load execution state");
+
+        assert_eq!(snapshot.sessions, vec![session]);
+        assert_eq!(snapshot.missions, vec![mission]);
+        assert_eq!(snapshot.jobs, vec![job]);
+        assert_eq!(snapshot.runs, vec![run]);
     }
 
     #[test]

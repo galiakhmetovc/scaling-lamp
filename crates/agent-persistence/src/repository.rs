@@ -6,11 +6,13 @@ use crate::store::StoreError;
 pub trait SessionRepository {
     fn put_session(&self, record: &SessionRecord) -> Result<(), StoreError>;
     fn get_session(&self, id: &str) -> Result<Option<SessionRecord>, StoreError>;
+    fn list_sessions(&self) -> Result<Vec<SessionRecord>, StoreError>;
 }
 
 pub trait MissionRepository {
     fn put_mission(&self, record: &MissionRecord) -> Result<(), StoreError>;
     fn get_mission(&self, id: &str) -> Result<Option<MissionRecord>, StoreError>;
+    fn list_missions(&self) -> Result<Vec<MissionRecord>, StoreError>;
 }
 
 pub trait RunRepository {
@@ -22,6 +24,7 @@ pub trait RunRepository {
 pub trait JobRepository {
     fn put_job(&self, record: &JobRecord) -> Result<(), StoreError>;
     fn get_job(&self, id: &str) -> Result<Option<JobRecord>, StoreError>;
+    fn list_jobs(&self) -> Result<Vec<JobRecord>, StoreError>;
 }
 
 pub trait TranscriptRepository {
