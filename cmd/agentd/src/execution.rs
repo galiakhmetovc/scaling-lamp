@@ -11,7 +11,8 @@ use agent_runtime::mission::{
 use agent_runtime::permission::{PermissionAction, PermissionConfig};
 use agent_runtime::provider::{
     ProviderContinuationMessage, ProviderDriver, ProviderError, ProviderMessage, ProviderRequest,
-    ProviderResponse, ProviderStreamMode, ProviderToolDefinition, ProviderToolOutput,
+    ProviderResponse, ProviderStreamMode, ProviderToolCall, ProviderToolDefinition,
+    ProviderToolOutput,
 };
 use agent_runtime::run::{
     ActiveProcess, ApprovalRequest, PendingToolApproval, ProviderLoopState, RunEngine, RunSnapshot,
@@ -21,7 +22,9 @@ use agent_runtime::scheduler::{
     MissionVerificationSummary, SupervisorAction, SupervisorLoop, SupervisorTickInput,
 };
 use agent_runtime::session::{MessageRole, TranscriptEntry};
-use agent_runtime::tool::{ProcessKind, ToolCall, ToolCatalog, ToolError, ToolOutput, ToolRuntime};
+use agent_runtime::tool::{
+    ProcessKind, ToolCall, ToolCatalog, ToolDefinition, ToolError, ToolOutput, ToolRuntime,
+};
 use agent_runtime::verification::EvidenceBundle;
 use agent_runtime::workspace::WorkspaceRef;
 use std::collections::BTreeMap;
@@ -126,6 +129,205 @@ struct ToolExecutionContext<'a> {
     workspace_root: Option<&'a Path>,
     evidence: Option<&'a EvidenceBundle>,
     now: i64,
+}
+
+#[derive(Debug, Clone)]
+struct ProviderLoopCursor {
+    round: usize,
+    pending_tool_outputs: Vec<ProviderToolOutput>,
+    continuation_messages: Vec<ProviderContinuationMessage>,
+    previous_response_id: Option<String>,
+    seen_tool_signatures: BTreeMap<String, usize>,
+    supports_previous_response_id: bool,
+    supports_streaming: bool,
+}
+
+impl ProviderLoopCursor {
+    fn new(provider: &dyn ProviderDriver, initial_loop_state: Option<ProviderLoopState>) -> Self {
+        let supports_previous_response_id = provider
+            .descriptor()
+            .capabilities
+            .supports_previous_response_id;
+        let supports_streaming = provider.descriptor().capabilities.supports_streaming;
+        let round = initial_loop_state
+            .as_ref()
+            .map(|state| state.next_round)
+            .unwrap_or(0);
+        let pending_tool_outputs = initial_loop_state
+            .as_ref()
+            .map(|state| state.pending_tool_outputs.clone())
+            .unwrap_or_default();
+        let continuation_messages = initial_loop_state
+            .as_ref()
+            .map(|state| state.continuation_messages.clone())
+            .unwrap_or_default();
+        let previous_response_id = initial_loop_state
+            .as_ref()
+            .and_then(|state| state.previous_response_id.clone());
+        let seen_tool_signatures = initial_loop_state
+            .as_ref()
+            .map(|state| {
+                state
+                    .seen_tool_signatures
+                    .iter()
+                    .enumerate()
+                    .map(|(index, signature)| (signature.clone(), index))
+                    .collect::<BTreeMap<_, _>>()
+            })
+            .unwrap_or_default();
+
+        Self {
+            round,
+            pending_tool_outputs,
+            continuation_messages,
+            previous_response_id,
+            seen_tool_signatures,
+            supports_previous_response_id,
+            supports_streaming,
+        }
+    }
+
+    fn has_round_budget(&self) -> bool {
+        self.round < MAX_PROVIDER_TOOL_ROUNDS
+    }
+
+    fn stream_mode(&self, has_observer: bool) -> ProviderStreamMode {
+        if has_observer && self.supports_streaming {
+            ProviderStreamMode::Enabled
+        } else {
+            ProviderStreamMode::Disabled
+        }
+    }
+
+    fn build_request(
+        &self,
+        base_messages: &[ProviderMessage],
+        instructions: Option<&str>,
+        tools: &[ProviderToolDefinition],
+        stream: ProviderStreamMode,
+    ) -> ProviderRequest {
+        ProviderRequest {
+            model: None,
+            instructions: instructions.map(str::to_string),
+            messages: if self.supports_previous_response_id && self.previous_response_id.is_some() {
+                Vec::new()
+            } else {
+                base_messages.to_vec()
+            },
+            previous_response_id: if self.supports_previous_response_id {
+                self.previous_response_id.clone()
+            } else {
+                None
+            },
+            continuation_messages: self.continuation_messages.clone(),
+            tools: tools.to_vec(),
+            tool_outputs: if self.supports_previous_response_id {
+                self.pending_tool_outputs.clone()
+            } else {
+                Vec::new()
+            },
+            max_output_tokens: Some(512),
+            stream,
+        }
+    }
+
+    fn remember_tool_signature(
+        &mut self,
+        response: &ProviderResponse,
+    ) -> Result<(), ExecutionError> {
+        let signature = response
+            .tool_calls
+            .iter()
+            .map(|tool_call| format!("{}:{}", tool_call.name, tool_call.arguments))
+            .collect::<Vec<_>>()
+            .join("|");
+        if let Some(first_seen_round) = self
+            .seen_tool_signatures
+            .insert(signature.clone(), self.round)
+        {
+            return Err(ExecutionError::ProviderLoop {
+                reason: format!(
+                    "provider repeated tool-call signature from round {}: {}",
+                    first_seen_round + 1,
+                    signature
+                ),
+            });
+        }
+        Ok(())
+    }
+
+    fn note_assistant_tool_calls(&mut self, response: &ProviderResponse) {
+        if !self.supports_previous_response_id {
+            self.continuation_messages
+                .push(ProviderContinuationMessage::AssistantToolCalls {
+                    tool_calls: response.tool_calls.clone(),
+                });
+        }
+    }
+
+    fn begin_tool_round(&mut self) {
+        if self.supports_previous_response_id {
+            self.pending_tool_outputs.clear();
+        }
+    }
+
+    fn record_tool_output(&mut self, tool_call_id: &str, model_output: String) {
+        if self.supports_previous_response_id {
+            self.pending_tool_outputs.push(ProviderToolOutput {
+                call_id: tool_call_id.to_string(),
+                output: model_output,
+            });
+        } else {
+            self.continuation_messages
+                .push(ProviderContinuationMessage::ToolResult {
+                    tool_call_id: tool_call_id.to_string(),
+                    content: model_output,
+                });
+        }
+    }
+
+    fn pending_approval_state(
+        &self,
+        response: &ProviderResponse,
+        tool_call: &ProviderToolCall,
+        parsed: &ToolCall,
+        approval_id: &str,
+    ) -> ProviderLoopState {
+        ProviderLoopState {
+            next_round: self.round + 1,
+            previous_response_id: self
+                .supports_previous_response_id
+                .then(|| response.response_id.clone()),
+            continuation_messages: self.continuation_messages.clone(),
+            pending_tool_outputs: self.pending_tool_outputs.clone(),
+            seen_tool_signatures: self.seen_tool_signatures.keys().cloned().collect(),
+            pending_approval: Some(PendingToolApproval::new(
+                approval_id.to_string(),
+                tool_call.call_id.clone(),
+                parsed.name().as_str().to_string(),
+                tool_call.arguments.clone(),
+            )),
+        }
+    }
+
+    fn advance_after_response(&mut self, response: &ProviderResponse) {
+        if self.supports_previous_response_id {
+            self.previous_response_id = Some(response.response_id.clone());
+        } else {
+            self.previous_response_id = None;
+            self.pending_tool_outputs.clear();
+        }
+        self.round += 1;
+    }
+
+    fn exhausted_rounds_error(&self) -> ExecutionError {
+        ExecutionError::ProviderLoop {
+            reason: format!(
+                "provider exceeded {} tool-calling rounds without producing a final answer",
+                MAX_PROVIDER_TOOL_ROUNDS
+            ),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -285,6 +487,96 @@ impl ExecutionService {
         }
     }
 
+    fn request_provider_response(
+        &self,
+        provider: &dyn ProviderDriver,
+        request: &ProviderRequest,
+        observer: &mut Option<&mut dyn FnMut(ChatExecutionEvent)>,
+    ) -> Result<ProviderResponse, ExecutionError> {
+        if matches!(request.stream, ProviderStreamMode::Enabled) {
+            let mut stream = provider.stream(request).map_err(ExecutionError::Provider)?;
+            let mut final_response = None;
+            while let Some(event) = stream.next_event().map_err(ExecutionError::Provider)? {
+                match event {
+                    agent_runtime::provider::ProviderStreamEvent::TextDelta(delta) => {
+                        Self::emit_event(observer, ChatExecutionEvent::AssistantTextDelta(delta));
+                    }
+                    agent_runtime::provider::ProviderStreamEvent::Completed(response) => {
+                        final_response = Some(response);
+                        break;
+                    }
+                }
+            }
+            final_response.ok_or_else(|| ExecutionError::ProviderLoop {
+                reason: "provider stream ended without a final response".to_string(),
+            })
+        } else {
+            provider.complete(request).map_err(ExecutionError::Provider)
+        }
+    }
+
+    fn resolve_provider_tool_call<'a>(
+        &self,
+        catalog: &'a ToolCatalog,
+        tool_call: &ProviderToolCall,
+    ) -> Result<(ToolCall, &'a ToolDefinition), ExecutionError> {
+        let parsed = ToolCall::from_openai_function(&tool_call.name, &tool_call.arguments)
+            .map_err(|source| ExecutionError::ToolCallParse {
+                name: tool_call.name.clone(),
+                reason: source.to_string(),
+            })?;
+        let definition =
+            catalog
+                .definition_for_call(&parsed)
+                .ok_or_else(|| ExecutionError::ToolCallParse {
+                    name: tool_call.name.clone(),
+                    reason: "tool is not in the catalog".to_string(),
+                })?;
+        Ok((parsed, definition))
+    }
+
+    fn invoke_provider_tool_call(
+        &self,
+        run: &mut RunEngine,
+        tool_runtime: &mut ToolRuntime,
+        parsed: &ToolCall,
+        now: i64,
+        observer: &mut Option<&mut dyn FnMut(ChatExecutionEvent)>,
+    ) -> Result<String, ExecutionError> {
+        Self::emit_event(
+            observer,
+            ChatExecutionEvent::ToolStatus {
+                tool_name: parsed.name().as_str().to_string(),
+                status: ToolExecutionStatus::Running,
+            },
+        );
+        let output = match tool_runtime.invoke(parsed.clone()) {
+            Ok(output) => output,
+            Err(source) => {
+                Self::emit_event(
+                    observer,
+                    ChatExecutionEvent::ToolStatus {
+                        tool_name: parsed.name().as_str().to_string(),
+                        status: ToolExecutionStatus::Failed,
+                    },
+                );
+                return Err(ExecutionError::Tool(source));
+            }
+        };
+        let summary = output.summary();
+        let model_output = output.model_output();
+        run.record_tool_completion(summary, now)
+            .map_err(ExecutionError::RunTransition)?;
+        Self::emit_event(
+            observer,
+            ChatExecutionEvent::ToolStatus {
+                tool_name: parsed.name().as_str().to_string(),
+                status: ToolExecutionStatus::Completed,
+            },
+        );
+        Ok(model_output)
+    }
+
     #[allow(clippy::too_many_arguments)]
     fn execute_provider_turn_loop(
         &self,
@@ -300,96 +592,17 @@ impl ExecutionService {
         let base_messages = self.transcript_messages(store, session_id)?;
         let catalog = ToolCatalog::default();
         let tools = self.automatic_provider_tools(provider);
-        let mut pending_tool_outputs = initial_loop_state
-            .as_ref()
-            .map(|state| state.pending_tool_outputs.clone())
-            .unwrap_or_default();
-        let mut continuation_messages = initial_loop_state
-            .as_ref()
-            .map(|state| state.continuation_messages.clone())
-            .unwrap_or_default();
         let mut tool_runtime = ToolRuntime::new(self.workspace.clone());
-        let mut previous_response_id = initial_loop_state
-            .as_ref()
-            .and_then(|state| state.previous_response_id.clone());
-        let mut seen_tool_signatures = initial_loop_state
-            .as_ref()
-            .map(|state| {
-                state
-                    .seen_tool_signatures
-                    .iter()
-                    .enumerate()
-                    .map(|(index, signature)| (signature.clone(), index))
-                    .collect::<BTreeMap<_, _>>()
-            })
-            .unwrap_or_default();
-        let starting_round = initial_loop_state
-            .as_ref()
-            .map(|state| state.next_round)
-            .unwrap_or(0);
-        let supports_previous_response_id = provider
-            .descriptor()
-            .capabilities
-            .supports_previous_response_id;
-        let supports_streaming = provider.descriptor().capabilities.supports_streaming;
+        let mut cursor = ProviderLoopCursor::new(provider, initial_loop_state);
 
-        for round in starting_round..MAX_PROVIDER_TOOL_ROUNDS {
-            let enable_streaming = observer.is_some() && supports_streaming;
-            let request = ProviderRequest {
-                model: None,
-                instructions: instructions.clone(),
-                messages: if supports_previous_response_id && previous_response_id.is_some() {
-                    Vec::new()
-                } else {
-                    base_messages.clone()
-                },
-                previous_response_id: if supports_previous_response_id {
-                    previous_response_id.clone()
-                } else {
-                    None
-                },
-                continuation_messages: continuation_messages.clone(),
-                tools: tools.clone(),
-                tool_outputs: if supports_previous_response_id {
-                    pending_tool_outputs.clone()
-                } else {
-                    Vec::new()
-                },
-                max_output_tokens: Some(512),
-                stream: if enable_streaming {
-                    ProviderStreamMode::Enabled
-                } else {
-                    ProviderStreamMode::Disabled
-                },
-            };
-
-            let response = if enable_streaming {
-                let mut stream = provider
-                    .stream(&request)
-                    .map_err(ExecutionError::Provider)?;
-                let mut final_response = None;
-                while let Some(event) = stream.next_event().map_err(ExecutionError::Provider)? {
-                    match event {
-                        agent_runtime::provider::ProviderStreamEvent::TextDelta(delta) => {
-                            Self::emit_event(
-                                observer,
-                                ChatExecutionEvent::AssistantTextDelta(delta),
-                            );
-                        }
-                        agent_runtime::provider::ProviderStreamEvent::Completed(response) => {
-                            final_response = Some(response);
-                            break;
-                        }
-                    }
-                }
-                final_response.ok_or_else(|| ExecutionError::ProviderLoop {
-                    reason: "provider stream ended without a final response".to_string(),
-                })?
-            } else {
-                provider
-                    .complete(&request)
-                    .map_err(ExecutionError::Provider)?
-            };
+        while cursor.has_round_budget() {
+            let request = cursor.build_request(
+                &base_messages,
+                instructions.as_deref(),
+                &tools,
+                cursor.stream_mode(observer.is_some()),
+            );
+            let response = self.request_provider_response(provider, &request, observer)?;
             self.apply_provider_response(run, &response, now)?;
             self.persist_run(store, run)?;
 
@@ -397,41 +610,11 @@ impl ExecutionService {
                 return Ok(response);
             }
 
-            let signature = response
-                .tool_calls
-                .iter()
-                .map(|tool_call| format!("{}:{}", tool_call.name, tool_call.arguments))
-                .collect::<Vec<_>>()
-                .join("|");
-            if let Some(first_seen_round) = seen_tool_signatures.insert(signature.clone(), round) {
-                return Err(ExecutionError::ProviderLoop {
-                    reason: format!(
-                        "provider repeated tool-call signature from round {}: {}",
-                        first_seen_round + 1,
-                        signature
-                    ),
-                });
-            }
-
-            if !supports_previous_response_id {
-                continuation_messages.push(ProviderContinuationMessage::AssistantToolCalls {
-                    tool_calls: response.tool_calls.clone(),
-                });
-            }
-
-            let mut next_tool_outputs = Vec::new();
+            cursor.remember_tool_signature(&response)?;
+            cursor.note_assistant_tool_calls(&response);
+            cursor.begin_tool_round();
             for tool_call in &response.tool_calls {
-                let parsed = ToolCall::from_openai_function(&tool_call.name, &tool_call.arguments)
-                    .map_err(|source| ExecutionError::ToolCallParse {
-                        name: tool_call.name.clone(),
-                        reason: source.to_string(),
-                    })?;
-                let definition = catalog.definition_for_call(&parsed).ok_or_else(|| {
-                    ExecutionError::ToolCallParse {
-                        name: tool_call.name.clone(),
-                        reason: "tool is not in the catalog".to_string(),
-                    }
-                })?;
+                let (parsed, definition) = self.resolve_provider_tool_call(&catalog, tool_call)?;
                 Self::emit_event(
                     observer,
                     ChatExecutionEvent::ToolStatus {
@@ -480,6 +663,12 @@ impl ExecutionService {
                             parsed.summary(),
                             permission.reason
                         );
+                        let approval_state = cursor.pending_approval_state(
+                            &response,
+                            tool_call,
+                            &parsed,
+                            &approval_id,
+                        );
                         run.wait_for_approval(
                             ApprovalRequest::new(
                                 approval_id.clone(),
@@ -490,27 +679,8 @@ impl ExecutionService {
                             now,
                         )
                         .map_err(ExecutionError::RunTransition)?;
-                        run.set_provider_loop_state(
-                            ProviderLoopState {
-                                next_round: round + 1,
-                                previous_response_id: supports_previous_response_id
-                                    .then(|| response.response_id.clone()),
-                                continuation_messages: continuation_messages.clone(),
-                                pending_tool_outputs: next_tool_outputs.clone(),
-                                seen_tool_signatures: seen_tool_signatures
-                                    .keys()
-                                    .cloned()
-                                    .collect(),
-                                pending_approval: Some(PendingToolApproval::new(
-                                    approval_id.clone(),
-                                    tool_call.call_id.clone(),
-                                    tool_call.name.clone(),
-                                    tool_call.arguments.clone(),
-                                )),
-                            },
-                            now,
-                        )
-                        .map_err(ExecutionError::RunTransition)?;
+                        run.set_provider_loop_state(approval_state, now)
+                            .map_err(ExecutionError::RunTransition)?;
                         self.persist_run(store, run)?;
                         return Err(ExecutionError::ApprovalRequired {
                             tool: parsed.name().as_str().to_string(),
@@ -520,66 +690,16 @@ impl ExecutionService {
                     }
                 }
 
-                Self::emit_event(
-                    observer,
-                    ChatExecutionEvent::ToolStatus {
-                        tool_name: parsed.name().as_str().to_string(),
-                        status: ToolExecutionStatus::Running,
-                    },
-                );
-                let output = match tool_runtime.invoke(parsed.clone()) {
-                    Ok(output) => output,
-                    Err(source) => {
-                        Self::emit_event(
-                            observer,
-                            ChatExecutionEvent::ToolStatus {
-                                tool_name: parsed.name().as_str().to_string(),
-                                status: ToolExecutionStatus::Failed,
-                            },
-                        );
-                        return Err(ExecutionError::Tool(source));
-                    }
-                };
-                let summary = output.summary();
-                let model_output = output.model_output();
-                run.record_tool_completion(summary, now)
-                    .map_err(ExecutionError::RunTransition)?;
-                Self::emit_event(
-                    observer,
-                    ChatExecutionEvent::ToolStatus {
-                        tool_name: parsed.name().as_str().to_string(),
-                        status: ToolExecutionStatus::Completed,
-                    },
-                );
-                if supports_previous_response_id {
-                    next_tool_outputs.push(ProviderToolOutput {
-                        call_id: tool_call.call_id.clone(),
-                        output: model_output,
-                    });
-                } else {
-                    continuation_messages.push(ProviderContinuationMessage::ToolResult {
-                        tool_call_id: tool_call.call_id.clone(),
-                        content: model_output,
-                    });
-                }
+                let model_output =
+                    self.invoke_provider_tool_call(run, &mut tool_runtime, &parsed, now, observer)?;
+                cursor.record_tool_output(&tool_call.call_id, model_output);
             }
 
-            if supports_previous_response_id {
-                previous_response_id = Some(response.response_id.clone());
-                pending_tool_outputs = next_tool_outputs;
-            } else {
-                previous_response_id = None;
-                pending_tool_outputs.clear();
-            }
+            cursor.advance_after_response(&response);
             self.persist_run(store, run)?;
         }
 
-        Err(ExecutionError::ProviderLoop {
-            reason: format!(
-                "provider exceeded {} tool-calling rounds without producing a final answer",
-                MAX_PROVIDER_TOOL_ROUNDS
-            ),
-        })
+        Err(cursor.exhausted_rounds_error())
     }
 
     pub fn supervisor_tick(
@@ -1163,37 +1283,9 @@ impl ExecutionService {
                 .map_err(ExecutionError::Store)?;
         }
 
-        Self::emit_event(
-            observer,
-            ChatExecutionEvent::ToolStatus {
-                tool_name: parsed.name().as_str().to_string(),
-                status: ToolExecutionStatus::Running,
-            },
-        );
-        let output = match ToolRuntime::new(self.workspace.clone()).invoke(parsed.clone()) {
-            Ok(output) => output,
-            Err(source) => {
-                Self::emit_event(
-                    observer,
-                    ChatExecutionEvent::ToolStatus {
-                        tool_name: parsed.name().as_str().to_string(),
-                        status: ToolExecutionStatus::Failed,
-                    },
-                );
-                return Err(ExecutionError::Tool(source));
-            }
-        };
-        let summary = output.summary();
-        let model_output = output.model_output();
-        run.record_tool_completion(summary, now)
-            .map_err(ExecutionError::RunTransition)?;
-        Self::emit_event(
-            observer,
-            ChatExecutionEvent::ToolStatus {
-                tool_name: parsed.name().as_str().to_string(),
-                status: ToolExecutionStatus::Completed,
-            },
-        );
+        let mut tool_runtime = ToolRuntime::new(self.workspace.clone());
+        let model_output =
+            self.invoke_provider_tool_call(&mut run, &mut tool_runtime, &parsed, now, observer)?;
 
         let mut resumed_loop_state = loop_state;
         resumed_loop_state.pending_approval = None;

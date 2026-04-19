@@ -1,6 +1,4 @@
-mod bootstrap;
-mod cli;
-mod execution;
+use agentd::bootstrap;
 
 fn main() -> Result<(), bootstrap::BootstrapError> {
     let app = bootstrap::build()?;
