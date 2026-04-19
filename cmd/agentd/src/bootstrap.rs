@@ -83,6 +83,19 @@ impl App {
             .supervisor_tick(&store, now, verifications)
             .map_err(BootstrapError::Execution)
     }
+
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub fn execute_mission_turn_job(
+        &self,
+        job_id: &str,
+        now: i64,
+    ) -> Result<execution::MissionTurnExecutionReport, BootstrapError> {
+        let store = self.store()?;
+        let provider = self.provider_driver()?;
+        execution::ExecutionService::default()
+            .execute_mission_turn_job(&store, provider.as_ref(), job_id, now)
+            .map_err(BootstrapError::Execution)
+    }
 }
 
 impl fmt::Display for BootstrapError {
@@ -276,6 +289,7 @@ mod tests {
     use agent_persistence::{
         AppConfig, ConfigError, JobRecord, JobRepository, MissionRecord, MissionRepository,
         PersistenceStore, RunRecord, RunRepository, SessionRecord, SessionRepository,
+        TranscriptRepository,
     };
     use agent_runtime::mission::{JobSpec, MissionExecutionIntent, MissionSchedule, MissionStatus};
     use agent_runtime::provider::{ConfiguredProvider, ProviderKind};
@@ -962,6 +976,129 @@ mod tests {
             .expect("completed mission exists");
         assert_eq!(completed_mission.status, "completed");
         assert_eq!(completed_mission.completed_at, Some(90));
+    }
+
+    #[test]
+    fn execute_mission_turn_job_creates_a_run_calls_provider_and_persists_transcript() {
+        let (api_base, requests, handle) = spawn_json_server(
+            r#"{
+                "id":"resp_456",
+                "model":"gpt-5.4",
+                "output":[
+                    {
+                        "id":"msg_1",
+                        "type":"message",
+                        "status":"completed",
+                        "role":"assistant",
+                        "content":[
+                            {
+                                "type":"output_text",
+                                "text":"Mission result"
+                            }
+                        ]
+                    }
+                ],
+                "usage":{"input_tokens":15,"output_tokens":5,"total_tokens":20}
+            }"#,
+        );
+        let temp = tempfile::tempdir().expect("tempdir");
+        let app = build_from_config(AppConfig {
+            data_dir: temp.path().join("state-root"),
+            provider: ConfiguredProvider {
+                kind: ProviderKind::OpenAiResponses,
+                api_base: Some(format!("{api_base}/v1")),
+                api_key: Some("test-key".to_string()),
+                default_model: Some("gpt-5.4".to_string()),
+            },
+        })
+        .expect("build app");
+        let store = PersistenceStore::open(&app.persistence).expect("open store");
+
+        store
+            .put_session(&SessionRecord {
+                id: "session-turn".to_string(),
+                title: "Mission turn session".to_string(),
+                prompt_override: Some("Reply tersely.".to_string()),
+                settings_json: serde_json::to_string(&SessionSettings::default())
+                    .expect("serialize settings"),
+                active_mission_id: None,
+                created_at: 1,
+                updated_at: 1,
+            })
+            .expect("put session");
+        store
+            .put_mission(&MissionRecord {
+                id: "mission-turn".to_string(),
+                session_id: "session-turn".to_string(),
+                objective: "Ship one provider-backed mission turn".to_string(),
+                status: MissionStatus::Ready.as_str().to_string(),
+                execution_intent: MissionExecutionIntent::Autonomous.as_str().to_string(),
+                schedule_json: serde_json::to_string(&MissionSchedule::once())
+                    .expect("serialize schedule"),
+                acceptance_json: "[]".to_string(),
+                created_at: 2,
+                updated_at: 2,
+                completed_at: None,
+            })
+            .expect("put mission");
+        store
+            .put_job(
+                &JobRecord::try_from(&JobSpec::mission_turn(
+                    "job-turn",
+                    "mission-turn",
+                    None,
+                    None,
+                    "Draft a short mission update",
+                    3,
+                ))
+                .expect("job record"),
+            )
+            .expect("put job");
+
+        let report = app
+            .execute_mission_turn_job("job-turn", 10)
+            .expect("execute mission turn");
+        let raw_request = requests.recv().expect("raw request");
+        handle.join().expect("join server");
+
+        assert_eq!(report.run_id, "run-job-turn");
+        assert_eq!(report.response_id, "resp_456");
+        assert_eq!(report.output_text, "Mission result");
+
+        let run = store
+            .get_run("run-job-turn")
+            .expect("get run")
+            .expect("run exists");
+        assert_eq!(run.status, "completed");
+        assert_eq!(run.result.as_deref(), Some("Mission result"));
+
+        let job = store
+            .get_job("job-turn")
+            .expect("get job")
+            .expect("job exists");
+        assert_eq!(job.status, "completed");
+        assert_eq!(job.run_id.as_deref(), Some("run-job-turn"));
+        assert_eq!(job.finished_at, Some(10));
+
+        let mission = store
+            .get_mission("mission-turn")
+            .expect("get mission")
+            .expect("mission exists");
+        assert_eq!(mission.status, "running");
+
+        let transcripts = store
+            .list_transcripts_for_session("session-turn")
+            .expect("list transcripts");
+        assert_eq!(transcripts.len(), 2);
+        assert_eq!(transcripts[0].kind, "user");
+        assert_eq!(transcripts[0].content, "Draft a short mission update");
+        assert_eq!(transcripts[1].kind, "assistant");
+        assert_eq!(transcripts[1].content, "Mission result");
+
+        let normalized_request = raw_request.to_ascii_lowercase();
+        assert!(normalized_request.contains("/v1/responses"));
+        assert!(normalized_request.contains("\"instructions\":\"reply tersely.\""));
+        assert!(normalized_request.contains("\"text\":\"draft a short mission update\""));
     }
 
     fn spawn_json_server(body: &'static str) -> (String, Receiver<String>, thread::JoinHandle<()>) {

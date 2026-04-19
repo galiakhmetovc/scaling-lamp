@@ -2,13 +2,20 @@
 
 use agent_persistence::{
     JobRecord, JobRepository, MissionRecord, MissionRepository, PersistenceStore,
-    RecordConversionError, StoreError,
+    RecordConversionError, RunRecord, RunRepository, SessionRepository, StoreError,
+    TranscriptRecord, TranscriptRepository,
 };
-use agent_runtime::mission::{JobSpec, JobStatus, MissionSpec, MissionStatus};
-use agent_runtime::run::RunSnapshot;
+use agent_runtime::mission::{
+    JobExecutionInput, JobResult, JobSpec, JobStatus, MissionSpec, MissionStatus,
+};
+use agent_runtime::provider::{
+    ProviderDriver, ProviderError, ProviderMessage, ProviderRequest, ProviderStreamMode,
+};
+use agent_runtime::run::{RunEngine, RunSnapshot, RunTransitionError};
 use agent_runtime::scheduler::{
     MissionVerificationSummary, SupervisorAction, SupervisorLoop, SupervisorTickInput,
 };
+use agent_runtime::session::{MessageRole, TranscriptEntry};
 use std::collections::BTreeMap;
 use std::error::Error;
 use std::fmt;
@@ -24,6 +31,14 @@ pub struct SupervisorTickReport {
     pub budget_remaining: usize,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MissionTurnExecutionReport {
+    pub job_id: String,
+    pub run_id: String,
+    pub response_id: String,
+    pub output_text: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct ExecutionService {
     supervisor: SupervisorLoop,
@@ -33,7 +48,11 @@ pub struct ExecutionService {
 pub enum ExecutionError {
     MissingJob { id: String },
     MissingMission { id: String },
+    MissingSession { id: String },
+    UnsupportedJobInput { id: String, kind: String },
+    Provider(ProviderError),
     RecordConversion(RecordConversionError),
+    RunTransition(RunTransitionError),
     Store(StoreError),
 }
 
@@ -164,6 +183,187 @@ impl ExecutionService {
 
         Ok(report)
     }
+
+    pub fn execute_mission_turn_job(
+        &self,
+        store: &PersistenceStore,
+        provider: &dyn ProviderDriver,
+        job_id: &str,
+        now: i64,
+    ) -> Result<MissionTurnExecutionReport, ExecutionError> {
+        let mut job = JobSpec::try_from(
+            store
+                .get_job(job_id)
+                .map_err(ExecutionError::Store)?
+                .ok_or_else(|| ExecutionError::MissingJob {
+                    id: job_id.to_string(),
+                })?,
+        )
+        .map_err(ExecutionError::RecordConversion)?;
+        let mut mission = MissionSpec::try_from(
+            store
+                .get_mission(&job.mission_id)
+                .map_err(ExecutionError::Store)?
+                .ok_or_else(|| ExecutionError::MissingMission {
+                    id: job.mission_id.clone(),
+                })?,
+        )
+        .map_err(ExecutionError::RecordConversion)?;
+        let session = store
+            .get_session(&mission.session_id)
+            .map_err(ExecutionError::Store)?
+            .ok_or_else(|| ExecutionError::MissingSession {
+                id: mission.session_id.clone(),
+            })?;
+
+        let goal = match &job.input {
+            JobExecutionInput::MissionTurn { mission_id, goal } if mission_id == &mission.id => {
+                goal.clone()
+            }
+            _ => {
+                return Err(ExecutionError::UnsupportedJobInput {
+                    id: job.id.clone(),
+                    kind: job.kind.as_str().to_string(),
+                });
+            }
+        };
+
+        let run_id = job
+            .run_id
+            .clone()
+            .unwrap_or_else(|| format!("run-{}", job.id));
+        let mut run = RunEngine::new(
+            run_id.clone(),
+            session.id.clone(),
+            Some(mission.id.as_str()),
+            now,
+        );
+        run.start(now).map_err(ExecutionError::RunTransition)?;
+        store
+            .put_run(
+                &RunRecord::try_from(run.snapshot()).map_err(ExecutionError::RecordConversion)?,
+            )
+            .map_err(ExecutionError::Store)?;
+
+        job.status = JobStatus::Running;
+        job.run_id = Some(run_id.clone());
+        job.error = None;
+        job.updated_at = now;
+        if job.started_at.is_none() {
+            job.started_at = Some(now);
+        }
+        store
+            .put_job(&JobRecord::try_from(&job).map_err(ExecutionError::RecordConversion)?)
+            .map_err(ExecutionError::Store)?;
+
+        mission.status = MissionStatus::Running;
+        mission.updated_at = now;
+        store
+            .put_mission(
+                &MissionRecord::try_from(&mission).map_err(ExecutionError::RecordConversion)?,
+            )
+            .map_err(ExecutionError::Store)?;
+
+        let user_entry = TranscriptEntry::user(
+            format!("transcript-{}-01-user", job.id),
+            session.id.clone(),
+            Some(run_id.as_str()),
+            &goal,
+            now,
+        );
+        store
+            .put_transcript(&TranscriptRecord::from(&user_entry))
+            .map_err(ExecutionError::Store)?;
+
+        let request = ProviderRequest {
+            model: None,
+            instructions: session.prompt_override.clone(),
+            messages: store
+                .list_transcripts_for_session(&session.id)
+                .map_err(ExecutionError::Store)?
+                .into_iter()
+                .map(|record| {
+                    let role = MessageRole::try_from(record.kind.as_str()).map_err(|_| {
+                        ExecutionError::RecordConversion(
+                            RecordConversionError::InvalidMessageRole {
+                                value: record.kind.clone(),
+                            },
+                        )
+                    })?;
+                    Ok(ProviderMessage {
+                        role,
+                        content: record.content,
+                    })
+                })
+                .collect::<Result<Vec<_>, _>>()?,
+            max_output_tokens: Some(512),
+            stream: ProviderStreamMode::Disabled,
+        };
+
+        let response = match provider.complete(&request) {
+            Ok(response) => response,
+            Err(source) => {
+                run.fail(source.to_string(), now)
+                    .map_err(ExecutionError::RunTransition)?;
+                store
+                    .put_run(
+                        &RunRecord::try_from(run.snapshot())
+                            .map_err(ExecutionError::RecordConversion)?,
+                    )
+                    .map_err(ExecutionError::Store)?;
+                job.status = JobStatus::Failed;
+                job.error = Some(source.to_string());
+                job.finished_at = Some(now);
+                job.updated_at = now;
+                store
+                    .put_job(&JobRecord::try_from(&job).map_err(ExecutionError::RecordConversion)?)
+                    .map_err(ExecutionError::Store)?;
+                return Err(ExecutionError::Provider(source));
+            }
+        };
+
+        run.begin_provider_stream(&response.response_id, &response.model, now)
+            .map_err(ExecutionError::RunTransition)?;
+        run.push_provider_text(&response.output_text, now)
+            .map_err(ExecutionError::RunTransition)?;
+        run.finish_provider_stream(now)
+            .map_err(ExecutionError::RunTransition)?;
+        run.complete(&response.output_text, now)
+            .map_err(ExecutionError::RunTransition)?;
+        store
+            .put_run(
+                &RunRecord::try_from(run.snapshot()).map_err(ExecutionError::RecordConversion)?,
+            )
+            .map_err(ExecutionError::Store)?;
+
+        let assistant_entry = TranscriptEntry::assistant(
+            format!("transcript-{}-02-assistant", job.id),
+            session.id,
+            Some(run_id.as_str()),
+            &response.output_text,
+            now,
+        );
+        store
+            .put_transcript(&TranscriptRecord::from(&assistant_entry))
+            .map_err(ExecutionError::Store)?;
+
+        job.status = JobStatus::Completed;
+        job.result = Some(JobResult::Summary {
+            outcome: response.output_text.clone(),
+        });
+        job.finished_at = Some(now);
+        job.updated_at = now;
+        store
+            .put_job(&JobRecord::try_from(&job).map_err(ExecutionError::RecordConversion)?)
+            .map_err(ExecutionError::Store)?;
+
+        Ok(MissionTurnExecutionReport {
+            job_id: job.id,
+            run_id,
+            response_id: response.response_id,
+            output_text: response.output_text,
+        })
+    }
 }
 
 fn touch_mission(
@@ -193,8 +393,21 @@ impl fmt::Display for ExecutionError {
             Self::MissingMission { id } => {
                 write!(formatter, "execution mission {id} was not found")
             }
+            Self::MissingSession { id } => {
+                write!(formatter, "execution session {id} was not found")
+            }
+            Self::UnsupportedJobInput { id, kind } => {
+                write!(
+                    formatter,
+                    "execution job {id} has unsupported input for kind {kind}"
+                )
+            }
+            Self::Provider(source) => write!(formatter, "execution provider error: {source}"),
             Self::RecordConversion(source) => {
                 write!(formatter, "execution record conversion error: {source}")
+            }
+            Self::RunTransition(source) => {
+                write!(formatter, "execution run transition error: {source}")
             }
             Self::Store(source) => write!(formatter, "execution store error: {source}"),
         }
@@ -204,9 +417,14 @@ impl fmt::Display for ExecutionError {
 impl Error for ExecutionError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
+            Self::Provider(source) => Some(source),
             Self::RecordConversion(source) => Some(source),
+            Self::RunTransition(source) => Some(source),
             Self::Store(source) => Some(source),
-            Self::MissingJob { .. } | Self::MissingMission { .. } => None,
+            Self::MissingJob { .. }
+            | Self::MissingMission { .. }
+            | Self::MissingSession { .. }
+            | Self::UnsupportedJobInput { .. } => None,
         }
     }
 }
