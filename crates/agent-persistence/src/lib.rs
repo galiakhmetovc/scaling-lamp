@@ -7,7 +7,8 @@ pub mod store;
 
 pub use config::{AppConfig, ConfigEnv, ConfigError};
 pub use records::{
-    ArtifactRecord, JobRecord, MissionRecord, RunRecord, SessionRecord, TranscriptRecord,
+    ArtifactRecord, JobRecord, MissionRecord, RecordConversionError, RunRecord, SessionRecord,
+    TranscriptRecord,
 };
 pub use repository::{
     ArtifactRepository, JobRepository, MissionRepository, RunRepository, SessionRepository,

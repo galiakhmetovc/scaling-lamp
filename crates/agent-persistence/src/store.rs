@@ -64,6 +64,17 @@ pub struct PersistenceStore {
     connection: Connection,
 }
 
+type TranscriptRow = (
+    String,
+    String,
+    Option<String>,
+    String,
+    String,
+    i64,
+    String,
+    i64,
+);
+
 impl fmt::Display for StoreError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -158,6 +169,31 @@ impl PersistenceStore {
             &self.layout.artifacts_dir,
         )?;
         Ok(())
+    }
+
+    fn hydrate_transcript_record(
+        &self,
+        row: TranscriptRow,
+    ) -> Result<TranscriptRecord, StoreError> {
+        let (id, session_id, run_id, kind, storage_key, byte_len, sha256, created_at) = row;
+        let path = self.layout.transcripts_dir.join(storage_key);
+        let content = read_string_payload(&path)?;
+        validate_integrity(
+            &path,
+            content.len() as u64,
+            content.as_bytes(),
+            byte_len as u64,
+            &sha256,
+        )?;
+
+        Ok(TranscriptRecord {
+            id,
+            session_id,
+            run_id,
+            kind,
+            content,
+            created_at,
+        })
     }
 }
 
@@ -446,28 +482,39 @@ impl TranscriptRepository for PersistenceStore {
             .optional()?;
 
         match row {
-            Some((id, session_id, run_id, kind, storage_key, byte_len, sha256, created_at)) => {
-                let path = self.layout.transcripts_dir.join(storage_key);
-                let content = read_string_payload(&path)?;
-                validate_integrity(
-                    &path,
-                    content.len() as u64,
-                    content.as_bytes(),
-                    byte_len as u64,
-                    &sha256,
-                )?;
-
-                Ok(Some(TranscriptRecord {
-                    id,
-                    session_id,
-                    run_id,
-                    kind,
-                    content,
-                    created_at,
-                }))
-            }
+            Some(row) => Ok(Some(self.hydrate_transcript_record(row)?)),
             None => Ok(None),
         }
+    }
+
+    fn list_transcripts_for_session(
+        &self,
+        session_id: &str,
+    ) -> Result<Vec<TranscriptRecord>, StoreError> {
+        let mut statement = self.connection.prepare(
+            "SELECT id, session_id, run_id, kind, storage_key, byte_len, sha256, created_at
+             FROM transcripts
+             WHERE session_id = ?1
+             ORDER BY created_at ASC, id ASC",
+        )?;
+        let mut rows = statement.query([session_id])?;
+        let mut transcripts = Vec::new();
+
+        while let Some(row) = rows.next()? {
+            let row: TranscriptRow = (
+                row.get(0)?,
+                row.get(1)?,
+                row.get(2)?,
+                row.get(3)?,
+                row.get(4)?,
+                row.get(5)?,
+                row.get(6)?,
+                row.get(7)?,
+            );
+            transcripts.push(self.hydrate_transcript_record(row)?);
+        }
+
+        Ok(transcripts)
     }
 }
 
@@ -1167,6 +1214,19 @@ mod tests {
             Some(transcript)
         );
         assert_eq!(
+            reopened
+                .list_transcripts_for_session("session-1")
+                .expect("list transcript history"),
+            vec![TranscriptRecord {
+                id: "transcript-1".to_string(),
+                session_id: "session-1".to_string(),
+                run_id: Some("run-1".to_string()),
+                kind: "user".to_string(),
+                content: "build the persistence layer".to_string(),
+                created_at: 6,
+            }]
+        );
+        assert_eq!(
             reopened.get_artifact(&artifact.id).expect("get artifact"),
             Some(artifact)
         );
@@ -1208,6 +1268,69 @@ mod tests {
             store.put_artifact(&artifact),
             Err(super::StoreError::InvalidIdentifier { .. })
         ));
+    }
+
+    #[test]
+    fn list_transcripts_for_session_orders_by_timestamp_and_id() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let scaffold = PersistenceScaffold::from_config(crate::AppConfig {
+            data_dir: temp.path().join("state-root"),
+        });
+        let store = super::PersistenceStore::open(&scaffold).expect("open store");
+
+        let session = SessionRecord {
+            id: "session-1".to_string(),
+            title: "Boot mission".to_string(),
+            prompt_override: None,
+            settings_json: "{\"model\":\"gpt-5.4\"}".to_string(),
+            active_mission_id: None,
+            created_at: 1,
+            updated_at: 1,
+        };
+        store.put_session(&session).expect("store session");
+
+        store
+            .put_transcript(&TranscriptRecord {
+                id: "transcript-b".to_string(),
+                session_id: session.id.clone(),
+                run_id: None,
+                kind: "assistant".to_string(),
+                content: "second".to_string(),
+                created_at: 2,
+            })
+            .expect("store transcript b");
+        store
+            .put_transcript(&TranscriptRecord {
+                id: "transcript-a".to_string(),
+                session_id: session.id.clone(),
+                run_id: None,
+                kind: "user".to_string(),
+                content: "first".to_string(),
+                created_at: 2,
+            })
+            .expect("store transcript a");
+        store
+            .put_transcript(&TranscriptRecord {
+                id: "transcript-c".to_string(),
+                session_id: session.id.clone(),
+                run_id: None,
+                kind: "tool".to_string(),
+                content: "third".to_string(),
+                created_at: 3,
+            })
+            .expect("store transcript c");
+
+        let history = store
+            .list_transcripts_for_session(&session.id)
+            .expect("list transcripts");
+
+        assert_eq!(
+            history
+                .iter()
+                .map(|record| record.id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["transcript-a", "transcript-b", "transcript-c"]
+        );
     }
 
     #[test]

@@ -26,6 +26,10 @@ pub trait JobRepository {
 pub trait TranscriptRepository {
     fn put_transcript(&self, record: &TranscriptRecord) -> Result<(), StoreError>;
     fn get_transcript(&self, id: &str) -> Result<Option<TranscriptRecord>, StoreError>;
+    fn list_transcripts_for_session(
+        &self,
+        session_id: &str,
+    ) -> Result<Vec<TranscriptRecord>, StoreError>;
 }
 
 pub trait ArtifactRepository {
