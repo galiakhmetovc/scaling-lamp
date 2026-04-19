@@ -71,6 +71,8 @@ Useful commands:
 
 ```bash
 cargo run -p agentd -- status
+cargo run -p agentd -- chat show <session-id>
+cargo run -p agentd -- chat send <session-id> "<message>"
 cargo run -p agentd -- mission tick
 cargo run -p agentd -- mission tick <unix-timestamp>
 cargo run -p agentd -- job execute <job-id>
@@ -88,6 +90,11 @@ The first autonomous operator path is now:
 1. `mission tick` to queue due mission-turn jobs
 2. `job execute <job-id>` to run one mission-turn job through the configured provider
 
+The normal chat operator path is now:
+
+1. `chat show <session-id>` to inspect transcript history
+2. `chat send <session-id> "<message>"` to execute one ordinary chat turn
+
 ## Autonomous Mission Smoke
 
 Minimal operator smoke for the first autonomous path:
@@ -103,6 +110,17 @@ cargo run -p agentd -- run show run-mission-smoke-mission-turn-<timestamp>
 
 If you need deterministic output for testing or demos, pass explicit unix
 timestamps to `mission tick` and `job execute`.
+
+## Chat Smoke
+
+Minimal operator smoke for the normal chat path:
+
+```bash
+cargo run -p agentd -- session create session-chat "Chat Session"
+cargo run -p agentd -- chat show session-chat
+cargo run -p agentd -- chat send session-chat "Hello chat"
+cargo run -p agentd -- chat show session-chat
+```
 
 ## Core Principles
 
