@@ -315,14 +315,16 @@ impl RunRepository for PersistenceStore {
     fn put_run(&self, record: &RunRecord) -> Result<(), StoreError> {
         self.connection.execute(
             "INSERT INTO runs (
-                id, session_id, mission_id, status, error, result, started_at, updated_at, finished_at
-             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+                id, session_id, mission_id, status, error, result, evidence_refs_json,
+                started_at, updated_at, finished_at
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
              ON CONFLICT(id) DO UPDATE SET
                 session_id = excluded.session_id,
                 mission_id = excluded.mission_id,
                 status = excluded.status,
                 error = excluded.error,
                 result = excluded.result,
+                evidence_refs_json = excluded.evidence_refs_json,
                 started_at = excluded.started_at,
                 updated_at = excluded.updated_at,
                 finished_at = excluded.finished_at",
@@ -333,6 +335,7 @@ impl RunRepository for PersistenceStore {
                 record.status,
                 record.error,
                 record.result,
+                record.evidence_refs_json,
                 record.started_at,
                 record.updated_at,
                 record.finished_at
@@ -344,7 +347,8 @@ impl RunRepository for PersistenceStore {
     fn get_run(&self, id: &str) -> Result<Option<RunRecord>, StoreError> {
         self.connection
             .query_row(
-                "SELECT id, session_id, mission_id, status, error, result, started_at, updated_at, finished_at
+                "SELECT id, session_id, mission_id, status, error, result, evidence_refs_json,
+                        started_at, updated_at, finished_at
                  FROM runs WHERE id = ?1",
                 [id],
                 |row| {
@@ -355,9 +359,10 @@ impl RunRepository for PersistenceStore {
                         status: row.get(3)?,
                         error: row.get(4)?,
                         result: row.get(5)?,
-                        started_at: row.get(6)?,
-                        updated_at: row.get(7)?,
-                        finished_at: row.get(8)?,
+                        evidence_refs_json: row.get(6)?,
+                        started_at: row.get(7)?,
+                        updated_at: row.get(8)?,
+                        finished_at: row.get(9)?,
                     })
                 },
             )
@@ -692,6 +697,7 @@ fn bootstrap_schema(connection: &Connection) -> Result<(), StoreError> {
              status TEXT NOT NULL,
              error TEXT,
              result TEXT,
+             evidence_refs_json TEXT NOT NULL,
              started_at INTEGER NOT NULL,
              updated_at INTEGER NOT NULL,
              finished_at INTEGER,
@@ -767,6 +773,7 @@ fn validate_schema(connection: &Connection) -> Result<(), StoreError> {
     validate_column(connection, "missions", "acceptance_json", true)?;
     validate_column(connection, "jobs", "mission_id", true)?;
     validate_column(connection, "sessions", "settings_json", true)?;
+    validate_column(connection, "runs", "evidence_refs_json", true)?;
     validate_column(connection, "runs", "result", false)?;
     validate_column(connection, "transcripts", "sha256", true)?;
     validate_column(connection, "artifacts", "session_id", true)?;
@@ -796,6 +803,12 @@ fn migrate_schema(connection: &Connection) -> Result<(), StoreError> {
         "missions",
         "schedule_json",
         "TEXT NOT NULL DEFAULT '{\"not_before\":null,\"interval_seconds\":null}'",
+    )?;
+    add_column_if_missing(
+        connection,
+        "runs",
+        "evidence_refs_json",
+        "TEXT NOT NULL DEFAULT '[]'",
     )?;
     add_column_if_missing(
         connection,
@@ -1356,6 +1369,7 @@ mod tests {
             status: "running".to_string(),
             error: None,
             result: None,
+            evidence_refs_json: "[\"bundle:bootstrap\"]".to_string(),
             started_at: 3,
             updated_at: 4,
             finished_at: None,
@@ -1590,6 +1604,7 @@ mod tests {
                 status: "running".to_string(),
                 error: None,
                 result: None,
+                evidence_refs_json: "[]".to_string(),
                 started_at: 3,
                 updated_at: 4,
                 finished_at: None,

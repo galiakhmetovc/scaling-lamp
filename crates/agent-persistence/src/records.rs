@@ -43,6 +43,7 @@ pub struct RunRecord {
     pub status: String,
     pub error: Option<String>,
     pub result: Option<String>,
+    pub evidence_refs_json: String,
     pub started_at: i64,
     pub updated_at: i64,
     pub finished_at: Option<i64>,
@@ -100,12 +101,14 @@ pub enum RecordConversionError {
     InvalidMissionStatus(MissionStatusParseError),
     MissingJobInput,
     InvalidPromptOverride(SessionError),
+    InvalidRunEvidenceRefs(serde_json::Error),
     InvalidRunStatus(RunStatusParseError),
     InvalidSessionSettings(serde_json::Error),
     SerializeJobInput(serde_json::Error),
     SerializeJobResult(serde_json::Error),
     SerializeMissionAcceptance(serde_json::Error),
     SerializeMissionSchedule(serde_json::Error),
+    SerializeRunEvidenceRefs(serde_json::Error),
     SerializeSessionSettings(serde_json::Error),
 }
 
@@ -223,6 +226,8 @@ impl TryFrom<&RunSnapshot> for RunRecord {
             status: snapshot.status.as_str().to_string(),
             error: snapshot.error.clone(),
             result: snapshot.result.clone(),
+            evidence_refs_json: serde_json::to_string(&snapshot.evidence_refs)
+                .map_err(RecordConversionError::SerializeRunEvidenceRefs)?,
             started_at: snapshot.started_at,
             updated_at: snapshot.updated_at,
             finished_at: snapshot.finished_at,
@@ -245,6 +250,8 @@ impl TryFrom<RunRecord> for RunSnapshot {
             finished_at: record.finished_at,
             error: record.error,
             result: record.result,
+            evidence_refs: serde_json::from_str(&record.evidence_refs_json)
+                .map_err(RecordConversionError::InvalidRunEvidenceRefs)?,
             ..RunSnapshot::default()
         })
     }
@@ -370,6 +377,9 @@ impl fmt::Display for RecordConversionError {
             Self::InvalidPromptOverride(source) => {
                 write!(formatter, "invalid prompt override: {source}")
             }
+            Self::InvalidRunEvidenceRefs(source) => {
+                write!(formatter, "invalid run evidence refs: {source}")
+            }
             Self::InvalidRunStatus(source) => {
                 write!(formatter, "invalid run status: {source}")
             }
@@ -391,6 +401,9 @@ impl fmt::Display for RecordConversionError {
             Self::SerializeMissionSchedule(source) => {
                 write!(formatter, "failed to serialize mission schedule: {source}")
             }
+            Self::SerializeRunEvidenceRefs(source) => {
+                write!(formatter, "failed to serialize run evidence refs: {source}")
+            }
             Self::SerializeSessionSettings(source) => {
                 write!(formatter, "failed to serialize session settings: {source}")
             }
@@ -411,12 +424,14 @@ impl Error for RecordConversionError {
             Self::InvalidMissionSchedule(source) => Some(source),
             Self::InvalidMissionStatus(source) => Some(source),
             Self::InvalidPromptOverride(source) => Some(source),
+            Self::InvalidRunEvidenceRefs(source) => Some(source),
             Self::InvalidRunStatus(source) => Some(source),
             Self::InvalidSessionSettings(source) => Some(source),
             Self::SerializeJobInput(source) => Some(source),
             Self::SerializeJobResult(source) => Some(source),
             Self::SerializeMissionAcceptance(source) => Some(source),
             Self::SerializeMissionSchedule(source) => Some(source),
+            Self::SerializeRunEvidenceRefs(source) => Some(source),
             Self::SerializeSessionSettings(source) => Some(source),
             Self::InvalidMessageRole { .. } | Self::MissingJobInput => None,
         }
@@ -433,6 +448,7 @@ mod tests {
     };
     use agent_runtime::run::{RunEngine, RunSnapshot};
     use agent_runtime::session::{MessageRole, PromptOverride, Session, TranscriptEntry};
+    use agent_runtime::verification::{CheckOutcome, EvidenceBundle};
 
     #[test]
     fn session_records_round_trip_with_domain_sessions() {
@@ -501,7 +517,15 @@ mod tests {
     #[test]
     fn run_records_round_trip_with_snapshot_core_fields() {
         let mut engine = RunEngine::new("run-1", "session-1", Some("mission-1"), 1);
+        let mut evidence = EvidenceBundle::new("bundle-1", "run-1", 2);
         engine.start(2).expect("start");
+        evidence
+            .record_check("fmt", CheckOutcome::Passed, Some("rustfmt clean"), 2)
+            .expect("record fmt");
+        evidence.add_artifact_ref("artifact:verification-report");
+        engine
+            .record_evidence(&evidence, 2)
+            .expect("record evidence");
         engine.complete("done", 3).expect("complete");
 
         let stored = RunRecord::try_from(engine.snapshot()).expect("snapshot to record");
@@ -513,6 +537,14 @@ mod tests {
         assert_eq!(restored.status.as_str(), "completed");
         assert_eq!(restored.result.as_deref(), Some("done"));
         assert_eq!(restored.finished_at, Some(3));
+        assert_eq!(
+            restored.evidence_refs,
+            vec![
+                "bundle:bundle-1".to_string(),
+                "check:fmt".to_string(),
+                "artifact:verification-report".to_string(),
+            ]
+        );
     }
 
     #[test]

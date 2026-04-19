@@ -1,3 +1,4 @@
+use crate::verification::EvidenceBundle;
 use std::error::Error;
 use std::fmt;
 
@@ -82,6 +83,7 @@ pub enum RunStepKind {
     ProviderStreamStarted,
     ProviderTextDelta,
     ProviderStreamFinished,
+    EvidenceRecorded,
     WaitingApproval,
     ApprovalResolved,
     WaitingProcess,
@@ -345,6 +347,28 @@ impl RunEngine {
         self.snapshot.status = RunStatus::WaitingApproval;
         self.touch(at);
         self.push_step(RunStepKind::WaitingApproval, detail, at);
+        Ok(())
+    }
+
+    pub fn record_evidence(
+        &mut self,
+        bundle: &EvidenceBundle,
+        at: i64,
+    ) -> Result<(), RunTransitionError> {
+        self.require_not_terminal("record_evidence")?;
+
+        for evidence_ref in bundle.refs() {
+            if !self.snapshot.evidence_refs.contains(&evidence_ref) {
+                self.snapshot.evidence_refs.push(evidence_ref);
+            }
+        }
+
+        self.touch(at);
+        self.push_step(
+            RunStepKind::EvidenceRecorded,
+            format!("recorded evidence bundle {}", bundle.id),
+            at,
+        );
         Ok(())
     }
 
@@ -617,6 +641,7 @@ impl Error for RunStatusParseError {}
 #[cfg(test)]
 mod tests {
     use super::{ActiveProcess, ApprovalRequest, DelegateRun, RunEngine, RunStatus, RunStepKind};
+    use crate::verification::{CheckOutcome, EvidenceBundle};
 
     #[test]
     fn happy_path_transitions_from_queued_to_completed() {
@@ -709,5 +734,36 @@ mod tests {
         assert_eq!(engine.snapshot().status, RunStatus::Cancelled);
         assert!(engine.resume(4).is_err());
         assert!(engine.complete("done", 5).is_err());
+    }
+
+    #[test]
+    fn evidence_bundles_attach_refs_without_duplicates() {
+        let mut engine = RunEngine::new("run-1", "session-1", Some("mission-1"), 1);
+        let mut bundle = EvidenceBundle::new("bundle-1", "run-1", 2);
+
+        bundle
+            .record_check("fmt", CheckOutcome::Passed, Some("rustfmt clean"), 3)
+            .expect("record fmt");
+        bundle.add_artifact_ref("artifact:verification-report");
+
+        engine.start(2).expect("start");
+        engine.record_evidence(&bundle, 4).expect("record evidence");
+        engine
+            .record_evidence(&bundle, 5)
+            .expect("record evidence again");
+
+        let snapshot = engine.snapshot();
+        assert_eq!(
+            snapshot.evidence_refs,
+            vec![
+                "bundle:bundle-1".to_string(),
+                "check:fmt".to_string(),
+                "artifact:verification-report".to_string(),
+            ]
+        );
+        assert_eq!(
+            snapshot.recent_steps.last().expect("evidence step").kind,
+            RunStepKind::EvidenceRecorded
+        );
     }
 }
