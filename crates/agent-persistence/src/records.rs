@@ -1,3 +1,4 @@
+use agent_runtime::context::ContextSummary;
 use agent_runtime::mission::{
     JobKind, JobKindParseError, JobResult, JobSpec, JobSpecValidationError, JobStatus,
     JobStatusParseError, MissionExecutionIntent, MissionExecutionIntentParseError, MissionSchedule,
@@ -80,6 +81,15 @@ pub struct TranscriptRecord {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ContextSummaryRecord {
+    pub session_id: String,
+    pub summary_text: String,
+    pub covered_message_count: i64,
+    pub summary_token_estimate: i64,
+    pub updated_at: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ArtifactRecord {
     pub id: String,
     pub session_id: String,
@@ -97,6 +107,8 @@ pub enum RecordConversionError {
     InvalidJobResult(serde_json::Error),
     InvalidJobSpec(JobSpecValidationError),
     InvalidJobStatus(JobStatusParseError),
+    InvalidContextSummaryCoveredMessageCount { value: i64 },
+    InvalidContextSummaryTokenEstimate { value: i64 },
     InvalidMessageRole { value: String },
     InvalidMissionAcceptance(serde_json::Error),
     InvalidMissionExecutionIntent(MissionExecutionIntentParseError),
@@ -221,6 +233,40 @@ impl From<&TranscriptEntry> for TranscriptRecord {
             content: entry.content.clone(),
             created_at: entry.created_at,
         }
+    }
+}
+
+impl From<&ContextSummary> for ContextSummaryRecord {
+    fn from(summary: &ContextSummary) -> Self {
+        Self {
+            session_id: summary.session_id.clone(),
+            summary_text: summary.summary_text.clone(),
+            covered_message_count: i64::from(summary.covered_message_count),
+            summary_token_estimate: i64::from(summary.summary_token_estimate),
+            updated_at: summary.updated_at,
+        }
+    }
+}
+
+impl TryFrom<ContextSummaryRecord> for ContextSummary {
+    type Error = RecordConversionError;
+
+    fn try_from(record: ContextSummaryRecord) -> Result<Self, Self::Error> {
+        Ok(Self {
+            session_id: record.session_id,
+            summary_text: record.summary_text,
+            covered_message_count: u32::try_from(record.covered_message_count).map_err(|_| {
+                RecordConversionError::InvalidContextSummaryCoveredMessageCount {
+                    value: record.covered_message_count,
+                }
+            })?,
+            summary_token_estimate: u32::try_from(record.summary_token_estimate).map_err(|_| {
+                RecordConversionError::InvalidContextSummaryTokenEstimate {
+                    value: record.summary_token_estimate,
+                }
+            })?,
+            updated_at: record.updated_at,
+        })
     }
 }
 
@@ -379,6 +425,18 @@ impl fmt::Display for RecordConversionError {
                 write!(formatter, "invalid job specification: {source}")
             }
             Self::InvalidJobStatus(source) => write!(formatter, "invalid job status: {source}"),
+            Self::InvalidContextSummaryCoveredMessageCount { value } => {
+                write!(
+                    formatter,
+                    "invalid context summary covered_message_count: {value}"
+                )
+            }
+            Self::InvalidContextSummaryTokenEstimate { value } => {
+                write!(
+                    formatter,
+                    "invalid context summary summary_token_estimate: {value}"
+                )
+            }
             Self::InvalidMessageRole { value } => {
                 write!(formatter, "invalid transcript role {value}")
             }
@@ -464,6 +522,8 @@ impl Error for RecordConversionError {
             Self::InvalidJobResult(source) => Some(source),
             Self::InvalidJobSpec(source) => Some(source),
             Self::InvalidJobStatus(source) => Some(source),
+            Self::InvalidContextSummaryCoveredMessageCount { .. } => None,
+            Self::InvalidContextSummaryTokenEstimate { .. } => None,
             Self::InvalidMissionAcceptance(source) => Some(source),
             Self::InvalidMissionExecutionIntent(source) => Some(source),
             Self::InvalidMissionSchedule(source) => Some(source),

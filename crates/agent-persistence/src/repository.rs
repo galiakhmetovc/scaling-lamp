@@ -1,5 +1,6 @@
 use crate::records::{
-    ArtifactRecord, JobRecord, MissionRecord, RunRecord, SessionRecord, TranscriptRecord,
+    ArtifactRecord, ContextSummaryRecord, JobRecord, MissionRecord, RunRecord, SessionRecord,
+    TranscriptRecord,
 };
 use crate::store::StoreError;
 
@@ -35,6 +36,14 @@ pub trait TranscriptRepository {
         &self,
         session_id: &str,
     ) -> Result<Vec<TranscriptRecord>, StoreError>;
+}
+
+pub trait ContextSummaryRepository {
+    fn put_context_summary(&self, record: &ContextSummaryRecord) -> Result<(), StoreError>;
+    fn get_context_summary(
+        &self,
+        session_id: &str,
+    ) -> Result<Option<ContextSummaryRecord>, StoreError>;
 }
 
 pub trait ArtifactRepository {

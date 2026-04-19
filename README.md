@@ -230,8 +230,9 @@ Current notes:
 
 - `/clear` is destructive: it deletes the current session after confirmation
   and immediately switches into a new empty session
-- `/compact` currently only increments the canonical compactification counter
-  and leaves the real compaction mechanism for a later phase
+- `/compact` now runs real canonical context compaction: it summarizes the
+  older transcript prefix, persists one context summary per session, and makes
+  future chat turns use that summary plus only the uncovered trailing messages
 - `/model` now updates the session-level model override that the canonical chat
   execution path actually sends to the provider
 - `/think` is currently stored and surfaced in the UI/top bar, but does not yet

@@ -1,13 +1,15 @@
 use crate::{cli, execution};
 use agent_persistence::{
-    AppConfig, ConfigError, PersistenceScaffold, PersistenceStore, RecordConversionError,
-    RunRecord, RunRepository, SessionRepository, StoreError, TranscriptRepository, recovery,
+    AppConfig, ConfigError, ContextSummaryRepository, PersistenceScaffold, PersistenceStore,
+    RecordConversionError, RunRecord, RunRepository, SessionRepository, StoreError,
+    TranscriptRepository, recovery,
 };
 use agent_runtime::RuntimeScaffold;
+use agent_runtime::context::{CompactionPolicy, ContextSummary, approximate_token_count};
 use agent_runtime::provider::{ProviderBuildError, ProviderDriver, ProviderError, build_driver};
 use agent_runtime::run::{RunEngine, RunSnapshot, RunTransitionError};
 use agent_runtime::scheduler::MissionVerificationSummary;
-use agent_runtime::session::{Session, SessionSettings, TranscriptEntry};
+use agent_runtime::session::{MessageRole, Session, SessionSettings, TranscriptEntry};
 use agent_runtime::tool::ToolCall;
 use std::error::Error;
 use std::fmt;
@@ -333,18 +335,94 @@ impl App {
     }
 
     #[cfg_attr(not(test), allow(dead_code))]
-    pub fn compact_session_placeholder(
+    pub fn context_summary(
         &self,
         session_id: &str,
-    ) -> Result<SessionSummary, BootstrapError> {
-        let current = self.session_summary(session_id)?;
-        self.update_session_preferences(
-            session_id,
-            SessionPreferencesPatch {
-                compactifications: Some(current.compactifications + 1),
-                ..SessionPreferencesPatch::default()
-            },
-        )
+    ) -> Result<Option<ContextSummary>, BootstrapError> {
+        let store = self.store()?;
+        if store.get_session(session_id)?.is_none() {
+            return Err(BootstrapError::MissingRecord {
+                kind: "session",
+                id: session_id.to_string(),
+            });
+        }
+
+        store
+            .get_context_summary(session_id)?
+            .map(ContextSummary::try_from)
+            .transpose()
+            .map_err(BootstrapError::RecordConversion)
+    }
+
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub fn compact_session(&self, session_id: &str) -> Result<SessionSummary, BootstrapError> {
+        let store = self.store()?;
+        let session_record =
+            store
+                .get_session(session_id)?
+                .ok_or_else(|| BootstrapError::MissingRecord {
+                    kind: "session",
+                    id: session_id.to_string(),
+                })?;
+        let mut session =
+            Session::try_from(session_record).map_err(BootstrapError::RecordConversion)?;
+        let transcripts = store.list_transcripts_for_session(session_id)?;
+        let policy = CompactionPolicy::default();
+
+        if !policy.should_compact(transcripts.len()) {
+            return self.session_summary(session_id);
+        }
+
+        let covered_message_count = policy.covered_message_count(transcripts.len());
+        let summary_messages = transcripts
+            .iter()
+            .take(covered_message_count)
+            .map(|record| {
+                let role = MessageRole::try_from(record.kind.as_str()).map_err(|_| {
+                    BootstrapError::RecordConversion(RecordConversionError::InvalidMessageRole {
+                        value: record.kind.clone(),
+                    })
+                })?;
+                Ok::<agent_runtime::provider::ProviderMessage, BootstrapError>(
+                    agent_runtime::provider::ProviderMessage {
+                        role,
+                        content: record.content.clone(),
+                    },
+                )
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+
+        let provider = self.provider_driver()?;
+        let response = provider.complete(&agent_runtime::provider::ProviderRequest {
+            model: session.settings.model.clone(),
+            instructions: Some(compaction_instructions()),
+            messages: summary_messages,
+            previous_response_id: None,
+            continuation_messages: Vec::new(),
+            tools: Vec::new(),
+            tool_outputs: Vec::new(),
+            max_output_tokens: Some(policy.max_output_tokens),
+            stream: agent_runtime::provider::ProviderStreamMode::Disabled,
+        })?;
+        let now = unix_timestamp()?;
+        let summary_text = policy.trim_summary_text(&response.output_text);
+        let context_summary = ContextSummary {
+            session_id: session.id.clone(),
+            summary_text: summary_text.clone(),
+            covered_message_count: covered_message_count as u32,
+            summary_token_estimate: approximate_token_count(&summary_text),
+            updated_at: now,
+        };
+        store.put_context_summary(&agent_persistence::ContextSummaryRecord::from(
+            &context_summary,
+        ))?;
+
+        session.settings.compactifications += 1;
+        session.updated_at = now;
+        let session_record = agent_persistence::SessionRecord::try_from(&session)
+            .map_err(BootstrapError::RecordConversion)?;
+        store.put_session(&session_record)?;
+        self.session_summary(session_id)
     }
 
     #[cfg_attr(not(test), allow(dead_code))]
@@ -554,16 +632,31 @@ fn session_summary_from_session(
 ) -> Result<SessionSummary, BootstrapError> {
     let transcripts = store.list_transcripts_for_session(&session.id)?;
     let message_count = transcripts.len();
+    let context_summary = store
+        .get_context_summary(&session.id)?
+        .map(ContextSummary::try_from)
+        .transpose()
+        .map_err(BootstrapError::RecordConversion)?;
+    let covered_message_count = context_summary
+        .as_ref()
+        .map(|summary| summary.covered_message_count as usize)
+        .unwrap_or(0)
+        .min(message_count);
     let last_message_preview = transcripts
         .last()
         .map(|record| preview_text(record.content.as_str(), 96));
     let transcript_tokens = transcripts
         .iter()
+        .skip(covered_message_count)
         .map(|record| approximate_token_count(record.content.as_str()))
         .sum::<u32>();
     let transcript_updated_at = transcripts
         .last()
         .map(|record| record.created_at)
+        .unwrap_or(session.updated_at);
+    let context_updated_at = context_summary
+        .as_ref()
+        .map(|summary| summary.updated_at)
         .unwrap_or(session.updated_at);
     let run_updated_at = runs
         .iter()
@@ -574,6 +667,7 @@ fn session_summary_from_session(
     let updated_at = session
         .updated_at
         .max(transcript_updated_at)
+        .max(context_updated_at)
         .max(run_updated_at);
     let has_pending_approval = runs.iter().any(|run| {
         run.session_id == session.id
@@ -592,7 +686,11 @@ fn session_summary_from_session(
         reasoning_visible: session.settings.reasoning_visible,
         think_level: session.settings.think_level.clone(),
         compactifications: session.settings.compactifications,
-        context_tokens: transcript_tokens,
+        context_tokens: transcript_tokens
+            + context_summary
+                .as_ref()
+                .map(|summary| summary.summary_token_estimate)
+                .unwrap_or(0),
         has_pending_approval,
         last_message_preview,
         message_count,
@@ -601,12 +699,8 @@ fn session_summary_from_session(
     })
 }
 
-fn approximate_token_count(content: &str) -> u32 {
-    let trimmed = content.trim();
-    if trimmed.is_empty() {
-        return 0;
-    }
-    ((trimmed.chars().count() as u32) / 4).saturating_add(1)
+fn compaction_instructions() -> String {
+    "Summarize the provided earlier conversation into a concise operational context summary. Preserve user goals, key decisions, important files and paths, blockers, approvals, and unresolved next steps. Keep the summary short and actionable.".to_string()
 }
 
 fn preview_text(content: &str, limit: usize) -> String {

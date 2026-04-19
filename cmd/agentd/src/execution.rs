@@ -1,10 +1,11 @@
 #![cfg_attr(not(test), allow(dead_code))]
 
 use agent_persistence::{
-    JobRecord, JobRepository, MissionRecord, MissionRepository, PersistenceStore,
-    RecordConversionError, RunRecord, RunRepository, SessionRepository, StoreError,
-    TranscriptRecord, TranscriptRepository,
+    ContextSummaryRepository, JobRecord, JobRepository, MissionRecord, MissionRepository,
+    PersistenceStore, RecordConversionError, RunRecord, RunRepository, SessionRepository,
+    StoreError, TranscriptRecord, TranscriptRepository,
 };
+use agent_runtime::context::ContextSummary;
 use agent_runtime::mission::{
     JobExecutionInput, JobResult, JobSpec, JobStatus, MissionSpec, MissionStatus,
 };
@@ -439,6 +440,36 @@ impl ExecutionService {
             .collect::<Result<Vec<_>, _>>()
     }
 
+    fn prompt_messages(
+        &self,
+        store: &PersistenceStore,
+        session_id: &str,
+    ) -> Result<Vec<ProviderMessage>, ExecutionError> {
+        let transcript_messages = self.transcript_messages(store, session_id)?;
+        let Some(summary_record) = store
+            .get_context_summary(session_id)
+            .map_err(ExecutionError::Store)?
+        else {
+            return Ok(transcript_messages);
+        };
+        let summary =
+            ContextSummary::try_from(summary_record).map_err(ExecutionError::RecordConversion)?;
+        let covered_message_count =
+            (summary.covered_message_count as usize).min(transcript_messages.len());
+        let mut prompt_messages = Vec::with_capacity(
+            transcript_messages
+                .len()
+                .saturating_sub(covered_message_count)
+                + 1,
+        );
+        prompt_messages.push(ProviderMessage {
+            role: MessageRole::System,
+            content: summary.system_message_text(),
+        });
+        prompt_messages.extend(transcript_messages.into_iter().skip(covered_message_count));
+        Ok(prompt_messages)
+    }
+
     fn persist_run(&self, store: &PersistenceStore, run: &RunEngine) -> Result<(), ExecutionError> {
         store
             .put_run(
@@ -595,7 +626,7 @@ impl ExecutionService {
         now: i64,
         observer: &mut Option<&mut dyn FnMut(ChatExecutionEvent)>,
     ) -> Result<ProviderResponse, ExecutionError> {
-        let base_messages = self.transcript_messages(store, session_id)?;
+        let base_messages = self.prompt_messages(store, session_id)?;
         let catalog = ToolCatalog::default();
         let tools = self.automatic_provider_tools(provider);
         let mut tool_runtime = ToolRuntime::new(self.workspace.clone());

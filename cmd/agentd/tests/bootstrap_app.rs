@@ -3383,3 +3383,257 @@ fn tui_like_session_delete_and_clear_remove_canonical_state() {
             .is_some()
     );
 }
+
+#[test]
+fn compact_session_persists_a_context_summary_and_increments_the_counter() {
+    let (api_base, requests, handle) = spawn_json_server(
+        r#"{
+                "id":"resp_compact",
+                "model":"gpt-5.4",
+                "output":[
+                    {
+                        "id":"msg_compact",
+                        "type":"message",
+                        "status":"completed",
+                        "role":"assistant",
+                        "content":[
+                            {
+                                "type":"output_text",
+                                "text":"Condensed earlier context."
+                            }
+                        ]
+                    }
+                ],
+                "usage":{"input_tokens":42,"output_tokens":9,"total_tokens":51}
+            }"#,
+    );
+    let temp = tempfile::tempdir().expect("tempdir");
+    let app = build_from_config(AppConfig {
+        data_dir: temp.path().join("state-root"),
+        provider: ConfiguredProvider {
+            kind: ProviderKind::OpenAiResponses,
+            api_base: Some(format!("{api_base}/v1")),
+            api_key: Some("test-key".to_string()),
+            default_model: Some("gpt-5.4".to_string()),
+        },
+        ..AppConfig::default()
+    })
+    .expect("build app");
+    let store = PersistenceStore::open(&app.persistence).expect("open store");
+    let session = app
+        .create_session_auto(Some("Compaction Session"))
+        .expect("create session");
+
+    for (index, (kind, content)) in [
+        ("user", "covered user one"),
+        ("assistant", "covered assistant one"),
+        ("user", "recent user one"),
+        ("assistant", "recent assistant one"),
+        ("user", "recent user two"),
+        ("assistant", "recent assistant two"),
+        ("user", "recent user three"),
+        ("assistant", "recent assistant three"),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        store
+            .put_transcript(&agent_persistence::TranscriptRecord {
+                id: format!("compact-transcript-{index}"),
+                session_id: session.id.clone(),
+                run_id: None,
+                kind: kind.to_string(),
+                content: content.to_string(),
+                created_at: 10 + index as i64,
+            })
+            .expect("put transcript");
+    }
+
+    let summary = app.compact_session(&session.id).expect("compact session");
+    let context_summary = app
+        .context_summary(&session.id)
+        .expect("load context summary")
+        .expect("context summary should exist");
+    let raw_request = requests.recv().expect("compaction request");
+    handle.join().expect("join server");
+
+    assert_eq!(summary.compactifications, 1);
+    assert_eq!(context_summary.session_id, session.id);
+    assert_eq!(context_summary.summary_text, "Condensed earlier context.");
+    assert_eq!(context_summary.covered_message_count, 2);
+    assert!(context_summary.summary_token_estimate > 0);
+
+    let normalized_request = raw_request.to_ascii_lowercase();
+    assert!(normalized_request.contains("/v1/responses"));
+    assert!(normalized_request.contains("\"text\":\"covered user one\""));
+    assert!(normalized_request.contains("\"text\":\"covered assistant one\""));
+    assert!(!normalized_request.contains("\"text\":\"recent user one\""));
+}
+
+#[test]
+fn compact_session_is_a_noop_when_the_transcript_is_below_threshold() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let app = build_from_config(AppConfig {
+        data_dir: temp.path().join("state-root"),
+        ..AppConfig::default()
+    })
+    .expect("build app");
+    let store = PersistenceStore::open(&app.persistence).expect("open store");
+    let session = app
+        .create_session_auto(Some("Short Session"))
+        .expect("create session");
+
+    for (index, (kind, content)) in [
+        ("user", "one"),
+        ("assistant", "two"),
+        ("user", "three"),
+        ("assistant", "four"),
+        ("user", "five"),
+        ("assistant", "six"),
+        ("user", "seven"),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        store
+            .put_transcript(&agent_persistence::TranscriptRecord {
+                id: format!("short-transcript-{index}"),
+                session_id: session.id.clone(),
+                run_id: None,
+                kind: kind.to_string(),
+                content: content.to_string(),
+                created_at: 20 + index as i64,
+            })
+            .expect("put short transcript");
+    }
+
+    let summary = app
+        .compact_session(&session.id)
+        .expect("compact short session");
+
+    assert_eq!(summary.compactifications, 0);
+    assert!(
+        app.context_summary(&session.id)
+            .expect("load context summary")
+            .is_none()
+    );
+}
+
+#[test]
+fn execute_chat_turn_uses_the_context_summary_and_only_the_uncovered_messages() {
+    let (api_base, requests, handle) = spawn_json_server_sequence(vec![
+        r#"{
+                "id":"resp_compact_for_chat",
+                "model":"gpt-5.4",
+                "output":[
+                    {
+                        "id":"msg_compact_chat",
+                        "type":"message",
+                        "status":"completed",
+                        "role":"assistant",
+                        "content":[
+                            {
+                                "type":"output_text",
+                                "text":"Compact summary covering earlier context."
+                            }
+                        ]
+                    }
+                ],
+                "usage":{"input_tokens":42,"output_tokens":9,"total_tokens":51}
+            }"#
+        .to_string(),
+        r#"{
+                "id":"resp_chat_after_compact",
+                "model":"gpt-5.4",
+                "output":[
+                    {
+                        "id":"msg_after_compact",
+                        "type":"message",
+                        "status":"completed",
+                        "role":"assistant",
+                        "content":[
+                            {
+                                "type":"output_text",
+                                "text":"Answer after compaction."
+                            }
+                        ]
+                    }
+                ],
+                "usage":{"input_tokens":44,"output_tokens":6,"total_tokens":50}
+            }"#
+        .to_string(),
+    ]);
+    let temp = tempfile::tempdir().expect("tempdir");
+    let app = build_from_config(AppConfig {
+        data_dir: temp.path().join("state-root"),
+        provider: ConfiguredProvider {
+            kind: ProviderKind::OpenAiResponses,
+            api_base: Some(format!("{api_base}/v1")),
+            api_key: Some("test-key".to_string()),
+            default_model: Some("gpt-5.4".to_string()),
+        },
+        ..AppConfig::default()
+    })
+    .expect("build app");
+    let store = PersistenceStore::open(&app.persistence).expect("open store");
+
+    store
+        .put_session(&SessionRecord {
+            id: "session-compact-chat".to_string(),
+            title: "Compacted Chat".to_string(),
+            prompt_override: Some("Be concise.".to_string()),
+            settings_json: serde_json::to_string(&SessionSettings::default())
+                .expect("serialize settings"),
+            active_mission_id: None,
+            created_at: 1,
+            updated_at: 1,
+        })
+        .expect("put session");
+
+    for (index, (kind, content)) in [
+        ("user", "covered user one"),
+        ("assistant", "covered assistant one"),
+        ("user", "recent user one"),
+        ("assistant", "recent assistant one"),
+        ("user", "recent user two"),
+        ("assistant", "recent assistant two"),
+        ("user", "recent user three"),
+        ("assistant", "recent assistant three"),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        store
+            .put_transcript(&agent_persistence::TranscriptRecord {
+                id: format!("chat-compact-transcript-{index}"),
+                session_id: "session-compact-chat".to_string(),
+                run_id: None,
+                kind: kind.to_string(),
+                content: content.to_string(),
+                created_at: 30 + index as i64,
+            })
+            .expect("put transcript");
+    }
+
+    app.compact_session("session-compact-chat")
+        .expect("compact session");
+    let _first_request = requests.recv().expect("compaction request");
+
+    let report = app
+        .execute_chat_turn("session-compact-chat", "latest question", 50)
+        .expect("execute compacted chat turn");
+    let second_request = requests.recv().expect("chat request");
+    handle.join().expect("join server");
+
+    assert_eq!(report.response_id, "resp_chat_after_compact");
+    assert_eq!(report.output_text, "Answer after compaction.");
+
+    let normalized_request = second_request.to_ascii_lowercase();
+    assert!(normalized_request.contains("\"instructions\":\"be concise.\""));
+    assert!(normalized_request.contains("compact summary covering earlier context."));
+    assert!(normalized_request.contains("\"text\":\"recent user one\""));
+    assert!(normalized_request.contains("\"text\":\"recent assistant three\""));
+    assert!(normalized_request.contains("\"text\":\"latest question\""));
+    assert!(!normalized_request.contains("\"text\":\"covered user one\""));
+    assert!(!normalized_request.contains("\"text\":\"covered assistant one\""));
+}

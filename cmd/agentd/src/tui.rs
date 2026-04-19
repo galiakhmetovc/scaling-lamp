@@ -254,12 +254,21 @@ fn handle_command(
             state.sync_sessions(app.list_session_summaries()?);
         }
         "/compact" => {
-            let summary = app.compact_session_placeholder(&current_session_id)?;
+            let before = state
+                .current_session_summary()
+                .map(|summary| summary.compactifications);
+            let summary = app.compact_session(&current_session_id)?;
             state.replace_current_summary(summary);
             state.sync_sessions(app.list_session_summaries()?);
-            state
-                .timeline_mut()
-                .push_system("compact placeholder executed", unix_timestamp()?);
+            let after = state
+                .current_session_summary()
+                .map(|summary| summary.compactifications);
+            let message = if before == after {
+                "compaction skipped: not enough transcript history"
+            } else {
+                "context compaction completed"
+            };
+            state.timeline_mut().push_system(message, unix_timestamp()?);
         }
         "/exit" => state.request_exit(),
         _ => {

@@ -1,11 +1,12 @@
 use crate::PersistenceScaffold;
 use crate::config::AppConfig;
 use crate::records::{
-    ArtifactRecord, JobRecord, MissionRecord, RunRecord, SessionRecord, TranscriptRecord,
+    ArtifactRecord, ContextSummaryRecord, JobRecord, MissionRecord, RunRecord, SessionRecord,
+    TranscriptRecord,
 };
 use crate::repository::{
-    ArtifactRepository, JobRepository, MissionRepository, RunRepository, SessionRepository,
-    TranscriptRepository,
+    ArtifactRepository, ContextSummaryRepository, JobRepository, MissionRepository, RunRepository,
+    SessionRepository, TranscriptRepository,
 };
 use rusqlite::{Connection, OptionalExtension, params};
 use sha2::{Digest, Sha256};
@@ -739,6 +740,52 @@ impl TranscriptRepository for PersistenceStore {
     }
 }
 
+impl ContextSummaryRepository for PersistenceStore {
+    fn put_context_summary(&self, record: &ContextSummaryRecord) -> Result<(), StoreError> {
+        self.connection.execute(
+            "INSERT INTO context_summaries (
+                session_id, summary_text, covered_message_count, summary_token_estimate, updated_at
+             ) VALUES (?1, ?2, ?3, ?4, ?5)
+             ON CONFLICT(session_id) DO UPDATE SET
+                summary_text = excluded.summary_text,
+                covered_message_count = excluded.covered_message_count,
+                summary_token_estimate = excluded.summary_token_estimate,
+                updated_at = excluded.updated_at",
+            params![
+                record.session_id,
+                record.summary_text,
+                record.covered_message_count,
+                record.summary_token_estimate,
+                record.updated_at
+            ],
+        )?;
+        Ok(())
+    }
+
+    fn get_context_summary(
+        &self,
+        session_id: &str,
+    ) -> Result<Option<ContextSummaryRecord>, StoreError> {
+        self.connection
+            .query_row(
+                "SELECT session_id, summary_text, covered_message_count, summary_token_estimate, updated_at
+                 FROM context_summaries WHERE session_id = ?1",
+                [session_id],
+                |row| {
+                    Ok(ContextSummaryRecord {
+                        session_id: row.get(0)?,
+                        summary_text: row.get(1)?,
+                        covered_message_count: row.get(2)?,
+                        summary_token_estimate: row.get(3)?,
+                        updated_at: row.get(4)?,
+                    })
+                },
+            )
+            .optional()
+            .map_err(StoreError::from)
+    }
+}
+
 impl ArtifactRepository for PersistenceStore {
     fn put_artifact(&self, record: &ArtifactRecord) -> Result<(), StoreError> {
         let path = self.artifact_path(&record.id)?;
@@ -937,6 +984,15 @@ fn bootstrap_schema(connection: &Connection) -> Result<(), StoreError> {
              FOREIGN KEY(run_id) REFERENCES runs(id) ON DELETE SET NULL
          );
 
+         CREATE TABLE IF NOT EXISTS context_summaries (
+             session_id TEXT PRIMARY KEY,
+             summary_text TEXT NOT NULL,
+             covered_message_count INTEGER NOT NULL,
+             summary_token_estimate INTEGER NOT NULL,
+             updated_at INTEGER NOT NULL,
+             FOREIGN KEY(session_id) REFERENCES sessions(id) ON DELETE CASCADE
+         );
+
          CREATE TABLE IF NOT EXISTS artifacts (
              id TEXT PRIMARY KEY,
              session_id TEXT NOT NULL,
@@ -961,6 +1017,7 @@ fn bootstrap_schema(connection: &Connection) -> Result<(), StoreError> {
          CREATE INDEX IF NOT EXISTS idx_jobs_parent_job_id ON jobs(parent_job_id);
          CREATE INDEX IF NOT EXISTS idx_transcripts_session_id ON transcripts(session_id);
          CREATE INDEX IF NOT EXISTS idx_transcripts_run_id ON transcripts(run_id);
+         CREATE INDEX IF NOT EXISTS idx_context_summaries_updated_at ON context_summaries(updated_at);
          CREATE INDEX IF NOT EXISTS idx_artifacts_session_id ON artifacts(session_id);",
     )?;
 
@@ -979,9 +1036,29 @@ fn validate_schema(connection: &Connection) -> Result<(), StoreError> {
     validate_column(connection, "runs", "delegate_runs_json", true)?;
     validate_column(connection, "runs", "result", false)?;
     validate_column(connection, "transcripts", "sha256", true)?;
+    validate_column(connection, "context_summaries", "summary_text", true)?;
+    validate_column(
+        connection,
+        "context_summaries",
+        "covered_message_count",
+        true,
+    )?;
+    validate_column(
+        connection,
+        "context_summaries",
+        "summary_token_estimate",
+        true,
+    )?;
     validate_column(connection, "artifacts", "session_id", true)?;
     validate_column(connection, "artifacts", "metadata_json", true)?;
     validate_column(connection, "artifacts", "sha256", true)?;
+    validate_foreign_key(
+        connection,
+        "context_summaries",
+        "session_id",
+        "sessions",
+        "CASCADE",
+    )?;
     validate_foreign_key(connection, "artifacts", "session_id", "sessions", "CASCADE")?;
     validate_foreign_key(connection, "jobs", "mission_id", "missions", "CASCADE")?;
     validate_foreign_key(

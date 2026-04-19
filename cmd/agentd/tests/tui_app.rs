@@ -1,4 +1,6 @@
-use agent_persistence::{AppConfig, PersistenceStore, RunRecord, RunRepository};
+use agent_persistence::{
+    AppConfig, PersistenceStore, RunRecord, RunRepository, TranscriptRepository,
+};
 use agent_runtime::provider::{ConfiguredProvider, ProviderKind};
 use agent_runtime::run::{ApprovalRequest, RunEngine, RunSnapshot, RunStatus};
 use agentd::bootstrap::{SessionPreferencesPatch, SessionSummary, build_from_config};
@@ -127,20 +129,74 @@ fn tui_chat_commands_and_timeline_new_creates_and_switches_immediately() {
 
 #[test]
 fn tui_chat_commands_and_timeline_rename_clear_and_preferences_use_the_app_layer() {
+    let (api_base, _provider_handle) = spawn_json_server_sequence(vec![
+        r#"{
+                "id":"resp_tui_compact",
+                "model":"gpt-5.4",
+                "output":[
+                    {
+                        "id":"msg_tui_compact",
+                        "type":"message",
+                        "status":"completed",
+                        "role":"assistant",
+                        "content":[
+                            {
+                                "type":"output_text",
+                                "text":"TUI compact summary."
+                            }
+                        ]
+                    }
+                ],
+                "usage":{"input_tokens":40,"output_tokens":7,"total_tokens":47}
+            }"#
+        .to_string(),
+    ]);
     let temp = tempfile::tempdir().expect("tempdir");
     let app = build_from_config(AppConfig {
         data_dir: temp.path().join("state-root"),
+        provider: ConfiguredProvider {
+            kind: ProviderKind::OpenAiResponses,
+            api_base: Some(format!("{api_base}/v1")),
+            api_key: Some("test-key".to_string()),
+            default_model: Some("gpt-5.4".to_string()),
+        },
         ..AppConfig::default()
     })
     .expect("build app");
     let session = app
         .create_session_auto(Some("Original Session"))
         .expect("create session");
+    let store = PersistenceStore::open(&app.persistence).expect("open store");
     let mut state = TuiAppState::new(
         app.list_session_summaries().expect("list sessions"),
         Some(session.id.clone()),
     );
     let mut render = |_state: &TuiAppState| Ok::<_, agentd::bootstrap::BootstrapError>(());
+
+    for (index, (kind, content)) in [
+        ("user", "covered user one"),
+        ("assistant", "covered assistant one"),
+        ("user", "recent user one"),
+        ("assistant", "recent assistant one"),
+        ("user", "recent user two"),
+        ("assistant", "recent assistant two"),
+        ("user", "recent user three"),
+        ("assistant", "recent assistant three"),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        store
+            .put_transcript(&agent_persistence::TranscriptRecord {
+                id: format!("tui-compact-transcript-{index}"),
+                session_id: session.id.clone(),
+                run_id: None,
+                kind: kind.to_string(),
+                content: content.to_string(),
+                created_at: 50 + index as i64,
+            })
+            .expect("put tui transcript");
+    }
 
     dispatch_action(
         &app,
@@ -201,6 +257,12 @@ fn tui_chat_commands_and_timeline_rename_clear_and_preferences_use_the_app_layer
     assert!(!updated.reasoning_visible);
     assert_eq!(updated.think_level.as_deref(), Some("high"));
     assert_eq!(updated.compactifications, 1);
+    let context_summary = app
+        .context_summary(&current_id)
+        .expect("load context summary")
+        .expect("persisted compact summary");
+    assert_eq!(context_summary.summary_text, "TUI compact summary.");
+    assert_eq!(context_summary.covered_message_count, 2);
 
     dispatch_action(
         &app,
@@ -559,6 +621,52 @@ fn spawn_sse_server_sequence(responses: Vec<String>) -> (String, thread::JoinHan
             }
             let response = format!(
                 "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nCache-Control: no-cache\r\nConnection: close\r\nContent-Length: {}\r\n\r\n{}",
+                body.len(),
+                body
+            );
+            stream
+                .write_all(response.as_bytes())
+                .expect("write response");
+            stream.flush().expect("flush response");
+        }
+    });
+
+    (format!("http://{}", address), handle)
+}
+
+fn spawn_json_server_sequence(responses: Vec<String>) -> (String, thread::JoinHandle<()>) {
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind test server");
+    let address = listener.local_addr().expect("local addr");
+
+    let handle = thread::spawn(move || {
+        for body in responses {
+            let (mut stream, _) = listener.accept().expect("accept connection");
+            stream
+                .set_read_timeout(Some(std::time::Duration::from_secs(2)))
+                .expect("set read timeout");
+            let mut reader = BufReader::new(stream.try_clone().expect("clone stream"));
+            let mut raw_request = String::new();
+            loop {
+                let mut line = String::new();
+                let read = reader.read_line(&mut line).expect("read request line");
+                if read == 0 || line == "\r\n" {
+                    break;
+                }
+                raw_request.push_str(&line);
+            }
+            let mut content_length = 0usize;
+            for header in raw_request.lines() {
+                let lower = header.to_ascii_lowercase();
+                if let Some(value) = lower.strip_prefix("content-length:") {
+                    content_length = value.trim().parse::<usize>().expect("parse content-length");
+                }
+            }
+            if content_length > 0 {
+                let mut discard = vec![0u8; content_length];
+                reader.read_exact(&mut discard).expect("read body");
+            }
+            let response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nConnection: close\r\nContent-Length: {}\r\n\r\n{}",
                 body.len(),
                 body
             );
