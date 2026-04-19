@@ -1,4 +1,4 @@
-use crate::cli;
+use crate::{cli, execution};
 use agent_persistence::{
     AppConfig, ConfigError, PersistenceScaffold, PersistenceStore, RecordConversionError,
     StoreError, recovery,
@@ -6,6 +6,7 @@ use agent_persistence::{
 use agent_runtime::RuntimeScaffold;
 use agent_runtime::provider::{ProviderBuildError, ProviderDriver, ProviderError, build_driver};
 use agent_runtime::run::RunTransitionError;
+use agent_runtime::scheduler::MissionVerificationSummary;
 use std::error::Error;
 use std::fmt;
 use std::fs;
@@ -30,6 +31,7 @@ pub enum BootstrapError {
     },
     ProviderBuild(ProviderBuildError),
     ProviderRequest(ProviderError),
+    Execution(execution::ExecutionError),
     Recovery(recovery::RecoveryError),
     RecordConversion(RecordConversionError),
     RunTransition(RunTransitionError),
@@ -69,6 +71,18 @@ impl App {
     pub fn provider_driver(&self) -> Result<Box<dyn ProviderDriver>, BootstrapError> {
         build_driver(&self.config.provider).map_err(BootstrapError::ProviderBuild)
     }
+
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub fn supervisor_tick(
+        &self,
+        now: i64,
+        verifications: &[MissionVerificationSummary],
+    ) -> Result<execution::SupervisorTickReport, BootstrapError> {
+        let store = self.store()?;
+        execution::ExecutionService::default()
+            .supervisor_tick(&store, now, verifications)
+            .map_err(BootstrapError::Execution)
+    }
 }
 
 impl fmt::Display for BootstrapError {
@@ -93,6 +107,7 @@ impl fmt::Display for BootstrapError {
             Self::MissingRecord { kind, id } => write!(formatter, "{kind} {id} was not found"),
             Self::ProviderBuild(source) => write!(formatter, "{source}"),
             Self::ProviderRequest(source) => write!(formatter, "{source}"),
+            Self::Execution(source) => write!(formatter, "{source}"),
             Self::Recovery(source) => write!(formatter, "{source}"),
             Self::RecordConversion(source) => {
                 write!(formatter, "record conversion error: {source}")
@@ -113,6 +128,7 @@ impl Error for BootstrapError {
             Self::Io { source, .. } => Some(source),
             Self::ProviderBuild(source) => Some(source),
             Self::ProviderRequest(source) => Some(source),
+            Self::Execution(source) => Some(source),
             Self::Recovery(source) => Some(source),
             Self::RecordConversion(source) => Some(source),
             Self::RunTransition(source) => Some(source),
@@ -150,6 +166,12 @@ impl From<ProviderBuildError> for BootstrapError {
 impl From<ProviderError> for BootstrapError {
     fn from(source: ProviderError) -> Self {
         Self::ProviderRequest(source)
+    }
+}
+
+impl From<execution::ExecutionError> for BootstrapError {
+    fn from(source: execution::ExecutionError) -> Self {
+        Self::Execution(source)
     }
 }
 
@@ -258,7 +280,9 @@ mod tests {
     use agent_runtime::mission::{JobSpec, MissionExecutionIntent, MissionSchedule, MissionStatus};
     use agent_runtime::provider::{ConfiguredProvider, ProviderKind};
     use agent_runtime::run::{ApprovalRequest, DelegateRun, RunEngine, RunSnapshot, RunStatus};
+    use agent_runtime::scheduler::{MissionVerificationSummary, SupervisorAction};
     use agent_runtime::session::SessionSettings;
+    use agent_runtime::verification::VerificationStatus;
     use agent_runtime::verification::{CheckOutcome, EvidenceBundle};
     use std::fs;
     use std::io::{BufRead, BufReader, Read, Write};
@@ -759,6 +783,185 @@ mod tests {
         let normalized_request = raw_request.to_ascii_lowercase();
         assert!(normalized_request.contains("/v1/responses"));
         assert!(normalized_request.contains("\"text\":\"say hi\""));
+    }
+
+    #[test]
+    fn supervisor_tick_queues_due_mission_turn_jobs_from_persisted_state() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let app = build_from_config(AppConfig {
+            data_dir: temp.path().join("state-root"),
+            ..AppConfig::default()
+        })
+        .expect("build app");
+        let store = PersistenceStore::open(&app.persistence).expect("open store");
+
+        store
+            .put_session(&SessionRecord {
+                id: "session-queue".to_string(),
+                title: "Queue session".to_string(),
+                prompt_override: None,
+                settings_json: serde_json::to_string(&SessionSettings::default())
+                    .expect("serialize settings"),
+                active_mission_id: None,
+                created_at: 1,
+                updated_at: 1,
+            })
+            .expect("put session");
+        store
+            .put_mission(&MissionRecord {
+                id: "mission-queue".to_string(),
+                session_id: "session-queue".to_string(),
+                objective: "Queue a mission turn".to_string(),
+                status: MissionStatus::Ready.as_str().to_string(),
+                execution_intent: MissionExecutionIntent::Autonomous.as_str().to_string(),
+                schedule_json: serde_json::to_string(&MissionSchedule::once())
+                    .expect("serialize schedule"),
+                acceptance_json: "[]".to_string(),
+                created_at: 2,
+                updated_at: 2,
+                completed_at: None,
+            })
+            .expect("put mission");
+
+        let report = app.supervisor_tick(60, &[]).expect("run supervisor tick");
+
+        assert_eq!(
+            report.actions,
+            vec![SupervisorAction::QueueJob(Box::new(JobSpec::mission_turn(
+                "mission-queue-mission-turn-60",
+                "mission-queue",
+                None,
+                None,
+                "Queue a mission turn",
+                60,
+            )))]
+        );
+
+        let queued_job = store
+            .get_job("mission-queue-mission-turn-60")
+            .expect("get queued job")
+            .expect("queued job exists");
+        assert_eq!(queued_job.status, "queued");
+        assert_eq!(queued_job.created_at, 60);
+    }
+
+    #[test]
+    fn supervisor_tick_dispatches_queued_jobs_and_completes_verified_missions() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let app = build_from_config(AppConfig {
+            data_dir: temp.path().join("state-root"),
+            ..AppConfig::default()
+        })
+        .expect("build app");
+        let store = PersistenceStore::open(&app.persistence).expect("open store");
+
+        store
+            .put_session(&SessionRecord {
+                id: "session-ops".to_string(),
+                title: "Execution session".to_string(),
+                prompt_override: None,
+                settings_json: serde_json::to_string(&SessionSettings::default())
+                    .expect("serialize settings"),
+                active_mission_id: None,
+                created_at: 1,
+                updated_at: 1,
+            })
+            .expect("put session");
+
+        store
+            .put_mission(&MissionRecord {
+                id: "mission-ready".to_string(),
+                session_id: "session-ops".to_string(),
+                objective: "Dispatch work".to_string(),
+                status: MissionStatus::Ready.as_str().to_string(),
+                execution_intent: MissionExecutionIntent::Autonomous.as_str().to_string(),
+                schedule_json: serde_json::to_string(&MissionSchedule::once())
+                    .expect("serialize schedule"),
+                acceptance_json: "[]".to_string(),
+                created_at: 2,
+                updated_at: 2,
+                completed_at: None,
+            })
+            .expect("put ready mission");
+        store
+            .put_job(
+                &JobRecord::try_from(&JobSpec::mission_turn(
+                    "job-dispatch",
+                    "mission-ready",
+                    None,
+                    None,
+                    "Dispatch work",
+                    10,
+                ))
+                .expect("job record"),
+            )
+            .expect("put queued job");
+
+        store
+            .put_mission(&MissionRecord {
+                id: "mission-done".to_string(),
+                session_id: "session-ops".to_string(),
+                objective: "Complete work".to_string(),
+                status: MissionStatus::Running.as_str().to_string(),
+                execution_intent: MissionExecutionIntent::Autonomous.as_str().to_string(),
+                schedule_json: serde_json::to_string(&MissionSchedule::once())
+                    .expect("serialize schedule"),
+                acceptance_json: "[]".to_string(),
+                created_at: 3,
+                updated_at: 3,
+                completed_at: None,
+            })
+            .expect("put running mission");
+        store
+            .put_run(&RunRecord {
+                id: "run-done".to_string(),
+                session_id: "session-ops".to_string(),
+                mission_id: Some("mission-done".to_string()),
+                status: RunStatus::Completed.as_str().to_string(),
+                error: None,
+                result: Some("done".to_string()),
+                evidence_refs_json: "[]".to_string(),
+                pending_approvals_json: "[]".to_string(),
+                delegate_runs_json: "[]".to_string(),
+                started_at: 20,
+                updated_at: 21,
+                finished_at: Some(21),
+            })
+            .expect("put completed run");
+
+        let report = app
+            .supervisor_tick(
+                90,
+                &[MissionVerificationSummary {
+                    mission_id: "mission-done".to_string(),
+                    status: VerificationStatus::Passed,
+                    missing_required_checks: Vec::new(),
+                    open_risks: Vec::new(),
+                }],
+            )
+            .expect("run supervisor tick");
+
+        assert!(report.actions.contains(&SupervisorAction::DispatchJob {
+            job_id: "job-dispatch".to_string(),
+            kind: agent_runtime::mission::JobKind::MissionTurn,
+        }));
+        assert!(report.actions.contains(&SupervisorAction::CompleteMission {
+            mission_id: "mission-done".to_string(),
+        }));
+
+        let dispatched_job = store
+            .get_job("job-dispatch")
+            .expect("get dispatched job")
+            .expect("dispatched job exists");
+        assert_eq!(dispatched_job.status, "running");
+        assert_eq!(dispatched_job.started_at, Some(90));
+
+        let completed_mission = store
+            .get_mission("mission-done")
+            .expect("get completed mission")
+            .expect("completed mission exists");
+        assert_eq!(completed_mission.status, "completed");
+        assert_eq!(completed_mission.completed_at, Some(90));
     }
 
     fn spawn_json_server(body: &'static str) -> (String, Receiver<String>, thread::JoinHandle<()>) {
