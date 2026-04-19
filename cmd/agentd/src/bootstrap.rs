@@ -3140,6 +3140,72 @@ mod tests {
     }
 
     #[test]
+    fn repl_accepts_cp1251_terminal_input_without_utf8_failure() {
+        let (api_base, _requests, handle) = spawn_json_server(
+            r#"{
+                "id":"resp_cp1251_repl",
+                "model":"gpt-5.4",
+                "output":[
+                    {
+                        "id":"msg_cp1251",
+                        "type":"message",
+                        "status":"completed",
+                        "role":"assistant",
+                        "content":[
+                            {
+                                "type":"output_text",
+                                "text":"cp1251 ok"
+                            }
+                        ]
+                    }
+                ],
+                "usage":{"input_tokens":16,"output_tokens":3,"total_tokens":19}
+            }"#,
+        );
+        let temp = tempfile::tempdir().expect("tempdir");
+        let app = build_from_config(AppConfig {
+            data_dir: temp.path().join("state-root"),
+            provider: ConfiguredProvider {
+                kind: ProviderKind::OpenAiResponses,
+                api_base: Some(format!("{api_base}/v1")),
+                api_key: Some("test-key".to_string()),
+                default_model: Some("gpt-5.4".to_string()),
+            },
+            permissions: PermissionConfig::default(),
+        })
+        .expect("build app");
+        let store = PersistenceStore::open(&app.persistence).expect("open store");
+
+        store
+            .put_session(&SessionRecord {
+                id: "session-chat-repl-cp1251".to_string(),
+                title: "Chat REPL cp1251 session".to_string(),
+                prompt_override: None,
+                settings_json: serde_json::to_string(&SessionSettings::default())
+                    .expect("serialize settings"),
+                active_mission_id: None,
+                created_at: 1,
+                updated_at: 1,
+            })
+            .expect("put session");
+
+        let encoded = encoding_rs::WINDOWS_1251.encode("привет\n/exit\n").0;
+        let mut input = Cursor::new(encoded.into_owned());
+        let mut output = Vec::new();
+        app.run_with_io(
+            ["chat", "repl", "session-chat-repl-cp1251"],
+            &mut input,
+            &mut output,
+        )
+        .expect("repl");
+        handle.join().expect("join server");
+
+        let rendered = String::from_utf8(output).expect("utf8");
+        assert!(rendered.contains("assistant: cp1251 ok"));
+        assert!(!rendered.contains("stream did not contain valid UTF-8"));
+    }
+
+    #[test]
     fn repl_surfaces_waiting_approval_and_can_approve_latest_pending_turn() {
         let (web_base, _web_requests, _web_handle) = spawn_text_server("/doc", "repl ask doc");
         let first_provider_response = format!(

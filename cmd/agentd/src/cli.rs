@@ -8,7 +8,9 @@ use agent_runtime::mission::{MissionExecutionIntent, MissionSchedule, MissionSpe
 use agent_runtime::provider::{FinishReason, ProviderMessage, ProviderRequest, ProviderStreamMode};
 use agent_runtime::run::{RunSnapshot, RunStatus};
 use agent_runtime::session::{MessageRole, Session, SessionSettings};
+use encoding_rs::Encoding;
 use rusqlite::Connection;
+use std::env;
 use std::io::{BufRead, Write};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -410,7 +412,7 @@ where
         renderer.output.flush().map_err(BootstrapError::Stream)?;
 
         line.clear();
-        let bytes = input.read_line(&mut line).map_err(BootstrapError::Stream)?;
+        let bytes = read_repl_line(input, &mut line).map_err(BootstrapError::Stream)?;
         if bytes == 0 {
             renderer.finish_turn()?;
             writeln!(renderer.output, "leaving chat repl session_id={session_id}")
@@ -966,6 +968,73 @@ fn load_run_snapshot(
     RunSnapshot::try_from(record).map_err(BootstrapError::RecordConversion)
 }
 
+fn read_repl_line<R: BufRead>(input: &mut R, line: &mut String) -> Result<usize, std::io::Error> {
+    let mut bytes = Vec::new();
+    let count = input.read_until(b'\n', &mut bytes)?;
+    if count == 0 {
+        line.clear();
+        return Ok(0);
+    }
+
+    *line = decode_repl_line_bytes(&bytes, terminal_encoding_label().as_deref())
+        .map_err(|message| std::io::Error::new(std::io::ErrorKind::InvalidData, message))?;
+    Ok(count)
+}
+
+fn terminal_encoding_label() -> Option<String> {
+    ["LC_ALL", "LC_CTYPE", "LANG"]
+        .into_iter()
+        .find_map(|key| env::var(key).ok())
+        .and_then(|value| locale_encoding_label(&value))
+}
+
+fn locale_encoding_label(locale: &str) -> Option<String> {
+    let normalized = locale.trim();
+    if normalized.is_empty() || normalized.eq_ignore_ascii_case("c") || normalized == "POSIX" {
+        return None;
+    }
+
+    let label = normalized
+        .split('.')
+        .nth(1)
+        .unwrap_or(normalized)
+        .split('@')
+        .next()
+        .unwrap_or(normalized)
+        .trim();
+
+    if label.is_empty() {
+        None
+    } else {
+        Some(label.to_string())
+    }
+}
+
+fn decode_repl_line_bytes(bytes: &[u8], locale_hint: Option<&str>) -> Result<String, String> {
+    if let Ok(decoded) = String::from_utf8(bytes.to_vec()) {
+        return Ok(decoded);
+    }
+
+    let mut labels = Vec::new();
+    if let Some(label) = locale_hint {
+        labels.push(label.to_string());
+    }
+    labels.push("windows-1251".to_string());
+    labels.push("koi8-r".to_string());
+
+    for label in labels {
+        let Some(encoding) = Encoding::for_label(label.as_bytes()) else {
+            continue;
+        };
+        let (decoded, _, had_errors) = encoding.decode(bytes);
+        if !had_errors {
+            return Ok(decoded.into_owned());
+        }
+    }
+
+    Err("stream did not contain valid UTF-8".to_string())
+}
+
 fn join_required(parts: &[String], label: &'static str) -> Result<String, BootstrapError> {
     let joined = parts.join(" ");
     if joined.trim().is_empty() {
@@ -982,4 +1051,18 @@ fn unix_timestamp() -> Result<i64, BootstrapError> {
         .duration_since(UNIX_EPOCH)
         .map_err(BootstrapError::Clock)?
         .as_secs() as i64)
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn decode_repl_line_bytes_uses_cp1251_locale_hint() {
+        let bytes = "привет\n".as_bytes();
+        let encoded = encoding_rs::WINDOWS_1251.encode("привет\n").0;
+
+        let decoded = super::decode_repl_line_bytes(&encoded, Some("cp1251"))
+            .expect("cp1251 input should decode");
+
+        assert_eq!(decoded, String::from_utf8(bytes.to_vec()).expect("utf8"));
+    }
 }
