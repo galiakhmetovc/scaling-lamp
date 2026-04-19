@@ -1642,6 +1642,93 @@ mod tests {
         assert!(normalized_request.contains("\"text\":\"how are you?\""));
     }
 
+    #[test]
+    fn run_with_args_shows_and_sends_chat_turns() {
+        let (api_base, requests, handle) = spawn_json_server(
+            r#"{
+                "id":"resp_chat_cli",
+                "model":"gpt-5.4",
+                "output":[
+                    {
+                        "id":"msg_1",
+                        "type":"message",
+                        "status":"completed",
+                        "role":"assistant",
+                        "content":[
+                            {
+                                "type":"output_text",
+                                "text":"Chat CLI reply"
+                            }
+                        ]
+                    }
+                ],
+                "usage":{"input_tokens":16,"output_tokens":3,"total_tokens":19}
+            }"#,
+        );
+        let temp = tempfile::tempdir().expect("tempdir");
+        let app = build_from_config(AppConfig {
+            data_dir: temp.path().join("state-root"),
+            provider: ConfiguredProvider {
+                kind: ProviderKind::OpenAiResponses,
+                api_base: Some(format!("{api_base}/v1")),
+                api_key: Some("test-key".to_string()),
+                default_model: Some("gpt-5.4".to_string()),
+            },
+        })
+        .expect("build app");
+        let store = PersistenceStore::open(&app.persistence).expect("open store");
+
+        store
+            .put_session(&SessionRecord {
+                id: "session-chat-cli".to_string(),
+                title: "Chat CLI session".to_string(),
+                prompt_override: Some("Keep it short.".to_string()),
+                settings_json: serde_json::to_string(&SessionSettings::default())
+                    .expect("serialize settings"),
+                active_mission_id: None,
+                created_at: 1,
+                updated_at: 1,
+            })
+            .expect("put session");
+        store
+            .put_transcript(&agent_persistence::TranscriptRecord {
+                id: "msg-1".to_string(),
+                session_id: "session-chat-cli".to_string(),
+                run_id: None,
+                kind: "user".to_string(),
+                content: "First".to_string(),
+                created_at: 2,
+            })
+            .expect("put transcript");
+
+        let shown_before = app
+            .run_with_args(["chat", "show", "session-chat-cli"])
+            .expect("chat show before");
+        assert_eq!(shown_before, "[2] user: First");
+
+        let sent = app
+            .run_with_args(["chat", "send", "session-chat-cli", "Second", "message"])
+            .expect("chat send");
+        let raw_request = requests.recv().expect("raw request");
+        handle.join().expect("join server");
+
+        assert!(sent.contains("chat send session_id=session-chat-cli"));
+        assert!(sent.contains("response_id=resp_chat_cli"));
+        assert!(sent.contains("output=Chat CLI reply"));
+
+        let shown_after = app
+            .run_with_args(["chat", "show", "session-chat-cli"])
+            .expect("chat show after");
+        assert!(shown_after.contains("[2] user: First"));
+        assert!(shown_after.contains("user: Second message"));
+        assert!(shown_after.contains("assistant: Chat CLI reply"));
+
+        let normalized_request = raw_request.to_ascii_lowercase();
+        assert!(normalized_request.contains("\"instructions\":\"keep it short.\""));
+        assert!(normalized_request.contains("\"text\":\"first\""));
+        assert!(normalized_request.contains("\"text\":\"second message\""));
+    }
+
     fn spawn_json_server(body: &'static str) -> (String, Receiver<String>, thread::JoinHandle<()>) {
         let listener = TcpListener::bind("127.0.0.1:0").expect("bind listener");
         let address = listener.local_addr().expect("local addr");

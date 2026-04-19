@@ -18,6 +18,13 @@ enum Command {
     ProviderSmoke {
         prompt: String,
     },
+    ChatShow {
+        session_id: String,
+    },
+    ChatSend {
+        session_id: String,
+        message: String,
+    },
     MissionTick {
         now: i64,
     },
@@ -71,6 +78,11 @@ where
     match command {
         Command::Status => render_status(app),
         Command::ProviderSmoke { prompt } => run_provider_smoke(app, &prompt),
+        Command::ChatShow { session_id } => show_chat(app, &session_id),
+        Command::ChatSend {
+            session_id,
+            message,
+        } => send_chat(app, &session_id, &message),
         Command::MissionTick { now } => run_mission_tick(app, now),
         Command::SessionCreate { id, title } => create_session(&app.store()?, &id, &title),
         Command::SessionShow { id } => show_session(&app.store()?, &id),
@@ -115,6 +127,17 @@ impl Command {
             [scope, action, prompt @ ..] if scope == "provider" && action == "smoke" => {
                 Ok(Self::ProviderSmoke {
                     prompt: join_required(prompt, "smoke prompt")?,
+                })
+            }
+            [scope, action, session_id] if scope == "chat" && action == "show" => {
+                Ok(Self::ChatShow {
+                    session_id: session_id.clone(),
+                })
+            }
+            [scope, action, session_id, message @ ..] if scope == "chat" && action == "send" => {
+                Ok(Self::ChatSend {
+                    session_id: session_id.clone(),
+                    message: join_required(message, "chat message")?,
                 })
             }
             [scope, action] if scope == "mission" && action == "tick" => Ok(Self::MissionTick {
@@ -188,7 +211,7 @@ impl Command {
                 })
             }
             _ => Err(BootstrapError::Usage {
-                reason: "expected one of: status | provider smoke | mission create/show/tick | session create/show | run show | job show/execute | approval list/approve | delegate list | verification show".to_string(),
+                reason: "expected one of: status | provider smoke | chat show/send | mission create/show/tick | session create/show | run show | job show/execute | approval list/approve | delegate list | verification show".to_string(),
             }),
         }
     }
@@ -231,6 +254,24 @@ fn show_session(store: &PersistenceStore, id: &str) -> Result<String, BootstrapE
         record.title,
         record.active_mission_id.as_deref().unwrap_or("<none>"),
         record.settings_json
+    ))
+}
+
+fn show_chat(app: &App, session_id: &str) -> Result<String, BootstrapError> {
+    let transcript = app.session_transcript(session_id)?;
+    let rendered = transcript.render();
+    if rendered.is_empty() {
+        return Ok("<empty>".to_string());
+    }
+
+    Ok(rendered)
+}
+
+fn send_chat(app: &App, session_id: &str, message: &str) -> Result<String, BootstrapError> {
+    let report = app.execute_chat_turn(session_id, message, unix_timestamp()?)?;
+    Ok(format!(
+        "chat send session_id={} run_id={} response_id={} output={}",
+        report.session_id, report.run_id, report.response_id, report.output_text
     ))
 }
 
