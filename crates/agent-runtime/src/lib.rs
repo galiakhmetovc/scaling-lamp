@@ -4,6 +4,7 @@ pub mod mission;
 pub mod plan;
 pub mod provider;
 pub mod run;
+pub mod scheduler;
 pub mod session;
 pub mod tool;
 pub mod verification;
@@ -17,6 +18,7 @@ pub struct RuntimeScaffold {
     pub plan: plan::PlanSnapshot,
     pub provider: provider::ProviderDescriptor,
     pub run: run::RunSnapshot,
+    pub scheduler: scheduler::SupervisorLoop,
     pub session: session::Session,
     pub tools: tool::ToolCatalog,
     pub verification: verification::EvidenceBundle,
@@ -24,13 +26,14 @@ pub struct RuntimeScaffold {
 }
 
 impl RuntimeScaffold {
-    pub const COMPONENTS: [&str; 10] = [
+    pub const COMPONENTS: [&str; 11] = [
         "delegation",
         "memory",
         "mission",
         "plan",
         "provider",
         "run",
+        "scheduler",
         "session",
         "tools",
         "verification",
