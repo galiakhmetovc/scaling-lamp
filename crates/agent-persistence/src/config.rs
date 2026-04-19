@@ -1,10 +1,14 @@
 use agent_runtime::provider::{ConfiguredProvider, ProviderKind};
 use serde::Deserialize;
+use std::collections::BTreeMap;
 use std::env;
 use std::error::Error;
 use std::fmt;
 use std::fs;
 use std::path::{Path, PathBuf};
+
+const DEFAULT_ZAI_API_BASE: &str = "https://api.z.ai/api/coding/paas/v4";
+const DEFAULT_ZAI_MODEL: &str = "glm-5-turbo";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AppConfig {
@@ -21,6 +25,7 @@ pub struct ConfigEnv {
     pub provider_api_key_override: Option<String>,
     pub provider_kind_override: Option<String>,
     pub provider_model_override: Option<String>,
+    pub legacy_zai_api_key_override: Option<String>,
     pub temp_dir: PathBuf,
     pub xdg_config_home: Option<PathBuf>,
     pub xdg_state_home: Option<PathBuf>,
@@ -103,17 +108,20 @@ impl Error for ConfigError {
 
 impl ConfigEnv {
     pub fn capture() -> Result<Self, ConfigError> {
+        let dotenv = load_dotenv_from_cwd()?;
+
         Ok(Self {
-            config_path: read_path_var("TEAMD_CONFIG")?,
-            data_dir_override: read_path_var("TEAMD_DATA_DIR")?,
-            home_dir: read_path_var("HOME")?,
-            provider_api_base_override: read_string_var("TEAMD_PROVIDER_API_BASE"),
-            provider_api_key_override: read_string_var("TEAMD_PROVIDER_API_KEY"),
-            provider_kind_override: read_string_var("TEAMD_PROVIDER_KIND"),
-            provider_model_override: read_string_var("TEAMD_PROVIDER_MODEL"),
+            config_path: read_path_var("TEAMD_CONFIG", &dotenv)?,
+            data_dir_override: read_path_var("TEAMD_DATA_DIR", &dotenv)?,
+            home_dir: read_path_var("HOME", &dotenv)?,
+            provider_api_base_override: read_string_var("TEAMD_PROVIDER_API_BASE", &dotenv),
+            provider_api_key_override: read_string_var("TEAMD_PROVIDER_API_KEY", &dotenv),
+            provider_kind_override: read_string_var("TEAMD_PROVIDER_KIND", &dotenv),
+            provider_model_override: read_string_var("TEAMD_PROVIDER_MODEL", &dotenv),
+            legacy_zai_api_key_override: read_string_var("TEAMD_ZAI_API_KEY", &dotenv),
             temp_dir: env::temp_dir(),
-            xdg_config_home: read_path_var("XDG_CONFIG_HOME")?,
-            xdg_state_home: read_path_var("XDG_STATE_HOME")?,
+            xdg_config_home: read_path_var("XDG_CONFIG_HOME", &dotenv)?,
+            xdg_state_home: read_path_var("XDG_STATE_HOME", &dotenv)?,
         })
     }
 
@@ -181,6 +189,23 @@ impl AppConfig {
         if let Some(default_model) = &env.provider_model_override {
             provider.default_model = Some(default_model.clone());
         }
+        if provider.api_key.is_none()
+            && let Some(api_key) = &env.legacy_zai_api_key_override
+        {
+            provider.api_key = Some(api_key.clone());
+        }
+        if env.provider_kind_override.is_none()
+            && provider.kind == ProviderKind::OpenAiResponses
+            && env.legacy_zai_api_key_override.is_some()
+        {
+            provider.kind = ProviderKind::ZaiChatCompletions;
+        }
+        if provider.kind == ProviderKind::ZaiChatCompletions && provider.api_base.is_none() {
+            provider.api_base = Some(DEFAULT_ZAI_API_BASE.to_string());
+        }
+        if provider.kind == ProviderKind::ZaiChatCompletions && provider.default_model.is_none() {
+            provider.default_model = Some(DEFAULT_ZAI_MODEL.to_string());
+        }
 
         let config = Self { data_dir, provider };
         config.validate()?;
@@ -243,12 +268,21 @@ fn load_file_config(path: &Path, required: bool) -> Result<FileConfig, ConfigErr
     })
 }
 
-fn read_path_var(name: &'static str) -> Result<Option<PathBuf>, ConfigError> {
-    path_from_env_value(name, env::var_os(name))
+fn read_path_var(
+    name: &'static str,
+    dotenv: &BTreeMap<String, String>,
+) -> Result<Option<PathBuf>, ConfigError> {
+    path_from_env_value(
+        name,
+        env::var_os(name).or_else(|| dotenv.get(name).map(std::ffi::OsString::from)),
+    )
 }
 
-fn read_string_var(name: &'static str) -> Option<String> {
-    env::var(name).ok().filter(|value| !value.is_empty())
+fn read_string_var(name: &'static str, dotenv: &BTreeMap<String, String>) -> Option<String> {
+    env::var(name)
+        .ok()
+        .filter(|value| !value.is_empty())
+        .or_else(|| dotenv.get(name).cloned())
 }
 
 fn path_from_env_value(
@@ -286,6 +320,55 @@ fn parse_provider_kind(value: &str) -> Result<ProviderKind, ConfigError> {
     })
 }
 
+fn load_dotenv_from_cwd() -> Result<BTreeMap<String, String>, ConfigError> {
+    let Some(path) = env::current_dir().ok().map(|cwd| cwd.join(".env")) else {
+        return Ok(BTreeMap::new());
+    };
+
+    if !path.exists() {
+        return Ok(BTreeMap::new());
+    }
+
+    let contents = fs::read_to_string(&path).map_err(|source| ConfigError::ReadConfig {
+        path: path.clone(),
+        source,
+    })?;
+
+    Ok(parse_dotenv(&contents))
+}
+
+fn parse_dotenv(contents: &str) -> BTreeMap<String, String> {
+    let mut values = BTreeMap::new();
+
+    for line in contents.lines() {
+        let line = line.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+
+        let Some((key, value)) = line.split_once('=') else {
+            continue;
+        };
+        let key = key.trim();
+        if key.is_empty() {
+            continue;
+        }
+
+        let value = value
+            .trim()
+            .trim_matches('"')
+            .trim_matches('\'')
+            .to_string();
+        if value.is_empty() {
+            continue;
+        }
+
+        values.insert(key.to_string(), value);
+    }
+
+    values
+}
+
 impl Default for AppConfig {
     fn default() -> Self {
         Self {
@@ -297,8 +380,11 @@ impl Default for AppConfig {
 
 #[cfg(test)]
 mod tests {
-    use super::{AppConfig, ConfigEnv, ConfigError};
+    use super::{
+        AppConfig, ConfigEnv, ConfigError, DEFAULT_ZAI_API_BASE, DEFAULT_ZAI_MODEL, parse_dotenv,
+    };
     use agent_runtime::provider::ProviderKind;
+    use std::collections::BTreeMap;
     use std::ffi::OsString;
     use std::fs;
     use std::path::PathBuf;
@@ -319,6 +405,7 @@ mod tests {
             provider_api_key_override: None,
             provider_kind_override: None,
             provider_model_override: None,
+            legacy_zai_api_key_override: None,
             temp_dir: temp.path().join("tmp"),
             xdg_config_home: Some(temp.path().join("xdg-config")),
             xdg_state_home: Some(temp.path().join("xdg-state")),
@@ -343,6 +430,7 @@ mod tests {
             provider_api_key_override: None,
             provider_kind_override: None,
             provider_model_override: None,
+            legacy_zai_api_key_override: None,
             temp_dir: temp.path().join("tmp"),
             xdg_config_home: None,
             xdg_state_home: Some(xdg_state_home.clone()),
@@ -384,6 +472,7 @@ mod tests {
             provider_api_key_override: None,
             provider_kind_override: None,
             provider_model_override: None,
+            legacy_zai_api_key_override: None,
             temp_dir: temp.path().join("tmp"),
             xdg_config_home: Some(temp.path().join("xdg-config")),
             xdg_state_home: Some(temp.path().join("xdg-state")),
@@ -420,6 +509,7 @@ default_model = "glm-5.1"
             provider_api_key_override: Some("zai-secret".into()),
             provider_kind_override: None,
             provider_model_override: Some("glm-5.1-air".into()),
+            legacy_zai_api_key_override: None,
             temp_dir: temp.path().join("tmp"),
             xdg_config_home: Some(temp.path().join("xdg-config")),
             xdg_state_home: Some(temp.path().join("xdg-state")),
@@ -436,6 +526,79 @@ default_model = "glm-5.1"
         assert_eq!(
             config.provider.default_model.as_deref(),
             Some("glm-5.1-air")
+        );
+    }
+
+    #[test]
+    fn load_uses_legacy_zai_api_key_defaults() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let env = ConfigEnv {
+            config_path: None,
+            data_dir_override: None,
+            home_dir: Some(temp.path().join("home")),
+            provider_api_base_override: None,
+            provider_api_key_override: None,
+            provider_kind_override: None,
+            provider_model_override: None,
+            legacy_zai_api_key_override: Some("legacy-key".to_string()),
+            temp_dir: temp.path().join("tmp"),
+            xdg_config_home: None,
+            xdg_state_home: Some(temp.path().join("xdg-state")),
+        };
+
+        let config = AppConfig::load_from_env(&env).expect("load config");
+
+        assert_eq!(config.provider.kind, ProviderKind::ZaiChatCompletions);
+        assert_eq!(
+            config.provider.api_base.as_deref(),
+            Some(DEFAULT_ZAI_API_BASE)
+        );
+        assert_eq!(config.provider.api_key.as_deref(), Some("legacy-key"));
+        assert_eq!(
+            config.provider.default_model.as_deref(),
+            Some(DEFAULT_ZAI_MODEL)
+        );
+    }
+
+    #[test]
+    fn parse_dotenv_ignores_comments_and_trims_quotes() {
+        let values = parse_dotenv(
+            r#"
+# comment
+TEAMD_PROVIDER_KIND="zai_chat_completions"
+TEAMD_PROVIDER_MODEL='glm-5-turbo'
+INVALID_LINE
+TEAMD_ZAI_API_KEY=secret-key
+"#,
+        );
+
+        assert_eq!(
+            values.get("TEAMD_PROVIDER_KIND").map(String::as_str),
+            Some("zai_chat_completions")
+        );
+        assert_eq!(
+            values.get("TEAMD_PROVIDER_MODEL").map(String::as_str),
+            Some("glm-5-turbo")
+        );
+        assert_eq!(
+            values.get("TEAMD_ZAI_API_KEY").map(String::as_str),
+            Some("secret-key")
+        );
+    }
+
+    #[test]
+    fn dotenv_values_fill_missing_provider_env_bindings() {
+        let mut dotenv = BTreeMap::new();
+        dotenv.insert(
+            "TEAMD_PROVIDER_API_BASE".to_string(),
+            "https://api.z.ai/api/coding/paas/v4".to_string(),
+        );
+
+        let value = super::read_string_var("TEAMD_PROVIDER_API_BASE", &dotenv);
+
+        assert_eq!(
+            value.as_deref(),
+            Some("https://api.z.ai/api/coding/paas/v4")
         );
     }
 }

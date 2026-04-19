@@ -27,6 +27,26 @@ The runtime should not be:
 - split across multiple competing runtime paths
 - dependent on UI heuristics to infer what is happening
 
+## Local Smoke
+
+The current greenfield branch includes a minimal live provider smoke path in
+`agentd`.
+
+Local `.env` files are ignored by git and autoloaded by `agentd` when matching
+process environment variables are not already set. The repo ships
+[.env.example](/home/admin/AI-AGENT/data/projects/teamD/.env.example) with the
+current z.ai baseline taken from the older smoke branches:
+
+- provider kind: `zai_chat_completions`
+- base URL: `https://api.z.ai/api/coding/paas/v4`
+- model: `glm-5-turbo`
+
+Smoke command:
+
+```bash
+cargo run -p agentd -- provider smoke "Say hello in one short sentence."
+```
+
 ## Core Principles
 
 ### 1. World State First
