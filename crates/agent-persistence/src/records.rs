@@ -1,3 +1,4 @@
+use agent_runtime::run::{RunSnapshot, RunStatus, RunStatusParseError};
 use agent_runtime::session::{
     MessageRole, PromptOverride, Session, SessionError, SessionSettings, TranscriptEntry,
 };
@@ -80,6 +81,7 @@ pub struct ArtifactRecord {
 pub enum RecordConversionError {
     InvalidMessageRole { value: String },
     InvalidPromptOverride(SessionError),
+    InvalidRunStatus(RunStatusParseError),
     InvalidSessionSettings(serde_json::Error),
     SerializeSessionSettings(serde_json::Error),
 }
@@ -143,6 +145,44 @@ impl From<&TranscriptEntry> for TranscriptRecord {
     }
 }
 
+impl TryFrom<&RunSnapshot> for RunRecord {
+    type Error = RecordConversionError;
+
+    fn try_from(snapshot: &RunSnapshot) -> Result<Self, Self::Error> {
+        Ok(Self {
+            id: snapshot.id.clone(),
+            session_id: snapshot.session_id.clone(),
+            mission_id: snapshot.mission_id.clone(),
+            status: snapshot.status.as_str().to_string(),
+            error: snapshot.error.clone(),
+            result: snapshot.result.clone(),
+            started_at: snapshot.started_at,
+            updated_at: snapshot.updated_at,
+            finished_at: snapshot.finished_at,
+        })
+    }
+}
+
+impl TryFrom<RunRecord> for RunSnapshot {
+    type Error = RecordConversionError;
+
+    fn try_from(record: RunRecord) -> Result<Self, Self::Error> {
+        Ok(Self {
+            id: record.id,
+            session_id: record.session_id,
+            mission_id: record.mission_id,
+            status: RunStatus::try_from(record.status.as_str())
+                .map_err(RecordConversionError::InvalidRunStatus)?,
+            started_at: record.started_at,
+            updated_at: record.updated_at,
+            finished_at: record.finished_at,
+            error: record.error,
+            result: record.result,
+            ..RunSnapshot::default()
+        })
+    }
+}
+
 impl TryFrom<TranscriptRecord> for TranscriptEntry {
     type Error = RecordConversionError;
 
@@ -173,6 +213,9 @@ impl fmt::Display for RecordConversionError {
             Self::InvalidPromptOverride(source) => {
                 write!(formatter, "invalid prompt override: {source}")
             }
+            Self::InvalidRunStatus(source) => {
+                write!(formatter, "invalid run status: {source}")
+            }
             Self::InvalidSessionSettings(source) => {
                 write!(formatter, "invalid session settings: {source}")
             }
@@ -187,6 +230,7 @@ impl Error for RecordConversionError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
             Self::InvalidPromptOverride(source) => Some(source),
+            Self::InvalidRunStatus(source) => Some(source),
             Self::InvalidSessionSettings(source) => Some(source),
             Self::SerializeSessionSettings(source) => Some(source),
             Self::InvalidMessageRole { .. } => None,
@@ -196,7 +240,8 @@ impl Error for RecordConversionError {
 
 #[cfg(test)]
 mod tests {
-    use super::{SessionRecord, TranscriptRecord};
+    use super::{RunRecord, SessionRecord, TranscriptRecord};
+    use agent_runtime::run::{RunEngine, RunSnapshot};
     use agent_runtime::session::{MessageRole, PromptOverride, Session, TranscriptEntry};
 
     #[test]
@@ -261,5 +306,22 @@ mod tests {
         let stored = TranscriptRecord::from(&entry);
 
         assert_eq!(stored.kind, "tool");
+    }
+
+    #[test]
+    fn run_records_round_trip_with_snapshot_core_fields() {
+        let mut engine = RunEngine::new("run-1", "session-1", Some("mission-1"), 1);
+        engine.start(2).expect("start");
+        engine.complete("done", 3).expect("complete");
+
+        let stored = RunRecord::try_from(engine.snapshot()).expect("snapshot to record");
+        let restored = RunSnapshot::try_from(stored).expect("record to snapshot");
+
+        assert_eq!(restored.id, "run-1");
+        assert_eq!(restored.session_id, "session-1");
+        assert_eq!(restored.mission_id.as_deref(), Some("mission-1"));
+        assert_eq!(restored.status.as_str(), "completed");
+        assert_eq!(restored.result.as_deref(), Some("done"));
+        assert_eq!(restored.finished_at, Some(3));
     }
 }
