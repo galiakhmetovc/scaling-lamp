@@ -1,12 +1,13 @@
 use crate::{cli, execution};
 use agent_persistence::{
     AppConfig, ConfigError, PersistenceScaffold, PersistenceStore, RecordConversionError,
-    StoreError, recovery,
+    SessionRepository, StoreError, TranscriptRepository, recovery,
 };
 use agent_runtime::RuntimeScaffold;
 use agent_runtime::provider::{ProviderBuildError, ProviderDriver, ProviderError, build_driver};
 use agent_runtime::run::RunTransitionError;
 use agent_runtime::scheduler::MissionVerificationSummary;
+use agent_runtime::session::TranscriptEntry;
 use agent_runtime::tool::ToolCall;
 use std::error::Error;
 use std::fmt;
@@ -50,6 +51,20 @@ pub struct App {
     pub runtime: RuntimeScaffold,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SessionTranscriptView {
+    pub session_id: String,
+    pub entries: Vec<SessionTranscriptLine>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SessionTranscriptLine {
+    pub role: String,
+    pub content: String,
+    pub run_id: Option<String>,
+    pub created_at: i64,
+}
+
 impl App {
     pub fn run(&self) -> Result<(), BootstrapError> {
         let output = self.run_with_args(std::env::args().skip(1))?;
@@ -71,6 +86,40 @@ impl App {
 
     pub fn provider_driver(&self) -> Result<Box<dyn ProviderDriver>, BootstrapError> {
         build_driver(&self.config.provider).map_err(BootstrapError::ProviderBuild)
+    }
+
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub fn session_transcript(
+        &self,
+        session_id: &str,
+    ) -> Result<SessionTranscriptView, BootstrapError> {
+        let store = self.store()?;
+        if store.get_session(session_id)?.is_none() {
+            return Err(BootstrapError::MissingRecord {
+                kind: "session",
+                id: session_id.to_string(),
+            });
+        }
+
+        let entries = store
+            .list_transcripts_for_session(session_id)?
+            .into_iter()
+            .map(TranscriptEntry::try_from)
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(BootstrapError::RecordConversion)?
+            .into_iter()
+            .map(|entry| SessionTranscriptLine {
+                role: entry.role.as_str().to_string(),
+                content: entry.content,
+                run_id: entry.run_id,
+                created_at: entry.created_at,
+            })
+            .collect();
+
+        Ok(SessionTranscriptView {
+            session_id: session_id.to_string(),
+            entries,
+        })
     }
 
     #[cfg_attr(not(test), allow(dead_code))]
@@ -121,6 +170,17 @@ impl App {
         execution::ExecutionService::default()
             .resume_tool_call(&store, request)
             .map_err(BootstrapError::Execution)
+    }
+}
+
+impl SessionTranscriptView {
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub fn render(&self) -> String {
+        self.entries
+            .iter()
+            .map(|entry| format!("[{}] {}: {}", entry.created_at, entry.role, entry.content))
+            .collect::<Vec<_>>()
+            .join("\n")
     }
 }
 
@@ -1407,6 +1467,62 @@ mod tests {
         assert!(normalized_request.contains("/v1/responses"));
         assert!(normalized_request.contains("\"instructions\":\"reply tersely.\""));
         assert!(normalized_request.contains("\"text\":\"drive one cli mission\""));
+    }
+
+    #[test]
+    fn session_transcript_view_renders_entries_in_chronological_order() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let app = build_from_config(AppConfig {
+            data_dir: temp.path().join("state-root"),
+            ..AppConfig::default()
+        })
+        .expect("build app");
+        let store = PersistenceStore::open(&app.persistence).expect("open store");
+
+        store
+            .put_session(&SessionRecord {
+                id: "session-chat".to_string(),
+                title: "Chat session".to_string(),
+                prompt_override: None,
+                settings_json: serde_json::to_string(&SessionSettings::default())
+                    .expect("serialize settings"),
+                active_mission_id: None,
+                created_at: 1,
+                updated_at: 1,
+            })
+            .expect("put session");
+        store
+            .put_transcript(&agent_persistence::TranscriptRecord {
+                id: "msg-2".to_string(),
+                session_id: "session-chat".to_string(),
+                run_id: None,
+                kind: "assistant".to_string(),
+                content: "Hi".to_string(),
+                created_at: 11,
+            })
+            .expect("put assistant transcript");
+        store
+            .put_transcript(&agent_persistence::TranscriptRecord {
+                id: "msg-1".to_string(),
+                session_id: "session-chat".to_string(),
+                run_id: None,
+                kind: "user".to_string(),
+                content: "Hello".to_string(),
+                created_at: 10,
+            })
+            .expect("put user transcript");
+
+        let transcript = app
+            .session_transcript("session-chat")
+            .expect("load transcript view");
+
+        assert_eq!(transcript.session_id, "session-chat");
+        assert_eq!(transcript.entries.len(), 2);
+        assert_eq!(transcript.entries[0].role, "user");
+        assert_eq!(transcript.entries[0].content, "Hello");
+        assert_eq!(transcript.entries[1].role, "assistant");
+        assert_eq!(transcript.entries[1].content, "Hi");
+        assert_eq!(transcript.render(), "[10] user: Hello\n[11] assistant: Hi");
     }
 
     fn spawn_json_server(body: &'static str) -> (String, Receiver<String>, thread::JoinHandle<()>) {
