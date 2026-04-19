@@ -4,6 +4,7 @@ pub mod memory;
 pub mod mission;
 pub mod permission;
 pub mod plan;
+pub mod prompt;
 pub mod provider;
 pub mod run;
 pub mod scheduler;

@@ -1,4 +1,4 @@
-use crate::{cli, execution};
+use crate::{cli, execution, prompting};
 use agent_persistence::{
     AppConfig, ConfigError, ContextSummaryRepository, PersistenceScaffold, PersistenceStore,
     RecordConversionError, RunRecord, RunRepository, SessionRepository, StoreError,
@@ -6,6 +6,7 @@ use agent_persistence::{
 };
 use agent_runtime::RuntimeScaffold;
 use agent_runtime::context::{CompactionPolicy, ContextSummary, approximate_token_count};
+use agent_runtime::prompt::SessionHead;
 use agent_runtime::provider::{ProviderBuildError, ProviderDriver, ProviderError, build_driver};
 use agent_runtime::run::{RunEngine, RunSnapshot, RunTransitionError};
 use agent_runtime::scheduler::MissionVerificationSummary;
@@ -221,6 +222,38 @@ impl App {
                 kind: "session",
                 id: session_id.to_string(),
             })
+    }
+
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub fn session_head(&self, session_id: &str) -> Result<SessionHead, BootstrapError> {
+        let store = self.store()?;
+        let session = Session::try_from(store.get_session(session_id)?.ok_or_else(|| {
+            BootstrapError::MissingRecord {
+                kind: "session",
+                id: session_id.to_string(),
+            }
+        })?)
+        .map_err(BootstrapError::RecordConversion)?;
+        let transcripts = store.list_transcripts_for_session(session_id)?;
+        let context_summary = store
+            .get_context_summary(session_id)?
+            .map(ContextSummary::try_from)
+            .transpose()
+            .map_err(BootstrapError::RecordConversion)?;
+        let runs = store
+            .load_execution_state()?
+            .runs
+            .into_iter()
+            .map(RunSnapshot::try_from)
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(BootstrapError::RecordConversion)?;
+
+        Ok(prompting::build_session_head(
+            &session,
+            &transcripts,
+            context_summary.as_ref(),
+            &runs,
+        ))
     }
 
     #[cfg_attr(not(test), allow(dead_code))]
@@ -631,25 +664,16 @@ fn session_summary_from_session(
     session: &Session,
 ) -> Result<SessionSummary, BootstrapError> {
     let transcripts = store.list_transcripts_for_session(&session.id)?;
-    let message_count = transcripts.len();
     let context_summary = store
         .get_context_summary(&session.id)?
         .map(ContextSummary::try_from)
         .transpose()
         .map_err(BootstrapError::RecordConversion)?;
-    let covered_message_count = context_summary
-        .as_ref()
-        .map(|summary| summary.covered_message_count as usize)
-        .unwrap_or(0)
-        .min(message_count);
+    let session_head =
+        prompting::build_session_head(session, &transcripts, context_summary.as_ref(), runs);
     let last_message_preview = transcripts
         .last()
-        .map(|record| preview_text(record.content.as_str(), 96));
-    let transcript_tokens = transcripts
-        .iter()
-        .skip(covered_message_count)
-        .map(|record| approximate_token_count(record.content.as_str()))
-        .sum::<u32>();
+        .map(|record| prompting::preview_text(record.content.as_str(), 96));
     let transcript_updated_at = transcripts
         .last()
         .map(|record| record.created_at)
@@ -669,12 +693,6 @@ fn session_summary_from_session(
         .max(transcript_updated_at)
         .max(context_updated_at)
         .max(run_updated_at);
-    let has_pending_approval = runs.iter().any(|run| {
-        run.session_id == session.id
-            && run.status == agent_runtime::run::RunStatus::WaitingApproval
-            && !run.pending_approvals.is_empty()
-    });
-
     Ok(SessionSummary {
         id: session.id.clone(),
         title: session.title.clone(),
@@ -686,14 +704,10 @@ fn session_summary_from_session(
         reasoning_visible: session.settings.reasoning_visible,
         think_level: session.settings.think_level.clone(),
         compactifications: session.settings.compactifications,
-        context_tokens: transcript_tokens
-            + context_summary
-                .as_ref()
-                .map(|summary| summary.summary_token_estimate)
-                .unwrap_or(0),
-        has_pending_approval,
+        context_tokens: session_head.context_tokens,
+        has_pending_approval: session_head.pending_approval_count > 0,
         last_message_preview,
-        message_count,
+        message_count: session_head.message_count,
         created_at: session.created_at,
         updated_at,
     })
@@ -701,19 +715,6 @@ fn session_summary_from_session(
 
 fn compaction_instructions() -> String {
     "Summarize the provided earlier conversation into a concise operational context summary. Preserve user goals, key decisions, important files and paths, blockers, approvals, and unresolved next steps. Keep the summary short and actionable.".to_string()
-}
-
-fn preview_text(content: &str, limit: usize) -> String {
-    let collapsed = content.split_whitespace().collect::<Vec<_>>().join(" ");
-    if collapsed.chars().count() <= limit {
-        return collapsed;
-    }
-    let mut preview = collapsed
-        .chars()
-        .take(limit.saturating_sub(1))
-        .collect::<String>();
-    preview.push('…');
-    preview
 }
 
 impl fmt::Display for BootstrapError {

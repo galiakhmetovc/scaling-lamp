@@ -1,7 +1,7 @@
 use agent_persistence::{
-    AppConfig, ConfigError, JobRecord, JobRepository, MissionRecord, MissionRepository,
-    PersistenceStore, RunRecord, RunRepository, SessionRecord, SessionRepository,
-    TranscriptRepository,
+    AppConfig, ConfigError, ContextSummaryRepository, JobRecord, JobRepository, MissionRecord,
+    MissionRepository, PersistenceStore, RunRecord, RunRepository, SessionRecord,
+    SessionRepository, TranscriptRepository,
 };
 use agent_runtime::mission::{JobSpec, MissionExecutionIntent, MissionSchedule, MissionStatus};
 use agent_runtime::permission::{
@@ -3520,6 +3520,93 @@ fn compact_session_is_a_noop_when_the_transcript_is_below_threshold() {
 }
 
 #[test]
+fn session_head_derives_counts_previews_and_summary_state() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let app = build_from_config(AppConfig {
+        data_dir: temp.path().join("state-root"),
+        ..AppConfig::default()
+    })
+    .expect("build app");
+    let store = PersistenceStore::open(&app.persistence).expect("open store");
+
+    store
+        .put_session(&SessionRecord {
+            id: "session-head".to_string(),
+            title: "Session Head".to_string(),
+            prompt_override: None,
+            settings_json: serde_json::to_string(&SessionSettings {
+                compactifications: 2,
+                ..SessionSettings::default()
+            })
+            .expect("serialize settings"),
+            active_mission_id: None,
+            created_at: 1,
+            updated_at: 1,
+        })
+        .expect("put session");
+    for (index, (kind, content)) in [
+        ("user", "first question"),
+        ("assistant", "first answer"),
+        ("user", "latest question"),
+        ("assistant", "recent answer"),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        store
+            .put_transcript(&agent_persistence::TranscriptRecord {
+                id: format!("session-head-transcript-{index}"),
+                session_id: "session-head".to_string(),
+                run_id: None,
+                kind: kind.to_string(),
+                content: content.to_string(),
+                created_at: 10 + index as i64,
+            })
+            .expect("put transcript");
+    }
+    store
+        .put_context_summary(&agent_persistence::ContextSummaryRecord {
+            session_id: "session-head".to_string(),
+            summary_text: "Condensed state.".to_string(),
+            covered_message_count: 2,
+            summary_token_estimate: 7,
+            updated_at: 20,
+        })
+        .expect("put context summary");
+
+    let mut run = RunEngine::new("run-pending", "session-head", None, 30);
+    run.start(30).expect("start run");
+    run.wait_for_approval(
+        ApprovalRequest::new("approval-1", "tool-1", "approve", 31),
+        31,
+    )
+    .expect("wait approval");
+    store
+        .put_run(&RunRecord::try_from(run.snapshot()).expect("run record"))
+        .expect("put run");
+
+    let head = app.session_head("session-head").expect("session head");
+
+    assert_eq!(head.session_id, "session-head");
+    assert_eq!(head.title, "Session Head");
+    assert_eq!(head.message_count, 4);
+    assert_eq!(head.context_tokens, 15);
+    assert_eq!(head.compactifications, 2);
+    assert_eq!(head.summary_covered_message_count, 2);
+    assert_eq!(head.pending_approval_count, 1);
+    assert_eq!(head.last_user_preview.as_deref(), Some("latest question"));
+    assert_eq!(
+        head.last_assistant_preview.as_deref(),
+        Some("recent answer")
+    );
+
+    let rendered = head.render();
+    assert!(rendered.contains("Session: Session Head"));
+    assert!(rendered.contains("Summary Covers: 2 messages"));
+    assert!(rendered.contains("Pending Approvals: 1"));
+}
+
+#[test]
 fn execute_chat_turn_uses_the_context_summary_and_only_the_uncovered_messages() {
     let (api_base, requests, handle) = spawn_json_server_sequence(vec![
         r#"{
@@ -3630,6 +3717,14 @@ fn execute_chat_turn_uses_the_context_summary_and_only_the_uncovered_messages() 
 
     let normalized_request = second_request.to_ascii_lowercase();
     assert!(normalized_request.contains("\"instructions\":\"be concise.\""));
+    let session_head_marker = normalized_request
+        .find("session: compacted chat")
+        .expect("session head marker");
+    let summary_marker = normalized_request
+        .find("compact summary covering earlier context.")
+        .expect("compact summary marker");
+    assert!(session_head_marker < summary_marker);
+    assert!(normalized_request.contains("summary covers: 2 messages"));
     assert!(normalized_request.contains("compact summary covering earlier context."));
     assert!(normalized_request.contains("\"text\":\"recent user one\""));
     assert!(normalized_request.contains("\"text\":\"recent assistant three\""));

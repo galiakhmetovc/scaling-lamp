@@ -1,5 +1,6 @@
 #![cfg_attr(not(test), allow(dead_code))]
 
+use crate::prompting;
 use agent_persistence::{
     ContextSummaryRepository, JobRecord, JobRepository, MissionRecord, MissionRepository,
     PersistenceStore, RecordConversionError, RunRecord, RunRepository, SessionRepository,
@@ -10,6 +11,7 @@ use agent_runtime::mission::{
     JobExecutionInput, JobResult, JobSpec, JobStatus, MissionSpec, MissionStatus,
 };
 use agent_runtime::permission::{PermissionAction, PermissionConfig};
+use agent_runtime::prompt::{PromptAssembly, PromptAssemblyInput};
 use agent_runtime::provider::{
     ProviderContinuationMessage, ProviderDriver, ProviderError, ProviderMessage, ProviderRequest,
     ProviderResponse, ProviderStreamMode, ProviderToolCall, ProviderToolDefinition,
@@ -417,15 +419,25 @@ impl ExecutionService {
             .collect()
     }
 
-    fn transcript_messages(
+    fn prompt_messages(
         &self,
         store: &PersistenceStore,
         session_id: &str,
     ) -> Result<Vec<ProviderMessage>, ExecutionError> {
-        store
+        let session = Session::try_from(
+            store
+                .get_session(session_id)
+                .map_err(ExecutionError::Store)?
+                .ok_or_else(|| ExecutionError::MissingSession {
+                    id: session_id.to_string(),
+                })?,
+        )
+        .map_err(ExecutionError::RecordConversion)?;
+        let transcripts = store
             .list_transcripts_for_session(session_id)
-            .map_err(ExecutionError::Store)?
-            .into_iter()
+            .map_err(ExecutionError::Store)?;
+        let transcript_messages = transcripts
+            .iter()
             .map(|record| {
                 let role = MessageRole::try_from(record.kind.as_str()).map_err(|_| {
                     ExecutionError::RecordConversion(RecordConversionError::InvalidMessageRole {
@@ -434,40 +446,32 @@ impl ExecutionService {
                 })?;
                 Ok(ProviderMessage {
                     role,
-                    content: record.content,
+                    content: record.content.clone(),
                 })
             })
-            .collect::<Result<Vec<_>, _>>()
-    }
-
-    fn prompt_messages(
-        &self,
-        store: &PersistenceStore,
-        session_id: &str,
-    ) -> Result<Vec<ProviderMessage>, ExecutionError> {
-        let transcript_messages = self.transcript_messages(store, session_id)?;
-        let Some(summary_record) = store
+            .collect::<Result<Vec<_>, _>>()?;
+        let context_summary = store
             .get_context_summary(session_id)
             .map_err(ExecutionError::Store)?
-        else {
-            return Ok(transcript_messages);
-        };
-        let summary =
-            ContextSummary::try_from(summary_record).map_err(ExecutionError::RecordConversion)?;
-        let covered_message_count =
-            (summary.covered_message_count as usize).min(transcript_messages.len());
-        let mut prompt_messages = Vec::with_capacity(
-            transcript_messages
-                .len()
-                .saturating_sub(covered_message_count)
-                + 1,
-        );
-        prompt_messages.push(ProviderMessage {
-            role: MessageRole::System,
-            content: summary.system_message_text(),
-        });
-        prompt_messages.extend(transcript_messages.into_iter().skip(covered_message_count));
-        Ok(prompt_messages)
+            .map(ContextSummary::try_from)
+            .transpose()
+            .map_err(ExecutionError::RecordConversion)?;
+        let runs = store
+            .load_execution_state()
+            .map_err(ExecutionError::Store)?
+            .runs
+            .into_iter()
+            .map(RunSnapshot::try_from)
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(ExecutionError::RecordConversion)?;
+        let session_head =
+            prompting::build_session_head(&session, &transcripts, context_summary.as_ref(), &runs);
+
+        Ok(PromptAssembly::build_messages(PromptAssemblyInput {
+            session_head: Some(session_head),
+            context_summary,
+            transcript_messages,
+        }))
     }
 
     fn persist_run(&self, store: &PersistenceStore, run: &RunEngine) -> Result<(), ExecutionError> {
