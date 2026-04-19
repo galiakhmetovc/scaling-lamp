@@ -10,7 +10,6 @@ use std::process::{Child, Command, Stdio};
 pub enum ToolFamily {
     Filesystem,
     Exec,
-    ShellSnippet,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -22,9 +21,6 @@ pub enum ToolName {
     ExecStart,
     ExecWait,
     ExecKill,
-    ShellSnippetStart,
-    ShellSnippetWait,
-    ShellSnippetKill,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -79,12 +75,6 @@ pub struct ExecStartInput {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct ShellSnippetStartInput {
-    pub snippet: String,
-    pub cwd: Option<String>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ProcessWaitInput {
     pub process_id: String,
 }
@@ -103,9 +93,6 @@ pub enum ToolCall {
     ExecStart(ExecStartInput),
     ExecWait(ProcessWaitInput),
     ExecKill(ProcessKillInput),
-    ShellSnippetStart(ShellSnippetStartInput),
-    ShellSnippetWait(ProcessWaitInput),
-    ShellSnippetKill(ProcessKillInput),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -133,7 +120,6 @@ pub struct FsSearchOutput {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ProcessKind {
     Exec,
-    ShellSnippet,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -206,7 +192,6 @@ impl ToolFamily {
         match self {
             Self::Filesystem => "fs",
             Self::Exec => "exec",
-            Self::ShellSnippet => "shell_snippet",
         }
     }
 }
@@ -221,9 +206,6 @@ impl ToolName {
             Self::ExecStart => "exec_start",
             Self::ExecWait => "exec_wait",
             Self::ExecKill => "exec_kill",
-            Self::ShellSnippetStart => "shell_snippet_start",
-            Self::ShellSnippetWait => "shell_snippet_wait",
-            Self::ShellSnippetKill => "shell_snippet_kill",
         }
     }
 }
@@ -311,36 +293,6 @@ impl ToolCatalog {
                     requires_approval: true,
                 },
             },
-            ToolDefinition {
-                name: ToolName::ShellSnippetStart,
-                family: ToolFamily::ShellSnippet,
-                description: "Start a shell snippet with shell semantics",
-                policy: ToolPolicy {
-                    read_only: false,
-                    destructive: true,
-                    requires_approval: true,
-                },
-            },
-            ToolDefinition {
-                name: ToolName::ShellSnippetWait,
-                family: ToolFamily::ShellSnippet,
-                description: "Wait for a shell snippet process to finish",
-                policy: ToolPolicy {
-                    read_only: false,
-                    destructive: false,
-                    requires_approval: false,
-                },
-            },
-            ToolDefinition {
-                name: ToolName::ShellSnippetKill,
-                family: ToolFamily::ShellSnippet,
-                description: "Kill a shell snippet process",
-                policy: ToolPolicy {
-                    read_only: false,
-                    destructive: true,
-                    requires_approval: true,
-                },
-            },
         ]
     }
 }
@@ -348,7 +300,7 @@ impl ToolCatalog {
 impl Default for ToolCatalog {
     fn default() -> Self {
         Self {
-            families: vec!["fs", "exec", "shell_snippet"],
+            families: vec!["fs", "exec"],
             definitions: Self::definitions(),
         }
     }
@@ -385,21 +337,6 @@ impl ToolRuntime {
             }
             ToolCall::ExecWait(input) => self.wait_process(&input.process_id, ProcessKind::Exec),
             ToolCall::ExecKill(input) => self.kill_process(&input.process_id, ProcessKind::Exec),
-            ToolCall::ShellSnippetStart(input) => {
-                let cwd = self.resolve_cwd(input.cwd.as_deref())?;
-                self.start_process(
-                    ProcessKind::ShellSnippet,
-                    "/bin/sh",
-                    &["-lc".to_string(), input.snippet],
-                    cwd,
-                )
-            }
-            ToolCall::ShellSnippetWait(input) => {
-                self.wait_process(&input.process_id, ProcessKind::ShellSnippet)
-            }
-            ToolCall::ShellSnippetKill(input) => {
-                self.kill_process(&input.process_id, ProcessKind::ShellSnippet)
-            }
         }
     }
 
@@ -537,9 +474,6 @@ impl ToolCall {
             Self::ExecStart(_) => ToolName::ExecStart,
             Self::ExecWait(_) => ToolName::ExecWait,
             Self::ExecKill(_) => ToolName::ExecKill,
-            Self::ShellSnippetStart(_) => ToolName::ShellSnippetStart,
-            Self::ShellSnippetWait(_) => ToolName::ShellSnippetWait,
-            Self::ShellSnippetKill(_) => ToolName::ShellSnippetKill,
         }
     }
 
@@ -570,15 +504,6 @@ impl ToolCall {
             }
             Self::ExecWait(input) => format!("exec_wait process_id={}", input.process_id),
             Self::ExecKill(input) => format!("exec_kill process_id={}", input.process_id),
-            Self::ShellSnippetStart(input) => {
-                format!("shell_snippet_start bytes={}", input.snippet.len())
-            }
-            Self::ShellSnippetWait(input) => {
-                format!("shell_snippet_wait process_id={}", input.process_id)
-            }
-            Self::ShellSnippetKill(input) => {
-                format!("shell_snippet_kill process_id={}", input.process_id)
-            }
         }
     }
 }
@@ -587,14 +512,12 @@ impl ProcessKind {
     fn as_prefix(self) -> &'static str {
         match self {
             Self::Exec => "exec",
-            Self::ShellSnippet => "shell",
         }
     }
 
     fn as_str(self) -> &'static str {
         match self {
             Self::Exec => "exec",
-            Self::ShellSnippet => "shell_snippet",
         }
     }
 }
@@ -716,8 +639,8 @@ fn normalize_tool_path(path: &str) -> String {
 mod tests {
     use super::{
         ExecStartInput, FsListInput, FsReadInput, FsSearchInput, FsWriteInput, ProcessKillInput,
-        ProcessResultStatus, ProcessWaitInput, ShellSnippetStartInput, ToolCall, ToolCatalog,
-        ToolFamily, ToolName, ToolRuntime,
+        ProcessResultStatus, ProcessWaitInput, ToolCall, ToolCatalog, ToolFamily, ToolName,
+        ToolRuntime,
     };
     use crate::workspace::WorkspaceRef;
 
@@ -725,17 +648,12 @@ mod tests {
     fn catalog_exposes_distinct_families_and_policy_flags() {
         let catalog = ToolCatalog::default();
         let exec_start = catalog.definition(ToolName::ExecStart).expect("exec_start");
-        let shell_start = catalog
-            .definition(ToolName::ShellSnippetStart)
-            .expect("shell_snippet_start");
         let fs_read = catalog.definition(ToolName::FsRead).expect("fs_read");
         let fs_write = catalog.definition(ToolName::FsWrite).expect("fs_write");
 
-        assert_eq!(catalog.families, ["fs", "exec", "shell_snippet"]);
+        assert_eq!(catalog.families, ["fs", "exec"]);
         assert_eq!(exec_start.family, ToolFamily::Exec);
-        assert_eq!(shell_start.family, ToolFamily::ShellSnippet);
         assert!(exec_start.policy.requires_approval);
-        assert!(shell_start.policy.requires_approval);
         assert!(fs_read.policy.read_only);
         assert!(fs_write.policy.destructive);
     }
@@ -842,28 +760,10 @@ mod tests {
     }
 
     #[test]
-    fn shell_snippet_family_allows_shell_features_and_exec_kill_terminates_processes() {
+    fn exec_kill_terminates_structured_processes() {
         let temp = tempfile::tempdir().expect("tempdir");
         let workspace = WorkspaceRef::new(temp.path());
         let mut runtime = ToolRuntime::new(workspace);
-
-        let shell_started = runtime
-            .invoke(ToolCall::ShellSnippetStart(ShellSnippetStartInput {
-                snippet: "printf 'left|right' | tr '|' ':'".to_string(),
-                cwd: None,
-            }))
-            .expect("shell start")
-            .into_process_start()
-            .expect("shell process start");
-        let shell_waited = runtime
-            .invoke(ToolCall::ShellSnippetWait(ProcessWaitInput {
-                process_id: shell_started.process_id.clone(),
-            }))
-            .expect("shell wait")
-            .into_process_result()
-            .expect("shell process result");
-
-        assert_eq!(shell_waited.stdout, "left:right");
 
         let exec_started = runtime
             .invoke(ToolCall::ExecStart(ExecStartInput {

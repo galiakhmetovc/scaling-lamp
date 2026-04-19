@@ -398,20 +398,9 @@ This family is for executable + args execution only.
 
 No shell parsing semantics are allowed here.
 
-### Shell Script Execution
-
-- `shell_snippet_start`
-- `shell_snippet_wait`
-- `shell_snippet_kill`
-
-This family is for:
-
-- pipes
-- redirects
-- compound shell expressions
-- shell builtins
-
-The runtime must always know which family is being used.
+If the agent needs a script-like workflow, it must write an explicit script file with
+`fs_write` and then invoke that file through `exec_start`. There is no dedicated
+shell-specific tool family.
 
 ### Planning
 

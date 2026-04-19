@@ -763,7 +763,6 @@ fn touch_mission(
 fn process_kind_label(kind: ProcessKind) -> &'static str {
     match kind {
         ProcessKind::Exec => "exec",
-        ProcessKind::ShellSnippet => "shell_snippet",
     }
 }
 
