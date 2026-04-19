@@ -1,4 +1,5 @@
 use crate::bootstrap::{App, BootstrapError};
+use crate::execution::ExecutionError;
 use agent_persistence::{
     JobRepository, MissionRecord, MissionRepository, PersistenceStore, RunRepository,
     SessionRecord, SessionRepository,
@@ -268,7 +269,20 @@ fn show_chat(app: &App, session_id: &str) -> Result<String, BootstrapError> {
 }
 
 fn send_chat(app: &App, session_id: &str, message: &str) -> Result<String, BootstrapError> {
-    let report = app.execute_chat_turn(session_id, message, unix_timestamp()?)?;
+    let now = unix_timestamp()?;
+    let run_id = format!("run-chat-{session_id}-{now}");
+    let report = match app.execute_chat_turn(session_id, message, now) {
+        Ok(report) => report,
+        Err(BootstrapError::Execution(ExecutionError::ApprovalRequired {
+            approval_id, ..
+        })) => {
+            return Ok(format!(
+                "chat send session_id={} run_id={} status=waiting_approval approval_id={}",
+                session_id, run_id, approval_id
+            ));
+        }
+        Err(error) => return Err(error),
+    };
     Ok(format!(
         "chat send session_id={} run_id={} response_id={} output={}",
         report.session_id, report.run_id, report.response_id, report.output_text

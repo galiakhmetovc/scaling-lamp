@@ -2915,6 +2915,82 @@ mod tests {
         assert!(normalized_request.contains("\"text\":\"second message\""));
     }
 
+    #[test]
+    fn run_with_args_chat_send_reports_waiting_approval_details() {
+        let (web_base, _web_requests, _web_handle) = spawn_text_server("/doc", "cli ask doc");
+        let first_provider_response = format!(
+            r#"{{
+                "id":"resp_chat_cli_approval",
+                "model":"gpt-5.4",
+                "output":[
+                    {{
+                        "id":"fc_1",
+                        "type":"function_call",
+                        "status":"completed",
+                        "call_id":"call_web_fetch",
+                        "name":"web_fetch",
+                        "arguments":"{{\"url\":\"{}\"}}"
+                    }}
+                ],
+                "usage":{{"input_tokens":19,"output_tokens":7,"total_tokens":26}}
+            }}"#,
+            web_base
+        );
+        let (api_base, _requests, handle) =
+            spawn_json_server_sequence(vec![first_provider_response]);
+        let temp = tempfile::tempdir().expect("tempdir");
+        let app = build_from_config(AppConfig {
+            data_dir: temp.path().join("state-root"),
+            provider: ConfiguredProvider {
+                kind: ProviderKind::OpenAiResponses,
+                api_base: Some(format!("{api_base}/v1")),
+                api_key: Some("test-key".to_string()),
+                default_model: Some("gpt-5.4".to_string()),
+            },
+            permissions: PermissionConfig {
+                mode: PermissionMode::Auto,
+                rules: vec![PermissionRule {
+                    action: PermissionAction::Ask,
+                    tool: Some("web_fetch".to_string()),
+                    family: None,
+                    path_prefix: None,
+                }],
+            },
+        })
+        .expect("build app");
+        let store = PersistenceStore::open(&app.persistence).expect("open store");
+
+        store
+            .put_session(&SessionRecord {
+                id: "session-chat-cli-approval".to_string(),
+                title: "Chat CLI approval session".to_string(),
+                prompt_override: Some("Use tools when useful.".to_string()),
+                settings_json: serde_json::to_string(&SessionSettings::default())
+                    .expect("serialize settings"),
+                active_mission_id: None,
+                created_at: 1,
+                updated_at: 1,
+            })
+            .expect("put session");
+
+        let sent = app
+            .run_with_args([
+                "chat",
+                "send",
+                "session-chat-cli-approval",
+                "Fetch",
+                "the",
+                "doc",
+            ])
+            .expect("chat send should report waiting approval");
+        handle.join().expect("join server");
+
+        assert!(sent.contains("status=waiting_approval"));
+        assert!(sent.contains("session_id=session-chat-cli-approval"));
+        assert!(sent.contains("run_id=run-chat-session-chat-cli-approval-"));
+        assert!(sent.contains("approval_id=approval-run-chat-session-chat-cli-approval-"));
+    }
+
     fn spawn_json_server(body: &'static str) -> (String, Receiver<String>, thread::JoinHandle<()>) {
         spawn_json_server_sequence(vec![body.to_string()])
     }

@@ -106,6 +106,8 @@ tool loop for auto-allowed tools:
   transcript on every tool step
 - the loop is bounded and rejects repeated tool-call signatures instead of
   spinning forever
+- when a surfaced tool resolves to `ask`, `chat send` now returns
+  `status=waiting_approval` together with `run_id` and `approval_id`
 
 ## Autonomous Mission Smoke
 
