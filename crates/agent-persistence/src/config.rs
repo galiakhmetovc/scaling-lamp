@@ -25,7 +25,6 @@ pub struct ConfigEnv {
     pub provider_api_key_override: Option<String>,
     pub provider_kind_override: Option<String>,
     pub provider_model_override: Option<String>,
-    pub legacy_zai_api_key_override: Option<String>,
     pub temp_dir: PathBuf,
     pub xdg_config_home: Option<PathBuf>,
     pub xdg_state_home: Option<PathBuf>,
@@ -118,7 +117,6 @@ impl ConfigEnv {
             provider_api_key_override: read_string_var("TEAMD_PROVIDER_API_KEY", &dotenv),
             provider_kind_override: read_string_var("TEAMD_PROVIDER_KIND", &dotenv),
             provider_model_override: read_string_var("TEAMD_PROVIDER_MODEL", &dotenv),
-            legacy_zai_api_key_override: read_string_var("TEAMD_ZAI_API_KEY", &dotenv),
             temp_dir: env::temp_dir(),
             xdg_config_home: read_path_var("XDG_CONFIG_HOME", &dotenv)?,
             xdg_state_home: read_path_var("XDG_STATE_HOME", &dotenv)?,
@@ -188,17 +186,6 @@ impl AppConfig {
         }
         if let Some(default_model) = &env.provider_model_override {
             provider.default_model = Some(default_model.clone());
-        }
-        if provider.api_key.is_none()
-            && let Some(api_key) = &env.legacy_zai_api_key_override
-        {
-            provider.api_key = Some(api_key.clone());
-        }
-        if env.provider_kind_override.is_none()
-            && provider.kind == ProviderKind::OpenAiResponses
-            && env.legacy_zai_api_key_override.is_some()
-        {
-            provider.kind = ProviderKind::ZaiChatCompletions;
         }
         if provider.kind == ProviderKind::ZaiChatCompletions && provider.api_base.is_none() {
             provider.api_base = Some(DEFAULT_ZAI_API_BASE.to_string());
@@ -405,7 +392,6 @@ mod tests {
             provider_api_key_override: None,
             provider_kind_override: None,
             provider_model_override: None,
-            legacy_zai_api_key_override: None,
             temp_dir: temp.path().join("tmp"),
             xdg_config_home: Some(temp.path().join("xdg-config")),
             xdg_state_home: Some(temp.path().join("xdg-state")),
@@ -430,7 +416,6 @@ mod tests {
             provider_api_key_override: None,
             provider_kind_override: None,
             provider_model_override: None,
-            legacy_zai_api_key_override: None,
             temp_dir: temp.path().join("tmp"),
             xdg_config_home: None,
             xdg_state_home: Some(xdg_state_home.clone()),
@@ -472,7 +457,6 @@ mod tests {
             provider_api_key_override: None,
             provider_kind_override: None,
             provider_model_override: None,
-            legacy_zai_api_key_override: None,
             temp_dir: temp.path().join("tmp"),
             xdg_config_home: Some(temp.path().join("xdg-config")),
             xdg_state_home: Some(temp.path().join("xdg-state")),
@@ -509,7 +493,6 @@ default_model = "glm-5.1"
             provider_api_key_override: Some("zai-secret".into()),
             provider_kind_override: None,
             provider_model_override: Some("glm-5.1-air".into()),
-            legacy_zai_api_key_override: None,
             temp_dir: temp.path().join("tmp"),
             xdg_config_home: Some(temp.path().join("xdg-config")),
             xdg_state_home: Some(temp.path().join("xdg-state")),
@@ -530,17 +513,16 @@ default_model = "glm-5.1"
     }
 
     #[test]
-    fn load_uses_legacy_zai_api_key_defaults() {
+    fn load_uses_zai_defaults_when_provider_kind_is_selected() {
         let temp = tempfile::tempdir().expect("tempdir");
         let env = ConfigEnv {
             config_path: None,
             data_dir_override: None,
             home_dir: Some(temp.path().join("home")),
             provider_api_base_override: None,
-            provider_api_key_override: None,
-            provider_kind_override: None,
+            provider_api_key_override: Some("zai-key".to_string()),
+            provider_kind_override: Some("zai_chat_completions".to_string()),
             provider_model_override: None,
-            legacy_zai_api_key_override: Some("legacy-key".to_string()),
             temp_dir: temp.path().join("tmp"),
             xdg_config_home: None,
             xdg_state_home: Some(temp.path().join("xdg-state")),
@@ -553,7 +535,7 @@ default_model = "glm-5.1"
             config.provider.api_base.as_deref(),
             Some(DEFAULT_ZAI_API_BASE)
         );
-        assert_eq!(config.provider.api_key.as_deref(), Some("legacy-key"));
+        assert_eq!(config.provider.api_key.as_deref(), Some("zai-key"));
         assert_eq!(
             config.provider.default_model.as_deref(),
             Some(DEFAULT_ZAI_MODEL)
@@ -568,7 +550,7 @@ default_model = "glm-5.1"
 TEAMD_PROVIDER_KIND="zai_chat_completions"
 TEAMD_PROVIDER_MODEL='glm-5-turbo'
 INVALID_LINE
-TEAMD_ZAI_API_KEY=secret-key
+TEAMD_PROVIDER_API_KEY=secret-key
 "#,
         );
 
@@ -581,7 +563,7 @@ TEAMD_ZAI_API_KEY=secret-key
             Some("glm-5-turbo")
         );
         assert_eq!(
-            values.get("TEAMD_ZAI_API_KEY").map(String::as_str),
+            values.get("TEAMD_PROVIDER_API_KEY").map(String::as_str),
             Some("secret-key")
         );
     }

@@ -40,6 +40,7 @@ current z.ai baseline taken from the older smoke branches:
 - provider kind: `zai_chat_completions`
 - base URL: `https://api.z.ai/api/coding/paas/v4`
 - model: `glm-5-turbo`
+- key env var: `TEAMD_PROVIDER_API_KEY`
 
 Smoke command:
 
