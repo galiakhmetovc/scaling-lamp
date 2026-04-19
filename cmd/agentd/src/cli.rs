@@ -9,9 +9,11 @@ use agent_runtime::provider::{FinishReason, ProviderMessage, ProviderRequest, Pr
 use agent_runtime::run::RunSnapshot;
 use agent_runtime::session::{MessageRole, Session, SessionSettings};
 use rusqlite::Connection;
+use std::io::{BufRead, Write};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 const DEFAULT_SMOKE_PROMPT: &str = "Reply with the single word ready.";
+const REPL_HELP: &str = "commands: /help | /show | /approve [approval-id] | /exit";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum Command {
@@ -25,6 +27,9 @@ enum Command {
     ChatSend {
         session_id: String,
         message: String,
+    },
+    ChatRepl {
+        session_id: String,
     },
     MissionTick {
         now: i64,
@@ -69,6 +74,7 @@ enum Command {
     },
 }
 
+#[cfg_attr(not(test), allow(dead_code))]
 pub fn execute<I, S>(app: &App, args: I) -> Result<String, BootstrapError>
 where
     I: IntoIterator<Item = S>,
@@ -84,6 +90,9 @@ where
             session_id,
             message,
         } => send_chat(app, &session_id, &message),
+        Command::ChatRepl { .. } => Err(BootstrapError::Usage {
+            reason: "chat repl requires interactive I/O".to_string(),
+        }),
         Command::MissionTick { now } => run_mission_tick(app, now),
         Command::SessionCreate { id, title } => create_session(&app.store()?, &id, &title),
         Command::SessionShow { id } => show_session(&app.store()?, &id),
@@ -103,6 +112,28 @@ where
         } => approve_run(app, &run_id, &approval_id),
         Command::DelegateList { run_id } => list_delegates(&app.store()?, &run_id),
         Command::VerificationShow { run_id } => show_verification(&app.store()?, &run_id),
+    }
+}
+
+pub fn execute_with_io<I, S, R, W>(
+    app: &App,
+    args: I,
+    input: &mut R,
+    output: &mut W,
+) -> Result<(), BootstrapError>
+where
+    I: IntoIterator<Item = S>,
+    S: AsRef<str>,
+    R: BufRead,
+    W: Write,
+{
+    let command = Command::parse(args)?;
+    match command {
+        Command::ChatRepl { session_id } => run_chat_repl(app, &session_id, input, output),
+        other => {
+            let rendered = execute_command(app, other)?;
+            writeln!(output, "{rendered}").map_err(BootstrapError::Stream)
+        }
     }
 }
 
@@ -132,6 +163,11 @@ impl Command {
             }
             [scope, action, session_id] if scope == "chat" && action == "show" => {
                 Ok(Self::ChatShow {
+                    session_id: session_id.clone(),
+                })
+            }
+            [scope, action, session_id] if scope == "chat" && action == "repl" => {
+                Ok(Self::ChatRepl {
                     session_id: session_id.clone(),
                 })
             }
@@ -212,8 +248,162 @@ impl Command {
                 })
             }
             _ => Err(BootstrapError::Usage {
-                reason: "expected one of: status | provider smoke | chat show/send | mission create/show/tick | session create/show | run show | job show/execute | approval list/approve | delegate list | verification show".to_string(),
+                reason: "expected one of: status | provider smoke | chat show/send/repl | mission create/show/tick | session create/show | run show | job show/execute | approval list/approve | delegate list | verification show".to_string(),
             }),
+        }
+    }
+}
+
+fn execute_command(app: &App, command: Command) -> Result<String, BootstrapError> {
+    match command {
+        Command::Status => render_status(app),
+        Command::ProviderSmoke { prompt } => run_provider_smoke(app, &prompt),
+        Command::ChatShow { session_id } => show_chat(app, &session_id),
+        Command::ChatSend {
+            session_id,
+            message,
+        } => send_chat(app, &session_id, &message),
+        Command::ChatRepl { .. } => Err(BootstrapError::Usage {
+            reason: "chat repl requires interactive I/O".to_string(),
+        }),
+        Command::MissionTick { now } => run_mission_tick(app, now),
+        Command::SessionCreate { id, title } => create_session(&app.store()?, &id, &title),
+        Command::SessionShow { id } => show_session(&app.store()?, &id),
+        Command::MissionCreate {
+            id,
+            session_id,
+            objective,
+        } => create_mission(&app.store()?, &id, &session_id, &objective),
+        Command::MissionShow { id } => show_mission(&app.store()?, &id),
+        Command::RunShow { id } => show_run(&app.store()?, &id),
+        Command::JobShow { id } => show_job(&app.store()?, &id),
+        Command::JobExecute { id, now } => execute_job(app, &id, now),
+        Command::ApprovalList { run_id } => list_approvals(&app.store()?, &run_id),
+        Command::ApprovalApprove {
+            run_id,
+            approval_id,
+        } => approve_run(app, &run_id, &approval_id),
+        Command::DelegateList { run_id } => list_delegates(&app.store()?, &run_id),
+        Command::VerificationShow { run_id } => show_verification(&app.store()?, &run_id),
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum ChatSendOutcome {
+    Completed {
+        session_id: String,
+        run_id: String,
+        response_id: String,
+        output_text: String,
+    },
+    WaitingApproval {
+        session_id: String,
+        run_id: String,
+        approval_id: String,
+    },
+}
+
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+struct ReplPendingApproval {
+    run_id: String,
+    approval_id: String,
+}
+
+fn run_chat_repl<R, W>(
+    app: &App,
+    session_id: &str,
+    input: &mut R,
+    output: &mut W,
+) -> Result<(), BootstrapError>
+where
+    R: BufRead,
+    W: Write,
+{
+    writeln!(output, "chat repl session_id={session_id}").map_err(BootstrapError::Stream)?;
+    writeln!(output, "{REPL_HELP}").map_err(BootstrapError::Stream)?;
+
+    let mut pending = None::<ReplPendingApproval>;
+    let mut line = String::new();
+
+    loop {
+        write!(output, "> ").map_err(BootstrapError::Stream)?;
+        output.flush().map_err(BootstrapError::Stream)?;
+
+        line.clear();
+        let bytes = input.read_line(&mut line).map_err(BootstrapError::Stream)?;
+        if bytes == 0 {
+            writeln!(output, "leaving chat repl session_id={session_id}")
+                .map_err(BootstrapError::Stream)?;
+            return Ok(());
+        }
+
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+
+        match trimmed {
+            "/exit" => {
+                writeln!(output, "leaving chat repl session_id={session_id}")
+                    .map_err(BootstrapError::Stream)?;
+                return Ok(());
+            }
+            "/help" => {
+                writeln!(output, "{REPL_HELP}").map_err(BootstrapError::Stream)?;
+            }
+            "/show" => {
+                let transcript = show_chat(app, session_id)?;
+                writeln!(output, "{transcript}").map_err(BootstrapError::Stream)?;
+            }
+            _ if trimmed.starts_with("/approve") => {
+                let requested = trimmed.split_whitespace().nth(1).map(ToString::to_string);
+                let Some(current) = pending.as_ref() else {
+                    writeln!(output, "no pending approval for session_id={session_id}")
+                        .map_err(BootstrapError::Stream)?;
+                    continue;
+                };
+                let approval_id = requested.unwrap_or_else(|| current.approval_id.clone());
+                let report = app.approve_run(&current.run_id, &approval_id, unix_timestamp()?)?;
+                writeln!(
+                    output,
+                    "approved {} on run {} status={} response_id={} output={} next_approval={}",
+                    approval_id,
+                    report.run_id,
+                    report.run_status.as_str(),
+                    report.response_id.as_deref().unwrap_or("<none>"),
+                    report.output_text.as_deref().unwrap_or("<none>"),
+                    report.approval_id.as_deref().unwrap_or("<none>")
+                )
+                .map_err(BootstrapError::Stream)?;
+                if let Some(text) = report.output_text.as_deref() {
+                    writeln!(output, "assistant: {text}").map_err(BootstrapError::Stream)?;
+                }
+                pending = report.approval_id.map(|next_approval| ReplPendingApproval {
+                    run_id: report.run_id,
+                    approval_id: next_approval,
+                });
+            }
+            message => match send_chat_outcome(app, session_id, message)? {
+                ChatSendOutcome::Completed { output_text, .. } => {
+                    writeln!(output, "assistant: {output_text}").map_err(BootstrapError::Stream)?;
+                }
+                ChatSendOutcome::WaitingApproval {
+                    session_id,
+                    run_id,
+                    approval_id,
+                } => {
+                    writeln!(
+                        output,
+                        "chat send session_id={} run_id={} status=waiting_approval approval_id={}",
+                        session_id, run_id, approval_id
+                    )
+                    .map_err(BootstrapError::Stream)?;
+                    pending = Some(ReplPendingApproval {
+                        run_id,
+                        approval_id,
+                    });
+                }
+            },
         }
     }
 }
@@ -269,6 +459,32 @@ fn show_chat(app: &App, session_id: &str) -> Result<String, BootstrapError> {
 }
 
 fn send_chat(app: &App, session_id: &str, message: &str) -> Result<String, BootstrapError> {
+    match send_chat_outcome(app, session_id, message)? {
+        ChatSendOutcome::Completed {
+            session_id,
+            run_id,
+            response_id,
+            output_text,
+        } => Ok(format!(
+            "chat send session_id={} run_id={} response_id={} output={}",
+            session_id, run_id, response_id, output_text
+        )),
+        ChatSendOutcome::WaitingApproval {
+            session_id,
+            run_id,
+            approval_id,
+        } => Ok(format!(
+            "chat send session_id={} run_id={} status=waiting_approval approval_id={}",
+            session_id, run_id, approval_id
+        )),
+    }
+}
+
+fn send_chat_outcome(
+    app: &App,
+    session_id: &str,
+    message: &str,
+) -> Result<ChatSendOutcome, BootstrapError> {
     let now = unix_timestamp()?;
     let run_id = format!("run-chat-{session_id}-{now}");
     let report = match app.execute_chat_turn(session_id, message, now) {
@@ -276,17 +492,20 @@ fn send_chat(app: &App, session_id: &str, message: &str) -> Result<String, Boots
         Err(BootstrapError::Execution(ExecutionError::ApprovalRequired {
             approval_id, ..
         })) => {
-            return Ok(format!(
-                "chat send session_id={} run_id={} status=waiting_approval approval_id={}",
-                session_id, run_id, approval_id
-            ));
+            return Ok(ChatSendOutcome::WaitingApproval {
+                session_id: session_id.to_string(),
+                run_id,
+                approval_id,
+            });
         }
         Err(error) => return Err(error),
     };
-    Ok(format!(
-        "chat send session_id={} run_id={} response_id={} output={}",
-        report.session_id, report.run_id, report.response_id, report.output_text
-    ))
+    Ok(ChatSendOutcome::Completed {
+        session_id: report.session_id,
+        run_id: report.run_id,
+        response_id: report.response_id,
+        output_text: report.output_text,
+    })
 }
 
 fn create_mission(

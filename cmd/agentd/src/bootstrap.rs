@@ -12,6 +12,7 @@ use agent_runtime::tool::ToolCall;
 use std::error::Error;
 use std::fmt;
 use std::fs;
+use std::io::{BufRead, Write};
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, SystemTimeError, UNIX_EPOCH};
 
@@ -27,6 +28,7 @@ pub enum BootstrapError {
         path: PathBuf,
         source: std::io::Error,
     },
+    Stream(std::io::Error),
     MissingRecord {
         kind: &'static str,
         id: String,
@@ -74,17 +76,35 @@ impl App {
     }
 
     pub fn run(&self) -> Result<(), BootstrapError> {
-        let output = self.run_with_args(std::env::args().skip(1))?;
-        println!("{output}");
-        Ok(())
+        let stdin = std::io::stdin();
+        let stdout = std::io::stdout();
+        let mut input = stdin.lock();
+        let mut output = stdout.lock();
+        self.run_with_io(std::env::args().skip(1), &mut input, &mut output)
     }
 
+    #[cfg_attr(not(test), allow(dead_code))]
     pub fn run_with_args<I, S>(&self, args: I) -> Result<String, BootstrapError>
     where
         I: IntoIterator<Item = S>,
         S: AsRef<str>,
     {
         cli::execute(self, args)
+    }
+
+    pub fn run_with_io<I, S, R, W>(
+        &self,
+        args: I,
+        input: &mut R,
+        output: &mut W,
+    ) -> Result<(), BootstrapError>
+    where
+        I: IntoIterator<Item = S>,
+        S: AsRef<str>,
+        R: BufRead,
+        W: Write,
+    {
+        cli::execute_with_io(self, args, input, output)
     }
 
     pub fn store(&self) -> Result<PersistenceStore, BootstrapError> {
@@ -264,6 +284,7 @@ impl fmt::Display for BootstrapError {
                     path.display()
                 )
             }
+            Self::Stream(source) => write!(formatter, "stream I/O error: {source}"),
             Self::MissingRecord { kind, id } => write!(formatter, "{kind} {id} was not found"),
             Self::ProviderBuild(source) => write!(formatter, "{source}"),
             Self::ProviderRequest(source) => write!(formatter, "{source}"),
@@ -286,6 +307,7 @@ impl Error for BootstrapError {
             Self::Config(source) => Some(source),
             Self::Clock(source) => Some(source),
             Self::Io { source, .. } => Some(source),
+            Self::Stream(source) => Some(source),
             Self::ProviderBuild(source) => Some(source),
             Self::ProviderRequest(source) => Some(source),
             Self::Execution(source) => Some(source),
@@ -451,7 +473,7 @@ mod tests {
     use agent_runtime::verification::VerificationStatus;
     use agent_runtime::verification::{CheckOutcome, EvidenceBundle};
     use std::fs;
-    use std::io::{BufRead, BufReader, Read, Write};
+    use std::io::{BufRead, BufReader, Cursor, Read, Write};
     use std::net::TcpListener;
     use std::sync::mpsc::{self, Receiver};
     use std::thread;
@@ -2989,6 +3011,169 @@ mod tests {
         assert!(sent.contains("session_id=session-chat-cli-approval"));
         assert!(sent.contains("run_id=run-chat-session-chat-cli-approval-"));
         assert!(sent.contains("approval_id=approval-run-chat-session-chat-cli-approval-"));
+    }
+
+    #[test]
+    fn repl_runs_chat_turns_and_supports_show_and_exit_commands() {
+        let (api_base, _requests, handle) = spawn_json_server(
+            r#"{
+                "id":"resp_chat_repl",
+                "model":"gpt-5.4",
+                "output":[
+                    {
+                        "id":"msg_1",
+                        "type":"message",
+                        "status":"completed",
+                        "role":"assistant",
+                        "content":[
+                            {
+                                "type":"output_text",
+                                "text":"REPL reply"
+                            }
+                        ]
+                    }
+                ],
+                "usage":{"input_tokens":16,"output_tokens":3,"total_tokens":19}
+            }"#,
+        );
+        let temp = tempfile::tempdir().expect("tempdir");
+        let app = build_from_config(AppConfig {
+            data_dir: temp.path().join("state-root"),
+            provider: ConfiguredProvider {
+                kind: ProviderKind::OpenAiResponses,
+                api_base: Some(format!("{api_base}/v1")),
+                api_key: Some("test-key".to_string()),
+                default_model: Some("gpt-5.4".to_string()),
+            },
+            ..AppConfig::default()
+        })
+        .expect("build app");
+        let store = PersistenceStore::open(&app.persistence).expect("open store");
+
+        store
+            .put_session(&SessionRecord {
+                id: "session-chat-repl".to_string(),
+                title: "Chat REPL session".to_string(),
+                prompt_override: Some("Keep it short.".to_string()),
+                settings_json: serde_json::to_string(&SessionSettings::default())
+                    .expect("serialize settings"),
+                active_mission_id: None,
+                created_at: 1,
+                updated_at: 1,
+            })
+            .expect("put session");
+
+        let mut input = Cursor::new(b"Hello from repl\n/show\n/exit\n".to_vec());
+        let mut output = Vec::new();
+        app.run_with_io(
+            ["chat", "repl", "session-chat-repl"],
+            &mut input,
+            &mut output,
+        )
+        .expect("repl");
+        handle.join().expect("join server");
+
+        let rendered = String::from_utf8(output).expect("utf8");
+        assert!(rendered.contains("assistant: REPL reply"));
+        assert!(rendered.contains("["));
+        assert!(rendered.contains("user: Hello from repl"));
+        assert!(rendered.contains("leaving chat repl"));
+    }
+
+    #[test]
+    fn repl_surfaces_waiting_approval_and_can_approve_latest_pending_turn() {
+        let (web_base, _web_requests, _web_handle) = spawn_text_server("/doc", "repl ask doc");
+        let first_provider_response = format!(
+            r#"{{
+                "id":"resp_repl_waiting",
+                "model":"gpt-5.4",
+                "output":[
+                    {{
+                        "id":"fc_1",
+                        "type":"function_call",
+                        "status":"completed",
+                        "call_id":"call_web_fetch",
+                        "name":"web_fetch",
+                        "arguments":"{{\"url\":\"{}\"}}"
+                    }}
+                ],
+                "usage":{{"input_tokens":19,"output_tokens":7,"total_tokens":26}}
+            }}"#,
+            web_base
+        );
+        let second_provider_response = r#"{
+            "id":"resp_repl_approved",
+            "model":"gpt-5.4",
+            "output":[
+                {
+                    "id":"msg_approved",
+                    "type":"message",
+                    "status":"completed",
+                    "role":"assistant",
+                    "content":[
+                        {
+                            "type":"output_text",
+                            "text":"repl approval completed"
+                        }
+                    ]
+                }
+            ],
+            "usage":{"input_tokens":20,"output_tokens":4,"total_tokens":24}
+        }"#
+        .to_string();
+        let (api_base, _requests, handle) =
+            spawn_json_server_sequence(vec![first_provider_response, second_provider_response]);
+        let temp = tempfile::tempdir().expect("tempdir");
+        let app = build_from_config(AppConfig {
+            data_dir: temp.path().join("state-root"),
+            provider: ConfiguredProvider {
+                kind: ProviderKind::OpenAiResponses,
+                api_base: Some(format!("{api_base}/v1")),
+                api_key: Some("test-key".to_string()),
+                default_model: Some("gpt-5.4".to_string()),
+            },
+            permissions: PermissionConfig {
+                mode: PermissionMode::Auto,
+                rules: vec![PermissionRule {
+                    action: PermissionAction::Ask,
+                    tool: Some("web_fetch".to_string()),
+                    family: None,
+                    path_prefix: None,
+                }],
+            },
+        })
+        .expect("build app");
+        let store = PersistenceStore::open(&app.persistence).expect("open store");
+
+        store
+            .put_session(&SessionRecord {
+                id: "session-chat-repl-approval".to_string(),
+                title: "Chat REPL approval session".to_string(),
+                prompt_override: Some("Use tools when useful.".to_string()),
+                settings_json: serde_json::to_string(&SessionSettings::default())
+                    .expect("serialize settings"),
+                active_mission_id: None,
+                created_at: 1,
+                updated_at: 1,
+            })
+            .expect("put session");
+
+        let mut input = Cursor::new(b"Fetch the doc\n/approve\n/show\n/exit\n".to_vec());
+        let mut output = Vec::new();
+        app.run_with_io(
+            ["chat", "repl", "session-chat-repl-approval"],
+            &mut input,
+            &mut output,
+        )
+        .expect("repl");
+        handle.join().expect("join server");
+
+        let rendered = String::from_utf8(output).expect("utf8");
+        assert!(rendered.contains("status=waiting_approval"));
+        assert!(rendered.contains("approval_id=approval-run-chat-session-chat-repl-approval-"));
+        assert!(rendered.contains("approved"));
+        assert!(rendered.contains("output=repl approval completed"));
+        assert!(rendered.contains("assistant: repl approval completed"));
     }
 
     fn spawn_json_server(body: &'static str) -> (String, Receiver<String>, thread::JoinHandle<()>) {

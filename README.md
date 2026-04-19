@@ -73,6 +73,7 @@ Useful commands:
 cargo run -p agentd -- status
 cargo run -p agentd -- chat show <session-id>
 cargo run -p agentd -- chat send <session-id> "<message>"
+cargo run -p agentd -- chat repl <session-id>
 cargo run -p agentd -- mission tick
 cargo run -p agentd -- mission tick <unix-timestamp>
 cargo run -p agentd -- job execute <job-id>
@@ -94,6 +95,7 @@ The normal chat operator path is now:
 
 1. `chat show <session-id>` to inspect transcript history
 2. `chat send <session-id> "<message>"` to execute one ordinary chat turn
+3. `chat repl <session-id>` to stay inside one terminal chat loop
 
 The current OpenAI-backed chat path now also supports one bounded model-driven
 tool loop for auto-allowed tools:
@@ -164,6 +166,17 @@ cargo run -p agentd -- chat show <session-id>
 
 The approval command now continues the same model turn and appends the final
 assistant reply when the provider returns a completion.
+
+Interactive REPL commands:
+
+- `/help`
+- `/show`
+- `/approve [approval-id]`
+- `/exit`
+
+When the active session hits `waiting_approval`, the REPL prints the pending
+`run_id` and `approval_id`. `/approve` with no argument resumes the latest
+pending approval for that REPL session; `/approve <approval-id>` overrides it.
 
 ## Core Principles
 
