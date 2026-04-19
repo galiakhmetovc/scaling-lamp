@@ -46,6 +46,14 @@ pub struct MissionTurnExecutionReport {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ChatTurnExecutionReport {
+    pub session_id: String,
+    pub run_id: String,
+    pub response_id: String,
+    pub output_text: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ToolExecutionReport {
     pub job_id: String,
     pub run_id: String,
@@ -396,6 +404,116 @@ impl ExecutionService {
 
         Ok(MissionTurnExecutionReport {
             job_id: job.id,
+            run_id,
+            response_id: response.response_id,
+            output_text: response.output_text,
+        })
+    }
+
+    pub fn execute_chat_turn(
+        &self,
+        store: &PersistenceStore,
+        provider: &dyn ProviderDriver,
+        session_id: &str,
+        message: &str,
+        now: i64,
+    ) -> Result<ChatTurnExecutionReport, ExecutionError> {
+        let mut session = store
+            .get_session(session_id)
+            .map_err(ExecutionError::Store)?
+            .ok_or_else(|| ExecutionError::MissingSession {
+                id: session_id.to_string(),
+            })?;
+        let run_id = format!("run-chat-{session_id}-{now}");
+        let mut run = RunEngine::new(run_id.clone(), session.id.clone(), None, now);
+        run.start(now).map_err(ExecutionError::RunTransition)?;
+        store
+            .put_run(
+                &RunRecord::try_from(run.snapshot()).map_err(ExecutionError::RecordConversion)?,
+            )
+            .map_err(ExecutionError::Store)?;
+
+        let user_entry = TranscriptEntry::user(
+            format!("transcript-chat-{session_id}-{now}-01-user"),
+            session.id.clone(),
+            Some(run_id.as_str()),
+            message,
+            now,
+        );
+        store
+            .put_transcript(&TranscriptRecord::from(&user_entry))
+            .map_err(ExecutionError::Store)?;
+
+        session.updated_at = now;
+        store.put_session(&session).map_err(ExecutionError::Store)?;
+
+        let request = ProviderRequest {
+            model: None,
+            instructions: session.prompt_override.clone(),
+            messages: store
+                .list_transcripts_for_session(&session.id)
+                .map_err(ExecutionError::Store)?
+                .into_iter()
+                .map(|record| {
+                    let role = MessageRole::try_from(record.kind.as_str()).map_err(|_| {
+                        ExecutionError::RecordConversion(
+                            RecordConversionError::InvalidMessageRole {
+                                value: record.kind.clone(),
+                            },
+                        )
+                    })?;
+                    Ok(ProviderMessage {
+                        role,
+                        content: record.content,
+                    })
+                })
+                .collect::<Result<Vec<_>, _>>()?,
+            max_output_tokens: Some(512),
+            stream: ProviderStreamMode::Disabled,
+        };
+
+        let response = match provider.complete(&request) {
+            Ok(response) => response,
+            Err(source) => {
+                run.fail(source.to_string(), now)
+                    .map_err(ExecutionError::RunTransition)?;
+                store
+                    .put_run(
+                        &RunRecord::try_from(run.snapshot())
+                            .map_err(ExecutionError::RecordConversion)?,
+                    )
+                    .map_err(ExecutionError::Store)?;
+                return Err(ExecutionError::Provider(source));
+            }
+        };
+
+        run.begin_provider_stream(&response.response_id, &response.model, now)
+            .map_err(ExecutionError::RunTransition)?;
+        run.push_provider_text(&response.output_text, now)
+            .map_err(ExecutionError::RunTransition)?;
+        run.finish_provider_stream(now)
+            .map_err(ExecutionError::RunTransition)?;
+        run.complete(&response.output_text, now)
+            .map_err(ExecutionError::RunTransition)?;
+        store
+            .put_run(
+                &RunRecord::try_from(run.snapshot()).map_err(ExecutionError::RecordConversion)?,
+            )
+            .map_err(ExecutionError::Store)?;
+
+        let assistant_entry = TranscriptEntry::assistant(
+            format!("transcript-chat-{session_id}-{now}-02-assistant"),
+            session.id.clone(),
+            Some(run_id.as_str()),
+            &response.output_text,
+            now,
+        );
+        store
+            .put_transcript(&TranscriptRecord::from(&assistant_entry))
+            .map_err(ExecutionError::Store)?;
+
+        Ok(ChatTurnExecutionReport {
+            session_id: session.id,
             run_id,
             response_id: response.response_id,
             output_text: response.output_text,

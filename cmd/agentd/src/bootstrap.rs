@@ -148,6 +148,20 @@ impl App {
     }
 
     #[cfg_attr(not(test), allow(dead_code))]
+    pub fn execute_chat_turn(
+        &self,
+        session_id: &str,
+        message: &str,
+        now: i64,
+    ) -> Result<execution::ChatTurnExecutionReport, BootstrapError> {
+        let store = self.store()?;
+        let provider = self.provider_driver()?;
+        execution::ExecutionService::default()
+            .execute_chat_turn(&store, provider.as_ref(), session_id, message, now)
+            .map_err(BootstrapError::Execution)
+    }
+
+    #[cfg_attr(not(test), allow(dead_code))]
     pub fn request_tool_approval(
         &self,
         job_id: &str,
@@ -1523,6 +1537,109 @@ mod tests {
         assert_eq!(transcript.entries[1].role, "assistant");
         assert_eq!(transcript.entries[1].content, "Hi");
         assert_eq!(transcript.render(), "[10] user: Hello\n[11] assistant: Hi");
+    }
+
+    #[test]
+    fn execute_chat_turn_creates_a_run_and_appends_transcript_history() {
+        let (api_base, requests, handle) = spawn_json_server(
+            r#"{
+                "id":"resp_chat",
+                "model":"gpt-5.4",
+                "output":[
+                    {
+                        "id":"msg_1",
+                        "type":"message",
+                        "status":"completed",
+                        "role":"assistant",
+                        "content":[
+                            {
+                                "type":"output_text",
+                                "text":"Hi back"
+                            }
+                        ]
+                    }
+                ],
+                "usage":{"input_tokens":18,"output_tokens":3,"total_tokens":21}
+            }"#,
+        );
+        let temp = tempfile::tempdir().expect("tempdir");
+        let app = build_from_config(AppConfig {
+            data_dir: temp.path().join("state-root"),
+            provider: ConfiguredProvider {
+                kind: ProviderKind::OpenAiResponses,
+                api_base: Some(format!("{api_base}/v1")),
+                api_key: Some("test-key".to_string()),
+                default_model: Some("gpt-5.4".to_string()),
+            },
+        })
+        .expect("build app");
+        let store = PersistenceStore::open(&app.persistence).expect("open store");
+
+        store
+            .put_session(&SessionRecord {
+                id: "session-chat-turn".to_string(),
+                title: "Chat turn session".to_string(),
+                prompt_override: Some("Be concise.".to_string()),
+                settings_json: serde_json::to_string(&SessionSettings::default())
+                    .expect("serialize settings"),
+                active_mission_id: None,
+                created_at: 1,
+                updated_at: 1,
+            })
+            .expect("put session");
+        store
+            .put_transcript(&agent_persistence::TranscriptRecord {
+                id: "msg-1".to_string(),
+                session_id: "session-chat-turn".to_string(),
+                run_id: None,
+                kind: "user".to_string(),
+                content: "Hello there".to_string(),
+                created_at: 2,
+            })
+            .expect("put prior user transcript");
+        store
+            .put_transcript(&agent_persistence::TranscriptRecord {
+                id: "msg-2".to_string(),
+                session_id: "session-chat-turn".to_string(),
+                run_id: None,
+                kind: "assistant".to_string(),
+                content: "General Kenobi".to_string(),
+                created_at: 3,
+            })
+            .expect("put prior assistant transcript");
+
+        let report = app
+            .execute_chat_turn("session-chat-turn", "How are you?", 10)
+            .expect("execute chat turn");
+        let raw_request = requests.recv().expect("raw request");
+        handle.join().expect("join server");
+
+        assert_eq!(report.run_id, "run-chat-session-chat-turn-10");
+        assert_eq!(report.response_id, "resp_chat");
+        assert_eq!(report.output_text, "Hi back");
+
+        let run = store
+            .get_run("run-chat-session-chat-turn-10")
+            .expect("get run")
+            .expect("run exists");
+        assert_eq!(run.status, "completed");
+        assert_eq!(run.result.as_deref(), Some("Hi back"));
+
+        let transcript = app
+            .session_transcript("session-chat-turn")
+            .expect("load transcript");
+        assert_eq!(transcript.entries.len(), 4);
+        assert_eq!(transcript.entries[2].role, "user");
+        assert_eq!(transcript.entries[2].content, "How are you?");
+        assert_eq!(transcript.entries[3].role, "assistant");
+        assert_eq!(transcript.entries[3].content, "Hi back");
+
+        let normalized_request = raw_request.to_ascii_lowercase();
+        assert!(normalized_request.contains("/v1/responses"));
+        assert!(normalized_request.contains("\"instructions\":\"be concise.\""));
+        assert!(normalized_request.contains("\"text\":\"hello there\""));
+        assert!(normalized_request.contains("\"text\":\"general kenobi\""));
+        assert!(normalized_request.contains("\"text\":\"how are you?\""));
     }
 
     fn spawn_json_server(body: &'static str) -> (String, Receiver<String>, thread::JoinHandle<()>) {
