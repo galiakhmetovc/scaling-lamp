@@ -340,10 +340,7 @@ impl SessionRepository for PersistenceStore {
             return Ok(false);
         }
 
-        for path in transcript_paths
-            .into_iter()
-            .chain(artifact_paths.into_iter())
-        {
+        for path in transcript_paths.into_iter().chain(artifact_paths) {
             remove_payload_if_exists(&path)?;
             remove_payload_if_exists(&backup_path(&path))?;
         }

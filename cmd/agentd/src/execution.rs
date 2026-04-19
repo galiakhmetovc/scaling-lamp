@@ -21,7 +21,7 @@ use agent_runtime::run::{
 use agent_runtime::scheduler::{
     MissionVerificationSummary, SupervisorAction, SupervisorLoop, SupervisorTickInput,
 };
-use agent_runtime::session::{MessageRole, TranscriptEntry};
+use agent_runtime::session::{MessageRole, Session, TranscriptEntry};
 use agent_runtime::tool::{
     ProcessKind, ToolCall, ToolCatalog, ToolDefinition, ToolError, ToolOutput, ToolRuntime,
 };
@@ -203,12 +203,13 @@ impl ProviderLoopCursor {
     fn build_request(
         &self,
         base_messages: &[ProviderMessage],
+        model: Option<&str>,
         instructions: Option<&str>,
         tools: &[ProviderToolDefinition],
         stream: ProviderStreamMode,
     ) -> ProviderRequest {
         ProviderRequest {
-            model: None,
+            model: model.map(str::to_string),
             instructions: instructions.map(str::to_string),
             messages: if self.supports_previous_response_id && self.previous_response_id.is_some() {
                 Vec::new()
@@ -587,6 +588,7 @@ impl ExecutionService {
         store: &PersistenceStore,
         provider: &dyn ProviderDriver,
         session_id: &str,
+        model: Option<String>,
         instructions: Option<String>,
         run: &mut RunEngine,
         initial_loop_state: Option<ProviderLoopState>,
@@ -602,6 +604,7 @@ impl ExecutionService {
         while cursor.has_round_budget() {
             let request = cursor.build_request(
                 &base_messages,
+                model.as_deref(),
                 instructions.as_deref(),
                 &tools,
                 cursor.stream_mode(observer.is_some()),
@@ -858,12 +861,14 @@ impl ExecutionService {
                 })?,
         )
         .map_err(ExecutionError::RecordConversion)?;
-        let session = store
+        let session_record = store
             .get_session(&mission.session_id)
             .map_err(ExecutionError::Store)?
             .ok_or_else(|| ExecutionError::MissingSession {
                 id: mission.session_id.clone(),
             })?;
+        let session =
+            Session::try_from(session_record).map_err(ExecutionError::RecordConversion)?;
 
         let goal = match &job.input {
             JobExecutionInput::MissionTurn { mission_id, goal } if mission_id == &mission.id => {
@@ -929,7 +934,11 @@ impl ExecutionService {
             store,
             provider,
             &session.id,
-            session.prompt_override.clone(),
+            session.settings.model.clone(),
+            session
+                .prompt_override
+                .as_ref()
+                .map(|override_text| override_text.as_str().to_string()),
             &mut run,
             None,
             now,
@@ -1041,12 +1050,14 @@ impl ExecutionService {
         now: i64,
         observer: &mut Option<&mut dyn FnMut(ChatExecutionEvent)>,
     ) -> Result<ChatTurnExecutionReport, ExecutionError> {
-        let mut session = store
+        let mut session_record = store
             .get_session(session_id)
             .map_err(ExecutionError::Store)?
             .ok_or_else(|| ExecutionError::MissingSession {
                 id: session_id.to_string(),
             })?;
+        let session =
+            Session::try_from(session_record.clone()).map_err(ExecutionError::RecordConversion)?;
         let run_id = format!("run-chat-{session_id}-{now}");
         let mut run = RunEngine::new(run_id.clone(), session.id.clone(), None, now);
         run.start(now).map_err(ExecutionError::RunTransition)?;
@@ -1067,14 +1078,20 @@ impl ExecutionService {
             .put_transcript(&TranscriptRecord::from(&user_entry))
             .map_err(ExecutionError::Store)?;
 
-        session.updated_at = now;
-        store.put_session(&session).map_err(ExecutionError::Store)?;
+        session_record.updated_at = now;
+        store
+            .put_session(&session_record)
+            .map_err(ExecutionError::Store)?;
 
         let response = match self.execute_provider_turn_loop(
             store,
             provider,
             &session.id,
-            session.prompt_override.clone(),
+            session.settings.model.clone(),
+            session
+                .prompt_override
+                .as_ref()
+                .map(|override_text| override_text.as_str().to_string()),
             &mut run,
             None,
             now,
@@ -1179,12 +1196,14 @@ impl ExecutionService {
             });
         }
 
-        let session = store
+        let session_record = store
             .get_session(&run.snapshot().session_id)
             .map_err(ExecutionError::Store)?
             .ok_or_else(|| ExecutionError::MissingSession {
                 id: run.snapshot().session_id.clone(),
             })?;
+        let session =
+            Session::try_from(session_record).map_err(ExecutionError::RecordConversion)?;
         let mut job = self.find_job_by_run_id(store, run_id)?;
         let mut mission = if let Some(job) = job.as_ref() {
             Some(
@@ -1320,7 +1339,11 @@ impl ExecutionService {
             store,
             provider,
             &session.id,
-            session.prompt_override.clone(),
+            session.settings.model.clone(),
+            session
+                .prompt_override
+                .as_ref()
+                .map(|override_text| override_text.as_str().to_string()),
             &mut run,
             Some(resumed_loop_state),
             now,

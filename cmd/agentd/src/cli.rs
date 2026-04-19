@@ -7,7 +7,7 @@ use agent_persistence::{
 };
 use agent_runtime::mission::{MissionExecutionIntent, MissionSchedule, MissionSpec, MissionStatus};
 use agent_runtime::provider::{FinishReason, ProviderMessage, ProviderRequest, ProviderStreamMode};
-use agent_runtime::run::{RunSnapshot, RunStatus};
+use agent_runtime::run::RunSnapshot;
 use agent_runtime::session::{MessageRole, Session, SessionSettings};
 use encoding_rs::Encoding;
 use rusqlite::Connection;
@@ -562,43 +562,12 @@ fn find_pending_approval(
     session_id: &str,
     requested_approval_id: Option<&str>,
 ) -> Result<Option<ReplPendingApproval>, BootstrapError> {
-    let snapshot = app.store()?.load_execution_state()?;
-    let mut latest = None::<(i64, i64, ReplPendingApproval)>;
-
-    for record in snapshot.runs {
-        let run = RunSnapshot::try_from(record).map_err(BootstrapError::RecordConversion)?;
-        if run.session_id != session_id || run.status != RunStatus::WaitingApproval {
-            continue;
-        }
-
-        for approval in run.pending_approvals {
-            let pending = ReplPendingApproval {
-                run_id: run.id.clone(),
-                approval_id: approval.id.clone(),
-            };
-
-            if let Some(requested) = requested_approval_id {
-                if approval.id == requested {
-                    return Ok(Some(pending));
-                }
-                continue;
-            }
-
-            let candidate = (run.updated_at, approval.requested_at, pending);
-            if latest
-                .as_ref()
-                .map(|existing| {
-                    existing.0 < candidate.0
-                        || (existing.0 == candidate.0 && existing.1 < candidate.1)
-                })
-                .unwrap_or(true)
-            {
-                latest = Some(candidate);
-            }
-        }
-    }
-
-    Ok(latest.map(|(_, _, pending)| pending))
+    Ok(app
+        .latest_pending_approval(session_id, requested_approval_id)?
+        .map(|pending| ReplPendingApproval {
+            run_id: pending.run_id,
+            approval_id: pending.approval_id,
+        }))
 }
 
 fn create_session(

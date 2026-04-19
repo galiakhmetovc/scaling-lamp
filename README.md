@@ -95,6 +95,7 @@ The normal chat operator path is now:
 1. `chat show <session-id>` to inspect transcript history
 2. `chat send <session-id> "<message>"` to execute one ordinary chat turn
 3. `chat repl <session-id>` to stay inside one terminal chat loop
+4. `tui` to work in the chat-first fullscreen terminal UI
 
 `chat repl` now streams provider output directly in the terminal:
 
@@ -190,6 +191,51 @@ Interactive REPL commands:
 When the active session hits `waiting_approval`, the REPL prints the pending
 `run_id` and `approval_id`. `/approve` with no argument resumes the latest
 pending approval for that REPL session; `/approve <approval-id>` overrides it.
+
+## Terminal UI
+
+The current branch now includes a chat-first terminal UI on top of the same
+canonical runtime path:
+
+```bash
+cargo run -p agentd -- tui
+```
+
+The first screen is a session picker. `Enter` opens the selected session, `N`
+opens the create-session dialog, `D` opens delete confirmation, and `Esc`
+returns to the previous chat if one is already active.
+
+Inside the chat screen:
+
+- the main surface is one lazy scrollable chat timeline
+- assistant text streams into the timeline as it arrives
+- reasoning is rendered as its own timestamped timeline entry type
+- tool activity stays compact as one status row per tool step
+- approvals are still command-driven through `/approve [approval-id]`
+
+Supported chat commands in the TUI:
+
+- `/session`
+- `/new`
+- `/rename`
+- `/clear`
+- `/approve [approval-id]`
+- `/model <name>`
+- `/reasoning on|off`
+- `/think <level>`
+- `/compact`
+- `/exit`
+
+Current notes:
+
+- `/clear` is destructive: it deletes the current session after confirmation
+  and immediately switches into a new empty session
+- `/compact` currently only increments the canonical compactification counter
+  and leaves the real compaction mechanism for a later phase
+- `/model` now updates the session-level model override that the canonical chat
+  execution path actually sends to the provider
+- `/think` is currently stored and surfaced in the UI/top bar, but does not yet
+  change provider-specific reasoning parameters
 
 ## Core Principles
 

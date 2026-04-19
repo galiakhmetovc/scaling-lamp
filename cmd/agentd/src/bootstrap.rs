@@ -75,8 +75,20 @@ pub struct SessionSummary {
     pub reasoning_visible: bool,
     pub think_level: Option<String>,
     pub compactifications: u32,
+    pub context_tokens: u32,
+    pub has_pending_approval: bool,
+    pub last_message_preview: Option<String>,
+    pub message_count: usize,
     pub created_at: i64,
     pub updated_at: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SessionPendingApproval {
+    pub run_id: String,
+    pub approval_id: String,
+    pub reason: String,
+    pub requested_at: i64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
@@ -189,22 +201,73 @@ impl App {
         let record = agent_persistence::SessionRecord::try_from(&session)
             .map_err(BootstrapError::RecordConversion)?;
         store.put_session(&record)?;
-        Ok(session_summary_from_session(&session))
+        self.session_summary(&session.id)
     }
 
     #[cfg_attr(not(test), allow(dead_code))]
     pub fn list_session_summaries(&self) -> Result<Vec<SessionSummary>, BootstrapError> {
         let store = self.store()?;
-        let sessions = store
-            .list_sessions()?
+        build_session_summaries(&store, &self.config)
+    }
+
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub fn session_summary(&self, session_id: &str) -> Result<SessionSummary, BootstrapError> {
+        self.list_session_summaries()?
             .into_iter()
-            .map(Session::try_from)
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(BootstrapError::RecordConversion)?;
-        Ok(sessions
-            .into_iter()
-            .map(|session| session_summary_from_session(&session))
-            .collect())
+            .find(|summary| summary.id == session_id)
+            .ok_or_else(|| BootstrapError::MissingRecord {
+                kind: "session",
+                id: session_id.to_string(),
+            })
+    }
+
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub fn pending_approvals(
+        &self,
+        session_id: &str,
+    ) -> Result<Vec<SessionPendingApproval>, BootstrapError> {
+        let snapshot = self.store()?.load_execution_state()?;
+        let mut pending = Vec::new();
+
+        for record in snapshot.runs {
+            let run = RunSnapshot::try_from(record).map_err(BootstrapError::RecordConversion)?;
+            if run.session_id != session_id
+                || run.status != agent_runtime::run::RunStatus::WaitingApproval
+            {
+                continue;
+            }
+            for approval in run.pending_approvals {
+                pending.push(SessionPendingApproval {
+                    run_id: run.id.clone(),
+                    approval_id: approval.id,
+                    reason: approval.reason,
+                    requested_at: approval.requested_at,
+                });
+            }
+        }
+
+        pending.sort_by_key(|approval| (approval.requested_at, approval.approval_id.clone()));
+        Ok(pending)
+    }
+
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub fn latest_pending_approval(
+        &self,
+        session_id: &str,
+        requested_approval_id: Option<&str>,
+    ) -> Result<Option<SessionPendingApproval>, BootstrapError> {
+        let pending = self.pending_approvals(session_id)?;
+        if let Some(requested) = requested_approval_id {
+            return Ok(pending
+                .into_iter()
+                .find(|approval| approval.approval_id == requested));
+        }
+
+        Ok(pending.into_iter().max_by(|left, right| {
+            left.requested_at
+                .cmp(&right.requested_at)
+                .then_with(|| left.approval_id.cmp(&right.approval_id))
+        }))
     }
 
     #[cfg_attr(not(test), allow(dead_code))]
@@ -243,7 +306,7 @@ impl App {
         let record = agent_persistence::SessionRecord::try_from(&session)
             .map_err(BootstrapError::RecordConversion)?;
         store.put_session(&record)?;
-        Ok(session_summary_from_session(&session))
+        self.session_summary(session_id)
     }
 
     #[cfg_attr(not(test), allow(dead_code))]
@@ -267,6 +330,21 @@ impl App {
     ) -> Result<SessionSummary, BootstrapError> {
         self.delete_session(session_id)?;
         self.create_session_auto(title)
+    }
+
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub fn compact_session_placeholder(
+        &self,
+        session_id: &str,
+    ) -> Result<SessionSummary, BootstrapError> {
+        let current = self.session_summary(session_id)?;
+        self.update_session_preferences(
+            session_id,
+            SessionPreferencesPatch {
+                compactifications: Some(current.compactifications + 1),
+                ..SessionPreferencesPatch::default()
+            },
+        )
     }
 
     #[cfg_attr(not(test), allow(dead_code))]
@@ -444,17 +522,104 @@ impl SessionTranscriptView {
     }
 }
 
-fn session_summary_from_session(session: &Session) -> SessionSummary {
-    SessionSummary {
+fn build_session_summaries(
+    store: &PersistenceStore,
+    config: &AppConfig,
+) -> Result<Vec<SessionSummary>, BootstrapError> {
+    let sessions = store
+        .list_sessions()?
+        .into_iter()
+        .map(Session::try_from)
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(BootstrapError::RecordConversion)?;
+    let runs = store
+        .load_execution_state()?
+        .runs
+        .into_iter()
+        .map(RunSnapshot::try_from)
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(BootstrapError::RecordConversion)?;
+
+    sessions
+        .into_iter()
+        .map(|session| session_summary_from_session(store, config, &runs, &session))
+        .collect()
+}
+
+fn session_summary_from_session(
+    store: &PersistenceStore,
+    config: &AppConfig,
+    runs: &[RunSnapshot],
+    session: &Session,
+) -> Result<SessionSummary, BootstrapError> {
+    let transcripts = store.list_transcripts_for_session(&session.id)?;
+    let message_count = transcripts.len();
+    let last_message_preview = transcripts
+        .last()
+        .map(|record| preview_text(record.content.as_str(), 96));
+    let transcript_tokens = transcripts
+        .iter()
+        .map(|record| approximate_token_count(record.content.as_str()))
+        .sum::<u32>();
+    let transcript_updated_at = transcripts
+        .last()
+        .map(|record| record.created_at)
+        .unwrap_or(session.updated_at);
+    let run_updated_at = runs
+        .iter()
+        .filter(|run| run.session_id == session.id)
+        .map(|run| run.updated_at)
+        .max()
+        .unwrap_or(session.updated_at);
+    let updated_at = session
+        .updated_at
+        .max(transcript_updated_at)
+        .max(run_updated_at);
+    let has_pending_approval = runs.iter().any(|run| {
+        run.session_id == session.id
+            && run.status == agent_runtime::run::RunStatus::WaitingApproval
+            && !run.pending_approvals.is_empty()
+    });
+
+    Ok(SessionSummary {
         id: session.id.clone(),
         title: session.title.clone(),
-        model: session.settings.model.clone(),
+        model: session
+            .settings
+            .model
+            .clone()
+            .or_else(|| config.provider.default_model.clone()),
         reasoning_visible: session.settings.reasoning_visible,
         think_level: session.settings.think_level.clone(),
         compactifications: session.settings.compactifications,
+        context_tokens: transcript_tokens,
+        has_pending_approval,
+        last_message_preview,
+        message_count,
         created_at: session.created_at,
-        updated_at: session.updated_at,
+        updated_at,
+    })
+}
+
+fn approximate_token_count(content: &str) -> u32 {
+    let trimmed = content.trim();
+    if trimmed.is_empty() {
+        return 0;
     }
+    ((trimmed.chars().count() as u32) / 4).saturating_add(1)
+}
+
+fn preview_text(content: &str, limit: usize) -> String {
+    let collapsed = content.split_whitespace().collect::<Vec<_>>().join(" ");
+    if collapsed.chars().count() <= limit {
+        return collapsed;
+    }
+    let mut preview = collapsed
+        .chars()
+        .take(limit.saturating_sub(1))
+        .collect::<String>();
+    preview.push('…');
+    preview
 }
 
 impl fmt::Display for BootstrapError {

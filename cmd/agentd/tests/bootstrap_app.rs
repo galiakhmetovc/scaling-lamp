@@ -14,7 +14,7 @@ use agent_runtime::session::SessionSettings;
 use agent_runtime::tool::{FsWriteInput, ToolCall};
 use agent_runtime::verification::VerificationStatus;
 use agent_runtime::verification::{CheckOutcome, EvidenceBundle};
-use agentd::bootstrap::{BootstrapError, build_from_config};
+use agentd::bootstrap::{BootstrapError, SessionPreferencesPatch, build_from_config};
 use agentd::execution;
 use std::fs;
 use std::io::{BufRead, BufReader, Cursor, Read, Write};
@@ -521,6 +521,63 @@ fn run_with_args_provider_smoke_uses_the_configured_driver() {
     let normalized_request = raw_request.to_ascii_lowercase();
     assert!(normalized_request.contains("/v1/responses"));
     assert!(normalized_request.contains("\"text\":\"say hi\""));
+}
+
+#[test]
+fn execute_chat_turn_uses_the_session_model_override() {
+    let (api_base, requests, handle) = spawn_json_server(
+        r#"{
+                "id":"resp_model_override",
+                "model":"glm-5-air",
+                "output":[
+                    {
+                        "id":"msg_1",
+                        "type":"message",
+                        "status":"completed",
+                        "role":"assistant",
+                        "content":[
+                            {
+                                "type":"output_text",
+                                "text":"model override ok"
+                            }
+                        ]
+                    }
+                ],
+                "usage":{"input_tokens":5,"output_tokens":4,"total_tokens":9}
+            }"#,
+    );
+    let temp = tempfile::tempdir().expect("tempdir");
+    let app = build_from_config(AppConfig {
+        data_dir: temp.path().join("state-root"),
+        provider: ConfiguredProvider {
+            kind: ProviderKind::OpenAiResponses,
+            api_base: Some(format!("{api_base}/v1")),
+            api_key: Some("test-key".to_string()),
+            default_model: Some("gpt-5.4".to_string()),
+        },
+        ..AppConfig::default()
+    })
+    .expect("build app");
+    let session = app
+        .create_session_auto(Some("Model override session"))
+        .expect("create session");
+    app.update_session_preferences(
+        &session.id,
+        SessionPreferencesPatch {
+            model: Some(Some("glm-5-air".to_string())),
+            ..SessionPreferencesPatch::default()
+        },
+    )
+    .expect("update model");
+
+    let report = app
+        .execute_chat_turn(&session.id, "hello model override", 100)
+        .expect("chat turn");
+    let raw_request = requests.recv().expect("provider request");
+    handle.join().expect("join provider");
+
+    assert_eq!(report.output_text, "model override ok");
+    assert!(raw_request.contains("\"model\":\"glm-5-air\""));
 }
 
 #[test]
