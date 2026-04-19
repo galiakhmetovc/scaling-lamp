@@ -84,6 +84,7 @@ pub enum RunStepKind {
     ProviderStreamStarted,
     ProviderTextDelta,
     ProviderStreamFinished,
+    ToolCompleted,
     EvidenceRecorded,
     WaitingApproval,
     ApprovalResolved,
@@ -374,6 +375,17 @@ impl RunEngine {
             format!("recorded evidence bundle {}", bundle.id),
             at,
         );
+        Ok(())
+    }
+
+    pub fn record_tool_completion(
+        &mut self,
+        detail: impl Into<String>,
+        at: i64,
+    ) -> Result<(), RunTransitionError> {
+        self.require_not_terminal("record_tool_completion")?;
+        self.touch(at);
+        self.push_step(RunStepKind::ToolCompleted, detail.into(), at);
         Ok(())
     }
 

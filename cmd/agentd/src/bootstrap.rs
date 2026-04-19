@@ -7,6 +7,7 @@ use agent_runtime::RuntimeScaffold;
 use agent_runtime::provider::{ProviderBuildError, ProviderDriver, ProviderError, build_driver};
 use agent_runtime::run::RunTransitionError;
 use agent_runtime::scheduler::MissionVerificationSummary;
+use agent_runtime::tool::ToolCall;
 use std::error::Error;
 use std::fmt;
 use std::fs;
@@ -94,6 +95,31 @@ impl App {
         let provider = self.provider_driver()?;
         execution::ExecutionService::default()
             .execute_mission_turn_job(&store, provider.as_ref(), job_id, now)
+            .map_err(BootstrapError::Execution)
+    }
+
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub fn request_tool_approval(
+        &self,
+        job_id: &str,
+        run_id: &str,
+        tool_call: &ToolCall,
+        now: i64,
+    ) -> Result<execution::ToolExecutionReport, BootstrapError> {
+        let store = self.store()?;
+        execution::ExecutionService::default()
+            .request_tool_approval(&store, job_id, run_id, tool_call, now)
+            .map_err(BootstrapError::Execution)
+    }
+
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub fn resume_tool_call(
+        &self,
+        request: execution::ToolResumeRequest<'_>,
+    ) -> Result<execution::ToolExecutionReport, BootstrapError> {
+        let store = self.store()?;
+        execution::ExecutionService::default()
+            .resume_tool_call(&store, request)
             .map_err(BootstrapError::Execution)
     }
 }
@@ -286,6 +312,7 @@ fn unix_timestamp() -> Result<i64, BootstrapError> {
 #[cfg(test)]
 mod tests {
     use super::build_from_config;
+    use crate::execution;
     use agent_persistence::{
         AppConfig, ConfigError, JobRecord, JobRepository, MissionRecord, MissionRepository,
         PersistenceStore, RunRecord, RunRepository, SessionRecord, SessionRepository,
@@ -296,6 +323,7 @@ mod tests {
     use agent_runtime::run::{ApprovalRequest, DelegateRun, RunEngine, RunSnapshot, RunStatus};
     use agent_runtime::scheduler::{MissionVerificationSummary, SupervisorAction};
     use agent_runtime::session::SessionSettings;
+    use agent_runtime::tool::{FsWriteInput, ToolCall};
     use agent_runtime::verification::VerificationStatus;
     use agent_runtime::verification::{CheckOutcome, EvidenceBundle};
     use std::fs;
@@ -1099,6 +1127,181 @@ mod tests {
         assert!(normalized_request.contains("/v1/responses"));
         assert!(normalized_request.contains("\"instructions\":\"reply tersely.\""));
         assert!(normalized_request.contains("\"text\":\"draft a short mission update\""));
+    }
+
+    #[test]
+    fn tool_execution_pauses_for_approval_then_resumes_and_records_evidence() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let workspace_root = temp.path().join("workspace");
+        let app = build_from_config(AppConfig {
+            data_dir: temp.path().join("state-root"),
+            ..AppConfig::default()
+        })
+        .expect("build app");
+        let store = PersistenceStore::open(&app.persistence).expect("open store");
+
+        store
+            .put_session(&SessionRecord {
+                id: "session-tool".to_string(),
+                title: "Tool session".to_string(),
+                prompt_override: None,
+                settings_json: serde_json::to_string(&SessionSettings::default())
+                    .expect("serialize settings"),
+                active_mission_id: None,
+                created_at: 1,
+                updated_at: 1,
+            })
+            .expect("put session");
+        store
+            .put_mission(&MissionRecord {
+                id: "mission-tool".to_string(),
+                session_id: "session-tool".to_string(),
+                objective: "Drive an approval-gated tool".to_string(),
+                status: MissionStatus::Running.as_str().to_string(),
+                execution_intent: MissionExecutionIntent::Autonomous.as_str().to_string(),
+                schedule_json: serde_json::to_string(&MissionSchedule::once())
+                    .expect("serialize schedule"),
+                acceptance_json: "[]".to_string(),
+                created_at: 2,
+                updated_at: 2,
+                completed_at: None,
+            })
+            .expect("put mission");
+
+        let mut job = JobSpec::mission_turn(
+            "job-tool",
+            "mission-tool",
+            Some("run-tool"),
+            None,
+            "Write a mission artifact",
+            3,
+        );
+        job.status = agent_runtime::mission::JobStatus::Running;
+        job.started_at = Some(4);
+        job.updated_at = 4;
+
+        let mut run = RunEngine::new("run-tool", "session-tool", Some("mission-tool"), 4);
+        run.start(4).expect("start run");
+        store
+            .put_run(&RunRecord::try_from(run.snapshot()).expect("run record"))
+            .expect("put run");
+        store
+            .put_job(&JobRecord::try_from(&job).expect("job record"))
+            .expect("put job");
+
+        let tool_call = ToolCall::FsWrite(FsWriteInput {
+            path: "notes/out.txt".to_string(),
+            content: "tool output\n".to_string(),
+        });
+
+        let approval = app
+            .request_tool_approval("job-tool", "run-tool", &tool_call, 20)
+            .expect("request approval");
+        assert_eq!(approval.run_status, RunStatus::WaitingApproval);
+        assert_eq!(
+            approval.approval_id.as_deref(),
+            Some("approval-job-tool-fs_write")
+        );
+
+        let waiting_run = RunSnapshot::try_from(
+            store
+                .get_run("run-tool")
+                .expect("get waiting run")
+                .expect("waiting run exists"),
+        )
+        .expect("waiting snapshot");
+        assert_eq!(waiting_run.status, RunStatus::WaitingApproval);
+        assert_eq!(waiting_run.pending_approvals.len(), 1);
+
+        let blocked_job = store
+            .get_job("job-tool")
+            .expect("get blocked job")
+            .expect("blocked job exists");
+        assert_eq!(blocked_job.status, "blocked");
+        assert!(!workspace_root.join("notes/out.txt").exists());
+
+        let mut evidence = EvidenceBundle::new("bundle-tool", "run-tool", 21);
+        evidence
+            .record_check("fmt", CheckOutcome::Passed, Some("clean"), 21)
+            .expect("record fmt");
+        evidence
+            .record_check("clippy", CheckOutcome::Passed, Some("clean"), 21)
+            .expect("record clippy");
+        evidence
+            .record_check("test", CheckOutcome::Passed, Some("green"), 21)
+            .expect("record test");
+        evidence.add_artifact_ref("artifact:notes/out.txt");
+
+        let resumed = app
+            .resume_tool_call(execution::ToolResumeRequest {
+                job_id: "job-tool",
+                run_id: "run-tool",
+                approval_id: approval.approval_id.as_deref().expect("approval id"),
+                tool_call: &tool_call,
+                workspace_root: &workspace_root,
+                evidence: Some(&evidence),
+                now: 21,
+            })
+            .expect("resume tool call");
+        assert_eq!(resumed.run_status, RunStatus::Completed);
+        assert_eq!(
+            resumed.output_summary.as_deref(),
+            Some("fs_write path=notes/out.txt bytes=12")
+        );
+        assert!(
+            resumed
+                .evidence_refs
+                .contains(&"bundle:bundle-tool".to_string())
+        );
+        assert!(resumed.evidence_refs.contains(&"check:fmt".to_string()));
+        assert!(resumed.evidence_refs.contains(&"check:clippy".to_string()));
+        assert!(resumed.evidence_refs.contains(&"check:test".to_string()));
+        assert!(
+            resumed
+                .evidence_refs
+                .contains(&"artifact:notes/out.txt".to_string())
+        );
+
+        assert_eq!(
+            fs::read_to_string(workspace_root.join("notes/out.txt")).expect("read workspace file"),
+            "tool output\n"
+        );
+
+        let completed_run = RunSnapshot::try_from(
+            store
+                .get_run("run-tool")
+                .expect("get completed run")
+                .expect("completed run exists"),
+        )
+        .expect("completed snapshot");
+        assert_eq!(completed_run.status, RunStatus::Completed);
+        assert!(completed_run.pending_approvals.is_empty());
+        assert_eq!(
+            completed_run.result.as_deref(),
+            Some("fs_write path=notes/out.txt bytes=12")
+        );
+        assert!(
+            completed_run
+                .evidence_refs
+                .contains(&"bundle:bundle-tool".to_string())
+        );
+
+        let completed_job = store
+            .get_job("job-tool")
+            .expect("get completed job")
+            .expect("completed job exists");
+        assert_eq!(completed_job.status, "completed");
+        assert_eq!(
+            completed_job.result_json.as_deref(),
+            Some(r#"{"Summary":{"outcome":"fs_write path=notes/out.txt bytes=12"}}"#)
+        );
+
+        let mission = store
+            .get_mission("mission-tool")
+            .expect("get mission")
+            .expect("mission exists");
+        assert_eq!(mission.status, "running");
+        assert_eq!(mission.updated_at, 21);
     }
 
     fn spawn_json_server(body: &'static str) -> (String, Receiver<String>, thread::JoinHandle<()>) {

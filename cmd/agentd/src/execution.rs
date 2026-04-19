@@ -11,14 +11,20 @@ use agent_runtime::mission::{
 use agent_runtime::provider::{
     ProviderDriver, ProviderError, ProviderMessage, ProviderRequest, ProviderStreamMode,
 };
-use agent_runtime::run::{RunEngine, RunSnapshot, RunTransitionError};
+use agent_runtime::run::{
+    ActiveProcess, ApprovalRequest, RunEngine, RunSnapshot, RunStatus, RunTransitionError,
+};
 use agent_runtime::scheduler::{
     MissionVerificationSummary, SupervisorAction, SupervisorLoop, SupervisorTickInput,
 };
 use agent_runtime::session::{MessageRole, TranscriptEntry};
+use agent_runtime::tool::{ProcessKind, ToolCall, ToolCatalog, ToolError, ToolOutput, ToolRuntime};
+use agent_runtime::verification::EvidenceBundle;
+use agent_runtime::workspace::WorkspaceRef;
 use std::collections::BTreeMap;
 use std::error::Error;
 use std::fmt;
+use std::path::Path;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SupervisorTickReport {
@@ -39,6 +45,35 @@ pub struct MissionTurnExecutionReport {
     pub output_text: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ToolExecutionReport {
+    pub job_id: String,
+    pub run_id: String,
+    pub run_status: RunStatus,
+    pub approval_id: Option<String>,
+    pub output_summary: Option<String>,
+    pub evidence_refs: Vec<String>,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct ToolResumeRequest<'a> {
+    pub job_id: &'a str,
+    pub run_id: &'a str,
+    pub approval_id: &'a str,
+    pub tool_call: &'a ToolCall,
+    pub workspace_root: &'a Path,
+    pub evidence: Option<&'a EvidenceBundle>,
+    pub now: i64,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct ToolExecutionContext<'a> {
+    approved_approval_id: Option<&'a str>,
+    workspace_root: Option<&'a Path>,
+    evidence: Option<&'a EvidenceBundle>,
+    now: i64,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct ExecutionService {
     supervisor: SupervisorLoop,
@@ -48,12 +83,14 @@ pub struct ExecutionService {
 pub enum ExecutionError {
     MissingJob { id: String },
     MissingMission { id: String },
+    MissingRun { id: String },
     MissingSession { id: String },
     UnsupportedJobInput { id: String, kind: String },
     Provider(ProviderError),
     RecordConversion(RecordConversionError),
     RunTransition(RunTransitionError),
     Store(StoreError),
+    Tool(ToolError),
 }
 
 impl ExecutionService {
@@ -364,6 +401,225 @@ impl ExecutionService {
             output_text: response.output_text,
         })
     }
+
+    pub fn request_tool_approval(
+        &self,
+        store: &PersistenceStore,
+        job_id: &str,
+        run_id: &str,
+        tool_call: &ToolCall,
+        now: i64,
+    ) -> Result<ToolExecutionReport, ExecutionError> {
+        self.execute_tool_call_internal(
+            store,
+            job_id,
+            run_id,
+            tool_call,
+            ToolExecutionContext {
+                approved_approval_id: None,
+                workspace_root: None,
+                evidence: None,
+                now,
+            },
+        )
+    }
+
+    pub fn resume_tool_call(
+        &self,
+        store: &PersistenceStore,
+        request: ToolResumeRequest<'_>,
+    ) -> Result<ToolExecutionReport, ExecutionError> {
+        self.execute_tool_call_internal(
+            store,
+            request.job_id,
+            request.run_id,
+            request.tool_call,
+            ToolExecutionContext {
+                approved_approval_id: Some(request.approval_id),
+                workspace_root: Some(request.workspace_root),
+                evidence: request.evidence,
+                now: request.now,
+            },
+        )
+    }
+
+    fn execute_tool_call_internal(
+        &self,
+        store: &PersistenceStore,
+        job_id: &str,
+        run_id: &str,
+        tool_call: &ToolCall,
+        context: ToolExecutionContext<'_>,
+    ) -> Result<ToolExecutionReport, ExecutionError> {
+        let catalog = ToolCatalog::default();
+        let definition = catalog.definition_for_call(tool_call).ok_or_else(|| {
+            ExecutionError::UnsupportedJobInput {
+                id: job_id.to_string(),
+                kind: tool_call.name().as_str().to_string(),
+            }
+        })?;
+        let mut job = JobSpec::try_from(
+            store
+                .get_job(job_id)
+                .map_err(ExecutionError::Store)?
+                .ok_or_else(|| ExecutionError::MissingJob {
+                    id: job_id.to_string(),
+                })?,
+        )
+        .map_err(ExecutionError::RecordConversion)?;
+        let mut mission = MissionSpec::try_from(
+            store
+                .get_mission(&job.mission_id)
+                .map_err(ExecutionError::Store)?
+                .ok_or_else(|| ExecutionError::MissingMission {
+                    id: job.mission_id.clone(),
+                })?,
+        )
+        .map_err(ExecutionError::RecordConversion)?;
+        let run_snapshot = RunSnapshot::try_from(
+            store
+                .get_run(run_id)
+                .map_err(ExecutionError::Store)?
+                .ok_or_else(|| ExecutionError::MissingRun {
+                    id: run_id.to_string(),
+                })?,
+        )
+        .map_err(ExecutionError::RecordConversion)?;
+        let mut run = RunEngine::from_snapshot(run_snapshot);
+
+        if context.approved_approval_id.is_none() && definition.policy.requires_approval {
+            let approval_id = format!("approval-{}-{}", job.id, tool_call.name().as_str());
+            let reason = format!(
+                "tool {} requires approval: {}",
+                tool_call.name().as_str(),
+                tool_call.summary()
+            );
+            run.wait_for_approval(
+                ApprovalRequest::new(
+                    approval_id.clone(),
+                    tool_call.name().as_str(),
+                    &reason,
+                    context.now,
+                ),
+                context.now,
+            )
+            .map_err(ExecutionError::RunTransition)?;
+            job.status = JobStatus::Blocked;
+            job.error = Some(reason);
+            job.updated_at = context.now;
+            mission.updated_at = context.now;
+            store
+                .put_run(
+                    &RunRecord::try_from(run.snapshot())
+                        .map_err(ExecutionError::RecordConversion)?,
+                )
+                .map_err(ExecutionError::Store)?;
+            store
+                .put_job(&JobRecord::try_from(&job).map_err(ExecutionError::RecordConversion)?)
+                .map_err(ExecutionError::Store)?;
+            store
+                .put_mission(
+                    &MissionRecord::try_from(&mission).map_err(ExecutionError::RecordConversion)?,
+                )
+                .map_err(ExecutionError::Store)?;
+            return Ok(ToolExecutionReport {
+                job_id: job.id,
+                run_id: run_id.to_string(),
+                run_status: run.snapshot().status,
+                approval_id: Some(approval_id),
+                output_summary: None,
+                evidence_refs: run.snapshot().evidence_refs.clone(),
+            });
+        }
+
+        let Some(workspace_root) = context.workspace_root else {
+            return Ok(ToolExecutionReport {
+                job_id: job.id,
+                run_id: run_id.to_string(),
+                run_status: run.snapshot().status,
+                approval_id: None,
+                output_summary: None,
+                evidence_refs: run.snapshot().evidence_refs.clone(),
+            });
+        };
+
+        if let Some(approval_id) = context.approved_approval_id {
+            run.resolve_approval(approval_id, context.now)
+                .map_err(ExecutionError::RunTransition)?;
+            if run.snapshot().status == RunStatus::Resuming {
+                run.resume(context.now)
+                    .map_err(ExecutionError::RunTransition)?;
+            }
+        }
+
+        job.status = JobStatus::Running;
+        job.error = None;
+        job.updated_at = context.now;
+        if job.started_at.is_none() {
+            job.started_at = Some(context.now);
+        }
+        mission.status = MissionStatus::Running;
+        mission.updated_at = context.now;
+
+        let mut tool_runtime = ToolRuntime::new(WorkspaceRef::new(workspace_root));
+        let output = tool_runtime
+            .invoke(tool_call.clone())
+            .map_err(ExecutionError::Tool)?;
+        let output_summary = output.summary();
+        run.record_tool_completion(output_summary.clone(), context.now)
+            .map_err(ExecutionError::RunTransition)?;
+        if let Some(bundle) = context.evidence {
+            run.record_evidence(bundle, context.now)
+                .map_err(ExecutionError::RunTransition)?;
+        }
+
+        match output {
+            ToolOutput::ProcessStart(start) => {
+                run.wait_for_process(
+                    ActiveProcess::new(
+                        start.process_id,
+                        process_kind_label(start.kind),
+                        start.pid_ref,
+                        context.now,
+                    ),
+                    context.now,
+                )
+                .map_err(ExecutionError::RunTransition)?;
+            }
+            _ => {
+                run.complete(output_summary.clone(), context.now)
+                    .map_err(ExecutionError::RunTransition)?;
+                job.status = JobStatus::Completed;
+                job.result = Some(JobResult::Summary {
+                    outcome: output_summary.clone(),
+                });
+                job.finished_at = Some(context.now);
+            }
+        }
+
+        store
+            .put_run(
+                &RunRecord::try_from(run.snapshot()).map_err(ExecutionError::RecordConversion)?,
+            )
+            .map_err(ExecutionError::Store)?;
+        store
+            .put_job(&JobRecord::try_from(&job).map_err(ExecutionError::RecordConversion)?)
+            .map_err(ExecutionError::Store)?;
+        store
+            .put_mission(
+                &MissionRecord::try_from(&mission).map_err(ExecutionError::RecordConversion)?,
+            )
+            .map_err(ExecutionError::Store)?;
+
+        Ok(ToolExecutionReport {
+            job_id: job.id,
+            run_id: run_id.to_string(),
+            run_status: run.snapshot().status,
+            approval_id: None,
+            output_summary: Some(output_summary),
+            evidence_refs: run.snapshot().evidence_refs.clone(),
+        })
+    }
 }
 
 fn touch_mission(
@@ -386,6 +642,13 @@ fn touch_mission(
     Ok(())
 }
 
+fn process_kind_label(kind: ProcessKind) -> &'static str {
+    match kind {
+        ProcessKind::Exec => "exec",
+        ProcessKind::ShellSnippet => "shell_snippet",
+    }
+}
+
 impl fmt::Display for ExecutionError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -393,6 +656,7 @@ impl fmt::Display for ExecutionError {
             Self::MissingMission { id } => {
                 write!(formatter, "execution mission {id} was not found")
             }
+            Self::MissingRun { id } => write!(formatter, "execution run {id} was not found"),
             Self::MissingSession { id } => {
                 write!(formatter, "execution session {id} was not found")
             }
@@ -410,6 +674,7 @@ impl fmt::Display for ExecutionError {
                 write!(formatter, "execution run transition error: {source}")
             }
             Self::Store(source) => write!(formatter, "execution store error: {source}"),
+            Self::Tool(source) => write!(formatter, "execution tool error: {source}"),
         }
     }
 }
@@ -421,8 +686,10 @@ impl Error for ExecutionError {
             Self::RecordConversion(source) => Some(source),
             Self::RunTransition(source) => Some(source),
             Self::Store(source) => Some(source),
+            Self::Tool(source) => Some(source),
             Self::MissingJob { .. }
             | Self::MissingMission { .. }
+            | Self::MissingRun { .. }
             | Self::MissingSession { .. }
             | Self::UnsupportedJobInput { .. } => None,
         }

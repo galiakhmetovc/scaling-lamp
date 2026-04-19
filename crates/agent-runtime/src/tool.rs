@@ -211,11 +211,32 @@ impl ToolFamily {
     }
 }
 
+impl ToolName {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::FsRead => "fs_read",
+            Self::FsWrite => "fs_write",
+            Self::FsList => "fs_list",
+            Self::FsSearch => "fs_search",
+            Self::ExecStart => "exec_start",
+            Self::ExecWait => "exec_wait",
+            Self::ExecKill => "exec_kill",
+            Self::ShellSnippetStart => "shell_snippet_start",
+            Self::ShellSnippetWait => "shell_snippet_wait",
+            Self::ShellSnippetKill => "shell_snippet_kill",
+        }
+    }
+}
+
 impl ToolCatalog {
     pub fn definition(&self, name: ToolName) -> Option<&ToolDefinition> {
         self.definitions
             .iter()
             .find(|definition| definition.name == name)
+    }
+
+    pub fn definition_for_call(&self, call: &ToolCall) -> Option<&ToolDefinition> {
+        self.definition(call.name())
     }
 
     fn definitions() -> Vec<ToolDefinition> {
@@ -506,11 +527,74 @@ impl ToolRuntime {
     }
 }
 
+impl ToolCall {
+    pub fn name(&self) -> ToolName {
+        match self {
+            Self::FsRead(_) => ToolName::FsRead,
+            Self::FsWrite(_) => ToolName::FsWrite,
+            Self::FsList(_) => ToolName::FsList,
+            Self::FsSearch(_) => ToolName::FsSearch,
+            Self::ExecStart(_) => ToolName::ExecStart,
+            Self::ExecWait(_) => ToolName::ExecWait,
+            Self::ExecKill(_) => ToolName::ExecKill,
+            Self::ShellSnippetStart(_) => ToolName::ShellSnippetStart,
+            Self::ShellSnippetWait(_) => ToolName::ShellSnippetWait,
+            Self::ShellSnippetKill(_) => ToolName::ShellSnippetKill,
+        }
+    }
+
+    pub fn summary(&self) -> String {
+        match self {
+            Self::FsRead(input) => format!("fs_read path={}", normalize_tool_path(&input.path)),
+            Self::FsWrite(input) => format!(
+                "fs_write path={} bytes={}",
+                normalize_tool_path(&input.path),
+                input.content.len()
+            ),
+            Self::FsList(input) => format!(
+                "fs_list path={} recursive={}",
+                normalize_tool_path(&input.path),
+                input.recursive
+            ),
+            Self::FsSearch(input) => format!(
+                "fs_search path={} query={}",
+                normalize_tool_path(&input.path),
+                input.query
+            ),
+            Self::ExecStart(input) => {
+                format!(
+                    "exec_start executable={} argc={}",
+                    input.executable,
+                    input.args.len()
+                )
+            }
+            Self::ExecWait(input) => format!("exec_wait process_id={}", input.process_id),
+            Self::ExecKill(input) => format!("exec_kill process_id={}", input.process_id),
+            Self::ShellSnippetStart(input) => {
+                format!("shell_snippet_start bytes={}", input.snippet.len())
+            }
+            Self::ShellSnippetWait(input) => {
+                format!("shell_snippet_wait process_id={}", input.process_id)
+            }
+            Self::ShellSnippetKill(input) => {
+                format!("shell_snippet_kill process_id={}", input.process_id)
+            }
+        }
+    }
+}
+
 impl ProcessKind {
     fn as_prefix(self) -> &'static str {
         match self {
             Self::Exec => "exec",
             Self::ShellSnippet => "shell",
+        }
+    }
+
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Exec => "exec",
+            Self::ShellSnippet => "shell_snippet",
         }
     }
 }
@@ -548,6 +632,36 @@ impl ToolOutput {
         match self {
             Self::ProcessResult(output) => Some(output),
             _ => None,
+        }
+    }
+
+    pub fn summary(&self) -> String {
+        match self {
+            Self::FsRead(output) => {
+                format!(
+                    "fs_read path={} bytes={}",
+                    output.path,
+                    output.content.len()
+                )
+            }
+            Self::FsWrite(output) => {
+                format!(
+                    "fs_write path={} bytes={}",
+                    output.path, output.bytes_written
+                )
+            }
+            Self::FsList(output) => format!("fs_list entries={}", output.entries.len()),
+            Self::FsSearch(output) => format!("fs_search matches={}", output.matches.len()),
+            Self::ProcessStart(output) => format!(
+                "{}_start process_id={} pid_ref={}",
+                output.kind.as_str(),
+                output.process_id,
+                output.pid_ref
+            ),
+            Self::ProcessResult(output) => format!(
+                "process_result process_id={} status={:?} exit_code={:?}",
+                output.process_id, output.status, output.exit_code
+            ),
         }
     }
 }
