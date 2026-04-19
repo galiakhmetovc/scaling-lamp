@@ -264,14 +264,15 @@ fn show_mission(store: &PersistenceStore, id: &str) -> Result<String, BootstrapE
 fn show_run(store: &PersistenceStore, id: &str) -> Result<String, BootstrapError> {
     let snapshot = load_run_snapshot(store, id)?;
     Ok(format!(
-        "run id={} session_id={} mission_id={} status={} pending_approvals={} delegates={} evidence_refs={}",
+        "run id={} session_id={} mission_id={} status={} pending_approvals={} delegates={} evidence_refs={} error={}",
         snapshot.id,
         snapshot.session_id,
         snapshot.mission_id.as_deref().unwrap_or("<none>"),
         snapshot.status.as_str(),
         snapshot.pending_approvals.len(),
         snapshot.delegate_runs.len(),
-        snapshot.evidence_refs.len()
+        snapshot.evidence_refs.len(),
+        snapshot.error.as_deref().unwrap_or("<none>")
     ))
 }
 

@@ -48,6 +48,37 @@ Smoke command:
 cargo run -p agentd -- provider smoke "Say hello in one short sentence."
 ```
 
+For the current `z.ai` smoke path, `agentd` sends `thinking={"type":"disabled"}`
+on purpose. `glm-5-turbo` enables thinking by default, and the current MVP does
+not consume `reasoning_content`, so disabling it keeps the smoke check focused
+on basic request/response health instead of model-side reasoning budgets.
+
+## Current Operator Notes
+
+The current MVP already applies a boot-time recovery pass.
+
+On daemon startup:
+
+- `waiting_approval` runs stay pending
+- `queued` runs stay queued
+- `running`, `resuming`, `waiting_process`, and `waiting_delegate` runs are
+  marked `interrupted`
+
+This is intentionally conservative. The current branch does not yet persist
+enough live process/provider state to resume those paths safely after a crash.
+
+Useful commands:
+
+```bash
+cargo run -p agentd -- status
+cargo run -p agentd -- run show <run-id>
+cargo run -p agentd -- approval list <run-id>
+cargo run -p agentd -- approval approve <run-id> <approval-id>
+```
+
+`run show` now surfaces the stored run error, which includes recovery
+interrupt reasons after restart.
+
 ## Core Principles
 
 ### 1. World State First

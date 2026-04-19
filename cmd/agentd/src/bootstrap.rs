@@ -1,7 +1,7 @@
 use crate::cli;
 use agent_persistence::{
     AppConfig, ConfigError, PersistenceScaffold, PersistenceStore, RecordConversionError,
-    StoreError,
+    StoreError, recovery,
 };
 use agent_runtime::RuntimeScaffold;
 use agent_runtime::provider::{ProviderBuildError, ProviderDriver, ProviderError, build_driver};
@@ -10,7 +10,7 @@ use std::error::Error;
 use std::fmt;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::time::SystemTimeError;
+use std::time::{SystemTime, SystemTimeError, UNIX_EPOCH};
 
 #[derive(Debug)]
 pub enum BootstrapError {
@@ -30,6 +30,7 @@ pub enum BootstrapError {
     },
     ProviderBuild(ProviderBuildError),
     ProviderRequest(ProviderError),
+    Recovery(recovery::RecoveryError),
     RecordConversion(RecordConversionError),
     RunTransition(RunTransitionError),
     Sqlite(rusqlite::Error),
@@ -92,6 +93,7 @@ impl fmt::Display for BootstrapError {
             Self::MissingRecord { kind, id } => write!(formatter, "{kind} {id} was not found"),
             Self::ProviderBuild(source) => write!(formatter, "{source}"),
             Self::ProviderRequest(source) => write!(formatter, "{source}"),
+            Self::Recovery(source) => write!(formatter, "{source}"),
             Self::RecordConversion(source) => {
                 write!(formatter, "record conversion error: {source}")
             }
@@ -111,6 +113,7 @@ impl Error for BootstrapError {
             Self::Io { source, .. } => Some(source),
             Self::ProviderBuild(source) => Some(source),
             Self::ProviderRequest(source) => Some(source),
+            Self::Recovery(source) => Some(source),
             Self::RecordConversion(source) => Some(source),
             Self::RunTransition(source) => Some(source),
             Self::Sqlite(source) => Some(source),
@@ -150,6 +153,12 @@ impl From<ProviderError> for BootstrapError {
     }
 }
 
+impl From<recovery::RecoveryError> for BootstrapError {
+    fn from(source: recovery::RecoveryError) -> Self {
+        Self::Recovery(source)
+    }
+}
+
 pub fn build() -> Result<App, BootstrapError> {
     let config = AppConfig::load()?;
     build_from_config(config)
@@ -160,6 +169,7 @@ pub fn build_from_config(config: AppConfig) -> Result<App, BootstrapError> {
 
     let persistence = PersistenceScaffold::from_config(config.clone());
     ensure_runtime_layout(&persistence)?;
+    reconcile_recovery_state(&persistence)?;
 
     Ok(App {
         config,
@@ -223,6 +233,19 @@ fn create_directory(path: &Path) -> Result<(), BootstrapError> {
         path: path.to_path_buf(),
         source,
     })
+}
+
+fn reconcile_recovery_state(persistence: &PersistenceScaffold) -> Result<(), BootstrapError> {
+    let store = PersistenceStore::open(persistence)?;
+    recovery::reconcile_runs(&store, persistence.recovery, unix_timestamp()?)?;
+    Ok(())
+}
+
+fn unix_timestamp() -> Result<i64, BootstrapError> {
+    Ok(SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_err(BootstrapError::Clock)?
+        .as_secs() as i64)
 }
 
 #[cfg(test)]
@@ -478,6 +501,213 @@ mod tests {
         let snapshot = RunSnapshot::try_from(persisted).expect("snapshot");
         assert_eq!(snapshot.status, RunStatus::Resuming);
         assert!(snapshot.pending_approvals.is_empty());
+    }
+
+    #[test]
+    fn build_from_config_interrupts_unrecoverable_runs_but_keeps_approvals_pending() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let data_dir = temp.path().join("state-root");
+        let app = build_from_config(AppConfig {
+            data_dir: data_dir.clone(),
+            ..AppConfig::default()
+        })
+        .expect("build app");
+        let store = PersistenceStore::open(&app.persistence).expect("open store");
+
+        store
+            .put_session(&SessionRecord {
+                id: "session-recovery".to_string(),
+                title: "Recovery session".to_string(),
+                prompt_override: None,
+                settings_json: serde_json::to_string(&SessionSettings::default())
+                    .expect("serialize settings"),
+                active_mission_id: None,
+                created_at: 1,
+                updated_at: 1,
+            })
+            .expect("put session");
+        store
+            .put_mission(&MissionRecord {
+                id: "mission-recovery".to_string(),
+                session_id: "session-recovery".to_string(),
+                objective: "Recover autonomous work".to_string(),
+                status: MissionStatus::Running.as_str().to_string(),
+                execution_intent: MissionExecutionIntent::Autonomous.as_str().to_string(),
+                schedule_json: serde_json::to_string(&MissionSchedule::once())
+                    .expect("serialize schedule"),
+                acceptance_json: "[]".to_string(),
+                created_at: 2,
+                updated_at: 2,
+                completed_at: None,
+            })
+            .expect("put mission");
+
+        for record in [
+            RunRecord {
+                id: "run-running".to_string(),
+                session_id: "session-recovery".to_string(),
+                mission_id: Some("mission-recovery".to_string()),
+                status: RunStatus::Running.as_str().to_string(),
+                error: None,
+                result: None,
+                evidence_refs_json: "[]".to_string(),
+                pending_approvals_json: "[]".to_string(),
+                delegate_runs_json: "[]".to_string(),
+                started_at: 3,
+                updated_at: 4,
+                finished_at: None,
+            },
+            RunRecord {
+                id: "run-resuming".to_string(),
+                session_id: "session-recovery".to_string(),
+                mission_id: Some("mission-recovery".to_string()),
+                status: RunStatus::Resuming.as_str().to_string(),
+                error: None,
+                result: None,
+                evidence_refs_json: "[]".to_string(),
+                pending_approvals_json: "[]".to_string(),
+                delegate_runs_json: "[]".to_string(),
+                started_at: 5,
+                updated_at: 6,
+                finished_at: None,
+            },
+            RunRecord {
+                id: "run-process".to_string(),
+                session_id: "session-recovery".to_string(),
+                mission_id: Some("mission-recovery".to_string()),
+                status: RunStatus::WaitingProcess.as_str().to_string(),
+                error: None,
+                result: None,
+                evidence_refs_json: "[]".to_string(),
+                pending_approvals_json: "[]".to_string(),
+                delegate_runs_json: "[]".to_string(),
+                started_at: 7,
+                updated_at: 8,
+                finished_at: None,
+            },
+            RunRecord {
+                id: "run-delegate".to_string(),
+                session_id: "session-recovery".to_string(),
+                mission_id: Some("mission-recovery".to_string()),
+                status: RunStatus::WaitingDelegate.as_str().to_string(),
+                error: None,
+                result: None,
+                evidence_refs_json: "[]".to_string(),
+                pending_approvals_json: "[]".to_string(),
+                delegate_runs_json: serde_json::to_string(&vec![DelegateRun::new(
+                    "delegate-1",
+                    "worker-a",
+                    9,
+                )])
+                .expect("serialize delegates"),
+                started_at: 9,
+                updated_at: 10,
+                finished_at: None,
+            },
+            RunRecord {
+                id: "run-approval".to_string(),
+                session_id: "session-recovery".to_string(),
+                mission_id: Some("mission-recovery".to_string()),
+                status: RunStatus::WaitingApproval.as_str().to_string(),
+                error: None,
+                result: None,
+                evidence_refs_json: "[]".to_string(),
+                pending_approvals_json: serde_json::to_string(&vec![ApprovalRequest::new(
+                    "approval-1",
+                    "tool-call-1",
+                    "allow exec",
+                    11,
+                )])
+                .expect("serialize approvals"),
+                delegate_runs_json: "[]".to_string(),
+                started_at: 11,
+                updated_at: 12,
+                finished_at: None,
+            },
+        ] {
+            store.put_run(&record).expect("put run");
+        }
+
+        drop(store);
+        drop(app);
+
+        let reopened = build_from_config(AppConfig {
+            data_dir,
+            ..AppConfig::default()
+        })
+        .expect("reopen app");
+        let reopened_store = PersistenceStore::open(&reopened.persistence).expect("reopen store");
+
+        for run_id in ["run-running", "run-resuming", "run-process", "run-delegate"] {
+            let interrupted = RunSnapshot::try_from(
+                reopened_store
+                    .get_run(run_id)
+                    .expect("get interrupted run")
+                    .expect("interrupted run exists"),
+            )
+            .expect("interrupted snapshot");
+            assert_eq!(interrupted.status, RunStatus::Interrupted);
+            assert_eq!(
+                interrupted.error.as_deref(),
+                Some("runtime restart interrupted a non-recoverable run state")
+            );
+        }
+
+        let pending = RunSnapshot::try_from(
+            reopened_store
+                .get_run("run-approval")
+                .expect("get approval run")
+                .expect("approval run exists"),
+        )
+        .expect("approval snapshot");
+        assert_eq!(pending.status, RunStatus::WaitingApproval);
+        assert_eq!(pending.pending_approvals.len(), 1);
+    }
+
+    #[test]
+    fn run_show_surfaces_error_details_for_interrupted_runs() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let app = build_from_config(AppConfig {
+            data_dir: temp.path().join("state-root"),
+            ..AppConfig::default()
+        })
+        .expect("build app");
+        let store = PersistenceStore::open(&app.persistence).expect("open store");
+
+        store
+            .put_session(&SessionRecord {
+                id: "session-show".to_string(),
+                title: "Show session".to_string(),
+                prompt_override: None,
+                settings_json: serde_json::to_string(&SessionSettings::default())
+                    .expect("serialize settings"),
+                active_mission_id: None,
+                created_at: 1,
+                updated_at: 1,
+            })
+            .expect("put session");
+        store
+            .put_run(&RunRecord {
+                id: "run-interrupted".to_string(),
+                session_id: "session-show".to_string(),
+                mission_id: None,
+                status: RunStatus::Interrupted.as_str().to_string(),
+                error: Some("runtime restart interrupted a non-recoverable run state".to_string()),
+                result: None,
+                evidence_refs_json: "[]".to_string(),
+                pending_approvals_json: "[]".to_string(),
+                delegate_runs_json: "[]".to_string(),
+                started_at: 3,
+                updated_at: 4,
+                finished_at: Some(4),
+            })
+            .expect("put run");
+
+        let shown = app
+            .run_with_args(["run", "show", "run-interrupted"])
+            .expect("show run");
+        assert!(shown.contains("status=interrupted"));
+        assert!(shown.contains("error=runtime restart interrupted a non-recoverable run state"));
     }
 
     #[test]

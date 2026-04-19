@@ -375,6 +375,36 @@ impl RunRepository for PersistenceStore {
             .optional()
             .map_err(StoreError::from)
     }
+
+    fn list_runs(&self) -> Result<Vec<RunRecord>, StoreError> {
+        let mut statement = self.connection.prepare(
+            "SELECT id, session_id, mission_id, status, error, result, evidence_refs_json,
+                    pending_approvals_json, delegate_runs_json, started_at, updated_at, finished_at
+             FROM runs
+             ORDER BY started_at ASC, id ASC",
+        )?;
+        let mut rows = statement.query([])?;
+        let mut runs = Vec::new();
+
+        while let Some(row) = rows.next()? {
+            runs.push(RunRecord {
+                id: row.get(0)?,
+                session_id: row.get(1)?,
+                mission_id: row.get(2)?,
+                status: row.get(3)?,
+                error: row.get(4)?,
+                result: row.get(5)?,
+                evidence_refs_json: row.get(6)?,
+                pending_approvals_json: row.get(7)?,
+                delegate_runs_json: row.get(8)?,
+                started_at: row.get(9)?,
+                updated_at: row.get(10)?,
+                finished_at: row.get(11)?,
+            });
+        }
+
+        Ok(runs)
+    }
 }
 
 impl JobRepository for PersistenceStore {

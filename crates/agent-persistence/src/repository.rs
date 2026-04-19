@@ -16,6 +16,7 @@ pub trait MissionRepository {
 pub trait RunRepository {
     fn put_run(&self, record: &RunRecord) -> Result<(), StoreError>;
     fn get_run(&self, id: &str) -> Result<Option<RunRecord>, StoreError>;
+    fn list_runs(&self) -> Result<Vec<RunRecord>, StoreError>;
 }
 
 pub trait JobRepository {
