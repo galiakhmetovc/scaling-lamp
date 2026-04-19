@@ -97,6 +97,12 @@ The normal chat operator path is now:
 2. `chat send <session-id> "<message>"` to execute one ordinary chat turn
 3. `chat repl <session-id>` to stay inside one terminal chat loop
 
+`chat repl` now streams assistant text deltas directly in the terminal. When a
+turn invokes a tool, the REPL keeps one compact `tool: <name> | <status>` line
+per active tool step and updates it through `requested`, `waiting_approval`,
+`approved`, `running`, and `completed`/`failed` instead of printing a long raw
+event log.
+
 The current OpenAI-backed chat path now also supports one bounded model-driven
 tool loop for auto-allowed tools:
 

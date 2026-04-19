@@ -77,6 +77,38 @@ pub struct ToolExecutionReport {
     pub evidence_refs: Vec<String>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ChatExecutionEvent {
+    AssistantTextDelta(String),
+    ToolStatus {
+        tool_name: String,
+        status: ToolExecutionStatus,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ToolExecutionStatus {
+    Requested,
+    WaitingApproval,
+    Approved,
+    Running,
+    Completed,
+    Failed,
+}
+
+impl ToolExecutionStatus {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Requested => "requested",
+            Self::WaitingApproval => "waiting_approval",
+            Self::Approved => "approved",
+            Self::Running => "running",
+            Self::Completed => "completed",
+            Self::Failed => "failed",
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy)]
 pub struct ToolResumeRequest<'a> {
     pub job_id: &'a str,
@@ -244,6 +276,15 @@ impl ExecutionService {
         Ok(())
     }
 
+    fn emit_event(
+        observer: &mut Option<&mut dyn FnMut(ChatExecutionEvent)>,
+        event: ChatExecutionEvent,
+    ) {
+        if let Some(observer) = observer.as_deref_mut() {
+            observer(event);
+        }
+    }
+
     #[allow(clippy::too_many_arguments)]
     fn execute_provider_turn_loop(
         &self,
@@ -254,6 +295,7 @@ impl ExecutionService {
         run: &mut RunEngine,
         initial_loop_state: Option<ProviderLoopState>,
         now: i64,
+        observer: &mut Option<&mut dyn FnMut(ChatExecutionEvent)>,
     ) -> Result<ProviderResponse, ExecutionError> {
         let base_messages = self.transcript_messages(store, session_id)?;
         let catalog = ToolCatalog::default();
@@ -289,8 +331,10 @@ impl ExecutionService {
             .descriptor()
             .capabilities
             .supports_previous_response_id;
+        let supports_streaming = provider.descriptor().capabilities.supports_streaming;
 
         for round in starting_round..MAX_PROVIDER_TOOL_ROUNDS {
+            let enable_streaming = observer.is_some() && supports_streaming;
             let request = ProviderRequest {
                 model: None,
                 instructions: instructions.clone(),
@@ -312,12 +356,40 @@ impl ExecutionService {
                     Vec::new()
                 },
                 max_output_tokens: Some(512),
-                stream: ProviderStreamMode::Disabled,
+                stream: if enable_streaming {
+                    ProviderStreamMode::Enabled
+                } else {
+                    ProviderStreamMode::Disabled
+                },
             };
 
-            let response = provider
-                .complete(&request)
-                .map_err(ExecutionError::Provider)?;
+            let response = if enable_streaming {
+                let mut stream = provider
+                    .stream(&request)
+                    .map_err(ExecutionError::Provider)?;
+                let mut final_response = None;
+                while let Some(event) = stream.next_event().map_err(ExecutionError::Provider)? {
+                    match event {
+                        agent_runtime::provider::ProviderStreamEvent::TextDelta(delta) => {
+                            Self::emit_event(
+                                observer,
+                                ChatExecutionEvent::AssistantTextDelta(delta),
+                            );
+                        }
+                        agent_runtime::provider::ProviderStreamEvent::Completed(response) => {
+                            final_response = Some(response);
+                            break;
+                        }
+                    }
+                }
+                final_response.ok_or_else(|| ExecutionError::ProviderLoop {
+                    reason: "provider stream ended without a final response".to_string(),
+                })?
+            } else {
+                provider
+                    .complete(&request)
+                    .map_err(ExecutionError::Provider)?
+            };
             self.apply_provider_response(run, &response, now)?;
             self.persist_run(store, run)?;
 
@@ -360,11 +432,25 @@ impl ExecutionService {
                         reason: "tool is not in the catalog".to_string(),
                     }
                 })?;
+                Self::emit_event(
+                    observer,
+                    ChatExecutionEvent::ToolStatus {
+                        tool_name: parsed.name().as_str().to_string(),
+                        status: ToolExecutionStatus::Requested,
+                    },
+                );
                 let permission = self.permissions.resolve(definition, &parsed);
 
                 match permission.action {
                     PermissionAction::Allow => {}
                     PermissionAction::Deny => {
+                        Self::emit_event(
+                            observer,
+                            ChatExecutionEvent::ToolStatus {
+                                tool_name: parsed.name().as_str().to_string(),
+                                status: ToolExecutionStatus::Failed,
+                            },
+                        );
                         let reason = format!(
                             "tool {} denied by permission policy: {}",
                             parsed.name().as_str(),
@@ -379,6 +465,13 @@ impl ExecutionService {
                         });
                     }
                     PermissionAction::Ask => {
+                        Self::emit_event(
+                            observer,
+                            ChatExecutionEvent::ToolStatus {
+                                tool_name: parsed.name().as_str().to_string(),
+                                status: ToolExecutionStatus::WaitingApproval,
+                            },
+                        );
                         let approval_id =
                             format!("approval-{}-{}", run.snapshot().id, parsed.name().as_str());
                         let reason = format!(
@@ -427,13 +520,37 @@ impl ExecutionService {
                     }
                 }
 
-                let output = tool_runtime
-                    .invoke(parsed.clone())
-                    .map_err(ExecutionError::Tool)?;
+                Self::emit_event(
+                    observer,
+                    ChatExecutionEvent::ToolStatus {
+                        tool_name: parsed.name().as_str().to_string(),
+                        status: ToolExecutionStatus::Running,
+                    },
+                );
+                let output = match tool_runtime.invoke(parsed.clone()) {
+                    Ok(output) => output,
+                    Err(source) => {
+                        Self::emit_event(
+                            observer,
+                            ChatExecutionEvent::ToolStatus {
+                                tool_name: parsed.name().as_str().to_string(),
+                                status: ToolExecutionStatus::Failed,
+                            },
+                        );
+                        return Err(ExecutionError::Tool(source));
+                    }
+                };
                 let summary = output.summary();
                 let model_output = output.model_output();
                 run.record_tool_completion(summary, now)
                     .map_err(ExecutionError::RunTransition)?;
+                Self::emit_event(
+                    observer,
+                    ChatExecutionEvent::ToolStatus {
+                        tool_name: parsed.name().as_str().to_string(),
+                        status: ToolExecutionStatus::Completed,
+                    },
+                );
                 if supports_previous_response_id {
                     next_tool_outputs.push(ProviderToolOutput {
                         call_id: tool_call.call_id.clone(),
@@ -683,6 +800,7 @@ impl ExecutionService {
             .put_transcript(&TranscriptRecord::from(&user_entry))
             .map_err(ExecutionError::Store)?;
 
+        let mut observer = None;
         let response = match self.execute_provider_turn_loop(
             store,
             provider,
@@ -691,6 +809,7 @@ impl ExecutionService {
             &mut run,
             None,
             now,
+            &mut observer,
         ) {
             Ok(response) => response,
             Err(source @ ExecutionError::ApprovalRequired { .. }) => {
@@ -778,6 +897,26 @@ impl ExecutionService {
         message: &str,
         now: i64,
     ) -> Result<ChatTurnExecutionReport, ExecutionError> {
+        let mut observer = None;
+        self.execute_chat_turn_with_observer(
+            store,
+            provider,
+            session_id,
+            message,
+            now,
+            &mut observer,
+        )
+    }
+
+    pub fn execute_chat_turn_with_observer(
+        &self,
+        store: &PersistenceStore,
+        provider: &dyn ProviderDriver,
+        session_id: &str,
+        message: &str,
+        now: i64,
+        observer: &mut Option<&mut dyn FnMut(ChatExecutionEvent)>,
+    ) -> Result<ChatTurnExecutionReport, ExecutionError> {
         let mut session = store
             .get_session(session_id)
             .map_err(ExecutionError::Store)?
@@ -815,6 +954,7 @@ impl ExecutionService {
             &mut run,
             None,
             now,
+            observer,
         ) {
             Ok(response) => response,
             Err(source) => {
@@ -861,6 +1001,26 @@ impl ExecutionService {
         run_id: &str,
         approval_id: &str,
         now: i64,
+    ) -> Result<ApprovalContinuationReport, ExecutionError> {
+        let mut observer = None;
+        self.approve_model_run_with_observer(
+            store,
+            provider,
+            run_id,
+            approval_id,
+            now,
+            &mut observer,
+        )
+    }
+
+    pub fn approve_model_run_with_observer(
+        &self,
+        store: &PersistenceStore,
+        provider: &dyn ProviderDriver,
+        run_id: &str,
+        approval_id: &str,
+        now: i64,
+        observer: &mut Option<&mut dyn FnMut(ChatExecutionEvent)>,
     ) -> Result<ApprovalContinuationReport, ExecutionError> {
         let run_snapshot = RunSnapshot::try_from(
             store
@@ -973,6 +1133,13 @@ impl ExecutionService {
         if run.snapshot().status == RunStatus::Resuming {
             run.resume(now).map_err(ExecutionError::RunTransition)?;
         }
+        Self::emit_event(
+            observer,
+            ChatExecutionEvent::ToolStatus {
+                tool_name: parsed.name().as_str().to_string(),
+                status: ToolExecutionStatus::Approved,
+            },
+        );
 
         if let Some(job) = job.as_mut() {
             job.status = JobStatus::Running;
@@ -996,13 +1163,37 @@ impl ExecutionService {
                 .map_err(ExecutionError::Store)?;
         }
 
-        let output = ToolRuntime::new(self.workspace.clone())
-            .invoke(parsed.clone())
-            .map_err(ExecutionError::Tool)?;
+        Self::emit_event(
+            observer,
+            ChatExecutionEvent::ToolStatus {
+                tool_name: parsed.name().as_str().to_string(),
+                status: ToolExecutionStatus::Running,
+            },
+        );
+        let output = match ToolRuntime::new(self.workspace.clone()).invoke(parsed.clone()) {
+            Ok(output) => output,
+            Err(source) => {
+                Self::emit_event(
+                    observer,
+                    ChatExecutionEvent::ToolStatus {
+                        tool_name: parsed.name().as_str().to_string(),
+                        status: ToolExecutionStatus::Failed,
+                    },
+                );
+                return Err(ExecutionError::Tool(source));
+            }
+        };
         let summary = output.summary();
         let model_output = output.model_output();
         run.record_tool_completion(summary, now)
             .map_err(ExecutionError::RunTransition)?;
+        Self::emit_event(
+            observer,
+            ChatExecutionEvent::ToolStatus {
+                tool_name: parsed.name().as_str().to_string(),
+                status: ToolExecutionStatus::Completed,
+            },
+        );
 
         let mut resumed_loop_state = loop_state;
         resumed_loop_state.pending_approval = None;
@@ -1037,6 +1228,7 @@ impl ExecutionService {
             &mut run,
             Some(resumed_loop_state),
             now,
+            observer,
         ) {
             Ok(response) => response,
             Err(

@@ -3,8 +3,10 @@ use reqwest::StatusCode;
 use reqwest::blocking::Client;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use std::collections::VecDeque;
 use std::error::Error;
 use std::fmt;
+use std::io::{BufRead, BufReader};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProviderDescriptor {
@@ -131,6 +133,7 @@ pub enum ProviderError {
     HttpStatus { status: StatusCode, body: String },
     MissingModel,
     Parse(serde_json::Error),
+    Stream(std::io::Error),
     ResponseMissingOutputText,
     ResponseMissingToolCallField { field: &'static str },
     UnsupportedMessageRole { role: MessageRole },
@@ -284,6 +287,8 @@ struct ZaiChatCompletionsRequest<'a> {
     #[serde(skip_serializing_if = "Option::is_none")]
     tool_choice: Option<&'static str>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    tool_stream: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     max_tokens: Option<u32>,
     stream: bool,
 }
@@ -379,6 +384,59 @@ struct ZaiChatCompletionsUsage {
     prompt_tokens: u32,
     completion_tokens: u32,
     total_tokens: u32,
+}
+
+#[derive(Debug, Deserialize)]
+struct ZaiChatCompletionsStreamChunk {
+    id: Option<String>,
+    model: Option<String>,
+    choices: Vec<ZaiChatCompletionsStreamChoice>,
+    usage: Option<ZaiChatCompletionsUsage>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ZaiChatCompletionsStreamChoice {
+    finish_reason: Option<String>,
+    delta: ZaiChatCompletionsStreamDelta,
+}
+
+#[derive(Debug, Deserialize, Default)]
+struct ZaiChatCompletionsStreamDelta {
+    content: Option<String>,
+    tool_calls: Option<Vec<ZaiChatCompletionsStreamToolCallDelta>>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ZaiChatCompletionsStreamToolCallDelta {
+    index: usize,
+    id: Option<String>,
+    function: Option<ZaiChatCompletionsStreamToolCallFunctionDelta>,
+}
+
+#[derive(Debug, Deserialize, Default)]
+struct ZaiChatCompletionsStreamToolCallFunctionDelta {
+    name: Option<String>,
+    arguments: Option<String>,
+}
+
+#[derive(Debug, Default)]
+struct ZaiAccumulatedToolCall {
+    id: String,
+    name: String,
+    arguments: String,
+}
+
+#[derive(Debug)]
+struct ZaiChatCompletionsResponseStream {
+    reader: BufReader<reqwest::blocking::Response>,
+    pending_events: VecDeque<ProviderStreamEvent>,
+    response_id: Option<String>,
+    model: Option<String>,
+    output_text: String,
+    tool_calls: Vec<ZaiAccumulatedToolCall>,
+    finish_reason: FinishReason,
+    usage: Option<ProviderUsage>,
+    done: bool,
 }
 
 impl Default for ProviderDescriptor {
@@ -568,7 +626,7 @@ impl ZaiChatCompletionsDriver {
                 model_family: "zai".to_string(),
                 default_model: config.default_model.clone(),
                 capabilities: ModelCapabilities {
-                    supports_streaming: false,
+                    supports_streaming: true,
                     supports_text_input: true,
                     supports_tool_calls: true,
                     supports_previous_response_id: false,
@@ -680,8 +738,11 @@ impl ZaiChatCompletionsDriver {
             },
             tools,
             tool_choice: (!request.tools.is_empty()).then_some("auto"),
+            tool_stream: (request.stream == ProviderStreamMode::Enabled
+                && !request.tools.is_empty())
+            .then_some(true),
             max_tokens: request.max_output_tokens,
-            stream: false,
+            stream: request.stream == ProviderStreamMode::Enabled,
         })
     }
 }
@@ -778,6 +839,150 @@ impl ProviderDriver for OpenAiResponsesDriver {
     }
 }
 
+impl ZaiChatCompletionsResponseStream {
+    fn finalize_response(&mut self) -> Option<ProviderResponse> {
+        if self.done {
+            return None;
+        }
+        self.done = true;
+
+        Some(ProviderResponse {
+            response_id: self.response_id.clone()?,
+            model: self.model.clone()?,
+            output_text: self.output_text.clone(),
+            tool_calls: self
+                .tool_calls
+                .iter()
+                .map(|tool_call| ProviderToolCall {
+                    call_id: tool_call.id.clone(),
+                    name: tool_call.name.clone(),
+                    arguments: tool_call.arguments.clone(),
+                })
+                .collect(),
+            finish_reason: self.finish_reason.clone(),
+            usage: self.usage.clone(),
+        })
+    }
+
+    fn parse_next_sse_payload(&mut self) -> Result<Option<String>, ProviderError> {
+        let mut payload_lines = Vec::new();
+
+        loop {
+            let mut line = String::new();
+            let bytes = self
+                .reader
+                .read_line(&mut line)
+                .map_err(ProviderError::Stream)?;
+            if bytes == 0 {
+                if payload_lines.is_empty() {
+                    return Ok(None);
+                }
+                return Ok(Some(payload_lines.join("\n")));
+            }
+
+            let trimmed = line.trim_end_matches(['\r', '\n']);
+            if trimmed.is_empty() {
+                if payload_lines.is_empty() {
+                    continue;
+                }
+                return Ok(Some(payload_lines.join("\n")));
+            }
+
+            if let Some(data) = trimmed.strip_prefix("data:") {
+                payload_lines.push(data.trim_start().to_string());
+            }
+        }
+    }
+
+    fn apply_chunk(&mut self, chunk: ZaiChatCompletionsStreamChunk) -> Result<(), ProviderError> {
+        if let Some(response_id) = chunk.id {
+            self.response_id = Some(response_id);
+        }
+        if let Some(model) = chunk.model {
+            self.model = Some(model);
+        }
+        if let Some(usage) = chunk.usage {
+            self.usage = Some(ProviderUsage {
+                input_tokens: usage.prompt_tokens,
+                output_tokens: usage.completion_tokens,
+                total_tokens: usage.total_tokens,
+            });
+        }
+
+        for choice in chunk.choices {
+            if let Some(content) = choice.delta.content {
+                self.output_text.push_str(&content);
+                self.pending_events
+                    .push_back(ProviderStreamEvent::TextDelta(content));
+            }
+
+            if let Some(tool_calls) = choice.delta.tool_calls {
+                for tool_call in tool_calls {
+                    while self.tool_calls.len() <= tool_call.index {
+                        self.tool_calls.push(ZaiAccumulatedToolCall::default());
+                    }
+                    let entry = &mut self.tool_calls[tool_call.index];
+                    if let Some(id) = tool_call.id {
+                        entry.id = id;
+                    }
+                    if let Some(function) = tool_call.function {
+                        if let Some(name) = function.name {
+                            entry.name = name;
+                        }
+                        if let Some(arguments) = function.arguments {
+                            entry.arguments.push_str(&arguments);
+                        }
+                    }
+                }
+            }
+
+            if let Some(finish_reason) = choice.finish_reason.as_deref() {
+                self.finish_reason = match finish_reason {
+                    "stop" => FinishReason::Completed,
+                    _ => FinishReason::Incomplete,
+                };
+                if let Some(response) = self.finalize_response() {
+                    self.pending_events
+                        .push_back(ProviderStreamEvent::Completed(response));
+                }
+            }
+        }
+
+        Ok(())
+    }
+}
+
+impl ProviderResponseStream for ZaiChatCompletionsResponseStream {
+    fn next_event(&mut self) -> Result<Option<ProviderStreamEvent>, ProviderError> {
+        loop {
+            if let Some(event) = self.pending_events.pop_front() {
+                return Ok(Some(event));
+            }
+            if self.done {
+                return Ok(None);
+            }
+
+            let Some(payload) = self.parse_next_sse_payload()? else {
+                if let Some(response) = self.finalize_response() {
+                    return Ok(Some(ProviderStreamEvent::Completed(response)));
+                }
+                return Ok(None);
+            };
+
+            if payload == "[DONE]" {
+                if let Some(response) = self.finalize_response() {
+                    return Ok(Some(ProviderStreamEvent::Completed(response)));
+                }
+                return Ok(None);
+            }
+
+            let chunk = serde_json::from_str::<ZaiChatCompletionsStreamChunk>(&payload)
+                .map_err(ProviderError::Parse)?;
+            self.apply_chunk(chunk)?;
+        }
+    }
+}
+
 impl ProviderDriver for ZaiChatCompletionsDriver {
     fn descriptor(&self) -> &ProviderDescriptor {
         &self.descriptor
@@ -856,9 +1061,35 @@ impl ProviderDriver for ZaiChatCompletionsDriver {
 
     fn stream(
         &self,
-        _request: &ProviderRequest,
+        request: &ProviderRequest,
     ) -> Result<Box<dyn ProviderResponseStream>, ProviderError> {
-        Err(ProviderError::UnsupportedStreaming)
+        let model = self.resolve_model(request)?;
+        let body = self.build_request_body(request, model)?;
+        let response = self
+            .client
+            .post(self.endpoint())
+            .bearer_auth(&self.config.api_key)
+            .json(&body)
+            .send()
+            .map_err(ProviderError::Http)?;
+        let status = response.status();
+
+        if !status.is_success() {
+            let body = response.text().map_err(ProviderError::Http)?;
+            return Err(ProviderError::HttpStatus { status, body });
+        }
+
+        Ok(Box::new(ZaiChatCompletionsResponseStream {
+            reader: BufReader::new(response),
+            pending_events: VecDeque::new(),
+            response_id: None,
+            model: None,
+            output_text: String::new(),
+            tool_calls: Vec::new(),
+            finish_reason: FinishReason::Incomplete,
+            usage: None,
+            done: false,
+        }))
     }
 }
 
@@ -871,6 +1102,7 @@ impl fmt::Display for ProviderError {
             }
             Self::MissingModel => write!(formatter, "provider request is missing a model"),
             Self::Parse(source) => write!(formatter, "provider parse error: {source}"),
+            Self::Stream(source) => write!(formatter, "provider stream error: {source}"),
             Self::ResponseMissingOutputText => {
                 write!(
                     formatter,
@@ -899,6 +1131,7 @@ impl Error for ProviderError {
         match self {
             Self::Http(source) => Some(source),
             Self::Parse(source) => Some(source),
+            Self::Stream(source) => Some(source),
             Self::HttpStatus { .. }
             | Self::MissingModel
             | Self::ResponseMissingOutputText
@@ -933,7 +1166,8 @@ mod tests {
     use super::{
         ConfiguredProvider, FinishReason, ModelCapabilities, OpenAiResponsesConfig,
         OpenAiResponsesDriver, ProviderBuildError, ProviderDriver, ProviderError, ProviderKind,
-        ProviderMessage, ProviderRequest, ProviderStreamMode, ProviderToolDefinition, build_driver,
+        ProviderMessage, ProviderRequest, ProviderResponse, ProviderStreamEvent,
+        ProviderStreamMode, ProviderToolDefinition, build_driver,
     };
     use crate::session::MessageRole;
     use serde_json::json;
@@ -1172,6 +1406,69 @@ mod tests {
     }
 
     #[test]
+    fn zai_stream_emits_text_deltas_and_final_response() {
+        let (api_base, requests, handle) = spawn_sse_server(
+            "data: {\"id\":\"chatcmpl-stream-1\",\"model\":\"glm-5-turbo\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"hello \"},\"finish_reason\":null}]}\n\n\
+data: {\"id\":\"chatcmpl-stream-1\",\"model\":\"glm-5-turbo\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"world\"},\"finish_reason\":\"stop\"}]}\n\n\
+data: [DONE]\n\n",
+        );
+        let driver = build_driver(&ConfiguredProvider {
+            kind: ProviderKind::ZaiChatCompletions,
+            api_base: Some(api_base),
+            api_key: Some("zai-key".to_string()),
+            default_model: Some("glm-5-turbo".to_string()),
+        })
+        .expect("build zai driver");
+        let request = ProviderRequest {
+            model: None,
+            instructions: Some("Be brief".to_string()),
+            messages: vec![ProviderMessage::new(MessageRole::User, "Say hi")],
+            previous_response_id: None,
+            continuation_messages: Vec::new(),
+            tools: Vec::new(),
+            tool_outputs: Vec::new(),
+            max_output_tokens: Some(64),
+            stream: ProviderStreamMode::Enabled,
+        };
+
+        let mut stream = driver.stream(&request).expect("stream");
+        let first = stream
+            .next_event()
+            .expect("first event")
+            .expect("some first event");
+        let second = stream
+            .next_event()
+            .expect("second event")
+            .expect("some second event");
+        let third = stream
+            .next_event()
+            .expect("third event")
+            .expect("some third event");
+        let done = stream.next_event().expect("done");
+        let raw_request = requests.recv().expect("raw request");
+        handle.join().expect("join server");
+
+        assert_eq!(first, ProviderStreamEvent::TextDelta("hello ".to_string()));
+        assert_eq!(second, ProviderStreamEvent::TextDelta("world".to_string()));
+        assert_eq!(
+            third,
+            ProviderStreamEvent::Completed(ProviderResponse {
+                response_id: "chatcmpl-stream-1".to_string(),
+                model: "glm-5-turbo".to_string(),
+                output_text: "hello world".to_string(),
+                tool_calls: Vec::new(),
+                finish_reason: FinishReason::Completed,
+                usage: None,
+            })
+        );
+        assert!(done.is_none());
+
+        let normalized_request = raw_request.to_ascii_lowercase();
+        assert!(normalized_request.contains("/chat/completions"));
+        assert!(normalized_request.contains("\"stream\":true"));
+    }
+
+    #[test]
     fn complete_posts_responses_payload_and_extracts_output_text() {
         let (api_base, requests, handle) = spawn_json_server(
             r#"{
@@ -1335,6 +1632,56 @@ mod tests {
             driver.stream(&request),
             Err(ProviderError::UnsupportedStreaming)
         ));
+    }
+
+    fn spawn_sse_server(body: &'static str) -> (String, Receiver<String>, thread::JoinHandle<()>) {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind listener");
+        let address = listener.local_addr().expect("local addr");
+        let (sender, receiver) = mpsc::channel();
+
+        let handle = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().expect("accept connection");
+            stream
+                .set_read_timeout(Some(Duration::from_secs(2)))
+                .expect("set read timeout");
+
+            let mut reader = BufReader::new(stream.try_clone().expect("clone stream"));
+            let mut raw_request = String::new();
+            let mut content_length = 0usize;
+
+            loop {
+                let mut line = String::new();
+                reader.read_line(&mut line).expect("read request line");
+                raw_request.push_str(&line);
+
+                if line == "\r\n" {
+                    break;
+                }
+
+                let lower = line.to_ascii_lowercase();
+                if let Some(value) = lower.strip_prefix("content-length:") {
+                    content_length = value.trim().parse().expect("parse content length");
+                }
+            }
+
+            let mut body_bytes = vec![0; content_length];
+            reader
+                .read_exact(&mut body_bytes)
+                .expect("read request body");
+            raw_request.push_str(&String::from_utf8_lossy(&body_bytes));
+
+            let response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nCache-Control: no-cache\r\nConnection: close\r\nContent-Length: {}\r\n\r\n{}",
+                body.len(),
+                body
+            );
+            stream
+                .write_all(response.as_bytes())
+                .expect("write response");
+            sender.send(raw_request).expect("send request");
+        });
+
+        (format!("http://{address}/v1"), receiver, handle)
     }
 
     fn spawn_json_server(body: &'static str) -> (String, Receiver<String>, thread::JoinHandle<()>) {

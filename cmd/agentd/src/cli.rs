@@ -1,5 +1,5 @@
 use crate::bootstrap::{App, BootstrapError};
-use crate::execution::ExecutionError;
+use crate::execution::{ChatExecutionEvent, ExecutionError, ToolExecutionStatus};
 use agent_persistence::{
     JobRepository, MissionRecord, MissionRepository, PersistenceStore, RunRepository,
     SessionRecord, SessionRepository,
@@ -309,6 +309,86 @@ struct ReplPendingApproval {
     approval_id: String,
 }
 
+struct ReplRenderer<'a, W: Write> {
+    output: &'a mut W,
+    active_tool: Option<String>,
+    assistant_open: bool,
+    assistant_streamed_this_turn: bool,
+}
+
+impl<'a, W: Write> ReplRenderer<'a, W> {
+    fn new(output: &'a mut W) -> Self {
+        Self {
+            output,
+            active_tool: None,
+            assistant_open: false,
+            assistant_streamed_this_turn: false,
+        }
+    }
+
+    fn emit(&mut self, event: ChatExecutionEvent) -> Result<(), BootstrapError> {
+        match event {
+            ChatExecutionEvent::AssistantTextDelta(delta) => self.write_assistant_delta(&delta),
+            ChatExecutionEvent::ToolStatus { tool_name, status } => {
+                self.write_tool_status(&tool_name, status)
+            }
+        }
+    }
+
+    fn finish_turn(&mut self) -> Result<(), BootstrapError> {
+        if self.assistant_open {
+            writeln!(self.output).map_err(BootstrapError::Stream)?;
+            self.assistant_open = false;
+        }
+        Ok(())
+    }
+
+    fn begin_turn(&mut self) {
+        self.assistant_streamed_this_turn = false;
+    }
+
+    fn assistant_streamed_this_turn(&self) -> bool {
+        self.assistant_streamed_this_turn
+    }
+
+    fn write_assistant_delta(&mut self, delta: &str) -> Result<(), BootstrapError> {
+        if self.assistant_open {
+            write!(self.output, "{delta}").map_err(BootstrapError::Stream)?;
+        } else {
+            write!(self.output, "assistant: {delta}").map_err(BootstrapError::Stream)?;
+            self.assistant_open = true;
+        }
+        self.assistant_streamed_this_turn = true;
+        self.output.flush().map_err(BootstrapError::Stream)
+    }
+
+    fn write_tool_status(
+        &mut self,
+        tool_name: &str,
+        status: ToolExecutionStatus,
+    ) -> Result<(), BootstrapError> {
+        self.finish_turn()?;
+        let line = format!("tool: {tool_name} | {}", status.as_str());
+        match &self.active_tool {
+            Some(current) if current == tool_name => {
+                write!(self.output, "\x1b[1A\r\x1b[2K{line}\n").map_err(BootstrapError::Stream)?;
+            }
+            _ => {
+                writeln!(self.output, "{line}").map_err(BootstrapError::Stream)?;
+            }
+        }
+        if matches!(
+            status,
+            ToolExecutionStatus::Completed | ToolExecutionStatus::Failed
+        ) {
+            self.active_tool = None;
+        } else {
+            self.active_tool = Some(tool_name.to_string());
+        }
+        self.output.flush().map_err(BootstrapError::Stream)
+    }
+}
+
 fn run_chat_repl<R, W>(
     app: &App,
     session_id: &str,
@@ -323,15 +403,17 @@ where
     writeln!(output, "{REPL_HELP}").map_err(BootstrapError::Stream)?;
 
     let mut line = String::new();
+    let mut renderer = ReplRenderer::new(output);
 
     loop {
-        write!(output, "> ").map_err(BootstrapError::Stream)?;
-        output.flush().map_err(BootstrapError::Stream)?;
+        write!(renderer.output, "> ").map_err(BootstrapError::Stream)?;
+        renderer.output.flush().map_err(BootstrapError::Stream)?;
 
         line.clear();
         let bytes = input.read_line(&mut line).map_err(BootstrapError::Stream)?;
         if bytes == 0 {
-            writeln!(output, "leaving chat repl session_id={session_id}")
+            renderer.finish_turn()?;
+            writeln!(renderer.output, "leaving chat repl session_id={session_id}")
                 .map_err(BootstrapError::Stream)?;
             return Ok(());
         }
@@ -343,68 +425,94 @@ where
 
         match trimmed {
             "/exit" => {
-                writeln!(output, "leaving chat repl session_id={session_id}")
+                renderer.finish_turn()?;
+                writeln!(renderer.output, "leaving chat repl session_id={session_id}")
                     .map_err(BootstrapError::Stream)?;
                 return Ok(());
             }
             "/help" => {
-                writeln!(output, "{REPL_HELP}").map_err(BootstrapError::Stream)?;
+                renderer.finish_turn()?;
+                writeln!(renderer.output, "{REPL_HELP}").map_err(BootstrapError::Stream)?;
             }
             "/show" => {
+                renderer.finish_turn()?;
                 let transcript = show_chat(app, session_id)?;
-                writeln!(output, "{transcript}").map_err(BootstrapError::Stream)?;
+                writeln!(renderer.output, "{transcript}").map_err(BootstrapError::Stream)?;
             }
             _ if trimmed.starts_with("/approve") => {
                 let requested = trimmed.split_whitespace().nth(1).map(ToString::to_string);
                 let Some(current) = find_pending_approval(app, session_id, requested.as_deref())?
                 else {
-                    writeln!(output, "no pending approval for session_id={session_id}")
-                        .map_err(BootstrapError::Stream)?;
+                    renderer.finish_turn()?;
+                    writeln!(
+                        renderer.output,
+                        "no pending approval for session_id={session_id}"
+                    )
+                    .map_err(BootstrapError::Stream)?;
                     continue;
                 };
                 let approval_id = current.approval_id.clone();
-                let report = app.approve_run(&current.run_id, &approval_id, unix_timestamp()?)?;
-                writeln!(
-                    output,
-                    "approved {} on run {} status={} response_id={} output={} next_approval={}",
-                    approval_id,
-                    report.run_id,
-                    report.run_status.as_str(),
-                    report.response_id.as_deref().unwrap_or("<none>"),
-                    report.output_text.as_deref().unwrap_or("<none>"),
-                    report.approval_id.as_deref().unwrap_or("<none>")
-                )
-                .map_err(BootstrapError::Stream)?;
+                renderer.begin_turn();
+                let mut emit_error = None;
+                let mut emit = |event| {
+                    if emit_error.is_none() {
+                        emit_error = renderer.emit(event).err();
+                    }
+                };
+                let report = app.approve_run_with_observer(
+                    &current.run_id,
+                    &approval_id,
+                    unix_timestamp()?,
+                    &mut emit,
+                )?;
+                if let Some(error) = emit_error {
+                    return Err(error);
+                }
+                renderer.finish_turn()?;
                 if let Some(text) = report.output_text.as_deref() {
-                    writeln!(output, "assistant: {text}").map_err(BootstrapError::Stream)?;
+                    if text.is_empty() || renderer.assistant_streamed_this_turn() {
+                        continue;
+                    }
+                    writeln!(renderer.output, "assistant: {text}")
+                        .map_err(BootstrapError::Stream)?;
                 }
             }
             message => {
                 if find_pending_approval(app, session_id, None)?.is_some() {
+                    renderer.finish_turn()?;
                     writeln!(
-                        output,
+                        renderer.output,
                         "finish the pending approval before sending another message"
                     )
                     .map_err(BootstrapError::Stream)?;
                     continue;
                 }
 
-                match send_chat_outcome(app, session_id, message)? {
+                renderer.begin_turn();
+                let mut emit_error = None;
+                let mut emit = |event| {
+                    if emit_error.is_none() {
+                        emit_error = renderer.emit(event).err();
+                    }
+                };
+                match send_chat_outcome_with_observer(app, session_id, message, &mut emit)? {
                     ChatSendOutcome::Completed { output_text, .. } => {
-                        writeln!(output, "assistant: {output_text}")
+                        if let Some(error) = emit_error {
+                            return Err(error);
+                        }
+                        renderer.finish_turn()?;
+                        if output_text.is_empty() || renderer.assistant_streamed_this_turn() {
+                            continue;
+                        }
+                        writeln!(renderer.output, "assistant: {output_text}")
                             .map_err(BootstrapError::Stream)?;
                     }
-                    ChatSendOutcome::WaitingApproval {
-                        session_id,
-                        run_id,
-                        approval_id,
-                    } => {
-                        writeln!(
-                            output,
-                            "chat send session_id={} run_id={} status=waiting_approval approval_id={}",
-                            session_id, run_id, approval_id
-                        )
-                        .map_err(BootstrapError::Stream)?;
+                    ChatSendOutcome::WaitingApproval { approval_id, .. } => {
+                        if let Some(error) = emit_error {
+                            return Err(error);
+                        }
+                        let _ = approval_id;
+                        renderer.finish_turn()?;
                     }
                 }
             }
@@ -533,9 +641,33 @@ fn send_chat_outcome(
     session_id: &str,
     message: &str,
 ) -> Result<ChatSendOutcome, BootstrapError> {
+    let mut observer = None;
+    send_chat_outcome_internal(app, session_id, message, &mut observer)
+}
+
+fn send_chat_outcome_with_observer(
+    app: &App,
+    session_id: &str,
+    message: &str,
+    observer: &mut dyn FnMut(ChatExecutionEvent),
+) -> Result<ChatSendOutcome, BootstrapError> {
+    let mut observer = Some(observer);
+    send_chat_outcome_internal(app, session_id, message, &mut observer)
+}
+
+fn send_chat_outcome_internal(
+    app: &App,
+    session_id: &str,
+    message: &str,
+    observer: &mut Option<&mut dyn FnMut(ChatExecutionEvent)>,
+) -> Result<ChatSendOutcome, BootstrapError> {
     let now = unix_timestamp()?;
     let run_id = format!("run-chat-{session_id}-{now}");
-    let report = match app.execute_chat_turn(session_id, message, now) {
+    let result = match observer.as_deref_mut() {
+        Some(observer) => app.execute_chat_turn_with_observer(session_id, message, now, observer),
+        None => app.execute_chat_turn(session_id, message, now),
+    };
+    let report = match result {
         Ok(report) => report,
         Err(BootstrapError::Execution(ExecutionError::ApprovalRequired {
             approval_id, ..

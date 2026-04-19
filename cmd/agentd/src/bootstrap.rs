@@ -189,6 +189,29 @@ impl App {
     }
 
     #[cfg_attr(not(test), allow(dead_code))]
+    pub fn execute_chat_turn_with_observer(
+        &self,
+        session_id: &str,
+        message: &str,
+        now: i64,
+        observer: &mut dyn FnMut(execution::ChatExecutionEvent),
+    ) -> Result<execution::ChatTurnExecutionReport, BootstrapError> {
+        let store = self.store()?;
+        let provider = self.provider_driver()?;
+        let mut observer = Some(observer as &mut dyn FnMut(execution::ChatExecutionEvent));
+        self.execution_service()
+            .execute_chat_turn_with_observer(
+                &store,
+                provider.as_ref(),
+                session_id,
+                message,
+                now,
+                &mut observer,
+            )
+            .map_err(BootstrapError::Execution)
+    }
+
+    #[cfg_attr(not(test), allow(dead_code))]
     pub fn approve_run(
         &self,
         run_id: &str,
@@ -226,6 +249,42 @@ impl App {
             output_text: None,
             approval_id: None,
         })
+    }
+
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub fn approve_run_with_observer(
+        &self,
+        run_id: &str,
+        approval_id: &str,
+        now: i64,
+        observer: &mut dyn FnMut(execution::ChatExecutionEvent),
+    ) -> Result<execution::ApprovalContinuationReport, BootstrapError> {
+        let store = self.store()?;
+        let snapshot = RunSnapshot::try_from(store.get_run(run_id)?.ok_or_else(|| {
+            BootstrapError::MissingRecord {
+                kind: "run",
+                id: run_id.to_string(),
+            }
+        })?)
+        .map_err(BootstrapError::RecordConversion)?;
+
+        if snapshot.provider_loop.is_some() {
+            let provider = self.provider_driver()?;
+            let mut observer = Some(observer as &mut dyn FnMut(execution::ChatExecutionEvent));
+            return self
+                .execution_service()
+                .approve_model_run_with_observer(
+                    &store,
+                    provider.as_ref(),
+                    run_id,
+                    approval_id,
+                    now,
+                    &mut observer,
+                )
+                .map_err(BootstrapError::Execution);
+        }
+
+        self.approve_run(run_id, approval_id, now)
     }
 
     #[cfg_attr(not(test), allow(dead_code))]
@@ -3169,10 +3228,9 @@ mod tests {
         handle.join().expect("join server");
 
         let rendered = String::from_utf8(output).expect("utf8");
-        assert!(rendered.contains("status=waiting_approval"));
-        assert!(rendered.contains("approval_id=approval-run-chat-session-chat-repl-approval-"));
-        assert!(rendered.contains("approved"));
-        assert!(rendered.contains("output=repl approval completed"));
+        assert!(rendered.contains("tool: web_fetch | waiting_approval"));
+        assert!(rendered.contains("tool: web_fetch | approved"));
+        assert!(rendered.contains("tool: web_fetch | completed"));
         assert!(rendered.contains("assistant: repl approval completed"));
     }
 
@@ -3295,8 +3353,8 @@ mod tests {
         .expect("second repl");
 
         let rendered = String::from_utf8(second_output).expect("utf8");
-        assert!(rendered.contains("approved"));
-        assert!(rendered.contains("output=approval after restart completed"));
+        assert!(rendered.contains("tool: web_fetch | approved"));
+        assert!(rendered.contains("tool: web_fetch | completed"));
         assert!(rendered.contains("assistant: approval after restart completed"));
     }
 
@@ -3369,13 +3427,139 @@ mod tests {
         handle.join().expect("join server");
 
         let rendered = String::from_utf8(output).expect("utf8");
-        assert!(rendered.contains("status=waiting_approval"));
+        assert!(rendered.contains("tool: web_fetch | waiting_approval"));
         assert!(rendered.contains("finish the pending approval before sending another message"));
         assert!(!rendered.contains("assistant: Second turn"));
     }
 
+    #[test]
+    fn repl_stream_renders_tool_status_instead_of_raw_command_reports() {
+        let (web_base, _web_requests, _web_handle) =
+            spawn_text_server("/doc", "streaming tool result");
+        let first_stream = format!(
+            "data: {{\"id\":\"chatcmpl-stream-tool-1\",\"model\":\"glm-5-turbo\",\"choices\":[{{\"index\":0,\"delta\":{{\"tool_calls\":[{{\"index\":0,\"id\":\"call_web_fetch\",\"type\":\"function\",\"function\":{{\"name\":\"web_fetch\",\"arguments\":\"{{\\\"url\\\":\\\"{}\\\"}}\"}}}}]}},\"finish_reason\":\"tool_calls\"}}]}}\n\n\
+data: [DONE]\n\n",
+            web_base
+        );
+        let second_stream =
+            "data: {\"id\":\"chatcmpl-stream-tool-2\",\"model\":\"glm-5-turbo\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"streaming \"},\"finish_reason\":null}]}\n\n\
+data: {\"id\":\"chatcmpl-stream-tool-2\",\"model\":\"glm-5-turbo\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"tool result\"},\"finish_reason\":\"stop\"}]}\n\n\
+data: [DONE]\n\n"
+                .to_string();
+        let (api_base, _requests, handle) =
+            spawn_sse_server_sequence(vec![first_stream, second_stream]);
+        let temp = tempfile::tempdir().expect("tempdir");
+        let app = build_from_config(AppConfig {
+            data_dir: temp.path().join("state-root"),
+            provider: ConfiguredProvider {
+                kind: ProviderKind::ZaiChatCompletions,
+                api_base: Some(api_base),
+                api_key: Some("zai-key".to_string()),
+                default_model: Some("glm-5-turbo".to_string()),
+            },
+            permissions: PermissionConfig {
+                mode: PermissionMode::Auto,
+                rules: vec![PermissionRule {
+                    action: PermissionAction::Ask,
+                    tool: Some("web_fetch".to_string()),
+                    family: None,
+                    path_prefix: None,
+                }],
+            },
+        })
+        .expect("build app");
+        let store = PersistenceStore::open(&app.persistence).expect("open store");
+
+        store
+            .put_session(&SessionRecord {
+                id: "session-chat-repl-stream".to_string(),
+                title: "Chat REPL stream session".to_string(),
+                prompt_override: Some("Use tools when useful.".to_string()),
+                settings_json: serde_json::to_string(&SessionSettings::default())
+                    .expect("serialize settings"),
+                active_mission_id: None,
+                created_at: 1,
+                updated_at: 1,
+            })
+            .expect("put session");
+
+        let mut input = Cursor::new(
+            b"Fetch the doc and reply with the exact body only\n/approve\n/exit\n".to_vec(),
+        );
+        let mut output = Vec::new();
+        app.run_with_io(
+            ["chat", "repl", "session-chat-repl-stream"],
+            &mut input,
+            &mut output,
+        )
+        .expect("repl");
+        handle.join().expect("join server");
+
+        let rendered = String::from_utf8(output).expect("utf8");
+        assert!(rendered.contains("tool: web_fetch | waiting_approval"));
+        assert!(rendered.contains("tool: web_fetch | completed"));
+        assert!(rendered.contains("assistant: streaming tool result"));
+        assert!(!rendered.contains("chat send session_id=session-chat-repl-stream"));
+        assert!(!rendered.contains("approved approval-"));
+    }
+
     fn spawn_json_server(body: &'static str) -> (String, Receiver<String>, thread::JoinHandle<()>) {
         spawn_json_server_sequence(vec![body.to_string()])
+    }
+
+    fn spawn_sse_server_sequence(
+        bodies: Vec<String>,
+    ) -> (String, Receiver<String>, thread::JoinHandle<()>) {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind listener");
+        let address = listener.local_addr().expect("local addr");
+        let (sender, receiver) = mpsc::channel();
+
+        let handle = thread::spawn(move || {
+            for body in bodies {
+                let (mut stream, _) = listener.accept().expect("accept connection");
+                stream
+                    .set_read_timeout(Some(Duration::from_secs(2)))
+                    .expect("set read timeout");
+
+                let mut reader = BufReader::new(stream.try_clone().expect("clone stream"));
+                let mut raw_request = String::new();
+                let mut content_length = 0usize;
+
+                loop {
+                    let mut line = String::new();
+                    reader.read_line(&mut line).expect("read request line");
+                    raw_request.push_str(&line);
+
+                    if line == "\r\n" {
+                        break;
+                    }
+
+                    let lower = line.to_ascii_lowercase();
+                    if let Some(value) = lower.strip_prefix("content-length:") {
+                        content_length = value.trim().parse().expect("parse content length");
+                    }
+                }
+
+                let mut body_bytes = vec![0; content_length];
+                reader
+                    .read_exact(&mut body_bytes)
+                    .expect("read request body");
+                raw_request.push_str(&String::from_utf8_lossy(&body_bytes));
+
+                let response = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nCache-Control: no-cache\r\nConnection: close\r\nContent-Length: {}\r\n\r\n{}",
+                    body.len(),
+                    body
+                );
+                stream
+                    .write_all(response.as_bytes())
+                    .expect("write response");
+                stream.flush().expect("flush response");
+                sender.send(raw_request).expect("send request");
+            }
+        });
+
+        (format!("http://{address}/v1"), receiver, handle)
     }
 
     fn spawn_json_server_sequence(
