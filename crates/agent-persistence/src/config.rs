@@ -1,3 +1,4 @@
+use agent_runtime::provider::{ConfiguredProvider, ProviderKind};
 use serde::Deserialize;
 use std::env;
 use std::error::Error;
@@ -8,6 +9,7 @@ use std::path::{Path, PathBuf};
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AppConfig {
     pub data_dir: PathBuf,
+    pub provider: ConfiguredProvider,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -15,6 +17,10 @@ pub struct ConfigEnv {
     pub config_path: Option<PathBuf>,
     pub data_dir_override: Option<PathBuf>,
     pub home_dir: Option<PathBuf>,
+    pub provider_api_base_override: Option<String>,
+    pub provider_api_key_override: Option<String>,
+    pub provider_kind_override: Option<String>,
+    pub provider_model_override: Option<String>,
     pub temp_dir: PathBuf,
     pub xdg_config_home: Option<PathBuf>,
     pub xdg_state_home: Option<PathBuf>,
@@ -30,6 +36,9 @@ pub enum ConfigError {
         path: PathBuf,
         reason: &'static str,
     },
+    InvalidProviderKind {
+        value: String,
+    },
     ParseConfig {
         path: PathBuf,
         source: toml::de::Error,
@@ -43,6 +52,7 @@ pub enum ConfigError {
 #[derive(Debug, Clone, Deserialize)]
 struct FileConfig {
     data_dir: Option<PathBuf>,
+    provider: Option<ConfiguredProvider>,
 }
 
 impl fmt::Display for ConfigError {
@@ -57,6 +67,9 @@ impl fmt::Display for ConfigError {
                     "invalid config path {}: {reason}",
                     path.display()
                 )
+            }
+            Self::InvalidProviderKind { value } => {
+                write!(formatter, "invalid provider kind {value}")
             }
             Self::ParseConfig { path, source } => {
                 write!(
@@ -81,7 +94,9 @@ impl Error for ConfigError {
         match self {
             Self::ParseConfig { source, .. } => Some(source),
             Self::ReadConfig { source, .. } => Some(source),
-            Self::InvalidConfigPath { .. } | Self::InvalidDataDir { .. } => None,
+            Self::InvalidConfigPath { .. }
+            | Self::InvalidDataDir { .. }
+            | Self::InvalidProviderKind { .. } => None,
         }
     }
 }
@@ -92,6 +107,10 @@ impl ConfigEnv {
             config_path: read_path_var("TEAMD_CONFIG")?,
             data_dir_override: read_path_var("TEAMD_DATA_DIR")?,
             home_dir: read_path_var("HOME")?,
+            provider_api_base_override: read_string_var("TEAMD_PROVIDER_API_BASE"),
+            provider_api_key_override: read_string_var("TEAMD_PROVIDER_API_KEY"),
+            provider_kind_override: read_string_var("TEAMD_PROVIDER_KIND"),
+            provider_model_override: read_string_var("TEAMD_PROVIDER_MODEL"),
             temp_dir: env::temp_dir(),
             xdg_config_home: read_path_var("XDG_CONFIG_HOME")?,
             xdg_state_home: read_path_var("XDG_STATE_HOME")?,
@@ -140,10 +159,30 @@ impl AppConfig {
         let data_dir = env
             .data_dir_override
             .clone()
-            .or(file_config.and_then(|config| config.data_dir))
+            .or_else(|| {
+                file_config
+                    .as_ref()
+                    .and_then(|config| config.data_dir.clone())
+            })
             .unwrap_or_else(|| env.default_data_dir());
+        let mut provider = file_config
+            .as_ref()
+            .and_then(|config| config.provider.clone())
+            .unwrap_or_default();
+        if let Some(kind) = env.provider_kind_override.as_deref() {
+            provider.kind = parse_provider_kind(kind)?;
+        }
+        if let Some(api_base) = &env.provider_api_base_override {
+            provider.api_base = Some(api_base.clone());
+        }
+        if let Some(api_key) = &env.provider_api_key_override {
+            provider.api_key = Some(api_key.clone());
+        }
+        if let Some(default_model) = &env.provider_model_override {
+            provider.default_model = Some(default_model.clone());
+        }
 
-        let config = Self { data_dir };
+        let config = Self { data_dir, provider };
         config.validate()?;
         Ok(config)
     }
@@ -185,7 +224,10 @@ fn load_file_config(path: &Path, required: bool) -> Result<FileConfig, ConfigErr
     let contents = match fs::read_to_string(path) {
         Ok(contents) => contents,
         Err(source) if !required && source.kind() == std::io::ErrorKind::NotFound => {
-            return Ok(FileConfig { data_dir: None });
+            return Ok(FileConfig {
+                data_dir: None,
+                provider: None,
+            });
         }
         Err(source) => {
             return Err(ConfigError::ReadConfig {
@@ -203,6 +245,10 @@ fn load_file_config(path: &Path, required: bool) -> Result<FileConfig, ConfigErr
 
 fn read_path_var(name: &'static str) -> Result<Option<PathBuf>, ConfigError> {
     path_from_env_value(name, env::var_os(name))
+}
+
+fn read_string_var(name: &'static str) -> Option<String> {
+    env::var(name).ok().filter(|value| !value.is_empty())
 }
 
 fn path_from_env_value(
@@ -234,10 +280,17 @@ fn validate_config_path(path: &Path) -> Result<(), ConfigError> {
     Ok(())
 }
 
+fn parse_provider_kind(value: &str) -> Result<ProviderKind, ConfigError> {
+    ProviderKind::try_from(value).map_err(|_| ConfigError::InvalidProviderKind {
+        value: value.to_string(),
+    })
+}
+
 impl Default for AppConfig {
     fn default() -> Self {
         Self {
             data_dir: default_data_dir(),
+            provider: ConfiguredProvider::default(),
         }
     }
 }
@@ -245,6 +298,7 @@ impl Default for AppConfig {
 #[cfg(test)]
 mod tests {
     use super::{AppConfig, ConfigEnv, ConfigError};
+    use agent_runtime::provider::ProviderKind;
     use std::ffi::OsString;
     use std::fs;
     use std::path::PathBuf;
@@ -261,6 +315,10 @@ mod tests {
             config_path: Some(config_path),
             data_dir_override: Some(override_dir.clone()),
             home_dir: Some(temp.path().join("home")),
+            provider_api_base_override: None,
+            provider_api_key_override: None,
+            provider_kind_override: None,
+            provider_model_override: None,
             temp_dir: temp.path().join("tmp"),
             xdg_config_home: Some(temp.path().join("xdg-config")),
             xdg_state_home: Some(temp.path().join("xdg-state")),
@@ -281,6 +339,10 @@ mod tests {
             config_path: None,
             data_dir_override: None,
             home_dir: Some(home_dir),
+            provider_api_base_override: None,
+            provider_api_key_override: None,
+            provider_kind_override: None,
+            provider_model_override: None,
             temp_dir: temp.path().join("tmp"),
             xdg_config_home: None,
             xdg_state_home: Some(xdg_state_home.clone()),
@@ -295,6 +357,7 @@ mod tests {
     fn validate_rejects_relative_data_dir() {
         let config = AppConfig {
             data_dir: PathBuf::from("relative/teamd"),
+            provider: Default::default(),
         };
 
         let error = config.validate().expect_err("relative path must fail");
@@ -317,6 +380,10 @@ mod tests {
             config_path: Some(PathBuf::from("relative-config.toml")),
             data_dir_override: None,
             home_dir: Some(temp.path().join("home")),
+            provider_api_base_override: None,
+            provider_api_key_override: None,
+            provider_kind_override: None,
+            provider_model_override: None,
             temp_dir: temp.path().join("tmp"),
             xdg_config_home: Some(temp.path().join("xdg-config")),
             xdg_state_home: Some(temp.path().join("xdg-state")),
@@ -325,5 +392,50 @@ mod tests {
         let error = AppConfig::load_from_env(&env).expect_err("relative config path must fail");
 
         assert!(matches!(error, ConfigError::InvalidConfigPath { .. }));
+    }
+
+    #[test]
+    fn load_merges_provider_settings_from_file_and_env() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let config_path = temp.path().join("teamd.toml");
+
+        fs::write(
+            &config_path,
+            r#"
+data_dir = "/tmp/teamd-config"
+
+[provider]
+kind = "zai_chat_completions"
+api_base = "https://api.z.ai/api/paas/v4"
+default_model = "glm-5.1"
+"#,
+        )
+        .expect("write config");
+
+        let env = ConfigEnv {
+            config_path: Some(config_path),
+            data_dir_override: Some(temp.path().join("override")),
+            home_dir: Some(temp.path().join("home")),
+            provider_api_base_override: None,
+            provider_api_key_override: Some("zai-secret".into()),
+            provider_kind_override: None,
+            provider_model_override: Some("glm-5.1-air".into()),
+            temp_dir: temp.path().join("tmp"),
+            xdg_config_home: Some(temp.path().join("xdg-config")),
+            xdg_state_home: Some(temp.path().join("xdg-state")),
+        };
+
+        let config = AppConfig::load_from_env(&env).expect("load config");
+
+        assert_eq!(config.provider.kind, ProviderKind::ZaiChatCompletions);
+        assert_eq!(
+            config.provider.api_base.as_deref(),
+            Some("https://api.z.ai/api/paas/v4")
+        );
+        assert_eq!(config.provider.api_key.as_deref(), Some("zai-secret"));
+        assert_eq!(
+            config.provider.default_model.as_deref(),
+            Some("glm-5.1-air")
+        );
     }
 }

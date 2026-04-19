@@ -13,6 +13,23 @@ pub struct ProviderDescriptor {
     pub capabilities: ModelCapabilities,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum ProviderKind {
+    #[default]
+    OpenAiResponses,
+    ZaiChatCompletions,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(default)]
+pub struct ConfiguredProvider {
+    pub kind: ProviderKind,
+    pub api_base: Option<String>,
+    pub api_key: Option<String>,
+    pub default_model: Option<String>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct ModelCapabilities {
     pub supports_streaming: bool,
@@ -82,7 +99,25 @@ pub enum ProviderError {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProviderKindParseError {
+    value: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ProviderBuildError {
+    MissingApiBase,
+    MissingApiKey,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OpenAiResponsesConfig {
+    pub api_base: String,
+    pub api_key: String,
+    pub default_model: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ZaiChatCompletionsConfig {
     pub api_base: String,
     pub api_key: String,
     pub default_model: Option<String>,
@@ -105,6 +140,13 @@ pub trait ProviderDriver: Send + Sync {
 pub struct OpenAiResponsesDriver {
     client: Client,
     config: OpenAiResponsesConfig,
+    descriptor: ProviderDescriptor,
+}
+
+#[derive(Debug, Clone)]
+pub struct ZaiChatCompletionsDriver {
+    client: Client,
+    config: ZaiChatCompletionsConfig,
     descriptor: ProviderDescriptor,
 }
 
@@ -162,6 +204,47 @@ struct OpenAiResponsesUsage {
     total_tokens: u32,
 }
 
+#[derive(Debug, Serialize)]
+struct ZaiChatCompletionsRequest<'a> {
+    model: &'a str,
+    messages: Vec<ZaiChatCompletionMessage<'a>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    max_tokens: Option<u32>,
+    stream: bool,
+}
+
+#[derive(Debug, Serialize)]
+struct ZaiChatCompletionMessage<'a> {
+    role: &'a str,
+    content: &'a str,
+}
+
+#[derive(Debug, Deserialize)]
+struct ZaiChatCompletionsResponse {
+    id: String,
+    model: String,
+    choices: Vec<ZaiChatCompletionChoice>,
+    usage: Option<ZaiChatCompletionsUsage>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ZaiChatCompletionChoice {
+    finish_reason: Option<String>,
+    message: ZaiChatCompletionResponseMessage,
+}
+
+#[derive(Debug, Deserialize)]
+struct ZaiChatCompletionResponseMessage {
+    content: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ZaiChatCompletionsUsage {
+    prompt_tokens: u32,
+    completion_tokens: u32,
+    total_tokens: u32,
+}
+
 impl Default for ProviderDescriptor {
     fn default() -> Self {
         Self {
@@ -182,7 +265,66 @@ impl ProviderMessage {
     }
 }
 
+impl ProviderKind {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::OpenAiResponses => "openai_responses",
+            Self::ZaiChatCompletions => "zai_chat_completions",
+        }
+    }
+}
+
+impl TryFrom<&str> for ProviderKind {
+    type Error = ProviderKindParseError;
+
+    fn try_from(value: &str) -> Result<Self, Self::Error> {
+        match value {
+            "openai_responses" => Ok(Self::OpenAiResponses),
+            "zai_chat_completions" => Ok(Self::ZaiChatCompletions),
+            _ => Err(ProviderKindParseError {
+                value: value.to_string(),
+            }),
+        }
+    }
+}
+
+pub fn build_driver(
+    provider: &ConfiguredProvider,
+) -> Result<Box<dyn ProviderDriver>, ProviderBuildError> {
+    let api_base = provider
+        .api_base
+        .clone()
+        .ok_or(ProviderBuildError::MissingApiBase)?;
+    let api_key = provider
+        .api_key
+        .clone()
+        .ok_or(ProviderBuildError::MissingApiKey)?;
+
+    match provider.kind {
+        ProviderKind::OpenAiResponses => Ok(Box::new(OpenAiResponsesDriver::new(
+            OpenAiResponsesConfig {
+                api_base,
+                api_key,
+                default_model: provider.default_model.clone(),
+            },
+        ))),
+        ProviderKind::ZaiChatCompletions => Ok(Box::new(ZaiChatCompletionsDriver::new(
+            ZaiChatCompletionsConfig {
+                api_base,
+                api_key,
+                default_model: provider.default_model.clone(),
+            },
+        ))),
+    }
+}
+
 impl OpenAiResponsesConfig {
+    fn normalized_api_base(&self) -> &str {
+        self.api_base.trim_end_matches('/')
+    }
+}
+
+impl ZaiChatCompletionsConfig {
     fn normalized_api_base(&self) -> &str {
         self.api_base.trim_end_matches('/')
     }
@@ -257,6 +399,75 @@ impl OpenAiResponsesDriver {
     }
 }
 
+impl ZaiChatCompletionsDriver {
+    pub fn new(config: ZaiChatCompletionsConfig) -> Self {
+        Self {
+            client: Client::new(),
+            descriptor: ProviderDescriptor {
+                name: "zai-chat-completions".to_string(),
+                model_family: "zai".to_string(),
+                default_model: config.default_model.clone(),
+                capabilities: ModelCapabilities {
+                    supports_streaming: false,
+                    supports_text_input: true,
+                    supports_tool_calls: false,
+                    supports_reasoning_summaries: false,
+                },
+            },
+            config,
+        }
+    }
+
+    fn endpoint(&self) -> String {
+        format!("{}/chat/completions", self.config.normalized_api_base())
+    }
+
+    fn resolve_model<'a>(&'a self, request: &'a ProviderRequest) -> Result<&'a str, ProviderError> {
+        request
+            .model
+            .as_deref()
+            .or(self.config.default_model.as_deref())
+            .ok_or(ProviderError::MissingModel)
+    }
+
+    fn build_request_body<'a>(
+        &'a self,
+        request: &'a ProviderRequest,
+        model: &'a str,
+    ) -> Result<ZaiChatCompletionsRequest<'a>, ProviderError> {
+        let mut messages = Vec::new();
+
+        if let Some(instructions) = request.instructions.as_deref() {
+            messages.push(ZaiChatCompletionMessage {
+                role: "system",
+                content: instructions,
+            });
+        }
+
+        for message in &request.messages {
+            let role = match message.role {
+                MessageRole::System => "system",
+                MessageRole::User => "user",
+                MessageRole::Assistant => "assistant",
+                MessageRole::Tool => {
+                    return Err(ProviderError::UnsupportedMessageRole { role: message.role });
+                }
+            };
+            messages.push(ZaiChatCompletionMessage {
+                role,
+                content: message.content.as_str(),
+            });
+        }
+
+        Ok(ZaiChatCompletionsRequest {
+            model,
+            messages,
+            max_tokens: request.max_output_tokens,
+            stream: false,
+        })
+    }
+}
+
 impl ProviderDriver for OpenAiResponsesDriver {
     fn descriptor(&self) -> &ProviderDescriptor {
         &self.descriptor
@@ -327,6 +538,72 @@ impl ProviderDriver for OpenAiResponsesDriver {
     }
 }
 
+impl ProviderDriver for ZaiChatCompletionsDriver {
+    fn descriptor(&self) -> &ProviderDescriptor {
+        &self.descriptor
+    }
+
+    fn complete(&self, request: &ProviderRequest) -> Result<ProviderResponse, ProviderError> {
+        let model = self.resolve_model(request)?;
+        let body = self.build_request_body(request, model)?;
+        let response = self
+            .client
+            .post(self.endpoint())
+            .bearer_auth(&self.config.api_key)
+            .json(&body)
+            .send()
+            .map_err(ProviderError::Http)?;
+        let status = response.status();
+
+        if !status.is_success() {
+            let body = response.text().map_err(ProviderError::Http)?;
+            return Err(ProviderError::HttpStatus { status, body });
+        }
+
+        let response = response
+            .json::<ZaiChatCompletionsResponse>()
+            .map_err(ProviderError::Http)?;
+        let output_text = response
+            .choices
+            .iter()
+            .filter_map(|choice| choice.message.content.as_deref())
+            .collect::<String>();
+
+        if output_text.is_empty() {
+            return Err(ProviderError::ResponseMissingOutputText);
+        }
+
+        let finish_reason = if response
+            .choices
+            .iter()
+            .all(|choice| choice.finish_reason.as_deref() == Some("stop"))
+        {
+            FinishReason::Completed
+        } else {
+            FinishReason::Incomplete
+        };
+
+        Ok(ProviderResponse {
+            response_id: response.id,
+            model: response.model,
+            output_text,
+            finish_reason,
+            usage: response.usage.map(|usage| ProviderUsage {
+                input_tokens: usage.prompt_tokens,
+                output_tokens: usage.completion_tokens,
+                total_tokens: usage.total_tokens,
+            }),
+        })
+    }
+
+    fn stream(
+        &self,
+        _request: &ProviderRequest,
+    ) -> Result<Box<dyn ProviderResponseStream>, ProviderError> {
+        Err(ProviderError::UnsupportedStreaming)
+    }
+}
+
 impl fmt::Display for ProviderError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -370,11 +647,31 @@ impl Error for ProviderError {
     }
 }
 
+impl fmt::Display for ProviderKindParseError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(formatter, "unknown provider kind {}", self.value)
+    }
+}
+
+impl Error for ProviderKindParseError {}
+
+impl fmt::Display for ProviderBuildError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::MissingApiBase => write!(formatter, "provider config is missing api_base"),
+            Self::MissingApiKey => write!(formatter, "provider config is missing api_key"),
+        }
+    }
+}
+
+impl Error for ProviderBuildError {}
+
 #[cfg(test)]
 mod tests {
     use super::{
-        FinishReason, ModelCapabilities, OpenAiResponsesConfig, OpenAiResponsesDriver,
-        ProviderDriver, ProviderError, ProviderMessage, ProviderRequest, ProviderStreamMode,
+        ConfiguredProvider, FinishReason, ModelCapabilities, OpenAiResponsesConfig,
+        OpenAiResponsesDriver, ProviderBuildError, ProviderDriver, ProviderError, ProviderKind,
+        ProviderMessage, ProviderRequest, ProviderStreamMode, build_driver,
     };
     use crate::session::MessageRole;
     use std::io::{BufRead, BufReader, Read, Write};
@@ -406,6 +703,119 @@ mod tests {
                 supports_reasoning_summaries: true,
             }
         );
+    }
+
+    #[test]
+    fn build_driver_uses_explicit_openai_selection() {
+        let driver = build_driver(&ConfiguredProvider {
+            kind: ProviderKind::OpenAiResponses,
+            api_base: Some("http://127.0.0.1:9/v1".to_string()),
+            api_key: Some("test-key".to_string()),
+            default_model: Some("gpt-5.4".to_string()),
+        })
+        .expect("build openai driver");
+
+        assert_eq!(driver.descriptor().name, "openai-responses");
+        assert_eq!(
+            driver.descriptor().default_model.as_deref(),
+            Some("gpt-5.4")
+        );
+    }
+
+    #[test]
+    fn build_driver_requires_api_base_and_api_key() {
+        let missing_base = build_driver(&ConfiguredProvider {
+            kind: ProviderKind::OpenAiResponses,
+            api_base: None,
+            api_key: Some("test-key".to_string()),
+            default_model: None,
+        })
+        .err()
+        .expect("missing api base must fail");
+        assert!(matches!(missing_base, ProviderBuildError::MissingApiBase));
+
+        let missing_key = build_driver(&ConfiguredProvider {
+            kind: ProviderKind::OpenAiResponses,
+            api_base: Some("https://api.openai.com/v1".to_string()),
+            api_key: None,
+            default_model: None,
+        })
+        .err()
+        .expect("missing api key must fail");
+        assert!(matches!(missing_key, ProviderBuildError::MissingApiKey));
+    }
+
+    #[test]
+    fn build_driver_uses_explicit_zai_selection() {
+        let driver = build_driver(&ConfiguredProvider {
+            kind: ProviderKind::ZaiChatCompletions,
+            api_base: Some("https://api.z.ai/api/paas/v4".to_string()),
+            api_key: Some("test-key".to_string()),
+            default_model: Some("glm-5.1".to_string()),
+        })
+        .expect("build zai driver");
+
+        assert_eq!(driver.descriptor().name, "zai-chat-completions");
+        assert_eq!(driver.descriptor().model_family, "zai");
+        assert_eq!(
+            driver.descriptor().default_model.as_deref(),
+            Some("glm-5.1")
+        );
+    }
+
+    #[test]
+    fn zai_complete_posts_chat_completions_payload_and_extracts_output_text() {
+        let (api_base, requests, handle) = spawn_json_server(
+            r#"{
+                "id":"chatcmpl-123",
+                "model":"glm-5.1",
+                "choices":[
+                    {
+                        "index":0,
+                        "finish_reason":"stop",
+                        "message":{
+                            "role":"assistant",
+                            "content":"hello from z.ai"
+                        }
+                    }
+                ],
+                "usage":{"prompt_tokens":21,"completion_tokens":9,"total_tokens":30}
+            }"#,
+        );
+        let driver = build_driver(&ConfiguredProvider {
+            kind: ProviderKind::ZaiChatCompletions,
+            api_base: Some(api_base),
+            api_key: Some("zai-key".to_string()),
+            default_model: Some("glm-5.1".to_string()),
+        })
+        .expect("build zai driver");
+        let request = ProviderRequest {
+            model: None,
+            instructions: Some("Be brief".to_string()),
+            messages: vec![ProviderMessage::new(MessageRole::User, "Say hi")],
+            max_output_tokens: Some(64),
+            stream: ProviderStreamMode::Disabled,
+        };
+
+        let response = driver.complete(&request).expect("complete");
+        let raw_request = requests.recv().expect("raw request");
+        handle.join().expect("join server");
+
+        assert_eq!(response.response_id, "chatcmpl-123");
+        assert_eq!(response.model, "glm-5.1");
+        assert_eq!(response.output_text, "hello from z.ai");
+        assert_eq!(response.finish_reason, FinishReason::Completed);
+        assert_eq!(response.usage.expect("usage").total_tokens, 30);
+
+        let normalized_request = raw_request.to_ascii_lowercase();
+        assert!(normalized_request.contains("/chat/completions"));
+        assert!(normalized_request.contains("authorization: bearer zai-key"));
+        assert!(normalized_request.contains("\"model\":\"glm-5.1\""));
+        assert!(normalized_request.contains("\"role\":\"system\""));
+        assert!(normalized_request.contains("\"content\":\"be brief\""));
+        assert!(normalized_request.contains("\"role\":\"user\""));
+        assert!(normalized_request.contains("\"content\":\"say hi\""));
+        assert!(normalized_request.contains("\"stream\":false"));
     }
 
     #[test]

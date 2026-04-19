@@ -4,6 +4,7 @@ use agent_persistence::{
     StoreError,
 };
 use agent_runtime::RuntimeScaffold;
+use agent_runtime::provider::{ProviderBuildError, ProviderDriver, ProviderError, build_driver};
 use agent_runtime::run::RunTransitionError;
 use std::error::Error;
 use std::fmt;
@@ -27,6 +28,8 @@ pub enum BootstrapError {
         kind: &'static str,
         id: String,
     },
+    ProviderBuild(ProviderBuildError),
+    ProviderRequest(ProviderError),
     RecordConversion(RecordConversionError),
     RunTransition(RunTransitionError),
     Sqlite(rusqlite::Error),
@@ -61,6 +64,10 @@ impl App {
     pub fn store(&self) -> Result<PersistenceStore, BootstrapError> {
         PersistenceStore::open(&self.persistence).map_err(BootstrapError::Store)
     }
+
+    pub fn provider_driver(&self) -> Result<Box<dyn ProviderDriver>, BootstrapError> {
+        build_driver(&self.config.provider).map_err(BootstrapError::ProviderBuild)
+    }
 }
 
 impl fmt::Display for BootstrapError {
@@ -83,6 +90,8 @@ impl fmt::Display for BootstrapError {
                 )
             }
             Self::MissingRecord { kind, id } => write!(formatter, "{kind} {id} was not found"),
+            Self::ProviderBuild(source) => write!(formatter, "{source}"),
+            Self::ProviderRequest(source) => write!(formatter, "{source}"),
             Self::RecordConversion(source) => {
                 write!(formatter, "record conversion error: {source}")
             }
@@ -100,6 +109,8 @@ impl Error for BootstrapError {
             Self::Config(source) => Some(source),
             Self::Clock(source) => Some(source),
             Self::Io { source, .. } => Some(source),
+            Self::ProviderBuild(source) => Some(source),
+            Self::ProviderRequest(source) => Some(source),
             Self::RecordConversion(source) => Some(source),
             Self::RunTransition(source) => Some(source),
             Self::Sqlite(source) => Some(source),
@@ -124,6 +135,18 @@ impl From<rusqlite::Error> for BootstrapError {
 impl From<StoreError> for BootstrapError {
     fn from(source: StoreError) -> Self {
         Self::Store(source)
+    }
+}
+
+impl From<ProviderBuildError> for BootstrapError {
+    fn from(source: ProviderBuildError) -> Self {
+        Self::ProviderBuild(source)
+    }
+}
+
+impl From<ProviderError> for BootstrapError {
+    fn from(source: ProviderError) -> Self {
+        Self::ProviderRequest(source)
     }
 }
 
@@ -210,10 +233,16 @@ mod tests {
         PersistenceStore, RunRecord, RunRepository, SessionRecord, SessionRepository,
     };
     use agent_runtime::mission::{JobSpec, MissionExecutionIntent, MissionSchedule, MissionStatus};
+    use agent_runtime::provider::{ConfiguredProvider, ProviderKind};
     use agent_runtime::run::{ApprovalRequest, DelegateRun, RunEngine, RunSnapshot, RunStatus};
     use agent_runtime::session::SessionSettings;
     use agent_runtime::verification::{CheckOutcome, EvidenceBundle};
     use std::fs;
+    use std::io::{BufRead, BufReader, Read, Write};
+    use std::net::TcpListener;
+    use std::sync::mpsc::{self, Receiver};
+    use std::thread;
+    use std::time::Duration;
 
     #[test]
     fn build_from_config_creates_runtime_layout_from_one_root() {
@@ -221,6 +250,7 @@ mod tests {
         let data_dir = temp.path().join("state-root");
         let config = AppConfig {
             data_dir: data_dir.clone(),
+            ..AppConfig::default()
         };
 
         let app = build_from_config(config.clone()).expect("build app");
@@ -241,6 +271,7 @@ mod tests {
 
         let error = build_from_config(AppConfig {
             data_dir: occupied_path.clone(),
+            ..AppConfig::default()
         })
         .expect_err("invalid data dir must fail");
 
@@ -256,6 +287,7 @@ mod tests {
         let temp = tempfile::tempdir().expect("tempdir");
         let app = build_from_config(AppConfig {
             data_dir: temp.path().join("state-root"),
+            ..AppConfig::default()
         })
         .expect("build app");
 
@@ -322,6 +354,7 @@ mod tests {
         let temp = tempfile::tempdir().expect("tempdir");
         let app = build_from_config(AppConfig {
             data_dir: temp.path().join("state-root"),
+            ..AppConfig::default()
         })
         .expect("build app");
         let store = PersistenceStore::open(&app.persistence).expect("open store");
@@ -445,5 +478,105 @@ mod tests {
         let snapshot = RunSnapshot::try_from(persisted).expect("snapshot");
         assert_eq!(snapshot.status, RunStatus::Resuming);
         assert!(snapshot.pending_approvals.is_empty());
+    }
+
+    #[test]
+    fn run_with_args_provider_smoke_uses_the_configured_driver() {
+        let (api_base, requests, handle) = spawn_json_server(
+            r#"{
+                "id":"resp_123",
+                "model":"gpt-5.4",
+                "output":[
+                    {
+                        "id":"msg_1",
+                        "type":"message",
+                        "status":"completed",
+                        "role":"assistant",
+                        "content":[
+                            {
+                                "type":"output_text",
+                                "text":"hello world"
+                            }
+                        ]
+                    }
+                ],
+                "usage":{"input_tokens":11,"output_tokens":7,"total_tokens":18}
+            }"#,
+        );
+        let temp = tempfile::tempdir().expect("tempdir");
+        let app = build_from_config(AppConfig {
+            data_dir: temp.path().join("state-root"),
+            provider: ConfiguredProvider {
+                kind: ProviderKind::OpenAiResponses,
+                api_base: Some(format!("{api_base}/v1")),
+                api_key: Some("test-key".to_string()),
+                default_model: Some("gpt-5.4".to_string()),
+            },
+        })
+        .expect("build app");
+
+        let output = app
+            .run_with_args(["provider", "smoke", "Say", "hi"])
+            .expect("provider smoke");
+        let raw_request = requests.recv().expect("raw request");
+        handle.join().expect("join server");
+
+        assert!(output.contains("provider name=openai-responses"));
+        assert!(output.contains("response_id=resp_123"));
+        assert!(output.contains("model=gpt-5.4"));
+        assert!(output.contains("output=hello world"));
+
+        let normalized_request = raw_request.to_ascii_lowercase();
+        assert!(normalized_request.contains("/v1/responses"));
+        assert!(normalized_request.contains("\"text\":\"say hi\""));
+    }
+
+    fn spawn_json_server(body: &'static str) -> (String, Receiver<String>, thread::JoinHandle<()>) {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind listener");
+        let address = listener.local_addr().expect("local addr");
+        let (sender, receiver) = mpsc::channel();
+
+        let handle = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().expect("accept connection");
+            stream
+                .set_read_timeout(Some(Duration::from_secs(2)))
+                .expect("set read timeout");
+
+            let mut reader = BufReader::new(stream.try_clone().expect("clone stream"));
+            let mut raw_request = String::new();
+            let mut content_length = 0usize;
+
+            loop {
+                let mut line = String::new();
+                reader.read_line(&mut line).expect("read request line");
+                raw_request.push_str(&line);
+
+                if line == "\r\n" {
+                    break;
+                }
+
+                let lower = line.to_ascii_lowercase();
+                if let Some(value) = lower.strip_prefix("content-length:") {
+                    content_length = value.trim().parse().expect("parse content length");
+                }
+            }
+
+            let mut body_buf = vec![0u8; content_length];
+            reader.read_exact(&mut body_buf).expect("read request body");
+            raw_request.push_str(std::str::from_utf8(&body_buf).expect("utf8 body"));
+            sender.send(raw_request).expect("send request");
+
+            let response = format!(
+                "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
+                body.len(),
+                body
+            );
+            stream
+                .write_all(response.as_bytes())
+                .expect("write response");
+            stream.flush().expect("flush response");
+        });
+
+        (format!("http://{address}"), receiver, handle)
     }
 }

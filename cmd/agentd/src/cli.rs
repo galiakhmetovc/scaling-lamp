@@ -4,14 +4,20 @@ use agent_persistence::{
     SessionRecord, SessionRepository,
 };
 use agent_runtime::mission::{MissionExecutionIntent, MissionSchedule, MissionSpec, MissionStatus};
+use agent_runtime::provider::{FinishReason, ProviderMessage, ProviderRequest, ProviderStreamMode};
 use agent_runtime::run::{RunEngine, RunSnapshot};
-use agent_runtime::session::{Session, SessionSettings};
+use agent_runtime::session::{MessageRole, Session, SessionSettings};
 use rusqlite::Connection;
 use std::time::{SystemTime, UNIX_EPOCH};
+
+const DEFAULT_SMOKE_PROMPT: &str = "Reply with the single word ready.";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum Command {
     Status,
+    ProviderSmoke {
+        prompt: String,
+    },
     SessionCreate {
         id: String,
         title: String,
@@ -54,27 +60,27 @@ where
     S: AsRef<str>,
 {
     let command = Command::parse(args)?;
-    let store = app.store()?;
 
     match command {
         Command::Status => render_status(app),
-        Command::SessionCreate { id, title } => create_session(&store, &id, &title),
-        Command::SessionShow { id } => show_session(&store, &id),
+        Command::ProviderSmoke { prompt } => run_provider_smoke(app, &prompt),
+        Command::SessionCreate { id, title } => create_session(&app.store()?, &id, &title),
+        Command::SessionShow { id } => show_session(&app.store()?, &id),
         Command::MissionCreate {
             id,
             session_id,
             objective,
-        } => create_mission(&store, &id, &session_id, &objective),
-        Command::MissionShow { id } => show_mission(&store, &id),
-        Command::RunShow { id } => show_run(&store, &id),
-        Command::JobShow { id } => show_job(&store, &id),
-        Command::ApprovalList { run_id } => list_approvals(&store, &run_id),
+        } => create_mission(&app.store()?, &id, &session_id, &objective),
+        Command::MissionShow { id } => show_mission(&app.store()?, &id),
+        Command::RunShow { id } => show_run(&app.store()?, &id),
+        Command::JobShow { id } => show_job(&app.store()?, &id),
+        Command::ApprovalList { run_id } => list_approvals(&app.store()?, &run_id),
         Command::ApprovalApprove {
             run_id,
             approval_id,
-        } => approve_run(&store, &run_id, &approval_id),
-        Command::DelegateList { run_id } => list_delegates(&store, &run_id),
-        Command::VerificationShow { run_id } => show_verification(&store, &run_id),
+        } => approve_run(&app.store()?, &run_id, &approval_id),
+        Command::DelegateList { run_id } => list_delegates(&app.store()?, &run_id),
+        Command::VerificationShow { run_id } => show_verification(&app.store()?, &run_id),
     }
 }
 
@@ -92,6 +98,16 @@ impl Command {
         match args.as_slice() {
             [] => Ok(Self::Status),
             [status] if status == "status" => Ok(Self::Status),
+            [scope, action] if scope == "provider" && action == "smoke" => {
+                Ok(Self::ProviderSmoke {
+                    prompt: DEFAULT_SMOKE_PROMPT.to_string(),
+                })
+            }
+            [scope, action, prompt @ ..] if scope == "provider" && action == "smoke" => {
+                Ok(Self::ProviderSmoke {
+                    prompt: join_required(prompt, "smoke prompt")?,
+                })
+            }
             [scope, action, id, title @ ..] if scope == "session" && action == "create" => {
                 let title = join_required(title, "session title")?;
                 Ok(Self::SessionCreate {
@@ -145,7 +161,7 @@ impl Command {
                 })
             }
             _ => Err(BootstrapError::Usage {
-                reason: "expected one of: status | session create/show | mission create/show | run show | job show | approval list/approve | delegate list | verification show".to_string(),
+                reason: "expected one of: status | provider smoke | session create/show | mission create/show | run show | job show | approval list/approve | delegate list | verification show".to_string(),
             }),
         }
     }
@@ -338,6 +354,33 @@ fn show_verification(store: &PersistenceStore, run_id: &str) -> Result<String, B
         snapshot.evidence_refs.join(",")
     };
     Ok(format!("verification run_id={} refs={}", run_id, refs))
+}
+
+fn run_provider_smoke(app: &App, prompt: &str) -> Result<String, BootstrapError> {
+    let driver = app.provider_driver()?;
+    let response = driver.complete(&ProviderRequest {
+        model: None,
+        instructions: Some("Reply tersely.".to_string()),
+        messages: vec![ProviderMessage::new(MessageRole::User, prompt)],
+        max_output_tokens: Some(128),
+        stream: ProviderStreamMode::Disabled,
+    })?;
+
+    Ok(format!(
+        "provider name={} response_id={} model={} finish_reason={} usage_total_tokens={} output={}",
+        driver.descriptor().name,
+        response.response_id,
+        response.model,
+        match response.finish_reason {
+            FinishReason::Completed => "completed",
+            FinishReason::Incomplete => "incomplete",
+        },
+        response
+            .usage
+            .map(|usage| usage.total_tokens)
+            .unwrap_or_default(),
+        response.output_text
+    ))
 }
 
 fn render_status(app: &App) -> Result<String, BootstrapError> {

@@ -1361,6 +1361,7 @@ mod tests {
         let temp = tempfile::tempdir().expect("tempdir");
         let scaffold = PersistenceScaffold::from_config(crate::AppConfig {
             data_dir: temp.path().join("state-root"),
+            ..crate::AppConfig::default()
         });
 
         let session = SessionRecord {
@@ -1498,6 +1499,7 @@ mod tests {
         let temp = tempfile::tempdir().expect("tempdir");
         let scaffold = PersistenceScaffold::from_config(crate::AppConfig {
             data_dir: temp.path().join("state-root"),
+            ..crate::AppConfig::default()
         });
 
         fs::create_dir_all(
@@ -1683,6 +1685,7 @@ mod tests {
         let temp = tempfile::tempdir().expect("tempdir");
         let scaffold = PersistenceScaffold::from_config(crate::AppConfig {
             data_dir: temp.path().join("state-root"),
+            ..crate::AppConfig::default()
         });
         let store = super::PersistenceStore::open(&scaffold).expect("open store");
 
@@ -1720,6 +1723,7 @@ mod tests {
         let temp = tempfile::tempdir().expect("tempdir");
         let scaffold = PersistenceScaffold::from_config(crate::AppConfig {
             data_dir: temp.path().join("state-root"),
+            ..crate::AppConfig::default()
         });
         let store = super::PersistenceStore::open(&scaffold).expect("open store");
 
@@ -1783,6 +1787,7 @@ mod tests {
         let temp = tempfile::tempdir().expect("tempdir");
         let scaffold = PersistenceScaffold::from_config(crate::AppConfig {
             data_dir: temp.path().join("state-root"),
+            ..crate::AppConfig::default()
         });
 
         fs::create_dir_all(&scaffold.stores.transcripts_dir).expect("create transcript dir");
@@ -1804,6 +1809,7 @@ mod tests {
         let temp = tempfile::tempdir().expect("tempdir");
         let scaffold = PersistenceScaffold::from_config(crate::AppConfig {
             data_dir: temp.path().join("state-root"),
+            ..crate::AppConfig::default()
         });
         let store = super::PersistenceStore::open(&scaffold).expect("open store");
 
@@ -1874,6 +1880,7 @@ mod tests {
         let temp = tempfile::tempdir().expect("tempdir");
         let scaffold = PersistenceScaffold::from_config(crate::AppConfig {
             data_dir: temp.path().join("state-root"),
+            ..crate::AppConfig::default()
         });
 
         fs::create_dir_all(
@@ -1912,6 +1919,7 @@ mod tests {
         let temp = tempfile::tempdir().expect("tempdir");
         let scaffold = PersistenceScaffold::from_config(crate::AppConfig {
             data_dir: temp.path().join("state-root"),
+            ..crate::AppConfig::default()
         });
         let store = super::PersistenceStore::open(&scaffold).expect("open store");
 
@@ -1980,6 +1988,7 @@ mod tests {
         let temp = tempfile::tempdir().expect("tempdir");
         let scaffold = PersistenceScaffold::from_config(crate::AppConfig {
             data_dir: temp.path().join("state-root"),
+            ..crate::AppConfig::default()
         });
         let store = super::PersistenceStore::open(&scaffold).expect("open store");
 
@@ -2041,6 +2050,7 @@ mod tests {
         let temp = tempfile::tempdir().expect("tempdir");
         let scaffold = PersistenceScaffold::from_config(crate::AppConfig {
             data_dir: temp.path().join("state-root"),
+            ..crate::AppConfig::default()
         });
         let store = super::PersistenceStore::open(&scaffold).expect("open store");
 
