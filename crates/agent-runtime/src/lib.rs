@@ -12,7 +12,7 @@ pub mod workspace;
 
 #[derive(Debug, Clone, Default)]
 pub struct RuntimeScaffold {
-    pub delegation: delegation::DelegateHandle,
+    pub delegation: delegation::DelegateRuntime,
     pub memory: memory::MemoryIndex,
     pub mission: mission::MissionSpec,
     pub plan: plan::PlanSnapshot,
