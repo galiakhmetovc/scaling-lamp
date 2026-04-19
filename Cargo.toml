@@ -10,7 +10,9 @@ rust-version = "1.95"
 version = "0.1.0"
 
 [workspace.dependencies]
+crossterm = "0.28"
 encoding_rs = "0.8"
+ratatui = "0.29"
 reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls"] }
 rusqlite = { version = "0.32", features = ["bundled"] }
 serde = { version = "1", features = ["derive"] }

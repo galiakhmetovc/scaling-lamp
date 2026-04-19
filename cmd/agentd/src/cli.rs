@@ -1,5 +1,6 @@
 use crate::bootstrap::{App, BootstrapError};
 use crate::execution::{ChatExecutionEvent, ExecutionError, ToolExecutionStatus};
+use crate::tui;
 use agent_persistence::{
     JobRepository, MissionRecord, MissionRepository, PersistenceStore, RunRepository,
     SessionRecord, SessionRepository,
@@ -33,6 +34,7 @@ enum Command {
     ChatRepl {
         session_id: String,
     },
+    Tui,
     MissionTick {
         now: i64,
     },
@@ -95,6 +97,9 @@ where
         Command::ChatRepl { .. } => Err(BootstrapError::Usage {
             reason: "chat repl requires interactive I/O".to_string(),
         }),
+        Command::Tui => Err(BootstrapError::Usage {
+            reason: "tui requires interactive terminal I/O".to_string(),
+        }),
         Command::MissionTick { now } => run_mission_tick(app, now),
         Command::SessionCreate { id, title } => create_session(&app.store()?, &id, &title),
         Command::SessionShow { id } => show_session(&app.store()?, &id),
@@ -132,6 +137,7 @@ where
     let command = Command::parse(args)?;
     match command {
         Command::ChatRepl { session_id } => run_chat_repl(app, &session_id, input, output),
+        Command::Tui => tui::run(app),
         other => {
             let rendered = execute_command(app, other)?;
             writeln!(output, "{rendered}").map_err(BootstrapError::Stream)
@@ -153,6 +159,7 @@ impl Command {
         match args.as_slice() {
             [] => Ok(Self::Status),
             [status] if status == "status" => Ok(Self::Status),
+            [command] if command == "tui" => Ok(Self::Tui),
             [scope, action] if scope == "provider" && action == "smoke" => {
                 Ok(Self::ProviderSmoke {
                     prompt: DEFAULT_SMOKE_PROMPT.to_string(),
@@ -250,7 +257,7 @@ impl Command {
                 })
             }
             _ => Err(BootstrapError::Usage {
-                reason: "expected one of: status | provider smoke | chat show/send/repl | mission create/show/tick | session create/show | run show | job show/execute | approval list/approve | delegate list | verification show".to_string(),
+                reason: "expected one of: status | tui | provider smoke | chat show/send/repl | mission create/show/tick | session create/show | run show | job show/execute | approval list/approve | delegate list | verification show".to_string(),
             }),
         }
     }
@@ -267,6 +274,9 @@ fn execute_command(app: &App, command: Command) -> Result<String, BootstrapError
         } => send_chat(app, &session_id, &message),
         Command::ChatRepl { .. } => Err(BootstrapError::Usage {
             reason: "chat repl requires interactive I/O".to_string(),
+        }),
+        Command::Tui => Err(BootstrapError::Usage {
+            reason: "tui requires interactive terminal I/O".to_string(),
         }),
         Command::MissionTick { now } => run_mission_tick(app, now),
         Command::SessionCreate { id, title } => create_session(&app.store()?, &id, &title),
