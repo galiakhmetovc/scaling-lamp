@@ -44,6 +44,8 @@ pub struct RunRecord {
     pub error: Option<String>,
     pub result: Option<String>,
     pub evidence_refs_json: String,
+    pub pending_approvals_json: String,
+    pub delegate_runs_json: String,
     pub started_at: i64,
     pub updated_at: i64,
     pub finished_at: Option<i64>,
@@ -101,6 +103,8 @@ pub enum RecordConversionError {
     InvalidMissionStatus(MissionStatusParseError),
     MissingJobInput,
     InvalidPromptOverride(SessionError),
+    InvalidRunDelegateRuns(serde_json::Error),
+    InvalidRunPendingApprovals(serde_json::Error),
     InvalidRunEvidenceRefs(serde_json::Error),
     InvalidRunStatus(RunStatusParseError),
     InvalidSessionSettings(serde_json::Error),
@@ -108,7 +112,9 @@ pub enum RecordConversionError {
     SerializeJobResult(serde_json::Error),
     SerializeMissionAcceptance(serde_json::Error),
     SerializeMissionSchedule(serde_json::Error),
+    SerializeRunDelegateRuns(serde_json::Error),
     SerializeRunEvidenceRefs(serde_json::Error),
+    SerializeRunPendingApprovals(serde_json::Error),
     SerializeSessionSettings(serde_json::Error),
 }
 
@@ -228,6 +234,10 @@ impl TryFrom<&RunSnapshot> for RunRecord {
             result: snapshot.result.clone(),
             evidence_refs_json: serde_json::to_string(&snapshot.evidence_refs)
                 .map_err(RecordConversionError::SerializeRunEvidenceRefs)?,
+            pending_approvals_json: serde_json::to_string(&snapshot.pending_approvals)
+                .map_err(RecordConversionError::SerializeRunPendingApprovals)?,
+            delegate_runs_json: serde_json::to_string(&snapshot.delegate_runs)
+                .map_err(RecordConversionError::SerializeRunDelegateRuns)?,
             started_at: snapshot.started_at,
             updated_at: snapshot.updated_at,
             finished_at: snapshot.finished_at,
@@ -252,6 +262,10 @@ impl TryFrom<RunRecord> for RunSnapshot {
             result: record.result,
             evidence_refs: serde_json::from_str(&record.evidence_refs_json)
                 .map_err(RecordConversionError::InvalidRunEvidenceRefs)?,
+            pending_approvals: serde_json::from_str(&record.pending_approvals_json)
+                .map_err(RecordConversionError::InvalidRunPendingApprovals)?,
+            delegate_runs: serde_json::from_str(&record.delegate_runs_json)
+                .map_err(RecordConversionError::InvalidRunDelegateRuns)?,
             ..RunSnapshot::default()
         })
     }
@@ -377,6 +391,12 @@ impl fmt::Display for RecordConversionError {
             Self::InvalidPromptOverride(source) => {
                 write!(formatter, "invalid prompt override: {source}")
             }
+            Self::InvalidRunDelegateRuns(source) => {
+                write!(formatter, "invalid run delegate runs: {source}")
+            }
+            Self::InvalidRunPendingApprovals(source) => {
+                write!(formatter, "invalid run pending approvals: {source}")
+            }
             Self::InvalidRunEvidenceRefs(source) => {
                 write!(formatter, "invalid run evidence refs: {source}")
             }
@@ -401,8 +421,17 @@ impl fmt::Display for RecordConversionError {
             Self::SerializeMissionSchedule(source) => {
                 write!(formatter, "failed to serialize mission schedule: {source}")
             }
+            Self::SerializeRunDelegateRuns(source) => {
+                write!(formatter, "failed to serialize run delegate runs: {source}")
+            }
             Self::SerializeRunEvidenceRefs(source) => {
                 write!(formatter, "failed to serialize run evidence refs: {source}")
+            }
+            Self::SerializeRunPendingApprovals(source) => {
+                write!(
+                    formatter,
+                    "failed to serialize run pending approvals: {source}"
+                )
             }
             Self::SerializeSessionSettings(source) => {
                 write!(formatter, "failed to serialize session settings: {source}")
@@ -424,6 +453,8 @@ impl Error for RecordConversionError {
             Self::InvalidMissionSchedule(source) => Some(source),
             Self::InvalidMissionStatus(source) => Some(source),
             Self::InvalidPromptOverride(source) => Some(source),
+            Self::InvalidRunDelegateRuns(source) => Some(source),
+            Self::InvalidRunPendingApprovals(source) => Some(source),
             Self::InvalidRunEvidenceRefs(source) => Some(source),
             Self::InvalidRunStatus(source) => Some(source),
             Self::InvalidSessionSettings(source) => Some(source),
@@ -431,7 +462,9 @@ impl Error for RecordConversionError {
             Self::SerializeJobResult(source) => Some(source),
             Self::SerializeMissionAcceptance(source) => Some(source),
             Self::SerializeMissionSchedule(source) => Some(source),
+            Self::SerializeRunDelegateRuns(source) => Some(source),
             Self::SerializeRunEvidenceRefs(source) => Some(source),
+            Self::SerializeRunPendingApprovals(source) => Some(source),
             Self::SerializeSessionSettings(source) => Some(source),
             Self::InvalidMessageRole { .. } | Self::MissingJobInput => None,
         }
@@ -446,7 +479,7 @@ mod tests {
         JobSpecValidationError, JobStatus, MissionExecutionIntent, MissionSchedule, MissionSpec,
         MissionStatus,
     };
-    use agent_runtime::run::{RunEngine, RunSnapshot};
+    use agent_runtime::run::{ApprovalRequest, DelegateRun, RunEngine, RunSnapshot};
     use agent_runtime::session::{MessageRole, PromptOverride, Session, TranscriptEntry};
     use agent_runtime::verification::{CheckOutcome, EvidenceBundle};
 
@@ -519,6 +552,19 @@ mod tests {
         let mut engine = RunEngine::new("run-1", "session-1", Some("mission-1"), 1);
         let mut evidence = EvidenceBundle::new("bundle-1", "run-1", 2);
         engine.start(2).expect("start");
+        engine
+            .wait_for_approval(
+                ApprovalRequest::new("approval-1", "tool-call-1", "write access", 2),
+                2,
+            )
+            .expect("wait for approval");
+        engine
+            .resolve_approval("approval-1", 2)
+            .expect("resolve approval");
+        engine.resume(2).expect("resume");
+        engine
+            .wait_for_delegate(DelegateRun::new("delegate-1", "worker-a", 2), 2)
+            .expect("wait for delegate");
         evidence
             .record_check("fmt", CheckOutcome::Passed, Some("rustfmt clean"), 2)
             .expect("record fmt");
@@ -526,6 +572,10 @@ mod tests {
         engine
             .record_evidence(&evidence, 2)
             .expect("record evidence");
+        engine
+            .complete_delegate("delegate-1", 2)
+            .expect("complete delegate");
+        engine.resume(2).expect("resume");
         engine.complete("done", 3).expect("complete");
 
         let stored = RunRecord::try_from(engine.snapshot()).expect("snapshot to record");
@@ -537,6 +587,8 @@ mod tests {
         assert_eq!(restored.status.as_str(), "completed");
         assert_eq!(restored.result.as_deref(), Some("done"));
         assert_eq!(restored.finished_at, Some(3));
+        assert!(restored.pending_approvals.is_empty());
+        assert!(restored.delegate_runs.is_empty());
         assert_eq!(
             restored.evidence_refs,
             vec![

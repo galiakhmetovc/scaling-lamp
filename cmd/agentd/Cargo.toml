@@ -9,6 +9,8 @@ version.workspace = true
 [dependencies]
 agent-persistence = { path = "../../crates/agent-persistence" }
 agent-runtime = { path = "../../crates/agent-runtime" }
+rusqlite.workspace = true
+serde_json.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true

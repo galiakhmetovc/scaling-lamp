@@ -316,8 +316,8 @@ impl RunRepository for PersistenceStore {
         self.connection.execute(
             "INSERT INTO runs (
                 id, session_id, mission_id, status, error, result, evidence_refs_json,
-                started_at, updated_at, finished_at
-             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
+                pending_approvals_json, delegate_runs_json, started_at, updated_at, finished_at
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)
              ON CONFLICT(id) DO UPDATE SET
                 session_id = excluded.session_id,
                 mission_id = excluded.mission_id,
@@ -325,6 +325,8 @@ impl RunRepository for PersistenceStore {
                 error = excluded.error,
                 result = excluded.result,
                 evidence_refs_json = excluded.evidence_refs_json,
+                pending_approvals_json = excluded.pending_approvals_json,
+                delegate_runs_json = excluded.delegate_runs_json,
                 started_at = excluded.started_at,
                 updated_at = excluded.updated_at,
                 finished_at = excluded.finished_at",
@@ -336,6 +338,8 @@ impl RunRepository for PersistenceStore {
                 record.error,
                 record.result,
                 record.evidence_refs_json,
+                record.pending_approvals_json,
+                record.delegate_runs_json,
                 record.started_at,
                 record.updated_at,
                 record.finished_at
@@ -348,7 +352,7 @@ impl RunRepository for PersistenceStore {
         self.connection
             .query_row(
                 "SELECT id, session_id, mission_id, status, error, result, evidence_refs_json,
-                        started_at, updated_at, finished_at
+                        pending_approvals_json, delegate_runs_json, started_at, updated_at, finished_at
                  FROM runs WHERE id = ?1",
                 [id],
                 |row| {
@@ -360,9 +364,11 @@ impl RunRepository for PersistenceStore {
                         error: row.get(4)?,
                         result: row.get(5)?,
                         evidence_refs_json: row.get(6)?,
-                        started_at: row.get(7)?,
-                        updated_at: row.get(8)?,
-                        finished_at: row.get(9)?,
+                        pending_approvals_json: row.get(7)?,
+                        delegate_runs_json: row.get(8)?,
+                        started_at: row.get(9)?,
+                        updated_at: row.get(10)?,
+                        finished_at: row.get(11)?,
                     })
                 },
             )
@@ -698,6 +704,8 @@ fn bootstrap_schema(connection: &Connection) -> Result<(), StoreError> {
              error TEXT,
              result TEXT,
              evidence_refs_json TEXT NOT NULL,
+             pending_approvals_json TEXT NOT NULL,
+             delegate_runs_json TEXT NOT NULL,
              started_at INTEGER NOT NULL,
              updated_at INTEGER NOT NULL,
              finished_at INTEGER,
@@ -774,6 +782,8 @@ fn validate_schema(connection: &Connection) -> Result<(), StoreError> {
     validate_column(connection, "jobs", "mission_id", true)?;
     validate_column(connection, "sessions", "settings_json", true)?;
     validate_column(connection, "runs", "evidence_refs_json", true)?;
+    validate_column(connection, "runs", "pending_approvals_json", true)?;
+    validate_column(connection, "runs", "delegate_runs_json", true)?;
     validate_column(connection, "runs", "result", false)?;
     validate_column(connection, "transcripts", "sha256", true)?;
     validate_column(connection, "artifacts", "session_id", true)?;
@@ -808,6 +818,18 @@ fn migrate_schema(connection: &Connection) -> Result<(), StoreError> {
         connection,
         "runs",
         "evidence_refs_json",
+        "TEXT NOT NULL DEFAULT '[]'",
+    )?;
+    add_column_if_missing(
+        connection,
+        "runs",
+        "pending_approvals_json",
+        "TEXT NOT NULL DEFAULT '[]'",
+    )?;
+    add_column_if_missing(
+        connection,
+        "runs",
+        "delegate_runs_json",
         "TEXT NOT NULL DEFAULT '[]'",
     )?;
     add_column_if_missing(
@@ -1370,6 +1392,8 @@ mod tests {
             error: None,
             result: None,
             evidence_refs_json: "[\"bundle:bootstrap\"]".to_string(),
+            pending_approvals_json: "[]".to_string(),
+            delegate_runs_json: "[]".to_string(),
             started_at: 3,
             updated_at: 4,
             finished_at: None,
@@ -1605,6 +1629,8 @@ mod tests {
                 error: None,
                 result: None,
                 evidence_refs_json: "[]".to_string(),
+                pending_approvals_json: "[]".to_string(),
+                delegate_runs_json: "[]".to_string(),
                 started_at: 3,
                 updated_at: 4,
                 finished_at: None,

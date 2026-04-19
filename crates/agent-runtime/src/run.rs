@@ -1,4 +1,5 @@
 use crate::verification::EvidenceBundle;
+use serde::{Deserialize, Serialize};
 use std::error::Error;
 use std::fmt;
 
@@ -38,7 +39,7 @@ pub struct RunSnapshot {
     pub evidence_refs: Vec<String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ApprovalRequest {
     pub id: String,
     pub tool_call_id: String,
@@ -54,7 +55,7 @@ pub struct ActiveProcess {
     pub started_at: i64,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DelegateRun {
     pub id: String,
     pub label: String,
@@ -236,6 +237,10 @@ impl DelegateRun {
 }
 
 impl RunEngine {
+    pub fn from_snapshot(snapshot: RunSnapshot) -> Self {
+        Self { snapshot }
+    }
+
     pub fn new(
         id: impl Into<String>,
         session_id: impl Into<String>,
