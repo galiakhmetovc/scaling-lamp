@@ -652,6 +652,21 @@ impl ToolCall {
         }
     }
 
+    pub fn scope_target(&self) -> Option<String> {
+        match self {
+            Self::FsRead(input) => Some(normalize_tool_path(&input.path)),
+            Self::FsWrite(input) => Some(normalize_tool_path(&input.path)),
+            Self::FsPatch(input) => Some(normalize_tool_path(&input.path)),
+            Self::FsList(input) => Some(normalize_tool_path(&input.path)),
+            Self::FsGlob(input) => Some(normalize_tool_path(&input.path)),
+            Self::FsSearch(input) => Some(normalize_tool_path(&input.path)),
+            Self::WebFetch(input) => Some(input.url.clone()),
+            Self::WebSearch(_) => None,
+            Self::ExecStart(input) => input.cwd.clone(),
+            Self::ExecWait(_) | Self::ExecKill(_) => None,
+        }
+    }
+
     pub fn summary(&self) -> String {
         match self {
             Self::FsRead(input) => format!("fs_read path={}", normalize_tool_path(&input.path)),

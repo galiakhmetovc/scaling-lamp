@@ -519,8 +519,9 @@ fn render_status(app: &App) -> Result<String, BootstrapError> {
     let job_count = count_rows(&connection, "jobs")?;
 
     Ok(format!(
-        "status data_dir={} sessions={} missions={} runs={} jobs={} components={} state_db={}",
+        "status data_dir={} permission_mode={} sessions={} missions={} runs={} jobs={} components={} state_db={}",
         app.config.data_dir.display(),
+        app.config.permissions.mode.as_str(),
         session_count,
         mission_count,
         run_count,

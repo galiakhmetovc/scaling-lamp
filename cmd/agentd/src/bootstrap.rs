@@ -66,6 +66,10 @@ pub struct SessionTranscriptLine {
 }
 
 impl App {
+    fn execution_service(&self) -> execution::ExecutionService {
+        execution::ExecutionService::new(self.config.permissions.clone())
+    }
+
     pub fn run(&self) -> Result<(), BootstrapError> {
         let output = self.run_with_args(std::env::args().skip(1))?;
         println!("{output}");
@@ -129,7 +133,7 @@ impl App {
         verifications: &[MissionVerificationSummary],
     ) -> Result<execution::SupervisorTickReport, BootstrapError> {
         let store = self.store()?;
-        execution::ExecutionService::default()
+        self.execution_service()
             .supervisor_tick(&store, now, verifications)
             .map_err(BootstrapError::Execution)
     }
@@ -142,7 +146,7 @@ impl App {
     ) -> Result<execution::MissionTurnExecutionReport, BootstrapError> {
         let store = self.store()?;
         let provider = self.provider_driver()?;
-        execution::ExecutionService::default()
+        self.execution_service()
             .execute_mission_turn_job(&store, provider.as_ref(), job_id, now)
             .map_err(BootstrapError::Execution)
     }
@@ -156,7 +160,7 @@ impl App {
     ) -> Result<execution::ChatTurnExecutionReport, BootstrapError> {
         let store = self.store()?;
         let provider = self.provider_driver()?;
-        execution::ExecutionService::default()
+        self.execution_service()
             .execute_chat_turn(&store, provider.as_ref(), session_id, message, now)
             .map_err(BootstrapError::Execution)
     }
@@ -170,7 +174,7 @@ impl App {
         now: i64,
     ) -> Result<execution::ToolExecutionReport, BootstrapError> {
         let store = self.store()?;
-        execution::ExecutionService::default()
+        self.execution_service()
             .request_tool_approval(&store, job_id, run_id, tool_call, now)
             .map_err(BootstrapError::Execution)
     }
@@ -181,7 +185,7 @@ impl App {
         request: execution::ToolResumeRequest<'_>,
     ) -> Result<execution::ToolExecutionReport, BootstrapError> {
         let store = self.store()?;
-        execution::ExecutionService::default()
+        self.execution_service()
             .resume_tool_call(&store, request)
             .map_err(BootstrapError::Execution)
     }
@@ -393,6 +397,9 @@ mod tests {
         TranscriptRepository,
     };
     use agent_runtime::mission::{JobSpec, MissionExecutionIntent, MissionSchedule, MissionStatus};
+    use agent_runtime::permission::{
+        PermissionAction, PermissionConfig, PermissionMode, PermissionRule,
+    };
     use agent_runtime::provider::{ConfiguredProvider, ProviderKind};
     use agent_runtime::run::{ApprovalRequest, DelegateRun, RunEngine, RunSnapshot, RunStatus};
     use agent_runtime::scheduler::{MissionVerificationSummary, SupervisorAction};
@@ -494,6 +501,7 @@ mod tests {
         assert!(shown_mission.contains("Ship the autonomous supervisor"));
 
         let status = app.run_with_args(["status"]).expect("status");
+        assert!(status.contains("permission_mode=default"));
         assert!(status.contains("sessions=1"));
         assert!(status.contains("missions=1"));
 
@@ -882,6 +890,7 @@ mod tests {
                 api_key: Some("test-key".to_string()),
                 default_model: Some("gpt-5.4".to_string()),
             },
+            ..AppConfig::default()
         })
         .expect("build app");
 
@@ -1112,6 +1121,7 @@ mod tests {
                 api_key: Some("test-key".to_string()),
                 default_model: Some("gpt-5.4".to_string()),
             },
+            ..AppConfig::default()
         })
         .expect("build app");
         let store = PersistenceStore::open(&app.persistence).expect("open store");
@@ -1379,6 +1389,193 @@ mod tests {
     }
 
     #[test]
+    fn accept_edits_mode_skips_approval_for_filesystem_edits() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let app = build_from_config(AppConfig {
+            data_dir: temp.path().join("state-root"),
+            permissions: PermissionConfig {
+                mode: PermissionMode::AcceptEdits,
+                rules: Vec::new(),
+            },
+            ..AppConfig::default()
+        })
+        .expect("build app");
+        let store = PersistenceStore::open(&app.persistence).expect("open store");
+
+        store
+            .put_session(&SessionRecord {
+                id: "session-allow".to_string(),
+                title: "Allow session".to_string(),
+                prompt_override: None,
+                settings_json: serde_json::to_string(&SessionSettings::default())
+                    .expect("serialize settings"),
+                active_mission_id: None,
+                created_at: 1,
+                updated_at: 1,
+            })
+            .expect("put session");
+        store
+            .put_mission(&MissionRecord {
+                id: "mission-allow".to_string(),
+                session_id: "session-allow".to_string(),
+                objective: "Allow edit".to_string(),
+                status: MissionStatus::Running.as_str().to_string(),
+                execution_intent: MissionExecutionIntent::Autonomous.as_str().to_string(),
+                schedule_json: serde_json::to_string(&MissionSchedule::once())
+                    .expect("serialize schedule"),
+                acceptance_json: "[]".to_string(),
+                created_at: 2,
+                updated_at: 2,
+                completed_at: None,
+            })
+            .expect("put mission");
+
+        let mut job = JobSpec::mission_turn(
+            "job-allow",
+            "mission-allow",
+            Some("run-allow"),
+            None,
+            "Write without approval",
+            3,
+        );
+        job.status = agent_runtime::mission::JobStatus::Running;
+        job.started_at = Some(4);
+        job.updated_at = 4;
+
+        let mut run = RunEngine::new("run-allow", "session-allow", Some("mission-allow"), 4);
+        run.start(4).expect("start run");
+        store
+            .put_run(&RunRecord::try_from(run.snapshot()).expect("run record"))
+            .expect("put run");
+        store
+            .put_job(&JobRecord::try_from(&job).expect("job record"))
+            .expect("put job");
+
+        let tool_call = ToolCall::FsWrite(FsWriteInput {
+            path: "notes/out.txt".to_string(),
+            content: "allowed\n".to_string(),
+        });
+
+        let report = app
+            .request_tool_approval("job-allow", "run-allow", &tool_call, 20)
+            .expect("request tool gate");
+        assert_eq!(report.run_status, RunStatus::Running);
+        assert_eq!(report.approval_id, None);
+
+        let run_snapshot = RunSnapshot::try_from(
+            store
+                .get_run("run-allow")
+                .expect("get run")
+                .expect("run exists"),
+        )
+        .expect("run snapshot");
+        assert_eq!(run_snapshot.status, RunStatus::Running);
+        assert!(run_snapshot.pending_approvals.is_empty());
+    }
+
+    #[test]
+    fn deny_rule_fails_tool_execution_before_approval_is_created() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let app = build_from_config(AppConfig {
+            data_dir: temp.path().join("state-root"),
+            permissions: PermissionConfig {
+                mode: PermissionMode::AcceptEdits,
+                rules: vec![PermissionRule {
+                    action: PermissionAction::Deny,
+                    tool: Some("fs_write".to_string()),
+                    family: None,
+                    path_prefix: Some("secrets/".to_string()),
+                }],
+            },
+            ..AppConfig::default()
+        })
+        .expect("build app");
+        let store = PersistenceStore::open(&app.persistence).expect("open store");
+
+        store
+            .put_session(&SessionRecord {
+                id: "session-deny".to_string(),
+                title: "Deny session".to_string(),
+                prompt_override: None,
+                settings_json: serde_json::to_string(&SessionSettings::default())
+                    .expect("serialize settings"),
+                active_mission_id: None,
+                created_at: 1,
+                updated_at: 1,
+            })
+            .expect("put session");
+        store
+            .put_mission(&MissionRecord {
+                id: "mission-deny".to_string(),
+                session_id: "session-deny".to_string(),
+                objective: "Deny edit".to_string(),
+                status: MissionStatus::Running.as_str().to_string(),
+                execution_intent: MissionExecutionIntent::Autonomous.as_str().to_string(),
+                schedule_json: serde_json::to_string(&MissionSchedule::once())
+                    .expect("serialize schedule"),
+                acceptance_json: "[]".to_string(),
+                created_at: 2,
+                updated_at: 2,
+                completed_at: None,
+            })
+            .expect("put mission");
+
+        let mut job = JobSpec::mission_turn(
+            "job-deny",
+            "mission-deny",
+            Some("run-deny"),
+            None,
+            "Write forbidden file",
+            3,
+        );
+        job.status = agent_runtime::mission::JobStatus::Running;
+        job.started_at = Some(4);
+        job.updated_at = 4;
+
+        let mut run = RunEngine::new("run-deny", "session-deny", Some("mission-deny"), 4);
+        run.start(4).expect("start run");
+        store
+            .put_run(&RunRecord::try_from(run.snapshot()).expect("run record"))
+            .expect("put run");
+        store
+            .put_job(&JobRecord::try_from(&job).expect("job record"))
+            .expect("put job");
+
+        let tool_call = ToolCall::FsWrite(FsWriteInput {
+            path: "secrets/out.txt".to_string(),
+            content: "denied\n".to_string(),
+        });
+
+        let error = app
+            .request_tool_approval("job-deny", "run-deny", &tool_call, 20)
+            .expect_err("deny rule must fail");
+        assert!(error.to_string().contains("permission denied"));
+
+        let run_snapshot = RunSnapshot::try_from(
+            store
+                .get_run("run-deny")
+                .expect("get run")
+                .expect("run exists"),
+        )
+        .expect("run snapshot");
+        assert_eq!(run_snapshot.status, RunStatus::Failed);
+        assert!(run_snapshot.pending_approvals.is_empty());
+
+        let failed_job = store
+            .get_job("job-deny")
+            .expect("get job")
+            .expect("job exists");
+        assert_eq!(failed_job.status, "failed");
+        assert!(
+            failed_job
+                .error
+                .as_deref()
+                .unwrap_or_default()
+                .contains("secrets/")
+        );
+    }
+
+    #[test]
     fn run_with_args_executes_mission_ticks_and_jobs() {
         let (api_base, requests, handle) = spawn_json_server(
             r#"{
@@ -1410,6 +1607,7 @@ mod tests {
                 api_key: Some("test-key".to_string()),
                 default_model: Some("gpt-5.4".to_string()),
             },
+            ..AppConfig::default()
         })
         .expect("build app");
         let store = PersistenceStore::open(&app.persistence).expect("open store");
@@ -1571,6 +1769,7 @@ mod tests {
                 api_key: Some("test-key".to_string()),
                 default_model: Some("gpt-5.4".to_string()),
             },
+            ..AppConfig::default()
         })
         .expect("build app");
         let store = PersistenceStore::open(&app.persistence).expect("open store");
@@ -1674,6 +1873,7 @@ mod tests {
                 api_key: Some("test-key".to_string()),
                 default_model: Some("gpt-5.4".to_string()),
             },
+            ..AppConfig::default()
         })
         .expect("build app");
         let store = PersistenceStore::open(&app.persistence).expect("open store");

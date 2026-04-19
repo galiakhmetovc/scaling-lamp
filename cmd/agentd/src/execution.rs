@@ -8,6 +8,7 @@ use agent_persistence::{
 use agent_runtime::mission::{
     JobExecutionInput, JobResult, JobSpec, JobStatus, MissionSpec, MissionStatus,
 };
+use agent_runtime::permission::{PermissionAction, PermissionConfig};
 use agent_runtime::provider::{
     ProviderDriver, ProviderError, ProviderMessage, ProviderRequest, ProviderStreamMode,
 };
@@ -82,8 +83,9 @@ struct ToolExecutionContext<'a> {
     now: i64,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ExecutionService {
+    permissions: PermissionConfig,
     supervisor: SupervisorLoop,
 }
 
@@ -94,11 +96,27 @@ pub enum ExecutionError {
     MissingRun { id: String },
     MissingSession { id: String },
     UnsupportedJobInput { id: String, kind: String },
+    PermissionDenied { tool: String, reason: String },
     Provider(ProviderError),
     RecordConversion(RecordConversionError),
     RunTransition(RunTransitionError),
     Store(StoreError),
     Tool(ToolError),
+}
+
+impl Default for ExecutionService {
+    fn default() -> Self {
+        Self::new(PermissionConfig::default())
+    }
+}
+
+impl ExecutionService {
+    pub fn new(permissions: PermissionConfig) -> Self {
+        Self {
+            permissions,
+            supervisor: SupervisorLoop::default(),
+        }
+    }
 }
 
 impl ExecutionService {
@@ -604,13 +622,50 @@ impl ExecutionService {
         )
         .map_err(ExecutionError::RecordConversion)?;
         let mut run = RunEngine::from_snapshot(run_snapshot);
+        let permission = self.permissions.resolve(definition, tool_call);
 
-        if context.approved_approval_id.is_none() && definition.policy.requires_approval {
+        if matches!(permission.action, PermissionAction::Deny) {
+            let reason = format!(
+                "tool {} denied by permission policy: {}",
+                tool_call.name().as_str(),
+                permission.reason
+            );
+            run.fail(reason.clone(), context.now)
+                .map_err(ExecutionError::RunTransition)?;
+            job.status = JobStatus::Failed;
+            job.error = Some(reason.clone());
+            job.updated_at = context.now;
+            job.finished_at = Some(context.now);
+            mission.updated_at = context.now;
+            store
+                .put_run(
+                    &RunRecord::try_from(run.snapshot())
+                        .map_err(ExecutionError::RecordConversion)?,
+                )
+                .map_err(ExecutionError::Store)?;
+            store
+                .put_job(&JobRecord::try_from(&job).map_err(ExecutionError::RecordConversion)?)
+                .map_err(ExecutionError::Store)?;
+            store
+                .put_mission(
+                    &MissionRecord::try_from(&mission).map_err(ExecutionError::RecordConversion)?,
+                )
+                .map_err(ExecutionError::Store)?;
+            return Err(ExecutionError::PermissionDenied {
+                tool: tool_call.name().as_str().to_string(),
+                reason,
+            });
+        }
+
+        if context.approved_approval_id.is_none()
+            && matches!(permission.action, PermissionAction::Ask)
+        {
             let approval_id = format!("approval-{}-{}", job.id, tool_call.name().as_str());
             let reason = format!(
-                "tool {} requires approval: {}",
+                "tool {} requires approval: {} ({})",
                 tool_call.name().as_str(),
-                tool_call.summary()
+                tool_call.summary(),
+                permission.reason
             );
             run.wait_for_approval(
                 ApprovalRequest::new(
@@ -783,6 +838,12 @@ impl fmt::Display for ExecutionError {
                     "execution job {id} has unsupported input for kind {kind}"
                 )
             }
+            Self::PermissionDenied { tool, reason } => {
+                write!(
+                    formatter,
+                    "execution permission denied for {tool}: {reason}"
+                )
+            }
             Self::Provider(source) => write!(formatter, "execution provider error: {source}"),
             Self::RecordConversion(source) => {
                 write!(formatter, "execution record conversion error: {source}")
@@ -808,6 +869,7 @@ impl Error for ExecutionError {
             | Self::MissingMission { .. }
             | Self::MissingRun { .. }
             | Self::MissingSession { .. }
+            | Self::PermissionDenied { .. }
             | Self::UnsupportedJobInput { .. } => None,
         }
     }

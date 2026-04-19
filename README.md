@@ -408,6 +408,21 @@ If the agent needs a script-like workflow, it must write an explicit script file
 `fs_write` and then invoke that file through `exec_start`. There is no dedicated
 shell-specific tool family.
 
+## Permissions
+
+Permissions are project-level and resolve to `allow`, `ask`, or `deny` before a tool
+call becomes an approval wait.
+
+Supported default modes:
+
+- `default`: respect each tool's built-in approval policy
+- `accept_edits`: allow filesystem edits, still ask for exec-style actions
+- `plan`: allow read-only tools, deny mutating tools
+- `auto`: allow tools unless a rule overrides them
+- `bypass_permissions`: unconditional allow
+
+Rules can override the mode by matching `tool`, `family`, and optional `path_prefix`.
+
 ### Planning
 
 - `plan_create`

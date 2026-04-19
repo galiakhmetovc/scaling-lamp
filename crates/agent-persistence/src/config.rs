@@ -1,3 +1,4 @@
+use agent_runtime::permission::{PermissionConfig, PermissionMode};
 use agent_runtime::provider::{ConfiguredProvider, ProviderKind};
 use serde::Deserialize;
 use std::collections::BTreeMap;
@@ -13,6 +14,7 @@ const DEFAULT_ZAI_MODEL: &str = "glm-5-turbo";
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AppConfig {
     pub data_dir: PathBuf,
+    pub permissions: PermissionConfig,
     pub provider: ConfiguredProvider,
 }
 
@@ -25,6 +27,7 @@ pub struct ConfigEnv {
     pub provider_api_key_override: Option<String>,
     pub provider_kind_override: Option<String>,
     pub provider_model_override: Option<String>,
+    pub permission_mode_override: Option<String>,
     pub temp_dir: PathBuf,
     pub xdg_config_home: Option<PathBuf>,
     pub xdg_state_home: Option<PathBuf>,
@@ -43,6 +46,9 @@ pub enum ConfigError {
     InvalidProviderKind {
         value: String,
     },
+    InvalidPermissionMode {
+        value: String,
+    },
     ParseConfig {
         path: PathBuf,
         source: toml::de::Error,
@@ -56,6 +62,7 @@ pub enum ConfigError {
 #[derive(Debug, Clone, Deserialize)]
 struct FileConfig {
     data_dir: Option<PathBuf>,
+    permissions: Option<PermissionConfig>,
     provider: Option<ConfiguredProvider>,
 }
 
@@ -74,6 +81,9 @@ impl fmt::Display for ConfigError {
             }
             Self::InvalidProviderKind { value } => {
                 write!(formatter, "invalid provider kind {value}")
+            }
+            Self::InvalidPermissionMode { value } => {
+                write!(formatter, "invalid permission mode {value}")
             }
             Self::ParseConfig { path, source } => {
                 write!(
@@ -100,6 +110,7 @@ impl Error for ConfigError {
             Self::ReadConfig { source, .. } => Some(source),
             Self::InvalidConfigPath { .. }
             | Self::InvalidDataDir { .. }
+            | Self::InvalidPermissionMode { .. }
             | Self::InvalidProviderKind { .. } => None,
         }
     }
@@ -117,6 +128,7 @@ impl ConfigEnv {
             provider_api_key_override: read_string_var("TEAMD_PROVIDER_API_KEY", &dotenv),
             provider_kind_override: read_string_var("TEAMD_PROVIDER_KIND", &dotenv),
             provider_model_override: read_string_var("TEAMD_PROVIDER_MODEL", &dotenv),
+            permission_mode_override: read_string_var("TEAMD_PERMISSION_MODE", &dotenv),
             temp_dir: env::temp_dir(),
             xdg_config_home: read_path_var("XDG_CONFIG_HOME", &dotenv)?,
             xdg_state_home: read_path_var("XDG_STATE_HOME", &dotenv)?,
@@ -175,6 +187,10 @@ impl AppConfig {
             .as_ref()
             .and_then(|config| config.provider.clone())
             .unwrap_or_default();
+        let mut permissions = file_config
+            .as_ref()
+            .and_then(|config| config.permissions.clone())
+            .unwrap_or_default();
         if let Some(kind) = env.provider_kind_override.as_deref() {
             provider.kind = parse_provider_kind(kind)?;
         }
@@ -187,6 +203,9 @@ impl AppConfig {
         if let Some(default_model) = &env.provider_model_override {
             provider.default_model = Some(default_model.clone());
         }
+        if let Some(mode) = env.permission_mode_override.as_deref() {
+            permissions.mode = parse_permission_mode(mode)?;
+        }
         if provider.kind == ProviderKind::ZaiChatCompletions && provider.api_base.is_none() {
             provider.api_base = Some(DEFAULT_ZAI_API_BASE.to_string());
         }
@@ -194,7 +213,11 @@ impl AppConfig {
             provider.default_model = Some(DEFAULT_ZAI_MODEL.to_string());
         }
 
-        let config = Self { data_dir, provider };
+        let config = Self {
+            data_dir,
+            permissions,
+            provider,
+        };
         config.validate()?;
         Ok(config)
     }
@@ -238,6 +261,7 @@ fn load_file_config(path: &Path, required: bool) -> Result<FileConfig, ConfigErr
         Err(source) if !required && source.kind() == std::io::ErrorKind::NotFound => {
             return Ok(FileConfig {
                 data_dir: None,
+                permissions: None,
                 provider: None,
             });
         }
@@ -307,6 +331,12 @@ fn parse_provider_kind(value: &str) -> Result<ProviderKind, ConfigError> {
     })
 }
 
+fn parse_permission_mode(value: &str) -> Result<PermissionMode, ConfigError> {
+    PermissionMode::try_from(value).map_err(|_| ConfigError::InvalidPermissionMode {
+        value: value.to_string(),
+    })
+}
+
 fn load_dotenv_from_cwd() -> Result<BTreeMap<String, String>, ConfigError> {
     let Some(path) = env::current_dir().ok().map(|cwd| cwd.join(".env")) else {
         return Ok(BTreeMap::new());
@@ -360,6 +390,7 @@ impl Default for AppConfig {
     fn default() -> Self {
         Self {
             data_dir: default_data_dir(),
+            permissions: PermissionConfig::default(),
             provider: ConfiguredProvider::default(),
         }
     }
@@ -370,6 +401,7 @@ mod tests {
     use super::{
         AppConfig, ConfigEnv, ConfigError, DEFAULT_ZAI_API_BASE, DEFAULT_ZAI_MODEL, parse_dotenv,
     };
+    use agent_runtime::permission::{PermissionAction, PermissionMode};
     use agent_runtime::provider::ProviderKind;
     use std::collections::BTreeMap;
     use std::ffi::OsString;
@@ -392,6 +424,7 @@ mod tests {
             provider_api_key_override: None,
             provider_kind_override: None,
             provider_model_override: None,
+            permission_mode_override: None,
             temp_dir: temp.path().join("tmp"),
             xdg_config_home: Some(temp.path().join("xdg-config")),
             xdg_state_home: Some(temp.path().join("xdg-state")),
@@ -416,6 +449,7 @@ mod tests {
             provider_api_key_override: None,
             provider_kind_override: None,
             provider_model_override: None,
+            permission_mode_override: None,
             temp_dir: temp.path().join("tmp"),
             xdg_config_home: None,
             xdg_state_home: Some(xdg_state_home.clone()),
@@ -430,6 +464,7 @@ mod tests {
     fn validate_rejects_relative_data_dir() {
         let config = AppConfig {
             data_dir: PathBuf::from("relative/teamd"),
+            permissions: Default::default(),
             provider: Default::default(),
         };
 
@@ -457,6 +492,7 @@ mod tests {
             provider_api_key_override: None,
             provider_kind_override: None,
             provider_model_override: None,
+            permission_mode_override: None,
             temp_dir: temp.path().join("tmp"),
             xdg_config_home: Some(temp.path().join("xdg-config")),
             xdg_state_home: Some(temp.path().join("xdg-state")),
@@ -481,6 +517,14 @@ data_dir = "/tmp/teamd-config"
 kind = "zai_chat_completions"
 api_base = "https://api.z.ai/api/paas/v4"
 default_model = "glm-5.1"
+
+[permissions]
+mode = "plan"
+
+[[permissions.rules]]
+action = "allow"
+tool = "fs_write"
+path_prefix = "notes/"
 "#,
         )
         .expect("write config");
@@ -493,6 +537,7 @@ default_model = "glm-5.1"
             provider_api_key_override: Some("zai-secret".into()),
             provider_kind_override: None,
             provider_model_override: Some("glm-5.1-air".into()),
+            permission_mode_override: Some("accept_edits".into()),
             temp_dir: temp.path().join("tmp"),
             xdg_config_home: Some(temp.path().join("xdg-config")),
             xdg_state_home: Some(temp.path().join("xdg-state")),
@@ -510,6 +555,9 @@ default_model = "glm-5.1"
             config.provider.default_model.as_deref(),
             Some("glm-5.1-air")
         );
+        assert_eq!(config.permissions.mode, PermissionMode::AcceptEdits);
+        assert_eq!(config.permissions.rules.len(), 1);
+        assert_eq!(config.permissions.rules[0].action, PermissionAction::Allow);
     }
 
     #[test]
@@ -523,6 +571,7 @@ default_model = "glm-5.1"
             provider_api_key_override: Some("zai-key".to_string()),
             provider_kind_override: Some("zai_chat_completions".to_string()),
             provider_model_override: None,
+            permission_mode_override: None,
             temp_dir: temp.path().join("tmp"),
             xdg_config_home: None,
             xdg_state_home: Some(temp.path().join("xdg-state")),
