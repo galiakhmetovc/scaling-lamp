@@ -1960,6 +1960,133 @@ mod tests {
     }
 
     #[test]
+    fn execute_chat_turn_can_finish_after_an_allowed_web_tool_call_with_zai() {
+        let (web_base, web_requests, web_handle) = spawn_text_server("/doc", "local doc");
+        let first_provider_response = format!(
+            r#"{{
+                "id":"chatcmpl-tool-zai-1",
+                "model":"glm-5.1",
+                "choices":[
+                    {{
+                        "index":0,
+                        "finish_reason":"tool_calls",
+                        "message":{{
+                            "role":"assistant",
+                            "content":"",
+                            "tool_calls":[
+                                {{
+                                    "id":"call_web_fetch",
+                                    "type":"function",
+                                    "function":{{
+                                        "name":"web_fetch",
+                                        "arguments":"{{\"url\":\"{}\"}}"
+                                    }}
+                                }}
+                            ]
+                        }}
+                    }}
+                ],
+                "usage":{{"prompt_tokens":19,"completion_tokens":7,"total_tokens":26}}
+            }}"#,
+            web_base
+        );
+        let (provider_api_base, provider_requests, provider_handle) =
+            spawn_json_server_sequence(vec![
+                first_provider_response,
+                r#"{
+                    "id":"chatcmpl-tool-zai-2",
+                    "model":"glm-5.1",
+                    "choices":[
+                        {
+                            "index":0,
+                            "finish_reason":"stop",
+                            "message":{
+                                "role":"assistant",
+                                "content":"Fetched local doc through z.ai"
+                            }
+                        }
+                    ],
+                    "usage":{"prompt_tokens":31,"completion_tokens":4,"total_tokens":35}
+                }"#
+                .to_string(),
+            ]);
+        let temp = tempfile::tempdir().expect("tempdir");
+        let app = build_from_config(AppConfig {
+            data_dir: temp.path().join("state-root"),
+            provider: ConfiguredProvider {
+                kind: ProviderKind::ZaiChatCompletions,
+                api_base: Some(format!("{provider_api_base}/v1")),
+                api_key: Some("test-key".to_string()),
+                default_model: Some("glm-5.1".to_string()),
+            },
+            ..AppConfig::default()
+        })
+        .expect("build app");
+        let store = PersistenceStore::open(&app.persistence).expect("open store");
+
+        store
+            .put_session(&SessionRecord {
+                id: "session-chat-tool-zai".to_string(),
+                title: "Chat tool zai session".to_string(),
+                prompt_override: Some("Use tools when useful.".to_string()),
+                settings_json: serde_json::to_string(&SessionSettings::default())
+                    .expect("serialize settings"),
+                active_mission_id: None,
+                created_at: 1,
+                updated_at: 1,
+            })
+            .expect("put session");
+
+        let report = app
+            .execute_chat_turn("session-chat-tool-zai", "Fetch the local doc", 10)
+            .expect("execute chat turn");
+        let first_request = provider_requests.recv().expect("first provider request");
+        let second_request = provider_requests.recv().expect("second provider request");
+        let web_request = web_requests.recv().expect("web request");
+        provider_handle.join().expect("join provider server");
+        web_handle.join().expect("join web server");
+
+        assert_eq!(report.run_id, "run-chat-session-chat-tool-zai-10");
+        assert_eq!(report.response_id, "chatcmpl-tool-zai-2");
+        assert_eq!(report.output_text, "Fetched local doc through z.ai");
+
+        let run = store
+            .get_run("run-chat-session-chat-tool-zai-10")
+            .expect("get run")
+            .expect("run exists");
+        assert_eq!(run.status, "completed");
+        assert_eq!(
+            run.result.as_deref(),
+            Some("Fetched local doc through z.ai")
+        );
+
+        let transcript = app
+            .session_transcript("session-chat-tool-zai")
+            .expect("load transcript");
+        assert_eq!(transcript.entries.len(), 2);
+        assert_eq!(transcript.entries[0].content, "Fetch the local doc");
+        assert_eq!(
+            transcript.entries[1].content,
+            "Fetched local doc through z.ai"
+        );
+
+        let normalized_first = first_request.to_ascii_lowercase();
+        assert!(normalized_first.contains("/chat/completions"));
+        assert!(normalized_first.contains("\"tool_choice\":\"auto\""));
+        assert!(normalized_first.contains("\"name\":\"web_fetch\""));
+        assert!(normalized_first.contains("\"content\":\"fetch the local doc\""));
+
+        let normalized_second = second_request.to_ascii_lowercase();
+        assert!(normalized_second.contains("\"role\":\"assistant\""));
+        assert!(normalized_second.contains("\"tool_calls\""));
+        assert!(normalized_second.contains("\"tool_call_id\":\"call_web_fetch\""));
+        assert!(normalized_second.contains("local doc"));
+
+        let normalized_web = web_request.to_ascii_lowercase();
+        assert!(normalized_web.contains("get /doc http/1.1"));
+    }
+
+    #[test]
     fn execute_chat_turn_fails_when_the_provider_repeats_the_same_tool_signature() {
         let (web_base, web_requests, web_handle) = spawn_text_server("/doc", "loop doc");
         let repeated_tool_response = format!(

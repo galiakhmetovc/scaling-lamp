@@ -36,6 +36,7 @@ pub struct ModelCapabilities {
     pub supports_streaming: bool,
     pub supports_text_input: bool,
     pub supports_tool_calls: bool,
+    pub supports_previous_response_id: bool,
     pub supports_reasoning_summaries: bool,
 }
 
@@ -57,6 +58,7 @@ pub struct ProviderRequest {
     pub instructions: Option<String>,
     pub messages: Vec<ProviderMessage>,
     pub previous_response_id: Option<String>,
+    pub continuation_messages: Vec<ProviderContinuationMessage>,
     pub tools: Vec<ProviderToolDefinition>,
     pub tool_outputs: Vec<ProviderToolOutput>,
     pub max_output_tokens: Option<u32>,
@@ -81,6 +83,17 @@ pub struct ProviderToolCall {
 pub struct ProviderToolOutput {
     pub call_id: String,
     pub output: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ProviderContinuationMessage {
+    AssistantToolCalls {
+        tool_calls: Vec<ProviderToolCall>,
+    },
+    ToolResult {
+        tool_call_id: String,
+        content: String,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -266,6 +279,10 @@ struct ZaiChatCompletionsRequest<'a> {
     model: &'a str,
     messages: Vec<ZaiChatCompletionMessage<'a>>,
     thinking: ZaiThinkingConfig<'static>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    tools: Vec<ZaiChatCompletionToolDefinition<'a>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    tool_choice: Option<&'static str>,
     #[serde(skip_serializing_if = "Option::is_none")]
     max_tokens: Option<u32>,
     stream: bool,
@@ -280,7 +297,40 @@ struct ZaiThinkingConfig<'a> {
 #[derive(Debug, Serialize)]
 struct ZaiChatCompletionMessage<'a> {
     role: &'a str,
-    content: &'a str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    content: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    tool_call_id: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    tool_calls: Option<Vec<ZaiChatCompletionToolCall<'a>>>,
+}
+
+#[derive(Debug, Serialize)]
+struct ZaiChatCompletionToolDefinition<'a> {
+    #[serde(rename = "type")]
+    tool_type: &'static str,
+    function: ZaiChatCompletionFunctionDefinition<'a>,
+}
+
+#[derive(Debug, Serialize)]
+struct ZaiChatCompletionFunctionDefinition<'a> {
+    name: &'a str,
+    description: &'a str,
+    parameters: &'a Value,
+}
+
+#[derive(Debug, Serialize)]
+struct ZaiChatCompletionToolCall<'a> {
+    id: &'a str,
+    #[serde(rename = "type")]
+    tool_type: &'static str,
+    function: ZaiChatCompletionToolCallFunction<'a>,
+}
+
+#[derive(Debug, Serialize)]
+struct ZaiChatCompletionToolCallFunction<'a> {
+    name: &'a str,
+    arguments: &'a str,
 }
 
 #[derive(Debug, Deserialize)]
@@ -300,6 +350,28 @@ struct ZaiChatCompletionChoice {
 #[derive(Debug, Deserialize)]
 struct ZaiChatCompletionResponseMessage {
     content: Option<String>,
+    tool_calls: Option<Vec<ZaiChatCompletionResponseToolCall>>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ZaiChatCompletionResponseToolCall {
+    id: String,
+    #[serde(rename = "type")]
+    _tool_type: String,
+    function: ZaiChatCompletionResponseToolCallFunction,
+}
+
+#[derive(Debug, Deserialize)]
+struct ZaiChatCompletionResponseToolCallFunction {
+    name: String,
+    arguments: ZaiToolCallArguments,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(untagged)]
+enum ZaiToolCallArguments {
+    String(String),
+    Json(Value),
 }
 
 #[derive(Debug, Deserialize)]
@@ -406,6 +478,7 @@ impl OpenAiResponsesDriver {
                     supports_streaming: false,
                     supports_text_input: true,
                     supports_tool_calls: true,
+                    supports_previous_response_id: true,
                     supports_reasoning_summaries: true,
                 },
             },
@@ -497,7 +570,8 @@ impl ZaiChatCompletionsDriver {
                 capabilities: ModelCapabilities {
                     supports_streaming: false,
                     supports_text_input: true,
-                    supports_tool_calls: false,
+                    supports_tool_calls: true,
+                    supports_previous_response_id: false,
                     supports_reasoning_summaries: false,
                 },
             },
@@ -523,11 +597,25 @@ impl ZaiChatCompletionsDriver {
         model: &'a str,
     ) -> Result<ZaiChatCompletionsRequest<'a>, ProviderError> {
         let mut messages = Vec::new();
+        let tools = request
+            .tools
+            .iter()
+            .map(|tool| ZaiChatCompletionToolDefinition {
+                tool_type: "function",
+                function: ZaiChatCompletionFunctionDefinition {
+                    name: tool.name.as_str(),
+                    description: tool.description.as_str(),
+                    parameters: &tool.parameters,
+                },
+            })
+            .collect::<Vec<_>>();
 
         if let Some(instructions) = request.instructions.as_deref() {
             messages.push(ZaiChatCompletionMessage {
                 role: "system",
-                content: instructions,
+                content: Some(instructions),
+                tool_call_id: None,
+                tool_calls: None,
             });
         }
 
@@ -542,8 +630,46 @@ impl ZaiChatCompletionsDriver {
             };
             messages.push(ZaiChatCompletionMessage {
                 role,
-                content: message.content.as_str(),
+                content: Some(message.content.as_str()),
+                tool_call_id: None,
+                tool_calls: None,
             });
+        }
+
+        for message in &request.continuation_messages {
+            match message {
+                ProviderContinuationMessage::AssistantToolCalls { tool_calls } => {
+                    messages.push(ZaiChatCompletionMessage {
+                        role: "assistant",
+                        content: None,
+                        tool_call_id: None,
+                        tool_calls: Some(
+                            tool_calls
+                                .iter()
+                                .map(|tool_call| ZaiChatCompletionToolCall {
+                                    id: tool_call.call_id.as_str(),
+                                    tool_type: "function",
+                                    function: ZaiChatCompletionToolCallFunction {
+                                        name: tool_call.name.as_str(),
+                                        arguments: tool_call.arguments.as_str(),
+                                    },
+                                })
+                                .collect(),
+                        ),
+                    });
+                }
+                ProviderContinuationMessage::ToolResult {
+                    tool_call_id,
+                    content,
+                } => {
+                    messages.push(ZaiChatCompletionMessage {
+                        role: "tool",
+                        content: Some(content.as_str()),
+                        tool_call_id: Some(tool_call_id.as_str()),
+                        tool_calls: None,
+                    });
+                }
+            }
         }
 
         Ok(ZaiChatCompletionsRequest {
@@ -552,6 +678,8 @@ impl ZaiChatCompletionsDriver {
             thinking: ZaiThinkingConfig {
                 thinking_type: "disabled",
             },
+            tools,
+            tool_choice: (!request.tools.is_empty()).then_some("auto"),
             max_tokens: request.max_output_tokens,
             stream: false,
         })
@@ -680,8 +808,25 @@ impl ProviderDriver for ZaiChatCompletionsDriver {
             .iter()
             .filter_map(|choice| choice.message.content.as_deref())
             .collect::<String>();
+        let tool_calls = response
+            .choices
+            .iter()
+            .flat_map(|choice| choice.message.tool_calls.iter().flatten())
+            .map(|tool_call| {
+                Ok(ProviderToolCall {
+                    call_id: tool_call.id.clone(),
+                    name: tool_call.function.name.clone(),
+                    arguments: match &tool_call.function.arguments {
+                        ZaiToolCallArguments::Json(value) => {
+                            serde_json::to_string(value).map_err(ProviderError::Parse)?
+                        }
+                        ZaiToolCallArguments::String(value) => value.clone(),
+                    },
+                })
+            })
+            .collect::<Result<Vec<_>, ProviderError>>()?;
 
-        if output_text.is_empty() {
+        if output_text.is_empty() && tool_calls.is_empty() {
             return Err(ProviderError::ResponseMissingOutputText);
         }
 
@@ -699,7 +844,7 @@ impl ProviderDriver for ZaiChatCompletionsDriver {
             response_id: response.id,
             model: response.model,
             output_text,
-            tool_calls: Vec::new(),
+            tool_calls,
             finish_reason,
             usage: response.usage.map(|usage| ProviderUsage {
                 input_tokens: usage.prompt_tokens,
@@ -818,6 +963,7 @@ mod tests {
                 supports_streaming: false,
                 supports_text_input: true,
                 supports_tool_calls: true,
+                supports_previous_response_id: true,
                 supports_reasoning_summaries: true,
             }
         );
@@ -912,6 +1058,7 @@ mod tests {
             instructions: Some("Be brief".to_string()),
             messages: vec![ProviderMessage::new(MessageRole::User, "Say hi")],
             previous_response_id: None,
+            continuation_messages: Vec::new(),
             tools: Vec::new(),
             tool_outputs: Vec::new(),
             max_output_tokens: Some(64),
@@ -939,6 +1086,89 @@ mod tests {
         assert!(normalized_request.contains("\"content\":\"say hi\""));
         assert!(normalized_request.contains("\"thinking\":{\"type\":\"disabled\"}"));
         assert!(normalized_request.contains("\"stream\":false"));
+    }
+
+    #[test]
+    fn zai_complete_accepts_function_call_only_responses() {
+        let (api_base, requests, handle) = spawn_json_server(
+            r#"{
+                "id":"chatcmpl-tool-123",
+                "model":"glm-5.1",
+                "choices":[
+                    {
+                        "index":0,
+                        "finish_reason":"tool_calls",
+                        "message":{
+                            "role":"assistant",
+                            "content":"",
+                            "tool_calls":[
+                                {
+                                    "id":"call_web_fetch",
+                                    "type":"function",
+                                    "function":{
+                                        "name":"web_fetch",
+                                        "arguments":"{\"url\":\"http://127.0.0.1:9999/doc\"}"
+                                    }
+                                }
+                            ]
+                        }
+                    }
+                ],
+                "usage":{"prompt_tokens":21,"completion_tokens":9,"total_tokens":30}
+            }"#,
+        );
+        let driver = build_driver(&ConfiguredProvider {
+            kind: ProviderKind::ZaiChatCompletions,
+            api_base: Some(api_base),
+            api_key: Some("zai-key".to_string()),
+            default_model: Some("glm-5.1".to_string()),
+        })
+        .expect("build zai driver");
+        let request = ProviderRequest {
+            model: None,
+            instructions: Some("Use tools when needed".to_string()),
+            messages: vec![ProviderMessage::new(MessageRole::User, "Fetch the doc")],
+            previous_response_id: None,
+            continuation_messages: Vec::new(),
+            tools: vec![ProviderToolDefinition {
+                name: "web_fetch".to_string(),
+                description: "Fetch a URL".to_string(),
+                parameters: json!({
+                    "type": "object",
+                    "properties": {
+                        "url": { "type": "string" }
+                    },
+                    "required": ["url"],
+                    "additionalProperties": false,
+                }),
+            }],
+            tool_outputs: Vec::new(),
+            max_output_tokens: Some(64),
+            stream: ProviderStreamMode::Disabled,
+        };
+
+        let response = driver
+            .complete(&request)
+            .expect("z.ai tool-call response should be accepted");
+        let raw_request = requests.recv().expect("raw request");
+        handle.join().expect("join server");
+
+        assert_eq!(response.response_id, "chatcmpl-tool-123");
+        assert_eq!(response.model, "glm-5.1");
+        assert_eq!(response.output_text, "");
+        assert_eq!(response.tool_calls.len(), 1);
+        assert_eq!(response.tool_calls[0].call_id, "call_web_fetch");
+        assert_eq!(response.tool_calls[0].name, "web_fetch");
+        assert_eq!(
+            response.tool_calls[0].arguments,
+            r#"{"url":"http://127.0.0.1:9999/doc"}"#
+        );
+        assert_eq!(response.finish_reason, FinishReason::Incomplete);
+
+        let normalized_request = raw_request.to_ascii_lowercase();
+        assert!(normalized_request.contains("/chat/completions"));
+        assert!(normalized_request.contains("\"tool_choice\":\"auto\""));
+        assert!(normalized_request.contains("\"name\":\"web_fetch\""));
     }
 
     #[test]
@@ -977,6 +1207,7 @@ mod tests {
             instructions: Some("Be brief".to_string()),
             messages: vec![ProviderMessage::new(MessageRole::User, "Write a haiku")],
             previous_response_id: None,
+            continuation_messages: Vec::new(),
             tools: Vec::new(),
             tool_outputs: Vec::new(),
             max_output_tokens: None,
@@ -1037,6 +1268,7 @@ mod tests {
                 "Fetch the local document",
             )],
             previous_response_id: None,
+            continuation_messages: Vec::new(),
             tools: vec![ProviderToolDefinition {
                 name: "web_fetch".to_string(),
                 description: "Fetch a URL".to_string(),
@@ -1092,6 +1324,7 @@ mod tests {
             instructions: None,
             messages: vec![ProviderMessage::new(MessageRole::User, "ping")],
             previous_response_id: None,
+            continuation_messages: Vec::new(),
             tools: Vec::new(),
             tool_outputs: Vec::new(),
             max_output_tokens: None,

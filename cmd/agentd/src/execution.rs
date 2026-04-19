@@ -10,8 +10,8 @@ use agent_runtime::mission::{
 };
 use agent_runtime::permission::{PermissionAction, PermissionConfig};
 use agent_runtime::provider::{
-    ProviderDriver, ProviderError, ProviderMessage, ProviderRequest, ProviderResponse,
-    ProviderStreamMode, ProviderToolDefinition, ProviderToolOutput,
+    ProviderContinuationMessage, ProviderDriver, ProviderError, ProviderMessage, ProviderRequest,
+    ProviderResponse, ProviderStreamMode, ProviderToolDefinition, ProviderToolOutput,
 };
 use agent_runtime::run::{
     ActiveProcess, ApprovalRequest, RunEngine, RunSnapshot, RunStatus, RunTransitionError,
@@ -231,22 +231,36 @@ impl ExecutionService {
         let catalog = ToolCatalog::default();
         let tools = self.automatic_provider_tools(provider);
         let mut pending_tool_outputs = Vec::new();
+        let mut continuation_messages = Vec::new();
         let mut tool_runtime = ToolRuntime::new(self.workspace.clone());
         let mut previous_response_id = None;
         let mut seen_tool_signatures = BTreeMap::new();
+        let supports_previous_response_id = provider
+            .descriptor()
+            .capabilities
+            .supports_previous_response_id;
 
         for round in 0..MAX_PROVIDER_TOOL_ROUNDS {
             let request = ProviderRequest {
                 model: None,
                 instructions: instructions.clone(),
-                messages: if previous_response_id.is_some() {
+                messages: if supports_previous_response_id && previous_response_id.is_some() {
                     Vec::new()
                 } else {
                     base_messages.clone()
                 },
-                previous_response_id: previous_response_id.clone(),
+                previous_response_id: if supports_previous_response_id {
+                    previous_response_id.clone()
+                } else {
+                    None
+                },
+                continuation_messages: continuation_messages.clone(),
                 tools: tools.clone(),
-                tool_outputs: pending_tool_outputs.clone(),
+                tool_outputs: if supports_previous_response_id {
+                    pending_tool_outputs.clone()
+                } else {
+                    Vec::new()
+                },
                 max_output_tokens: Some(512),
                 stream: ProviderStreamMode::Disabled,
             };
@@ -274,6 +288,12 @@ impl ExecutionService {
                         first_seen_round + 1,
                         signature
                     ),
+                });
+            }
+
+            if !supports_previous_response_id {
+                continuation_messages.push(ProviderContinuationMessage::AssistantToolCalls {
+                    tool_calls: response.tool_calls.clone(),
                 });
             }
 
@@ -340,16 +360,29 @@ impl ExecutionService {
                     .invoke(parsed.clone())
                     .map_err(ExecutionError::Tool)?;
                 let summary = output.summary();
+                let model_output = output.model_output();
                 run.record_tool_completion(summary, now)
                     .map_err(ExecutionError::RunTransition)?;
-                next_tool_outputs.push(ProviderToolOutput {
-                    call_id: tool_call.call_id.clone(),
-                    output: output.model_output(),
-                });
+                if supports_previous_response_id {
+                    next_tool_outputs.push(ProviderToolOutput {
+                        call_id: tool_call.call_id.clone(),
+                        output: model_output,
+                    });
+                } else {
+                    continuation_messages.push(ProviderContinuationMessage::ToolResult {
+                        tool_call_id: tool_call.call_id.clone(),
+                        content: model_output,
+                    });
+                }
             }
 
-            previous_response_id = Some(response.response_id.clone());
-            pending_tool_outputs = next_tool_outputs;
+            if supports_previous_response_id {
+                previous_response_id = Some(response.response_id.clone());
+                pending_tool_outputs = next_tool_outputs;
+            } else {
+                previous_response_id = None;
+                pending_tool_outputs.clear();
+            }
             self.persist_run(store, run)?;
         }
 
