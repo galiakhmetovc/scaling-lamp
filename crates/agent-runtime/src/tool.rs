@@ -1,4 +1,6 @@
 use crate::workspace::{WorkspaceEntry, WorkspaceError, WorkspaceRef, WorkspaceSearchMatch};
+use reqwest::Url;
+use reqwest::blocking::Client;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::error::Error;
@@ -9,6 +11,7 @@ use std::process::{Child, Command, Stdio};
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ToolFamily {
     Filesystem,
+    Web,
     Exec,
 }
 
@@ -20,6 +23,8 @@ pub enum ToolName {
     FsList,
     FsGlob,
     FsSearch,
+    WebFetch,
+    WebSearch,
     ExecStart,
     ExecWait,
     ExecKill,
@@ -89,6 +94,17 @@ pub struct FsSearchInput {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WebFetchInput {
+    pub url: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WebSearchInput {
+    pub query: String,
+    pub limit: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ExecStartInput {
     pub executable: String,
     pub args: Vec<String>,
@@ -113,6 +129,8 @@ pub enum ToolCall {
     FsList(FsListInput),
     FsGlob(FsGlobInput),
     FsSearch(FsSearchInput),
+    WebFetch(WebFetchInput),
+    WebSearch(WebSearchInput),
     ExecStart(ExecStartInput),
     ExecWait(ProcessWaitInput),
     ExecKill(ProcessKillInput),
@@ -152,6 +170,27 @@ pub struct FsSearchOutput {
     pub matches: Vec<WorkspaceSearchMatch>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WebFetchOutput {
+    pub url: String,
+    pub status_code: u16,
+    pub content_type: Option<String>,
+    pub body: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WebSearchResult {
+    pub title: String,
+    pub url: String,
+    pub snippet: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WebSearchOutput {
+    pub query: String,
+    pub results: Vec<WebSearchResult>,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ProcessKind {
     Exec,
@@ -187,6 +226,8 @@ pub enum ToolOutput {
     FsList(FsListOutput),
     FsGlob(FsGlobOutput),
     FsSearch(FsSearchOutput),
+    WebFetch(WebFetchOutput),
+    WebSearch(WebSearchOutput),
     ProcessStart(ProcessStartOutput),
     ProcessResult(ProcessResult),
 }
@@ -198,6 +239,18 @@ pub enum ToolError {
     },
     InvalidPatch {
         path: String,
+        reason: String,
+    },
+    InvalidWebRequest {
+        reason: String,
+    },
+    WebHttp(reqwest::Error),
+    WebHttpStatus {
+        url: String,
+        status_code: u16,
+    },
+    WebParse {
+        url: String,
         reason: String,
     },
     ProcessFamilyMismatch {
@@ -218,8 +271,15 @@ pub enum ToolError {
 #[derive(Debug)]
 pub struct ToolRuntime {
     workspace: WorkspaceRef,
+    web: WebToolClient,
     next_process_id: usize,
     processes: BTreeMap<String, ManagedProcess>,
+}
+
+#[derive(Debug, Clone)]
+pub struct WebToolClient {
+    client: Client,
+    search_url: String,
 }
 
 #[derive(Debug)]
@@ -232,6 +292,7 @@ impl ToolFamily {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Filesystem => "fs",
+            Self::Web => "web",
             Self::Exec => "exec",
         }
     }
@@ -246,6 +307,8 @@ impl ToolName {
             Self::FsList => "fs_list",
             Self::FsGlob => "fs_glob",
             Self::FsSearch => "fs_search",
+            Self::WebFetch => "web_fetch",
+            Self::WebSearch => "web_search",
             Self::ExecStart => "exec_start",
             Self::ExecWait => "exec_wait",
             Self::ExecKill => "exec_kill",
@@ -327,6 +390,26 @@ impl ToolCatalog {
                 },
             },
             ToolDefinition {
+                name: ToolName::WebFetch,
+                family: ToolFamily::Web,
+                description: "Fetch a URL and return its response body",
+                policy: ToolPolicy {
+                    read_only: true,
+                    destructive: false,
+                    requires_approval: false,
+                },
+            },
+            ToolDefinition {
+                name: ToolName::WebSearch,
+                family: ToolFamily::Web,
+                description: "Run a search query against the configured web search backend",
+                policy: ToolPolicy {
+                    read_only: true,
+                    destructive: false,
+                    requires_approval: false,
+                },
+            },
+            ToolDefinition {
                 name: ToolName::ExecStart,
                 family: ToolFamily::Exec,
                 description: "Start a structured executable plus args process",
@@ -363,7 +446,7 @@ impl ToolCatalog {
 impl Default for ToolCatalog {
     fn default() -> Self {
         Self {
-            families: vec!["fs", "exec"],
+            families: vec!["fs", "web", "exec"],
             definitions: Self::definitions(),
         }
     }
@@ -371,8 +454,13 @@ impl Default for ToolCatalog {
 
 impl ToolRuntime {
     pub fn new(workspace: WorkspaceRef) -> Self {
+        Self::with_web_client(workspace, WebToolClient::default())
+    }
+
+    pub fn with_web_client(workspace: WorkspaceRef, web: WebToolClient) -> Self {
         Self {
             workspace,
+            web,
             next_process_id: 1,
             processes: BTreeMap::new(),
         }
@@ -410,6 +498,10 @@ impl ToolRuntime {
             ToolCall::FsSearch(input) => Ok(ToolOutput::FsSearch(FsSearchOutput {
                 matches: self.workspace.search(&input.path, &input.query)?,
             })),
+            ToolCall::WebFetch(input) => Ok(ToolOutput::WebFetch(self.web.fetch(&input.url)?)),
+            ToolCall::WebSearch(input) => Ok(ToolOutput::WebSearch(
+                self.web.search(&input.query, input.limit)?,
+            )),
             ToolCall::ExecStart(input) => {
                 let cwd = self.resolve_cwd(input.cwd.as_deref())?;
                 self.start_process(ProcessKind::Exec, &input.executable, &input.args, cwd)
@@ -552,6 +644,8 @@ impl ToolCall {
             Self::FsList(_) => ToolName::FsList,
             Self::FsGlob(_) => ToolName::FsGlob,
             Self::FsSearch(_) => ToolName::FsSearch,
+            Self::WebFetch(_) => ToolName::WebFetch,
+            Self::WebSearch(_) => ToolName::WebSearch,
             Self::ExecStart(_) => ToolName::ExecStart,
             Self::ExecWait(_) => ToolName::ExecWait,
             Self::ExecKill(_) => ToolName::ExecKill,
@@ -586,6 +680,10 @@ impl ToolCall {
                 normalize_tool_path(&input.path),
                 input.query
             ),
+            Self::WebFetch(input) => format!("web_fetch url={}", input.url),
+            Self::WebSearch(input) => {
+                format!("web_search query={} limit={}", input.query, input.limit)
+            }
             Self::ExecStart(input) => {
                 format!(
                     "exec_start executable={} argc={}",
@@ -642,6 +740,20 @@ impl ToolOutput {
         }
     }
 
+    pub fn into_web_fetch(self) -> Option<WebFetchOutput> {
+        match self {
+            Self::WebFetch(output) => Some(output),
+            _ => None,
+        }
+    }
+
+    pub fn into_web_search(self) -> Option<WebSearchOutput> {
+        match self {
+            Self::WebSearch(output) => Some(output),
+            _ => None,
+        }
+    }
+
     pub fn into_process_start(self) -> Option<ProcessStartOutput> {
         match self {
             Self::ProcessStart(output) => Some(output),
@@ -680,6 +792,10 @@ impl ToolOutput {
             Self::FsList(output) => format!("fs_list entries={}", output.entries.len()),
             Self::FsGlob(output) => format!("fs_glob entries={}", output.entries.len()),
             Self::FsSearch(output) => format!("fs_search matches={}", output.matches.len()),
+            Self::WebFetch(output) => {
+                format!("web_fetch url={} status={}", output.url, output.status_code)
+            }
+            Self::WebSearch(output) => format!("web_search results={}", output.results.len()),
             Self::ProcessStart(output) => format!(
                 "{}_start process_id={} pid_ref={}",
                 output.kind.as_str(),
@@ -700,6 +816,22 @@ impl fmt::Display for ToolError {
             Self::InvalidExec { reason } => write!(formatter, "invalid exec request: {reason}"),
             Self::InvalidPatch { path, reason } => {
                 write!(formatter, "invalid patch for {path}: {reason}")
+            }
+            Self::InvalidWebRequest { reason } => {
+                write!(formatter, "invalid web request: {reason}")
+            }
+            Self::WebHttp(source) => write!(formatter, "web http error: {source}"),
+            Self::WebHttpStatus { url, status_code } => {
+                write!(
+                    formatter,
+                    "web request to {url} failed with status {status_code}"
+                )
+            }
+            Self::WebParse { url, reason } => {
+                write!(
+                    formatter,
+                    "failed to parse web response from {url}: {reason}"
+                )
             }
             Self::ProcessFamilyMismatch {
                 process_id,
@@ -724,10 +856,14 @@ impl fmt::Display for ToolError {
 impl Error for ToolError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
+            Self::WebHttp(source) => Some(source),
             Self::ProcessIo { source, .. } => Some(source),
             Self::Workspace(source) => Some(source),
             Self::InvalidExec { .. }
             | Self::InvalidPatch { .. }
+            | Self::InvalidWebRequest { .. }
+            | Self::WebHttpStatus { .. }
+            | Self::WebParse { .. }
             | Self::ProcessFamilyMismatch { .. }
             | Self::UnknownProcess { .. } => None,
         }
@@ -742,6 +878,79 @@ impl From<WorkspaceError> for ToolError {
 
 fn normalize_tool_path(path: &str) -> String {
     path.replace('\\', "/")
+}
+
+impl Default for WebToolClient {
+    fn default() -> Self {
+        Self {
+            client: Client::builder()
+                .user_agent("teamd-agent/0.1")
+                .build()
+                .expect("web tool client"),
+            search_url: "https://duckduckgo.com/html/".to_string(),
+        }
+    }
+}
+
+impl WebToolClient {
+    pub fn for_tests(_base_url: impl Into<String>, search_url: impl Into<String>) -> Self {
+        Self {
+            client: Client::builder()
+                .user_agent("teamd-agent-test/0.1")
+                .build()
+                .expect("test web tool client"),
+            search_url: search_url.into(),
+        }
+    }
+
+    fn fetch(&self, url: &str) -> Result<WebFetchOutput, ToolError> {
+        let response = self.client.get(url).send().map_err(ToolError::WebHttp)?;
+        let status_code = response.status().as_u16();
+        if !response.status().is_success() {
+            return Err(ToolError::WebHttpStatus {
+                url: url.to_string(),
+                status_code,
+            });
+        }
+
+        let content_type = response
+            .headers()
+            .get(reqwest::header::CONTENT_TYPE)
+            .and_then(|value| value.to_str().ok())
+            .map(str::to_owned);
+        let body = response.text().map_err(ToolError::WebHttp)?;
+
+        Ok(WebFetchOutput {
+            url: url.to_string(),
+            status_code,
+            content_type,
+            body,
+        })
+    }
+
+    fn search(&self, query: &str, limit: usize) -> Result<WebSearchOutput, ToolError> {
+        if query.trim().is_empty() {
+            return Err(ToolError::InvalidWebRequest {
+                reason: "query must not be empty".to_string(),
+            });
+        }
+
+        let mut url = Url::parse(&self.search_url).map_err(|_| ToolError::InvalidWebRequest {
+            reason: format!("invalid search URL: {}", self.search_url),
+        })?;
+        url.query_pairs_mut().append_pair("q", query);
+
+        let fetch = self.fetch(url.as_str())?;
+        let mut results = parse_search_results(&fetch.body, fetch.url.as_str())?;
+        if limit > 0 && results.len() > limit {
+            results.truncate(limit);
+        }
+
+        Ok(WebSearchOutput {
+            query: query.to_string(),
+            results,
+        })
+    }
 }
 
 struct AppliedPatch {
@@ -841,14 +1050,92 @@ fn glob_match_segment_chars(pattern: &[char], candidate: &[char]) -> bool {
     }
 }
 
+fn parse_search_results(html: &str, source_url: &str) -> Result<Vec<WebSearchResult>, ToolError> {
+    let mut results = Vec::new();
+    let mut cursor = html;
+    let link_prefix = "<a class=\"result__a\" href=\"";
+    let snippet_prefix = "<a class=\"result__snippet\">";
+
+    while let Some(index) = cursor.find(link_prefix) {
+        cursor = &cursor[index + link_prefix.len()..];
+        let Some(url_end) = cursor.find('"') else {
+            return Err(ToolError::WebParse {
+                url: source_url.to_string(),
+                reason: "result href was not terminated".to_string(),
+            });
+        };
+        let url = decode_html_entities(&cursor[..url_end]);
+        cursor = &cursor[url_end + 1..];
+
+        let Some(tag_close) = cursor.find('>') else {
+            return Err(ToolError::WebParse {
+                url: source_url.to_string(),
+                reason: "result anchor was malformed".to_string(),
+            });
+        };
+        cursor = &cursor[tag_close + 1..];
+
+        let Some(title_end) = cursor.find("</a>") else {
+            return Err(ToolError::WebParse {
+                url: source_url.to_string(),
+                reason: "result title was not terminated".to_string(),
+            });
+        };
+        let title = strip_html_tags(&decode_html_entities(&cursor[..title_end]));
+        cursor = &cursor[title_end + 4..];
+
+        let snippet = cursor.find(snippet_prefix).and_then(|snippet_index| {
+            let after_prefix = &cursor[snippet_index + snippet_prefix.len()..];
+            after_prefix.find("</a>").map(|snippet_end| {
+                strip_html_tags(&decode_html_entities(&after_prefix[..snippet_end]))
+            })
+        });
+
+        results.push(WebSearchResult {
+            title,
+            url,
+            snippet,
+        });
+    }
+
+    Ok(results)
+}
+
+fn strip_html_tags(input: &str) -> String {
+    let mut output = String::new();
+    let mut inside_tag = false;
+    for character in input.chars() {
+        match character {
+            '<' => inside_tag = true,
+            '>' => inside_tag = false,
+            _ if !inside_tag => output.push(character),
+            _ => {}
+        }
+    }
+    output.trim().to_string()
+}
+
+fn decode_html_entities(input: &str) -> String {
+    input
+        .replace("&amp;", "&")
+        .replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&quot;", "\"")
+        .replace("&#39;", "'")
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
         ExecStartInput, FsGlobInput, FsListInput, FsPatchEdit, FsPatchInput, FsReadInput,
         FsSearchInput, FsWriteInput, ProcessKillInput, ProcessResultStatus, ProcessWaitInput,
-        ToolCall, ToolCatalog, ToolFamily, ToolName, ToolRuntime,
+        ToolCall, ToolCatalog, ToolFamily, ToolName, ToolRuntime, WebFetchInput, WebSearchInput,
+        WebToolClient,
     };
     use crate::workspace::WorkspaceRef;
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
+    use std::thread;
 
     #[test]
     fn catalog_exposes_distinct_families_and_policy_flags() {
@@ -856,16 +1143,22 @@ mod tests {
         let exec_start = catalog.definition(ToolName::ExecStart).expect("exec_start");
         let fs_glob = catalog.definition(ToolName::FsGlob).expect("fs_glob");
         let fs_patch = catalog.definition(ToolName::FsPatch).expect("fs_patch");
+        let web_fetch = catalog.definition(ToolName::WebFetch).expect("web_fetch");
+        let web_search = catalog.definition(ToolName::WebSearch).expect("web_search");
         let fs_read = catalog.definition(ToolName::FsRead).expect("fs_read");
         let fs_write = catalog.definition(ToolName::FsWrite).expect("fs_write");
 
-        assert_eq!(catalog.families, ["fs", "exec"]);
+        assert_eq!(catalog.families, ["fs", "web", "exec"]);
         assert_eq!(exec_start.family, ToolFamily::Exec);
         assert_eq!(fs_glob.family, ToolFamily::Filesystem);
         assert_eq!(fs_patch.family, ToolFamily::Filesystem);
+        assert_eq!(web_fetch.family, ToolFamily::Web);
+        assert_eq!(web_search.family, ToolFamily::Web);
         assert!(exec_start.policy.requires_approval);
         assert!(fs_glob.policy.read_only);
         assert!(fs_patch.policy.destructive);
+        assert!(web_fetch.policy.read_only);
+        assert!(web_search.policy.read_only);
         assert!(fs_read.policy.read_only);
         assert!(fs_write.policy.destructive);
     }
@@ -1080,5 +1373,104 @@ mod tests {
             .expect("killed process result");
 
         assert_eq!(killed.status, ProcessResultStatus::Killed);
+    }
+
+    #[test]
+    fn web_tools_fetch_pages_and_return_search_results() {
+        let server = TestHttpServer::spawn();
+        let temp = tempfile::tempdir().expect("tempdir");
+        let workspace = WorkspaceRef::new(temp.path());
+        let mut runtime = ToolRuntime::with_web_client(
+            workspace,
+            WebToolClient::for_tests(server.base_url(), server.search_url()),
+        );
+
+        let fetched = runtime
+            .invoke(ToolCall::WebFetch(WebFetchInput {
+                url: server.page_url(),
+            }))
+            .expect("web_fetch")
+            .into_web_fetch()
+            .expect("web_fetch output");
+        let searched = runtime
+            .invoke(ToolCall::WebSearch(WebSearchInput {
+                query: "agent runtime".to_string(),
+                limit: 5,
+            }))
+            .expect("web_search")
+            .into_web_search()
+            .expect("web_search output");
+
+        assert_eq!(fetched.url, server.page_url());
+        assert_eq!(fetched.status_code, 200);
+        assert!(fetched.body.contains("Agent runtime page"));
+        assert_eq!(searched.results.len(), 2);
+        assert_eq!(searched.results[0].title, "Agent runtime docs");
+        assert_eq!(searched.results[0].url, "https://example.test/docs");
+    }
+
+    struct TestHttpServer {
+        base_url: String,
+        search_url: String,
+    }
+
+    impl TestHttpServer {
+        fn spawn() -> Self {
+            let listener = TcpListener::bind("127.0.0.1:0").expect("bind test server");
+            let address = listener.local_addr().expect("local addr");
+            let base_url = format!("http://{}", address);
+            let search_url = format!("{}/search", base_url);
+
+            thread::spawn(move || {
+                for _ in 0..2 {
+                    let (mut stream, _) = listener.accept().expect("accept");
+                    let mut buffer = [0_u8; 4096];
+                    let bytes = stream.read(&mut buffer).expect("read request");
+                    let request = String::from_utf8_lossy(&buffer[..bytes]);
+                    let path = request
+                        .lines()
+                        .next()
+                        .and_then(|line| line.split_whitespace().nth(1))
+                        .unwrap_or("/");
+
+                    let body = if path.starts_with("/search") {
+                        "<html><body>\
+                         <a class=\"result__a\" href=\"https://example.test/docs\">Agent runtime docs</a>\
+                         <a class=\"result__snippet\">Typed tools and run engine</a>\
+                         <a class=\"result__a\" href=\"https://example.test/blog\">Blog post</a>\
+                         <a class=\"result__snippet\">Web tool coverage</a>\
+                         </body></html>"
+                    } else {
+                        "<html><head><title>Agent runtime page</title></head>\
+                         <body>Agent runtime page body</body></html>"
+                    };
+
+                    write!(
+                        stream,
+                        "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                        body.len(),
+                        body
+                    )
+                    .expect("write response");
+                }
+            });
+
+            Self {
+                base_url,
+                search_url,
+            }
+        }
+
+        fn base_url(&self) -> &str {
+            &self.base_url
+        }
+
+        fn search_url(&self) -> &str {
+            &self.search_url
+        }
+
+        fn page_url(&self) -> String {
+            format!("{}/page", self.base_url)
+        }
     }
 }

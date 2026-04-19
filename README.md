@@ -389,6 +389,11 @@ Tools should be grouped by capability family.
 - `fs_glob`
 - `fs_search`
 
+### Web
+
+- `web_fetch`
+- `web_search`
+
 ### Structured Process Execution
 
 - `exec_start`

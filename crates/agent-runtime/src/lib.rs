@@ -61,7 +61,7 @@ mod tests {
             RuntimeScaffold::COMPONENTS.len()
         );
         assert_eq!(scaffold.run.status, RunStatus::Queued);
-        assert_eq!(scaffold.tools.families, ["fs", "exec"]);
+        assert_eq!(scaffold.tools.families, ["fs", "web", "exec"]);
         workspace.root.push("runs");
         assert_eq!(workspace.root, PathBuf::from("./runs"));
     }
