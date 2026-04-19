@@ -88,6 +88,22 @@ The first autonomous operator path is now:
 1. `mission tick` to queue due mission-turn jobs
 2. `job execute <job-id>` to run one mission-turn job through the configured provider
 
+## Autonomous Mission Smoke
+
+Minimal operator smoke for the first autonomous path:
+
+```bash
+cargo run -p agentd -- session create session-smoke "Smoke Session"
+cargo run -p agentd -- mission create mission-smoke session-smoke "Run the autonomous smoke"
+cargo run -p agentd -- mission tick
+cargo run -p agentd -- job show mission-smoke-mission-turn-<timestamp>
+cargo run -p agentd -- job execute mission-smoke-mission-turn-<timestamp>
+cargo run -p agentd -- run show run-mission-smoke-mission-turn-<timestamp>
+```
+
+If you need deterministic output for testing or demos, pass explicit unix
+timestamps to `mission tick` and `job execute`.
+
 ## Core Principles
 
 ### 1. World State First
