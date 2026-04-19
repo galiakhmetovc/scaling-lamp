@@ -18,6 +18,9 @@ enum Command {
     ProviderSmoke {
         prompt: String,
     },
+    MissionTick {
+        now: i64,
+    },
     SessionCreate {
         id: String,
         title: String,
@@ -38,6 +41,10 @@ enum Command {
     },
     JobShow {
         id: String,
+    },
+    JobExecute {
+        id: String,
+        now: i64,
     },
     ApprovalList {
         run_id: String,
@@ -64,6 +71,7 @@ where
     match command {
         Command::Status => render_status(app),
         Command::ProviderSmoke { prompt } => run_provider_smoke(app, &prompt),
+        Command::MissionTick { now } => run_mission_tick(app, now),
         Command::SessionCreate { id, title } => create_session(&app.store()?, &id, &title),
         Command::SessionShow { id } => show_session(&app.store()?, &id),
         Command::MissionCreate {
@@ -74,6 +82,7 @@ where
         Command::MissionShow { id } => show_mission(&app.store()?, &id),
         Command::RunShow { id } => show_run(&app.store()?, &id),
         Command::JobShow { id } => show_job(&app.store()?, &id),
+        Command::JobExecute { id, now } => execute_job(app, &id, now),
         Command::ApprovalList { run_id } => list_approvals(&app.store()?, &run_id),
         Command::ApprovalApprove {
             run_id,
@@ -108,6 +117,14 @@ impl Command {
                     prompt: join_required(prompt, "smoke prompt")?,
                 })
             }
+            [scope, action] if scope == "mission" && action == "tick" => Ok(Self::MissionTick {
+                now: unix_timestamp()?,
+            }),
+            [scope, action, now] if scope == "mission" && action == "tick" => {
+                Ok(Self::MissionTick {
+                    now: parse_timestamp(now, "mission tick timestamp")?,
+                })
+            }
             [scope, action, id, title @ ..] if scope == "session" && action == "create" => {
                 let title = join_required(title, "session title")?;
                 Ok(Self::SessionCreate {
@@ -137,6 +154,16 @@ impl Command {
             [scope, action, id] if scope == "job" && action == "show" => {
                 Ok(Self::JobShow { id: id.clone() })
             }
+            [scope, action, id] if scope == "job" && action == "execute" => Ok(Self::JobExecute {
+                id: id.clone(),
+                now: unix_timestamp()?,
+            }),
+            [scope, action, id, now] if scope == "job" && action == "execute" => {
+                Ok(Self::JobExecute {
+                    id: id.clone(),
+                    now: parse_timestamp(now, "job execute timestamp")?,
+                })
+            }
             [scope, action, run_id] if scope == "approval" && action == "list" => {
                 Ok(Self::ApprovalList {
                     run_id: run_id.clone(),
@@ -161,7 +188,7 @@ impl Command {
                 })
             }
             _ => Err(BootstrapError::Usage {
-                reason: "expected one of: status | provider smoke | session create/show | mission create/show | run show | job show | approval list/approve | delegate list | verification show".to_string(),
+                reason: "expected one of: status | provider smoke | mission create/show/tick | session create/show | run show | job show/execute | approval list/approve | delegate list | verification show".to_string(),
             }),
         }
     }
@@ -261,6 +288,31 @@ fn show_mission(store: &PersistenceStore, id: &str) -> Result<String, BootstrapE
     ))
 }
 
+fn run_mission_tick(app: &App, now: i64) -> Result<String, BootstrapError> {
+    let report = app.supervisor_tick(now, &[])?;
+    let actions = if report.actions.is_empty() {
+        "<none>".to_string()
+    } else {
+        report
+            .actions
+            .iter()
+            .map(format_supervisor_action)
+            .collect::<Vec<_>>()
+            .join(" | ")
+    };
+
+    Ok(format!(
+        "mission tick now={} queued_jobs={} dispatched_jobs={} blocked_jobs={} completed_missions={} budget_remaining={} actions={}",
+        now,
+        report.queued_jobs,
+        report.dispatched_jobs,
+        report.blocked_jobs,
+        report.completed_missions,
+        report.budget_remaining,
+        actions
+    ))
+}
+
 fn show_run(store: &PersistenceStore, id: &str) -> Result<String, BootstrapError> {
     let snapshot = load_run_snapshot(store, id)?;
     Ok(format!(
@@ -293,6 +345,14 @@ fn show_job(store: &PersistenceStore, id: &str) -> Result<String, BootstrapError
         record.status,
         record.input_json.as_deref().unwrap_or("<none>"),
         record.result_json.as_deref().unwrap_or("<none>")
+    ))
+}
+
+fn execute_job(app: &App, id: &str, now: i64) -> Result<String, BootstrapError> {
+    let report = app.execute_mission_turn_job(id, now)?;
+    Ok(format!(
+        "job execute id={} run_id={} response_id={} output={}",
+        report.job_id, report.run_id, report.response_id, report.output_text
     ))
 }
 
@@ -382,6 +442,32 @@ fn run_provider_smoke(app: &App, prompt: &str) -> Result<String, BootstrapError>
             .unwrap_or_default(),
         response.output_text
     ))
+}
+
+fn parse_timestamp(raw: &str, label: &str) -> Result<i64, BootstrapError> {
+    raw.parse::<i64>().map_err(|_| BootstrapError::Usage {
+        reason: format!("{label} must be an integer unix timestamp"),
+    })
+}
+
+fn format_supervisor_action(action: &agent_runtime::scheduler::SupervisorAction) -> String {
+    match action {
+        agent_runtime::scheduler::SupervisorAction::QueueJob(job) => {
+            format!("queue_job:{}", job.id)
+        }
+        agent_runtime::scheduler::SupervisorAction::DispatchJob { job_id, .. } => {
+            format!("dispatch_job:{job_id}")
+        }
+        agent_runtime::scheduler::SupervisorAction::RequestApproval { job_id, .. } => {
+            format!("request_approval:{job_id}")
+        }
+        agent_runtime::scheduler::SupervisorAction::DeferMission { mission_id, .. } => {
+            format!("defer_mission:{mission_id}")
+        }
+        agent_runtime::scheduler::SupervisorAction::CompleteMission { mission_id } => {
+            format!("complete_mission:{mission_id}")
+        }
+    }
 }
 
 fn render_status(app: &App) -> Result<String, BootstrapError> {

@@ -71,6 +71,10 @@ Useful commands:
 
 ```bash
 cargo run -p agentd -- status
+cargo run -p agentd -- mission tick
+cargo run -p agentd -- mission tick <unix-timestamp>
+cargo run -p agentd -- job execute <job-id>
+cargo run -p agentd -- job execute <job-id> <unix-timestamp>
 cargo run -p agentd -- run show <run-id>
 cargo run -p agentd -- approval list <run-id>
 cargo run -p agentd -- approval approve <run-id> <approval-id>
@@ -78,6 +82,11 @@ cargo run -p agentd -- approval approve <run-id> <approval-id>
 
 `run show` now surfaces the stored run error, which includes recovery
 interrupt reasons after restart.
+
+The first autonomous operator path is now:
+
+1. `mission tick` to queue due mission-turn jobs
+2. `job execute <job-id>` to run one mission-turn job through the configured provider
 
 ## Core Principles
 

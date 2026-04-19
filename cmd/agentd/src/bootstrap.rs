@@ -1304,6 +1304,111 @@ mod tests {
         assert_eq!(mission.updated_at, 21);
     }
 
+    #[test]
+    fn run_with_args_executes_mission_ticks_and_jobs() {
+        let (api_base, requests, handle) = spawn_json_server(
+            r#"{
+                "id":"resp_cli",
+                "model":"gpt-5.4",
+                "output":[
+                    {
+                        "id":"msg_1",
+                        "type":"message",
+                        "status":"completed",
+                        "role":"assistant",
+                        "content":[
+                            {
+                                "type":"output_text",
+                                "text":"CLI mission result"
+                            }
+                        ]
+                    }
+                ],
+                "usage":{"input_tokens":12,"output_tokens":4,"total_tokens":16}
+            }"#,
+        );
+        let temp = tempfile::tempdir().expect("tempdir");
+        let app = build_from_config(AppConfig {
+            data_dir: temp.path().join("state-root"),
+            provider: ConfiguredProvider {
+                kind: ProviderKind::OpenAiResponses,
+                api_base: Some(format!("{api_base}/v1")),
+                api_key: Some("test-key".to_string()),
+                default_model: Some("gpt-5.4".to_string()),
+            },
+        })
+        .expect("build app");
+        let store = PersistenceStore::open(&app.persistence).expect("open store");
+
+        store
+            .put_session(&SessionRecord {
+                id: "session-cli".to_string(),
+                title: "CLI session".to_string(),
+                prompt_override: Some("Reply tersely.".to_string()),
+                settings_json: serde_json::to_string(&SessionSettings::default())
+                    .expect("serialize settings"),
+                active_mission_id: None,
+                created_at: 1,
+                updated_at: 1,
+            })
+            .expect("put session");
+        store
+            .put_mission(&MissionRecord {
+                id: "mission-cli".to_string(),
+                session_id: "session-cli".to_string(),
+                objective: "Drive one CLI mission".to_string(),
+                status: MissionStatus::Ready.as_str().to_string(),
+                execution_intent: MissionExecutionIntent::Autonomous.as_str().to_string(),
+                schedule_json: serde_json::to_string(&MissionSchedule::once())
+                    .expect("serialize schedule"),
+                acceptance_json: "[]".to_string(),
+                created_at: 2,
+                updated_at: 2,
+                completed_at: None,
+            })
+            .expect("put mission");
+
+        let tick = app
+            .run_with_args(["mission", "tick", "60"])
+            .expect("mission tick");
+        assert!(tick.contains("queued_jobs=1"));
+        assert!(tick.contains("mission-cli-mission-turn-60"));
+
+        let executed = app
+            .run_with_args(["job", "execute", "mission-cli-mission-turn-60", "61"])
+            .expect("job execute");
+        let raw_request = requests.recv().expect("raw request");
+        handle.join().expect("join server");
+
+        assert!(executed.contains("job execute id=mission-cli-mission-turn-60"));
+        assert!(executed.contains("run_id=run-mission-cli-mission-turn-60"));
+        assert!(executed.contains("response_id=resp_cli"));
+        assert!(executed.contains("output=CLI mission result"));
+
+        let executed_job = store
+            .get_job("mission-cli-mission-turn-60")
+            .expect("get executed job")
+            .expect("job exists");
+        assert_eq!(executed_job.status, "completed");
+
+        let executed_run = store
+            .get_run("run-mission-cli-mission-turn-60")
+            .expect("get executed run")
+            .expect("run exists");
+        assert_eq!(executed_run.status, "completed");
+        assert_eq!(executed_run.result.as_deref(), Some("CLI mission result"));
+
+        let transcripts = store
+            .list_transcripts_for_session("session-cli")
+            .expect("list transcripts");
+        assert_eq!(transcripts.len(), 2);
+
+        let normalized_request = raw_request.to_ascii_lowercase();
+        assert!(normalized_request.contains("/v1/responses"));
+        assert!(normalized_request.contains("\"instructions\":\"reply tersely.\""));
+        assert!(normalized_request.contains("\"text\":\"drive one cli mission\""));
+    }
+
     fn spawn_json_server(body: &'static str) -> (String, Receiver<String>, thread::JoinHandle<()>) {
         let listener = TcpListener::bind("127.0.0.1:0").expect("bind listener");
         let address = listener.local_addr().expect("local addr");
