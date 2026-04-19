@@ -7,6 +7,7 @@ pub trait SessionRepository {
     fn put_session(&self, record: &SessionRecord) -> Result<(), StoreError>;
     fn get_session(&self, id: &str) -> Result<Option<SessionRecord>, StoreError>;
     fn list_sessions(&self) -> Result<Vec<SessionRecord>, StoreError>;
+    fn delete_session(&self, id: &str) -> Result<bool, StoreError>;
 }
 
 pub trait MissionRepository {

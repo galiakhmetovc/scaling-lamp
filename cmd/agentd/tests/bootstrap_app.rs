@@ -3198,3 +3198,131 @@ fn spawn_text_server_sequence(
 
     (format!("http://{address}"), receiver, handle)
 }
+
+#[test]
+fn tui_like_session_metadata_persists_and_lists_for_ui() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let app = build_from_config(AppConfig {
+        data_dir: temp.path().join("state-root"),
+        ..AppConfig::default()
+    })
+    .expect("build app");
+
+    let created = app
+        .create_session_auto(Some("Terminal UI"))
+        .expect("create session");
+
+    let updated = app
+        .update_session_preferences(
+            &created.id,
+            agentd::bootstrap::SessionPreferencesPatch {
+                title: Some("Renamed in TUI".to_string()),
+                model: Some(Some("gpt-5.4".to_string())),
+                reasoning_visible: Some(false),
+                think_level: Some(Some("high".to_string())),
+                compactifications: Some(3),
+            },
+        )
+        .expect("update session preferences");
+
+    assert_eq!(updated.id, created.id);
+    assert_eq!(updated.title, "Renamed in TUI");
+    assert_eq!(updated.model.as_deref(), Some("gpt-5.4"));
+    assert!(!updated.reasoning_visible);
+    assert_eq!(updated.think_level.as_deref(), Some("high"));
+    assert_eq!(updated.compactifications, 3);
+
+    let sessions = app
+        .list_session_summaries()
+        .expect("list session summaries");
+    let summary = sessions
+        .into_iter()
+        .find(|summary| summary.id == created.id)
+        .expect("session summary");
+
+    assert_eq!(summary.title, "Renamed in TUI");
+    assert_eq!(summary.model.as_deref(), Some("gpt-5.4"));
+    assert!(!summary.reasoning_visible);
+    assert_eq!(summary.think_level.as_deref(), Some("high"));
+    assert_eq!(summary.compactifications, 3);
+}
+
+#[test]
+fn tui_like_session_delete_and_clear_remove_canonical_state() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let app = build_from_config(AppConfig {
+        data_dir: temp.path().join("state-root"),
+        ..AppConfig::default()
+    })
+    .expect("build app");
+
+    let store = PersistenceStore::open(&app.persistence).expect("open store");
+    let session = app
+        .create_session_auto(Some("Delete me"))
+        .expect("create session");
+    let now = 100;
+    store
+        .put_transcript(&agent_persistence::TranscriptRecord {
+            id: "transcript-delete-1".to_string(),
+            session_id: session.id.clone(),
+            run_id: None,
+            kind: "user".to_string(),
+            content: "hello".to_string(),
+            created_at: now,
+        })
+        .expect("put transcript");
+
+    app.delete_session(&session.id).expect("delete session");
+
+    assert!(
+        store
+            .get_session(&session.id)
+            .expect("get deleted session")
+            .is_none()
+    );
+    assert!(
+        store
+            .list_transcripts_for_session(&session.id)
+            .expect("list deleted transcripts")
+            .is_empty()
+    );
+
+    let clear_source = app
+        .create_session_auto(Some("Clear me"))
+        .expect("create clear source");
+    store
+        .put_transcript(&agent_persistence::TranscriptRecord {
+            id: "transcript-clear-1".to_string(),
+            session_id: clear_source.id.clone(),
+            run_id: None,
+            kind: "assistant".to_string(),
+            content: "old state".to_string(),
+            created_at: now + 1,
+        })
+        .expect("put clear transcript");
+
+    let replacement = app
+        .clear_session(&clear_source.id, Some("Fresh Session"))
+        .expect("clear session");
+
+    assert_ne!(replacement.id, clear_source.id);
+    assert_eq!(replacement.title, "Fresh Session");
+    assert!(
+        store
+            .get_session(&clear_source.id)
+            .expect("get cleared source")
+            .is_none()
+    );
+    assert!(
+        store
+            .list_transcripts_for_session(&clear_source.id)
+            .expect("list cleared transcripts")
+            .is_empty()
+    );
+    assert!(
+        store
+            .get_session(&replacement.id)
+            .expect("get replacement")
+            .is_some()
+    );
+}

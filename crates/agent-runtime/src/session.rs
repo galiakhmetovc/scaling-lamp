@@ -18,6 +18,10 @@ pub struct Session {
 pub struct SessionSettings {
     pub working_memory_limit: usize,
     pub project_memory_enabled: bool,
+    pub model: Option<String>,
+    pub reasoning_visible: bool,
+    pub think_level: Option<String>,
+    pub compactifications: u32,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -81,6 +85,10 @@ impl Default for SessionSettings {
         Self {
             working_memory_limit: 64,
             project_memory_enabled: true,
+            model: None,
+            reasoning_visible: true,
+            think_level: None,
+            compactifications: 0,
         }
     }
 }
@@ -289,6 +297,10 @@ mod tests {
         assert!(session.prompt_override.is_none());
         assert_eq!(session.settings.working_memory_limit, 64);
         assert!(session.settings.project_memory_enabled);
+        assert_eq!(session.settings.model, None);
+        assert!(session.settings.reasoning_visible);
+        assert_eq!(session.settings.think_level, None);
+        assert_eq!(session.settings.compactifications, 0);
     }
 
     #[test]

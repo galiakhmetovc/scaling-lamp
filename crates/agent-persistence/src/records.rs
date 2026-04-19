@@ -520,6 +520,25 @@ mod tests {
     }
 
     #[test]
+    fn session_records_accept_legacy_partial_settings_json() {
+        let restored = Session::try_from(SessionRecord {
+            id: "session-legacy".to_string(),
+            title: "Legacy".to_string(),
+            prompt_override: None,
+            settings_json: "{\"model\":\"gpt-5.4\"}".to_string(),
+            active_mission_id: None,
+            created_at: 1,
+            updated_at: 1,
+        })
+        .expect("record to session");
+
+        assert_eq!(restored.settings.model.as_deref(), Some("gpt-5.4"));
+        assert!(restored.settings.reasoning_visible);
+        assert_eq!(restored.settings.think_level, None);
+        assert_eq!(restored.settings.compactifications, 0);
+    }
+
+    #[test]
     fn transcript_records_round_trip_with_domain_entries() {
         let entry = TranscriptEntry::assistant(
             "message-1",

@@ -7,7 +7,7 @@ use agent_runtime::RuntimeScaffold;
 use agent_runtime::provider::{ProviderBuildError, ProviderDriver, ProviderError, build_driver};
 use agent_runtime::run::{RunEngine, RunSnapshot, RunTransitionError};
 use agent_runtime::scheduler::MissionVerificationSummary;
-use agent_runtime::session::TranscriptEntry;
+use agent_runtime::session::{Session, SessionSettings, TranscriptEntry};
 use agent_runtime::tool::ToolCall;
 use std::error::Error;
 use std::fmt;
@@ -65,6 +65,27 @@ pub struct SessionTranscriptLine {
     pub content: String,
     pub run_id: Option<String>,
     pub created_at: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SessionSummary {
+    pub id: String,
+    pub title: String,
+    pub model: Option<String>,
+    pub reasoning_visible: bool,
+    pub think_level: Option<String>,
+    pub compactifications: u32,
+    pub created_at: i64,
+    pub updated_at: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct SessionPreferencesPatch {
+    pub title: Option<String>,
+    pub model: Option<Option<String>>,
+    pub reasoning_visible: Option<bool>,
+    pub think_level: Option<Option<String>>,
+    pub compactifications: Option<u32>,
 }
 
 impl App {
@@ -147,6 +168,105 @@ impl App {
             session_id: session_id.to_string(),
             entries,
         })
+    }
+
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub fn create_session_auto(
+        &self,
+        title: Option<&str>,
+    ) -> Result<SessionSummary, BootstrapError> {
+        let store = self.store()?;
+        let now = unix_timestamp()?;
+        let session = Session {
+            id: format!("session-{}", unique_timestamp_token()?),
+            title: title.unwrap_or("New Session").trim().to_string(),
+            prompt_override: None,
+            settings: SessionSettings::default(),
+            active_mission_id: None,
+            created_at: now,
+            updated_at: now,
+        };
+        let record = agent_persistence::SessionRecord::try_from(&session)
+            .map_err(BootstrapError::RecordConversion)?;
+        store.put_session(&record)?;
+        Ok(session_summary_from_session(&session))
+    }
+
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub fn list_session_summaries(&self) -> Result<Vec<SessionSummary>, BootstrapError> {
+        let store = self.store()?;
+        let sessions = store
+            .list_sessions()?
+            .into_iter()
+            .map(Session::try_from)
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(BootstrapError::RecordConversion)?;
+        Ok(sessions
+            .into_iter()
+            .map(|session| session_summary_from_session(&session))
+            .collect())
+    }
+
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub fn update_session_preferences(
+        &self,
+        session_id: &str,
+        patch: SessionPreferencesPatch,
+    ) -> Result<SessionSummary, BootstrapError> {
+        let store = self.store()?;
+        let record =
+            store
+                .get_session(session_id)?
+                .ok_or_else(|| BootstrapError::MissingRecord {
+                    kind: "session",
+                    id: session_id.to_string(),
+                })?;
+        let mut session = Session::try_from(record).map_err(BootstrapError::RecordConversion)?;
+
+        if let Some(title) = patch.title {
+            session.title = title.trim().to_string();
+        }
+        if let Some(model) = patch.model {
+            session.settings.model = model.map(|value| value.trim().to_string());
+        }
+        if let Some(reasoning_visible) = patch.reasoning_visible {
+            session.settings.reasoning_visible = reasoning_visible;
+        }
+        if let Some(think_level) = patch.think_level {
+            session.settings.think_level = think_level.map(|value| value.trim().to_string());
+        }
+        if let Some(compactifications) = patch.compactifications {
+            session.settings.compactifications = compactifications;
+        }
+        session.updated_at = unix_timestamp()?;
+
+        let record = agent_persistence::SessionRecord::try_from(&session)
+            .map_err(BootstrapError::RecordConversion)?;
+        store.put_session(&record)?;
+        Ok(session_summary_from_session(&session))
+    }
+
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub fn delete_session(&self, session_id: &str) -> Result<(), BootstrapError> {
+        let store = self.store()?;
+        let deleted = store.delete_session(session_id)?;
+        if !deleted {
+            return Err(BootstrapError::MissingRecord {
+                kind: "session",
+                id: session_id.to_string(),
+            });
+        }
+        Ok(())
+    }
+
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub fn clear_session(
+        &self,
+        session_id: &str,
+        title: Option<&str>,
+    ) -> Result<SessionSummary, BootstrapError> {
+        self.delete_session(session_id)?;
+        self.create_session_auto(title)
     }
 
     #[cfg_attr(not(test), allow(dead_code))]
@@ -321,6 +441,19 @@ impl SessionTranscriptView {
             .map(|entry| format!("[{}] {}: {}", entry.created_at, entry.role, entry.content))
             .collect::<Vec<_>>()
             .join("\n")
+    }
+}
+
+fn session_summary_from_session(session: &Session) -> SessionSummary {
+    SessionSummary {
+        id: session.id.clone(),
+        title: session.title.clone(),
+        model: session.settings.model.clone(),
+        reasoning_visible: session.settings.reasoning_visible,
+        think_level: session.settings.think_level.clone(),
+        compactifications: session.settings.compactifications,
+        created_at: session.created_at,
+        updated_at: session.updated_at,
     }
 }
 
@@ -509,4 +642,11 @@ fn unix_timestamp() -> Result<i64, BootstrapError> {
         .duration_since(UNIX_EPOCH)
         .map_err(BootstrapError::Clock)?
         .as_secs() as i64)
+}
+
+fn unique_timestamp_token() -> Result<u128, BootstrapError> {
+    Ok(SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_err(BootstrapError::Clock)?
+        .as_millis())
 }

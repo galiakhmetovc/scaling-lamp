@@ -217,6 +217,44 @@ impl PersistenceStore {
             created_at,
         })
     }
+
+    fn session_transcript_payload_paths(
+        &self,
+        session_id: &str,
+    ) -> Result<Vec<PathBuf>, StoreError> {
+        let mut statement = self
+            .connection
+            .prepare("SELECT storage_key FROM transcripts WHERE session_id = ?1 ORDER BY id ASC")?;
+        let mut rows = statement.query([session_id])?;
+        let mut paths = Vec::new();
+
+        while let Some(row) = rows.next()? {
+            let storage_key = row.get::<_, String>(0)?;
+            paths.push(self.layout.transcripts_dir.join(storage_key));
+        }
+
+        Ok(paths)
+    }
+
+    fn session_artifact_payload_paths(&self, session_id: &str) -> Result<Vec<PathBuf>, StoreError> {
+        let mut statement = self
+            .connection
+            .prepare("SELECT path FROM artifacts WHERE session_id = ?1 ORDER BY id ASC")?;
+        let mut rows = statement.query([session_id])?;
+        let mut paths = Vec::new();
+        let root = self
+            .layout
+            .metadata_db
+            .parent()
+            .unwrap_or(self.layout.metadata_db.as_path());
+
+        while let Some(row) = rows.next()? {
+            let relative_path = row.get::<_, String>(0)?;
+            paths.push(root.join(relative_path));
+        }
+
+        Ok(paths)
+    }
 }
 
 impl SessionRepository for PersistenceStore {
@@ -289,6 +327,28 @@ impl SessionRepository for PersistenceStore {
         }
 
         Ok(sessions)
+    }
+
+    fn delete_session(&self, id: &str) -> Result<bool, StoreError> {
+        let transcript_paths = self.session_transcript_payload_paths(id)?;
+        let artifact_paths = self.session_artifact_payload_paths(id)?;
+        let deleted = self
+            .connection
+            .execute("DELETE FROM sessions WHERE id = ?1", [id])?;
+
+        if deleted == 0 {
+            return Ok(false);
+        }
+
+        for path in transcript_paths
+            .into_iter()
+            .chain(artifact_paths.into_iter())
+        {
+            remove_payload_if_exists(&path)?;
+            remove_payload_if_exists(&backup_path(&path))?;
+        }
+
+        Ok(true)
     }
 }
 
@@ -1350,6 +1410,17 @@ fn reconcile_directory(
 
 fn backup_path(path: &Path) -> PathBuf {
     PathBuf::from(format!("{}.bak", path.to_string_lossy()))
+}
+
+fn remove_payload_if_exists(path: &Path) -> Result<(), StoreError> {
+    match fs::remove_file(path) {
+        Ok(()) => Ok(()),
+        Err(source) if source.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(source) => Err(StoreError::Io {
+            path: path.to_path_buf(),
+            source,
+        }),
+    }
 }
 
 fn payload_fingerprint(path: &Path) -> Result<(u64, String), StoreError> {
