@@ -2,6 +2,7 @@ use crate::workspace::{WorkspaceEntry, WorkspaceError, WorkspaceRef, WorkspaceSe
 use reqwest::Url;
 use reqwest::blocking::Client;
 use serde::{Deserialize, Serialize};
+use serde_json::{Value, json};
 use std::collections::BTreeMap;
 use std::error::Error;
 use std::fmt;
@@ -269,6 +270,17 @@ pub enum ToolError {
 }
 
 #[derive(Debug)]
+pub enum ToolCallParseError {
+    UnknownTool {
+        name: String,
+    },
+    InvalidArguments {
+        name: String,
+        source: serde_json::Error,
+    },
+}
+
+#[derive(Debug)]
 pub struct ToolRuntime {
     workspace: WorkspaceRef,
     web: WebToolClient,
@@ -325,6 +337,23 @@ impl ToolCatalog {
 
     pub fn definition_for_call(&self, call: &ToolCall) -> Option<&ToolDefinition> {
         self.definition(call.name())
+    }
+
+    pub fn automatic_model_definitions(&self) -> Vec<&ToolDefinition> {
+        self.definitions
+            .iter()
+            .filter(|definition| {
+                matches!(
+                    definition.name,
+                    ToolName::FsRead
+                        | ToolName::FsList
+                        | ToolName::FsGlob
+                        | ToolName::FsSearch
+                        | ToolName::WebFetch
+                        | ToolName::WebSearch
+                )
+            })
+            .collect()
     }
 
     fn definitions() -> Vec<ToolDefinition> {
@@ -710,6 +739,80 @@ impl ToolCall {
             Self::ExecKill(input) => format!("exec_kill process_id={}", input.process_id),
         }
     }
+
+    pub fn from_openai_function(name: &str, arguments: &str) -> Result<Self, ToolCallParseError> {
+        match name {
+            "fs_read" => serde_json::from_str(arguments)
+                .map(Self::FsRead)
+                .map_err(|source| ToolCallParseError::InvalidArguments {
+                    name: name.to_string(),
+                    source,
+                }),
+            "fs_write" => serde_json::from_str(arguments)
+                .map(Self::FsWrite)
+                .map_err(|source| ToolCallParseError::InvalidArguments {
+                    name: name.to_string(),
+                    source,
+                }),
+            "fs_patch" => serde_json::from_str(arguments)
+                .map(Self::FsPatch)
+                .map_err(|source| ToolCallParseError::InvalidArguments {
+                    name: name.to_string(),
+                    source,
+                }),
+            "fs_list" => serde_json::from_str(arguments)
+                .map(Self::FsList)
+                .map_err(|source| ToolCallParseError::InvalidArguments {
+                    name: name.to_string(),
+                    source,
+                }),
+            "fs_glob" => serde_json::from_str(arguments)
+                .map(Self::FsGlob)
+                .map_err(|source| ToolCallParseError::InvalidArguments {
+                    name: name.to_string(),
+                    source,
+                }),
+            "fs_search" => serde_json::from_str(arguments)
+                .map(Self::FsSearch)
+                .map_err(|source| ToolCallParseError::InvalidArguments {
+                    name: name.to_string(),
+                    source,
+                }),
+            "web_fetch" => serde_json::from_str(arguments)
+                .map(Self::WebFetch)
+                .map_err(|source| ToolCallParseError::InvalidArguments {
+                    name: name.to_string(),
+                    source,
+                }),
+            "web_search" => serde_json::from_str(arguments)
+                .map(Self::WebSearch)
+                .map_err(|source| ToolCallParseError::InvalidArguments {
+                    name: name.to_string(),
+                    source,
+                }),
+            "exec_start" => serde_json::from_str(arguments)
+                .map(Self::ExecStart)
+                .map_err(|source| ToolCallParseError::InvalidArguments {
+                    name: name.to_string(),
+                    source,
+                }),
+            "exec_wait" => serde_json::from_str(arguments)
+                .map(Self::ExecWait)
+                .map_err(|source| ToolCallParseError::InvalidArguments {
+                    name: name.to_string(),
+                    source,
+                }),
+            "exec_kill" => serde_json::from_str(arguments)
+                .map(Self::ExecKill)
+                .map_err(|source| ToolCallParseError::InvalidArguments {
+                    name: name.to_string(),
+                    source,
+                }),
+            _ => Err(ToolCallParseError::UnknownTool {
+                name: name.to_string(),
+            }),
+        }
+    }
 }
 
 impl ProcessKind {
@@ -823,6 +926,197 @@ impl ToolOutput {
             ),
         }
     }
+
+    pub fn model_output(&self) -> String {
+        match self {
+            Self::FsRead(output) => json!({
+                "tool": "fs_read",
+                "path": output.path,
+                "content": output.content,
+            })
+            .to_string(),
+            Self::FsWrite(output) => json!({
+                "tool": "fs_write",
+                "path": output.path,
+                "bytes_written": output.bytes_written,
+            })
+            .to_string(),
+            Self::FsPatch(output) => json!({
+                "tool": "fs_patch",
+                "path": output.path,
+                "bytes_written": output.bytes_written,
+                "edits_applied": output.edits_applied,
+            })
+            .to_string(),
+            Self::FsList(output) => json!({
+                "tool": "fs_list",
+                "entries": output.entries.iter().map(workspace_entry_json).collect::<Vec<_>>(),
+            })
+            .to_string(),
+            Self::FsGlob(output) => json!({
+                "tool": "fs_glob",
+                "entries": output.entries.iter().map(workspace_entry_json).collect::<Vec<_>>(),
+            })
+            .to_string(),
+            Self::FsSearch(output) => json!({
+                "tool": "fs_search",
+                "matches": output.matches.iter().map(workspace_match_json).collect::<Vec<_>>(),
+            })
+            .to_string(),
+            Self::WebFetch(output) => json!({
+                "tool": "web_fetch",
+                "url": output.url,
+                "status_code": output.status_code,
+                "content_type": output.content_type,
+                "body": output.body,
+            })
+            .to_string(),
+            Self::WebSearch(output) => json!({
+                "tool": "web_search",
+                "query": output.query,
+                "results": output.results.iter().map(|result| json!({
+                    "title": result.title,
+                    "url": result.url,
+                    "snippet": result.snippet,
+                })).collect::<Vec<_>>(),
+            })
+            .to_string(),
+            Self::ProcessStart(output) => json!({
+                "tool": "process_start",
+                "process_id": output.process_id,
+                "pid_ref": output.pid_ref,
+                "kind": output.kind.as_str(),
+            })
+            .to_string(),
+            Self::ProcessResult(output) => json!({
+                "tool": "process_result",
+                "process_id": output.process_id,
+                "status": format!("{:?}", output.status).to_lowercase(),
+                "exit_code": output.exit_code,
+                "stdout": output.stdout,
+                "stderr": output.stderr,
+            })
+            .to_string(),
+        }
+    }
+}
+
+impl ToolDefinition {
+    pub fn openai_function_schema(&self) -> Value {
+        json!({
+            "type": "function",
+            "name": self.name.as_str(),
+            "description": self.description,
+            "parameters": self.name.input_schema(),
+        })
+    }
+}
+
+impl ToolName {
+    pub fn input_schema(self) -> Value {
+        match self {
+            Self::FsRead => json!({
+                "type": "object",
+                "properties": {
+                    "path": { "type": "string", "description": "Relative workspace path to read" }
+                },
+                "required": ["path"],
+                "additionalProperties": false,
+            }),
+            Self::FsWrite => json!({
+                "type": "object",
+                "properties": {
+                    "path": { "type": "string", "description": "Relative workspace path to write" },
+                    "content": { "type": "string", "description": "UTF-8 file content to write" }
+                },
+                "required": ["path", "content"],
+                "additionalProperties": false,
+            }),
+            Self::FsPatch => json!({
+                "type": "object",
+                "properties": {
+                    "path": { "type": "string", "description": "Relative workspace path to patch" },
+                    "edits": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "old": { "type": "string" },
+                                "new": { "type": "string" },
+                                "replace_all": { "type": "boolean" }
+                            },
+                            "required": ["old", "new", "replace_all"],
+                            "additionalProperties": false
+                        }
+                    }
+                },
+                "required": ["path", "edits"],
+                "additionalProperties": false,
+            }),
+            Self::FsList => json!({
+                "type": "object",
+                "properties": {
+                    "path": { "type": "string", "description": "Relative workspace path to list" },
+                    "recursive": { "type": "boolean", "description": "Whether to recurse into subdirectories" }
+                },
+                "required": ["path", "recursive"],
+                "additionalProperties": false,
+            }),
+            Self::FsGlob => json!({
+                "type": "object",
+                "properties": {
+                    "path": { "type": "string", "description": "Relative workspace root to search from" },
+                    "pattern": { "type": "string", "description": "Glob-style path pattern" }
+                },
+                "required": ["path", "pattern"],
+                "additionalProperties": false,
+            }),
+            Self::FsSearch => json!({
+                "type": "object",
+                "properties": {
+                    "path": { "type": "string", "description": "Relative workspace root to search from" },
+                    "query": { "type": "string", "description": "Literal text to search for" }
+                },
+                "required": ["path", "query"],
+                "additionalProperties": false,
+            }),
+            Self::WebFetch => json!({
+                "type": "object",
+                "properties": {
+                    "url": { "type": "string", "description": "Absolute URL to fetch" }
+                },
+                "required": ["url"],
+                "additionalProperties": false,
+            }),
+            Self::WebSearch => json!({
+                "type": "object",
+                "properties": {
+                    "query": { "type": "string", "description": "Search query text" },
+                    "limit": { "type": "integer", "minimum": 1, "description": "Maximum number of results" }
+                },
+                "required": ["query", "limit"],
+                "additionalProperties": false,
+            }),
+            Self::ExecStart => json!({
+                "type": "object",
+                "properties": {
+                    "executable": { "type": "string" },
+                    "args": { "type": "array", "items": { "type": "string" } },
+                    "cwd": { "type": ["string", "null"] }
+                },
+                "required": ["executable", "args"],
+                "additionalProperties": false,
+            }),
+            Self::ExecWait | Self::ExecKill => json!({
+                "type": "object",
+                "properties": {
+                    "process_id": { "type": "string" }
+                },
+                "required": ["process_id"],
+                "additionalProperties": false,
+            }),
+        }
+    }
 }
 
 impl fmt::Display for ToolError {
@@ -885,6 +1179,26 @@ impl Error for ToolError {
     }
 }
 
+impl fmt::Display for ToolCallParseError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::UnknownTool { name } => write!(formatter, "unknown tool call {name}"),
+            Self::InvalidArguments { name, source } => {
+                write!(formatter, "invalid arguments for {name}: {source}")
+            }
+        }
+    }
+}
+
+impl Error for ToolCallParseError {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        match self {
+            Self::InvalidArguments { source, .. } => Some(source),
+            Self::UnknownTool { .. } => None,
+        }
+    }
+}
+
 impl From<WorkspaceError> for ToolError {
     fn from(source: WorkspaceError) -> Self {
         Self::Workspace(source)
@@ -893,6 +1207,25 @@ impl From<WorkspaceError> for ToolError {
 
 fn normalize_tool_path(path: &str) -> String {
     path.replace('\\', "/")
+}
+
+fn workspace_entry_json(entry: &WorkspaceEntry) -> Value {
+    json!({
+        "path": entry.path,
+        "kind": match entry.kind {
+            crate::workspace::WorkspaceEntryKind::File => "file",
+            crate::workspace::WorkspaceEntryKind::Directory => "directory",
+        },
+        "bytes": entry.bytes,
+    })
+}
+
+fn workspace_match_json(entry: &WorkspaceSearchMatch) -> Value {
+    json!({
+        "path": entry.path,
+        "line_number": entry.line_number,
+        "line": entry.line,
+    })
 }
 
 impl Default for WebToolClient {

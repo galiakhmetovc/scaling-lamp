@@ -95,6 +95,17 @@ The normal chat operator path is now:
 1. `chat show <session-id>` to inspect transcript history
 2. `chat send <session-id> "<message>"` to execute one ordinary chat turn
 
+The current OpenAI-backed chat path now also supports one bounded model-driven
+tool loop for auto-allowed tools:
+
+- exposed automatically: `fs_read`, `fs_list`, `fs_glob`, `fs_search`,
+  `web_fetch`, `web_search`
+- approval-gated tools are still kept out of the automatic loop
+- continuation uses `previous_response_id` instead of replaying the whole
+  transcript on every tool step
+- the loop is bounded and rejects repeated tool-call signatures instead of
+  spinning forever
+
 ## Autonomous Mission Smoke
 
 Minimal operator smoke for the first autonomous path:
@@ -121,6 +132,23 @@ cargo run -p agentd -- chat show session-chat
 cargo run -p agentd -- chat send session-chat "Hello chat"
 cargo run -p agentd -- chat show session-chat
 ```
+
+Tool-calling smoke for the current OpenAI Responses path:
+
+1. Configure `TEAMD_PROVIDER_KIND=openai_responses` with a model that supports
+   function calling.
+2. Prompt for a fetch/search-style action that stays inside the auto-allowed
+   surface, for example:
+
+```bash
+cargo run -p agentd -- session create session-tool "Tool Session"
+cargo run -p agentd -- chat send session-tool "Fetch https://example.com and summarize it in one line."
+cargo run -p agentd -- chat show session-tool
+```
+
+Current limitation: approval-gated tools such as `fs_write`, `fs_patch`, and
+`exec_start` still use the explicit operator approval/resume path rather than
+the automatic chat continuation loop.
 
 ## Core Principles
 

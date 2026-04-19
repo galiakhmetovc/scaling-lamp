@@ -67,7 +67,10 @@ pub struct SessionTranscriptLine {
 
 impl App {
     fn execution_service(&self) -> execution::ExecutionService {
-        execution::ExecutionService::new(self.config.permissions.clone())
+        execution::ExecutionService::new(
+            self.config.permissions.clone(),
+            self.runtime.workspace.clone(),
+        )
     }
 
     pub fn run(&self) -> Result<(), BootstrapError> {
@@ -1842,6 +1845,329 @@ mod tests {
     }
 
     #[test]
+    fn execute_chat_turn_can_finish_after_an_allowed_web_tool_call() {
+        let (web_base, web_requests, web_handle) = spawn_text_server("/doc", "local doc");
+        let first_provider_response = format!(
+            r#"{{
+                "id":"resp_tool_call",
+                "model":"gpt-5.4",
+                "output":[
+                    {{
+                        "id":"fc_1",
+                        "type":"function_call",
+                        "status":"completed",
+                        "call_id":"call_web_fetch",
+                        "name":"web_fetch",
+                        "arguments":"{{\"url\":\"{}\"}}"
+                    }}
+                ],
+                "usage":{{"input_tokens":19,"output_tokens":7,"total_tokens":26}}
+            }}"#,
+            web_base
+        );
+        let (provider_api_base, provider_requests, provider_handle) =
+            spawn_json_server_sequence(vec![
+                first_provider_response,
+                r#"{
+                    "id":"resp_tool_final",
+                    "model":"gpt-5.4",
+                    "output":[
+                        {
+                            "id":"msg_1",
+                            "type":"message",
+                            "status":"completed",
+                            "role":"assistant",
+                            "content":[
+                                {
+                                    "type":"output_text",
+                                    "text":"Fetched local doc"
+                                }
+                            ]
+                        }
+                    ],
+                    "usage":{"input_tokens":31,"output_tokens":4,"total_tokens":35}
+                }"#
+                .to_string(),
+            ]);
+        let temp = tempfile::tempdir().expect("tempdir");
+        let app = build_from_config(AppConfig {
+            data_dir: temp.path().join("state-root"),
+            provider: ConfiguredProvider {
+                kind: ProviderKind::OpenAiResponses,
+                api_base: Some(format!("{provider_api_base}/v1")),
+                api_key: Some("test-key".to_string()),
+                default_model: Some("gpt-5.4".to_string()),
+            },
+            ..AppConfig::default()
+        })
+        .expect("build app");
+        let store = PersistenceStore::open(&app.persistence).expect("open store");
+
+        store
+            .put_session(&SessionRecord {
+                id: "session-chat-tool".to_string(),
+                title: "Chat tool session".to_string(),
+                prompt_override: Some("Use tools when useful.".to_string()),
+                settings_json: serde_json::to_string(&SessionSettings::default())
+                    .expect("serialize settings"),
+                active_mission_id: None,
+                created_at: 1,
+                updated_at: 1,
+            })
+            .expect("put session");
+
+        let report = app
+            .execute_chat_turn("session-chat-tool", "Fetch the local doc", 10)
+            .expect("execute chat turn");
+        let first_request = provider_requests.recv().expect("first provider request");
+        let second_request = provider_requests.recv().expect("second provider request");
+        let web_request = web_requests.recv().expect("web request");
+        provider_handle.join().expect("join provider server");
+        web_handle.join().expect("join web server");
+
+        assert_eq!(report.run_id, "run-chat-session-chat-tool-10");
+        assert_eq!(report.response_id, "resp_tool_final");
+        assert_eq!(report.output_text, "Fetched local doc");
+
+        let run = store
+            .get_run("run-chat-session-chat-tool-10")
+            .expect("get run")
+            .expect("run exists");
+        assert_eq!(run.status, "completed");
+        assert_eq!(run.result.as_deref(), Some("Fetched local doc"));
+
+        let transcript = app
+            .session_transcript("session-chat-tool")
+            .expect("load transcript");
+        assert_eq!(transcript.entries.len(), 2);
+        assert_eq!(transcript.entries[0].content, "Fetch the local doc");
+        assert_eq!(transcript.entries[1].content, "Fetched local doc");
+
+        let normalized_first = first_request.to_ascii_lowercase();
+        assert!(normalized_first.contains("\"tools\""));
+        assert!(normalized_first.contains("\"name\":\"web_fetch\""));
+        assert!(normalized_first.contains("\"text\":\"fetch the local doc\""));
+
+        let normalized_second = second_request.to_ascii_lowercase();
+        assert!(normalized_second.contains("\"previous_response_id\":\"resp_tool_call\""));
+        assert!(normalized_second.contains("\"type\":\"function_call_output\""));
+        assert!(normalized_second.contains("local doc"));
+        assert!(!normalized_second.contains("\"text\":\"fetch the local doc\""));
+
+        let normalized_web = web_request.to_ascii_lowercase();
+        assert!(normalized_web.contains("get /doc http/1.1"));
+        assert!(web_base.contains("127.0.0.1"));
+    }
+
+    #[test]
+    fn execute_chat_turn_fails_when_the_provider_repeats_the_same_tool_signature() {
+        let (web_base, web_requests, web_handle) = spawn_text_server("/doc", "loop doc");
+        let repeated_tool_response = format!(
+            r#"{{
+                "id":"resp_tool_loop",
+                "model":"gpt-5.4",
+                "output":[
+                    {{
+                        "id":"fc_loop",
+                        "type":"function_call",
+                        "status":"completed",
+                        "call_id":"call_web_fetch",
+                        "name":"web_fetch",
+                        "arguments":"{{\"url\":\"{}\"}}"
+                    }}
+                ],
+                "usage":{{"input_tokens":19,"output_tokens":7,"total_tokens":26}}
+            }}"#,
+            web_base
+        );
+        let (provider_api_base, provider_requests, provider_handle) =
+            spawn_json_server_sequence(vec![
+                repeated_tool_response.clone(),
+                repeated_tool_response,
+            ]);
+        let temp = tempfile::tempdir().expect("tempdir");
+        let app = build_from_config(AppConfig {
+            data_dir: temp.path().join("state-root"),
+            provider: ConfiguredProvider {
+                kind: ProviderKind::OpenAiResponses,
+                api_base: Some(format!("{provider_api_base}/v1")),
+                api_key: Some("test-key".to_string()),
+                default_model: Some("gpt-5.4".to_string()),
+            },
+            ..AppConfig::default()
+        })
+        .expect("build app");
+        let store = PersistenceStore::open(&app.persistence).expect("open store");
+
+        store
+            .put_session(&SessionRecord {
+                id: "session-chat-loop".to_string(),
+                title: "Chat loop session".to_string(),
+                prompt_override: Some("Use tools when useful.".to_string()),
+                settings_json: serde_json::to_string(&SessionSettings::default())
+                    .expect("serialize settings"),
+                active_mission_id: None,
+                created_at: 1,
+                updated_at: 1,
+            })
+            .expect("put session");
+
+        let error = app
+            .execute_chat_turn("session-chat-loop", "Fetch the local doc", 10)
+            .expect_err("repeated tool signature must fail");
+        let first_request = provider_requests.recv().expect("first provider request");
+        let second_request = provider_requests.recv().expect("second provider request");
+        let web_request = web_requests.recv().expect("web request");
+        provider_handle.join().expect("join provider server");
+        web_handle.join().expect("join web server");
+
+        assert!(
+            error
+                .to_string()
+                .contains("provider repeated tool-call signature")
+        );
+
+        let run = store
+            .get_run("run-chat-session-chat-loop-10")
+            .expect("get run")
+            .expect("run exists");
+        assert_eq!(run.status, "failed");
+        assert!(
+            run.error
+                .as_deref()
+                .unwrap_or_default()
+                .contains("provider repeated tool-call signature")
+        );
+
+        let normalized_first = first_request.to_ascii_lowercase();
+        assert!(normalized_first.contains("\"name\":\"web_fetch\""));
+        let normalized_second = second_request.to_ascii_lowercase();
+        assert!(normalized_second.contains("\"previous_response_id\":\"resp_tool_loop\""));
+        let normalized_web = web_request.to_ascii_lowercase();
+        assert!(normalized_web.contains("get /doc http/1.1"));
+    }
+
+    #[test]
+    fn execute_chat_turn_only_sends_new_tool_outputs_for_each_continuation_round() {
+        let (web_base, web_requests, web_handle) =
+            spawn_text_server_sequence(vec!["doc one", "doc two"]);
+        let first_provider_response = format!(
+            r#"{{
+                "id":"resp_tool_chain_1",
+                "model":"gpt-5.4",
+                "output":[
+                    {{
+                        "id":"fc_chain_1",
+                        "type":"function_call",
+                        "status":"completed",
+                        "call_id":"call_web_fetch_1",
+                        "name":"web_fetch",
+                        "arguments":"{{\"url\":\"{}/doc-1\"}}"
+                    }}
+                ],
+                "usage":{{"input_tokens":19,"output_tokens":7,"total_tokens":26}}
+            }}"#,
+            web_base
+        );
+        let second_provider_response = format!(
+            r#"{{
+                "id":"resp_tool_chain_2",
+                "model":"gpt-5.4",
+                "output":[
+                    {{
+                        "id":"fc_chain_2",
+                        "type":"function_call",
+                        "status":"completed",
+                        "call_id":"call_web_fetch_2",
+                        "name":"web_fetch",
+                        "arguments":"{{\"url\":\"{}/doc-2\"}}"
+                    }}
+                ],
+                "usage":{{"input_tokens":27,"output_tokens":8,"total_tokens":35}}
+            }}"#,
+            web_base
+        );
+        let (provider_api_base, provider_requests, provider_handle) =
+            spawn_json_server_sequence(vec![
+                first_provider_response,
+                second_provider_response,
+                r#"{
+                    "id":"resp_tool_chain_3",
+                    "model":"gpt-5.4",
+                    "output":[
+                        {
+                            "id":"msg_1",
+                            "type":"message",
+                            "status":"completed",
+                            "role":"assistant",
+                            "content":[
+                                {
+                                    "type":"output_text",
+                                    "text":"two step tool chain ok"
+                                }
+                            ]
+                        }
+                    ],
+                    "usage":{"input_tokens":39,"output_tokens":5,"total_tokens":44}
+                }"#
+                .to_string(),
+            ]);
+        let temp = tempfile::tempdir().expect("tempdir");
+        let app = build_from_config(AppConfig {
+            data_dir: temp.path().join("state-root"),
+            provider: ConfiguredProvider {
+                kind: ProviderKind::OpenAiResponses,
+                api_base: Some(format!("{provider_api_base}/v1")),
+                api_key: Some("test-key".to_string()),
+                default_model: Some("gpt-5.4".to_string()),
+            },
+            ..AppConfig::default()
+        })
+        .expect("build app");
+
+        let store = PersistenceStore::open(&app.persistence).expect("open store");
+        store
+            .put_session(&SessionRecord {
+                id: "session-chat-chain".to_string(),
+                title: "Chat chain session".to_string(),
+                prompt_override: Some("Use tools when useful.".to_string()),
+                settings_json: serde_json::to_string(&SessionSettings::default())
+                    .expect("serialize settings"),
+                active_mission_id: None,
+                created_at: 1,
+                updated_at: 1,
+            })
+            .expect("put session");
+
+        let report = app
+            .execute_chat_turn("session-chat-chain", "Fetch two docs", 10)
+            .expect("execute chat turn");
+        let _first_request = provider_requests.recv().expect("first provider request");
+        let second_request = provider_requests.recv().expect("second provider request");
+        let third_request = provider_requests.recv().expect("third provider request");
+        let first_web_request = web_requests.recv().expect("first web request");
+        let second_web_request = web_requests.recv().expect("second web request");
+        provider_handle.join().expect("join provider server");
+        web_handle.join().expect("join web server");
+
+        assert_eq!(report.output_text, "two step tool chain ok");
+
+        let normalized_second = second_request.to_ascii_lowercase();
+        assert!(normalized_second.contains("\"previous_response_id\":\"resp_tool_chain_1\""));
+        assert!(normalized_second.contains("doc one"));
+
+        let normalized_third = third_request.to_ascii_lowercase();
+        assert!(normalized_third.contains("\"previous_response_id\":\"resp_tool_chain_2\""));
+        assert!(normalized_third.contains("doc two"));
+        assert!(!normalized_third.contains("doc one"));
+
+        let normalized_first_web = first_web_request.to_ascii_lowercase();
+        assert!(normalized_first_web.contains("get /doc-1 http/1.1"));
+        let normalized_second_web = second_web_request.to_ascii_lowercase();
+        assert!(normalized_second_web.contains("get /doc-2 http/1.1"));
+    }
+
+    #[test]
     fn run_with_args_shows_and_sends_chat_turns() {
         let (api_base, requests, handle) = spawn_json_server(
             r#"{
@@ -1930,6 +2256,66 @@ mod tests {
     }
 
     fn spawn_json_server(body: &'static str) -> (String, Receiver<String>, thread::JoinHandle<()>) {
+        spawn_json_server_sequence(vec![body.to_string()])
+    }
+
+    fn spawn_json_server_sequence(
+        bodies: Vec<String>,
+    ) -> (String, Receiver<String>, thread::JoinHandle<()>) {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind listener");
+        let address = listener.local_addr().expect("local addr");
+        let (sender, receiver) = mpsc::channel();
+
+        let handle = thread::spawn(move || {
+            for body in bodies {
+                let (mut stream, _) = listener.accept().expect("accept connection");
+                stream
+                    .set_read_timeout(Some(Duration::from_secs(2)))
+                    .expect("set read timeout");
+
+                let mut reader = BufReader::new(stream.try_clone().expect("clone stream"));
+                let mut raw_request = String::new();
+                let mut content_length = 0usize;
+
+                loop {
+                    let mut line = String::new();
+                    reader.read_line(&mut line).expect("read request line");
+                    raw_request.push_str(&line);
+
+                    if line == "\r\n" {
+                        break;
+                    }
+
+                    let lower = line.to_ascii_lowercase();
+                    if let Some(value) = lower.strip_prefix("content-length:") {
+                        content_length = value.trim().parse().expect("parse content length");
+                    }
+                }
+
+                let mut body_buf = vec![0u8; content_length];
+                reader.read_exact(&mut body_buf).expect("read request body");
+                raw_request.push_str(std::str::from_utf8(&body_buf).expect("utf8 body"));
+                sender.send(raw_request).expect("send request");
+
+                let response = format!(
+                    "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
+                    body.len(),
+                    body
+                );
+                stream
+                    .write_all(response.as_bytes())
+                    .expect("write response");
+                stream.flush().expect("flush response");
+            }
+        });
+
+        (format!("http://{address}"), receiver, handle)
+    }
+
+    fn spawn_text_server(
+        path: &'static str,
+        body: &'static str,
+    ) -> (String, Receiver<String>, thread::JoinHandle<()>) {
         let listener = TcpListener::bind("127.0.0.1:0").expect("bind listener");
         let address = listener.local_addr().expect("local addr");
         let (sender, receiver) = mpsc::channel();
@@ -1942,30 +2328,19 @@ mod tests {
 
             let mut reader = BufReader::new(stream.try_clone().expect("clone stream"));
             let mut raw_request = String::new();
-            let mut content_length = 0usize;
 
             loop {
                 let mut line = String::new();
                 reader.read_line(&mut line).expect("read request line");
                 raw_request.push_str(&line);
-
                 if line == "\r\n" {
                     break;
                 }
-
-                let lower = line.to_ascii_lowercase();
-                if let Some(value) = lower.strip_prefix("content-length:") {
-                    content_length = value.trim().parse().expect("parse content length");
-                }
             }
 
-            let mut body_buf = vec![0u8; content_length];
-            reader.read_exact(&mut body_buf).expect("read request body");
-            raw_request.push_str(std::str::from_utf8(&body_buf).expect("utf8 body"));
             sender.send(raw_request).expect("send request");
-
             let response = format!(
-                "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
+                "HTTP/1.1 200 OK\r\ncontent-type: text/plain\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
                 body.len(),
                 body
             );
@@ -1973,6 +2348,48 @@ mod tests {
                 .write_all(response.as_bytes())
                 .expect("write response");
             stream.flush().expect("flush response");
+        });
+
+        (format!("http://{address}{path}"), receiver, handle)
+    }
+
+    fn spawn_text_server_sequence(
+        bodies: Vec<&'static str>,
+    ) -> (String, Receiver<String>, thread::JoinHandle<()>) {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind listener");
+        let address = listener.local_addr().expect("local addr");
+        let (sender, receiver) = mpsc::channel();
+
+        let handle = thread::spawn(move || {
+            for body in bodies {
+                let (mut stream, _) = listener.accept().expect("accept connection");
+                stream
+                    .set_read_timeout(Some(Duration::from_secs(2)))
+                    .expect("set read timeout");
+
+                let mut reader = BufReader::new(stream.try_clone().expect("clone stream"));
+                let mut raw_request = String::new();
+
+                loop {
+                    let mut line = String::new();
+                    reader.read_line(&mut line).expect("read request line");
+                    raw_request.push_str(&line);
+                    if line == "\r\n" {
+                        break;
+                    }
+                }
+
+                sender.send(raw_request).expect("send request");
+                let response = format!(
+                    "HTTP/1.1 200 OK\r\ncontent-type: text/plain\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
+                    body.len(),
+                    body
+                );
+                stream
+                    .write_all(response.as_bytes())
+                    .expect("write response");
+                stream.flush().expect("flush response");
+            }
         });
 
         (format!("http://{address}"), receiver, handle)

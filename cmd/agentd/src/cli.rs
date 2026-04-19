@@ -464,6 +464,9 @@ fn run_provider_smoke(app: &App, prompt: &str) -> Result<String, BootstrapError>
         model: None,
         instructions: Some("Reply tersely.".to_string()),
         messages: vec![ProviderMessage::new(MessageRole::User, prompt)],
+        previous_response_id: None,
+        tools: Vec::new(),
+        tool_outputs: Vec::new(),
         max_output_tokens: Some(128),
         stream: ProviderStreamMode::Disabled,
     })?;

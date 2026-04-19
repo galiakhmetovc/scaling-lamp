@@ -2,6 +2,7 @@ use crate::session::MessageRole;
 use reqwest::StatusCode;
 use reqwest::blocking::Client;
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use std::error::Error;
 use std::fmt;
 
@@ -50,13 +51,36 @@ pub enum ProviderStreamMode {
     Enabled,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct ProviderRequest {
     pub model: Option<String>,
     pub instructions: Option<String>,
     pub messages: Vec<ProviderMessage>,
+    pub previous_response_id: Option<String>,
+    pub tools: Vec<ProviderToolDefinition>,
+    pub tool_outputs: Vec<ProviderToolOutput>,
     pub max_output_tokens: Option<u32>,
     pub stream: ProviderStreamMode,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ProviderToolDefinition {
+    pub name: String,
+    pub description: String,
+    pub parameters: Value,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProviderToolCall {
+    pub call_id: String,
+    pub name: String,
+    pub arguments: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProviderToolOutput {
+    pub call_id: String,
+    pub output: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -77,6 +101,7 @@ pub struct ProviderResponse {
     pub response_id: String,
     pub model: String,
     pub output_text: String,
+    pub tool_calls: Vec<ProviderToolCall>,
     pub finish_reason: FinishReason,
     pub usage: Option<ProviderUsage>,
 }
@@ -94,6 +119,7 @@ pub enum ProviderError {
     MissingModel,
     Parse(serde_json::Error),
     ResponseMissingOutputText,
+    ResponseMissingToolCallField { field: &'static str },
     UnsupportedMessageRole { role: MessageRole },
     UnsupportedStreaming,
 }
@@ -155,10 +181,21 @@ struct OpenAiResponsesRequest<'a> {
     model: &'a str,
     #[serde(skip_serializing_if = "Option::is_none")]
     instructions: Option<&'a str>,
-    input: Vec<OpenAiResponsesInputMessage<'a>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    previous_response_id: Option<&'a str>,
+    input: Vec<OpenAiResponsesInputItem<'a>>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    tools: Vec<OpenAiResponsesToolDefinition<'a>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     max_output_tokens: Option<u32>,
     store: bool,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(untagged)]
+enum OpenAiResponsesInputItem<'a> {
+    Message(OpenAiResponsesInputMessage<'a>),
+    FunctionCallOutput(OpenAiResponsesFunctionCallOutput<'a>),
 }
 
 #[derive(Debug, Serialize)]
@@ -172,6 +209,23 @@ struct OpenAiResponsesInputText<'a> {
     #[serde(rename = "type")]
     item_type: &'static str,
     text: &'a str,
+}
+
+#[derive(Debug, Serialize)]
+struct OpenAiResponsesFunctionCallOutput<'a> {
+    #[serde(rename = "type")]
+    item_type: &'static str,
+    call_id: &'a str,
+    output: &'a str,
+}
+
+#[derive(Debug, Serialize)]
+struct OpenAiResponsesToolDefinition<'a> {
+    #[serde(rename = "type")]
+    item_type: &'static str,
+    name: &'a str,
+    description: &'a str,
+    parameters: &'a Value,
 }
 
 #[derive(Debug, Deserialize)]
@@ -188,6 +242,9 @@ struct OpenAiResponseOutputItem {
     item_type: String,
     status: Option<String>,
     content: Option<Vec<OpenAiResponseContentItem>>,
+    call_id: Option<String>,
+    name: Option<String>,
+    arguments: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -348,7 +405,7 @@ impl OpenAiResponsesDriver {
                 capabilities: ModelCapabilities {
                     supports_streaming: false,
                     supports_text_input: true,
-                    supports_tool_calls: false,
+                    supports_tool_calls: true,
                     supports_reasoning_summaries: true,
                 },
             },
@@ -373,7 +430,7 @@ impl OpenAiResponsesDriver {
         request: &'a ProviderRequest,
         model: &'a str,
     ) -> Result<OpenAiResponsesRequest<'a>, ProviderError> {
-        let input = request
+        let mut input = request
             .messages
             .iter()
             .map(|message| {
@@ -386,20 +443,43 @@ impl OpenAiResponsesDriver {
                     }
                 };
 
-                Ok(OpenAiResponsesInputMessage {
-                    role,
-                    content: vec![OpenAiResponsesInputText {
-                        item_type: "input_text",
-                        text: message.content.as_str(),
-                    }],
-                })
+                Ok(OpenAiResponsesInputItem::Message(
+                    OpenAiResponsesInputMessage {
+                        role,
+                        content: vec![OpenAiResponsesInputText {
+                            item_type: "input_text",
+                            text: message.content.as_str(),
+                        }],
+                    },
+                ))
             })
             .collect::<Result<Vec<_>, _>>()?;
+
+        input.extend(request.tool_outputs.iter().map(|output| {
+            OpenAiResponsesInputItem::FunctionCallOutput(OpenAiResponsesFunctionCallOutput {
+                item_type: "function_call_output",
+                call_id: output.call_id.as_str(),
+                output: output.output.as_str(),
+            })
+        }));
+
+        let tools = request
+            .tools
+            .iter()
+            .map(|tool| OpenAiResponsesToolDefinition {
+                item_type: "function",
+                name: tool.name.as_str(),
+                description: tool.description.as_str(),
+                parameters: &tool.parameters,
+            })
+            .collect();
 
         Ok(OpenAiResponsesRequest {
             model,
             instructions: request.instructions.as_deref(),
+            previous_response_id: request.previous_response_id.as_deref(),
             input,
+            tools,
             max_output_tokens: request.max_output_tokens,
             store: false,
         })
@@ -512,7 +592,28 @@ impl ProviderDriver for OpenAiResponsesDriver {
             .filter_map(|item| item.text.as_deref())
             .collect::<String>();
 
-        if output_text.is_empty() {
+        let tool_calls = response
+            .output
+            .iter()
+            .filter(|item| item.item_type == "function_call")
+            .map(|item| {
+                Ok(ProviderToolCall {
+                    call_id: item
+                        .call_id
+                        .clone()
+                        .ok_or(ProviderError::ResponseMissingToolCallField { field: "call_id" })?,
+                    name: item
+                        .name
+                        .clone()
+                        .ok_or(ProviderError::ResponseMissingToolCallField { field: "name" })?,
+                    arguments: item.arguments.clone().ok_or(
+                        ProviderError::ResponseMissingToolCallField { field: "arguments" },
+                    )?,
+                })
+            })
+            .collect::<Result<Vec<_>, ProviderError>>()?;
+
+        if output_text.is_empty() && tool_calls.is_empty() {
             return Err(ProviderError::ResponseMissingOutputText);
         }
 
@@ -531,6 +632,7 @@ impl ProviderDriver for OpenAiResponsesDriver {
             response_id: response.id,
             model: response.model,
             output_text,
+            tool_calls,
             finish_reason,
             usage: response.usage.map(|usage| ProviderUsage {
                 input_tokens: usage.input_tokens,
@@ -597,6 +699,7 @@ impl ProviderDriver for ZaiChatCompletionsDriver {
             response_id: response.id,
             model: response.model,
             output_text,
+            tool_calls: Vec::new(),
             finish_reason,
             usage: response.usage.map(|usage| ProviderUsage {
                 input_tokens: usage.prompt_tokens,
@@ -629,6 +732,9 @@ impl fmt::Display for ProviderError {
                     "provider response did not include assistant text"
                 )
             }
+            Self::ResponseMissingToolCallField { field } => {
+                write!(formatter, "provider function call response missing {field}")
+            }
             Self::UnsupportedMessageRole { role } => {
                 write!(
                     formatter,
@@ -651,6 +757,7 @@ impl Error for ProviderError {
             Self::HttpStatus { .. }
             | Self::MissingModel
             | Self::ResponseMissingOutputText
+            | Self::ResponseMissingToolCallField { .. }
             | Self::UnsupportedMessageRole { .. }
             | Self::UnsupportedStreaming => None,
         }
@@ -681,9 +788,10 @@ mod tests {
     use super::{
         ConfiguredProvider, FinishReason, ModelCapabilities, OpenAiResponsesConfig,
         OpenAiResponsesDriver, ProviderBuildError, ProviderDriver, ProviderError, ProviderKind,
-        ProviderMessage, ProviderRequest, ProviderStreamMode, build_driver,
+        ProviderMessage, ProviderRequest, ProviderStreamMode, ProviderToolDefinition, build_driver,
     };
     use crate::session::MessageRole;
+    use serde_json::json;
     use std::io::{BufRead, BufReader, Read, Write};
     use std::net::TcpListener;
     use std::sync::mpsc::{self, Receiver};
@@ -709,7 +817,7 @@ mod tests {
             ModelCapabilities {
                 supports_streaming: false,
                 supports_text_input: true,
-                supports_tool_calls: false,
+                supports_tool_calls: true,
                 supports_reasoning_summaries: true,
             }
         );
@@ -803,6 +911,9 @@ mod tests {
             model: None,
             instructions: Some("Be brief".to_string()),
             messages: vec![ProviderMessage::new(MessageRole::User, "Say hi")],
+            previous_response_id: None,
+            tools: Vec::new(),
+            tool_outputs: Vec::new(),
             max_output_tokens: Some(64),
             stream: ProviderStreamMode::Disabled,
         };
@@ -814,6 +925,7 @@ mod tests {
         assert_eq!(response.response_id, "chatcmpl-123");
         assert_eq!(response.model, "glm-5.1");
         assert_eq!(response.output_text, "hello from z.ai");
+        assert!(response.tool_calls.is_empty());
         assert_eq!(response.finish_reason, FinishReason::Completed);
         assert_eq!(response.usage.expect("usage").total_tokens, 30);
 
@@ -864,6 +976,9 @@ mod tests {
             model: None,
             instructions: Some("Be brief".to_string()),
             messages: vec![ProviderMessage::new(MessageRole::User, "Write a haiku")],
+            previous_response_id: None,
+            tools: Vec::new(),
+            tool_outputs: Vec::new(),
             max_output_tokens: None,
             stream: ProviderStreamMode::Disabled,
         };
@@ -875,6 +990,7 @@ mod tests {
         assert_eq!(response.response_id, "resp_123");
         assert_eq!(response.model, "gpt-5.4");
         assert_eq!(response.output_text, "hello world");
+        assert!(response.tool_calls.is_empty());
         assert_eq!(response.finish_reason, FinishReason::Completed);
         assert_eq!(response.usage.expect("usage").total_tokens, 18);
 
@@ -890,6 +1006,81 @@ mod tests {
     }
 
     #[test]
+    fn complete_accepts_function_call_only_responses_for_openai() {
+        let (api_base, requests, handle) = spawn_json_server(
+            r#"{
+                "id":"resp_tool_123",
+                "model":"gpt-5.4",
+                "output":[
+                    {
+                        "id":"fc_1",
+                        "type":"function_call",
+                        "status":"completed",
+                        "call_id":"call_web_fetch",
+                        "name":"web_fetch",
+                        "arguments":"{\"url\":\"http://127.0.0.1:9999/doc\"}"
+                    }
+                ],
+                "usage":{"input_tokens":14,"output_tokens":6,"total_tokens":20}
+            }"#,
+        );
+        let driver = OpenAiResponsesDriver::new(OpenAiResponsesConfig {
+            api_base,
+            api_key: "test-key".to_string(),
+            default_model: Some("gpt-5.4".to_string()),
+        });
+        let request = ProviderRequest {
+            model: None,
+            instructions: Some("Use tools when needed".to_string()),
+            messages: vec![ProviderMessage::new(
+                MessageRole::User,
+                "Fetch the local document",
+            )],
+            previous_response_id: None,
+            tools: vec![ProviderToolDefinition {
+                name: "web_fetch".to_string(),
+                description: "Fetch a URL".to_string(),
+                parameters: json!({
+                    "type": "object",
+                    "properties": {
+                        "url": { "type": "string" }
+                    },
+                    "required": ["url"],
+                    "additionalProperties": false,
+                }),
+            }],
+            tool_outputs: Vec::new(),
+            max_output_tokens: None,
+            stream: ProviderStreamMode::Disabled,
+        };
+
+        let response = driver
+            .complete(&request)
+            .expect("function-call response should be accepted");
+        let raw_request = requests.recv().expect("raw request");
+        handle.join().expect("join server");
+
+        assert_eq!(response.response_id, "resp_tool_123");
+        assert_eq!(response.model, "gpt-5.4");
+        assert_eq!(response.output_text, "");
+        assert_eq!(response.tool_calls.len(), 1);
+        assert_eq!(response.tool_calls[0].call_id, "call_web_fetch");
+        assert_eq!(response.tool_calls[0].name, "web_fetch");
+        assert_eq!(
+            response.tool_calls[0].arguments,
+            r#"{"url":"http://127.0.0.1:9999/doc"}"#
+        );
+        assert_eq!(response.finish_reason, FinishReason::Completed);
+        assert_eq!(response.usage.expect("usage").total_tokens, 20);
+
+        let normalized_request = raw_request.to_ascii_lowercase();
+        assert!(normalized_request.contains("post /v1/responses http/1.1"));
+        assert!(normalized_request.contains("\"text\":\"fetch the local document\""));
+        assert!(normalized_request.contains("\"tools\":["));
+        assert!(normalized_request.contains("\"name\":\"web_fetch\""));
+    }
+
+    #[test]
     fn stream_is_an_explicit_contract_even_when_unimplemented() {
         let driver = OpenAiResponsesDriver::new(OpenAiResponsesConfig {
             api_base: "http://127.0.0.1:9/v1".to_string(),
@@ -900,6 +1091,9 @@ mod tests {
             model: Some("gpt-5.4".to_string()),
             instructions: None,
             messages: vec![ProviderMessage::new(MessageRole::User, "ping")],
+            previous_response_id: None,
+            tools: Vec::new(),
+            tool_outputs: Vec::new(),
             max_output_tokens: None,
             stream: ProviderStreamMode::Enabled,
         };

@@ -10,7 +10,8 @@ use agent_runtime::mission::{
 };
 use agent_runtime::permission::{PermissionAction, PermissionConfig};
 use agent_runtime::provider::{
-    ProviderDriver, ProviderError, ProviderMessage, ProviderRequest, ProviderStreamMode,
+    ProviderDriver, ProviderError, ProviderMessage, ProviderRequest, ProviderResponse,
+    ProviderStreamMode, ProviderToolDefinition, ProviderToolOutput,
 };
 use agent_runtime::run::{
     ActiveProcess, ApprovalRequest, RunEngine, RunSnapshot, RunStatus, RunTransitionError,
@@ -26,6 +27,8 @@ use std::collections::BTreeMap;
 use std::error::Error;
 use std::fmt;
 use std::path::Path;
+
+const MAX_PROVIDER_TOOL_ROUNDS: usize = 8;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SupervisorTickReport {
@@ -87,39 +90,277 @@ struct ToolExecutionContext<'a> {
 pub struct ExecutionService {
     permissions: PermissionConfig,
     supervisor: SupervisorLoop,
+    workspace: WorkspaceRef,
 }
 
 #[derive(Debug)]
 pub enum ExecutionError {
-    MissingJob { id: String },
-    MissingMission { id: String },
-    MissingRun { id: String },
-    MissingSession { id: String },
-    UnsupportedJobInput { id: String, kind: String },
-    PermissionDenied { tool: String, reason: String },
+    MissingJob {
+        id: String,
+    },
+    MissingMission {
+        id: String,
+    },
+    MissingRun {
+        id: String,
+    },
+    MissingSession {
+        id: String,
+    },
+    UnsupportedJobInput {
+        id: String,
+        kind: String,
+    },
+    PermissionDenied {
+        tool: String,
+        reason: String,
+    },
+    ApprovalRequired {
+        tool: String,
+        approval_id: String,
+        reason: String,
+    },
     Provider(ProviderError),
+    ProviderLoop {
+        reason: String,
+    },
     RecordConversion(RecordConversionError),
     RunTransition(RunTransitionError),
     Store(StoreError),
+    ToolCallParse {
+        name: String,
+        reason: String,
+    },
     Tool(ToolError),
 }
 
 impl Default for ExecutionService {
     fn default() -> Self {
-        Self::new(PermissionConfig::default())
+        Self::new(PermissionConfig::default(), WorkspaceRef::default())
     }
 }
 
 impl ExecutionService {
-    pub fn new(permissions: PermissionConfig) -> Self {
+    pub fn new(permissions: PermissionConfig, workspace: WorkspaceRef) -> Self {
         Self {
             permissions,
             supervisor: SupervisorLoop::default(),
+            workspace,
         }
     }
 }
 
 impl ExecutionService {
+    fn automatic_provider_tools(
+        &self,
+        provider: &dyn ProviderDriver,
+    ) -> Vec<ProviderToolDefinition> {
+        if !provider.descriptor().capabilities.supports_tool_calls {
+            return Vec::new();
+        }
+
+        ToolCatalog::default()
+            .automatic_model_definitions()
+            .into_iter()
+            .map(|definition| ProviderToolDefinition {
+                name: definition.name.as_str().to_string(),
+                description: definition.description.to_string(),
+                parameters: definition.name.input_schema(),
+            })
+            .collect()
+    }
+
+    fn transcript_messages(
+        &self,
+        store: &PersistenceStore,
+        session_id: &str,
+    ) -> Result<Vec<ProviderMessage>, ExecutionError> {
+        store
+            .list_transcripts_for_session(session_id)
+            .map_err(ExecutionError::Store)?
+            .into_iter()
+            .map(|record| {
+                let role = MessageRole::try_from(record.kind.as_str()).map_err(|_| {
+                    ExecutionError::RecordConversion(RecordConversionError::InvalidMessageRole {
+                        value: record.kind.clone(),
+                    })
+                })?;
+                Ok(ProviderMessage {
+                    role,
+                    content: record.content,
+                })
+            })
+            .collect::<Result<Vec<_>, _>>()
+    }
+
+    fn persist_run(&self, store: &PersistenceStore, run: &RunEngine) -> Result<(), ExecutionError> {
+        store
+            .put_run(
+                &RunRecord::try_from(run.snapshot()).map_err(ExecutionError::RecordConversion)?,
+            )
+            .map_err(ExecutionError::Store)
+    }
+
+    fn apply_provider_response(
+        &self,
+        run: &mut RunEngine,
+        response: &ProviderResponse,
+        now: i64,
+    ) -> Result<(), ExecutionError> {
+        run.begin_provider_stream(&response.response_id, &response.model, now)
+            .map_err(ExecutionError::RunTransition)?;
+        if !response.output_text.is_empty() {
+            run.push_provider_text(&response.output_text, now)
+                .map_err(ExecutionError::RunTransition)?;
+        }
+        run.finish_provider_stream(now)
+            .map_err(ExecutionError::RunTransition)?;
+        Ok(())
+    }
+
+    fn execute_provider_turn_loop(
+        &self,
+        store: &PersistenceStore,
+        provider: &dyn ProviderDriver,
+        session_id: &str,
+        instructions: Option<String>,
+        run: &mut RunEngine,
+        now: i64,
+    ) -> Result<ProviderResponse, ExecutionError> {
+        let base_messages = self.transcript_messages(store, session_id)?;
+        let catalog = ToolCatalog::default();
+        let tools = self.automatic_provider_tools(provider);
+        let mut pending_tool_outputs = Vec::new();
+        let mut tool_runtime = ToolRuntime::new(self.workspace.clone());
+        let mut previous_response_id = None;
+        let mut seen_tool_signatures = BTreeMap::new();
+
+        for round in 0..MAX_PROVIDER_TOOL_ROUNDS {
+            let request = ProviderRequest {
+                model: None,
+                instructions: instructions.clone(),
+                messages: if previous_response_id.is_some() {
+                    Vec::new()
+                } else {
+                    base_messages.clone()
+                },
+                previous_response_id: previous_response_id.clone(),
+                tools: tools.clone(),
+                tool_outputs: pending_tool_outputs.clone(),
+                max_output_tokens: Some(512),
+                stream: ProviderStreamMode::Disabled,
+            };
+
+            let response = provider
+                .complete(&request)
+                .map_err(ExecutionError::Provider)?;
+            self.apply_provider_response(run, &response, now)?;
+            self.persist_run(store, run)?;
+
+            if response.tool_calls.is_empty() {
+                return Ok(response);
+            }
+
+            let signature = response
+                .tool_calls
+                .iter()
+                .map(|tool_call| format!("{}:{}", tool_call.name, tool_call.arguments))
+                .collect::<Vec<_>>()
+                .join("|");
+            if let Some(first_seen_round) = seen_tool_signatures.insert(signature.clone(), round) {
+                return Err(ExecutionError::ProviderLoop {
+                    reason: format!(
+                        "provider repeated tool-call signature from round {}: {}",
+                        first_seen_round + 1,
+                        signature
+                    ),
+                });
+            }
+
+            let mut next_tool_outputs = Vec::new();
+            for tool_call in &response.tool_calls {
+                let parsed = ToolCall::from_openai_function(&tool_call.name, &tool_call.arguments)
+                    .map_err(|source| ExecutionError::ToolCallParse {
+                        name: tool_call.name.clone(),
+                        reason: source.to_string(),
+                    })?;
+                let definition = catalog.definition_for_call(&parsed).ok_or_else(|| {
+                    ExecutionError::ToolCallParse {
+                        name: tool_call.name.clone(),
+                        reason: "tool is not in the catalog".to_string(),
+                    }
+                })?;
+                let permission = self.permissions.resolve(definition, &parsed);
+
+                match permission.action {
+                    PermissionAction::Allow => {}
+                    PermissionAction::Deny => {
+                        let reason = format!(
+                            "tool {} denied by permission policy: {}",
+                            parsed.name().as_str(),
+                            permission.reason
+                        );
+                        run.fail(reason.clone(), now)
+                            .map_err(ExecutionError::RunTransition)?;
+                        self.persist_run(store, run)?;
+                        return Err(ExecutionError::PermissionDenied {
+                            tool: parsed.name().as_str().to_string(),
+                            reason,
+                        });
+                    }
+                    PermissionAction::Ask => {
+                        let approval_id =
+                            format!("approval-{}-{}", run.snapshot().id, parsed.name().as_str());
+                        let reason = format!(
+                            "tool {} requires approval: {} ({})",
+                            parsed.name().as_str(),
+                            parsed.summary(),
+                            permission.reason
+                        );
+                        run.wait_for_approval(
+                            ApprovalRequest::new(
+                                approval_id.clone(),
+                                parsed.name().as_str(),
+                                &reason,
+                                now,
+                            ),
+                            now,
+                        )
+                        .map_err(ExecutionError::RunTransition)?;
+                        self.persist_run(store, run)?;
+                        return Err(ExecutionError::ApprovalRequired {
+                            tool: parsed.name().as_str().to_string(),
+                            approval_id,
+                            reason,
+                        });
+                    }
+                }
+
+                let output = tool_runtime
+                    .invoke(parsed.clone())
+                    .map_err(ExecutionError::Tool)?;
+                let summary = output.summary();
+                run.record_tool_completion(summary, now)
+                    .map_err(ExecutionError::RunTransition)?;
+                next_tool_outputs.push(ProviderToolOutput {
+                    call_id: tool_call.call_id.clone(),
+                    output: output.model_output(),
+                });
+            }
+
+            previous_response_id = Some(response.response_id.clone());
+            pending_tool_outputs = next_tool_outputs;
+            self.persist_run(store, run)?;
+        }
+
+        Err(ExecutionError::ProviderLoop {
+            reason: format!(
+                "provider exceeded {} tool-calling rounds without producing a final answer",
+                MAX_PROVIDER_TOOL_ROUNDS
+            ),
+        })
+    }
+
     pub fn supervisor_tick(
         &self,
         store: &PersistenceStore,
@@ -338,66 +579,62 @@ impl ExecutionService {
             .put_transcript(&TranscriptRecord::from(&user_entry))
             .map_err(ExecutionError::Store)?;
 
-        let request = ProviderRequest {
-            model: None,
-            instructions: session.prompt_override.clone(),
-            messages: store
-                .list_transcripts_for_session(&session.id)
-                .map_err(ExecutionError::Store)?
-                .into_iter()
-                .map(|record| {
-                    let role = MessageRole::try_from(record.kind.as_str()).map_err(|_| {
-                        ExecutionError::RecordConversion(
-                            RecordConversionError::InvalidMessageRole {
-                                value: record.kind.clone(),
-                            },
-                        )
-                    })?;
-                    Ok(ProviderMessage {
-                        role,
-                        content: record.content,
-                    })
-                })
-                .collect::<Result<Vec<_>, _>>()?,
-            max_output_tokens: Some(512),
-            stream: ProviderStreamMode::Disabled,
-        };
-
-        let response = match provider.complete(&request) {
+        let response = match self.execute_provider_turn_loop(
+            store,
+            provider,
+            &session.id,
+            session.prompt_override.clone(),
+            &mut run,
+            now,
+        ) {
             Ok(response) => response,
-            Err(source) => {
-                run.fail(source.to_string(), now)
-                    .map_err(ExecutionError::RunTransition)?;
+            Err(source @ ExecutionError::ApprovalRequired { .. }) => {
+                job.status = JobStatus::Blocked;
+                job.error = Some(source.to_string());
+                job.updated_at = now;
+                mission.updated_at = now;
                 store
-                    .put_run(
-                        &RunRecord::try_from(run.snapshot())
+                    .put_job(&JobRecord::try_from(&job).map_err(ExecutionError::RecordConversion)?)
+                    .map_err(ExecutionError::Store)?;
+                store
+                    .put_mission(
+                        &MissionRecord::try_from(&mission)
                             .map_err(ExecutionError::RecordConversion)?,
                     )
                     .map_err(ExecutionError::Store)?;
+                return Err(source);
+            }
+            Err(source) => {
+                if !matches!(
+                    source,
+                    ExecutionError::PermissionDenied { .. }
+                        | ExecutionError::ApprovalRequired { .. }
+                ) {
+                    run.fail(source.to_string(), now)
+                        .map_err(ExecutionError::RunTransition)?;
+                    self.persist_run(store, &run)?;
+                }
                 job.status = JobStatus::Failed;
                 job.error = Some(source.to_string());
                 job.finished_at = Some(now);
                 job.updated_at = now;
+                mission.updated_at = now;
                 store
                     .put_job(&JobRecord::try_from(&job).map_err(ExecutionError::RecordConversion)?)
                     .map_err(ExecutionError::Store)?;
-                return Err(ExecutionError::Provider(source));
+                store
+                    .put_mission(
+                        &MissionRecord::try_from(&mission)
+                            .map_err(ExecutionError::RecordConversion)?,
+                    )
+                    .map_err(ExecutionError::Store)?;
+                return Err(source);
             }
         };
 
-        run.begin_provider_stream(&response.response_id, &response.model, now)
-            .map_err(ExecutionError::RunTransition)?;
-        run.push_provider_text(&response.output_text, now)
-            .map_err(ExecutionError::RunTransition)?;
-        run.finish_provider_stream(now)
-            .map_err(ExecutionError::RunTransition)?;
         run.complete(&response.output_text, now)
             .map_err(ExecutionError::RunTransition)?;
-        store
-            .put_run(
-                &RunRecord::try_from(run.snapshot()).map_err(ExecutionError::RecordConversion)?,
-            )
-            .map_err(ExecutionError::Store)?;
+        self.persist_run(store, &run)?;
 
         let assistant_entry = TranscriptEntry::assistant(
             format!("transcript-{}-02-assistant", job.id),
@@ -465,59 +702,32 @@ impl ExecutionService {
         session.updated_at = now;
         store.put_session(&session).map_err(ExecutionError::Store)?;
 
-        let request = ProviderRequest {
-            model: None,
-            instructions: session.prompt_override.clone(),
-            messages: store
-                .list_transcripts_for_session(&session.id)
-                .map_err(ExecutionError::Store)?
-                .into_iter()
-                .map(|record| {
-                    let role = MessageRole::try_from(record.kind.as_str()).map_err(|_| {
-                        ExecutionError::RecordConversion(
-                            RecordConversionError::InvalidMessageRole {
-                                value: record.kind.clone(),
-                            },
-                        )
-                    })?;
-                    Ok(ProviderMessage {
-                        role,
-                        content: record.content,
-                    })
-                })
-                .collect::<Result<Vec<_>, _>>()?,
-            max_output_tokens: Some(512),
-            stream: ProviderStreamMode::Disabled,
-        };
-
-        let response = match provider.complete(&request) {
+        let response = match self.execute_provider_turn_loop(
+            store,
+            provider,
+            &session.id,
+            session.prompt_override.clone(),
+            &mut run,
+            now,
+        ) {
             Ok(response) => response,
             Err(source) => {
-                run.fail(source.to_string(), now)
-                    .map_err(ExecutionError::RunTransition)?;
-                store
-                    .put_run(
-                        &RunRecord::try_from(run.snapshot())
-                            .map_err(ExecutionError::RecordConversion)?,
-                    )
-                    .map_err(ExecutionError::Store)?;
-                return Err(ExecutionError::Provider(source));
+                if !matches!(
+                    source,
+                    ExecutionError::PermissionDenied { .. }
+                        | ExecutionError::ApprovalRequired { .. }
+                ) {
+                    run.fail(source.to_string(), now)
+                        .map_err(ExecutionError::RunTransition)?;
+                    self.persist_run(store, &run)?;
+                }
+                return Err(source);
             }
         };
 
-        run.begin_provider_stream(&response.response_id, &response.model, now)
-            .map_err(ExecutionError::RunTransition)?;
-        run.push_provider_text(&response.output_text, now)
-            .map_err(ExecutionError::RunTransition)?;
-        run.finish_provider_stream(now)
-            .map_err(ExecutionError::RunTransition)?;
         run.complete(&response.output_text, now)
             .map_err(ExecutionError::RunTransition)?;
-        store
-            .put_run(
-                &RunRecord::try_from(run.snapshot()).map_err(ExecutionError::RecordConversion)?,
-            )
-            .map_err(ExecutionError::Store)?;
+        self.persist_run(store, &run)?;
 
         let assistant_entry = TranscriptEntry::assistant(
             format!("transcript-chat-{session_id}-{now}-02-assistant"),
@@ -844,7 +1054,18 @@ impl fmt::Display for ExecutionError {
                     "execution permission denied for {tool}: {reason}"
                 )
             }
+            Self::ApprovalRequired {
+                tool,
+                approval_id,
+                reason,
+            } => write!(
+                formatter,
+                "execution approval required for {tool} ({approval_id}): {reason}"
+            ),
             Self::Provider(source) => write!(formatter, "execution provider error: {source}"),
+            Self::ProviderLoop { reason } => {
+                write!(formatter, "execution provider loop error: {reason}")
+            }
             Self::RecordConversion(source) => {
                 write!(formatter, "execution record conversion error: {source}")
             }
@@ -852,6 +1073,12 @@ impl fmt::Display for ExecutionError {
                 write!(formatter, "execution run transition error: {source}")
             }
             Self::Store(source) => write!(formatter, "execution store error: {source}"),
+            Self::ToolCallParse { name, reason } => {
+                write!(
+                    formatter,
+                    "execution failed to parse tool call {name}: {reason}"
+                )
+            }
             Self::Tool(source) => write!(formatter, "execution tool error: {source}"),
         }
     }
@@ -870,6 +1097,9 @@ impl Error for ExecutionError {
             | Self::MissingRun { .. }
             | Self::MissingSession { .. }
             | Self::PermissionDenied { .. }
+            | Self::ApprovalRequired { .. }
+            | Self::ProviderLoop { .. }
+            | Self::ToolCallParse { .. }
             | Self::UnsupportedJobInput { .. } => None,
         }
     }
