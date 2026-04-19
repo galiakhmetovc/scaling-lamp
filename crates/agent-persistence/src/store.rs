@@ -75,6 +75,11 @@ type TranscriptRow = (
     i64,
 );
 
+const DEFAULT_MISSION_EXECUTION_INTENT: &str = "autonomous";
+const DEFAULT_MISSION_SCHEDULE_JSON: &str = r#"{"not_before":null,"interval_seconds":null}"#;
+const DEFAULT_MISSION_ACCEPTANCE_JSON: &str = "[]";
+const LEGACY_MISSION_PREFIX: &str = "legacy-mission-";
+
 impl fmt::Display for StoreError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -250,12 +255,16 @@ impl MissionRepository for PersistenceStore {
     fn put_mission(&self, record: &MissionRecord) -> Result<(), StoreError> {
         self.connection.execute(
             "INSERT INTO missions (
-                id, session_id, objective, status, created_at, updated_at, completed_at
-             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+                id, session_id, objective, status, execution_intent, schedule_json, acceptance_json,
+                created_at, updated_at, completed_at
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
              ON CONFLICT(id) DO UPDATE SET
                 session_id = excluded.session_id,
                 objective = excluded.objective,
                 status = excluded.status,
+                execution_intent = excluded.execution_intent,
+                schedule_json = excluded.schedule_json,
+                acceptance_json = excluded.acceptance_json,
                 created_at = excluded.created_at,
                 updated_at = excluded.updated_at,
                 completed_at = excluded.completed_at",
@@ -264,6 +273,9 @@ impl MissionRepository for PersistenceStore {
                 record.session_id,
                 record.objective,
                 record.status,
+                record.execution_intent,
+                record.schedule_json,
+                record.acceptance_json,
                 record.created_at,
                 record.updated_at,
                 record.completed_at
@@ -275,7 +287,8 @@ impl MissionRepository for PersistenceStore {
     fn get_mission(&self, id: &str) -> Result<Option<MissionRecord>, StoreError> {
         self.connection
             .query_row(
-                "SELECT id, session_id, objective, status, created_at, updated_at, completed_at
+                "SELECT id, session_id, objective, status, execution_intent, schedule_json,
+                        acceptance_json, created_at, updated_at, completed_at
                  FROM missions WHERE id = ?1",
                 [id],
                 |row| {
@@ -284,9 +297,12 @@ impl MissionRepository for PersistenceStore {
                         session_id: row.get(1)?,
                         objective: row.get(2)?,
                         status: row.get(3)?,
-                        created_at: row.get(4)?,
-                        updated_at: row.get(5)?,
-                        completed_at: row.get(6)?,
+                        execution_intent: row.get(4)?,
+                        schedule_json: row.get(5)?,
+                        acceptance_json: row.get(6)?,
+                        created_at: row.get(7)?,
+                        updated_at: row.get(8)?,
+                        completed_at: row.get(9)?,
                     })
                 },
             )
@@ -354,10 +370,11 @@ impl JobRepository for PersistenceStore {
     fn put_job(&self, record: &JobRecord) -> Result<(), StoreError> {
         self.connection.execute(
             "INSERT INTO jobs (
-                id, run_id, parent_job_id, kind, status, input_json, result_json, error,
+                id, mission_id, run_id, parent_job_id, kind, status, input_json, result_json, error,
                 created_at, updated_at, started_at, finished_at
-             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)
              ON CONFLICT(id) DO UPDATE SET
+                mission_id = excluded.mission_id,
                 run_id = excluded.run_id,
                 parent_job_id = excluded.parent_job_id,
                 kind = excluded.kind,
@@ -371,6 +388,7 @@ impl JobRepository for PersistenceStore {
                 finished_at = excluded.finished_at",
             params![
                 record.id,
+                record.mission_id,
                 record.run_id,
                 record.parent_job_id,
                 record.kind,
@@ -390,24 +408,25 @@ impl JobRepository for PersistenceStore {
     fn get_job(&self, id: &str) -> Result<Option<JobRecord>, StoreError> {
         self.connection
             .query_row(
-                "SELECT id, run_id, parent_job_id, kind, status, input_json, result_json, error,
-                        created_at, updated_at, started_at, finished_at
+                "SELECT id, mission_id, run_id, parent_job_id, kind, status, input_json,
+                        result_json, error, created_at, updated_at, started_at, finished_at
                  FROM jobs WHERE id = ?1",
                 [id],
                 |row| {
                     Ok(JobRecord {
                         id: row.get(0)?,
-                        run_id: row.get(1)?,
-                        parent_job_id: row.get(2)?,
-                        kind: row.get(3)?,
-                        status: row.get(4)?,
-                        input_json: row.get(5)?,
-                        result_json: row.get(6)?,
-                        error: row.get(7)?,
-                        created_at: row.get(8)?,
-                        updated_at: row.get(9)?,
-                        started_at: row.get(10)?,
-                        finished_at: row.get(11)?,
+                        mission_id: row.get(1)?,
+                        run_id: row.get(2)?,
+                        parent_job_id: row.get(3)?,
+                        kind: row.get(4)?,
+                        status: row.get(5)?,
+                        input_json: row.get(6)?,
+                        result_json: row.get(7)?,
+                        error: row.get(8)?,
+                        created_at: row.get(9)?,
+                        updated_at: row.get(10)?,
+                        started_at: row.get(11)?,
+                        finished_at: row.get(12)?,
                     })
                 },
             )
@@ -657,6 +676,9 @@ fn bootstrap_schema(connection: &Connection) -> Result<(), StoreError> {
              session_id TEXT NOT NULL,
              objective TEXT NOT NULL,
              status TEXT NOT NULL,
+             execution_intent TEXT NOT NULL,
+             schedule_json TEXT NOT NULL,
+             acceptance_json TEXT NOT NULL,
              created_at INTEGER NOT NULL,
              updated_at INTEGER NOT NULL,
              completed_at INTEGER,
@@ -679,7 +701,8 @@ fn bootstrap_schema(connection: &Connection) -> Result<(), StoreError> {
 
          CREATE TABLE IF NOT EXISTS jobs (
              id TEXT PRIMARY KEY,
-             run_id TEXT NOT NULL,
+             mission_id TEXT NOT NULL,
+             run_id TEXT,
              parent_job_id TEXT,
              kind TEXT NOT NULL,
              status TEXT NOT NULL,
@@ -690,7 +713,8 @@ fn bootstrap_schema(connection: &Connection) -> Result<(), StoreError> {
              updated_at INTEGER NOT NULL,
              started_at INTEGER,
              finished_at INTEGER,
-             FOREIGN KEY(run_id) REFERENCES runs(id) ON DELETE CASCADE,
+             FOREIGN KEY(mission_id) REFERENCES missions(id) ON DELETE CASCADE,
+             FOREIGN KEY(run_id) REFERENCES runs(id) ON DELETE SET NULL,
              FOREIGN KEY(parent_job_id) REFERENCES jobs(id) ON DELETE SET NULL
          );
 
@@ -717,11 +741,16 @@ fn bootstrap_schema(connection: &Connection) -> Result<(), StoreError> {
              sha256 TEXT NOT NULL,
              created_at INTEGER NOT NULL,
              FOREIGN KEY(session_id) REFERENCES sessions(id) ON DELETE CASCADE
-         );
+         );",
+    )?;
 
-         CREATE INDEX IF NOT EXISTS idx_missions_session_id ON missions(session_id);
+    migrate_schema(connection)?;
+
+    connection.execute_batch(
+        "CREATE INDEX IF NOT EXISTS idx_missions_session_id ON missions(session_id);
          CREATE INDEX IF NOT EXISTS idx_runs_session_id ON runs(session_id);
          CREATE INDEX IF NOT EXISTS idx_runs_mission_id ON runs(mission_id);
+         CREATE INDEX IF NOT EXISTS idx_jobs_mission_id ON jobs(mission_id);
          CREATE INDEX IF NOT EXISTS idx_jobs_run_id ON jobs(run_id);
          CREATE INDEX IF NOT EXISTS idx_jobs_parent_job_id ON jobs(parent_job_id);
          CREATE INDEX IF NOT EXISTS idx_transcripts_session_id ON transcripts(session_id);
@@ -733,6 +762,10 @@ fn bootstrap_schema(connection: &Connection) -> Result<(), StoreError> {
 }
 
 fn validate_schema(connection: &Connection) -> Result<(), StoreError> {
+    validate_column(connection, "missions", "execution_intent", true)?;
+    validate_column(connection, "missions", "schedule_json", true)?;
+    validate_column(connection, "missions", "acceptance_json", true)?;
+    validate_column(connection, "jobs", "mission_id", true)?;
     validate_column(connection, "sessions", "settings_json", true)?;
     validate_column(connection, "runs", "result", false)?;
     validate_column(connection, "transcripts", "sha256", true)?;
@@ -740,6 +773,7 @@ fn validate_schema(connection: &Connection) -> Result<(), StoreError> {
     validate_column(connection, "artifacts", "metadata_json", true)?;
     validate_column(connection, "artifacts", "sha256", true)?;
     validate_foreign_key(connection, "artifacts", "session_id", "sessions", "CASCADE")?;
+    validate_foreign_key(connection, "jobs", "mission_id", "missions", "CASCADE")?;
     validate_foreign_key(
         connection,
         "sessions",
@@ -747,6 +781,29 @@ fn validate_schema(connection: &Connection) -> Result<(), StoreError> {
         "missions",
         "SET NULL",
     )?;
+    Ok(())
+}
+
+fn migrate_schema(connection: &Connection) -> Result<(), StoreError> {
+    add_column_if_missing(
+        connection,
+        "missions",
+        "execution_intent",
+        "TEXT NOT NULL DEFAULT 'autonomous'",
+    )?;
+    add_column_if_missing(
+        connection,
+        "missions",
+        "schedule_json",
+        "TEXT NOT NULL DEFAULT '{\"not_before\":null,\"interval_seconds\":null}'",
+    )?;
+    add_column_if_missing(
+        connection,
+        "missions",
+        "acceptance_json",
+        "TEXT NOT NULL DEFAULT '[]'",
+    )?;
+    migrate_jobs_table(connection)?;
     Ok(())
 }
 
@@ -774,6 +831,113 @@ fn validate_identifier(id: &str) -> Result<(), StoreError> {
             reason: "must use only ascii letters, digits, hyphen, or underscore",
         });
     }
+
+    Ok(())
+}
+
+fn add_column_if_missing(
+    connection: &Connection,
+    table: &'static str,
+    column: &'static str,
+    definition: &'static str,
+) -> Result<(), StoreError> {
+    if table_has_column(connection, table, column)? {
+        return Ok(());
+    }
+
+    connection.execute_batch(&format!(
+        "ALTER TABLE {table} ADD COLUMN {column} {definition};"
+    ))?;
+    Ok(())
+}
+
+fn migrate_jobs_table(connection: &Connection) -> Result<(), StoreError> {
+    if !table_exists(connection, "jobs")? {
+        return Ok(());
+    }
+
+    if table_has_column(connection, "jobs", "mission_id")?
+        && foreign_key_exists(connection, "jobs", "mission_id", "missions", "CASCADE")?
+        && foreign_key_exists(connection, "jobs", "run_id", "runs", "SET NULL")?
+    {
+        return Ok(());
+    }
+
+    connection.execute_batch(&format!(
+        "PRAGMA foreign_keys = OFF;
+         BEGIN IMMEDIATE;
+         ALTER TABLE jobs RENAME TO jobs_legacy;
+         INSERT OR IGNORE INTO missions (
+             id, session_id, objective, status, execution_intent, schedule_json, acceptance_json,
+             created_at, updated_at, completed_at
+         )
+         SELECT DISTINCT
+             '{LEGACY_MISSION_PREFIX}' || runs.id,
+             runs.session_id,
+             'Recovered legacy mission for run ' || runs.id,
+             CASE
+                 WHEN runs.finished_at IS NULL THEN 'ready'
+                 ELSE 'completed'
+             END,
+             '{DEFAULT_MISSION_EXECUTION_INTENT}',
+             '{DEFAULT_MISSION_SCHEDULE_JSON}',
+             '{DEFAULT_MISSION_ACCEPTANCE_JSON}',
+             runs.started_at,
+             runs.updated_at,
+             runs.finished_at
+         FROM jobs_legacy
+         INNER JOIN runs ON runs.id = jobs_legacy.run_id
+         WHERE runs.mission_id IS NULL;
+         UPDATE runs
+         SET mission_id = '{LEGACY_MISSION_PREFIX}' || id
+         WHERE mission_id IS NULL
+           AND EXISTS (
+               SELECT 1
+               FROM jobs_legacy
+               WHERE jobs_legacy.run_id = runs.id
+           );
+         CREATE TABLE jobs (
+             id TEXT PRIMARY KEY,
+             mission_id TEXT NOT NULL,
+             run_id TEXT,
+             parent_job_id TEXT,
+             kind TEXT NOT NULL,
+             status TEXT NOT NULL,
+             input_json TEXT,
+             result_json TEXT,
+             error TEXT,
+             created_at INTEGER NOT NULL,
+             updated_at INTEGER NOT NULL,
+             started_at INTEGER,
+             finished_at INTEGER,
+             FOREIGN KEY(mission_id) REFERENCES missions(id) ON DELETE CASCADE,
+             FOREIGN KEY(run_id) REFERENCES runs(id) ON DELETE SET NULL,
+             FOREIGN KEY(parent_job_id) REFERENCES jobs(id) ON DELETE SET NULL
+         );
+         INSERT INTO jobs (
+             id, mission_id, run_id, parent_job_id, kind, status, input_json, result_json, error,
+             created_at, updated_at, started_at, finished_at
+         )
+         SELECT
+             jobs_legacy.id,
+             COALESCE(runs.mission_id, '{LEGACY_MISSION_PREFIX}' || runs.id),
+             jobs_legacy.run_id,
+             jobs_legacy.parent_job_id,
+             jobs_legacy.kind,
+             jobs_legacy.status,
+             jobs_legacy.input_json,
+             jobs_legacy.result_json,
+             jobs_legacy.error,
+             jobs_legacy.created_at,
+             jobs_legacy.updated_at,
+             jobs_legacy.started_at,
+             jobs_legacy.finished_at
+         FROM jobs_legacy
+         INNER JOIN runs ON runs.id = jobs_legacy.run_id;
+         DROP TABLE jobs_legacy;
+         COMMIT;
+         PRAGMA foreign_keys = ON;"
+    ))?;
 
     Ok(())
 }
@@ -861,13 +1025,43 @@ fn validate_column(
     })
 }
 
-fn validate_foreign_key(
+fn table_exists(connection: &Connection, table: &'static str) -> Result<bool, StoreError> {
+    connection
+        .query_row(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?1",
+            [table],
+            |_row| Ok(()),
+        )
+        .optional()
+        .map(|row| row.is_some())
+        .map_err(StoreError::Sqlite)
+}
+
+fn table_has_column(
+    connection: &Connection,
+    table: &'static str,
+    column: &'static str,
+) -> Result<bool, StoreError> {
+    let mut statement = connection.prepare(&format!("PRAGMA table_info({table})"))?;
+    let mut rows = statement.query([])?;
+
+    while let Some(row) = rows.next()? {
+        let name: String = row.get(1)?;
+        if name == column {
+            return Ok(true);
+        }
+    }
+
+    Ok(false)
+}
+
+fn foreign_key_exists(
     connection: &Connection,
     table: &'static str,
     from_column: &'static str,
     target_table: &'static str,
     on_delete: &'static str,
-) -> Result<(), StoreError> {
+) -> Result<bool, StoreError> {
     let mut statement = connection.prepare(&format!("PRAGMA foreign_key_list({table})"))?;
     let mut rows = statement.query([])?;
 
@@ -877,8 +1071,22 @@ fn validate_foreign_key(
         let fk_on_delete: String = row.get(6)?;
 
         if fk_table == target_table && fk_from == from_column && fk_on_delete == on_delete {
-            return Ok(());
+            return Ok(true);
         }
+    }
+
+    Ok(false)
+}
+
+fn validate_foreign_key(
+    connection: &Connection,
+    table: &'static str,
+    from_column: &'static str,
+    target_table: &'static str,
+    on_delete: &'static str,
+) -> Result<(), StoreError> {
+    if foreign_key_exists(connection, table, from_column, target_table, on_delete)? {
+        return Ok(());
     }
 
     Err(StoreError::SchemaMismatch {
@@ -1100,11 +1308,16 @@ fn read_binary_payload(path: &Path) -> Result<Vec<u8>, StoreError> {
 
 #[cfg(test)]
 mod tests {
+    use super::{
+        DEFAULT_MISSION_ACCEPTANCE_JSON, DEFAULT_MISSION_EXECUTION_INTENT,
+        DEFAULT_MISSION_SCHEDULE_JSON, LEGACY_MISSION_PREFIX,
+    };
     use crate::{
         ArtifactRecord, ArtifactRepository, JobRecord, JobRepository, MissionRecord,
         MissionRepository, PersistenceScaffold, RunRecord, RunRepository, SessionRecord,
         SessionRepository, TranscriptRecord, TranscriptRepository,
     };
+    use agent_runtime::mission::JobExecutionInput;
     use std::fs;
     use std::path::PathBuf;
 
@@ -1129,6 +1342,9 @@ mod tests {
             session_id: session.id.clone(),
             objective: "Build stores".to_string(),
             status: "running".to_string(),
+            execution_intent: "autonomous".to_string(),
+            schedule_json: "{\"not_before\":null,\"interval_seconds\":null}".to_string(),
+            acceptance_json: "[]".to_string(),
             created_at: 2,
             updated_at: 3,
             completed_at: None,
@@ -1146,11 +1362,17 @@ mod tests {
         };
         let job = JobRecord {
             id: "job-1".to_string(),
-            run_id: run.id.clone(),
+            mission_id: mission.id.clone(),
+            run_id: Some(run.id.clone()),
             parent_job_id: None,
-            kind: "bootstrap".to_string(),
+            kind: "maintenance".to_string(),
             status: "queued".to_string(),
-            input_json: Some("{\"step\":1}".to_string()),
+            input_json: Some(
+                serde_json::to_string(&JobExecutionInput::Maintenance {
+                    summary: "bootstrap schema".to_string(),
+                })
+                .expect("serialize maintenance input"),
+            ),
             result_json: None,
             error: None,
             created_at: 4,
@@ -1231,6 +1453,188 @@ mod tests {
             Some(artifact)
         );
         assert!(scaffold.stores.metadata_db.exists());
+    }
+
+    #[test]
+    fn open_migrates_legacy_mission_and_job_schema() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let scaffold = PersistenceScaffold::from_config(crate::AppConfig {
+            data_dir: temp.path().join("state-root"),
+        });
+
+        fs::create_dir_all(
+            scaffold
+                .stores
+                .metadata_db
+                .parent()
+                .unwrap_or(scaffold.stores.metadata_db.as_path()),
+        )
+        .expect("create db dir");
+
+        let connection =
+            rusqlite::Connection::open(&scaffold.stores.metadata_db).expect("open sqlite");
+        connection
+            .execute_batch(
+                "PRAGMA foreign_keys = ON;
+                 CREATE TABLE sessions (
+                     id TEXT PRIMARY KEY,
+                     title TEXT NOT NULL,
+                     prompt_override TEXT,
+                     settings_json TEXT NOT NULL,
+                     active_mission_id TEXT,
+                     created_at INTEGER NOT NULL,
+                     updated_at INTEGER NOT NULL,
+                     FOREIGN KEY(active_mission_id) REFERENCES missions(id) ON DELETE SET NULL
+                 );
+                 CREATE TABLE missions (
+                     id TEXT PRIMARY KEY,
+                     session_id TEXT NOT NULL,
+                     objective TEXT NOT NULL,
+                     status TEXT NOT NULL,
+                     created_at INTEGER NOT NULL,
+                     updated_at INTEGER NOT NULL,
+                     completed_at INTEGER,
+                     FOREIGN KEY(session_id) REFERENCES sessions(id) ON DELETE CASCADE
+                 );
+                 CREATE TABLE runs (
+                     id TEXT PRIMARY KEY,
+                     session_id TEXT NOT NULL,
+                     mission_id TEXT,
+                     status TEXT NOT NULL,
+                     error TEXT,
+                     result TEXT,
+                     started_at INTEGER NOT NULL,
+                     updated_at INTEGER NOT NULL,
+                     finished_at INTEGER,
+                     FOREIGN KEY(session_id) REFERENCES sessions(id) ON DELETE CASCADE,
+                     FOREIGN KEY(mission_id) REFERENCES missions(id) ON DELETE SET NULL
+                 );
+                 CREATE TABLE jobs (
+                     id TEXT PRIMARY KEY,
+                     run_id TEXT NOT NULL,
+                     parent_job_id TEXT,
+                     kind TEXT NOT NULL,
+                     status TEXT NOT NULL,
+                     input_json TEXT,
+                     result_json TEXT,
+                     error TEXT,
+                     created_at INTEGER NOT NULL,
+                     updated_at INTEGER NOT NULL,
+                     started_at INTEGER,
+                     finished_at INTEGER,
+                     FOREIGN KEY(run_id) REFERENCES runs(id) ON DELETE CASCADE,
+                     FOREIGN KEY(parent_job_id) REFERENCES jobs(id) ON DELETE SET NULL
+                 );
+                 INSERT INTO sessions (
+                     id, title, prompt_override, settings_json, active_mission_id, created_at, updated_at
+                 ) VALUES (
+                     'session-1', 'Legacy mission', NULL, '{\"model\":\"gpt-5.4\"}', NULL, 1, 1
+                 );
+                 INSERT INTO missions (
+                     id, session_id, objective, status, created_at, updated_at, completed_at
+                 ) VALUES (
+                     'mission-1', 'session-1', 'Carry forward existing missions', 'ready', 2, 2, NULL
+                 );
+                 INSERT INTO runs (
+                     id, session_id, mission_id, status, error, result, started_at, updated_at, finished_at
+                 ) VALUES (
+                     'run-1', 'session-1', NULL, 'running', NULL, NULL, 3, 4, NULL
+                 );
+                 INSERT INTO jobs (
+                     id, run_id, parent_job_id, kind, status, input_json, result_json, error,
+                     created_at, updated_at, started_at, finished_at
+                 ) VALUES (
+                     'job-1',
+                     'run-1',
+                     NULL,
+                     'maintenance',
+                     'queued',
+                     '{\"Maintenance\":{\"summary\":\"legacy bootstrap\"}}',
+                     NULL,
+                     NULL,
+                     4,
+                     5,
+                     NULL,
+                     NULL
+                 );",
+            )
+            .expect("create legacy schema");
+        drop(connection);
+
+        let reopened = super::PersistenceStore::open(&scaffold).expect("migrate legacy schema");
+
+        assert_eq!(
+            reopened
+                .get_mission("mission-1")
+                .expect("get migrated mission"),
+            Some(MissionRecord {
+                id: "mission-1".to_string(),
+                session_id: "session-1".to_string(),
+                objective: "Carry forward existing missions".to_string(),
+                status: "ready".to_string(),
+                execution_intent: DEFAULT_MISSION_EXECUTION_INTENT.to_string(),
+                schedule_json: DEFAULT_MISSION_SCHEDULE_JSON.to_string(),
+                acceptance_json: DEFAULT_MISSION_ACCEPTANCE_JSON.to_string(),
+                created_at: 2,
+                updated_at: 2,
+                completed_at: None,
+            })
+        );
+
+        assert_eq!(
+            reopened.get_run("run-1").expect("get migrated run"),
+            Some(RunRecord {
+                id: "run-1".to_string(),
+                session_id: "session-1".to_string(),
+                mission_id: Some(format!("{LEGACY_MISSION_PREFIX}run-1")),
+                status: "running".to_string(),
+                error: None,
+                result: None,
+                started_at: 3,
+                updated_at: 4,
+                finished_at: None,
+            })
+        );
+        assert_eq!(
+            reopened.get_job("job-1").expect("get migrated job"),
+            Some(JobRecord {
+                id: "job-1".to_string(),
+                mission_id: format!("{LEGACY_MISSION_PREFIX}run-1"),
+                run_id: Some("run-1".to_string()),
+                parent_job_id: None,
+                kind: "maintenance".to_string(),
+                status: "queued".to_string(),
+                input_json: Some(
+                    serde_json::to_string(&JobExecutionInput::Maintenance {
+                        summary: "legacy bootstrap".to_string(),
+                    })
+                    .expect("serialize maintenance input"),
+                ),
+                result_json: None,
+                error: None,
+                created_at: 4,
+                updated_at: 5,
+                started_at: None,
+                finished_at: None,
+            })
+        );
+        assert_eq!(
+            reopened
+                .get_mission(&format!("{LEGACY_MISSION_PREFIX}run-1"))
+                .expect("get synthesized mission"),
+            Some(MissionRecord {
+                id: format!("{LEGACY_MISSION_PREFIX}run-1"),
+                session_id: "session-1".to_string(),
+                objective: "Recovered legacy mission for run run-1".to_string(),
+                status: "ready".to_string(),
+                execution_intent: DEFAULT_MISSION_EXECUTION_INTENT.to_string(),
+                schedule_json: DEFAULT_MISSION_SCHEDULE_JSON.to_string(),
+                acceptance_json: DEFAULT_MISSION_ACCEPTANCE_JSON.to_string(),
+                created_at: 3,
+                updated_at: 4,
+                completed_at: None,
+            })
+        );
     }
 
     #[test]

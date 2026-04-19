@@ -1,3 +1,8 @@
+use agent_runtime::mission::{
+    JobKind, JobKindParseError, JobResult, JobSpec, JobSpecValidationError, JobStatus,
+    JobStatusParseError, MissionExecutionIntent, MissionExecutionIntentParseError, MissionSchedule,
+    MissionSpec, MissionStatus, MissionStatusParseError,
+};
 use agent_runtime::run::{RunSnapshot, RunStatus, RunStatusParseError};
 use agent_runtime::session::{
     MessageRole, PromptOverride, Session, SessionError, SessionSettings, TranscriptEntry,
@@ -22,6 +27,9 @@ pub struct MissionRecord {
     pub session_id: String,
     pub objective: String,
     pub status: String,
+    pub execution_intent: String,
+    pub schedule_json: String,
+    pub acceptance_json: String,
     pub created_at: i64,
     pub updated_at: i64,
     pub completed_at: Option<i64>,
@@ -43,7 +51,8 @@ pub struct RunRecord {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct JobRecord {
     pub id: String,
-    pub run_id: String,
+    pub mission_id: String,
+    pub run_id: Option<String>,
     pub parent_job_id: Option<String>,
     pub kind: String,
     pub status: String,
@@ -79,10 +88,24 @@ pub struct ArtifactRecord {
 
 #[derive(Debug)]
 pub enum RecordConversionError {
+    InvalidJobInput(serde_json::Error),
+    InvalidJobKind(JobKindParseError),
+    InvalidJobResult(serde_json::Error),
+    InvalidJobSpec(JobSpecValidationError),
+    InvalidJobStatus(JobStatusParseError),
     InvalidMessageRole { value: String },
+    InvalidMissionAcceptance(serde_json::Error),
+    InvalidMissionExecutionIntent(MissionExecutionIntentParseError),
+    InvalidMissionSchedule(serde_json::Error),
+    InvalidMissionStatus(MissionStatusParseError),
+    MissingJobInput,
     InvalidPromptOverride(SessionError),
     InvalidRunStatus(RunStatusParseError),
     InvalidSessionSettings(serde_json::Error),
+    SerializeJobInput(serde_json::Error),
+    SerializeJobResult(serde_json::Error),
+    SerializeMissionAcceptance(serde_json::Error),
+    SerializeMissionSchedule(serde_json::Error),
     SerializeSessionSettings(serde_json::Error),
 }
 
@@ -128,6 +151,50 @@ impl TryFrom<SessionRecord> for Session {
             active_mission_id: record.active_mission_id,
             created_at: record.created_at,
             updated_at: record.updated_at,
+        })
+    }
+}
+
+impl TryFrom<&MissionSpec> for MissionRecord {
+    type Error = RecordConversionError;
+
+    fn try_from(mission: &MissionSpec) -> Result<Self, Self::Error> {
+        Ok(Self {
+            id: mission.id.clone(),
+            session_id: mission.session_id.clone(),
+            objective: mission.objective.clone(),
+            status: mission.status.as_str().to_string(),
+            execution_intent: mission.execution_intent.as_str().to_string(),
+            schedule_json: serde_json::to_string(&mission.schedule)
+                .map_err(RecordConversionError::SerializeMissionSchedule)?,
+            acceptance_json: serde_json::to_string(&mission.acceptance_criteria)
+                .map_err(RecordConversionError::SerializeMissionAcceptance)?,
+            created_at: mission.created_at,
+            updated_at: mission.updated_at,
+            completed_at: mission.completed_at,
+        })
+    }
+}
+
+impl TryFrom<MissionRecord> for MissionSpec {
+    type Error = RecordConversionError;
+
+    fn try_from(record: MissionRecord) -> Result<Self, Self::Error> {
+        Ok(Self {
+            id: record.id,
+            session_id: record.session_id,
+            objective: record.objective,
+            status: MissionStatus::try_from(record.status.as_str())
+                .map_err(RecordConversionError::InvalidMissionStatus)?,
+            execution_intent: MissionExecutionIntent::try_from(record.execution_intent.as_str())
+                .map_err(RecordConversionError::InvalidMissionExecutionIntent)?,
+            schedule: serde_json::from_str::<MissionSchedule>(&record.schedule_json)
+                .map_err(RecordConversionError::InvalidMissionSchedule)?,
+            acceptance_criteria: serde_json::from_str(&record.acceptance_json)
+                .map_err(RecordConversionError::InvalidMissionAcceptance)?,
+            created_at: record.created_at,
+            updated_at: record.updated_at,
+            completed_at: record.completed_at,
         })
     }
 }
@@ -204,12 +271,102 @@ impl TryFrom<TranscriptRecord> for TranscriptEntry {
     }
 }
 
+impl TryFrom<&JobSpec> for JobRecord {
+    type Error = RecordConversionError;
+
+    fn try_from(job: &JobSpec) -> Result<Self, Self::Error> {
+        job.validate()
+            .map_err(RecordConversionError::InvalidJobSpec)?;
+        Ok(Self {
+            id: job.id.clone(),
+            mission_id: job.mission_id.clone(),
+            run_id: job.run_id.clone(),
+            parent_job_id: job.parent_job_id.clone(),
+            kind: job.kind.as_str().to_string(),
+            status: job.status.as_str().to_string(),
+            input_json: Some(
+                serde_json::to_string(&job.input)
+                    .map_err(RecordConversionError::SerializeJobInput)?,
+            ),
+            result_json: job
+                .result
+                .as_ref()
+                .map(serde_json::to_string)
+                .transpose()
+                .map_err(RecordConversionError::SerializeJobResult)?,
+            error: job.error.clone(),
+            created_at: job.created_at,
+            updated_at: job.updated_at,
+            started_at: job.started_at,
+            finished_at: job.finished_at,
+        })
+    }
+}
+
+impl TryFrom<JobRecord> for JobSpec {
+    type Error = RecordConversionError;
+
+    fn try_from(record: JobRecord) -> Result<Self, Self::Error> {
+        let job = Self {
+            id: record.id,
+            mission_id: record.mission_id,
+            run_id: record.run_id,
+            parent_job_id: record.parent_job_id,
+            kind: JobKind::try_from(record.kind.as_str())
+                .map_err(RecordConversionError::InvalidJobKind)?,
+            status: JobStatus::try_from(record.status.as_str())
+                .map_err(RecordConversionError::InvalidJobStatus)?,
+            input: serde_json::from_str(
+                record
+                    .input_json
+                    .as_deref()
+                    .ok_or(RecordConversionError::MissingJobInput)?,
+            )
+            .map_err(RecordConversionError::InvalidJobInput)?,
+            result: record
+                .result_json
+                .as_deref()
+                .map(serde_json::from_str::<JobResult>)
+                .transpose()
+                .map_err(RecordConversionError::InvalidJobResult)?,
+            error: record.error,
+            created_at: record.created_at,
+            updated_at: record.updated_at,
+            started_at: record.started_at,
+            finished_at: record.finished_at,
+        };
+        job.validate()
+            .map_err(RecordConversionError::InvalidJobSpec)?;
+        Ok(job)
+    }
+}
+
 impl fmt::Display for RecordConversionError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::InvalidJobInput(source) => write!(formatter, "invalid job input: {source}"),
+            Self::InvalidJobKind(source) => write!(formatter, "invalid job kind: {source}"),
+            Self::InvalidJobResult(source) => write!(formatter, "invalid job result: {source}"),
+            Self::InvalidJobSpec(source) => {
+                write!(formatter, "invalid job specification: {source}")
+            }
+            Self::InvalidJobStatus(source) => write!(formatter, "invalid job status: {source}"),
             Self::InvalidMessageRole { value } => {
                 write!(formatter, "invalid transcript role {value}")
             }
+            Self::InvalidMissionAcceptance(source) => {
+                write!(formatter, "invalid mission acceptance criteria: {source}")
+            }
+            Self::InvalidMissionExecutionIntent(source) => {
+                write!(formatter, "invalid mission execution intent: {source}")
+            }
+            Self::InvalidMissionSchedule(source) => {
+                write!(formatter, "invalid mission schedule: {source}")
+            }
+            Self::InvalidMissionStatus(source) => {
+                write!(formatter, "invalid mission status: {source}")
+            }
+            Self::MissingJobInput => write!(formatter, "job input is missing"),
             Self::InvalidPromptOverride(source) => {
                 write!(formatter, "invalid prompt override: {source}")
             }
@@ -218,6 +375,21 @@ impl fmt::Display for RecordConversionError {
             }
             Self::InvalidSessionSettings(source) => {
                 write!(formatter, "invalid session settings: {source}")
+            }
+            Self::SerializeJobInput(source) => {
+                write!(formatter, "failed to serialize job input: {source}")
+            }
+            Self::SerializeJobResult(source) => {
+                write!(formatter, "failed to serialize job result: {source}")
+            }
+            Self::SerializeMissionAcceptance(source) => {
+                write!(
+                    formatter,
+                    "failed to serialize mission acceptance criteria: {source}"
+                )
+            }
+            Self::SerializeMissionSchedule(source) => {
+                write!(formatter, "failed to serialize mission schedule: {source}")
             }
             Self::SerializeSessionSettings(source) => {
                 write!(formatter, "failed to serialize session settings: {source}")
@@ -229,18 +401,36 @@ impl fmt::Display for RecordConversionError {
 impl Error for RecordConversionError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
+            Self::InvalidJobInput(source) => Some(source),
+            Self::InvalidJobKind(source) => Some(source),
+            Self::InvalidJobResult(source) => Some(source),
+            Self::InvalidJobSpec(source) => Some(source),
+            Self::InvalidJobStatus(source) => Some(source),
+            Self::InvalidMissionAcceptance(source) => Some(source),
+            Self::InvalidMissionExecutionIntent(source) => Some(source),
+            Self::InvalidMissionSchedule(source) => Some(source),
+            Self::InvalidMissionStatus(source) => Some(source),
             Self::InvalidPromptOverride(source) => Some(source),
             Self::InvalidRunStatus(source) => Some(source),
             Self::InvalidSessionSettings(source) => Some(source),
+            Self::SerializeJobInput(source) => Some(source),
+            Self::SerializeJobResult(source) => Some(source),
+            Self::SerializeMissionAcceptance(source) => Some(source),
+            Self::SerializeMissionSchedule(source) => Some(source),
             Self::SerializeSessionSettings(source) => Some(source),
-            Self::InvalidMessageRole { .. } => None,
+            Self::InvalidMessageRole { .. } | Self::MissingJobInput => None,
         }
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{RunRecord, SessionRecord, TranscriptRecord};
+    use super::{JobRecord, MissionRecord, RunRecord, SessionRecord, TranscriptRecord};
+    use agent_runtime::mission::{
+        AcceptanceCriterion, JobExecutionInput, JobKind, JobResult, JobSpec,
+        JobSpecValidationError, JobStatus, MissionExecutionIntent, MissionSchedule, MissionSpec,
+        MissionStatus,
+    };
     use agent_runtime::run::{RunEngine, RunSnapshot};
     use agent_runtime::session::{MessageRole, PromptOverride, Session, TranscriptEntry};
 
@@ -323,5 +513,94 @@ mod tests {
         assert_eq!(restored.status.as_str(), "completed");
         assert_eq!(restored.result.as_deref(), Some("done"));
         assert_eq!(restored.finished_at, Some(3));
+    }
+
+    #[test]
+    fn mission_records_round_trip_with_schedule_and_acceptance_criteria() {
+        let mission = MissionSpec {
+            id: "mission-1".to_string(),
+            session_id: "session-1".to_string(),
+            objective: "Ship the autonomous runtime".to_string(),
+            status: MissionStatus::Running,
+            execution_intent: MissionExecutionIntent::Scheduled,
+            schedule: MissionSchedule {
+                not_before: Some(20),
+                interval_seconds: Some(3600),
+            },
+            acceptance_criteria: vec![
+                AcceptanceCriterion::new("criterion-1", "all workspace tests pass")
+                    .expect("criterion"),
+            ],
+            created_at: 10,
+            updated_at: 11,
+            completed_at: None,
+        };
+
+        let stored = MissionRecord::try_from(&mission).expect("mission to record");
+        let restored = MissionSpec::try_from(stored).expect("record to mission");
+
+        assert_eq!(restored, mission);
+    }
+
+    #[test]
+    fn job_records_round_trip_with_typed_input_and_result() {
+        let mut job = JobSpec::mission_turn(
+            "job-1",
+            "mission-1",
+            Some("run-1"),
+            Some("job-root"),
+            "Ship the autonomous runtime",
+            30,
+        );
+        job.status = JobStatus::Completed;
+        job.result = Some(JobResult::Summary {
+            outcome: "done".to_string(),
+        });
+        job.updated_at = 31;
+        job.started_at = Some(30);
+        job.finished_at = Some(31);
+
+        let stored = JobRecord::try_from(&job).expect("job to record");
+        let restored = JobSpec::try_from(stored).expect("record to job");
+
+        assert_eq!(restored.kind, JobKind::MissionTurn);
+        assert_eq!(restored.status, JobStatus::Completed);
+        assert_eq!(restored.mission_id, "mission-1");
+        assert_eq!(restored.run_id.as_deref(), Some("run-1"));
+        assert_eq!(restored.parent_job_id.as_deref(), Some("job-root"));
+        assert_eq!(
+            restored.input,
+            JobExecutionInput::MissionTurn {
+                mission_id: "mission-1".to_string(),
+                goal: "Ship the autonomous runtime".to_string(),
+            }
+        );
+        assert_eq!(
+            restored.result,
+            Some(JobResult::Summary {
+                outcome: "done".to_string(),
+            })
+        );
+    }
+
+    #[test]
+    fn job_records_reject_mismatched_mission_turn_identifiers() {
+        let mut stored = JobRecord::try_from(&JobSpec::mission_turn(
+            "job-1",
+            "mission-1",
+            Some("run-1"),
+            None,
+            "Ship the autonomous runtime",
+            30,
+        ))
+        .expect("job to record");
+        stored.mission_id = "mission-2".to_string();
+
+        assert!(matches!(
+            JobSpec::try_from(stored),
+            Err(super::RecordConversionError::InvalidJobSpec(
+                JobSpecValidationError::MissionIdMismatch { .. }
+            ))
+        ));
     }
 }
