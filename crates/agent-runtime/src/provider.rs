@@ -123,6 +123,7 @@ pub struct ProviderResponse {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ProviderStreamEvent {
+    ReasoningDelta(String),
     TextDelta(String),
     Completed(ProviderResponse),
 }
@@ -200,11 +201,19 @@ struct OpenAiResponsesRequest<'a> {
     #[serde(skip_serializing_if = "Option::is_none")]
     previous_response_id: Option<&'a str>,
     input: Vec<OpenAiResponsesInputItem<'a>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    reasoning: Option<OpenAiResponsesReasoningConfig<'a>>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     tools: Vec<OpenAiResponsesToolDefinition<'a>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     max_output_tokens: Option<u32>,
+    stream: bool,
     store: bool,
+}
+
+#[derive(Debug, Serialize)]
+struct OpenAiResponsesReasoningConfig<'a> {
+    summary: &'a str,
 }
 
 #[derive(Debug, Serialize)]
@@ -403,6 +412,7 @@ struct ZaiChatCompletionsStreamChoice {
 #[derive(Debug, Deserialize, Default)]
 struct ZaiChatCompletionsStreamDelta {
     content: Option<String>,
+    reasoning_content: Option<String>,
     tool_calls: Option<Vec<ZaiChatCompletionsStreamToolCallDelta>>,
 }
 
@@ -437,6 +447,21 @@ struct ZaiChatCompletionsResponseStream {
     finish_reason: FinishReason,
     usage: Option<ProviderUsage>,
     done: bool,
+}
+
+#[derive(Debug)]
+struct OpenAiResponsesResponseStream {
+    reader: BufReader<reqwest::blocking::Response>,
+    pending_events: VecDeque<ProviderStreamEvent>,
+    done: bool,
+}
+
+#[derive(Debug, Deserialize)]
+struct OpenAiResponsesStreamEvent {
+    #[serde(rename = "type")]
+    event_type: String,
+    delta: Option<String>,
+    response: Option<OpenAiResponsesResponse>,
 }
 
 impl Default for ProviderDescriptor {
@@ -533,7 +558,7 @@ impl OpenAiResponsesDriver {
                 model_family: "openai".to_string(),
                 default_model: config.default_model.clone(),
                 capabilities: ModelCapabilities {
-                    supports_streaming: false,
+                    supports_streaming: true,
                     supports_text_input: true,
                     supports_tool_calls: true,
                     supports_previous_response_id: true,
@@ -610,8 +635,11 @@ impl OpenAiResponsesDriver {
             instructions: request.instructions.as_deref(),
             previous_response_id: request.previous_response_id.as_deref(),
             input,
+            reasoning: (request.stream == ProviderStreamMode::Enabled)
+                .then_some(OpenAiResponsesReasoningConfig { summary: "auto" }),
             tools,
             max_output_tokens: request.max_output_tokens,
+            stream: request.stream == ProviderStreamMode::Enabled,
             store: false,
         })
     }
@@ -734,7 +762,11 @@ impl ZaiChatCompletionsDriver {
             model,
             messages,
             thinking: ZaiThinkingConfig {
-                thinking_type: "disabled",
+                thinking_type: if request.stream == ProviderStreamMode::Enabled {
+                    "enabled"
+                } else {
+                    "disabled"
+                },
             },
             tools,
             tool_choice: (!request.tools.is_empty()).then_some("auto"),
@@ -772,70 +804,34 @@ impl ProviderDriver for OpenAiResponsesDriver {
         let response = response
             .json::<OpenAiResponsesResponse>()
             .map_err(ProviderError::Http)?;
-        let output_text = response
-            .output
-            .iter()
-            .filter(|item| item.item_type == "message")
-            .flat_map(|item| item.content.iter().flatten())
-            .filter(|item| item.item_type == "output_text")
-            .filter_map(|item| item.text.as_deref())
-            .collect::<String>();
-
-        let tool_calls = response
-            .output
-            .iter()
-            .filter(|item| item.item_type == "function_call")
-            .map(|item| {
-                Ok(ProviderToolCall {
-                    call_id: item
-                        .call_id
-                        .clone()
-                        .ok_or(ProviderError::ResponseMissingToolCallField { field: "call_id" })?,
-                    name: item
-                        .name
-                        .clone()
-                        .ok_or(ProviderError::ResponseMissingToolCallField { field: "name" })?,
-                    arguments: item.arguments.clone().ok_or(
-                        ProviderError::ResponseMissingToolCallField { field: "arguments" },
-                    )?,
-                })
-            })
-            .collect::<Result<Vec<_>, ProviderError>>()?;
-
-        if output_text.is_empty() && tool_calls.is_empty() {
-            return Err(ProviderError::ResponseMissingOutputText);
-        }
-
-        let finish_reason = if response
-            .output
-            .iter()
-            .filter(|item| item.item_type == "message")
-            .all(|item| item.status.as_deref() == Some("completed"))
-        {
-            FinishReason::Completed
-        } else {
-            FinishReason::Incomplete
-        };
-
-        Ok(ProviderResponse {
-            response_id: response.id,
-            model: response.model,
-            output_text,
-            tool_calls,
-            finish_reason,
-            usage: response.usage.map(|usage| ProviderUsage {
-                input_tokens: usage.input_tokens,
-                output_tokens: usage.output_tokens,
-                total_tokens: usage.total_tokens,
-            }),
-        })
+        openai_provider_response_from_response(response)
     }
 
     fn stream(
         &self,
-        _request: &ProviderRequest,
+        request: &ProviderRequest,
     ) -> Result<Box<dyn ProviderResponseStream>, ProviderError> {
-        Err(ProviderError::UnsupportedStreaming)
+        let model = self.resolve_model(request)?;
+        let body = self.build_request_body(request, model)?;
+        let response = self
+            .client
+            .post(self.endpoint())
+            .bearer_auth(&self.config.api_key)
+            .json(&body)
+            .send()
+            .map_err(ProviderError::Http)?;
+        let status = response.status();
+
+        if !status.is_success() {
+            let body = response.text().map_err(ProviderError::Http)?;
+            return Err(ProviderError::HttpStatus { status, body });
+        }
+
+        Ok(Box::new(OpenAiResponsesResponseStream {
+            reader: BufReader::new(response),
+            pending_events: VecDeque::new(),
+            done: false,
+        }))
     }
 }
 
@@ -915,6 +911,10 @@ impl ZaiChatCompletionsResponseStream {
                 self.pending_events
                     .push_back(ProviderStreamEvent::TextDelta(content));
             }
+            if let Some(reasoning) = choice.delta.reasoning_content {
+                self.pending_events
+                    .push_back(ProviderStreamEvent::ReasoningDelta(reasoning));
+            }
 
             if let Some(tool_calls) = choice.delta.tool_calls {
                 for tool_call in tool_calls {
@@ -949,6 +949,92 @@ impl ZaiChatCompletionsResponseStream {
         }
 
         Ok(())
+    }
+}
+
+impl OpenAiResponsesResponseStream {
+    fn parse_next_sse_payload(&mut self) -> Result<Option<String>, ProviderError> {
+        let mut payload_lines = Vec::new();
+
+        loop {
+            let mut line = String::new();
+            let bytes = self
+                .reader
+                .read_line(&mut line)
+                .map_err(ProviderError::Stream)?;
+            if bytes == 0 {
+                if payload_lines.is_empty() {
+                    return Ok(None);
+                }
+                return Ok(Some(payload_lines.join("\n")));
+            }
+
+            let trimmed = line.trim_end_matches(['\r', '\n']);
+            if trimmed.is_empty() {
+                if payload_lines.is_empty() {
+                    continue;
+                }
+                return Ok(Some(payload_lines.join("\n")));
+            }
+
+            if let Some(data) = trimmed.strip_prefix("data:") {
+                payload_lines.push(data.trim_start().to_string());
+            }
+        }
+    }
+
+    fn apply_event(&mut self, event: OpenAiResponsesStreamEvent) -> Result<(), ProviderError> {
+        match event.event_type.as_str() {
+            "response.output_text.delta" => {
+                if let Some(delta) = event.delta {
+                    self.pending_events
+                        .push_back(ProviderStreamEvent::TextDelta(delta));
+                }
+            }
+            "response.reasoning_summary_text.delta" => {
+                if let Some(delta) = event.delta {
+                    self.pending_events
+                        .push_back(ProviderStreamEvent::ReasoningDelta(delta));
+                }
+            }
+            "response.completed" | "response.incomplete" => {
+                let response = event
+                    .response
+                    .ok_or_else(|| ProviderError::ResponseMissingOutputText)?;
+                self.pending_events
+                    .push_back(ProviderStreamEvent::Completed(
+                        openai_provider_response_from_response(response)?,
+                    ));
+                self.done = true;
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+}
+
+impl ProviderResponseStream for OpenAiResponsesResponseStream {
+    fn next_event(&mut self) -> Result<Option<ProviderStreamEvent>, ProviderError> {
+        loop {
+            if let Some(event) = self.pending_events.pop_front() {
+                return Ok(Some(event));
+            }
+            if self.done {
+                return Ok(None);
+            }
+
+            let Some(payload) = self.parse_next_sse_payload()? else {
+                return Ok(None);
+            };
+            if payload == "[DONE]" {
+                self.done = true;
+                return Ok(None);
+            }
+
+            let event = serde_json::from_str::<OpenAiResponsesStreamEvent>(&payload)
+                .map_err(ProviderError::Parse)?;
+            self.apply_event(event)?;
+        }
     }
 }
 
@@ -1160,3 +1246,66 @@ impl fmt::Display for ProviderBuildError {
 }
 
 impl Error for ProviderBuildError {}
+
+fn openai_provider_response_from_response(
+    response: OpenAiResponsesResponse,
+) -> Result<ProviderResponse, ProviderError> {
+    let output_text = response
+        .output
+        .iter()
+        .filter(|item| item.item_type == "message")
+        .flat_map(|item| item.content.iter().flatten())
+        .filter(|item| item.item_type == "output_text")
+        .filter_map(|item| item.text.as_deref())
+        .collect::<String>();
+
+    let tool_calls = response
+        .output
+        .iter()
+        .filter(|item| item.item_type == "function_call")
+        .map(|item| {
+            Ok(ProviderToolCall {
+                call_id: item
+                    .call_id
+                    .clone()
+                    .ok_or(ProviderError::ResponseMissingToolCallField { field: "call_id" })?,
+                name: item
+                    .name
+                    .clone()
+                    .ok_or(ProviderError::ResponseMissingToolCallField { field: "name" })?,
+                arguments: item
+                    .arguments
+                    .clone()
+                    .ok_or(ProviderError::ResponseMissingToolCallField { field: "arguments" })?,
+            })
+        })
+        .collect::<Result<Vec<_>, ProviderError>>()?;
+
+    if output_text.is_empty() && tool_calls.is_empty() {
+        return Err(ProviderError::ResponseMissingOutputText);
+    }
+
+    let finish_reason = if response
+        .output
+        .iter()
+        .filter(|item| item.item_type == "message")
+        .all(|item| item.status.as_deref() == Some("completed"))
+    {
+        FinishReason::Completed
+    } else {
+        FinishReason::Incomplete
+    };
+
+    Ok(ProviderResponse {
+        response_id: response.id,
+        model: response.model,
+        output_text,
+        tool_calls,
+        finish_reason,
+        usage: response.usage.map(|usage| ProviderUsage {
+            input_tokens: usage.input_tokens,
+            output_tokens: usage.output_tokens,
+            total_tokens: usage.total_tokens,
+        }),
+    })
+}

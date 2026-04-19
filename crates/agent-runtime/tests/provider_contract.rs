@@ -1,7 +1,7 @@
 use agent_runtime::provider::{
     ConfiguredProvider, FinishReason, ModelCapabilities, OpenAiResponsesConfig,
-    OpenAiResponsesDriver, ProviderBuildError, ProviderDriver, ProviderError, ProviderKind,
-    ProviderMessage, ProviderRequest, ProviderResponse, ProviderStreamEvent, ProviderStreamMode,
+    OpenAiResponsesDriver, ProviderBuildError, ProviderDriver, ProviderKind, ProviderMessage,
+    ProviderRequest, ProviderResponse, ProviderStreamEvent, ProviderStreamMode,
     ProviderToolDefinition, build_driver,
 };
 use agent_runtime::session::MessageRole;
@@ -29,7 +29,7 @@ fn driver_descriptor_exposes_stable_openai_capabilities() {
     assert_eq!(
         driver.descriptor().capabilities,
         ModelCapabilities {
-            supports_streaming: false,
+            supports_streaming: true,
             supports_text_input: true,
             supports_tool_calls: true,
             supports_previous_response_id: true,
@@ -243,7 +243,8 @@ fn zai_complete_accepts_function_call_only_responses() {
 #[test]
 fn zai_stream_emits_text_deltas_and_final_response() {
     let (api_base, requests, handle) = spawn_sse_server(
-        "data: {\"id\":\"chatcmpl-stream-1\",\"model\":\"glm-5-turbo\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"hello \"},\"finish_reason\":null}]}\n\n\
+        "data: {\"id\":\"chatcmpl-stream-1\",\"model\":\"glm-5-turbo\",\"choices\":[{\"index\":0,\"delta\":{\"reasoning_content\":\"thinking... \"},\"finish_reason\":null}]}\n\n\
+data: {\"id\":\"chatcmpl-stream-1\",\"model\":\"glm-5-turbo\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"hello \"},\"finish_reason\":null}]}\n\n\
 data: {\"id\":\"chatcmpl-stream-1\",\"model\":\"glm-5-turbo\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"world\"},\"finish_reason\":\"stop\"}]}\n\n\
 data: [DONE]\n\n",
     );
@@ -279,14 +280,22 @@ data: [DONE]\n\n",
         .next_event()
         .expect("third event")
         .expect("some third event");
+    let fourth = stream
+        .next_event()
+        .expect("fourth event")
+        .expect("some fourth event");
     let done = stream.next_event().expect("done");
     let raw_request = requests.recv().expect("raw request");
     handle.join().expect("join server");
 
-    assert_eq!(first, ProviderStreamEvent::TextDelta("hello ".to_string()));
-    assert_eq!(second, ProviderStreamEvent::TextDelta("world".to_string()));
     assert_eq!(
-        third,
+        first,
+        ProviderStreamEvent::ReasoningDelta("thinking... ".to_string())
+    );
+    assert_eq!(second, ProviderStreamEvent::TextDelta("hello ".to_string()));
+    assert_eq!(third, ProviderStreamEvent::TextDelta("world".to_string()));
+    assert_eq!(
+        fourth,
         ProviderStreamEvent::Completed(ProviderResponse {
             response_id: "chatcmpl-stream-1".to_string(),
             model: "glm-5-turbo".to_string(),
@@ -301,6 +310,7 @@ data: [DONE]\n\n",
     let normalized_request = raw_request.to_ascii_lowercase();
     assert!(normalized_request.contains("/chat/completions"));
     assert!(normalized_request.contains("\"stream\":true"));
+    assert!(normalized_request.contains("\"thinking\":{\"type\":\"enabled\"}"));
 }
 
 #[test]
@@ -445,15 +455,21 @@ fn complete_accepts_function_call_only_responses_for_openai() {
 }
 
 #[test]
-fn stream_is_an_explicit_contract_even_when_unimplemented() {
+fn openai_stream_emits_reasoning_summary_text_and_final_response() {
+    let (api_base, requests, handle) = spawn_sse_server(
+        "data: {\"type\":\"response.reasoning_summary_text.delta\",\"item_id\":\"rs_123\",\"output_index\":0,\"summary_index\":0,\"delta\":\"Plan: inspect the question. \"}\n\n\
+data: {\"type\":\"response.output_text.delta\",\"item_id\":\"msg_123\",\"output_index\":1,\"content_index\":0,\"delta\":\"hello \"}\n\n\
+data: {\"type\":\"response.output_text.delta\",\"item_id\":\"msg_123\",\"output_index\":1,\"content_index\":0,\"delta\":\"world\"}\n\n\
+data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_stream_123\",\"model\":\"gpt-5.4\",\"output\":[{\"id\":\"rs_123\",\"type\":\"reasoning\",\"summary\":[{\"type\":\"summary_text\",\"text\":\"Plan: inspect the question. \"}]},{\"id\":\"msg_123\",\"type\":\"message\",\"status\":\"completed\",\"role\":\"assistant\",\"content\":[{\"type\":\"output_text\",\"text\":\"hello world\",\"annotations\":[]}]}],\"usage\":{\"input_tokens\":11,\"output_tokens\":7,\"total_tokens\":18}}}\n\n",
+    );
     let driver = OpenAiResponsesDriver::new(OpenAiResponsesConfig {
-        api_base: "http://127.0.0.1:9/v1".to_string(),
+        api_base,
         api_key: "test-key".to_string(),
         default_model: Some("gpt-5.4".to_string()),
     });
     let request = ProviderRequest {
         model: Some("gpt-5.4".to_string()),
-        instructions: None,
+        instructions: Some("Be brief".to_string()),
         messages: vec![ProviderMessage::new(MessageRole::User, "ping")],
         previous_response_id: None,
         continuation_messages: Vec::new(),
@@ -463,10 +479,54 @@ fn stream_is_an_explicit_contract_even_when_unimplemented() {
         stream: ProviderStreamMode::Enabled,
     };
 
-    assert!(matches!(
-        driver.stream(&request),
-        Err(ProviderError::UnsupportedStreaming)
-    ));
+    let mut stream = driver.stream(&request).expect("stream");
+    let first = stream
+        .next_event()
+        .expect("first event")
+        .expect("some first event");
+    let second = stream
+        .next_event()
+        .expect("second event")
+        .expect("some second event");
+    let third = stream
+        .next_event()
+        .expect("third event")
+        .expect("some third event");
+    let fourth = stream
+        .next_event()
+        .expect("fourth event")
+        .expect("some fourth event");
+    let done = stream.next_event().expect("done");
+    let raw_request = requests.recv().expect("raw request");
+    handle.join().expect("join server");
+
+    assert_eq!(
+        first,
+        ProviderStreamEvent::ReasoningDelta("Plan: inspect the question. ".to_string())
+    );
+    assert_eq!(second, ProviderStreamEvent::TextDelta("hello ".to_string()));
+    assert_eq!(third, ProviderStreamEvent::TextDelta("world".to_string()));
+    assert_eq!(
+        fourth,
+        ProviderStreamEvent::Completed(ProviderResponse {
+            response_id: "resp_stream_123".to_string(),
+            model: "gpt-5.4".to_string(),
+            output_text: "hello world".to_string(),
+            tool_calls: Vec::new(),
+            finish_reason: FinishReason::Completed,
+            usage: Some(agent_runtime::provider::ProviderUsage {
+                input_tokens: 11,
+                output_tokens: 7,
+                total_tokens: 18,
+            }),
+        })
+    );
+    assert!(done.is_none());
+
+    let normalized_request = raw_request.to_ascii_lowercase();
+    assert!(normalized_request.contains("post /v1/responses http/1.1"));
+    assert!(normalized_request.contains("\"stream\":true"));
+    assert!(normalized_request.contains("\"reasoning\":{\"summary\":\"auto\"}"));
 }
 
 fn spawn_sse_server(body: &'static str) -> (String, Receiver<String>, thread::JoinHandle<()>) {

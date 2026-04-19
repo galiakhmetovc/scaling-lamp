@@ -2544,33 +2544,17 @@ fn run_with_args_chat_send_reports_waiting_approval_details() {
 
 #[test]
 fn repl_runs_chat_turns_and_supports_show_and_exit_commands() {
-    let (api_base, _requests, handle) = spawn_json_server(
-        r#"{
-                "id":"resp_chat_repl",
-                "model":"gpt-5.4",
-                "output":[
-                    {
-                        "id":"msg_1",
-                        "type":"message",
-                        "status":"completed",
-                        "role":"assistant",
-                        "content":[
-                            {
-                                "type":"output_text",
-                                "text":"REPL reply"
-                            }
-                        ]
-                    }
-                ],
-                "usage":{"input_tokens":16,"output_tokens":3,"total_tokens":19}
-            }"#,
-    );
+    let (api_base, _requests, handle) =
+        spawn_sse_server_sequence(vec![openai_stream_message_response(
+            "resp_chat_repl",
+            "REPL reply",
+        )]);
     let temp = tempfile::tempdir().expect("tempdir");
     let app = build_from_config(AppConfig {
         data_dir: temp.path().join("state-root"),
         provider: ConfiguredProvider {
             kind: ProviderKind::OpenAiResponses,
-            api_base: Some(format!("{api_base}/v1")),
+            api_base: Some(api_base),
             api_key: Some("test-key".to_string()),
             default_model: Some("gpt-5.4".to_string()),
         },
@@ -2611,33 +2595,17 @@ fn repl_runs_chat_turns_and_supports_show_and_exit_commands() {
 
 #[test]
 fn repl_accepts_cp1251_terminal_input_without_utf8_failure() {
-    let (api_base, _requests, handle) = spawn_json_server(
-        r#"{
-                "id":"resp_cp1251_repl",
-                "model":"gpt-5.4",
-                "output":[
-                    {
-                        "id":"msg_cp1251",
-                        "type":"message",
-                        "status":"completed",
-                        "role":"assistant",
-                        "content":[
-                            {
-                                "type":"output_text",
-                                "text":"cp1251 ok"
-                            }
-                        ]
-                    }
-                ],
-                "usage":{"input_tokens":16,"output_tokens":3,"total_tokens":19}
-            }"#,
-    );
+    let (api_base, _requests, handle) =
+        spawn_sse_server_sequence(vec![openai_stream_message_response(
+            "resp_cp1251_repl",
+            "cp1251 ok",
+        )]);
     let temp = tempfile::tempdir().expect("tempdir");
     let app = build_from_config(AppConfig {
         data_dir: temp.path().join("state-root"),
         provider: ConfiguredProvider {
             kind: ProviderKind::OpenAiResponses,
-            api_base: Some(format!("{api_base}/v1")),
+            api_base: Some(api_base),
             api_key: Some("test-key".to_string()),
             default_model: Some("gpt-5.4".to_string()),
         },
@@ -2678,52 +2646,22 @@ fn repl_accepts_cp1251_terminal_input_without_utf8_failure() {
 #[test]
 fn repl_surfaces_waiting_approval_and_can_approve_latest_pending_turn() {
     let (web_base, _web_requests, _web_handle) = spawn_text_server("/doc", "repl ask doc");
-    let first_provider_response = format!(
-        r#"{{
-                "id":"resp_repl_waiting",
-                "model":"gpt-5.4",
-                "output":[
-                    {{
-                        "id":"fc_1",
-                        "type":"function_call",
-                        "status":"completed",
-                        "call_id":"call_web_fetch",
-                        "name":"web_fetch",
-                        "arguments":"{{\"url\":\"{}\"}}"
-                    }}
-                ],
-                "usage":{{"input_tokens":19,"output_tokens":7,"total_tokens":26}}
-            }}"#,
-        web_base
+    let first_provider_response = openai_stream_tool_call_response(
+        "resp_repl_waiting",
+        "call_web_fetch",
+        "web_fetch",
+        &format!(r#"{{"url":"{}"}}"#, web_base),
     );
-    let second_provider_response = r#"{
-            "id":"resp_repl_approved",
-            "model":"gpt-5.4",
-            "output":[
-                {
-                    "id":"msg_approved",
-                    "type":"message",
-                    "status":"completed",
-                    "role":"assistant",
-                    "content":[
-                        {
-                            "type":"output_text",
-                            "text":"repl approval completed"
-                        }
-                    ]
-                }
-            ],
-            "usage":{"input_tokens":20,"output_tokens":4,"total_tokens":24}
-        }"#
-    .to_string();
+    let second_provider_response =
+        openai_stream_message_response("resp_repl_approved", "repl approval completed");
     let (api_base, _requests, handle) =
-        spawn_json_server_sequence(vec![first_provider_response, second_provider_response]);
+        spawn_sse_server_sequence(vec![first_provider_response, second_provider_response]);
     let temp = tempfile::tempdir().expect("tempdir");
     let app = build_from_config(AppConfig {
         data_dir: temp.path().join("state-root"),
         provider: ConfiguredProvider {
             kind: ProviderKind::OpenAiResponses,
-            api_base: Some(format!("{api_base}/v1")),
+            api_base: Some(api_base),
             api_key: Some("test-key".to_string()),
             default_model: Some("gpt-5.4".to_string()),
         },
@@ -2773,52 +2711,24 @@ fn repl_surfaces_waiting_approval_and_can_approve_latest_pending_turn() {
 #[test]
 fn repl_rehydrates_latest_pending_approval_after_restart() {
     let (web_base, _web_requests, _web_handle) = spawn_text_server("/doc", "rehydrated doc");
-    let first_provider_response = format!(
-        r#"{{
-                "id":"resp_repl_restart_waiting",
-                "model":"gpt-5.4",
-                "output":[
-                    {{
-                        "id":"fc_1",
-                        "type":"function_call",
-                        "status":"completed",
-                        "call_id":"call_web_fetch",
-                        "name":"web_fetch",
-                        "arguments":"{{\"url\":\"{}\"}}"
-                    }}
-                ],
-                "usage":{{"input_tokens":19,"output_tokens":7,"total_tokens":26}}
-            }}"#,
-        web_base
+    let first_provider_response = openai_stream_tool_call_response(
+        "resp_repl_restart_waiting",
+        "call_web_fetch",
+        "web_fetch",
+        &format!(r#"{{"url":"{}"}}"#, web_base),
     );
-    let second_provider_response = r#"{
-            "id":"resp_repl_restart_done",
-            "model":"gpt-5.4",
-            "output":[
-                {
-                    "id":"msg_done",
-                    "type":"message",
-                    "status":"completed",
-                    "role":"assistant",
-                    "content":[
-                        {
-                            "type":"output_text",
-                            "text":"approval after restart completed"
-                        }
-                    ]
-                }
-            ],
-            "usage":{"input_tokens":20,"output_tokens":4,"total_tokens":24}
-        }"#
-    .to_string();
+    let second_provider_response = openai_stream_message_response(
+        "resp_repl_restart_done",
+        "approval after restart completed",
+    );
     let temp = tempfile::tempdir().expect("tempdir");
     let state_root = temp.path().join("state-root");
-    let (api_base, _requests, handle) = spawn_json_server(first_provider_response.leak());
+    let (api_base, _requests, handle) = spawn_sse_server_sequence(vec![first_provider_response]);
     let app = build_from_config(AppConfig {
         data_dir: state_root.clone(),
         provider: ConfiguredProvider {
             kind: ProviderKind::OpenAiResponses,
-            api_base: Some(format!("{api_base}/v1")),
+            api_base: Some(api_base),
             api_key: Some("test-key".to_string()),
             default_model: Some("gpt-5.4".to_string()),
         },
@@ -2858,12 +2768,12 @@ fn repl_rehydrates_latest_pending_approval_after_restart() {
     .expect("first repl");
     handle.join().expect("join first server");
 
-    let (api_base, _requests, _handle) = spawn_json_server(second_provider_response.leak());
+    let (api_base, _requests, _handle) = spawn_sse_server_sequence(vec![second_provider_response]);
     let app = build_from_config(AppConfig {
         data_dir: state_root,
         provider: ConfiguredProvider {
             kind: ProviderKind::OpenAiResponses,
-            api_base: Some(format!("{api_base}/v1")),
+            api_base: Some(api_base),
             api_key: Some("test-key".to_string()),
             default_model: Some("gpt-5.4".to_string()),
         },
@@ -2897,31 +2807,19 @@ fn repl_rehydrates_latest_pending_approval_after_restart() {
 #[test]
 fn repl_rejects_new_turns_while_an_approval_is_pending() {
     let (web_base, _web_requests, _web_handle) = spawn_text_server("/doc", "pending doc");
-    let first_provider_response = format!(
-        r#"{{
-                "id":"resp_repl_pending_only",
-                "model":"gpt-5.4",
-                "output":[
-                    {{
-                        "id":"fc_1",
-                        "type":"function_call",
-                        "status":"completed",
-                        "call_id":"call_web_fetch",
-                        "name":"web_fetch",
-                        "arguments":"{{\"url\":\"{}\"}}"
-                    }}
-                ],
-                "usage":{{"input_tokens":19,"output_tokens":7,"total_tokens":26}}
-            }}"#,
-        web_base
+    let first_provider_response = openai_stream_tool_call_response(
+        "resp_repl_pending_only",
+        "call_web_fetch",
+        "web_fetch",
+        &format!(r#"{{"url":"{}"}}"#, web_base),
     );
-    let (api_base, _requests, handle) = spawn_json_server(first_provider_response.leak());
+    let (api_base, _requests, handle) = spawn_sse_server_sequence(vec![first_provider_response]);
     let temp = tempfile::tempdir().expect("tempdir");
     let app = build_from_config(AppConfig {
         data_dir: temp.path().join("state-root"),
         provider: ConfiguredProvider {
             kind: ProviderKind::OpenAiResponses,
-            api_base: Some(format!("{api_base}/v1")),
+            api_base: Some(api_base),
             api_key: Some("test-key".to_string()),
             default_model: Some("gpt-5.4".to_string()),
         },
@@ -2971,7 +2869,7 @@ fn repl_rejects_new_turns_while_an_approval_is_pending() {
 fn repl_stream_renders_tool_status_instead_of_raw_command_reports() {
     let (web_base, _web_requests, _web_handle) = spawn_text_server("/doc", "streaming tool result");
     let first_stream = format!(
-        "data: {{\"id\":\"chatcmpl-stream-tool-1\",\"model\":\"glm-5-turbo\",\"choices\":[{{\"index\":0,\"delta\":{{\"tool_calls\":[{{\"index\":0,\"id\":\"call_web_fetch\",\"type\":\"function\",\"function\":{{\"name\":\"web_fetch\",\"arguments\":\"{{\\\"url\\\":\\\"{}\\\"}}\"}}}}]}},\"finish_reason\":\"tool_calls\"}}]}}\n\n\
+        "data: {{\"id\":\"chatcmpl-stream-tool-1\",\"model\":\"glm-5-turbo\",\"choices\":[{{\"index\":0,\"delta\":{{\"reasoning_content\":\"inspect doc before fetching. \",\"tool_calls\":[{{\"index\":0,\"id\":\"call_web_fetch\",\"type\":\"function\",\"function\":{{\"name\":\"web_fetch\",\"arguments\":\"{{\\\"url\\\":\\\"{}\\\"}}\"}}}}]}},\"finish_reason\":\"tool_calls\"}}]}}\n\n\
 data: [DONE]\n\n",
         web_base
     );
@@ -3030,11 +2928,80 @@ data: [DONE]\n\n"
     handle.join().expect("join server");
 
     let rendered = String::from_utf8(output).expect("utf8");
+    assert!(rendered.contains("reasoning: inspect doc before fetching."));
     assert!(rendered.contains("tool: web_fetch | waiting_approval"));
     assert!(rendered.contains("tool: web_fetch | completed"));
     assert!(rendered.contains("assistant: streaming tool result"));
     assert!(!rendered.contains("chat send session_id=session-chat-repl-stream"));
     assert!(!rendered.contains("approved approval-"));
+}
+
+#[test]
+fn openai_repl_stream_renders_reasoning_summary_and_assistant_text() {
+    let stream = "data: {\"type\":\"response.reasoning_summary_text.delta\",\"item_id\":\"rs_123\",\"output_index\":0,\"summary_index\":0,\"delta\":\"Compare the request with prior context. \"}\n\n\
+data: {\"type\":\"response.output_text.delta\",\"item_id\":\"msg_123\",\"output_index\":1,\"content_index\":0,\"delta\":\"hello \"}\n\n\
+data: {\"type\":\"response.output_text.delta\",\"item_id\":\"msg_123\",\"output_index\":1,\"content_index\":0,\"delta\":\"from openai\"}\n\n\
+data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_stream_repl\",\"model\":\"gpt-5.4\",\"output\":[{\"id\":\"rs_123\",\"type\":\"reasoning\",\"summary\":[{\"type\":\"summary_text\",\"text\":\"Compare the request with prior context. \"}]},{\"id\":\"msg_123\",\"type\":\"message\",\"status\":\"completed\",\"role\":\"assistant\",\"content\":[{\"type\":\"output_text\",\"text\":\"hello from openai\",\"annotations\":[]}]}],\"usage\":{\"input_tokens\":11,\"output_tokens\":7,\"total_tokens\":18}}}\n\n".to_string();
+    let (api_base, _requests, handle) = spawn_sse_server_sequence(vec![stream]);
+    let temp = tempfile::tempdir().expect("tempdir");
+    let app = build_from_config(AppConfig {
+        data_dir: temp.path().join("state-root"),
+        provider: ConfiguredProvider {
+            kind: ProviderKind::OpenAiResponses,
+            api_base: Some(api_base),
+            api_key: Some("test-key".to_string()),
+            default_model: Some("gpt-5.4".to_string()),
+        },
+        ..AppConfig::default()
+    })
+    .expect("build app");
+    let store = PersistenceStore::open(&app.persistence).expect("open store");
+
+    store
+        .put_session(&SessionRecord {
+            id: "session-chat-repl-openai-stream".to_string(),
+            title: "Chat REPL openai stream session".to_string(),
+            prompt_override: Some("Be brief.".to_string()),
+            settings_json: serde_json::to_string(&SessionSettings::default())
+                .expect("serialize settings"),
+            active_mission_id: None,
+            created_at: 1,
+            updated_at: 1,
+        })
+        .expect("put session");
+
+    let mut input = Cursor::new(b"Say hi\n/exit\n".to_vec());
+    let mut output = Vec::new();
+    app.run_with_io(
+        ["chat", "repl", "session-chat-repl-openai-stream"],
+        &mut input,
+        &mut output,
+    )
+    .expect("repl");
+    handle.join().expect("join server");
+
+    let rendered = String::from_utf8(output).expect("utf8");
+    assert!(rendered.contains("reasoning: Compare the request with prior context."));
+    assert!(rendered.contains("assistant: hello from openai"));
+}
+
+fn openai_stream_message_response(response_id: &str, text: &str) -> String {
+    let text = serde_json::to_string(text).expect("serialize text");
+    format!(
+        "data: {{\"type\":\"response.completed\",\"response\":{{\"id\":\"{response_id}\",\"model\":\"gpt-5.4\",\"output\":[{{\"id\":\"msg_1\",\"type\":\"message\",\"status\":\"completed\",\"role\":\"assistant\",\"content\":[{{\"type\":\"output_text\",\"text\":{text}}}]}}],\"usage\":{{\"input_tokens\":16,\"output_tokens\":3,\"total_tokens\":19}}}}}}\n\n"
+    )
+}
+
+fn openai_stream_tool_call_response(
+    response_id: &str,
+    call_id: &str,
+    tool_name: &str,
+    arguments: &str,
+) -> String {
+    let arguments = serde_json::to_string(arguments).expect("serialize arguments");
+    format!(
+        "data: {{\"type\":\"response.completed\",\"response\":{{\"id\":\"{response_id}\",\"model\":\"gpt-5.4\",\"output\":[{{\"id\":\"fc_1\",\"type\":\"function_call\",\"status\":\"completed\",\"call_id\":\"{call_id}\",\"name\":\"{tool_name}\",\"arguments\":{arguments}}}],\"usage\":{{\"input_tokens\":19,\"output_tokens\":7,\"total_tokens\":26}}}}}}\n\n"
+    )
 }
 
 fn spawn_json_server(body: &'static str) -> (String, Receiver<String>, thread::JoinHandle<()>) {

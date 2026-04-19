@@ -314,6 +314,7 @@ struct ReplPendingApproval {
 struct ReplRenderer<'a, W: Write> {
     output: &'a mut W,
     active_tool: Option<String>,
+    reasoning_open: bool,
     assistant_open: bool,
     assistant_streamed_this_turn: bool,
 }
@@ -323,6 +324,7 @@ impl<'a, W: Write> ReplRenderer<'a, W> {
         Self {
             output,
             active_tool: None,
+            reasoning_open: false,
             assistant_open: false,
             assistant_streamed_this_turn: false,
         }
@@ -330,6 +332,7 @@ impl<'a, W: Write> ReplRenderer<'a, W> {
 
     fn emit(&mut self, event: ChatExecutionEvent) -> Result<(), BootstrapError> {
         match event {
+            ChatExecutionEvent::ReasoningDelta(delta) => self.write_reasoning_delta(&delta),
             ChatExecutionEvent::AssistantTextDelta(delta) => self.write_assistant_delta(&delta),
             ChatExecutionEvent::ToolStatus { tool_name, status } => {
                 self.write_tool_status(&tool_name, status)
@@ -338,6 +341,10 @@ impl<'a, W: Write> ReplRenderer<'a, W> {
     }
 
     fn finish_turn(&mut self) -> Result<(), BootstrapError> {
+        if self.reasoning_open {
+            writeln!(self.output).map_err(BootstrapError::Stream)?;
+            self.reasoning_open = false;
+        }
         if self.assistant_open {
             writeln!(self.output).map_err(BootstrapError::Stream)?;
             self.assistant_open = false;
@@ -353,7 +360,25 @@ impl<'a, W: Write> ReplRenderer<'a, W> {
         self.assistant_streamed_this_turn
     }
 
+    fn write_reasoning_delta(&mut self, delta: &str) -> Result<(), BootstrapError> {
+        if self.assistant_open {
+            writeln!(self.output).map_err(BootstrapError::Stream)?;
+            self.assistant_open = false;
+        }
+        if self.reasoning_open {
+            write!(self.output, "{delta}").map_err(BootstrapError::Stream)?;
+        } else {
+            write!(self.output, "reasoning: {delta}").map_err(BootstrapError::Stream)?;
+            self.reasoning_open = true;
+        }
+        self.output.flush().map_err(BootstrapError::Stream)
+    }
+
     fn write_assistant_delta(&mut self, delta: &str) -> Result<(), BootstrapError> {
+        if self.reasoning_open {
+            writeln!(self.output).map_err(BootstrapError::Stream)?;
+            self.reasoning_open = false;
+        }
         if self.assistant_open {
             write!(self.output, "{delta}").map_err(BootstrapError::Stream)?;
         } else {

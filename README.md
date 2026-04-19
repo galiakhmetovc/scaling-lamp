@@ -48,10 +48,9 @@ Smoke command:
 cargo run -p agentd -- provider smoke "Say hello in one short sentence."
 ```
 
-For the current `z.ai` smoke path, `agentd` sends `thinking={"type":"disabled"}`
-on purpose. `glm-5-turbo` enables thinking by default, and the current MVP does
-not consume `reasoning_content`, so disabling it keeps the smoke check focused
-on basic request/response health instead of model-side reasoning budgets.
+For the current `z.ai` smoke path, `agentd` keeps `thinking={"type":"disabled"}`
+for the one-shot `provider smoke` command so the check stays focused on basic
+request/response health.
 
 ## Current Operator Notes
 
@@ -97,11 +96,19 @@ The normal chat operator path is now:
 2. `chat send <session-id> "<message>"` to execute one ordinary chat turn
 3. `chat repl <session-id>` to stay inside one terminal chat loop
 
-`chat repl` now streams assistant text deltas directly in the terminal. When a
-turn invokes a tool, the REPL keeps one compact `tool: <name> | <status>` line
-per active tool step and updates it through `requested`, `waiting_approval`,
-`approved`, `running`, and `completed`/`failed` instead of printing a long raw
-event log.
+`chat repl` now streams provider output directly in the terminal:
+
+- assistant text appears as live deltas
+- reasoning appears as a distinct `reasoning: ...` line
+- when a turn invokes a tool, the REPL keeps one compact
+  `tool: <name> | <status>` line per active tool step and updates it through
+  `requested`, `waiting_approval`, `approved`, `running`, and
+  `completed`/`failed` instead of printing a long raw event log
+
+Streaming reasoning currently works through:
+
+- OpenAI Responses via `reasoning summary` deltas
+- `z.ai` chat completions via streamed `reasoning_content`
 
 The current OpenAI-backed chat path now also supports one bounded model-driven
 tool loop for auto-allowed tools:

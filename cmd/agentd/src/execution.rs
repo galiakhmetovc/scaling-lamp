@@ -82,6 +82,7 @@ pub struct ToolExecutionReport {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ChatExecutionEvent {
+    ReasoningDelta(String),
     AssistantTextDelta(String),
     ToolStatus {
         tool_name: String,
@@ -498,6 +499,9 @@ impl ExecutionService {
             let mut final_response = None;
             while let Some(event) = stream.next_event().map_err(ExecutionError::Provider)? {
                 match event {
+                    agent_runtime::provider::ProviderStreamEvent::ReasoningDelta(delta) => {
+                        Self::emit_event(observer, ChatExecutionEvent::ReasoningDelta(delta));
+                    }
                     agent_runtime::provider::ProviderStreamEvent::TextDelta(delta) => {
                         Self::emit_event(observer, ChatExecutionEvent::AssistantTextDelta(delta));
                     }
