@@ -386,6 +386,7 @@ Tools should be grouped by capability family.
 - `fs_write`
 - `fs_patch`
 - `fs_list`
+- `fs_glob`
 - `fs_search`
 
 ### Structured Process Execution

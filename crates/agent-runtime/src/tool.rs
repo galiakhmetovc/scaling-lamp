@@ -16,7 +16,9 @@ pub enum ToolFamily {
 pub enum ToolName {
     FsRead,
     FsWrite,
+    FsPatch,
     FsList,
+    FsGlob,
     FsSearch,
     ExecStart,
     ExecWait,
@@ -56,9 +58,28 @@ pub struct FsWriteInput {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FsPatchEdit {
+    pub old: String,
+    pub new: String,
+    pub replace_all: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FsPatchInput {
+    pub path: String,
+    pub edits: Vec<FsPatchEdit>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct FsListInput {
     pub path: String,
     pub recursive: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FsGlobInput {
+    pub path: String,
+    pub pattern: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -88,7 +109,9 @@ pub struct ProcessKillInput {
 pub enum ToolCall {
     FsRead(FsReadInput),
     FsWrite(FsWriteInput),
+    FsPatch(FsPatchInput),
     FsList(FsListInput),
+    FsGlob(FsGlobInput),
     FsSearch(FsSearchInput),
     ExecStart(ExecStartInput),
     ExecWait(ProcessWaitInput),
@@ -108,7 +131,19 @@ pub struct FsWriteOutput {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FsPatchOutput {
+    pub path: String,
+    pub bytes_written: usize,
+    pub edits_applied: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FsListOutput {
+    pub entries: Vec<WorkspaceEntry>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FsGlobOutput {
     pub entries: Vec<WorkspaceEntry>,
 }
 
@@ -148,7 +183,9 @@ pub struct ProcessResult {
 pub enum ToolOutput {
     FsRead(FsReadOutput),
     FsWrite(FsWriteOutput),
+    FsPatch(FsPatchOutput),
     FsList(FsListOutput),
+    FsGlob(FsGlobOutput),
     FsSearch(FsSearchOutput),
     ProcessStart(ProcessStartOutput),
     ProcessResult(ProcessResult),
@@ -158,6 +195,10 @@ pub enum ToolOutput {
 pub enum ToolError {
     InvalidExec {
         reason: &'static str,
+    },
+    InvalidPatch {
+        path: String,
+        reason: String,
     },
     ProcessFamilyMismatch {
         process_id: String,
@@ -201,7 +242,9 @@ impl ToolName {
         match self {
             Self::FsRead => "fs_read",
             Self::FsWrite => "fs_write",
+            Self::FsPatch => "fs_patch",
             Self::FsList => "fs_list",
+            Self::FsGlob => "fs_glob",
             Self::FsSearch => "fs_search",
             Self::ExecStart => "exec_start",
             Self::ExecWait => "exec_wait",
@@ -244,9 +287,29 @@ impl ToolCatalog {
                 },
             },
             ToolDefinition {
+                name: ToolName::FsPatch,
+                family: ToolFamily::Filesystem,
+                description: "Apply exact text edits to a UTF-8 text file inside the workspace",
+                policy: ToolPolicy {
+                    read_only: false,
+                    destructive: true,
+                    requires_approval: true,
+                },
+            },
+            ToolDefinition {
                 name: ToolName::FsList,
                 family: ToolFamily::Filesystem,
                 description: "List files and directories inside the workspace",
+                policy: ToolPolicy {
+                    read_only: true,
+                    destructive: false,
+                    requires_approval: false,
+                },
+            },
+            ToolDefinition {
+                name: ToolName::FsGlob,
+                family: ToolFamily::Filesystem,
+                description: "Match workspace paths with glob-style patterns",
                 policy: ToolPolicy {
                     read_only: true,
                     destructive: false,
@@ -325,9 +388,25 @@ impl ToolRuntime {
                 path: normalize_tool_path(&input.path),
                 bytes_written: self.workspace.write_text(&input.path, &input.content)?,
             })),
+            ToolCall::FsPatch(input) => {
+                let path = normalize_tool_path(&input.path);
+                let content = self.workspace.read_text(&input.path)?;
+                let patched = apply_patch_edits(&path, content, &input.edits)?;
+                let bytes_written = self.workspace.write_text(&input.path, &patched.content)?;
+                Ok(ToolOutput::FsPatch(FsPatchOutput {
+                    path,
+                    bytes_written,
+                    edits_applied: input.edits.len(),
+                }))
+            }
             ToolCall::FsList(input) => Ok(ToolOutput::FsList(FsListOutput {
                 entries: self.workspace.list(&input.path, input.recursive)?,
             })),
+            ToolCall::FsGlob(input) => {
+                let mut entries = self.workspace.list(&input.path, true)?;
+                entries.retain(|entry| glob_matches(&input.pattern, &entry.path));
+                Ok(ToolOutput::FsGlob(FsGlobOutput { entries }))
+            }
             ToolCall::FsSearch(input) => Ok(ToolOutput::FsSearch(FsSearchOutput {
                 matches: self.workspace.search(&input.path, &input.query)?,
             })),
@@ -469,7 +548,9 @@ impl ToolCall {
         match self {
             Self::FsRead(_) => ToolName::FsRead,
             Self::FsWrite(_) => ToolName::FsWrite,
+            Self::FsPatch(_) => ToolName::FsPatch,
             Self::FsList(_) => ToolName::FsList,
+            Self::FsGlob(_) => ToolName::FsGlob,
             Self::FsSearch(_) => ToolName::FsSearch,
             Self::ExecStart(_) => ToolName::ExecStart,
             Self::ExecWait(_) => ToolName::ExecWait,
@@ -485,10 +566,20 @@ impl ToolCall {
                 normalize_tool_path(&input.path),
                 input.content.len()
             ),
+            Self::FsPatch(input) => format!(
+                "fs_patch path={} edits={}",
+                normalize_tool_path(&input.path),
+                input.edits.len()
+            ),
             Self::FsList(input) => format!(
                 "fs_list path={} recursive={}",
                 normalize_tool_path(&input.path),
                 input.recursive
+            ),
+            Self::FsGlob(input) => format!(
+                "fs_glob path={} pattern={}",
+                normalize_tool_path(&input.path),
+                input.pattern
             ),
             Self::FsSearch(input) => format!(
                 "fs_search path={} query={}",
@@ -537,6 +628,13 @@ impl ToolOutput {
         }
     }
 
+    pub fn into_fs_glob(self) -> Option<FsGlobOutput> {
+        match self {
+            Self::FsGlob(output) => Some(output),
+            _ => None,
+        }
+    }
+
     pub fn into_fs_search(self) -> Option<FsSearchOutput> {
         match self {
             Self::FsSearch(output) => Some(output),
@@ -573,7 +671,14 @@ impl ToolOutput {
                     output.path, output.bytes_written
                 )
             }
+            Self::FsPatch(output) => {
+                format!(
+                    "fs_patch path={} edits={}",
+                    output.path, output.edits_applied
+                )
+            }
             Self::FsList(output) => format!("fs_list entries={}", output.entries.len()),
+            Self::FsGlob(output) => format!("fs_glob entries={}", output.entries.len()),
             Self::FsSearch(output) => format!("fs_search matches={}", output.matches.len()),
             Self::ProcessStart(output) => format!(
                 "{}_start process_id={} pid_ref={}",
@@ -593,6 +698,9 @@ impl fmt::Display for ToolError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::InvalidExec { reason } => write!(formatter, "invalid exec request: {reason}"),
+            Self::InvalidPatch { path, reason } => {
+                write!(formatter, "invalid patch for {path}: {reason}")
+            }
             Self::ProcessFamilyMismatch {
                 process_id,
                 expected,
@@ -619,6 +727,7 @@ impl Error for ToolError {
             Self::ProcessIo { source, .. } => Some(source),
             Self::Workspace(source) => Some(source),
             Self::InvalidExec { .. }
+            | Self::InvalidPatch { .. }
             | Self::ProcessFamilyMismatch { .. }
             | Self::UnknownProcess { .. } => None,
         }
@@ -635,12 +744,109 @@ fn normalize_tool_path(path: &str) -> String {
     path.replace('\\', "/")
 }
 
+struct AppliedPatch {
+    content: String,
+}
+
+fn apply_patch_edits(
+    path: &str,
+    mut content: String,
+    edits: &[FsPatchEdit],
+) -> Result<AppliedPatch, ToolError> {
+    if edits.is_empty() {
+        return Err(ToolError::InvalidPatch {
+            path: path.to_string(),
+            reason: "at least one edit is required".to_string(),
+        });
+    }
+
+    for edit in edits {
+        if edit.old.is_empty() {
+            return Err(ToolError::InvalidPatch {
+                path: path.to_string(),
+                reason: "edit.old must not be empty".to_string(),
+            });
+        }
+
+        let occurrences = content.matches(&edit.old).count();
+        if occurrences == 0 {
+            return Err(ToolError::InvalidPatch {
+                path: path.to_string(),
+                reason: format!("edit target was not found: {}", edit.old),
+            });
+        }
+
+        if edit.replace_all {
+            content = content.replace(&edit.old, &edit.new);
+            continue;
+        }
+
+        if occurrences > 1 {
+            return Err(ToolError::InvalidPatch {
+                path: path.to_string(),
+                reason: format!("edit target is ambiguous: {}", edit.old),
+            });
+        }
+
+        content = content.replacen(&edit.old, &edit.new, 1);
+    }
+
+    Ok(AppliedPatch { content })
+}
+
+fn glob_matches(pattern: &str, candidate: &str) -> bool {
+    let normalized_pattern = normalize_tool_path(pattern);
+    let normalized_candidate = normalize_tool_path(candidate);
+    let pattern_segments = normalized_pattern.split('/').collect::<Vec<_>>();
+    let candidate_segments = normalized_candidate.split('/').collect::<Vec<_>>();
+    glob_match_segments(&pattern_segments, &candidate_segments)
+}
+
+fn glob_match_segments(pattern: &[&str], candidate: &[&str]) -> bool {
+    match pattern.split_first() {
+        None => candidate.is_empty(),
+        Some((&"**", rest)) => {
+            glob_match_segments(rest, candidate)
+                || (!candidate.is_empty() && glob_match_segments(pattern, &candidate[1..]))
+        }
+        Some((segment, rest)) => {
+            !candidate.is_empty()
+                && glob_match_segment(segment, candidate[0])
+                && glob_match_segments(rest, &candidate[1..])
+        }
+    }
+}
+
+fn glob_match_segment(pattern: &str, candidate: &str) -> bool {
+    let pattern_chars = pattern.chars().collect::<Vec<_>>();
+    let candidate_chars = candidate.chars().collect::<Vec<_>>();
+    glob_match_segment_chars(&pattern_chars, &candidate_chars)
+}
+
+fn glob_match_segment_chars(pattern: &[char], candidate: &[char]) -> bool {
+    match pattern.split_first() {
+        None => candidate.is_empty(),
+        Some((&'*', rest)) => {
+            glob_match_segment_chars(rest, candidate)
+                || (!candidate.is_empty() && glob_match_segment_chars(pattern, &candidate[1..]))
+        }
+        Some((&'?', rest)) => {
+            !candidate.is_empty() && glob_match_segment_chars(rest, &candidate[1..])
+        }
+        Some((&expected, rest)) => {
+            !candidate.is_empty()
+                && candidate[0] == expected
+                && glob_match_segment_chars(rest, &candidate[1..])
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
-        ExecStartInput, FsListInput, FsReadInput, FsSearchInput, FsWriteInput, ProcessKillInput,
-        ProcessResultStatus, ProcessWaitInput, ToolCall, ToolCatalog, ToolFamily, ToolName,
-        ToolRuntime,
+        ExecStartInput, FsGlobInput, FsListInput, FsPatchEdit, FsPatchInput, FsReadInput,
+        FsSearchInput, FsWriteInput, ProcessKillInput, ProcessResultStatus, ProcessWaitInput,
+        ToolCall, ToolCatalog, ToolFamily, ToolName, ToolRuntime,
     };
     use crate::workspace::WorkspaceRef;
 
@@ -648,12 +854,18 @@ mod tests {
     fn catalog_exposes_distinct_families_and_policy_flags() {
         let catalog = ToolCatalog::default();
         let exec_start = catalog.definition(ToolName::ExecStart).expect("exec_start");
+        let fs_glob = catalog.definition(ToolName::FsGlob).expect("fs_glob");
+        let fs_patch = catalog.definition(ToolName::FsPatch).expect("fs_patch");
         let fs_read = catalog.definition(ToolName::FsRead).expect("fs_read");
         let fs_write = catalog.definition(ToolName::FsWrite).expect("fs_write");
 
         assert_eq!(catalog.families, ["fs", "exec"]);
         assert_eq!(exec_start.family, ToolFamily::Exec);
+        assert_eq!(fs_glob.family, ToolFamily::Filesystem);
+        assert_eq!(fs_patch.family, ToolFamily::Filesystem);
         assert!(exec_start.policy.requires_approval);
+        assert!(fs_glob.policy.read_only);
+        assert!(fs_patch.policy.destructive);
         assert!(fs_read.policy.read_only);
         assert!(fs_write.policy.destructive);
     }
@@ -726,6 +938,91 @@ mod tests {
             runtime
                 .invoke(ToolCall::FsRead(FsReadInput {
                     path: "../secret.txt".to_string(),
+                }))
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn filesystem_tools_glob_and_patch_files_with_exact_edits() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let workspace = WorkspaceRef::new(temp.path());
+        let mut runtime = ToolRuntime::new(workspace.clone());
+
+        runtime
+            .invoke(ToolCall::FsWrite(FsWriteInput {
+                path: "src/main.rs".to_string(),
+                content: "fn main() {\n    println!(\"old\");\n}\n".to_string(),
+            }))
+            .expect("fs_write main");
+        runtime
+            .invoke(ToolCall::FsWrite(FsWriteInput {
+                path: "src/lib.rs".to_string(),
+                content: "pub fn helper() {}\n".to_string(),
+            }))
+            .expect("fs_write lib");
+
+        let globbed = runtime
+            .invoke(ToolCall::FsGlob(FsGlobInput {
+                path: "src".to_string(),
+                pattern: "**/*.rs".to_string(),
+            }))
+            .expect("fs_glob")
+            .into_fs_glob()
+            .expect("fs_glob output");
+        let patched = runtime
+            .invoke(ToolCall::FsPatch(FsPatchInput {
+                path: "src/main.rs".to_string(),
+                edits: vec![FsPatchEdit {
+                    old: "println!(\"old\");".to_string(),
+                    new: "println!(\"new\");".to_string(),
+                    replace_all: false,
+                }],
+            }))
+            .expect("fs_patch");
+        let read = runtime
+            .invoke(ToolCall::FsRead(FsReadInput {
+                path: "src/main.rs".to_string(),
+            }))
+            .expect("fs_read patched")
+            .into_fs_read()
+            .expect("fs_read output");
+
+        assert_eq!(
+            globbed
+                .entries
+                .iter()
+                .filter(|entry| entry.kind == crate::workspace::WorkspaceEntryKind::File)
+                .map(|entry| entry.path.as_str())
+                .collect::<Vec<_>>(),
+            vec!["src/lib.rs", "src/main.rs"]
+        );
+        assert_eq!(patched.summary(), "fs_patch path=src/main.rs edits=1");
+        assert!(read.content.contains("println!(\"new\");"));
+    }
+
+    #[test]
+    fn fs_patch_rejects_ambiguous_single_replace_edits() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let workspace = WorkspaceRef::new(temp.path());
+        let mut runtime = ToolRuntime::new(workspace);
+
+        runtime
+            .invoke(ToolCall::FsWrite(FsWriteInput {
+                path: "docs/repeated.txt".to_string(),
+                content: "same\nsame\n".to_string(),
+            }))
+            .expect("fs_write repeated");
+
+        assert!(
+            runtime
+                .invoke(ToolCall::FsPatch(FsPatchInput {
+                    path: "docs/repeated.txt".to_string(),
+                    edits: vec![FsPatchEdit {
+                        old: "same".to_string(),
+                        new: "updated".to_string(),
+                        replace_all: false,
+                    }],
                 }))
                 .is_err()
         );
