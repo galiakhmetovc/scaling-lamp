@@ -3176,6 +3176,204 @@ mod tests {
         assert!(rendered.contains("assistant: repl approval completed"));
     }
 
+    #[test]
+    fn repl_rehydrates_latest_pending_approval_after_restart() {
+        let (web_base, _web_requests, _web_handle) = spawn_text_server("/doc", "rehydrated doc");
+        let first_provider_response = format!(
+            r#"{{
+                "id":"resp_repl_restart_waiting",
+                "model":"gpt-5.4",
+                "output":[
+                    {{
+                        "id":"fc_1",
+                        "type":"function_call",
+                        "status":"completed",
+                        "call_id":"call_web_fetch",
+                        "name":"web_fetch",
+                        "arguments":"{{\"url\":\"{}\"}}"
+                    }}
+                ],
+                "usage":{{"input_tokens":19,"output_tokens":7,"total_tokens":26}}
+            }}"#,
+            web_base
+        );
+        let second_provider_response = r#"{
+            "id":"resp_repl_restart_done",
+            "model":"gpt-5.4",
+            "output":[
+                {
+                    "id":"msg_done",
+                    "type":"message",
+                    "status":"completed",
+                    "role":"assistant",
+                    "content":[
+                        {
+                            "type":"output_text",
+                            "text":"approval after restart completed"
+                        }
+                    ]
+                }
+            ],
+            "usage":{"input_tokens":20,"output_tokens":4,"total_tokens":24}
+        }"#
+        .to_string();
+        let temp = tempfile::tempdir().expect("tempdir");
+        let state_root = temp.path().join("state-root");
+        let (api_base, _requests, handle) = spawn_json_server(first_provider_response.leak());
+        let app = build_from_config(AppConfig {
+            data_dir: state_root.clone(),
+            provider: ConfiguredProvider {
+                kind: ProviderKind::OpenAiResponses,
+                api_base: Some(format!("{api_base}/v1")),
+                api_key: Some("test-key".to_string()),
+                default_model: Some("gpt-5.4".to_string()),
+            },
+            permissions: PermissionConfig {
+                mode: PermissionMode::Auto,
+                rules: vec![PermissionRule {
+                    action: PermissionAction::Ask,
+                    tool: Some("web_fetch".to_string()),
+                    family: None,
+                    path_prefix: None,
+                }],
+            },
+        })
+        .expect("build app");
+        let store = PersistenceStore::open(&app.persistence).expect("open store");
+
+        store
+            .put_session(&SessionRecord {
+                id: "session-chat-repl-restart".to_string(),
+                title: "Chat REPL restart session".to_string(),
+                prompt_override: Some("Use tools when useful.".to_string()),
+                settings_json: serde_json::to_string(&SessionSettings::default())
+                    .expect("serialize settings"),
+                active_mission_id: None,
+                created_at: 1,
+                updated_at: 1,
+            })
+            .expect("put session");
+
+        let mut first_input = Cursor::new(b"Fetch the doc\n/exit\n".to_vec());
+        let mut first_output = Vec::new();
+        app.run_with_io(
+            ["chat", "repl", "session-chat-repl-restart"],
+            &mut first_input,
+            &mut first_output,
+        )
+        .expect("first repl");
+        handle.join().expect("join first server");
+
+        let (api_base, _requests, _handle) = spawn_json_server(second_provider_response.leak());
+        let app = build_from_config(AppConfig {
+            data_dir: state_root,
+            provider: ConfiguredProvider {
+                kind: ProviderKind::OpenAiResponses,
+                api_base: Some(format!("{api_base}/v1")),
+                api_key: Some("test-key".to_string()),
+                default_model: Some("gpt-5.4".to_string()),
+            },
+            permissions: PermissionConfig {
+                mode: PermissionMode::Auto,
+                rules: vec![PermissionRule {
+                    action: PermissionAction::Ask,
+                    tool: Some("web_fetch".to_string()),
+                    family: None,
+                    path_prefix: None,
+                }],
+            },
+        })
+        .expect("rebuild app");
+
+        let mut second_input = Cursor::new(b"/approve\n/exit\n".to_vec());
+        let mut second_output = Vec::new();
+        app.run_with_io(
+            ["chat", "repl", "session-chat-repl-restart"],
+            &mut second_input,
+            &mut second_output,
+        )
+        .expect("second repl");
+
+        let rendered = String::from_utf8(second_output).expect("utf8");
+        assert!(rendered.contains("approved"));
+        assert!(rendered.contains("output=approval after restart completed"));
+        assert!(rendered.contains("assistant: approval after restart completed"));
+    }
+
+    #[test]
+    fn repl_rejects_new_turns_while_an_approval_is_pending() {
+        let (web_base, _web_requests, _web_handle) = spawn_text_server("/doc", "pending doc");
+        let first_provider_response = format!(
+            r#"{{
+                "id":"resp_repl_pending_only",
+                "model":"gpt-5.4",
+                "output":[
+                    {{
+                        "id":"fc_1",
+                        "type":"function_call",
+                        "status":"completed",
+                        "call_id":"call_web_fetch",
+                        "name":"web_fetch",
+                        "arguments":"{{\"url\":\"{}\"}}"
+                    }}
+                ],
+                "usage":{{"input_tokens":19,"output_tokens":7,"total_tokens":26}}
+            }}"#,
+            web_base
+        );
+        let (api_base, _requests, handle) = spawn_json_server(first_provider_response.leak());
+        let temp = tempfile::tempdir().expect("tempdir");
+        let app = build_from_config(AppConfig {
+            data_dir: temp.path().join("state-root"),
+            provider: ConfiguredProvider {
+                kind: ProviderKind::OpenAiResponses,
+                api_base: Some(format!("{api_base}/v1")),
+                api_key: Some("test-key".to_string()),
+                default_model: Some("gpt-5.4".to_string()),
+            },
+            permissions: PermissionConfig {
+                mode: PermissionMode::Auto,
+                rules: vec![PermissionRule {
+                    action: PermissionAction::Ask,
+                    tool: Some("web_fetch".to_string()),
+                    family: None,
+                    path_prefix: None,
+                }],
+            },
+        })
+        .expect("build app");
+        let store = PersistenceStore::open(&app.persistence).expect("open store");
+
+        store
+            .put_session(&SessionRecord {
+                id: "session-chat-repl-pending".to_string(),
+                title: "Chat REPL pending session".to_string(),
+                prompt_override: Some("Use tools when useful.".to_string()),
+                settings_json: serde_json::to_string(&SessionSettings::default())
+                    .expect("serialize settings"),
+                active_mission_id: None,
+                created_at: 1,
+                updated_at: 1,
+            })
+            .expect("put session");
+
+        let mut input =
+            Cursor::new(b"Fetch the doc\nSecond turn should be blocked\n/exit\n".to_vec());
+        let mut output = Vec::new();
+        app.run_with_io(
+            ["chat", "repl", "session-chat-repl-pending"],
+            &mut input,
+            &mut output,
+        )
+        .expect("repl");
+        handle.join().expect("join server");
+
+        let rendered = String::from_utf8(output).expect("utf8");
+        assert!(rendered.contains("status=waiting_approval"));
+        assert!(rendered.contains("finish the pending approval before sending another message"));
+        assert!(!rendered.contains("assistant: Second turn"));
+    }
+
     fn spawn_json_server(body: &'static str) -> (String, Receiver<String>, thread::JoinHandle<()>) {
         spawn_json_server_sequence(vec![body.to_string()])
     }

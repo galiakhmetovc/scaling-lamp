@@ -6,7 +6,7 @@ use agent_persistence::{
 };
 use agent_runtime::mission::{MissionExecutionIntent, MissionSchedule, MissionSpec, MissionStatus};
 use agent_runtime::provider::{FinishReason, ProviderMessage, ProviderRequest, ProviderStreamMode};
-use agent_runtime::run::RunSnapshot;
+use agent_runtime::run::{RunSnapshot, RunStatus};
 use agent_runtime::session::{MessageRole, Session, SessionSettings};
 use rusqlite::Connection;
 use std::io::{BufRead, Write};
@@ -322,7 +322,6 @@ where
     writeln!(output, "chat repl session_id={session_id}").map_err(BootstrapError::Stream)?;
     writeln!(output, "{REPL_HELP}").map_err(BootstrapError::Stream)?;
 
-    let mut pending = None::<ReplPendingApproval>;
     let mut line = String::new();
 
     loop {
@@ -357,12 +356,13 @@ where
             }
             _ if trimmed.starts_with("/approve") => {
                 let requested = trimmed.split_whitespace().nth(1).map(ToString::to_string);
-                let Some(current) = pending.as_ref() else {
+                let Some(current) = find_pending_approval(app, session_id, requested.as_deref())?
+                else {
                     writeln!(output, "no pending approval for session_id={session_id}")
                         .map_err(BootstrapError::Stream)?;
                     continue;
                 };
-                let approval_id = requested.unwrap_or_else(|| current.approval_id.clone());
+                let approval_id = current.approval_id.clone();
                 let report = app.approve_run(&current.run_id, &approval_id, unix_timestamp()?)?;
                 writeln!(
                     output,
@@ -378,34 +378,82 @@ where
                 if let Some(text) = report.output_text.as_deref() {
                     writeln!(output, "assistant: {text}").map_err(BootstrapError::Stream)?;
                 }
-                pending = report.approval_id.map(|next_approval| ReplPendingApproval {
-                    run_id: report.run_id,
-                    approval_id: next_approval,
-                });
             }
-            message => match send_chat_outcome(app, session_id, message)? {
-                ChatSendOutcome::Completed { output_text, .. } => {
-                    writeln!(output, "assistant: {output_text}").map_err(BootstrapError::Stream)?;
-                }
-                ChatSendOutcome::WaitingApproval {
-                    session_id,
-                    run_id,
-                    approval_id,
-                } => {
+            message => {
+                if find_pending_approval(app, session_id, None)?.is_some() {
                     writeln!(
                         output,
-                        "chat send session_id={} run_id={} status=waiting_approval approval_id={}",
-                        session_id, run_id, approval_id
+                        "finish the pending approval before sending another message"
                     )
                     .map_err(BootstrapError::Stream)?;
-                    pending = Some(ReplPendingApproval {
+                    continue;
+                }
+
+                match send_chat_outcome(app, session_id, message)? {
+                    ChatSendOutcome::Completed { output_text, .. } => {
+                        writeln!(output, "assistant: {output_text}")
+                            .map_err(BootstrapError::Stream)?;
+                    }
+                    ChatSendOutcome::WaitingApproval {
+                        session_id,
                         run_id,
                         approval_id,
-                    });
+                    } => {
+                        writeln!(
+                            output,
+                            "chat send session_id={} run_id={} status=waiting_approval approval_id={}",
+                            session_id, run_id, approval_id
+                        )
+                        .map_err(BootstrapError::Stream)?;
+                    }
                 }
-            },
+            }
         }
     }
+}
+
+fn find_pending_approval(
+    app: &App,
+    session_id: &str,
+    requested_approval_id: Option<&str>,
+) -> Result<Option<ReplPendingApproval>, BootstrapError> {
+    let snapshot = app.store()?.load_execution_state()?;
+    let mut latest = None::<(i64, i64, ReplPendingApproval)>;
+
+    for record in snapshot.runs {
+        let run = RunSnapshot::try_from(record).map_err(BootstrapError::RecordConversion)?;
+        if run.session_id != session_id || run.status != RunStatus::WaitingApproval {
+            continue;
+        }
+
+        for approval in run.pending_approvals {
+            let pending = ReplPendingApproval {
+                run_id: run.id.clone(),
+                approval_id: approval.id.clone(),
+            };
+
+            if let Some(requested) = requested_approval_id {
+                if approval.id == requested {
+                    return Ok(Some(pending));
+                }
+                continue;
+            }
+
+            let candidate = (run.updated_at, approval.requested_at, pending);
+            if latest
+                .as_ref()
+                .map(|existing| {
+                    existing.0 < candidate.0
+                        || (existing.0 == candidate.0 && existing.1 < candidate.1)
+                })
+                .unwrap_or(true)
+            {
+                latest = Some(candidate);
+            }
+        }
+    }
+
+    Ok(latest.map(|(_, _, pending)| pending))
 }
 
 fn create_session(
