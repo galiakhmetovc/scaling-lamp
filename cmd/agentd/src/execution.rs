@@ -11,7 +11,6 @@ use agent_persistence::{
     PersistenceStore, PlanRecord, PlanRepository, RecordConversionError, RunRecord, RunRepository,
     SessionRepository, StoreError, TranscriptRecord, TranscriptRepository,
 };
-use agent_runtime::context::ContextSummary;
 use agent_runtime::mission::{
     JobExecutionInput, JobResult, JobSpec, JobStatus, MissionSpec, MissionStatus,
 };

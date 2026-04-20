@@ -16,6 +16,7 @@ pub enum ToolFamily {
     Web,
     Exec,
     Planning,
+    Offload,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -33,6 +34,8 @@ pub enum ToolName {
     ExecKill,
     PlanRead,
     PlanWrite,
+    ArtifactRead,
+    ArtifactSearch,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -141,6 +144,17 @@ pub struct PlanWriteInput {
     pub items: Vec<PlanWriteItemInput>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ArtifactReadInput {
+    pub artifact_id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ArtifactSearchInput {
+    pub query: String,
+    pub limit: usize,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ToolCall {
     FsRead(FsReadInput),
@@ -156,6 +170,8 @@ pub enum ToolCall {
     ExecKill(ProcessKillInput),
     PlanRead(PlanReadInput),
     PlanWrite(PlanWriteInput),
+    ArtifactRead(ArtifactReadInput),
+    ArtifactSearch(ArtifactSearchInput),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -251,6 +267,32 @@ pub struct PlanWriteOutput {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ArtifactReadOutput {
+    pub ref_id: String,
+    pub artifact_id: String,
+    pub label: String,
+    pub summary: String,
+    pub content: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ArtifactSearchResult {
+    pub ref_id: String,
+    pub artifact_id: String,
+    pub label: String,
+    pub summary: String,
+    pub token_estimate: u32,
+    pub message_count: u32,
+    pub preview: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ArtifactSearchOutput {
+    pub query: String,
+    pub results: Vec<ArtifactSearchResult>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ToolOutput {
     FsRead(FsReadOutput),
     FsWrite(FsWriteOutput),
@@ -264,6 +306,8 @@ pub enum ToolOutput {
     ProcessResult(ProcessResult),
     PlanRead(PlanReadOutput),
     PlanWrite(PlanWriteOutput),
+    ArtifactRead(ArtifactReadOutput),
+    ArtifactSearch(ArtifactSearchOutput),
 }
 
 #[derive(Debug)]
@@ -297,6 +341,9 @@ pub enum ToolError {
         source: std::io::Error,
     },
     InvalidPlanWrite {
+        reason: String,
+    },
+    InvalidArtifactTool {
         reason: String,
     },
     UnknownProcess {
@@ -343,6 +390,7 @@ impl ToolFamily {
             Self::Web => "web",
             Self::Exec => "exec",
             Self::Planning => "plan",
+            Self::Offload => "offload",
         }
     }
 }
@@ -363,6 +411,8 @@ impl ToolName {
             Self::ExecKill => "exec_kill",
             Self::PlanRead => "plan_read",
             Self::PlanWrite => "plan_write",
+            Self::ArtifactRead => "artifact_read",
+            Self::ArtifactSearch => "artifact_search",
         }
     }
 }
@@ -392,6 +442,8 @@ impl ToolCatalog {
                         | ToolName::WebSearch
                         | ToolName::PlanRead
                         | ToolName::PlanWrite
+                        | ToolName::ArtifactRead
+                        | ToolName::ArtifactSearch
                 )
             })
             .collect()
@@ -529,6 +581,26 @@ impl ToolCatalog {
                     requires_approval: false,
                 },
             },
+            ToolDefinition {
+                name: ToolName::ArtifactRead,
+                family: ToolFamily::Offload,
+                description: "Read the full content of an offloaded context artifact by artifact_id",
+                policy: ToolPolicy {
+                    read_only: true,
+                    destructive: false,
+                    requires_approval: false,
+                },
+            },
+            ToolDefinition {
+                name: ToolName::ArtifactSearch,
+                family: ToolFamily::Offload,
+                description: "Search across the current session's offloaded context references and payloads",
+                policy: ToolPolicy {
+                    read_only: true,
+                    destructive: false,
+                    requires_approval: false,
+                },
+            },
         ]
     }
 }
@@ -536,7 +608,7 @@ impl ToolCatalog {
 impl Default for ToolCatalog {
     fn default() -> Self {
         Self {
-            families: vec!["fs", "web", "exec", "plan"],
+            families: vec!["fs", "web", "exec", "plan", "offload"],
             definitions: Self::definitions(),
         }
     }
@@ -602,6 +674,13 @@ impl ToolRuntime {
                 reason: "planning tools must execute through the canonical session path"
                     .to_string(),
             }),
+            ToolCall::ArtifactRead(_) | ToolCall::ArtifactSearch(_) => {
+                Err(ToolError::InvalidArtifactTool {
+                    reason:
+                        "offload retrieval tools must execute through the canonical session path"
+                            .to_string(),
+                })
+            }
         }
     }
 
@@ -745,6 +824,8 @@ impl ToolCall {
             Self::ExecKill(_) => ToolName::ExecKill,
             Self::PlanRead(_) => ToolName::PlanRead,
             Self::PlanWrite(_) => ToolName::PlanWrite,
+            Self::ArtifactRead(_) => ToolName::ArtifactRead,
+            Self::ArtifactSearch(_) => ToolName::ArtifactSearch,
         }
     }
 
@@ -761,6 +842,8 @@ impl ToolCall {
             Self::ExecStart(input) => input.cwd.clone(),
             Self::ExecWait(_) | Self::ExecKill(_) => None,
             Self::PlanRead(_) | Self::PlanWrite(_) => None,
+            Self::ArtifactRead(input) => Some(input.artifact_id.clone()),
+            Self::ArtifactSearch(_) => None,
         }
     }
 
@@ -807,6 +890,13 @@ impl ToolCall {
             Self::ExecKill(input) => format!("exec_kill process_id={}", input.process_id),
             Self::PlanRead(_) => "plan_read".to_string(),
             Self::PlanWrite(input) => format!("plan_write items={}", input.items.len()),
+            Self::ArtifactRead(input) => format!("artifact_read artifact_id={}", input.artifact_id),
+            Self::ArtifactSearch(input) => {
+                format!(
+                    "artifact_search query={} limit={}",
+                    input.query, input.limit
+                )
+            }
         }
     }
 
@@ -886,6 +976,18 @@ impl ToolCall {
                 }),
             "plan_write" => serde_json::from_str(arguments)
                 .map(Self::PlanWrite)
+                .map_err(|source| ToolCallParseError::InvalidArguments {
+                    name: name.to_string(),
+                    source,
+                }),
+            "artifact_read" => serde_json::from_str(arguments)
+                .map(Self::ArtifactRead)
+                .map_err(|source| ToolCallParseError::InvalidArguments {
+                    name: name.to_string(),
+                    source,
+                }),
+            "artifact_search" => serde_json::from_str(arguments)
+                .map(Self::ArtifactSearch)
                 .map_err(|source| ToolCallParseError::InvalidArguments {
                     name: name.to_string(),
                     source,
@@ -1022,6 +1124,20 @@ impl ToolOutput {
             ),
             Self::PlanRead(output) => format!("plan_read items={}", output.items.len()),
             Self::PlanWrite(output) => format!("plan_write items={}", output.items.len()),
+            Self::ArtifactRead(output) => {
+                format!(
+                    "artifact_read artifact_id={} bytes={}",
+                    output.artifact_id,
+                    output.content.len()
+                )
+            }
+            Self::ArtifactSearch(output) => {
+                format!(
+                    "artifact_search query={} results={}",
+                    output.query,
+                    output.results.len()
+                )
+            }
         }
     }
 
@@ -1103,6 +1219,29 @@ impl ToolOutput {
             Self::PlanWrite(output) => json!({
                 "tool": "plan_write",
                 "items": output.items.iter().map(plan_item_json).collect::<Vec<_>>(),
+            })
+            .to_string(),
+            Self::ArtifactRead(output) => json!({
+                "tool": "artifact_read",
+                "ref_id": output.ref_id,
+                "artifact_id": output.artifact_id,
+                "label": output.label,
+                "summary": output.summary,
+                "content": output.content,
+            })
+            .to_string(),
+            Self::ArtifactSearch(output) => json!({
+                "tool": "artifact_search",
+                "query": output.query,
+                "results": output.results.iter().map(|result| json!({
+                    "ref_id": result.ref_id,
+                    "artifact_id": result.artifact_id,
+                    "label": result.label,
+                    "summary": result.summary,
+                    "token_estimate": result.token_estimate,
+                    "message_count": result.message_count,
+                    "preview": result.preview,
+                })).collect::<Vec<_>>(),
             })
             .to_string(),
         }
@@ -1251,6 +1390,23 @@ impl ToolName {
                 "required": ["items"],
                 "additionalProperties": false,
             }),
+            Self::ArtifactRead => json!({
+                "type": "object",
+                "properties": {
+                    "artifact_id": { "type": "string", "description": "Artifact id from the offloaded context references block" }
+                },
+                "required": ["artifact_id"],
+                "additionalProperties": false,
+            }),
+            Self::ArtifactSearch => json!({
+                "type": "object",
+                "properties": {
+                    "query": { "type": "string", "description": "Search query against offloaded context labels, summaries, and payloads" },
+                    "limit": { "type": "integer", "minimum": 1, "description": "Maximum number of matching artifacts to return" }
+                },
+                "required": ["query", "limit"],
+                "additionalProperties": false,
+            }),
         }
     }
 }
@@ -1293,6 +1449,9 @@ impl fmt::Display for ToolError {
             Self::InvalidPlanWrite { reason } => {
                 write!(formatter, "invalid plan write request: {reason}")
             }
+            Self::InvalidArtifactTool { reason } => {
+                write!(formatter, "invalid offload retrieval request: {reason}")
+            }
             Self::UnknownProcess { process_id } => {
                 write!(formatter, "unknown process {process_id}")
             }
@@ -1314,6 +1473,7 @@ impl Error for ToolError {
             | Self::WebParse { .. }
             | Self::ProcessFamilyMismatch { .. }
             | Self::InvalidPlanWrite { .. }
+            | Self::InvalidArtifactTool { .. }
             | Self::UnknownProcess { .. } => None,
         }
     }

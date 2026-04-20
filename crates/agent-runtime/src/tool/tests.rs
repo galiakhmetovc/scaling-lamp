@@ -11,6 +11,12 @@ use std::thread;
 #[test]
 fn catalog_exposes_distinct_families_and_policy_flags() {
     let catalog = ToolCatalog::default();
+    let artifact_read = catalog
+        .definition(ToolName::ArtifactRead)
+        .expect("artifact_read");
+    let artifact_search = catalog
+        .definition(ToolName::ArtifactSearch)
+        .expect("artifact_search");
     let exec_start = catalog.definition(ToolName::ExecStart).expect("exec_start");
     let fs_glob = catalog.definition(ToolName::FsGlob).expect("fs_glob");
     let fs_patch = catalog.definition(ToolName::FsPatch).expect("fs_patch");
@@ -21,7 +27,9 @@ fn catalog_exposes_distinct_families_and_policy_flags() {
     let fs_read = catalog.definition(ToolName::FsRead).expect("fs_read");
     let fs_write = catalog.definition(ToolName::FsWrite).expect("fs_write");
 
-    assert_eq!(catalog.families, ["fs", "web", "exec", "plan"]);
+    assert_eq!(catalog.families, ["fs", "web", "exec", "plan", "offload"]);
+    assert_eq!(artifact_read.family, ToolFamily::Offload);
+    assert_eq!(artifact_search.family, ToolFamily::Offload);
     assert_eq!(exec_start.family, ToolFamily::Exec);
     assert_eq!(fs_glob.family, ToolFamily::Filesystem);
     assert_eq!(fs_patch.family, ToolFamily::Filesystem);
@@ -29,6 +37,8 @@ fn catalog_exposes_distinct_families_and_policy_flags() {
     assert_eq!(plan_write.family, ToolFamily::Planning);
     assert_eq!(web_fetch.family, ToolFamily::Web);
     assert_eq!(web_search.family, ToolFamily::Web);
+    assert!(artifact_read.policy.read_only);
+    assert!(artifact_search.policy.read_only);
     assert!(exec_start.policy.requires_approval);
     assert!(fs_glob.policy.read_only);
     assert!(fs_patch.policy.destructive);

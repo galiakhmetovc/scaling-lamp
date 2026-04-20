@@ -1,4 +1,4 @@
-use crate::context::ContextSummary;
+use crate::context::{ContextOffloadSnapshot, ContextSummary};
 use crate::plan::PlanSnapshot;
 use crate::provider::ProviderMessage;
 use crate::session::MessageRole;
@@ -96,6 +96,7 @@ pub struct PromptAssemblyInput {
     pub session_head: Option<SessionHead>,
     pub plan_snapshot: Option<PlanSnapshot>,
     pub context_summary: Option<ContextSummary>,
+    pub context_offload: Option<ContextOffloadSnapshot>,
     pub transcript_messages: Vec<ProviderMessage>,
 }
 
@@ -104,7 +105,7 @@ pub struct PromptAssembly;
 
 impl PromptAssembly {
     pub fn build_messages(input: PromptAssemblyInput) -> Vec<ProviderMessage> {
-        let mut messages = Vec::with_capacity(input.transcript_messages.len() + 3);
+        let mut messages = Vec::with_capacity(input.transcript_messages.len() + 4);
 
         if let Some(session_head) = input.session_head {
             let rendered = session_head.render();
@@ -141,6 +142,15 @@ impl PromptAssembly {
             });
         }
 
+        if let Some(context_offload) = input.context_offload
+            && let Some(rendered) = render_context_offload_refs(&context_offload)
+        {
+            messages.push(ProviderMessage {
+                role: MessageRole::System,
+                content: rendered,
+            });
+        }
+
         messages.extend(
             input
                 .transcript_messages
@@ -151,13 +161,42 @@ impl PromptAssembly {
     }
 }
 
+fn render_context_offload_refs(snapshot: &ContextOffloadSnapshot) -> Option<String> {
+    if snapshot.refs.is_empty() {
+        return None;
+    }
+
+    let mut lines = vec!["Offloaded Context References:".to_string()];
+    const MAX_REFS: usize = 8;
+    for reference in snapshot.refs.iter().take(MAX_REFS) {
+        lines.push(format!(
+            "- [{}] {} | artifact_id={} | tokens={} | messages={} | summary={}",
+            reference.id,
+            reference.label,
+            reference.artifact_id,
+            reference.token_estimate,
+            reference.message_count,
+            reference.summary
+        ));
+    }
+
+    if snapshot.refs.len() > MAX_REFS {
+        lines.push(format!(
+            "- ... ({} more refs)",
+            snapshot.refs.len() - MAX_REFS
+        ));
+    }
+
+    Some(lines.join("\n"))
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
         PromptAssembly, PromptAssemblyInput, SessionHead, SessionHeadFsActivity,
         SessionHeadWorkspaceEntry, SessionHeadWorkspaceEntryKind,
     };
-    use crate::context::ContextSummary;
+    use crate::context::{ContextOffloadRef, ContextOffloadSnapshot, ContextSummary};
     use crate::plan::PlanSnapshot;
     use crate::provider::ProviderMessage;
     use crate::session::MessageRole;
@@ -254,6 +293,7 @@ mod tests {
                 summary_token_estimate: 5,
                 updated_at: 10,
             }),
+            context_offload: None,
             transcript_messages: vec![
                 ProviderMessage {
                     role: MessageRole::User,
@@ -285,6 +325,7 @@ mod tests {
             session_head: None,
             plan_snapshot: None,
             context_summary: None,
+            context_offload: None,
             transcript_messages: vec![ProviderMessage {
                 role: MessageRole::User,
                 content: "hello".to_string(),
@@ -329,6 +370,7 @@ mod tests {
                 summary_token_estimate: 5,
                 updated_at: 10,
             }),
+            context_offload: None,
             transcript_messages: vec![
                 ProviderMessage {
                     role: MessageRole::User,
@@ -350,5 +392,57 @@ mod tests {
         assert_eq!(messages[2].role, MessageRole::System);
         assert!(messages[2].content.contains("Compact summary text."));
         assert_eq!(messages[3].content, "latest question");
+    }
+
+    #[test]
+    fn prompt_assembly_places_offload_refs_after_summary_and_before_transcript_tail() {
+        let messages = PromptAssembly::build_messages(PromptAssemblyInput {
+            session_head: None,
+            plan_snapshot: None,
+            context_summary: Some(ContextSummary {
+                session_id: "session-1".to_string(),
+                summary_text: "Compacted summary text.".to_string(),
+                covered_message_count: 1,
+                summary_token_estimate: 5,
+                updated_at: 10,
+            }),
+            context_offload: Some(ContextOffloadSnapshot {
+                session_id: "session-1".to_string(),
+                refs: vec![ContextOffloadRef {
+                    id: "offload-1".to_string(),
+                    label: "Earlier tool dump".to_string(),
+                    summary: "Shell output with migration diagnostics".to_string(),
+                    artifact_id: "artifact-offload-1".to_string(),
+                    token_estimate: 120,
+                    message_count: 4,
+                    created_at: 11,
+                }],
+                updated_at: 12,
+            }),
+            transcript_messages: vec![
+                ProviderMessage {
+                    role: MessageRole::User,
+                    content: "covered first".to_string(),
+                },
+                ProviderMessage {
+                    role: MessageRole::User,
+                    content: "latest question".to_string(),
+                },
+            ],
+        });
+
+        assert_eq!(messages.len(), 3);
+        assert_eq!(messages[0].role, MessageRole::System);
+        assert_eq!(messages[1].role, MessageRole::System);
+        assert_eq!(messages[2].role, MessageRole::User);
+        assert!(messages[0].content.contains("Compacted summary text."));
+        assert!(
+            messages[1]
+                .content
+                .contains("Offloaded Context References:")
+        );
+        assert!(messages[1].content.contains("artifact-offload-1"));
+        assert!(messages[1].content.contains("Earlier tool dump"));
+        assert_eq!(messages[2].content, "latest question");
     }
 }

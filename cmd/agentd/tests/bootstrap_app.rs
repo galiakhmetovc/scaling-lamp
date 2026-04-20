@@ -1,8 +1,9 @@
 use agent_persistence::{
-    AppConfig, ConfigError, ContextSummaryRepository, JobRecord, JobRepository, MissionRecord,
-    MissionRepository, PersistenceStore, PlanRecord, PlanRepository, RunRecord, RunRepository,
-    SessionRecord, SessionRepository, TranscriptRepository,
+    AppConfig, ConfigError, ContextOffloadRepository, ContextSummaryRepository, JobRecord,
+    JobRepository, MissionRecord, MissionRepository, PersistenceStore, PlanRecord, PlanRepository,
+    RunRecord, RunRepository, SessionRecord, SessionRepository, TranscriptRepository,
 };
+use agent_runtime::context::{ContextOffloadPayload, ContextOffloadRef, ContextOffloadSnapshot};
 use agent_runtime::mission::{JobSpec, MissionExecutionIntent, MissionSchedule, MissionStatus};
 use agent_runtime::permission::{
     PermissionAction, PermissionConfig, PermissionMode, PermissionRule,
@@ -4000,4 +4001,121 @@ fn execute_chat_turn_can_finish_after_plan_write_and_plan_read_tool_calls() {
     assert!(normalized_third.contains("\"call_id\":\"call_plan_read\""));
     assert!(normalized_third.contains("plan_read"));
     assert!(normalized_third.contains("inspect planning seams"));
+}
+
+#[test]
+fn execute_chat_turn_can_retrieve_offloaded_context_via_artifact_read() {
+    let (api_base, requests, handle) = spawn_json_server_sequence(vec![
+        r#"{
+                "id":"resp_offload_tool_1",
+                "model":"gpt-5.4",
+                "output":[
+                    {
+                        "id":"fc_artifact_read",
+                        "type":"function_call",
+                        "call_id":"call_artifact_read",
+                        "name":"artifact_read",
+                        "arguments":"{\"artifact_id\":\"artifact-offload-1\"}"
+                    }
+                ],
+                "usage":{"input_tokens":40,"output_tokens":12,"total_tokens":52}
+            }"#
+        .to_string(),
+        r#"{
+                "id":"resp_offload_tool_2",
+                "model":"gpt-5.4",
+                "output":[
+                    {
+                        "id":"msg_offload_tool",
+                        "type":"message",
+                        "status":"completed",
+                        "role":"assistant",
+                        "content":[
+                            {
+                                "type":"output_text",
+                                "text":"Recovered offloaded context."
+                            }
+                        ]
+                    }
+                ],
+                "usage":{"input_tokens":24,"output_tokens":6,"total_tokens":30}
+            }"#
+        .to_string(),
+    ]);
+    let temp = tempfile::tempdir().expect("tempdir");
+    let app = build_from_config(AppConfig {
+        data_dir: temp.path().join("state-root"),
+        provider: ConfiguredProvider {
+            kind: ProviderKind::OpenAiResponses,
+            api_base: Some(format!("{api_base}/v1")),
+            api_key: Some("test-key".to_string()),
+            default_model: Some("gpt-5.4".to_string()),
+        },
+        ..AppConfig::default()
+    })
+    .expect("build app");
+    let store = PersistenceStore::open(&app.persistence).expect("open store");
+
+    store
+        .put_session(&SessionRecord {
+            id: "session-offload-tools".to_string(),
+            title: "Offload Tools".to_string(),
+            prompt_override: Some(
+                "Use retrieval tools when offloaded context is relevant.".to_string(),
+            ),
+            settings_json: serde_json::to_string(&SessionSettings::default())
+                .expect("serialize settings"),
+            active_mission_id: None,
+            created_at: 1,
+            updated_at: 1,
+        })
+        .expect("put session");
+    store
+        .put_context_offload(
+            &agent_persistence::ContextOffloadRecord::try_from(&ContextOffloadSnapshot {
+                session_id: "session-offload-tools".to_string(),
+                refs: vec![ContextOffloadRef {
+                    id: "offload-1".to_string(),
+                    label: "Earlier shell dump".to_string(),
+                    summary: "Migration diagnostics from the previous turn".to_string(),
+                    artifact_id: "artifact-offload-1".to_string(),
+                    token_estimate: 120,
+                    message_count: 4,
+                    created_at: 2,
+                }],
+                updated_at: 3,
+            })
+            .expect("offload record"),
+            &[ContextOffloadPayload {
+                artifact_id: "artifact-offload-1".to_string(),
+                bytes: b"line one\nimportant diagnostic detail\nline three\n".to_vec(),
+            }],
+        )
+        .expect("put context offload");
+
+    let report = app
+        .execute_chat_turn(
+            "session-offload-tools",
+            "Recover the earlier diagnostics",
+            10,
+        )
+        .expect("execute chat turn");
+    let first_request = requests.recv().expect("first provider request");
+    let second_request = requests.recv().expect("second provider request");
+    handle.join().expect("join server");
+
+    assert_eq!(report.response_id, "resp_offload_tool_2");
+    assert_eq!(report.output_text, "Recovered offloaded context.");
+
+    let normalized_first = first_request.to_ascii_lowercase();
+    assert!(normalized_first.contains("\"name\":\"artifact_read\""));
+    assert!(normalized_first.contains("offloaded context references"));
+    assert!(normalized_first.contains("artifact-offload-1"));
+    assert!(normalized_first.contains("earlier shell dump"));
+    assert!(!normalized_first.contains("important diagnostic detail"));
+
+    let normalized_second = second_request.to_ascii_lowercase();
+    assert!(normalized_second.contains("\"call_id\":\"call_artifact_read\""));
+    assert!(normalized_second.contains("artifact_read"));
+    assert!(normalized_second.contains("important diagnostic detail"));
 }

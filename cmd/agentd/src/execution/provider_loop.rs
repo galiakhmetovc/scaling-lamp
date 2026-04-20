@@ -1,5 +1,7 @@
 use super::*;
 use crate::prompting;
+use agent_persistence::ContextOffloadRepository;
+use agent_runtime::context::{ContextOffloadSnapshot, ContextSummary};
 use agent_runtime::permission::PermissionAction;
 use agent_runtime::plan::PlanItem;
 use agent_runtime::prompt::{PromptAssembly, PromptAssemblyInput};
@@ -11,7 +13,8 @@ use agent_runtime::provider::{
 use agent_runtime::run::{ApprovalRequest, PendingToolApproval, ProviderLoopState};
 use agent_runtime::session::MessageRole;
 use agent_runtime::tool::{
-    PlanReadOutput, PlanWriteOutput, ToolCatalog, ToolDefinition, ToolOutput, ToolRuntime,
+    ArtifactReadOutput, ArtifactSearchOutput, ArtifactSearchResult, PlanReadOutput,
+    PlanWriteOutput, ToolCatalog, ToolDefinition, ToolName, ToolOutput, ToolRuntime,
 };
 use std::collections::BTreeMap;
 
@@ -22,6 +25,12 @@ pub(super) struct ProviderToolExecutionContext<'a> {
     pub(super) store: &'a PersistenceStore,
     pub(super) session_id: &'a str,
     pub(super) now: i64,
+}
+
+#[derive(Debug, Clone)]
+struct PromptMessages {
+    messages: Vec<ProviderMessage>,
+    context_offload: Option<ContextOffloadSnapshot>,
 }
 
 #[derive(Debug, Clone)]
@@ -228,14 +237,23 @@ impl ExecutionService {
     fn automatic_provider_tools(
         &self,
         provider: &dyn ProviderDriver,
+        context_offload: Option<&ContextOffloadSnapshot>,
     ) -> Vec<ProviderToolDefinition> {
         if !provider.descriptor().capabilities.supports_tool_calls {
             return Vec::new();
         }
 
+        let has_context_offload = context_offload.is_some_and(|snapshot| !snapshot.is_empty());
         ToolCatalog::default()
             .automatic_model_definitions()
             .into_iter()
+            .filter(|definition| {
+                has_context_offload
+                    || !matches!(
+                        definition.name,
+                        ToolName::ArtifactRead | ToolName::ArtifactSearch
+                    )
+            })
             .map(|definition| ProviderToolDefinition {
                 name: definition.name.as_str().to_string(),
                 description: definition.description.to_string(),
@@ -248,7 +266,7 @@ impl ExecutionService {
         &self,
         store: &PersistenceStore,
         session_id: &str,
-    ) -> Result<Vec<ProviderMessage>, ExecutionError> {
+    ) -> Result<PromptMessages, ExecutionError> {
         let session = Session::try_from(
             store
                 .get_session(session_id)
@@ -287,6 +305,12 @@ impl ExecutionService {
             .map(PlanSnapshot::try_from)
             .transpose()
             .map_err(ExecutionError::RecordConversion)?;
+        let context_offload = store
+            .get_context_offload(session_id)
+            .map_err(ExecutionError::Store)?
+            .map(ContextOffloadSnapshot::try_from)
+            .transpose()
+            .map_err(ExecutionError::RecordConversion)?;
         let runs = store
             .load_execution_state()
             .map_err(ExecutionError::Store)?
@@ -303,12 +327,16 @@ impl ExecutionService {
             &self.workspace,
         );
 
-        Ok(PromptAssembly::build_messages(PromptAssemblyInput {
-            session_head: Some(session_head),
-            plan_snapshot,
-            context_summary,
-            transcript_messages,
-        }))
+        Ok(PromptMessages {
+            messages: PromptAssembly::build_messages(PromptAssemblyInput {
+                session_head: Some(session_head),
+                plan_snapshot,
+                context_summary,
+                context_offload: context_offload.clone(),
+                transcript_messages,
+            }),
+            context_offload,
+        })
     }
 
     pub(super) fn persist_run(
@@ -481,6 +509,17 @@ impl ExecutionService {
             ToolCall::PlanWrite(input) => Ok(ToolOutput::PlanWrite(
                 self.write_plan_snapshot(store, session_id, input, now)?,
             )),
+            ToolCall::ArtifactRead(input) => Ok(ToolOutput::ArtifactRead(
+                self.read_context_offload_artifact(store, session_id, input.artifact_id.as_str())?,
+            )),
+            ToolCall::ArtifactSearch(input) => Ok(ToolOutput::ArtifactSearch(
+                self.search_context_offload_artifacts(
+                    store,
+                    session_id,
+                    input.query.as_str(),
+                    input.limit,
+                )?,
+            )),
             _ => tool_runtime
                 .invoke(parsed.clone())
                 .map_err(ExecutionError::Tool),
@@ -538,6 +577,125 @@ impl ExecutionService {
         Ok(PlanWriteOutput { items })
     }
 
+    fn read_context_offload_artifact(
+        &self,
+        store: &PersistenceStore,
+        session_id: &str,
+        artifact_id: &str,
+    ) -> Result<ArtifactReadOutput, ExecutionError> {
+        let snapshot = self.require_context_offload_snapshot(store, session_id)?;
+        let reference = snapshot
+            .refs
+            .into_iter()
+            .find(|reference| reference.artifact_id == artifact_id)
+            .ok_or_else(|| {
+                ExecutionError::Tool(ToolError::InvalidArtifactTool {
+                    reason: format!(
+                        "artifact {} is not referenced by the current session offload snapshot",
+                        artifact_id
+                    ),
+                })
+            })?;
+        let payload = store
+            .get_context_offload_payload(artifact_id)
+            .map_err(ExecutionError::Store)?
+            .ok_or_else(|| {
+                ExecutionError::Tool(ToolError::InvalidArtifactTool {
+                    reason: format!(
+                        "artifact {} is missing from context offload storage",
+                        artifact_id
+                    ),
+                })
+            })?;
+
+        Ok(ArtifactReadOutput {
+            ref_id: reference.id,
+            artifact_id: reference.artifact_id,
+            label: reference.label,
+            summary: reference.summary,
+            content: String::from_utf8_lossy(&payload.bytes).to_string(),
+        })
+    }
+
+    fn search_context_offload_artifacts(
+        &self,
+        store: &PersistenceStore,
+        session_id: &str,
+        query: &str,
+        limit: usize,
+    ) -> Result<ArtifactSearchOutput, ExecutionError> {
+        let snapshot = self.require_context_offload_snapshot(store, session_id)?;
+        let query = query.trim();
+        if query.is_empty() {
+            return Err(ExecutionError::Tool(ToolError::InvalidArtifactTool {
+                reason: "artifact_search query must not be empty".to_string(),
+            }));
+        }
+        let normalized_query = query.to_ascii_lowercase();
+        let mut results = Vec::new();
+        let effective_limit = limit.max(1);
+
+        for reference in snapshot.refs {
+            let payload = store
+                .get_context_offload_payload(reference.artifact_id.as_str())
+                .map_err(ExecutionError::Store)?
+                .ok_or_else(|| {
+                    ExecutionError::Tool(ToolError::InvalidArtifactTool {
+                        reason: format!(
+                            "artifact {} is missing from context offload storage",
+                            reference.artifact_id
+                        ),
+                    })
+                })?;
+            let content = String::from_utf8_lossy(&payload.bytes).to_string();
+            let haystack = format!(
+                "{}\n{}\n{}\n{}",
+                reference.artifact_id, reference.label, reference.summary, content
+            )
+            .to_ascii_lowercase();
+            if !haystack.contains(&normalized_query) {
+                continue;
+            }
+
+            results.push(ArtifactSearchResult {
+                ref_id: reference.id,
+                artifact_id: reference.artifact_id,
+                label: reference.label,
+                summary: reference.summary,
+                token_estimate: reference.token_estimate,
+                message_count: reference.message_count,
+                preview: prompting::preview_text(&content, 240),
+            });
+            if results.len() >= effective_limit {
+                break;
+            }
+        }
+
+        Ok(ArtifactSearchOutput {
+            query: query.to_string(),
+            results,
+        })
+    }
+
+    fn require_context_offload_snapshot(
+        &self,
+        store: &PersistenceStore,
+        session_id: &str,
+    ) -> Result<ContextOffloadSnapshot, ExecutionError> {
+        store
+            .get_context_offload(session_id)
+            .map_err(ExecutionError::Store)?
+            .map(ContextOffloadSnapshot::try_from)
+            .transpose()
+            .map_err(ExecutionError::RecordConversion)?
+            .filter(|snapshot| !snapshot.is_empty())
+            .ok_or_else(|| {
+                ExecutionError::Tool(ToolError::InvalidArtifactTool {
+                    reason: "the current session has no offloaded context".to_string(),
+                })
+            })
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub(super) fn execute_provider_turn_loop(
         &self,
@@ -551,15 +709,16 @@ impl ExecutionService {
         now: i64,
         observer: &mut Option<&mut dyn FnMut(ChatExecutionEvent)>,
     ) -> Result<ProviderResponse, ExecutionError> {
-        let base_messages = self.prompt_messages(store, session_id)?;
+        let prompt_messages = self.prompt_messages(store, session_id)?;
         let catalog = ToolCatalog::default();
-        let tools = self.automatic_provider_tools(provider);
+        let tools =
+            self.automatic_provider_tools(provider, prompt_messages.context_offload.as_ref());
         let mut tool_runtime = ToolRuntime::new(self.workspace.clone());
         let mut cursor = ProviderLoopCursor::new(provider, initial_loop_state);
 
         while cursor.has_round_budget() {
             let request = cursor.build_request(
-                &base_messages,
+                &prompt_messages.messages,
                 model.as_deref(),
                 instructions.as_deref(),
                 &tools,
