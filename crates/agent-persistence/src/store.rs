@@ -1,12 +1,12 @@
 use crate::PersistenceScaffold;
 use crate::config::AppConfig;
 use crate::records::{
-    ArtifactRecord, ContextSummaryRecord, JobRecord, MissionRecord, RunRecord, SessionRecord,
-    TranscriptRecord,
+    ArtifactRecord, ContextSummaryRecord, JobRecord, MissionRecord, PlanRecord, RunRecord,
+    SessionRecord, TranscriptRecord,
 };
 use crate::repository::{
-    ArtifactRepository, ContextSummaryRepository, JobRepository, MissionRepository, RunRepository,
-    SessionRepository, TranscriptRepository,
+    ArtifactRepository, ContextSummaryRepository, JobRepository, MissionRepository, PlanRepository,
+    RunRepository, SessionRepository, TranscriptRepository,
 };
 use rusqlite::{Connection, OptionalExtension, params};
 use sha2::{Digest, Sha256};
@@ -790,6 +790,37 @@ impl ContextSummaryRepository for PersistenceStore {
     }
 }
 
+impl PlanRepository for PersistenceStore {
+    fn put_plan(&self, record: &PlanRecord) -> Result<(), StoreError> {
+        self.connection.execute(
+            "INSERT INTO plans (session_id, items_json, updated_at)
+             VALUES (?1, ?2, ?3)
+             ON CONFLICT(session_id) DO UPDATE SET
+                items_json = excluded.items_json,
+                updated_at = excluded.updated_at",
+            params![record.session_id, record.items_json, record.updated_at],
+        )?;
+        Ok(())
+    }
+
+    fn get_plan(&self, session_id: &str) -> Result<Option<PlanRecord>, StoreError> {
+        self.connection
+            .query_row(
+                "SELECT session_id, items_json, updated_at FROM plans WHERE session_id = ?1",
+                [session_id],
+                |row| {
+                    Ok(PlanRecord {
+                        session_id: row.get(0)?,
+                        items_json: row.get(1)?,
+                        updated_at: row.get(2)?,
+                    })
+                },
+            )
+            .optional()
+            .map_err(StoreError::from)
+    }
+}
+
 impl ArtifactRepository for PersistenceStore {
     fn put_artifact(&self, record: &ArtifactRecord) -> Result<(), StoreError> {
         let path = self.artifact_path(&record.id)?;
@@ -998,6 +1029,13 @@ fn bootstrap_schema(connection: &Connection) -> Result<(), StoreError> {
              FOREIGN KEY(session_id) REFERENCES sessions(id) ON DELETE CASCADE
          );
 
+         CREATE TABLE IF NOT EXISTS plans (
+             session_id TEXT PRIMARY KEY,
+             items_json TEXT NOT NULL,
+             updated_at INTEGER NOT NULL,
+             FOREIGN KEY(session_id) REFERENCES sessions(id) ON DELETE CASCADE
+         );
+
          CREATE TABLE IF NOT EXISTS artifacts (
              id TEXT PRIMARY KEY,
              session_id TEXT NOT NULL,
@@ -1055,6 +1093,9 @@ fn validate_schema(connection: &Connection) -> Result<(), StoreError> {
         "summary_token_estimate",
         true,
     )?;
+    validate_column(connection, "plans", "session_id", true)?;
+    validate_column(connection, "plans", "items_json", true)?;
+    validate_foreign_key(connection, "plans", "session_id", "sessions", "CASCADE")?;
     validate_column(connection, "artifacts", "session_id", true)?;
     validate_column(connection, "artifacts", "metadata_json", true)?;
     validate_column(connection, "artifacts", "sha256", true)?;
@@ -1330,9 +1371,10 @@ fn validate_column(
     while let Some(row) = rows.next()? {
         let name: String = row.get(1)?;
         let not_null: i64 = row.get(3)?;
+        let primary_key_position: i64 = row.get(5)?;
 
         if name == column {
-            if required_not_null && not_null != 1 {
+            if required_not_null && not_null != 1 && primary_key_position == 0 {
                 return Err(StoreError::SchemaMismatch {
                     table,
                     reason: format!("{column} must be NOT NULL"),
@@ -1648,10 +1690,11 @@ mod tests {
     };
     use crate::{
         ArtifactRecord, ArtifactRepository, JobRecord, JobRepository, MissionRecord,
-        MissionRepository, PersistenceScaffold, RunRecord, RunRepository, SessionRecord,
-        SessionRepository, TranscriptRecord, TranscriptRepository,
+        MissionRepository, PersistenceScaffold, PlanRecord, PlanRepository, RunRecord,
+        RunRepository, SessionRecord, SessionRepository, TranscriptRecord, TranscriptRepository,
     };
     use agent_runtime::mission::JobExecutionInput;
+    use agent_runtime::plan::{PlanItem, PlanItemStatus, PlanSnapshot};
     use std::fs;
     use std::path::PathBuf;
 
@@ -1737,6 +1780,16 @@ mod tests {
             bytes: b"verification output".to_vec(),
             created_at: 7,
         };
+        let plan = PlanRecord {
+            session_id: session.id.clone(),
+            items_json: serde_json::to_string(&vec![PlanItem {
+                id: "inspect".to_string(),
+                content: "Inspect planning seams".to_string(),
+                status: PlanItemStatus::Pending,
+            }])
+            .expect("serialize plan"),
+            updated_at: 8,
+        };
 
         {
             let store = super::PersistenceStore::open(&scaffold).expect("open store");
@@ -1751,6 +1804,7 @@ mod tests {
             store.put_run(&run).expect("store run");
             store.put_job(&job).expect("store job");
             store.put_transcript(&transcript).expect("store transcript");
+            store.put_plan(&plan).expect("store plan");
             store.put_artifact(&artifact).expect("store artifact");
         }
 
@@ -1789,10 +1843,65 @@ mod tests {
             }]
         );
         assert_eq!(
+            reopened.get_plan("session-1").expect("get plan"),
+            Some(plan)
+        );
+        assert_eq!(
             reopened.get_artifact(&artifact.id).expect("get artifact"),
             Some(artifact)
         );
         assert!(scaffold.stores.metadata_db.exists());
+    }
+
+    #[test]
+    fn plan_repository_round_trips_structured_plan_snapshots() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let scaffold = PersistenceScaffold::from_config(crate::AppConfig {
+            data_dir: temp.path().join("state-root"),
+            ..crate::AppConfig::default()
+        });
+        let store = super::PersistenceStore::open(&scaffold).expect("open store");
+        store
+            .put_session(&SessionRecord {
+                id: "session-plan".to_string(),
+                title: "Plan Session".to_string(),
+                prompt_override: None,
+                settings_json: "{\"model\":\"gpt-5.4\"}".to_string(),
+                active_mission_id: None,
+                created_at: 1,
+                updated_at: 1,
+            })
+            .expect("put session");
+
+        let snapshot = PlanSnapshot {
+            session_id: "session-plan".to_string(),
+            items: vec![
+                PlanItem {
+                    id: "inspect".to_string(),
+                    content: "Inspect seams".to_string(),
+                    status: PlanItemStatus::Pending,
+                },
+                PlanItem {
+                    id: "persist".to_string(),
+                    content: "Persist plan".to_string(),
+                    status: PlanItemStatus::Completed,
+                },
+            ],
+            updated_at: 9,
+        };
+
+        store
+            .put_plan(&PlanRecord::try_from(&snapshot).expect("plan record"))
+            .expect("put plan");
+        let restored = PlanSnapshot::try_from(
+            store
+                .get_plan("session-plan")
+                .expect("get plan")
+                .expect("plan exists"),
+        )
+        .expect("restore plan");
+
+        assert_eq!(restored, snapshot);
     }
 
     #[test]

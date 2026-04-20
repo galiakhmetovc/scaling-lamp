@@ -1,6 +1,6 @@
 use crate::records::{
-    ArtifactRecord, ContextSummaryRecord, JobRecord, MissionRecord, RunRecord, SessionRecord,
-    TranscriptRecord,
+    ArtifactRecord, ContextSummaryRecord, JobRecord, MissionRecord, PlanRecord, RunRecord,
+    SessionRecord, TranscriptRecord,
 };
 use crate::store::StoreError;
 
@@ -44,6 +44,11 @@ pub trait ContextSummaryRepository {
         &self,
         session_id: &str,
     ) -> Result<Option<ContextSummaryRecord>, StoreError>;
+}
+
+pub trait PlanRepository {
+    fn put_plan(&self, record: &PlanRecord) -> Result<(), StoreError>;
+    fn get_plan(&self, session_id: &str) -> Result<Option<PlanRecord>, StoreError>;
 }
 
 pub trait ArtifactRepository {

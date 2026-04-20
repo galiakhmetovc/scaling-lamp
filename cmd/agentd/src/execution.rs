@@ -3,14 +3,15 @@
 use crate::prompting;
 use agent_persistence::{
     ContextSummaryRepository, JobRecord, JobRepository, MissionRecord, MissionRepository,
-    PersistenceStore, RecordConversionError, RunRecord, RunRepository, SessionRepository,
-    StoreError, TranscriptRecord, TranscriptRepository,
+    PersistenceStore, PlanRecord, PlanRepository, RecordConversionError, RunRecord, RunRepository,
+    SessionRepository, StoreError, TranscriptRecord, TranscriptRepository,
 };
 use agent_runtime::context::ContextSummary;
 use agent_runtime::mission::{
     JobExecutionInput, JobResult, JobSpec, JobStatus, MissionSpec, MissionStatus,
 };
 use agent_runtime::permission::{PermissionAction, PermissionConfig};
+use agent_runtime::plan::{PlanItem, PlanSnapshot};
 use agent_runtime::prompt::{PromptAssembly, PromptAssemblyInput};
 use agent_runtime::provider::{
     ProviderContinuationMessage, ProviderDriver, ProviderError, ProviderMessage, ProviderRequest,
@@ -26,7 +27,8 @@ use agent_runtime::scheduler::{
 };
 use agent_runtime::session::{MessageRole, Session, TranscriptEntry};
 use agent_runtime::tool::{
-    ProcessKind, ToolCall, ToolCatalog, ToolDefinition, ToolError, ToolOutput, ToolRuntime,
+    PlanReadOutput, PlanWriteOutput, ProcessKind, ToolCall, ToolCatalog, ToolDefinition, ToolError,
+    ToolOutput, ToolRuntime,
 };
 use agent_runtime::verification::EvidenceBundle;
 use agent_runtime::workspace::WorkspaceRef;
@@ -132,6 +134,13 @@ struct ToolExecutionContext<'a> {
     approved_approval_id: Option<&'a str>,
     workspace_root: Option<&'a Path>,
     evidence: Option<&'a EvidenceBundle>,
+    now: i64,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct ProviderToolExecutionContext<'a> {
+    store: &'a PersistenceStore,
+    session_id: &'a str,
     now: i64,
 }
 
@@ -456,6 +465,12 @@ impl ExecutionService {
             .map(ContextSummary::try_from)
             .transpose()
             .map_err(ExecutionError::RecordConversion)?;
+        let plan_snapshot = store
+            .get_plan(session_id)
+            .map_err(ExecutionError::Store)?
+            .map(PlanSnapshot::try_from)
+            .transpose()
+            .map_err(ExecutionError::RecordConversion)?;
         let runs = store
             .load_execution_state()
             .map_err(ExecutionError::Store)?
@@ -474,6 +489,7 @@ impl ExecutionService {
 
         Ok(PromptAssembly::build_messages(PromptAssemblyInput {
             session_head: Some(session_head),
+            plan_snapshot,
             context_summary,
             transcript_messages,
         }))
@@ -582,10 +598,10 @@ impl ExecutionService {
 
     fn invoke_provider_tool_call(
         &self,
+        context: ProviderToolExecutionContext<'_>,
         run: &mut RunEngine,
         tool_runtime: &mut ToolRuntime,
         parsed: &ToolCall,
-        now: i64,
         observer: &mut Option<&mut dyn FnMut(ChatExecutionEvent)>,
     ) -> Result<String, ExecutionError> {
         Self::emit_event(
@@ -595,7 +611,13 @@ impl ExecutionService {
                 status: ToolExecutionStatus::Running,
             },
         );
-        let output = match tool_runtime.invoke(parsed.clone()) {
+        let output = match self.execute_model_tool_call(
+            context.store,
+            context.session_id,
+            tool_runtime,
+            parsed,
+            context.now,
+        ) {
             Ok(output) => output,
             Err(source) => {
                 Self::emit_event(
@@ -605,11 +627,11 @@ impl ExecutionService {
                         status: ToolExecutionStatus::Failed,
                     },
                 );
-                return Err(ExecutionError::Tool(source));
+                return Err(source);
             }
         };
         let model_output = output.model_output();
-        run.record_tool_completion(completed_tool_step_detail(parsed, &output), now)
+        run.record_tool_completion(completed_tool_step_detail(parsed, &output), context.now)
             .map_err(ExecutionError::RunTransition)?;
         Self::emit_event(
             observer,
@@ -619,6 +641,78 @@ impl ExecutionService {
             },
         );
         Ok(model_output)
+    }
+
+    fn execute_model_tool_call(
+        &self,
+        store: &PersistenceStore,
+        session_id: &str,
+        tool_runtime: &mut ToolRuntime,
+        parsed: &ToolCall,
+        now: i64,
+    ) -> Result<ToolOutput, ExecutionError> {
+        match parsed {
+            ToolCall::PlanRead(_) => Ok(ToolOutput::PlanRead(
+                self.read_plan_snapshot(store, session_id)?,
+            )),
+            ToolCall::PlanWrite(input) => Ok(ToolOutput::PlanWrite(
+                self.write_plan_snapshot(store, session_id, input, now)?,
+            )),
+            _ => tool_runtime
+                .invoke(parsed.clone())
+                .map_err(ExecutionError::Tool),
+        }
+    }
+
+    fn read_plan_snapshot(
+        &self,
+        store: &PersistenceStore,
+        session_id: &str,
+    ) -> Result<PlanReadOutput, ExecutionError> {
+        let snapshot = store
+            .get_plan(session_id)
+            .map_err(ExecutionError::Store)?
+            .map(PlanSnapshot::try_from)
+            .transpose()
+            .map_err(ExecutionError::RecordConversion)?
+            .unwrap_or_else(|| PlanSnapshot {
+                session_id: session_id.to_string(),
+                items: Vec::new(),
+                updated_at: 0,
+            });
+
+        Ok(PlanReadOutput {
+            items: snapshot.items,
+        })
+    }
+
+    fn write_plan_snapshot(
+        &self,
+        store: &PersistenceStore,
+        session_id: &str,
+        input: &agent_runtime::tool::PlanWriteInput,
+        now: i64,
+    ) -> Result<PlanWriteOutput, ExecutionError> {
+        let items = input
+            .items
+            .clone()
+            .into_iter()
+            .map(PlanItem::try_from)
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|source| {
+                ExecutionError::Tool(ToolError::InvalidPlanWrite {
+                    reason: source.to_string(),
+                })
+            })?;
+        let snapshot = PlanSnapshot {
+            session_id: session_id.to_string(),
+            items: items.clone(),
+            updated_at: now,
+        };
+        let record = PlanRecord::try_from(&snapshot).map_err(ExecutionError::RecordConversion)?;
+        store.put_plan(&record).map_err(ExecutionError::Store)?;
+
+        Ok(PlanWriteOutput { items })
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -736,8 +830,17 @@ impl ExecutionService {
                     }
                 }
 
-                let model_output =
-                    self.invoke_provider_tool_call(run, &mut tool_runtime, &parsed, now, observer)?;
+                let model_output = self.invoke_provider_tool_call(
+                    ProviderToolExecutionContext {
+                        store,
+                        session_id,
+                        now,
+                    },
+                    run,
+                    &mut tool_runtime,
+                    &parsed,
+                    observer,
+                )?;
                 cursor.record_tool_output(&tool_call.call_id, model_output);
             }
 
@@ -1346,8 +1449,17 @@ impl ExecutionService {
         }
 
         let mut tool_runtime = ToolRuntime::new(self.workspace.clone());
-        let model_output =
-            self.invoke_provider_tool_call(&mut run, &mut tool_runtime, &parsed, now, observer)?;
+        let model_output = self.invoke_provider_tool_call(
+            ProviderToolExecutionContext {
+                store,
+                session_id: &session.id,
+                now,
+            },
+            &mut run,
+            &mut tool_runtime,
+            &parsed,
+            observer,
+        )?;
 
         let mut resumed_loop_state = loop_state;
         resumed_loop_state.pending_approval = None;
@@ -1577,6 +1689,7 @@ impl ExecutionService {
                 })?,
         )
         .map_err(ExecutionError::RecordConversion)?;
+        let session_id = run_snapshot.session_id.clone();
         let mut run = RunEngine::from_snapshot(run_snapshot);
         let permission = self.permissions.resolve(definition, tool_call);
 
@@ -1661,17 +1774,6 @@ impl ExecutionService {
             });
         }
 
-        let Some(workspace_root) = context.workspace_root else {
-            return Ok(ToolExecutionReport {
-                job_id: job.id,
-                run_id: run_id.to_string(),
-                run_status: run.snapshot().status,
-                approval_id: None,
-                output_summary: None,
-                evidence_refs: run.snapshot().evidence_refs.clone(),
-            });
-        };
-
         if let Some(approval_id) = context.approved_approval_id {
             run.resolve_approval(approval_id, context.now)
                 .map_err(ExecutionError::RunTransition)?;
@@ -1690,10 +1792,38 @@ impl ExecutionService {
         mission.status = MissionStatus::Running;
         mission.updated_at = context.now;
 
-        let mut tool_runtime = ToolRuntime::new(WorkspaceRef::new(workspace_root));
-        let output = tool_runtime
-            .invoke(tool_call.clone())
-            .map_err(ExecutionError::Tool)?;
+        let output = match tool_call {
+            ToolCall::PlanRead(_) | ToolCall::PlanWrite(_) => {
+                let mut tool_runtime = ToolRuntime::new(self.workspace.clone());
+                self.execute_model_tool_call(
+                    store,
+                    &session_id,
+                    &mut tool_runtime,
+                    tool_call,
+                    context.now,
+                )?
+            }
+            _ => {
+                let Some(workspace_root) = context.workspace_root else {
+                    return Ok(ToolExecutionReport {
+                        job_id: job.id,
+                        run_id: run_id.to_string(),
+                        run_status: run.snapshot().status,
+                        approval_id: None,
+                        output_summary: None,
+                        evidence_refs: run.snapshot().evidence_refs.clone(),
+                    });
+                };
+                let mut tool_runtime = ToolRuntime::new(WorkspaceRef::new(workspace_root));
+                self.execute_model_tool_call(
+                    store,
+                    &session_id,
+                    &mut tool_runtime,
+                    tool_call,
+                    context.now,
+                )?
+            }
+        };
         let output_summary = output.summary();
         run.record_tool_completion(completed_tool_step_detail(tool_call, &output), context.now)
             .map_err(ExecutionError::RunTransition)?;

@@ -1,12 +1,13 @@
 use agent_persistence::{
     AppConfig, ConfigError, ContextSummaryRepository, JobRecord, JobRepository, MissionRecord,
-    MissionRepository, PersistenceStore, RunRecord, RunRepository, SessionRecord,
-    SessionRepository, TranscriptRepository,
+    MissionRepository, PersistenceStore, PlanRecord, PlanRepository, RunRecord, RunRepository,
+    SessionRecord, SessionRepository, TranscriptRepository,
 };
 use agent_runtime::mission::{JobSpec, MissionExecutionIntent, MissionSchedule, MissionStatus};
 use agent_runtime::permission::{
     PermissionAction, PermissionConfig, PermissionMode, PermissionRule,
 };
+use agent_runtime::plan::{PlanItem, PlanItemStatus, PlanSnapshot};
 use agent_runtime::provider::{ConfiguredProvider, ProviderKind};
 use agent_runtime::run::{ApprovalRequest, DelegateRun, RunEngine, RunSnapshot, RunStatus};
 use agent_runtime::scheduler::{MissionVerificationSummary, SupervisorAction};
@@ -3782,4 +3783,221 @@ fn execute_chat_turn_uses_the_context_summary_and_only_the_uncovered_messages() 
     assert!(normalized_request.contains("\"text\":\"latest question\""));
     assert!(!normalized_request.contains("\"text\":\"covered user one\""));
     assert!(!normalized_request.contains("\"text\":\"covered assistant one\""));
+}
+
+#[test]
+fn execute_chat_turn_includes_the_plan_snapshot_before_context_summary() {
+    let (api_base, requests, handle) = spawn_json_server_sequence(vec![
+        r#"{
+                "id":"resp_plan_chat",
+                "model":"gpt-5.4",
+                "output":[
+                    {
+                        "id":"msg_plan_chat",
+                        "type":"message",
+                        "status":"completed",
+                        "role":"assistant",
+                        "content":[
+                            {
+                                "type":"output_text",
+                                "text":"Answer with plan context."
+                            }
+                        ]
+                    }
+                ],
+                "usage":{"input_tokens":28,"output_tokens":6,"total_tokens":34}
+            }"#
+        .to_string(),
+    ]);
+    let temp = tempfile::tempdir().expect("tempdir");
+    let app = build_from_config(AppConfig {
+        data_dir: temp.path().join("state-root"),
+        provider: ConfiguredProvider {
+            kind: ProviderKind::OpenAiResponses,
+            api_base: Some(format!("{api_base}/v1")),
+            api_key: Some("test-key".to_string()),
+            default_model: Some("gpt-5.4".to_string()),
+        },
+        ..AppConfig::default()
+    })
+    .expect("build app");
+    let store = PersistenceStore::open(&app.persistence).expect("open store");
+
+    store
+        .put_session(&SessionRecord {
+            id: "session-plan-chat".to_string(),
+            title: "Planned Chat".to_string(),
+            prompt_override: None,
+            settings_json: serde_json::to_string(&SessionSettings::default())
+                .expect("serialize settings"),
+            active_mission_id: None,
+            created_at: 1,
+            updated_at: 1,
+        })
+        .expect("put session");
+    store
+        .put_plan(
+            &PlanRecord::try_from(&PlanSnapshot {
+                session_id: "session-plan-chat".to_string(),
+                items: vec![
+                    PlanItem {
+                        id: "inspect".to_string(),
+                        content: "Inspect planning seams".to_string(),
+                        status: PlanItemStatus::Pending,
+                    },
+                    PlanItem {
+                        id: "persist".to_string(),
+                        content: "Persist canonical plan state".to_string(),
+                        status: PlanItemStatus::InProgress,
+                    },
+                ],
+                updated_at: 3,
+            })
+            .expect("plan record"),
+        )
+        .expect("put plan");
+    store
+        .put_context_summary(&agent_persistence::ContextSummaryRecord {
+            session_id: "session-plan-chat".to_string(),
+            summary_text: "Compact summary text.".to_string(),
+            covered_message_count: 0,
+            summary_token_estimate: 4,
+            updated_at: 4,
+        })
+        .expect("put context summary");
+
+    let report = app
+        .execute_chat_turn("session-plan-chat", "what next?", 10)
+        .expect("execute chat turn");
+    let request = requests.recv().expect("provider request");
+    handle.join().expect("join server");
+
+    assert_eq!(report.response_id, "resp_plan_chat");
+    let normalized = request.to_ascii_lowercase();
+    let session_marker = normalized.find("session: planned chat").expect("session");
+    let plan_marker = normalized.find("plan:").expect("plan marker");
+    let summary_marker = normalized
+        .find("compact summary text.")
+        .expect("summary marker");
+    assert!(session_marker < plan_marker);
+    assert!(plan_marker < summary_marker);
+    assert!(normalized.contains("[pending] inspect: inspect planning seams"));
+    assert!(normalized.contains("[in_progress] persist: persist canonical plan state"));
+}
+
+#[test]
+fn execute_chat_turn_can_finish_after_plan_write_and_plan_read_tool_calls() {
+    let (api_base, requests, handle) = spawn_json_server_sequence(vec![
+        r#"{
+                "id":"resp_plan_tools_1",
+                "model":"gpt-5.4",
+                "output":[
+                    {
+                        "id":"fc_plan_write",
+                        "type":"function_call",
+                        "call_id":"call_plan_write",
+                        "name":"plan_write",
+                        "arguments":"{\"items\":[{\"id\":\"inspect\",\"content\":\"Inspect planning seams\",\"status\":\"in_progress\"},{\"id\":\"persist\",\"content\":\"Persist plan snapshot\",\"status\":\"pending\"}]}"
+                    }
+                ],
+                "usage":{"input_tokens":30,"output_tokens":10,"total_tokens":40}
+            }"#
+        .to_string(),
+        r#"{
+                "id":"resp_plan_tools_2",
+                "model":"gpt-5.4",
+                "output":[
+                    {
+                        "id":"fc_plan_read",
+                        "type":"function_call",
+                        "call_id":"call_plan_read",
+                        "name":"plan_read",
+                        "arguments":"{}"
+                    }
+                ],
+                "usage":{"input_tokens":20,"output_tokens":8,"total_tokens":28}
+            }"#
+        .to_string(),
+        r#"{
+                "id":"resp_plan_tools_3",
+                "model":"gpt-5.4",
+                "output":[
+                    {
+                        "id":"msg_plan_tools",
+                        "type":"message",
+                        "status":"completed",
+                        "role":"assistant",
+                        "content":[
+                            {
+                                "type":"output_text",
+                                "text":"Plan updated and read back."
+                            }
+                        ]
+                    }
+                ],
+                "usage":{"input_tokens":24,"output_tokens":6,"total_tokens":30}
+            }"#
+        .to_string(),
+    ]);
+    let temp = tempfile::tempdir().expect("tempdir");
+    let app = build_from_config(AppConfig {
+        data_dir: temp.path().join("state-root"),
+        provider: ConfiguredProvider {
+            kind: ProviderKind::OpenAiResponses,
+            api_base: Some(format!("{api_base}/v1")),
+            api_key: Some("test-key".to_string()),
+            default_model: Some("gpt-5.4".to_string()),
+        },
+        ..AppConfig::default()
+    })
+    .expect("build app");
+    let store = PersistenceStore::open(&app.persistence).expect("open store");
+
+    store
+        .put_session(&SessionRecord {
+            id: "session-plan-tools".to_string(),
+            title: "Plan Tools".to_string(),
+            prompt_override: None,
+            settings_json: serde_json::to_string(&SessionSettings::default())
+                .expect("serialize settings"),
+            active_mission_id: None,
+            created_at: 1,
+            updated_at: 1,
+        })
+        .expect("put session");
+
+    let report = app
+        .execute_chat_turn("session-plan-tools", "make a plan", 10)
+        .expect("execute chat turn");
+    let _first_request = requests.recv().expect("first provider request");
+    let second_request = requests.recv().expect("second provider request");
+    let third_request = requests.recv().expect("third provider request");
+    handle.join().expect("join server");
+
+    assert_eq!(report.response_id, "resp_plan_tools_3");
+    assert_eq!(report.output_text, "Plan updated and read back.");
+
+    let plan = PlanSnapshot::try_from(
+        store
+            .get_plan("session-plan-tools")
+            .expect("get plan")
+            .expect("plan exists"),
+    )
+    .expect("restore plan");
+    assert_eq!(plan.items.len(), 2);
+    assert_eq!(plan.items[0].id, "inspect");
+    assert_eq!(plan.items[0].status, PlanItemStatus::InProgress);
+    assert_eq!(plan.items[1].id, "persist");
+    assert_eq!(plan.items[1].status, PlanItemStatus::Pending);
+
+    let normalized_second = second_request.to_ascii_lowercase();
+    assert!(normalized_second.contains("\"type\":\"function_call_output\""));
+    assert!(normalized_second.contains("\"call_id\":\"call_plan_write\""));
+    assert!(normalized_second.contains("plan_write"));
+    assert!(normalized_second.contains("inspect planning seams"));
+
+    let normalized_third = third_request.to_ascii_lowercase();
+    assert!(normalized_third.contains("\"call_id\":\"call_plan_read\""));
+    assert!(normalized_third.contains("plan_read"));
+    assert!(normalized_third.contains("inspect planning seams"));
 }

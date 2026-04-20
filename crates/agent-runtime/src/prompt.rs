@@ -1,4 +1,5 @@
 use crate::context::ContextSummary;
+use crate::plan::PlanSnapshot;
 use crate::provider::ProviderMessage;
 use crate::session::MessageRole;
 
@@ -93,6 +94,7 @@ impl SessionHead {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PromptAssemblyInput {
     pub session_head: Option<SessionHead>,
+    pub plan_snapshot: Option<PlanSnapshot>,
     pub context_summary: Option<ContextSummary>,
     pub transcript_messages: Vec<ProviderMessage>,
 }
@@ -102,7 +104,7 @@ pub struct PromptAssembly;
 
 impl PromptAssembly {
     pub fn build_messages(input: PromptAssemblyInput) -> Vec<ProviderMessage> {
-        let mut messages = Vec::with_capacity(input.transcript_messages.len() + 2);
+        let mut messages = Vec::with_capacity(input.transcript_messages.len() + 3);
 
         if let Some(session_head) = input.session_head {
             let rendered = session_head.render();
@@ -112,6 +114,15 @@ impl PromptAssembly {
                     content: rendered,
                 });
             }
+        }
+
+        if let Some(plan_snapshot) = input.plan_snapshot
+            && !plan_snapshot.is_empty()
+        {
+            messages.push(ProviderMessage {
+                role: MessageRole::System,
+                content: plan_snapshot.system_message_text(),
+            });
         }
 
         let covered_message_count = input
@@ -147,6 +158,7 @@ mod tests {
         SessionHeadWorkspaceEntry, SessionHeadWorkspaceEntryKind,
     };
     use crate::context::ContextSummary;
+    use crate::plan::PlanSnapshot;
     use crate::provider::ProviderMessage;
     use crate::session::MessageRole;
 
@@ -234,6 +246,7 @@ mod tests {
                 }],
                 workspace_tree_truncated: false,
             }),
+            plan_snapshot: None,
             context_summary: Some(ContextSummary {
                 session_id: "session-1".to_string(),
                 summary_text: "Compact summary text.".to_string(),
@@ -270,6 +283,7 @@ mod tests {
     fn prompt_assembly_omits_missing_optional_sections() {
         let messages = PromptAssembly::build_messages(PromptAssemblyInput {
             session_head: None,
+            plan_snapshot: None,
             context_summary: None,
             transcript_messages: vec![ProviderMessage {
                 role: MessageRole::User,
@@ -280,5 +294,61 @@ mod tests {
         assert_eq!(messages.len(), 1);
         assert_eq!(messages[0].role, MessageRole::User);
         assert_eq!(messages[0].content, "hello");
+    }
+
+    #[test]
+    fn prompt_assembly_places_plan_between_session_head_and_compact_summary() {
+        let messages = PromptAssembly::build_messages(PromptAssemblyInput {
+            session_head: Some(SessionHead {
+                session_id: "session-1".to_string(),
+                title: "Plan Chat".to_string(),
+                message_count: 3,
+                context_tokens: 9,
+                compactifications: 0,
+                summary_covered_message_count: 1,
+                pending_approval_count: 0,
+                last_user_preview: None,
+                last_assistant_preview: None,
+                recent_filesystem_activity: Vec::new(),
+                workspace_tree: Vec::new(),
+                workspace_tree_truncated: false,
+            }),
+            plan_snapshot: Some(PlanSnapshot {
+                session_id: "session-1".to_string(),
+                items: vec![crate::plan::PlanItem {
+                    id: "wire".to_string(),
+                    content: "Wire planning tools".to_string(),
+                    status: crate::plan::PlanItemStatus::InProgress,
+                }],
+                updated_at: 11,
+            }),
+            context_summary: Some(ContextSummary {
+                session_id: "session-1".to_string(),
+                summary_text: "Compact summary text.".to_string(),
+                covered_message_count: 1,
+                summary_token_estimate: 5,
+                updated_at: 10,
+            }),
+            transcript_messages: vec![
+                ProviderMessage {
+                    role: MessageRole::User,
+                    content: "covered first".to_string(),
+                },
+                ProviderMessage {
+                    role: MessageRole::User,
+                    content: "latest question".to_string(),
+                },
+            ],
+        });
+
+        assert_eq!(messages.len(), 4);
+        assert_eq!(messages[0].role, MessageRole::System);
+        assert!(messages[0].content.contains("Session: Plan Chat"));
+        assert_eq!(messages[1].role, MessageRole::System);
+        assert!(messages[1].content.contains("Plan:"));
+        assert!(messages[1].content.contains("Wire planning tools"));
+        assert_eq!(messages[2].role, MessageRole::System);
+        assert!(messages[2].content.contains("Compact summary text."));
+        assert_eq!(messages[3].content, "latest question");
     }
 }

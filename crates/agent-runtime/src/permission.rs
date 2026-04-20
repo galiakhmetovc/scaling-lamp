@@ -97,7 +97,7 @@ impl PermissionConfig {
                 _ => PermissionAction::Allow,
             },
             PermissionMode::Plan => {
-                if definition.policy.read_only {
+                if definition.family == ToolFamily::Planning || definition.policy.read_only {
                     PermissionAction::Allow
                 } else {
                     PermissionAction::Deny
@@ -238,6 +238,28 @@ mod tests {
 
         assert_eq!(read.action, PermissionAction::Allow);
         assert_eq!(write.action, PermissionAction::Deny);
+    }
+
+    #[test]
+    fn plan_mode_still_allows_plan_write() {
+        let config = PermissionConfig {
+            mode: PermissionMode::Plan,
+            rules: Vec::new(),
+        };
+        let catalog = ToolCatalog::default();
+
+        let write = config.resolve(
+            catalog.definition(ToolName::PlanWrite).expect("plan_write"),
+            &ToolCall::PlanWrite(crate::tool::PlanWriteInput {
+                items: vec![crate::tool::PlanWriteItemInput {
+                    id: "inspect".to_string(),
+                    content: "Inspect seams".to_string(),
+                    status: "pending".to_string(),
+                }],
+            }),
+        );
+
+        assert_eq!(write.action, PermissionAction::Allow);
     }
 
     #[test]

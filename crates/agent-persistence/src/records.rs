@@ -4,6 +4,7 @@ use agent_runtime::mission::{
     JobStatusParseError, MissionExecutionIntent, MissionExecutionIntentParseError, MissionSchedule,
     MissionSpec, MissionStatus, MissionStatusParseError,
 };
+use agent_runtime::plan::PlanSnapshot;
 use agent_runtime::run::{RunSnapshot, RunStatus, RunStatusParseError};
 use agent_runtime::session::{
     MessageRole, PromptOverride, Session, SessionError, SessionSettings, TranscriptEntry,
@@ -91,6 +92,13 @@ pub struct ContextSummaryRecord {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PlanRecord {
+    pub session_id: String,
+    pub items_json: String,
+    pub updated_at: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ArtifactRecord {
     pub id: String,
     pub session_id: String,
@@ -115,6 +123,7 @@ pub enum RecordConversionError {
     InvalidMissionExecutionIntent(MissionExecutionIntentParseError),
     InvalidMissionSchedule(serde_json::Error),
     InvalidMissionStatus(MissionStatusParseError),
+    InvalidPlanItems(serde_json::Error),
     MissingJobInput,
     InvalidPromptOverride(SessionError),
     InvalidRunDelegateRuns(serde_json::Error),
@@ -128,6 +137,7 @@ pub enum RecordConversionError {
     SerializeJobResult(serde_json::Error),
     SerializeMissionAcceptance(serde_json::Error),
     SerializeMissionSchedule(serde_json::Error),
+    SerializePlanItems(serde_json::Error),
     SerializeRunDelegateRuns(serde_json::Error),
     SerializeRunEvidenceRefs(serde_json::Error),
     SerializeRunRecentSteps(serde_json::Error),
@@ -268,6 +278,32 @@ impl TryFrom<ContextSummaryRecord> for ContextSummary {
                     value: record.summary_token_estimate,
                 }
             })?,
+            updated_at: record.updated_at,
+        })
+    }
+}
+
+impl TryFrom<&PlanSnapshot> for PlanRecord {
+    type Error = RecordConversionError;
+
+    fn try_from(snapshot: &PlanSnapshot) -> Result<Self, Self::Error> {
+        Ok(Self {
+            session_id: snapshot.session_id.clone(),
+            items_json: serde_json::to_string(&snapshot.items)
+                .map_err(RecordConversionError::SerializePlanItems)?,
+            updated_at: snapshot.updated_at,
+        })
+    }
+}
+
+impl TryFrom<PlanRecord> for PlanSnapshot {
+    type Error = RecordConversionError;
+
+    fn try_from(record: PlanRecord) -> Result<Self, Self::Error> {
+        Ok(Self {
+            session_id: record.session_id,
+            items: serde_json::from_str(&record.items_json)
+                .map_err(RecordConversionError::InvalidPlanItems)?,
             updated_at: record.updated_at,
         })
     }
@@ -459,6 +495,9 @@ impl fmt::Display for RecordConversionError {
             Self::InvalidMissionStatus(source) => {
                 write!(formatter, "invalid mission status: {source}")
             }
+            Self::InvalidPlanItems(source) => {
+                write!(formatter, "invalid plan items: {source}")
+            }
             Self::MissingJobInput => write!(formatter, "job input is missing"),
             Self::InvalidPromptOverride(source) => {
                 write!(formatter, "invalid prompt override: {source}")
@@ -498,6 +537,9 @@ impl fmt::Display for RecordConversionError {
             }
             Self::SerializeMissionSchedule(source) => {
                 write!(formatter, "failed to serialize mission schedule: {source}")
+            }
+            Self::SerializePlanItems(source) => {
+                write!(formatter, "failed to serialize plan items: {source}")
             }
             Self::SerializeRunDelegateRuns(source) => {
                 write!(formatter, "failed to serialize run delegate runs: {source}")
@@ -541,6 +583,7 @@ impl Error for RecordConversionError {
             Self::InvalidMissionExecutionIntent(source) => Some(source),
             Self::InvalidMissionSchedule(source) => Some(source),
             Self::InvalidMissionStatus(source) => Some(source),
+            Self::InvalidPlanItems(source) => Some(source),
             Self::InvalidPromptOverride(source) => Some(source),
             Self::InvalidRunDelegateRuns(source) => Some(source),
             Self::InvalidRunRecentSteps(source) => Some(source),
@@ -553,6 +596,7 @@ impl Error for RecordConversionError {
             Self::SerializeJobResult(source) => Some(source),
             Self::SerializeMissionAcceptance(source) => Some(source),
             Self::SerializeMissionSchedule(source) => Some(source),
+            Self::SerializePlanItems(source) => Some(source),
             Self::SerializeRunDelegateRuns(source) => Some(source),
             Self::SerializeRunRecentSteps(source) => Some(source),
             Self::SerializeRunEvidenceRefs(source) => Some(source),
@@ -566,12 +610,13 @@ impl Error for RecordConversionError {
 
 #[cfg(test)]
 mod tests {
-    use super::{JobRecord, MissionRecord, RunRecord, SessionRecord, TranscriptRecord};
+    use super::{JobRecord, MissionRecord, PlanRecord, RunRecord, SessionRecord, TranscriptRecord};
     use agent_runtime::mission::{
         AcceptanceCriterion, JobExecutionInput, JobKind, JobResult, JobSpec,
         JobSpecValidationError, JobStatus, MissionExecutionIntent, MissionSchedule, MissionSpec,
         MissionStatus,
     };
+    use agent_runtime::plan::{PlanItem, PlanItemStatus, PlanSnapshot};
     use agent_runtime::run::{ApprovalRequest, DelegateRun, RunEngine, RunSnapshot};
     use agent_runtime::session::{MessageRole, PromptOverride, Session, TranscriptEntry};
     use agent_runtime::verification::{CheckOutcome, EvidenceBundle};
@@ -748,6 +793,31 @@ mod tests {
         let restored = MissionSpec::try_from(stored).expect("record to mission");
 
         assert_eq!(restored, mission);
+    }
+
+    #[test]
+    fn plan_records_round_trip_with_typed_items() {
+        let snapshot = PlanSnapshot {
+            session_id: "session-1".to_string(),
+            items: vec![
+                PlanItem {
+                    id: "inspect".to_string(),
+                    content: "Inspect planning seams".to_string(),
+                    status: PlanItemStatus::Pending,
+                },
+                PlanItem {
+                    id: "persist".to_string(),
+                    content: "Persist plan snapshot".to_string(),
+                    status: PlanItemStatus::InProgress,
+                },
+            ],
+            updated_at: 12,
+        };
+
+        let stored = PlanRecord::try_from(&snapshot).expect("plan to record");
+        let restored = PlanSnapshot::try_from(stored).expect("record to plan");
+
+        assert_eq!(restored, snapshot);
     }
 
     #[test]

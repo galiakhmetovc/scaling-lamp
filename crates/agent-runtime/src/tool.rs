@@ -1,3 +1,4 @@
+use crate::plan::{PlanItem, PlanItemStatus, PlanItemStatusParseError};
 use crate::workspace::{WorkspaceEntry, WorkspaceError, WorkspaceRef, WorkspaceSearchMatch};
 use reqwest::Url;
 use reqwest::blocking::Client;
@@ -14,6 +15,7 @@ pub enum ToolFamily {
     Filesystem,
     Web,
     Exec,
+    Planning,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -29,6 +31,8 @@ pub enum ToolName {
     ExecStart,
     ExecWait,
     ExecKill,
+    PlanRead,
+    PlanWrite,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -122,6 +126,21 @@ pub struct ProcessKillInput {
     pub process_id: String,
 }
 
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PlanReadInput {}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PlanWriteItemInput {
+    pub id: String,
+    pub content: String,
+    pub status: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PlanWriteInput {
+    pub items: Vec<PlanWriteItemInput>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ToolCall {
     FsRead(FsReadInput),
@@ -135,6 +154,8 @@ pub enum ToolCall {
     ExecStart(ExecStartInput),
     ExecWait(ProcessWaitInput),
     ExecKill(ProcessKillInput),
+    PlanRead(PlanReadInput),
+    PlanWrite(PlanWriteInput),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -220,6 +241,16 @@ pub struct ProcessResult {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PlanReadOutput {
+    pub items: Vec<PlanItem>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PlanWriteOutput {
+    pub items: Vec<PlanItem>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ToolOutput {
     FsRead(FsReadOutput),
     FsWrite(FsWriteOutput),
@@ -231,6 +262,8 @@ pub enum ToolOutput {
     WebSearch(WebSearchOutput),
     ProcessStart(ProcessStartOutput),
     ProcessResult(ProcessResult),
+    PlanRead(PlanReadOutput),
+    PlanWrite(PlanWriteOutput),
 }
 
 #[derive(Debug)]
@@ -262,6 +295,9 @@ pub enum ToolError {
     ProcessIo {
         process_id: String,
         source: std::io::Error,
+    },
+    InvalidPlanWrite {
+        reason: String,
     },
     UnknownProcess {
         process_id: String,
@@ -306,6 +342,7 @@ impl ToolFamily {
             Self::Filesystem => "fs",
             Self::Web => "web",
             Self::Exec => "exec",
+            Self::Planning => "plan",
         }
     }
 }
@@ -324,6 +361,8 @@ impl ToolName {
             Self::ExecStart => "exec_start",
             Self::ExecWait => "exec_wait",
             Self::ExecKill => "exec_kill",
+            Self::PlanRead => "plan_read",
+            Self::PlanWrite => "plan_write",
         }
     }
 }
@@ -351,6 +390,8 @@ impl ToolCatalog {
                         | ToolName::FsSearch
                         | ToolName::WebFetch
                         | ToolName::WebSearch
+                        | ToolName::PlanRead
+                        | ToolName::PlanWrite
                 )
             })
             .collect()
@@ -468,6 +509,26 @@ impl ToolCatalog {
                     requires_approval: true,
                 },
             },
+            ToolDefinition {
+                name: ToolName::PlanRead,
+                family: ToolFamily::Planning,
+                description: "Read the structured plan snapshot for the current session",
+                policy: ToolPolicy {
+                    read_only: true,
+                    destructive: false,
+                    requires_approval: false,
+                },
+            },
+            ToolDefinition {
+                name: ToolName::PlanWrite,
+                family: ToolFamily::Planning,
+                description: "Replace the structured plan snapshot for the current session",
+                policy: ToolPolicy {
+                    read_only: false,
+                    destructive: false,
+                    requires_approval: false,
+                },
+            },
         ]
     }
 }
@@ -475,7 +536,7 @@ impl ToolCatalog {
 impl Default for ToolCatalog {
     fn default() -> Self {
         Self {
-            families: vec!["fs", "web", "exec"],
+            families: vec!["fs", "web", "exec", "plan"],
             definitions: Self::definitions(),
         }
     }
@@ -537,6 +598,10 @@ impl ToolRuntime {
             }
             ToolCall::ExecWait(input) => self.wait_process(&input.process_id, ProcessKind::Exec),
             ToolCall::ExecKill(input) => self.kill_process(&input.process_id, ProcessKind::Exec),
+            ToolCall::PlanRead(_) | ToolCall::PlanWrite(_) => Err(ToolError::InvalidPlanWrite {
+                reason: "planning tools must execute through the canonical session path"
+                    .to_string(),
+            }),
         }
     }
 
@@ -678,6 +743,8 @@ impl ToolCall {
             Self::ExecStart(_) => ToolName::ExecStart,
             Self::ExecWait(_) => ToolName::ExecWait,
             Self::ExecKill(_) => ToolName::ExecKill,
+            Self::PlanRead(_) => ToolName::PlanRead,
+            Self::PlanWrite(_) => ToolName::PlanWrite,
         }
     }
 
@@ -693,6 +760,7 @@ impl ToolCall {
             Self::WebSearch(_) => None,
             Self::ExecStart(input) => input.cwd.clone(),
             Self::ExecWait(_) | Self::ExecKill(_) => None,
+            Self::PlanRead(_) | Self::PlanWrite(_) => None,
         }
     }
 
@@ -737,6 +805,8 @@ impl ToolCall {
             }
             Self::ExecWait(input) => format!("exec_wait process_id={}", input.process_id),
             Self::ExecKill(input) => format!("exec_kill process_id={}", input.process_id),
+            Self::PlanRead(_) => "plan_read".to_string(),
+            Self::PlanWrite(input) => format!("plan_write items={}", input.items.len()),
         }
     }
 
@@ -804,6 +874,18 @@ impl ToolCall {
                 }),
             "exec_kill" => serde_json::from_str(arguments)
                 .map(Self::ExecKill)
+                .map_err(|source| ToolCallParseError::InvalidArguments {
+                    name: name.to_string(),
+                    source,
+                }),
+            "plan_read" => serde_json::from_str(arguments)
+                .map(Self::PlanRead)
+                .map_err(|source| ToolCallParseError::InvalidArguments {
+                    name: name.to_string(),
+                    source,
+                }),
+            "plan_write" => serde_json::from_str(arguments)
+                .map(Self::PlanWrite)
                 .map_err(|source| ToolCallParseError::InvalidArguments {
                     name: name.to_string(),
                     source,
@@ -886,6 +968,20 @@ impl ToolOutput {
         }
     }
 
+    pub fn into_plan_read(self) -> Option<PlanReadOutput> {
+        match self {
+            Self::PlanRead(output) => Some(output),
+            _ => None,
+        }
+    }
+
+    pub fn into_plan_write(self) -> Option<PlanWriteOutput> {
+        match self {
+            Self::PlanWrite(output) => Some(output),
+            _ => None,
+        }
+    }
+
     pub fn summary(&self) -> String {
         match self {
             Self::FsRead(output) => {
@@ -924,6 +1020,8 @@ impl ToolOutput {
                 "process_result process_id={} status={:?} exit_code={:?}",
                 output.process_id, output.status, output.exit_code
             ),
+            Self::PlanRead(output) => format!("plan_read items={}", output.items.len()),
+            Self::PlanWrite(output) => format!("plan_write items={}", output.items.len()),
         }
     }
 
@@ -995,6 +1093,16 @@ impl ToolOutput {
                 "exit_code": output.exit_code,
                 "stdout": output.stdout,
                 "stderr": output.stderr,
+            })
+            .to_string(),
+            Self::PlanRead(output) => json!({
+                "tool": "plan_read",
+                "items": output.items.iter().map(plan_item_json).collect::<Vec<_>>(),
+            })
+            .to_string(),
+            Self::PlanWrite(output) => json!({
+                "tool": "plan_write",
+                "items": output.items.iter().map(plan_item_json).collect::<Vec<_>>(),
             })
             .to_string(),
         }
@@ -1115,6 +1223,34 @@ impl ToolName {
                 "required": ["process_id"],
                 "additionalProperties": false,
             }),
+            Self::PlanRead => json!({
+                "type": "object",
+                "properties": {},
+                "additionalProperties": false,
+            }),
+            Self::PlanWrite => json!({
+                "type": "object",
+                "properties": {
+                    "items": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "id": { "type": "string" },
+                                "content": { "type": "string" },
+                                "status": {
+                                    "type": "string",
+                                    "enum": ["pending", "in_progress", "completed"]
+                                }
+                            },
+                            "required": ["id", "content", "status"],
+                            "additionalProperties": false
+                        }
+                    }
+                },
+                "required": ["items"],
+                "additionalProperties": false,
+            }),
         }
     }
 }
@@ -1154,6 +1290,9 @@ impl fmt::Display for ToolError {
             Self::ProcessIo { process_id, source } => {
                 write!(formatter, "process io error for {process_id}: {source}")
             }
+            Self::InvalidPlanWrite { reason } => {
+                write!(formatter, "invalid plan write request: {reason}")
+            }
             Self::UnknownProcess { process_id } => {
                 write!(formatter, "unknown process {process_id}")
             }
@@ -1174,6 +1313,7 @@ impl Error for ToolError {
             | Self::WebHttpStatus { .. }
             | Self::WebParse { .. }
             | Self::ProcessFamilyMismatch { .. }
+            | Self::InvalidPlanWrite { .. }
             | Self::UnknownProcess { .. } => None,
         }
     }
@@ -1226,6 +1366,26 @@ fn workspace_match_json(entry: &WorkspaceSearchMatch) -> Value {
         "line_number": entry.line_number,
         "line": entry.line,
     })
+}
+
+fn plan_item_json(item: &PlanItem) -> Value {
+    json!({
+        "id": item.id,
+        "content": item.content,
+        "status": item.status.as_str(),
+    })
+}
+
+impl TryFrom<PlanWriteItemInput> for PlanItem {
+    type Error = PlanItemStatusParseError;
+
+    fn try_from(value: PlanWriteItemInput) -> Result<Self, Self::Error> {
+        Ok(Self {
+            id: value.id,
+            content: value.content,
+            status: PlanItemStatus::try_from(value.status.as_str())?,
+        })
+    }
 }
 
 impl Default for WebToolClient {
@@ -1491,20 +1651,27 @@ mod tests {
         let exec_start = catalog.definition(ToolName::ExecStart).expect("exec_start");
         let fs_glob = catalog.definition(ToolName::FsGlob).expect("fs_glob");
         let fs_patch = catalog.definition(ToolName::FsPatch).expect("fs_patch");
+        let plan_read = catalog.definition(ToolName::PlanRead).expect("plan_read");
+        let plan_write = catalog.definition(ToolName::PlanWrite).expect("plan_write");
         let web_fetch = catalog.definition(ToolName::WebFetch).expect("web_fetch");
         let web_search = catalog.definition(ToolName::WebSearch).expect("web_search");
         let fs_read = catalog.definition(ToolName::FsRead).expect("fs_read");
         let fs_write = catalog.definition(ToolName::FsWrite).expect("fs_write");
 
-        assert_eq!(catalog.families, ["fs", "web", "exec"]);
+        assert_eq!(catalog.families, ["fs", "web", "exec", "plan"]);
         assert_eq!(exec_start.family, ToolFamily::Exec);
         assert_eq!(fs_glob.family, ToolFamily::Filesystem);
         assert_eq!(fs_patch.family, ToolFamily::Filesystem);
+        assert_eq!(plan_read.family, ToolFamily::Planning);
+        assert_eq!(plan_write.family, ToolFamily::Planning);
         assert_eq!(web_fetch.family, ToolFamily::Web);
         assert_eq!(web_search.family, ToolFamily::Web);
         assert!(exec_start.policy.requires_approval);
         assert!(fs_glob.policy.read_only);
         assert!(fs_patch.policy.destructive);
+        assert!(plan_read.policy.read_only);
+        assert!(!plan_write.policy.read_only);
+        assert!(!plan_write.policy.requires_approval);
         assert!(web_fetch.policy.read_only);
         assert!(web_search.policy.read_only);
         assert!(fs_read.policy.read_only);
