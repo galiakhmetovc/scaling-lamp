@@ -3811,6 +3811,221 @@ fn execute_chat_turn_uses_the_context_summary_and_only_the_uncovered_messages() 
 }
 
 #[test]
+fn execute_chat_turn_places_system_and_agents_files_before_runtime_blocks() {
+    let (api_base, requests, handle) = spawn_json_server_sequence(vec![
+        r#"{
+                "id":"resp_prompt_files",
+                "model":"gpt-5.4",
+                "output":[
+                    {
+                        "id":"msg_prompt_files",
+                        "type":"message",
+                        "status":"completed",
+                        "role":"assistant",
+                        "content":[
+                            {
+                                "type":"output_text",
+                                "text":"Loaded prompt files."
+                            }
+                        ]
+                    }
+                ],
+                "usage":{"input_tokens":40,"output_tokens":6,"total_tokens":46}
+            }"#
+        .to_string(),
+    ]);
+    let temp = tempfile::tempdir().expect("tempdir");
+    let workspace_root = temp.path().join("workspace");
+    fs::create_dir_all(&workspace_root).expect("create workspace");
+    fs::write(
+        workspace_root.join("SYSTEM.md"),
+        "You are a useful AI assistant.\nAlways prefer structured tools.\n",
+    )
+    .expect("write system prompt");
+    fs::write(
+        workspace_root.join("AGENTS.md"),
+        "Project instructions:\n- Keep edits minimal.\n- Explain tradeoffs briefly.\n",
+    )
+    .expect("write agents prompt");
+    let mut app = build_from_config(AppConfig {
+        data_dir: temp.path().join("state-root"),
+        provider: ConfiguredProvider {
+            kind: ProviderKind::OpenAiResponses,
+            api_base: Some(format!("{api_base}/v1")),
+            api_key: Some("test-key".to_string()),
+            default_model: Some("gpt-5.4".to_string()),
+            ..ConfiguredProvider::default()
+        },
+        ..AppConfig::default()
+    })
+    .expect("build app");
+    app.runtime.workspace = WorkspaceRef::new(&workspace_root);
+    let store = PersistenceStore::open(&app.persistence).expect("open store");
+    store
+        .put_session(&SessionRecord {
+            id: "session-prompt-files".to_string(),
+            title: "Prompt Files".to_string(),
+            prompt_override: None,
+            settings_json: serde_json::to_string(&SessionSettings::default())
+                .expect("serialize settings"),
+            active_mission_id: None,
+            created_at: 1,
+            updated_at: 1,
+        })
+        .expect("put session");
+
+    let report = app
+        .execute_chat_turn("session-prompt-files", "hello", 10)
+        .expect("execute chat turn");
+    let first_request = requests.recv().expect("provider request");
+    handle.join().expect("join server");
+
+    assert_eq!(report.response_id, "resp_prompt_files");
+    assert_eq!(report.output_text, "Loaded prompt files.");
+
+    let normalized = first_request.to_ascii_lowercase();
+    let system_prompt_marker = normalized
+        .find("you are a useful ai assistant.")
+        .expect("system prompt marker");
+    let agents_marker = normalized
+        .find("project instructions:")
+        .expect("agents marker");
+    let session_marker = normalized
+        .find("session: prompt files")
+        .expect("session marker");
+
+    assert!(system_prompt_marker < agents_marker);
+    assert!(agents_marker < session_marker);
+}
+
+#[test]
+fn execute_chat_turn_offloads_large_fs_read_text_results_into_artifacts() {
+    let (api_base, requests, handle) = spawn_json_server_sequence(vec![
+        r#"{
+                "id":"resp_offload_fs_read_1",
+                "model":"gpt-5.4",
+                "output":[
+                    {
+                        "id":"fc_fs_read_large",
+                        "type":"function_call",
+                        "call_id":"call_fs_read_large",
+                        "name":"fs_read_text",
+                        "arguments":"{\"path\":\"docs/large.txt\"}"
+                    }
+                ],
+                "usage":{"input_tokens":40,"output_tokens":12,"total_tokens":52}
+            }"#
+        .to_string(),
+        r#"{
+                "id":"resp_offload_fs_read_2",
+                "model":"gpt-5.4",
+                "output":[
+                    {
+                        "id":"msg_offload_fs_read",
+                        "type":"message",
+                        "status":"completed",
+                        "role":"assistant",
+                        "content":[
+                            {
+                                "type":"output_text",
+                                "text":"Large file result was offloaded."
+                            }
+                        ]
+                    }
+                ],
+                "usage":{"input_tokens":18,"output_tokens":6,"total_tokens":24}
+            }"#
+        .to_string(),
+    ]);
+    let temp = tempfile::tempdir().expect("tempdir");
+    let workspace_root = temp.path().join("workspace");
+    fs::create_dir_all(workspace_root.join("docs")).expect("create docs");
+    let large_content = format!(
+        "{}\n{}\n{}\n",
+        "OFFLOAD-MARKER-LARGE-BLOCK".repeat(120),
+        "second-line".repeat(80),
+        "third-line".repeat(80)
+    );
+    fs::write(workspace_root.join("docs/large.txt"), &large_content).expect("write large file");
+    let mut app = build_from_config(AppConfig {
+        data_dir: temp.path().join("state-root"),
+        provider: ConfiguredProvider {
+            kind: ProviderKind::OpenAiResponses,
+            api_base: Some(format!("{api_base}/v1")),
+            api_key: Some("test-key".to_string()),
+            default_model: Some("gpt-5.4".to_string()),
+            ..ConfiguredProvider::default()
+        },
+        ..AppConfig::default()
+    })
+    .expect("build app");
+    app.runtime.workspace = WorkspaceRef::new(&workspace_root);
+    let store = PersistenceStore::open(&app.persistence).expect("open store");
+    store
+        .put_session(&SessionRecord {
+            id: "session-offload-large-read".to_string(),
+            title: "Large Read".to_string(),
+            prompt_override: None,
+            settings_json: serde_json::to_string(&SessionSettings::default())
+                .expect("serialize settings"),
+            active_mission_id: None,
+            created_at: 1,
+            updated_at: 1,
+        })
+        .expect("put session");
+
+    let report = app
+        .execute_chat_turn("session-offload-large-read", "read the big file", 10)
+        .expect("execute chat turn");
+    let _first_request = requests.recv().expect("first provider request");
+    let second_request = requests.recv().expect("second provider request");
+    handle.join().expect("join server");
+
+    assert_eq!(report.output_text, "Large file result was offloaded.");
+
+    let snapshot = ContextOffloadSnapshot::try_from(
+        store
+            .get_context_offload("session-offload-large-read")
+            .expect("get context offload")
+            .expect("context offload exists"),
+    )
+    .expect("restore offload snapshot");
+    assert_eq!(snapshot.refs.len(), 1);
+    assert!(snapshot.refs[0].label.contains("fs_read_text"));
+    assert!(snapshot.refs[0].summary.contains("docs/large.txt"));
+
+    let payload = store
+        .get_context_offload_payload(&snapshot.refs[0].artifact_id)
+        .expect("get payload")
+        .expect("payload exists");
+    assert!(String::from_utf8_lossy(&payload.bytes).contains("OFFLOAD-MARKER-LARGE-BLOCK"));
+
+    let second_request_body = second_request
+        .split_once("\r\n\r\n")
+        .map(|(_, body)| body)
+        .expect("extract second provider request body");
+    let second_request_json: serde_json::Value =
+        serde_json::from_str(second_request_body).expect("parse second provider request");
+    let tool_output = second_request_json["input"][0]["output"]
+        .as_str()
+        .expect("tool output string");
+    let tool_output_json: serde_json::Value =
+        serde_json::from_str(tool_output).expect("parse compact tool output");
+
+    assert_eq!(tool_output_json["offloaded"], serde_json::json!(true));
+    assert!(tool_output_json.get("artifact_id").is_some());
+    assert_eq!(
+        tool_output_json["path"],
+        serde_json::json!("docs/large.txt")
+    );
+    assert!(
+        !tool_output
+            .to_ascii_lowercase()
+            .contains(&"offload-marker-large-block".repeat(20))
+    );
+}
+
+#[test]
 fn execute_chat_turn_includes_the_plan_snapshot_before_context_summary() {
     let (api_base, requests, handle) = spawn_json_server_sequence(vec![
         r#"{

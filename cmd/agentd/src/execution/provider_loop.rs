@@ -1,7 +1,10 @@
 use super::*;
 use crate::prompting;
 use agent_persistence::ContextOffloadRepository;
-use agent_runtime::context::{ContextOffloadSnapshot, ContextSummary};
+use agent_runtime::context::{
+    ContextOffloadPayload, ContextOffloadRef, ContextOffloadSnapshot, ContextSummary,
+    approximate_token_count,
+};
 use agent_runtime::permission::PermissionAction;
 use agent_runtime::plan::{PlanItem, PlanItemStatus, PlanSnapshot};
 use agent_runtime::prompt::{PromptAssembly, PromptAssemblyInput};
@@ -22,6 +25,11 @@ use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 const MAX_PROVIDER_TOOL_ROUNDS: usize = 8;
+const MAX_CONTEXT_OFFLOAD_REFS: usize = 16;
+const INLINE_TOOL_OUTPUT_TOKEN_LIMIT: u32 = 512;
+const INLINE_FIND_IN_FILES_PREVIEW_LIMIT: usize = 6;
+
+type OffloadableToolOutput = (String, String, Vec<u8>, String);
 
 #[derive(Debug, Clone, Copy)]
 pub(super) struct ProviderToolExecutionContext<'a> {
@@ -330,9 +338,13 @@ impl ExecutionService {
             &runs,
             &self.workspace,
         );
+        let system_prompt = prompting::load_system_prompt(&self.workspace);
+        let agents_prompt = prompting::load_agents_prompt(&self.workspace);
 
         Ok(PromptMessages {
             messages: PromptAssembly::build_messages(PromptAssemblyInput {
+                system_prompt: Some(system_prompt),
+                agents_prompt,
                 session_head: Some(session_head),
                 plan_snapshot,
                 context_summary,
@@ -453,6 +465,7 @@ impl ExecutionService {
         context: ProviderToolExecutionContext<'_>,
         run: &mut RunEngine,
         tool_runtime: &mut ToolRuntime,
+        tool_call_id: &str,
         parsed: &ToolCall,
         observer: &mut Option<&mut dyn FnMut(ChatExecutionEvent)>,
     ) -> Result<String, ExecutionError> {
@@ -495,7 +508,15 @@ impl ExecutionService {
                 status: ToolExecutionStatus::Completed,
             },
         );
-        Ok(model_output)
+        self.prepare_model_tool_output(
+            context.store,
+            context.session_id,
+            tool_call_id,
+            parsed,
+            &output,
+            model_output,
+            context.now,
+        )
     }
 
     pub(super) fn execute_model_tool_call(
@@ -779,6 +800,212 @@ impl ExecutionService {
         })
     }
 
+    #[allow(clippy::too_many_arguments)]
+    fn prepare_model_tool_output(
+        &self,
+        store: &PersistenceStore,
+        session_id: &str,
+        tool_call_id: &str,
+        parsed: &ToolCall,
+        output: &ToolOutput,
+        inline_output: String,
+        now: i64,
+    ) -> Result<String, ExecutionError> {
+        let Some((label, summary, payload_bytes, compact_output)) =
+            self.offloadable_tool_output(parsed, output)?
+        else {
+            return Ok(inline_output);
+        };
+        let payload_text = String::from_utf8_lossy(&payload_bytes).to_string();
+        let token_estimate = approximate_token_count(&payload_text);
+
+        if token_estimate <= INLINE_TOOL_OUTPUT_TOKEN_LIMIT {
+            return Ok(inline_output);
+        }
+
+        let mut snapshot = store
+            .get_context_offload(session_id)
+            .map_err(ExecutionError::Store)?
+            .map(ContextOffloadSnapshot::try_from)
+            .transpose()
+            .map_err(ExecutionError::RecordConversion)?
+            .unwrap_or_else(|| ContextOffloadSnapshot {
+                session_id: session_id.to_string(),
+                refs: Vec::new(),
+                updated_at: 0,
+            });
+
+        let normalized_id = sanitize_identifier(tool_call_id);
+        let artifact_id = format!("artifact-tool-offload-{session_id}-{normalized_id}");
+        let ref_id = format!("tool-offload-{normalized_id}");
+        snapshot.refs.push(ContextOffloadRef {
+            id: ref_id.clone(),
+            label,
+            summary,
+            artifact_id: artifact_id.clone(),
+            token_estimate,
+            message_count: 1,
+            created_at: now,
+        });
+        snapshot.refs.sort_by(|left, right| {
+            right
+                .created_at
+                .cmp(&left.created_at)
+                .then_with(|| left.id.cmp(&right.id))
+        });
+        snapshot.refs.truncate(MAX_CONTEXT_OFFLOAD_REFS);
+        snapshot.updated_at = now;
+
+        let payloads = snapshot
+            .refs
+            .iter()
+            .map(|reference| {
+                if reference.artifact_id == artifact_id {
+                    Ok(ContextOffloadPayload {
+                        artifact_id: artifact_id.clone(),
+                        bytes: payload_bytes.clone(),
+                    })
+                } else {
+                    Ok(store
+                        .get_context_offload_payload(reference.artifact_id.as_str())
+                        .map_err(ExecutionError::Store)?
+                        .ok_or_else(|| {
+                            ExecutionError::Tool(ToolError::InvalidArtifactTool {
+                                reason: format!(
+                                    "artifact {} is missing from context offload storage",
+                                    reference.artifact_id
+                                ),
+                            })
+                        })?)
+                }
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+
+        store
+            .put_context_offload(
+                &agent_persistence::ContextOffloadRecord::try_from(&snapshot)
+                    .map_err(ExecutionError::RecordConversion)?,
+                &payloads,
+            )
+            .map_err(ExecutionError::Store)?;
+
+        Ok(compact_output
+            .replace("__ARTIFACT_ID__", artifact_id.as_str())
+            .replace("__REF_ID__", ref_id.as_str()))
+    }
+
+    fn offloadable_tool_output(
+        &self,
+        _parsed: &ToolCall,
+        output: &ToolOutput,
+    ) -> Result<Option<OffloadableToolOutput>, ExecutionError> {
+        match output {
+            ToolOutput::FsReadText(result) => {
+                let payload = output.model_output().into_bytes();
+                let preview = prompting::preview_text(result.content.as_str(), 240);
+                Ok(Some((
+                    format!("fs_read_text {}", result.path),
+                    format!("Large file read from {}", result.path),
+                    payload,
+                    serde_json::json!({
+                        "tool": "fs_read_text",
+                        "path": result.path,
+                        "offloaded": true,
+                        "artifact_id": "__ARTIFACT_ID__",
+                        "ref_id": "__REF_ID__",
+                        "summary": format!("Large file read from {}", result.path),
+                        "preview": preview,
+                    })
+                    .to_string(),
+                )))
+            }
+            ToolOutput::FsReadLines(result) => {
+                let payload = output.model_output().into_bytes();
+                let preview = prompting::preview_text(result.content.as_str(), 240);
+                Ok(Some((
+                    format!("fs_read_lines {}", result.path),
+                    format!(
+                        "Large line-range read from {} ({}-{})",
+                        result.path, result.start_line, result.end_line
+                    ),
+                    payload,
+                    serde_json::json!({
+                        "tool": "fs_read_lines",
+                        "path": result.path,
+                        "start_line": result.start_line,
+                        "end_line": result.end_line,
+                        "total_lines": result.total_lines,
+                        "eof": result.eof,
+                        "next_start_line": result.next_start_line,
+                        "offloaded": true,
+                        "artifact_id": "__ARTIFACT_ID__",
+                        "ref_id": "__REF_ID__",
+                        "summary": format!("Large line-range read from {} ({}-{})", result.path, result.start_line, result.end_line),
+                        "preview": preview,
+                    })
+                    .to_string(),
+                )))
+            }
+            ToolOutput::FsFindInFiles(result) => {
+                let payload = output.model_output().into_bytes();
+                let preview_matches = result
+                    .matches
+                    .iter()
+                    .take(INLINE_FIND_IN_FILES_PREVIEW_LIMIT)
+                    .map(|entry| {
+                        serde_json::json!({
+                            "path": entry.path,
+                            "line_number": entry.line_number,
+                            "line": entry.line,
+                        })
+                    })
+                    .collect::<Vec<_>>();
+                Ok(Some((
+                    "fs_find_in_files workspace search".to_string(),
+                    format!("Large multi-file search result with {} matches", result.matches.len()),
+                    payload,
+                    serde_json::json!({
+                        "tool": "fs_find_in_files",
+                        "offloaded": true,
+                        "artifact_id": "__ARTIFACT_ID__",
+                        "ref_id": "__REF_ID__",
+                        "summary": format!("Large multi-file search result with {} matches", result.matches.len()),
+                        "match_count": result.matches.len(),
+                        "preview_matches": preview_matches,
+                    })
+                    .to_string(),
+                )))
+            }
+            ToolOutput::ProcessResult(result) => {
+                let payload = output.model_output().into_bytes();
+                let stdout_preview = prompting::preview_text(result.stdout.as_str(), 180);
+                let stderr_preview = prompting::preview_text(result.stderr.as_str(), 180);
+                Ok(Some((
+                    format!("exec_wait {}", result.process_id),
+                    format!(
+                        "Large process output for {} (exit_code={:?})",
+                        result.process_id, result.exit_code
+                    ),
+                    payload,
+                    serde_json::json!({
+                        "tool": "process_result",
+                        "process_id": result.process_id,
+                        "status": format!("{:?}", result.status).to_lowercase(),
+                        "exit_code": result.exit_code,
+                        "offloaded": true,
+                        "artifact_id": "__ARTIFACT_ID__",
+                        "ref_id": "__REF_ID__",
+                        "summary": format!("Large process output for {} (exit_code={:?})", result.process_id, result.exit_code),
+                        "stdout_preview": stdout_preview,
+                        "stderr_preview": stderr_preview,
+                    })
+                    .to_string(),
+                )))
+            }
+            _ => Ok(None),
+        }
+    }
+
     fn read_context_offload_artifact(
         &self,
         store: &PersistenceStore,
@@ -1024,6 +1251,7 @@ impl ExecutionService {
                     },
                     run,
                     &mut tool_runtime,
+                    &tool_call.call_id,
                     &parsed,
                     observer,
                 )?;
@@ -1041,6 +1269,29 @@ impl ExecutionService {
         }
 
         Err(cursor.exhausted_rounds_error())
+    }
+}
+
+fn sanitize_identifier(value: &str) -> String {
+    let normalized = value
+        .chars()
+        .map(|ch| {
+            if ch.is_ascii_alphanumeric() {
+                ch.to_ascii_lowercase()
+            } else {
+                '-'
+            }
+        })
+        .collect::<String>();
+    let compact = normalized
+        .split('-')
+        .filter(|part| !part.is_empty())
+        .collect::<Vec<_>>()
+        .join("-");
+    if compact.is_empty() {
+        "artifact".to_string()
+    } else {
+        compact
     }
 }
 

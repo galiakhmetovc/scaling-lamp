@@ -339,6 +339,7 @@ impl ExecutionService {
             },
             &mut run,
             &mut tool_runtime,
+            pending_approval.provider_tool_call_id.as_str(),
             &parsed,
             observer,
         )?;

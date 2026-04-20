@@ -93,6 +93,8 @@ impl SessionHead {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PromptAssemblyInput {
+    pub system_prompt: Option<String>,
+    pub agents_prompt: Option<String>,
     pub session_head: Option<SessionHead>,
     pub plan_snapshot: Option<PlanSnapshot>,
     pub context_summary: Option<ContextSummary>,
@@ -105,7 +107,25 @@ pub struct PromptAssembly;
 
 impl PromptAssembly {
     pub fn build_messages(input: PromptAssemblyInput) -> Vec<ProviderMessage> {
-        let mut messages = Vec::with_capacity(input.transcript_messages.len() + 4);
+        let mut messages = Vec::with_capacity(input.transcript_messages.len() + 6);
+
+        if let Some(system_prompt) = input.system_prompt
+            && !system_prompt.trim().is_empty()
+        {
+            messages.push(ProviderMessage {
+                role: MessageRole::System,
+                content: system_prompt,
+            });
+        }
+
+        if let Some(agents_prompt) = input.agents_prompt
+            && !agents_prompt.trim().is_empty()
+        {
+            messages.push(ProviderMessage {
+                role: MessageRole::System,
+                content: agents_prompt,
+            });
+        }
 
         if let Some(session_head) = input.session_head {
             let rendered = session_head.render();
@@ -261,6 +281,8 @@ mod tests {
     #[test]
     fn prompt_assembly_orders_session_head_then_compact_summary_then_transcript() {
         let messages = PromptAssembly::build_messages(PromptAssemblyInput {
+            system_prompt: None,
+            agents_prompt: None,
             session_head: Some(SessionHead {
                 session_id: "session-1".to_string(),
                 title: "Compacted Chat".to_string(),
@@ -322,6 +344,8 @@ mod tests {
     #[test]
     fn prompt_assembly_omits_missing_optional_sections() {
         let messages = PromptAssembly::build_messages(PromptAssemblyInput {
+            system_prompt: None,
+            agents_prompt: None,
             session_head: None,
             plan_snapshot: None,
             context_summary: None,
@@ -340,6 +364,8 @@ mod tests {
     #[test]
     fn prompt_assembly_places_plan_between_session_head_and_compact_summary() {
         let messages = PromptAssembly::build_messages(PromptAssemblyInput {
+            system_prompt: None,
+            agents_prompt: None,
             session_head: Some(SessionHead {
                 session_id: "session-1".to_string(),
                 title: "Plan Chat".to_string(),
@@ -402,6 +428,8 @@ mod tests {
     #[test]
     fn prompt_assembly_places_offload_refs_after_summary_and_before_transcript_tail() {
         let messages = PromptAssembly::build_messages(PromptAssemblyInput {
+            system_prompt: None,
+            agents_prompt: None,
             session_head: None,
             plan_snapshot: None,
             context_summary: Some(ContextSummary {

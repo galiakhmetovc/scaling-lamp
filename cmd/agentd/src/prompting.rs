@@ -6,9 +6,11 @@ use agent_runtime::prompt::{
 use agent_runtime::run::{RunSnapshot, RunStatus, RunStepKind};
 use agent_runtime::session::Session;
 use agent_runtime::workspace::{WorkspaceEntryKind, WorkspaceRef};
+use std::io::ErrorKind;
 
 const RECENT_FILESYSTEM_ACTIVITY_LIMIT: usize = 6;
 const WORKSPACE_TREE_LIMIT: usize = 12;
+const DEFAULT_SYSTEM_PROMPT: &str = "You are a useful AI assistant.";
 
 pub(crate) fn build_session_head(
     session: &Session,
@@ -77,6 +79,28 @@ pub(crate) fn preview_text(content: &str, limit: usize) -> String {
         .collect::<String>();
     preview.push('…');
     preview
+}
+
+pub(crate) fn load_system_prompt(workspace: &WorkspaceRef) -> String {
+    read_prompt_file(workspace, "SYSTEM.md")
+        .filter(|content| !content.trim().is_empty())
+        .unwrap_or_else(|| DEFAULT_SYSTEM_PROMPT.to_string())
+}
+
+pub(crate) fn load_agents_prompt(workspace: &WorkspaceRef) -> Option<String> {
+    read_prompt_file(workspace, "AGENTS.md").filter(|content| !content.trim().is_empty())
+}
+
+fn read_prompt_file(workspace: &WorkspaceRef, path: &str) -> Option<String> {
+    match workspace.read_text(path) {
+        Ok(content) => Some(content.trim().to_string()),
+        Err(agent_runtime::workspace::WorkspaceError::Io { source, .. })
+            if source.kind() == ErrorKind::NotFound =>
+        {
+            None
+        }
+        Err(_) => None,
+    }
 }
 
 fn build_recent_filesystem_activity(
