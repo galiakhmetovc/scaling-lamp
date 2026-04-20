@@ -12,7 +12,7 @@ use agent_runtime::provider::{ProviderBuildError, ProviderDriver, ProviderError,
 use agent_runtime::run::{RunEngine, RunSnapshot, RunTransitionError};
 use agent_runtime::scheduler::MissionVerificationSummary;
 use agent_runtime::session::{MessageRole, Session, SessionSettings, TranscriptEntry};
-use agent_runtime::tool::ToolCall;
+use agent_runtime::tool::{SharedProcessRegistry, ToolCall};
 use std::error::Error;
 use std::fmt;
 use std::fs;
@@ -56,6 +56,7 @@ pub struct App {
     pub config: AppConfig,
     pub persistence: PersistenceScaffold,
     pub runtime: RuntimeScaffold,
+    pub processes: SharedProcessRegistry,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -111,6 +112,7 @@ impl App {
             self.config.permissions.clone(),
             self.runtime.workspace.clone(),
             self.config.provider.max_output_tokens,
+            self.processes.clone(),
         )
     }
 
@@ -923,6 +925,7 @@ pub fn build_from_config(config: AppConfig) -> Result<App, BootstrapError> {
         config,
         persistence,
         runtime: RuntimeScaffold::default(),
+        processes: SharedProcessRegistry::default(),
     })
 }
 

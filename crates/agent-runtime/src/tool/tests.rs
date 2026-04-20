@@ -2,8 +2,8 @@ use super::{
     ExecStartInput, FsFindInFilesInput, FsGlobInput, FsInsertTextInput, FsListInput, FsMkdirInput,
     FsMoveInput, FsPatchTextInput, FsReadLinesInput, FsReadTextInput, FsReplaceLinesInput,
     FsSearchTextInput, FsTrashInput, FsWriteMode, FsWriteTextInput, ProcessKillInput,
-    ProcessResultStatus, ProcessWaitInput, ToolCall, ToolCatalog, ToolFamily, ToolName,
-    ToolRuntime, WebFetchInput, WebSearchInput, WebToolClient,
+    ProcessResultStatus, ProcessWaitInput, SharedProcessRegistry, ToolCall, ToolCatalog,
+    ToolFamily, ToolName, ToolRuntime, WebFetchInput, WebSearchInput, WebToolClient,
 };
 use crate::workspace::WorkspaceRef;
 use std::io::{Read, Write};
@@ -443,6 +443,37 @@ fn exec_kill_terminates_structured_processes() {
         .expect("killed process result");
 
     assert_eq!(killed.status, ProcessResultStatus::Killed);
+}
+
+#[test]
+fn structured_exec_processes_survive_runtime_recreation_with_shared_registry() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let workspace = WorkspaceRef::new(temp.path());
+    let registry = SharedProcessRegistry::default();
+    let mut first_runtime =
+        ToolRuntime::with_shared_process_registry(workspace.clone(), registry.clone());
+    let mut second_runtime = ToolRuntime::with_shared_process_registry(workspace, registry);
+
+    let started = first_runtime
+        .invoke(ToolCall::ExecStart(ExecStartInput {
+            executable: "/bin/sh".to_string(),
+            args: vec!["-c".to_string(), "printf shared-registry".to_string()],
+            cwd: None,
+        }))
+        .expect("exec_start")
+        .into_process_start()
+        .expect("process start");
+    let waited = second_runtime
+        .invoke(ToolCall::ExecWait(ProcessWaitInput {
+            process_id: started.process_id,
+        }))
+        .expect("exec_wait")
+        .into_process_result()
+        .expect("process result");
+
+    assert_eq!(waited.status, ProcessResultStatus::Exited);
+    assert_eq!(waited.exit_code, Some(0));
+    assert_eq!(waited.stdout, "shared-registry");
 }
 
 #[test]

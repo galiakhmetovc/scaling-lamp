@@ -200,7 +200,7 @@ impl ExecutionService {
 
         let output = match tool_call {
             ToolCall::PlanRead(_) | ToolCall::PlanWrite(_) => {
-                let mut tool_runtime = ToolRuntime::new(self.workspace.clone());
+                let mut tool_runtime = self.tool_runtime();
                 self.execute_model_tool_call(
                     store,
                     &session_id,
@@ -220,7 +220,10 @@ impl ExecutionService {
                         evidence_refs: run.snapshot().evidence_refs.clone(),
                     });
                 };
-                let mut tool_runtime = ToolRuntime::new(WorkspaceRef::new(workspace_root));
+                let mut tool_runtime = ToolRuntime::with_shared_process_registry(
+                    WorkspaceRef::new(workspace_root),
+                    self.processes.clone(),
+                );
                 self.execute_model_tool_call(
                     store,
                     &session_id,

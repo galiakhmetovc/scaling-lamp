@@ -1143,7 +1143,7 @@ impl ExecutionService {
         let catalog = ToolCatalog::default();
         let tools =
             self.automatic_provider_tools(provider, prompt_messages.context_offload.as_ref());
-        let mut tool_runtime = ToolRuntime::new(self.workspace.clone());
+        let mut tool_runtime = self.tool_runtime();
         let mut cursor = ProviderLoopCursor::new(provider, initial_loop_state);
 
         while cursor.has_round_budget() {

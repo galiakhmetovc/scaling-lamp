@@ -2,7 +2,7 @@ use super::*;
 use agent_runtime::mission::{JobResult, MissionStatus};
 use agent_runtime::provider::{ProviderContinuationMessage, ProviderToolOutput};
 use agent_runtime::session::TranscriptEntry;
-use agent_runtime::tool::{ToolCatalog, ToolRuntime};
+use agent_runtime::tool::ToolCatalog;
 use std::sync::atomic::AtomicBool;
 
 impl ExecutionService {
@@ -330,7 +330,7 @@ impl ExecutionService {
                 .map_err(ExecutionError::Store)?;
         }
 
-        let mut tool_runtime = ToolRuntime::new(self.workspace.clone());
+        let mut tool_runtime = self.tool_runtime();
         let model_output = self.invoke_provider_tool_call(
             super::provider_loop::ProviderToolExecutionContext {
                 store,

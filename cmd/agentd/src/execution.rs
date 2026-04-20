@@ -19,7 +19,7 @@ use agent_runtime::provider::{ProviderDriver, ProviderError};
 use agent_runtime::run::{RunEngine, RunSnapshot, RunStatus, RunTransitionError};
 use agent_runtime::scheduler::{MissionVerificationSummary, SupervisorAction, SupervisorLoop};
 use agent_runtime::session::Session;
-use agent_runtime::tool::{ToolCall, ToolError};
+use agent_runtime::tool::{SharedProcessRegistry, ToolCall, ToolError, ToolRuntime};
 use agent_runtime::verification::EvidenceBundle;
 use agent_runtime::workspace::WorkspaceRef;
 use std::error::Error;
@@ -116,12 +116,13 @@ pub struct ToolResumeRequest<'a> {
     pub now: i64,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone)]
 pub struct ExecutionService {
     permissions: PermissionConfig,
     provider_max_output_tokens: Option<u32>,
     supervisor: SupervisorLoop,
     workspace: WorkspaceRef,
+    processes: SharedProcessRegistry,
 }
 
 #[derive(Debug)]
@@ -168,7 +169,12 @@ pub enum ExecutionError {
 
 impl Default for ExecutionService {
     fn default() -> Self {
-        Self::new(PermissionConfig::default(), WorkspaceRef::default(), None)
+        Self::new(
+            PermissionConfig::default(),
+            WorkspaceRef::default(),
+            None,
+            SharedProcessRegistry::default(),
+        )
     }
 }
 
@@ -177,13 +183,19 @@ impl ExecutionService {
         permissions: PermissionConfig,
         workspace: WorkspaceRef,
         provider_max_output_tokens: Option<u32>,
+        processes: SharedProcessRegistry,
     ) -> Self {
         Self {
             permissions,
             provider_max_output_tokens,
             supervisor: SupervisorLoop::default(),
             workspace,
+            processes,
         }
+    }
+
+    fn tool_runtime(&self) -> ToolRuntime {
+        ToolRuntime::with_shared_process_registry(self.workspace.clone(), self.processes.clone())
     }
 }
 

@@ -1770,6 +1770,113 @@ fn execute_chat_turn_can_finish_after_an_allowed_web_tool_call_with_zai() {
 }
 
 #[test]
+fn execute_chat_turn_can_finish_after_exec_start_and_exec_wait_tool_calls() {
+    let (api_base, requests, handle) = spawn_json_server_sequence(vec![
+        r#"{
+                "id":"resp_exec_tools_1",
+                "model":"gpt-5.4",
+                "output":[
+                    {
+                        "id":"fc_exec_start",
+                        "type":"function_call",
+                        "call_id":"call_exec_start",
+                        "name":"exec_start",
+                        "arguments":"{\"executable\":\"/bin/sh\",\"args\":[\"-c\",\"printf exec-ok\"],\"cwd\":null}"
+                    }
+                ],
+                "usage":{"input_tokens":30,"output_tokens":10,"total_tokens":40}
+            }"#
+        .to_string(),
+        r#"{
+                "id":"resp_exec_tools_2",
+                "model":"gpt-5.4",
+                "output":[
+                    {
+                        "id":"fc_exec_wait",
+                        "type":"function_call",
+                        "call_id":"call_exec_wait",
+                        "name":"exec_wait",
+                        "arguments":"{\"process_id\":\"exec-1\"}"
+                    }
+                ],
+                "usage":{"input_tokens":24,"output_tokens":8,"total_tokens":32}
+            }"#
+        .to_string(),
+        r#"{
+                "id":"resp_exec_tools_3",
+                "model":"gpt-5.4",
+                "output":[
+                    {
+                        "id":"msg_exec_tools",
+                        "type":"message",
+                        "status":"completed",
+                        "role":"assistant",
+                        "content":[
+                            {
+                                "type":"output_text",
+                                "text":"Executed command."
+                            }
+                        ]
+                    }
+                ],
+                "usage":{"input_tokens":20,"output_tokens":4,"total_tokens":24}
+            }"#
+        .to_string(),
+    ]);
+    let temp = tempfile::tempdir().expect("tempdir");
+    let app = build_from_config(AppConfig {
+        data_dir: temp.path().join("state-root"),
+        provider: ConfiguredProvider {
+            kind: ProviderKind::OpenAiResponses,
+            api_base: Some(format!("{api_base}/v1")),
+            api_key: Some("test-key".to_string()),
+            default_model: Some("gpt-5.4".to_string()),
+            ..ConfiguredProvider::default()
+        },
+        permissions: PermissionConfig {
+            mode: PermissionMode::BypassPermissions,
+            rules: Vec::new(),
+        },
+    })
+    .expect("build app");
+    let store = PersistenceStore::open(&app.persistence).expect("open store");
+
+    store
+        .put_session(&SessionRecord {
+            id: "session-exec-tools".to_string(),
+            title: "Exec Tools".to_string(),
+            prompt_override: Some("Use tools when useful.".to_string()),
+            settings_json: serde_json::to_string(&SessionSettings::default())
+                .expect("serialize settings"),
+            active_mission_id: None,
+            created_at: 1,
+            updated_at: 1,
+        })
+        .expect("put session");
+
+    let report = app
+        .execute_chat_turn("session-exec-tools", "run a command", 10)
+        .expect("execute chat turn");
+    let _first_request = requests.recv().expect("first provider request");
+    let second_request = requests.recv().expect("second provider request");
+    let third_request = requests.recv().expect("third provider request");
+    handle.join().expect("join server");
+
+    assert_eq!(report.response_id, "resp_exec_tools_3");
+    assert_eq!(report.output_text, "Executed command.");
+
+    let normalized_second = second_request.to_ascii_lowercase();
+    assert!(normalized_second.contains("\"call_id\":\"call_exec_start\""));
+    assert!(normalized_second.contains("\"type\":\"function_call_output\""));
+    assert!(normalized_second.contains("process_start"));
+    assert!(normalized_second.contains("exec-1"));
+
+    let normalized_third = third_request.to_ascii_lowercase();
+    assert!(normalized_third.contains("\"call_id\":\"call_exec_wait\""));
+    assert!(normalized_third.contains("exec-ok"));
+}
+
+#[test]
 fn approval_approve_resumes_an_openai_chat_tool_call_and_completes_the_run() {
     let (web_base, web_requests, web_handle) = spawn_text_server("/doc", "approved doc");
     let first_provider_response = format!(
@@ -3079,6 +3186,69 @@ data: [DONE]\n\n"
     assert!(rendered.contains("assistant: streaming tool result"));
     assert!(!rendered.contains("chat send session_id=session-chat-repl-stream"));
     assert!(!rendered.contains("approved approval-"));
+}
+
+#[test]
+fn zai_repl_stream_can_finish_after_exec_start_and_exec_wait_tool_calls() {
+    let first_stream =
+        "data: {\"id\":\"chatcmpl-stream-exec-1\",\"model\":\"glm-5-turbo\",\"choices\":[{\"index\":0,\"delta\":{\"reasoning_content\":\"run a quick command first. \",\"tool_calls\":[{\"index\":0,\"id\":\"call_exec_start\",\"type\":\"function\",\"function\":{\"name\":\"exec_start\",\"arguments\":\"{\\\"executable\\\":\\\"/bin/sh\\\",\\\"args\\\":[\\\"-c\\\",\\\"printf exec-ok\\\"],\\\"cwd\\\":null}\"}}]},\"finish_reason\":\"tool_calls\"}]}\n\n\
+data: [DONE]\n\n"
+            .to_string();
+    let second_stream =
+        "data: {\"id\":\"chatcmpl-stream-exec-2\",\"model\":\"glm-5-turbo\",\"choices\":[{\"index\":0,\"delta\":{\"reasoning_content\":\"now wait for completion. \",\"tool_calls\":[{\"index\":0,\"id\":\"call_exec_wait\",\"type\":\"function\",\"function\":{\"name\":\"exec_wait\",\"arguments\":\"{\\\"process_id\\\":\\\"exec-1\\\"}\"}}]},\"finish_reason\":\"tool_calls\"}]}\n\n\
+data: [DONE]\n\n"
+            .to_string();
+    let third_stream =
+        "data: {\"id\":\"chatcmpl-stream-exec-3\",\"model\":\"glm-5-turbo\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"command completed\"},\"finish_reason\":\"stop\"}]}\n\n\
+data: [DONE]\n\n"
+            .to_string();
+    let (api_base, _requests, handle) =
+        spawn_sse_server_sequence(vec![first_stream, second_stream, third_stream]);
+    let temp = tempfile::tempdir().expect("tempdir");
+    let app = build_from_config(AppConfig {
+        data_dir: temp.path().join("state-root"),
+        provider: ConfiguredProvider {
+            kind: ProviderKind::ZaiChatCompletions,
+            api_base: Some(api_base),
+            api_key: Some("zai-key".to_string()),
+            default_model: Some("glm-5-turbo".to_string()),
+            ..ConfiguredProvider::default()
+        },
+        permissions: PermissionConfig {
+            mode: PermissionMode::BypassPermissions,
+            rules: Vec::new(),
+        },
+    })
+    .expect("build app");
+    let store = PersistenceStore::open(&app.persistence).expect("open store");
+
+    store
+        .put_session(&SessionRecord {
+            id: "session-chat-repl-exec-stream".to_string(),
+            title: "Chat REPL exec stream session".to_string(),
+            prompt_override: Some("Use tools when useful.".to_string()),
+            settings_json: serde_json::to_string(&SessionSettings::default())
+                .expect("serialize settings"),
+            active_mission_id: None,
+            created_at: 1,
+            updated_at: 1,
+        })
+        .expect("put session");
+
+    let mut input = Cursor::new(b"run a command\n/exit\n".to_vec());
+    let mut output = Vec::new();
+    app.run_with_io(
+        ["chat", "repl", "session-chat-repl-exec-stream"],
+        &mut input,
+        &mut output,
+    )
+    .expect("repl");
+    handle.join().expect("join server");
+
+    let rendered = String::from_utf8(output).expect("utf8");
+    assert!(rendered.contains("tool: exec_start | completed"));
+    assert!(rendered.contains("tool: exec_wait | completed"));
+    assert!(rendered.contains("assistant: command completed"));
 }
 
 #[test]

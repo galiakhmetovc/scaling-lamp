@@ -11,6 +11,7 @@ use std::error::Error;
 use std::fmt;
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
+use std::sync::{Arc, Mutex};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ToolFamily {
@@ -664,8 +665,7 @@ pub enum ToolCallParseError {
 pub struct ToolRuntime {
     workspace: WorkspaceRef,
     web: WebToolClient,
-    next_process_id: usize,
-    processes: BTreeMap<String, ManagedProcess>,
+    processes: SharedProcessRegistry,
 }
 
 #[derive(Debug, Clone)]
@@ -678,6 +678,26 @@ pub struct WebToolClient {
 struct ManagedProcess {
     kind: ProcessKind,
     child: Child,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct SharedProcessRegistry {
+    inner: Arc<Mutex<ProcessRegistryState>>,
+}
+
+#[derive(Debug)]
+struct ProcessRegistryState {
+    next_process_id: usize,
+    processes: BTreeMap<String, ManagedProcess>,
+}
+
+impl Default for ProcessRegistryState {
+    fn default() -> Self {
+        Self {
+            next_process_id: 1,
+            processes: BTreeMap::new(),
+        }
+    }
 }
 
 impl ToolFamily {
@@ -1128,15 +1148,29 @@ impl Default for ToolCatalog {
 
 impl ToolRuntime {
     pub fn new(workspace: WorkspaceRef) -> Self {
-        Self::with_web_client(workspace, WebToolClient::default())
+        Self::with_shared_process_registry(workspace, SharedProcessRegistry::default())
     }
 
     pub fn with_web_client(workspace: WorkspaceRef, web: WebToolClient) -> Self {
+        Self::with_web_client_and_process_registry(workspace, web, SharedProcessRegistry::default())
+    }
+
+    pub fn with_shared_process_registry(
+        workspace: WorkspaceRef,
+        processes: SharedProcessRegistry,
+    ) -> Self {
+        Self::with_web_client_and_process_registry(workspace, WebToolClient::default(), processes)
+    }
+
+    pub fn with_web_client_and_process_registry(
+        workspace: WorkspaceRef,
+        web: WebToolClient,
+        processes: SharedProcessRegistry,
+    ) -> Self {
         Self {
             workspace,
             web,
-            next_process_id: 1,
-            processes: BTreeMap::new(),
+            processes,
         }
     }
 
@@ -1376,12 +1410,17 @@ impl ToolRuntime {
             process_id: executable.to_string(),
             source,
         })?;
-        let process_id = format!("{}-{}", kind.as_prefix(), self.next_process_id);
-        self.next_process_id += 1;
-
         let pid_ref = format!("pid:{}", child.id());
-        self.processes
-            .insert(process_id.clone(), ManagedProcess { kind, child });
+
+        let process_id = {
+            let mut registry = self.processes.lock();
+            let process_id = format!("{}-{}", kind.as_prefix(), registry.next_process_id);
+            registry.next_process_id += 1;
+            registry
+                .processes
+                .insert(process_id.clone(), ManagedProcess { kind, child });
+            process_id
+        };
 
         Ok(ToolOutput::ProcessStart(ProcessStartOutput {
             process_id,
@@ -1448,12 +1487,14 @@ impl ToolRuntime {
         process_id: &str,
         expected_kind: ProcessKind,
     ) -> Result<ManagedProcess, ToolError> {
-        let managed =
-            self.processes
-                .remove(process_id)
-                .ok_or_else(|| ToolError::UnknownProcess {
-                    process_id: process_id.to_string(),
-                })?;
+        let managed = self
+            .processes
+            .lock()
+            .processes
+            .remove(process_id)
+            .ok_or_else(|| ToolError::UnknownProcess {
+                process_id: process_id.to_string(),
+            })?;
 
         if managed.kind != expected_kind {
             return Err(ToolError::ProcessFamilyMismatch {
@@ -1464,6 +1505,12 @@ impl ToolRuntime {
         }
 
         Ok(managed)
+    }
+}
+
+impl SharedProcessRegistry {
+    fn lock(&self) -> std::sync::MutexGuard<'_, ProcessRegistryState> {
+        self.inner.lock().expect("shared process registry poisoned")
     }
 }
 
