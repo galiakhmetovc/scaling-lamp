@@ -2,8 +2,8 @@ use agent_persistence::AppConfig;
 use agentd::bootstrap;
 use agentd::daemon;
 use agentd::http::types::{
-    CreateSessionRequest, DaemonStopResponse, ErrorResponse, SessionSummaryResponse, SkillCommandRequest,
-    StatusResponse,
+    CreateSessionRequest, DaemonStopResponse, ErrorResponse, SessionSummaryResponse,
+    SkillCommandRequest, StatusResponse,
 };
 use reqwest::StatusCode;
 use reqwest::blocking::Client;

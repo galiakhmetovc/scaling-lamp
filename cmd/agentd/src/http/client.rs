@@ -8,7 +8,9 @@ use crate::bootstrap::{
     SessionSummary, SessionTranscriptView,
 };
 use crate::execution::{ApprovalContinuationReport, ChatExecutionEvent, ChatTurnExecutionReport};
-use crate::http::types::{DaemonStopResponse, ErrorResponse, SessionSummaryResponse, StatusResponse};
+use crate::http::types::{
+    DaemonStopResponse, ErrorResponse, SessionSummaryResponse, StatusResponse,
+};
 use agent_persistence::AppConfig;
 use reqwest::StatusCode;
 use reqwest::blocking::Client;

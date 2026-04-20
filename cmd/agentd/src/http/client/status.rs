@@ -6,7 +6,8 @@ impl DaemonClient {
     }
 
     pub fn shutdown(&self) -> Result<(), BootstrapError> {
-        let response: DaemonStopResponse = self.post_json("/v1/daemon/stop", &serde_json::json!({}))?;
+        let response: DaemonStopResponse =
+            self.post_json("/v1/daemon/stop", &serde_json::json!({}))?;
         if response.stopping {
             return Ok(());
         }

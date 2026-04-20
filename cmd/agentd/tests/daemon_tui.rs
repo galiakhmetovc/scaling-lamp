@@ -95,3 +95,23 @@ fn daemon_client_does_not_autospawn_for_explicit_remote_target() {
     assert!(error.to_string().contains("daemon"));
     assert_eq!(*spawn_count.lock().expect("lock count"), 0);
 }
+
+#[test]
+fn daemon_client_uses_loopback_when_daemon_binds_all_interfaces() {
+    let (_temp, mut config) = test_config();
+    config.daemon.bind_host = "0.0.0.0".to_string();
+    let app = bootstrap::build_from_config(config.clone()).expect("build app");
+    let handle = daemon::spawn_for_test(app).expect("spawn daemon");
+
+    let client = DaemonClient::new(&config, &DaemonConnectOptions::default());
+    let status = client.status().expect("status over wildcard bind");
+    assert!(status.ok);
+    assert_eq!(status.bind_host, "0.0.0.0");
+
+    let session = client
+        .create_session_auto(Some("Wildcard Bind Session"))
+        .expect("create session over loopback");
+    assert_eq!(session.title, "Wildcard Bind Session");
+
+    handle.stop().expect("stop daemon");
+}

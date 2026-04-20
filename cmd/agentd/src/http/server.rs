@@ -28,11 +28,7 @@ pub fn serve(app: App, shutdown: Arc<AtomicBool>) -> std::io::Result<()> {
     Ok(())
 }
 
-fn handle_request(
-    app: &App,
-    shutdown: &Arc<AtomicBool>,
-    request: Request,
-) -> std::io::Result<()> {
+fn handle_request(app: &App, shutdown: &Arc<AtomicBool>, request: Request) -> std::io::Result<()> {
     if !is_authorized(app, &request) {
         return respond_json(
             request,

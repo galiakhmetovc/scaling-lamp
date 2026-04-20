@@ -6,7 +6,7 @@ impl DaemonClient {
         let host = options
             .host
             .clone()
-            .unwrap_or_else(|| config.daemon.bind_host.clone());
+            .unwrap_or_else(|| default_connect_host(&config.daemon.bind_host));
         let port = options.port.unwrap_or(config.daemon.bind_port);
         Self {
             http: Client::builder()
@@ -81,5 +81,36 @@ impl DaemonClient {
             .send()
             .map_err(|error| BootstrapError::Stream(std::io::Error::other(error.to_string())))?;
         decode_response(response)
+    }
+}
+
+fn default_connect_host(bind_host: &str) -> String {
+    match bind_host.trim() {
+        "0.0.0.0" => "127.0.0.1".to_string(),
+        "::" | "[::]" => "[::1]".to_string(),
+        other => other.to_string(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::default_connect_host;
+
+    #[test]
+    fn default_connect_host_maps_ipv4_wildcard_to_loopback() {
+        assert_eq!(default_connect_host("0.0.0.0"), "127.0.0.1");
+    }
+
+    #[test]
+    fn default_connect_host_maps_ipv6_wildcard_to_loopback() {
+        assert_eq!(default_connect_host("::"), "[::1]");
+        assert_eq!(default_connect_host("[::]"), "[::1]");
+    }
+
+    #[test]
+    fn default_connect_host_preserves_explicit_hosts() {
+        assert_eq!(default_connect_host("127.0.0.1"), "127.0.0.1");
+        assert_eq!(default_connect_host("10.6.5.3"), "10.6.5.3");
+        assert_eq!(default_connect_host("example.com"), "example.com");
     }
 }
