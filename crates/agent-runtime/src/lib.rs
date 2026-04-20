@@ -9,6 +9,7 @@ pub mod provider;
 pub mod run;
 pub mod scheduler;
 pub mod session;
+pub mod skills;
 pub mod tool;
 pub mod verification;
 pub mod workspace;
