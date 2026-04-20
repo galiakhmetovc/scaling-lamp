@@ -10,6 +10,7 @@ use agentd::tui::app::{DialogState, TuiAppState, TuiScreen};
 use agentd::tui::events::TuiAction;
 use agentd::tui::timeline::{Timeline, TimelineEntryKind};
 use agentd::tui::{dispatch_action, pump_background};
+use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::TcpListener;
 use std::thread;
@@ -94,6 +95,43 @@ fn tui_shell_navigation_opens_expected_dialogs() {
             session_id: "session-a".to_string(),
         })
     );
+}
+
+#[test]
+fn tui_chat_key_handling_supports_page_navigation_from_the_tail() {
+    let mut state = TuiAppState::new(
+        vec![summary("session-a", "Session A")],
+        Some("session-a".to_string()),
+    );
+
+    let action = agentd::tui::screens::chat::handle_key(
+        &mut state,
+        KeyEvent::new(KeyCode::PageUp, KeyModifiers::NONE),
+    )
+    .expect("page up");
+    assert!(matches!(action, TuiAction::None));
+    assert_eq!(state.scroll_offset(), 10);
+
+    let _ = agentd::tui::screens::chat::handle_key(
+        &mut state,
+        KeyEvent::new(KeyCode::Up, KeyModifiers::NONE),
+    )
+    .expect("up");
+    assert_eq!(state.scroll_offset(), 11);
+
+    let _ = agentd::tui::screens::chat::handle_key(
+        &mut state,
+        KeyEvent::new(KeyCode::PageDown, KeyModifiers::NONE),
+    )
+    .expect("page down");
+    assert_eq!(state.scroll_offset(), 1);
+
+    let _ = agentd::tui::screens::chat::handle_key(
+        &mut state,
+        KeyEvent::new(KeyCode::Down, KeyModifiers::NONE),
+    )
+    .expect("down");
+    assert_eq!(state.scroll_offset(), 0);
 }
 
 #[test]

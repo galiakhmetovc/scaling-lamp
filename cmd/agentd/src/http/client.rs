@@ -31,6 +31,12 @@ pub struct DaemonClient {
     bearer_token: Option<String>,
 }
 
+#[derive(Debug, Clone)]
+pub struct DaemonConnection {
+    client: DaemonClient,
+    autospawned: bool,
+}
+
 pub fn connect_or_autospawn<F>(
     config: &AppConfig,
     options: &DaemonConnectOptions,
@@ -39,9 +45,23 @@ pub fn connect_or_autospawn<F>(
 where
     F: FnOnce() -> Result<(), BootstrapError>,
 {
+    Ok(connect_or_autospawn_detailed(config, options, spawn_local)?.client)
+}
+
+pub fn connect_or_autospawn_detailed<F>(
+    config: &AppConfig,
+    options: &DaemonConnectOptions,
+    spawn_local: F,
+) -> Result<DaemonConnection, BootstrapError>
+where
+    F: FnOnce() -> Result<(), BootstrapError>,
+{
     let client = DaemonClient::new(config, options);
     if client.status().is_ok() {
-        return Ok(client);
+        return Ok(DaemonConnection {
+            client,
+            autospawned: false,
+        });
     }
 
     if options.host.is_some() || options.port.is_some() {
@@ -53,12 +73,39 @@ where
     spawn_local()?;
     for _ in 0..50 {
         if client.status().is_ok() {
-            return Ok(client);
+            return Ok(DaemonConnection {
+                client,
+                autospawned: true,
+            });
         }
         thread::sleep(Duration::from_millis(100));
     }
     client.status()?;
-    Ok(client)
+    Ok(DaemonConnection {
+        client,
+        autospawned: true,
+    })
+}
+
+impl DaemonConnection {
+    pub fn client(&self) -> &DaemonClient {
+        &self.client
+    }
+
+    pub fn into_client(self) -> DaemonClient {
+        self.client
+    }
+
+    pub fn was_autospawned(&self) -> bool {
+        self.autospawned
+    }
+
+    pub fn shutdown_if_autospawned(&self) -> Result<(), BootstrapError> {
+        if self.autospawned {
+            self.client.shutdown()?;
+        }
+        Ok(())
+    }
 }
 
 fn decode_response<T>(response: reqwest::blocking::Response) -> Result<T, BootstrapError>

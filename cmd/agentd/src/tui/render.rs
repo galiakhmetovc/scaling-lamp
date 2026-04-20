@@ -114,10 +114,16 @@ fn render_chat_screen(frame: &mut Frame<'_>, state: &TuiAppState) {
         .into_iter()
         .flat_map(|entry| render_timeline_entry(entry, now))
         .collect::<Vec<_>>();
+    let timeline_viewport_height = usize::from(chunks[1].height.saturating_sub(2));
+    let timeline_scroll_top = chat_scroll_top(
+        timeline_lines.len(),
+        timeline_viewport_height,
+        state.scroll_offset(),
+    );
     let timeline = Paragraph::new(timeline_lines)
         .block(Block::default().title("Chat").borders(Borders::ALL))
         .wrap(Wrap { trim: false })
-        .scroll((state.scroll_offset(), 0));
+        .scroll((timeline_scroll_top, 0));
 
     let composer_lines = vec![
         Line::from(vec![
@@ -411,9 +417,19 @@ fn format_elapsed(started_at: i64, now: i64) -> String {
     format!("{minutes:02}:{seconds:02}")
 }
 
+fn chat_scroll_top(total_lines: usize, viewport_lines: usize, offset_from_bottom: u16) -> u16 {
+    if viewport_lines == 0 || total_lines <= viewport_lines {
+        return 0;
+    }
+
+    let max_top = total_lines.saturating_sub(viewport_lines);
+    let offset_from_bottom = usize::from(offset_from_bottom).min(max_top);
+    max_top.saturating_sub(offset_from_bottom) as u16
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{format_timestamp, render_markdown_entry};
+    use super::{chat_scroll_top, format_timestamp, render_markdown_entry};
 
     #[test]
     fn timestamps_render_in_human_readable_form_for_same_day_entries() {
@@ -437,5 +453,13 @@ mod tests {
         assert!(rendered.contains("Heading"));
         assert!(rendered.contains("• item one"));
         assert!(rendered.contains("fn main() {}"));
+    }
+
+    #[test]
+    fn chat_scroll_top_follows_the_tail_and_respects_manual_offset() {
+        assert_eq!(chat_scroll_top(3, 8, 0), 0);
+        assert_eq!(chat_scroll_top(20, 5, 0), 15);
+        assert_eq!(chat_scroll_top(20, 5, 3), 12);
+        assert_eq!(chat_scroll_top(20, 5, 99), 0);
     }
 }

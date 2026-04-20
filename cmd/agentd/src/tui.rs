@@ -9,7 +9,7 @@ pub mod worker;
 use crate::bootstrap::{App, BootstrapError};
 use crate::daemon;
 use crate::execution::ChatExecutionEvent;
-use crate::http::client::{DaemonConnectOptions, connect_or_autospawn};
+use crate::http::client::{DaemonConnectOptions, connect_or_autospawn_detailed};
 use app::{DialogState, TuiAppState};
 use backend::TuiBackend;
 use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind};
@@ -59,10 +59,17 @@ pub fn run(app: &App) -> Result<(), BootstrapError> {
 }
 
 pub fn run_daemon_backed(app: &App, options: DaemonConnectOptions) -> Result<(), BootstrapError> {
-    let client = connect_or_autospawn(&app.config, &options, || {
+    let connection = connect_or_autospawn_detailed(&app.config, &options, || {
         daemon::spawn_local_process().map_err(BootstrapError::Stream)
     })?;
-    run_with_backend(client)
+    let client = connection.client().clone();
+    let result = run_with_backend(client);
+    let shutdown_result = connection.shutdown_if_autospawned();
+    match (result, shutdown_result) {
+        (Ok(()), Ok(())) => Ok(()),
+        (Err(error), _) => Err(error),
+        (Ok(()), Err(error)) => Err(error),
+    }
 }
 
 pub fn run_with_backend<B>(backend: B) -> Result<(), BootstrapError>

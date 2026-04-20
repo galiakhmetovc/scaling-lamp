@@ -35,6 +35,14 @@ pub fn handle_key(state: &mut TuiAppState, key: KeyEvent) -> Result<TuiAction, B
             state.scroll_down();
             TuiAction::None
         }
+        KeyCode::PageUp => {
+            state.scroll_page_up();
+            TuiAction::None
+        }
+        KeyCode::PageDown => {
+            state.scroll_page_down();
+            TuiAction::None
+        }
         KeyCode::Backspace => {
             state.pop_input_char();
             TuiAction::None

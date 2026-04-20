@@ -20,6 +20,7 @@ const COMMANDS: [&str; 14] = [
     "/compact",
     "/exit",
 ];
+const PAGE_SCROLL_LINES: u16 = 10;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TuiScreen {
@@ -327,11 +328,19 @@ impl TuiAppState {
     }
 
     pub fn scroll_up(&mut self) {
-        self.scroll_offset = self.scroll_offset.saturating_sub(1);
+        self.scroll_offset = self.scroll_offset.saturating_add(1);
     }
 
     pub fn scroll_down(&mut self) {
-        self.scroll_offset = self.scroll_offset.saturating_add(1);
+        self.scroll_offset = self.scroll_offset.saturating_sub(1);
+    }
+
+    pub fn scroll_page_up(&mut self) {
+        self.scroll_offset = self.scroll_offset.saturating_add(PAGE_SCROLL_LINES);
+    }
+
+    pub fn scroll_page_down(&mut self) {
+        self.scroll_offset = self.scroll_offset.saturating_sub(PAGE_SCROLL_LINES);
     }
 
     pub fn timeline(&self) -> &Timeline {

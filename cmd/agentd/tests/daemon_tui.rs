@@ -2,7 +2,9 @@ use agent_persistence::AppConfig;
 use agent_runtime::provider::{ConfiguredProvider, ProviderKind};
 use agentd::bootstrap;
 use agentd::daemon;
-use agentd::http::client::{DaemonClient, DaemonConnectOptions, connect_or_autospawn};
+use agentd::http::client::{
+    DaemonClient, DaemonConnectOptions, connect_or_autospawn, connect_or_autospawn_detailed,
+};
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::TcpListener;
 use std::sync::mpsc::{self, Receiver};
@@ -232,4 +234,48 @@ fn daemon_client_chat_turn_waits_for_slow_daemon_responses() {
     );
 
     handle.stop().expect("stop daemon");
+}
+
+#[test]
+fn detailed_daemon_connection_can_shutdown_autospawned_local_daemon() {
+    let (_temp, config) = test_config();
+    let handle_cell = Arc::new(Mutex::new(None));
+    let handle_cell_clone = handle_cell.clone();
+    let config_clone = config.clone();
+
+    let connection =
+        connect_or_autospawn_detailed(&config, &DaemonConnectOptions::default(), move || {
+            let app = bootstrap::build_from_config(config_clone).expect("build spawned app");
+            let handle = daemon::spawn_for_test(app).expect("spawn daemon");
+            *handle_cell_clone.lock().expect("lock handle") = Some(handle);
+            Ok(())
+        })
+        .expect("connect or spawn");
+
+    assert!(connection.was_autospawned());
+    assert!(
+        connection
+            .client()
+            .status()
+            .expect("status before shutdown")
+            .ok
+    );
+
+    connection
+        .shutdown_if_autospawned()
+        .expect("shutdown owned daemon");
+    thread::sleep(Duration::from_millis(250));
+
+    connection
+        .client()
+        .status()
+        .expect_err("daemon should stop");
+
+    handle_cell
+        .lock()
+        .expect("lock handle")
+        .take()
+        .expect("spawned handle")
+        .stop()
+        .expect("join stopped daemon");
 }
