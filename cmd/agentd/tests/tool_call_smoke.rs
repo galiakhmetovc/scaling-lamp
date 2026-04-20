@@ -50,10 +50,12 @@ fn operator_can_run_a_chat_turn_that_uses_an_allowed_web_tool() {
     ]);
     let temp = tempfile::tempdir().expect("tempdir");
     let data_dir = temp.path().join("state-root");
+    let daemon_port = free_port();
 
     let created_session = run_agentd(
         &data_dir,
         &api_base,
+        daemon_port,
         &["session", "create", "session-tool-smoke", "Tool", "Smoke"],
     );
     assert!(created_session.contains("created session session-tool-smoke"));
@@ -61,6 +63,7 @@ fn operator_can_run_a_chat_turn_that_uses_an_allowed_web_tool() {
     let sent = run_agentd(
         &data_dir,
         &api_base,
+        daemon_port,
         &["chat", "send", "session-tool-smoke", "Fetch", "the", "doc"],
     );
     let first_request = provider_requests.recv().expect("first provider request");
@@ -76,6 +79,7 @@ fn operator_can_run_a_chat_turn_that_uses_an_allowed_web_tool() {
     let shown = run_agentd(
         &data_dir,
         &api_base,
+        daemon_port,
         &["chat", "show", "session-tool-smoke"],
     );
     assert!(shown.contains("user: Fetch the doc"));
@@ -96,10 +100,16 @@ fn operator_can_run_a_chat_turn_that_uses_an_allowed_web_tool() {
     assert!(normalized_web.contains("get /doc http/1.1"));
 }
 
-fn run_agentd(data_dir: &std::path::Path, api_base: &str, args: &[&str]) -> String {
+fn run_agentd(
+    data_dir: &std::path::Path,
+    api_base: &str,
+    daemon_port: u16,
+    args: &[&str],
+) -> String {
     let output = Command::new(env!("CARGO_BIN_EXE_agentd"))
         .args(args)
         .env("TEAMD_DATA_DIR", data_dir)
+        .env("TEAMD_DAEMON_BIND_PORT", daemon_port.to_string())
         .env("TEAMD_PROVIDER_KIND", "openai_responses")
         .env("TEAMD_PROVIDER_API_BASE", format!("{api_base}/v1"))
         .env("TEAMD_PROVIDER_API_KEY", "test-key")
@@ -119,6 +129,14 @@ fn run_agentd(data_dir: &std::path::Path, api_base: &str, args: &[&str]) -> Stri
         .expect("utf8 stdout")
         .trim()
         .to_string()
+}
+
+fn free_port() -> u16 {
+    TcpListener::bind("127.0.0.1:0")
+        .expect("bind listener")
+        .local_addr()
+        .expect("local addr")
+        .port()
 }
 
 fn spawn_json_server_sequence(

@@ -2,10 +2,11 @@ use crate::bootstrap::{App, BootstrapError};
 use crate::execution::ExecutionError;
 use crate::http::types::{
     ApproveRunRequest, ChatTurnRequest, ClearSessionRequest, CreateSessionRequest, ErrorResponse,
-    SessionPendingApprovalsResponse, SessionPreferencesRequest, SessionSkillsResponse,
-    SessionSummaryResponse, SessionTranscriptResponse, SkillCommandRequest, StatusResponse,
-    WorkerOutcomeResponse,
+    SessionDetailResponse, SessionPendingApprovalsResponse, SessionPreferencesRequest,
+    SessionSkillsResponse, SessionSummaryResponse, SessionTranscriptResponse, SkillCommandRequest,
+    StatusResponse, WorkerOutcomeResponse,
 };
+use agent_persistence::{JobRepository, MissionRepository, SessionRepository};
 use serde::{Serialize, de::DeserializeOwned};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -52,10 +53,38 @@ fn handle_request(app: &App, request: Request) -> std::io::Result<()> {
 }
 
 fn handle_status(app: &App, request: Request) -> std::io::Result<()> {
-    let session_count = match app.list_session_summaries() {
-        Ok(sessions) => sessions.len(),
+    let store = match app.store() {
+        Ok(store) => store,
         Err(error) => {
             let (status, payload) = map_bootstrap_error(error);
+            return respond_json(request, status, &payload);
+        }
+    };
+    let session_count = match store.list_sessions() {
+        Ok(sessions) => sessions.len(),
+        Err(error) => {
+            let (status, payload) = map_bootstrap_error(BootstrapError::Store(error));
+            return respond_json(request, status, &payload);
+        }
+    };
+    let mission_count = match store.list_missions() {
+        Ok(missions) => missions.len(),
+        Err(error) => {
+            let (status, payload) = map_bootstrap_error(BootstrapError::Store(error));
+            return respond_json(request, status, &payload);
+        }
+    };
+    let run_count = match store.load_execution_state() {
+        Ok(state) => state.runs.len(),
+        Err(error) => {
+            let (status, payload) = map_bootstrap_error(BootstrapError::Store(error));
+            return respond_json(request, status, &payload);
+        }
+    };
+    let job_count = match store.list_jobs() {
+        Ok(jobs) => jobs.len(),
+        Err(error) => {
+            let (status, payload) = map_bootstrap_error(BootstrapError::Store(error));
             return respond_json(request, status, &payload);
         }
     };
@@ -63,7 +92,14 @@ fn handle_status(app: &App, request: Request) -> std::io::Result<()> {
         ok: true,
         bind_host: app.config.daemon.bind_host.clone(),
         bind_port: app.config.daemon.bind_port,
+        permission_mode: app.config.permissions.mode.as_str().to_string(),
         session_count,
+        mission_count,
+        run_count,
+        job_count,
+        components: app.runtime.component_count(),
+        data_dir: app.config.data_dir.display().to_string(),
+        state_db: app.persistence.stores.metadata_db.display().to_string(),
     };
     respond_json(request, StatusCode(200), &response)
 }
@@ -72,7 +108,10 @@ fn handle_create_session(app: &App, mut request: Request) -> std::io::Result<()>
     let mut body = String::new();
     request.as_reader().read_to_string(&mut body)?;
     let payload = if body.trim().is_empty() {
-        CreateSessionRequest { title: None }
+        CreateSessionRequest {
+            id: None,
+            title: None,
+        }
     } else {
         match serde_json::from_str::<CreateSessionRequest>(&body) {
             Ok(payload) => payload,
@@ -88,7 +127,11 @@ fn handle_create_session(app: &App, mut request: Request) -> std::io::Result<()>
         }
     };
 
-    let session = match app.create_session_auto(payload.title.as_deref()) {
+    let session_result = match payload.id.as_deref() {
+        Some(id) => app.create_session(id, payload.title.as_deref().unwrap_or("New Session")),
+        None => app.create_session_auto(payload.title.as_deref()),
+    };
+    let session = match session_result {
         Ok(session) => session,
         Err(error) => {
             let (status, payload) = map_bootstrap_error(error);
@@ -139,6 +182,9 @@ fn handle_nested_routes(app: &App, request: Request) -> std::io::Result<()> {
         .collect::<Vec<_>>();
     match (method, segments.as_slice()) {
         (Method::Get, [session_id]) => handle_session_summary(app, request, session_id.as_str()),
+        (Method::Get, [session_id, detail]) if detail == "detail" => {
+            handle_session_detail(app, request, session_id.as_str())
+        }
         (Method::Delete, [session_id]) => handle_delete_session(app, request, session_id.as_str()),
         (Method::Get, [session_id, transcript]) if transcript == "transcript" => {
             handle_session_transcript(app, request, session_id.as_str())
@@ -178,6 +224,43 @@ fn handle_nested_routes(app: &App, request: Request) -> std::io::Result<()> {
                 error: "route not found".to_string(),
             },
         ),
+    }
+}
+
+fn handle_session_detail(app: &App, request: Request, session_id: &str) -> std::io::Result<()> {
+    let store = match app.store() {
+        Ok(store) => store,
+        Err(error) => {
+            let (status, payload) = map_bootstrap_error(error);
+            return respond_json(request, status, &payload);
+        }
+    };
+
+    match store.get_session(session_id) {
+        Ok(Some(record)) => respond_json(
+            request,
+            StatusCode(200),
+            &SessionDetailResponse {
+                id: record.id,
+                title: record.title,
+                prompt_override: record.prompt_override,
+                settings_json: record.settings_json,
+                active_mission_id: record.active_mission_id,
+                created_at: record.created_at,
+                updated_at: record.updated_at,
+            },
+        ),
+        Ok(None) => respond_json(
+            request,
+            StatusCode(404),
+            &ErrorResponse {
+                error: format!("session {session_id} not found"),
+            },
+        ),
+        Err(error) => {
+            let (status, payload) = map_bootstrap_error(BootstrapError::Store(error));
+            respond_json(request, status, &payload)
+        }
     }
 }
 

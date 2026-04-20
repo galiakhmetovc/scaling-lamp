@@ -134,7 +134,7 @@ impl App {
         let stdout = std::io::stdout();
         let mut input = stdin.lock();
         let mut output = stdout.lock();
-        self.run_with_io(std::env::args().skip(1), &mut input, &mut output)
+        cli::execute_process_with_io(self, std::env::args().skip(1), &mut input, &mut output)
     }
 
     #[cfg_attr(not(test), allow(dead_code))]
@@ -208,11 +208,19 @@ impl App {
         &self,
         title: Option<&str>,
     ) -> Result<SessionSummary, BootstrapError> {
+        self.create_session(
+            &format!("session-{}", unique_timestamp_token()?),
+            title.unwrap_or("New Session").trim(),
+        )
+    }
+
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub fn create_session(&self, id: &str, title: &str) -> Result<SessionSummary, BootstrapError> {
         let store = self.store()?;
         let now = unix_timestamp()?;
         let session = Session {
-            id: format!("session-{}", unique_timestamp_token()?),
-            title: title.unwrap_or("New Session").trim().to_string(),
+            id: id.to_string(),
+            title: title.trim().to_string(),
             prompt_override: None,
             settings: SessionSettings::default(),
             active_mission_id: None,

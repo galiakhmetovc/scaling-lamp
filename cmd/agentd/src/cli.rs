@@ -1,7 +1,8 @@
 use crate::bootstrap::{App, BootstrapError};
 use crate::daemon;
 use crate::execution::{ChatExecutionEvent, ExecutionError, ToolExecutionStatus};
-use crate::http::client::DaemonConnectOptions;
+use crate::http::client::{DaemonClient, DaemonConnectOptions, connect_or_autospawn};
+use crate::http::types::{SessionDetailResponse, StatusResponse};
 use crate::tui;
 use agent_persistence::{
     JobRepository, MissionRecord, MissionRepository, PersistenceStore, RunRepository,
@@ -148,6 +149,54 @@ where
         } => approve_run(app, &run_id, &approval_id),
         Command::DelegateList { run_id } => list_delegates(&app.store()?, &run_id),
         Command::VerificationShow { run_id } => show_verification(&app.store()?, &run_id),
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ProcessInvocation {
+    connect: DaemonConnectOptions,
+    command: Command,
+}
+
+pub fn execute_process_with_io<I, S, R, W>(
+    app: &App,
+    args: I,
+    input: &mut R,
+    output: &mut W,
+) -> Result<(), BootstrapError>
+where
+    I: IntoIterator<Item = S>,
+    S: AsRef<str>,
+    R: BufRead,
+    W: Write,
+{
+    let invocation = ProcessInvocation::parse(args)?;
+    let ProcessInvocation { connect, command } = invocation;
+
+    match command {
+        Command::Daemon => daemon::serve(app.clone()).map_err(BootstrapError::Stream),
+        Command::Tui { host, port } => {
+            let connect = merge_connect_options(connect, host, port);
+            tui::run_daemon_backed(app, connect)
+        }
+        Command::ChatRepl { session_id } => {
+            let client = daemon_client_for_process(app, &connect)?;
+            run_chat_repl_with_backend(&client, &session_id, input, output)
+        }
+        other if daemon_supports_command(&other) => {
+            let client = daemon_client_for_process(app, &connect)?;
+            let rendered = execute_daemon_command(&client, other)?;
+            writeln!(output, "{rendered}").map_err(BootstrapError::Stream)
+        }
+        other => {
+            if connect.host.is_some() || connect.port.is_some() {
+                return Err(BootstrapError::Usage {
+                    reason: "this command is not available over daemon transport yet".to_string(),
+                });
+            }
+            let rendered = execute_command(app, other)?;
+            writeln!(output, "{rendered}").map_err(BootstrapError::Stream)
+        }
     }
 }
 
@@ -319,6 +368,54 @@ impl Command {
     }
 }
 
+impl ProcessInvocation {
+    fn parse<I, S>(args: I) -> Result<Self, BootstrapError>
+    where
+        I: IntoIterator<Item = S>,
+        S: AsRef<str>,
+    {
+        let mut args = args
+            .into_iter()
+            .map(|value| value.as_ref().to_string())
+            .collect::<Vec<_>>();
+        let connect = parse_global_connect_options(&mut args)?;
+        let command = Command::parse(args)?;
+        Ok(Self { connect, command })
+    }
+}
+
+fn parse_global_connect_options(
+    args: &mut Vec<String>,
+) -> Result<DaemonConnectOptions, BootstrapError> {
+    let mut host = None;
+    let mut port = None;
+    let index = 0;
+    while index < args.len() {
+        match args[index].as_str() {
+            "--host" => {
+                let Some(value) = args.get(index + 1) else {
+                    return Err(BootstrapError::Usage {
+                        reason: "--host requires a value".to_string(),
+                    });
+                };
+                host = Some(value.clone());
+                args.drain(index..=index + 1);
+            }
+            "--port" => {
+                let Some(value) = args.get(index + 1) else {
+                    return Err(BootstrapError::Usage {
+                        reason: "--port requires a value".to_string(),
+                    });
+                };
+                port = Some(parse_port_arg(value, "--port")?);
+                args.drain(index..=index + 1);
+            }
+            _ => break,
+        }
+    }
+    Ok(DaemonConnectOptions { host, port })
+}
+
 fn parse_tui_command(args: &[String]) -> Result<Command, BootstrapError> {
     let mut host = None;
     let mut port = None;
@@ -351,6 +448,41 @@ fn parse_tui_command(args: &[String]) -> Result<Command, BootstrapError> {
         }
     }
     Ok(Command::Tui { host, port })
+}
+
+fn merge_connect_options(
+    global: DaemonConnectOptions,
+    host: Option<String>,
+    port: Option<u16>,
+) -> DaemonConnectOptions {
+    DaemonConnectOptions {
+        host: host.or(global.host),
+        port: port.or(global.port),
+    }
+}
+
+fn daemon_supports_command(command: &Command) -> bool {
+    matches!(
+        command,
+        Command::Status
+            | Command::ChatShow { .. }
+            | Command::ChatSend { .. }
+            | Command::ChatRepl { .. }
+            | Command::SessionCreate { .. }
+            | Command::SessionShow { .. }
+            | Command::SessionSkills { .. }
+            | Command::SessionEnableSkill { .. }
+            | Command::SessionDisableSkill { .. }
+    )
+}
+
+fn daemon_client_for_process(
+    app: &App,
+    connect: &DaemonConnectOptions,
+) -> Result<DaemonClient, BootstrapError> {
+    connect_or_autospawn(&app.config, connect, || {
+        daemon::spawn_local_process().map_err(BootstrapError::Stream)
+    })
 }
 
 fn execute_command(app: &App, command: Command) -> Result<String, BootstrapError> {
@@ -402,17 +534,56 @@ fn execute_command(app: &App, command: Command) -> Result<String, BootstrapError
     }
 }
 
+fn execute_daemon_command(
+    client: &DaemonClient,
+    command: Command,
+) -> Result<String, BootstrapError> {
+    match command {
+        Command::Status => render_daemon_status(&client.status()?),
+        Command::ChatShow { session_id } => show_chat_via_client(client, &session_id),
+        Command::ChatSend {
+            session_id,
+            message,
+        } => send_chat_via_client(client, &session_id, &message),
+        Command::ChatRepl { .. } | Command::Tui { .. } | Command::Daemon => {
+            Err(BootstrapError::Usage {
+                reason: "interactive command requires process I/O path".to_string(),
+            })
+        }
+        Command::SessionCreate { id, title } => {
+            let summary = client.create_session(Some(&id), Some(&title))?;
+            Ok(format!(
+                "created session {} title={}",
+                summary.id, summary.title
+            ))
+        }
+        Command::SessionShow { id } => show_session_via_client(client, &id),
+        Command::SessionSkills { id } => render_session_skills_list(client.session_skills(&id)?),
+        Command::SessionEnableSkill { id, skill_name } => {
+            let skills = client.enable_session_skill(&id, &skill_name)?;
+            render_session_skills_list(skills)
+        }
+        Command::SessionDisableSkill { id, skill_name } => {
+            let skills = client.disable_session_skill(&id, &skill_name)?;
+            render_session_skills_list(skills)
+        }
+        _ => Err(BootstrapError::Usage {
+            reason: "this command is not available over daemon transport yet".to_string(),
+        }),
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum ChatSendOutcome {
     Completed {
         session_id: String,
-        run_id: String,
+        run_id: Option<String>,
         response_id: String,
         output_text: String,
     },
     WaitingApproval {
         session_id: String,
-        run_id: String,
+        run_id: Option<String>,
         approval_id: String,
     },
 }
@@ -421,6 +592,166 @@ enum ChatSendOutcome {
 struct ReplPendingApproval {
     run_id: String,
     approval_id: String,
+}
+
+trait ChatReplBackend {
+    fn show_chat(&self, session_id: &str) -> Result<String, BootstrapError>;
+    fn render_plan(&self, session_id: &str) -> Result<String, BootstrapError>;
+    fn render_session_skills(&self, session_id: &str) -> Result<String, BootstrapError>;
+    fn enable_session_skill(
+        &self,
+        session_id: &str,
+        skill_name: &str,
+    ) -> Result<String, BootstrapError>;
+    fn disable_session_skill(
+        &self,
+        session_id: &str,
+        skill_name: &str,
+    ) -> Result<String, BootstrapError>;
+    fn find_pending_approval(
+        &self,
+        session_id: &str,
+        requested_approval_id: Option<&str>,
+    ) -> Result<Option<ReplPendingApproval>, BootstrapError>;
+    fn approve_run_with_observer(
+        &self,
+        run_id: &str,
+        approval_id: &str,
+        observer: &mut dyn FnMut(ChatExecutionEvent),
+    ) -> Result<crate::execution::ApprovalContinuationReport, BootstrapError>;
+    fn send_chat_with_observer(
+        &self,
+        session_id: &str,
+        message: &str,
+        observer: &mut dyn FnMut(ChatExecutionEvent),
+    ) -> Result<ChatSendOutcome, BootstrapError>;
+}
+
+impl ChatReplBackend for App {
+    fn show_chat(&self, session_id: &str) -> Result<String, BootstrapError> {
+        show_chat(self, session_id)
+    }
+
+    fn render_plan(&self, session_id: &str) -> Result<String, BootstrapError> {
+        self.render_plan(session_id)
+    }
+
+    fn render_session_skills(&self, session_id: &str) -> Result<String, BootstrapError> {
+        self.render_session_skills(session_id)
+    }
+
+    fn enable_session_skill(
+        &self,
+        session_id: &str,
+        skill_name: &str,
+    ) -> Result<String, BootstrapError> {
+        self.enable_session_skill(session_id, skill_name)?;
+        self.render_session_skills(session_id)
+    }
+
+    fn disable_session_skill(
+        &self,
+        session_id: &str,
+        skill_name: &str,
+    ) -> Result<String, BootstrapError> {
+        self.disable_session_skill(session_id, skill_name)?;
+        self.render_session_skills(session_id)
+    }
+
+    fn find_pending_approval(
+        &self,
+        session_id: &str,
+        requested_approval_id: Option<&str>,
+    ) -> Result<Option<ReplPendingApproval>, BootstrapError> {
+        find_pending_approval(self, session_id, requested_approval_id)
+    }
+
+    fn approve_run_with_observer(
+        &self,
+        run_id: &str,
+        approval_id: &str,
+        observer: &mut dyn FnMut(ChatExecutionEvent),
+    ) -> Result<crate::execution::ApprovalContinuationReport, BootstrapError> {
+        self.approve_run_with_observer(run_id, approval_id, unix_timestamp()?, observer)
+    }
+
+    fn send_chat_with_observer(
+        &self,
+        session_id: &str,
+        message: &str,
+        observer: &mut dyn FnMut(ChatExecutionEvent),
+    ) -> Result<ChatSendOutcome, BootstrapError> {
+        send_chat_outcome_with_observer(self, session_id, message, observer)
+    }
+}
+
+impl ChatReplBackend for DaemonClient {
+    fn show_chat(&self, session_id: &str) -> Result<String, BootstrapError> {
+        show_chat_via_client(self, session_id)
+    }
+
+    fn render_plan(&self, session_id: &str) -> Result<String, BootstrapError> {
+        self.render_plan(session_id)
+    }
+
+    fn render_session_skills(&self, session_id: &str) -> Result<String, BootstrapError> {
+        render_session_skills_list(self.session_skills(session_id)?)
+    }
+
+    fn enable_session_skill(
+        &self,
+        session_id: &str,
+        skill_name: &str,
+    ) -> Result<String, BootstrapError> {
+        let skills = self.enable_session_skill(session_id, skill_name)?;
+        render_session_skills_list(skills)
+    }
+
+    fn disable_session_skill(
+        &self,
+        session_id: &str,
+        skill_name: &str,
+    ) -> Result<String, BootstrapError> {
+        let skills = self.disable_session_skill(session_id, skill_name)?;
+        render_session_skills_list(skills)
+    }
+
+    fn find_pending_approval(
+        &self,
+        session_id: &str,
+        requested_approval_id: Option<&str>,
+    ) -> Result<Option<ReplPendingApproval>, BootstrapError> {
+        Ok(self
+            .latest_pending_approval(session_id, requested_approval_id)?
+            .map(|pending| ReplPendingApproval {
+                run_id: pending.run_id,
+                approval_id: pending.approval_id,
+            }))
+    }
+
+    fn approve_run_with_observer(
+        &self,
+        run_id: &str,
+        approval_id: &str,
+        observer: &mut dyn FnMut(ChatExecutionEvent),
+    ) -> Result<crate::execution::ApprovalContinuationReport, BootstrapError> {
+        self.approve_run_with_control_and_observer(
+            run_id,
+            approval_id,
+            unix_timestamp()?,
+            None,
+            observer,
+        )
+    }
+
+    fn send_chat_with_observer(
+        &self,
+        session_id: &str,
+        message: &str,
+        observer: &mut dyn FnMut(ChatExecutionEvent),
+    ) -> Result<ChatSendOutcome, BootstrapError> {
+        send_chat_outcome_via_client_with_observer(self, session_id, message, observer)
+    }
 }
 
 struct ReplRenderer<'a, W: Write> {
@@ -538,6 +869,20 @@ where
     R: BufRead,
     W: Write,
 {
+    run_chat_repl_with_backend(app, session_id, input, output)
+}
+
+fn run_chat_repl_with_backend<B, R, W>(
+    backend: &B,
+    session_id: &str,
+    input: &mut R,
+    output: &mut W,
+) -> Result<(), BootstrapError>
+where
+    B: ChatReplBackend,
+    R: BufRead,
+    W: Write,
+{
     writeln!(output, "chat repl session_id={session_id}").map_err(BootstrapError::Stream)?;
     writeln!(output, "{REPL_HELP}").map_err(BootstrapError::Stream)?;
 
@@ -575,17 +920,17 @@ where
             }
             Some("/show") => {
                 renderer.finish_turn()?;
-                let transcript = show_chat(app, session_id)?;
+                let transcript = backend.show_chat(session_id)?;
                 writeln!(renderer.output, "{transcript}").map_err(BootstrapError::Stream)?;
             }
             Some("/plan") => {
                 renderer.finish_turn()?;
-                let plan = app.render_plan(session_id)?;
+                let plan = backend.render_plan(session_id)?;
                 writeln!(renderer.output, "{plan}").map_err(BootstrapError::Stream)?;
             }
             Some("/skills") => {
                 renderer.finish_turn()?;
-                let skills = app.render_session_skills(session_id)?;
+                let skills = backend.render_session_skills(session_id)?;
                 writeln!(renderer.output, "{skills}").map_err(BootstrapError::Stream)?;
             }
             Some("/enable") => {
@@ -594,8 +939,7 @@ where
                     split_command_arg(trimmed).ok_or_else(|| BootstrapError::Usage {
                         reason: "\\включить requires a skill name".to_string(),
                     })?;
-                app.enable_session_skill(session_id, skill_name)?;
-                let skills = app.render_session_skills(session_id)?;
+                let skills = backend.enable_session_skill(session_id, skill_name)?;
                 writeln!(renderer.output, "{skills}").map_err(BootstrapError::Stream)?;
             }
             Some("/disable") => {
@@ -604,13 +948,13 @@ where
                     split_command_arg(trimmed).ok_or_else(|| BootstrapError::Usage {
                         reason: "\\выключить requires a skill name".to_string(),
                     })?;
-                app.disable_session_skill(session_id, skill_name)?;
-                let skills = app.render_session_skills(session_id)?;
+                let skills = backend.disable_session_skill(session_id, skill_name)?;
                 writeln!(renderer.output, "{skills}").map_err(BootstrapError::Stream)?;
             }
             Some("/approve") => {
                 let requested = trimmed.split_whitespace().nth(1).map(ToString::to_string);
-                let Some(current) = find_pending_approval(app, session_id, requested.as_deref())?
+                let Some(current) =
+                    backend.find_pending_approval(session_id, requested.as_deref())?
                 else {
                     renderer.finish_turn()?;
                     writeln!(
@@ -628,12 +972,8 @@ where
                         emit_error = renderer.emit(event).err();
                     }
                 };
-                let report = app.approve_run_with_observer(
-                    &current.run_id,
-                    &approval_id,
-                    unix_timestamp()?,
-                    &mut emit,
-                )?;
+                let report =
+                    backend.approve_run_with_observer(&current.run_id, &approval_id, &mut emit)?;
                 if let Some(error) = emit_error {
                     return Err(error);
                 }
@@ -648,7 +988,7 @@ where
             }
             _ => {
                 let message = trimmed;
-                if find_pending_approval(app, session_id, None)?.is_some() {
+                if backend.find_pending_approval(session_id, None)?.is_some() {
                     renderer.finish_turn()?;
                     writeln!(
                         renderer.output,
@@ -665,7 +1005,7 @@ where
                         emit_error = renderer.emit(event).err();
                     }
                 };
-                match send_chat_outcome_with_observer(app, session_id, message, &mut emit)? {
+                match backend.send_chat_with_observer(session_id, message, &mut emit)? {
                     ChatSendOutcome::Completed { output_text, .. } => {
                         if let Some(error) = emit_error {
                             return Err(error);
@@ -747,6 +1087,11 @@ fn create_session(
     ))
 }
 
+fn show_session_via_client(client: &DaemonClient, id: &str) -> Result<String, BootstrapError> {
+    let detail = client.session_detail(id)?;
+    Ok(render_session_detail(&detail))
+}
+
 fn show_session(store: &PersistenceStore, id: &str) -> Result<String, BootstrapError> {
     let record = store
         .get_session(id)?
@@ -755,17 +1100,39 @@ fn show_session(store: &PersistenceStore, id: &str) -> Result<String, BootstrapE
             id: id.to_string(),
         })?;
 
-    Ok(format!(
+    Ok(render_session_detail(&SessionDetailResponse {
+        id: record.id,
+        title: record.title,
+        prompt_override: record.prompt_override,
+        settings_json: record.settings_json,
+        active_mission_id: record.active_mission_id,
+        created_at: record.created_at,
+        updated_at: record.updated_at,
+    }))
+}
+
+fn render_session_detail(detail: &SessionDetailResponse) -> String {
+    format!(
         "session id={} title={} active_mission_id={} settings={}",
-        record.id,
-        record.title,
-        record.active_mission_id.as_deref().unwrap_or("<none>"),
-        record.settings_json
-    ))
+        detail.id,
+        detail.title,
+        detail.active_mission_id.as_deref().unwrap_or("<none>"),
+        detail.settings_json
+    )
 }
 
 fn show_chat(app: &App, session_id: &str) -> Result<String, BootstrapError> {
     let transcript = app.session_transcript(session_id)?;
+    let rendered = transcript.render();
+    if rendered.is_empty() {
+        return Ok("<empty>".to_string());
+    }
+
+    Ok(rendered)
+}
+
+fn show_chat_via_client(client: &DaemonClient, session_id: &str) -> Result<String, BootstrapError> {
+    let transcript = client.session_transcript(session_id)?;
     let rendered = transcript.render();
     if rendered.is_empty() {
         return Ok("<empty>".to_string());
@@ -783,7 +1150,10 @@ fn send_chat(app: &App, session_id: &str, message: &str) -> Result<String, Boots
             output_text,
         } => Ok(format!(
             "chat send session_id={} run_id={} response_id={} output={}",
-            session_id, run_id, response_id, output_text
+            session_id,
+            run_id.unwrap_or_else(|| "<none>".to_string()),
+            response_id,
+            output_text
         )),
         ChatSendOutcome::WaitingApproval {
             session_id,
@@ -791,8 +1161,45 @@ fn send_chat(app: &App, session_id: &str, message: &str) -> Result<String, Boots
             approval_id,
         } => Ok(format!(
             "chat send session_id={} run_id={} status=waiting_approval approval_id={}",
-            session_id, run_id, approval_id
+            session_id,
+            run_id.unwrap_or_else(|| "<none>".to_string()),
+            approval_id
         )),
+    }
+}
+
+fn send_chat_via_client(
+    client: &DaemonClient,
+    session_id: &str,
+    message: &str,
+) -> Result<String, BootstrapError> {
+    match send_chat_outcome_via_client(client, session_id, message)? {
+        ChatSendOutcome::Completed {
+            session_id,
+            run_id,
+            response_id,
+            output_text,
+        } => Ok(format!(
+            "chat send session_id={} run_id={} response_id={} output={}",
+            session_id,
+            run_id.unwrap_or_else(|| "<daemon>".to_string()),
+            response_id,
+            output_text
+        )),
+        ChatSendOutcome::WaitingApproval {
+            session_id,
+            run_id,
+            approval_id,
+        } => {
+            let mut line = format!("chat send session_id={} ", session_id);
+            if let Some(run_id) = run_id {
+                line.push_str(&format!("run_id={} ", run_id));
+            }
+            line.push_str(&format!(
+                "status=waiting_approval approval_id={approval_id}"
+            ));
+            Ok(line)
+        }
     }
 }
 
@@ -815,6 +1222,25 @@ fn send_chat_outcome_with_observer(
     send_chat_outcome_internal(app, session_id, message, &mut observer)
 }
 
+fn send_chat_outcome_via_client(
+    client: &DaemonClient,
+    session_id: &str,
+    message: &str,
+) -> Result<ChatSendOutcome, BootstrapError> {
+    let mut observer = None;
+    send_chat_outcome_via_client_internal(client, session_id, message, &mut observer)
+}
+
+fn send_chat_outcome_via_client_with_observer(
+    client: &DaemonClient,
+    session_id: &str,
+    message: &str,
+    observer: &mut dyn FnMut(ChatExecutionEvent),
+) -> Result<ChatSendOutcome, BootstrapError> {
+    let mut observer = Some(observer);
+    send_chat_outcome_via_client_internal(client, session_id, message, &mut observer)
+}
+
 fn send_chat_outcome_internal(
     app: &App,
     session_id: &str,
@@ -834,7 +1260,7 @@ fn send_chat_outcome_internal(
         })) => {
             return Ok(ChatSendOutcome::WaitingApproval {
                 session_id: session_id.to_string(),
-                run_id,
+                run_id: Some(run_id),
                 approval_id,
             });
         }
@@ -842,7 +1268,45 @@ fn send_chat_outcome_internal(
     };
     Ok(ChatSendOutcome::Completed {
         session_id: report.session_id,
-        run_id: report.run_id,
+        run_id: Some(report.run_id),
+        response_id: report.response_id,
+        output_text: report.output_text,
+    })
+}
+
+fn send_chat_outcome_via_client_internal(
+    client: &DaemonClient,
+    session_id: &str,
+    message: &str,
+    observer: &mut Option<&mut dyn FnMut(ChatExecutionEvent)>,
+) -> Result<ChatSendOutcome, BootstrapError> {
+    let now = unix_timestamp()?;
+    let result = match observer.as_deref_mut() {
+        Some(observer) => client
+            .execute_chat_turn_with_control_and_observer(session_id, message, now, None, observer),
+        None => {
+            let mut noop = |_| {};
+            client.execute_chat_turn_with_control_and_observer(
+                session_id, message, now, None, &mut noop,
+            )
+        }
+    };
+    let report = match result {
+        Ok(report) => report,
+        Err(BootstrapError::Execution(ExecutionError::ApprovalRequired {
+            approval_id, ..
+        })) => {
+            return Ok(ChatSendOutcome::WaitingApproval {
+                session_id: session_id.to_string(),
+                run_id: None,
+                approval_id,
+            });
+        }
+        Err(error) => return Err(error),
+    };
+    Ok(ChatSendOutcome::Completed {
+        session_id: report.session_id,
+        run_id: Some(report.run_id),
         response_id: report.response_id,
         output_text: report.output_text,
     })
@@ -1028,6 +1492,22 @@ fn show_verification(store: &PersistenceStore, run_id: &str) -> Result<String, B
     Ok(format!("verification run_id={} refs={}", run_id, refs))
 }
 
+fn render_session_skills_list(
+    skills: Vec<crate::bootstrap::SessionSkillStatus>,
+) -> Result<String, BootstrapError> {
+    if skills.is_empty() {
+        return Ok("skills: none discovered".to_string());
+    }
+
+    let mut lines = vec!["Skills:".to_string()];
+    lines.extend(
+        skills
+            .into_iter()
+            .map(|skill| format!("- [{}] {}: {}", skill.mode, skill.name, skill.description)),
+    );
+    Ok(lines.join("\n"))
+}
+
 fn run_provider_smoke(app: &App, prompt: &str) -> Result<String, BootstrapError> {
     let driver = app.provider_driver()?;
     let response = driver.complete(&ProviderRequest {
@@ -1108,6 +1588,20 @@ fn render_status(app: &App) -> Result<String, BootstrapError> {
         job_count,
         app.runtime.component_count(),
         app.persistence.stores.metadata_db.display()
+    ))
+}
+
+fn render_daemon_status(status: &StatusResponse) -> Result<String, BootstrapError> {
+    Ok(format!(
+        "status data_dir={} permission_mode={} sessions={} missions={} runs={} jobs={} components={} state_db={}",
+        status.data_dir,
+        status.permission_mode,
+        status.session_count,
+        status.mission_count,
+        status.run_count,
+        status.job_count,
+        status.components,
+        status.state_db
     ))
 }
 

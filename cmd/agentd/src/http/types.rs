@@ -10,7 +10,14 @@ pub struct StatusResponse {
     pub ok: bool,
     pub bind_host: String,
     pub bind_port: u16,
+    pub permission_mode: String,
     pub session_count: usize,
+    pub mission_count: usize,
+    pub run_count: usize,
+    pub job_count: usize,
+    pub components: usize,
+    pub data_dir: String,
+    pub state_db: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -20,6 +27,7 @@ pub struct ErrorResponse {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CreateSessionRequest {
+    pub id: Option<String>,
     pub title: Option<String>,
 }
 
@@ -35,6 +43,17 @@ pub struct SessionSummaryResponse {
     pub has_pending_approval: bool,
     pub last_message_preview: Option<String>,
     pub message_count: usize,
+    pub created_at: i64,
+    pub updated_at: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SessionDetailResponse {
+    pub id: String,
+    pub title: String,
+    pub prompt_override: Option<String>,
+    pub settings_json: String,
+    pub active_mission_id: Option<String>,
     pub created_at: i64,
     pub updated_at: i64,
 }

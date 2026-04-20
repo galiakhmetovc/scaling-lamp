@@ -29,10 +29,12 @@ fn operator_can_run_the_normal_chat_smoke_flow() {
     );
     let temp = tempfile::tempdir().expect("tempdir");
     let data_dir = temp.path().join("state-root");
+    let daemon_port = free_port();
 
     let created_session = run_agentd(
         &data_dir,
         &api_base,
+        daemon_port,
         &["session", "create", "session-chat-smoke", "Chat", "Smoke"],
     );
     assert!(created_session.contains("created session session-chat-smoke"));
@@ -40,6 +42,7 @@ fn operator_can_run_the_normal_chat_smoke_flow() {
     let empty_chat = run_agentd(
         &data_dir,
         &api_base,
+        daemon_port,
         &["chat", "show", "session-chat-smoke"],
     );
     assert_eq!(empty_chat, "<empty>");
@@ -47,6 +50,7 @@ fn operator_can_run_the_normal_chat_smoke_flow() {
     let sent = run_agentd(
         &data_dir,
         &api_base,
+        daemon_port,
         &["chat", "send", "session-chat-smoke", "Hello", "chat"],
     );
     let raw_request = requests.recv().expect("raw request");
@@ -59,6 +63,7 @@ fn operator_can_run_the_normal_chat_smoke_flow() {
     let shown = run_agentd(
         &data_dir,
         &api_base,
+        daemon_port,
         &["chat", "show", "session-chat-smoke"],
     );
     assert!(shown.contains("user: Hello chat"));
@@ -69,10 +74,16 @@ fn operator_can_run_the_normal_chat_smoke_flow() {
     assert!(normalized_request.contains("\"text\":\"hello chat\""));
 }
 
-fn run_agentd(data_dir: &std::path::Path, api_base: &str, args: &[&str]) -> String {
+fn run_agentd(
+    data_dir: &std::path::Path,
+    api_base: &str,
+    daemon_port: u16,
+    args: &[&str],
+) -> String {
     let output = Command::new(env!("CARGO_BIN_EXE_agentd"))
         .args(args)
         .env("TEAMD_DATA_DIR", data_dir)
+        .env("TEAMD_DAEMON_BIND_PORT", daemon_port.to_string())
         .env("TEAMD_PROVIDER_KIND", "openai_responses")
         .env("TEAMD_PROVIDER_API_BASE", format!("{api_base}/v1"))
         .env("TEAMD_PROVIDER_API_KEY", "test-key")
@@ -92,6 +103,14 @@ fn run_agentd(data_dir: &std::path::Path, api_base: &str, args: &[&str]) -> Stri
         .expect("utf8 stdout")
         .trim()
         .to_string()
+}
+
+fn free_port() -> u16 {
+    TcpListener::bind("127.0.0.1:0")
+        .expect("bind listener")
+        .local_addr()
+        .expect("local addr")
+        .port()
 }
 
 fn spawn_json_server(body: &'static str) -> (String, Receiver<String>, thread::JoinHandle<()>) {

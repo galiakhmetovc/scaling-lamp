@@ -89,6 +89,7 @@ fn daemon_http_can_create_a_session_over_json() {
         .post(format!("{base_url}/v1/sessions"))
         .bearer_auth("secret-token")
         .json(&CreateSessionRequest {
+            id: None,
             title: Some("Daemon Session".to_string()),
         })
         .send()

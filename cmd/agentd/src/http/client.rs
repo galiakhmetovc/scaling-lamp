@@ -7,7 +7,8 @@ use crate::execution::{
 };
 use crate::http::types::{
     ApproveRunRequest, ChatTurnRequest, ClearSessionRequest, CreateSessionRequest, ErrorResponse,
-    SessionSummaryResponse, SkillCommandRequest, StatusResponse, WorkerOutcomeResponse,
+    SessionDetailResponse, SessionSummaryResponse, SkillCommandRequest, StatusResponse,
+    WorkerOutcomeResponse,
 };
 use agent_persistence::AppConfig;
 use reqwest::StatusCode;
@@ -56,9 +57,18 @@ impl DaemonClient {
         &self,
         title: Option<&str>,
     ) -> Result<SessionSummary, BootstrapError> {
+        self.create_session(None, title)
+    }
+
+    pub fn create_session(
+        &self,
+        id: Option<&str>,
+        title: Option<&str>,
+    ) -> Result<SessionSummary, BootstrapError> {
         let session: SessionSummaryResponse = self.post_json(
             "/v1/sessions",
             &CreateSessionRequest {
+                id: id.map(str::to_string),
                 title: title.map(str::to_string),
             },
         )?;
@@ -103,6 +113,13 @@ impl DaemonClient {
         let summary: SessionSummaryResponse =
             self.get_json(&format!("/v1/sessions/{session_id}"))?;
         Ok(summary.into())
+    }
+
+    pub fn session_detail(
+        &self,
+        session_id: &str,
+    ) -> Result<SessionDetailResponse, BootstrapError> {
+        self.get_json(&format!("/v1/sessions/{session_id}/detail"))
     }
 
     pub fn session_transcript(
