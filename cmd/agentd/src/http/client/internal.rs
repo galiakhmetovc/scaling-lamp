@@ -11,7 +11,6 @@ impl DaemonClient {
         Self {
             http: Client::builder()
                 .connect_timeout(Duration::from_secs(2))
-                .timeout(Duration::from_secs(5))
                 .build()
                 .expect("build daemon http client"),
             base_url: format!("http://{host}:{port}"),
