@@ -26,6 +26,11 @@ pub struct ErrorResponse {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DaemonStopResponse {
+    pub stopping: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CreateSessionRequest {
     pub id: Option<String>,
     pub title: Option<String>,

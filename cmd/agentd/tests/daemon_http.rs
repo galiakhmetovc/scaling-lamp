@@ -2,12 +2,14 @@ use agent_persistence::AppConfig;
 use agentd::bootstrap;
 use agentd::daemon;
 use agentd::http::types::{
-    CreateSessionRequest, ErrorResponse, SessionSummaryResponse, SkillCommandRequest,
+    CreateSessionRequest, DaemonStopResponse, ErrorResponse, SessionSummaryResponse, SkillCommandRequest,
     StatusResponse,
 };
 use reqwest::StatusCode;
 use reqwest::blocking::Client;
 use std::net::TcpListener;
+use std::thread;
+use std::time::Duration;
 
 fn free_port() -> u16 {
     TcpListener::bind("127.0.0.1:0")
@@ -38,7 +40,10 @@ fn test_app(token: Option<&str>) -> (tempfile::TempDir, bootstrap::App, String) 
 fn daemon_http_status_is_public_when_no_token_is_configured() {
     let (_temp, app, base_url) = test_app(None);
     let handle = daemon::spawn_for_test(app).expect("spawn daemon");
-    let client = Client::new();
+    let client = Client::builder()
+        .timeout(Duration::from_secs(2))
+        .build()
+        .expect("http client");
 
     let response = client
         .get(format!("{base_url}/v1/status"))
@@ -175,4 +180,32 @@ fn daemon_http_lists_and_updates_session_skills() {
     assert_eq!(disabled[0].mode, "disabled");
 
     handle.stop().expect("stop daemon");
+}
+
+#[test]
+fn daemon_http_stop_shuts_down_a_running_server() {
+    let (_temp, app, base_url) = test_app(Some("secret-token"));
+    let handle = daemon::spawn_for_test(app).expect("spawn daemon");
+    let client = Client::new();
+
+    let response = client
+        .post(format!("{base_url}/v1/daemon/stop"))
+        .bearer_auth("secret-token")
+        .json(&serde_json::json!({}))
+        .send()
+        .expect("stop request");
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body: DaemonStopResponse = response.json().expect("stop json");
+    assert!(body.stopping);
+
+    thread::sleep(Duration::from_millis(250));
+
+    let result = client
+        .get(format!("{base_url}/v1/status"))
+        .bearer_auth("secret-token")
+        .send();
+    assert!(result.is_err(), "daemon should stop answering status");
+
+    handle.stop().expect("join stopped daemon");
 }

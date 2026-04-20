@@ -3,7 +3,7 @@ mod sessions;
 mod status;
 
 use crate::bootstrap::{App, BootstrapError};
-use crate::http::types::ErrorResponse;
+use crate::http::types::{DaemonStopResponse, ErrorResponse};
 use serde::{Serialize, de::DeserializeOwned};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -19,7 +19,7 @@ pub fn serve(app: App, shutdown: Arc<AtomicBool>) -> std::io::Result<()> {
 
     while !shutdown.load(Ordering::Relaxed) {
         match server.recv_timeout(Duration::from_millis(100)) {
-            Ok(Some(request)) => handle_request(&app, request)?,
+            Ok(Some(request)) => handle_request(&app, &shutdown, request)?,
             Ok(None) => continue,
             Err(error) => return Err(error),
         }
@@ -28,7 +28,11 @@ pub fn serve(app: App, shutdown: Arc<AtomicBool>) -> std::io::Result<()> {
     Ok(())
 }
 
-fn handle_request(app: &App, request: Request) -> std::io::Result<()> {
+fn handle_request(
+    app: &App,
+    shutdown: &Arc<AtomicBool>,
+    request: Request,
+) -> std::io::Result<()> {
     if !is_authorized(app, &request) {
         return respond_json(
             request,
@@ -41,12 +45,22 @@ fn handle_request(app: &App, request: Request) -> std::io::Result<()> {
 
     match (request.method(), request.url()) {
         (&tiny_http::Method::Get, "/v1/status") => status::handle_status(app, request),
+        (&tiny_http::Method::Post, "/v1/daemon/stop") => handle_shutdown(shutdown, request),
         (&tiny_http::Method::Get, "/v1/sessions") => sessions::handle_list_sessions(app, request),
         (&tiny_http::Method::Post, "/v1/sessions") => sessions::handle_create_session(app, request),
         (&tiny_http::Method::Post, "/v1/chat/turn") => chat::handle_chat_turn(app, request),
         (&tiny_http::Method::Post, "/v1/runs/approve") => chat::handle_approve_run(app, request),
         _ => sessions::handle_nested_routes(app, request),
     }
+}
+
+fn handle_shutdown(shutdown: &Arc<AtomicBool>, request: Request) -> std::io::Result<()> {
+    shutdown.store(true, Ordering::Relaxed);
+    respond_json(
+        request,
+        StatusCode(200),
+        &DaemonStopResponse { stopping: true },
+    )
 }
 
 fn parse_json_body<T>(request: &mut Request) -> Result<T, String>

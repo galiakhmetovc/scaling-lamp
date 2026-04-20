@@ -53,6 +53,9 @@ pub(super) fn execute_command(app: &App, command: Command) -> Result<String, Boo
         Command::Daemon => Err(BootstrapError::Usage {
             reason: "daemon requires server mode I/O".to_string(),
         }),
+        Command::DaemonStop => Err(BootstrapError::Usage {
+            reason: "daemon stop requires process I/O path".to_string(),
+        }),
         Command::MissionTick { now } => render::run_mission_tick(app, now),
         Command::SessionCreate { id, title } => render::create_session(&app.store()?, &id, &title),
         Command::SessionShow { id } => render::show_session(&app.store()?, &id),

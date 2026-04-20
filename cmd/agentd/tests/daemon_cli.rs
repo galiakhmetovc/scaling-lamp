@@ -179,3 +179,31 @@ fn process_cli_can_create_and_show_sessions_over_remote_daemon() {
 
     handle.stop().expect("stop daemon");
 }
+
+#[test]
+fn process_cli_can_stop_a_remote_daemon_without_autospawning() {
+    let (_temp, config) = test_config();
+    let app = bootstrap::build_from_config(config.clone()).expect("build app");
+    let handle = daemon::spawn_for_test(app.clone()).expect("spawn daemon");
+
+    let mut output = Vec::new();
+    cli::execute_process_with_io(
+        &app,
+        [
+            "--host",
+            "127.0.0.1",
+            "--port",
+            &config.daemon.bind_port.to_string(),
+            "daemon",
+            "stop",
+        ],
+        &mut Cursor::new(Vec::<u8>::new()),
+        &mut output,
+    )
+    .expect("daemon stop");
+
+    let output = String::from_utf8(output).expect("utf8");
+    assert!(output.contains("daemon stopping"));
+
+    handle.stop().expect("join stopped daemon");
+}

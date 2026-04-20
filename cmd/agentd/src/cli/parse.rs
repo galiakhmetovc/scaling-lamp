@@ -20,6 +20,7 @@ impl Command {
             }),
             [command, rest @ ..] if command == "tui" => parse_tui_command(rest),
             [command] if command == "daemon" => Ok(Self::Daemon),
+            [scope, action] if scope == "daemon" && action == "stop" => Ok(Self::DaemonStop),
             [scope, action] if scope == "provider" && action == "smoke" => {
                 Ok(Self::ProviderSmoke {
                     prompt: DEFAULT_SMOKE_PROMPT.to_string(),
@@ -136,7 +137,7 @@ impl Command {
                 })
             }
             _ => Err(BootstrapError::Usage {
-                reason: "expected one of: status | tui | daemon | provider smoke | chat show/send/repl | mission create/show/tick | session create/show/skills/enable-skill/disable-skill | run show | job show/execute | approval list/approve | delegate list | verification show".to_string(),
+                reason: "expected one of: status | tui | daemon | daemon stop | provider smoke | chat show/send/repl | mission create/show/tick | session create/show/skills/enable-skill/disable-skill | run show | job show/execute | approval list/approve | delegate list | verification show".to_string(),
             }),
         }
     }

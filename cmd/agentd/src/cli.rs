@@ -53,6 +53,7 @@ enum Command {
         port: Option<u16>,
     },
     Daemon,
+    DaemonStop,
     MissionTick {
         now: i64,
     },
@@ -159,6 +160,9 @@ where
         Command::Daemon => Err(BootstrapError::Usage {
             reason: "daemon requires server mode I/O".to_string(),
         }),
+        Command::DaemonStop => Err(BootstrapError::Usage {
+            reason: "daemon stop requires process I/O".to_string(),
+        }),
         Command::MissionTick { now } => render::run_mission_tick(app, now),
         Command::SessionCreate { id, title } => render::create_session(&app.store()?, &id, &title),
         Command::SessionShow { id } => render::show_session(&app.store()?, &id),
@@ -207,6 +211,11 @@ where
 
     match command {
         Command::Daemon => daemon::serve(app.clone()).map_err(BootstrapError::Stream),
+        Command::DaemonStop => {
+            let client = DaemonClient::new(&app.config, &connect);
+            client.shutdown()?;
+            writeln!(output, "daemon stopping").map_err(BootstrapError::Stream)
+        }
         Command::Tui { host, port } => {
             let connect = merge_connect_options(connect, host, port);
             tui::run_daemon_backed(app, connect)
