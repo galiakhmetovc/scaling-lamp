@@ -551,20 +551,44 @@ where
 }
 
 fn load_dotenv_from_cwd() -> Result<BTreeMap<String, String>, ConfigError> {
-    let Some(path) = env::current_dir().ok().map(|cwd| cwd.join(".env")) else {
-        return Ok(BTreeMap::new());
-    };
+    let cwd = env::current_dir().ok();
+    let exe_dir = env::current_exe()
+        .ok()
+        .and_then(|path| path.parent().map(Path::to_path_buf));
+    load_dotenv_from_locations(cwd.as_deref(), exe_dir.as_deref())
+}
 
-    if !path.exists() {
-        return Ok(BTreeMap::new());
+fn load_dotenv_from_locations(
+    cwd: Option<&Path>,
+    exe_dir: Option<&Path>,
+) -> Result<BTreeMap<String, String>, ConfigError> {
+    let mut candidates = Vec::new();
+    if let Some(cwd) = cwd {
+        candidates.push(cwd.join(".env"));
+    }
+    if let Some(exe_dir) = exe_dir {
+        let exe_candidate = exe_dir.join(".env");
+        if !candidates
+            .iter()
+            .any(|candidate| candidate == &exe_candidate)
+        {
+            candidates.push(exe_candidate);
+        }
     }
 
-    let contents = fs::read_to_string(&path).map_err(|source| ConfigError::ReadConfig {
-        path: path.clone(),
-        source,
-    })?;
+    for path in candidates {
+        if !path.exists() {
+            continue;
+        }
 
-    Ok(parse_dotenv(&contents))
+        let contents = fs::read_to_string(&path).map_err(|source| ConfigError::ReadConfig {
+            path: path.clone(),
+            source,
+        })?;
+        return Ok(parse_dotenv(&contents));
+    }
+
+    Ok(BTreeMap::new())
 }
 
 fn parse_dotenv(contents: &str) -> BTreeMap<String, String> {
@@ -613,7 +637,8 @@ impl Default for AppConfig {
 #[cfg(test)]
 mod tests {
     use super::{
-        AppConfig, ConfigEnv, ConfigError, DEFAULT_ZAI_API_BASE, DEFAULT_ZAI_MODEL, parse_dotenv,
+        AppConfig, ConfigEnv, ConfigError, DEFAULT_ZAI_API_BASE, DEFAULT_ZAI_MODEL,
+        load_dotenv_from_locations, parse_dotenv,
     };
     use agent_runtime::permission::{PermissionAction, PermissionMode};
     use agent_runtime::provider::ProviderKind;
@@ -849,6 +874,48 @@ TEAMD_PROVIDER_API_KEY=secret-key
         assert_eq!(
             value.as_deref(),
             Some("https://api.z.ai/api/coding/paas/v4")
+        );
+    }
+
+    #[test]
+    fn dotenv_falls_back_to_executable_directory_when_cwd_has_no_file() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let exe_dir = temp.path().join("bin");
+        fs::create_dir_all(&exe_dir).expect("create exe dir");
+        fs::write(
+            exe_dir.join(".env"),
+            "TEAMD_PROVIDER_API_BASE=https://api.z.ai/api/coding/paas/v4\n",
+        )
+        .expect("write dotenv");
+
+        let values = load_dotenv_from_locations(Some(temp.path()), Some(&exe_dir))
+            .expect("load dotenv from fallback");
+
+        assert_eq!(
+            values.get("TEAMD_PROVIDER_API_BASE").map(String::as_str),
+            Some("https://api.z.ai/api/coding/paas/v4")
+        );
+    }
+
+    #[test]
+    fn dotenv_prefers_current_working_directory_over_executable_directory() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let exe_dir = temp.path().join("bin");
+        fs::create_dir_all(&exe_dir).expect("create exe dir");
+        fs::write(
+            temp.path().join(".env"),
+            "TEAMD_PROVIDER_MODEL=glm-5-turbo\n",
+        )
+        .expect("write cwd dotenv");
+        fs::write(exe_dir.join(".env"), "TEAMD_PROVIDER_MODEL=glm-5.1\n")
+            .expect("write exe dotenv");
+
+        let values = load_dotenv_from_locations(Some(temp.path()), Some(&exe_dir))
+            .expect("load dotenv with cwd precedence");
+
+        assert_eq!(
+            values.get("TEAMD_PROVIDER_MODEL").map(String::as_str),
+            Some("glm-5-turbo")
         );
     }
 
