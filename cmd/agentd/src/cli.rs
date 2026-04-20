@@ -16,7 +16,7 @@ use std::io::{BufRead, Write};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 const DEFAULT_SMOKE_PROMPT: &str = "Reply with the single word ready.";
-const REPL_HELP: &str = "commands: /help | /show | /approve [approval-id] | /exit";
+const REPL_HELP: &str = "commands: /help | /show | /plan | /approve [approval-id] | /exit";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum Command {
@@ -475,6 +475,11 @@ where
                 renderer.finish_turn()?;
                 let transcript = show_chat(app, session_id)?;
                 writeln!(renderer.output, "{transcript}").map_err(BootstrapError::Stream)?;
+            }
+            "/plan" => {
+                renderer.finish_turn()?;
+                let plan = app.render_plan(session_id)?;
+                writeln!(renderer.output, "{plan}").map_err(BootstrapError::Stream)?;
             }
             _ if trimmed.starts_with("/approve") => {
                 let requested = trimmed.split_whitespace().nth(1).map(ToString::to_string);

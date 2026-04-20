@@ -1,6 +1,8 @@
 use agent_persistence::{
-    AppConfig, PersistenceStore, RunRecord, RunRepository, TranscriptRepository,
+    AppConfig, PersistenceStore, PlanRecord, PlanRepository, RunRecord, RunRepository,
+    TranscriptRepository,
 };
+use agent_runtime::plan::{PlanItem, PlanItemStatus, PlanSnapshot};
 use agent_runtime::provider::{ConfiguredProvider, ProviderKind};
 use agent_runtime::run::{ApprovalRequest, RunEngine, RunSnapshot, RunStatus};
 use agentd::bootstrap::{SessionPreferencesPatch, SessionSummary, build_from_config};
@@ -126,6 +128,67 @@ fn tui_chat_commands_and_timeline_new_creates_and_switches_immediately() {
         2
     );
     assert!(state.timeline().entries(true).is_empty());
+}
+
+#[test]
+fn tui_chat_commands_and_timeline_plan_renders_current_plan() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let app = build_from_config(AppConfig {
+        data_dir: temp.path().join("state-root"),
+        ..AppConfig::default()
+    })
+    .expect("build app");
+    let session = app
+        .create_session_auto(Some("Planned Session"))
+        .expect("create session");
+    let store = PersistenceStore::open(&app.persistence).expect("open store");
+    store
+        .put_plan(
+            &PlanRecord::try_from(&PlanSnapshot {
+                session_id: session.id.clone(),
+                goal: Some("Ship /plan in TUI".to_string()),
+                items: vec![PlanItem {
+                    id: "render-plan".to_string(),
+                    content: "Show the current plan in the timeline".to_string(),
+                    status: PlanItemStatus::Pending,
+                    depends_on: Vec::new(),
+                    notes: vec!["Keep it read-only".to_string()],
+                    blocked_reason: None,
+                    parent_task_id: None,
+                }],
+                updated_at: 10,
+            })
+            .expect("plan record"),
+        )
+        .expect("put plan");
+
+    let mut state = TuiAppState::new(
+        app.list_session_summaries().expect("list sessions"),
+        Some(session.id.clone()),
+    );
+    let mut render = |_state: &TuiAppState| Ok::<_, agentd::bootstrap::BootstrapError>(());
+
+    dispatch_action(
+        &app,
+        &mut state,
+        TuiAction::SubmitChatInput("/plan".to_string()),
+        &mut render,
+    )
+    .expect("dispatch /plan");
+
+    let rendered_entries = state
+        .timeline()
+        .entries(true)
+        .into_iter()
+        .filter(|entry| matches!(entry.kind, TimelineEntryKind::System))
+        .map(|entry| entry.content.clone())
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(rendered_entries.contains("Goal: Ship /plan in TUI"));
+    assert!(
+        rendered_entries.contains("[pending] render-plan: Show the current plan in the timeline")
+    );
+    assert!(rendered_entries.contains("note: Keep it read-only"));
 }
 
 #[test]

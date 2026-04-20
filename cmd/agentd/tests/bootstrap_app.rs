@@ -2676,6 +2676,63 @@ fn repl_runs_chat_turns_and_supports_show_and_exit_commands() {
 }
 
 #[test]
+fn repl_runs_plan_command_and_renders_current_plan() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let app = build_from_config(AppConfig {
+        data_dir: temp.path().join("state-root"),
+        ..AppConfig::default()
+    })
+    .expect("build app");
+    let store = PersistenceStore::open(&app.persistence).expect("open store");
+
+    store
+        .put_session(&SessionRecord {
+            id: "session-chat-repl-plan".to_string(),
+            title: "Chat REPL plan session".to_string(),
+            prompt_override: None,
+            settings_json: serde_json::to_string(&SessionSettings::default())
+                .expect("serialize settings"),
+            active_mission_id: None,
+            created_at: 1,
+            updated_at: 1,
+        })
+        .expect("put session");
+    store
+        .put_plan(
+            &PlanRecord::try_from(&PlanSnapshot {
+                session_id: "session-chat-repl-plan".to_string(),
+                goal: Some("Ship /plan command".to_string()),
+                items: vec![PlanItem {
+                    id: "show-plan".to_string(),
+                    content: "Render the current plan in chat".to_string(),
+                    status: PlanItemStatus::InProgress,
+                    depends_on: Vec::new(),
+                    notes: vec!["Use the canonical plan snapshot".to_string()],
+                    blocked_reason: None,
+                    parent_task_id: None,
+                }],
+                updated_at: 10,
+            })
+            .expect("plan record"),
+        )
+        .expect("put plan");
+
+    let mut input = Cursor::new(b"/plan\n/exit\n".to_vec());
+    let mut output = Vec::new();
+    app.run_with_io(
+        ["chat", "repl", "session-chat-repl-plan"],
+        &mut input,
+        &mut output,
+    )
+    .expect("repl");
+
+    let rendered = String::from_utf8(output).expect("utf8");
+    assert!(rendered.contains("Goal: Ship /plan command"));
+    assert!(rendered.contains("[in_progress] show-plan: Render the current plan in chat"));
+    assert!(rendered.contains("note: Use the canonical plan snapshot"));
+}
+
+#[test]
 fn repl_accepts_cp1251_terminal_input_without_utf8_failure() {
     let (api_base, _requests, handle) =
         spawn_sse_server_sequence(vec![openai_stream_message_response(

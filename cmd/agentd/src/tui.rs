@@ -223,6 +223,10 @@ fn handle_command(
         "/clear" => {
             let _ = state.open_clear_dialog();
         }
+        "/plan" => {
+            let plan = app.render_plan(&current_session_id)?;
+            state.timeline_mut().push_system(&plan, unix_timestamp()?);
+        }
         "/approve" => approve_pending(app, state, &current_session_id, option_arg(rest), redraw)?,
         "/model" => {
             let summary = app.update_session_preferences(

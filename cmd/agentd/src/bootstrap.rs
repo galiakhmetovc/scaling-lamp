@@ -1,11 +1,12 @@
 use crate::{cli, execution, prompting};
 use agent_persistence::{
     AppConfig, ConfigError, ContextSummaryRepository, PersistenceScaffold, PersistenceStore,
-    RecordConversionError, RunRecord, RunRepository, SessionRepository, StoreError,
+    PlanRepository, RecordConversionError, RunRecord, RunRepository, SessionRepository, StoreError,
     TranscriptRepository, recovery,
 };
 use agent_runtime::RuntimeScaffold;
 use agent_runtime::context::{CompactionPolicy, ContextSummary, approximate_token_count};
+use agent_runtime::plan::PlanSnapshot;
 use agent_runtime::prompt::SessionHead;
 use agent_runtime::provider::{ProviderBuildError, ProviderDriver, ProviderError, build_driver};
 use agent_runtime::run::{RunEngine, RunSnapshot, RunTransitionError};
@@ -388,6 +389,63 @@ impl App {
             .map(ContextSummary::try_from)
             .transpose()
             .map_err(BootstrapError::RecordConversion)
+    }
+
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub fn plan_snapshot(&self, session_id: &str) -> Result<PlanSnapshot, BootstrapError> {
+        let store = self.store()?;
+        if store.get_session(session_id)?.is_none() {
+            return Err(BootstrapError::MissingRecord {
+                kind: "session",
+                id: session_id.to_string(),
+            });
+        }
+
+        Ok(store
+            .get_plan(session_id)?
+            .map(PlanSnapshot::try_from)
+            .transpose()
+            .map_err(BootstrapError::RecordConversion)?
+            .unwrap_or_else(|| PlanSnapshot {
+                session_id: session_id.to_string(),
+                goal: None,
+                items: Vec::new(),
+                updated_at: 0,
+            }))
+    }
+
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub fn render_plan(&self, session_id: &str) -> Result<String, BootstrapError> {
+        let snapshot = self.plan_snapshot(session_id)?;
+        if snapshot.is_empty() {
+            return Ok("plan is empty".to_string());
+        }
+
+        let mut lines = vec!["Plan:".to_string()];
+        if let Some(goal) = snapshot.goal {
+            lines.push(format!("Goal: {goal}"));
+        }
+        for item in snapshot.items {
+            lines.push(format!(
+                "- [{}] {}: {}",
+                item.status.as_str(),
+                item.id,
+                item.content
+            ));
+            if !item.depends_on.is_empty() {
+                lines.push(format!("  depends_on: {}", item.depends_on.join(", ")));
+            }
+            if let Some(blocked_reason) = item.blocked_reason {
+                lines.push(format!("  blocked_reason: {blocked_reason}"));
+            }
+            if let Some(parent_task_id) = item.parent_task_id {
+                lines.push(format!("  parent_task_id: {parent_task_id}"));
+            }
+            for note in item.notes {
+                lines.push(format!("  note: {note}"));
+            }
+        }
+        Ok(lines.join("\n"))
     }
 
     #[cfg_attr(not(test), allow(dead_code))]
