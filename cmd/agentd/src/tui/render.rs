@@ -150,7 +150,9 @@ fn render_timeline_entry(entry: &TimelineEntry, now: i64) -> Vec<Line<'static>> 
         TimelineEntryKind::User => "user".to_string(),
         TimelineEntryKind::Assistant => "assistant".to_string(),
         TimelineEntryKind::Reasoning => "reasoning".to_string(),
-        TimelineEntryKind::Tool { tool_name, status } => format!("tool:{tool_name}:{status}"),
+        TimelineEntryKind::Tool {
+            tool_name, status, ..
+        } => format!("tool: {tool_name} | {status}"),
         TimelineEntryKind::Approval { approval_id } => format!("approval:{approval_id}"),
         TimelineEntryKind::System => "system".to_string(),
     };
@@ -158,6 +160,11 @@ fn render_timeline_entry(entry: &TimelineEntry, now: i64) -> Vec<Line<'static>> 
     let continuation_prefix = " ".repeat(prefix.len());
     match entry.kind {
         TimelineEntryKind::Assistant => render_markdown_entry(
+            prefix.as_str(),
+            continuation_prefix.as_str(),
+            &entry.content,
+        ),
+        TimelineEntryKind::Tool { .. } => render_tool_entry(
             prefix.as_str(),
             continuation_prefix.as_str(),
             &entry.content,
@@ -277,6 +284,22 @@ fn render_markdown_entry(
 
     if lines.is_empty() {
         lines.push(Line::from(prefix.to_string()));
+    }
+    lines
+}
+
+fn render_tool_entry(prefix: &str, continuation_prefix: &str, content: &str) -> Vec<Line<'static>> {
+    if content.trim().is_empty() {
+        return vec![Line::from(prefix.to_string())];
+    }
+
+    let mut lines = vec![Line::from(prefix.to_string())];
+    for raw_line in content.lines() {
+        lines.push(Line::from(vec![
+            Span::raw(continuation_prefix.to_string()),
+            Span::styled("  -> ", Style::default().fg(Color::Cyan)),
+            Span::raw(raw_line.to_string()),
+        ]));
     }
     lines
 }
@@ -429,7 +452,8 @@ fn chat_scroll_top(total_lines: usize, viewport_lines: usize, offset_from_bottom
 
 #[cfg(test)]
 mod tests {
-    use super::{chat_scroll_top, format_timestamp, render_markdown_entry};
+    use super::{chat_scroll_top, format_timestamp, render_markdown_entry, render_timeline_entry};
+    use crate::tui::timeline::{TimelineEntry, TimelineEntryKind};
 
     #[test]
     fn timestamps_render_in_human_readable_form_for_same_day_entries() {
@@ -461,5 +485,28 @@ mod tests {
         assert_eq!(chat_scroll_top(20, 5, 0), 15);
         assert_eq!(chat_scroll_top(20, 5, 3), 12);
         assert_eq!(chat_scroll_top(20, 5, 99), 0);
+    }
+
+    #[test]
+    fn tool_entries_render_with_a_clear_status_line_and_summary_detail() {
+        let lines = render_timeline_entry(
+            &TimelineEntry {
+                timestamp: 1_775_200_010,
+                kind: TimelineEntryKind::Tool {
+                    tool_name: "web_fetch".to_string(),
+                    status: "completed".to_string(),
+                    summary: "web_fetch url=https://example.com/doc".to_string(),
+                },
+                content: "web_fetch url=https://example.com/doc".to_string(),
+            },
+            1_775_200_099,
+        );
+        let rendered = lines
+            .into_iter()
+            .map(|line| line.to_string())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(rendered.contains("tool: web_fetch | completed:"));
+        assert!(rendered.contains("-> web_fetch url=https://example.com/doc"));
     }
 }

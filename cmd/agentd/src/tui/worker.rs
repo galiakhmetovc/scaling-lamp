@@ -215,7 +215,9 @@ impl ActiveRunHandle {
             ChatExecutionEvent::ReasoningDelta(_) | ChatExecutionEvent::AssistantTextDelta(_) => {
                 self.phase = ActiveRunPhase::Streaming;
             }
-            ChatExecutionEvent::ToolStatus { tool_name, status } => {
+            ChatExecutionEvent::ToolStatus {
+                tool_name, status, ..
+            } => {
                 self.phase = match status {
                     ToolExecutionStatus::Requested => ActiveRunPhase::ToolRequested {
                         tool_name: tool_name.clone(),

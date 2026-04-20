@@ -445,10 +445,14 @@ where
                     ChatExecutionEvent::AssistantTextDelta(delta) => {
                         state.timeline_mut().push_assistant_delta(&delta, at);
                     }
-                    ChatExecutionEvent::ToolStatus { tool_name, status } => {
+                    ChatExecutionEvent::ToolStatus {
+                        tool_name,
+                        summary,
+                        status,
+                    } => {
                         state
                             .timeline_mut()
-                            .update_tool_status(&tool_name, status, at);
+                            .update_tool_status(&tool_name, &summary, status, at);
                     }
                 }
             }

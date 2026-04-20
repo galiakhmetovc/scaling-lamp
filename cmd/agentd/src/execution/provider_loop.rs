@@ -497,6 +497,7 @@ impl ExecutionService {
             observer,
             ChatExecutionEvent::ToolStatus {
                 tool_name: parsed.name().as_str().to_string(),
+                summary: parsed.summary(),
                 status: ToolExecutionStatus::Running,
             },
         );
@@ -513,6 +514,7 @@ impl ExecutionService {
                     observer,
                     ChatExecutionEvent::ToolStatus {
                         tool_name: parsed.name().as_str().to_string(),
+                        summary: parsed.summary(),
                         status: ToolExecutionStatus::Failed,
                     },
                 );
@@ -529,6 +531,7 @@ impl ExecutionService {
             observer,
             ChatExecutionEvent::ToolStatus {
                 tool_name: parsed.name().as_str().to_string(),
+                summary: parsed.summary(),
                 status: ToolExecutionStatus::Completed,
             },
         );
@@ -1196,6 +1199,7 @@ impl ExecutionService {
                     observer,
                     ChatExecutionEvent::ToolStatus {
                         tool_name: parsed.name().as_str().to_string(),
+                        summary: parsed.summary(),
                         status: ToolExecutionStatus::Requested,
                     },
                 );
@@ -1208,6 +1212,7 @@ impl ExecutionService {
                             observer,
                             ChatExecutionEvent::ToolStatus {
                                 tool_name: parsed.name().as_str().to_string(),
+                                summary: parsed.summary(),
                                 status: ToolExecutionStatus::Failed,
                             },
                         );
@@ -1229,6 +1234,7 @@ impl ExecutionService {
                             observer,
                             ChatExecutionEvent::ToolStatus {
                                 tool_name: parsed.name().as_str().to_string(),
+                                summary: parsed.summary(),
                                 status: ToolExecutionStatus::WaitingApproval,
                             },
                         );

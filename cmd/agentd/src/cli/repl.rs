@@ -183,9 +183,11 @@ impl<'a, W: Write> ReplRenderer<'a, W> {
         match event {
             ChatExecutionEvent::ReasoningDelta(delta) => self.write_reasoning_delta(&delta),
             ChatExecutionEvent::AssistantTextDelta(delta) => self.write_assistant_delta(&delta),
-            ChatExecutionEvent::ToolStatus { tool_name, status } => {
-                self.write_tool_status(&tool_name, status)
-            }
+            ChatExecutionEvent::ToolStatus {
+                tool_name,
+                summary,
+                status,
+            } => self.write_tool_status(&tool_name, &summary, status),
         }
     }
 
@@ -241,10 +243,15 @@ impl<'a, W: Write> ReplRenderer<'a, W> {
     fn write_tool_status(
         &mut self,
         tool_name: &str,
+        summary: &str,
         status: ToolExecutionStatus,
     ) -> Result<(), BootstrapError> {
         self.finish_turn()?;
-        let line = format!("tool: {tool_name} | {}", status.as_str());
+        let line = if summary.is_empty() || summary == tool_name {
+            format!("tool: {tool_name} | {}", status.as_str())
+        } else {
+            format!("tool: {tool_name} | {} | {summary}", status.as_str())
+        };
         match &self.active_tool {
             Some(current) if current == tool_name => {
                 write!(self.output, "\x1b[1A\r\x1b[2K{line}\n").map_err(BootstrapError::Stream)?;

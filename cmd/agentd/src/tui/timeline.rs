@@ -7,8 +7,14 @@ pub enum TimelineEntryKind {
     User,
     Assistant,
     Reasoning,
-    Tool { tool_name: String, status: String },
-    Approval { approval_id: String },
+    Tool {
+        tool_name: String,
+        status: String,
+        summary: String,
+    },
+    Approval {
+        approval_id: String,
+    },
     System,
 }
 
@@ -145,6 +151,7 @@ impl Timeline {
     pub fn update_tool_status(
         &mut self,
         tool_name: &str,
+        summary: &str,
         status: ToolExecutionStatus,
         timestamp: i64,
     ) {
@@ -155,8 +162,9 @@ impl Timeline {
                 self.entries[*index].kind = TimelineEntryKind::Tool {
                     tool_name: tool_name.to_string(),
                     status: status_text,
+                    summary: summary.to_string(),
                 };
-                self.entries[*index].content = tool_name.to_string();
+                self.entries[*index].content = summary.to_string();
                 if matches!(
                     status,
                     ToolExecutionStatus::Completed | ToolExecutionStatus::Failed
@@ -171,8 +179,9 @@ impl Timeline {
                     kind: TimelineEntryKind::Tool {
                         tool_name: tool_name.to_string(),
                         status: status_text,
+                        summary: summary.to_string(),
                     },
-                    content: tool_name.to_string(),
+                    content: summary.to_string(),
                 });
                 if matches!(
                     status,

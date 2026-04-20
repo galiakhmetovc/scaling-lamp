@@ -481,16 +481,19 @@ fn tui_chat_commands_and_timeline_assigns_timestamps_and_updates_tool_rows_in_pl
     timeline.push_assistant_delta("world", 12);
     timeline.update_tool_status(
         "web_fetch",
+        "web_fetch url=https://example.com/doc",
         agentd::execution::ToolExecutionStatus::Requested,
         13,
     );
     timeline.update_tool_status(
         "web_fetch",
+        "web_fetch url=https://example.com/doc",
         agentd::execution::ToolExecutionStatus::WaitingApproval,
         14,
     );
     timeline.update_tool_status(
         "web_fetch",
+        "web_fetch url=https://example.com/doc",
         agentd::execution::ToolExecutionStatus::Completed,
         15,
     );
@@ -512,6 +515,14 @@ fn tui_chat_commands_and_timeline_assigns_timestamps_and_updates_tool_rows_in_pl
             .kind,
         TimelineEntryKind::Tool { ref status, .. } if status == "completed"
     ));
+    assert_eq!(
+        rendered
+            .iter()
+            .find(|entry| matches!(entry.kind, TimelineEntryKind::Tool { .. }))
+            .expect("tool entry")
+            .content,
+        "web_fetch url=https://example.com/doc"
+    );
     assert_eq!(
         rendered
             .iter()

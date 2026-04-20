@@ -304,6 +304,7 @@ impl ExecutionService {
             observer,
             ChatExecutionEvent::ToolStatus {
                 tool_name: parsed.name().as_str().to_string(),
+                summary: parsed.summary(),
                 status: ToolExecutionStatus::Approved,
             },
         );

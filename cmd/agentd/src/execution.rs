@@ -79,6 +79,7 @@ pub enum ChatExecutionEvent {
     AssistantTextDelta(String),
     ToolStatus {
         tool_name: String,
+        summary: String,
         status: ToolExecutionStatus,
     },
 }
