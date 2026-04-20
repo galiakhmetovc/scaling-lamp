@@ -356,10 +356,15 @@ mod tests {
             }),
             plan_snapshot: Some(PlanSnapshot {
                 session_id: "session-1".to_string(),
+                goal: Some("Ship planning tools".to_string()),
                 items: vec![crate::plan::PlanItem {
                     id: "wire".to_string(),
                     content: "Wire planning tools".to_string(),
                     status: crate::plan::PlanItemStatus::InProgress,
+                    depends_on: Vec::new(),
+                    notes: Vec::new(),
+                    blocked_reason: None,
+                    parent_task_id: None,
                 }],
                 updated_at: 11,
             }),

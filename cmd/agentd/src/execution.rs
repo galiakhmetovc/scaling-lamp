@@ -15,7 +15,6 @@ use agent_runtime::mission::{
     JobExecutionInput, JobResult, JobSpec, JobStatus, MissionSpec, MissionStatus,
 };
 use agent_runtime::permission::{PermissionAction, PermissionConfig};
-use agent_runtime::plan::PlanSnapshot;
 use agent_runtime::provider::{ProviderDriver, ProviderError};
 use agent_runtime::run::{RunEngine, RunSnapshot, RunStatus, RunTransitionError};
 use agent_runtime::scheduler::{MissionVerificationSummary, SupervisorAction, SupervisorLoop};

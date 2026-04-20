@@ -1,4 +1,4 @@
-use crate::plan::{PlanItem, PlanItemStatus, PlanItemStatusParseError};
+use crate::plan::{PlanItem, PlanItemStatus, PlanItemStatusParseError, PlanLintIssue};
 use crate::workspace::{
     WorkspaceEntry, WorkspaceError, WorkspaceRef, WorkspaceSearchMatch, WriteMode,
 };
@@ -47,6 +47,13 @@ pub enum ToolName {
     ExecKill,
     PlanRead,
     PlanWrite,
+    InitPlan,
+    AddTask,
+    SetTaskStatus,
+    AddTaskNote,
+    EditTask,
+    PlanSnapshot,
+    PlanLint,
     ArtifactRead,
     ArtifactSearch,
 }
@@ -237,6 +244,53 @@ pub struct PlanWriteInput {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct InitPlanInput {
+    pub goal: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AddTaskInput {
+    pub description: String,
+    #[serde(default)]
+    pub depends_on: Vec<String>,
+    #[serde(default)]
+    pub parent_task_id: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SetTaskStatusInput {
+    pub task_id: String,
+    pub new_status: String,
+    #[serde(default)]
+    pub blocked_reason: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AddTaskNoteInput {
+    pub task_id: String,
+    pub note: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EditTaskInput {
+    pub task_id: String,
+    #[serde(default)]
+    pub description: Option<String>,
+    #[serde(default)]
+    pub depends_on: Option<Vec<String>>,
+    #[serde(default)]
+    pub parent_task_id: Option<String>,
+    #[serde(default)]
+    pub clear_parent_task: bool,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PlanSnapshotInput {}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PlanLintInput {}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ArtifactReadInput {
     pub artifact_id: String,
 }
@@ -273,6 +327,13 @@ pub enum ToolCall {
     ExecKill(ProcessKillInput),
     PlanRead(PlanReadInput),
     PlanWrite(PlanWriteInput),
+    InitPlan(InitPlanInput),
+    AddTask(AddTaskInput),
+    SetTaskStatus(SetTaskStatusInput),
+    AddTaskNote(AddTaskNoteInput),
+    EditTask(EditTaskInput),
+    PlanSnapshot(PlanSnapshotInput),
+    PlanLint(PlanLintInput),
     ArtifactRead(ArtifactReadInput),
     ArtifactSearch(ArtifactSearchInput),
 }
@@ -436,12 +497,52 @@ pub struct ProcessResult {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PlanReadOutput {
+    pub goal: Option<String>,
     pub items: Vec<PlanItem>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PlanWriteOutput {
+    pub goal: Option<String>,
     pub items: Vec<PlanItem>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InitPlanOutput {
+    pub goal: String,
+    pub item_count: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AddTaskOutput {
+    pub task: PlanItem,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SetTaskStatusOutput {
+    pub task: PlanItem,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AddTaskNoteOutput {
+    pub task: PlanItem,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EditTaskOutput {
+    pub task: PlanItem,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PlanSnapshotOutput {
+    pub goal: Option<String>,
+    pub items: Vec<PlanItem>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PlanLintOutput {
+    pub ok: bool,
+    pub issues: Vec<PlanLintIssue>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -495,6 +596,13 @@ pub enum ToolOutput {
     ProcessResult(ProcessResult),
     PlanRead(PlanReadOutput),
     PlanWrite(PlanWriteOutput),
+    InitPlan(InitPlanOutput),
+    AddTask(AddTaskOutput),
+    SetTaskStatus(SetTaskStatusOutput),
+    AddTaskNote(AddTaskNoteOutput),
+    EditTask(EditTaskOutput),
+    PlanSnapshot(PlanSnapshotOutput),
+    PlanLint(PlanLintOutput),
     ArtifactRead(ArtifactReadOutput),
     ArtifactSearch(ArtifactSearchOutput),
 }
@@ -611,6 +719,13 @@ impl ToolName {
             Self::ExecKill => "exec_kill",
             Self::PlanRead => "plan_read",
             Self::PlanWrite => "plan_write",
+            Self::InitPlan => "init_plan",
+            Self::AddTask => "add_task",
+            Self::SetTaskStatus => "set_task_status",
+            Self::AddTaskNote => "add_task_note",
+            Self::EditTask => "edit_task",
+            Self::PlanSnapshot => "plan_snapshot",
+            Self::PlanLint => "plan_lint",
             Self::ArtifactRead => "artifact_read",
             Self::ArtifactSearch => "artifact_search",
         }
@@ -652,8 +767,13 @@ impl ToolCatalog {
                         | ToolName::ExecKill
                         | ToolName::WebFetch
                         | ToolName::WebSearch
-                        | ToolName::PlanRead
-                        | ToolName::PlanWrite
+                        | ToolName::InitPlan
+                        | ToolName::AddTask
+                        | ToolName::SetTaskStatus
+                        | ToolName::AddTaskNote
+                        | ToolName::EditTask
+                        | ToolName::PlanSnapshot
+                        | ToolName::PlanLint
                         | ToolName::ArtifactRead
                         | ToolName::ArtifactSearch
                 )
@@ -904,6 +1024,76 @@ impl ToolCatalog {
                 },
             },
             ToolDefinition {
+                name: ToolName::InitPlan,
+                family: ToolFamily::Planning,
+                description: "Initialize a structured session plan with a top-level goal",
+                policy: ToolPolicy {
+                    read_only: false,
+                    destructive: false,
+                    requires_approval: false,
+                },
+            },
+            ToolDefinition {
+                name: ToolName::AddTask,
+                family: ToolFamily::Planning,
+                description: "Add a task to the structured session plan",
+                policy: ToolPolicy {
+                    read_only: false,
+                    destructive: false,
+                    requires_approval: false,
+                },
+            },
+            ToolDefinition {
+                name: ToolName::SetTaskStatus,
+                family: ToolFamily::Planning,
+                description: "Update the status of a task in the structured session plan",
+                policy: ToolPolicy {
+                    read_only: false,
+                    destructive: false,
+                    requires_approval: false,
+                },
+            },
+            ToolDefinition {
+                name: ToolName::AddTaskNote,
+                family: ToolFamily::Planning,
+                description: "Append a note to a task in the structured session plan",
+                policy: ToolPolicy {
+                    read_only: false,
+                    destructive: false,
+                    requires_approval: false,
+                },
+            },
+            ToolDefinition {
+                name: ToolName::EditTask,
+                family: ToolFamily::Planning,
+                description: "Edit a task description, dependencies, or parent relationship in the structured session plan",
+                policy: ToolPolicy {
+                    read_only: false,
+                    destructive: false,
+                    requires_approval: false,
+                },
+            },
+            ToolDefinition {
+                name: ToolName::PlanSnapshot,
+                family: ToolFamily::Planning,
+                description: "Read the current structured session plan including goal and tasks",
+                policy: ToolPolicy {
+                    read_only: true,
+                    destructive: false,
+                    requires_approval: false,
+                },
+            },
+            ToolDefinition {
+                name: ToolName::PlanLint,
+                family: ToolFamily::Planning,
+                description: "Validate the current structured session plan and report issues",
+                policy: ToolPolicy {
+                    read_only: true,
+                    destructive: false,
+                    requires_approval: false,
+                },
+            },
+            ToolDefinition {
                 name: ToolName::ArtifactRead,
                 family: ToolFamily::Offload,
                 description: "Read the full content of an offloaded context artifact by artifact_id",
@@ -1131,7 +1321,15 @@ impl ToolRuntime {
             }
             ToolCall::ExecWait(input) => self.wait_process(&input.process_id, ProcessKind::Exec),
             ToolCall::ExecKill(input) => self.kill_process(&input.process_id, ProcessKind::Exec),
-            ToolCall::PlanRead(_) | ToolCall::PlanWrite(_) => Err(ToolError::InvalidPlanWrite {
+            ToolCall::PlanRead(_)
+            | ToolCall::PlanWrite(_)
+            | ToolCall::InitPlan(_)
+            | ToolCall::AddTask(_)
+            | ToolCall::SetTaskStatus(_)
+            | ToolCall::AddTaskNote(_)
+            | ToolCall::EditTask(_)
+            | ToolCall::PlanSnapshot(_)
+            | ToolCall::PlanLint(_) => Err(ToolError::InvalidPlanWrite {
                 reason: "planning tools must execute through the canonical session path"
                     .to_string(),
             }),
@@ -1296,6 +1494,13 @@ impl ToolCall {
             Self::ExecKill(_) => ToolName::ExecKill,
             Self::PlanRead(_) => ToolName::PlanRead,
             Self::PlanWrite(_) => ToolName::PlanWrite,
+            Self::InitPlan(_) => ToolName::InitPlan,
+            Self::AddTask(_) => ToolName::AddTask,
+            Self::SetTaskStatus(_) => ToolName::SetTaskStatus,
+            Self::AddTaskNote(_) => ToolName::AddTaskNote,
+            Self::EditTask(_) => ToolName::EditTask,
+            Self::PlanSnapshot(_) => ToolName::PlanSnapshot,
+            Self::PlanLint(_) => ToolName::PlanLint,
             Self::ArtifactRead(_) => ToolName::ArtifactRead,
             Self::ArtifactSearch(_) => ToolName::ArtifactSearch,
         }
@@ -1324,7 +1529,15 @@ impl ToolCall {
             Self::WebSearch(_) => None,
             Self::ExecStart(input) => input.cwd.clone(),
             Self::ExecWait(_) | Self::ExecKill(_) => None,
-            Self::PlanRead(_) | Self::PlanWrite(_) => None,
+            Self::PlanRead(_)
+            | Self::PlanWrite(_)
+            | Self::InitPlan(_)
+            | Self::AddTask(_)
+            | Self::SetTaskStatus(_)
+            | Self::AddTaskNote(_)
+            | Self::EditTask(_)
+            | Self::PlanSnapshot(_)
+            | Self::PlanLint(_) => None,
             Self::ArtifactRead(input) => Some(input.artifact_id.clone()),
             Self::ArtifactSearch(_) => None,
         }
@@ -1424,6 +1637,20 @@ impl ToolCall {
             Self::ExecKill(input) => format!("exec_kill process_id={}", input.process_id),
             Self::PlanRead(_) => "plan_read".to_string(),
             Self::PlanWrite(input) => format!("plan_write items={}", input.items.len()),
+            Self::InitPlan(input) => format!("init_plan goal={}", input.goal),
+            Self::AddTask(input) => format!(
+                "add_task description={} depends_on={}",
+                input.description,
+                input.depends_on.len()
+            ),
+            Self::SetTaskStatus(input) => format!(
+                "set_task_status task_id={} status={}",
+                input.task_id, input.new_status
+            ),
+            Self::AddTaskNote(input) => format!("add_task_note task_id={}", input.task_id),
+            Self::EditTask(input) => format!("edit_task task_id={}", input.task_id),
+            Self::PlanSnapshot(_) => "plan_snapshot".to_string(),
+            Self::PlanLint(_) => "plan_lint".to_string(),
             Self::ArtifactRead(input) => format!("artifact_read artifact_id={}", input.artifact_id),
             Self::ArtifactSearch(input) => {
                 format!(
@@ -1580,6 +1807,48 @@ impl ToolCall {
                     name: name.to_string(),
                     source,
                 }),
+            "init_plan" => serde_json::from_str(arguments)
+                .map(Self::InitPlan)
+                .map_err(|source| ToolCallParseError::InvalidArguments {
+                    name: name.to_string(),
+                    source,
+                }),
+            "add_task" => serde_json::from_str(arguments)
+                .map(Self::AddTask)
+                .map_err(|source| ToolCallParseError::InvalidArguments {
+                    name: name.to_string(),
+                    source,
+                }),
+            "set_task_status" => serde_json::from_str(arguments)
+                .map(Self::SetTaskStatus)
+                .map_err(|source| ToolCallParseError::InvalidArguments {
+                    name: name.to_string(),
+                    source,
+                }),
+            "add_task_note" => serde_json::from_str(arguments)
+                .map(Self::AddTaskNote)
+                .map_err(|source| ToolCallParseError::InvalidArguments {
+                    name: name.to_string(),
+                    source,
+                }),
+            "edit_task" => serde_json::from_str(arguments)
+                .map(Self::EditTask)
+                .map_err(|source| ToolCallParseError::InvalidArguments {
+                    name: name.to_string(),
+                    source,
+                }),
+            "plan_snapshot" => serde_json::from_str(arguments)
+                .map(Self::PlanSnapshot)
+                .map_err(|source| ToolCallParseError::InvalidArguments {
+                    name: name.to_string(),
+                    source,
+                }),
+            "plan_lint" => serde_json::from_str(arguments)
+                .map(Self::PlanLint)
+                .map_err(|source| ToolCallParseError::InvalidArguments {
+                    name: name.to_string(),
+                    source,
+                }),
             "artifact_read" => serde_json::from_str(arguments)
                 .map(Self::ArtifactRead)
                 .map_err(|source| ToolCallParseError::InvalidArguments {
@@ -1712,6 +1981,13 @@ impl ToolOutput {
         }
     }
 
+    pub fn into_plan_snapshot(self) -> Option<PlanSnapshotOutput> {
+        match self {
+            Self::PlanSnapshot(output) => Some(output),
+            _ => None,
+        }
+    }
+
     pub fn summary(&self) -> String {
         match self {
             Self::FsRead(output) => {
@@ -1799,6 +2075,21 @@ impl ToolOutput {
             ),
             Self::PlanRead(output) => format!("plan_read items={}", output.items.len()),
             Self::PlanWrite(output) => format!("plan_write items={}", output.items.len()),
+            Self::InitPlan(output) => {
+                format!("init_plan goal={} items={}", output.goal, output.item_count)
+            }
+            Self::AddTask(output) => format!("add_task task_id={}", output.task.id),
+            Self::SetTaskStatus(output) => format!(
+                "set_task_status task_id={} status={}",
+                output.task.id,
+                output.task.status.as_str()
+            ),
+            Self::AddTaskNote(output) => format!("add_task_note task_id={}", output.task.id),
+            Self::EditTask(output) => format!("edit_task task_id={}", output.task.id),
+            Self::PlanSnapshot(output) => format!("plan_snapshot items={}", output.items.len()),
+            Self::PlanLint(output) => {
+                format!("plan_lint ok={} issues={}", output.ok, output.issues.len())
+            }
             Self::ArtifactRead(output) => {
                 format!(
                     "artifact_read artifact_id={} bytes={}",
@@ -1963,12 +2254,56 @@ impl ToolOutput {
             .to_string(),
             Self::PlanRead(output) => json!({
                 "tool": "plan_read",
+                "goal": output.goal,
                 "items": output.items.iter().map(plan_item_json).collect::<Vec<_>>(),
             })
             .to_string(),
             Self::PlanWrite(output) => json!({
                 "tool": "plan_write",
+                "goal": output.goal,
                 "items": output.items.iter().map(plan_item_json).collect::<Vec<_>>(),
+            })
+            .to_string(),
+            Self::InitPlan(output) => json!({
+                "tool": "init_plan",
+                "goal": output.goal,
+                "item_count": output.item_count,
+            })
+            .to_string(),
+            Self::AddTask(output) => json!({
+                "tool": "add_task",
+                "task": plan_item_json(&output.task),
+            })
+            .to_string(),
+            Self::SetTaskStatus(output) => json!({
+                "tool": "set_task_status",
+                "task": plan_item_json(&output.task),
+            })
+            .to_string(),
+            Self::AddTaskNote(output) => json!({
+                "tool": "add_task_note",
+                "task": plan_item_json(&output.task),
+            })
+            .to_string(),
+            Self::EditTask(output) => json!({
+                "tool": "edit_task",
+                "task": plan_item_json(&output.task),
+            })
+            .to_string(),
+            Self::PlanSnapshot(output) => json!({
+                "tool": "plan_snapshot",
+                "goal": output.goal,
+                "items": output.items.iter().map(plan_item_json).collect::<Vec<_>>(),
+            })
+            .to_string(),
+            Self::PlanLint(output) => json!({
+                "tool": "plan_lint",
+                "ok": output.ok,
+                "issues": output.issues.iter().map(|issue| json!({
+                    "severity": issue.severity,
+                    "task_id": issue.task_id,
+                    "message": issue.message,
+                })).collect::<Vec<_>>(),
             })
             .to_string(),
             Self::ArtifactRead(output) => json!({
@@ -2244,6 +2579,70 @@ impl ToolName {
                 "required": ["items"],
                 "additionalProperties": false,
             }),
+            Self::InitPlan => json!({
+                "type": "object",
+                "properties": {
+                    "goal": { "type": "string", "description": "Top-level goal for the structured session plan" }
+                },
+                "required": ["goal"],
+                "additionalProperties": false,
+            }),
+            Self::AddTask => json!({
+                "type": "object",
+                "properties": {
+                    "description": { "type": "string", "description": "Human-readable task description" },
+                    "depends_on": {
+                        "type": "array",
+                        "items": { "type": "string" },
+                        "description": "Optional task ids that must complete first"
+                    },
+                    "parent_task_id": { "type": ["string", "null"], "description": "Optional parent task id" }
+                },
+                "required": ["description"],
+                "additionalProperties": false,
+            }),
+            Self::SetTaskStatus => json!({
+                "type": "object",
+                "properties": {
+                    "task_id": { "type": "string" },
+                    "new_status": {
+                        "type": "string",
+                        "enum": ["pending", "in_progress", "completed", "blocked", "cancelled"]
+                    },
+                    "blocked_reason": { "type": ["string", "null"] }
+                },
+                "required": ["task_id", "new_status"],
+                "additionalProperties": false,
+            }),
+            Self::AddTaskNote => json!({
+                "type": "object",
+                "properties": {
+                    "task_id": { "type": "string" },
+                    "note": { "type": "string" }
+                },
+                "required": ["task_id", "note"],
+                "additionalProperties": false,
+            }),
+            Self::EditTask => json!({
+                "type": "object",
+                "properties": {
+                    "task_id": { "type": "string" },
+                    "description": { "type": ["string", "null"] },
+                    "depends_on": {
+                        "type": ["array", "null"],
+                        "items": { "type": "string" }
+                    },
+                    "parent_task_id": { "type": ["string", "null"] },
+                    "clear_parent_task": { "type": "boolean" }
+                },
+                "required": ["task_id"],
+                "additionalProperties": false,
+            }),
+            Self::PlanSnapshot | Self::PlanLint => json!({
+                "type": "object",
+                "properties": {},
+                "additionalProperties": false,
+            }),
             Self::ArtifactRead => json!({
                 "type": "object",
                 "properties": {
@@ -2504,6 +2903,10 @@ fn plan_item_json(item: &PlanItem) -> Value {
         "id": item.id,
         "content": item.content,
         "status": item.status.as_str(),
+        "depends_on": item.depends_on,
+        "notes": item.notes,
+        "blocked_reason": item.blocked_reason,
+        "parent_task_id": item.parent_task_id,
     })
 }
 
@@ -2515,6 +2918,10 @@ impl TryFrom<PlanWriteItemInput> for PlanItem {
             id: value.id,
             content: value.content,
             status: PlanItemStatus::try_from(value.status.as_str())?,
+            depends_on: Vec::new(),
+            notes: Vec::new(),
+            blocked_reason: None,
+            parent_task_id: None,
         })
     }
 }

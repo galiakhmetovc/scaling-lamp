@@ -89,6 +89,24 @@ fn automatic_model_definitions_include_structured_exec_tools() {
 }
 
 #[test]
+fn automatic_model_definitions_include_granular_planning_tools() {
+    let catalog = ToolCatalog::default();
+    let names = catalog
+        .automatic_model_definitions()
+        .into_iter()
+        .map(|definition| definition.name)
+        .collect::<Vec<_>>();
+
+    assert!(names.contains(&ToolName::InitPlan));
+    assert!(names.contains(&ToolName::AddTask));
+    assert!(names.contains(&ToolName::SetTaskStatus));
+    assert!(names.contains(&ToolName::AddTaskNote));
+    assert!(names.contains(&ToolName::EditTask));
+    assert!(names.contains(&ToolName::PlanSnapshot));
+    assert!(names.contains(&ToolName::PlanLint));
+}
+
+#[test]
 fn filesystem_tools_read_write_list_and_search_within_workspace() {
     let temp = tempfile::tempdir().expect("tempdir");
     let workspace = WorkspaceRef::new(temp.path());

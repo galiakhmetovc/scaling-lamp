@@ -12,6 +12,12 @@ use agent_runtime::session::{
 use std::error::Error;
 use std::fmt;
 
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+struct PlanRecordPayload {
+    goal: Option<String>,
+    items: Vec<agent_runtime::plan::PlanItem>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SessionRecord {
     pub id: String,
@@ -324,8 +330,11 @@ impl TryFrom<&PlanSnapshot> for PlanRecord {
     fn try_from(snapshot: &PlanSnapshot) -> Result<Self, Self::Error> {
         Ok(Self {
             session_id: snapshot.session_id.clone(),
-            items_json: serde_json::to_string(&snapshot.items)
-                .map_err(RecordConversionError::SerializePlanItems)?,
+            items_json: serde_json::to_string(&PlanRecordPayload {
+                goal: snapshot.goal.clone(),
+                items: snapshot.items.clone(),
+            })
+            .map_err(RecordConversionError::SerializePlanItems)?,
             updated_at: snapshot.updated_at,
         })
     }
@@ -335,11 +344,26 @@ impl TryFrom<PlanRecord> for PlanSnapshot {
     type Error = RecordConversionError;
 
     fn try_from(record: PlanRecord) -> Result<Self, Self::Error> {
+        let PlanRecord {
+            session_id,
+            items_json,
+            updated_at,
+        } = record;
+        let payload = serde_json::from_str::<PlanRecordPayload>(&items_json)
+            .map_or_else(
+                |_| {
+                    serde_json::from_str::<Vec<agent_runtime::plan::PlanItem>>(&items_json)
+                        .map(|items| PlanRecordPayload { goal: None, items })
+                },
+                Ok,
+            )
+            .map_err(RecordConversionError::InvalidPlanItems)?;
+
         Ok(Self {
-            session_id: record.session_id,
-            items: serde_json::from_str(&record.items_json)
-                .map_err(RecordConversionError::InvalidPlanItems)?,
-            updated_at: record.updated_at,
+            session_id,
+            goal: payload.goal,
+            items: payload.items,
+            updated_at,
         })
     }
 }
@@ -849,16 +873,25 @@ mod tests {
     fn plan_records_round_trip_with_typed_items() {
         let snapshot = PlanSnapshot {
             session_id: "session-1".to_string(),
+            goal: Some("Ship planning tools".to_string()),
             items: vec![
                 PlanItem {
                     id: "inspect".to_string(),
                     content: "Inspect planning seams".to_string(),
                     status: PlanItemStatus::Pending,
+                    depends_on: Vec::new(),
+                    notes: Vec::new(),
+                    blocked_reason: None,
+                    parent_task_id: None,
                 },
                 PlanItem {
                     id: "persist".to_string(),
                     content: "Persist plan snapshot".to_string(),
                     status: PlanItemStatus::InProgress,
+                    depends_on: vec!["inspect".to_string()],
+                    notes: vec!["Use sqlite".to_string()],
+                    blocked_reason: None,
+                    parent_task_id: None,
                 },
             ],
             updated_at: 12,

@@ -102,6 +102,10 @@ fn open_bootstraps_schema_and_round_trips_structured_and_file_backed_data() {
             id: "inspect".to_string(),
             content: "Inspect planning seams".to_string(),
             status: PlanItemStatus::Pending,
+            depends_on: Vec::new(),
+            notes: Vec::new(),
+            blocked_reason: None,
+            parent_task_id: None,
         }])
         .expect("serialize plan"),
         updated_at: 8,
@@ -224,16 +228,25 @@ fn plan_repository_round_trips_structured_plan_snapshots() {
 
     let snapshot = PlanSnapshot {
         session_id: "session-plan".to_string(),
+        goal: Some("Ship plan persistence".to_string()),
         items: vec![
             PlanItem {
                 id: "inspect".to_string(),
                 content: "Inspect seams".to_string(),
                 status: PlanItemStatus::Pending,
+                depends_on: Vec::new(),
+                notes: Vec::new(),
+                blocked_reason: None,
+                parent_task_id: None,
             },
             PlanItem {
                 id: "persist".to_string(),
                 content: "Persist plan".to_string(),
                 status: PlanItemStatus::Completed,
+                depends_on: vec!["inspect".to_string()],
+                notes: Vec::new(),
+                blocked_reason: None,
+                parent_task_id: None,
             },
         ],
         updated_at: 9,

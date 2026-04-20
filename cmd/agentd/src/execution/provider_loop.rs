@@ -3,7 +3,7 @@ use crate::prompting;
 use agent_persistence::ContextOffloadRepository;
 use agent_runtime::context::{ContextOffloadSnapshot, ContextSummary};
 use agent_runtime::permission::PermissionAction;
-use agent_runtime::plan::PlanItem;
+use agent_runtime::plan::{PlanItem, PlanItemStatus, PlanSnapshot};
 use agent_runtime::prompt::{PromptAssembly, PromptAssemblyInput};
 use agent_runtime::provider::{
     ProviderContinuationMessage, ProviderMessage, ProviderRequest, ProviderResponse,
@@ -13,8 +13,10 @@ use agent_runtime::provider::{
 use agent_runtime::run::{ApprovalRequest, PendingToolApproval, ProviderLoopState};
 use agent_runtime::session::MessageRole;
 use agent_runtime::tool::{
-    ArtifactReadOutput, ArtifactSearchOutput, ArtifactSearchResult, PlanReadOutput,
-    PlanWriteOutput, ToolCatalog, ToolDefinition, ToolName, ToolOutput, ToolRuntime,
+    AddTaskNoteOutput, AddTaskOutput, ArtifactReadOutput, ArtifactSearchOutput,
+    ArtifactSearchResult, EditTaskOutput, InitPlanOutput, PlanLintOutput, PlanReadOutput,
+    PlanSnapshotOutput, PlanWriteOutput, SetTaskStatusOutput, ToolCatalog, ToolDefinition,
+    ToolName, ToolOutput, ToolRuntime,
 };
 use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -511,6 +513,53 @@ impl ExecutionService {
             ToolCall::PlanWrite(input) => Ok(ToolOutput::PlanWrite(
                 self.write_plan_snapshot(store, session_id, input, now)?,
             )),
+            ToolCall::InitPlan(input) => Ok(ToolOutput::InitPlan(self.init_plan_snapshot(
+                store,
+                session_id,
+                input.goal.as_str(),
+                now,
+            )?)),
+            ToolCall::AddTask(input) => Ok(ToolOutput::AddTask(self.add_plan_task(
+                store,
+                session_id,
+                input.description.as_str(),
+                input.depends_on.clone(),
+                input.parent_task_id.clone(),
+                now,
+            )?)),
+            ToolCall::SetTaskStatus(input) => {
+                Ok(ToolOutput::SetTaskStatus(self.set_plan_task_status(
+                    store,
+                    session_id,
+                    input.task_id.as_str(),
+                    input.new_status.as_str(),
+                    input.blocked_reason.clone(),
+                    now,
+                )?))
+            }
+            ToolCall::AddTaskNote(input) => Ok(ToolOutput::AddTaskNote(self.add_plan_task_note(
+                store,
+                session_id,
+                input.task_id.as_str(),
+                input.note.as_str(),
+                now,
+            )?)),
+            ToolCall::EditTask(input) => Ok(ToolOutput::EditTask(self.edit_plan_task(
+                store,
+                session_id,
+                input.task_id.as_str(),
+                input.description.clone(),
+                input.depends_on.clone(),
+                input.parent_task_id.clone(),
+                input.clear_parent_task,
+                now,
+            )?)),
+            ToolCall::PlanSnapshot(_) => Ok(ToolOutput::PlanSnapshot(
+                self.plan_snapshot_output(store, session_id)?,
+            )),
+            ToolCall::PlanLint(_) => Ok(ToolOutput::PlanLint(
+                self.lint_plan_snapshot(store, session_id)?,
+            )),
             ToolCall::ArtifactRead(input) => Ok(ToolOutput::ArtifactRead(
                 self.read_context_offload_artifact(store, session_id, input.artifact_id.as_str())?,
             )),
@@ -533,19 +582,10 @@ impl ExecutionService {
         store: &PersistenceStore,
         session_id: &str,
     ) -> Result<PlanReadOutput, ExecutionError> {
-        let snapshot = store
-            .get_plan(session_id)
-            .map_err(ExecutionError::Store)?
-            .map(PlanSnapshot::try_from)
-            .transpose()
-            .map_err(ExecutionError::RecordConversion)?
-            .unwrap_or_else(|| PlanSnapshot {
-                session_id: session_id.to_string(),
-                items: Vec::new(),
-                updated_at: 0,
-            });
+        let snapshot = self.load_plan_snapshot(store, session_id)?;
 
         Ok(PlanReadOutput {
+            goal: snapshot.goal,
             items: snapshot.items,
         })
     }
@@ -570,13 +610,173 @@ impl ExecutionService {
             })?;
         let snapshot = PlanSnapshot {
             session_id: session_id.to_string(),
+            goal: self.load_plan_snapshot(store, session_id)?.goal,
             items: items.clone(),
             updated_at: now,
         };
-        let record = PlanRecord::try_from(&snapshot).map_err(ExecutionError::RecordConversion)?;
-        store.put_plan(&record).map_err(ExecutionError::Store)?;
+        self.persist_plan_snapshot(store, &snapshot)?;
 
-        Ok(PlanWriteOutput { items })
+        Ok(PlanWriteOutput {
+            goal: snapshot.goal,
+            items,
+        })
+    }
+
+    fn init_plan_snapshot(
+        &self,
+        store: &PersistenceStore,
+        session_id: &str,
+        goal: &str,
+        now: i64,
+    ) -> Result<InitPlanOutput, ExecutionError> {
+        let mut snapshot = self.load_plan_snapshot(store, session_id)?;
+        snapshot
+            .initialize(goal, now)
+            .map_err(Self::invalid_plan_tool)?;
+        self.persist_plan_snapshot(store, &snapshot)?;
+
+        Ok(InitPlanOutput {
+            goal: snapshot.goal.unwrap_or_default(),
+            item_count: snapshot.items.len(),
+        })
+    }
+
+    fn add_plan_task(
+        &self,
+        store: &PersistenceStore,
+        session_id: &str,
+        description: &str,
+        depends_on: Vec<String>,
+        parent_task_id: Option<String>,
+        now: i64,
+    ) -> Result<AddTaskOutput, ExecutionError> {
+        let mut snapshot = self.load_plan_snapshot(store, session_id)?;
+        let task = snapshot
+            .add_task(description, depends_on, parent_task_id, now)
+            .map_err(Self::invalid_plan_tool)?;
+        self.persist_plan_snapshot(store, &snapshot)?;
+        Ok(AddTaskOutput { task })
+    }
+
+    fn set_plan_task_status(
+        &self,
+        store: &PersistenceStore,
+        session_id: &str,
+        task_id: &str,
+        new_status: &str,
+        blocked_reason: Option<String>,
+        now: i64,
+    ) -> Result<SetTaskStatusOutput, ExecutionError> {
+        let mut snapshot = self.load_plan_snapshot(store, session_id)?;
+        let status = PlanItemStatus::try_from(new_status).map_err(Self::invalid_plan_tool)?;
+        let task = snapshot
+            .set_task_status(task_id, status, blocked_reason, now)
+            .map_err(Self::invalid_plan_tool)?;
+        self.persist_plan_snapshot(store, &snapshot)?;
+        Ok(SetTaskStatusOutput { task })
+    }
+
+    fn add_plan_task_note(
+        &self,
+        store: &PersistenceStore,
+        session_id: &str,
+        task_id: &str,
+        note: &str,
+        now: i64,
+    ) -> Result<AddTaskNoteOutput, ExecutionError> {
+        let mut snapshot = self.load_plan_snapshot(store, session_id)?;
+        let task = snapshot
+            .add_task_note(task_id, note, now)
+            .map_err(Self::invalid_plan_tool)?;
+        self.persist_plan_snapshot(store, &snapshot)?;
+        Ok(AddTaskNoteOutput { task })
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn edit_plan_task(
+        &self,
+        store: &PersistenceStore,
+        session_id: &str,
+        task_id: &str,
+        description: Option<String>,
+        depends_on: Option<Vec<String>>,
+        parent_task_id: Option<String>,
+        clear_parent_task: bool,
+        now: i64,
+    ) -> Result<EditTaskOutput, ExecutionError> {
+        let mut snapshot = self.load_plan_snapshot(store, session_id)?;
+        let task = snapshot
+            .edit_task(
+                task_id,
+                description,
+                depends_on,
+                parent_task_id,
+                clear_parent_task,
+                now,
+            )
+            .map_err(Self::invalid_plan_tool)?;
+        self.persist_plan_snapshot(store, &snapshot)?;
+        Ok(EditTaskOutput { task })
+    }
+
+    fn plan_snapshot_output(
+        &self,
+        store: &PersistenceStore,
+        session_id: &str,
+    ) -> Result<PlanSnapshotOutput, ExecutionError> {
+        let snapshot = self.load_plan_snapshot(store, session_id)?;
+        Ok(PlanSnapshotOutput {
+            goal: snapshot.goal,
+            items: snapshot.items,
+        })
+    }
+
+    fn lint_plan_snapshot(
+        &self,
+        store: &PersistenceStore,
+        session_id: &str,
+    ) -> Result<PlanLintOutput, ExecutionError> {
+        let snapshot = self.load_plan_snapshot(store, session_id)?;
+        let issues = snapshot.lint();
+        Ok(PlanLintOutput {
+            ok: issues.is_empty(),
+            issues,
+        })
+    }
+
+    fn load_plan_snapshot(
+        &self,
+        store: &PersistenceStore,
+        session_id: &str,
+    ) -> Result<PlanSnapshot, ExecutionError> {
+        let snapshot = store
+            .get_plan(session_id)
+            .map_err(ExecutionError::Store)?
+            .map(PlanSnapshot::try_from)
+            .transpose()
+            .map_err(ExecutionError::RecordConversion)?
+            .unwrap_or_else(|| PlanSnapshot {
+                session_id: session_id.to_string(),
+                goal: None,
+                items: Vec::new(),
+                updated_at: 0,
+            });
+        Ok(snapshot)
+    }
+
+    fn persist_plan_snapshot(
+        &self,
+        store: &PersistenceStore,
+        snapshot: &PlanSnapshot,
+    ) -> Result<(), ExecutionError> {
+        let record = PlanRecord::try_from(snapshot).map_err(ExecutionError::RecordConversion)?;
+        store.put_plan(&record).map_err(ExecutionError::Store)
+    }
+
+    fn invalid_plan_tool(source: impl std::fmt::Display) -> ExecutionError {
+        ExecutionError::Tool(ToolError::InvalidPlanWrite {
+            reason: source.to_string(),
+        })
     }
 
     fn read_context_offload_artifact(

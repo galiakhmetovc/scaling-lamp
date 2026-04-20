@@ -3865,16 +3865,25 @@ fn execute_chat_turn_includes_the_plan_snapshot_before_context_summary() {
         .put_plan(
             &PlanRecord::try_from(&PlanSnapshot {
                 session_id: "session-plan-chat".to_string(),
+                goal: Some("Ship planning tools".to_string()),
                 items: vec![
                     PlanItem {
                         id: "inspect".to_string(),
                         content: "Inspect planning seams".to_string(),
                         status: PlanItemStatus::Pending,
+                        depends_on: Vec::new(),
+                        notes: Vec::new(),
+                        blocked_reason: None,
+                        parent_task_id: None,
                     },
                     PlanItem {
                         id: "persist".to_string(),
                         content: "Persist canonical plan state".to_string(),
                         status: PlanItemStatus::InProgress,
+                        depends_on: vec!["inspect".to_string()],
+                        notes: Vec::new(),
+                        blocked_reason: None,
+                        parent_task_id: None,
                     },
                 ],
                 updated_at: 3,
@@ -4027,6 +4036,156 @@ fn execute_chat_turn_can_finish_after_plan_write_and_plan_read_tool_calls() {
     assert!(normalized_third.contains("\"call_id\":\"call_plan_read\""));
     assert!(normalized_third.contains("plan_read"));
     assert!(normalized_third.contains("inspect planning seams"));
+}
+
+#[test]
+fn execute_chat_turn_can_finish_after_granular_plan_tool_calls() {
+    let (api_base, requests, handle) = spawn_json_server_sequence(vec![
+        r#"{
+                "id":"resp_plan_granular_1",
+                "model":"gpt-5.4",
+                "output":[
+                    {
+                        "id":"fc_init_plan",
+                        "type":"function_call",
+                        "call_id":"call_init_plan",
+                        "name":"init_plan",
+                        "arguments":"{\"goal\":\"Refactor auth\"}"
+                    }
+                ],
+                "usage":{"input_tokens":28,"output_tokens":8,"total_tokens":36}
+            }"#
+        .to_string(),
+        r#"{
+                "id":"resp_plan_granular_2",
+                "model":"gpt-5.4",
+                "output":[
+                    {
+                        "id":"fc_add_task",
+                        "type":"function_call",
+                        "call_id":"call_add_task",
+                        "name":"add_task",
+                        "arguments":"{\"description\":\"Inspect auth module\",\"depends_on\":[]}"
+                    }
+                ],
+                "usage":{"input_tokens":24,"output_tokens":8,"total_tokens":32}
+            }"#
+        .to_string(),
+        r#"{
+                "id":"resp_plan_granular_3",
+                "model":"gpt-5.4",
+                "output":[
+                    {
+                        "id":"fc_set_status",
+                        "type":"function_call",
+                        "call_id":"call_set_status",
+                        "name":"set_task_status",
+                        "arguments":"{\"task_id\":\"inspect-auth-module\",\"new_status\":\"in_progress\"}"
+                    }
+                ],
+                "usage":{"input_tokens":22,"output_tokens":8,"total_tokens":30}
+            }"#
+        .to_string(),
+        r#"{
+                "id":"resp_plan_granular_4",
+                "model":"gpt-5.4",
+                "output":[
+                    {
+                        "id":"fc_plan_snapshot",
+                        "type":"function_call",
+                        "call_id":"call_plan_snapshot",
+                        "name":"plan_snapshot",
+                        "arguments":"{}"
+                    }
+                ],
+                "usage":{"input_tokens":22,"output_tokens":8,"total_tokens":30}
+            }"#
+        .to_string(),
+        r#"{
+                "id":"resp_plan_granular_5",
+                "model":"gpt-5.4",
+                "output":[
+                    {
+                        "id":"msg_plan_granular",
+                        "type":"message",
+                        "status":"completed",
+                        "role":"assistant",
+                        "content":[
+                            {
+                                "type":"output_text",
+                                "text":"Plan initialized, updated, and read back."
+                            }
+                        ]
+                    }
+                ],
+                "usage":{"input_tokens":22,"output_tokens":6,"total_tokens":28}
+            }"#
+        .to_string(),
+    ]);
+    let temp = tempfile::tempdir().expect("tempdir");
+    let app = build_from_config(AppConfig {
+        data_dir: temp.path().join("state-root"),
+        provider: ConfiguredProvider {
+            kind: ProviderKind::OpenAiResponses,
+            api_base: Some(format!("{api_base}/v1")),
+            api_key: Some("test-key".to_string()),
+            default_model: Some("gpt-5.4".to_string()),
+            ..ConfiguredProvider::default()
+        },
+        ..AppConfig::default()
+    })
+    .expect("build app");
+    let store = PersistenceStore::open(&app.persistence).expect("open store");
+
+    store
+        .put_session(&SessionRecord {
+            id: "session-plan-granular".to_string(),
+            title: "Plan Granular".to_string(),
+            prompt_override: None,
+            settings_json: serde_json::to_string(&SessionSettings::default())
+                .expect("serialize settings"),
+            active_mission_id: None,
+            created_at: 1,
+            updated_at: 1,
+        })
+        .expect("put session");
+
+    let report = app
+        .execute_chat_turn("session-plan-granular", "make a structured plan", 10)
+        .expect("execute chat turn");
+    let _first_request = requests.recv().expect("first provider request");
+    let _second_request = requests.recv().expect("second provider request");
+    let _third_request = requests.recv().expect("third provider request");
+    let fourth_request = requests.recv().expect("fourth provider request");
+    let fifth_request = requests.recv().expect("fifth provider request");
+    handle.join().expect("join server");
+
+    assert_eq!(report.response_id, "resp_plan_granular_5");
+    assert_eq!(
+        report.output_text,
+        "Plan initialized, updated, and read back."
+    );
+
+    let plan = PlanSnapshot::try_from(
+        store
+            .get_plan("session-plan-granular")
+            .expect("get plan")
+            .expect("plan exists"),
+    )
+    .expect("restore plan");
+    assert_eq!(plan.goal.as_deref(), Some("Refactor auth"));
+    assert_eq!(plan.items.len(), 1);
+    assert_eq!(plan.items[0].id, "inspect-auth-module");
+    assert_eq!(plan.items[0].status, PlanItemStatus::InProgress);
+
+    let normalized_fourth = fourth_request.to_ascii_lowercase();
+    assert!(normalized_fourth.contains("\"call_id\":\"call_set_status\""));
+    assert!(normalized_fourth.contains("inspect-auth-module"));
+
+    let normalized_fifth = fifth_request.to_ascii_lowercase();
+    assert!(normalized_fifth.contains("\"call_id\":\"call_plan_snapshot\""));
+    assert!(normalized_fifth.contains("refactor auth"));
+    assert!(normalized_fifth.contains("inspect auth module"));
 }
 
 #[test]
