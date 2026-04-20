@@ -17,6 +17,7 @@ use agent_runtime::tool::{
     PlanWriteOutput, ToolCatalog, ToolDefinition, ToolName, ToolOutput, ToolRuntime,
 };
 use std::collections::BTreeMap;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 const MAX_PROVIDER_TOOL_ROUNDS: usize = 8;
 
@@ -708,6 +709,7 @@ impl ExecutionService {
         run: &mut RunEngine,
         initial_loop_state: Option<ProviderLoopState>,
         now: i64,
+        interrupt_after_tool_step: Option<&AtomicBool>,
         observer: &mut Option<&mut dyn FnMut(ChatExecutionEvent)>,
     ) -> Result<ProviderResponse, ExecutionError> {
         let prompt_messages = self.prompt_messages(store, session_id)?;
@@ -826,6 +828,12 @@ impl ExecutionService {
                     observer,
                 )?;
                 cursor.record_tool_output(&tool_call.call_id, model_output);
+                if interrupt_after_tool_step.is_some_and(|flag| flag.load(Ordering::SeqCst)) {
+                    run.interrupt("superseded by queued user input", now)
+                        .map_err(ExecutionError::RunTransition)?;
+                    self.persist_run(store, run)?;
+                    return Err(ExecutionError::InterruptedByQueuedInput);
+                }
             }
 
             cursor.advance_after_response(&response);

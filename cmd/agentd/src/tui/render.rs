@@ -1,10 +1,14 @@
 use crate::tui::app::{DialogState, TuiAppState, TuiScreen};
 use crate::tui::timeline::{TimelineEntry, TimelineEntryKind};
+use crate::tui::worker::{ActiveRunKind, ActiveRunPhase};
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
-use ratatui::style::{Modifier, Style};
-use ratatui::text::Line;
+use ratatui::style::{Color, Modifier, Style};
+use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, List, ListItem, Paragraph, Wrap};
+use std::time::{SystemTime, UNIX_EPOCH};
+use time::macros::format_description;
+use time::{Date, OffsetDateTime};
 
 pub fn render(frame: &mut Frame<'_>, state: &TuiAppState) {
     match state.active_screen() {
@@ -19,6 +23,7 @@ pub fn render(frame: &mut Frame<'_>, state: &TuiAppState) {
 
 fn render_session_screen(frame: &mut Frame<'_>, state: &TuiAppState) {
     let area = frame.area();
+    let now = unix_timestamp();
     let items = state
         .sessions()
         .iter()
@@ -34,7 +39,10 @@ fn render_session_screen(frame: &mut Frame<'_>, state: &TuiAppState) {
             let preview = session.last_message_preview.as_deref().unwrap_or("<empty>");
             let label = format!(
                 "{prefix}{} | updated={} | messages={}{}",
-                session.title, session.updated_at, session.message_count, approval
+                session.title,
+                format_timestamp(session.updated_at, now),
+                session.message_count,
+                approval
             );
             let preview_line = format!("    {preview}");
             let mut item = ListItem::new(vec![Line::from(label), Line::from(preview_line)]);
@@ -55,35 +63,45 @@ fn render_session_screen(frame: &mut Frame<'_>, state: &TuiAppState) {
 
 fn render_chat_screen(frame: &mut Frame<'_>, state: &TuiAppState) {
     let area = frame.area();
+    let now = unix_timestamp();
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(3),
+            Constraint::Length(4),
             Constraint::Min(1),
-            Constraint::Length(3),
+            Constraint::Length(4),
         ])
         .split(area);
 
-    let top = if let Some(summary) = state.current_session_summary() {
-        Paragraph::new(format!(
-            "{} | model={} | reasoning={} | think={} | ctx={} | compact={} | messages={}",
-            summary.title,
-            summary.model.as_deref().unwrap_or("<default>"),
-            if summary.reasoning_visible {
-                "on"
-            } else {
-                "off"
-            },
-            summary.think_level.as_deref().unwrap_or("<default>"),
-            summary.context_tokens,
-            summary.compactifications,
-            summary.message_count.max(state.timeline().message_count()),
-        ))
-        .block(Block::default().borders(Borders::ALL).title("Session"))
+    let top_lines = if let Some(summary) = state.current_session_summary() {
+        vec![
+            Line::from(format!(
+                "{} | model={} | reasoning={} | think={} | ctx={} | compact={} | messages={}",
+                summary.title,
+                summary.model.as_deref().unwrap_or("<default>"),
+                if summary.reasoning_visible {
+                    "on"
+                } else {
+                    "off"
+                },
+                summary.think_level.as_deref().unwrap_or("<default>"),
+                summary.context_tokens,
+                summary.compactifications,
+                summary.message_count.max(state.timeline().message_count()),
+            )),
+            Line::from(format!(
+                "run={} | queued={} (asap={} deferred={})",
+                describe_run_status(state, now),
+                state.queued_draft_count(),
+                state.queued_priority_count(),
+                state.queued_deferred_count()
+            )),
+        ]
     } else {
-        Paragraph::new("No active session")
-            .block(Block::default().borders(Borders::ALL).title("Session"))
+        vec![Line::from("No active session")]
     };
+    let top =
+        Paragraph::new(top_lines).block(Block::default().borders(Borders::ALL).title("Session"));
 
     let timeline_lines = state
         .timeline()
@@ -94,25 +112,34 @@ fn render_chat_screen(frame: &mut Frame<'_>, state: &TuiAppState) {
                 .unwrap_or(true),
         )
         .into_iter()
-        .flat_map(render_timeline_entry)
+        .flat_map(|entry| render_timeline_entry(entry, now))
         .collect::<Vec<_>>();
     let timeline = Paragraph::new(timeline_lines)
         .block(Block::default().title("Chat").borders(Borders::ALL))
         .wrap(Wrap { trim: false })
         .scroll((state.scroll_offset(), 0));
-    let input = Paragraph::new(state.input_buffer()).block(
-        Block::default()
-            .title("Input | /session /new /rename /clear /approve /model /reasoning /think /compact /exit")
-            .borders(Borders::ALL),
-    );
+
+    let composer_lines = vec![
+        Line::from(vec![
+            Span::styled("> ", Style::default().fg(Color::Cyan)),
+            Span::raw(state.input_buffer().to_string()),
+            Span::styled("█", Style::default().fg(Color::Yellow)),
+        ]),
+        Line::from(format!(
+            "Enter=send after tool-step | Tab=queue after full run | Shift+Tab=cycle /commands | {}",
+            describe_run_status(state, now)
+        )),
+    ];
+    let input = Paragraph::new(composer_lines)
+        .block(Block::default().title("Composer").borders(Borders::ALL));
 
     frame.render_widget(top, chunks[0]);
     frame.render_widget(timeline, chunks[1]);
     frame.render_widget(input, chunks[2]);
 }
 
-fn render_timeline_entry(entry: &TimelineEntry) -> Vec<Line<'static>> {
-    let timestamp = format!("[{}]", entry.timestamp);
+fn render_timeline_entry(entry: &TimelineEntry, now: i64) -> Vec<Line<'static>> {
+    let timestamp = format_timestamp(entry.timestamp, now);
     let label = match &entry.kind {
         TimelineEntryKind::User => "user".to_string(),
         TimelineEntryKind::Assistant => "assistant".to_string(),
@@ -121,10 +148,186 @@ fn render_timeline_entry(entry: &TimelineEntry) -> Vec<Line<'static>> {
         TimelineEntryKind::Approval { approval_id } => format!("approval:{approval_id}"),
         TimelineEntryKind::System => "system".to_string(),
     };
-    vec![Line::from(format!(
-        "{timestamp} {label}: {}",
-        entry.content
-    ))]
+    let prefix = format!("[{timestamp}] {label}: ");
+    let continuation_prefix = " ".repeat(prefix.len());
+    match entry.kind {
+        TimelineEntryKind::Assistant => render_markdown_entry(
+            prefix.as_str(),
+            continuation_prefix.as_str(),
+            &entry.content,
+        ),
+        _ => render_plain_entry(
+            prefix.as_str(),
+            continuation_prefix.as_str(),
+            &entry.content,
+        ),
+    }
+}
+
+fn render_plain_entry(
+    prefix: &str,
+    continuation_prefix: &str,
+    content: &str,
+) -> Vec<Line<'static>> {
+    let mut lines = Vec::new();
+    for (index, raw_line) in content.lines().enumerate() {
+        let current_prefix = if index == 0 {
+            prefix
+        } else {
+            continuation_prefix
+        };
+        lines.push(Line::from(format!("{current_prefix}{raw_line}")));
+    }
+    if lines.is_empty() {
+        lines.push(Line::from(prefix.to_string()));
+    }
+    lines
+}
+
+fn render_markdown_entry(
+    prefix: &str,
+    continuation_prefix: &str,
+    content: &str,
+) -> Vec<Line<'static>> {
+    let mut lines = Vec::new();
+    let mut in_code_block = false;
+    let mut first_line = true;
+
+    for raw_line in content.lines() {
+        if raw_line.trim_start().starts_with("```") {
+            in_code_block = !in_code_block;
+            continue;
+        }
+
+        let line_prefix = if first_line {
+            prefix
+        } else {
+            continuation_prefix
+        };
+        first_line = false;
+        if in_code_block {
+            lines.push(Line::from(vec![
+                Span::raw(line_prefix.to_string()),
+                Span::styled(
+                    format!("    {raw_line}"),
+                    Style::default()
+                        .fg(Color::Green)
+                        .add_modifier(Modifier::DIM),
+                ),
+            ]));
+            continue;
+        }
+
+        let trimmed = raw_line.trim_start();
+        if let Some(heading) = trimmed.strip_prefix("### ") {
+            lines.push(Line::from(vec![
+                Span::raw(line_prefix.to_string()),
+                Span::styled(
+                    heading.to_string(),
+                    Style::default().add_modifier(Modifier::BOLD),
+                ),
+            ]));
+            continue;
+        }
+        if let Some(heading) = trimmed
+            .strip_prefix("## ")
+            .or_else(|| trimmed.strip_prefix("# "))
+        {
+            lines.push(Line::from(vec![
+                Span::raw(line_prefix.to_string()),
+                Span::styled(
+                    heading.to_string(),
+                    Style::default()
+                        .fg(Color::Yellow)
+                        .add_modifier(Modifier::BOLD),
+                ),
+            ]));
+            continue;
+        }
+        if let Some(quote) = trimmed.strip_prefix("> ") {
+            lines.push(Line::from(vec![
+                Span::raw(line_prefix.to_string()),
+                Span::styled("> ", Style::default().fg(Color::Blue)),
+                Span::styled(
+                    quote.to_string(),
+                    Style::default().add_modifier(Modifier::ITALIC),
+                ),
+            ]));
+            continue;
+        }
+        if trimmed.starts_with("- ") || trimmed.starts_with("* ") {
+            lines.push(Line::from(vec![
+                Span::raw(line_prefix.to_string()),
+                Span::styled("• ", Style::default().fg(Color::Cyan)),
+                Span::raw(trimmed[2..].to_string()),
+            ]));
+            continue;
+        }
+
+        let mut spans = vec![Span::raw(line_prefix.to_string())];
+        spans.extend(render_inline_code(trimmed));
+        lines.push(Line::from(spans));
+    }
+
+    if lines.is_empty() {
+        lines.push(Line::from(prefix.to_string()));
+    }
+    lines
+}
+
+fn render_inline_code(content: &str) -> Vec<Span<'static>> {
+    let mut spans = Vec::new();
+    for (index, segment) in content.split('`').enumerate() {
+        if segment.is_empty() {
+            continue;
+        }
+        let span = if index % 2 == 1 {
+            Span::styled(
+                segment.to_string(),
+                Style::default()
+                    .fg(Color::Magenta)
+                    .add_modifier(Modifier::BOLD),
+            )
+        } else {
+            Span::raw(segment.to_string())
+        };
+        spans.push(span);
+    }
+    if spans.is_empty() {
+        spans.push(Span::raw(String::new()));
+    }
+    spans
+}
+
+fn describe_run_status(state: &TuiAppState, now: i64) -> String {
+    if let Some(active_run) = state.active_run() {
+        let kind = match active_run.kind() {
+            ActiveRunKind::Chat => "chat",
+            ActiveRunKind::Approval => "approval",
+        };
+        let phase = match active_run.phase() {
+            ActiveRunPhase::Sending => "sending".to_string(),
+            ActiveRunPhase::Streaming => "streaming".to_string(),
+            ActiveRunPhase::WaitingApproval => "waiting_approval".to_string(),
+            ActiveRunPhase::ToolRequested { tool_name } => format!("tool requested ({tool_name})"),
+            ActiveRunPhase::ToolRunning { tool_name } => format!("tool running ({tool_name})"),
+            ActiveRunPhase::ToolCompleted { tool_name } => {
+                format!("tool completed ({tool_name})")
+            }
+            ActiveRunPhase::Failed => "failed".to_string(),
+        };
+        return format!(
+            "{kind} {phase} {}",
+            format_elapsed(active_run.started_at(), now)
+        );
+    }
+    if state
+        .current_session_summary()
+        .is_some_and(|summary| summary.has_pending_approval)
+    {
+        return "waiting_approval".to_string();
+    }
+    "idle".to_string()
 }
 
 fn render_dialog(frame: &mut Frame<'_>, dialog: DialogState) {
@@ -168,4 +371,71 @@ fn centered_rect(area: Rect, width_percent: u16, height_percent: u16) -> Rect {
         ])
         .split(vertical[1]);
     horizontal[1]
+}
+
+fn unix_timestamp() -> i64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_secs() as i64)
+        .unwrap_or_default()
+}
+
+fn format_timestamp(timestamp: i64, now: i64) -> String {
+    let Ok(current) = OffsetDateTime::from_unix_timestamp(now) else {
+        return timestamp.to_string();
+    };
+    let Ok(value) = OffsetDateTime::from_unix_timestamp(timestamp) else {
+        return timestamp.to_string();
+    };
+
+    let same_day = Date::from_calendar_date(current.year(), current.month(), current.day()).ok()
+        == Date::from_calendar_date(value.year(), value.month(), value.day()).ok();
+
+    if same_day {
+        value
+            .format(&format_description!("[hour repr:24]:[minute]:[second]"))
+            .unwrap_or_else(|_| timestamp.to_string())
+    } else {
+        value
+            .format(&format_description!(
+                "[year]-[month]-[day] [hour repr:24]:[minute]"
+            ))
+            .unwrap_or_else(|_| timestamp.to_string())
+    }
+}
+
+fn format_elapsed(started_at: i64, now: i64) -> String {
+    let elapsed = now.saturating_sub(started_at);
+    let minutes = elapsed / 60;
+    let seconds = elapsed % 60;
+    format!("{minutes:02}:{seconds:02}")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{format_timestamp, render_markdown_entry};
+
+    #[test]
+    fn timestamps_render_in_human_readable_form_for_same_day_entries() {
+        let formatted = format_timestamp(1_775_200_010, 1_775_200_099);
+        assert_eq!(formatted.len(), 8);
+        assert!(formatted.contains(':'));
+    }
+
+    #[test]
+    fn markdown_renderer_formats_headings_lists_and_code_blocks() {
+        let lines = render_markdown_entry(
+            "[12:00:00] assistant: ",
+            "                     ",
+            "# Heading\n- item one\n```rust\nfn main() {}\n```",
+        );
+        let rendered = lines
+            .into_iter()
+            .map(|line| line.to_string())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(rendered.contains("Heading"));
+        assert!(rendered.contains("• item one"));
+        assert!(rendered.contains("fn main() {}"));
+    }
 }

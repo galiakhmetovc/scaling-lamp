@@ -10,12 +10,21 @@ pub fn handle_key(state: &mut TuiAppState, key: KeyEvent) -> Result<TuiAction, B
 
     let action = match key.code {
         KeyCode::Esc => TuiAction::OpenSessionScreen,
+        KeyCode::BackTab => TuiAction::CyclePreviousCommand,
         KeyCode::Enter => {
             let input = state.take_input_buffer();
             if input.trim().is_empty() {
                 TuiAction::None
             } else {
                 TuiAction::SubmitChatInput(input)
+            }
+        }
+        KeyCode::Tab => {
+            let input = state.take_input_buffer();
+            if input.trim().is_empty() {
+                TuiAction::None
+            } else {
+                TuiAction::QueueChatInput(input)
             }
         }
         KeyCode::Up => {
@@ -27,11 +36,11 @@ pub fn handle_key(state: &mut TuiAppState, key: KeyEvent) -> Result<TuiAction, B
             TuiAction::None
         }
         KeyCode::Backspace => {
-            state.input_buffer_mut().pop();
+            state.pop_input_char();
             TuiAction::None
         }
         KeyCode::Char(c) if key.modifiers.is_empty() || key.modifiers == KeyModifiers::SHIFT => {
-            state.input_buffer_mut().push(c);
+            state.push_input_char(c);
             TuiAction::None
         }
         _ => TuiAction::None,

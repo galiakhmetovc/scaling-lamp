@@ -225,6 +225,16 @@ Inside the chat screen:
 - reasoning is rendered as its own timestamped timeline entry type
 - tool activity stays compact as one status row per tool step
 - approvals are still command-driven through `/approve [approval-id]`
+- the session header shows the active run state, elapsed timer, queue counts,
+  context tokens, compactification count, and message count
+- the composer stays editable while a background run is active
+- `Enter` sends the current draft as soon as the current run reaches its next
+  completed tool step
+- `Tab` queues the current draft to send after the current run fully completes
+- `Shift+Tab` cycles matching slash commands in place
+- assistant markdown is rendered in a more readable terminal form
+- timestamps are rendered in human-readable clock form instead of raw unix
+  seconds
 
 Supported chat commands in the TUI:
 

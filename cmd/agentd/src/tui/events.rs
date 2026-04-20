@@ -10,4 +10,6 @@ pub enum TuiAction {
     OpenClearDialog,
     ConfirmDialog,
     SubmitChatInput(String),
+    QueueChatInput(String),
+    CyclePreviousCommand,
 }

@@ -3,6 +3,7 @@ use agent_runtime::mission::{JobResult, MissionStatus};
 use agent_runtime::provider::{ProviderContinuationMessage, ProviderToolOutput};
 use agent_runtime::session::TranscriptEntry;
 use agent_runtime::tool::{ToolCatalog, ToolRuntime};
+use std::sync::atomic::AtomicBool;
 
 impl ExecutionService {
     pub fn execute_chat_turn(
@@ -31,6 +32,22 @@ impl ExecutionService {
         session_id: &str,
         message: &str,
         now: i64,
+        observer: &mut Option<&mut dyn FnMut(ChatExecutionEvent)>,
+    ) -> Result<ChatTurnExecutionReport, ExecutionError> {
+        self.execute_chat_turn_with_control(
+            store, provider, session_id, message, now, None, observer,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn execute_chat_turn_with_control(
+        &self,
+        store: &PersistenceStore,
+        provider: &dyn ProviderDriver,
+        session_id: &str,
+        message: &str,
+        now: i64,
+        interrupt_after_tool_step: Option<&AtomicBool>,
         observer: &mut Option<&mut dyn FnMut(ChatExecutionEvent)>,
     ) -> Result<ChatTurnExecutionReport, ExecutionError> {
         let mut session_record = store
@@ -78,6 +95,7 @@ impl ExecutionService {
             &mut run,
             None,
             now,
+            interrupt_after_tool_step,
             observer,
         ) {
             Ok(response) => response,
@@ -86,6 +104,7 @@ impl ExecutionService {
                     source,
                     ExecutionError::PermissionDenied { .. }
                         | ExecutionError::ApprovalRequired { .. }
+                        | ExecutionError::InterruptedByQueuedInput
                 ) {
                     run.fail(source.to_string(), now)
                         .map_err(ExecutionError::RunTransition)?;
@@ -144,6 +163,28 @@ impl ExecutionService {
         run_id: &str,
         approval_id: &str,
         now: i64,
+        observer: &mut Option<&mut dyn FnMut(ChatExecutionEvent)>,
+    ) -> Result<ApprovalContinuationReport, ExecutionError> {
+        self.approve_model_run_with_control(
+            store,
+            provider,
+            run_id,
+            approval_id,
+            now,
+            None,
+            observer,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn approve_model_run_with_control(
+        &self,
+        store: &PersistenceStore,
+        provider: &dyn ProviderDriver,
+        run_id: &str,
+        approval_id: &str,
+        now: i64,
+        interrupt_after_tool_step: Option<&AtomicBool>,
         observer: &mut Option<&mut dyn FnMut(ChatExecutionEvent)>,
     ) -> Result<ApprovalContinuationReport, ExecutionError> {
         let run_snapshot = RunSnapshot::try_from(
@@ -301,6 +342,14 @@ impl ExecutionService {
             &parsed,
             observer,
         )?;
+        if interrupt_after_tool_step
+            .is_some_and(|flag| flag.load(std::sync::atomic::Ordering::SeqCst))
+        {
+            run.interrupt("superseded by queued user input", now)
+                .map_err(ExecutionError::RunTransition)?;
+            self.persist_run(store, &run)?;
+            return Err(ExecutionError::InterruptedByQueuedInput);
+        }
 
         let mut resumed_loop_state = loop_state;
         resumed_loop_state.pending_approval = None;
@@ -339,6 +388,7 @@ impl ExecutionService {
             &mut run,
             Some(resumed_loop_state),
             now,
+            interrupt_after_tool_step,
             observer,
         ) {
             Ok(response) => response,
@@ -381,6 +431,7 @@ impl ExecutionService {
                     source,
                     ExecutionError::PermissionDenied { .. }
                         | ExecutionError::ApprovalRequired { .. }
+                        | ExecutionError::InterruptedByQueuedInput
                 ) {
                     run.fail(source.to_string(), now)
                         .map_err(ExecutionError::RunTransition)?;

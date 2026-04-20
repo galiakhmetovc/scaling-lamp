@@ -1,5 +1,21 @@
 use crate::bootstrap::SessionSummary;
 use crate::tui::timeline::Timeline;
+use crate::tui::worker::{
+    ActiveRunHandle, ActiveRunPhase, ComposerQueue, QueuedDraft, QueuedDraftMode,
+};
+
+const COMMANDS: [&str; 10] = [
+    "/session",
+    "/new",
+    "/rename",
+    "/clear",
+    "/approve",
+    "/model",
+    "/reasoning",
+    "/think",
+    "/compact",
+    "/exit",
+];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TuiScreen {
@@ -15,7 +31,6 @@ pub enum DialogState {
     ConfirmClear { session_id: String },
 }
 
-#[derive(Debug, Clone)]
 pub struct TuiAppState {
     sessions: Vec<SessionSummary>,
     active_screen: TuiScreen,
@@ -25,8 +40,12 @@ pub struct TuiAppState {
     selected_session_index: usize,
     dialog_state: Option<DialogState>,
     input_buffer: String,
+    command_cycle_index: Option<usize>,
+    command_cycle_seed: Option<String>,
     scroll_offset: u16,
     timeline: Timeline,
+    composer_queue: ComposerQueue,
+    active_run: Option<ActiveRunHandle>,
     should_exit: bool,
 }
 
@@ -55,8 +74,12 @@ impl TuiAppState {
             selected_session_index,
             dialog_state: None,
             input_buffer: String::new(),
+            command_cycle_index: None,
+            command_cycle_seed: None,
             scroll_offset: 0,
             timeline: Timeline::default(),
+            composer_queue: ComposerQueue::default(),
+            active_run: None,
             should_exit: false,
         }
     }
@@ -121,6 +144,7 @@ impl TuiAppState {
         self.timeline = timeline;
         self.scroll_offset = 0;
         self.input_buffer.clear();
+        self.command_cycle_index = None;
         self.dialog_state = None;
         self.active_screen = TuiScreen::Chat;
     }
@@ -270,11 +294,27 @@ impl TuiAppState {
         &self.input_buffer
     }
 
-    pub fn input_buffer_mut(&mut self) -> &mut String {
-        &mut self.input_buffer
+    pub fn replace_input_buffer(&mut self, value: impl Into<String>) {
+        self.input_buffer = value.into();
+        self.command_cycle_index = None;
+        self.command_cycle_seed = None;
+    }
+
+    pub fn push_input_char(&mut self, value: char) {
+        self.input_buffer.push(value);
+        self.command_cycle_index = None;
+        self.command_cycle_seed = None;
+    }
+
+    pub fn pop_input_char(&mut self) {
+        self.input_buffer.pop();
+        self.command_cycle_index = None;
+        self.command_cycle_seed = None;
     }
 
     pub fn take_input_buffer(&mut self) -> String {
+        self.command_cycle_index = None;
+        self.command_cycle_seed = None;
         std::mem::take(&mut self.input_buffer)
     }
 
@@ -301,6 +341,107 @@ impl TuiAppState {
     pub fn replace_timeline(&mut self, timeline: Timeline) {
         self.timeline = timeline;
         self.scroll_offset = 0;
+    }
+
+    pub fn has_active_run(&self) -> bool {
+        self.active_run.is_some()
+    }
+
+    pub fn active_run(&self) -> Option<&ActiveRunHandle> {
+        self.active_run.as_ref()
+    }
+
+    pub fn active_run_mut(&mut self) -> Option<&mut ActiveRunHandle> {
+        self.active_run.as_mut()
+    }
+
+    pub fn set_active_run(&mut self, active_run: ActiveRunHandle) {
+        self.active_run = Some(active_run);
+    }
+
+    pub fn take_active_run(&mut self) -> Option<ActiveRunHandle> {
+        self.active_run.take()
+    }
+
+    pub fn queue_draft(&mut self, content: String, queued_at: i64, mode: QueuedDraftMode) {
+        self.composer_queue.enqueue(QueuedDraft {
+            content,
+            queued_at,
+            mode,
+        });
+        if matches!(mode, QueuedDraftMode::Priority)
+            && let Some(active_run) = self.active_run.as_ref()
+        {
+            active_run.queue_interrupt_after_tool_step();
+        }
+    }
+
+    pub fn next_priority_draft(&mut self) -> Option<QueuedDraft> {
+        self.composer_queue.pop_priority()
+    }
+
+    pub fn next_deferred_draft(&mut self) -> Option<QueuedDraft> {
+        self.composer_queue.pop_deferred()
+    }
+
+    pub fn queued_draft_count(&self) -> usize {
+        self.composer_queue.total_len()
+    }
+
+    pub fn queued_priority_count(&self) -> usize {
+        self.composer_queue.priority_len()
+    }
+
+    pub fn queued_deferred_count(&self) -> usize {
+        self.composer_queue.deferred_len()
+    }
+
+    pub fn cycle_previous_command(&mut self) -> bool {
+        if !self.input_buffer.starts_with('/') {
+            return false;
+        }
+
+        let (typed_prefix, suffix) = self
+            .input_buffer
+            .split_once(' ')
+            .map(|(command, rest)| (command, Some(rest)))
+            .unwrap_or((self.input_buffer.as_str(), None));
+        let command_prefix = self
+            .command_cycle_seed
+            .clone()
+            .unwrap_or_else(|| typed_prefix.to_string());
+        let matches = COMMANDS
+            .iter()
+            .copied()
+            .filter(|command| command.starts_with(command_prefix.as_str()))
+            .collect::<Vec<_>>();
+        if matches.is_empty() {
+            return false;
+        }
+        let next_index = self
+            .command_cycle_index
+            .map(|index| (index + 1) % matches.len())
+            .unwrap_or(0);
+        self.command_cycle_index = Some(next_index);
+        self.command_cycle_seed = Some(command_prefix);
+        self.input_buffer = match suffix {
+            Some(rest) if !rest.is_empty() => format!("{} {}", matches[next_index], rest),
+            _ => matches[next_index].to_string(),
+        };
+        true
+    }
+
+    pub fn reset_command_cycle(&mut self) {
+        self.command_cycle_index = None;
+        self.command_cycle_seed = None;
+    }
+
+    pub fn command_hints(&self) -> &'static [&'static str] {
+        &COMMANDS
+    }
+
+    pub fn current_phase(&self) -> Option<&ActiveRunPhase> {
+        self.active_run.as_ref().map(ActiveRunHandle::phase)
     }
 
     pub fn should_exit(&self) -> bool {

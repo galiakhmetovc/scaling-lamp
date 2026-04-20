@@ -17,6 +17,7 @@ use std::fmt;
 use std::fs;
 use std::io::{BufRead, Write};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::AtomicBool;
 use std::time::{SystemTime, SystemTimeError, UNIX_EPOCH};
 
 #[derive(Debug)]
@@ -49,7 +50,7 @@ pub enum BootstrapError {
     },
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct App {
     pub config: AppConfig,
     pub persistence: PersistenceScaffold,
@@ -507,16 +508,28 @@ impl App {
         now: i64,
         observer: &mut dyn FnMut(execution::ChatExecutionEvent),
     ) -> Result<execution::ChatTurnExecutionReport, BootstrapError> {
+        self.execute_chat_turn_with_control_and_observer(session_id, message, now, None, observer)
+    }
+
+    pub fn execute_chat_turn_with_control_and_observer(
+        &self,
+        session_id: &str,
+        message: &str,
+        now: i64,
+        interrupt_after_tool_step: Option<&AtomicBool>,
+        observer: &mut dyn FnMut(execution::ChatExecutionEvent),
+    ) -> Result<execution::ChatTurnExecutionReport, BootstrapError> {
         let store = self.store()?;
         let provider = self.provider_driver()?;
         let mut observer = Some(observer as &mut dyn FnMut(execution::ChatExecutionEvent));
         self.execution_service()
-            .execute_chat_turn_with_observer(
+            .execute_chat_turn_with_control(
                 &store,
                 provider.as_ref(),
                 session_id,
                 message,
                 now,
+                interrupt_after_tool_step,
                 &mut observer,
             )
             .map_err(BootstrapError::Execution)
@@ -570,6 +583,17 @@ impl App {
         now: i64,
         observer: &mut dyn FnMut(execution::ChatExecutionEvent),
     ) -> Result<execution::ApprovalContinuationReport, BootstrapError> {
+        self.approve_run_with_control_and_observer(run_id, approval_id, now, None, observer)
+    }
+
+    pub fn approve_run_with_control_and_observer(
+        &self,
+        run_id: &str,
+        approval_id: &str,
+        now: i64,
+        interrupt_after_tool_step: Option<&AtomicBool>,
+        observer: &mut dyn FnMut(execution::ChatExecutionEvent),
+    ) -> Result<execution::ApprovalContinuationReport, BootstrapError> {
         let store = self.store()?;
         let snapshot = RunSnapshot::try_from(store.get_run(run_id)?.ok_or_else(|| {
             BootstrapError::MissingRecord {
@@ -584,12 +608,13 @@ impl App {
             let mut observer = Some(observer as &mut dyn FnMut(execution::ChatExecutionEvent));
             return self
                 .execution_service()
-                .approve_model_run_with_observer(
+                .approve_model_run_with_control(
                     &store,
                     provider.as_ref(),
                     run_id,
                     approval_id,
                     now,
+                    interrupt_after_tool_step,
                     &mut observer,
                 )
                 .map_err(BootstrapError::Execution);

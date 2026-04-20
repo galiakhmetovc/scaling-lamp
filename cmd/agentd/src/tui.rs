@@ -3,9 +3,10 @@ pub mod events;
 pub mod render;
 pub mod screens;
 pub mod timeline;
+pub mod worker;
 
 use crate::bootstrap::{App, BootstrapError};
-use crate::execution::{ChatExecutionEvent, ExecutionError};
+use crate::execution::ChatExecutionEvent;
 use app::{DialogState, TuiAppState};
 use crossterm::event::{self, Event, KeyCode};
 use crossterm::execute;
@@ -18,6 +19,7 @@ use ratatui::backend::CrosstermBackend;
 use std::io::{self, Stdout};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use timeline::Timeline;
+use worker::{ActiveRunHandle, QueuedDraftMode, WorkerEvent, WorkerOutcome};
 
 pub use app::{DialogState as TuiDialogState, TuiScreen};
 
@@ -51,12 +53,17 @@ impl Drop for TerminalGuard {
 pub fn run(app: &App) -> Result<(), BootstrapError> {
     let mut state = app::TuiAppState::new(app.list_session_summaries()?, None);
     let mut terminal = TerminalGuard::new()?;
-
-    loop {
+    let mut redraw = |state: &TuiAppState| {
         terminal
             .terminal()
-            .draw(|frame| render::render(frame, &state))
-            .map_err(BootstrapError::Stream)?;
+            .draw(|frame| render::render(frame, state))
+            .map(|_| ())
+            .map_err(BootstrapError::Stream)
+    };
+
+    loop {
+        pump_background(app, &mut state, &mut redraw)?;
+        redraw(&state)?;
 
         if state.should_exit() {
             return Ok(());
@@ -83,13 +90,6 @@ pub fn run(app: &App) -> Result<(), BootstrapError> {
             continue;
         }
 
-        let mut redraw = |state: &TuiAppState| {
-            terminal
-                .terminal()
-                .draw(|frame| render::render(frame, state))
-                .map(|_| ())
-                .map_err(BootstrapError::Stream)
-        };
         dispatch_action(app, &mut state, action, &mut redraw)?;
     }
 }
@@ -173,8 +173,21 @@ pub fn dispatch_action(
             if input.trim_start().starts_with('/') {
                 handle_command(app, state, input.trim(), redraw)?;
             } else {
-                send_chat_message(app, state, input.trim(), redraw)?;
+                submit_chat_message(app, state, input.trim(), QueuedDraftMode::Priority)?;
             }
+        }
+        TuiAction::QueueChatInput(input) => {
+            if input.trim_start().starts_with('/') {
+                state.timeline_mut().push_system(
+                    "commands cannot be queued; press Enter to execute the command",
+                    unix_timestamp()?,
+                );
+            } else {
+                submit_chat_message(app, state, input.trim(), QueuedDraftMode::Deferred)?;
+            }
+        }
+        TuiAction::CyclePreviousCommand => {
+            state.cycle_previous_command();
         }
     }
 
@@ -281,11 +294,11 @@ fn handle_command(
     Ok(())
 }
 
-fn send_chat_message(
+fn submit_chat_message(
     app: &App,
     state: &mut TuiAppState,
     message: &str,
-    redraw: &mut dyn FnMut(&TuiAppState) -> Result<(), BootstrapError>,
+    mode: QueuedDraftMode,
 ) -> Result<(), BootstrapError> {
     if message.is_empty() {
         return Ok(());
@@ -297,54 +310,141 @@ fn send_chat_message(
             reason: "no current session selected".to_string(),
         })?
         .to_string();
-    if app.latest_pending_approval(&session_id, None)?.is_some() {
-        state.timeline_mut().push_system(
-            "finish the pending approval before sending another message",
-            unix_timestamp()?,
-        );
+
+    if state.has_active_run() || app.latest_pending_approval(&session_id, None)?.is_some() {
+        state.queue_draft(message.to_string(), unix_timestamp()?, mode);
         return Ok(());
     }
 
-    let sent_at = unix_timestamp()?;
-    state.timeline_mut().push_user(message, sent_at);
-    redraw(state)?;
+    start_chat_run(app, state, &session_id, message, unix_timestamp()?)?;
+    Ok(())
+}
 
-    let mut emit_error = None;
-    let mut emit = |event: ChatExecutionEvent| {
-        if emit_error.is_some() {
-            return;
-        }
-        let at = match unix_timestamp() {
-            Ok(now) => now,
-            Err(error) => {
-                emit_error = Some(error);
-                return;
-            }
-        };
-        match event {
-            ChatExecutionEvent::ReasoningDelta(delta) => {
-                state.timeline_mut().push_reasoning_delta(&delta, at);
-            }
-            ChatExecutionEvent::AssistantTextDelta(delta) => {
-                state.timeline_mut().push_assistant_delta(&delta, at);
-            }
-            ChatExecutionEvent::ToolStatus { tool_name, status } => {
-                state
-                    .timeline_mut()
-                    .update_tool_status(&tool_name, status, at);
-            }
-        }
-        if let Err(error) = redraw(state) {
-            emit_error = Some(error);
-        }
+fn approve_pending(
+    app: &App,
+    state: &mut TuiAppState,
+    session_id: &str,
+    requested_approval_id: Option<String>,
+    _redraw: &mut dyn FnMut(&TuiAppState) -> Result<(), BootstrapError>,
+) -> Result<(), BootstrapError> {
+    let Some(pending) =
+        app.latest_pending_approval(session_id, requested_approval_id.as_deref())?
+    else {
+        state.timeline_mut().push_system(
+            &format!("no pending approval for session_id={session_id}"),
+            unix_timestamp()?,
+        );
+        return Ok(());
     };
-    let result = app.execute_chat_turn_with_observer(&session_id, message, sent_at, &mut emit);
-    if let Some(error) = emit_error {
-        return Err(error);
+    state.timeline_mut().remove_approval(&pending.approval_id);
+    start_approval_run(
+        app,
+        state,
+        session_id,
+        &pending.run_id,
+        &pending.approval_id,
+        unix_timestamp()?,
+    )?;
+    Ok(())
+}
+
+pub fn pump_background(
+    app: &App,
+    state: &mut TuiAppState,
+    redraw: &mut dyn FnMut(&TuiAppState) -> Result<(), BootstrapError>,
+) -> Result<(), BootstrapError> {
+    let Some(events) = state.active_run_mut().map(ActiveRunHandle::drain_events) else {
+        return Ok(());
+    };
+    let mut outcome = None;
+    for event in events {
+        match event {
+            WorkerEvent::Chat(chat_event) => {
+                let at = unix_timestamp()?;
+                match chat_event {
+                    ChatExecutionEvent::ReasoningDelta(delta) => {
+                        state.timeline_mut().push_reasoning_delta(&delta, at);
+                    }
+                    ChatExecutionEvent::AssistantTextDelta(delta) => {
+                        state.timeline_mut().push_assistant_delta(&delta, at);
+                    }
+                    ChatExecutionEvent::ToolStatus { tool_name, status } => {
+                        state
+                            .timeline_mut()
+                            .update_tool_status(&tool_name, status, at);
+                    }
+                }
+            }
+            WorkerEvent::Finished(result) => outcome = Some(result),
+        }
     }
 
-    match result {
-        Ok(report) => {
+    let finished = outcome.is_some();
+    if finished {
+        let mut active_run = state.take_active_run().expect("active run");
+        active_run.join();
+        handle_worker_outcome(
+            app,
+            state,
+            active_run.session_id().to_string(),
+            outcome.expect("worker outcome"),
+        )?;
+    }
+
+    if state.has_active_run() || finished {
+        redraw(state)?;
+    }
+
+    Ok(())
+}
+
+fn start_chat_run(
+    app: &App,
+    state: &mut TuiAppState,
+    session_id: &str,
+    message: &str,
+    sent_at: i64,
+) -> Result<(), BootstrapError> {
+    state.timeline_mut().push_user(message, sent_at);
+    state.set_active_run(ActiveRunHandle::spawn_chat(
+        app.clone(),
+        session_id.to_string(),
+        message.to_string(),
+        sent_at,
+    ));
+    Ok(())
+}
+
+fn start_approval_run(
+    app: &App,
+    state: &mut TuiAppState,
+    session_id: &str,
+    run_id: &str,
+    approval_id: &str,
+    started_at: i64,
+) -> Result<(), BootstrapError> {
+    let should_interrupt_after_tool_step = state.queued_priority_count() > 0;
+    state.set_active_run(ActiveRunHandle::spawn_approval(
+        app.clone(),
+        session_id.to_string(),
+        run_id.to_string(),
+        approval_id.to_string(),
+        started_at,
+    ));
+    if should_interrupt_after_tool_step && let Some(active_run) = state.active_run() {
+        active_run.queue_interrupt_after_tool_step();
+    }
+    Ok(())
+}
+
+fn handle_worker_outcome(
+    app: &App,
+    state: &mut TuiAppState,
+    session_id: String,
+    outcome: WorkerOutcome,
+) -> Result<(), BootstrapError> {
+    match outcome {
+        WorkerOutcome::ChatCompleted(report) => {
             if !report.output_text.is_empty()
                 && !state
                     .timeline()
@@ -359,78 +459,7 @@ fn send_chat_message(
             }
             state.timeline_mut().finish_turn();
         }
-        Err(BootstrapError::Execution(ExecutionError::ApprovalRequired { .. })) => {
-            state.timeline_mut().finish_turn();
-        }
-        Err(error) => {
-            report_nonfatal_execution_error(state, "chat failed", &error)?;
-            return Ok(());
-        }
-    }
-
-    refresh_current_session(app, state)?;
-    Ok(())
-}
-
-fn approve_pending(
-    app: &App,
-    state: &mut TuiAppState,
-    session_id: &str,
-    requested_approval_id: Option<String>,
-    redraw: &mut dyn FnMut(&TuiAppState) -> Result<(), BootstrapError>,
-) -> Result<(), BootstrapError> {
-    let Some(pending) =
-        app.latest_pending_approval(session_id, requested_approval_id.as_deref())?
-    else {
-        state.timeline_mut().push_system(
-            &format!("no pending approval for session_id={session_id}"),
-            unix_timestamp()?,
-        );
-        return Ok(());
-    };
-    state.timeline_mut().remove_approval(&pending.approval_id);
-
-    let mut emit_error = None;
-    let mut emit = |event: ChatExecutionEvent| {
-        if emit_error.is_some() {
-            return;
-        }
-        let at = match unix_timestamp() {
-            Ok(now) => now,
-            Err(error) => {
-                emit_error = Some(error);
-                return;
-            }
-        };
-        match event {
-            ChatExecutionEvent::ReasoningDelta(delta) => {
-                state.timeline_mut().push_reasoning_delta(&delta, at);
-            }
-            ChatExecutionEvent::AssistantTextDelta(delta) => {
-                state.timeline_mut().push_assistant_delta(&delta, at);
-            }
-            ChatExecutionEvent::ToolStatus { tool_name, status } => {
-                state
-                    .timeline_mut()
-                    .update_tool_status(&tool_name, status, at);
-            }
-        }
-        if let Err(error) = redraw(state) {
-            emit_error = Some(error);
-        }
-    };
-    let result = app.approve_run_with_observer(
-        &pending.run_id,
-        &pending.approval_id,
-        unix_timestamp()?,
-        &mut emit,
-    );
-    if let Some(error) = emit_error {
-        return Err(error);
-    }
-
-    match result {
-        Ok(report) => {
+        WorkerOutcome::ApprovalCompleted(report) => {
             if let Some(output_text) = report.output_text
                 && !output_text.is_empty()
                 && !state
@@ -446,26 +475,55 @@ fn approve_pending(
             }
             state.timeline_mut().finish_turn();
         }
-        Err(error) => {
-            report_nonfatal_execution_error(state, "approval failed", &error)?;
-            return Ok(());
+        WorkerOutcome::ApprovalRequired {
+            approval_id,
+            reason,
+        } => {
+            state
+                .timeline_mut()
+                .push_approval(&approval_id, &reason, unix_timestamp()?);
+            state.timeline_mut().finish_turn();
+        }
+        WorkerOutcome::InterruptedByQueuedInput => {
+            state.timeline_mut().push_system(
+                "current response interrupted by queued input",
+                unix_timestamp()?,
+            );
+            state.timeline_mut().finish_turn();
+        }
+        WorkerOutcome::Failed(reason) => {
+            state
+                .timeline_mut()
+                .push_system(&format!("chat failed: {reason}"), unix_timestamp()?);
+            state.timeline_mut().finish_turn();
         }
     }
 
     refresh_current_session(app, state)?;
-    Ok(())
+    schedule_next_draft_if_idle(app, state, &session_id)
 }
 
-fn report_nonfatal_execution_error(
+fn schedule_next_draft_if_idle(
+    app: &App,
     state: &mut TuiAppState,
-    prefix: &str,
-    error: &BootstrapError,
+    session_id: &str,
 ) -> Result<(), BootstrapError> {
-    state
-        .timeline_mut()
-        .push_system(&format!("{prefix}: {error}"), unix_timestamp()?);
-    state.timeline_mut().finish_turn();
-    Ok(())
+    if state.has_active_run() || app.latest_pending_approval(session_id, None)?.is_some() {
+        return Ok(());
+    }
+    let next_draft = state
+        .next_priority_draft()
+        .or_else(|| state.next_deferred_draft());
+    let Some(next_draft) = next_draft else {
+        return Ok(());
+    };
+    start_chat_run(
+        app,
+        state,
+        session_id,
+        next_draft.content.as_str(),
+        next_draft.queued_at.max(unix_timestamp()?),
+    )
 }
 
 fn load_session_into_state(

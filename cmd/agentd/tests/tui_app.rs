@@ -5,12 +5,13 @@ use agent_runtime::provider::{ConfiguredProvider, ProviderKind};
 use agent_runtime::run::{ApprovalRequest, RunEngine, RunSnapshot, RunStatus};
 use agentd::bootstrap::{SessionPreferencesPatch, SessionSummary, build_from_config};
 use agentd::tui::app::{DialogState, TuiAppState, TuiScreen};
-use agentd::tui::dispatch_action;
 use agentd::tui::events::TuiAction;
 use agentd::tui::timeline::{Timeline, TimelineEntryKind};
+use agentd::tui::{dispatch_action, pump_background};
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::TcpListener;
 use std::thread;
+use std::time::{Duration, Instant};
 
 fn summary(id: &str, title: &str) -> SessionSummary {
     SessionSummary {
@@ -339,6 +340,7 @@ fn tui_chat_commands_and_timeline_approve_targets_latest_or_explicit_pending_app
         &mut render,
     )
     .expect("approve latest");
+    wait_for_tui_idle(&app, &mut state, &mut render);
 
     let latest = RunSnapshot::try_from(
         store
@@ -356,6 +358,7 @@ fn tui_chat_commands_and_timeline_approve_targets_latest_or_explicit_pending_app
         &mut render,
     )
     .expect("approve explicit");
+    wait_for_tui_idle(&app, &mut state, &mut render);
 
     let explicit = RunSnapshot::try_from(
         store
@@ -460,6 +463,7 @@ data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_tui_stream\",
         &mut redraw,
     )
     .expect("dispatch chat");
+    wait_for_tui_idle(&app, &mut state, &mut redraw);
     handle.join().expect("join sse");
 
     let entries = state.timeline().entries(true);
@@ -521,6 +525,7 @@ data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_tui_hidden_re
         &mut redraw,
     )
     .expect("dispatch chat");
+    wait_for_tui_idle(&app, &mut state, &mut redraw);
     handle.join().expect("join sse");
 
     assert!(
@@ -573,11 +578,249 @@ fn tui_chat_send_provider_failure_stays_inside_timeline_instead_of_exiting() {
         TuiAction::SubmitChatInput("hello timeout path".to_string()),
         &mut redraw,
     );
+    wait_for_tui_idle(&app, &mut state, &mut redraw);
 
     assert!(result.is_ok(), "provider failure should stay in the TUI");
     assert!(state.timeline().entries(true).iter().any(|entry| {
         matches!(entry.kind, TimelineEntryKind::System) && entry.content.starts_with("chat failed:")
     }));
+}
+
+#[test]
+fn tui_chat_submit_returns_without_blocking_on_provider_response() {
+    let stream = "data: {\"type\":\"response.output_text.delta\",\"item_id\":\"msg_nonblocking\",\"output_index\":0,\"content_index\":0,\"delta\":\"hello later\"}\n\n\
+data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_nonblocking\",\"model\":\"gpt-5.4\",\"output\":[{\"id\":\"msg_nonblocking\",\"type\":\"message\",\"status\":\"completed\",\"role\":\"assistant\",\"content\":[{\"type\":\"output_text\",\"text\":\"hello later\",\"annotations\":[]}]}],\"usage\":{\"input_tokens\":9,\"output_tokens\":4,\"total_tokens\":13}}}\n\n".to_string();
+    let (api_base, handle) =
+        spawn_delayed_sse_server_sequence(vec![(Duration::from_millis(400), stream)]);
+    let temp = tempfile::tempdir().expect("tempdir");
+    let app = build_from_config(AppConfig {
+        data_dir: temp.path().join("state-root"),
+        provider: ConfiguredProvider {
+            kind: ProviderKind::OpenAiResponses,
+            api_base: Some(format!("{api_base}/v1")),
+            api_key: Some("test-key".to_string()),
+            default_model: Some("gpt-5.4".to_string()),
+            ..ConfiguredProvider::default()
+        },
+        ..AppConfig::default()
+    })
+    .expect("build app");
+    let session = app
+        .create_session_auto(Some("Non Blocking Session"))
+        .expect("create session");
+    let mut state = TuiAppState::new(
+        app.list_session_summaries().expect("list sessions"),
+        Some(session.id.clone()),
+    );
+    let mut redraw = |_state: &TuiAppState| Ok::<_, agentd::bootstrap::BootstrapError>(());
+
+    let started = Instant::now();
+    dispatch_action(
+        &app,
+        &mut state,
+        TuiAction::SubmitChatInput("hello nonblocking".to_string()),
+        &mut redraw,
+    )
+    .expect("dispatch chat");
+    let elapsed = started.elapsed();
+
+    handle.join().expect("join delayed sse");
+
+    assert!(
+        elapsed < Duration::from_millis(250),
+        "expected TUI submit to return quickly, got {:?}",
+        elapsed
+    );
+}
+
+#[test]
+fn tui_composer_remains_editable_while_a_background_run_is_active() {
+    let stream = "data: {\"type\":\"response.output_text.delta\",\"item_id\":\"msg_background_edit\",\"output_index\":0,\"content_index\":0,\"delta\":\"hello later\"}\n\n\
+data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_background_edit\",\"model\":\"gpt-5.4\",\"output\":[{\"id\":\"msg_background_edit\",\"type\":\"message\",\"status\":\"completed\",\"role\":\"assistant\",\"content\":[{\"type\":\"output_text\",\"text\":\"hello later\",\"annotations\":[]}]}],\"usage\":{\"input_tokens\":9,\"output_tokens\":4,\"total_tokens\":13}}}\n\n".to_string();
+    let (api_base, handle) =
+        spawn_delayed_sse_server_sequence(vec![(Duration::from_millis(400), stream)]);
+    let temp = tempfile::tempdir().expect("tempdir");
+    let app = build_from_config(AppConfig {
+        data_dir: temp.path().join("state-root"),
+        provider: ConfiguredProvider {
+            kind: ProviderKind::OpenAiResponses,
+            api_base: Some(format!("{api_base}/v1")),
+            api_key: Some("test-key".to_string()),
+            default_model: Some("gpt-5.4".to_string()),
+            ..ConfiguredProvider::default()
+        },
+        ..AppConfig::default()
+    })
+    .expect("build app");
+    let session = app
+        .create_session_auto(Some("Editable Composer Session"))
+        .expect("create session");
+    let mut state = TuiAppState::new(
+        app.list_session_summaries().expect("list sessions"),
+        Some(session.id.clone()),
+    );
+    let mut redraw = |_state: &TuiAppState| Ok::<_, agentd::bootstrap::BootstrapError>(());
+
+    dispatch_action(
+        &app,
+        &mut state,
+        TuiAction::SubmitChatInput("hello nonblocking".to_string()),
+        &mut redraw,
+    )
+    .expect("dispatch chat");
+    state.push_input_char('n');
+    state.push_input_char('e');
+    state.push_input_char('x');
+    state.push_input_char('t');
+
+    assert!(state.has_active_run());
+    assert_eq!(state.input_buffer(), "next");
+
+    wait_for_tui_idle(&app, &mut state, &mut redraw);
+    handle.join().expect("join delayed sse");
+}
+
+#[test]
+fn tui_priority_submit_interrupts_after_a_completed_tool_step() {
+    let (api_base, handle) = spawn_openai_priority_server();
+    let temp = tempfile::tempdir().expect("tempdir");
+    let app = build_from_config(AppConfig {
+        data_dir: temp.path().join("state-root"),
+        provider: ConfiguredProvider {
+            kind: ProviderKind::OpenAiResponses,
+            api_base: Some(format!("{api_base}/v1")),
+            api_key: Some("test-key".to_string()),
+            default_model: Some("gpt-5.4".to_string()),
+            ..ConfiguredProvider::default()
+        },
+        ..AppConfig::default()
+    })
+    .expect("build app");
+    let session = app
+        .create_session_auto(Some("Priority Session"))
+        .expect("create session");
+    let mut state = TuiAppState::new(
+        app.list_session_summaries().expect("list sessions"),
+        Some(session.id.clone()),
+    );
+    let mut redraw = |_state: &TuiAppState| Ok::<_, agentd::bootstrap::BootstrapError>(());
+
+    dispatch_action(
+        &app,
+        &mut state,
+        TuiAction::SubmitChatInput("plan first".to_string()),
+        &mut redraw,
+    )
+    .expect("dispatch initial chat");
+    dispatch_action(
+        &app,
+        &mut state,
+        TuiAction::SubmitChatInput("urgent follow-up".to_string()),
+        &mut redraw,
+    )
+    .expect("dispatch queued priority chat");
+
+    wait_for_tui_idle(&app, &mut state, &mut redraw);
+    handle.join().expect("join sse");
+
+    let entries = state.timeline().entries(true);
+    assert!(entries.iter().any(|entry| {
+        matches!(entry.kind, TimelineEntryKind::Assistant) && entry.content == "fresh answer"
+    }));
+    assert!(!entries.iter().any(|entry| {
+        matches!(entry.kind, TimelineEntryKind::Assistant) && entry.content == "stale answer"
+    }));
+}
+
+#[test]
+fn tui_deferred_queue_sends_after_the_current_run_completes() {
+    let first = openai_stream_message_response("resp_tui_deferred_first", "first answer");
+    let second = openai_stream_message_response("resp_tui_deferred_second", "second answer");
+    let (api_base, handle) = spawn_delayed_sse_server_sequence(vec![
+        (Duration::from_millis(200), first),
+        (Duration::from_millis(10), second),
+    ]);
+    let temp = tempfile::tempdir().expect("tempdir");
+    let app = build_from_config(AppConfig {
+        data_dir: temp.path().join("state-root"),
+        provider: ConfiguredProvider {
+            kind: ProviderKind::OpenAiResponses,
+            api_base: Some(format!("{api_base}/v1")),
+            api_key: Some("test-key".to_string()),
+            default_model: Some("gpt-5.4".to_string()),
+            ..ConfiguredProvider::default()
+        },
+        ..AppConfig::default()
+    })
+    .expect("build app");
+    let session = app
+        .create_session_auto(Some("Deferred Queue Session"))
+        .expect("create session");
+    let mut state = TuiAppState::new(
+        app.list_session_summaries().expect("list sessions"),
+        Some(session.id.clone()),
+    );
+    let mut redraw = |_state: &TuiAppState| Ok::<_, agentd::bootstrap::BootstrapError>(());
+
+    dispatch_action(
+        &app,
+        &mut state,
+        TuiAction::SubmitChatInput("first request".to_string()),
+        &mut redraw,
+    )
+    .expect("dispatch first request");
+    dispatch_action(
+        &app,
+        &mut state,
+        TuiAction::QueueChatInput("second request".to_string()),
+        &mut redraw,
+    )
+    .expect("queue second request");
+
+    wait_for_tui_idle(&app, &mut state, &mut redraw);
+    handle.join().expect("join delayed sequence");
+
+    let assistant_messages = state
+        .timeline()
+        .entries(true)
+        .into_iter()
+        .filter(|entry| matches!(entry.kind, TimelineEntryKind::Assistant))
+        .map(|entry| entry.content.clone())
+        .collect::<Vec<_>>();
+    assert_eq!(assistant_messages, vec!["first answer", "second answer"]);
+}
+
+#[test]
+fn tui_shift_tab_cycles_slash_commands_in_place() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let app = build_from_config(AppConfig {
+        data_dir: temp.path().join("state-root"),
+        ..AppConfig::default()
+    })
+    .expect("build app");
+    let mut state = TuiAppState::new(
+        vec![summary("session-a", "Session A")],
+        Some("session-a".to_string()),
+    );
+    state.replace_input_buffer("/r");
+
+    dispatch_action(
+        &app,
+        &mut state,
+        TuiAction::CyclePreviousCommand,
+        &mut |_state| Ok::<_, agentd::bootstrap::BootstrapError>(()),
+    )
+    .expect("cycle commands first");
+    assert_eq!(state.input_buffer(), "/rename");
+
+    dispatch_action(
+        &app,
+        &mut state,
+        TuiAction::CyclePreviousCommand,
+        &mut |_state| Ok::<_, agentd::bootstrap::BootstrapError>(()),
+    )
+    .expect("cycle commands second");
+    assert_eq!(state.input_buffer(), "/reasoning");
 }
 
 #[test]
@@ -678,6 +921,110 @@ fn spawn_sse_server_sequence(responses: Vec<String>) -> (String, thread::JoinHan
     (format!("http://{}", address), handle)
 }
 
+fn openai_stream_message_response(response_id: &str, text: &str) -> String {
+    let text = serde_json::to_string(text).expect("serialize text");
+    format!(
+        "data: {{\"type\":\"response.completed\",\"response\":{{\"id\":\"{response_id}\",\"model\":\"gpt-5.4\",\"output\":[{{\"id\":\"msg_1\",\"type\":\"message\",\"status\":\"completed\",\"role\":\"assistant\",\"content\":[{{\"type\":\"output_text\",\"text\":{text},\"annotations\":[]}}]}}],\"usage\":{{\"input_tokens\":16,\"output_tokens\":3,\"total_tokens\":19}}}}}}\n\n"
+    )
+}
+
+fn openai_stream_tool_call_response(
+    response_id: &str,
+    call_id: &str,
+    tool_name: &str,
+    arguments: &str,
+) -> String {
+    let arguments = serde_json::to_string(arguments).expect("serialize arguments");
+    format!(
+        "data: {{\"type\":\"response.completed\",\"response\":{{\"id\":\"{response_id}\",\"model\":\"gpt-5.4\",\"output\":[{{\"id\":\"fc_1\",\"type\":\"function_call\",\"status\":\"completed\",\"call_id\":\"{call_id}\",\"name\":\"{tool_name}\",\"arguments\":{arguments}}}],\"usage\":{{\"input_tokens\":19,\"output_tokens\":7,\"total_tokens\":26}}}}}}\n\n"
+    )
+}
+
+fn spawn_openai_priority_server() -> (String, thread::JoinHandle<()>) {
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind priority server");
+    listener
+        .set_nonblocking(true)
+        .expect("set nonblocking listener");
+    let address = listener.local_addr().expect("priority local addr");
+
+    let handle = thread::spawn(move || {
+        let mut last_activity = Instant::now();
+        loop {
+            match listener.accept() {
+                Ok((mut stream, _)) => {
+                    last_activity = Instant::now();
+                    stream
+                        .set_read_timeout(Some(Duration::from_secs(2)))
+                        .expect("set read timeout");
+                    let mut reader = BufReader::new(stream.try_clone().expect("clone stream"));
+                    let mut raw_request = String::new();
+                    loop {
+                        let mut line = String::new();
+                        let read = reader.read_line(&mut line).expect("read request line");
+                        if read == 0 {
+                            break;
+                        }
+                        raw_request.push_str(&line);
+                        if line == "\r\n" {
+                            break;
+                        }
+                    }
+                    let content_length = raw_request
+                        .lines()
+                        .find_map(|header| {
+                            let lower = header.to_ascii_lowercase();
+                            lower
+                                .strip_prefix("content-length:")
+                                .map(str::trim)
+                                .and_then(|value| value.parse::<usize>().ok())
+                        })
+                        .unwrap_or(0);
+                    if content_length > 0 {
+                        let mut discard = vec![0u8; content_length];
+                        reader.read_exact(&mut discard).expect("read body");
+                        raw_request.push_str(&String::from_utf8(discard).expect("utf8 body"));
+                    }
+
+                    let body = if raw_request.contains("urgent follow-up") {
+                        openai_stream_message_response("resp_tui_priority_fresh", "fresh answer")
+                    } else if raw_request
+                        .to_ascii_lowercase()
+                        .contains("\"type\":\"function_call_output\"")
+                    {
+                        openai_stream_message_response("resp_tui_priority_stale", "stale answer")
+                    } else {
+                        openai_stream_tool_call_response(
+                            "resp_tui_priority_tool",
+                            "call_plan_write",
+                            "plan_write",
+                            r#"{"items":[{"id":"p1","content":"inspect request","status":"in_progress"}]}"#,
+                        )
+                    };
+
+                    let response = format!(
+                        "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nCache-Control: no-cache\r\nConnection: close\r\nContent-Length: {}\r\n\r\n{}",
+                        body.len(),
+                        body
+                    );
+                    stream
+                        .write_all(response.as_bytes())
+                        .expect("write response");
+                    stream.flush().expect("flush response");
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                    if last_activity.elapsed() > Duration::from_millis(300) {
+                        break;
+                    }
+                    thread::sleep(Duration::from_millis(10));
+                }
+                Err(error) => panic!("priority server accept failed: {error}"),
+            }
+        }
+    });
+
+    (format!("http://{}", address), handle)
+}
+
 fn spawn_json_server_sequence(responses: Vec<String>) -> (String, thread::JoinHandle<()>) {
     let listener = TcpListener::bind("127.0.0.1:0").expect("bind test server");
     let address = listener.local_addr().expect("local addr");
@@ -722,4 +1069,68 @@ fn spawn_json_server_sequence(responses: Vec<String>) -> (String, thread::JoinHa
     });
 
     (format!("http://{}", address), handle)
+}
+
+fn spawn_delayed_sse_server_sequence(
+    responses: Vec<(Duration, String)>,
+) -> (String, thread::JoinHandle<()>) {
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind test server");
+    let address = listener.local_addr().expect("local addr");
+
+    let handle = thread::spawn(move || {
+        for (delay, body) in responses {
+            let (mut stream, _) = listener.accept().expect("accept connection");
+            stream
+                .set_read_timeout(Some(Duration::from_secs(2)))
+                .expect("set read timeout");
+            let mut reader = BufReader::new(stream.try_clone().expect("clone stream"));
+            let mut raw_request = String::new();
+            loop {
+                let mut line = String::new();
+                let read = reader.read_line(&mut line).expect("read request line");
+                if read == 0 || line == "\r\n" {
+                    break;
+                }
+                raw_request.push_str(&line);
+            }
+            let mut content_length = 0usize;
+            for header in raw_request.lines() {
+                let lower = header.to_ascii_lowercase();
+                if let Some(value) = lower.strip_prefix("content-length:") {
+                    content_length = value.trim().parse::<usize>().expect("parse content-length");
+                }
+            }
+            if content_length > 0 {
+                let mut discard = vec![0u8; content_length];
+                reader.read_exact(&mut discard).expect("read body");
+            }
+            thread::sleep(delay);
+            let response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nCache-Control: no-cache\r\nConnection: close\r\nContent-Length: {}\r\n\r\n{}",
+                body.len(),
+                body
+            );
+            stream
+                .write_all(response.as_bytes())
+                .expect("write response");
+            stream.flush().expect("flush response");
+        }
+    });
+
+    (format!("http://{}", address), handle)
+}
+
+fn wait_for_tui_idle(
+    app: &agentd::bootstrap::App,
+    state: &mut TuiAppState,
+    redraw: &mut dyn FnMut(&TuiAppState) -> Result<(), agentd::bootstrap::BootstrapError>,
+) {
+    for _ in 0..100 {
+        pump_background(app, state, redraw).expect("pump background");
+        if !state.has_active_run() {
+            return;
+        }
+        thread::sleep(Duration::from_millis(10));
+    }
+    panic!("tui did not become idle in time");
 }

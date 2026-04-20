@@ -152,6 +152,7 @@ pub enum ExecutionError {
         approval_id: String,
         reason: String,
     },
+    InterruptedByQueuedInput,
     Provider(ProviderError),
     ProviderLoop {
         reason: String,
@@ -218,6 +219,9 @@ impl fmt::Display for ExecutionError {
                 formatter,
                 "execution approval required for {tool} ({approval_id}): {reason}"
             ),
+            Self::InterruptedByQueuedInput => {
+                write!(formatter, "execution interrupted by queued user input")
+            }
             Self::Provider(source) => write!(formatter, "execution provider error: {source}"),
             Self::ProviderLoop { reason } => {
                 write!(formatter, "execution provider loop error: {reason}")
@@ -254,6 +258,7 @@ impl Error for ExecutionError {
             | Self::MissingSession { .. }
             | Self::PermissionDenied { .. }
             | Self::ApprovalRequired { .. }
+            | Self::InterruptedByQueuedInput
             | Self::ProviderLoop { .. }
             | Self::ToolCallParse { .. }
             | Self::UnsupportedJobInput { .. } => None,
