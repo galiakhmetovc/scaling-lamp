@@ -1,4 +1,5 @@
 pub mod app;
+pub mod backend;
 pub mod events;
 pub mod render;
 pub mod screens;
@@ -6,8 +7,11 @@ pub mod timeline;
 pub mod worker;
 
 use crate::bootstrap::{App, BootstrapError};
+use crate::daemon;
 use crate::execution::ChatExecutionEvent;
+use crate::http::client::{DaemonConnectOptions, connect_or_autospawn};
 use app::{DialogState, TuiAppState};
+use backend::TuiBackend;
 use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind};
 use crossterm::execute;
 use crossterm::terminal::{
@@ -51,7 +55,21 @@ impl Drop for TerminalGuard {
 }
 
 pub fn run(app: &App) -> Result<(), BootstrapError> {
-    let mut state = app::TuiAppState::new(app.list_session_summaries()?, None);
+    run_daemon_backed(app, DaemonConnectOptions::default())
+}
+
+pub fn run_daemon_backed(app: &App, options: DaemonConnectOptions) -> Result<(), BootstrapError> {
+    let client = connect_or_autospawn(&app.config, &options, || {
+        daemon::spawn_local_process().map_err(BootstrapError::Stream)
+    })?;
+    run_with_backend(client)
+}
+
+pub fn run_with_backend<B>(backend: B) -> Result<(), BootstrapError>
+where
+    B: TuiBackend,
+{
+    let mut state = app::TuiAppState::new(backend.list_session_summaries()?, None);
     let mut terminal = TerminalGuard::new()?;
     let mut redraw = |state: &TuiAppState| {
         terminal
@@ -62,7 +80,7 @@ pub fn run(app: &App) -> Result<(), BootstrapError> {
     };
 
     loop {
-        pump_background(app, &mut state, &mut redraw)?;
+        pump_background(&backend, &mut state, &mut redraw)?;
         redraw(&state)?;
 
         if state.should_exit() {
@@ -94,16 +112,19 @@ pub fn run(app: &App) -> Result<(), BootstrapError> {
             continue;
         }
 
-        dispatch_action(app, &mut state, action, &mut redraw)?;
+        dispatch_action(&backend, &mut state, action, &mut redraw)?;
     }
 }
 
-pub fn dispatch_action(
-    app: &App,
+pub fn dispatch_action<B>(
+    app: &B,
     state: &mut TuiAppState,
     action: TuiAction,
     redraw: &mut dyn FnMut(&TuiAppState) -> Result<(), BootstrapError>,
-) -> Result<(), BootstrapError> {
+) -> Result<(), BootstrapError>
+where
+    B: TuiBackend,
+{
     match action {
         TuiAction::None => {}
         TuiAction::Exit => state.request_exit(),
@@ -202,12 +223,15 @@ fn should_dispatch_key_event(key: KeyEvent) -> bool {
     matches!(key.kind, KeyEventKind::Press | KeyEventKind::Repeat)
 }
 
-fn handle_command(
-    app: &App,
+fn handle_command<B>(
+    app: &B,
     state: &mut TuiAppState,
     raw: &str,
     redraw: &mut dyn FnMut(&TuiAppState) -> Result<(), BootstrapError>,
-) -> Result<(), BootstrapError> {
+) -> Result<(), BootstrapError>
+where
+    B: TuiBackend,
+{
     let current_session_id = state
         .current_session_id()
         .ok_or_else(|| BootstrapError::Usage {
@@ -306,12 +330,15 @@ fn handle_command(
     Ok(())
 }
 
-fn submit_chat_message(
-    app: &App,
+fn submit_chat_message<B>(
+    app: &B,
     state: &mut TuiAppState,
     message: &str,
     mode: QueuedDraftMode,
-) -> Result<(), BootstrapError> {
+) -> Result<(), BootstrapError>
+where
+    B: TuiBackend,
+{
     if message.is_empty() {
         return Ok(());
     }
@@ -332,13 +359,16 @@ fn submit_chat_message(
     Ok(())
 }
 
-fn approve_pending(
-    app: &App,
+fn approve_pending<B>(
+    app: &B,
     state: &mut TuiAppState,
     session_id: &str,
     requested_approval_id: Option<String>,
     _redraw: &mut dyn FnMut(&TuiAppState) -> Result<(), BootstrapError>,
-) -> Result<(), BootstrapError> {
+) -> Result<(), BootstrapError>
+where
+    B: TuiBackend,
+{
     let Some(pending) =
         app.latest_pending_approval(session_id, requested_approval_id.as_deref())?
     else {
@@ -360,11 +390,14 @@ fn approve_pending(
     Ok(())
 }
 
-pub fn pump_background(
-    app: &App,
+pub fn pump_background<B>(
+    app: &B,
     state: &mut TuiAppState,
     redraw: &mut dyn FnMut(&TuiAppState) -> Result<(), BootstrapError>,
-) -> Result<(), BootstrapError> {
+) -> Result<(), BootstrapError>
+where
+    B: TuiBackend,
+{
     let Some(events) = state.active_run_mut().map(ActiveRunHandle::drain_events) else {
         return Ok(());
     };
@@ -410,13 +443,16 @@ pub fn pump_background(
     Ok(())
 }
 
-fn start_chat_run(
-    app: &App,
+fn start_chat_run<B>(
+    app: &B,
     state: &mut TuiAppState,
     session_id: &str,
     message: &str,
     sent_at: i64,
-) -> Result<(), BootstrapError> {
+) -> Result<(), BootstrapError>
+where
+    B: TuiBackend,
+{
     state.timeline_mut().push_user(message, sent_at);
     state.set_active_run(ActiveRunHandle::spawn_chat(
         app.clone(),
@@ -427,14 +463,17 @@ fn start_chat_run(
     Ok(())
 }
 
-fn start_approval_run(
-    app: &App,
+fn start_approval_run<B>(
+    app: &B,
     state: &mut TuiAppState,
     session_id: &str,
     run_id: &str,
     approval_id: &str,
     started_at: i64,
-) -> Result<(), BootstrapError> {
+) -> Result<(), BootstrapError>
+where
+    B: TuiBackend,
+{
     let should_interrupt_after_tool_step = state.queued_priority_count() > 0;
     state.set_active_run(ActiveRunHandle::spawn_approval(
         app.clone(),
@@ -449,12 +488,15 @@ fn start_approval_run(
     Ok(())
 }
 
-fn handle_worker_outcome(
-    app: &App,
+fn handle_worker_outcome<B>(
+    app: &B,
     state: &mut TuiAppState,
     session_id: String,
     outcome: WorkerOutcome,
-) -> Result<(), BootstrapError> {
+) -> Result<(), BootstrapError>
+where
+    B: TuiBackend,
+{
     match outcome {
         WorkerOutcome::ChatCompleted(report) => {
             if !report.output_text.is_empty()
@@ -515,11 +557,14 @@ fn handle_worker_outcome(
     schedule_next_draft_if_idle(app, state, &session_id)
 }
 
-fn schedule_next_draft_if_idle(
-    app: &App,
+fn schedule_next_draft_if_idle<B>(
+    app: &B,
     state: &mut TuiAppState,
     session_id: &str,
-) -> Result<(), BootstrapError> {
+) -> Result<(), BootstrapError>
+where
+    B: TuiBackend,
+{
     if state.has_active_run() || app.latest_pending_approval(session_id, None)?.is_some() {
         return Ok(());
     }
@@ -538,11 +583,14 @@ fn schedule_next_draft_if_idle(
     )
 }
 
-fn load_session_into_state(
-    app: &App,
+fn load_session_into_state<B>(
+    app: &B,
     state: &mut TuiAppState,
     session_id: &str,
-) -> Result<(), BootstrapError> {
+) -> Result<(), BootstrapError>
+where
+    B: TuiBackend,
+{
     let summary = app.session_summary(session_id)?;
     let transcript = app.session_transcript(session_id)?;
     let pending = app.pending_approvals(session_id)?;
@@ -551,7 +599,10 @@ fn load_session_into_state(
     Ok(())
 }
 
-fn refresh_current_session(app: &App, state: &mut TuiAppState) -> Result<(), BootstrapError> {
+fn refresh_current_session<B>(app: &B, state: &mut TuiAppState) -> Result<(), BootstrapError>
+where
+    B: TuiBackend,
+{
     let sessions = app.list_session_summaries()?;
     state.sync_sessions(sessions);
     if let Some(session_id) = state.current_session_id().map(ToString::to_string) {

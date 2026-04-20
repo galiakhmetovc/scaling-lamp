@@ -6,7 +6,7 @@ use std::fmt;
 
 const RECENT_STEP_LIMIT: usize = 32;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub enum RunStatus {
     #[default]
     Queued,

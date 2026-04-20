@@ -22,6 +22,7 @@ use agent_runtime::session::Session;
 use agent_runtime::tool::{SharedProcessRegistry, ToolCall, ToolError, ToolRuntime};
 use agent_runtime::verification::EvidenceBundle;
 use agent_runtime::workspace::WorkspaceRef;
+use serde::{Deserialize, Serialize};
 use std::error::Error;
 use std::fmt;
 use std::path::Path;
@@ -37,7 +38,7 @@ pub struct SupervisorTickReport {
     pub budget_remaining: usize,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct MissionTurnExecutionReport {
     pub job_id: String,
     pub run_id: String,
@@ -45,7 +46,7 @@ pub struct MissionTurnExecutionReport {
     pub output_text: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ChatTurnExecutionReport {
     pub session_id: String,
     pub run_id: String,
@@ -53,7 +54,7 @@ pub struct ChatTurnExecutionReport {
     pub output_text: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ApprovalContinuationReport {
     pub run_id: String,
     pub run_status: RunStatus,
@@ -62,7 +63,7 @@ pub struct ApprovalContinuationReport {
     pub approval_id: Option<String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ToolExecutionReport {
     pub job_id: String,
     pub run_id: String,
@@ -72,7 +73,7 @@ pub struct ToolExecutionReport {
     pub evidence_refs: Vec<String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ChatExecutionEvent {
     ReasoningDelta(String),
     AssistantTextDelta(String),
@@ -82,7 +83,7 @@ pub enum ChatExecutionEvent {
     },
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ToolExecutionStatus {
     Requested,
     WaitingApproval,

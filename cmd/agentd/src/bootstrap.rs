@@ -13,6 +13,7 @@ use agent_runtime::run::{RunEngine, RunSnapshot, RunTransitionError};
 use agent_runtime::scheduler::MissionVerificationSummary;
 use agent_runtime::session::{MessageRole, Session, SessionSettings, TranscriptEntry};
 use agent_runtime::tool::{SharedProcessRegistry, ToolCall};
+use serde::{Deserialize, Serialize};
 use std::error::Error;
 use std::fmt;
 use std::fs;
@@ -59,13 +60,13 @@ pub struct App {
     pub processes: SharedProcessRegistry,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SessionTranscriptView {
     pub session_id: String,
     pub entries: Vec<SessionTranscriptLine>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SessionTranscriptLine {
     pub role: String,
     pub content: String,
@@ -73,7 +74,7 @@ pub struct SessionTranscriptLine {
     pub created_at: i64,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SessionSummary {
     pub id: String,
     pub title: String,
@@ -89,7 +90,7 @@ pub struct SessionSummary {
     pub updated_at: i64,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SessionPendingApproval {
     pub run_id: String,
     pub approval_id: String,
@@ -97,7 +98,7 @@ pub struct SessionPendingApproval {
     pub requested_at: i64,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub struct SessionPreferencesPatch {
     pub title: Option<String>,
     pub model: Option<Option<String>>,

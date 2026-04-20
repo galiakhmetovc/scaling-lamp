@@ -1,5 +1,7 @@
 use crate::bootstrap::{App, BootstrapError};
+use crate::daemon;
 use crate::execution::{ChatExecutionEvent, ExecutionError, ToolExecutionStatus};
+use crate::http::client::DaemonConnectOptions;
 use crate::tui;
 use agent_persistence::{
     JobRepository, MissionRecord, MissionRepository, PersistenceStore, RunRepository,
@@ -34,7 +36,11 @@ enum Command {
     ChatRepl {
         session_id: String,
     },
-    Tui,
+    Tui {
+        host: Option<String>,
+        port: Option<u16>,
+    },
+    Daemon,
     MissionTick {
         now: i64,
     },
@@ -97,8 +103,11 @@ where
         Command::ChatRepl { .. } => Err(BootstrapError::Usage {
             reason: "chat repl requires interactive I/O".to_string(),
         }),
-        Command::Tui => Err(BootstrapError::Usage {
+        Command::Tui { .. } => Err(BootstrapError::Usage {
             reason: "tui requires interactive terminal I/O".to_string(),
+        }),
+        Command::Daemon => Err(BootstrapError::Usage {
+            reason: "daemon requires server mode I/O".to_string(),
         }),
         Command::MissionTick { now } => run_mission_tick(app, now),
         Command::SessionCreate { id, title } => create_session(&app.store()?, &id, &title),
@@ -137,7 +146,10 @@ where
     let command = Command::parse(args)?;
     match command {
         Command::ChatRepl { session_id } => run_chat_repl(app, &session_id, input, output),
-        Command::Tui => tui::run(app),
+        Command::Tui { host, port } => {
+            tui::run_daemon_backed(app, DaemonConnectOptions { host, port })
+        }
+        Command::Daemon => daemon::serve(app.clone()).map_err(BootstrapError::Stream),
         other => {
             let rendered = execute_command(app, other)?;
             writeln!(output, "{rendered}").map_err(BootstrapError::Stream)
@@ -159,7 +171,12 @@ impl Command {
         match args.as_slice() {
             [] => Ok(Self::Status),
             [status] if status == "status" => Ok(Self::Status),
-            [command] if command == "tui" => Ok(Self::Tui),
+            [command] if command == "tui" => Ok(Self::Tui {
+                host: None,
+                port: None,
+            }),
+            [command, rest @ ..] if command == "tui" => parse_tui_command(rest),
+            [command] if command == "daemon" => Ok(Self::Daemon),
             [scope, action] if scope == "provider" && action == "smoke" => {
                 Ok(Self::ProviderSmoke {
                     prompt: DEFAULT_SMOKE_PROMPT.to_string(),
@@ -257,10 +274,44 @@ impl Command {
                 })
             }
             _ => Err(BootstrapError::Usage {
-                reason: "expected one of: status | tui | provider smoke | chat show/send/repl | mission create/show/tick | session create/show | run show | job show/execute | approval list/approve | delegate list | verification show".to_string(),
+                reason: "expected one of: status | tui | daemon | provider smoke | chat show/send/repl | mission create/show/tick | session create/show | run show | job show/execute | approval list/approve | delegate list | verification show".to_string(),
             }),
         }
     }
+}
+
+fn parse_tui_command(args: &[String]) -> Result<Command, BootstrapError> {
+    let mut host = None;
+    let mut port = None;
+    let mut index = 0;
+    while index < args.len() {
+        match args[index].as_str() {
+            "--host" => {
+                let Some(value) = args.get(index + 1) else {
+                    return Err(BootstrapError::Usage {
+                        reason: "tui --host requires a value".to_string(),
+                    });
+                };
+                host = Some(value.clone());
+                index += 2;
+            }
+            "--port" => {
+                let Some(value) = args.get(index + 1) else {
+                    return Err(BootstrapError::Usage {
+                        reason: "tui --port requires a value".to_string(),
+                    });
+                };
+                port = Some(parse_port_arg(value, "tui --port")?);
+                index += 2;
+            }
+            other => {
+                return Err(BootstrapError::Usage {
+                    reason: format!("unsupported tui argument {other}"),
+                });
+            }
+        }
+    }
+    Ok(Command::Tui { host, port })
 }
 
 fn execute_command(app: &App, command: Command) -> Result<String, BootstrapError> {
@@ -275,8 +326,11 @@ fn execute_command(app: &App, command: Command) -> Result<String, BootstrapError
         Command::ChatRepl { .. } => Err(BootstrapError::Usage {
             reason: "chat repl requires interactive I/O".to_string(),
         }),
-        Command::Tui => Err(BootstrapError::Usage {
+        Command::Tui { .. } => Err(BootstrapError::Usage {
             reason: "tui requires interactive terminal I/O".to_string(),
+        }),
+        Command::Daemon => Err(BootstrapError::Usage {
+            reason: "daemon requires server mode I/O".to_string(),
         }),
         Command::MissionTick { now } => run_mission_tick(app, now),
         Command::SessionCreate { id, title } => create_session(&app.store()?, &id, &title),
@@ -913,6 +967,12 @@ fn run_provider_smoke(app: &App, prompt: &str) -> Result<String, BootstrapError>
 fn parse_timestamp(raw: &str, label: &str) -> Result<i64, BootstrapError> {
     raw.parse::<i64>().map_err(|_| BootstrapError::Usage {
         reason: format!("{label} must be an integer unix timestamp"),
+    })
+}
+
+fn parse_port_arg(raw: &str, label: &str) -> Result<u16, BootstrapError> {
+    raw.parse::<u16>().map_err(|_| BootstrapError::Usage {
+        reason: format!("{label} must be a valid port number"),
     })
 }
 

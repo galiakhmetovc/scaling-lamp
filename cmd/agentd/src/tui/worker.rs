@@ -1,8 +1,9 @@
-use crate::bootstrap::{App, BootstrapError};
+use crate::bootstrap::BootstrapError;
 use crate::execution::{
     ApprovalContinuationReport, ChatExecutionEvent, ChatTurnExecutionReport, ExecutionError,
     ToolExecutionStatus,
 };
+use crate::tui::backend::TuiBackend;
 use std::collections::VecDeque;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -65,7 +66,10 @@ pub struct ActiveRunHandle {
 }
 
 impl ActiveRunHandle {
-    pub fn spawn_chat(app: App, session_id: String, message: String, started_at: i64) -> Self {
+    pub fn spawn_chat<B>(app: B, session_id: String, message: String, started_at: i64) -> Self
+    where
+        B: TuiBackend,
+    {
         let (sender, receiver) = mpsc::channel();
         let interrupt_after_tool_step = Arc::new(AtomicBool::new(false));
         let worker_session_id = session_id.clone();
@@ -113,13 +117,16 @@ impl ActiveRunHandle {
         }
     }
 
-    pub fn spawn_approval(
-        app: App,
+    pub fn spawn_approval<B>(
+        app: B,
         session_id: String,
         run_id: String,
         approval_id: String,
         started_at: i64,
-    ) -> Self {
+    ) -> Self
+    where
+        B: TuiBackend,
+    {
         let (sender, receiver) = mpsc::channel();
         let interrupt_after_tool_step = Arc::new(AtomicBool::new(false));
         let join_handle = {

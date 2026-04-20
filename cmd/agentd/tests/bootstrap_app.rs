@@ -506,6 +506,7 @@ fn run_with_args_provider_smoke_uses_the_configured_driver() {
     let temp = tempfile::tempdir().expect("tempdir");
     let app = build_from_config(AppConfig {
         data_dir: temp.path().join("state-root"),
+        daemon: Default::default(),
         provider: ConfiguredProvider {
             kind: ProviderKind::OpenAiResponses,
             api_base: Some(format!("{api_base}/v1")),
@@ -559,6 +560,7 @@ fn execute_chat_turn_uses_the_session_model_override() {
     let temp = tempfile::tempdir().expect("tempdir");
     let app = build_from_config(AppConfig {
         data_dir: temp.path().join("state-root"),
+        daemon: Default::default(),
         provider: ConfiguredProvider {
             kind: ProviderKind::OpenAiResponses,
             api_base: Some(format!("{api_base}/v1")),
@@ -798,6 +800,7 @@ fn execute_mission_turn_job_creates_a_run_calls_provider_and_persists_transcript
     let temp = tempfile::tempdir().expect("tempdir");
     let app = build_from_config(AppConfig {
         data_dir: temp.path().join("state-root"),
+        daemon: Default::default(),
         provider: ConfiguredProvider {
             kind: ProviderKind::OpenAiResponses,
             api_base: Some(format!("{api_base}/v1")),
@@ -1285,6 +1288,7 @@ fn run_with_args_executes_mission_ticks_and_jobs() {
     let temp = tempfile::tempdir().expect("tempdir");
     let app = build_from_config(AppConfig {
         data_dir: temp.path().join("state-root"),
+        daemon: Default::default(),
         provider: ConfiguredProvider {
             kind: ProviderKind::OpenAiResponses,
             api_base: Some(format!("{api_base}/v1")),
@@ -1448,6 +1452,7 @@ fn execute_chat_turn_creates_a_run_and_appends_transcript_history() {
     let temp = tempfile::tempdir().expect("tempdir");
     let app = build_from_config(AppConfig {
         data_dir: temp.path().join("state-root"),
+        daemon: Default::default(),
         provider: ConfiguredProvider {
             kind: ProviderKind::OpenAiResponses,
             api_base: Some(format!("{api_base}/v1")),
@@ -1574,6 +1579,7 @@ fn execute_chat_turn_can_finish_after_an_allowed_web_tool_call() {
     let temp = tempfile::tempdir().expect("tempdir");
     let app = build_from_config(AppConfig {
         data_dir: temp.path().join("state-root"),
+        daemon: Default::default(),
         provider: ConfiguredProvider {
             kind: ProviderKind::OpenAiResponses,
             api_base: Some(format!("{provider_api_base}/v1")),
@@ -1695,6 +1701,7 @@ fn execute_chat_turn_can_finish_after_an_allowed_web_tool_call_with_zai() {
     let temp = tempfile::tempdir().expect("tempdir");
     let app = build_from_config(AppConfig {
         data_dir: temp.path().join("state-root"),
+        daemon: Default::default(),
         provider: ConfiguredProvider {
             kind: ProviderKind::ZaiChatCompletions,
             api_base: Some(format!("{provider_api_base}/v1")),
@@ -1826,6 +1833,7 @@ fn execute_chat_turn_can_finish_after_exec_start_and_exec_wait_tool_calls() {
     let temp = tempfile::tempdir().expect("tempdir");
     let app = build_from_config(AppConfig {
         data_dir: temp.path().join("state-root"),
+        daemon: Default::default(),
         provider: ConfiguredProvider {
             kind: ProviderKind::OpenAiResponses,
             api_base: Some(format!("{api_base}/v1")),
@@ -1923,6 +1931,7 @@ fn approval_approve_resumes_an_openai_chat_tool_call_and_completes_the_run() {
     let temp = tempfile::tempdir().expect("tempdir");
     let app = build_from_config(AppConfig {
         data_dir: temp.path().join("state-root"),
+        daemon: Default::default(),
         provider: ConfiguredProvider {
             kind: ProviderKind::OpenAiResponses,
             api_base: Some(format!("{provider_api_base}/v1")),
@@ -2077,6 +2086,7 @@ fn approval_approve_resumes_a_zai_chat_tool_call_and_completes_the_run() {
     let temp = tempfile::tempdir().expect("tempdir");
     let app = build_from_config(AppConfig {
         data_dir: temp.path().join("state-root"),
+        daemon: Default::default(),
         provider: ConfiguredProvider {
             kind: ProviderKind::ZaiChatCompletions,
             api_base: Some(format!("{provider_api_base}/v1")),
@@ -2225,6 +2235,7 @@ fn approval_approve_resumes_a_mission_turn_and_completes_the_job() {
     let temp = tempfile::tempdir().expect("tempdir");
     let app = build_from_config(AppConfig {
         data_dir: temp.path().join("state-root"),
+        daemon: Default::default(),
         provider: ConfiguredProvider {
             kind: ProviderKind::OpenAiResponses,
             api_base: Some(format!("{provider_api_base}/v1")),
@@ -2385,6 +2396,7 @@ fn execute_chat_turn_fails_when_the_provider_repeats_the_same_tool_signature() {
     let temp = tempfile::tempdir().expect("tempdir");
     let app = build_from_config(AppConfig {
         data_dir: temp.path().join("state-root"),
+        daemon: Default::default(),
         provider: ConfiguredProvider {
             kind: ProviderKind::OpenAiResponses,
             api_base: Some(format!("{provider_api_base}/v1")),
@@ -2512,6 +2524,7 @@ fn execute_chat_turn_only_sends_new_tool_outputs_for_each_continuation_round() {
     let temp = tempfile::tempdir().expect("tempdir");
     let app = build_from_config(AppConfig {
         data_dir: temp.path().join("state-root"),
+        daemon: Default::default(),
         provider: ConfiguredProvider {
             kind: ProviderKind::OpenAiResponses,
             api_base: Some(format!("{provider_api_base}/v1")),
@@ -2591,6 +2604,7 @@ fn run_with_args_shows_and_sends_chat_turns() {
     let temp = tempfile::tempdir().expect("tempdir");
     let app = build_from_config(AppConfig {
         data_dir: temp.path().join("state-root"),
+        daemon: Default::default(),
         provider: ConfiguredProvider {
             kind: ProviderKind::OpenAiResponses,
             api_base: Some(format!("{api_base}/v1")),
@@ -2679,6 +2693,7 @@ fn run_with_args_chat_send_reports_waiting_approval_details() {
     let temp = tempfile::tempdir().expect("tempdir");
     let app = build_from_config(AppConfig {
         data_dir: temp.path().join("state-root"),
+        daemon: Default::default(),
         provider: ConfiguredProvider {
             kind: ProviderKind::OpenAiResponses,
             api_base: Some(format!("{api_base}/v1")),
@@ -2740,6 +2755,7 @@ fn repl_runs_chat_turns_and_supports_show_and_exit_commands() {
     let temp = tempfile::tempdir().expect("tempdir");
     let app = build_from_config(AppConfig {
         data_dir: temp.path().join("state-root"),
+        daemon: Default::default(),
         provider: ConfiguredProvider {
             kind: ProviderKind::OpenAiResponses,
             api_base: Some(api_base),
@@ -2849,6 +2865,7 @@ fn repl_accepts_cp1251_terminal_input_without_utf8_failure() {
     let temp = tempfile::tempdir().expect("tempdir");
     let app = build_from_config(AppConfig {
         data_dir: temp.path().join("state-root"),
+        daemon: Default::default(),
         provider: ConfiguredProvider {
             kind: ProviderKind::OpenAiResponses,
             api_base: Some(api_base),
@@ -2906,6 +2923,7 @@ fn repl_surfaces_waiting_approval_and_can_approve_latest_pending_turn() {
     let temp = tempfile::tempdir().expect("tempdir");
     let app = build_from_config(AppConfig {
         data_dir: temp.path().join("state-root"),
+        daemon: Default::default(),
         provider: ConfiguredProvider {
             kind: ProviderKind::OpenAiResponses,
             api_base: Some(api_base),
@@ -2974,6 +2992,7 @@ fn repl_rehydrates_latest_pending_approval_after_restart() {
     let (api_base, _requests, handle) = spawn_sse_server_sequence(vec![first_provider_response]);
     let app = build_from_config(AppConfig {
         data_dir: state_root.clone(),
+        daemon: Default::default(),
         provider: ConfiguredProvider {
             kind: ProviderKind::OpenAiResponses,
             api_base: Some(api_base),
@@ -3020,6 +3039,7 @@ fn repl_rehydrates_latest_pending_approval_after_restart() {
     let (api_base, _requests, _handle) = spawn_sse_server_sequence(vec![second_provider_response]);
     let app = build_from_config(AppConfig {
         data_dir: state_root,
+        daemon: Default::default(),
         provider: ConfiguredProvider {
             kind: ProviderKind::OpenAiResponses,
             api_base: Some(api_base),
@@ -3067,6 +3087,7 @@ fn repl_rejects_new_turns_while_an_approval_is_pending() {
     let temp = tempfile::tempdir().expect("tempdir");
     let app = build_from_config(AppConfig {
         data_dir: temp.path().join("state-root"),
+        daemon: Default::default(),
         provider: ConfiguredProvider {
             kind: ProviderKind::OpenAiResponses,
             api_base: Some(api_base),
@@ -3134,6 +3155,7 @@ data: [DONE]\n\n"
     let temp = tempfile::tempdir().expect("tempdir");
     let app = build_from_config(AppConfig {
         data_dir: temp.path().join("state-root"),
+        daemon: Default::default(),
         provider: ConfiguredProvider {
             kind: ProviderKind::ZaiChatCompletions,
             api_base: Some(api_base),
@@ -3207,6 +3229,7 @@ data: [DONE]\n\n"
     let temp = tempfile::tempdir().expect("tempdir");
     let app = build_from_config(AppConfig {
         data_dir: temp.path().join("state-root"),
+        daemon: Default::default(),
         provider: ConfiguredProvider {
             kind: ProviderKind::ZaiChatCompletions,
             api_base: Some(api_base),
@@ -3261,6 +3284,7 @@ data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_stream_repl\"
     let temp = tempfile::tempdir().expect("tempdir");
     let app = build_from_config(AppConfig {
         data_dir: temp.path().join("state-root"),
+        daemon: Default::default(),
         provider: ConfiguredProvider {
             kind: ProviderKind::OpenAiResponses,
             api_base: Some(api_base),
@@ -3669,6 +3693,7 @@ fn compact_session_persists_a_context_summary_and_increments_the_counter() {
     let temp = tempfile::tempdir().expect("tempdir");
     let app = build_from_config(AppConfig {
         data_dir: temp.path().join("state-root"),
+        daemon: Default::default(),
         provider: ConfiguredProvider {
             kind: ProviderKind::OpenAiResponses,
             api_base: Some(format!("{api_base}/v1")),
@@ -3939,6 +3964,7 @@ fn execute_chat_turn_uses_the_context_summary_and_only_the_uncovered_messages() 
         .expect("write workspace readme");
     let mut app = build_from_config(AppConfig {
         data_dir: temp.path().join("state-root"),
+        daemon: Default::default(),
         provider: ConfiguredProvider {
             kind: ProviderKind::OpenAiResponses,
             api_base: Some(format!("{api_base}/v1")),
@@ -4076,6 +4102,7 @@ fn execute_chat_turn_places_system_and_agents_files_before_runtime_blocks() {
     .expect("write agents prompt");
     let mut app = build_from_config(AppConfig {
         data_dir: temp.path().join("state-root"),
+        daemon: Default::default(),
         provider: ConfiguredProvider {
             kind: ProviderKind::OpenAiResponses,
             api_base: Some(format!("{api_base}/v1")),
@@ -4176,6 +4203,7 @@ fn execute_chat_turn_offloads_large_fs_read_text_results_into_artifacts() {
     fs::write(workspace_root.join("docs/large.txt"), &large_content).expect("write large file");
     let mut app = build_from_config(AppConfig {
         data_dir: temp.path().join("state-root"),
+        daemon: Default::default(),
         provider: ConfiguredProvider {
             kind: ProviderKind::OpenAiResponses,
             api_base: Some(format!("{api_base}/v1")),
@@ -4279,6 +4307,7 @@ fn execute_chat_turn_includes_the_plan_snapshot_before_context_summary() {
     let temp = tempfile::tempdir().expect("tempdir");
     let app = build_from_config(AppConfig {
         data_dir: temp.path().join("state-root"),
+        daemon: Default::default(),
         provider: ConfiguredProvider {
             kind: ProviderKind::OpenAiResponses,
             api_base: Some(format!("{api_base}/v1")),
@@ -4419,6 +4448,7 @@ fn execute_chat_turn_can_finish_after_plan_write_and_plan_read_tool_calls() {
     let temp = tempfile::tempdir().expect("tempdir");
     let app = build_from_config(AppConfig {
         data_dir: temp.path().join("state-root"),
+        daemon: Default::default(),
         provider: ConfiguredProvider {
             kind: ProviderKind::OpenAiResponses,
             api_base: Some(format!("{api_base}/v1")),
@@ -4567,6 +4597,7 @@ fn execute_chat_turn_can_finish_after_granular_plan_tool_calls() {
     let temp = tempfile::tempdir().expect("tempdir");
     let app = build_from_config(AppConfig {
         data_dir: temp.path().join("state-root"),
+        daemon: Default::default(),
         provider: ConfiguredProvider {
             kind: ProviderKind::OpenAiResponses,
             api_base: Some(format!("{api_base}/v1")),
@@ -4672,6 +4703,7 @@ fn execute_chat_turn_can_retrieve_offloaded_context_via_artifact_read() {
     let temp = tempfile::tempdir().expect("tempdir");
     let app = build_from_config(AppConfig {
         data_dir: temp.path().join("state-root"),
+        daemon: Default::default(),
         provider: ConfiguredProvider {
             kind: ProviderKind::OpenAiResponses,
             api_base: Some(format!("{api_base}/v1")),

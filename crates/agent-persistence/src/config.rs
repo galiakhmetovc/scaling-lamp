@@ -10,18 +10,35 @@ use std::path::{Path, PathBuf};
 
 const DEFAULT_ZAI_API_BASE: &str = "https://api.z.ai/api/coding/paas/v4";
 const DEFAULT_ZAI_MODEL: &str = "glm-5-turbo";
+const DEFAULT_DAEMON_BIND_HOST: &str = "127.0.0.1";
+const DEFAULT_DAEMON_BIND_PORT: u16 = 5140;
+const DEFAULT_DAEMON_SKILLS_DIR: &str = "skills";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AppConfig {
     pub data_dir: PathBuf,
+    pub daemon: DaemonConfig,
     pub permissions: PermissionConfig,
     pub provider: ConfiguredProvider,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(default)]
+pub struct DaemonConfig {
+    pub bind_host: String,
+    pub bind_port: u16,
+    pub bearer_token: Option<String>,
+    pub skills_dir: PathBuf,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ConfigEnv {
     pub config_path: Option<PathBuf>,
     pub data_dir_override: Option<PathBuf>,
+    pub daemon_bearer_token_override: Option<String>,
+    pub daemon_bind_host_override: Option<String>,
+    pub daemon_bind_port_override: Option<u16>,
+    pub daemon_skills_dir_override: Option<PathBuf>,
     pub home_dir: Option<PathBuf>,
     pub provider_api_base_override: Option<String>,
     pub provider_api_key_override: Option<String>,
@@ -71,8 +88,20 @@ pub enum ConfigError {
 #[derive(Debug, Clone, Deserialize)]
 struct FileConfig {
     data_dir: Option<PathBuf>,
+    daemon: Option<DaemonConfig>,
     permissions: Option<PermissionConfig>,
     provider: Option<ConfiguredProvider>,
+}
+
+impl Default for DaemonConfig {
+    fn default() -> Self {
+        Self {
+            bind_host: DEFAULT_DAEMON_BIND_HOST.to_string(),
+            bind_port: DEFAULT_DAEMON_BIND_PORT,
+            bearer_token: None,
+            skills_dir: PathBuf::from(DEFAULT_DAEMON_SKILLS_DIR),
+        }
+    }
 }
 
 impl fmt::Display for ConfigError {
@@ -143,6 +172,10 @@ impl ConfigEnv {
         Ok(Self {
             config_path: read_path_var("TEAMD_CONFIG", &dotenv)?,
             data_dir_override: read_path_var("TEAMD_DATA_DIR", &dotenv)?,
+            daemon_bearer_token_override: read_string_var("TEAMD_DAEMON_BEARER_TOKEN", &dotenv),
+            daemon_bind_host_override: read_string_var("TEAMD_DAEMON_BIND_HOST", &dotenv),
+            daemon_bind_port_override: read_u16_var("TEAMD_DAEMON_BIND_PORT", &dotenv)?,
+            daemon_skills_dir_override: read_path_var("TEAMD_DAEMON_SKILLS_DIR", &dotenv)?,
             home_dir: read_path_var("HOME", &dotenv)?,
             provider_api_base_override: read_string_var("TEAMD_PROVIDER_API_BASE", &dotenv),
             provider_api_key_override: read_string_var("TEAMD_PROVIDER_API_KEY", &dotenv),
@@ -219,6 +252,10 @@ impl AppConfig {
                     .and_then(|config| config.data_dir.clone())
             })
             .unwrap_or_else(|| env.default_data_dir());
+        let mut daemon = file_config
+            .as_ref()
+            .and_then(|config| config.daemon.clone())
+            .unwrap_or_default();
         let mut provider = file_config
             .as_ref()
             .and_then(|config| config.provider.clone())
@@ -227,6 +264,18 @@ impl AppConfig {
             .as_ref()
             .and_then(|config| config.permissions.clone())
             .unwrap_or_default();
+        if let Some(bind_host) = env.daemon_bind_host_override.as_deref() {
+            daemon.bind_host = bind_host.to_string();
+        }
+        if let Some(bind_port) = env.daemon_bind_port_override {
+            daemon.bind_port = bind_port;
+        }
+        if let Some(bearer_token) = &env.daemon_bearer_token_override {
+            daemon.bearer_token = Some(bearer_token.clone());
+        }
+        if let Some(skills_dir) = &env.daemon_skills_dir_override {
+            daemon.skills_dir = skills_dir.clone();
+        }
         if let Some(kind) = env.provider_kind_override.as_deref() {
             provider.kind = parse_provider_kind(kind)?;
         }
@@ -263,6 +312,7 @@ impl AppConfig {
 
         let config = Self {
             data_dir,
+            daemon,
             permissions,
             provider,
         };
@@ -288,6 +338,38 @@ impl AppConfig {
         if self.data_dir.exists() && !self.data_dir.is_dir() {
             return Err(ConfigError::InvalidDataDir {
                 path: self.data_dir.clone(),
+                reason: "must point to a directory",
+            });
+        }
+
+        if self.daemon.bind_host.trim().is_empty() {
+            return Err(ConfigError::InvalidProviderValue {
+                name: "daemon.bind_host",
+                value: self.daemon.bind_host.clone(),
+                reason: "must not be empty",
+            });
+        }
+
+        if self.daemon.bind_port == 0 {
+            return Err(ConfigError::InvalidProviderValue {
+                name: "daemon.bind_port",
+                value: self.daemon.bind_port.to_string(),
+                reason: "must be greater than zero",
+            });
+        }
+
+        if self.daemon.skills_dir.as_os_str().is_empty() {
+            return Err(ConfigError::InvalidProviderValue {
+                name: "daemon.skills_dir",
+                value: self.daemon.skills_dir.display().to_string(),
+                reason: "must not be empty",
+            });
+        }
+
+        if self.daemon.skills_dir.exists() && !self.daemon.skills_dir.is_dir() {
+            return Err(ConfigError::InvalidProviderValue {
+                name: "daemon.skills_dir",
+                value: self.daemon.skills_dir.display().to_string(),
                 reason: "must point to a directory",
             });
         }
@@ -323,6 +405,7 @@ fn load_file_config(path: &Path, required: bool) -> Result<FileConfig, ConfigErr
         Err(source) if !required && source.kind() == std::io::ErrorKind::NotFound => {
             return Ok(FileConfig {
                 data_dir: None,
+                daemon: None,
                 permissions: None,
                 provider: None,
             });
@@ -371,6 +454,15 @@ fn read_u32_var(
     name: &'static str,
     dotenv: &BTreeMap<String, String>,
 ) -> Result<Option<u32>, ConfigError> {
+    read_string_var(name, dotenv)
+        .map(|value| parse_positive_numeric(name, &value))
+        .transpose()
+}
+
+fn read_u16_var(
+    name: &'static str,
+    dotenv: &BTreeMap<String, String>,
+) -> Result<Option<u16>, ConfigError> {
     read_string_var(name, dotenv)
         .map(|value| parse_positive_numeric(name, &value))
         .transpose()
@@ -511,6 +603,7 @@ impl Default for AppConfig {
     fn default() -> Self {
         Self {
             data_dir: default_data_dir(),
+            daemon: DaemonConfig::default(),
             permissions: PermissionConfig::default(),
             provider: ConfiguredProvider::default(),
         }
@@ -527,20 +620,17 @@ mod tests {
     use std::collections::BTreeMap;
     use std::ffi::OsString;
     use std::fs;
-    use std::path::PathBuf;
+    use std::path::{Path, PathBuf};
 
-    #[test]
-    fn load_prefers_explicit_data_dir_override() {
-        let temp = tempfile::tempdir().expect("tempdir");
-        let config_path = temp.path().join("teamd.toml");
-        let override_dir = temp.path().join("override");
-
-        fs::write(&config_path, "data_dir = \"/ignored/from/file\"\n").expect("write config");
-
-        let env = ConfigEnv {
-            config_path: Some(config_path),
-            data_dir_override: Some(override_dir.clone()),
-            home_dir: Some(temp.path().join("home")),
+    fn base_env(root: &Path) -> ConfigEnv {
+        ConfigEnv {
+            config_path: None,
+            data_dir_override: None,
+            daemon_bearer_token_override: None,
+            daemon_bind_host_override: None,
+            daemon_bind_port_override: None,
+            daemon_skills_dir_override: None,
+            home_dir: Some(root.join("home")),
             provider_api_base_override: None,
             provider_api_key_override: None,
             provider_connect_timeout_override: None,
@@ -550,10 +640,23 @@ mod tests {
             provider_request_timeout_override: None,
             provider_stream_idle_timeout_override: None,
             permission_mode_override: None,
-            temp_dir: temp.path().join("tmp"),
-            xdg_config_home: Some(temp.path().join("xdg-config")),
-            xdg_state_home: Some(temp.path().join("xdg-state")),
-        };
+            temp_dir: root.join("tmp"),
+            xdg_config_home: Some(root.join("xdg-config")),
+            xdg_state_home: Some(root.join("xdg-state")),
+        }
+    }
+
+    #[test]
+    fn load_prefers_explicit_data_dir_override() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let config_path = temp.path().join("teamd.toml");
+        let override_dir = temp.path().join("override");
+
+        fs::write(&config_path, "data_dir = \"/ignored/from/file\"\n").expect("write config");
+
+        let mut env = base_env(temp.path());
+        env.config_path = Some(config_path);
+        env.data_dir_override = Some(override_dir.clone());
 
         let config = AppConfig::load_from_env(&env).expect("load config");
 
@@ -566,23 +669,10 @@ mod tests {
         let xdg_state_home = temp.path().join("xdg-state");
         let home_dir = temp.path().join("home");
 
-        let env = ConfigEnv {
-            config_path: None,
-            data_dir_override: None,
-            home_dir: Some(home_dir),
-            provider_api_base_override: None,
-            provider_api_key_override: None,
-            provider_connect_timeout_override: None,
-            provider_kind_override: None,
-            provider_max_output_tokens_override: None,
-            provider_model_override: None,
-            provider_request_timeout_override: None,
-            provider_stream_idle_timeout_override: None,
-            permission_mode_override: None,
-            temp_dir: temp.path().join("tmp"),
-            xdg_config_home: None,
-            xdg_state_home: Some(xdg_state_home.clone()),
-        };
+        let mut env = base_env(temp.path());
+        env.home_dir = Some(home_dir);
+        env.xdg_config_home = None;
+        env.xdg_state_home = Some(xdg_state_home.clone());
 
         let config = AppConfig::load_from_env(&env).expect("load config");
 
@@ -593,6 +683,7 @@ mod tests {
     fn validate_rejects_relative_data_dir() {
         let config = AppConfig {
             data_dir: PathBuf::from("relative/teamd"),
+            daemon: Default::default(),
             permissions: Default::default(),
             provider: Default::default(),
         };
@@ -613,23 +704,8 @@ mod tests {
     #[test]
     fn load_rejects_relative_config_override_paths() {
         let temp = tempfile::tempdir().expect("tempdir");
-        let env = ConfigEnv {
-            config_path: Some(PathBuf::from("relative-config.toml")),
-            data_dir_override: None,
-            home_dir: Some(temp.path().join("home")),
-            provider_api_base_override: None,
-            provider_api_key_override: None,
-            provider_connect_timeout_override: None,
-            provider_kind_override: None,
-            provider_max_output_tokens_override: None,
-            provider_model_override: None,
-            provider_request_timeout_override: None,
-            provider_stream_idle_timeout_override: None,
-            permission_mode_override: None,
-            temp_dir: temp.path().join("tmp"),
-            xdg_config_home: Some(temp.path().join("xdg-config")),
-            xdg_state_home: Some(temp.path().join("xdg-state")),
-        };
+        let mut env = base_env(temp.path());
+        env.config_path = Some(PathBuf::from("relative-config.toml"));
 
         let error = AppConfig::load_from_env(&env).expect_err("relative config path must fail");
 
@@ -662,23 +738,12 @@ path_prefix = "notes/"
         )
         .expect("write config");
 
-        let env = ConfigEnv {
-            config_path: Some(config_path),
-            data_dir_override: Some(temp.path().join("override")),
-            home_dir: Some(temp.path().join("home")),
-            provider_api_base_override: None,
-            provider_api_key_override: Some("zai-secret".into()),
-            provider_connect_timeout_override: None,
-            provider_kind_override: None,
-            provider_max_output_tokens_override: None,
-            provider_model_override: Some("glm-5.1-air".into()),
-            provider_request_timeout_override: None,
-            provider_stream_idle_timeout_override: None,
-            permission_mode_override: Some("accept_edits".into()),
-            temp_dir: temp.path().join("tmp"),
-            xdg_config_home: Some(temp.path().join("xdg-config")),
-            xdg_state_home: Some(temp.path().join("xdg-state")),
-        };
+        let mut env = base_env(temp.path());
+        env.config_path = Some(config_path);
+        env.data_dir_override = Some(temp.path().join("override"));
+        env.provider_api_key_override = Some("zai-secret".into());
+        env.provider_model_override = Some("glm-5.1-air".into());
+        env.permission_mode_override = Some("accept_edits".into());
 
         let config = AppConfig::load_from_env(&env).expect("load config");
 
@@ -700,23 +765,10 @@ path_prefix = "notes/"
     #[test]
     fn load_uses_zai_defaults_when_provider_kind_is_selected() {
         let temp = tempfile::tempdir().expect("tempdir");
-        let env = ConfigEnv {
-            config_path: None,
-            data_dir_override: None,
-            home_dir: Some(temp.path().join("home")),
-            provider_api_base_override: None,
-            provider_api_key_override: Some("zai-key".to_string()),
-            provider_connect_timeout_override: None,
-            provider_kind_override: Some("zai_chat_completions".to_string()),
-            provider_max_output_tokens_override: None,
-            provider_model_override: None,
-            provider_request_timeout_override: None,
-            provider_stream_idle_timeout_override: None,
-            permission_mode_override: None,
-            temp_dir: temp.path().join("tmp"),
-            xdg_config_home: None,
-            xdg_state_home: Some(temp.path().join("xdg-state")),
-        };
+        let mut env = base_env(temp.path());
+        env.xdg_config_home = None;
+        env.provider_api_key_override = Some("zai-key".to_string());
+        env.provider_kind_override = Some("zai_chat_completions".to_string());
 
         let config = AppConfig::load_from_env(&env).expect("load config");
 
@@ -739,23 +791,16 @@ path_prefix = "notes/"
     #[test]
     fn load_applies_provider_runtime_env_overrides() {
         let temp = tempfile::tempdir().expect("tempdir");
-        let env = ConfigEnv {
-            config_path: None,
-            data_dir_override: None,
-            home_dir: Some(temp.path().join("home")),
-            provider_api_base_override: Some("https://api.z.ai/api/coding/paas/v4".to_string()),
-            provider_api_key_override: Some("zai-key".to_string()),
-            provider_kind_override: Some("zai_chat_completions".to_string()),
-            provider_model_override: Some("glm-5-air".to_string()),
-            permission_mode_override: None,
-            provider_connect_timeout_override: Some(20),
-            provider_request_timeout_override: Some(3600),
-            provider_stream_idle_timeout_override: Some(1800),
-            provider_max_output_tokens_override: Some(8192),
-            temp_dir: temp.path().join("tmp"),
-            xdg_config_home: None,
-            xdg_state_home: Some(temp.path().join("xdg-state")),
-        };
+        let mut env = base_env(temp.path());
+        env.xdg_config_home = None;
+        env.provider_api_base_override = Some("https://api.z.ai/api/coding/paas/v4".to_string());
+        env.provider_api_key_override = Some("zai-key".to_string());
+        env.provider_kind_override = Some("zai_chat_completions".to_string());
+        env.provider_model_override = Some("glm-5-air".to_string());
+        env.provider_connect_timeout_override = Some(20);
+        env.provider_request_timeout_override = Some(3600);
+        env.provider_stream_idle_timeout_override = Some(1800);
+        env.provider_max_output_tokens_override = Some(8192);
 
         let config = AppConfig::load_from_env(&env).expect("load config");
 
@@ -805,5 +850,49 @@ TEAMD_PROVIDER_API_KEY=secret-key
             value.as_deref(),
             Some("https://api.z.ai/api/coding/paas/v4")
         );
+    }
+
+    #[test]
+    fn load_uses_safe_local_daemon_defaults() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let env = base_env(temp.path());
+
+        let config = AppConfig::load_from_env(&env).expect("load config");
+
+        assert_eq!(config.daemon.bind_host, "127.0.0.1");
+        assert_eq!(config.daemon.bind_port, 5140);
+        assert_eq!(config.daemon.bearer_token, None);
+        assert_eq!(config.daemon.skills_dir, PathBuf::from("skills"));
+    }
+
+    #[test]
+    fn load_merges_daemon_settings_from_file_and_env() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let config_path = temp.path().join("teamd.toml");
+        fs::write(
+            &config_path,
+            r#"
+[daemon]
+bind_host = "0.0.0.0"
+bind_port = 5140
+bearer_token = "file-token"
+skills_dir = "/srv/teamd/skills"
+"#,
+        )
+        .expect("write config");
+
+        let mut env = base_env(temp.path());
+        env.config_path = Some(config_path);
+        env.daemon_bind_host_override = Some("10.6.5.3".to_string());
+        env.daemon_bind_port_override = Some(6140);
+        env.daemon_bearer_token_override = Some("env-token".to_string());
+        env.daemon_skills_dir_override = Some(temp.path().join("runtime-skills"));
+
+        let config = AppConfig::load_from_env(&env).expect("load config");
+
+        assert_eq!(config.daemon.bind_host, "10.6.5.3");
+        assert_eq!(config.daemon.bind_port, 6140);
+        assert_eq!(config.daemon.bearer_token.as_deref(), Some("env-token"));
+        assert_eq!(config.daemon.skills_dir, temp.path().join("runtime-skills"));
     }
 }
