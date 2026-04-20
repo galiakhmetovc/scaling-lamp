@@ -109,6 +109,16 @@ impl PromptAssembly {
     pub fn build_messages(input: PromptAssemblyInput) -> Vec<ProviderMessage> {
         let mut messages = Vec::with_capacity(input.transcript_messages.len() + 6);
 
+        if let Some(session_head) = input.session_head {
+            let rendered = session_head.render();
+            if !rendered.trim().is_empty() {
+                messages.push(ProviderMessage {
+                    role: MessageRole::System,
+                    content: rendered,
+                });
+            }
+        }
+
         if let Some(system_prompt) = input.system_prompt
             && !system_prompt.trim().is_empty()
         {
@@ -125,16 +135,6 @@ impl PromptAssembly {
                 role: MessageRole::System,
                 content: agents_prompt,
             });
-        }
-
-        if let Some(session_head) = input.session_head {
-            let rendered = session_head.render();
-            if !rendered.trim().is_empty() {
-                messages.push(ProviderMessage {
-                    role: MessageRole::System,
-                    content: rendered,
-                });
-            }
         }
 
         if let Some(plan_snapshot) = input.plan_snapshot
@@ -423,6 +423,47 @@ mod tests {
         assert_eq!(messages[2].role, MessageRole::System);
         assert!(messages[2].content.contains("Compact summary text."));
         assert_eq!(messages[3].content, "latest question");
+    }
+
+    #[test]
+    fn prompt_assembly_places_session_head_before_system_and_agents_prompts() {
+        let messages = PromptAssembly::build_messages(PromptAssemblyInput {
+            system_prompt: Some("You are a useful AI assistant.".to_string()),
+            agents_prompt: Some("Project instructions: keep edits minimal.".to_string()),
+            session_head: Some(SessionHead {
+                session_id: "session-1".to_string(),
+                title: "Prompt Order".to_string(),
+                message_count: 2,
+                context_tokens: 8,
+                compactifications: 0,
+                summary_covered_message_count: 0,
+                pending_approval_count: 0,
+                last_user_preview: Some("hello".to_string()),
+                last_assistant_preview: None,
+                recent_filesystem_activity: Vec::new(),
+                workspace_tree: Vec::new(),
+                workspace_tree_truncated: false,
+            }),
+            plan_snapshot: None,
+            context_summary: None,
+            context_offload: None,
+            transcript_messages: vec![ProviderMessage {
+                role: MessageRole::User,
+                content: "hello".to_string(),
+            }],
+        });
+
+        assert_eq!(messages.len(), 4);
+        assert_eq!(messages[0].role, MessageRole::System);
+        assert!(messages[0].content.contains("Session: Prompt Order"));
+        assert_eq!(messages[1].role, MessageRole::System);
+        assert_eq!(messages[1].content, "You are a useful AI assistant.");
+        assert_eq!(messages[2].role, MessageRole::System);
+        assert_eq!(
+            messages[2].content,
+            "Project instructions: keep edits minimal."
+        );
+        assert_eq!(messages[3].role, MessageRole::User);
     }
 
     #[test]
