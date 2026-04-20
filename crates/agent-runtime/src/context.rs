@@ -1,3 +1,29 @@
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ContextOffloadRef {
+    pub id: String,
+    pub label: String,
+    pub summary: String,
+    pub artifact_id: String,
+    pub token_estimate: u32,
+    pub message_count: u32,
+    pub created_at: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub struct ContextOffloadSnapshot {
+    pub session_id: String,
+    pub refs: Vec<ContextOffloadRef>,
+    pub updated_at: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ContextOffloadPayload {
+    pub artifact_id: String,
+    pub bytes: Vec<u8>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct ContextSummary {
     pub session_id: String,
@@ -18,6 +44,19 @@ pub struct CompactionPolicy {
 impl ContextSummary {
     pub fn system_message_text(&self) -> String {
         format!("Compacted session summary:\n{}", self.summary_text)
+    }
+}
+
+impl ContextOffloadSnapshot {
+    pub fn is_empty(&self) -> bool {
+        self.refs.is_empty()
+    }
+
+    pub fn total_token_estimate(&self) -> u32 {
+        self.refs
+            .iter()
+            .map(|reference| reference.token_estimate)
+            .sum()
     }
 }
 
@@ -67,7 +106,10 @@ pub fn approximate_token_count(content: &str) -> u32 {
 
 #[cfg(test)]
 mod tests {
-    use super::{CompactionPolicy, ContextSummary, approximate_token_count};
+    use super::{
+        CompactionPolicy, ContextOffloadRef, ContextOffloadSnapshot, ContextSummary,
+        approximate_token_count,
+    };
 
     #[test]
     fn policy_uses_expected_defaults() {
@@ -106,5 +148,36 @@ mod tests {
     fn approximate_token_count_is_zero_for_blank_text() {
         assert_eq!(approximate_token_count("   "), 0);
         assert!(approximate_token_count("hello world") > 0);
+    }
+
+    #[test]
+    fn context_offload_snapshot_tracks_refs_and_total_tokens() {
+        let snapshot = ContextOffloadSnapshot {
+            session_id: "session-1".to_string(),
+            refs: vec![
+                ContextOffloadRef {
+                    id: "offload-1".to_string(),
+                    label: "Earlier transcript".to_string(),
+                    summary: "Previous design discussion".to_string(),
+                    artifact_id: "artifact-offload-1".to_string(),
+                    token_estimate: 240,
+                    message_count: 8,
+                    created_at: 10,
+                },
+                ContextOffloadRef {
+                    id: "offload-2".to_string(),
+                    label: "Tool trace".to_string(),
+                    summary: "Large web fetch output".to_string(),
+                    artifact_id: "artifact-offload-2".to_string(),
+                    token_estimate: 90,
+                    message_count: 2,
+                    created_at: 11,
+                },
+            ],
+            updated_at: 12,
+        };
+
+        assert!(!snapshot.is_empty());
+        assert_eq!(snapshot.total_token_estimate(), 330);
     }
 }

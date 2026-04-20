@@ -1,8 +1,9 @@
 use crate::records::{
-    ArtifactRecord, ContextSummaryRecord, JobRecord, MissionRecord, PlanRecord, RunRecord,
-    SessionRecord, TranscriptRecord,
+    ArtifactRecord, ContextOffloadRecord, ContextSummaryRecord, JobRecord, MissionRecord,
+    PlanRecord, RunRecord, SessionRecord, TranscriptRecord,
 };
 use crate::store::StoreError;
+use agent_runtime::context::ContextOffloadPayload;
 
 pub trait SessionRepository {
     fn put_session(&self, record: &SessionRecord) -> Result<(), StoreError>;
@@ -44,6 +45,22 @@ pub trait ContextSummaryRepository {
         &self,
         session_id: &str,
     ) -> Result<Option<ContextSummaryRecord>, StoreError>;
+}
+
+pub trait ContextOffloadRepository {
+    fn put_context_offload(
+        &self,
+        record: &ContextOffloadRecord,
+        payloads: &[ContextOffloadPayload],
+    ) -> Result<(), StoreError>;
+    fn get_context_offload(
+        &self,
+        session_id: &str,
+    ) -> Result<Option<ContextOffloadRecord>, StoreError>;
+    fn get_context_offload_payload(
+        &self,
+        artifact_id: &str,
+    ) -> Result<Option<ContextOffloadPayload>, StoreError>;
 }
 
 pub trait PlanRepository {

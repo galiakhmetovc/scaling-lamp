@@ -1,13 +1,14 @@
 use crate::PersistenceScaffold;
 use crate::config::AppConfig;
 use crate::records::{
-    ArtifactRecord, ContextSummaryRecord, JobRecord, MissionRecord, PlanRecord, RunRecord,
-    SessionRecord, TranscriptRecord,
+    ArtifactRecord, ContextOffloadRecord, ContextSummaryRecord, JobRecord, MissionRecord,
+    PlanRecord, RunRecord, SessionRecord, TranscriptRecord,
 };
 use crate::repository::{
-    ArtifactRepository, ContextSummaryRepository, JobRepository, MissionRepository, PlanRepository,
-    RunRepository, SessionRepository, TranscriptRepository,
+    ArtifactRepository, ContextOffloadRepository, ContextSummaryRepository, JobRepository,
+    MissionRepository, PlanRepository, RunRepository, SessionRepository, TranscriptRepository,
 };
+use agent_runtime::context::{ContextOffloadPayload, ContextOffloadSnapshot};
 use rusqlite::{Connection, OptionalExtension, params};
 use sha2::{Digest, Sha256};
 use std::error::Error;
@@ -41,6 +42,10 @@ pub enum StoreError {
     InvalidIdentifier {
         id: String,
         reason: &'static str,
+    },
+    InvalidContextOffload {
+        session_id: String,
+        reason: String,
     },
     Io {
         path: PathBuf,
@@ -95,6 +100,12 @@ impl fmt::Display for StoreError {
             Self::InvalidIdentifier { id, reason } => {
                 write!(formatter, "invalid storage identifier {id}: {reason}")
             }
+            Self::InvalidContextOffload { session_id, reason } => {
+                write!(
+                    formatter,
+                    "invalid context offload for {session_id}: {reason}"
+                )
+            }
             Self::Io { path, source } => {
                 write!(
                     formatter,
@@ -126,6 +137,7 @@ impl Error for StoreError {
             Self::Io { source, .. } => Some(source),
             Self::Sqlite(source) => Some(source),
             Self::InvalidIdentifier { .. }
+            | Self::InvalidContextOffload { .. }
             | Self::MissingPayload { .. }
             | Self::IntegrityMismatch { .. }
             | Self::SchemaMismatch { .. } => None,
@@ -255,6 +267,21 @@ impl PersistenceStore {
         }
 
         Ok(paths)
+    }
+
+    fn delete_artifact_by_id(&self, id: &str) -> Result<bool, StoreError> {
+        let path = self.artifact_path(id)?;
+        let deleted = self
+            .connection
+            .execute("DELETE FROM artifacts WHERE id = ?1", [id])?;
+
+        if deleted == 0 {
+            return Ok(false);
+        }
+
+        remove_payload_if_exists(&path)?;
+        remove_payload_if_exists(&backup_path(&path))?;
+        Ok(true)
     }
 }
 
@@ -790,6 +817,136 @@ impl ContextSummaryRepository for PersistenceStore {
     }
 }
 
+impl ContextOffloadRepository for PersistenceStore {
+    fn put_context_offload(
+        &self,
+        record: &ContextOffloadRecord,
+        payloads: &[ContextOffloadPayload],
+    ) -> Result<(), StoreError> {
+        let snapshot = ContextOffloadSnapshot::try_from(record.clone()).map_err(|source| {
+            StoreError::InvalidContextOffload {
+                session_id: record.session_id.clone(),
+                reason: source.to_string(),
+            }
+        })?;
+        let referenced_artifact_ids = snapshot
+            .refs
+            .iter()
+            .map(|reference| reference.artifact_id.clone())
+            .collect::<std::collections::BTreeSet<_>>();
+        let payload_artifact_ids = payloads
+            .iter()
+            .map(|payload| payload.artifact_id.clone())
+            .collect::<std::collections::BTreeSet<_>>();
+
+        if referenced_artifact_ids != payload_artifact_ids {
+            return Err(StoreError::InvalidContextOffload {
+                session_id: record.session_id.clone(),
+                reason: "payload artifact ids must exactly match snapshot refs".to_string(),
+            });
+        }
+
+        let obsolete_artifact_ids = self
+            .get_context_offload(&record.session_id)?
+            .map(ContextOffloadSnapshot::try_from)
+            .transpose()
+            .map_err(|source| StoreError::InvalidContextOffload {
+                session_id: record.session_id.clone(),
+                reason: source.to_string(),
+            })?
+            .map(|existing| {
+                existing
+                    .refs
+                    .into_iter()
+                    .filter(|reference| !referenced_artifact_ids.contains(&reference.artifact_id))
+                    .map(|reference| reference.artifact_id)
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+
+        for payload in payloads {
+            let reference = snapshot
+                .refs
+                .iter()
+                .find(|reference| reference.artifact_id == payload.artifact_id)
+                .ok_or_else(|| StoreError::InvalidContextOffload {
+                    session_id: record.session_id.clone(),
+                    reason: format!(
+                        "missing ref metadata for payload artifact {}",
+                        payload.artifact_id
+                    ),
+                })?;
+            self.put_artifact(&ArtifactRecord {
+                id: payload.artifact_id.clone(),
+                session_id: record.session_id.clone(),
+                kind: "context_offload".to_string(),
+                metadata_json: serde_json::json!({
+                    "offload_ref_id": reference.id,
+                    "label": reference.label,
+                    "summary": reference.summary,
+                    "token_estimate": reference.token_estimate,
+                    "message_count": reference.message_count,
+                    "created_at": reference.created_at,
+                })
+                .to_string(),
+                path: self.artifact_relative_path(&payload.artifact_id)?,
+                bytes: payload.bytes.clone(),
+                created_at: reference.created_at,
+            })?;
+        }
+
+        self.connection.execute(
+            "INSERT INTO context_offloads (session_id, refs_json, updated_at)
+             VALUES (?1, ?2, ?3)
+             ON CONFLICT(session_id) DO UPDATE SET
+                refs_json = excluded.refs_json,
+                updated_at = excluded.updated_at",
+            params![record.session_id, record.refs_json, record.updated_at],
+        )?;
+
+        for artifact_id in obsolete_artifact_ids {
+            self.delete_artifact_by_id(&artifact_id)?;
+        }
+
+        Ok(())
+    }
+
+    fn get_context_offload(
+        &self,
+        session_id: &str,
+    ) -> Result<Option<ContextOffloadRecord>, StoreError> {
+        self.connection
+            .query_row(
+                "SELECT session_id, refs_json, updated_at
+                 FROM context_offloads WHERE session_id = ?1",
+                [session_id],
+                |row| {
+                    Ok(ContextOffloadRecord {
+                        session_id: row.get(0)?,
+                        refs_json: row.get(1)?,
+                        updated_at: row.get(2)?,
+                    })
+                },
+            )
+            .optional()
+            .map_err(StoreError::from)
+    }
+
+    fn get_context_offload_payload(
+        &self,
+        artifact_id: &str,
+    ) -> Result<Option<ContextOffloadPayload>, StoreError> {
+        match self.get_artifact(artifact_id)? {
+            Some(record) if record.kind == "context_offload" => Ok(Some(ContextOffloadPayload {
+                artifact_id: record.id,
+                bytes: record.bytes,
+            })),
+            Some(_) => Ok(None),
+            None => Ok(None),
+        }
+    }
+}
+
 impl PlanRepository for PersistenceStore {
     fn put_plan(&self, record: &PlanRecord) -> Result<(), StoreError> {
         self.connection.execute(
@@ -1029,6 +1186,13 @@ fn bootstrap_schema(connection: &Connection) -> Result<(), StoreError> {
              FOREIGN KEY(session_id) REFERENCES sessions(id) ON DELETE CASCADE
          );
 
+         CREATE TABLE IF NOT EXISTS context_offloads (
+             session_id TEXT PRIMARY KEY,
+             refs_json TEXT NOT NULL,
+             updated_at INTEGER NOT NULL,
+             FOREIGN KEY(session_id) REFERENCES sessions(id) ON DELETE CASCADE
+         );
+
          CREATE TABLE IF NOT EXISTS plans (
              session_id TEXT PRIMARY KEY,
              items_json TEXT NOT NULL,
@@ -1061,6 +1225,7 @@ fn bootstrap_schema(connection: &Connection) -> Result<(), StoreError> {
          CREATE INDEX IF NOT EXISTS idx_transcripts_session_id ON transcripts(session_id);
          CREATE INDEX IF NOT EXISTS idx_transcripts_run_id ON transcripts(run_id);
          CREATE INDEX IF NOT EXISTS idx_context_summaries_updated_at ON context_summaries(updated_at);
+         CREATE INDEX IF NOT EXISTS idx_context_offloads_updated_at ON context_offloads(updated_at);
          CREATE INDEX IF NOT EXISTS idx_artifacts_session_id ON artifacts(session_id);",
     )?;
 
@@ -1092,6 +1257,15 @@ fn validate_schema(connection: &Connection) -> Result<(), StoreError> {
         "context_summaries",
         "summary_token_estimate",
         true,
+    )?;
+    validate_column(connection, "context_offloads", "session_id", true)?;
+    validate_column(connection, "context_offloads", "refs_json", true)?;
+    validate_foreign_key(
+        connection,
+        "context_offloads",
+        "session_id",
+        "sessions",
+        "CASCADE",
     )?;
     validate_column(connection, "plans", "session_id", true)?;
     validate_column(connection, "plans", "items_json", true)?;
@@ -1689,9 +1863,13 @@ mod tests {
         DEFAULT_MISSION_SCHEDULE_JSON, LEGACY_MISSION_PREFIX,
     };
     use crate::{
-        ArtifactRecord, ArtifactRepository, JobRecord, JobRepository, MissionRecord,
-        MissionRepository, PersistenceScaffold, PlanRecord, PlanRepository, RunRecord,
-        RunRepository, SessionRecord, SessionRepository, TranscriptRecord, TranscriptRepository,
+        ArtifactRecord, ArtifactRepository, ContextOffloadRecord, ContextOffloadRepository,
+        JobRecord, JobRepository, MissionRecord, MissionRepository, PersistenceScaffold,
+        PlanRecord, PlanRepository, RunRecord, RunRepository, SessionRecord, SessionRepository,
+        TranscriptRecord, TranscriptRepository,
+    };
+    use agent_runtime::context::{
+        ContextOffloadPayload, ContextOffloadRef, ContextOffloadSnapshot,
     };
     use agent_runtime::mission::JobExecutionInput;
     use agent_runtime::plan::{PlanItem, PlanItemStatus, PlanSnapshot};
@@ -1790,6 +1968,24 @@ mod tests {
             .expect("serialize plan"),
             updated_at: 8,
         };
+        let offload = ContextOffloadRecord {
+            session_id: session.id.clone(),
+            refs_json: serde_json::to_string(&vec![ContextOffloadRef {
+                id: "offload-1".to_string(),
+                label: "Earlier transcript".to_string(),
+                summary: "Design notes".to_string(),
+                artifact_id: "artifact-offload-1".to_string(),
+                token_estimate: 120,
+                message_count: 4,
+                created_at: 8,
+            }])
+            .expect("serialize offload"),
+            updated_at: 9,
+        };
+        let offload_payload = ContextOffloadPayload {
+            artifact_id: "artifact-offload-1".to_string(),
+            bytes: b"earlier transcript chunk".to_vec(),
+        };
 
         {
             let store = super::PersistenceStore::open(&scaffold).expect("open store");
@@ -1805,6 +2001,9 @@ mod tests {
             store.put_job(&job).expect("store job");
             store.put_transcript(&transcript).expect("store transcript");
             store.put_plan(&plan).expect("store plan");
+            store
+                .put_context_offload(&offload, std::slice::from_ref(&offload_payload))
+                .expect("store offload");
             store.put_artifact(&artifact).expect("store artifact");
         }
 
@@ -1845,6 +2044,18 @@ mod tests {
         assert_eq!(
             reopened.get_plan("session-1").expect("get plan"),
             Some(plan)
+        );
+        assert_eq!(
+            reopened
+                .get_context_offload("session-1")
+                .expect("get offload"),
+            Some(offload)
+        );
+        assert_eq!(
+            reopened
+                .get_context_offload_payload("artifact-offload-1")
+                .expect("get offload payload"),
+            Some(offload_payload)
         );
         assert_eq!(
             reopened.get_artifact(&artifact.id).expect("get artifact"),
@@ -1902,6 +2113,150 @@ mod tests {
         .expect("restore plan");
 
         assert_eq!(restored, snapshot);
+    }
+
+    #[test]
+    fn context_offload_repository_round_trips_snapshot_and_payloads() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let scaffold = PersistenceScaffold::from_config(crate::AppConfig {
+            data_dir: temp.path().join("state-root"),
+            ..crate::AppConfig::default()
+        });
+        let store = super::PersistenceStore::open(&scaffold).expect("open store");
+        store
+            .put_session(&SessionRecord {
+                id: "session-offload".to_string(),
+                title: "Offload Session".to_string(),
+                prompt_override: None,
+                settings_json: "{\"model\":\"gpt-5.4\"}".to_string(),
+                active_mission_id: None,
+                created_at: 1,
+                updated_at: 1,
+            })
+            .expect("put session");
+
+        let snapshot = ContextOffloadSnapshot {
+            session_id: "session-offload".to_string(),
+            refs: vec![ContextOffloadRef {
+                id: "offload-1".to_string(),
+                label: "Earlier transcript".to_string(),
+                summary: "Requirements and design".to_string(),
+                artifact_id: "artifact-offload-1".to_string(),
+                token_estimate: 180,
+                message_count: 7,
+                created_at: 5,
+            }],
+            updated_at: 6,
+        };
+        let payload = ContextOffloadPayload {
+            artifact_id: "artifact-offload-1".to_string(),
+            bytes: b"offloaded transcript bytes".to_vec(),
+        };
+
+        store
+            .put_context_offload(
+                &ContextOffloadRecord::try_from(&snapshot).expect("offload record"),
+                std::slice::from_ref(&payload),
+            )
+            .expect("put offload");
+
+        let restored = ContextOffloadSnapshot::try_from(
+            store
+                .get_context_offload("session-offload")
+                .expect("get offload")
+                .expect("offload exists"),
+        )
+        .expect("restore offload");
+
+        assert_eq!(restored, snapshot);
+        assert_eq!(
+            store
+                .get_context_offload_payload("artifact-offload-1")
+                .expect("get offload payload"),
+            Some(payload)
+        );
+    }
+
+    #[test]
+    fn replacing_context_offload_snapshot_prunes_obsolete_artifacts() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let scaffold = PersistenceScaffold::from_config(crate::AppConfig {
+            data_dir: temp.path().join("state-root"),
+            ..crate::AppConfig::default()
+        });
+        let store = super::PersistenceStore::open(&scaffold).expect("open store");
+        store
+            .put_session(&SessionRecord {
+                id: "session-offload-prune".to_string(),
+                title: "Offload Prune".to_string(),
+                prompt_override: None,
+                settings_json: "{\"model\":\"gpt-5.4\"}".to_string(),
+                active_mission_id: None,
+                created_at: 1,
+                updated_at: 1,
+            })
+            .expect("put session");
+
+        let first = ContextOffloadSnapshot {
+            session_id: "session-offload-prune".to_string(),
+            refs: vec![ContextOffloadRef {
+                id: "offload-1".to_string(),
+                label: "Earlier transcript".to_string(),
+                summary: "Version one".to_string(),
+                artifact_id: "artifact-offload-old".to_string(),
+                token_estimate: 42,
+                message_count: 2,
+                created_at: 2,
+            }],
+            updated_at: 3,
+        };
+        store
+            .put_context_offload(
+                &ContextOffloadRecord::try_from(&first).expect("first offload"),
+                &[ContextOffloadPayload {
+                    artifact_id: "artifact-offload-old".to_string(),
+                    bytes: b"old payload".to_vec(),
+                }],
+            )
+            .expect("put first offload");
+
+        let second = ContextOffloadSnapshot {
+            session_id: "session-offload-prune".to_string(),
+            refs: vec![ContextOffloadRef {
+                id: "offload-2".to_string(),
+                label: "Replacement".to_string(),
+                summary: "Version two".to_string(),
+                artifact_id: "artifact-offload-new".to_string(),
+                token_estimate: 55,
+                message_count: 3,
+                created_at: 4,
+            }],
+            updated_at: 5,
+        };
+        store
+            .put_context_offload(
+                &ContextOffloadRecord::try_from(&second).expect("second offload"),
+                &[ContextOffloadPayload {
+                    artifact_id: "artifact-offload-new".to_string(),
+                    bytes: b"new payload".to_vec(),
+                }],
+            )
+            .expect("replace offload");
+
+        assert!(
+            store
+                .get_context_offload_payload("artifact-offload-old")
+                .expect("get old payload")
+                .is_none()
+        );
+        assert_eq!(
+            store
+                .get_context_offload_payload("artifact-offload-new")
+                .expect("get new payload")
+                .expect("new payload exists")
+                .bytes,
+            b"new payload".to_vec()
+        );
     }
 
     #[test]

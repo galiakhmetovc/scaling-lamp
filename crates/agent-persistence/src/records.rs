@@ -1,4 +1,4 @@
-use agent_runtime::context::ContextSummary;
+use agent_runtime::context::{ContextOffloadSnapshot, ContextSummary};
 use agent_runtime::mission::{
     JobKind, JobKindParseError, JobResult, JobSpec, JobSpecValidationError, JobStatus,
     JobStatusParseError, MissionExecutionIntent, MissionExecutionIntentParseError, MissionSchedule,
@@ -92,6 +92,13 @@ pub struct ContextSummaryRecord {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ContextOffloadRecord {
+    pub session_id: String,
+    pub refs_json: String,
+    pub updated_at: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PlanRecord {
     pub session_id: String,
     pub items_json: String,
@@ -116,6 +123,7 @@ pub enum RecordConversionError {
     InvalidJobResult(serde_json::Error),
     InvalidJobSpec(JobSpecValidationError),
     InvalidJobStatus(JobStatusParseError),
+    InvalidContextOffloadRefs(serde_json::Error),
     InvalidContextSummaryCoveredMessageCount { value: i64 },
     InvalidContextSummaryTokenEstimate { value: i64 },
     InvalidMessageRole { value: String },
@@ -133,6 +141,7 @@ pub enum RecordConversionError {
     InvalidRunEvidenceRefs(serde_json::Error),
     InvalidRunStatus(RunStatusParseError),
     InvalidSessionSettings(serde_json::Error),
+    SerializeContextOffloadRefs(serde_json::Error),
     SerializeJobInput(serde_json::Error),
     SerializeJobResult(serde_json::Error),
     SerializeMissionAcceptance(serde_json::Error),
@@ -278,6 +287,32 @@ impl TryFrom<ContextSummaryRecord> for ContextSummary {
                     value: record.summary_token_estimate,
                 }
             })?,
+            updated_at: record.updated_at,
+        })
+    }
+}
+
+impl TryFrom<&ContextOffloadSnapshot> for ContextOffloadRecord {
+    type Error = RecordConversionError;
+
+    fn try_from(snapshot: &ContextOffloadSnapshot) -> Result<Self, Self::Error> {
+        Ok(Self {
+            session_id: snapshot.session_id.clone(),
+            refs_json: serde_json::to_string(&snapshot.refs)
+                .map_err(RecordConversionError::SerializeContextOffloadRefs)?,
+            updated_at: snapshot.updated_at,
+        })
+    }
+}
+
+impl TryFrom<ContextOffloadRecord> for ContextOffloadSnapshot {
+    type Error = RecordConversionError;
+
+    fn try_from(record: ContextOffloadRecord) -> Result<Self, Self::Error> {
+        Ok(Self {
+            session_id: record.session_id,
+            refs: serde_json::from_str(&record.refs_json)
+                .map_err(RecordConversionError::InvalidContextOffloadRefs)?,
             updated_at: record.updated_at,
         })
     }
@@ -468,6 +503,9 @@ impl fmt::Display for RecordConversionError {
                 write!(formatter, "invalid job specification: {source}")
             }
             Self::InvalidJobStatus(source) => write!(formatter, "invalid job status: {source}"),
+            Self::InvalidContextOffloadRefs(source) => {
+                write!(formatter, "invalid context offload refs: {source}")
+            }
             Self::InvalidContextSummaryCoveredMessageCount { value } => {
                 write!(
                     formatter,
@@ -523,6 +561,12 @@ impl fmt::Display for RecordConversionError {
             Self::InvalidSessionSettings(source) => {
                 write!(formatter, "invalid session settings: {source}")
             }
+            Self::SerializeContextOffloadRefs(source) => {
+                write!(
+                    formatter,
+                    "failed to serialize context offload refs: {source}"
+                )
+            }
             Self::SerializeJobInput(source) => {
                 write!(formatter, "failed to serialize job input: {source}")
             }
@@ -577,6 +621,7 @@ impl Error for RecordConversionError {
             Self::InvalidJobResult(source) => Some(source),
             Self::InvalidJobSpec(source) => Some(source),
             Self::InvalidJobStatus(source) => Some(source),
+            Self::InvalidContextOffloadRefs(source) => Some(source),
             Self::InvalidContextSummaryCoveredMessageCount { .. } => None,
             Self::InvalidContextSummaryTokenEstimate { .. } => None,
             Self::InvalidMissionAcceptance(source) => Some(source),
@@ -592,6 +637,7 @@ impl Error for RecordConversionError {
             Self::InvalidRunEvidenceRefs(source) => Some(source),
             Self::InvalidRunStatus(source) => Some(source),
             Self::InvalidSessionSettings(source) => Some(source),
+            Self::SerializeContextOffloadRefs(source) => Some(source),
             Self::SerializeJobInput(source) => Some(source),
             Self::SerializeJobResult(source) => Some(source),
             Self::SerializeMissionAcceptance(source) => Some(source),
@@ -610,7 +656,11 @@ impl Error for RecordConversionError {
 
 #[cfg(test)]
 mod tests {
-    use super::{JobRecord, MissionRecord, PlanRecord, RunRecord, SessionRecord, TranscriptRecord};
+    use super::{
+        ContextOffloadRecord, JobRecord, MissionRecord, PlanRecord, RunRecord, SessionRecord,
+        TranscriptRecord,
+    };
+    use agent_runtime::context::{ContextOffloadRef, ContextOffloadSnapshot};
     use agent_runtime::mission::{
         AcceptanceCriterion, JobExecutionInput, JobKind, JobResult, JobSpec,
         JobSpecValidationError, JobStatus, MissionExecutionIntent, MissionSchedule, MissionSpec,
@@ -816,6 +866,39 @@ mod tests {
 
         let stored = PlanRecord::try_from(&snapshot).expect("plan to record");
         let restored = PlanSnapshot::try_from(stored).expect("record to plan");
+
+        assert_eq!(restored, snapshot);
+    }
+
+    #[test]
+    fn context_offload_records_round_trip_with_artifact_refs() {
+        let snapshot = ContextOffloadSnapshot {
+            session_id: "session-1".to_string(),
+            refs: vec![
+                ContextOffloadRef {
+                    id: "offload-1".to_string(),
+                    label: "Earlier transcript".to_string(),
+                    summary: "Design and requirements".to_string(),
+                    artifact_id: "artifact-offload-1".to_string(),
+                    token_estimate: 128,
+                    message_count: 6,
+                    created_at: 20,
+                },
+                ContextOffloadRef {
+                    id: "offload-2".to_string(),
+                    label: "Large tool output".to_string(),
+                    summary: "Web fetch dump".to_string(),
+                    artifact_id: "artifact-offload-2".to_string(),
+                    token_estimate: 64,
+                    message_count: 1,
+                    created_at: 21,
+                },
+            ],
+            updated_at: 22,
+        };
+
+        let stored = ContextOffloadRecord::try_from(&snapshot).expect("offload to record");
+        let restored = ContextOffloadSnapshot::try_from(stored).expect("record to offload");
 
         assert_eq!(restored, snapshot);
     }
