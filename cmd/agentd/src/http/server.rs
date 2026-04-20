@@ -2,8 +2,9 @@ use crate::bootstrap::{App, BootstrapError};
 use crate::execution::ExecutionError;
 use crate::http::types::{
     ApproveRunRequest, ChatTurnRequest, ClearSessionRequest, CreateSessionRequest, ErrorResponse,
-    SessionPendingApprovalsResponse, SessionPreferencesRequest, SessionSummaryResponse,
-    SessionTranscriptResponse, StatusResponse, WorkerOutcomeResponse,
+    SessionPendingApprovalsResponse, SessionPreferencesRequest, SessionSkillsResponse,
+    SessionSummaryResponse, SessionTranscriptResponse, SkillCommandRequest, StatusResponse,
+    WorkerOutcomeResponse,
 };
 use serde::{Serialize, de::DeserializeOwned};
 use std::sync::Arc;
@@ -145,6 +146,19 @@ fn handle_nested_routes(app: &App, request: Request) -> std::io::Result<()> {
         (Method::Get, [session_id, approvals]) if approvals == "approvals" => {
             handle_pending_approvals(app, request, session_id.as_str())
         }
+        (Method::Get, [session_id, skills]) if skills == "skills" => {
+            handle_session_skills(app, request, session_id.as_str())
+        }
+        (Method::Post, [session_id, skills, action])
+            if skills == "skills" && action == "enable" =>
+        {
+            handle_enable_session_skill(app, request, session_id.as_str())
+        }
+        (Method::Post, [session_id, skills, action])
+            if skills == "skills" && action == "disable" =>
+        {
+            handle_disable_session_skill(app, request, session_id.as_str())
+        }
         (Method::Patch, [session_id, preferences]) if preferences == "preferences" => {
             handle_update_preferences(app, request, session_id.as_str())
         }
@@ -198,6 +212,70 @@ fn handle_pending_approvals(app: &App, request: Request, session_id: &str) -> st
         Ok(approvals) => {
             respond_json::<SessionPendingApprovalsResponse>(request, StatusCode(200), &approvals)
         }
+        Err(error) => {
+            let (status, payload) = map_bootstrap_error(error);
+            respond_json(request, status, &payload)
+        }
+    }
+}
+
+fn handle_session_skills(app: &App, request: Request, session_id: &str) -> std::io::Result<()> {
+    match app.session_skills(session_id) {
+        Ok(skills) => respond_json::<SessionSkillsResponse>(request, StatusCode(200), &skills),
+        Err(error) => {
+            let (status, payload) = map_bootstrap_error(error);
+            respond_json(request, status, &payload)
+        }
+    }
+}
+
+fn handle_enable_session_skill(
+    app: &App,
+    mut request: Request,
+    session_id: &str,
+) -> std::io::Result<()> {
+    let body: SkillCommandRequest = match parse_json_body(&mut request) {
+        Ok(body) => body,
+        Err(error) => {
+            return respond_json(
+                request,
+                StatusCode(400),
+                &ErrorResponse {
+                    error: format!("invalid json body: {error}"),
+                },
+            );
+        }
+    };
+
+    match app.enable_session_skill(session_id, &body.name) {
+        Ok(skills) => respond_json::<SessionSkillsResponse>(request, StatusCode(200), &skills),
+        Err(error) => {
+            let (status, payload) = map_bootstrap_error(error);
+            respond_json(request, status, &payload)
+        }
+    }
+}
+
+fn handle_disable_session_skill(
+    app: &App,
+    mut request: Request,
+    session_id: &str,
+) -> std::io::Result<()> {
+    let body: SkillCommandRequest = match parse_json_body(&mut request) {
+        Ok(body) => body,
+        Err(error) => {
+            return respond_json(
+                request,
+                StatusCode(400),
+                &ErrorResponse {
+                    error: format!("invalid json body: {error}"),
+                },
+            );
+        }
+    };
+
+    match app.disable_session_skill(session_id, &body.name) {
+        Ok(skills) => respond_json::<SessionSkillsResponse>(request, StatusCode(200), &skills),
         Err(error) => {
             let (status, payload) = map_bootstrap_error(error);
             respond_json(request, status, &payload)

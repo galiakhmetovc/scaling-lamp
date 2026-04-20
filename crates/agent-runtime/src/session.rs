@@ -22,6 +22,8 @@ pub struct SessionSettings {
     pub reasoning_visible: bool,
     pub think_level: Option<String>,
     pub compactifications: u32,
+    pub enabled_skills: Vec<String>,
+    pub disabled_skills: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -89,7 +91,68 @@ impl Default for SessionSettings {
             reasoning_visible: true,
             think_level: None,
             compactifications: 0,
+            enabled_skills: Vec::new(),
+            disabled_skills: Vec::new(),
         }
+    }
+}
+
+impl SessionSettings {
+    pub fn enable_skill(&mut self, skill_name: &str) -> bool {
+        let Some(skill_name) = normalize_skill_name(skill_name) else {
+            return false;
+        };
+        let mut changed = false;
+        let original_disabled = self.disabled_skills.len();
+        self.disabled_skills.retain(|existing| {
+            normalize_skill_name(existing).as_deref() != Some(skill_name.as_str())
+        });
+        if self.disabled_skills.len() != original_disabled {
+            changed = true;
+        }
+        if !self
+            .enabled_skills
+            .iter()
+            .any(|existing| normalize_skill_name(existing).as_deref() == Some(skill_name.as_str()))
+        {
+            self.enabled_skills.push(skill_name);
+            self.enabled_skills.sort();
+            changed = true;
+        }
+        changed
+    }
+
+    pub fn disable_skill(&mut self, skill_name: &str) -> bool {
+        let Some(skill_name) = normalize_skill_name(skill_name) else {
+            return false;
+        };
+        let mut changed = false;
+        let original_enabled = self.enabled_skills.len();
+        self.enabled_skills.retain(|existing| {
+            normalize_skill_name(existing).as_deref() != Some(skill_name.as_str())
+        });
+        if self.enabled_skills.len() != original_enabled {
+            changed = true;
+        }
+        if !self
+            .disabled_skills
+            .iter()
+            .any(|existing| normalize_skill_name(existing).as_deref() == Some(skill_name.as_str()))
+        {
+            self.disabled_skills.push(skill_name);
+            self.disabled_skills.sort();
+            changed = true;
+        }
+        changed
+    }
+}
+
+fn normalize_skill_name(skill_name: &str) -> Option<String> {
+    let trimmed = skill_name.trim().to_lowercase();
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(trimmed)
     }
 }
 
@@ -286,7 +349,9 @@ impl Error for MessageRoleParseError {}
 
 #[cfg(test)]
 mod tests {
-    use super::{MessageRole, PromptOverride, Session, Transcript, TranscriptEntry};
+    use super::{
+        MessageRole, PromptOverride, Session, SessionSettings, Transcript, TranscriptEntry,
+    };
 
     #[test]
     fn session_defaults_include_prompt_and_memory_settings() {
@@ -301,6 +366,8 @@ mod tests {
         assert!(session.settings.reasoning_visible);
         assert_eq!(session.settings.think_level, None);
         assert_eq!(session.settings.compactifications, 0);
+        assert!(session.settings.enabled_skills.is_empty());
+        assert!(session.settings.disabled_skills.is_empty());
     }
 
     #[test]
@@ -345,5 +412,20 @@ mod tests {
         assert_eq!(transcript.entries()[1].role, MessageRole::Assistant);
         assert_eq!(transcript.entries()[0].content, "draft the runtime");
         assert_eq!(transcript.entries()[1].content, "starting plan");
+    }
+
+    #[test]
+    fn session_settings_skill_overrides_stay_unique_and_move_between_lists() {
+        let mut settings = SessionSettings::default();
+
+        assert!(settings.enable_skill(" Rust-Debug "));
+        assert!(!settings.enable_skill("rust-debug"));
+        assert_eq!(settings.enabled_skills, vec!["rust-debug".to_string()]);
+        assert!(settings.disable_skill("rust-debug"));
+        assert!(settings.enabled_skills.is_empty());
+        assert_eq!(settings.disabled_skills, vec!["rust-debug".to_string()]);
+        assert!(settings.enable_skill("rust-debug"));
+        assert_eq!(settings.enabled_skills, vec!["rust-debug".to_string()]);
+        assert!(settings.disabled_skills.is_empty());
     }
 }

@@ -95,6 +95,7 @@ impl SessionHead {
 pub struct PromptAssemblyInput {
     pub system_prompt: Option<String>,
     pub agents_prompt: Option<String>,
+    pub active_skill_prompts: Vec<String>,
     pub session_head: Option<SessionHead>,
     pub plan_snapshot: Option<PlanSnapshot>,
     pub context_summary: Option<ContextSummary>,
@@ -107,7 +108,9 @@ pub struct PromptAssembly;
 
 impl PromptAssembly {
     pub fn build_messages(input: PromptAssemblyInput) -> Vec<ProviderMessage> {
-        let mut messages = Vec::with_capacity(input.transcript_messages.len() + 6);
+        let mut messages = Vec::with_capacity(
+            input.transcript_messages.len() + 6 + input.active_skill_prompts.len(),
+        );
 
         if let Some(system_prompt) = input.system_prompt
             && !system_prompt.trim().is_empty()
@@ -124,6 +127,16 @@ impl PromptAssembly {
             messages.push(ProviderMessage {
                 role: MessageRole::System,
                 content: agents_prompt,
+            });
+        }
+
+        for skill_prompt in input.active_skill_prompts {
+            if skill_prompt.trim().is_empty() {
+                continue;
+            }
+            messages.push(ProviderMessage {
+                role: MessageRole::System,
+                content: skill_prompt,
             });
         }
 
@@ -283,6 +296,7 @@ mod tests {
         let messages = PromptAssembly::build_messages(PromptAssemblyInput {
             system_prompt: None,
             agents_prompt: None,
+            active_skill_prompts: Vec::new(),
             session_head: Some(SessionHead {
                 session_id: "session-1".to_string(),
                 title: "Compacted Chat".to_string(),
@@ -346,6 +360,7 @@ mod tests {
         let messages = PromptAssembly::build_messages(PromptAssemblyInput {
             system_prompt: None,
             agents_prompt: None,
+            active_skill_prompts: Vec::new(),
             session_head: None,
             plan_snapshot: None,
             context_summary: None,
@@ -366,6 +381,7 @@ mod tests {
         let messages = PromptAssembly::build_messages(PromptAssemblyInput {
             system_prompt: None,
             agents_prompt: None,
+            active_skill_prompts: Vec::new(),
             session_head: Some(SessionHead {
                 session_id: "session-1".to_string(),
                 title: "Plan Chat".to_string(),
@@ -430,6 +446,7 @@ mod tests {
         let messages = PromptAssembly::build_messages(PromptAssemblyInput {
             system_prompt: Some("You are a useful AI assistant.".to_string()),
             agents_prompt: Some("Project instructions: keep edits minimal.".to_string()),
+            active_skill_prompts: vec!["# skill: rust-debug\nPrefer cargo and clippy.".to_string()],
             session_head: Some(SessionHead {
                 session_id: "session-1".to_string(),
                 title: "Prompt Order".to_string(),
@@ -453,7 +470,7 @@ mod tests {
             }],
         });
 
-        assert_eq!(messages.len(), 4);
+        assert_eq!(messages.len(), 5);
         assert_eq!(messages[0].role, MessageRole::System);
         assert_eq!(messages[0].content, "You are a useful AI assistant.");
         assert_eq!(messages[1].role, MessageRole::System);
@@ -462,8 +479,10 @@ mod tests {
             "Project instructions: keep edits minimal."
         );
         assert_eq!(messages[2].role, MessageRole::System);
-        assert!(messages[2].content.contains("Session: Prompt Order"));
-        assert_eq!(messages[3].role, MessageRole::User);
+        assert!(messages[2].content.contains("# skill: rust-debug"));
+        assert_eq!(messages[3].role, MessageRole::System);
+        assert!(messages[3].content.contains("Session: Prompt Order"));
+        assert_eq!(messages[4].role, MessageRole::User);
     }
 
     #[test]
@@ -471,6 +490,7 @@ mod tests {
         let messages = PromptAssembly::build_messages(PromptAssemblyInput {
             system_prompt: None,
             agents_prompt: None,
+            active_skill_prompts: Vec::new(),
             session_head: None,
             plan_snapshot: None,
             context_summary: Some(ContextSummary {

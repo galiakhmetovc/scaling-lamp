@@ -5,6 +5,9 @@ use agent_runtime::prompt::{
 };
 use agent_runtime::run::{RunSnapshot, RunStatus, RunStepKind};
 use agent_runtime::session::Session;
+use agent_runtime::skills::{
+    SessionSkillStatus, SkillActivationMode, SkillCatalog, parse_skill_document,
+};
 use agent_runtime::workspace::{WorkspaceEntryKind, WorkspaceRef};
 use std::io::ErrorKind;
 
@@ -89,6 +92,41 @@ pub(crate) fn load_system_prompt(workspace: &WorkspaceRef) -> String {
 
 pub(crate) fn load_agents_prompt(workspace: &WorkspaceRef) -> Option<String> {
     read_prompt_file(workspace, "AGENTS.md").filter(|content| !content.trim().is_empty())
+}
+
+pub(crate) fn load_active_skill_prompts(
+    catalog: &SkillCatalog,
+    active_skills: &[SessionSkillStatus],
+) -> Vec<String> {
+    let active_names = active_skills
+        .iter()
+        .filter(|skill| {
+            matches!(
+                skill.mode,
+                SkillActivationMode::Automatic | SkillActivationMode::Manual
+            )
+        })
+        .map(|skill| skill.name.as_str())
+        .collect::<Vec<_>>();
+
+    let mut prompts = Vec::new();
+    for skill in catalog.entries.iter().filter(|entry| {
+        active_names
+            .iter()
+            .any(|candidate| entry.name.eq_ignore_ascii_case(candidate))
+    }) {
+        let Ok(contents) = std::fs::read_to_string(&skill.skill_md_path) else {
+            continue;
+        };
+        let Ok(document) = parse_skill_document(&skill.skill_md_path, &contents) else {
+            continue;
+        };
+        if document.body.trim().is_empty() {
+            continue;
+        }
+        prompts.push(document.body);
+    }
+    prompts
 }
 
 fn read_prompt_file(workspace: &WorkspaceRef, path: &str) -> Option<String> {

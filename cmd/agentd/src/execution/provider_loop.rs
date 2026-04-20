@@ -14,7 +14,8 @@ use agent_runtime::provider::{
     ProviderToolOutput,
 };
 use agent_runtime::run::{ApprovalRequest, PendingToolApproval, ProviderLoopState};
-use agent_runtime::session::MessageRole;
+use agent_runtime::session::{MessageRole, TranscriptEntry};
+use agent_runtime::skills::{resolve_session_skill_status, scan_skill_catalog};
 use agent_runtime::tool::{
     AddTaskNoteOutput, AddTaskOutput, ArtifactReadOutput, ArtifactSearchOutput,
     ArtifactSearchResult, EditTaskOutput, InitPlanOutput, PlanLintOutput, PlanReadOutput,
@@ -340,11 +341,34 @@ impl ExecutionService {
         );
         let system_prompt = prompting::load_system_prompt(&self.workspace);
         let agents_prompt = prompting::load_agents_prompt(&self.workspace);
+        let transcripts_for_activation = transcripts
+            .iter()
+            .cloned()
+            .map(TranscriptEntry::try_from)
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(ExecutionError::RecordConversion)?;
+        let skills_catalog = scan_skill_catalog(&self.skills_dir).map_err(|source| {
+            ExecutionError::ProviderLoop {
+                reason: format!(
+                    "failed to scan skills catalog at {}: {source}",
+                    self.skills_dir.display()
+                ),
+            }
+        })?;
+        let active_skill_status = resolve_session_skill_status(
+            &skills_catalog,
+            &session.settings,
+            &session.title,
+            &transcripts_for_activation,
+        );
+        let active_skill_prompts =
+            prompting::load_active_skill_prompts(&skills_catalog, &active_skill_status);
 
         Ok(PromptMessages {
             messages: PromptAssembly::build_messages(PromptAssemblyInput {
                 system_prompt: Some(system_prompt),
                 agents_prompt,
+                active_skill_prompts,
                 session_head: Some(session_head),
                 plan_snapshot,
                 context_summary,

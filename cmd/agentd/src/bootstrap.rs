@@ -12,6 +12,10 @@ use agent_runtime::provider::{ProviderBuildError, ProviderDriver, ProviderError,
 use agent_runtime::run::{RunEngine, RunSnapshot, RunTransitionError};
 use agent_runtime::scheduler::MissionVerificationSummary;
 use agent_runtime::session::{MessageRole, Session, SessionSettings, TranscriptEntry};
+use agent_runtime::skills::{
+    SessionSkillStatus as RuntimeSessionSkillStatus, resolve_session_skill_status,
+    scan_skill_catalog,
+};
 use agent_runtime::tool::{SharedProcessRegistry, ToolCall};
 use serde::{Deserialize, Serialize};
 use std::error::Error;
@@ -98,6 +102,13 @@ pub struct SessionPendingApproval {
     pub requested_at: i64,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SessionSkillStatus {
+    pub name: String,
+    pub description: String,
+    pub mode: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub struct SessionPreferencesPatch {
     pub title: Option<String>,
@@ -114,6 +125,7 @@ impl App {
             self.runtime.workspace.clone(),
             self.config.provider.max_output_tokens,
             self.processes.clone(),
+            self.config.daemon.skills_dir.clone(),
         )
     }
 
@@ -228,6 +240,69 @@ impl App {
                 kind: "session",
                 id: session_id.to_string(),
             })
+    }
+
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub fn session_skills(
+        &self,
+        session_id: &str,
+    ) -> Result<Vec<SessionSkillStatus>, BootstrapError> {
+        let store = self.store()?;
+        let session = Session::try_from(store.get_session(session_id)?.ok_or_else(|| {
+            BootstrapError::MissingRecord {
+                kind: "session",
+                id: session_id.to_string(),
+            }
+        })?)
+        .map_err(BootstrapError::RecordConversion)?;
+        let transcripts = store
+            .list_transcripts_for_session(session_id)?
+            .into_iter()
+            .map(TranscriptEntry::try_from)
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(BootstrapError::RecordConversion)?;
+
+        let catalog = self.skill_catalog()?;
+        Ok(
+            resolve_session_skill_status(&catalog, &session.settings, &session.title, &transcripts)
+                .into_iter()
+                .map(SessionSkillStatus::from)
+                .collect(),
+        )
+    }
+
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub fn render_session_skills(&self, session_id: &str) -> Result<String, BootstrapError> {
+        let skills = self.session_skills(session_id)?;
+        if skills.is_empty() {
+            return Ok("skills: none discovered".to_string());
+        }
+
+        let mut lines = vec!["Skills:".to_string()];
+        lines.extend(
+            skills
+                .into_iter()
+                .map(|skill| format!("- [{}] {}: {}", skill.mode, skill.name, skill.description)),
+        );
+        Ok(lines.join("\n"))
+    }
+
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub fn enable_session_skill(
+        &self,
+        session_id: &str,
+        skill_name: &str,
+    ) -> Result<Vec<SessionSkillStatus>, BootstrapError> {
+        self.update_session_skill_state(session_id, skill_name, SkillCommand::Enable)
+    }
+
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub fn disable_session_skill(
+        &self,
+        session_id: &str,
+        skill_name: &str,
+    ) -> Result<Vec<SessionSkillStatus>, BootstrapError> {
+        self.update_session_skill_state(session_id, skill_name, SkillCommand::Disable)
     }
 
     #[cfg_attr(not(test), allow(dead_code))]
@@ -372,6 +447,66 @@ impl App {
     ) -> Result<SessionSummary, BootstrapError> {
         self.delete_session(session_id)?;
         self.create_session_auto(title)
+    }
+
+    fn update_session_skill_state(
+        &self,
+        session_id: &str,
+        skill_name: &str,
+        command: SkillCommand,
+    ) -> Result<Vec<SessionSkillStatus>, BootstrapError> {
+        let normalized_skill = skill_name.trim().to_lowercase();
+        if normalized_skill.is_empty() {
+            return Err(BootstrapError::Usage {
+                reason: "skill name must not be empty".to_string(),
+            });
+        }
+
+        let store = self.store()?;
+        let record =
+            store
+                .get_session(session_id)?
+                .ok_or_else(|| BootstrapError::MissingRecord {
+                    kind: "session",
+                    id: session_id.to_string(),
+                })?;
+        let mut session = Session::try_from(record).map_err(BootstrapError::RecordConversion)?;
+        let catalog = self.skill_catalog()?;
+        let matching = catalog
+            .entries
+            .iter()
+            .find(|entry| entry.name.eq_ignore_ascii_case(normalized_skill.as_str()))
+            .or_else(|| {
+                catalog
+                    .entries
+                    .iter()
+                    .find(|entry| entry.name.to_lowercase() == normalized_skill)
+            })
+            .ok_or_else(|| BootstrapError::Usage {
+                reason: format!("unknown skill {skill_name}"),
+            })?;
+
+        match command {
+            SkillCommand::Enable => {
+                session.settings.enable_skill(&matching.name);
+            }
+            SkillCommand::Disable => {
+                session.settings.disable_skill(&matching.name);
+            }
+        }
+        session.updated_at = unix_timestamp()?;
+
+        let record = agent_persistence::SessionRecord::try_from(&session)
+            .map_err(BootstrapError::RecordConversion)?;
+        store.put_session(&record)?;
+        self.session_skills(session_id)
+    }
+
+    fn skill_catalog(&self) -> Result<agent_runtime::skills::SkillCatalog, BootstrapError> {
+        scan_skill_catalog(&self.config.daemon.skills_dir).map_err(|source| BootstrapError::Io {
+            path: self.config.daemon.skills_dir.clone(),
+            source,
+        })
     }
 
     #[cfg_attr(not(test), allow(dead_code))]
@@ -806,6 +941,28 @@ fn session_summary_from_session(
         created_at: session.created_at,
         updated_at,
     })
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SkillCommand {
+    Enable,
+    Disable,
+}
+
+impl From<RuntimeSessionSkillStatus> for SessionSkillStatus {
+    fn from(value: RuntimeSessionSkillStatus) -> Self {
+        Self {
+            name: value.name,
+            description: value.description,
+            mode: match value.mode {
+                agent_runtime::skills::SkillActivationMode::Inactive => "inactive",
+                agent_runtime::skills::SkillActivationMode::Automatic => "automatic",
+                agent_runtime::skills::SkillActivationMode::Manual => "manual",
+                agent_runtime::skills::SkillActivationMode::Disabled => "disabled",
+            }
+            .to_string(),
+        }
+    }
 }
 
 fn compaction_instructions() -> String {

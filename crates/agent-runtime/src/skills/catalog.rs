@@ -31,7 +31,12 @@ pub fn scan_skill_catalog(skills_dir: &Path) -> Result<SkillCatalog, std::io::Er
     let mut skipped = Vec::new();
     let mut skill_dirs = fs::read_dir(skills_dir)?
         .filter_map(Result::ok)
-        .filter(|entry| entry.file_type().map(|file_type| file_type.is_dir()).unwrap_or(false))
+        .filter(|entry| {
+            entry
+                .file_type()
+                .map(|file_type| file_type.is_dir())
+                .unwrap_or(false)
+        })
         .map(|entry| entry.path())
         .collect::<Vec<_>>();
     skill_dirs.sort();

@@ -1,5 +1,6 @@
 use crate::bootstrap::{
-    SessionPendingApproval, SessionPreferencesPatch, SessionSummary, SessionTranscriptView,
+    SessionPendingApproval, SessionPreferencesPatch, SessionSkillStatus, SessionSummary,
+    SessionTranscriptView,
 };
 use crate::execution::{ApprovalContinuationReport, ChatTurnExecutionReport};
 use serde::{Deserialize, Serialize};
@@ -77,6 +78,11 @@ pub struct ApproveRunRequest {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SkillCommandRequest {
+    pub name: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum WorkerOutcomeResponse {
     ChatCompleted { report: ChatTurnExecutionReport },
@@ -89,3 +95,4 @@ pub enum WorkerOutcomeResponse {
 pub type SessionTranscriptResponse = SessionTranscriptView;
 pub type SessionPendingApprovalsResponse = Vec<SessionPendingApproval>;
 pub type SessionPreferencesRequest = SessionPreferencesPatch;
+pub type SessionSkillsResponse = Vec<SessionSkillStatus>;

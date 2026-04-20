@@ -25,7 +25,7 @@ use agent_runtime::workspace::WorkspaceRef;
 use serde::{Deserialize, Serialize};
 use std::error::Error;
 use std::fmt;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SupervisorTickReport {
@@ -124,6 +124,7 @@ pub struct ExecutionService {
     supervisor: SupervisorLoop,
     workspace: WorkspaceRef,
     processes: SharedProcessRegistry,
+    skills_dir: PathBuf,
 }
 
 #[derive(Debug)]
@@ -175,6 +176,7 @@ impl Default for ExecutionService {
             WorkspaceRef::default(),
             None,
             SharedProcessRegistry::default(),
+            PathBuf::from("skills"),
         )
     }
 }
@@ -185,6 +187,7 @@ impl ExecutionService {
         workspace: WorkspaceRef,
         provider_max_output_tokens: Option<u32>,
         processes: SharedProcessRegistry,
+        skills_dir: PathBuf,
     ) -> Self {
         Self {
             permissions,
@@ -192,6 +195,7 @@ impl ExecutionService {
             supervisor: SupervisorLoop::default(),
             workspace,
             processes,
+            skills_dir,
         }
     }
 

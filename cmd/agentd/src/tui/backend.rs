@@ -1,6 +1,6 @@
 use crate::bootstrap::{
-    App, BootstrapError, SessionPendingApproval, SessionPreferencesPatch, SessionSummary,
-    SessionTranscriptView,
+    App, BootstrapError, SessionPendingApproval, SessionPreferencesPatch, SessionSkillStatus,
+    SessionSummary, SessionTranscriptView,
 };
 use crate::execution::{ApprovalContinuationReport, ChatExecutionEvent, ChatTurnExecutionReport};
 use crate::http::client::DaemonClient;
@@ -27,6 +27,17 @@ pub trait TuiBackend: Clone + Send + Sync + 'static {
         &self,
         session_id: &str,
     ) -> Result<Vec<SessionPendingApproval>, BootstrapError>;
+    fn session_skills(&self, session_id: &str) -> Result<Vec<SessionSkillStatus>, BootstrapError>;
+    fn enable_session_skill(
+        &self,
+        session_id: &str,
+        skill_name: &str,
+    ) -> Result<Vec<SessionSkillStatus>, BootstrapError>;
+    fn disable_session_skill(
+        &self,
+        session_id: &str,
+        skill_name: &str,
+    ) -> Result<Vec<SessionSkillStatus>, BootstrapError>;
     fn latest_pending_approval(
         &self,
         session_id: &str,
@@ -97,6 +108,26 @@ impl TuiBackend for App {
         session_id: &str,
     ) -> Result<Vec<SessionPendingApproval>, BootstrapError> {
         App::pending_approvals(self, session_id)
+    }
+
+    fn session_skills(&self, session_id: &str) -> Result<Vec<SessionSkillStatus>, BootstrapError> {
+        App::session_skills(self, session_id)
+    }
+
+    fn enable_session_skill(
+        &self,
+        session_id: &str,
+        skill_name: &str,
+    ) -> Result<Vec<SessionSkillStatus>, BootstrapError> {
+        App::enable_session_skill(self, session_id, skill_name)
+    }
+
+    fn disable_session_skill(
+        &self,
+        session_id: &str,
+        skill_name: &str,
+    ) -> Result<Vec<SessionSkillStatus>, BootstrapError> {
+        App::disable_session_skill(self, session_id, skill_name)
     }
 
     fn latest_pending_approval(
@@ -197,6 +228,26 @@ impl TuiBackend for DaemonClient {
         session_id: &str,
     ) -> Result<Vec<SessionPendingApproval>, BootstrapError> {
         DaemonClient::pending_approvals(self, session_id)
+    }
+
+    fn session_skills(&self, session_id: &str) -> Result<Vec<SessionSkillStatus>, BootstrapError> {
+        DaemonClient::session_skills(self, session_id)
+    }
+
+    fn enable_session_skill(
+        &self,
+        session_id: &str,
+        skill_name: &str,
+    ) -> Result<Vec<SessionSkillStatus>, BootstrapError> {
+        DaemonClient::enable_session_skill(self, session_id, skill_name)
+    }
+
+    fn disable_session_skill(
+        &self,
+        session_id: &str,
+        skill_name: &str,
+    ) -> Result<Vec<SessionSkillStatus>, BootstrapError> {
+        DaemonClient::disable_session_skill(self, session_id, skill_name)
     }
 
     fn latest_pending_approval(

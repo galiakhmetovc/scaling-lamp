@@ -2,7 +2,8 @@ use agent_persistence::AppConfig;
 use agentd::bootstrap;
 use agentd::daemon;
 use agentd::http::types::{
-    CreateSessionRequest, ErrorResponse, SessionSummaryResponse, StatusResponse,
+    CreateSessionRequest, ErrorResponse, SessionSummaryResponse, SkillCommandRequest,
+    StatusResponse,
 };
 use reqwest::StatusCode;
 use reqwest::blocking::Client;
@@ -98,6 +99,79 @@ fn daemon_http_can_create_a_session_over_json() {
     assert_eq!(session.title, "Daemon Session");
     assert_eq!(session.message_count, 0);
     assert!(!session.id.is_empty());
+
+    handle.stop().expect("stop daemon");
+}
+
+#[test]
+fn daemon_http_lists_and_updates_session_skills() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let skills_dir = temp.path().join("skills");
+    std::fs::create_dir_all(skills_dir.join("rust-debug")).expect("rust skill dir");
+    std::fs::write(
+        skills_dir.join("rust-debug").join("SKILL.md"),
+        "---\nname: rust-debug\ndescription: Debug Rust compiler errors and cargo regressions.\n---\n\n# rust-debug\n",
+    )
+    .expect("write skill");
+
+    let mut config = AppConfig {
+        data_dir: temp.path().join("teamd-state"),
+        ..AppConfig::default()
+    };
+    config.daemon.bind_host = "127.0.0.1".to_string();
+    config.daemon.bind_port = free_port();
+    config.daemon.bearer_token = Some("secret-token".to_string());
+    config.daemon.skills_dir = skills_dir;
+    let base_url = format!(
+        "http://{}:{}",
+        config.daemon.bind_host, config.daemon.bind_port
+    );
+    let app = bootstrap::build_from_config(config).expect("build app");
+    let session = app
+        .create_session_auto(Some("Daemon Skill Session"))
+        .expect("create session");
+    let handle = daemon::spawn_for_test(app).expect("spawn daemon");
+    let client = Client::new();
+
+    let listed = client
+        .get(format!("{base_url}/v1/sessions/{}/skills", session.id))
+        .bearer_auth("secret-token")
+        .send()
+        .expect("list skills");
+    assert_eq!(listed.status(), StatusCode::OK);
+    let listed: Vec<bootstrap::SessionSkillStatus> = listed.json().expect("skills json");
+    assert_eq!(listed.len(), 1);
+    assert_eq!(listed[0].mode, "inactive");
+
+    let enabled = client
+        .post(format!(
+            "{base_url}/v1/sessions/{}/skills/enable",
+            session.id
+        ))
+        .bearer_auth("secret-token")
+        .json(&SkillCommandRequest {
+            name: "rust-debug".to_string(),
+        })
+        .send()
+        .expect("enable skill");
+    assert_eq!(enabled.status(), StatusCode::OK);
+    let enabled: Vec<bootstrap::SessionSkillStatus> = enabled.json().expect("enabled json");
+    assert_eq!(enabled[0].mode, "manual");
+
+    let disabled = client
+        .post(format!(
+            "{base_url}/v1/sessions/{}/skills/disable",
+            session.id
+        ))
+        .bearer_auth("secret-token")
+        .json(&SkillCommandRequest {
+            name: "rust-debug".to_string(),
+        })
+        .send()
+        .expect("disable skill");
+    assert_eq!(disabled.status(), StatusCode::OK);
+    let disabled: Vec<bootstrap::SessionSkillStatus> = disabled.json().expect("disabled json");
+    assert_eq!(disabled[0].mode, "disabled");
 
     handle.stop().expect("stop daemon");
 }

@@ -1,13 +1,13 @@
 use crate::bootstrap::{
-    BootstrapError, SessionPendingApproval, SessionPreferencesPatch, SessionSummary,
-    SessionTranscriptView,
+    BootstrapError, SessionPendingApproval, SessionPreferencesPatch, SessionSkillStatus,
+    SessionSummary, SessionTranscriptView,
 };
 use crate::execution::{
     ApprovalContinuationReport, ChatExecutionEvent, ChatTurnExecutionReport, ExecutionError,
 };
 use crate::http::types::{
     ApproveRunRequest, ChatTurnRequest, ClearSessionRequest, CreateSessionRequest, ErrorResponse,
-    SessionSummaryResponse, StatusResponse, WorkerOutcomeResponse,
+    SessionSummaryResponse, SkillCommandRequest, StatusResponse, WorkerOutcomeResponse,
 };
 use agent_persistence::AppConfig;
 use reqwest::StatusCode;
@@ -117,6 +117,39 @@ impl DaemonClient {
         session_id: &str,
     ) -> Result<Vec<SessionPendingApproval>, BootstrapError> {
         self.get_json(&format!("/v1/sessions/{session_id}/approvals"))
+    }
+
+    pub fn session_skills(
+        &self,
+        session_id: &str,
+    ) -> Result<Vec<SessionSkillStatus>, BootstrapError> {
+        self.get_json(&format!("/v1/sessions/{session_id}/skills"))
+    }
+
+    pub fn enable_session_skill(
+        &self,
+        session_id: &str,
+        skill_name: &str,
+    ) -> Result<Vec<SessionSkillStatus>, BootstrapError> {
+        self.post_json(
+            &format!("/v1/sessions/{session_id}/skills/enable"),
+            &SkillCommandRequest {
+                name: skill_name.to_string(),
+            },
+        )
+    }
+
+    pub fn disable_session_skill(
+        &self,
+        session_id: &str,
+        skill_name: &str,
+    ) -> Result<Vec<SessionSkillStatus>, BootstrapError> {
+        self.post_json(
+            &format!("/v1/sessions/{session_id}/skills/disable"),
+            &SkillCommandRequest {
+                name: skill_name.to_string(),
+            },
+        )
     }
 
     pub fn latest_pending_approval(

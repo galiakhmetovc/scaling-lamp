@@ -195,14 +195,14 @@ where
             None => {}
         },
         TuiAction::SubmitChatInput(input) => {
-            if input.trim_start().starts_with('/') {
+            if is_command_input(input.as_str()) {
                 handle_command(app, state, input.trim(), redraw)?;
             } else {
                 submit_chat_message(app, state, input.trim(), QueuedDraftMode::Priority)?;
             }
         }
         TuiAction::QueueChatInput(input) => {
-            if input.trim_start().starts_with('/') {
+            if is_command_input(input.as_str()) {
                 state.timeline_mut().push_system(
                     "commands cannot be queued; press Enter to execute the command",
                     unix_timestamp()?,
@@ -242,25 +242,49 @@ where
     let command = parts.next().unwrap_or_default();
     let rest = parts.next().unwrap_or_default().trim();
 
-    match command {
-        "/session" => state.open_session_screen(),
-        "/new" => {
+    match canonical_command(command) {
+        Some("/session") => state.open_session_screen(),
+        Some("/new") => {
             let summary = app.create_session_auto(Some("New Session"))?;
             state.sync_sessions(app.list_session_summaries()?);
             load_session_into_state(app, state, &summary.id)?;
         }
-        "/rename" => {
+        Some("/rename") => {
             let _ = state.open_rename_dialog();
         }
-        "/clear" => {
+        Some("/clear") => {
             let _ = state.open_clear_dialog();
         }
-        "/plan" => {
+        Some("/plan") => {
             let plan = app.render_plan(&current_session_id)?;
             state.timeline_mut().push_system(&plan, unix_timestamp()?);
         }
-        "/approve" => approve_pending(app, state, &current_session_id, option_arg(rest), redraw)?,
-        "/model" => {
+        Some("/skills") => {
+            let rendered = render_session_skills(app.session_skills(&current_session_id)?);
+            state
+                .timeline_mut()
+                .push_system(&rendered, unix_timestamp()?);
+        }
+        Some("/enable") => {
+            let skill_name = require_arg(rest, "\\включить")?;
+            let updated = app.enable_session_skill(&current_session_id, &skill_name)?;
+            let rendered = render_session_skills(updated);
+            state
+                .timeline_mut()
+                .push_system(&rendered, unix_timestamp()?);
+        }
+        Some("/disable") => {
+            let skill_name = require_arg(rest, "\\выключить")?;
+            let updated = app.disable_session_skill(&current_session_id, &skill_name)?;
+            let rendered = render_session_skills(updated);
+            state
+                .timeline_mut()
+                .push_system(&rendered, unix_timestamp()?);
+        }
+        Some("/approve") => {
+            approve_pending(app, state, &current_session_id, option_arg(rest), redraw)?
+        }
+        Some("/model") => {
             let summary = app.update_session_preferences(
                 &current_session_id,
                 crate::bootstrap::SessionPreferencesPatch {
@@ -271,7 +295,7 @@ where
             state.replace_current_summary(summary);
             state.sync_sessions(app.list_session_summaries()?);
         }
-        "/reasoning" => {
+        Some("/reasoning") => {
             let visible = match require_arg(rest, "/reasoning")?.as_str() {
                 "on" => true,
                 "off" => false,
@@ -291,7 +315,7 @@ where
             state.replace_current_summary(summary);
             state.sync_sessions(app.list_session_summaries()?);
         }
-        "/think" => {
+        Some("/think") => {
             let summary = app.update_session_preferences(
                 &current_session_id,
                 crate::bootstrap::SessionPreferencesPatch {
@@ -302,7 +326,7 @@ where
             state.replace_current_summary(summary);
             state.sync_sessions(app.list_session_summaries()?);
         }
-        "/compact" => {
+        Some("/compact") => {
             let before = state
                 .current_session_summary()
                 .map(|summary| summary.compactifications);
@@ -319,7 +343,7 @@ where
             };
             state.timeline_mut().push_system(message, unix_timestamp()?);
         }
-        "/exit" => state.request_exit(),
+        Some("/exit") => state.request_exit(),
         _ => {
             state
                 .timeline_mut()
@@ -623,6 +647,45 @@ fn require_arg(raw: &str, command: &str) -> Result<String, BootstrapError> {
 
 fn option_arg(raw: &str) -> Option<String> {
     (!raw.trim().is_empty()).then(|| raw.trim().to_string())
+}
+
+fn is_command_input(input: &str) -> bool {
+    let trimmed = input.trim_start();
+    trimmed.starts_with('/') || trimmed.starts_with('\\')
+}
+
+fn canonical_command(command: &str) -> Option<&'static str> {
+    match command {
+        "/session" | "\\сессии" => Some("/session"),
+        "/new" | "\\новая" => Some("/new"),
+        "/rename" | "\\переименовать" => Some("/rename"),
+        "/clear" | "\\очистить" => Some("/clear"),
+        "/plan" | "\\план" => Some("/plan"),
+        "/skills" | "\\скиллы" => Some("/skills"),
+        "/enable" | "\\включить" => Some("/enable"),
+        "/disable" | "\\выключить" => Some("/disable"),
+        "/approve" | "\\апрув" => Some("/approve"),
+        "/model" | "\\модель" => Some("/model"),
+        "/reasoning" | "\\размышления" => Some("/reasoning"),
+        "/think" | "\\думай" => Some("/think"),
+        "/compact" | "\\компакт" => Some("/compact"),
+        "/exit" | "\\выход" => Some("/exit"),
+        _ => None,
+    }
+}
+
+fn render_session_skills(skills: Vec<crate::bootstrap::SessionSkillStatus>) -> String {
+    if skills.is_empty() {
+        return "skills: none discovered".to_string();
+    }
+
+    let mut lines = vec!["Skills:".to_string()];
+    lines.extend(
+        skills
+            .into_iter()
+            .map(|skill| format!("- [{}] {}: {}", skill.mode, skill.name, skill.description)),
+    );
+    lines.join("\n")
 }
 
 fn title_or_default(raw: &str, default: &str) -> String {

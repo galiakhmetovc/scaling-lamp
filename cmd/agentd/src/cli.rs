@@ -18,7 +18,7 @@ use std::io::{BufRead, Write};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 const DEFAULT_SMOKE_PROMPT: &str = "Reply with the single word ready.";
-const REPL_HELP: &str = "commands: /help | /show | /plan | /approve [approval-id] | /exit";
+const REPL_HELP: &str = "commands: \\помощь|/help | \\показать|/show | \\план|/plan | \\скиллы|/skills | \\включить <skill>|/enable <skill> | \\выключить <skill>|/disable <skill> | /approve [approval-id] | \\выход|/exit";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum Command {
@@ -50,6 +50,17 @@ enum Command {
     },
     SessionShow {
         id: String,
+    },
+    SessionSkills {
+        id: String,
+    },
+    SessionEnableSkill {
+        id: String,
+        skill_name: String,
+    },
+    SessionDisableSkill {
+        id: String,
+        skill_name: String,
     },
     MissionCreate {
         id: String,
@@ -112,6 +123,15 @@ where
         Command::MissionTick { now } => run_mission_tick(app, now),
         Command::SessionCreate { id, title } => create_session(&app.store()?, &id, &title),
         Command::SessionShow { id } => show_session(&app.store()?, &id),
+        Command::SessionSkills { id } => app.render_session_skills(&id),
+        Command::SessionEnableSkill { id, skill_name } => {
+            app.enable_session_skill(&id, &skill_name)?;
+            app.render_session_skills(&id)
+        }
+        Command::SessionDisableSkill { id, skill_name } => {
+            app.disable_session_skill(&id, &skill_name)?;
+            app.render_session_skills(&id)
+        }
         Command::MissionCreate {
             id,
             session_id,
@@ -221,6 +241,25 @@ impl Command {
             [scope, action, id] if scope == "session" && action == "show" => {
                 Ok(Self::SessionShow { id: id.clone() })
             }
+            [scope, action, id] if scope == "session" && action == "skills" => {
+                Ok(Self::SessionSkills { id: id.clone() })
+            }
+            [scope, action, id, skill_name]
+                if scope == "session" && action == "enable-skill" =>
+            {
+                Ok(Self::SessionEnableSkill {
+                    id: id.clone(),
+                    skill_name: skill_name.clone(),
+                })
+            }
+            [scope, action, id, skill_name]
+                if scope == "session" && action == "disable-skill" =>
+            {
+                Ok(Self::SessionDisableSkill {
+                    id: id.clone(),
+                    skill_name: skill_name.clone(),
+                })
+            }
             [scope, action, id, session_id, objective @ ..]
                 if scope == "mission" && action == "create" =>
             {
@@ -274,7 +313,7 @@ impl Command {
                 })
             }
             _ => Err(BootstrapError::Usage {
-                reason: "expected one of: status | tui | daemon | provider smoke | chat show/send/repl | mission create/show/tick | session create/show | run show | job show/execute | approval list/approve | delegate list | verification show".to_string(),
+                reason: "expected one of: status | tui | daemon | provider smoke | chat show/send/repl | mission create/show/tick | session create/show/skills/enable-skill/disable-skill | run show | job show/execute | approval list/approve | delegate list | verification show".to_string(),
             }),
         }
     }
@@ -335,6 +374,15 @@ fn execute_command(app: &App, command: Command) -> Result<String, BootstrapError
         Command::MissionTick { now } => run_mission_tick(app, now),
         Command::SessionCreate { id, title } => create_session(&app.store()?, &id, &title),
         Command::SessionShow { id } => show_session(&app.store()?, &id),
+        Command::SessionSkills { id } => app.render_session_skills(&id),
+        Command::SessionEnableSkill { id, skill_name } => {
+            app.enable_session_skill(&id, &skill_name)?;
+            app.render_session_skills(&id)
+        }
+        Command::SessionDisableSkill { id, skill_name } => {
+            app.disable_session_skill(&id, &skill_name)?;
+            app.render_session_skills(&id)
+        }
         Command::MissionCreate {
             id,
             session_id,
@@ -514,28 +562,53 @@ where
             continue;
         }
 
-        match trimmed {
-            "/exit" => {
+        match canonical_repl_command(trimmed) {
+            Some("/exit") => {
                 renderer.finish_turn()?;
                 writeln!(renderer.output, "leaving chat repl session_id={session_id}")
                     .map_err(BootstrapError::Stream)?;
                 return Ok(());
             }
-            "/help" => {
+            Some("/help") => {
                 renderer.finish_turn()?;
                 writeln!(renderer.output, "{REPL_HELP}").map_err(BootstrapError::Stream)?;
             }
-            "/show" => {
+            Some("/show") => {
                 renderer.finish_turn()?;
                 let transcript = show_chat(app, session_id)?;
                 writeln!(renderer.output, "{transcript}").map_err(BootstrapError::Stream)?;
             }
-            "/plan" => {
+            Some("/plan") => {
                 renderer.finish_turn()?;
                 let plan = app.render_plan(session_id)?;
                 writeln!(renderer.output, "{plan}").map_err(BootstrapError::Stream)?;
             }
-            _ if trimmed.starts_with("/approve") => {
+            Some("/skills") => {
+                renderer.finish_turn()?;
+                let skills = app.render_session_skills(session_id)?;
+                writeln!(renderer.output, "{skills}").map_err(BootstrapError::Stream)?;
+            }
+            Some("/enable") => {
+                renderer.finish_turn()?;
+                let skill_name =
+                    split_command_arg(trimmed).ok_or_else(|| BootstrapError::Usage {
+                        reason: "\\включить requires a skill name".to_string(),
+                    })?;
+                app.enable_session_skill(session_id, skill_name)?;
+                let skills = app.render_session_skills(session_id)?;
+                writeln!(renderer.output, "{skills}").map_err(BootstrapError::Stream)?;
+            }
+            Some("/disable") => {
+                renderer.finish_turn()?;
+                let skill_name =
+                    split_command_arg(trimmed).ok_or_else(|| BootstrapError::Usage {
+                        reason: "\\выключить requires a skill name".to_string(),
+                    })?;
+                app.disable_session_skill(session_id, skill_name)?;
+                let skills = app.render_session_skills(session_id)?;
+                writeln!(renderer.output, "{skills}").map_err(BootstrapError::Stream)?;
+            }
+            Some("/approve") => {
                 let requested = trimmed.split_whitespace().nth(1).map(ToString::to_string);
                 let Some(current) = find_pending_approval(app, session_id, requested.as_deref())?
                 else {
@@ -573,7 +646,8 @@ where
                         .map_err(BootstrapError::Stream)?;
                 }
             }
-            message => {
+            _ => {
+                let message = trimmed;
                 if find_pending_approval(app, session_id, None)?.is_some() {
                     renderer.finish_turn()?;
                     writeln!(
@@ -614,6 +688,27 @@ where
             }
         }
     }
+}
+
+fn canonical_repl_command(raw: &str) -> Option<&'static str> {
+    let command = raw.split_whitespace().next().unwrap_or_default();
+    match command {
+        "/exit" | "\\выход" => Some("/exit"),
+        "/help" | "\\помощь" => Some("/help"),
+        "/show" | "\\показать" => Some("/show"),
+        "/plan" | "\\план" => Some("/plan"),
+        "/skills" | "\\скиллы" => Some("/skills"),
+        "/enable" | "\\включить" => Some("/enable"),
+        "/disable" | "\\выключить" => Some("/disable"),
+        "/approve" | "\\апрув" => Some("/approve"),
+        _ => None,
+    }
+}
+
+fn split_command_arg(raw: &str) -> Option<&str> {
+    raw.split_once(char::is_whitespace)
+        .map(|(_, rest)| rest.trim())
+        .filter(|value| !value.is_empty())
 }
 
 fn find_pending_approval(

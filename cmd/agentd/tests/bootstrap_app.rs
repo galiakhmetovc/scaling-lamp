@@ -2856,6 +2856,106 @@ fn repl_runs_plan_command_and_renders_current_plan() {
 }
 
 #[test]
+fn repl_supports_russian_skill_commands_with_session_scoped_overrides() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let skills_dir = temp.path().join("skills");
+    std::fs::create_dir_all(skills_dir.join("rust-debug")).expect("rust skill dir");
+    std::fs::create_dir_all(skills_dir.join("postgres")).expect("postgres skill dir");
+    std::fs::write(
+        skills_dir.join("rust-debug").join("SKILL.md"),
+        "---\nname: rust-debug\ndescription: Debug Rust compiler errors and cargo regressions.\n---\n\n# rust-debug\n",
+    )
+    .expect("write rust skill");
+    std::fs::write(
+        skills_dir.join("postgres").join("SKILL.md"),
+        "---\nname: postgres\ndescription: Investigate PostgreSQL queries and migration issues.\n---\n\n# postgres\n",
+    )
+    .expect("write postgres skill");
+
+    let mut config = AppConfig {
+        data_dir: temp.path().join("state-root"),
+        ..AppConfig::default()
+    };
+    config.daemon.skills_dir = skills_dir;
+    let app = build_from_config(config).expect("build app");
+    let store = PersistenceStore::open(&app.persistence).expect("open store");
+
+    store
+        .put_session(&SessionRecord {
+            id: "session-chat-repl-skills".to_string(),
+            title: "Chat REPL skills session".to_string(),
+            prompt_override: None,
+            settings_json: serde_json::to_string(&SessionSettings::default())
+                .expect("serialize settings"),
+            active_mission_id: None,
+            created_at: 1,
+            updated_at: 1,
+        })
+        .expect("put session");
+
+    let mut input = Cursor::new(
+        "\\скиллы\n\\включить rust-debug\n\\выключить rust-debug\n\\выход\n"
+            .as_bytes()
+            .to_vec(),
+    );
+    let mut output = Vec::new();
+    app.run_with_io(
+        ["chat", "repl", "session-chat-repl-skills"],
+        &mut input,
+        &mut output,
+    )
+    .expect("repl");
+
+    let rendered = String::from_utf8(output).expect("utf8");
+    assert!(rendered.contains("rust-debug"));
+    assert!(rendered.contains("postgres"));
+    assert!(rendered.contains("[manual] rust-debug"));
+    assert!(rendered.contains("[disabled] rust-debug"));
+}
+
+#[test]
+fn cli_session_skill_commands_render_and_mutate_session_skill_overrides() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let skills_dir = temp.path().join("skills");
+    std::fs::create_dir_all(skills_dir.join("rust-debug")).expect("rust skill dir");
+    std::fs::write(
+        skills_dir.join("rust-debug").join("SKILL.md"),
+        "---\nname: rust-debug\ndescription: Debug Rust compiler errors and cargo regressions.\n---\n\n# rust-debug\n",
+    )
+    .expect("write rust skill");
+
+    let mut config = AppConfig {
+        data_dir: temp.path().join("state-root"),
+        ..AppConfig::default()
+    };
+    config.daemon.skills_dir = skills_dir;
+    let app = build_from_config(config).expect("build app");
+    let session = app
+        .create_session_auto(Some("CLI Skill Session"))
+        .expect("create session");
+
+    let listed = app
+        .run_with_args(["session", "skills", session.id.as_str()])
+        .expect("list skills");
+    assert!(listed.contains("[inactive] rust-debug"));
+
+    let enabled = app
+        .run_with_args(["session", "enable-skill", session.id.as_str(), "rust-debug"])
+        .expect("enable skill");
+    assert!(enabled.contains("[manual] rust-debug"));
+
+    let disabled = app
+        .run_with_args([
+            "session",
+            "disable-skill",
+            session.id.as_str(),
+            "rust-debug",
+        ])
+        .expect("disable skill");
+    assert!(disabled.contains("[disabled] rust-debug"));
+}
+
+#[test]
 fn repl_accepts_cp1251_terminal_input_without_utf8_failure() {
     let (api_base, _requests, handle) =
         spawn_sse_server_sequence(vec![openai_stream_message_response(
@@ -4150,6 +4250,104 @@ fn execute_chat_turn_places_system_and_agents_files_before_runtime_blocks() {
 
     assert!(system_prompt_marker < agents_marker);
     assert!(agents_marker < session_marker);
+}
+
+#[test]
+fn execute_chat_turn_places_active_skills_between_agents_and_session_head() {
+    let (api_base, requests, handle) = spawn_json_server_sequence(vec![
+        r#"{
+                "id":"resp_prompt_skills",
+                "model":"gpt-5.4",
+                "output":[
+                    {
+                        "id":"msg_prompt_skills",
+                        "type":"message",
+                        "status":"completed",
+                        "role":"assistant",
+                        "content":[
+                            {
+                                "type":"output_text",
+                                "text":"Loaded active skills."
+                            }
+                        ]
+                    }
+                ],
+                "usage":{"input_tokens":44,"output_tokens":6,"total_tokens":50}
+            }"#
+        .to_string(),
+    ]);
+    let temp = tempfile::tempdir().expect("tempdir");
+    let workspace_root = temp.path().join("workspace");
+    let skills_dir = temp.path().join("skills");
+    fs::create_dir_all(&workspace_root).expect("create workspace");
+    fs::create_dir_all(skills_dir.join("rust-debug")).expect("create skill dir");
+    fs::write(
+        workspace_root.join("SYSTEM.md"),
+        "You are a useful AI assistant.\n",
+    )
+    .expect("write system prompt");
+    fs::write(
+        workspace_root.join("AGENTS.md"),
+        "Project instructions:\n- Keep edits minimal.\n",
+    )
+    .expect("write agents prompt");
+    fs::write(
+        skills_dir.join("rust-debug").join("SKILL.md"),
+        "---\nname: rust-debug\ndescription: Debug Rust compiler errors and cargo regressions.\n---\n\n# rust-debug\nAlways start with cargo check and focused Rust diagnostics.\n",
+    )
+    .expect("write skill prompt");
+    let mut config = AppConfig {
+        data_dir: temp.path().join("state-root"),
+        daemon: Default::default(),
+        provider: ConfiguredProvider {
+            kind: ProviderKind::OpenAiResponses,
+            api_base: Some(format!("{api_base}/v1")),
+            api_key: Some("test-key".to_string()),
+            default_model: Some("gpt-5.4".to_string()),
+            ..ConfiguredProvider::default()
+        },
+        ..AppConfig::default()
+    };
+    config.daemon.skills_dir = skills_dir;
+    let mut app = build_from_config(config).expect("build app");
+    app.runtime.workspace = WorkspaceRef::new(&workspace_root);
+    let store = PersistenceStore::open(&app.persistence).expect("open store");
+    store
+        .put_session(&SessionRecord {
+            id: "session-prompt-skills".to_string(),
+            title: "Prompt Skills".to_string(),
+            prompt_override: None,
+            settings_json: serde_json::to_string(&SessionSettings {
+                enabled_skills: vec!["rust-debug".to_string()],
+                ..SessionSettings::default()
+            })
+            .expect("serialize settings"),
+            active_mission_id: None,
+            created_at: 1,
+            updated_at: 1,
+        })
+        .expect("put session");
+
+    let report = app
+        .execute_chat_turn("session-prompt-skills", "hello", 10)
+        .expect("execute chat turn");
+    let first_request = requests.recv().expect("provider request");
+    handle.join().expect("join server");
+
+    assert_eq!(report.response_id, "resp_prompt_skills");
+    assert_eq!(report.output_text, "Loaded active skills.");
+
+    let normalized = first_request.to_ascii_lowercase();
+    let agents_marker = normalized
+        .find("project instructions:")
+        .expect("agents marker");
+    let skill_marker = normalized.find("# rust-debug").expect("skill marker");
+    let session_marker = normalized
+        .find("session: prompt skills")
+        .expect("session marker");
+
+    assert!(agents_marker < skill_marker);
+    assert!(skill_marker < session_marker);
 }
 
 #[test]
