@@ -118,6 +118,15 @@ impl PromptAssembly {
             });
         }
 
+        if let Some(agents_prompt) = input.agents_prompt
+            && !agents_prompt.trim().is_empty()
+        {
+            messages.push(ProviderMessage {
+                role: MessageRole::System,
+                content: agents_prompt,
+            });
+        }
+
         if let Some(session_head) = input.session_head {
             let rendered = session_head.render();
             if !rendered.trim().is_empty() {
@@ -126,15 +135,6 @@ impl PromptAssembly {
                     content: rendered,
                 });
             }
-        }
-
-        if let Some(agents_prompt) = input.agents_prompt
-            && !agents_prompt.trim().is_empty()
-        {
-            messages.push(ProviderMessage {
-                role: MessageRole::System,
-                content: agents_prompt,
-            });
         }
 
         if let Some(plan_snapshot) = input.plan_snapshot
@@ -426,7 +426,7 @@ mod tests {
     }
 
     #[test]
-    fn prompt_assembly_places_system_prompt_before_session_head_and_agents() {
+    fn prompt_assembly_places_system_prompt_then_agents_then_session_head() {
         let messages = PromptAssembly::build_messages(PromptAssemblyInput {
             system_prompt: Some("You are a useful AI assistant.".to_string()),
             agents_prompt: Some("Project instructions: keep edits minimal.".to_string()),
@@ -457,12 +457,12 @@ mod tests {
         assert_eq!(messages[0].role, MessageRole::System);
         assert_eq!(messages[0].content, "You are a useful AI assistant.");
         assert_eq!(messages[1].role, MessageRole::System);
-        assert!(messages[1].content.contains("Session: Prompt Order"));
-        assert_eq!(messages[2].role, MessageRole::System);
         assert_eq!(
-            messages[2].content,
+            messages[1].content,
             "Project instructions: keep edits minimal."
         );
+        assert_eq!(messages[2].role, MessageRole::System);
+        assert!(messages[2].content.contains("Session: Prompt Order"));
         assert_eq!(messages[3].role, MessageRole::User);
     }
 

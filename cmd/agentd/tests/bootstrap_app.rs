@@ -3887,15 +3887,15 @@ fn execute_chat_turn_places_system_and_agents_files_before_runtime_blocks() {
     let system_prompt_marker = normalized
         .find("you are a useful ai assistant.")
         .expect("system prompt marker");
-    let session_marker = normalized
-        .find("session: prompt files")
-        .expect("session marker");
     let agents_marker = normalized
         .find("project instructions:")
         .expect("agents marker");
+    let session_marker = normalized
+        .find("session: prompt files")
+        .expect("session marker");
 
-    assert!(system_prompt_marker < session_marker);
-    assert!(session_marker < agents_marker);
+    assert!(system_prompt_marker < agents_marker);
+    assert!(agents_marker < session_marker);
 }
 
 #[test]
