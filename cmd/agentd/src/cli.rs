@@ -884,7 +884,7 @@ fn run_provider_smoke(app: &App, prompt: &str) -> Result<String, BootstrapError>
         continuation_messages: Vec::new(),
         tools: Vec::new(),
         tool_outputs: Vec::new(),
-        max_output_tokens: Some(128),
+        max_output_tokens: app.config.provider.max_output_tokens,
         stream: ProviderStreamMode::Disabled,
     })?;
 

@@ -108,6 +108,7 @@ impl App {
         execution::ExecutionService::new(
             self.config.permissions.clone(),
             self.runtime.workspace.clone(),
+            self.config.provider.max_output_tokens,
         )
     }
 

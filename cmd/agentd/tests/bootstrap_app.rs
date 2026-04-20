@@ -511,6 +511,7 @@ fn run_with_args_provider_smoke_uses_the_configured_driver() {
             api_base: Some(format!("{api_base}/v1")),
             api_key: Some("test-key".to_string()),
             default_model: Some("gpt-5.4".to_string()),
+            ..ConfiguredProvider::default()
         },
         ..AppConfig::default()
     })
@@ -563,6 +564,7 @@ fn execute_chat_turn_uses_the_session_model_override() {
             api_base: Some(format!("{api_base}/v1")),
             api_key: Some("test-key".to_string()),
             default_model: Some("gpt-5.4".to_string()),
+            ..ConfiguredProvider::default()
         },
         ..AppConfig::default()
     })
@@ -801,6 +803,7 @@ fn execute_mission_turn_job_creates_a_run_calls_provider_and_persists_transcript
             api_base: Some(format!("{api_base}/v1")),
             api_key: Some("test-key".to_string()),
             default_model: Some("gpt-5.4".to_string()),
+            ..ConfiguredProvider::default()
         },
         ..AppConfig::default()
     })
@@ -1287,6 +1290,7 @@ fn run_with_args_executes_mission_ticks_and_jobs() {
             api_base: Some(format!("{api_base}/v1")),
             api_key: Some("test-key".to_string()),
             default_model: Some("gpt-5.4".to_string()),
+            ..ConfiguredProvider::default()
         },
         ..AppConfig::default()
     })
@@ -1449,6 +1453,7 @@ fn execute_chat_turn_creates_a_run_and_appends_transcript_history() {
             api_base: Some(format!("{api_base}/v1")),
             api_key: Some("test-key".to_string()),
             default_model: Some("gpt-5.4".to_string()),
+            ..ConfiguredProvider::default()
         },
         ..AppConfig::default()
     })
@@ -1574,6 +1579,7 @@ fn execute_chat_turn_can_finish_after_an_allowed_web_tool_call() {
             api_base: Some(format!("{provider_api_base}/v1")),
             api_key: Some("test-key".to_string()),
             default_model: Some("gpt-5.4".to_string()),
+            ..ConfiguredProvider::default()
         },
         ..AppConfig::default()
     })
@@ -1694,6 +1700,7 @@ fn execute_chat_turn_can_finish_after_an_allowed_web_tool_call_with_zai() {
             api_base: Some(format!("{provider_api_base}/v1")),
             api_key: Some("test-key".to_string()),
             default_model: Some("glm-5.1".to_string()),
+            ..ConfiguredProvider::default()
         },
         ..AppConfig::default()
     })
@@ -1814,6 +1821,7 @@ fn approval_approve_resumes_an_openai_chat_tool_call_and_completes_the_run() {
             api_base: Some(format!("{provider_api_base}/v1")),
             api_key: Some("test-key".to_string()),
             default_model: Some("gpt-5.4".to_string()),
+            ..ConfiguredProvider::default()
         },
         permissions: PermissionConfig {
             mode: PermissionMode::Auto,
@@ -1967,6 +1975,7 @@ fn approval_approve_resumes_a_zai_chat_tool_call_and_completes_the_run() {
             api_base: Some(format!("{provider_api_base}/v1")),
             api_key: Some("test-key".to_string()),
             default_model: Some("glm-5.1".to_string()),
+            ..ConfiguredProvider::default()
         },
         permissions: PermissionConfig {
             mode: PermissionMode::Auto,
@@ -2114,6 +2123,7 @@ fn approval_approve_resumes_a_mission_turn_and_completes_the_job() {
             api_base: Some(format!("{provider_api_base}/v1")),
             api_key: Some("test-key".to_string()),
             default_model: Some("gpt-5.4".to_string()),
+            ..ConfiguredProvider::default()
         },
         permissions: PermissionConfig {
             mode: PermissionMode::Auto,
@@ -2273,6 +2283,7 @@ fn execute_chat_turn_fails_when_the_provider_repeats_the_same_tool_signature() {
             api_base: Some(format!("{provider_api_base}/v1")),
             api_key: Some("test-key".to_string()),
             default_model: Some("gpt-5.4".to_string()),
+            ..ConfiguredProvider::default()
         },
         ..AppConfig::default()
     })
@@ -2399,6 +2410,7 @@ fn execute_chat_turn_only_sends_new_tool_outputs_for_each_continuation_round() {
             api_base: Some(format!("{provider_api_base}/v1")),
             api_key: Some("test-key".to_string()),
             default_model: Some("gpt-5.4".to_string()),
+            ..ConfiguredProvider::default()
         },
         ..AppConfig::default()
     })
@@ -2477,6 +2489,7 @@ fn run_with_args_shows_and_sends_chat_turns() {
             api_base: Some(format!("{api_base}/v1")),
             api_key: Some("test-key".to_string()),
             default_model: Some("gpt-5.4".to_string()),
+            ..ConfiguredProvider::default()
         },
         ..AppConfig::default()
     })
@@ -2564,6 +2577,7 @@ fn run_with_args_chat_send_reports_waiting_approval_details() {
             api_base: Some(format!("{api_base}/v1")),
             api_key: Some("test-key".to_string()),
             default_model: Some("gpt-5.4".to_string()),
+            ..ConfiguredProvider::default()
         },
         permissions: PermissionConfig {
             mode: PermissionMode::Auto,
@@ -2624,6 +2638,7 @@ fn repl_runs_chat_turns_and_supports_show_and_exit_commands() {
             api_base: Some(api_base),
             api_key: Some("test-key".to_string()),
             default_model: Some("gpt-5.4".to_string()),
+            ..ConfiguredProvider::default()
         },
         ..AppConfig::default()
     })
@@ -2675,6 +2690,7 @@ fn repl_accepts_cp1251_terminal_input_without_utf8_failure() {
             api_base: Some(api_base),
             api_key: Some("test-key".to_string()),
             default_model: Some("gpt-5.4".to_string()),
+            ..ConfiguredProvider::default()
         },
         permissions: PermissionConfig::default(),
     })
@@ -2731,6 +2747,7 @@ fn repl_surfaces_waiting_approval_and_can_approve_latest_pending_turn() {
             api_base: Some(api_base),
             api_key: Some("test-key".to_string()),
             default_model: Some("gpt-5.4".to_string()),
+            ..ConfiguredProvider::default()
         },
         permissions: PermissionConfig {
             mode: PermissionMode::Auto,
@@ -2798,6 +2815,7 @@ fn repl_rehydrates_latest_pending_approval_after_restart() {
             api_base: Some(api_base),
             api_key: Some("test-key".to_string()),
             default_model: Some("gpt-5.4".to_string()),
+            ..ConfiguredProvider::default()
         },
         permissions: PermissionConfig {
             mode: PermissionMode::Auto,
@@ -2843,6 +2861,7 @@ fn repl_rehydrates_latest_pending_approval_after_restart() {
             api_base: Some(api_base),
             api_key: Some("test-key".to_string()),
             default_model: Some("gpt-5.4".to_string()),
+            ..ConfiguredProvider::default()
         },
         permissions: PermissionConfig {
             mode: PermissionMode::Auto,
@@ -2889,6 +2908,7 @@ fn repl_rejects_new_turns_while_an_approval_is_pending() {
             api_base: Some(api_base),
             api_key: Some("test-key".to_string()),
             default_model: Some("gpt-5.4".to_string()),
+            ..ConfiguredProvider::default()
         },
         permissions: PermissionConfig {
             mode: PermissionMode::Auto,
@@ -2955,6 +2975,7 @@ data: [DONE]\n\n"
             api_base: Some(api_base),
             api_key: Some("zai-key".to_string()),
             default_model: Some("glm-5-turbo".to_string()),
+            ..ConfiguredProvider::default()
         },
         permissions: PermissionConfig {
             mode: PermissionMode::Auto,
@@ -3018,6 +3039,7 @@ data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_stream_repl\"
             api_base: Some(api_base),
             api_key: Some("test-key".to_string()),
             default_model: Some("gpt-5.4".to_string()),
+            ..ConfiguredProvider::default()
         },
         ..AppConfig::default()
     })
@@ -3425,6 +3447,7 @@ fn compact_session_persists_a_context_summary_and_increments_the_counter() {
             api_base: Some(format!("{api_base}/v1")),
             api_key: Some("test-key".to_string()),
             default_model: Some("gpt-5.4".to_string()),
+            ..ConfiguredProvider::default()
         },
         ..AppConfig::default()
     })
@@ -3694,6 +3717,7 @@ fn execute_chat_turn_uses_the_context_summary_and_only_the_uncovered_messages() 
             api_base: Some(format!("{api_base}/v1")),
             api_key: Some("test-key".to_string()),
             default_model: Some("gpt-5.4".to_string()),
+            ..ConfiguredProvider::default()
         },
         ..AppConfig::default()
     })
@@ -3818,6 +3842,7 @@ fn execute_chat_turn_includes_the_plan_snapshot_before_context_summary() {
             api_base: Some(format!("{api_base}/v1")),
             api_key: Some("test-key".to_string()),
             default_model: Some("gpt-5.4".to_string()),
+            ..ConfiguredProvider::default()
         },
         ..AppConfig::default()
     })
@@ -3948,6 +3973,7 @@ fn execute_chat_turn_can_finish_after_plan_write_and_plan_read_tool_calls() {
             api_base: Some(format!("{api_base}/v1")),
             api_key: Some("test-key".to_string()),
             default_model: Some("gpt-5.4".to_string()),
+            ..ConfiguredProvider::default()
         },
         ..AppConfig::default()
     })
@@ -4050,6 +4076,7 @@ fn execute_chat_turn_can_retrieve_offloaded_context_via_artifact_read() {
             api_base: Some(format!("{api_base}/v1")),
             api_key: Some("test-key".to_string()),
             default_model: Some("gpt-5.4".to_string()),
+            ..ConfiguredProvider::default()
         },
         ..AppConfig::default()
     })

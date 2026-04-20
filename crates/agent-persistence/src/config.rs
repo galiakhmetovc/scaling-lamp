@@ -25,8 +25,12 @@ pub struct ConfigEnv {
     pub home_dir: Option<PathBuf>,
     pub provider_api_base_override: Option<String>,
     pub provider_api_key_override: Option<String>,
+    pub provider_connect_timeout_override: Option<u64>,
     pub provider_kind_override: Option<String>,
+    pub provider_max_output_tokens_override: Option<u32>,
     pub provider_model_override: Option<String>,
+    pub provider_request_timeout_override: Option<u64>,
+    pub provider_stream_idle_timeout_override: Option<u64>,
     pub permission_mode_override: Option<String>,
     pub temp_dir: PathBuf,
     pub xdg_config_home: Option<PathBuf>,
@@ -48,6 +52,11 @@ pub enum ConfigError {
     },
     InvalidPermissionMode {
         value: String,
+    },
+    InvalidProviderValue {
+        name: &'static str,
+        value: String,
+        reason: &'static str,
     },
     ParseConfig {
         path: PathBuf,
@@ -85,6 +94,16 @@ impl fmt::Display for ConfigError {
             Self::InvalidPermissionMode { value } => {
                 write!(formatter, "invalid permission mode {value}")
             }
+            Self::InvalidProviderValue {
+                name,
+                value,
+                reason,
+            } => {
+                write!(
+                    formatter,
+                    "invalid provider setting {name}={value}: {reason}"
+                )
+            }
             Self::ParseConfig { path, source } => {
                 write!(
                     formatter,
@@ -111,6 +130,7 @@ impl Error for ConfigError {
             Self::InvalidConfigPath { .. }
             | Self::InvalidDataDir { .. }
             | Self::InvalidPermissionMode { .. }
+            | Self::InvalidProviderValue { .. }
             | Self::InvalidProviderKind { .. } => None,
         }
     }
@@ -126,8 +146,24 @@ impl ConfigEnv {
             home_dir: read_path_var("HOME", &dotenv)?,
             provider_api_base_override: read_string_var("TEAMD_PROVIDER_API_BASE", &dotenv),
             provider_api_key_override: read_string_var("TEAMD_PROVIDER_API_KEY", &dotenv),
+            provider_connect_timeout_override: read_u64_var(
+                "TEAMD_PROVIDER_CONNECT_TIMEOUT_SECONDS",
+                &dotenv,
+            )?,
             provider_kind_override: read_string_var("TEAMD_PROVIDER_KIND", &dotenv),
+            provider_max_output_tokens_override: read_u32_var(
+                "TEAMD_PROVIDER_MAX_OUTPUT_TOKENS",
+                &dotenv,
+            )?,
             provider_model_override: read_string_var("TEAMD_PROVIDER_MODEL", &dotenv),
+            provider_request_timeout_override: read_u64_var(
+                "TEAMD_PROVIDER_REQUEST_TIMEOUT_SECONDS",
+                &dotenv,
+            )?,
+            provider_stream_idle_timeout_override: read_u64_var(
+                "TEAMD_PROVIDER_STREAM_IDLE_TIMEOUT_SECONDS",
+                &dotenv,
+            )?,
             permission_mode_override: read_string_var("TEAMD_PERMISSION_MODE", &dotenv),
             temp_dir: env::temp_dir(),
             xdg_config_home: read_path_var("XDG_CONFIG_HOME", &dotenv)?,
@@ -200,8 +236,20 @@ impl AppConfig {
         if let Some(api_key) = &env.provider_api_key_override {
             provider.api_key = Some(api_key.clone());
         }
+        if let Some(seconds) = env.provider_connect_timeout_override {
+            provider.connect_timeout_seconds = Some(seconds);
+        }
         if let Some(default_model) = &env.provider_model_override {
             provider.default_model = Some(default_model.clone());
+        }
+        if let Some(tokens) = env.provider_max_output_tokens_override {
+            provider.max_output_tokens = Some(tokens);
+        }
+        if let Some(seconds) = env.provider_request_timeout_override {
+            provider.request_timeout_seconds = Some(seconds);
+        }
+        if let Some(seconds) = env.provider_stream_idle_timeout_override {
+            provider.stream_idle_timeout_seconds = Some(seconds);
         }
         if let Some(mode) = env.permission_mode_override.as_deref() {
             permissions.mode = parse_permission_mode(mode)?;
@@ -243,6 +291,20 @@ impl AppConfig {
                 reason: "must point to a directory",
             });
         }
+
+        validate_positive_provider_value(
+            "connect_timeout_seconds",
+            self.provider.connect_timeout_seconds,
+        )?;
+        validate_positive_provider_value(
+            "request_timeout_seconds",
+            self.provider.request_timeout_seconds,
+        )?;
+        validate_positive_provider_value(
+            "stream_idle_timeout_seconds",
+            self.provider.stream_idle_timeout_seconds,
+        )?;
+        validate_positive_provider_value("max_output_tokens", self.provider.max_output_tokens)?;
 
         Ok(())
     }
@@ -296,6 +358,24 @@ fn read_string_var(name: &'static str, dotenv: &BTreeMap<String, String>) -> Opt
         .or_else(|| dotenv.get(name).cloned())
 }
 
+fn read_u64_var(
+    name: &'static str,
+    dotenv: &BTreeMap<String, String>,
+) -> Result<Option<u64>, ConfigError> {
+    read_string_var(name, dotenv)
+        .map(|value| parse_positive_numeric(name, &value))
+        .transpose()
+}
+
+fn read_u32_var(
+    name: &'static str,
+    dotenv: &BTreeMap<String, String>,
+) -> Result<Option<u32>, ConfigError> {
+    read_string_var(name, dotenv)
+        .map(|value| parse_positive_numeric(name, &value))
+        .transpose()
+}
+
 fn path_from_env_value(
     _name: &'static str,
     value: Option<std::ffi::OsString>,
@@ -335,6 +415,47 @@ fn parse_permission_mode(value: &str) -> Result<PermissionMode, ConfigError> {
     PermissionMode::try_from(value).map_err(|_| ConfigError::InvalidPermissionMode {
         value: value.to_string(),
     })
+}
+
+fn parse_positive_numeric<T>(name: &'static str, value: &str) -> Result<T, ConfigError>
+where
+    T: std::str::FromStr + PartialEq + Default,
+{
+    let parsed = value
+        .parse::<T>()
+        .map_err(|_| ConfigError::InvalidProviderValue {
+            name,
+            value: value.to_string(),
+            reason: "must be a positive integer",
+        })?;
+    if parsed == T::default() {
+        return Err(ConfigError::InvalidProviderValue {
+            name,
+            value: value.to_string(),
+            reason: "must be greater than zero",
+        });
+    }
+    Ok(parsed)
+}
+
+fn validate_positive_provider_value<T>(
+    name: &'static str,
+    value: Option<T>,
+) -> Result<(), ConfigError>
+where
+    T: PartialEq + Default + ToString,
+{
+    if let Some(value) = value
+        && value == T::default()
+    {
+        return Err(ConfigError::InvalidProviderValue {
+            name,
+            value: value.to_string(),
+            reason: "must be greater than zero",
+        });
+    }
+
+    Ok(())
 }
 
 fn load_dotenv_from_cwd() -> Result<BTreeMap<String, String>, ConfigError> {
@@ -422,8 +543,12 @@ mod tests {
             home_dir: Some(temp.path().join("home")),
             provider_api_base_override: None,
             provider_api_key_override: None,
+            provider_connect_timeout_override: None,
             provider_kind_override: None,
+            provider_max_output_tokens_override: None,
             provider_model_override: None,
+            provider_request_timeout_override: None,
+            provider_stream_idle_timeout_override: None,
             permission_mode_override: None,
             temp_dir: temp.path().join("tmp"),
             xdg_config_home: Some(temp.path().join("xdg-config")),
@@ -447,8 +572,12 @@ mod tests {
             home_dir: Some(home_dir),
             provider_api_base_override: None,
             provider_api_key_override: None,
+            provider_connect_timeout_override: None,
             provider_kind_override: None,
+            provider_max_output_tokens_override: None,
             provider_model_override: None,
+            provider_request_timeout_override: None,
+            provider_stream_idle_timeout_override: None,
             permission_mode_override: None,
             temp_dir: temp.path().join("tmp"),
             xdg_config_home: None,
@@ -490,8 +619,12 @@ mod tests {
             home_dir: Some(temp.path().join("home")),
             provider_api_base_override: None,
             provider_api_key_override: None,
+            provider_connect_timeout_override: None,
             provider_kind_override: None,
+            provider_max_output_tokens_override: None,
             provider_model_override: None,
+            provider_request_timeout_override: None,
+            provider_stream_idle_timeout_override: None,
             permission_mode_override: None,
             temp_dir: temp.path().join("tmp"),
             xdg_config_home: Some(temp.path().join("xdg-config")),
@@ -535,8 +668,12 @@ path_prefix = "notes/"
             home_dir: Some(temp.path().join("home")),
             provider_api_base_override: None,
             provider_api_key_override: Some("zai-secret".into()),
+            provider_connect_timeout_override: None,
             provider_kind_override: None,
+            provider_max_output_tokens_override: None,
             provider_model_override: Some("glm-5.1-air".into()),
+            provider_request_timeout_override: None,
+            provider_stream_idle_timeout_override: None,
             permission_mode_override: Some("accept_edits".into()),
             temp_dir: temp.path().join("tmp"),
             xdg_config_home: Some(temp.path().join("xdg-config")),
@@ -569,8 +706,12 @@ path_prefix = "notes/"
             home_dir: Some(temp.path().join("home")),
             provider_api_base_override: None,
             provider_api_key_override: Some("zai-key".to_string()),
+            provider_connect_timeout_override: None,
             provider_kind_override: Some("zai_chat_completions".to_string()),
+            provider_max_output_tokens_override: None,
             provider_model_override: None,
+            provider_request_timeout_override: None,
+            provider_stream_idle_timeout_override: None,
             permission_mode_override: None,
             temp_dir: temp.path().join("tmp"),
             xdg_config_home: None,
@@ -589,6 +730,39 @@ path_prefix = "notes/"
             config.provider.default_model.as_deref(),
             Some(DEFAULT_ZAI_MODEL)
         );
+        assert_eq!(config.provider.connect_timeout_seconds, Some(15));
+        assert_eq!(config.provider.request_timeout_seconds, None);
+        assert_eq!(config.provider.stream_idle_timeout_seconds, Some(1200));
+        assert_eq!(config.provider.max_output_tokens, None);
+    }
+
+    #[test]
+    fn load_applies_provider_runtime_env_overrides() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let env = ConfigEnv {
+            config_path: None,
+            data_dir_override: None,
+            home_dir: Some(temp.path().join("home")),
+            provider_api_base_override: Some("https://api.z.ai/api/coding/paas/v4".to_string()),
+            provider_api_key_override: Some("zai-key".to_string()),
+            provider_kind_override: Some("zai_chat_completions".to_string()),
+            provider_model_override: Some("glm-5-air".to_string()),
+            permission_mode_override: None,
+            provider_connect_timeout_override: Some(20),
+            provider_request_timeout_override: Some(3600),
+            provider_stream_idle_timeout_override: Some(1800),
+            provider_max_output_tokens_override: Some(8192),
+            temp_dir: temp.path().join("tmp"),
+            xdg_config_home: None,
+            xdg_state_home: Some(temp.path().join("xdg-state")),
+        };
+
+        let config = AppConfig::load_from_env(&env).expect("load config");
+
+        assert_eq!(config.provider.connect_timeout_seconds, Some(20));
+        assert_eq!(config.provider.request_timeout_seconds, Some(3600));
+        assert_eq!(config.provider.stream_idle_timeout_seconds, Some(1800));
+        assert_eq!(config.provider.max_output_tokens, Some(8192));
     }
 
     #[test]

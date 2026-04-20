@@ -159,6 +159,7 @@ fn tui_chat_commands_and_timeline_rename_clear_and_preferences_use_the_app_layer
             api_base: Some(format!("{api_base}/v1")),
             api_key: Some("test-key".to_string()),
             default_model: Some("gpt-5.4".to_string()),
+            ..ConfiguredProvider::default()
         },
         ..AppConfig::default()
     })
@@ -438,6 +439,7 @@ data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_tui_stream\",
             api_base: Some(format!("{api_base}/v1")),
             api_key: Some("test-key".to_string()),
             default_model: Some("gpt-5.4".to_string()),
+            ..ConfiguredProvider::default()
         },
         ..AppConfig::default()
     })
@@ -490,6 +492,7 @@ data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_tui_hidden_re
             api_base: Some(format!("{api_base}/v1")),
             api_key: Some("test-key".to_string()),
             default_model: Some("gpt-5.4".to_string()),
+            ..ConfiguredProvider::default()
         },
         ..AppConfig::default()
     })
@@ -550,6 +553,7 @@ fn tui_chat_send_provider_failure_stays_inside_timeline_instead_of_exiting() {
             api_base: Some(format!("http://{address}")),
             api_key: Some("test-key".to_string()),
             default_model: Some("glm-5-turbo".to_string()),
+            ..ConfiguredProvider::default()
         },
         ..AppConfig::default()
     })

@@ -120,6 +120,7 @@ pub struct ToolResumeRequest<'a> {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ExecutionService {
     permissions: PermissionConfig,
+    provider_max_output_tokens: Option<u32>,
     supervisor: SupervisorLoop,
     workspace: WorkspaceRef,
 }
@@ -167,14 +168,19 @@ pub enum ExecutionError {
 
 impl Default for ExecutionService {
     fn default() -> Self {
-        Self::new(PermissionConfig::default(), WorkspaceRef::default())
+        Self::new(PermissionConfig::default(), WorkspaceRef::default(), None)
     }
 }
 
 impl ExecutionService {
-    pub fn new(permissions: PermissionConfig, workspace: WorkspaceRef) -> Self {
+    pub fn new(
+        permissions: PermissionConfig,
+        workspace: WorkspaceRef,
+        provider_max_output_tokens: Option<u32>,
+    ) -> Self {
         Self {
             permissions,
+            provider_max_output_tokens,
             supervisor: SupervisorLoop::default(),
             workspace,
         }

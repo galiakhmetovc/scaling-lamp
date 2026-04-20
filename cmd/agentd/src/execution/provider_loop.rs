@@ -108,6 +108,7 @@ impl ProviderLoopCursor {
         instructions: Option<&str>,
         tools: &[ProviderToolDefinition],
         stream: ProviderStreamMode,
+        max_output_tokens: Option<u32>,
     ) -> ProviderRequest {
         ProviderRequest {
             model: model.map(str::to_string),
@@ -129,7 +130,7 @@ impl ProviderLoopCursor {
             } else {
                 Vec::new()
             },
-            max_output_tokens: Some(512),
+            max_output_tokens,
             stream,
         }
     }
@@ -723,6 +724,7 @@ impl ExecutionService {
                 instructions.as_deref(),
                 &tools,
                 cursor.stream_mode(observer.is_some()),
+                self.provider_max_output_tokens,
             );
             let response = self.request_provider_response(provider, &request, observer)?;
             self.apply_provider_response(run, &response, now)?;
@@ -831,5 +833,86 @@ impl ExecutionService {
         }
 
         Err(cursor.exhausted_rounds_error())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use agent_runtime::provider::{
+        ModelCapabilities, ProviderDescriptor, ProviderError, ProviderRequest, ProviderResponse,
+        ProviderResponseStream,
+    };
+
+    struct TestProviderDriver {
+        descriptor: ProviderDescriptor,
+    }
+
+    impl ProviderDriver for TestProviderDriver {
+        fn descriptor(&self) -> &ProviderDescriptor {
+            &self.descriptor
+        }
+
+        fn complete(&self, _request: &ProviderRequest) -> Result<ProviderResponse, ProviderError> {
+            unreachable!("provider loop cursor tests do not call complete")
+        }
+
+        fn stream(
+            &self,
+            _request: &ProviderRequest,
+        ) -> Result<Box<dyn ProviderResponseStream>, ProviderError> {
+            unreachable!("provider loop cursor tests do not call stream")
+        }
+    }
+
+    fn provider() -> TestProviderDriver {
+        TestProviderDriver {
+            descriptor: ProviderDescriptor {
+                name: "test-provider".to_string(),
+                model_family: "test".to_string(),
+                default_model: Some("test-model".to_string()),
+                capabilities: ModelCapabilities {
+                    supports_streaming: true,
+                    supports_text_input: true,
+                    supports_tool_calls: true,
+                    supports_previous_response_id: true,
+                    supports_reasoning_summaries: true,
+                },
+            },
+        }
+    }
+
+    #[test]
+    fn build_request_omits_max_output_tokens_when_not_configured() {
+        let provider = provider();
+        let cursor = ProviderLoopCursor::new(&provider, None);
+
+        let request = cursor.build_request(
+            &[ProviderMessage::new(MessageRole::User, "hello")],
+            Some("test-model"),
+            None,
+            &[],
+            ProviderStreamMode::Disabled,
+            None,
+        );
+
+        assert_eq!(request.max_output_tokens, None);
+    }
+
+    #[test]
+    fn build_request_uses_configured_max_output_tokens() {
+        let provider = provider();
+        let cursor = ProviderLoopCursor::new(&provider, None);
+
+        let request = cursor.build_request(
+            &[ProviderMessage::new(MessageRole::User, "hello")],
+            Some("test-model"),
+            None,
+            &[],
+            ProviderStreamMode::Disabled,
+            Some(8192),
+        );
+
+        assert_eq!(request.max_output_tokens, Some(8192));
     }
 }

@@ -41,6 +41,10 @@ current z.ai baseline taken from the older smoke branches:
 - base URL: `https://api.z.ai/api/coding/paas/v4`
 - model: `glm-5-turbo`
 - key env var: `TEAMD_PROVIDER_API_KEY`
+- connect timeout default: `15` seconds
+- overall request timeout default: disabled
+- stream idle timeout default: `1200` seconds
+- `max_output_tokens` default: omitted from provider requests
 
 Smoke command:
 
@@ -51,6 +55,15 @@ cargo run -p agentd -- provider smoke "Say hello in one short sentence."
 For the current `z.ai` smoke path, `agentd` keeps `thinking={"type":"disabled"}`
 for the one-shot `provider smoke` command so the check stays focused on basic
 request/response health.
+
+Optional provider runtime env vars:
+
+```dotenv
+TEAMD_PROVIDER_CONNECT_TIMEOUT_SECONDS=15
+TEAMD_PROVIDER_REQUEST_TIMEOUT_SECONDS=3600
+TEAMD_PROVIDER_STREAM_IDLE_TIMEOUT_SECONDS=1800
+TEAMD_PROVIDER_MAX_OUTPUT_TOKENS=8192
+```
 
 ## Current Operator Notes
 

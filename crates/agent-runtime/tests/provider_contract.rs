@@ -1,7 +1,7 @@
 use agent_runtime::provider::{
     ConfiguredProvider, FinishReason, ModelCapabilities, OpenAiResponsesConfig,
-    OpenAiResponsesDriver, ProviderBuildError, ProviderDriver, ProviderKind, ProviderMessage,
-    ProviderRequest, ProviderResponse, ProviderStreamEvent, ProviderStreamMode,
+    OpenAiResponsesDriver, ProviderBuildError, ProviderDriver, ProviderError, ProviderKind,
+    ProviderMessage, ProviderRequest, ProviderResponse, ProviderStreamEvent, ProviderStreamMode,
     ProviderToolDefinition, build_driver,
 };
 use agent_runtime::session::MessageRole;
@@ -18,6 +18,9 @@ fn driver_descriptor_exposes_stable_openai_capabilities() {
         api_base: "http://127.0.0.1:9/v1".to_string(),
         api_key: "test-key".to_string(),
         default_model: Some("gpt-5.4".to_string()),
+        connect_timeout_seconds: Some(15),
+        request_timeout_seconds: None,
+        stream_idle_timeout_seconds: Some(1200),
     });
 
     assert_eq!(driver.descriptor().name, "openai-responses");
@@ -45,6 +48,7 @@ fn build_driver_uses_explicit_openai_selection() {
         api_base: Some("http://127.0.0.1:9/v1".to_string()),
         api_key: Some("test-key".to_string()),
         default_model: Some("gpt-5.4".to_string()),
+        ..ConfiguredProvider::default()
     })
     .expect("build openai driver");
 
@@ -62,6 +66,7 @@ fn build_driver_requires_api_base_and_api_key() {
         api_base: None,
         api_key: Some("test-key".to_string()),
         default_model: None,
+        ..ConfiguredProvider::default()
     })
     .err()
     .expect("missing api base must fail");
@@ -72,6 +77,7 @@ fn build_driver_requires_api_base_and_api_key() {
         api_base: Some("https://api.openai.com/v1".to_string()),
         api_key: None,
         default_model: None,
+        ..ConfiguredProvider::default()
     })
     .err()
     .expect("missing api key must fail");
@@ -85,6 +91,7 @@ fn build_driver_uses_explicit_zai_selection() {
         api_base: Some("https://api.z.ai/api/paas/v4".to_string()),
         api_key: Some("test-key".to_string()),
         default_model: Some("glm-5.1".to_string()),
+        ..ConfiguredProvider::default()
     })
     .expect("build zai driver");
 
@@ -120,6 +127,7 @@ fn zai_complete_posts_chat_completions_payload_and_extracts_output_text() {
         api_base: Some(api_base),
         api_key: Some("zai-key".to_string()),
         default_model: Some("glm-5.1".to_string()),
+        ..ConfiguredProvider::default()
     })
     .expect("build zai driver");
     let request = ProviderRequest {
@@ -130,7 +138,7 @@ fn zai_complete_posts_chat_completions_payload_and_extracts_output_text() {
         continuation_messages: Vec::new(),
         tools: Vec::new(),
         tool_outputs: Vec::new(),
-        max_output_tokens: Some(64),
+        max_output_tokens: None,
         stream: ProviderStreamMode::Disabled,
     };
 
@@ -155,6 +163,7 @@ fn zai_complete_posts_chat_completions_payload_and_extracts_output_text() {
     assert!(normalized_request.contains("\"content\":\"say hi\""));
     assert!(normalized_request.contains("\"thinking\":{\"type\":\"disabled\"}"));
     assert!(normalized_request.contains("\"stream\":false"));
+    assert!(!normalized_request.contains("\"max_tokens\":"));
 }
 
 #[test]
@@ -191,6 +200,7 @@ fn zai_complete_accepts_function_call_only_responses() {
         api_base: Some(api_base),
         api_key: Some("zai-key".to_string()),
         default_model: Some("glm-5.1".to_string()),
+        ..ConfiguredProvider::default()
     })
     .expect("build zai driver");
     let request = ProviderRequest {
@@ -238,6 +248,7 @@ fn zai_complete_accepts_function_call_only_responses() {
     assert!(normalized_request.contains("/chat/completions"));
     assert!(normalized_request.contains("\"tool_choice\":\"auto\""));
     assert!(normalized_request.contains("\"name\":\"web_fetch\""));
+    assert!(normalized_request.contains("\"max_tokens\":64"));
 }
 
 #[test]
@@ -253,6 +264,7 @@ data: [DONE]\n\n",
         api_base: Some(api_base),
         api_key: Some("zai-key".to_string()),
         default_model: Some("glm-5-turbo".to_string()),
+        ..ConfiguredProvider::default()
     })
     .expect("build zai driver");
     let request = ProviderRequest {
@@ -343,6 +355,9 @@ fn complete_posts_responses_payload_and_extracts_output_text() {
         api_base,
         api_key: "test-key".to_string(),
         default_model: Some("gpt-5.4".to_string()),
+        connect_timeout_seconds: Some(15),
+        request_timeout_seconds: None,
+        stream_idle_timeout_seconds: Some(1200),
     });
     let request = ProviderRequest {
         model: None,
@@ -376,6 +391,7 @@ fn complete_posts_responses_payload_and_extracts_output_text() {
     assert!(normalized_request.contains("\"role\":\"user\""));
     assert!(normalized_request.contains("\"type\":\"input_text\""));
     assert!(normalized_request.contains("\"text\":\"write a haiku\""));
+    assert!(!normalized_request.contains("\"max_output_tokens\":"));
 }
 
 #[test]
@@ -401,6 +417,9 @@ fn complete_accepts_function_call_only_responses_for_openai() {
         api_base,
         api_key: "test-key".to_string(),
         default_model: Some("gpt-5.4".to_string()),
+        connect_timeout_seconds: Some(15),
+        request_timeout_seconds: None,
+        stream_idle_timeout_seconds: Some(1200),
     });
     let request = ProviderRequest {
         model: None,
@@ -466,6 +485,9 @@ data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_stream_123\",
         api_base,
         api_key: "test-key".to_string(),
         default_model: Some("gpt-5.4".to_string()),
+        connect_timeout_seconds: Some(15),
+        request_timeout_seconds: None,
+        stream_idle_timeout_seconds: Some(1200),
     });
     let request = ProviderRequest {
         model: Some("gpt-5.4".to_string()),
@@ -529,6 +551,43 @@ data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_stream_123\",
     assert!(normalized_request.contains("\"reasoning\":{\"summary\":\"auto\"}"));
 }
 
+#[test]
+fn openai_stream_times_out_after_configured_idle_period_without_new_bytes() {
+    let (api_base, requests, handle) = spawn_stalled_sse_server(Duration::from_secs(2));
+    let driver = OpenAiResponsesDriver::new(OpenAiResponsesConfig {
+        api_base,
+        api_key: "test-key".to_string(),
+        default_model: Some("gpt-5.4".to_string()),
+        connect_timeout_seconds: Some(15),
+        request_timeout_seconds: None,
+        stream_idle_timeout_seconds: Some(1),
+    });
+    let request = ProviderRequest {
+        model: Some("gpt-5.4".to_string()),
+        instructions: Some("Be brief".to_string()),
+        messages: vec![ProviderMessage::new(MessageRole::User, "ping")],
+        previous_response_id: None,
+        continuation_messages: Vec::new(),
+        tools: Vec::new(),
+        tool_outputs: Vec::new(),
+        max_output_tokens: None,
+        stream: ProviderStreamMode::Enabled,
+    };
+
+    let mut stream = driver.stream(&request).expect("stream");
+    let error = stream
+        .next_event()
+        .expect_err("idle stream should time out");
+    let raw_request = requests.recv().expect("raw request");
+    handle.join().expect("join server");
+
+    assert!(matches!(
+        error,
+        ProviderError::StreamIdleTimeout { seconds: 1 }
+    ));
+    assert!(raw_request.to_ascii_lowercase().contains("\"stream\":true"));
+}
+
 fn spawn_sse_server(body: &'static str) -> (String, Receiver<String>, thread::JoinHandle<()>) {
     let listener = TcpListener::bind("127.0.0.1:0").expect("bind listener");
     let address = listener.local_addr().expect("local addr");
@@ -574,6 +633,56 @@ fn spawn_sse_server(body: &'static str) -> (String, Receiver<String>, thread::Jo
             .write_all(response.as_bytes())
             .expect("write response");
         sender.send(raw_request).expect("send request");
+    });
+
+    (format!("http://{address}/v1"), receiver, handle)
+}
+
+fn spawn_stalled_sse_server(
+    stall_for: Duration,
+) -> (String, Receiver<String>, thread::JoinHandle<()>) {
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind listener");
+    let address = listener.local_addr().expect("local addr");
+    let (sender, receiver) = mpsc::channel();
+
+    let handle = thread::spawn(move || {
+        let (mut stream, _) = listener.accept().expect("accept connection");
+        stream
+            .set_read_timeout(Some(Duration::from_secs(2)))
+            .expect("set read timeout");
+
+        let mut reader = BufReader::new(stream.try_clone().expect("clone stream"));
+        let mut raw_request = String::new();
+        let mut content_length = 0usize;
+
+        loop {
+            let mut line = String::new();
+            reader.read_line(&mut line).expect("read request line");
+            raw_request.push_str(&line);
+
+            if line == "\r\n" {
+                break;
+            }
+
+            let lower = line.to_ascii_lowercase();
+            if let Some(value) = lower.strip_prefix("content-length:") {
+                content_length = value.trim().parse().expect("parse content length");
+            }
+        }
+
+        let mut body_bytes = vec![0; content_length];
+        reader
+            .read_exact(&mut body_bytes)
+            .expect("read request body");
+        raw_request.push_str(&String::from_utf8_lossy(&body_bytes));
+
+        stream
+            .write_all(
+                b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nCache-Control: no-cache\r\nConnection: close\r\n\r\n",
+            )
+            .expect("write headers");
+        sender.send(raw_request).expect("send request");
+        thread::sleep(stall_for);
     });
 
     (format!("http://{address}/v1"), receiver, handle)

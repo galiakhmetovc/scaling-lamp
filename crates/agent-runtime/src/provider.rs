@@ -7,6 +7,9 @@ use std::collections::VecDeque;
 use std::error::Error;
 use std::fmt;
 use std::io::{BufRead, BufReader};
+use std::sync::mpsc::{self, Receiver, RecvTimeoutError};
+use std::thread;
+use std::time::Duration;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProviderDescriptor {
@@ -24,13 +27,32 @@ pub enum ProviderKind {
     ZaiChatCompletions,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct ConfiguredProvider {
     pub kind: ProviderKind,
     pub api_base: Option<String>,
     pub api_key: Option<String>,
     pub default_model: Option<String>,
+    pub connect_timeout_seconds: Option<u64>,
+    pub request_timeout_seconds: Option<u64>,
+    pub stream_idle_timeout_seconds: Option<u64>,
+    pub max_output_tokens: Option<u32>,
+}
+
+impl Default for ConfiguredProvider {
+    fn default() -> Self {
+        Self {
+            kind: ProviderKind::default(),
+            api_base: None,
+            api_key: None,
+            default_model: None,
+            connect_timeout_seconds: Some(15),
+            request_timeout_seconds: None,
+            stream_idle_timeout_seconds: Some(1200),
+            max_output_tokens: None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
@@ -135,6 +157,7 @@ pub enum ProviderError {
     MissingModel,
     Parse(serde_json::Error),
     Stream(std::io::Error),
+    StreamIdleTimeout { seconds: u64 },
     ResponseMissingOutputText,
     ResponseMissingToolCallField { field: &'static str },
     UnsupportedMessageRole { role: MessageRole },
@@ -157,6 +180,9 @@ pub struct OpenAiResponsesConfig {
     pub api_base: String,
     pub api_key: String,
     pub default_model: Option<String>,
+    pub connect_timeout_seconds: Option<u64>,
+    pub request_timeout_seconds: Option<u64>,
+    pub stream_idle_timeout_seconds: Option<u64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -164,6 +190,9 @@ pub struct ZaiChatCompletionsConfig {
     pub api_base: String,
     pub api_key: String,
     pub default_model: Option<String>,
+    pub connect_timeout_seconds: Option<u64>,
+    pub request_timeout_seconds: Option<u64>,
+    pub stream_idle_timeout_seconds: Option<u64>,
 }
 
 pub trait ProviderResponseStream: Send {
@@ -438,7 +467,7 @@ struct ZaiAccumulatedToolCall {
 
 #[derive(Debug)]
 struct ZaiChatCompletionsResponseStream {
-    reader: BufReader<reqwest::blocking::Response>,
+    line_reader: TimedSseLineReader,
     pending_events: VecDeque<ProviderStreamEvent>,
     response_id: Option<String>,
     model: Option<String>,
@@ -451,9 +480,15 @@ struct ZaiChatCompletionsResponseStream {
 
 #[derive(Debug)]
 struct OpenAiResponsesResponseStream {
-    reader: BufReader<reqwest::blocking::Response>,
+    line_reader: TimedSseLineReader,
     pending_events: VecDeque<ProviderStreamEvent>,
     done: bool,
+}
+
+#[derive(Debug)]
+struct TimedSseLineReader {
+    receiver: Receiver<Result<Option<String>, std::io::Error>>,
+    idle_timeout: Option<Duration>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -525,6 +560,9 @@ pub fn build_driver(
                 api_base,
                 api_key,
                 default_model: provider.default_model.clone(),
+                connect_timeout_seconds: provider.connect_timeout_seconds,
+                request_timeout_seconds: provider.request_timeout_seconds,
+                stream_idle_timeout_seconds: provider.stream_idle_timeout_seconds,
             },
         ))),
         ProviderKind::ZaiChatCompletions => Ok(Box::new(ZaiChatCompletionsDriver::new(
@@ -532,6 +570,9 @@ pub fn build_driver(
                 api_base,
                 api_key,
                 default_model: provider.default_model.clone(),
+                connect_timeout_seconds: provider.connect_timeout_seconds,
+                request_timeout_seconds: provider.request_timeout_seconds,
+                stream_idle_timeout_seconds: provider.stream_idle_timeout_seconds,
             },
         ))),
     }
@@ -552,7 +593,10 @@ impl ZaiChatCompletionsConfig {
 impl OpenAiResponsesDriver {
     pub fn new(config: OpenAiResponsesConfig) -> Self {
         Self {
-            client: Client::new(),
+            client: build_http_client(
+                config.connect_timeout_seconds,
+                config.request_timeout_seconds,
+            ),
             descriptor: ProviderDescriptor {
                 name: "openai-responses".to_string(),
                 model_family: "openai".to_string(),
@@ -648,7 +692,10 @@ impl OpenAiResponsesDriver {
 impl ZaiChatCompletionsDriver {
     pub fn new(config: ZaiChatCompletionsConfig) -> Self {
         Self {
-            client: Client::new(),
+            client: build_http_client(
+                config.connect_timeout_seconds,
+                config.request_timeout_seconds,
+            ),
             descriptor: ProviderDescriptor {
                 name: "zai-chat-completions".to_string(),
                 model_family: "zai".to_string(),
@@ -779,6 +826,75 @@ impl ZaiChatCompletionsDriver {
     }
 }
 
+fn build_http_client(
+    connect_timeout_seconds: Option<u64>,
+    request_timeout_seconds: Option<u64>,
+) -> Client {
+    let mut builder = Client::builder();
+
+    if let Some(seconds) = connect_timeout_seconds {
+        builder = builder.connect_timeout(Duration::from_secs(seconds));
+    }
+    if let Some(seconds) = request_timeout_seconds {
+        builder = builder.timeout(Duration::from_secs(seconds));
+    }
+
+    builder
+        .build()
+        .expect("provider http client configuration should be valid")
+}
+
+impl TimedSseLineReader {
+    fn new(response: reqwest::blocking::Response, idle_timeout_seconds: Option<u64>) -> Self {
+        let (sender, receiver) = mpsc::channel();
+        thread::spawn(move || {
+            let mut reader = BufReader::new(response);
+            loop {
+                let mut line = String::new();
+                match reader.read_line(&mut line) {
+                    Ok(0) => {
+                        let _ = sender.send(Ok(None));
+                        break;
+                    }
+                    Ok(_) => {
+                        if sender.send(Ok(Some(line))).is_err() {
+                            break;
+                        }
+                    }
+                    Err(error) => {
+                        let _ = sender.send(Err(error));
+                        break;
+                    }
+                }
+            }
+        });
+
+        Self {
+            receiver,
+            idle_timeout: idle_timeout_seconds.map(Duration::from_secs),
+        }
+    }
+
+    fn next_line(&mut self) -> Result<Option<String>, ProviderError> {
+        match self.idle_timeout {
+            Some(duration) => match self.receiver.recv_timeout(duration) {
+                Ok(result) => result.map_err(ProviderError::Stream),
+                Err(RecvTimeoutError::Timeout) => Err(ProviderError::StreamIdleTimeout {
+                    seconds: duration.as_secs(),
+                }),
+                Err(RecvTimeoutError::Disconnected) => Ok(None),
+            },
+            None => self
+                .receiver
+                .recv()
+                .map_err(|_| {
+                    ProviderError::Stream(std::io::Error::from(std::io::ErrorKind::UnexpectedEof))
+                })?
+                .map_err(ProviderError::Stream),
+        }
+    }
+}
+
 impl ProviderDriver for OpenAiResponsesDriver {
     fn descriptor(&self) -> &ProviderDescriptor {
         &self.descriptor
@@ -828,7 +944,7 @@ impl ProviderDriver for OpenAiResponsesDriver {
         }
 
         Ok(Box::new(OpenAiResponsesResponseStream {
-            reader: BufReader::new(response),
+            line_reader: TimedSseLineReader::new(response, self.config.stream_idle_timeout_seconds),
             pending_events: VecDeque::new(),
             done: false,
         }))
@@ -864,17 +980,12 @@ impl ZaiChatCompletionsResponseStream {
         let mut payload_lines = Vec::new();
 
         loop {
-            let mut line = String::new();
-            let bytes = self
-                .reader
-                .read_line(&mut line)
-                .map_err(ProviderError::Stream)?;
-            if bytes == 0 {
+            let Some(line) = self.line_reader.next_line()? else {
                 if payload_lines.is_empty() {
                     return Ok(None);
                 }
                 return Ok(Some(payload_lines.join("\n")));
-            }
+            };
 
             let trimmed = line.trim_end_matches(['\r', '\n']);
             if trimmed.is_empty() {
@@ -957,17 +1068,12 @@ impl OpenAiResponsesResponseStream {
         let mut payload_lines = Vec::new();
 
         loop {
-            let mut line = String::new();
-            let bytes = self
-                .reader
-                .read_line(&mut line)
-                .map_err(ProviderError::Stream)?;
-            if bytes == 0 {
+            let Some(line) = self.line_reader.next_line()? else {
                 if payload_lines.is_empty() {
                     return Ok(None);
                 }
                 return Ok(Some(payload_lines.join("\n")));
-            }
+            };
 
             let trimmed = line.trim_end_matches(['\r', '\n']);
             if trimmed.is_empty() {
@@ -1166,7 +1272,7 @@ impl ProviderDriver for ZaiChatCompletionsDriver {
         }
 
         Ok(Box::new(ZaiChatCompletionsResponseStream {
-            reader: BufReader::new(response),
+            line_reader: TimedSseLineReader::new(response, self.config.stream_idle_timeout_seconds),
             pending_events: VecDeque::new(),
             response_id: None,
             model: None,
@@ -1189,6 +1295,13 @@ impl fmt::Display for ProviderError {
             Self::MissingModel => write!(formatter, "provider request is missing a model"),
             Self::Parse(source) => write!(formatter, "provider parse error: {source}"),
             Self::Stream(source) => write!(formatter, "provider stream error: {source}"),
+            Self::StreamIdleTimeout { seconds } => {
+                write!(
+                    formatter,
+                    "provider stream idle timeout after {} seconds without new bytes",
+                    seconds
+                )
+            }
             Self::ResponseMissingOutputText => {
                 write!(
                     formatter,
@@ -1220,6 +1333,7 @@ impl Error for ProviderError {
             Self::Stream(source) => Some(source),
             Self::HttpStatus { .. }
             | Self::MissingModel
+            | Self::StreamIdleTimeout { .. }
             | Self::ResponseMissingOutputText
             | Self::ResponseMissingToolCallField { .. }
             | Self::UnsupportedMessageRole { .. }
