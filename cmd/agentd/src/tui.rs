@@ -223,6 +223,7 @@ where
         }
     }
 
+    redraw(state)?;
     Ok(())
 }
 

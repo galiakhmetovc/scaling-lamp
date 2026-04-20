@@ -735,6 +735,64 @@ data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_nonblocking\"
 }
 
 #[test]
+fn tui_chat_submit_redraws_immediately_and_shows_the_user_message() {
+    let stream = "data: {\"type\":\"response.output_text.delta\",\"item_id\":\"msg_immediate_redraw\",\"output_index\":0,\"content_index\":0,\"delta\":\"hello later\"}\n\n\
+data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_immediate_redraw\",\"model\":\"gpt-5.4\",\"output\":[{\"id\":\"msg_immediate_redraw\",\"type\":\"message\",\"status\":\"completed\",\"role\":\"assistant\",\"content\":[{\"type\":\"output_text\",\"text\":\"hello later\",\"annotations\":[]}]}],\"usage\":{\"input_tokens\":9,\"output_tokens\":4,\"total_tokens\":13}}}\n\n".to_string();
+    let (api_base, handle) =
+        spawn_delayed_sse_server_sequence(vec![(Duration::from_millis(400), stream)]);
+    let temp = tempfile::tempdir().expect("tempdir");
+    let app = build_from_config(AppConfig {
+        data_dir: temp.path().join("state-root"),
+        provider: ConfiguredProvider {
+            kind: ProviderKind::OpenAiResponses,
+            api_base: Some(format!("{api_base}/v1")),
+            api_key: Some("test-key".to_string()),
+            default_model: Some("gpt-5.4".to_string()),
+            ..ConfiguredProvider::default()
+        },
+        ..AppConfig::default()
+    })
+    .expect("build app");
+    let session = app
+        .create_session_auto(Some("Immediate Redraw Session"))
+        .expect("create session");
+    let mut state = TuiAppState::new(
+        app.list_session_summaries().expect("list sessions"),
+        Some(session.id.clone()),
+    );
+    let redraw_count = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let redraw_counter = redraw_count.clone();
+    let mut redraw = move |_state: &TuiAppState| {
+        redraw_counter.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        Ok::<_, agentd::bootstrap::BootstrapError>(())
+    };
+
+    dispatch_action(
+        &app,
+        &mut state,
+        TuiAction::SubmitChatInput("hello immediate".to_string()),
+        &mut redraw,
+    )
+    .expect("dispatch chat");
+
+    assert!(
+        redraw_count.load(std::sync::atomic::Ordering::Relaxed) > 0,
+        "submit should trigger an immediate redraw"
+    );
+    assert!(
+        state.timeline().entries(true).iter().any(|entry| {
+            matches!(entry.kind, TimelineEntryKind::User) && entry.content == "hello immediate"
+        }),
+        "user message should be visible in the timeline immediately after submit"
+    );
+
+    wait_for_tui_idle(&app, &mut state, &mut |_state| {
+        Ok::<_, agentd::bootstrap::BootstrapError>(())
+    });
+    handle.join().expect("join delayed sse");
+}
+
+#[test]
 fn tui_composer_remains_editable_while_a_background_run_is_active() {
     let stream = "data: {\"type\":\"response.output_text.delta\",\"item_id\":\"msg_background_edit\",\"output_index\":0,\"content_index\":0,\"delta\":\"hello later\"}\n\n\
 data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_background_edit\",\"model\":\"gpt-5.4\",\"output\":[{\"id\":\"msg_background_edit\",\"type\":\"message\",\"status\":\"completed\",\"role\":\"assistant\",\"content\":[{\"type\":\"output_text\",\"text\":\"hello later\",\"annotations\":[]}]}],\"usage\":{\"input_tokens\":9,\"output_tokens\":4,\"total_tokens\":13}}}\n\n".to_string();

@@ -27,6 +27,7 @@ pub struct DaemonConnectOptions {
 #[derive(Debug, Clone)]
 pub struct DaemonClient {
     http: Client,
+    long_http: Client,
     base_url: String,
     bearer_token: Option<String>,
 }

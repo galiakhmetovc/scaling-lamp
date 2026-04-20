@@ -7,6 +7,7 @@ use crate::http::types::{DaemonStopResponse, ErrorResponse};
 use serde::{Serialize, de::DeserializeOwned};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::thread;
 use std::time::Duration;
 use tiny_http::{Header, Request, Response, Server, StatusCode};
 
@@ -19,7 +20,13 @@ pub fn serve(app: App, shutdown: Arc<AtomicBool>) -> std::io::Result<()> {
 
     while !shutdown.load(Ordering::Relaxed) {
         match server.recv_timeout(Duration::from_millis(100)) {
-            Ok(Some(request)) => handle_request(&app, &shutdown, request)?,
+            Ok(Some(request)) => {
+                let app = app.clone();
+                let shutdown = shutdown.clone();
+                thread::spawn(move || {
+                    let _ = handle_request(&app, &shutdown, request);
+                });
+            }
             Ok(None) => continue,
             Err(error) => return Err(error),
         }

@@ -12,7 +12,7 @@ impl DaemonClient {
         _interrupt_after_tool_step: Option<&AtomicBool>,
         _observer: &mut dyn FnMut(ChatExecutionEvent),
     ) -> Result<ChatTurnExecutionReport, BootstrapError> {
-        match self.post_json::<WorkerOutcomeResponse, _>(
+        match self.post_json_long::<WorkerOutcomeResponse, _>(
             "/v1/chat/turn",
             &ChatTurnRequest {
                 session_id: session_id.to_string(),
@@ -49,7 +49,7 @@ impl DaemonClient {
         _interrupt_after_tool_step: Option<&AtomicBool>,
         _observer: &mut dyn FnMut(ChatExecutionEvent),
     ) -> Result<ApprovalContinuationReport, BootstrapError> {
-        match self.post_json::<WorkerOutcomeResponse, _>(
+        match self.post_json_long::<WorkerOutcomeResponse, _>(
             "/v1/runs/approve",
             &ApproveRunRequest {
                 run_id: run_id.to_string(),

@@ -1,4 +1,5 @@
 use super::*;
+use std::error::Error as _;
 use std::time::Duration;
 
 impl DaemonClient {
@@ -11,8 +12,14 @@ impl DaemonClient {
         Self {
             http: Client::builder()
                 .connect_timeout(Duration::from_secs(2))
+                .timeout(Duration::from_secs(5))
                 .build()
                 .expect("build daemon http client"),
+            long_http: Client::builder()
+                .connect_timeout(Duration::from_secs(2))
+                .timeout(None::<Duration>)
+                .build()
+                .expect("build daemon long http client"),
             base_url: format!("http://{host}:{port}"),
             bearer_token: config.daemon.bearer_token.clone(),
         }
@@ -26,9 +33,9 @@ impl DaemonClient {
         if let Some(token) = &self.bearer_token {
             request = request.bearer_auth(token);
         }
-        let response = request
-            .send()
-            .map_err(|error| BootstrapError::Stream(std::io::Error::other(error.to_string())))?;
+        let response = request.send().map_err(|error| {
+            BootstrapError::Stream(std::io::Error::other(format_http_error(&error)))
+        })?;
         decode_response(response)
     }
 
@@ -44,9 +51,9 @@ impl DaemonClient {
         if let Some(token) = &self.bearer_token {
             request = request.bearer_auth(token);
         }
-        let response = request
-            .send()
-            .map_err(|error| BootstrapError::Stream(std::io::Error::other(error.to_string())))?;
+        let response = request.send().map_err(|error| {
+            BootstrapError::Stream(std::io::Error::other(format_http_error(&error)))
+        })?;
         decode_response(response)
     }
 
@@ -62,9 +69,9 @@ impl DaemonClient {
         if let Some(token) = &self.bearer_token {
             request = request.bearer_auth(token);
         }
-        let response = request
-            .send()
-            .map_err(|error| BootstrapError::Stream(std::io::Error::other(error.to_string())))?;
+        let response = request.send().map_err(|error| {
+            BootstrapError::Stream(std::io::Error::other(format_http_error(&error)))
+        })?;
         decode_response(response)
     }
 
@@ -76,11 +83,42 @@ impl DaemonClient {
         if let Some(token) = &self.bearer_token {
             request = request.bearer_auth(token);
         }
-        let response = request
-            .send()
-            .map_err(|error| BootstrapError::Stream(std::io::Error::other(error.to_string())))?;
+        let response = request.send().map_err(|error| {
+            BootstrapError::Stream(std::io::Error::other(format_http_error(&error)))
+        })?;
         decode_response(response)
     }
+
+    pub(super) fn post_json_long<T, B>(&self, path: &str, body: &B) -> Result<T, BootstrapError>
+    where
+        T: DeserializeOwned,
+        B: serde::Serialize + ?Sized,
+    {
+        let mut request = self
+            .long_http
+            .post(format!("{}{}", self.base_url, path))
+            .json(body);
+        if let Some(token) = &self.bearer_token {
+            request = request.bearer_auth(token);
+        }
+        let response = request.send().map_err(|error| {
+            BootstrapError::Stream(std::io::Error::other(format_http_error(&error)))
+        })?;
+        decode_response(response)
+    }
+}
+
+fn format_http_error(error: &reqwest::Error) -> String {
+    let mut parts = vec![error.to_string()];
+    let mut source = error.source();
+    while let Some(next) = source {
+        let text = next.to_string();
+        if parts.last() != Some(&text) {
+            parts.push(text);
+        }
+        source = next.source();
+    }
+    parts.join(": ")
 }
 
 fn default_connect_host(bind_host: &str) -> String {

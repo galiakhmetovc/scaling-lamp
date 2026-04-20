@@ -237,6 +237,83 @@ fn daemon_client_chat_turn_waits_for_slow_daemon_responses() {
 }
 
 #[test]
+fn daemon_client_can_query_pending_approvals_while_chat_turn_is_in_flight() {
+    let (_temp, mut config) = test_config();
+    let (provider_api_base, _provider_requests, provider_handle) =
+        spawn_delayed_json_server_sequence(vec![(
+            Duration::from_secs(2),
+            r#"{
+                "id":"resp_inflight",
+                "model":"gpt-5.4",
+                "output":[
+                    {
+                        "id":"msg_inflight",
+                        "type":"message",
+                        "status":"completed",
+                        "role":"assistant",
+                        "content":[
+                            {
+                                "type":"output_text",
+                                "text":"done"
+                            }
+                        ]
+                    }
+                ],
+                "usage":{"input_tokens":12,"output_tokens":4,"total_tokens":16}
+            }"#
+            .to_string(),
+        )]);
+    config.provider = ConfiguredProvider {
+        kind: ProviderKind::OpenAiResponses,
+        api_base: Some(format!("{provider_api_base}/v1")),
+        api_key: Some("test-key".to_string()),
+        default_model: Some("gpt-5.4".to_string()),
+        ..ConfiguredProvider::default()
+    };
+
+    let app = bootstrap::build_from_config(config.clone()).expect("build app");
+    let handle = daemon::spawn_for_test(app).expect("spawn daemon");
+    let client = DaemonClient::new(&config, &DaemonConnectOptions::default());
+    let session = client
+        .create_session_auto(Some("Inflight Session"))
+        .expect("create session");
+
+    let client_for_chat = client.clone();
+    let session_id = session.id.clone();
+    let chat_thread = thread::spawn(move || {
+        client_for_chat.execute_chat_turn_with_control_and_observer(
+            &session_id,
+            "Привет",
+            10,
+            None,
+            &mut |_| {},
+        )
+    });
+
+    thread::sleep(Duration::from_millis(200));
+    let started = std::time::Instant::now();
+    let approvals = client
+        .pending_approvals(&session.id)
+        .expect("query approvals while chat turn is in flight");
+    let elapsed = started.elapsed();
+
+    assert!(approvals.is_empty());
+    assert!(
+        elapsed < Duration::from_secs(1),
+        "pending approvals request should not block on the in-flight chat turn, got {:?}",
+        elapsed
+    );
+
+    let report = chat_thread
+        .join()
+        .expect("join chat thread")
+        .expect("chat turn");
+    assert_eq!(report.output_text, "done");
+    provider_handle.join().expect("join provider");
+    handle.stop().expect("stop daemon");
+}
+
+#[test]
 fn detailed_daemon_connection_can_shutdown_autospawned_local_daemon() {
     let (_temp, config) = test_config();
     let handle_cell = Arc::new(Mutex::new(None));
