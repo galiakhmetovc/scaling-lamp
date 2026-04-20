@@ -122,18 +122,34 @@ fn build_workspace_tree(workspace: &WorkspaceRef) -> (Vec<SessionHeadWorkspaceEn
 
 fn parse_filesystem_activity(detail: &str, recorded_at: i64) -> Option<SessionHeadFsActivity> {
     let (tool_summary, _) = detail.split_once(" -> ")?;
-    let (action, target) = if tool_summary.starts_with("fs_read ") {
+    let (action, target) = if tool_summary.starts_with("fs_read ")
+        || tool_summary.starts_with("fs_read_text ")
+        || tool_summary.starts_with("fs_read_lines ")
+    {
         ("read", extract_tool_field(tool_summary, "path")?)
-    } else if tool_summary.starts_with("fs_write ") {
+    } else if tool_summary.starts_with("fs_write ") || tool_summary.starts_with("fs_write_text ") {
         ("write", extract_tool_field(tool_summary, "path")?)
-    } else if tool_summary.starts_with("fs_patch ") {
+    } else if tool_summary.starts_with("fs_patch ")
+        || tool_summary.starts_with("fs_patch_text ")
+        || tool_summary.starts_with("fs_replace_lines ")
+        || tool_summary.starts_with("fs_insert_text ")
+    {
         ("patch", extract_tool_field(tool_summary, "path")?)
     } else if tool_summary.starts_with("fs_list ") {
         ("list", extract_tool_field(tool_summary, "path")?)
     } else if tool_summary.starts_with("fs_glob ") {
         ("glob", extract_tool_field(tool_summary, "path")?)
-    } else if tool_summary.starts_with("fs_search ") {
+    } else if tool_summary.starts_with("fs_search ") || tool_summary.starts_with("fs_search_text ")
+    {
         ("search", extract_tool_field(tool_summary, "path")?)
+    } else if tool_summary.starts_with("fs_find_in_files ") {
+        ("search", "<workspace>".to_string())
+    } else if tool_summary.starts_with("fs_mkdir ") {
+        ("mkdir", extract_tool_field(tool_summary, "path")?)
+    } else if tool_summary.starts_with("fs_move ") {
+        ("move", extract_tool_field(tool_summary, "dest")?)
+    } else if tool_summary.starts_with("fs_trash ") {
+        ("trash", extract_tool_field(tool_summary, "path")?)
     } else {
         return None;
     };

@@ -1,5 +1,7 @@
 use crate::plan::{PlanItem, PlanItemStatus, PlanItemStatusParseError};
-use crate::workspace::{WorkspaceEntry, WorkspaceError, WorkspaceRef, WorkspaceSearchMatch};
+use crate::workspace::{
+    WorkspaceEntry, WorkspaceError, WorkspaceRef, WorkspaceSearchMatch, WriteMode,
+};
 use reqwest::Url;
 use reqwest::blocking::Client;
 use serde::{Deserialize, Serialize};
@@ -24,6 +26,17 @@ pub enum ToolName {
     FsRead,
     FsWrite,
     FsPatch,
+    FsReadText,
+    FsReadLines,
+    FsSearchText,
+    FsFindInFiles,
+    FsWriteText,
+    FsPatchText,
+    FsReplaceLines,
+    FsInsertText,
+    FsMkdir,
+    FsMove,
+    FsTrash,
     FsList,
     FsGlob,
     FsSearch,
@@ -70,6 +83,46 @@ pub struct FsWriteInput {
     pub content: String,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FsWriteMode {
+    Create,
+    Overwrite,
+    Upsert,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FsReadTextInput {
+    pub path: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FsReadLinesInput {
+    pub path: String,
+    pub start_line: usize,
+    pub end_line: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FsSearchTextInput {
+    pub path: String,
+    pub query: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FsFindInFilesInput {
+    pub query: String,
+    pub glob: Option<String>,
+    pub limit: Option<usize>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FsWriteTextInput {
+    pub path: String,
+    pub content: String,
+    pub mode: FsWriteMode,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct FsPatchEdit {
     pub old: String,
@@ -81,6 +134,29 @@ pub struct FsPatchEdit {
 pub struct FsPatchInput {
     pub path: String,
     pub edits: Vec<FsPatchEdit>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FsPatchTextInput {
+    pub path: String,
+    pub search: String,
+    pub replace: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FsReplaceLinesInput {
+    pub path: String,
+    pub start_line: usize,
+    pub end_line: usize,
+    pub content: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FsInsertTextInput {
+    pub path: String,
+    pub line: Option<usize>,
+    pub position: String,
+    pub content: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -99,6 +175,22 @@ pub struct FsGlobInput {
 pub struct FsSearchInput {
     pub path: String,
     pub query: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FsMkdirInput {
+    pub path: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FsMoveInput {
+    pub src: String,
+    pub dest: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FsTrashInput {
+    pub path: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -160,6 +252,17 @@ pub enum ToolCall {
     FsRead(FsReadInput),
     FsWrite(FsWriteInput),
     FsPatch(FsPatchInput),
+    FsReadText(FsReadTextInput),
+    FsReadLines(FsReadLinesInput),
+    FsSearchText(FsSearchTextInput),
+    FsFindInFiles(FsFindInFilesInput),
+    FsWriteText(FsWriteTextInput),
+    FsPatchText(FsPatchTextInput),
+    FsReplaceLines(FsReplaceLinesInput),
+    FsInsertText(FsInsertTextInput),
+    FsMkdir(FsMkdirInput),
+    FsMove(FsMoveInput),
+    FsTrash(FsTrashInput),
     FsList(FsListInput),
     FsGlob(FsGlobInput),
     FsSearch(FsSearchInput),
@@ -181,9 +284,35 @@ pub struct FsReadOutput {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FsReadTextOutput {
+    pub path: String,
+    pub content: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FsReadLinesOutput {
+    pub path: String,
+    pub start_line: usize,
+    pub end_line: usize,
+    pub total_lines: usize,
+    pub eof: bool,
+    pub next_start_line: Option<usize>,
+    pub content: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FsWriteOutput {
     pub path: String,
     pub bytes_written: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FsWriteTextOutput {
+    pub path: String,
+    pub mode: FsWriteMode,
+    pub bytes_written: usize,
+    pub created: bool,
+    pub overwritten: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -191,6 +320,28 @@ pub struct FsPatchOutput {
     pub path: String,
     pub bytes_written: usize,
     pub edits_applied: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FsPatchTextOutput {
+    pub path: String,
+    pub bytes_written: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FsReplaceLinesOutput {
+    pub path: String,
+    pub start_line: usize,
+    pub end_line: usize,
+    pub bytes_written: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FsInsertTextOutput {
+    pub path: String,
+    pub position: String,
+    pub line: Option<usize>,
+    pub bytes_written: usize,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -206,6 +357,33 @@ pub struct FsGlobOutput {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FsSearchOutput {
     pub matches: Vec<WorkspaceSearchMatch>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FsSearchTextOutput {
+    pub matches: Vec<WorkspaceSearchMatch>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FsFindInFilesOutput {
+    pub matches: Vec<WorkspaceSearchMatch>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FsMkdirOutput {
+    pub path: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FsMoveOutput {
+    pub src: String,
+    pub dest: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FsTrashOutput {
+    pub path: String,
+    pub trashed_to: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -297,6 +475,17 @@ pub enum ToolOutput {
     FsRead(FsReadOutput),
     FsWrite(FsWriteOutput),
     FsPatch(FsPatchOutput),
+    FsReadText(FsReadTextOutput),
+    FsReadLines(FsReadLinesOutput),
+    FsSearchText(FsSearchTextOutput),
+    FsFindInFiles(FsFindInFilesOutput),
+    FsWriteText(FsWriteTextOutput),
+    FsPatchText(FsPatchTextOutput),
+    FsReplaceLines(FsReplaceLinesOutput),
+    FsInsertText(FsInsertTextOutput),
+    FsMkdir(FsMkdirOutput),
+    FsMove(FsMoveOutput),
+    FsTrash(FsTrashOutput),
     FsList(FsListOutput),
     FsGlob(FsGlobOutput),
     FsSearch(FsSearchOutput),
@@ -401,6 +590,17 @@ impl ToolName {
             Self::FsRead => "fs_read",
             Self::FsWrite => "fs_write",
             Self::FsPatch => "fs_patch",
+            Self::FsReadText => "fs_read_text",
+            Self::FsReadLines => "fs_read_lines",
+            Self::FsSearchText => "fs_search_text",
+            Self::FsFindInFiles => "fs_find_in_files",
+            Self::FsWriteText => "fs_write_text",
+            Self::FsPatchText => "fs_patch_text",
+            Self::FsReplaceLines => "fs_replace_lines",
+            Self::FsInsertText => "fs_insert_text",
+            Self::FsMkdir => "fs_mkdir",
+            Self::FsMove => "fs_move",
+            Self::FsTrash => "fs_trash",
             Self::FsList => "fs_list",
             Self::FsGlob => "fs_glob",
             Self::FsSearch => "fs_search",
@@ -434,10 +634,22 @@ impl ToolCatalog {
             .filter(|definition| {
                 matches!(
                     definition.name,
-                    ToolName::FsRead
+                    ToolName::FsReadText
+                        | ToolName::FsReadLines
                         | ToolName::FsList
                         | ToolName::FsGlob
-                        | ToolName::FsSearch
+                        | ToolName::FsSearchText
+                        | ToolName::FsFindInFiles
+                        | ToolName::FsWriteText
+                        | ToolName::FsPatchText
+                        | ToolName::FsReplaceLines
+                        | ToolName::FsInsertText
+                        | ToolName::FsMkdir
+                        | ToolName::FsMove
+                        | ToolName::FsTrash
+                        | ToolName::ExecStart
+                        | ToolName::ExecWait
+                        | ToolName::ExecKill
                         | ToolName::WebFetch
                         | ToolName::WebSearch
                         | ToolName::PlanRead
@@ -475,6 +687,116 @@ impl ToolCatalog {
                 name: ToolName::FsPatch,
                 family: ToolFamily::Filesystem,
                 description: "Apply exact text edits to a UTF-8 text file inside the workspace",
+                policy: ToolPolicy {
+                    read_only: false,
+                    destructive: true,
+                    requires_approval: true,
+                },
+            },
+            ToolDefinition {
+                name: ToolName::FsReadText,
+                family: ToolFamily::Filesystem,
+                description: "Read a UTF-8 text file from the workspace",
+                policy: ToolPolicy {
+                    read_only: true,
+                    destructive: false,
+                    requires_approval: false,
+                },
+            },
+            ToolDefinition {
+                name: ToolName::FsReadLines,
+                family: ToolFamily::Filesystem,
+                description: "Read an inclusive line range from a UTF-8 text file and report file bounds",
+                policy: ToolPolicy {
+                    read_only: true,
+                    destructive: false,
+                    requires_approval: false,
+                },
+            },
+            ToolDefinition {
+                name: ToolName::FsSearchText,
+                family: ToolFamily::Filesystem,
+                description: "Search for literal text within a single UTF-8 text file",
+                policy: ToolPolicy {
+                    read_only: true,
+                    destructive: false,
+                    requires_approval: false,
+                },
+            },
+            ToolDefinition {
+                name: ToolName::FsFindInFiles,
+                family: ToolFamily::Filesystem,
+                description: "Search for literal text across workspace files, optionally constrained by glob",
+                policy: ToolPolicy {
+                    read_only: true,
+                    destructive: false,
+                    requires_approval: false,
+                },
+            },
+            ToolDefinition {
+                name: ToolName::FsWriteText,
+                family: ToolFamily::Filesystem,
+                description: "Write full UTF-8 text to a file with explicit create, overwrite, or upsert semantics",
+                policy: ToolPolicy {
+                    read_only: false,
+                    destructive: true,
+                    requires_approval: true,
+                },
+            },
+            ToolDefinition {
+                name: ToolName::FsPatchText,
+                family: ToolFamily::Filesystem,
+                description: "Replace one exact text fragment inside a UTF-8 text file",
+                policy: ToolPolicy {
+                    read_only: false,
+                    destructive: true,
+                    requires_approval: true,
+                },
+            },
+            ToolDefinition {
+                name: ToolName::FsReplaceLines,
+                family: ToolFamily::Filesystem,
+                description: "Replace an explicit inclusive line range inside a UTF-8 text file",
+                policy: ToolPolicy {
+                    read_only: false,
+                    destructive: true,
+                    requires_approval: true,
+                },
+            },
+            ToolDefinition {
+                name: ToolName::FsInsertText,
+                family: ToolFamily::Filesystem,
+                description: "Insert text before or after a line, or prepend or append to a file",
+                policy: ToolPolicy {
+                    read_only: false,
+                    destructive: true,
+                    requires_approval: true,
+                },
+            },
+            ToolDefinition {
+                name: ToolName::FsMkdir,
+                family: ToolFamily::Filesystem,
+                description: "Create a directory inside the workspace",
+                policy: ToolPolicy {
+                    read_only: false,
+                    destructive: true,
+                    requires_approval: true,
+                },
+            },
+            ToolDefinition {
+                name: ToolName::FsMove,
+                family: ToolFamily::Filesystem,
+                description: "Move or rename a file or directory inside the workspace",
+                policy: ToolPolicy {
+                    read_only: false,
+                    destructive: true,
+                    requires_approval: true,
+                },
+            },
+            ToolDefinition {
+                name: ToolName::FsTrash,
+                family: ToolFamily::Filesystem,
+                description: "Move a file or directory into workspace trash instead of deleting it permanently",
                 policy: ToolPolicy {
                     read_only: false,
                     destructive: true,
@@ -634,20 +956,159 @@ impl ToolRuntime {
                 path: normalize_tool_path(&input.path),
                 content: self.workspace.read_text(&input.path)?,
             })),
-            ToolCall::FsWrite(input) => Ok(ToolOutput::FsWrite(FsWriteOutput {
-                path: normalize_tool_path(&input.path),
-                bytes_written: self.workspace.write_text(&input.path, &input.content)?,
-            })),
+            ToolCall::FsWrite(input) => {
+                let result = self.workspace.write_text_with_mode(
+                    &input.path,
+                    &input.content,
+                    WriteMode::Upsert,
+                )?;
+                Ok(ToolOutput::FsWrite(FsWriteOutput {
+                    path: normalize_tool_path(&input.path),
+                    bytes_written: result.bytes_written,
+                }))
+            }
             ToolCall::FsPatch(input) => {
                 let path = normalize_tool_path(&input.path);
                 let content = self.workspace.read_text(&input.path)?;
                 let patched = apply_patch_edits(&path, content, &input.edits)?;
-                let bytes_written = self.workspace.write_text(&input.path, &patched.content)?;
+                let bytes_written = self
+                    .workspace
+                    .write_text_with_mode(&input.path, &patched.content, WriteMode::Upsert)?
+                    .bytes_written;
                 Ok(ToolOutput::FsPatch(FsPatchOutput {
                     path,
                     bytes_written,
                     edits_applied: input.edits.len(),
                 }))
+            }
+            ToolCall::FsReadText(input) => Ok(ToolOutput::FsReadText(FsReadTextOutput {
+                path: normalize_tool_path(&input.path),
+                content: self.workspace.read_text(&input.path)?,
+            })),
+            ToolCall::FsReadLines(input) => {
+                let chunk =
+                    self.workspace
+                        .read_lines(&input.path, input.start_line, input.end_line)?;
+                Ok(ToolOutput::FsReadLines(FsReadLinesOutput {
+                    path: chunk.path,
+                    start_line: chunk.start_line,
+                    end_line: chunk.end_line,
+                    total_lines: chunk.total_lines,
+                    eof: chunk.eof,
+                    next_start_line: chunk.next_start_line,
+                    content: chunk.content,
+                }))
+            }
+            ToolCall::FsSearchText(input) => Ok(ToolOutput::FsSearchText(FsSearchTextOutput {
+                matches: self.workspace.search_text(&input.path, &input.query)?,
+            })),
+            ToolCall::FsFindInFiles(input) => {
+                let mut matches = self.workspace.find_in_files("", &input.query)?;
+                if let Some(glob) = &input.glob {
+                    matches.retain(|entry| glob_matches(glob, &entry.path));
+                }
+                if let Some(limit) = input.limit {
+                    matches.truncate(limit);
+                }
+                Ok(ToolOutput::FsFindInFiles(FsFindInFilesOutput { matches }))
+            }
+            ToolCall::FsWriteText(input) => {
+                let result = self.workspace.write_text_with_mode(
+                    &input.path,
+                    &input.content,
+                    input.mode.into(),
+                )?;
+                Ok(ToolOutput::FsWriteText(FsWriteTextOutput {
+                    path: normalize_tool_path(&input.path),
+                    mode: input.mode,
+                    bytes_written: result.bytes_written,
+                    created: result.created,
+                    overwritten: result.overwritten,
+                }))
+            }
+            ToolCall::FsPatchText(input) => {
+                let path = normalize_tool_path(&input.path);
+                let content = self.workspace.read_text(&input.path)?;
+                let updated = content.replacen(&input.search, &input.replace, 1);
+                if updated == content {
+                    return Err(ToolError::InvalidPatch {
+                        path,
+                        reason: "search text not found in file".to_string(),
+                    });
+                }
+                let bytes_written = self
+                    .workspace
+                    .write_text_with_mode(&input.path, &updated, WriteMode::Upsert)?
+                    .bytes_written;
+                Ok(ToolOutput::FsPatchText(FsPatchTextOutput {
+                    path: normalize_tool_path(&input.path),
+                    bytes_written,
+                }))
+            }
+            ToolCall::FsReplaceLines(input) => {
+                let path = normalize_tool_path(&input.path);
+                let content = self.workspace.read_text(&input.path)?;
+                let updated = replace_lines_range(
+                    path.as_str(),
+                    content.as_str(),
+                    input.start_line,
+                    input.end_line,
+                    input.content.as_str(),
+                )?;
+                let bytes_written = self
+                    .workspace
+                    .write_text_with_mode(&input.path, updated.as_str(), WriteMode::Upsert)?
+                    .bytes_written;
+                Ok(ToolOutput::FsReplaceLines(FsReplaceLinesOutput {
+                    path,
+                    start_line: input.start_line,
+                    end_line: input.end_line,
+                    bytes_written,
+                }))
+            }
+            ToolCall::FsInsertText(input) => {
+                let path = normalize_tool_path(&input.path);
+                let content = self.workspace.read_text(&input.path).or_else(|error| {
+                    if matches!(
+                        &error,
+                        WorkspaceError::Io {
+                            source,
+                            ..
+                        } if source.kind() == std::io::ErrorKind::NotFound
+                    ) {
+                        Ok(String::new())
+                    } else {
+                        Err(error)
+                    }
+                })?;
+                let updated = insert_text(
+                    path.as_str(),
+                    content.as_str(),
+                    input.line,
+                    input.position.as_str(),
+                    input.content.as_str(),
+                )?;
+                let bytes_written = self
+                    .workspace
+                    .write_text_with_mode(&input.path, updated.as_str(), WriteMode::Upsert)?
+                    .bytes_written;
+                Ok(ToolOutput::FsInsertText(FsInsertTextOutput {
+                    path,
+                    position: input.position,
+                    line: input.line,
+                    bytes_written,
+                }))
+            }
+            ToolCall::FsMkdir(input) => Ok(ToolOutput::FsMkdir(FsMkdirOutput {
+                path: self.workspace.mkdir(&input.path)?,
+            })),
+            ToolCall::FsMove(input) => {
+                let (src, dest) = self.workspace.move_path(&input.src, &input.dest)?;
+                Ok(ToolOutput::FsMove(FsMoveOutput { src, dest }))
+            }
+            ToolCall::FsTrash(input) => {
+                let (path, trashed_to) = self.workspace.trash_path(&input.path)?;
+                Ok(ToolOutput::FsTrash(FsTrashOutput { path, trashed_to }))
             }
             ToolCall::FsList(input) => Ok(ToolOutput::FsList(FsListOutput {
                 entries: self.workspace.list(&input.path, input.recursive)?,
@@ -814,6 +1275,17 @@ impl ToolCall {
             Self::FsRead(_) => ToolName::FsRead,
             Self::FsWrite(_) => ToolName::FsWrite,
             Self::FsPatch(_) => ToolName::FsPatch,
+            Self::FsReadText(_) => ToolName::FsReadText,
+            Self::FsReadLines(_) => ToolName::FsReadLines,
+            Self::FsSearchText(_) => ToolName::FsSearchText,
+            Self::FsFindInFiles(_) => ToolName::FsFindInFiles,
+            Self::FsWriteText(_) => ToolName::FsWriteText,
+            Self::FsPatchText(_) => ToolName::FsPatchText,
+            Self::FsReplaceLines(_) => ToolName::FsReplaceLines,
+            Self::FsInsertText(_) => ToolName::FsInsertText,
+            Self::FsMkdir(_) => ToolName::FsMkdir,
+            Self::FsMove(_) => ToolName::FsMove,
+            Self::FsTrash(_) => ToolName::FsTrash,
             Self::FsList(_) => ToolName::FsList,
             Self::FsGlob(_) => ToolName::FsGlob,
             Self::FsSearch(_) => ToolName::FsSearch,
@@ -834,6 +1306,17 @@ impl ToolCall {
             Self::FsRead(input) => Some(normalize_tool_path(&input.path)),
             Self::FsWrite(input) => Some(normalize_tool_path(&input.path)),
             Self::FsPatch(input) => Some(normalize_tool_path(&input.path)),
+            Self::FsReadText(input) => Some(normalize_tool_path(&input.path)),
+            Self::FsReadLines(input) => Some(normalize_tool_path(&input.path)),
+            Self::FsSearchText(input) => Some(normalize_tool_path(&input.path)),
+            Self::FsFindInFiles(_) => None,
+            Self::FsWriteText(input) => Some(normalize_tool_path(&input.path)),
+            Self::FsPatchText(input) => Some(normalize_tool_path(&input.path)),
+            Self::FsReplaceLines(input) => Some(normalize_tool_path(&input.path)),
+            Self::FsInsertText(input) => Some(normalize_tool_path(&input.path)),
+            Self::FsMkdir(input) => Some(normalize_tool_path(&input.path)),
+            Self::FsMove(input) => Some(normalize_tool_path(&input.dest)),
+            Self::FsTrash(input) => Some(normalize_tool_path(&input.path)),
             Self::FsList(input) => Some(normalize_tool_path(&input.path)),
             Self::FsGlob(input) => Some(normalize_tool_path(&input.path)),
             Self::FsSearch(input) => Some(normalize_tool_path(&input.path)),
@@ -860,6 +1343,57 @@ impl ToolCall {
                 normalize_tool_path(&input.path),
                 input.edits.len()
             ),
+            Self::FsReadText(input) => {
+                format!("fs_read_text path={}", normalize_tool_path(&input.path))
+            }
+            Self::FsReadLines(input) => format!(
+                "fs_read_lines path={} start_line={} end_line={}",
+                normalize_tool_path(&input.path),
+                input.start_line,
+                input.end_line
+            ),
+            Self::FsSearchText(input) => format!(
+                "fs_search_text path={} query={}",
+                normalize_tool_path(&input.path),
+                input.query
+            ),
+            Self::FsFindInFiles(input) => format!(
+                "fs_find_in_files query={} glob={} limit={}",
+                input.query,
+                input.glob.as_deref().unwrap_or("*"),
+                input.limit.unwrap_or(0)
+            ),
+            Self::FsWriteText(input) => format!(
+                "fs_write_text path={} mode={} bytes={}",
+                normalize_tool_path(&input.path),
+                input.mode.as_str(),
+                input.content.len()
+            ),
+            Self::FsPatchText(input) => {
+                format!("fs_patch_text path={}", normalize_tool_path(&input.path))
+            }
+            Self::FsReplaceLines(input) => format!(
+                "fs_replace_lines path={} start_line={} end_line={}",
+                normalize_tool_path(&input.path),
+                input.start_line,
+                input.end_line
+            ),
+            Self::FsInsertText(input) => format!(
+                "fs_insert_text path={} position={} line={}",
+                normalize_tool_path(&input.path),
+                input.position,
+                input
+                    .line
+                    .map(|value| value.to_string())
+                    .unwrap_or_else(|| "-".to_string())
+            ),
+            Self::FsMkdir(input) => format!("fs_mkdir path={}", normalize_tool_path(&input.path)),
+            Self::FsMove(input) => format!(
+                "fs_move src={} dest={}",
+                normalize_tool_path(&input.src),
+                normalize_tool_path(&input.dest)
+            ),
+            Self::FsTrash(input) => format!("fs_trash path={}", normalize_tool_path(&input.path)),
             Self::FsList(input) => format!(
                 "fs_list path={} recursive={}",
                 normalize_tool_path(&input.path),
@@ -916,6 +1450,72 @@ impl ToolCall {
                 }),
             "fs_patch" => serde_json::from_str(arguments)
                 .map(Self::FsPatch)
+                .map_err(|source| ToolCallParseError::InvalidArguments {
+                    name: name.to_string(),
+                    source,
+                }),
+            "fs_read_text" => serde_json::from_str(arguments)
+                .map(Self::FsReadText)
+                .map_err(|source| ToolCallParseError::InvalidArguments {
+                    name: name.to_string(),
+                    source,
+                }),
+            "fs_read_lines" => serde_json::from_str(arguments)
+                .map(Self::FsReadLines)
+                .map_err(|source| ToolCallParseError::InvalidArguments {
+                    name: name.to_string(),
+                    source,
+                }),
+            "fs_search_text" => serde_json::from_str(arguments)
+                .map(Self::FsSearchText)
+                .map_err(|source| ToolCallParseError::InvalidArguments {
+                    name: name.to_string(),
+                    source,
+                }),
+            "fs_find_in_files" => serde_json::from_str(arguments)
+                .map(Self::FsFindInFiles)
+                .map_err(|source| ToolCallParseError::InvalidArguments {
+                    name: name.to_string(),
+                    source,
+                }),
+            "fs_write_text" => serde_json::from_str(arguments)
+                .map(Self::FsWriteText)
+                .map_err(|source| ToolCallParseError::InvalidArguments {
+                    name: name.to_string(),
+                    source,
+                }),
+            "fs_patch_text" => serde_json::from_str(arguments)
+                .map(Self::FsPatchText)
+                .map_err(|source| ToolCallParseError::InvalidArguments {
+                    name: name.to_string(),
+                    source,
+                }),
+            "fs_replace_lines" => serde_json::from_str(arguments)
+                .map(Self::FsReplaceLines)
+                .map_err(|source| ToolCallParseError::InvalidArguments {
+                    name: name.to_string(),
+                    source,
+                }),
+            "fs_insert_text" => serde_json::from_str(arguments)
+                .map(Self::FsInsertText)
+                .map_err(|source| ToolCallParseError::InvalidArguments {
+                    name: name.to_string(),
+                    source,
+                }),
+            "fs_mkdir" => serde_json::from_str(arguments)
+                .map(Self::FsMkdir)
+                .map_err(|source| ToolCallParseError::InvalidArguments {
+                    name: name.to_string(),
+                    source,
+                }),
+            "fs_move" => serde_json::from_str(arguments)
+                .map(Self::FsMove)
+                .map_err(|source| ToolCallParseError::InvalidArguments {
+                    name: name.to_string(),
+                    source,
+                }),
+            "fs_trash" => serde_json::from_str(arguments)
+                .map(Self::FsTrash)
                 .map_err(|source| ToolCallParseError::InvalidArguments {
                     name: name.to_string(),
                     source,
@@ -1021,6 +1621,20 @@ impl ToolOutput {
         }
     }
 
+    pub fn into_fs_read_text(self) -> Option<FsReadTextOutput> {
+        match self {
+            Self::FsReadText(output) => Some(output),
+            _ => None,
+        }
+    }
+
+    pub fn into_fs_read_lines(self) -> Option<FsReadLinesOutput> {
+        match self {
+            Self::FsReadLines(output) => Some(output),
+            _ => None,
+        }
+    }
+
     pub fn into_fs_list(self) -> Option<FsListOutput> {
         match self {
             Self::FsList(output) => Some(output),
@@ -1038,6 +1652,20 @@ impl ToolOutput {
     pub fn into_fs_search(self) -> Option<FsSearchOutput> {
         match self {
             Self::FsSearch(output) => Some(output),
+            _ => None,
+        }
+    }
+
+    pub fn into_fs_search_text(self) -> Option<FsSearchTextOutput> {
+        match self {
+            Self::FsSearchText(output) => Some(output),
+            _ => None,
+        }
+    }
+
+    pub fn into_fs_find_in_files(self) -> Option<FsFindInFilesOutput> {
+        match self {
+            Self::FsFindInFiles(output) => Some(output),
             _ => None,
         }
     }
@@ -1093,21 +1721,68 @@ impl ToolOutput {
                     output.content.len()
                 )
             }
+            Self::FsReadText(output) => {
+                format!(
+                    "fs_read_text path={} bytes={}",
+                    output.path,
+                    output.content.len()
+                )
+            }
+            Self::FsReadLines(output) => format!(
+                "fs_read_lines path={} start_line={} end_line={} total_lines={}",
+                output.path, output.start_line, output.end_line, output.total_lines
+            ),
             Self::FsWrite(output) => {
                 format!(
                     "fs_write path={} bytes={}",
                     output.path, output.bytes_written
                 )
             }
+            Self::FsWriteText(output) => format!(
+                "fs_write_text path={} mode={} bytes={}",
+                output.path,
+                output.mode.as_str(),
+                output.bytes_written
+            ),
             Self::FsPatch(output) => {
                 format!(
                     "fs_patch path={} edits={}",
                     output.path, output.edits_applied
                 )
             }
+            Self::FsPatchText(output) => {
+                format!("fs_patch_text path={}", output.path)
+            }
+            Self::FsReplaceLines(output) => format!(
+                "fs_replace_lines path={} start_line={} end_line={}",
+                output.path, output.start_line, output.end_line
+            ),
+            Self::FsInsertText(output) => format!(
+                "fs_insert_text path={} position={} line={}",
+                output.path,
+                output.position,
+                output
+                    .line
+                    .map(|value| value.to_string())
+                    .unwrap_or_else(|| "-".to_string())
+            ),
+            Self::FsMkdir(output) => format!("fs_mkdir path={}", output.path),
+            Self::FsMove(output) => format!("fs_move {} -> {}", output.src, output.dest),
+            Self::FsTrash(output) => {
+                format!(
+                    "fs_trash path={} trashed_to={}",
+                    output.path, output.trashed_to
+                )
+            }
             Self::FsList(output) => format!("fs_list entries={}", output.entries.len()),
             Self::FsGlob(output) => format!("fs_glob entries={}", output.entries.len()),
             Self::FsSearch(output) => format!("fs_search matches={}", output.matches.len()),
+            Self::FsSearchText(output) => {
+                format!("fs_search_text matches={}", output.matches.len())
+            }
+            Self::FsFindInFiles(output) => {
+                format!("fs_find_in_files matches={}", output.matches.len())
+            }
             Self::WebFetch(output) => {
                 format!("web_fetch url={} status={}", output.url, output.status_code)
             }
@@ -1149,10 +1824,36 @@ impl ToolOutput {
                 "content": output.content,
             })
             .to_string(),
+            Self::FsReadText(output) => json!({
+                "tool": "fs_read_text",
+                "path": output.path,
+                "content": output.content,
+            })
+            .to_string(),
+            Self::FsReadLines(output) => json!({
+                "tool": "fs_read_lines",
+                "path": output.path,
+                "start_line": output.start_line,
+                "end_line": output.end_line,
+                "total_lines": output.total_lines,
+                "eof": output.eof,
+                "next_start_line": output.next_start_line,
+                "content": output.content,
+            })
+            .to_string(),
             Self::FsWrite(output) => json!({
                 "tool": "fs_write",
                 "path": output.path,
                 "bytes_written": output.bytes_written,
+            })
+            .to_string(),
+            Self::FsWriteText(output) => json!({
+                "tool": "fs_write_text",
+                "path": output.path,
+                "mode": output.mode.as_str(),
+                "bytes_written": output.bytes_written,
+                "created": output.created,
+                "overwritten": output.overwritten,
             })
             .to_string(),
             Self::FsPatch(output) => json!({
@@ -1160,6 +1861,45 @@ impl ToolOutput {
                 "path": output.path,
                 "bytes_written": output.bytes_written,
                 "edits_applied": output.edits_applied,
+            })
+            .to_string(),
+            Self::FsPatchText(output) => json!({
+                "tool": "fs_patch_text",
+                "path": output.path,
+                "bytes_written": output.bytes_written,
+            })
+            .to_string(),
+            Self::FsReplaceLines(output) => json!({
+                "tool": "fs_replace_lines",
+                "path": output.path,
+                "start_line": output.start_line,
+                "end_line": output.end_line,
+                "bytes_written": output.bytes_written,
+            })
+            .to_string(),
+            Self::FsInsertText(output) => json!({
+                "tool": "fs_insert_text",
+                "path": output.path,
+                "position": output.position,
+                "line": output.line,
+                "bytes_written": output.bytes_written,
+            })
+            .to_string(),
+            Self::FsMkdir(output) => json!({
+                "tool": "fs_mkdir",
+                "path": output.path,
+            })
+            .to_string(),
+            Self::FsMove(output) => json!({
+                "tool": "fs_move",
+                "src": output.src,
+                "dest": output.dest,
+            })
+            .to_string(),
+            Self::FsTrash(output) => json!({
+                "tool": "fs_trash",
+                "path": output.path,
+                "trashed_to": output.trashed_to,
             })
             .to_string(),
             Self::FsList(output) => json!({
@@ -1174,6 +1914,16 @@ impl ToolOutput {
             .to_string(),
             Self::FsSearch(output) => json!({
                 "tool": "fs_search",
+                "matches": output.matches.iter().map(workspace_match_json).collect::<Vec<_>>(),
+            })
+            .to_string(),
+            Self::FsSearchText(output) => json!({
+                "tool": "fs_search_text",
+                "matches": output.matches.iter().map(workspace_match_json).collect::<Vec<_>>(),
+            })
+            .to_string(),
+            Self::FsFindInFiles(output) => json!({
+                "tool": "fs_find_in_files",
                 "matches": output.matches.iter().map(workspace_match_json).collect::<Vec<_>>(),
             })
             .to_string(),
@@ -1270,6 +2020,24 @@ impl ToolName {
                 "required": ["path"],
                 "additionalProperties": false,
             }),
+            Self::FsReadText => json!({
+                "type": "object",
+                "properties": {
+                    "path": { "type": "string", "description": "Relative workspace path to read" }
+                },
+                "required": ["path"],
+                "additionalProperties": false,
+            }),
+            Self::FsReadLines => json!({
+                "type": "object",
+                "properties": {
+                    "path": { "type": "string", "description": "Relative workspace path to read" },
+                    "start_line": { "type": "integer", "minimum": 1 },
+                    "end_line": { "type": "integer", "minimum": 1 }
+                },
+                "required": ["path", "start_line", "end_line"],
+                "additionalProperties": false,
+            }),
             Self::FsWrite => json!({
                 "type": "object",
                 "properties": {
@@ -1277,6 +2045,16 @@ impl ToolName {
                     "content": { "type": "string", "description": "UTF-8 file content to write" }
                 },
                 "required": ["path", "content"],
+                "additionalProperties": false,
+            }),
+            Self::FsWriteText => json!({
+                "type": "object",
+                "properties": {
+                    "path": { "type": "string", "description": "Relative workspace path to write" },
+                    "content": { "type": "string", "description": "UTF-8 file content to write" },
+                    "mode": { "type": "string", "enum": ["create", "overwrite", "upsert"] }
+                },
+                "required": ["path", "content", "mode"],
                 "additionalProperties": false,
             }),
             Self::FsPatch => json!({
@@ -1298,6 +2076,38 @@ impl ToolName {
                     }
                 },
                 "required": ["path", "edits"],
+                "additionalProperties": false,
+            }),
+            Self::FsPatchText => json!({
+                "type": "object",
+                "properties": {
+                    "path": { "type": "string", "description": "Relative workspace path to patch" },
+                    "search": { "type": "string" },
+                    "replace": { "type": "string" }
+                },
+                "required": ["path", "search", "replace"],
+                "additionalProperties": false,
+            }),
+            Self::FsReplaceLines => json!({
+                "type": "object",
+                "properties": {
+                    "path": { "type": "string", "description": "Relative workspace path to patch" },
+                    "start_line": { "type": "integer", "minimum": 1 },
+                    "end_line": { "type": "integer", "minimum": 1 },
+                    "content": { "type": "string" }
+                },
+                "required": ["path", "start_line", "end_line", "content"],
+                "additionalProperties": false,
+            }),
+            Self::FsInsertText => json!({
+                "type": "object",
+                "properties": {
+                    "path": { "type": "string", "description": "Relative workspace path to modify" },
+                    "line": { "type": ["integer", "null"], "minimum": 1 },
+                    "position": { "type": "string", "enum": ["before", "after", "prepend", "append"] },
+                    "content": { "type": "string" }
+                },
+                "required": ["path", "position", "content"],
                 "additionalProperties": false,
             }),
             Self::FsList => json!({
@@ -1325,6 +2135,50 @@ impl ToolName {
                     "query": { "type": "string", "description": "Literal text to search for" }
                 },
                 "required": ["path", "query"],
+                "additionalProperties": false,
+            }),
+            Self::FsSearchText => json!({
+                "type": "object",
+                "properties": {
+                    "path": { "type": "string", "description": "Relative workspace file to search" },
+                    "query": { "type": "string", "description": "Literal text to search for" }
+                },
+                "required": ["path", "query"],
+                "additionalProperties": false,
+            }),
+            Self::FsFindInFiles => json!({
+                "type": "object",
+                "properties": {
+                    "query": { "type": "string", "description": "Literal text to search for" },
+                    "glob": { "type": ["string", "null"], "description": "Optional glob used to filter matching paths" },
+                    "limit": { "type": ["integer", "null"], "minimum": 1, "description": "Optional maximum number of matches" }
+                },
+                "required": ["query"],
+                "additionalProperties": false,
+            }),
+            Self::FsMkdir => json!({
+                "type": "object",
+                "properties": {
+                    "path": { "type": "string", "description": "Relative directory path to create" }
+                },
+                "required": ["path"],
+                "additionalProperties": false,
+            }),
+            Self::FsMove => json!({
+                "type": "object",
+                "properties": {
+                    "src": { "type": "string", "description": "Relative source path" },
+                    "dest": { "type": "string", "description": "Relative destination path" }
+                },
+                "required": ["src", "dest"],
+                "additionalProperties": false,
+            }),
+            Self::FsTrash => json!({
+                "type": "object",
+                "properties": {
+                    "path": { "type": "string", "description": "Relative path to move into trash" }
+                },
+                "required": ["path"],
                 "additionalProperties": false,
             }),
             Self::WebFetch => json!({
@@ -1505,8 +2359,125 @@ impl From<WorkspaceError> for ToolError {
     }
 }
 
+impl FsWriteMode {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Create => "create",
+            Self::Overwrite => "overwrite",
+            Self::Upsert => "upsert",
+        }
+    }
+}
+
+impl From<FsWriteMode> for WriteMode {
+    fn from(value: FsWriteMode) -> Self {
+        match value {
+            FsWriteMode::Create => WriteMode::Create,
+            FsWriteMode::Overwrite => WriteMode::Overwrite,
+            FsWriteMode::Upsert => WriteMode::Upsert,
+        }
+    }
+}
+
 fn normalize_tool_path(path: &str) -> String {
     path.replace('\\', "/")
+}
+
+fn replace_lines_range(
+    path: &str,
+    content: &str,
+    start_line: usize,
+    end_line: usize,
+    replacement: &str,
+) -> Result<String, ToolError> {
+    let mut lines = split_preserving_empty(content);
+    if start_line == 0 || end_line == 0 || start_line > end_line {
+        return Err(ToolError::InvalidPatch {
+            path: path.to_string(),
+            reason: "line range must be 1-based and inclusive".to_string(),
+        });
+    }
+    if start_line > lines.len() {
+        return Err(ToolError::InvalidPatch {
+            path: path.to_string(),
+            reason: "start_line exceeds file length".to_string(),
+        });
+    }
+    let bounded_end = end_line.min(lines.len());
+    let replacement_lines = split_preserving_empty(replacement);
+    lines.splice(start_line - 1..bounded_end, replacement_lines);
+    Ok(join_lines(lines))
+}
+
+fn insert_text(
+    path: &str,
+    content: &str,
+    line: Option<usize>,
+    position: &str,
+    inserted: &str,
+) -> Result<String, ToolError> {
+    let mut lines = split_preserving_empty(content);
+    let insert_lines = split_preserving_empty(inserted);
+    let index = match position {
+        "prepend" => 0,
+        "append" => lines.len(),
+        "before" => {
+            let line = line.ok_or_else(|| ToolError::InvalidPatch {
+                path: path.to_string(),
+                reason: "line is required for before insertion".to_string(),
+            })?;
+            if line == 0 || line > lines.len() {
+                return Err(ToolError::InvalidPatch {
+                    path: path.to_string(),
+                    reason: "line exceeds file length".to_string(),
+                });
+            }
+            line - 1
+        }
+        "after" => {
+            let line = line.ok_or_else(|| ToolError::InvalidPatch {
+                path: path.to_string(),
+                reason: "line is required for after insertion".to_string(),
+            })?;
+            if line == 0 || line > lines.len() {
+                return Err(ToolError::InvalidPatch {
+                    path: path.to_string(),
+                    reason: "line exceeds file length".to_string(),
+                });
+            }
+            line
+        }
+        other => {
+            return Err(ToolError::InvalidPatch {
+                path: path.to_string(),
+                reason: format!(
+                    "position must be one of before, after, prepend, append, got {other}"
+                ),
+            });
+        }
+    };
+    lines.splice(index..index, insert_lines);
+    Ok(join_lines(lines))
+}
+
+fn split_preserving_empty(content: &str) -> Vec<String> {
+    if content.is_empty() {
+        return Vec::new();
+    }
+    let normalized = content.replace("\r\n", "\n");
+    normalized
+        .trim_end_matches('\n')
+        .split('\n')
+        .map(str::to_string)
+        .collect()
+}
+
+fn join_lines(lines: Vec<String>) -> String {
+    if lines.is_empty() {
+        String::new()
+    } else {
+        format!("{}\n", lines.join("\n"))
+    }
 }
 
 fn workspace_entry_json(entry: &WorkspaceEntry) -> Value {

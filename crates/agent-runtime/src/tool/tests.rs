@@ -1,7 +1,9 @@
 use super::{
-    ExecStartInput, FsGlobInput, FsListInput, FsPatchEdit, FsPatchInput, FsReadInput,
-    FsSearchInput, FsWriteInput, ProcessKillInput, ProcessResultStatus, ProcessWaitInput, ToolCall,
-    ToolCatalog, ToolFamily, ToolName, ToolRuntime, WebFetchInput, WebSearchInput, WebToolClient,
+    ExecStartInput, FsFindInFilesInput, FsGlobInput, FsInsertTextInput, FsListInput, FsMkdirInput,
+    FsMoveInput, FsPatchTextInput, FsReadLinesInput, FsReadTextInput, FsReplaceLinesInput,
+    FsSearchTextInput, FsTrashInput, FsWriteMode, FsWriteTextInput, ProcessKillInput,
+    ProcessResultStatus, ProcessWaitInput, ToolCall, ToolCatalog, ToolFamily, ToolName,
+    ToolRuntime, WebFetchInput, WebSearchInput, WebToolClient,
 };
 use crate::workspace::WorkspaceRef;
 use std::io::{Read, Write};
@@ -19,7 +21,18 @@ fn catalog_exposes_distinct_families_and_policy_flags() {
         .expect("artifact_search");
     let exec_start = catalog.definition(ToolName::ExecStart).expect("exec_start");
     let fs_glob = catalog.definition(ToolName::FsGlob).expect("fs_glob");
-    let fs_patch = catalog.definition(ToolName::FsPatch).expect("fs_patch");
+    let fs_patch = catalog
+        .definition(ToolName::FsPatchText)
+        .expect("fs_patch_text");
+    let fs_read_lines = catalog
+        .definition(ToolName::FsReadLines)
+        .expect("fs_read_lines");
+    let fs_find_in_files = catalog
+        .definition(ToolName::FsFindInFiles)
+        .expect("fs_find_in_files");
+    let fs_mkdir = catalog.definition(ToolName::FsMkdir).expect("fs_mkdir");
+    let fs_move = catalog.definition(ToolName::FsMove).expect("fs_move");
+    let fs_trash = catalog.definition(ToolName::FsTrash).expect("fs_trash");
     let plan_read = catalog.definition(ToolName::PlanRead).expect("plan_read");
     let plan_write = catalog.definition(ToolName::PlanWrite).expect("plan_write");
     let web_fetch = catalog.definition(ToolName::WebFetch).expect("web_fetch");
@@ -32,6 +45,11 @@ fn catalog_exposes_distinct_families_and_policy_flags() {
     assert_eq!(artifact_search.family, ToolFamily::Offload);
     assert_eq!(exec_start.family, ToolFamily::Exec);
     assert_eq!(fs_glob.family, ToolFamily::Filesystem);
+    assert_eq!(fs_read_lines.family, ToolFamily::Filesystem);
+    assert_eq!(fs_find_in_files.family, ToolFamily::Filesystem);
+    assert_eq!(fs_mkdir.family, ToolFamily::Filesystem);
+    assert_eq!(fs_move.family, ToolFamily::Filesystem);
+    assert_eq!(fs_trash.family, ToolFamily::Filesystem);
     assert_eq!(fs_patch.family, ToolFamily::Filesystem);
     assert_eq!(plan_read.family, ToolFamily::Planning);
     assert_eq!(plan_write.family, ToolFamily::Planning);
@@ -41,7 +59,12 @@ fn catalog_exposes_distinct_families_and_policy_flags() {
     assert!(artifact_search.policy.read_only);
     assert!(exec_start.policy.requires_approval);
     assert!(fs_glob.policy.read_only);
+    assert!(fs_read_lines.policy.read_only);
+    assert!(fs_find_in_files.policy.read_only);
     assert!(fs_patch.policy.destructive);
+    assert!(fs_mkdir.policy.destructive);
+    assert!(fs_move.policy.destructive);
+    assert!(fs_trash.policy.destructive);
     assert!(plan_read.policy.read_only);
     assert!(!plan_write.policy.read_only);
     assert!(!plan_write.policy.requires_approval);
@@ -52,31 +75,47 @@ fn catalog_exposes_distinct_families_and_policy_flags() {
 }
 
 #[test]
+fn automatic_model_definitions_include_structured_exec_tools() {
+    let catalog = ToolCatalog::default();
+    let names = catalog
+        .automatic_model_definitions()
+        .into_iter()
+        .map(|definition| definition.name)
+        .collect::<Vec<_>>();
+
+    assert!(names.contains(&ToolName::ExecStart));
+    assert!(names.contains(&ToolName::ExecWait));
+    assert!(names.contains(&ToolName::ExecKill));
+}
+
+#[test]
 fn filesystem_tools_read_write_list_and_search_within_workspace() {
     let temp = tempfile::tempdir().expect("tempdir");
     let workspace = WorkspaceRef::new(temp.path());
     let mut runtime = ToolRuntime::new(workspace.clone());
 
     runtime
-        .invoke(ToolCall::FsWrite(FsWriteInput {
+        .invoke(ToolCall::FsWriteText(FsWriteTextInput {
             path: "docs/notes.txt".to_string(),
             content: "alpha\nbeta\n".to_string(),
+            mode: FsWriteMode::Upsert,
         }))
-        .expect("fs_write");
+        .expect("fs_write_text");
     runtime
-        .invoke(ToolCall::FsWrite(FsWriteInput {
+        .invoke(ToolCall::FsWriteText(FsWriteTextInput {
             path: "docs/summary.txt".to_string(),
             content: "beta\ngamma\n".to_string(),
+            mode: FsWriteMode::Upsert,
         }))
-        .expect("fs_write summary");
+        .expect("fs_write_text summary");
 
     let read = runtime
-        .invoke(ToolCall::FsRead(FsReadInput {
+        .invoke(ToolCall::FsReadText(FsReadTextInput {
             path: "docs/notes.txt".to_string(),
         }))
-        .expect("fs_read")
-        .into_fs_read()
-        .expect("fs_read output");
+        .expect("fs_read_text")
+        .into_fs_read_text()
+        .expect("fs_read_text output");
     let list = runtime
         .invoke(ToolCall::FsList(FsListInput {
             path: "docs".to_string(),
@@ -85,14 +124,23 @@ fn filesystem_tools_read_write_list_and_search_within_workspace() {
         .expect("fs_list")
         .into_fs_list()
         .expect("fs_list output");
-    let search = runtime
-        .invoke(ToolCall::FsSearch(FsSearchInput {
-            path: "docs".to_string(),
+    let file_search = runtime
+        .invoke(ToolCall::FsSearchText(FsSearchTextInput {
+            path: "docs/notes.txt".to_string(),
             query: "beta".to_string(),
         }))
-        .expect("fs_search")
-        .into_fs_search()
-        .expect("fs_search output");
+        .expect("fs_search_text")
+        .into_fs_search_text()
+        .expect("fs_search_text output");
+    let multi_search = runtime
+        .invoke(ToolCall::FsFindInFiles(FsFindInFilesInput {
+            query: "beta".to_string(),
+            glob: Some("docs/*.txt".to_string()),
+            limit: Some(10),
+        }))
+        .expect("fs_find_in_files")
+        .into_fs_find_in_files()
+        .expect("fs_find_in_files output");
 
     assert_eq!(read.path, "docs/notes.txt");
     assert_eq!(read.content, "alpha\nbeta\n");
@@ -104,9 +152,11 @@ fn filesystem_tools_read_write_list_and_search_within_workspace() {
             .collect::<Vec<_>>(),
         vec!["docs/notes.txt", "docs/summary.txt"]
     );
-    assert_eq!(search.matches.len(), 2);
-    assert_eq!(search.matches[0].path, "docs/notes.txt");
-    assert_eq!(search.matches[1].path, "docs/summary.txt");
+    assert_eq!(file_search.matches.len(), 1);
+    assert_eq!(file_search.matches[0].path, "docs/notes.txt");
+    assert_eq!(multi_search.matches.len(), 2);
+    assert_eq!(multi_search.matches[0].path, "docs/notes.txt");
+    assert_eq!(multi_search.matches[1].path, "docs/summary.txt");
 }
 
 #[test]
@@ -117,7 +167,7 @@ fn filesystem_tools_reject_paths_that_escape_workspace() {
 
     assert!(
         runtime
-            .invoke(ToolCall::FsRead(FsReadInput {
+            .invoke(ToolCall::FsReadText(FsReadTextInput {
                 path: "../secret.txt".to_string(),
             }))
             .is_err()
@@ -131,17 +181,19 @@ fn filesystem_tools_glob_and_patch_files_with_exact_edits() {
     let mut runtime = ToolRuntime::new(workspace.clone());
 
     runtime
-        .invoke(ToolCall::FsWrite(FsWriteInput {
+        .invoke(ToolCall::FsWriteText(FsWriteTextInput {
             path: "src/main.rs".to_string(),
             content: "fn main() {\n    println!(\"old\");\n}\n".to_string(),
+            mode: FsWriteMode::Upsert,
         }))
-        .expect("fs_write main");
+        .expect("fs_write_text main");
     runtime
-        .invoke(ToolCall::FsWrite(FsWriteInput {
+        .invoke(ToolCall::FsWriteText(FsWriteTextInput {
             path: "src/lib.rs".to_string(),
             content: "pub fn helper() {}\n".to_string(),
+            mode: FsWriteMode::Upsert,
         }))
-        .expect("fs_write lib");
+        .expect("fs_write_text lib");
 
     let globbed = runtime
         .invoke(ToolCall::FsGlob(FsGlobInput {
@@ -152,22 +204,19 @@ fn filesystem_tools_glob_and_patch_files_with_exact_edits() {
         .into_fs_glob()
         .expect("fs_glob output");
     let patched = runtime
-        .invoke(ToolCall::FsPatch(FsPatchInput {
+        .invoke(ToolCall::FsPatchText(FsPatchTextInput {
             path: "src/main.rs".to_string(),
-            edits: vec![FsPatchEdit {
-                old: "println!(\"old\");".to_string(),
-                new: "println!(\"new\");".to_string(),
-                replace_all: false,
-            }],
+            search: "println!(\"old\");".to_string(),
+            replace: "println!(\"new\");".to_string(),
         }))
-        .expect("fs_patch");
+        .expect("fs_patch_text");
     let read = runtime
-        .invoke(ToolCall::FsRead(FsReadInput {
+        .invoke(ToolCall::FsReadText(FsReadTextInput {
             path: "src/main.rs".to_string(),
         }))
-        .expect("fs_read patched")
-        .into_fs_read()
-        .expect("fs_read output");
+        .expect("fs_read_text patched")
+        .into_fs_read_text()
+        .expect("fs_read_text output");
 
     assert_eq!(
         globbed
@@ -178,35 +227,150 @@ fn filesystem_tools_glob_and_patch_files_with_exact_edits() {
             .collect::<Vec<_>>(),
         vec!["src/lib.rs", "src/main.rs"]
     );
-    assert_eq!(patched.summary(), "fs_patch path=src/main.rs edits=1");
+    assert_eq!(patched.summary(), "fs_patch_text path=src/main.rs");
     assert!(read.content.contains("println!(\"new\");"));
 }
 
 #[test]
-fn fs_patch_rejects_ambiguous_single_replace_edits() {
+fn filesystem_tools_read_lines_report_file_bounds_and_replace_by_line_range() {
     let temp = tempfile::tempdir().expect("tempdir");
     let workspace = WorkspaceRef::new(temp.path());
     let mut runtime = ToolRuntime::new(workspace);
 
     runtime
-        .invoke(ToolCall::FsWrite(FsWriteInput {
+        .invoke(ToolCall::FsWriteText(FsWriteTextInput {
             path: "docs/repeated.txt".to_string(),
-            content: "same\nsame\n".to_string(),
+            content: "zero\none\ntwo\nthree\n".to_string(),
+            mode: FsWriteMode::Upsert,
         }))
-        .expect("fs_write repeated");
+        .expect("fs_write_text repeated");
 
+    let chunk = runtime
+        .invoke(ToolCall::FsReadLines(FsReadLinesInput {
+            path: "docs/repeated.txt".to_string(),
+            start_line: 2,
+            end_line: 3,
+        }))
+        .expect("fs_read_lines")
+        .into_fs_read_lines()
+        .expect("fs_read_lines output");
+
+    assert_eq!(chunk.start_line, 2);
+    assert_eq!(chunk.end_line, 3);
+    assert_eq!(chunk.total_lines, 4);
+    assert!(!chunk.eof);
+    assert_eq!(chunk.next_start_line, Some(4));
+    assert_eq!(chunk.content, "one\ntwo\n");
+
+    runtime
+        .invoke(ToolCall::FsReplaceLines(FsReplaceLinesInput {
+            path: "docs/repeated.txt".to_string(),
+            start_line: 2,
+            end_line: 3,
+            content: "updated-one\nupdated-two\n".to_string(),
+        }))
+        .expect("fs_replace_lines");
+
+    let read = runtime
+        .invoke(ToolCall::FsReadText(FsReadTextInput {
+            path: "docs/repeated.txt".to_string(),
+        }))
+        .expect("fs_read_text")
+        .into_fs_read_text()
+        .expect("fs_read_text output");
+
+    assert_eq!(read.content, "zero\nupdated-one\nupdated-two\nthree\n");
+}
+
+#[test]
+fn filesystem_tools_support_write_modes_and_directory_lifecycle() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let workspace = WorkspaceRef::new(temp.path());
+    let mut runtime = ToolRuntime::new(workspace.clone());
+
+    runtime
+        .invoke(ToolCall::FsMkdir(FsMkdirInput {
+            path: "workspace/tmp".to_string(),
+        }))
+        .expect("fs_mkdir");
+    runtime
+        .invoke(ToolCall::FsWriteText(FsWriteTextInput {
+            path: "workspace/tmp/note.txt".to_string(),
+            content: "first\n".to_string(),
+            mode: FsWriteMode::Create,
+        }))
+        .expect("fs_write_text create");
     assert!(
         runtime
-            .invoke(ToolCall::FsPatch(FsPatchInput {
-                path: "docs/repeated.txt".to_string(),
-                edits: vec![FsPatchEdit {
-                    old: "same".to_string(),
-                    new: "updated".to_string(),
-                    replace_all: false,
-                }],
+            .invoke(ToolCall::FsWriteText(FsWriteTextInput {
+                path: "workspace/tmp/note.txt".to_string(),
+                content: "again\n".to_string(),
+                mode: FsWriteMode::Create,
             }))
             .is_err()
     );
+
+    runtime
+        .invoke(ToolCall::FsMove(FsMoveInput {
+            src: "workspace/tmp/note.txt".to_string(),
+            dest: "workspace/archive/note.txt".to_string(),
+        }))
+        .expect("fs_move");
+    runtime
+        .invoke(ToolCall::FsTrash(FsTrashInput {
+            path: "workspace/archive/note.txt".to_string(),
+        }))
+        .expect("fs_trash");
+
+    let listed = runtime
+        .invoke(ToolCall::FsList(FsListInput {
+            path: "".to_string(),
+            recursive: true,
+        }))
+        .expect("fs_list")
+        .into_fs_list()
+        .expect("fs_list output");
+
+    assert!(
+        listed
+            .entries
+            .iter()
+            .any(|entry| entry.path.starts_with(".trash/"))
+    );
+}
+
+#[test]
+fn filesystem_tools_insert_text_around_line_positions() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let workspace = WorkspaceRef::new(temp.path());
+    let mut runtime = ToolRuntime::new(workspace);
+
+    runtime
+        .invoke(ToolCall::FsWriteText(FsWriteTextInput {
+            path: "docs/insert.txt".to_string(),
+            content: "alpha\ngamma\n".to_string(),
+            mode: FsWriteMode::Upsert,
+        }))
+        .expect("fs_write_text");
+
+    runtime
+        .invoke(ToolCall::FsInsertText(FsInsertTextInput {
+            path: "docs/insert.txt".to_string(),
+            line: Some(2),
+            position: "before".to_string(),
+            content: "beta\n".to_string(),
+        }))
+        .expect("fs_insert_text");
+
+    let read = runtime
+        .invoke(ToolCall::FsReadText(FsReadTextInput {
+            path: "docs/insert.txt".to_string(),
+        }))
+        .expect("fs_read_text")
+        .into_fs_read_text()
+        .expect("fs_read_text output");
+
+    assert_eq!(read.content, "alpha\nbeta\ngamma\n");
 }
 
 #[test]
