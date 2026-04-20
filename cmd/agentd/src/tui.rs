@@ -8,7 +8,7 @@ pub mod worker;
 use crate::bootstrap::{App, BootstrapError};
 use crate::execution::ChatExecutionEvent;
 use app::{DialogState, TuiAppState};
-use crossterm::event::{self, Event, KeyCode};
+use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind};
 use crossterm::execute;
 use crossterm::terminal::{
     EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
@@ -76,6 +76,10 @@ pub fn run(app: &App) -> Result<(), BootstrapError> {
         let Event::Key(key) = event::read().map_err(BootstrapError::Stream)? else {
             continue;
         };
+
+        if !should_dispatch_key_event(key) {
+            continue;
+        }
 
         let action = match state.active_screen() {
             TuiScreen::Sessions => screens::session::handle_key(&mut state, key)?,
@@ -192,6 +196,10 @@ pub fn dispatch_action(
     }
 
     Ok(())
+}
+
+fn should_dispatch_key_event(key: KeyEvent) -> bool {
+    matches!(key.kind, KeyEventKind::Press | KeyEventKind::Repeat)
 }
 
 fn handle_command(
@@ -580,4 +588,41 @@ fn unix_timestamp() -> Result<i64, BootstrapError> {
         .duration_since(UNIX_EPOCH)
         .map_err(BootstrapError::Clock)?;
     Ok(duration.as_secs() as i64)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::should_dispatch_key_event;
+    use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyEventState, KeyModifiers};
+
+    #[test]
+    fn should_dispatch_key_event_ignores_release_events() {
+        let release = KeyEvent {
+            code: KeyCode::Char('a'),
+            modifiers: KeyModifiers::NONE,
+            kind: KeyEventKind::Release,
+            state: KeyEventState::NONE,
+        };
+
+        assert!(!should_dispatch_key_event(release));
+    }
+
+    #[test]
+    fn should_dispatch_key_event_accepts_press_and_repeat_events() {
+        let press = KeyEvent {
+            code: KeyCode::Char('a'),
+            modifiers: KeyModifiers::NONE,
+            kind: KeyEventKind::Press,
+            state: KeyEventState::NONE,
+        };
+        let repeat = KeyEvent {
+            code: KeyCode::Char('a'),
+            modifiers: KeyModifiers::NONE,
+            kind: KeyEventKind::Repeat,
+            state: KeyEventState::NONE,
+        };
+
+        assert!(should_dispatch_key_event(press));
+        assert!(should_dispatch_key_event(repeat));
+    }
 }
