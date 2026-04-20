@@ -210,7 +210,7 @@ impl App {
     #[cfg_attr(not(test), allow(dead_code))]
     pub fn list_session_summaries(&self) -> Result<Vec<SessionSummary>, BootstrapError> {
         let store = self.store()?;
-        build_session_summaries(&store, &self.config)
+        build_session_summaries(&store, &self.config, &self.runtime.workspace)
     }
 
     #[cfg_attr(not(test), allow(dead_code))]
@@ -253,6 +253,7 @@ impl App {
             &transcripts,
             context_summary.as_ref(),
             &runs,
+            &self.runtime.workspace,
         ))
     }
 
@@ -636,6 +637,7 @@ impl SessionTranscriptView {
 fn build_session_summaries(
     store: &PersistenceStore,
     config: &AppConfig,
+    workspace: &agent_runtime::workspace::WorkspaceRef,
 ) -> Result<Vec<SessionSummary>, BootstrapError> {
     let sessions = store
         .list_sessions()?
@@ -653,7 +655,7 @@ fn build_session_summaries(
 
     sessions
         .into_iter()
-        .map(|session| session_summary_from_session(store, config, &runs, &session))
+        .map(|session| session_summary_from_session(store, config, &runs, &session, workspace))
         .collect()
 }
 
@@ -662,6 +664,7 @@ fn session_summary_from_session(
     config: &AppConfig,
     runs: &[RunSnapshot],
     session: &Session,
+    workspace: &agent_runtime::workspace::WorkspaceRef,
 ) -> Result<SessionSummary, BootstrapError> {
     let transcripts = store.list_transcripts_for_session(&session.id)?;
     let context_summary = store
@@ -669,8 +672,13 @@ fn session_summary_from_session(
         .map(ContextSummary::try_from)
         .transpose()
         .map_err(BootstrapError::RecordConversion)?;
-    let session_head =
-        prompting::build_session_head(session, &transcripts, context_summary.as_ref(), runs);
+    let session_head = prompting::build_session_head(
+        session,
+        &transcripts,
+        context_summary.as_ref(),
+        runs,
+        workspace,
+    );
     let last_message_preview = transcripts
         .last()
         .map(|record| prompting::preview_text(record.content.as_str(), 96));

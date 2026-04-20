@@ -442,15 +442,16 @@ impl RunRepository for PersistenceStore {
     fn put_run(&self, record: &RunRecord) -> Result<(), StoreError> {
         self.connection.execute(
             "INSERT INTO runs (
-                id, session_id, mission_id, status, error, result, evidence_refs_json,
+                id, session_id, mission_id, status, error, result, recent_steps_json, evidence_refs_json,
                 pending_approvals_json, provider_loop_json, delegate_runs_json, started_at, updated_at, finished_at
-             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)
              ON CONFLICT(id) DO UPDATE SET
                 session_id = excluded.session_id,
                 mission_id = excluded.mission_id,
                 status = excluded.status,
                 error = excluded.error,
                 result = excluded.result,
+                recent_steps_json = excluded.recent_steps_json,
                 evidence_refs_json = excluded.evidence_refs_json,
                 pending_approvals_json = excluded.pending_approvals_json,
                 provider_loop_json = excluded.provider_loop_json,
@@ -465,6 +466,7 @@ impl RunRepository for PersistenceStore {
                 record.status,
                 record.error,
                 record.result,
+                record.recent_steps_json,
                 record.evidence_refs_json,
                 record.pending_approvals_json,
                 record.provider_loop_json,
@@ -480,8 +482,8 @@ impl RunRepository for PersistenceStore {
     fn get_run(&self, id: &str) -> Result<Option<RunRecord>, StoreError> {
         self.connection
             .query_row(
-                "SELECT id, session_id, mission_id, status, error, result, evidence_refs_json,
-                        pending_approvals_json, provider_loop_json, delegate_runs_json, started_at, updated_at, finished_at
+                "SELECT id, session_id, mission_id, status, error, result, recent_steps_json,
+                        evidence_refs_json, pending_approvals_json, provider_loop_json, delegate_runs_json, started_at, updated_at, finished_at
                  FROM runs WHERE id = ?1",
                 [id],
                 |row| {
@@ -492,13 +494,14 @@ impl RunRepository for PersistenceStore {
                         status: row.get(3)?,
                         error: row.get(4)?,
                         result: row.get(5)?,
-                        evidence_refs_json: row.get(6)?,
-                        pending_approvals_json: row.get(7)?,
-                        provider_loop_json: row.get(8)?,
-                        delegate_runs_json: row.get(9)?,
-                        started_at: row.get(10)?,
-                        updated_at: row.get(11)?,
-                        finished_at: row.get(12)?,
+                        recent_steps_json: row.get(6)?,
+                        evidence_refs_json: row.get(7)?,
+                        pending_approvals_json: row.get(8)?,
+                        provider_loop_json: row.get(9)?,
+                        delegate_runs_json: row.get(10)?,
+                        started_at: row.get(11)?,
+                        updated_at: row.get(12)?,
+                        finished_at: row.get(13)?,
                     })
                 },
             )
@@ -508,7 +511,7 @@ impl RunRepository for PersistenceStore {
 
     fn list_runs(&self) -> Result<Vec<RunRecord>, StoreError> {
         let mut statement = self.connection.prepare(
-            "SELECT id, session_id, mission_id, status, error, result, evidence_refs_json,
+            "SELECT id, session_id, mission_id, status, error, result, recent_steps_json, evidence_refs_json,
                     pending_approvals_json, provider_loop_json, delegate_runs_json, started_at, updated_at, finished_at
              FROM runs
              ORDER BY started_at ASC, id ASC",
@@ -524,13 +527,14 @@ impl RunRepository for PersistenceStore {
                 status: row.get(3)?,
                 error: row.get(4)?,
                 result: row.get(5)?,
-                evidence_refs_json: row.get(6)?,
-                pending_approvals_json: row.get(7)?,
-                provider_loop_json: row.get(8)?,
-                delegate_runs_json: row.get(9)?,
-                started_at: row.get(10)?,
-                updated_at: row.get(11)?,
-                finished_at: row.get(12)?,
+                recent_steps_json: row.get(6)?,
+                evidence_refs_json: row.get(7)?,
+                pending_approvals_json: row.get(8)?,
+                provider_loop_json: row.get(9)?,
+                delegate_runs_json: row.get(10)?,
+                started_at: row.get(11)?,
+                updated_at: row.get(12)?,
+                finished_at: row.get(13)?,
             });
         }
 
@@ -941,6 +945,7 @@ fn bootstrap_schema(connection: &Connection) -> Result<(), StoreError> {
              status TEXT NOT NULL,
              error TEXT,
              result TEXT,
+             recent_steps_json TEXT NOT NULL,
              evidence_refs_json TEXT NOT NULL,
              pending_approvals_json TEXT NOT NULL,
              provider_loop_json TEXT NOT NULL,
@@ -1031,6 +1036,7 @@ fn validate_schema(connection: &Connection) -> Result<(), StoreError> {
     validate_column(connection, "jobs", "mission_id", true)?;
     validate_column(connection, "sessions", "settings_json", true)?;
     validate_column(connection, "runs", "evidence_refs_json", true)?;
+    validate_column(connection, "runs", "recent_steps_json", true)?;
     validate_column(connection, "runs", "pending_approvals_json", true)?;
     validate_column(connection, "runs", "provider_loop_json", true)?;
     validate_column(connection, "runs", "delegate_runs_json", true)?;
@@ -1083,6 +1089,12 @@ fn migrate_schema(connection: &Connection) -> Result<(), StoreError> {
         "missions",
         "schedule_json",
         "TEXT NOT NULL DEFAULT '{\"not_before\":null,\"interval_seconds\":null}'",
+    )?;
+    add_column_if_missing(
+        connection,
+        "runs",
+        "recent_steps_json",
+        "TEXT NOT NULL DEFAULT '[]'",
     )?;
     add_column_if_missing(
         connection,
@@ -1679,6 +1691,7 @@ mod tests {
             status: "running".to_string(),
             error: None,
             result: None,
+            recent_steps_json: "[]".to_string(),
             evidence_refs_json: "[\"bundle:bootstrap\"]".to_string(),
             pending_approvals_json: "[]".to_string(),
             provider_loop_json: "null".to_string(),
@@ -1918,6 +1931,7 @@ mod tests {
                 status: "running".to_string(),
                 error: None,
                 result: None,
+                recent_steps_json: "[]".to_string(),
                 evidence_refs_json: "[]".to_string(),
                 pending_approvals_json: "[]".to_string(),
                 provider_loop_json: "null".to_string(),
@@ -2135,6 +2149,7 @@ mod tests {
             status: "queued".to_string(),
             error: None,
             result: None,
+            recent_steps_json: "[]".to_string(),
             evidence_refs_json: "[]".to_string(),
             pending_approvals_json: "[]".to_string(),
             provider_loop_json: "null".to_string(),
@@ -2150,6 +2165,7 @@ mod tests {
             status: "queued".to_string(),
             error: None,
             result: None,
+            recent_steps_json: "[]".to_string(),
             evidence_refs_json: "[]".to_string(),
             pending_approvals_json: "[]".to_string(),
             provider_loop_json: "null".to_string(),
@@ -2297,6 +2313,7 @@ mod tests {
             status: "queued".to_string(),
             error: None,
             result: None,
+            recent_steps_json: "[]".to_string(),
             evidence_refs_json: "[]".to_string(),
             pending_approvals_json: "[]".to_string(),
             provider_loop_json: "null".to_string(),

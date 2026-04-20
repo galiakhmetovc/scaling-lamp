@@ -464,8 +464,13 @@ impl ExecutionService {
             .map(RunSnapshot::try_from)
             .collect::<Result<Vec<_>, _>>()
             .map_err(ExecutionError::RecordConversion)?;
-        let session_head =
-            prompting::build_session_head(&session, &transcripts, context_summary.as_ref(), &runs);
+        let session_head = prompting::build_session_head(
+            &session,
+            &transcripts,
+            context_summary.as_ref(),
+            &runs,
+            &self.workspace,
+        );
 
         Ok(PromptAssembly::build_messages(PromptAssemblyInput {
             session_head: Some(session_head),
@@ -603,9 +608,8 @@ impl ExecutionService {
                 return Err(ExecutionError::Tool(source));
             }
         };
-        let summary = output.summary();
         let model_output = output.model_output();
-        run.record_tool_completion(summary, now)
+        run.record_tool_completion(completed_tool_step_detail(parsed, &output), now)
             .map_err(ExecutionError::RunTransition)?;
         Self::emit_event(
             observer,
@@ -1691,7 +1695,7 @@ impl ExecutionService {
             .invoke(tool_call.clone())
             .map_err(ExecutionError::Tool)?;
         let output_summary = output.summary();
-        run.record_tool_completion(output_summary.clone(), context.now)
+        run.record_tool_completion(completed_tool_step_detail(tool_call, &output), context.now)
             .map_err(ExecutionError::RunTransition)?;
         if let Some(bundle) = context.evidence {
             run.record_evidence(bundle, context.now)
@@ -1771,6 +1775,10 @@ fn process_kind_label(kind: ProcessKind) -> &'static str {
     match kind {
         ProcessKind::Exec => "exec",
     }
+}
+
+fn completed_tool_step_detail(tool_call: &ToolCall, output: &ToolOutput) -> String {
+    format!("{} -> {}", tool_call.summary(), output.summary())
 }
 
 impl fmt::Display for ExecutionError {

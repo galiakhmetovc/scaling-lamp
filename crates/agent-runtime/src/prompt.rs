@@ -3,6 +3,26 @@ use crate::provider::ProviderMessage;
 use crate::session::MessageRole;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SessionHeadFsActivity {
+    pub action: String,
+    pub target: String,
+    pub detail: String,
+    pub recorded_at: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SessionHeadWorkspaceEntry {
+    pub path: String,
+    pub kind: SessionHeadWorkspaceEntryKind,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SessionHeadWorkspaceEntryKind {
+    File,
+    Directory,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SessionHead {
     pub session_id: String,
     pub title: String,
@@ -13,6 +33,9 @@ pub struct SessionHead {
     pub pending_approval_count: usize,
     pub last_user_preview: Option<String>,
     pub last_assistant_preview: Option<String>,
+    pub recent_filesystem_activity: Vec<SessionHeadFsActivity>,
+    pub workspace_tree: Vec<SessionHeadWorkspaceEntry>,
+    pub workspace_tree_truncated: bool,
 }
 
 impl SessionHead {
@@ -41,6 +64,27 @@ impl SessionHead {
         }
         if let Some(last_assistant_preview) = self.last_assistant_preview.as_deref() {
             lines.push(format!("Last Assistant: {last_assistant_preview}"));
+        }
+        if !self.recent_filesystem_activity.is_empty() {
+            lines.push("Recent Filesystem Activity:".to_string());
+            lines.extend(
+                self.recent_filesystem_activity
+                    .iter()
+                    .map(|activity| format!("- {} {}", activity.action, activity.target)),
+            );
+        }
+        if !self.workspace_tree.is_empty() {
+            lines.push("Workspace Tree:".to_string());
+            lines.extend(self.workspace_tree.iter().map(|entry| {
+                let suffix = match entry.kind {
+                    SessionHeadWorkspaceEntryKind::File => "",
+                    SessionHeadWorkspaceEntryKind::Directory => "/",
+                };
+                format!("- {}{}", entry.path, suffix)
+            }));
+            if self.workspace_tree_truncated {
+                lines.push("- ...".to_string());
+            }
         }
         lines.join("\n")
     }
@@ -98,7 +142,10 @@ impl PromptAssembly {
 
 #[cfg(test)]
 mod tests {
-    use super::{PromptAssembly, PromptAssemblyInput, SessionHead};
+    use super::{
+        PromptAssembly, PromptAssemblyInput, SessionHead, SessionHeadFsActivity,
+        SessionHeadWorkspaceEntry, SessionHeadWorkspaceEntryKind,
+    };
     use crate::context::ContextSummary;
     use crate::provider::ProviderMessage;
     use crate::session::MessageRole;
@@ -115,6 +162,31 @@ mod tests {
             pending_approval_count: 1,
             last_user_preview: Some("latest question".to_string()),
             last_assistant_preview: Some("recent answer".to_string()),
+            recent_filesystem_activity: vec![
+                SessionHeadFsActivity {
+                    action: "read".to_string(),
+                    target: ".env".to_string(),
+                    detail: "fs_read path=.env -> fs_read path=.env bytes=42".to_string(),
+                    recorded_at: 12,
+                },
+                SessionHeadFsActivity {
+                    action: "list".to_string(),
+                    target: ".".to_string(),
+                    detail: "fs_list path=. recursive=false -> fs_list entries=6".to_string(),
+                    recorded_at: 11,
+                },
+            ],
+            workspace_tree: vec![
+                SessionHeadWorkspaceEntry {
+                    path: "README.md".to_string(),
+                    kind: SessionHeadWorkspaceEntryKind::File,
+                },
+                SessionHeadWorkspaceEntry {
+                    path: "crates".to_string(),
+                    kind: SessionHeadWorkspaceEntryKind::Directory,
+                },
+            ],
+            workspace_tree_truncated: false,
         }
         .render();
 
@@ -127,6 +199,12 @@ mod tests {
         assert!(rendered.contains("Pending Approvals: 1"));
         assert!(rendered.contains("Last User: latest question"));
         assert!(rendered.contains("Last Assistant: recent answer"));
+        assert!(rendered.contains("Recent Filesystem Activity:"));
+        assert!(rendered.contains("- read .env"));
+        assert!(rendered.contains("- list ."));
+        assert!(rendered.contains("Workspace Tree:"));
+        assert!(rendered.contains("- README.md"));
+        assert!(rendered.contains("- crates/"));
     }
 
     #[test]
@@ -142,6 +220,19 @@ mod tests {
                 pending_approval_count: 0,
                 last_user_preview: Some("latest question".to_string()),
                 last_assistant_preview: Some("recent answer".to_string()),
+                recent_filesystem_activity: vec![SessionHeadFsActivity {
+                    action: "patch".to_string(),
+                    target: "src/main.rs".to_string(),
+                    detail:
+                        "fs_patch path=src/main.rs edits=1 -> fs_patch path=src/main.rs edits=1"
+                            .to_string(),
+                    recorded_at: 14,
+                }],
+                workspace_tree: vec![SessionHeadWorkspaceEntry {
+                    path: "src".to_string(),
+                    kind: SessionHeadWorkspaceEntryKind::Directory,
+                }],
+                workspace_tree_truncated: false,
             }),
             context_summary: Some(ContextSummary {
                 session_id: "session-1".to_string(),

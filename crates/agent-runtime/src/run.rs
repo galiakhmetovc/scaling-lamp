@@ -91,14 +91,14 @@ pub struct PendingToolApproval {
     pub tool_arguments: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RunStep {
     pub kind: RunStepKind,
     pub detail: String,
     pub recorded_at: i64,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum RunStepKind {
     Started,
     ProviderStreamStarted,

@@ -14,6 +14,7 @@ use agent_runtime::session::SessionSettings;
 use agent_runtime::tool::{FsWriteInput, ToolCall};
 use agent_runtime::verification::VerificationStatus;
 use agent_runtime::verification::{CheckOutcome, EvidenceBundle};
+use agent_runtime::workspace::WorkspaceRef;
 use agentd::bootstrap::{BootstrapError, SessionPreferencesPatch, build_from_config};
 use agentd::execution;
 use std::fs;
@@ -305,6 +306,7 @@ fn build_from_config_interrupts_unrecoverable_runs_but_keeps_approvals_pending()
             status: RunStatus::Running.as_str().to_string(),
             error: None,
             result: None,
+            recent_steps_json: "[]".to_string(),
             evidence_refs_json: "[]".to_string(),
             pending_approvals_json: "[]".to_string(),
             provider_loop_json: "null".to_string(),
@@ -320,6 +322,7 @@ fn build_from_config_interrupts_unrecoverable_runs_but_keeps_approvals_pending()
             status: RunStatus::Resuming.as_str().to_string(),
             error: None,
             result: None,
+            recent_steps_json: "[]".to_string(),
             evidence_refs_json: "[]".to_string(),
             pending_approvals_json: "[]".to_string(),
             provider_loop_json: "null".to_string(),
@@ -335,6 +338,7 @@ fn build_from_config_interrupts_unrecoverable_runs_but_keeps_approvals_pending()
             status: RunStatus::WaitingProcess.as_str().to_string(),
             error: None,
             result: None,
+            recent_steps_json: "[]".to_string(),
             evidence_refs_json: "[]".to_string(),
             pending_approvals_json: "[]".to_string(),
             provider_loop_json: "null".to_string(),
@@ -350,6 +354,7 @@ fn build_from_config_interrupts_unrecoverable_runs_but_keeps_approvals_pending()
             status: RunStatus::WaitingDelegate.as_str().to_string(),
             error: None,
             result: None,
+            recent_steps_json: "[]".to_string(),
             evidence_refs_json: "[]".to_string(),
             pending_approvals_json: "[]".to_string(),
             provider_loop_json: "null".to_string(),
@@ -370,6 +375,7 @@ fn build_from_config_interrupts_unrecoverable_runs_but_keeps_approvals_pending()
             status: RunStatus::WaitingApproval.as_str().to_string(),
             error: None,
             result: None,
+            recent_steps_json: "[]".to_string(),
             evidence_refs_json: "[]".to_string(),
             pending_approvals_json: serde_json::to_string(&vec![ApprovalRequest::new(
                 "approval-1",
@@ -454,6 +460,7 @@ fn run_show_surfaces_error_details_for_interrupted_runs() {
             status: RunStatus::Interrupted.as_str().to_string(),
             error: Some("runtime restart interrupted a non-recoverable run state".to_string()),
             result: None,
+            recent_steps_json: "[]".to_string(),
             evidence_refs_json: "[]".to_string(),
             pending_approvals_json: "[]".to_string(),
             provider_loop_json: "null".to_string(),
@@ -715,6 +722,7 @@ fn supervisor_tick_dispatches_queued_jobs_and_completes_verified_missions() {
             status: RunStatus::Completed.as_str().to_string(),
             error: None,
             result: Some("done".to_string()),
+            recent_steps_json: "[]".to_string(),
             evidence_refs_json: "[]".to_string(),
             pending_approvals_json: "[]".to_string(),
             provider_loop_json: "null".to_string(),
@@ -3522,11 +3530,15 @@ fn compact_session_is_a_noop_when_the_transcript_is_below_threshold() {
 #[test]
 fn session_head_derives_counts_previews_and_summary_state() {
     let temp = tempfile::tempdir().expect("tempdir");
-    let app = build_from_config(AppConfig {
+    let workspace_root = temp.path().join("workspace");
+    fs::create_dir_all(workspace_root.join("crates")).expect("create crates dir");
+    fs::write(workspace_root.join("README.md"), "hello\n").expect("write readme");
+    let mut app = build_from_config(AppConfig {
         data_dir: temp.path().join("state-root"),
         ..AppConfig::default()
     })
     .expect("build app");
+    app.runtime.workspace = WorkspaceRef::new(&workspace_root);
     let store = PersistenceStore::open(&app.persistence).expect("open store");
 
     store
@@ -3581,6 +3593,10 @@ fn session_head_derives_counts_previews_and_summary_state() {
         31,
     )
     .expect("wait approval");
+    run.record_tool_completion("fs_read path=.env -> fs_read path=.env bytes=42", 32)
+        .expect("record fs read");
+    run.record_tool_completion("fs_list path=. recursive=false -> fs_list entries=2", 33)
+        .expect("record fs list");
     store
         .put_run(&RunRecord::try_from(run.snapshot()).expect("run record"))
         .expect("put run");
@@ -3599,11 +3615,25 @@ fn session_head_derives_counts_previews_and_summary_state() {
         head.last_assistant_preview.as_deref(),
         Some("recent answer")
     );
+    assert_eq!(head.recent_filesystem_activity.len(), 2);
+    assert_eq!(head.recent_filesystem_activity[0].action, "list");
+    assert_eq!(head.recent_filesystem_activity[0].target, ".");
+    assert_eq!(head.recent_filesystem_activity[1].action, "read");
+    assert_eq!(head.recent_filesystem_activity[1].target, ".env");
+    assert_eq!(head.workspace_tree.len(), 2);
+    assert_eq!(head.workspace_tree[0].path, "README.md");
+    assert_eq!(head.workspace_tree[1].path, "crates");
 
     let rendered = head.render();
     assert!(rendered.contains("Session: Session Head"));
     assert!(rendered.contains("Summary Covers: 2 messages"));
     assert!(rendered.contains("Pending Approvals: 1"));
+    assert!(rendered.contains("Recent Filesystem Activity:"));
+    assert!(rendered.contains("- list ."));
+    assert!(rendered.contains("- read .env"));
+    assert!(rendered.contains("Workspace Tree:"));
+    assert!(rendered.contains("- README.md"));
+    assert!(rendered.contains("- crates/"));
 }
 
 #[test]
@@ -3651,7 +3681,11 @@ fn execute_chat_turn_uses_the_context_summary_and_only_the_uncovered_messages() 
         .to_string(),
     ]);
     let temp = tempfile::tempdir().expect("tempdir");
-    let app = build_from_config(AppConfig {
+    let workspace_root = temp.path().join("workspace");
+    fs::create_dir_all(workspace_root.join("src")).expect("create src");
+    fs::write(workspace_root.join("README.md"), "workspace readme\n")
+        .expect("write workspace readme");
+    let mut app = build_from_config(AppConfig {
         data_dir: temp.path().join("state-root"),
         provider: ConfiguredProvider {
             kind: ProviderKind::OpenAiResponses,
@@ -3662,6 +3696,7 @@ fn execute_chat_turn_uses_the_context_summary_and_only_the_uncovered_messages() 
         ..AppConfig::default()
     })
     .expect("build app");
+    app.runtime.workspace = WorkspaceRef::new(&workspace_root);
     let store = PersistenceStore::open(&app.persistence).expect("open store");
 
     store
@@ -3701,6 +3736,17 @@ fn execute_chat_turn_uses_the_context_summary_and_only_the_uncovered_messages() 
             })
             .expect("put transcript");
     }
+    let mut prior_run = RunEngine::new("run-fs-head", "session-compact-chat", None, 40);
+    prior_run.start(40).expect("start prior run");
+    prior_run
+        .record_tool_completion(
+            "fs_patch path=src/main.rs edits=1 -> fs_patch path=src/main.rs edits=1",
+            41,
+        )
+        .expect("record patch");
+    store
+        .put_run(&RunRecord::try_from(prior_run.snapshot()).expect("prior run record"))
+        .expect("put prior run");
 
     app.compact_session("session-compact-chat")
         .expect("compact session");
@@ -3725,6 +3771,11 @@ fn execute_chat_turn_uses_the_context_summary_and_only_the_uncovered_messages() 
         .expect("compact summary marker");
     assert!(session_head_marker < summary_marker);
     assert!(normalized_request.contains("summary covers: 2 messages"));
+    assert!(normalized_request.contains("recent filesystem activity:"));
+    assert!(normalized_request.contains("- patch src/main.rs"));
+    assert!(normalized_request.contains("workspace tree:"));
+    assert!(normalized_request.contains("- readme.md"));
+    assert!(normalized_request.contains("- src/"));
     assert!(normalized_request.contains("compact summary covering earlier context."));
     assert!(normalized_request.contains("\"text\":\"recent user one\""));
     assert!(normalized_request.contains("\"text\":\"recent assistant three\""));

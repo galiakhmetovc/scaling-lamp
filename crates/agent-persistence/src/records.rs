@@ -44,6 +44,7 @@ pub struct RunRecord {
     pub status: String,
     pub error: Option<String>,
     pub result: Option<String>,
+    pub recent_steps_json: String,
     pub evidence_refs_json: String,
     pub pending_approvals_json: String,
     pub provider_loop_json: String,
@@ -117,6 +118,7 @@ pub enum RecordConversionError {
     MissingJobInput,
     InvalidPromptOverride(SessionError),
     InvalidRunDelegateRuns(serde_json::Error),
+    InvalidRunRecentSteps(serde_json::Error),
     InvalidRunPendingApprovals(serde_json::Error),
     InvalidRunProviderLoop(serde_json::Error),
     InvalidRunEvidenceRefs(serde_json::Error),
@@ -128,6 +130,7 @@ pub enum RecordConversionError {
     SerializeMissionSchedule(serde_json::Error),
     SerializeRunDelegateRuns(serde_json::Error),
     SerializeRunEvidenceRefs(serde_json::Error),
+    SerializeRunRecentSteps(serde_json::Error),
     SerializeRunPendingApprovals(serde_json::Error),
     SerializeRunProviderLoop(serde_json::Error),
     SerializeSessionSettings(serde_json::Error),
@@ -281,6 +284,8 @@ impl TryFrom<&RunSnapshot> for RunRecord {
             status: snapshot.status.as_str().to_string(),
             error: snapshot.error.clone(),
             result: snapshot.result.clone(),
+            recent_steps_json: serde_json::to_string(&snapshot.recent_steps)
+                .map_err(RecordConversionError::SerializeRunRecentSteps)?,
             evidence_refs_json: serde_json::to_string(&snapshot.evidence_refs)
                 .map_err(RecordConversionError::SerializeRunEvidenceRefs)?,
             pending_approvals_json: serde_json::to_string(&snapshot.pending_approvals)
@@ -311,6 +316,8 @@ impl TryFrom<RunRecord> for RunSnapshot {
             finished_at: record.finished_at,
             error: record.error,
             result: record.result,
+            recent_steps: serde_json::from_str(&record.recent_steps_json)
+                .map_err(RecordConversionError::InvalidRunRecentSteps)?,
             evidence_refs: serde_json::from_str(&record.evidence_refs_json)
                 .map_err(RecordConversionError::InvalidRunEvidenceRefs)?,
             pending_approvals: serde_json::from_str(&record.pending_approvals_json)
@@ -459,6 +466,9 @@ impl fmt::Display for RecordConversionError {
             Self::InvalidRunDelegateRuns(source) => {
                 write!(formatter, "invalid run delegate runs: {source}")
             }
+            Self::InvalidRunRecentSteps(source) => {
+                write!(formatter, "invalid run recent steps: {source}")
+            }
             Self::InvalidRunPendingApprovals(source) => {
                 write!(formatter, "invalid run pending approvals: {source}")
             }
@@ -491,6 +501,9 @@ impl fmt::Display for RecordConversionError {
             }
             Self::SerializeRunDelegateRuns(source) => {
                 write!(formatter, "failed to serialize run delegate runs: {source}")
+            }
+            Self::SerializeRunRecentSteps(source) => {
+                write!(formatter, "failed to serialize run recent steps: {source}")
             }
             Self::SerializeRunEvidenceRefs(source) => {
                 write!(formatter, "failed to serialize run evidence refs: {source}")
@@ -530,6 +543,7 @@ impl Error for RecordConversionError {
             Self::InvalidMissionStatus(source) => Some(source),
             Self::InvalidPromptOverride(source) => Some(source),
             Self::InvalidRunDelegateRuns(source) => Some(source),
+            Self::InvalidRunRecentSteps(source) => Some(source),
             Self::InvalidRunPendingApprovals(source) => Some(source),
             Self::InvalidRunProviderLoop(source) => Some(source),
             Self::InvalidRunEvidenceRefs(source) => Some(source),
@@ -540,6 +554,7 @@ impl Error for RecordConversionError {
             Self::SerializeMissionAcceptance(source) => Some(source),
             Self::SerializeMissionSchedule(source) => Some(source),
             Self::SerializeRunDelegateRuns(source) => Some(source),
+            Self::SerializeRunRecentSteps(source) => Some(source),
             Self::SerializeRunEvidenceRefs(source) => Some(source),
             Self::SerializeRunPendingApprovals(source) => Some(source),
             Self::SerializeRunProviderLoop(source) => Some(source),
@@ -686,6 +701,18 @@ mod tests {
         assert_eq!(restored.finished_at, Some(3));
         assert!(restored.pending_approvals.is_empty());
         assert!(restored.delegate_runs.is_empty());
+        assert!(
+            restored
+                .recent_steps
+                .iter()
+                .any(|step| step.detail.contains("recorded evidence bundle bundle-1"))
+        );
+        assert!(
+            restored
+                .recent_steps
+                .iter()
+                .any(|step| step.detail.contains("run completed"))
+        );
         assert_eq!(
             restored.evidence_refs,
             vec![

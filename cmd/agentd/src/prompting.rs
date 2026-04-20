@@ -1,14 +1,21 @@
 use agent_persistence::TranscriptRecord;
 use agent_runtime::context::{ContextSummary, approximate_token_count};
-use agent_runtime::prompt::SessionHead;
-use agent_runtime::run::{RunSnapshot, RunStatus};
+use agent_runtime::prompt::{
+    SessionHead, SessionHeadFsActivity, SessionHeadWorkspaceEntry, SessionHeadWorkspaceEntryKind,
+};
+use agent_runtime::run::{RunSnapshot, RunStatus, RunStepKind};
 use agent_runtime::session::Session;
+use agent_runtime::workspace::{WorkspaceEntryKind, WorkspaceRef};
+
+const RECENT_FILESYSTEM_ACTIVITY_LIMIT: usize = 6;
+const WORKSPACE_TREE_LIMIT: usize = 12;
 
 pub(crate) fn build_session_head(
     session: &Session,
     transcripts: &[TranscriptRecord],
     context_summary: Option<&ContextSummary>,
     runs: &[RunSnapshot],
+    workspace: &WorkspaceRef,
 ) -> SessionHead {
     let message_count = transcripts.len();
     let covered_message_count = context_summary
@@ -33,6 +40,8 @@ pub(crate) fn build_session_head(
         .map(|run| run.pending_approvals.len())
         .sum::<usize>();
 
+    let (workspace_tree, workspace_tree_truncated) = build_workspace_tree(workspace);
+
     SessionHead {
         session_id: session.id.clone(),
         title: session.title.clone(),
@@ -51,6 +60,9 @@ pub(crate) fn build_session_head(
             .rev()
             .find(|record| record.kind == "assistant")
             .map(|record| preview_text(record.content.as_str(), 96)),
+        recent_filesystem_activity: build_recent_filesystem_activity(session, runs),
+        workspace_tree,
+        workspace_tree_truncated,
     }
 }
 
@@ -65,4 +77,83 @@ pub(crate) fn preview_text(content: &str, limit: usize) -> String {
         .collect::<String>();
     preview.push('…');
     preview
+}
+
+fn build_recent_filesystem_activity(
+    session: &Session,
+    runs: &[RunSnapshot],
+) -> Vec<SessionHeadFsActivity> {
+    let mut activity = runs
+        .iter()
+        .filter(|run| run.session_id == session.id)
+        .flat_map(|run| run.recent_steps.iter())
+        .filter(|step| step.kind == RunStepKind::ToolCompleted)
+        .filter_map(|step| parse_filesystem_activity(step.detail.as_str(), step.recorded_at))
+        .collect::<Vec<_>>();
+
+    activity.sort_by(|left, right| {
+        right
+            .recorded_at
+            .cmp(&left.recorded_at)
+            .then_with(|| left.detail.cmp(&right.detail))
+    });
+    activity.truncate(RECENT_FILESYSTEM_ACTIVITY_LIMIT);
+    activity
+}
+
+fn build_workspace_tree(workspace: &WorkspaceRef) -> (Vec<SessionHeadWorkspaceEntry>, bool) {
+    let Ok(entries) = workspace.list("", false) else {
+        return (Vec::new(), false);
+    };
+    let truncated = entries.len() > WORKSPACE_TREE_LIMIT;
+    let rendered = entries
+        .into_iter()
+        .take(WORKSPACE_TREE_LIMIT)
+        .map(|entry| SessionHeadWorkspaceEntry {
+            path: entry.path,
+            kind: match entry.kind {
+                WorkspaceEntryKind::File => SessionHeadWorkspaceEntryKind::File,
+                WorkspaceEntryKind::Directory => SessionHeadWorkspaceEntryKind::Directory,
+            },
+        })
+        .collect();
+    (rendered, truncated)
+}
+
+fn parse_filesystem_activity(detail: &str, recorded_at: i64) -> Option<SessionHeadFsActivity> {
+    let (tool_summary, _) = detail.split_once(" -> ")?;
+    let (action, target) = if tool_summary.starts_with("fs_read ") {
+        ("read", extract_tool_field(tool_summary, "path")?)
+    } else if tool_summary.starts_with("fs_write ") {
+        ("write", extract_tool_field(tool_summary, "path")?)
+    } else if tool_summary.starts_with("fs_patch ") {
+        ("patch", extract_tool_field(tool_summary, "path")?)
+    } else if tool_summary.starts_with("fs_list ") {
+        ("list", extract_tool_field(tool_summary, "path")?)
+    } else if tool_summary.starts_with("fs_glob ") {
+        ("glob", extract_tool_field(tool_summary, "path")?)
+    } else if tool_summary.starts_with("fs_search ") {
+        ("search", extract_tool_field(tool_summary, "path")?)
+    } else {
+        return None;
+    };
+
+    Some(SessionHeadFsActivity {
+        action: action.to_string(),
+        target,
+        detail: detail.to_string(),
+        recorded_at,
+    })
+}
+
+fn extract_tool_field(summary: &str, field: &str) -> Option<String> {
+    let marker = format!("{field}=");
+    let value = summary.split_once(&marker)?.1;
+    Some(
+        value
+            .split_once(' ')
+            .map(|(target, _)| target)
+            .unwrap_or(value)
+            .to_string(),
+    )
 }
