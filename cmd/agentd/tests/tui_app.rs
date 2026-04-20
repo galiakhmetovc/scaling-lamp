@@ -537,6 +537,46 @@ data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_tui_hidden_re
 }
 
 #[test]
+fn tui_chat_send_provider_failure_stays_inside_timeline_instead_of_exiting() {
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind port probe");
+    let address = listener.local_addr().expect("probe local addr");
+    drop(listener);
+
+    let temp = tempfile::tempdir().expect("tempdir");
+    let app = build_from_config(AppConfig {
+        data_dir: temp.path().join("state-root"),
+        provider: ConfiguredProvider {
+            kind: ProviderKind::ZaiChatCompletions,
+            api_base: Some(format!("http://{address}")),
+            api_key: Some("test-key".to_string()),
+            default_model: Some("glm-5-turbo".to_string()),
+        },
+        ..AppConfig::default()
+    })
+    .expect("build app");
+    let session = app
+        .create_session_auto(Some("Failure Session"))
+        .expect("create session");
+    let mut state = TuiAppState::new(
+        app.list_session_summaries().expect("list sessions"),
+        Some(session.id.clone()),
+    );
+    let mut redraw = |_state: &TuiAppState| Ok::<_, agentd::bootstrap::BootstrapError>(());
+
+    let result = dispatch_action(
+        &app,
+        &mut state,
+        TuiAction::SubmitChatInput("hello timeout path".to_string()),
+        &mut redraw,
+    );
+
+    assert!(result.is_ok(), "provider failure should stay in the TUI");
+    assert!(state.timeline().entries(true).iter().any(|entry| {
+        matches!(entry.kind, TimelineEntryKind::System) && entry.content.starts_with("chat failed:")
+    }));
+}
+
+#[test]
 fn tui_end_to_end_session_create_and_delete_wait_for_confirmation() {
     let temp = tempfile::tempdir().expect("tempdir");
     let app = build_from_config(AppConfig {

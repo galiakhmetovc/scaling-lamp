@@ -363,11 +363,8 @@ fn send_chat_message(
             state.timeline_mut().finish_turn();
         }
         Err(error) => {
-            state
-                .timeline_mut()
-                .push_system(&format!("chat failed: {error}"), unix_timestamp()?);
-            state.timeline_mut().finish_turn();
-            return Err(error);
+            report_nonfatal_execution_error(state, "chat failed", &error)?;
+            return Ok(());
         }
     }
 
@@ -450,15 +447,24 @@ fn approve_pending(
             state.timeline_mut().finish_turn();
         }
         Err(error) => {
-            state
-                .timeline_mut()
-                .push_system(&format!("approval failed: {error}"), unix_timestamp()?);
-            state.timeline_mut().finish_turn();
-            return Err(error);
+            report_nonfatal_execution_error(state, "approval failed", &error)?;
+            return Ok(());
         }
     }
 
     refresh_current_session(app, state)?;
+    Ok(())
+}
+
+fn report_nonfatal_execution_error(
+    state: &mut TuiAppState,
+    prefix: &str,
+    error: &BootstrapError,
+) -> Result<(), BootstrapError> {
+    state
+        .timeline_mut()
+        .push_system(&format!("{prefix}: {error}"), unix_timestamp()?);
+    state.timeline_mut().finish_turn();
     Ok(())
 }
 
