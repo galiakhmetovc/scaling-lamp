@@ -109,6 +109,15 @@ impl PromptAssembly {
     pub fn build_messages(input: PromptAssemblyInput) -> Vec<ProviderMessage> {
         let mut messages = Vec::with_capacity(input.transcript_messages.len() + 6);
 
+        if let Some(system_prompt) = input.system_prompt
+            && !system_prompt.trim().is_empty()
+        {
+            messages.push(ProviderMessage {
+                role: MessageRole::System,
+                content: system_prompt,
+            });
+        }
+
         if let Some(session_head) = input.session_head {
             let rendered = session_head.render();
             if !rendered.trim().is_empty() {
@@ -117,15 +126,6 @@ impl PromptAssembly {
                     content: rendered,
                 });
             }
-        }
-
-        if let Some(system_prompt) = input.system_prompt
-            && !system_prompt.trim().is_empty()
-        {
-            messages.push(ProviderMessage {
-                role: MessageRole::System,
-                content: system_prompt,
-            });
         }
 
         if let Some(agents_prompt) = input.agents_prompt
@@ -426,7 +426,7 @@ mod tests {
     }
 
     #[test]
-    fn prompt_assembly_places_session_head_before_system_and_agents_prompts() {
+    fn prompt_assembly_places_system_prompt_before_session_head_and_agents() {
         let messages = PromptAssembly::build_messages(PromptAssemblyInput {
             system_prompt: Some("You are a useful AI assistant.".to_string()),
             agents_prompt: Some("Project instructions: keep edits minimal.".to_string()),
@@ -455,9 +455,9 @@ mod tests {
 
         assert_eq!(messages.len(), 4);
         assert_eq!(messages[0].role, MessageRole::System);
-        assert!(messages[0].content.contains("Session: Prompt Order"));
+        assert_eq!(messages[0].content, "You are a useful AI assistant.");
         assert_eq!(messages[1].role, MessageRole::System);
-        assert_eq!(messages[1].content, "You are a useful AI assistant.");
+        assert!(messages[1].content.contains("Session: Prompt Order"));
         assert_eq!(messages[2].role, MessageRole::System);
         assert_eq!(
             messages[2].content,
