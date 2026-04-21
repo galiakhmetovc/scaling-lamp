@@ -108,10 +108,13 @@ impl JobRepository for PersistenceStore {
     fn put_job(&self, record: &JobRecord) -> Result<(), StoreError> {
         self.connection.execute(
             "INSERT INTO jobs (
-                id, mission_id, run_id, parent_job_id, kind, status, input_json, result_json, error,
-                created_at, updated_at, started_at, finished_at
-             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)
+                id, session_id, mission_id, run_id, parent_job_id, kind, status, input_json,
+                result_json, error, created_at, updated_at, started_at, finished_at,
+                attempt_count, max_attempts, lease_owner, lease_expires_at, heartbeat_at,
+                cancel_requested_at, last_progress_message
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21)
              ON CONFLICT(id) DO UPDATE SET
+                session_id = excluded.session_id,
                 mission_id = excluded.mission_id,
                 run_id = excluded.run_id,
                 parent_job_id = excluded.parent_job_id,
@@ -123,9 +126,17 @@ impl JobRepository for PersistenceStore {
                 created_at = excluded.created_at,
                 updated_at = excluded.updated_at,
                 started_at = excluded.started_at,
-                finished_at = excluded.finished_at",
+                finished_at = excluded.finished_at,
+                attempt_count = excluded.attempt_count,
+                max_attempts = excluded.max_attempts,
+                lease_owner = excluded.lease_owner,
+                lease_expires_at = excluded.lease_expires_at,
+                heartbeat_at = excluded.heartbeat_at,
+                cancel_requested_at = excluded.cancel_requested_at,
+                last_progress_message = excluded.last_progress_message",
             params![
                 record.id,
+                record.session_id,
                 record.mission_id,
                 record.run_id,
                 record.parent_job_id,
@@ -137,7 +148,14 @@ impl JobRepository for PersistenceStore {
                 record.created_at,
                 record.updated_at,
                 record.started_at,
-                record.finished_at
+                record.finished_at,
+                record.attempt_count,
+                record.max_attempts,
+                record.lease_owner,
+                record.lease_expires_at,
+                record.heartbeat_at,
+                record.cancel_requested_at,
+                record.last_progress_message
             ],
         )?;
         Ok(())
@@ -146,25 +164,35 @@ impl JobRepository for PersistenceStore {
     fn get_job(&self, id: &str) -> Result<Option<JobRecord>, StoreError> {
         self.connection
             .query_row(
-                "SELECT id, mission_id, run_id, parent_job_id, kind, status, input_json,
-                        result_json, error, created_at, updated_at, started_at, finished_at
+                "SELECT id, session_id, mission_id, run_id, parent_job_id, kind, status, input_json,
+                        result_json, error, created_at, updated_at, started_at, finished_at,
+                        attempt_count, max_attempts, lease_owner, lease_expires_at, heartbeat_at,
+                        cancel_requested_at, last_progress_message
                  FROM jobs WHERE id = ?1",
                 [id],
                 |row| {
                     Ok(JobRecord {
                         id: row.get(0)?,
-                        mission_id: row.get(1)?,
-                        run_id: row.get(2)?,
-                        parent_job_id: row.get(3)?,
-                        kind: row.get(4)?,
-                        status: row.get(5)?,
-                        input_json: row.get(6)?,
-                        result_json: row.get(7)?,
-                        error: row.get(8)?,
-                        created_at: row.get(9)?,
-                        updated_at: row.get(10)?,
-                        started_at: row.get(11)?,
-                        finished_at: row.get(12)?,
+                        session_id: row.get(1)?,
+                        mission_id: row.get(2)?,
+                        run_id: row.get(3)?,
+                        parent_job_id: row.get(4)?,
+                        kind: row.get(5)?,
+                        status: row.get(6)?,
+                        input_json: row.get(7)?,
+                        result_json: row.get(8)?,
+                        error: row.get(9)?,
+                        created_at: row.get(10)?,
+                        updated_at: row.get(11)?,
+                        started_at: row.get(12)?,
+                        finished_at: row.get(13)?,
+                        attempt_count: row.get(14)?,
+                        max_attempts: row.get(15)?,
+                        lease_owner: row.get(16)?,
+                        lease_expires_at: row.get(17)?,
+                        heartbeat_at: row.get(18)?,
+                        cancel_requested_at: row.get(19)?,
+                        last_progress_message: row.get(20)?,
                     })
                 },
             )
@@ -174,32 +202,76 @@ impl JobRepository for PersistenceStore {
 
     fn list_jobs(&self) -> Result<Vec<JobRecord>, StoreError> {
         let mut statement = self.connection.prepare(
-            "SELECT id, mission_id, run_id, parent_job_id, kind, status, input_json,
-                    result_json, error, created_at, updated_at, started_at, finished_at
+            "SELECT id, session_id, mission_id, run_id, parent_job_id, kind, status, input_json,
+                    result_json, error, created_at, updated_at, started_at, finished_at,
+                    attempt_count, max_attempts, lease_owner, lease_expires_at, heartbeat_at,
+                    cancel_requested_at, last_progress_message
              FROM jobs
              ORDER BY created_at ASC, id ASC",
         )?;
-        let mut rows = statement.query([])?;
-        let mut jobs = Vec::new();
-
-        while let Some(row) = rows.next()? {
-            jobs.push(JobRecord {
-                id: row.get(0)?,
-                mission_id: row.get(1)?,
-                run_id: row.get(2)?,
-                parent_job_id: row.get(3)?,
-                kind: row.get(4)?,
-                status: row.get(5)?,
-                input_json: row.get(6)?,
-                result_json: row.get(7)?,
-                error: row.get(8)?,
-                created_at: row.get(9)?,
-                updated_at: row.get(10)?,
-                started_at: row.get(11)?,
-                finished_at: row.get(12)?,
-            });
-        }
-
-        Ok(jobs)
+        collect_jobs(&mut statement, &[] as &[&dyn rusqlite::ToSql])
     }
+
+    fn list_jobs_for_session(&self, session_id: &str) -> Result<Vec<JobRecord>, StoreError> {
+        let mut statement = self.connection.prepare(
+            "SELECT id, session_id, mission_id, run_id, parent_job_id, kind, status, input_json,
+                    result_json, error, created_at, updated_at, started_at, finished_at,
+                    attempt_count, max_attempts, lease_owner, lease_expires_at, heartbeat_at,
+                    cancel_requested_at, last_progress_message
+             FROM jobs
+             WHERE session_id = ?1
+             ORDER BY created_at ASC, id ASC",
+        )?;
+        collect_jobs(&mut statement, &[&session_id])
+    }
+
+    fn list_active_jobs_for_session(&self, session_id: &str) -> Result<Vec<JobRecord>, StoreError> {
+        let mut statement = self.connection.prepare(
+            "SELECT id, session_id, mission_id, run_id, parent_job_id, kind, status, input_json,
+                    result_json, error, created_at, updated_at, started_at, finished_at,
+                    attempt_count, max_attempts, lease_owner, lease_expires_at, heartbeat_at,
+                    cancel_requested_at, last_progress_message
+             FROM jobs
+             WHERE session_id = ?1
+               AND status IN ('queued', 'running', 'blocked')
+             ORDER BY created_at ASC, id ASC",
+        )?;
+        collect_jobs(&mut statement, &[&session_id])
+    }
+}
+
+fn collect_jobs(
+    statement: &mut rusqlite::Statement<'_>,
+    params: &[&dyn rusqlite::ToSql],
+) -> Result<Vec<JobRecord>, StoreError> {
+    let mut rows = statement.query(params)?;
+    let mut jobs = Vec::new();
+
+    while let Some(row) = rows.next()? {
+        jobs.push(JobRecord {
+            id: row.get(0)?,
+            session_id: row.get(1)?,
+            mission_id: row.get(2)?,
+            run_id: row.get(3)?,
+            parent_job_id: row.get(4)?,
+            kind: row.get(5)?,
+            status: row.get(6)?,
+            input_json: row.get(7)?,
+            result_json: row.get(8)?,
+            error: row.get(9)?,
+            created_at: row.get(10)?,
+            updated_at: row.get(11)?,
+            started_at: row.get(12)?,
+            finished_at: row.get(13)?,
+            attempt_count: row.get(14)?,
+            max_attempts: row.get(15)?,
+            lease_owner: row.get(16)?,
+            lease_expires_at: row.get(17)?,
+            heartbeat_at: row.get(18)?,
+            cancel_requested_at: row.get(19)?,
+            last_progress_message: row.get(20)?,
+        });
+    }
+
+    Ok(jobs)
 }

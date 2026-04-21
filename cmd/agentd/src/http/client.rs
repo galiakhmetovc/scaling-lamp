@@ -4,12 +4,13 @@ mod sessions;
 mod status;
 
 use crate::bootstrap::{
-    BootstrapError, SessionPendingApproval, SessionPreferencesPatch, SessionSkillStatus,
-    SessionSummary, SessionTranscriptView,
+    BootstrapError, SessionBackgroundJob, SessionPendingApproval, SessionPreferencesPatch,
+    SessionSkillStatus, SessionSummary, SessionTranscriptView,
 };
 use crate::execution::{ApprovalContinuationReport, ChatExecutionEvent, ChatTurnExecutionReport};
 use crate::http::types::{
-    DaemonStopResponse, ErrorResponse, SessionSummaryResponse, StatusResponse,
+    DaemonStopResponse, ErrorResponse, SessionBackgroundJobResponse, SessionSummaryResponse,
+    StatusResponse,
 };
 use agent_persistence::AppConfig;
 use reqwest::StatusCode;
@@ -155,8 +156,24 @@ impl From<SessionSummaryResponse> for SessionSummary {
             has_pending_approval: value.has_pending_approval,
             last_message_preview: value.last_message_preview,
             message_count: value.message_count,
+            background_job_count: value.background_job_count,
+            running_background_job_count: value.running_background_job_count,
+            queued_background_job_count: value.queued_background_job_count,
             created_at: value.created_at,
             updated_at: value.updated_at,
+        }
+    }
+}
+
+impl From<SessionBackgroundJobResponse> for SessionBackgroundJob {
+    fn from(value: SessionBackgroundJobResponse) -> Self {
+        Self {
+            id: value.id,
+            kind: value.kind,
+            status: value.status,
+            queued_at: value.queued_at,
+            started_at: value.started_at,
+            last_progress_message: value.last_progress_message,
         }
     }
 }

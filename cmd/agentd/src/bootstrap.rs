@@ -4,9 +4,9 @@ mod session_ops;
 
 use crate::{cli, execution, prompting};
 use agent_persistence::{
-    AppConfig, ConfigError, ContextSummaryRepository, PersistenceScaffold, PersistenceStore,
-    PlanRepository, RecordConversionError, RunRecord, RunRepository, SessionRepository, StoreError,
-    TranscriptRepository, recovery,
+    AppConfig, ConfigError, ContextSummaryRepository, JobRepository, PersistenceScaffold,
+    PersistenceStore, PlanRepository, RecordConversionError, RunRecord, RunRepository,
+    SessionRepository, StoreError, TranscriptRepository, recovery,
 };
 use agent_runtime::RuntimeScaffold;
 use agent_runtime::context::{ContextSummary, approximate_token_count};
@@ -87,8 +87,21 @@ pub struct SessionSummary {
     pub has_pending_approval: bool,
     pub last_message_preview: Option<String>,
     pub message_count: usize,
+    pub background_job_count: usize,
+    pub running_background_job_count: usize,
+    pub queued_background_job_count: usize,
     pub created_at: i64,
     pub updated_at: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SessionBackgroundJob {
+    pub id: String,
+    pub kind: String,
+    pub status: String,
+    pub queued_at: i64,
+    pub started_at: Option<i64>,
+    pub last_progress_message: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -196,10 +209,18 @@ fn build_session_summaries(
         .map(RunSnapshot::try_from)
         .collect::<Result<Vec<_>, _>>()
         .map_err(BootstrapError::RecordConversion)?;
+    let jobs = store
+        .list_jobs()?
+        .into_iter()
+        .map(agent_runtime::mission::JobSpec::try_from)
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(BootstrapError::RecordConversion)?;
 
     sessions
         .into_iter()
-        .map(|session| session_summary_from_session(store, config, &runs, &session, workspace))
+        .map(|session| {
+            session_summary_from_session(store, config, &runs, &jobs, &session, workspace)
+        })
         .collect()
 }
 
@@ -207,6 +228,7 @@ fn session_summary_from_session(
     store: &PersistenceStore,
     config: &AppConfig,
     runs: &[RunSnapshot],
+    jobs: &[agent_runtime::mission::JobSpec],
     session: &agent_runtime::session::Session,
     workspace: &agent_runtime::workspace::WorkspaceRef,
 ) -> Result<SessionSummary, BootstrapError> {
@@ -240,6 +262,19 @@ fn session_summary_from_session(
         .map(|run| run.updated_at)
         .max()
         .unwrap_or(session.updated_at);
+    let session_jobs = jobs
+        .iter()
+        .filter(|job| job.session_id == session.id && job.status.is_active())
+        .collect::<Vec<_>>();
+    let background_job_count = session_jobs.len();
+    let running_background_job_count = session_jobs
+        .iter()
+        .filter(|job| job.status == agent_runtime::mission::JobStatus::Running)
+        .count();
+    let queued_background_job_count = session_jobs
+        .iter()
+        .filter(|job| job.status == agent_runtime::mission::JobStatus::Queued)
+        .count();
     let updated_at = session
         .updated_at
         .max(transcript_updated_at)
@@ -260,6 +295,9 @@ fn session_summary_from_session(
         has_pending_approval: session_head.pending_approval_count > 0,
         last_message_preview,
         message_count: session_head.message_count,
+        background_job_count,
+        running_background_job_count,
+        queued_background_job_count,
         created_at: session.created_at,
         updated_at,
     })

@@ -44,6 +44,7 @@ pub trait TuiBackend: Clone + Send + Sync + 'static {
         requested_approval_id: Option<&str>,
     ) -> Result<Option<SessionPendingApproval>, BootstrapError>;
     fn render_plan(&self, session_id: &str) -> Result<String, BootstrapError>;
+    fn render_active_jobs(&self, session_id: &str) -> Result<String, BootstrapError>;
     fn compact_session(&self, session_id: &str) -> Result<SessionSummary, BootstrapError>;
     fn execute_chat_turn_with_control_and_observer(
         &self,
@@ -140,6 +141,10 @@ impl TuiBackend for App {
 
     fn render_plan(&self, session_id: &str) -> Result<String, BootstrapError> {
         App::render_plan(self, session_id)
+    }
+
+    fn render_active_jobs(&self, session_id: &str) -> Result<String, BootstrapError> {
+        App::render_session_background_jobs(self, session_id)
     }
 
     fn compact_session(&self, session_id: &str) -> Result<SessionSummary, BootstrapError> {
@@ -260,6 +265,10 @@ impl TuiBackend for DaemonClient {
 
     fn render_plan(&self, session_id: &str) -> Result<String, BootstrapError> {
         DaemonClient::render_plan(self, session_id)
+    }
+
+    fn render_active_jobs(&self, session_id: &str) -> Result<String, BootstrapError> {
+        DaemonClient::render_session_background_jobs(self, session_id)
     }
 
     fn compact_session(&self, session_id: &str) -> Result<SessionSummary, BootstrapError> {

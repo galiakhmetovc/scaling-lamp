@@ -267,6 +267,10 @@ where
             let plan = app.render_plan(&current_session_id)?;
             state.timeline_mut().push_system(&plan, unix_timestamp()?);
         }
+        Some("/jobs") => {
+            let jobs = app.render_active_jobs(&current_session_id)?;
+            state.timeline_mut().push_system(&jobs, unix_timestamp()?);
+        }
         Some("/skills") => {
             let rendered = render_session_skills(app.session_skills(&current_session_id)?);
             state
@@ -673,6 +677,7 @@ fn canonical_command(command: &str) -> Option<&'static str> {
         "/rename" | "\\переименовать" => Some("/rename"),
         "/clear" | "\\очистить" => Some("/clear"),
         "/plan" | "\\план" => Some("/plan"),
+        "/jobs" | "\\задачи" => Some("/jobs"),
         "/skills" | "\\скиллы" => Some("/skills"),
         "/enable" | "\\включить" => Some("/enable"),
         "/disable" | "\\выключить" => Some("/disable"),

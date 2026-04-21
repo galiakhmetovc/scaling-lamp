@@ -47,6 +47,8 @@ pub struct AcceptanceCriterion {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum JobKind {
+    ChatTurn,
+    ApprovalContinuation,
     MissionTurn,
     Verification,
     Delegate,
@@ -65,6 +67,8 @@ pub enum JobStatus {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum JobExecutionInput {
+    ChatTurn { message: String },
+    ApprovalContinuation { run_id: String, approval_id: String },
     MissionTurn { mission_id: String, goal: String },
     Verification { checks: Vec<String> },
     Delegate { label: String, goal: String },
@@ -79,7 +83,8 @@ pub enum JobResult {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct JobSpec {
     pub id: String,
-    pub mission_id: String,
+    pub session_id: String,
+    pub mission_id: Option<String>,
     pub run_id: Option<String>,
     pub parent_job_id: Option<String>,
     pub kind: JobKind,
@@ -91,6 +96,13 @@ pub struct JobSpec {
     pub updated_at: i64,
     pub started_at: Option<i64>,
     pub finished_at: Option<i64>,
+    pub attempt_count: u32,
+    pub max_attempts: u32,
+    pub lease_owner: Option<String>,
+    pub lease_expires_at: Option<i64>,
+    pub heartbeat_at: Option<i64>,
+    pub cancel_requested_at: Option<i64>,
+    pub last_progress_message: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -106,6 +118,7 @@ pub enum JobSpecValidationError {
         expected: JobKind,
         actual: JobKind,
     },
+    MissingMissionId,
     MissionIdMismatch {
         job_mission_id: String,
         input_mission_id: String,
@@ -246,6 +259,8 @@ impl AcceptanceCriterion {
 impl JobKind {
     pub fn as_str(self) -> &'static str {
         match self {
+            Self::ChatTurn => "chat_turn",
+            Self::ApprovalContinuation => "approval_continuation",
             Self::MissionTurn => "mission_turn",
             Self::Verification => "verification",
             Self::Delegate => "delegate",
@@ -259,6 +274,8 @@ impl TryFrom<&str> for JobKind {
 
     fn try_from(value: &str) -> Result<Self, Self::Error> {
         match value {
+            "chat_turn" => Ok(Self::ChatTurn),
+            "approval_continuation" => Ok(Self::ApprovalContinuation),
             "mission_turn" => Ok(Self::MissionTurn),
             "verification" => Ok(Self::Verification),
             "delegate" => Ok(Self::Delegate),
@@ -280,6 +297,10 @@ impl JobStatus {
             Self::Cancelled => "cancelled",
             Self::Blocked => "blocked",
         }
+    }
+
+    pub fn is_active(self) -> bool {
+        matches!(self, Self::Queued | Self::Running | Self::Blocked)
     }
 }
 
@@ -304,18 +325,21 @@ impl TryFrom<&str> for JobStatus {
 impl JobSpec {
     pub fn mission_turn(
         id: impl Into<String>,
+        session_id: impl Into<String>,
         mission_id: impl Into<String>,
         run_id: Option<&str>,
         parent_job_id: Option<&str>,
         goal: impl Into<String>,
         created_at: i64,
     ) -> Self {
+        let session_id = session_id.into();
         let mission_id = mission_id.into();
         let goal = goal.into();
 
         Self {
             id: id.into(),
-            mission_id: mission_id.clone(),
+            session_id,
+            mission_id: Some(mission_id.clone()),
             run_id: run_id.map(str::to_owned),
             parent_job_id: parent_job_id.map(str::to_owned),
             kind: JobKind::MissionTurn,
@@ -327,6 +351,48 @@ impl JobSpec {
             updated_at: created_at,
             started_at: None,
             finished_at: None,
+            attempt_count: 0,
+            max_attempts: 1,
+            lease_owner: None,
+            lease_expires_at: None,
+            heartbeat_at: None,
+            cancel_requested_at: None,
+            last_progress_message: None,
+        }
+    }
+
+    pub fn chat_turn(
+        id: impl Into<String>,
+        session_id: impl Into<String>,
+        run_id: Option<&str>,
+        parent_job_id: Option<&str>,
+        message: impl Into<String>,
+        created_at: i64,
+    ) -> Self {
+        Self {
+            id: id.into(),
+            session_id: session_id.into(),
+            mission_id: None,
+            run_id: run_id.map(str::to_owned),
+            parent_job_id: parent_job_id.map(str::to_owned),
+            kind: JobKind::ChatTurn,
+            status: JobStatus::Queued,
+            input: JobExecutionInput::ChatTurn {
+                message: message.into(),
+            },
+            result: None,
+            error: None,
+            created_at,
+            updated_at: created_at,
+            started_at: None,
+            finished_at: None,
+            attempt_count: 0,
+            max_attempts: 1,
+            lease_owner: None,
+            lease_expires_at: None,
+            heartbeat_at: None,
+            cancel_requested_at: None,
+            last_progress_message: None,
         }
     }
 
@@ -339,13 +405,17 @@ impl JobSpec {
             });
         }
 
-        if let JobExecutionInput::MissionTurn { mission_id, .. } = &self.input
-            && mission_id != &self.mission_id
-        {
-            return Err(JobSpecValidationError::MissionIdMismatch {
-                job_mission_id: self.mission_id.clone(),
-                input_mission_id: mission_id.clone(),
-            });
+        if let JobExecutionInput::MissionTurn { mission_id, .. } = &self.input {
+            let Some(job_mission_id) = self.mission_id.as_ref() else {
+                return Err(JobSpecValidationError::MissingMissionId);
+            };
+
+            if mission_id != job_mission_id {
+                return Err(JobSpecValidationError::MissionIdMismatch {
+                    job_mission_id: job_mission_id.clone(),
+                    input_mission_id: mission_id.clone(),
+                });
+            }
         }
 
         Ok(())
@@ -355,6 +425,8 @@ impl JobSpec {
 impl JobExecutionInput {
     pub fn kind(&self) -> JobKind {
         match self {
+            Self::ChatTurn { .. } => JobKind::ChatTurn,
+            Self::ApprovalContinuation { .. } => JobKind::ApprovalContinuation,
             Self::MissionTurn { .. } => JobKind::MissionTurn,
             Self::Verification { .. } => JobKind::Verification,
             Self::Delegate { .. } => JobKind::Delegate,
@@ -391,6 +463,9 @@ impl fmt::Display for JobSpecValidationError {
                 expected.as_str(),
                 actual.as_str()
             ),
+            Self::MissingMissionId => {
+                write!(formatter, "mission turn jobs require a mission_id")
+            }
             Self::MissionIdMismatch {
                 job_mission_id,
                 input_mission_id,
@@ -454,6 +529,7 @@ mod tests {
     fn job_spec_tracks_mission_turn_inputs_and_parent_relationships() {
         let job = JobSpec::mission_turn(
             "job-1",
+            "session-1",
             "mission-1",
             Some("run-1"),
             Some("job-root"),
@@ -463,7 +539,8 @@ mod tests {
 
         assert_eq!(job.kind, JobKind::MissionTurn);
         assert_eq!(job.status, JobStatus::Queued);
-        assert_eq!(job.mission_id, "mission-1");
+        assert_eq!(job.session_id, "session-1");
+        assert_eq!(job.mission_id.as_deref(), Some("mission-1"));
         assert_eq!(job.run_id.as_deref(), Some("run-1"));
         assert_eq!(job.parent_job_id.as_deref(), Some("job-root"));
         assert_eq!(
@@ -477,7 +554,15 @@ mod tests {
 
     #[test]
     fn job_spec_rejects_mismatched_kind_and_input_payloads() {
-        let mut job = JobSpec::mission_turn("job-1", "mission-1", None, None, "finish runtime", 10);
+        let mut job = JobSpec::mission_turn(
+            "job-1",
+            "session-1",
+            "mission-1",
+            None,
+            None,
+            "finish runtime",
+            10,
+        );
         job.kind = JobKind::Delegate;
 
         assert_eq!(
@@ -491,7 +576,15 @@ mod tests {
 
     #[test]
     fn job_spec_rejects_mismatched_mission_turn_identifiers() {
-        let mut job = JobSpec::mission_turn("job-1", "mission-1", None, None, "finish runtime", 10);
+        let mut job = JobSpec::mission_turn(
+            "job-1",
+            "session-1",
+            "mission-1",
+            None,
+            None,
+            "finish runtime",
+            10,
+        );
         job.input = JobExecutionInput::MissionTurn {
             mission_id: "mission-2".to_string(),
             goal: "finish runtime".to_string(),
@@ -504,5 +597,14 @@ mod tests {
                 input_mission_id: "mission-2".to_string(),
             })
         );
+    }
+
+    #[test]
+    fn session_scoped_background_jobs_validate_without_a_mission() {
+        let job = JobSpec::chat_turn("job-bg", "session-1", None, None, "hello", 20);
+
+        assert_eq!(job.kind, JobKind::ChatTurn);
+        assert!(job.mission_id.is_none());
+        assert!(job.validate().is_ok());
     }
 }

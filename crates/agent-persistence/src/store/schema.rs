@@ -50,7 +50,8 @@ pub(super) fn bootstrap_schema(connection: &Connection) -> Result<(), StoreError
 
          CREATE TABLE IF NOT EXISTS jobs (
              id TEXT PRIMARY KEY,
-             mission_id TEXT NOT NULL,
+             session_id TEXT NOT NULL,
+             mission_id TEXT,
              run_id TEXT,
              parent_job_id TEXT,
              kind TEXT NOT NULL,
@@ -62,7 +63,15 @@ pub(super) fn bootstrap_schema(connection: &Connection) -> Result<(), StoreError
              updated_at INTEGER NOT NULL,
              started_at INTEGER,
              finished_at INTEGER,
-             FOREIGN KEY(mission_id) REFERENCES missions(id) ON DELETE CASCADE,
+             attempt_count INTEGER NOT NULL DEFAULT 0,
+             max_attempts INTEGER NOT NULL DEFAULT 1,
+             lease_owner TEXT,
+             lease_expires_at INTEGER,
+             heartbeat_at INTEGER,
+             cancel_requested_at INTEGER,
+             last_progress_message TEXT,
+             FOREIGN KEY(session_id) REFERENCES sessions(id) ON DELETE CASCADE,
+             FOREIGN KEY(mission_id) REFERENCES missions(id) ON DELETE SET NULL,
              FOREIGN KEY(run_id) REFERENCES runs(id) ON DELETE SET NULL,
              FOREIGN KEY(parent_job_id) REFERENCES jobs(id) ON DELETE SET NULL
          );
@@ -122,6 +131,7 @@ pub(super) fn bootstrap_schema(connection: &Connection) -> Result<(), StoreError
         "CREATE INDEX IF NOT EXISTS idx_missions_session_id ON missions(session_id);
          CREATE INDEX IF NOT EXISTS idx_runs_session_id ON runs(session_id);
          CREATE INDEX IF NOT EXISTS idx_runs_mission_id ON runs(mission_id);
+         CREATE INDEX IF NOT EXISTS idx_jobs_session_id ON jobs(session_id);
          CREATE INDEX IF NOT EXISTS idx_jobs_mission_id ON jobs(mission_id);
          CREATE INDEX IF NOT EXISTS idx_jobs_run_id ON jobs(run_id);
          CREATE INDEX IF NOT EXISTS idx_jobs_parent_job_id ON jobs(parent_job_id);
@@ -139,7 +149,15 @@ pub(super) fn validate_schema(connection: &Connection) -> Result<(), StoreError>
     validate_column(connection, "missions", "execution_intent", true)?;
     validate_column(connection, "missions", "schedule_json", true)?;
     validate_column(connection, "missions", "acceptance_json", true)?;
-    validate_column(connection, "jobs", "mission_id", true)?;
+    validate_column(connection, "jobs", "session_id", true)?;
+    validate_column(connection, "jobs", "mission_id", false)?;
+    validate_column(connection, "jobs", "attempt_count", true)?;
+    validate_column(connection, "jobs", "max_attempts", true)?;
+    validate_column(connection, "jobs", "lease_owner", false)?;
+    validate_column(connection, "jobs", "lease_expires_at", false)?;
+    validate_column(connection, "jobs", "heartbeat_at", false)?;
+    validate_column(connection, "jobs", "cancel_requested_at", false)?;
+    validate_column(connection, "jobs", "last_progress_message", false)?;
     validate_column(connection, "sessions", "settings_json", true)?;
     validate_column(connection, "runs", "evidence_refs_json", true)?;
     validate_column(connection, "runs", "recent_steps_json", true)?;
@@ -184,7 +202,8 @@ pub(super) fn validate_schema(connection: &Connection) -> Result<(), StoreError>
         "CASCADE",
     )?;
     validate_foreign_key(connection, "artifacts", "session_id", "sessions", "CASCADE")?;
-    validate_foreign_key(connection, "jobs", "mission_id", "missions", "CASCADE")?;
+    validate_foreign_key(connection, "jobs", "session_id", "sessions", "CASCADE")?;
+    validate_foreign_key(connection, "jobs", "mission_id", "missions", "SET NULL")?;
     validate_foreign_key(
         connection,
         "sessions",
@@ -297,12 +316,30 @@ pub(super) fn migrate_jobs_table(connection: &Connection) -> Result<(), StoreErr
         return Ok(());
     }
 
-    if table_has_column(connection, "jobs", "mission_id")?
-        && foreign_key_exists(connection, "jobs", "mission_id", "missions", "CASCADE")?
+    let legacy_has_mission_id = table_has_column(connection, "jobs", "mission_id")?;
+    if table_has_column(connection, "jobs", "session_id")?
+        && table_has_column(connection, "jobs", "mission_id")?
+        && table_has_column(connection, "jobs", "attempt_count")?
+        && table_has_column(connection, "jobs", "max_attempts")?
+        && table_has_column(connection, "jobs", "lease_owner")?
+        && table_has_column(connection, "jobs", "lease_expires_at")?
+        && table_has_column(connection, "jobs", "heartbeat_at")?
+        && table_has_column(connection, "jobs", "cancel_requested_at")?
+        && table_has_column(connection, "jobs", "last_progress_message")?
+        && foreign_key_exists(connection, "jobs", "session_id", "sessions", "CASCADE")?
+        && foreign_key_exists(connection, "jobs", "mission_id", "missions", "SET NULL")?
         && foreign_key_exists(connection, "jobs", "run_id", "runs", "SET NULL")?
     {
         return Ok(());
     }
+
+    let mission_id_expr = if legacy_has_mission_id {
+        format!(
+            "COALESCE(jobs_legacy.mission_id, runs.mission_id, '{LEGACY_MISSION_PREFIX}' || runs.id)"
+        )
+    } else {
+        format!("COALESCE(runs.mission_id, '{LEGACY_MISSION_PREFIX}' || runs.id)")
+    };
 
     connection.execute_batch(&format!(
         "PRAGMA foreign_keys = OFF;
@@ -339,7 +376,8 @@ pub(super) fn migrate_jobs_table(connection: &Connection) -> Result<(), StoreErr
            );
          CREATE TABLE jobs (
              id TEXT PRIMARY KEY,
-             mission_id TEXT NOT NULL,
+             session_id TEXT NOT NULL,
+             mission_id TEXT,
              run_id TEXT,
              parent_job_id TEXT,
              kind TEXT NOT NULL,
@@ -351,17 +389,28 @@ pub(super) fn migrate_jobs_table(connection: &Connection) -> Result<(), StoreErr
              updated_at INTEGER NOT NULL,
              started_at INTEGER,
              finished_at INTEGER,
-             FOREIGN KEY(mission_id) REFERENCES missions(id) ON DELETE CASCADE,
+             attempt_count INTEGER NOT NULL DEFAULT 0,
+             max_attempts INTEGER NOT NULL DEFAULT 1,
+             lease_owner TEXT,
+             lease_expires_at INTEGER,
+             heartbeat_at INTEGER,
+             cancel_requested_at INTEGER,
+             last_progress_message TEXT,
+             FOREIGN KEY(session_id) REFERENCES sessions(id) ON DELETE CASCADE,
+             FOREIGN KEY(mission_id) REFERENCES missions(id) ON DELETE SET NULL,
              FOREIGN KEY(run_id) REFERENCES runs(id) ON DELETE SET NULL,
              FOREIGN KEY(parent_job_id) REFERENCES jobs(id) ON DELETE SET NULL
          );
          INSERT INTO jobs (
-             id, mission_id, run_id, parent_job_id, kind, status, input_json, result_json, error,
-             created_at, updated_at, started_at, finished_at
+             id, session_id, mission_id, run_id, parent_job_id, kind, status, input_json,
+             result_json, error, created_at, updated_at, started_at, finished_at, attempt_count,
+             max_attempts, lease_owner, lease_expires_at, heartbeat_at, cancel_requested_at,
+             last_progress_message
          )
          SELECT
              jobs_legacy.id,
-             COALESCE(runs.mission_id, '{LEGACY_MISSION_PREFIX}' || runs.id),
+             COALESCE(missions.session_id, runs.session_id),
+             {mission_id_expr},
              jobs_legacy.run_id,
              jobs_legacy.parent_job_id,
              jobs_legacy.kind,
@@ -372,9 +421,17 @@ pub(super) fn migrate_jobs_table(connection: &Connection) -> Result<(), StoreErr
              jobs_legacy.created_at,
              jobs_legacy.updated_at,
              jobs_legacy.started_at,
-             jobs_legacy.finished_at
+             jobs_legacy.finished_at,
+             0,
+             1,
+             NULL,
+             NULL,
+             NULL,
+             NULL,
+             NULL
          FROM jobs_legacy
-         INNER JOIN runs ON runs.id = jobs_legacy.run_id;
+         INNER JOIN runs ON runs.id = jobs_legacy.run_id
+         LEFT JOIN missions ON missions.id = {mission_id_expr};
          DROP TABLE jobs_legacy;
          COMMIT;
          PRAGMA foreign_keys = ON;"

@@ -1,6 +1,7 @@
 use super::*;
 use crate::http::types::{
-    ClearSessionRequest, CreateSessionRequest, SessionDetailResponse, SkillCommandRequest,
+    ClearSessionRequest, CreateSessionRequest, SessionBackgroundJobsResponse,
+    SessionDetailResponse, SkillCommandRequest,
 };
 
 impl DaemonClient {
@@ -145,6 +146,38 @@ impl DaemonClient {
             .and_then(serde_json::Value::as_str)
             .map(str::to_string)
             .ok_or_else(|| BootstrapError::Stream(std::io::Error::other("missing plan field")))
+    }
+
+    pub fn session_background_jobs(
+        &self,
+        session_id: &str,
+    ) -> Result<Vec<SessionBackgroundJob>, BootstrapError> {
+        let jobs: SessionBackgroundJobsResponse =
+            self.get_json(&format!("/v1/sessions/{session_id}/jobs"))?;
+        Ok(jobs.into_iter().map(SessionBackgroundJob::from).collect())
+    }
+
+    pub fn render_session_background_jobs(
+        &self,
+        session_id: &str,
+    ) -> Result<String, BootstrapError> {
+        let jobs = self.session_background_jobs(session_id)?;
+        if jobs.is_empty() {
+            return Ok("jobs: none active".to_string());
+        }
+
+        let mut lines = vec!["Jobs:".to_string()];
+        for job in jobs {
+            lines.push(format!("- [{}] {} ({})", job.status, job.id, job.kind));
+            lines.push(format!("  queued_at: {}", job.queued_at));
+            if let Some(started_at) = job.started_at {
+                lines.push(format!("  started_at: {started_at}"));
+            }
+            if let Some(progress) = job.last_progress_message {
+                lines.push(format!("  progress: {progress}"));
+            }
+        }
+        Ok(lines.join("\n"))
     }
 
     pub fn compact_session(&self, session_id: &str) -> Result<SessionSummary, BootstrapError> {

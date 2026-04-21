@@ -1,6 +1,11 @@
 use super::*;
+use agent_persistence::JobRepository;
+use agent_runtime::mission::JobSpec;
 use agent_runtime::session::{Session, TranscriptEntry};
 use agent_runtime::skills::{resolve_session_skill_status, scan_skill_catalog};
+use time::OffsetDateTime;
+use time::UtcOffset;
+use time::format_description::well_known::Rfc3339;
 
 impl App {
     #[cfg_attr(not(test), allow(dead_code))]
@@ -126,6 +131,69 @@ impl App {
                 .into_iter()
                 .map(|skill| format!("- [{}] {}: {}", skill.mode, skill.name, skill.description)),
         );
+        Ok(lines.join("\n"))
+    }
+
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub fn session_background_jobs(
+        &self,
+        session_id: &str,
+    ) -> Result<Vec<SessionBackgroundJob>, BootstrapError> {
+        let store = self.store()?;
+        if store.get_session(session_id)?.is_none() {
+            return Err(BootstrapError::MissingRecord {
+                kind: "session",
+                id: session_id.to_string(),
+            });
+        }
+
+        store
+            .list_active_jobs_for_session(session_id)?
+            .into_iter()
+            .map(JobSpec::try_from)
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(BootstrapError::RecordConversion)
+            .map(|jobs| {
+                jobs.into_iter()
+                    .map(|job| SessionBackgroundJob {
+                        id: job.id,
+                        kind: job.kind.as_str().to_string(),
+                        status: job.status.as_str().to_string(),
+                        queued_at: job.created_at,
+                        started_at: job.started_at,
+                        last_progress_message: job.last_progress_message,
+                    })
+                    .collect()
+            })
+    }
+
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub fn render_session_background_jobs(
+        &self,
+        session_id: &str,
+    ) -> Result<String, BootstrapError> {
+        let jobs = self.session_background_jobs(session_id)?;
+        if jobs.is_empty() {
+            return Ok("jobs: none active".to_string());
+        }
+
+        let mut lines = vec!["Jobs:".to_string()];
+        for job in jobs {
+            lines.push(format!("- [{}] {} ({})", job.status, job.id, job.kind));
+            lines.push(format!(
+                "  queued: {}",
+                format_background_job_time(job.queued_at)
+            ));
+            if let Some(started_at) = job.started_at {
+                lines.push(format!(
+                    "  started: {}",
+                    format_background_job_time(started_at)
+                ));
+            }
+            if let Some(progress) = job.last_progress_message {
+                lines.push(format!("  progress: {progress}"));
+            }
+        }
         Ok(lines.join("\n"))
     }
 
@@ -268,4 +336,15 @@ impl App {
             source,
         })
     }
+}
+
+fn format_background_job_time(timestamp: i64) -> String {
+    OffsetDateTime::from_unix_timestamp(timestamp)
+        .map(|value| {
+            value
+                .to_offset(UtcOffset::UTC)
+                .format(&Rfc3339)
+                .unwrap_or_else(|_| timestamp.to_string())
+        })
+        .unwrap_or_else(|_| timestamp.to_string())
 }

@@ -254,7 +254,7 @@ pub(super) fn show_job(store: &PersistenceStore, id: &str) -> Result<String, Boo
     Ok(format!(
         "job id={} mission_id={} run_id={} kind={} status={} input={} result={}",
         record.id,
-        record.mission_id,
+        record.mission_id.as_deref().unwrap_or("<none>"),
         record.run_id.as_deref().unwrap_or("<none>"),
         record.kind,
         record.status,

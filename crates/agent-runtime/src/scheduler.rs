@@ -178,6 +178,7 @@ impl SupervisorLoop {
 
             actions.push(SupervisorAction::QueueJob(Box::new(JobSpec::mission_turn(
                 format!("{}-mission-turn-{}", mission.id, input.now),
+                mission.session_id.clone(),
                 mission.id.clone(),
                 None,
                 None,
@@ -212,7 +213,9 @@ impl SupervisorLoop {
                     .schedule
                     .not_before
                     .is_none_or(|not_before| now >= not_before)
-                    && jobs.iter().all(|job| job.mission_id != mission.id)
+                    && jobs
+                        .iter()
+                        .all(|job| job.mission_id.as_deref() != Some(mission.id.as_str()))
             }
             MissionExecutionIntent::Scheduled => {
                 if mission
@@ -224,7 +227,7 @@ impl SupervisorLoop {
                 }
 
                 if jobs.iter().any(|job| {
-                    job.mission_id == mission.id
+                    job.mission_id.as_deref() == Some(mission.id.as_str())
                         && job.kind == JobKind::MissionTurn
                         && matches!(
                             job.status,
@@ -264,7 +267,7 @@ fn count_active_runs(runs: &[RunSnapshot]) -> usize {
 
 fn mission_has_open_jobs(mission: &MissionSpec, jobs: &[JobSpec]) -> bool {
     jobs.iter().any(|job| {
-        job.mission_id == mission.id
+        job.mission_id.as_deref() == Some(mission.id.as_str())
             && matches!(
                 job.status,
                 JobStatus::Queued | JobStatus::Running | JobStatus::Blocked
@@ -280,7 +283,10 @@ fn mission_has_terminal_run(mission: &MissionSpec, runs: &[RunSnapshot]) -> bool
 
 fn latest_finished_mission_turn_at(mission: &MissionSpec, jobs: &[JobSpec]) -> Option<i64> {
     jobs.iter()
-        .filter(|job| job.mission_id == mission.id && job.kind == JobKind::MissionTurn)
+        .filter(|job| {
+            job.mission_id.as_deref() == Some(mission.id.as_str())
+                && job.kind == JobKind::MissionTurn
+        })
         .filter_map(|job| job.finished_at.or(Some(job.updated_at)))
         .max()
 }
@@ -316,6 +322,7 @@ mod tests {
             tick.actions,
             vec![SupervisorAction::QueueJob(Box::new(JobSpec::mission_turn(
                 "mission-1-mission-turn-60",
+                "session-1",
                 "mission-1",
                 None,
                 None,
@@ -355,7 +362,8 @@ mod tests {
             SupervisorLoop::new(SupervisorPolicy::default(), AutonomyBudget::new(1, 1));
         let job = JobSpec {
             id: "job-1".to_string(),
-            mission_id: "mission-1".to_string(),
+            session_id: "session-1".to_string(),
+            mission_id: Some("mission-1".to_string()),
             run_id: None,
             parent_job_id: None,
             kind: JobKind::Delegate,
@@ -370,6 +378,13 @@ mod tests {
             updated_at: 10,
             started_at: None,
             finished_at: None,
+            attempt_count: 0,
+            max_attempts: 1,
+            lease_owner: None,
+            lease_expires_at: None,
+            heartbeat_at: None,
+            cancel_requested_at: None,
+            last_progress_message: None,
         };
 
         let tick = supervisor.tick(SupervisorTickInput {

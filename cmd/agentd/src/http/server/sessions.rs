@@ -1,8 +1,9 @@
 use super::*;
 use crate::http::types::{
-    ClearSessionRequest, CreateSessionRequest, ErrorResponse, SessionDetailResponse,
-    SessionPendingApprovalsResponse, SessionPreferencesRequest, SessionSkillsResponse,
-    SessionSummaryResponse, SessionTranscriptResponse, SkillCommandRequest,
+    ClearSessionRequest, CreateSessionRequest, ErrorResponse, SessionBackgroundJobResponse,
+    SessionBackgroundJobsResponse, SessionDetailResponse, SessionPendingApprovalsResponse,
+    SessionPreferencesRequest, SessionSkillsResponse, SessionSummaryResponse,
+    SessionTranscriptResponse, SkillCommandRequest,
 };
 use agent_persistence::SessionRepository;
 use tiny_http::Method;
@@ -94,6 +95,9 @@ pub(super) fn handle_nested_routes(app: &App, request: Request) -> std::io::Resu
         }
         (Method::Get, [session_id, approvals]) if approvals == "approvals" => {
             handle_pending_approvals(app, request, session_id.as_str())
+        }
+        (Method::Get, [session_id, jobs]) if jobs == "jobs" => {
+            handle_session_background_jobs(app, request, session_id.as_str())
         }
         (Method::Get, [session_id, skills]) if skills == "skills" => {
             handle_session_skills(app, request, session_id.as_str())
@@ -197,6 +201,26 @@ fn handle_pending_approvals(app: &App, request: Request, session_id: &str) -> st
     match app.pending_approvals(session_id) {
         Ok(approvals) => {
             respond_json::<SessionPendingApprovalsResponse>(request, StatusCode(200), &approvals)
+        }
+        Err(error) => {
+            let (status, payload) = map_bootstrap_error(error);
+            respond_json(request, status, &payload)
+        }
+    }
+}
+
+fn handle_session_background_jobs(
+    app: &App,
+    request: Request,
+    session_id: &str,
+) -> std::io::Result<()> {
+    match app.session_background_jobs(session_id) {
+        Ok(jobs) => {
+            let response = jobs
+                .into_iter()
+                .map(SessionBackgroundJobResponse::from)
+                .collect::<Vec<_>>();
+            respond_json::<SessionBackgroundJobsResponse>(request, StatusCode(200), &response)
         }
         Err(error) => {
             let (status, payload) = map_bootstrap_error(error);

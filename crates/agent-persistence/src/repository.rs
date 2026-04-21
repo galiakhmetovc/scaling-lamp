@@ -28,6 +28,8 @@ pub trait JobRepository {
     fn put_job(&self, record: &JobRecord) -> Result<(), StoreError>;
     fn get_job(&self, id: &str) -> Result<Option<JobRecord>, StoreError>;
     fn list_jobs(&self) -> Result<Vec<JobRecord>, StoreError>;
+    fn list_jobs_for_session(&self, session_id: &str) -> Result<Vec<JobRecord>, StoreError>;
+    fn list_active_jobs_for_session(&self, session_id: &str) -> Result<Vec<JobRecord>, StoreError>;
 }
 
 pub trait TranscriptRepository {

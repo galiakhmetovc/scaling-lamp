@@ -1,9 +1,14 @@
-use agent_persistence::AppConfig;
+use agent_persistence::{
+    AppConfig, JobRecord, JobRepository, MissionRecord, MissionRepository, PersistenceStore,
+};
+use agent_runtime::mission::{
+    JobExecutionInput, MissionExecutionIntent, MissionSchedule, MissionStatus,
+};
 use agentd::bootstrap;
 use agentd::daemon;
 use agentd::http::types::{
-    CreateSessionRequest, DaemonStopResponse, ErrorResponse, SessionSummaryResponse,
-    SkillCommandRequest, StatusResponse,
+    CreateSessionRequest, DaemonStopResponse, ErrorResponse, SessionBackgroundJobResponse,
+    SessionSummaryResponse, SkillCommandRequest, StatusResponse,
 };
 use reqwest::StatusCode;
 use reqwest::blocking::Client;
@@ -208,4 +213,86 @@ fn daemon_http_stop_shuts_down_a_running_server() {
     assert!(result.is_err(), "daemon should stop answering status");
 
     handle.stop().expect("join stopped daemon");
+}
+
+#[test]
+fn daemon_http_exposes_current_session_background_jobs_and_counts() {
+    let (_temp, app, base_url) = test_app(Some("secret-token"));
+    let session = app
+        .create_session_auto(Some("Daemon Jobs Session"))
+        .expect("create session");
+    let store = PersistenceStore::open(&app.persistence).expect("open store");
+    store
+        .put_mission(&MissionRecord {
+            id: "mission-daemon-jobs".to_string(),
+            session_id: session.id.clone(),
+            objective: "Watch jobs".to_string(),
+            status: MissionStatus::Running.as_str().to_string(),
+            execution_intent: MissionExecutionIntent::Autonomous.as_str().to_string(),
+            schedule_json: serde_json::to_string(&MissionSchedule::once()).expect("schedule"),
+            acceptance_json: "[]".to_string(),
+            created_at: 1,
+            updated_at: 1,
+            completed_at: None,
+        })
+        .expect("put mission");
+    store
+        .put_job(&JobRecord {
+            id: "job-daemon-queued".to_string(),
+            session_id: session.id.clone(),
+            mission_id: Some("mission-daemon-jobs".to_string()),
+            run_id: None,
+            parent_job_id: None,
+            kind: "maintenance".to_string(),
+            status: "queued".to_string(),
+            input_json: Some(
+                serde_json::to_string(&JobExecutionInput::Maintenance {
+                    summary: "daemon queue".to_string(),
+                })
+                .expect("serialize input"),
+            ),
+            result_json: None,
+            error: None,
+            created_at: 2,
+            updated_at: 2,
+            started_at: None,
+            finished_at: None,
+            attempt_count: 0,
+            max_attempts: 1,
+            lease_owner: None,
+            lease_expires_at: None,
+            heartbeat_at: None,
+            cancel_requested_at: None,
+            last_progress_message: Some("queued via daemon".to_string()),
+        })
+        .expect("put job");
+    let handle = daemon::spawn_for_test(app).expect("spawn daemon");
+    let client = Client::new();
+
+    let summary = client
+        .get(format!("{base_url}/v1/sessions/{}", session.id))
+        .bearer_auth("secret-token")
+        .send()
+        .expect("summary request");
+    assert_eq!(summary.status(), StatusCode::OK);
+    let summary: SessionSummaryResponse = summary.json().expect("summary json");
+    assert_eq!(summary.background_job_count, 1);
+    assert_eq!(summary.queued_background_job_count, 1);
+
+    let jobs = client
+        .get(format!("{base_url}/v1/sessions/{}/jobs", session.id))
+        .bearer_auth("secret-token")
+        .send()
+        .expect("jobs request");
+    assert_eq!(jobs.status(), StatusCode::OK);
+    let jobs: Vec<SessionBackgroundJobResponse> = jobs.json().expect("jobs json");
+    assert_eq!(jobs.len(), 1);
+    assert_eq!(jobs[0].id, "job-daemon-queued");
+    assert_eq!(jobs[0].status, "queued");
+    assert_eq!(
+        jobs[0].last_progress_message.as_deref(),
+        Some("queued via daemon")
+    );
+
+    handle.stop().expect("stop daemon");
 }

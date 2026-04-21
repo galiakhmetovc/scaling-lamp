@@ -1,6 +1,6 @@
 use crate::bootstrap::{
-    SessionPendingApproval, SessionPreferencesPatch, SessionSkillStatus, SessionSummary,
-    SessionTranscriptView,
+    SessionBackgroundJob, SessionPendingApproval, SessionPreferencesPatch, SessionSkillStatus,
+    SessionSummary, SessionTranscriptView,
 };
 use crate::execution::{ApprovalContinuationReport, ChatExecutionEvent, ChatTurnExecutionReport};
 use serde::{Deserialize, Serialize};
@@ -48,6 +48,9 @@ pub struct SessionSummaryResponse {
     pub has_pending_approval: bool,
     pub last_message_preview: Option<String>,
     pub message_count: usize,
+    pub background_job_count: usize,
+    pub running_background_job_count: usize,
+    pub queued_background_job_count: usize,
     pub created_at: i64,
     pub updated_at: i64,
 }
@@ -76,8 +79,34 @@ impl From<SessionSummary> for SessionSummaryResponse {
             has_pending_approval: value.has_pending_approval,
             last_message_preview: value.last_message_preview,
             message_count: value.message_count,
+            background_job_count: value.background_job_count,
+            running_background_job_count: value.running_background_job_count,
+            queued_background_job_count: value.queued_background_job_count,
             created_at: value.created_at,
             updated_at: value.updated_at,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SessionBackgroundJobResponse {
+    pub id: String,
+    pub kind: String,
+    pub status: String,
+    pub queued_at: i64,
+    pub started_at: Option<i64>,
+    pub last_progress_message: Option<String>,
+}
+
+impl From<SessionBackgroundJob> for SessionBackgroundJobResponse {
+    fn from(value: SessionBackgroundJob) -> Self {
+        Self {
+            id: value.id,
+            kind: value.kind,
+            status: value.status,
+            queued_at: value.queued_at,
+            started_at: value.started_at,
+            last_progress_message: value.last_progress_message,
         }
     }
 }
@@ -131,3 +160,4 @@ pub type SessionTranscriptResponse = SessionTranscriptView;
 pub type SessionPendingApprovalsResponse = Vec<SessionPendingApproval>;
 pub type SessionPreferencesRequest = SessionPreferencesPatch;
 pub type SessionSkillsResponse = Vec<SessionSkillStatus>;
+pub type SessionBackgroundJobsResponse = Vec<SessionBackgroundJobResponse>;

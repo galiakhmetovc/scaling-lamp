@@ -61,7 +61,8 @@ fn open_bootstraps_schema_and_round_trips_structured_and_file_backed_data() {
     };
     let job = JobRecord {
         id: "job-1".to_string(),
-        mission_id: mission.id.clone(),
+        session_id: session.id.clone(),
+        mission_id: Some(mission.id.clone()),
         run_id: Some(run.id.clone()),
         parent_job_id: None,
         kind: "maintenance".to_string(),
@@ -78,6 +79,13 @@ fn open_bootstraps_schema_and_round_trips_structured_and_file_backed_data() {
         updated_at: 5,
         started_at: None,
         finished_at: None,
+        attempt_count: 0,
+        max_attempts: 1,
+        lease_owner: None,
+        lease_expires_at: None,
+        heartbeat_at: None,
+        cancel_requested_at: None,
+        last_progress_message: None,
     };
     let transcript = TranscriptRecord {
         id: "transcript-1".to_string(),
@@ -559,7 +567,8 @@ fn open_migrates_legacy_mission_and_job_schema() {
         reopened.get_job("job-1").expect("get migrated job"),
         Some(JobRecord {
             id: "job-1".to_string(),
-            mission_id: format!("{LEGACY_MISSION_PREFIX}run-1"),
+            session_id: "session-1".to_string(),
+            mission_id: Some(format!("{LEGACY_MISSION_PREFIX}run-1")),
             run_id: Some("run-1".to_string()),
             parent_job_id: None,
             kind: "maintenance".to_string(),
@@ -576,6 +585,13 @@ fn open_migrates_legacy_mission_and_job_schema() {
             updated_at: 5,
             started_at: None,
             finished_at: None,
+            attempt_count: 0,
+            max_attempts: 1,
+            lease_owner: None,
+            lease_expires_at: None,
+            heartbeat_at: None,
+            cancel_requested_at: None,
+            last_progress_message: None,
         })
     );
     assert_eq!(
@@ -793,7 +809,8 @@ fn list_execution_records_orders_sessions_missions_jobs_and_runs_stably() {
 
     let job_b = JobRecord {
         id: "job-b".to_string(),
-        mission_id: mission_b.id.clone(),
+        session_id: session_b.id.clone(),
+        mission_id: Some(mission_b.id.clone()),
         run_id: Some(run_b.id.clone()),
         parent_job_id: None,
         kind: "mission_turn".to_string(),
@@ -811,10 +828,18 @@ fn list_execution_records_orders_sessions_missions_jobs_and_runs_stably() {
         updated_at: 4,
         started_at: None,
         finished_at: None,
+        attempt_count: 0,
+        max_attempts: 1,
+        lease_owner: None,
+        lease_expires_at: None,
+        heartbeat_at: None,
+        cancel_requested_at: None,
+        last_progress_message: None,
     };
     let job_a = JobRecord {
         id: "job-a".to_string(),
-        mission_id: mission_a.id.clone(),
+        session_id: session_a.id.clone(),
+        mission_id: Some(mission_a.id.clone()),
         run_id: Some(run_a.id.clone()),
         parent_job_id: None,
         kind: "mission_turn".to_string(),
@@ -832,6 +857,13 @@ fn list_execution_records_orders_sessions_missions_jobs_and_runs_stably() {
         updated_at: 4,
         started_at: None,
         finished_at: None,
+        attempt_count: 0,
+        max_attempts: 1,
+        lease_owner: None,
+        lease_expires_at: None,
+        heartbeat_at: None,
+        cancel_requested_at: None,
+        last_progress_message: None,
     };
     store.put_job(&job_b).expect("put job b");
     store.put_job(&job_a).expect("put job a");
@@ -901,7 +933,8 @@ fn load_execution_state_returns_one_typed_snapshot_for_scheduler_inputs() {
     };
     let job = JobRecord {
         id: "job-1".to_string(),
-        mission_id: mission.id.clone(),
+        session_id: session.id.clone(),
+        mission_id: Some(mission.id.clone()),
         run_id: None,
         parent_job_id: None,
         kind: "mission_turn".to_string(),
@@ -919,6 +952,13 @@ fn load_execution_state_returns_one_typed_snapshot_for_scheduler_inputs() {
         updated_at: 4,
         started_at: None,
         finished_at: None,
+        attempt_count: 0,
+        max_attempts: 1,
+        lease_owner: None,
+        lease_expires_at: None,
+        heartbeat_at: None,
+        cancel_requested_at: None,
+        last_progress_message: None,
     };
     let run = RunRecord {
         id: "run-1".to_string(),
@@ -1040,6 +1080,37 @@ fn open_removes_payloads_that_do_not_match_metadata() {
             .artifacts_dir
             .join("artifact-1.bin")
             .exists()
+    );
+}
+
+#[test]
+fn jobs_schema_includes_session_scoped_background_columns() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let scaffold = PersistenceScaffold::from_config(crate::AppConfig {
+        data_dir: temp.path().join("state-root"),
+        ..crate::AppConfig::default()
+    });
+    let store = super::PersistenceStore::open(&scaffold).expect("open store");
+
+    let mut statement = store
+        .connection
+        .prepare("PRAGMA table_info(jobs)")
+        .expect("prepare pragma");
+    let mut rows = statement.query([]).expect("query pragma");
+    let mut columns = Vec::new();
+    while let Some(row) = rows.next().expect("next pragma row") {
+        columns.push(row.get::<_, String>(1).expect("column name"));
+    }
+
+    assert!(columns.iter().any(|column| column == "session_id"));
+    assert!(columns.iter().any(|column| column == "attempt_count"));
+    assert!(columns.iter().any(|column| column == "lease_owner"));
+    assert!(columns.iter().any(|column| column == "heartbeat_at"));
+    assert!(columns.iter().any(|column| column == "cancel_requested_at"));
+    assert!(
+        columns
+            .iter()
+            .any(|column| column == "last_progress_message")
     );
 }
 

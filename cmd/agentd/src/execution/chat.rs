@@ -230,13 +230,20 @@ impl ExecutionService {
             Session::try_from(session_record).map_err(ExecutionError::RecordConversion)?;
         let mut job = self.find_job_by_run_id(store, run_id)?;
         let mut mission = if let Some(job) = job.as_ref() {
+            let mission_id =
+                job.mission_id
+                    .clone()
+                    .ok_or_else(|| ExecutionError::UnsupportedJobInput {
+                        id: job.id.clone(),
+                        kind: job.kind.as_str().to_string(),
+                    })?;
             Some(
                 MissionSpec::try_from(
                     store
-                        .get_mission(&job.mission_id)
+                        .get_mission(&mission_id)
                         .map_err(ExecutionError::Store)?
                         .ok_or_else(|| ExecutionError::MissingMission {
-                            id: job.mission_id.clone(),
+                            id: mission_id.clone(),
                         })?,
                 )
                 .map_err(ExecutionError::RecordConversion)?,

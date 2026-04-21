@@ -200,6 +200,7 @@ fn run_with_args_inspects_and_updates_runs_jobs_approvals_and_delegates() {
 
     let job = JobSpec::mission_turn(
         "job-1",
+        "session-ops",
         "mission-ops",
         Some("run-approval"),
         None,
@@ -637,6 +638,7 @@ fn supervisor_tick_queues_due_mission_turn_jobs_from_persisted_state() {
         report.actions,
         vec![SupervisorAction::QueueJob(Box::new(JobSpec::mission_turn(
             "mission-queue-mission-turn-60",
+            "session-queue",
             "mission-queue",
             None,
             None,
@@ -695,6 +697,7 @@ fn supervisor_tick_dispatches_queued_jobs_and_completes_verified_missions() {
         .put_job(
             &JobRecord::try_from(&JobSpec::mission_turn(
                 "job-dispatch",
+                "session-ops",
                 "mission-ready",
                 None,
                 None,
@@ -844,6 +847,7 @@ fn execute_mission_turn_job_creates_a_run_calls_provider_and_persists_transcript
         .put_job(
             &JobRecord::try_from(&JobSpec::mission_turn(
                 "job-turn",
+                "session-turn",
                 "mission-turn",
                 None,
                 None,
@@ -941,6 +945,7 @@ fn tool_execution_pauses_for_approval_then_resumes_and_records_evidence() {
 
     let mut job = JobSpec::mission_turn(
         "job-tool",
+        "session-tool",
         "mission-tool",
         Some("run-tool"),
         None,
@@ -1119,6 +1124,7 @@ fn accept_edits_mode_skips_approval_for_filesystem_edits() {
 
     let mut job = JobSpec::mission_turn(
         "job-allow",
+        "session-allow",
         "mission-allow",
         Some("run-allow"),
         None,
@@ -1209,6 +1215,7 @@ fn deny_rule_fails_tool_execution_before_approval_is_created() {
 
     let mut job = JobSpec::mission_turn(
         "job-deny",
+        "session-deny",
         "mission-deny",
         Some("run-deny"),
         None,
@@ -2287,6 +2294,7 @@ fn approval_approve_resumes_a_mission_turn_and_completes_the_job() {
         .put_job(
             &JobRecord::try_from(&JobSpec::mission_turn(
                 "job-mission-approval",
+                "session-mission-approval",
                 "mission-approval",
                 None,
                 None,
@@ -4011,6 +4019,204 @@ fn session_head_derives_counts_previews_and_summary_state() {
     assert!(rendered.contains("Workspace Tree:"));
     assert!(rendered.contains("- README.md"));
     assert!(rendered.contains("- crates/"));
+}
+
+#[test]
+fn session_summary_counts_active_background_jobs_and_renders_current_session_jobs() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let app = build_from_config(AppConfig {
+        data_dir: temp.path().join("state-root"),
+        ..AppConfig::default()
+    })
+    .expect("build app");
+    let store = PersistenceStore::open(&app.persistence).expect("open store");
+
+    store
+        .put_session(&SessionRecord {
+            id: "session-bg".to_string(),
+            title: "Background Session".to_string(),
+            prompt_override: None,
+            settings_json: serde_json::to_string(&SessionSettings::default())
+                .expect("serialize settings"),
+            active_mission_id: None,
+            created_at: 1,
+            updated_at: 1,
+        })
+        .expect("put session");
+    store
+        .put_session(&SessionRecord {
+            id: "session-other".to_string(),
+            title: "Other Session".to_string(),
+            prompt_override: None,
+            settings_json: serde_json::to_string(&SessionSettings::default())
+                .expect("serialize settings"),
+            active_mission_id: None,
+            created_at: 1,
+            updated_at: 1,
+        })
+        .expect("put other session");
+    store
+        .put_mission(&MissionRecord {
+            id: "mission-bg".to_string(),
+            session_id: "session-bg".to_string(),
+            objective: "Background work".to_string(),
+            status: MissionStatus::Running.as_str().to_string(),
+            execution_intent: MissionExecutionIntent::Autonomous.as_str().to_string(),
+            schedule_json: serde_json::to_string(&MissionSchedule::once())
+                .expect("serialize schedule"),
+            acceptance_json: "[]".to_string(),
+            created_at: 2,
+            updated_at: 2,
+            completed_at: None,
+        })
+        .expect("put mission");
+    store
+        .put_mission(&MissionRecord {
+            id: "mission-other".to_string(),
+            session_id: "session-other".to_string(),
+            objective: "Other work".to_string(),
+            status: MissionStatus::Running.as_str().to_string(),
+            execution_intent: MissionExecutionIntent::Autonomous.as_str().to_string(),
+            schedule_json: serde_json::to_string(&MissionSchedule::once())
+                .expect("serialize schedule"),
+            acceptance_json: "[]".to_string(),
+            created_at: 2,
+            updated_at: 2,
+            completed_at: None,
+        })
+        .expect("put other mission");
+    for job in [
+        JobRecord {
+            id: "job-queued".to_string(),
+            session_id: "session-bg".to_string(),
+            mission_id: Some("mission-bg".to_string()),
+            run_id: None,
+            parent_job_id: None,
+            kind: "maintenance".to_string(),
+            status: "queued".to_string(),
+            input_json: Some(
+                serde_json::to_string(&agent_runtime::mission::JobExecutionInput::Maintenance {
+                    summary: "queue summary".to_string(),
+                })
+                .expect("serialize queued input"),
+            ),
+            result_json: None,
+            error: None,
+            created_at: 10,
+            updated_at: 10,
+            started_at: None,
+            finished_at: None,
+            attempt_count: 0,
+            max_attempts: 1,
+            lease_owner: None,
+            lease_expires_at: None,
+            heartbeat_at: None,
+            cancel_requested_at: None,
+            last_progress_message: Some("queued for execution".to_string()),
+        },
+        JobRecord {
+            id: "job-running".to_string(),
+            session_id: "session-bg".to_string(),
+            mission_id: Some("mission-bg".to_string()),
+            run_id: None,
+            parent_job_id: None,
+            kind: "delegate".to_string(),
+            status: "running".to_string(),
+            input_json: Some(
+                serde_json::to_string(&agent_runtime::mission::JobExecutionInput::Delegate {
+                    label: "worker-a".to_string(),
+                    goal: "inspect logs".to_string(),
+                })
+                .expect("serialize running input"),
+            ),
+            result_json: None,
+            error: None,
+            created_at: 11,
+            updated_at: 11,
+            started_at: Some(11),
+            finished_at: None,
+            attempt_count: 1,
+            max_attempts: 3,
+            lease_owner: Some("daemon-1".to_string()),
+            lease_expires_at: Some(111),
+            heartbeat_at: Some(111),
+            cancel_requested_at: None,
+            last_progress_message: Some("inspecting logs".to_string()),
+        },
+        JobRecord {
+            id: "job-blocked".to_string(),
+            session_id: "session-bg".to_string(),
+            mission_id: Some("mission-bg".to_string()),
+            run_id: None,
+            parent_job_id: None,
+            kind: "maintenance".to_string(),
+            status: "blocked".to_string(),
+            input_json: Some(
+                serde_json::to_string(&agent_runtime::mission::JobExecutionInput::Maintenance {
+                    summary: "blocked summary".to_string(),
+                })
+                .expect("serialize blocked input"),
+            ),
+            result_json: None,
+            error: None,
+            created_at: 12,
+            updated_at: 12,
+            started_at: None,
+            finished_at: None,
+            attempt_count: 0,
+            max_attempts: 1,
+            lease_owner: None,
+            lease_expires_at: None,
+            heartbeat_at: None,
+            cancel_requested_at: None,
+            last_progress_message: Some("waiting for approval".to_string()),
+        },
+        JobRecord {
+            id: "job-other".to_string(),
+            session_id: "session-other".to_string(),
+            mission_id: Some("mission-other".to_string()),
+            run_id: None,
+            parent_job_id: None,
+            kind: "maintenance".to_string(),
+            status: "queued".to_string(),
+            input_json: Some(
+                serde_json::to_string(&agent_runtime::mission::JobExecutionInput::Maintenance {
+                    summary: "other summary".to_string(),
+                })
+                .expect("serialize other input"),
+            ),
+            result_json: None,
+            error: None,
+            created_at: 13,
+            updated_at: 13,
+            started_at: None,
+            finished_at: None,
+            attempt_count: 0,
+            max_attempts: 1,
+            lease_owner: None,
+            lease_expires_at: None,
+            heartbeat_at: None,
+            cancel_requested_at: None,
+            last_progress_message: Some("other progress".to_string()),
+        },
+    ] {
+        store.put_job(&job).expect("put job");
+    }
+
+    let summary = app.session_summary("session-bg").expect("session summary");
+    assert_eq!(summary.background_job_count, 3);
+    assert_eq!(summary.running_background_job_count, 1);
+    assert_eq!(summary.queued_background_job_count, 1);
+
+    let rendered = app
+        .render_session_background_jobs("session-bg")
+        .expect("render jobs");
+    assert!(rendered.contains("Jobs:"));
+    assert!(rendered.contains("job-queued"));
+    assert!(rendered.contains("job-running"));
+    assert!(rendered.contains("job-blocked"));
+    assert!(rendered.contains("progress: queued for execution"));
+    assert!(!rendered.contains("job-other"));
 }
 
 #[test]

@@ -64,7 +64,8 @@ pub struct RunRecord {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct JobRecord {
     pub id: String,
-    pub mission_id: String,
+    pub session_id: String,
+    pub mission_id: Option<String>,
     pub run_id: Option<String>,
     pub parent_job_id: Option<String>,
     pub kind: String,
@@ -76,6 +77,13 @@ pub struct JobRecord {
     pub updated_at: i64,
     pub started_at: Option<i64>,
     pub finished_at: Option<i64>,
+    pub attempt_count: i64,
+    pub max_attempts: i64,
+    pub lease_owner: Option<String>,
+    pub lease_expires_at: Option<i64>,
+    pub heartbeat_at: Option<i64>,
+    pub cancel_requested_at: Option<i64>,
+    pub last_progress_message: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -455,6 +463,7 @@ impl TryFrom<&JobSpec> for JobRecord {
             .map_err(RecordConversionError::InvalidJobSpec)?;
         Ok(Self {
             id: job.id.clone(),
+            session_id: job.session_id.clone(),
             mission_id: job.mission_id.clone(),
             run_id: job.run_id.clone(),
             parent_job_id: job.parent_job_id.clone(),
@@ -475,6 +484,13 @@ impl TryFrom<&JobSpec> for JobRecord {
             updated_at: job.updated_at,
             started_at: job.started_at,
             finished_at: job.finished_at,
+            attempt_count: i64::from(job.attempt_count),
+            max_attempts: i64::from(job.max_attempts),
+            lease_owner: job.lease_owner.clone(),
+            lease_expires_at: job.lease_expires_at,
+            heartbeat_at: job.heartbeat_at,
+            cancel_requested_at: job.cancel_requested_at,
+            last_progress_message: job.last_progress_message.clone(),
         })
     }
 }
@@ -485,6 +501,7 @@ impl TryFrom<JobRecord> for JobSpec {
     fn try_from(record: JobRecord) -> Result<Self, Self::Error> {
         let job = Self {
             id: record.id,
+            session_id: record.session_id,
             mission_id: record.mission_id,
             run_id: record.run_id,
             parent_job_id: record.parent_job_id,
@@ -510,6 +527,13 @@ impl TryFrom<JobRecord> for JobSpec {
             updated_at: record.updated_at,
             started_at: record.started_at,
             finished_at: record.finished_at,
+            attempt_count: record.attempt_count.max(0) as u32,
+            max_attempts: record.max_attempts.max(0) as u32,
+            lease_owner: record.lease_owner,
+            lease_expires_at: record.lease_expires_at,
+            heartbeat_at: record.heartbeat_at,
+            cancel_requested_at: record.cancel_requested_at,
+            last_progress_message: record.last_progress_message,
         };
         job.validate()
             .map_err(RecordConversionError::InvalidJobSpec)?;
@@ -940,6 +964,7 @@ mod tests {
     fn job_records_round_trip_with_typed_input_and_result() {
         let mut job = JobSpec::mission_turn(
             "job-1",
+            "session-1",
             "mission-1",
             Some("run-1"),
             Some("job-root"),
@@ -959,7 +984,8 @@ mod tests {
 
         assert_eq!(restored.kind, JobKind::MissionTurn);
         assert_eq!(restored.status, JobStatus::Completed);
-        assert_eq!(restored.mission_id, "mission-1");
+        assert_eq!(restored.session_id, "session-1");
+        assert_eq!(restored.mission_id.as_deref(), Some("mission-1"));
         assert_eq!(restored.run_id.as_deref(), Some("run-1"));
         assert_eq!(restored.parent_job_id.as_deref(), Some("job-root"));
         assert_eq!(
@@ -981,6 +1007,7 @@ mod tests {
     fn job_records_reject_mismatched_mission_turn_identifiers() {
         let mut stored = JobRecord::try_from(&JobSpec::mission_turn(
             "job-1",
+            "session-1",
             "mission-1",
             Some("run-1"),
             None,
@@ -988,7 +1015,7 @@ mod tests {
             30,
         ))
         .expect("job to record");
-        stored.mission_id = "mission-2".to_string();
+        stored.mission_id = Some("mission-2".to_string());
 
         assert!(matches!(
             JobSpec::try_from(stored),
@@ -996,5 +1023,34 @@ mod tests {
                 JobSpecValidationError::MissionIdMismatch { .. }
             ))
         ));
+    }
+
+    #[test]
+    fn job_records_accept_future_background_chat_turn_payloads() {
+        let stored = JobRecord {
+            id: "job-chat".to_string(),
+            session_id: "session-1".to_string(),
+            mission_id: None,
+            run_id: Some("run-1".to_string()),
+            parent_job_id: None,
+            kind: "chat_turn".to_string(),
+            status: "queued".to_string(),
+            input_json: Some("{\"ChatTurn\":{\"message\":\"hello from the queue\"}}".to_string()),
+            result_json: None,
+            error: None,
+            created_at: 10,
+            updated_at: 10,
+            started_at: None,
+            finished_at: None,
+            attempt_count: 0,
+            max_attempts: 1,
+            lease_owner: None,
+            lease_expires_at: None,
+            heartbeat_at: None,
+            cancel_requested_at: None,
+            last_progress_message: Some("queued for background execution".to_string()),
+        };
+
+        assert!(JobSpec::try_from(stored).is_ok());
     }
 }

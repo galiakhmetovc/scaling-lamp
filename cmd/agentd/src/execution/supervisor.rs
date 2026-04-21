@@ -66,7 +66,7 @@ impl ExecutionService {
                                 .map_err(ExecutionError::RecordConversion)?,
                         )
                         .map_err(ExecutionError::Store)?;
-                    touch_mission(store, &mission_by_id, &job.mission_id, now)?;
+                    touch_mission(store, &mission_by_id, job.mission_id.as_deref(), now)?;
                     report.queued_jobs += 1;
                 }
                 SupervisorAction::DispatchJob { job_id, .. } => {
@@ -84,7 +84,7 @@ impl ExecutionService {
                             &JobRecord::try_from(&job).map_err(ExecutionError::RecordConversion)?,
                         )
                         .map_err(ExecutionError::Store)?;
-                    touch_mission(store, &mission_by_id, &job.mission_id, now)?;
+                    touch_mission(store, &mission_by_id, job.mission_id.as_deref(), now)?;
                     report.dispatched_jobs += 1;
                 }
                 SupervisorAction::RequestApproval { job_id, reason } => {
@@ -100,11 +100,11 @@ impl ExecutionService {
                             &JobRecord::try_from(&job).map_err(ExecutionError::RecordConversion)?,
                         )
                         .map_err(ExecutionError::Store)?;
-                    touch_mission(store, &mission_by_id, &job.mission_id, now)?;
+                    touch_mission(store, &mission_by_id, job.mission_id.as_deref(), now)?;
                     report.blocked_jobs += 1;
                 }
                 SupervisorAction::DeferMission { mission_id, .. } => {
-                    touch_mission(store, &mission_by_id, mission_id, now)?;
+                    touch_mission(store, &mission_by_id, Some(mission_id.as_str()), now)?;
                     report.deferred_missions += 1;
                 }
                 SupervisorAction::CompleteMission { mission_id } => {
@@ -134,9 +134,12 @@ impl ExecutionService {
 fn touch_mission(
     store: &PersistenceStore,
     mission_by_id: &BTreeMap<String, MissionSpec>,
-    mission_id: &str,
+    mission_id: Option<&str>,
     now: i64,
 ) -> Result<(), ExecutionError> {
+    let Some(mission_id) = mission_id else {
+        return Ok(());
+    };
     let mut mission =
         mission_by_id
             .get(mission_id)

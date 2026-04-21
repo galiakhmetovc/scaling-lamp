@@ -1,7 +1,8 @@
 use agent_persistence::{
-    AppConfig, PersistenceStore, PlanRecord, PlanRepository, RunRecord, RunRepository,
-    TranscriptRepository,
+    AppConfig, JobRecord, JobRepository, MissionRecord, MissionRepository, PersistenceStore,
+    PlanRecord, PlanRepository, RunRecord, RunRepository, TranscriptRepository,
 };
+use agent_runtime::mission::JobExecutionInput;
 use agent_runtime::plan::{PlanItem, PlanItemStatus, PlanSnapshot};
 use agent_runtime::provider::{ConfiguredProvider, ProviderKind};
 use agent_runtime::run::{ApprovalRequest, RunEngine, RunSnapshot, RunStatus};
@@ -11,6 +12,8 @@ use agentd::tui::events::TuiAction;
 use agentd::tui::timeline::{Timeline, TimelineEntryKind};
 use agentd::tui::{dispatch_action, pump_background};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use ratatui::Terminal;
+use ratatui::backend::TestBackend;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::TcpListener;
 use std::thread;
@@ -28,6 +31,9 @@ fn summary(id: &str, title: &str) -> SessionSummary {
         has_pending_approval: false,
         last_message_preview: None,
         message_count: 0,
+        background_job_count: 0,
+        running_background_job_count: 0,
+        queued_background_job_count: 0,
         created_at: 10,
         updated_at: 20,
     }
@@ -135,6 +141,45 @@ fn tui_chat_key_handling_supports_page_navigation_from_the_tail() {
 }
 
 #[test]
+fn tui_render_includes_background_job_counts_in_the_session_header() {
+    let mut state = TuiAppState::new(
+        vec![SessionSummary {
+            background_job_count: 3,
+            running_background_job_count: 1,
+            queued_background_job_count: 1,
+            ..summary("session-a", "Session A")
+        }],
+        Some("session-a".to_string()),
+    );
+    state.set_current_session(
+        SessionSummary {
+            background_job_count: 3,
+            running_background_job_count: 1,
+            queued_background_job_count: 1,
+            ..summary("session-a", "Session A")
+        },
+        Timeline::default(),
+    );
+
+    let backend = TestBackend::new(140, 24);
+    let mut terminal = Terminal::new(backend).expect("terminal");
+    terminal
+        .draw(|frame| agentd::tui::render::render(frame, &state))
+        .expect("draw");
+
+    let buffer = terminal.backend().buffer();
+    let mut rendered = String::new();
+    for y in 0..buffer.area.height {
+        for x in 0..buffer.area.width {
+            rendered.push_str(buffer[(x, y)].symbol());
+        }
+        rendered.push('\n');
+    }
+
+    assert!(rendered.contains("bg=3 (run=1 queued=1)"));
+}
+
+#[test]
 fn tui_chat_commands_and_timeline_new_creates_and_switches_immediately() {
     let temp = tempfile::tempdir().expect("tempdir");
     let app = build_from_config(AppConfig {
@@ -227,6 +272,90 @@ fn tui_chat_commands_and_timeline_plan_renders_current_plan() {
         rendered_entries.contains("[pending] render-plan: Show the current plan in the timeline")
     );
     assert!(rendered_entries.contains("note: Keep it read-only"));
+}
+
+#[test]
+fn tui_chat_commands_and_timeline_jobs_renders_active_jobs_for_the_current_session() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let app = build_from_config(AppConfig {
+        data_dir: temp.path().join("state-root"),
+        ..AppConfig::default()
+    })
+    .expect("build app");
+    let session = app
+        .create_session_auto(Some("Jobs Session"))
+        .expect("create session");
+    let store = PersistenceStore::open(&app.persistence).expect("open store");
+    store
+        .put_mission(&MissionRecord {
+            id: "mission-jobs".to_string(),
+            session_id: session.id.clone(),
+            objective: "Run background work".to_string(),
+            status: "running".to_string(),
+            execution_intent: "autonomous".to_string(),
+            schedule_json: "{\"not_before\":null,\"interval_seconds\":null}".to_string(),
+            acceptance_json: "[]".to_string(),
+            created_at: 10,
+            updated_at: 11,
+            completed_at: None,
+        })
+        .expect("put mission");
+    store
+        .put_job(&JobRecord {
+            id: "job-bg".to_string(),
+            session_id: session.id.clone(),
+            mission_id: Some("mission-jobs".to_string()),
+            run_id: None,
+            parent_job_id: None,
+            kind: "maintenance".to_string(),
+            status: "queued".to_string(),
+            input_json: Some(
+                serde_json::to_string(&JobExecutionInput::Maintenance {
+                    summary: "watch the background queue".to_string(),
+                })
+                .expect("serialize job input"),
+            ),
+            result_json: None,
+            error: None,
+            created_at: 20,
+            updated_at: 21,
+            started_at: None,
+            finished_at: None,
+            attempt_count: 0,
+            max_attempts: 1,
+            lease_owner: None,
+            lease_expires_at: None,
+            heartbeat_at: None,
+            cancel_requested_at: None,
+            last_progress_message: Some("watch the background queue".to_string()),
+        })
+        .expect("put background job");
+
+    let mut state = TuiAppState::new(
+        app.list_session_summaries().expect("list sessions"),
+        Some(session.id.clone()),
+    );
+    let mut render = |_state: &TuiAppState| Ok::<_, agentd::bootstrap::BootstrapError>(());
+
+    dispatch_action(
+        &app,
+        &mut state,
+        TuiAction::SubmitChatInput("/jobs".to_string()),
+        &mut render,
+    )
+    .expect("dispatch /jobs");
+
+    let rendered_entries = state
+        .timeline()
+        .entries(true)
+        .into_iter()
+        .filter(|entry| matches!(entry.kind, TimelineEntryKind::System))
+        .map(|entry| entry.content.clone())
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(rendered_entries.contains("Jobs:"));
+    assert!(rendered_entries.contains("job-bg"));
+    assert!(rendered_entries.contains("maintenance"));
 }
 
 #[test]

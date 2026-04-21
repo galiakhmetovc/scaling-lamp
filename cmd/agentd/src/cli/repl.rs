@@ -3,6 +3,7 @@ use super::*;
 pub(super) trait ChatReplBackend {
     fn show_chat(&self, session_id: &str) -> Result<String, BootstrapError>;
     fn render_plan(&self, session_id: &str) -> Result<String, BootstrapError>;
+    fn render_active_jobs(&self, session_id: &str) -> Result<String, BootstrapError>;
     fn render_session_skills(&self, session_id: &str) -> Result<String, BootstrapError>;
     fn enable_session_skill(
         &self,
@@ -40,6 +41,10 @@ impl ChatReplBackend for App {
 
     fn render_plan(&self, session_id: &str) -> Result<String, BootstrapError> {
         self.render_plan(session_id)
+    }
+
+    fn render_active_jobs(&self, session_id: &str) -> Result<String, BootstrapError> {
+        self.render_session_background_jobs(session_id)
     }
 
     fn render_session_skills(&self, session_id: &str) -> Result<String, BootstrapError> {
@@ -98,6 +103,10 @@ impl ChatReplBackend for DaemonClient {
 
     fn render_plan(&self, session_id: &str) -> Result<String, BootstrapError> {
         self.render_plan(session_id)
+    }
+
+    fn render_active_jobs(&self, session_id: &str) -> Result<String, BootstrapError> {
+        self.render_session_background_jobs(session_id)
     }
 
     fn render_session_skills(&self, session_id: &str) -> Result<String, BootstrapError> {
@@ -341,6 +350,11 @@ where
                 let plan = backend.render_plan(session_id)?;
                 writeln!(renderer.output, "{plan}").map_err(BootstrapError::Stream)?;
             }
+            Some("/jobs") => {
+                renderer.finish_turn()?;
+                let jobs = backend.render_active_jobs(session_id)?;
+                writeln!(renderer.output, "{jobs}").map_err(BootstrapError::Stream)?;
+            }
             Some("/skills") => {
                 renderer.finish_turn()?;
                 let skills = backend.render_session_skills(session_id)?;
@@ -559,6 +573,7 @@ fn canonical_repl_command(raw: &str) -> Option<&'static str> {
         "/help" | "\\помощь" => Some("/help"),
         "/show" | "\\показать" => Some("/show"),
         "/plan" | "\\план" => Some("/plan"),
+        "/jobs" | "\\задачи" => Some("/jobs"),
         "/skills" | "\\скиллы" => Some("/skills"),
         "/enable" | "\\включить" => Some("/enable"),
         "/disable" | "\\выключить" => Some("/disable"),
