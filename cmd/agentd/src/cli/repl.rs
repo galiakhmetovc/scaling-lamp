@@ -6,6 +6,7 @@ pub(super) trait ChatReplBackend {
     fn render_context(&self, session_id: &str) -> Result<String, BootstrapError>;
     fn render_plan(&self, session_id: &str) -> Result<String, BootstrapError>;
     fn render_active_jobs(&self, session_id: &str) -> Result<String, BootstrapError>;
+    fn write_debug_bundle(&self, session_id: &str) -> Result<String, BootstrapError>;
     fn render_session_skills(&self, session_id: &str) -> Result<String, BootstrapError>;
     fn enable_session_skill(
         &self,
@@ -56,6 +57,11 @@ impl ChatReplBackend for App {
 
     fn render_active_jobs(&self, session_id: &str) -> Result<String, BootstrapError> {
         self.render_session_background_jobs(session_id)
+    }
+
+    fn write_debug_bundle(&self, session_id: &str) -> Result<String, BootstrapError> {
+        self.write_debug_bundle(session_id)
+            .map(|path| path.display().to_string())
     }
 
     fn render_session_skills(&self, session_id: &str) -> Result<String, BootstrapError> {
@@ -130,6 +136,10 @@ impl ChatReplBackend for DaemonClient {
 
     fn render_active_jobs(&self, session_id: &str) -> Result<String, BootstrapError> {
         self.render_session_background_jobs(session_id)
+    }
+
+    fn write_debug_bundle(&self, session_id: &str) -> Result<String, BootstrapError> {
+        self.write_debug_bundle(session_id)
     }
 
     fn render_session_skills(&self, session_id: &str) -> Result<String, BootstrapError> {
@@ -391,6 +401,12 @@ where
                 renderer.finish_turn()?;
                 let jobs = backend.render_active_jobs(session_id)?;
                 writeln!(renderer.output, "{jobs}").map_err(BootstrapError::Stream)?;
+            }
+            Some("/debug") => {
+                renderer.finish_turn()?;
+                let path = backend.write_debug_bundle(session_id)?;
+                writeln!(renderer.output, "debug bundle saved: {path}")
+                    .map_err(BootstrapError::Stream)?;
             }
             Some("/skills") => {
                 renderer.finish_turn()?;
@@ -656,6 +672,7 @@ fn canonical_repl_command(raw: &str) -> Option<&'static str> {
         "/context" | "\\контекст" => Some("/context"),
         "/plan" | "\\план" => Some("/plan"),
         "/jobs" | "\\задачи" => Some("/jobs"),
+        "/debug" | "\\отладка" => Some("/debug"),
         "/completion" | "\\доводка" => Some("/completion"),
         "/autoapprove" | "\\автоапрув" => Some("/autoapprove"),
         "/skills" | "\\скиллы" => Some("/skills"),

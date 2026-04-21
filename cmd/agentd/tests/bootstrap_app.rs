@@ -70,6 +70,58 @@ fn build_from_config_rejects_invalid_paths_before_side_effects() {
 }
 
 #[test]
+fn write_debug_bundle_persists_session_snapshot_into_workspace_file() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let mut app = build_from_config(AppConfig {
+        data_dir: temp.path().join("state-root"),
+        ..AppConfig::default()
+    })
+    .expect("build app");
+    app.runtime.workspace = WorkspaceRef::new(temp.path());
+
+    let store = PersistenceStore::open(&app.persistence).expect("open store");
+    store
+        .put_session(&SessionRecord {
+            id: "session-debug".to_string(),
+            title: "Debug Session".to_string(),
+            prompt_override: None,
+            settings_json: serde_json::to_string(&SessionSettings::default())
+                .expect("serialize settings"),
+            active_mission_id: None,
+            parent_session_id: None,
+            parent_job_id: None,
+            delegation_label: None,
+            created_at: 10,
+            updated_at: 10,
+        })
+        .expect("put session");
+    store
+        .put_transcript(&agent_persistence::TranscriptRecord {
+            id: "tx-debug-1".to_string(),
+            session_id: "session-debug".to_string(),
+            run_id: None,
+            kind: "user".to_string(),
+            content: "debug me".to_string(),
+            created_at: 11,
+        })
+        .expect("put transcript");
+
+    let path = app
+        .write_debug_bundle("session-debug")
+        .expect("write debug bundle");
+
+    assert!(path.starts_with(temp.path()));
+    assert!(path.is_file());
+
+    let bundle = fs::read_to_string(&path).expect("read bundle");
+    assert!(bundle.contains("Debug Bundle"));
+    assert!(bundle.contains("session_id=session-debug"));
+    assert!(bundle.contains("Context:"));
+    assert!(bundle.contains("Plan:"));
+    assert!(bundle.contains("Transcript Tail:"));
+}
+
+#[test]
 fn run_with_args_creates_and_shows_sessions_and_missions() {
     let temp = tempfile::tempdir().expect("tempdir");
     let app = build_from_config(AppConfig {

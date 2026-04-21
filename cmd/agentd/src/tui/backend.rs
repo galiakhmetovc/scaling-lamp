@@ -46,6 +46,7 @@ pub trait TuiBackend: Clone + Send + Sync + 'static {
     fn render_context(&self, session_id: &str) -> Result<String, BootstrapError>;
     fn render_plan(&self, session_id: &str) -> Result<String, BootstrapError>;
     fn render_active_jobs(&self, session_id: &str) -> Result<String, BootstrapError>;
+    fn write_debug_bundle(&self, session_id: &str) -> Result<String, BootstrapError>;
     fn compact_session(&self, session_id: &str) -> Result<SessionSummary, BootstrapError>;
     fn execute_chat_turn_with_control_and_observer(
         &self,
@@ -150,6 +151,10 @@ impl TuiBackend for App {
 
     fn render_active_jobs(&self, session_id: &str) -> Result<String, BootstrapError> {
         App::render_session_background_jobs(self, session_id)
+    }
+
+    fn write_debug_bundle(&self, session_id: &str) -> Result<String, BootstrapError> {
+        App::write_debug_bundle(self, session_id).map(|path| path.display().to_string())
     }
 
     fn compact_session(&self, session_id: &str) -> Result<SessionSummary, BootstrapError> {
@@ -278,6 +283,10 @@ impl TuiBackend for DaemonClient {
 
     fn render_active_jobs(&self, session_id: &str) -> Result<String, BootstrapError> {
         DaemonClient::render_session_background_jobs(self, session_id)
+    }
+
+    fn write_debug_bundle(&self, session_id: &str) -> Result<String, BootstrapError> {
+        DaemonClient::write_debug_bundle(self, session_id)
     }
 
     fn compact_session(&self, session_id: &str) -> Result<SessionSummary, BootstrapError> {

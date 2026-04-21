@@ -60,7 +60,7 @@ impl ExecutionService {
             })?;
         let session =
             Session::try_from(session_record.clone()).map_err(ExecutionError::RecordConversion)?;
-        let run_id = format!("run-chat-{session_id}-{now}");
+        let run_id = ensure_unique_run_id(store, format!("run-chat-{session_id}-{now}"))?;
         let mut run = RunEngine::new(run_id.clone(), session.id.clone(), None, now);
         run.start(now).map_err(ExecutionError::RunTransition)?;
         store
@@ -70,7 +70,7 @@ impl ExecutionService {
             .map_err(ExecutionError::Store)?;
 
         let user_entry = TranscriptEntry::user(
-            format!("transcript-chat-{session_id}-{now}-01-user"),
+            format!("transcript-{run_id}-01-user"),
             session.id.clone(),
             Some(run_id.as_str()),
             message,
@@ -121,7 +121,7 @@ impl ExecutionService {
         self.persist_run(store, &run)?;
 
         let assistant_entry = TranscriptEntry::assistant(
-            format!("transcript-chat-{session_id}-{now}-02-assistant"),
+            format!("transcript-{run_id}-02-assistant"),
             session.id.clone(),
             Some(run_id.as_str()),
             &response.output_text,

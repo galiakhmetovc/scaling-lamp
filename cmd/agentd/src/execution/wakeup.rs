@@ -29,7 +29,7 @@ impl ExecutionService {
             })?;
         let session =
             Session::try_from(session_record).map_err(ExecutionError::RecordConversion)?;
-        let run_id = format!("run-wakeup-{session_id}-{now}");
+        let run_id = ensure_unique_run_id(store, format!("run-wakeup-{session_id}-{now}"))?;
         let mut run = RunEngine::new(run_id.clone(), session.id.clone(), None, now);
         run.start(now).map_err(ExecutionError::RunTransition)?;
         store

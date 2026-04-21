@@ -1,9 +1,9 @@
 use super::*;
 use crate::http::types::{
-    ClearSessionRequest, CreateSessionRequest, ErrorResponse, SessionBackgroundJobResponse,
-    SessionBackgroundJobsResponse, SessionDetailResponse, SessionPendingApprovalsResponse,
-    SessionPreferencesRequest, SessionSkillsResponse, SessionSummaryResponse,
-    SessionTranscriptResponse, SkillCommandRequest,
+    ClearSessionRequest, CreateSessionRequest, DebugBundleResponse, ErrorResponse,
+    SessionBackgroundJobResponse, SessionBackgroundJobsResponse, SessionDetailResponse,
+    SessionPendingApprovalsResponse, SessionPreferencesRequest, SessionSkillsResponse,
+    SessionSummaryResponse, SessionTranscriptResponse, SkillCommandRequest,
 };
 use agent_persistence::SessionRepository;
 use tiny_http::Method;
@@ -121,6 +121,9 @@ pub(super) fn handle_nested_routes(app: &App, request: Request) -> std::io::Resu
         (Method::Post, [session_id, compact]) if compact == "compact" => {
             handle_compact_session(app, request, session_id.as_str())
         }
+        (Method::Post, [session_id, debug]) if debug == "debug-bundle" => {
+            handle_write_debug_bundle(app, request, session_id.as_str())
+        }
         (Method::Get, [session_id, context]) if context == "context" => {
             handle_render_context(app, request, session_id.as_str())
         }
@@ -228,6 +231,22 @@ fn handle_session_background_jobs(
                 .collect::<Vec<_>>();
             respond_json::<SessionBackgroundJobsResponse>(request, StatusCode(200), &response)
         }
+        Err(error) => {
+            let (status, payload) = map_bootstrap_error(error);
+            respond_json(request, status, &payload)
+        }
+    }
+}
+
+fn handle_write_debug_bundle(app: &App, request: Request, session_id: &str) -> std::io::Result<()> {
+    match app.write_debug_bundle(session_id) {
+        Ok(path) => respond_json(
+            request,
+            StatusCode(200),
+            &DebugBundleResponse {
+                path: path.display().to_string(),
+            },
+        ),
         Err(error) => {
             let (status, payload) = map_bootstrap_error(error);
             respond_json(request, status, &payload)

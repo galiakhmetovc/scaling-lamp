@@ -4,8 +4,9 @@ use agent_runtime::context::CompactionPolicy;
 use agent_runtime::plan::PlanSnapshot;
 use agent_runtime::prompt::SessionHead;
 use agent_runtime::provider::ProviderMessage;
-use agent_runtime::run::RunSnapshot;
+use agent_runtime::run::{PendingProviderApproval, RunSnapshot};
 use agent_runtime::session::{MessageRole, Session};
+use std::path::PathBuf;
 
 impl App {
     #[cfg_attr(not(test), allow(dead_code))]
@@ -317,5 +318,274 @@ impl App {
             .map_err(BootstrapError::RecordConversion)?;
         store.put_session(&session_record)?;
         self.session_summary(session_id)
+    }
+
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub fn write_debug_bundle(&self, session_id: &str) -> Result<PathBuf, BootstrapError> {
+        let bundle = self.render_debug_bundle(session_id)?;
+        let relative_path = format!(
+            ".teamd-debug/{}-{}.txt",
+            sanitize_debug_filename(session_id),
+            unique_timestamp_token()?
+        );
+        self.runtime
+            .workspace
+            .write_text(relative_path.as_str(), bundle.as_str())
+            .map_err(map_workspace_error)?;
+        self.runtime
+            .workspace
+            .resolve(relative_path.as_str())
+            .map_err(map_workspace_error)
+    }
+
+    fn render_debug_bundle(&self, session_id: &str) -> Result<String, BootstrapError> {
+        let store = self.store()?;
+        let session_record =
+            store
+                .get_session(session_id)?
+                .ok_or_else(|| BootstrapError::MissingRecord {
+                    kind: "session",
+                    id: session_id.to_string(),
+                })?;
+        let summary = self.session_summary(session_id)?;
+        let transcript = self.session_transcript(session_id)?;
+        let context = self.render_context_state(session_id)?;
+        let plan = self.render_plan(session_id)?;
+        let jobs = self.render_session_background_jobs(session_id)?;
+        let skills = self.render_session_skills(session_id)?;
+        let pending_approvals = self.pending_approvals(session_id)?;
+        let runs = store
+            .load_execution_state()?
+            .runs
+            .into_iter()
+            .map(RunSnapshot::try_from)
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(BootstrapError::RecordConversion)?;
+        let session_runs = runs
+            .into_iter()
+            .filter(|run| run.session_id == session_id)
+            .collect::<Vec<_>>();
+
+        let mut lines = vec![
+            "Debug Bundle".to_string(),
+            format!("generated_at={}", unix_timestamp()?),
+            format!("workspace_root={}", self.runtime.workspace.root.display()),
+            format!("data_dir={}", self.config.data_dir.display()),
+            format!("state_db={}", self.persistence.stores.metadata_db.display()),
+            String::new(),
+            "Session Summary:".to_string(),
+            format!("session_id={}", summary.id),
+            format!("title={}", summary.title),
+            format!(
+                "model={}",
+                summary.model.unwrap_or_else(|| "<default>".to_string())
+            ),
+            format!("reasoning_visible={}", summary.reasoning_visible),
+            format!(
+                "think_level={}",
+                summary
+                    .think_level
+                    .unwrap_or_else(|| "<default>".to_string())
+            ),
+            format!("ctx={}", summary.context_tokens),
+            format!("messages={}", summary.message_count),
+            format!(
+                "background_jobs={} running={} queued={}",
+                summary.background_job_count,
+                summary.running_background_job_count,
+                summary.queued_background_job_count
+            ),
+            format!("has_pending_approval={}", summary.has_pending_approval),
+            format!("compactifications={}", summary.compactifications),
+            format!("completion_nudges={:?}", summary.completion_nudges),
+            format!("auto_approve={}", summary.auto_approve),
+            String::new(),
+            "Session Detail:".to_string(),
+            format!("prompt_override={:?}", session_record.prompt_override),
+            format!("settings_json={}", session_record.settings_json),
+            format!("active_mission_id={:?}", session_record.active_mission_id),
+            format!("parent_session_id={:?}", session_record.parent_session_id),
+            format!("parent_job_id={:?}", session_record.parent_job_id),
+            format!("delegation_label={:?}", session_record.delegation_label),
+            String::new(),
+            "Context:".to_string(),
+            context,
+            String::new(),
+            "Plan:".to_string(),
+            plan,
+            String::new(),
+            "Jobs:".to_string(),
+            jobs,
+            String::new(),
+            "Skills:".to_string(),
+            skills,
+            String::new(),
+            "Pending Approvals:".to_string(),
+        ];
+
+        if pending_approvals.is_empty() {
+            lines.push("- none".to_string());
+        } else {
+            for approval in pending_approvals {
+                lines.push(format!(
+                    "- run_id={} approval_id={} requested_at={} reason={}",
+                    approval.run_id, approval.approval_id, approval.requested_at, approval.reason
+                ));
+            }
+        }
+
+        lines.push(String::new());
+        lines.push("Runs:".to_string());
+        if session_runs.is_empty() {
+            lines.push("- none".to_string());
+        } else {
+            for run in session_runs.iter().rev().take(8).rev() {
+                lines.extend(render_debug_run(run));
+            }
+        }
+
+        lines.push(String::new());
+        lines.push(format!(
+            "Transcript Tail: total_entries={}",
+            transcript.entries.len()
+        ));
+        for entry in transcript.entries.iter().rev().take(80).rev() {
+            let descriptor = match entry.role.as_str() {
+                "tool" => format!(
+                    "tool:{}:{}",
+                    entry.tool_name.as_deref().unwrap_or("tool"),
+                    entry.tool_status.as_deref().unwrap_or("completed")
+                ),
+                "approval" => format!(
+                    "approval:{}",
+                    entry.approval_id.as_deref().unwrap_or("approval")
+                ),
+                role => role.to_string(),
+            };
+            lines.push(format!(
+                "- [{}] {} {}",
+                entry.created_at,
+                descriptor,
+                entry.content.replace('\n', "\\n")
+            ));
+        }
+
+        Ok(lines.join("\n"))
+    }
+}
+
+fn sanitize_debug_filename(session_id: &str) -> String {
+    session_id
+        .chars()
+        .map(|ch| {
+            if ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_') {
+                ch
+            } else {
+                '_'
+            }
+        })
+        .collect()
+}
+
+fn render_debug_run(run: &RunSnapshot) -> Vec<String> {
+    let mut lines = vec![format!(
+        "- id={} status={} started_at={} updated_at={} finished_at={:?}",
+        run.id,
+        run.status.as_str(),
+        run.started_at,
+        run.updated_at,
+        run.finished_at
+    )];
+    if let Some(error) = run.error.as_ref() {
+        lines.push(format!("  error={error}"));
+    }
+    if let Some(result) = run.result.as_ref() {
+        lines.push(format!("  result={}", result.replace('\n', "\\n")));
+    }
+    if let Some(stream) = run.provider_stream.as_ref() {
+        lines.push(format!(
+            "  provider_stream=response_id={} model={} output_len={} updated_at={}",
+            stream.response_id,
+            stream.model,
+            stream.output_text.len(),
+            stream.updated_at
+        ));
+    }
+    if let Some(loop_state) = run.provider_loop.as_ref() {
+        lines.push(format!(
+            "  provider_loop=next_round:{} previous_response_id:{:?} pending_tool_outputs:{} continuation_messages:{} seen_tool_signatures:{} completion_nudges_used:{} pending_approval:{}",
+            loop_state.next_round,
+            loop_state.previous_response_id,
+            loop_state.pending_tool_outputs.len(),
+            loop_state.continuation_input_messages.len(),
+            loop_state.seen_tool_signatures.len(),
+            loop_state.completion_nudges_used,
+            describe_pending_provider_approval(loop_state.pending_approval.as_ref())
+        ));
+    }
+    if !run.pending_approvals.is_empty() {
+        for approval in &run.pending_approvals {
+            lines.push(format!(
+                "  pending_approval id={} tool_call_id={} requested_at={} reason={}",
+                approval.id, approval.tool_call_id, approval.requested_at, approval.reason
+            ));
+        }
+    }
+    if !run.active_processes.is_empty() {
+        for process in &run.active_processes {
+            lines.push(format!(
+                "  active_process id={} kind={} pid_ref={} started_at={}",
+                process.id, process.kind, process.pid_ref, process.started_at
+            ));
+        }
+    }
+    if !run.delegate_runs.is_empty() {
+        for delegate in &run.delegate_runs {
+            lines.push(format!(
+                "  delegate_run id={} label={} started_at={}",
+                delegate.id, delegate.label, delegate.started_at
+            ));
+        }
+    }
+    if !run.recent_steps.is_empty() {
+        lines.push("  recent_steps:".to_string());
+        for step in run.recent_steps.iter().rev().take(12).rev() {
+            lines.push(format!(
+                "    - [{}] {:?}: {}",
+                step.recorded_at, step.kind, step.detail
+            ));
+        }
+    }
+    lines
+}
+
+fn describe_pending_provider_approval(pending: Option<&PendingProviderApproval>) -> String {
+    match pending {
+        None => "none".to_string(),
+        Some(PendingProviderApproval::Tool(approval)) => {
+            format!("tool:{}:{}", approval.tool_name, approval.approval_id)
+        }
+        Some(PendingProviderApproval::LoopReset(approval)) => format!(
+            "loop_reset:{} rounds={}/{}",
+            approval.approval_id, approval.exhausted_rounds, approval.max_rounds
+        ),
+        Some(PendingProviderApproval::CompletionNudge(approval)) => format!(
+            "completion:{} nudges={}/{}",
+            approval.approval_id, approval.completion_nudges_used, approval.max_completion_nudges
+        ),
+    }
+}
+
+fn map_workspace_error(error: agent_runtime::workspace::WorkspaceError) -> BootstrapError {
+    match error {
+        agent_runtime::workspace::WorkspaceError::InvalidPath { path, reason } => {
+            BootstrapError::InvalidPath {
+                path: PathBuf::from(path),
+                reason,
+            }
+        }
+        agent_runtime::workspace::WorkspaceError::Io { path, source } => {
+            BootstrapError::Io { path, source }
+        }
     }
 }

@@ -256,7 +256,11 @@ impl Timeline {
     }
 
     pub fn merge_ephemeral_from(&mut self, previous: &Timeline) {
-        for entry in previous.entries.iter().filter(|entry| should_preserve_entry(entry)) {
+        for entry in previous
+            .entries
+            .iter()
+            .filter(|entry| should_preserve_entry(entry))
+        {
             if !self.entries.iter().any(|existing| existing == entry) {
                 self.entries.push(entry.clone());
             }
@@ -264,7 +268,9 @@ impl Timeline {
         self.entries.sort_by(|left, right| {
             left.timestamp
                 .cmp(&right.timestamp)
-                .then_with(|| timeline_entry_sort_weight(left).cmp(&timeline_entry_sort_weight(right)))
+                .then_with(|| {
+                    timeline_entry_sort_weight(left).cmp(&timeline_entry_sort_weight(right))
+                })
                 .then_with(|| left.content.cmp(&right.content))
         });
     }

@@ -33,6 +33,10 @@ use std::collections::BTreeMap;
 use std::error::Error;
 use std::fmt;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::{SystemTime, UNIX_EPOCH};
+
+static EXECUTION_ID_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SupervisorTickReport {
@@ -249,6 +253,29 @@ impl ExecutionService {
     fn tool_runtime(&self) -> ToolRuntime {
         ToolRuntime::with_shared_process_registry(self.workspace.clone(), self.processes.clone())
     }
+}
+
+fn unique_execution_token() -> String {
+    let millis = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_millis())
+        .unwrap_or(0);
+    let seq = EXECUTION_ID_COUNTER.fetch_add(1, Ordering::Relaxed);
+    format!("{millis}-{seq}")
+}
+
+fn ensure_unique_run_id(
+    store: &PersistenceStore,
+    base_id: String,
+) -> Result<String, ExecutionError> {
+    if store
+        .get_run(&base_id)
+        .map_err(ExecutionError::Store)?
+        .is_none()
+    {
+        return Ok(base_id);
+    }
+    Ok(format!("{base_id}-{}", unique_execution_token()))
 }
 
 impl fmt::Display for ExecutionError {

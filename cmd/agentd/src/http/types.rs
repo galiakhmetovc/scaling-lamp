@@ -72,6 +72,11 @@ pub struct SessionDetailResponse {
     pub updated_at: i64,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DebugBundleResponse {
+    pub path: String,
+}
+
 impl From<SessionSummary> for SessionSummaryResponse {
     fn from(value: SessionSummary) -> Self {
         Self {

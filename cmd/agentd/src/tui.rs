@@ -290,6 +290,12 @@ where
         Some("/clear") => {
             let _ = state.open_clear_dialog();
         }
+        Some("/debug") => {
+            let saved = app.write_debug_bundle(&current_session_id)?;
+            state
+                .timeline_mut()
+                .push_system(&format!("debug bundle saved: {saved}"), unix_timestamp()?);
+        }
         Some("/context") => {
             let context = app.render_context(&current_session_id)?;
             state
@@ -826,6 +832,7 @@ fn canonical_command(command: &str) -> Option<&'static str> {
         "/new" | "\\новая" => Some("/new"),
         "/rename" | "\\переименовать" => Some("/rename"),
         "/clear" | "\\очистить" => Some("/clear"),
+        "/debug" | "\\отладка" => Some("/debug"),
         "/plan" | "\\план" => Some("/plan"),
         "/jobs" | "\\задачи" => Some("/jobs"),
         "/context" | "\\контекст" => Some("/context"),
@@ -893,6 +900,7 @@ mod tests {
         summary: SessionSummary,
         pending: Vec<SessionPendingApproval>,
         transcript: SessionTranscriptView,
+        debug_bundle: String,
     }
 
     impl TuiBackend for FakeBackend {
@@ -986,6 +994,10 @@ mod tests {
 
         fn render_active_jobs(&self, _session_id: &str) -> Result<String, BootstrapError> {
             panic!("unused in test")
+        }
+
+        fn write_debug_bundle(&self, _session_id: &str) -> Result<String, BootstrapError> {
+            Ok(self.debug_bundle.clone())
         }
 
         fn compact_session(&self, _session_id: &str) -> Result<SessionSummary, BootstrapError> {
@@ -1113,6 +1125,7 @@ mod tests {
                 session_id: "session-a".to_string(),
                 entries: Vec::new(),
             },
+            debug_bundle: "unused".to_string(),
         };
         let mut state = TuiAppState::new(
             vec![backend.summary.clone()],
@@ -1143,6 +1156,62 @@ mod tests {
         assert_eq!(canonical_command("\\апрув\\"), Some("/approve"));
         assert_eq!(canonical_command("/approve/"), Some("/approve"));
         assert_eq!(canonical_command("\\контекст\\"), Some("/context"));
+    }
+
+    #[test]
+    fn canonical_command_accepts_debug_aliases() {
+        assert_eq!(canonical_command("/debug"), Some("/debug"));
+        assert_eq!(canonical_command("\\отладка"), Some("/debug"));
+    }
+
+    #[test]
+    fn debug_command_reports_saved_path() {
+        fn redraw(_: &TuiAppState) -> Result<(), BootstrapError> {
+            Ok(())
+        }
+
+        let backend = FakeBackend {
+            summary: SessionSummary {
+                id: "session-a".to_string(),
+                title: "Session A".to_string(),
+                model: Some("glm-5-turbo".to_string()),
+                reasoning_visible: true,
+                think_level: None,
+                compactifications: 0,
+                completion_nudges: None,
+                auto_approve: false,
+                context_tokens: 0,
+                has_pending_approval: false,
+                last_message_preview: None,
+                message_count: 0,
+                background_job_count: 0,
+                running_background_job_count: 0,
+                queued_background_job_count: 0,
+                created_at: 1,
+                updated_at: 2,
+            },
+            pending: Vec::new(),
+            transcript: SessionTranscriptView {
+                session_id: "session-a".to_string(),
+                entries: Vec::new(),
+            },
+            debug_bundle: "/tmp/debug-bundle.txt".to_string(),
+        };
+        let mut state = TuiAppState::new(
+            vec![backend.summary.clone()],
+            Some(backend.summary.id.clone()),
+        );
+        state.set_current_session(backend.summary.clone(), Timeline::default());
+
+        handle_command(&backend, &mut state, "\\отладка", &mut redraw).expect("handle command");
+
+        let entries = state.timeline().entries(true);
+        let last = entries.last().expect("timeline entry");
+        assert!(matches!(last.kind, TimelineEntryKind::System));
+        assert!(
+            last.content
+                .contains("debug bundle saved: /tmp/debug-bundle.txt")
+        );
     }
 
     #[test]
@@ -1201,6 +1270,7 @@ mod tests {
                     },
                 ],
             },
+            debug_bundle: "unused".to_string(),
         };
         let mut state = TuiAppState::new(vec![summary.clone()], Some(summary.id.clone()));
         state.set_current_session(summary, Timeline::default());

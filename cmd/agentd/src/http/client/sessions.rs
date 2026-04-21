@@ -1,6 +1,6 @@
 use super::*;
 use crate::http::types::{
-    ClearSessionRequest, CreateSessionRequest, SessionBackgroundJobsResponse,
+    ClearSessionRequest, CreateSessionRequest, DebugBundleResponse, SessionBackgroundJobsResponse,
     SessionDetailResponse, SkillCommandRequest,
 };
 
@@ -188,6 +188,14 @@ impl DaemonClient {
             }
         }
         Ok(lines.join("\n"))
+    }
+
+    pub fn write_debug_bundle(&self, session_id: &str) -> Result<String, BootstrapError> {
+        let response: DebugBundleResponse = self.post_json(
+            &format!("/v1/sessions/{session_id}/debug-bundle"),
+            &serde_json::json!({}),
+        )?;
+        Ok(response.path)
     }
 
     pub fn compact_session(&self, session_id: &str) -> Result<SessionSummary, BootstrapError> {
