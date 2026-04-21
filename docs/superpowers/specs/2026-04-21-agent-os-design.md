@@ -19,6 +19,7 @@ This slice covers:
 - operator-visible agent management commands in TUI/REPL
 - inter-agent messaging through the canonical session/runtime path
 - loop protection for inter-agent chains with judge-mediated continuation
+- compatibility with future scheduled agent launches through the existing daemon scheduler substrate
 
 This slice does not cover:
 
@@ -27,6 +28,7 @@ This slice does not cover:
 - remote A2A transport as the primary agent substrate
 - per-agent model ownership
 - mutable agent switching for already-created sessions
+- full operator-facing schedule management UX
 
 ## Constraints
 
@@ -214,6 +216,29 @@ This keeps agent identity separate from per-session runtime tuning.
 
 Agents must be able to send messages to each other through the same canonical chat/runtime path used for operator messages.
 
+### Trigger Surface
+
+For `v1`, inter-agent messaging is initiated by a canonical model-facing tool:
+
+- `message_agent`
+
+The tool takes the minimum structured input:
+
+- `target_agent_id`
+- `message`
+
+It is not a text convention and not a special UI-only command.
+
+On success, `message_agent` does not synchronously wait for the other agent's full answer inside the current turn. Instead it:
+
+1. validates tool policy and inter-agent chain metadata
+2. enqueues canonical daemon-owned follow-up work on the existing background/delegation substrate
+3. returns an accepted/queued result to the current turn
+
+Later, the origin session receives the other agent's answer through the same canonical wake-up path already used for background results.
+
+This keeps inter-agent work on the existing background job, inbox event, and wake-up mechanisms rather than inventing a nested live chat loop.
+
 ### Base Semantics
 
 - when one agent writes to another, runtime creates a new session for the recipient agent
@@ -253,13 +278,62 @@ Inter-agent messaging needs an explicit loop guard.
 
 Recommended policy:
 
-- enforce a bounded `max_hops`
-- when a chain reaches the limit, further forwarding is denied by default
+- default `max_hops = 3`
+- `hop_count` increments when runtime accepts a `message_agent` call and creates the next recipient session
+- when `hop_count >= max_hops`, further forwarding is denied by default
 - `judge` may grant a one-time continuation for that specific chain
 
 The continuation must be scoped to one chain, not globally disable loop protection.
 
 This allows useful escalation chains while keeping accidental ping-pong between agents bounded and inspectable.
+
+### Continuation Trigger and Persistence
+
+For `v1`, continuation is granted by a second canonical tool id available only to agents whose allowlist includes it:
+
+- `grant_agent_chain_continuation`
+
+The minimum input is:
+
+- `chain_id`
+- `reason`
+
+Runtime persists a durable one-shot grant keyed by `chain_id`. When a blocked chain later attempts one more `message_agent` hop:
+
+- if an unused continuation grant exists, runtime consumes it and allows exactly one additional hop
+- otherwise the hop remains blocked
+
+The grant is single-use and must be marked consumed durably so restarts cannot accidentally permit more than one extension.
+
+### Minimal Chain State Machine
+
+The minimum chain lifecycle is:
+
+1. `active`
+2. `blocked_max_hops`
+3. `continued_once`
+4. terminal on completion or failure
+
+This is enough to keep persistence, wake-up behavior, and tests deterministic without adding a second orchestration stack.
+
+## Scheduled Agent Launches
+
+The `agent os` design should stay compatible with future scheduled launches without making scheduling part of this initial slice.
+
+The intended extension path is a new durable `AgentSchedule` model bound to:
+
+- `agent_profile_id`
+- `project_workspace`
+- `schedule`
+- `prompt`
+
+On schedule fire:
+
+- the daemon creates a fresh new session for that agent in that project workspace
+- the saved prompt is injected as the session's incoming message
+- execution then proceeds through the same canonical chat/runtime path
+
+This should reuse the existing mission/scheduler, background job, inbox event, and wake-up substrate rather than introducing a separate scheduler-owned execution path.
 
 ## Built-In Templates
 
