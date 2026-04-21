@@ -2532,6 +2532,137 @@ fn execute_chat_turn_allows_more_than_eight_unique_tool_rounds() {
 }
 
 #[test]
+fn execute_chat_turn_pauses_for_transient_provider_failure_and_can_retry_via_approval() {
+    let (provider_api_base, provider_requests, provider_handle) =
+        spawn_json_server_status_sequence(vec![
+            (
+                500,
+                r#"{"error":{"code":"1234","message":"Internal network failure, error id: transient-1"}}"#
+                    .to_string(),
+            ),
+            (
+                200,
+                r#"{
+                    "id":"resp_retry_ok",
+                    "model":"gpt-5.4",
+                    "output":[
+                        {
+                            "id":"msg_retry_ok",
+                            "type":"message",
+                            "status":"completed",
+                            "role":"assistant",
+                            "content":[
+                                {
+                                    "type":"output_text",
+                                    "text":"Recovered after provider retry"
+                                }
+                            ]
+                        }
+                    ],
+                    "usage":{"input_tokens":20,"output_tokens":5,"total_tokens":25}
+                }"#
+                .to_string(),
+            ),
+        ]);
+    let temp = tempfile::tempdir().expect("tempdir");
+    let app = build_from_config(AppConfig {
+        data_dir: temp.path().join("state-root"),
+        daemon: Default::default(),
+        provider: ConfiguredProvider {
+            kind: ProviderKind::OpenAiResponses,
+            api_base: Some(format!("{provider_api_base}/v1")),
+            api_key: Some("test-key".to_string()),
+            default_model: Some("gpt-5.4".to_string()),
+            ..ConfiguredProvider::default()
+        },
+        ..AppConfig::default()
+    })
+    .expect("build app");
+    let store = PersistenceStore::open(&app.persistence).expect("open store");
+
+    store
+        .put_session(&SessionRecord {
+            id: "session-provider-retry".to_string(),
+            title: "Provider retry session".to_string(),
+            prompt_override: Some("Keep going.".to_string()),
+            settings_json: serde_json::to_string(&SessionSettings::default())
+                .expect("serialize settings"),
+            active_mission_id: None,
+            parent_session_id: None,
+            parent_job_id: None,
+            delegation_label: None,
+            created_at: 1,
+            updated_at: 1,
+        })
+        .expect("put session");
+
+    let error = app
+        .execute_chat_turn("session-provider-retry", "Say hi", 10)
+        .expect_err("chat turn should pause for provider retry approval");
+    assert!(error.to_string().contains("approval"));
+
+    let waiting_run = store
+        .get_run("run-chat-session-provider-retry-10")
+        .expect("get waiting run")
+        .expect("waiting run exists");
+    assert_eq!(waiting_run.status, "waiting_approval");
+
+    let approvals = app
+        .run_with_args(["approval", "list", "run-chat-session-provider-retry-10"])
+        .expect("approval list");
+    assert!(approvals.contains("retry the provider request"));
+    assert!(approvals.contains("500 Internal Server Error"));
+
+    let approval_id = approvals
+        .split_whitespace()
+        .find(|token| token.starts_with("approval-"))
+        .expect("approval id in list")
+        .to_string();
+
+    let approved = app
+        .run_with_args([
+            "approval",
+            "approve",
+            "run-chat-session-provider-retry-10",
+            &approval_id,
+        ])
+        .expect("approval approve");
+    let first_request = provider_requests.recv().expect("first provider request");
+    let second_request = provider_requests.recv().expect("second provider request");
+    provider_handle.join().expect("join provider server");
+
+    assert!(approved.contains("run-chat-session-provider-retry-10"));
+    assert!(approved.contains("Recovered after provider retry"));
+
+    let completed_run = store
+        .get_run("run-chat-session-provider-retry-10")
+        .expect("get completed run")
+        .expect("completed run exists");
+    assert_eq!(completed_run.status, "completed");
+    assert_eq!(
+        completed_run.result.as_deref(),
+        Some("Recovered after provider retry")
+    );
+
+    let transcript = app
+        .session_transcript("session-provider-retry")
+        .expect("load transcript");
+    assert_eq!(
+        transcript
+            .entries
+            .last()
+            .map(|entry| entry.content.as_str()),
+        Some("Recovered after provider retry")
+    );
+    assert!(first_request.to_ascii_lowercase().contains("/v1/responses"));
+    assert!(
+        second_request
+            .to_ascii_lowercase()
+            .contains("/v1/responses")
+    );
+}
+
+#[test]
 fn execute_chat_turn_can_finish_after_an_allowed_web_tool_call_with_zai() {
     let (web_base, web_requests, web_handle) = spawn_text_server("/doc", "local doc");
     let first_provider_response = format!(
@@ -4541,6 +4672,72 @@ fn spawn_json_server_sequence(
 
             let response = format!(
                 "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
+                body.len(),
+                body
+            );
+            stream
+                .write_all(response.as_bytes())
+                .expect("write response");
+            stream.flush().expect("flush response");
+        }
+    });
+
+    (format!("http://{address}"), receiver, handle)
+}
+
+fn spawn_json_server_status_sequence(
+    responses: Vec<(u16, String)>,
+) -> (String, Receiver<String>, thread::JoinHandle<()>) {
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind listener");
+    let address = listener.local_addr().expect("local addr");
+    let (sender, receiver) = mpsc::channel();
+
+    let handle = thread::spawn(move || {
+        for (status_code, body) in responses {
+            let (mut stream, _) = listener.accept().expect("accept connection");
+            stream
+                .set_read_timeout(Some(Duration::from_secs(2)))
+                .expect("set read timeout");
+
+            let mut reader = BufReader::new(stream.try_clone().expect("clone stream"));
+            let mut raw_request = String::new();
+            let mut content_length = 0usize;
+
+            loop {
+                let mut line = String::new();
+                reader.read_line(&mut line).expect("read request line");
+                raw_request.push_str(&line);
+
+                if line == "\r\n" {
+                    break;
+                }
+
+                let lower = line.to_ascii_lowercase();
+                if let Some(value) = lower.strip_prefix("content-length:") {
+                    content_length = value.trim().parse().expect("parse content length");
+                }
+            }
+
+            let mut body_buf = vec![0u8; content_length];
+            reader.read_exact(&mut body_buf).expect("read request body");
+            raw_request.push_str(std::str::from_utf8(&body_buf).expect("utf8 body"));
+            sender.send(raw_request).expect("send request");
+
+            let status_line = match status_code {
+                200 => "200 OK".to_string(),
+                400 => "400 Bad Request".to_string(),
+                401 => "401 Unauthorized".to_string(),
+                403 => "403 Forbidden".to_string(),
+                408 => "408 Request Timeout".to_string(),
+                429 => "429 Too Many Requests".to_string(),
+                500 => "500 Internal Server Error".to_string(),
+                502 => "502 Bad Gateway".to_string(),
+                503 => "503 Service Unavailable".to_string(),
+                504 => "504 Gateway Timeout".to_string(),
+                other => format!("{other} Test Status"),
+            };
+            let response = format!(
+                "HTTP/1.1 {status_line}\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
                 body.len(),
                 body
             );

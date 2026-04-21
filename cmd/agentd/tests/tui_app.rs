@@ -1011,8 +1011,18 @@ fn tui_chat_send_provider_failure_stays_inside_timeline_instead_of_exiting() {
 
     assert!(result.is_ok(), "provider failure should stay in the TUI");
     assert!(state.timeline().entries(true).iter().any(|entry| {
-        matches!(entry.kind, TimelineEntryKind::System) && entry.content.starts_with("chat failed:")
+        matches!(entry.kind, TimelineEntryKind::Approval { .. })
+            && entry
+                .content
+                .contains("approve to retry the provider request")
     }));
+    assert!(
+        !state.timeline().entries(true).iter().any(|entry| {
+            matches!(entry.kind, TimelineEntryKind::System)
+                && entry.content.starts_with("chat failed:")
+        }),
+        "transient provider failures should pause for approval instead of terminal chat failure"
+    );
 }
 
 #[test]

@@ -109,11 +109,18 @@ pub struct PendingCompletionApproval {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PendingProviderRetryApproval {
+    pub approval_id: String,
+    pub error_summary: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum PendingProviderApproval {
     Tool(PendingToolApproval),
     LoopReset(PendingLoopResetApproval),
     CompletionNudge(PendingCompletionApproval),
+    ProviderRetry(PendingProviderRetryApproval),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -297,12 +304,22 @@ impl PendingCompletionApproval {
     }
 }
 
+impl PendingProviderRetryApproval {
+    pub fn new(approval_id: impl Into<String>, error_summary: impl Into<String>) -> Self {
+        Self {
+            approval_id: approval_id.into(),
+            error_summary: error_summary.into(),
+        }
+    }
+}
+
 impl PendingProviderApproval {
     pub fn approval_id(&self) -> &str {
         match self {
             Self::Tool(approval) => approval.approval_id.as_str(),
             Self::LoopReset(approval) => approval.approval_id.as_str(),
             Self::CompletionNudge(approval) => approval.approval_id.as_str(),
+            Self::ProviderRetry(approval) => approval.approval_id.as_str(),
         }
     }
 }

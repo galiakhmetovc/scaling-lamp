@@ -573,6 +573,10 @@ fn describe_pending_provider_approval(pending: Option<&PendingProviderApproval>)
             "completion:{} nudges={}/{}",
             approval.approval_id, approval.completion_nudges_used, approval.max_completion_nudges
         ),
+        Some(PendingProviderApproval::ProviderRetry(approval)) => format!(
+            "provider_retry:{} error={}",
+            approval.approval_id, approval.error_summary
+        ),
     }
 }
 

@@ -9,13 +9,13 @@ use agent_runtime::permission::PermissionAction;
 use agent_runtime::plan::{PlanItem, PlanItemStatus, PlanSnapshot};
 use agent_runtime::prompt::{PromptAssembly, PromptAssemblyInput};
 use agent_runtime::provider::{
-    ProviderContinuationMessage, ProviderMessage, ProviderRequest, ProviderResponse,
+    ProviderContinuationMessage, ProviderError, ProviderMessage, ProviderRequest, ProviderResponse,
     ProviderStreamEvent, ProviderStreamMode, ProviderToolCall, ProviderToolDefinition,
     ProviderToolOutput,
 };
 use agent_runtime::run::{
-    ApprovalRequest, PendingLoopResetApproval, PendingProviderApproval, PendingToolApproval,
-    ProviderLoopState, RunStepKind,
+    ApprovalRequest, PendingLoopResetApproval, PendingProviderApproval,
+    PendingProviderRetryApproval, PendingToolApproval, ProviderLoopState, RunStepKind,
 };
 use agent_runtime::session::{MessageRole, TranscriptEntry};
 use agent_runtime::skills::{resolve_session_skill_status, scan_skill_catalog};
@@ -295,6 +295,16 @@ impl ProviderLoopCursor {
                 self.completion_nudges_used,
                 max_completion_nudges,
             ),
+        )))
+    }
+
+    fn provider_retry_approval_state(
+        &self,
+        approval_id: &str,
+        error: &ProviderError,
+    ) -> ProviderLoopState {
+        self.persistent_state(Some(PendingProviderApproval::ProviderRetry(
+            PendingProviderRetryApproval::new(approval_id.to_string(), error.approval_summary()),
         )))
     }
 
@@ -614,6 +624,41 @@ impl ExecutionService {
         } else {
             provider.complete(request).map_err(ExecutionError::Provider)
         }
+    }
+
+    fn pause_for_transient_provider_retry(
+        &self,
+        run: &mut RunEngine,
+        cursor: &ProviderLoopCursor,
+        error: &ProviderError,
+        now: i64,
+        store: &PersistenceStore,
+    ) -> Result<ExecutionError, ExecutionError> {
+        let approval_id = format!(
+            "approval-{}-provider-retry-{}",
+            run.snapshot().id,
+            run.snapshot().recent_steps.len()
+        );
+        let reason = format!(
+            "{}; approve to retry the provider request",
+            error.approval_summary()
+        );
+        run.wait_for_approval(
+            ApprovalRequest::new(approval_id.clone(), "provider-retry", &reason, now),
+            now,
+        )
+        .map_err(ExecutionError::RunTransition)?;
+        run.set_provider_loop_state(
+            cursor.provider_retry_approval_state(&approval_id, error),
+            now,
+        )
+        .map_err(ExecutionError::RunTransition)?;
+        self.persist_run(store, run)?;
+        Ok(ExecutionError::ApprovalRequired {
+            tool: "provider_retry".to_string(),
+            approval_id,
+            reason,
+        })
     }
 
     fn resolve_provider_tool_call<'a>(
@@ -1495,7 +1540,15 @@ impl ExecutionService {
                 cursor.stream_mode(observer.is_some()),
                 self.config.provider_max_output_tokens,
             );
-            let response = self.request_provider_response(provider, &request, observer)?;
+            let response = match self.request_provider_response(provider, &request, observer) {
+                Ok(response) => response,
+                Err(ExecutionError::Provider(error)) if error.is_transient() => {
+                    return Err(
+                        self.pause_for_transient_provider_retry(run, &cursor, &error, now, store)?
+                    );
+                }
+                Err(error) => return Err(error),
+            };
             cursor.clear_continuation_input_messages();
             self.apply_provider_response(run, &response, now)?;
             self.persist_run(store, run)?;

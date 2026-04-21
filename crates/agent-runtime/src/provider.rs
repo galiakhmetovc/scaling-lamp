@@ -1347,6 +1347,45 @@ impl Error for ProviderError {
     }
 }
 
+impl ProviderError {
+    pub fn is_transient(&self) -> bool {
+        match self {
+            Self::Http(_) | Self::Stream(_) | Self::StreamIdleTimeout { .. } => true,
+            Self::HttpStatus { status, .. } => {
+                status.is_server_error()
+                    || *status == StatusCode::TOO_MANY_REQUESTS
+                    || *status == StatusCode::REQUEST_TIMEOUT
+            }
+            Self::MissingModel
+            | Self::Parse(_)
+            | Self::ResponseMissingOutputText
+            | Self::ResponseMissingToolCallField { .. }
+            | Self::UnsupportedMessageRole { .. }
+            | Self::UnsupportedStreaming => false,
+        }
+    }
+
+    pub fn approval_summary(&self) -> String {
+        match self {
+            Self::HttpStatus { status, body } => {
+                let body = body.trim();
+                if body.is_empty() {
+                    format!("provider request failed with {status}")
+                } else {
+                    format!("provider request failed with {status}: {body}")
+                }
+            }
+            Self::Http(source) => format!("provider http error: {source}"),
+            Self::Stream(source) => format!("provider stream error: {source}"),
+            Self::StreamIdleTimeout { seconds } => format!(
+                "provider stream idle timeout after {} seconds without new bytes",
+                seconds
+            ),
+            _ => self.to_string(),
+        }
+    }
+}
+
 impl fmt::Display for ProviderKindParseError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(formatter, "unknown provider kind {}", self.value)

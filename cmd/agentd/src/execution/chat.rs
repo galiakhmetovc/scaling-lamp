@@ -694,6 +694,7 @@ impl ExecutionService {
                 resumed_loop_state.completion_nudges_used =
                     pending_completion_approval.completion_nudges_used;
             }
+            agent_runtime::run::PendingProviderApproval::ProviderRetry(_) => {}
         }
         run.set_provider_loop_state(resumed_loop_state.clone(), now)
             .map_err(ExecutionError::RunTransition)?;
