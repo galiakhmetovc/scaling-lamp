@@ -135,13 +135,28 @@ pub struct ToolResumeRequest<'a> {
     pub now: i64,
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct ExecutionServiceConfig {
+    pub provider_max_tool_rounds: usize,
     pub provider_max_output_tokens: Option<u32>,
     pub skills_dir: PathBuf,
     pub a2a_public_base_url: Option<String>,
     pub a2a_callback_bearer_token: Option<String>,
     pub a2a_peers: BTreeMap<String, A2APeerConfig>,
+}
+
+impl Default for ExecutionServiceConfig {
+    fn default() -> Self {
+        Self {
+            provider_max_tool_rounds: agent_runtime::provider::DEFAULT_PROVIDER_MAX_TOOL_ROUNDS
+                as usize,
+            provider_max_output_tokens: None,
+            skills_dir: PathBuf::new(),
+            a2a_public_base_url: None,
+            a2a_callback_bearer_token: None,
+            a2a_peers: BTreeMap::new(),
+        }
+    }
 }
 
 #[derive(Debug, Clone)]

@@ -27,6 +27,8 @@ pub enum ProviderKind {
     ZaiChatCompletions,
 }
 
+pub const DEFAULT_PROVIDER_MAX_TOOL_ROUNDS: u32 = 24;
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct ConfiguredProvider {
@@ -37,6 +39,7 @@ pub struct ConfiguredProvider {
     pub connect_timeout_seconds: Option<u64>,
     pub request_timeout_seconds: Option<u64>,
     pub stream_idle_timeout_seconds: Option<u64>,
+    pub max_tool_rounds: Option<u32>,
     pub max_output_tokens: Option<u32>,
 }
 
@@ -50,6 +53,7 @@ impl Default for ConfiguredProvider {
             connect_timeout_seconds: Some(15),
             request_timeout_seconds: None,
             stream_idle_timeout_seconds: Some(1200),
+            max_tool_rounds: Some(DEFAULT_PROVIDER_MAX_TOOL_ROUNDS),
             max_output_tokens: None,
         }
     }

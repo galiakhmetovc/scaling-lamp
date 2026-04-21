@@ -10,7 +10,10 @@ use agent_persistence::{
 };
 use agent_runtime::RuntimeScaffold;
 use agent_runtime::context::{ContextSummary, approximate_token_count};
-use agent_runtime::provider::{ProviderBuildError, ProviderDriver, ProviderError, build_driver};
+use agent_runtime::provider::{
+    DEFAULT_PROVIDER_MAX_TOOL_ROUNDS, ProviderBuildError, ProviderDriver, ProviderError,
+    build_driver,
+};
 use agent_runtime::run::{RunSnapshot, RunTransitionError};
 use agent_runtime::session::SessionSettings;
 use agent_runtime::skills::SessionSkillStatus as RuntimeSessionSkillStatus;
@@ -135,6 +138,12 @@ impl App {
             self.runtime.workspace.clone(),
             self.processes.clone(),
             execution::ExecutionServiceConfig {
+                provider_max_tool_rounds: self
+                    .config
+                    .provider
+                    .max_tool_rounds
+                    .unwrap_or(DEFAULT_PROVIDER_MAX_TOOL_ROUNDS)
+                    as usize,
                 provider_max_output_tokens: self.config.provider.max_output_tokens,
                 skills_dir: self.config.daemon.skills_dir.clone(),
                 a2a_public_base_url: self.config.daemon.public_base_url.clone(),

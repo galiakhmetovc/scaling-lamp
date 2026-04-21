@@ -25,7 +25,6 @@ use agent_runtime::tool::{
 use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-const MAX_PROVIDER_TOOL_ROUNDS: usize = 8;
 const MAX_CONTEXT_OFFLOAD_REFS: usize = 16;
 const INLINE_TOOL_OUTPUT_TOKEN_LIMIT: u32 = 512;
 const INLINE_FIND_IN_FILES_PREVIEW_LIMIT: usize = 6;
@@ -47,6 +46,7 @@ struct PromptMessages {
 
 #[derive(Debug, Clone)]
 struct ProviderLoopCursor {
+    max_rounds: usize,
     round: usize,
     pending_tool_outputs: Vec<ProviderToolOutput>,
     continuation_messages: Vec<ProviderContinuationMessage>,
@@ -57,7 +57,11 @@ struct ProviderLoopCursor {
 }
 
 impl ProviderLoopCursor {
-    fn new(provider: &dyn ProviderDriver, initial_loop_state: Option<ProviderLoopState>) -> Self {
+    fn new(
+        provider: &dyn ProviderDriver,
+        initial_loop_state: Option<ProviderLoopState>,
+        max_rounds: usize,
+    ) -> Self {
         let supports_previous_response_id = provider
             .descriptor()
             .capabilities
@@ -91,6 +95,7 @@ impl ProviderLoopCursor {
             .unwrap_or_default();
 
         Self {
+            max_rounds,
             round,
             pending_tool_outputs,
             continuation_messages,
@@ -102,7 +107,7 @@ impl ProviderLoopCursor {
     }
 
     fn has_round_budget(&self) -> bool {
-        self.round < MAX_PROVIDER_TOOL_ROUNDS
+        self.round < self.max_rounds
     }
 
     fn stream_mode(&self, has_observer: bool) -> ProviderStreamMode {
@@ -240,7 +245,7 @@ impl ProviderLoopCursor {
         ExecutionError::ProviderLoop {
             reason: format!(
                 "provider exceeded {} tool-calling rounds without producing a final answer",
-                MAX_PROVIDER_TOOL_ROUNDS
+                self.max_rounds
             ),
         }
     }
@@ -1180,7 +1185,11 @@ impl ExecutionService {
         let tools =
             self.automatic_provider_tools(provider, prompt_messages.context_offload.as_ref());
         let mut tool_runtime = self.tool_runtime();
-        let mut cursor = ProviderLoopCursor::new(provider, initial_loop_state);
+        let mut cursor = ProviderLoopCursor::new(
+            provider,
+            initial_loop_state,
+            self.config.provider_max_tool_rounds,
+        );
 
         while cursor.has_round_budget() {
             let request = cursor.build_request(
@@ -1407,7 +1416,7 @@ mod tests {
     #[test]
     fn build_request_omits_max_output_tokens_when_not_configured() {
         let provider = provider();
-        let cursor = ProviderLoopCursor::new(&provider, None);
+        let cursor = ProviderLoopCursor::new(&provider, None, 24);
 
         let request = cursor.build_request(
             &[ProviderMessage::new(MessageRole::User, "hello")],
@@ -1424,7 +1433,7 @@ mod tests {
     #[test]
     fn build_request_uses_configured_max_output_tokens() {
         let provider = provider();
-        let cursor = ProviderLoopCursor::new(&provider, None);
+        let cursor = ProviderLoopCursor::new(&provider, None, 24);
 
         let request = cursor.build_request(
             &[ProviderMessage::new(MessageRole::User, "hello")],

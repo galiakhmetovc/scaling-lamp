@@ -23,6 +23,7 @@ fn base_env(root: &Path) -> ConfigEnv {
         provider_api_key_override: None,
         provider_connect_timeout_override: None,
         provider_kind_override: None,
+        provider_max_tool_rounds_override: None,
         provider_max_output_tokens_override: None,
         provider_model_override: None,
         provider_request_timeout_override: None,
@@ -173,6 +174,7 @@ fn load_uses_zai_defaults_when_provider_kind_is_selected() {
     assert_eq!(config.provider.connect_timeout_seconds, Some(15));
     assert_eq!(config.provider.request_timeout_seconds, None);
     assert_eq!(config.provider.stream_idle_timeout_seconds, Some(1200));
+    assert_eq!(config.provider.max_tool_rounds, Some(24));
     assert_eq!(config.provider.max_output_tokens, None);
 }
 
@@ -188,6 +190,7 @@ fn load_applies_provider_runtime_env_overrides() {
     env.provider_connect_timeout_override = Some(20);
     env.provider_request_timeout_override = Some(3600);
     env.provider_stream_idle_timeout_override = Some(1800);
+    env.provider_max_tool_rounds_override = Some(32);
     env.provider_max_output_tokens_override = Some(8192);
 
     let config = AppConfig::load_from_env(&env).expect("load config");
@@ -195,6 +198,7 @@ fn load_applies_provider_runtime_env_overrides() {
     assert_eq!(config.provider.connect_timeout_seconds, Some(20));
     assert_eq!(config.provider.request_timeout_seconds, Some(3600));
     assert_eq!(config.provider.stream_idle_timeout_seconds, Some(1800));
+    assert_eq!(config.provider.max_tool_rounds, Some(32));
     assert_eq!(config.provider.max_output_tokens, Some(8192));
 }
 

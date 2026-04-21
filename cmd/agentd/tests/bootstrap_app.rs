@@ -1840,6 +1840,122 @@ fn execute_chat_turn_recovers_from_invalid_tool_arguments_and_retries() {
 }
 
 #[test]
+fn execute_chat_turn_allows_more_than_eight_unique_tool_rounds() {
+    let mut provider_responses = Vec::new();
+    for round in 1..=9 {
+        provider_responses.push(format!(
+            r#"{{
+                "id":"resp_tool_round_{round}",
+                "model":"gpt-5.4",
+                "output":[
+                    {{
+                        "id":"fc_{round}",
+                        "type":"function_call",
+                        "status":"completed",
+                        "call_id":"call_glob_{round}",
+                        "name":"fs_glob",
+                        "arguments":"{{\"path\":\".\",\"pattern\":\"**/*round-{round}*\"}}"
+                    }}
+                ],
+                "usage":{{"input_tokens":12,"output_tokens":4,"total_tokens":16}}
+            }}"#
+        ));
+    }
+    provider_responses.push(
+        r#"{
+                "id":"resp_tool_round_final",
+                "model":"gpt-5.4",
+                "output":[
+                    {
+                        "id":"msg_tool_round_final",
+                        "type":"message",
+                        "status":"completed",
+                        "role":"assistant",
+                        "content":[
+                            {
+                                "type":"output_text",
+                                "text":"Завершил длинную цепочку tool rounds."
+                            }
+                        ]
+                    }
+                ],
+                "usage":{"input_tokens":40,"output_tokens":8,"total_tokens":48}
+            }"#
+        .to_string(),
+    );
+    let (provider_api_base, provider_requests, provider_handle) =
+        spawn_json_server_sequence(provider_responses);
+    let temp = tempfile::tempdir().expect("tempdir");
+    let workspace_root = temp.path().join("workspace");
+    fs::create_dir_all(&workspace_root).expect("create workspace");
+    fs::write(
+        workspace_root.join("round-9-target.txt"),
+        "marker for the final glob round\n",
+    )
+    .expect("write workspace marker");
+    let app = build_from_config(AppConfig {
+        data_dir: temp.path().join("state-root"),
+        daemon: Default::default(),
+        provider: ConfiguredProvider {
+            kind: ProviderKind::OpenAiResponses,
+            api_base: Some(format!("{provider_api_base}/v1")),
+            api_key: Some("test-key".to_string()),
+            default_model: Some("gpt-5.4".to_string()),
+            ..ConfiguredProvider::default()
+        },
+        ..AppConfig::default()
+    })
+    .expect("build app");
+    let store = PersistenceStore::open(&app.persistence).expect("open store");
+
+    store
+        .put_session(&SessionRecord {
+            id: "session-many-rounds".to_string(),
+            title: "Many rounds session".to_string(),
+            prompt_override: Some("Use tools when useful.".to_string()),
+            settings_json: serde_json::to_string(&SessionSettings::default())
+                .expect("serialize settings"),
+            active_mission_id: None,
+            parent_session_id: None,
+            parent_job_id: None,
+            delegation_label: None,
+            created_at: 1,
+            updated_at: 1,
+        })
+        .expect("put session");
+
+    let previous_dir = std::env::current_dir().expect("current dir");
+    std::env::set_current_dir(&workspace_root).expect("switch to workspace");
+    let report = app
+        .execute_chat_turn(
+            "session-many-rounds",
+            "Пройди длинную цепочку поиска по workspace",
+            10,
+        )
+        .expect("execute chat turn");
+    std::env::set_current_dir(previous_dir).expect("restore current dir");
+
+    for _ in 0..10 {
+        provider_requests.recv().expect("provider request");
+    }
+    provider_handle.join().expect("join provider server");
+
+    assert_eq!(report.run_id, "run-chat-session-many-rounds-10");
+    assert_eq!(report.response_id, "resp_tool_round_final");
+    assert_eq!(report.output_text, "Завершил длинную цепочку tool rounds.");
+
+    let run = store
+        .get_run("run-chat-session-many-rounds-10")
+        .expect("get run")
+        .expect("run exists");
+    assert_eq!(run.status, "completed");
+    assert_eq!(
+        run.result.as_deref(),
+        Some("Завершил длинную цепочку tool rounds.")
+    );
+}
+
+#[test]
 fn execute_chat_turn_can_finish_after_an_allowed_web_tool_call_with_zai() {
     let (web_base, web_requests, web_handle) = spawn_text_server("/doc", "local doc");
     let first_provider_response = format!(

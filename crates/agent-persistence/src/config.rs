@@ -54,6 +54,7 @@ pub struct ConfigEnv {
     pub provider_api_key_override: Option<String>,
     pub provider_connect_timeout_override: Option<u64>,
     pub provider_kind_override: Option<String>,
+    pub provider_max_tool_rounds_override: Option<u32>,
     pub provider_max_output_tokens_override: Option<u32>,
     pub provider_model_override: Option<String>,
     pub provider_request_timeout_override: Option<u64>,
@@ -200,6 +201,10 @@ impl ConfigEnv {
                 &dotenv,
             )?,
             provider_kind_override: read_string_var("TEAMD_PROVIDER_KIND", &dotenv),
+            provider_max_tool_rounds_override: read_u32_var(
+                "TEAMD_PROVIDER_MAX_TOOL_ROUNDS",
+                &dotenv,
+            )?,
             provider_max_output_tokens_override: read_u32_var(
                 "TEAMD_PROVIDER_MAX_OUTPUT_TOKENS",
                 &dotenv,
@@ -309,6 +314,9 @@ impl AppConfig {
         }
         if let Some(default_model) = &env.provider_model_override {
             provider.default_model = Some(default_model.clone());
+        }
+        if let Some(rounds) = env.provider_max_tool_rounds_override {
+            provider.max_tool_rounds = Some(rounds);
         }
         if let Some(tokens) = env.provider_max_output_tokens_override {
             provider.max_output_tokens = Some(tokens);
@@ -425,6 +433,7 @@ impl AppConfig {
             "stream_idle_timeout_seconds",
             self.provider.stream_idle_timeout_seconds,
         )?;
+        validate_positive_provider_value("max_tool_rounds", self.provider.max_tool_rounds)?;
         validate_positive_provider_value("max_output_tokens", self.provider.max_output_tokens)?;
 
         Ok(())
