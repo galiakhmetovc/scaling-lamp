@@ -208,7 +208,7 @@ impl WorkspaceRef {
     ) -> Result<Vec<WorkspaceSearchMatch>, WorkspaceError> {
         let resolved = self.resolve(path)?;
         let mut matches = Vec::new();
-        self.collect_matches(&resolved, query, &mut matches)?;
+        self.collect_matches(&resolved, query, &mut matches, false)?;
         matches.sort_by(|left, right| {
             left.path
                 .cmp(&right.path)
@@ -392,11 +392,20 @@ impl WorkspaceRef {
         path: &Path,
         query: &str,
         matches: &mut Vec<WorkspaceSearchMatch>,
+        allow_missing_entry: bool,
     ) -> Result<(), WorkspaceError> {
-        let metadata = fs::metadata(path).map_err(|source| WorkspaceError::Io {
-            path: path.to_path_buf(),
-            source,
-        })?;
+        let metadata = match fs::metadata(path) {
+            Ok(metadata) => metadata,
+            Err(source) if allow_missing_entry && source.kind() == std::io::ErrorKind::NotFound => {
+                return Ok(());
+            }
+            Err(source) => {
+                return Err(WorkspaceError::Io {
+                    path: path.to_path_buf(),
+                    source,
+                });
+            }
+        };
 
         if metadata.is_file() {
             matches.extend(self.read_matches_in_file(path, query)?);
@@ -411,7 +420,7 @@ impl WorkspaceRef {
                 path: path.to_path_buf(),
                 source,
             })?;
-            self.collect_matches(&entry.path(), query, matches)?;
+            self.collect_matches(&entry.path(), query, matches, true)?;
         }
 
         Ok(())
@@ -497,6 +506,7 @@ impl Error for WorkspaceError {
 #[cfg(test)]
 mod tests {
     use super::WorkspaceRef;
+    use std::fs;
 
     #[test]
     fn resolve_path_keeps_access_inside_workspace_root() {
@@ -508,5 +518,33 @@ mod tests {
         );
         assert!(workspace.resolve("../escape").is_err());
         assert!(workspace.resolve("/abs/path").is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn find_in_files_ignores_dangling_symlink_entries() {
+        use std::os::unix::fs::symlink;
+
+        let temp = tempfile::tempdir().expect("tempdir");
+        let workspace = WorkspaceRef::new(temp.path());
+
+        fs::create_dir_all(temp.path().join(".docker")).expect("create directory");
+        fs::write(
+            temp.path().join("notes.txt"),
+            "timeweb binary should live next to the skill\n",
+        )
+        .expect("write searchable file");
+        symlink(
+            temp.path().join("missing-features.json"),
+            temp.path().join(".docker/features.json"),
+        )
+        .expect("create dangling symlink");
+
+        let matches = workspace
+            .find_in_files("", "timeweb")
+            .expect("search should ignore dangling symlink");
+
+        assert_eq!(matches.len(), 1);
+        assert_eq!(matches[0].path, "notes.txt");
     }
 }
