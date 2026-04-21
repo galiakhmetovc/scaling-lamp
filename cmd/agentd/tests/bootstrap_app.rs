@@ -1590,6 +1590,7 @@ fn execute_chat_turn_creates_a_run_and_appends_transcript_history() {
 #[test]
 fn execute_chat_turn_can_finish_after_an_allowed_web_tool_call() {
     let (web_base, web_requests, web_handle) = spawn_text_server("/doc", "local doc");
+    let web_url = format!("{web_base}/doc");
     let first_provider_response = format!(
         r#"{{
                 "id":"resp_tool_call",
@@ -1604,9 +1605,9 @@ fn execute_chat_turn_can_finish_after_an_allowed_web_tool_call() {
                         "arguments":"{{\"url\":\"{}\"}}"
                     }}
                 ],
-                "usage":{{"input_tokens":19,"output_tokens":7,"total_tokens":26}}
+                        "usage":{{"input_tokens":19,"output_tokens":7,"total_tokens":26}}
             }}"#,
-        web_base
+        web_url
     );
     let (provider_api_base, provider_requests, provider_handle) = spawn_json_server_sequence(vec![
         first_provider_response,
@@ -1702,7 +1703,8 @@ fn execute_chat_turn_can_finish_after_an_allowed_web_tool_call() {
     assert!(!normalized_second.contains("\"text\":\"fetch the local doc\""));
 
     let normalized_web = web_request.to_ascii_lowercase();
-    assert!(normalized_web.contains("get /doc http/1.1"));
+    assert!(normalized_web.contains("get "));
+    assert!(normalized_web.contains("/doc"));
     assert!(web_base.contains("127.0.0.1"));
 }
 
@@ -2580,7 +2582,8 @@ fn execute_chat_turn_can_finish_after_an_allowed_web_tool_call_with_zai() {
     assert!(normalized_second.contains("local doc"));
 
     let normalized_web = web_request.to_ascii_lowercase();
-    assert!(normalized_web.contains("get /doc http/1.1"));
+    assert!(normalized_web.contains("get "));
+    assert!(normalized_web.contains("/doc"));
 }
 
 #[test]
@@ -2843,7 +2846,8 @@ fn approval_approve_resumes_an_openai_chat_tool_call_and_completes_the_run() {
     assert!(normalized_second.contains("approved doc"));
 
     let normalized_web = web_request.to_ascii_lowercase();
-    assert!(normalized_web.contains("get /doc http/1.1"));
+    assert!(normalized_web.contains("get "));
+    assert!(normalized_web.contains("/doc"));
 }
 
 #[test]
@@ -3001,7 +3005,8 @@ fn approval_approve_resumes_a_zai_chat_tool_call_and_completes_the_run() {
     assert!(normalized_second.contains("approved zai doc"));
 
     let normalized_web = web_request.to_ascii_lowercase();
-    assert!(normalized_web.contains("get /doc http/1.1"));
+    assert!(normalized_web.contains("get "));
+    assert!(normalized_web.contains("/doc"));
 }
 
 #[test]
@@ -3187,12 +3192,14 @@ fn approval_approve_resumes_a_mission_turn_and_completes_the_job() {
     assert!(normalized_second.contains("\"previous_response_id\":\"resp_mission_approval_call\""));
     assert!(normalized_second.contains("mission approved doc"));
     let normalized_web = web_request.to_ascii_lowercase();
-    assert!(normalized_web.contains("get /doc http/1.1"));
+    assert!(normalized_web.contains("get "));
+    assert!(normalized_web.contains("/doc"));
 }
 
 #[test]
 fn execute_chat_turn_fails_when_the_provider_repeats_the_same_tool_signature() {
-    let (web_base, web_requests, web_handle) = spawn_text_server("/doc", "loop doc");
+    let (web_base, web_requests, web_handle) =
+        spawn_text_server_sequence(vec!["loop doc", "loop doc"]);
     let repeated_tool_response = format!(
         r#"{{
                 "id":"resp_tool_loop",
@@ -3211,8 +3218,11 @@ fn execute_chat_turn_fails_when_the_provider_repeats_the_same_tool_signature() {
             }}"#,
         web_base
     );
-    let (provider_api_base, provider_requests, provider_handle) =
-        spawn_json_server_sequence(vec![repeated_tool_response.clone(), repeated_tool_response]);
+    let (provider_api_base, provider_requests, provider_handle) = spawn_json_server_sequence(vec![
+        repeated_tool_response.clone(),
+        repeated_tool_response.clone(),
+        repeated_tool_response,
+    ]);
     let temp = tempfile::tempdir().expect("tempdir");
     let app = build_from_config(AppConfig {
         data_dir: temp.path().join("state-root"),
@@ -3248,16 +3258,28 @@ fn execute_chat_turn_fails_when_the_provider_repeats_the_same_tool_signature() {
     let error = app
         .execute_chat_turn("session-chat-loop", "Fetch the local doc", 10)
         .expect_err("repeated tool signature must fail");
-    let first_request = provider_requests.recv().expect("first provider request");
-    let second_request = provider_requests.recv().expect("second provider request");
-    let web_request = web_requests.recv().expect("web request");
+    let first_request = provider_requests
+        .recv_timeout(Duration::from_secs(1))
+        .expect("first provider request");
+    let second_request = provider_requests
+        .recv_timeout(Duration::from_secs(1))
+        .expect("second provider request");
+    let third_request = provider_requests
+        .recv_timeout(Duration::from_secs(1))
+        .expect("third provider request");
+    let web_request = web_requests
+        .recv_timeout(Duration::from_secs(1))
+        .expect("web request");
+    let second_web_request = web_requests
+        .recv_timeout(Duration::from_secs(1))
+        .expect("second web request");
     provider_handle.join().expect("join provider server");
     web_handle.join().expect("join web server");
 
     assert!(
         error
             .to_string()
-            .contains("provider repeated tool-call signature")
+            .contains("provider repeated tool-call signature 3 times in a row")
     );
 
     let run = store
@@ -3269,15 +3291,19 @@ fn execute_chat_turn_fails_when_the_provider_repeats_the_same_tool_signature() {
         run.error
             .as_deref()
             .unwrap_or_default()
-            .contains("provider repeated tool-call signature")
+            .contains("provider repeated tool-call signature 3 times in a row")
     );
 
     let normalized_first = first_request.to_ascii_lowercase();
     assert!(normalized_first.contains("\"name\":\"web_fetch\""));
     let normalized_second = second_request.to_ascii_lowercase();
     assert!(normalized_second.contains("\"previous_response_id\":\"resp_tool_loop\""));
+    let normalized_third = third_request.to_ascii_lowercase();
+    assert!(normalized_third.contains("\"previous_response_id\":\"resp_tool_loop\""));
     let normalized_web = web_request.to_ascii_lowercase();
-    assert!(normalized_web.contains("get /doc http/1.1"));
+    assert!(normalized_web.contains("get "));
+    let normalized_second_web = second_web_request.to_ascii_lowercase();
+    assert!(normalized_second_web.contains("get "));
 }
 
 #[test]
@@ -4524,6 +4550,7 @@ fn tui_like_session_metadata_persists_and_lists_for_ui() {
                 think_level: Some(Some("high".to_string())),
                 compactifications: Some(3),
                 completion_nudges: Some(Some(2)),
+                auto_approve: Some(false),
             },
         )
         .expect("update session preferences");

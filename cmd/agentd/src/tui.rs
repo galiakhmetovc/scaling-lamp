@@ -324,6 +324,29 @@ where
                 unix_timestamp()?,
             );
         }
+        Some("/autoapprove") => {
+            let value = require_arg(rest, "\\автоапрув")?;
+            let auto_approve = parse_auto_approve(value.as_str())?;
+            let summary = app.update_session_preferences(
+                &current_session_id,
+                crate::bootstrap::SessionPreferencesPatch {
+                    auto_approve: Some(auto_approve),
+                    ..crate::bootstrap::SessionPreferencesPatch::default()
+                },
+            )?;
+            state.replace_current_summary(summary);
+            state.sync_sessions(app.list_session_summaries()?);
+            state.timeline_mut().push_system(
+                &format!(
+                    "auto-approval {}",
+                    if auto_approve { "enabled" } else { "disabled" }
+                ),
+                unix_timestamp()?,
+            );
+            if auto_approve {
+                schedule_next_draft_if_idle(app, state, &current_session_id)?;
+            }
+        }
         Some("/enable") => {
             let skill_name = require_arg(rest, "\\включить")?;
             let updated = app.enable_session_skill(&current_session_id, &skill_name)?;
@@ -484,6 +507,7 @@ where
     let Some(events) = state.active_run_mut().map(ActiveRunHandle::drain_events) else {
         return Ok(());
     };
+    let was_following_tail = state.scroll_offset() == 0;
     let mut outcome = None;
     for event in events {
         match event {
@@ -527,6 +551,10 @@ where
             active_run.session_id().to_string(),
             outcome.expect("worker outcome"),
         )?;
+    }
+
+    if was_following_tail {
+        state.scroll_to_bottom();
     }
 
     if state.has_active_run() || finished {
@@ -616,6 +644,7 @@ where
             approval_id,
             reason,
         } => {
+            state.scroll_to_bottom();
             state
                 .timeline_mut()
                 .push_approval(&approval_id, &reason, unix_timestamp()?);
@@ -650,7 +679,31 @@ fn schedule_next_draft_if_idle<B>(
 where
     B: TuiBackend,
 {
-    if state.has_active_run() || app.latest_pending_approval(session_id, None)?.is_some() {
+    if state.has_active_run() {
+        return Ok(());
+    }
+    if state
+        .current_session_summary()
+        .is_some_and(|summary| summary.auto_approve)
+        && let Some(pending) = app.latest_pending_approval(session_id, None)?
+    {
+        state.timeline_mut().remove_approval(&pending.approval_id);
+        state.timeline_mut().push_system(
+            &format!("auto-approving pending request: {}", pending.reason),
+            unix_timestamp()?,
+        );
+        state.scroll_to_bottom();
+        start_approval_run(
+            app,
+            state,
+            session_id,
+            &pending.run_id,
+            &pending.approval_id,
+            unix_timestamp()?,
+        )?;
+        return Ok(());
+    }
+    if app.latest_pending_approval(session_id, None)?.is_some() {
         return Ok(());
     }
     let next_draft = state
@@ -735,6 +788,16 @@ fn describe_completion_mode(completion_nudges: Option<u32>) -> String {
     }
 }
 
+fn parse_auto_approve(raw: &str) -> Result<bool, BootstrapError> {
+    match raw.trim() {
+        "on" | "1" | "yes" | "да" | "вкл" | "enable" => Ok(true),
+        "off" | "0" | "no" | "нет" | "выкл" | "disable" => Ok(false),
+        value => Err(BootstrapError::Usage {
+            reason: format!("unsupported auto-approve mode {value}; expected on|off"),
+        }),
+    }
+}
+
 fn is_command_input(input: &str) -> bool {
     let trimmed = input.trim_start();
     trimmed.starts_with('/') || trimmed.starts_with('\\')
@@ -749,6 +812,7 @@ fn canonical_command(command: &str) -> Option<&'static str> {
         "/plan" | "\\план" => Some("/plan"),
         "/jobs" | "\\задачи" => Some("/jobs"),
         "/completion" | "\\доводка" => Some("/completion"),
+        "/autoapprove" | "\\автоапрув" => Some("/autoapprove"),
         "/skills" | "\\скиллы" => Some("/skills"),
         "/enable" | "\\включить" => Some("/enable"),
         "/disable" | "\\выключить" => Some("/disable"),
@@ -973,6 +1037,7 @@ mod tests {
                 think_level: None,
                 compactifications: 0,
                 completion_nudges: None,
+                auto_approve: false,
                 context_tokens: 0,
                 has_pending_approval: false,
                 last_message_preview: None,
@@ -1007,6 +1072,7 @@ mod tests {
                 think_level: None,
                 compactifications: 0,
                 completion_nudges: None,
+                auto_approve: false,
                 context_tokens: 0,
                 has_pending_approval: true,
                 last_message_preview: None,

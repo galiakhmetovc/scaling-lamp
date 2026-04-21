@@ -28,6 +28,7 @@ fn summary(id: &str, title: &str) -> SessionSummary {
         think_level: Some("medium".to_string()),
         compactifications: 0,
         completion_nudges: None,
+        auto_approve: false,
         context_tokens: 0,
         has_pending_approval: false,
         last_message_preview: None,
@@ -209,7 +210,7 @@ fn tui_render_includes_background_job_counts_in_the_session_header() {
         Timeline::default(),
     );
 
-    let backend = TestBackend::new(140, 24);
+    let backend = TestBackend::new(220, 24);
     let mut terminal = Terminal::new(backend).expect("terminal");
     terminal
         .draw(|frame| agentd::tui::render::render(frame, &state))
@@ -224,7 +225,8 @@ fn tui_render_includes_background_job_counts_in_the_session_header() {
         rendered.push('\n');
     }
 
-    assert!(rendered.contains("bg=3 (run=1 queued=1)"));
+    assert!(rendered.contains("bg=3"));
+    assert!(rendered.contains("(run=1 queued=1)"));
 }
 
 #[test]
@@ -678,6 +680,83 @@ fn tui_chat_commands_and_timeline_approve_targets_latest_or_explicit_pending_app
 }
 
 #[test]
+fn tui_chat_commands_and_timeline_autoapprove_can_resume_an_existing_pending_approval() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let app = build_from_config(AppConfig {
+        data_dir: temp.path().join("state-root"),
+        ..AppConfig::default()
+    })
+    .expect("build app");
+    let session = app
+        .create_session_auto(Some("Auto Approval Session"))
+        .expect("create session");
+    let store = PersistenceStore::open(&app.persistence).expect("open store");
+
+    let mut run = RunEngine::new("run-auto", &session.id, None, 10);
+    run.start(10).expect("start run");
+    run.wait_for_approval(
+        ApprovalRequest::new("approval-auto", "tool-call-auto", "approve auto", 11),
+        11,
+    )
+    .expect("pending approval");
+    store
+        .put_run(&RunRecord::try_from(run.snapshot()).expect("run record"))
+        .expect("put run");
+
+    let mut state = TuiAppState::new(
+        app.list_session_summaries().expect("list sessions"),
+        Some(session.id.clone()),
+    );
+    let pending = app
+        .pending_approvals(&session.id)
+        .expect("pending approvals");
+    state.set_current_session(
+        app.session_summary(&session.id).expect("session summary"),
+        Timeline::from_session_view(
+            &app.session_transcript(&session.id)
+                .expect("session transcript"),
+            &pending,
+        ),
+    );
+    let mut redraw = |_state: &TuiAppState| Ok::<_, agentd::bootstrap::BootstrapError>(());
+
+    dispatch_action(
+        &app,
+        &mut state,
+        TuiAction::SubmitChatInput("/autoapprove on".to_string()),
+        &mut redraw,
+    )
+    .expect("enable autoapprove");
+    wait_for_tui_idle(&app, &mut state, &mut redraw);
+
+    let resumed = RunSnapshot::try_from(
+        store
+            .get_run("run-auto")
+            .expect("load run")
+            .expect("run exists"),
+    )
+    .expect("run snapshot");
+    assert_eq!(resumed.status, RunStatus::Resuming);
+    assert!(
+        !state
+            .timeline()
+            .entries(true)
+            .iter()
+            .any(|entry| matches!(entry.kind, TimelineEntryKind::Approval { .. })),
+        "pending approval should be removed from the timeline after auto-approval starts"
+    );
+    assert!(
+        state.timeline().entries(true).iter().any(|entry| {
+            matches!(entry.kind, TimelineEntryKind::System)
+                && entry
+                    .content
+                    .contains("auto-approving pending request: approve auto")
+        }),
+        "timeline should explain what was auto-approved"
+    );
+}
+
+#[test]
 fn tui_chat_commands_and_timeline_assigns_timestamps_and_updates_tool_rows_in_place() {
     let mut timeline = Timeline::default();
 
@@ -743,6 +822,38 @@ fn tui_chat_commands_and_timeline_assigns_timestamps_and_updates_tool_rows_in_pl
             .count(),
         1
     );
+}
+
+#[test]
+fn tui_render_shows_approval_details_and_autoapprove_hint() {
+    let mut state = TuiAppState::new(
+        vec![summary("session-a", "Session A")],
+        Some("session-a".to_string()),
+    );
+    let mut timeline = Timeline::default();
+    timeline.push_approval("approval-1", "tool web_fetch requires approval", 42);
+    state.set_current_session(summary("session-a", "Session A"), timeline);
+
+    let backend = TestBackend::new(140, 24);
+    let mut terminal = Terminal::new(backend).expect("terminal");
+    terminal
+        .draw(|frame| agentd::tui::render::render(frame, &state))
+        .expect("draw");
+
+    let buffer = terminal.backend().buffer();
+    let mut rendered = String::new();
+    for y in 0..buffer.area.height {
+        for x in 0..buffer.area.width {
+            rendered.push_str(buffer[(x, y)].symbol());
+        }
+        rendered.push('\n');
+    }
+
+    assert!(rendered.contains("approval: pending"));
+    assert!(rendered.contains("id=approval-1"));
+    assert!(rendered.contains("tool web_fetch requires approval"));
+    assert!(rendered.contains("\\апрув"));
+    assert!(rendered.contains("\\автоапрув on"));
 }
 
 #[test]

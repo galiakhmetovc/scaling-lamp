@@ -77,7 +77,7 @@ fn render_chat_screen(frame: &mut Frame<'_>, state: &TuiAppState) {
     let top_lines = if let Some(summary) = state.current_session_summary() {
         vec![
             Line::from(format!(
-                "{} | model={} | reasoning={} | think={} | finish={} | ctx={} | compact={} | messages={} | bg={} (run={} queued={})",
+                "{} | model={} | reasoning={} | think={} | finish={} | approve={} | ctx={} | compact={} | messages={} | bg={} (run={} queued={})",
                 summary.title,
                 summary.model.as_deref().unwrap_or("<default>"),
                 if summary.reasoning_visible {
@@ -90,6 +90,11 @@ fn render_chat_screen(frame: &mut Frame<'_>, state: &TuiAppState) {
                     .completion_nudges
                     .map(|value| value.to_string())
                     .unwrap_or_else(|| "off".to_string()),
+                if summary.auto_approve {
+                    "auto"
+                } else {
+                    "manual"
+                },
                 summary.context_tokens,
                 summary.compactifications,
                 summary.message_count.max(state.timeline().message_count()),
@@ -124,8 +129,9 @@ fn render_chat_screen(frame: &mut Frame<'_>, state: &TuiAppState) {
         .flat_map(|entry| render_timeline_entry(entry, now))
         .collect::<Vec<_>>();
     let timeline_viewport_height = usize::from(chunks[1].height.saturating_sub(2));
+    let timeline_viewport_width = usize::from(chunks[1].width.saturating_sub(2)).max(1);
     let timeline_scroll_top = chat_scroll_top(
-        timeline_lines.len(),
+        estimate_wrapped_line_count(&timeline_lines, timeline_viewport_width),
         timeline_viewport_height,
         state.scroll_offset(),
     );
@@ -208,12 +214,12 @@ fn render_timeline_entry(entry: &TimelineEntry, now: i64) -> Vec<Line<'static>> 
         TimelineEntryKind::Tool {
             tool_name, status, ..
         } => format!("tool: {tool_name} | {status}"),
-        TimelineEntryKind::Approval { approval_id } => format!("approval:{approval_id}"),
+        TimelineEntryKind::Approval { .. } => "approval".to_string(),
         TimelineEntryKind::System => "system".to_string(),
     };
     let prefix = format!("[{timestamp}] {label}: ");
     let continuation_prefix = " ".repeat(prefix.len());
-    match entry.kind {
+    match &entry.kind {
         TimelineEntryKind::Assistant => render_markdown_entry(
             prefix.as_str(),
             continuation_prefix.as_str(),
@@ -222,6 +228,12 @@ fn render_timeline_entry(entry: &TimelineEntry, now: i64) -> Vec<Line<'static>> 
         TimelineEntryKind::Tool { .. } => render_tool_entry(
             prefix.as_str(),
             continuation_prefix.as_str(),
+            &entry.content,
+        ),
+        TimelineEntryKind::Approval { approval_id } => render_approval_entry(
+            prefix.as_str(),
+            continuation_prefix.as_str(),
+            approval_id.as_str(),
             &entry.content,
         ),
         _ => render_plain_entry(
@@ -357,6 +369,49 @@ fn render_tool_entry(prefix: &str, continuation_prefix: &str, content: &str) -> 
         ]));
     }
     lines
+}
+
+fn render_approval_entry(
+    prefix: &str,
+    continuation_prefix: &str,
+    approval_id: &str,
+    reason: &str,
+) -> Vec<Line<'static>> {
+    let mut lines = vec![Line::from(format!("{prefix}pending"))];
+    lines.push(Line::from(vec![
+        Span::raw(continuation_prefix.to_string()),
+        Span::styled("  -> ", Style::default().fg(Color::Yellow)),
+        Span::styled(
+            format!("id={approval_id}"),
+            Style::default().add_modifier(Modifier::BOLD),
+        ),
+    ]));
+    for raw_line in reason.lines() {
+        lines.push(Line::from(vec![
+            Span::raw(continuation_prefix.to_string()),
+            Span::styled("  -> ", Style::default().fg(Color::Yellow)),
+            Span::raw(raw_line.to_string()),
+        ]));
+    }
+    lines.push(Line::from(vec![
+        Span::raw(continuation_prefix.to_string()),
+        Span::styled("  -> ", Style::default().fg(Color::Yellow)),
+        Span::raw("\\апрув to continue, \\автоапрув on to auto-approve".to_string()),
+    ]));
+    lines
+}
+
+fn estimate_wrapped_line_count(lines: &[Line<'_>], width: usize) -> usize {
+    if width == 0 {
+        return lines.len();
+    }
+    lines
+        .iter()
+        .map(|line| {
+            let len = line.to_string().chars().count().max(1);
+            len.div_ceil(width)
+        })
+        .sum()
 }
 
 fn render_inline_code(content: &str) -> Vec<Span<'static>> {
@@ -524,8 +579,12 @@ fn chat_scroll_top(total_lines: usize, viewport_lines: usize, offset_from_bottom
 
 #[cfg(test)]
 mod tests {
-    use super::{chat_scroll_top, format_timestamp, render_markdown_entry, render_timeline_entry};
+    use super::{
+        chat_scroll_top, estimate_wrapped_line_count, format_timestamp, render_markdown_entry,
+        render_timeline_entry,
+    };
     use crate::tui::timeline::{TimelineEntry, TimelineEntryKind};
+    use ratatui::text::Line;
 
     #[test]
     fn timestamps_render_in_human_readable_form_for_same_day_entries() {
@@ -557,6 +616,12 @@ mod tests {
         assert_eq!(chat_scroll_top(20, 5, 0), 15);
         assert_eq!(chat_scroll_top(20, 5, 3), 12);
         assert_eq!(chat_scroll_top(20, 5, 99), 0);
+    }
+
+    #[test]
+    fn wrapped_line_count_accounts_for_long_wrapped_rows() {
+        let lines = vec![Line::from("123456789"), Line::from("xx")];
+        assert_eq!(estimate_wrapped_line_count(&lines, 4), 4);
     }
 
     #[test]

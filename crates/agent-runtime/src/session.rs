@@ -26,6 +26,7 @@ pub struct SessionSettings {
     pub think_level: Option<String>,
     pub compactifications: u32,
     pub completion_nudges: Option<u32>,
+    pub auto_approve: bool,
     pub enabled_skills: Vec<String>,
     pub disabled_skills: Vec<String>,
 }
@@ -99,6 +100,7 @@ impl Default for SessionSettings {
             think_level: None,
             compactifications: 0,
             completion_nudges: None,
+            auto_approve: false,
             enabled_skills: Vec::new(),
             disabled_skills: Vec::new(),
         }

@@ -403,6 +403,26 @@ where
                 )
                 .map_err(BootstrapError::Stream)?;
             }
+            Some("/autoapprove") => {
+                renderer.finish_turn()?;
+                let value = split_command_arg(trimmed).ok_or_else(|| BootstrapError::Usage {
+                    reason: "\\автоапрув requires on|off".to_string(),
+                })?;
+                let auto_approve = parse_auto_approve(value)?;
+                backend.update_session_preferences(
+                    session_id,
+                    SessionPreferencesPatch {
+                        auto_approve: Some(auto_approve),
+                        ..SessionPreferencesPatch::default()
+                    },
+                )?;
+                writeln!(
+                    renderer.output,
+                    "auto-approval {}",
+                    if auto_approve { "enabled" } else { "disabled" }
+                )
+                .map_err(BootstrapError::Stream)?;
+            }
             Some("/enable") => {
                 renderer.finish_turn()?;
                 let skill_name =
@@ -618,6 +638,7 @@ fn canonical_repl_command(raw: &str) -> Option<&'static str> {
         "/plan" | "\\план" => Some("/plan"),
         "/jobs" | "\\задачи" => Some("/jobs"),
         "/completion" | "\\доводка" => Some("/completion"),
+        "/autoapprove" | "\\автоапрув" => Some("/autoapprove"),
         "/skills" | "\\скиллы" => Some("/skills"),
         "/enable" | "\\включить" => Some("/enable"),
         "/disable" | "\\выключить" => Some("/disable"),
@@ -652,6 +673,16 @@ fn describe_completion_mode(completion_nudges: Option<u32>) -> String {
         None => "disabled".to_string(),
         Some(0) => "enabled with operator approval after the first early stop".to_string(),
         Some(value) => format!("enabled with {value} auto-nudges"),
+    }
+}
+
+fn parse_auto_approve(raw: &str) -> Result<bool, BootstrapError> {
+    match raw.trim() {
+        "on" | "1" | "yes" | "да" | "вкл" | "enable" => Ok(true),
+        "off" | "0" | "no" | "нет" | "выкл" | "disable" => Ok(false),
+        value => Err(BootstrapError::Usage {
+            reason: format!("unsupported auto-approve mode {value}; expected on|off"),
+        }),
     }
 }
 

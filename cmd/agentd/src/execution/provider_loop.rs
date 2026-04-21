@@ -25,12 +25,12 @@ use agent_runtime::tool::{
     PlanSnapshotOutput, PlanWriteOutput, SetTaskStatusOutput, ToolCatalog, ToolDefinition,
     ToolName, ToolOutput, ToolRuntime,
 };
-use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 const MAX_CONTEXT_OFFLOAD_REFS: usize = 16;
 const INLINE_TOOL_OUTPUT_TOKEN_LIMIT: u32 = 512;
 const INLINE_FIND_IN_FILES_PREVIEW_LIMIT: usize = 6;
+const MAX_CONSECUTIVE_IDENTICAL_TOOL_SIGNATURES: usize = 3;
 
 type OffloadableToolOutput = (String, String, Vec<u8>, String);
 
@@ -61,7 +61,7 @@ struct ProviderLoopCursor {
     continuation_messages: Vec<ProviderContinuationMessage>,
     continuation_input_messages: Vec<ProviderMessage>,
     previous_response_id: Option<String>,
-    seen_tool_signatures: BTreeMap<String, usize>,
+    seen_tool_signatures: Vec<String>,
     completion_nudges_used: usize,
     supports_previous_response_id: bool,
     supports_streaming: bool,
@@ -99,14 +99,7 @@ impl ProviderLoopCursor {
             .and_then(|state| state.previous_response_id.clone());
         let seen_tool_signatures = initial_loop_state
             .as_ref()
-            .map(|state| {
-                state
-                    .seen_tool_signatures
-                    .iter()
-                    .enumerate()
-                    .map(|(index, signature)| (signature.clone(), index))
-                    .collect::<BTreeMap<_, _>>()
-            })
+            .map(|state| state.seen_tool_signatures.clone())
             .unwrap_or_default();
         let completion_nudges_used = initial_loop_state
             .as_ref()
@@ -129,6 +122,10 @@ impl ProviderLoopCursor {
 
     fn has_round_budget(&self) -> bool {
         self.round < self.max_rounds
+    }
+
+    fn reset_round_budget(&mut self) {
+        self.round = 0;
     }
 
     fn stream_mode(&self, has_observer: bool) -> ProviderStreamMode {
@@ -187,7 +184,7 @@ impl ProviderLoopCursor {
             continuation_messages: self.continuation_messages.clone(),
             pending_tool_outputs: self.pending_tool_outputs.clone(),
             continuation_input_messages: self.continuation_input_messages.clone(),
-            seen_tool_signatures: self.seen_tool_signatures.keys().cloned().collect(),
+            seen_tool_signatures: self.seen_tool_signatures.clone(),
             completion_nudges_used: self.completion_nudges_used,
             pending_approval,
         }
@@ -203,18 +200,23 @@ impl ProviderLoopCursor {
             .map(|tool_call| format!("{}:{}", tool_call.name, tool_call.arguments))
             .collect::<Vec<_>>()
             .join("|");
-        if let Some(first_seen_round) = self
-            .seen_tool_signatures
-            .insert(signature.clone(), self.round)
-        {
+        let mut consecutive_repeats = 1usize;
+        for previous in self.seen_tool_signatures.iter().rev() {
+            if previous == &signature {
+                consecutive_repeats += 1;
+            } else {
+                break;
+            }
+        }
+        if consecutive_repeats >= MAX_CONSECUTIVE_IDENTICAL_TOOL_SIGNATURES {
             return Err(ExecutionError::ProviderLoop {
                 reason: format!(
-                    "provider repeated tool-call signature from round {}: {}",
-                    first_seen_round + 1,
-                    signature
+                    "provider repeated tool-call signature {} times in a row: {}",
+                    consecutive_repeats, signature
                 ),
             });
         }
+        self.seen_tool_signatures.push(signature);
         Ok(())
     }
 
@@ -263,7 +265,7 @@ impl ProviderLoopCursor {
             continuation_messages: self.continuation_messages.clone(),
             pending_tool_outputs: self.pending_tool_outputs.clone(),
             continuation_input_messages: Vec::new(),
-            seen_tool_signatures: self.seen_tool_signatures.keys().cloned().collect(),
+            seen_tool_signatures: self.seen_tool_signatures.clone(),
             completion_nudges_used: self.completion_nudges_used,
             pending_approval: Some(PendingProviderApproval::Tool(PendingToolApproval::new(
                 approval_id.to_string(),
@@ -335,6 +337,56 @@ impl ExecutionService {
             "retryable": true,
         })
         .to_string()
+    }
+
+    fn retryable_provider_tool_output(
+        tool_name: &str,
+        reason: &str,
+        details: serde_json::Value,
+    ) -> String {
+        serde_json::json!({
+            "tool": tool_name,
+            "error": reason,
+            "retryable": true,
+            "details": details,
+        })
+        .to_string()
+    }
+
+    fn recoverable_tool_error_output(
+        &self,
+        parsed: &ToolCall,
+        error: &ToolError,
+    ) -> Option<String> {
+        match error {
+            ToolError::UnknownProcess { process_id } => Some(Self::retryable_provider_tool_output(
+                parsed.name().as_str(),
+                &format!("unknown process {process_id}"),
+                serde_json::json!({
+                    "requested_process_id": process_id,
+                    "active_process_ids": self.processes.active_process_ids(Some(agent_runtime::tool::ProcessKind::Exec)),
+                }),
+            )),
+            ToolError::ProcessFamilyMismatch {
+                process_id,
+                expected,
+                actual,
+            } => Some(Self::retryable_provider_tool_output(
+                parsed.name().as_str(),
+                &format!(
+                    "process {process_id} has family mismatch: expected {} but found {}",
+                    expected.as_prefix(),
+                    actual.as_prefix()
+                ),
+                serde_json::json!({
+                    "requested_process_id": process_id,
+                    "expected_kind": expected.as_prefix(),
+                    "actual_kind": actual.as_prefix(),
+                    "active_process_ids": self.processes.active_process_ids(None),
+                }),
+            )),
+            _ => None,
+        }
     }
 
     fn automatic_provider_tools(
@@ -611,6 +663,7 @@ impl ExecutionService {
                 return Err(source);
             }
         };
+        let output_summary = output.summary();
         let model_output = output.model_output();
         run.record_tool_completion(
             super::tools::completed_tool_step_detail(parsed, &output),
@@ -621,7 +674,7 @@ impl ExecutionService {
             observer,
             ChatExecutionEvent::ToolStatus {
                 tool_name: parsed.name().as_str().to_string(),
-                summary: parsed.summary(),
+                summary: output_summary,
                 status: ToolExecutionStatus::Completed,
             },
         );
@@ -965,6 +1018,23 @@ impl ExecutionService {
             max_completion_nudges: max_completion_nudges as usize,
             nudge_message: self.build_completion_nudge_message(&snapshot, &unfinished, response),
         }))
+    }
+
+    fn session_auto_approve_enabled(
+        &self,
+        store: &PersistenceStore,
+        session_id: &str,
+    ) -> Result<bool, ExecutionError> {
+        let session = Session::try_from(
+            store
+                .get_session(session_id)
+                .map_err(ExecutionError::Store)?
+                .ok_or_else(|| ExecutionError::MissingSession {
+                    id: session_id.to_string(),
+                })?,
+        )
+        .map_err(ExecutionError::RecordConversion)?;
+        Ok(session.settings.auto_approve)
     }
 
     fn build_completion_nudge_message(
@@ -1362,6 +1432,7 @@ impl ExecutionService {
         let tools =
             self.automatic_provider_tools(provider, prompt_messages.context_offload.as_ref());
         let mut tool_runtime = self.tool_runtime();
+        let auto_approve = self.session_auto_approve_enabled(store, session_id)?;
         let mut cursor = ProviderLoopCursor::new(
             provider,
             initial_loop_state,
@@ -1370,6 +1441,17 @@ impl ExecutionService {
 
         loop {
             if !cursor.has_round_budget() {
+                if auto_approve {
+                    cursor.reset_round_budget();
+                    Self::emit_event(
+                        observer,
+                        ChatExecutionEvent::ProviderLoopProgress {
+                            current_round: 1,
+                            max_rounds: cursor.max_rounds,
+                        },
+                    );
+                    continue;
+                }
                 let approval_id = format!(
                     "approval-{}-provider-loop-r{}-{}",
                     run.snapshot().id,
@@ -1414,6 +1496,21 @@ impl ExecutionService {
                 {
                     if cursor.completion_nudges_used < decision.max_completion_nudges {
                         cursor.record_completion_nudge();
+                        cursor.adopt_response_anchor(&response);
+                        cursor.queue_continuation_input_messages(
+                            self.completion_continuation_messages(
+                                cursor.supports_previous_response_id,
+                                &response,
+                                decision.nudge_message.as_str(),
+                            ),
+                        );
+                        run.set_provider_loop_state(cursor.persistent_state(None), now)
+                            .map_err(ExecutionError::RunTransition)?;
+                        self.persist_run(store, run)?;
+                        continue;
+                    }
+
+                    if auto_approve {
                         cursor.adopt_response_anchor(&response);
                         cursor.queue_continuation_input_messages(
                             self.completion_continuation_messages(
@@ -1536,50 +1633,64 @@ impl ExecutionService {
                         });
                     }
                     PermissionAction::Ask => {
-                        Self::emit_event(
-                            observer,
-                            ChatExecutionEvent::ToolStatus {
-                                tool_name: parsed.name().as_str().to_string(),
-                                summary: parsed.summary(),
-                                status: ToolExecutionStatus::WaitingApproval,
-                            },
-                        );
-                        let approval_id =
-                            format!("approval-{}-{}", run.snapshot().id, parsed.name().as_str());
-                        let reason = format!(
-                            "tool {} requires approval: {} ({})",
-                            parsed.name().as_str(),
-                            parsed.summary(),
-                            permission.reason
-                        );
-                        let approval_state = cursor.pending_approval_state(
-                            &response,
-                            tool_call,
-                            &parsed,
-                            &approval_id,
-                        );
-                        run.wait_for_approval(
-                            ApprovalRequest::new(
-                                approval_id.clone(),
-                                tool_call.call_id.as_str(),
-                                &reason,
+                        if auto_approve {
+                            Self::emit_event(
+                                observer,
+                                ChatExecutionEvent::ToolStatus {
+                                    tool_name: parsed.name().as_str().to_string(),
+                                    summary: parsed.summary(),
+                                    status: ToolExecutionStatus::Approved,
+                                },
+                            );
+                        } else {
+                            Self::emit_event(
+                                observer,
+                                ChatExecutionEvent::ToolStatus {
+                                    tool_name: parsed.name().as_str().to_string(),
+                                    summary: parsed.summary(),
+                                    status: ToolExecutionStatus::WaitingApproval,
+                                },
+                            );
+                            let approval_id = format!(
+                                "approval-{}-{}",
+                                run.snapshot().id,
+                                parsed.name().as_str()
+                            );
+                            let reason = format!(
+                                "tool {} requires approval: {} ({})",
+                                parsed.name().as_str(),
+                                parsed.summary(),
+                                permission.reason
+                            );
+                            let approval_state = cursor.pending_approval_state(
+                                &response,
+                                tool_call,
+                                &parsed,
+                                &approval_id,
+                            );
+                            run.wait_for_approval(
+                                ApprovalRequest::new(
+                                    approval_id.clone(),
+                                    tool_call.call_id.as_str(),
+                                    &reason,
+                                    now,
+                                ),
                                 now,
-                            ),
-                            now,
-                        )
-                        .map_err(ExecutionError::RunTransition)?;
-                        run.set_provider_loop_state(approval_state, now)
+                            )
                             .map_err(ExecutionError::RunTransition)?;
-                        self.persist_run(store, run)?;
-                        return Err(ExecutionError::ApprovalRequired {
-                            tool: parsed.name().as_str().to_string(),
-                            approval_id,
-                            reason,
-                        });
+                            run.set_provider_loop_state(approval_state, now)
+                                .map_err(ExecutionError::RunTransition)?;
+                            self.persist_run(store, run)?;
+                            return Err(ExecutionError::ApprovalRequired {
+                                tool: parsed.name().as_str().to_string(),
+                                approval_id,
+                                reason,
+                            });
+                        }
                     }
                 }
 
-                let model_output = self.invoke_provider_tool_call(
+                let model_output = match self.invoke_provider_tool_call(
                     ProviderToolExecutionContext {
                         store,
                         session_id,
@@ -1590,7 +1701,32 @@ impl ExecutionService {
                     &tool_call.call_id,
                     &parsed,
                     observer,
-                )?;
+                ) {
+                    Ok(model_output) => model_output,
+                    Err(ExecutionError::Tool(error)) => {
+                        if let Some(model_output) =
+                            self.recoverable_tool_error_output(&parsed, &error)
+                        {
+                            Self::emit_event(
+                                observer,
+                                ChatExecutionEvent::ToolStatus {
+                                    tool_name: parsed.name().as_str().to_string(),
+                                    summary: format!("retryable error: {error}"),
+                                    status: ToolExecutionStatus::Failed,
+                                },
+                            );
+                            run.record_tool_completion(
+                                format!("{} retryable error: {error}", parsed.name().as_str()),
+                                now,
+                            )
+                            .map_err(ExecutionError::RunTransition)?;
+                            model_output
+                        } else {
+                            return Err(ExecutionError::Tool(error));
+                        }
+                    }
+                    Err(other) => return Err(other),
+                };
                 cursor.record_tool_output(&tool_call.call_id, model_output);
                 if interrupt_after_tool_step.is_some_and(|flag| flag.load(Ordering::SeqCst)) {
                     run.interrupt("superseded by queued user input", now)

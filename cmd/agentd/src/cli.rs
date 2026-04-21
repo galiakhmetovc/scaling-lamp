@@ -30,7 +30,7 @@ use self::process::{
 use self::repl::{run_chat_repl, run_chat_repl_with_backend};
 
 const DEFAULT_SMOKE_PROMPT: &str = "Reply with the single word ready.";
-const REPL_HELP: &str = "commands: \\помощь|/help | \\показать|/show | \\план|/plan | \\задачи|/jobs | \\скиллы|/skills | \\включить <skill>|/enable <skill> | \\выключить <skill>|/disable <skill> | \\доводка <n|off>|/completion <n|off> | /approve [approval-id] | \\выход|/exit";
+const REPL_HELP: &str = "commands: \\помощь|/help | \\показать|/show | \\план|/plan | \\задачи|/jobs | \\скиллы|/skills | \\включить <skill>|/enable <skill> | \\выключить <skill>|/disable <skill> | \\доводка <n|off>|/completion <n|off> | \\автоапрув <on|off>|/autoapprove <on|off> | /approve [approval-id] | \\выход|/exit";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum Command {

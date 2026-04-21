@@ -252,6 +252,9 @@ impl App {
         if let Some(completion_nudges) = patch.completion_nudges {
             session.settings.completion_nudges = completion_nudges;
         }
+        if let Some(auto_approve) = patch.auto_approve {
+            session.settings.auto_approve = auto_approve;
+        }
         session.updated_at = unix_timestamp()?;
 
         let record = agent_persistence::SessionRecord::try_from(&session)

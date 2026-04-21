@@ -1512,6 +1512,21 @@ impl SharedProcessRegistry {
     fn lock(&self) -> std::sync::MutexGuard<'_, ProcessRegistryState> {
         self.inner.lock().expect("shared process registry poisoned")
     }
+
+    pub fn active_process_ids(&self, kind: Option<ProcessKind>) -> Vec<String> {
+        let registry = self.lock();
+        registry
+            .processes
+            .iter()
+            .filter_map(|(process_id, managed)| {
+                if kind.is_none_or(|expected| expected == managed.kind) {
+                    Some(process_id.clone())
+                } else {
+                    None
+                }
+            })
+            .collect()
+    }
 }
 
 impl ToolCall {
@@ -1916,7 +1931,7 @@ impl ToolCall {
 }
 
 impl ProcessKind {
-    fn as_prefix(self) -> &'static str {
+    pub fn as_prefix(self) -> &'static str {
         match self {
             Self::Exec => "exec",
         }

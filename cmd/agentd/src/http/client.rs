@@ -153,6 +153,7 @@ impl From<SessionSummaryResponse> for SessionSummary {
             think_level: value.think_level,
             compactifications: value.compactifications,
             completion_nudges: value.completion_nudges,
+            auto_approve: value.auto_approve,
             context_tokens: value.context_tokens,
             has_pending_approval: value.has_pending_approval,
             last_message_preview: value.last_message_preview,
