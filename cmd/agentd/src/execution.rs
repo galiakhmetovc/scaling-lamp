@@ -2,11 +2,13 @@
 
 mod background;
 mod chat;
+mod delegate_jobs;
 mod delegation;
 mod mission;
 mod provider_loop;
 mod supervisor;
 mod tools;
+mod wakeup;
 
 use crate::a2a::A2AClient;
 use agent_persistence::{
