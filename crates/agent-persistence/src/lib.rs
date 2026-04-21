@@ -8,11 +8,13 @@ pub mod store;
 pub use config::{AppConfig, ConfigEnv, ConfigError, DaemonConfig};
 pub use records::{
     ArtifactRecord, ContextOffloadRecord, ContextSummaryRecord, JobRecord, MissionRecord,
-    PlanRecord, RecordConversionError, RunRecord, SessionRecord, TranscriptRecord,
+    PlanRecord, RecordConversionError, RunRecord, SessionInboxEventRecord, SessionRecord,
+    TranscriptRecord,
 };
 pub use repository::{
     ArtifactRepository, ContextOffloadRepository, ContextSummaryRepository, JobRepository,
-    MissionRepository, PlanRepository, RunRepository, SessionRepository, TranscriptRepository,
+    MissionRepository, PlanRepository, RunRepository, SessionInboxRepository, SessionRepository,
+    TranscriptRepository,
 };
 pub use store::{ExecutionStateSnapshot, PersistenceStore, StoreError, StoreLayout};
 

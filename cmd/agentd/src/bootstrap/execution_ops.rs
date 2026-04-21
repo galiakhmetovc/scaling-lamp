@@ -18,6 +18,18 @@ impl App {
     }
 
     #[cfg_attr(not(test), allow(dead_code))]
+    pub fn background_worker_tick(
+        &self,
+        now: i64,
+    ) -> Result<execution::BackgroundWorkerTickReport, BootstrapError> {
+        let store = self.store()?;
+        let provider = self.provider_driver()?;
+        self.execution_service()
+            .background_worker_tick(&store, provider.as_ref(), now)
+            .map_err(BootstrapError::Execution)
+    }
+
+    #[cfg_attr(not(test), allow(dead_code))]
     pub fn execute_mission_turn_job(
         &self,
         job_id: &str,

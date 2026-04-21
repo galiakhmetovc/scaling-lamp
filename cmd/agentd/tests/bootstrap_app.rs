@@ -1,7 +1,8 @@
 use agent_persistence::{
     AppConfig, ConfigError, ContextOffloadRepository, ContextSummaryRepository, JobRecord,
     JobRepository, MissionRecord, MissionRepository, PersistenceStore, PlanRecord, PlanRepository,
-    RunRecord, RunRepository, SessionRecord, SessionRepository, TranscriptRepository,
+    RunRecord, RunRepository, SessionInboxRepository, SessionRecord, SessionRepository,
+    TranscriptRepository,
 };
 use agent_runtime::context::{ContextOffloadPayload, ContextOffloadRef, ContextOffloadSnapshot};
 use agent_runtime::mission::{JobSpec, MissionExecutionIntent, MissionSchedule, MissionStatus};
@@ -69,6 +70,13 @@ fn run_with_args_creates_and_shows_sessions_and_missions() {
     let temp = tempfile::tempdir().expect("tempdir");
     let app = build_from_config(AppConfig {
         data_dir: temp.path().join("state-root"),
+        provider: ConfiguredProvider {
+            kind: ProviderKind::OpenAiResponses,
+            api_base: Some("http://127.0.0.1:9/v1".to_string()),
+            api_key: Some("test-key".to_string()),
+            default_model: Some("gpt-5.4".to_string()),
+            ..ConfiguredProvider::default()
+        },
         ..AppConfig::default()
     })
     .expect("build app");
@@ -5182,4 +5190,205 @@ fn execute_chat_turn_can_retrieve_offloaded_context_via_artifact_read() {
     assert!(normalized_second.contains("\"call_id\":\"call_artifact_read\""));
     assert!(normalized_second.contains("artifact_read"));
     assert!(normalized_second.contains("important diagnostic detail"));
+}
+
+#[test]
+fn background_worker_completes_chat_turn_jobs_and_wakes_idle_sessions() {
+    let (api_base, requests, handle) = spawn_json_server_sequence(vec![
+        r#"{
+                "id":"resp_background_job",
+                "model":"gpt-5.4",
+                "output":[
+                    {
+                        "id":"msg_background_job",
+                        "type":"message",
+                        "status":"completed",
+                        "role":"assistant",
+                        "content":[
+                            {
+                                "type":"output_text",
+                                "text":"Background work is done."
+                            }
+                        ]
+                    }
+                ],
+                "usage":{"input_tokens":12,"output_tokens":5,"total_tokens":17}
+            }"#
+        .to_string(),
+        r#"{
+                "id":"resp_wakeup_turn",
+                "model":"gpt-5.4",
+                "output":[
+                    {
+                        "id":"msg_wakeup_turn",
+                        "type":"message",
+                        "status":"completed",
+                        "role":"assistant",
+                        "content":[
+                            {
+                                "type":"output_text",
+                                "text":"I saw the background result and resumed the session."
+                            }
+                        ]
+                    }
+                ],
+                "usage":{"input_tokens":14,"output_tokens":7,"total_tokens":21}
+            }"#
+        .to_string(),
+    ]);
+    let temp = tempfile::tempdir().expect("tempdir");
+    let app = build_from_config(AppConfig {
+        data_dir: temp.path().join("state-root"),
+        daemon: Default::default(),
+        provider: ConfiguredProvider {
+            kind: ProviderKind::OpenAiResponses,
+            api_base: Some(format!("{api_base}/v1")),
+            api_key: Some("test-key".to_string()),
+            default_model: Some("gpt-5.4".to_string()),
+            ..ConfiguredProvider::default()
+        },
+        ..AppConfig::default()
+    })
+    .expect("build app");
+    let store = PersistenceStore::open(&app.persistence).expect("open store");
+
+    store
+        .put_session(&SessionRecord {
+            id: "session-bg-worker".to_string(),
+            title: "Background Worker".to_string(),
+            prompt_override: None,
+            settings_json: serde_json::to_string(&SessionSettings::default())
+                .expect("serialize settings"),
+            active_mission_id: None,
+            created_at: 1,
+            updated_at: 1,
+        })
+        .expect("put session");
+    store
+        .put_job(
+            &JobRecord::try_from(&agent_runtime::mission::JobSpec::chat_turn(
+                "job-bg-chat",
+                "session-bg-worker",
+                None,
+                None,
+                "Complete this in the background",
+                2,
+            ))
+            .expect("job record"),
+        )
+        .expect("put chat job");
+
+    let report = app
+        .background_worker_tick(10)
+        .expect("run background worker");
+    let first_request = requests.recv().expect("job request");
+    let second_request = requests.recv().expect("wake-up request");
+    handle.join().expect("join server");
+
+    assert_eq!(report.executed_jobs, 1);
+    assert_eq!(report.woken_sessions, 1);
+    assert_eq!(report.emitted_inbox_events, 1);
+
+    let job = store
+        .get_job("job-bg-chat")
+        .expect("get job")
+        .expect("job exists");
+    assert_eq!(job.status, "completed");
+    assert_eq!(
+        job.last_progress_message.as_deref(),
+        Some("background chat turn completed")
+    );
+
+    let inbox_events = store
+        .list_session_inbox_events_for_session("session-bg-worker")
+        .expect("list inbox events");
+    assert_eq!(inbox_events.len(), 1);
+    assert_eq!(inbox_events[0].status, "processed");
+
+    let transcripts = store
+        .list_transcripts_for_session("session-bg-worker")
+        .expect("list transcripts");
+    assert_eq!(transcripts.len(), 4);
+    assert_eq!(transcripts[0].kind, "user");
+    assert_eq!(transcripts[1].kind, "assistant");
+    assert_eq!(transcripts[2].kind, "system");
+    assert!(transcripts[2].content.contains("background job completed"));
+    assert_eq!(
+        transcripts[3].content,
+        "I saw the background result and resumed the session."
+    );
+
+    let normalized_first = first_request.to_ascii_lowercase();
+    assert!(normalized_first.contains("complete this in the background"));
+    let normalized_second = second_request.to_ascii_lowercase();
+    assert!(normalized_second.contains("background job completed"));
+    assert!(normalized_second.contains("background work is done"));
+}
+
+#[test]
+fn background_worker_cancels_jobs_with_cancel_requested_at() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let app = build_from_config(AppConfig {
+        data_dir: temp.path().join("state-root"),
+        provider: ConfiguredProvider {
+            kind: ProviderKind::OpenAiResponses,
+            api_base: Some("http://127.0.0.1:9/v1".to_string()),
+            api_key: Some("test-key".to_string()),
+            default_model: Some("gpt-5.4".to_string()),
+            ..ConfiguredProvider::default()
+        },
+        ..AppConfig::default()
+    })
+    .expect("build app");
+    let store = PersistenceStore::open(&app.persistence).expect("open store");
+
+    store
+        .put_session(&SessionRecord {
+            id: "session-bg-cancel".to_string(),
+            title: "Background Cancel".to_string(),
+            prompt_override: None,
+            settings_json: serde_json::to_string(&SessionSettings::default())
+                .expect("serialize settings"),
+            active_mission_id: None,
+            created_at: 1,
+            updated_at: 1,
+        })
+        .expect("put session");
+
+    let mut job = agent_runtime::mission::JobSpec::chat_turn(
+        "job-bg-cancel",
+        "session-bg-cancel",
+        None,
+        None,
+        "This should never execute",
+        2,
+    );
+    job.status = agent_runtime::mission::JobStatus::Running;
+    job.cancel_requested_at = Some(5);
+    job.updated_at = 5;
+
+    store
+        .put_job(&JobRecord::try_from(&job).expect("job record"))
+        .expect("put job");
+
+    let report = app
+        .background_worker_tick(10)
+        .expect("run background worker");
+
+    assert_eq!(report.executed_jobs, 0);
+
+    let job = store
+        .get_job("job-bg-cancel")
+        .expect("get job")
+        .expect("job exists");
+    assert_eq!(job.status, "cancelled");
+    assert_eq!(
+        job.last_progress_message.as_deref(),
+        Some("background job cancelled")
+    );
+
+    let transcripts = store
+        .list_transcripts_for_session("session-bg-cancel")
+        .expect("list transcripts");
+    assert!(transcripts.is_empty());
 }

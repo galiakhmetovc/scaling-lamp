@@ -1,5 +1,6 @@
 mod context_repos;
 mod execution_repos;
+mod inbox_repos;
 mod payloads;
 mod schema;
 mod session_mission;
@@ -8,11 +9,12 @@ use crate::PersistenceScaffold;
 use crate::config::AppConfig;
 use crate::records::{
     ArtifactRecord, ContextOffloadRecord, ContextSummaryRecord, JobRecord, MissionRecord,
-    PlanRecord, RunRecord, SessionRecord, TranscriptRecord,
+    PlanRecord, RunRecord, SessionInboxEventRecord, SessionRecord, TranscriptRecord,
 };
 use crate::repository::{
     ArtifactRepository, ContextOffloadRepository, ContextSummaryRepository, JobRepository,
-    MissionRepository, PlanRepository, RunRepository, SessionRepository, TranscriptRepository,
+    MissionRepository, PlanRepository, RunRepository, SessionInboxRepository, SessionRepository,
+    TranscriptRepository,
 };
 use agent_runtime::context::{ContextOffloadPayload, ContextOffloadSnapshot};
 use rusqlite::{Connection, OptionalExtension, params};
@@ -82,6 +84,7 @@ pub struct ExecutionStateSnapshot {
     pub missions: Vec<MissionRecord>,
     pub jobs: Vec<JobRecord>,
     pub runs: Vec<RunRecord>,
+    pub inbox_events: Vec<SessionInboxEventRecord>,
 }
 
 type TranscriptRow = (
@@ -180,6 +183,7 @@ impl PersistenceStore {
             missions: self.list_missions()?,
             jobs: self.list_jobs()?,
             runs: self.list_runs()?,
+            inbox_events: self.list_queued_session_inbox_events()?,
         })
     }
 

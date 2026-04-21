@@ -5,7 +5,7 @@ use std::process::{Command, Stdio};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread::{self, JoinHandle};
-use std::time::Duration;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 pub struct DaemonHandle {
     shutdown: Arc<AtomicBool>,
@@ -13,7 +13,12 @@ pub struct DaemonHandle {
 }
 
 pub fn serve(app: App) -> std::io::Result<()> {
-    server::serve(app, Arc::new(AtomicBool::new(false)))
+    let shutdown = Arc::new(AtomicBool::new(false));
+    let worker = spawn_background_worker(app.clone(), shutdown.clone());
+    let result = server::serve(app, shutdown.clone());
+    shutdown.store(true, Ordering::Relaxed);
+    let _ = worker.join();
+    result
 }
 
 pub fn spawn_local_process() -> Result<(), std::io::Error> {
@@ -33,8 +38,16 @@ pub fn spawn_for_test(app: App) -> std::io::Result<DaemonHandle> {
         app.config.daemon.bind_host, app.config.daemon.bind_port
     );
     let shutdown = Arc::new(AtomicBool::new(false));
+    let worker_app = app.clone();
+    let worker_shutdown = shutdown.clone();
+    let worker = spawn_background_worker(worker_app, worker_shutdown);
     let thread_shutdown = shutdown.clone();
-    let thread = thread::spawn(move || server::serve(app, thread_shutdown));
+    let thread = thread::spawn(move || {
+        let result = server::serve(app, thread_shutdown.clone());
+        thread_shutdown.store(true, Ordering::Relaxed);
+        let _ = worker.join();
+        result
+    });
 
     for _ in 0..50 {
         if TcpStream::connect(&bind).is_ok() {
@@ -61,4 +74,20 @@ impl DaemonHandle {
             Err(_) => Err(std::io::Error::other("daemon thread panicked")),
         }
     }
+}
+
+fn unix_timestamp() -> i64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_secs() as i64)
+        .unwrap_or(0)
+}
+
+fn spawn_background_worker(app: App, shutdown: Arc<AtomicBool>) -> JoinHandle<()> {
+    thread::spawn(move || {
+        while !shutdown.load(Ordering::Relaxed) {
+            let _ = app.background_worker_tick(unix_timestamp());
+            thread::sleep(Duration::from_millis(100));
+        }
+    })
 }

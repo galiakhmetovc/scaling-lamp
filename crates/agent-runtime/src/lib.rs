@@ -1,5 +1,6 @@
 pub mod context;
 pub mod delegation;
+pub mod inbox;
 pub mod memory;
 pub mod mission;
 pub mod permission;

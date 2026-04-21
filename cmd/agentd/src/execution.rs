@@ -1,5 +1,6 @@
 #![cfg_attr(not(test), allow(dead_code))]
 
+mod background;
 mod chat;
 mod mission;
 mod provider_loop;
@@ -9,7 +10,7 @@ mod tools;
 use agent_persistence::{
     ContextSummaryRepository, JobRecord, JobRepository, MissionRecord, MissionRepository,
     PersistenceStore, PlanRecord, PlanRepository, RecordConversionError, RunRecord, RunRepository,
-    SessionRepository, StoreError, TranscriptRecord, TranscriptRepository,
+    SessionInboxRepository, SessionRepository, StoreError, TranscriptRecord, TranscriptRepository,
 };
 use agent_runtime::mission::{
     JobExecutionInput, JobResult, JobSpec, JobStatus, MissionSpec, MissionStatus,
@@ -71,6 +72,16 @@ pub struct ToolExecutionReport {
     pub approval_id: Option<String>,
     pub output_summary: Option<String>,
     pub evidence_refs: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub struct BackgroundWorkerTickReport {
+    pub queued_jobs: usize,
+    pub dispatched_jobs: usize,
+    pub executed_jobs: usize,
+    pub emitted_inbox_events: usize,
+    pub woken_sessions: usize,
+    pub failed_jobs: usize,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

@@ -89,6 +89,22 @@ pub(super) fn bootstrap_schema(connection: &Connection) -> Result<(), StoreError
              FOREIGN KEY(run_id) REFERENCES runs(id) ON DELETE SET NULL
          );
 
+         CREATE TABLE IF NOT EXISTS session_inbox_events (
+             id TEXT PRIMARY KEY,
+             session_id TEXT NOT NULL,
+             job_id TEXT,
+             kind TEXT NOT NULL,
+             payload_json TEXT NOT NULL,
+             status TEXT NOT NULL,
+             created_at INTEGER NOT NULL,
+             available_at INTEGER NOT NULL,
+             claimed_at INTEGER,
+             processed_at INTEGER,
+             error TEXT,
+             FOREIGN KEY(session_id) REFERENCES sessions(id) ON DELETE CASCADE,
+             FOREIGN KEY(job_id) REFERENCES jobs(id) ON DELETE SET NULL
+         );
+
          CREATE TABLE IF NOT EXISTS context_summaries (
              session_id TEXT PRIMARY KEY,
              summary_text TEXT NOT NULL,
@@ -137,6 +153,8 @@ pub(super) fn bootstrap_schema(connection: &Connection) -> Result<(), StoreError
          CREATE INDEX IF NOT EXISTS idx_jobs_parent_job_id ON jobs(parent_job_id);
          CREATE INDEX IF NOT EXISTS idx_transcripts_session_id ON transcripts(session_id);
          CREATE INDEX IF NOT EXISTS idx_transcripts_run_id ON transcripts(run_id);
+         CREATE INDEX IF NOT EXISTS idx_session_inbox_events_session_id ON session_inbox_events(session_id);
+         CREATE INDEX IF NOT EXISTS idx_session_inbox_events_status_available_at ON session_inbox_events(status, available_at);
          CREATE INDEX IF NOT EXISTS idx_context_summaries_updated_at ON context_summaries(updated_at);
          CREATE INDEX IF NOT EXISTS idx_context_offloads_updated_at ON context_offloads(updated_at);
          CREATE INDEX IF NOT EXISTS idx_artifacts_session_id ON artifacts(session_id);",
@@ -166,6 +184,10 @@ pub(super) fn validate_schema(connection: &Connection) -> Result<(), StoreError>
     validate_column(connection, "runs", "delegate_runs_json", true)?;
     validate_column(connection, "runs", "result", false)?;
     validate_column(connection, "transcripts", "sha256", true)?;
+    validate_column(connection, "session_inbox_events", "session_id", true)?;
+    validate_column(connection, "session_inbox_events", "kind", true)?;
+    validate_column(connection, "session_inbox_events", "payload_json", true)?;
+    validate_column(connection, "session_inbox_events", "status", true)?;
     validate_column(connection, "context_summaries", "summary_text", true)?;
     validate_column(
         connection,
@@ -197,6 +219,13 @@ pub(super) fn validate_schema(connection: &Connection) -> Result<(), StoreError>
     validate_foreign_key(
         connection,
         "context_summaries",
+        "session_id",
+        "sessions",
+        "CASCADE",
+    )?;
+    validate_foreign_key(
+        connection,
+        "session_inbox_events",
         "session_id",
         "sessions",
         "CASCADE",

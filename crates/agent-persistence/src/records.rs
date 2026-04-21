@@ -1,4 +1,8 @@
 use agent_runtime::context::{ContextOffloadSnapshot, ContextSummary};
+use agent_runtime::inbox::{
+    SessionInboxEvent, SessionInboxEventParseError, SessionInboxEventPayload,
+    SessionInboxEventStatus,
+};
 use agent_runtime::mission::{
     JobKind, JobKindParseError, JobResult, JobSpec, JobSpecValidationError, JobStatus,
     JobStatusParseError, MissionExecutionIntent, MissionExecutionIntentParseError, MissionSchedule,
@@ -97,6 +101,21 @@ pub struct TranscriptRecord {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SessionInboxEventRecord {
+    pub id: String,
+    pub session_id: String,
+    pub job_id: Option<String>,
+    pub kind: String,
+    pub payload_json: String,
+    pub status: String,
+    pub created_at: i64,
+    pub available_at: i64,
+    pub claimed_at: Option<i64>,
+    pub processed_at: Option<i64>,
+    pub error: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ContextSummaryRecord {
     pub session_id: String,
     pub summary_text: String,
@@ -138,6 +157,8 @@ pub enum RecordConversionError {
     InvalidJobSpec(JobSpecValidationError),
     InvalidJobStatus(JobStatusParseError),
     InvalidContextOffloadRefs(serde_json::Error),
+    InvalidInboxEventPayload(serde_json::Error),
+    InvalidInboxEventStatus(SessionInboxEventParseError),
     InvalidContextSummaryCoveredMessageCount { value: i64 },
     InvalidContextSummaryTokenEstimate { value: i64 },
     InvalidMessageRole { value: String },
@@ -156,6 +177,7 @@ pub enum RecordConversionError {
     InvalidRunStatus(RunStatusParseError),
     InvalidSessionSettings(serde_json::Error),
     SerializeContextOffloadRefs(serde_json::Error),
+    SerializeInboxEventPayload(serde_json::Error),
     SerializeJobInput(serde_json::Error),
     SerializeJobResult(serde_json::Error),
     SerializeMissionAcceptance(serde_json::Error),
@@ -455,6 +477,51 @@ impl TryFrom<TranscriptRecord> for TranscriptEntry {
     }
 }
 
+impl TryFrom<&SessionInboxEvent> for SessionInboxEventRecord {
+    type Error = RecordConversionError;
+
+    fn try_from(event: &SessionInboxEvent) -> Result<Self, Self::Error> {
+        Ok(Self {
+            id: event.id.clone(),
+            session_id: event.session_id.clone(),
+            job_id: event.job_id.clone(),
+            kind: serde_json::to_string(&event.kind)
+                .map_err(RecordConversionError::SerializeInboxEventPayload)?,
+            payload_json: serde_json::to_string(&event.payload)
+                .map_err(RecordConversionError::SerializeInboxEventPayload)?,
+            status: event.status.as_str().to_string(),
+            created_at: event.created_at,
+            available_at: event.available_at,
+            claimed_at: event.claimed_at,
+            processed_at: event.processed_at,
+            error: event.error.clone(),
+        })
+    }
+}
+
+impl TryFrom<SessionInboxEventRecord> for SessionInboxEvent {
+    type Error = RecordConversionError;
+
+    fn try_from(record: SessionInboxEventRecord) -> Result<Self, Self::Error> {
+        Ok(Self {
+            id: record.id,
+            session_id: record.session_id,
+            job_id: record.job_id,
+            kind: serde_json::from_str(&record.kind)
+                .map_err(RecordConversionError::InvalidInboxEventPayload)?,
+            payload: serde_json::from_str::<SessionInboxEventPayload>(&record.payload_json)
+                .map_err(RecordConversionError::InvalidInboxEventPayload)?,
+            status: SessionInboxEventStatus::try_from(record.status.as_str())
+                .map_err(RecordConversionError::InvalidInboxEventStatus)?,
+            created_at: record.created_at,
+            available_at: record.available_at,
+            claimed_at: record.claimed_at,
+            processed_at: record.processed_at,
+            error: record.error,
+        })
+    }
+}
+
 impl TryFrom<&JobSpec> for JobRecord {
     type Error = RecordConversionError;
 
@@ -554,6 +621,12 @@ impl fmt::Display for RecordConversionError {
             Self::InvalidContextOffloadRefs(source) => {
                 write!(formatter, "invalid context offload refs: {source}")
             }
+            Self::InvalidInboxEventPayload(source) => {
+                write!(formatter, "invalid inbox event payload: {source}")
+            }
+            Self::InvalidInboxEventStatus(source) => {
+                write!(formatter, "invalid inbox event status: {source}")
+            }
             Self::InvalidContextSummaryCoveredMessageCount { value } => {
                 write!(
                     formatter,
@@ -615,6 +688,12 @@ impl fmt::Display for RecordConversionError {
                     "failed to serialize context offload refs: {source}"
                 )
             }
+            Self::SerializeInboxEventPayload(source) => {
+                write!(
+                    formatter,
+                    "failed to serialize inbox event payload: {source}"
+                )
+            }
             Self::SerializeJobInput(source) => {
                 write!(formatter, "failed to serialize job input: {source}")
             }
@@ -670,6 +749,8 @@ impl Error for RecordConversionError {
             Self::InvalidJobSpec(source) => Some(source),
             Self::InvalidJobStatus(source) => Some(source),
             Self::InvalidContextOffloadRefs(source) => Some(source),
+            Self::InvalidInboxEventPayload(source) => Some(source),
+            Self::InvalidInboxEventStatus(source) => Some(source),
             Self::InvalidContextSummaryCoveredMessageCount { .. } => None,
             Self::InvalidContextSummaryTokenEstimate { .. } => None,
             Self::InvalidMissionAcceptance(source) => Some(source),
@@ -686,6 +767,7 @@ impl Error for RecordConversionError {
             Self::InvalidRunStatus(source) => Some(source),
             Self::InvalidSessionSettings(source) => Some(source),
             Self::SerializeContextOffloadRefs(source) => Some(source),
+            Self::SerializeInboxEventPayload(source) => Some(source),
             Self::SerializeJobInput(source) => Some(source),
             Self::SerializeJobResult(source) => Some(source),
             Self::SerializeMissionAcceptance(source) => Some(source),

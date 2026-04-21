@@ -1,5 +1,6 @@
 use agent_persistence::{
     AppConfig, JobRecord, JobRepository, MissionRecord, MissionRepository, PersistenceStore,
+    SessionInboxRepository, TranscriptRepository,
 };
 use agent_runtime::mission::{
     JobExecutionInput, MissionExecutionIntent, MissionSchedule, MissionStatus,
@@ -12,7 +13,9 @@ use agentd::http::types::{
 };
 use reqwest::StatusCode;
 use reqwest::blocking::Client;
+use std::io::{Read, Write};
 use std::net::TcpListener;
+use std::sync::mpsc::{self, Receiver};
 use std::thread;
 use std::time::Duration;
 
@@ -295,4 +298,159 @@ fn daemon_http_exposes_current_session_background_jobs_and_counts() {
     );
 
     handle.stop().expect("stop daemon");
+}
+
+#[test]
+fn daemon_background_worker_processes_queued_chat_jobs_and_wakes_session() {
+    let (api_base, _requests, provider_handle) = spawn_json_server_sequence(vec![
+        r#"{
+                "id":"resp_daemon_bg_job",
+                "model":"gpt-5.4",
+                "output":[
+                    {
+                        "id":"msg_daemon_bg_job",
+                        "type":"message",
+                        "status":"completed",
+                        "role":"assistant",
+                        "content":[
+                            {
+                                "type":"output_text",
+                                "text":"Background daemon job finished."
+                            }
+                        ]
+                    }
+                ],
+                "usage":{"input_tokens":12,"output_tokens":5,"total_tokens":17}
+            }"#
+        .to_string(),
+        r#"{
+                "id":"resp_daemon_wakeup",
+                "model":"gpt-5.4",
+                "output":[
+                    {
+                        "id":"msg_daemon_wakeup",
+                        "type":"message",
+                        "status":"completed",
+                        "role":"assistant",
+                        "content":[
+                            {
+                                "type":"output_text",
+                                "text":"Daemon wake-up turn handled the background result."
+                            }
+                        ]
+                    }
+                ],
+                "usage":{"input_tokens":14,"output_tokens":7,"total_tokens":21}
+            }"#
+        .to_string(),
+    ]);
+
+    let temp = tempfile::tempdir().expect("tempdir");
+    let mut config = AppConfig {
+        data_dir: temp.path().join("teamd-state"),
+        ..AppConfig::default()
+    };
+    config.daemon.bind_host = "127.0.0.1".to_string();
+    config.daemon.bind_port = free_port();
+    config.daemon.bearer_token = Some("secret-token".to_string());
+    config.provider.kind = agent_runtime::provider::ProviderKind::OpenAiResponses;
+    config.provider.api_base = Some(format!("{api_base}/v1"));
+    config.provider.api_key = Some("test-key".to_string());
+    config.provider.default_model = Some("gpt-5.4".to_string());
+    let app = bootstrap::build_from_config(config).expect("build app");
+    let scaffold = app.persistence.clone();
+    let session = app
+        .create_session_auto(Some("Daemon Background Worker"))
+        .expect("create session");
+    let store = PersistenceStore::open(&scaffold).expect("open store");
+    store
+        .put_job(
+            &JobRecord::try_from(&agent_runtime::mission::JobSpec::chat_turn(
+                "job-daemon-bg-chat",
+                session.id.as_str(),
+                None,
+                None,
+                "Complete this in the daemon background",
+                2,
+            ))
+            .expect("job record"),
+        )
+        .expect("put job");
+
+    let handle = daemon::spawn_for_test(app).expect("spawn daemon");
+
+    let mut completed = false;
+    for _ in 0..60 {
+        let poll_store = PersistenceStore::open(&scaffold).expect("reopen store");
+        let job = poll_store
+            .get_job("job-daemon-bg-chat")
+            .expect("get job")
+            .expect("job exists");
+        let transcripts = poll_store
+            .list_transcripts_for_session(&session.id)
+            .expect("list transcripts");
+        if job.status == "completed" && transcripts.len() >= 4 {
+            completed = true;
+            assert_eq!(transcripts[2].kind, "system");
+            assert!(transcripts[2].content.contains("background job completed"));
+            assert_eq!(
+                transcripts[3].content,
+                "Daemon wake-up turn handled the background result."
+            );
+            let inbox = poll_store
+                .list_session_inbox_events_for_session(&session.id)
+                .expect("list inbox");
+            assert_eq!(inbox.len(), 1);
+            assert_eq!(inbox[0].status, "processed");
+            break;
+        }
+        thread::sleep(Duration::from_millis(100));
+    }
+
+    assert!(completed, "daemon should process the queued background job");
+
+    handle.stop().expect("stop daemon");
+    provider_handle.join().expect("join provider");
+}
+
+fn spawn_json_server_sequence(
+    responses: Vec<String>,
+) -> (String, Receiver<String>, thread::JoinHandle<()>) {
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind test server");
+    let port = listener.local_addr().expect("local addr").port();
+    let (sender, receiver) = mpsc::channel();
+
+    let handle = thread::spawn(move || {
+        for body in responses {
+            let (mut stream, _) = listener.accept().expect("accept connection");
+            let mut request = Vec::new();
+            let mut buffer = [0_u8; 1024];
+
+            loop {
+                let bytes_read = stream.read(&mut buffer).expect("read request");
+                if bytes_read == 0 {
+                    break;
+                }
+                request.extend_from_slice(&buffer[..bytes_read]);
+                if request.windows(4).any(|window| window == b"\r\n\r\n") {
+                    break;
+                }
+            }
+
+            sender
+                .send(String::from_utf8_lossy(&request).into_owned())
+                .expect("send request");
+
+            let response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                body.len(),
+                body
+            );
+            stream
+                .write_all(response.as_bytes())
+                .expect("write response");
+        }
+    });
+
+    (format!("http://127.0.0.1:{port}"), receiver, handle)
 }

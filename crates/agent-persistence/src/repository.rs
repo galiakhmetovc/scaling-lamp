@@ -1,6 +1,6 @@
 use crate::records::{
     ArtifactRecord, ContextOffloadRecord, ContextSummaryRecord, JobRecord, MissionRecord,
-    PlanRecord, RunRecord, SessionRecord, TranscriptRecord,
+    PlanRecord, RunRecord, SessionInboxEventRecord, SessionRecord, TranscriptRecord,
 };
 use crate::store::StoreError;
 use agent_runtime::context::ContextOffloadPayload;
@@ -39,6 +39,23 @@ pub trait TranscriptRepository {
         &self,
         session_id: &str,
     ) -> Result<Vec<TranscriptRecord>, StoreError>;
+}
+
+pub trait SessionInboxRepository {
+    fn put_session_inbox_event(&self, record: &SessionInboxEventRecord) -> Result<(), StoreError>;
+    fn get_session_inbox_event(
+        &self,
+        id: &str,
+    ) -> Result<Option<SessionInboxEventRecord>, StoreError>;
+    fn list_session_inbox_events_for_session(
+        &self,
+        session_id: &str,
+    ) -> Result<Vec<SessionInboxEventRecord>, StoreError>;
+    fn list_queued_session_inbox_events_for_session(
+        &self,
+        session_id: &str,
+    ) -> Result<Vec<SessionInboxEventRecord>, StoreError>;
+    fn list_queued_session_inbox_events(&self) -> Result<Vec<SessionInboxEventRecord>, StoreError>;
 }
 
 pub trait ContextSummaryRepository {

@@ -5,8 +5,8 @@ use super::{
 use crate::{
     ArtifactRecord, ArtifactRepository, ContextOffloadRecord, ContextOffloadRepository, JobRecord,
     JobRepository, MissionRecord, MissionRepository, PersistenceScaffold, PlanRecord,
-    PlanRepository, RunRecord, RunRepository, SessionRecord, SessionRepository, TranscriptRecord,
-    TranscriptRepository,
+    PlanRepository, RunRecord, RunRepository, SessionInboxRepository, SessionRecord,
+    SessionRepository, TranscriptRecord, TranscriptRepository,
 };
 use agent_runtime::context::{ContextOffloadPayload, ContextOffloadRef, ContextOffloadSnapshot};
 use agent_runtime::mission::JobExecutionInput;
@@ -1351,4 +1351,71 @@ fn open_restores_matching_backups_before_pruning_corrupt_payloads() {
     );
     assert!(!transcript_backup.exists());
     assert!(!artifact_backup.exists());
+}
+
+#[test]
+fn inbox_events_round_trip_and_session_queries() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let scaffold = PersistenceScaffold::from_config(crate::AppConfig {
+        data_dir: temp.path().join("state-root"),
+        ..crate::AppConfig::default()
+    });
+    let store = super::PersistenceStore::open(&scaffold).expect("open store");
+
+    let session = SessionRecord {
+        id: "session-inbox".to_string(),
+        title: "Inbox Session".to_string(),
+        prompt_override: None,
+        settings_json: "{\"model\":\"gpt-5.4\"}".to_string(),
+        active_mission_id: None,
+        created_at: 1,
+        updated_at: 1,
+    };
+    store.put_session(&session).expect("put session");
+
+    let queued = crate::SessionInboxEventRecord::try_from(
+        &agent_runtime::inbox::SessionInboxEvent::job_completed(
+            "inbox-job-completed",
+            "session-inbox",
+            None,
+            "Background job finished",
+            10,
+        ),
+    )
+    .expect("queued record");
+    let processed = crate::SessionInboxEventRecord::try_from(
+        &agent_runtime::inbox::SessionInboxEvent::job_failed(
+            "inbox-job-failed",
+            "session-inbox",
+            None,
+            "Background job failed",
+            11,
+        )
+        .mark_processed(12),
+    )
+    .expect("processed record");
+
+    store.put_session_inbox_event(&queued).expect("put queued");
+    store
+        .put_session_inbox_event(&processed)
+        .expect("put processed");
+
+    let restored = agent_runtime::inbox::SessionInboxEvent::try_from(
+        store
+            .get_session_inbox_event("inbox-job-completed")
+            .expect("get queued")
+            .expect("queued exists"),
+    )
+    .expect("restore queued");
+    assert_eq!(restored.session_id, "session-inbox");
+    assert_eq!(
+        restored.status,
+        agent_runtime::inbox::SessionInboxEventStatus::Queued
+    );
+
+    let queued_events = store
+        .list_queued_session_inbox_events_for_session("session-inbox")
+        .expect("list queued");
+    assert_eq!(queued_events.len(), 1);
+    assert_eq!(queued_events[0].id, "inbox-job-completed");
 }
