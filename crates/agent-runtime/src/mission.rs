@@ -61,10 +61,19 @@ pub enum JobKind {
 pub enum JobStatus {
     Queued,
     Running,
+    WaitingExternal,
     Completed,
     Failed,
     Cancelled,
     Blocked,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct JobCallbackTarget {
+    pub url: String,
+    pub bearer_token: Option<String>,
+    pub parent_session_id: String,
+    pub parent_job_id: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -130,6 +139,8 @@ pub struct JobSpec {
     pub heartbeat_at: Option<i64>,
     pub cancel_requested_at: Option<i64>,
     pub last_progress_message: Option<String>,
+    pub callback: Option<JobCallbackTarget>,
+    pub callback_sent_at: Option<i64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -319,6 +330,7 @@ impl JobStatus {
         match self {
             Self::Queued => "queued",
             Self::Running => "running",
+            Self::WaitingExternal => "waiting_external",
             Self::Completed => "completed",
             Self::Failed => "failed",
             Self::Cancelled => "cancelled",
@@ -327,7 +339,10 @@ impl JobStatus {
     }
 
     pub fn is_active(self) -> bool {
-        matches!(self, Self::Queued | Self::Running | Self::Blocked)
+        matches!(
+            self,
+            Self::Queued | Self::Running | Self::WaitingExternal | Self::Blocked
+        )
     }
 }
 
@@ -338,6 +353,7 @@ impl TryFrom<&str> for JobStatus {
         match value {
             "queued" => Ok(Self::Queued),
             "running" => Ok(Self::Running),
+            "waiting_external" => Ok(Self::WaitingExternal),
             "completed" => Ok(Self::Completed),
             "failed" => Ok(Self::Failed),
             "cancelled" => Ok(Self::Cancelled),
@@ -385,6 +401,8 @@ impl JobSpec {
             heartbeat_at: None,
             cancel_requested_at: None,
             last_progress_message: None,
+            callback: None,
+            callback_sent_at: None,
         }
     }
 
@@ -420,6 +438,8 @@ impl JobSpec {
             heartbeat_at: None,
             cancel_requested_at: None,
             last_progress_message: None,
+            callback: None,
+            callback_sent_at: None,
         }
     }
 
@@ -466,6 +486,8 @@ impl JobSpec {
             heartbeat_at: None,
             cancel_requested_at: None,
             last_progress_message: None,
+            callback: None,
+            callback_sent_at: None,
         }
     }
 

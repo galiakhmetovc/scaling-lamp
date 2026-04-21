@@ -73,6 +73,8 @@ pub(super) fn bootstrap_schema(connection: &Connection) -> Result<(), StoreError
              heartbeat_at INTEGER,
              cancel_requested_at INTEGER,
              last_progress_message TEXT,
+             callback_json TEXT,
+             callback_sent_at INTEGER,
              FOREIGN KEY(session_id) REFERENCES sessions(id) ON DELETE CASCADE,
              FOREIGN KEY(mission_id) REFERENCES missions(id) ON DELETE SET NULL,
              FOREIGN KEY(run_id) REFERENCES runs(id) ON DELETE SET NULL,
@@ -179,6 +181,8 @@ pub(super) fn validate_schema(connection: &Connection) -> Result<(), StoreError>
     validate_column(connection, "jobs", "heartbeat_at", false)?;
     validate_column(connection, "jobs", "cancel_requested_at", false)?;
     validate_column(connection, "jobs", "last_progress_message", false)?;
+    validate_column(connection, "jobs", "callback_json", false)?;
+    validate_column(connection, "jobs", "callback_sent_at", false)?;
     validate_column(connection, "sessions", "settings_json", true)?;
     validate_column(connection, "sessions", "parent_session_id", false)?;
     validate_column(connection, "sessions", "parent_job_id", false)?;
@@ -323,6 +327,8 @@ pub(super) fn migrate_schema(connection: &Connection) -> Result<(), StoreError> 
         "delegate_runs_json",
         "TEXT NOT NULL DEFAULT '[]'",
     )?;
+    add_column_if_missing(connection, "jobs", "callback_json", "TEXT")?;
+    add_column_if_missing(connection, "jobs", "callback_sent_at", "INTEGER")?;
     add_column_if_missing(
         connection,
         "missions",
@@ -434,6 +440,8 @@ pub(super) fn migrate_jobs_table(connection: &Connection) -> Result<(), StoreErr
              heartbeat_at INTEGER,
              cancel_requested_at INTEGER,
              last_progress_message TEXT,
+             callback_json TEXT,
+             callback_sent_at INTEGER,
              FOREIGN KEY(session_id) REFERENCES sessions(id) ON DELETE CASCADE,
              FOREIGN KEY(mission_id) REFERENCES missions(id) ON DELETE SET NULL,
              FOREIGN KEY(run_id) REFERENCES runs(id) ON DELETE SET NULL,
@@ -443,7 +451,7 @@ pub(super) fn migrate_jobs_table(connection: &Connection) -> Result<(), StoreErr
              id, session_id, mission_id, run_id, parent_job_id, kind, status, input_json,
              result_json, error, created_at, updated_at, started_at, finished_at, attempt_count,
              max_attempts, lease_owner, lease_expires_at, heartbeat_at, cancel_requested_at,
-             last_progress_message
+             last_progress_message, callback_json, callback_sent_at
          )
          SELECT
              jobs_legacy.id,
@@ -462,6 +470,8 @@ pub(super) fn migrate_jobs_table(connection: &Connection) -> Result<(), StoreErr
              jobs_legacy.finished_at,
              0,
              1,
+             NULL,
+             NULL,
              NULL,
              NULL,
              NULL,

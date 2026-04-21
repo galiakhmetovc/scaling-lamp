@@ -1,5 +1,6 @@
-use super::delegation::{DelegationExecutorKind, resolve_delegate_dispatch};
+use super::delegation::{DelegationExecutorKind, a2a_peer_id, resolve_delegate_dispatch};
 use super::*;
+use crate::http::types::{A2ACallbackTargetRequest, A2ADelegationCreateRequest};
 use crate::prompting;
 use agent_runtime::delegation::{DelegateRequest, DelegateResultPackage};
 use agent_runtime::mission::{JobResult, MissionStatus};
@@ -463,19 +464,123 @@ impl ExecutionService {
                 )?;
             }
             DelegationExecutorKind::RemoteA2A => {
-                let reason = dispatch
-                    .blocked_reason()
-                    .unwrap_or_else(|| "remote delegation executor is not configured".to_string());
-                job.status = JobStatus::Blocked;
-                job.error = Some(reason.clone());
-                job.updated_at = now;
-                job.last_progress_message = Some(reason);
-                store
-                    .put_job(&JobRecord::try_from(&job).map_err(ExecutionError::RecordConversion)?)
-                    .map_err(ExecutionError::Store)?;
+                self.execute_background_delegate_job_remote(
+                    store,
+                    &mut job,
+                    &request,
+                    &dispatch.owner_selector,
+                    now,
+                )?;
             }
         }
 
+        Ok(())
+    }
+
+    fn execute_background_delegate_job_remote(
+        &self,
+        store: &PersistenceStore,
+        job: &mut JobSpec,
+        request: &DelegateRequest,
+        owner_selector: &str,
+        now: i64,
+    ) -> Result<(), ExecutionError> {
+        let Some(peer_id) = a2a_peer_id(owner_selector) else {
+            let reason = format!("invalid remote delegation owner {owner_selector}");
+            job.status = JobStatus::Blocked;
+            job.error = Some(reason.clone());
+            job.updated_at = now;
+            job.last_progress_message = Some(reason);
+            store
+                .put_job(&JobRecord::try_from(&*job).map_err(ExecutionError::RecordConversion)?)
+                .map_err(ExecutionError::Store)?;
+            return Ok(());
+        };
+
+        let Some(peer) = self.config.a2a_peers.get(peer_id) else {
+            let reason = format!("remote delegation peer {peer_id} is not configured");
+            job.status = JobStatus::Blocked;
+            job.error = Some(reason.clone());
+            job.updated_at = now;
+            job.last_progress_message = Some(reason);
+            store
+                .put_job(&JobRecord::try_from(&*job).map_err(ExecutionError::RecordConversion)?)
+                .map_err(ExecutionError::Store)?;
+            return Ok(());
+        };
+
+        let Some(public_base_url) = self.config.a2a_public_base_url.as_deref() else {
+            let reason = "daemon.public_base_url is required for remote delegation".to_string();
+            job.status = JobStatus::Blocked;
+            job.error = Some(reason.clone());
+            job.updated_at = now;
+            job.last_progress_message = Some(reason);
+            store
+                .put_job(&JobRecord::try_from(&*job).map_err(ExecutionError::RecordConversion)?)
+                .map_err(ExecutionError::Store)?;
+            return Ok(());
+        };
+
+        let callback_url = format!(
+            "{}/v1/a2a/delegations/{}/complete",
+            public_base_url.trim_end_matches('/'),
+            job.id
+        );
+        let accepted = match self.a2a.send_delegation(
+            peer,
+            &A2ADelegationCreateRequest {
+                parent_session_id: job.session_id.clone(),
+                parent_job_id: job.id.clone(),
+                label: request.label.clone(),
+                goal: request.goal.clone(),
+                bounded_context: request.bounded_context.clone(),
+                write_scope: request.write_scope.clone(),
+                expected_output: request.expected_output.clone(),
+                owner: request.owner.clone(),
+                callback: A2ACallbackTargetRequest {
+                    url: callback_url,
+                    bearer_token: self.config.a2a_callback_bearer_token.clone(),
+                },
+                now,
+            },
+        ) {
+            Ok(accepted) => accepted,
+            Err(reason) => {
+                job.status = JobStatus::Blocked;
+                job.error = Some(reason.clone());
+                job.updated_at = now;
+                job.last_progress_message = Some(format!(
+                    "remote delegation dispatch to {peer_id} failed: {reason}"
+                ));
+                store
+                    .put_job(&JobRecord::try_from(&*job).map_err(ExecutionError::RecordConversion)?)
+                    .map_err(ExecutionError::Store)?;
+                return Ok(());
+            }
+        };
+
+        self.write_delegate_parent_started_transcript(
+            store,
+            &job.session_id,
+            &job.id,
+            &accepted.remote_session_id,
+            &request.label,
+            now,
+        )?;
+
+        job.status = JobStatus::WaitingExternal;
+        job.error = None;
+        job.updated_at = now;
+        job.lease_owner = None;
+        job.lease_expires_at = None;
+        job.heartbeat_at = Some(now);
+        job.last_progress_message = Some(format!(
+            "remote delegation accepted by {peer_id} as {}",
+            accepted.remote_job_id
+        ));
+        store
+            .put_job(&JobRecord::try_from(&*job).map_err(ExecutionError::RecordConversion)?)
+            .map_err(ExecutionError::Store)?;
         Ok(())
     }
 

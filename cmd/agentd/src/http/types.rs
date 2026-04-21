@@ -3,6 +3,7 @@ use crate::bootstrap::{
     SessionSummary, SessionTranscriptView,
 };
 use crate::execution::{ApprovalContinuationReport, ChatExecutionEvent, ChatTurnExecutionReport};
+use agent_runtime::delegation::{DelegateResultPackage, DelegateWriteScope};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -140,6 +141,59 @@ pub struct ApproveRunRequest {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SkillCommandRequest {
     pub name: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct A2ACallbackTargetRequest {
+    pub url: String,
+    pub bearer_token: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct A2ADelegationCreateRequest {
+    pub parent_session_id: String,
+    pub parent_job_id: String,
+    pub label: String,
+    pub goal: String,
+    pub bounded_context: Vec<String>,
+    pub write_scope: DelegateWriteScope,
+    pub expected_output: String,
+    pub owner: String,
+    pub callback: A2ACallbackTargetRequest,
+    pub now: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct A2ADelegationAcceptedResponse {
+    pub accepted: bool,
+    pub remote_session_id: String,
+    pub remote_job_id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum A2ADelegationCompletionOutcomeRequest {
+    Completed {
+        remote_session_id: String,
+        remote_job_id: String,
+        package: DelegateResultPackage,
+    },
+    Failed {
+        remote_session_id: String,
+        remote_job_id: String,
+        reason: String,
+    },
+    Blocked {
+        remote_session_id: String,
+        remote_job_id: String,
+        reason: String,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct A2ADelegationCompletionRequest {
+    pub outcome: A2ADelegationCompletionOutcomeRequest,
+    pub now: i64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

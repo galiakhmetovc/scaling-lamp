@@ -8,11 +8,12 @@ mod provider_loop;
 mod supervisor;
 mod tools;
 
+use crate::a2a::A2AClient;
 use agent_persistence::{
-    ContextOffloadRepository, ContextSummaryRepository, JobRecord, JobRepository, MissionRecord,
-    MissionRepository, PersistenceStore, PlanRecord, PlanRepository, RecordConversionError,
-    RunRecord, RunRepository, SessionInboxRepository, SessionRepository, StoreError,
-    TranscriptRecord, TranscriptRepository,
+    A2APeerConfig, ContextOffloadRepository, ContextSummaryRepository, JobRecord, JobRepository,
+    MissionRecord, MissionRepository, PersistenceStore, PlanRecord, PlanRepository,
+    RecordConversionError, RunRecord, RunRepository, SessionInboxRepository, SessionRepository,
+    StoreError, TranscriptRecord, TranscriptRepository,
 };
 use agent_runtime::mission::{
     JobExecutionInput, JobResult, JobSpec, JobStatus, MissionSpec, MissionStatus,
@@ -26,6 +27,7 @@ use agent_runtime::tool::{SharedProcessRegistry, ToolCall, ToolError, ToolRuntim
 use agent_runtime::verification::EvidenceBundle;
 use agent_runtime::workspace::WorkspaceRef;
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 use std::error::Error;
 use std::fmt;
 use std::path::{Path, PathBuf};
@@ -131,14 +133,23 @@ pub struct ToolResumeRequest<'a> {
     pub now: i64,
 }
 
+#[derive(Debug, Clone, Default)]
+pub struct ExecutionServiceConfig {
+    pub provider_max_output_tokens: Option<u32>,
+    pub skills_dir: PathBuf,
+    pub a2a_public_base_url: Option<String>,
+    pub a2a_callback_bearer_token: Option<String>,
+    pub a2a_peers: BTreeMap<String, A2APeerConfig>,
+}
+
 #[derive(Debug, Clone)]
 pub struct ExecutionService {
     permissions: PermissionConfig,
-    provider_max_output_tokens: Option<u32>,
+    config: ExecutionServiceConfig,
     supervisor: SupervisorLoop,
     workspace: WorkspaceRef,
     processes: SharedProcessRegistry,
-    skills_dir: PathBuf,
+    a2a: A2AClient,
 }
 
 #[derive(Debug)]
@@ -188,9 +199,11 @@ impl Default for ExecutionService {
         Self::new(
             PermissionConfig::default(),
             WorkspaceRef::default(),
-            None,
             SharedProcessRegistry::default(),
-            PathBuf::from("skills"),
+            ExecutionServiceConfig {
+                skills_dir: PathBuf::from("skills"),
+                ..ExecutionServiceConfig::default()
+            },
         )
     }
 }
@@ -199,17 +212,16 @@ impl ExecutionService {
     pub fn new(
         permissions: PermissionConfig,
         workspace: WorkspaceRef,
-        provider_max_output_tokens: Option<u32>,
         processes: SharedProcessRegistry,
-        skills_dir: PathBuf,
+        config: ExecutionServiceConfig,
     ) -> Self {
         Self {
             permissions,
-            provider_max_output_tokens,
+            config,
             supervisor: SupervisorLoop::default(),
             workspace,
             processes,
-            skills_dir,
+            a2a: A2AClient::default(),
         }
     }
 

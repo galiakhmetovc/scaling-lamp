@@ -29,6 +29,15 @@ pub struct DaemonConfig {
     pub bind_port: u16,
     pub bearer_token: Option<String>,
     pub skills_dir: PathBuf,
+    pub public_base_url: Option<String>,
+    pub a2a_peers: BTreeMap<String, A2APeerConfig>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
+#[serde(default)]
+pub struct A2APeerConfig {
+    pub base_url: String,
+    pub bearer_token: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -38,6 +47,7 @@ pub struct ConfigEnv {
     pub daemon_bearer_token_override: Option<String>,
     pub daemon_bind_host_override: Option<String>,
     pub daemon_bind_port_override: Option<u16>,
+    pub daemon_public_base_url_override: Option<String>,
     pub daemon_skills_dir_override: Option<PathBuf>,
     pub home_dir: Option<PathBuf>,
     pub provider_api_base_override: Option<String>,
@@ -100,6 +110,8 @@ impl Default for DaemonConfig {
             bind_port: DEFAULT_DAEMON_BIND_PORT,
             bearer_token: None,
             skills_dir: PathBuf::from(DEFAULT_DAEMON_SKILLS_DIR),
+            public_base_url: None,
+            a2a_peers: BTreeMap::new(),
         }
     }
 }
@@ -175,6 +187,10 @@ impl ConfigEnv {
             daemon_bearer_token_override: read_string_var("TEAMD_DAEMON_BEARER_TOKEN", &dotenv),
             daemon_bind_host_override: read_string_var("TEAMD_DAEMON_BIND_HOST", &dotenv),
             daemon_bind_port_override: read_u16_var("TEAMD_DAEMON_BIND_PORT", &dotenv)?,
+            daemon_public_base_url_override: read_string_var(
+                "TEAMD_DAEMON_PUBLIC_BASE_URL",
+                &dotenv,
+            ),
             daemon_skills_dir_override: read_path_var("TEAMD_DAEMON_SKILLS_DIR", &dotenv)?,
             home_dir: read_path_var("HOME", &dotenv)?,
             provider_api_base_override: read_string_var("TEAMD_PROVIDER_API_BASE", &dotenv),
@@ -273,6 +289,9 @@ impl AppConfig {
         if let Some(bearer_token) = &env.daemon_bearer_token_override {
             daemon.bearer_token = Some(bearer_token.clone());
         }
+        if let Some(public_base_url) = &env.daemon_public_base_url_override {
+            daemon.public_base_url = Some(public_base_url.clone());
+        }
         if let Some(skills_dir) = &env.daemon_skills_dir_override {
             daemon.skills_dir = skills_dir.clone();
         }
@@ -366,12 +385,32 @@ impl AppConfig {
             });
         }
 
+        if let Some(public_base_url) = &self.daemon.public_base_url
+            && public_base_url.trim().is_empty()
+        {
+            return Err(ConfigError::InvalidProviderValue {
+                name: "daemon.public_base_url",
+                value: public_base_url.clone(),
+                reason: "must not be empty",
+            });
+        }
+
         if self.daemon.skills_dir.exists() && !self.daemon.skills_dir.is_dir() {
             return Err(ConfigError::InvalidProviderValue {
                 name: "daemon.skills_dir",
                 value: self.daemon.skills_dir.display().to_string(),
                 reason: "must point to a directory",
             });
+        }
+
+        for (peer_id, peer) in &self.daemon.a2a_peers {
+            if peer.base_url.trim().is_empty() {
+                return Err(ConfigError::InvalidProviderValue {
+                    name: "daemon.a2a_peers.base_url",
+                    value: peer_id.clone(),
+                    reason: "must not be empty",
+                });
+            }
         }
 
         validate_positive_provider_value(
@@ -654,6 +693,7 @@ mod tests {
             daemon_bearer_token_override: None,
             daemon_bind_host_override: None,
             daemon_bind_port_override: None,
+            daemon_public_base_url_override: None,
             daemon_skills_dir_override: None,
             home_dir: Some(root.join("home")),
             provider_api_base_override: None,
@@ -930,6 +970,8 @@ TEAMD_PROVIDER_API_KEY=secret-key
         assert_eq!(config.daemon.bind_port, 5140);
         assert_eq!(config.daemon.bearer_token, None);
         assert_eq!(config.daemon.skills_dir, PathBuf::from("skills"));
+        assert_eq!(config.daemon.public_base_url, None);
+        assert!(config.daemon.a2a_peers.is_empty());
     }
 
     #[test]
@@ -944,6 +986,11 @@ bind_host = "0.0.0.0"
 bind_port = 5140
 bearer_token = "file-token"
 skills_dir = "/srv/teamd/skills"
+public_base_url = "https://daemon-a.example"
+
+[daemon.a2a_peers.judge]
+base_url = "https://daemon-b.example"
+bearer_token = "peer-token"
 "#,
         )
         .expect("write config");
@@ -954,6 +1001,7 @@ skills_dir = "/srv/teamd/skills"
         env.daemon_bind_port_override = Some(6140);
         env.daemon_bearer_token_override = Some("env-token".to_string());
         env.daemon_skills_dir_override = Some(temp.path().join("runtime-skills"));
+        env.daemon_public_base_url_override = Some("https://override.example".to_string());
 
         let config = AppConfig::load_from_env(&env).expect("load config");
 
@@ -961,5 +1009,13 @@ skills_dir = "/srv/teamd/skills"
         assert_eq!(config.daemon.bind_port, 6140);
         assert_eq!(config.daemon.bearer_token.as_deref(), Some("env-token"));
         assert_eq!(config.daemon.skills_dir, temp.path().join("runtime-skills"));
+        assert_eq!(
+            config.daemon.public_base_url.as_deref(),
+            Some("https://override.example")
+        );
+        assert_eq!(config.daemon.a2a_peers.len(), 1);
+        let peer = config.daemon.a2a_peers.get("judge").expect("judge peer");
+        assert_eq!(peer.base_url, "https://daemon-b.example");
+        assert_eq!(peer.bearer_token.as_deref(), Some("peer-token"));
     }
 }

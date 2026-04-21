@@ -111,8 +111,8 @@ impl JobRepository for PersistenceStore {
                 id, session_id, mission_id, run_id, parent_job_id, kind, status, input_json,
                 result_json, error, created_at, updated_at, started_at, finished_at,
                 attempt_count, max_attempts, lease_owner, lease_expires_at, heartbeat_at,
-                cancel_requested_at, last_progress_message
-             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21)
+                cancel_requested_at, last_progress_message, callback_json, callback_sent_at
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23)
              ON CONFLICT(id) DO UPDATE SET
                 session_id = excluded.session_id,
                 mission_id = excluded.mission_id,
@@ -133,7 +133,9 @@ impl JobRepository for PersistenceStore {
                 lease_expires_at = excluded.lease_expires_at,
                 heartbeat_at = excluded.heartbeat_at,
                 cancel_requested_at = excluded.cancel_requested_at,
-                last_progress_message = excluded.last_progress_message",
+                last_progress_message = excluded.last_progress_message,
+                callback_json = excluded.callback_json,
+                callback_sent_at = excluded.callback_sent_at",
             params![
                 record.id,
                 record.session_id,
@@ -155,7 +157,9 @@ impl JobRepository for PersistenceStore {
                 record.lease_expires_at,
                 record.heartbeat_at,
                 record.cancel_requested_at,
-                record.last_progress_message
+                record.last_progress_message,
+                record.callback_json,
+                record.callback_sent_at
             ],
         )?;
         Ok(())
@@ -167,7 +171,7 @@ impl JobRepository for PersistenceStore {
                 "SELECT id, session_id, mission_id, run_id, parent_job_id, kind, status, input_json,
                         result_json, error, created_at, updated_at, started_at, finished_at,
                         attempt_count, max_attempts, lease_owner, lease_expires_at, heartbeat_at,
-                        cancel_requested_at, last_progress_message
+                        cancel_requested_at, last_progress_message, callback_json, callback_sent_at
                  FROM jobs WHERE id = ?1",
                 [id],
                 |row| {
@@ -193,6 +197,8 @@ impl JobRepository for PersistenceStore {
                         heartbeat_at: row.get(18)?,
                         cancel_requested_at: row.get(19)?,
                         last_progress_message: row.get(20)?,
+                        callback_json: row.get(21)?,
+                        callback_sent_at: row.get(22)?,
                     })
                 },
             )
@@ -205,7 +211,7 @@ impl JobRepository for PersistenceStore {
             "SELECT id, session_id, mission_id, run_id, parent_job_id, kind, status, input_json,
                     result_json, error, created_at, updated_at, started_at, finished_at,
                     attempt_count, max_attempts, lease_owner, lease_expires_at, heartbeat_at,
-                    cancel_requested_at, last_progress_message
+                    cancel_requested_at, last_progress_message, callback_json, callback_sent_at
              FROM jobs
              ORDER BY created_at ASC, id ASC",
         )?;
@@ -217,7 +223,7 @@ impl JobRepository for PersistenceStore {
             "SELECT id, session_id, mission_id, run_id, parent_job_id, kind, status, input_json,
                     result_json, error, created_at, updated_at, started_at, finished_at,
                     attempt_count, max_attempts, lease_owner, lease_expires_at, heartbeat_at,
-                    cancel_requested_at, last_progress_message
+                    cancel_requested_at, last_progress_message, callback_json, callback_sent_at
              FROM jobs
              WHERE session_id = ?1
              ORDER BY created_at ASC, id ASC",
@@ -230,10 +236,10 @@ impl JobRepository for PersistenceStore {
             "SELECT id, session_id, mission_id, run_id, parent_job_id, kind, status, input_json,
                     result_json, error, created_at, updated_at, started_at, finished_at,
                     attempt_count, max_attempts, lease_owner, lease_expires_at, heartbeat_at,
-                    cancel_requested_at, last_progress_message
+                    cancel_requested_at, last_progress_message, callback_json, callback_sent_at
              FROM jobs
              WHERE session_id = ?1
-               AND status IN ('queued', 'running', 'blocked')
+               AND status IN ('queued', 'running', 'waiting_external', 'blocked')
              ORDER BY created_at ASC, id ASC",
         )?;
         collect_jobs(&mut statement, &[&session_id])
@@ -270,6 +276,8 @@ fn collect_jobs(
             heartbeat_at: row.get(18)?,
             cancel_requested_at: row.get(19)?,
             last_progress_message: row.get(20)?,
+            callback_json: row.get(21)?,
+            callback_sent_at: row.get(22)?,
         });
     }
 

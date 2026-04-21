@@ -1,3 +1,4 @@
+mod a2a;
 mod chat;
 mod sessions;
 mod status;
@@ -49,6 +50,9 @@ fn handle_request(app: &App, shutdown: &Arc<AtomicBool>, request: Request) -> st
     match (request.method(), request.url()) {
         (&tiny_http::Method::Get, "/v1/status") => status::handle_status(app, request),
         (&tiny_http::Method::Post, "/v1/daemon/stop") => handle_shutdown(shutdown, request),
+        (&tiny_http::Method::Post, "/v1/a2a/delegations") => {
+            a2a::handle_create_delegation(app, request)
+        }
         (&tiny_http::Method::Get, "/v1/sessions") => sessions::handle_list_sessions(app, request),
         (&tiny_http::Method::Post, "/v1/sessions") => sessions::handle_create_session(app, request),
         (&tiny_http::Method::Post, "/v1/chat/turn") => chat::handle_chat_turn(app, request),
@@ -58,6 +62,9 @@ fn handle_request(app: &App, shutdown: &Arc<AtomicBool>, request: Request) -> st
         (&tiny_http::Method::Post, "/v1/runs/approve") => chat::handle_approve_run(app, request),
         (&tiny_http::Method::Post, "/v1/runs/approve/stream") => {
             chat::handle_approve_run_stream(app, request)
+        }
+        _ if request.url().starts_with("/v1/a2a/delegations/") => {
+            a2a::handle_nested_routes(app, request)
         }
         _ => sessions::handle_nested_routes(app, request),
     }

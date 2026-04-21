@@ -4229,6 +4229,8 @@ fn session_summary_counts_active_background_jobs_and_renders_current_session_job
             heartbeat_at: None,
             cancel_requested_at: None,
             last_progress_message: Some("queued for execution".to_string()),
+            callback_json: None,
+            callback_sent_at: None,
         },
         JobRecord {
             id: "job-running".to_string(),
@@ -4264,6 +4266,8 @@ fn session_summary_counts_active_background_jobs_and_renders_current_session_job
             heartbeat_at: Some(111),
             cancel_requested_at: None,
             last_progress_message: Some("inspecting logs".to_string()),
+            callback_json: None,
+            callback_sent_at: None,
         },
         JobRecord {
             id: "job-blocked".to_string(),
@@ -4292,6 +4296,8 @@ fn session_summary_counts_active_background_jobs_and_renders_current_session_job
             heartbeat_at: None,
             cancel_requested_at: None,
             last_progress_message: Some("waiting for approval".to_string()),
+            callback_json: None,
+            callback_sent_at: None,
         },
         JobRecord {
             id: "job-other".to_string(),
@@ -4320,6 +4326,8 @@ fn session_summary_counts_active_background_jobs_and_renders_current_session_job
             heartbeat_at: None,
             cancel_requested_at: None,
             last_progress_message: Some("other progress".to_string()),
+            callback_json: None,
+            callback_sent_at: None,
         },
     ] {
         store.put_job(&job).expect("put job");
@@ -5730,13 +5738,13 @@ fn background_worker_blocks_remote_delegate_jobs_without_falling_back_to_local()
         job.error
             .as_deref()
             .expect("blocked reason")
-            .contains("remote delegation executor is not configured")
+            .contains("remote delegation peer judge is not configured")
     );
     assert!(
         job.last_progress_message
             .as_deref()
             .expect("blocked progress")
-            .contains("remote delegation executor is not configured")
+            .contains("remote delegation peer judge is not configured")
     );
 
     assert!(

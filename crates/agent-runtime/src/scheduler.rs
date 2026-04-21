@@ -391,6 +391,8 @@ mod tests {
             heartbeat_at: None,
             cancel_requested_at: None,
             last_progress_message: None,
+            callback: None,
+            callback_sent_at: None,
         };
 
         let tick = supervisor.tick(SupervisorTickInput {

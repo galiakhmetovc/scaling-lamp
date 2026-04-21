@@ -1,3 +1,4 @@
+pub mod a2a;
 pub mod bootstrap;
 pub mod cli;
 pub mod daemon;

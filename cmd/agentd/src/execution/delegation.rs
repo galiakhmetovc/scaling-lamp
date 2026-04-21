@@ -37,6 +37,13 @@ pub fn resolve_delegate_dispatch(request: &DelegateRequest) -> DelegationDispatc
     }
 }
 
+pub fn a2a_peer_id(owner_selector: &str) -> Option<&str> {
+    owner_selector
+        .strip_prefix("a2a:")
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -68,6 +75,7 @@ mod tests {
     fn delegate_routing_resolves_a2a_owner_to_remote_executor() {
         let dispatch = resolve_delegate_dispatch(&request("a2a:judge"));
         assert_eq!(dispatch.kind, DelegationExecutorKind::RemoteA2A);
+        assert_eq!(a2a_peer_id(&dispatch.owner_selector), Some("judge"));
         assert_eq!(
             dispatch.blocked_reason().as_deref(),
             Some("remote delegation executor is not configured for owner a2a:judge")

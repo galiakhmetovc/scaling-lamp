@@ -91,6 +91,8 @@ pub struct JobRecord {
     pub heartbeat_at: Option<i64>,
     pub cancel_requested_at: Option<i64>,
     pub last_progress_message: Option<String>,
+    pub callback_json: Option<String>,
+    pub callback_sent_at: Option<i64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -566,6 +568,13 @@ impl TryFrom<&JobSpec> for JobRecord {
             heartbeat_at: job.heartbeat_at,
             cancel_requested_at: job.cancel_requested_at,
             last_progress_message: job.last_progress_message.clone(),
+            callback_json: job
+                .callback
+                .as_ref()
+                .map(serde_json::to_string)
+                .transpose()
+                .map_err(RecordConversionError::SerializeJobInput)?,
+            callback_sent_at: job.callback_sent_at,
         })
     }
 }
@@ -609,6 +618,13 @@ impl TryFrom<JobRecord> for JobSpec {
             heartbeat_at: record.heartbeat_at,
             cancel_requested_at: record.cancel_requested_at,
             last_progress_message: record.last_progress_message,
+            callback: record
+                .callback_json
+                .as_deref()
+                .map(serde_json::from_str::<agent_runtime::mission::JobCallbackTarget>)
+                .transpose()
+                .map_err(RecordConversionError::InvalidJobInput)?,
+            callback_sent_at: record.callback_sent_at,
         };
         job.validate()
             .map_err(RecordConversionError::InvalidJobSpec)?;
@@ -1127,6 +1143,48 @@ mod tests {
     }
 
     #[test]
+    fn job_records_round_trip_with_waiting_external_callback_metadata() {
+        let mut job = JobSpec::delegate(
+            "job-a2a",
+            "session-parent",
+            None,
+            None,
+            "judge",
+            "Review the results",
+            vec!["reports/judge.md".to_string()],
+            agent_runtime::delegation::DelegateWriteScope::new(vec!["reports".to_string()])
+                .expect("write scope"),
+            "Short verdict",
+            "a2a:judge",
+            40,
+        );
+        job.status = JobStatus::WaitingExternal;
+        job.updated_at = 41;
+        job.callback = Some(agent_runtime::mission::JobCallbackTarget {
+            url: "https://daemon-a.example/v1/a2a/delegations/job-parent/complete".to_string(),
+            bearer_token: Some("callback-token".to_string()),
+            parent_session_id: "session-parent".to_string(),
+            parent_job_id: "job-parent".to_string(),
+        });
+
+        let stored = JobRecord::try_from(&job).expect("job to record");
+        let restored = JobSpec::try_from(stored).expect("record to job");
+
+        assert_eq!(restored.status, JobStatus::WaitingExternal);
+        assert_eq!(
+            restored.callback.as_ref().expect("callback").url,
+            "https://daemon-a.example/v1/a2a/delegations/job-parent/complete"
+        );
+        assert_eq!(
+            restored
+                .callback
+                .as_ref()
+                .and_then(|callback| callback.bearer_token.as_deref()),
+            Some("callback-token")
+        );
+    }
+
+    #[test]
     fn job_records_reject_mismatched_mission_turn_identifiers() {
         let mut stored = JobRecord::try_from(&JobSpec::mission_turn(
             "job-1",
@@ -1172,6 +1230,8 @@ mod tests {
             heartbeat_at: None,
             cancel_requested_at: None,
             last_progress_message: Some("queued for background execution".to_string()),
+            callback_json: None,
+            callback_sent_at: None,
         };
 
         assert!(JobSpec::try_from(stored).is_ok());

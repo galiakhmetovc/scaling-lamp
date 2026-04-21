@@ -1,18 +1,22 @@
 use agent_persistence::{
-    AppConfig, JobRecord, JobRepository, MissionRecord, MissionRepository, PersistenceStore,
-    SessionInboxRepository, TranscriptRepository,
+    A2APeerConfig, AppConfig, JobRecord, JobRepository, MissionRecord, MissionRepository,
+    PersistenceStore, SessionInboxRepository, SessionRepository, TranscriptRepository,
 };
 use agent_runtime::mission::{
-    JobExecutionInput, MissionExecutionIntent, MissionSchedule, MissionStatus,
+    JobExecutionInput, JobResult, JobSpec, JobStatus, MissionExecutionIntent, MissionSchedule,
+    MissionStatus,
 };
 use agentd::bootstrap;
 use agentd::daemon;
 use agentd::http::types::{
-    CreateSessionRequest, DaemonStopResponse, ErrorResponse, SessionBackgroundJobResponse,
-    SessionSummaryResponse, SkillCommandRequest, StatusResponse,
+    A2ACallbackTargetRequest, A2ADelegationAcceptedResponse, A2ADelegationCompletionOutcomeRequest,
+    A2ADelegationCompletionRequest, A2ADelegationCreateRequest, CreateSessionRequest,
+    DaemonStopResponse, ErrorResponse, SessionBackgroundJobResponse, SessionSummaryResponse,
+    SkillCommandRequest, StatusResponse,
 };
 use reqwest::StatusCode;
 use reqwest::blocking::Client;
+use std::collections::BTreeMap;
 use std::io::{Read, Write};
 use std::net::TcpListener;
 use std::sync::mpsc::{self, Receiver};
@@ -267,6 +271,8 @@ fn daemon_http_exposes_current_session_background_jobs_and_counts() {
             heartbeat_at: None,
             cancel_requested_at: None,
             last_progress_message: Some("queued via daemon".to_string()),
+            callback_json: None,
+            callback_sent_at: None,
         })
         .expect("put job");
     let handle = daemon::spawn_for_test(app).expect("spawn daemon");
@@ -298,6 +304,358 @@ fn daemon_http_exposes_current_session_background_jobs_and_counts() {
     );
 
     handle.stop().expect("stop daemon");
+}
+
+#[test]
+fn daemon_http_a2a_accepts_remote_delegation_and_creates_child_session_and_job() {
+    let (_temp, app, base_url) = test_app(Some("secret-token"));
+    let handle = daemon::spawn_for_test(app.clone()).expect("spawn daemon");
+    let client = Client::new();
+
+    let response = client
+        .post(format!("{base_url}/v1/a2a/delegations"))
+        .bearer_auth("secret-token")
+        .json(&A2ADelegationCreateRequest {
+            parent_session_id: "session-parent".to_string(),
+            parent_job_id: "job-parent".to_string(),
+            label: "judge".to_string(),
+            goal: "Review the artifacts and return a verdict.".to_string(),
+            bounded_context: vec!["reports/judge.md".to_string()],
+            write_scope: agent_runtime::delegation::DelegateWriteScope::new(vec![
+                "reports".to_string(),
+            ])
+            .expect("write scope"),
+            expected_output: "Short verdict".to_string(),
+            owner: "a2a:judge".to_string(),
+            callback: A2ACallbackTargetRequest {
+                url: "https://daemon-a.example/v1/a2a/delegations/job-parent/complete".to_string(),
+                bearer_token: Some("callback-token".to_string()),
+            },
+            now: 10,
+        })
+        .send()
+        .expect("create a2a delegation");
+
+    assert_eq!(response.status(), StatusCode::CREATED);
+    let accepted: A2ADelegationAcceptedResponse = response.json().expect("accepted json");
+    assert_eq!(accepted.remote_session_id, "session-a2a-job-parent");
+    assert_eq!(accepted.remote_job_id, "job-a2a-job-parent");
+
+    let store = PersistenceStore::open(&app.persistence).expect("open store");
+    let session = store
+        .get_session("session-a2a-job-parent")
+        .expect("get remote session")
+        .expect("remote session exists");
+    assert_eq!(session.parent_session_id.as_deref(), Some("session-parent"));
+    assert_eq!(session.parent_job_id.as_deref(), Some("job-parent"));
+
+    let job = JobSpec::try_from(
+        store
+            .get_job("job-a2a-job-parent")
+            .expect("get remote job")
+            .expect("remote job exists"),
+    )
+    .expect("restore remote job");
+    assert_eq!(job.status, JobStatus::Running);
+    assert!(job.callback.is_some());
+
+    handle.stop().expect("stop daemon");
+}
+
+#[test]
+fn daemon_http_a2a_completion_callback_updates_parent_job_and_queues_inbox_event() {
+    let (_temp, app, base_url) = test_app(Some("secret-token"));
+    let session = app
+        .create_session("session-parent", "Parent")
+        .expect("create parent");
+    let store = PersistenceStore::open(&app.persistence).expect("open store");
+    let mut job = JobSpec::delegate(
+        "job-parent",
+        &session.id,
+        None,
+        None,
+        "judge",
+        "Review the artifacts and return a verdict.",
+        vec!["reports/judge.md".to_string()],
+        agent_runtime::delegation::DelegateWriteScope::new(vec!["reports".to_string()])
+            .expect("write scope"),
+        "Short verdict",
+        "a2a:judge",
+        5,
+    );
+    job.status = JobStatus::WaitingExternal;
+    store
+        .put_job(&JobRecord::try_from(&job).expect("job record"))
+        .expect("put parent job");
+
+    let handle = daemon::spawn_for_test(app.clone()).expect("spawn daemon");
+    let client = Client::new();
+    let response = client
+        .post(format!("{base_url}/v1/a2a/delegations/{}/complete", job.id))
+        .bearer_auth("secret-token")
+        .json(&A2ADelegationCompletionRequest {
+            outcome: A2ADelegationCompletionOutcomeRequest::Completed {
+                remote_session_id: "session-a2a-job-parent".to_string(),
+                remote_job_id: "job-a2a-job-parent".to_string(),
+                package: agent_runtime::delegation::DelegateResultPackage::new(
+                    "Judge complete",
+                    Vec::new(),
+                    vec!["artifact-1".to_string()],
+                    Vec::new(),
+                )
+                .expect("package"),
+            },
+            now: 20,
+        })
+        .send()
+        .expect("complete remote delegation");
+
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let job = JobSpec::try_from(
+        store
+            .get_job("job-parent")
+            .expect("get updated job")
+            .expect("updated job exists"),
+    )
+    .expect("restore updated job");
+    assert_eq!(job.status, JobStatus::Completed);
+
+    let inbox = store
+        .list_session_inbox_events_for_session(&session.id)
+        .expect("list inbox");
+    assert_eq!(inbox.len(), 1);
+    assert_eq!(inbox[0].kind, "delegation_result_ready");
+
+    handle.stop().expect("stop daemon");
+}
+
+#[test]
+fn daemon_a2a_remote_delegate_round_trip_wakes_parent_session() {
+    let (provider_a_base, provider_a_requests, provider_a_handle) = spawn_json_server_sequence(vec![
+        r#"{
+                "id":"resp_parent_wake",
+                "model":"gpt-5.4",
+                "output":[
+                    {
+                        "id":"msg_parent_wake",
+                        "type":"message",
+                        "status":"completed",
+                        "role":"assistant",
+                        "content":[
+                            {
+                                "type":"output_text",
+                                "text":"Родительская сессия получила удалённый вердикт и продолжила работу."
+                            }
+                        ]
+                    }
+                ],
+                "usage":{"input_tokens":20,"output_tokens":12,"total_tokens":32}
+            }"#
+        .to_string(),
+    ]);
+    let (provider_b_base, provider_b_requests, provider_b_handle) =
+        spawn_json_server_sequence(vec![
+            r#"{
+                "id":"resp_remote_child",
+                "model":"gpt-5.4",
+                "output":[
+                    {
+                        "id":"msg_remote_child",
+                        "type":"message",
+                        "status":"completed",
+                        "role":"assistant",
+                        "content":[
+                            {
+                                "type":"output_text",
+                                "text":"Судья проверил артефакты и замечаний не нашёл."
+                            }
+                        ]
+                    }
+                ],
+                "usage":{"input_tokens":18,"output_tokens":11,"total_tokens":29}
+            }"#
+            .to_string(),
+        ]);
+
+    let temp_a = tempfile::tempdir().expect("tempdir a");
+    let temp_b = tempfile::tempdir().expect("tempdir b");
+    let port_a = free_port();
+    let port_b = free_port();
+
+    let mut config_a = AppConfig {
+        data_dir: temp_a.path().join("teamd-a"),
+        ..AppConfig::default()
+    };
+    config_a.daemon.bind_host = "127.0.0.1".to_string();
+    config_a.daemon.bind_port = port_a;
+    config_a.daemon.bearer_token = Some("token-a".to_string());
+    config_a.daemon.public_base_url = Some(format!("http://127.0.0.1:{port_a}"));
+    config_a.daemon.a2a_peers = BTreeMap::from([(
+        "judge".to_string(),
+        A2APeerConfig {
+            base_url: format!("http://127.0.0.1:{port_b}"),
+            bearer_token: Some("token-b".to_string()),
+        },
+    )]);
+    config_a.provider.kind = agent_runtime::provider::ProviderKind::OpenAiResponses;
+    config_a.provider.api_base = Some(format!("{provider_a_base}/v1"));
+    config_a.provider.api_key = Some("test-key-a".to_string());
+    config_a.provider.default_model = Some("gpt-5.4".to_string());
+
+    let mut config_b = AppConfig {
+        data_dir: temp_b.path().join("teamd-b"),
+        ..AppConfig::default()
+    };
+    config_b.daemon.bind_host = "127.0.0.1".to_string();
+    config_b.daemon.bind_port = port_b;
+    config_b.daemon.bearer_token = Some("token-b".to_string());
+    config_b.provider.kind = agent_runtime::provider::ProviderKind::OpenAiResponses;
+    config_b.provider.api_base = Some(format!("{provider_b_base}/v1"));
+    config_b.provider.api_key = Some("test-key-b".to_string());
+    config_b.provider.default_model = Some("gpt-5.4".to_string());
+
+    let app_a = bootstrap::build_from_config(config_a).expect("build app a");
+    let app_b = bootstrap::build_from_config(config_b).expect("build app b");
+
+    let store_a = PersistenceStore::open(&app_a.persistence).expect("open store a");
+    store_a
+        .put_session(&agent_persistence::SessionRecord {
+            id: "session-a2a-parent".to_string(),
+            title: "A2A Parent".to_string(),
+            prompt_override: None,
+            settings_json: serde_json::to_string(
+                &agent_runtime::session::SessionSettings::default(),
+            )
+            .expect("serialize settings"),
+            active_mission_id: None,
+            parent_session_id: None,
+            parent_job_id: None,
+            delegation_label: None,
+            created_at: 1,
+            updated_at: 1,
+        })
+        .expect("put parent session");
+    let mut delegate_job = JobSpec::delegate(
+        "job-a2a-parent",
+        "session-a2a-parent",
+        None,
+        None,
+        "judge-helper",
+        "Проверь артефакты и верни короткий вердикт.",
+        vec!["reports/judge.md".to_string()],
+        agent_runtime::delegation::DelegateWriteScope::new(vec!["reports".to_string()])
+            .expect("write scope"),
+        "Короткий вердикт",
+        "a2a:judge",
+        2,
+    );
+    delegate_job.status = JobStatus::Running;
+    delegate_job.updated_at = 2;
+    store_a
+        .put_job(&JobRecord::try_from(&delegate_job).expect("delegate job"))
+        .expect("put delegate job");
+
+    let handle_b = daemon::spawn_for_test(app_b.clone()).expect("spawn daemon b");
+    let handle_a = daemon::spawn_for_test(app_a.clone()).expect("spawn daemon a");
+
+    let mut completed = false;
+    for _ in 0..80 {
+        let poll_store_a = PersistenceStore::open(&app_a.persistence).expect("poll store a");
+        let job = JobSpec::try_from(
+            poll_store_a
+                .get_job("job-a2a-parent")
+                .expect("get parent job")
+                .expect("parent job exists"),
+        )
+        .expect("restore parent job");
+        let transcripts = poll_store_a
+            .list_transcripts_for_session("session-a2a-parent")
+            .expect("list parent transcripts");
+        if job.status == JobStatus::Completed
+            && transcripts.iter().any(|record| {
+                record
+                    .content
+                    .contains("Родительская сессия получила удалённый вердикт")
+            })
+        {
+            completed = true;
+            if let Some(JobResult::Delegation {
+                child_session_id,
+                package,
+            }) = job.result
+            {
+                assert_eq!(child_session_id, "session-a2a-job-a2a-parent");
+                assert_eq!(
+                    package.summary,
+                    "Судья проверил артефакты и замечаний не нашёл."
+                );
+            } else {
+                panic!("expected delegation result package");
+            }
+            let inbox = poll_store_a
+                .list_session_inbox_events_for_session("session-a2a-parent")
+                .expect("list parent inbox");
+            assert_eq!(inbox.len(), 1);
+            assert_eq!(inbox[0].kind, "delegation_result_ready");
+            assert_eq!(inbox[0].status, "processed");
+            break;
+        }
+        thread::sleep(Duration::from_millis(100));
+    }
+
+    assert!(
+        completed,
+        "remote a2a delegation should round-trip and wake the parent session"
+    );
+
+    let store_b = PersistenceStore::open(&app_b.persistence).expect("open store b");
+    let remote_session = store_b
+        .get_session("session-a2a-job-a2a-parent")
+        .expect("get remote session")
+        .expect("remote session exists");
+    assert_eq!(
+        remote_session.parent_session_id.as_deref(),
+        Some("session-a2a-parent")
+    );
+    assert_eq!(
+        remote_session.parent_job_id.as_deref(),
+        Some("job-a2a-parent")
+    );
+
+    let remote_job = JobSpec::try_from(
+        store_b
+            .get_job("job-a2a-job-a2a-parent")
+            .expect("get remote job")
+            .expect("remote job exists"),
+    )
+    .expect("restore remote job");
+    assert_eq!(remote_job.status, JobStatus::Completed);
+    assert!(remote_job.callback_sent_at.is_some());
+
+    let parent_request = provider_a_requests
+        .recv_timeout(Duration::from_secs(2))
+        .expect("parent wake request");
+    let remote_request = provider_b_requests
+        .recv_timeout(Duration::from_secs(2))
+        .expect("remote child request");
+    assert!(
+        parent_request
+            .to_ascii_lowercase()
+            .contains("delegation result ready")
+    );
+    assert!(
+        parent_request
+            .to_ascii_lowercase()
+            .contains("замечаний не нашёл")
+    );
+    assert!(remote_request.to_ascii_lowercase().contains("judge-helper"));
+    assert!(remote_request.to_ascii_lowercase().contains("a2a:judge"));
+
+    handle_a.stop().expect("stop daemon a");
+    handle_b.stop().expect("stop daemon b");
+    provider_a_handle.join().expect("join provider a");
+    provider_b_handle.join().expect("join provider b");
 }
 
 #[test]

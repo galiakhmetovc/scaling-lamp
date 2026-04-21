@@ -133,9 +133,14 @@ impl App {
         execution::ExecutionService::new(
             self.config.permissions.clone(),
             self.runtime.workspace.clone(),
-            self.config.provider.max_output_tokens,
             self.processes.clone(),
-            self.config.daemon.skills_dir.clone(),
+            execution::ExecutionServiceConfig {
+                provider_max_output_tokens: self.config.provider.max_output_tokens,
+                skills_dir: self.config.daemon.skills_dir.clone(),
+                a2a_public_base_url: self.config.daemon.public_base_url.clone(),
+                a2a_callback_bearer_token: self.config.daemon.bearer_token.clone(),
+                a2a_peers: self.config.daemon.a2a_peers.clone(),
+            },
         )
     }
 

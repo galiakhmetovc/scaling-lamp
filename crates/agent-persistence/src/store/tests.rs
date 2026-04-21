@@ -89,6 +89,8 @@ fn open_bootstraps_schema_and_round_trips_structured_and_file_backed_data() {
         heartbeat_at: None,
         cancel_requested_at: None,
         last_progress_message: None,
+        callback_json: None,
+        callback_sent_at: None,
     };
     let transcript = TranscriptRecord {
         id: "transcript-1".to_string(),
@@ -604,6 +606,8 @@ fn open_migrates_legacy_mission_and_job_schema() {
             heartbeat_at: None,
             cancel_requested_at: None,
             last_progress_message: None,
+            callback_json: None,
+            callback_sent_at: None,
         })
     );
     assert_eq!(
@@ -856,6 +860,8 @@ fn list_execution_records_orders_sessions_missions_jobs_and_runs_stably() {
         heartbeat_at: None,
         cancel_requested_at: None,
         last_progress_message: None,
+        callback_json: None,
+        callback_sent_at: None,
     };
     let job_a = JobRecord {
         id: "job-a".to_string(),
@@ -885,6 +891,8 @@ fn list_execution_records_orders_sessions_missions_jobs_and_runs_stably() {
         heartbeat_at: None,
         cancel_requested_at: None,
         last_progress_message: None,
+        callback_json: None,
+        callback_sent_at: None,
     };
     store.put_job(&job_b).expect("put job b");
     store.put_job(&job_a).expect("put job a");
@@ -983,6 +991,8 @@ fn load_execution_state_returns_one_typed_snapshot_for_scheduler_inputs() {
         heartbeat_at: None,
         cancel_requested_at: None,
         last_progress_message: None,
+        callback_json: None,
+        callback_sent_at: None,
     };
     let run = RunRecord {
         id: "run-1".to_string(),
@@ -1134,6 +1144,8 @@ fn jobs_schema_includes_session_scoped_background_columns() {
     assert!(columns.iter().any(|column| column == "lease_owner"));
     assert!(columns.iter().any(|column| column == "heartbeat_at"));
     assert!(columns.iter().any(|column| column == "cancel_requested_at"));
+    assert!(columns.iter().any(|column| column == "callback_json"));
+    assert!(columns.iter().any(|column| column == "callback_sent_at"));
     assert!(
         columns
             .iter()

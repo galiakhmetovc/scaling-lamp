@@ -328,6 +328,8 @@ fn tui_chat_commands_and_timeline_jobs_renders_active_jobs_for_the_current_sessi
             heartbeat_at: None,
             cancel_requested_at: None,
             last_progress_message: Some("watch the background queue".to_string()),
+            callback_json: None,
+            callback_sent_at: None,
         })
         .expect("put background job");
 

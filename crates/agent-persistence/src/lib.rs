@@ -5,7 +5,7 @@ pub mod recovery;
 pub mod repository;
 pub mod store;
 
-pub use config::{AppConfig, ConfigEnv, ConfigError, DaemonConfig};
+pub use config::{A2APeerConfig, AppConfig, ConfigEnv, ConfigError, DaemonConfig};
 pub use records::{
     ArtifactRecord, ContextOffloadRecord, ContextSummaryRecord, JobRecord, MissionRecord,
     PlanRecord, RecordConversionError, RunRecord, SessionInboxEventRecord, SessionRecord,

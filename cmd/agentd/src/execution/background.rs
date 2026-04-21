@@ -1,4 +1,6 @@
 use super::*;
+use crate::http::types::{A2ADelegationCompletionOutcomeRequest, A2ADelegationCompletionRequest};
+use agent_runtime::delegation::DelegateResultPackage;
 use agent_runtime::inbox::SessionInboxEvent;
 use agent_runtime::mission::JobKind;
 use agent_runtime::run::RunStatus;
@@ -50,6 +52,8 @@ impl ExecutionService {
                 }
             }
 
+            let updated_job = self.load_job(store, &job.id)?;
+            self.deliver_callback_for_job(store, &updated_job, now)?;
             let updated_job = self.load_job(store, &job.id)?;
             if self.emit_inbox_event_for_job(store, &updated_job, now)? {
                 report.emitted_inbox_events += 1;
@@ -156,6 +160,9 @@ impl ExecutionService {
         job: &JobSpec,
         now: i64,
     ) -> Result<bool, ExecutionError> {
+        if job.callback.is_some() {
+            return Ok(false);
+        }
         let event = match job.status {
             JobStatus::Completed => match job.result.as_ref() {
                 Some(JobResult::Delegation {
@@ -216,6 +223,157 @@ impl ExecutionService {
             .put_session_inbox_event(&record)
             .map_err(ExecutionError::Store)?;
         Ok(true)
+    }
+
+    fn deliver_callback_for_job(
+        &self,
+        store: &PersistenceStore,
+        job: &JobSpec,
+        now: i64,
+    ) -> Result<(), ExecutionError> {
+        let Some(callback) = job.callback.as_ref() else {
+            return Ok(());
+        };
+        if job.callback_sent_at.is_some() {
+            return Ok(());
+        }
+        if !matches!(
+            job.status,
+            JobStatus::Completed | JobStatus::Failed | JobStatus::Blocked | JobStatus::Cancelled
+        ) {
+            return Ok(());
+        }
+
+        let request = self.build_a2a_completion_request(store, job, now)?;
+        match self
+            .a2a
+            .send_completion(&callback.url, callback.bearer_token.as_deref(), &request)
+        {
+            Ok(()) => {
+                let mut updated = job.clone();
+                updated.callback_sent_at = Some(now);
+                updated.updated_at = now;
+                updated.last_progress_message =
+                    Some("a2a completion callback delivered".to_string());
+                store
+                    .put_job(
+                        &JobRecord::try_from(&updated).map_err(ExecutionError::RecordConversion)?,
+                    )
+                    .map_err(ExecutionError::Store)?;
+            }
+            Err(reason) => {
+                let mut updated = job.clone();
+                updated.updated_at = now;
+                updated.last_progress_message =
+                    Some(format!("a2a completion callback failed: {reason}"));
+                store
+                    .put_job(
+                        &JobRecord::try_from(&updated).map_err(ExecutionError::RecordConversion)?,
+                    )
+                    .map_err(ExecutionError::Store)?;
+            }
+        }
+
+        Ok(())
+    }
+
+    fn build_a2a_completion_request(
+        &self,
+        store: &PersistenceStore,
+        job: &JobSpec,
+        now: i64,
+    ) -> Result<A2ADelegationCompletionRequest, ExecutionError> {
+        let outcome = match job.status {
+            JobStatus::Completed => {
+                let package = match job.result.as_ref() {
+                    Some(JobResult::Delegation {
+                        child_session_id: _,
+                        package,
+                    }) => package.clone(),
+                    Some(JobResult::Summary { outcome }) => DelegateResultPackage::new(
+                        outcome.clone(),
+                        Vec::new(),
+                        self.collect_job_artifact_refs(store, &job.session_id)?,
+                        Vec::new(),
+                    )
+                    .map_err(|source| ExecutionError::ProviderLoop {
+                        reason: source.to_string(),
+                    })?,
+                    None => DelegateResultPackage::new(
+                        job.last_progress_message
+                            .clone()
+                            .unwrap_or_else(|| "remote delegated job completed".to_string()),
+                        Vec::new(),
+                        self.collect_job_artifact_refs(store, &job.session_id)?,
+                        Vec::new(),
+                    )
+                    .map_err(|source| ExecutionError::ProviderLoop {
+                        reason: source.to_string(),
+                    })?,
+                };
+                A2ADelegationCompletionOutcomeRequest::Completed {
+                    remote_session_id: job.session_id.clone(),
+                    remote_job_id: job.id.clone(),
+                    package,
+                }
+            }
+            JobStatus::Failed => A2ADelegationCompletionOutcomeRequest::Failed {
+                remote_session_id: job.session_id.clone(),
+                remote_job_id: job.id.clone(),
+                reason: job
+                    .error
+                    .clone()
+                    .unwrap_or_else(|| "remote delegated job failed".to_string()),
+            },
+            JobStatus::Blocked => {
+                let reason = job
+                    .error
+                    .clone()
+                    .or_else(|| job.last_progress_message.clone())
+                    .unwrap_or_else(|| "remote delegated job blocked".to_string());
+                A2ADelegationCompletionOutcomeRequest::Blocked {
+                    remote_session_id: job.session_id.clone(),
+                    remote_job_id: job.id.clone(),
+                    reason,
+                }
+            }
+            JobStatus::Cancelled => A2ADelegationCompletionOutcomeRequest::Blocked {
+                remote_session_id: job.session_id.clone(),
+                remote_job_id: job.id.clone(),
+                reason: "remote delegated job cancelled".to_string(),
+            },
+            _ => {
+                return Err(ExecutionError::ProviderLoop {
+                    reason: format!(
+                        "cannot build a2a completion request from non-terminal status {}",
+                        job.status.as_str()
+                    ),
+                });
+            }
+        };
+
+        Ok(A2ADelegationCompletionRequest { outcome, now })
+    }
+
+    fn collect_job_artifact_refs(
+        &self,
+        store: &PersistenceStore,
+        session_id: &str,
+    ) -> Result<Vec<String>, ExecutionError> {
+        Ok(store
+            .get_context_offload(session_id)
+            .map_err(ExecutionError::Store)?
+            .map(agent_runtime::context::ContextOffloadSnapshot::try_from)
+            .transpose()
+            .map_err(ExecutionError::RecordConversion)?
+            .map(|snapshot| {
+                snapshot
+                    .refs
+                    .into_iter()
+                    .map(|reference| reference.artifact_id)
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default())
     }
 
     fn load_job(&self, store: &PersistenceStore, job_id: &str) -> Result<JobSpec, ExecutionError> {

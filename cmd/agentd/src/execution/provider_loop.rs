@@ -347,11 +347,11 @@ impl ExecutionService {
             .map(TranscriptEntry::try_from)
             .collect::<Result<Vec<_>, _>>()
             .map_err(ExecutionError::RecordConversion)?;
-        let skills_catalog = scan_skill_catalog(&self.skills_dir).map_err(|source| {
+        let skills_catalog = scan_skill_catalog(&self.config.skills_dir).map_err(|source| {
             ExecutionError::ProviderLoop {
                 reason: format!(
                     "failed to scan skills catalog at {}: {source}",
-                    self.skills_dir.display()
+                    self.config.skills_dir.display()
                 ),
             }
         })?;
@@ -1180,7 +1180,7 @@ impl ExecutionService {
                 instructions.as_deref(),
                 &tools,
                 cursor.stream_mode(observer.is_some()),
-                self.provider_max_output_tokens,
+                self.config.provider_max_output_tokens,
             );
             let response = self.request_provider_response(provider, &request, observer)?;
             self.apply_provider_response(run, &response, now)?;
