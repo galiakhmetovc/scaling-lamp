@@ -167,6 +167,62 @@ fn zai_complete_posts_chat_completions_payload_and_extracts_output_text() {
 }
 
 #[test]
+fn zai_complete_waits_for_slow_response_when_request_timeout_is_unset() {
+    let (api_base, requests, handle) = spawn_delayed_json_server(
+        Duration::from_secs(31),
+        r#"{
+                "id":"chatcmpl-slow-123",
+                "model":"glm-5.1",
+                "choices":[
+                    {
+                        "index":0,
+                        "finish_reason":"stop",
+                        "message":{
+                            "role":"assistant",
+                            "content":"slow hello from z.ai"
+                        }
+                    }
+                ],
+                "usage":{"prompt_tokens":21,"completion_tokens":9,"total_tokens":30}
+            }"#,
+    );
+    let driver = build_driver(&ConfiguredProvider {
+        kind: ProviderKind::ZaiChatCompletions,
+        api_base: Some(api_base),
+        api_key: Some("zai-key".to_string()),
+        default_model: Some("glm-5.1".to_string()),
+        request_timeout_seconds: None,
+        ..ConfiguredProvider::default()
+    })
+    .expect("build zai driver");
+    let request = ProviderRequest {
+        model: None,
+        instructions: Some("Be brief".to_string()),
+        messages: vec![ProviderMessage::new(MessageRole::User, "Say hi slowly")],
+        previous_response_id: None,
+        continuation_messages: Vec::new(),
+        tools: Vec::new(),
+        tool_outputs: Vec::new(),
+        max_output_tokens: None,
+        stream: ProviderStreamMode::Disabled,
+    };
+
+    let response = driver
+        .complete(&request)
+        .expect("complete should not use reqwest's default 30 second timeout");
+    let raw_request = requests.recv().expect("raw request");
+    handle.join().expect("join server");
+
+    assert_eq!(response.response_id, "chatcmpl-slow-123");
+    assert_eq!(response.output_text, "slow hello from z.ai");
+    assert!(
+        raw_request
+            .to_ascii_lowercase()
+            .contains("/chat/completions")
+    );
+}
+
+#[test]
 fn zai_complete_accepts_function_call_only_responses() {
     let (api_base, requests, handle) = spawn_json_server(
         r#"{
@@ -733,6 +789,61 @@ fn spawn_json_server(body: &'static str) -> (String, Receiver<String>, thread::J
             .write_all(response.as_bytes())
             .expect("write response");
         sender.send(raw_request).expect("send request");
+    });
+
+    (format!("http://{address}/v1"), receiver, handle)
+}
+
+fn spawn_delayed_json_server(
+    delay: Duration,
+    body: &'static str,
+) -> (String, Receiver<String>, thread::JoinHandle<()>) {
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind listener");
+    let address = listener.local_addr().expect("local addr");
+    let (sender, receiver) = mpsc::channel();
+
+    let handle = thread::spawn(move || {
+        let (mut stream, _) = listener.accept().expect("accept connection");
+        stream
+            .set_read_timeout(Some(Duration::from_secs(2)))
+            .expect("set read timeout");
+
+        let mut reader = BufReader::new(stream.try_clone().expect("clone stream"));
+        let mut raw_request = String::new();
+        let mut content_length = 0usize;
+
+        loop {
+            let mut line = String::new();
+            reader.read_line(&mut line).expect("read request line");
+            raw_request.push_str(&line);
+
+            if line == "\r\n" {
+                break;
+            }
+
+            let lower = line.to_ascii_lowercase();
+            if let Some(value) = lower.strip_prefix("content-length:") {
+                content_length = value.trim().parse().expect("parse content length");
+            }
+        }
+
+        let mut body_bytes = vec![0; content_length];
+        reader
+            .read_exact(&mut body_bytes)
+            .expect("read request body");
+        raw_request.push_str(&String::from_utf8_lossy(&body_bytes));
+        sender.send(raw_request).expect("send request");
+
+        thread::sleep(delay);
+
+        let response = format!(
+            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+            body.len(),
+            body
+        );
+        stream
+            .write_all(response.as_bytes())
+            .expect("write response");
     });
 
     (format!("http://{address}/v1"), receiver, handle)

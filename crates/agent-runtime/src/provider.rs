@@ -835,9 +835,10 @@ fn build_http_client(
     if let Some(seconds) = connect_timeout_seconds {
         builder = builder.connect_timeout(Duration::from_secs(seconds));
     }
-    if let Some(seconds) = request_timeout_seconds {
-        builder = builder.timeout(Duration::from_secs(seconds));
-    }
+    builder = match request_timeout_seconds {
+        Some(seconds) => builder.timeout(Duration::from_secs(seconds)),
+        None => builder.timeout(None::<Duration>),
+    };
 
     builder
         .build()
