@@ -2,7 +2,7 @@ use crate::bootstrap::{
     SessionPendingApproval, SessionPreferencesPatch, SessionSkillStatus, SessionSummary,
     SessionTranscriptView,
 };
-use crate::execution::{ApprovalContinuationReport, ChatTurnExecutionReport};
+use crate::execution::{ApprovalContinuationReport, ChatExecutionEvent, ChatTurnExecutionReport};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -92,6 +92,8 @@ pub struct ChatTurnRequest {
     pub session_id: String,
     pub message: String,
     pub now: i64,
+    #[serde(default)]
+    pub interrupt_after_tool_step: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -99,6 +101,8 @@ pub struct ApproveRunRequest {
     pub run_id: String,
     pub approval_id: String,
     pub now: i64,
+    #[serde(default)]
+    pub interrupt_after_tool_step: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -114,6 +118,13 @@ pub enum WorkerOutcomeResponse {
     ApprovalRequired { approval_id: String, reason: String },
     InterruptedByQueuedInput,
     Failed { reason: String },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum WorkerStreamEventResponse {
+    ChatEvent { event: ChatExecutionEvent },
+    Finished { outcome: WorkerOutcomeResponse },
 }
 
 pub type SessionTranscriptResponse = SessionTranscriptView;

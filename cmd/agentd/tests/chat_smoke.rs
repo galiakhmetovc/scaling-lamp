@@ -6,26 +6,8 @@ use std::thread;
 
 #[test]
 fn operator_can_run_the_normal_chat_smoke_flow() {
-    let (api_base, requests, handle) = spawn_json_server(
-        r#"{
-            "id":"resp_chat_smoke",
-            "model":"gpt-5.4",
-            "output":[
-                {
-                    "id":"msg_1",
-                    "type":"message",
-                    "status":"completed",
-                    "role":"assistant",
-                    "content":[
-                        {
-                            "type":"output_text",
-                            "text":"chat smoke ok"
-                        }
-                    ]
-                }
-            ],
-            "usage":{"input_tokens":11,"output_tokens":3,"total_tokens":14}
-        }"#,
+    let (api_base, requests, handle) = spawn_sse_server(
+        "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_chat_smoke\",\"model\":\"gpt-5.4\",\"output\":[{\"id\":\"msg_1\",\"type\":\"message\",\"status\":\"completed\",\"role\":\"assistant\",\"content\":[{\"type\":\"output_text\",\"text\":\"chat smoke ok\"}]}],\"usage\":{\"input_tokens\":11,\"output_tokens\":3,\"total_tokens\":14}}}\n\n",
     );
     let temp = tempfile::tempdir().expect("tempdir");
     let data_dir = temp.path().join("state-root");
@@ -113,7 +95,7 @@ fn free_port() -> u16 {
         .port()
 }
 
-fn spawn_json_server(body: &'static str) -> (String, Receiver<String>, thread::JoinHandle<()>) {
+fn spawn_sse_server(body: &'static str) -> (String, Receiver<String>, thread::JoinHandle<()>) {
     let listener = TcpListener::bind("127.0.0.1:0").expect("bind listener");
     let address = listener.local_addr().expect("local addr");
     let (tx, rx) = mpsc::channel();
@@ -159,7 +141,7 @@ fn spawn_json_server(body: &'static str) -> (String, Receiver<String>, thread::J
         tx.send(request).expect("send request");
 
         let response = format!(
-            "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
+            "HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\ncache-control: no-cache\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
             body.len(),
             body
         );

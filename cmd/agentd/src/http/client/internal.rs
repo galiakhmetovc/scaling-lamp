@@ -1,5 +1,6 @@
 use super::*;
 use std::error::Error as _;
+use std::io::BufRead;
 use std::time::Duration;
 
 impl DaemonClient {
@@ -89,10 +90,15 @@ impl DaemonClient {
         decode_response(response)
     }
 
-    pub(super) fn post_json_long<T, B>(&self, path: &str, body: &B) -> Result<T, BootstrapError>
+    pub(super) fn post_json_long_stream<B, F>(
+        &self,
+        path: &str,
+        body: &B,
+        mut on_line: F,
+    ) -> Result<(), BootstrapError>
     where
-        T: DeserializeOwned,
         B: serde::Serialize + ?Sized,
+        F: FnMut(&str) -> Result<(), BootstrapError>,
     {
         let mut request = self
             .long_http
@@ -104,7 +110,31 @@ impl DaemonClient {
         let response = request.send().map_err(|error| {
             BootstrapError::Stream(std::io::Error::other(format_http_error(&error)))
         })?;
-        decode_response(response)
+        if !response.status().is_success() {
+            return Err(decode_error_response(response));
+        }
+
+        let mut reader = std::io::BufReader::new(response);
+        let mut line = String::new();
+        loop {
+            line.clear();
+            let bytes_read = reader.read_line(&mut line).map_err(|error| {
+                BootstrapError::Stream(std::io::Error::other(format!(
+                    "invalid daemon stream: {error}"
+                )))
+            })?;
+            if bytes_read == 0 {
+                break;
+            }
+
+            let line = line.trim_end_matches(['\r', '\n']);
+            if line.is_empty() {
+                continue;
+            }
+            on_line(line)?;
+        }
+
+        Ok(())
     }
 }
 
@@ -126,6 +156,28 @@ fn default_connect_host(bind_host: &str) -> String {
         "0.0.0.0" => "127.0.0.1".to_string(),
         "::" | "[::]" => "[::1]".to_string(),
         other => other.to_string(),
+    }
+}
+
+fn decode_error_response(response: reqwest::blocking::Response) -> BootstrapError {
+    let status = response.status();
+    let error = response
+        .json::<ErrorResponse>()
+        .ok()
+        .map(|error| error.error);
+    let reason = error.unwrap_or_else(|| {
+        status
+            .canonical_reason()
+            .unwrap_or("daemon error")
+            .to_string()
+    });
+    let kind = if status == StatusCode::UNAUTHORIZED {
+        "daemon authorization failed"
+    } else {
+        "daemon request failed"
+    };
+    BootstrapError::Usage {
+        reason: format!("{kind}: {reason}"),
     }
 }
 

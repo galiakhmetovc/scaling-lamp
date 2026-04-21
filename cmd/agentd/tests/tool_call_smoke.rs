@@ -8,45 +8,12 @@ use std::thread;
 fn operator_can_run_a_chat_turn_that_uses_an_allowed_web_tool() {
     let (web_base, web_requests, web_handle) = spawn_text_server("/doc", "tool smoke doc");
     let first_provider_response = format!(
-        r#"{{
-            "id":"resp_tool_smoke_1",
-            "model":"gpt-5.4",
-            "output":[
-                {{
-                    "id":"fc_1",
-                    "type":"function_call",
-                    "status":"completed",
-                    "call_id":"call_web_fetch",
-                    "name":"web_fetch",
-                    "arguments":"{{\"url\":\"{}\"}}"
-                }}
-            ],
-            "usage":{{"input_tokens":19,"output_tokens":7,"total_tokens":26}}
-        }}"#,
+        "data: {{\"type\":\"response.completed\",\"response\":{{\"id\":\"resp_tool_smoke_1\",\"model\":\"gpt-5.4\",\"output\":[{{\"id\":\"fc_1\",\"type\":\"function_call\",\"status\":\"completed\",\"call_id\":\"call_web_fetch\",\"name\":\"web_fetch\",\"arguments\":\"{{\\\"url\\\":\\\"{}\\\"}}\"}}],\"usage\":{{\"input_tokens\":19,\"output_tokens\":7,\"total_tokens\":26}}}}}}\n\n",
         web_base
     );
-    let (api_base, provider_requests, provider_handle) = spawn_json_server_sequence(vec![
+    let (api_base, provider_requests, provider_handle) = spawn_sse_server_sequence(vec![
         first_provider_response,
-        r#"{
-            "id":"resp_tool_smoke_2",
-            "model":"gpt-5.4",
-            "output":[
-                {
-                    "id":"msg_1",
-                    "type":"message",
-                    "status":"completed",
-                    "role":"assistant",
-                    "content":[
-                        {
-                            "type":"output_text",
-                            "text":"tool smoke ok"
-                        }
-                    ]
-                }
-            ],
-            "usage":{"input_tokens":31,"output_tokens":4,"total_tokens":35}
-        }"#
-        .to_string(),
+        "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_tool_smoke_2\",\"model\":\"gpt-5.4\",\"output\":[{\"id\":\"msg_1\",\"type\":\"message\",\"status\":\"completed\",\"role\":\"assistant\",\"content\":[{\"type\":\"output_text\",\"text\":\"tool smoke ok\"}]}],\"usage\":{\"input_tokens\":31,\"output_tokens\":4,\"total_tokens\":35}}}\n\n".to_string(),
     ]);
     let temp = tempfile::tempdir().expect("tempdir");
     let data_dir = temp.path().join("state-root");
@@ -139,7 +106,7 @@ fn free_port() -> u16 {
         .port()
 }
 
-fn spawn_json_server_sequence(
+fn spawn_sse_server_sequence(
     bodies: Vec<String>,
 ) -> (String, Receiver<String>, thread::JoinHandle<()>) {
     let listener = TcpListener::bind("127.0.0.1:0").expect("bind listener");
@@ -188,7 +155,7 @@ fn spawn_json_server_sequence(
             tx.send(request).expect("send request");
 
             let response = format!(
-                "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
+                "HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\ncache-control: no-cache\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
                 body.len(),
                 body
             );

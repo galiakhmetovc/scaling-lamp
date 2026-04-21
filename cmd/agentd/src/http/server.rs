@@ -52,7 +52,13 @@ fn handle_request(app: &App, shutdown: &Arc<AtomicBool>, request: Request) -> st
         (&tiny_http::Method::Get, "/v1/sessions") => sessions::handle_list_sessions(app, request),
         (&tiny_http::Method::Post, "/v1/sessions") => sessions::handle_create_session(app, request),
         (&tiny_http::Method::Post, "/v1/chat/turn") => chat::handle_chat_turn(app, request),
+        (&tiny_http::Method::Post, "/v1/chat/turn/stream") => {
+            chat::handle_chat_turn_stream(app, request)
+        }
         (&tiny_http::Method::Post, "/v1/runs/approve") => chat::handle_approve_run(app, request),
+        (&tiny_http::Method::Post, "/v1/runs/approve/stream") => {
+            chat::handle_approve_run_stream(app, request)
+        }
         _ => sessions::handle_nested_routes(app, request),
     }
 }

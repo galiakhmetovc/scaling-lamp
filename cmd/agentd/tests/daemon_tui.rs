@@ -1,7 +1,12 @@
 use agent_persistence::AppConfig;
+use agent_runtime::permission::{
+    PermissionAction, PermissionConfig, PermissionMode, PermissionRule,
+};
 use agent_runtime::provider::{ConfiguredProvider, ProviderKind};
 use agentd::bootstrap;
+use agentd::bootstrap::BootstrapError;
 use agentd::daemon;
+use agentd::execution::{ChatExecutionEvent, ExecutionError, ToolExecutionStatus};
 use agentd::http::client::{
     DaemonClient, DaemonConnectOptions, connect_or_autospawn, connect_or_autospawn_detailed,
 };
@@ -32,7 +37,7 @@ fn test_config() -> (tempfile::TempDir, AppConfig) {
     (temp, config)
 }
 
-fn spawn_delayed_json_server_sequence(
+fn spawn_delayed_sse_server_sequence(
     responses: Vec<(Duration, String)>,
 ) -> (String, Receiver<String>, thread::JoinHandle<()>) {
     let listener = TcpListener::bind("127.0.0.1:0").expect("bind listener");
@@ -73,7 +78,60 @@ fn spawn_delayed_json_server_sequence(
             thread::sleep(delay);
 
             let response = format!(
-                "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
+                "HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\ncache-control: no-cache\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
+                body.len(),
+                body
+            );
+            stream
+                .write_all(response.as_bytes())
+                .expect("write response");
+            stream.flush().expect("flush response");
+        }
+    });
+
+    (format!("http://{address}"), receiver, handle)
+}
+
+fn spawn_sse_server_sequence(
+    bodies: Vec<String>,
+) -> (String, Receiver<String>, thread::JoinHandle<()>) {
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind listener");
+    let address = listener.local_addr().expect("local addr");
+    let (sender, receiver) = mpsc::channel();
+
+    let handle = thread::spawn(move || {
+        for body in bodies {
+            let (mut stream, _) = listener.accept().expect("accept connection");
+            stream
+                .set_read_timeout(Some(Duration::from_secs(2)))
+                .expect("set read timeout");
+
+            let mut reader = BufReader::new(stream.try_clone().expect("clone stream"));
+            let mut raw_request = String::new();
+            let mut content_length = 0usize;
+
+            loop {
+                let mut line = String::new();
+                reader.read_line(&mut line).expect("read request line");
+                raw_request.push_str(&line);
+
+                if line == "\r\n" {
+                    break;
+                }
+
+                let lower = line.to_ascii_lowercase();
+                if let Some(value) = lower.strip_prefix("content-length:") {
+                    content_length = value.trim().parse().expect("parse content length");
+                }
+            }
+
+            let mut body_buf = vec![0u8; content_length];
+            reader.read_exact(&mut body_buf).expect("read request body");
+            raw_request.push_str(std::str::from_utf8(&body_buf).expect("utf8 body"));
+            sender.send(raw_request).expect("send request");
+
+            let response = format!(
+                "HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\ncache-control: no-cache\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
                 body.len(),
                 body
             );
@@ -181,30 +239,12 @@ fn daemon_client_uses_loopback_when_daemon_binds_all_interfaces() {
 #[test]
 fn daemon_client_chat_turn_waits_for_slow_daemon_responses() {
     let (_temp, mut config) = test_config();
-    let (provider_api_base, provider_requests, provider_handle) =
-        spawn_delayed_json_server_sequence(vec![(
+    let (provider_api_base, provider_requests, provider_handle) = spawn_delayed_sse_server_sequence(
+        vec![(
             Duration::from_secs(6),
-            r#"{
-                "id":"resp_slow",
-                "model":"gpt-5.4",
-                "output":[
-                    {
-                        "id":"msg_1",
-                        "type":"message",
-                        "status":"completed",
-                        "role":"assistant",
-                        "content":[
-                            {
-                                "type":"output_text",
-                                "text":"slow hello"
-                            }
-                        ]
-                    }
-                ],
-                "usage":{"input_tokens":12,"output_tokens":4,"total_tokens":16}
-            }"#
-            .to_string(),
-        )]);
+            "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_slow\",\"model\":\"gpt-5.4\",\"output\":[{\"id\":\"msg_1\",\"type\":\"message\",\"status\":\"completed\",\"role\":\"assistant\",\"content\":[{\"type\":\"output_text\",\"text\":\"slow hello\"}]}],\"usage\":{\"input_tokens\":12,\"output_tokens\":4,\"total_tokens\":16}}}\n\n".to_string(),
+        )],
+    );
     config.provider = ConfiguredProvider {
         kind: ProviderKind::OpenAiResponses,
         api_base: Some(format!("{provider_api_base}/v1")),
@@ -237,32 +277,136 @@ fn daemon_client_chat_turn_waits_for_slow_daemon_responses() {
 }
 
 #[test]
+fn daemon_client_streams_reasoning_and_text_events_from_chat_turn() {
+    let (_temp, mut config) = test_config();
+    let stream = "data: {\"type\":\"response.reasoning_summary_text.delta\",\"item_id\":\"rs_1\",\"output_index\":0,\"summary_index\":0,\"delta\":\"Compare context. \"}\n\n\
+data: {\"type\":\"response.output_text.delta\",\"item_id\":\"msg_1\",\"output_index\":1,\"content_index\":0,\"delta\":\"hello \"}\n\n\
+data: {\"type\":\"response.output_text.delta\",\"item_id\":\"msg_1\",\"output_index\":1,\"content_index\":0,\"delta\":\"from daemon\"}\n\n\
+data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_stream_daemon\",\"model\":\"gpt-5.4\",\"output\":[{\"id\":\"rs_1\",\"type\":\"reasoning\",\"summary\":[{\"type\":\"summary_text\",\"text\":\"Compare context. \"}]},{\"id\":\"msg_1\",\"type\":\"message\",\"status\":\"completed\",\"role\":\"assistant\",\"content\":[{\"type\":\"output_text\",\"text\":\"hello from daemon\",\"annotations\":[]}]}],\"usage\":{\"input_tokens\":11,\"output_tokens\":7,\"total_tokens\":18}}}\n\n".to_string();
+    let (provider_api_base, _provider_requests, provider_handle) =
+        spawn_sse_server_sequence(vec![stream]);
+    config.provider = ConfiguredProvider {
+        kind: ProviderKind::OpenAiResponses,
+        api_base: Some(format!("{provider_api_base}/v1")),
+        api_key: Some("test-key".to_string()),
+        default_model: Some("gpt-5.4".to_string()),
+        ..ConfiguredProvider::default()
+    };
+
+    let app = bootstrap::build_from_config(config.clone()).expect("build app");
+    let handle = daemon::spawn_for_test(app).expect("spawn daemon");
+    let client = DaemonClient::new(&config, &DaemonConnectOptions::default());
+    let session = client
+        .create_session_auto(Some("Streamed Remote Session"))
+        .expect("create session");
+    let mut events = Vec::new();
+
+    let report = client
+        .execute_chat_turn_with_control_and_observer(
+            &session.id,
+            "Привет",
+            10,
+            None,
+            &mut |event| {
+                events.push(event);
+            },
+        )
+        .expect("chat turn should stream intermediate events");
+
+    provider_handle.join().expect("join provider");
+    handle.stop().expect("stop daemon");
+
+    assert_eq!(report.output_text, "hello from daemon");
+    assert!(
+        events
+            .iter()
+            .any(|event| matches!(event, ChatExecutionEvent::ReasoningDelta(delta) if delta == "Compare context. "))
+    );
+    assert!(events.iter().any(
+        |event| matches!(event, ChatExecutionEvent::AssistantTextDelta(delta) if delta == "hello ")
+    ));
+    assert!(
+        events
+            .iter()
+            .any(|event| matches!(event, ChatExecutionEvent::AssistantTextDelta(delta) if delta == "from daemon"))
+    );
+}
+
+#[test]
+fn daemon_client_streams_tool_status_before_approval_required() {
+    let (_temp, mut config) = test_config();
+    let stream = "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_tool_daemon\",\"model\":\"gpt-5.4\",\"output\":[{\"id\":\"fc_1\",\"type\":\"function_call\",\"status\":\"completed\",\"call_id\":\"call_web_fetch\",\"name\":\"web_fetch\",\"arguments\":\"{\\\"url\\\":\\\"https://example.com/weather\\\"}\"}],\"usage\":{\"input_tokens\":19,\"output_tokens\":7,\"total_tokens\":26}}}\n\n".to_string();
+    let (provider_api_base, _provider_requests, provider_handle) =
+        spawn_sse_server_sequence(vec![stream]);
+    config.provider = ConfiguredProvider {
+        kind: ProviderKind::OpenAiResponses,
+        api_base: Some(format!("{provider_api_base}/v1")),
+        api_key: Some("test-key".to_string()),
+        default_model: Some("gpt-5.4".to_string()),
+        ..ConfiguredProvider::default()
+    };
+    config.permissions = PermissionConfig {
+        mode: PermissionMode::Default,
+        rules: vec![PermissionRule {
+            action: PermissionAction::Ask,
+            tool: Some("web_fetch".to_string()),
+            family: None,
+            path_prefix: None,
+        }],
+    };
+
+    let app = bootstrap::build_from_config(config.clone()).expect("build app");
+    let handle = daemon::spawn_for_test(app).expect("spawn daemon");
+    let client = DaemonClient::new(&config, &DaemonConnectOptions::default());
+    let session = client
+        .create_session_auto(Some("Approval Remote Session"))
+        .expect("create session");
+    let mut events = Vec::new();
+
+    let error = client
+        .execute_chat_turn_with_control_and_observer(
+            &session.id,
+            "Какая погода в Москве?",
+            10,
+            None,
+            &mut |event| events.push(event),
+        )
+        .expect_err("chat turn should require approval");
+
+    provider_handle.join().expect("join provider");
+    handle.stop().expect("stop daemon");
+
+    assert!(matches!(
+        error,
+        BootstrapError::Execution(ExecutionError::ApprovalRequired { .. })
+    ));
+    assert!(events.iter().any(|event| matches!(
+        event,
+        ChatExecutionEvent::ToolStatus {
+            tool_name,
+            status: ToolExecutionStatus::Requested,
+            ..
+        } if tool_name == "web_fetch"
+    )));
+    assert!(events.iter().any(|event| matches!(
+        event,
+        ChatExecutionEvent::ToolStatus {
+            tool_name,
+            status: ToolExecutionStatus::WaitingApproval,
+            ..
+        } if tool_name == "web_fetch"
+    )));
+}
+
+#[test]
 fn daemon_client_can_query_pending_approvals_while_chat_turn_is_in_flight() {
     let (_temp, mut config) = test_config();
-    let (provider_api_base, _provider_requests, provider_handle) =
-        spawn_delayed_json_server_sequence(vec![(
+    let (provider_api_base, _provider_requests, provider_handle) = spawn_delayed_sse_server_sequence(
+        vec![(
             Duration::from_secs(2),
-            r#"{
-                "id":"resp_inflight",
-                "model":"gpt-5.4",
-                "output":[
-                    {
-                        "id":"msg_inflight",
-                        "type":"message",
-                        "status":"completed",
-                        "role":"assistant",
-                        "content":[
-                            {
-                                "type":"output_text",
-                                "text":"done"
-                            }
-                        ]
-                    }
-                ],
-                "usage":{"input_tokens":12,"output_tokens":4,"total_tokens":16}
-            }"#
-            .to_string(),
-        )]);
+            "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_inflight\",\"model\":\"gpt-5.4\",\"output\":[{\"id\":\"msg_inflight\",\"type\":\"message\",\"status\":\"completed\",\"role\":\"assistant\",\"content\":[{\"type\":\"output_text\",\"text\":\"done\"}]}],\"usage\":{\"input_tokens\":12,\"output_tokens\":4,\"total_tokens\":16}}}\n\n".to_string(),
+        )],
+    );
     config.provider = ConfiguredProvider {
         kind: ProviderKind::OpenAiResponses,
         api_base: Some(format!("{provider_api_base}/v1")),

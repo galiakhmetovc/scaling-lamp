@@ -1,6 +1,8 @@
 use super::*;
 use crate::execution::ExecutionError;
-use crate::http::types::{ApproveRunRequest, ChatTurnRequest, WorkerOutcomeResponse};
+use crate::http::types::{
+    ApproveRunRequest, ChatTurnRequest, WorkerOutcomeResponse, WorkerStreamEventResponse,
+};
 use std::sync::atomic::AtomicBool;
 
 impl DaemonClient {
@@ -9,17 +11,40 @@ impl DaemonClient {
         session_id: &str,
         message: &str,
         now: i64,
-        _interrupt_after_tool_step: Option<&AtomicBool>,
-        _observer: &mut dyn FnMut(ChatExecutionEvent),
+        interrupt_after_tool_step: Option<&AtomicBool>,
+        observer: &mut dyn FnMut(ChatExecutionEvent),
     ) -> Result<ChatTurnExecutionReport, BootstrapError> {
-        match self.post_json_long::<WorkerOutcomeResponse, _>(
-            "/v1/chat/turn",
+        let mut final_outcome = None;
+        self.post_json_long_stream(
+            "/v1/chat/turn/stream",
             &ChatTurnRequest {
                 session_id: session_id.to_string(),
                 message: message.to_string(),
                 now,
+                interrupt_after_tool_step: interrupt_after_tool_step
+                    .is_some_and(|flag| flag.load(std::sync::atomic::Ordering::SeqCst)),
             },
-        )? {
+            |line| {
+                let event: WorkerStreamEventResponse =
+                    serde_json::from_str(line).map_err(|error| {
+                        BootstrapError::Stream(std::io::Error::other(format!(
+                            "invalid daemon stream event: {error}"
+                        )))
+                    })?;
+                match event {
+                    WorkerStreamEventResponse::ChatEvent { event } => observer(event),
+                    WorkerStreamEventResponse::Finished { outcome } => {
+                        final_outcome = Some(outcome);
+                    }
+                }
+                Ok(())
+            },
+        )?;
+        match final_outcome.ok_or_else(|| {
+            BootstrapError::Stream(std::io::Error::other(
+                "daemon chat stream finished without a final outcome",
+            ))
+        })? {
             WorkerOutcomeResponse::ChatCompleted { report } => Ok(report),
             WorkerOutcomeResponse::ApprovalRequired {
                 approval_id,
@@ -46,17 +71,40 @@ impl DaemonClient {
         run_id: &str,
         approval_id: &str,
         now: i64,
-        _interrupt_after_tool_step: Option<&AtomicBool>,
-        _observer: &mut dyn FnMut(ChatExecutionEvent),
+        interrupt_after_tool_step: Option<&AtomicBool>,
+        observer: &mut dyn FnMut(ChatExecutionEvent),
     ) -> Result<ApprovalContinuationReport, BootstrapError> {
-        match self.post_json_long::<WorkerOutcomeResponse, _>(
-            "/v1/runs/approve",
+        let mut final_outcome = None;
+        self.post_json_long_stream(
+            "/v1/runs/approve/stream",
             &ApproveRunRequest {
                 run_id: run_id.to_string(),
                 approval_id: approval_id.to_string(),
                 now,
+                interrupt_after_tool_step: interrupt_after_tool_step
+                    .is_some_and(|flag| flag.load(std::sync::atomic::Ordering::SeqCst)),
             },
-        )? {
+            |line| {
+                let event: WorkerStreamEventResponse =
+                    serde_json::from_str(line).map_err(|error| {
+                        BootstrapError::Stream(std::io::Error::other(format!(
+                            "invalid daemon stream event: {error}"
+                        )))
+                    })?;
+                match event {
+                    WorkerStreamEventResponse::ChatEvent { event } => observer(event),
+                    WorkerStreamEventResponse::Finished { outcome } => {
+                        final_outcome = Some(outcome);
+                    }
+                }
+                Ok(())
+            },
+        )?;
+        match final_outcome.ok_or_else(|| {
+            BootstrapError::Stream(std::io::Error::other(
+                "daemon approval stream finished without a final outcome",
+            ))
+        })? {
             WorkerOutcomeResponse::ApprovalCompleted { report } => Ok(report),
             WorkerOutcomeResponse::ApprovalRequired {
                 approval_id,
