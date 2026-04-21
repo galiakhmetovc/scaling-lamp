@@ -1538,6 +1538,78 @@ fn session_transcript_view_renders_entries_in_chronological_order() {
 }
 
 #[test]
+fn session_transcript_places_persisted_reasoning_before_final_assistant_for_same_run() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let app = build_from_config(AppConfig {
+        data_dir: temp.path().join("state-root"),
+        ..AppConfig::default()
+    })
+    .expect("build app");
+    let store = PersistenceStore::open(&app.persistence).expect("open store");
+
+    store
+        .put_session(&SessionRecord {
+            id: "session-reasoning".to_string(),
+            title: "Reasoning session".to_string(),
+            prompt_override: None,
+            settings_json: serde_json::to_string(&SessionSettings::default())
+                .expect("serialize settings"),
+            active_mission_id: None,
+            parent_session_id: None,
+            parent_job_id: None,
+            delegation_label: None,
+            created_at: 1,
+            updated_at: 1,
+        })
+        .expect("put session");
+
+    let mut run = RunEngine::new("run-reasoning", "session-reasoning", None, 10);
+    run.start(10).expect("start run");
+    run.push_provider_reasoning("I should inspect the Timeweb profile first.", 10)
+        .expect("persist reasoning");
+    run.complete("Done", 10).expect("complete run");
+    store
+        .put_run(&RunRecord::try_from(run.snapshot()).expect("run record"))
+        .expect("put run");
+
+    store
+        .put_transcript(&agent_persistence::TranscriptRecord {
+            id: "msg-user".to_string(),
+            session_id: "session-reasoning".to_string(),
+            run_id: Some("run-reasoning".to_string()),
+            kind: "user".to_string(),
+            content: "show timeweb servers".to_string(),
+            created_at: 10,
+        })
+        .expect("put user transcript");
+    store
+        .put_transcript(&agent_persistence::TranscriptRecord {
+            id: "msg-assistant".to_string(),
+            session_id: "session-reasoning".to_string(),
+            run_id: Some("run-reasoning".to_string()),
+            kind: "assistant".to_string(),
+            content: "Done".to_string(),
+            created_at: 10,
+        })
+        .expect("put assistant transcript");
+
+    let transcript = app
+        .session_transcript("session-reasoning")
+        .expect("load transcript view");
+
+    let roles = transcript
+        .entries
+        .iter()
+        .map(|entry| entry.role.as_str())
+        .collect::<Vec<_>>();
+    assert_eq!(roles, vec!["user", "reasoning", "assistant"]);
+    assert_eq!(
+        transcript.entries[1].content,
+        "I should inspect the Timeweb profile first."
+    );
+}
+
+#[test]
 fn execute_chat_turn_creates_a_run_and_appends_transcript_history() {
     let (api_base, requests, handle) = spawn_json_server(
         r#"{

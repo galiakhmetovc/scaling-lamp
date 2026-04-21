@@ -119,13 +119,14 @@ impl ExecutionService {
         run.complete(&response.output_text, now)
             .map_err(ExecutionError::RunTransition)?;
         self.persist_run(store, &run)?;
+        let assistant_at = completed_run_timestamp(&run);
 
         let assistant_entry = TranscriptEntry::assistant(
             format!("transcript-{run_id}-02-assistant"),
             session.id.clone(),
             Some(run_id.as_str()),
             &response.output_text,
-            now,
+            assistant_at,
         );
         store
             .put_transcript(&TranscriptRecord::from(&assistant_entry))
@@ -260,13 +261,14 @@ impl ExecutionService {
         run.complete(&response.output_text, now)
             .map_err(ExecutionError::RunTransition)?;
         self.persist_run(store, &run)?;
+        let assistant_at = completed_run_timestamp(&run);
 
         let assistant_entry = TranscriptEntry::assistant(
             format!("transcript-{}-02-assistant", job.id),
             session.id.clone(),
             Some(run_id.as_str()),
             &response.output_text,
-            now,
+            assistant_at,
         );
         store
             .put_transcript(&TranscriptRecord::from(&assistant_entry))
@@ -789,13 +791,14 @@ impl ExecutionService {
         run.complete(&response.output_text, now)
             .map_err(ExecutionError::RunTransition)?;
         self.persist_run(store, &run)?;
+        let assistant_at = completed_run_timestamp(&run);
 
         let assistant_entry = TranscriptEntry::assistant(
             format!("transcript-run-{run_id}-{now}-assistant"),
             session.id.clone(),
             Some(run_id),
             &response.output_text,
-            now,
+            assistant_at,
         );
         store
             .put_transcript(&TranscriptRecord::from(&assistant_entry))
@@ -821,4 +824,10 @@ impl ExecutionService {
             approval_id: None,
         })
     }
+}
+
+fn completed_run_timestamp(run: &RunEngine) -> i64 {
+    run.snapshot()
+        .finished_at
+        .unwrap_or(run.snapshot().updated_at)
 }

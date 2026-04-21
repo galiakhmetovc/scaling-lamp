@@ -300,7 +300,6 @@ impl Timeline {
 
 fn should_preserve_entry(entry: &TimelineEntry) -> bool {
     match &entry.kind {
-        TimelineEntryKind::Reasoning => true,
         TimelineEntryKind::Tool { status, .. } => {
             !matches!(status.as_str(), "completed" | "failed")
         }

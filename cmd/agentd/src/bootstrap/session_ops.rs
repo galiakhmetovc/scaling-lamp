@@ -379,6 +379,17 @@ fn build_synthetic_run_lines(session_id: &str, runs: &[RunSnapshot]) -> Vec<Sess
     for run in runs.iter().filter(|run| run.session_id == session_id) {
         for step in &run.recent_steps {
             match step.kind {
+                RunStepKind::ProviderReasoningDelta => {
+                    lines.push(SessionTranscriptLine {
+                        role: "reasoning".to_string(),
+                        content: parse_provider_reasoning_step(step.detail.as_str()),
+                        run_id: Some(run.id.clone()),
+                        created_at: step.recorded_at,
+                        tool_name: None,
+                        tool_status: None,
+                        approval_id: None,
+                    });
+                }
                 RunStepKind::ToolCompleted => {
                     let (tool_name, status, summary) = parse_tool_step_detail(step.detail.as_str());
                     lines.push(SessionTranscriptLine {
@@ -479,6 +490,14 @@ fn parse_tool_step_detail(detail: &str) -> (String, String, String) {
         "completed"
     };
     (tool_name, status.to_string(), summary)
+}
+
+fn parse_provider_reasoning_step(detail: &str) -> String {
+    detail
+        .strip_prefix("provider reasoning: ")
+        .unwrap_or(detail)
+        .trim()
+        .to_string()
 }
 
 fn format_background_job_time(timestamp: i64) -> String {

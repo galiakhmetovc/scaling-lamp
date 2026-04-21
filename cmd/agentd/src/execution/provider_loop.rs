@@ -54,6 +54,13 @@ struct PromptMessages {
 }
 
 #[derive(Debug, Clone)]
+struct ObservedProviderResponse {
+    response: ProviderResponse,
+    reasoning_deltas: Vec<String>,
+    text_deltas: Vec<String>,
+}
+
+#[derive(Debug, Clone)]
 struct ProviderLoopCursor {
     max_rounds: usize,
     round: usize,
@@ -584,16 +591,29 @@ impl ExecutionService {
     fn apply_provider_response(
         &self,
         run: &mut RunEngine,
-        response: &ProviderResponse,
+        observed: &ObservedProviderResponse,
         now: i64,
     ) -> Result<(), ExecutionError> {
-        run.begin_provider_stream(&response.response_id, &response.model, now)
-            .map_err(ExecutionError::RunTransition)?;
-        if !response.output_text.is_empty() {
-            run.push_provider_text(&response.output_text, now)
+        run.begin_provider_stream(
+            &observed.response.response_id,
+            &observed.response.model,
+            now,
+        )
+        .map_err(ExecutionError::RunTransition)?;
+        for delta in &observed.reasoning_deltas {
+            run.push_provider_reasoning(delta, now)
                 .map_err(ExecutionError::RunTransition)?;
         }
-        run.set_latest_provider_usage(response.usage.clone(), now)
+        if !observed.text_deltas.is_empty() {
+            for delta in &observed.text_deltas {
+                run.push_provider_text(delta, now)
+                    .map_err(ExecutionError::RunTransition)?;
+            }
+        } else if !observed.response.output_text.is_empty() {
+            run.push_provider_text(&observed.response.output_text, now)
+                .map_err(ExecutionError::RunTransition)?;
+        }
+        run.set_latest_provider_usage(observed.response.usage.clone(), now)
             .map_err(ExecutionError::RunTransition)?;
         run.finish_provider_stream(now)
             .map_err(ExecutionError::RunTransition)?;
@@ -614,17 +634,27 @@ impl ExecutionService {
         provider: &dyn ProviderDriver,
         request: &ProviderRequest,
         observer: &mut Option<&mut dyn FnMut(ChatExecutionEvent)>,
-    ) -> Result<ProviderResponse, ExecutionError> {
+    ) -> Result<ObservedProviderResponse, ExecutionError> {
         if matches!(request.stream, ProviderStreamMode::Enabled) {
             let mut stream = provider.stream(request).map_err(ExecutionError::Provider)?;
             let mut final_response = None;
+            let mut reasoning_deltas = Vec::new();
+            let mut text_deltas = Vec::new();
             while let Some(event) = stream.next_event().map_err(ExecutionError::Provider)? {
                 match event {
                     ProviderStreamEvent::ReasoningDelta(delta) => {
-                        Self::emit_event(observer, ChatExecutionEvent::ReasoningDelta(delta));
+                        Self::emit_event(
+                            observer,
+                            ChatExecutionEvent::ReasoningDelta(delta.clone()),
+                        );
+                        reasoning_deltas.push(delta);
                     }
                     ProviderStreamEvent::TextDelta(delta) => {
-                        Self::emit_event(observer, ChatExecutionEvent::AssistantTextDelta(delta));
+                        Self::emit_event(
+                            observer,
+                            ChatExecutionEvent::AssistantTextDelta(delta.clone()),
+                        );
+                        text_deltas.push(delta);
                     }
                     ProviderStreamEvent::Completed(response) => {
                         final_response = Some(response);
@@ -632,11 +662,24 @@ impl ExecutionService {
                     }
                 }
             }
-            final_response.ok_or_else(|| ExecutionError::ProviderLoop {
-                reason: "provider stream ended without a final response".to_string(),
-            })
+            final_response
+                .map(|response| ObservedProviderResponse {
+                    response,
+                    reasoning_deltas,
+                    text_deltas,
+                })
+                .ok_or_else(|| ExecutionError::ProviderLoop {
+                    reason: "provider stream ended without a final response".to_string(),
+                })
         } else {
-            provider.complete(request).map_err(ExecutionError::Provider)
+            provider
+                .complete(request)
+                .map(|response| ObservedProviderResponse {
+                    response,
+                    reasoning_deltas: Vec::new(),
+                    text_deltas: Vec::new(),
+                })
+                .map_err(ExecutionError::Provider)
         }
     }
 
@@ -1554,8 +1597,8 @@ impl ExecutionService {
                 cursor.stream_mode(observer.is_some()),
                 self.config.provider_max_output_tokens,
             );
-            let response = match self.request_provider_response(provider, &request, observer) {
-                Ok(response) => response,
+            let observed = match self.request_provider_response(provider, &request, observer) {
+                Ok(observed) => observed,
                 Err(ExecutionError::Provider(error)) if error.is_transient() => {
                     return Err(
                         self.pause_for_transient_provider_retry(run, &cursor, &error, now, store)?
@@ -1564,8 +1607,9 @@ impl ExecutionService {
                 Err(error) => return Err(error),
             };
             cursor.clear_continuation_input_messages();
-            self.apply_provider_response(run, &response, now)?;
+            self.apply_provider_response(run, &observed, now)?;
             self.persist_run(store, run)?;
+            let response = observed.response;
 
             if response.tool_calls.is_empty() {
                 if let Some(decision) =

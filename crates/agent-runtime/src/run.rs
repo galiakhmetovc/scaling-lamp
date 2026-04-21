@@ -137,6 +137,7 @@ pub struct RunStep {
 pub enum RunStepKind {
     Started,
     ProviderStreamStarted,
+    ProviderReasoningDelta,
     ProviderTextDelta,
     ProviderStreamFinished,
     ToolCompleted,
@@ -468,6 +469,22 @@ impl RunEngine {
         self.push_step(
             RunStepKind::ProviderTextDelta,
             format!("provider delta: {delta}"),
+            at,
+        );
+        Ok(())
+    }
+
+    pub fn push_provider_reasoning(
+        &mut self,
+        delta: impl AsRef<str>,
+        at: i64,
+    ) -> Result<(), RunTransitionError> {
+        self.require_status("push_provider_reasoning", &[RunStatus::Running])?;
+        let delta = delta.as_ref();
+        self.touch(at);
+        self.push_step(
+            RunStepKind::ProviderReasoningDelta,
+            format!("provider reasoning: {delta}"),
             at,
         );
         Ok(())
