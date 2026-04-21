@@ -212,7 +212,9 @@ impl ActiveRunHandle {
 
     fn apply_chat_event(&mut self, event: &ChatExecutionEvent) {
         match event {
-            ChatExecutionEvent::ReasoningDelta(_) | ChatExecutionEvent::AssistantTextDelta(_) => {
+            ChatExecutionEvent::ReasoningDelta(_)
+            | ChatExecutionEvent::AssistantTextDelta(_)
+            | ChatExecutionEvent::ProviderLoopProgress { .. } => {
                 self.phase = ActiveRunPhase::Streaming;
             }
             ChatExecutionEvent::ToolStatus {

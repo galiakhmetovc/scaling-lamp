@@ -227,6 +227,33 @@ fn tui_render_includes_background_job_counts_in_the_session_header() {
 }
 
 #[test]
+fn tui_render_includes_provider_tool_round_progress_in_the_session_header() {
+    let mut state = TuiAppState::new(
+        vec![summary("session-a", "Session A")],
+        Some("session-a".to_string()),
+    );
+    state.set_current_session(summary("session-a", "Session A"), Timeline::default());
+    state.set_provider_loop_progress(7, 24);
+
+    let backend = TestBackend::new(140, 24);
+    let mut terminal = Terminal::new(backend).expect("terminal");
+    terminal
+        .draw(|frame| agentd::tui::render::render(frame, &state))
+        .expect("draw");
+
+    let buffer = terminal.backend().buffer();
+    let mut rendered = String::new();
+    for y in 0..buffer.area.height {
+        for x in 0..buffer.area.width {
+            rendered.push_str(buffer[(x, y)].symbol());
+        }
+        rendered.push('\n');
+    }
+
+    assert!(rendered.contains("tools=7/24"));
+}
+
+#[test]
 fn tui_chat_commands_and_timeline_new_creates_and_switches_immediately() {
     let temp = tempfile::tempdir().expect("tempdir");
     let app = build_from_config(AppConfig {

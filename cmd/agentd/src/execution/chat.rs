@@ -455,11 +455,11 @@ impl ExecutionService {
                 .ok_or_else(|| ExecutionError::ProviderLoop {
                     reason: format!("run {run_id} has no pending provider approval to resume"),
                 })?;
-        if pending_approval.approval_id != approval_id {
+        if pending_approval.approval_id() != approval_id {
             return Err(ExecutionError::ProviderLoop {
                 reason: format!(
                     "approval {approval_id} does not match pending provider approval {}",
-                    pending_approval.approval_id
+                    pending_approval.approval_id()
                 ),
             });
         }
@@ -496,69 +496,11 @@ impl ExecutionService {
             None
         };
 
-        let parsed = ToolCall::from_openai_function(
-            &pending_approval.tool_name,
-            &pending_approval.tool_arguments,
-        )
-        .map_err(|source| ExecutionError::ToolCallParse {
-            name: pending_approval.tool_name.clone(),
-            reason: source.to_string(),
-        })?;
-        let catalog = ToolCatalog::default();
-        let definition =
-            catalog
-                .definition_for_call(&parsed)
-                .ok_or_else(|| ExecutionError::ToolCallParse {
-                    name: pending_approval.tool_name.clone(),
-                    reason: "tool is not in the catalog".to_string(),
-                })?;
-        let permission = self.permissions.resolve(definition, &parsed);
-        if matches!(permission.action, PermissionAction::Deny) {
-            let reason = format!(
-                "tool {} denied by permission policy: {}",
-                parsed.name().as_str(),
-                permission.reason
-            );
-            run.fail(reason.clone(), now)
-                .map_err(ExecutionError::RunTransition)?;
-            self.persist_run(store, &run)?;
-            if let Some(job) = job.as_mut() {
-                job.status = JobStatus::Failed;
-                job.error = Some(reason.clone());
-                job.finished_at = Some(now);
-                job.updated_at = now;
-                store
-                    .put_job(&JobRecord::try_from(&*job).map_err(ExecutionError::RecordConversion)?)
-                    .map_err(ExecutionError::Store)?;
-            }
-            if let Some(mission) = mission.as_mut() {
-                mission.updated_at = now;
-                store
-                    .put_mission(
-                        &MissionRecord::try_from(&*mission)
-                            .map_err(ExecutionError::RecordConversion)?,
-                    )
-                    .map_err(ExecutionError::Store)?;
-            }
-            return Err(ExecutionError::PermissionDenied {
-                tool: parsed.name().as_str().to_string(),
-                reason,
-            });
-        }
-
         run.resolve_approval(approval_id, now)
             .map_err(ExecutionError::RunTransition)?;
         if run.snapshot().status == RunStatus::Resuming {
             run.resume(now).map_err(ExecutionError::RunTransition)?;
         }
-        Self::emit_event(
-            observer,
-            ChatExecutionEvent::ToolStatus {
-                tool_name: parsed.name().as_str().to_string(),
-                summary: parsed.summary(),
-                status: ToolExecutionStatus::Approved,
-            },
-        );
 
         if let Some(job) = job.as_mut() {
             job.status = JobStatus::Running;
@@ -582,48 +524,123 @@ impl ExecutionService {
                 .map_err(ExecutionError::Store)?;
         }
 
-        let mut tool_runtime = self.tool_runtime();
-        let model_output = self.invoke_provider_tool_call(
-            super::provider_loop::ProviderToolExecutionContext {
-                store,
-                session_id: &session.id,
-                now,
-            },
-            &mut run,
-            &mut tool_runtime,
-            pending_approval.provider_tool_call_id.as_str(),
-            &parsed,
-            observer,
-        )?;
-        if interrupt_after_tool_step
-            .is_some_and(|flag| flag.load(std::sync::atomic::Ordering::SeqCst))
-        {
-            run.interrupt("superseded by queued user input", now)
-                .map_err(ExecutionError::RunTransition)?;
-            self.persist_run(store, &run)?;
-            return Err(ExecutionError::InterruptedByQueuedInput);
-        }
-
         let mut resumed_loop_state = loop_state;
         resumed_loop_state.pending_approval = None;
-        if provider
-            .descriptor()
-            .capabilities
-            .supports_previous_response_id
-        {
-            resumed_loop_state
-                .pending_tool_outputs
-                .push(ProviderToolOutput {
-                    call_id: pending_approval.provider_tool_call_id.clone(),
-                    output: model_output,
-                });
-        } else {
-            resumed_loop_state.continuation_messages.push(
-                ProviderContinuationMessage::ToolResult {
-                    tool_call_id: pending_approval.provider_tool_call_id.clone(),
-                    content: model_output,
-                },
-            );
+        match pending_approval {
+            agent_runtime::run::PendingProviderApproval::Tool(pending_tool_approval) => {
+                let parsed = ToolCall::from_openai_function(
+                    &pending_tool_approval.tool_name,
+                    &pending_tool_approval.tool_arguments,
+                )
+                .map_err(|source| ExecutionError::ToolCallParse {
+                    name: pending_tool_approval.tool_name.clone(),
+                    reason: source.to_string(),
+                })?;
+                let catalog = ToolCatalog::default();
+                let definition = catalog.definition_for_call(&parsed).ok_or_else(|| {
+                    ExecutionError::ToolCallParse {
+                        name: pending_tool_approval.tool_name.clone(),
+                        reason: "tool is not in the catalog".to_string(),
+                    }
+                })?;
+                let permission = self.permissions.resolve(definition, &parsed);
+                if matches!(permission.action, PermissionAction::Deny) {
+                    let reason = format!(
+                        "tool {} denied by permission policy: {}",
+                        parsed.name().as_str(),
+                        permission.reason
+                    );
+                    run.fail(reason.clone(), now)
+                        .map_err(ExecutionError::RunTransition)?;
+                    self.persist_run(store, &run)?;
+                    if let Some(job) = job.as_mut() {
+                        job.status = JobStatus::Failed;
+                        job.error = Some(reason.clone());
+                        job.finished_at = Some(now);
+                        job.updated_at = now;
+                        store
+                            .put_job(
+                                &JobRecord::try_from(&*job)
+                                    .map_err(ExecutionError::RecordConversion)?,
+                            )
+                            .map_err(ExecutionError::Store)?;
+                    }
+                    if let Some(mission) = mission.as_mut() {
+                        mission.updated_at = now;
+                        store
+                            .put_mission(
+                                &MissionRecord::try_from(&*mission)
+                                    .map_err(ExecutionError::RecordConversion)?,
+                            )
+                            .map_err(ExecutionError::Store)?;
+                    }
+                    return Err(ExecutionError::PermissionDenied {
+                        tool: parsed.name().as_str().to_string(),
+                        reason,
+                    });
+                }
+
+                Self::emit_event(
+                    observer,
+                    ChatExecutionEvent::ToolStatus {
+                        tool_name: parsed.name().as_str().to_string(),
+                        summary: parsed.summary(),
+                        status: ToolExecutionStatus::Approved,
+                    },
+                );
+
+                let mut tool_runtime = self.tool_runtime();
+                let model_output = self.invoke_provider_tool_call(
+                    super::provider_loop::ProviderToolExecutionContext {
+                        store,
+                        session_id: &session.id,
+                        now,
+                    },
+                    &mut run,
+                    &mut tool_runtime,
+                    pending_tool_approval.provider_tool_call_id.as_str(),
+                    &parsed,
+                    observer,
+                )?;
+                if interrupt_after_tool_step
+                    .is_some_and(|flag| flag.load(std::sync::atomic::Ordering::SeqCst))
+                {
+                    run.interrupt("superseded by queued user input", now)
+                        .map_err(ExecutionError::RunTransition)?;
+                    self.persist_run(store, &run)?;
+                    return Err(ExecutionError::InterruptedByQueuedInput);
+                }
+
+                if provider
+                    .descriptor()
+                    .capabilities
+                    .supports_previous_response_id
+                {
+                    resumed_loop_state
+                        .pending_tool_outputs
+                        .push(ProviderToolOutput {
+                            call_id: pending_tool_approval.provider_tool_call_id.clone(),
+                            output: model_output,
+                        });
+                } else {
+                    resumed_loop_state.continuation_messages.push(
+                        ProviderContinuationMessage::ToolResult {
+                            tool_call_id: pending_tool_approval.provider_tool_call_id.clone(),
+                            content: model_output,
+                        },
+                    );
+                }
+            }
+            agent_runtime::run::PendingProviderApproval::LoopReset(pending_loop_reset) => {
+                resumed_loop_state.next_round = 0;
+                Self::emit_event(
+                    observer,
+                    ChatExecutionEvent::ProviderLoopProgress {
+                        current_round: 1,
+                        max_rounds: pending_loop_reset.max_rounds,
+                    },
+                );
+            }
         }
         run.set_provider_loop_state(resumed_loop_state.clone(), now)
             .map_err(ExecutionError::RunTransition)?;

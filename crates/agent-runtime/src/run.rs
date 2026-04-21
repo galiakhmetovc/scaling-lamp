@@ -80,7 +80,7 @@ pub struct ProviderLoopState {
     pub continuation_messages: Vec<ProviderContinuationMessage>,
     pub pending_tool_outputs: Vec<ProviderToolOutput>,
     pub seen_tool_signatures: Vec<String>,
-    pub pending_approval: Option<PendingToolApproval>,
+    pub pending_approval: Option<PendingProviderApproval>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -89,6 +89,20 @@ pub struct PendingToolApproval {
     pub provider_tool_call_id: String,
     pub tool_name: String,
     pub tool_arguments: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PendingLoopResetApproval {
+    pub approval_id: String,
+    pub exhausted_rounds: usize,
+    pub max_rounds: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum PendingProviderApproval {
+    Tool(PendingToolApproval),
+    LoopReset(PendingLoopResetApproval),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -244,6 +258,25 @@ impl PendingToolApproval {
             provider_tool_call_id: provider_tool_call_id.into(),
             tool_name: tool_name.into(),
             tool_arguments: tool_arguments.into(),
+        }
+    }
+}
+
+impl PendingLoopResetApproval {
+    pub fn new(approval_id: impl Into<String>, exhausted_rounds: usize, max_rounds: usize) -> Self {
+        Self {
+            approval_id: approval_id.into(),
+            exhausted_rounds,
+            max_rounds,
+        }
+    }
+}
+
+impl PendingProviderApproval {
+    pub fn approval_id(&self) -> &str {
+        match self {
+            Self::Tool(approval) => approval.approval_id.as_str(),
+            Self::LoopReset(approval) => approval.approval_id.as_str(),
         }
     }
 }

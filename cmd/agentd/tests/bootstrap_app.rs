@@ -23,6 +23,7 @@ use agent_runtime::verification::{CheckOutcome, EvidenceBundle};
 use agent_runtime::workspace::WorkspaceRef;
 use agentd::bootstrap::{BootstrapError, SessionPreferencesPatch, build_from_config};
 use agentd::execution;
+use agentd::execution::ExecutionError;
 use std::fs;
 use std::io::{BufRead, BufReader, Cursor, Read, Write};
 use std::net::TcpListener;
@@ -1837,6 +1838,154 @@ fn execute_chat_turn_recovers_from_invalid_tool_arguments_and_retries() {
     let normalized_third = third_request.to_ascii_lowercase();
     assert!(normalized_third.contains("\"previous_response_id\":\"resp_good_tool_call\""));
     assert!(normalized_third.contains("\"type\":\"function_call_output\""));
+}
+
+#[test]
+fn execute_chat_turn_requests_operator_reset_when_tool_round_budget_is_exhausted() {
+    let first_provider_response = r#"{
+                "id":"resp_tool_limit_round_1",
+                "model":"gpt-5.4",
+                "output":[
+                    {
+                        "id":"fc_limit_1",
+                        "type":"function_call",
+                        "status":"completed",
+                        "call_id":"call_limit_list",
+                        "name":"fs_list",
+                        "arguments":"{\"path\":\".\",\"recursive\":false}"
+                    }
+                ],
+                "usage":{"input_tokens":12,"output_tokens":4,"total_tokens":16}
+            }"#
+    .to_string();
+    let resumed_provider_response = r#"{
+                "id":"resp_tool_limit_final",
+                "model":"gpt-5.4",
+                "output":[
+                    {
+                        "id":"msg_limit_1",
+                        "type":"message",
+                        "status":"completed",
+                        "role":"assistant",
+                        "content":[
+                            {
+                                "type":"output_text",
+                                "text":"Продолжил работу после подтверждённого сброса лимита tool rounds."
+                            }
+                        ]
+                    }
+                ],
+                "usage":{"input_tokens":18,"output_tokens":7,"total_tokens":25}
+            }"#
+    .to_string();
+    let (provider_api_base, provider_requests, provider_handle) =
+        spawn_json_server_sequence(vec![first_provider_response, resumed_provider_response]);
+    let temp = tempfile::tempdir().expect("tempdir");
+    let app = build_from_config(AppConfig {
+        data_dir: temp.path().join("state-root"),
+        provider: ConfiguredProvider {
+            kind: ProviderKind::OpenAiResponses,
+            api_base: Some(format!("{provider_api_base}/v1")),
+            api_key: Some("test-key".to_string()),
+            default_model: Some("gpt-5.4".to_string()),
+            max_tool_rounds: Some(1),
+            ..ConfiguredProvider::default()
+        },
+        ..AppConfig::default()
+    })
+    .expect("build app");
+    let store = PersistenceStore::open(&app.persistence).expect("open store");
+
+    store
+        .put_session(&SessionRecord {
+            id: "session-chat-tool-limit".to_string(),
+            title: "Chat tool limit session".to_string(),
+            prompt_override: Some("Use tools when useful.".to_string()),
+            settings_json: serde_json::to_string(&SessionSettings::default())
+                .expect("serialize settings"),
+            active_mission_id: None,
+            parent_session_id: None,
+            parent_job_id: None,
+            delegation_label: None,
+            created_at: 1,
+            updated_at: 1,
+        })
+        .expect("put session");
+
+    let error = app
+        .execute_chat_turn("session-chat-tool-limit", "Inspect the workspace", 10)
+        .expect_err("tool loop should request operator reset");
+    let BootstrapError::Execution(ExecutionError::ApprovalRequired {
+        approval_id,
+        reason,
+        ..
+    }) = error
+    else {
+        panic!("expected approval-required error");
+    };
+    assert!(
+        reason.contains("tool-calling limit"),
+        "unexpected approval reason: {reason}"
+    );
+
+    let pending = app
+        .pending_approvals("session-chat-tool-limit")
+        .expect("pending approvals");
+    assert_eq!(pending.len(), 1);
+    assert_eq!(pending[0].approval_id, approval_id);
+
+    let waiting_run = RunSnapshot::try_from(
+        store
+            .get_run("run-chat-session-chat-tool-limit-10")
+            .expect("get run")
+            .expect("run exists"),
+    )
+    .expect("run snapshot");
+    assert_eq!(waiting_run.status, RunStatus::WaitingApproval);
+
+    let approved = app
+        .approve_run("run-chat-session-chat-tool-limit-10", &approval_id, 20)
+        .expect("approve limit reset");
+    assert_eq!(approved.run_status, RunStatus::Completed);
+    assert_eq!(
+        approved.response_id.as_deref(),
+        Some("resp_tool_limit_final")
+    );
+    assert_eq!(
+        approved.output_text.as_deref(),
+        Some("Продолжил работу после подтверждённого сброса лимита tool rounds.")
+    );
+
+    let first_request = provider_requests.recv().expect("first provider request");
+    let second_request = provider_requests.recv().expect("second provider request");
+    provider_handle.join().expect("join provider server");
+
+    let normalized_first = first_request.to_ascii_lowercase();
+    assert!(normalized_first.contains("\"name\":\"fs_list\""));
+
+    let normalized_second = second_request.to_ascii_lowercase();
+    assert!(normalized_second.contains("\"previous_response_id\":\"resp_tool_limit_round_1\""));
+    assert!(normalized_second.contains("\"type\":\"function_call_output\""));
+
+    let completed_run = RunSnapshot::try_from(
+        store
+            .get_run("run-chat-session-chat-tool-limit-10")
+            .expect("get completed run")
+            .expect("completed run exists"),
+    )
+    .expect("completed run snapshot");
+    assert_eq!(completed_run.status, RunStatus::Completed);
+    assert!(completed_run.pending_approvals.is_empty());
+
+    let transcript = app
+        .session_transcript("session-chat-tool-limit")
+        .expect("transcript");
+    assert_eq!(transcript.entries.len(), 2);
+    assert_eq!(transcript.entries[0].content, "Inspect the workspace");
+    assert_eq!(
+        transcript.entries[1].content,
+        "Продолжил работу после подтверждённого сброса лимита tool rounds."
+    );
 }
 
 #[test]

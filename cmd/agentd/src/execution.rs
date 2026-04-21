@@ -94,6 +94,10 @@ pub struct BackgroundWorkerTickReport {
 pub enum ChatExecutionEvent {
     ReasoningDelta(String),
     AssistantTextDelta(String),
+    ProviderLoopProgress {
+        current_round: usize,
+        max_rounds: usize,
+    },
     ToolStatus {
         tool_name: String,
         summary: String,

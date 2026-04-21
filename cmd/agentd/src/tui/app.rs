@@ -53,6 +53,7 @@ pub struct TuiAppState {
     timeline: Timeline,
     composer_queue: ComposerQueue,
     active_run: Option<ActiveRunHandle>,
+    provider_loop_progress: Option<(usize, usize)>,
     should_exit: bool,
 }
 
@@ -88,6 +89,7 @@ impl TuiAppState {
             timeline: Timeline::default(),
             composer_queue: ComposerQueue::default(),
             active_run: None,
+            provider_loop_progress: None,
             should_exit: false,
         }
     }
@@ -156,6 +158,7 @@ impl TuiAppState {
         self.command_cycle_index = None;
         self.dialog_state = None;
         self.active_screen = TuiScreen::Chat;
+        self.provider_loop_progress = None;
     }
 
     pub fn replace_current_summary(&mut self, summary: SessionSummary) {
@@ -321,6 +324,13 @@ impl TuiAppState {
         self.command_cycle_seed = None;
     }
 
+    pub fn insert_input_text(&mut self, value: &str) {
+        self.input_buffer.insert_str(self.input_cursor, value);
+        self.input_cursor += value.len();
+        self.command_cycle_index = None;
+        self.command_cycle_seed = None;
+    }
+
     pub fn pop_input_char(&mut self) {
         if self.input_cursor == 0 {
             return;
@@ -444,10 +454,23 @@ impl TuiAppState {
 
     pub fn set_active_run(&mut self, active_run: ActiveRunHandle) {
         self.active_run = Some(active_run);
+        self.provider_loop_progress = None;
     }
 
     pub fn take_active_run(&mut self) -> Option<ActiveRunHandle> {
         self.active_run.take()
+    }
+
+    pub fn provider_loop_progress(&self) -> Option<(usize, usize)> {
+        self.provider_loop_progress
+    }
+
+    pub fn set_provider_loop_progress(&mut self, current_round: usize, max_rounds: usize) {
+        self.provider_loop_progress = Some((current_round, max_rounds));
+    }
+
+    pub fn clear_provider_loop_progress(&mut self) {
+        self.provider_loop_progress = None;
     }
 
     pub fn queue_draft(&mut self, content: String, queued_at: i64, mode: QueuedDraftMode) {

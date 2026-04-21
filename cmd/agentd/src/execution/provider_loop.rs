@@ -13,7 +13,10 @@ use agent_runtime::provider::{
     ProviderStreamEvent, ProviderStreamMode, ProviderToolCall, ProviderToolDefinition,
     ProviderToolOutput,
 };
-use agent_runtime::run::{ApprovalRequest, PendingToolApproval, ProviderLoopState};
+use agent_runtime::run::{
+    ApprovalRequest, PendingLoopResetApproval, PendingProviderApproval, PendingToolApproval,
+    ProviderLoopState,
+};
 use agent_runtime::session::{MessageRole, TranscriptEntry};
 use agent_runtime::skills::{resolve_session_skill_status, scan_skill_catalog};
 use agent_runtime::tool::{
@@ -222,11 +225,24 @@ impl ProviderLoopCursor {
             continuation_messages: self.continuation_messages.clone(),
             pending_tool_outputs: self.pending_tool_outputs.clone(),
             seen_tool_signatures: self.seen_tool_signatures.keys().cloned().collect(),
-            pending_approval: Some(PendingToolApproval::new(
+            pending_approval: Some(PendingProviderApproval::Tool(PendingToolApproval::new(
                 approval_id.to_string(),
                 tool_call.call_id.clone(),
                 parsed.name().as_str().to_string(),
                 tool_call.arguments.clone(),
+            ))),
+        }
+    }
+
+    fn loop_reset_approval_state(&self, approval_id: &str) -> ProviderLoopState {
+        ProviderLoopState {
+            next_round: self.round,
+            previous_response_id: self.previous_response_id.clone(),
+            continuation_messages: self.continuation_messages.clone(),
+            pending_tool_outputs: self.pending_tool_outputs.clone(),
+            seen_tool_signatures: self.seen_tool_signatures.keys().cloned().collect(),
+            pending_approval: Some(PendingProviderApproval::LoopReset(
+                PendingLoopResetApproval::new(approval_id.to_string(), self.round, self.max_rounds),
             )),
         }
     }
@@ -239,15 +255,6 @@ impl ProviderLoopCursor {
             self.pending_tool_outputs.clear();
         }
         self.round += 1;
-    }
-
-    fn exhausted_rounds_error(&self) -> ExecutionError {
-        ExecutionError::ProviderLoop {
-            reason: format!(
-                "provider exceeded {} tool-calling rounds without producing a final answer",
-                self.max_rounds
-            ),
-        }
     }
 }
 
@@ -1191,7 +1198,33 @@ impl ExecutionService {
             self.config.provider_max_tool_rounds,
         );
 
-        while cursor.has_round_budget() {
+        loop {
+            if !cursor.has_round_budget() {
+                let approval_id = format!(
+                    "approval-{}-provider-loop-r{}-{}",
+                    run.snapshot().id,
+                    cursor.round,
+                    run.snapshot().recent_steps.len()
+                );
+                let reason = format!(
+                    "provider reached the tool-calling limit ({}/{}) before producing a final answer; approve to reset the tool round budget and continue",
+                    cursor.round, cursor.max_rounds
+                );
+                let approval_state = cursor.loop_reset_approval_state(&approval_id);
+                run.wait_for_approval(
+                    ApprovalRequest::new(approval_id.clone(), "provider-loop", &reason, now),
+                    now,
+                )
+                .map_err(ExecutionError::RunTransition)?;
+                run.set_provider_loop_state(approval_state, now)
+                    .map_err(ExecutionError::RunTransition)?;
+                self.persist_run(store, run)?;
+                return Err(ExecutionError::ApprovalRequired {
+                    tool: "provider_loop".to_string(),
+                    approval_id,
+                    reason,
+                });
+            }
             let request = cursor.build_request(
                 &prompt_messages.messages,
                 model.as_deref(),
@@ -1208,6 +1241,13 @@ impl ExecutionService {
                 return Ok(response);
             }
 
+            Self::emit_event(
+                observer,
+                ChatExecutionEvent::ProviderLoopProgress {
+                    current_round: cursor.round.saturating_add(1),
+                    max_rounds: cursor.max_rounds,
+                },
+            );
             cursor.remember_tool_signature(&response)?;
             cursor.note_assistant_tool_calls(&response);
             cursor.begin_tool_round();
@@ -1339,8 +1379,6 @@ impl ExecutionService {
             cursor.advance_after_response(&response);
             self.persist_run(store, run)?;
         }
-
-        Err(cursor.exhausted_rounds_error())
     }
 }
 

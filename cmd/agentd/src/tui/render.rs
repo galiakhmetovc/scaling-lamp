@@ -64,12 +64,13 @@ fn render_session_screen(frame: &mut Frame<'_>, state: &TuiAppState) {
 fn render_chat_screen(frame: &mut Frame<'_>, state: &TuiAppState) {
     let area = frame.area();
     let now = unix_timestamp();
+    let composer_height = composer_height(state);
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
             Constraint::Length(4),
             Constraint::Min(1),
-            Constraint::Length(4),
+            Constraint::Length(composer_height),
         ])
         .split(area);
 
@@ -93,8 +94,9 @@ fn render_chat_screen(frame: &mut Frame<'_>, state: &TuiAppState) {
                 summary.queued_background_job_count,
             )),
             Line::from(format!(
-                "run={} | queued={} (asap={} deferred={})",
+                "run={}{} | queued={} (asap={} deferred={})",
                 describe_run_status(state, now),
+                format_provider_loop_progress(state),
                 state.queued_draft_count(),
                 state.queued_priority_count(),
                 state.queued_deferred_count()
@@ -128,13 +130,11 @@ fn render_chat_screen(frame: &mut Frame<'_>, state: &TuiAppState) {
         .wrap(Wrap { trim: false })
         .scroll((timeline_scroll_top, 0));
 
-    let composer_lines = vec![
-        render_composer_line(state),
-        Line::from(format!(
-            "Enter=send after tool-step | Tab=queue after full run | Shift+Tab=cycle /commands | {}",
-            describe_run_status(state, now)
-        )),
-    ];
+    let mut composer_lines = render_composer_lines(state);
+    composer_lines.push(Line::from(format!(
+        "Enter=send after tool-step | Tab=queue after full run | Shift+Tab=cycle /commands | {}",
+        describe_run_status(state, now)
+    )));
     let input = Paragraph::new(composer_lines)
         .block(Block::default().title("Composer").borders(Borders::ALL));
 
@@ -143,29 +143,56 @@ fn render_chat_screen(frame: &mut Frame<'_>, state: &TuiAppState) {
     frame.render_widget(input, chunks[2]);
 }
 
-fn render_composer_line(state: &TuiAppState) -> Line<'static> {
+fn render_composer_lines(state: &TuiAppState) -> Vec<Line<'static>> {
     let cursor = state.input_cursor().min(state.input_buffer().len());
     let (before, rest) = state.input_buffer().split_at(cursor);
     let mut rest_chars = rest.chars();
     let cursor_char = rest_chars.next();
     let after = rest_chars.as_str();
+    let mut lines = Vec::new();
+    let mut spans = vec![Span::styled("> ", Style::default().fg(Color::Cyan))];
 
-    let mut spans = vec![
-        Span::styled("> ", Style::default().fg(Color::Cyan)),
-        Span::raw(before.to_string()),
-    ];
+    let push_segment = |segments: &mut Vec<Line<'static>>,
+                        current_spans: &mut Vec<Span<'static>>,
+                        text: &str,
+                        style: Option<Style>| {
+        let mut parts = text.split('\n').peekable();
+        while let Some(part) = parts.next() {
+            if !part.is_empty() {
+                let span = match style {
+                    Some(style) => Span::styled(part.to_string(), style),
+                    None => Span::raw(part.to_string()),
+                };
+                current_spans.push(span);
+            }
+            if parts.peek().is_some() {
+                segments.push(Line::from(std::mem::take(current_spans)));
+                current_spans.push(Span::styled("  ", Style::default().fg(Color::Cyan)));
+            }
+        }
+    };
+
+    push_segment(&mut lines, &mut spans, before, None);
     match cursor_char {
-        Some(current) => spans.push(Span::styled(
-            current.to_string(),
-            Style::default()
-                .fg(Color::Black)
-                .bg(Color::Yellow)
-                .add_modifier(Modifier::BOLD),
-        )),
+        Some(current) => {
+            let highlighted = current.to_string();
+            push_segment(
+                &mut lines,
+                &mut spans,
+                &highlighted,
+                Some(
+                    Style::default()
+                        .fg(Color::Black)
+                        .bg(Color::Yellow)
+                        .add_modifier(Modifier::BOLD),
+                ),
+            );
+        }
         None => spans.push(Span::styled("█", Style::default().fg(Color::Yellow))),
     }
-    spans.push(Span::raw(after.to_string()));
-    Line::from(spans)
+    push_segment(&mut lines, &mut spans, after, None);
+    lines.push(Line::from(spans));
+    lines
 }
 
 fn render_timeline_entry(entry: &TimelineEntry, now: i64) -> Vec<Line<'static>> {
@@ -381,6 +408,23 @@ fn describe_run_status(state: &TuiAppState, now: i64) -> String {
         return "waiting_approval".to_string();
     }
     "idle".to_string()
+}
+
+fn format_provider_loop_progress(state: &TuiAppState) -> String {
+    state
+        .provider_loop_progress()
+        .map(|(current_round, max_rounds)| format!(" | tools={current_round}/{max_rounds}"))
+        .unwrap_or_default()
+}
+
+fn composer_height(state: &TuiAppState) -> u16 {
+    let input_lines = state
+        .input_buffer()
+        .chars()
+        .filter(|ch| *ch == '\n')
+        .count()
+        + 1;
+    (input_lines as u16 + 2).clamp(4, 8)
 }
 
 fn render_dialog(frame: &mut Frame<'_>, dialog: DialogState) {

@@ -192,6 +192,7 @@ impl<'a, W: Write> ReplRenderer<'a, W> {
         match event {
             ChatExecutionEvent::ReasoningDelta(delta) => self.write_reasoning_delta(&delta),
             ChatExecutionEvent::AssistantTextDelta(delta) => self.write_assistant_delta(&delta),
+            ChatExecutionEvent::ProviderLoopProgress { .. } => Ok(()),
             ChatExecutionEvent::ToolStatus {
                 tool_name,
                 summary,

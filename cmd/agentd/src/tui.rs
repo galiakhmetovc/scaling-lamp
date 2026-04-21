@@ -12,7 +12,9 @@ use crate::execution::ChatExecutionEvent;
 use crate::http::client::{DaemonConnectOptions, connect_or_autospawn_detailed};
 use app::{DialogState, TuiAppState};
 use backend::TuiBackend;
-use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind};
+use crossterm::event::{
+    self, DisableBracketedPaste, EnableBracketedPaste, Event, KeyCode, KeyEvent, KeyEventKind,
+};
 use crossterm::execute;
 use crossterm::terminal::{
     EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
@@ -35,7 +37,8 @@ impl TerminalGuard {
     fn new() -> Result<Self, BootstrapError> {
         enable_raw_mode().map_err(BootstrapError::Stream)?;
         let mut stdout = io::stdout();
-        execute!(stdout, EnterAlternateScreen).map_err(BootstrapError::Stream)?;
+        execute!(stdout, EnterAlternateScreen, EnableBracketedPaste)
+            .map_err(BootstrapError::Stream)?;
         let backend = CrosstermBackend::new(stdout);
         let terminal = Terminal::new(backend).map_err(BootstrapError::Stream)?;
         Ok(Self { terminal })
@@ -49,7 +52,11 @@ impl TerminalGuard {
 impl Drop for TerminalGuard {
     fn drop(&mut self) {
         let _ = disable_raw_mode();
-        let _ = execute!(self.terminal.backend_mut(), LeaveAlternateScreen);
+        let _ = execute!(
+            self.terminal.backend_mut(),
+            DisableBracketedPaste,
+            LeaveAlternateScreen
+        );
         let _ = self.terminal.show_cursor();
     }
 }
@@ -98,28 +105,48 @@ where
             continue;
         }
 
-        let Event::Key(key) = event::read().map_err(BootstrapError::Stream)? else {
-            continue;
-        };
-
-        if !should_dispatch_key_event(key) {
-            continue;
-        }
-
-        let action = match state.active_screen() {
-            TuiScreen::Sessions => screens::session::handle_key(&mut state, key)?,
-            TuiScreen::Chat => screens::chat::handle_key(&mut state, key)?,
-        };
-
-        if key.code == KeyCode::Char('q')
-            && key.modifiers.is_empty()
-            && state.dialog_state().is_none()
-        {
-            state.request_exit();
+        let event = event::read().map_err(BootstrapError::Stream)?;
+        let action = dispatch_terminal_event(&mut state, event)?;
+        if state.should_exit() {
             continue;
         }
 
         dispatch_action(&backend, &mut state, action, &mut redraw)?;
+    }
+}
+
+fn dispatch_terminal_event(
+    state: &mut TuiAppState,
+    event: Event,
+) -> Result<TuiAction, BootstrapError> {
+    match event {
+        Event::Key(key) => {
+            if !should_dispatch_key_event(key) {
+                return Ok(TuiAction::None);
+            }
+            let action = match state.active_screen() {
+                TuiScreen::Sessions => screens::session::handle_key(state, key)?,
+                TuiScreen::Chat => screens::chat::handle_key(state, key)?,
+            };
+
+            if key.code == KeyCode::Char('q')
+                && key.modifiers.is_empty()
+                && state.dialog_state().is_none()
+            {
+                state.request_exit();
+                return Ok(TuiAction::None);
+            }
+
+            Ok(action)
+        }
+        Event::Paste(text) => {
+            if !text.is_empty() {
+                let normalized = text.replace("\r\n", "\n").replace('\r', "\n");
+                state.insert_input_text(normalized.as_str());
+            }
+            Ok(TuiAction::None)
+        }
+        _ => Ok(TuiAction::None),
     }
 }
 
@@ -449,6 +476,12 @@ where
                     ChatExecutionEvent::AssistantTextDelta(delta) => {
                         state.timeline_mut().push_assistant_delta(&delta, at);
                     }
+                    ChatExecutionEvent::ProviderLoopProgress {
+                        current_round,
+                        max_rounds,
+                    } => {
+                        state.set_provider_loop_progress(current_round, max_rounds);
+                    }
                     ChatExecutionEvent::ToolStatus {
                         tool_name,
                         summary,
@@ -540,6 +573,7 @@ where
 {
     match outcome {
         WorkerOutcome::ChatCompleted(report) => {
+            state.clear_provider_loop_progress();
             if !report.output_text.is_empty() {
                 state
                     .timeline_mut()
@@ -548,6 +582,7 @@ where
             state.timeline_mut().finish_turn();
         }
         WorkerOutcome::ApprovalCompleted(report) => {
+            state.clear_provider_loop_progress();
             if let Some(output_text) = report.output_text
                 && !output_text.is_empty()
             {
@@ -567,6 +602,7 @@ where
             state.timeline_mut().finish_turn();
         }
         WorkerOutcome::InterruptedByQueuedInput => {
+            state.clear_provider_loop_progress();
             state.timeline_mut().push_system(
                 "current response interrupted by queued input",
                 unix_timestamp()?,
@@ -574,6 +610,7 @@ where
             state.timeline_mut().finish_turn();
         }
         WorkerOutcome::Failed(reason) => {
+            state.clear_provider_loop_progress();
             state
                 .timeline_mut()
                 .push_system(&format!("chat failed: {reason}"), unix_timestamp()?);
@@ -722,7 +759,7 @@ mod tests {
     use crate::execution::{ApprovalContinuationReport, ChatTurnExecutionReport};
     use crate::tui::backend::TuiBackend;
     use crate::tui::timeline::TimelineEntryKind;
-    use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyEventState, KeyModifiers};
+    use crossterm::event::{Event, KeyCode, KeyEvent, KeyEventKind, KeyEventState, KeyModifiers};
     use std::sync::atomic::AtomicBool;
 
     #[derive(Clone)]
@@ -879,6 +916,39 @@ mod tests {
 
         assert!(should_dispatch_key_event(press));
         assert!(should_dispatch_key_event(repeat));
+    }
+
+    #[test]
+    fn terminal_paste_inserts_multiline_text_without_submitting_or_queueing() {
+        let mut state = TuiAppState::new(
+            vec![SessionSummary {
+                id: "session-a".to_string(),
+                title: "Session A".to_string(),
+                model: Some("glm-5-turbo".to_string()),
+                reasoning_visible: true,
+                think_level: None,
+                compactifications: 0,
+                context_tokens: 0,
+                has_pending_approval: false,
+                last_message_preview: None,
+                message_count: 0,
+                background_job_count: 0,
+                running_background_job_count: 0,
+                queued_background_job_count: 0,
+                created_at: 1,
+                updated_at: 2,
+            }],
+            Some("session-a".to_string()),
+        );
+        let action = dispatch_terminal_event(
+            &mut state,
+            Event::Paste("first line\nsecond line\nthird line".to_string()),
+        )
+        .expect("paste event");
+
+        assert_eq!(action, TuiAction::None);
+        assert_eq!(state.input_buffer(), "first line\nsecond line\nthird line");
+        assert_eq!(state.input_cursor(), state.input_buffer().len());
     }
 
     #[test]
