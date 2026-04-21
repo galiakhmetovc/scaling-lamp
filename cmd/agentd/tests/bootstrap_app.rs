@@ -1706,6 +1706,140 @@ fn execute_chat_turn_can_finish_after_an_allowed_web_tool_call() {
 }
 
 #[test]
+fn execute_chat_turn_recovers_from_invalid_tool_arguments_and_retries() {
+    let first_provider_response = r#"{
+                "id":"resp_bad_tool_call",
+                "model":"gpt-5.4",
+                "output":[
+                    {
+                        "id":"fc_bad_1",
+                        "type":"function_call",
+                        "status":"completed",
+                        "call_id":"call_find_bad",
+                        "name":"fs_find_in_files",
+                        "arguments":"{\"query\":}"
+                    }
+                ],
+                "usage":{"input_tokens":12,"output_tokens":4,"total_tokens":16}
+            }"#
+    .to_string();
+    let second_provider_response = r#"{
+                "id":"resp_good_tool_call",
+                "model":"gpt-5.4",
+                "output":[
+                    {
+                        "id":"fc_good_1",
+                        "type":"function_call",
+                        "status":"completed",
+                        "call_id":"call_find_good",
+                        "name":"fs_find_in_files",
+                        "arguments":"{\"query\":\"timeweb\",\"limit\":3}"
+                    }
+                ],
+                "usage":{"input_tokens":20,"output_tokens":6,"total_tokens":26}
+            }"#
+    .to_string();
+    let final_provider_response = r#"{
+                "id":"resp_tool_retry_final",
+                "model":"gpt-5.4",
+                "output":[
+                    {
+                        "id":"msg_retry_1",
+                        "type":"message",
+                        "status":"completed",
+                        "role":"assistant",
+                        "content":[
+                            {
+                                "type":"output_text",
+                                "text":"Проверил workspace и обработал ошибку аргументов."
+                            }
+                        ]
+                    }
+                ],
+                "usage":{"input_tokens":30,"output_tokens":8,"total_tokens":38}
+            }"#
+    .to_string();
+    let (provider_api_base, provider_requests, provider_handle) = spawn_json_server_sequence(vec![
+        first_provider_response,
+        second_provider_response,
+        final_provider_response,
+    ]);
+    let temp = tempfile::tempdir().expect("tempdir");
+    let workspace_root = temp.path().join("workspace");
+    fs::create_dir_all(workspace_root.join("skills/timeweb")).expect("create workspace dirs");
+    fs::write(
+        workspace_root.join("skills/timeweb/SKILL.md"),
+        "# Timeweb\n\nInstalled skill.\n",
+    )
+    .expect("write skill file");
+    let app = build_from_config(AppConfig {
+        data_dir: temp.path().join("state-root"),
+        daemon: Default::default(),
+        provider: ConfiguredProvider {
+            kind: ProviderKind::OpenAiResponses,
+            api_base: Some(format!("{provider_api_base}/v1")),
+            api_key: Some("test-key".to_string()),
+            default_model: Some("gpt-5.4".to_string()),
+            ..ConfiguredProvider::default()
+        },
+        ..AppConfig::default()
+    })
+    .expect("build app");
+    let store = PersistenceStore::open(&app.persistence).expect("open store");
+
+    store
+        .put_session(&SessionRecord {
+            id: "session-invalid-tool".to_string(),
+            title: "Tool retry session".to_string(),
+            prompt_override: Some("Use tools when useful.".to_string()),
+            settings_json: serde_json::to_string(&SessionSettings::default())
+                .expect("serialize settings"),
+            active_mission_id: None,
+            parent_session_id: None,
+            parent_job_id: None,
+            delegation_label: None,
+            created_at: 1,
+            updated_at: 1,
+        })
+        .expect("put session");
+
+    let previous_dir = std::env::current_dir().expect("current dir");
+    std::env::set_current_dir(&workspace_root).expect("switch to workspace");
+    let report = app
+        .execute_chat_turn(
+            "session-invalid-tool",
+            "Прочитай скилл timeweb в workspace",
+            10,
+        )
+        .expect("execute chat turn");
+    std::env::set_current_dir(previous_dir).expect("restore current dir");
+
+    let first_request = provider_requests.recv().expect("first provider request");
+    let second_request = provider_requests.recv().expect("second provider request");
+    let third_request = provider_requests.recv().expect("third provider request");
+    provider_handle.join().expect("join provider server");
+
+    assert_eq!(report.run_id, "run-chat-session-invalid-tool-10");
+    assert_eq!(report.response_id, "resp_tool_retry_final");
+    assert_eq!(
+        report.output_text,
+        "Проверил workspace и обработал ошибку аргументов."
+    );
+
+    let normalized_second = first_request.to_ascii_lowercase();
+    assert!(normalized_second.contains("\"name\":\"fs_find_in_files\""));
+
+    let normalized_retry = second_request.to_ascii_lowercase();
+    assert!(normalized_retry.contains("\"type\":\"function_call_output\""));
+    assert!(normalized_retry.contains("invalid tool call"));
+    assert!(normalized_retry.contains("fs_find_in_files"));
+
+    let normalized_third = third_request.to_ascii_lowercase();
+    assert!(normalized_third.contains("\"previous_response_id\":\"resp_good_tool_call\""));
+    assert!(normalized_third.contains("\"type\":\"function_call_output\""));
+}
+
+#[test]
 fn execute_chat_turn_can_finish_after_an_allowed_web_tool_call_with_zai() {
     let (web_base, web_requests, web_handle) = spawn_text_server("/doc", "local doc");
     let first_provider_response = format!(

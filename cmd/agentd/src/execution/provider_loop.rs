@@ -247,6 +247,15 @@ impl ProviderLoopCursor {
 }
 
 impl ExecutionService {
+    fn invalid_provider_tool_output(tool_name: &str, reason: &str) -> String {
+        serde_json::json!({
+            "tool": tool_name,
+            "error": format!("invalid tool call: {reason}"),
+            "retryable": true,
+        })
+        .to_string()
+    }
+
     fn automatic_provider_tools(
         &self,
         provider: &dyn ProviderDriver,
@@ -1194,7 +1203,31 @@ impl ExecutionService {
             cursor.note_assistant_tool_calls(&response);
             cursor.begin_tool_round();
             for tool_call in &response.tool_calls {
-                let (parsed, definition) = self.resolve_provider_tool_call(&catalog, tool_call)?;
+                let (parsed, definition) =
+                    match self.resolve_provider_tool_call(&catalog, tool_call) {
+                        Ok(resolved) => resolved,
+                        Err(ExecutionError::ToolCallParse { reason, .. }) => {
+                            Self::emit_event(
+                                observer,
+                                ChatExecutionEvent::ToolStatus {
+                                    tool_name: tool_call.name.clone(),
+                                    summary: format!("invalid arguments: {reason}"),
+                                    status: ToolExecutionStatus::Failed,
+                                },
+                            );
+                            run.record_tool_completion(
+                                format!("{} invalid arguments: {reason}", tool_call.name),
+                                now,
+                            )
+                            .map_err(ExecutionError::RunTransition)?;
+                            cursor.record_tool_output(
+                                &tool_call.call_id,
+                                Self::invalid_provider_tool_output(&tool_call.name, &reason),
+                            );
+                            continue;
+                        }
+                        Err(other) => return Err(other),
+                    };
                 Self::emit_event(
                     observer,
                     ChatExecutionEvent::ToolStatus {
