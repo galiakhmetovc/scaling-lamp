@@ -240,6 +240,13 @@ pub(super) fn validate_schema(connection: &Connection) -> Result<(), StoreError>
         "sessions",
         "CASCADE",
     )?;
+    validate_foreign_key(
+        connection,
+        "session_inbox_events",
+        "job_id",
+        "jobs",
+        "SET NULL",
+    )?;
     validate_foreign_key(connection, "artifacts", "session_id", "sessions", "CASCADE")?;
     validate_foreign_key(connection, "jobs", "session_id", "sessions", "CASCADE")?;
     validate_foreign_key(connection, "jobs", "mission_id", "missions", "SET NULL")?;
@@ -336,6 +343,7 @@ pub(super) fn migrate_schema(connection: &Connection) -> Result<(), StoreError> 
         "TEXT NOT NULL DEFAULT '[]'",
     )?;
     migrate_jobs_table(connection)?;
+    migrate_session_inbox_events_table(connection)?;
     Ok(())
 }
 
@@ -484,6 +492,76 @@ pub(super) fn migrate_jobs_table(connection: &Connection) -> Result<(), StoreErr
          COMMIT;
          PRAGMA foreign_keys = ON;"
     ))?;
+
+    Ok(())
+}
+
+pub(super) fn migrate_session_inbox_events_table(
+    connection: &Connection,
+) -> Result<(), StoreError> {
+    if !table_exists(connection, "session_inbox_events")? {
+        return Ok(());
+    }
+
+    if table_has_column(connection, "session_inbox_events", "session_id")?
+        && table_has_column(connection, "session_inbox_events", "job_id")?
+        && table_has_column(connection, "session_inbox_events", "kind")?
+        && table_has_column(connection, "session_inbox_events", "payload_json")?
+        && table_has_column(connection, "session_inbox_events", "status")?
+        && table_has_column(connection, "session_inbox_events", "created_at")?
+        && table_has_column(connection, "session_inbox_events", "available_at")?
+        && table_has_column(connection, "session_inbox_events", "claimed_at")?
+        && table_has_column(connection, "session_inbox_events", "processed_at")?
+        && table_has_column(connection, "session_inbox_events", "error")?
+        && foreign_key_exists(
+            connection,
+            "session_inbox_events",
+            "session_id",
+            "sessions",
+            "CASCADE",
+        )?
+        && foreign_key_exists(
+            connection,
+            "session_inbox_events",
+            "job_id",
+            "jobs",
+            "SET NULL",
+        )?
+    {
+        return Ok(());
+    }
+
+    connection.execute_batch(
+        "PRAGMA foreign_keys = OFF;
+         BEGIN IMMEDIATE;
+         ALTER TABLE session_inbox_events RENAME TO session_inbox_events_legacy;
+         CREATE TABLE session_inbox_events (
+             id TEXT PRIMARY KEY,
+             session_id TEXT NOT NULL,
+             job_id TEXT,
+             kind TEXT NOT NULL,
+             payload_json TEXT NOT NULL,
+             status TEXT NOT NULL,
+             created_at INTEGER NOT NULL,
+             available_at INTEGER NOT NULL,
+             claimed_at INTEGER,
+             processed_at INTEGER,
+             error TEXT,
+             FOREIGN KEY(session_id) REFERENCES sessions(id) ON DELETE CASCADE,
+             FOREIGN KEY(job_id) REFERENCES jobs(id) ON DELETE SET NULL
+         );
+         INSERT INTO session_inbox_events (
+             id, session_id, job_id, kind, payload_json, status, created_at, available_at,
+             claimed_at, processed_at, error
+         )
+         SELECT
+             id, session_id, job_id, kind, payload_json, status, created_at, available_at,
+             claimed_at, processed_at, error
+         FROM session_inbox_events_legacy;
+         DROP TABLE session_inbox_events_legacy;
+         COMMIT;
+         PRAGMA foreign_keys = ON;",
+    )?;
 
     Ok(())
 }

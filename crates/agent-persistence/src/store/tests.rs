@@ -502,6 +502,21 @@ fn open_migrates_legacy_mission_and_job_schema() {
                  FOREIGN KEY(run_id) REFERENCES runs(id) ON DELETE CASCADE,
                  FOREIGN KEY(parent_job_id) REFERENCES jobs(id) ON DELETE SET NULL
              );
+             CREATE TABLE session_inbox_events (
+                 id TEXT PRIMARY KEY,
+                 session_id TEXT NOT NULL,
+                 job_id TEXT,
+                 kind TEXT NOT NULL,
+                 payload_json TEXT NOT NULL,
+                 status TEXT NOT NULL,
+                 created_at INTEGER NOT NULL,
+                 available_at INTEGER NOT NULL,
+                 claimed_at INTEGER,
+                 processed_at INTEGER,
+                 error TEXT,
+                 FOREIGN KEY(session_id) REFERENCES sessions(id) ON DELETE CASCADE,
+                 FOREIGN KEY(job_id) REFERENCES jobs(id) ON DELETE SET NULL
+             );
              INSERT INTO sessions (
                  id, title, prompt_override, settings_json, active_mission_id, created_at, updated_at
              ) VALUES (
@@ -531,6 +546,22 @@ fn open_migrates_legacy_mission_and_job_schema() {
                  NULL,
                  4,
                  5,
+                 NULL,
+                 NULL
+             );
+             INSERT INTO session_inbox_events (
+                 id, session_id, job_id, kind, payload_json, status, created_at, available_at,
+                 claimed_at, processed_at, error
+             ) VALUES (
+                 'event-legacy',
+                 'session-1',
+                 'job-1',
+                 'job_completed',
+                 '{\"job_id\":\"job-1\"}',
+                 'queued',
+                 6,
+                 6,
+                 NULL,
                  NULL,
                  NULL
              );",
@@ -627,6 +658,58 @@ fn open_migrates_legacy_mission_and_job_schema() {
             completed_at: None,
         })
     );
+
+    let mut foreign_key_statement = reopened
+        .connection
+        .prepare("PRAGMA foreign_key_list(session_inbox_events)")
+        .expect("prepare foreign key list");
+    let mut foreign_key_rows = foreign_key_statement
+        .query([])
+        .expect("query foreign key list");
+    let mut job_foreign_key_target = None;
+    while let Some(row) = foreign_key_rows.next().expect("read foreign key row") {
+        let from_column: String = row.get(3).expect("from column");
+        if from_column == "job_id" {
+            let target_table: String = row.get(2).expect("target table");
+            job_foreign_key_target = Some(target_table);
+        }
+    }
+    assert_eq!(job_foreign_key_target.as_deref(), Some("jobs"));
+
+    assert_eq!(
+        reopened
+            .get_session_inbox_event("event-legacy")
+            .expect("load migrated inbox event"),
+        Some(crate::SessionInboxEventRecord {
+            id: "event-legacy".to_string(),
+            session_id: "session-1".to_string(),
+            job_id: Some("job-1".to_string()),
+            kind: "job_completed".to_string(),
+            payload_json: "{\"job_id\":\"job-1\"}".to_string(),
+            status: "queued".to_string(),
+            created_at: 6,
+            available_at: 6,
+            claimed_at: None,
+            processed_at: None,
+            error: None,
+        })
+    );
+
+    reopened
+        .put_session_inbox_event(&crate::SessionInboxEventRecord {
+            id: "event-new".to_string(),
+            session_id: "session-1".to_string(),
+            job_id: Some("job-1".to_string()),
+            kind: "job_completed".to_string(),
+            payload_json: "{\"job_id\":\"job-1\",\"summary\":\"done\"}".to_string(),
+            status: "queued".to_string(),
+            created_at: 7,
+            available_at: 7,
+            claimed_at: None,
+            processed_at: None,
+            error: None,
+        })
+        .expect("store inbox event after migration");
 }
 
 #[test]
