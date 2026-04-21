@@ -145,6 +145,62 @@ fn spawn_sse_server_sequence(
     (format!("http://{address}"), receiver, handle)
 }
 
+fn spawn_streaming_sse_server_sequence(
+    responses: Vec<Vec<(Duration, String)>>,
+) -> (String, Receiver<String>, thread::JoinHandle<()>) {
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind listener");
+    let address = listener.local_addr().expect("local addr");
+    let (sender, receiver) = mpsc::channel();
+
+    let handle = thread::spawn(move || {
+        for chunks in responses {
+            let (mut stream, _) = listener.accept().expect("accept connection");
+            stream
+                .set_read_timeout(Some(Duration::from_secs(2)))
+                .expect("set read timeout");
+
+            let mut reader = BufReader::new(stream.try_clone().expect("clone stream"));
+            let mut raw_request = String::new();
+            let mut content_length = 0usize;
+
+            loop {
+                let mut line = String::new();
+                reader.read_line(&mut line).expect("read request line");
+                raw_request.push_str(&line);
+
+                if line == "\r\n" {
+                    break;
+                }
+
+                let lower = line.to_ascii_lowercase();
+                if let Some(value) = lower.strip_prefix("content-length:") {
+                    content_length = value.trim().parse().expect("parse content length");
+                }
+            }
+
+            let mut body_buf = vec![0u8; content_length];
+            reader.read_exact(&mut body_buf).expect("read request body");
+            raw_request.push_str(std::str::from_utf8(&body_buf).expect("utf8 body"));
+            sender.send(raw_request).expect("send request");
+
+            stream
+                .write_all(
+                    b"HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\ncache-control: no-cache\r\nconnection: close\r\n\r\n",
+                )
+                .expect("write headers");
+            stream.flush().expect("flush headers");
+
+            for (delay, chunk) in chunks {
+                thread::sleep(delay);
+                stream.write_all(chunk.as_bytes()).expect("write chunk");
+                stream.flush().expect("flush chunk");
+            }
+        }
+    });
+
+    (format!("http://{address}"), receiver, handle)
+}
+
 #[test]
 fn daemon_client_can_talk_to_running_daemon() {
     let (_temp, config) = test_config();
@@ -396,6 +452,80 @@ fn daemon_client_streams_tool_status_before_approval_required() {
             ..
         } if tool_name == "web_fetch"
     )));
+}
+
+#[test]
+fn daemon_client_delivers_stream_events_before_the_final_outcome() {
+    let (_temp, mut config) = test_config();
+    let chunks = vec![
+        (
+            Duration::from_millis(50),
+            "data: {\"type\":\"response.reasoning_summary_text.delta\",\"item_id\":\"rs_timed\",\"output_index\":0,\"summary_index\":0,\"delta\":\"step one \"}\n\n".to_string(),
+        ),
+        (
+            Duration::from_millis(700),
+            "data: {\"type\":\"response.output_text.delta\",\"item_id\":\"msg_timed\",\"output_index\":1,\"content_index\":0,\"delta\":\"hello \"}\n\n".to_string(),
+        ),
+        (
+            Duration::from_millis(700),
+            "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_timed\",\"model\":\"gpt-5.4\",\"output\":[{\"id\":\"rs_timed\",\"type\":\"reasoning\",\"summary\":[{\"type\":\"summary_text\",\"text\":\"step one \"}]},{\"id\":\"msg_timed\",\"type\":\"message\",\"status\":\"completed\",\"role\":\"assistant\",\"content\":[{\"type\":\"output_text\",\"text\":\"hello daemon\",\"annotations\":[]}]}],\"usage\":{\"input_tokens\":11,\"output_tokens\":7,\"total_tokens\":18}}}\n\n".to_string(),
+        ),
+    ];
+    let (provider_api_base, _provider_requests, provider_handle) =
+        spawn_streaming_sse_server_sequence(vec![chunks]);
+    config.provider = ConfiguredProvider {
+        kind: ProviderKind::OpenAiResponses,
+        api_base: Some(format!("{provider_api_base}/v1")),
+        api_key: Some("test-key".to_string()),
+        default_model: Some("gpt-5.4".to_string()),
+        ..ConfiguredProvider::default()
+    };
+
+    let app = bootstrap::build_from_config(config.clone()).expect("build app");
+    let handle = daemon::spawn_for_test(app).expect("spawn daemon");
+    let client = DaemonClient::new(&config, &DaemonConnectOptions::default());
+    let session = client
+        .create_session_auto(Some("Timed Stream Session"))
+        .expect("create session");
+
+    let started = std::time::Instant::now();
+    let mut first_event_at = None;
+    let report = client
+        .execute_chat_turn_with_control_and_observer(
+            &session.id,
+            "Привет",
+            10,
+            None,
+            &mut |event| {
+                if first_event_at.is_none()
+                    && matches!(
+                        event,
+                        ChatExecutionEvent::ReasoningDelta(_)
+                            | ChatExecutionEvent::AssistantTextDelta(_)
+                    )
+                {
+                    first_event_at = Some(started.elapsed());
+                }
+            },
+        )
+        .expect("chat turn should succeed");
+    let total_elapsed = started.elapsed();
+
+    provider_handle.join().expect("join provider");
+    handle.stop().expect("stop daemon");
+
+    assert_eq!(report.output_text, "hello daemon");
+    let first_event_at = first_event_at.expect("expected at least one streamed event");
+    assert!(
+        first_event_at < Duration::from_millis(500),
+        "first stream event arrived too late: {:?}",
+        first_event_at
+    );
+    assert!(
+        total_elapsed > Duration::from_millis(1200),
+        "total elapsed too short to prove staged streaming: {:?}",
+        total_elapsed
+    );
 }
 
 #[test]

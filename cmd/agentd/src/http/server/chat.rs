@@ -5,55 +5,8 @@ use crate::http::types::{
     ApproveRunRequest, ChatTurnRequest, ErrorResponse, WorkerOutcomeResponse,
     WorkerStreamEventResponse,
 };
-use std::io::{self, Cursor, Read};
+use std::io::{self, Write};
 use std::sync::atomic::AtomicBool;
-use std::sync::mpsc::{self, Receiver, Sender};
-use std::thread;
-use tiny_http::Header;
-
-struct ChannelReader {
-    receiver: Receiver<Vec<u8>>,
-    current: Cursor<Vec<u8>>,
-    closed: bool,
-}
-
-impl ChannelReader {
-    fn new(receiver: Receiver<Vec<u8>>) -> Self {
-        Self {
-            receiver,
-            current: Cursor::new(Vec::new()),
-            closed: false,
-        }
-    }
-}
-
-impl Read for ChannelReader {
-    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
-        loop {
-            let bytes_read = self.current.read(buf)?;
-            if bytes_read > 0 {
-                return Ok(bytes_read);
-            }
-
-            if self.closed {
-                return Ok(0);
-            }
-
-            match self.receiver.recv() {
-                Ok(chunk) => self.current = Cursor::new(chunk),
-                Err(_) => self.closed = true,
-            }
-        }
-    }
-}
-
-fn send_stream_event(sender: &Sender<Vec<u8>>, event: &WorkerStreamEventResponse) {
-    let Ok(mut payload) = serde_json::to_vec(event) else {
-        return;
-    };
-    payload.push(b'\n');
-    let _ = sender.send(payload);
-}
 
 fn map_chat_turn_outcome(
     result: Result<crate::execution::ChatTurnExecutionReport, BootstrapError>,
@@ -108,26 +61,39 @@ fn map_approve_run_outcome(
     }
 }
 
-fn respond_ndjson_stream<F>(request: Request, work: F) -> std::io::Result<()>
-where
-    F: FnOnce(Sender<Vec<u8>>) + Send + 'static,
-{
-    let (sender, receiver) = mpsc::channel();
-    thread::spawn(move || work(sender));
+fn write_chunk<W: Write + ?Sized>(writer: &mut W, bytes: &[u8]) -> io::Result<()> {
+    write!(writer, "{:X}\r\n", bytes.len())?;
+    writer.write_all(bytes)?;
+    writer.write_all(b"\r\n")?;
+    writer.flush()
+}
 
-    let mut response = Response::new(
-        StatusCode(200),
-        Vec::new(),
-        ChannelReader::new(receiver),
-        None,
-        None,
-    )
-    .with_chunked_threshold(0);
-    response.add_header(
-        Header::from_bytes("Content-Type", "application/x-ndjson; charset=utf-8")
-            .map_err(|_| std::io::Error::other("invalid content type header"))?,
-    );
-    request.respond(response)
+fn finish_chunked_response<W: Write + ?Sized>(writer: &mut W) -> io::Result<()> {
+    writer.write_all(b"0\r\n\r\n")?;
+    writer.flush()
+}
+
+fn respond_ndjson_stream<F>(request: Request, mut work: F) -> std::io::Result<()>
+where
+    F: FnMut(&mut dyn FnMut(WorkerStreamEventResponse) -> io::Result<()>) -> std::io::Result<()>,
+{
+    let mut writer = request.into_writer();
+    writer.write_all(
+        b"HTTP/1.1 200 OK\r\nContent-Type: application/x-ndjson; charset=utf-8\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n",
+    )?;
+    writer.flush()?;
+
+    let mut emit = |event: WorkerStreamEventResponse| {
+        let mut payload =
+            serde_json::to_vec(&event).map_err(|error| io::Error::other(error.to_string()))?;
+        payload.push(b'\n');
+        write_chunk(&mut *writer, &payload)
+    };
+
+    let work_result = work(&mut emit);
+    let finish_result = finish_chunked_response(&mut *writer);
+    work_result?;
+    finish_result
 }
 
 pub(super) fn handle_chat_turn(app: &App, mut request: Request) -> std::io::Result<()> {
@@ -187,10 +153,10 @@ pub(super) fn handle_chat_turn_stream(app: &App, mut request: Request) -> std::i
         }
     };
     let app = app.clone();
-    respond_ndjson_stream(request, move |sender| {
+    respond_ndjson_stream(request, move |emit| {
         let interrupt_after_tool_step = AtomicBool::new(body.interrupt_after_tool_step);
         let mut observer = |event| {
-            send_stream_event(&sender, &WorkerStreamEventResponse::ChatEvent { event });
+            let _ = emit(WorkerStreamEventResponse::ChatEvent { event });
         };
         let outcome = map_chat_turn_outcome(app.execute_chat_turn_with_control_and_observer(
             &body.session_id,
@@ -199,7 +165,7 @@ pub(super) fn handle_chat_turn_stream(app: &App, mut request: Request) -> std::i
             Some(&interrupt_after_tool_step),
             &mut observer,
         ));
-        send_stream_event(&sender, &WorkerStreamEventResponse::Finished { outcome });
+        emit(WorkerStreamEventResponse::Finished { outcome })
     })
 }
 
@@ -260,10 +226,10 @@ pub(super) fn handle_approve_run_stream(app: &App, mut request: Request) -> std:
         }
     };
     let app = app.clone();
-    respond_ndjson_stream(request, move |sender| {
+    respond_ndjson_stream(request, move |emit| {
         let interrupt_after_tool_step = AtomicBool::new(body.interrupt_after_tool_step);
         let mut observer = |event| {
-            send_stream_event(&sender, &WorkerStreamEventResponse::ChatEvent { event });
+            let _ = emit(WorkerStreamEventResponse::ChatEvent { event });
         };
         let outcome = map_approve_run_outcome(app.approve_run_with_control_and_observer(
             &body.run_id,
@@ -272,6 +238,6 @@ pub(super) fn handle_approve_run_stream(app: &App, mut request: Request) -> std:
             Some(&interrupt_after_tool_step),
             &mut observer,
         ));
-        send_stream_event(&sender, &WorkerStreamEventResponse::Finished { outcome });
+        emit(WorkerStreamEventResponse::Finished { outcome })
     })
 }
