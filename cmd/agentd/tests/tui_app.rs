@@ -27,6 +27,7 @@ fn summary(id: &str, title: &str) -> SessionSummary {
         reasoning_visible: true,
         think_level: Some("medium".to_string()),
         compactifications: 0,
+        completion_nudges: None,
         context_tokens: 0,
         has_pending_approval: false,
         last_message_preview: None,

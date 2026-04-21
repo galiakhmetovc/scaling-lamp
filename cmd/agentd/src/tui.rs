@@ -304,6 +304,26 @@ where
                 .timeline_mut()
                 .push_system(&rendered, unix_timestamp()?);
         }
+        Some("/completion") => {
+            let value = require_arg(rest, "\\доводка")?;
+            let completion_nudges = parse_completion_nudges(value.as_str())?;
+            let summary = app.update_session_preferences(
+                &current_session_id,
+                crate::bootstrap::SessionPreferencesPatch {
+                    completion_nudges: Some(completion_nudges),
+                    ..crate::bootstrap::SessionPreferencesPatch::default()
+                },
+            )?;
+            state.replace_current_summary(summary);
+            state.sync_sessions(app.list_session_summaries()?);
+            state.timeline_mut().push_system(
+                &format!(
+                    "completion gate {}",
+                    describe_completion_mode(completion_nudges)
+                ),
+                unix_timestamp()?,
+            );
+        }
         Some("/enable") => {
             let skill_name = require_arg(rest, "\\включить")?;
             let updated = app.enable_session_skill(&current_session_id, &skill_name)?;
@@ -692,6 +712,29 @@ fn option_arg(raw: &str) -> Option<String> {
     (!raw.trim().is_empty()).then(|| raw.trim().to_string())
 }
 
+fn parse_completion_nudges(raw: &str) -> Result<Option<u32>, BootstrapError> {
+    let trimmed = raw.trim();
+    if matches!(trimmed, "off" | "выкл" | "disable") {
+        return Ok(None);
+    }
+    trimmed
+        .parse::<u32>()
+        .map(Some)
+        .map_err(|_| BootstrapError::Usage {
+            reason: format!(
+                "unsupported completion mode {trimmed}; expected off|выкл or a non-negative integer"
+            ),
+        })
+}
+
+fn describe_completion_mode(completion_nudges: Option<u32>) -> String {
+    match completion_nudges {
+        None => "disabled".to_string(),
+        Some(0) => "enabled with operator approval after the first early stop".to_string(),
+        Some(value) => format!("enabled with {value} auto-nudges"),
+    }
+}
+
 fn is_command_input(input: &str) -> bool {
     let trimmed = input.trim_start();
     trimmed.starts_with('/') || trimmed.starts_with('\\')
@@ -705,6 +748,7 @@ fn canonical_command(command: &str) -> Option<&'static str> {
         "/clear" | "\\очистить" => Some("/clear"),
         "/plan" | "\\план" => Some("/plan"),
         "/jobs" | "\\задачи" => Some("/jobs"),
+        "/completion" | "\\доводка" => Some("/completion"),
         "/skills" | "\\скиллы" => Some("/skills"),
         "/enable" | "\\включить" => Some("/enable"),
         "/disable" | "\\выключить" => Some("/disable"),
@@ -928,6 +972,7 @@ mod tests {
                 reasoning_visible: true,
                 think_level: None,
                 compactifications: 0,
+                completion_nudges: None,
                 context_tokens: 0,
                 has_pending_approval: false,
                 last_message_preview: None,
@@ -961,6 +1006,7 @@ mod tests {
                 reasoning_visible: true,
                 think_level: None,
                 compactifications: 0,
+                completion_nudges: None,
                 context_tokens: 0,
                 has_pending_approval: true,
                 last_message_preview: None,

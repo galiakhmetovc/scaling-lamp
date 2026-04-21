@@ -249,6 +249,9 @@ impl App {
         if let Some(compactifications) = patch.compactifications {
             session.settings.compactifications = compactifications;
         }
+        if let Some(completion_nudges) = patch.completion_nudges {
+            session.settings.completion_nudges = completion_nudges;
+        }
         session.updated_at = unix_timestamp()?;
 
         let record = agent_persistence::SessionRecord::try_from(&session)

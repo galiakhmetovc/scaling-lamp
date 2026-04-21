@@ -25,6 +25,7 @@ pub struct SessionSettings {
     pub reasoning_visible: bool,
     pub think_level: Option<String>,
     pub compactifications: u32,
+    pub completion_nudges: Option<u32>,
     pub enabled_skills: Vec<String>,
     pub disabled_skills: Vec<String>,
 }
@@ -37,7 +38,7 @@ pub enum SessionError {
     EmptyPromptOverride,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum MessageRole {
     System,
     User,
@@ -97,6 +98,7 @@ impl Default for SessionSettings {
             reasoning_visible: true,
             think_level: None,
             compactifications: 0,
+            completion_nudges: None,
             enabled_skills: Vec::new(),
             disabled_skills: Vec::new(),
         }

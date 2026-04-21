@@ -86,6 +86,7 @@ pub struct SessionSummary {
     pub reasoning_visible: bool,
     pub think_level: Option<String>,
     pub compactifications: u32,
+    pub completion_nudges: Option<u32>,
     pub context_tokens: u32,
     pub has_pending_approval: bool,
     pub last_message_preview: Option<String>,
@@ -129,6 +130,7 @@ pub struct SessionPreferencesPatch {
     pub reasoning_visible: Option<bool>,
     pub think_level: Option<Option<String>>,
     pub compactifications: Option<u32>,
+    pub completion_nudges: Option<Option<u32>>,
 }
 
 impl App {
@@ -305,6 +307,7 @@ fn session_summary_from_session(
         reasoning_visible: session.settings.reasoning_visible,
         think_level: session.settings.think_level.clone(),
         compactifications: session.settings.compactifications,
+        completion_nudges: session.settings.completion_nudges,
         context_tokens: session_head.context_tokens,
         has_pending_approval: session_head.pending_approval_count > 0,
         last_message_preview,

@@ -1,6 +1,8 @@
 use super::*;
 use agent_runtime::mission::{JobResult, MissionStatus};
-use agent_runtime::provider::{ProviderContinuationMessage, ProviderToolOutput};
+use agent_runtime::provider::{
+    FinishReason, ProviderContinuationMessage, ProviderResponse, ProviderToolOutput,
+};
 use agent_runtime::session::TranscriptEntry;
 use agent_runtime::tool::ToolCatalog;
 use std::sync::atomic::AtomicBool;
@@ -640,6 +642,57 @@ impl ExecutionService {
                         max_rounds: pending_loop_reset.max_rounds,
                     },
                 );
+            }
+            agent_runtime::run::PendingProviderApproval::CompletionNudge(
+                pending_completion_approval,
+            ) => {
+                let synthetic_response = ProviderResponse {
+                    response_id: run
+                        .snapshot()
+                        .provider_stream
+                        .as_ref()
+                        .map(|stream| stream.response_id.clone())
+                        .unwrap_or_else(|| format!("completion-gate-{run_id}")),
+                    model: run
+                        .snapshot()
+                        .provider_stream
+                        .as_ref()
+                        .map(|stream| stream.model.clone())
+                        .unwrap_or_else(|| {
+                            session
+                                .settings
+                                .model
+                                .clone()
+                                .unwrap_or_else(|| "provider".to_string())
+                        }),
+                    output_text: run
+                        .snapshot()
+                        .provider_stream
+                        .as_ref()
+                        .map(|stream| stream.output_text.clone())
+                        .unwrap_or_default(),
+                    tool_calls: Vec::new(),
+                    finish_reason: FinishReason::Completed,
+                    usage: None,
+                };
+                let decision = self
+                    .completion_gate_decision(store, &session.id, &run, &synthetic_response)?
+                    .ok_or_else(|| ExecutionError::ProviderLoop {
+                        reason: format!(
+                            "approval {approval_id} requested completion continuation but the gate is no longer active"
+                        ),
+                    })?;
+                resumed_loop_state.continuation_input_messages = self
+                    .completion_continuation_messages(
+                        provider
+                            .descriptor()
+                            .capabilities
+                            .supports_previous_response_id,
+                        &synthetic_response,
+                        decision.nudge_message.as_str(),
+                    );
+                resumed_loop_state.completion_nudges_used =
+                    pending_completion_approval.completion_nudges_used;
             }
         }
         run.set_provider_loop_state(resumed_loop_state.clone(), now)

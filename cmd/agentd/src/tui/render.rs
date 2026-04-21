@@ -77,7 +77,7 @@ fn render_chat_screen(frame: &mut Frame<'_>, state: &TuiAppState) {
     let top_lines = if let Some(summary) = state.current_session_summary() {
         vec![
             Line::from(format!(
-                "{} | model={} | reasoning={} | think={} | ctx={} | compact={} | messages={} | bg={} (run={} queued={})",
+                "{} | model={} | reasoning={} | think={} | finish={} | ctx={} | compact={} | messages={} | bg={} (run={} queued={})",
                 summary.title,
                 summary.model.as_deref().unwrap_or("<default>"),
                 if summary.reasoning_visible {
@@ -86,6 +86,10 @@ fn render_chat_screen(frame: &mut Frame<'_>, state: &TuiAppState) {
                     "off"
                 },
                 summary.think_level.as_deref().unwrap_or("<default>"),
+                summary
+                    .completion_nudges
+                    .map(|value| value.to_string())
+                    .unwrap_or_else(|| "off".to_string()),
                 summary.context_tokens,
                 summary.compactifications,
                 summary.message_count.max(state.timeline().message_count()),

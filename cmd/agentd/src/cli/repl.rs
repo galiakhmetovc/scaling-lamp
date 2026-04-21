@@ -1,4 +1,5 @@
 use super::*;
+use crate::bootstrap::SessionPreferencesPatch;
 
 pub(super) trait ChatReplBackend {
     fn show_chat(&self, session_id: &str) -> Result<String, BootstrapError>;
@@ -15,6 +16,11 @@ pub(super) trait ChatReplBackend {
         session_id: &str,
         skill_name: &str,
     ) -> Result<String, BootstrapError>;
+    fn update_session_preferences(
+        &self,
+        session_id: &str,
+        patch: SessionPreferencesPatch,
+    ) -> Result<(), BootstrapError>;
     fn find_pending_approval(
         &self,
         session_id: &str,
@@ -67,6 +73,14 @@ impl ChatReplBackend for App {
     ) -> Result<String, BootstrapError> {
         self.disable_session_skill(session_id, skill_name)?;
         self.render_session_skills(session_id)
+    }
+
+    fn update_session_preferences(
+        &self,
+        session_id: &str,
+        patch: SessionPreferencesPatch,
+    ) -> Result<(), BootstrapError> {
+        App::update_session_preferences(self, session_id, patch).map(|_| ())
     }
 
     fn find_pending_approval(
@@ -129,6 +143,14 @@ impl ChatReplBackend for DaemonClient {
     ) -> Result<String, BootstrapError> {
         let skills = self.disable_session_skill(session_id, skill_name)?;
         render::render_session_skills_list(skills)
+    }
+
+    fn update_session_preferences(
+        &self,
+        session_id: &str,
+        patch: SessionPreferencesPatch,
+    ) -> Result<(), BootstrapError> {
+        DaemonClient::update_session_preferences(self, session_id, patch).map(|_| ())
     }
 
     fn find_pending_approval(
@@ -361,6 +383,26 @@ where
                 let skills = backend.render_session_skills(session_id)?;
                 writeln!(renderer.output, "{skills}").map_err(BootstrapError::Stream)?;
             }
+            Some("/completion") => {
+                renderer.finish_turn()?;
+                let value = split_command_arg(trimmed).ok_or_else(|| BootstrapError::Usage {
+                    reason: "\\доводка requires off|выкл or a non-negative integer".to_string(),
+                })?;
+                let completion_nudges = parse_completion_nudges(value)?;
+                backend.update_session_preferences(
+                    session_id,
+                    SessionPreferencesPatch {
+                        completion_nudges: Some(completion_nudges),
+                        ..SessionPreferencesPatch::default()
+                    },
+                )?;
+                writeln!(
+                    renderer.output,
+                    "completion gate {}",
+                    describe_completion_mode(completion_nudges)
+                )
+                .map_err(BootstrapError::Stream)?;
+            }
             Some("/enable") => {
                 renderer.finish_turn()?;
                 let skill_name =
@@ -575,6 +617,7 @@ fn canonical_repl_command(raw: &str) -> Option<&'static str> {
         "/show" | "\\показать" => Some("/show"),
         "/plan" | "\\план" => Some("/plan"),
         "/jobs" | "\\задачи" => Some("/jobs"),
+        "/completion" | "\\доводка" => Some("/completion"),
         "/skills" | "\\скиллы" => Some("/skills"),
         "/enable" | "\\включить" => Some("/enable"),
         "/disable" | "\\выключить" => Some("/disable"),
@@ -587,6 +630,29 @@ fn split_command_arg(raw: &str) -> Option<&str> {
     raw.split_once(char::is_whitespace)
         .map(|(_, rest)| rest.trim())
         .filter(|value| !value.is_empty())
+}
+
+fn parse_completion_nudges(raw: &str) -> Result<Option<u32>, BootstrapError> {
+    let trimmed = raw.trim();
+    if matches!(trimmed, "off" | "выкл" | "disable") {
+        return Ok(None);
+    }
+    trimmed
+        .parse::<u32>()
+        .map(Some)
+        .map_err(|_| BootstrapError::Usage {
+            reason: format!(
+                "unsupported completion mode {trimmed}; expected off|выкл or a non-negative integer"
+            ),
+        })
+}
+
+fn describe_completion_mode(completion_nudges: Option<u32>) -> String {
+    match completion_nudges {
+        None => "disabled".to_string(),
+        Some(0) => "enabled with operator approval after the first early stop".to_string(),
+        Some(value) => format!("enabled with {value} auto-nudges"),
+    }
 }
 
 fn find_pending_approval(

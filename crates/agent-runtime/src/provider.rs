@@ -68,7 +68,7 @@ pub struct ModelCapabilities {
     pub supports_reasoning_summaries: bool,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ProviderMessage {
     pub role: MessageRole,
     pub content: String,

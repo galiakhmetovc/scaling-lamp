@@ -1989,6 +1989,354 @@ fn execute_chat_turn_requests_operator_reset_when_tool_round_budget_is_exhausted
 }
 
 #[test]
+fn execute_chat_turn_auto_nudges_when_model_stops_with_unfinished_plan_work() {
+    let (provider_api_base, provider_requests, provider_handle) = spawn_json_server_sequence(vec![
+        r#"{
+                "id":"resp_completion_nudge_1",
+                "model":"gpt-5.4",
+                "output":[
+                    {
+                        "id":"fc_list",
+                        "type":"function_call",
+                        "status":"completed",
+                        "call_id":"call_fs_list",
+                        "name":"fs_list",
+                        "arguments":"{\"path\":\".\",\"recursive\":false}"
+                    }
+                ],
+                "usage":{"input_tokens":12,"output_tokens":5,"total_tokens":17}
+            }"#
+        .to_string(),
+        r#"{
+                "id":"resp_completion_nudge_2",
+                "model":"gpt-5.4",
+                "output":[
+                    {
+                        "id":"msg_stop_early",
+                        "type":"message",
+                        "status":"completed",
+                        "role":"assistant",
+                        "content":[
+                            {
+                                "type":"output_text",
+                                "text":"Нашёл нужный скилл и пока на этом остановлюсь."
+                            }
+                        ]
+                    }
+                ],
+                "usage":{"input_tokens":18,"output_tokens":9,"total_tokens":27}
+            }"#
+        .to_string(),
+        r#"{
+                "id":"resp_completion_nudge_3",
+                "model":"gpt-5.4",
+                "output":[
+                    {
+                        "id":"fc_complete_task",
+                        "type":"function_call",
+                        "status":"completed",
+                        "call_id":"call_complete_task",
+                        "name":"set_task_status",
+                        "arguments":"{\"task_id\":\"download-twcli\",\"new_status\":\"completed\"}"
+                    }
+                ],
+                "usage":{"input_tokens":14,"output_tokens":6,"total_tokens":20}
+            }"#
+        .to_string(),
+        r#"{
+                "id":"resp_completion_nudge_4",
+                "model":"gpt-5.4",
+                "output":[
+                    {
+                        "id":"msg_done",
+                        "type":"message",
+                        "status":"completed",
+                        "role":"assistant",
+                        "content":[
+                            {
+                                "type":"output_text",
+                                "text":"Довёл задачу до конца."
+                            }
+                        ]
+                    }
+                ],
+                "usage":{"input_tokens":10,"output_tokens":5,"total_tokens":15}
+            }"#
+        .to_string(),
+    ]);
+    let temp = tempfile::tempdir().expect("tempdir");
+    let app = build_from_config(AppConfig {
+        data_dir: temp.path().join("state-root"),
+        provider: ConfiguredProvider {
+            kind: ProviderKind::OpenAiResponses,
+            api_base: Some(format!("{provider_api_base}/v1")),
+            api_key: Some("test-key".to_string()),
+            default_model: Some("gpt-5.4".to_string()),
+            ..ConfiguredProvider::default()
+        },
+        ..AppConfig::default()
+    })
+    .expect("build app");
+    let store = PersistenceStore::open(&app.persistence).expect("open store");
+
+    let settings = SessionSettings {
+        completion_nudges: Some(1),
+        ..SessionSettings::default()
+    };
+    store
+        .put_session(&SessionRecord {
+            id: "session-completion-nudge".to_string(),
+            title: "Completion nudge".to_string(),
+            prompt_override: Some("Keep working until the task is done.".to_string()),
+            settings_json: serde_json::to_string(&settings).expect("serialize settings"),
+            active_mission_id: None,
+            parent_session_id: None,
+            parent_job_id: None,
+            delegation_label: None,
+            created_at: 1,
+            updated_at: 1,
+        })
+        .expect("put session");
+    store
+        .put_plan(
+            &PlanRecord::try_from(&PlanSnapshot {
+                session_id: "session-completion-nudge".to_string(),
+                goal: Some("Довести работу над twcli".to_string()),
+                items: vec![PlanItem {
+                    id: "download-twcli".to_string(),
+                    content: "Скачать и положить twcli рядом со скиллом".to_string(),
+                    status: PlanItemStatus::Pending,
+                    depends_on: Vec::new(),
+                    notes: Vec::new(),
+                    blocked_reason: None,
+                    parent_task_id: None,
+                }],
+                updated_at: 1,
+            })
+            .expect("plan record"),
+        )
+        .expect("put plan");
+
+    let report = app
+        .execute_chat_turn("session-completion-nudge", "доведи задачу до конца", 10)
+        .expect("chat turn");
+    let first_request = provider_requests.recv().expect("first request");
+    let second_request = provider_requests.recv().expect("second request");
+    let third_request = provider_requests.recv().expect("third request");
+    let fourth_request = provider_requests.recv().expect("fourth request");
+    provider_handle.join().expect("join provider");
+
+    assert_eq!(report.response_id, "resp_completion_nudge_4");
+    assert_eq!(report.output_text, "Довёл задачу до конца.");
+    assert!(first_request.contains("\"name\":\"fs_list\""));
+    assert!(second_request.contains("\"call_id\":\"call_fs_list\""));
+    assert!(third_request.contains("\"previous_response_id\":\"resp_completion_nudge_2\""));
+    assert!(third_request.contains("Ты остановился раньше времени."));
+    assert!(fourth_request.contains("\"call_id\":\"call_complete_task\""));
+
+    let run = RunSnapshot::try_from(
+        store
+            .get_run("run-chat-session-completion-nudge-10")
+            .expect("get run")
+            .expect("run exists"),
+    )
+    .expect("run snapshot");
+    assert_eq!(run.status, RunStatus::Completed);
+    assert!(run.pending_approvals.is_empty());
+}
+
+#[test]
+fn execute_chat_turn_requests_operator_approval_after_completion_nudges_are_exhausted() {
+    let (provider_api_base, provider_requests, provider_handle) = spawn_json_server_sequence(vec![
+        r#"{
+                "id":"resp_completion_approval_1",
+                "model":"gpt-5.4",
+                "output":[
+                    {
+                        "id":"fc_list",
+                        "type":"function_call",
+                        "status":"completed",
+                        "call_id":"call_fs_list",
+                        "name":"fs_list",
+                        "arguments":"{\"path\":\".\",\"recursive\":false}"
+                    }
+                ],
+                "usage":{"input_tokens":12,"output_tokens":5,"total_tokens":17}
+            }"#
+        .to_string(),
+        r#"{
+                "id":"resp_completion_approval_2",
+                "model":"gpt-5.4",
+                "output":[
+                    {
+                        "id":"msg_stop_early_1",
+                        "type":"message",
+                        "status":"completed",
+                        "role":"assistant",
+                        "content":[
+                            {
+                                "type":"output_text",
+                                "text":"Пока остановлюсь на промежуточном результате."
+                            }
+                        ]
+                    }
+                ],
+                "usage":{"input_tokens":18,"output_tokens":9,"total_tokens":27}
+            }"#
+        .to_string(),
+        r#"{
+                "id":"resp_completion_approval_3",
+                "model":"gpt-5.4",
+                "output":[
+                    {
+                        "id":"msg_stop_early_2",
+                        "type":"message",
+                        "status":"completed",
+                        "role":"assistant",
+                        "content":[
+                            {
+                                "type":"output_text",
+                                "text":"Я снова остановился слишком рано."
+                            }
+                        ]
+                    }
+                ],
+                "usage":{"input_tokens":18,"output_tokens":9,"total_tokens":27}
+            }"#
+        .to_string(),
+        r#"{
+                "id":"resp_completion_approval_4",
+                "model":"gpt-5.4",
+                "output":[
+                    {
+                        "id":"fc_complete_task",
+                        "type":"function_call",
+                        "status":"completed",
+                        "call_id":"call_complete_task",
+                        "name":"set_task_status",
+                        "arguments":"{\"task_id\":\"download-twcli\",\"new_status\":\"completed\"}"
+                    }
+                ],
+                "usage":{"input_tokens":14,"output_tokens":6,"total_tokens":20}
+            }"#
+        .to_string(),
+        r#"{
+                "id":"resp_completion_approval_5",
+                "model":"gpt-5.4",
+                "output":[
+                    {
+                        "id":"msg_done",
+                        "type":"message",
+                        "status":"completed",
+                        "role":"assistant",
+                        "content":[
+                            {
+                                "type":"output_text",
+                                "text":"Завершил работу после подтверждения оператора."
+                            }
+                        ]
+                    }
+                ],
+                "usage":{"input_tokens":10,"output_tokens":5,"total_tokens":15}
+            }"#
+        .to_string(),
+    ]);
+    let temp = tempfile::tempdir().expect("tempdir");
+    let app = build_from_config(AppConfig {
+        data_dir: temp.path().join("state-root"),
+        provider: ConfiguredProvider {
+            kind: ProviderKind::OpenAiResponses,
+            api_base: Some(format!("{provider_api_base}/v1")),
+            api_key: Some("test-key".to_string()),
+            default_model: Some("gpt-5.4".to_string()),
+            ..ConfiguredProvider::default()
+        },
+        ..AppConfig::default()
+    })
+    .expect("build app");
+    let store = PersistenceStore::open(&app.persistence).expect("open store");
+
+    let settings = SessionSettings {
+        completion_nudges: Some(1),
+        ..SessionSettings::default()
+    };
+    store
+        .put_session(&SessionRecord {
+            id: "session-completion-approval".to_string(),
+            title: "Completion approval".to_string(),
+            prompt_override: Some("Keep working until the task is done.".to_string()),
+            settings_json: serde_json::to_string(&settings).expect("serialize settings"),
+            active_mission_id: None,
+            parent_session_id: None,
+            parent_job_id: None,
+            delegation_label: None,
+            created_at: 1,
+            updated_at: 1,
+        })
+        .expect("put session");
+    store
+        .put_plan(
+            &PlanRecord::try_from(&PlanSnapshot {
+                session_id: "session-completion-approval".to_string(),
+                goal: Some("Довести работу над twcli".to_string()),
+                items: vec![PlanItem {
+                    id: "download-twcli".to_string(),
+                    content: "Скачать и положить twcli рядом со скиллом".to_string(),
+                    status: PlanItemStatus::Pending,
+                    depends_on: Vec::new(),
+                    notes: Vec::new(),
+                    blocked_reason: None,
+                    parent_task_id: None,
+                }],
+                updated_at: 1,
+            })
+            .expect("plan record"),
+        )
+        .expect("put plan");
+
+    let error = app
+        .execute_chat_turn("session-completion-approval", "доведи задачу до конца", 10)
+        .expect_err("completion gate should require approval");
+    let BootstrapError::Execution(ExecutionError::ApprovalRequired {
+        approval_id,
+        reason,
+        ..
+    }) = error
+    else {
+        panic!("expected approval-required error");
+    };
+    assert!(
+        reason.contains("stopped early"),
+        "unexpected completion approval reason: {reason}"
+    );
+
+    let first_request = provider_requests.recv().expect("first request");
+    let second_request = provider_requests.recv().expect("second request");
+    let third_request = provider_requests.recv().expect("third request");
+
+    assert!(first_request.contains("\"name\":\"fs_list\""));
+    assert!(second_request.contains("\"call_id\":\"call_fs_list\""));
+    assert!(third_request.contains("\"previous_response_id\":\"resp_completion_approval_2\""));
+    assert!(third_request.contains("Ты остановился раньше времени."));
+
+    let approved = app
+        .approve_run("run-chat-session-completion-approval-10", &approval_id, 20)
+        .expect("approve completion continuation");
+    let fourth_request = provider_requests.recv().expect("fourth request");
+    let fifth_request = provider_requests.recv().expect("fifth request");
+    provider_handle.join().expect("join provider");
+
+    assert_eq!(approved.run_status, RunStatus::Completed);
+    assert_eq!(
+        approved.output_text.as_deref(),
+        Some("Завершил работу после подтверждения оператора.")
+    );
+    assert!(fourth_request.contains("\"previous_response_id\":\"resp_completion_approval_3\""));
+    assert!(fourth_request.contains("Ты остановился раньше времени."));
+    assert!(fifth_request.contains("\"call_id\":\"call_complete_task\""));
+}
+
+#[test]
 fn execute_chat_turn_allows_more_than_eight_unique_tool_rounds() {
     let mut provider_responses = Vec::new();
     for round in 1..=9 {
@@ -4175,6 +4523,7 @@ fn tui_like_session_metadata_persists_and_lists_for_ui() {
                 reasoning_visible: Some(false),
                 think_level: Some(Some("high".to_string())),
                 compactifications: Some(3),
+                completion_nudges: Some(Some(2)),
             },
         )
         .expect("update session preferences");
@@ -4185,6 +4534,7 @@ fn tui_like_session_metadata_persists_and_lists_for_ui() {
     assert!(!updated.reasoning_visible);
     assert_eq!(updated.think_level.as_deref(), Some("high"));
     assert_eq!(updated.compactifications, 3);
+    assert_eq!(updated.completion_nudges, Some(2));
 
     let sessions = app
         .list_session_summaries()
@@ -4199,6 +4549,7 @@ fn tui_like_session_metadata_persists_and_lists_for_ui() {
     assert!(!summary.reasoning_visible);
     assert_eq!(summary.think_level.as_deref(), Some("high"));
     assert_eq!(summary.compactifications, 3);
+    assert_eq!(summary.completion_nudges, Some(2));
 }
 
 #[test]

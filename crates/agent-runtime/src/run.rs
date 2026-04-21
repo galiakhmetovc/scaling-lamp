@@ -1,4 +1,4 @@
-use crate::provider::{ProviderContinuationMessage, ProviderToolOutput};
+use crate::provider::{ProviderContinuationMessage, ProviderMessage, ProviderToolOutput};
 use crate::verification::EvidenceBundle;
 use serde::{Deserialize, Serialize};
 use std::error::Error;
@@ -74,12 +74,15 @@ pub struct ProviderStreamState {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(default)]
 pub struct ProviderLoopState {
     pub next_round: usize,
     pub previous_response_id: Option<String>,
     pub continuation_messages: Vec<ProviderContinuationMessage>,
     pub pending_tool_outputs: Vec<ProviderToolOutput>,
+    pub continuation_input_messages: Vec<ProviderMessage>,
     pub seen_tool_signatures: Vec<String>,
+    pub completion_nudges_used: usize,
     pub pending_approval: Option<PendingProviderApproval>,
 }
 
@@ -99,10 +102,18 @@ pub struct PendingLoopResetApproval {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PendingCompletionApproval {
+    pub approval_id: String,
+    pub completion_nudges_used: usize,
+    pub max_completion_nudges: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum PendingProviderApproval {
     Tool(PendingToolApproval),
     LoopReset(PendingLoopResetApproval),
+    CompletionNudge(PendingCompletionApproval),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -272,11 +283,26 @@ impl PendingLoopResetApproval {
     }
 }
 
+impl PendingCompletionApproval {
+    pub fn new(
+        approval_id: impl Into<String>,
+        completion_nudges_used: usize,
+        max_completion_nudges: usize,
+    ) -> Self {
+        Self {
+            approval_id: approval_id.into(),
+            completion_nudges_used,
+            max_completion_nudges,
+        }
+    }
+}
+
 impl PendingProviderApproval {
     pub fn approval_id(&self) -> &str {
         match self {
             Self::Tool(approval) => approval.approval_id.as_str(),
             Self::LoopReset(approval) => approval.approval_id.as_str(),
+            Self::CompletionNudge(approval) => approval.approval_id.as_str(),
         }
     }
 }
