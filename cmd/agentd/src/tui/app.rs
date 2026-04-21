@@ -46,6 +46,7 @@ pub struct TuiAppState {
     selected_session_index: usize,
     dialog_state: Option<DialogState>,
     input_buffer: String,
+    input_cursor: usize,
     command_cycle_index: Option<usize>,
     command_cycle_seed: Option<String>,
     scroll_offset: u16,
@@ -80,6 +81,7 @@ impl TuiAppState {
             selected_session_index,
             dialog_state: None,
             input_buffer: String::new(),
+            input_cursor: 0,
             command_cycle_index: None,
             command_cycle_seed: None,
             scroll_offset: 0,
@@ -150,6 +152,7 @@ impl TuiAppState {
         self.timeline = timeline;
         self.scroll_offset = 0;
         self.input_buffer.clear();
+        self.input_cursor = 0;
         self.command_cycle_index = None;
         self.dialog_state = None;
         self.active_screen = TuiScreen::Chat;
@@ -300,27 +303,93 @@ impl TuiAppState {
         &self.input_buffer
     }
 
+    pub fn input_cursor(&self) -> usize {
+        self.input_cursor
+    }
+
     pub fn replace_input_buffer(&mut self, value: impl Into<String>) {
         self.input_buffer = value.into();
+        self.input_cursor = self.input_buffer.len();
         self.command_cycle_index = None;
         self.command_cycle_seed = None;
     }
 
     pub fn push_input_char(&mut self, value: char) {
-        self.input_buffer.push(value);
+        self.input_buffer.insert(self.input_cursor, value);
+        self.input_cursor += value.len_utf8();
         self.command_cycle_index = None;
         self.command_cycle_seed = None;
     }
 
     pub fn pop_input_char(&mut self) {
-        self.input_buffer.pop();
+        if self.input_cursor == 0 {
+            return;
+        }
+        let previous_index = self
+            .input_buffer
+            .char_indices()
+            .map(|(index, _)| index)
+            .take_while(|index| *index < self.input_cursor)
+            .last()
+            .unwrap_or(0);
+        self.input_buffer.drain(previous_index..self.input_cursor);
+        self.input_cursor = previous_index;
         self.command_cycle_index = None;
         self.command_cycle_seed = None;
+    }
+
+    pub fn delete_input_char(&mut self) {
+        if self.input_cursor >= self.input_buffer.len() {
+            return;
+        }
+        let next_index = self
+            .input_buffer
+            .char_indices()
+            .map(|(index, _)| index)
+            .find(|index| *index > self.input_cursor)
+            .unwrap_or(self.input_buffer.len());
+        self.input_buffer.drain(self.input_cursor..next_index);
+        self.command_cycle_index = None;
+        self.command_cycle_seed = None;
+    }
+
+    pub fn move_input_cursor_left(&mut self) {
+        if self.input_cursor == 0 {
+            return;
+        }
+        self.input_cursor = self
+            .input_buffer
+            .char_indices()
+            .map(|(index, _)| index)
+            .take_while(|index| *index < self.input_cursor)
+            .last()
+            .unwrap_or(0);
+    }
+
+    pub fn move_input_cursor_right(&mut self) {
+        if self.input_cursor >= self.input_buffer.len() {
+            return;
+        }
+        self.input_cursor = self
+            .input_buffer
+            .char_indices()
+            .map(|(index, _)| index)
+            .find(|index| *index > self.input_cursor)
+            .unwrap_or(self.input_buffer.len());
+    }
+
+    pub fn move_input_cursor_home(&mut self) {
+        self.input_cursor = 0;
+    }
+
+    pub fn move_input_cursor_end(&mut self) {
+        self.input_cursor = self.input_buffer.len();
     }
 
     pub fn take_input_buffer(&mut self) -> String {
         self.command_cycle_index = None;
         self.command_cycle_seed = None;
+        self.input_cursor = 0;
         std::mem::take(&mut self.input_buffer)
     }
 
@@ -354,6 +423,10 @@ impl TuiAppState {
 
     pub fn replace_timeline(&mut self, timeline: Timeline) {
         self.timeline = timeline;
+        self.scroll_offset = 0;
+    }
+
+    pub fn scroll_to_bottom(&mut self) {
         self.scroll_offset = 0;
     }
 

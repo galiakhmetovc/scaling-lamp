@@ -43,8 +43,36 @@ pub fn handle_key(state: &mut TuiAppState, key: KeyEvent) -> Result<TuiAction, B
             state.scroll_page_down();
             TuiAction::None
         }
+        KeyCode::Left => {
+            state.move_input_cursor_left();
+            TuiAction::None
+        }
+        KeyCode::Right => {
+            state.move_input_cursor_right();
+            TuiAction::None
+        }
+        KeyCode::Home => {
+            state.move_input_cursor_home();
+            TuiAction::None
+        }
+        KeyCode::End => {
+            state.move_input_cursor_end();
+            TuiAction::None
+        }
         KeyCode::Backspace => {
             state.pop_input_char();
+            TuiAction::None
+        }
+        KeyCode::Delete => {
+            state.delete_input_char();
+            TuiAction::None
+        }
+        KeyCode::Char('a') if key.modifiers == KeyModifiers::CONTROL => {
+            state.move_input_cursor_home();
+            TuiAction::None
+        }
+        KeyCode::Char('e') if key.modifiers == KeyModifiers::CONTROL => {
+            state.move_input_cursor_end();
             TuiAction::None
         }
         KeyCode::Char(c) if key.modifiers.is_empty() || key.modifiers == KeyModifiers::SHIFT => {

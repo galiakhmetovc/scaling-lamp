@@ -141,6 +141,53 @@ fn tui_chat_key_handling_supports_page_navigation_from_the_tail() {
 }
 
 #[test]
+fn tui_chat_key_handling_supports_cursor_navigation_and_home_end_editing() {
+    let mut state = TuiAppState::new(
+        vec![summary("session-a", "Session A")],
+        Some("session-a".to_string()),
+    );
+    state.replace_input_buffer("helo");
+
+    let _ = agentd::tui::screens::chat::handle_key(
+        &mut state,
+        KeyEvent::new(KeyCode::Left, KeyModifiers::NONE),
+    )
+    .expect("left");
+    let _ = agentd::tui::screens::chat::handle_key(
+        &mut state,
+        KeyEvent::new(KeyCode::Left, KeyModifiers::NONE),
+    )
+    .expect("left");
+    let _ = agentd::tui::screens::chat::handle_key(
+        &mut state,
+        KeyEvent::new(KeyCode::Char('l'), KeyModifiers::NONE),
+    )
+    .expect("insert");
+    let _ = agentd::tui::screens::chat::handle_key(
+        &mut state,
+        KeyEvent::new(KeyCode::Home, KeyModifiers::NONE),
+    )
+    .expect("home");
+    let _ = agentd::tui::screens::chat::handle_key(
+        &mut state,
+        KeyEvent::new(KeyCode::Char('['), KeyModifiers::NONE),
+    )
+    .expect("prefix");
+    let _ = agentd::tui::screens::chat::handle_key(
+        &mut state,
+        KeyEvent::new(KeyCode::End, KeyModifiers::NONE),
+    )
+    .expect("end");
+    let _ = agentd::tui::screens::chat::handle_key(
+        &mut state,
+        KeyEvent::new(KeyCode::Char(']'), KeyModifiers::NONE),
+    )
+    .expect("suffix");
+
+    assert_eq!(state.input_buffer(), "[hello]");
+}
+
+#[test]
 fn tui_render_includes_background_job_counts_in_the_session_header() {
     let mut state = TuiAppState::new(
         vec![SessionSummary {
@@ -932,6 +979,97 @@ data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_immediate_red
         Ok::<_, agentd::bootstrap::BootstrapError>(())
     });
     handle.join().expect("join delayed sse");
+}
+
+#[test]
+fn tui_chat_submit_from_scrolled_history_snaps_back_to_the_tail() {
+    let stream = "data: {\"type\":\"response.output_text.delta\",\"item_id\":\"msg_tail_snap\",\"output_index\":0,\"content_index\":0,\"delta\":\"hello later\"}\n\n\
+data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_tail_snap\",\"model\":\"gpt-5.4\",\"output\":[{\"id\":\"msg_tail_snap\",\"type\":\"message\",\"status\":\"completed\",\"role\":\"assistant\",\"content\":[{\"type\":\"output_text\",\"text\":\"hello later\",\"annotations\":[]}]}],\"usage\":{\"input_tokens\":9,\"output_tokens\":4,\"total_tokens\":13}}}\n\n".to_string();
+    let (api_base, handle) =
+        spawn_delayed_sse_server_sequence(vec![(Duration::from_millis(200), stream)]);
+    let temp = tempfile::tempdir().expect("tempdir");
+    let app = build_from_config(AppConfig {
+        data_dir: temp.path().join("state-root"),
+        provider: ConfiguredProvider {
+            kind: ProviderKind::OpenAiResponses,
+            api_base: Some(format!("{api_base}/v1")),
+            api_key: Some("test-key".to_string()),
+            default_model: Some("gpt-5.4".to_string()),
+            ..ConfiguredProvider::default()
+        },
+        ..AppConfig::default()
+    })
+    .expect("build app");
+    let session = app
+        .create_session_auto(Some("Tail Snap Session"))
+        .expect("create session");
+    let mut state = TuiAppState::new(
+        app.list_session_summaries().expect("list sessions"),
+        Some(session.id.clone()),
+    );
+    state.scroll_page_up();
+    assert!(state.scroll_offset() > 0);
+    let mut redraw = |_state: &TuiAppState| Ok::<_, agentd::bootstrap::BootstrapError>(());
+
+    dispatch_action(
+        &app,
+        &mut state,
+        TuiAction::SubmitChatInput("hello immediate tail".to_string()),
+        &mut redraw,
+    )
+    .expect("dispatch chat");
+
+    assert_eq!(state.scroll_offset(), 0);
+
+    wait_for_tui_idle(&app, &mut state, &mut redraw);
+    handle.join().expect("join delayed sse");
+}
+
+#[test]
+fn tui_chat_completion_reconciles_partial_stream_with_final_assistant_text() {
+    let stream = "data: {\"type\":\"response.output_text.delta\",\"item_id\":\"msg_partial\",\"output_index\":0,\"content_index\":0,\"delta\":\"hello \"}\n\n\
+data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_partial\",\"model\":\"gpt-5.4\",\"output\":[{\"id\":\"msg_partial\",\"type\":\"message\",\"status\":\"completed\",\"role\":\"assistant\",\"content\":[{\"type\":\"output_text\",\"text\":\"hello from reconciliation\",\"annotations\":[]}]}],\"usage\":{\"input_tokens\":9,\"output_tokens\":4,\"total_tokens\":13}}}\n\n".to_string();
+    let (api_base, handle) = spawn_sse_server_sequence(vec![stream]);
+    let temp = tempfile::tempdir().expect("tempdir");
+    let app = build_from_config(AppConfig {
+        data_dir: temp.path().join("state-root"),
+        provider: ConfiguredProvider {
+            kind: ProviderKind::OpenAiResponses,
+            api_base: Some(format!("{api_base}/v1")),
+            api_key: Some("test-key".to_string()),
+            default_model: Some("gpt-5.4".to_string()),
+            ..ConfiguredProvider::default()
+        },
+        ..AppConfig::default()
+    })
+    .expect("build app");
+    let session = app
+        .create_session_auto(Some("Reconcile Session"))
+        .expect("create session");
+    let mut state = TuiAppState::new(
+        app.list_session_summaries().expect("list sessions"),
+        Some(session.id.clone()),
+    );
+    let mut redraw = |_state: &TuiAppState| Ok::<_, agentd::bootstrap::BootstrapError>(());
+
+    dispatch_action(
+        &app,
+        &mut state,
+        TuiAction::SubmitChatInput("hello reconcile".to_string()),
+        &mut redraw,
+    )
+    .expect("dispatch chat");
+    wait_for_tui_idle(&app, &mut state, &mut redraw);
+    handle.join().expect("join sse");
+
+    let assistant_messages = state
+        .timeline()
+        .entries(true)
+        .into_iter()
+        .filter(|entry| matches!(entry.kind, TimelineEntryKind::Assistant))
+        .map(|entry| entry.content.clone())
+        .collect::<Vec<_>>();
+    assert_eq!(assistant_messages, vec!["hello from reconciliation"]);
 }
 
 #[test]

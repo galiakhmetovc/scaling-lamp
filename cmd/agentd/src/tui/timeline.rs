@@ -195,6 +195,28 @@ impl Timeline {
         }
     }
 
+    pub fn finalize_assistant_output(&mut self, content: &str, timestamp: i64) {
+        self.finish_reasoning();
+        if let Some(index) = self.active_assistant {
+            self.entries[index].timestamp = timestamp;
+            self.entries[index].content = content.to_string();
+            return;
+        }
+        self.push_assistant(content, timestamp);
+    }
+
+    pub fn sync_pending_approvals(&mut self, pending_approvals: &[SessionPendingApproval]) {
+        self.entries
+            .retain(|entry| !matches!(entry.kind, TimelineEntryKind::Approval { .. }));
+        for approval in pending_approvals {
+            self.push_approval(
+                approval.approval_id.as_str(),
+                approval.reason.as_str(),
+                approval.requested_at,
+            );
+        }
+    }
+
     pub fn finish_turn(&mut self) {
         self.finish_reasoning();
         self.finish_assistant();

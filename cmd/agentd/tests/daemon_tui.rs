@@ -10,6 +10,10 @@ use agentd::execution::{ChatExecutionEvent, ExecutionError, ToolExecutionStatus}
 use agentd::http::client::{
     DaemonClient, DaemonConnectOptions, connect_or_autospawn, connect_or_autospawn_detailed,
 };
+use agentd::tui::app::TuiAppState;
+use agentd::tui::events::TuiAction;
+use agentd::tui::timeline::{Timeline, TimelineEntryKind};
+use agentd::tui::{dispatch_action, pump_background};
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::TcpListener;
 use std::sync::mpsc::{self, Receiver};
@@ -588,6 +592,70 @@ fn daemon_client_can_query_pending_approvals_while_chat_turn_is_in_flight() {
 }
 
 #[test]
+fn daemon_backed_tui_shows_pending_approval_in_timeline() {
+    let (_temp, mut config) = test_config();
+    let stream = "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_tool_daemon_tui\",\"model\":\"gpt-5.4\",\"output\":[{\"id\":\"fc_1\",\"type\":\"function_call\",\"status\":\"completed\",\"call_id\":\"call_web_fetch\",\"name\":\"web_fetch\",\"arguments\":\"{\\\"url\\\":\\\"https://example.com/weather\\\"}\"}],\"usage\":{\"input_tokens\":19,\"output_tokens\":7,\"total_tokens\":26}}}\n\n".to_string();
+    let (provider_api_base, _provider_requests, provider_handle) =
+        spawn_sse_server_sequence(vec![stream]);
+    config.provider = ConfiguredProvider {
+        kind: ProviderKind::OpenAiResponses,
+        api_base: Some(format!("{provider_api_base}/v1")),
+        api_key: Some("test-key".to_string()),
+        default_model: Some("gpt-5.4".to_string()),
+        ..ConfiguredProvider::default()
+    };
+    config.permissions = PermissionConfig {
+        mode: PermissionMode::Default,
+        rules: vec![PermissionRule {
+            action: PermissionAction::Ask,
+            tool: Some("web_fetch".to_string()),
+            family: None,
+            path_prefix: None,
+        }],
+    };
+
+    let app = bootstrap::build_from_config(config.clone()).expect("build app");
+    let handle = daemon::spawn_for_test(app).expect("spawn daemon");
+    let client = DaemonClient::new(&config, &DaemonConnectOptions::default());
+    let session = client
+        .create_session_auto(Some("Approval TUI Session"))
+        .expect("create session");
+
+    let mut state = TuiAppState::new(
+        client.list_session_summaries().expect("list sessions"),
+        Some(session.id.clone()),
+    );
+    state.set_current_session(
+        client
+            .session_summary(&session.id)
+            .expect("session summary"),
+        Timeline::default(),
+    );
+    let mut redraw = |_state: &TuiAppState| Ok::<_, BootstrapError>(());
+
+    dispatch_action(
+        &client,
+        &mut state,
+        TuiAction::SubmitChatInput("Нужна погода".to_string()),
+        &mut redraw,
+    )
+    .expect("dispatch chat");
+    wait_for_daemon_tui_idle(&client, &mut state, &mut redraw);
+
+    assert!(
+        state
+            .timeline()
+            .entries(true)
+            .iter()
+            .any(|entry| matches!(entry.kind, TimelineEntryKind::Approval { .. })),
+        "daemon-backed TUI should show the pending approval in the timeline"
+    );
+
+    provider_handle.join().expect("join provider");
+    handle.stop().expect("stop daemon");
+}
+
+#[test]
 fn detailed_daemon_connection_can_shutdown_autospawned_local_daemon() {
     let (_temp, config) = test_config();
     let handle_cell = Arc::new(Mutex::new(None));
@@ -629,4 +697,19 @@ fn detailed_daemon_connection_can_shutdown_autospawned_local_daemon() {
         .expect("spawned handle")
         .stop()
         .expect("join stopped daemon");
+}
+
+fn wait_for_daemon_tui_idle(
+    client: &DaemonClient,
+    state: &mut TuiAppState,
+    redraw: &mut dyn FnMut(&TuiAppState) -> Result<(), BootstrapError>,
+) {
+    for _ in 0..100 {
+        pump_background(client, state, redraw).expect("pump background");
+        if !state.has_active_run() {
+            return;
+        }
+        thread::sleep(Duration::from_millis(10));
+    }
+    panic!("daemon-backed tui did not become idle in time");
 }

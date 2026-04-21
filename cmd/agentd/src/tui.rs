@@ -493,6 +493,7 @@ fn start_chat_run<B>(
 where
     B: TuiBackend,
 {
+    state.scroll_to_bottom();
     state.timeline_mut().push_user(message, sent_at);
     state.set_active_run(ActiveRunHandle::spawn_chat(
         app.clone(),
@@ -539,33 +540,20 @@ where
 {
     match outcome {
         WorkerOutcome::ChatCompleted(report) => {
-            if !report.output_text.is_empty()
-                && !state
-                    .timeline()
-                    .entries(true)
-                    .last()
-                    .map(|entry| matches!(entry.kind, timeline::TimelineEntryKind::Assistant))
-                    .unwrap_or(false)
-            {
+            if !report.output_text.is_empty() {
                 state
                     .timeline_mut()
-                    .push_assistant(&report.output_text, unix_timestamp()?);
+                    .finalize_assistant_output(&report.output_text, unix_timestamp()?);
             }
             state.timeline_mut().finish_turn();
         }
         WorkerOutcome::ApprovalCompleted(report) => {
             if let Some(output_text) = report.output_text
                 && !output_text.is_empty()
-                && !state
-                    .timeline()
-                    .entries(true)
-                    .last()
-                    .map(|entry| matches!(entry.kind, timeline::TimelineEntryKind::Assistant))
-                    .unwrap_or(false)
             {
                 state
                     .timeline_mut()
-                    .push_assistant(&output_text, unix_timestamp()?);
+                    .finalize_assistant_output(&output_text, unix_timestamp()?);
             }
             state.timeline_mut().finish_turn();
         }
@@ -648,6 +636,8 @@ where
     if let Some(session_id) = state.current_session_id().map(ToString::to_string) {
         let summary = app.session_summary(&session_id)?;
         state.replace_current_summary(summary);
+        let pending = app.pending_approvals(&session_id)?;
+        state.timeline_mut().sync_pending_approvals(&pending);
     }
     Ok(())
 }
@@ -724,7 +714,141 @@ fn unix_timestamp() -> Result<i64, BootstrapError> {
 #[cfg(test)]
 mod tests {
     use super::should_dispatch_key_event;
+    use super::*;
+    use crate::bootstrap::{
+        SessionPendingApproval, SessionPreferencesPatch, SessionSkillStatus, SessionSummary,
+        SessionTranscriptView,
+    };
+    use crate::execution::{ApprovalContinuationReport, ChatTurnExecutionReport};
+    use crate::tui::backend::TuiBackend;
+    use crate::tui::timeline::TimelineEntryKind;
     use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyEventState, KeyModifiers};
+    use std::sync::atomic::AtomicBool;
+
+    #[derive(Clone)]
+    struct FakeBackend {
+        summary: SessionSummary,
+        pending: Vec<SessionPendingApproval>,
+    }
+
+    impl TuiBackend for FakeBackend {
+        fn list_session_summaries(&self) -> Result<Vec<SessionSummary>, BootstrapError> {
+            Ok(vec![self.summary.clone()])
+        }
+
+        fn create_session_auto(
+            &self,
+            _title: Option<&str>,
+        ) -> Result<SessionSummary, BootstrapError> {
+            panic!("unused in test")
+        }
+
+        fn update_session_preferences(
+            &self,
+            _session_id: &str,
+            _patch: SessionPreferencesPatch,
+        ) -> Result<SessionSummary, BootstrapError> {
+            panic!("unused in test")
+        }
+
+        fn delete_session(&self, _session_id: &str) -> Result<(), BootstrapError> {
+            panic!("unused in test")
+        }
+
+        fn clear_session(
+            &self,
+            _session_id: &str,
+            _title: Option<&str>,
+        ) -> Result<SessionSummary, BootstrapError> {
+            panic!("unused in test")
+        }
+
+        fn session_summary(&self, _session_id: &str) -> Result<SessionSummary, BootstrapError> {
+            Ok(self.summary.clone())
+        }
+
+        fn session_transcript(
+            &self,
+            _session_id: &str,
+        ) -> Result<SessionTranscriptView, BootstrapError> {
+            Ok(SessionTranscriptView {
+                session_id: self.summary.id.clone(),
+                entries: Vec::new(),
+            })
+        }
+
+        fn pending_approvals(
+            &self,
+            _session_id: &str,
+        ) -> Result<Vec<SessionPendingApproval>, BootstrapError> {
+            Ok(self.pending.clone())
+        }
+
+        fn session_skills(
+            &self,
+            _session_id: &str,
+        ) -> Result<Vec<SessionSkillStatus>, BootstrapError> {
+            panic!("unused in test")
+        }
+
+        fn enable_session_skill(
+            &self,
+            _session_id: &str,
+            _skill_name: &str,
+        ) -> Result<Vec<SessionSkillStatus>, BootstrapError> {
+            panic!("unused in test")
+        }
+
+        fn disable_session_skill(
+            &self,
+            _session_id: &str,
+            _skill_name: &str,
+        ) -> Result<Vec<SessionSkillStatus>, BootstrapError> {
+            panic!("unused in test")
+        }
+
+        fn latest_pending_approval(
+            &self,
+            _session_id: &str,
+            _requested_approval_id: Option<&str>,
+        ) -> Result<Option<SessionPendingApproval>, BootstrapError> {
+            Ok(self.pending.first().cloned())
+        }
+
+        fn render_plan(&self, _session_id: &str) -> Result<String, BootstrapError> {
+            panic!("unused in test")
+        }
+
+        fn render_active_jobs(&self, _session_id: &str) -> Result<String, BootstrapError> {
+            panic!("unused in test")
+        }
+
+        fn compact_session(&self, _session_id: &str) -> Result<SessionSummary, BootstrapError> {
+            panic!("unused in test")
+        }
+
+        fn execute_chat_turn_with_control_and_observer(
+            &self,
+            _session_id: &str,
+            _message: &str,
+            _now: i64,
+            _interrupt_after_tool_step: Option<&AtomicBool>,
+            _observer: &mut dyn FnMut(ChatExecutionEvent),
+        ) -> Result<ChatTurnExecutionReport, BootstrapError> {
+            panic!("unused in test")
+        }
+
+        fn approve_run_with_control_and_observer(
+            &self,
+            _run_id: &str,
+            _approval_id: &str,
+            _now: i64,
+            _interrupt_after_tool_step: Option<&AtomicBool>,
+            _observer: &mut dyn FnMut(ChatExecutionEvent),
+        ) -> Result<ApprovalContinuationReport, BootstrapError> {
+            panic!("unused in test")
+        }
+    }
 
     #[test]
     fn should_dispatch_key_event_ignores_release_events() {
@@ -755,5 +879,56 @@ mod tests {
 
         assert!(should_dispatch_key_event(press));
         assert!(should_dispatch_key_event(repeat));
+    }
+
+    #[test]
+    fn handle_worker_outcome_rehydrates_pending_approval_from_backend_state() {
+        let backend = FakeBackend {
+            summary: SessionSummary {
+                id: "session-a".to_string(),
+                title: "Session A".to_string(),
+                model: Some("glm-5-turbo".to_string()),
+                reasoning_visible: true,
+                think_level: None,
+                compactifications: 0,
+                context_tokens: 0,
+                has_pending_approval: true,
+                last_message_preview: None,
+                message_count: 1,
+                background_job_count: 0,
+                running_background_job_count: 0,
+                queued_background_job_count: 0,
+                created_at: 1,
+                updated_at: 2,
+            },
+            pending: vec![SessionPendingApproval {
+                run_id: "run-1".to_string(),
+                approval_id: "approval-1".to_string(),
+                reason: "tool write requires approval".to_string(),
+                requested_at: 10,
+            }],
+        };
+        let mut state = TuiAppState::new(
+            vec![backend.summary.clone()],
+            Some(backend.summary.id.clone()),
+        );
+        state.set_current_session(backend.summary.clone(), Timeline::default());
+
+        handle_worker_outcome(
+            &backend,
+            &mut state,
+            backend.summary.id.clone(),
+            WorkerOutcome::Failed("stream ended unexpectedly".to_string()),
+        )
+        .expect("handle worker outcome");
+
+        assert!(state.timeline().entries(true).iter().any(|entry| {
+            matches!(
+                entry.kind,
+                TimelineEntryKind::Approval {
+                    ref approval_id
+                } if approval_id == "approval-1"
+            )
+        }));
     }
 }

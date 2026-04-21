@@ -129,11 +129,7 @@ fn render_chat_screen(frame: &mut Frame<'_>, state: &TuiAppState) {
         .scroll((timeline_scroll_top, 0));
 
     let composer_lines = vec![
-        Line::from(vec![
-            Span::styled("> ", Style::default().fg(Color::Cyan)),
-            Span::raw(state.input_buffer().to_string()),
-            Span::styled("█", Style::default().fg(Color::Yellow)),
-        ]),
+        render_composer_line(state),
         Line::from(format!(
             "Enter=send after tool-step | Tab=queue after full run | Shift+Tab=cycle /commands | {}",
             describe_run_status(state, now)
@@ -145,6 +141,31 @@ fn render_chat_screen(frame: &mut Frame<'_>, state: &TuiAppState) {
     frame.render_widget(top, chunks[0]);
     frame.render_widget(timeline, chunks[1]);
     frame.render_widget(input, chunks[2]);
+}
+
+fn render_composer_line(state: &TuiAppState) -> Line<'static> {
+    let cursor = state.input_cursor().min(state.input_buffer().len());
+    let (before, rest) = state.input_buffer().split_at(cursor);
+    let mut rest_chars = rest.chars();
+    let cursor_char = rest_chars.next();
+    let after = rest_chars.as_str();
+
+    let mut spans = vec![
+        Span::styled("> ", Style::default().fg(Color::Cyan)),
+        Span::raw(before.to_string()),
+    ];
+    match cursor_char {
+        Some(current) => spans.push(Span::styled(
+            current.to_string(),
+            Style::default()
+                .fg(Color::Black)
+                .bg(Color::Yellow)
+                .add_modifier(Modifier::BOLD),
+        )),
+        None => spans.push(Span::styled("█", Style::default().fg(Color::Yellow))),
+    }
+    spans.push(Span::raw(after.to_string()));
+    Line::from(spans)
 }
 
 fn render_timeline_entry(entry: &TimelineEntry, now: i64) -> Vec<Line<'static>> {
