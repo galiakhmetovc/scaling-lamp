@@ -4,11 +4,12 @@ use crate::tui::worker::{
     ActiveRunHandle, ActiveRunPhase, ComposerQueue, QueuedDraft, QueuedDraftMode,
 };
 
-const COMMANDS: [&str; 17] = [
+const COMMANDS: [&str; 18] = [
     "/session",
     "/new",
     "/rename",
     "/clear",
+    "/context",
     "/plan",
     "/jobs",
     "\\доводка",

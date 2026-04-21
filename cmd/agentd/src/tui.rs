@@ -290,6 +290,12 @@ where
         Some("/clear") => {
             let _ = state.open_clear_dialog();
         }
+        Some("/context") => {
+            let context = app.render_context(&current_session_id)?;
+            state
+                .timeline_mut()
+                .push_system(&context, unix_timestamp()?);
+        }
         Some("/plan") => {
             let plan = app.render_plan(&current_session_id)?;
             state.timeline_mut().push_system(&plan, unix_timestamp()?);
@@ -730,10 +736,9 @@ where
     B: TuiBackend,
 {
     let summary = app.session_summary(session_id)?;
-    let transcript = app.session_transcript(session_id)?;
-    let pending = app.pending_approvals(session_id)?;
-    let timeline = Timeline::from_session_view(&transcript, &pending);
+    let timeline = load_session_timeline(app, session_id)?;
     state.set_current_session(summary, timeline);
+    state.scroll_to_bottom();
     Ok(())
 }
 
@@ -746,10 +751,21 @@ where
     if let Some(session_id) = state.current_session_id().map(ToString::to_string) {
         let summary = app.session_summary(&session_id)?;
         state.replace_current_summary(summary);
-        let pending = app.pending_approvals(&session_id)?;
-        state.timeline_mut().sync_pending_approvals(&pending);
+        let previous_timeline = state.timeline().clone();
+        let mut timeline = load_session_timeline(app, &session_id)?;
+        timeline.merge_ephemeral_from(&previous_timeline);
+        state.replace_timeline(timeline);
     }
     Ok(())
+}
+
+fn load_session_timeline<B>(app: &B, session_id: &str) -> Result<Timeline, BootstrapError>
+where
+    B: TuiBackend,
+{
+    let transcript = app.session_transcript(session_id)?;
+    let pending = app.pending_approvals(session_id)?;
+    Ok(Timeline::from_session_view(&transcript, &pending))
 }
 
 fn require_arg(raw: &str, command: &str) -> Result<String, BootstrapError> {
@@ -804,13 +820,15 @@ fn is_command_input(input: &str) -> bool {
 }
 
 fn canonical_command(command: &str) -> Option<&'static str> {
-    match command {
+    let normalized = command.trim_end_matches(['\\', '/']);
+    match normalized {
         "/session" | "\\сессии" => Some("/session"),
         "/new" | "\\новая" => Some("/new"),
         "/rename" | "\\переименовать" => Some("/rename"),
         "/clear" | "\\очистить" => Some("/clear"),
         "/plan" | "\\план" => Some("/plan"),
         "/jobs" | "\\задачи" => Some("/jobs"),
+        "/context" | "\\контекст" => Some("/context"),
         "/completion" | "\\доводка" => Some("/completion"),
         "/autoapprove" | "\\автоапрув" => Some("/autoapprove"),
         "/skills" | "\\скиллы" => Some("/skills"),
@@ -874,6 +892,7 @@ mod tests {
     struct FakeBackend {
         summary: SessionSummary,
         pending: Vec<SessionPendingApproval>,
+        transcript: SessionTranscriptView,
     }
 
     impl TuiBackend for FakeBackend {
@@ -916,10 +935,7 @@ mod tests {
             &self,
             _session_id: &str,
         ) -> Result<SessionTranscriptView, BootstrapError> {
-            Ok(SessionTranscriptView {
-                session_id: self.summary.id.clone(),
-                entries: Vec::new(),
-            })
+            Ok(self.transcript.clone())
         }
 
         fn pending_approvals(
@@ -958,6 +974,10 @@ mod tests {
             _requested_approval_id: Option<&str>,
         ) -> Result<Option<SessionPendingApproval>, BootstrapError> {
             Ok(self.pending.first().cloned())
+        }
+
+        fn render_context(&self, _session_id: &str) -> Result<String, BootstrapError> {
+            Ok("Context:\nctx=0".to_string())
         }
 
         fn render_plan(&self, _session_id: &str) -> Result<String, BootstrapError> {
@@ -1089,6 +1109,10 @@ mod tests {
                 reason: "tool write requires approval".to_string(),
                 requested_at: 10,
             }],
+            transcript: SessionTranscriptView {
+                session_id: "session-a".to_string(),
+                entries: Vec::new(),
+            },
         };
         let mut state = TuiAppState::new(
             vec![backend.summary.clone()],
@@ -1112,5 +1136,89 @@ mod tests {
                 } if approval_id == "approval-1"
             )
         }));
+    }
+
+    #[test]
+    fn canonical_command_accepts_trailing_slashes_and_backslashes() {
+        assert_eq!(canonical_command("\\апрув\\"), Some("/approve"));
+        assert_eq!(canonical_command("/approve/"), Some("/approve"));
+        assert_eq!(canonical_command("\\контекст\\"), Some("/context"));
+    }
+
+    #[test]
+    fn refresh_current_session_rebuilds_timeline_from_backend_transcript() {
+        let summary = SessionSummary {
+            id: "session-a".to_string(),
+            title: "Session A".to_string(),
+            model: Some("glm-5-turbo".to_string()),
+            reasoning_visible: true,
+            think_level: None,
+            compactifications: 0,
+            completion_nudges: None,
+            auto_approve: false,
+            context_tokens: 0,
+            has_pending_approval: false,
+            last_message_preview: None,
+            message_count: 2,
+            background_job_count: 0,
+            running_background_job_count: 0,
+            queued_background_job_count: 0,
+            created_at: 1,
+            updated_at: 2,
+        };
+        let backend = FakeBackend {
+            summary: summary.clone(),
+            pending: Vec::new(),
+            transcript: SessionTranscriptView {
+                session_id: "session-a".to_string(),
+                entries: vec![
+                    crate::bootstrap::SessionTranscriptLine {
+                        role: "user".to_string(),
+                        content: "hi".to_string(),
+                        run_id: None,
+                        created_at: 10,
+                        tool_name: None,
+                        tool_status: None,
+                        approval_id: None,
+                    },
+                    crate::bootstrap::SessionTranscriptLine {
+                        role: "tool".to_string(),
+                        content: "exec_start executable=echo argc=1 -> process_result process_id=exec-1 status=Exited exit_code=Some(0)".to_string(),
+                        run_id: Some("run-1".to_string()),
+                        created_at: 11,
+                        tool_name: Some("exec_start".to_string()),
+                        tool_status: Some("completed".to_string()),
+                        approval_id: None,
+                    },
+                    crate::bootstrap::SessionTranscriptLine {
+                        role: "assistant".to_string(),
+                        content: "done".to_string(),
+                        run_id: Some("run-1".to_string()),
+                        created_at: 12,
+                        tool_name: None,
+                        tool_status: None,
+                        approval_id: None,
+                    },
+                ],
+            },
+        };
+        let mut state = TuiAppState::new(vec![summary.clone()], Some(summary.id.clone()));
+        state.set_current_session(summary, Timeline::default());
+        state.scroll_page_up();
+
+        refresh_current_session(&backend, &mut state).expect("refresh current session");
+
+        let entries = state.timeline().entries(true);
+        assert!(entries.iter().any(|entry| {
+            matches!(
+                entry.kind,
+                TimelineEntryKind::Tool {
+                    ref tool_name,
+                    ref status,
+                    ..
+                } if tool_name == "exec_start" && status == "completed"
+            )
+        }));
+        assert_eq!(state.scroll_offset(), 0);
     }
 }

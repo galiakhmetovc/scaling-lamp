@@ -385,6 +385,16 @@ impl ExecutionService {
                     "active_process_ids": self.processes.active_process_ids(None),
                 }),
             )),
+            ToolError::ProcessIo { process_id, source } => {
+                Some(Self::retryable_provider_tool_output(
+                    parsed.name().as_str(),
+                    &format!("process io error for {process_id}: {source}"),
+                    serde_json::json!({
+                        "process_or_executable": process_id,
+                        "active_process_ids": self.processes.active_process_ids(None),
+                    }),
+                ))
+            }
             _ => None,
         }
     }
@@ -1716,12 +1726,17 @@ impl ExecutionService {
                                 },
                             );
                             run.record_tool_completion(
-                                format!("{} retryable error: {error}", parsed.name().as_str()),
+                                format!("{} retryable error: {error}", parsed.summary()),
                                 now,
                             )
                             .map_err(ExecutionError::RunTransition)?;
                             model_output
                         } else {
+                            run.record_tool_completion(
+                                format!("{} failed: {error}", parsed.summary()),
+                                now,
+                            )
+                            .map_err(ExecutionError::RunTransition)?;
                             return Err(ExecutionError::Tool(error));
                         }
                     }
@@ -1772,6 +1787,7 @@ mod tests {
         ModelCapabilities, ProviderDescriptor, ProviderError, ProviderRequest, ProviderResponse,
         ProviderResponseStream,
     };
+    use std::io;
 
     struct TestProviderDriver {
         descriptor: ProviderDescriptor,
@@ -1843,5 +1859,29 @@ mod tests {
         );
 
         assert_eq!(request.max_output_tokens, Some(8192));
+    }
+
+    #[test]
+    fn recoverable_tool_error_output_treats_process_io_as_retryable() {
+        let service = ExecutionService::default();
+        let parsed = ToolCall::ExecStart(agent_runtime::tool::ExecStartInput {
+            executable: "missing-binary".to_string(),
+            args: Vec::new(),
+            cwd: None,
+        });
+
+        let output = service
+            .recoverable_tool_error_output(
+                &parsed,
+                &ToolError::ProcessIo {
+                    process_id: "missing-binary".to_string(),
+                    source: io::Error::new(io::ErrorKind::NotFound, "No such file or directory"),
+                },
+            )
+            .expect("recoverable output");
+
+        assert!(output.contains("\"retryable\":true"));
+        assert!(output.contains("missing-binary"));
+        assert!(output.contains("No such file or directory"));
     }
 }

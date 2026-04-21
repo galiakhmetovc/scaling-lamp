@@ -121,6 +121,9 @@ pub(super) fn handle_nested_routes(app: &App, request: Request) -> std::io::Resu
         (Method::Post, [session_id, compact]) if compact == "compact" => {
             handle_compact_session(app, request, session_id.as_str())
         }
+        (Method::Get, [session_id, context]) if context == "context" => {
+            handle_render_context(app, request, session_id.as_str())
+        }
         (Method::Get, [session_id, plan]) if plan == "plan" => {
             handle_render_plan(app, request, session_id.as_str())
         }
@@ -225,6 +228,20 @@ fn handle_session_background_jobs(
                 .collect::<Vec<_>>();
             respond_json::<SessionBackgroundJobsResponse>(request, StatusCode(200), &response)
         }
+        Err(error) => {
+            let (status, payload) = map_bootstrap_error(error);
+            respond_json(request, status, &payload)
+        }
+    }
+}
+
+fn handle_render_context(app: &App, request: Request, session_id: &str) -> std::io::Result<()> {
+    match app.render_context_state(session_id) {
+        Ok(context) => respond_json(
+            request,
+            StatusCode(200),
+            &serde_json::json!({ "context": context }),
+        ),
         Err(error) => {
             let (status, payload) = map_bootstrap_error(error);
             respond_json(request, status, &payload)

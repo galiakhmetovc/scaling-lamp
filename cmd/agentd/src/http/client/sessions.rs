@@ -148,6 +148,16 @@ impl DaemonClient {
             .ok_or_else(|| BootstrapError::Stream(std::io::Error::other("missing plan field")))
     }
 
+    pub fn render_context_state(&self, session_id: &str) -> Result<String, BootstrapError> {
+        let value: serde_json::Value =
+            self.get_json(&format!("/v1/sessions/{session_id}/context"))?;
+        value
+            .get("context")
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_string)
+            .ok_or_else(|| BootstrapError::Stream(std::io::Error::other("missing context field")))
+    }
+
     pub fn session_background_jobs(
         &self,
         session_id: &str,

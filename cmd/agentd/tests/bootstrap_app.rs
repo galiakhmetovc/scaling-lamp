@@ -1687,9 +1687,25 @@ fn execute_chat_turn_can_finish_after_an_allowed_web_tool_call() {
     let transcript = app
         .session_transcript("session-chat-tool")
         .expect("load transcript");
-    assert_eq!(transcript.entries.len(), 2);
-    assert_eq!(transcript.entries[0].content, "Fetch the local doc");
-    assert_eq!(transcript.entries[1].content, "Fetched local doc");
+    assert_eq!(
+        transcript
+            .entries
+            .first()
+            .map(|entry| entry.content.as_str()),
+        Some("Fetch the local doc")
+    );
+    assert_eq!(
+        transcript
+            .entries
+            .last()
+            .map(|entry| entry.content.as_str()),
+        Some("Fetched local doc")
+    );
+    assert!(transcript.entries.iter().any(|entry| {
+        entry.role == "tool"
+            && entry.tool_name.as_deref() == Some("web_fetch")
+            && entry.tool_status.as_deref() == Some("completed")
+    }));
 
     let normalized_first = first_request.to_ascii_lowercase();
     assert!(normalized_first.contains("\"tools\""));
@@ -1982,12 +1998,21 @@ fn execute_chat_turn_requests_operator_reset_when_tool_round_budget_is_exhausted
     let transcript = app
         .session_transcript("session-chat-tool-limit")
         .expect("transcript");
-    assert_eq!(transcript.entries.len(), 2);
-    assert_eq!(transcript.entries[0].content, "Inspect the workspace");
     assert_eq!(
-        transcript.entries[1].content,
-        "Продолжил работу после подтверждённого сброса лимита tool rounds."
+        transcript
+            .entries
+            .first()
+            .map(|entry| entry.content.as_str()),
+        Some("Inspect the workspace")
     );
+    assert_eq!(
+        transcript
+            .entries
+            .last()
+            .map(|entry| entry.content.as_str()),
+        Some("Продолжил работу после подтверждённого сброса лимита tool rounds.")
+    );
+    assert!(transcript.entries.iter().any(|entry| entry.role == "tool"));
 }
 
 #[test]
@@ -2562,12 +2587,21 @@ fn execute_chat_turn_can_finish_after_an_allowed_web_tool_call_with_zai() {
     let transcript = app
         .session_transcript("session-chat-tool-zai")
         .expect("load transcript");
-    assert_eq!(transcript.entries.len(), 2);
-    assert_eq!(transcript.entries[0].content, "Fetch the local doc");
     assert_eq!(
-        transcript.entries[1].content,
-        "Fetched local doc through z.ai"
+        transcript
+            .entries
+            .first()
+            .map(|entry| entry.content.as_str()),
+        Some("Fetch the local doc")
     );
+    assert_eq!(
+        transcript
+            .entries
+            .last()
+            .map(|entry| entry.content.as_str()),
+        Some("Fetched local doc through z.ai")
+    );
+    assert!(transcript.entries.iter().any(|entry| entry.role == "tool"));
 
     let normalized_first = first_request.to_ascii_lowercase();
     assert!(normalized_first.contains("/chat/completions"));
@@ -2829,12 +2863,21 @@ fn approval_approve_resumes_an_openai_chat_tool_call_and_completes_the_run() {
     let transcript = app
         .session_transcript("session-chat-approval")
         .expect("load transcript");
-    assert_eq!(transcript.entries.len(), 2);
-    assert_eq!(transcript.entries[0].content, "Fetch the approved doc");
     assert_eq!(
-        transcript.entries[1].content,
-        "Fetched approved doc after approval"
+        transcript
+            .entries
+            .first()
+            .map(|entry| entry.content.as_str()),
+        Some("Fetch the approved doc")
     );
+    assert_eq!(
+        transcript
+            .entries
+            .last()
+            .map(|entry| entry.content.as_str()),
+        Some("Fetched approved doc after approval")
+    );
+    assert!(transcript.entries.iter().any(|entry| entry.role == "tool"));
 
     let normalized_first = first_request.to_ascii_lowercase();
     assert!(normalized_first.contains("\"name\":\"web_fetch\""));
@@ -2986,12 +3029,21 @@ fn approval_approve_resumes_a_zai_chat_tool_call_and_completes_the_run() {
     let transcript = app
         .session_transcript("session-chat-approval-zai")
         .expect("load transcript");
-    assert_eq!(transcript.entries.len(), 2);
-    assert_eq!(transcript.entries[0].content, "Fetch the approved zai doc");
     assert_eq!(
-        transcript.entries[1].content,
-        "Fetched approved zai doc after approval"
+        transcript
+            .entries
+            .first()
+            .map(|entry| entry.content.as_str()),
+        Some("Fetch the approved zai doc")
     );
+    assert_eq!(
+        transcript
+            .entries
+            .last()
+            .map(|entry| entry.content.as_str()),
+        Some("Fetched approved zai doc after approval")
+    );
+    assert!(transcript.entries.iter().any(|entry| entry.role == "tool"));
 
     let normalized_first = first_request.to_ascii_lowercase();
     assert!(normalized_first.contains("\"tool_choice\":\"auto\""));
@@ -3176,15 +3228,21 @@ fn approval_approve_resumes_a_mission_turn_and_completes_the_job() {
     let transcript = app
         .session_transcript("session-mission-approval")
         .expect("load transcript");
-    assert_eq!(transcript.entries.len(), 2);
     assert_eq!(
-        transcript.entries[0].content,
-        "Fetch the approved mission doc"
+        transcript
+            .entries
+            .first()
+            .map(|entry| entry.content.as_str()),
+        Some("Fetch the approved mission doc")
     );
     assert_eq!(
-        transcript.entries[1].content,
-        "Mission fetched approved doc"
+        transcript
+            .entries
+            .last()
+            .map(|entry| entry.content.as_str()),
+        Some("Mission fetched approved doc")
     );
+    assert!(transcript.entries.iter().any(|entry| entry.role == "tool"));
 
     let normalized_first = first_request.to_ascii_lowercase();
     assert!(normalized_first.contains("\"name\":\"web_fetch\""));
@@ -4794,6 +4852,67 @@ fn compact_session_is_a_noop_when_the_transcript_is_below_threshold() {
             .expect("load context summary")
             .is_none()
     );
+}
+
+#[test]
+fn render_context_state_explains_ctx_summary_and_compaction_policy() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let app = build_from_config(AppConfig {
+        data_dir: temp.path().join("state-root"),
+        ..AppConfig::default()
+    })
+    .expect("build app");
+    let store = PersistenceStore::open(&app.persistence).expect("open store");
+    let session = app
+        .create_session_auto(Some("Context Session"))
+        .expect("create session");
+
+    for (index, (kind, content)) in [
+        ("user", "one"),
+        ("assistant", "two"),
+        ("user", "three"),
+        ("assistant", "four"),
+        ("user", "five"),
+        ("assistant", "six"),
+        ("user", "seven"),
+        ("assistant", "eight"),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        store
+            .put_transcript(&agent_persistence::TranscriptRecord {
+                id: format!("context-transcript-{index}"),
+                session_id: session.id.clone(),
+                run_id: None,
+                kind: kind.to_string(),
+                content: content.to_string(),
+                created_at: 100 + index as i64,
+            })
+            .expect("put transcript");
+    }
+    store
+        .put_context_summary(&agent_persistence::ContextSummaryRecord {
+            session_id: session.id.clone(),
+            summary_text: "Earlier context.".to_string(),
+            covered_message_count: 2,
+            summary_token_estimate: 4,
+            updated_at: 200,
+        })
+        .expect("put context summary");
+
+    let rendered = app
+        .render_context_state(&session.id)
+        .expect("render context state");
+
+    assert!(rendered.contains("Context:"));
+    assert!(rendered.contains("ctx="));
+    assert!(rendered.contains("messages_total=8"));
+    assert!(rendered.contains("messages_uncovered=6"));
+    assert!(rendered.contains("summary_tokens=4"));
+    assert!(rendered.contains("compaction_manual=true"));
+    assert!(rendered.contains("keep_tail=6"));
+    assert!(rendered.contains("summary_covers_messages=2"));
 }
 
 #[test]

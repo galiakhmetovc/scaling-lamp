@@ -43,6 +43,22 @@ impl Timeline {
             match entry.role.as_str() {
                 "user" => timeline.push_user(entry.content.as_str(), entry.created_at),
                 "assistant" => timeline.push_assistant(entry.content.as_str(), entry.created_at),
+                "reasoning" => timeline.push_reasoning(entry.content.as_str(), entry.created_at),
+                "tool" => timeline.push_tool(
+                    entry.tool_name.as_deref().unwrap_or("tool"),
+                    entry
+                        .tool_status
+                        .as_deref()
+                        .unwrap_or(ToolExecutionStatus::Completed.as_str()),
+                    entry.content.as_str(),
+                    entry.created_at,
+                ),
+                "approval" => timeline.push_approval(
+                    entry.approval_id.as_deref().unwrap_or("approval"),
+                    entry.content.as_str(),
+                    entry.created_at,
+                ),
+                "system" => timeline.push_system(entry.content.as_str(), entry.created_at),
                 _ => timeline.push_system(
                     &format!("{}: {}", entry.role, entry.content),
                     entry.created_at,
@@ -107,6 +123,15 @@ impl Timeline {
         });
     }
 
+    pub fn push_reasoning(&mut self, content: &str, timestamp: i64) {
+        self.finish_assistant();
+        self.entries.push(TimelineEntry {
+            timestamp,
+            kind: TimelineEntryKind::Reasoning,
+            content: content.to_string(),
+        });
+    }
+
     pub fn push_approval(&mut self, approval_id: &str, reason: &str, timestamp: i64) {
         self.finish_turn();
         self.entries.push(TimelineEntry {
@@ -115,6 +140,19 @@ impl Timeline {
                 approval_id: approval_id.to_string(),
             },
             content: reason.to_string(),
+        });
+    }
+
+    pub fn push_tool(&mut self, tool_name: &str, status: &str, summary: &str, timestamp: i64) {
+        self.finish_turn();
+        self.entries.push(TimelineEntry {
+            timestamp,
+            kind: TimelineEntryKind::Tool {
+                tool_name: tool_name.to_string(),
+                status: status.to_string(),
+                summary: summary.to_string(),
+            },
+            content: summary.to_string(),
         });
     }
 
@@ -217,6 +255,20 @@ impl Timeline {
         }
     }
 
+    pub fn merge_ephemeral_from(&mut self, previous: &Timeline) {
+        for entry in previous.entries.iter().filter(|entry| should_preserve_entry(entry)) {
+            if !self.entries.iter().any(|existing| existing == entry) {
+                self.entries.push(entry.clone());
+            }
+        }
+        self.entries.sort_by(|left, right| {
+            left.timestamp
+                .cmp(&right.timestamp)
+                .then_with(|| timeline_entry_sort_weight(left).cmp(&timeline_entry_sort_weight(right)))
+                .then_with(|| left.content.cmp(&right.content))
+        });
+    }
+
     pub fn finish_turn(&mut self) {
         self.finish_reasoning();
         self.finish_assistant();
@@ -237,5 +289,27 @@ impl Timeline {
 
     fn finish_assistant(&mut self) {
         self.active_assistant = None;
+    }
+}
+
+fn should_preserve_entry(entry: &TimelineEntry) -> bool {
+    match &entry.kind {
+        TimelineEntryKind::Reasoning => true,
+        TimelineEntryKind::Tool { status, .. } => {
+            !matches!(status.as_str(), "completed" | "failed")
+        }
+        TimelineEntryKind::System => entry.content.starts_with("auto-approving pending request:"),
+        _ => false,
+    }
+}
+
+fn timeline_entry_sort_weight(entry: &TimelineEntry) -> u8 {
+    match entry.kind {
+        TimelineEntryKind::User => 0,
+        TimelineEntryKind::Reasoning => 1,
+        TimelineEntryKind::Tool { .. } => 2,
+        TimelineEntryKind::Approval { .. } => 3,
+        TimelineEntryKind::System => 4,
+        TimelineEntryKind::Assistant => 5,
     }
 }

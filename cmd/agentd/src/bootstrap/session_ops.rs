@@ -1,6 +1,7 @@
 use super::*;
 use agent_persistence::JobRepository;
 use agent_runtime::mission::JobSpec;
+use agent_runtime::run::{RunSnapshot, RunStatus, RunStepKind};
 use agent_runtime::session::{Session, TranscriptEntry};
 use agent_runtime::skills::{resolve_session_skill_status, scan_skill_catalog};
 use time::OffsetDateTime;
@@ -21,7 +22,7 @@ impl App {
             });
         }
 
-        let entries = store
+        let mut entries = store
             .list_transcripts_for_session(session_id)?
             .into_iter()
             .map(TranscriptEntry::try_from)
@@ -33,8 +34,29 @@ impl App {
                 content: entry.content,
                 run_id: entry.run_id,
                 created_at: entry.created_at,
+                tool_name: None,
+                tool_status: None,
+                approval_id: None,
             })
-            .collect();
+            .collect::<Vec<_>>();
+
+        let runs = store
+            .load_execution_state()?
+            .runs
+            .into_iter()
+            .map(RunSnapshot::try_from)
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(BootstrapError::RecordConversion)?;
+        entries.extend(build_synthetic_run_lines(session_id, &runs));
+        entries.sort_by(|left, right| {
+            left.created_at
+                .cmp(&right.created_at)
+                .then_with(|| {
+                    transcript_line_sort_weight(left).cmp(&transcript_line_sort_weight(right))
+                })
+                .then_with(|| left.role.cmp(&right.role))
+                .then_with(|| left.content.cmp(&right.content))
+        });
 
         Ok(SessionTranscriptView {
             session_id: session_id.to_string(),
@@ -345,6 +367,113 @@ impl App {
             source,
         })
     }
+}
+
+fn build_synthetic_run_lines(session_id: &str, runs: &[RunSnapshot]) -> Vec<SessionTranscriptLine> {
+    let mut lines = Vec::new();
+    for run in runs.iter().filter(|run| run.session_id == session_id) {
+        for step in &run.recent_steps {
+            match step.kind {
+                RunStepKind::ToolCompleted => {
+                    let (tool_name, status, summary) = parse_tool_step_detail(step.detail.as_str());
+                    lines.push(SessionTranscriptLine {
+                        role: "tool".to_string(),
+                        content: summary,
+                        run_id: Some(run.id.clone()),
+                        created_at: step.recorded_at,
+                        tool_name: Some(tool_name),
+                        tool_status: Some(status),
+                        approval_id: None,
+                    });
+                }
+                RunStepKind::WaitingApproval
+                | RunStepKind::ApprovalResolved
+                | RunStepKind::WaitingProcess
+                | RunStepKind::ProcessCompleted
+                | RunStepKind::WaitingDelegate
+                | RunStepKind::DelegateCompleted
+                | RunStepKind::Cancelled
+                | RunStepKind::Interrupted => {
+                    lines.push(SessionTranscriptLine {
+                        role: "system".to_string(),
+                        content: step.detail.clone(),
+                        run_id: Some(run.id.clone()),
+                        created_at: step.recorded_at,
+                        tool_name: None,
+                        tool_status: None,
+                        approval_id: None,
+                    });
+                }
+                _ => {}
+            }
+        }
+
+        if let Some(provider_stream) = run.provider_stream.as_ref()
+            && !provider_stream.output_text.trim().is_empty()
+        {
+            lines.push(SessionTranscriptLine {
+                role: "assistant".to_string(),
+                content: provider_stream.output_text.clone(),
+                run_id: Some(run.id.clone()),
+                created_at: provider_stream.updated_at,
+                tool_name: None,
+                tool_status: None,
+                approval_id: None,
+            });
+        }
+
+        if matches!(
+            run.status,
+            RunStatus::Failed | RunStatus::Cancelled | RunStatus::Interrupted
+        ) && let Some(error) = run.error.as_deref()
+        {
+            lines.push(SessionTranscriptLine {
+                role: "system".to_string(),
+                content: format!("chat failed: {error}"),
+                run_id: Some(run.id.clone()),
+                created_at: run.finished_at.unwrap_or(run.updated_at),
+                tool_name: None,
+                tool_status: None,
+                approval_id: None,
+            });
+        }
+    }
+    lines
+}
+
+fn transcript_line_sort_weight(line: &SessionTranscriptLine) -> u8 {
+    match line.role.as_str() {
+        "user" => 0,
+        "reasoning" => 1,
+        "tool" => 2,
+        "approval" => 3,
+        "system" => 4,
+        "assistant" => 5,
+        _ => 6,
+    }
+}
+
+fn parse_tool_step_detail(detail: &str) -> (String, String, String) {
+    let summary = detail.trim().to_string();
+    let tool_summary = detail
+        .split_once(" -> ")
+        .map(|(head, _)| head.trim())
+        .unwrap_or_else(|| detail.trim());
+    let tool_name = tool_summary
+        .split_whitespace()
+        .next()
+        .unwrap_or("tool")
+        .to_string();
+    let detail_lower = detail.to_ascii_lowercase();
+    let status = if detail_lower.contains("retryable error:")
+        || detail_lower.contains(" invalid arguments:")
+        || detail_lower.contains(" failed:")
+    {
+        "failed"
+    } else {
+        "completed"
+    };
+    (tool_name, status.to_string(), summary)
 }
 
 fn format_background_job_time(timestamp: i64) -> String {

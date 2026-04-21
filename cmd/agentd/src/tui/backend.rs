@@ -43,6 +43,7 @@ pub trait TuiBackend: Clone + Send + Sync + 'static {
         session_id: &str,
         requested_approval_id: Option<&str>,
     ) -> Result<Option<SessionPendingApproval>, BootstrapError>;
+    fn render_context(&self, session_id: &str) -> Result<String, BootstrapError>;
     fn render_plan(&self, session_id: &str) -> Result<String, BootstrapError>;
     fn render_active_jobs(&self, session_id: &str) -> Result<String, BootstrapError>;
     fn compact_session(&self, session_id: &str) -> Result<SessionSummary, BootstrapError>;
@@ -137,6 +138,10 @@ impl TuiBackend for App {
         requested_approval_id: Option<&str>,
     ) -> Result<Option<SessionPendingApproval>, BootstrapError> {
         App::latest_pending_approval(self, session_id, requested_approval_id)
+    }
+
+    fn render_context(&self, session_id: &str) -> Result<String, BootstrapError> {
+        App::render_context_state(self, session_id)
     }
 
     fn render_plan(&self, session_id: &str) -> Result<String, BootstrapError> {
@@ -261,6 +266,10 @@ impl TuiBackend for DaemonClient {
         requested_approval_id: Option<&str>,
     ) -> Result<Option<SessionPendingApproval>, BootstrapError> {
         DaemonClient::latest_pending_approval(self, session_id, requested_approval_id)
+    }
+
+    fn render_context(&self, session_id: &str) -> Result<String, BootstrapError> {
+        DaemonClient::render_context_state(self, session_id)
     }
 
     fn render_plan(&self, session_id: &str) -> Result<String, BootstrapError> {

@@ -76,6 +76,12 @@ pub struct SessionTranscriptLine {
     pub content: String,
     pub run_id: Option<String>,
     pub created_at: i64,
+    #[serde(default)]
+    pub tool_name: Option<String>,
+    #[serde(default)]
+    pub tool_status: Option<String>,
+    #[serde(default)]
+    pub approval_id: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -203,7 +209,22 @@ impl SessionTranscriptView {
     pub fn render(&self) -> String {
         self.entries
             .iter()
-            .map(|entry| format!("[{}] {}: {}", entry.created_at, entry.role, entry.content))
+            .map(|entry| match entry.role.as_str() {
+                "tool" => format!(
+                    "[{}] tool:{}|{}: {}",
+                    entry.created_at,
+                    entry.tool_name.as_deref().unwrap_or("tool"),
+                    entry.tool_status.as_deref().unwrap_or("completed"),
+                    entry.content
+                ),
+                "approval" => format!(
+                    "[{}] approval:{}: {}",
+                    entry.created_at,
+                    entry.approval_id.as_deref().unwrap_or("approval"),
+                    entry.content
+                ),
+                _ => format!("[{}] {}: {}", entry.created_at, entry.role, entry.content),
+            })
             .collect::<Vec<_>>()
             .join("\n")
     }

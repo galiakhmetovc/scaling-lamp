@@ -3,6 +3,7 @@ use crate::bootstrap::SessionPreferencesPatch;
 
 pub(super) trait ChatReplBackend {
     fn show_chat(&self, session_id: &str) -> Result<String, BootstrapError>;
+    fn render_context(&self, session_id: &str) -> Result<String, BootstrapError>;
     fn render_plan(&self, session_id: &str) -> Result<String, BootstrapError>;
     fn render_active_jobs(&self, session_id: &str) -> Result<String, BootstrapError>;
     fn render_session_skills(&self, session_id: &str) -> Result<String, BootstrapError>;
@@ -43,6 +44,10 @@ pub(super) trait ChatReplBackend {
 impl ChatReplBackend for App {
     fn show_chat(&self, session_id: &str) -> Result<String, BootstrapError> {
         render::show_chat(self, session_id)
+    }
+
+    fn render_context(&self, session_id: &str) -> Result<String, BootstrapError> {
+        self.render_context_state(session_id)
     }
 
     fn render_plan(&self, session_id: &str) -> Result<String, BootstrapError> {
@@ -113,6 +118,10 @@ impl ChatReplBackend for App {
 impl ChatReplBackend for DaemonClient {
     fn show_chat(&self, session_id: &str) -> Result<String, BootstrapError> {
         render::show_chat_via_client(self, session_id)
+    }
+
+    fn render_context(&self, session_id: &str) -> Result<String, BootstrapError> {
+        self.render_context_state(session_id)
     }
 
     fn render_plan(&self, session_id: &str) -> Result<String, BootstrapError> {
@@ -367,6 +376,11 @@ where
                 renderer.finish_turn()?;
                 let transcript = backend.show_chat(session_id)?;
                 writeln!(renderer.output, "{transcript}").map_err(BootstrapError::Stream)?;
+            }
+            Some("/context") => {
+                renderer.finish_turn()?;
+                let context = backend.render_context(session_id)?;
+                writeln!(renderer.output, "{context}").map_err(BootstrapError::Stream)?;
             }
             Some("/plan") => {
                 renderer.finish_turn()?;
@@ -630,11 +644,16 @@ fn send_chat_outcome_via_client_internal(
 }
 
 fn canonical_repl_command(raw: &str) -> Option<&'static str> {
-    let command = raw.split_whitespace().next().unwrap_or_default();
+    let command = raw
+        .split_whitespace()
+        .next()
+        .unwrap_or_default()
+        .trim_end_matches(['\\', '/']);
     match command {
         "/exit" | "\\выход" => Some("/exit"),
         "/help" | "\\помощь" => Some("/help"),
         "/show" | "\\показать" => Some("/show"),
+        "/context" | "\\контекст" => Some("/context"),
         "/plan" | "\\план" => Some("/plan"),
         "/jobs" | "\\задачи" => Some("/jobs"),
         "/completion" | "\\доводка" => Some("/completion"),

@@ -1,4 +1,5 @@
 use super::*;
+use agent_persistence::ContextOffloadRepository;
 use agent_runtime::context::CompactionPolicy;
 use agent_runtime::plan::PlanSnapshot;
 use agent_runtime::prompt::SessionHead;
@@ -163,6 +164,89 @@ impl App {
                 lines.push(format!("  note: {note}"));
             }
         }
+        Ok(lines.join("\n"))
+    }
+
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub fn render_context_state(&self, session_id: &str) -> Result<String, BootstrapError> {
+        let store = self.store()?;
+        let session = Session::try_from(store.get_session(session_id)?.ok_or_else(|| {
+            BootstrapError::MissingRecord {
+                kind: "session",
+                id: session_id.to_string(),
+            }
+        })?)
+        .map_err(BootstrapError::RecordConversion)?;
+        let transcripts = store.list_transcripts_for_session(session_id)?;
+        let context_summary = store
+            .get_context_summary(session_id)?
+            .map(ContextSummary::try_from)
+            .transpose()
+            .map_err(BootstrapError::RecordConversion)?;
+        let context_offload = store
+            .get_context_offload(session_id)?
+            .map(agent_runtime::context::ContextOffloadSnapshot::try_from)
+            .transpose()
+            .map_err(BootstrapError::RecordConversion)?;
+        let runs = store
+            .load_execution_state()?
+            .runs
+            .into_iter()
+            .map(RunSnapshot::try_from)
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(BootstrapError::RecordConversion)?;
+        let session_head = prompting::build_session_head(
+            &session,
+            &transcripts,
+            context_summary.as_ref(),
+            &runs,
+            &self.runtime.workspace,
+        );
+        let policy = CompactionPolicy::default();
+        let uncovered_messages = transcripts.len().saturating_sub(
+            context_summary
+                .as_ref()
+                .map_or(0, |summary| summary.covered_message_count as usize),
+        );
+        let offload_refs = context_offload
+            .as_ref()
+            .map_or(0usize, |snapshot| snapshot.refs.len());
+        let offload_tokens = context_offload
+            .as_ref()
+            .map_or(0u32, |snapshot| snapshot.total_token_estimate());
+
+        let mut lines = vec![
+            "Context:".to_string(),
+            format!("session_id={}", session.id),
+            format!("ctx={} (tail + summary only)", session_head.context_tokens),
+            format!("messages_total={}", transcripts.len()),
+            format!("messages_uncovered={uncovered_messages}"),
+            format!(
+                "summary_tokens={}",
+                context_summary
+                    .as_ref()
+                    .map_or(0u32, |summary| summary.summary_token_estimate)
+            ),
+            format!("offload_tokens={offload_tokens}"),
+            format!("offload_refs={offload_refs}"),
+            format!("compactifications={}", session.settings.compactifications),
+            format!(
+                "compaction_manual={} threshold_messages={} keep_tail={}",
+                true, policy.min_messages, policy.keep_tail_messages
+            ),
+        ];
+
+        if let Some(summary) = context_summary.as_ref() {
+            lines.push(format!(
+                "summary_covers_messages={}",
+                summary.covered_message_count
+            ));
+            lines.push(format!("summary_updated_at={}", summary.updated_at));
+        } else {
+            lines.push("summary_covers_messages=0".to_string());
+            lines.push("summary_updated_at=<none>".to_string());
+        }
+
         Ok(lines.join("\n"))
     }
 
