@@ -35,6 +35,17 @@ pub(crate) fn build_session_head(
     let summary_tokens = context_summary
         .map(|summary| summary.summary_token_estimate)
         .unwrap_or(0);
+    let provider_input_tokens = runs
+        .iter()
+        .filter(|run| run.session_id == session.id)
+        .max_by(|left, right| {
+            left.updated_at
+                .cmp(&right.updated_at)
+                .then_with(|| left.started_at.cmp(&right.started_at))
+                .then_with(|| left.id.cmp(&right.id))
+        })
+        .and_then(|run| run.latest_provider_usage.as_ref())
+        .map(|usage| usage.input_tokens);
     let pending_approval_count = runs
         .iter()
         .filter(|run| {
@@ -51,7 +62,8 @@ pub(crate) fn build_session_head(
         session_id: session.id.clone(),
         title: session.title.clone(),
         message_count,
-        context_tokens: uncovered_transcript_tokens + summary_tokens,
+        context_tokens: provider_input_tokens
+            .unwrap_or(uncovered_transcript_tokens + summary_tokens),
         compactifications: session.settings.compactifications,
         summary_covered_message_count: covered_message_count as u32,
         pending_approval_count,

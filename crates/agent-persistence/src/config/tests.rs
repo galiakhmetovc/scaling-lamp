@@ -19,6 +19,10 @@ fn base_env(root: &Path) -> ConfigEnv {
         daemon_public_base_url_override: None,
         daemon_skills_dir_override: None,
         home_dir: Some(root.join("home")),
+        context_compaction_keep_tail_messages_override: None,
+        context_compaction_max_output_tokens_override: None,
+        context_compaction_max_summary_chars_override: None,
+        context_compaction_min_messages_override: None,
         provider_api_base_override: None,
         provider_api_key_override: None,
         provider_connect_timeout_override: None,
@@ -29,6 +33,8 @@ fn base_env(root: &Path) -> ConfigEnv {
         provider_request_timeout_override: None,
         provider_stream_idle_timeout_override: None,
         permission_mode_override: None,
+        session_project_memory_enabled_override: None,
+        session_working_memory_limit_override: None,
         temp_dir: root.join("tmp"),
         xdg_config_home: Some(root.join("xdg-config")),
         xdg_state_home: Some(root.join("xdg-state")),
@@ -75,6 +81,8 @@ fn validate_rejects_relative_data_dir() {
         daemon: Default::default(),
         permissions: Default::default(),
         provider: Default::default(),
+        session_defaults: Default::default(),
+        context: Default::default(),
     };
 
     let error = config.validate().expect_err("relative path must fail");
@@ -149,6 +157,42 @@ path_prefix = "notes/"
     assert_eq!(config.permissions.mode, PermissionMode::AcceptEdits);
     assert_eq!(config.permissions.rules.len(), 1);
     assert_eq!(config.permissions.rules[0].action, PermissionAction::Allow);
+}
+
+#[test]
+fn load_merges_session_defaults_and_context_policy_from_file() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let config_path = temp.path().join("teamd.toml");
+
+    fs::write(
+        &config_path,
+        r#"
+data_dir = "/tmp/teamd-config"
+
+[session_defaults]
+working_memory_limit = 96
+project_memory_enabled = false
+
+[context]
+compaction_min_messages = 12
+compaction_keep_tail_messages = 4
+compaction_max_output_tokens = 2048
+compaction_max_summary_chars = 8192
+"#,
+    )
+    .expect("write config");
+
+    let mut env = base_env(temp.path());
+    env.config_path = Some(config_path);
+
+    let config = AppConfig::load_from_env(&env).expect("load config");
+
+    assert_eq!(config.session_defaults.working_memory_limit, 96);
+    assert!(!config.session_defaults.project_memory_enabled);
+    assert_eq!(config.context.compaction_min_messages, 12);
+    assert_eq!(config.context.compaction_keep_tail_messages, 4);
+    assert_eq!(config.context.compaction_max_output_tokens, 2048);
+    assert_eq!(config.context.compaction_max_summary_chars, 8192);
 }
 
 #[test]

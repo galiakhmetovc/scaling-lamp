@@ -58,6 +58,7 @@ pub struct RunRecord {
     pub status: String,
     pub error: Option<String>,
     pub result: Option<String>,
+    pub provider_usage_json: String,
     pub recent_steps_json: String,
     pub evidence_refs_json: String,
     pub pending_approvals_json: String,
@@ -178,6 +179,7 @@ pub enum RecordConversionError {
     InvalidRunRecentSteps(serde_json::Error),
     InvalidRunPendingApprovals(serde_json::Error),
     InvalidRunProviderLoop(serde_json::Error),
+    InvalidRunProviderUsage(serde_json::Error),
     InvalidRunEvidenceRefs(serde_json::Error),
     InvalidRunStatus(RunStatusParseError),
     InvalidSessionSettings(serde_json::Error),
@@ -193,6 +195,7 @@ pub enum RecordConversionError {
     SerializeRunRecentSteps(serde_json::Error),
     SerializeRunPendingApprovals(serde_json::Error),
     SerializeRunProviderLoop(serde_json::Error),
+    SerializeRunProviderUsage(serde_json::Error),
     SerializeSessionSettings(serde_json::Error),
 }
 
@@ -420,6 +423,8 @@ impl TryFrom<&RunSnapshot> for RunRecord {
             status: snapshot.status.as_str().to_string(),
             error: snapshot.error.clone(),
             result: snapshot.result.clone(),
+            provider_usage_json: serde_json::to_string(&snapshot.latest_provider_usage)
+                .map_err(RecordConversionError::SerializeRunProviderUsage)?,
             recent_steps_json: serde_json::to_string(&snapshot.recent_steps)
                 .map_err(RecordConversionError::SerializeRunRecentSteps)?,
             evidence_refs_json: serde_json::to_string(&snapshot.evidence_refs)
@@ -452,6 +457,8 @@ impl TryFrom<RunRecord> for RunSnapshot {
             finished_at: record.finished_at,
             error: record.error,
             result: record.result,
+            latest_provider_usage: serde_json::from_str(&record.provider_usage_json)
+                .map_err(RecordConversionError::InvalidRunProviderUsage)?,
             recent_steps: serde_json::from_str(&record.recent_steps_json)
                 .map_err(RecordConversionError::InvalidRunRecentSteps)?,
             evidence_refs: serde_json::from_str(&record.evidence_refs_json)
@@ -697,6 +704,9 @@ impl fmt::Display for RecordConversionError {
             Self::InvalidRunProviderLoop(source) => {
                 write!(formatter, "invalid run provider loop state: {source}")
             }
+            Self::InvalidRunProviderUsage(source) => {
+                write!(formatter, "invalid run provider usage: {source}")
+            }
             Self::InvalidRunEvidenceRefs(source) => {
                 write!(formatter, "invalid run evidence refs: {source}")
             }
@@ -757,6 +767,12 @@ impl fmt::Display for RecordConversionError {
                     "failed to serialize run provider loop state: {source}"
                 )
             }
+            Self::SerializeRunProviderUsage(source) => {
+                write!(
+                    formatter,
+                    "failed to serialize run provider usage: {source}"
+                )
+            }
             Self::SerializeSessionSettings(source) => {
                 write!(formatter, "failed to serialize session settings: {source}")
             }
@@ -787,6 +803,7 @@ impl Error for RecordConversionError {
             Self::InvalidRunRecentSteps(source) => Some(source),
             Self::InvalidRunPendingApprovals(source) => Some(source),
             Self::InvalidRunProviderLoop(source) => Some(source),
+            Self::InvalidRunProviderUsage(source) => Some(source),
             Self::InvalidRunEvidenceRefs(source) => Some(source),
             Self::InvalidRunStatus(source) => Some(source),
             Self::InvalidSessionSettings(source) => Some(source),
@@ -802,6 +819,7 @@ impl Error for RecordConversionError {
             Self::SerializeRunEvidenceRefs(source) => Some(source),
             Self::SerializeRunPendingApprovals(source) => Some(source),
             Self::SerializeRunProviderLoop(source) => Some(source),
+            Self::SerializeRunProviderUsage(source) => Some(source),
             Self::SerializeSessionSettings(source) => Some(source),
             Self::InvalidMessageRole { .. } | Self::MissingJobInput => None,
         }

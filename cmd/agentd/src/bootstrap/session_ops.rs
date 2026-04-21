@@ -79,11 +79,16 @@ impl App {
     pub fn create_session(&self, id: &str, title: &str) -> Result<SessionSummary, BootstrapError> {
         let store = self.store()?;
         let now = unix_timestamp()?;
+        let settings = SessionSettings {
+            working_memory_limit: self.config.session_defaults.working_memory_limit,
+            project_memory_enabled: self.config.session_defaults.project_memory_enabled,
+            ..SessionSettings::default()
+        };
         let session = Session {
             id: id.to_string(),
             title: title.trim().to_string(),
             prompt_override: None,
-            settings: SessionSettings::default(),
+            settings,
             active_mission_id: None,
             parent_session_id: None,
             parent_job_id: None,

@@ -39,6 +39,7 @@ pub(super) fn bootstrap_schema(connection: &Connection) -> Result<(), StoreError
              status TEXT NOT NULL,
              error TEXT,
              result TEXT,
+             provider_usage_json TEXT NOT NULL DEFAULT 'null',
              recent_steps_json TEXT NOT NULL,
              evidence_refs_json TEXT NOT NULL,
              pending_approvals_json TEXT NOT NULL,
@@ -189,6 +190,7 @@ pub(super) fn validate_schema(connection: &Connection) -> Result<(), StoreError>
     validate_column(connection, "sessions", "delegation_label", false)?;
     validate_column(connection, "runs", "evidence_refs_json", true)?;
     validate_column(connection, "runs", "recent_steps_json", true)?;
+    validate_column(connection, "runs", "provider_usage_json", true)?;
     validate_column(connection, "runs", "pending_approvals_json", true)?;
     validate_column(connection, "runs", "provider_loop_json", true)?;
     validate_column(connection, "runs", "delegate_runs_json", true)?;
@@ -303,6 +305,12 @@ pub(super) fn migrate_schema(connection: &Connection) -> Result<(), StoreError> 
         "missions",
         "schedule_json",
         "TEXT NOT NULL DEFAULT '{\"not_before\":null,\"interval_seconds\":null}'",
+    )?;
+    add_column_if_missing(
+        connection,
+        "runs",
+        "provider_usage_json",
+        "TEXT NOT NULL DEFAULT 'null'",
     )?;
     add_column_if_missing(
         connection,

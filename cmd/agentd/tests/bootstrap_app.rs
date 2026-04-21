@@ -16,7 +16,7 @@ use agent_runtime::plan::{PlanItem, PlanItemStatus, PlanSnapshot};
 use agent_runtime::provider::{ConfiguredProvider, ProviderKind};
 use agent_runtime::run::{ApprovalRequest, DelegateRun, RunEngine, RunSnapshot, RunStatus};
 use agent_runtime::scheduler::{MissionVerificationSummary, SupervisorAction};
-use agent_runtime::session::SessionSettings;
+use agent_runtime::session::{Session, SessionSettings};
 use agent_runtime::tool::{FsWriteInput, ToolCall};
 use agent_runtime::verification::VerificationStatus;
 use agent_runtime::verification::{CheckOutcome, EvidenceBundle};
@@ -379,6 +379,7 @@ fn build_from_config_interrupts_unrecoverable_runs_but_keeps_approvals_pending()
             status: RunStatus::Running.as_str().to_string(),
             error: None,
             result: None,
+            provider_usage_json: "null".to_string(),
             recent_steps_json: "[]".to_string(),
             evidence_refs_json: "[]".to_string(),
             pending_approvals_json: "[]".to_string(),
@@ -395,6 +396,7 @@ fn build_from_config_interrupts_unrecoverable_runs_but_keeps_approvals_pending()
             status: RunStatus::Resuming.as_str().to_string(),
             error: None,
             result: None,
+            provider_usage_json: "null".to_string(),
             recent_steps_json: "[]".to_string(),
             evidence_refs_json: "[]".to_string(),
             pending_approvals_json: "[]".to_string(),
@@ -411,6 +413,7 @@ fn build_from_config_interrupts_unrecoverable_runs_but_keeps_approvals_pending()
             status: RunStatus::WaitingProcess.as_str().to_string(),
             error: None,
             result: None,
+            provider_usage_json: "null".to_string(),
             recent_steps_json: "[]".to_string(),
             evidence_refs_json: "[]".to_string(),
             pending_approvals_json: "[]".to_string(),
@@ -427,6 +430,7 @@ fn build_from_config_interrupts_unrecoverable_runs_but_keeps_approvals_pending()
             status: RunStatus::WaitingDelegate.as_str().to_string(),
             error: None,
             result: None,
+            provider_usage_json: "null".to_string(),
             recent_steps_json: "[]".to_string(),
             evidence_refs_json: "[]".to_string(),
             pending_approvals_json: "[]".to_string(),
@@ -448,6 +452,7 @@ fn build_from_config_interrupts_unrecoverable_runs_but_keeps_approvals_pending()
             status: RunStatus::WaitingApproval.as_str().to_string(),
             error: None,
             result: None,
+            provider_usage_json: "null".to_string(),
             recent_steps_json: "[]".to_string(),
             evidence_refs_json: "[]".to_string(),
             pending_approvals_json: serde_json::to_string(&vec![ApprovalRequest::new(
@@ -536,6 +541,7 @@ fn run_show_surfaces_error_details_for_interrupted_runs() {
             status: RunStatus::Interrupted.as_str().to_string(),
             error: Some("runtime restart interrupted a non-recoverable run state".to_string()),
             result: None,
+            provider_usage_json: "null".to_string(),
             recent_steps_json: "[]".to_string(),
             evidence_refs_json: "[]".to_string(),
             pending_approvals_json: "[]".to_string(),
@@ -810,6 +816,7 @@ fn supervisor_tick_dispatches_queued_jobs_and_completes_verified_missions() {
             status: RunStatus::Completed.as_str().to_string(),
             error: None,
             result: Some("done".to_string()),
+            provider_usage_json: "null".to_string(),
             recent_steps_json: "[]".to_string(),
             evidence_refs_json: "[]".to_string(),
             pending_approvals_json: "[]".to_string(),
@@ -2872,6 +2879,7 @@ fn execute_chat_turn_can_finish_after_exec_start_and_exec_wait_tool_calls() {
             mode: PermissionMode::BypassPermissions,
             rules: Vec::new(),
         },
+        ..AppConfig::default()
     })
     .expect("build app");
     let store = PersistenceStore::open(&app.persistence).expect("open store");
@@ -2978,6 +2986,7 @@ fn approval_approve_resumes_an_openai_chat_tool_call_and_completes_the_run() {
                 path_prefix: None,
             }],
         },
+        ..AppConfig::default()
     })
     .expect("build app");
     let store = PersistenceStore::open(&app.persistence).expect("open store");
@@ -3146,6 +3155,7 @@ fn approval_approve_resumes_a_zai_chat_tool_call_and_completes_the_run() {
                 path_prefix: None,
             }],
         },
+        ..AppConfig::default()
     })
     .expect("build app");
     let store = PersistenceStore::open(&app.persistence).expect("open store");
@@ -3308,6 +3318,7 @@ fn approval_approve_resumes_a_mission_turn_and_completes_the_job() {
                 path_prefix: None,
             }],
         },
+        ..AppConfig::default()
     })
     .expect("build app");
     let store = PersistenceStore::open(&app.persistence).expect("open store");
@@ -3806,6 +3817,7 @@ fn run_with_args_chat_send_reports_waiting_approval_details() {
                 path_prefix: None,
             }],
         },
+        ..AppConfig::default()
     })
     .expect("build app");
     let store = PersistenceStore::open(&app.persistence).expect("open store");
@@ -4082,6 +4094,7 @@ fn repl_accepts_cp1251_terminal_input_without_utf8_failure() {
             ..ConfiguredProvider::default()
         },
         permissions: PermissionConfig::default(),
+        ..AppConfig::default()
     })
     .expect("build app");
     let store = PersistenceStore::open(&app.persistence).expect("open store");
@@ -4151,6 +4164,7 @@ fn repl_surfaces_waiting_approval_and_can_approve_latest_pending_turn() {
                 path_prefix: None,
             }],
         },
+        ..AppConfig::default()
     })
     .expect("build app");
     let store = PersistenceStore::open(&app.persistence).expect("open store");
@@ -4223,6 +4237,7 @@ fn repl_rehydrates_latest_pending_approval_after_restart() {
                 path_prefix: None,
             }],
         },
+        ..AppConfig::default()
     })
     .expect("build app");
     let store = PersistenceStore::open(&app.persistence).expect("open store");
@@ -4273,6 +4288,7 @@ fn repl_rehydrates_latest_pending_approval_after_restart() {
                 path_prefix: None,
             }],
         },
+        ..AppConfig::default()
     })
     .expect("rebuild app");
 
@@ -4321,6 +4337,7 @@ fn repl_rejects_new_turns_while_an_approval_is_pending() {
                 path_prefix: None,
             }],
         },
+        ..AppConfig::default()
     })
     .expect("build app");
     let store = PersistenceStore::open(&app.persistence).expect("open store");
@@ -4392,6 +4409,7 @@ data: [DONE]\n\n"
                 path_prefix: None,
             }],
         },
+        ..AppConfig::default()
     })
     .expect("build app");
     let store = PersistenceStore::open(&app.persistence).expect("open store");
@@ -4464,6 +4482,7 @@ data: [DONE]\n\n"
             mode: PermissionMode::BypassPermissions,
             rules: Vec::new(),
         },
+        ..AppConfig::default()
     })
     .expect("build app");
     let store = PersistenceStore::open(&app.persistence).expect("open store");
@@ -5106,11 +5125,14 @@ fn compact_session_is_a_noop_when_the_transcript_is_below_threshold() {
 #[test]
 fn render_context_state_explains_ctx_summary_and_compaction_policy() {
     let temp = tempfile::tempdir().expect("tempdir");
-    let app = build_from_config(AppConfig {
+    let mut config = AppConfig {
         data_dir: temp.path().join("state-root"),
         ..AppConfig::default()
-    })
-    .expect("build app");
+    };
+    config.session_defaults.working_memory_limit = 96;
+    config.context.compaction_min_messages = 12;
+    config.context.compaction_keep_tail_messages = 4;
+    let app = build_from_config(config).expect("build app");
     let store = PersistenceStore::open(&app.persistence).expect("open store");
     let session = app
         .create_session_auto(Some("Context Session"))
@@ -5160,7 +5182,8 @@ fn render_context_state_explains_ctx_summary_and_compaction_policy() {
     assert!(rendered.contains("messages_uncovered=6"));
     assert!(rendered.contains("summary_tokens=4"));
     assert!(rendered.contains("compaction_manual=true"));
-    assert!(rendered.contains("keep_tail=6"));
+    assert!(rendered.contains("threshold_messages=12"));
+    assert!(rendered.contains("keep_tail=4"));
     assert!(rendered.contains("summary_covers_messages=2"));
 }
 
@@ -5274,6 +5297,90 @@ fn session_head_derives_counts_previews_and_summary_state() {
     assert!(rendered.contains("Workspace Tree:"));
     assert!(rendered.contains("- README.md"));
     assert!(rendered.contains("- crates/"));
+}
+
+#[test]
+fn session_head_prefers_latest_provider_input_tokens_for_ctx() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let app = build_from_config(AppConfig {
+        data_dir: temp.path().join("state-root"),
+        ..AppConfig::default()
+    })
+    .expect("build app");
+    let store = PersistenceStore::open(&app.persistence).expect("open store");
+
+    store
+        .put_session(&SessionRecord {
+            id: "session-usage".to_string(),
+            title: "Session Usage".to_string(),
+            prompt_override: None,
+            settings_json: serde_json::to_string(&SessionSettings::default())
+                .expect("serialize settings"),
+            active_mission_id: None,
+            parent_session_id: None,
+            parent_job_id: None,
+            delegation_label: None,
+            created_at: 1,
+            updated_at: 1,
+        })
+        .expect("put session");
+    store
+        .put_transcript(&agent_persistence::TranscriptRecord {
+            id: "session-usage-user".to_string(),
+            session_id: "session-usage".to_string(),
+            run_id: None,
+            kind: "user".to_string(),
+            content: "hello".to_string(),
+            created_at: 10,
+        })
+        .expect("put transcript");
+
+    let mut run = RunEngine::new("run-usage", "session-usage", None, 20);
+    run.start(20).expect("start run");
+    run.set_latest_provider_usage(
+        Some(agent_runtime::provider::ProviderUsage {
+            input_tokens: 123,
+            output_tokens: 7,
+            total_tokens: 130,
+        }),
+        21,
+    )
+    .expect("set provider usage");
+    run.complete("done", 22).expect("complete run");
+    store
+        .put_run(&RunRecord::try_from(run.snapshot()).expect("run record"))
+        .expect("put run");
+
+    let head = app.session_head("session-usage").expect("session head");
+
+    assert_eq!(head.context_tokens, 123);
+}
+
+#[test]
+fn create_session_uses_configured_working_memory_limit() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let mut config = AppConfig {
+        data_dir: temp.path().join("state-root"),
+        ..AppConfig::default()
+    };
+    config.session_defaults.working_memory_limit = 96;
+    let app = build_from_config(config).expect("build app");
+
+    let summary = app
+        .create_session("session-configured-memory", "Configured Memory")
+        .expect("create session");
+    assert_eq!(summary.id, "session-configured-memory");
+
+    let store = PersistenceStore::open(&app.persistence).expect("open store");
+    let session = Session::try_from(
+        store
+            .get_session("session-configured-memory")
+            .expect("get session")
+            .expect("session exists"),
+    )
+    .expect("convert session");
+
+    assert_eq!(session.settings.working_memory_limit, 96);
 }
 
 #[test]

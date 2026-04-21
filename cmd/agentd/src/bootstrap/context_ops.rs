@@ -9,6 +9,15 @@ use agent_runtime::session::{MessageRole, Session};
 use std::path::PathBuf;
 
 impl App {
+    fn compaction_policy(&self) -> CompactionPolicy {
+        CompactionPolicy {
+            min_messages: self.config.context.compaction_min_messages,
+            keep_tail_messages: self.config.context.compaction_keep_tail_messages,
+            max_output_tokens: self.config.context.compaction_max_output_tokens,
+            max_summary_chars: self.config.context.compaction_max_summary_chars,
+        }
+    }
+
     #[cfg_attr(not(test), allow(dead_code))]
     pub fn session_head(&self, session_id: &str) -> Result<SessionHead, BootstrapError> {
         let store = self.store()?;
@@ -203,12 +212,13 @@ impl App {
             &runs,
             &self.runtime.workspace,
         );
-        let policy = CompactionPolicy::default();
+        let policy = self.compaction_policy();
         let uncovered_messages = transcripts.len().saturating_sub(
             context_summary
                 .as_ref()
                 .map_or(0, |summary| summary.covered_message_count as usize),
         );
+        let provider_ctx = crate::bootstrap::latest_provider_input_tokens(&runs, &session.id);
         let offload_refs = context_offload
             .as_ref()
             .map_or(0usize, |snapshot| snapshot.refs.len());
@@ -219,7 +229,13 @@ impl App {
         let mut lines = vec![
             "Context:".to_string(),
             format!("session_id={}", session.id),
-            format!("ctx={} (tail + summary only)", session_head.context_tokens),
+            match provider_ctx {
+                Some(tokens) => format!("ctx={} (provider input tokens from latest run)", tokens),
+                None => format!(
+                    "ctx={} (tail + summary fallback)",
+                    session_head.context_tokens
+                ),
+            },
             format!("messages_total={}", transcripts.len()),
             format!("messages_uncovered={uncovered_messages}"),
             format!(
@@ -264,7 +280,7 @@ impl App {
         let mut session =
             Session::try_from(session_record).map_err(BootstrapError::RecordConversion)?;
         let transcripts = store.list_transcripts_for_session(session_id)?;
-        let policy = CompactionPolicy::default();
+        let policy = self.compaction_policy();
 
         if !policy.should_compact(transcripts.len()) {
             return self.session_summary(session_id);

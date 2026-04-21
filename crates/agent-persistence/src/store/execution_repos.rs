@@ -4,15 +4,16 @@ impl RunRepository for PersistenceStore {
     fn put_run(&self, record: &RunRecord) -> Result<(), StoreError> {
         self.connection.execute(
             "INSERT INTO runs (
-                id, session_id, mission_id, status, error, result, recent_steps_json, evidence_refs_json,
+                id, session_id, mission_id, status, error, result, provider_usage_json, recent_steps_json, evidence_refs_json,
                 pending_approvals_json, provider_loop_json, delegate_runs_json, started_at, updated_at, finished_at
-             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)
              ON CONFLICT(id) DO UPDATE SET
                 session_id = excluded.session_id,
                 mission_id = excluded.mission_id,
                 status = excluded.status,
                 error = excluded.error,
                 result = excluded.result,
+                provider_usage_json = excluded.provider_usage_json,
                 recent_steps_json = excluded.recent_steps_json,
                 evidence_refs_json = excluded.evidence_refs_json,
                 pending_approvals_json = excluded.pending_approvals_json,
@@ -28,6 +29,7 @@ impl RunRepository for PersistenceStore {
                 record.status,
                 record.error,
                 record.result,
+                record.provider_usage_json,
                 record.recent_steps_json,
                 record.evidence_refs_json,
                 record.pending_approvals_json,
@@ -44,7 +46,7 @@ impl RunRepository for PersistenceStore {
     fn get_run(&self, id: &str) -> Result<Option<RunRecord>, StoreError> {
         self.connection
             .query_row(
-                "SELECT id, session_id, mission_id, status, error, result, recent_steps_json,
+                "SELECT id, session_id, mission_id, status, error, result, provider_usage_json, recent_steps_json,
                         evidence_refs_json, pending_approvals_json, provider_loop_json, delegate_runs_json, started_at, updated_at, finished_at
                  FROM runs WHERE id = ?1",
                 [id],
@@ -56,14 +58,15 @@ impl RunRepository for PersistenceStore {
                         status: row.get(3)?,
                         error: row.get(4)?,
                         result: row.get(5)?,
-                        recent_steps_json: row.get(6)?,
-                        evidence_refs_json: row.get(7)?,
-                        pending_approvals_json: row.get(8)?,
-                        provider_loop_json: row.get(9)?,
-                        delegate_runs_json: row.get(10)?,
-                        started_at: row.get(11)?,
-                        updated_at: row.get(12)?,
-                        finished_at: row.get(13)?,
+                        provider_usage_json: row.get(6)?,
+                        recent_steps_json: row.get(7)?,
+                        evidence_refs_json: row.get(8)?,
+                        pending_approvals_json: row.get(9)?,
+                        provider_loop_json: row.get(10)?,
+                        delegate_runs_json: row.get(11)?,
+                        started_at: row.get(12)?,
+                        updated_at: row.get(13)?,
+                        finished_at: row.get(14)?,
                     })
                 },
             )
@@ -73,7 +76,7 @@ impl RunRepository for PersistenceStore {
 
     fn list_runs(&self) -> Result<Vec<RunRecord>, StoreError> {
         let mut statement = self.connection.prepare(
-            "SELECT id, session_id, mission_id, status, error, result, recent_steps_json, evidence_refs_json,
+            "SELECT id, session_id, mission_id, status, error, result, provider_usage_json, recent_steps_json, evidence_refs_json,
                     pending_approvals_json, provider_loop_json, delegate_runs_json, started_at, updated_at, finished_at
              FROM runs
              ORDER BY started_at ASC, id ASC",
@@ -89,14 +92,15 @@ impl RunRepository for PersistenceStore {
                 status: row.get(3)?,
                 error: row.get(4)?,
                 result: row.get(5)?,
-                recent_steps_json: row.get(6)?,
-                evidence_refs_json: row.get(7)?,
-                pending_approvals_json: row.get(8)?,
-                provider_loop_json: row.get(9)?,
-                delegate_runs_json: row.get(10)?,
-                started_at: row.get(11)?,
-                updated_at: row.get(12)?,
-                finished_at: row.get(13)?,
+                provider_usage_json: row.get(6)?,
+                recent_steps_json: row.get(7)?,
+                evidence_refs_json: row.get(8)?,
+                pending_approvals_json: row.get(9)?,
+                provider_loop_json: row.get(10)?,
+                delegate_runs_json: row.get(11)?,
+                started_at: row.get(12)?,
+                updated_at: row.get(13)?,
+                finished_at: row.get(14)?,
             });
         }
 

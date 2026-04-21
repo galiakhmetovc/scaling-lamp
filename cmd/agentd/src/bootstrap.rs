@@ -332,7 +332,8 @@ fn session_summary_from_session(
         compactifications: session.settings.compactifications,
         completion_nudges: session.settings.completion_nudges,
         auto_approve: session.settings.auto_approve,
-        context_tokens: session_head.context_tokens,
+        context_tokens: latest_provider_input_tokens(runs, &session.id)
+            .unwrap_or(session_head.context_tokens),
         has_pending_approval: session_head.pending_approval_count > 0,
         last_message_preview,
         message_count: session_head.message_count,
@@ -342,6 +343,19 @@ fn session_summary_from_session(
         created_at: session.created_at,
         updated_at,
     })
+}
+
+pub(crate) fn latest_provider_input_tokens(runs: &[RunSnapshot], session_id: &str) -> Option<u32> {
+    runs.iter()
+        .filter(|run| run.session_id == session_id)
+        .max_by(|left, right| {
+            left.updated_at
+                .cmp(&right.updated_at)
+                .then_with(|| left.started_at.cmp(&right.started_at))
+                .then_with(|| left.id.cmp(&right.id))
+        })
+        .and_then(|run| run.latest_provider_usage.as_ref())
+        .map(|usage| usage.input_tokens)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

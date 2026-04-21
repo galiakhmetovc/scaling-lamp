@@ -405,6 +405,18 @@ impl ExecutionService {
                     }),
                 ))
             }
+            ToolError::Workspace(agent_runtime::workspace::WorkspaceError::InvalidPath {
+                path,
+                reason,
+            }) => Some(Self::retryable_provider_tool_output(
+                parsed.name().as_str(),
+                &format!("invalid workspace path {path}: {reason}"),
+                serde_json::json!({
+                    "requested_path": path,
+                    "constraint": "workspace_relative_only",
+                    "workspace_root": self.workspace.root.display().to_string(),
+                }),
+            )),
             _ => None,
         }
     }
@@ -581,6 +593,8 @@ impl ExecutionService {
             run.push_provider_text(&response.output_text, now)
                 .map_err(ExecutionError::RunTransition)?;
         }
+        run.set_latest_provider_usage(response.usage.clone(), now)
+            .map_err(ExecutionError::RunTransition)?;
         run.finish_provider_stream(now)
             .map_err(ExecutionError::RunTransition)?;
         Ok(())
@@ -1936,5 +1950,27 @@ mod tests {
         assert!(output.contains("\"retryable\":true"));
         assert!(output.contains("missing-binary"));
         assert!(output.contains("No such file or directory"));
+    }
+
+    #[test]
+    fn recoverable_tool_error_output_treats_invalid_workspace_paths_as_retryable() {
+        let service = ExecutionService::default();
+        let parsed = ToolCall::FsReadText(agent_runtime::tool::FsReadTextInput {
+            path: "/home/user/.twcrc".to_string(),
+        });
+
+        let output = service
+            .recoverable_tool_error_output(
+                &parsed,
+                &ToolError::Workspace(agent_runtime::workspace::WorkspaceError::InvalidPath {
+                    path: "/home/user/.twcrc".to_string(),
+                    reason: "must be relative to the workspace root",
+                }),
+            )
+            .expect("recoverable output");
+
+        assert!(output.contains("\"retryable\":true"));
+        assert!(output.contains("/home/user/.twcrc"));
+        assert!(output.contains("workspace_relative_only"));
     }
 }

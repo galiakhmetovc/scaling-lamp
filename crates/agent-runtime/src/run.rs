@@ -1,4 +1,6 @@
-use crate::provider::{ProviderContinuationMessage, ProviderMessage, ProviderToolOutput};
+use crate::provider::{
+    ProviderContinuationMessage, ProviderMessage, ProviderToolOutput, ProviderUsage,
+};
 use crate::verification::EvidenceBundle;
 use serde::{Deserialize, Serialize};
 use std::error::Error;
@@ -32,6 +34,7 @@ pub struct RunSnapshot {
     pub finished_at: Option<i64>,
     pub error: Option<String>,
     pub result: Option<String>,
+    pub latest_provider_usage: Option<ProviderUsage>,
     pub pending_approvals: Vec<ApprovalRequest>,
     pub active_processes: Vec<ActiveProcess>,
     pub recent_steps: Vec<RunStep>,
@@ -191,6 +194,7 @@ impl Default for RunSnapshot {
             finished_at: None,
             error: None,
             result: None,
+            latest_provider_usage: None,
             pending_approvals: Vec::new(),
             active_processes: Vec::new(),
             recent_steps: Vec::new(),
@@ -414,6 +418,17 @@ impl RunEngine {
             "provider stream started",
             at,
         );
+        Ok(())
+    }
+
+    pub fn set_latest_provider_usage(
+        &mut self,
+        usage: Option<ProviderUsage>,
+        at: i64,
+    ) -> Result<(), RunTransitionError> {
+        self.require_status("set_latest_provider_usage", &[RunStatus::Running])?;
+        self.snapshot.latest_provider_usage = usage;
+        self.touch(at);
         Ok(())
     }
 

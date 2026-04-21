@@ -124,7 +124,7 @@ pub enum ProviderContinuationMessage {
     },
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ProviderUsage {
     pub input_tokens: u32,
     pub output_tokens: u32,

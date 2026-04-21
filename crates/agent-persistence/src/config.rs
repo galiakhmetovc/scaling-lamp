@@ -1,5 +1,6 @@
 use agent_runtime::permission::{PermissionConfig, PermissionMode};
 use agent_runtime::provider::{ConfiguredProvider, ProviderKind};
+use agent_runtime::{context::CompactionPolicy, session::SessionSettings};
 use serde::Deserialize;
 use std::collections::BTreeMap;
 use std::env;
@@ -20,6 +21,8 @@ pub struct AppConfig {
     pub daemon: DaemonConfig,
     pub permissions: PermissionConfig,
     pub provider: ConfiguredProvider,
+    pub session_defaults: SessionDefaultsConfig,
+    pub context: ContextConfig,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
@@ -31,6 +34,22 @@ pub struct DaemonConfig {
     pub skills_dir: PathBuf,
     pub public_base_url: Option<String>,
     pub a2a_peers: BTreeMap<String, A2APeerConfig>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(default)]
+pub struct SessionDefaultsConfig {
+    pub working_memory_limit: usize,
+    pub project_memory_enabled: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(default)]
+pub struct ContextConfig {
+    pub compaction_min_messages: usize,
+    pub compaction_keep_tail_messages: usize,
+    pub compaction_max_output_tokens: u32,
+    pub compaction_max_summary_chars: usize,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
@@ -50,6 +69,10 @@ pub struct ConfigEnv {
     pub daemon_public_base_url_override: Option<String>,
     pub daemon_skills_dir_override: Option<PathBuf>,
     pub home_dir: Option<PathBuf>,
+    pub context_compaction_keep_tail_messages_override: Option<usize>,
+    pub context_compaction_max_output_tokens_override: Option<u32>,
+    pub context_compaction_max_summary_chars_override: Option<usize>,
+    pub context_compaction_min_messages_override: Option<usize>,
     pub provider_api_base_override: Option<String>,
     pub provider_api_key_override: Option<String>,
     pub provider_connect_timeout_override: Option<u64>,
@@ -60,6 +83,8 @@ pub struct ConfigEnv {
     pub provider_request_timeout_override: Option<u64>,
     pub provider_stream_idle_timeout_override: Option<u64>,
     pub permission_mode_override: Option<String>,
+    pub session_project_memory_enabled_override: Option<bool>,
+    pub session_working_memory_limit_override: Option<usize>,
     pub temp_dir: PathBuf,
     pub xdg_config_home: Option<PathBuf>,
     pub xdg_state_home: Option<PathBuf>,
@@ -102,6 +127,8 @@ struct FileConfig {
     daemon: Option<DaemonConfig>,
     permissions: Option<PermissionConfig>,
     provider: Option<ConfiguredProvider>,
+    session_defaults: Option<SessionDefaultsConfig>,
+    context: Option<ContextConfig>,
 }
 
 impl Default for DaemonConfig {
@@ -113,6 +140,28 @@ impl Default for DaemonConfig {
             skills_dir: PathBuf::from(DEFAULT_DAEMON_SKILLS_DIR),
             public_base_url: None,
             a2a_peers: BTreeMap::new(),
+        }
+    }
+}
+
+impl Default for SessionDefaultsConfig {
+    fn default() -> Self {
+        let defaults = SessionSettings::default();
+        Self {
+            working_memory_limit: defaults.working_memory_limit,
+            project_memory_enabled: defaults.project_memory_enabled,
+        }
+    }
+}
+
+impl Default for ContextConfig {
+    fn default() -> Self {
+        let defaults = CompactionPolicy::default();
+        Self {
+            compaction_min_messages: defaults.min_messages,
+            compaction_keep_tail_messages: defaults.keep_tail_messages,
+            compaction_max_output_tokens: defaults.max_output_tokens,
+            compaction_max_summary_chars: defaults.max_summary_chars,
         }
     }
 }
@@ -194,6 +243,22 @@ impl ConfigEnv {
             ),
             daemon_skills_dir_override: read_path_var("TEAMD_DAEMON_SKILLS_DIR", &dotenv)?,
             home_dir: read_path_var("HOME", &dotenv)?,
+            context_compaction_keep_tail_messages_override: read_usize_var(
+                "TEAMD_CONTEXT_COMPACTION_KEEP_TAIL_MESSAGES",
+                &dotenv,
+            )?,
+            context_compaction_max_output_tokens_override: read_u32_var(
+                "TEAMD_CONTEXT_COMPACTION_MAX_OUTPUT_TOKENS",
+                &dotenv,
+            )?,
+            context_compaction_max_summary_chars_override: read_usize_var(
+                "TEAMD_CONTEXT_COMPACTION_MAX_SUMMARY_CHARS",
+                &dotenv,
+            )?,
+            context_compaction_min_messages_override: read_usize_var(
+                "TEAMD_CONTEXT_COMPACTION_MIN_MESSAGES",
+                &dotenv,
+            )?,
             provider_api_base_override: read_string_var("TEAMD_PROVIDER_API_BASE", &dotenv),
             provider_api_key_override: read_string_var("TEAMD_PROVIDER_API_KEY", &dotenv),
             provider_connect_timeout_override: read_u64_var(
@@ -219,6 +284,14 @@ impl ConfigEnv {
                 &dotenv,
             )?,
             permission_mode_override: read_string_var("TEAMD_PERMISSION_MODE", &dotenv),
+            session_project_memory_enabled_override: read_bool_var(
+                "TEAMD_SESSION_PROJECT_MEMORY_ENABLED",
+                &dotenv,
+            )?,
+            session_working_memory_limit_override: read_usize_var(
+                "TEAMD_SESSION_WORKING_MEMORY_LIMIT",
+                &dotenv,
+            )?,
             temp_dir: env::temp_dir(),
             xdg_config_home: read_path_var("XDG_CONFIG_HOME", &dotenv)?,
             xdg_state_home: read_path_var("XDG_STATE_HOME", &dotenv)?,
@@ -281,6 +354,14 @@ impl AppConfig {
             .as_ref()
             .and_then(|config| config.provider.clone())
             .unwrap_or_default();
+        let mut session_defaults = file_config
+            .as_ref()
+            .and_then(|config| config.session_defaults.clone())
+            .unwrap_or_default();
+        let mut context = file_config
+            .as_ref()
+            .and_then(|config| config.context.clone())
+            .unwrap_or_default();
         let mut permissions = file_config
             .as_ref()
             .and_then(|config| config.permissions.clone())
@@ -330,6 +411,24 @@ impl AppConfig {
         if let Some(mode) = env.permission_mode_override.as_deref() {
             permissions.mode = parse_permission_mode(mode)?;
         }
+        if let Some(limit) = env.session_working_memory_limit_override {
+            session_defaults.working_memory_limit = limit;
+        }
+        if let Some(enabled) = env.session_project_memory_enabled_override {
+            session_defaults.project_memory_enabled = enabled;
+        }
+        if let Some(value) = env.context_compaction_min_messages_override {
+            context.compaction_min_messages = value;
+        }
+        if let Some(value) = env.context_compaction_keep_tail_messages_override {
+            context.compaction_keep_tail_messages = value;
+        }
+        if let Some(value) = env.context_compaction_max_output_tokens_override {
+            context.compaction_max_output_tokens = value;
+        }
+        if let Some(value) = env.context_compaction_max_summary_chars_override {
+            context.compaction_max_summary_chars = value;
+        }
         if provider.kind == ProviderKind::ZaiChatCompletions && provider.api_base.is_none() {
             provider.api_base = Some(DEFAULT_ZAI_API_BASE.to_string());
         }
@@ -342,6 +441,8 @@ impl AppConfig {
             daemon,
             permissions,
             provider,
+            session_defaults,
+            context,
         };
         config.validate()?;
         Ok(config)
@@ -435,6 +536,33 @@ impl AppConfig {
         )?;
         validate_positive_provider_value("max_tool_rounds", self.provider.max_tool_rounds)?;
         validate_positive_provider_value("max_output_tokens", self.provider.max_output_tokens)?;
+        validate_positive_usize_value(
+            "session_defaults.working_memory_limit",
+            self.session_defaults.working_memory_limit,
+        )?;
+        validate_positive_usize_value(
+            "context.compaction_min_messages",
+            self.context.compaction_min_messages,
+        )?;
+        validate_positive_usize_value(
+            "context.compaction_keep_tail_messages",
+            self.context.compaction_keep_tail_messages,
+        )?;
+        validate_positive_u32_value(
+            "context.compaction_max_output_tokens",
+            self.context.compaction_max_output_tokens,
+        )?;
+        validate_positive_usize_value(
+            "context.compaction_max_summary_chars",
+            self.context.compaction_max_summary_chars,
+        )?;
+        if self.context.compaction_keep_tail_messages > self.context.compaction_min_messages {
+            return Err(ConfigError::InvalidProviderValue {
+                name: "context.compaction_keep_tail_messages",
+                value: self.context.compaction_keep_tail_messages.to_string(),
+                reason: "must be less than or equal to compaction_min_messages",
+            });
+        }
 
         Ok(())
     }
@@ -456,6 +584,8 @@ fn load_file_config(path: &Path, required: bool) -> Result<FileConfig, ConfigErr
                 daemon: None,
                 permissions: None,
                 provider: None,
+                session_defaults: None,
+                context: None,
             });
         }
         Err(source) => {
@@ -513,6 +643,24 @@ fn read_u16_var(
 ) -> Result<Option<u16>, ConfigError> {
     read_string_var(name, dotenv)
         .map(|value| parse_positive_numeric(name, &value))
+        .transpose()
+}
+
+fn read_usize_var(
+    name: &'static str,
+    dotenv: &BTreeMap<String, String>,
+) -> Result<Option<usize>, ConfigError> {
+    read_string_var(name, dotenv)
+        .map(|value| parse_positive_numeric(name, &value))
+        .transpose()
+}
+
+fn read_bool_var(
+    name: &'static str,
+    dotenv: &BTreeMap<String, String>,
+) -> Result<Option<bool>, ConfigError> {
+    read_string_var(name, dotenv)
+        .map(|value| parse_bool(name, &value))
         .transpose()
 }
 
@@ -578,6 +726,18 @@ where
     Ok(parsed)
 }
 
+fn parse_bool(name: &'static str, value: &str) -> Result<bool, ConfigError> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "1" | "true" | "yes" | "on" => Ok(true),
+        "0" | "false" | "no" | "off" => Ok(false),
+        _ => Err(ConfigError::InvalidProviderValue {
+            name,
+            value: value.to_string(),
+            reason: "must be a boolean",
+        }),
+    }
+}
+
 fn validate_positive_provider_value<T>(
     name: &'static str,
     value: Option<T>,
@@ -595,6 +755,28 @@ where
         });
     }
 
+    Ok(())
+}
+
+fn validate_positive_usize_value(name: &'static str, value: usize) -> Result<(), ConfigError> {
+    if value == 0 {
+        return Err(ConfigError::InvalidProviderValue {
+            name,
+            value: value.to_string(),
+            reason: "must be greater than zero",
+        });
+    }
+    Ok(())
+}
+
+fn validate_positive_u32_value(name: &'static str, value: u32) -> Result<(), ConfigError> {
+    if value == 0 {
+        return Err(ConfigError::InvalidProviderValue {
+            name,
+            value: value.to_string(),
+            reason: "must be greater than zero",
+        });
+    }
     Ok(())
 }
 
@@ -678,6 +860,8 @@ impl Default for AppConfig {
             daemon: DaemonConfig::default(),
             permissions: PermissionConfig::default(),
             provider: ConfiguredProvider::default(),
+            session_defaults: SessionDefaultsConfig::default(),
+            context: ContextConfig::default(),
         }
     }
 }
