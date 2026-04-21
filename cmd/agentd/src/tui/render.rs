@@ -9,6 +9,7 @@ use ratatui::widgets::{Block, Borders, Clear, List, ListItem, Paragraph, Wrap};
 use std::time::{SystemTime, UNIX_EPOCH};
 use time::macros::format_description;
 use time::{Date, OffsetDateTime};
+use unicode_width::UnicodeWidthStr;
 
 pub fn render(frame: &mut Frame<'_>, state: &TuiAppState) {
     match state.active_screen() {
@@ -408,7 +409,8 @@ fn estimate_wrapped_line_count(lines: &[Line<'_>], width: usize) -> usize {
     lines
         .iter()
         .map(|line| {
-            let len = line.to_string().chars().count().max(1);
+            let rendered = line.to_string();
+            let len = UnicodeWidthStr::width(rendered.as_str()).max(1);
             len.div_ceil(width)
         })
         .sum()
@@ -622,6 +624,12 @@ mod tests {
     fn wrapped_line_count_accounts_for_long_wrapped_rows() {
         let lines = vec![Line::from("123456789"), Line::from("xx")];
         assert_eq!(estimate_wrapped_line_count(&lines, 4), 4);
+    }
+
+    #[test]
+    fn wrapped_line_count_uses_display_width_for_wide_characters() {
+        let lines = vec![Line::from("🙂🙂🙂")];
+        assert_eq!(estimate_wrapped_line_count(&lines, 4), 2);
     }
 
     #[test]

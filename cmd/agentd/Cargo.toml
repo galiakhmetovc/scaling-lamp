@@ -18,6 +18,7 @@ serde.workspace = true
 serde_json.workspace = true
 time.workspace = true
 tiny_http.workspace = true
+unicode-width.workspace = true
 
 [dev-dependencies]
 reqwest.workspace = true

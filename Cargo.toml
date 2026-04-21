@@ -22,3 +22,4 @@ tempfile = "3"
 time = { version = "0.3", features = ["formatting", "macros"] }
 tiny_http = "0.12"
 toml = "0.8"
+unicode-width = "0.2"
