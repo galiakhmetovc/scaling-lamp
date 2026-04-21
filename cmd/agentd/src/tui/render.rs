@@ -11,6 +11,21 @@ use time::macros::format_description;
 use time::{Date, OffsetDateTime};
 use unicode_width::UnicodeWidthStr;
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ChatViewportDebug {
+    pub terminal_width: u16,
+    pub terminal_height: u16,
+    pub composer_height: u16,
+    pub timeline_viewport_width: usize,
+    pub timeline_viewport_height: usize,
+    pub timeline_total_lines: usize,
+    pub timeline_scroll_top: u16,
+    pub scroll_offset: u16,
+    pub reasoning_visible: bool,
+    pub visible_entry_count: usize,
+    pub total_entry_count: usize,
+}
+
 pub fn render(frame: &mut Frame<'_>, state: &TuiAppState) {
     match state.active_screen() {
         TuiScreen::Sessions => render_session_screen(frame, state),
@@ -118,14 +133,13 @@ fn render_chat_screen(frame: &mut Frame<'_>, state: &TuiAppState) {
     let top =
         Paragraph::new(top_lines).block(Block::default().borders(Borders::ALL).title("Session"));
 
+    let reasoning_visible = state
+        .current_session_summary()
+        .map(|summary| summary.reasoning_visible)
+        .unwrap_or(true);
     let timeline_lines = state
         .timeline()
-        .entries(
-            state
-                .current_session_summary()
-                .map(|summary| summary.reasoning_visible)
-                .unwrap_or(true),
-        )
+        .entries(reasoning_visible)
         .into_iter()
         .flat_map(|entry| render_timeline_entry(entry, now))
         .collect::<Vec<_>>();
@@ -152,6 +166,54 @@ fn render_chat_screen(frame: &mut Frame<'_>, state: &TuiAppState) {
     frame.render_widget(top, chunks[0]);
     frame.render_widget(timeline, chunks[1]);
     frame.render_widget(input, chunks[2]);
+}
+
+pub fn chat_viewport_debug(state: &TuiAppState, area: Rect) -> Option<ChatViewportDebug> {
+    if state.active_screen() != TuiScreen::Chat {
+        return None;
+    }
+
+    let composer_height = composer_height(state);
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(4),
+            Constraint::Min(1),
+            Constraint::Length(composer_height),
+        ])
+        .split(area);
+    let reasoning_visible = state
+        .current_session_summary()
+        .map(|summary| summary.reasoning_visible)
+        .unwrap_or(true);
+    let timeline_entries = state.timeline().entries(reasoning_visible);
+    let timeline_lines = timeline_entries
+        .iter()
+        .flat_map(|entry| render_timeline_entry(entry, unix_timestamp()))
+        .collect::<Vec<_>>();
+    let timeline_viewport_height = usize::from(chunks[1].height.saturating_sub(2));
+    let timeline_viewport_width = usize::from(chunks[1].width.saturating_sub(2)).max(1);
+    let timeline_total_lines =
+        estimate_wrapped_line_count(&timeline_lines, timeline_viewport_width);
+    let timeline_scroll_top = chat_scroll_top(
+        timeline_total_lines,
+        timeline_viewport_height,
+        state.scroll_offset(),
+    );
+
+    Some(ChatViewportDebug {
+        terminal_width: area.width,
+        terminal_height: area.height,
+        composer_height,
+        timeline_viewport_width,
+        timeline_viewport_height,
+        timeline_total_lines,
+        timeline_scroll_top,
+        scroll_offset: state.scroll_offset(),
+        reasoning_visible,
+        visible_entry_count: timeline_entries.len(),
+        total_entry_count: state.timeline().entries(true).len(),
+    })
 }
 
 fn render_composer_lines(state: &TuiAppState) -> Vec<Line<'static>> {
