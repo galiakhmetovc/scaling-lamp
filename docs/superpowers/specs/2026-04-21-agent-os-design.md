@@ -101,6 +101,11 @@ Sessions gain:
 
 This linkage is immutable after session creation.
 
+Upgrade rule:
+
+- pre-existing persisted sessions are backfilled to the built-in `default` agent during migration/bootstrap
+- newly created sessions always persist the currently selected agent id at creation time
+
 ## Agent Home Layout
 
 Each agent owns:
@@ -174,6 +179,8 @@ Minimum commands:
 - `\агент открыть`
 - `\новая`
 
+CLI/TUI may keep slash aliases for compatibility, but the user-facing Russian command surface should document the backslash forms as canonical.
+
 Startup behavior:
 
 - if `current_agent_profile_id` exists, restore it
@@ -213,6 +220,13 @@ Agents must be able to send messages to each other through the same canonical ch
 - the recipient session processes the incoming message through the normal chat turn path
 - the response is delivered back into the origin session through the same canonical message/wake-up path
 
+For `v1`, this recipient session is one-shot per inter-agent send, not a reused long-lived thread:
+
+- one outgoing inter-agent message creates one new recipient session
+- that recipient session handles the request and produces one return payload to the origin session
+- no automatic session reuse is attempted for later inter-agent sends, even if the same two agents talk again
+- completed recipient sessions remain as normal inspectable sessions; they are not silently deleted
+
 ### Transcript and UI Semantics
 
 The returned message should not pretend to be a human user message. It should be marked with the source agent, for example:
@@ -229,6 +243,7 @@ Inter-agent chains carry:
 - `origin_session_id`
 - `origin_agent_id`
 - `hop_count`
+- `parent_interagent_session_id`
 
 This metadata is for routing, loop protection, and operator visibility.
 
