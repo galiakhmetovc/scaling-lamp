@@ -2,6 +2,7 @@
 
 mod background;
 mod chat;
+mod delegation;
 mod mission;
 mod provider_loop;
 mod supervisor;

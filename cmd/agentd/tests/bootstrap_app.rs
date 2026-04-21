@@ -5653,6 +5653,108 @@ fn background_worker_executes_delegate_jobs_as_child_sessions_and_wakes_parent()
 }
 
 #[test]
+fn background_worker_blocks_remote_delegate_jobs_without_falling_back_to_local() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let app = build_from_config(AppConfig {
+        data_dir: temp.path().join("state-root"),
+        provider: ConfiguredProvider {
+            kind: ProviderKind::OpenAiResponses,
+            api_base: Some("http://127.0.0.1:9/v1".to_string()),
+            api_key: Some("test-key".to_string()),
+            default_model: Some("gpt-5.4".to_string()),
+            ..ConfiguredProvider::default()
+        },
+        ..AppConfig::default()
+    })
+    .expect("build app");
+    let store = PersistenceStore::open(&app.persistence).expect("open store");
+
+    store
+        .put_session(&SessionRecord {
+            id: "session-delegate-remote".to_string(),
+            title: "Delegate Remote Parent".to_string(),
+            prompt_override: None,
+            settings_json: serde_json::to_string(&SessionSettings::default())
+                .expect("serialize settings"),
+            active_mission_id: None,
+            parent_session_id: None,
+            parent_job_id: None,
+            delegation_label: None,
+            created_at: 1,
+            updated_at: 1,
+        })
+        .expect("put parent session");
+
+    let mut active_run = RunEngine::new("run-parent-active", "session-delegate-remote", None, 2);
+    active_run.start(2).expect("start parent run");
+    store
+        .put_run(&RunRecord::try_from(active_run.snapshot()).expect("run record"))
+        .expect("put active run");
+
+    let mut job = JobSpec::delegate(
+        "job-bg-delegate-remote",
+        "session-delegate-remote",
+        None,
+        None,
+        "judge-helper",
+        "Проверь артефакты и верни вердикт.",
+        vec!["reports/judge.md".to_string()],
+        DelegateWriteScope::new(vec!["reports".to_string()]).expect("write scope"),
+        "Краткий вердикт",
+        "a2a:judge",
+        2,
+    );
+    job.status = agent_runtime::mission::JobStatus::Running;
+    job.updated_at = 2;
+    store
+        .put_job(&JobRecord::try_from(&job).expect("delegate record"))
+        .expect("put delegate job");
+
+    let report = app
+        .background_worker_tick(10)
+        .expect("run background worker");
+
+    assert_eq!(report.executed_jobs, 1);
+    assert_eq!(report.woken_sessions, 0);
+    assert_eq!(report.emitted_inbox_events, 1);
+
+    let job = JobSpec::try_from(
+        store
+            .get_job("job-bg-delegate-remote")
+            .expect("get remote job")
+            .expect("remote job exists"),
+    )
+    .expect("restore remote job");
+    assert_eq!(job.status, agent_runtime::mission::JobStatus::Blocked);
+    assert!(
+        job.error
+            .as_deref()
+            .expect("blocked reason")
+            .contains("remote delegation executor is not configured")
+    );
+    assert!(
+        job.last_progress_message
+            .as_deref()
+            .expect("blocked progress")
+            .contains("remote delegation executor is not configured")
+    );
+
+    assert!(
+        store
+            .get_session("session-delegate-job-bg-delegate-remote")
+            .expect("get child session")
+            .is_none()
+    );
+
+    let inbox_events = store
+        .list_session_inbox_events_for_session("session-delegate-remote")
+        .expect("list inbox events");
+    assert_eq!(inbox_events.len(), 1);
+    assert_eq!(inbox_events[0].kind, "job_blocked");
+    assert_eq!(inbox_events[0].status, "queued");
+}
+
+#[test]
 fn background_worker_cancels_jobs_with_cancel_requested_at() {
     let temp = tempfile::tempdir().expect("tempdir");
     let app = build_from_config(AppConfig {

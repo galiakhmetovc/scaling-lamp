@@ -1,3 +1,4 @@
+use super::delegation::{DelegationExecutorKind, resolve_delegate_dispatch};
 use super::*;
 use crate::prompting;
 use agent_runtime::delegation::{DelegateRequest, DelegateResultPackage};
@@ -389,7 +390,7 @@ impl ExecutionService {
         provider: &dyn ProviderDriver,
         job_id: &str,
         now: i64,
-    ) -> Result<ChatTurnExecutionReport, ExecutionError> {
+    ) -> Result<(), ExecutionError> {
         let mut job = JobSpec::try_from(
             store
                 .get_job(job_id)
@@ -423,14 +424,6 @@ impl ExecutionService {
             }
         };
 
-        let parent_session_record = store
-            .get_session(&job.session_id)
-            .map_err(ExecutionError::Store)?
-            .ok_or_else(|| ExecutionError::MissingSession {
-                id: job.session_id.clone(),
-            })?;
-        let parent_session = Session::try_from(parent_session_record.clone())
-            .map_err(ExecutionError::RecordConversion)?;
         let child_run_id = format!("run-delegate-child-{}", job.id);
         let parent_run_id = job
             .run_id
@@ -462,14 +455,59 @@ impl ExecutionService {
             .put_job(&JobRecord::try_from(&job).map_err(ExecutionError::RecordConversion)?)
             .map_err(ExecutionError::Store)?;
 
-        let child_session =
-            self.ensure_delegate_child_session(store, &parent_session, &job.id, &label, now)?;
+        let dispatch = resolve_delegate_dispatch(&request);
+        match dispatch.kind {
+            DelegationExecutorKind::LocalChildSession => {
+                self.execute_background_delegate_job_local(
+                    store, provider, &mut job, &request, now,
+                )?;
+            }
+            DelegationExecutorKind::RemoteA2A => {
+                let reason = dispatch
+                    .blocked_reason()
+                    .unwrap_or_else(|| "remote delegation executor is not configured".to_string());
+                job.status = JobStatus::Blocked;
+                job.error = Some(reason.clone());
+                job.updated_at = now;
+                job.last_progress_message = Some(reason);
+                store
+                    .put_job(&JobRecord::try_from(&job).map_err(ExecutionError::RecordConversion)?)
+                    .map_err(ExecutionError::Store)?;
+            }
+        }
+
+        Ok(())
+    }
+
+    fn execute_background_delegate_job_local(
+        &self,
+        store: &PersistenceStore,
+        provider: &dyn ProviderDriver,
+        job: &mut JobSpec,
+        request: &DelegateRequest,
+        now: i64,
+    ) -> Result<(), ExecutionError> {
+        let parent_session_record = store
+            .get_session(&job.session_id)
+            .map_err(ExecutionError::Store)?
+            .ok_or_else(|| ExecutionError::MissingSession {
+                id: job.session_id.clone(),
+            })?;
+        let parent_session =
+            Session::try_from(parent_session_record).map_err(ExecutionError::RecordConversion)?;
+        let child_session = self.ensure_delegate_child_session(
+            store,
+            &parent_session,
+            &job.id,
+            &request.label,
+            now,
+        )?;
         self.write_delegate_parent_started_transcript(
             store,
             &parent_session.id,
             &job.id,
             &child_session.id,
-            &label,
+            &request.label,
             now,
         )?;
 
@@ -478,7 +516,7 @@ impl ExecutionService {
             provider,
             &job.id,
             &child_session,
-            &request,
+            request,
             now,
         ) {
             Ok(report) => report,
@@ -489,7 +527,7 @@ impl ExecutionService {
                 job.last_progress_message =
                     Some("delegated child session requires approval".to_string());
                 store
-                    .put_job(&JobRecord::try_from(&job).map_err(ExecutionError::RecordConversion)?)
+                    .put_job(&JobRecord::try_from(&*job).map_err(ExecutionError::RecordConversion)?)
                     .map_err(ExecutionError::Store)?;
                 return Err(source);
             }
@@ -500,7 +538,7 @@ impl ExecutionService {
                 job.updated_at = now;
                 job.last_progress_message = Some("delegated child session failed".to_string());
                 store
-                    .put_job(&JobRecord::try_from(&job).map_err(ExecutionError::RecordConversion)?)
+                    .put_job(&JobRecord::try_from(&*job).map_err(ExecutionError::RecordConversion)?)
                     .map_err(ExecutionError::Store)?;
                 return Err(source);
             }
@@ -540,10 +578,10 @@ impl ExecutionService {
         job.updated_at = now;
         job.last_progress_message = Some("delegated child session completed".to_string());
         store
-            .put_job(&JobRecord::try_from(&job).map_err(ExecutionError::RecordConversion)?)
+            .put_job(&JobRecord::try_from(&*job).map_err(ExecutionError::RecordConversion)?)
             .map_err(ExecutionError::Store)?;
 
-        Ok(child_report)
+        Ok(())
     }
 
     fn ensure_delegate_child_session(
