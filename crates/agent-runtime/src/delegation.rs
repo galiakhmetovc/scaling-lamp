@@ -1,4 +1,5 @@
 use crate::run::DelegateRun;
+use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::error::Error;
 use std::fmt;
@@ -27,7 +28,7 @@ pub struct DelegateHandle {
     pub error: Option<String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DelegateRequest {
     pub id: String,
     pub parent_run_id: String,
@@ -40,12 +41,12 @@ pub struct DelegateRequest {
     pub owner: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DelegateWriteScope {
     pub allowed_paths: Vec<String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DelegateResultPackage {
     pub summary: String,
     pub changed_paths: Vec<String>,

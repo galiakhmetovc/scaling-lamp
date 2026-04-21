@@ -9,6 +9,9 @@ pub struct Session {
     pub prompt_override: Option<PromptOverride>,
     pub settings: SessionSettings,
     pub active_mission_id: Option<String>,
+    pub parent_session_id: Option<String>,
+    pub parent_job_id: Option<String>,
+    pub delegation_label: Option<String>,
     pub created_at: i64,
     pub updated_at: i64,
 }
@@ -76,6 +79,9 @@ impl Default for Session {
             prompt_override: None,
             settings: SessionSettings::default(),
             active_mission_id: None,
+            parent_session_id: None,
+            parent_job_id: None,
+            delegation_label: None,
             created_at: 0,
             updated_at: 0,
         }

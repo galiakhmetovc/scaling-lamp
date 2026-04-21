@@ -5,7 +5,10 @@ use agent_persistence::{
     TranscriptRepository,
 };
 use agent_runtime::context::{ContextOffloadPayload, ContextOffloadRef, ContextOffloadSnapshot};
-use agent_runtime::mission::{JobSpec, MissionExecutionIntent, MissionSchedule, MissionStatus};
+use agent_runtime::delegation::DelegateWriteScope;
+use agent_runtime::mission::{
+    JobResult, JobSpec, MissionExecutionIntent, MissionSchedule, MissionStatus,
+};
 use agent_runtime::permission::{
     PermissionAction, PermissionConfig, PermissionMode, PermissionRule,
 };
@@ -158,6 +161,9 @@ fn run_with_args_inspects_and_updates_runs_jobs_approvals_and_delegates() {
             settings_json: serde_json::to_string(&SessionSettings::default())
                 .expect("serialize settings"),
             active_mission_id: None,
+            parent_session_id: None,
+            parent_job_id: None,
+            delegation_label: None,
             created_at: 1,
             updated_at: 1,
         })
@@ -289,6 +295,9 @@ fn build_from_config_interrupts_unrecoverable_runs_but_keeps_approvals_pending()
             settings_json: serde_json::to_string(&SessionSettings::default())
                 .expect("serialize settings"),
             active_mission_id: None,
+            parent_session_id: None,
+            parent_job_id: None,
+            delegation_label: None,
             created_at: 1,
             updated_at: 1,
         })
@@ -459,6 +468,9 @@ fn run_show_surfaces_error_details_for_interrupted_runs() {
             settings_json: serde_json::to_string(&SessionSettings::default())
                 .expect("serialize settings"),
             active_mission_id: None,
+            parent_session_id: None,
+            parent_job_id: None,
+            delegation_label: None,
             created_at: 1,
             updated_at: 1,
         })
@@ -620,6 +632,9 @@ fn supervisor_tick_queues_due_mission_turn_jobs_from_persisted_state() {
             settings_json: serde_json::to_string(&SessionSettings::default())
                 .expect("serialize settings"),
             active_mission_id: None,
+            parent_session_id: None,
+            parent_job_id: None,
+            delegation_label: None,
             created_at: 1,
             updated_at: 1,
         })
@@ -681,6 +696,9 @@ fn supervisor_tick_dispatches_queued_jobs_and_completes_verified_missions() {
             settings_json: serde_json::to_string(&SessionSettings::default())
                 .expect("serialize settings"),
             active_mission_id: None,
+            parent_session_id: None,
+            parent_job_id: None,
+            delegation_label: None,
             created_at: 1,
             updated_at: 1,
         })
@@ -832,6 +850,9 @@ fn execute_mission_turn_job_creates_a_run_calls_provider_and_persists_transcript
             settings_json: serde_json::to_string(&SessionSettings::default())
                 .expect("serialize settings"),
             active_mission_id: None,
+            parent_session_id: None,
+            parent_job_id: None,
+            delegation_label: None,
             created_at: 1,
             updated_at: 1,
         })
@@ -931,6 +952,9 @@ fn tool_execution_pauses_for_approval_then_resumes_and_records_evidence() {
             settings_json: serde_json::to_string(&SessionSettings::default())
                 .expect("serialize settings"),
             active_mission_id: None,
+            parent_session_id: None,
+            parent_job_id: None,
+            delegation_label: None,
             created_at: 1,
             updated_at: 1,
         })
@@ -1110,6 +1134,9 @@ fn accept_edits_mode_skips_approval_for_filesystem_edits() {
             settings_json: serde_json::to_string(&SessionSettings::default())
                 .expect("serialize settings"),
             active_mission_id: None,
+            parent_session_id: None,
+            parent_job_id: None,
+            delegation_label: None,
             created_at: 1,
             updated_at: 1,
         })
@@ -1201,6 +1228,9 @@ fn deny_rule_fails_tool_execution_before_approval_is_created() {
             settings_json: serde_json::to_string(&SessionSettings::default())
                 .expect("serialize settings"),
             active_mission_id: None,
+            parent_session_id: None,
+            parent_job_id: None,
+            delegation_label: None,
             created_at: 1,
             updated_at: 1,
         })
@@ -1324,6 +1354,9 @@ fn run_with_args_executes_mission_ticks_and_jobs() {
             settings_json: serde_json::to_string(&SessionSettings::default())
                 .expect("serialize settings"),
             active_mission_id: None,
+            parent_session_id: None,
+            parent_job_id: None,
+            delegation_label: None,
             created_at: 1,
             updated_at: 1,
         })
@@ -1403,6 +1436,9 @@ fn session_transcript_view_renders_entries_in_chronological_order() {
             settings_json: serde_json::to_string(&SessionSettings::default())
                 .expect("serialize settings"),
             active_mission_id: None,
+            parent_session_id: None,
+            parent_job_id: None,
+            delegation_label: None,
             created_at: 1,
             updated_at: 1,
         })
@@ -1488,6 +1524,9 @@ fn execute_chat_turn_creates_a_run_and_appends_transcript_history() {
             settings_json: serde_json::to_string(&SessionSettings::default())
                 .expect("serialize settings"),
             active_mission_id: None,
+            parent_session_id: None,
+            parent_job_id: None,
+            delegation_label: None,
             created_at: 1,
             updated_at: 1,
         })
@@ -1615,6 +1654,9 @@ fn execute_chat_turn_can_finish_after_an_allowed_web_tool_call() {
             settings_json: serde_json::to_string(&SessionSettings::default())
                 .expect("serialize settings"),
             active_mission_id: None,
+            parent_session_id: None,
+            parent_job_id: None,
+            delegation_label: None,
             created_at: 1,
             updated_at: 1,
         })
@@ -1737,6 +1779,9 @@ fn execute_chat_turn_can_finish_after_an_allowed_web_tool_call_with_zai() {
             settings_json: serde_json::to_string(&SessionSettings::default())
                 .expect("serialize settings"),
             active_mission_id: None,
+            parent_session_id: None,
+            parent_job_id: None,
+            delegation_label: None,
             created_at: 1,
             updated_at: 1,
         })
@@ -1872,6 +1917,9 @@ fn execute_chat_turn_can_finish_after_exec_start_and_exec_wait_tool_calls() {
             settings_json: serde_json::to_string(&SessionSettings::default())
                 .expect("serialize settings"),
             active_mission_id: None,
+            parent_session_id: None,
+            parent_job_id: None,
+            delegation_label: None,
             created_at: 1,
             updated_at: 1,
         })
@@ -1975,6 +2023,9 @@ fn approval_approve_resumes_an_openai_chat_tool_call_and_completes_the_run() {
             settings_json: serde_json::to_string(&SessionSettings::default())
                 .expect("serialize settings"),
             active_mission_id: None,
+            parent_session_id: None,
+            parent_job_id: None,
+            delegation_label: None,
             created_at: 1,
             updated_at: 1,
         })
@@ -2130,6 +2181,9 @@ fn approval_approve_resumes_a_zai_chat_tool_call_and_completes_the_run() {
             settings_json: serde_json::to_string(&SessionSettings::default())
                 .expect("serialize settings"),
             active_mission_id: None,
+            parent_session_id: None,
+            parent_job_id: None,
+            delegation_label: None,
             created_at: 1,
             updated_at: 1,
         })
@@ -2279,6 +2333,9 @@ fn approval_approve_resumes_a_mission_turn_and_completes_the_job() {
             settings_json: serde_json::to_string(&SessionSettings::default())
                 .expect("serialize settings"),
             active_mission_id: None,
+            parent_session_id: None,
+            parent_job_id: None,
+            delegation_label: None,
             created_at: 1,
             updated_at: 1,
         })
@@ -2433,6 +2490,9 @@ fn execute_chat_turn_fails_when_the_provider_repeats_the_same_tool_signature() {
             settings_json: serde_json::to_string(&SessionSettings::default())
                 .expect("serialize settings"),
             active_mission_id: None,
+            parent_session_id: None,
+            parent_job_id: None,
+            delegation_label: None,
             created_at: 1,
             updated_at: 1,
         })
@@ -2561,6 +2621,9 @@ fn execute_chat_turn_only_sends_new_tool_outputs_for_each_continuation_round() {
             settings_json: serde_json::to_string(&SessionSettings::default())
                 .expect("serialize settings"),
             active_mission_id: None,
+            parent_session_id: None,
+            parent_job_id: None,
+            delegation_label: None,
             created_at: 1,
             updated_at: 1,
         })
@@ -2641,6 +2704,9 @@ fn run_with_args_shows_and_sends_chat_turns() {
             settings_json: serde_json::to_string(&SessionSettings::default())
                 .expect("serialize settings"),
             active_mission_id: None,
+            parent_session_id: None,
+            parent_job_id: None,
+            delegation_label: None,
             created_at: 1,
             updated_at: 1,
         })
@@ -2738,6 +2804,9 @@ fn run_with_args_chat_send_reports_waiting_approval_details() {
             settings_json: serde_json::to_string(&SessionSettings::default())
                 .expect("serialize settings"),
             active_mission_id: None,
+            parent_session_id: None,
+            parent_job_id: None,
+            delegation_label: None,
             created_at: 1,
             updated_at: 1,
         })
@@ -2792,6 +2861,9 @@ fn repl_runs_chat_turns_and_supports_show_and_exit_commands() {
             settings_json: serde_json::to_string(&SessionSettings::default())
                 .expect("serialize settings"),
             active_mission_id: None,
+            parent_session_id: None,
+            parent_job_id: None,
+            delegation_label: None,
             created_at: 1,
             updated_at: 1,
         })
@@ -2832,6 +2904,9 @@ fn repl_runs_plan_command_and_renders_current_plan() {
             settings_json: serde_json::to_string(&SessionSettings::default())
                 .expect("serialize settings"),
             active_mission_id: None,
+            parent_session_id: None,
+            parent_job_id: None,
+            delegation_label: None,
             created_at: 1,
             updated_at: 1,
         })
@@ -2904,6 +2979,9 @@ fn repl_supports_russian_skill_commands_with_session_scoped_overrides() {
             settings_json: serde_json::to_string(&SessionSettings::default())
                 .expect("serialize settings"),
             active_mission_id: None,
+            parent_session_id: None,
+            parent_job_id: None,
+            delegation_label: None,
             created_at: 1,
             updated_at: 1,
         })
@@ -3002,6 +3080,9 @@ fn repl_accepts_cp1251_terminal_input_without_utf8_failure() {
             settings_json: serde_json::to_string(&SessionSettings::default())
                 .expect("serialize settings"),
             active_mission_id: None,
+            parent_session_id: None,
+            parent_job_id: None,
+            delegation_label: None,
             created_at: 1,
             updated_at: 1,
         })
@@ -3068,6 +3149,9 @@ fn repl_surfaces_waiting_approval_and_can_approve_latest_pending_turn() {
             settings_json: serde_json::to_string(&SessionSettings::default())
                 .expect("serialize settings"),
             active_mission_id: None,
+            parent_session_id: None,
+            parent_job_id: None,
+            delegation_label: None,
             created_at: 1,
             updated_at: 1,
         })
@@ -3137,6 +3221,9 @@ fn repl_rehydrates_latest_pending_approval_after_restart() {
             settings_json: serde_json::to_string(&SessionSettings::default())
                 .expect("serialize settings"),
             active_mission_id: None,
+            parent_session_id: None,
+            parent_job_id: None,
+            delegation_label: None,
             created_at: 1,
             updated_at: 1,
         })
@@ -3232,6 +3319,9 @@ fn repl_rejects_new_turns_while_an_approval_is_pending() {
             settings_json: serde_json::to_string(&SessionSettings::default())
                 .expect("serialize settings"),
             active_mission_id: None,
+            parent_session_id: None,
+            parent_job_id: None,
+            delegation_label: None,
             created_at: 1,
             updated_at: 1,
         })
@@ -3300,6 +3390,9 @@ data: [DONE]\n\n"
             settings_json: serde_json::to_string(&SessionSettings::default())
                 .expect("serialize settings"),
             active_mission_id: None,
+            parent_session_id: None,
+            parent_job_id: None,
+            delegation_label: None,
             created_at: 1,
             updated_at: 1,
         })
@@ -3369,6 +3462,9 @@ data: [DONE]\n\n"
             settings_json: serde_json::to_string(&SessionSettings::default())
                 .expect("serialize settings"),
             active_mission_id: None,
+            parent_session_id: None,
+            parent_job_id: None,
+            delegation_label: None,
             created_at: 1,
             updated_at: 1,
         })
@@ -3421,6 +3517,9 @@ data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_stream_repl\"
             settings_json: serde_json::to_string(&SessionSettings::default())
                 .expect("serialize settings"),
             active_mission_id: None,
+            parent_session_id: None,
+            parent_job_id: None,
+            delegation_label: None,
             created_at: 1,
             updated_at: 1,
         })
@@ -3945,6 +4044,9 @@ fn session_head_derives_counts_previews_and_summary_state() {
             })
             .expect("serialize settings"),
             active_mission_id: None,
+            parent_session_id: None,
+            parent_job_id: None,
+            delegation_label: None,
             created_at: 1,
             updated_at: 1,
         })
@@ -4047,6 +4149,9 @@ fn session_summary_counts_active_background_jobs_and_renders_current_session_job
             settings_json: serde_json::to_string(&SessionSettings::default())
                 .expect("serialize settings"),
             active_mission_id: None,
+            parent_session_id: None,
+            parent_job_id: None,
+            delegation_label: None,
             created_at: 1,
             updated_at: 1,
         })
@@ -4059,6 +4164,9 @@ fn session_summary_counts_active_background_jobs_and_renders_current_session_job
             settings_json: serde_json::to_string(&SessionSettings::default())
                 .expect("serialize settings"),
             active_mission_id: None,
+            parent_session_id: None,
+            parent_job_id: None,
+            delegation_label: None,
             created_at: 1,
             updated_at: 1,
         })
@@ -4134,6 +4242,12 @@ fn session_summary_counts_active_background_jobs_and_renders_current_session_job
                 serde_json::to_string(&agent_runtime::mission::JobExecutionInput::Delegate {
                     label: "worker-a".to_string(),
                     goal: "inspect logs".to_string(),
+                    bounded_context: vec!["logs".to_string()],
+                    write_scope: DelegateWriteScope {
+                        allowed_paths: vec!["logs".to_string()],
+                    },
+                    expected_output: "summary".to_string(),
+                    owner: "local-child".to_string(),
                 })
                 .expect("serialize running input"),
             ),
@@ -4300,6 +4414,9 @@ fn execute_chat_turn_uses_the_context_summary_and_only_the_uncovered_messages() 
             settings_json: serde_json::to_string(&SessionSettings::default())
                 .expect("serialize settings"),
             active_mission_id: None,
+            parent_session_id: None,
+            parent_job_id: None,
+            delegation_label: None,
             created_at: 1,
             updated_at: 1,
         })
@@ -4437,6 +4554,9 @@ fn execute_chat_turn_places_system_and_agents_files_before_runtime_blocks() {
             settings_json: serde_json::to_string(&SessionSettings::default())
                 .expect("serialize settings"),
             active_mission_id: None,
+            parent_session_id: None,
+            parent_job_id: None,
+            delegation_label: None,
             created_at: 1,
             updated_at: 1,
         })
@@ -4537,6 +4657,9 @@ fn execute_chat_turn_places_active_skills_between_agents_and_session_head() {
             })
             .expect("serialize settings"),
             active_mission_id: None,
+            parent_session_id: None,
+            parent_job_id: None,
+            delegation_label: None,
             created_at: 1,
             updated_at: 1,
         })
@@ -4636,6 +4759,9 @@ fn execute_chat_turn_offloads_large_fs_read_text_results_into_artifacts() {
             settings_json: serde_json::to_string(&SessionSettings::default())
                 .expect("serialize settings"),
             active_mission_id: None,
+            parent_session_id: None,
+            parent_job_id: None,
+            delegation_label: None,
             created_at: 1,
             updated_at: 1,
         })
@@ -4740,6 +4866,9 @@ fn execute_chat_turn_includes_the_plan_snapshot_before_context_summary() {
             settings_json: serde_json::to_string(&SessionSettings::default())
                 .expect("serialize settings"),
             active_mission_id: None,
+            parent_session_id: None,
+            parent_job_id: None,
+            delegation_label: None,
             created_at: 1,
             updated_at: 1,
         })
@@ -4881,6 +5010,9 @@ fn execute_chat_turn_can_finish_after_plan_write_and_plan_read_tool_calls() {
             settings_json: serde_json::to_string(&SessionSettings::default())
                 .expect("serialize settings"),
             active_mission_id: None,
+            parent_session_id: None,
+            parent_job_id: None,
+            delegation_label: None,
             created_at: 1,
             updated_at: 1,
         })
@@ -5030,6 +5162,9 @@ fn execute_chat_turn_can_finish_after_granular_plan_tool_calls() {
             settings_json: serde_json::to_string(&SessionSettings::default())
                 .expect("serialize settings"),
             active_mission_id: None,
+            parent_session_id: None,
+            parent_job_id: None,
+            delegation_label: None,
             created_at: 1,
             updated_at: 1,
         })
@@ -5138,6 +5273,9 @@ fn execute_chat_turn_can_retrieve_offloaded_context_via_artifact_read() {
             settings_json: serde_json::to_string(&SessionSettings::default())
                 .expect("serialize settings"),
             active_mission_id: None,
+            parent_session_id: None,
+            parent_job_id: None,
+            delegation_label: None,
             created_at: 1,
             updated_at: 1,
         })
@@ -5260,6 +5398,9 @@ fn background_worker_completes_chat_turn_jobs_and_wakes_idle_sessions() {
             settings_json: serde_json::to_string(&SessionSettings::default())
                 .expect("serialize settings"),
             active_mission_id: None,
+            parent_session_id: None,
+            parent_job_id: None,
+            delegation_label: None,
             created_at: 1,
             updated_at: 1,
         })
@@ -5326,6 +5467,192 @@ fn background_worker_completes_chat_turn_jobs_and_wakes_idle_sessions() {
 }
 
 #[test]
+fn background_worker_executes_delegate_jobs_as_child_sessions_and_wakes_parent() {
+    let (api_base, requests, handle) = spawn_json_server_sequence(vec![
+        r#"{
+                "id":"resp_delegate_child",
+                "model":"gpt-5.4",
+                "output":[
+                    {
+                        "id":"msg_delegate_child",
+                        "type":"message",
+                        "status":"completed",
+                        "role":"assistant",
+                        "content":[
+                            {
+                                "type":"output_text",
+                                "text":"Сейчас в Москве около +2°C, облачно."
+                            }
+                        ]
+                    }
+                ],
+                "usage":{"input_tokens":18,"output_tokens":9,"total_tokens":27}
+            }"#
+        .to_string(),
+        r#"{
+                "id":"resp_delegate_parent",
+                "model":"gpt-5.4",
+                "output":[
+                    {
+                        "id":"msg_delegate_parent",
+                        "type":"message",
+                        "status":"completed",
+                        "role":"assistant",
+                        "content":[
+                            {
+                                "type":"output_text",
+                                "text":"Делегированная задача завершилась, я увидел результат и продолжаю работу."
+                            }
+                        ]
+                    }
+                ],
+                "usage":{"input_tokens":16,"output_tokens":12,"total_tokens":28}
+            }"#
+        .to_string(),
+    ]);
+    let temp = tempfile::tempdir().expect("tempdir");
+    let app = build_from_config(AppConfig {
+        data_dir: temp.path().join("state-root"),
+        daemon: Default::default(),
+        provider: ConfiguredProvider {
+            kind: ProviderKind::OpenAiResponses,
+            api_base: Some(format!("{api_base}/v1")),
+            api_key: Some("test-key".to_string()),
+            default_model: Some("gpt-5.4".to_string()),
+            ..ConfiguredProvider::default()
+        },
+        ..AppConfig::default()
+    })
+    .expect("build app");
+    let store = PersistenceStore::open(&app.persistence).expect("open store");
+
+    store
+        .put_session(&SessionRecord {
+            id: "session-delegate-parent".to_string(),
+            title: "Delegate Parent".to_string(),
+            prompt_override: None,
+            settings_json: serde_json::to_string(&SessionSettings::default())
+                .expect("serialize settings"),
+            active_mission_id: None,
+            parent_session_id: None,
+            parent_job_id: None,
+            delegation_label: None,
+            created_at: 1,
+            updated_at: 1,
+        })
+        .expect("put parent session");
+    let mut job = JobSpec::delegate(
+        "job-bg-delegate",
+        "session-delegate-parent",
+        None,
+        None,
+        "weather-helper",
+        "Узнай текущую погоду в Москве и верни короткую сводку по-русски.",
+        vec!["notes/weather.txt".to_string()],
+        DelegateWriteScope::new(vec!["notes".to_string()]).expect("write scope"),
+        "Короткая погодная сводка по-русски",
+        "local-child",
+        2,
+    );
+    job.status = agent_runtime::mission::JobStatus::Running;
+    job.updated_at = 2;
+    store
+        .put_job(&JobRecord::try_from(&job).expect("delegate record"))
+        .expect("put delegate job");
+
+    let report = app
+        .background_worker_tick(10)
+        .expect("run background worker");
+    let child_request = requests
+        .recv_timeout(Duration::from_secs(2))
+        .expect("child request");
+    let wake_request = requests
+        .recv_timeout(Duration::from_secs(2))
+        .expect("wake request");
+    handle.join().expect("join server");
+
+    assert_eq!(report.executed_jobs, 1);
+    assert_eq!(report.woken_sessions, 1);
+    assert_eq!(report.emitted_inbox_events, 1);
+
+    let job = JobSpec::try_from(
+        store
+            .get_job("job-bg-delegate")
+            .expect("get delegate job")
+            .expect("delegate job exists"),
+    )
+    .expect("restore delegate job");
+    assert_eq!(job.status, agent_runtime::mission::JobStatus::Completed);
+
+    let (child_session_id, package) = match job.result {
+        Some(JobResult::Delegation {
+            child_session_id,
+            package,
+        }) => (child_session_id, package),
+        other => panic!("expected delegation result, got {other:?}"),
+    };
+    assert_eq!(package.summary, "Сейчас в Москве около +2°C, облачно.");
+
+    let child_session = store
+        .get_session(&child_session_id)
+        .expect("get child session")
+        .expect("child session exists");
+    assert_eq!(
+        child_session.parent_session_id.as_deref(),
+        Some("session-delegate-parent")
+    );
+    assert_eq!(
+        child_session.parent_job_id.as_deref(),
+        Some("job-bg-delegate")
+    );
+    assert_eq!(
+        child_session.delegation_label.as_deref(),
+        Some("weather-helper")
+    );
+
+    let inbox_events = store
+        .list_session_inbox_events_for_session("session-delegate-parent")
+        .expect("list inbox events");
+    assert_eq!(inbox_events.len(), 1);
+    assert_eq!(inbox_events[0].kind, "delegation_result_ready");
+    assert_eq!(inbox_events[0].status, "processed");
+
+    let parent_transcripts = store
+        .list_transcripts_for_session("session-delegate-parent")
+        .expect("list parent transcripts");
+    assert!(
+        parent_transcripts
+            .iter()
+            .any(|record| record.content.contains("delegation started"))
+    );
+    assert!(
+        parent_transcripts
+            .iter()
+            .any(|record| record.content.contains("delegation result ready"))
+    );
+    assert!(
+        parent_transcripts
+            .iter()
+            .any(|record| record.content.contains("Делегированная задача завершилась"))
+    );
+
+    let child_transcripts = store
+        .list_transcripts_for_session(&child_session_id)
+        .expect("list child transcripts");
+    assert_eq!(child_transcripts.len(), 3);
+    assert_eq!(child_transcripts[0].kind, "system");
+    assert_eq!(child_transcripts[1].kind, "user");
+    assert_eq!(child_transcripts[2].kind, "assistant");
+
+    let normalized_child_request = child_request.to_ascii_lowercase();
+    assert!(normalized_child_request.contains("weather-helper"));
+    assert!(normalized_child_request.contains("local-child"));
+    let normalized_wake_request = wake_request.to_ascii_lowercase();
+    assert!(normalized_wake_request.contains("delegation result ready"));
+    assert!(normalized_wake_request.contains("+2"));
+}
+
+#[test]
 fn background_worker_cancels_jobs_with_cancel_requested_at() {
     let temp = tempfile::tempdir().expect("tempdir");
     let app = build_from_config(AppConfig {
@@ -5350,6 +5677,9 @@ fn background_worker_cancels_jobs_with_cancel_requested_at() {
             settings_json: serde_json::to_string(&SessionSettings::default())
                 .expect("serialize settings"),
             active_mission_id: None,
+            parent_session_id: None,
+            parent_job_id: None,
+            delegation_label: None,
             created_at: 1,
             updated_at: 1,
         })

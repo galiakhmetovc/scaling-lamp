@@ -4,13 +4,17 @@ impl SessionRepository for PersistenceStore {
     fn put_session(&self, record: &SessionRecord) -> Result<(), StoreError> {
         self.connection.execute(
             "INSERT INTO sessions (
-                id, title, prompt_override, settings_json, active_mission_id, created_at, updated_at
-             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+                id, title, prompt_override, settings_json, active_mission_id, parent_session_id,
+                parent_job_id, delegation_label, created_at, updated_at
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
              ON CONFLICT(id) DO UPDATE SET
                 title = excluded.title,
                 prompt_override = excluded.prompt_override,
                 settings_json = excluded.settings_json,
                 active_mission_id = excluded.active_mission_id,
+                parent_session_id = excluded.parent_session_id,
+                parent_job_id = excluded.parent_job_id,
+                delegation_label = excluded.delegation_label,
                 created_at = excluded.created_at,
                 updated_at = excluded.updated_at",
             params![
@@ -19,6 +23,9 @@ impl SessionRepository for PersistenceStore {
                 record.prompt_override,
                 &record.settings_json,
                 record.active_mission_id,
+                record.parent_session_id,
+                record.parent_job_id,
+                record.delegation_label,
                 record.created_at,
                 record.updated_at
             ],
@@ -29,7 +36,8 @@ impl SessionRepository for PersistenceStore {
     fn get_session(&self, id: &str) -> Result<Option<SessionRecord>, StoreError> {
         self.connection
             .query_row(
-                "SELECT id, title, prompt_override, settings_json, active_mission_id, created_at, updated_at
+                "SELECT id, title, prompt_override, settings_json, active_mission_id, parent_session_id,
+                        parent_job_id, delegation_label, created_at, updated_at
                  FROM sessions WHERE id = ?1",
                 [id],
                 |row| {
@@ -39,8 +47,11 @@ impl SessionRepository for PersistenceStore {
                         prompt_override: row.get(2)?,
                         settings_json: row.get(3)?,
                         active_mission_id: row.get(4)?,
-                        created_at: row.get(5)?,
-                        updated_at: row.get(6)?,
+                        parent_session_id: row.get(5)?,
+                        parent_job_id: row.get(6)?,
+                        delegation_label: row.get(7)?,
+                        created_at: row.get(8)?,
+                        updated_at: row.get(9)?,
                     })
                 },
             )
@@ -50,7 +61,8 @@ impl SessionRepository for PersistenceStore {
 
     fn list_sessions(&self) -> Result<Vec<SessionRecord>, StoreError> {
         let mut statement = self.connection.prepare(
-            "SELECT id, title, prompt_override, settings_json, active_mission_id, created_at, updated_at
+            "SELECT id, title, prompt_override, settings_json, active_mission_id, parent_session_id,
+                    parent_job_id, delegation_label, created_at, updated_at
              FROM sessions
              ORDER BY created_at ASC, id ASC",
         )?;
@@ -64,8 +76,11 @@ impl SessionRepository for PersistenceStore {
                 prompt_override: row.get(2)?,
                 settings_json: row.get(3)?,
                 active_mission_id: row.get(4)?,
-                created_at: row.get(5)?,
-                updated_at: row.get(6)?,
+                parent_session_id: row.get(5)?,
+                parent_job_id: row.get(6)?,
+                delegation_label: row.get(7)?,
+                created_at: row.get(8)?,
+                updated_at: row.get(9)?,
             });
         }
 

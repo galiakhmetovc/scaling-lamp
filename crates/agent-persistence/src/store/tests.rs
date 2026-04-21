@@ -28,6 +28,9 @@ fn open_bootstraps_schema_and_round_trips_structured_and_file_backed_data() {
         prompt_override: None,
         settings_json: "{\"model\":\"gpt-5.4\"}".to_string(),
         active_mission_id: None,
+        parent_session_id: None,
+        parent_job_id: None,
+        delegation_label: None,
         created_at: 1,
         updated_at: 2,
     };
@@ -229,6 +232,9 @@ fn plan_repository_round_trips_structured_plan_snapshots() {
             prompt_override: None,
             settings_json: "{\"model\":\"gpt-5.4\"}".to_string(),
             active_mission_id: None,
+            parent_session_id: None,
+            parent_job_id: None,
+            delegation_label: None,
             created_at: 1,
             updated_at: 1,
         })
@@ -289,6 +295,9 @@ fn context_offload_repository_round_trips_snapshot_and_payloads() {
             prompt_override: None,
             settings_json: "{\"model\":\"gpt-5.4\"}".to_string(),
             active_mission_id: None,
+            parent_session_id: None,
+            parent_job_id: None,
+            delegation_label: None,
             created_at: 1,
             updated_at: 1,
         })
@@ -351,6 +360,9 @@ fn replacing_context_offload_snapshot_prunes_obsolete_artifacts() {
             prompt_override: None,
             settings_json: "{\"model\":\"gpt-5.4\"}".to_string(),
             active_mission_id: None,
+            parent_session_id: None,
+            parent_job_id: None,
+            delegation_label: None,
             created_at: 1,
             updated_at: 1,
         })
@@ -666,6 +678,9 @@ fn list_transcripts_for_session_orders_by_timestamp_and_id() {
         prompt_override: None,
         settings_json: "{\"model\":\"gpt-5.4\"}".to_string(),
         active_mission_id: None,
+        parent_session_id: None,
+        parent_job_id: None,
+        delegation_label: None,
         created_at: 1,
         updated_at: 1,
     };
@@ -730,6 +745,9 @@ fn list_execution_records_orders_sessions_missions_jobs_and_runs_stably() {
         prompt_override: None,
         settings_json: "{}".to_string(),
         active_mission_id: None,
+        parent_session_id: None,
+        parent_job_id: None,
+        delegation_label: None,
         created_at: 2,
         updated_at: 2,
     };
@@ -739,6 +757,9 @@ fn list_execution_records_orders_sessions_missions_jobs_and_runs_stably() {
         prompt_override: None,
         settings_json: "{}".to_string(),
         active_mission_id: None,
+        parent_session_id: None,
+        parent_job_id: None,
+        delegation_label: None,
         created_at: 2,
         updated_at: 2,
     };
@@ -916,6 +937,9 @@ fn load_execution_state_returns_one_typed_snapshot_for_scheduler_inputs() {
         prompt_override: None,
         settings_json: "{}".to_string(),
         active_mission_id: None,
+        parent_session_id: None,
+        parent_job_id: None,
+        delegation_label: None,
         created_at: 1,
         updated_at: 2,
     };
@@ -1027,6 +1051,9 @@ fn open_removes_payloads_that_do_not_match_metadata() {
         prompt_override: None,
         settings_json: "{\"model\":\"gpt-5.4\"}".to_string(),
         active_mission_id: None,
+        parent_session_id: None,
+        parent_job_id: None,
+        delegation_label: None,
         created_at: 1,
         updated_at: 1,
     };
@@ -1167,6 +1194,9 @@ fn failed_metadata_updates_restore_previous_payloads() {
         prompt_override: None,
         settings_json: "{\"model\":\"gpt-5.4\"}".to_string(),
         active_mission_id: None,
+        parent_session_id: None,
+        parent_job_id: None,
+        delegation_label: None,
         created_at: 1,
         updated_at: 1,
     };
@@ -1236,6 +1266,9 @@ fn reads_fail_when_payloads_no_longer_match_metadata() {
         prompt_override: None,
         settings_json: "{\"model\":\"gpt-5.4\"}".to_string(),
         active_mission_id: None,
+        parent_session_id: None,
+        parent_job_id: None,
+        delegation_label: None,
         created_at: 1,
         updated_at: 1,
     };
@@ -1298,6 +1331,9 @@ fn open_restores_matching_backups_before_pruning_corrupt_payloads() {
         prompt_override: None,
         settings_json: "{\"model\":\"gpt-5.4\"}".to_string(),
         active_mission_id: None,
+        parent_session_id: None,
+        parent_job_id: None,
+        delegation_label: None,
         created_at: 1,
         updated_at: 1,
     };
@@ -1368,6 +1404,9 @@ fn inbox_events_round_trip_and_session_queries() {
         prompt_override: None,
         settings_json: "{\"model\":\"gpt-5.4\"}".to_string(),
         active_mission_id: None,
+        parent_session_id: None,
+        parent_job_id: None,
+        delegation_label: None,
         created_at: 1,
         updated_at: 1,
     };

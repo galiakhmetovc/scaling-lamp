@@ -38,6 +38,40 @@ pub struct SessionInboxEventParseError {
     value: String,
 }
 
+impl SessionInboxEventKind {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::JobCompleted => "job_completed",
+            Self::JobFailed => "job_failed",
+            Self::JobProgressed => "job_progressed",
+            Self::JobBlocked => "job_blocked",
+            Self::ApprovalNeeded => "approval_needed",
+            Self::ExternalInputReceived => "external_input_received",
+            Self::DelegationResultReady => "delegation_result_ready",
+        }
+    }
+}
+
+impl TryFrom<&str> for SessionInboxEventKind {
+    type Error = SessionInboxEventParseError;
+
+    fn try_from(value: &str) -> Result<Self, Self::Error> {
+        match value {
+            "job_completed" => Ok(Self::JobCompleted),
+            "job_failed" => Ok(Self::JobFailed),
+            "job_progressed" => Ok(Self::JobProgressed),
+            "job_blocked" => Ok(Self::JobBlocked),
+            "approval_needed" => Ok(Self::ApprovalNeeded),
+            "external_input_received" => Ok(Self::ExternalInputReceived),
+            "delegation_result_ready" => Ok(Self::DelegationResultReady),
+            other => Err(SessionInboxEventParseError {
+                field: "kind",
+                value: other.to_string(),
+            }),
+        }
+    }
+}
+
 impl TryFrom<&str> for SessionInboxEventStatus {
     type Error = SessionInboxEventParseError;
 
@@ -176,6 +210,27 @@ impl SessionInboxEvent {
             SessionInboxEventKind::JobBlocked,
             SessionInboxEventPayload::JobBlocked {
                 reason: reason.into(),
+            },
+            created_at,
+        )
+    }
+
+    pub fn delegation_result_ready(
+        id: impl Into<String>,
+        session_id: impl Into<String>,
+        job_id: Option<&str>,
+        summary: impl Into<String>,
+        artifact_refs: Vec<String>,
+        created_at: i64,
+    ) -> Self {
+        Self::new(
+            id,
+            session_id,
+            job_id,
+            SessionInboxEventKind::DelegationResultReady,
+            SessionInboxEventPayload::DelegationResultReady {
+                summary: summary.into(),
+                artifact_refs,
             },
             created_at,
         )

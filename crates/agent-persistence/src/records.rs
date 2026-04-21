@@ -29,6 +29,9 @@ pub struct SessionRecord {
     pub prompt_override: Option<String>,
     pub settings_json: String,
     pub active_mission_id: Option<String>,
+    pub parent_session_id: Option<String>,
+    pub parent_job_id: Option<String>,
+    pub delegation_label: Option<String>,
     pub created_at: i64,
     pub updated_at: i64,
 }
@@ -207,6 +210,9 @@ impl TryFrom<&Session> for SessionRecord {
                 .map(|prompt_override| prompt_override.as_str().to_string()),
             settings_json,
             active_mission_id: session.active_mission_id.clone(),
+            parent_session_id: session.parent_session_id.clone(),
+            parent_job_id: session.parent_job_id.clone(),
+            delegation_label: session.delegation_label.clone(),
             created_at: session.created_at,
             updated_at: session.updated_at,
         })
@@ -231,6 +237,9 @@ impl TryFrom<SessionRecord> for Session {
             prompt_override,
             settings,
             active_mission_id: record.active_mission_id,
+            parent_session_id: record.parent_session_id,
+            parent_job_id: record.parent_job_id,
+            delegation_label: record.delegation_label,
             created_at: record.created_at,
             updated_at: record.updated_at,
         })
@@ -485,8 +494,7 @@ impl TryFrom<&SessionInboxEvent> for SessionInboxEventRecord {
             id: event.id.clone(),
             session_id: event.session_id.clone(),
             job_id: event.job_id.clone(),
-            kind: serde_json::to_string(&event.kind)
-                .map_err(RecordConversionError::SerializeInboxEventPayload)?,
+            kind: event.kind.as_str().to_string(),
             payload_json: serde_json::to_string(&event.payload)
                 .map_err(RecordConversionError::SerializeInboxEventPayload)?,
             status: event.status.as_str().to_string(),
@@ -507,8 +515,8 @@ impl TryFrom<SessionInboxEventRecord> for SessionInboxEvent {
             id: record.id,
             session_id: record.session_id,
             job_id: record.job_id,
-            kind: serde_json::from_str(&record.kind)
-                .map_err(RecordConversionError::InvalidInboxEventPayload)?,
+            kind: agent_runtime::inbox::SessionInboxEventKind::try_from(record.kind.as_str())
+                .map_err(RecordConversionError::InvalidInboxEventStatus)?,
             payload: serde_json::from_str::<SessionInboxEventPayload>(&record.payload_json)
                 .map_err(RecordConversionError::InvalidInboxEventPayload)?,
             status: SessionInboxEventStatus::try_from(record.status.as_str())
@@ -809,6 +817,9 @@ mod tests {
             prompt_override: Some(PromptOverride::new("Always verify").expect("prompt override")),
             settings: Default::default(),
             active_mission_id: Some("mission-1".to_string()),
+            parent_session_id: None,
+            parent_job_id: None,
+            delegation_label: None,
             created_at: 10,
             updated_at: 11,
         };
@@ -820,6 +831,33 @@ mod tests {
     }
 
     #[test]
+    fn session_records_round_trip_with_delegation_lineage_metadata() {
+        let session = Session {
+            id: "session-child".to_string(),
+            title: "Delegate: verification".to_string(),
+            prompt_override: None,
+            settings: Default::default(),
+            active_mission_id: None,
+            parent_session_id: Some("session-parent".to_string()),
+            parent_job_id: Some("job-delegate".to_string()),
+            delegation_label: Some("verification".to_string()),
+            created_at: 20,
+            updated_at: 21,
+        };
+
+        let stored = SessionRecord::try_from(&session).expect("session to record");
+        let restored = Session::try_from(stored).expect("record to session");
+
+        assert_eq!(
+            restored.parent_session_id.as_deref(),
+            Some("session-parent")
+        );
+        assert_eq!(restored.parent_job_id.as_deref(), Some("job-delegate"));
+        assert_eq!(restored.delegation_label.as_deref(), Some("verification"));
+        assert_eq!(restored, session);
+    }
+
+    #[test]
     fn session_records_accept_legacy_partial_settings_json() {
         let restored = Session::try_from(SessionRecord {
             id: "session-legacy".to_string(),
@@ -827,6 +865,9 @@ mod tests {
             prompt_override: None,
             settings_json: "{\"model\":\"gpt-5.4\"}".to_string(),
             active_mission_id: None,
+            parent_session_id: None,
+            parent_job_id: None,
+            delegation_label: None,
             created_at: 1,
             updated_at: 1,
         })

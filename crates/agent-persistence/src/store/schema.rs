@@ -10,6 +10,9 @@ pub(super) fn bootstrap_schema(connection: &Connection) -> Result<(), StoreError
              prompt_override TEXT,
              settings_json TEXT NOT NULL,
              active_mission_id TEXT,
+             parent_session_id TEXT,
+             parent_job_id TEXT,
+             delegation_label TEXT,
              created_at INTEGER NOT NULL,
              updated_at INTEGER NOT NULL,
              FOREIGN KEY(active_mission_id) REFERENCES missions(id) ON DELETE SET NULL
@@ -177,6 +180,9 @@ pub(super) fn validate_schema(connection: &Connection) -> Result<(), StoreError>
     validate_column(connection, "jobs", "cancel_requested_at", false)?;
     validate_column(connection, "jobs", "last_progress_message", false)?;
     validate_column(connection, "sessions", "settings_json", true)?;
+    validate_column(connection, "sessions", "parent_session_id", false)?;
+    validate_column(connection, "sessions", "parent_job_id", false)?;
+    validate_column(connection, "sessions", "delegation_label", false)?;
     validate_column(connection, "runs", "evidence_refs_json", true)?;
     validate_column(connection, "runs", "recent_steps_json", true)?;
     validate_column(connection, "runs", "pending_approvals_json", true)?;
@@ -272,6 +278,9 @@ pub(super) fn validate_identifier(id: &str) -> Result<(), StoreError> {
 }
 
 pub(super) fn migrate_schema(connection: &Connection) -> Result<(), StoreError> {
+    add_column_if_missing(connection, "sessions", "parent_session_id", "TEXT")?;
+    add_column_if_missing(connection, "sessions", "parent_job_id", "TEXT")?;
+    add_column_if_missing(connection, "sessions", "delegation_label", "TEXT")?;
     add_column_if_missing(
         connection,
         "missions",

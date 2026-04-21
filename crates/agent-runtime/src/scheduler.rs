@@ -371,6 +371,12 @@ mod tests {
             input: JobExecutionInput::Delegate {
                 label: "worker-a".to_string(),
                 goal: "inspect the runtime".to_string(),
+                bounded_context: vec!["src/runtime.rs".to_string()],
+                write_scope: crate::delegation::DelegateWriteScope {
+                    allowed_paths: vec!["src".to_string()],
+                },
+                expected_output: "summary".to_string(),
+                owner: "local-child".to_string(),
             },
             result: None,
             error: None,

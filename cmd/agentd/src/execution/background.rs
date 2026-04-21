@@ -128,6 +128,10 @@ impl ExecutionService {
                 self.execute_background_approval_job(store, provider, job_id, now)?;
                 Ok(())
             }
+            JobKind::Delegate => {
+                self.execute_background_delegate_job(store, provider, job_id, now)?;
+                Ok(())
+            }
             _ => {
                 let mut job = job;
                 job.status = JobStatus::Failed;
@@ -153,22 +157,35 @@ impl ExecutionService {
         now: i64,
     ) -> Result<bool, ExecutionError> {
         let event = match job.status {
-            JobStatus::Completed => {
-                let summary = match job.result.as_ref() {
-                    Some(JobResult::Summary { outcome }) => outcome.clone(),
-                    None => job
-                        .last_progress_message
-                        .clone()
-                        .unwrap_or_else(|| "background job completed".to_string()),
-                };
-                Some(SessionInboxEvent::job_completed(
+            JobStatus::Completed => match job.result.as_ref() {
+                Some(JobResult::Delegation {
+                    child_session_id: _,
+                    package,
+                }) => Some(SessionInboxEvent::delegation_result_ready(
+                    format!("inbox-{}-delegation-{}", job.id, job.updated_at),
+                    &job.session_id,
+                    Some(job.id.as_str()),
+                    package.summary.clone(),
+                    package.artifact_refs.clone(),
+                    now,
+                )),
+                Some(JobResult::Summary { outcome }) => Some(SessionInboxEvent::job_completed(
                     format!("inbox-{}-completed-{}", job.id, job.updated_at),
                     &job.session_id,
                     Some(job.id.as_str()),
-                    summary,
+                    outcome.clone(),
                     now,
-                ))
-            }
+                )),
+                None => Some(SessionInboxEvent::job_completed(
+                    format!("inbox-{}-completed-{}", job.id, job.updated_at),
+                    &job.session_id,
+                    Some(job.id.as_str()),
+                    job.last_progress_message
+                        .clone()
+                        .unwrap_or_else(|| "background job completed".to_string()),
+                    now,
+                )),
+            },
             JobStatus::Failed => Some(SessionInboxEvent::job_failed(
                 format!("inbox-{}-failed-{}", job.id, job.updated_at),
                 &job.session_id,

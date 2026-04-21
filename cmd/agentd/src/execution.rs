@@ -8,9 +8,10 @@ mod supervisor;
 mod tools;
 
 use agent_persistence::{
-    ContextSummaryRepository, JobRecord, JobRepository, MissionRecord, MissionRepository,
-    PersistenceStore, PlanRecord, PlanRepository, RecordConversionError, RunRecord, RunRepository,
-    SessionInboxRepository, SessionRepository, StoreError, TranscriptRecord, TranscriptRepository,
+    ContextOffloadRepository, ContextSummaryRepository, JobRecord, JobRepository, MissionRecord,
+    MissionRepository, PersistenceStore, PlanRecord, PlanRepository, RecordConversionError,
+    RunRecord, RunRepository, SessionInboxRepository, SessionRepository, StoreError,
+    TranscriptRecord, TranscriptRepository,
 };
 use agent_runtime::mission::{
     JobExecutionInput, JobResult, JobSpec, JobStatus, MissionSpec, MissionStatus,

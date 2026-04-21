@@ -2,6 +2,8 @@ use serde::{Deserialize, Serialize};
 use std::error::Error;
 use std::fmt;
 
+use crate::delegation::{DelegateResultPackage, DelegateWriteScope};
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MissionSpec {
     pub id: String,
@@ -67,17 +69,42 @@ pub enum JobStatus {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum JobExecutionInput {
-    ChatTurn { message: String },
-    ApprovalContinuation { run_id: String, approval_id: String },
-    MissionTurn { mission_id: String, goal: String },
-    Verification { checks: Vec<String> },
-    Delegate { label: String, goal: String },
-    Maintenance { summary: String },
+    ChatTurn {
+        message: String,
+    },
+    ApprovalContinuation {
+        run_id: String,
+        approval_id: String,
+    },
+    MissionTurn {
+        mission_id: String,
+        goal: String,
+    },
+    Verification {
+        checks: Vec<String>,
+    },
+    Delegate {
+        label: String,
+        goal: String,
+        bounded_context: Vec<String>,
+        write_scope: DelegateWriteScope,
+        expected_output: String,
+        owner: String,
+    },
+    Maintenance {
+        summary: String,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum JobResult {
-    Summary { outcome: String },
+    Summary {
+        outcome: String,
+    },
+    Delegation {
+        child_session_id: String,
+        package: DelegateResultPackage,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -379,6 +406,52 @@ impl JobSpec {
             status: JobStatus::Queued,
             input: JobExecutionInput::ChatTurn {
                 message: message.into(),
+            },
+            result: None,
+            error: None,
+            created_at,
+            updated_at: created_at,
+            started_at: None,
+            finished_at: None,
+            attempt_count: 0,
+            max_attempts: 1,
+            lease_owner: None,
+            lease_expires_at: None,
+            heartbeat_at: None,
+            cancel_requested_at: None,
+            last_progress_message: None,
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn delegate(
+        id: impl Into<String>,
+        session_id: impl Into<String>,
+        run_id: Option<&str>,
+        parent_job_id: Option<&str>,
+        label: impl Into<String>,
+        goal: impl Into<String>,
+        bounded_context: Vec<String>,
+        write_scope: DelegateWriteScope,
+        expected_output: impl Into<String>,
+        owner: impl Into<String>,
+        created_at: i64,
+    ) -> Self {
+        Self {
+            id: id.into(),
+            session_id: session_id.into(),
+            mission_id: None,
+            run_id: run_id.map(str::to_owned),
+            parent_job_id: parent_job_id.map(str::to_owned),
+            kind: JobKind::Delegate,
+            status: JobStatus::Queued,
+            input: JobExecutionInput::Delegate {
+                label: label.into(),
+                goal: goal.into(),
+                bounded_context,
+                write_scope,
+                expected_output: expected_output.into(),
+                owner: owner.into(),
             },
             result: None,
             error: None,

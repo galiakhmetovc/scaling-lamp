@@ -62,6 +62,9 @@ pub struct SessionDetailResponse {
     pub prompt_override: Option<String>,
     pub settings_json: String,
     pub active_mission_id: Option<String>,
+    pub parent_session_id: Option<String>,
+    pub parent_job_id: Option<String>,
+    pub delegation_label: Option<String>,
     pub created_at: i64,
     pub updated_at: i64,
 }

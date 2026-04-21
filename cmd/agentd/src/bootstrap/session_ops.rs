@@ -63,6 +63,9 @@ impl App {
             prompt_override: None,
             settings: SessionSettings::default(),
             active_mission_id: None,
+            parent_session_id: None,
+            parent_job_id: None,
+            delegation_label: None,
             created_at: now,
             updated_at: now,
         };
