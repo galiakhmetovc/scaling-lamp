@@ -791,6 +791,16 @@ where
                         .timeline_mut()
                         .push_system(&message, unix_timestamp()?);
                 }
+                "/cancel" => {
+                    if let Some(active_run) = state.active_run() {
+                        active_run.queue_interrupt_after_tool_step();
+                    }
+                    let message =
+                        app.cancel_all_session_work(&current_session_id, unix_timestamp()?)?;
+                    state
+                        .timeline_mut()
+                        .push_system(&message, unix_timestamp()?);
+                }
                 "/jobs" => {
                     let jobs = app.render_active_jobs(&current_session_id)?;
                     state.timeline_mut().push_system(&jobs, unix_timestamp()?);
@@ -1544,6 +1554,7 @@ fn canonical_command(command: &str) -> Option<&'static str> {
         "/processes" | "\\процессы" => Some("/processes"),
         "/pause" | "\\пауза" => Some("/pause"),
         "/stop" | "\\стоп" => Some("/stop"),
+        "/cancel" | "\\отмена" => Some("/cancel"),
         "/jobs" | "\\задачи" => Some("/jobs"),
         "/artifacts" | "/артефакты" | "\\артефакты" => Some("/artifacts"),
         "/artifact" | "/артефакт" | "\\артефакт" => Some("/artifact"),
@@ -1993,6 +2004,14 @@ mod tests {
             Ok("ход остановлен".to_string())
         }
 
+        fn cancel_all_session_work(
+            &self,
+            _session_id: &str,
+            _now: i64,
+        ) -> Result<String, BootstrapError> {
+            Ok("отмена выполнена".to_string())
+        }
+
         fn render_version_info(&self) -> Result<String, BootstrapError> {
             Ok("версия=test".to_string())
         }
@@ -2285,6 +2304,14 @@ mod tests {
             panic!("unused in test")
         }
 
+        fn cancel_all_session_work(
+            &self,
+            _session_id: &str,
+            _now: i64,
+        ) -> Result<String, BootstrapError> {
+            panic!("unused in test")
+        }
+
         fn render_version_info(&self) -> Result<String, BootstrapError> {
             panic!("unused in test")
         }
@@ -2528,6 +2555,7 @@ mod tests {
         assert_eq!(canonical_command("\\помощь"), Some("/help"));
         assert_eq!(canonical_command("\\настройки"), Some("/settings"));
         assert_eq!(canonical_command("\\пауза"), Some("/pause"));
+        assert_eq!(canonical_command("\\отмена"), Some("/cancel"));
     }
 
     #[test]

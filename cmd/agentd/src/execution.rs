@@ -19,6 +19,7 @@ use agent_persistence::{
     StoreError, TranscriptRecord, TranscriptRepository,
 };
 use agent_runtime::agent::AgentProfile;
+use agent_runtime::inbox::SessionInboxEvent;
 use agent_runtime::mission::{
     JobExecutionInput, JobResult, JobSpec, JobStatus, MissionSpec, MissionStatus,
 };
@@ -31,7 +32,7 @@ use agent_runtime::tool::{SharedProcessRegistry, ToolCall, ToolError, ToolName, 
 use agent_runtime::verification::EvidenceBundle;
 use agent_runtime::workspace::WorkspaceRef;
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::error::Error;
 use std::fmt;
 use std::path::{Path, PathBuf};
@@ -94,6 +95,15 @@ pub struct BackgroundWorkerTickReport {
     pub emitted_inbox_events: usize,
     pub woken_sessions: usize,
     pub failed_jobs: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub struct SessionWorkCancellationReport {
+    pub session_count: usize,
+    pub run_count: usize,
+    pub job_count: usize,
+    pub mission_count: usize,
+    pub inbox_event_count: usize,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

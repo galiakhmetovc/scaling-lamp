@@ -32,6 +32,7 @@ pub(super) trait ChatReplBackend {
     fn read_artifact(&self, session_id: &str, artifact_id: &str) -> Result<String, BootstrapError>;
     fn render_active_run(&self, session_id: &str) -> Result<String, BootstrapError>;
     fn cancel_active_run(&self, session_id: &str) -> Result<String, BootstrapError>;
+    fn cancel_all_session_work(&self, session_id: &str) -> Result<String, BootstrapError>;
     fn render_active_jobs(&self, session_id: &str) -> Result<String, BootstrapError>;
     fn write_debug_bundle(&self, session_id: &str) -> Result<String, BootstrapError>;
     fn render_session_skills(&self, session_id: &str) -> Result<String, BootstrapError>;
@@ -173,6 +174,10 @@ impl ChatReplBackend for App {
 
     fn cancel_active_run(&self, session_id: &str) -> Result<String, BootstrapError> {
         self.cancel_latest_session_run(session_id, unix_timestamp()?)
+    }
+
+    fn cancel_all_session_work(&self, session_id: &str) -> Result<String, BootstrapError> {
+        App::cancel_all_session_work(self, session_id, unix_timestamp()?)
     }
 
     fn render_active_jobs(&self, session_id: &str) -> Result<String, BootstrapError> {
@@ -326,6 +331,10 @@ impl ChatReplBackend for DaemonClient {
 
     fn cancel_active_run(&self, session_id: &str) -> Result<String, BootstrapError> {
         self.cancel_active_run(session_id)
+    }
+
+    fn cancel_all_session_work(&self, session_id: &str) -> Result<String, BootstrapError> {
+        self.cancel_all_session_work(session_id)
     }
 
     fn render_active_jobs(&self, session_id: &str) -> Result<String, BootstrapError> {
@@ -681,6 +690,11 @@ where
                     let message = backend.cancel_active_run(session_id)?;
                     writeln!(renderer.output, "{message}").map_err(BootstrapError::Stream)?;
                 }
+                Some("/cancel") => {
+                    renderer.finish_turn()?;
+                    let message = backend.cancel_all_session_work(session_id)?;
+                    writeln!(renderer.output, "{message}").map_err(BootstrapError::Stream)?;
+                }
                 Some("/jobs") => {
                     renderer.finish_turn()?;
                     let jobs = backend.render_active_jobs(session_id)?;
@@ -1018,6 +1032,7 @@ fn canonical_repl_command(raw: &str) -> Option<&'static str> {
         "/processes" | "\\процессы" => Some("/processes"),
         "/pause" | "\\пауза" => Some("/pause"),
         "/stop" | "\\стоп" => Some("/stop"),
+        "/cancel" | "\\отмена" => Some("/cancel"),
         "/jobs" | "\\задачи" => Some("/jobs"),
         "/artifacts" | "/артефакты" | "\\артефакты" => Some("/artifacts"),
         "/artifact" | "/артефакт" | "\\артефакт" => Some("/artifact"),

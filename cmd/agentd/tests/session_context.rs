@@ -1,9 +1,13 @@
 use agent_persistence::{
-    AppConfig, ContextSummaryRepository, PersistenceStore, RunRecord, RunRepository, SessionRecord,
-    SessionRepository, TranscriptRepository,
+    AppConfig, ContextSummaryRepository, JobRecord, JobRepository, MissionRecord,
+    MissionRepository, PersistenceStore, RunRecord, RunRepository, SessionInboxRepository,
+    SessionRecord, SessionRepository, TranscriptRepository,
 };
+use agent_runtime::inbox::SessionInboxEvent;
+use agent_runtime::mission::{JobSpec, JobStatus, MissionSpec, MissionStatus};
 use agent_runtime::run::{ActiveProcess, RunEngine};
-use agent_runtime::session::SessionSettings;
+use agent_runtime::session::{Session, SessionSettings};
+use agent_runtime::tool::{ExecStartInput, ProcessOutputStream, ToolCall, ToolRuntime};
 use agent_runtime::workspace::WorkspaceRef;
 use agentd::bootstrap::{SessionSummary, build_from_config};
 use std::fs;
@@ -223,6 +227,96 @@ fn render_active_run_shows_usage_and_active_processes() {
     assert!(rendered.contains("cwd: /workspace"));
 }
 
+#[test]
+fn render_active_run_shows_live_exec_output_tail() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let workspace = WorkspaceRef::new(temp.path());
+    let app = build_from_config(AppConfig {
+        data_dir: temp.path().join("state-root"),
+        ..AppConfig::default()
+    })
+    .expect("build app");
+    let store = PersistenceStore::open(&app.persistence).expect("open store");
+
+    store
+        .put_session(&SessionRecord {
+            id: "session-run-live-output".to_string(),
+            title: "Session Run Live Output".to_string(),
+            prompt_override: None,
+            settings_json: serde_json::to_string(&SessionSettings::default())
+                .expect("serialize settings"),
+            agent_profile_id: "default".to_string(),
+            active_mission_id: None,
+            parent_session_id: None,
+            parent_job_id: None,
+            delegation_label: None,
+            created_at: 1,
+            updated_at: 1,
+        })
+        .expect("put session");
+
+    let mut runtime = ToolRuntime::with_shared_process_registry(workspace, app.processes.clone());
+    let started = runtime
+        .invoke(ToolCall::ExecStart(ExecStartInput {
+            executable: "/bin/sh".to_string(),
+            args: vec![
+                "-c".to_string(),
+                "printf 'status-stdout\\n'; printf 'status-stderr\\n' >&2; sleep 5".to_string(),
+            ],
+            cwd: None,
+        }))
+        .expect("exec_start")
+        .into_process_start()
+        .expect("process start");
+
+    let mut run = RunEngine::new("run-live-output", "session-run-live-output", None, 10);
+    run.start(10).expect("start run");
+    run.track_active_process(
+        ActiveProcess::new(&started.process_id, "exec", started.pid_ref.clone(), 11)
+            .with_command_details(started.command_display, started.cwd),
+        11,
+    )
+    .expect("track active process");
+    store
+        .put_run(&RunRecord::try_from(run.snapshot()).expect("run record"))
+        .expect("put run");
+
+    let deadline = Instant::now() + Duration::from_secs(3);
+    loop {
+        let rendered = app
+            .render_active_run("session-run-live-output")
+            .expect("render active run");
+        if rendered.contains("status-stdout") && rendered.contains("status-stderr") {
+            assert!(rendered.contains("вывод:"));
+            break;
+        }
+        let read = app
+            .processes
+            .read_exec_output(
+                &started.process_id,
+                ProcessOutputStream::Merged,
+                None,
+                Some(1024),
+                Some(10),
+            )
+            .expect("read live output");
+        if read.text.contains("status-stdout") && read.text.contains("status-stderr") {
+            let rendered = app
+                .render_active_run("session-run-live-output")
+                .expect("render active run");
+            assert!(rendered.contains("status-stdout"));
+            assert!(rendered.contains("status-stderr"));
+            assert!(rendered.contains("вывод:"));
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "timed out waiting for live output"
+        );
+        thread::sleep(Duration::from_millis(25));
+    }
+}
+
 #[cfg(unix)]
 #[test]
 fn cancel_latest_session_run_terminates_a_long_running_process() {
@@ -276,6 +370,212 @@ fn cancel_latest_session_run_terminates_a_long_running_process() {
         .render_active_run(&session.id)
         .expect("render active run");
     assert_eq!(rendered, "Ход: активного выполнения нет");
+}
+
+#[test]
+fn cancel_all_session_work_cancels_runs_jobs_missions_and_queued_wakeups_for_session_tree() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let app = build_from_config(AppConfig {
+        data_dir: temp.path().join("state-root"),
+        ..AppConfig::default()
+    })
+    .expect("build app");
+    let store = PersistenceStore::open(&app.persistence).expect("open store");
+    let root = app
+        .create_session_auto(Some("Root Session"))
+        .expect("create root session");
+    let child_summary = app
+        .create_session_auto(Some("Child Session"))
+        .expect("create child session");
+
+    let mut child = Session::try_from(
+        store
+            .get_session(&child_summary.id)
+            .expect("get child session")
+            .expect("child session exists"),
+    )
+    .expect("child session");
+    child.parent_session_id = Some(root.id.clone());
+    child.updated_at = 2;
+    store
+        .put_session(&SessionRecord::try_from(&child).expect("child session record"))
+        .expect("put child session");
+
+    let mut child_process = Command::new("sleep")
+        .arg("30")
+        .spawn()
+        .expect("spawn sleep");
+
+    let mut root_run = RunEngine::new("run-root-cancel-all", &root.id, None, 10);
+    root_run.start(10).expect("start root run");
+    root_run
+        .track_active_process(
+            ActiveProcess::new(
+                "exec-root",
+                "exec",
+                format!("pid:{}", child_process.id()),
+                11,
+            ),
+            11,
+        )
+        .expect("track root process");
+    store
+        .put_run(&RunRecord::try_from(root_run.snapshot()).expect("root run record"))
+        .expect("put root run");
+
+    let mut child_run = RunEngine::new("run-child-cancel-all", &child.id, None, 10);
+    child_run.start(10).expect("start child run");
+    store
+        .put_run(&RunRecord::try_from(child_run.snapshot()).expect("child run record"))
+        .expect("put child run");
+
+    let mut root_job = JobSpec::chat_turn(
+        "job-root",
+        &root.id,
+        Some("run-root-cancel-all"),
+        None,
+        "hi",
+        10,
+    );
+    root_job.status = JobStatus::Running;
+    root_job.started_at = Some(10);
+    store
+        .put_job(&JobRecord::try_from(&root_job).expect("root job record"))
+        .expect("put root job");
+
+    let mut child_job = JobSpec::chat_turn(
+        "job-child",
+        &child.id,
+        Some("run-child-cancel-all"),
+        None,
+        "hi",
+        10,
+    );
+    child_job.status = JobStatus::Queued;
+    store
+        .put_job(&JobRecord::try_from(&child_job).expect("child job record"))
+        .expect("put child job");
+
+    let mission = MissionSpec {
+        id: "mission-root".to_string(),
+        session_id: root.id.clone(),
+        status: MissionStatus::Running,
+        updated_at: 10,
+        ..MissionSpec::default()
+    };
+    store
+        .put_mission(&MissionRecord::try_from(&mission).expect("mission record"))
+        .expect("put mission");
+
+    let mut root_session = Session::try_from(
+        store
+            .get_session(&root.id)
+            .expect("get root session")
+            .expect("root session exists"),
+    )
+    .expect("root session");
+    root_session.active_mission_id = Some("mission-root".to_string());
+    root_session.updated_at = 11;
+    store
+        .put_session(&SessionRecord::try_from(&root_session).expect("root session record"))
+        .expect("put root session");
+
+    let inbox = SessionInboxEvent::job_completed(
+        "inbox-root-cancel-all",
+        &root.id,
+        Some("job-root"),
+        "queued wakeup",
+        10,
+    );
+    store
+        .put_session_inbox_event(
+            &agent_persistence::SessionInboxEventRecord::try_from(&inbox).expect("inbox record"),
+        )
+        .expect("put inbox event");
+
+    let message = app
+        .cancel_all_session_work(&root.id, 20)
+        .expect("cancel all session work");
+
+    assert!(message.contains("sessions=2"));
+    assert!(message.contains("runs=2"));
+    assert!(message.contains("jobs=2"));
+    assert!(message.contains("missions=1"));
+    assert!(message.contains("inbox_events=1"));
+
+    let deadline = Instant::now() + Duration::from_secs(2);
+    loop {
+        if let Some(status) = child_process.try_wait().expect("try_wait") {
+            assert!(!status.success());
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "sleep process was not terminated in time"
+        );
+        thread::sleep(Duration::from_millis(20));
+    }
+
+    let root_run = agent_runtime::run::RunSnapshot::try_from(
+        store
+            .get_run("run-root-cancel-all")
+            .expect("get root run")
+            .expect("root run exists"),
+    )
+    .expect("root run snapshot");
+    assert_eq!(root_run.status, agent_runtime::run::RunStatus::Cancelled);
+
+    let child_run = agent_runtime::run::RunSnapshot::try_from(
+        store
+            .get_run("run-child-cancel-all")
+            .expect("get child run")
+            .expect("child run exists"),
+    )
+    .expect("child run snapshot");
+    assert_eq!(child_run.status, agent_runtime::run::RunStatus::Cancelled);
+
+    let root_job = JobSpec::try_from(
+        store
+            .get_job("job-root")
+            .expect("get root job")
+            .expect("root job exists"),
+    )
+    .expect("root job");
+    assert_eq!(root_job.status, JobStatus::Cancelled);
+
+    let child_job = JobSpec::try_from(
+        store
+            .get_job("job-child")
+            .expect("get child job")
+            .expect("child job exists"),
+    )
+    .expect("child job");
+    assert_eq!(child_job.status, JobStatus::Cancelled);
+
+    let mission = MissionSpec::try_from(
+        store
+            .get_mission("mission-root")
+            .expect("get mission")
+            .expect("mission exists"),
+    )
+    .expect("mission");
+    assert_eq!(mission.status, MissionStatus::Cancelled);
+
+    let root_session = Session::try_from(
+        store
+            .get_session(&root.id)
+            .expect("get root session")
+            .expect("root session exists"),
+    )
+    .expect("root session");
+    assert_eq!(root_session.active_mission_id, None);
+
+    assert!(
+        store
+            .list_queued_session_inbox_events_for_session(&root.id)
+            .expect("list queued inbox events")
+            .is_empty()
+    );
 }
 
 #[test]

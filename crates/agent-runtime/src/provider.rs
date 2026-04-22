@@ -1460,7 +1460,10 @@ impl Error for ProviderError {
 impl ProviderError {
     pub fn is_transient(&self) -> bool {
         match self {
-            Self::Http(_) | Self::Stream(_) | Self::StreamIdleTimeout { .. } => true,
+            Self::Http(_)
+            | Self::Stream(_)
+            | Self::StreamIdleTimeout { .. }
+            | Self::ResponseMissingOutputText => true,
             Self::HttpStatus { status, .. } => {
                 status.is_server_error()
                     || *status == StatusCode::TOO_MANY_REQUESTS
@@ -1470,7 +1473,6 @@ impl ProviderError {
             | Self::MissingApiKey
             | Self::MissingModel
             | Self::Parse(_)
-            | Self::ResponseMissingOutputText
             | Self::ResponseMissingToolCallField { .. }
             | Self::UnsupportedMessageRole { .. }
             | Self::UnsupportedStreaming => false,

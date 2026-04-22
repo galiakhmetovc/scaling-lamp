@@ -415,6 +415,7 @@ data: [DONE]\n\n",
     handle.join().expect("join server");
 
     assert!(matches!(error, ProviderError::ResponseMissingOutputText));
+    assert!(error.is_transient());
     let normalized_request = raw_request.to_ascii_lowercase();
     assert!(normalized_request.contains("/chat/completions"));
     assert!(normalized_request.contains("\"stream\":true"));

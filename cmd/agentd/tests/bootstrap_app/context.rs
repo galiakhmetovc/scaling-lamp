@@ -408,6 +408,16 @@ fn session_head_derives_counts_previews_and_summary_state() {
         .expect("record fs read");
     run.record_tool_completion("fs_list path=. recursive=false -> fs_list entries=2", 33)
         .expect("record fs list");
+    run.record_tool_completion(
+        "exec_start cwd=. command=/bin/sh -c 'echo ready' -> exec_start process_id=exec-1 pid_ref=pid:101 cwd=. command=/bin/sh -c 'echo ready'",
+        34,
+    )
+    .expect("record exec start");
+    run.record_tool_completion(
+        "exec_wait process_id=exec-1 -> process_result process_id=exec-1 status=Exited exit_code=Some(0)",
+        35,
+    )
+    .expect("record exec wait");
     store
         .put_run(&RunRecord::try_from(run.snapshot()).expect("run record"))
         .expect("put run");
@@ -431,6 +441,17 @@ fn session_head_derives_counts_previews_and_summary_state() {
     assert_eq!(head.recent_filesystem_activity[0].target, ".");
     assert_eq!(head.recent_filesystem_activity[1].action, "read");
     assert_eq!(head.recent_filesystem_activity[1].target, ".env");
+    assert_eq!(head.recent_process_activity.len(), 2);
+    assert_eq!(head.recent_process_activity[0].action, "finish");
+    assert_eq!(
+        head.recent_process_activity[0].target,
+        "exec-1 status=Exited exit=0"
+    );
+    assert_eq!(head.recent_process_activity[1].action, "start");
+    assert_eq!(
+        head.recent_process_activity[1].target,
+        "/bin/sh -c 'echo ready'"
+    );
     assert_eq!(head.workspace_tree.len(), 2);
     assert_eq!(head.workspace_tree[0].path, "README.md");
     assert_eq!(head.workspace_tree[1].path, "crates");
@@ -442,6 +463,9 @@ fn session_head_derives_counts_previews_and_summary_state() {
     assert!(rendered.contains("Recent Filesystem Activity:"));
     assert!(rendered.contains("- list ."));
     assert!(rendered.contains("- read .env"));
+    assert!(rendered.contains("Recent Process Activity:"));
+    assert!(rendered.contains("- finish exec-1 status=Exited exit=0"));
+    assert!(rendered.contains("- start /bin/sh -c 'echo ready'"));
     assert!(rendered.contains("Workspace Tree:"));
     assert!(rendered.contains("- README.md"));
     assert!(rendered.contains("- crates/"));

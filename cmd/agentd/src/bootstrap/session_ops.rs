@@ -7,12 +7,15 @@ use agent_runtime::session::{
     MessageRole, Session, TranscriptEntry, parse_scheduled_input_metadata,
 };
 use agent_runtime::skills::{resolve_session_skill_status, scan_skill_catalog_with_overrides};
+use agent_runtime::tool::ProcessOutputStream;
 use std::collections::HashMap;
 use time::OffsetDateTime;
 use time::UtcOffset;
 use time::format_description::well_known::Rfc3339;
 
 const ACTIVE_RUN_STEP_TAIL_LIMIT: usize = 3;
+const ACTIVE_PROCESS_OUTPUT_TAIL_MAX_BYTES: usize = 2 * 1024;
+const ACTIVE_PROCESS_OUTPUT_TAIL_MAX_LINES: usize = 8;
 
 impl App {
     #[cfg_attr(not(test), allow(dead_code))]
@@ -314,6 +317,12 @@ impl App {
                 if let Some(cwd) = process.cwd.as_deref() {
                     lines.push(format!("    cwd: {cwd}"));
                 }
+                if let Some(output_lines) =
+                    render_active_process_output_tail(self, process.id.as_str())
+                {
+                    lines.push("    вывод:".to_string());
+                    lines.extend(output_lines);
+                }
             }
         }
         if let Some(error) = run.error.as_deref() {
@@ -603,6 +612,32 @@ fn active_run_step_tail(run: &RunSnapshot) -> Vec<&agent_runtime::run::RunStep> 
             .rev()
             .collect()
     }
+}
+
+fn render_active_process_output_tail(app: &App, process_id: &str) -> Option<Vec<String>> {
+    let output = app
+        .processes
+        .read_exec_output(
+            process_id,
+            ProcessOutputStream::Merged,
+            None,
+            Some(ACTIVE_PROCESS_OUTPUT_TAIL_MAX_BYTES),
+            Some(ACTIVE_PROCESS_OUTPUT_TAIL_MAX_LINES),
+        )
+        .ok()?;
+    let text = output.text.trim_end();
+    if text.is_empty() {
+        return None;
+    }
+
+    let mut lines = text
+        .lines()
+        .map(|line| format!("      {line}"))
+        .collect::<Vec<_>>();
+    if output.truncated {
+        lines.insert(0, "      ...".to_string());
+    }
+    Some(lines)
 }
 
 fn active_run_step_is_relevant(kind: RunStepKind) -> bool {

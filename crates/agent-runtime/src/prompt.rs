@@ -12,6 +12,14 @@ pub struct SessionHeadFsActivity {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SessionHeadProcessActivity {
+    pub action: String,
+    pub target: String,
+    pub detail: String,
+    pub recorded_at: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SessionHeadWorkspaceEntry {
     pub path: String,
     pub kind: SessionHeadWorkspaceEntryKind,
@@ -35,6 +43,7 @@ pub struct SessionHead {
     pub last_user_preview: Option<String>,
     pub last_assistant_preview: Option<String>,
     pub recent_filesystem_activity: Vec<SessionHeadFsActivity>,
+    pub recent_process_activity: Vec<SessionHeadProcessActivity>,
     pub workspace_tree: Vec<SessionHeadWorkspaceEntry>,
     pub workspace_tree_truncated: bool,
 }
@@ -70,6 +79,14 @@ impl SessionHead {
             lines.push("Recent Filesystem Activity:".to_string());
             lines.extend(
                 self.recent_filesystem_activity
+                    .iter()
+                    .map(|activity| format!("- {} {}", activity.action, activity.target)),
+            );
+        }
+        if !self.recent_process_activity.is_empty() {
+            lines.push("Recent Process Activity:".to_string());
+            lines.extend(
+                self.recent_process_activity
                     .iter()
                     .map(|activity| format!("- {} {}", activity.action, activity.target)),
             );
@@ -227,7 +244,7 @@ fn render_context_offload_refs(snapshot: &ContextOffloadSnapshot) -> Option<Stri
 mod tests {
     use super::{
         PromptAssembly, PromptAssemblyInput, SessionHead, SessionHeadFsActivity,
-        SessionHeadWorkspaceEntry, SessionHeadWorkspaceEntryKind,
+        SessionHeadProcessActivity, SessionHeadWorkspaceEntry, SessionHeadWorkspaceEntryKind,
     };
     use crate::context::{ContextOffloadRef, ContextOffloadSnapshot, ContextSummary};
     use crate::plan::PlanSnapshot;
@@ -260,6 +277,20 @@ mod tests {
                     recorded_at: 11,
                 },
             ],
+            recent_process_activity: vec![
+                SessionHeadProcessActivity {
+                    action: "start".to_string(),
+                    target: "/bin/sh -c 'make test'".to_string(),
+                    detail: "exec_start cwd=. command=/bin/sh -c 'make test' -> exec_start process_id=exec-1 pid_ref=pid:101 cwd=. command=/bin/sh -c 'make test'".to_string(),
+                    recorded_at: 13,
+                },
+                SessionHeadProcessActivity {
+                    action: "finish".to_string(),
+                    target: "exec-1 status=Exited exit=0".to_string(),
+                    detail: "exec_wait process_id=exec-1 -> process_result process_id=exec-1 status=Exited exit_code=Some(0)".to_string(),
+                    recorded_at: 14,
+                },
+            ],
             workspace_tree: vec![
                 SessionHeadWorkspaceEntry {
                     path: "README.md".to_string(),
@@ -286,6 +317,9 @@ mod tests {
         assert!(rendered.contains("Recent Filesystem Activity:"));
         assert!(rendered.contains("- read .env"));
         assert!(rendered.contains("- list ."));
+        assert!(rendered.contains("Recent Process Activity:"));
+        assert!(rendered.contains("- start /bin/sh -c 'make test'"));
+        assert!(rendered.contains("- finish exec-1 status=Exited exit=0"));
         assert!(rendered.contains("Workspace Tree:"));
         assert!(rendered.contains("- README.md"));
         assert!(rendered.contains("- crates/"));
@@ -314,6 +348,12 @@ mod tests {
                         "fs_patch path=src/main.rs edits=1 -> fs_patch path=src/main.rs edits=1"
                             .to_string(),
                     recorded_at: 14,
+                }],
+                recent_process_activity: vec![SessionHeadProcessActivity {
+                    action: "finish".to_string(),
+                    target: "exec-7 status=Exited exit=0".to_string(),
+                    detail: "exec_wait process_id=exec-7 -> process_result process_id=exec-7 status=Exited exit_code=Some(0)".to_string(),
+                    recorded_at: 15,
                 }],
                 workspace_tree: vec![SessionHeadWorkspaceEntry {
                     path: "src".to_string(),
@@ -393,6 +433,7 @@ mod tests {
                 last_user_preview: None,
                 last_assistant_preview: None,
                 recent_filesystem_activity: Vec::new(),
+                recent_process_activity: Vec::new(),
                 workspace_tree: Vec::new(),
                 workspace_tree_truncated: false,
             }),
@@ -458,6 +499,7 @@ mod tests {
                 last_user_preview: Some("hello".to_string()),
                 last_assistant_preview: None,
                 recent_filesystem_activity: Vec::new(),
+                recent_process_activity: Vec::new(),
                 workspace_tree: Vec::new(),
                 workspace_tree_truncated: false,
             }),

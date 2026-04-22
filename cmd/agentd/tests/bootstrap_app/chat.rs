@@ -1119,6 +1119,160 @@ fn execute_chat_turn_retries_after_transient_provider_failure_and_records_system
 }
 
 #[test]
+fn execute_chat_turn_recovers_after_persistent_empty_provider_responses_following_tool_results() {
+    let (web_base, web_requests, web_handle) = spawn_text_server("/doc", "local doc");
+    let tool_call_response = format!(
+        r#"{{
+                "id":"resp_tool_empty_recovery_1",
+                "model":"gpt-5.4",
+                "output":[
+                    {{
+                        "id":"fc_empty_recovery",
+                        "type":"function_call",
+                        "status":"completed",
+                        "call_id":"call_web_fetch",
+                        "name":"web_fetch",
+                        "arguments":"{{\"url\":\"{}\"}}"
+                    }}
+                ],
+                "usage":{{"input_tokens":19,"output_tokens":7,"total_tokens":26}}
+            }}"#,
+        web_base
+    );
+    let empty_response = r#"{
+                "id":"resp_tool_empty_recovery_empty",
+                "model":"gpt-5.4",
+                "output":[],
+                "usage":{"input_tokens":19,"output_tokens":0,"total_tokens":19}
+            }"#
+    .to_string();
+    let final_response = r#"{
+                "id":"resp_tool_empty_recovery_done",
+                "model":"gpt-5.4",
+                "output":[
+                    {
+                        "id":"msg_empty_recovery_done",
+                        "type":"message",
+                        "status":"completed",
+                        "role":"assistant",
+                        "content":[
+                            {
+                                "type":"output_text",
+                                "text":"Recovered after explicit continuation"
+                            }
+                        ]
+                    }
+                ],
+                "usage":{"input_tokens":31,"output_tokens":4,"total_tokens":35}
+            }"#
+    .to_string();
+    let (provider_api_base, provider_requests, provider_handle) = spawn_json_server_sequence(vec![
+        tool_call_response,
+        empty_response.clone(),
+        empty_response.clone(),
+        empty_response.clone(),
+        empty_response,
+        final_response,
+    ]);
+    let temp = tempfile::tempdir().expect("tempdir");
+    let app = build_from_config(AppConfig {
+        data_dir: temp.path().join("state-root"),
+        daemon: Default::default(),
+        provider: ConfiguredProvider {
+            kind: ProviderKind::OpenAiResponses,
+            api_base: Some(format!("{provider_api_base}/v1")),
+            api_key: Some("test-key".to_string()),
+            default_model: Some("gpt-5.4".to_string()),
+            ..ConfiguredProvider::default()
+        },
+        ..AppConfig::default()
+    })
+    .expect("build app");
+    let store = PersistenceStore::open(&app.persistence).expect("open store");
+
+    store
+        .put_session(&SessionRecord {
+            id: "session-provider-empty-recovery".to_string(),
+            title: "Provider empty recovery session".to_string(),
+            prompt_override: Some("Use tools when useful.".to_string()),
+            settings_json: serde_json::to_string(&SessionSettings::default())
+                .expect("serialize settings"),
+            agent_profile_id: "default".to_string(),
+            active_mission_id: None,
+            parent_session_id: None,
+            parent_job_id: None,
+            delegation_label: None,
+            created_at: 1,
+            updated_at: 1,
+        })
+        .expect("put session");
+
+    let report = app
+        .execute_chat_turn(
+            "session-provider-empty-recovery",
+            "Fetch the local doc and continue",
+            10,
+        )
+        .expect("chat turn should recover from empty provider responses");
+    let first_request = provider_requests.recv().expect("first provider request");
+    let second_request = provider_requests.recv().expect("second provider request");
+    let third_request = provider_requests.recv().expect("third provider request");
+    let fourth_request = provider_requests.recv().expect("fourth provider request");
+    let fifth_request = provider_requests.recv().expect("fifth provider request");
+    let sixth_request = provider_requests.recv().expect("sixth provider request");
+    let web_request = web_requests.recv().expect("web request");
+    provider_handle.join().expect("join provider server");
+    web_handle.join().expect("join web server");
+
+    assert_eq!(report.run_id, "run-chat-session-provider-empty-recovery-10");
+    assert_eq!(report.output_text, "Recovered after explicit continuation");
+
+    let completed_run = store
+        .get_run("run-chat-session-provider-empty-recovery-10")
+        .expect("get completed run")
+        .expect("completed run exists");
+    assert_eq!(completed_run.status, "completed");
+    assert_eq!(
+        completed_run.result.as_deref(),
+        Some("Recovered after explicit continuation")
+    );
+
+    let transcript = app
+        .session_transcript("session-provider-empty-recovery")
+        .expect("load transcript");
+    assert!(transcript.entries.iter().any(|entry| {
+        entry.role == "system"
+            && entry
+                .content
+                .contains("provider retryable error: provider response did not include assistant text; retrying request (1/3)")
+    }));
+    assert!(transcript.entries.iter().any(|entry| {
+        entry.role == "system"
+            && entry.content.contains(
+                "provider returned an empty response after tool results; retrying with explicit continuation (1/1)",
+            )
+    }));
+    assert_eq!(
+        transcript
+            .entries
+            .last()
+            .map(|entry| entry.content.as_str()),
+        Some("Recovered after explicit continuation")
+    );
+
+    assert!(first_request.to_ascii_lowercase().contains("/v1/responses"));
+    assert!(second_request.contains("\"previous_response_id\":\"resp_tool_empty_recovery_1\""));
+    assert!(third_request.contains("\"previous_response_id\":\"resp_tool_empty_recovery_1\""));
+    assert!(fourth_request.contains("\"previous_response_id\":\"resp_tool_empty_recovery_1\""));
+    assert!(fifth_request.contains("\"previous_response_id\":\"resp_tool_empty_recovery_1\""));
+    assert!(sixth_request.contains("\"previous_response_id\":\"resp_tool_empty_recovery_1\""));
+    assert!(
+        sixth_request.contains("Твой предыдущий ответ после результатов tools оказался пустым.")
+    );
+    assert!(web_request.to_ascii_lowercase().contains("get "));
+}
+
+#[test]
 fn execute_chat_turn_can_finish_after_an_allowed_web_tool_call_with_zai() {
     let (web_base, web_requests, web_handle) = spawn_text_server("/doc", "local doc");
     let first_provider_response = format!(
@@ -2011,6 +2165,153 @@ fn execute_chat_turn_fails_when_the_provider_repeats_the_same_tool_signature() {
     assert!(normalized_web.contains("get "));
     let normalized_second_web = second_web_request.to_ascii_lowercase();
     assert!(normalized_second_web.contains("get "));
+}
+
+#[test]
+fn execute_chat_turn_allows_repeated_exec_read_output_polling() {
+    let start_response = r#"{
+                "id":"resp_exec_poll_start",
+                "model":"gpt-5.4",
+                "output":[
+                    {
+                        "id":"fc_exec_start",
+                        "type":"function_call",
+                        "status":"completed",
+                        "call_id":"call_exec_start",
+                        "name":"exec_start",
+                        "arguments":"{\"executable\":\"/bin/sh\",\"args\":[\"-c\",\"printf poll-start; sleep 1\"],\"cwd\":null}"
+                    }
+                ],
+                "usage":{"input_tokens":19,"output_tokens":7,"total_tokens":26}
+            }"#
+    .to_string();
+    let read_output_response = r#"{
+                "id":"resp_exec_poll_read",
+                "model":"gpt-5.4",
+                "output":[
+                    {
+                        "id":"fc_exec_read",
+                        "type":"function_call",
+                        "status":"completed",
+                        "call_id":"call_exec_read",
+                        "name":"exec_read_output",
+                        "arguments":"{\"process_id\":\"exec-1\",\"max_lines\":30}"
+                    }
+                ],
+                "usage":{"input_tokens":19,"output_tokens":7,"total_tokens":26}
+            }"#
+    .to_string();
+    let wait_response = r#"{
+                "id":"resp_exec_poll_wait",
+                "model":"gpt-5.4",
+                "output":[
+                    {
+                        "id":"fc_exec_wait",
+                        "type":"function_call",
+                        "status":"completed",
+                        "call_id":"call_exec_wait",
+                        "name":"exec_wait",
+                        "arguments":"{\"process_id\":\"exec-1\"}"
+                    }
+                ],
+                "usage":{"input_tokens":19,"output_tokens":7,"total_tokens":26}
+            }"#
+    .to_string();
+    let final_response = r#"{
+                "id":"resp_exec_poll_done",
+                "model":"gpt-5.4",
+                "output":[
+                    {
+                        "id":"msg_exec_poll_done",
+                        "type":"message",
+                        "status":"completed",
+                        "role":"assistant",
+                        "content":[
+                            {
+                                "type":"output_text",
+                                "text":"polling completed"
+                            }
+                        ]
+                    }
+                ],
+                "usage":{"input_tokens":19,"output_tokens":7,"total_tokens":26}
+            }"#
+    .to_string();
+    let (provider_api_base, provider_requests, provider_handle) = spawn_json_server_sequence(vec![
+        start_response,
+        read_output_response.clone(),
+        read_output_response.clone(),
+        read_output_response,
+        wait_response,
+        final_response,
+    ]);
+    let temp = tempfile::tempdir().expect("tempdir");
+    let app = build_from_config(AppConfig {
+        data_dir: temp.path().join("state-root"),
+        daemon: Default::default(),
+        provider: ConfiguredProvider {
+            kind: ProviderKind::OpenAiResponses,
+            api_base: Some(format!("{provider_api_base}/v1")),
+            api_key: Some("test-key".to_string()),
+            default_model: Some("gpt-5.4".to_string()),
+            ..ConfiguredProvider::default()
+        },
+        permissions: PermissionConfig {
+            mode: PermissionMode::BypassPermissions,
+            rules: Vec::new(),
+        },
+        ..AppConfig::default()
+    })
+    .expect("build app");
+    let store = PersistenceStore::open(&app.persistence).expect("open store");
+
+    store
+        .put_session(&SessionRecord {
+            id: "session-chat-exec-poll".to_string(),
+            title: "Chat exec poll session".to_string(),
+            prompt_override: Some("Use tools when useful.".to_string()),
+            settings_json: serde_json::to_string(&SessionSettings::default())
+                .expect("serialize settings"),
+            agent_profile_id: "default".to_string(),
+            active_mission_id: None,
+            parent_session_id: None,
+            parent_job_id: None,
+            delegation_label: None,
+            created_at: 1,
+            updated_at: 1,
+        })
+        .expect("put session");
+
+    let report = app
+        .execute_chat_turn("session-chat-exec-poll", "Run and monitor the command", 10)
+        .expect("repeated exec polling should not fail");
+    for _ in 0..6 {
+        provider_requests
+            .recv_timeout(Duration::from_secs(1))
+            .expect("provider request");
+    }
+    provider_handle.join().expect("join provider server");
+
+    assert_eq!(report.response_id, "resp_exec_poll_done");
+    assert_eq!(report.output_text, "polling completed");
+
+    let run = store
+        .get_run("run-chat-session-chat-exec-poll-10")
+        .expect("get run")
+        .expect("run exists");
+    assert_eq!(run.status, "completed");
+    assert_eq!(run.result.as_deref(), Some("polling completed"));
+    assert_eq!(run.error.as_deref(), None);
+
+    let transcript = app
+        .session_transcript("session-chat-exec-poll")
+        .expect("load transcript");
+    let exec_read_entries = transcript
+        .entries
+        .iter()
+        .filter(|entry| entry.tool_name.as_deref() == Some("exec_read_output"))
+        .count();
+    assert_eq!(exec_read_entries, 3);
 }
 
 #[test]

@@ -88,6 +88,7 @@ pub struct ProviderLoopState {
     pub continuation_input_messages: Vec<ProviderMessage>,
     pub seen_tool_signatures: Vec<String>,
     pub completion_nudges_used: usize,
+    pub empty_response_recoveries_used: usize,
     pub pending_approval: Option<PendingProviderApproval>,
 }
 

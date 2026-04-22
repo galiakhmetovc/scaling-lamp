@@ -35,6 +35,7 @@ const INLINE_TOOL_OUTPUT_TOKEN_LIMIT: u32 = 512;
 const INLINE_FIND_IN_FILES_PREVIEW_LIMIT: usize = 6;
 const MAX_CONSECUTIVE_IDENTICAL_TOOL_SIGNATURES: usize = 3;
 const MAX_TRANSIENT_PROVIDER_RETRIES: usize = 3;
+const MAX_EMPTY_RESPONSE_RECOVERIES: usize = 1;
 
 type OffloadableToolOutput = (String, String, Vec<u8>, String);
 
@@ -74,11 +75,20 @@ struct ProviderLoopCursor {
     previous_response_id: Option<String>,
     seen_tool_signatures: Vec<String>,
     completion_nudges_used: usize,
+    empty_response_recoveries_used: usize,
     supports_previous_response_id: bool,
     supports_streaming: bool,
 }
 
 impl ProviderLoopCursor {
+    fn permits_repeated_tool_signature(response: &ProviderResponse) -> bool {
+        !response.tool_calls.is_empty()
+            && response
+                .tool_calls
+                .iter()
+                .all(|tool_call| tool_call.name == ToolName::ExecReadOutput.as_str())
+    }
+
     fn new(
         provider: &dyn ProviderDriver,
         initial_loop_state: Option<ProviderLoopState>,
@@ -116,6 +126,10 @@ impl ProviderLoopCursor {
             .as_ref()
             .map(|state| state.completion_nudges_used)
             .unwrap_or_default();
+        let empty_response_recoveries_used = initial_loop_state
+            .as_ref()
+            .map(|state| state.empty_response_recoveries_used)
+            .unwrap_or_default();
 
         Self {
             max_rounds,
@@ -126,6 +140,7 @@ impl ProviderLoopCursor {
             previous_response_id,
             seen_tool_signatures,
             completion_nudges_used,
+            empty_response_recoveries_used,
             supports_previous_response_id,
             supports_streaming,
         }
@@ -197,6 +212,7 @@ impl ProviderLoopCursor {
             continuation_input_messages: self.continuation_input_messages.clone(),
             seen_tool_signatures: self.seen_tool_signatures.clone(),
             completion_nudges_used: self.completion_nudges_used,
+            empty_response_recoveries_used: self.empty_response_recoveries_used,
             pending_approval,
         }
     }
@@ -219,7 +235,9 @@ impl ProviderLoopCursor {
                 break;
             }
         }
-        if consecutive_repeats >= MAX_CONSECUTIVE_IDENTICAL_TOOL_SIGNATURES {
+        if consecutive_repeats >= MAX_CONSECUTIVE_IDENTICAL_TOOL_SIGNATURES
+            && !Self::permits_repeated_tool_signature(response)
+        {
             return Err(ExecutionError::ProviderLoop {
                 reason: format!(
                     "provider repeated tool-call signature {} times in a row: {}",
@@ -278,6 +296,7 @@ impl ProviderLoopCursor {
             continuation_input_messages: Vec::new(),
             seen_tool_signatures: self.seen_tool_signatures.clone(),
             completion_nudges_used: self.completion_nudges_used,
+            empty_response_recoveries_used: self.empty_response_recoveries_used,
             pending_approval: Some(PendingProviderApproval::Tool(PendingToolApproval::new(
                 approval_id.to_string(),
                 tool_call.call_id.clone(),
@@ -320,6 +339,15 @@ impl ProviderLoopCursor {
 
     fn record_completion_nudge(&mut self) {
         self.completion_nudges_used += 1;
+    }
+
+    fn can_recover_from_empty_response(&self) -> bool {
+        self.empty_response_recoveries_used < MAX_EMPTY_RESPONSE_RECOVERIES
+            && (!self.pending_tool_outputs.is_empty() || !self.continuation_messages.is_empty())
+    }
+
+    fn record_empty_response_recovery(&mut self) {
+        self.empty_response_recoveries_used += 1;
     }
 
     fn adopt_response_anchor(&mut self, response: &ProviderResponse) {
@@ -806,7 +834,172 @@ impl ExecutionService {
         Ok(Some(run.snapshot().clone()))
     }
 
-    fn run_was_cancelled_by_operator(
+    pub(crate) fn cancel_all_session_work(
+        &self,
+        store: &PersistenceStore,
+        session_id: &str,
+        now: i64,
+    ) -> Result<SessionWorkCancellationReport, ExecutionError> {
+        let snapshot = store
+            .load_execution_state()
+            .map_err(ExecutionError::Store)?;
+        if !snapshot
+            .sessions
+            .iter()
+            .any(|record| record.id == session_id)
+        {
+            return Ok(SessionWorkCancellationReport::default());
+        }
+
+        let target_session_ids =
+            self.collect_session_tree_session_ids(session_id, &snapshot.sessions);
+        let mut report = SessionWorkCancellationReport {
+            session_count: target_session_ids.len(),
+            ..SessionWorkCancellationReport::default()
+        };
+        let mut cancelled_mission_ids = BTreeSet::new();
+
+        for mission_record in snapshot.missions {
+            let mut mission =
+                MissionSpec::try_from(mission_record).map_err(ExecutionError::RecordConversion)?;
+            if !target_session_ids.contains(&mission.session_id) {
+                continue;
+            }
+            if !matches!(
+                mission.status,
+                MissionStatus::Ready | MissionStatus::Running
+            ) {
+                continue;
+            }
+            mission.status = MissionStatus::Cancelled;
+            mission.updated_at = now;
+            mission.completed_at = Some(now);
+            cancelled_mission_ids.insert(mission.id.clone());
+            store
+                .put_mission(
+                    &MissionRecord::try_from(&mission).map_err(ExecutionError::RecordConversion)?,
+                )
+                .map_err(ExecutionError::Store)?;
+            report.mission_count += 1;
+        }
+
+        for session_record in snapshot.sessions {
+            if !target_session_ids.contains(&session_record.id) {
+                continue;
+            }
+            let clear_active_mission = session_record
+                .active_mission_id
+                .as_ref()
+                .is_some_and(|id| cancelled_mission_ids.contains(id));
+            if !clear_active_mission {
+                continue;
+            }
+            let mut session =
+                Session::try_from(session_record).map_err(ExecutionError::RecordConversion)?;
+            session.active_mission_id = None;
+            session.updated_at = now;
+            store
+                .put_session(
+                    &agent_persistence::SessionRecord::try_from(&session)
+                        .map_err(ExecutionError::RecordConversion)?,
+                )
+                .map_err(ExecutionError::Store)?;
+        }
+
+        for run_record in snapshot.runs {
+            let snapshot =
+                RunSnapshot::try_from(run_record).map_err(ExecutionError::RecordConversion)?;
+            if !target_session_ids.contains(&snapshot.session_id) || snapshot.status.is_terminal() {
+                continue;
+            }
+            for process in &snapshot.active_processes {
+                self.terminate_pid_ref(process.pid_ref.as_str())?;
+            }
+            let mut run = RunEngine::from_snapshot(snapshot);
+            run.cancel("operator cancelled all session work", now)
+                .map_err(ExecutionError::RunTransition)?;
+            self.persist_run(store, &run)?;
+            report.run_count += 1;
+        }
+
+        for job_record in snapshot.jobs {
+            let mut job =
+                JobSpec::try_from(job_record).map_err(ExecutionError::RecordConversion)?;
+            if !target_session_ids.contains(&job.session_id) || !job.status.is_active() {
+                continue;
+            }
+            self.cancel_job_spec(store, &mut job, now, "operator cancelled all session work")?;
+            report.job_count += 1;
+        }
+
+        for inbox_record in snapshot.inbox_events {
+            if !target_session_ids.contains(&inbox_record.session_id) {
+                continue;
+            }
+            let event = SessionInboxEvent::try_from(inbox_record)
+                .map_err(ExecutionError::RecordConversion)?
+                .mark_processed(now);
+            store
+                .put_session_inbox_event(
+                    &agent_persistence::SessionInboxEventRecord::try_from(&event)
+                        .map_err(ExecutionError::RecordConversion)?,
+                )
+                .map_err(ExecutionError::Store)?;
+            report.inbox_event_count += 1;
+        }
+
+        Ok(report)
+    }
+
+    fn collect_session_tree_session_ids(
+        &self,
+        root_session_id: &str,
+        sessions: &[agent_persistence::SessionRecord],
+    ) -> BTreeSet<String> {
+        let mut target_session_ids = BTreeSet::from([root_session_id.to_string()]);
+        loop {
+            let mut changed = false;
+            for session in sessions {
+                if target_session_ids.contains(&session.id) {
+                    continue;
+                }
+                if session
+                    .parent_session_id
+                    .as_ref()
+                    .is_some_and(|parent| target_session_ids.contains(parent))
+                {
+                    target_session_ids.insert(session.id.clone());
+                    changed = true;
+                }
+            }
+            if !changed {
+                return target_session_ids;
+            }
+        }
+    }
+
+    pub(super) fn cancel_job_spec(
+        &self,
+        store: &PersistenceStore,
+        job: &mut JobSpec,
+        now: i64,
+        reason: &str,
+    ) -> Result<(), ExecutionError> {
+        job.status = JobStatus::Cancelled;
+        job.error = Some(reason.to_string());
+        job.updated_at = now;
+        job.finished_at = Some(now);
+        job.cancel_requested_at = Some(now);
+        job.lease_owner = None;
+        job.lease_expires_at = None;
+        job.heartbeat_at = Some(now);
+        job.last_progress_message = Some(reason.to_string());
+        store
+            .put_job(&JobRecord::try_from(&*job).map_err(ExecutionError::RecordConversion)?)
+            .map_err(ExecutionError::Store)
+    }
+
+    pub(super) fn run_was_cancelled_by_operator(
         &self,
         store: &PersistenceStore,
         run_id: &str,
@@ -816,6 +1009,18 @@ impl ExecutionService {
         };
         let snapshot = RunSnapshot::try_from(run).map_err(ExecutionError::RecordConversion)?;
         Ok(snapshot.status == agent_runtime::run::RunStatus::Cancelled)
+    }
+
+    pub(super) fn job_was_cancelled_by_operator(
+        &self,
+        store: &PersistenceStore,
+        job_id: &str,
+    ) -> Result<bool, ExecutionError> {
+        let Some(job) = store.get_job(job_id).map_err(ExecutionError::Store)? else {
+            return Ok(false);
+        };
+        let job = JobSpec::try_from(job).map_err(ExecutionError::RecordConversion)?;
+        Ok(job.status == JobStatus::Cancelled || job.cancel_requested_at.is_some())
     }
 
     fn terminate_pid_ref(&self, pid_ref: &str) -> Result<(), ExecutionError> {
@@ -1605,6 +1810,24 @@ impl ExecutionService {
         messages
     }
 
+    fn empty_response_continuation_messages(
+        &self,
+        supports_previous_response_id: bool,
+    ) -> Vec<ProviderMessage> {
+        let mut messages = Vec::new();
+        if !supports_previous_response_id {
+            messages.push(ProviderMessage::new(
+                MessageRole::Assistant,
+                "Предыдущий ответ после результатов tools оказался пустым.",
+            ));
+        }
+        messages.push(ProviderMessage::new(
+            MessageRole::System,
+            "Твой предыдущий ответ после результатов tools оказался пустым. Не возвращай пустой ответ. Продолжай работу в этой же сессии: либо вызови следующий нужный tool, либо дай обычный assistant reply с конкретным продолжением.",
+        ));
+        messages
+    }
+
     #[allow(clippy::too_many_arguments)]
     fn prepare_model_tool_output(
         &self,
@@ -2006,9 +2229,35 @@ impl ExecutionService {
                 cursor.stream_mode(observer.is_some()),
                 self.config.provider_max_output_tokens,
             );
-            let observed = self.request_provider_response_with_retries(
+            let observed = match self.request_provider_response_with_retries(
                 store, run, provider, &request, now, observer,
-            )?;
+            ) {
+                Ok(observed) => observed,
+                Err(ExecutionError::Provider(ProviderError::ResponseMissingOutputText))
+                    if cursor.can_recover_from_empty_response() =>
+                {
+                    cursor.record_empty_response_recovery();
+                    run.record_system_note(
+                        format!(
+                            "provider returned an empty response after tool results; retrying with explicit continuation ({}/{})",
+                            cursor.empty_response_recoveries_used,
+                            MAX_EMPTY_RESPONSE_RECOVERIES
+                        ),
+                        now,
+                    )
+                    .map_err(ExecutionError::RunTransition)?;
+                    cursor.queue_continuation_input_messages(
+                        self.empty_response_continuation_messages(
+                            cursor.supports_previous_response_id,
+                        ),
+                    );
+                    run.set_provider_loop_state(cursor.persistent_state(None), now)
+                        .map_err(ExecutionError::RunTransition)?;
+                    self.persist_run(store, run)?;
+                    continue;
+                }
+                Err(error) => return Err(error),
+            };
             cursor.clear_continuation_input_messages();
             self.apply_provider_response(run, &observed, now)?;
             self.persist_run(store, run)?;

@@ -22,6 +22,7 @@ fn skills_prompt_places_active_skill_blocks_between_agents_and_session_head() {
             last_user_preview: Some("hello".to_string()),
             last_assistant_preview: None,
             recent_filesystem_activity: Vec::new(),
+            recent_process_activity: Vec::new(),
             workspace_tree: Vec::new(),
             workspace_tree_truncated: false,
         }),

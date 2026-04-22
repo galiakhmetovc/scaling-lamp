@@ -259,6 +259,17 @@ impl ExecutionService {
                 return Err(source);
             }
             Err(source) => {
+                if matches!(source, ExecutionError::CancelledByOperator)
+                    || self.job_was_cancelled_by_operator(store, &job.id)?
+                {
+                    self.cancel_job_spec(
+                        store,
+                        &mut *job,
+                        now,
+                        "operator cancelled all session work",
+                    )?;
+                    return Err(source);
+                }
                 job.status = JobStatus::Failed;
                 job.error = Some(source.to_string());
                 job.finished_at = Some(now);
@@ -270,6 +281,13 @@ impl ExecutionService {
                 return Err(source);
             }
         };
+
+        if self.job_was_cancelled_by_operator(store, &job.id)?
+            || self.run_was_cancelled_by_operator(store, child_report.run_id.as_str())?
+        {
+            self.cancel_job_spec(store, &mut *job, now, "operator cancelled all session work")?;
+            return Err(ExecutionError::CancelledByOperator);
+        }
 
         let artifact_refs = store
             .get_context_offload(&child_session.id)
@@ -470,6 +488,7 @@ impl ExecutionService {
                     source,
                     ExecutionError::PermissionDenied { .. }
                         | ExecutionError::ApprovalRequired { .. }
+                        | ExecutionError::CancelledByOperator
                         | ExecutionError::InterruptedByQueuedInput
                 ) {
                     run.fail(source.to_string(), now)
@@ -479,6 +498,10 @@ impl ExecutionService {
                 return Err(source);
             }
         };
+
+        if self.run_was_cancelled_by_operator(store, request.child_run_id.as_str())? {
+            return Err(ExecutionError::CancelledByOperator);
+        }
 
         run.complete(&response.output_text, now)
             .map_err(ExecutionError::RunTransition)?;

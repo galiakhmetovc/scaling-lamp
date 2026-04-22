@@ -277,6 +277,17 @@ impl ExecutionService {
                         .map_err(ExecutionError::RunTransition)?;
                     self.persist_run(store, &run)?;
                 }
+                if matches!(source, ExecutionError::CancelledByOperator)
+                    || self.job_was_cancelled_by_operator(store, &job.id)?
+                {
+                    self.cancel_job_spec(
+                        store,
+                        &mut job,
+                        now,
+                        "operator cancelled all session work",
+                    )?;
+                    return Err(source);
+                }
                 job.status = JobStatus::Failed;
                 job.error = Some(source.to_string());
                 job.finished_at = Some(now);
@@ -288,6 +299,13 @@ impl ExecutionService {
                 return Err(source);
             }
         };
+
+        if self.job_was_cancelled_by_operator(store, &job.id)?
+            || self.run_was_cancelled_by_operator(store, run_id.as_str())?
+        {
+            self.cancel_job_spec(store, &mut job, now, "operator cancelled all session work")?;
+            return Err(ExecutionError::CancelledByOperator);
+        }
 
         run.complete(&response.output_text, now)
             .map_err(ExecutionError::RunTransition)?;
@@ -457,6 +475,17 @@ impl ExecutionService {
                         .map_err(ExecutionError::RunTransition)?;
                     self.persist_run(store, &run)?;
                 }
+                if matches!(source, ExecutionError::CancelledByOperator)
+                    || self.job_was_cancelled_by_operator(store, &job.id)?
+                {
+                    self.cancel_job_spec(
+                        store,
+                        &mut job,
+                        now,
+                        "operator cancelled all session work",
+                    )?;
+                    return Err(source);
+                }
                 job.status = JobStatus::Failed;
                 job.error = Some(source.to_string());
                 job.finished_at = Some(now);
@@ -619,6 +648,17 @@ impl ExecutionService {
                 return Err(source);
             }
             Err(source) => {
+                if matches!(source, ExecutionError::CancelledByOperator)
+                    || self.job_was_cancelled_by_operator(store, &job.id)?
+                {
+                    self.cancel_job_spec(
+                        store,
+                        &mut job,
+                        now,
+                        "operator cancelled all session work",
+                    )?;
+                    return Err(source);
+                }
                 job.status = JobStatus::Failed;
                 job.error = Some(source.to_string());
                 job.finished_at = Some(now);
@@ -631,6 +671,13 @@ impl ExecutionService {
                 return Err(source);
             }
         };
+
+        if self.job_was_cancelled_by_operator(store, &job.id)?
+            || self.run_was_cancelled_by_operator(store, run_id.as_str())?
+        {
+            self.cancel_job_spec(store, &mut job, now, "operator cancelled all session work")?;
+            return Err(ExecutionError::CancelledByOperator);
+        }
 
         job.status = JobStatus::Completed;
         job.result = Some(JobResult::Summary {

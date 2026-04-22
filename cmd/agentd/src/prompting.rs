@@ -2,7 +2,8 @@ use crate::agents;
 use agent_persistence::TranscriptRecord;
 use agent_runtime::context::{ContextSummary, approximate_token_count};
 use agent_runtime::prompt::{
-    SessionHead, SessionHeadFsActivity, SessionHeadWorkspaceEntry, SessionHeadWorkspaceEntryKind,
+    SessionHead, SessionHeadFsActivity, SessionHeadProcessActivity, SessionHeadWorkspaceEntry,
+    SessionHeadWorkspaceEntryKind,
 };
 use agent_runtime::run::{RunSnapshot, RunStatus, RunStepKind};
 use agent_runtime::session::Session;
@@ -15,6 +16,7 @@ use std::io::ErrorKind;
 use std::path::Path;
 
 const RECENT_FILESYSTEM_ACTIVITY_LIMIT: usize = 6;
+const RECENT_PROCESS_ACTIVITY_LIMIT: usize = 6;
 const WORKSPACE_TREE_LIMIT: usize = 12;
 
 pub(crate) fn build_session_head(
@@ -80,6 +82,7 @@ pub(crate) fn build_session_head(
             .find(|record| record.kind == "assistant")
             .map(|record| preview_text(record.content.as_str(), 96)),
         recent_filesystem_activity: build_recent_filesystem_activity(session, runs),
+        recent_process_activity: build_recent_process_activity(session, runs),
         workspace_tree,
         workspace_tree_truncated,
     }
@@ -196,6 +199,28 @@ fn build_workspace_tree(workspace: &WorkspaceRef) -> (Vec<SessionHeadWorkspaceEn
     (rendered, truncated)
 }
 
+fn build_recent_process_activity(
+    session: &Session,
+    runs: &[RunSnapshot],
+) -> Vec<SessionHeadProcessActivity> {
+    let mut activity = runs
+        .iter()
+        .filter(|run| run.session_id == session.id)
+        .flat_map(|run| run.recent_steps.iter())
+        .filter(|step| step.kind == RunStepKind::ToolCompleted)
+        .filter_map(|step| parse_process_activity(step.detail.as_str(), step.recorded_at))
+        .collect::<Vec<_>>();
+
+    activity.sort_by(|left, right| {
+        right
+            .recorded_at
+            .cmp(&left.recorded_at)
+            .then_with(|| left.detail.cmp(&right.detail))
+    });
+    activity.truncate(RECENT_PROCESS_ACTIVITY_LIMIT);
+    activity
+}
+
 fn parse_filesystem_activity(detail: &str, recorded_at: i64) -> Option<SessionHeadFsActivity> {
     let (tool_summary, _) = detail.split_once(" -> ")?;
     let (action, target) = if tool_summary.starts_with("fs_read ")
@@ -236,6 +261,67 @@ fn parse_filesystem_activity(detail: &str, recorded_at: i64) -> Option<SessionHe
         detail: detail.to_string(),
         recorded_at,
     })
+}
+
+fn parse_process_activity(detail: &str, recorded_at: i64) -> Option<SessionHeadProcessActivity> {
+    let (tool_summary, output_summary) = detail.split_once(" -> ")?;
+
+    let (action, target) = if let Some(command) = parse_exec_start_command(tool_summary) {
+        ("start", preview_text(command, 72))
+    } else if tool_summary.starts_with("exec_wait ") {
+        let process_id = extract_tool_field(tool_summary, "process_id")?;
+        (
+            "finish",
+            format_process_result_target(process_id, output_summary),
+        )
+    } else if tool_summary.starts_with("exec_kill ") {
+        let process_id = extract_tool_field(tool_summary, "process_id")?;
+        (
+            "kill",
+            format_process_result_target(process_id, output_summary),
+        )
+    } else {
+        return None;
+    };
+
+    Some(SessionHeadProcessActivity {
+        action: action.to_string(),
+        target,
+        detail: detail.to_string(),
+        recorded_at,
+    })
+}
+
+fn parse_exec_start_command(summary: &str) -> Option<&str> {
+    summary
+        .strip_prefix("exec_start ")?
+        .split_once(" command=")
+        .map(|(_, command)| command)
+}
+
+fn format_process_result_target(process_id: String, output_summary: &str) -> String {
+    let Some(result_summary) = output_summary
+        .strip_prefix("process_result ")
+        .or_else(|| output_summary.strip_prefix("process_output_read "))
+    else {
+        return process_id;
+    };
+    let status = extract_tool_field(result_summary, "status");
+    let exit_code =
+        extract_tool_field(result_summary, "exit_code").and_then(|value| parse_exit_code(&value));
+
+    match (status, exit_code) {
+        (Some(status), Some(exit_code)) => {
+            format!("{process_id} status={status} exit={exit_code}")
+        }
+        (Some(status), None) => format!("{process_id} status={status}"),
+        (None, Some(exit_code)) => format!("{process_id} exit={exit_code}"),
+        (None, None) => process_id,
+    }
+}
+
+fn parse_exit_code(raw: &str) -> Option<String> {
+    Some(raw.strip_prefix("Some(")?.strip_suffix(')')?.to_string())
 }
 
 fn extract_tool_field(summary: &str, field: &str) -> Option<String> {

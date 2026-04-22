@@ -291,6 +291,14 @@ impl DaemonClient {
         Ok(response.message)
     }
 
+    pub fn cancel_all_session_work(&self, session_id: &str) -> Result<String, BootstrapError> {
+        let response: SessionRunControlResponse = self.post_json(
+            &format!("/v1/sessions/{session_id}/cancel-all-work"),
+            &serde_json::json!({}),
+        )?;
+        Ok(response.message)
+    }
+
     pub fn session_background_jobs(
         &self,
         session_id: &str,

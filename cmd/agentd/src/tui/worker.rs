@@ -223,7 +223,7 @@ impl ActiveRunHandle {
         }
         let detail = match &self.phase {
             ActiveRunPhase::ToolRunning { tool_name, summary } => Some(format!(
-                "ход всё ещё выполняется: {} {} уже {} ({summary}). Команды: \\статус, \\пауза, \\стоп, \\отладка",
+                "ход всё ещё выполняется: {} {} уже {} ({summary}). Команды: \\статус, \\пауза, \\стоп, \\отмена, \\отладка",
                 self.kind_label(),
                 tool_name,
                 format_elapsed(now.saturating_sub(self.started_at))

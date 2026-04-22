@@ -825,6 +825,90 @@ data: [DONE]\n\n"
 }
 
 #[test]
+fn repl_stream_retries_after_empty_terminal_provider_response() {
+    let (web_base, _web_requests, web_handle) =
+        spawn_text_server("/doc", "retryable streaming doc");
+    let first_stream = format!(
+        "data: {{\"id\":\"chatcmpl-stream-empty-retry-1\",\"model\":\"glm-5-turbo\",\"choices\":[{{\"index\":0,\"delta\":{{\"reasoning_content\":\"fetch the doc first. \",\"tool_calls\":[{{\"index\":0,\"id\":\"call_web_fetch\",\"type\":\"function\",\"function\":{{\"name\":\"web_fetch\",\"arguments\":\"{{\\\"url\\\":\\\"{}\\\"}}\"}}}}]}},\"finish_reason\":\"tool_calls\"}}]}}\n\n\
+data: [DONE]\n\n",
+        web_base
+    );
+    let empty_terminal_stream =
+        "data: {\"id\":\"chatcmpl-stream-empty-retry-2\",\"model\":\"glm-5-turbo\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"\"},\"finish_reason\":\"stop\"}]}\n\n\
+data: [DONE]\n\n"
+            .to_string();
+    let final_stream =
+        "data: {\"id\":\"chatcmpl-stream-empty-retry-3\",\"model\":\"glm-5-turbo\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"retried \"},\"finish_reason\":null}]}\n\n\
+data: {\"id\":\"chatcmpl-stream-empty-retry-3\",\"model\":\"glm-5-turbo\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"successfully\"},\"finish_reason\":\"stop\"}]}\n\n\
+data: [DONE]\n\n"
+            .to_string();
+    let (api_base, _requests, handle) =
+        spawn_sse_server_sequence(vec![first_stream, empty_terminal_stream, final_stream]);
+    let temp = tempfile::tempdir().expect("tempdir");
+    let app = build_from_config(AppConfig {
+        data_dir: temp.path().join("state-root"),
+        daemon: Default::default(),
+        provider: ConfiguredProvider {
+            kind: ProviderKind::ZaiChatCompletions,
+            api_base: Some(api_base),
+            api_key: Some("zai-key".to_string()),
+            default_model: Some("glm-5-turbo".to_string()),
+            ..ConfiguredProvider::default()
+        },
+        permissions: PermissionConfig {
+            mode: PermissionMode::BypassPermissions,
+            rules: Vec::new(),
+        },
+        ..AppConfig::default()
+    })
+    .expect("build app");
+    let store = PersistenceStore::open(&app.persistence).expect("open store");
+
+    store
+        .put_session(&SessionRecord {
+            id: "session-chat-repl-empty-retry".to_string(),
+            title: "Chat REPL empty retry session".to_string(),
+            prompt_override: Some("Use tools when useful.".to_string()),
+            settings_json: serde_json::to_string(&SessionSettings::default())
+                .expect("serialize settings"),
+            agent_profile_id: "default".to_string(),
+            active_mission_id: None,
+            parent_session_id: None,
+            parent_job_id: None,
+            delegation_label: None,
+            created_at: 1,
+            updated_at: 1,
+        })
+        .expect("put session");
+
+    let mut input = Cursor::new(b"Fetch the doc and finish\n/exit\n".to_vec());
+    let mut output = Vec::new();
+    app.run_with_io(
+        ["chat", "repl", "session-chat-repl-empty-retry"],
+        &mut input,
+        &mut output,
+    )
+    .expect("repl");
+    handle.join().expect("join server");
+    web_handle.join().expect("join web server");
+
+    let rendered = String::from_utf8(output).expect("utf8");
+    assert!(rendered.contains("инструмент: web_fetch | завершён"));
+    assert!(rendered.contains("ассистент: retried successfully"));
+    assert!(!rendered.contains("system: chat failed"));
+
+    let transcript = app
+        .session_transcript("session-chat-repl-empty-retry")
+        .expect("load transcript");
+    assert!(transcript.entries.iter().any(|entry| {
+        entry.role == "system"
+            && entry
+                .content
+                .contains("provider retryable error: provider response did not include assistant text; retrying request (1/3)")
+    }));
+}
+
+#[test]
 fn zai_repl_stream_can_finish_after_exec_start_and_exec_wait_tool_calls() {
     let first_stream =
         "data: {\"id\":\"chatcmpl-stream-exec-1\",\"model\":\"glm-5-turbo\",\"choices\":[{\"index\":0,\"delta\":{\"reasoning_content\":\"run a quick command first. \",\"tool_calls\":[{\"index\":0,\"id\":\"call_exec_start\",\"type\":\"function\",\"function\":{\"name\":\"exec_start\",\"arguments\":\"{\\\"executable\\\":\\\"/bin/sh\\\",\\\"args\\\":[\\\"-c\\\",\\\"printf exec-ok\\\"],\\\"cwd\\\":null}\"}}]},\"finish_reason\":\"tool_calls\"}]}\n\n\

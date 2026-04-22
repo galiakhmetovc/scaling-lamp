@@ -53,6 +53,9 @@ impl ExecutionService {
                 Ok(()) => {
                     report.executed_jobs += 1;
                 }
+                Err(ExecutionError::CancelledByOperator) => {
+                    report.executed_jobs += 1;
+                }
                 Err(ExecutionError::ApprovalRequired { .. }) => {
                     report.executed_jobs += 1;
                 }

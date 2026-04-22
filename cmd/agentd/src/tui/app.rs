@@ -4,7 +4,7 @@ use crate::tui::worker::{
     ActiveRunHandle, ActiveRunPhase, ComposerQueue, QueuedDraft, QueuedDraftMode,
 };
 
-const COMMAND_HINTS: [&str; 39] = [
+const COMMAND_HINTS: [&str; 40] = [
     "\\сессии",
     "\\новая",
     "\\агенты",
@@ -30,6 +30,7 @@ const COMMAND_HINTS: [&str; 39] = [
     "\\процессы",
     "\\пауза",
     "\\стоп",
+    "\\отмена",
     "\\задачи",
     "\\артефакты",
     "\\артефакт",
@@ -45,7 +46,7 @@ const COMMAND_HINTS: [&str; 39] = [
     "\\компакт",
     "\\выход",
 ];
-const COMMAND_STEMS: [&str; 39] = [
+const COMMAND_STEMS: [&str; 40] = [
     "сессии",
     "новая",
     "агенты",
@@ -71,6 +72,7 @@ const COMMAND_STEMS: [&str; 39] = [
     "процессы",
     "пауза",
     "стоп",
+    "отмена",
     "задачи",
     "артефакты",
     "артефакт",

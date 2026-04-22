@@ -2,13 +2,15 @@ use super::{
     ExecStartInput, FsFindInFilesInput, FsGlobInput, FsInsertTextInput, FsListInput, FsMkdirInput,
     FsMoveInput, FsPatchTextInput, FsReadLinesInput, FsReadTextInput, FsReplaceLinesInput,
     FsSearchTextInput, FsTrashInput, FsWriteMode, FsWriteTextInput, ProcessKillInput,
-    ProcessResultStatus, ProcessWaitInput, SharedProcessRegistry, ToolCall, ToolCatalog,
-    ToolFamily, ToolName, ToolRuntime, WebFetchInput, WebSearchInput, WebToolClient,
+    ProcessOutputStatus, ProcessOutputStream, ProcessReadOutputInput, ProcessResultStatus,
+    ProcessWaitInput, SharedProcessRegistry, ToolCall, ToolCatalog, ToolFamily, ToolName,
+    ToolRuntime, WebFetchInput, WebSearchInput, WebToolClient,
 };
 use crate::workspace::WorkspaceRef;
 use std::io::{Read, Write};
 use std::net::TcpListener;
 use std::thread;
+use std::time::{Duration, Instant};
 
 #[test]
 fn catalog_exposes_distinct_families_and_policy_flags() {
@@ -84,6 +86,7 @@ fn automatic_model_definitions_include_structured_exec_tools() {
         .collect::<Vec<_>>();
 
     assert!(names.contains(&ToolName::ExecStart));
+    assert!(names.contains(&ToolName::ExecReadOutput));
     assert!(names.contains(&ToolName::ExecWait));
     assert!(names.contains(&ToolName::ExecKill));
 }
@@ -594,6 +597,72 @@ fn structured_exec_processes_survive_runtime_recreation_with_shared_registry() {
     assert_eq!(waited.status, ProcessResultStatus::Exited);
     assert_eq!(waited.exit_code, Some(0));
     assert_eq!(waited.stdout, "shared-registry");
+}
+
+#[test]
+fn structured_exec_can_read_live_output_with_cursor_and_merged_stream() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let workspace = WorkspaceRef::new(temp.path());
+    let registry = SharedProcessRegistry::default();
+    let mut first_runtime =
+        ToolRuntime::with_shared_process_registry(workspace.clone(), registry.clone());
+    let mut second_runtime = ToolRuntime::with_shared_process_registry(workspace, registry);
+
+    let started = first_runtime
+        .invoke(ToolCall::ExecStart(ExecStartInput {
+            executable: "/bin/sh".to_string(),
+            args: vec![
+                "-c".to_string(),
+                "printf 'stdout-1\\n'; printf 'stderr-1\\n' >&2; sleep 1; printf 'stdout-2\\n'; printf 'stderr-2\\n' >&2"
+                    .to_string(),
+            ],
+            cwd: None,
+        }))
+        .expect("exec_start")
+        .into_process_start()
+        .expect("process start");
+
+    let deadline = Instant::now() + Duration::from_secs(3);
+    let first_read = loop {
+        let read = second_runtime
+            .invoke(ToolCall::ExecReadOutput(ProcessReadOutputInput {
+                process_id: started.process_id.clone(),
+                stream: Some(ProcessOutputStream::Merged),
+                cursor: None,
+                max_bytes: Some(1024),
+                max_lines: Some(10),
+            }))
+            .expect("exec_read_output")
+            .into_process_output_read()
+            .expect("process output read");
+        if read.text.contains("stdout-1") && read.text.contains("stderr-1") {
+            break read;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "timed out waiting for live output"
+        );
+        thread::sleep(Duration::from_millis(25));
+    };
+
+    assert_eq!(first_read.status, ProcessOutputStatus::Running);
+    assert!(first_read.next_cursor >= first_read.cursor);
+    assert!(first_read.text.contains("stdout-1"));
+    assert!(first_read.text.contains("stderr-1"));
+
+    let waited = second_runtime
+        .invoke(ToolCall::ExecWait(ProcessWaitInput {
+            process_id: started.process_id.clone(),
+        }))
+        .expect("exec_wait")
+        .into_process_result()
+        .expect("process result");
+
+    assert_eq!(waited.status, ProcessResultStatus::Exited);
+    assert!(waited.stdout.contains("stdout-1"));
+    assert!(waited.stdout.contains("stdout-2"));
+    assert!(waited.stderr.contains("stderr-1"));
+    assert!(waited.stderr.contains("stderr-2"));
 }
 
 #[cfg(target_os = "linux")]

@@ -148,6 +148,9 @@ pub(super) fn handle_nested_routes(app: &App, request: Request) -> std::io::Resu
         (Method::Post, [session_id, cancel_run]) if cancel_run == "cancel-run" => {
             handle_cancel_active_run(app, request, session_id.as_str())
         }
+        (Method::Post, [session_id, cancel_all]) if cancel_all == "cancel-all-work" => {
+            handle_cancel_all_session_work(app, request, session_id.as_str())
+        }
         _ => respond_json(
             request,
             StatusCode(404),
@@ -353,6 +356,29 @@ fn handle_cancel_active_run(app: &App, request: Request, session_id: &str) -> st
         .map(|duration| duration.as_secs() as i64)
         .unwrap_or(0);
     match app.cancel_latest_session_run(session_id, now) {
+        Ok(message) => respond_json(
+            request,
+            StatusCode(200),
+            &SessionRunControlResponse { message },
+        ),
+        Err(error) => {
+            let (status, payload) = map_bootstrap_error(error);
+            respond_json(request, status, &payload)
+        }
+    }
+}
+
+fn handle_cancel_all_session_work(
+    app: &App,
+    request: Request,
+    session_id: &str,
+) -> std::io::Result<()> {
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_secs() as i64)
+        .unwrap_or_default();
+
+    match app.cancel_all_session_work(session_id, now) {
         Ok(message) => respond_json(
             request,
             StatusCode(200),

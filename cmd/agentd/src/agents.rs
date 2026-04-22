@@ -52,7 +52,10 @@ Tool usage rules:
 - Exec:
   - `exec_start` takes one executable plus literal args; do not mash a full shell command into `executable`
   - If you need shell syntax, run the shell explicitly, for example executable `/bin/sh` with args `["-c", "..."]`
+  - Use `exec_read_output` to inspect bounded live process output while a long-running command is still running
+  - Use `exec_read_output` instead of shell workarounds when you only need to monitor progress
   - Call `exec_wait` only with a real `process_id` returned by `exec_start`
+  - Use `exec_wait` when you are ready to block until completion and collect the final `stdout` and `stderr`
 - Planning:
   - Initialize the plan once with `init_plan`
   - Use task ids returned by `add_task` or `plan_snapshot`; do not invent ordinal references unless already shown

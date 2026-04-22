@@ -263,7 +263,7 @@ fn render_chat_screen(frame: &mut Frame<'_>, state: &TuiAppState) {
         .wrap(Wrap { trim: false })
         .scroll((composer_scroll_top, 0));
     let hint = Paragraph::new(Line::from(format!(
-        "Enter=отправить после шага инструмента | Tab=в очередь после полного хода | Shift+Tab=перебор команд | \\процессы | \\пауза | \\стоп | {}",
+        "Enter=отправить после шага инструмента | Tab=в очередь после полного хода | Shift+Tab=перебор команд | \\процессы | \\пауза | \\стоп | \\отмена | {}",
         describe_run_status(state, now)
     )));
 

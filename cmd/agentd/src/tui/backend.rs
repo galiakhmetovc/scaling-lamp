@@ -70,6 +70,8 @@ pub trait TuiBackend: Clone + Send + Sync + 'static {
     fn render_active_jobs(&self, session_id: &str) -> Result<String, BootstrapError>;
     fn render_active_run(&self, session_id: &str) -> Result<String, BootstrapError>;
     fn cancel_active_run(&self, session_id: &str, now: i64) -> Result<String, BootstrapError>;
+    fn cancel_all_session_work(&self, session_id: &str, now: i64)
+    -> Result<String, BootstrapError>;
     fn render_version_info(&self) -> Result<String, BootstrapError>;
     fn update_runtime(&self) -> Result<String, BootstrapError>;
     fn write_debug_bundle(&self, session_id: &str) -> Result<String, BootstrapError>;
@@ -262,6 +264,14 @@ impl TuiBackend for App {
 
     fn cancel_active_run(&self, session_id: &str, now: i64) -> Result<String, BootstrapError> {
         App::cancel_latest_session_run(self, session_id, now)
+    }
+
+    fn cancel_all_session_work(
+        &self,
+        session_id: &str,
+        now: i64,
+    ) -> Result<String, BootstrapError> {
+        App::cancel_all_session_work(self, session_id, now)
     }
 
     fn render_version_info(&self) -> Result<String, BootstrapError> {
@@ -468,6 +478,14 @@ impl TuiBackend for DaemonClient {
 
     fn cancel_active_run(&self, session_id: &str, _now: i64) -> Result<String, BootstrapError> {
         DaemonClient::cancel_active_run(self, session_id)
+    }
+
+    fn cancel_all_session_work(
+        &self,
+        session_id: &str,
+        _now: i64,
+    ) -> Result<String, BootstrapError> {
+        DaemonClient::cancel_all_session_work(self, session_id)
     }
 
     fn render_version_info(&self) -> Result<String, BootstrapError> {

@@ -209,6 +209,37 @@ impl App {
     }
 
     #[cfg_attr(not(test), allow(dead_code))]
+    pub fn cancel_all_session_work(
+        &self,
+        session_id: &str,
+        now: i64,
+    ) -> Result<String, BootstrapError> {
+        let store = self.store()?;
+        if store
+            .get_session(session_id)
+            .map_err(BootstrapError::Store)?
+            .is_none()
+        {
+            return Err(BootstrapError::MissingRecord {
+                kind: "session",
+                id: session_id.to_string(),
+            });
+        }
+        let report = self
+            .execution_service()
+            .cancel_all_session_work(&store, session_id, now)
+            .map_err(BootstrapError::Execution)?;
+        Ok(format!(
+            "отмена выполнена: sessions={} runs={} jobs={} missions={} inbox_events={}",
+            report.session_count,
+            report.run_count,
+            report.job_count,
+            report.mission_count,
+            report.inbox_event_count
+        ))
+    }
+
+    #[cfg_attr(not(test), allow(dead_code))]
     pub fn request_tool_approval(
         &self,
         job_id: &str,
@@ -325,6 +356,10 @@ impl App {
             }
         })?)
         .map_err(BootstrapError::RecordConversion)?;
+
+        if job.status == JobStatus::Cancelled || job.cancel_requested_at.is_some() {
+            return Ok(());
+        }
 
         let inbox_event = match request.outcome {
             A2ADelegationCompletionOutcomeRequest::Completed {

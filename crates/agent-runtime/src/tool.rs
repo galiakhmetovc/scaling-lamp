@@ -11,12 +11,18 @@ use std::error::Error;
 use std::fmt;
 #[cfg(unix)]
 use std::io;
+use std::io::Read;
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
 use std::sync::{Arc, Mutex};
+use std::thread;
 
 const DEFAULT_FS_LIST_LIMIT: usize = 200;
 const MAX_FS_LIST_LIMIT: usize = 1_000;
+const DEFAULT_PROCESS_OUTPUT_READ_MAX_BYTES: usize = 4 * 1024;
+const MAX_PROCESS_OUTPUT_READ_MAX_BYTES: usize = 32 * 1024;
+const DEFAULT_PROCESS_OUTPUT_READ_MAX_LINES: usize = 20;
+const MAX_PROCESS_OUTPUT_READ_MAX_LINES: usize = 200;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ToolFamily {
@@ -49,6 +55,7 @@ pub enum ToolName {
     WebFetch,
     WebSearch,
     ExecStart,
+    ExecReadOutput,
     ExecWait,
     ExecKill,
     PlanRead,
@@ -230,6 +237,27 @@ pub struct ExecStartInput {
     pub cwd: Option<String>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ProcessOutputStream {
+    Merged,
+    Stdout,
+    Stderr,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProcessReadOutputInput {
+    pub process_id: String,
+    #[serde(default)]
+    pub stream: Option<ProcessOutputStream>,
+    #[serde(default)]
+    pub cursor: Option<usize>,
+    #[serde(default)]
+    pub max_bytes: Option<usize>,
+    #[serde(default)]
+    pub max_lines: Option<usize>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ProcessWaitInput {
     pub process_id: String,
@@ -347,6 +375,7 @@ pub enum ToolCall {
     WebFetch(WebFetchInput),
     WebSearch(WebSearchInput),
     ExecStart(ExecStartInput),
+    ExecReadOutput(ProcessReadOutputInput),
     ExecWait(ProcessWaitInput),
     ExecKill(ProcessKillInput),
     PlanRead(PlanReadInput),
@@ -524,6 +553,13 @@ pub enum ProcessResultStatus {
     Killed,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProcessOutputStatus {
+    Running,
+    Exited,
+    Killed,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProcessResult {
     pub process_id: String,
@@ -531,6 +567,18 @@ pub struct ProcessResult {
     pub exit_code: Option<i32>,
     pub stdout: String,
     pub stderr: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProcessOutputRead {
+    pub process_id: String,
+    pub stream: ProcessOutputStream,
+    pub status: ProcessOutputStatus,
+    pub exit_code: Option<i32>,
+    pub cursor: usize,
+    pub next_cursor: usize,
+    pub truncated: bool,
+    pub text: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -646,6 +694,7 @@ pub enum ToolOutput {
     WebFetch(WebFetchOutput),
     WebSearch(WebSearchOutput),
     ProcessStart(ProcessStartOutput),
+    ProcessOutputRead(ProcessOutputRead),
     ProcessResult(ProcessResult),
     PlanRead(PlanReadOutput),
     PlanWrite(PlanWriteOutput),
@@ -731,7 +780,10 @@ pub struct WebToolClient {
 #[derive(Debug)]
 struct ManagedProcess {
     kind: ProcessKind,
-    child: Child,
+    child: Mutex<Child>,
+    output: Arc<Mutex<ManagedProcessOutput>>,
+    stdout_reader: Mutex<Option<thread::JoinHandle<()>>>,
+    stderr_reader: Mutex<Option<thread::JoinHandle<()>>>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -742,7 +794,16 @@ pub struct SharedProcessRegistry {
 #[derive(Debug)]
 struct ProcessRegistryState {
     next_process_id: usize,
-    processes: BTreeMap<String, ManagedProcess>,
+    processes: BTreeMap<String, Arc<ManagedProcess>>,
+}
+
+#[derive(Debug, Default)]
+struct ManagedProcessOutput {
+    stdout: String,
+    stderr: String,
+    merged: String,
+    finished_status: Option<ProcessResultStatus>,
+    exit_code: Option<i32>,
 }
 
 impl Default for ProcessRegistryState {
@@ -789,6 +850,7 @@ impl ToolName {
             Self::WebFetch => "web_fetch",
             Self::WebSearch => "web_search",
             Self::ExecStart => "exec_start",
+            Self::ExecReadOutput => "exec_read_output",
             Self::ExecWait => "exec_wait",
             Self::ExecKill => "exec_kill",
             Self::PlanRead => "plan_read",
@@ -843,6 +905,7 @@ impl ToolCatalog {
                         | ToolName::FsMove
                         | ToolName::FsTrash
                         | ToolName::ExecStart
+                        | ToolName::ExecReadOutput
                         | ToolName::ExecWait
                         | ToolName::ExecKill
                         | ToolName::WebFetch
@@ -1063,6 +1126,16 @@ impl ToolCatalog {
                     read_only: false,
                     destructive: true,
                     requires_approval: true,
+                },
+            },
+            ToolDefinition {
+                name: ToolName::ExecReadOutput,
+                family: ToolFamily::Exec,
+                description: "Read bounded live output from a structured exec process",
+                policy: ToolPolicy {
+                    read_only: true,
+                    destructive: false,
+                    requires_approval: false,
                 },
             },
             ToolDefinition {
@@ -1470,6 +1543,10 @@ impl ToolRuntime {
                 let cwd = self.resolve_cwd(input.cwd.as_deref())?;
                 self.start_process(ProcessKind::Exec, &input.executable, &input.args, cwd)
             }
+            ToolCall::ExecReadOutput(input) => {
+                let process_id = input.process_id.clone();
+                self.read_process_output(&process_id, ProcessKind::Exec, input)
+            }
             ToolCall::ExecWait(input) => self.wait_process(&input.process_id, ProcessKind::Exec),
             ToolCall::ExecKill(input) => self.kill_process(&input.process_id, ProcessKind::Exec),
             ToolCall::PlanRead(_)
@@ -1531,19 +1608,33 @@ impl ToolRuntime {
 
         let command_display = format_exec_command_display(executable, args);
         let cwd_display = cwd.display().to_string();
-        let child = command.spawn().map_err(|source| ToolError::ProcessIo {
+        let mut child = command.spawn().map_err(|source| ToolError::ProcessIo {
             process_id: executable.to_string(),
             source,
         })?;
         let pid_ref = format!("pid:{}", child.id());
+        let output = Arc::new(Mutex::new(ManagedProcessOutput::default()));
+        let stdout_reader = child.stdout.take().map(|stdout| {
+            spawn_process_reader(stdout, ProcessOutputStream::Stdout, output.clone())
+        });
+        let stderr_reader = child.stderr.take().map(|stderr| {
+            spawn_process_reader(stderr, ProcessOutputStream::Stderr, output.clone())
+        });
 
         let process_id = {
             let mut registry = self.processes.lock();
             let process_id = format!("{}-{}", kind.as_prefix(), registry.next_process_id);
             registry.next_process_id += 1;
-            registry
-                .processes
-                .insert(process_id.clone(), ManagedProcess { kind, child });
+            registry.processes.insert(
+                process_id.clone(),
+                Arc::new(ManagedProcess {
+                    kind,
+                    child: Mutex::new(child),
+                    output,
+                    stdout_reader: Mutex::new(stdout_reader),
+                    stderr_reader: Mutex::new(stderr_reader),
+                }),
+            );
             process_id
         };
 
@@ -1556,26 +1647,75 @@ impl ToolRuntime {
         }))
     }
 
+    fn read_process_output(
+        &mut self,
+        process_id: &str,
+        expected_kind: ProcessKind,
+        input: ProcessReadOutputInput,
+    ) -> Result<ToolOutput, ToolError> {
+        let managed = self.lookup_process(process_id, expected_kind)?;
+        let status = managed.poll_status(process_id)?;
+        let output = managed
+            .output
+            .lock()
+            .expect("managed process output poisoned");
+        let stream = input.stream.unwrap_or(ProcessOutputStream::Merged);
+        let source = match stream {
+            ProcessOutputStream::Merged => output.merged.as_str(),
+            ProcessOutputStream::Stdout => output.stdout.as_str(),
+            ProcessOutputStream::Stderr => output.stderr.as_str(),
+        };
+        let max_bytes = normalize_process_output_max_bytes(input.max_bytes);
+        let max_lines = normalize_process_output_max_lines(input.max_lines);
+        let read = build_process_output_read(
+            ProcessOutputView {
+                process_id,
+                stream,
+                status,
+                exit_code: output.exit_code,
+                source,
+            },
+            input.cursor,
+            max_bytes,
+            max_lines,
+        );
+        Ok(ToolOutput::ProcessOutputRead(read))
+    }
+
     fn wait_process(
         &mut self,
         process_id: &str,
         expected_kind: ProcessKind,
     ) -> Result<ToolOutput, ToolError> {
-        let managed = self.take_process(process_id, expected_kind)?;
-        let output = managed
-            .child
-            .wait_with_output()
-            .map_err(|source| ToolError::ProcessIo {
+        let managed = self.lookup_process(process_id, expected_kind)?;
+        let exit_status = {
+            let mut child = managed.child.lock().expect("managed child poisoned");
+            child.wait().map_err(|source| ToolError::ProcessIo {
                 process_id: process_id.to_string(),
                 source,
-            })?;
+            })?
+        };
+        {
+            let mut output = managed
+                .output
+                .lock()
+                .expect("managed process output poisoned");
+            output.finished_status = Some(ProcessResultStatus::Exited);
+            output.exit_code = exit_status.code();
+        }
+        managed.join_readers();
+        self.remove_process(process_id);
+        let output = managed
+            .output
+            .lock()
+            .expect("managed process output poisoned");
 
         Ok(ToolOutput::ProcessResult(ProcessResult {
             process_id: process_id.to_string(),
             status: ProcessResultStatus::Exited,
-            exit_code: output.status.code(),
-            stdout: String::from_utf8_lossy(&output.stdout).to_string(),
-            stderr: String::from_utf8_lossy(&output.stderr).to_string(),
+            exit_code: output.exit_code,
+            stdout: output.stdout.clone(),
+            stderr: output.stderr.clone(),
         }))
     }
 
@@ -1584,41 +1724,51 @@ impl ToolRuntime {
         process_id: &str,
         expected_kind: ProcessKind,
     ) -> Result<ToolOutput, ToolError> {
-        let mut managed = self.take_process(process_id, expected_kind)?;
-        managed
-            .child
-            .kill()
-            .map_err(|source| ToolError::ProcessIo {
+        let managed = self.lookup_process(process_id, expected_kind)?;
+        {
+            let mut child = managed.child.lock().expect("managed child poisoned");
+            child.kill().map_err(|source| ToolError::ProcessIo {
                 process_id: process_id.to_string(),
                 source,
             })?;
+            let exit_status = child.wait().map_err(|source| ToolError::ProcessIo {
+                process_id: process_id.to_string(),
+                source,
+            })?;
+            let mut output = managed
+                .output
+                .lock()
+                .expect("managed process output poisoned");
+            output.finished_status = Some(ProcessResultStatus::Killed);
+            output.exit_code = exit_status.code();
+        }
+        managed.join_readers();
+        self.remove_process(process_id);
         let output = managed
-            .child
-            .wait_with_output()
-            .map_err(|source| ToolError::ProcessIo {
-                process_id: process_id.to_string(),
-                source,
-            })?;
+            .output
+            .lock()
+            .expect("managed process output poisoned");
 
         Ok(ToolOutput::ProcessResult(ProcessResult {
             process_id: process_id.to_string(),
             status: ProcessResultStatus::Killed,
-            exit_code: output.status.code(),
-            stdout: String::from_utf8_lossy(&output.stdout).to_string(),
-            stderr: String::from_utf8_lossy(&output.stderr).to_string(),
+            exit_code: output.exit_code,
+            stdout: output.stdout.clone(),
+            stderr: output.stderr.clone(),
         }))
     }
 
-    fn take_process(
-        &mut self,
+    fn lookup_process(
+        &self,
         process_id: &str,
         expected_kind: ProcessKind,
-    ) -> Result<ManagedProcess, ToolError> {
+    ) -> Result<Arc<ManagedProcess>, ToolError> {
         let managed = self
             .processes
             .lock()
             .processes
-            .remove(process_id)
+            .get(process_id)
+            .cloned()
             .ok_or_else(|| ToolError::UnknownProcess {
                 process_id: process_id.to_string(),
             })?;
@@ -1632,6 +1782,199 @@ impl ToolRuntime {
         }
 
         Ok(managed)
+    }
+
+    fn remove_process(&self, process_id: &str) {
+        self.processes.lock().processes.remove(process_id);
+    }
+}
+
+impl ManagedProcess {
+    fn poll_status(&self, process_id: &str) -> Result<ProcessOutputStatus, ToolError> {
+        {
+            let output = self.output.lock().expect("managed process output poisoned");
+            if let Some(status) = output.finished_status {
+                return Ok(match status {
+                    ProcessResultStatus::Exited => ProcessOutputStatus::Exited,
+                    ProcessResultStatus::Killed => ProcessOutputStatus::Killed,
+                });
+            }
+        }
+
+        if let Ok(mut child) = self.child.try_lock()
+            && let Some(exit_status) = child.try_wait().map_err(|source| ToolError::ProcessIo {
+                process_id: process_id.to_string(),
+                source,
+            })?
+        {
+            let mut output = self.output.lock().expect("managed process output poisoned");
+            output.finished_status = Some(ProcessResultStatus::Exited);
+            output.exit_code = exit_status.code();
+            return Ok(ProcessOutputStatus::Exited);
+        }
+
+        Ok(ProcessOutputStatus::Running)
+    }
+
+    fn join_readers(&self) {
+        if let Some(handle) = self
+            .stdout_reader
+            .lock()
+            .expect("stdout reader mutex poisoned")
+            .take()
+        {
+            let _ = handle.join();
+        }
+        if let Some(handle) = self
+            .stderr_reader
+            .lock()
+            .expect("stderr reader mutex poisoned")
+            .take()
+        {
+            let _ = handle.join();
+        }
+    }
+}
+
+fn spawn_process_reader<R>(
+    mut reader: R,
+    stream: ProcessOutputStream,
+    output: Arc<Mutex<ManagedProcessOutput>>,
+) -> thread::JoinHandle<()>
+where
+    R: Read + Send + 'static,
+{
+    thread::spawn(move || {
+        let mut buffer = [0_u8; 8192];
+        loop {
+            let bytes = match reader.read(&mut buffer) {
+                Ok(0) => break,
+                Ok(bytes) => bytes,
+                Err(_) => break,
+            };
+            let text = String::from_utf8_lossy(&buffer[..bytes]).to_string();
+            let mut guard = output.lock().expect("managed process output poisoned");
+            match stream {
+                ProcessOutputStream::Merged => {}
+                ProcessOutputStream::Stdout => guard.stdout.push_str(text.as_str()),
+                ProcessOutputStream::Stderr => guard.stderr.push_str(text.as_str()),
+            }
+            guard.merged.push_str(text.as_str());
+        }
+    })
+}
+
+fn normalize_process_output_max_bytes(limit: Option<usize>) -> usize {
+    limit
+        .unwrap_or(DEFAULT_PROCESS_OUTPUT_READ_MAX_BYTES)
+        .clamp(1, MAX_PROCESS_OUTPUT_READ_MAX_BYTES)
+}
+
+fn normalize_process_output_max_lines(limit: Option<usize>) -> usize {
+    limit
+        .unwrap_or(DEFAULT_PROCESS_OUTPUT_READ_MAX_LINES)
+        .clamp(1, MAX_PROCESS_OUTPUT_READ_MAX_LINES)
+}
+
+fn clamp_utf8_boundary(text: &str, offset: usize) -> usize {
+    let mut clamped = offset.min(text.len());
+    while clamped > 0 && !text.is_char_boundary(clamped) {
+        clamped -= 1;
+    }
+    clamped
+}
+
+fn prefix_boundary_for_max_bytes(text: &str, max_bytes: usize) -> usize {
+    let mut end = text.len().min(max_bytes);
+    while end > 0 && !text.is_char_boundary(end) {
+        end -= 1;
+    }
+    end
+}
+
+fn tail_start_for_max_bytes(text: &str, max_bytes: usize) -> usize {
+    if text.len() <= max_bytes {
+        return 0;
+    }
+    let mut start = text.len() - max_bytes;
+    while start < text.len() && !text.is_char_boundary(start) {
+        start += 1;
+    }
+    start.min(text.len())
+}
+
+fn tail_start_for_max_lines(text: &str, max_lines: usize) -> usize {
+    let segments = text.split_inclusive('\n').collect::<Vec<_>>();
+    if segments.len() <= max_lines {
+        return 0;
+    }
+    segments[..segments.len() - max_lines]
+        .iter()
+        .map(|segment| segment.len())
+        .sum()
+}
+
+fn prefix_end_for_max_lines_and_bytes(text: &str, max_lines: usize, max_bytes: usize) -> usize {
+    let mut end = 0_usize;
+    for (lines, segment) in text.split_inclusive('\n').enumerate() {
+        if lines >= max_lines || end + segment.len() > max_bytes {
+            break;
+        }
+        end += segment.len();
+    }
+
+    if end == 0 && !text.is_empty() {
+        prefix_boundary_for_max_bytes(text, max_bytes)
+    } else {
+        end
+    }
+}
+
+struct ProcessOutputView<'a> {
+    process_id: &'a str,
+    stream: ProcessOutputStream,
+    status: ProcessOutputStatus,
+    exit_code: Option<i32>,
+    source: &'a str,
+}
+
+fn build_process_output_read(
+    view: ProcessOutputView<'_>,
+    cursor: Option<usize>,
+    max_bytes: usize,
+    max_lines: usize,
+) -> ProcessOutputRead {
+    match cursor {
+        Some(cursor) => {
+            let cursor = clamp_utf8_boundary(view.source, cursor);
+            let remaining = &view.source[cursor..];
+            let end = cursor + prefix_end_for_max_lines_and_bytes(remaining, max_lines, max_bytes);
+            ProcessOutputRead {
+                process_id: view.process_id.to_string(),
+                stream: view.stream,
+                status: view.status,
+                exit_code: view.exit_code,
+                cursor,
+                next_cursor: end,
+                truncated: end < view.source.len(),
+                text: view.source[cursor..end].to_string(),
+            }
+        }
+        None => {
+            let byte_start = tail_start_for_max_bytes(view.source, max_bytes);
+            let line_start =
+                byte_start + tail_start_for_max_lines(&view.source[byte_start..], max_lines);
+            ProcessOutputRead {
+                process_id: view.process_id.to_string(),
+                stream: view.stream,
+                status: view.status,
+                exit_code: view.exit_code,
+                cursor: line_start,
+                next_cursor: view.source.len(),
+                truncated: line_start > 0,
+                text: view.source[line_start..].to_string(),
+            }
+        }
     }
 }
 
@@ -1671,6 +2014,53 @@ impl SharedProcessRegistry {
             })
             .collect()
     }
+
+    pub fn read_exec_output(
+        &self,
+        process_id: &str,
+        stream: ProcessOutputStream,
+        cursor: Option<usize>,
+        max_bytes: Option<usize>,
+        max_lines: Option<usize>,
+    ) -> Result<ProcessOutputRead, ToolError> {
+        let managed = self
+            .lock()
+            .processes
+            .get(process_id)
+            .cloned()
+            .ok_or_else(|| ToolError::UnknownProcess {
+                process_id: process_id.to_string(),
+            })?;
+        if managed.kind != ProcessKind::Exec {
+            return Err(ToolError::ProcessFamilyMismatch {
+                process_id: process_id.to_string(),
+                expected: ProcessKind::Exec,
+                actual: managed.kind,
+            });
+        }
+        let status = managed.poll_status(process_id)?;
+        let output = managed
+            .output
+            .lock()
+            .expect("managed process output poisoned");
+        let source = match stream {
+            ProcessOutputStream::Merged => output.merged.as_str(),
+            ProcessOutputStream::Stdout => output.stdout.as_str(),
+            ProcessOutputStream::Stderr => output.stderr.as_str(),
+        };
+        Ok(build_process_output_read(
+            ProcessOutputView {
+                process_id,
+                stream,
+                status,
+                exit_code: output.exit_code,
+                source,
+            },
+            cursor,
+            normalize_process_output_max_bytes(max_bytes),
+            normalize_process_output_max_lines(max_lines),
+        ))
+    }
 }
 
 impl ToolCall {
@@ -1696,6 +2086,7 @@ impl ToolCall {
             Self::WebFetch(_) => ToolName::WebFetch,
             Self::WebSearch(_) => ToolName::WebSearch,
             Self::ExecStart(_) => ToolName::ExecStart,
+            Self::ExecReadOutput(_) => ToolName::ExecReadOutput,
             Self::ExecWait(_) => ToolName::ExecWait,
             Self::ExecKill(_) => ToolName::ExecKill,
             Self::PlanRead(_) => ToolName::PlanRead,
@@ -1736,7 +2127,7 @@ impl ToolCall {
             Self::WebFetch(input) => Some(input.url.clone()),
             Self::WebSearch(_) => None,
             Self::ExecStart(input) => input.cwd.clone(),
-            Self::ExecWait(_) | Self::ExecKill(_) => None,
+            Self::ExecReadOutput(_) | Self::ExecWait(_) | Self::ExecKill(_) => None,
             Self::PlanRead(_)
             | Self::PlanWrite(_)
             | Self::InitPlan(_)
@@ -1843,6 +2234,23 @@ impl ToolCall {
                     format_exec_command_display(input.executable.as_str(), &input.args)
                 )
             }
+            Self::ExecReadOutput(input) => format!(
+                "exec_read_output process_id={} stream={} cursor={} max_bytes={} max_lines={}",
+                input.process_id,
+                input.stream.unwrap_or(ProcessOutputStream::Merged).as_str(),
+                input
+                    .cursor
+                    .map(|value| value.to_string())
+                    .unwrap_or_else(|| "-".to_string()),
+                input
+                    .max_bytes
+                    .map(|value| value.to_string())
+                    .unwrap_or_else(|| "-".to_string()),
+                input
+                    .max_lines
+                    .map(|value| value.to_string())
+                    .unwrap_or_else(|| "-".to_string())
+            ),
             Self::ExecWait(input) => format!("exec_wait process_id={}", input.process_id),
             Self::ExecKill(input) => format!("exec_kill process_id={}", input.process_id),
             Self::PlanRead(_) => "plan_read".to_string(),
@@ -2001,6 +2409,12 @@ impl ToolCall {
                     name: name.to_string(),
                     source,
                 }),
+            "exec_read_output" => serde_json::from_str(arguments)
+                .map(Self::ExecReadOutput)
+                .map_err(|source| ToolCallParseError::InvalidArguments {
+                    name: name.to_string(),
+                    source,
+                }),
             "exec_wait" => serde_json::from_str(arguments)
                 .map(Self::ExecWait)
                 .map_err(|source| ToolCallParseError::InvalidArguments {
@@ -2112,6 +2526,26 @@ impl ProcessKind {
     }
 }
 
+impl ProcessOutputStream {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Merged => "merged",
+            Self::Stdout => "stdout",
+            Self::Stderr => "stderr",
+        }
+    }
+}
+
+impl ProcessOutputStatus {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Running => "running",
+            Self::Exited => "exited",
+            Self::Killed => "killed",
+        }
+    }
+}
+
 impl ToolOutput {
     pub fn into_fs_read(self) -> Option<FsReadOutput> {
         match self {
@@ -2186,6 +2620,13 @@ impl ToolOutput {
     pub fn into_process_start(self) -> Option<ProcessStartOutput> {
         match self {
             Self::ProcessStart(output) => Some(output),
+            _ => None,
+        }
+    }
+
+    pub fn into_process_output_read(self) -> Option<ProcessOutputRead> {
+        match self {
+            Self::ProcessOutputRead(output) => Some(output),
             _ => None,
         }
     }
@@ -2322,6 +2763,15 @@ impl ToolOutput {
                 output.pid_ref,
                 output.cwd,
                 output.command_display
+            ),
+            Self::ProcessOutputRead(output) => format!(
+                "process_output_read process_id={} stream={} status={} cursor={} next_cursor={} bytes={}",
+                output.process_id,
+                output.stream.as_str(),
+                output.status.as_str(),
+                output.cursor,
+                output.next_cursor,
+                output.text.len()
             ),
             Self::ProcessResult(output) => format!(
                 "process_result process_id={} status={:?} exit_code={:?}",
@@ -2519,6 +2969,18 @@ impl ToolOutput {
                 "kind": output.kind.as_str(),
                 "cwd": output.cwd,
                 "command": output.command_display,
+            })
+            .to_string(),
+            Self::ProcessOutputRead(output) => json!({
+                "tool": "process_output_read",
+                "process_id": output.process_id,
+                "stream": output.stream.as_str(),
+                "status": output.status.as_str(),
+                "exit_code": output.exit_code,
+                "cursor": output.cursor,
+                "next_cursor": output.next_cursor,
+                "truncated": output.truncated,
+                "text": output.text,
             })
             .to_string(),
             Self::ProcessResult(output) => json!({
@@ -2838,6 +3300,18 @@ impl ToolName {
                     "cwd": { "type": ["string", "null"] }
                 },
                 "required": ["executable", "args"],
+                "additionalProperties": false,
+            }),
+            Self::ExecReadOutput => json!({
+                "type": "object",
+                "properties": {
+                    "process_id": { "type": "string", "description": "Process id returned by exec_start" },
+                    "stream": { "type": ["string", "null"], "enum": ["merged", "stdout", "stderr", null], "description": "Which stream view to read; defaults to merged" },
+                    "cursor": { "type": ["integer", "null"], "minimum": 0, "description": "Optional cursor returned by a previous exec_read_output call" },
+                    "max_bytes": { "type": ["integer", "null"], "minimum": 1, "description": "Optional maximum number of UTF-8 bytes to return" },
+                    "max_lines": { "type": ["integer", "null"], "minimum": 1, "description": "Optional maximum number of lines to return" }
+                },
+                "required": ["process_id"],
                 "additionalProperties": false,
             }),
             Self::ExecWait | Self::ExecKill => json!({

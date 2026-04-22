@@ -146,6 +146,7 @@ fn build_from_config_refreshes_legacy_default_prompts_but_preserves_custom_edits
     assert!(refreshed_system.contains("assistant autonomous coding agent runtime profile"));
     assert!(refreshed_agents.contains("Assistant agent profile."));
     assert!(refreshed_agents.contains("Never invent tool names"));
+    assert!(refreshed_agents.contains("exec_read_output"));
 
     fs::write(default_home.join("AGENTS.md"), "custom prompt preserved\n")
         .expect("write custom agents");
