@@ -1009,7 +1009,7 @@ fn execute_chat_turn_allows_more_than_eight_unique_tool_rounds() {
 }
 
 #[test]
-fn execute_chat_turn_pauses_for_transient_provider_failure_and_can_retry_via_approval() {
+fn execute_chat_turn_retries_after_transient_provider_failure_and_records_system_note() {
     let (provider_api_base, provider_requests, provider_handle) =
         spawn_json_server_status_sequence(vec![
             (
@@ -1074,43 +1074,15 @@ fn execute_chat_turn_pauses_for_transient_provider_failure_and_can_retry_via_app
         })
         .expect("put session");
 
-    let error = app
+    let report = app
         .execute_chat_turn("session-provider-retry", "Say hi", 10)
-        .expect_err("chat turn should pause for provider retry approval");
-    assert!(error.to_string().contains("approval"));
-
-    let waiting_run = store
-        .get_run("run-chat-session-provider-retry-10")
-        .expect("get waiting run")
-        .expect("waiting run exists");
-    assert_eq!(waiting_run.status, "waiting_approval");
-
-    let approvals = app
-        .run_with_args(["approval", "list", "run-chat-session-provider-retry-10"])
-        .expect("approval list");
-    assert!(approvals.contains("retry the provider request"));
-    assert!(approvals.contains("500 Internal Server Error"));
-
-    let approval_id = approvals
-        .split_whitespace()
-        .find(|token| token.starts_with("approval-"))
-        .expect("approval id in list")
-        .to_string();
-
-    let approved = app
-        .run_with_args([
-            "approval",
-            "approve",
-            "run-chat-session-provider-retry-10",
-            &approval_id,
-        ])
-        .expect("approval approve");
+        .expect("chat turn should retry transient provider failures");
     let first_request = provider_requests.recv().expect("first provider request");
     let second_request = provider_requests.recv().expect("second provider request");
     provider_handle.join().expect("join provider server");
 
-    assert!(approved.contains("run-chat-session-provider-retry-10"));
-    assert!(approved.contains("Recovered after provider retry"));
+    assert_eq!(report.run_id, "run-chat-session-provider-retry-10");
+    assert_eq!(report.output_text, "Recovered after provider retry");
 
     let completed_run = store
         .get_run("run-chat-session-provider-retry-10")
@@ -1125,6 +1097,12 @@ fn execute_chat_turn_pauses_for_transient_provider_failure_and_can_retry_via_app
     let transcript = app
         .session_transcript("session-provider-retry")
         .expect("load transcript");
+    assert!(transcript.entries.iter().any(|entry| {
+        entry.role == "system"
+            && entry
+                .content
+                .contains("provider request failed with 500 Internal Server Error")
+    }));
     assert_eq!(
         transcript
             .entries

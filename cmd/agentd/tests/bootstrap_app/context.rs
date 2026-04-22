@@ -1345,6 +1345,196 @@ fn execute_chat_turn_offloads_large_fs_read_text_results_into_artifacts() {
 }
 
 #[test]
+fn execute_chat_turn_prunes_stale_offload_refs_when_a_payload_file_is_missing() {
+    let (api_base, requests, handle) = spawn_json_server_sequence(vec![
+        r#"{
+                "id":"resp_offload_stale_1",
+                "model":"gpt-5.4",
+                "output":[
+                    {
+                        "id":"fc_fs_read_old",
+                        "type":"function_call",
+                        "call_id":"call_fs_read_old",
+                        "name":"fs_read_text",
+                        "arguments":"{\"path\":\"docs/old.txt\"}"
+                    }
+                ],
+                "usage":{"input_tokens":40,"output_tokens":12,"total_tokens":52}
+            }"#
+        .to_string(),
+        r#"{
+                "id":"resp_offload_stale_2",
+                "model":"gpt-5.4",
+                "output":[
+                    {
+                        "id":"msg_offload_stale_1",
+                        "type":"message",
+                        "status":"completed",
+                        "role":"assistant",
+                        "content":[
+                            {
+                                "type":"output_text",
+                                "text":"First file was offloaded."
+                            }
+                        ]
+                    }
+                ],
+                "usage":{"input_tokens":18,"output_tokens":6,"total_tokens":24}
+            }"#
+        .to_string(),
+        r#"{
+                "id":"resp_offload_stale_3",
+                "model":"gpt-5.4",
+                "output":[
+                    {
+                        "id":"fc_fs_read_new",
+                        "type":"function_call",
+                        "call_id":"call_fs_read_new",
+                        "name":"fs_read_text",
+                        "arguments":"{\"path\":\"docs/new.txt\"}"
+                    }
+                ],
+                "usage":{"input_tokens":40,"output_tokens":12,"total_tokens":52}
+            }"#
+        .to_string(),
+        r#"{
+                "id":"resp_offload_stale_4",
+                "model":"gpt-5.4",
+                "output":[
+                    {
+                        "id":"msg_offload_stale_2",
+                        "type":"message",
+                        "status":"completed",
+                        "role":"assistant",
+                        "content":[
+                            {
+                                "type":"output_text",
+                                "text":"Second file was offloaded after pruning stale refs."
+                            }
+                        ]
+                    }
+                ],
+                "usage":{"input_tokens":18,"output_tokens":6,"total_tokens":24}
+            }"#
+        .to_string(),
+    ]);
+    let temp = tempfile::tempdir().expect("tempdir");
+    let workspace_root = temp.path().join("workspace");
+    fs::create_dir_all(workspace_root.join("docs")).expect("create docs");
+    let large_old = format!(
+        "{}\n{}\n{}\n",
+        "OFFLOAD-MARKER-OLD-BLOCK".repeat(120),
+        "second-line".repeat(80),
+        "third-line".repeat(80)
+    );
+    let large_new = format!(
+        "{}\n{}\n{}\n",
+        "OFFLOAD-MARKER-NEW-BLOCK".repeat(120),
+        "second-line".repeat(80),
+        "third-line".repeat(80)
+    );
+    fs::write(workspace_root.join("docs/old.txt"), &large_old).expect("write old file");
+    fs::write(workspace_root.join("docs/new.txt"), &large_new).expect("write new file");
+    let mut app = build_from_config(AppConfig {
+        data_dir: temp.path().join("state-root"),
+        daemon: Default::default(),
+        provider: ConfiguredProvider {
+            kind: ProviderKind::OpenAiResponses,
+            api_base: Some(format!("{api_base}/v1")),
+            api_key: Some("test-key".to_string()),
+            default_model: Some("gpt-5.4".to_string()),
+            ..ConfiguredProvider::default()
+        },
+        ..AppConfig::default()
+    })
+    .expect("build app");
+    app.runtime.workspace = WorkspaceRef::new(&workspace_root);
+    let store = PersistenceStore::open(&app.persistence).expect("open store");
+    store
+        .put_session(&SessionRecord {
+            id: "session-offload-stale-prune".to_string(),
+            title: "Stale Offload".to_string(),
+            prompt_override: None,
+            settings_json: serde_json::to_string(&SessionSettings::default())
+                .expect("serialize settings"),
+            agent_profile_id: "default".to_string(),
+            active_mission_id: None,
+            parent_session_id: None,
+            parent_job_id: None,
+            delegation_label: None,
+            created_at: 1,
+            updated_at: 1,
+        })
+        .expect("put session");
+
+    let first = app
+        .execute_chat_turn("session-offload-stale-prune", "read the old big file", 10)
+        .expect("execute first chat turn");
+    assert_eq!(first.output_text, "First file was offloaded.");
+    let _ = requests.recv().expect("first provider request");
+    let _ = requests.recv().expect("second provider request");
+
+    let first_snapshot = ContextOffloadSnapshot::try_from(
+        store
+            .get_context_offload("session-offload-stale-prune")
+            .expect("get first offload")
+            .expect("first offload exists"),
+    )
+    .expect("restore first snapshot");
+    assert_eq!(first_snapshot.refs.len(), 1);
+    let stale_artifact_id = first_snapshot.refs[0].artifact_id.clone();
+    let stale_path = app
+        .persistence
+        .stores
+        .artifacts_dir
+        .join(format!("{stale_artifact_id}.bin"));
+    fs::remove_file(&stale_path).expect("remove stale payload");
+
+    let second = app
+        .execute_chat_turn("session-offload-stale-prune", "read the new big file", 20)
+        .expect("execute second chat turn");
+    assert_eq!(
+        second.output_text,
+        "Second file was offloaded after pruning stale refs."
+    );
+    let _ = requests.recv().expect("third provider request");
+    let second_request = requests.recv().expect("fourth provider request");
+    handle.join().expect("join server");
+
+    let snapshot = ContextOffloadSnapshot::try_from(
+        store
+            .get_context_offload("session-offload-stale-prune")
+            .expect("get latest offload")
+            .expect("latest offload exists"),
+    )
+    .expect("restore latest snapshot");
+    assert_eq!(snapshot.refs.len(), 1);
+    assert!(snapshot.refs[0].summary.contains("docs/new.txt"));
+    assert_ne!(snapshot.refs[0].artifact_id, stale_artifact_id);
+
+    let payload = store
+        .get_context_offload_payload(&snapshot.refs[0].artifact_id)
+        .expect("get latest payload")
+        .expect("latest payload exists");
+    assert!(String::from_utf8_lossy(&payload.bytes).contains("OFFLOAD-MARKER-NEW-BLOCK"));
+
+    let second_request_body = second_request
+        .split_once("\r\n\r\n")
+        .map(|(_, body)| body)
+        .expect("extract second turn provider request body");
+    let second_request_json: serde_json::Value =
+        serde_json::from_str(second_request_body).expect("parse second turn provider request");
+    let tool_output = second_request_json["input"][0]["output"]
+        .as_str()
+        .expect("tool output string");
+    let tool_output_json: serde_json::Value =
+        serde_json::from_str(tool_output).expect("parse compact tool output");
+
+    assert_eq!(tool_output_json["offloaded"], serde_json::json!(true));
+    assert_eq!(tool_output_json["path"], serde_json::json!("docs/new.txt"));
+}
+
+#[test]
 fn execute_chat_turn_includes_the_plan_snapshot_before_context_summary() {
     let (api_base, requests, handle) = spawn_json_server_sequence(vec![
         r#"{
@@ -1992,6 +2182,127 @@ fn execute_chat_turn_can_retrieve_offloaded_context_via_artifact_read() {
     assert!(normalized_second.contains("\"call_id\":\"call_artifact_read\""));
     assert!(normalized_second.contains("artifact_read"));
     assert!(normalized_second.contains("important diagnostic detail"));
+}
+
+#[test]
+fn execute_chat_turn_recovers_when_artifact_read_payload_is_missing() {
+    let (api_base, requests, handle) = spawn_json_server_sequence(vec![
+        r#"{
+                "id":"resp_offload_missing_1",
+                "model":"gpt-5.4",
+                "output":[
+                    {
+                        "id":"fc_artifact_read_missing",
+                        "type":"function_call",
+                        "call_id":"call_artifact_read_missing",
+                        "name":"artifact_read",
+                        "arguments":"{\"artifact_id\":\"artifact-offload-missing\"}"
+                    }
+                ],
+                "usage":{"input_tokens":40,"output_tokens":12,"total_tokens":52}
+            }"#
+        .to_string(),
+        r#"{
+                "id":"resp_offload_missing_2",
+                "model":"gpt-5.4",
+                "output":[
+                    {
+                        "id":"msg_offload_missing",
+                        "type":"message",
+                        "status":"completed",
+                        "role":"assistant",
+                        "content":[
+                            {
+                                "type":"output_text",
+                                "text":"Handled missing offloaded context."
+                            }
+                        ]
+                    }
+                ],
+                "usage":{"input_tokens":24,"output_tokens":6,"total_tokens":30}
+            }"#
+        .to_string(),
+    ]);
+    let temp = tempfile::tempdir().expect("tempdir");
+    let app = build_from_config(AppConfig {
+        data_dir: temp.path().join("state-root"),
+        daemon: Default::default(),
+        provider: ConfiguredProvider {
+            kind: ProviderKind::OpenAiResponses,
+            api_base: Some(format!("{api_base}/v1")),
+            api_key: Some("test-key".to_string()),
+            default_model: Some("gpt-5.4".to_string()),
+            ..ConfiguredProvider::default()
+        },
+        ..AppConfig::default()
+    })
+    .expect("build app");
+    let store = PersistenceStore::open(&app.persistence).expect("open store");
+
+    store
+        .put_session(&SessionRecord {
+            id: "session-offload-missing".to_string(),
+            title: "Missing Offload".to_string(),
+            prompt_override: Some(
+                "Recover gracefully when an offload artifact is missing.".to_string(),
+            ),
+            settings_json: serde_json::to_string(&SessionSettings::default())
+                .expect("serialize settings"),
+            agent_profile_id: "default".to_string(),
+            active_mission_id: None,
+            parent_session_id: None,
+            parent_job_id: None,
+            delegation_label: None,
+            created_at: 1,
+            updated_at: 1,
+        })
+        .expect("put session");
+    store
+        .put_context_offload(
+            &agent_persistence::ContextOffloadRecord::try_from(&ContextOffloadSnapshot {
+                session_id: "session-offload-missing".to_string(),
+                refs: vec![ContextOffloadRef {
+                    id: "offload-missing".to_string(),
+                    label: "Broken artifact".to_string(),
+                    summary: "This payload file is gone".to_string(),
+                    artifact_id: "artifact-offload-missing".to_string(),
+                    token_estimate: 120,
+                    message_count: 4,
+                    created_at: 2,
+                }],
+                updated_at: 3,
+            })
+            .expect("offload record"),
+            &[ContextOffloadPayload {
+                artifact_id: "artifact-offload-missing".to_string(),
+                bytes: b"stale bytes".to_vec(),
+            }],
+        )
+        .expect("put context offload");
+    let missing_path = app
+        .persistence
+        .stores
+        .artifacts_dir
+        .join("artifact-offload-missing.bin");
+    fs::remove_file(&missing_path).expect("remove payload file");
+
+    let report = app
+        .execute_chat_turn("session-offload-missing", "Recover the broken offload", 10)
+        .expect("execute chat turn");
+    let _first_request = requests.recv().expect("first provider request");
+    let second_request = requests.recv().expect("second provider request");
+    handle.join().expect("join server");
+
+    assert_eq!(report.response_id, "resp_offload_missing_2");
+    assert_eq!(report.output_text, "Handled missing offloaded context.");
+
+    let normalized_second = second_request.to_ascii_lowercase();
+    assert!(normalized_second.contains("\"call_id\":\"call_artifact_read_missing\""));
+    assert!(
+        normalized_second.contains("artifact_offload_missing")
+            || normalized_second.contains("artifact-offload-missing")
+    );
+    assert!(normalized_second.contains("missing from context offload storage"));
 }
 
 #[test]

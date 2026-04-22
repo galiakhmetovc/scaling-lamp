@@ -15,6 +15,9 @@ use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
 use std::sync::{Arc, Mutex};
 
+const DEFAULT_FS_LIST_LIMIT: usize = 200;
+const MAX_FS_LIST_LIMIT: usize = 1_000;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ToolFamily {
     Filesystem,
@@ -175,12 +178,16 @@ pub struct FsInsertTextInput {
 pub struct FsListInput {
     pub path: String,
     pub recursive: bool,
+    pub limit: Option<usize>,
+    pub offset: Option<usize>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct FsGlobInput {
     pub path: String,
     pub pattern: String,
+    pub limit: Option<usize>,
+    pub offset: Option<usize>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -427,11 +434,21 @@ pub struct FsInsertTextOutput {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FsListOutput {
     pub entries: Vec<WorkspaceEntry>,
+    pub truncated: bool,
+    pub offset: usize,
+    pub limit: usize,
+    pub total_entries: usize,
+    pub next_offset: Option<usize>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FsGlobOutput {
     pub entries: Vec<WorkspaceEntry>,
+    pub truncated: bool,
+    pub offset: usize,
+    pub limit: usize,
+    pub total_entries: usize,
+    pub next_offset: Option<usize>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -991,7 +1008,7 @@ impl ToolCatalog {
             ToolDefinition {
                 name: ToolName::FsList,
                 family: ToolFamily::Filesystem,
-                description: "List files and directories inside the workspace",
+                description: "List files and directories inside the workspace with bounded pagination",
                 policy: ToolPolicy {
                     read_only: true,
                     destructive: false,
@@ -1399,13 +1416,48 @@ impl ToolRuntime {
                 let (path, trashed_to) = self.workspace.trash_path(&input.path)?;
                 Ok(ToolOutput::FsTrash(FsTrashOutput { path, trashed_to }))
             }
-            ToolCall::FsList(input) => Ok(ToolOutput::FsList(FsListOutput {
-                entries: self.workspace.list(&input.path, input.recursive)?,
-            })),
+            ToolCall::FsList(input) => {
+                let all_entries = self.workspace.list(&input.path, input.recursive)?;
+                let total_entries = all_entries.len();
+                let offset = input.offset.unwrap_or(0).min(total_entries);
+                let limit = normalize_fs_list_limit(input.limit);
+                let entries = all_entries
+                    .into_iter()
+                    .skip(offset)
+                    .take(limit)
+                    .collect::<Vec<_>>();
+                let next_offset =
+                    (offset + entries.len() < total_entries).then_some(offset + entries.len());
+                Ok(ToolOutput::FsList(FsListOutput {
+                    truncated: next_offset.is_some(),
+                    offset,
+                    limit,
+                    total_entries,
+                    next_offset,
+                    entries,
+                }))
+            }
             ToolCall::FsGlob(input) => {
                 let mut entries = self.workspace.list(&input.path, true)?;
                 entries.retain(|entry| glob_matches(&input.pattern, &entry.path));
-                Ok(ToolOutput::FsGlob(FsGlobOutput { entries }))
+                let total_entries = entries.len();
+                let offset = input.offset.unwrap_or(0).min(total_entries);
+                let limit = normalize_fs_list_limit(input.limit);
+                let entries = entries
+                    .into_iter()
+                    .skip(offset)
+                    .take(limit)
+                    .collect::<Vec<_>>();
+                let next_offset =
+                    (offset + entries.len() < total_entries).then_some(offset + entries.len());
+                Ok(ToolOutput::FsGlob(FsGlobOutput {
+                    truncated: next_offset.is_some(),
+                    offset,
+                    limit,
+                    total_entries,
+                    next_offset,
+                    entries,
+                }))
             }
             ToolCall::FsSearch(input) => Ok(ToolOutput::FsSearch(FsSearchOutput {
                 matches: self.workspace.search(&input.path, &input.query)?,
@@ -2228,8 +2280,30 @@ impl ToolOutput {
                     output.path, output.trashed_to
                 )
             }
-            Self::FsList(output) => format!("fs_list entries={}", output.entries.len()),
-            Self::FsGlob(output) => format!("fs_glob entries={}", output.entries.len()),
+            Self::FsList(output) => {
+                if let Some(next_offset) = output.next_offset {
+                    format!(
+                        "fs_list entries={} total={} truncated next_offset={}",
+                        output.entries.len(),
+                        output.total_entries,
+                        next_offset
+                    )
+                } else {
+                    format!("fs_list entries={}", output.entries.len())
+                }
+            }
+            Self::FsGlob(output) => {
+                if let Some(next_offset) = output.next_offset {
+                    format!(
+                        "fs_glob entries={} total={} truncated next_offset={}",
+                        output.entries.len(),
+                        output.total_entries,
+                        next_offset
+                    )
+                } else {
+                    format!("fs_glob entries={}", output.entries.len())
+                }
+            }
             Self::FsSearch(output) => format!("fs_search matches={}", output.matches.len()),
             Self::FsSearchText(output) => {
                 format!("fs_search_text matches={}", output.matches.len())
@@ -2387,11 +2461,21 @@ impl ToolOutput {
             .to_string(),
             Self::FsList(output) => json!({
                 "tool": "fs_list",
+                "offset": output.offset,
+                "limit": output.limit,
+                "truncated": output.truncated,
+                "total_entries": output.total_entries,
+                "next_offset": output.next_offset,
                 "entries": output.entries.iter().map(workspace_entry_json).collect::<Vec<_>>(),
             })
             .to_string(),
             Self::FsGlob(output) => json!({
                 "tool": "fs_glob",
+                "offset": output.offset,
+                "limit": output.limit,
+                "truncated": output.truncated,
+                "total_entries": output.total_entries,
+                "next_offset": output.next_offset,
                 "entries": output.entries.iter().map(workspace_entry_json).collect::<Vec<_>>(),
             })
             .to_string(),
@@ -2658,7 +2742,9 @@ impl ToolName {
                 "type": "object",
                 "properties": {
                     "path": { "type": "string", "description": "Relative workspace path to list" },
-                    "recursive": { "type": "boolean", "description": "Whether to recurse into subdirectories" }
+                    "recursive": { "type": "boolean", "description": "Whether to recurse into subdirectories" },
+                    "limit": { "type": ["integer", "null"], "minimum": 1, "description": "Optional maximum number of entries to return; defaults to a safe bounded page size" },
+                    "offset": { "type": ["integer", "null"], "minimum": 0, "description": "Optional zero-based offset for continuing a previous paginated listing" }
                 },
                 "required": ["path", "recursive"],
                 "additionalProperties": false,
@@ -2667,7 +2753,9 @@ impl ToolName {
                 "type": "object",
                 "properties": {
                     "path": { "type": "string", "description": "Relative workspace root to search from" },
-                    "pattern": { "type": "string", "description": "Glob-style path pattern" }
+                    "pattern": { "type": "string", "description": "Glob-style path pattern" },
+                    "limit": { "type": ["integer", "null"], "minimum": 1, "description": "Optional maximum number of matches to return; defaults to a safe bounded page size" },
+                    "offset": { "type": ["integer", "null"], "minimum": 0, "description": "Optional zero-based offset for continuing a previous paginated glob result" }
                 },
                 "required": ["path", "pattern"],
                 "additionalProperties": false,
@@ -3125,6 +3213,12 @@ fn join_lines(lines: Vec<String>) -> String {
     } else {
         format!("{}\n", lines.join("\n"))
     }
+}
+
+fn normalize_fs_list_limit(limit: Option<usize>) -> usize {
+    limit
+        .unwrap_or(DEFAULT_FS_LIST_LIMIT)
+        .clamp(1, MAX_FS_LIST_LIMIT)
 }
 
 fn workspace_entry_json(entry: &WorkspaceEntry) -> Value {

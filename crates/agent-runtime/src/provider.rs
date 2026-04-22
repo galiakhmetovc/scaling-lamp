@@ -1054,28 +1054,37 @@ impl ProviderDriver for OpenAiResponsesDriver {
 }
 
 impl ZaiChatCompletionsResponseStream {
-    fn finalize_response(&mut self) -> Option<ProviderResponse> {
+    fn finalize_response(&mut self) -> Result<Option<ProviderResponse>, ProviderError> {
         if self.done {
-            return None;
+            return Ok(None);
         }
         self.done = true;
 
-        Some(ProviderResponse {
-            response_id: self.response_id.clone()?,
-            model: self.model.clone()?,
+        let Some(response_id) = self.response_id.clone() else {
+            return Ok(None);
+        };
+        let Some(model) = self.model.clone() else {
+            return Ok(None);
+        };
+        let tool_calls = self
+            .tool_calls
+            .iter()
+            .map(|tool_call| ProviderToolCall {
+                call_id: tool_call.id.clone(),
+                name: tool_call.name.clone(),
+                arguments: tool_call.arguments.clone(),
+            })
+            .collect::<Vec<_>>();
+        ensure_response_has_primary_output(self.output_text.as_str(), &tool_calls)?;
+
+        Ok(Some(ProviderResponse {
+            response_id,
+            model,
             output_text: self.output_text.clone(),
-            tool_calls: self
-                .tool_calls
-                .iter()
-                .map(|tool_call| ProviderToolCall {
-                    call_id: tool_call.id.clone(),
-                    name: tool_call.name.clone(),
-                    arguments: tool_call.arguments.clone(),
-                })
-                .collect(),
+            tool_calls,
             finish_reason: self.finish_reason.clone(),
             usage: self.usage.clone(),
-        })
+        }))
     }
 
     fn parse_next_sse_payload(&mut self) -> Result<Option<String>, ProviderError> {
@@ -1119,7 +1128,9 @@ impl ZaiChatCompletionsResponseStream {
         }
 
         for choice in chunk.choices {
-            if let Some(content) = choice.delta.content {
+            if let Some(content) = choice.delta.content
+                && !content.is_empty()
+            {
                 self.output_text.push_str(&content);
                 self.pending_events
                     .push_back(ProviderStreamEvent::TextDelta(content));
@@ -1154,7 +1165,7 @@ impl ZaiChatCompletionsResponseStream {
                     "stop" => FinishReason::Completed,
                     _ => FinishReason::Incomplete,
                 };
-                if let Some(response) = self.finalize_response() {
+                if let Some(response) = self.finalize_response()? {
                     self.pending_events
                         .push_back(ProviderStreamEvent::Completed(response));
                 }
@@ -1257,14 +1268,14 @@ impl ProviderResponseStream for ZaiChatCompletionsResponseStream {
             }
 
             let Some(payload) = self.parse_next_sse_payload()? else {
-                if let Some(response) = self.finalize_response() {
+                if let Some(response) = self.finalize_response()? {
                     return Ok(Some(ProviderStreamEvent::Completed(response)));
                 }
                 return Ok(None);
             };
 
             if payload == "[DONE]" {
-                if let Some(response) = self.finalize_response() {
+                if let Some(response) = self.finalize_response()? {
                     return Ok(Some(ProviderStreamEvent::Completed(response)));
                 }
                 return Ok(None);
@@ -1325,9 +1336,7 @@ impl ProviderDriver for ZaiChatCompletionsDriver {
             })
             .collect::<Result<Vec<_>, ProviderError>>()?;
 
-        if output_text.is_empty() && tool_calls.is_empty() {
-            return Err(ProviderError::ResponseMissingOutputText);
-        }
+        ensure_response_has_primary_output(output_text.as_str(), &tool_calls)?;
 
         let finish_reason = if response
             .choices
@@ -1542,9 +1551,7 @@ fn openai_provider_response_from_response(
         })
         .collect::<Result<Vec<_>, ProviderError>>()?;
 
-    if output_text.is_empty() && tool_calls.is_empty() {
-        return Err(ProviderError::ResponseMissingOutputText);
-    }
+    ensure_response_has_primary_output(output_text.as_str(), &tool_calls)?;
 
     let finish_reason = if response
         .output
@@ -1569,4 +1576,14 @@ fn openai_provider_response_from_response(
             total_tokens: usage.total_tokens,
         }),
     })
+}
+
+fn ensure_response_has_primary_output(
+    output_text: &str,
+    tool_calls: &[ProviderToolCall],
+) -> Result<(), ProviderError> {
+    if output_text.is_empty() && tool_calls.is_empty() {
+        return Err(ProviderError::ResponseMissingOutputText);
+    }
+    Ok(())
 }

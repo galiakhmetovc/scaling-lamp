@@ -15,8 +15,8 @@ use agent_runtime::provider::{
     ProviderToolOutput,
 };
 use agent_runtime::run::{
-    ApprovalRequest, PendingLoopResetApproval, PendingProviderApproval,
-    PendingProviderRetryApproval, PendingToolApproval, ProviderLoopState, RunStepKind,
+    ApprovalRequest, PendingLoopResetApproval, PendingProviderApproval, PendingToolApproval,
+    ProviderLoopState, RunStepKind,
 };
 use agent_runtime::session::{MessageRole, TranscriptEntry};
 use agent_runtime::skills::{resolve_session_skill_status, scan_skill_catalog_with_overrides};
@@ -27,11 +27,14 @@ use agent_runtime::tool::{
     ToolName, ToolOutput, ToolRuntime,
 };
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::thread;
+use std::time::Duration;
 
 const MAX_CONTEXT_OFFLOAD_REFS: usize = 16;
 const INLINE_TOOL_OUTPUT_TOKEN_LIMIT: u32 = 512;
 const INLINE_FIND_IN_FILES_PREVIEW_LIMIT: usize = 6;
 const MAX_CONSECUTIVE_IDENTICAL_TOOL_SIGNATURES: usize = 3;
+const MAX_TRANSIENT_PROVIDER_RETRIES: usize = 3;
 
 type OffloadableToolOutput = (String, String, Vec<u8>, String);
 
@@ -306,16 +309,6 @@ impl ProviderLoopCursor {
         )))
     }
 
-    fn provider_retry_approval_state(
-        &self,
-        approval_id: &str,
-        error: &ProviderError,
-    ) -> ProviderLoopState {
-        self.persistent_state(Some(PendingProviderApproval::ProviderRetry(
-            PendingProviderRetryApproval::new(approval_id.to_string(), error.approval_summary()),
-        )))
-    }
-
     fn queue_continuation_input_messages(&mut self, messages: Vec<ProviderMessage>) {
         self.continuation_input_messages.clear();
         self.continuation_input_messages.extend(messages);
@@ -348,6 +341,47 @@ impl ProviderLoopCursor {
 }
 
 impl ExecutionService {
+    fn is_stale_context_offload_payload_error(error: &agent_persistence::StoreError) -> bool {
+        matches!(
+            error,
+            agent_persistence::StoreError::MissingPayload { .. }
+                | agent_persistence::StoreError::IntegrityMismatch { .. }
+        )
+    }
+
+    fn load_context_offload_payload_for_refresh(
+        &self,
+        store: &PersistenceStore,
+        artifact_id: &str,
+    ) -> Result<Option<ContextOffloadPayload>, ExecutionError> {
+        match store.get_context_offload_payload(artifact_id) {
+            Ok(payload) => Ok(payload),
+            Err(source) if Self::is_stale_context_offload_payload_error(&source) => Ok(None),
+            Err(source) => Err(ExecutionError::Store(source)),
+        }
+    }
+
+    fn load_context_offload_payload_for_tool(
+        &self,
+        store: &PersistenceStore,
+        artifact_id: &str,
+    ) -> Result<ContextOffloadPayload, ExecutionError> {
+        match store.get_context_offload_payload(artifact_id) {
+            Ok(Some(payload)) => Ok(payload),
+            Ok(None)
+            | Err(agent_persistence::StoreError::MissingPayload { .. })
+            | Err(agent_persistence::StoreError::IntegrityMismatch { .. }) => {
+                Err(ExecutionError::Tool(ToolError::InvalidArtifactTool {
+                    reason: format!(
+                        "artifact {} is missing from context offload storage",
+                        artifact_id
+                    ),
+                }))
+            }
+            Err(source) => Err(ExecutionError::Store(source)),
+        }
+    }
+
     fn provider_tool_output(
         tool_name: &str,
         reason: &str,
@@ -929,39 +963,52 @@ impl ExecutionService {
         }
     }
 
-    fn pause_for_transient_provider_retry(
+    fn transient_provider_retry_delay(attempt: usize) -> Duration {
+        Duration::from_millis((attempt as u64) * 100)
+    }
+
+    fn note_transient_provider_retry(
         &self,
-        run: &mut RunEngine,
-        cursor: &ProviderLoopCursor,
-        error: &ProviderError,
-        now: i64,
         store: &PersistenceStore,
-    ) -> Result<ExecutionError, ExecutionError> {
-        let approval_id = format!(
-            "approval-{}-provider-retry-{}",
-            run.snapshot().id,
-            run.snapshot().recent_steps.len()
+        run: &mut RunEngine,
+        error: &ProviderError,
+        attempt: usize,
+        at: i64,
+    ) -> Result<(), ExecutionError> {
+        let detail = format!(
+            "provider retryable error: {}; retrying request ({}/{})",
+            error.approval_summary(),
+            attempt,
+            MAX_TRANSIENT_PROVIDER_RETRIES
         );
-        let reason = format!(
-            "{}; approve to retry the provider request",
-            error.approval_summary()
-        );
-        run.wait_for_approval(
-            ApprovalRequest::new(approval_id.clone(), "provider-retry", &reason, now),
-            now,
-        )
-        .map_err(ExecutionError::RunTransition)?;
-        run.set_provider_loop_state(
-            cursor.provider_retry_approval_state(&approval_id, error),
-            now,
-        )
-        .map_err(ExecutionError::RunTransition)?;
-        self.persist_run(store, run)?;
-        Ok(ExecutionError::ApprovalRequired {
-            tool: "provider_retry".to_string(),
-            approval_id,
-            reason,
-        })
+        run.record_system_note(detail, at)
+            .map_err(ExecutionError::RunTransition)?;
+        self.persist_run(store, run)
+    }
+
+    fn request_provider_response_with_retries(
+        &self,
+        store: &PersistenceStore,
+        run: &mut RunEngine,
+        provider: &dyn ProviderDriver,
+        request: &ProviderRequest,
+        now: i64,
+        observer: &mut Option<&mut dyn FnMut(ChatExecutionEvent)>,
+    ) -> Result<ObservedProviderResponse, ExecutionError> {
+        let mut attempt = 0usize;
+        loop {
+            match self.request_provider_response(provider, request, observer) {
+                Ok(observed) => return Ok(observed),
+                Err(ExecutionError::Provider(error))
+                    if error.is_transient() && attempt < MAX_TRANSIENT_PROVIDER_RETRIES =>
+                {
+                    attempt += 1;
+                    self.note_transient_provider_retry(store, run, &error, attempt, now)?;
+                    thread::sleep(Self::transient_provider_retry_delay(attempt));
+                }
+                Err(error) => return Err(error),
+            }
+        }
     }
 
     fn resolve_provider_tool_call<'a>(
@@ -1611,30 +1658,26 @@ impl ExecutionService {
         snapshot.refs.truncate(MAX_CONTEXT_OFFLOAD_REFS);
         snapshot.updated_at = now;
 
-        let payloads = snapshot
-            .refs
-            .iter()
-            .map(|reference| {
-                if reference.artifact_id == artifact_id {
-                    Ok(ContextOffloadPayload {
-                        artifact_id: artifact_id.clone(),
-                        bytes: payload_bytes.clone(),
-                    })
-                } else {
-                    Ok(store
-                        .get_context_offload_payload(reference.artifact_id.as_str())
-                        .map_err(ExecutionError::Store)?
-                        .ok_or_else(|| {
-                            ExecutionError::Tool(ToolError::InvalidArtifactTool {
-                                reason: format!(
-                                    "artifact {} is missing from context offload storage",
-                                    reference.artifact_id
-                                ),
-                            })
-                        })?)
-                }
-            })
-            .collect::<Result<Vec<_>, _>>()?;
+        let mut retained_refs = Vec::with_capacity(snapshot.refs.len());
+        let mut payloads = Vec::with_capacity(snapshot.refs.len());
+        for reference in &snapshot.refs {
+            if reference.artifact_id == artifact_id {
+                retained_refs.push(reference.clone());
+                payloads.push(ContextOffloadPayload {
+                    artifact_id: artifact_id.clone(),
+                    bytes: payload_bytes.clone(),
+                });
+                continue;
+            }
+
+            if let Some(payload) = self
+                .load_context_offload_payload_for_refresh(store, reference.artifact_id.as_str())?
+            {
+                retained_refs.push(reference.clone());
+                payloads.push(payload);
+            }
+        }
+        snapshot.refs = retained_refs;
 
         store
             .put_context_offload(
@@ -1780,17 +1823,7 @@ impl ExecutionService {
                     ),
                 })
             })?;
-        let payload = store
-            .get_context_offload_payload(artifact_id)
-            .map_err(ExecutionError::Store)?
-            .ok_or_else(|| {
-                ExecutionError::Tool(ToolError::InvalidArtifactTool {
-                    reason: format!(
-                        "artifact {} is missing from context offload storage",
-                        artifact_id
-                    ),
-                })
-            })?;
+        let payload = self.load_context_offload_payload_for_tool(store, artifact_id)?;
 
         Ok(ArtifactReadOutput {
             ref_id: reference.id,
@@ -1820,17 +1853,8 @@ impl ExecutionService {
         let effective_limit = limit.max(1);
 
         for reference in snapshot.refs {
-            let payload = store
-                .get_context_offload_payload(reference.artifact_id.as_str())
-                .map_err(ExecutionError::Store)?
-                .ok_or_else(|| {
-                    ExecutionError::Tool(ToolError::InvalidArtifactTool {
-                        reason: format!(
-                            "artifact {} is missing from context offload storage",
-                            reference.artifact_id
-                        ),
-                    })
-                })?;
+            let payload =
+                self.load_context_offload_payload_for_tool(store, reference.artifact_id.as_str())?;
             let content = String::from_utf8_lossy(&payload.bytes).to_string();
             let haystack = format!(
                 "{}\n{}\n{}\n{}",
@@ -1961,18 +1985,9 @@ impl ExecutionService {
                 cursor.stream_mode(observer.is_some()),
                 self.config.provider_max_output_tokens,
             );
-            let observed = match self.request_provider_response(provider, &request, observer) {
-                Ok(observed) => observed,
-                Err(ExecutionError::Provider(error)) if error.is_transient() => {
-                    if auto_approve {
-                        return Err(ExecutionError::Provider(error));
-                    }
-                    return Err(
-                        self.pause_for_transient_provider_retry(run, &cursor, &error, now, store)?
-                    );
-                }
-                Err(error) => return Err(error),
-            };
+            let observed = self.request_provider_response_with_retries(
+                store, run, provider, &request, now, observer,
+            )?;
             cursor.clear_continuation_input_messages();
             self.apply_provider_response(run, &observed, now)?;
             self.persist_run(store, run)?;

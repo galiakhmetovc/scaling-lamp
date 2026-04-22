@@ -12,6 +12,8 @@ use time::OffsetDateTime;
 use time::UtcOffset;
 use time::format_description::well_known::Rfc3339;
 
+const ACTIVE_RUN_STEP_TAIL_LIMIT: usize = 3;
+
 impl App {
     #[cfg_attr(not(test), allow(dead_code))]
     pub fn session_transcript(
@@ -286,8 +288,15 @@ impl App {
                 usage.input_tokens, usage.output_tokens, usage.total_tokens
             ));
         }
-        if let Some(step) = run.recent_steps.last() {
+        let step_tail = active_run_step_tail(&run);
+        if let Some(step) = step_tail.last() {
             lines.push(format!("- последний шаг: {}", step.detail));
+            if step_tail.len() > 1 {
+                lines.push("- предыдущие шаги:".to_string());
+                for prior_step in step_tail[..step_tail.len() - 1].iter().rev() {
+                    lines.push(format!("  - {}", prior_step.detail));
+                }
+            }
         }
         if !run.active_processes.is_empty() {
             lines.push("- активные процессы:".to_string());
@@ -501,7 +510,8 @@ fn build_synthetic_run_lines(session_id: &str, runs: &[RunSnapshot]) -> Vec<Sess
                         approval_id: None,
                     });
                 }
-                RunStepKind::WaitingApproval
+                RunStepKind::SystemNote
+                | RunStepKind::WaitingApproval
                 | RunStepKind::ApprovalResolved
                 | RunStepKind::WaitingProcess
                 | RunStepKind::ProcessCompleted
@@ -566,6 +576,52 @@ fn build_synthetic_run_lines(session_id: &str, runs: &[RunSnapshot]) -> Vec<Sess
         }
     }
     lines
+}
+
+fn active_run_step_tail(run: &RunSnapshot) -> Vec<&agent_runtime::run::RunStep> {
+    let relevant_steps = run
+        .recent_steps
+        .iter()
+        .filter(|step| active_run_step_is_relevant(step.kind))
+        .collect::<Vec<_>>();
+    if relevant_steps.is_empty() {
+        run.recent_steps
+            .iter()
+            .rev()
+            .take(ACTIVE_RUN_STEP_TAIL_LIMIT)
+            .collect::<Vec<_>>()
+            .into_iter()
+            .rev()
+            .collect()
+    } else {
+        relevant_steps
+            .into_iter()
+            .rev()
+            .take(ACTIVE_RUN_STEP_TAIL_LIMIT)
+            .collect::<Vec<_>>()
+            .into_iter()
+            .rev()
+            .collect()
+    }
+}
+
+fn active_run_step_is_relevant(kind: RunStepKind) -> bool {
+    matches!(
+        kind,
+        RunStepKind::ToolCompleted
+            | RunStepKind::SystemNote
+            | RunStepKind::WaitingApproval
+            | RunStepKind::ApprovalResolved
+            | RunStepKind::WaitingProcess
+            | RunStepKind::ProcessCompleted
+            | RunStepKind::WaitingDelegate
+            | RunStepKind::DelegateCompleted
+            | RunStepKind::Resumed
+            | RunStepKind::EvidenceRecorded
+            | RunStepKind::Failed
+            | RunStepKind::Cancelled
+            | RunStepKind::Interrupted
+    )
 }
 
 fn transcript_line_sort_weight(line: &SessionTranscriptLine) -> u8 {

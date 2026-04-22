@@ -138,6 +138,8 @@ fn filesystem_tools_read_write_list_and_search_within_workspace() {
         .invoke(ToolCall::FsList(FsListInput {
             path: "docs".to_string(),
             recursive: true,
+            limit: None,
+            offset: None,
         }))
         .expect("fs_list")
         .into_fs_list()
@@ -217,6 +219,8 @@ fn filesystem_tools_glob_and_patch_files_with_exact_edits() {
         .invoke(ToolCall::FsGlob(FsGlobInput {
             path: "src".to_string(),
             pattern: "**/*.rs".to_string(),
+            limit: None,
+            offset: None,
         }))
         .expect("fs_glob")
         .into_fs_glob()
@@ -344,6 +348,8 @@ fn filesystem_tools_support_write_modes_and_directory_lifecycle() {
         .invoke(ToolCall::FsList(FsListInput {
             path: "".to_string(),
             recursive: true,
+            limit: None,
+            offset: None,
         }))
         .expect("fs_list")
         .into_fs_list()
@@ -354,6 +360,118 @@ fn filesystem_tools_support_write_modes_and_directory_lifecycle() {
             .entries
             .iter()
             .any(|entry| entry.path.starts_with(".trash/"))
+    );
+}
+
+#[test]
+fn filesystem_tools_list_results_are_bounded_and_paginated() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let workspace = WorkspaceRef::new(temp.path());
+    let mut runtime = ToolRuntime::new(workspace);
+
+    for index in 0..250 {
+        runtime
+            .invoke(ToolCall::FsWriteText(FsWriteTextInput {
+                path: format!("big/file-{index:03}.txt"),
+                content: format!("payload-{index}\n"),
+                mode: FsWriteMode::Upsert,
+            }))
+            .expect("seed file");
+    }
+
+    let first_page = runtime
+        .invoke(ToolCall::FsList(FsListInput {
+            path: "big".to_string(),
+            recursive: true,
+            limit: None,
+            offset: None,
+        }))
+        .expect("fs_list first page")
+        .into_fs_list()
+        .expect("fs_list first page output");
+
+    assert_eq!(first_page.entries.len(), super::DEFAULT_FS_LIST_LIMIT);
+    assert!(first_page.truncated);
+    assert_eq!(first_page.offset, 0);
+    assert_eq!(first_page.limit, super::DEFAULT_FS_LIST_LIMIT);
+    assert_eq!(first_page.total_entries, 250);
+    assert_eq!(first_page.next_offset, Some(super::DEFAULT_FS_LIST_LIMIT));
+
+    let second_page = runtime
+        .invoke(ToolCall::FsList(FsListInput {
+            path: "big".to_string(),
+            recursive: true,
+            limit: Some(25),
+            offset: first_page.next_offset,
+        }))
+        .expect("fs_list second page")
+        .into_fs_list()
+        .expect("fs_list second page output");
+
+    assert_eq!(second_page.entries.len(), 25);
+    assert!(second_page.truncated);
+    assert_eq!(second_page.offset, super::DEFAULT_FS_LIST_LIMIT);
+    assert_eq!(second_page.limit, 25);
+    assert_eq!(second_page.total_entries, 250);
+    assert_eq!(
+        second_page.next_offset,
+        Some(super::DEFAULT_FS_LIST_LIMIT + 25)
+    );
+}
+
+#[test]
+fn filesystem_tools_glob_results_are_bounded_and_paginated() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let workspace = WorkspaceRef::new(temp.path());
+    let mut runtime = ToolRuntime::new(workspace);
+
+    for index in 0..230 {
+        runtime
+            .invoke(ToolCall::FsWriteText(FsWriteTextInput {
+                path: format!("globbed/file-{index:03}.txt"),
+                content: format!("payload-{index}\n"),
+                mode: FsWriteMode::Upsert,
+            }))
+            .expect("seed file");
+    }
+
+    let first_page = runtime
+        .invoke(ToolCall::FsGlob(FsGlobInput {
+            path: "globbed".to_string(),
+            pattern: "**/*.txt".to_string(),
+            limit: None,
+            offset: None,
+        }))
+        .expect("fs_glob first page")
+        .into_fs_glob()
+        .expect("fs_glob first page output");
+
+    assert_eq!(first_page.entries.len(), super::DEFAULT_FS_LIST_LIMIT);
+    assert!(first_page.truncated);
+    assert_eq!(first_page.offset, 0);
+    assert_eq!(first_page.limit, super::DEFAULT_FS_LIST_LIMIT);
+    assert_eq!(first_page.total_entries, 230);
+    assert_eq!(first_page.next_offset, Some(super::DEFAULT_FS_LIST_LIMIT));
+
+    let second_page = runtime
+        .invoke(ToolCall::FsGlob(FsGlobInput {
+            path: "globbed".to_string(),
+            pattern: "**/*.txt".to_string(),
+            limit: Some(15),
+            offset: first_page.next_offset,
+        }))
+        .expect("fs_glob second page")
+        .into_fs_glob()
+        .expect("fs_glob second page output");
+
+    assert_eq!(second_page.entries.len(), 15);
+    assert!(second_page.truncated);
+    assert_eq!(second_page.offset, super::DEFAULT_FS_LIST_LIMIT);
+    assert_eq!(second_page.limit, 15);
+    assert_eq!(second_page.total_entries, 230);
+    assert_eq!(
+        second_page.next_offset,
+        Some(super::DEFAULT_FS_LIST_LIMIT + 15)
     );
 }
 

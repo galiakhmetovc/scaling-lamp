@@ -38,6 +38,7 @@ Tool usage rules:
   - Use `fs_read_text` for a whole UTF-8 text file
   - Use `fs_read_lines` when you only need a line range
   - Use `fs_list` or `fs_glob` before reading when the path is uncertain
+  - For broad or recursive directory listings, prefer bounded `fs_list` or `fs_glob` calls and continue with `offset` only if the result is marked `truncated`
   - Do not call `fs_read_text` on directories
 - Filesystem writes:
   - Re-read the file before `fs_patch_text` or `fs_replace_lines`

@@ -382,6 +382,45 @@ data: [DONE]\n\n",
 }
 
 #[test]
+fn zai_stream_rejects_terminal_response_without_text_or_tool_calls() {
+    let (api_base, requests, handle) = spawn_sse_server(
+        "data: {\"id\":\"chatcmpl-empty-1\",\"model\":\"glm-5-turbo\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"\"},\"finish_reason\":\"stop\"}]}\n\n\
+data: [DONE]\n\n",
+    );
+    let driver = build_driver(&ConfiguredProvider {
+        kind: ProviderKind::ZaiChatCompletions,
+        api_base: Some(api_base),
+        api_key: Some("zai-key".to_string()),
+        default_model: Some("glm-5-turbo".to_string()),
+        ..ConfiguredProvider::default()
+    })
+    .expect("build zai driver");
+    let request = ProviderRequest {
+        model: None,
+        instructions: Some("Be brief".to_string()),
+        messages: vec![ProviderMessage::new(MessageRole::User, "Say hi")],
+        previous_response_id: None,
+        continuation_messages: Vec::new(),
+        tools: Vec::new(),
+        tool_outputs: Vec::new(),
+        max_output_tokens: Some(64),
+        stream: ProviderStreamMode::Enabled,
+    };
+
+    let mut stream = driver.stream(&request).expect("stream");
+    let error = stream
+        .next_event()
+        .expect_err("empty terminal response must fail");
+    let raw_request = requests.recv().expect("raw request");
+    handle.join().expect("join server");
+
+    assert!(matches!(error, ProviderError::ResponseMissingOutputText));
+    let normalized_request = raw_request.to_ascii_lowercase();
+    assert!(normalized_request.contains("/chat/completions"));
+    assert!(normalized_request.contains("\"stream\":true"));
+}
+
+#[test]
 fn complete_posts_responses_payload_and_extracts_output_text() {
     let (api_base, requests, handle) = spawn_json_server(
         r#"{

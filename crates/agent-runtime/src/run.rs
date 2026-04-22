@@ -142,6 +142,7 @@ pub enum RunStepKind {
     ProviderReasoningDelta,
     ProviderTextDelta,
     ProviderStreamFinished,
+    SystemNote,
     ToolCompleted,
     EvidenceRecorded,
     WaitingApproval,
@@ -563,6 +564,17 @@ impl RunEngine {
         self.require_not_terminal("record_tool_completion")?;
         self.touch(at);
         self.push_step(RunStepKind::ToolCompleted, detail.into(), at);
+        Ok(())
+    }
+
+    pub fn record_system_note(
+        &mut self,
+        detail: impl Into<String>,
+        at: i64,
+    ) -> Result<(), RunTransitionError> {
+        self.require_not_terminal("record_system_note")?;
+        self.touch(at);
+        self.push_step(RunStepKind::SystemNote, detail.into(), at);
         Ok(())
     }
 

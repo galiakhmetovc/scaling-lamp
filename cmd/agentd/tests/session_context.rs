@@ -179,6 +179,18 @@ fn render_active_run_shows_usage_and_active_processes() {
         11,
     )
     .expect("track active process");
+    run.record_tool_completion("plan_snapshot -> plan_snapshot items=11", 12)
+        .expect("record plan snapshot");
+    run.record_system_note(
+        "provider retryable error: upstream reset; retrying request (1/3)",
+        13,
+    )
+    .expect("record system note");
+    run.record_tool_completion(
+        "fs_list path=projects/adqm/infra/ansible recursive=true -> fs_list entries=46959",
+        14,
+    )
+    .expect("record fs_list");
     run.set_latest_provider_usage(
         Some(agent_runtime::provider::ProviderUsage {
             input_tokens: 400,
@@ -200,6 +212,12 @@ fn render_active_run_shows_usage_and_active_processes() {
     assert!(rendered.contains("run-live"));
     assert!(rendered.contains("статус: running"));
     assert!(rendered.contains("usage: input=400 output=40 total=440"));
+    assert!(rendered.contains(
+        "последний шаг: fs_list path=projects/adqm/infra/ansible recursive=true -> fs_list entries=46959"
+    ));
+    assert!(rendered.contains("предыдущие шаги:"));
+    assert!(rendered.contains("provider retryable error: upstream reset; retrying request (1/3)"));
+    assert!(rendered.contains("plan_snapshot -> plan_snapshot items=11"));
     assert!(rendered.contains("exec-9 (exec) pid:4242"));
     assert!(rendered.contains("команда: curl -fL https://example.test/govc.tar.gz"));
     assert!(rendered.contains("cwd: /workspace"));

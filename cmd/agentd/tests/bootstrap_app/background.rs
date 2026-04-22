@@ -1116,9 +1116,13 @@ fn background_worker_scheduled_fresh_session_launch_auto_approves_exec_tools() {
     assert_eq!(runs[0].status, "completed");
     assert!(runs[0].pending_approvals_json.contains("[]"));
 
-    let updated = app
-        .agent_schedule("fresh-autoapprove")
-        .expect("load schedule");
+    let updated = store
+        .get_agent_schedule("fresh-autoapprove")
+        .expect("get schedule")
+        .map(AgentSchedule::try_from)
+        .transpose()
+        .expect("parse schedule")
+        .expect("schedule exists");
     assert_eq!(updated.last_result.as_deref(), Some("completed"));
     assert_eq!(updated.last_error, None);
 
@@ -1269,19 +1273,37 @@ fn background_worker_scheduled_existing_session_launch_auto_approves_exec_tools(
         entry.role == "assistant" && entry.content == "existing scheduled exec complete"
     }));
 
-    let updated = app
-        .agent_schedule("existing-autoapprove")
-        .expect("load schedule");
+    let updated = store
+        .get_agent_schedule("existing-autoapprove")
+        .expect("get schedule")
+        .map(AgentSchedule::try_from)
+        .transpose()
+        .expect("parse schedule")
+        .expect("schedule exists");
     assert_eq!(updated.last_result.as_deref(), Some("completed"));
 }
 
 #[test]
 fn background_worker_scheduled_provider_retry_becomes_terminal_failure_instead_of_waiting_approval()
 {
-    let (api_base, requests, handle) = spawn_json_server_status_sequence(vec![(
-        503,
-        r#"{"error":{"message":"temporary upstream issue"}}"#.to_string(),
-    )]);
+    let (api_base, requests, handle) = spawn_json_server_status_sequence(vec![
+        (
+            503,
+            r#"{"error":{"message":"temporary upstream issue"}}"#.to_string(),
+        ),
+        (
+            503,
+            r#"{"error":{"message":"temporary upstream issue"}}"#.to_string(),
+        ),
+        (
+            503,
+            r#"{"error":{"message":"temporary upstream issue"}}"#.to_string(),
+        ),
+        (
+            503,
+            r#"{"error":{"message":"temporary upstream issue"}}"#.to_string(),
+        ),
+    ]);
     let temp = tempfile::tempdir().expect("tempdir");
     let app = build_from_config(AppConfig {
         data_dir: temp.path().join("state-root"),
@@ -1325,9 +1347,13 @@ fn background_worker_scheduled_provider_retry_becomes_terminal_failure_instead_o
     let report = app
         .background_worker_tick(10)
         .expect("run background worker");
-    let request = requests
-        .recv_timeout(Duration::from_secs(2))
-        .expect("provider request");
+    let requests = (0..4)
+        .map(|_| {
+            requests
+                .recv_timeout(Duration::from_secs(2))
+                .expect("provider request")
+        })
+        .collect::<Vec<_>>();
     handle.join().expect("join server");
 
     assert_eq!(report.executed_jobs, 1);
@@ -1340,7 +1366,13 @@ fn background_worker_scheduled_provider_retry_becomes_terminal_failure_instead_o
     assert_eq!(runs[0].status, "failed");
     assert!(runs[0].pending_approvals_json.contains("[]"));
 
-    let updated = app.agent_schedule("retry-terminal").expect("load schedule");
+    let updated = store
+        .get_agent_schedule("retry-terminal")
+        .expect("get schedule")
+        .map(AgentSchedule::try_from)
+        .transpose()
+        .expect("parse schedule")
+        .expect("schedule exists");
     assert_eq!(updated.last_result.as_deref(), Some("failed"));
     assert!(
         updated
@@ -1350,6 +1382,9 @@ fn background_worker_scheduled_provider_retry_becomes_terminal_failure_instead_o
             .contains("503")
     );
 
-    let normalized_request = request.to_ascii_lowercase();
-    assert!(normalized_request.contains("trigger provider retry"));
+    assert!(requests.iter().all(|request| {
+        request
+            .to_ascii_lowercase()
+            .contains("trigger provider retry")
+    }));
 }
