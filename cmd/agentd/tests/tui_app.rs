@@ -7,7 +7,7 @@ use agent_runtime::plan::{PlanItem, PlanItemStatus, PlanSnapshot};
 use agent_runtime::provider::{ConfiguredProvider, ProviderKind};
 use agent_runtime::run::{ApprovalRequest, RunEngine, RunSnapshot, RunStatus};
 use agentd::bootstrap::{SessionPreferencesPatch, SessionSummary, build_from_config};
-use agentd::tui::app::{DialogState, TuiAppState, TuiScreen};
+use agentd::tui::app::{BrowserItem, DialogState, TuiAppState, TuiScreen};
 use agentd::tui::events::TuiAction;
 use agentd::tui::timeline::{Timeline, TimelineEntryKind};
 use agentd::tui::{dispatch_action, pump_background};
@@ -161,6 +161,52 @@ fn tui_shell_navigation_can_enter_and_exit_agent_and_schedule_screens() {
 }
 
 #[test]
+fn tui_shell_navigation_can_enter_and_navigate_browser_screens() {
+    let mut app = TuiAppState::new(
+        vec![summary("session-a", "Session A")],
+        Some("session-a".to_string()),
+    );
+    app.open_agent_browser(
+        "Агенты".to_string(),
+        "↑↓ выбор | Enter выбрать".to_string(),
+        vec![
+            BrowserItem {
+                id: "default".to_string(),
+                label: "Default (default)".to_string(),
+            },
+            BrowserItem {
+                id: "judge".to_string(),
+                label: "Judge (judge)".to_string(),
+            },
+        ],
+        0,
+        "Агент default".to_string(),
+        "id=default".to_string(),
+    );
+
+    assert_eq!(app.active_screen(), TuiScreen::Agents);
+    assert_eq!(
+        app.browser_selected_item().map(|item| item.id.as_str()),
+        Some("default")
+    );
+
+    app.browser_select_next();
+    assert_eq!(
+        app.browser_selected_item().map(|item| item.id.as_str()),
+        Some("judge")
+    );
+
+    app.set_browser_preview("Агент judge".to_string(), "id=judge".to_string());
+    assert_eq!(
+        app.browser_state().map(|browser| browser.preview_content()),
+        Some("id=judge")
+    );
+
+    app.handle_escape();
+    assert_eq!(app.active_screen(), TuiScreen::Chat);
+}
+
+#[test]
 fn tui_render_agent_and_schedule_screens_show_inspector_content() {
     let mut state = TuiAppState::new(
         vec![summary("session-a", "Session A")],
@@ -228,6 +274,50 @@ fn tui_render_agent_and_schedule_screens_show_inspector_content() {
     assert!(rendered.contains("Артефакт artifact-1"));
     assert!(rendered.contains("artifact_id=artifact-1"));
     assert!(rendered.contains("Esc назад"));
+}
+
+#[test]
+fn tui_render_browser_screens_show_list_preview_and_hints() {
+    let mut state = TuiAppState::new(
+        vec![summary("session-a", "Session A")],
+        Some("session-a".to_string()),
+    );
+    state.open_agent_browser(
+        "Агенты".to_string(),
+        "↑↓ выбор | Enter выбрать".to_string(),
+        vec![
+            BrowserItem {
+                id: "default".to_string(),
+                label: "Default (default)".to_string(),
+            },
+            BrowserItem {
+                id: "judge".to_string(),
+                label: "Judge (judge)".to_string(),
+            },
+        ],
+        1,
+        "Агент judge".to_string(),
+        "id=judge\nname=Judge".to_string(),
+    );
+
+    let backend = TestBackend::new(120, 24);
+    let mut terminal = Terminal::new(backend).expect("terminal");
+    terminal
+        .draw(|frame| agentd::tui::render::render(frame, &state))
+        .expect("draw browser");
+
+    let buffer = terminal.backend().buffer();
+    let mut rendered = String::new();
+    for y in 0..buffer.area.height {
+        for x in 0..buffer.area.width {
+            rendered.push_str(buffer[(x, y)].symbol());
+        }
+        rendered.push('\n');
+    }
+    assert!(rendered.contains("Агенты"));
+    assert!(rendered.contains("Judge (judge)"));
+    assert!(rendered.contains("Агент judge"));
+    assert!(rendered.contains("id=judge"));
 }
 
 #[test]

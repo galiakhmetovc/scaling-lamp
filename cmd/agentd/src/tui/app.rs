@@ -97,6 +97,30 @@ pub enum TuiScreen {
     Artifacts,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BrowserKind {
+    Agents,
+    Schedules,
+    Artifacts,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BrowserItem {
+    pub id: String,
+    pub label: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BrowserState {
+    kind: BrowserKind,
+    title: String,
+    action_hint: String,
+    items: Vec<BrowserItem>,
+    selected_index: usize,
+    preview_title: String,
+    preview_content: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DialogState {
     CreateSession { value: String },
@@ -125,6 +149,7 @@ pub struct TuiAppState {
     provider_loop_progress: Option<(usize, usize)>,
     inspector_title: Option<String>,
     inspector_content: Option<String>,
+    browser: Option<BrowserState>,
     should_exit: bool,
 }
 
@@ -164,6 +189,7 @@ impl TuiAppState {
             provider_loop_progress: None,
             inspector_title: None,
             inspector_content: None,
+            browser: None,
             should_exit: false,
         }
     }
@@ -236,6 +262,7 @@ impl TuiAppState {
         self.provider_loop_progress = None;
         self.inspector_title = None;
         self.inspector_content = None;
+        self.browser = None;
     }
 
     pub fn replace_current_summary(&mut self, summary: SessionSummary) {
@@ -340,6 +367,7 @@ impl TuiAppState {
         self.previous_screen = None;
         self.inspector_title = None;
         self.inspector_content = None;
+        self.browser = None;
     }
 
     pub fn open_agent_screen(&mut self, title: String, content: String) {
@@ -354,12 +382,126 @@ impl TuiAppState {
         self.open_inspector_screen(TuiScreen::Artifacts, title, content);
     }
 
+    pub fn open_agent_browser(
+        &mut self,
+        title: String,
+        action_hint: String,
+        items: Vec<BrowserItem>,
+        selected_index: usize,
+        preview_title: String,
+        preview_content: String,
+    ) {
+        self.open_browser_screen(
+            TuiScreen::Agents,
+            BrowserState {
+                kind: BrowserKind::Agents,
+                title,
+                action_hint,
+                items,
+                selected_index,
+                preview_title,
+                preview_content,
+            },
+        );
+    }
+
+    pub fn open_schedule_browser(
+        &mut self,
+        title: String,
+        action_hint: String,
+        items: Vec<BrowserItem>,
+        selected_index: usize,
+        preview_title: String,
+        preview_content: String,
+    ) {
+        self.open_browser_screen(
+            TuiScreen::Schedules,
+            BrowserState {
+                kind: BrowserKind::Schedules,
+                title,
+                action_hint,
+                items,
+                selected_index,
+                preview_title,
+                preview_content,
+            },
+        );
+    }
+
+    pub fn open_artifact_browser(
+        &mut self,
+        title: String,
+        action_hint: String,
+        items: Vec<BrowserItem>,
+        selected_index: usize,
+        preview_title: String,
+        preview_content: String,
+    ) {
+        self.open_browser_screen(
+            TuiScreen::Artifacts,
+            BrowserState {
+                kind: BrowserKind::Artifacts,
+                title,
+                action_hint,
+                items,
+                selected_index,
+                preview_title,
+                preview_content,
+            },
+        );
+    }
+
     pub fn active_inspector_title(&self) -> Option<&str> {
         self.inspector_title.as_deref()
     }
 
     pub fn active_inspector_content(&self) -> Option<&str> {
         self.inspector_content.as_deref()
+    }
+
+    pub fn browser_state(&self) -> Option<&BrowserState> {
+        self.browser.as_ref()
+    }
+
+    pub fn browser_state_mut(&mut self) -> Option<&mut BrowserState> {
+        self.browser.as_mut()
+    }
+
+    pub fn browser_selected_item(&self) -> Option<&BrowserItem> {
+        self.browser
+            .as_ref()
+            .and_then(|browser| browser.items.get(browser.selected_index))
+    }
+
+    pub fn browser_select_next(&mut self) {
+        let Some(browser) = self.browser.as_mut() else {
+            return;
+        };
+        if browser.items.is_empty() {
+            return;
+        }
+        browser.selected_index = (browser.selected_index + 1) % browser.items.len();
+    }
+
+    pub fn browser_select_previous(&mut self) {
+        let Some(browser) = self.browser.as_mut() else {
+            return;
+        };
+        if browser.items.is_empty() {
+            return;
+        }
+        browser.selected_index = if browser.selected_index == 0 {
+            browser.items.len() - 1
+        } else {
+            browser.selected_index - 1
+        };
+    }
+
+    pub fn set_browser_preview(&mut self, title: String, content: String) {
+        if let Some(browser) = self.browser.as_mut() {
+            browser.preview_title = title;
+            browser.preview_content = content;
+        }
     }
 
     pub fn select_next_session(&mut self) {
@@ -413,6 +555,7 @@ impl TuiAppState {
                 });
                 self.inspector_title = None;
                 self.inspector_content = None;
+                self.browser = None;
             }
             TuiScreen::Chat => {}
         }
@@ -657,10 +800,53 @@ impl TuiAppState {
     }
 
     fn open_inspector_screen(&mut self, screen: TuiScreen, title: String, content: String) {
-        self.previous_screen = Some(self.active_screen);
+        if self.active_screen != screen {
+            self.previous_screen = Some(self.active_screen);
+        }
         self.active_screen = screen;
+        self.browser = None;
         self.inspector_title = Some(title);
         self.inspector_content = Some(content);
+    }
+
+    fn open_browser_screen(&mut self, screen: TuiScreen, browser: BrowserState) {
+        if self.active_screen != screen {
+            self.previous_screen = Some(self.active_screen);
+        }
+        self.active_screen = screen;
+        self.inspector_title = None;
+        self.inspector_content = None;
+        self.browser = Some(browser);
+    }
+}
+
+impl BrowserState {
+    pub fn kind(&self) -> BrowserKind {
+        self.kind
+    }
+
+    pub fn title(&self) -> &str {
+        self.title.as_str()
+    }
+
+    pub fn action_hint(&self) -> &str {
+        self.action_hint.as_str()
+    }
+
+    pub fn items(&self) -> &[BrowserItem] {
+        &self.items
+    }
+
+    pub fn selected_index(&self) -> usize {
+        self.selected_index
+    }
+
+    pub fn preview_title(&self) -> &str {
+        self.preview_title.as_str()
+    }
+
+    pub fn preview_content(&self) -> &str {
+        self.preview_content.as_str()
     }
 }
 

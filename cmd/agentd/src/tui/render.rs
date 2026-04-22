@@ -96,6 +96,11 @@ fn render_session_screen(frame: &mut Frame<'_>, state: &TuiAppState) {
 }
 
 fn render_inspector_screen(frame: &mut Frame<'_>, state: &TuiAppState) {
+    if state.browser_state().is_some() {
+        render_browser_screen(frame, state);
+        return;
+    }
+
     let area = frame.area();
     let title = state
         .active_inspector_title()
@@ -114,6 +119,51 @@ fn render_inspector_screen(frame: &mut Frame<'_>, state: &TuiAppState) {
         )
         .wrap(Wrap { trim: false });
     frame.render_widget(widget, area);
+}
+
+fn render_browser_screen(frame: &mut Frame<'_>, state: &TuiAppState) {
+    let area = frame.area();
+    let browser = state.browser_state().expect("browser state");
+    let chunks = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Percentage(36), Constraint::Percentage(64)])
+        .split(area);
+    let list_items = browser
+        .items()
+        .iter()
+        .enumerate()
+        .map(|(index, item)| {
+            let prefix = if index == browser.selected_index() {
+                "> "
+            } else {
+                "  "
+            };
+            let mut list_item = ListItem::new(Line::from(format!("{prefix}{}", item.label)));
+            if index == browser.selected_index() {
+                list_item = list_item.style(Style::default().add_modifier(Modifier::BOLD));
+            }
+            list_item
+        })
+        .collect::<Vec<_>>();
+    let title = browser.title();
+    let list = List::new(list_items).block(
+        Block::default()
+            .title(format!(
+                "{title} | {} | {} | Esc назад",
+                short_version_label(),
+                browser.action_hint()
+            ))
+            .borders(Borders::ALL),
+    );
+    let preview = Paragraph::new(browser.preview_content().to_string())
+        .block(
+            Block::default()
+                .title(browser.preview_title().to_string())
+                .borders(Borders::ALL),
+        )
+        .wrap(Wrap { trim: false });
+    frame.render_widget(list, chunks[0]);
+    frame.render_widget(preview, chunks[1]);
 }
 
 fn render_chat_screen(frame: &mut Frame<'_>, state: &TuiAppState) {

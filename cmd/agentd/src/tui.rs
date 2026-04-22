@@ -11,7 +11,7 @@ use crate::daemon;
 use crate::execution::ChatExecutionEvent;
 use crate::help::{HelpTopic, parse_help_topic, render_command_usage_error, render_help};
 use crate::http::client::{DaemonConnectOptions, connect_or_autospawn_detailed};
-use app::{DialogState, TuiAppState};
+use app::{BrowserItem, BrowserKind, DialogState, TuiAppState};
 use backend::TuiBackend;
 use crossterm::event::{
     self, DisableBracketedPaste, EnableBracketedPaste, Event, KeyCode, KeyEvent, KeyEventKind,
@@ -170,12 +170,21 @@ where
         TuiAction::Exit => state.request_exit(),
         TuiAction::OpenSessionScreen => state.open_session_screen(),
         TuiAction::OpenAgentsScreen => {
-            let rendered = app.render_agents()?;
-            state.open_agent_screen("Агенты".to_string(), rendered);
+            open_agents_browser(app, state, None)?;
         }
         TuiAction::OpenSchedulesScreen => {
-            let rendered = app.render_agent_schedules()?;
-            state.open_schedule_screen("Расписания".to_string(), rendered);
+            open_schedule_browser(app, state, None)?;
+        }
+        TuiAction::BrowserSelectPrevious => {
+            state.browser_select_previous();
+            refresh_browser_preview(app, state)?;
+        }
+        TuiAction::BrowserSelectNext => {
+            state.browser_select_next();
+            refresh_browser_preview(app, state)?;
+        }
+        TuiAction::BrowserActivate => {
+            activate_browser_selection(app, state)?;
         }
         TuiAction::OpenNewSessionDialog => state.open_new_session_dialog(),
         TuiAction::OpenDeleteDialog => {
@@ -279,6 +288,243 @@ fn should_dispatch_key_event(key: KeyEvent) -> bool {
     matches!(key.kind, KeyEventKind::Press | KeyEventKind::Repeat)
 }
 
+fn open_agents_browser<B>(
+    app: &B,
+    state: &mut TuiAppState,
+    preferred_id: Option<&str>,
+) -> Result<(), BootstrapError>
+where
+    B: TuiBackend,
+{
+    let rendered = app.render_agents()?;
+    let parsed = parse_agent_browser_items(&rendered);
+    if parsed.items.is_empty() {
+        state.open_agent_screen("Агенты".to_string(), rendered);
+        return Ok(());
+    }
+    let selected_index = preferred_id
+        .and_then(|id| parsed.items.iter().position(|item| item.id == id))
+        .unwrap_or(parsed.selected_index);
+    let selected_id = parsed
+        .items
+        .get(selected_index)
+        .map(|item| item.id.as_str())
+        .unwrap_or_default()
+        .to_string();
+    let preview_content = app.render_agent(Some(selected_id.as_str()))?;
+    state.open_agent_browser(
+        "Агенты".to_string(),
+        "↑↓ выбор | Enter выбрать".to_string(),
+        parsed.items,
+        selected_index,
+        format!("Агент {selected_id}"),
+        preview_content,
+    );
+    Ok(())
+}
+
+fn open_schedule_browser<B>(
+    app: &B,
+    state: &mut TuiAppState,
+    preferred_id: Option<&str>,
+) -> Result<(), BootstrapError>
+where
+    B: TuiBackend,
+{
+    let rendered = app.render_agent_schedules()?;
+    let items = parse_schedule_browser_items(&rendered);
+    if items.is_empty() {
+        state.open_schedule_screen("Расписания".to_string(), rendered);
+        return Ok(());
+    }
+    let selected_index = preferred_id
+        .and_then(|id| items.iter().position(|item| item.id == id))
+        .unwrap_or(0);
+    let selected_id = items
+        .get(selected_index)
+        .map(|item| item.id.as_str())
+        .unwrap_or_default()
+        .to_string();
+    let preview_content = app.render_agent_schedule(selected_id.as_str())?;
+    state.open_schedule_browser(
+        "Расписания".to_string(),
+        "↑↓ выбор".to_string(),
+        items,
+        selected_index,
+        format!("Расписание {selected_id}"),
+        preview_content,
+    );
+    Ok(())
+}
+
+fn open_artifact_browser<B>(
+    app: &B,
+    state: &mut TuiAppState,
+    session_id: &str,
+    preferred_id: Option<&str>,
+) -> Result<(), BootstrapError>
+where
+    B: TuiBackend,
+{
+    let rendered = app.render_artifacts(session_id)?;
+    let items = parse_artifact_browser_items(&rendered);
+    if items.is_empty() {
+        state.open_artifact_screen("Артефакты".to_string(), rendered);
+        return Ok(());
+    }
+    let selected_index = preferred_id
+        .and_then(|id| items.iter().position(|item| item.id == id))
+        .unwrap_or(0);
+    let selected_id = items
+        .get(selected_index)
+        .map(|item| item.id.as_str())
+        .unwrap_or_default()
+        .to_string();
+    let preview_content = app.read_artifact(session_id, selected_id.as_str())?;
+    state.open_artifact_browser(
+        "Артефакты".to_string(),
+        "↑↓ выбор".to_string(),
+        items,
+        selected_index,
+        format!("Артефакт {selected_id}"),
+        preview_content,
+    );
+    Ok(())
+}
+
+fn refresh_browser_preview<B>(app: &B, state: &mut TuiAppState) -> Result<(), BootstrapError>
+where
+    B: TuiBackend,
+{
+    let Some(selected) = state.browser_selected_item().cloned() else {
+        return Ok(());
+    };
+    let Some(kind) = state.browser_state().map(|browser| browser.kind()) else {
+        return Ok(());
+    };
+    let (title, content) = match kind {
+        BrowserKind::Agents => (
+            format!("Агент {}", selected.id),
+            app.render_agent(Some(selected.id.as_str()))?,
+        ),
+        BrowserKind::Schedules => (
+            format!("Расписание {}", selected.id),
+            app.render_agent_schedule(selected.id.as_str())?,
+        ),
+        BrowserKind::Artifacts => {
+            let session_id = state
+                .current_session_id()
+                .ok_or_else(|| BootstrapError::Usage {
+                    reason: "не выбрана текущая сессия".to_string(),
+                })?;
+            (
+                format!("Артефакт {}", selected.id),
+                app.read_artifact(session_id, selected.id.as_str())?,
+            )
+        }
+    };
+    state.set_browser_preview(title, content);
+    Ok(())
+}
+
+fn activate_browser_selection<B>(app: &B, state: &mut TuiAppState) -> Result<(), BootstrapError>
+where
+    B: TuiBackend,
+{
+    let Some(selected_id) = state.browser_selected_item().map(|item| item.id.clone()) else {
+        return Ok(());
+    };
+    let Some(kind) = state.browser_state().map(|browser| browser.kind()) else {
+        return Ok(());
+    };
+    match kind {
+        BrowserKind::Agents => {
+            let _ = app.select_agent(selected_id.as_str())?;
+            state.sync_sessions(app.list_session_summaries()?);
+            open_agents_browser(app, state, Some(selected_id.as_str()))?;
+        }
+        BrowserKind::Schedules | BrowserKind::Artifacts => {
+            refresh_browser_preview(app, state)?;
+        }
+    }
+    Ok(())
+}
+
+#[derive(Debug)]
+struct ParsedAgentBrowser {
+    items: Vec<BrowserItem>,
+    selected_index: usize,
+}
+
+fn parse_agent_browser_items(rendered: &str) -> ParsedAgentBrowser {
+    let mut items = Vec::new();
+    let mut selected_index = 0usize;
+    for line in rendered.lines() {
+        let trimmed = line.trim_start();
+        let marker = if trimmed.starts_with("* ") {
+            Some('*')
+        } else if trimmed.starts_with("- ") {
+            Some('-')
+        } else {
+            None
+        };
+        let Some(marker) = marker else {
+            continue;
+        };
+        let Some((id, label)) = parse_agent_browser_line(trimmed) else {
+            continue;
+        };
+        if marker == '*' {
+            selected_index = items.len();
+        }
+        items.push(BrowserItem { id, label });
+    }
+    ParsedAgentBrowser {
+        items,
+        selected_index,
+    }
+}
+
+fn parse_agent_browser_line(line: &str) -> Option<(String, String)> {
+    let body = line
+        .strip_prefix("* ")
+        .or_else(|| line.strip_prefix("- "))?
+        .trim();
+    let id_start = body.rfind(" (")?;
+    let id_end = body[id_start + 2..].find(')')? + id_start + 2;
+    let id = body[id_start + 2..id_end].to_string();
+    let label = body.to_string();
+    Some((id, label))
+}
+
+fn parse_schedule_browser_items(rendered: &str) -> Vec<BrowserItem> {
+    rendered
+        .lines()
+        .filter_map(|line| {
+            let body = line.trim_start().strip_prefix("- ")?;
+            let id = body.split_whitespace().next()?.to_string();
+            Some(BrowserItem {
+                id,
+                label: body.to_string(),
+            })
+        })
+        .collect()
+}
+
+fn parse_artifact_browser_items(rendered: &str) -> Vec<BrowserItem> {
+    rendered
+        .lines()
+        .filter_map(|line| {
+            let body = line.trim_start().strip_prefix("- ")?;
+            let id = body.split_whitespace().next()?.to_string();
+            Some(BrowserItem {
+                id,
+                label: body.to_string(),
+            })
+        })
+        .collect()
+}
+
 fn handle_command<B>(
     app: &B,
     state: &mut TuiAppState,
@@ -300,13 +546,18 @@ where
             load_session_into_state(app, state, &summary.id)?;
         }
         Some("/agents") => {
-            let rendered = app.render_agents()?;
-            state.open_agent_screen("Агенты".to_string(), rendered);
+            open_agents_browser(app, state, None)?;
         }
         Some("/agent") => {
             let message = handle_agent_command(app, rest)?;
             if rest.is_empty() || rest.starts_with("показать") || rest.starts_with("show") {
-                state.open_agent_screen("Агент".to_string(), message);
+                let identifier = option_arg(rest.strip_prefix("показать").unwrap_or(rest))
+                    .or_else(|| option_arg(rest.strip_prefix("show").unwrap_or(rest)));
+                if let Some(identifier) = identifier.as_deref() {
+                    state.open_agent_screen(format!("Агент {identifier}"), message);
+                } else {
+                    open_agents_browser(app, state, None)?;
+                }
             } else {
                 state
                     .timeline_mut()
@@ -315,18 +566,18 @@ where
             state.sync_sessions(app.list_session_summaries()?);
         }
         Some("/schedules") => {
-            let rendered = app.render_agent_schedules()?;
-            state.open_schedule_screen("Расписания".to_string(), rendered);
+            open_schedule_browser(app, state, None)?;
         }
         Some("/schedule") => {
             let message = handle_schedule_command(app, rest)?;
             if rest.is_empty() || rest.starts_with("показать") || rest.starts_with("show") {
-                let title = if rest.is_empty() {
-                    "Расписания".to_string()
+                let selected_id = option_arg(rest.strip_prefix("показать").unwrap_or(rest))
+                    .or_else(|| option_arg(rest.strip_prefix("show").unwrap_or(rest)));
+                if let Some(selected_id) = selected_id.as_deref() {
+                    state.open_schedule_screen(format!("Расписание {selected_id}"), message);
                 } else {
-                    "Расписание".to_string()
-                };
-                state.open_schedule_screen(title, message);
+                    open_schedule_browser(app, state, None)?;
+                }
             } else {
                 state
                     .timeline_mut()
@@ -421,13 +672,16 @@ where
                     state.timeline_mut().push_system(&jobs, unix_timestamp()?);
                 }
                 "/artifacts" => {
-                    let artifacts = app.render_artifacts(&current_session_id)?;
-                    state.open_artifact_screen("Артефакты".to_string(), artifacts);
+                    open_artifact_browser(app, state, &current_session_id, None)?;
                 }
                 "/artifact" => {
                     let artifact_id = require_arg(rest, "/artifact")?;
-                    let artifact = app.read_artifact(&current_session_id, &artifact_id)?;
-                    state.open_artifact_screen(format!("Артефакт {artifact_id}"), artifact);
+                    open_artifact_browser(
+                        app,
+                        state,
+                        &current_session_id,
+                        Some(artifact_id.as_str()),
+                    )?;
                 }
                 "/debug" => {
                     let backend_saved = app.write_debug_bundle(&current_session_id)?;
@@ -1421,6 +1675,7 @@ mod tests {
     use crate::tui::timeline::TimelineEntryKind;
     use crossterm::event::{Event, KeyCode, KeyEvent, KeyEventKind, KeyEventState, KeyModifiers};
     use std::sync::atomic::AtomicBool;
+    use std::sync::{Arc, Mutex};
 
     #[derive(Clone)]
     struct FakeBackend {
@@ -1470,7 +1725,10 @@ mod tests {
         }
 
         fn render_agent_schedules(&self) -> Result<String, BootstrapError> {
-            Ok("Расписания: workspace=/tmp/test".to_string())
+            Ok(
+                "Расписания: workspace=/tmp/test\n- pulse agent=default interval=300 next_fire_at=10"
+                    .to_string(),
+            )
         }
 
         fn render_agent_schedule(&self, id: &str) -> Result<String, BootstrapError> {
@@ -1588,7 +1846,7 @@ mod tests {
         }
 
         fn render_artifacts(&self, _session_id: &str) -> Result<String, BootstrapError> {
-            Ok("Артефакты: нет".to_string())
+            Ok("Артефакты:\n- artifact-1 [ref-1] Tool trace".to_string())
         }
 
         fn read_artifact(
@@ -1625,6 +1883,242 @@ mod tests {
 
         fn write_debug_bundle(&self, _session_id: &str) -> Result<String, BootstrapError> {
             Ok(self.debug_bundle.clone())
+        }
+
+        fn compact_session(&self, _session_id: &str) -> Result<SessionSummary, BootstrapError> {
+            panic!("unused in test")
+        }
+
+        fn execute_chat_turn_with_control_and_observer(
+            &self,
+            _session_id: &str,
+            _message: &str,
+            _now: i64,
+            _interrupt_after_tool_step: Option<&AtomicBool>,
+            _observer: &mut dyn FnMut(ChatExecutionEvent),
+        ) -> Result<ChatTurnExecutionReport, BootstrapError> {
+            panic!("unused in test")
+        }
+
+        fn approve_run_with_control_and_observer(
+            &self,
+            _run_id: &str,
+            _approval_id: &str,
+            _now: i64,
+            _interrupt_after_tool_step: Option<&AtomicBool>,
+            _observer: &mut dyn FnMut(ChatExecutionEvent),
+        ) -> Result<ApprovalContinuationReport, BootstrapError> {
+            panic!("unused in test")
+        }
+    }
+
+    #[derive(Clone)]
+    struct BrowserBackend {
+        summary: SessionSummary,
+        state: Arc<Mutex<BrowserBackendState>>,
+    }
+
+    #[derive(Clone)]
+    struct BrowserBackendState {
+        current_agent_id: String,
+    }
+
+    impl TuiBackend for BrowserBackend {
+        fn render_agents(&self) -> Result<String, BootstrapError> {
+            let current = self
+                .state
+                .lock()
+                .expect("browser backend state")
+                .current_agent_id
+                .clone();
+            let first = if current == "default" { "*" } else { "-" };
+            let second = if current == "judge" { "*" } else { "-" };
+            Ok(format!(
+                "Агенты: текущий={current}\n{first} Default (default) template=default tools=4 home=/tmp/default\n{second} Judge (judge) template=judge tools=2 home=/tmp/judge"
+            ))
+        }
+
+        fn render_agent(&self, identifier: Option<&str>) -> Result<String, BootstrapError> {
+            let id = identifier.unwrap_or("default");
+            let name = if id == "judge" { "Judge" } else { "Default" };
+            Ok(format!("id={id}\nname={name}"))
+        }
+
+        fn select_agent(&self, identifier: &str) -> Result<String, BootstrapError> {
+            self.state
+                .lock()
+                .expect("browser backend state")
+                .current_agent_id = identifier.to_string();
+            Ok(format!("текущий агент: {identifier}"))
+        }
+
+        fn create_agent(
+            &self,
+            _name: &str,
+            _template_identifier: Option<&str>,
+        ) -> Result<String, BootstrapError> {
+            panic!("unused in test")
+        }
+
+        fn open_agent_home(&self, _identifier: Option<&str>) -> Result<String, BootstrapError> {
+            panic!("unused in test")
+        }
+
+        fn render_agent_schedules(&self) -> Result<String, BootstrapError> {
+            panic!("unused in test")
+        }
+
+        fn render_agent_schedule(&self, _id: &str) -> Result<String, BootstrapError> {
+            panic!("unused in test")
+        }
+
+        fn create_agent_schedule(
+            &self,
+            _id: &str,
+            _interval_seconds: u64,
+            _prompt: &str,
+            _agent_identifier: Option<&str>,
+        ) -> Result<String, BootstrapError> {
+            panic!("unused in test")
+        }
+
+        fn delete_agent_schedule(&self, _id: &str) -> Result<String, BootstrapError> {
+            panic!("unused in test")
+        }
+
+        fn list_session_summaries(&self) -> Result<Vec<SessionSummary>, BootstrapError> {
+            Ok(vec![self.summary.clone()])
+        }
+
+        fn create_session_auto(
+            &self,
+            _title: Option<&str>,
+        ) -> Result<SessionSummary, BootstrapError> {
+            panic!("unused in test")
+        }
+
+        fn update_session_preferences(
+            &self,
+            _session_id: &str,
+            _patch: SessionPreferencesPatch,
+        ) -> Result<SessionSummary, BootstrapError> {
+            panic!("unused in test")
+        }
+
+        fn delete_session(&self, _session_id: &str) -> Result<(), BootstrapError> {
+            panic!("unused in test")
+        }
+
+        fn clear_session(
+            &self,
+            _session_id: &str,
+            _title: Option<&str>,
+        ) -> Result<SessionSummary, BootstrapError> {
+            panic!("unused in test")
+        }
+
+        fn session_summary(&self, _session_id: &str) -> Result<SessionSummary, BootstrapError> {
+            Ok(self.summary.clone())
+        }
+
+        fn session_transcript(
+            &self,
+            _session_id: &str,
+        ) -> Result<SessionTranscriptView, BootstrapError> {
+            Ok(SessionTranscriptView {
+                session_id: self.summary.id.clone(),
+                entries: Vec::new(),
+            })
+        }
+
+        fn pending_approvals(
+            &self,
+            _session_id: &str,
+        ) -> Result<Vec<SessionPendingApproval>, BootstrapError> {
+            Ok(Vec::new())
+        }
+
+        fn session_skills(
+            &self,
+            _session_id: &str,
+        ) -> Result<Vec<SessionSkillStatus>, BootstrapError> {
+            panic!("unused in test")
+        }
+
+        fn enable_session_skill(
+            &self,
+            _session_id: &str,
+            _skill_name: &str,
+        ) -> Result<Vec<SessionSkillStatus>, BootstrapError> {
+            panic!("unused in test")
+        }
+
+        fn disable_session_skill(
+            &self,
+            _session_id: &str,
+            _skill_name: &str,
+        ) -> Result<Vec<SessionSkillStatus>, BootstrapError> {
+            panic!("unused in test")
+        }
+
+        fn latest_pending_approval(
+            &self,
+            _session_id: &str,
+            _requested_approval_id: Option<&str>,
+        ) -> Result<Option<SessionPendingApproval>, BootstrapError> {
+            Ok(None)
+        }
+
+        fn render_context(&self, _session_id: &str) -> Result<String, BootstrapError> {
+            panic!("unused in test")
+        }
+
+        fn render_system(&self, _session_id: &str) -> Result<String, BootstrapError> {
+            panic!("unused in test")
+        }
+
+        fn render_plan(&self, _session_id: &str) -> Result<String, BootstrapError> {
+            panic!("unused in test")
+        }
+
+        fn render_artifacts(&self, _session_id: &str) -> Result<String, BootstrapError> {
+            panic!("unused in test")
+        }
+
+        fn read_artifact(
+            &self,
+            _session_id: &str,
+            _artifact_id: &str,
+        ) -> Result<String, BootstrapError> {
+            panic!("unused in test")
+        }
+
+        fn render_active_jobs(&self, _session_id: &str) -> Result<String, BootstrapError> {
+            panic!("unused in test")
+        }
+
+        fn render_active_run(&self, _session_id: &str) -> Result<String, BootstrapError> {
+            panic!("unused in test")
+        }
+
+        fn cancel_active_run(
+            &self,
+            _session_id: &str,
+            _now: i64,
+        ) -> Result<String, BootstrapError> {
+            panic!("unused in test")
+        }
+
+        fn render_version_info(&self) -> Result<String, BootstrapError> {
+            panic!("unused in test")
+        }
+
+        fn update_runtime(&self) -> Result<String, BootstrapError> {
+            panic!("unused in test")
+        }
+
+        fn write_debug_bundle(&self, _session_id: &str) -> Result<String, BootstrapError> {
+            panic!("unused in test")
         }
 
         fn compact_session(&self, _session_id: &str) -> Result<SessionSummary, BootstrapError> {
@@ -2087,23 +2581,25 @@ mod tests {
 
         handle_command(&backend, &mut state, "\\агенты", &mut redraw).expect("agents command");
         assert_eq!(state.active_screen(), TuiScreen::Agents);
-        assert_eq!(state.active_inspector_title(), Some("Агенты"));
+        assert!(state.browser_state().is_some());
         assert!(
             state
-                .active_inspector_content()
-                .expect("agents content")
-                .contains("Агенты: текущий=")
+                .browser_selected_item()
+                .expect("selected agent")
+                .id
+                .contains("default")
         );
 
         handle_command(&backend, &mut state, "\\расписания", &mut redraw)
             .expect("schedules command");
         assert_eq!(state.active_screen(), TuiScreen::Schedules);
-        assert_eq!(state.active_inspector_title(), Some("Расписания"));
+        assert!(state.browser_state().is_some());
         assert!(
             state
-                .active_inspector_content()
-                .expect("schedule content")
-                .contains("Расписания:")
+                .browser_selected_item()
+                .expect("selected schedule")
+                .id
+                .contains("pulse")
         );
     }
 
@@ -2154,23 +2650,101 @@ mod tests {
         handle_command(&backend, &mut state, "\\артефакты", &mut redraw)
             .expect("artifacts command");
         assert_eq!(state.active_screen(), TuiScreen::Artifacts);
-        assert_eq!(state.active_inspector_title(), Some("Артефакты"));
+        assert!(state.browser_state().is_some());
         assert!(
             state
-                .active_inspector_content()
-                .expect("artifacts content")
-                .contains("Артефакты:")
+                .browser_selected_item()
+                .expect("selected artifact")
+                .id
+                .contains("artifact-1")
         );
 
         handle_command(&backend, &mut state, "\\артефакт artifact-1", &mut redraw)
             .expect("artifact command");
         assert_eq!(state.active_screen(), TuiScreen::Artifacts);
-        assert_eq!(state.active_inspector_title(), Some("Артефакт artifact-1"));
+        assert!(state.browser_state().is_some());
         assert!(
             state
-                .active_inspector_content()
-                .expect("artifact content")
+                .browser_state()
+                .expect("artifact browser")
+                .preview_content()
                 .contains("artifact_id=artifact-1")
+        );
+    }
+
+    #[test]
+    fn agent_browser_navigation_and_selection_use_backend_actions() {
+        fn redraw(_: &TuiAppState) -> Result<(), BootstrapError> {
+            Ok(())
+        }
+
+        let summary = SessionSummary {
+            id: "session-a".to_string(),
+            title: "Session A".to_string(),
+            agent_profile_id: "default".to_string(),
+            agent_name: "Default".to_string(),
+            model: Some("glm-5-turbo".to_string()),
+            reasoning_visible: true,
+            think_level: None,
+            compactifications: 0,
+            completion_nudges: None,
+            auto_approve: false,
+            context_tokens: 0,
+            usage_input_tokens: None,
+            usage_output_tokens: None,
+            usage_total_tokens: None,
+            has_pending_approval: false,
+            last_message_preview: None,
+            message_count: 0,
+            background_job_count: 0,
+            running_background_job_count: 0,
+            queued_background_job_count: 0,
+            created_at: 1,
+            updated_at: 2,
+        };
+        let backend = BrowserBackend {
+            summary: summary.clone(),
+            state: Arc::new(Mutex::new(BrowserBackendState {
+                current_agent_id: "default".to_string(),
+            })),
+        };
+        let mut state = TuiAppState::new(vec![summary.clone()], Some(summary.id.clone()));
+        state.set_current_session(summary, Timeline::default());
+
+        handle_command(&backend, &mut state, "\\агенты", &mut redraw).expect("agents command");
+        assert_eq!(
+            state.browser_state().expect("browser").preview_content(),
+            "id=default\nname=Default"
+        );
+
+        dispatch_action(
+            &backend,
+            &mut state,
+            TuiAction::BrowserSelectNext,
+            &mut redraw,
+        )
+        .expect("select next");
+        assert_eq!(
+            state.browser_state().expect("browser").preview_content(),
+            "id=judge\nname=Judge"
+        );
+
+        dispatch_action(
+            &backend,
+            &mut state,
+            TuiAction::BrowserActivate,
+            &mut redraw,
+        )
+        .expect("activate browser selection");
+        assert!(
+            backend
+                .render_agents()
+                .expect("render agents")
+                .contains("Агенты: текущий=judge")
+        );
+        assert_eq!(
+            state.browser_selected_item().map(|item| item.id.as_str()),
+            Some("judge")
         );
     }
 
