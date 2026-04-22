@@ -130,7 +130,7 @@ fn dispatch_terminal_event(
             let action = match state.active_screen() {
                 TuiScreen::Sessions => screens::session::handle_key(state, key)?,
                 TuiScreen::Chat => screens::chat::handle_key(state, key)?,
-                TuiScreen::Agents | TuiScreen::Schedules => {
+                TuiScreen::Agents | TuiScreen::Schedules | TuiScreen::Artifacts => {
                     screens::inspector::handle_key(state, key)?
                 }
             };
@@ -422,16 +422,12 @@ where
                 }
                 "/artifacts" => {
                     let artifacts = app.render_artifacts(&current_session_id)?;
-                    state
-                        .timeline_mut()
-                        .push_system(&artifacts, unix_timestamp()?);
+                    state.open_artifact_screen("Артефакты".to_string(), artifacts);
                 }
                 "/artifact" => {
                     let artifact_id = require_arg(rest, "/artifact")?;
                     let artifact = app.read_artifact(&current_session_id, &artifact_id)?;
-                    state
-                        .timeline_mut()
-                        .push_system(&artifact, unix_timestamp()?);
+                    state.open_artifact_screen(format!("Артефакт {artifact_id}"), artifact);
                 }
                 "/debug" => {
                     let backend_saved = app.write_debug_bundle(&current_session_id)?;
@@ -1598,9 +1594,9 @@ mod tests {
         fn read_artifact(
             &self,
             _session_id: &str,
-            _artifact_id: &str,
+            artifact_id: &str,
         ) -> Result<String, BootstrapError> {
-            Ok("artifact_id=test".to_string())
+            Ok(format!("artifact_id={artifact_id}"))
         }
 
         fn render_active_run(&self, _session_id: &str) -> Result<String, BootstrapError> {
@@ -2108,6 +2104,73 @@ mod tests {
                 .active_inspector_content()
                 .expect("schedule content")
                 .contains("Расписания:")
+        );
+    }
+
+    #[test]
+    fn artifact_commands_open_dedicated_screens() {
+        fn redraw(_: &TuiAppState) -> Result<(), BootstrapError> {
+            Ok(())
+        }
+
+        let backend = FakeBackend {
+            summary: SessionSummary {
+                id: "session-a".to_string(),
+                title: "Session A".to_string(),
+                agent_profile_id: "default".to_string(),
+                agent_name: "Default".to_string(),
+                model: Some("glm-5-turbo".to_string()),
+                reasoning_visible: true,
+                think_level: None,
+                compactifications: 0,
+                completion_nudges: None,
+                auto_approve: false,
+                context_tokens: 0,
+                usage_input_tokens: None,
+                usage_output_tokens: None,
+                usage_total_tokens: None,
+                has_pending_approval: false,
+                last_message_preview: None,
+                message_count: 0,
+                background_job_count: 0,
+                running_background_job_count: 0,
+                queued_background_job_count: 0,
+                created_at: 1,
+                updated_at: 2,
+            },
+            pending: Vec::new(),
+            transcript: SessionTranscriptView {
+                session_id: "session-a".to_string(),
+                entries: Vec::new(),
+            },
+            debug_bundle: "unused".to_string(),
+        };
+        let mut state = TuiAppState::new(
+            vec![backend.summary.clone()],
+            Some(backend.summary.id.clone()),
+        );
+        state.set_current_session(backend.summary.clone(), Timeline::default());
+
+        handle_command(&backend, &mut state, "\\артефакты", &mut redraw)
+            .expect("artifacts command");
+        assert_eq!(state.active_screen(), TuiScreen::Artifacts);
+        assert_eq!(state.active_inspector_title(), Some("Артефакты"));
+        assert!(
+            state
+                .active_inspector_content()
+                .expect("artifacts content")
+                .contains("Артефакты:")
+        );
+
+        handle_command(&backend, &mut state, "\\артефакт artifact-1", &mut redraw)
+            .expect("artifact command");
+        assert_eq!(state.active_screen(), TuiScreen::Artifacts);
+        assert_eq!(state.active_inspector_title(), Some("Артефакт artifact-1"));
+        assert!(
+            state
+                .active_inspector_content()
+                .expect("artifact content")
+                .contains("artifact_id=artifact-1")
         );
     }
 

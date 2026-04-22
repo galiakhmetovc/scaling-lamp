@@ -94,6 +94,7 @@ pub enum TuiScreen {
     Chat,
     Agents,
     Schedules,
+    Artifacts,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -349,6 +350,10 @@ impl TuiAppState {
         self.open_inspector_screen(TuiScreen::Schedules, title, content);
     }
 
+    pub fn open_artifact_screen(&mut self, title: String, content: String) {
+        self.open_inspector_screen(TuiScreen::Artifacts, title, content);
+    }
+
     pub fn active_inspector_title(&self) -> Option<&str> {
         self.inspector_title.as_deref()
     }
@@ -398,7 +403,7 @@ impl TuiAppState {
                     self.active_screen = TuiScreen::Chat;
                 }
             }
-            TuiScreen::Agents | TuiScreen::Schedules => {
+            TuiScreen::Agents | TuiScreen::Schedules | TuiScreen::Artifacts => {
                 self.active_screen = self.previous_screen.take().unwrap_or_else(|| {
                     if self.current_session_id.is_some() {
                         TuiScreen::Chat

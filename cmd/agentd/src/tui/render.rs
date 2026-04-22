@@ -41,7 +41,9 @@ pub fn render(frame: &mut Frame<'_>, state: &TuiAppState) {
     match state.active_screen() {
         TuiScreen::Sessions => render_session_screen(frame, state),
         TuiScreen::Chat => render_chat_screen(frame, state),
-        TuiScreen::Agents | TuiScreen::Schedules => render_inspector_screen(frame, state),
+        TuiScreen::Agents | TuiScreen::Schedules | TuiScreen::Artifacts => {
+            render_inspector_screen(frame, state)
+        }
     }
 
     if let Some(dialog) = state.dialog_state() {
@@ -100,6 +102,7 @@ fn render_inspector_screen(frame: &mut Frame<'_>, state: &TuiAppState) {
         .unwrap_or(match state.active_screen() {
             TuiScreen::Agents => "Агенты",
             TuiScreen::Schedules => "Расписания",
+            TuiScreen::Artifacts => "Артефакты",
             _ => "Просмотр",
         });
     let content = state.active_inspector_content().unwrap_or("<пусто>");

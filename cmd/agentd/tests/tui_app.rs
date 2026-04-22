@@ -143,6 +143,21 @@ fn tui_shell_navigation_can_enter_and_exit_agent_and_schedule_screens() {
 
     app.handle_escape();
     assert_eq!(app.active_screen(), TuiScreen::Chat);
+
+    app.open_artifact_screen(
+        "Артефакт artifact-1".to_string(),
+        "artifact_id=artifact-1\npayload".to_string(),
+    );
+    assert_eq!(app.active_screen(), TuiScreen::Artifacts);
+    assert_eq!(app.active_inspector_title(), Some("Артефакт artifact-1"));
+    assert!(
+        app.active_inspector_content()
+            .expect("artifact content")
+            .contains("artifact_id=artifact-1")
+    );
+
+    app.handle_escape();
+    assert_eq!(app.active_screen(), TuiScreen::Chat);
 }
 
 #[test]
@@ -192,6 +207,26 @@ fn tui_render_agent_and_schedule_screens_show_inspector_content() {
     }
     assert!(rendered.contains("Расписания"));
     assert!(rendered.contains("workspace=/tmp/test"));
+    assert!(rendered.contains("Esc назад"));
+
+    state.open_artifact_screen(
+        "Артефакт artifact-1".to_string(),
+        "artifact_id=artifact-1\npayload".to_string(),
+    );
+    terminal
+        .draw(|frame| agentd::tui::render::render(frame, &state))
+        .expect("draw artifact");
+
+    let buffer = terminal.backend().buffer();
+    let mut rendered = String::new();
+    for y in 0..buffer.area.height {
+        for x in 0..buffer.area.width {
+            rendered.push_str(buffer[(x, y)].symbol());
+        }
+        rendered.push('\n');
+    }
+    assert!(rendered.contains("Артефакт artifact-1"));
+    assert!(rendered.contains("artifact_id=artifact-1"));
     assert!(rendered.contains("Esc назад"));
 }
 
