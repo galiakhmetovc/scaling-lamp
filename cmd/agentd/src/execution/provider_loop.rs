@@ -342,11 +342,14 @@ impl ProviderLoopCursor {
 
 impl ExecutionService {
     fn is_stale_context_offload_payload_error(error: &agent_persistence::StoreError) -> bool {
-        matches!(
-            error,
+        match error {
             agent_persistence::StoreError::MissingPayload { .. }
-                | agent_persistence::StoreError::IntegrityMismatch { .. }
-        )
+            | agent_persistence::StoreError::IntegrityMismatch { .. } => true,
+            agent_persistence::StoreError::Io { source, .. } => {
+                source.kind() == std::io::ErrorKind::NotFound
+            }
+            _ => false,
+        }
     }
 
     fn load_context_offload_payload_for_refresh(
@@ -1640,7 +1643,7 @@ impl ExecutionService {
         let normalized_id = sanitize_identifier(tool_call_id);
         let artifact_id = format!("artifact-tool-offload-{session_id}-{normalized_id}");
         let ref_id = format!("tool-offload-{normalized_id}");
-        snapshot.refs.push(ContextOffloadRef {
+        let current_ref = ContextOffloadRef {
             id: ref_id.clone(),
             label,
             summary,
@@ -1648,7 +1651,8 @@ impl ExecutionService {
             token_estimate,
             message_count: 1,
             created_at: now,
-        });
+        };
+        snapshot.refs.push(current_ref.clone());
         snapshot.refs.sort_by(|left, right| {
             right
                 .created_at
@@ -1679,13 +1683,30 @@ impl ExecutionService {
         }
         snapshot.refs = retained_refs;
 
-        store
-            .put_context_offload(
-                &agent_persistence::ContextOffloadRecord::try_from(&snapshot)
-                    .map_err(ExecutionError::RecordConversion)?,
-                &payloads,
-            )
-            .map_err(ExecutionError::Store)?;
+        let snapshot_record = agent_persistence::ContextOffloadRecord::try_from(&snapshot)
+            .map_err(ExecutionError::RecordConversion)?;
+        match store.put_context_offload(&snapshot_record, &payloads) {
+            Ok(()) => {}
+            Err(source) if Self::is_stale_context_offload_payload_error(&source) => {
+                let fallback_snapshot = ContextOffloadSnapshot {
+                    session_id: session_id.to_string(),
+                    refs: vec![current_ref],
+                    updated_at: now,
+                };
+                let fallback_payloads = vec![ContextOffloadPayload {
+                    artifact_id: artifact_id.clone(),
+                    bytes: payload_bytes,
+                }];
+                store
+                    .put_context_offload(
+                        &agent_persistence::ContextOffloadRecord::try_from(&fallback_snapshot)
+                            .map_err(ExecutionError::RecordConversion)?,
+                        &fallback_payloads,
+                    )
+                    .map_err(ExecutionError::Store)?;
+            }
+            Err(source) => return Err(ExecutionError::Store(source)),
+        }
 
         Ok(compact_output
             .replace("__ARTIFACT_ID__", artifact_id.as_str())
@@ -2552,6 +2573,20 @@ mod tests {
         assert!(output.contains("\"retryable\":true"));
         assert!(output.contains("workspace path is not a regular file"));
         assert!(output.contains("skills/project-knowledge-layout"));
+    }
+
+    #[test]
+    fn stale_context_offload_payload_error_treats_io_not_found_as_stale() {
+        let error = agent_persistence::StoreError::Io {
+            path: std::path::PathBuf::from(
+                "/tmp/artifacts/artifact-tool-offload-session-1-call-1.bin",
+            ),
+            source: std::io::Error::from(std::io::ErrorKind::NotFound),
+        };
+
+        assert!(ExecutionService::is_stale_context_offload_payload_error(
+            &error
+        ));
     }
 
     #[test]
