@@ -4,6 +4,8 @@ pub enum TuiAction {
     Exit,
     ActivateSelectedSession,
     OpenSessionScreen,
+    OpenAgentsScreen,
+    OpenSchedulesScreen,
     OpenNewSessionDialog,
     OpenDeleteDialog,
     OpenRenameDialog,

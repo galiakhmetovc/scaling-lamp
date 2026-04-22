@@ -41,6 +41,7 @@ pub fn render(frame: &mut Frame<'_>, state: &TuiAppState) {
     match state.active_screen() {
         TuiScreen::Sessions => render_session_screen(frame, state),
         TuiScreen::Chat => render_chat_screen(frame, state),
+        TuiScreen::Agents | TuiScreen::Schedules => render_inspector_screen(frame, state),
     }
 
     if let Some(dialog) = state.dialog_state() {
@@ -84,12 +85,32 @@ fn render_session_screen(frame: &mut Frame<'_>, state: &TuiAppState) {
     let list = List::new(items).block(
         Block::default()
             .title(format!(
-                "Сессии | {} | Enter открыть | Н новая | У удалить | П переименовать | Esc назад",
+                "Сессии | {} | Enter открыть | Н новая | У удалить | П переименовать | А агенты | Р расписания | Esc назад",
                 short_version_label()
             ))
             .borders(Borders::ALL),
     );
     frame.render_widget(list, area);
+}
+
+fn render_inspector_screen(frame: &mut Frame<'_>, state: &TuiAppState) {
+    let area = frame.area();
+    let title = state
+        .active_inspector_title()
+        .unwrap_or(match state.active_screen() {
+            TuiScreen::Agents => "Агенты",
+            TuiScreen::Schedules => "Расписания",
+            _ => "Просмотр",
+        });
+    let content = state.active_inspector_content().unwrap_or("<пусто>");
+    let widget = Paragraph::new(content.to_string())
+        .block(
+            Block::default()
+                .title(format!("{title} | {} | Esc назад", short_version_label()))
+                .borders(Borders::ALL),
+        )
+        .wrap(Wrap { trim: false });
+    frame.render_widget(widget, area);
 }
 
 fn render_chat_screen(frame: &mut Frame<'_>, state: &TuiAppState) {

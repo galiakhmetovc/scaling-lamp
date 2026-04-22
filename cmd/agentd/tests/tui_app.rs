@@ -111,6 +111,91 @@ fn tui_shell_navigation_opens_expected_dialogs() {
 }
 
 #[test]
+fn tui_shell_navigation_can_enter_and_exit_agent_and_schedule_screens() {
+    let mut app = TuiAppState::new(
+        vec![summary("session-a", "Session A")],
+        Some("session-a".to_string()),
+    );
+
+    app.open_agent_screen("Агенты".to_string(), "Агенты: текущий=default".to_string());
+    assert_eq!(app.active_screen(), TuiScreen::Agents);
+    assert_eq!(app.active_inspector_title(), Some("Агенты"));
+    assert!(
+        app.active_inspector_content()
+            .expect("agents content")
+            .contains("текущий=default")
+    );
+
+    app.handle_escape();
+    assert_eq!(app.active_screen(), TuiScreen::Chat);
+
+    app.open_schedule_screen(
+        "Расписания".to_string(),
+        "Расписания: workspace=/tmp/test".to_string(),
+    );
+    assert_eq!(app.active_screen(), TuiScreen::Schedules);
+    assert_eq!(app.active_inspector_title(), Some("Расписания"));
+    assert!(
+        app.active_inspector_content()
+            .expect("schedule content")
+            .contains("workspace=/tmp/test")
+    );
+
+    app.handle_escape();
+    assert_eq!(app.active_screen(), TuiScreen::Chat);
+}
+
+#[test]
+fn tui_render_agent_and_schedule_screens_show_inspector_content() {
+    let mut state = TuiAppState::new(
+        vec![summary("session-a", "Session A")],
+        Some("session-a".to_string()),
+    );
+    state.open_agent_screen(
+        "Агенты".to_string(),
+        "Агенты: текущий=default\n* Default (default)".to_string(),
+    );
+
+    let backend = TestBackend::new(120, 24);
+    let mut terminal = Terminal::new(backend).expect("terminal");
+    terminal
+        .draw(|frame| agentd::tui::render::render(frame, &state))
+        .expect("draw agents");
+
+    let buffer = terminal.backend().buffer();
+    let mut rendered = String::new();
+    for y in 0..buffer.area.height {
+        for x in 0..buffer.area.width {
+            rendered.push_str(buffer[(x, y)].symbol());
+        }
+        rendered.push('\n');
+    }
+    assert!(rendered.contains("Агенты"));
+    assert!(rendered.contains("текущий=default"));
+    assert!(rendered.contains("Esc назад"));
+
+    state.open_schedule_screen(
+        "Расписания".to_string(),
+        "Расписания: workspace=/tmp/test\n- pulse".to_string(),
+    );
+    terminal
+        .draw(|frame| agentd::tui::render::render(frame, &state))
+        .expect("draw schedules");
+
+    let buffer = terminal.backend().buffer();
+    let mut rendered = String::new();
+    for y in 0..buffer.area.height {
+        for x in 0..buffer.area.width {
+            rendered.push_str(buffer[(x, y)].symbol());
+        }
+        rendered.push('\n');
+    }
+    assert!(rendered.contains("Расписания"));
+    assert!(rendered.contains("workspace=/tmp/test"));
+    assert!(rendered.contains("Esc назад"));
+}
+
+#[test]
 fn tui_chat_key_handling_supports_page_navigation_from_the_tail() {
     let mut state = TuiAppState::new(
         vec![summary("session-a", "Session A")],

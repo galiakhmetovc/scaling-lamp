@@ -92,6 +92,8 @@ const PAGE_SCROLL_LINES: u16 = 10;
 pub enum TuiScreen {
     Sessions,
     Chat,
+    Agents,
+    Schedules,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -107,6 +109,7 @@ pub struct TuiAppState {
     active_screen: TuiScreen,
     current_session_id: Option<String>,
     previous_session_id: Option<String>,
+    previous_screen: Option<TuiScreen>,
     active_summary: Option<SessionSummary>,
     selected_session_index: usize,
     dialog_state: Option<DialogState>,
@@ -119,6 +122,8 @@ pub struct TuiAppState {
     composer_queue: ComposerQueue,
     active_run: Option<ActiveRunHandle>,
     provider_loop_progress: Option<(usize, usize)>,
+    inspector_title: Option<String>,
+    inspector_content: Option<String>,
     should_exit: bool,
 }
 
@@ -143,6 +148,7 @@ impl TuiAppState {
             active_screen,
             current_session_id: current_session_id.clone(),
             previous_session_id: current_session_id,
+            previous_screen: None,
             active_summary,
             selected_session_index,
             dialog_state: None,
@@ -155,6 +161,8 @@ impl TuiAppState {
             composer_queue: ComposerQueue::default(),
             active_run: None,
             provider_loop_progress: None,
+            inspector_title: None,
+            inspector_content: None,
             should_exit: false,
         }
     }
@@ -223,7 +231,10 @@ impl TuiAppState {
         self.command_cycle_index = None;
         self.dialog_state = None;
         self.active_screen = TuiScreen::Chat;
+        self.previous_screen = None;
         self.provider_loop_progress = None;
+        self.inspector_title = None;
+        self.inspector_content = None;
     }
 
     pub fn replace_current_summary(&mut self, summary: SessionSummary) {
@@ -325,6 +336,25 @@ impl TuiAppState {
     pub fn open_session_screen(&mut self) {
         self.previous_session_id = self.current_session_id.clone();
         self.active_screen = TuiScreen::Sessions;
+        self.previous_screen = None;
+        self.inspector_title = None;
+        self.inspector_content = None;
+    }
+
+    pub fn open_agent_screen(&mut self, title: String, content: String) {
+        self.open_inspector_screen(TuiScreen::Agents, title, content);
+    }
+
+    pub fn open_schedule_screen(&mut self, title: String, content: String) {
+        self.open_inspector_screen(TuiScreen::Schedules, title, content);
+    }
+
+    pub fn active_inspector_title(&self) -> Option<&str> {
+        self.inspector_title.as_deref()
+    }
+
+    pub fn active_inspector_content(&self) -> Option<&str> {
+        self.inspector_content.as_deref()
     }
 
     pub fn select_next_session(&mut self) {
@@ -362,8 +392,24 @@ impl TuiAppState {
             self.dialog_state = None;
             return;
         }
-        if self.active_screen == TuiScreen::Sessions && self.previous_session_id.is_some() {
-            self.active_screen = TuiScreen::Chat;
+        match self.active_screen {
+            TuiScreen::Sessions => {
+                if self.previous_session_id.is_some() {
+                    self.active_screen = TuiScreen::Chat;
+                }
+            }
+            TuiScreen::Agents | TuiScreen::Schedules => {
+                self.active_screen = self.previous_screen.take().unwrap_or_else(|| {
+                    if self.current_session_id.is_some() {
+                        TuiScreen::Chat
+                    } else {
+                        TuiScreen::Sessions
+                    }
+                });
+                self.inspector_title = None;
+                self.inspector_content = None;
+            }
+            TuiScreen::Chat => {}
         }
     }
 
@@ -603,6 +649,13 @@ impl TuiAppState {
 
     pub fn request_exit(&mut self) {
         self.should_exit = true;
+    }
+
+    fn open_inspector_screen(&mut self, screen: TuiScreen, title: String, content: String) {
+        self.previous_screen = Some(self.active_screen);
+        self.active_screen = screen;
+        self.inspector_title = Some(title);
+        self.inspector_content = Some(content);
     }
 }
 

@@ -130,6 +130,9 @@ fn dispatch_terminal_event(
             let action = match state.active_screen() {
                 TuiScreen::Sessions => screens::session::handle_key(state, key)?,
                 TuiScreen::Chat => screens::chat::handle_key(state, key)?,
+                TuiScreen::Agents | TuiScreen::Schedules => {
+                    screens::inspector::handle_key(state, key)?
+                }
             };
 
             if key.code == KeyCode::Char('q')
@@ -166,6 +169,14 @@ where
         TuiAction::None => {}
         TuiAction::Exit => state.request_exit(),
         TuiAction::OpenSessionScreen => state.open_session_screen(),
+        TuiAction::OpenAgentsScreen => {
+            let rendered = app.render_agents()?;
+            state.open_agent_screen("Агенты".to_string(), rendered);
+        }
+        TuiAction::OpenSchedulesScreen => {
+            let rendered = app.render_agent_schedules()?;
+            state.open_schedule_screen("Расписания".to_string(), rendered);
+        }
         TuiAction::OpenNewSessionDialog => state.open_new_session_dialog(),
         TuiAction::OpenDeleteDialog => {
             let _ = state.open_delete_dialog();
@@ -290,28 +301,37 @@ where
         }
         Some("/agents") => {
             let rendered = app.render_agents()?;
-            state
-                .timeline_mut()
-                .push_system(&rendered, unix_timestamp()?);
+            state.open_agent_screen("Агенты".to_string(), rendered);
         }
         Some("/agent") => {
             let message = handle_agent_command(app, rest)?;
-            state
-                .timeline_mut()
-                .push_system(&message, unix_timestamp()?);
+            if rest.is_empty() || rest.starts_with("показать") || rest.starts_with("show") {
+                state.open_agent_screen("Агент".to_string(), message);
+            } else {
+                state
+                    .timeline_mut()
+                    .push_system(&message, unix_timestamp()?);
+            }
             state.sync_sessions(app.list_session_summaries()?);
         }
         Some("/schedules") => {
             let rendered = app.render_agent_schedules()?;
-            state
-                .timeline_mut()
-                .push_system(&rendered, unix_timestamp()?);
+            state.open_schedule_screen("Расписания".to_string(), rendered);
         }
         Some("/schedule") => {
             let message = handle_schedule_command(app, rest)?;
-            state
-                .timeline_mut()
-                .push_system(&message, unix_timestamp()?);
+            if rest.is_empty() || rest.starts_with("показать") || rest.starts_with("show") {
+                let title = if rest.is_empty() {
+                    "Расписания".to_string()
+                } else {
+                    "Расписание".to_string()
+                };
+                state.open_schedule_screen(title, message);
+            } else {
+                state
+                    .timeline_mut()
+                    .push_system(&message, unix_timestamp()?);
+            }
         }
         Some("/version") => {
             let about = app.render_version_info()?;
@@ -1400,6 +1420,7 @@ mod tests {
         SessionTranscriptView,
     };
     use crate::execution::{ApprovalContinuationReport, ChatTurnExecutionReport};
+    use crate::tui::app::TuiScreen;
     use crate::tui::backend::TuiBackend;
     use crate::tui::timeline::TimelineEntryKind;
     use crossterm::event::{Event, KeyCode, KeyEvent, KeyEventKind, KeyEventState, KeyModifiers};
@@ -2022,6 +2043,72 @@ mod tests {
         assert!(last.content.contains("\\агент выбрать judge"));
         assert!(last.content.contains("[daemon.a2a_peers.judge]"));
         assert!(last.content.contains("message_agent"));
+    }
+
+    #[test]
+    fn agent_and_schedule_commands_open_dedicated_screens() {
+        fn redraw(_: &TuiAppState) -> Result<(), BootstrapError> {
+            Ok(())
+        }
+
+        let backend = FakeBackend {
+            summary: SessionSummary {
+                id: "session-a".to_string(),
+                title: "Session A".to_string(),
+                agent_profile_id: "default".to_string(),
+                agent_name: "Default".to_string(),
+                model: Some("glm-5-turbo".to_string()),
+                reasoning_visible: true,
+                think_level: None,
+                compactifications: 0,
+                completion_nudges: None,
+                auto_approve: false,
+                context_tokens: 0,
+                usage_input_tokens: None,
+                usage_output_tokens: None,
+                usage_total_tokens: None,
+                has_pending_approval: false,
+                last_message_preview: None,
+                message_count: 0,
+                background_job_count: 0,
+                running_background_job_count: 0,
+                queued_background_job_count: 0,
+                created_at: 1,
+                updated_at: 2,
+            },
+            pending: Vec::new(),
+            transcript: SessionTranscriptView {
+                session_id: "session-a".to_string(),
+                entries: Vec::new(),
+            },
+            debug_bundle: "unused".to_string(),
+        };
+        let mut state = TuiAppState::new(
+            vec![backend.summary.clone()],
+            Some(backend.summary.id.clone()),
+        );
+        state.set_current_session(backend.summary.clone(), Timeline::default());
+
+        handle_command(&backend, &mut state, "\\агенты", &mut redraw).expect("agents command");
+        assert_eq!(state.active_screen(), TuiScreen::Agents);
+        assert_eq!(state.active_inspector_title(), Some("Агенты"));
+        assert!(
+            state
+                .active_inspector_content()
+                .expect("agents content")
+                .contains("Агенты: текущий=")
+        );
+
+        handle_command(&backend, &mut state, "\\расписания", &mut redraw)
+            .expect("schedules command");
+        assert_eq!(state.active_screen(), TuiScreen::Schedules);
+        assert_eq!(state.active_inspector_title(), Some("Расписания"));
+        assert!(
+            state
+                .active_inspector_content()
+                .expect("schedule content")
+                .contains("Расписания:")
+        );
     }
 
     #[test]
