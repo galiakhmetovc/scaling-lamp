@@ -195,6 +195,17 @@ where
         TuiAction::BrowserDelete => {
             open_browser_delete_dialog(state);
         }
+        TuiAction::BrowserPreviewScrollUp => state.browser_preview_scroll_up(),
+        TuiAction::BrowserPreviewScrollDown => state.browser_preview_scroll_down(),
+        TuiAction::BrowserPreviewScrollPageUp => state.browser_preview_scroll_page_up(),
+        TuiAction::BrowserPreviewScrollPageDown => state.browser_preview_scroll_page_down(),
+        TuiAction::BrowserPreviewScrollHome => state.browser_preview_scroll_home(),
+        TuiAction::BrowserPreviewScrollEnd => state.browser_preview_scroll_end(),
+        TuiAction::BrowserSearch => {
+            open_browser_search_dialog(state);
+        }
+        TuiAction::BrowserSearchNext => state.browser_search_next(),
+        TuiAction::BrowserSearchPrevious => state.browser_search_previous(),
         TuiAction::OpenNewSessionDialog => state.open_new_session_dialog(),
         TuiAction::OpenDeleteDialog => {
             let _ = state.open_delete_dialog();
@@ -248,6 +259,10 @@ where
                 state
                     .timeline_mut()
                     .push_system(&message, unix_timestamp()?);
+            }
+            Some(DialogState::BrowserSearch { value }) => {
+                state.apply_browser_search(value);
+                state.close_dialog();
             }
             Some(DialogState::RenameSession { session_id, value }) => {
                 let title = title_or_default(value.as_str(), "Новая сессия");
@@ -428,7 +443,7 @@ where
     if items.is_empty() {
         state.open_artifact_browser(
             "Артефакты".to_string(),
-            "↑↓ выбор".to_string(),
+            "↑↓ выбор | Enter полный | / поиск | n/N | PgUp/PgDn".to_string(),
             Vec::new(),
             0,
             "Артефакты".to_string(),
@@ -447,7 +462,7 @@ where
     let preview_content = app.read_artifact(session_id, selected_id.as_str())?;
     state.open_artifact_browser(
         "Артефакты".to_string(),
-        "↑↓ выбор".to_string(),
+        "↑↓ выбор | Enter полный | / поиск | n/N | PgUp/PgDn".to_string(),
         items,
         selected_index,
         format!("Артефакт {selected_id}"),
@@ -510,9 +525,10 @@ where
                 .timeline_mut()
                 .push_system(&message, unix_timestamp()?);
         }
-        BrowserKind::Schedules | BrowserKind::Artifacts => {
+        BrowserKind::Schedules => {
             refresh_browser_preview(app, state)?;
         }
+        BrowserKind::Artifacts => state.toggle_browser_full_preview(),
     }
     Ok(())
 }
@@ -554,6 +570,15 @@ fn open_browser_delete_dialog(state: &mut TuiAppState) {
     ) && let Some(selected) = state.browser_selected_item()
     {
         state.open_delete_schedule_dialog(selected.id.clone());
+    }
+}
+
+fn open_browser_search_dialog(state: &mut TuiAppState) {
+    if matches!(
+        state.browser_state().map(|browser| browser.kind()),
+        Some(BrowserKind::Artifacts)
+    ) {
+        state.open_browser_search_dialog();
     }
 }
 
@@ -2828,6 +2853,79 @@ mod tests {
                 .expect("artifact browser")
                 .preview_content()
                 .contains("artifact_id=artifact-1")
+        );
+    }
+
+    #[test]
+    fn artifact_browser_can_toggle_full_preview_and_apply_search() {
+        fn redraw(_: &TuiAppState) -> Result<(), BootstrapError> {
+            Ok(())
+        }
+
+        let backend = FakeBackend {
+            summary: SessionSummary {
+                id: "session-a".to_string(),
+                title: "Session A".to_string(),
+                agent_profile_id: "default".to_string(),
+                agent_name: "Default".to_string(),
+                model: Some("glm-5-turbo".to_string()),
+                reasoning_visible: true,
+                think_level: None,
+                compactifications: 0,
+                completion_nudges: None,
+                auto_approve: false,
+                context_tokens: 0,
+                usage_input_tokens: None,
+                usage_output_tokens: None,
+                usage_total_tokens: None,
+                has_pending_approval: false,
+                last_message_preview: None,
+                message_count: 0,
+                background_job_count: 0,
+                running_background_job_count: 0,
+                queued_background_job_count: 0,
+                created_at: 1,
+                updated_at: 2,
+            },
+            pending: Vec::new(),
+            transcript: SessionTranscriptView {
+                session_id: "session-a".to_string(),
+                entries: Vec::new(),
+            },
+            debug_bundle: "unused".to_string(),
+        };
+        let mut state = TuiAppState::new(
+            vec![backend.summary.clone()],
+            Some(backend.summary.id.clone()),
+        );
+        state.set_current_session(backend.summary.clone(), Timeline::default());
+
+        handle_command(&backend, &mut state, "\\артефакты", &mut redraw)
+            .expect("artifacts command");
+        dispatch_action(
+            &backend,
+            &mut state,
+            TuiAction::BrowserActivate,
+            &mut redraw,
+        )
+        .expect("open full preview");
+        assert!(state.browser_full_preview());
+
+        dispatch_action(&backend, &mut state, TuiAction::BrowserSearch, &mut redraw)
+            .expect("open search dialog");
+        assert!(matches!(
+            state.dialog_state(),
+            Some(DialogState::BrowserSearch { .. })
+        ));
+        state.set_dialog_input("artifact_id".to_string());
+        dispatch_action(&backend, &mut state, TuiAction::ConfirmDialog, &mut redraw)
+            .expect("confirm search");
+        assert_eq!(
+            state
+                .browser_state()
+                .expect("artifact browser")
+                .search_query(),
+            Some("artifact_id")
         );
     }
 

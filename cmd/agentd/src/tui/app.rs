@@ -119,6 +119,10 @@ pub struct BrowserState {
     selected_index: usize,
     preview_title: String,
     preview_content: String,
+    preview_scroll: u16,
+    full_preview: bool,
+    search_query: Option<String>,
+    search_match_index: usize,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -126,6 +130,7 @@ pub enum DialogState {
     CreateSession { value: String },
     CreateAgent { value: String },
     CreateSchedule { value: String },
+    BrowserSearch { value: String },
     RenameSession { session_id: String, value: String },
     ConfirmDelete { session_id: String },
     ConfirmClear { session_id: String },
@@ -292,6 +297,7 @@ impl TuiAppState {
             Some(DialogState::CreateSession { value })
             | Some(DialogState::CreateAgent { value })
             | Some(DialogState::CreateSchedule { value })
+            | Some(DialogState::BrowserSearch { value })
             | Some(DialogState::RenameSession { value, .. }) => Some(value.as_str()),
             _ => None,
         }
@@ -302,6 +308,7 @@ impl TuiAppState {
             Some(DialogState::CreateSession { value: current })
             | Some(DialogState::CreateAgent { value: current })
             | Some(DialogState::CreateSchedule { value: current })
+            | Some(DialogState::BrowserSearch { value: current })
             | Some(DialogState::RenameSession { value: current, .. }) => {
                 *current = value;
             }
@@ -314,6 +321,7 @@ impl TuiAppState {
             Some(DialogState::CreateSession { value: current })
             | Some(DialogState::CreateAgent { value: current })
             | Some(DialogState::CreateSchedule { value: current })
+            | Some(DialogState::BrowserSearch { value: current })
             | Some(DialogState::RenameSession { value: current, .. }) => {
                 current.push(value);
             }
@@ -326,6 +334,7 @@ impl TuiAppState {
             Some(DialogState::CreateSession { value })
             | Some(DialogState::CreateAgent { value })
             | Some(DialogState::CreateSchedule { value })
+            | Some(DialogState::BrowserSearch { value })
             | Some(DialogState::RenameSession { value, .. }) => {
                 value.pop();
             }
@@ -353,6 +362,15 @@ impl TuiAppState {
         self.dialog_state = Some(DialogState::CreateSchedule {
             value: String::new(),
         });
+    }
+
+    pub fn open_browser_search_dialog(&mut self) {
+        let value = self
+            .browser
+            .as_ref()
+            .and_then(|browser| browser.search_query.clone())
+            .unwrap_or_default();
+        self.dialog_state = Some(DialogState::BrowserSearch { value });
     }
 
     pub fn open_rename_dialog(&mut self) -> Result<(), &'static str> {
@@ -428,6 +446,10 @@ impl TuiAppState {
                 selected_index,
                 preview_title,
                 preview_content,
+                preview_scroll: 0,
+                full_preview: false,
+                search_query: None,
+                search_match_index: 0,
             },
         );
     }
@@ -451,6 +473,10 @@ impl TuiAppState {
                 selected_index,
                 preview_title,
                 preview_content,
+                preview_scroll: 0,
+                full_preview: false,
+                search_query: None,
+                search_match_index: 0,
             },
         );
     }
@@ -474,6 +500,10 @@ impl TuiAppState {
                 selected_index,
                 preview_title,
                 preview_content,
+                preview_scroll: 0,
+                full_preview: false,
+                search_query: None,
+                search_match_index: 0,
             },
         );
     }
@@ -528,6 +558,103 @@ impl TuiAppState {
         if let Some(browser) = self.browser.as_mut() {
             browser.preview_title = title;
             browser.preview_content = content;
+            browser.preview_scroll = 0;
+            browser.search_match_index = 0;
+            browser.full_preview = false;
+            browser.snap_preview_to_current_match();
+        }
+    }
+
+    pub fn browser_preview_scroll_up(&mut self) {
+        if let Some(browser) = self.browser.as_mut() {
+            browser.preview_scroll = browser.preview_scroll.saturating_sub(1);
+        }
+    }
+
+    pub fn browser_preview_scroll_down(&mut self) {
+        if let Some(browser) = self.browser.as_mut() {
+            browser.preview_scroll = browser.preview_scroll.saturating_add(1);
+        }
+    }
+
+    pub fn browser_preview_scroll_page_up(&mut self) {
+        if let Some(browser) = self.browser.as_mut() {
+            browser.preview_scroll = browser.preview_scroll.saturating_sub(PAGE_SCROLL_LINES);
+        }
+    }
+
+    pub fn browser_preview_scroll_page_down(&mut self) {
+        if let Some(browser) = self.browser.as_mut() {
+            browser.preview_scroll = browser.preview_scroll.saturating_add(PAGE_SCROLL_LINES);
+        }
+    }
+
+    pub fn browser_preview_scroll_home(&mut self) {
+        if let Some(browser) = self.browser.as_mut() {
+            browser.preview_scroll = 0;
+        }
+    }
+
+    pub fn browser_preview_scroll_end(&mut self) {
+        if let Some(browser) = self.browser.as_mut() {
+            browser.preview_scroll = u16::MAX;
+        }
+    }
+
+    pub fn toggle_browser_full_preview(&mut self) {
+        if let Some(browser) = self.browser.as_mut() {
+            browser.full_preview = !browser.full_preview;
+        }
+    }
+
+    pub fn close_browser_full_preview(&mut self) {
+        if let Some(browser) = self.browser.as_mut() {
+            browser.full_preview = false;
+        }
+    }
+
+    pub fn browser_full_preview(&self) -> bool {
+        self.browser
+            .as_ref()
+            .map(|browser| browser.full_preview)
+            .unwrap_or(false)
+    }
+
+    pub fn apply_browser_search(&mut self, query: String) {
+        if let Some(browser) = self.browser.as_mut() {
+            browser.search_query = if query.trim().is_empty() {
+                None
+            } else {
+                Some(query)
+            };
+            browser.search_match_index = 0;
+            browser.snap_preview_to_current_match();
+        }
+    }
+
+    pub fn browser_search_next(&mut self) {
+        if let Some(browser) = self.browser.as_mut() {
+            let match_count = browser.search_match_lines().len();
+            if match_count == 0 {
+                return;
+            }
+            browser.search_match_index = (browser.search_match_index + 1) % match_count;
+            browser.snap_preview_to_current_match();
+        }
+    }
+
+    pub fn browser_search_previous(&mut self) {
+        if let Some(browser) = self.browser.as_mut() {
+            let match_count = browser.search_match_lines().len();
+            if match_count == 0 {
+                return;
+            }
+            browser.search_match_index = if browser.search_match_index == 0 {
+                match_count - 1
+            } else {
+                browser.search_match_index - 1
+            };
+            browser.snap_preview_to_current_match();
         }
     }
 
@@ -564,6 +691,10 @@ impl TuiAppState {
     pub fn handle_escape(&mut self) {
         if self.dialog_state.is_some() {
             self.dialog_state = None;
+            return;
+        }
+        if self.browser_full_preview() {
+            self.close_browser_full_preview();
             return;
         }
         match self.active_screen {
@@ -875,11 +1006,76 @@ impl BrowserState {
     pub fn preview_content(&self) -> &str {
         self.preview_content.as_str()
     }
+
+    pub fn preview_scroll(&self) -> u16 {
+        self.preview_scroll
+    }
+
+    pub fn full_preview(&self) -> bool {
+        self.full_preview
+    }
+
+    pub fn search_query(&self) -> Option<&str> {
+        self.search_query.as_deref()
+    }
+
+    pub fn search_status(&self) -> Option<(usize, usize)> {
+        let query = self.search_query.as_ref()?;
+        if query.trim().is_empty() {
+            return None;
+        }
+        let matches = self.search_match_lines();
+        if matches.is_empty() {
+            Some((0, 0))
+        } else {
+            Some((self.search_match_index + 1, matches.len()))
+        }
+    }
+
+    pub fn current_match_line(&self) -> Option<usize> {
+        let matches = self.search_match_lines();
+        matches.get(self.search_match_index).copied()
+    }
+
+    pub fn line_matches_query(&self, line: &str) -> bool {
+        self.search_query
+            .as_deref()
+            .is_some_and(|query| line_matches_query(line, query))
+    }
+
+    fn search_match_lines(&self) -> Vec<usize> {
+        let Some(query) = self.search_query.as_deref() else {
+            return Vec::new();
+        };
+        if query.trim().is_empty() {
+            return Vec::new();
+        }
+        self.preview_content
+            .split('\n')
+            .enumerate()
+            .filter_map(|(index, line)| line_matches_query(line, query).then_some(index))
+            .collect()
+    }
+
+    fn snap_preview_to_current_match(&mut self) {
+        if let Some(line_index) = self.current_match_line() {
+            self.preview_scroll = line_index as u16;
+        } else {
+            self.preview_scroll = 0;
+        }
+    }
+}
+
+fn line_matches_query(line: &str, query: &str) -> bool {
+    if query.trim().is_empty() {
+        return false;
+    }
+    line.to_lowercase().contains(&query.to_lowercase())
 }
 
 #[cfg(test)]
 mod tests {
-    use super::TuiAppState;
+    use super::{BrowserItem, TuiAppState};
 
     #[test]
     fn command_cycle_works_without_prefix_and_uses_russian_commands() {
@@ -891,5 +1087,33 @@ mod tests {
         state.replace_input_buffer("авто");
         assert!(state.cycle_previous_command());
         assert_eq!(state.input_buffer(), "\\сессии");
+    }
+
+    #[test]
+    fn artifact_browser_tracks_search_full_preview_and_scroll_state() {
+        let mut state = TuiAppState::new(Vec::new(), Some("session-a".to_string()));
+        state.open_artifact_browser(
+            "Артефакты".to_string(),
+            "↑↓ выбор | Enter полный".to_string(),
+            vec![BrowserItem {
+                id: "artifact-1".to_string(),
+                label: "artifact-1 [ref]".to_string(),
+            }],
+            0,
+            "Артефакт artifact-1".to_string(),
+            "alpha\nbeta\nGamma".to_string(),
+        );
+
+        state.apply_browser_search("ga".to_string());
+        let browser = state.browser_state().expect("browser");
+        assert_eq!(browser.search_query(), Some("ga"));
+        assert_eq!(browser.search_status(), Some((1, 1)));
+        assert_eq!(browser.current_match_line(), Some(2));
+        assert_eq!(browser.preview_scroll(), 2);
+
+        state.toggle_browser_full_preview();
+        assert!(state.browser_full_preview());
+        state.handle_escape();
+        assert!(!state.browser_full_preview());
     }
 }

@@ -124,6 +124,27 @@ fn render_inspector_screen(frame: &mut Frame<'_>, state: &TuiAppState) {
 fn render_browser_screen(frame: &mut Frame<'_>, state: &TuiAppState) {
     let area = frame.area();
     let browser = state.browser_state().expect("browser state");
+    let preview_lines = render_browser_preview_lines(browser);
+    if browser.full_preview() {
+        let preview_width = inner_block_width(area.width);
+        let preview_height = usize::from(area.height.saturating_sub(2));
+        let total_lines = paragraph_line_count(&preview_lines, preview_width);
+        let scroll_top = browser_scroll_top(total_lines, preview_height, browser.preview_scroll());
+        let preview = Paragraph::new(preview_lines)
+            .block(
+                Block::default()
+                    .title(format!(
+                        "{} | {} | Enter список | / поиск | n/N совпадения | PgUp/PgDn | Home/End | Esc назад",
+                        browser_preview_title(browser),
+                        short_version_label()
+                    ))
+                    .borders(Borders::ALL),
+            )
+            .wrap(Wrap { trim: false })
+            .scroll((scroll_top, 0));
+        frame.render_widget(preview, area);
+        return;
+    }
     let chunks = Layout::default()
         .direction(Direction::Horizontal)
         .constraints([Constraint::Percentage(36), Constraint::Percentage(64)])
@@ -155,13 +176,18 @@ fn render_browser_screen(frame: &mut Frame<'_>, state: &TuiAppState) {
             ))
             .borders(Borders::ALL),
     );
-    let preview = Paragraph::new(browser.preview_content().to_string())
+    let preview_width = inner_block_width(chunks[1].width);
+    let preview_height = usize::from(chunks[1].height.saturating_sub(2));
+    let total_lines = paragraph_line_count(&preview_lines, preview_width);
+    let scroll_top = browser_scroll_top(total_lines, preview_height, browser.preview_scroll());
+    let preview = Paragraph::new(preview_lines)
         .block(
             Block::default()
-                .title(browser.preview_title().to_string())
+                .title(browser_preview_title(browser))
                 .borders(Borders::ALL),
         )
-        .wrap(Wrap { trim: false });
+        .wrap(Wrap { trim: false })
+        .scroll((scroll_top, 0));
     frame.render_widget(list, chunks[0]);
     frame.render_widget(preview, chunks[1]);
 }
@@ -1081,6 +1107,58 @@ fn inner_block_width(width: u16) -> usize {
     usize::from(width.saturating_sub(2)).max(1)
 }
 
+fn browser_scroll_top(total_lines: usize, viewport_lines: usize, requested_top: u16) -> u16 {
+    if viewport_lines == 0 {
+        return 0;
+    }
+    let max_top = total_lines.saturating_sub(viewport_lines);
+    usize::from(requested_top).min(max_top) as u16
+}
+
+fn browser_preview_title(browser: &crate::tui::app::BrowserState) -> String {
+    match (browser.search_query(), browser.search_status()) {
+        (Some(query), Some((current, total))) => format!(
+            "{} | поиск=\"{}\" {}/{}",
+            browser.preview_title(),
+            query,
+            current,
+            total
+        ),
+        _ => browser.preview_title().to_string(),
+    }
+}
+
+fn render_browser_preview_lines(browser: &crate::tui::app::BrowserState) -> Vec<Line<'static>> {
+    let current_match_line = browser.current_match_line();
+    let mut lines = browser
+        .preview_content()
+        .split('\n')
+        .enumerate()
+        .map(|(index, raw_line)| {
+            if current_match_line == Some(index) {
+                Line::from(vec![Span::styled(
+                    raw_line.to_string(),
+                    Style::default()
+                        .fg(Color::Black)
+                        .bg(Color::Yellow)
+                        .add_modifier(Modifier::BOLD),
+                )])
+            } else if browser.line_matches_query(raw_line) {
+                Line::from(vec![Span::styled(
+                    raw_line.to_string(),
+                    Style::default().fg(Color::Yellow),
+                )])
+            } else {
+                Line::from(raw_line.to_string())
+            }
+        })
+        .collect::<Vec<_>>();
+    if lines.is_empty() {
+        lines.push(Line::default());
+    }
+    lines
+}
+
 fn truncate_display_text(text: &str, max_chars: usize) -> String {
     let normalized = text.replace('\n', " ↩ ");
     let mut chars = normalized.chars();
@@ -1104,6 +1182,9 @@ fn render_dialog(frame: &mut Frame<'_>, dialog: DialogState) {
         ),
         DialogState::CreateSchedule { value } => format!(
             "Создать расписание\n\n{value}\n\nФормат: <id> <секунды> [agent=<id>] :: <промпт>\nПример: pulse 300 :: проверь очередь задач\n\nEnter подтвердить, Esc отмена"
+        ),
+        DialogState::BrowserSearch { value } => format!(
+            "Поиск в просмотре\n\n{value}\n\nПустая строка очищает поиск.\n\nEnter подтвердить, Esc отмена"
         ),
         DialogState::RenameSession { value, .. } => {
             format!("Переименовать сессию\n\n{value}\n\nEnter подтвердить, Esc отмена")
@@ -1207,7 +1288,7 @@ fn chat_scroll_top(total_lines: usize, viewport_lines: usize, offset_from_bottom
 mod tests {
     use super::{chat_scroll_top, format_timestamp, render_markdown_entry, render_timeline_entry};
     use crate::bootstrap::SessionSummary;
-    use crate::tui::app::TuiAppState;
+    use crate::tui::app::{BrowserItem, TuiAppState};
     use crate::tui::timeline::Timeline;
     use crate::tui::timeline::{TimelineEntry, TimelineEntryKind};
     use ratatui::Terminal;
@@ -1314,6 +1395,69 @@ mod tests {
         assert!(rendered.contains("агент: judge:"));
         assert!(rendered.contains("Критических замечаний нет."));
         assert!(!rendered.contains("[agent:judge]"));
+    }
+
+    #[test]
+    fn artifact_browser_full_preview_renders_search_state_and_content() {
+        let mut state = TuiAppState::new(
+            vec![SessionSummary {
+                id: "session-artifact".to_string(),
+                title: "artifact".to_string(),
+                agent_profile_id: "default".to_string(),
+                agent_name: "Default".to_string(),
+                model: Some("glm-5-turbo".to_string()),
+                reasoning_visible: true,
+                think_level: None,
+                compactifications: 0,
+                completion_nudges: None,
+                auto_approve: true,
+                context_tokens: 0,
+                usage_input_tokens: None,
+                usage_output_tokens: None,
+                usage_total_tokens: None,
+                has_pending_approval: false,
+                last_message_preview: None,
+                message_count: 0,
+                background_job_count: 0,
+                running_background_job_count: 0,
+                queued_background_job_count: 0,
+                created_at: 1,
+                updated_at: 1,
+            }],
+            Some("session-artifact".to_string()),
+        );
+        state.open_artifact_browser(
+            "Артефакты".to_string(),
+            "↑↓ выбор | Enter полный | / поиск | PgUp/PgDn".to_string(),
+            vec![BrowserItem {
+                id: "artifact-1".to_string(),
+                label: "artifact-1 [ref] Tool trace".to_string(),
+            }],
+            0,
+            "Артефакт artifact-1".to_string(),
+            "первая строка\nвторая строка\nneedle строка".to_string(),
+        );
+        state.apply_browser_search("needle".to_string());
+        state.toggle_browser_full_preview();
+
+        let backend = TestBackend::new(100, 18);
+        let mut terminal = Terminal::new(backend).expect("terminal");
+        terminal
+            .draw(|frame| super::render(frame, &state))
+            .expect("draw");
+
+        let buffer = terminal.backend().buffer();
+        let mut rendered = String::new();
+        for y in 0..buffer.area.height {
+            for x in 0..buffer.area.width {
+                rendered.push_str(buffer[(x, y)].symbol());
+            }
+            rendered.push('\n');
+        }
+
+        assert!(rendered.contains("поиск=\"needle\" 1/1"));
+        assert!(rendered.contains("needle строка"));
+        assert!(rendered.contains("Enter список"));
     }
 
     #[test]
