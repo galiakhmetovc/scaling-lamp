@@ -889,8 +889,8 @@ fn background_worker_existing_session_rebinds_deleted_target_session() {
 }
 
 #[test]
-fn background_worker_schedule_failures_update_last_result_and_last_error_without_crashing() {
-    let provider_response = r#"{
+fn background_worker_schedule_recovers_when_permission_policy_denies_tool_call() {
+    let first_provider_response = r#"{
         "id":"resp_schedule_exec_denied",
         "model":"gpt-5.4",
         "output":[
@@ -904,8 +904,30 @@ fn background_worker_schedule_failures_update_last_result_and_last_error_without
             }
         ],
         "usage":{"input_tokens":19,"output_tokens":7,"total_tokens":26}
-    }"#;
-    let (api_base, requests, handle) = spawn_json_server(provider_response);
+    }"#
+    .to_string();
+    let second_provider_response = r#"{
+        "id":"resp_schedule_exec_denied_final",
+        "model":"gpt-5.4",
+        "output":[
+            {
+                "id":"msg_1",
+                "type":"message",
+                "status":"completed",
+                "role":"assistant",
+                "content":[
+                    {
+                        "type":"output_text",
+                        "text":"Recovered after permission denial"
+                    }
+                ]
+            }
+        ],
+        "usage":{"input_tokens":31,"output_tokens":4,"total_tokens":35}
+    }"#
+    .to_string();
+    let (api_base, requests, handle) =
+        spawn_json_server_sequence(vec![first_provider_response, second_provider_response]);
     let temp = tempfile::tempdir().expect("tempdir");
     let app = build_from_config(AppConfig {
         data_dir: temp.path().join("state-root"),
@@ -953,29 +975,29 @@ fn background_worker_schedule_failures_update_last_result_and_last_error_without
     let report = app
         .background_worker_tick(10)
         .expect("run background worker");
-    let request = requests
+    let first_request = requests
         .recv_timeout(Duration::from_secs(2))
-        .expect("provider request");
+        .expect("first provider request");
+    let second_request = requests
+        .recv_timeout(Duration::from_secs(2))
+        .expect("second provider request");
     handle.join().expect("join server");
 
     assert_eq!(report.executed_jobs, 1);
     let jobs = store.list_jobs().expect("list jobs");
     let updated = app.agent_schedule("judge-failure").expect("load schedule");
-    assert_eq!(updated.last_result.as_deref(), Some("failed"));
-    assert!(
-        updated
-            .last_error
-            .as_deref()
-            .expect("schedule last error")
-            .contains("denied by permission policy")
-    );
+    assert_eq!(updated.last_result.as_deref(), Some("completed"));
+    assert_eq!(updated.last_error, None);
     assert_eq!(updated.last_finished_at, Some(10));
 
     assert_eq!(jobs.len(), 1);
-    assert_eq!(jobs[0].status, "failed");
+    assert_eq!(jobs[0].status, "completed");
 
-    let normalized_request = request.to_ascii_lowercase();
-    assert!(normalized_request.contains("try to run exec"));
+    let normalized_first_request = first_request.to_ascii_lowercase();
+    assert!(normalized_first_request.contains("try to run exec"));
+    let normalized_second_request = second_request.to_ascii_lowercase();
+    assert!(normalized_second_request.contains("denied by permission policy"));
+    assert!(normalized_second_request.contains("\"call_id\":\"call_exec_start\""));
 }
 
 #[test]

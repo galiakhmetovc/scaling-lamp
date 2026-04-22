@@ -22,6 +22,7 @@ fn build_from_config_bootstraps_builtin_agents_and_selects_default() {
 
     let current = app.current_agent_profile().expect("current agent");
     assert_eq!(current.id, "default");
+    assert_eq!(current.name, "Ассистент");
     assert_eq!(current.template_kind, AgentTemplateKind::Default);
 
     for agent_id in ["default", "judge"] {
@@ -108,4 +109,53 @@ fn create_agent_from_template_copies_template_files_independently() {
         .expect("get created agent profile")
         .expect("created profile exists");
     assert_eq!(stored.template_kind, "custom");
+}
+
+#[test]
+fn build_from_config_refreshes_legacy_default_prompts_but_preserves_custom_edits() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let data_dir = temp.path().join("state-root");
+    let app = build_from_config(AppConfig {
+        data_dir: data_dir.clone(),
+        ..AppConfig::default()
+    })
+    .expect("build app");
+
+    let default_home = app.agent_home_path("default").expect("default home");
+    fs::write(
+        default_home.join("SYSTEM.md"),
+        "You are the default autonomous coding agent runtime profile.\n\nWork directly, preserve the canonical runtime path, and keep outputs concise and operational.\n",
+    )
+    .expect("write legacy system");
+    fs::write(
+        default_home.join("AGENTS.md"),
+        "Default agent profile.\n\n- Primary role: general-purpose coding agent\n- Prefer direct execution over unnecessary planning\n- Keep tool usage explicit and minimal\n",
+    )
+    .expect("write legacy agents");
+
+    let _ = build_from_config(AppConfig {
+        data_dir: data_dir.clone(),
+        ..AppConfig::default()
+    })
+    .expect("rebuild app");
+
+    let refreshed_system =
+        fs::read_to_string(default_home.join("SYSTEM.md")).expect("read refreshed system");
+    let refreshed_agents =
+        fs::read_to_string(default_home.join("AGENTS.md")).expect("read refreshed agents");
+    assert!(refreshed_system.contains("assistant autonomous coding agent runtime profile"));
+    assert!(refreshed_agents.contains("Assistant agent profile."));
+    assert!(refreshed_agents.contains("Never invent tool names"));
+
+    fs::write(default_home.join("AGENTS.md"), "custom prompt preserved\n")
+        .expect("write custom agents");
+    let _ = build_from_config(AppConfig {
+        data_dir,
+        ..AppConfig::default()
+    })
+    .expect("rebuild app after custom edit");
+
+    let preserved_agents =
+        fs::read_to_string(default_home.join("AGENTS.md")).expect("read preserved agents");
+    assert_eq!(preserved_agents, "custom prompt preserved\n");
 }

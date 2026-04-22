@@ -3,7 +3,10 @@ use agentd::bootstrap;
 use agentd::cli;
 use agentd::daemon;
 use std::io::Cursor;
-use std::net::TcpListener;
+use std::net::{TcpListener, TcpStream};
+use std::process::Command;
+use std::thread;
+use std::time::Duration;
 
 fn free_port() -> u16 {
     TcpListener::bind("127.0.0.1:0")
@@ -206,4 +209,40 @@ fn process_cli_can_stop_a_remote_daemon_without_autospawning() {
     assert!(output.contains("daemon stopping"));
 
     handle.stop().expect("join stopped daemon");
+}
+
+#[test]
+fn process_cli_shuts_down_autospawned_local_daemon_after_one_shot_command() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let daemon_port = free_port();
+    let data_dir = temp.path().join("state-root");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_agentd"))
+        .args(["session", "create", "session-auto", "Auto", "Spawned"])
+        .env("TEAMD_DATA_DIR", &data_dir)
+        .env("TEAMD_DAEMON_BIND_HOST", "127.0.0.1")
+        .env("TEAMD_DAEMON_BIND_PORT", daemon_port.to_string())
+        .output()
+        .expect("run agentd");
+
+    assert!(
+        output.status.success(),
+        "agentd failed: status={:?} stdout={} stderr={}",
+        output.status.code(),
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let output = String::from_utf8(output.stdout).expect("utf8");
+    assert!(output.contains("created session session-auto"));
+
+    let bind = format!("127.0.0.1:{daemon_port}");
+    for _ in 0..50 {
+        if TcpStream::connect(&bind).is_err() {
+            return;
+        }
+        thread::sleep(Duration::from_millis(20));
+    }
+
+    panic!("autospawned daemon at {bind} stayed alive after one-shot process command");
 }

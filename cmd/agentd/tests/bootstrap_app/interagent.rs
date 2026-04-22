@@ -240,8 +240,7 @@ fn background_worker_routes_interagent_reply_back_to_origin_session() {
     assert_eq!(inbox[0].kind, "external_input_received");
     assert_eq!(inbox[0].status, "processed");
 
-    let child_request = child_request.to_ascii_lowercase();
-    assert!(child_request.contains("[agent:default]"));
+    assert!(child_request.contains("[agent:Ассистент]"));
     let wake_request = wake_request.to_ascii_lowercase();
     assert!(wake_request.contains("[agent:judge]"));
 }
@@ -372,4 +371,97 @@ fn judge_continuation_grant_allows_exactly_one_extra_hop() {
         .expect("parse continued chain");
     assert_eq!(continued_chain.hop_count, DEFAULT_MAX_HOPS + 1);
     assert_eq!(continued_chain.state, AgentChainState::ContinuedOnce);
+}
+
+#[test]
+fn build_from_config_keeps_active_interagent_job_runs_recoverable_across_restart() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let data_dir = temp.path().join("state-root");
+    let app = build_from_config(AppConfig {
+        data_dir: data_dir.clone(),
+        ..AppConfig::default()
+    })
+    .expect("build app");
+    let store = PersistenceStore::open(&app.persistence).expect("open store");
+
+    for (session_id, title, agent_profile_id) in [
+        ("session-origin-restart", "Origin", "default"),
+        ("session-recipient-restart", "Agent: Judge", "judge"),
+    ] {
+        store
+            .put_session(&SessionRecord {
+                id: session_id.to_string(),
+                title: title.to_string(),
+                prompt_override: None,
+                settings_json: serde_json::to_string(&SessionSettings::default())
+                    .expect("serialize settings"),
+                agent_profile_id: agent_profile_id.to_string(),
+                active_mission_id: None,
+                parent_session_id: None,
+                parent_job_id: None,
+                delegation_label: None,
+                created_at: 1,
+                updated_at: 1,
+            })
+            .expect("put session");
+    }
+
+    let mut run = RunEngine::new(
+        "run-interagent-restart",
+        "session-recipient-restart",
+        None,
+        3,
+    );
+    run.start(3).expect("start run");
+    store
+        .put_run(&RunRecord::try_from(run.snapshot()).expect("run record"))
+        .expect("put run");
+
+    let mut job = JobSpec::interagent_message(
+        "job-interagent-restart",
+        "session-recipient-restart",
+        Some("run-interagent-restart"),
+        None,
+        "session-origin-restart",
+        "default",
+        "Default",
+        "judge",
+        "Judge",
+        "Проверь план.",
+        AgentMessageChain::root(
+            "chain-interagent-restart",
+            "session-origin-restart",
+            "default",
+        )
+        .expect("root chain"),
+        2,
+    );
+    job.status = agent_runtime::mission::JobStatus::Running;
+    job.started_at = Some(3);
+    job.updated_at = 3;
+    job.lease_owner = Some("daemon".to_string());
+    job.lease_expires_at = Some(300);
+    store
+        .put_job(&JobRecord::try_from(&job).expect("job record"))
+        .expect("put job");
+
+    drop(store);
+    drop(app);
+
+    let reopened = build_from_config(AppConfig {
+        data_dir,
+        ..AppConfig::default()
+    })
+    .expect("reopen app");
+    let reopened_store = PersistenceStore::open(&reopened.persistence).expect("reopen store");
+
+    let restored = RunSnapshot::try_from(
+        reopened_store
+            .get_run("run-interagent-restart")
+            .expect("get run")
+            .expect("run exists"),
+    )
+    .expect("restore run");
+    assert_eq!(restored.status, RunStatus::Running);
+    assert!(restored.error.is_none());
 }

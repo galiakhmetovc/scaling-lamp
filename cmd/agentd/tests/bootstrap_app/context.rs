@@ -1206,8 +1206,10 @@ fn execute_chat_turn_falls_back_to_builtin_agent_prompts_when_agent_files_are_mi
     assert_eq!(report.output_text, "Loaded fallback prompt files.");
 
     let normalized = first_request.to_ascii_lowercase();
-    assert!(normalized.contains("default autonomous coding agent runtime profile"));
-    assert!(normalized.contains("default agent profile."));
+    assert!(normalized.contains("assistant autonomous coding agent runtime profile"));
+    assert!(normalized.contains("assistant agent profile."));
+    assert!(normalized.contains("never invent tool names"));
+    assert!(normalized.contains("do not call `fs_read_text` on directories"));
 }
 
 #[test]

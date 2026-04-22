@@ -26,11 +26,11 @@ pub(super) fn daemon_supports_command(command: &Command) -> bool {
     )
 }
 
-pub(super) fn daemon_client_for_process(
+pub(super) fn daemon_connection_for_process(
     app: &App,
     connect: &DaemonConnectOptions,
-) -> Result<DaemonClient, BootstrapError> {
-    connect_or_autospawn(&app.config, connect, || {
+) -> Result<crate::http::client::DaemonConnection, BootstrapError> {
+    crate::http::client::connect_or_autospawn_detailed(&app.config, connect, || {
         daemon::spawn_local_process().map_err(BootstrapError::Stream)
     })
 }

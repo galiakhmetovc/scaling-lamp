@@ -2259,3 +2259,232 @@ fn judge_session_turn_recovers_when_provider_calls_a_forbidden_tool() {
     assert!(normalized_second.contains("not allowed by agent profile judge"));
     assert!(normalized_second.contains("agent_allowed_tools"));
 }
+
+#[test]
+fn execute_chat_turn_recovers_when_tool_call_returns_web_fetch_error() {
+    let first_provider_response = r#"{
+                "id":"resp_invalid_web_tool_call",
+                "model":"gpt-5.4",
+                "output":[
+                    {
+                        "id":"fc_1",
+                        "type":"function_call",
+                        "status":"completed",
+                        "call_id":"call_web_fetch",
+                        "name":"web_fetch",
+                        "arguments":"{\"url\":\"not-a-url\"}"
+                    }
+                ],
+                "usage":{"input_tokens":19,"output_tokens":7,"total_tokens":26}
+            }"#
+    .to_string();
+    let second_provider_response = r#"{
+                "id":"resp_invalid_web_final",
+                "model":"gpt-5.4",
+                "output":[
+                    {
+                        "id":"msg_1",
+                        "type":"message",
+                        "status":"completed",
+                        "role":"assistant",
+                        "content":[
+                            {
+                                "type":"output_text",
+                                "text":"Recovered after invalid web request"
+                            }
+                        ]
+                    }
+                ],
+                "usage":{"input_tokens":31,"output_tokens":4,"total_tokens":35}
+            }"#
+    .to_string();
+    let (provider_api_base, provider_requests, provider_handle) =
+        spawn_json_server_sequence(vec![first_provider_response, second_provider_response]);
+    let temp = tempfile::tempdir().expect("tempdir");
+    let app = build_from_config(AppConfig {
+        data_dir: temp.path().join("state-root"),
+        daemon: Default::default(),
+        provider: ConfiguredProvider {
+            kind: ProviderKind::OpenAiResponses,
+            api_base: Some(format!("{provider_api_base}/v1")),
+            api_key: Some("test-key".to_string()),
+            default_model: Some("gpt-5.4".to_string()),
+            ..ConfiguredProvider::default()
+        },
+        permissions: PermissionConfig {
+            mode: PermissionMode::BypassPermissions,
+            rules: Vec::new(),
+        },
+        ..AppConfig::default()
+    })
+    .expect("build app");
+    let store = PersistenceStore::open(&app.persistence).expect("open store");
+
+    store
+        .put_session(&SessionRecord {
+            id: "session-invalid-web-tool".to_string(),
+            title: "Invalid web tool".to_string(),
+            prompt_override: Some("Use tools when useful.".to_string()),
+            settings_json: serde_json::to_string(&SessionSettings::default())
+                .expect("serialize settings"),
+            agent_profile_id: "default".to_string(),
+            active_mission_id: None,
+            parent_session_id: None,
+            parent_job_id: None,
+            delegation_label: None,
+            created_at: 1,
+            updated_at: 1,
+        })
+        .expect("put session");
+
+    let report = app
+        .execute_chat_turn("session-invalid-web-tool", "Fetch an invalid url", 10)
+        .expect("execute chat turn");
+    let _first_request = provider_requests.recv().expect("first provider request");
+    let second_request = provider_requests.recv().expect("second provider request");
+    provider_handle.join().expect("join provider server");
+
+    assert_eq!(report.response_id, "resp_invalid_web_final");
+    assert_eq!(report.output_text, "Recovered after invalid web request");
+
+    let run = store
+        .get_run("run-chat-session-invalid-web-tool-10")
+        .expect("get run")
+        .expect("run exists");
+    assert_eq!(run.status, "completed");
+    assert_eq!(
+        run.result.as_deref(),
+        Some("Recovered after invalid web request")
+    );
+
+    let normalized_second = second_request.to_ascii_lowercase();
+    assert!(
+        normalized_second.contains("\"call_id\":\"call_web_fetch\""),
+        "{normalized_second}"
+    );
+    assert!(
+        normalized_second.contains("\"type\":\"function_call_output\""),
+        "{normalized_second}"
+    );
+    assert!(
+        normalized_second.contains("web http error"),
+        "{normalized_second}"
+    );
+    assert!(
+        normalized_second.contains("not-a-url"),
+        "{normalized_second}"
+    );
+}
+
+#[test]
+fn execute_chat_turn_recovers_when_permission_policy_denies_tool_call() {
+    let first_provider_response = r#"{
+                "id":"resp_permission_denied_tool_call",
+                "model":"gpt-5.4",
+                "output":[
+                    {
+                        "id":"fc_1",
+                        "type":"function_call",
+                        "status":"completed",
+                        "call_id":"call_web_fetch",
+                        "name":"web_fetch",
+                        "arguments":"{\"url\":\"https://example.com/restricted\"}"
+                    }
+                ],
+                "usage":{"input_tokens":19,"output_tokens":7,"total_tokens":26}
+            }"#
+    .to_string();
+    let second_provider_response = r#"{
+                "id":"resp_permission_denied_final",
+                "model":"gpt-5.4",
+                "output":[
+                    {
+                        "id":"msg_1",
+                        "type":"message",
+                        "status":"completed",
+                        "role":"assistant",
+                        "content":[
+                            {
+                                "type":"output_text",
+                                "text":"Recovered after permission denial"
+                            }
+                        ]
+                    }
+                ],
+                "usage":{"input_tokens":31,"output_tokens":4,"total_tokens":35}
+            }"#
+    .to_string();
+    let (provider_api_base, provider_requests, provider_handle) =
+        spawn_json_server_sequence(vec![first_provider_response, second_provider_response]);
+    let temp = tempfile::tempdir().expect("tempdir");
+    let app = build_from_config(AppConfig {
+        data_dir: temp.path().join("state-root"),
+        daemon: Default::default(),
+        provider: ConfiguredProvider {
+            kind: ProviderKind::OpenAiResponses,
+            api_base: Some(format!("{provider_api_base}/v1")),
+            api_key: Some("test-key".to_string()),
+            default_model: Some("gpt-5.4".to_string()),
+            ..ConfiguredProvider::default()
+        },
+        permissions: PermissionConfig {
+            mode: PermissionMode::Auto,
+            rules: vec![PermissionRule {
+                action: PermissionAction::Deny,
+                tool: Some("web_fetch".to_string()),
+                family: None,
+                path_prefix: None,
+            }],
+        },
+        ..AppConfig::default()
+    })
+    .expect("build app");
+    let store = PersistenceStore::open(&app.persistence).expect("open store");
+
+    store
+        .put_session(&SessionRecord {
+            id: "session-permission-denied-tool".to_string(),
+            title: "Permission denied tool".to_string(),
+            prompt_override: Some("Use tools when useful.".to_string()),
+            settings_json: serde_json::to_string(&SessionSettings::default())
+                .expect("serialize settings"),
+            agent_profile_id: "default".to_string(),
+            active_mission_id: None,
+            parent_session_id: None,
+            parent_job_id: None,
+            delegation_label: None,
+            created_at: 1,
+            updated_at: 1,
+        })
+        .expect("put session");
+
+    let report = app
+        .execute_chat_turn(
+            "session-permission-denied-tool",
+            "Fetch a restricted url",
+            10,
+        )
+        .expect("execute chat turn");
+    let _first_request = provider_requests.recv().expect("first provider request");
+    let second_request = provider_requests.recv().expect("second provider request");
+    provider_handle.join().expect("join provider server");
+
+    assert_eq!(report.response_id, "resp_permission_denied_final");
+    assert_eq!(report.output_text, "Recovered after permission denial");
+
+    let run = store
+        .get_run("run-chat-session-permission-denied-tool-10")
+        .expect("get run")
+        .expect("run exists");
+    assert_eq!(run.status, "completed");
+    assert_eq!(
+        run.result.as_deref(),
+        Some("Recovered after permission denial")
+    );
+
+    let normalized_second = second_request.to_ascii_lowercase();
+    assert!(normalized_second.contains("\"call_id\":\"call_web_fetch\""));
+    assert!(normalized_second.contains("\"type\":\"function_call_output\""));
+    assert!(normalized_second.contains("denied by permission policy"));
+    assert!(normalized_second.contains("web_fetch"));
+}

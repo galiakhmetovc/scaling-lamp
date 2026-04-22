@@ -348,6 +348,21 @@ impl ProviderLoopCursor {
 }
 
 impl ExecutionService {
+    fn provider_tool_output(
+        tool_name: &str,
+        reason: &str,
+        retryable: bool,
+        details: serde_json::Value,
+    ) -> String {
+        serde_json::json!({
+            "tool": tool_name,
+            "error": reason,
+            "retryable": retryable,
+            "details": details,
+        })
+        .to_string()
+    }
+
     fn invalid_provider_tool_output(tool_name: &str, reason: &str) -> String {
         serde_json::json!({
             "tool": tool_name,
@@ -362,13 +377,15 @@ impl ExecutionService {
         reason: &str,
         details: serde_json::Value,
     ) -> String {
-        serde_json::json!({
-            "tool": tool_name,
-            "error": reason,
-            "retryable": true,
-            "details": details,
-        })
-        .to_string()
+        Self::provider_tool_output(tool_name, reason, true, details)
+    }
+
+    fn non_retryable_provider_tool_output(
+        tool_name: &str,
+        reason: &str,
+        details: serde_json::Value,
+    ) -> String {
+        Self::provider_tool_output(tool_name, reason, false, details)
     }
 
     fn recoverable_tool_error_output(
@@ -437,6 +454,22 @@ impl ExecutionService {
                     }),
                 ))
             }
+            ToolError::Workspace(agent_runtime::workspace::WorkspaceError::Io { path, source })
+                if matches!(
+                    source.kind(),
+                    std::io::ErrorKind::IsADirectory | std::io::ErrorKind::NotADirectory
+                ) =>
+            {
+                Some(Self::retryable_provider_tool_output(
+                    parsed.name().as_str(),
+                    &format!("workspace path is not a regular file: {}", path.display()),
+                    serde_json::json!({
+                        "requested_path": path.display().to_string(),
+                        "io_error": source.to_string(),
+                        "hint": "re-check whether the path should target a file or use a list/read-directory style tool instead",
+                    }),
+                ))
+            }
             ToolError::InvalidPatch { path, reason } => Some(Self::retryable_provider_tool_output(
                 parsed.name().as_str(),
                 &format!("invalid patch for {path}: {reason}"),
@@ -453,12 +486,21 @@ impl ExecutionService {
                     parsed.name().as_str(),
                     &format!("invalid plan reference: {reason}"),
                     serde_json::json!({
-                        "plan_error": reason,
+                            "plan_error": reason,
                         "hint": "use canonical task_id values returned by add_task or plan_snapshot",
                     }),
                 ))
             }
-            _ => None,
+            _ => Some(Self::non_retryable_provider_tool_output(
+                parsed.name().as_str(),
+                &error.to_string(),
+                serde_json::json!({
+                    "requested_tool": parsed.name().as_str(),
+                    "request_summary": parsed.summary(),
+                    "error_kind": format!("{error:?}"),
+                    "hint": "inspect the error details and adjust the tool arguments or choose a different tool before retrying",
+                }),
+            )),
         }
     }
 
@@ -2093,13 +2135,32 @@ impl ExecutionService {
                             parsed.name().as_str(),
                             permission.reason
                         );
-                        run.fail(reason.clone(), now)
-                            .map_err(ExecutionError::RunTransition)?;
-                        self.persist_run(store, run)?;
-                        return Err(ExecutionError::PermissionDenied {
-                            tool: parsed.name().as_str().to_string(),
-                            reason,
-                        });
+                        run.record_tool_completion(
+                            format!("{} tool error: {reason}", parsed.summary()),
+                            now,
+                        )
+                        .map_err(ExecutionError::RunTransition)?;
+                        let model_output = self
+                            .recoverable_execution_error_output(
+                                &parsed,
+                                &ExecutionError::PermissionDenied {
+                                    tool: parsed.name().as_str().to_string(),
+                                    reason,
+                                },
+                            )
+                            .expect("permission denied should produce model-visible tool output");
+                        cursor.record_tool_output(&tool_call.call_id, model_output);
+                        if self.run_was_cancelled_by_operator(store, run.snapshot().id.as_str())? {
+                            return Err(ExecutionError::CancelledByOperator);
+                        }
+                        if interrupt_after_tool_step.is_some_and(|flag| flag.load(Ordering::SeqCst))
+                        {
+                            run.interrupt("superseded by queued user input", now)
+                                .map_err(ExecutionError::RunTransition)?;
+                            self.persist_run(store, run)?;
+                            return Err(ExecutionError::InterruptedByQueuedInput);
+                        }
+                        continue;
                     }
                     PermissionAction::Ask => {
                         if auto_approve {
@@ -2457,6 +2518,28 @@ mod tests {
     }
 
     #[test]
+    fn recoverable_tool_error_output_treats_directory_workspace_paths_as_retryable() {
+        let service = ExecutionService::default();
+        let parsed = ToolCall::FsReadText(agent_runtime::tool::FsReadTextInput {
+            path: "skills/project-knowledge-layout".to_string(),
+        });
+
+        let output = service
+            .recoverable_tool_error_output(
+                &parsed,
+                &ToolError::Workspace(agent_runtime::workspace::WorkspaceError::Io {
+                    path: std::path::PathBuf::from("./skills/project-knowledge-layout"),
+                    source: std::io::Error::from(std::io::ErrorKind::IsADirectory),
+                }),
+            )
+            .expect("recoverable output");
+
+        assert!(output.contains("\"retryable\":true"));
+        assert!(output.contains("workspace path is not a regular file"));
+        assert!(output.contains("skills/project-knowledge-layout"));
+    }
+
+    #[test]
     fn recoverable_tool_error_output_treats_patch_search_misses_as_retryable() {
         let service = ExecutionService::default();
         let parsed = ToolCall::FsPatchText(agent_runtime::tool::FsPatchTextInput {
@@ -2478,5 +2561,26 @@ mod tests {
         assert!(output.contains("\"retryable\":true"));
         assert!(output.contains("search text not found in file"));
         assert!(output.contains("skills/vsphere-govc/scripts/vm-list.sh"));
+    }
+
+    #[test]
+    fn recoverable_tool_error_output_treats_invalid_web_requests_as_nonfatal() {
+        let service = ExecutionService::default();
+        let parsed = ToolCall::WebFetch(agent_runtime::tool::WebFetchInput {
+            url: "not-a-url".to_string(),
+        });
+
+        let output = service
+            .recoverable_tool_error_output(
+                &parsed,
+                &ToolError::InvalidWebRequest {
+                    reason: "relative URL without a base".to_string(),
+                },
+            )
+            .expect("recoverable output");
+
+        assert!(output.contains("\"retryable\":false"));
+        assert!(output.contains("invalid web request"));
+        assert!(output.contains("relative URL without a base"));
     }
 }

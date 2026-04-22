@@ -1,5 +1,6 @@
 use crate::repository::RunRepository;
 use crate::store::{PersistenceStore, StoreError};
+use agent_runtime::mission::JobStatus;
 use agent_runtime::run::RunStatus;
 use std::error::Error;
 use std::fmt;
@@ -34,14 +35,18 @@ pub fn reconcile_runs(
     policy: RecoveryPolicy,
     at: i64,
 ) -> Result<RecoveryReport, RecoveryError> {
-    let runs = store.list_runs().map_err(RecoveryError::Store)?;
+    let snapshot = store.load_execution_state().map_err(RecoveryError::Store)?;
+    let runs = snapshot.runs;
+    let jobs = snapshot.jobs;
     let mut report = RecoveryReport {
         scanned_runs: runs.len(),
         interrupted_runs: 0,
     };
 
     for record in runs {
-        if should_interrupt_run(record.status.as_str(), policy.mode) {
+        if should_interrupt_run(record.status.as_str(), policy.mode)
+            && !has_recoverable_active_job(&record.id, &jobs, policy.mode)
+        {
             let mut updated = record;
             updated.status = RunStatus::Interrupted.as_str().to_string();
             updated.error = Some(NON_RECOVERABLE_RUN_REASON.to_string());
@@ -66,6 +71,23 @@ fn should_interrupt_run(status: &str, mode: RecoveryMode) -> bool {
             "running" | "waiting_process" | "waiting_delegate" | "resuming"
         ),
     }
+}
+
+fn has_recoverable_active_job(run_id: &str, jobs: &[crate::JobRecord], mode: RecoveryMode) -> bool {
+    if mode != RecoveryMode::Reconcile {
+        return false;
+    }
+
+    jobs.iter().any(|job| {
+        job.run_id.as_deref() == Some(run_id)
+            && matches!(
+                JobStatus::try_from(job.status.as_str()),
+                Ok(JobStatus::Queued
+                    | JobStatus::Running
+                    | JobStatus::WaitingExternal
+                    | JobStatus::Blocked)
+            )
+    })
 }
 
 impl fmt::Display for RecoveryError {

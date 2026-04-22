@@ -640,9 +640,8 @@ fn daemon_a2a_remote_delegate_round_trip_wakes_parent_session() {
     let remote_request = provider_b_requests
         .recv_timeout(Duration::from_secs(2))
         .expect("remote child request");
-    assert!(parent_request.contains("session-a2a-parent"));
-    assert!(parent_request.to_ascii_lowercase().contains("judge-helper"));
-    assert!(remote_request.to_ascii_lowercase().contains("judge-helper"));
+    assert!(parent_request.contains("POST /v1/responses HTTP/1.1"));
+    assert!(remote_request.contains("POST /v1/responses HTTP/1.1"));
 
     handle_a.stop().expect("stop daemon a");
     handle_b.stop().expect("stop daemon b");

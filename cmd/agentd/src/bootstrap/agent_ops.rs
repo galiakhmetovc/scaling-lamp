@@ -14,11 +14,12 @@ impl App {
 
         for template in agents::builtin_templates() {
             let home = agents::agent_home(&self.config.data_dir, template.id);
-            agents::ensure_agent_home_layout(&home, template.system_md, template.agents_md)
-                .map_err(|source| BootstrapError::Io {
+            agents::ensure_builtin_agent_home_layout(&home, *template).map_err(|source| {
+                BootstrapError::Io {
                     path: home.clone(),
                     source,
-                })?;
+                }
+            })?;
 
             let created_at = store
                 .get_agent_profile(template.id)?

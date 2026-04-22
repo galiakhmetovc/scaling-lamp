@@ -14,7 +14,7 @@ use crate::http::client::{DaemonConnectOptions, connect_or_autospawn_detailed};
 use app::{BrowserItem, BrowserKind, DialogState, TuiAppState};
 use backend::TuiBackend;
 use crossterm::event::{
-    self, DisableBracketedPaste, EnableBracketedPaste, Event, KeyCode, KeyEvent, KeyEventKind,
+    self, DisableBracketedPaste, EnableBracketedPaste, Event, KeyEvent, KeyEventKind,
 };
 use crossterm::execute;
 use crossterm::terminal::{
@@ -134,14 +134,6 @@ fn dispatch_terminal_event(
                     screens::inspector::handle_key(state, key)?
                 }
             };
-
-            if key.code == KeyCode::Char('q')
-                && key.modifiers.is_empty()
-                && state.dialog_state().is_none()
-            {
-                state.request_exit();
-                return Ok(TuiAction::None);
-            }
 
             Ok(action)
         }
@@ -2402,6 +2394,56 @@ mod tests {
         assert_eq!(action, TuiAction::None);
         assert_eq!(state.input_buffer(), "first line\nsecond line\nthird line");
         assert_eq!(state.input_cursor(), state.input_buffer().len());
+    }
+
+    #[test]
+    fn dispatch_terminal_event_does_not_treat_plain_q_or_shortcut_letter_as_exit() {
+        let mut state = TuiAppState::new(
+            vec![SessionSummary {
+                id: "session-a".to_string(),
+                title: "Session A".to_string(),
+                agent_profile_id: "default".to_string(),
+                agent_name: "Default".to_string(),
+                scheduled_by: None,
+                model: Some("glm-5-turbo".to_string()),
+                reasoning_visible: true,
+                think_level: None,
+                compactifications: 0,
+                completion_nudges: None,
+                auto_approve: false,
+                context_tokens: 0,
+                usage_input_tokens: None,
+                usage_output_tokens: None,
+                usage_total_tokens: None,
+                has_pending_approval: false,
+                last_message_preview: None,
+                message_count: 0,
+                background_job_count: 0,
+                running_background_job_count: 0,
+                queued_background_job_count: 0,
+                created_at: 1,
+                updated_at: 2,
+            }],
+            Some("session-a".to_string()),
+        );
+
+        let action = dispatch_terminal_event(
+            &mut state,
+            Event::Key(KeyEvent::new(KeyCode::Char('q'), KeyModifiers::NONE)),
+        )
+        .expect("q key");
+        assert_eq!(action, TuiAction::None);
+        assert!(!state.should_exit());
+        assert_eq!(state.input_buffer(), "q");
+
+        let action = dispatch_terminal_event(
+            &mut state,
+            Event::Key(KeyEvent::new(KeyCode::Char('й'), KeyModifiers::NONE)),
+        )
+        .expect("russian q key");
+        assert_eq!(action, TuiAction::None);
+        assert!(!state.should_exit());
+        assert_eq!(state.input_buffer(), "qй");
     }
 
     #[test]

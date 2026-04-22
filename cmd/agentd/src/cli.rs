@@ -7,7 +7,7 @@ use crate::bootstrap::{App, BootstrapError};
 use crate::daemon;
 use crate::execution::{ChatExecutionEvent, ExecutionError, ToolExecutionStatus};
 use crate::help::QUICK_HELP_LINE;
-use crate::http::client::{DaemonClient, DaemonConnectOptions, connect_or_autospawn};
+use crate::http::client::{DaemonClient, DaemonConnectOptions};
 use crate::http::types::{SessionDetailResponse, StatusResponse};
 use crate::tui;
 use agent_persistence::{
@@ -25,8 +25,8 @@ use std::io::{BufRead, Write};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use self::process::{
-    daemon_client_for_process, daemon_supports_command, execute_command, execute_daemon_command,
-    merge_connect_options,
+    daemon_connection_for_process, daemon_supports_command, execute_command,
+    execute_daemon_command, merge_connect_options,
 };
 use self::repl::{run_chat_repl, run_chat_repl_with_backend};
 
@@ -222,13 +222,33 @@ where
             tui::run_daemon_backed(app, connect)
         }
         Command::ChatRepl { session_id } => {
-            let client = daemon_client_for_process(app, &connect)?;
-            run_chat_repl_with_backend(&client, &session_id, input, output)
+            let connection = daemon_connection_for_process(app, &connect)?;
+            let result =
+                run_chat_repl_with_backend(connection.client(), &session_id, input, output);
+            let shutdown_result = connection.shutdown_if_autospawned();
+            match result {
+                Ok(()) => shutdown_result,
+                Err(error) => {
+                    let _ = shutdown_result;
+                    Err(error)
+                }
+            }
         }
         other if daemon_supports_command(&other) => {
-            let client = daemon_client_for_process(app, &connect)?;
-            let rendered = execute_daemon_command(&client, other)?;
-            writeln!(output, "{rendered}").map_err(BootstrapError::Stream)
+            let connection = daemon_connection_for_process(app, &connect)?;
+            let rendered = execute_daemon_command(connection.client(), other);
+            let write_result = match rendered {
+                Ok(rendered) => writeln!(output, "{rendered}").map_err(BootstrapError::Stream),
+                Err(error) => Err(error),
+            };
+            let shutdown_result = connection.shutdown_if_autospawned();
+            match write_result {
+                Ok(()) => shutdown_result,
+                Err(error) => {
+                    let _ = shutdown_result;
+                    Err(error)
+                }
+            }
         }
         other => {
             if connect.host.is_some() || connect.port.is_some() {

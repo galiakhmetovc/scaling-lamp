@@ -593,8 +593,9 @@ fn parse_tool_step_detail(detail: &str) -> (String, String, String) {
         .to_string();
     let detail_lower = detail.to_ascii_lowercase();
     let status = if detail_lower.contains("retryable error:")
-        || detail_lower.contains(" invalid arguments:")
-        || detail_lower.contains(" failed:")
+        || detail_lower.contains("tool error:")
+        || detail_lower.contains("invalid arguments:")
+        || detail_lower.contains("failed:")
     {
         "failed"
     } else {
@@ -644,4 +645,48 @@ fn format_background_job_time(timestamp: i64) -> String {
                 .unwrap_or_else(|_| timestamp.to_string())
         })
         .unwrap_or_else(|_| timestamp.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{build_synthetic_run_lines, parse_tool_step_detail};
+    use agent_runtime::run::{RunSnapshot, RunStatus, RunStep, RunStepKind};
+
+    #[test]
+    fn parse_tool_step_detail_marks_tool_error_as_failed() {
+        let (tool_name, status, summary) = parse_tool_step_detail(
+            "fs_read_text path=projects/adqm/infra/ansible/group_vars/all.yml tool error: execution tool error: workspace filesystem error at ./projects/adqm/infra/ansible/group_vars/all.yml: No such file or directory (os error 2)",
+        );
+
+        assert_eq!(tool_name, "fs_read_text");
+        assert_eq!(status, "failed");
+        assert!(summary.contains("tool error:"));
+    }
+
+    #[test]
+    fn build_synthetic_run_lines_marks_tool_error_as_failed() {
+        let run = RunSnapshot {
+            id: "run-1".to_string(),
+            session_id: "session-1".to_string(),
+            status: RunStatus::Running,
+            started_at: 100,
+            updated_at: 101,
+            recent_steps: vec![RunStep {
+                kind: RunStepKind::ToolCompleted,
+                detail: "fs_read_text path=projects/adqm/infra/ansible/group_vars/all.yml tool error: execution tool error: workspace filesystem error at ./projects/adqm/infra/ansible/group_vars/all.yml: No such file or directory (os error 2)".to_string(),
+                recorded_at: 101,
+            }],
+            ..RunSnapshot::default()
+        };
+
+        let lines = build_synthetic_run_lines("session-1", &[run]);
+        let tool_line = lines
+            .iter()
+            .find(|line| line.role == "tool")
+            .expect("synthetic tool transcript line");
+
+        assert_eq!(tool_line.tool_name.as_deref(), Some("fs_read_text"));
+        assert_eq!(tool_line.tool_status.as_deref(), Some("failed"));
+        assert!(tool_line.content.contains("tool error:"));
+    }
 }

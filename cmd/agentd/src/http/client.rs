@@ -105,6 +105,12 @@ impl DaemonConnection {
     pub fn shutdown_if_autospawned(&self) -> Result<(), BootstrapError> {
         if self.autospawned {
             self.client.shutdown()?;
+            for _ in 0..50 {
+                if self.client.status().is_err() {
+                    return Ok(());
+                }
+                thread::sleep(Duration::from_millis(50));
+            }
         }
         Ok(())
     }

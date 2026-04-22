@@ -7,16 +7,60 @@ use std::path::{Path, PathBuf};
 pub const DEFAULT_AGENT_ID: &str = "default";
 pub const JUDGE_AGENT_ID: &str = "judge";
 
-const DEFAULT_SYSTEM_MD: &str = r#"You are the default autonomous coding agent runtime profile.
+const LEGACY_DEFAULT_SYSTEM_MD: &str = r#"You are the default autonomous coding agent runtime profile.
 
 Work directly, preserve the canonical runtime path, and keep outputs concise and operational.
 "#;
 
-const DEFAULT_AGENTS_MD: &str = r#"Default agent profile.
+const DEFAULT_SYSTEM_MD: &str = r#"You are the assistant autonomous coding agent runtime profile.
+
+Work directly, preserve the canonical runtime path, and keep outputs concise and operational.
+"#;
+
+const LEGACY_DEFAULT_AGENTS_MD: &str = r#"Default agent profile.
 
 - Primary role: general-purpose coding agent
 - Prefer direct execution over unnecessary planning
 - Keep tool usage explicit and minimal
+"#;
+
+const DEFAULT_AGENTS_MD: &str = r#"Assistant agent profile.
+
+- Primary role: general-purpose coding agent
+- Prefer direct execution over unnecessary planning
+- Keep tool usage explicit and minimal
+- Never invent tool names, tool arguments, status values, task ids, process ids, or artifact ids
+- Use only the exact canonical tool ids exposed in the tool catalog
+
+Tool usage rules:
+
+- Filesystem reads:
+  - Use `fs_read_text` for a whole UTF-8 text file
+  - Use `fs_read_lines` when you only need a line range
+  - Use `fs_list` or `fs_glob` before reading when the path is uncertain
+  - Do not call `fs_read_text` on directories
+- Filesystem writes:
+  - Re-read the file before `fs_patch_text` or `fs_replace_lines`
+  - Use `fs_write_text` only for full-file writes
+  - Use `fs_patch_text` for exact text replacement
+  - Use `fs_replace_lines` when you know the exact inclusive line range
+  - Use `fs_insert_text` for prepend/append or before/after a specific line
+- Search:
+  - Use `fs_search_text` for one known file
+  - Use `fs_find_in_files` when searching across the workspace
+- Exec:
+  - `exec_start` takes one executable plus literal args; do not mash a full shell command into `executable`
+  - If you need shell syntax, run the shell explicitly, for example executable `/bin/sh` with args `["-c", "..."]`
+  - Call `exec_wait` only with a real `process_id` returned by `exec_start`
+- Planning:
+  - Initialize the plan once with `init_plan`
+  - Use task ids returned by `add_task` or `plan_snapshot`; do not invent ordinal references unless already shown
+  - Update progress with `set_task_status` and `add_task_note` as work advances
+- Offload:
+  - Use `artifact_read` or `artifact_search` only for artifact ids or refs that already exist in the context
+- Error handling:
+  - If a tool returns an error, inspect the returned details, correct the arguments, and retry with the right tool
+  - Do not claim success after a failed tool call
 "#;
 
 const JUDGE_SYSTEM_MD: &str = r#"You are the judge agent profile.
@@ -44,7 +88,7 @@ pub struct BuiltinAgentTemplate {
 const BUILTIN_TEMPLATES: [BuiltinAgentTemplate; 2] = [
     BuiltinAgentTemplate {
         id: DEFAULT_AGENT_ID,
-        name: "Default",
+        name: "Ассистент",
         template_kind: AgentTemplateKind::Default,
         system_md: DEFAULT_SYSTEM_MD,
         agents_md: DEFAULT_AGENTS_MD,
@@ -122,14 +166,21 @@ pub fn builtin_allowed_tools(template_kind: AgentTemplateKind) -> Vec<String> {
     }
 }
 
-pub fn ensure_agent_home_layout(
+pub fn ensure_builtin_agent_home_layout(
     agent_home: &Path,
-    system_md: &str,
-    agents_md: &str,
+    template: BuiltinAgentTemplate,
 ) -> io::Result<()> {
     fs::create_dir_all(agent_home.join("skills"))?;
-    write_if_missing(&agent_home.join("SYSTEM.md"), system_md)?;
-    write_if_missing(&agent_home.join("AGENTS.md"), agents_md)?;
+    sync_builtin_prompt_file(
+        &agent_home.join("SYSTEM.md"),
+        template.system_md,
+        builtin_legacy_system_variants(template.id),
+    )?;
+    sync_builtin_prompt_file(
+        &agent_home.join("AGENTS.md"),
+        template.agents_md,
+        builtin_legacy_agents_variants(template.id),
+    )?;
     Ok(())
 }
 
@@ -187,11 +238,51 @@ pub fn normalize_agent_id(name: &str) -> String {
     }
 }
 
-fn write_if_missing(path: &Path, content: &str) -> io::Result<()> {
-    if path.exists() {
-        return Ok(());
+fn sync_builtin_prompt_file(
+    path: &Path,
+    current: &str,
+    legacy_variants: &[&str],
+) -> io::Result<()> {
+    match fs::read_to_string(path) {
+        Ok(existing) => {
+            let existing = normalize_prompt_contents(&existing);
+            let current = normalize_prompt_contents(current);
+            if existing == current
+                || legacy_variants
+                    .iter()
+                    .any(|candidate| existing == normalize_prompt_contents(candidate))
+            {
+                fs::write(path, current)
+            } else {
+                Ok(())
+            }
+        }
+        Err(source) if source.kind() == io::ErrorKind::NotFound => fs::write(path, current),
+        Err(source) => Err(source),
     }
-    fs::write(path, content)
+}
+
+fn normalize_prompt_contents(contents: &str) -> String {
+    let normalized = contents.replace("\r\n", "\n");
+    if normalized.ends_with('\n') {
+        normalized
+    } else {
+        format!("{normalized}\n")
+    }
+}
+
+fn builtin_legacy_system_variants(agent_id: &str) -> &'static [&'static str] {
+    match agent_id {
+        DEFAULT_AGENT_ID => &[LEGACY_DEFAULT_SYSTEM_MD],
+        _ => &[],
+    }
+}
+
+fn builtin_legacy_agents_variants(agent_id: &str) -> &'static [&'static str] {
+    match agent_id {
+        DEFAULT_AGENT_ID => &[LEGACY_DEFAULT_AGENTS_MD],
+        _ => &[],
+    }
 }
 
 fn copy_or_write(source: &Path, destination: &Path, fallback: &str) -> io::Result<()> {
