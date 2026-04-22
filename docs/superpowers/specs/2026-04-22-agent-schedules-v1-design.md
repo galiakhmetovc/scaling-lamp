@@ -9,8 +9,11 @@ This slice focuses on:
 - two concrete schedule modes:
   - `interval`
   - `after_completion`
+- two delivery modes:
+  - `fresh_session`
+  - `existing_session`
 - visible scheduled sessions in the normal session list
-- schedule-owned fresh-session launches
+- schedule-owned fresh-session and fixed-session launches
 - schedule-safe execution semantics without interactive approvals
 - TUI-first operator UX for listing, creating, toggling, inspecting, and deleting schedules
 
@@ -21,7 +24,7 @@ This design covers:
 - `AgentSchedule` domain and persistence changes
 - scheduler semantics for `interval` and `after_completion`
 - auto-approved scheduled execution policy
-- session metadata needed to mark schedule-created sessions
+- session metadata needed to mark schedule-created sessions and schedule-origin messages
 - TUI browser behavior for schedules
 - minimum CLI/HTTP parity required to preserve the thin-client architecture
 
@@ -30,7 +33,7 @@ This design does not cover:
 - trigger-based schedules
 - cron syntax
 - in-place schedule editing beyond enable/disable in `v1`
-- reusing the same session for repeated schedule runs
+- heuristic retargeting to an arbitrary "latest matching" session
 - hidden schedule-only sessions
 
 ## Constraints
@@ -44,7 +47,7 @@ This design does not cover:
   5. `ContextSummary`
   6. offload refs
   7. uncovered transcript tail
-- Scheduled launches must create normal sessions, not a hidden synthetic run type.
+- Scheduled execution must use normal visible sessions and normal queued messages, not a hidden synthetic run type.
 - Scheduled sessions remain visible in the main session list with an explicit mark.
 - Schedule execution must not block forever on interactive approvals.
 
@@ -87,6 +90,10 @@ This reuses substrate, but it produces poor operator UX because there is no stab
 - `mode`
   - `interval`
   - `after_completion`
+- `delivery_mode`
+  - `fresh_session`
+  - `existing_session`
+- `target_session_id`
 - `interval_seconds`
 - `next_fire_at`
 - `enabled`
@@ -100,6 +107,8 @@ This reuses substrate, but it produces poor operator UX because there is no stab
 - `updated_at`
 
 `trigger` remains reserved but is not operator-creatable in `v1`.
+
+`target_session_id` is used only for `delivery_mode=existing_session`.
 
 ## Schedule Modes
 
@@ -134,18 +143,44 @@ This mode is for loops like:
 - "10 minutes after the previous run finishes, run again"
 - "keep polling, but avoid overlap and avoid drift from long executions"
 
+## Delivery Modes
+
+### `fresh_session`
+
+Each fire creates a brand new session.
+
+This is the default behavior and works for both schedule modes.
+
+### `existing_session`
+
+Each fire targets one specific persisted session via `target_session_id`.
+
+Rules:
+
+- the target session must already belong to the same agent profile as the schedule
+- if the target session has been deleted, the scheduler creates a new session and rewrites `target_session_id` to the new session id
+- the scheduler never auto-retargets to an arbitrary "latest matching session"
+
 ## Launch Semantics
 
-Each schedule fire creates a **fresh new session**.
+Each schedule fire resolves its target according to `delivery_mode`.
 
-The session:
+For `fresh_session`, runtime creates a new session.
+
+For `existing_session`, runtime targets the stored `target_session_id`.
+
+In both cases, the effective session:
 
 - is bound to the schedule's `agent_profile_id`
 - uses the schedule's `workspace_root`
 - receives the saved `prompt` as its initial incoming message
 - runs through the normal chat/runtime/tool loop
 
-`v1` does not reuse a prior scheduled session.
+If `delivery_mode=existing_session` and the stored session no longer exists:
+
+- runtime creates a new replacement session
+- persists the replacement as the new `target_session_id`
+- continues future launches against that replacement session
 
 ## Scheduled Execution Policy
 
@@ -176,6 +211,10 @@ This requires durable session-side metadata for schedule origin, for example:
 
 - `agent_schedule_id`
 
+Scheduled input shown inside an existing session should be visibly marked as schedule-origin, for example:
+
+- `расписание: <id>`
+
 ## TUI UX
 
 The schedule browser should become operational rather than read-only.
@@ -187,6 +226,7 @@ Each row should show:
 - `id`
 - `agent`
 - `mode`
+- `delivery_mode`
 - `enabled/disabled`
 - next run summary
 - last result summary
@@ -199,6 +239,7 @@ The detail pane should show:
 - full prompt
 - `workspace_root`
 - `mode`
+- `delivery_mode`
 - `interval_seconds`
 - `next_fire_at`
 - `last_triggered_at`
@@ -207,6 +248,7 @@ The detail pane should show:
 - `last_job_id`
 - `last_result`
 - `last_error`
+- `target_session_id`
 
 ### TUI Actions
 
@@ -224,8 +266,10 @@ Recommended creation flow:
 1. `id`
 2. `agent`
 3. `mode`
-4. `interval_seconds`
-5. `prompt`
+4. `delivery_mode`
+5. `interval_seconds`
+6. `prompt`
+7. optional `target_session_id` when `delivery_mode=existing_session`
 
 ## CLI And HTTP Surface
 
@@ -252,6 +296,19 @@ Mode-specific updates:
 - `after_completion`
   - update `next_fire_at` only after the launched session reaches terminal completion
 
+Mode and delivery interactions:
+
+- `interval + fresh_session`
+  - normal fresh-session cadence
+- `interval + existing_session`
+  - if the target session is currently busy with an active run, the current tick is skipped
+- `after_completion + fresh_session`
+  - the next fire time is based on the terminal completion of the previous schedule-owned run
+- `after_completion + existing_session`
+  - completion is tracked only for runs launched by this exact schedule in that target session
+  - manual operator turns and other schedules in the same session do not satisfy completion for this schedule
+  - if the target session is busy, the scheduled message may be queued into that same session rather than dropped
+
 ## Error Handling
 
 - Missing agent:
@@ -260,6 +317,9 @@ Mode-specific updates:
   - `last_error` records the reason
 - Missing workspace:
   - same failure handling as above
+- Deleted `target_session_id` for `existing_session`:
+  - runtime creates a replacement session
+  - rewrites `target_session_id`
 - Run failure:
   - schedule records `last_result=failed`
   - `last_error` stores the terminal reason
@@ -270,11 +330,17 @@ Mode-specific updates:
 Required coverage:
 
 - schedule record/domain round-trips with `mode`, `enabled`, and terminal result fields
+- schedule record/domain round-trips with `delivery_mode` and optional `target_session_id`
 - `interval` schedules fire on stable cadence without burst catch-up
 - `after_completion` schedules do not relaunch until the previous run is terminal
-- scheduled launches create fresh sessions, not reused threads
+- `existing_session` schedules target a concrete session id
+- deleted `target_session_id` causes replacement-session creation and schedule rebinding
+- `interval + existing_session` skips ticks while the target session is busy
+- `after_completion + existing_session` tracks only schedule-owned completion and may queue work into the target session
+- scheduled launches create fresh sessions only when `delivery_mode=fresh_session`
 - scheduled launches use auto-approved execution semantics
 - schedule-created sessions are marked in session metadata and visible in list rendering
+- scheduled messages in an existing session are visibly marked as `расписание: <id>`
 - TUI schedule browser supports create, enable/disable, delete, and detailed inspection
 - daemon-backed TUI/CLI paths use the same schedule semantics as direct app calls
 
@@ -283,8 +349,8 @@ Required coverage:
 Recommended implementation order:
 
 1. extend `AgentSchedule` domain, records, and schema
-2. extend scheduler/background semantics for `interval` and `after_completion`
-3. add session origin metadata for schedule-created sessions
+2. extend scheduler/background semantics for `interval`, `after_completion`, `fresh_session`, and `existing_session`
+3. add session origin metadata for schedule-created sessions and scheduled messages
 4. update app/CLI/HTTP rendering for richer schedule state
 5. upgrade TUI schedule browser to operational UX
 
