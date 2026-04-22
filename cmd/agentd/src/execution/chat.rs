@@ -1,4 +1,5 @@
 use super::*;
+use agent_runtime::interagent::AgentMessageChain;
 use agent_runtime::mission::{JobResult, MissionStatus};
 use agent_runtime::provider::{
     FinishReason, ProviderContinuationMessage, ProviderResponse, ProviderToolOutput,
@@ -106,6 +107,7 @@ impl ExecutionService {
                     source,
                     ExecutionError::PermissionDenied { .. }
                         | ExecutionError::ApprovalRequired { .. }
+                        | ExecutionError::CancelledByOperator
                         | ExecutionError::InterruptedByQueuedInput
                 ) {
                     run.fail(source.to_string(), now)
@@ -156,8 +158,11 @@ impl ExecutionService {
                 })?,
         )
         .map_err(ExecutionError::RecordConversion)?;
-        let message = match &job.input {
-            JobExecutionInput::ChatTurn { message } => message.clone(),
+        let (message, progress_prefix) = match &job.input {
+            JobExecutionInput::ChatTurn { message } => (message.clone(), "background chat turn"),
+            JobExecutionInput::ScheduledChatTurn { message, .. } => {
+                (message.clone(), "scheduled chat turn")
+            }
             _ => {
                 return Err(ExecutionError::UnsupportedJobInput {
                     id: job.id.clone(),
@@ -228,8 +233,7 @@ impl ExecutionService {
                 job.status = JobStatus::Blocked;
                 job.error = Some(source.to_string());
                 job.updated_at = now;
-                job.last_progress_message =
-                    Some("background chat turn requires approval".to_string());
+                job.last_progress_message = Some(format!("{progress_prefix} requires approval"));
                 store
                     .put_job(&JobRecord::try_from(&job).map_err(ExecutionError::RecordConversion)?)
                     .map_err(ExecutionError::Store)?;
@@ -240,6 +244,7 @@ impl ExecutionService {
                     source,
                     ExecutionError::PermissionDenied { .. }
                         | ExecutionError::ApprovalRequired { .. }
+                        | ExecutionError::CancelledByOperator
                         | ExecutionError::InterruptedByQueuedInput
                 ) {
                     run.fail(source.to_string(), now)
@@ -250,7 +255,7 @@ impl ExecutionService {
                 job.error = Some(source.to_string());
                 job.finished_at = Some(now);
                 job.updated_at = now;
-                job.last_progress_message = Some("background chat turn failed".to_string());
+                job.last_progress_message = Some(format!("{progress_prefix} failed"));
                 store
                     .put_job(&JobRecord::try_from(&job).map_err(ExecutionError::RecordConversion)?)
                     .map_err(ExecutionError::Store)?;
@@ -280,7 +285,7 @@ impl ExecutionService {
         });
         job.finished_at = Some(now);
         job.updated_at = now;
-        job.last_progress_message = Some("background chat turn completed".to_string());
+        job.last_progress_message = Some(format!("{progress_prefix} completed"));
         store
             .put_job(&JobRecord::try_from(&job).map_err(ExecutionError::RecordConversion)?)
             .map_err(ExecutionError::Store)?;
@@ -291,6 +296,237 @@ impl ExecutionService {
             response_id: response.response_id,
             output_text: response.output_text,
         })
+    }
+
+    pub fn execute_background_interagent_message_job(
+        &self,
+        store: &PersistenceStore,
+        provider: &dyn ProviderDriver,
+        job_id: &str,
+        now: i64,
+    ) -> Result<ChatTurnExecutionReport, ExecutionError> {
+        let mut job = JobSpec::try_from(
+            store
+                .get_job(job_id)
+                .map_err(ExecutionError::Store)?
+                .ok_or_else(|| ExecutionError::MissingJob {
+                    id: job_id.to_string(),
+                })?,
+        )
+        .map_err(ExecutionError::RecordConversion)?;
+        let (
+            source_session_id,
+            source_agent_id,
+            source_agent_name,
+            target_agent_name,
+            message,
+            chain,
+        ) = match &job.input {
+            JobExecutionInput::InterAgentMessage {
+                source_session_id,
+                source_agent_id,
+                source_agent_name,
+                target_agent_name,
+                message,
+                chain,
+                ..
+            } => (
+                source_session_id.clone(),
+                source_agent_id.clone(),
+                source_agent_name.clone(),
+                target_agent_name.clone(),
+                message.clone(),
+                chain.clone(),
+            ),
+            _ => {
+                return Err(ExecutionError::UnsupportedJobInput {
+                    id: job.id.clone(),
+                    kind: job.kind.as_str().to_string(),
+                });
+            }
+        };
+        let session_record = store
+            .get_session(&job.session_id)
+            .map_err(ExecutionError::Store)?
+            .ok_or_else(|| ExecutionError::MissingSession {
+                id: job.session_id.clone(),
+            })?;
+        let session =
+            Session::try_from(session_record.clone()).map_err(ExecutionError::RecordConversion)?;
+        let run_id = job
+            .run_id
+            .clone()
+            .unwrap_or_else(|| format!("run-{}", job.id));
+        let mut run = RunEngine::new(run_id.clone(), session.id.clone(), None, now);
+        run.start(now).map_err(ExecutionError::RunTransition)?;
+        store
+            .put_run(
+                &RunRecord::try_from(run.snapshot()).map_err(ExecutionError::RecordConversion)?,
+            )
+            .map_err(ExecutionError::Store)?;
+
+        job.status = JobStatus::Running;
+        job.run_id = Some(run_id.clone());
+        job.error = None;
+        job.updated_at = now;
+        if job.started_at.is_none() {
+            job.started_at = Some(now);
+        }
+        store
+            .put_job(&JobRecord::try_from(&job).map_err(ExecutionError::RecordConversion)?)
+            .map_err(ExecutionError::Store)?;
+
+        self.write_interagent_recipient_transcripts(
+            store,
+            &job.id,
+            &session.id,
+            &run_id,
+            source_session_id.as_str(),
+            source_agent_id.as_str(),
+            source_agent_name.as_str(),
+            target_agent_name.as_str(),
+            &chain,
+            &message,
+            now,
+        )?;
+
+        let mut observer = None;
+        let response = match self.execute_provider_turn_loop(
+            store,
+            provider,
+            &session.id,
+            session.settings.model.clone(),
+            session
+                .prompt_override
+                .as_ref()
+                .map(|override_text| override_text.as_str().to_string()),
+            &mut run,
+            None,
+            now,
+            None,
+            &mut observer,
+        ) {
+            Ok(response) => response,
+            Err(source @ ExecutionError::ApprovalRequired { .. }) => {
+                job.status = JobStatus::Blocked;
+                job.error = Some(source.to_string());
+                job.updated_at = now;
+                job.last_progress_message =
+                    Some("inter-agent recipient turn requires approval".to_string());
+                store
+                    .put_job(&JobRecord::try_from(&job).map_err(ExecutionError::RecordConversion)?)
+                    .map_err(ExecutionError::Store)?;
+                return Err(source);
+            }
+            Err(source) => {
+                if !matches!(
+                    source,
+                    ExecutionError::PermissionDenied { .. }
+                        | ExecutionError::ApprovalRequired { .. }
+                        | ExecutionError::CancelledByOperator
+                        | ExecutionError::InterruptedByQueuedInput
+                ) {
+                    run.fail(source.to_string(), now)
+                        .map_err(ExecutionError::RunTransition)?;
+                    self.persist_run(store, &run)?;
+                }
+                job.status = JobStatus::Failed;
+                job.error = Some(source.to_string());
+                job.finished_at = Some(now);
+                job.updated_at = now;
+                job.last_progress_message = Some("inter-agent recipient turn failed".to_string());
+                store
+                    .put_job(&JobRecord::try_from(&job).map_err(ExecutionError::RecordConversion)?)
+                    .map_err(ExecutionError::Store)?;
+                return Err(source);
+            }
+        };
+
+        run.complete(&response.output_text, now)
+            .map_err(ExecutionError::RunTransition)?;
+        self.persist_run(store, &run)?;
+        let assistant_at = completed_run_timestamp(&run);
+
+        let assistant_entry = TranscriptEntry::assistant(
+            format!("transcript-{}-03-assistant", job.id),
+            session.id.clone(),
+            Some(run_id.as_str()),
+            &response.output_text,
+            assistant_at,
+        );
+        store
+            .put_transcript(&TranscriptRecord::from(&assistant_entry))
+            .map_err(ExecutionError::Store)?;
+
+        job.status = JobStatus::Completed;
+        job.result = Some(JobResult::Summary {
+            outcome: response.output_text.clone(),
+        });
+        job.finished_at = Some(now);
+        job.updated_at = now;
+        job.last_progress_message = Some("inter-agent recipient turn completed".to_string());
+        store
+            .put_job(&JobRecord::try_from(&job).map_err(ExecutionError::RecordConversion)?)
+            .map_err(ExecutionError::Store)?;
+
+        Ok(ChatTurnExecutionReport {
+            session_id: session.id,
+            run_id,
+            response_id: response.response_id,
+            output_text: response.output_text,
+        })
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn write_interagent_recipient_transcripts(
+        &self,
+        store: &PersistenceStore,
+        job_id: &str,
+        session_id: &str,
+        run_id: &str,
+        source_session_id: &str,
+        source_agent_id: &str,
+        source_agent_name: &str,
+        target_agent_name: &str,
+        chain: &AgentMessageChain,
+        message: &str,
+        now: i64,
+    ) -> Result<(), ExecutionError> {
+        let chain_entry = TranscriptEntry::system(
+            format!("transcript-{job_id}-01-system-chain"),
+            session_id.to_string(),
+            Some(run_id),
+            chain.to_transcript_metadata(),
+            now,
+        );
+        store
+            .put_transcript(&TranscriptRecord::from(&chain_entry))
+            .map_err(ExecutionError::Store)?;
+
+        let system_entry = TranscriptEntry::system(
+            format!("transcript-{job_id}-02-system-interagent"),
+            session_id.to_string(),
+            Some(run_id),
+            format!(
+                "Inter-agent message.\nsource_session_id: {source_session_id}\nsource_agent_id: {source_agent_id}\nsource_agent_name: {source_agent_name}\ntarget_agent_name: {target_agent_name}\nchain_id: {}\nhop_count: {}",
+                chain.chain_id, chain.hop_count
+            ),
+            now,
+        );
+        store
+            .put_transcript(&TranscriptRecord::from(&system_entry))
+            .map_err(ExecutionError::Store)?;
+
+        let user_entry = TranscriptEntry::user(
+            format!("transcript-{job_id}-03-user"),
+            session_id.to_string(),
+            Some(run_id),
+            self.interagent_origin_user_message(source_agent_name, message),
+            now,
+        );
+        store
+            .put_transcript(&TranscriptRecord::from(&user_entry))
+            .map_err(ExecutionError::Store)
     }
 
     pub fn execute_background_approval_job(
@@ -757,6 +993,7 @@ impl ExecutionService {
                     source,
                     ExecutionError::PermissionDenied { .. }
                         | ExecutionError::ApprovalRequired { .. }
+                        | ExecutionError::CancelledByOperator
                         | ExecutionError::InterruptedByQueuedInput
                 ) {
                     run.fail(source.to_string(), now)

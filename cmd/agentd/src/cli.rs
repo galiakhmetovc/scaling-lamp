@@ -6,6 +6,7 @@ mod repl;
 use crate::bootstrap::{App, BootstrapError};
 use crate::daemon;
 use crate::execution::{ChatExecutionEvent, ExecutionError, ToolExecutionStatus};
+use crate::help::QUICK_HELP_LINE;
 use crate::http::client::{DaemonClient, DaemonConnectOptions, connect_or_autospawn};
 use crate::http::types::{SessionDetailResponse, StatusResponse};
 use crate::tui;
@@ -30,7 +31,7 @@ use self::process::{
 use self::repl::{run_chat_repl, run_chat_repl_with_backend};
 
 const DEFAULT_SMOKE_PROMPT: &str = "Reply with the single word ready.";
-const REPL_HELP: &str = "commands: \\помощь|/help | \\показать|/show | \\контекст|/context | \\план|/plan | \\задачи|/jobs | \\скиллы|/skills | \\включить <skill>|/enable <skill> | \\выключить <skill>|/disable <skill> | \\доводка <n|off>|/completion <n|off> | \\автоапрув <on|off>|/autoapprove <on|off> | /approve [approval-id] | \\выход|/exit";
+const REPL_HELP: &str = QUICK_HELP_LINE;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum Command {

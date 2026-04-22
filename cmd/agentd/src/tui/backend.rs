@@ -7,6 +7,25 @@ use crate::http::client::DaemonClient;
 use std::sync::atomic::AtomicBool;
 
 pub trait TuiBackend: Clone + Send + Sync + 'static {
+    fn render_agents(&self) -> Result<String, BootstrapError>;
+    fn render_agent(&self, identifier: Option<&str>) -> Result<String, BootstrapError>;
+    fn select_agent(&self, identifier: &str) -> Result<String, BootstrapError>;
+    fn create_agent(
+        &self,
+        name: &str,
+        template_identifier: Option<&str>,
+    ) -> Result<String, BootstrapError>;
+    fn open_agent_home(&self, identifier: Option<&str>) -> Result<String, BootstrapError>;
+    fn render_agent_schedules(&self) -> Result<String, BootstrapError>;
+    fn render_agent_schedule(&self, id: &str) -> Result<String, BootstrapError>;
+    fn create_agent_schedule(
+        &self,
+        id: &str,
+        interval_seconds: u64,
+        prompt: &str,
+        agent_identifier: Option<&str>,
+    ) -> Result<String, BootstrapError>;
+    fn delete_agent_schedule(&self, id: &str) -> Result<String, BootstrapError>;
     fn list_session_summaries(&self) -> Result<Vec<SessionSummary>, BootstrapError>;
     fn create_session_auto(&self, title: Option<&str>) -> Result<SessionSummary, BootstrapError>;
     fn update_session_preferences(
@@ -44,8 +63,15 @@ pub trait TuiBackend: Clone + Send + Sync + 'static {
         requested_approval_id: Option<&str>,
     ) -> Result<Option<SessionPendingApproval>, BootstrapError>;
     fn render_context(&self, session_id: &str) -> Result<String, BootstrapError>;
+    fn render_system(&self, session_id: &str) -> Result<String, BootstrapError>;
     fn render_plan(&self, session_id: &str) -> Result<String, BootstrapError>;
+    fn render_artifacts(&self, session_id: &str) -> Result<String, BootstrapError>;
+    fn read_artifact(&self, session_id: &str, artifact_id: &str) -> Result<String, BootstrapError>;
     fn render_active_jobs(&self, session_id: &str) -> Result<String, BootstrapError>;
+    fn render_active_run(&self, session_id: &str) -> Result<String, BootstrapError>;
+    fn cancel_active_run(&self, session_id: &str, now: i64) -> Result<String, BootstrapError>;
+    fn render_version_info(&self) -> Result<String, BootstrapError>;
+    fn update_runtime(&self) -> Result<String, BootstrapError>;
     fn write_debug_bundle(&self, session_id: &str) -> Result<String, BootstrapError>;
     fn compact_session(&self, session_id: &str) -> Result<SessionSummary, BootstrapError>;
     fn execute_chat_turn_with_control_and_observer(
@@ -67,6 +93,71 @@ pub trait TuiBackend: Clone + Send + Sync + 'static {
 }
 
 impl TuiBackend for App {
+    fn render_agents(&self) -> Result<String, BootstrapError> {
+        App::render_agents(self)
+    }
+
+    fn render_agent(&self, identifier: Option<&str>) -> Result<String, BootstrapError> {
+        App::render_agent_profile(self, identifier)
+    }
+
+    fn select_agent(&self, identifier: &str) -> Result<String, BootstrapError> {
+        let profile = App::select_agent_profile(self, identifier)?;
+        Ok(format!("текущий агент: {} ({})", profile.name, profile.id))
+    }
+
+    fn create_agent(
+        &self,
+        name: &str,
+        template_identifier: Option<&str>,
+    ) -> Result<String, BootstrapError> {
+        let profile = App::create_agent_from_template(self, name, template_identifier)?;
+        Ok(format!(
+            "создан агент {} ({}) из шаблона {}",
+            profile.name,
+            profile.id,
+            profile.template_kind.as_str()
+        ))
+    }
+
+    fn open_agent_home(&self, identifier: Option<&str>) -> Result<String, BootstrapError> {
+        App::render_agent_home(self, identifier)
+    }
+
+    fn render_agent_schedules(&self) -> Result<String, BootstrapError> {
+        App::render_agent_schedules(self)
+    }
+
+    fn render_agent_schedule(&self, id: &str) -> Result<String, BootstrapError> {
+        App::render_agent_schedule(self, id)
+    }
+
+    fn create_agent_schedule(
+        &self,
+        id: &str,
+        interval_seconds: u64,
+        prompt: &str,
+        agent_identifier: Option<&str>,
+    ) -> Result<String, BootstrapError> {
+        let schedule =
+            App::create_agent_schedule(self, id, interval_seconds, prompt, agent_identifier)?;
+        Ok(format!(
+            "создано расписание {} agent={} interval={}s",
+            schedule.id, schedule.agent_profile_id, schedule.interval_seconds
+        ))
+    }
+
+    fn delete_agent_schedule(&self, id: &str) -> Result<String, BootstrapError> {
+        if App::delete_agent_schedule(self, id)? {
+            Ok(format!("расписание {id} удалено"))
+        } else {
+            Err(BootstrapError::MissingRecord {
+                kind: "agent schedule",
+                id: id.to_string(),
+            })
+        }
+    }
+
     fn list_session_summaries(&self) -> Result<Vec<SessionSummary>, BootstrapError> {
         App::list_session_summaries(self)
     }
@@ -145,12 +236,40 @@ impl TuiBackend for App {
         App::render_context_state(self, session_id)
     }
 
+    fn render_system(&self, session_id: &str) -> Result<String, BootstrapError> {
+        App::render_system_blocks(self, session_id)
+    }
+
     fn render_plan(&self, session_id: &str) -> Result<String, BootstrapError> {
         App::render_plan(self, session_id)
     }
 
+    fn render_artifacts(&self, session_id: &str) -> Result<String, BootstrapError> {
+        App::render_session_artifacts(self, session_id)
+    }
+
+    fn read_artifact(&self, session_id: &str, artifact_id: &str) -> Result<String, BootstrapError> {
+        App::read_session_artifact(self, session_id, artifact_id)
+    }
+
     fn render_active_jobs(&self, session_id: &str) -> Result<String, BootstrapError> {
         App::render_session_background_jobs(self, session_id)
+    }
+
+    fn render_active_run(&self, session_id: &str) -> Result<String, BootstrapError> {
+        App::render_active_run(self, session_id)
+    }
+
+    fn cancel_active_run(&self, session_id: &str, now: i64) -> Result<String, BootstrapError> {
+        App::cancel_latest_session_run(self, session_id, now)
+    }
+
+    fn render_version_info(&self) -> Result<String, BootstrapError> {
+        App::render_version_info(self)
+    }
+
+    fn update_runtime(&self) -> Result<String, BootstrapError> {
+        App::update_runtime_binary(self)
     }
 
     fn write_debug_bundle(&self, session_id: &str) -> Result<String, BootstrapError> {
@@ -199,6 +318,52 @@ impl TuiBackend for App {
 }
 
 impl TuiBackend for DaemonClient {
+    fn render_agents(&self) -> Result<String, BootstrapError> {
+        DaemonClient::render_agents(self)
+    }
+
+    fn render_agent(&self, identifier: Option<&str>) -> Result<String, BootstrapError> {
+        DaemonClient::render_agent(self, identifier)
+    }
+
+    fn select_agent(&self, identifier: &str) -> Result<String, BootstrapError> {
+        DaemonClient::select_agent(self, identifier)
+    }
+
+    fn create_agent(
+        &self,
+        name: &str,
+        template_identifier: Option<&str>,
+    ) -> Result<String, BootstrapError> {
+        DaemonClient::create_agent(self, name, template_identifier)
+    }
+
+    fn open_agent_home(&self, identifier: Option<&str>) -> Result<String, BootstrapError> {
+        DaemonClient::open_agent_home(self, identifier)
+    }
+
+    fn render_agent_schedules(&self) -> Result<String, BootstrapError> {
+        DaemonClient::render_agent_schedules(self)
+    }
+
+    fn render_agent_schedule(&self, id: &str) -> Result<String, BootstrapError> {
+        DaemonClient::render_agent_schedule(self, id)
+    }
+
+    fn create_agent_schedule(
+        &self,
+        id: &str,
+        interval_seconds: u64,
+        prompt: &str,
+        agent_identifier: Option<&str>,
+    ) -> Result<String, BootstrapError> {
+        DaemonClient::create_agent_schedule(self, id, interval_seconds, prompt, agent_identifier)
+    }
+
+    fn delete_agent_schedule(&self, id: &str) -> Result<String, BootstrapError> {
+        DaemonClient::delete_agent_schedule(self, id)
+    }
+
     fn list_session_summaries(&self) -> Result<Vec<SessionSummary>, BootstrapError> {
         DaemonClient::list_session_summaries(self)
     }
@@ -277,12 +442,40 @@ impl TuiBackend for DaemonClient {
         DaemonClient::render_context_state(self, session_id)
     }
 
+    fn render_system(&self, session_id: &str) -> Result<String, BootstrapError> {
+        DaemonClient::render_system_blocks(self, session_id)
+    }
+
     fn render_plan(&self, session_id: &str) -> Result<String, BootstrapError> {
         DaemonClient::render_plan(self, session_id)
     }
 
+    fn render_artifacts(&self, session_id: &str) -> Result<String, BootstrapError> {
+        DaemonClient::render_session_artifacts(self, session_id)
+    }
+
+    fn read_artifact(&self, session_id: &str, artifact_id: &str) -> Result<String, BootstrapError> {
+        DaemonClient::read_session_artifact(self, session_id, artifact_id)
+    }
+
     fn render_active_jobs(&self, session_id: &str) -> Result<String, BootstrapError> {
         DaemonClient::render_session_background_jobs(self, session_id)
+    }
+
+    fn render_active_run(&self, session_id: &str) -> Result<String, BootstrapError> {
+        DaemonClient::render_active_run(self, session_id)
+    }
+
+    fn cancel_active_run(&self, session_id: &str, _now: i64) -> Result<String, BootstrapError> {
+        DaemonClient::cancel_active_run(self, session_id)
+    }
+
+    fn render_version_info(&self) -> Result<String, BootstrapError> {
+        DaemonClient::about(self)
+    }
+
+    fn update_runtime(&self) -> Result<String, BootstrapError> {
+        DaemonClient::update_runtime(self)
     }
 
     fn write_debug_bundle(&self, session_id: &str) -> Result<String, BootstrapError> {

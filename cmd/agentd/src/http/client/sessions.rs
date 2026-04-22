@@ -1,10 +1,106 @@
 use super::*;
 use crate::http::types::{
-    ClearSessionRequest, CreateSessionRequest, DebugBundleResponse, SessionBackgroundJobsResponse,
-    SessionDetailResponse, SkillCommandRequest,
+    AgentCreateRequest, AgentRenderResponse, AgentResolveRequest, AgentScheduleCreateRequest,
+    AgentScheduleResolveRequest, AgentSelectRequest, ClearSessionRequest, CreateSessionRequest,
+    DebugBundleResponse, SessionArtifactResponse, SessionArtifactsResponse,
+    SessionBackgroundJobsResponse, SessionDetailResponse, SessionRunControlResponse,
+    SessionRunStatusResponse, SessionSystemResponse, SkillCommandRequest,
 };
 
 impl DaemonClient {
+    pub fn render_agents(&self) -> Result<String, BootstrapError> {
+        let response: AgentRenderResponse = self.get_json("/v1/agents")?;
+        Ok(response.message)
+    }
+
+    pub fn render_current_agent(&self) -> Result<String, BootstrapError> {
+        let response: AgentRenderResponse = self.get_json("/v1/agents/current")?;
+        Ok(response.message)
+    }
+
+    pub fn render_agent(&self, identifier: Option<&str>) -> Result<String, BootstrapError> {
+        let response: AgentRenderResponse = self.post_json(
+            "/v1/agents/show",
+            &AgentResolveRequest {
+                identifier: identifier.map(str::to_string),
+            },
+        )?;
+        Ok(response.message)
+    }
+
+    pub fn select_agent(&self, identifier: &str) -> Result<String, BootstrapError> {
+        let response: AgentRenderResponse = self.post_json(
+            "/v1/agents/select",
+            &AgentSelectRequest {
+                identifier: identifier.to_string(),
+            },
+        )?;
+        Ok(response.message)
+    }
+
+    pub fn create_agent(
+        &self,
+        name: &str,
+        template_identifier: Option<&str>,
+    ) -> Result<String, BootstrapError> {
+        let response: AgentRenderResponse = self.post_json(
+            "/v1/agents",
+            &AgentCreateRequest {
+                name: name.to_string(),
+                template_identifier: template_identifier.map(str::to_string),
+            },
+        )?;
+        Ok(response.message)
+    }
+
+    pub fn open_agent_home(&self, identifier: Option<&str>) -> Result<String, BootstrapError> {
+        let response: AgentRenderResponse = self.post_json(
+            "/v1/agents/open",
+            &AgentResolveRequest {
+                identifier: identifier.map(str::to_string),
+            },
+        )?;
+        Ok(response.message)
+    }
+
+    pub fn render_agent_schedules(&self) -> Result<String, BootstrapError> {
+        let response: AgentRenderResponse = self.get_json("/v1/agent-schedules")?;
+        Ok(response.message)
+    }
+
+    pub fn render_agent_schedule(&self, id: &str) -> Result<String, BootstrapError> {
+        let response: AgentRenderResponse = self.post_json(
+            "/v1/agent-schedules/show",
+            &AgentScheduleResolveRequest { id: id.to_string() },
+        )?;
+        Ok(response.message)
+    }
+
+    pub fn create_agent_schedule(
+        &self,
+        id: &str,
+        interval_seconds: u64,
+        prompt: &str,
+        agent_identifier: Option<&str>,
+    ) -> Result<String, BootstrapError> {
+        let response: AgentRenderResponse = self.post_json(
+            "/v1/agent-schedules",
+            &AgentScheduleCreateRequest {
+                id: id.to_string(),
+                agent_identifier: agent_identifier.map(str::to_string),
+                interval_seconds,
+                prompt: prompt.to_string(),
+            },
+        )?;
+        Ok(response.message)
+    }
+
+    pub fn delete_agent_schedule(&self, id: &str) -> Result<String, BootstrapError> {
+        let response: AgentRenderResponse =
+            self.delete_json(&format!("/v1/agent-schedules/{id}"))?;
+        Ok(response.message)
+    }
+
     pub fn create_session_auto(
         &self,
         title: Option<&str>,
@@ -158,6 +254,43 @@ impl DaemonClient {
             .ok_or_else(|| BootstrapError::Stream(std::io::Error::other("missing context field")))
     }
 
+    pub fn render_system_blocks(&self, session_id: &str) -> Result<String, BootstrapError> {
+        let response: SessionSystemResponse =
+            self.get_json(&format!("/v1/sessions/{session_id}/system"))?;
+        Ok(response.system)
+    }
+
+    pub fn render_session_artifacts(&self, session_id: &str) -> Result<String, BootstrapError> {
+        let response: SessionArtifactsResponse =
+            self.get_json(&format!("/v1/sessions/{session_id}/artifacts"))?;
+        Ok(response.artifacts)
+    }
+
+    pub fn read_session_artifact(
+        &self,
+        session_id: &str,
+        artifact_id: &str,
+    ) -> Result<String, BootstrapError> {
+        let response: SessionArtifactResponse = self.get_json(&format!(
+            "/v1/sessions/{session_id}/artifacts/{artifact_id}"
+        ))?;
+        Ok(response.artifact)
+    }
+
+    pub fn render_active_run(&self, session_id: &str) -> Result<String, BootstrapError> {
+        let response: SessionRunStatusResponse =
+            self.get_json(&format!("/v1/sessions/{session_id}/run"))?;
+        Ok(response.run)
+    }
+
+    pub fn cancel_active_run(&self, session_id: &str) -> Result<String, BootstrapError> {
+        let response: SessionRunControlResponse = self.post_json(
+            &format!("/v1/sessions/{session_id}/cancel-run"),
+            &serde_json::json!({}),
+        )?;
+        Ok(response.message)
+    }
+
     pub fn session_background_jobs(
         &self,
         session_id: &str,
@@ -173,18 +306,18 @@ impl DaemonClient {
     ) -> Result<String, BootstrapError> {
         let jobs = self.session_background_jobs(session_id)?;
         if jobs.is_empty() {
-            return Ok("jobs: none active".to_string());
+            return Ok("Задачи: активных нет".to_string());
         }
 
-        let mut lines = vec!["Jobs:".to_string()];
+        let mut lines = vec!["Задачи:".to_string()];
         for job in jobs {
             lines.push(format!("- [{}] {} ({})", job.status, job.id, job.kind));
-            lines.push(format!("  queued_at: {}", job.queued_at));
+            lines.push(format!("  поставлена_в_очередь: {}", job.queued_at));
             if let Some(started_at) = job.started_at {
-                lines.push(format!("  started_at: {started_at}"));
+                lines.push(format!("  запущена: {started_at}"));
             }
             if let Some(progress) = job.last_progress_message {
-                lines.push(format!("  progress: {progress}"));
+                lines.push(format!("  прогресс: {progress}"));
             }
         }
         Ok(lines.join("\n"))
@@ -199,7 +332,7 @@ impl DaemonClient {
     }
 
     pub fn compact_session(&self, session_id: &str) -> Result<SessionSummary, BootstrapError> {
-        let summary: SessionSummaryResponse = self.post_json(
+        let summary: SessionSummaryResponse = self.post_json_long(
             &format!("/v1/sessions/{session_id}/compact"),
             &serde_json::json!({}),
         )?;

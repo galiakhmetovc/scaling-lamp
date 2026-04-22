@@ -80,6 +80,6 @@ fn skills_tui_russian_commands_list_enable_and_disable_session_skills() {
         .join("\n");
     assert!(rendered.contains("rust-debug"));
     assert!(rendered.contains("postgres"));
-    assert!(rendered.contains("manual"));
-    assert!(rendered.contains("disabled"));
+    assert!(rendered.contains("вручную"));
+    assert!(rendered.contains("выключен"));
 }

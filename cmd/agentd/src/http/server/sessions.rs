@@ -1,11 +1,14 @@
 use super::*;
 use crate::http::types::{
     ClearSessionRequest, CreateSessionRequest, DebugBundleResponse, ErrorResponse,
-    SessionBackgroundJobResponse, SessionBackgroundJobsResponse, SessionDetailResponse,
-    SessionPendingApprovalsResponse, SessionPreferencesRequest, SessionSkillsResponse,
-    SessionSummaryResponse, SessionTranscriptResponse, SkillCommandRequest,
+    SessionArtifactResponse, SessionArtifactsResponse, SessionBackgroundJobResponse,
+    SessionBackgroundJobsResponse, SessionDetailResponse, SessionPendingApprovalsResponse,
+    SessionPreferencesRequest, SessionRunControlResponse, SessionRunStatusResponse,
+    SessionSkillsResponse, SessionSummaryResponse, SessionSystemResponse,
+    SessionTranscriptResponse, SkillCommandRequest,
 };
-use agent_persistence::SessionRepository;
+use agent_persistence::{AgentRepository, SessionRepository};
+use std::time::{SystemTime, UNIX_EPOCH};
 use tiny_http::Method;
 
 pub(super) fn handle_create_session(app: &App, mut request: Request) -> std::io::Result<()> {
@@ -124,11 +127,26 @@ pub(super) fn handle_nested_routes(app: &App, request: Request) -> std::io::Resu
         (Method::Post, [session_id, debug]) if debug == "debug-bundle" => {
             handle_write_debug_bundle(app, request, session_id.as_str())
         }
+        (Method::Get, [session_id, system]) if system == "system" => {
+            handle_render_system(app, request, session_id.as_str())
+        }
         (Method::Get, [session_id, context]) if context == "context" => {
             handle_render_context(app, request, session_id.as_str())
         }
+        (Method::Get, [session_id, artifacts]) if artifacts == "artifacts" => {
+            handle_render_artifacts(app, request, session_id.as_str())
+        }
+        (Method::Get, [session_id, artifacts, artifact_id]) if artifacts == "artifacts" => {
+            handle_read_artifact(app, request, session_id.as_str(), artifact_id.as_str())
+        }
         (Method::Get, [session_id, plan]) if plan == "plan" => {
             handle_render_plan(app, request, session_id.as_str())
+        }
+        (Method::Get, [session_id, run]) if run == "run" => {
+            handle_render_active_run(app, request, session_id.as_str())
+        }
+        (Method::Post, [session_id, cancel_run]) if cancel_run == "cancel-run" => {
+            handle_cancel_active_run(app, request, session_id.as_str())
         }
         _ => respond_json(
             request,
@@ -150,22 +168,30 @@ fn handle_session_detail(app: &App, request: Request, session_id: &str) -> std::
     };
 
     match store.get_session(session_id) {
-        Ok(Some(record)) => respond_json(
-            request,
-            StatusCode(200),
-            &SessionDetailResponse {
-                id: record.id,
-                title: record.title,
-                prompt_override: record.prompt_override,
-                settings_json: record.settings_json,
-                active_mission_id: record.active_mission_id,
-                parent_session_id: record.parent_session_id,
-                parent_job_id: record.parent_job_id,
-                delegation_label: record.delegation_label,
-                created_at: record.created_at,
-                updated_at: record.updated_at,
-            },
-        ),
+        Ok(Some(record)) => {
+            let agent_name = match store.get_agent_profile(&record.agent_profile_id) {
+                Ok(Some(agent)) => agent.name,
+                Ok(None) | Err(_) => record.agent_profile_id.clone(),
+            };
+            respond_json(
+                request,
+                StatusCode(200),
+                &SessionDetailResponse {
+                    id: record.id,
+                    title: record.title,
+                    agent_profile_id: record.agent_profile_id,
+                    agent_name,
+                    prompt_override: record.prompt_override,
+                    settings_json: record.settings_json,
+                    active_mission_id: record.active_mission_id,
+                    parent_session_id: record.parent_session_id,
+                    parent_job_id: record.parent_job_id,
+                    delegation_label: record.delegation_label,
+                    created_at: record.created_at,
+                    updated_at: record.updated_at,
+                },
+            )
+        }
         Ok(None) => respond_json(
             request,
             StatusCode(404),
@@ -260,6 +286,77 @@ fn handle_render_context(app: &App, request: Request, session_id: &str) -> std::
             request,
             StatusCode(200),
             &serde_json::json!({ "context": context }),
+        ),
+        Err(error) => {
+            let (status, payload) = map_bootstrap_error(error);
+            respond_json(request, status, &payload)
+        }
+    }
+}
+
+fn handle_render_system(app: &App, request: Request, session_id: &str) -> std::io::Result<()> {
+    match app.render_system_blocks(session_id) {
+        Ok(system) => respond_json(request, StatusCode(200), &SessionSystemResponse { system }),
+        Err(error) => {
+            let (status, payload) = map_bootstrap_error(error);
+            respond_json(request, status, &payload)
+        }
+    }
+}
+
+fn handle_render_artifacts(app: &App, request: Request, session_id: &str) -> std::io::Result<()> {
+    match app.render_session_artifacts(session_id) {
+        Ok(artifacts) => respond_json(
+            request,
+            StatusCode(200),
+            &SessionArtifactsResponse { artifacts },
+        ),
+        Err(error) => {
+            let (status, payload) = map_bootstrap_error(error);
+            respond_json(request, status, &payload)
+        }
+    }
+}
+
+fn handle_read_artifact(
+    app: &App,
+    request: Request,
+    session_id: &str,
+    artifact_id: &str,
+) -> std::io::Result<()> {
+    match app.read_session_artifact(session_id, artifact_id) {
+        Ok(artifact) => respond_json(
+            request,
+            StatusCode(200),
+            &SessionArtifactResponse { artifact },
+        ),
+        Err(error) => {
+            let (status, payload) = map_bootstrap_error(error);
+            respond_json(request, status, &payload)
+        }
+    }
+}
+
+fn handle_render_active_run(app: &App, request: Request, session_id: &str) -> std::io::Result<()> {
+    match app.render_active_run(session_id) {
+        Ok(run) => respond_json(request, StatusCode(200), &SessionRunStatusResponse { run }),
+        Err(error) => {
+            let (status, payload) = map_bootstrap_error(error);
+            respond_json(request, status, &payload)
+        }
+    }
+}
+
+fn handle_cancel_active_run(app: &App, request: Request, session_id: &str) -> std::io::Result<()> {
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_secs() as i64)
+        .unwrap_or(0);
+    match app.cancel_latest_session_run(session_id, now) {
+        Ok(message) => respond_json(
+            request,
+            StatusCode(200),
+            &SessionRunControlResponse { message },
         ),
         Err(error) => {
             let (status, payload) = map_bootstrap_error(error);

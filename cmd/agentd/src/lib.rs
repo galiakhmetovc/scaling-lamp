@@ -1,8 +1,11 @@
 pub mod a2a;
+pub mod about;
+pub mod agents;
 pub mod bootstrap;
 pub mod cli;
 pub mod daemon;
 pub mod execution;
+pub mod help;
 pub mod http;
 pub mod prompting;
 pub mod tui;

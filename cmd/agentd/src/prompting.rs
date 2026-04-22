@@ -1,3 +1,4 @@
+use crate::agents;
 use agent_persistence::TranscriptRecord;
 use agent_runtime::context::{ContextSummary, approximate_token_count};
 use agent_runtime::prompt::{
@@ -9,11 +10,12 @@ use agent_runtime::skills::{
     SessionSkillStatus, SkillActivationMode, SkillCatalog, parse_skill_document,
 };
 use agent_runtime::workspace::{WorkspaceEntryKind, WorkspaceRef};
+use std::fs;
 use std::io::ErrorKind;
+use std::path::Path;
 
 const RECENT_FILESYSTEM_ACTIVITY_LIMIT: usize = 6;
 const WORKSPACE_TREE_LIMIT: usize = 12;
-const DEFAULT_SYSTEM_PROMPT: &str = "You are a useful AI assistant.";
 
 pub(crate) fn build_session_head(
     session: &Session,
@@ -96,14 +98,18 @@ pub(crate) fn preview_text(content: &str, limit: usize) -> String {
     preview
 }
 
-pub(crate) fn load_system_prompt(workspace: &WorkspaceRef) -> String {
-    read_prompt_file(workspace, "SYSTEM.md")
+pub(crate) fn load_system_prompt(data_dir: &Path, agent_profile_id: &str) -> String {
+    read_prompt_file(&agents::agent_home(data_dir, agent_profile_id).join("SYSTEM.md"))
         .filter(|content| !content.trim().is_empty())
-        .unwrap_or_else(|| DEFAULT_SYSTEM_PROMPT.to_string())
+        .unwrap_or_else(|| agents::fallback_system_md(agent_profile_id).to_string())
 }
 
-pub(crate) fn load_agents_prompt(workspace: &WorkspaceRef) -> Option<String> {
-    read_prompt_file(workspace, "AGENTS.md").filter(|content| !content.trim().is_empty())
+pub(crate) fn load_agents_prompt(data_dir: &Path, agent_profile_id: &str) -> Option<String> {
+    Some(
+        read_prompt_file(&agents::agent_home(data_dir, agent_profile_id).join("AGENTS.md"))
+            .filter(|content| !content.trim().is_empty())
+            .unwrap_or_else(|| agents::fallback_agents_md(agent_profile_id).to_string()),
+    )
 }
 
 pub(crate) fn load_active_skill_prompts(
@@ -141,14 +147,10 @@ pub(crate) fn load_active_skill_prompts(
     prompts
 }
 
-fn read_prompt_file(workspace: &WorkspaceRef, path: &str) -> Option<String> {
-    match workspace.read_text(path) {
+fn read_prompt_file(path: &Path) -> Option<String> {
+    match fs::read_to_string(path) {
         Ok(content) => Some(content.trim().to_string()),
-        Err(agent_runtime::workspace::WorkspaceError::Io { source, .. })
-            if source.kind() == ErrorKind::NotFound =>
-        {
-            None
-        }
+        Err(source) if source.kind() == ErrorKind::NotFound => None,
         Err(_) => None,
     }
 }

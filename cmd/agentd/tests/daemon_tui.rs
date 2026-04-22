@@ -1,4 +1,4 @@
-use agent_persistence::AppConfig;
+use agent_persistence::{AppConfig, TranscriptRepository};
 use agent_runtime::permission::{
     PermissionAction, PermissionConfig, PermissionMode, PermissionRule,
 };
@@ -83,6 +83,61 @@ fn spawn_delayed_sse_server_sequence(
 
             let response = format!(
                 "HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\ncache-control: no-cache\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
+                body.len(),
+                body
+            );
+            stream
+                .write_all(response.as_bytes())
+                .expect("write response");
+            stream.flush().expect("flush response");
+        }
+    });
+
+    (format!("http://{address}"), receiver, handle)
+}
+
+fn spawn_delayed_json_server_sequence(
+    responses: Vec<(Duration, String)>,
+) -> (String, Receiver<String>, thread::JoinHandle<()>) {
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind listener");
+    let address = listener.local_addr().expect("local addr");
+    let (sender, receiver) = mpsc::channel();
+
+    let handle = thread::spawn(move || {
+        for (delay, body) in responses {
+            let (mut stream, _) = listener.accept().expect("accept connection");
+            stream
+                .set_read_timeout(Some(Duration::from_secs(2)))
+                .expect("set read timeout");
+
+            let mut reader = BufReader::new(stream.try_clone().expect("clone stream"));
+            let mut raw_request = String::new();
+            let mut content_length = 0usize;
+
+            loop {
+                let mut line = String::new();
+                reader.read_line(&mut line).expect("read request line");
+                raw_request.push_str(&line);
+
+                if line == "\r\n" {
+                    break;
+                }
+
+                let lower = line.to_ascii_lowercase();
+                if let Some(value) = lower.strip_prefix("content-length:") {
+                    content_length = value.trim().parse().expect("parse content length");
+                }
+            }
+
+            let mut body_buf = vec![0u8; content_length];
+            reader.read_exact(&mut body_buf).expect("read request body");
+            raw_request.push_str(std::str::from_utf8(&body_buf).expect("utf8 body"));
+            sender.send(raw_request).expect("send request");
+
+            thread::sleep(delay);
+
+            let response = format!(
+                "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
                 body.len(),
                 body
             );
@@ -334,6 +389,89 @@ fn daemon_client_chat_turn_waits_for_slow_daemon_responses() {
     );
 
     handle.stop().expect("stop daemon");
+}
+
+#[test]
+fn daemon_client_compact_session_waits_for_slow_daemon_responses() {
+    let (_temp, mut config) = test_config();
+    let (provider_api_base, provider_requests, provider_handle) =
+        spawn_delayed_json_server_sequence(vec![(
+            Duration::from_secs(6),
+            r#"{
+                "id":"resp_compact_slow",
+                "model":"gpt-5.4",
+                "output":[
+                    {
+                        "id":"msg_compact_slow",
+                        "type":"message",
+                        "status":"completed",
+                        "role":"assistant",
+                        "content":[
+                            {
+                                "type":"output_text",
+                                "text":"Сжатое раннее состояние."
+                            }
+                        ]
+                    }
+                ],
+                "usage":{"input_tokens":42,"output_tokens":9,"total_tokens":51}
+            }"#
+            .to_string(),
+        )]);
+    config.provider = ConfiguredProvider {
+        kind: ProviderKind::OpenAiResponses,
+        api_base: Some(format!("{provider_api_base}/v1")),
+        api_key: Some("test-key".to_string()),
+        default_model: Some("gpt-5.4".to_string()),
+        ..ConfiguredProvider::default()
+    };
+
+    let app = bootstrap::build_from_config(config.clone()).expect("build app");
+    let store = agent_persistence::PersistenceStore::open(&app.persistence).expect("open store");
+    let session = app
+        .create_session_auto(Some("Slow Compact Session"))
+        .expect("create session");
+    for (index, (kind, content)) in [
+        ("user", "covered user one"),
+        ("assistant", "covered assistant one"),
+        ("user", "recent user one"),
+        ("assistant", "recent assistant one"),
+        ("user", "recent user two"),
+        ("assistant", "recent assistant two"),
+        ("user", "recent user three"),
+        ("assistant", "recent assistant three"),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        store
+            .put_transcript(&agent_persistence::TranscriptRecord {
+                id: format!("compact-transcript-{index}"),
+                session_id: session.id.clone(),
+                run_id: None,
+                kind: kind.to_string(),
+                content: content.to_string(),
+                created_at: 10 + index as i64,
+            })
+            .expect("put transcript");
+    }
+
+    let handle = daemon::spawn_for_test(app).expect("spawn daemon");
+    let client = DaemonClient::new(&config, &DaemonConnectOptions::default());
+
+    let summary = client
+        .compact_session(&session.id)
+        .expect("compact session should wait for slow daemon response");
+    let provider_request = provider_requests.recv().expect("provider request");
+    provider_handle.join().expect("join provider");
+    handle.stop().expect("stop daemon");
+
+    assert_eq!(summary.compactifications, 1);
+    assert!(
+        provider_request
+            .to_ascii_lowercase()
+            .contains("/v1/responses")
+    );
 }
 
 #[test]

@@ -1,6 +1,7 @@
 use crate::records::{
-    ArtifactRecord, ContextOffloadRecord, ContextSummaryRecord, JobRecord, MissionRecord,
-    PlanRecord, RunRecord, SessionInboxEventRecord, SessionRecord, TranscriptRecord,
+    AgentChainContinuationRecord, AgentProfileRecord, AgentScheduleRecord, ArtifactRecord,
+    ContextOffloadRecord, ContextSummaryRecord, JobRecord, MissionRecord, PlanRecord, RunRecord,
+    SessionInboxEventRecord, SessionRecord, TranscriptRecord,
 };
 use crate::store::StoreError;
 use agent_runtime::context::ContextOffloadPayload;
@@ -10,6 +11,28 @@ pub trait SessionRepository {
     fn get_session(&self, id: &str) -> Result<Option<SessionRecord>, StoreError>;
     fn list_sessions(&self) -> Result<Vec<SessionRecord>, StoreError>;
     fn delete_session(&self, id: &str) -> Result<bool, StoreError>;
+}
+
+pub trait AgentRepository {
+    fn put_agent_profile(&self, record: &AgentProfileRecord) -> Result<(), StoreError>;
+    fn get_agent_profile(&self, id: &str) -> Result<Option<AgentProfileRecord>, StoreError>;
+    fn list_agent_profiles(&self) -> Result<Vec<AgentProfileRecord>, StoreError>;
+    fn delete_agent_profile(&self, id: &str) -> Result<bool, StoreError>;
+    fn get_current_agent_profile_id(&self) -> Result<Option<String>, StoreError>;
+    fn set_current_agent_profile_id(&self, id: Option<&str>) -> Result<(), StoreError>;
+    fn put_agent_chain_continuation(
+        &self,
+        record: &AgentChainContinuationRecord,
+    ) -> Result<(), StoreError>;
+    fn get_agent_chain_continuation(
+        &self,
+        chain_id: &str,
+    ) -> Result<Option<AgentChainContinuationRecord>, StoreError>;
+    fn delete_agent_chain_continuation(&self, chain_id: &str) -> Result<bool, StoreError>;
+    fn put_agent_schedule(&self, record: &AgentScheduleRecord) -> Result<(), StoreError>;
+    fn get_agent_schedule(&self, id: &str) -> Result<Option<AgentScheduleRecord>, StoreError>;
+    fn list_agent_schedules(&self) -> Result<Vec<AgentScheduleRecord>, StoreError>;
+    fn delete_agent_schedule(&self, id: &str) -> Result<bool, StoreError>;
 }
 
 pub trait MissionRepository {

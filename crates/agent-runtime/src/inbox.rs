@@ -236,6 +236,27 @@ impl SessionInboxEvent {
         )
     }
 
+    pub fn external_input_received(
+        id: impl Into<String>,
+        session_id: impl Into<String>,
+        job_id: Option<&str>,
+        source: impl Into<String>,
+        summary: impl Into<String>,
+        created_at: i64,
+    ) -> Self {
+        Self::new(
+            id,
+            session_id,
+            job_id,
+            SessionInboxEventKind::ExternalInputReceived,
+            SessionInboxEventPayload::ExternalInputReceived {
+                source: source.into(),
+                summary: summary.into(),
+            },
+            created_at,
+        )
+    }
+
     pub fn mark_claimed(mut self, claimed_at: i64) -> Self {
         self.status = SessionInboxEventStatus::Claimed;
         self.claimed_at = Some(claimed_at);

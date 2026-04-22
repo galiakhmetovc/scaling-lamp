@@ -9,8 +9,8 @@ use crate::bootstrap::{
 };
 use crate::execution::{ApprovalContinuationReport, ChatExecutionEvent, ChatTurnExecutionReport};
 use crate::http::types::{
-    DaemonStopResponse, ErrorResponse, SessionBackgroundJobResponse, SessionSummaryResponse,
-    StatusResponse,
+    AboutResponse, DaemonStopResponse, ErrorResponse, SessionBackgroundJobResponse,
+    SessionSummaryResponse, StatusResponse, UpdateRuntimeResponse,
 };
 use agent_persistence::AppConfig;
 use reqwest::StatusCode;
@@ -148,6 +148,8 @@ impl From<SessionSummaryResponse> for SessionSummary {
         Self {
             id: value.id,
             title: value.title,
+            agent_profile_id: value.agent_profile_id,
+            agent_name: value.agent_name,
             model: value.model,
             reasoning_visible: value.reasoning_visible,
             think_level: value.think_level,
@@ -155,6 +157,9 @@ impl From<SessionSummaryResponse> for SessionSummary {
             completion_nudges: value.completion_nudges,
             auto_approve: value.auto_approve,
             context_tokens: value.context_tokens,
+            usage_input_tokens: value.usage_input_tokens,
+            usage_output_tokens: value.usage_output_tokens,
+            usage_total_tokens: value.usage_total_tokens,
             has_pending_approval: value.has_pending_approval,
             last_message_preview: value.last_message_preview,
             message_count: value.message_count,

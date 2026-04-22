@@ -1,12 +1,13 @@
+mod agent_ops;
 mod context_ops;
 mod execution_ops;
 mod session_ops;
 
 use crate::{cli, execution, prompting};
 use agent_persistence::{
-    AppConfig, ConfigError, ContextSummaryRepository, JobRepository, PersistenceScaffold,
-    PersistenceStore, PlanRepository, RecordConversionError, RunRecord, RunRepository,
-    SessionRepository, StoreError, TranscriptRepository, recovery,
+    AgentRepository, AppConfig, ConfigError, ContextSummaryRepository, JobRepository,
+    PersistenceScaffold, PersistenceStore, PlanRepository, RecordConversionError, RunRecord,
+    RunRepository, SessionRepository, StoreError, TranscriptRepository, recovery,
 };
 use agent_runtime::RuntimeScaffold;
 use agent_runtime::context::{ContextSummary, approximate_token_count};
@@ -88,6 +89,8 @@ pub struct SessionTranscriptLine {
 pub struct SessionSummary {
     pub id: String,
     pub title: String,
+    pub agent_profile_id: String,
+    pub agent_name: String,
     pub model: Option<String>,
     pub reasoning_visible: bool,
     pub think_level: Option<String>,
@@ -95,6 +98,9 @@ pub struct SessionSummary {
     pub completion_nudges: Option<u32>,
     pub auto_approve: bool,
     pub context_tokens: u32,
+    pub usage_input_tokens: Option<u32>,
+    pub usage_output_tokens: Option<u32>,
+    pub usage_total_tokens: Option<u32>,
     pub has_pending_approval: bool,
     pub last_message_preview: Option<String>,
     pub message_count: usize,
@@ -148,6 +154,7 @@ impl App {
             self.runtime.workspace.clone(),
             self.processes.clone(),
             execution::ExecutionServiceConfig {
+                data_dir: self.config.data_dir.clone(),
                 provider_max_tool_rounds: self
                     .config
                     .provider
@@ -155,6 +162,11 @@ impl App {
                     .unwrap_or(DEFAULT_PROVIDER_MAX_TOOL_ROUNDS)
                     as usize,
                 provider_max_output_tokens: self.config.provider.max_output_tokens,
+                session_defaults: SessionSettings {
+                    working_memory_limit: self.config.session_defaults.working_memory_limit,
+                    project_memory_enabled: self.config.session_defaults.project_memory_enabled,
+                    ..SessionSettings::default()
+                },
                 skills_dir: self.config.daemon.skills_dir.clone(),
                 a2a_public_base_url: self.config.daemon.public_base_url.clone(),
                 a2a_callback_bearer_token: self.config.daemon.bearer_token.clone(),
@@ -319,9 +331,16 @@ fn session_summary_from_session(
         .max(transcript_updated_at)
         .max(context_updated_at)
         .max(run_updated_at);
+    let latest_usage = latest_provider_usage(runs, &session.id);
+    let agent_name = store
+        .get_agent_profile(&session.agent_profile_id)?
+        .map(|record| record.name)
+        .unwrap_or_else(|| session.agent_profile_id.clone());
     Ok(SessionSummary {
         id: session.id.clone(),
         title: session.title.clone(),
+        agent_profile_id: session.agent_profile_id.clone(),
+        agent_name,
         model: session
             .settings
             .model
@@ -332,8 +351,13 @@ fn session_summary_from_session(
         compactifications: session.settings.compactifications,
         completion_nudges: session.settings.completion_nudges,
         auto_approve: session.settings.auto_approve,
-        context_tokens: latest_provider_input_tokens(runs, &session.id)
+        context_tokens: latest_usage
+            .as_ref()
+            .map(|usage| usage.input_tokens)
             .unwrap_or(session_head.context_tokens),
+        usage_input_tokens: latest_usage.as_ref().map(|usage| usage.input_tokens),
+        usage_output_tokens: latest_usage.as_ref().map(|usage| usage.output_tokens),
+        usage_total_tokens: latest_usage.as_ref().map(|usage| usage.total_tokens),
         has_pending_approval: session_head.pending_approval_count > 0,
         last_message_preview,
         message_count: session_head.message_count,
@@ -345,7 +369,10 @@ fn session_summary_from_session(
     })
 }
 
-pub(crate) fn latest_provider_input_tokens(runs: &[RunSnapshot], session_id: &str) -> Option<u32> {
+pub(crate) fn latest_provider_usage(
+    runs: &[RunSnapshot],
+    session_id: &str,
+) -> Option<agent_runtime::provider::ProviderUsage> {
     runs.iter()
         .filter(|run| run.session_id == session_id)
         .max_by(|left, right| {
@@ -355,7 +382,7 @@ pub(crate) fn latest_provider_input_tokens(runs: &[RunSnapshot], session_id: &st
                 .then_with(|| left.id.cmp(&right.id))
         })
         .and_then(|run| run.latest_provider_usage.as_ref())
-        .map(|usage| usage.input_tokens)
+        .cloned()
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -494,12 +521,14 @@ pub fn build_from_config(config: AppConfig) -> Result<App, BootstrapError> {
     ensure_runtime_layout(&persistence)?;
     reconcile_recovery_state(&persistence)?;
 
-    Ok(App {
+    let app = App {
         config,
         persistence,
         runtime: RuntimeScaffold::default(),
         processes: SharedProcessRegistry::default(),
-    })
+    };
+    app.ensure_builtin_agents_bootstrapped()?;
+    Ok(app)
 }
 
 fn ensure_runtime_layout(persistence: &PersistenceScaffold) -> Result<(), BootstrapError> {

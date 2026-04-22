@@ -1,4 +1,5 @@
 use super::*;
+use agent_runtime::inbox::SessionInboxEventPayload;
 use agent_runtime::session::TranscriptEntry;
 
 impl ExecutionService {
@@ -47,15 +48,26 @@ impl ExecutionService {
                     .map_err(ExecutionError::RecordConversion)?,
                 )
                 .map_err(ExecutionError::Store)?;
-            let system_entry = TranscriptEntry::system(
-                format!("transcript-{}-system", event.id),
-                session.id.clone(),
-                Some(run_id.as_str()),
-                event.transcript_summary(),
-                now,
-            );
+            let transcript_entry = match &event.payload {
+                SessionInboxEventPayload::ExternalInputReceived { source, summary } => {
+                    TranscriptEntry::user(
+                        format!("transcript-{}-external-input", event.id),
+                        session.id.clone(),
+                        Some(run_id.as_str()),
+                        self.interagent_origin_user_message(source, summary),
+                        now,
+                    )
+                }
+                _ => TranscriptEntry::system(
+                    format!("transcript-{}-system", event.id),
+                    session.id.clone(),
+                    Some(run_id.as_str()),
+                    event.transcript_summary(),
+                    now,
+                ),
+            };
             store
-                .put_transcript(&TranscriptRecord::from(&system_entry))
+                .put_transcript(&TranscriptRecord::from(&transcript_entry))
                 .map_err(ExecutionError::Store)?;
         }
 

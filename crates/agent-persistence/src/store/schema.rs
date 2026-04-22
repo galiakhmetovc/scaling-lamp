@@ -9,6 +9,7 @@ pub(super) fn bootstrap_schema(connection: &Connection) -> Result<(), StoreError
              title TEXT NOT NULL,
              prompt_override TEXT,
              settings_json TEXT NOT NULL,
+             agent_profile_id TEXT NOT NULL DEFAULT 'default',
              active_mission_id TEXT,
              parent_session_id TEXT,
              parent_job_id TEXT,
@@ -40,6 +41,7 @@ pub(super) fn bootstrap_schema(connection: &Connection) -> Result<(), StoreError
              error TEXT,
              result TEXT,
              provider_usage_json TEXT NOT NULL DEFAULT 'null',
+             active_processes_json TEXT NOT NULL DEFAULT '[]',
              recent_steps_json TEXT NOT NULL,
              evidence_refs_json TEXT NOT NULL,
              pending_approvals_json TEXT NOT NULL,
@@ -111,6 +113,42 @@ pub(super) fn bootstrap_schema(connection: &Connection) -> Result<(), StoreError
              FOREIGN KEY(job_id) REFERENCES jobs(id) ON DELETE SET NULL
          );
 
+         CREATE TABLE IF NOT EXISTS agent_profiles (
+             id TEXT PRIMARY KEY,
+             name TEXT NOT NULL,
+             template_kind TEXT NOT NULL,
+             agent_home TEXT NOT NULL,
+             allowed_tools_json TEXT NOT NULL,
+             created_at INTEGER NOT NULL,
+             updated_at INTEGER NOT NULL
+         );
+
+         CREATE TABLE IF NOT EXISTS daemon_state (
+             key TEXT PRIMARY KEY,
+             value TEXT
+         );
+
+         CREATE TABLE IF NOT EXISTS agent_chain_continuations (
+             chain_id TEXT PRIMARY KEY,
+             reason TEXT NOT NULL,
+             granted_hops INTEGER NOT NULL,
+             granted_at INTEGER NOT NULL
+         );
+
+         CREATE TABLE IF NOT EXISTS agent_schedules (
+             id TEXT PRIMARY KEY,
+             agent_profile_id TEXT NOT NULL,
+             workspace_root TEXT NOT NULL,
+             prompt TEXT NOT NULL,
+             interval_seconds INTEGER NOT NULL,
+             next_fire_at INTEGER NOT NULL,
+             last_triggered_at INTEGER,
+             last_session_id TEXT,
+             last_job_id TEXT,
+             created_at INTEGER NOT NULL,
+             updated_at INTEGER NOT NULL
+         );
+
          CREATE TABLE IF NOT EXISTS context_summaries (
              session_id TEXT PRIMARY KEY,
              summary_text TEXT NOT NULL,
@@ -161,6 +199,9 @@ pub(super) fn bootstrap_schema(connection: &Connection) -> Result<(), StoreError
          CREATE INDEX IF NOT EXISTS idx_transcripts_run_id ON transcripts(run_id);
          CREATE INDEX IF NOT EXISTS idx_session_inbox_events_session_id ON session_inbox_events(session_id);
          CREATE INDEX IF NOT EXISTS idx_session_inbox_events_status_available_at ON session_inbox_events(status, available_at);
+         CREATE INDEX IF NOT EXISTS idx_agent_profiles_updated_at ON agent_profiles(updated_at);
+         CREATE INDEX IF NOT EXISTS idx_agent_chain_continuations_granted_at ON agent_chain_continuations(granted_at);
+         CREATE INDEX IF NOT EXISTS idx_agent_schedules_next_fire_at ON agent_schedules(next_fire_at);
          CREATE INDEX IF NOT EXISTS idx_context_summaries_updated_at ON context_summaries(updated_at);
          CREATE INDEX IF NOT EXISTS idx_context_offloads_updated_at ON context_offloads(updated_at);
          CREATE INDEX IF NOT EXISTS idx_artifacts_session_id ON artifacts(session_id);",
@@ -185,12 +226,43 @@ pub(super) fn validate_schema(connection: &Connection) -> Result<(), StoreError>
     validate_column(connection, "jobs", "callback_json", false)?;
     validate_column(connection, "jobs", "callback_sent_at", false)?;
     validate_column(connection, "sessions", "settings_json", true)?;
+    validate_column(connection, "sessions", "agent_profile_id", true)?;
     validate_column(connection, "sessions", "parent_session_id", false)?;
     validate_column(connection, "sessions", "parent_job_id", false)?;
     validate_column(connection, "sessions", "delegation_label", false)?;
+    validate_column(connection, "agent_profiles", "id", true)?;
+    validate_column(connection, "agent_profiles", "name", true)?;
+    validate_column(connection, "agent_profiles", "template_kind", true)?;
+    validate_column(connection, "agent_profiles", "agent_home", true)?;
+    validate_column(connection, "agent_profiles", "allowed_tools_json", true)?;
+    validate_column(connection, "agent_profiles", "created_at", true)?;
+    validate_column(connection, "agent_profiles", "updated_at", true)?;
+    validate_column(connection, "daemon_state", "key", true)?;
+    validate_column(connection, "daemon_state", "value", false)?;
+    validate_column(connection, "agent_chain_continuations", "chain_id", true)?;
+    validate_column(connection, "agent_chain_continuations", "reason", true)?;
+    validate_column(
+        connection,
+        "agent_chain_continuations",
+        "granted_hops",
+        true,
+    )?;
+    validate_column(connection, "agent_chain_continuations", "granted_at", true)?;
+    validate_column(connection, "agent_schedules", "id", true)?;
+    validate_column(connection, "agent_schedules", "agent_profile_id", true)?;
+    validate_column(connection, "agent_schedules", "workspace_root", true)?;
+    validate_column(connection, "agent_schedules", "prompt", true)?;
+    validate_column(connection, "agent_schedules", "interval_seconds", true)?;
+    validate_column(connection, "agent_schedules", "next_fire_at", true)?;
+    validate_column(connection, "agent_schedules", "last_triggered_at", false)?;
+    validate_column(connection, "agent_schedules", "last_session_id", false)?;
+    validate_column(connection, "agent_schedules", "last_job_id", false)?;
+    validate_column(connection, "agent_schedules", "created_at", true)?;
+    validate_column(connection, "agent_schedules", "updated_at", true)?;
     validate_column(connection, "runs", "evidence_refs_json", true)?;
     validate_column(connection, "runs", "recent_steps_json", true)?;
     validate_column(connection, "runs", "provider_usage_json", true)?;
+    validate_column(connection, "runs", "active_processes_json", true)?;
     validate_column(connection, "runs", "pending_approvals_json", true)?;
     validate_column(connection, "runs", "provider_loop_json", true)?;
     validate_column(connection, "runs", "delegate_runs_json", true)?;
@@ -291,6 +363,12 @@ pub(super) fn validate_identifier(id: &str) -> Result<(), StoreError> {
 }
 
 pub(super) fn migrate_schema(connection: &Connection) -> Result<(), StoreError> {
+    add_column_if_missing(
+        connection,
+        "sessions",
+        "agent_profile_id",
+        "TEXT NOT NULL DEFAULT 'default'",
+    )?;
     add_column_if_missing(connection, "sessions", "parent_session_id", "TEXT")?;
     add_column_if_missing(connection, "sessions", "parent_job_id", "TEXT")?;
     add_column_if_missing(connection, "sessions", "delegation_label", "TEXT")?;
@@ -311,6 +389,12 @@ pub(super) fn migrate_schema(connection: &Connection) -> Result<(), StoreError> 
         "runs",
         "provider_usage_json",
         "TEXT NOT NULL DEFAULT 'null'",
+    )?;
+    add_column_if_missing(
+        connection,
+        "runs",
+        "active_processes_json",
+        "TEXT NOT NULL DEFAULT '[]'",
     )?;
     add_column_if_missing(
         connection,

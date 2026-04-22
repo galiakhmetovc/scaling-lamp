@@ -303,7 +303,7 @@ fn should_preserve_entry(entry: &TimelineEntry) -> bool {
         TimelineEntryKind::Tool { status, .. } => {
             !matches!(status.as_str(), "completed" | "failed")
         }
-        TimelineEntryKind::System => entry.content.starts_with("auto-approving pending request:"),
+        TimelineEntryKind::System => entry.content.starts_with("автоапрув ожидающего запроса:"),
         _ => false,
     }
 }

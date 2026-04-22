@@ -332,6 +332,7 @@ impl ExecutionService {
             title: format!("Delegate: {label}"),
             prompt_override: parent_session.prompt_override.clone(),
             settings: parent_session.settings.clone(),
+            agent_profile_id: parent_session.agent_profile_id.clone(),
             active_mission_id: None,
             parent_session_id: Some(parent_session.id.clone()),
             parent_job_id: Some(parent_job_id.to_string()),

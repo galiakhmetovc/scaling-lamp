@@ -41,6 +41,8 @@ pub struct CreateSessionRequest {
 pub struct SessionSummaryResponse {
     pub id: String,
     pub title: String,
+    pub agent_profile_id: String,
+    pub agent_name: String,
     pub model: Option<String>,
     pub reasoning_visible: bool,
     pub think_level: Option<String>,
@@ -48,6 +50,9 @@ pub struct SessionSummaryResponse {
     pub completion_nudges: Option<u32>,
     pub auto_approve: bool,
     pub context_tokens: u32,
+    pub usage_input_tokens: Option<u32>,
+    pub usage_output_tokens: Option<u32>,
+    pub usage_total_tokens: Option<u32>,
     pub has_pending_approval: bool,
     pub last_message_preview: Option<String>,
     pub message_count: usize,
@@ -62,6 +67,8 @@ pub struct SessionSummaryResponse {
 pub struct SessionDetailResponse {
     pub id: String,
     pub title: String,
+    pub agent_profile_id: String,
+    pub agent_name: String,
     pub prompt_override: Option<String>,
     pub settings_json: String,
     pub active_mission_id: Option<String>,
@@ -77,11 +84,82 @@ pub struct DebugBundleResponse {
     pub path: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AboutResponse {
+    pub about: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct UpdateRuntimeResponse {
+    pub message: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SessionRunStatusResponse {
+    pub run: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SessionRunControlResponse {
+    pub message: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SessionSystemResponse {
+    pub system: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SessionArtifactsResponse {
+    pub artifacts: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SessionArtifactResponse {
+    pub artifact: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AgentRenderResponse {
+    pub message: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AgentSelectRequest {
+    pub identifier: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AgentCreateRequest {
+    pub name: String,
+    pub template_identifier: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AgentResolveRequest {
+    pub identifier: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AgentScheduleCreateRequest {
+    pub id: String,
+    pub agent_identifier: Option<String>,
+    pub interval_seconds: u64,
+    pub prompt: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AgentScheduleResolveRequest {
+    pub id: String,
+}
+
 impl From<SessionSummary> for SessionSummaryResponse {
     fn from(value: SessionSummary) -> Self {
         Self {
             id: value.id,
             title: value.title,
+            agent_profile_id: value.agent_profile_id,
+            agent_name: value.agent_name,
             model: value.model,
             reasoning_visible: value.reasoning_visible,
             think_level: value.think_level,
@@ -89,6 +167,9 @@ impl From<SessionSummary> for SessionSummaryResponse {
             completion_nudges: value.completion_nudges,
             auto_approve: value.auto_approve,
             context_tokens: value.context_tokens,
+            usage_input_tokens: value.usage_input_tokens,
+            usage_output_tokens: value.usage_output_tokens,
+            usage_total_tokens: value.usage_total_tokens,
             has_pending_approval: value.has_pending_approval,
             last_message_preview: value.last_message_preview,
             message_count: value.message_count,

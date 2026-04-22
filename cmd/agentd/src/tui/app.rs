@@ -4,26 +4,87 @@ use crate::tui::worker::{
     ActiveRunHandle, ActiveRunPhase, ComposerQueue, QueuedDraft, QueuedDraftMode,
 };
 
-const COMMANDS: [&str; 19] = [
-    "/session",
-    "/new",
-    "/rename",
-    "/clear",
-    "/debug",
-    "/context",
-    "/plan",
-    "/jobs",
+const COMMAND_HINTS: [&str; 39] = [
+    "\\сессии",
+    "\\новая",
+    "\\агенты",
+    "\\агент показать",
+    "\\агент выбрать",
+    "\\агент создать",
+    "\\агент открыть",
+    "\\расписания",
+    "\\расписание показать",
+    "\\расписание создать",
+    "\\расписание удалить",
+    "\\переименовать",
+    "\\очистить",
+    "\\версия",
+    "\\обновить",
+    "\\помощь",
+    "\\настройки",
+    "\\отладка",
+    "\\система",
+    "\\контекст",
+    "\\план",
+    "\\статус",
+    "\\процессы",
+    "\\пауза",
+    "\\стоп",
+    "\\задачи",
+    "\\артефакты",
+    "\\артефакт",
     "\\доводка",
     "\\автоапрув",
     "\\скиллы",
     "\\включить",
     "\\выключить",
-    "/approve",
-    "/model",
-    "/reasoning",
-    "/think",
-    "/compact",
-    "/exit",
+    "\\апрув",
+    "\\модель",
+    "\\размышления",
+    "\\думай",
+    "\\компакт",
+    "\\выход",
+];
+const COMMAND_STEMS: [&str; 39] = [
+    "сессии",
+    "новая",
+    "агенты",
+    "агент показать",
+    "агент выбрать",
+    "агент создать",
+    "агент открыть",
+    "расписания",
+    "расписание показать",
+    "расписание создать",
+    "расписание удалить",
+    "переименовать",
+    "очистить",
+    "версия",
+    "обновить",
+    "помощь",
+    "настройки",
+    "отладка",
+    "система",
+    "контекст",
+    "план",
+    "статус",
+    "процессы",
+    "пауза",
+    "стоп",
+    "задачи",
+    "артефакты",
+    "артефакт",
+    "доводка",
+    "автоапрув",
+    "скиллы",
+    "включить",
+    "выключить",
+    "апрув",
+    "модель",
+    "размышления",
+    "думай",
+    "компакт",
+    "выход",
 ];
 const PAGE_SCROLL_LINES: u16 = 10;
 
@@ -511,37 +572,15 @@ impl TuiAppState {
     }
 
     pub fn cycle_previous_command(&mut self) -> bool {
-        if !self.input_buffer.starts_with('/') {
-            return false;
-        }
-
-        let (typed_prefix, suffix) = self
-            .input_buffer
-            .split_once(' ')
-            .map(|(command, rest)| (command, Some(rest)))
-            .unwrap_or((self.input_buffer.as_str(), None));
-        let command_prefix = self
-            .command_cycle_seed
-            .clone()
-            .unwrap_or_else(|| typed_prefix.to_string());
-        let matches = COMMANDS
-            .iter()
-            .copied()
-            .filter(|command| command.starts_with(command_prefix.as_str()))
-            .collect::<Vec<_>>();
-        if matches.is_empty() {
-            return false;
-        }
+        let matches = COMMAND_STEMS;
         let next_index = self
             .command_cycle_index
             .map(|index| (index + 1) % matches.len())
             .unwrap_or(0);
         self.command_cycle_index = Some(next_index);
-        self.command_cycle_seed = Some(command_prefix);
-        self.input_buffer = match suffix {
-            Some(rest) if !rest.is_empty() => format!("{} {}", matches[next_index], rest),
-            _ => matches[next_index].to_string(),
-        };
+        self.command_cycle_seed = None;
+        self.input_buffer = format!("\\{}", matches[next_index]);
+        self.input_cursor = self.input_buffer.len();
         true
     }
 
@@ -551,7 +590,7 @@ impl TuiAppState {
     }
 
     pub fn command_hints(&self) -> &'static [&'static str] {
-        &COMMANDS
+        &COMMAND_HINTS
     }
 
     pub fn current_phase(&self) -> Option<&ActiveRunPhase> {
@@ -564,5 +603,22 @@ impl TuiAppState {
 
     pub fn request_exit(&mut self) {
         self.should_exit = true;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::TuiAppState;
+
+    #[test]
+    fn command_cycle_works_without_prefix_and_uses_russian_commands() {
+        let mut state = TuiAppState::new(Vec::new(), None);
+
+        assert!(state.cycle_previous_command());
+        assert_eq!(state.input_buffer(), "\\сессии");
+
+        state.replace_input_buffer("авто");
+        assert!(state.cycle_previous_command());
+        assert_eq!(state.input_buffer(), "\\сессии");
     }
 }

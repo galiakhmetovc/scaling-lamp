@@ -1,4 +1,5 @@
 mod a2a;
+mod agents;
 mod chat;
 mod sessions;
 mod status;
@@ -49,7 +50,30 @@ fn handle_request(app: &App, shutdown: &Arc<AtomicBool>, request: Request) -> st
 
     match (request.method(), request.url()) {
         (&tiny_http::Method::Get, "/v1/status") => status::handle_status(app, request),
+        (&tiny_http::Method::Get, "/v1/about") => status::handle_about(app, request),
+        (&tiny_http::Method::Post, "/v1/update") => status::handle_update_runtime(app, request),
         (&tiny_http::Method::Post, "/v1/daemon/stop") => handle_shutdown(shutdown, request),
+        (&tiny_http::Method::Get, "/v1/agents") => agents::handle_list_agents(app, request),
+        (&tiny_http::Method::Get, "/v1/agents/current") => {
+            agents::handle_current_agent(app, request)
+        }
+        (&tiny_http::Method::Post, "/v1/agents/show") => agents::handle_show_agent(app, request),
+        (&tiny_http::Method::Post, "/v1/agents/select") => {
+            agents::handle_select_agent(app, request)
+        }
+        (&tiny_http::Method::Post, "/v1/agents") => agents::handle_create_agent(app, request),
+        (&tiny_http::Method::Post, "/v1/agents/open") => {
+            agents::handle_open_agent_home(app, request)
+        }
+        (&tiny_http::Method::Get, "/v1/agent-schedules") => {
+            agents::handle_list_agent_schedules(app, request)
+        }
+        (&tiny_http::Method::Post, "/v1/agent-schedules/show") => {
+            agents::handle_show_agent_schedule(app, request)
+        }
+        (&tiny_http::Method::Post, "/v1/agent-schedules") => {
+            agents::handle_create_agent_schedule(app, request)
+        }
         (&tiny_http::Method::Post, "/v1/a2a/delegations") => {
             a2a::handle_create_delegation(app, request)
         }
@@ -65,6 +89,9 @@ fn handle_request(app: &App, shutdown: &Arc<AtomicBool>, request: Request) -> st
         }
         _ if request.url().starts_with("/v1/a2a/delegations/") => {
             a2a::handle_nested_routes(app, request)
+        }
+        _ if request.url().starts_with("/v1/agent-schedules/") => {
+            agents::handle_agent_schedule_nested_routes(app, request)
         }
         _ => sessions::handle_nested_routes(app, request),
     }

@@ -1,5 +1,5 @@
 use super::*;
-use crate::http::types::StatusResponse;
+use crate::http::types::{AboutResponse, StatusResponse, UpdateRuntimeResponse};
 use agent_persistence::{JobRepository, MissionRepository, SessionRepository};
 
 pub(super) fn handle_status(app: &App, request: Request) -> std::io::Result<()> {
@@ -52,4 +52,24 @@ pub(super) fn handle_status(app: &App, request: Request) -> std::io::Result<()> 
         state_db: app.persistence.stores.metadata_db.display().to_string(),
     };
     respond_json(request, StatusCode(200), &response)
+}
+
+pub(super) fn handle_about(app: &App, request: Request) -> std::io::Result<()> {
+    match app.render_version_info() {
+        Ok(about) => respond_json(request, StatusCode(200), &AboutResponse { about }),
+        Err(error) => {
+            let (status, payload) = map_bootstrap_error(error);
+            respond_json(request, status, &payload)
+        }
+    }
+}
+
+pub(super) fn handle_update_runtime(app: &App, request: Request) -> std::io::Result<()> {
+    match app.update_runtime_binary() {
+        Ok(message) => respond_json(request, StatusCode(200), &UpdateRuntimeResponse { message }),
+        Err(error) => {
+            let (status, payload) = map_bootstrap_error(error);
+            respond_json(request, status, &payload)
+        }
+    }
 }

@@ -1,4 +1,5 @@
 use crate::skills::parser::parse_skill_frontmatter;
+use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -23,10 +24,40 @@ pub struct SkippedSkill {
 }
 
 pub fn scan_skill_catalog(skills_dir: &Path) -> Result<SkillCatalog, std::io::Error> {
+    scan_skill_catalog_with_overrides(skills_dir, None)
+}
+
+pub fn scan_skill_catalog_with_overrides(
+    skills_dir: &Path,
+    override_skills_dir: Option<&Path>,
+) -> Result<SkillCatalog, std::io::Error> {
+    let global = scan_single_skill_catalog(skills_dir)?;
+    let Some(override_skills_dir) = override_skills_dir else {
+        return Ok(global);
+    };
+    let local = scan_single_skill_catalog(override_skills_dir)?;
+
+    let mut entries_by_name = BTreeMap::new();
+    for entry in global.entries {
+        entries_by_name.insert(entry.name.to_ascii_lowercase(), entry);
+    }
+    for entry in local.entries {
+        entries_by_name.insert(entry.name.to_ascii_lowercase(), entry);
+    }
+
+    let mut entries = entries_by_name.into_values().collect::<Vec<_>>();
+    entries.sort_by(|left, right| left.name.cmp(&right.name));
+
+    let mut skipped = global.skipped;
+    skipped.extend(local.skipped);
+
+    Ok(SkillCatalog { entries, skipped })
+}
+
+fn scan_single_skill_catalog(skills_dir: &Path) -> Result<SkillCatalog, std::io::Error> {
     if !skills_dir.exists() {
         return Ok(SkillCatalog::default());
     }
-
     let mut entries = Vec::new();
     let mut skipped = Vec::new();
     let mut skill_dirs = fs::read_dir(skills_dir)?

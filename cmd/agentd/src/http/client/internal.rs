@@ -76,6 +76,24 @@ impl DaemonClient {
         decode_response(response)
     }
 
+    pub(super) fn post_json_long<T, B>(&self, path: &str, body: &B) -> Result<T, BootstrapError>
+    where
+        T: DeserializeOwned,
+        B: serde::Serialize + ?Sized,
+    {
+        let mut request = self
+            .long_http
+            .post(format!("{}{}", self.base_url, path))
+            .json(body);
+        if let Some(token) = &self.bearer_token {
+            request = request.bearer_auth(token);
+        }
+        let response = request.send().map_err(|error| {
+            BootstrapError::Stream(std::io::Error::other(format_http_error(&error)))
+        })?;
+        decode_response(response)
+    }
+
     pub(super) fn delete_json<T>(&self, path: &str) -> Result<T, BootstrapError>
     where
         T: DeserializeOwned,

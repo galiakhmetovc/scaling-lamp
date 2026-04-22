@@ -19,7 +19,7 @@ This slice covers:
 - operator-visible agent management commands in TUI/REPL
 - inter-agent messaging through the canonical session/runtime path
 - loop protection for inter-agent chains with judge-mediated continuation
-- compatibility with future scheduled agent launches through the existing daemon scheduler substrate
+- interval-based scheduled agent launches through the existing daemon scheduler substrate
 
 This slice does not cover:
 
@@ -28,7 +28,7 @@ This slice does not cover:
 - remote A2A transport as the primary agent substrate
 - per-agent model ownership
 - mutable agent switching for already-created sessions
-- full operator-facing schedule management UX
+- advanced schedule UX beyond the current command surface
 
 ## Constraints
 
@@ -318,9 +318,9 @@ This is enough to keep persistence, wake-up behavior, and tests deterministic wi
 
 ## Scheduled Agent Launches
 
-The `agent os` design should stay compatible with future scheduled launches without making scheduling part of this initial slice.
+The `agent os` design includes durable interval-based scheduled launches without introducing a separate scheduler-owned execution path.
 
-The intended extension path is a new durable `AgentSchedule` model bound to:
+`AgentSchedule` is bound to:
 
 - `agent_profile_id`
 - `project_workspace`
@@ -333,7 +333,7 @@ On schedule fire:
 - the saved prompt is injected as the session's incoming message
 - execution then proceeds through the same canonical chat/runtime path
 
-This should reuse the existing mission/scheduler, background job, inbox event, and wake-up substrate rather than introducing a separate scheduler-owned execution path.
+This reuses the existing mission/scheduler, background job, inbox event, and wake-up substrate rather than introducing a separate scheduler-owned execution path.
 
 ## Built-In Templates
 

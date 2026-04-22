@@ -120,10 +120,10 @@ fn process_cli_chat_repl_uses_remote_daemon_for_skill_commands() {
     .expect("remote repl");
 
     let output = String::from_utf8(output).expect("utf8");
-    assert!(output.contains("chat repl session_id="));
-    assert!(output.contains("Skills:"));
+    assert!(output.contains("чатовый режим session_id="));
+    assert!(output.contains("Скиллы:"));
     assert!(output.contains("rust-debug"));
-    assert!(output.contains("leaving chat repl"));
+    assert!(output.contains("выход из чатового режима"));
 
     handle.stop().expect("stop daemon");
 }

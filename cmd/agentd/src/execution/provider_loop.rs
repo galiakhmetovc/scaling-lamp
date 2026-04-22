@@ -1,4 +1,5 @@
 use super::*;
+use crate::agents;
 use crate::prompting;
 use agent_persistence::ContextOffloadRepository;
 use agent_runtime::context::{
@@ -18,7 +19,7 @@ use agent_runtime::run::{
     PendingProviderRetryApproval, PendingToolApproval, ProviderLoopState, RunStepKind,
 };
 use agent_runtime::session::{MessageRole, TranscriptEntry};
-use agent_runtime::skills::{resolve_session_skill_status, scan_skill_catalog};
+use agent_runtime::skills::{resolve_session_skill_status, scan_skill_catalog_with_overrides};
 use agent_runtime::tool::{
     AddTaskNoteOutput, AddTaskOutput, ArtifactReadOutput, ArtifactSearchOutput,
     ArtifactSearchResult, EditTaskOutput, InitPlanOutput, PlanLintOutput, PlanReadOutput,
@@ -424,14 +425,79 @@ impl ExecutionService {
                     "workspace_root": self.workspace.root.display().to_string(),
                 }),
             )),
+            ToolError::Workspace(agent_runtime::workspace::WorkspaceError::Io { path, source })
+                if source.kind() == std::io::ErrorKind::NotFound =>
+            {
+                Some(Self::retryable_provider_tool_output(
+                    parsed.name().as_str(),
+                    &format!("workspace path not found: {}", path.display()),
+                    serde_json::json!({
+                        "requested_path": path.display().to_string(),
+                        "hint": "check the exact relative path and list nearby files before retrying",
+                    }),
+                ))
+            }
+            ToolError::InvalidPatch { path, reason } => Some(Self::retryable_provider_tool_output(
+                parsed.name().as_str(),
+                &format!("invalid patch for {path}: {reason}"),
+                serde_json::json!({
+                    "requested_path": path,
+                    "patch_error": reason,
+                    "hint": "re-read the file and construct the patch from the current content",
+                }),
+            )),
+            ToolError::InvalidPlanWrite { reason }
+                if Self::is_retryable_plan_write_reason(reason) =>
+            {
+                Some(Self::retryable_provider_tool_output(
+                    parsed.name().as_str(),
+                    &format!("invalid plan reference: {reason}"),
+                    serde_json::json!({
+                        "plan_error": reason,
+                        "hint": "use canonical task_id values returned by add_task or plan_snapshot",
+                    }),
+                ))
+            }
             _ => None,
         }
+    }
+
+    fn recoverable_execution_error_output(
+        &self,
+        parsed: &ToolCall,
+        error: &ExecutionError,
+    ) -> Option<String> {
+        match error {
+            ExecutionError::Tool(tool_error) => {
+                self.recoverable_tool_error_output(parsed, tool_error)
+            }
+            ExecutionError::PermissionDenied { tool, reason } => Some(
+                serde_json::json!({
+                    "tool": tool,
+                    "error": reason,
+                    "retryable": false,
+                    "details": {
+                        "requested_tool": tool,
+                        "constraint": "agent_allowed_tools",
+                    },
+                })
+                .to_string(),
+            ),
+            _ => None,
+        }
+    }
+
+    fn is_retryable_plan_write_reason(reason: &str) -> bool {
+        reason.starts_with("unknown dependency ")
+            || reason.starts_with("unknown task ")
+            || reason.starts_with("unknown parent task ")
     }
 
     fn automatic_provider_tools(
         &self,
         provider: &dyn ProviderDriver,
         context_offload: Option<&ContextOffloadSnapshot>,
+        agent_profile: &AgentProfile,
     ) -> Vec<ProviderToolDefinition> {
         if !provider.descriptor().capabilities.supports_tool_calls {
             return Vec::new();
@@ -442,11 +508,12 @@ impl ExecutionService {
             .automatic_model_definitions()
             .into_iter()
             .filter(|definition| {
-                has_context_offload
-                    || !matches!(
-                        definition.name,
-                        ToolName::ArtifactRead | ToolName::ArtifactSearch
-                    )
+                agent_profile.allows_tool_id(definition.name.as_str())
+                    && (has_context_offload
+                        || !matches!(
+                            definition.name,
+                            ToolName::ArtifactRead | ToolName::ArtifactSearch
+                        ))
             })
             .map(|definition| ProviderToolDefinition {
                 name: definition.name.as_str().to_string(),
@@ -520,21 +587,28 @@ impl ExecutionService {
             &runs,
             &self.workspace,
         );
-        let system_prompt = prompting::load_system_prompt(&self.workspace);
-        let agents_prompt = prompting::load_agents_prompt(&self.workspace);
+        let system_prompt =
+            prompting::load_system_prompt(&self.config.data_dir, &session.agent_profile_id);
+        let agents_prompt =
+            prompting::load_agents_prompt(&self.config.data_dir, &session.agent_profile_id);
         let transcripts_for_activation = transcripts
             .iter()
             .cloned()
             .map(TranscriptEntry::try_from)
             .collect::<Result<Vec<_>, _>>()
             .map_err(ExecutionError::RecordConversion)?;
-        let skills_catalog = scan_skill_catalog(&self.config.skills_dir).map_err(|source| {
-            ExecutionError::ProviderLoop {
-                reason: format!(
-                    "failed to scan skills catalog at {}: {source}",
-                    self.config.skills_dir.display()
-                ),
-            }
+        let agent_skills_dir =
+            agents::agent_home(&self.config.data_dir, &session.agent_profile_id).join("skills");
+        let skills_catalog = scan_skill_catalog_with_overrides(
+            &self.config.skills_dir,
+            Some(agent_skills_dir.as_path()),
+        )
+        .map_err(|source| ExecutionError::ProviderLoop {
+            reason: format!(
+                "failed to scan merged skills catalog at {} and {}: {source}",
+                self.config.skills_dir.display(),
+                agent_skills_dir.display()
+            ),
         })?;
         let active_skill_status = resolve_session_skill_status(
             &skills_catalog,
@@ -560,6 +634,42 @@ impl ExecutionService {
         })
     }
 
+    pub(crate) fn build_provider_request_preview(
+        &self,
+        store: &PersistenceStore,
+        provider: &dyn ProviderDriver,
+        session_id: &str,
+    ) -> Result<ProviderRequest, ExecutionError> {
+        let session = Session::try_from(
+            store
+                .get_session(session_id)
+                .map_err(ExecutionError::Store)?
+                .ok_or_else(|| ExecutionError::MissingSession {
+                    id: session_id.to_string(),
+                })?,
+        )
+        .map_err(ExecutionError::RecordConversion)?;
+        let agent_profile = self.load_agent_profile(store, &session.agent_profile_id)?;
+        let prompt = self.prompt_messages(store, session_id)?;
+        let tools = self.automatic_provider_tools(
+            provider,
+            prompt.context_offload.as_ref(),
+            &agent_profile,
+        );
+        let cursor = ProviderLoopCursor::new(provider, None, self.config.provider_max_tool_rounds);
+        Ok(cursor.build_request(
+            &prompt.messages,
+            session.settings.model.as_deref(),
+            session
+                .prompt_override
+                .as_ref()
+                .map(|override_| override_.as_str()),
+            &tools,
+            cursor.stream_mode(true),
+            self.config.provider_max_output_tokens,
+        ))
+    }
+
     pub(super) fn persist_run(
         &self,
         store: &PersistenceStore,
@@ -570,6 +680,100 @@ impl ExecutionService {
                 &RunRecord::try_from(run.snapshot()).map_err(ExecutionError::RecordConversion)?,
             )
             .map_err(ExecutionError::Store)
+    }
+
+    pub(crate) fn latest_active_session_run(
+        &self,
+        store: &PersistenceStore,
+        session_id: &str,
+    ) -> Result<Option<RunSnapshot>, ExecutionError> {
+        let runs = store
+            .load_execution_state()
+            .map_err(ExecutionError::Store)?
+            .runs
+            .into_iter()
+            .map(RunSnapshot::try_from)
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(ExecutionError::RecordConversion)?;
+        Ok(runs
+            .into_iter()
+            .filter(|run| run.session_id == session_id && !run.status.is_terminal())
+            .max_by(|left, right| {
+                left.updated_at
+                    .cmp(&right.updated_at)
+                    .then_with(|| left.started_at.cmp(&right.started_at))
+                    .then_with(|| left.id.cmp(&right.id))
+            }))
+    }
+
+    pub(crate) fn cancel_latest_session_run(
+        &self,
+        store: &PersistenceStore,
+        session_id: &str,
+        now: i64,
+    ) -> Result<Option<RunSnapshot>, ExecutionError> {
+        let Some(snapshot) = self.latest_active_session_run(store, session_id)? else {
+            return Ok(None);
+        };
+
+        for process in &snapshot.active_processes {
+            self.terminate_pid_ref(process.pid_ref.as_str())?;
+        }
+
+        let mut run = RunEngine::from_snapshot(snapshot);
+        run.cancel("operator stop", now)
+            .map_err(ExecutionError::RunTransition)?;
+        self.persist_run(store, &run)?;
+        Ok(Some(run.snapshot().clone()))
+    }
+
+    fn run_was_cancelled_by_operator(
+        &self,
+        store: &PersistenceStore,
+        run_id: &str,
+    ) -> Result<bool, ExecutionError> {
+        let Some(run) = store.get_run(run_id).map_err(ExecutionError::Store)? else {
+            return Ok(false);
+        };
+        let snapshot = RunSnapshot::try_from(run).map_err(ExecutionError::RecordConversion)?;
+        Ok(snapshot.status == agent_runtime::run::RunStatus::Cancelled)
+    }
+
+    fn terminate_pid_ref(&self, pid_ref: &str) -> Result<(), ExecutionError> {
+        #[cfg(unix)]
+        {
+            let Some(pid_text) = pid_ref.strip_prefix("pid:") else {
+                return Err(ExecutionError::ProviderLoop {
+                    reason: format!("invalid pid_ref {pid_ref}"),
+                });
+            };
+            let pid =
+                pid_text
+                    .parse::<libc::pid_t>()
+                    .map_err(|_| ExecutionError::ProviderLoop {
+                        reason: format!("invalid pid_ref {pid_ref}"),
+                    })?;
+            let rc = unsafe { libc::kill(pid, libc::SIGTERM) };
+            if rc == 0 {
+                return Ok(());
+            }
+            let error = std::io::Error::last_os_error();
+            if error.raw_os_error() == Some(libc::ESRCH) {
+                return Ok(());
+            }
+            Err(ExecutionError::ProviderLoop {
+                reason: format!("failed to stop process {pid_ref}: {error}"),
+            })
+        }
+
+        #[cfg(not(unix))]
+        {
+            let _ = pid_ref;
+            Err(ExecutionError::ProviderLoop {
+                reason: "operator stop for active processes is not supported on this platform yet"
+                    .to_string(),
+            })
+        }
     }
 
     pub(super) fn find_job_by_run_id(
@@ -775,6 +979,32 @@ impl ExecutionService {
                 return Err(source);
             }
         };
+        match &output {
+            ToolOutput::ProcessStart(start) => {
+                run.track_active_process(
+                    agent_runtime::run::ActiveProcess::new(
+                        start.process_id.clone(),
+                        super::tools::process_kind_label(start.kind),
+                        start.pid_ref.clone(),
+                        context.now,
+                    )
+                    .with_command_details(start.command_display.clone(), start.cwd.clone()),
+                    context.now,
+                )
+                .map_err(ExecutionError::RunTransition)?;
+            }
+            ToolOutput::ProcessResult(result)
+                if run
+                    .snapshot()
+                    .active_processes
+                    .iter()
+                    .any(|process| process.id == result.process_id) =>
+            {
+                run.finish_active_process(&result.process_id, result.exit_code, context.now)
+                    .map_err(ExecutionError::RunTransition)?;
+            }
+            _ => {}
+        }
         let output_summary = output.summary();
         let model_output = output.model_output();
         run.record_tool_completion(
@@ -874,6 +1104,14 @@ impl ExecutionService {
                     input.limit,
                 )?,
             )),
+            ToolCall::MessageAgent(input) => Ok(ToolOutput::MessageAgent(
+                self.queue_interagent_message(store, session_id, input, now)?,
+            )),
+            ToolCall::GrantAgentChainContinuation(input) => {
+                Ok(ToolOutput::GrantAgentChainContinuation(
+                    self.grant_agent_chain_continuation(store, input, now)?,
+                ))
+            }
             _ => tool_runtime
                 .invoke(parsed.clone())
                 .map_err(ExecutionError::Tool),
@@ -933,13 +1171,28 @@ impl ExecutionService {
         now: i64,
     ) -> Result<InitPlanOutput, ExecutionError> {
         let mut snapshot = self.load_plan_snapshot(store, session_id)?;
-        snapshot
-            .initialize(goal, now)
-            .map_err(Self::invalid_plan_tool)?;
-        self.persist_plan_snapshot(store, &snapshot)?;
+        let goal = goal.trim();
+        if goal.is_empty() {
+            return Err(Self::invalid_plan_tool(
+                agent_runtime::plan::PlanMutationError::EmptyGoal,
+            ));
+        }
+
+        if snapshot.plan_exists() {
+            if snapshot.goal.is_none() {
+                snapshot.goal = Some(goal.to_string());
+                snapshot.updated_at = now;
+                self.persist_plan_snapshot(store, &snapshot)?;
+            }
+        } else {
+            snapshot
+                .initialize(goal, now)
+                .map_err(Self::invalid_plan_tool)?;
+            self.persist_plan_snapshot(store, &snapshot)?;
+        }
 
         Ok(InitPlanOutput {
-            goal: snapshot.goal.unwrap_or_default(),
+            goal: snapshot.goal.unwrap_or_else(|| goal.to_string()),
             item_count: snapshot.items.len(),
         })
     }
@@ -954,6 +1207,9 @@ impl ExecutionService {
         now: i64,
     ) -> Result<AddTaskOutput, ExecutionError> {
         let mut snapshot = self.load_plan_snapshot(store, session_id)?;
+        let depends_on = Self::normalize_plan_task_references(&snapshot, depends_on);
+        let parent_task_id =
+            Self::normalize_optional_plan_task_reference(&snapshot, parent_task_id);
         let task = snapshot
             .add_task(description, depends_on, parent_task_id, now)
             .map_err(Self::invalid_plan_tool)?;
@@ -971,9 +1227,10 @@ impl ExecutionService {
         now: i64,
     ) -> Result<SetTaskStatusOutput, ExecutionError> {
         let mut snapshot = self.load_plan_snapshot(store, session_id)?;
+        let task_id = Self::normalize_plan_task_reference(&snapshot, task_id);
         let status = PlanItemStatus::try_from(new_status).map_err(Self::invalid_plan_tool)?;
         let task = snapshot
-            .set_task_status(task_id, status, blocked_reason, now)
+            .set_task_status(&task_id, status, blocked_reason, now)
             .map_err(Self::invalid_plan_tool)?;
         self.persist_plan_snapshot(store, &snapshot)?;
         Ok(SetTaskStatusOutput { task })
@@ -988,8 +1245,9 @@ impl ExecutionService {
         now: i64,
     ) -> Result<AddTaskNoteOutput, ExecutionError> {
         let mut snapshot = self.load_plan_snapshot(store, session_id)?;
+        let task_id = Self::normalize_plan_task_reference(&snapshot, task_id);
         let task = snapshot
-            .add_task_note(task_id, note, now)
+            .add_task_note(&task_id, note, now)
             .map_err(Self::invalid_plan_tool)?;
         self.persist_plan_snapshot(store, &snapshot)?;
         Ok(AddTaskNoteOutput { task })
@@ -1008,9 +1266,14 @@ impl ExecutionService {
         now: i64,
     ) -> Result<EditTaskOutput, ExecutionError> {
         let mut snapshot = self.load_plan_snapshot(store, session_id)?;
+        let task_id = Self::normalize_plan_task_reference(&snapshot, task_id);
+        let depends_on =
+            depends_on.map(|items| Self::normalize_plan_task_references(&snapshot, items));
+        let parent_task_id =
+            Self::normalize_optional_plan_task_reference(&snapshot, parent_task_id);
         let task = snapshot
             .edit_task(
-                task_id,
+                &task_id,
                 description,
                 depends_on,
                 parent_task_id,
@@ -1080,6 +1343,56 @@ impl ExecutionService {
         ExecutionError::Tool(ToolError::InvalidPlanWrite {
             reason: source.to_string(),
         })
+    }
+
+    fn normalize_plan_task_references(
+        snapshot: &PlanSnapshot,
+        references: Vec<String>,
+    ) -> Vec<String> {
+        references
+            .into_iter()
+            .map(|reference| Self::normalize_plan_task_reference(snapshot, &reference))
+            .collect()
+    }
+
+    fn normalize_optional_plan_task_reference(
+        snapshot: &PlanSnapshot,
+        reference: Option<String>,
+    ) -> Option<String> {
+        reference.map(|reference| Self::normalize_plan_task_reference(snapshot, &reference))
+    }
+
+    fn normalize_plan_task_reference(snapshot: &PlanSnapshot, reference: &str) -> String {
+        let trimmed = reference.trim();
+        if trimmed.is_empty() || snapshot.task(trimmed).is_some() {
+            return trimmed.to_string();
+        }
+
+        let Some(index) = Self::plan_task_ordinal_index(trimmed) else {
+            return trimmed.to_string();
+        };
+
+        snapshot
+            .items
+            .get(index)
+            .map(|item| item.id.clone())
+            .unwrap_or_else(|| trimmed.to_string())
+    }
+
+    fn plan_task_ordinal_index(reference: &str) -> Option<usize> {
+        let normalized = reference.trim().to_ascii_lowercase();
+        let ordinal = normalized.parse::<usize>().ok().or_else(|| {
+            ["task-", "task_", "task ", "задача-", "задача_", "задача "]
+                .into_iter()
+                .find_map(|prefix| {
+                    normalized
+                        .strip_prefix(prefix)?
+                        .trim()
+                        .parse::<usize>()
+                        .ok()
+                })
+        })?;
+        ordinal.checked_sub(1)
     }
 
     pub(super) fn completion_gate_decision(
@@ -1541,8 +1854,12 @@ impl ExecutionService {
     ) -> Result<ProviderResponse, ExecutionError> {
         let prompt_messages = self.prompt_messages(store, session_id)?;
         let catalog = ToolCatalog::default();
-        let tools =
-            self.automatic_provider_tools(provider, prompt_messages.context_offload.as_ref());
+        let agent_profile = self.load_agent_profile_for_session(store, session_id)?;
+        let tools = self.automatic_provider_tools(
+            provider,
+            prompt_messages.context_offload.as_ref(),
+            &agent_profile,
+        );
         let mut tool_runtime = self.tool_runtime();
         let auto_approve = self.session_auto_approve_enabled(store, session_id)?;
         let mut cursor = ProviderLoopCursor::new(
@@ -1552,6 +1869,9 @@ impl ExecutionService {
         );
 
         loop {
+            if self.run_was_cancelled_by_operator(store, run.snapshot().id.as_str())? {
+                return Err(ExecutionError::CancelledByOperator);
+            }
             if !cursor.has_round_budget() {
                 if auto_approve {
                     cursor.reset_round_budget();
@@ -1727,6 +2047,29 @@ impl ExecutionService {
                         status: ToolExecutionStatus::Requested,
                     },
                 );
+                if let Err(error) = self.ensure_agent_tool_allowed(store, session_id, parsed.name())
+                {
+                    Self::emit_event(
+                        observer,
+                        ChatExecutionEvent::ToolStatus {
+                            tool_name: parsed.name().as_str().to_string(),
+                            summary: format!("tool error: {error}"),
+                            status: ToolExecutionStatus::Failed,
+                        },
+                    );
+                    run.record_tool_completion(
+                        format!("{} tool error: {error}", parsed.summary()),
+                        now,
+                    )
+                    .map_err(ExecutionError::RunTransition)?;
+                    if let Some(model_output) =
+                        self.recoverable_execution_error_output(&parsed, &error)
+                    {
+                        cursor.record_tool_output(&tool_call.call_id, model_output);
+                        continue;
+                    }
+                    return Err(error);
+                }
                 let permission = self.permissions.resolve(definition, &parsed);
 
                 match permission.action {
@@ -1824,20 +2167,20 @@ impl ExecutionService {
                     observer,
                 ) {
                     Ok(model_output) => model_output,
-                    Err(ExecutionError::Tool(error)) => {
+                    Err(error) => {
                         if let Some(model_output) =
-                            self.recoverable_tool_error_output(&parsed, &error)
+                            self.recoverable_execution_error_output(&parsed, &error)
                         {
                             Self::emit_event(
                                 observer,
                                 ChatExecutionEvent::ToolStatus {
                                     tool_name: parsed.name().as_str().to_string(),
-                                    summary: format!("retryable error: {error}"),
+                                    summary: format!("tool error: {error}"),
                                     status: ToolExecutionStatus::Failed,
                                 },
                             );
                             run.record_tool_completion(
-                                format!("{} retryable error: {error}", parsed.summary()),
+                                format!("{} tool error: {error}", parsed.summary()),
                                 now,
                             )
                             .map_err(ExecutionError::RunTransition)?;
@@ -1848,11 +2191,13 @@ impl ExecutionService {
                                 now,
                             )
                             .map_err(ExecutionError::RunTransition)?;
-                            return Err(ExecutionError::Tool(error));
+                            return Err(error);
                         }
                     }
-                    Err(other) => return Err(other),
                 };
+                if self.run_was_cancelled_by_operator(store, run.snapshot().id.as_str())? {
+                    return Err(ExecutionError::CancelledByOperator);
+                }
                 cursor.record_tool_output(&tool_call.call_id, model_output);
                 if interrupt_after_tool_step.is_some_and(|flag| flag.load(Ordering::SeqCst)) {
                     run.interrupt("superseded by queued user input", now)
@@ -1894,6 +2239,7 @@ fn sanitize_identifier(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use agent_runtime::plan::PlanItemStatus;
     use agent_runtime::provider::{
         ModelCapabilities, ProviderDescriptor, ProviderError, ProviderRequest, ProviderResponse,
         ProviderResponseStream,
@@ -2016,5 +2362,116 @@ mod tests {
         assert!(output.contains("\"retryable\":true"));
         assert!(output.contains("/home/user/.twcrc"));
         assert!(output.contains("workspace_relative_only"));
+    }
+
+    #[test]
+    fn normalize_plan_task_reference_maps_task_ordinals_to_existing_ids() {
+        let snapshot = PlanSnapshot {
+            session_id: "session-1".to_string(),
+            goal: Some("goal".to_string()),
+            items: vec![
+                PlanItem {
+                    id: "python-pip".to_string(),
+                    content: "Detect Python and pip".to_string(),
+                    status: PlanItemStatus::Completed,
+                    depends_on: Vec::new(),
+                    notes: Vec::new(),
+                    blocked_reason: None,
+                    parent_task_id: None,
+                },
+                PlanItem {
+                    id: "ansible-pip".to_string(),
+                    content: "Install Ansible".to_string(),
+                    status: PlanItemStatus::Pending,
+                    depends_on: vec!["python-pip".to_string()],
+                    notes: Vec::new(),
+                    blocked_reason: None,
+                    parent_task_id: None,
+                },
+            ],
+            updated_at: 0,
+        };
+
+        assert_eq!(
+            ExecutionService::normalize_plan_task_reference(&snapshot, "task-1"),
+            "python-pip"
+        );
+        assert_eq!(
+            ExecutionService::normalize_plan_task_reference(&snapshot, "2"),
+            "ansible-pip"
+        );
+        assert_eq!(
+            ExecutionService::normalize_plan_task_reference(&snapshot, "ansible-pip"),
+            "ansible-pip"
+        );
+    }
+
+    #[test]
+    fn recoverable_tool_error_output_treats_invalid_plan_references_as_retryable() {
+        let service = ExecutionService::default();
+        let parsed = ToolCall::AddTask(agent_runtime::tool::AddTaskInput {
+            description: "Install Ansible".to_string(),
+            depends_on: vec!["task-1".to_string()],
+            parent_task_id: None,
+        });
+
+        let output = service
+            .recoverable_tool_error_output(
+                &parsed,
+                &ToolError::InvalidPlanWrite {
+                    reason: "unknown dependency task-1".to_string(),
+                },
+            )
+            .expect("recoverable output");
+
+        assert!(output.contains("\"retryable\":true"));
+        assert!(output.contains("unknown dependency task-1"));
+        assert!(output.contains("canonical task_id values"));
+    }
+
+    #[test]
+    fn recoverable_tool_error_output_treats_missing_workspace_paths_as_retryable() {
+        let service = ExecutionService::default();
+        let parsed = ToolCall::FsReadText(agent_runtime::tool::FsReadTextInput {
+            path: "references/govc-guide.md".to_string(),
+        });
+
+        let output = service
+            .recoverable_tool_error_output(
+                &parsed,
+                &ToolError::Workspace(agent_runtime::workspace::WorkspaceError::Io {
+                    path: std::path::PathBuf::from("./references/govc-guide.md"),
+                    source: std::io::Error::from(std::io::ErrorKind::NotFound),
+                }),
+            )
+            .expect("recoverable output");
+
+        assert!(output.contains("\"retryable\":true"));
+        assert!(output.contains("workspace path not found"));
+        assert!(output.contains("references/govc-guide.md"));
+    }
+
+    #[test]
+    fn recoverable_tool_error_output_treats_patch_search_misses_as_retryable() {
+        let service = ExecutionService::default();
+        let parsed = ToolCall::FsPatchText(agent_runtime::tool::FsPatchTextInput {
+            path: "skills/vsphere-govc/scripts/vm-list.sh".to_string(),
+            search: "missing old text".to_string(),
+            replace: "new text".to_string(),
+        });
+
+        let output = service
+            .recoverable_tool_error_output(
+                &parsed,
+                &ToolError::InvalidPatch {
+                    path: "skills/vsphere-govc/scripts/vm-list.sh".to_string(),
+                    reason: "search text not found in file".to_string(),
+                },
+            )
+            .expect("recoverable output");
+
+        assert!(output.contains("\"retryable\":true"));
+        assert!(output.contains("search text not found in file"));
+        assert!(output.contains("skills/vsphere-govc/scripts/vm-list.sh"));
     }
 }

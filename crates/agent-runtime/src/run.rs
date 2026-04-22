@@ -52,12 +52,14 @@ pub struct ApprovalRequest {
     pub requested_at: i64,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ActiveProcess {
     pub id: String,
     pub kind: String,
     pub pid_ref: String,
     pub started_at: i64,
+    pub command_display: Option<String>,
+    pub cwd: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -341,7 +343,19 @@ impl ActiveProcess {
             kind: kind.into(),
             pid_ref: pid_ref.into(),
             started_at,
+            command_display: None,
+            cwd: None,
         }
+    }
+
+    pub fn with_command_details(
+        mut self,
+        command_display: impl Into<String>,
+        cwd: impl Into<String>,
+    ) -> Self {
+        self.command_display = Some(command_display.into());
+        self.cwd = Some(cwd.into());
+        self
     }
 }
 
@@ -592,6 +606,24 @@ impl RunEngine {
         Ok(())
     }
 
+    pub fn track_active_process(
+        &mut self,
+        process: ActiveProcess,
+        at: i64,
+    ) -> Result<(), RunTransitionError> {
+        self.require_not_terminal("track_active_process")?;
+        if self
+            .snapshot
+            .active_processes
+            .iter()
+            .all(|existing| existing.id != process.id)
+        {
+            self.snapshot.active_processes.push(process);
+        }
+        self.touch(at);
+        Ok(())
+    }
+
     pub fn complete_process(
         &mut self,
         process_id: &str,
@@ -610,6 +642,30 @@ impl RunEngine {
         if self.snapshot.active_processes.is_empty() {
             self.snapshot.status = RunStatus::Resuming;
         }
+        self.touch(at);
+        self.push_step(
+            RunStepKind::ProcessCompleted,
+            format!("process {process_id} completed with {:?}", exit_code),
+            at,
+        );
+        Ok(())
+    }
+
+    pub fn finish_active_process(
+        &mut self,
+        process_id: &str,
+        exit_code: Option<i32>,
+        at: i64,
+    ) -> Result<(), RunTransitionError> {
+        self.require_not_terminal("finish_active_process")?;
+        let removed = remove_by_id(&mut self.snapshot.active_processes, process_id);
+
+        if !removed {
+            return Err(RunTransitionError::MissingProcess {
+                id: process_id.to_string(),
+            });
+        }
+
         self.touch(at);
         self.push_step(
             RunStepKind::ProcessCompleted,
@@ -697,6 +753,9 @@ impl RunEngine {
         self.snapshot.finished_at = Some(at);
         self.snapshot.provider_stream = None;
         self.snapshot.provider_loop = None;
+        self.snapshot.pending_approvals.clear();
+        self.snapshot.active_processes.clear();
+        self.snapshot.delegate_runs.clear();
         self.touch(at);
         self.push_step(RunStepKind::Cancelled, "run cancelled", at);
         Ok(())
@@ -918,6 +977,45 @@ mod tests {
         assert_eq!(engine.snapshot().status, RunStatus::Cancelled);
         assert!(engine.resume(4).is_err());
         assert!(engine.complete("done", 5).is_err());
+    }
+
+    #[test]
+    fn track_and_finish_active_process_keep_run_running() {
+        let mut engine = RunEngine::new("run-1", "session-1", None, 1);
+        engine.start(2).expect("start");
+
+        engine
+            .track_active_process(ActiveProcess::new("proc-1", "exec", "pid:42", 3), 3)
+            .expect("track active process");
+
+        assert_eq!(engine.snapshot().status, RunStatus::Running);
+        assert_eq!(engine.snapshot().active_processes.len(), 1);
+
+        engine
+            .finish_active_process("proc-1", Some(0), 4)
+            .expect("finish active process");
+
+        assert_eq!(engine.snapshot().status, RunStatus::Running);
+        assert!(engine.snapshot().active_processes.is_empty());
+    }
+
+    #[test]
+    fn cancel_clears_pending_waiters() {
+        let mut engine = RunEngine::new("run-1", "session-1", None, 1);
+        engine.start(2).expect("start");
+        engine
+            .track_active_process(ActiveProcess::new("proc-1", "exec", "pid:42", 3), 3)
+            .expect("track active process");
+        engine
+            .wait_for_approval(ApprovalRequest::new("approval-1", "tool-1", "reason", 4), 4)
+            .expect("wait for approval");
+
+        engine.cancel("operator stop", 5).expect("cancel");
+
+        assert_eq!(engine.snapshot().status, RunStatus::Cancelled);
+        assert!(engine.snapshot().active_processes.is_empty());
+        assert!(engine.snapshot().pending_approvals.is_empty());
+        assert!(engine.snapshot().delegate_runs.is_empty());
     }
 
     #[test]

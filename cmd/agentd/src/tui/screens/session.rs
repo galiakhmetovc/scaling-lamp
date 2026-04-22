@@ -22,8 +22,11 @@ pub fn handle_key(state: &mut TuiAppState, key: KeyEvent) -> Result<TuiAction, B
             state.handle_escape();
             TuiAction::None
         }
+        KeyCode::Char('н') | KeyCode::Char('Н') => TuiAction::OpenNewSessionDialog,
         KeyCode::Char('n') | KeyCode::Char('N') => TuiAction::OpenNewSessionDialog,
+        KeyCode::Char('у') | KeyCode::Char('У') => TuiAction::OpenDeleteDialog,
         KeyCode::Char('d') | KeyCode::Char('D') => TuiAction::OpenDeleteDialog,
+        KeyCode::Char('п') | KeyCode::Char('П') => TuiAction::OpenRenameDialog,
         _ => TuiAction::None,
     };
 
@@ -46,5 +49,43 @@ fn handle_dialog_key(state: &mut TuiAppState, key: KeyEvent) -> TuiAction {
             TuiAction::None
         }
         _ => TuiAction::None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::handle_key;
+    use crate::tui::app::TuiAppState;
+    use crate::tui::events::TuiAction;
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+
+    #[test]
+    fn session_screen_accepts_russian_shortcuts() {
+        let mut state = TuiAppState::new(Vec::new(), None);
+
+        assert_eq!(
+            handle_key(
+                &mut state,
+                KeyEvent::new(KeyCode::Char('н'), KeyModifiers::NONE)
+            )
+            .expect("new key"),
+            TuiAction::OpenNewSessionDialog
+        );
+        assert_eq!(
+            handle_key(
+                &mut state,
+                KeyEvent::new(KeyCode::Char('у'), KeyModifiers::NONE)
+            )
+            .expect("delete key"),
+            TuiAction::OpenDeleteDialog
+        );
+        assert_eq!(
+            handle_key(
+                &mut state,
+                KeyEvent::new(KeyCode::Char('п'), KeyModifiers::NONE)
+            )
+            .expect("rename key"),
+            TuiAction::OpenRenameDialog
+        );
     }
 }

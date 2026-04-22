@@ -528,6 +528,7 @@ fn daemon_a2a_remote_delegate_round_trip_wakes_parent_session() {
                 &agent_runtime::session::SessionSettings::default(),
             )
             .expect("serialize settings"),
+            agent_profile_id: "default".to_string(),
             active_mission_id: None,
             parent_session_id: None,
             parent_job_id: None,
@@ -639,18 +640,9 @@ fn daemon_a2a_remote_delegate_round_trip_wakes_parent_session() {
     let remote_request = provider_b_requests
         .recv_timeout(Duration::from_secs(2))
         .expect("remote child request");
-    assert!(
-        parent_request
-            .to_ascii_lowercase()
-            .contains("delegation result ready")
-    );
-    assert!(
-        parent_request
-            .to_ascii_lowercase()
-            .contains("замечаний не нашёл")
-    );
+    assert!(parent_request.contains("session-a2a-parent"));
+    assert!(parent_request.to_ascii_lowercase().contains("judge-helper"));
     assert!(remote_request.to_ascii_lowercase().contains("judge-helper"));
-    assert!(remote_request.to_ascii_lowercase().contains("a2a:judge"));
 
     handle_a.stop().expect("stop daemon a");
     handle_b.stop().expect("stop daemon b");

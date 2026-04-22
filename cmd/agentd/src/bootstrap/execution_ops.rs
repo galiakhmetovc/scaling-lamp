@@ -188,6 +188,27 @@ impl App {
     }
 
     #[cfg_attr(not(test), allow(dead_code))]
+    pub fn cancel_latest_session_run(
+        &self,
+        session_id: &str,
+        now: i64,
+    ) -> Result<String, BootstrapError> {
+        let store = self.store()?;
+        let Some(run) = self
+            .execution_service()
+            .cancel_latest_session_run(&store, session_id, now)
+            .map_err(BootstrapError::Execution)?
+        else {
+            return Ok("Ход: активного выполнения нет".to_string());
+        };
+        Ok(format!(
+            "ход {} остановлен оператором (статус: {})",
+            run.id,
+            run.status.as_str()
+        ))
+    }
+
+    #[cfg_attr(not(test), allow(dead_code))]
     pub fn request_tool_approval(
         &self,
         job_id: &str,
@@ -235,6 +256,7 @@ impl App {
                 title: format!("A2A Delegate: {}", request.label),
                 prompt_override: None,
                 settings: SessionSettings::default(),
+                agent_profile_id: "default".to_string(),
                 active_mission_id: None,
                 parent_session_id: Some(request.parent_session_id.clone()),
                 parent_job_id: Some(request.parent_job_id.clone()),

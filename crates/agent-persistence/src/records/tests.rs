@@ -1,6 +1,9 @@
 use super::{
-    ContextOffloadRecord, JobRecord, MissionRecord, PlanRecord, RunRecord, SessionRecord,
-    TranscriptRecord,
+    AgentChainContinuationRecord, AgentProfileRecord, AgentScheduleRecord, ContextOffloadRecord,
+    JobRecord, MissionRecord, PlanRecord, RunRecord, SessionRecord, TranscriptRecord,
+};
+use agent_runtime::agent::{
+    AgentChainContinuationGrant, AgentProfile, AgentSchedule, AgentTemplateKind,
 };
 use agent_runtime::context::{ContextOffloadRef, ContextOffloadSnapshot};
 use agent_runtime::mission::{
@@ -8,7 +11,7 @@ use agent_runtime::mission::{
     JobStatus, MissionExecutionIntent, MissionSchedule, MissionSpec, MissionStatus,
 };
 use agent_runtime::plan::{PlanItem, PlanItemStatus, PlanSnapshot};
-use agent_runtime::run::{ApprovalRequest, DelegateRun, RunEngine, RunSnapshot};
+use agent_runtime::run::{ActiveProcess, ApprovalRequest, DelegateRun, RunEngine, RunSnapshot};
 use agent_runtime::session::{MessageRole, PromptOverride, Session, TranscriptEntry};
 use agent_runtime::verification::{CheckOutcome, EvidenceBundle};
 
@@ -19,6 +22,7 @@ fn session_records_round_trip_with_domain_sessions() {
         title: "Bootstrap".to_string(),
         prompt_override: Some(PromptOverride::new("Always verify").expect("prompt override")),
         settings: Default::default(),
+        agent_profile_id: "default".to_string(),
         active_mission_id: Some("mission-1".to_string()),
         parent_session_id: None,
         parent_job_id: None,
@@ -40,6 +44,7 @@ fn session_records_round_trip_with_delegation_lineage_metadata() {
         title: "Delegate: verification".to_string(),
         prompt_override: None,
         settings: Default::default(),
+        agent_profile_id: "judge".to_string(),
         active_mission_id: None,
         parent_session_id: Some("session-parent".to_string()),
         parent_job_id: Some("job-delegate".to_string()),
@@ -67,6 +72,7 @@ fn session_records_accept_legacy_partial_settings_json() {
         title: "Legacy".to_string(),
         prompt_override: None,
         settings_json: "{\"model\":\"gpt-5.4\"}".to_string(),
+        agent_profile_id: "default".to_string(),
         active_mission_id: None,
         parent_session_id: None,
         parent_job_id: None,
@@ -80,6 +86,59 @@ fn session_records_accept_legacy_partial_settings_json() {
     assert!(restored.settings.reasoning_visible);
     assert_eq!(restored.settings.think_level, None);
     assert_eq!(restored.settings.compactifications, 0);
+}
+
+#[test]
+fn agent_profile_records_round_trip_with_domain_agents() {
+    let profile = AgentProfile::new(
+        "judge",
+        "Judge",
+        AgentTemplateKind::Judge,
+        "/var/lib/teamd/agents/judge",
+        vec!["fs_read_text".to_string(), "plan_snapshot".to_string()],
+        10,
+        11,
+    )
+    .expect("agent profile");
+
+    let stored = AgentProfileRecord::try_from(&profile).expect("profile to record");
+    let restored = AgentProfile::try_from(stored).expect("record to profile");
+
+    assert_eq!(restored, profile);
+}
+
+#[test]
+fn chain_continuation_records_round_trip() {
+    let grant = AgentChainContinuationGrant::new("chain-1", "judge approved", 42)
+        .expect("continuation grant");
+
+    let stored = AgentChainContinuationRecord::from(&grant);
+    let restored = AgentChainContinuationGrant::try_from(stored).expect("record to grant");
+
+    assert_eq!(restored, grant);
+}
+
+#[test]
+fn agent_schedule_records_round_trip() {
+    let schedule = AgentSchedule::new(
+        "judge-pulse",
+        "judge",
+        "/workspace/project",
+        "Check the latest diff and summarize it.",
+        300,
+        42,
+        Some(12),
+        Some("session-schedule-prev".to_string()),
+        Some("job-schedule-prev".to_string()),
+        10,
+        11,
+    )
+    .expect("schedule");
+
+    let stored = AgentScheduleRecord::from(&schedule);
+    let restored = AgentSchedule::try_from(stored).expect("record to schedule");
+
+    assert_eq!(restored, schedule);
 }
 
 #[test]
@@ -144,6 +203,12 @@ fn run_records_round_trip_with_snapshot_core_fields() {
         .expect("resolve approval");
     engine.resume(2).expect("resume");
     engine
+        .track_active_process(ActiveProcess::new("exec-1", "exec", "pid:42", 2), 2)
+        .expect("track active process");
+    engine
+        .finish_active_process("exec-1", Some(0), 2)
+        .expect("finish active process");
+    engine
         .wait_for_delegate(DelegateRun::new("delegate-1", "worker-a", 2), 2)
         .expect("wait for delegate");
     evidence
@@ -170,6 +235,7 @@ fn run_records_round_trip_with_snapshot_core_fields() {
     assert_eq!(restored.finished_at, Some(3));
     assert!(restored.pending_approvals.is_empty());
     assert!(restored.delegate_runs.is_empty());
+    assert!(restored.active_processes.is_empty());
     assert!(
         restored
             .recent_steps

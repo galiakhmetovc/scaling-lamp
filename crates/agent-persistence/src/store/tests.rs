@@ -3,14 +3,19 @@ use super::{
     DEFAULT_MISSION_SCHEDULE_JSON, LEGACY_MISSION_PREFIX,
 };
 use crate::{
-    ArtifactRecord, ArtifactRepository, ContextOffloadRecord, ContextOffloadRepository, JobRecord,
-    JobRepository, MissionRecord, MissionRepository, PersistenceScaffold, PlanRecord,
-    PlanRepository, RunRecord, RunRepository, SessionInboxRepository, SessionRecord,
-    SessionRepository, TranscriptRecord, TranscriptRepository,
+    AgentProfileRecord, AgentRepository, AgentScheduleRecord, ArtifactRecord, ArtifactRepository,
+    ContextOffloadRecord, ContextOffloadRepository, JobRecord, JobRepository, MissionRecord,
+    MissionRepository, PersistenceScaffold, PlanRecord, PlanRepository, RunRecord, RunRepository,
+    SessionInboxRepository, SessionRecord, SessionRepository, TranscriptRecord,
+    TranscriptRepository,
+};
+use agent_runtime::agent::{
+    AgentChainContinuationGrant, AgentProfile, AgentSchedule, AgentTemplateKind,
 };
 use agent_runtime::context::{ContextOffloadPayload, ContextOffloadRef, ContextOffloadSnapshot};
 use agent_runtime::mission::JobExecutionInput;
 use agent_runtime::plan::{PlanItem, PlanItemStatus, PlanSnapshot};
+use rusqlite::params;
 use std::fs;
 use std::path::PathBuf;
 
@@ -27,6 +32,7 @@ fn open_bootstraps_schema_and_round_trips_structured_and_file_backed_data() {
         title: "Boot mission".to_string(),
         prompt_override: None,
         settings_json: "{\"model\":\"gpt-5.4\"}".to_string(),
+        agent_profile_id: "default".to_string(),
         active_mission_id: None,
         parent_session_id: None,
         parent_job_id: None,
@@ -54,6 +60,7 @@ fn open_bootstraps_schema_and_round_trips_structured_and_file_backed_data() {
         error: None,
         result: None,
         provider_usage_json: "null".to_string(),
+        active_processes_json: "[]".to_string(),
         recent_steps_json: "[]".to_string(),
         evidence_refs_json: "[\"bundle:bootstrap\"]".to_string(),
         pending_approvals_json: "[]".to_string(),
@@ -150,6 +157,7 @@ fn open_bootstraps_schema_and_round_trips_structured_and_file_backed_data() {
         store
             .put_session(&SessionRecord {
                 active_mission_id: Some(mission.id.clone()),
+                agent_profile_id: "default".to_string(),
                 ..session.clone()
             })
             .expect("attach active mission");
@@ -169,6 +177,7 @@ fn open_bootstraps_schema_and_round_trips_structured_and_file_backed_data() {
         reopened.get_session(&session.id).expect("get session"),
         Some(SessionRecord {
             active_mission_id: Some(mission.id.clone()),
+            agent_profile_id: "default".to_string(),
             ..session
         })
     );
@@ -221,6 +230,229 @@ fn open_bootstraps_schema_and_round_trips_structured_and_file_backed_data() {
 }
 
 #[test]
+fn agent_repository_round_trips_profiles_current_selection_and_continuations() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let scaffold = PersistenceScaffold::from_config(crate::AppConfig {
+        data_dir: temp.path().join("state-root"),
+        ..crate::AppConfig::default()
+    });
+    let store = super::PersistenceStore::open(&scaffold).expect("open store");
+
+    let profile = AgentProfile::new(
+        "judge",
+        "Judge",
+        AgentTemplateKind::Judge,
+        scaffold.config.data_dir.join("agents/judge"),
+        vec!["fs_read_text".to_string(), "plan_snapshot".to_string()],
+        10,
+        11,
+    )
+    .expect("agent profile");
+    let profile_record = AgentProfileRecord::try_from(&profile).expect("profile to record");
+
+    store
+        .put_agent_profile(&profile_record)
+        .expect("put agent profile");
+    store
+        .set_current_agent_profile_id(Some(&profile.id))
+        .expect("set current agent");
+
+    let continuation = AgentChainContinuationGrant::new("chain-1", "judge approved", 12)
+        .expect("continuation grant");
+    let continuation_record = crate::AgentChainContinuationRecord::from(&continuation);
+    store
+        .put_agent_chain_continuation(&continuation_record)
+        .expect("put continuation");
+
+    assert_eq!(
+        store
+            .get_agent_profile(&profile.id)
+            .expect("get agent profile"),
+        Some(profile_record.clone())
+    );
+    assert_eq!(
+        store.list_agent_profiles().expect("list agent profiles"),
+        vec![profile_record]
+    );
+    assert_eq!(
+        store
+            .get_current_agent_profile_id()
+            .expect("get current agent"),
+        Some("judge".to_string())
+    );
+    assert_eq!(
+        store
+            .get_agent_chain_continuation("chain-1")
+            .expect("get continuation"),
+        Some(continuation_record)
+    );
+}
+
+#[test]
+fn agent_repository_round_trips_schedules() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let scaffold = PersistenceScaffold::from_config(crate::AppConfig {
+        data_dir: temp.path().join("state-root"),
+        ..crate::AppConfig::default()
+    });
+    let store = super::PersistenceStore::open(&scaffold).expect("open store");
+
+    let schedule = AgentSchedule::new(
+        "judge-pulse",
+        "judge",
+        scaffold.config.data_dir.join("workspace"),
+        "check the latest diff",
+        300,
+        30,
+        Some(20),
+        Some("session-schedule-prev".to_string()),
+        Some("job-schedule-prev".to_string()),
+        10,
+        11,
+    )
+    .expect("schedule");
+    let record = AgentScheduleRecord::from(&schedule);
+
+    store.put_agent_schedule(&record).expect("put schedule");
+
+    assert_eq!(
+        store
+            .get_agent_schedule("judge-pulse")
+            .expect("get schedule"),
+        Some(record.clone())
+    );
+    assert_eq!(
+        store.list_agent_schedules().expect("list schedules"),
+        vec![record]
+    );
+}
+
+#[test]
+fn store_rejects_mutating_session_agent_profile_id() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let scaffold = PersistenceScaffold::from_config(crate::AppConfig {
+        data_dir: temp.path().join("state-root"),
+        ..crate::AppConfig::default()
+    });
+    let store = super::PersistenceStore::open(&scaffold).expect("open store");
+
+    let session = SessionRecord {
+        id: "session-immutable-agent".to_string(),
+        title: "Immutable agent".to_string(),
+        prompt_override: None,
+        settings_json: "{}".to_string(),
+        agent_profile_id: "default".to_string(),
+        active_mission_id: None,
+        parent_session_id: None,
+        parent_job_id: None,
+        delegation_label: None,
+        created_at: 1,
+        updated_at: 1,
+    };
+    store.put_session(&session).expect("put session");
+
+    let error = store
+        .put_session(&SessionRecord {
+            title: "Retargeted".to_string(),
+            agent_profile_id: "judge".to_string(),
+            updated_at: 2,
+            ..session.clone()
+        })
+        .expect_err("changing session agent should fail");
+
+    assert!(matches!(
+        error,
+        super::StoreError::ImmutableSessionAgentProfile {
+            session_id,
+            existing_agent_profile_id,
+            attempted_agent_profile_id,
+        } if session_id == "session-immutable-agent"
+            && existing_agent_profile_id == "default"
+            && attempted_agent_profile_id == "judge"
+    ));
+    assert_eq!(
+        store
+            .get_session(&session.id)
+            .expect("get session after failure"),
+        Some(session)
+    );
+}
+
+#[test]
+fn open_migrates_legacy_sessions_with_default_agent_profile_id() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let scaffold = PersistenceScaffold::from_config(crate::AppConfig {
+        data_dir: temp.path().join("state-root"),
+        ..crate::AppConfig::default()
+    });
+
+    fs::create_dir_all(
+        scaffold
+            .stores
+            .metadata_db
+            .parent()
+            .unwrap_or(scaffold.stores.metadata_db.as_path()),
+    )
+    .expect("create db dir");
+
+    let connection = rusqlite::Connection::open(&scaffold.stores.metadata_db).expect("open sqlite");
+    connection
+        .execute_batch(
+            "PRAGMA foreign_keys = ON;
+             CREATE TABLE missions (
+                 id TEXT PRIMARY KEY,
+                 session_id TEXT NOT NULL,
+                 objective TEXT NOT NULL,
+                 status TEXT NOT NULL,
+                 execution_intent TEXT NOT NULL,
+                 schedule_json TEXT NOT NULL,
+                 acceptance_json TEXT NOT NULL,
+                 created_at INTEGER NOT NULL,
+                 updated_at INTEGER NOT NULL,
+                 completed_at INTEGER
+             );
+             CREATE TABLE sessions (
+                 id TEXT PRIMARY KEY,
+                 title TEXT NOT NULL,
+                 prompt_override TEXT,
+                 settings_json TEXT NOT NULL,
+                 active_mission_id TEXT,
+                 created_at INTEGER NOT NULL,
+                 updated_at INTEGER NOT NULL,
+                 FOREIGN KEY(active_mission_id) REFERENCES missions(id) ON DELETE SET NULL
+             );
+             INSERT INTO sessions (
+                 id, title, prompt_override, settings_json, active_mission_id, created_at, updated_at
+             ) VALUES (
+                 'session-legacy', 'Legacy session', NULL, '{\"model\":\"gpt-5.4\"}', NULL, 1, 2
+             );",
+        )
+        .expect("create legacy sessions");
+    drop(connection);
+
+    let store = super::PersistenceStore::open(&scaffold).expect("open migrated store");
+
+    assert_eq!(
+        store
+            .get_session("session-legacy")
+            .expect("get migrated session"),
+        Some(SessionRecord {
+            id: "session-legacy".to_string(),
+            title: "Legacy session".to_string(),
+            prompt_override: None,
+            settings_json: "{\"model\":\"gpt-5.4\"}".to_string(),
+            agent_profile_id: "default".to_string(),
+            active_mission_id: None,
+            parent_session_id: None,
+            parent_job_id: None,
+            delegation_label: None,
+            created_at: 1,
+            updated_at: 2,
+        })
+    );
+}
+
+#[test]
 fn plan_repository_round_trips_structured_plan_snapshots() {
     let temp = tempfile::tempdir().expect("tempdir");
     let scaffold = PersistenceScaffold::from_config(crate::AppConfig {
@@ -234,6 +466,7 @@ fn plan_repository_round_trips_structured_plan_snapshots() {
             title: "Plan Session".to_string(),
             prompt_override: None,
             settings_json: "{\"model\":\"gpt-5.4\"}".to_string(),
+            agent_profile_id: "default".to_string(),
             active_mission_id: None,
             parent_session_id: None,
             parent_job_id: None,
@@ -297,6 +530,7 @@ fn context_offload_repository_round_trips_snapshot_and_payloads() {
             title: "Offload Session".to_string(),
             prompt_override: None,
             settings_json: "{\"model\":\"gpt-5.4\"}".to_string(),
+            agent_profile_id: "default".to_string(),
             active_mission_id: None,
             parent_session_id: None,
             parent_job_id: None,
@@ -362,6 +596,7 @@ fn replacing_context_offload_snapshot_prunes_obsolete_artifacts() {
             title: "Offload Prune".to_string(),
             prompt_override: None,
             settings_json: "{\"model\":\"gpt-5.4\"}".to_string(),
+            agent_profile_id: "default".to_string(),
             active_mission_id: None,
             parent_session_id: None,
             parent_job_id: None,
@@ -481,6 +716,7 @@ fn open_migrates_legacy_mission_and_job_schema() {
                  status TEXT NOT NULL,
                  error TEXT,
                  result TEXT,
+                 active_processes_json TEXT NOT NULL DEFAULT '[]',
                  started_at INTEGER NOT NULL,
                  updated_at INTEGER NOT NULL,
                  finished_at INTEGER,
@@ -600,6 +836,7 @@ fn open_migrates_legacy_mission_and_job_schema() {
             error: None,
             result: None,
             provider_usage_json: "null".to_string(),
+            active_processes_json: "[]".to_string(),
             recent_steps_json: "[]".to_string(),
             evidence_refs_json: "[]".to_string(),
             pending_approvals_json: "[]".to_string(),
@@ -766,6 +1003,7 @@ fn list_transcripts_for_session_orders_by_timestamp_and_id() {
         title: "Boot mission".to_string(),
         prompt_override: None,
         settings_json: "{\"model\":\"gpt-5.4\"}".to_string(),
+        agent_profile_id: "default".to_string(),
         active_mission_id: None,
         parent_session_id: None,
         parent_job_id: None,
@@ -833,6 +1071,7 @@ fn list_execution_records_orders_sessions_missions_jobs_and_runs_stably() {
         title: "Second session".to_string(),
         prompt_override: None,
         settings_json: "{}".to_string(),
+        agent_profile_id: "default".to_string(),
         active_mission_id: None,
         parent_session_id: None,
         parent_job_id: None,
@@ -845,6 +1084,7 @@ fn list_execution_records_orders_sessions_missions_jobs_and_runs_stably() {
         title: "First session".to_string(),
         prompt_override: None,
         settings_json: "{}".to_string(),
+        agent_profile_id: "default".to_string(),
         active_mission_id: None,
         parent_session_id: None,
         parent_job_id: None,
@@ -890,6 +1130,7 @@ fn list_execution_records_orders_sessions_missions_jobs_and_runs_stably() {
         error: None,
         result: None,
         provider_usage_json: "null".to_string(),
+        active_processes_json: "[]".to_string(),
         recent_steps_json: "[]".to_string(),
         evidence_refs_json: "[]".to_string(),
         pending_approvals_json: "[]".to_string(),
@@ -907,6 +1148,7 @@ fn list_execution_records_orders_sessions_missions_jobs_and_runs_stably() {
         error: None,
         result: None,
         provider_usage_json: "null".to_string(),
+        active_processes_json: "[]".to_string(),
         recent_steps_json: "[]".to_string(),
         evidence_refs_json: "[]".to_string(),
         pending_approvals_json: "[]".to_string(),
@@ -1031,6 +1273,7 @@ fn load_execution_state_returns_one_typed_snapshot_for_scheduler_inputs() {
         title: "Execution session".to_string(),
         prompt_override: None,
         settings_json: "{}".to_string(),
+        agent_profile_id: "default".to_string(),
         active_mission_id: None,
         parent_session_id: None,
         parent_job_id: None,
@@ -1089,6 +1332,7 @@ fn load_execution_state_returns_one_typed_snapshot_for_scheduler_inputs() {
         error: None,
         result: None,
         provider_usage_json: "null".to_string(),
+        active_processes_json: "[]".to_string(),
         recent_steps_json: "[]".to_string(),
         evidence_refs_json: "[]".to_string(),
         pending_approvals_json: "[]".to_string(),
@@ -1135,6 +1379,82 @@ fn open_removes_orphan_payload_files() {
 }
 
 #[test]
+fn open_does_not_prune_payloads_that_are_mid_commit() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let scaffold = PersistenceScaffold::from_config(crate::AppConfig {
+        data_dir: temp.path().join("state-root"),
+        ..crate::AppConfig::default()
+    });
+    let store = super::PersistenceStore::open(&scaffold).expect("open store");
+
+    let session = SessionRecord {
+        id: "session-1".to_string(),
+        title: "Store payloads".to_string(),
+        prompt_override: None,
+        settings_json: "{\"model\":\"gpt-5.4\"}".to_string(),
+        agent_profile_id: "default".to_string(),
+        active_mission_id: None,
+        parent_session_id: None,
+        parent_job_id: None,
+        delegation_label: None,
+        created_at: 1,
+        updated_at: 1,
+    };
+    store.put_session(&session).expect("store session");
+
+    let transcript = TranscriptRecord {
+        id: "transcript-race".to_string(),
+        session_id: session.id.clone(),
+        run_id: None,
+        kind: "user".to_string(),
+        content: "mid-commit transcript".to_string(),
+        created_at: 2,
+    };
+    let path = scaffold.stores.transcripts_dir.join("transcript-race.txt");
+    let storage_key = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .expect("storage key")
+        .to_string();
+    let sha256 = super::sha256_hex(transcript.content.as_bytes());
+
+    super::persist_payload_with_commit(&path, transcript.content.as_bytes(), || {
+        let _concurrent = super::PersistenceStore::open(&scaffold).expect("concurrent open");
+        store
+            .connection
+            .execute(
+                "INSERT INTO transcripts (
+                    id, session_id, run_id, kind, storage_key, byte_len, sha256, created_at
+                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+                params![
+                    transcript.id.clone(),
+                    transcript.session_id.clone(),
+                    transcript.run_id.clone(),
+                    transcript.kind.clone(),
+                    storage_key.clone(),
+                    transcript.content.len() as i64,
+                    sha256.clone(),
+                    transcript.created_at
+                ],
+            )
+            .map(|_| ())
+            .map_err(super::StoreError::from)
+    })
+    .expect("persist transcript through concurrent reconcile");
+
+    assert!(
+        path.exists(),
+        "payload should survive concurrent store open"
+    );
+    assert_eq!(
+        store
+            .get_transcript("transcript-race")
+            .expect("get transcript"),
+        Some(transcript)
+    );
+}
+
+#[test]
 fn open_removes_payloads_that_do_not_match_metadata() {
     let temp = tempfile::tempdir().expect("tempdir");
     let scaffold = PersistenceScaffold::from_config(crate::AppConfig {
@@ -1148,6 +1468,7 @@ fn open_removes_payloads_that_do_not_match_metadata() {
         title: "Store payloads".to_string(),
         prompt_override: None,
         settings_json: "{\"model\":\"gpt-5.4\"}".to_string(),
+        agent_profile_id: "default".to_string(),
         active_mission_id: None,
         parent_session_id: None,
         parent_job_id: None,
@@ -1293,6 +1614,7 @@ fn failed_metadata_updates_restore_previous_payloads() {
         title: "Store payloads".to_string(),
         prompt_override: None,
         settings_json: "{\"model\":\"gpt-5.4\"}".to_string(),
+        agent_profile_id: "default".to_string(),
         active_mission_id: None,
         parent_session_id: None,
         parent_job_id: None,
@@ -1365,6 +1687,7 @@ fn reads_fail_when_payloads_no_longer_match_metadata() {
         title: "Store payloads".to_string(),
         prompt_override: None,
         settings_json: "{\"model\":\"gpt-5.4\"}".to_string(),
+        agent_profile_id: "default".to_string(),
         active_mission_id: None,
         parent_session_id: None,
         parent_job_id: None,
@@ -1417,6 +1740,53 @@ fn reads_fail_when_payloads_no_longer_match_metadata() {
 }
 
 #[test]
+fn put_artifact_recreates_the_payload_directory_when_it_was_removed() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let scaffold = PersistenceScaffold::from_config(crate::AppConfig {
+        data_dir: temp.path().join("state-root"),
+        ..crate::AppConfig::default()
+    });
+    let store = super::PersistenceStore::open(&scaffold).expect("open store");
+
+    let session = SessionRecord {
+        id: "session-artifacts-recreated".to_string(),
+        title: "Artifacts recreated".to_string(),
+        prompt_override: None,
+        settings_json: "{\"model\":\"gpt-5.4\"}".to_string(),
+        agent_profile_id: "default".to_string(),
+        active_mission_id: None,
+        parent_session_id: None,
+        parent_job_id: None,
+        delegation_label: None,
+        created_at: 1,
+        updated_at: 1,
+    };
+    store.put_session(&session).expect("put session");
+
+    fs::remove_dir_all(&scaffold.stores.artifacts_dir).expect("remove artifacts dir");
+    assert!(!scaffold.stores.artifacts_dir.exists());
+
+    let artifact = ArtifactRecord {
+        id: "artifact-recreated".to_string(),
+        session_id: session.id.clone(),
+        kind: "report".to_string(),
+        metadata_json: "{\"source\":\"test\"}".to_string(),
+        path: PathBuf::from("artifacts/artifact-recreated.bin"),
+        bytes: b"payload".to_vec(),
+        created_at: 2,
+    };
+    store.put_artifact(&artifact).expect("store artifact");
+
+    assert!(scaffold.stores.artifacts_dir.is_dir());
+    assert_eq!(
+        store
+            .get_artifact("artifact-recreated")
+            .expect("get artifact"),
+        Some(artifact)
+    );
+}
+
+#[test]
 fn open_restores_matching_backups_before_pruning_corrupt_payloads() {
     let temp = tempfile::tempdir().expect("tempdir");
     let scaffold = PersistenceScaffold::from_config(crate::AppConfig {
@@ -1430,6 +1800,7 @@ fn open_restores_matching_backups_before_pruning_corrupt_payloads() {
         title: "Store payloads".to_string(),
         prompt_override: None,
         settings_json: "{\"model\":\"gpt-5.4\"}".to_string(),
+        agent_profile_id: "default".to_string(),
         active_mission_id: None,
         parent_session_id: None,
         parent_job_id: None,
@@ -1503,6 +1874,7 @@ fn inbox_events_round_trip_and_session_queries() {
         title: "Inbox Session".to_string(),
         prompt_override: None,
         settings_json: "{\"model\":\"gpt-5.4\"}".to_string(),
+        agent_profile_id: "default".to_string(),
         active_mission_id: None,
         parent_session_id: None,
         parent_job_id: None,

@@ -2,15 +2,26 @@ use super::*;
 
 impl SessionRepository for PersistenceStore {
     fn put_session(&self, record: &SessionRecord) -> Result<(), StoreError> {
+        if let Some(existing) = self.get_session(&record.id)?
+            && existing.agent_profile_id != record.agent_profile_id
+        {
+            return Err(StoreError::ImmutableSessionAgentProfile {
+                session_id: record.id.clone(),
+                existing_agent_profile_id: existing.agent_profile_id,
+                attempted_agent_profile_id: record.agent_profile_id.clone(),
+            });
+        }
+
         self.connection.execute(
             "INSERT INTO sessions (
-                id, title, prompt_override, settings_json, active_mission_id, parent_session_id,
-                parent_job_id, delegation_label, created_at, updated_at
-             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
+                id, title, prompt_override, settings_json, agent_profile_id, active_mission_id,
+                parent_session_id, parent_job_id, delegation_label, created_at, updated_at
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)
              ON CONFLICT(id) DO UPDATE SET
                 title = excluded.title,
                 prompt_override = excluded.prompt_override,
                 settings_json = excluded.settings_json,
+                agent_profile_id = excluded.agent_profile_id,
                 active_mission_id = excluded.active_mission_id,
                 parent_session_id = excluded.parent_session_id,
                 parent_job_id = excluded.parent_job_id,
@@ -22,6 +33,7 @@ impl SessionRepository for PersistenceStore {
                 record.title,
                 record.prompt_override,
                 &record.settings_json,
+                &record.agent_profile_id,
                 record.active_mission_id,
                 record.parent_session_id,
                 record.parent_job_id,
@@ -36,8 +48,8 @@ impl SessionRepository for PersistenceStore {
     fn get_session(&self, id: &str) -> Result<Option<SessionRecord>, StoreError> {
         self.connection
             .query_row(
-                "SELECT id, title, prompt_override, settings_json, active_mission_id, parent_session_id,
-                        parent_job_id, delegation_label, created_at, updated_at
+                "SELECT id, title, prompt_override, settings_json, agent_profile_id, active_mission_id,
+                        parent_session_id, parent_job_id, delegation_label, created_at, updated_at
                  FROM sessions WHERE id = ?1",
                 [id],
                 |row| {
@@ -46,12 +58,13 @@ impl SessionRepository for PersistenceStore {
                         title: row.get(1)?,
                         prompt_override: row.get(2)?,
                         settings_json: row.get(3)?,
-                        active_mission_id: row.get(4)?,
-                        parent_session_id: row.get(5)?,
-                        parent_job_id: row.get(6)?,
-                        delegation_label: row.get(7)?,
-                        created_at: row.get(8)?,
-                        updated_at: row.get(9)?,
+                        agent_profile_id: row.get(4)?,
+                        active_mission_id: row.get(5)?,
+                        parent_session_id: row.get(6)?,
+                        parent_job_id: row.get(7)?,
+                        delegation_label: row.get(8)?,
+                        created_at: row.get(9)?,
+                        updated_at: row.get(10)?,
                     })
                 },
             )
@@ -61,8 +74,8 @@ impl SessionRepository for PersistenceStore {
 
     fn list_sessions(&self) -> Result<Vec<SessionRecord>, StoreError> {
         let mut statement = self.connection.prepare(
-            "SELECT id, title, prompt_override, settings_json, active_mission_id, parent_session_id,
-                    parent_job_id, delegation_label, created_at, updated_at
+            "SELECT id, title, prompt_override, settings_json, agent_profile_id, active_mission_id,
+                    parent_session_id, parent_job_id, delegation_label, created_at, updated_at
              FROM sessions
              ORDER BY created_at ASC, id ASC",
         )?;
@@ -75,12 +88,13 @@ impl SessionRepository for PersistenceStore {
                 title: row.get(1)?,
                 prompt_override: row.get(2)?,
                 settings_json: row.get(3)?,
-                active_mission_id: row.get(4)?,
-                parent_session_id: row.get(5)?,
-                parent_job_id: row.get(6)?,
-                delegation_label: row.get(7)?,
-                created_at: row.get(8)?,
-                updated_at: row.get(9)?,
+                agent_profile_id: row.get(4)?,
+                active_mission_id: row.get(5)?,
+                parent_session_id: row.get(6)?,
+                parent_job_id: row.get(7)?,
+                delegation_label: row.get(8)?,
+                created_at: row.get(9)?,
+                updated_at: row.get(10)?,
             });
         }
 

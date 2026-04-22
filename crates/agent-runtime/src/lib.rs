@@ -1,6 +1,8 @@
+pub mod agent;
 pub mod context;
 pub mod delegation;
 pub mod inbox;
+pub mod interagent;
 pub mod memory;
 pub mod mission;
 pub mod permission;

@@ -16,9 +16,12 @@ pub(super) fn show_session(store: &PersistenceStore, id: &str) -> Result<String,
             id: id.to_string(),
         })?;
 
+    let agent_profile_id = record.agent_profile_id.clone();
     Ok(render_session_detail(&SessionDetailResponse {
         id: record.id,
         title: record.title,
+        agent_profile_id: agent_profile_id.clone(),
+        agent_name: agent_profile_id,
         prompt_override: record.prompt_override,
         settings_json: record.settings_json,
         active_mission_id: record.active_mission_id,
@@ -32,9 +35,11 @@ pub(super) fn show_session(store: &PersistenceStore, id: &str) -> Result<String,
 
 pub(super) fn render_session_detail(detail: &SessionDetailResponse) -> String {
     format!(
-        "session id={} title={} active_mission_id={} settings={}",
+        "session id={} title={} agent={} ({}) active_mission_id={} settings={}",
         detail.id,
         detail.title,
+        detail.agent_name,
+        detail.agent_profile_id,
         detail.active_mission_id.as_deref().unwrap_or("<none>"),
         detail.settings_json
     )
@@ -140,6 +145,7 @@ pub(super) fn create_session(
         title: title.to_string(),
         prompt_override: None,
         settings: SessionSettings::default(),
+        agent_profile_id: "default".to_string(),
         active_mission_id: None,
         parent_session_id: None,
         parent_job_id: None,
@@ -352,10 +358,10 @@ pub(super) fn render_session_skills_list(
     skills: Vec<crate::bootstrap::SessionSkillStatus>,
 ) -> Result<String, BootstrapError> {
     if skills.is_empty() {
-        return Ok("skills: none discovered".to_string());
+        return Ok("Скиллы: ничего не найдено".to_string());
     }
 
-    let mut lines = vec!["Skills:".to_string()];
+    let mut lines = vec!["Скиллы:".to_string()];
     lines.extend(
         skills
             .into_iter()

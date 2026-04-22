@@ -406,6 +406,8 @@ fn structured_exec_treats_shell_tokens_as_literal_args() {
         .expect("exec_start")
         .into_process_start()
         .expect("process start");
+    assert_eq!(started.command_display, "/bin/echo 'left|right'");
+    assert_eq!(started.cwd, temp.path().display().to_string());
     let waited = runtime
         .invoke(ToolCall::ExecWait(ProcessWaitInput {
             process_id: started.process_id.clone(),
@@ -474,6 +476,73 @@ fn structured_exec_processes_survive_runtime_recreation_with_shared_registry() {
     assert_eq!(waited.status, ProcessResultStatus::Exited);
     assert_eq!(waited.exit_code, Some(0));
     assert_eq!(waited.stdout, "shared-registry");
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn structured_exec_disconnects_child_stdin_from_the_terminal() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let workspace = WorkspaceRef::new(temp.path());
+    let mut runtime = ToolRuntime::new(workspace);
+
+    let started = runtime
+        .invoke(ToolCall::ExecStart(ExecStartInput {
+            executable: "/bin/sh".to_string(),
+            args: vec!["-c".to_string(), "readlink /proc/self/fd/0".to_string()],
+            cwd: None,
+        }))
+        .expect("exec_start")
+        .into_process_start()
+        .expect("process start");
+    let waited = runtime
+        .invoke(ToolCall::ExecWait(ProcessWaitInput {
+            process_id: started.process_id,
+        }))
+        .expect("exec_wait")
+        .into_process_result()
+        .expect("process result");
+
+    assert_eq!(waited.status, ProcessResultStatus::Exited);
+    assert_eq!(waited.exit_code, Some(0));
+    assert_eq!(waited.stdout.trim(), "/dev/null");
+}
+
+#[cfg(all(unix, target_os = "linux"))]
+#[test]
+fn structured_exec_detaches_from_the_parent_controlling_tty_when_one_exists() {
+    // This assertion only makes sense when the test process itself has a terminal.
+    if unsafe { libc::isatty(0) } != 1 {
+        return;
+    }
+
+    let temp = tempfile::tempdir().expect("tempdir");
+    let workspace = WorkspaceRef::new(temp.path());
+    let mut runtime = ToolRuntime::new(workspace);
+
+    let started = runtime
+        .invoke(ToolCall::ExecStart(ExecStartInput {
+            executable: "/bin/sh".to_string(),
+            args: vec![
+                "-c".to_string(),
+                "if (: >/dev/tty) 2>/dev/null; then printf tty-present; else printf tty-absent; fi"
+                    .to_string(),
+            ],
+            cwd: None,
+        }))
+        .expect("exec_start")
+        .into_process_start()
+        .expect("process start");
+    let waited = runtime
+        .invoke(ToolCall::ExecWait(ProcessWaitInput {
+            process_id: started.process_id,
+        }))
+        .expect("exec_wait")
+        .into_process_result()
+        .expect("process result");
+
+    assert_eq!(waited.status, ProcessResultStatus::Exited);
+    assert_eq!(waited.exit_code, Some(0));
+    assert_eq!(waited.stdout, "tty-absent");
 }
 
 #[test]

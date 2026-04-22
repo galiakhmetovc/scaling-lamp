@@ -1,9 +1,10 @@
 use super::*;
+use crate::agents;
 use agent_persistence::JobRepository;
 use agent_runtime::mission::JobSpec;
 use agent_runtime::run::{RunSnapshot, RunStatus, RunStepKind};
 use agent_runtime::session::{Session, TranscriptEntry};
-use agent_runtime::skills::{resolve_session_skill_status, scan_skill_catalog};
+use agent_runtime::skills::{resolve_session_skill_status, scan_skill_catalog_with_overrides};
 use time::OffsetDateTime;
 use time::UtcOffset;
 use time::format_description::well_known::Rfc3339;
@@ -84,11 +85,13 @@ impl App {
             project_memory_enabled: self.config.session_defaults.project_memory_enabled,
             ..SessionSettings::default()
         };
+        let agent_profile_id = self.current_agent_profile_id()?;
         let session = Session {
             id: id.to_string(),
             title: title.trim().to_string(),
             prompt_override: None,
             settings,
+            agent_profile_id,
             active_mission_id: None,
             parent_session_id: None,
             parent_job_id: None,
@@ -139,7 +142,7 @@ impl App {
             .collect::<Result<Vec<_>, _>>()
             .map_err(BootstrapError::RecordConversion)?;
 
-        let catalog = self.skill_catalog()?;
+        let catalog = self.skill_catalog(&session.agent_profile_id)?;
         Ok(
             resolve_session_skill_status(&catalog, &session.settings, &session.title, &transcripts)
                 .into_iter()
@@ -152,10 +155,10 @@ impl App {
     pub fn render_session_skills(&self, session_id: &str) -> Result<String, BootstrapError> {
         let skills = self.session_skills(session_id)?;
         if skills.is_empty() {
-            return Ok("skills: none discovered".to_string());
+            return Ok("Скиллы: ничего не найдено".to_string());
         }
 
-        let mut lines = vec!["Skills:".to_string()];
+        let mut lines = vec!["Скиллы:".to_string()];
         lines.extend(
             skills
                 .into_iter()
@@ -204,25 +207,83 @@ impl App {
     ) -> Result<String, BootstrapError> {
         let jobs = self.session_background_jobs(session_id)?;
         if jobs.is_empty() {
-            return Ok("jobs: none active".to_string());
+            return Ok("Задачи: активных нет".to_string());
         }
 
-        let mut lines = vec!["Jobs:".to_string()];
+        let mut lines = vec!["Задачи:".to_string()];
         for job in jobs {
             lines.push(format!("- [{}] {} ({})", job.status, job.id, job.kind));
             lines.push(format!(
-                "  queued: {}",
+                "  поставлена_в_очередь: {}",
                 format_background_job_time(job.queued_at)
             ));
             if let Some(started_at) = job.started_at {
                 lines.push(format!(
-                    "  started: {}",
+                    "  запущена: {}",
                     format_background_job_time(started_at)
                 ));
             }
             if let Some(progress) = job.last_progress_message {
-                lines.push(format!("  progress: {progress}"));
+                lines.push(format!("  прогресс: {progress}"));
             }
+        }
+        Ok(lines.join("\n"))
+    }
+
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub fn render_active_run(&self, session_id: &str) -> Result<String, BootstrapError> {
+        let store = self.store()?;
+        if store.get_session(session_id)?.is_none() {
+            return Err(BootstrapError::MissingRecord {
+                kind: "session",
+                id: session_id.to_string(),
+            });
+        }
+
+        let Some(run) = self
+            .execution_service()
+            .latest_active_session_run(&store, session_id)
+            .map_err(BootstrapError::Execution)?
+        else {
+            return Ok("Ход: активного выполнения нет".to_string());
+        };
+
+        let mut lines = vec![
+            "Ход:".to_string(),
+            format!("- id: {}", run.id),
+            format!("- статус: {}", run.status.as_str()),
+            format!("- начат: {}", format_background_job_time(run.started_at)),
+            format!("- обновлён: {}", format_background_job_time(run.updated_at)),
+        ];
+        if let Some(usage) = run.latest_provider_usage.as_ref() {
+            lines.push(format!(
+                "- usage: input={} output={} total={}",
+                usage.input_tokens, usage.output_tokens, usage.total_tokens
+            ));
+        }
+        if let Some(step) = run.recent_steps.last() {
+            lines.push(format!("- последний шаг: {}", step.detail));
+        }
+        if !run.active_processes.is_empty() {
+            lines.push("- активные процессы:".to_string());
+            for process in &run.active_processes {
+                lines.push(format!(
+                    "  - {} ({}) {} c {}",
+                    process.id,
+                    process.kind,
+                    process.pid_ref,
+                    format_background_job_time(process.started_at)
+                ));
+                if let Some(command_display) = process.command_display.as_deref() {
+                    lines.push(format!("    команда: {command_display}"));
+                }
+                if let Some(cwd) = process.cwd.as_deref() {
+                    lines.push(format!("    cwd: {cwd}"));
+                }
+            }
+        }
+        if let Some(error) = run.error.as_deref() {
+            lines.push(format!("- ошибка: {error}"));
         }
         Ok(lines.join("\n"))
     }
@@ -335,7 +396,7 @@ impl App {
                     id: session_id.to_string(),
                 })?;
         let mut session = Session::try_from(record).map_err(BootstrapError::RecordConversion)?;
-        let catalog = self.skill_catalog()?;
+        let catalog = self.skill_catalog(&session.agent_profile_id)?;
         let matching = catalog
             .entries
             .iter()
@@ -366,9 +427,18 @@ impl App {
         self.session_skills(session_id)
     }
 
-    fn skill_catalog(&self) -> Result<agent_runtime::skills::SkillCatalog, BootstrapError> {
-        scan_skill_catalog(&self.config.daemon.skills_dir).map_err(|source| BootstrapError::Io {
-            path: self.config.daemon.skills_dir.clone(),
+    fn skill_catalog(
+        &self,
+        agent_profile_id: &str,
+    ) -> Result<agent_runtime::skills::SkillCatalog, BootstrapError> {
+        let agent_skills_dir =
+            agents::agent_home(&self.config.data_dir, agent_profile_id).join("skills");
+        scan_skill_catalog_with_overrides(
+            &self.config.daemon.skills_dir,
+            Some(agent_skills_dir.as_path()),
+        )
+        .map_err(|source| BootstrapError::Io {
+            path: agent_skills_dir,
             source,
         })
     }
@@ -377,20 +447,24 @@ impl App {
 fn build_synthetic_run_lines(session_id: &str, runs: &[RunSnapshot]) -> Vec<SessionTranscriptLine> {
     let mut lines = Vec::new();
     for run in runs.iter().filter(|run| run.session_id == session_id) {
+        let mut reasoning_started_at = None;
+        let mut reasoning_buffer = String::new();
         for step in &run.recent_steps {
             match step.kind {
                 RunStepKind::ProviderReasoningDelta => {
-                    lines.push(SessionTranscriptLine {
-                        role: "reasoning".to_string(),
-                        content: parse_provider_reasoning_step(step.detail.as_str()),
-                        run_id: Some(run.id.clone()),
-                        created_at: step.recorded_at,
-                        tool_name: None,
-                        tool_status: None,
-                        approval_id: None,
-                    });
+                    if reasoning_started_at.is_none() {
+                        reasoning_started_at = Some(step.recorded_at);
+                    }
+                    let delta = parse_provider_reasoning_step(step.detail.as_str());
+                    reasoning_buffer.push_str(delta.as_str());
                 }
                 RunStepKind::ToolCompleted => {
+                    flush_reasoning_lines(
+                        &mut lines,
+                        run.id.as_str(),
+                        &mut reasoning_started_at,
+                        &mut reasoning_buffer,
+                    );
                     let (tool_name, status, summary) = parse_tool_step_detail(step.detail.as_str());
                     lines.push(SessionTranscriptLine {
                         role: "tool".to_string(),
@@ -410,6 +484,12 @@ fn build_synthetic_run_lines(session_id: &str, runs: &[RunSnapshot]) -> Vec<Sess
                 | RunStepKind::DelegateCompleted
                 | RunStepKind::Cancelled
                 | RunStepKind::Interrupted => {
+                    flush_reasoning_lines(
+                        &mut lines,
+                        run.id.as_str(),
+                        &mut reasoning_started_at,
+                        &mut reasoning_buffer,
+                    );
                     lines.push(SessionTranscriptLine {
                         role: "system".to_string(),
                         content: step.detail.clone(),
@@ -423,6 +503,12 @@ fn build_synthetic_run_lines(session_id: &str, runs: &[RunSnapshot]) -> Vec<Sess
                 _ => {}
             }
         }
+        flush_reasoning_lines(
+            &mut lines,
+            run.id.as_str(),
+            &mut reasoning_started_at,
+            &mut reasoning_buffer,
+        );
 
         if let Some(provider_stream) = run.provider_stream.as_ref()
             && !provider_stream.output_text.trim().is_empty()
@@ -496,8 +582,32 @@ fn parse_provider_reasoning_step(detail: &str) -> String {
     detail
         .strip_prefix("provider reasoning: ")
         .unwrap_or(detail)
-        .trim()
         .to_string()
+}
+
+fn flush_reasoning_lines(
+    lines: &mut Vec<SessionTranscriptLine>,
+    run_id: &str,
+    reasoning_started_at: &mut Option<i64>,
+    reasoning_buffer: &mut String,
+) {
+    let Some(created_at) = reasoning_started_at.take() else {
+        return;
+    };
+    if reasoning_buffer.trim().is_empty() {
+        reasoning_buffer.clear();
+        return;
+    }
+    lines.push(SessionTranscriptLine {
+        role: "reasoning".to_string(),
+        content: reasoning_buffer.trim().to_string(),
+        run_id: Some(run_id.to_string()),
+        created_at,
+        tool_name: None,
+        tool_status: None,
+        approval_id: None,
+    });
+    reasoning_buffer.clear();
 }
 
 fn format_background_job_time(timestamp: i64) -> String {

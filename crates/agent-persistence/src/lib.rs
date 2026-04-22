@@ -7,14 +7,14 @@ pub mod store;
 
 pub use config::{A2APeerConfig, AppConfig, ConfigEnv, ConfigError, DaemonConfig};
 pub use records::{
-    ArtifactRecord, ContextOffloadRecord, ContextSummaryRecord, JobRecord, MissionRecord,
-    PlanRecord, RecordConversionError, RunRecord, SessionInboxEventRecord, SessionRecord,
-    TranscriptRecord,
+    AgentChainContinuationRecord, AgentProfileRecord, AgentScheduleRecord, ArtifactRecord,
+    ContextOffloadRecord, ContextSummaryRecord, JobRecord, MissionRecord, PlanRecord,
+    RecordConversionError, RunRecord, SessionInboxEventRecord, SessionRecord, TranscriptRecord,
 };
 pub use repository::{
-    ArtifactRepository, ContextOffloadRepository, ContextSummaryRepository, JobRepository,
-    MissionRepository, PlanRepository, RunRepository, SessionInboxRepository, SessionRepository,
-    TranscriptRepository,
+    AgentRepository, ArtifactRepository, ContextOffloadRepository, ContextSummaryRepository,
+    JobRepository, MissionRepository, PlanRepository, RunRepository, SessionInboxRepository,
+    SessionRepository, TranscriptRepository,
 };
 pub use store::{ExecutionStateSnapshot, PersistenceStore, StoreError, StoreLayout};
 

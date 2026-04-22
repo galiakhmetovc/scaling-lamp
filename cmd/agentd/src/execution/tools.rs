@@ -11,7 +11,54 @@ struct ToolExecutionContext<'a> {
     now: i64,
 }
 
+struct ToolExecutionFailureContext<'a> {
+    store: &'a PersistenceStore,
+    run: &'a mut RunEngine,
+    job: &'a mut JobSpec,
+    mission: &'a mut MissionSpec,
+    now: i64,
+}
+
 impl ExecutionService {
+    fn reject_tool_execution(
+        &self,
+        failure: ToolExecutionFailureContext<'_>,
+        tool_name: &str,
+        reason: String,
+    ) -> Result<ToolExecutionReport, ExecutionError> {
+        failure
+            .run
+            .fail(reason.clone(), failure.now)
+            .map_err(ExecutionError::RunTransition)?;
+        failure.job.status = JobStatus::Failed;
+        failure.job.error = Some(reason.clone());
+        failure.job.updated_at = failure.now;
+        failure.job.finished_at = Some(failure.now);
+        failure.mission.updated_at = failure.now;
+        failure
+            .store
+            .put_run(
+                &RunRecord::try_from(failure.run.snapshot())
+                    .map_err(ExecutionError::RecordConversion)?,
+            )
+            .map_err(ExecutionError::Store)?;
+        failure
+            .store
+            .put_job(&JobRecord::try_from(&*failure.job).map_err(ExecutionError::RecordConversion)?)
+            .map_err(ExecutionError::Store)?;
+        failure
+            .store
+            .put_mission(
+                &MissionRecord::try_from(&*failure.mission)
+                    .map_err(ExecutionError::RecordConversion)?,
+            )
+            .map_err(ExecutionError::Store)?;
+        Err(ExecutionError::PermissionDenied {
+            tool: tool_name.to_string(),
+            reason,
+        })
+    }
+
     pub fn request_tool_approval(
         &self,
         store: &PersistenceStore,
@@ -104,6 +151,21 @@ impl ExecutionService {
         .map_err(ExecutionError::RecordConversion)?;
         let session_id = run_snapshot.session_id.clone();
         let mut run = RunEngine::from_snapshot(run_snapshot);
+        if let Err(ExecutionError::PermissionDenied { tool, reason }) =
+            self.ensure_agent_tool_allowed(store, &session_id, tool_call.name())
+        {
+            return self.reject_tool_execution(
+                ToolExecutionFailureContext {
+                    store,
+                    run: &mut run,
+                    job: &mut job,
+                    mission: &mut mission,
+                    now: context.now,
+                },
+                &tool,
+                reason,
+            );
+        }
         let permission = self.permissions.resolve(definition, tool_call);
 
         if matches!(permission.action, PermissionAction::Deny) {
@@ -112,31 +174,17 @@ impl ExecutionService {
                 tool_call.name().as_str(),
                 permission.reason
             );
-            run.fail(reason.clone(), context.now)
-                .map_err(ExecutionError::RunTransition)?;
-            job.status = JobStatus::Failed;
-            job.error = Some(reason.clone());
-            job.updated_at = context.now;
-            job.finished_at = Some(context.now);
-            mission.updated_at = context.now;
-            store
-                .put_run(
-                    &RunRecord::try_from(run.snapshot())
-                        .map_err(ExecutionError::RecordConversion)?,
-                )
-                .map_err(ExecutionError::Store)?;
-            store
-                .put_job(&JobRecord::try_from(&job).map_err(ExecutionError::RecordConversion)?)
-                .map_err(ExecutionError::Store)?;
-            store
-                .put_mission(
-                    &MissionRecord::try_from(&mission).map_err(ExecutionError::RecordConversion)?,
-                )
-                .map_err(ExecutionError::Store)?;
-            return Err(ExecutionError::PermissionDenied {
-                tool: tool_call.name().as_str().to_string(),
+            return self.reject_tool_execution(
+                ToolExecutionFailureContext {
+                    store,
+                    run: &mut run,
+                    job: &mut job,
+                    mission: &mut mission,
+                    now: context.now,
+                },
+                tool_call.name().as_str(),
                 reason,
-            });
+            );
         }
 
         if context.approved_approval_id.is_none()
@@ -206,7 +254,19 @@ impl ExecutionService {
         mission.updated_at = context.now;
 
         let output = match tool_call {
-            ToolCall::PlanRead(_) | ToolCall::PlanWrite(_) => {
+            ToolCall::PlanRead(_)
+            | ToolCall::PlanWrite(_)
+            | ToolCall::InitPlan(_)
+            | ToolCall::AddTask(_)
+            | ToolCall::SetTaskStatus(_)
+            | ToolCall::AddTaskNote(_)
+            | ToolCall::EditTask(_)
+            | ToolCall::PlanSnapshot(_)
+            | ToolCall::PlanLint(_)
+            | ToolCall::ArtifactRead(_)
+            | ToolCall::ArtifactSearch(_)
+            | ToolCall::MessageAgent(_)
+            | ToolCall::GrantAgentChainContinuation(_) => {
                 let mut tool_runtime = self.tool_runtime();
                 self.execute_model_tool_call(
                     store,
@@ -256,7 +316,8 @@ impl ExecutionService {
                         process_kind_label(start.kind),
                         start.pid_ref,
                         context.now,
-                    ),
+                    )
+                    .with_command_details(start.command_display, start.cwd),
                     context.now,
                 )
                 .map_err(ExecutionError::RunTransition)?;

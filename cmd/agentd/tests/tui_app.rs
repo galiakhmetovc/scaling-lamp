@@ -23,6 +23,8 @@ fn summary(id: &str, title: &str) -> SessionSummary {
     SessionSummary {
         id: id.to_string(),
         title: title.to_string(),
+        agent_profile_id: "default".to_string(),
+        agent_name: "Default".to_string(),
         model: Some("glm-5-turbo".to_string()),
         reasoning_visible: true,
         think_level: Some("medium".to_string()),
@@ -30,6 +32,9 @@ fn summary(id: &str, title: &str) -> SessionSummary {
         completion_nudges: None,
         auto_approve: false,
         context_tokens: 0,
+        usage_input_tokens: None,
+        usage_output_tokens: None,
+        usage_total_tokens: None,
         has_pending_approval: false,
         last_message_preview: None,
         message_count: 0,
@@ -225,8 +230,8 @@ fn tui_render_includes_background_job_counts_in_the_session_header() {
         rendered.push('\n');
     }
 
-    assert!(rendered.contains("bg=3"));
-    assert!(rendered.contains("(run=1 queued=1)"));
+    assert!(rendered.contains("фон=3"));
+    assert!(rendered.contains("(выполняется=1 в очереди=1)"));
 }
 
 #[test]
@@ -253,7 +258,7 @@ fn tui_render_includes_provider_tool_round_progress_in_the_session_header() {
         rendered.push('\n');
     }
 
-    assert!(rendered.contains("tools=7/24"));
+    assert!(rendered.contains("инструменты=7/24"));
 }
 
 #[test]
@@ -344,11 +349,11 @@ fn tui_chat_commands_and_timeline_plan_renders_current_plan() {
         .map(|entry| entry.content.clone())
         .collect::<Vec<_>>()
         .join("\n");
-    assert!(rendered_entries.contains("Goal: Ship /plan in TUI"));
+    assert!(rendered_entries.contains("Цель: Ship /plan in TUI"));
     assert!(
         rendered_entries.contains("[pending] render-plan: Show the current plan in the timeline")
     );
-    assert!(rendered_entries.contains("note: Keep it read-only"));
+    assert!(rendered_entries.contains("заметка: Keep it read-only"));
 }
 
 #[test]
@@ -432,7 +437,7 @@ fn tui_chat_commands_and_timeline_jobs_renders_active_jobs_for_the_current_sessi
         .map(|entry| entry.content.clone())
         .collect::<Vec<_>>()
         .join("\n");
-    assert!(rendered_entries.contains("Jobs:"));
+    assert!(rendered_entries.contains("Задачи:"));
     assert!(rendered_entries.contains("job-bg"));
     assert!(rendered_entries.contains("maintenance"));
 }
@@ -750,7 +755,7 @@ fn tui_chat_commands_and_timeline_autoapprove_can_resume_an_existing_pending_app
             matches!(entry.kind, TimelineEntryKind::System)
                 && entry
                     .content
-                    .contains("auto-approving pending request: approve auto")
+                    .contains("автоапрув ожидающего запроса: approve auto")
         }),
         "timeline should explain what was auto-approved"
     );
@@ -849,11 +854,11 @@ fn tui_render_shows_approval_details_and_autoapprove_hint() {
         rendered.push('\n');
     }
 
-    assert!(rendered.contains("approval: pending"));
+    assert!(rendered.contains("апрув: ожидает решения"));
     assert!(rendered.contains("id=approval-1"));
     assert!(rendered.contains("tool web_fetch requires approval"));
     assert!(rendered.contains("\\апрув"));
-    assert!(rendered.contains("\\автоапрув on"));
+    assert!(rendered.contains("\\автоапрув вкл"));
 }
 
 #[test]
@@ -1379,7 +1384,7 @@ fn tui_deferred_queue_sends_after_the_current_run_completes() {
 }
 
 #[test]
-fn tui_shift_tab_cycles_slash_commands_in_place() {
+fn tui_shift_tab_cycles_commands_in_place_without_prefix() {
     let temp = tempfile::tempdir().expect("tempdir");
     let app = build_from_config(AppConfig {
         data_dir: temp.path().join("state-root"),
@@ -1390,7 +1395,7 @@ fn tui_shift_tab_cycles_slash_commands_in_place() {
         vec![summary("session-a", "Session A")],
         Some("session-a".to_string()),
     );
-    state.replace_input_buffer("/r");
+    state.replace_input_buffer("любой текст");
 
     dispatch_action(
         &app,
@@ -1399,7 +1404,7 @@ fn tui_shift_tab_cycles_slash_commands_in_place() {
         &mut |_state| Ok::<_, agentd::bootstrap::BootstrapError>(()),
     )
     .expect("cycle commands first");
-    assert_eq!(state.input_buffer(), "/rename");
+    assert_eq!(state.input_buffer(), "\\сессии");
 
     dispatch_action(
         &app,
@@ -1408,7 +1413,7 @@ fn tui_shift_tab_cycles_slash_commands_in_place() {
         &mut |_state| Ok::<_, agentd::bootstrap::BootstrapError>(()),
     )
     .expect("cycle commands second");
-    assert_eq!(state.input_buffer(), "/reasoning");
+    assert_eq!(state.input_buffer(), "\\новая");
 }
 
 #[test]

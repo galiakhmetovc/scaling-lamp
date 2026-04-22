@@ -1,4 +1,4 @@
-use agent_runtime::skills::scan_skill_catalog;
+use agent_runtime::skills::{scan_skill_catalog, scan_skill_catalog_with_overrides};
 use std::fs;
 
 #[test]
@@ -88,4 +88,41 @@ See [Missing Reference](references/missing.md).
 
     assert_eq!(catalog.entries.len(), 1);
     assert!(catalog.skipped.is_empty());
+}
+
+#[test]
+fn skills_catalog_prefers_agent_local_override_by_skill_name() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let global_dir = temp.path().join("global-skills");
+    let local_dir = temp.path().join("agent-skills");
+    let global_skill_dir = global_dir.join("rust-debug");
+    let local_skill_dir = local_dir.join("rust-debug-local");
+    fs::create_dir_all(&global_skill_dir).expect("create global skill dir");
+    fs::create_dir_all(&local_skill_dir).expect("create local skill dir");
+
+    fs::write(
+        global_skill_dir.join("SKILL.md"),
+        r#"---
+name: Rust Debug
+description: Global version
+---
+"#,
+    )
+    .expect("write global skill");
+    fs::write(
+        local_skill_dir.join("SKILL.md"),
+        r#"---
+name: Rust Debug
+description: Agent-local override
+---
+"#,
+    )
+    .expect("write local skill");
+
+    let catalog = scan_skill_catalog_with_overrides(&global_dir, Some(&local_dir))
+        .expect("scan merged catalog");
+
+    assert_eq!(catalog.entries.len(), 1);
+    assert_eq!(catalog.entries[0].description, "Agent-local override");
+    assert_eq!(catalog.entries[0].skill_dir, local_skill_dir);
 }

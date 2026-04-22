@@ -3,6 +3,7 @@ use std::error::Error;
 use std::fmt;
 
 use crate::delegation::{DelegateResultPackage, DelegateWriteScope};
+use crate::interagent::AgentMessageChain;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MissionSpec {
@@ -50,6 +51,8 @@ pub struct AcceptanceCriterion {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum JobKind {
     ChatTurn,
+    ScheduledChatTurn,
+    InterAgentMessage,
     ApprovalContinuation,
     MissionTurn,
     Verification,
@@ -80,6 +83,19 @@ pub struct JobCallbackTarget {
 pub enum JobExecutionInput {
     ChatTurn {
         message: String,
+    },
+    ScheduledChatTurn {
+        schedule_id: String,
+        message: String,
+    },
+    InterAgentMessage {
+        source_session_id: String,
+        source_agent_id: String,
+        source_agent_name: String,
+        target_agent_id: String,
+        target_agent_name: String,
+        message: String,
+        chain: AgentMessageChain,
     },
     ApprovalContinuation {
         run_id: String,
@@ -298,6 +314,8 @@ impl JobKind {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::ChatTurn => "chat_turn",
+            Self::ScheduledChatTurn => "scheduled_chat_turn",
+            Self::InterAgentMessage => "interagent_message",
             Self::ApprovalContinuation => "approval_continuation",
             Self::MissionTurn => "mission_turn",
             Self::Verification => "verification",
@@ -313,6 +331,8 @@ impl TryFrom<&str> for JobKind {
     fn try_from(value: &str) -> Result<Self, Self::Error> {
         match value {
             "chat_turn" => Ok(Self::ChatTurn),
+            "scheduled_chat_turn" => Ok(Self::ScheduledChatTurn),
+            "interagent_message" => Ok(Self::InterAgentMessage),
             "approval_continuation" => Ok(Self::ApprovalContinuation),
             "mission_turn" => Ok(Self::MissionTurn),
             "verification" => Ok(Self::Verification),
@@ -443,6 +463,95 @@ impl JobSpec {
         }
     }
 
+    pub fn scheduled_chat_turn(
+        id: impl Into<String>,
+        session_id: impl Into<String>,
+        run_id: Option<&str>,
+        parent_job_id: Option<&str>,
+        schedule_id: impl Into<String>,
+        message: impl Into<String>,
+        created_at: i64,
+    ) -> Self {
+        Self {
+            id: id.into(),
+            session_id: session_id.into(),
+            mission_id: None,
+            run_id: run_id.map(str::to_owned),
+            parent_job_id: parent_job_id.map(str::to_owned),
+            kind: JobKind::ScheduledChatTurn,
+            status: JobStatus::Queued,
+            input: JobExecutionInput::ScheduledChatTurn {
+                schedule_id: schedule_id.into(),
+                message: message.into(),
+            },
+            result: None,
+            error: None,
+            created_at,
+            updated_at: created_at,
+            started_at: None,
+            finished_at: None,
+            attempt_count: 0,
+            max_attempts: 1,
+            lease_owner: None,
+            lease_expires_at: None,
+            heartbeat_at: None,
+            cancel_requested_at: None,
+            last_progress_message: None,
+            callback: None,
+            callback_sent_at: None,
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn interagent_message(
+        id: impl Into<String>,
+        session_id: impl Into<String>,
+        run_id: Option<&str>,
+        parent_job_id: Option<&str>,
+        source_session_id: impl Into<String>,
+        source_agent_id: impl Into<String>,
+        source_agent_name: impl Into<String>,
+        target_agent_id: impl Into<String>,
+        target_agent_name: impl Into<String>,
+        message: impl Into<String>,
+        chain: AgentMessageChain,
+        created_at: i64,
+    ) -> Self {
+        Self {
+            id: id.into(),
+            session_id: session_id.into(),
+            mission_id: None,
+            run_id: run_id.map(str::to_owned),
+            parent_job_id: parent_job_id.map(str::to_owned),
+            kind: JobKind::InterAgentMessage,
+            status: JobStatus::Queued,
+            input: JobExecutionInput::InterAgentMessage {
+                source_session_id: source_session_id.into(),
+                source_agent_id: source_agent_id.into(),
+                source_agent_name: source_agent_name.into(),
+                target_agent_id: target_agent_id.into(),
+                target_agent_name: target_agent_name.into(),
+                message: message.into(),
+                chain,
+            },
+            result: None,
+            error: None,
+            created_at,
+            updated_at: created_at,
+            started_at: None,
+            finished_at: None,
+            attempt_count: 0,
+            max_attempts: 1,
+            lease_owner: None,
+            lease_expires_at: None,
+            heartbeat_at: None,
+            cancel_requested_at: None,
+            last_progress_message: None,
+            callback: None,
+            callback_sent_at: None,
+        }
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub fn delegate(
         id: impl Into<String>,
@@ -521,6 +630,8 @@ impl JobExecutionInput {
     pub fn kind(&self) -> JobKind {
         match self {
             Self::ChatTurn { .. } => JobKind::ChatTurn,
+            Self::ScheduledChatTurn { .. } => JobKind::ScheduledChatTurn,
+            Self::InterAgentMessage { .. } => JobKind::InterAgentMessage,
             Self::ApprovalContinuation { .. } => JobKind::ApprovalContinuation,
             Self::MissionTurn { .. } => JobKind::MissionTurn,
             Self::Verification { .. } => JobKind::Verification,

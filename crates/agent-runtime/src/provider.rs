@@ -74,7 +74,7 @@ pub struct ProviderMessage {
     pub content: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ProviderStreamMode {
     Disabled,
     Enabled,
@@ -158,6 +158,8 @@ pub enum ProviderStreamEvent {
 pub enum ProviderError {
     Http(reqwest::Error),
     HttpStatus { status: StatusCode, body: String },
+    MissingApiBase,
+    MissingApiKey,
     MissingModel,
     Parse(serde_json::Error),
     Stream(std::io::Error),
@@ -580,6 +582,101 @@ pub fn build_driver(
             },
         ))),
     }
+}
+
+pub fn render_http_request_preview(
+    provider: &ConfiguredProvider,
+    request: &ProviderRequest,
+) -> Result<String, ProviderError> {
+    let api_base = provider
+        .api_base
+        .clone()
+        .ok_or(ProviderError::MissingApiBase)?;
+    let api_key = provider
+        .api_key
+        .clone()
+        .ok_or(ProviderError::MissingApiKey)?;
+
+    match provider.kind {
+        ProviderKind::OpenAiResponses => {
+            let driver = OpenAiResponsesDriver::new(OpenAiResponsesConfig {
+                api_base,
+                api_key: api_key.clone(),
+                default_model: provider.default_model.clone(),
+                connect_timeout_seconds: provider.connect_timeout_seconds,
+                request_timeout_seconds: provider.request_timeout_seconds,
+                stream_idle_timeout_seconds: provider.stream_idle_timeout_seconds,
+            });
+            let model = driver.resolve_model(request)?;
+            let body = driver.build_request_body(request, model)?;
+            let rendered_body =
+                serde_json::to_string_pretty(&body).map_err(ProviderError::Parse)?;
+            Ok(render_http_preview_text(
+                driver.endpoint(),
+                request.stream,
+                api_key.as_str(),
+                rendered_body,
+            ))
+        }
+        ProviderKind::ZaiChatCompletions => {
+            let driver = ZaiChatCompletionsDriver::new(ZaiChatCompletionsConfig {
+                api_base,
+                api_key: api_key.clone(),
+                default_model: provider.default_model.clone(),
+                connect_timeout_seconds: provider.connect_timeout_seconds,
+                request_timeout_seconds: provider.request_timeout_seconds,
+                stream_idle_timeout_seconds: provider.stream_idle_timeout_seconds,
+            });
+            let model = driver.resolve_model(request)?;
+            let body = driver.build_request_body(request, model)?;
+            let rendered_body =
+                serde_json::to_string_pretty(&body).map_err(ProviderError::Parse)?;
+            Ok(render_http_preview_text(
+                driver.endpoint(),
+                request.stream,
+                api_key.as_str(),
+                rendered_body,
+            ))
+        }
+    }
+}
+
+fn render_http_preview_text(
+    endpoint: String,
+    stream: ProviderStreamMode,
+    api_key: &str,
+    rendered_body: String,
+) -> String {
+    let accept = if stream == ProviderStreamMode::Enabled {
+        "text/event-stream"
+    } else {
+        "application/json"
+    };
+    [
+        format!("POST {endpoint}"),
+        format!("Authorization: Bearer {}", redact_api_key(api_key)),
+        "Content-Type: application/json".to_string(),
+        format!("Accept: {accept}"),
+        String::new(),
+        rendered_body,
+    ]
+    .join("\n")
+}
+
+fn redact_api_key(api_key: &str) -> String {
+    if api_key.chars().count() <= 8 {
+        return "<redacted>".to_string();
+    }
+    let prefix = api_key.chars().take(4).collect::<String>();
+    let suffix = api_key
+        .chars()
+        .rev()
+        .take(4)
+        .collect::<String>()
+        .chars()
+        .rev()
+        .collect::<String>();
+    format!("{prefix}…{suffix}")
 }
 
 impl OpenAiResponsesConfig {
@@ -1297,6 +1394,8 @@ impl fmt::Display for ProviderError {
             Self::HttpStatus { status, body } => {
                 write!(formatter, "provider request failed with {status}: {body}")
             }
+            Self::MissingApiBase => write!(formatter, "provider config is missing api_base"),
+            Self::MissingApiKey => write!(formatter, "provider config is missing api_key"),
             Self::MissingModel => write!(formatter, "provider request is missing a model"),
             Self::Parse(source) => write!(formatter, "provider parse error: {source}"),
             Self::Stream(source) => write!(formatter, "provider stream error: {source}"),
@@ -1337,6 +1436,8 @@ impl Error for ProviderError {
             Self::Parse(source) => Some(source),
             Self::Stream(source) => Some(source),
             Self::HttpStatus { .. }
+            | Self::MissingApiBase
+            | Self::MissingApiKey
             | Self::MissingModel
             | Self::StreamIdleTimeout { .. }
             | Self::ResponseMissingOutputText
@@ -1356,7 +1457,9 @@ impl ProviderError {
                     || *status == StatusCode::TOO_MANY_REQUESTS
                     || *status == StatusCode::REQUEST_TIMEOUT
             }
-            Self::MissingModel
+            Self::MissingApiBase
+            | Self::MissingApiKey
+            | Self::MissingModel
             | Self::Parse(_)
             | Self::ResponseMissingOutputText
             | Self::ResponseMissingToolCallField { .. }

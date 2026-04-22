@@ -1,6 +1,17 @@
 use super::*;
 
 impl DaemonClient {
+    pub fn about(&self) -> Result<String, BootstrapError> {
+        let response: AboutResponse = self.get_json("/v1/about")?;
+        Ok(response.about)
+    }
+
+    pub fn update_runtime(&self) -> Result<String, BootstrapError> {
+        let response: UpdateRuntimeResponse =
+            self.post_json("/v1/update", &serde_json::json!({}))?;
+        Ok(response.message)
+    }
+
     pub fn status(&self) -> Result<StatusResponse, BootstrapError> {
         self.get_json("/v1/status")
     }

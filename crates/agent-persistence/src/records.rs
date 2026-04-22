@@ -1,3 +1,7 @@
+use agent_runtime::agent::{
+    AgentChainContinuationError, AgentChainContinuationGrant, AgentProfile, AgentProfileError,
+    AgentSchedule, AgentScheduleError, AgentTemplateKind, AgentTemplateKindParseError,
+};
 use agent_runtime::context::{ContextOffloadSnapshot, ContextSummary};
 use agent_runtime::inbox::{
     SessionInboxEvent, SessionInboxEventParseError, SessionInboxEventPayload,
@@ -28,10 +32,45 @@ pub struct SessionRecord {
     pub title: String,
     pub prompt_override: Option<String>,
     pub settings_json: String,
+    pub agent_profile_id: String,
     pub active_mission_id: Option<String>,
     pub parent_session_id: Option<String>,
     pub parent_job_id: Option<String>,
     pub delegation_label: Option<String>,
+    pub created_at: i64,
+    pub updated_at: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AgentProfileRecord {
+    pub id: String,
+    pub name: String,
+    pub template_kind: String,
+    pub agent_home: String,
+    pub allowed_tools_json: String,
+    pub created_at: i64,
+    pub updated_at: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AgentChainContinuationRecord {
+    pub chain_id: String,
+    pub reason: String,
+    pub granted_hops: i64,
+    pub granted_at: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AgentScheduleRecord {
+    pub id: String,
+    pub agent_profile_id: String,
+    pub workspace_root: String,
+    pub prompt: String,
+    pub interval_seconds: i64,
+    pub next_fire_at: i64,
+    pub last_triggered_at: Option<i64>,
+    pub last_session_id: Option<String>,
+    pub last_job_id: Option<String>,
     pub created_at: i64,
     pub updated_at: i64,
 }
@@ -59,6 +98,7 @@ pub struct RunRecord {
     pub error: Option<String>,
     pub result: Option<String>,
     pub provider_usage_json: String,
+    pub active_processes_json: String,
     pub recent_steps_json: String,
     pub evidence_refs_json: String,
     pub pending_approvals_json: String,
@@ -165,6 +205,13 @@ pub enum RecordConversionError {
     InvalidContextOffloadRefs(serde_json::Error),
     InvalidInboxEventPayload(serde_json::Error),
     InvalidInboxEventStatus(SessionInboxEventParseError),
+    InvalidAgentChainContinuation(AgentChainContinuationError),
+    InvalidAgentContinuationHops { value: i64 },
+    InvalidAgentProfile(AgentProfileError),
+    InvalidAgentSchedule(AgentScheduleError),
+    InvalidAgentScheduleInterval { value: i64 },
+    InvalidAgentTemplateKind(AgentTemplateKindParseError),
+    InvalidAgentAllowedTools(serde_json::Error),
     InvalidContextSummaryCoveredMessageCount { value: i64 },
     InvalidContextSummaryTokenEstimate { value: i64 },
     InvalidMessageRole { value: String },
@@ -176,6 +223,7 @@ pub enum RecordConversionError {
     MissingJobInput,
     InvalidPromptOverride(SessionError),
     InvalidRunDelegateRuns(serde_json::Error),
+    InvalidRunActiveProcesses(serde_json::Error),
     InvalidRunRecentSteps(serde_json::Error),
     InvalidRunPendingApprovals(serde_json::Error),
     InvalidRunProviderLoop(serde_json::Error),
@@ -185,12 +233,14 @@ pub enum RecordConversionError {
     InvalidSessionSettings(serde_json::Error),
     SerializeContextOffloadRefs(serde_json::Error),
     SerializeInboxEventPayload(serde_json::Error),
+    SerializeAgentAllowedTools(serde_json::Error),
     SerializeJobInput(serde_json::Error),
     SerializeJobResult(serde_json::Error),
     SerializeMissionAcceptance(serde_json::Error),
     SerializeMissionSchedule(serde_json::Error),
     SerializePlanItems(serde_json::Error),
     SerializeRunDelegateRuns(serde_json::Error),
+    SerializeRunActiveProcesses(serde_json::Error),
     SerializeRunEvidenceRefs(serde_json::Error),
     SerializeRunRecentSteps(serde_json::Error),
     SerializeRunPendingApprovals(serde_json::Error),
@@ -214,6 +264,7 @@ impl TryFrom<&Session> for SessionRecord {
                 .as_ref()
                 .map(|prompt_override| prompt_override.as_str().to_string()),
             settings_json,
+            agent_profile_id: session.agent_profile_id.clone(),
             active_mission_id: session.active_mission_id.clone(),
             parent_session_id: session.parent_session_id.clone(),
             parent_job_id: session.parent_job_id.clone(),
@@ -241,6 +292,7 @@ impl TryFrom<SessionRecord> for Session {
             title: record.title,
             prompt_override,
             settings,
+            agent_profile_id: record.agent_profile_id,
             active_mission_id: record.active_mission_id,
             parent_session_id: record.parent_session_id,
             parent_job_id: record.parent_job_id,
@@ -248,6 +300,114 @@ impl TryFrom<SessionRecord> for Session {
             created_at: record.created_at,
             updated_at: record.updated_at,
         })
+    }
+}
+
+impl TryFrom<&AgentProfile> for AgentProfileRecord {
+    type Error = RecordConversionError;
+
+    fn try_from(profile: &AgentProfile) -> Result<Self, Self::Error> {
+        Ok(Self {
+            id: profile.id.clone(),
+            name: profile.name.clone(),
+            template_kind: profile.template_kind.as_str().to_string(),
+            agent_home: profile.agent_home.display().to_string(),
+            allowed_tools_json: serde_json::to_string(&profile.allowed_tools)
+                .map_err(RecordConversionError::SerializeAgentAllowedTools)?,
+            created_at: profile.created_at,
+            updated_at: profile.updated_at,
+        })
+    }
+}
+
+impl TryFrom<AgentProfileRecord> for AgentProfile {
+    type Error = RecordConversionError;
+
+    fn try_from(record: AgentProfileRecord) -> Result<Self, Self::Error> {
+        let allowed_tools = serde_json::from_str::<Vec<String>>(&record.allowed_tools_json)
+            .map_err(RecordConversionError::InvalidAgentAllowedTools)?;
+        AgentProfile::new(
+            record.id,
+            record.name,
+            AgentTemplateKind::try_from(record.template_kind.as_str())
+                .map_err(RecordConversionError::InvalidAgentTemplateKind)?,
+            record.agent_home,
+            allowed_tools,
+            record.created_at,
+            record.updated_at,
+        )
+        .map_err(RecordConversionError::InvalidAgentProfile)
+    }
+}
+
+impl From<&AgentChainContinuationGrant> for AgentChainContinuationRecord {
+    fn from(grant: &AgentChainContinuationGrant) -> Self {
+        Self {
+            chain_id: grant.chain_id.clone(),
+            reason: grant.reason.clone(),
+            granted_hops: i64::from(grant.granted_hops),
+            granted_at: grant.granted_at,
+        }
+    }
+}
+
+impl TryFrom<AgentChainContinuationRecord> for AgentChainContinuationGrant {
+    type Error = RecordConversionError;
+
+    fn try_from(record: AgentChainContinuationRecord) -> Result<Self, Self::Error> {
+        let mut grant =
+            AgentChainContinuationGrant::new(record.chain_id, record.reason, record.granted_at)
+                .map_err(RecordConversionError::InvalidAgentChainContinuation)?;
+        grant.granted_hops = u32::try_from(record.granted_hops).map_err(|_| {
+            RecordConversionError::InvalidAgentContinuationHops {
+                value: record.granted_hops,
+            }
+        })?;
+        Ok(grant)
+    }
+}
+
+impl From<&AgentSchedule> for AgentScheduleRecord {
+    fn from(schedule: &AgentSchedule) -> Self {
+        Self {
+            id: schedule.id.clone(),
+            agent_profile_id: schedule.agent_profile_id.clone(),
+            workspace_root: schedule.workspace_root.display().to_string(),
+            prompt: schedule.prompt.clone(),
+            interval_seconds: i64::try_from(schedule.interval_seconds)
+                .expect("agent schedule interval must fit in i64"),
+            next_fire_at: schedule.next_fire_at,
+            last_triggered_at: schedule.last_triggered_at,
+            last_session_id: schedule.last_session_id.clone(),
+            last_job_id: schedule.last_job_id.clone(),
+            created_at: schedule.created_at,
+            updated_at: schedule.updated_at,
+        }
+    }
+}
+
+impl TryFrom<AgentScheduleRecord> for AgentSchedule {
+    type Error = RecordConversionError;
+
+    fn try_from(record: AgentScheduleRecord) -> Result<Self, Self::Error> {
+        AgentSchedule::new(
+            record.id,
+            record.agent_profile_id,
+            record.workspace_root,
+            record.prompt,
+            u64::try_from(record.interval_seconds).map_err(|_| {
+                RecordConversionError::InvalidAgentScheduleInterval {
+                    value: record.interval_seconds,
+                }
+            })?,
+            record.next_fire_at,
+            record.last_triggered_at,
+            record.last_session_id,
+            record.last_job_id,
+            record.created_at,
+            record.updated_at,
+        )
+        .map_err(RecordConversionError::InvalidAgentSchedule)
     }
 }
 
@@ -425,6 +585,8 @@ impl TryFrom<&RunSnapshot> for RunRecord {
             result: snapshot.result.clone(),
             provider_usage_json: serde_json::to_string(&snapshot.latest_provider_usage)
                 .map_err(RecordConversionError::SerializeRunProviderUsage)?,
+            active_processes_json: serde_json::to_string(&snapshot.active_processes)
+                .map_err(RecordConversionError::SerializeRunActiveProcesses)?,
             recent_steps_json: serde_json::to_string(&snapshot.recent_steps)
                 .map_err(RecordConversionError::SerializeRunRecentSteps)?,
             evidence_refs_json: serde_json::to_string(&snapshot.evidence_refs)
@@ -459,6 +621,8 @@ impl TryFrom<RunRecord> for RunSnapshot {
             result: record.result,
             latest_provider_usage: serde_json::from_str(&record.provider_usage_json)
                 .map_err(RecordConversionError::InvalidRunProviderUsage)?,
+            active_processes: serde_json::from_str(&record.active_processes_json)
+                .map_err(RecordConversionError::InvalidRunActiveProcesses)?,
             recent_steps: serde_json::from_str(&record.recent_steps_json)
                 .map_err(RecordConversionError::InvalidRunRecentSteps)?,
             evidence_refs: serde_json::from_str(&record.evidence_refs_json)
@@ -649,6 +813,30 @@ impl fmt::Display for RecordConversionError {
                 write!(formatter, "invalid job specification: {source}")
             }
             Self::InvalidJobStatus(source) => write!(formatter, "invalid job status: {source}"),
+            Self::InvalidAgentChainContinuation(source) => {
+                write!(formatter, "invalid agent chain continuation: {source}")
+            }
+            Self::InvalidAgentContinuationHops { value } => {
+                write!(formatter, "invalid agent chain granted_hops: {value}")
+            }
+            Self::InvalidAgentProfile(source) => {
+                write!(formatter, "invalid agent profile: {source}")
+            }
+            Self::InvalidAgentSchedule(source) => {
+                write!(formatter, "invalid agent schedule: {source}")
+            }
+            Self::InvalidAgentScheduleInterval { value } => {
+                write!(
+                    formatter,
+                    "invalid agent schedule interval_seconds: {value}"
+                )
+            }
+            Self::InvalidAgentTemplateKind(source) => {
+                write!(formatter, "invalid agent template kind: {source}")
+            }
+            Self::InvalidAgentAllowedTools(source) => {
+                write!(formatter, "invalid agent allowed tools: {source}")
+            }
             Self::InvalidContextOffloadRefs(source) => {
                 write!(formatter, "invalid context offload refs: {source}")
             }
@@ -695,6 +883,9 @@ impl fmt::Display for RecordConversionError {
             Self::InvalidRunDelegateRuns(source) => {
                 write!(formatter, "invalid run delegate runs: {source}")
             }
+            Self::InvalidRunActiveProcesses(source) => {
+                write!(formatter, "invalid run active processes: {source}")
+            }
             Self::InvalidRunRecentSteps(source) => {
                 write!(formatter, "invalid run recent steps: {source}")
             }
@@ -720,6 +911,12 @@ impl fmt::Display for RecordConversionError {
                 write!(
                     formatter,
                     "failed to serialize context offload refs: {source}"
+                )
+            }
+            Self::SerializeAgentAllowedTools(source) => {
+                write!(
+                    formatter,
+                    "failed to serialize agent allowed tools: {source}"
                 )
             }
             Self::SerializeInboxEventPayload(source) => {
@@ -748,6 +945,12 @@ impl fmt::Display for RecordConversionError {
             }
             Self::SerializeRunDelegateRuns(source) => {
                 write!(formatter, "failed to serialize run delegate runs: {source}")
+            }
+            Self::SerializeRunActiveProcesses(source) => {
+                write!(
+                    formatter,
+                    "failed to serialize run active processes: {source}"
+                )
             }
             Self::SerializeRunRecentSteps(source) => {
                 write!(formatter, "failed to serialize run recent steps: {source}")
@@ -788,6 +991,13 @@ impl Error for RecordConversionError {
             Self::InvalidJobResult(source) => Some(source),
             Self::InvalidJobSpec(source) => Some(source),
             Self::InvalidJobStatus(source) => Some(source),
+            Self::InvalidAgentChainContinuation(source) => Some(source),
+            Self::InvalidAgentContinuationHops { .. } => None,
+            Self::InvalidAgentProfile(source) => Some(source),
+            Self::InvalidAgentSchedule(source) => Some(source),
+            Self::InvalidAgentScheduleInterval { .. } => None,
+            Self::InvalidAgentTemplateKind(source) => Some(source),
+            Self::InvalidAgentAllowedTools(source) => Some(source),
             Self::InvalidContextOffloadRefs(source) => Some(source),
             Self::InvalidInboxEventPayload(source) => Some(source),
             Self::InvalidInboxEventStatus(source) => Some(source),
@@ -800,6 +1010,7 @@ impl Error for RecordConversionError {
             Self::InvalidPlanItems(source) => Some(source),
             Self::InvalidPromptOverride(source) => Some(source),
             Self::InvalidRunDelegateRuns(source) => Some(source),
+            Self::InvalidRunActiveProcesses(source) => Some(source),
             Self::InvalidRunRecentSteps(source) => Some(source),
             Self::InvalidRunPendingApprovals(source) => Some(source),
             Self::InvalidRunProviderLoop(source) => Some(source),
@@ -808,6 +1019,7 @@ impl Error for RecordConversionError {
             Self::InvalidRunStatus(source) => Some(source),
             Self::InvalidSessionSettings(source) => Some(source),
             Self::SerializeContextOffloadRefs(source) => Some(source),
+            Self::SerializeAgentAllowedTools(source) => Some(source),
             Self::SerializeInboxEventPayload(source) => Some(source),
             Self::SerializeJobInput(source) => Some(source),
             Self::SerializeJobResult(source) => Some(source),
@@ -815,6 +1027,7 @@ impl Error for RecordConversionError {
             Self::SerializeMissionSchedule(source) => Some(source),
             Self::SerializePlanItems(source) => Some(source),
             Self::SerializeRunDelegateRuns(source) => Some(source),
+            Self::SerializeRunActiveProcesses(source) => Some(source),
             Self::SerializeRunRecentSteps(source) => Some(source),
             Self::SerializeRunEvidenceRefs(source) => Some(source),
             Self::SerializeRunPendingApprovals(source) => Some(source),

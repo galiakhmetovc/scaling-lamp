@@ -59,7 +59,7 @@ pub(super) fn reconcile_directory(
         if path
             .file_name()
             .and_then(|name| name.to_str())
-            .is_some_and(|name| name.ends_with(".bak"))
+            .is_some_and(|name| name.ends_with(".bak") || name.ends_with(".pending"))
         {
             continue;
         }
@@ -95,7 +95,10 @@ pub(super) fn persist_payload_with_commit<F>(
 where
     F: FnOnce() -> Result<(), StoreError>,
 {
-    let temp_path = path.with_extension("tmp");
+    if let Some(parent) = path.parent() {
+        create_directory(parent)?;
+    }
+    let temp_path = pending_path(path);
     let backup_path = backup_path(path);
     let had_existing = path.exists();
 
@@ -108,13 +111,15 @@ where
         })?;
     }
 
-    fs::rename(&temp_path, path).map_err(|source| StoreError::Io {
-        path: path.to_path_buf(),
-        source,
-    })?;
-
     match commit() {
         Ok(()) => {
+            if let Some(parent) = path.parent() {
+                create_directory(parent)?;
+            }
+            fs::rename(&temp_path, path).map_err(|source| StoreError::Io {
+                path: path.to_path_buf(),
+                source,
+            })?;
             if had_existing && backup_path.exists() {
                 fs::remove_file(&backup_path).map_err(|source| StoreError::Io {
                     path: backup_path,
@@ -125,12 +130,12 @@ where
         }
         Err(error) => {
             if had_existing {
-                let _ = fs::remove_file(path);
+                let _ = fs::remove_file(&temp_path);
                 if backup_path.exists() {
                     let _ = fs::rename(&backup_path, path);
                 }
             } else {
-                let _ = fs::remove_file(path);
+                let _ = fs::remove_file(&temp_path);
             }
             Err(error)
         }
@@ -139,6 +144,10 @@ where
 
 pub(super) fn backup_path(path: &Path) -> PathBuf {
     PathBuf::from(format!("{}.bak", path.to_string_lossy()))
+}
+
+pub(super) fn pending_path(path: &Path) -> PathBuf {
+    PathBuf::from(format!("{}.pending", path.to_string_lossy()))
 }
 
 pub(super) fn remove_payload_if_exists(path: &Path) -> Result<(), StoreError> {
@@ -246,19 +255,27 @@ pub(super) fn restore_backups(
         let Some(file_name) = path.file_name().and_then(|name| name.to_str()) else {
             continue;
         };
-        let Some(original_name) = file_name.strip_suffix(".bak") else {
+
+        let (original_name, is_backup) = if let Some(original_name) = file_name.strip_suffix(".bak")
+        {
+            (original_name, true)
+        } else if let Some(original_name) = file_name.strip_suffix(".pending") {
+            (original_name, false)
+        } else {
             continue;
         };
         let Some((expected_len, expected_sha256)) = expected.get(original_name) else {
-            fs::remove_file(&path).map_err(|source| StoreError::Io {
-                path: path.clone(),
-                source,
-            })?;
+            if is_backup {
+                fs::remove_file(&path).map_err(|source| StoreError::Io {
+                    path: path.clone(),
+                    source,
+                })?;
+            }
             continue;
         };
 
         let original_path = directory.join(original_name);
-        let backup_matches = payload_fingerprint(&path)
+        let staged_payload_matches = payload_fingerprint(&path)
             .map(|(len, sha256)| len == *expected_len && sha256 == *expected_sha256)
             .unwrap_or(false);
 
@@ -281,7 +298,7 @@ pub(super) fn restore_backups(
             })?;
         }
 
-        if backup_matches {
+        if staged_payload_matches {
             fs::rename(&path, &original_path).map_err(|source| StoreError::Io {
                 path: original_path,
                 source,

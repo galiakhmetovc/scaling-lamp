@@ -9,6 +9,7 @@ pub mod worker;
 use crate::bootstrap::{App, BootstrapError};
 use crate::daemon;
 use crate::execution::ChatExecutionEvent;
+use crate::help::{HelpTopic, parse_help_topic, render_command_usage_error, render_help};
 use crate::http::client::{DaemonConnectOptions, connect_or_autospawn_detailed};
 use app::{DialogState, TuiAppState};
 use backend::TuiBackend;
@@ -182,19 +183,19 @@ where
         }
         TuiAction::ConfirmDialog => match state.dialog_state() {
             Some(DialogState::CreateSession { value }) => {
-                let title = title_or_default(value.as_str(), "New Session");
+                let title = title_or_default(value.as_str(), "Новая сессия");
                 let summary = app.create_session_auto(Some(title.as_str()))?;
                 let sessions = app.list_session_summaries()?;
                 state.sync_sessions(sessions);
                 state.close_dialog();
                 state.timeline_mut().push_system(
-                    &format!("created session {}", summary.title),
+                    &format!("создана сессия {}", summary.title),
                     unix_timestamp()?,
                 );
                 load_session_into_state(app, state, &summary.id)?;
             }
             Some(DialogState::RenameSession { session_id, value }) => {
-                let title = title_or_default(value.as_str(), "New Session");
+                let title = title_or_default(value.as_str(), "Новая сессия");
                 let summary = app.update_session_preferences(
                     &session_id,
                     crate::bootstrap::SessionPreferencesPatch {
@@ -206,7 +207,7 @@ where
                 state.replace_current_summary(summary.clone());
                 state.sync_sessions(app.list_session_summaries()?);
                 state.timeline_mut().push_system(
-                    &format!("renamed session to {}", summary.title),
+                    &format!("сессия переименована в {}", summary.title),
                     unix_timestamp()?,
                 );
             }
@@ -220,19 +221,26 @@ where
                 }
             }
             Some(DialogState::ConfirmClear { session_id }) => {
-                let replacement = app.clear_session(&session_id, Some("New Session"))?;
+                let replacement = app.clear_session(&session_id, Some("Новая сессия"))?;
                 state.close_dialog();
                 state.sync_sessions(app.list_session_summaries()?);
                 load_session_into_state(app, state, &replacement.id)?;
                 state
                     .timeline_mut()
-                    .push_system("cleared session", unix_timestamp()?);
+                    .push_system("сессия очищена", unix_timestamp()?);
             }
             None => {}
         },
         TuiAction::SubmitChatInput(input) => {
             if is_command_input(input.as_str()) {
-                handle_command(app, state, input.trim(), redraw)?;
+                if let Err(error) = handle_command(app, state, input.trim(), redraw) {
+                    match error {
+                        BootstrapError::Usage { reason } => {
+                            state.timeline_mut().push_system(&reason, unix_timestamp()?);
+                        }
+                        other => return Err(other),
+                    }
+                }
             } else {
                 submit_chat_message(app, state, input.trim(), QueuedDraftMode::Priority)?;
             }
@@ -240,7 +248,7 @@ where
         TuiAction::QueueChatInput(input) => {
             if is_command_input(input.as_str()) {
                 state.timeline_mut().push_system(
-                    "commands cannot be queued; press Enter to execute the command",
+                    "команды нельзя ставить в очередь; нажмите Enter, чтобы выполнить сразу",
                     unix_timestamp()?,
                 );
             } else {
@@ -269,12 +277,6 @@ fn handle_command<B>(
 where
     B: TuiBackend,
 {
-    let current_session_id = state
-        .current_session_id()
-        .ok_or_else(|| BootstrapError::Usage {
-            reason: "no current session selected".to_string(),
-        })?
-        .to_string();
     let mut parts = raw.splitn(2, ' ');
     let command = parts.next().unwrap_or_default();
     let rest = parts.next().unwrap_or_default().trim();
@@ -282,9 +284,44 @@ where
     match canonical_command(command) {
         Some("/session") => state.open_session_screen(),
         Some("/new") => {
-            let summary = app.create_session_auto(Some("New Session"))?;
+            let summary = app.create_session_auto(Some("Новая сессия"))?;
             state.sync_sessions(app.list_session_summaries()?);
             load_session_into_state(app, state, &summary.id)?;
+        }
+        Some("/agents") => {
+            let rendered = app.render_agents()?;
+            state
+                .timeline_mut()
+                .push_system(&rendered, unix_timestamp()?);
+        }
+        Some("/agent") => {
+            let message = handle_agent_command(app, rest)?;
+            state
+                .timeline_mut()
+                .push_system(&message, unix_timestamp()?);
+            state.sync_sessions(app.list_session_summaries()?);
+        }
+        Some("/schedules") => {
+            let rendered = app.render_agent_schedules()?;
+            state
+                .timeline_mut()
+                .push_system(&rendered, unix_timestamp()?);
+        }
+        Some("/schedule") => {
+            let message = handle_schedule_command(app, rest)?;
+            state
+                .timeline_mut()
+                .push_system(&message, unix_timestamp()?);
+        }
+        Some("/version") => {
+            let about = app.render_version_info()?;
+            state.timeline_mut().push_system(&about, unix_timestamp()?);
+        }
+        Some("/update") => {
+            let message = app.update_runtime()?;
+            state
+                .timeline_mut()
+                .push_system(&message, unix_timestamp()?);
         }
         Some("/rename") => {
             let _ = state.open_rename_dialog();
@@ -292,164 +329,251 @@ where
         Some("/clear") => {
             let _ = state.open_clear_dialog();
         }
-        Some("/debug") => {
-            let backend_saved = app.write_debug_bundle(&current_session_id)?;
-            let saved = write_combined_tui_debug_bundle(
-                app,
-                state,
-                &current_session_id,
-                backend_saved.as_str(),
-            )?;
+        Some("/help") => {
+            let topic = parse_help_topic(option_arg(rest).as_deref()).map_err(|reason| {
+                BootstrapError::Usage {
+                    reason: render_command_usage_error("/help", reason.as_str()),
+                }
+            })?;
             state
                 .timeline_mut()
-                .push_system(&format!("debug bundle saved: {saved}"), unix_timestamp()?);
+                .push_system(&render_help(topic), unix_timestamp()?);
         }
-        Some("/context") => {
-            let context = app.render_context(&current_session_id)?;
+        Some("/settings") => {
             state
                 .timeline_mut()
-                .push_system(&context, unix_timestamp()?);
+                .push_system(&render_help(HelpTopic::Settings), unix_timestamp()?);
         }
-        Some("/plan") => {
-            let plan = app.render_plan(&current_session_id)?;
-            state.timeline_mut().push_system(&plan, unix_timestamp()?);
-        }
-        Some("/jobs") => {
-            let jobs = app.render_active_jobs(&current_session_id)?;
-            state.timeline_mut().push_system(&jobs, unix_timestamp()?);
-        }
-        Some("/skills") => {
-            let rendered = render_session_skills(app.session_skills(&current_session_id)?);
-            state
-                .timeline_mut()
-                .push_system(&rendered, unix_timestamp()?);
-        }
-        Some("/completion") => {
-            let value = require_arg(rest, "\\доводка")?;
-            let completion_nudges = parse_completion_nudges(value.as_str())?;
-            let summary = app.update_session_preferences(
-                &current_session_id,
-                crate::bootstrap::SessionPreferencesPatch {
-                    completion_nudges: Some(completion_nudges),
-                    ..crate::bootstrap::SessionPreferencesPatch::default()
-                },
-            )?;
-            state.replace_current_summary(summary);
-            state.sync_sessions(app.list_session_summaries()?);
-            state.timeline_mut().push_system(
-                &format!(
-                    "completion gate {}",
-                    describe_completion_mode(completion_nudges)
-                ),
-                unix_timestamp()?,
-            );
-        }
-        Some("/autoapprove") => {
-            let value = require_arg(rest, "\\автоапрув")?;
-            let auto_approve = parse_auto_approve(value.as_str())?;
-            let summary = app.update_session_preferences(
-                &current_session_id,
-                crate::bootstrap::SessionPreferencesPatch {
-                    auto_approve: Some(auto_approve),
-                    ..crate::bootstrap::SessionPreferencesPatch::default()
-                },
-            )?;
-            state.replace_current_summary(summary);
-            state.sync_sessions(app.list_session_summaries()?);
-            state.timeline_mut().push_system(
-                &format!(
-                    "auto-approval {}",
-                    if auto_approve { "enabled" } else { "disabled" }
-                ),
-                unix_timestamp()?,
-            );
-            if auto_approve {
-                schedule_next_draft_if_idle(app, state, &current_session_id)?;
+        Some(command) => {
+            let current_session_id = state
+                .current_session_id()
+                .ok_or_else(|| BootstrapError::Usage {
+                    reason: "не выбрана текущая сессия".to_string(),
+                })?
+                .to_string();
+            match command {
+                "/system" => {
+                    let system = app.render_system(&current_session_id)?;
+                    state.timeline_mut().push_system(&system, unix_timestamp()?);
+                }
+                "/context" => {
+                    let context = app.render_context(&current_session_id)?;
+                    state
+                        .timeline_mut()
+                        .push_system(&context, unix_timestamp()?);
+                }
+                "/plan" => {
+                    let plan = app.render_plan(&current_session_id)?;
+                    state.timeline_mut().push_system(&plan, unix_timestamp()?);
+                }
+                "/status" => {
+                    let run = app.render_active_run(&current_session_id)?;
+                    state.timeline_mut().push_system(&run, unix_timestamp()?);
+                }
+                "/processes" => {
+                    let run = app.render_active_run(&current_session_id)?;
+                    state.timeline_mut().push_system(&run, unix_timestamp()?);
+                }
+                "/pause" => {
+                    let message = if let Some(active_run) = state.active_run() {
+                        active_run.queue_interrupt_after_tool_step();
+                        let stopped =
+                            app.cancel_active_run(&current_session_id, unix_timestamp()?)?;
+                        format!("пауза пока реализована как операторская остановка: {stopped}")
+                    } else {
+                        "пауза не нужна: активного хода нет".to_string()
+                    };
+                    state
+                        .timeline_mut()
+                        .push_system(&message, unix_timestamp()?);
+                }
+                "/stop" => {
+                    if let Some(active_run) = state.active_run() {
+                        active_run.queue_interrupt_after_tool_step();
+                    }
+                    let message = app.cancel_active_run(&current_session_id, unix_timestamp()?)?;
+                    state
+                        .timeline_mut()
+                        .push_system(&message, unix_timestamp()?);
+                }
+                "/jobs" => {
+                    let jobs = app.render_active_jobs(&current_session_id)?;
+                    state.timeline_mut().push_system(&jobs, unix_timestamp()?);
+                }
+                "/artifacts" => {
+                    let artifacts = app.render_artifacts(&current_session_id)?;
+                    state
+                        .timeline_mut()
+                        .push_system(&artifacts, unix_timestamp()?);
+                }
+                "/artifact" => {
+                    let artifact_id = require_arg(rest, "/artifact")?;
+                    let artifact = app.read_artifact(&current_session_id, &artifact_id)?;
+                    state
+                        .timeline_mut()
+                        .push_system(&artifact, unix_timestamp()?);
+                }
+                "/debug" => {
+                    let backend_saved = app.write_debug_bundle(&current_session_id)?;
+                    let saved = write_combined_tui_debug_bundle(
+                        app,
+                        state,
+                        &current_session_id,
+                        backend_saved.as_str(),
+                    )?;
+                    state.timeline_mut().push_system(
+                        &format!("отладочный пакет сохранён: {saved}"),
+                        unix_timestamp()?,
+                    );
+                }
+                "/skills" => {
+                    let rendered = render_session_skills(app.session_skills(&current_session_id)?);
+                    state
+                        .timeline_mut()
+                        .push_system(&rendered, unix_timestamp()?);
+                }
+                "/completion" => {
+                    let value = require_arg(rest, "/completion")?;
+                    let completion_nudges = parse_completion_nudges(value.as_str())?;
+                    let summary = app.update_session_preferences(
+                        &current_session_id,
+                        crate::bootstrap::SessionPreferencesPatch {
+                            completion_nudges: Some(completion_nudges),
+                            ..crate::bootstrap::SessionPreferencesPatch::default()
+                        },
+                    )?;
+                    state.replace_current_summary(summary);
+                    state.sync_sessions(app.list_session_summaries()?);
+                    state.timeline_mut().push_system(
+                        &format!(
+                            "режим доводки: {}",
+                            describe_completion_mode(completion_nudges)
+                        ),
+                        unix_timestamp()?,
+                    );
+                }
+                "/autoapprove" => {
+                    let value = require_arg(rest, "/autoapprove")?;
+                    let auto_approve = parse_auto_approve(value.as_str())?;
+                    let summary = app.update_session_preferences(
+                        &current_session_id,
+                        crate::bootstrap::SessionPreferencesPatch {
+                            auto_approve: Some(auto_approve),
+                            ..crate::bootstrap::SessionPreferencesPatch::default()
+                        },
+                    )?;
+                    state.replace_current_summary(summary);
+                    state.sync_sessions(app.list_session_summaries()?);
+                    state.timeline_mut().push_system(
+                        &format!(
+                            "автоапрув {}",
+                            if auto_approve {
+                                "включён"
+                            } else {
+                                "выключен"
+                            }
+                        ),
+                        unix_timestamp()?,
+                    );
+                    if auto_approve {
+                        schedule_next_draft_if_idle(app, state, &current_session_id)?;
+                    }
+                }
+                "/enable" => {
+                    let skill_name = require_arg(rest, "/enable")?;
+                    let updated = app.enable_session_skill(&current_session_id, &skill_name)?;
+                    let rendered = render_session_skills(updated);
+                    state
+                        .timeline_mut()
+                        .push_system(&rendered, unix_timestamp()?);
+                }
+                "/disable" => {
+                    let skill_name = require_arg(rest, "/disable")?;
+                    let updated = app.disable_session_skill(&current_session_id, &skill_name)?;
+                    let rendered = render_session_skills(updated);
+                    state
+                        .timeline_mut()
+                        .push_system(&rendered, unix_timestamp()?);
+                }
+                "/approve" => {
+                    approve_pending(app, state, &current_session_id, option_arg(rest), redraw)?
+                }
+                "/model" => {
+                    let summary = app.update_session_preferences(
+                        &current_session_id,
+                        crate::bootstrap::SessionPreferencesPatch {
+                            model: Some(Some(require_arg(rest, "/model")?)),
+                            ..crate::bootstrap::SessionPreferencesPatch::default()
+                        },
+                    )?;
+                    state.replace_current_summary(summary);
+                    state.sync_sessions(app.list_session_summaries()?);
+                }
+                "/reasoning" => {
+                    let visible = match require_arg(rest, "/reasoning")?.as_str() {
+                        "on" | "вкл" | "enable" => true,
+                        "off" | "выкл" | "disable" => false,
+                        value => {
+                            return Err(BootstrapError::Usage {
+                                reason: render_command_usage_error(
+                                    "/reasoning",
+                                    &format!(
+                                        "неподдерживаемый режим размышлений {value}; ожидается вкл|выкл"
+                                    ),
+                                ),
+                            });
+                        }
+                    };
+                    let summary = app.update_session_preferences(
+                        &current_session_id,
+                        crate::bootstrap::SessionPreferencesPatch {
+                            reasoning_visible: Some(visible),
+                            ..crate::bootstrap::SessionPreferencesPatch::default()
+                        },
+                    )?;
+                    state.replace_current_summary(summary);
+                    state.sync_sessions(app.list_session_summaries()?);
+                }
+                "/think" => {
+                    let summary = app.update_session_preferences(
+                        &current_session_id,
+                        crate::bootstrap::SessionPreferencesPatch {
+                            think_level: Some(Some(require_arg(rest, "/think")?)),
+                            ..crate::bootstrap::SessionPreferencesPatch::default()
+                        },
+                    )?;
+                    state.replace_current_summary(summary);
+                    state.sync_sessions(app.list_session_summaries()?);
+                }
+                "/compact" => {
+                    let before = state
+                        .current_session_summary()
+                        .map(|summary| summary.compactifications);
+                    let summary = app.compact_session(&current_session_id)?;
+                    state.replace_current_summary(summary);
+                    state.sync_sessions(app.list_session_summaries()?);
+                    let after = state
+                        .current_session_summary()
+                        .map(|summary| summary.compactifications);
+                    let message = if before == after {
+                        "компактификация пропущена: истории ещё недостаточно"
+                    } else {
+                        "компактификация контекста завершена"
+                    };
+                    state.timeline_mut().push_system(message, unix_timestamp()?);
+                }
+                "/exit" => state.request_exit(),
+                _ => {
+                    state
+                        .timeline_mut()
+                        .push_system(&format!("неизвестная команда {raw}"), unix_timestamp()?);
+                }
             }
         }
-        Some("/enable") => {
-            let skill_name = require_arg(rest, "\\включить")?;
-            let updated = app.enable_session_skill(&current_session_id, &skill_name)?;
-            let rendered = render_session_skills(updated);
-            state
-                .timeline_mut()
-                .push_system(&rendered, unix_timestamp()?);
-        }
-        Some("/disable") => {
-            let skill_name = require_arg(rest, "\\выключить")?;
-            let updated = app.disable_session_skill(&current_session_id, &skill_name)?;
-            let rendered = render_session_skills(updated);
-            state
-                .timeline_mut()
-                .push_system(&rendered, unix_timestamp()?);
-        }
-        Some("/approve") => {
-            approve_pending(app, state, &current_session_id, option_arg(rest), redraw)?
-        }
-        Some("/model") => {
-            let summary = app.update_session_preferences(
-                &current_session_id,
-                crate::bootstrap::SessionPreferencesPatch {
-                    model: Some(Some(require_arg(rest, "/model")?)),
-                    ..crate::bootstrap::SessionPreferencesPatch::default()
-                },
-            )?;
-            state.replace_current_summary(summary);
-            state.sync_sessions(app.list_session_summaries()?);
-        }
-        Some("/reasoning") => {
-            let visible = match require_arg(rest, "/reasoning")?.as_str() {
-                "on" => true,
-                "off" => false,
-                value => {
-                    return Err(BootstrapError::Usage {
-                        reason: format!("unsupported reasoning mode {value}; expected on|off"),
-                    });
-                }
-            };
-            let summary = app.update_session_preferences(
-                &current_session_id,
-                crate::bootstrap::SessionPreferencesPatch {
-                    reasoning_visible: Some(visible),
-                    ..crate::bootstrap::SessionPreferencesPatch::default()
-                },
-            )?;
-            state.replace_current_summary(summary);
-            state.sync_sessions(app.list_session_summaries()?);
-        }
-        Some("/think") => {
-            let summary = app.update_session_preferences(
-                &current_session_id,
-                crate::bootstrap::SessionPreferencesPatch {
-                    think_level: Some(Some(require_arg(rest, "/think")?)),
-                    ..crate::bootstrap::SessionPreferencesPatch::default()
-                },
-            )?;
-            state.replace_current_summary(summary);
-            state.sync_sessions(app.list_session_summaries()?);
-        }
-        Some("/compact") => {
-            let before = state
-                .current_session_summary()
-                .map(|summary| summary.compactifications);
-            let summary = app.compact_session(&current_session_id)?;
-            state.replace_current_summary(summary);
-            state.sync_sessions(app.list_session_summaries()?);
-            let after = state
-                .current_session_summary()
-                .map(|summary| summary.compactifications);
-            let message = if before == after {
-                "compaction skipped: not enough transcript history"
-            } else {
-                "context compaction completed"
-            };
-            state.timeline_mut().push_system(message, unix_timestamp()?);
-        }
-        Some("/exit") => state.request_exit(),
         _ => {
             state
                 .timeline_mut()
-                .push_system(&format!("unknown command {raw}"), unix_timestamp()?);
+                .push_system(&format!("неизвестная команда {raw}"), unix_timestamp()?);
         }
     }
 
@@ -472,7 +596,7 @@ where
     let session_id = state
         .current_session_id()
         .ok_or_else(|| BootstrapError::Usage {
-            reason: "no current session selected".to_string(),
+            reason: "не выбрана текущая сессия".to_string(),
         })?
         .to_string();
 
@@ -499,7 +623,7 @@ where
         app.latest_pending_approval(session_id, requested_approval_id.as_deref())?
     else {
         state.timeline_mut().push_system(
-            &format!("no pending approval for session_id={session_id}"),
+            &format!("для session_id={session_id} нет ожидающего апрува"),
             unix_timestamp()?,
         );
         return Ok(());
@@ -528,11 +652,12 @@ where
         return Ok(());
     };
     let was_following_tail = state.scroll_offset() == 0;
+    let now = unix_timestamp()?;
     let mut outcome = None;
     for event in events {
         match event {
             WorkerEvent::Chat(chat_event) => {
-                let at = unix_timestamp()?;
+                let at = now;
                 match chat_event {
                     ChatExecutionEvent::ReasoningDelta(delta) => {
                         state.timeline_mut().push_reasoning_delta(&delta, at);
@@ -559,6 +684,14 @@ where
             }
             WorkerEvent::Finished(result) => outcome = Some(result),
         }
+    }
+
+    if outcome.is_none()
+        && let Some(message) = state
+            .active_run_mut()
+            .and_then(|active_run| active_run.heartbeat_notice(now, 30))
+    {
+        state.timeline_mut().push_system(&message, now);
     }
 
     let finished = outcome.is_some();
@@ -670,19 +803,29 @@ where
                 .push_approval(&approval_id, &reason, unix_timestamp()?);
             state.timeline_mut().finish_turn();
         }
+        WorkerOutcome::Cancelled => {
+            state.clear_provider_loop_progress();
+            state
+                .timeline_mut()
+                .push_system("текущий ход остановлен оператором", unix_timestamp()?);
+            state.timeline_mut().finish_turn();
+        }
         WorkerOutcome::InterruptedByQueuedInput => {
             state.clear_provider_loop_progress();
-            state.timeline_mut().push_system(
-                "current response interrupted by queued input",
-                unix_timestamp()?,
-            );
+            let interrupted_for_pause = state.queued_priority_count() == 0;
+            let message = if interrupted_for_pause {
+                "текущий ход поставлен на паузу оператором"
+            } else {
+                "текущий ответ прерван сообщением из очереди"
+            };
+            state.timeline_mut().push_system(message, unix_timestamp()?);
             state.timeline_mut().finish_turn();
         }
         WorkerOutcome::Failed(reason) => {
             state.clear_provider_loop_progress();
             state
                 .timeline_mut()
-                .push_system(&format!("chat failed: {reason}"), unix_timestamp()?);
+                .push_system(&format!("ошибка чата: {reason}"), unix_timestamp()?);
             state.timeline_mut().finish_turn();
         }
     }
@@ -709,7 +852,7 @@ where
     {
         state.timeline_mut().remove_approval(&pending.approval_id);
         state.timeline_mut().push_system(
-            &format!("auto-approving pending request: {}", pending.reason),
+            &format!("автоапрув ожидающего запроса: {}", pending.reason),
             unix_timestamp()?,
         );
         state.scroll_to_bottom();
@@ -809,6 +952,7 @@ where
     let mut lines = vec![
         "TUI Debug Bundle".to_string(),
         format!("generated_at={saved_at}"),
+        format!("version={}", crate::about::APP_VERSION),
         format!("backend_debug_bundle_path={backend_debug_bundle_path}"),
         format!("screen={:?}", state.active_screen()),
         format!("session_id={session_id}"),
@@ -816,7 +960,18 @@ where
 
     if let Some(summary) = state.current_session_summary() {
         lines.push(format!("session_title={}", summary.title));
-        lines.push(format!("summary_ctx={}", summary.context_tokens));
+        match (
+            summary.usage_input_tokens,
+            summary.usage_output_tokens,
+            summary.usage_total_tokens,
+        ) {
+            (Some(input), Some(output), Some(total)) => {
+                lines.push(format!(
+                    "summary_usage=input:{input} output:{output} total:{total}"
+                ));
+            }
+            _ => lines.push(format!("summary_approx_ctx={}", summary.context_tokens)),
+        }
         lines.push(format!("summary_messages={}", summary.message_count));
         lines.push(format!(
             "summary_reasoning_visible={}",
@@ -919,7 +1074,7 @@ fn sanitize_tui_debug_identifier(value: &str) -> String {
 fn require_arg(raw: &str, command: &str) -> Result<String, BootstrapError> {
     if raw.trim().is_empty() {
         return Err(BootstrapError::Usage {
-            reason: format!("{command} requires an argument"),
+            reason: render_command_usage_error(command, "не хватает аргументов"),
         });
     }
     Ok(raw.trim().to_string())
@@ -938,17 +1093,20 @@ fn parse_completion_nudges(raw: &str) -> Result<Option<u32>, BootstrapError> {
         .parse::<u32>()
         .map(Some)
         .map_err(|_| BootstrapError::Usage {
-            reason: format!(
-                "unsupported completion mode {trimmed}; expected off|выкл or a non-negative integer"
+            reason: render_command_usage_error(
+                "/completion",
+                &format!(
+                    "неподдерживаемый режим доводки {trimmed}; ожидается выкл или неотрицательное число"
+                ),
             ),
         })
 }
 
 fn describe_completion_mode(completion_nudges: Option<u32>) -> String {
     match completion_nudges {
-        None => "disabled".to_string(),
-        Some(0) => "enabled with operator approval after the first early stop".to_string(),
-        Some(value) => format!("enabled with {value} auto-nudges"),
+        None => "выключен".to_string(),
+        Some(0) => "включён: после первой ранней остановки сразу нужен апрув оператора".to_string(),
+        Some(value) => format!("включён: {value} автоматических пинка перед апрувом"),
     }
 }
 
@@ -957,7 +1115,10 @@ fn parse_auto_approve(raw: &str) -> Result<bool, BootstrapError> {
         "on" | "1" | "yes" | "да" | "вкл" | "enable" => Ok(true),
         "off" | "0" | "no" | "нет" | "выкл" | "disable" => Ok(false),
         value => Err(BootstrapError::Usage {
-            reason: format!("unsupported auto-approve mode {value}; expected on|off"),
+            reason: render_command_usage_error(
+                "/autoapprove",
+                &format!("неподдерживаемый режим автоапрува {value}; ожидается вкл|выкл"),
+            ),
         }),
     }
 }
@@ -972,11 +1133,26 @@ fn canonical_command(command: &str) -> Option<&'static str> {
     match normalized {
         "/session" | "\\сессии" => Some("/session"),
         "/new" | "\\новая" => Some("/new"),
+        "/agents" | "\\агенты" => Some("/agents"),
+        "/agent" | "\\агент" => Some("/agent"),
+        "/schedules" | "\\расписания" => Some("/schedules"),
+        "/schedule" | "\\расписание" => Some("/schedule"),
         "/rename" | "\\переименовать" => Some("/rename"),
         "/clear" | "\\очистить" => Some("/clear"),
+        "/help" | "\\помощь" => Some("/help"),
+        "/version" | "/версия" | "\\версия" => Some("/version"),
+        "/update" | "/обновить" | "\\обновить" => Some("/update"),
+        "/settings" | "\\настройки" => Some("/settings"),
         "/debug" | "\\отладка" => Some("/debug"),
+        "/system" | "/система" | "\\система" => Some("/system"),
         "/plan" | "\\план" => Some("/plan"),
+        "/status" | "\\статус" => Some("/status"),
+        "/processes" | "\\процессы" => Some("/processes"),
+        "/pause" | "\\пауза" => Some("/pause"),
+        "/stop" | "\\стоп" => Some("/stop"),
         "/jobs" | "\\задачи" => Some("/jobs"),
+        "/artifacts" | "/артефакты" | "\\артефакты" => Some("/artifacts"),
+        "/artifact" | "/артефакт" | "\\артефакт" => Some("/artifact"),
         "/context" | "\\контекст" => Some("/context"),
         "/completion" | "\\доводка" => Some("/completion"),
         "/autoapprove" | "\\автоапрув" => Some("/autoapprove"),
@@ -993,18 +1169,210 @@ fn canonical_command(command: &str) -> Option<&'static str> {
     }
 }
 
-fn render_session_skills(skills: Vec<crate::bootstrap::SessionSkillStatus>) -> String {
-    if skills.is_empty() {
-        return "skills: none discovered".to_string();
+fn handle_agent_command<B>(app: &B, raw: &str) -> Result<String, BootstrapError>
+where
+    B: TuiBackend,
+{
+    let trimmed = raw.trim();
+    let (action, tail) = match trimmed.split_once(' ') {
+        Some((action, tail)) => (action.trim(), tail.trim()),
+        None => (trimmed, ""),
+    };
+
+    match action {
+        "" => app.render_agent(None),
+        "показать" | "show" => app.render_agent(option_arg(tail).as_deref()),
+        "выбрать" | "select" => app.select_agent(&require_arg(tail, "/agent")?),
+        "создать" | "create" => {
+            let spec = require_arg(tail, "/agent")?;
+            let (name, template_identifier) = parse_agent_create_spec(spec.as_str())?;
+            app.create_agent(&name, template_identifier.as_deref())
+        }
+        "открыть" | "open" => app.open_agent_home(option_arg(tail).as_deref()),
+        _ => Err(BootstrapError::Usage {
+            reason: render_command_usage_error(
+                "/agent",
+                "неизвестная подкоманда агента; ожидается показать|выбрать|создать|открыть",
+            ),
+        }),
+    }
+}
+
+fn parse_agent_create_spec(raw: &str) -> Result<(String, Option<String>), BootstrapError> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return Err(BootstrapError::Usage {
+            reason: render_command_usage_error("/agent", "не хватает аргументов"),
+        });
     }
 
-    let mut lines = vec!["Skills:".to_string()];
-    lines.extend(
-        skills
-            .into_iter()
-            .map(|skill| format!("- [{}] {}: {}", skill.mode, skill.name, skill.description)),
-    );
+    for delimiter in [" из ", " from "] {
+        if let Some((name, template)) = trimmed.split_once(delimiter) {
+            let name = name.trim().to_string();
+            let template = template.trim().to_string();
+            if name.is_empty() || template.is_empty() {
+                break;
+            }
+            return Ok((name, Some(template)));
+        }
+    }
+
+    Ok((trimmed.to_string(), None))
+}
+
+fn handle_schedule_command<B>(app: &B, raw: &str) -> Result<String, BootstrapError>
+where
+    B: TuiBackend,
+{
+    let trimmed = raw.trim();
+    let (action, tail) = match trimmed.split_once(' ') {
+        Some((action, tail)) => (action.trim(), tail.trim()),
+        None => (trimmed, ""),
+    };
+
+    match action {
+        "" => app.render_agent_schedules(),
+        "показать" | "show" => app.render_agent_schedule(&require_arg(tail, "/schedule")?),
+        "создать" | "create" => {
+            let spec = require_arg(tail, "/schedule")?;
+            let (id, interval_seconds, agent_identifier, prompt) =
+                parse_schedule_create_spec(spec.as_str())?;
+            app.create_agent_schedule(&id, interval_seconds, &prompt, agent_identifier.as_deref())
+        }
+        "удалить" | "delete" | "remove" => {
+            app.delete_agent_schedule(&require_arg(tail, "/schedule")?)
+        }
+        _ => Err(BootstrapError::Usage {
+            reason: render_command_usage_error(
+                "/schedule",
+                "неизвестная подкоманда расписания; ожидается показать|создать|удалить",
+            ),
+        }),
+    }
+}
+
+fn parse_schedule_create_spec(
+    raw: &str,
+) -> Result<(String, u64, Option<String>, String), BootstrapError> {
+    let trimmed = raw.trim();
+    let Some((head, prompt)) = trimmed.split_once("::") else {
+        return Err(BootstrapError::Usage {
+            reason: render_command_usage_error(
+                "/schedule",
+                "не хватает prompt; используйте формат с разделителем ::",
+            ),
+        });
+    };
+    let prompt = prompt.trim().to_string();
+    if prompt.is_empty() {
+        return Err(BootstrapError::Usage {
+            reason: render_command_usage_error("/schedule", "prompt не должен быть пустым"),
+        });
+    }
+
+    let mut parts = head.split_whitespace();
+    let Some(id) = parts
+        .next()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    else {
+        return Err(BootstrapError::Usage {
+            reason: render_command_usage_error("/schedule", "не хватает id расписания"),
+        });
+    };
+    let Some(interval_raw) = parts
+        .next()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    else {
+        return Err(BootstrapError::Usage {
+            reason: render_command_usage_error("/schedule", "не хватает interval_seconds"),
+        });
+    };
+    let interval_seconds = interval_raw
+        .parse::<u64>()
+        .map_err(|_| BootstrapError::Usage {
+            reason: render_command_usage_error(
+                "/schedule",
+                "interval_seconds должен быть положительным целым числом",
+            ),
+        })?;
+    if interval_seconds == 0 {
+        return Err(BootstrapError::Usage {
+            reason: render_command_usage_error(
+                "/schedule",
+                "interval_seconds должен быть больше нуля",
+            ),
+        });
+    }
+
+    let remainder = parts.collect::<Vec<_>>();
+    let agent_identifier = match remainder.as_slice() {
+        [] => None,
+        [value] => parse_schedule_agent_override(value)?,
+        _ => {
+            return Err(BootstrapError::Usage {
+                reason: render_command_usage_error(
+                    "/schedule",
+                    "лишние аргументы; после interval_seconds допускается только agent=<id>",
+                ),
+            });
+        }
+    };
+
+    Ok((id.to_string(), interval_seconds, agent_identifier, prompt))
+}
+
+fn parse_schedule_agent_override(raw: &str) -> Result<Option<String>, BootstrapError> {
+    for prefix in ["agent=", "агент="] {
+        if let Some(value) = raw.strip_prefix(prefix) {
+            let value = value.trim();
+            if value.is_empty() {
+                return Err(BootstrapError::Usage {
+                    reason: render_command_usage_error(
+                        "/schedule",
+                        "после agent= должен быть id или имя агента",
+                    ),
+                });
+            }
+            return Ok(Some(value.to_string()));
+        }
+    }
+
+    Err(BootstrapError::Usage {
+        reason: render_command_usage_error(
+            "/schedule",
+            "неподдерживаемый override агента; используйте agent=<id> или агент=<id>",
+        ),
+    })
+}
+
+fn render_session_skills(skills: Vec<crate::bootstrap::SessionSkillStatus>) -> String {
+    if skills.is_empty() {
+        return "Скиллы: ничего не найдено".to_string();
+    }
+
+    let mut lines = vec!["Скиллы:".to_string()];
+    lines.extend(skills.into_iter().map(|skill| {
+        format!(
+            "- [{}] {}: {}",
+            translate_skill_mode(skill.mode.as_str()),
+            skill.name,
+            skill.description
+        )
+    }));
     lines.join("\n")
+}
+
+fn translate_skill_mode(mode: &str) -> &str {
+    match mode {
+        "inactive" => "неактивен",
+        "automatic" => "авто",
+        "manual" => "вручную",
+        "enabled" => "включён",
+        "disabled" => "выключен",
+        other => other,
+    }
 }
 
 fn title_or_default(raw: &str, default: &str) -> String {
@@ -1046,6 +1414,70 @@ mod tests {
     }
 
     impl TuiBackend for FakeBackend {
+        fn render_agents(&self) -> Result<String, BootstrapError> {
+            Ok(format!(
+                "Агенты: текущий={}\n* {} ({})",
+                self.summary.agent_profile_id,
+                self.summary.agent_name,
+                self.summary.agent_profile_id
+            ))
+        }
+
+        fn render_agent(&self, _identifier: Option<&str>) -> Result<String, BootstrapError> {
+            Ok(format!(
+                "id={}\nname={}",
+                self.summary.agent_profile_id, self.summary.agent_name
+            ))
+        }
+
+        fn select_agent(&self, identifier: &str) -> Result<String, BootstrapError> {
+            Ok(format!(
+                "текущий агент: {} ({identifier})",
+                self.summary.agent_name
+            ))
+        }
+
+        fn create_agent(
+            &self,
+            name: &str,
+            template_identifier: Option<&str>,
+        ) -> Result<String, BootstrapError> {
+            Ok(format!(
+                "создан агент {name} (test) из шаблона {}",
+                template_identifier.unwrap_or("default")
+            ))
+        }
+
+        fn open_agent_home(&self, _identifier: Option<&str>) -> Result<String, BootstrapError> {
+            Ok("/tmp/test-agent".to_string())
+        }
+
+        fn render_agent_schedules(&self) -> Result<String, BootstrapError> {
+            Ok("Расписания: workspace=/tmp/test".to_string())
+        }
+
+        fn render_agent_schedule(&self, id: &str) -> Result<String, BootstrapError> {
+            Ok(format!("id={id}"))
+        }
+
+        fn create_agent_schedule(
+            &self,
+            id: &str,
+            interval_seconds: u64,
+            _prompt: &str,
+            agent_identifier: Option<&str>,
+        ) -> Result<String, BootstrapError> {
+            Ok(format!(
+                "создано расписание {id} agent={} interval={}s",
+                agent_identifier.unwrap_or(&self.summary.agent_profile_id),
+                interval_seconds
+            ))
+        }
+
+        fn delete_agent_schedule(&self, id: &str) -> Result<String, BootstrapError> {
+            Ok(format!("расписание {id} удалено"))
+        }
+
         fn list_session_summaries(&self) -> Result<Vec<SessionSummary>, BootstrapError> {
             Ok(vec![self.summary.clone()])
         }
@@ -1130,8 +1562,44 @@ mod tests {
             Ok("Context:\nctx=0".to_string())
         }
 
+        fn render_system(&self, _session_id: &str) -> Result<String, BootstrapError> {
+            Ok("Системные блоки:\n<test>".to_string())
+        }
+
         fn render_plan(&self, _session_id: &str) -> Result<String, BootstrapError> {
             panic!("unused in test")
+        }
+
+        fn render_artifacts(&self, _session_id: &str) -> Result<String, BootstrapError> {
+            Ok("Артефакты: нет".to_string())
+        }
+
+        fn read_artifact(
+            &self,
+            _session_id: &str,
+            _artifact_id: &str,
+        ) -> Result<String, BootstrapError> {
+            Ok("artifact_id=test".to_string())
+        }
+
+        fn render_active_run(&self, _session_id: &str) -> Result<String, BootstrapError> {
+            Ok("Ход: активного выполнения нет".to_string())
+        }
+
+        fn cancel_active_run(
+            &self,
+            _session_id: &str,
+            _now: i64,
+        ) -> Result<String, BootstrapError> {
+            Ok("ход остановлен".to_string())
+        }
+
+        fn render_version_info(&self) -> Result<String, BootstrapError> {
+            Ok("версия=test".to_string())
+        }
+
+        fn update_runtime(&self) -> Result<String, BootstrapError> {
+            Ok("обновлено".to_string())
         }
 
         fn render_active_jobs(&self, _session_id: &str) -> Result<String, BootstrapError> {
@@ -1206,6 +1674,8 @@ mod tests {
             vec![SessionSummary {
                 id: "session-a".to_string(),
                 title: "Session A".to_string(),
+                agent_profile_id: "default".to_string(),
+                agent_name: "Default".to_string(),
                 model: Some("glm-5-turbo".to_string()),
                 reasoning_visible: true,
                 think_level: None,
@@ -1213,6 +1683,9 @@ mod tests {
                 completion_nudges: None,
                 auto_approve: false,
                 context_tokens: 0,
+                usage_input_tokens: None,
+                usage_output_tokens: None,
+                usage_total_tokens: None,
                 has_pending_approval: false,
                 last_message_preview: None,
                 message_count: 0,
@@ -1241,6 +1714,8 @@ mod tests {
             summary: SessionSummary {
                 id: "session-a".to_string(),
                 title: "Session A".to_string(),
+                agent_profile_id: "default".to_string(),
+                agent_name: "Default".to_string(),
                 model: Some("glm-5-turbo".to_string()),
                 reasoning_visible: true,
                 think_level: None,
@@ -1248,6 +1723,9 @@ mod tests {
                 completion_nudges: None,
                 auto_approve: false,
                 context_tokens: 0,
+                usage_input_tokens: None,
+                usage_output_tokens: None,
+                usage_total_tokens: None,
                 has_pending_approval: true,
                 last_message_preview: None,
                 message_count: 1,
@@ -1307,6 +1785,124 @@ mod tests {
     }
 
     #[test]
+    fn canonical_command_accepts_help_aliases() {
+        assert_eq!(canonical_command("\\помощь"), Some("/help"));
+        assert_eq!(canonical_command("\\настройки"), Some("/settings"));
+        assert_eq!(canonical_command("\\пауза"), Some("/pause"));
+    }
+
+    #[test]
+    fn pause_command_reports_when_no_active_run_exists() {
+        fn redraw(_: &TuiAppState) -> Result<(), BootstrapError> {
+            Ok(())
+        }
+
+        let backend = FakeBackend {
+            summary: SessionSummary {
+                id: "session-a".to_string(),
+                title: "Session A".to_string(),
+                agent_profile_id: "default".to_string(),
+                agent_name: "Default".to_string(),
+                model: Some("glm-5-turbo".to_string()),
+                reasoning_visible: true,
+                think_level: None,
+                compactifications: 0,
+                completion_nudges: None,
+                auto_approve: false,
+                context_tokens: 0,
+                usage_input_tokens: None,
+                usage_output_tokens: None,
+                usage_total_tokens: None,
+                has_pending_approval: false,
+                last_message_preview: None,
+                message_count: 0,
+                background_job_count: 0,
+                running_background_job_count: 0,
+                queued_background_job_count: 0,
+                created_at: 1,
+                updated_at: 2,
+            },
+            pending: Vec::new(),
+            transcript: SessionTranscriptView {
+                session_id: "session-a".to_string(),
+                entries: Vec::new(),
+            },
+            debug_bundle: "unused".to_string(),
+        };
+        let mut state = TuiAppState::new(
+            vec![backend.summary.clone()],
+            Some(backend.summary.id.clone()),
+        );
+        state.set_current_session(backend.summary.clone(), Timeline::default());
+
+        handle_command(&backend, &mut state, "\\пауза", &mut redraw).expect("pause command");
+
+        let entries = state.timeline().entries(true);
+        let last = entries.last().expect("timeline entry");
+        assert!(last.content.contains("пауза не нужна: активного хода нет"));
+    }
+
+    #[test]
+    fn submit_command_without_required_argument_stays_in_timeline() {
+        fn redraw(_: &TuiAppState) -> Result<(), BootstrapError> {
+            Ok(())
+        }
+
+        let backend = FakeBackend {
+            summary: SessionSummary {
+                id: "session-a".to_string(),
+                title: "Session A".to_string(),
+                agent_profile_id: "default".to_string(),
+                agent_name: "Default".to_string(),
+                model: Some("glm-5-turbo".to_string()),
+                reasoning_visible: true,
+                think_level: None,
+                compactifications: 0,
+                completion_nudges: None,
+                auto_approve: false,
+                context_tokens: 0,
+                usage_input_tokens: None,
+                usage_output_tokens: None,
+                usage_total_tokens: None,
+                has_pending_approval: false,
+                last_message_preview: None,
+                message_count: 0,
+                background_job_count: 0,
+                running_background_job_count: 0,
+                queued_background_job_count: 0,
+                created_at: 1,
+                updated_at: 2,
+            },
+            pending: Vec::new(),
+            transcript: SessionTranscriptView {
+                session_id: "session-a".to_string(),
+                entries: Vec::new(),
+            },
+            debug_bundle: "unused".to_string(),
+        };
+        let mut state = TuiAppState::new(
+            vec![backend.summary.clone()],
+            Some(backend.summary.id.clone()),
+        );
+        state.set_current_session(backend.summary.clone(), Timeline::default());
+
+        dispatch_action(
+            &backend,
+            &mut state,
+            TuiAction::SubmitChatInput("\\доводка".to_string()),
+            &mut redraw,
+        )
+        .expect("command should stay inside timeline");
+
+        let entries = state.timeline().entries(true);
+        let last = entries.last().expect("timeline entry");
+        assert!(matches!(last.kind, TimelineEntryKind::System));
+        assert!(last.content.contains("не хватает аргументов"));
+        assert!(last.content.contains("Формат: \\доводка <N|выкл>"));
+        assert!(last.content.contains("\\доводка 3"));
+    }
+
+    #[test]
     fn debug_command_reports_saved_path() {
         fn redraw(_: &TuiAppState) -> Result<(), BootstrapError> {
             Ok(())
@@ -1320,6 +1916,8 @@ mod tests {
             summary: SessionSummary {
                 id: "session-a".to_string(),
                 title: "Session A".to_string(),
+                agent_profile_id: "default".to_string(),
+                agent_name: "Default".to_string(),
                 model: Some("glm-5-turbo".to_string()),
                 reasoning_visible: true,
                 think_level: None,
@@ -1327,6 +1925,9 @@ mod tests {
                 completion_nudges: None,
                 auto_approve: false,
                 context_tokens: 0,
+                usage_input_tokens: None,
+                usage_output_tokens: None,
+                usage_total_tokens: None,
                 has_pending_approval: false,
                 last_message_preview: None,
                 message_count: 0,
@@ -1357,7 +1958,7 @@ mod tests {
         assert!(matches!(last.kind, TimelineEntryKind::System));
         let saved_path = last
             .content
-            .strip_prefix("debug bundle saved: ")
+            .strip_prefix("отладочный пакет сохранён: ")
             .expect("saved path prefix");
         let saved = std::fs::read_to_string(saved_path).expect("read saved bundle");
         assert!(saved.contains("TUI Debug Bundle"));
@@ -1370,10 +1971,66 @@ mod tests {
     }
 
     #[test]
+    fn help_command_reports_judge_topic() {
+        fn redraw(_: &TuiAppState) -> Result<(), BootstrapError> {
+            Ok(())
+        }
+
+        let backend = FakeBackend {
+            summary: SessionSummary {
+                id: "session-a".to_string(),
+                title: "Session A".to_string(),
+                agent_profile_id: "default".to_string(),
+                agent_name: "Default".to_string(),
+                model: Some("glm-5-turbo".to_string()),
+                reasoning_visible: true,
+                think_level: None,
+                compactifications: 0,
+                completion_nudges: None,
+                auto_approve: false,
+                context_tokens: 0,
+                usage_input_tokens: None,
+                usage_output_tokens: None,
+                usage_total_tokens: None,
+                has_pending_approval: false,
+                last_message_preview: None,
+                message_count: 0,
+                background_job_count: 0,
+                running_background_job_count: 0,
+                queued_background_job_count: 0,
+                created_at: 1,
+                updated_at: 2,
+            },
+            pending: Vec::new(),
+            transcript: SessionTranscriptView {
+                session_id: "session-a".to_string(),
+                entries: Vec::new(),
+            },
+            debug_bundle: "unused".to_string(),
+        };
+        let mut state = TuiAppState::new(
+            vec![backend.summary.clone()],
+            Some(backend.summary.id.clone()),
+        );
+        state.set_current_session(backend.summary.clone(), Timeline::default());
+
+        handle_command(&backend, &mut state, "\\помощь судья", &mut redraw)
+            .expect("handle help command");
+
+        let entries = state.timeline().entries(true);
+        let last = entries.last().expect("timeline entry");
+        assert!(last.content.contains("\\агент выбрать judge"));
+        assert!(last.content.contains("[daemon.a2a_peers.judge]"));
+        assert!(last.content.contains("message_agent"));
+    }
+
+    #[test]
     fn refresh_current_session_rebuilds_timeline_from_backend_transcript() {
         let summary = SessionSummary {
             id: "session-a".to_string(),
             title: "Session A".to_string(),
+            agent_profile_id: "default".to_string(),
+            agent_name: "Default".to_string(),
             model: Some("glm-5-turbo".to_string()),
             reasoning_visible: true,
             think_level: None,
@@ -1381,6 +2038,9 @@ mod tests {
             completion_nudges: None,
             auto_approve: false,
             context_tokens: 0,
+            usage_input_tokens: None,
+            usage_output_tokens: None,
+            usage_total_tokens: None,
             has_pending_approval: false,
             last_message_preview: None,
             message_count: 2,

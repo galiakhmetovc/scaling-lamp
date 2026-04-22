@@ -34,9 +34,9 @@ pub enum ActiveRunPhase {
     Sending,
     Streaming,
     WaitingApproval,
-    ToolRequested { tool_name: String },
-    ToolRunning { tool_name: String },
-    ToolCompleted { tool_name: String },
+    ToolRequested { tool_name: String, summary: String },
+    ToolRunning { tool_name: String, summary: String },
+    ToolCompleted { tool_name: String, summary: String },
     Failed,
 }
 
@@ -45,6 +45,7 @@ pub enum WorkerOutcome {
     ChatCompleted(ChatTurnExecutionReport),
     ApprovalCompleted(ApprovalContinuationReport),
     ApprovalRequired { approval_id: String, reason: String },
+    Cancelled,
     InterruptedByQueuedInput,
     Failed(String),
 }
@@ -59,6 +60,7 @@ pub struct ActiveRunHandle {
     kind: ActiveRunKind,
     session_id: String,
     started_at: i64,
+    last_status_notice_at: i64,
     phase: ActiveRunPhase,
     interrupt_after_tool_step: Arc<AtomicBool>,
     receiver: Receiver<WorkerEvent>,
@@ -96,6 +98,9 @@ impl ActiveRunHandle {
                         approval_id,
                         reason,
                     },
+                    Err(BootstrapError::Execution(ExecutionError::CancelledByOperator)) => {
+                        WorkerOutcome::Cancelled
+                    }
                     Err(BootstrapError::Execution(ExecutionError::InterruptedByQueuedInput)) => {
                         WorkerOutcome::InterruptedByQueuedInput
                     }
@@ -110,6 +115,7 @@ impl ActiveRunHandle {
             kind: ActiveRunKind::Chat,
             session_id,
             started_at,
+            last_status_notice_at: started_at,
             phase: ActiveRunPhase::Sending,
             interrupt_after_tool_step,
             receiver,
@@ -153,6 +159,9 @@ impl ActiveRunHandle {
                             WorkerOutcome::ApprovalCompleted(report)
                         }
                     }
+                    Err(BootstrapError::Execution(ExecutionError::CancelledByOperator)) => {
+                        WorkerOutcome::Cancelled
+                    }
                     Err(BootstrapError::Execution(ExecutionError::InterruptedByQueuedInput)) => {
                         WorkerOutcome::InterruptedByQueuedInput
                     }
@@ -167,6 +176,7 @@ impl ActiveRunHandle {
             kind: ActiveRunKind::Approval,
             session_id,
             started_at,
+            last_status_notice_at: started_at,
             phase: ActiveRunPhase::Sending,
             interrupt_after_tool_step,
             receiver,
@@ -192,6 +202,36 @@ impl ActiveRunHandle {
 
     pub fn queue_interrupt_after_tool_step(&self) {
         self.interrupt_after_tool_step.store(true, Ordering::SeqCst);
+    }
+
+    pub fn interrupt_after_tool_step_requested(&self) -> bool {
+        self.interrupt_after_tool_step.load(Ordering::SeqCst)
+    }
+
+    pub fn current_tool_summary(&self) -> Option<&str> {
+        match &self.phase {
+            ActiveRunPhase::ToolRequested { summary, .. }
+            | ActiveRunPhase::ToolRunning { summary, .. }
+            | ActiveRunPhase::ToolCompleted { summary, .. } => Some(summary.as_str()),
+            _ => None,
+        }
+    }
+
+    pub fn heartbeat_notice(&mut self, now: i64, interval_seconds: i64) -> Option<String> {
+        if now.saturating_sub(self.last_status_notice_at) < interval_seconds {
+            return None;
+        }
+        let detail = match &self.phase {
+            ActiveRunPhase::ToolRunning { tool_name, summary } => Some(format!(
+                "ход всё ещё выполняется: {} {} уже {} ({summary}). Команды: \\статус, \\пауза, \\стоп, \\отладка",
+                self.kind_label(),
+                tool_name,
+                format_elapsed(now.saturating_sub(self.started_at))
+            )),
+            _ => None,
+        }?;
+        self.last_status_notice_at = now;
+        Some(detail)
     }
 
     pub fn drain_events(&mut self) -> Vec<WorkerEvent> {
@@ -223,20 +263,49 @@ impl ActiveRunHandle {
                 self.phase = match status {
                     ToolExecutionStatus::Requested => ActiveRunPhase::ToolRequested {
                         tool_name: tool_name.clone(),
+                        summary: event_tool_summary(event),
                     },
                     ToolExecutionStatus::WaitingApproval => ActiveRunPhase::WaitingApproval,
                     ToolExecutionStatus::Approved | ToolExecutionStatus::Running => {
                         ActiveRunPhase::ToolRunning {
                             tool_name: tool_name.clone(),
+                            summary: event_tool_summary(event),
                         }
                     }
                     ToolExecutionStatus::Completed => ActiveRunPhase::ToolCompleted {
                         tool_name: tool_name.clone(),
+                        summary: event_tool_summary(event),
                     },
                     ToolExecutionStatus::Failed => ActiveRunPhase::Failed,
                 };
             }
         }
+    }
+
+    fn kind_label(&self) -> &'static str {
+        match self.kind {
+            ActiveRunKind::Chat => "чат",
+            ActiveRunKind::Approval => "апрув",
+        }
+    }
+}
+
+fn format_elapsed(total_seconds: i64) -> String {
+    let total_seconds = total_seconds.max(0);
+    let hours = total_seconds / 3600;
+    let minutes = (total_seconds % 3600) / 60;
+    let seconds = total_seconds % 60;
+    if hours > 0 {
+        format!("{hours:02}:{minutes:02}:{seconds:02}")
+    } else {
+        format!("{minutes:02}:{seconds:02}")
+    }
+}
+
+fn event_tool_summary(event: &ChatExecutionEvent) -> String {
+    match event {
+        ChatExecutionEvent::ToolStatus { summary, .. } => summary.clone(),
+        _ => String::new(),
     }
 }
 

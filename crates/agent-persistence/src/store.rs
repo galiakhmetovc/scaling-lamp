@@ -1,3 +1,4 @@
+mod agent_repos;
 mod context_repos;
 mod execution_repos;
 mod inbox_repos;
@@ -8,13 +9,14 @@ mod session_mission;
 use crate::PersistenceScaffold;
 use crate::config::AppConfig;
 use crate::records::{
-    ArtifactRecord, ContextOffloadRecord, ContextSummaryRecord, JobRecord, MissionRecord,
-    PlanRecord, RunRecord, SessionInboxEventRecord, SessionRecord, TranscriptRecord,
+    AgentChainContinuationRecord, AgentProfileRecord, AgentScheduleRecord, ArtifactRecord,
+    ContextOffloadRecord, ContextSummaryRecord, JobRecord, MissionRecord, PlanRecord, RunRecord,
+    SessionInboxEventRecord, SessionRecord, TranscriptRecord,
 };
 use crate::repository::{
-    ArtifactRepository, ContextOffloadRepository, ContextSummaryRepository, JobRepository,
-    MissionRepository, PlanRepository, RunRepository, SessionInboxRepository, SessionRepository,
-    TranscriptRepository,
+    AgentRepository, ArtifactRepository, ContextOffloadRepository, ContextSummaryRepository,
+    JobRepository, MissionRepository, PlanRepository, RunRepository, SessionInboxRepository,
+    SessionRepository, TranscriptRepository,
 };
 use agent_runtime::context::{ContextOffloadPayload, ContextOffloadSnapshot};
 use rusqlite::{Connection, OptionalExtension, params};
@@ -47,6 +49,11 @@ impl StoreLayout {
 
 #[derive(Debug)]
 pub enum StoreError {
+    ImmutableSessionAgentProfile {
+        session_id: String,
+        existing_agent_profile_id: String,
+        attempted_agent_profile_id: String,
+    },
     InvalidIdentifier {
         id: String,
         reason: &'static str,
@@ -106,6 +113,16 @@ const LEGACY_MISSION_PREFIX: &str = "legacy-mission-";
 impl fmt::Display for StoreError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::ImmutableSessionAgentProfile {
+                session_id,
+                existing_agent_profile_id,
+                attempted_agent_profile_id,
+            } => {
+                write!(
+                    formatter,
+                    "session {session_id} cannot change agent profile from {existing_agent_profile_id} to {attempted_agent_profile_id}"
+                )
+            }
             Self::InvalidIdentifier { id, reason } => {
                 write!(formatter, "invalid storage identifier {id}: {reason}")
             }
@@ -145,7 +162,8 @@ impl Error for StoreError {
         match self {
             Self::Io { source, .. } => Some(source),
             Self::Sqlite(source) => Some(source),
-            Self::InvalidIdentifier { .. }
+            Self::ImmutableSessionAgentProfile { .. }
+            | Self::InvalidIdentifier { .. }
             | Self::InvalidContextOffload { .. }
             | Self::MissingPayload { .. }
             | Self::IntegrityMismatch { .. }

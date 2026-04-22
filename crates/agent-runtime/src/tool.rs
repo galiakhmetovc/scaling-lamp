@@ -9,6 +9,8 @@ use serde_json::{Value, json};
 use std::collections::BTreeMap;
 use std::error::Error;
 use std::fmt;
+#[cfg(unix)]
+use std::io;
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
 use std::sync::{Arc, Mutex};
@@ -57,6 +59,8 @@ pub enum ToolName {
     PlanLint,
     ArtifactRead,
     ArtifactSearch,
+    MessageAgent,
+    GrantAgentChainContinuation,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -302,6 +306,18 @@ pub struct ArtifactSearchInput {
     pub limit: usize,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MessageAgentInput {
+    pub target_agent_id: String,
+    pub message: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GrantAgentChainContinuationInput {
+    pub chain_id: String,
+    pub reason: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ToolCall {
     FsRead(FsReadInput),
@@ -337,6 +353,8 @@ pub enum ToolCall {
     PlanLint(PlanLintInput),
     ArtifactRead(ArtifactReadInput),
     ArtifactSearch(ArtifactSearchInput),
+    MessageAgent(MessageAgentInput),
+    GrantAgentChainContinuation(GrantAgentChainContinuationInput),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -479,6 +497,8 @@ pub struct ProcessStartOutput {
     pub process_id: String,
     pub pid_ref: String,
     pub kind: ProcessKind,
+    pub command_display: String,
+    pub cwd: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -573,6 +593,21 @@ pub struct ArtifactSearchOutput {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MessageAgentOutput {
+    pub target_agent_id: String,
+    pub recipient_session_id: String,
+    pub recipient_job_id: String,
+    pub chain_id: String,
+    pub hop_count: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GrantAgentChainContinuationOutput {
+    pub chain_id: String,
+    pub granted_hops: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ToolOutput {
     FsRead(FsReadOutput),
     FsWrite(FsWriteOutput),
@@ -606,6 +641,8 @@ pub enum ToolOutput {
     PlanLint(PlanLintOutput),
     ArtifactRead(ArtifactReadOutput),
     ArtifactSearch(ArtifactSearchOutput),
+    MessageAgent(MessageAgentOutput),
+    GrantAgentChainContinuation(GrantAgentChainContinuationOutput),
 }
 
 #[derive(Debug)]
@@ -748,6 +785,8 @@ impl ToolName {
             Self::PlanLint => "plan_lint",
             Self::ArtifactRead => "artifact_read",
             Self::ArtifactSearch => "artifact_search",
+            Self::MessageAgent => "message_agent",
+            Self::GrantAgentChainContinuation => "grant_agent_chain_continuation",
         }
     }
 }
@@ -761,6 +800,10 @@ impl ToolCatalog {
 
     pub fn definition_for_call(&self, call: &ToolCall) -> Option<&ToolDefinition> {
         self.definition(call.name())
+    }
+
+    pub fn all_definitions(&self) -> &[ToolDefinition] {
+        &self.definitions
     }
 
     pub fn automatic_model_definitions(&self) -> Vec<&ToolDefinition> {
@@ -796,6 +839,8 @@ impl ToolCatalog {
                         | ToolName::PlanLint
                         | ToolName::ArtifactRead
                         | ToolName::ArtifactSearch
+                        | ToolName::MessageAgent
+                        | ToolName::GrantAgentChainContinuation
                 )
             })
             .collect()
@@ -1133,6 +1178,26 @@ impl ToolCatalog {
                     requires_approval: false,
                 },
             },
+            ToolDefinition {
+                name: ToolName::MessageAgent,
+                family: ToolFamily::Planning,
+                description: "Send a structured message to another agent by creating a one-shot recipient session and queued background work",
+                policy: ToolPolicy {
+                    read_only: false,
+                    destructive: false,
+                    requires_approval: false,
+                },
+            },
+            ToolDefinition {
+                name: ToolName::GrantAgentChainContinuation,
+                family: ToolFamily::Planning,
+                description: "Grant exactly one additional hop to a blocked inter-agent chain",
+                policy: ToolPolicy {
+                    read_only: false,
+                    destructive: false,
+                    requires_approval: false,
+                },
+            },
         ]
     }
 }
@@ -1363,7 +1428,9 @@ impl ToolRuntime {
             | ToolCall::AddTaskNote(_)
             | ToolCall::EditTask(_)
             | ToolCall::PlanSnapshot(_)
-            | ToolCall::PlanLint(_) => Err(ToolError::InvalidPlanWrite {
+            | ToolCall::PlanLint(_)
+            | ToolCall::MessageAgent(_)
+            | ToolCall::GrantAgentChainContinuation(_) => Err(ToolError::InvalidPlanWrite {
                 reason: "planning tools must execute through the canonical session path"
                     .to_string(),
             }),
@@ -1402,10 +1469,16 @@ impl ToolRuntime {
         let mut command = Command::new(executable);
         command
             .args(args)
-            .current_dir(cwd)
+            .current_dir(&cwd)
+            // Structured exec is intentionally non-interactive: tools must not steal
+            // the operator's TTY or block on terminal input while the TUI is running.
+            .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
+        detach_command_from_terminal(&mut command);
 
+        let command_display = format_exec_command_display(executable, args);
+        let cwd_display = cwd.display().to_string();
         let child = command.spawn().map_err(|source| ToolError::ProcessIo {
             process_id: executable.to_string(),
             source,
@@ -1426,6 +1499,8 @@ impl ToolRuntime {
             process_id,
             pid_ref,
             kind,
+            command_display,
+            cwd: cwd_display,
         }))
     }
 
@@ -1508,6 +1583,23 @@ impl ToolRuntime {
     }
 }
 
+#[cfg(unix)]
+fn detach_command_from_terminal(command: &mut Command) {
+    use std::os::unix::process::CommandExt;
+
+    unsafe {
+        command.pre_exec(|| {
+            if libc::setsid() == -1 {
+                return Err(io::Error::last_os_error());
+            }
+            Ok(())
+        });
+    }
+}
+
+#[cfg(not(unix))]
+fn detach_command_from_terminal(_command: &mut Command) {}
+
 impl SharedProcessRegistry {
     fn lock(&self) -> std::sync::MutexGuard<'_, ProcessRegistryState> {
         self.inner.lock().expect("shared process registry poisoned")
@@ -1565,6 +1657,8 @@ impl ToolCall {
             Self::PlanLint(_) => ToolName::PlanLint,
             Self::ArtifactRead(_) => ToolName::ArtifactRead,
             Self::ArtifactSearch(_) => ToolName::ArtifactSearch,
+            Self::MessageAgent(_) => ToolName::MessageAgent,
+            Self::GrantAgentChainContinuation(_) => ToolName::GrantAgentChainContinuation,
         }
     }
 
@@ -1599,7 +1693,9 @@ impl ToolCall {
             | Self::AddTaskNote(_)
             | Self::EditTask(_)
             | Self::PlanSnapshot(_)
-            | Self::PlanLint(_) => None,
+            | Self::PlanLint(_)
+            | Self::MessageAgent(_)
+            | Self::GrantAgentChainContinuation(_) => None,
             Self::ArtifactRead(input) => Some(input.artifact_id.clone()),
             Self::ArtifactSearch(_) => None,
         }
@@ -1690,9 +1786,9 @@ impl ToolCall {
             }
             Self::ExecStart(input) => {
                 format!(
-                    "exec_start executable={} argc={}",
-                    input.executable,
-                    input.args.len()
+                    "exec_start cwd={} command={}",
+                    input.cwd.as_deref().unwrap_or("."),
+                    format_exec_command_display(input.executable.as_str(), &input.args)
                 )
             }
             Self::ExecWait(input) => format!("exec_wait process_id={}", input.process_id),
@@ -1719,6 +1815,14 @@ impl ToolCall {
                     "artifact_search query={} limit={}",
                     input.query, input.limit
                 )
+            }
+            Self::MessageAgent(input) => format!(
+                "message_agent target_agent_id={} message_bytes={}",
+                input.target_agent_id,
+                input.message.len()
+            ),
+            Self::GrantAgentChainContinuation(input) => {
+                format!("grant_agent_chain_continuation chain_id={}", input.chain_id)
             }
         }
     }
@@ -1919,6 +2023,18 @@ impl ToolCall {
                 }),
             "artifact_search" => serde_json::from_str(arguments)
                 .map(Self::ArtifactSearch)
+                .map_err(|source| ToolCallParseError::InvalidArguments {
+                    name: name.to_string(),
+                    source,
+                }),
+            "message_agent" => serde_json::from_str(arguments)
+                .map(Self::MessageAgent)
+                .map_err(|source| ToolCallParseError::InvalidArguments {
+                    name: name.to_string(),
+                    source,
+                }),
+            "grant_agent_chain_continuation" => serde_json::from_str(arguments)
+                .map(Self::GrantAgentChainContinuation)
                 .map_err(|source| ToolCallParseError::InvalidArguments {
                     name: name.to_string(),
                     source,
@@ -2126,10 +2242,12 @@ impl ToolOutput {
             }
             Self::WebSearch(output) => format!("web_search results={}", output.results.len()),
             Self::ProcessStart(output) => format!(
-                "{}_start process_id={} pid_ref={}",
+                "{}_start process_id={} pid_ref={} cwd={} command={}",
                 output.kind.as_str(),
                 output.process_id,
-                output.pid_ref
+                output.pid_ref,
+                output.cwd,
+                output.command_display
             ),
             Self::ProcessResult(output) => format!(
                 "process_result process_id={} status={:?} exit_code={:?}",
@@ -2166,6 +2284,18 @@ impl ToolOutput {
                     output.results.len()
                 )
             }
+            Self::MessageAgent(output) => format!(
+                "message_agent target_agent_id={} recipient_session_id={} recipient_job_id={} chain_id={} hop_count={}",
+                output.target_agent_id,
+                output.recipient_session_id,
+                output.recipient_job_id,
+                output.chain_id,
+                output.hop_count
+            ),
+            Self::GrantAgentChainContinuation(output) => format!(
+                "grant_agent_chain_continuation chain_id={} granted_hops={}",
+                output.chain_id, output.granted_hops
+            ),
         }
     }
 
@@ -2303,6 +2433,8 @@ impl ToolOutput {
                 "process_id": output.process_id,
                 "pid_ref": output.pid_ref,
                 "kind": output.kind.as_str(),
+                "cwd": output.cwd,
+                "command": output.command_display,
             })
             .to_string(),
             Self::ProcessResult(output) => json!({
@@ -2389,6 +2521,21 @@ impl ToolOutput {
                     "message_count": result.message_count,
                     "preview": result.preview,
                 })).collect::<Vec<_>>(),
+            })
+            .to_string(),
+            Self::MessageAgent(output) => json!({
+                "tool": "message_agent",
+                "target_agent_id": output.target_agent_id,
+                "recipient_session_id": output.recipient_session_id,
+                "recipient_job_id": output.recipient_job_id,
+                "chain_id": output.chain_id,
+                "hop_count": output.hop_count,
+            })
+            .to_string(),
+            Self::GrantAgentChainContinuation(output) => json!({
+                "tool": "grant_agent_chain_continuation",
+                "chain_id": output.chain_id,
+                "granted_hops": output.granted_hops,
             })
             .to_string(),
         }
@@ -2722,6 +2869,24 @@ impl ToolName {
                 "required": ["query", "limit"],
                 "additionalProperties": false,
             }),
+            Self::MessageAgent => json!({
+                "type": "object",
+                "properties": {
+                    "target_agent_id": { "type": "string", "description": "Global agent profile id to message" },
+                    "message": { "type": "string", "description": "The user-like message to deliver into a fresh recipient session" }
+                },
+                "required": ["target_agent_id", "message"],
+                "additionalProperties": false,
+            }),
+            Self::GrantAgentChainContinuation => json!({
+                "type": "object",
+                "properties": {
+                    "chain_id": { "type": "string", "description": "Blocked inter-agent chain id to extend once" },
+                    "reason": { "type": "string", "description": "Why one more hop should be allowed" }
+                },
+                "required": ["chain_id", "reason"],
+                "additionalProperties": false,
+            }),
         }
     }
 }
@@ -2842,6 +3007,27 @@ impl From<FsWriteMode> for WriteMode {
 
 fn normalize_tool_path(path: &str) -> String {
     path.replace('\\', "/")
+}
+
+fn format_exec_command_display(executable: &str, args: &[String]) -> String {
+    std::iter::once(executable.to_string())
+        .chain(args.iter().cloned())
+        .map(|part| shell_quote_exec_part(part.as_str()))
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+fn shell_quote_exec_part(part: &str) -> String {
+    if part.is_empty() {
+        return "''".to_string();
+    }
+    if part
+        .chars()
+        .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '/' | '.' | '_' | '-' | ':' | '='))
+    {
+        return part.to_string();
+    }
+    format!("'{}'", part.replace('\'', "'\"'\"'"))
 }
 
 fn replace_lines_range(
