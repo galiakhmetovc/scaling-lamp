@@ -1,0 +1,43 @@
+name: release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  build-linux-x86_64:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Build agentd
+        run: cargo build --release -p agentd
+
+      - name: Package artifacts
+        run: |
+          mkdir -p dist/linux-x86_64
+          install -m 755 target/release/agentd dist/linux-x86_64/agentd
+          tar -C dist/linux-x86_64 -czf dist/agentd-linux-x86_64.tar.gz .
+
+      - name: Upload workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: agentd-linux-x86_64
+          path: |
+            dist/linux-x86_64/agentd
+            dist/agentd-linux-x86_64.tar.gz
+
+      - name: Publish GitHub release assets
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/linux-x86_64/agentd
+            dist/agentd-linux-x86_64.tar.gz
