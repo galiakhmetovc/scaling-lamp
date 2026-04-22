@@ -11,8 +11,32 @@ pub enum AgentTemplateKind {
     Custom,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentScheduleMode {
+    Interval,
+    AfterCompletion,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentScheduleDeliveryMode {
+    FreshSession,
+    ExistingSession,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AgentTemplateKindParseError {
+    value: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AgentScheduleModeParseError {
+    value: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AgentScheduleDeliveryModeParseError {
     value: String,
 }
 
@@ -41,11 +65,40 @@ pub struct AgentSchedule {
     pub agent_profile_id: String,
     pub workspace_root: PathBuf,
     pub prompt: String,
+    pub mode: AgentScheduleMode,
+    pub delivery_mode: AgentScheduleDeliveryMode,
+    pub target_session_id: Option<String>,
     pub interval_seconds: u64,
     pub next_fire_at: i64,
+    pub enabled: bool,
     pub last_triggered_at: Option<i64>,
+    pub last_finished_at: Option<i64>,
     pub last_session_id: Option<String>,
     pub last_job_id: Option<String>,
+    pub last_result: Option<String>,
+    pub last_error: Option<String>,
+    pub created_at: i64,
+    pub updated_at: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AgentScheduleInit {
+    pub id: String,
+    pub agent_profile_id: String,
+    pub workspace_root: PathBuf,
+    pub prompt: String,
+    pub mode: AgentScheduleMode,
+    pub delivery_mode: AgentScheduleDeliveryMode,
+    pub target_session_id: Option<String>,
+    pub interval_seconds: u64,
+    pub next_fire_at: i64,
+    pub enabled: bool,
+    pub last_triggered_at: Option<i64>,
+    pub last_finished_at: Option<i64>,
+    pub last_session_id: Option<String>,
+    pub last_job_id: Option<String>,
+    pub last_result: Option<String>,
+    pub last_error: Option<String>,
     pub created_at: i64,
     pub updated_at: i64,
 }
@@ -57,6 +110,13 @@ pub enum AgentScheduleError {
     EmptyWorkspaceRoot,
     EmptyPrompt,
     ZeroIntervalSeconds,
+    MissingTargetSessionId,
+    UnexpectedTargetSessionId,
+    EmptyTargetSessionId,
+    EmptyLastSessionId,
+    EmptyLastJobId,
+    EmptyLastResult,
+    EmptyLastError,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -83,6 +143,24 @@ impl AgentTemplateKind {
     }
 }
 
+impl AgentScheduleMode {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Interval => "interval",
+            Self::AfterCompletion => "after_completion",
+        }
+    }
+}
+
+impl AgentScheduleDeliveryMode {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::FreshSession => "fresh_session",
+            Self::ExistingSession => "existing_session",
+        }
+    }
+}
+
 impl TryFrom<&str> for AgentTemplateKind {
     type Error = AgentTemplateKindParseError;
 
@@ -98,6 +176,34 @@ impl TryFrom<&str> for AgentTemplateKind {
     }
 }
 
+impl TryFrom<&str> for AgentScheduleMode {
+    type Error = AgentScheduleModeParseError;
+
+    fn try_from(value: &str) -> Result<Self, Self::Error> {
+        match value {
+            "interval" => Ok(Self::Interval),
+            "after_completion" => Ok(Self::AfterCompletion),
+            other => Err(AgentScheduleModeParseError {
+                value: other.to_string(),
+            }),
+        }
+    }
+}
+
+impl TryFrom<&str> for AgentScheduleDeliveryMode {
+    type Error = AgentScheduleDeliveryModeParseError;
+
+    fn try_from(value: &str) -> Result<Self, Self::Error> {
+        match value {
+            "fresh_session" => Ok(Self::FreshSession),
+            "existing_session" => Ok(Self::ExistingSession),
+            other => Err(AgentScheduleDeliveryModeParseError {
+                value: other.to_string(),
+            }),
+        }
+    }
+}
+
 impl fmt::Display for AgentTemplateKindParseError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(formatter, "invalid agent template kind {}", self.value)
@@ -105,6 +211,26 @@ impl fmt::Display for AgentTemplateKindParseError {
 }
 
 impl Error for AgentTemplateKindParseError {}
+
+impl fmt::Display for AgentScheduleModeParseError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(formatter, "invalid agent schedule mode {}", self.value)
+    }
+}
+
+impl Error for AgentScheduleModeParseError {}
+
+impl fmt::Display for AgentScheduleDeliveryModeParseError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            formatter,
+            "invalid agent schedule delivery mode {}",
+            self.value
+        )
+    }
+}
+
+impl Error for AgentScheduleDeliveryModeParseError {}
 
 impl AgentProfile {
     pub fn new(
@@ -161,62 +287,97 @@ impl AgentProfile {
 }
 
 impl AgentSchedule {
-    #[allow(clippy::too_many_arguments)]
-    pub fn new(
-        id: impl Into<String>,
-        agent_profile_id: impl Into<String>,
-        workspace_root: impl AsRef<Path>,
-        prompt: impl Into<String>,
-        interval_seconds: u64,
-        next_fire_at: i64,
-        last_triggered_at: Option<i64>,
-        last_session_id: Option<String>,
-        last_job_id: Option<String>,
-        created_at: i64,
-        updated_at: i64,
-    ) -> Result<Self, AgentScheduleError> {
-        let id = id.into().trim().to_string();
+    pub fn new(init: AgentScheduleInit) -> Result<Self, AgentScheduleError> {
+        let id = init.id.trim().to_string();
         if id.is_empty() {
             return Err(AgentScheduleError::EmptyId);
         }
 
-        let agent_profile_id = agent_profile_id.into().trim().to_string();
+        let agent_profile_id = init.agent_profile_id.trim().to_string();
         if agent_profile_id.is_empty() {
             return Err(AgentScheduleError::EmptyAgentProfileId);
         }
 
-        let workspace_root = workspace_root.as_ref().to_path_buf();
+        let workspace_root = init.workspace_root;
         if workspace_root.as_os_str().is_empty() {
             return Err(AgentScheduleError::EmptyWorkspaceRoot);
         }
 
-        let prompt = prompt.into().trim().to_string();
+        let prompt = init.prompt.trim().to_string();
         if prompt.is_empty() {
             return Err(AgentScheduleError::EmptyPrompt);
         }
 
-        if interval_seconds == 0 {
+        if init.interval_seconds == 0 {
             return Err(AgentScheduleError::ZeroIntervalSeconds);
         }
+
+        let target_session_id = normalize_optional_string(
+            init.target_session_id,
+            AgentScheduleError::EmptyTargetSessionId,
+        )?;
+        match init.delivery_mode {
+            AgentScheduleDeliveryMode::FreshSession if target_session_id.is_some() => {
+                return Err(AgentScheduleError::UnexpectedTargetSessionId);
+            }
+            AgentScheduleDeliveryMode::ExistingSession if target_session_id.is_none() => {
+                return Err(AgentScheduleError::MissingTargetSessionId);
+            }
+            _ => {}
+        }
+
+        let last_session_id = normalize_optional_string(
+            init.last_session_id,
+            AgentScheduleError::EmptyLastSessionId,
+        )?;
+        let last_job_id =
+            normalize_optional_string(init.last_job_id, AgentScheduleError::EmptyLastJobId)?;
+        let last_result =
+            normalize_optional_string(init.last_result, AgentScheduleError::EmptyLastResult)?;
+        let last_error =
+            normalize_optional_string(init.last_error, AgentScheduleError::EmptyLastError)?;
 
         Ok(Self {
             id,
             agent_profile_id,
             workspace_root,
             prompt,
-            interval_seconds,
-            next_fire_at,
-            last_triggered_at,
+            mode: init.mode,
+            delivery_mode: init.delivery_mode,
+            target_session_id,
+            interval_seconds: init.interval_seconds,
+            next_fire_at: init.next_fire_at,
+            enabled: init.enabled,
+            last_triggered_at: init.last_triggered_at,
+            last_finished_at: init.last_finished_at,
             last_session_id,
             last_job_id,
-            created_at,
-            updated_at,
+            last_result,
+            last_error,
+            created_at: init.created_at,
+            updated_at: init.updated_at,
         })
     }
 
     pub fn is_due(&self, now: i64) -> bool {
         now >= self.next_fire_at
     }
+}
+
+fn normalize_optional_string(
+    value: Option<String>,
+    error: AgentScheduleError,
+) -> Result<Option<String>, AgentScheduleError> {
+    value
+        .map(|raw| {
+            let trimmed = raw.trim().to_string();
+            if trimmed.is_empty() {
+                Err(error)
+            } else {
+                Ok(trimmed)
+            }
+        })
+        .transpose()
 }
 
 impl AgentChainContinuationGrant {
@@ -284,6 +445,39 @@ impl fmt::Display for AgentScheduleError {
                     "agent schedule interval_seconds must be greater than zero"
                 )
             }
+            Self::MissingTargetSessionId => {
+                write!(
+                    formatter,
+                    "agent schedule existing_session delivery requires target_session_id"
+                )
+            }
+            Self::UnexpectedTargetSessionId => {
+                write!(
+                    formatter,
+                    "agent schedule fresh_session delivery must not include target_session_id"
+                )
+            }
+            Self::EmptyTargetSessionId => {
+                write!(
+                    formatter,
+                    "agent schedule target_session_id must not be empty"
+                )
+            }
+            Self::EmptyLastSessionId => {
+                write!(
+                    formatter,
+                    "agent schedule last_session_id must not be empty"
+                )
+            }
+            Self::EmptyLastJobId => {
+                write!(formatter, "agent schedule last_job_id must not be empty")
+            }
+            Self::EmptyLastResult => {
+                write!(formatter, "agent schedule last_result must not be empty")
+            }
+            Self::EmptyLastError => {
+                write!(formatter, "agent schedule last_error must not be empty")
+            }
         }
     }
 }
@@ -308,7 +502,8 @@ impl Error for AgentChainContinuationError {}
 mod tests {
     use super::{
         AgentChainContinuationGrant, AgentProfile, AgentProfileError, AgentSchedule,
-        AgentScheduleError, AgentTemplateKind,
+        AgentScheduleDeliveryMode, AgentScheduleError, AgentScheduleInit, AgentScheduleMode,
+        AgentTemplateKind,
     };
     use std::path::PathBuf;
 
@@ -379,43 +574,157 @@ mod tests {
 
     #[test]
     fn agent_schedule_rejects_zero_interval_seconds() {
-        let error = AgentSchedule::new(
-            "judge-pulse",
-            "judge",
-            PathBuf::from("/tmp/project"),
-            "check latest changes",
-            0,
-            10,
-            None,
-            None,
-            None,
-            1,
-            1,
-        )
+        let error = AgentSchedule::new(AgentScheduleInit {
+            id: "judge-pulse".to_string(),
+            agent_profile_id: "judge".to_string(),
+            workspace_root: PathBuf::from("/tmp/project"),
+            prompt: "check latest changes".to_string(),
+            mode: AgentScheduleMode::Interval,
+            delivery_mode: AgentScheduleDeliveryMode::FreshSession,
+            target_session_id: None,
+            interval_seconds: 0,
+            next_fire_at: 10,
+            enabled: true,
+            last_triggered_at: None,
+            last_finished_at: None,
+            last_session_id: None,
+            last_job_id: None,
+            last_result: None,
+            last_error: None,
+            created_at: 1,
+            updated_at: 1,
+        })
         .expect_err("zero interval should fail");
 
         assert_eq!(error, AgentScheduleError::ZeroIntervalSeconds);
     }
 
     #[test]
-    fn agent_schedule_is_due_when_next_fire_at_has_arrived() {
-        let schedule = AgentSchedule::new(
-            "judge-pulse",
-            "judge",
-            PathBuf::from("/tmp/project"),
-            "check latest changes",
-            300,
-            10,
-            None,
-            None,
-            None,
-            1,
-            1,
-        )
+    fn agent_schedule_supports_interval_and_fresh_session_delivery() {
+        let schedule = AgentSchedule::new(AgentScheduleInit {
+            id: "judge-pulse".to_string(),
+            agent_profile_id: "judge".to_string(),
+            workspace_root: PathBuf::from("/tmp/project"),
+            prompt: "check latest changes".to_string(),
+            mode: AgentScheduleMode::Interval,
+            delivery_mode: AgentScheduleDeliveryMode::FreshSession,
+            target_session_id: None,
+            interval_seconds: 300,
+            next_fire_at: 10,
+            enabled: true,
+            last_triggered_at: None,
+            last_finished_at: None,
+            last_session_id: None,
+            last_job_id: None,
+            last_result: None,
+            last_error: None,
+            created_at: 1,
+            updated_at: 1,
+        })
         .expect("schedule");
 
+        assert_eq!(schedule.mode, AgentScheduleMode::Interval);
+        assert_eq!(
+            schedule.delivery_mode,
+            AgentScheduleDeliveryMode::FreshSession
+        );
+        assert_eq!(schedule.target_session_id, None);
+        assert!(schedule.enabled);
         assert!(!schedule.is_due(9));
         assert!(schedule.is_due(10));
         assert!(schedule.is_due(11));
+    }
+
+    #[test]
+    fn agent_schedule_supports_existing_session_disabled_and_terminal_fields() {
+        let schedule = AgentSchedule::new(AgentScheduleInit {
+            id: "judge-review-loop".to_string(),
+            agent_profile_id: "judge".to_string(),
+            workspace_root: PathBuf::from("/tmp/project"),
+            prompt: "review the previous result".to_string(),
+            mode: AgentScheduleMode::AfterCompletion,
+            delivery_mode: AgentScheduleDeliveryMode::ExistingSession,
+            target_session_id: Some("session-bound".to_string()),
+            interval_seconds: 600,
+            next_fire_at: 42,
+            enabled: false,
+            last_triggered_at: Some(20),
+            last_finished_at: Some(30),
+            last_session_id: Some("session-bound".to_string()),
+            last_job_id: Some("job-schedule-prev".to_string()),
+            last_result: Some("failed".to_string()),
+            last_error: Some("tool execution failed".to_string()),
+            created_at: 10,
+            updated_at: 11,
+        })
+        .expect("schedule");
+
+        assert_eq!(schedule.mode, AgentScheduleMode::AfterCompletion);
+        assert_eq!(
+            schedule.delivery_mode,
+            AgentScheduleDeliveryMode::ExistingSession
+        );
+        assert_eq!(schedule.target_session_id.as_deref(), Some("session-bound"));
+        assert!(!schedule.enabled);
+        assert_eq!(schedule.last_finished_at, Some(30));
+        assert_eq!(schedule.last_result.as_deref(), Some("failed"));
+        assert_eq!(
+            schedule.last_error.as_deref(),
+            Some("tool execution failed")
+        );
+    }
+
+    #[test]
+    fn agent_schedule_rejects_existing_session_without_target_session_id() {
+        let error = AgentSchedule::new(AgentScheduleInit {
+            id: "judge-review-loop".to_string(),
+            agent_profile_id: "judge".to_string(),
+            workspace_root: PathBuf::from("/tmp/project"),
+            prompt: "review the previous result".to_string(),
+            mode: AgentScheduleMode::AfterCompletion,
+            delivery_mode: AgentScheduleDeliveryMode::ExistingSession,
+            target_session_id: None,
+            interval_seconds: 600,
+            next_fire_at: 42,
+            enabled: true,
+            last_triggered_at: None,
+            last_finished_at: None,
+            last_session_id: None,
+            last_job_id: None,
+            last_result: None,
+            last_error: None,
+            created_at: 10,
+            updated_at: 11,
+        })
+        .expect_err("existing_session should require target_session_id");
+
+        assert_eq!(error, AgentScheduleError::MissingTargetSessionId);
+    }
+
+    #[test]
+    fn agent_schedule_rejects_target_session_id_for_fresh_session() {
+        let error = AgentSchedule::new(AgentScheduleInit {
+            id: "judge-pulse".to_string(),
+            agent_profile_id: "judge".to_string(),
+            workspace_root: PathBuf::from("/tmp/project"),
+            prompt: "check latest changes".to_string(),
+            mode: AgentScheduleMode::Interval,
+            delivery_mode: AgentScheduleDeliveryMode::FreshSession,
+            target_session_id: Some("session-bound".to_string()),
+            interval_seconds: 300,
+            next_fire_at: 10,
+            enabled: true,
+            last_triggered_at: None,
+            last_finished_at: None,
+            last_session_id: None,
+            last_job_id: None,
+            last_result: None,
+            last_error: None,
+            created_at: 1,
+            updated_at: 1,
+        })
+        .expect_err("fresh_session should reject target_session_id");
+
+        assert_eq!(error, AgentScheduleError::UnexpectedTargetSessionId);
     }
 }

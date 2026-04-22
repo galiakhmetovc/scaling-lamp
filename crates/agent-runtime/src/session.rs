@@ -2,6 +2,8 @@ use serde::{Deserialize, Serialize};
 use std::error::Error;
 use std::fmt;
 
+pub const SCHEDULE_INPUT_METADATA_PREFIX: &str = "schedule_input:";
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Session {
     pub id: String,
@@ -51,6 +53,12 @@ pub enum MessageRole {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MessageRoleParseError {
     value: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ScheduledInputMetadata {
+    pub schedule_id: String,
+    pub message_id: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -166,6 +174,26 @@ fn normalize_skill_name(skill_name: &str) -> Option<String> {
     } else {
         Some(trimmed)
     }
+}
+
+pub fn scheduled_input_metadata(
+    schedule_id: impl Into<String>,
+    message_id: impl Into<String>,
+) -> String {
+    let payload = ScheduledInputMetadata {
+        schedule_id: schedule_id.into(),
+        message_id: message_id.into(),
+    };
+    format!(
+        "{SCHEDULE_INPUT_METADATA_PREFIX}{}",
+        serde_json::to_string(&payload).expect("serialize scheduled input metadata")
+    )
+}
+
+pub fn parse_scheduled_input_metadata(content: &str) -> Option<ScheduledInputMetadata> {
+    content
+        .strip_prefix(SCHEDULE_INPUT_METADATA_PREFIX)
+        .and_then(|payload| serde_json::from_str(payload).ok())
 }
 
 impl PromptOverride {
@@ -363,6 +391,7 @@ impl Error for MessageRoleParseError {}
 mod tests {
     use super::{
         MessageRole, PromptOverride, Session, SessionSettings, Transcript, TranscriptEntry,
+        parse_scheduled_input_metadata, scheduled_input_metadata,
     };
 
     #[test]
@@ -439,5 +468,15 @@ mod tests {
         assert!(settings.enable_skill("rust-debug"));
         assert_eq!(settings.enabled_skills, vec!["rust-debug".to_string()]);
         assert!(settings.disabled_skills.is_empty());
+    }
+
+    #[test]
+    fn scheduled_input_metadata_round_trips() {
+        let encoded = scheduled_input_metadata("judge-pulse", "transcript-msg-1");
+        let decoded =
+            parse_scheduled_input_metadata(&encoded).expect("decode scheduled input metadata");
+
+        assert_eq!(decoded.schedule_id, "judge-pulse");
+        assert_eq!(decoded.message_id, "transcript-msg-1");
     }
 }

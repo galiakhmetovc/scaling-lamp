@@ -1,6 +1,8 @@
 use agent_runtime::agent::{
     AgentChainContinuationError, AgentChainContinuationGrant, AgentProfile, AgentProfileError,
-    AgentSchedule, AgentScheduleError, AgentTemplateKind, AgentTemplateKindParseError,
+    AgentSchedule, AgentScheduleDeliveryMode, AgentScheduleDeliveryModeParseError,
+    AgentScheduleError, AgentScheduleInit, AgentScheduleMode, AgentScheduleModeParseError,
+    AgentTemplateKind, AgentTemplateKindParseError,
 };
 use agent_runtime::context::{ContextOffloadSnapshot, ContextSummary};
 use agent_runtime::inbox::{
@@ -66,11 +68,18 @@ pub struct AgentScheduleRecord {
     pub agent_profile_id: String,
     pub workspace_root: String,
     pub prompt: String,
+    pub mode: String,
+    pub delivery_mode: String,
+    pub target_session_id: Option<String>,
     pub interval_seconds: i64,
     pub next_fire_at: i64,
+    pub enabled: bool,
     pub last_triggered_at: Option<i64>,
+    pub last_finished_at: Option<i64>,
     pub last_session_id: Option<String>,
     pub last_job_id: Option<String>,
+    pub last_result: Option<String>,
+    pub last_error: Option<String>,
     pub created_at: i64,
     pub updated_at: i64,
 }
@@ -209,6 +218,8 @@ pub enum RecordConversionError {
     InvalidAgentContinuationHops { value: i64 },
     InvalidAgentProfile(AgentProfileError),
     InvalidAgentSchedule(AgentScheduleError),
+    InvalidAgentScheduleMode(AgentScheduleModeParseError),
+    InvalidAgentScheduleDeliveryMode(AgentScheduleDeliveryModeParseError),
     InvalidAgentScheduleInterval { value: i64 },
     InvalidAgentTemplateKind(AgentTemplateKindParseError),
     InvalidAgentAllowedTools(serde_json::Error),
@@ -374,12 +385,19 @@ impl From<&AgentSchedule> for AgentScheduleRecord {
             agent_profile_id: schedule.agent_profile_id.clone(),
             workspace_root: schedule.workspace_root.display().to_string(),
             prompt: schedule.prompt.clone(),
+            mode: schedule.mode.as_str().to_string(),
+            delivery_mode: schedule.delivery_mode.as_str().to_string(),
+            target_session_id: schedule.target_session_id.clone(),
             interval_seconds: i64::try_from(schedule.interval_seconds)
                 .expect("agent schedule interval must fit in i64"),
             next_fire_at: schedule.next_fire_at,
+            enabled: schedule.enabled,
             last_triggered_at: schedule.last_triggered_at,
+            last_finished_at: schedule.last_finished_at,
             last_session_id: schedule.last_session_id.clone(),
             last_job_id: schedule.last_job_id.clone(),
+            last_result: schedule.last_result.clone(),
+            last_error: schedule.last_error.clone(),
             created_at: schedule.created_at,
             updated_at: schedule.updated_at,
         }
@@ -390,23 +408,32 @@ impl TryFrom<AgentScheduleRecord> for AgentSchedule {
     type Error = RecordConversionError;
 
     fn try_from(record: AgentScheduleRecord) -> Result<Self, Self::Error> {
-        AgentSchedule::new(
-            record.id,
-            record.agent_profile_id,
-            record.workspace_root,
-            record.prompt,
-            u64::try_from(record.interval_seconds).map_err(|_| {
+        AgentSchedule::new(AgentScheduleInit {
+            id: record.id,
+            agent_profile_id: record.agent_profile_id,
+            workspace_root: record.workspace_root.into(),
+            prompt: record.prompt,
+            mode: AgentScheduleMode::try_from(record.mode.as_str())
+                .map_err(RecordConversionError::InvalidAgentScheduleMode)?,
+            delivery_mode: AgentScheduleDeliveryMode::try_from(record.delivery_mode.as_str())
+                .map_err(RecordConversionError::InvalidAgentScheduleDeliveryMode)?,
+            target_session_id: record.target_session_id,
+            interval_seconds: u64::try_from(record.interval_seconds).map_err(|_| {
                 RecordConversionError::InvalidAgentScheduleInterval {
                     value: record.interval_seconds,
                 }
             })?,
-            record.next_fire_at,
-            record.last_triggered_at,
-            record.last_session_id,
-            record.last_job_id,
-            record.created_at,
-            record.updated_at,
-        )
+            next_fire_at: record.next_fire_at,
+            enabled: record.enabled,
+            last_triggered_at: record.last_triggered_at,
+            last_finished_at: record.last_finished_at,
+            last_session_id: record.last_session_id,
+            last_job_id: record.last_job_id,
+            last_result: record.last_result,
+            last_error: record.last_error,
+            created_at: record.created_at,
+            updated_at: record.updated_at,
+        })
         .map_err(RecordConversionError::InvalidAgentSchedule)
     }
 }
@@ -825,6 +852,12 @@ impl fmt::Display for RecordConversionError {
             Self::InvalidAgentSchedule(source) => {
                 write!(formatter, "invalid agent schedule: {source}")
             }
+            Self::InvalidAgentScheduleMode(source) => {
+                write!(formatter, "invalid agent schedule mode: {source}")
+            }
+            Self::InvalidAgentScheduleDeliveryMode(source) => {
+                write!(formatter, "invalid agent schedule delivery mode: {source}")
+            }
             Self::InvalidAgentScheduleInterval { value } => {
                 write!(
                     formatter,
@@ -995,6 +1028,8 @@ impl Error for RecordConversionError {
             Self::InvalidAgentContinuationHops { .. } => None,
             Self::InvalidAgentProfile(source) => Some(source),
             Self::InvalidAgentSchedule(source) => Some(source),
+            Self::InvalidAgentScheduleMode(source) => Some(source),
+            Self::InvalidAgentScheduleDeliveryMode(source) => Some(source),
             Self::InvalidAgentScheduleInterval { .. } => None,
             Self::InvalidAgentTemplateKind(source) => Some(source),
             Self::InvalidAgentAllowedTools(source) => Some(source),

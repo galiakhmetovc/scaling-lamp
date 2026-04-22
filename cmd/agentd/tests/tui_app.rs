@@ -25,6 +25,7 @@ fn summary(id: &str, title: &str) -> SessionSummary {
         title: title.to_string(),
         agent_profile_id: "default".to_string(),
         agent_name: "Default".to_string(),
+        scheduled_by: None,
         model: Some("glm-5-turbo".to_string()),
         reasoning_visible: true,
         think_level: Some("medium".to_string()),

@@ -150,6 +150,7 @@ impl From<SessionSummaryResponse> for SessionSummary {
             title: value.title,
             agent_profile_id: value.agent_profile_id,
             agent_name: value.agent_name,
+            scheduled_by: value.scheduled_by,
             model: value.model,
             reasoning_visible: value.reasoning_visible,
             think_level: value.think_level,

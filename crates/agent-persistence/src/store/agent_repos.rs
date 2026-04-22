@@ -170,20 +170,38 @@ impl AgentRepository for PersistenceStore {
     fn put_agent_schedule(&self, record: &AgentScheduleRecord) -> Result<(), StoreError> {
         validate_identifier(&record.id)?;
         validate_identifier(&record.agent_profile_id)?;
+        if let Some(target_session_id) = record.target_session_id.as_deref() {
+            validate_identifier(target_session_id)?;
+        }
+        if let Some(last_session_id) = record.last_session_id.as_deref() {
+            validate_identifier(last_session_id)?;
+        }
+        if let Some(last_job_id) = record.last_job_id.as_deref() {
+            validate_identifier(last_job_id)?;
+        }
         self.connection.execute(
             "INSERT INTO agent_schedules (
-                id, agent_profile_id, workspace_root, prompt, interval_seconds, next_fire_at,
-                last_triggered_at, last_session_id, last_job_id, created_at, updated_at
-             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)
+                id, agent_profile_id, workspace_root, prompt, mode, delivery_mode,
+                target_session_id, interval_seconds, next_fire_at, enabled, last_triggered_at,
+                last_finished_at, last_session_id, last_job_id, last_result, last_error,
+                created_at, updated_at
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18)
              ON CONFLICT(id) DO UPDATE SET
                 agent_profile_id = excluded.agent_profile_id,
                 workspace_root = excluded.workspace_root,
                 prompt = excluded.prompt,
+                mode = excluded.mode,
+                delivery_mode = excluded.delivery_mode,
+                target_session_id = excluded.target_session_id,
                 interval_seconds = excluded.interval_seconds,
                 next_fire_at = excluded.next_fire_at,
+                enabled = excluded.enabled,
                 last_triggered_at = excluded.last_triggered_at,
+                last_finished_at = excluded.last_finished_at,
                 last_session_id = excluded.last_session_id,
                 last_job_id = excluded.last_job_id,
+                last_result = excluded.last_result,
+                last_error = excluded.last_error,
                 created_at = excluded.created_at,
                 updated_at = excluded.updated_at",
             params![
@@ -191,11 +209,18 @@ impl AgentRepository for PersistenceStore {
                 record.agent_profile_id,
                 record.workspace_root,
                 record.prompt,
+                record.mode,
+                record.delivery_mode,
+                record.target_session_id,
                 record.interval_seconds,
                 record.next_fire_at,
+                record.enabled,
                 record.last_triggered_at,
+                record.last_finished_at,
                 record.last_session_id,
                 record.last_job_id,
+                record.last_result,
+                record.last_error,
                 record.created_at,
                 record.updated_at,
             ],
@@ -206,8 +231,10 @@ impl AgentRepository for PersistenceStore {
     fn get_agent_schedule(&self, id: &str) -> Result<Option<AgentScheduleRecord>, StoreError> {
         self.connection
             .query_row(
-                "SELECT id, agent_profile_id, workspace_root, prompt, interval_seconds, next_fire_at,
-                        last_triggered_at, last_session_id, last_job_id, created_at, updated_at
+                "SELECT id, agent_profile_id, workspace_root, prompt, mode, delivery_mode,
+                        target_session_id, interval_seconds, next_fire_at, enabled,
+                        last_triggered_at, last_finished_at, last_session_id, last_job_id,
+                        last_result, last_error, created_at, updated_at
                  FROM agent_schedules
                  WHERE id = ?1",
                 [id],
@@ -217,13 +244,20 @@ impl AgentRepository for PersistenceStore {
                         agent_profile_id: row.get(1)?,
                         workspace_root: row.get(2)?,
                         prompt: row.get(3)?,
-                        interval_seconds: row.get(4)?,
-                        next_fire_at: row.get(5)?,
-                        last_triggered_at: row.get(6)?,
-                        last_session_id: row.get(7)?,
-                        last_job_id: row.get(8)?,
-                        created_at: row.get(9)?,
-                        updated_at: row.get(10)?,
+                        mode: row.get(4)?,
+                        delivery_mode: row.get(5)?,
+                        target_session_id: row.get(6)?,
+                        interval_seconds: row.get(7)?,
+                        next_fire_at: row.get(8)?,
+                        enabled: row.get(9)?,
+                        last_triggered_at: row.get(10)?,
+                        last_finished_at: row.get(11)?,
+                        last_session_id: row.get(12)?,
+                        last_job_id: row.get(13)?,
+                        last_result: row.get(14)?,
+                        last_error: row.get(15)?,
+                        created_at: row.get(16)?,
+                        updated_at: row.get(17)?,
                     })
                 },
             )
@@ -233,8 +267,10 @@ impl AgentRepository for PersistenceStore {
 
     fn list_agent_schedules(&self) -> Result<Vec<AgentScheduleRecord>, StoreError> {
         let mut statement = self.connection.prepare(
-            "SELECT id, agent_profile_id, workspace_root, prompt, interval_seconds, next_fire_at,
-                    last_triggered_at, last_session_id, last_job_id, created_at, updated_at
+            "SELECT id, agent_profile_id, workspace_root, prompt, mode, delivery_mode,
+                    target_session_id, interval_seconds, next_fire_at, enabled,
+                    last_triggered_at, last_finished_at, last_session_id, last_job_id,
+                    last_result, last_error, created_at, updated_at
              FROM agent_schedules
              ORDER BY created_at ASC, id ASC",
         )?;
@@ -247,13 +283,20 @@ impl AgentRepository for PersistenceStore {
                 agent_profile_id: row.get(1)?,
                 workspace_root: row.get(2)?,
                 prompt: row.get(3)?,
-                interval_seconds: row.get(4)?,
-                next_fire_at: row.get(5)?,
-                last_triggered_at: row.get(6)?,
-                last_session_id: row.get(7)?,
-                last_job_id: row.get(8)?,
-                created_at: row.get(9)?,
-                updated_at: row.get(10)?,
+                mode: row.get(4)?,
+                delivery_mode: row.get(5)?,
+                target_session_id: row.get(6)?,
+                interval_seconds: row.get(7)?,
+                next_fire_at: row.get(8)?,
+                enabled: row.get(9)?,
+                last_triggered_at: row.get(10)?,
+                last_finished_at: row.get(11)?,
+                last_session_id: row.get(12)?,
+                last_job_id: row.get(13)?,
+                last_result: row.get(14)?,
+                last_error: row.get(15)?,
+                created_at: row.get(16)?,
+                updated_at: row.get(17)?,
             });
         }
 

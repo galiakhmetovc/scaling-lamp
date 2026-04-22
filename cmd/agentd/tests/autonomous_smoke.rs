@@ -185,8 +185,10 @@ fn spawn_json_server(body: &'static str) -> (String, Receiver<String>, thread::J
         .expect("set nonblocking listener");
     let address = listener.local_addr().expect("local addr");
     let (tx, rx) = mpsc::channel();
+    let (ready_tx, ready_rx) = mpsc::channel();
 
     let handle = thread::spawn(move || {
+        ready_tx.send(()).expect("send server ready");
         let started_at = std::time::Instant::now();
         let mut served_requests = 0usize;
         loop {
@@ -257,6 +259,7 @@ fn spawn_json_server(body: &'static str) -> (String, Receiver<String>, thread::J
             served_requests += 1;
         }
     });
+    ready_rx.recv().expect("await server ready");
 
     (format!("http://{}", address), rx, handle)
 }

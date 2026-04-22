@@ -97,6 +97,11 @@ fn background_worker_fires_due_agent_schedule_into_fresh_session_without_self_wa
         session.delegation_label.as_deref(),
         Some("agent-schedule:judge-pulse")
     );
+    let summaries = app
+        .list_session_summaries()
+        .expect("list session summaries");
+    assert_eq!(summaries.len(), 1);
+    assert_eq!(summaries[0].scheduled_by.as_deref(), Some("judge-pulse"));
 
     let jobs = store.list_jobs().expect("list jobs");
     assert_eq!(jobs.len(), 1);
@@ -137,4 +142,52 @@ fn background_worker_fires_due_agent_schedule_into_fresh_session_without_self_wa
     let normalized_request = request.to_ascii_lowercase();
     assert!(normalized_request.contains("check the latest diff and summarize it"));
     assert!(normalized_request.contains("judge"));
+}
+
+#[test]
+fn session_transcript_renders_schedule_origin_messages_with_visible_label() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let app = build_from_config(AppConfig {
+        data_dir: temp.path().join("state-root"),
+        ..AppConfig::default()
+    })
+    .expect("build app");
+    let session = app
+        .create_session_auto(Some("Scheduled target"))
+        .expect("create session");
+    let store = PersistenceStore::open(&app.persistence).expect("open store");
+
+    store
+        .put_transcript(&agent_persistence::TranscriptRecord::from(
+            &TranscriptEntry::system(
+                "transcript-schedule-meta",
+                session.id.clone(),
+                None,
+                scheduled_input_metadata("judge-pulse", "transcript-schedule-user"),
+                10,
+            ),
+        ))
+        .expect("put schedule metadata");
+    store
+        .put_transcript(&agent_persistence::TranscriptRecord::from(
+            &TranscriptEntry::user(
+                "transcript-schedule-user",
+                session.id.clone(),
+                None,
+                "check the latest diff and summarize it",
+                11,
+            ),
+        ))
+        .expect("put scheduled user message");
+
+    let transcript = app
+        .session_transcript(&session.id)
+        .expect("render transcript view");
+
+    assert_eq!(transcript.entries.len(), 1);
+    assert_eq!(transcript.entries[0].role, "расписание: judge-pulse");
+    assert_eq!(
+        transcript.entries[0].content,
+        "check the latest diff and summarize it"
+    );
 }

@@ -10,7 +10,8 @@ use crate::{
     TranscriptRepository,
 };
 use agent_runtime::agent::{
-    AgentChainContinuationGrant, AgentProfile, AgentSchedule, AgentTemplateKind,
+    AgentChainContinuationGrant, AgentProfile, AgentSchedule, AgentScheduleDeliveryMode,
+    AgentScheduleInit, AgentScheduleMode, AgentTemplateKind,
 };
 use agent_runtime::context::{ContextOffloadPayload, ContextOffloadRef, ContextOffloadSnapshot};
 use agent_runtime::mission::JobExecutionInput;
@@ -297,19 +298,26 @@ fn agent_repository_round_trips_schedules() {
     });
     let store = super::PersistenceStore::open(&scaffold).expect("open store");
 
-    let schedule = AgentSchedule::new(
-        "judge-pulse",
-        "judge",
-        scaffold.config.data_dir.join("workspace"),
-        "check the latest diff",
-        300,
-        30,
-        Some(20),
-        Some("session-schedule-prev".to_string()),
-        Some("job-schedule-prev".to_string()),
-        10,
-        11,
-    )
+    let schedule = AgentSchedule::new(AgentScheduleInit {
+        id: "judge-pulse".to_string(),
+        agent_profile_id: "judge".to_string(),
+        workspace_root: scaffold.config.data_dir.join("workspace"),
+        prompt: "check the latest diff".to_string(),
+        mode: AgentScheduleMode::AfterCompletion,
+        delivery_mode: AgentScheduleDeliveryMode::ExistingSession,
+        target_session_id: Some("session-bound".to_string()),
+        interval_seconds: 300,
+        next_fire_at: 30,
+        enabled: false,
+        last_triggered_at: Some(20),
+        last_finished_at: Some(24),
+        last_session_id: Some("session-schedule-prev".to_string()),
+        last_job_id: Some("job-schedule-prev".to_string()),
+        last_result: Some("failed".to_string()),
+        last_error: Some("tool execution failed".to_string()),
+        created_at: 10,
+        updated_at: 11,
+    })
     .expect("schedule");
     let record = AgentScheduleRecord::from(&schedule);
 
@@ -450,6 +458,66 @@ fn open_migrates_legacy_sessions_with_default_agent_profile_id() {
             updated_at: 2,
         })
     );
+}
+
+#[test]
+fn open_migrates_legacy_agent_schedules_with_delivery_defaults() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let scaffold = PersistenceScaffold::from_config(crate::AppConfig {
+        data_dir: temp.path().join("state-root"),
+        ..crate::AppConfig::default()
+    });
+
+    fs::create_dir_all(
+        scaffold
+            .stores
+            .metadata_db
+            .parent()
+            .unwrap_or(scaffold.stores.metadata_db.as_path()),
+    )
+    .expect("create db dir");
+
+    let connection = rusqlite::Connection::open(&scaffold.stores.metadata_db).expect("open sqlite");
+    connection
+        .execute_batch(
+            "PRAGMA foreign_keys = ON;
+             CREATE TABLE agent_schedules (
+                 id TEXT PRIMARY KEY,
+                 agent_profile_id TEXT NOT NULL,
+                 workspace_root TEXT NOT NULL,
+                 prompt TEXT NOT NULL,
+                 interval_seconds INTEGER NOT NULL,
+                 next_fire_at INTEGER NOT NULL,
+                 last_triggered_at INTEGER,
+                 last_session_id TEXT,
+                 last_job_id TEXT,
+                 created_at INTEGER NOT NULL,
+                 updated_at INTEGER NOT NULL
+             );
+             INSERT INTO agent_schedules (
+                 id, agent_profile_id, workspace_root, prompt, interval_seconds, next_fire_at,
+                 last_triggered_at, last_session_id, last_job_id, created_at, updated_at
+             ) VALUES (
+                 'judge-pulse', 'judge', '/workspace/project', 'check latest diff',
+                 300, 42, 12, 'session-schedule-prev', 'job-schedule-prev', 10, 11
+             );",
+        )
+        .expect("create legacy agent_schedules");
+    drop(connection);
+
+    let store = super::PersistenceStore::open(&scaffold).expect("open migrated store");
+    let migrated = store
+        .get_agent_schedule("judge-pulse")
+        .expect("get migrated schedule")
+        .expect("schedule exists");
+
+    assert_eq!(migrated.mode, "interval");
+    assert_eq!(migrated.delivery_mode, "fresh_session");
+    assert_eq!(migrated.target_session_id, None);
+    assert!(migrated.enabled);
+    assert_eq!(migrated.last_finished_at, None);
+    assert_eq!(migrated.last_result, None);
+    assert_eq!(migrated.last_error, None);
 }
 
 #[test]

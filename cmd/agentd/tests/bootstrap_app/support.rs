@@ -20,7 +20,9 @@ pub(crate) use agent_runtime::run::{
     ApprovalRequest, DelegateRun, RunEngine, RunSnapshot, RunStatus,
 };
 pub(crate) use agent_runtime::scheduler::{MissionVerificationSummary, SupervisorAction};
-pub(crate) use agent_runtime::session::{Session, SessionSettings};
+pub(crate) use agent_runtime::session::{
+    Session, SessionSettings, TranscriptEntry, scheduled_input_metadata,
+};
 pub(crate) use agent_runtime::tool::{FsWriteInput, ToolCall};
 pub(crate) use agent_runtime::verification::VerificationStatus;
 pub(crate) use agent_runtime::verification::{CheckOutcome, EvidenceBundle};
@@ -66,8 +68,10 @@ pub(crate) fn spawn_sse_server_sequence(
     let listener = TcpListener::bind("127.0.0.1:0").expect("bind listener");
     let address = listener.local_addr().expect("local addr");
     let (sender, receiver) = mpsc::channel();
+    let (ready_tx, ready_rx) = mpsc::channel();
 
     let handle = thread::spawn(move || {
+        ready_tx.send(()).expect("send server ready");
         for body in bodies {
             let (mut stream, _) = listener.accept().expect("accept connection");
             stream
@@ -111,6 +115,7 @@ pub(crate) fn spawn_sse_server_sequence(
             sender.send(raw_request).expect("send request");
         }
     });
+    ready_rx.recv().expect("await server ready");
 
     (format!("http://{address}/v1"), receiver, handle)
 }
@@ -121,8 +126,10 @@ pub(crate) fn spawn_json_server_sequence(
     let listener = TcpListener::bind("127.0.0.1:0").expect("bind listener");
     let address = listener.local_addr().expect("local addr");
     let (sender, receiver) = mpsc::channel();
+    let (ready_tx, ready_rx) = mpsc::channel();
 
     let handle = thread::spawn(move || {
+        ready_tx.send(()).expect("send server ready");
         for body in bodies {
             let (mut stream, _) = listener.accept().expect("accept connection");
             stream
@@ -164,6 +171,7 @@ pub(crate) fn spawn_json_server_sequence(
             stream.flush().expect("flush response");
         }
     });
+    ready_rx.recv().expect("await server ready");
 
     (format!("http://{address}"), receiver, handle)
 }
@@ -174,8 +182,10 @@ pub(crate) fn spawn_json_server_status_sequence(
     let listener = TcpListener::bind("127.0.0.1:0").expect("bind listener");
     let address = listener.local_addr().expect("local addr");
     let (sender, receiver) = mpsc::channel();
+    let (ready_tx, ready_rx) = mpsc::channel();
 
     let handle = thread::spawn(move || {
+        ready_tx.send(()).expect("send server ready");
         for (status_code, body) in responses {
             let (mut stream, _) = listener.accept().expect("accept connection");
             stream
@@ -230,6 +240,7 @@ pub(crate) fn spawn_json_server_status_sequence(
             stream.flush().expect("flush response");
         }
     });
+    ready_rx.recv().expect("await server ready");
 
     (format!("http://{address}"), receiver, handle)
 }

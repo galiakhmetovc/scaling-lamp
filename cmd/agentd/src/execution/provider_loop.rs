@@ -1848,6 +1848,7 @@ impl ExecutionService {
         instructions: Option<String>,
         run: &mut RunEngine,
         initial_loop_state: Option<ProviderLoopState>,
+        auto_approve_override: Option<bool>,
         now: i64,
         interrupt_after_tool_step: Option<&AtomicBool>,
         observer: &mut Option<&mut dyn FnMut(ChatExecutionEvent)>,
@@ -1861,7 +1862,8 @@ impl ExecutionService {
             &agent_profile,
         );
         let mut tool_runtime = self.tool_runtime();
-        let auto_approve = self.session_auto_approve_enabled(store, session_id)?;
+        let auto_approve =
+            auto_approve_override.unwrap_or(self.session_auto_approve_enabled(store, session_id)?);
         let mut cursor = ProviderLoopCursor::new(
             provider,
             initial_loop_state,
@@ -1920,6 +1922,9 @@ impl ExecutionService {
             let observed = match self.request_provider_response(provider, &request, observer) {
                 Ok(observed) => observed,
                 Err(ExecutionError::Provider(error)) if error.is_transient() => {
+                    if auto_approve {
+                        return Err(ExecutionError::Provider(error));
+                    }
                     return Err(
                         self.pause_for_transient_provider_retry(run, &cursor, &error, now, store)?
                     );

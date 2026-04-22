@@ -3,8 +3,11 @@ use crate::agents;
 use agent_persistence::JobRepository;
 use agent_runtime::mission::JobSpec;
 use agent_runtime::run::{RunSnapshot, RunStatus, RunStepKind};
-use agent_runtime::session::{Session, TranscriptEntry};
+use agent_runtime::session::{
+    MessageRole, Session, TranscriptEntry, parse_scheduled_input_metadata,
+};
 use agent_runtime::skills::{resolve_session_skill_status, scan_skill_catalog_with_overrides};
+use std::collections::HashMap;
 use time::OffsetDateTime;
 use time::UtcOffset;
 use time::format_description::well_known::Rfc3339;
@@ -23,21 +26,43 @@ impl App {
             });
         }
 
-        let mut entries = store
+        let entries = store
             .list_transcripts_for_session(session_id)?
             .into_iter()
             .map(TranscriptEntry::try_from)
             .collect::<Result<Vec<_>, _>>()
-            .map_err(BootstrapError::RecordConversion)?
+            .map_err(BootstrapError::RecordConversion)?;
+        let schedule_labels = entries
+            .iter()
+            .filter_map(|entry| {
+                (entry.role == MessageRole::System)
+                    .then(|| parse_scheduled_input_metadata(&entry.content))
+                    .flatten()
+                    .map(|metadata| (metadata.message_id, metadata.schedule_id))
+            })
+            .collect::<HashMap<_, _>>();
+        let mut entries = entries
             .into_iter()
-            .map(|entry| SessionTranscriptLine {
-                role: entry.role.as_str().to_string(),
-                content: entry.content,
-                run_id: entry.run_id,
-                created_at: entry.created_at,
-                tool_name: None,
-                tool_status: None,
-                approval_id: None,
+            .filter_map(|entry| {
+                if entry.role == MessageRole::System
+                    && parse_scheduled_input_metadata(&entry.content).is_some()
+                {
+                    return None;
+                }
+
+                let role = schedule_labels
+                    .get(&entry.id)
+                    .map(|schedule_id| format!("расписание: {schedule_id}"))
+                    .unwrap_or_else(|| entry.role.as_str().to_string());
+                Some(SessionTranscriptLine {
+                    role,
+                    content: entry.content,
+                    run_id: entry.run_id,
+                    created_at: entry.created_at,
+                    tool_name: None,
+                    tool_status: None,
+                    approval_id: None,
+                })
             })
             .collect::<Vec<_>>();
 

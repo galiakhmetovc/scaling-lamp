@@ -1,9 +1,11 @@
 use super::*;
 use crate::http::types::{A2ADelegationCompletionOutcomeRequest, A2ADelegationCompletionRequest};
-use agent_runtime::agent::AgentSchedule;
+use agent_runtime::agent::{
+    AgentProfile, AgentSchedule, AgentScheduleDeliveryMode, AgentScheduleMode,
+};
 use agent_runtime::delegation::DelegateResultPackage;
 use agent_runtime::inbox::SessionInboxEvent;
-use agent_runtime::mission::JobKind;
+use agent_runtime::mission::{JobExecutionInput, JobKind, JobStatus};
 use agent_runtime::run::RunStatus;
 use agent_runtime::session::{Session, TranscriptEntry};
 use std::collections::BTreeSet;
@@ -42,8 +44,12 @@ impl ExecutionService {
                 self.cancel_background_job(store, &job.id, now)?;
                 continue;
             }
+            if self.should_defer_background_job(store, &job)? {
+                continue;
+            }
             self.claim_background_job(store, &job.id, now)?;
-            match self.execute_background_job(store, provider, &job.id, now) {
+            let execution_result = self.execute_background_job(store, provider, &job.id, now);
+            match execution_result {
                 Ok(()) => {
                     report.executed_jobs += 1;
                 }
@@ -51,11 +57,16 @@ impl ExecutionService {
                     report.executed_jobs += 1;
                 }
                 Err(error) => {
-                    return Err(error);
+                    if job.kind == JobKind::ScheduledChatTurn {
+                        report.executed_jobs += 1;
+                    } else {
+                        return Err(error);
+                    }
                 }
             }
 
             let updated_job = self.load_job(store, &job.id)?;
+            self.sync_schedule_state_from_job(store, &updated_job, now)?;
             self.deliver_callback_for_job(store, &updated_job, now)?;
             let updated_job = self.load_job(store, &job.id)?;
             if self.emit_inbox_event_for_job(store, &updated_job, now)? {
@@ -91,6 +102,17 @@ impl ExecutionService {
         match job.lease_expires_at {
             Some(expires_at) => expires_at <= now,
             None => true,
+        }
+    }
+
+    fn should_defer_background_job(
+        &self,
+        store: &PersistenceStore,
+        job: &JobSpec,
+    ) -> Result<bool, ExecutionError> {
+        match job.kind {
+            JobKind::ScheduledChatTurn => self.session_has_active_run(store, &job.session_id),
+            _ => Ok(false),
         }
     }
 
@@ -159,6 +181,182 @@ impl ExecutionService {
                 Ok(())
             }
         }
+    }
+
+    fn resolve_schedule_target_session(
+        &self,
+        store: &PersistenceStore,
+        schedule: &mut AgentSchedule,
+        delegation_label: &str,
+        now: i64,
+    ) -> Result<(String, bool), ExecutionError> {
+        match schedule.delivery_mode {
+            AgentScheduleDeliveryMode::FreshSession => {
+                let session_id = self.create_schedule_session(
+                    store,
+                    &schedule.id,
+                    &schedule.agent_profile_id,
+                    delegation_label,
+                    now,
+                )?;
+                Ok((session_id, true))
+            }
+            AgentScheduleDeliveryMode::ExistingSession => {
+                let Some(target_session_id) = schedule.target_session_id.clone() else {
+                    return Err(ExecutionError::ProviderLoop {
+                        reason: format!(
+                            "existing_session schedule {} is missing target_session_id",
+                            schedule.id
+                        ),
+                    });
+                };
+                if let Some(record) = store
+                    .get_session(&target_session_id)
+                    .map_err(ExecutionError::Store)?
+                {
+                    if record.agent_profile_id != schedule.agent_profile_id {
+                        return Err(ExecutionError::ProviderLoop {
+                            reason: format!(
+                                "schedule {} targets session {} with mismatched agent profile {}",
+                                schedule.id, target_session_id, record.agent_profile_id
+                            ),
+                        });
+                    }
+                    Ok((target_session_id, false))
+                } else {
+                    let session_id = self.create_schedule_session(
+                        store,
+                        &schedule.id,
+                        &schedule.agent_profile_id,
+                        delegation_label,
+                        now,
+                    )?;
+                    schedule.target_session_id = Some(session_id.clone());
+                    Ok((session_id, true))
+                }
+            }
+        }
+    }
+
+    fn create_schedule_session(
+        &self,
+        store: &PersistenceStore,
+        schedule_id: &str,
+        agent_profile_id: &str,
+        delegation_label: &str,
+        now: i64,
+    ) -> Result<String, ExecutionError> {
+        let session_id = format!(
+            "session-schedule-{}-{}",
+            schedule_id,
+            unique_execution_token()
+        );
+        let session = Session {
+            id: session_id.clone(),
+            title: format!("Расписание: {}", schedule_id),
+            prompt_override: None,
+            settings: self.config.session_defaults.clone(),
+            agent_profile_id: agent_profile_id.to_string(),
+            active_mission_id: None,
+            parent_session_id: None,
+            parent_job_id: None,
+            delegation_label: Some(delegation_label.to_string()),
+            created_at: now,
+            updated_at: now,
+        };
+        store
+            .put_session(
+                &agent_persistence::SessionRecord::try_from(&session)
+                    .map_err(ExecutionError::RecordConversion)?,
+            )
+            .map_err(ExecutionError::Store)?;
+        Ok(session_id)
+    }
+
+    fn sync_schedule_state_from_last_job(
+        &self,
+        store: &PersistenceStore,
+        schedule: &mut AgentSchedule,
+        now: i64,
+    ) -> Result<(), ExecutionError> {
+        let Some(last_job_id) = schedule.last_job_id.clone() else {
+            return Ok(());
+        };
+        let Some(record) = store.get_job(&last_job_id).map_err(ExecutionError::Store)? else {
+            return Ok(());
+        };
+        let job = JobSpec::try_from(record).map_err(ExecutionError::RecordConversion)?;
+        self.apply_schedule_job_terminal_state(store, schedule, &job, now)
+    }
+
+    fn sync_schedule_state_from_job(
+        &self,
+        store: &PersistenceStore,
+        job: &JobSpec,
+        now: i64,
+    ) -> Result<(), ExecutionError> {
+        let JobExecutionInput::ScheduledChatTurn { schedule_id, .. } = &job.input else {
+            return Ok(());
+        };
+        let Some(record) = store
+            .get_agent_schedule(schedule_id)
+            .map_err(ExecutionError::Store)?
+        else {
+            return Ok(());
+        };
+        let mut schedule =
+            AgentSchedule::try_from(record).map_err(ExecutionError::RecordConversion)?;
+        self.apply_schedule_job_terminal_state(store, &mut schedule, job, now)
+    }
+
+    fn apply_schedule_job_terminal_state(
+        &self,
+        store: &PersistenceStore,
+        schedule: &mut AgentSchedule,
+        job: &JobSpec,
+        now: i64,
+    ) -> Result<(), ExecutionError> {
+        let JobExecutionInput::ScheduledChatTurn { schedule_id, .. } = &job.input else {
+            return Ok(());
+        };
+        if schedule_id != &schedule.id || job.status.is_active() {
+            return Ok(());
+        }
+
+        let interval_seconds = i64::try_from(schedule.interval_seconds).unwrap_or(i64::MAX);
+        let mut changed = false;
+        let terminal_result = Some(schedule_terminal_result(job).to_string());
+        let terminal_error = schedule_terminal_error(job);
+
+        if schedule.last_result != terminal_result {
+            schedule.last_result = terminal_result;
+            changed = true;
+        }
+        if schedule.last_error != terminal_error {
+            schedule.last_error = terminal_error;
+            changed = true;
+        }
+        if let Some(finished_at) = job.finished_at {
+            if schedule.last_finished_at != Some(finished_at) {
+                schedule.last_finished_at = Some(finished_at);
+                changed = true;
+            }
+            if schedule.mode == AgentScheduleMode::AfterCompletion {
+                let next_fire_at = finished_at.saturating_add(interval_seconds);
+                if schedule.next_fire_at != next_fire_at {
+                    schedule.next_fire_at = next_fire_at;
+                    changed = true;
+                }
+            }
+        }
+
+        if changed {
+            schedule.updated_at = now;
+            store
+                .put_agent_schedule(&agent_persistence::AgentScheduleRecord::from(&*schedule))
+                .map_err(ExecutionError::Store)?;
+        }
+        Ok(())
     }
 
     fn emit_inbox_event_for_job(
@@ -297,7 +495,11 @@ impl ExecutionService {
         let mut fired = 0usize;
 
         for mut schedule in schedules {
-            if schedule.workspace_root != current_workspace || !schedule.is_due(now) {
+            if schedule.workspace_root != current_workspace {
+                continue;
+            }
+            self.sync_schedule_state_from_last_job(store, &mut schedule, now)?;
+            if !schedule.enabled || !schedule.is_due(now) {
                 continue;
             }
 
@@ -324,49 +526,49 @@ impl ExecutionService {
             };
             let agent =
                 AgentProfile::try_from(agent_record).map_err(ExecutionError::RecordConversion)?;
+            let schedule_label = format!("agent-schedule:{}", schedule.id);
+            let (session_id, created_new_session) =
+                self.resolve_schedule_target_session(store, &mut schedule, &schedule_label, now)?;
 
-            let session_id = format!(
-                "session-schedule-{}-{}",
-                schedule.id,
-                unique_execution_token()
-            );
+            if schedule.delivery_mode == AgentScheduleDeliveryMode::ExistingSession
+                && self.session_has_active_run(store, &session_id)?
+            {
+                match schedule.mode {
+                    AgentScheduleMode::Interval => {
+                        schedule.next_fire_at = advance_interval_schedule_cadence(&schedule, now);
+                        schedule.last_result = Some("skipped_busy".to_string());
+                        schedule.last_error = None;
+                        schedule.updated_at = now;
+                        store
+                            .put_agent_schedule(&agent_persistence::AgentScheduleRecord::from(
+                                &schedule,
+                            ))
+                            .map_err(ExecutionError::Store)?;
+                        continue;
+                    }
+                    AgentScheduleMode::AfterCompletion => {}
+                }
+            }
+
             let job_id = format!("job-schedule-{}-{}", schedule.id, unique_execution_token());
-            let session = Session {
-                id: session_id.clone(),
-                title: format!("Расписание: {}", schedule.id),
-                prompt_override: None,
-                settings: self.config.session_defaults.clone(),
-                agent_profile_id: schedule.agent_profile_id.clone(),
-                active_mission_id: None,
-                parent_session_id: None,
-                parent_job_id: None,
-                delegation_label: Some(format!("agent-schedule:{}", schedule.id)),
-                created_at: now,
-                updated_at: now,
-            };
-            store
-                .put_session(
-                    &agent_persistence::SessionRecord::try_from(&session)
-                        .map_err(ExecutionError::RecordConversion)?,
-                )
-                .map_err(ExecutionError::Store)?;
-
-            let system_entry = TranscriptEntry::system(
-                format!("transcript-{}-schedule-system", job_id),
-                session_id.clone(),
-                None,
-                format!(
-                    "Scheduled agent launch.\nschedule_id: {}\nagent_profile_id: {}\nagent_name: {}\nworkspace_root: {}",
-                    schedule.id,
-                    schedule.agent_profile_id,
-                    agent.name,
-                    schedule.workspace_root.display()
-                ),
-                now,
-            );
-            store
-                .put_transcript(&TranscriptRecord::from(&system_entry))
-                .map_err(ExecutionError::Store)?;
+            if created_new_session {
+                let system_entry = TranscriptEntry::system(
+                    format!("transcript-{}-schedule-system", job_id),
+                    session_id.clone(),
+                    None,
+                    format!(
+                        "Scheduled agent launch.\nschedule_id: {}\nagent_profile_id: {}\nagent_name: {}\nworkspace_root: {}",
+                        schedule.id,
+                        schedule.agent_profile_id,
+                        agent.name,
+                        schedule.workspace_root.display()
+                    ),
+                    now,
+                );
+                store
+                    .put_transcript(&TranscriptRecord::from(&system_entry))
+                    .map_err(ExecutionError::Store)?;
+            }
 
             let mut job = JobSpec::scheduled_chat_turn(
                 &job_id,
@@ -387,8 +589,11 @@ impl ExecutionService {
             schedule.last_triggered_at = Some(now);
             schedule.last_session_id = Some(session_id);
             schedule.last_job_id = Some(job_id);
-            schedule.next_fire_at =
-                now.saturating_add(i64::try_from(schedule.interval_seconds).unwrap_or(i64::MAX));
+            schedule.last_result = Some("running".to_string());
+            schedule.last_error = None;
+            if schedule.mode == AgentScheduleMode::Interval {
+                schedule.next_fire_at = advance_interval_schedule_cadence(&schedule, now);
+            }
             schedule.updated_at = now;
             store
                 .put_agent_schedule(&agent_persistence::AgentScheduleRecord::from(&schedule))
@@ -610,4 +815,34 @@ impl ExecutionService {
 
 fn canonical_workspace_root(path: &std::path::Path) -> std::path::PathBuf {
     std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf())
+}
+
+fn advance_interval_schedule_cadence(schedule: &AgentSchedule, now: i64) -> i64 {
+    let interval_seconds = i64::try_from(schedule.interval_seconds).unwrap_or(i64::MAX);
+    let mut next_fire_at = schedule.next_fire_at.saturating_add(interval_seconds);
+    while next_fire_at <= now {
+        next_fire_at = next_fire_at.saturating_add(interval_seconds);
+    }
+    next_fire_at
+}
+
+fn schedule_terminal_result(job: &JobSpec) -> &'static str {
+    match job.status {
+        JobStatus::Completed => "completed",
+        JobStatus::Failed => "failed",
+        JobStatus::Blocked => "blocked",
+        JobStatus::Cancelled => "cancelled",
+        JobStatus::Queued | JobStatus::Running | JobStatus::WaitingExternal => "running",
+    }
+}
+
+fn schedule_terminal_error(job: &JobSpec) -> Option<String> {
+    match job.status {
+        JobStatus::Completed => None,
+        JobStatus::Failed | JobStatus::Blocked | JobStatus::Cancelled => job
+            .error
+            .clone()
+            .or_else(|| job.last_progress_message.clone()),
+        JobStatus::Queued | JobStatus::Running | JobStatus::WaitingExternal => None,
+    }
 }

@@ -1,7 +1,10 @@
 use super::{App, BootstrapError, unix_timestamp};
 use crate::agents;
 use agent_persistence::{AgentProfileRecord, AgentRepository, AgentScheduleRecord};
-use agent_runtime::agent::{AgentProfile, AgentSchedule, AgentTemplateKind};
+use agent_runtime::agent::{
+    AgentProfile, AgentSchedule, AgentScheduleDeliveryMode, AgentScheduleInit, AgentScheduleMode,
+    AgentTemplateKind,
+};
 use std::path::PathBuf;
 
 impl App {
@@ -209,19 +212,26 @@ impl App {
             None => self.current_agent_profile()?,
         };
         let now = unix_timestamp()?;
-        let schedule = AgentSchedule::new(
-            id,
-            agent.id.clone(),
-            current_workspace_root(&self.runtime.workspace.root),
-            prompt,
+        let schedule = AgentSchedule::new(AgentScheduleInit {
+            id: id.to_string(),
+            agent_profile_id: agent.id.clone(),
+            workspace_root: current_workspace_root(&self.runtime.workspace.root),
+            prompt: prompt.to_string(),
+            mode: AgentScheduleMode::Interval,
+            delivery_mode: AgentScheduleDeliveryMode::FreshSession,
+            target_session_id: None,
             interval_seconds,
-            now,
-            None,
-            None,
-            None,
-            now,
-            now,
-        )
+            next_fire_at: now,
+            enabled: true,
+            last_triggered_at: None,
+            last_finished_at: None,
+            last_session_id: None,
+            last_job_id: None,
+            last_result: None,
+            last_error: None,
+            created_at: now,
+            updated_at: now,
+        })
         .map_err(|error| BootstrapError::Usage {
             reason: error.to_string(),
         })?;
@@ -289,20 +299,35 @@ impl App {
         let mut lines = vec![format!("Расписания: workspace={}", workspace.display())];
         for schedule in schedules {
             lines.push(format!(
-                "- {} agent={} interval={} next_fire_at={}",
+                "- {} agent={} mode={} delivery={} enabled={} interval={} next_fire_at={}",
                 schedule.id,
                 schedule.agent_profile_id,
+                schedule.mode.as_str(),
+                schedule.delivery_mode.as_str(),
+                if schedule.enabled { "yes" } else { "no" },
                 schedule.interval_seconds,
                 schedule.next_fire_at
             ));
             if let Some(last_triggered_at) = schedule.last_triggered_at {
                 lines.push(format!("  last_triggered_at={last_triggered_at}"));
             }
+            if let Some(last_finished_at) = schedule.last_finished_at {
+                lines.push(format!("  last_finished_at={last_finished_at}"));
+            }
             if let Some(last_session_id) = schedule.last_session_id.as_deref() {
                 lines.push(format!("  last_session_id={last_session_id}"));
             }
             if let Some(last_job_id) = schedule.last_job_id.as_deref() {
                 lines.push(format!("  last_job_id={last_job_id}"));
+            }
+            if let Some(target_session_id) = schedule.target_session_id.as_deref() {
+                lines.push(format!("  target_session_id={target_session_id}"));
+            }
+            if let Some(last_result) = schedule.last_result.as_deref() {
+                lines.push(format!("  last_result={last_result}"));
+            }
+            if let Some(last_error) = schedule.last_error.as_deref() {
+                lines.push(format!("  last_error={last_error}"));
             }
             lines.push(format!("  prompt={}", schedule.prompt));
         }
@@ -315,6 +340,9 @@ impl App {
             format!("id={}", schedule.id),
             format!("agent_profile_id={}", schedule.agent_profile_id),
             format!("workspace_root={}", schedule.workspace_root.display()),
+            format!("mode={}", schedule.mode.as_str()),
+            format!("delivery_mode={}", schedule.delivery_mode.as_str()),
+            format!("enabled={}", schedule.enabled),
             format!("interval_seconds={}", schedule.interval_seconds),
             format!("next_fire_at={}", schedule.next_fire_at),
             format!("created_at={}", schedule.created_at),
@@ -324,6 +352,14 @@ impl App {
             Some(value) => lines.push(format!("last_triggered_at={value}")),
             None => lines.push("last_triggered_at=<none>".to_string()),
         }
+        match schedule.last_finished_at {
+            Some(value) => lines.push(format!("last_finished_at={value}")),
+            None => lines.push("last_finished_at=<none>".to_string()),
+        }
+        match schedule.target_session_id.as_deref() {
+            Some(value) => lines.push(format!("target_session_id={value}")),
+            None => lines.push("target_session_id=<none>".to_string()),
+        }
         match schedule.last_session_id.as_deref() {
             Some(value) => lines.push(format!("last_session_id={value}")),
             None => lines.push("last_session_id=<none>".to_string()),
@@ -331,6 +367,14 @@ impl App {
         match schedule.last_job_id.as_deref() {
             Some(value) => lines.push(format!("last_job_id={value}")),
             None => lines.push("last_job_id=<none>".to_string()),
+        }
+        match schedule.last_result.as_deref() {
+            Some(value) => lines.push(format!("last_result={value}")),
+            None => lines.push("last_result=<none>".to_string()),
+        }
+        match schedule.last_error.as_deref() {
+            Some(value) => lines.push(format!("last_error={value}")),
+            None => lines.push("last_error=<none>".to_string()),
         }
         lines.push("prompt:".to_string());
         lines.push(schedule.prompt);

@@ -4,7 +4,7 @@ use agent_runtime::mission::{JobResult, MissionStatus};
 use agent_runtime::provider::{
     FinishReason, ProviderContinuationMessage, ProviderResponse, ProviderToolOutput,
 };
-use agent_runtime::session::TranscriptEntry;
+use agent_runtime::session::{TranscriptEntry, scheduled_input_metadata};
 use agent_runtime::tool::ToolCatalog;
 use std::sync::atomic::AtomicBool;
 
@@ -97,6 +97,7 @@ impl ExecutionService {
                 .map(|override_text| override_text.as_str().to_string()),
             &mut run,
             None,
+            None,
             now,
             interrupt_after_tool_step,
             observer,
@@ -158,11 +159,18 @@ impl ExecutionService {
                 })?,
         )
         .map_err(ExecutionError::RecordConversion)?;
-        let (message, progress_prefix) = match &job.input {
-            JobExecutionInput::ChatTurn { message } => (message.clone(), "background chat turn"),
-            JobExecutionInput::ScheduledChatTurn { message, .. } => {
-                (message.clone(), "scheduled chat turn")
+        let (message, progress_prefix, schedule_id) = match &job.input {
+            JobExecutionInput::ChatTurn { message } => {
+                (message.clone(), "background chat turn", None)
             }
+            JobExecutionInput::ScheduledChatTurn {
+                schedule_id,
+                message,
+            } => (
+                message.clone(),
+                "scheduled chat turn",
+                Some(schedule_id.clone()),
+            ),
             _ => {
                 return Err(ExecutionError::UnsupportedJobInput {
                     id: job.id.clone(),
@@ -201,8 +209,25 @@ impl ExecutionService {
             .put_job(&JobRecord::try_from(&job).map_err(ExecutionError::RecordConversion)?)
             .map_err(ExecutionError::Store)?;
 
+        let user_entry_id = format!("transcript-{}-01-user", job.id);
+        if let Some(schedule_id) = schedule_id.as_deref() {
+            let schedule_label = format!("agent-schedule:{schedule_id}");
+            if session.delegation_label.as_deref() != Some(schedule_label.as_str()) {
+                let metadata_entry = TranscriptEntry::system(
+                    format!("transcript-{}-00-schedule-meta", job.id),
+                    session.id.clone(),
+                    Some(run_id.as_str()),
+                    scheduled_input_metadata(schedule_id, &user_entry_id),
+                    now,
+                );
+                store
+                    .put_transcript(&TranscriptRecord::from(&metadata_entry))
+                    .map_err(ExecutionError::Store)?;
+            }
+        }
+
         let user_entry = TranscriptEntry::user(
-            format!("transcript-{}-01-user", job.id),
+            user_entry_id,
             session.id.clone(),
             Some(run_id.as_str()),
             &message,
@@ -224,6 +249,7 @@ impl ExecutionService {
                 .map(|override_text| override_text.as_str().to_string()),
             &mut run,
             None,
+            Some(true),
             now,
             None,
             &mut observer,
@@ -401,6 +427,7 @@ impl ExecutionService {
                 .as_ref()
                 .map(|override_text| override_text.as_str().to_string()),
             &mut run,
+            None,
             None,
             now,
             None,
@@ -949,6 +976,7 @@ impl ExecutionService {
                 .map(|override_text| override_text.as_str().to_string()),
             &mut run,
             Some(resumed_loop_state),
+            None,
             now,
             interrupt_after_tool_step,
             observer,

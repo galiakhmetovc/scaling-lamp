@@ -91,6 +91,7 @@ pub struct SessionSummary {
     pub title: String,
     pub agent_profile_id: String,
     pub agent_name: String,
+    pub scheduled_by: Option<String>,
     pub model: Option<String>,
     pub reasoning_visible: bool,
     pub think_level: Option<String>,
@@ -336,11 +337,17 @@ fn session_summary_from_session(
         .get_agent_profile(&session.agent_profile_id)?
         .map(|record| record.name)
         .unwrap_or_else(|| session.agent_profile_id.clone());
+    let scheduled_by = session
+        .delegation_label
+        .as_deref()
+        .and_then(|label| label.strip_prefix("agent-schedule:"))
+        .map(str::to_string);
     Ok(SessionSummary {
         id: session.id.clone(),
         title: session.title.clone(),
         agent_profile_id: session.agent_profile_id.clone(),
         agent_name,
+        scheduled_by,
         model: session
             .settings
             .model

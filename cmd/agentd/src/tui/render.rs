@@ -67,9 +67,14 @@ fn render_session_screen(frame: &mut Frame<'_>, state: &TuiAppState) {
                 ""
             };
             let preview = session.last_message_preview.as_deref().unwrap_or("<пусто>");
+            let title = session
+                .scheduled_by
+                .as_deref()
+                .map(|schedule_id| format!("{} [расписание:{}]", session.title, schedule_id))
+                .unwrap_or_else(|| session.title.clone());
             let label = format!(
                 "{prefix}{} | агент={} | обновлено={} | сообщений={}{}",
-                session.title,
+                title,
                 session.agent_name,
                 format_timestamp(session.updated_at, now),
                 session.message_count,
@@ -1405,6 +1410,7 @@ mod tests {
                 title: "artifact".to_string(),
                 agent_profile_id: "default".to_string(),
                 agent_name: "Default".to_string(),
+                scheduled_by: None,
                 model: Some("glm-5-turbo".to_string()),
                 reasoning_visible: true,
                 think_level: None,
@@ -1467,6 +1473,7 @@ mod tests {
             title: "очень длинная сессия".to_string(),
             agent_profile_id: "default".to_string(),
             agent_name: "Default".to_string(),
+            scheduled_by: None,
             model: Some("glm-5-turbo".to_string()),
             reasoning_visible: true,
             think_level: None,
@@ -1517,6 +1524,7 @@ mod tests {
             title: "новая".to_string(),
             agent_profile_id: "default".to_string(),
             agent_name: "Default".to_string(),
+            scheduled_by: None,
             model: Some("glm-5-turbo".to_string()),
             reasoning_visible: true,
             think_level: None,
@@ -1565,6 +1573,7 @@ mod tests {
             title: "compose".to_string(),
             agent_profile_id: "default".to_string(),
             agent_name: "Default".to_string(),
+            scheduled_by: None,
             model: Some("glm-5-turbo".to_string()),
             reasoning_visible: true,
             think_level: None,
@@ -1618,6 +1627,7 @@ mod tests {
             title: "compose".to_string(),
             agent_profile_id: "default".to_string(),
             agent_name: "Default".to_string(),
+            scheduled_by: None,
             model: Some("glm-5-turbo".to_string()),
             reasoning_visible: true,
             think_level: None,
@@ -1667,6 +1677,7 @@ mod tests {
             title: "ансибл".to_string(),
             agent_profile_id: "default".to_string(),
             agent_name: "Default".to_string(),
+            scheduled_by: None,
             model: Some("glm-5-turbo".to_string()),
             reasoning_visible: true,
             think_level: None,
@@ -1743,6 +1754,7 @@ mod tests {
             title: "ансибл".to_string(),
             agent_profile_id: "default".to_string(),
             agent_name: "Default".to_string(),
+            scheduled_by: None,
             model: Some("glm-5-turbo".to_string()),
             reasoning_visible: true,
             think_level: None,

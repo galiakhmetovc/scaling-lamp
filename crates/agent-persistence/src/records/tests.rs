@@ -3,7 +3,8 @@ use super::{
     JobRecord, MissionRecord, PlanRecord, RunRecord, SessionRecord, TranscriptRecord,
 };
 use agent_runtime::agent::{
-    AgentChainContinuationGrant, AgentProfile, AgentSchedule, AgentTemplateKind,
+    AgentChainContinuationGrant, AgentProfile, AgentSchedule, AgentScheduleDeliveryMode,
+    AgentScheduleInit, AgentScheduleMode, AgentTemplateKind,
 };
 use agent_runtime::context::{ContextOffloadRef, ContextOffloadSnapshot};
 use agent_runtime::mission::{
@@ -120,19 +121,26 @@ fn chain_continuation_records_round_trip() {
 
 #[test]
 fn agent_schedule_records_round_trip() {
-    let schedule = AgentSchedule::new(
-        "judge-pulse",
-        "judge",
-        "/workspace/project",
-        "Check the latest diff and summarize it.",
-        300,
-        42,
-        Some(12),
-        Some("session-schedule-prev".to_string()),
-        Some("job-schedule-prev".to_string()),
-        10,
-        11,
-    )
+    let schedule = AgentSchedule::new(AgentScheduleInit {
+        id: "judge-pulse".to_string(),
+        agent_profile_id: "judge".to_string(),
+        workspace_root: "/workspace/project".into(),
+        prompt: "Check the latest diff and summarize it.".to_string(),
+        mode: AgentScheduleMode::AfterCompletion,
+        delivery_mode: AgentScheduleDeliveryMode::ExistingSession,
+        target_session_id: Some("session-bound".to_string()),
+        interval_seconds: 300,
+        next_fire_at: 42,
+        enabled: false,
+        last_triggered_at: Some(12),
+        last_finished_at: Some(24),
+        last_session_id: Some("session-schedule-prev".to_string()),
+        last_job_id: Some("job-schedule-prev".to_string()),
+        last_result: Some("failed".to_string()),
+        last_error: Some("tool execution failed".to_string()),
+        created_at: 10,
+        updated_at: 11,
+    })
     .expect("schedule");
 
     let stored = AgentScheduleRecord::from(&schedule);

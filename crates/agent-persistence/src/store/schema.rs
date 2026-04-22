@@ -140,11 +140,18 @@ pub(super) fn bootstrap_schema(connection: &Connection) -> Result<(), StoreError
              agent_profile_id TEXT NOT NULL,
              workspace_root TEXT NOT NULL,
              prompt TEXT NOT NULL,
+             mode TEXT NOT NULL DEFAULT 'interval',
+             delivery_mode TEXT NOT NULL DEFAULT 'fresh_session',
+             target_session_id TEXT,
              interval_seconds INTEGER NOT NULL,
              next_fire_at INTEGER NOT NULL,
+             enabled INTEGER NOT NULL DEFAULT 1,
              last_triggered_at INTEGER,
+             last_finished_at INTEGER,
              last_session_id TEXT,
              last_job_id TEXT,
+             last_result TEXT,
+             last_error TEXT,
              created_at INTEGER NOT NULL,
              updated_at INTEGER NOT NULL
          );
@@ -252,11 +259,18 @@ pub(super) fn validate_schema(connection: &Connection) -> Result<(), StoreError>
     validate_column(connection, "agent_schedules", "agent_profile_id", true)?;
     validate_column(connection, "agent_schedules", "workspace_root", true)?;
     validate_column(connection, "agent_schedules", "prompt", true)?;
+    validate_column(connection, "agent_schedules", "mode", true)?;
+    validate_column(connection, "agent_schedules", "delivery_mode", true)?;
+    validate_column(connection, "agent_schedules", "target_session_id", false)?;
     validate_column(connection, "agent_schedules", "interval_seconds", true)?;
     validate_column(connection, "agent_schedules", "next_fire_at", true)?;
+    validate_column(connection, "agent_schedules", "enabled", true)?;
     validate_column(connection, "agent_schedules", "last_triggered_at", false)?;
+    validate_column(connection, "agent_schedules", "last_finished_at", false)?;
     validate_column(connection, "agent_schedules", "last_session_id", false)?;
     validate_column(connection, "agent_schedules", "last_job_id", false)?;
+    validate_column(connection, "agent_schedules", "last_result", false)?;
+    validate_column(connection, "agent_schedules", "last_error", false)?;
     validate_column(connection, "agent_schedules", "created_at", true)?;
     validate_column(connection, "agent_schedules", "updated_at", true)?;
     validate_column(connection, "runs", "evidence_refs_json", true)?;
@@ -372,6 +386,28 @@ pub(super) fn migrate_schema(connection: &Connection) -> Result<(), StoreError> 
     add_column_if_missing(connection, "sessions", "parent_session_id", "TEXT")?;
     add_column_if_missing(connection, "sessions", "parent_job_id", "TEXT")?;
     add_column_if_missing(connection, "sessions", "delegation_label", "TEXT")?;
+    add_column_if_missing(
+        connection,
+        "agent_schedules",
+        "mode",
+        "TEXT NOT NULL DEFAULT 'interval'",
+    )?;
+    add_column_if_missing(
+        connection,
+        "agent_schedules",
+        "delivery_mode",
+        "TEXT NOT NULL DEFAULT 'fresh_session'",
+    )?;
+    add_column_if_missing(connection, "agent_schedules", "target_session_id", "TEXT")?;
+    add_column_if_missing(
+        connection,
+        "agent_schedules",
+        "enabled",
+        "INTEGER NOT NULL DEFAULT 1",
+    )?;
+    add_column_if_missing(connection, "agent_schedules", "last_finished_at", "INTEGER")?;
+    add_column_if_missing(connection, "agent_schedules", "last_result", "TEXT")?;
+    add_column_if_missing(connection, "agent_schedules", "last_error", "TEXT")?;
     add_column_if_missing(
         connection,
         "missions",
