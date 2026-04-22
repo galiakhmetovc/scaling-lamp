@@ -124,9 +124,12 @@ pub struct BrowserState {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DialogState {
     CreateSession { value: String },
+    CreateAgent { value: String },
+    CreateSchedule { value: String },
     RenameSession { session_id: String, value: String },
     ConfirmDelete { session_id: String },
     ConfirmClear { session_id: String },
+    ConfirmDeleteSchedule { id: String },
 }
 
 pub struct TuiAppState {
@@ -287,6 +290,8 @@ impl TuiAppState {
     pub fn dialog_input(&self) -> Option<&str> {
         match self.dialog_state.as_ref() {
             Some(DialogState::CreateSession { value })
+            | Some(DialogState::CreateAgent { value })
+            | Some(DialogState::CreateSchedule { value })
             | Some(DialogState::RenameSession { value, .. }) => Some(value.as_str()),
             _ => None,
         }
@@ -295,6 +300,8 @@ impl TuiAppState {
     pub fn set_dialog_input(&mut self, value: String) {
         match self.dialog_state.as_mut() {
             Some(DialogState::CreateSession { value: current })
+            | Some(DialogState::CreateAgent { value: current })
+            | Some(DialogState::CreateSchedule { value: current })
             | Some(DialogState::RenameSession { value: current, .. }) => {
                 *current = value;
             }
@@ -305,6 +312,8 @@ impl TuiAppState {
     pub fn append_dialog_input(&mut self, value: char) {
         match self.dialog_state.as_mut() {
             Some(DialogState::CreateSession { value: current })
+            | Some(DialogState::CreateAgent { value: current })
+            | Some(DialogState::CreateSchedule { value: current })
             | Some(DialogState::RenameSession { value: current, .. }) => {
                 current.push(value);
             }
@@ -315,6 +324,8 @@ impl TuiAppState {
     pub fn pop_dialog_input(&mut self) {
         match self.dialog_state.as_mut() {
             Some(DialogState::CreateSession { value })
+            | Some(DialogState::CreateAgent { value })
+            | Some(DialogState::CreateSchedule { value })
             | Some(DialogState::RenameSession { value, .. }) => {
                 value.pop();
             }
@@ -328,6 +339,18 @@ impl TuiAppState {
 
     pub fn open_new_session_dialog(&mut self) {
         self.dialog_state = Some(DialogState::CreateSession {
+            value: String::new(),
+        });
+    }
+
+    pub fn open_create_agent_dialog(&mut self) {
+        self.dialog_state = Some(DialogState::CreateAgent {
+            value: String::new(),
+        });
+    }
+
+    pub fn open_create_schedule_dialog(&mut self) {
+        self.dialog_state = Some(DialogState::CreateSchedule {
             value: String::new(),
         });
     }
@@ -359,6 +382,10 @@ impl TuiAppState {
             session_id: current.id.clone(),
         });
         Ok(())
+    }
+
+    pub fn open_delete_schedule_dialog(&mut self, id: String) {
+        self.dialog_state = Some(DialogState::ConfirmDeleteSchedule { id });
     }
 
     pub fn open_session_screen(&mut self) {

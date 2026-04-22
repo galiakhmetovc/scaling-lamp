@@ -186,6 +186,15 @@ where
         TuiAction::BrowserActivate => {
             activate_browser_selection(app, state)?;
         }
+        TuiAction::BrowserOpenSelected => {
+            open_browser_selection(app, state)?;
+        }
+        TuiAction::BrowserCreate => {
+            open_browser_create_dialog(state);
+        }
+        TuiAction::BrowserDelete => {
+            open_browser_delete_dialog(state);
+        }
         TuiAction::OpenNewSessionDialog => state.open_new_session_dialog(),
         TuiAction::OpenDeleteDialog => {
             let _ = state.open_delete_dialog();
@@ -213,6 +222,32 @@ where
                     unix_timestamp()?,
                 );
                 load_session_into_state(app, state, &summary.id)?;
+            }
+            Some(DialogState::CreateAgent { value }) => {
+                let spec = require_arg(value.as_str(), "/agent")?;
+                let (name, template_identifier) = parse_agent_create_spec(spec.as_str())?;
+                let message = app.create_agent(&name, template_identifier.as_deref())?;
+                state.close_dialog();
+                open_agents_browser(app, state, None)?;
+                state
+                    .timeline_mut()
+                    .push_system(&message, unix_timestamp()?);
+            }
+            Some(DialogState::CreateSchedule { value }) => {
+                let spec = require_arg(value.as_str(), "/schedule")?;
+                let (id, interval_seconds, agent_identifier, prompt) =
+                    parse_schedule_create_spec(spec.as_str())?;
+                let message = app.create_agent_schedule(
+                    &id,
+                    interval_seconds,
+                    &prompt,
+                    agent_identifier.as_deref(),
+                )?;
+                state.close_dialog();
+                open_schedule_browser(app, state, Some(id.as_str()))?;
+                state
+                    .timeline_mut()
+                    .push_system(&message, unix_timestamp()?);
             }
             Some(DialogState::RenameSession { session_id, value }) => {
                 let title = title_or_default(value.as_str(), "Новая сессия");
@@ -248,6 +283,14 @@ where
                 state
                     .timeline_mut()
                     .push_system("сессия очищена", unix_timestamp()?);
+            }
+            Some(DialogState::ConfirmDeleteSchedule { id }) => {
+                let message = app.delete_agent_schedule(&id)?;
+                state.close_dialog();
+                open_schedule_browser(app, state, None)?;
+                state
+                    .timeline_mut()
+                    .push_system(&message, unix_timestamp()?);
             }
             None => {}
         },
@@ -299,7 +342,14 @@ where
     let rendered = app.render_agents()?;
     let parsed = parse_agent_browser_items(&rendered);
     if parsed.items.is_empty() {
-        state.open_agent_screen("Агенты".to_string(), rendered);
+        state.open_agent_browser(
+            "Агенты".to_string(),
+            "Н создать".to_string(),
+            Vec::new(),
+            0,
+            "Агенты".to_string(),
+            rendered,
+        );
         return Ok(());
     }
     let selected_index = preferred_id
@@ -314,7 +364,7 @@ where
     let preview_content = app.render_agent(Some(selected_id.as_str()))?;
     state.open_agent_browser(
         "Агенты".to_string(),
-        "↑↓ выбор | Enter выбрать".to_string(),
+        "↑↓ выбор | Enter выбрать | Н создать | О дом".to_string(),
         parsed.items,
         selected_index,
         format!("Агент {selected_id}"),
@@ -334,7 +384,14 @@ where
     let rendered = app.render_agent_schedules()?;
     let items = parse_schedule_browser_items(&rendered);
     if items.is_empty() {
-        state.open_schedule_screen("Расписания".to_string(), rendered);
+        state.open_schedule_browser(
+            "Расписания".to_string(),
+            "Н создать".to_string(),
+            Vec::new(),
+            0,
+            "Расписания".to_string(),
+            rendered,
+        );
         return Ok(());
     }
     let selected_index = preferred_id
@@ -348,7 +405,7 @@ where
     let preview_content = app.render_agent_schedule(selected_id.as_str())?;
     state.open_schedule_browser(
         "Расписания".to_string(),
-        "↑↓ выбор".to_string(),
+        "↑↓ выбор | Н создать | У удалить".to_string(),
         items,
         selected_index,
         format!("Расписание {selected_id}"),
@@ -369,7 +426,14 @@ where
     let rendered = app.render_artifacts(session_id)?;
     let items = parse_artifact_browser_items(&rendered);
     if items.is_empty() {
-        state.open_artifact_screen("Артефакты".to_string(), rendered);
+        state.open_artifact_browser(
+            "Артефакты".to_string(),
+            "↑↓ выбор".to_string(),
+            Vec::new(),
+            0,
+            "Артефакты".to_string(),
+            rendered,
+        );
         return Ok(());
     }
     let selected_index = preferred_id
@@ -439,15 +503,58 @@ where
     };
     match kind {
         BrowserKind::Agents => {
-            let _ = app.select_agent(selected_id.as_str())?;
+            let message = app.select_agent(selected_id.as_str())?;
             state.sync_sessions(app.list_session_summaries()?);
             open_agents_browser(app, state, Some(selected_id.as_str()))?;
+            state
+                .timeline_mut()
+                .push_system(&message, unix_timestamp()?);
         }
         BrowserKind::Schedules | BrowserKind::Artifacts => {
             refresh_browser_preview(app, state)?;
         }
     }
     Ok(())
+}
+
+fn open_browser_selection<B>(app: &B, state: &mut TuiAppState) -> Result<(), BootstrapError>
+where
+    B: TuiBackend,
+{
+    let Some(selected_id) = state.browser_selected_item().map(|item| item.id.clone()) else {
+        return Ok(());
+    };
+    let Some(kind) = state.browser_state().map(|browser| browser.kind()) else {
+        return Ok(());
+    };
+    match kind {
+        BrowserKind::Agents => {
+            let home = app.open_agent_home(Some(selected_id.as_str()))?;
+            state.set_browser_preview(format!("Дом агента {selected_id}"), home);
+        }
+        BrowserKind::Schedules | BrowserKind::Artifacts => {
+            refresh_browser_preview(app, state)?;
+        }
+    }
+    Ok(())
+}
+
+fn open_browser_create_dialog(state: &mut TuiAppState) {
+    match state.browser_state().map(|browser| browser.kind()) {
+        Some(BrowserKind::Agents) => state.open_create_agent_dialog(),
+        Some(BrowserKind::Schedules) => state.open_create_schedule_dialog(),
+        Some(BrowserKind::Artifacts) | None => {}
+    }
+}
+
+fn open_browser_delete_dialog(state: &mut TuiAppState) {
+    if matches!(
+        state.browser_state().map(|browser| browser.kind()),
+        Some(BrowserKind::Schedules)
+    ) && let Some(selected) = state.browser_selected_item()
+    {
+        state.open_delete_schedule_dialog(selected.id.clone());
+    }
 }
 
 #[derive(Debug)]
@@ -1921,26 +2028,36 @@ mod tests {
     #[derive(Clone)]
     struct BrowserBackendState {
         current_agent_id: String,
+        agents: Vec<(String, String)>,
+        schedules: Vec<String>,
     }
 
     impl TuiBackend for BrowserBackend {
         fn render_agents(&self) -> Result<String, BootstrapError> {
-            let current = self
-                .state
-                .lock()
-                .expect("browser backend state")
-                .current_agent_id
-                .clone();
-            let first = if current == "default" { "*" } else { "-" };
-            let second = if current == "judge" { "*" } else { "-" };
-            Ok(format!(
-                "Агенты: текущий={current}\n{first} Default (default) template=default tools=4 home=/tmp/default\n{second} Judge (judge) template=judge tools=2 home=/tmp/judge"
-            ))
+            let state = self.state.lock().expect("browser backend state");
+            let mut lines = vec![format!("Агенты: текущий={}", state.current_agent_id)];
+            for (id, name) in &state.agents {
+                let marker = if id == &state.current_agent_id {
+                    "*"
+                } else {
+                    "-"
+                };
+                lines.push(format!(
+                    "{marker} {name} ({id}) template=default tools=4 home=/tmp/{id}"
+                ));
+            }
+            Ok(lines.join("\n"))
         }
 
         fn render_agent(&self, identifier: Option<&str>) -> Result<String, BootstrapError> {
             let id = identifier.unwrap_or("default");
-            let name = if id == "judge" { "Judge" } else { "Default" };
+            let state = self.state.lock().expect("browser backend state");
+            let name = state
+                .agents
+                .iter()
+                .find(|(agent_id, _)| agent_id == id)
+                .map(|(_, name)| name.as_str())
+                .unwrap_or("Unknown");
             Ok(format!("id={id}\nname={name}"))
         }
 
@@ -1954,40 +2071,82 @@ mod tests {
 
         fn create_agent(
             &self,
-            _name: &str,
+            name: &str,
             _template_identifier: Option<&str>,
         ) -> Result<String, BootstrapError> {
-            panic!("unused in test")
+            let id = name.trim().to_lowercase().replace(' ', "-");
+            self.state
+                .lock()
+                .expect("browser backend state")
+                .agents
+                .push((id.clone(), name.trim().to_string()));
+            Ok(format!(
+                "создан агент {} ({id}) из шаблона default",
+                name.trim()
+            ))
         }
 
-        fn open_agent_home(&self, _identifier: Option<&str>) -> Result<String, BootstrapError> {
-            panic!("unused in test")
+        fn open_agent_home(&self, identifier: Option<&str>) -> Result<String, BootstrapError> {
+            let id = identifier.unwrap_or("default");
+            Ok(format!("/tmp/{id}"))
         }
 
         fn render_agent_schedules(&self) -> Result<String, BootstrapError> {
-            panic!("unused in test")
+            let state = self.state.lock().expect("browser backend state");
+            if state.schedules.is_empty() {
+                return Ok("Расписания: для workspace /tmp/test ничего не настроено".to_string());
+            }
+            let mut lines = vec!["Расписания: workspace=/tmp/test".to_string()];
+            for id in &state.schedules {
+                lines.push(format!(
+                    "- {id} agent={} interval=300 next_fire_at=10",
+                    state.current_agent_id
+                ));
+            }
+            Ok(lines.join("\n"))
         }
 
-        fn render_agent_schedule(&self, _id: &str) -> Result<String, BootstrapError> {
-            panic!("unused in test")
+        fn render_agent_schedule(&self, id: &str) -> Result<String, BootstrapError> {
+            Ok(format!("id={id}"))
         }
 
         fn create_agent_schedule(
             &self,
-            _id: &str,
+            id: &str,
             _interval_seconds: u64,
             _prompt: &str,
             _agent_identifier: Option<&str>,
         ) -> Result<String, BootstrapError> {
-            panic!("unused in test")
+            self.state
+                .lock()
+                .expect("browser backend state")
+                .schedules
+                .push(id.to_string());
+            Ok(format!(
+                "создано расписание {id} agent=default interval=300s"
+            ))
         }
 
-        fn delete_agent_schedule(&self, _id: &str) -> Result<String, BootstrapError> {
-            panic!("unused in test")
+        fn delete_agent_schedule(&self, id: &str) -> Result<String, BootstrapError> {
+            self.state
+                .lock()
+                .expect("browser backend state")
+                .schedules
+                .retain(|value| value != id);
+            Ok(format!("расписание {id} удалено"))
         }
 
         fn list_session_summaries(&self) -> Result<Vec<SessionSummary>, BootstrapError> {
-            Ok(vec![self.summary.clone()])
+            let state = self.state.lock().expect("browser backend state");
+            let mut summary = self.summary.clone();
+            summary.agent_profile_id = state.current_agent_id.clone();
+            summary.agent_name = state
+                .agents
+                .iter()
+                .find(|(id, _)| id == &state.current_agent_id)
+                .map(|(_, name)| name.clone())
+                .unwrap_or_else(|| summary.agent_name.clone());
+            Ok(vec![summary])
         }
 
         fn create_session_auto(
@@ -2706,6 +2865,11 @@ mod tests {
             summary: summary.clone(),
             state: Arc::new(Mutex::new(BrowserBackendState {
                 current_agent_id: "default".to_string(),
+                agents: vec![
+                    ("default".to_string(), "Default".to_string()),
+                    ("judge".to_string(), "Judge".to_string()),
+                ],
+                schedules: vec!["pulse".to_string()],
             })),
         };
         let mut state = TuiAppState::new(vec![summary.clone()], Some(summary.id.clone()));
@@ -2745,6 +2909,113 @@ mod tests {
         assert_eq!(
             state.browser_selected_item().map(|item| item.id.as_str()),
             Some("judge")
+        );
+    }
+
+    #[test]
+    fn browser_actions_can_open_agent_home_create_agent_and_manage_schedules() {
+        fn redraw(_: &TuiAppState) -> Result<(), BootstrapError> {
+            Ok(())
+        }
+
+        let summary = SessionSummary {
+            id: "session-a".to_string(),
+            title: "Session A".to_string(),
+            agent_profile_id: "default".to_string(),
+            agent_name: "Default".to_string(),
+            model: Some("glm-5-turbo".to_string()),
+            reasoning_visible: true,
+            think_level: None,
+            compactifications: 0,
+            completion_nudges: None,
+            auto_approve: false,
+            context_tokens: 0,
+            usage_input_tokens: None,
+            usage_output_tokens: None,
+            usage_total_tokens: None,
+            has_pending_approval: false,
+            last_message_preview: None,
+            message_count: 0,
+            background_job_count: 0,
+            running_background_job_count: 0,
+            queued_background_job_count: 0,
+            created_at: 1,
+            updated_at: 2,
+        };
+        let backend = BrowserBackend {
+            summary: summary.clone(),
+            state: Arc::new(Mutex::new(BrowserBackendState {
+                current_agent_id: "default".to_string(),
+                agents: vec![
+                    ("default".to_string(), "Default".to_string()),
+                    ("judge".to_string(), "Judge".to_string()),
+                ],
+                schedules: vec!["pulse".to_string()],
+            })),
+        };
+        let mut state = TuiAppState::new(vec![summary.clone()], Some(summary.id.clone()));
+        state.set_current_session(summary, Timeline::default());
+
+        handle_command(&backend, &mut state, "\\агенты", &mut redraw).expect("agents command");
+        dispatch_action(
+            &backend,
+            &mut state,
+            TuiAction::BrowserOpenSelected,
+            &mut redraw,
+        )
+        .expect("open agent home");
+        assert_eq!(
+            state.browser_state().expect("browser").preview_content(),
+            "/tmp/default"
+        );
+
+        dispatch_action(&backend, &mut state, TuiAction::BrowserCreate, &mut redraw)
+            .expect("open create agent dialog");
+        assert!(matches!(
+            state.dialog_state(),
+            Some(DialogState::CreateAgent { .. })
+        ));
+        state.set_dialog_input("Ревьюер из judge".to_string());
+        dispatch_action(&backend, &mut state, TuiAction::ConfirmDialog, &mut redraw)
+            .expect("confirm create agent");
+        assert!(
+            backend
+                .render_agents()
+                .expect("render agents")
+                .contains("Ревьюер (ревьюер)")
+        );
+
+        handle_command(&backend, &mut state, "\\расписания", &mut redraw)
+            .expect("schedules command");
+        dispatch_action(&backend, &mut state, TuiAction::BrowserCreate, &mut redraw)
+            .expect("open create schedule dialog");
+        assert!(matches!(
+            state.dialog_state(),
+            Some(DialogState::CreateSchedule { .. })
+        ));
+        state.set_dialog_input("pulse2 300 :: проверь очередь".to_string());
+        dispatch_action(&backend, &mut state, TuiAction::ConfirmDialog, &mut redraw)
+            .expect("confirm create schedule");
+        assert!(
+            backend
+                .render_agent_schedules()
+                .expect("render schedules")
+                .contains("pulse2")
+        );
+
+        dispatch_action(&backend, &mut state, TuiAction::BrowserDelete, &mut redraw)
+            .expect("open delete schedule dialog");
+        assert!(matches!(
+            state.dialog_state(),
+            Some(DialogState::ConfirmDeleteSchedule { .. })
+        ));
+        dispatch_action(&backend, &mut state, TuiAction::ConfirmDialog, &mut redraw)
+            .expect("confirm delete schedule");
+        assert!(
+            !backend
+                .render_agent_schedules()
+                .expect("render schedules")
+                .contains("pulse2")
         );
     }
 

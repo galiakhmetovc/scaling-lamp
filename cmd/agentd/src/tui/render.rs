@@ -1099,6 +1099,12 @@ fn render_dialog(frame: &mut Frame<'_>, dialog: DialogState) {
         DialogState::CreateSession { value } => {
             format!("Новая сессия\n\n{value}\n\nEnter подтвердить, Esc отмена")
         }
+        DialogState::CreateAgent { value } => format!(
+            "Создать агента\n\n{value}\n\nФормат: <имя> [из <шаблона>]\nПример: ревьюер из judge\n\nEnter подтвердить, Esc отмена"
+        ),
+        DialogState::CreateSchedule { value } => format!(
+            "Создать расписание\n\n{value}\n\nФормат: <id> <секунды> [agent=<id>] :: <промпт>\nПример: pulse 300 :: проверь очередь задач\n\nEnter подтвердить, Esc отмена"
+        ),
         DialogState::RenameSession { value, .. } => {
             format!("Переименовать сессию\n\n{value}\n\nEnter подтвердить, Esc отмена")
         }
@@ -1107,6 +1113,9 @@ fn render_dialog(frame: &mut Frame<'_>, dialog: DialogState) {
         }
         DialogState::ConfirmClear { session_id } => {
             format!("Очистить сессию {session_id}?\n\nEnter подтвердить, Esc отмена")
+        }
+        DialogState::ConfirmDeleteSchedule { id } => {
+            format!("Удалить расписание {id}?\n\nEnter подтвердить, Esc отмена")
         }
     };
     let paragraph = Paragraph::new(content)
