@@ -447,7 +447,7 @@ mod tests {
             },
             Box::new(MockReleaseClient {
                 latest: Some(ReleaseDescriptor {
-                    tag: "v1.0.2".to_string(),
+                    tag: "v1.0.3".to_string(),
                     assets: vec![ReleaseAsset {
                         name: "agentd".to_string(),
                         download_url: "https://example.invalid/agentd".to_string(),
@@ -462,7 +462,7 @@ mod tests {
 
         let about = updater.render_version_info().expect("render version info");
         assert!(about.contains(&format!("версия={APP_VERSION}")));
-        assert!(about.contains("latest_release=v1.0.2"));
+        assert!(about.contains("latest_release=v1.0.3"));
         assert!(about.contains("обновление=доступно"));
     }
 

@@ -101,6 +101,11 @@ pub trait JobRepository {
 pub trait TranscriptRepository {
     fn put_transcript(&self, record: &TranscriptRecord) -> Result<(), StoreError>;
     fn get_transcript(&self, id: &str) -> Result<Option<TranscriptRecord>, StoreError>;
+    fn get_latest_transcript_for_session(
+        &self,
+        session_id: &str,
+    ) -> Result<Option<TranscriptRecord>, StoreError>;
+    fn count_transcripts_for_session(&self, session_id: &str) -> Result<usize, StoreError>;
     fn list_transcripts_for_session(
         &self,
         session_id: &str,

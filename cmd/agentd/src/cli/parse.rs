@@ -14,6 +14,17 @@ impl Command {
         match args.as_slice() {
             [] => Ok(Self::Status),
             [status] if status == "status" => Ok(Self::Status),
+            [command] if command == "version" || command == "версия" => Ok(Self::Version),
+            [command] if command == "update" || command == "обновить" => {
+                Ok(Self::Update { tag: None })
+            }
+            [command, tag]
+                if command == "update" || command == "обновить" =>
+            {
+                Ok(Self::Update {
+                    tag: Some(tag.clone()),
+                })
+            }
             [command] if command == "tui" => Ok(Self::Tui {
                 host: None,
                 port: None,
@@ -137,7 +148,7 @@ impl Command {
                 })
             }
             _ => Err(BootstrapError::Usage {
-                reason: "expected one of: status | tui | daemon | daemon stop | provider smoke | chat show/send/repl | mission create/show/tick | session create/show/skills/enable-skill/disable-skill | run show | job show/execute | approval list/approve | delegate list | verification show".to_string(),
+                reason: "expected one of: status | version | update [tag] | tui | daemon | daemon stop | provider smoke | chat show/send/repl | mission create/show/tick | session create/show/skills/enable-skill/disable-skill | run show | job show/execute | approval list/approve | delegate list | verification show".to_string(),
             }),
         }
     }

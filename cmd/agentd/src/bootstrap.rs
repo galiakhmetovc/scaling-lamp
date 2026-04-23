@@ -314,53 +314,61 @@ impl SessionTranscriptView {
 fn build_session_summaries(
     store: &PersistenceStore,
     config: &AppConfig,
-    workspace: &agent_runtime::workspace::WorkspaceRef,
+    _workspace: &agent_runtime::workspace::WorkspaceRef,
 ) -> Result<Vec<SessionSummary>, BootstrapError> {
     let sessions = store
         .list_sessions()?
         .into_iter()
-        .map(agent_runtime::session::Session::try_from)
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(BootstrapError::RecordConversion)?;
+        .filter_map(|record| agent_runtime::session::Session::try_from(record).ok())
+        .collect::<Vec<_>>();
     let runs = store
-        .load_execution_state()?
-        .runs
+        .list_runs()?
         .into_iter()
-        .map(RunSnapshot::try_from)
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(BootstrapError::RecordConversion)?;
+        .filter_map(|record| RunSnapshot::try_from(record).ok())
+        .collect::<Vec<_>>();
     let jobs = store
         .list_jobs()?
         .into_iter()
-        .map(agent_runtime::mission::JobSpec::try_from)
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(BootstrapError::RecordConversion)?;
+        .filter_map(|record| agent_runtime::mission::JobSpec::try_from(record).ok())
+        .collect::<Vec<_>>();
     let schedules = store
         .list_agent_schedules()?
         .into_iter()
-        .map(AgentSchedule::try_from)
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(BootstrapError::RecordConversion)?;
+        .filter_map(|record| AgentSchedule::try_from(record).ok())
+        .collect::<Vec<_>>();
     let schedules_by_id = schedules
         .into_iter()
         .map(|schedule| (schedule.id.clone(), schedule))
         .collect::<std::collections::HashMap<_, _>>();
-
-    sessions
+    let agent_names = store
+        .list_agent_profiles()?
         .into_iter()
-        .map(|session| {
-            let schedule = session
-                .delegation_label
-                .as_deref()
-                .and_then(|label| label.strip_prefix("agent-schedule:"))
-                .and_then(|schedule_id| schedules_by_id.get(schedule_id))
-                .cloned()
-                .map(SessionScheduleSummary::from);
-            session_summary_from_session(
-                store, config, &runs, &jobs, &schedule, &session, workspace,
-            )
-        })
-        .collect()
+        .map(|record| (record.id, record.name))
+        .collect::<std::collections::HashMap<_, _>>();
+
+    let mut summaries = Vec::new();
+    for session in sessions {
+        let schedule = session
+            .delegation_label
+            .as_deref()
+            .and_then(|label| label.strip_prefix("agent-schedule:"))
+            .and_then(|schedule_id| schedules_by_id.get(schedule_id))
+            .cloned()
+            .map(SessionScheduleSummary::from);
+        if let Ok(summary) = session_list_summary_from_session(
+            store,
+            config,
+            &runs,
+            &jobs,
+            &schedule,
+            &session,
+            &agent_names,
+        ) {
+            summaries.push(summary);
+        }
+    }
+
+    Ok(summaries)
 }
 
 pub(crate) fn build_single_session_summary(
@@ -509,6 +517,115 @@ fn session_summary_from_session(
         has_pending_approval: session_head.pending_approval_count > 0,
         last_message_preview,
         message_count: session_head.message_count,
+        background_job_count,
+        running_background_job_count,
+        queued_background_job_count,
+        created_at: session.created_at,
+        updated_at,
+    })
+}
+
+fn session_list_summary_from_session(
+    store: &PersistenceStore,
+    config: &AppConfig,
+    runs: &[RunSnapshot],
+    jobs: &[agent_runtime::mission::JobSpec],
+    schedule: &Option<SessionScheduleSummary>,
+    session: &agent_runtime::session::Session,
+    agent_names: &std::collections::HashMap<String, String>,
+) -> Result<SessionSummary, BootstrapError> {
+    let transcript_count = store.count_transcripts_for_session(&session.id)?;
+    let latest_transcript = store.get_latest_transcript_for_session(&session.id)?;
+    let context_summary = store
+        .get_context_summary(&session.id)?
+        .and_then(|record| ContextSummary::try_from(record).ok());
+    let agent_name = agent_names
+        .get(&session.agent_profile_id)
+        .cloned()
+        .unwrap_or_else(|| session.agent_profile_id.clone());
+    let scheduled_by = session
+        .delegation_label
+        .as_deref()
+        .and_then(|label| label.strip_prefix("agent-schedule:"))
+        .map(str::to_string);
+    let session_runs = runs
+        .iter()
+        .filter(|run| run.session_id == session.id)
+        .collect::<Vec<_>>();
+    let transcript_updated_at = latest_transcript
+        .as_ref()
+        .map(|record| record.created_at)
+        .unwrap_or(session.updated_at);
+    let context_updated_at = context_summary
+        .as_ref()
+        .map(|summary| summary.updated_at)
+        .unwrap_or(session.updated_at);
+    let run_updated_at = session_runs
+        .iter()
+        .map(|run| run.updated_at)
+        .max()
+        .unwrap_or(session.updated_at);
+    let session_jobs = jobs
+        .iter()
+        .filter(|job| job.session_id == session.id && job.status.is_active())
+        .collect::<Vec<_>>();
+    let background_job_count = session_jobs.len();
+    let running_background_job_count = session_jobs
+        .iter()
+        .filter(|job| job.status == agent_runtime::mission::JobStatus::Running)
+        .count();
+    let queued_background_job_count = session_jobs
+        .iter()
+        .filter(|job| job.status == agent_runtime::mission::JobStatus::Queued)
+        .count();
+    let latest_usage = latest_provider_usage(runs, &session.id);
+    let approximated_context_tokens = context_summary
+        .as_ref()
+        .map(|summary| summary.summary_token_estimate)
+        .unwrap_or(0)
+        .saturating_add(
+            latest_transcript
+                .as_ref()
+                .map(|record| approximate_token_count(record.content.as_str()))
+                .unwrap_or(0),
+        );
+    let updated_at = session
+        .updated_at
+        .max(transcript_updated_at)
+        .max(context_updated_at)
+        .max(run_updated_at);
+
+    Ok(SessionSummary {
+        id: session.id.clone(),
+        title: session.title.clone(),
+        agent_profile_id: session.agent_profile_id.clone(),
+        agent_name,
+        scheduled_by,
+        schedule: schedule.clone(),
+        model: session
+            .settings
+            .model
+            .clone()
+            .or_else(|| config.provider.default_model.clone()),
+        reasoning_visible: session.settings.reasoning_visible,
+        think_level: session.settings.think_level.clone(),
+        compactifications: session.settings.compactifications,
+        completion_nudges: session.settings.completion_nudges,
+        auto_approve: session.settings.auto_approve,
+        context_tokens: latest_usage
+            .as_ref()
+            .map(|usage| usage.input_tokens)
+            .unwrap_or(approximated_context_tokens),
+        usage_input_tokens: latest_usage.as_ref().map(|usage| usage.input_tokens),
+        usage_output_tokens: latest_usage.as_ref().map(|usage| usage.output_tokens),
+        usage_total_tokens: latest_usage.as_ref().map(|usage| usage.total_tokens),
+        has_pending_approval: session_runs
+            .iter()
+            .any(|run| !run.pending_approvals.is_empty()),
+        last_message_preview: latest_transcript
+            .as_ref()
+            .map(|record| prompting::preview_text(record.content.as_str(), 96)),
+        message_count: transcript_count,
         background_job_count,
         running_background_job_count,
         queued_background_job_count,

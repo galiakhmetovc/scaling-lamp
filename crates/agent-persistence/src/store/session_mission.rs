@@ -287,6 +287,51 @@ impl TranscriptRepository for PersistenceStore {
         }
     }
 
+    fn get_latest_transcript_for_session(
+        &self,
+        session_id: &str,
+    ) -> Result<Option<TranscriptRecord>, StoreError> {
+        let row = self
+            .connection
+            .query_row(
+                "SELECT id, session_id, run_id, kind, storage_key, byte_len, sha256, created_at
+                 FROM transcripts
+                 WHERE session_id = ?1
+                 ORDER BY created_at DESC, id DESC
+                 LIMIT 1",
+                [session_id],
+                |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, Option<String>>(2)?,
+                        row.get::<_, String>(3)?,
+                        row.get::<_, String>(4)?,
+                        row.get::<_, i64>(5)?,
+                        row.get::<_, String>(6)?,
+                        row.get::<_, i64>(7)?,
+                    ))
+                },
+            )
+            .optional()?;
+
+        match row {
+            Some(row) => Ok(Some(self.hydrate_transcript_record(row)?)),
+            None => Ok(None),
+        }
+    }
+
+    fn count_transcripts_for_session(&self, session_id: &str) -> Result<usize, StoreError> {
+        self.connection
+            .query_row(
+                "SELECT COUNT(*) FROM transcripts WHERE session_id = ?1",
+                [session_id],
+                |row| row.get::<_, i64>(0),
+            )
+            .map(|count| count.max(0) as usize)
+            .map_err(StoreError::from)
+    }
+
     fn list_transcripts_for_session(
         &self,
         session_id: &str,

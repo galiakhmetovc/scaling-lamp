@@ -36,6 +36,10 @@ const REPL_HELP: &str = QUICK_HELP_LINE;
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum Command {
     Status,
+    Version,
+    Update {
+        tag: Option<String>,
+    },
     ProviderSmoke {
         prompt: String,
     },
@@ -146,6 +150,8 @@ where
 
     match command {
         Command::Status => render::render_status(app),
+        Command::Version => app.render_version_info(),
+        Command::Update { tag } => app.update_runtime_binary(tag.as_deref()),
         Command::ProviderSmoke { prompt } => render::run_provider_smoke(app, &prompt),
         Command::ChatShow { session_id } => render::show_chat(app, &session_id),
         Command::ChatSend {
