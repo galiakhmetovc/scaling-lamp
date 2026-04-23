@@ -83,6 +83,8 @@ fn validate_rejects_relative_data_dir() {
         provider: Default::default(),
         session_defaults: Default::default(),
         context: Default::default(),
+        runtime_timing: Default::default(),
+        runtime_limits: Default::default(),
     };
 
     let error = config.validate().expect_err("relative path must fail");
@@ -193,6 +195,113 @@ compaction_max_summary_chars = 8192
     assert_eq!(config.context.compaction_keep_tail_messages, 4);
     assert_eq!(config.context.compaction_max_output_tokens, 2048);
     assert_eq!(config.context.compaction_max_summary_chars, 8192);
+}
+
+#[test]
+fn load_merges_runtime_timing_and_limits_from_file() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let config_path = temp.path().join("teamd.toml");
+
+    fs::write(
+        &config_path,
+        r#"
+data_dir = "/tmp/teamd-config"
+
+[runtime_timing]
+daemon_http_connect_timeout_ms = 2500
+daemon_http_request_timeout_ms = 12000
+autospawn_status_poll_attempts = 75
+autospawn_status_poll_interval_ms = 150
+provider_loop_transient_retry_base_delay_ms = 220
+tui_active_run_heartbeat_notice_interval_seconds = 45
+
+[runtime_limits]
+diagnostic_tail_lines = 120
+transcript_tail_run_limit = 48
+agent_list_default_limit = 150
+agent_list_max_limit = 1500
+session_search_default_limit = 30
+session_search_max_limit = 130
+knowledge_read_default_max_bytes = 12000
+knowledge_read_max_bytes = 128000
+"#,
+    )
+    .expect("write config");
+
+    let mut env = base_env(temp.path());
+    env.config_path = Some(config_path);
+
+    let config = AppConfig::load_from_env(&env).expect("load config");
+
+    assert_eq!(config.runtime_timing.daemon_http_connect_timeout_ms, 2500);
+    assert_eq!(config.runtime_timing.daemon_http_request_timeout_ms, 12000);
+    assert_eq!(config.runtime_timing.autospawn_status_poll_attempts, 75);
+    assert_eq!(config.runtime_timing.autospawn_status_poll_interval_ms, 150);
+    assert_eq!(
+        config
+            .runtime_timing
+            .provider_loop_transient_retry_base_delay_ms,
+        220
+    );
+    assert_eq!(
+        config
+            .runtime_timing
+            .tui_active_run_heartbeat_notice_interval_seconds,
+        45
+    );
+
+    assert_eq!(config.runtime_limits.diagnostic_tail_lines, 120);
+    assert_eq!(config.runtime_limits.transcript_tail_run_limit, 48);
+    assert_eq!(config.runtime_limits.agent_list_default_limit, 150);
+    assert_eq!(config.runtime_limits.agent_list_max_limit, 1500);
+    assert_eq!(config.runtime_limits.session_search_default_limit, 30);
+    assert_eq!(config.runtime_limits.session_search_max_limit, 130);
+    assert_eq!(
+        config.runtime_limits.knowledge_read_default_max_bytes,
+        12000
+    );
+    assert_eq!(config.runtime_limits.knowledge_read_max_bytes, 128000);
+}
+
+#[test]
+fn config_example_toml_loads() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let config_path = temp.path().join("config.example.toml");
+    fs::write(
+        &config_path,
+        include_str!("../../../../config.example.toml"),
+    )
+    .expect("write config example");
+
+    let mut env = base_env(temp.path());
+    env.config_path = Some(config_path);
+
+    let config = AppConfig::load_from_env(&env).expect("load config example");
+
+    assert_eq!(config.daemon.bind_port, 5140);
+    assert_eq!(config.runtime_timing.daemon_http_request_timeout_ms, 5000);
+    assert_eq!(config.runtime_limits.diagnostic_tail_lines, 80);
+}
+
+#[test]
+fn validate_rejects_invalid_runtime_limit_bounds() {
+    let config = AppConfig {
+        data_dir: PathBuf::from("/tmp/teamd"),
+        daemon: Default::default(),
+        permissions: Default::default(),
+        provider: Default::default(),
+        session_defaults: Default::default(),
+        context: Default::default(),
+        runtime_timing: Default::default(),
+        runtime_limits: super::RuntimeLimitsConfig {
+            agent_list_default_limit: 200,
+            agent_list_max_limit: 100,
+            ..Default::default()
+        },
+    };
+
+    let error = config.validate().expect_err("invalid bounds must fail");
+    assert!(matches!(error, ConfigError::InvalidProviderValue { .. }));
 }
 
 #[test]

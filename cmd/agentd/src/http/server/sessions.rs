@@ -179,6 +179,11 @@ pub(super) fn handle_nested_routes(app: &App, request: Request) -> std::io::Resu
         (Method::Get, [session_id, transcript]) if transcript == "transcript" => {
             handle_session_transcript(app, request, session_id.as_str())
         }
+        (Method::Get, [session_id, transcript_tail, limit])
+            if transcript_tail == "transcript-tail" =>
+        {
+            handle_session_transcript_tail(app, request, session_id.as_str(), limit.as_str())
+        }
         (Method::Get, [session_id, approvals]) if approvals == "approvals" => {
             handle_pending_approvals(app, request, session_id.as_str())
         }
@@ -314,6 +319,32 @@ fn handle_session_summary(app: &App, request: Request, session_id: &str) -> std:
 
 fn handle_session_transcript(app: &App, request: Request, session_id: &str) -> std::io::Result<()> {
     match app.session_transcript(session_id) {
+        Ok(transcript) => {
+            respond_json::<SessionTranscriptResponse>(request, StatusCode(200), &transcript)
+        }
+        Err(error) => {
+            let (status, payload) = map_bootstrap_error(error);
+            respond_json(request, status, &payload)
+        }
+    }
+}
+
+fn handle_session_transcript_tail(
+    app: &App,
+    request: Request,
+    session_id: &str,
+    limit: &str,
+) -> std::io::Result<()> {
+    let max_entries = match limit.parse::<usize>() {
+        Ok(limit) => limit,
+        Err(error) => {
+            let (status, payload) = map_bootstrap_error(BootstrapError::Usage {
+                reason: format!("invalid transcript tail limit {limit}: {error}"),
+            });
+            return respond_json(request, status, &payload);
+        }
+    };
+    match app.session_transcript_tail(session_id, max_entries) {
         Ok(transcript) => {
             respond_json::<SessionTranscriptResponse>(request, StatusCode(200), &transcript)
         }

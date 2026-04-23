@@ -4,6 +4,7 @@ pub mod agents;
 pub mod bootstrap;
 pub mod cli;
 pub mod daemon;
+pub mod diagnostics;
 pub mod execution;
 pub mod help;
 pub mod http;

@@ -248,8 +248,13 @@ impl App {
         now: i64,
     ) -> Result<execution::ToolExecutionReport, BootstrapError> {
         let store = self.store()?;
+        let provider = if matches!(tool_call, ToolCall::SessionWait(_)) {
+            Some(self.provider_driver()?)
+        } else {
+            None
+        };
         self.execution_service()
-            .request_tool_approval(&store, job_id, run_id, tool_call, now)
+            .request_tool_approval(&store, provider.as_deref(), job_id, run_id, tool_call, now)
             .map_err(BootstrapError::Execution)
     }
 

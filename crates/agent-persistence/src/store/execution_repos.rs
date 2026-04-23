@@ -114,6 +114,121 @@ impl RunRepository for PersistenceStore {
         Ok(runs)
     }
 
+    fn list_runs_for_session(&self, session_id: &str) -> Result<Vec<RunRecord>, StoreError> {
+        let mut statement = self.connection.prepare(
+            "SELECT id, session_id, mission_id, status, error, result, provider_usage_json, active_processes_json, recent_steps_json, evidence_refs_json,
+                    pending_approvals_json, provider_loop_json, delegate_runs_json, started_at, updated_at, finished_at
+             FROM runs
+             WHERE session_id = ?1
+             ORDER BY started_at ASC, id ASC",
+        )?;
+        let mut rows = statement.query([session_id])?;
+        let mut runs = Vec::new();
+
+        while let Some(row) = rows.next()? {
+            runs.push(RunRecord {
+                id: row.get(0)?,
+                session_id: row.get(1)?,
+                mission_id: row.get(2)?,
+                status: row.get(3)?,
+                error: row.get(4)?,
+                result: row.get(5)?,
+                provider_usage_json: row.get(6)?,
+                active_processes_json: row.get(7)?,
+                recent_steps_json: row.get(8)?,
+                evidence_refs_json: row.get(9)?,
+                pending_approvals_json: row.get(10)?,
+                provider_loop_json: row.get(11)?,
+                delegate_runs_json: row.get(12)?,
+                started_at: row.get(13)?,
+                updated_at: row.get(14)?,
+                finished_at: row.get(15)?,
+            });
+        }
+
+        Ok(runs)
+    }
+
+    fn list_recent_runs_for_session(
+        &self,
+        session_id: &str,
+        limit: usize,
+    ) -> Result<Vec<RunRecord>, StoreError> {
+        if limit == 0 {
+            return Ok(Vec::new());
+        }
+
+        let mut statement = self.connection.prepare(
+            "SELECT id, session_id, mission_id, status, error, result, provider_usage_json, active_processes_json, recent_steps_json, evidence_refs_json,
+                    pending_approvals_json, provider_loop_json, delegate_runs_json, started_at, updated_at, finished_at
+             FROM runs
+             WHERE session_id = ?1
+             ORDER BY updated_at DESC, started_at DESC, id DESC
+             LIMIT ?2",
+        )?;
+        let mut rows = statement.query(params![session_id, limit as i64])?;
+        let mut runs = Vec::new();
+
+        while let Some(row) = rows.next()? {
+            runs.push(RunRecord {
+                id: row.get(0)?,
+                session_id: row.get(1)?,
+                mission_id: row.get(2)?,
+                status: row.get(3)?,
+                error: row.get(4)?,
+                result: row.get(5)?,
+                provider_usage_json: row.get(6)?,
+                active_processes_json: row.get(7)?,
+                recent_steps_json: row.get(8)?,
+                evidence_refs_json: row.get(9)?,
+                pending_approvals_json: row.get(10)?,
+                provider_loop_json: row.get(11)?,
+                delegate_runs_json: row.get(12)?,
+                started_at: row.get(13)?,
+                updated_at: row.get(14)?,
+                finished_at: row.get(15)?,
+            });
+        }
+
+        runs.reverse();
+        Ok(runs)
+    }
+
+    fn get_latest_run_summary_rollup_for_session(
+        &self,
+        session_id: &str,
+    ) -> Result<Option<RunSummaryRollup>, StoreError> {
+        self.connection
+            .query_row(
+                "SELECT id, session_id, provider_usage_json, pending_approvals_json, started_at, updated_at
+                 FROM runs
+                 WHERE session_id = ?1
+                 ORDER BY updated_at DESC, started_at DESC, id DESC
+                 LIMIT 1",
+                [session_id],
+                row_to_run_summary_rollup,
+            )
+            .optional()
+            .map_err(StoreError::from)
+    }
+
+    fn session_has_pending_approval(&self, session_id: &str) -> Result<bool, StoreError> {
+        self.connection
+            .query_row(
+                "SELECT EXISTS(
+                    SELECT 1
+                    FROM runs
+                    WHERE session_id = ?1
+                      AND pending_approvals_json NOT IN ('[]', 'null', '')
+                    LIMIT 1
+                )",
+                [session_id],
+                |row| row.get::<_, i64>(0),
+            )
+            .map(|exists| exists != 0)
+            .map_err(StoreError::from)
+    }
+
     fn list_run_summary_rollups(&self) -> Result<Vec<RunSummaryRollup>, StoreError> {
         let mut statement = self.connection.prepare(
             "SELECT id, session_id, provider_usage_json, pending_approvals_json, started_at, updated_at
@@ -329,26 +444,30 @@ fn collect_run_summary_rollups(
     let mut rollups = Vec::new();
 
     while let Some(row) = rows.next()? {
-        let provider_usage_json: String = row.get(2)?;
-        let pending_approvals_json: String = row.get(3)?;
-        let latest_provider_usage =
-            serde_json::from_str::<Option<ProviderUsage>>(&provider_usage_json).unwrap_or(None);
-        let pending_approval_count =
-            serde_json::from_str::<Vec<serde_json::Value>>(&pending_approvals_json)
-                .map(|entries| entries.len())
-                .unwrap_or(0);
-
-        rollups.push(RunSummaryRollup {
-            id: row.get(0)?,
-            session_id: row.get(1)?,
-            latest_provider_usage,
-            pending_approval_count,
-            started_at: row.get(4)?,
-            updated_at: row.get(5)?,
-        });
+        rollups.push(row_to_run_summary_rollup(row)?);
     }
 
     Ok(rollups)
+}
+
+fn row_to_run_summary_rollup(row: &rusqlite::Row<'_>) -> rusqlite::Result<RunSummaryRollup> {
+    let provider_usage_json: String = row.get(2)?;
+    let pending_approvals_json: String = row.get(3)?;
+    let latest_provider_usage =
+        serde_json::from_str::<Option<ProviderUsage>>(&provider_usage_json).unwrap_or(None);
+    let pending_approval_count =
+        serde_json::from_str::<Vec<serde_json::Value>>(&pending_approvals_json)
+            .map(|entries| entries.len())
+            .unwrap_or(0);
+
+    Ok(RunSummaryRollup {
+        id: row.get(0)?,
+        session_id: row.get(1)?,
+        latest_provider_usage,
+        pending_approval_count,
+        started_at: row.get(4)?,
+        updated_at: row.get(5)?,
+    })
 }
 
 fn collect_jobs(

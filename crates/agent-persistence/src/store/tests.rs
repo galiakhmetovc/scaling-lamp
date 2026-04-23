@@ -24,6 +24,9 @@ use agent_runtime::plan::{PlanItem, PlanItemStatus, PlanSnapshot};
 use rusqlite::params;
 use std::fs;
 use std::path::PathBuf;
+use std::sync::mpsc;
+use std::thread;
+use std::time::Duration;
 
 #[test]
 fn open_bootstraps_schema_and_round_trips_structured_and_file_backed_data() {
@@ -1854,6 +1857,179 @@ fn open_does_not_prune_payloads_that_are_mid_commit() {
             .expect("get transcript"),
         Some(transcript)
     );
+}
+
+#[test]
+fn open_runtime_does_not_block_on_bootstrap_work_when_another_connection_holds_a_write_lock() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let scaffold = PersistenceScaffold::from_config(crate::AppConfig {
+        data_dir: temp.path().join("state-root"),
+        ..crate::AppConfig::default()
+    });
+    let store = super::PersistenceStore::open(&scaffold).expect("bootstrap store");
+    drop(store);
+
+    let locker =
+        rusqlite::Connection::open(&scaffold.stores.metadata_db).expect("open locking connection");
+    locker
+        .execute_batch("BEGIN EXCLUSIVE;")
+        .expect("acquire exclusive lock");
+
+    let (tx, rx) = mpsc::channel();
+    let scaffold_clone = scaffold.clone();
+    let handle = thread::spawn(move || {
+        let result = super::PersistenceStore::open_runtime(&scaffold_clone).map(|_| ());
+        let _ = tx.send(result);
+    });
+
+    let received = rx.recv_timeout(Duration::from_millis(500));
+
+    locker.execute_batch("ROLLBACK;").expect("release lock");
+    handle.join().expect("join open_runtime thread");
+
+    match received {
+        Ok(Ok(())) => {}
+        Ok(Err(error)) => panic!("open_runtime failed under lock: {error}"),
+        Err(mpsc::RecvTimeoutError::Timeout) => {
+            panic!("open_runtime blocked behind request-path bootstrap work")
+        }
+        Err(mpsc::RecvTimeoutError::Disconnected) => {
+            panic!("open_runtime thread disconnected before reporting")
+        }
+    }
+}
+
+#[test]
+fn list_runs_for_session_does_not_block_when_another_connection_holds_a_write_lock() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let scaffold = PersistenceScaffold::from_config(crate::AppConfig {
+        data_dir: temp.path().join("state-root"),
+        ..crate::AppConfig::default()
+    });
+    let store = super::PersistenceStore::open(&scaffold).expect("bootstrap store");
+    store
+        .put_session(&SessionRecord {
+            id: "session-1".to_string(),
+            title: "Locked reads".to_string(),
+            prompt_override: None,
+            settings_json: "{\"model\":\"gpt-5.4\"}".to_string(),
+            agent_profile_id: "default".to_string(),
+            active_mission_id: None,
+            parent_session_id: None,
+            parent_job_id: None,
+            delegation_label: None,
+            created_at: 1,
+            updated_at: 1,
+        })
+        .expect("persist session");
+    drop(store);
+
+    let locker =
+        rusqlite::Connection::open(&scaffold.stores.metadata_db).expect("open locking connection");
+    locker
+        .execute_batch("BEGIN EXCLUSIVE;")
+        .expect("acquire exclusive lock");
+
+    let (tx, rx) = mpsc::channel();
+    let scaffold_clone = scaffold.clone();
+    let handle = thread::spawn(move || {
+        let result = super::PersistenceStore::open_runtime(&scaffold_clone)
+            .and_then(|store| store.list_runs_for_session("session-1"))
+            .map(|_| ());
+        let _ = tx.send(result);
+    });
+
+    let received = rx.recv_timeout(Duration::from_millis(500));
+
+    locker.execute_batch("ROLLBACK;").expect("release lock");
+    handle.join().expect("join list_runs thread");
+
+    match received {
+        Ok(Ok(())) => {}
+        Ok(Err(error)) => panic!("list_runs_for_session failed under lock: {error}"),
+        Err(mpsc::RecvTimeoutError::Timeout) => {
+            panic!("list_runs_for_session blocked behind a concurrent write lock")
+        }
+        Err(mpsc::RecvTimeoutError::Disconnected) => {
+            panic!("list_runs_for_session thread disconnected before reporting")
+        }
+    }
+}
+
+#[test]
+fn put_run_waits_for_a_short_writer_lock_instead_of_failing_immediately() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let scaffold = PersistenceScaffold::from_config(crate::AppConfig {
+        data_dir: temp.path().join("state-root"),
+        ..crate::AppConfig::default()
+    });
+    let store = super::PersistenceStore::open(&scaffold).expect("bootstrap store");
+    store
+        .put_session(&SessionRecord {
+            id: "session-1".to_string(),
+            title: "Write contention".to_string(),
+            prompt_override: None,
+            settings_json: "{\"model\":\"gpt-5.4\"}".to_string(),
+            agent_profile_id: "default".to_string(),
+            active_mission_id: None,
+            parent_session_id: None,
+            parent_job_id: None,
+            delegation_label: None,
+            created_at: 1,
+            updated_at: 1,
+        })
+        .expect("persist session");
+    drop(store);
+
+    let locker =
+        rusqlite::Connection::open(&scaffold.stores.metadata_db).expect("open locking connection");
+    locker
+        .execute_batch("BEGIN IMMEDIATE;")
+        .expect("acquire writer lock");
+
+    let (tx, rx) = mpsc::channel();
+    let scaffold_clone = scaffold.clone();
+    let handle = thread::spawn(move || {
+        let run = RunRecord {
+            id: "run-1".to_string(),
+            session_id: "session-1".to_string(),
+            mission_id: None,
+            status: "running".to_string(),
+            error: None,
+            result: None,
+            provider_usage_json: "null".to_string(),
+            active_processes_json: "[]".to_string(),
+            recent_steps_json: "[]".to_string(),
+            evidence_refs_json: "[]".to_string(),
+            pending_approvals_json: "[]".to_string(),
+            provider_loop_json: "null".to_string(),
+            delegate_runs_json: "[]".to_string(),
+            started_at: 1,
+            updated_at: 1,
+            finished_at: None,
+        };
+        let result = super::PersistenceStore::open_runtime(&scaffold_clone)
+            .and_then(|store| store.put_run(&run))
+            .map(|_| ());
+        let _ = tx.send(result);
+    });
+
+    thread::sleep(Duration::from_millis(150));
+    locker.execute_batch("ROLLBACK;").expect("release lock");
+
+    let received = rx.recv_timeout(Duration::from_secs(1));
+    handle.join().expect("join put_run thread");
+
+    match received {
+        Ok(Ok(())) => {}
+        Ok(Err(error)) => panic!("put_run failed after short write contention: {error}"),
+        Err(mpsc::RecvTimeoutError::Timeout) => {
+            panic!("put_run kept blocking after the writer lock was released")
+        }
+        Err(mpsc::RecvTimeoutError::Disconnected) => {
+            panic!("put_run thread disconnected before reporting")
+        }
+    }
 }
 
 #[test]

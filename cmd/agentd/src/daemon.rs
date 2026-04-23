@@ -1,11 +1,12 @@
 use crate::bootstrap::App;
+use crate::diagnostics::DiagnosticEventBuilder;
 use crate::http::server;
 use std::net::TcpStream;
 use std::process::{Command, Stdio};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread::{self, JoinHandle};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 pub struct DaemonHandle {
     shutdown: Arc<AtomicBool>,
@@ -13,11 +14,42 @@ pub struct DaemonHandle {
 }
 
 pub fn serve(app: App) -> std::io::Result<()> {
+    DiagnosticEventBuilder::new(
+        &app.config,
+        "info",
+        "daemon",
+        "serve.start",
+        "daemon server starting",
+    )
+    .field("bind_host", &app.config.daemon.bind_host)
+    .field("bind_port", app.config.daemon.bind_port)
+    .emit(&app.persistence.audit);
+    let diagnostic_app = app.clone();
     let shutdown = Arc::new(AtomicBool::new(false));
     let worker = spawn_background_worker(app.clone(), shutdown.clone());
     let result = server::serve(app, shutdown.clone());
     shutdown.store(true, Ordering::Relaxed);
     let _ = worker.join();
+    let finish = match &result {
+        Ok(()) => DiagnosticEventBuilder::new(
+            &diagnostic_app.config,
+            "info",
+            "daemon",
+            "serve.finish",
+            "daemon server stopped",
+        )
+        .outcome("ok"),
+        Err(error) => DiagnosticEventBuilder::new(
+            &diagnostic_app.config,
+            "error",
+            "daemon",
+            "serve.finish",
+            "daemon server stopped with error",
+        )
+        .error(error.to_string())
+        .outcome("error"),
+    };
+    finish.emit(&diagnostic_app.persistence.audit);
     result
 }
 
@@ -37,6 +69,11 @@ pub fn spawn_for_test(app: App) -> std::io::Result<DaemonHandle> {
         "{}:{}",
         app.config.daemon.bind_host, app.config.daemon.bind_port
     );
+    let startup_probe_attempts = app.config.runtime_timing.daemon_test_startup_probe_attempts;
+    let startup_probe_interval = app
+        .config
+        .runtime_timing
+        .daemon_test_startup_probe_interval();
     let shutdown = Arc::new(AtomicBool::new(false));
     let worker_app = app.clone();
     let worker_shutdown = shutdown.clone();
@@ -49,11 +86,11 @@ pub fn spawn_for_test(app: App) -> std::io::Result<DaemonHandle> {
         result
     });
 
-    for _ in 0..50 {
+    for _ in 0..startup_probe_attempts {
         if TcpStream::connect(&bind).is_ok() {
             break;
         }
-        thread::sleep(Duration::from_millis(20));
+        thread::sleep(startup_probe_interval);
     }
 
     Ok(DaemonHandle {
@@ -87,7 +124,11 @@ fn spawn_background_worker(app: App, shutdown: Arc<AtomicBool>) -> JoinHandle<()
     thread::spawn(move || {
         while !shutdown.load(Ordering::Relaxed) {
             let _ = app.background_worker_tick(unix_timestamp());
-            thread::sleep(Duration::from_millis(100));
+            thread::sleep(
+                app.config
+                    .runtime_timing
+                    .daemon_background_worker_tick_interval(),
+            );
         }
     })
 }

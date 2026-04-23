@@ -907,6 +907,7 @@ impl ExecutionService {
                 let model_output = self.invoke_provider_tool_call(
                     super::provider_loop::ProviderToolExecutionContext {
                         store,
+                        provider,
                         session_id: &session.id,
                         now,
                     },

@@ -8,6 +8,18 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 pub(crate) const APP_VERSION: &str = env!("CARGO_PKG_VERSION");
+pub(crate) const APP_COMMIT: &str = match option_env!("AGENTD_GIT_COMMIT") {
+    Some(commit) => commit,
+    None => "unknown",
+};
+pub(crate) const APP_TREE_STATE: &str = match option_env!("AGENTD_GIT_TREE_STATE") {
+    Some(state) => state,
+    None => "unknown",
+};
+pub(crate) const APP_BUILD_ID: &str = match option_env!("AGENTD_BUILD_ID") {
+    Some(build_id) => build_id,
+    None => "unknown",
+};
 const APP_NAME: &str = env!("CARGO_PKG_NAME");
 const APP_REPOSITORY_URL: &str = env!("CARGO_PKG_REPOSITORY");
 const GITHUB_API_BASE: &str = "https://api.github.com";
@@ -107,6 +119,9 @@ impl RuntimeReleaseUpdater {
     pub(crate) fn render_version_info(&self) -> Result<String, BootstrapError> {
         let mut lines = vec![
             format!("версия={APP_VERSION}"),
+            format!("commit={APP_COMMIT}"),
+            format!("tree={APP_TREE_STATE}"),
+            format!("build_id={APP_BUILD_ID}"),
             format!("бинарь={}", self.current_executable.display()),
             format!(
                 "repository={}/{}",
@@ -381,7 +396,10 @@ fn describe_release_availability(current_version: &str, latest_tag: &str) -> Str
 
 impl App {
     pub fn render_version_info(&self) -> Result<String, BootstrapError> {
-        self.updater.render_version_info()
+        let mut rendered = self.updater.render_version_info()?;
+        rendered.push('\n');
+        rendered.push_str(&format!("data_dir={}", self.config.data_dir.display()));
+        Ok(rendered)
     }
 
     pub fn update_runtime_binary(&self, tag: Option<&str>) -> Result<String, BootstrapError> {
@@ -447,7 +465,7 @@ mod tests {
             },
             Box::new(MockReleaseClient {
                 latest: Some(ReleaseDescriptor {
-                    tag: "v1.0.3".to_string(),
+                    tag: "v1.0.5".to_string(),
                     assets: vec![ReleaseAsset {
                         name: "agentd".to_string(),
                         download_url: "https://example.invalid/agentd".to_string(),
@@ -462,7 +480,10 @@ mod tests {
 
         let about = updater.render_version_info().expect("render version info");
         assert!(about.contains(&format!("версия={APP_VERSION}")));
-        assert!(about.contains("latest_release=v1.0.3"));
+        assert!(about.contains(&format!("commit={}", APP_COMMIT)));
+        assert!(about.contains(&format!("tree={}", APP_TREE_STATE)));
+        assert!(about.contains(&format!("build_id={}", APP_BUILD_ID)));
+        assert!(about.contains("latest_release=v1.0.5"));
         assert!(about.contains("обновление=доступно"));
     }
 

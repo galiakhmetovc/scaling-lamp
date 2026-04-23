@@ -1,0 +1,170 @@
+# Конфигурация
+
+## Где лежит конфиг
+
+По умолчанию `agentd` читает:
+
+- `~/.config/teamd/config.toml`
+
+Путь можно переопределить через:
+
+- `TEAMD_CONFIG`
+
+Полный пример лежит в [config.example.toml](../../config.example.toml).
+
+## Главные секции
+
+### `[daemon]`
+
+Управляет daemon-слоем:
+
+- `bind_host`
+- `bind_port`
+- `bearer_token`
+- `skills_dir`
+- `public_base_url`
+- `a2a_peers`
+- `mcp_connectors`
+
+Если у daemon есть `bearer_token`, HTTP API начинает требовать `Authorization: Bearer ...`.
+
+### `[provider]`
+
+Управляет LLM provider:
+
+- `kind`
+- `api_base`
+- `api_key`
+- `default_model`
+- `connect_timeout_seconds`
+- `request_timeout_seconds`
+- `stream_idle_timeout_seconds`
+- `max_tool_rounds`
+- `max_output_tokens`
+
+Из коробки пример ориентирован на `openai_responses`, но код также знает и другие provider kinds.
+
+### `[permissions]`
+
+Определяет permission mode для tool execution. Это часть общей security/control модели runtime.
+
+### `[session_defaults]`
+
+Управляет настройками новых session:
+
+- `working_memory_limit`
+- `project_memory_enabled`
+
+### `[context]`
+
+Управляет compaction policy:
+
+- `compaction_min_messages`
+- `compaction_keep_tail_messages`
+- `compaction_max_output_tokens`
+- `compaction_max_summary_chars`
+
+### `[runtime_timing]`
+
+Это теперь каноническое место для всех operator-facing timing policies:
+
+- SQLite busy timeout
+- daemon HTTP connect/request timeouts
+- A2A connect timeout
+- autospawn polling
+- shutdown/restart polling
+- server request poll interval
+- background worker tick interval
+- TUI event polling
+- MCP stdio polling
+- provider retry delay
+
+Раньше такие числа были размазаны по коду. Теперь они собраны в одном config surface.
+
+### `[runtime_limits]`
+
+Здесь собраны operator/runtime-facing лимиты:
+
+- diagnostic tail size
+- active run step preview limits
+- transcript tail run limit
+- agent/schedule/MCP/session search limits
+- session read limits
+- knowledge read/search limits
+- timeline preview chars
+- session warm idle seconds
+
+Идея та же: убрать магические числа из runtime path и сделать policy явно конфигурируемой.
+
+## Env overrides
+
+`AppConfig` поддерживает и environment overrides. В коде они читаются в [`crates/agent-persistence/src/config.rs`](../../crates/agent-persistence/src/config.rs).
+
+Полезно знать, что можно переопределять:
+
+- data dir;
+- daemon bind host/port/token/public URL/skills dir;
+- context compaction thresholds;
+- provider kind/base/key/model/timeouts/max rounds/max output tokens;
+- permission mode;
+- session defaults.
+
+На практике это удобно для:
+
+- локальных smoke tests;
+- запуска под `sudo`;
+- временных экспериментов без переписывания основного TOML.
+
+## `data_dir`
+
+`data_dir` особенно важен. От него зависят:
+
+- `state.sqlite`
+- `artifacts/`
+- `archives/`
+- `runs/`
+- `transcripts/`
+- `audit/runtime.jsonl`
+
+Если запускать бинарь то из-под пользователя, то из-под `root`, легко случайно получить два разных state root’а. Поэтому в production-like запуске стоит явно понимать, какой `data_dir` вы используете.
+
+## MCP connectors в конфиге
+
+В `[daemon.mcp_connectors]` можно seed’ить stdio MCP connectors:
+
+- command
+- args
+- env
+- cwd
+- enabled
+
+Это initial state для MCP runtime surface. Потом оператор может управлять коннекторами через TUI/HTTP/CLI.
+
+## A2A peers в конфиге
+
+В `[daemon.a2a_peers.<id>]` можно описывать удалённых peer daemon’ов:
+
+- `base_url`
+- `bearer_token`
+
+Это нужно только для remote delegation; локальный judge не требует A2A.
+
+## Практический минимум
+
+Для обычного локального запуска часто достаточно:
+
+```toml
+[provider]
+kind = "openai_responses"
+default_model = "gpt-5.4"
+
+[permissions]
+mode = "default"
+```
+
+и ключа в env.
+
+## Где смотреть в коде
+
+- Config structs и defaults: [`crates/agent-persistence/src/config.rs`](../../crates/agent-persistence/src/config.rs)
+- Runtime использование timing/limits: [`cmd/agentd/src/http/client.rs`](../../cmd/agentd/src/http/client.rs), [`cmd/agentd/src/daemon.rs`](../../cmd/agentd/src/daemon.rs), [`cmd/agentd/src/tui.rs`](../../cmd/agentd/src/tui.rs), [`cmd/agentd/src/mcp.rs`](../../cmd/agentd/src/mcp.rs), [`cmd/agentd/src/execution/provider_loop.rs`](../../cmd/agentd/src/execution/provider_loop.rs)

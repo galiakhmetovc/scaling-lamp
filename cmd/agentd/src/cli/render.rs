@@ -443,6 +443,15 @@ pub(super) fn render_status(app: &App) -> Result<String, BootstrapError> {
     ))
 }
 
+pub(super) fn render_diagnostics_tail(
+    app: &App,
+    max_lines: Option<usize>,
+) -> Result<String, BootstrapError> {
+    app.render_diagnostics_tail(
+        max_lines.unwrap_or(app.config.runtime_limits.diagnostic_tail_lines),
+    )
+}
+
 pub(super) fn render_daemon_status(status: &StatusResponse) -> Result<String, BootstrapError> {
     Ok(format!(
         "status data_dir={} permission_mode={} sessions={} missions={} runs={} jobs={} components={} state_db={}",

@@ -1,6 +1,7 @@
 use agent_persistence::{
     A2APeerConfig, AppConfig, JobRecord, JobRepository, MissionRecord, MissionRepository,
     PersistenceStore, SessionInboxRepository, SessionRepository, TranscriptRepository,
+    audit::DiagnosticEvent,
 };
 use agent_runtime::mission::{
     JobExecutionInput, JobResult, JobSpec, JobStatus, MissionExecutionIntent, MissionSchedule,
@@ -15,9 +16,10 @@ use agentd::daemon;
 use agentd::http::types::{
     A2ACallbackTargetRequest, A2ADelegationAcceptedResponse, A2ADelegationCompletionOutcomeRequest,
     A2ADelegationCompletionRequest, A2ADelegationCreateRequest, CreateSessionRequest,
-    DaemonStopResponse, ErrorResponse, McpConnectorCreateRequest, McpConnectorDetailResponse,
-    McpConnectorUpdateRequest, MemoryRenderResponse, SessionBackgroundJobResponse,
-    SessionSummaryResponse, SkillCommandRequest, StatusResponse,
+    DaemonStopResponse, DiagnosticsTailRequest, DiagnosticsTailResponse, ErrorResponse,
+    McpConnectorCreateRequest, McpConnectorDetailResponse, McpConnectorUpdateRequest,
+    MemoryRenderResponse, SessionBackgroundJobResponse, SessionSummaryResponse,
+    SkillCommandRequest, StatusResponse,
 };
 use reqwest::StatusCode;
 use reqwest::blocking::Client;
@@ -71,6 +73,11 @@ fn daemon_http_status_is_public_when_no_token_is_configured() {
     let body: StatusResponse = response.json().expect("status json");
     assert!(body.ok);
     assert_eq!(body.bind_host, "127.0.0.1");
+    assert_eq!(body.version.as_deref(), Some(env!("CARGO_PKG_VERSION")));
+    assert_eq!(
+        body.commit.as_deref(),
+        Some(option_env!("AGENTD_GIT_COMMIT").unwrap_or("unknown"))
+    );
 
     handle.stop().expect("stop daemon");
 }
@@ -334,6 +341,36 @@ fn daemon_http_exposes_memory_render_routes() {
 
     handle.stop().expect("stop daemon");
     let _ = std::fs::remove_file(knowledge_absolute);
+}
+
+#[test]
+fn daemon_http_exposes_diagnostics_tail_route() {
+    let (_temp, app, base_url) = test_app(Some("secret-token"));
+    app.persistence
+        .audit
+        .append_event(&DiagnosticEvent::new(
+            "info",
+            "test",
+            "daemon_http.diagnostics",
+            "diagnostics tail fixture",
+            app.config.data_dir.display().to_string(),
+        ))
+        .expect("append diagnostic event");
+    let handle = daemon::spawn_for_test(app).expect("spawn daemon");
+    let client = Client::new();
+
+    let response = client
+        .post(format!("{base_url}/v1/diagnostics/tail"))
+        .bearer_auth("secret-token")
+        .json(&DiagnosticsTailRequest { max_lines: Some(1) })
+        .send()
+        .expect("diagnostics tail request");
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body: DiagnosticsTailResponse = response.json().expect("diagnostics tail json");
+    assert!(body.diagnostics.contains("diagnostics tail fixture"));
+
+    handle.stop().expect("stop daemon");
 }
 
 #[test]

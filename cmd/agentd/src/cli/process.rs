@@ -38,6 +38,7 @@ pub(super) fn daemon_connection_for_process(
 pub(super) fn execute_command(app: &App, command: Command) -> Result<String, BootstrapError> {
     match command {
         Command::Status => render::render_status(app),
+        Command::Logs { max_lines } => render::render_diagnostics_tail(app, max_lines),
         Command::Version => app.render_version_info(),
         Command::Update { tag } => app.update_runtime_binary(tag.as_deref()),
         Command::ProviderSmoke { prompt } => render::run_provider_smoke(app, &prompt),
@@ -95,6 +96,7 @@ pub(super) fn execute_daemon_command(
 ) -> Result<String, BootstrapError> {
     match command {
         Command::Status => render::render_daemon_status(&client.status()?),
+        Command::Logs { max_lines } => client.render_diagnostics_tail(max_lines),
         Command::Version => client.about(),
         Command::Update { tag } => client.update_runtime(tag.as_deref()),
         Command::ChatShow { session_id } => render::show_chat_via_client(client, &session_id),

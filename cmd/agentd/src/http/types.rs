@@ -11,6 +11,14 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct StatusResponse {
     pub ok: bool,
+    #[serde(default)]
+    pub version: Option<String>,
+    #[serde(default)]
+    pub commit: Option<String>,
+    #[serde(default)]
+    pub tree_state: Option<String>,
+    #[serde(default)]
+    pub build_id: Option<String>,
     pub bind_host: String,
     pub bind_port: u16,
     pub permission_mode: String,
@@ -103,6 +111,16 @@ pub struct DebugBundleResponse {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AboutResponse {
     pub about: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DiagnosticsTailRequest {
+    pub max_lines: Option<usize>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DiagnosticsTailResponse {
+    pub diagnostics: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

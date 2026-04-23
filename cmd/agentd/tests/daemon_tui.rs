@@ -10,16 +10,21 @@ use agentd::execution::{ChatExecutionEvent, ExecutionError, ToolExecutionStatus}
 use agentd::http::client::{
     DaemonClient, DaemonConnectOptions, connect_or_autospawn, connect_or_autospawn_detailed,
 };
+use agentd::http::types::{DaemonStopResponse, StatusResponse};
 use agentd::tui::app::TuiAppState;
 use agentd::tui::events::TuiAction;
 use agentd::tui::timeline::{Timeline, TimelineEntryKind};
 use agentd::tui::{dispatch_action, pump_background};
+use std::fs;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::TcpListener;
+use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver};
 use std::sync::{Arc, Mutex};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
+use tiny_http::{Header, Method, Response, Server, StatusCode};
 
 fn free_port() -> u16 {
     TcpListener::bind("127.0.0.1:0")
@@ -258,6 +263,22 @@ fn spawn_streaming_sse_server_sequence(
     });
 
     (format!("http://{address}"), receiver, handle)
+}
+
+fn render_transcript_dump(label: &str, transcript: &bootstrap::SessionTranscriptView) -> String {
+    let mut rendered = format!("=== {label} ({}) ===\n", transcript.session_id);
+    for entry in &transcript.entries {
+        rendered.push_str(&format!("[{}] {}\n", entry.role, entry.content));
+    }
+    rendered
+}
+
+fn write_test_artifact(name: &str, content: &str) -> PathBuf {
+    let dir = PathBuf::from("target/test-artifacts");
+    fs::create_dir_all(&dir).expect("create test artifact dir");
+    let path = dir.join(name);
+    fs::write(&path, content).expect("write test artifact");
+    path
 }
 
 #[test]
@@ -794,6 +815,176 @@ fn daemon_backed_tui_shows_pending_approval_in_timeline() {
 }
 
 #[test]
+fn daemon_backed_tui_can_send_judge_message_and_observe_child_reply() {
+    let (_temp, mut config) = test_config();
+    let (provider_api_base, provider_requests, provider_handle) =
+        spawn_delayed_json_server_sequence(vec![
+            (
+                Duration::from_millis(50),
+                r#"{
+                "id":"resp_judge_tui",
+                "model":"gpt-5.4",
+                "output":[
+                    {
+                        "id":"msg_judge_tui",
+                        "type":"message",
+                        "status":"completed",
+                        "role":"assistant",
+                        "content":[
+                            {
+                                "type":"output_text",
+                                "text":"Я Judge. Проверяю результаты и выношу вердикт."
+                            }
+                        ]
+                    }
+                ],
+                "usage":{"input_tokens":18,"output_tokens":10,"total_tokens":28}
+            }"#
+                .to_string(),
+            ),
+            (
+                Duration::from_millis(50),
+                r#"{
+                "id":"resp_origin_tui",
+                "model":"gpt-5.4",
+                "output":[
+                    {
+                        "id":"msg_origin_tui",
+                        "type":"message",
+                        "status":"completed",
+                        "role":"assistant",
+                        "content":[
+                            {
+                                "type":"output_text",
+                                "text":"Я получил ответ Judge и продолжаю."
+                            }
+                        ]
+                    }
+                ],
+                "usage":{"input_tokens":16,"output_tokens":8,"total_tokens":24}
+            }"#
+                .to_string(),
+            ),
+        ]);
+    config.provider = ConfiguredProvider {
+        kind: ProviderKind::OpenAiResponses,
+        api_base: Some(format!("{provider_api_base}/v1")),
+        api_key: Some("test-key".to_string()),
+        default_model: Some("gpt-5.4".to_string()),
+        ..ConfiguredProvider::default()
+    };
+
+    let app = bootstrap::build_from_config(config.clone()).expect("build app");
+    let handle = daemon::spawn_for_test(app).expect("spawn daemon");
+    let client = DaemonClient::new(&config, &DaemonConnectOptions::default());
+    let origin = client
+        .create_session_auto(Some("Interagent TUI Session"))
+        .expect("create session");
+
+    let mut state = TuiAppState::new(
+        client.list_session_summaries().expect("list sessions"),
+        Some(origin.id.clone()),
+    );
+    state.set_current_session(
+        client.session_summary(&origin.id).expect("session summary"),
+        Timeline::default(),
+    );
+    let mut redraw = |_state: &TuiAppState| Ok::<_, BootstrapError>(());
+
+    dispatch_action(&client, &mut state, TuiAction::OpenJudgeDialog, &mut redraw)
+        .expect("open judge dialog");
+    state.dialog_next_field();
+    state.set_dialog_input("Кто ты?".to_string());
+    dispatch_action(&client, &mut state, TuiAction::ConfirmDialog, &mut redraw)
+        .expect("send judge message");
+
+    assert!(state.timeline().entries(true).iter().any(|entry| {
+        matches!(entry.kind, TimelineEntryKind::System)
+            && entry.content.contains("сообщение отправлено агенту judge")
+    }));
+
+    let started = Instant::now();
+    let child = loop {
+        let sessions = client.list_session_summaries().expect("list sessions");
+        state.sync_sessions(sessions.clone());
+        if let Some(summary) = sessions
+            .into_iter()
+            .find(|summary| summary.id != origin.id && summary.agent_profile_id == "judge")
+        {
+            let child_transcript = client
+                .session_transcript(&summary.id)
+                .expect("child transcript");
+            let origin_transcript = client
+                .session_transcript(&origin.id)
+                .expect("origin transcript");
+            if child_transcript
+                .entries
+                .iter()
+                .any(|entry| entry.content == "Я Judge. Проверяю результаты и выношу вердикт.")
+                && origin_transcript
+                    .entries
+                    .iter()
+                    .any(|entry| entry.content == "Я получил ответ Judge и продолжаю.")
+            {
+                break summary;
+            }
+        }
+        if started.elapsed() > Duration::from_secs(5) {
+            panic!("daemon-backed TUI did not observe judge reply in time");
+        }
+        thread::sleep(Duration::from_millis(50));
+    };
+
+    let origin_transcript = client
+        .session_transcript(&origin.id)
+        .expect("origin transcript");
+    let child_transcript = client
+        .session_transcript(&child.id)
+        .expect("child transcript");
+    let mut transcript_dump = String::from("=== origin tui timeline ===\n");
+    for entry in state.timeline().entries(true) {
+        transcript_dump.push_str(&format!("[{:?}] {}\n", entry.kind, entry.content));
+    }
+    transcript_dump.push('\n');
+    transcript_dump.push_str(&render_transcript_dump(
+        "origin transcript",
+        &origin_transcript,
+    ));
+    transcript_dump.push('\n');
+    transcript_dump.push_str(&render_transcript_dump(
+        "judge child transcript",
+        &child_transcript,
+    ));
+    let artifact_path = write_test_artifact(
+        "daemon-tui-interagent-judge-chat.log",
+        transcript_dump.as_str(),
+    );
+    eprintln!(
+        "saved daemon-backed TUI interagent transcript: {}\n{}",
+        artifact_path.display(),
+        transcript_dump
+    );
+
+    let child_request = provider_requests.recv().expect("judge request");
+    let wake_request = provider_requests.recv().expect("origin wake request");
+    provider_handle.join().expect("join provider");
+    handle.stop().expect("stop daemon");
+
+    assert_eq!(child.agent_profile_id, "judge");
+    assert!(child.title.contains("Judge"));
+    assert_eq!(state.sessions().len(), 2);
+    assert!(
+        state
+            .sessions()
+            .iter()
+            .any(|summary| summary.id == child.id)
+    );
+    assert!(child_request.contains("[agent:Ассистент]"));
+    assert!(child_request.contains("Кто ты?"));
+    assert!(wake_request.to_ascii_lowercase().contains("[agent:judge]"));
+}
+
+#[test]
 fn detailed_daemon_connection_can_shutdown_autospawned_local_daemon() {
     let (_temp, config) = test_config();
     let handle_cell = Arc::new(Mutex::new(None));
@@ -837,13 +1028,211 @@ fn detailed_daemon_connection_can_shutdown_autospawned_local_daemon() {
         .expect("join stopped daemon");
 }
 
+#[test]
+fn daemon_client_restarts_incompatible_local_daemon_build() {
+    let (_temp, config) = test_config();
+    let current_version = env!("CARGO_PKG_VERSION");
+    let current_commit = option_env!("AGENTD_GIT_COMMIT").unwrap_or("unknown");
+    let bind = format!("{}:{}", config.daemon.bind_host, config.daemon.bind_port);
+    let old_status_port = config.daemon.bind_port;
+    let old_data_dir = config.data_dir.display().to_string();
+    let old_daemon_running = Arc::new(AtomicBool::new(true));
+    let old_daemon_flag = old_daemon_running.clone();
+
+    let old_thread = thread::spawn(move || {
+        let server = Server::http(&bind).expect("bind fake old daemon");
+        while old_daemon_flag.load(Ordering::Relaxed) {
+            let Ok(Some(request)) = server.recv_timeout(Duration::from_millis(100)) else {
+                continue;
+            };
+            match (request.method(), request.url()) {
+                (&Method::Get, "/v1/status") => {
+                    let payload = serde_json::to_string(&StatusResponse {
+                        ok: true,
+                        version: Some("1.0.0".to_string()),
+                        commit: Some("oldbeef".to_string()),
+                        tree_state: Some("clean".to_string()),
+                        build_id: Some("old-build".to_string()),
+                        bind_host: "127.0.0.1".to_string(),
+                        bind_port: old_status_port,
+                        permission_mode: "default".to_string(),
+                        session_count: 0,
+                        mission_count: 0,
+                        run_count: 0,
+                        job_count: 0,
+                        components: 0,
+                        data_dir: old_data_dir.clone(),
+                        state_db: format!("{old_data_dir}/state.sqlite"),
+                    })
+                    .expect("serialize status");
+                    let response = Response::from_string(payload)
+                        .with_status_code(StatusCode(200))
+                        .with_header(
+                            Header::from_bytes(&b"content-type"[..], &b"application/json"[..])
+                                .expect("content-type header"),
+                        );
+                    request.respond(response).expect("respond status");
+                }
+                (&Method::Post, "/v1/daemon/stop") => {
+                    old_daemon_flag.store(false, Ordering::Relaxed);
+                    let payload = serde_json::to_string(&DaemonStopResponse { stopping: true })
+                        .expect("serialize stop");
+                    let response = Response::from_string(payload)
+                        .with_status_code(StatusCode(200))
+                        .with_header(
+                            Header::from_bytes(&b"content-type"[..], &b"application/json"[..])
+                                .expect("content-type header"),
+                        );
+                    request.respond(response).expect("respond stop");
+                }
+                _ => {
+                    request
+                        .respond(Response::empty(StatusCode(404)))
+                        .expect("respond 404");
+                }
+            }
+        }
+    });
+
+    let handle_cell = Arc::new(Mutex::new(None));
+    let handle_cell_clone = handle_cell.clone();
+    let config_clone = config.clone();
+    let connection =
+        connect_or_autospawn_detailed(&config, &DaemonConnectOptions::default(), move || {
+            let app = bootstrap::build_from_config(config_clone).expect("build spawned app");
+            let handle = daemon::spawn_for_test(app).expect("spawn daemon");
+            *handle_cell_clone.lock().expect("lock handle") = Some(handle);
+            Ok(())
+        })
+        .expect("restart incompatible daemon");
+
+    assert!(connection.was_autospawned());
+    let status = connection.client().status().expect("status");
+    assert_eq!(status.version.as_deref(), Some(current_version));
+    assert_eq!(status.commit.as_deref(), Some(current_commit));
+
+    old_thread.join().expect("join old daemon");
+    handle_cell
+        .lock()
+        .expect("lock handle")
+        .take()
+        .expect("spawned handle")
+        .stop()
+        .expect("stop daemon");
+}
+
+#[test]
+fn daemon_client_restarts_local_daemon_when_data_dir_mismatches() {
+    let (_temp, config) = test_config();
+    let current_version = env!("CARGO_PKG_VERSION");
+    let current_commit = option_env!("AGENTD_GIT_COMMIT").unwrap_or("unknown");
+    let bind = format!("{}:{}", config.daemon.bind_host, config.daemon.bind_port);
+    let old_status_port = config.daemon.bind_port;
+    let old_data_dir = config
+        .data_dir
+        .parent()
+        .expect("parent")
+        .join("other-state-root")
+        .display()
+        .to_string();
+    let old_daemon_running = Arc::new(AtomicBool::new(true));
+    let old_daemon_flag = old_daemon_running.clone();
+
+    let old_thread = thread::spawn(move || {
+        let server = Server::http(&bind).expect("bind fake old daemon");
+        while old_daemon_flag.load(Ordering::Relaxed) {
+            let Ok(Some(request)) = server.recv_timeout(Duration::from_millis(100)) else {
+                continue;
+            };
+            match (request.method(), request.url()) {
+                (&Method::Get, "/v1/status") => {
+                    let payload = serde_json::to_string(&StatusResponse {
+                        ok: true,
+                        version: Some(current_version.to_string()),
+                        commit: Some(current_commit.to_string()),
+                        tree_state: Some(
+                            option_env!("AGENTD_GIT_TREE_STATE")
+                                .unwrap_or("unknown")
+                                .to_string(),
+                        ),
+                        build_id: Some("other-build".to_string()),
+                        bind_host: "127.0.0.1".to_string(),
+                        bind_port: old_status_port,
+                        permission_mode: "default".to_string(),
+                        session_count: 0,
+                        mission_count: 0,
+                        run_count: 0,
+                        job_count: 0,
+                        components: 0,
+                        data_dir: old_data_dir.clone(),
+                        state_db: format!("{old_data_dir}/state.sqlite"),
+                    })
+                    .expect("serialize status");
+                    let response = Response::from_string(payload)
+                        .with_status_code(StatusCode(200))
+                        .with_header(
+                            Header::from_bytes(&b"content-type"[..], &b"application/json"[..])
+                                .expect("content-type header"),
+                        );
+                    request.respond(response).expect("respond status");
+                }
+                (&Method::Post, "/v1/daemon/stop") => {
+                    old_daemon_flag.store(false, Ordering::Relaxed);
+                    let payload = serde_json::to_string(&DaemonStopResponse { stopping: true })
+                        .expect("serialize stop");
+                    let response = Response::from_string(payload)
+                        .with_status_code(StatusCode(200))
+                        .with_header(
+                            Header::from_bytes(&b"content-type"[..], &b"application/json"[..])
+                                .expect("content-type header"),
+                        );
+                    request.respond(response).expect("respond stop");
+                }
+                _ => {
+                    request
+                        .respond(Response::empty(StatusCode(404)))
+                        .expect("respond 404");
+                }
+            }
+        }
+    });
+
+    let handle_cell = Arc::new(Mutex::new(None));
+    let handle_cell_clone = handle_cell.clone();
+    let config_clone = config.clone();
+    let connection =
+        connect_or_autospawn_detailed(&config, &DaemonConnectOptions::default(), move || {
+            let app = bootstrap::build_from_config(config_clone).expect("build spawned app");
+            let handle = daemon::spawn_for_test(app).expect("spawn daemon");
+            *handle_cell_clone.lock().expect("lock handle") = Some(handle);
+            Ok(())
+        })
+        .expect("restart mismatched data dir daemon");
+
+    assert!(connection.was_autospawned());
+    let status = connection.client().status().expect("status");
+    assert_eq!(status.version.as_deref(), Some(current_version));
+    assert_eq!(status.commit.as_deref(), Some(current_commit));
+    assert_eq!(status.data_dir, config.data_dir.display().to_string());
+
+    old_thread.join().expect("join old daemon");
+    handle_cell
+        .lock()
+        .expect("lock handle")
+        .take()
+        .expect("spawned handle")
+        .stop()
+        .expect("stop daemon");
+}
+
 fn wait_for_daemon_tui_idle(
     client: &DaemonClient,
     state: &mut TuiAppState,
     redraw: &mut dyn FnMut(&TuiAppState) -> Result<(), BootstrapError>,
 ) {
+    let runtime_timing = agent_persistence::RuntimeTimingConfig::default();
     for _ in 0..100 {
-        pump_background(client, state, redraw).expect("pump background");
+        pump_background(client, state, redraw, &runtime_timing).expect("pump background");
         if !state.has_active_run() {
             return;
         }

@@ -14,6 +14,14 @@ impl Command {
         match args.as_slice() {
             [] => Ok(Self::Status),
             [status] if status == "status" => Ok(Self::Status),
+            [command] if command == "logs" || command == "логи" => {
+                Ok(Self::Logs { max_lines: None })
+            }
+            [command, max_lines] if command == "logs" || command == "логи" => {
+                Ok(Self::Logs {
+                    max_lines: Some(parse_log_lines(max_lines)?),
+                })
+            }
             [command] if command == "version" || command == "версия" => Ok(Self::Version),
             [command] if command == "update" || command == "обновить" => {
                 Ok(Self::Update { tag: None })
@@ -148,10 +156,22 @@ impl Command {
                 })
             }
             _ => Err(BootstrapError::Usage {
-                reason: "expected one of: status | version | update [tag] | tui | daemon | daemon stop | provider smoke | chat show/send/repl | mission create/show/tick | session create/show/skills/enable-skill/disable-skill | run show | job show/execute | approval list/approve | delegate list | verification show".to_string(),
+                reason: "expected one of: status | logs [max_lines] | version | update [tag] | tui | daemon | daemon stop | provider smoke | chat show/send/repl | mission create/show/tick | session create/show/skills/enable-skill/disable-skill | run show | job show/execute | approval list/approve | delegate list | verification show".to_string(),
             }),
         }
     }
+}
+
+fn parse_log_lines(raw: &str) -> Result<usize, BootstrapError> {
+    let value = raw.parse::<usize>().map_err(|_| BootstrapError::Usage {
+        reason: "logs max_lines must be a positive integer".to_string(),
+    })?;
+    if value == 0 {
+        return Err(BootstrapError::Usage {
+            reason: "logs max_lines must be greater than zero".to_string(),
+        });
+    }
+    Ok(value)
 }
 
 impl ProcessInvocation {

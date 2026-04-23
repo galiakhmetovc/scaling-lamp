@@ -78,6 +78,7 @@ pub enum ToolName {
     KnowledgeRead,
     SessionSearch,
     SessionRead,
+    SessionWait,
     McpCall,
     McpSearchResources,
     McpReadResource,
@@ -458,6 +459,23 @@ pub struct SessionReadInput {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SessionWaitInput {
+    pub session_id: String,
+    #[serde(default)]
+    pub wait_timeout_ms: Option<u64>,
+    #[serde(default)]
+    pub mode: Option<SessionReadMode>,
+    #[serde(default)]
+    pub cursor: Option<usize>,
+    #[serde(default)]
+    pub max_items: Option<usize>,
+    #[serde(default)]
+    pub max_bytes: Option<usize>,
+    #[serde(default)]
+    pub include_tools: Option<bool>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct McpSearchResourcesInput {
     #[serde(default)]
     pub connector_id: Option<String>,
@@ -637,6 +655,7 @@ pub enum ToolCall {
     KnowledgeRead(KnowledgeReadInput),
     SessionSearch(SessionSearchInput),
     SessionRead(SessionReadInput),
+    SessionWait(SessionWaitInput),
     McpCall(McpCallInput),
     McpSearchResources(McpSearchResourcesInput),
     McpReadResource(McpReadResourceInput),
@@ -1036,6 +1055,20 @@ pub struct SessionReadOutput {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SessionWaitOutput {
+    pub session_id: String,
+    pub wait_timeout_ms: u64,
+    pub settled: bool,
+    pub active_run_count: usize,
+    pub active_job_count: usize,
+    pub latest_run_id: Option<String>,
+    pub latest_run_status: Option<String>,
+    pub latest_job_id: Option<String>,
+    pub latest_job_status: Option<String>,
+    pub snapshot: SessionReadOutput,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct McpDiscoveredResourceOutput {
     pub connector_id: String,
     pub uri: String,
@@ -1277,6 +1310,7 @@ pub enum ToolOutput {
     KnowledgeRead(KnowledgeReadOutput),
     SessionSearch(SessionSearchOutput),
     SessionRead(SessionReadOutput),
+    SessionWait(SessionWaitOutput),
     McpCall(McpCallOutput),
     McpSearchResources(McpSearchResourcesOutput),
     McpReadResource(McpReadResourceOutput),
@@ -1464,6 +1498,7 @@ impl ToolName {
             Self::KnowledgeRead => "knowledge_read",
             Self::SessionSearch => "session_search",
             Self::SessionRead => "session_read",
+            Self::SessionWait => "session_wait",
             Self::McpCall => "mcp_call",
             Self::McpSearchResources => "mcp_search_resources",
             Self::McpReadResource => "mcp_read_resource",
@@ -1537,6 +1572,7 @@ impl ToolCatalog {
                         | ToolName::KnowledgeRead
                         | ToolName::SessionSearch
                         | ToolName::SessionRead
+                        | ToolName::SessionWait
                         | ToolName::McpSearchResources
                         | ToolName::McpReadResource
                         | ToolName::McpSearchPrompts
@@ -1922,7 +1958,7 @@ impl ToolCatalog {
             ToolDefinition {
                 name: ToolName::SessionSearch,
                 family: ToolFamily::Memory,
-                description: "Search historical sessions with bounded pagination and retention-aware metadata",
+                description: "Search historical sessions with bounded pagination so you can find the exact session_id before reading it",
                 policy: ToolPolicy {
                     read_only: true,
                     destructive: false,
@@ -1932,7 +1968,17 @@ impl ToolCatalog {
             ToolDefinition {
                 name: ToolName::SessionRead,
                 family: ToolFamily::Memory,
-                description: "Read one historical session in bounded summary, timeline, transcript, or artifact views",
+                description: "Read one session snapshot in bounded summary, timeline, transcript, or artifact views; this inspects current data and does not wait for new work",
+                policy: ToolPolicy {
+                    read_only: true,
+                    destructive: false,
+                    requires_approval: false,
+                },
+            },
+            ToolDefinition {
+                name: ToolName::SessionWait,
+                family: ToolFamily::Agent,
+                description: "Wait for queued or running work in a session to settle, then return a bounded session snapshot; use this after message_agent when you need the other agent's reply before concluding",
                 policy: ToolPolicy {
                     read_only: true,
                     destructive: false,
@@ -2081,8 +2127,8 @@ impl ToolCatalog {
             },
             ToolDefinition {
                 name: ToolName::MessageAgent,
-                family: ToolFamily::Planning,
-                description: "Send a structured message to another agent by creating a one-shot recipient session and queued background work",
+                family: ToolFamily::Agent,
+                description: "Queue an asynchronous message to another agent by creating a fresh recipient session and background job; this returns recipient ids and does not wait for the reply",
                 policy: ToolPolicy {
                     read_only: false,
                     destructive: false,
@@ -2091,8 +2137,8 @@ impl ToolCatalog {
             },
             ToolDefinition {
                 name: ToolName::GrantAgentChainContinuation,
-                family: ToolFamily::Planning,
-                description: "Grant exactly one additional hop to a blocked inter-agent chain",
+                family: ToolFamily::Agent,
+                description: "Grant exactly one additional hop to a blocked inter-agent chain after you have confirmed the chain hit max_hops",
                 policy: ToolPolicy {
                     read_only: false,
                     destructive: false,
@@ -2370,9 +2416,7 @@ impl ToolRuntime {
             | ToolCall::AddTaskNote(_)
             | ToolCall::EditTask(_)
             | ToolCall::PlanSnapshot(_)
-            | ToolCall::PlanLint(_)
-            | ToolCall::MessageAgent(_)
-            | ToolCall::GrantAgentChainContinuation(_) => Err(ToolError::InvalidPlanWrite {
+            | ToolCall::PlanLint(_) => Err(ToolError::InvalidPlanWrite {
                 reason: "planning tools must execute through the canonical session path"
                     .to_string(),
             }),
@@ -2397,8 +2441,11 @@ impl ToolRuntime {
             | ToolCall::ScheduleRead(_)
             | ToolCall::ScheduleCreate(_)
             | ToolCall::ScheduleUpdate(_)
-            | ToolCall::ScheduleDelete(_) => Err(ToolError::InvalidAgentTool {
-                reason: "agent and schedule tools must execute through the canonical session path"
+            | ToolCall::ScheduleDelete(_)
+            | ToolCall::MessageAgent(_)
+            | ToolCall::SessionWait(_)
+            | ToolCall::GrantAgentChainContinuation(_) => Err(ToolError::InvalidAgentTool {
+                reason: "agent, schedule, and inter-agent tools must execute through the canonical session path"
                     .to_string(),
             }),
             ToolCall::ArtifactRead(_) | ToolCall::ArtifactSearch(_) => {
@@ -2942,6 +2989,7 @@ impl ToolCall {
             Self::KnowledgeRead(_) => ToolName::KnowledgeRead,
             Self::SessionSearch(_) => ToolName::SessionSearch,
             Self::SessionRead(_) => ToolName::SessionRead,
+            Self::SessionWait(_) => ToolName::SessionWait,
             Self::McpCall(_) => ToolName::McpCall,
             Self::McpSearchResources(_) => ToolName::McpSearchResources,
             Self::McpReadResource(_) => ToolName::McpReadResource,
@@ -2997,6 +3045,7 @@ impl ToolCall {
             | Self::KnowledgeRead(_)
             | Self::SessionSearch(_)
             | Self::SessionRead(_)
+            | Self::SessionWait(_)
             | Self::McpSearchResources(_)
             | Self::McpSearchPrompts(_)
             | Self::AgentList(_)
@@ -3171,6 +3220,12 @@ impl ToolCall {
                 "session_read session_id={} mode={}",
                 input.session_id,
                 input.mode.unwrap_or(SessionReadMode::Summary).as_str()
+            ),
+            Self::SessionWait(input) => format!(
+                "session_wait session_id={} timeout_ms={} mode={}",
+                input.session_id,
+                input.wait_timeout_ms.unwrap_or(0),
+                input.mode.unwrap_or(SessionReadMode::Transcript).as_str()
             ),
             Self::McpCall(input) => format!("mcp_call exposed_name={}", input.exposed_name),
             Self::McpSearchResources(input) => format!(
@@ -3464,6 +3519,12 @@ impl ToolCall {
                 }),
             "session_read" => serde_json::from_str(arguments)
                 .map(Self::SessionRead)
+                .map_err(|source| ToolCallParseError::InvalidArguments {
+                    name: name.to_string(),
+                    source,
+                }),
+            "session_wait" => serde_json::from_str(arguments)
+                .map(Self::SessionWait)
                 .map_err(|source| ToolCallParseError::InvalidArguments {
                     name: name.to_string(),
                     source,
@@ -3802,6 +3863,13 @@ impl ToolOutput {
         }
     }
 
+    pub fn into_session_wait(self) -> Option<SessionWaitOutput> {
+        match self {
+            Self::SessionWait(output) => Some(output),
+            _ => None,
+        }
+    }
+
     pub fn into_plan_read(self) -> Option<PlanReadOutput> {
         match self {
             Self::PlanRead(output) => Some(output),
@@ -4012,6 +4080,15 @@ impl ToolOutput {
                 output.messages.len(),
                 output.artifacts.len()
             ),
+            Self::SessionWait(output) => format!(
+                "session_wait session_id={} settled={} active_runs={} active_jobs={} mode={} messages={}",
+                output.session_id,
+                output.settled,
+                output.active_run_count,
+                output.active_job_count,
+                output.snapshot.mode.as_str(),
+                output.snapshot.messages.len()
+            ),
             Self::McpCall(output) => format!(
                 "mcp_call connector_id={} exposed_name={} is_error={}",
                 output.connector_id, output.exposed_name, output.is_error
@@ -4103,7 +4180,7 @@ impl ToolOutput {
                 )
             }
             Self::MessageAgent(output) => format!(
-                "message_agent target_agent_id={} recipient_session_id={} recipient_job_id={} chain_id={} hop_count={}",
+                "message_agent target_agent_id={} recipient_session_id={} recipient_job_id={} chain_id={} hop_count={} delivery_status=queued",
                 output.target_agent_id,
                 output.recipient_session_id,
                 output.recipient_job_id,
@@ -4451,6 +4528,53 @@ impl ToolOutput {
                 })).collect::<Vec<_>>(),
             })
             .to_string(),
+            Self::SessionWait(output) => json!({
+                "tool": "session_wait",
+                "session_id": output.session_id,
+                "wait_timeout_ms": output.wait_timeout_ms,
+                "settled": output.settled,
+                "active_run_count": output.active_run_count,
+                "active_job_count": output.active_job_count,
+                "latest_run_id": output.latest_run_id,
+                "latest_run_status": output.latest_run_status,
+                "latest_job_id": output.latest_job_id,
+                "latest_job_status": output.latest_job_status,
+                "snapshot": {
+                    "session_id": output.snapshot.session_id,
+                    "title": output.snapshot.title,
+                    "agent_profile_id": output.snapshot.agent_profile_id,
+                    "mode": output.snapshot.mode.as_str(),
+                    "tier": output.snapshot.tier.as_str(),
+                    "from_archive": output.snapshot.from_archive,
+                    "cursor": output.snapshot.cursor,
+                    "next_cursor": output.snapshot.next_cursor,
+                    "truncated": output.snapshot.truncated,
+                    "total_items": output.snapshot.total_items,
+                    "summary": output.snapshot.summary.as_ref().map(|summary| json!({
+                        "summary_text": summary.summary_text,
+                        "covered_message_count": summary.covered_message_count,
+                        "summary_token_estimate": summary.summary_token_estimate,
+                        "updated_at": summary.updated_at,
+                    })),
+                    "messages": output.snapshot.messages.iter().map(|message| json!({
+                        "id": message.id,
+                        "run_id": message.run_id,
+                        "role": message.role,
+                        "created_at": message.created_at,
+                        "content": message.content,
+                    })).collect::<Vec<_>>(),
+                    "artifacts": output.snapshot.artifacts.iter().map(|artifact| json!({
+                        "artifact_id": artifact.artifact_id,
+                        "kind": artifact.kind,
+                        "path": artifact.path,
+                        "byte_len": artifact.byte_len,
+                        "created_at": artifact.created_at,
+                        "label": artifact.label,
+                        "summary": artifact.summary,
+                    })).collect::<Vec<_>>(),
+                }
+            })
+            .to_string(),
             Self::McpCall(output) => json!({
                 "tool": "mcp_call",
                 "connector_id": output.connector_id,
@@ -4723,6 +4847,7 @@ impl ToolOutput {
                 "recipient_job_id": output.recipient_job_id,
                 "chain_id": output.chain_id,
                 "hop_count": output.hop_count,
+                "delivery_status": "queued",
             })
             .to_string(),
             Self::GrantAgentChainContinuation(output) => json!({
@@ -5113,7 +5238,7 @@ impl ToolName {
             Self::SessionSearch => json!({
                 "type": "object",
                 "properties": {
-                    "query": { "type": "string", "description": "Search query across historical sessions" },
+                    "query": { "type": "string", "description": "Search query across historical sessions so you can find the exact session_id before reading or waiting on a session" },
                     "limit": { "type": ["integer", "null"], "minimum": 1, "description": "Optional maximum number of search results to return" },
                     "offset": { "type": ["integer", "null"], "minimum": 0, "description": "Optional pagination offset" },
                     "tiers": {
@@ -5131,9 +5256,23 @@ impl ToolName {
             Self::SessionRead => json!({
                 "type": "object",
                 "properties": {
-                    "session_id": { "type": "string", "description": "Historical session id to read" },
-                    "mode": { "type": ["string", "null"], "enum": ["summary", "timeline", "transcript", "artifacts", null], "description": "Optional view mode; defaults to summary" },
+                    "session_id": { "type": "string", "description": "Session id to inspect without waiting for new work" },
+                    "mode": { "type": ["string", "null"], "enum": ["summary", "timeline", "transcript", "artifacts", null], "description": "Optional bounded view mode; defaults to summary" },
                     "cursor": { "type": ["integer", "null"], "minimum": 0, "description": "Optional item cursor returned by a previous session_read call" },
+                    "max_items": { "type": ["integer", "null"], "minimum": 1, "description": "Optional maximum number of messages or artifacts to return" },
+                    "max_bytes": { "type": ["integer", "null"], "minimum": 1, "description": "Optional maximum content bytes to return across message bodies" },
+                    "include_tools": { "type": ["boolean", "null"], "description": "Whether transcript and timeline modes should include tool-role entries; defaults to true" }
+                },
+                "required": ["session_id"],
+                "additionalProperties": false,
+            }),
+            Self::SessionWait => json!({
+                "type": "object",
+                "properties": {
+                    "session_id": { "type": "string", "description": "Session id to wait on; after message_agent this should normally be the returned recipient_session_id" },
+                    "wait_timeout_ms": { "type": ["integer", "null"], "minimum": 0, "description": "Optional wait timeout in milliseconds; defaults to the runtime request timeout and 0 means read immediately without waiting" },
+                    "mode": { "type": ["string", "null"], "enum": ["summary", "timeline", "transcript", "artifacts", null], "description": "Optional bounded view mode for the returned snapshot; defaults to transcript" },
+                    "cursor": { "type": ["integer", "null"], "minimum": 0, "description": "Optional item cursor returned by a previous session_wait or session_read call" },
                     "max_items": { "type": ["integer", "null"], "minimum": 1, "description": "Optional maximum number of messages or artifacts to return" },
                     "max_bytes": { "type": ["integer", "null"], "minimum": 1, "description": "Optional maximum content bytes to return across message bodies" },
                     "include_tools": { "type": ["boolean", "null"], "description": "Whether transcript and timeline modes should include tool-role entries; defaults to true" }
@@ -5288,7 +5427,7 @@ impl ToolName {
                 "type": "object",
                 "properties": {
                     "target_agent_id": { "type": "string", "description": "Global agent profile id to message" },
-                    "message": { "type": "string", "description": "The user-like message to deliver into a fresh recipient session" }
+                    "message": { "type": "string", "description": "The user-like message to deliver into a fresh recipient session; this tool only queues the work and does not wait for the reply" }
                 },
                 "required": ["target_agent_id", "message"],
                 "additionalProperties": false,
@@ -5296,7 +5435,7 @@ impl ToolName {
             Self::GrantAgentChainContinuation => json!({
                 "type": "object",
                 "properties": {
-                    "chain_id": { "type": "string", "description": "Blocked inter-agent chain id to extend once" },
+                    "chain_id": { "type": "string", "description": "Blocked inter-agent chain id to extend once after it hit max_hops" },
                     "reason": { "type": "string", "description": "Why one more hop should be allowed" }
                 },
                 "required": ["chain_id", "reason"],

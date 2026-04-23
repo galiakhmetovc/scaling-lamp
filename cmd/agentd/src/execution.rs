@@ -19,8 +19,9 @@ use crate::mcp::SharedMcpRegistry;
 use agent_persistence::{
     A2APeerConfig, AgentRepository, ContextOffloadRepository, ContextSummaryRepository, JobRecord,
     JobRepository, McpRepository, MissionRecord, MissionRepository, PersistenceStore, PlanRecord,
-    PlanRepository, RecordConversionError, RunRecord, RunRepository, SessionInboxRepository,
-    SessionRepository, StoreError, TranscriptRecord, TranscriptRepository,
+    PlanRepository, RecordConversionError, RunRecord, RunRepository, RuntimeLimitsConfig,
+    RuntimeTimingConfig, SessionInboxRepository, SessionRepository, StoreError, TranscriptRecord,
+    TranscriptRepository,
 };
 use agent_runtime::agent::AgentProfile;
 use agent_runtime::inbox::SessionInboxEvent;
@@ -169,6 +170,8 @@ pub struct ExecutionServiceConfig {
     pub a2a_public_base_url: Option<String>,
     pub a2a_callback_bearer_token: Option<String>,
     pub a2a_peers: BTreeMap<String, A2APeerConfig>,
+    pub runtime_timing: RuntimeTimingConfig,
+    pub runtime_limits: RuntimeLimitsConfig,
 }
 
 impl Default for ExecutionServiceConfig {
@@ -183,6 +186,8 @@ impl Default for ExecutionServiceConfig {
             a2a_public_base_url: None,
             a2a_callback_bearer_token: None,
             a2a_peers: BTreeMap::new(),
+            runtime_timing: RuntimeTimingConfig::default(),
+            runtime_limits: RuntimeLimitsConfig::default(),
         }
     }
 }
@@ -267,6 +272,7 @@ impl ExecutionService {
         mcp: SharedMcpRegistry,
         config: ExecutionServiceConfig,
     ) -> Self {
+        let a2a = A2AClient::new(config.runtime_timing.a2a_http_connect_timeout());
         Self {
             permissions,
             config,
@@ -274,7 +280,7 @@ impl ExecutionService {
             workspace,
             processes,
             mcp,
-            a2a: A2AClient::default(),
+            a2a,
         }
     }
 

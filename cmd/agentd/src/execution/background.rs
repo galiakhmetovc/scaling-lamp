@@ -99,6 +99,84 @@ impl ExecutionService {
         Ok(report)
     }
 
+    pub(crate) fn pump_background_for_session(
+        &self,
+        store: &PersistenceStore,
+        provider: &dyn ProviderDriver,
+        session_id: &str,
+        now: i64,
+    ) -> Result<bool, ExecutionError> {
+        let mut progressed = false;
+        let mut jobs = store
+            .list_active_jobs_for_session(session_id)
+            .map_err(ExecutionError::Store)?
+            .into_iter()
+            .map(JobSpec::try_from)
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(ExecutionError::RecordConversion)?;
+        jobs.sort_by(|left, right| {
+            left.created_at
+                .cmp(&right.created_at)
+                .then(left.id.cmp(&right.id))
+        });
+
+        for job in jobs
+            .into_iter()
+            .filter(|job| self.should_run_background_job(job, now))
+        {
+            if job.cancel_requested_at.is_some() {
+                self.cancel_background_job(store, &job.id, now)?;
+                progressed = true;
+                continue;
+            }
+            if self.should_defer_background_job(store, &job)? {
+                continue;
+            }
+            self.claim_background_job(store, &job.id, now)?;
+            let execution_result = self.execute_background_job(store, provider, &job.id, now);
+            match execution_result {
+                Ok(()) => {
+                    progressed = true;
+                }
+                Err(ExecutionError::CancelledByOperator) => {
+                    progressed = true;
+                }
+                Err(ExecutionError::ApprovalRequired { .. }) => {
+                    progressed = true;
+                }
+                Err(error) => {
+                    if job.kind == JobKind::ScheduledChatTurn {
+                        progressed = true;
+                    } else {
+                        return Err(error);
+                    }
+                }
+            }
+
+            let updated_job = self.load_job(store, &job.id)?;
+            self.sync_schedule_state_from_job(store, &updated_job, now)?;
+            self.deliver_callback_for_job(store, &updated_job, now)?;
+            let updated_job = self.load_job(store, &job.id)?;
+            if self.emit_inbox_event_for_job(store, &updated_job, now)? {
+                progressed = true;
+            }
+        }
+
+        let has_queued_inbox = store
+            .list_queued_session_inbox_events_for_session(session_id)
+            .map_err(ExecutionError::Store)?
+            .into_iter()
+            .any(|event| event.available_at <= now);
+        if has_queued_inbox
+            && !self.session_has_active_run(store, session_id)?
+            && self.execute_session_wakeup_turn(store, provider, session_id, now + 1)?
+        {
+            progressed = true;
+        }
+
+        Ok(progressed)
+    }
+
     fn should_run_background_job(&self, job: &JobSpec, now: i64) -> bool {
         if job.status != JobStatus::Running {
             return false;

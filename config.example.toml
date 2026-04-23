@@ -1,0 +1,82 @@
+# Copy to ~/.config/teamd/config.toml or point TEAMD_CONFIG at your own file.
+# Sensitive values such as API keys can stay in the environment if preferred.
+
+[daemon]
+bind_host = "127.0.0.1"
+bind_port = 5140
+skills_dir = "skills"
+# bearer_token = "replace-me"
+# public_base_url = "https://teamd.example"
+
+[provider]
+kind = "openai_responses"
+# api_base = "https://api.openai.com/v1"
+# api_key = "replace-me"
+# default_model = "gpt-5.4"
+connect_timeout_seconds = 15
+# request_timeout_seconds = 3600
+stream_idle_timeout_seconds = 1200
+max_tool_rounds = 24
+# max_output_tokens = 8192
+
+[permissions]
+mode = "default"
+
+[session_defaults]
+working_memory_limit = 128
+project_memory_enabled = true
+
+[context]
+compaction_min_messages = 20
+compaction_keep_tail_messages = 6
+compaction_max_output_tokens = 4096
+compaction_max_summary_chars = 12000
+
+[runtime_timing]
+sqlite_busy_timeout_ms = 5000
+daemon_http_connect_timeout_ms = 2000
+daemon_http_request_timeout_ms = 5000
+a2a_http_connect_timeout_ms = 2000
+autospawn_status_poll_attempts = 50
+autospawn_status_poll_interval_ms = 100
+shutdown_wait_poll_attempts = 50
+shutdown_wait_poll_interval_ms = 50
+restart_stop_poll_attempts = 60
+restart_stop_poll_interval_ms = 50
+restart_stop_required_unavailable_probes = 3
+http_server_request_poll_interval_ms = 100
+daemon_test_startup_probe_attempts = 50
+daemon_test_startup_probe_interval_ms = 20
+daemon_background_worker_tick_interval_ms = 100
+tui_event_poll_interval_ms = 100
+tui_active_run_heartbeat_notice_interval_seconds = 30
+mcp_stdio_command_poll_interval_ms = 100
+provider_loop_transient_retry_base_delay_ms = 100
+
+[runtime_limits]
+diagnostic_tail_lines = 80
+active_run_step_tail_limit = 3
+active_process_output_tail_max_bytes = 2048
+active_process_output_tail_max_lines = 8
+transcript_tail_run_limit = 32
+agent_list_default_limit = 100
+agent_list_max_limit = 1000
+schedule_list_default_limit = 100
+schedule_list_max_limit = 1000
+mcp_search_default_limit = 20
+mcp_search_max_limit = 100
+session_search_default_limit = 20
+session_search_max_limit = 100
+session_read_default_max_items = 20
+session_read_max_items = 200
+session_read_default_max_bytes = 8192
+session_read_max_bytes = 65536
+knowledge_search_default_limit = 20
+knowledge_search_max_limit = 100
+knowledge_read_excerpt_default_max_lines = 40
+knowledge_read_full_default_max_lines = 200
+knowledge_read_max_lines = 400
+knowledge_read_default_max_bytes = 8192
+knowledge_read_max_bytes = 65536
+session_warm_idle_seconds = 3600
+timeline_preview_chars = 160

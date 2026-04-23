@@ -1,6 +1,7 @@
 use super::*;
 use crate::agents;
-use agent_persistence::ContextOffloadRepository;
+use crate::diagnostics::{DiagnosticEventBuilder, render_diagnostic_tail};
+use agent_persistence::{ContextOffloadRepository, RunRepository};
 use agent_runtime::context::CompactionPolicy;
 use agent_runtime::plan::PlanSnapshot;
 use agent_runtime::prompt::{PromptAssembly, PromptAssemblyInput, SessionHead};
@@ -15,6 +16,7 @@ use agent_runtime::tool::{
     SessionReadInput, SessionReadOutput, SessionSearchInput, SessionSearchOutput,
 };
 use std::path::PathBuf;
+use std::time::Instant;
 
 fn load_session_head_metadata(
     store: &PersistenceStore,
@@ -77,8 +79,7 @@ impl App {
             .transpose()
             .map_err(BootstrapError::RecordConversion)?;
         let runs = store
-            .load_execution_state()?
-            .runs
+            .list_runs_for_session(session_id)?
             .into_iter()
             .map(RunSnapshot::try_from)
             .collect::<Result<Vec<_>, _>>()
@@ -101,11 +102,39 @@ impl App {
         &self,
         session_id: &str,
     ) -> Result<Vec<SessionPendingApproval>, BootstrapError> {
-        let snapshot = self.store()?.load_execution_state()?;
+        let started = Instant::now();
+        DiagnosticEventBuilder::new(
+            &self.config,
+            "info",
+            "session_ops",
+            "pending_approvals.start",
+            "loading pending approvals for session",
+        )
+        .session_id(session_id.to_string())
+        .emit(&self.persistence.audit);
+        let store = self.store()?;
+        let runs_started = Instant::now();
+        let runs = store
+            .list_runs_for_session(session_id)?
+            .into_iter()
+            .map(RunSnapshot::try_from)
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(BootstrapError::RecordConversion)?;
+        DiagnosticEventBuilder::new(
+            &self.config,
+            "info",
+            "session_ops",
+            "pending_approvals.loaded_runs",
+            "loaded session-scoped runs for pending approvals",
+        )
+        .session_id(session_id.to_string())
+        .elapsed_ms(runs_started.elapsed().as_millis() as u64)
+        .outcome("ok")
+        .field("run_count", runs.len())
+        .emit(&self.persistence.audit);
         let mut pending = Vec::new();
 
-        for record in snapshot.runs {
-            let run = RunSnapshot::try_from(record).map_err(BootstrapError::RecordConversion)?;
+        for run in runs {
             if run.session_id != session_id
                 || run.status != agent_runtime::run::RunStatus::WaitingApproval
             {
@@ -122,6 +151,18 @@ impl App {
         }
 
         pending.sort_by_key(|approval| (approval.requested_at, approval.approval_id.clone()));
+        DiagnosticEventBuilder::new(
+            &self.config,
+            "info",
+            "session_ops",
+            "pending_approvals.finish",
+            "loaded pending approvals for session",
+        )
+        .session_id(session_id.to_string())
+        .elapsed_ms(started.elapsed().as_millis() as u64)
+        .outcome("ok")
+        .field("approval_count", pending.len())
+        .emit(&self.persistence.audit);
         Ok(pending)
     }
 
@@ -296,8 +337,7 @@ impl App {
             .transpose()
             .map_err(BootstrapError::RecordConversion)?;
         let runs = store
-            .load_execution_state()?
-            .runs
+            .list_runs_for_session(session_id)?
             .into_iter()
             .map(RunSnapshot::try_from)
             .collect::<Result<Vec<_>, _>>()
@@ -413,8 +453,7 @@ impl App {
             .transpose()
             .map_err(BootstrapError::RecordConversion)?;
         let runs = store
-            .load_execution_state()?
-            .runs
+            .list_runs_for_session(session_id)?
             .into_iter()
             .map(RunSnapshot::try_from)
             .collect::<Result<Vec<_>, _>>()
@@ -903,6 +942,11 @@ impl App {
             .map_err(map_workspace_error)
     }
 
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub fn render_diagnostics_tail(&self, max_lines: usize) -> Result<String, BootstrapError> {
+        render_diagnostic_tail(&self.persistence.audit, max_lines)
+    }
+
     fn render_debug_bundle(&self, session_id: &str) -> Result<String, BootstrapError> {
         let store = self.store()?;
         let session_record =
@@ -924,17 +968,16 @@ impl App {
         let provider_http_preview = self
             .render_provider_request_preview(session_id)
             .unwrap_or_else(|error| format!("<unavailable: {error}>"));
+        let diagnostics_tail = self
+            .render_diagnostics_tail(self.config.runtime_limits.diagnostic_tail_lines)
+            .unwrap_or_else(|error| format!("<unavailable: {error}>"));
         let runs = store
-            .load_execution_state()?
-            .runs
+            .list_runs_for_session(session_id)?
             .into_iter()
             .map(RunSnapshot::try_from)
             .collect::<Result<Vec<_>, _>>()
             .map_err(BootstrapError::RecordConversion)?;
-        let session_runs = runs
-            .into_iter()
-            .filter(|run| run.session_id == session_id)
-            .collect::<Vec<_>>();
+        let session_runs = runs;
 
         let mut lines = vec![
             "Debug Bundle".to_string(),
@@ -1038,6 +1081,10 @@ impl App {
         lines.push(String::new());
         lines.push("Provider HTTP Preview:".to_string());
         lines.push(provider_http_preview);
+
+        lines.push(String::new());
+        lines.push("Diagnostic Tail:".to_string());
+        lines.push(diagnostics_tail);
 
         lines.push(String::new());
         lines.push(format!(

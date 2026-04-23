@@ -28,7 +28,6 @@ use agent_runtime::tool::{
 };
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread;
-use std::time::Duration;
 
 const MAX_CONTEXT_OFFLOAD_REFS: usize = 16;
 const INLINE_TOOL_OUTPUT_TOKEN_LIMIT: u32 = 512;
@@ -45,9 +44,10 @@ pub(super) struct CompletionGateDecision {
     pub(super) nudge_message: String,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Clone, Copy)]
 pub(super) struct ProviderToolExecutionContext<'a> {
     pub(super) store: &'a PersistenceStore,
+    pub(super) provider: &'a dyn ProviderDriver,
     pub(super) session_id: &'a str,
     pub(super) now: i64,
 }
@@ -1232,10 +1232,6 @@ impl ExecutionService {
         }
     }
 
-    fn transient_provider_retry_delay(attempt: usize) -> Duration {
-        Duration::from_millis((attempt as u64) * 100)
-    }
-
     fn note_transient_provider_retry(
         &self,
         store: &PersistenceStore,
@@ -1273,7 +1269,11 @@ impl ExecutionService {
                 {
                     attempt += 1;
                     self.note_transient_provider_retry(store, run, &error, attempt, now)?;
-                    thread::sleep(Self::transient_provider_retry_delay(attempt));
+                    thread::sleep(
+                        self.config
+                            .runtime_timing
+                            .provider_loop_transient_retry_delay(attempt),
+                    );
                 }
                 Err(error) => return Err(error),
             }
@@ -1343,6 +1343,7 @@ impl ExecutionService {
         );
         let output = match self.execute_model_tool_call(
             context.store,
+            Some(context.provider),
             context.session_id,
             tool_runtime,
             parsed,
@@ -1416,6 +1417,7 @@ impl ExecutionService {
     pub(super) fn execute_model_tool_call(
         &self,
         store: &PersistenceStore,
+        provider: Option<&dyn ProviderDriver>,
         session_id: &str,
         tool_runtime: &mut ToolRuntime,
         parsed: &ToolCall,
@@ -1531,6 +1533,20 @@ impl ExecutionService {
             ToolCall::SessionRead(input) => {
                 Ok(ToolOutput::SessionRead(self.read_session(store, input)?))
             }
+            ToolCall::SessionWait(input) => {
+                let Some(provider) = provider else {
+                    return Err(ExecutionError::Tool(
+                        agent_runtime::tool::ToolError::InvalidAgentTool {
+                            reason:
+                                "session_wait requires a provider-backed canonical session path"
+                                    .to_string(),
+                        },
+                    ));
+                };
+                Ok(ToolOutput::SessionWait(
+                    self.wait_for_session(store, provider, input, now)?,
+                ))
+            }
             ToolCall::AgentList(input) => {
                 Ok(ToolOutput::AgentList(self.list_tool_agents(store, input)?))
             }
@@ -1576,9 +1592,6 @@ impl ExecutionService {
         &self,
         input: &agent_runtime::tool::McpSearchResourcesInput,
     ) -> agent_runtime::tool::McpSearchResourcesOutput {
-        const DEFAULT_LIMIT: usize = 20;
-        const MAX_LIMIT: usize = 100;
-
         let query = input
             .query
             .as_deref()
@@ -1630,8 +1643,8 @@ impl ExecutionService {
             results.len(),
             input.offset,
             input.limit,
-            DEFAULT_LIMIT,
-            MAX_LIMIT,
+            self.config.runtime_limits.mcp_search_default_limit,
+            self.config.runtime_limits.mcp_search_max_limit,
         );
         let end = offset.saturating_add(limit).min(results.len());
         let page = results[offset..end].to_vec();
@@ -1652,9 +1665,6 @@ impl ExecutionService {
         &self,
         input: &agent_runtime::tool::McpSearchPromptsInput,
     ) -> agent_runtime::tool::McpSearchPromptsOutput {
-        const DEFAULT_LIMIT: usize = 20;
-        const MAX_LIMIT: usize = 100;
-
         let query = input
             .query
             .as_deref()
@@ -1712,8 +1722,8 @@ impl ExecutionService {
             results.len(),
             input.offset,
             input.limit,
-            DEFAULT_LIMIT,
-            MAX_LIMIT,
+            self.config.runtime_limits.mcp_search_default_limit,
+            self.config.runtime_limits.mcp_search_max_limit,
         );
         let end = offset.saturating_add(limit).min(results.len());
         let page = results[offset..end].to_vec();
@@ -2823,6 +2833,7 @@ impl ExecutionService {
                 let model_output = match self.invoke_provider_tool_call(
                     ProviderToolExecutionContext {
                         store,
+                        provider,
                         session_id,
                         now,
                     },

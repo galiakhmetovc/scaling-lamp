@@ -1,6 +1,7 @@
 use super::*;
 use crate::agents;
-use agent_persistence::JobRepository;
+use crate::diagnostics::DiagnosticEventBuilder;
+use agent_persistence::{JobRepository, RunRepository};
 use agent_runtime::interagent::{AgentChainState, AgentMessageChain};
 use agent_runtime::mission::JobSpec;
 use agent_runtime::run::{RunSnapshot, RunStatus, RunStepKind};
@@ -10,13 +11,10 @@ use agent_runtime::session::{
 use agent_runtime::skills::{resolve_session_skill_status, scan_skill_catalog_with_overrides};
 use agent_runtime::tool::ProcessOutputStream;
 use std::collections::HashMap;
+use std::time::Instant;
 use time::OffsetDateTime;
 use time::UtcOffset;
 use time::format_description::well_known::Rfc3339;
-
-const ACTIVE_RUN_STEP_TAIL_LIMIT: usize = 3;
-const ACTIVE_PROCESS_OUTPUT_TAIL_MAX_BYTES: usize = 2 * 1024;
-const ACTIVE_PROCESS_OUTPUT_TAIL_MAX_LINES: usize = 8;
 
 impl App {
     #[cfg_attr(not(test), allow(dead_code))]
@@ -24,20 +22,95 @@ impl App {
         &self,
         session_id: &str,
     ) -> Result<SessionTranscriptView, BootstrapError> {
+        self.build_session_transcript_view(session_id, None, None)
+    }
+
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub fn session_transcript_tail(
+        &self,
+        session_id: &str,
+        max_entries: usize,
+    ) -> Result<SessionTranscriptView, BootstrapError> {
+        let run_limit = if max_entries == 0 {
+            0
+        } else {
+            self.config.runtime_limits.transcript_tail_run_limit
+        };
+        self.build_session_transcript_view(session_id, Some(max_entries), Some(run_limit))
+    }
+
+    fn build_session_transcript_view(
+        &self,
+        session_id: &str,
+        transcript_limit: Option<usize>,
+        run_limit: Option<usize>,
+    ) -> Result<SessionTranscriptView, BootstrapError> {
+        let started = Instant::now();
+        DiagnosticEventBuilder::new(
+            &self.config,
+            "info",
+            "session_ops",
+            "session_transcript.start",
+            "building session transcript view",
+        )
+        .session_id(session_id.to_string())
+        .field("transcript_limit", transcript_limit)
+        .field("run_limit", run_limit)
+        .emit(&self.persistence.audit);
+        let store_started = Instant::now();
         let store = self.store()?;
-        if store.get_session(session_id)?.is_none() {
+        DiagnosticEventBuilder::new(
+            &self.config,
+            "info",
+            "session_ops",
+            "session_transcript.opened_store",
+            "opened runtime store for session transcript view",
+        )
+        .session_id(session_id.to_string())
+        .elapsed_ms(store_started.elapsed().as_millis() as u64)
+        .outcome("ok")
+        .emit(&self.persistence.audit);
+
+        let exists_started = Instant::now();
+        if !store.session_exists(session_id)? {
             return Err(BootstrapError::MissingRecord {
                 kind: "session",
                 id: session_id.to_string(),
             });
         }
+        DiagnosticEventBuilder::new(
+            &self.config,
+            "info",
+            "session_ops",
+            "session_transcript.checked_session_exists",
+            "verified session existence for transcript view",
+        )
+        .session_id(session_id.to_string())
+        .elapsed_ms(exists_started.elapsed().as_millis() as u64)
+        .outcome("ok")
+        .emit(&self.persistence.audit);
 
-        let entries = store
-            .list_transcripts_for_session(session_id)?
-            .into_iter()
-            .map(TranscriptEntry::try_from)
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(BootstrapError::RecordConversion)?;
+        let transcripts_started = Instant::now();
+        let entries = match transcript_limit {
+            Some(limit) => store.list_transcripts_tail_for_session(session_id, limit)?,
+            None => store.list_transcripts_for_session(session_id)?,
+        }
+        .into_iter()
+        .map(TranscriptEntry::try_from)
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(BootstrapError::RecordConversion)?;
+        DiagnosticEventBuilder::new(
+            &self.config,
+            "info",
+            "session_ops",
+            "session_transcript.loaded_transcripts",
+            "loaded transcript entries for session transcript view",
+        )
+        .session_id(session_id.to_string())
+        .elapsed_ms(transcripts_started.elapsed().as_millis() as u64)
+        .outcome("ok")
+        .field("transcript_count", entries.len())
+        .emit(&self.persistence.audit);
         let schedule_labels = entries
             .iter()
             .filter_map(|entry| {
@@ -72,13 +145,27 @@ impl App {
             })
             .collect::<Vec<_>>();
 
-        let runs = store
-            .load_execution_state()?
-            .runs
-            .into_iter()
-            .map(RunSnapshot::try_from)
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(BootstrapError::RecordConversion)?;
+        let runs_started = Instant::now();
+        let runs = match run_limit {
+            Some(limit) => store.list_recent_runs_for_session(session_id, limit)?,
+            None => store.list_runs_for_session(session_id)?,
+        }
+        .into_iter()
+        .map(RunSnapshot::try_from)
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(BootstrapError::RecordConversion)?;
+        DiagnosticEventBuilder::new(
+            &self.config,
+            "info",
+            "session_ops",
+            "session_transcript.loaded_runs",
+            "loaded session-scoped runs for transcript view",
+        )
+        .session_id(session_id.to_string())
+        .elapsed_ms(runs_started.elapsed().as_millis() as u64)
+        .outcome("ok")
+        .field("run_count", runs.len())
+        .emit(&self.persistence.audit);
         entries.extend(build_synthetic_run_lines(session_id, &runs));
         entries.sort_by(|left, right| {
             left.created_at
@@ -90,10 +177,25 @@ impl App {
                 .then_with(|| left.content.cmp(&right.content))
         });
 
-        Ok(SessionTranscriptView {
+        let transcript = SessionTranscriptView {
             session_id: session_id.to_string(),
             entries,
-        })
+        };
+        DiagnosticEventBuilder::new(
+            &self.config,
+            "info",
+            "session_ops",
+            "session_transcript.finish",
+            "built session transcript view",
+        )
+        .session_id(session_id.to_string())
+        .elapsed_ms(started.elapsed().as_millis() as u64)
+        .outcome("ok")
+        .field("entry_count", transcript.entries.len())
+        .field("transcript_limit", transcript_limit)
+        .field("run_limit", run_limit)
+        .emit(&self.persistence.audit);
+        Ok(transcript)
     }
 
     #[cfg_attr(not(test), allow(dead_code))]
@@ -109,6 +211,17 @@ impl App {
 
     #[cfg_attr(not(test), allow(dead_code))]
     pub fn create_session(&self, id: &str, title: &str) -> Result<SessionSummary, BootstrapError> {
+        let started = Instant::now();
+        DiagnosticEventBuilder::new(
+            &self.config,
+            "info",
+            "session_ops",
+            "create_session.start",
+            "creating session",
+        )
+        .session_id(id.to_string())
+        .field("title", title.trim())
+        .emit(&self.persistence.audit);
         let store = self.store()?;
         let now = unix_timestamp()?;
         let settings = SessionSettings {
@@ -133,19 +246,80 @@ impl App {
         let record = agent_persistence::SessionRecord::try_from(&session)
             .map_err(BootstrapError::RecordConversion)?;
         store.put_session(&record)?;
-        self.session_summary(&session.id)
+        let summary = self.session_summary(&session.id)?;
+        DiagnosticEventBuilder::new(
+            &self.config,
+            "info",
+            "session_ops",
+            "create_session.finish",
+            "created session",
+        )
+        .session_id(summary.id.clone())
+        .elapsed_ms(started.elapsed().as_millis() as u64)
+        .outcome("ok")
+        .emit(&self.persistence.audit);
+        Ok(summary)
     }
 
     #[cfg_attr(not(test), allow(dead_code))]
     pub fn list_session_summaries(&self) -> Result<Vec<SessionSummary>, BootstrapError> {
+        let started = Instant::now();
+        DiagnosticEventBuilder::new(
+            &self.config,
+            "info",
+            "session_ops",
+            "list_session_summaries.start",
+            "listing session summaries",
+        )
+        .emit(&self.persistence.audit);
         let store = self.store()?;
-        build_session_summaries(&store, &self.config, &self.runtime.workspace)
+        let summaries = build_session_summaries(&store, &self.config, &self.runtime.workspace)?;
+        DiagnosticEventBuilder::new(
+            &self.config,
+            "info",
+            "session_ops",
+            "list_session_summaries.finish",
+            "listed session summaries",
+        )
+        .elapsed_ms(started.elapsed().as_millis() as u64)
+        .outcome("ok")
+        .field("count", summaries.len())
+        .emit(&self.persistence.audit);
+        Ok(summaries)
     }
 
     #[cfg_attr(not(test), allow(dead_code))]
     pub fn session_summary(&self, session_id: &str) -> Result<SessionSummary, BootstrapError> {
+        let started = Instant::now();
+        DiagnosticEventBuilder::new(
+            &self.config,
+            "info",
+            "session_ops",
+            "session_summary.start",
+            "building session summary",
+        )
+        .session_id(session_id.to_string())
+        .emit(&self.persistence.audit);
         let store = self.store()?;
-        build_single_session_summary(&store, &self.config, &self.runtime.workspace, session_id)
+        let summary = build_single_session_summary(
+            &store,
+            &self.config,
+            &self.runtime.workspace,
+            session_id,
+        )?;
+        DiagnosticEventBuilder::new(
+            &self.config,
+            "info",
+            "session_ops",
+            "session_summary.finish",
+            "built session summary",
+        )
+        .session_id(session_id.to_string())
+        .elapsed_ms(started.elapsed().as_millis() as u64)
+        .outcome("ok")
+        .field("message_count", summary.message_count)
+        .emit(&self.persistence.audit);
+        Ok(summary)
     }
 
     #[cfg_attr(not(test), allow(dead_code))]
@@ -296,7 +470,7 @@ impl App {
                 usage.input_tokens, usage.output_tokens, usage.total_tokens
             ));
         }
-        let step_tail = active_run_step_tail(&run);
+        let step_tail = active_run_step_tail(self, &run);
         if let Some(step) = step_tail.last() {
             lines.push(format!("- последний шаг: {}", step.detail));
             if step_tail.len() > 1 {
@@ -401,6 +575,16 @@ impl App {
 
     #[cfg_attr(not(test), allow(dead_code))]
     pub fn delete_session(&self, session_id: &str) -> Result<(), BootstrapError> {
+        let started = Instant::now();
+        DiagnosticEventBuilder::new(
+            &self.config,
+            "info",
+            "session_ops",
+            "delete_session.start",
+            "deleting session",
+        )
+        .session_id(session_id.to_string())
+        .emit(&self.persistence.audit);
         let store = self.store()?;
         let deleted = store.delete_session(session_id)?;
         if !deleted {
@@ -409,6 +593,17 @@ impl App {
                 id: session_id.to_string(),
             });
         }
+        DiagnosticEventBuilder::new(
+            &self.config,
+            "info",
+            "session_ops",
+            "delete_session.finish",
+            "deleted session",
+        )
+        .session_id(session_id.to_string())
+        .elapsed_ms(started.elapsed().as_millis() as u64)
+        .outcome("ok")
+        .emit(&self.persistence.audit);
         Ok(())
     }
 
@@ -418,8 +613,32 @@ impl App {
         session_id: &str,
         title: Option<&str>,
     ) -> Result<SessionSummary, BootstrapError> {
+        let started = Instant::now();
+        DiagnosticEventBuilder::new(
+            &self.config,
+            "info",
+            "session_ops",
+            "clear_session.start",
+            "clearing session by delete and recreate",
+        )
+        .session_id(session_id.to_string())
+        .field("replacement_title", title)
+        .emit(&self.persistence.audit);
         self.delete_session(session_id)?;
-        self.create_session_auto(title)
+        let summary = self.create_session_auto(title)?;
+        DiagnosticEventBuilder::new(
+            &self.config,
+            "info",
+            "session_ops",
+            "clear_session.finish",
+            "cleared session and created replacement",
+        )
+        .session_id(session_id.to_string())
+        .elapsed_ms(started.elapsed().as_millis() as u64)
+        .outcome("ok")
+        .field("replacement_session_id", summary.id.clone())
+        .emit(&self.persistence.audit);
+        Ok(summary)
     }
 
     fn update_session_skill_state(
@@ -592,7 +811,10 @@ fn build_synthetic_run_lines(session_id: &str, runs: &[RunSnapshot]) -> Vec<Sess
     lines
 }
 
-fn active_run_step_tail(run: &RunSnapshot) -> Vec<&agent_runtime::run::RunStep> {
+fn active_run_step_tail<'a>(
+    app: &App,
+    run: &'a RunSnapshot,
+) -> Vec<&'a agent_runtime::run::RunStep> {
     let relevant_steps = run
         .recent_steps
         .iter()
@@ -602,7 +824,7 @@ fn active_run_step_tail(run: &RunSnapshot) -> Vec<&agent_runtime::run::RunStep> 
         run.recent_steps
             .iter()
             .rev()
-            .take(ACTIVE_RUN_STEP_TAIL_LIMIT)
+            .take(app.config.runtime_limits.active_run_step_tail_limit)
             .collect::<Vec<_>>()
             .into_iter()
             .rev()
@@ -611,7 +833,7 @@ fn active_run_step_tail(run: &RunSnapshot) -> Vec<&agent_runtime::run::RunStep> 
         relevant_steps
             .into_iter()
             .rev()
-            .take(ACTIVE_RUN_STEP_TAIL_LIMIT)
+            .take(app.config.runtime_limits.active_run_step_tail_limit)
             .collect::<Vec<_>>()
             .into_iter()
             .rev()
@@ -626,8 +848,16 @@ fn render_active_process_output_tail(app: &App, process_id: &str) -> Option<Vec<
             process_id,
             ProcessOutputStream::Merged,
             None,
-            Some(ACTIVE_PROCESS_OUTPUT_TAIL_MAX_BYTES),
-            Some(ACTIVE_PROCESS_OUTPUT_TAIL_MAX_LINES),
+            Some(
+                app.config
+                    .runtime_limits
+                    .active_process_output_tail_max_bytes,
+            ),
+            Some(
+                app.config
+                    .runtime_limits
+                    .active_process_output_tail_max_lines,
+            ),
         )
         .ok()?;
     let text = output.text.trim_end();

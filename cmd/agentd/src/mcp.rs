@@ -1,3 +1,4 @@
+use agent_persistence::RuntimeTimingConfig;
 use agent_runtime::mcp::McpConnectorConfig;
 use agent_runtime::tool::{
     McpCallOutput, McpGetPromptOutput, McpPromptMessageOutput, McpReadResourceOutput,
@@ -248,6 +249,7 @@ struct McpRegistryState {
 pub struct SharedMcpRegistry {
     inner: Arc<Mutex<McpRegistryState>>,
     starter: Arc<McpWorkerStarter>,
+    stdio_command_poll_interval: Duration,
 }
 
 impl std::fmt::Debug for SharedMcpRegistry {
@@ -260,14 +262,23 @@ impl std::fmt::Debug for SharedMcpRegistry {
 
 impl Default for SharedMcpRegistry {
     fn default() -> Self {
+        let runtime_timing = RuntimeTimingConfig::default();
         Self {
             inner: Arc::new(Mutex::new(McpRegistryState::default())),
             starter: Arc::new(default_stdio_starter),
+            stdio_command_poll_interval: runtime_timing.mcp_stdio_command_poll_interval(),
         }
     }
 }
 
 impl SharedMcpRegistry {
+    pub fn from_runtime_timing(runtime_timing: &RuntimeTimingConfig) -> Self {
+        Self {
+            stdio_command_poll_interval: runtime_timing.mcp_stdio_command_poll_interval(),
+            ..Self::default()
+        }
+    }
+
     pub fn with_starter<F>(starter: F) -> Self
     where
         F: Fn(&McpConnectorConfig, SharedMcpRegistry, i64) -> Result<McpWorkerControl, String>
@@ -278,6 +289,8 @@ impl SharedMcpRegistry {
         Self {
             inner: Arc::new(Mutex::new(McpRegistryState::default())),
             starter: Arc::new(starter),
+            stdio_command_poll_interval: RuntimeTimingConfig::default()
+                .mcp_stdio_command_poll_interval(),
         }
     }
 
@@ -317,6 +330,10 @@ impl SharedMcpRegistry {
 
     fn lock(&self) -> std::sync::MutexGuard<'_, McpRegistryState> {
         self.inner.lock().expect("shared MCP registry poisoned")
+    }
+
+    fn stdio_command_poll_interval(&self) -> Duration {
+        self.stdio_command_poll_interval
     }
 
     pub fn status(&self, id: &str) -> McpConnectorRuntimeStatus {
@@ -595,8 +612,13 @@ fn default_stdio_starter(
                         .await?;
                         registry.set_discovery(&runtime_connector_id, discovery);
                         registry.mark_running(&runtime_connector_id, now, pid);
-                        run_stdio_worker_loop(runtime_connector_id.as_str(), &service, command_rx)
-                            .await?;
+                        run_stdio_worker_loop(
+                            runtime_connector_id.as_str(),
+                            &service,
+                            command_rx,
+                            registry.stdio_command_poll_interval(),
+                        )
+                        .await?;
                         let _ = service.cancel().await;
                         Ok::<(), String>(())
                     })
@@ -683,9 +705,10 @@ async fn run_stdio_worker_loop(
     connector_id: &str,
     service: &RunningService<RoleClient, ()>,
     command_rx: mpsc::Receiver<McpWorkerCommand>,
+    poll_interval: Duration,
 ) -> Result<(), String> {
     loop {
-        match command_rx.recv_timeout(Duration::from_millis(100)) {
+        match command_rx.recv_timeout(poll_interval) {
             Ok(McpWorkerCommand::Stop) | Err(mpsc::RecvTimeoutError::Disconnected) => break,
             Err(mpsc::RecvTimeoutError::Timeout) => continue,
             Ok(McpWorkerCommand::CallTool {

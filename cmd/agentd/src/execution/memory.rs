@@ -22,22 +22,6 @@ use std::fs;
 use std::path::Path;
 use std::time::UNIX_EPOCH;
 
-const DEFAULT_SESSION_SEARCH_LIMIT: usize = 20;
-const MAX_SESSION_SEARCH_LIMIT: usize = 100;
-const DEFAULT_SESSION_READ_MAX_ITEMS: usize = 20;
-const MAX_SESSION_READ_MAX_ITEMS: usize = 200;
-const DEFAULT_SESSION_READ_MAX_BYTES: usize = 8 * 1024;
-const MAX_SESSION_READ_MAX_BYTES: usize = 64 * 1024;
-const DEFAULT_KNOWLEDGE_SEARCH_LIMIT: usize = 20;
-const MAX_KNOWLEDGE_SEARCH_LIMIT: usize = 100;
-const DEFAULT_KNOWLEDGE_READ_MAX_LINES_EXCERPT: usize = 40;
-const DEFAULT_KNOWLEDGE_READ_MAX_LINES_FULL: usize = 200;
-const MAX_KNOWLEDGE_READ_MAX_LINES: usize = 400;
-const DEFAULT_KNOWLEDGE_READ_MAX_BYTES: usize = 8 * 1024;
-const MAX_KNOWLEDGE_READ_MAX_BYTES: usize = 64 * 1024;
-const SESSION_WARM_IDLE_SECONDS: i64 = 60 * 60;
-const TIMELINE_PREVIEW_CHARS: usize = 160;
-
 const CANONICAL_KNOWLEDGE_FILES: &[(&str, KnowledgeRoot, KnowledgeSourceKind)] = &[
     (
         "README.md",
@@ -184,8 +168,8 @@ impl ExecutionService {
             results.len(),
             input.offset,
             input.limit,
-            DEFAULT_SESSION_SEARCH_LIMIT,
-            MAX_SESSION_SEARCH_LIMIT,
+            self.config.runtime_limits.session_search_default_limit,
+            self.config.runtime_limits.session_search_max_limit,
         );
         let end = offset.saturating_add(limit).min(results.len());
         let page = results[offset..end].to_vec();
@@ -293,7 +277,13 @@ impl ExecutionService {
             entries
                 .into_iter()
                 .filter(|entry| include_tools || entry.kind != "tool")
-                .map(|entry| message_output_from_archive(entry, mode))
+                .map(|entry| {
+                    message_output_from_archive(
+                        entry,
+                        mode,
+                        self.config.runtime_limits.timeline_preview_chars,
+                    )
+                })
                 .collect::<Vec<_>>()
         } else {
             store
@@ -301,7 +291,13 @@ impl ExecutionService {
                 .map_err(ExecutionError::Store)?
                 .into_iter()
                 .filter(|entry| include_tools || entry.kind != "tool")
-                .map(|entry| message_output_from_record(entry, mode))
+                .map(|entry| {
+                    message_output_from_record(
+                        entry,
+                        mode,
+                        self.config.runtime_limits.timeline_preview_chars,
+                    )
+                })
                 .collect::<Vec<_>>()
         };
         messages.sort_by(|left, right| {
@@ -310,8 +306,13 @@ impl ExecutionService {
                 .then(left.id.cmp(&right.id))
         });
         let total_items = messages.len();
-        let (messages, cursor, next_cursor, truncated) =
-            paginate_messages(messages, window.cursor, window.max_items, window.max_bytes);
+        let (messages, cursor, next_cursor, truncated) = paginate_messages(
+            messages,
+            window.cursor,
+            window.max_items,
+            window.max_bytes,
+            &self.config.runtime_limits,
+        );
 
         Ok(SessionReadOutput {
             session_id: session.id.clone(),
@@ -366,8 +367,13 @@ impl ExecutionService {
                 .then(left.artifact_id.cmp(&right.artifact_id))
         });
         let total_items = artifacts.len();
-        let (artifacts, cursor, next_cursor, truncated) =
-            paginate_artifacts(artifacts, window.cursor, window.max_items, window.max_bytes);
+        let (artifacts, cursor, next_cursor, truncated) = paginate_artifacts(
+            artifacts,
+            window.cursor,
+            window.max_items,
+            window.max_bytes,
+            &self.config.runtime_limits,
+        );
 
         Ok(SessionReadOutput {
             session_id: session.id.clone(),
@@ -449,8 +455,8 @@ impl ExecutionService {
             results.len(),
             input.offset,
             input.limit,
-            DEFAULT_KNOWLEDGE_SEARCH_LIMIT,
-            MAX_KNOWLEDGE_SEARCH_LIMIT,
+            self.config.runtime_limits.knowledge_search_default_limit,
+            self.config.runtime_limits.knowledge_search_max_limit,
         );
         let end = offset.saturating_add(limit).min(results.len());
         let page = results[offset..end].to_vec();
@@ -498,14 +504,22 @@ impl ExecutionService {
         let max_lines = input
             .max_lines
             .unwrap_or(match mode {
-                KnowledgeReadMode::Excerpt => DEFAULT_KNOWLEDGE_READ_MAX_LINES_EXCERPT,
-                KnowledgeReadMode::Full => DEFAULT_KNOWLEDGE_READ_MAX_LINES_FULL,
+                KnowledgeReadMode::Excerpt => {
+                    self.config
+                        .runtime_limits
+                        .knowledge_read_excerpt_default_max_lines
+                }
+                KnowledgeReadMode::Full => {
+                    self.config
+                        .runtime_limits
+                        .knowledge_read_full_default_max_lines
+                }
             })
-            .clamp(1, MAX_KNOWLEDGE_READ_MAX_LINES);
+            .clamp(1, self.config.runtime_limits.knowledge_read_max_lines);
         let max_bytes = input
             .max_bytes
-            .unwrap_or(DEFAULT_KNOWLEDGE_READ_MAX_BYTES)
-            .clamp(1, MAX_KNOWLEDGE_READ_MAX_BYTES);
+            .unwrap_or(self.config.runtime_limits.knowledge_read_default_max_bytes)
+            .clamp(1, self.config.runtime_limits.knowledge_read_max_bytes);
 
         let lines = content.lines().map(str::to_string).collect::<Vec<_>>();
         let total_lines = lines.len();
@@ -586,7 +600,8 @@ impl ExecutionService {
             let last_accessed_at = retention.last_accessed_at.max(session.updated_at);
             let has_active_run = self.session_has_active_run(store, &session.id)?;
             let desired_tier = if has_active_run
-                || now.saturating_sub(last_accessed_at) < SESSION_WARM_IDLE_SECONDS
+                || now.saturating_sub(last_accessed_at)
+                    < self.config.runtime_limits.session_warm_idle_seconds as i64
             {
                 SessionRetentionTier::Active
             } else {
@@ -1139,15 +1154,16 @@ fn paginate_messages(
     cursor: Option<usize>,
     max_items: Option<usize>,
     max_bytes: Option<usize>,
+    runtime_limits: &agent_persistence::RuntimeLimitsConfig,
 ) -> (Vec<SessionReadMessageOutput>, usize, Option<usize>, bool) {
     let total = messages.len();
     let start = cursor.unwrap_or(0).min(total);
     let item_limit = max_items
-        .unwrap_or(DEFAULT_SESSION_READ_MAX_ITEMS)
-        .clamp(1, MAX_SESSION_READ_MAX_ITEMS);
+        .unwrap_or(runtime_limits.session_read_default_max_items)
+        .clamp(1, runtime_limits.session_read_max_items);
     let byte_limit = max_bytes
-        .unwrap_or(DEFAULT_SESSION_READ_MAX_BYTES)
-        .clamp(1, MAX_SESSION_READ_MAX_BYTES);
+        .unwrap_or(runtime_limits.session_read_default_max_bytes)
+        .clamp(1, runtime_limits.session_read_max_bytes);
     let mut page = Vec::new();
     let mut consumed_bytes = 0usize;
     let mut next_cursor = None;
@@ -1191,15 +1207,16 @@ fn paginate_artifacts(
     cursor: Option<usize>,
     max_items: Option<usize>,
     max_bytes: Option<usize>,
+    runtime_limits: &agent_persistence::RuntimeLimitsConfig,
 ) -> (Vec<SessionReadArtifactOutput>, usize, Option<usize>, bool) {
     let total = artifacts.len();
     let start = cursor.unwrap_or(0).min(total);
     let item_limit = max_items
-        .unwrap_or(DEFAULT_SESSION_READ_MAX_ITEMS)
-        .clamp(1, MAX_SESSION_READ_MAX_ITEMS);
+        .unwrap_or(runtime_limits.session_read_default_max_items)
+        .clamp(1, runtime_limits.session_read_max_items);
     let byte_limit = max_bytes
-        .unwrap_or(DEFAULT_SESSION_READ_MAX_BYTES)
-        .clamp(1, MAX_SESSION_READ_MAX_BYTES);
+        .unwrap_or(runtime_limits.session_read_default_max_bytes)
+        .clamp(1, runtime_limits.session_read_max_bytes);
     let mut page = Vec::new();
     let mut consumed_bytes = 0usize;
     let mut next_cursor = None;
@@ -1252,26 +1269,28 @@ fn summary_output_from_archive(summary: ArchivedSummary) -> SessionReadSummaryOu
 fn message_output_from_record(
     record: TranscriptRecord,
     mode: SessionReadMode,
+    timeline_preview_chars: usize,
 ) -> SessionReadMessageOutput {
     SessionReadMessageOutput {
         id: record.id,
         run_id: record.run_id,
         role: record.kind,
         created_at: record.created_at,
-        content: render_message_content(record.content.as_str(), mode),
+        content: render_message_content(record.content.as_str(), mode, timeline_preview_chars),
     }
 }
 
 fn message_output_from_archive(
     entry: ArchivedTranscriptEntry,
     mode: SessionReadMode,
+    timeline_preview_chars: usize,
 ) -> SessionReadMessageOutput {
     SessionReadMessageOutput {
         id: entry.id,
         run_id: entry.run_id,
         role: entry.kind,
         created_at: entry.created_at,
-        content: render_message_content(entry.content.as_str(), mode),
+        content: render_message_content(entry.content.as_str(), mode, timeline_preview_chars),
     }
 }
 
@@ -1305,9 +1324,13 @@ fn artifact_metadata_string(metadata_json: &str, key: &str) -> Option<String> {
         .and_then(|value| value.get(key).and_then(Value::as_str).map(str::to_string))
 }
 
-fn render_message_content(content: &str, mode: SessionReadMode) -> String {
+fn render_message_content(
+    content: &str,
+    mode: SessionReadMode,
+    timeline_preview_chars: usize,
+) -> String {
     match mode {
-        SessionReadMode::Timeline => truncate_chars(content.trim(), TIMELINE_PREVIEW_CHARS),
+        SessionReadMode::Timeline => truncate_chars(content.trim(), timeline_preview_chars),
         SessionReadMode::Transcript | SessionReadMode::Summary | SessionReadMode::Artifacts => {
             content.to_string()
         }
@@ -1921,7 +1944,10 @@ mod tests {
             })
             .expect("put retention");
 
-        let report = service.maintain_memory(&store, 10 + SESSION_WARM_IDLE_SECONDS + 1);
+        let report = service.maintain_memory(
+            &store,
+            10 + service.config.runtime_limits.session_warm_idle_seconds as i64 + 1,
+        );
 
         assert!(report.is_ok(), "maintenance should succeed: {report:?}");
         let retention = store

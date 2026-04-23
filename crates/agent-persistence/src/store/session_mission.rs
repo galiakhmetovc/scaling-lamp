@@ -104,6 +104,21 @@ impl SessionRepository for PersistenceStore {
     fn delete_session(&self, id: &str) -> Result<bool, StoreError> {
         let transcript_paths = self.session_transcript_payload_paths(id)?;
         let artifact_paths = self.session_artifact_payload_paths(id)?;
+        self.append_diagnostic_event(
+            "delete_session.start",
+            "deleting session from store",
+            Some(id),
+            std::collections::BTreeMap::from([
+                (
+                    "transcript_payloads".to_string(),
+                    serde_json::json!(transcript_paths.len()),
+                ),
+                (
+                    "artifact_payloads".to_string(),
+                    serde_json::json!(artifact_paths.len()),
+                ),
+            ]),
+        );
         self.connection.execute(
             "DELETE FROM session_search_fts
              WHERE doc_id IN (
@@ -116,6 +131,12 @@ impl SessionRepository for PersistenceStore {
             .execute("DELETE FROM sessions WHERE id = ?1", [id])?;
 
         if deleted == 0 {
+            self.append_diagnostic_event(
+                "delete_session.finish",
+                "session was not found during delete",
+                Some(id),
+                std::collections::BTreeMap::new(),
+            );
             return Ok(false);
         }
 
@@ -123,6 +144,13 @@ impl SessionRepository for PersistenceStore {
             remove_payload_if_exists(&path)?;
             remove_payload_if_exists(&backup_path(&path))?;
         }
+
+        self.append_diagnostic_event(
+            "delete_session.finish",
+            "deleted session from store",
+            Some(id),
+            std::collections::BTreeMap::from([("deleted".to_string(), serde_json::json!(deleted))]),
+        );
 
         Ok(true)
     }
@@ -400,6 +428,43 @@ impl TranscriptRepository for PersistenceStore {
             transcripts.push(self.hydrate_transcript_record(row)?);
         }
 
+        Ok(transcripts)
+    }
+
+    fn list_transcripts_tail_for_session(
+        &self,
+        session_id: &str,
+        limit: usize,
+    ) -> Result<Vec<TranscriptRecord>, StoreError> {
+        if limit == 0 {
+            return Ok(Vec::new());
+        }
+
+        let mut statement = self.connection.prepare(
+            "SELECT id, session_id, run_id, kind, storage_key, byte_len, sha256, created_at
+             FROM transcripts
+             WHERE session_id = ?1
+             ORDER BY created_at DESC, id DESC
+             LIMIT ?2",
+        )?;
+        let mut rows = statement.query(params![session_id, limit as i64])?;
+        let mut transcripts = Vec::new();
+
+        while let Some(row) = rows.next()? {
+            let row: TranscriptRow = (
+                row.get(0)?,
+                row.get(1)?,
+                row.get(2)?,
+                row.get(3)?,
+                row.get(4)?,
+                row.get(5)?,
+                row.get(6)?,
+                row.get(7)?,
+            );
+            transcripts.push(self.hydrate_transcript_record(row)?);
+        }
+
+        transcripts.reverse();
         Ok(transcripts)
     }
 }

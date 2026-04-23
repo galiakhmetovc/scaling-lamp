@@ -89,6 +89,18 @@ pub trait TuiBackend: Clone + Send + Sync + 'static {
     fn session_summary(&self, session_id: &str) -> Result<SessionSummary, BootstrapError>;
     fn session_transcript(&self, session_id: &str)
     -> Result<SessionTranscriptView, BootstrapError>;
+    fn session_transcript_tail(
+        &self,
+        session_id: &str,
+        max_entries: usize,
+    ) -> Result<SessionTranscriptView, BootstrapError> {
+        let mut transcript = self.session_transcript(session_id)?;
+        if transcript.entries.len() > max_entries {
+            let keep_from = transcript.entries.len().saturating_sub(max_entries);
+            transcript.entries = transcript.entries.split_off(keep_from);
+        }
+        Ok(transcript)
+    }
     fn pending_approvals(
         &self,
         session_id: &str,
@@ -131,6 +143,7 @@ pub trait TuiBackend: Clone + Send + Sync + 'static {
     fn cancel_all_session_work(&self, session_id: &str, now: i64)
     -> Result<String, BootstrapError>;
     fn render_version_info(&self) -> Result<String, BootstrapError>;
+    fn render_diagnostics_tail(&self, max_lines: Option<usize>) -> Result<String, BootstrapError>;
     fn update_runtime(&self, tag: Option<&str>) -> Result<String, BootstrapError>;
     fn write_debug_bundle(&self, session_id: &str) -> Result<String, BootstrapError>;
     fn compact_session(&self, session_id: &str) -> Result<SessionSummary, BootstrapError>;
@@ -401,6 +414,14 @@ impl TuiBackend for App {
         App::session_transcript(self, session_id)
     }
 
+    fn session_transcript_tail(
+        &self,
+        session_id: &str,
+        max_entries: usize,
+    ) -> Result<SessionTranscriptView, BootstrapError> {
+        App::session_transcript_tail(self, session_id, max_entries)
+    }
+
     fn pending_approvals(
         &self,
         session_id: &str,
@@ -503,6 +524,13 @@ impl TuiBackend for App {
 
     fn render_version_info(&self) -> Result<String, BootstrapError> {
         App::render_version_info(self)
+    }
+
+    fn render_diagnostics_tail(&self, max_lines: Option<usize>) -> Result<String, BootstrapError> {
+        App::render_diagnostics_tail(
+            self,
+            max_lines.unwrap_or(self.config.runtime_limits.diagnostic_tail_lines),
+        )
     }
 
     fn update_runtime(&self, tag: Option<&str>) -> Result<String, BootstrapError> {
@@ -764,6 +792,14 @@ impl TuiBackend for DaemonClient {
         DaemonClient::session_transcript(self, session_id)
     }
 
+    fn session_transcript_tail(
+        &self,
+        session_id: &str,
+        max_entries: usize,
+    ) -> Result<SessionTranscriptView, BootstrapError> {
+        DaemonClient::session_transcript_tail(self, session_id, max_entries)
+    }
+
     fn pending_approvals(
         &self,
         session_id: &str,
@@ -866,6 +902,10 @@ impl TuiBackend for DaemonClient {
 
     fn render_version_info(&self) -> Result<String, BootstrapError> {
         DaemonClient::about(self)
+    }
+
+    fn render_diagnostics_tail(&self, max_lines: Option<usize>) -> Result<String, BootstrapError> {
+        DaemonClient::render_diagnostics_tail(self, max_lines)
     }
 
     fn update_runtime(&self, tag: Option<&str>) -> Result<String, BootstrapError> {

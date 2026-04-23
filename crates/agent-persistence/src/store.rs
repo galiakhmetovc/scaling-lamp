@@ -9,6 +9,7 @@ mod schema;
 mod session_mission;
 
 use crate::PersistenceScaffold;
+use crate::audit::{AuditLogConfig, DiagnosticEvent};
 use crate::config::AppConfig;
 use crate::records::{
     AgentChainContinuationRecord, AgentProfileRecord, AgentScheduleRecord, ArtifactRecord,
@@ -31,6 +32,8 @@ use std::error::Error;
 use std::fmt;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::process;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StoreLayout {
@@ -122,6 +125,12 @@ const DEFAULT_MISSION_SCHEDULE_JSON: &str = r#"{"not_before":null,"interval_seco
 const DEFAULT_MISSION_ACCEPTANCE_JSON: &str = "[]";
 const LEGACY_MISSION_PREFIX: &str = "legacy-mission-";
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum OpenMode {
+    BootstrapAndReconcile,
+    RuntimeRequestPath,
+}
+
 impl fmt::Display for StoreError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -200,17 +209,30 @@ impl From<rusqlite::Error> for StoreError {
 
 impl PersistenceStore {
     pub fn open(scaffold: &PersistenceScaffold) -> Result<Self, StoreError> {
+        Self::open_internal(scaffold, OpenMode::BootstrapAndReconcile)
+    }
+
+    pub fn open_runtime(scaffold: &PersistenceScaffold) -> Result<Self, StoreError> {
+        Self::open_internal(scaffold, OpenMode::RuntimeRequestPath)
+    }
+
+    fn open_internal(scaffold: &PersistenceScaffold, mode: OpenMode) -> Result<Self, StoreError> {
         prepare_layout(&scaffold.stores)?;
 
         let connection = Connection::open(&scaffold.stores.metadata_db)?;
-        bootstrap_schema(&connection)?;
-        validate_schema(&connection)?;
+        configure_connection(&connection, &scaffold.config, mode)?;
+        if mode == OpenMode::BootstrapAndReconcile {
+            bootstrap_schema(&connection)?;
+            validate_schema(&connection)?;
+        }
 
         let store = Self {
             layout: scaffold.stores.clone(),
             connection,
         };
-        store.reconcile_orphan_payloads()?;
+        if mode == OpenMode::BootstrapAndReconcile {
+            store.reconcile_orphan_payloads()?;
+        }
 
         Ok(store)
     }
@@ -223,6 +245,42 @@ impl PersistenceStore {
             runs: self.list_runs()?,
             inbox_events: self.list_queued_session_inbox_events()?,
         })
+    }
+
+    pub fn session_exists(&self, id: &str) -> Result<bool, StoreError> {
+        self.connection
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM sessions WHERE id = ?1)",
+                [id],
+                |row| row.get::<_, i64>(0),
+            )
+            .map(|exists| exists != 0)
+            .map_err(StoreError::from)
+    }
+
+    pub fn count_sessions(&self) -> Result<usize, StoreError> {
+        self.count_rows("sessions")
+    }
+
+    pub fn count_missions(&self) -> Result<usize, StoreError> {
+        self.count_rows("missions")
+    }
+
+    pub fn count_runs(&self) -> Result<usize, StoreError> {
+        self.count_rows("runs")
+    }
+
+    pub fn count_jobs(&self) -> Result<usize, StoreError> {
+        self.count_rows("jobs")
+    }
+
+    fn count_rows(&self, table: &'static str) -> Result<usize, StoreError> {
+        self.connection
+            .query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |row| {
+                row.get::<_, i64>(0)
+            })
+            .map(|count| count.max(0) as usize)
+            .map_err(StoreError::from)
     }
 
     fn transcript_path(&self, id: &str) -> Result<PathBuf, StoreError> {
@@ -317,6 +375,15 @@ impl PersistenceStore {
             paths.push(self.layout.transcripts_dir.join(storage_key));
         }
 
+        self.append_diagnostic_event(
+            "session_transcript_payload_paths",
+            "enumerated transcript payload paths",
+            Some(session_id),
+            std::collections::BTreeMap::from([(
+                "count".to_string(),
+                serde_json::json!(paths.len()),
+            )]),
+        );
         Ok(paths)
     }
 
@@ -337,6 +404,15 @@ impl PersistenceStore {
             paths.push(root.join(relative_path));
         }
 
+        self.append_diagnostic_event(
+            "session_artifact_payload_paths",
+            "enumerated artifact payload paths",
+            Some(session_id),
+            std::collections::BTreeMap::from([(
+                "count".to_string(),
+                serde_json::json!(paths.len()),
+            )]),
+        );
         Ok(paths)
     }
 
@@ -583,6 +659,67 @@ impl PersistenceStore {
         }
         Ok(Some(entries))
     }
+
+    fn audit_log_config(&self) -> AuditLogConfig {
+        let root = self
+            .layout
+            .metadata_db
+            .parent()
+            .unwrap_or(self.layout.metadata_db.as_path())
+            .to_path_buf();
+        AuditLogConfig {
+            path: root.join("audit/runtime.jsonl"),
+        }
+    }
+
+    fn append_diagnostic_event(
+        &self,
+        op: &str,
+        message: &str,
+        session_id: Option<&str>,
+        fields: std::collections::BTreeMap<String, serde_json::Value>,
+    ) {
+        self.audit_log_config()
+            .append_event_best_effort(&DiagnosticEvent {
+                ts: unix_timestamp(),
+                level: "info".to_string(),
+                component: "store".to_string(),
+                op: op.to_string(),
+                message: message.to_string(),
+                pid: Some(process::id()),
+                uid: None,
+                euid: None,
+                data_dir: self
+                    .layout
+                    .metadata_db
+                    .parent()
+                    .unwrap_or(self.layout.metadata_db.as_path())
+                    .display()
+                    .to_string(),
+                session_id: session_id.map(str::to_string),
+                run_id: None,
+                job_id: None,
+                daemon_base_url: None,
+                elapsed_ms: None,
+                outcome: Some("ok".to_string()),
+                error: None,
+                fields,
+            });
+    }
+}
+
+fn configure_connection(
+    connection: &Connection,
+    config: &AppConfig,
+    mode: OpenMode,
+) -> Result<(), StoreError> {
+    connection.busy_timeout(config.runtime_timing.sqlite_busy_timeout())?;
+    connection.execute_batch("PRAGMA foreign_keys = ON;")?;
+    if mode == OpenMode::BootstrapAndReconcile {
+        connection.pragma_update(None, "journal_mode", "WAL")?;
+        connection.pragma_update(None, "synchronous", "NORMAL")?;
+    }
+    Ok(())
 }
 
 fn prepare_layout(layout: &StoreLayout) -> Result<(), StoreError> {
@@ -644,6 +781,13 @@ fn read_string_payload(path: &Path) -> Result<String, StoreError> {
 
 fn read_binary_payload(path: &Path) -> Result<Vec<u8>, StoreError> {
     payloads::read_binary_payload(path)
+}
+
+fn unix_timestamp() -> i64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_secs() as i64)
+        .unwrap_or(0)
 }
 
 #[cfg(test)]

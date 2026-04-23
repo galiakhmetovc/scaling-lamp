@@ -252,6 +252,16 @@ impl DaemonClient {
         self.get_json(&format!("/v1/sessions/{session_id}/transcript"))
     }
 
+    pub fn session_transcript_tail(
+        &self,
+        session_id: &str,
+        max_entries: usize,
+    ) -> Result<SessionTranscriptView, BootstrapError> {
+        self.get_json(&format!(
+            "/v1/sessions/{session_id}/transcript-tail/{max_entries}"
+        ))
+    }
+
     pub fn pending_approvals(
         &self,
         session_id: &str,

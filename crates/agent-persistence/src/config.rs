@@ -9,6 +9,7 @@ use std::error::Error;
 use std::fmt;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 const DEFAULT_ZAI_API_BASE: &str = "https://api.z.ai/api/coding/paas/v4";
 const DEFAULT_ZAI_MODEL: &str = "glm-5-turbo";
@@ -24,6 +25,8 @@ pub struct AppConfig {
     pub provider: ConfiguredProvider,
     pub session_defaults: SessionDefaultsConfig,
     pub context: ContextConfig,
+    pub runtime_timing: RuntimeTimingConfig,
+    pub runtime_limits: RuntimeLimitsConfig,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
@@ -52,6 +55,61 @@ pub struct ContextConfig {
     pub compaction_keep_tail_messages: usize,
     pub compaction_max_output_tokens: u32,
     pub compaction_max_summary_chars: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(default)]
+pub struct RuntimeTimingConfig {
+    pub sqlite_busy_timeout_ms: u64,
+    pub daemon_http_connect_timeout_ms: u64,
+    pub daemon_http_request_timeout_ms: u64,
+    pub a2a_http_connect_timeout_ms: u64,
+    pub autospawn_status_poll_attempts: usize,
+    pub autospawn_status_poll_interval_ms: u64,
+    pub shutdown_wait_poll_attempts: usize,
+    pub shutdown_wait_poll_interval_ms: u64,
+    pub restart_stop_poll_attempts: usize,
+    pub restart_stop_poll_interval_ms: u64,
+    pub restart_stop_required_unavailable_probes: usize,
+    pub http_server_request_poll_interval_ms: u64,
+    pub daemon_test_startup_probe_attempts: usize,
+    pub daemon_test_startup_probe_interval_ms: u64,
+    pub daemon_background_worker_tick_interval_ms: u64,
+    pub tui_event_poll_interval_ms: u64,
+    pub tui_active_run_heartbeat_notice_interval_seconds: u64,
+    pub mcp_stdio_command_poll_interval_ms: u64,
+    pub provider_loop_transient_retry_base_delay_ms: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(default)]
+pub struct RuntimeLimitsConfig {
+    pub diagnostic_tail_lines: usize,
+    pub active_run_step_tail_limit: usize,
+    pub active_process_output_tail_max_bytes: usize,
+    pub active_process_output_tail_max_lines: usize,
+    pub transcript_tail_run_limit: usize,
+    pub agent_list_default_limit: usize,
+    pub agent_list_max_limit: usize,
+    pub schedule_list_default_limit: usize,
+    pub schedule_list_max_limit: usize,
+    pub mcp_search_default_limit: usize,
+    pub mcp_search_max_limit: usize,
+    pub session_search_default_limit: usize,
+    pub session_search_max_limit: usize,
+    pub session_read_default_max_items: usize,
+    pub session_read_max_items: usize,
+    pub session_read_default_max_bytes: usize,
+    pub session_read_max_bytes: usize,
+    pub knowledge_search_default_limit: usize,
+    pub knowledge_search_max_limit: usize,
+    pub knowledge_read_excerpt_default_max_lines: usize,
+    pub knowledge_read_full_default_max_lines: usize,
+    pub knowledge_read_max_lines: usize,
+    pub knowledge_read_default_max_bytes: usize,
+    pub knowledge_read_max_bytes: usize,
+    pub session_warm_idle_seconds: u64,
+    pub timeline_preview_chars: usize,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
@@ -142,6 +200,8 @@ struct FileConfig {
     provider: Option<ConfiguredProvider>,
     session_defaults: Option<SessionDefaultsConfig>,
     context: Option<ContextConfig>,
+    runtime_timing: Option<RuntimeTimingConfig>,
+    runtime_limits: Option<RuntimeLimitsConfig>,
 }
 
 impl Default for DaemonConfig {
@@ -189,6 +249,124 @@ impl Default for ContextConfig {
             compaction_keep_tail_messages: defaults.keep_tail_messages,
             compaction_max_output_tokens: defaults.max_output_tokens,
             compaction_max_summary_chars: defaults.max_summary_chars,
+        }
+    }
+}
+
+impl Default for RuntimeTimingConfig {
+    fn default() -> Self {
+        Self {
+            sqlite_busy_timeout_ms: 5_000,
+            daemon_http_connect_timeout_ms: 2_000,
+            daemon_http_request_timeout_ms: 5_000,
+            a2a_http_connect_timeout_ms: 2_000,
+            autospawn_status_poll_attempts: 50,
+            autospawn_status_poll_interval_ms: 100,
+            shutdown_wait_poll_attempts: 50,
+            shutdown_wait_poll_interval_ms: 50,
+            restart_stop_poll_attempts: 60,
+            restart_stop_poll_interval_ms: 50,
+            restart_stop_required_unavailable_probes: 3,
+            http_server_request_poll_interval_ms: 100,
+            daemon_test_startup_probe_attempts: 50,
+            daemon_test_startup_probe_interval_ms: 20,
+            daemon_background_worker_tick_interval_ms: 100,
+            tui_event_poll_interval_ms: 100,
+            tui_active_run_heartbeat_notice_interval_seconds: 30,
+            mcp_stdio_command_poll_interval_ms: 100,
+            provider_loop_transient_retry_base_delay_ms: 100,
+        }
+    }
+}
+
+impl RuntimeTimingConfig {
+    pub fn sqlite_busy_timeout(&self) -> Duration {
+        Duration::from_millis(self.sqlite_busy_timeout_ms)
+    }
+
+    pub fn daemon_http_connect_timeout(&self) -> Duration {
+        Duration::from_millis(self.daemon_http_connect_timeout_ms)
+    }
+
+    pub fn daemon_http_request_timeout(&self) -> Duration {
+        Duration::from_millis(self.daemon_http_request_timeout_ms)
+    }
+
+    pub fn a2a_http_connect_timeout(&self) -> Duration {
+        Duration::from_millis(self.a2a_http_connect_timeout_ms)
+    }
+
+    pub fn autospawn_status_poll_interval(&self) -> Duration {
+        Duration::from_millis(self.autospawn_status_poll_interval_ms)
+    }
+
+    pub fn shutdown_wait_poll_interval(&self) -> Duration {
+        Duration::from_millis(self.shutdown_wait_poll_interval_ms)
+    }
+
+    pub fn restart_stop_poll_interval(&self) -> Duration {
+        Duration::from_millis(self.restart_stop_poll_interval_ms)
+    }
+
+    pub fn http_server_request_poll_interval(&self) -> Duration {
+        Duration::from_millis(self.http_server_request_poll_interval_ms)
+    }
+
+    pub fn daemon_test_startup_probe_interval(&self) -> Duration {
+        Duration::from_millis(self.daemon_test_startup_probe_interval_ms)
+    }
+
+    pub fn daemon_background_worker_tick_interval(&self) -> Duration {
+        Duration::from_millis(self.daemon_background_worker_tick_interval_ms)
+    }
+
+    pub fn tui_event_poll_interval(&self) -> Duration {
+        Duration::from_millis(self.tui_event_poll_interval_ms)
+    }
+
+    pub fn mcp_stdio_command_poll_interval(&self) -> Duration {
+        Duration::from_millis(self.mcp_stdio_command_poll_interval_ms)
+    }
+
+    pub fn provider_loop_transient_retry_base_delay(&self) -> Duration {
+        Duration::from_millis(self.provider_loop_transient_retry_base_delay_ms)
+    }
+
+    pub fn provider_loop_transient_retry_delay(&self, attempt: usize) -> Duration {
+        self.provider_loop_transient_retry_base_delay()
+            .saturating_mul(attempt as u32)
+    }
+}
+
+impl Default for RuntimeLimitsConfig {
+    fn default() -> Self {
+        Self {
+            diagnostic_tail_lines: 80,
+            active_run_step_tail_limit: 3,
+            active_process_output_tail_max_bytes: 2 * 1024,
+            active_process_output_tail_max_lines: 8,
+            transcript_tail_run_limit: 32,
+            agent_list_default_limit: 100,
+            agent_list_max_limit: 1_000,
+            schedule_list_default_limit: 100,
+            schedule_list_max_limit: 1_000,
+            mcp_search_default_limit: 20,
+            mcp_search_max_limit: 100,
+            session_search_default_limit: 20,
+            session_search_max_limit: 100,
+            session_read_default_max_items: 20,
+            session_read_max_items: 200,
+            session_read_default_max_bytes: 8 * 1024,
+            session_read_max_bytes: 64 * 1024,
+            knowledge_search_default_limit: 20,
+            knowledge_search_max_limit: 100,
+            knowledge_read_excerpt_default_max_lines: 40,
+            knowledge_read_full_default_max_lines: 200,
+            knowledge_read_max_lines: 400,
+            knowledge_read_default_max_bytes: 8 * 1024,
+            knowledge_read_max_bytes: 64 * 1024,
+            session_warm_idle_seconds: 60 * 60,
+            timeline_preview_chars: 160,
         }
     }
 }
@@ -389,6 +567,14 @@ impl AppConfig {
             .as_ref()
             .and_then(|config| config.context.clone())
             .unwrap_or_default();
+        let runtime_timing = file_config
+            .as_ref()
+            .and_then(|config| config.runtime_timing.clone())
+            .unwrap_or_default();
+        let runtime_limits = file_config
+            .as_ref()
+            .and_then(|config| config.runtime_limits.clone())
+            .unwrap_or_default();
         let mut permissions = file_config
             .as_ref()
             .and_then(|config| config.permissions.clone())
@@ -470,6 +656,8 @@ impl AppConfig {
             provider,
             session_defaults,
             context,
+            runtime_timing,
+            runtime_limits,
         };
         config.validate()?;
         Ok(config)
@@ -583,6 +771,189 @@ impl AppConfig {
             "context.compaction_max_summary_chars",
             self.context.compaction_max_summary_chars,
         )?;
+        validate_positive_u64_value(
+            "runtime_timing.sqlite_busy_timeout_ms",
+            self.runtime_timing.sqlite_busy_timeout_ms,
+        )?;
+        validate_positive_u64_value(
+            "runtime_timing.daemon_http_connect_timeout_ms",
+            self.runtime_timing.daemon_http_connect_timeout_ms,
+        )?;
+        validate_positive_u64_value(
+            "runtime_timing.daemon_http_request_timeout_ms",
+            self.runtime_timing.daemon_http_request_timeout_ms,
+        )?;
+        validate_positive_u64_value(
+            "runtime_timing.a2a_http_connect_timeout_ms",
+            self.runtime_timing.a2a_http_connect_timeout_ms,
+        )?;
+        validate_positive_usize_value(
+            "runtime_timing.autospawn_status_poll_attempts",
+            self.runtime_timing.autospawn_status_poll_attempts,
+        )?;
+        validate_positive_u64_value(
+            "runtime_timing.autospawn_status_poll_interval_ms",
+            self.runtime_timing.autospawn_status_poll_interval_ms,
+        )?;
+        validate_positive_usize_value(
+            "runtime_timing.shutdown_wait_poll_attempts",
+            self.runtime_timing.shutdown_wait_poll_attempts,
+        )?;
+        validate_positive_u64_value(
+            "runtime_timing.shutdown_wait_poll_interval_ms",
+            self.runtime_timing.shutdown_wait_poll_interval_ms,
+        )?;
+        validate_positive_usize_value(
+            "runtime_timing.restart_stop_poll_attempts",
+            self.runtime_timing.restart_stop_poll_attempts,
+        )?;
+        validate_positive_u64_value(
+            "runtime_timing.restart_stop_poll_interval_ms",
+            self.runtime_timing.restart_stop_poll_interval_ms,
+        )?;
+        validate_positive_usize_value(
+            "runtime_timing.restart_stop_required_unavailable_probes",
+            self.runtime_timing.restart_stop_required_unavailable_probes,
+        )?;
+        validate_positive_u64_value(
+            "runtime_timing.http_server_request_poll_interval_ms",
+            self.runtime_timing.http_server_request_poll_interval_ms,
+        )?;
+        validate_positive_usize_value(
+            "runtime_timing.daemon_test_startup_probe_attempts",
+            self.runtime_timing.daemon_test_startup_probe_attempts,
+        )?;
+        validate_positive_u64_value(
+            "runtime_timing.daemon_test_startup_probe_interval_ms",
+            self.runtime_timing.daemon_test_startup_probe_interval_ms,
+        )?;
+        validate_positive_u64_value(
+            "runtime_timing.daemon_background_worker_tick_interval_ms",
+            self.runtime_timing
+                .daemon_background_worker_tick_interval_ms,
+        )?;
+        validate_positive_u64_value(
+            "runtime_timing.tui_event_poll_interval_ms",
+            self.runtime_timing.tui_event_poll_interval_ms,
+        )?;
+        validate_positive_u64_value(
+            "runtime_timing.tui_active_run_heartbeat_notice_interval_seconds",
+            self.runtime_timing
+                .tui_active_run_heartbeat_notice_interval_seconds,
+        )?;
+        validate_positive_u64_value(
+            "runtime_timing.mcp_stdio_command_poll_interval_ms",
+            self.runtime_timing.mcp_stdio_command_poll_interval_ms,
+        )?;
+        validate_positive_u64_value(
+            "runtime_timing.provider_loop_transient_retry_base_delay_ms",
+            self.runtime_timing
+                .provider_loop_transient_retry_base_delay_ms,
+        )?;
+        validate_positive_usize_value(
+            "runtime_limits.diagnostic_tail_lines",
+            self.runtime_limits.diagnostic_tail_lines,
+        )?;
+        validate_positive_usize_value(
+            "runtime_limits.active_run_step_tail_limit",
+            self.runtime_limits.active_run_step_tail_limit,
+        )?;
+        validate_positive_usize_value(
+            "runtime_limits.active_process_output_tail_max_bytes",
+            self.runtime_limits.active_process_output_tail_max_bytes,
+        )?;
+        validate_positive_usize_value(
+            "runtime_limits.active_process_output_tail_max_lines",
+            self.runtime_limits.active_process_output_tail_max_lines,
+        )?;
+        validate_positive_usize_value(
+            "runtime_limits.transcript_tail_run_limit",
+            self.runtime_limits.transcript_tail_run_limit,
+        )?;
+        validate_positive_usize_value(
+            "runtime_limits.agent_list_default_limit",
+            self.runtime_limits.agent_list_default_limit,
+        )?;
+        validate_positive_usize_value(
+            "runtime_limits.agent_list_max_limit",
+            self.runtime_limits.agent_list_max_limit,
+        )?;
+        validate_positive_usize_value(
+            "runtime_limits.schedule_list_default_limit",
+            self.runtime_limits.schedule_list_default_limit,
+        )?;
+        validate_positive_usize_value(
+            "runtime_limits.schedule_list_max_limit",
+            self.runtime_limits.schedule_list_max_limit,
+        )?;
+        validate_positive_usize_value(
+            "runtime_limits.mcp_search_default_limit",
+            self.runtime_limits.mcp_search_default_limit,
+        )?;
+        validate_positive_usize_value(
+            "runtime_limits.mcp_search_max_limit",
+            self.runtime_limits.mcp_search_max_limit,
+        )?;
+        validate_positive_usize_value(
+            "runtime_limits.session_search_default_limit",
+            self.runtime_limits.session_search_default_limit,
+        )?;
+        validate_positive_usize_value(
+            "runtime_limits.session_search_max_limit",
+            self.runtime_limits.session_search_max_limit,
+        )?;
+        validate_positive_usize_value(
+            "runtime_limits.session_read_default_max_items",
+            self.runtime_limits.session_read_default_max_items,
+        )?;
+        validate_positive_usize_value(
+            "runtime_limits.session_read_max_items",
+            self.runtime_limits.session_read_max_items,
+        )?;
+        validate_positive_usize_value(
+            "runtime_limits.session_read_default_max_bytes",
+            self.runtime_limits.session_read_default_max_bytes,
+        )?;
+        validate_positive_usize_value(
+            "runtime_limits.session_read_max_bytes",
+            self.runtime_limits.session_read_max_bytes,
+        )?;
+        validate_positive_usize_value(
+            "runtime_limits.knowledge_search_default_limit",
+            self.runtime_limits.knowledge_search_default_limit,
+        )?;
+        validate_positive_usize_value(
+            "runtime_limits.knowledge_search_max_limit",
+            self.runtime_limits.knowledge_search_max_limit,
+        )?;
+        validate_positive_usize_value(
+            "runtime_limits.knowledge_read_excerpt_default_max_lines",
+            self.runtime_limits.knowledge_read_excerpt_default_max_lines,
+        )?;
+        validate_positive_usize_value(
+            "runtime_limits.knowledge_read_full_default_max_lines",
+            self.runtime_limits.knowledge_read_full_default_max_lines,
+        )?;
+        validate_positive_usize_value(
+            "runtime_limits.knowledge_read_max_lines",
+            self.runtime_limits.knowledge_read_max_lines,
+        )?;
+        validate_positive_usize_value(
+            "runtime_limits.knowledge_read_default_max_bytes",
+            self.runtime_limits.knowledge_read_default_max_bytes,
+        )?;
+        validate_positive_usize_value(
+            "runtime_limits.knowledge_read_max_bytes",
+            self.runtime_limits.knowledge_read_max_bytes,
+        )?;
+        validate_positive_u64_value(
+            "runtime_limits.session_warm_idle_seconds",
+            self.runtime_limits.session_warm_idle_seconds,
+        )?;
+        validate_positive_usize_value(
+            "runtime_limits.timeline_preview_chars",
+            self.runtime_limits.timeline_preview_chars,
+        )?;
         if self.context.compaction_keep_tail_messages > self.context.compaction_min_messages {
             return Err(ConfigError::InvalidProviderValue {
                 name: "context.compaction_keep_tail_messages",
@@ -590,6 +961,66 @@ impl AppConfig {
                 reason: "must be less than or equal to compaction_min_messages",
             });
         }
+        validate_limit_bounds(
+            "runtime_limits.agent_list_default_limit",
+            self.runtime_limits.agent_list_default_limit,
+            "runtime_limits.agent_list_max_limit",
+            self.runtime_limits.agent_list_max_limit,
+        )?;
+        validate_limit_bounds(
+            "runtime_limits.schedule_list_default_limit",
+            self.runtime_limits.schedule_list_default_limit,
+            "runtime_limits.schedule_list_max_limit",
+            self.runtime_limits.schedule_list_max_limit,
+        )?;
+        validate_limit_bounds(
+            "runtime_limits.mcp_search_default_limit",
+            self.runtime_limits.mcp_search_default_limit,
+            "runtime_limits.mcp_search_max_limit",
+            self.runtime_limits.mcp_search_max_limit,
+        )?;
+        validate_limit_bounds(
+            "runtime_limits.session_search_default_limit",
+            self.runtime_limits.session_search_default_limit,
+            "runtime_limits.session_search_max_limit",
+            self.runtime_limits.session_search_max_limit,
+        )?;
+        validate_limit_bounds(
+            "runtime_limits.session_read_default_max_items",
+            self.runtime_limits.session_read_default_max_items,
+            "runtime_limits.session_read_max_items",
+            self.runtime_limits.session_read_max_items,
+        )?;
+        validate_limit_bounds(
+            "runtime_limits.session_read_default_max_bytes",
+            self.runtime_limits.session_read_default_max_bytes,
+            "runtime_limits.session_read_max_bytes",
+            self.runtime_limits.session_read_max_bytes,
+        )?;
+        validate_limit_bounds(
+            "runtime_limits.knowledge_search_default_limit",
+            self.runtime_limits.knowledge_search_default_limit,
+            "runtime_limits.knowledge_search_max_limit",
+            self.runtime_limits.knowledge_search_max_limit,
+        )?;
+        validate_limit_bounds(
+            "runtime_limits.knowledge_read_excerpt_default_max_lines",
+            self.runtime_limits.knowledge_read_excerpt_default_max_lines,
+            "runtime_limits.knowledge_read_max_lines",
+            self.runtime_limits.knowledge_read_max_lines,
+        )?;
+        validate_limit_bounds(
+            "runtime_limits.knowledge_read_full_default_max_lines",
+            self.runtime_limits.knowledge_read_full_default_max_lines,
+            "runtime_limits.knowledge_read_max_lines",
+            self.runtime_limits.knowledge_read_max_lines,
+        )?;
+        validate_limit_bounds(
+            "runtime_limits.knowledge_read_default_max_bytes",
+            self.runtime_limits.knowledge_read_default_max_bytes,
+            "runtime_limits.knowledge_read_max_bytes",
+            self.runtime_limits.knowledge_read_max_bytes,
+        )?;
 
         Ok(())
     }
@@ -613,6 +1044,8 @@ fn load_file_config(path: &Path, required: bool) -> Result<FileConfig, ConfigErr
                 provider: None,
                 session_defaults: None,
                 context: None,
+                runtime_timing: None,
+                runtime_limits: None,
             });
         }
         Err(source) => {
@@ -807,6 +1240,33 @@ fn validate_positive_u32_value(name: &'static str, value: u32) -> Result<(), Con
     Ok(())
 }
 
+fn validate_positive_u64_value(name: &'static str, value: u64) -> Result<(), ConfigError> {
+    if value == 0 {
+        return Err(ConfigError::InvalidProviderValue {
+            name,
+            value: value.to_string(),
+            reason: "must be greater than zero",
+        });
+    }
+    Ok(())
+}
+
+fn validate_limit_bounds(
+    name: &'static str,
+    value: usize,
+    max_name: &'static str,
+    max_value: usize,
+) -> Result<(), ConfigError> {
+    if value > max_value {
+        return Err(ConfigError::InvalidProviderValue {
+            name,
+            value: value.to_string(),
+            reason: max_name,
+        });
+    }
+    Ok(())
+}
+
 fn load_dotenv_from_cwd() -> Result<BTreeMap<String, String>, ConfigError> {
     let cwd = env::current_dir().ok();
     let exe_dir = env::current_exe()
@@ -889,6 +1349,8 @@ impl Default for AppConfig {
             provider: ConfiguredProvider::default(),
             session_defaults: SessionDefaultsConfig::default(),
             context: ContextConfig::default(),
+            runtime_timing: RuntimeTimingConfig::default(),
+            runtime_limits: RuntimeLimitsConfig::default(),
         }
     }
 }

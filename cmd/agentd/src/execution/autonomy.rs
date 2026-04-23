@@ -14,11 +14,6 @@ use agent_runtime::tool::{
 };
 use std::path::{Path, PathBuf};
 
-const DEFAULT_AGENT_LIST_LIMIT: usize = 100;
-const MAX_AGENT_LIST_LIMIT: usize = 1_000;
-const DEFAULT_SCHEDULE_LIST_LIMIT: usize = 100;
-const MAX_SCHEDULE_LIST_LIMIT: usize = 1_000;
-
 impl ExecutionService {
     pub(crate) fn list_tool_agents(
         &self,
@@ -37,8 +32,8 @@ impl ExecutionService {
             agents.len(),
             input.offset,
             input.limit,
-            DEFAULT_AGENT_LIST_LIMIT,
-            MAX_AGENT_LIST_LIMIT,
+            self.config.runtime_limits.agent_list_default_limit,
+            self.config.runtime_limits.agent_list_max_limit,
         );
         let end = offset.saturating_add(limit).min(agents.len());
         let page = agents[offset..end]
@@ -201,8 +196,8 @@ impl ExecutionService {
             schedules.len(),
             input.offset,
             input.limit,
-            DEFAULT_SCHEDULE_LIST_LIMIT,
-            MAX_SCHEDULE_LIST_LIMIT,
+            self.config.runtime_limits.schedule_list_default_limit,
+            self.config.runtime_limits.schedule_list_max_limit,
         );
         let end = offset.saturating_add(limit).min(schedules.len());
         let page = schedules[offset..end]

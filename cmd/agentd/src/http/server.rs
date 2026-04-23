@@ -11,7 +11,6 @@ use serde::{Serialize, de::DeserializeOwned};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread;
-use std::time::Duration;
 use tiny_http::{Header, Request, Response, Server, StatusCode};
 
 pub fn serve(app: App, shutdown: Arc<AtomicBool>) -> std::io::Result<()> {
@@ -22,7 +21,11 @@ pub fn serve(app: App, shutdown: Arc<AtomicBool>) -> std::io::Result<()> {
     let server = Server::http(&bind).map_err(std::io::Error::other)?;
 
     while !shutdown.load(Ordering::Relaxed) {
-        match server.recv_timeout(Duration::from_millis(100)) {
+        match server.recv_timeout(
+            app.config
+                .runtime_timing
+                .http_server_request_poll_interval(),
+        ) {
             Ok(Some(request)) => {
                 let app = app.clone();
                 let shutdown = shutdown.clone();
@@ -52,6 +55,9 @@ fn handle_request(app: &App, shutdown: &Arc<AtomicBool>, request: Request) -> st
     match (request.method(), request.url()) {
         (&tiny_http::Method::Get, "/v1/status") => status::handle_status(app, request),
         (&tiny_http::Method::Get, "/v1/about") => status::handle_about(app, request),
+        (&tiny_http::Method::Post, "/v1/diagnostics/tail") => {
+            status::handle_diagnostics_tail(app, request)
+        }
         (&tiny_http::Method::Post, "/v1/update") => status::handle_update_runtime(app, request),
         (&tiny_http::Method::Post, "/v1/daemon/stop") => handle_shutdown(shutdown, request),
         (&tiny_http::Method::Get, "/v1/agents") => agents::handle_list_agents(app, request),

@@ -1929,7 +1929,7 @@ fn wait_for_tui_idle(
     redraw: &mut dyn FnMut(&TuiAppState) -> Result<(), agentd::bootstrap::BootstrapError>,
 ) {
     for _ in 0..100 {
-        pump_background(app, state, redraw).expect("pump background");
+        pump_background(app, state, redraw, &app.config.runtime_timing).expect("pump background");
         if !state.has_active_run() {
             return;
         }

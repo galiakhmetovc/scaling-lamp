@@ -1,5 +1,5 @@
 use super::*;
-use crate::http::types::UpdateRuntimeRequest;
+use crate::http::types::{DiagnosticsTailRequest, DiagnosticsTailResponse, UpdateRuntimeRequest};
 
 impl DaemonClient {
     pub fn about(&self) -> Result<String, BootstrapError> {
@@ -19,6 +19,19 @@ impl DaemonClient {
 
     pub fn status(&self) -> Result<StatusResponse, BootstrapError> {
         self.get_json("/v1/status")
+    }
+
+    pub fn render_diagnostics_tail(
+        &self,
+        max_lines: Option<usize>,
+    ) -> Result<String, BootstrapError> {
+        let response: DiagnosticsTailResponse = self.post_json(
+            "/v1/diagnostics/tail",
+            &DiagnosticsTailRequest {
+                max_lines: Some(max_lines.unwrap_or(self.default_diagnostic_tail_lines)),
+            },
+        )?;
+        Ok(response.diagnostics)
     }
 
     pub fn shutdown(&self) -> Result<(), BootstrapError> {

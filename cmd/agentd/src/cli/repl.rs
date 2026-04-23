@@ -64,6 +64,7 @@ pub(super) trait ChatReplBackend {
     fn restart_mcp_connector(&self, id: &str) -> Result<String, BootstrapError>;
     fn delete_mcp_connector(&self, id: &str) -> Result<String, BootstrapError>;
     fn render_version_info(&self) -> Result<String, BootstrapError>;
+    fn render_diagnostics_tail(&self, max_lines: Option<usize>) -> Result<String, BootstrapError>;
     fn update_runtime(&self, tag: Option<&str>) -> Result<String, BootstrapError>;
     fn render_system(&self, session_id: &str) -> Result<String, BootstrapError>;
     fn render_context(&self, session_id: &str) -> Result<String, BootstrapError>;
@@ -280,6 +281,13 @@ impl ChatReplBackend for App {
 
     fn render_version_info(&self) -> Result<String, BootstrapError> {
         App::render_version_info(self)
+    }
+
+    fn render_diagnostics_tail(&self, max_lines: Option<usize>) -> Result<String, BootstrapError> {
+        App::render_diagnostics_tail(
+            self,
+            max_lines.unwrap_or(self.config.runtime_limits.diagnostic_tail_lines),
+        )
     }
 
     fn update_runtime(&self, tag: Option<&str>) -> Result<String, BootstrapError> {
@@ -546,6 +554,10 @@ impl ChatReplBackend for DaemonClient {
 
     fn render_version_info(&self) -> Result<String, BootstrapError> {
         DaemonClient::about(self)
+    }
+
+    fn render_diagnostics_tail(&self, max_lines: Option<usize>) -> Result<String, BootstrapError> {
+        DaemonClient::render_diagnostics_tail(self, max_lines)
     }
 
     fn update_runtime(&self, tag: Option<&str>) -> Result<String, BootstrapError> {
@@ -935,6 +947,14 @@ where
                     let about = backend.render_version_info()?;
                     writeln!(renderer.output, "{about}").map_err(BootstrapError::Stream)?;
                 }
+                Some("/logs") => {
+                    renderer.finish_turn()?;
+                    let logs = backend.render_diagnostics_tail(parse_optional_positive_usize(
+                        split_command_arg(trimmed),
+                        "/logs",
+                    )?)?;
+                    writeln!(renderer.output, "{logs}").map_err(BootstrapError::Stream)?;
+                }
                 Some("/update") => {
                     renderer.finish_turn()?;
                     let message = backend.update_runtime(split_command_arg(trimmed))?;
@@ -1322,6 +1342,7 @@ fn canonical_repl_command(raw: &str) -> Option<&'static str> {
         "/schedule" | "\\расписание" => Some("/schedule"),
         "/mcp" | "\\mcp" => Some("/mcp"),
         "/version" | "/версия" | "\\версия" => Some("/version"),
+        "/logs" | "/логи" | "\\логи" => Some("/logs"),
         "/update" | "/обновить" | "\\обновить" => Some("/update"),
         "/settings" | "\\настройки" => Some("/settings"),
         "/show" | "\\показать" => Some("/show"),
@@ -2116,6 +2137,24 @@ fn split_command_arg(raw: &str) -> Option<&str> {
     raw.split_once(char::is_whitespace)
         .map(|(_, rest)| rest.trim())
         .filter(|value| !value.is_empty())
+}
+
+fn parse_optional_positive_usize(
+    raw: Option<&str>,
+    command: &str,
+) -> Result<Option<usize>, BootstrapError> {
+    let Some(raw) = raw else {
+        return Ok(None);
+    };
+    let value = raw.parse::<usize>().map_err(|_| BootstrapError::Usage {
+        reason: render_command_usage_error(command, "ожидается положительное целое число"),
+    })?;
+    if value == 0 {
+        return Err(BootstrapError::Usage {
+            reason: render_command_usage_error(command, "значение должно быть больше нуля"),
+        });
+    }
+    Ok(Some(value))
 }
 
 fn parse_completion_nudges(raw: &str) -> Result<Option<u32>, BootstrapError> {

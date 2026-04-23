@@ -7,6 +7,7 @@ pub mod store;
 
 pub use config::{
     A2APeerConfig, AppConfig, ConfigEnv, ConfigError, DaemonConfig, McpConnectorSeedConfig,
+    RuntimeLimitsConfig, RuntimeTimingConfig,
 };
 pub use records::{
     AgentChainContinuationRecord, AgentProfileRecord, AgentScheduleRecord, ArtifactRecord,

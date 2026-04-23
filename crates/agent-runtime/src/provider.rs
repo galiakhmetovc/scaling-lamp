@@ -22,6 +22,7 @@ pub struct ProviderDescriptor {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum ProviderKind {
+    #[serde(alias = "openai_responses")]
     #[default]
     OpenAiResponses,
     ZaiChatCompletions,

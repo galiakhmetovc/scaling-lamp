@@ -4,9 +4,9 @@ use super::{
     FsSearchTextInput, FsTrashInput, FsWriteMode, FsWriteTextInput, KnowledgeReadInput,
     KnowledgeReadMode, KnowledgeRoot, KnowledgeSearchInput, KnowledgeSourceKind, ProcessKillInput,
     ProcessOutputStatus, ProcessOutputStream, ProcessReadOutputInput, ProcessResultStatus,
-    ProcessWaitInput, SessionReadInput, SessionReadMode, SessionSearchInput, SharedProcessRegistry,
-    ToolCall, ToolCatalog, ToolFamily, ToolName, ToolRuntime, WebFetchInput, WebSearchInput,
-    WebToolClient,
+    ProcessWaitInput, SessionReadInput, SessionReadMode, SessionSearchInput, SessionWaitInput,
+    SharedProcessRegistry, ToolCall, ToolCatalog, ToolFamily, ToolName, ToolRuntime, WebFetchInput,
+    WebSearchInput, WebToolClient,
 };
 use crate::memory::SessionRetentionTier;
 use crate::workspace::WorkspaceRef;
@@ -162,6 +162,7 @@ fn automatic_model_definitions_include_agent_and_schedule_tools() {
     assert!(names.contains(&ToolName::ScheduleCreate));
     assert!(names.contains(&ToolName::ScheduleUpdate));
     assert!(names.contains(&ToolName::ScheduleDelete));
+    assert!(names.contains(&ToolName::SessionWait));
 }
 
 #[test]
@@ -309,6 +310,56 @@ fn tool_call_parses_session_memory_inputs() {
             include_tools: None,
         })
     );
+}
+
+#[test]
+fn tool_call_parses_session_wait_inputs() {
+    let wait = ToolCall::from_openai_function(
+        "session_wait",
+        r#"{"session_id":"session-agentmsg-1","wait_timeout_ms":1500,"mode":"transcript","max_items":10}"#,
+    )
+    .expect("parse session_wait");
+
+    assert_eq!(
+        wait,
+        ToolCall::SessionWait(SessionWaitInput {
+            session_id: "session-agentmsg-1".to_string(),
+            wait_timeout_ms: Some(1500),
+            mode: Some(SessionReadMode::Transcript),
+            cursor: None,
+            max_items: Some(10),
+            max_bytes: None,
+            include_tools: None,
+        })
+    );
+}
+
+#[test]
+fn interagent_tool_definitions_are_explicit_about_async_follow_up_flow() {
+    let catalog = ToolCatalog::default();
+    let message_agent = catalog
+        .definition(ToolName::MessageAgent)
+        .expect("message_agent");
+    let session_wait = catalog
+        .definition(ToolName::SessionWait)
+        .expect("session_wait");
+    let message_schema = message_agent.openai_function_schema().to_string();
+    let session_wait_schema = session_wait.openai_function_schema().to_string();
+
+    assert_eq!(message_agent.family, ToolFamily::Agent);
+    assert_eq!(session_wait.family, ToolFamily::Agent);
+    assert!(
+        message_agent
+            .description
+            .contains("does not wait for the reply")
+    );
+    assert!(
+        session_wait
+            .description
+            .contains("use this after message_agent")
+    );
+    assert!(message_schema.contains("does not wait for the reply"));
+    assert!(session_wait_schema.contains("recipient_session_id"));
 }
 
 #[test]

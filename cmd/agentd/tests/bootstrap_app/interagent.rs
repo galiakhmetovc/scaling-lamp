@@ -1,7 +1,9 @@
 use super::support::*;
 use agent_runtime::interagent::{AgentChainState, AgentMessageChain, DEFAULT_MAX_HOPS};
 use agent_runtime::session::TranscriptEntry;
-use agent_runtime::tool::{GrantAgentChainContinuationInput, MessageAgentInput};
+use agent_runtime::tool::{
+    GrantAgentChainContinuationInput, MessageAgentInput, SessionReadMode, SessionWaitInput,
+};
 
 fn seed_session(store: &PersistenceStore, session_id: &str, agent_profile_id: &str) {
     store
@@ -359,6 +361,234 @@ fn background_worker_routes_interagent_reply_back_to_origin_session() {
     assert!(child_request.contains("[agent:Ассистент]"));
     let wake_request = wake_request.to_ascii_lowercase();
     assert!(wake_request.contains("[agent:judge]"));
+}
+
+#[test]
+fn execute_chat_turn_keeps_message_agent_async_until_a_follow_up_wait() {
+    let (api_base, requests, handle) = spawn_json_server_sequence(vec![
+        r#"{
+                "id":"resp_origin_message_agent",
+                "model":"gpt-5.4",
+                "output":[
+                    {
+                        "id":"fc_message_agent",
+                        "type":"function_call",
+                        "status":"completed",
+                        "call_id":"call_message_agent",
+                        "name":"message_agent",
+                        "arguments":"{\"target_agent_id\":\"judge\",\"message\":\"Привет, расскажи о себе.\"}"
+                    }
+                ],
+                "usage":{"input_tokens":20,"output_tokens":8,"total_tokens":28}
+            }"#
+        .to_string(),
+        r#"{
+                "id":"resp_origin_final",
+                "model":"gpt-5.4",
+                "output":[
+                    {
+                        "id":"msg_origin_final",
+                        "type":"message",
+                        "status":"completed",
+                        "role":"assistant",
+                        "content":[
+                            {
+                                "type":"output_text",
+                                "text":"Я отправил Judge сообщение. Если нужен его ответ в этом же ходе, надо отдельно вызвать session_wait по recipient_session_id."
+                            }
+                        ]
+                    }
+                ],
+                "usage":{"input_tokens":24,"output_tokens":18,"total_tokens":42}
+            }"#
+        .to_string(),
+    ]);
+    let temp = tempfile::tempdir().expect("tempdir");
+    let app = build_from_config(AppConfig {
+        data_dir: temp.path().join("state-root"),
+        daemon: Default::default(),
+        provider: ConfiguredProvider {
+            kind: ProviderKind::OpenAiResponses,
+            api_base: Some(format!("{api_base}/v1")),
+            api_key: Some("test-key".to_string()),
+            default_model: Some("gpt-5.4".to_string()),
+            ..ConfiguredProvider::default()
+        },
+        permissions: PermissionConfig {
+            mode: PermissionMode::AcceptEdits,
+            rules: Vec::new(),
+        },
+        ..AppConfig::default()
+    })
+    .expect("build app");
+    let store = PersistenceStore::open(&app.persistence).expect("open store");
+    seed_session(&store, "session-inline-origin", "default");
+
+    let report = app
+        .execute_chat_turn("session-inline-origin", "Спроси Judge, кто он.", 10)
+        .expect("execute chat turn");
+    let origin_request = requests.recv().expect("origin request");
+    let resumed_origin_request = requests.recv().expect("resumed origin request");
+    handle.join().expect("join server");
+
+    assert_eq!(
+        report.output_text,
+        "Я отправил Judge сообщение. Если нужен его ответ в этом же ходе, надо отдельно вызвать session_wait по recipient_session_id."
+    );
+
+    let sessions = store.list_sessions().expect("list sessions");
+    assert_eq!(sessions.len(), 2);
+    let judge_session = sessions
+        .into_iter()
+        .find(|record| record.id != "session-inline-origin")
+        .expect("judge session");
+    assert_eq!(judge_session.agent_profile_id, "judge");
+
+    let judge_transcript = store
+        .list_transcripts_for_session(&judge_session.id)
+        .expect("judge transcript");
+    assert!(
+        !judge_transcript
+            .iter()
+            .any(|record| record.kind == "assistant")
+    );
+    let jobs = store.list_jobs().expect("list jobs");
+    let judge_job = jobs
+        .into_iter()
+        .find(|record| record.kind == "interagent_message")
+        .expect("judge job");
+    assert_eq!(judge_job.status, "running");
+
+    assert!(origin_request.contains("Спроси Judge, кто он."));
+    assert!(
+        resumed_origin_request.contains("\"previous_response_id\":\"resp_origin_message_agent\"")
+    );
+    assert!(resumed_origin_request.contains("call_message_agent"));
+    assert!(resumed_origin_request.contains("delivery_status"));
+    assert!(resumed_origin_request.contains("recipient_session_id"));
+}
+
+#[test]
+fn session_wait_direct_tool_execution_pumps_child_session_and_returns_settled_snapshot() {
+    let (api_base, requests, handle) = spawn_json_server_sequence(vec![
+        r#"{
+                "id":"resp_judge_wait",
+                "model":"gpt-5.4",
+                "output":[
+                    {
+                        "id":"msg_judge_wait",
+                        "type":"message",
+                        "status":"completed",
+                        "role":"assistant",
+                        "content":[
+                            {
+                                "type":"output_text",
+                                "text":"Я Judge. Проверяю результаты и выношу вердикт."
+                            }
+                        ]
+                    }
+                ],
+                "usage":{"input_tokens":18,"output_tokens":10,"total_tokens":28}
+            }"#
+        .to_string(),
+    ]);
+    let temp = tempfile::tempdir().expect("tempdir");
+    let app = build_from_config(AppConfig {
+        data_dir: temp.path().join("state-root"),
+        daemon: Default::default(),
+        provider: ConfiguredProvider {
+            kind: ProviderKind::OpenAiResponses,
+            api_base: Some(format!("{api_base}/v1")),
+            api_key: Some("test-key".to_string()),
+            default_model: Some("gpt-5.4".to_string()),
+            ..ConfiguredProvider::default()
+        },
+        permissions: PermissionConfig {
+            mode: PermissionMode::AcceptEdits,
+            rules: Vec::new(),
+        },
+        ..AppConfig::default()
+    })
+    .expect("build app");
+    let store = PersistenceStore::open(&app.persistence).expect("open store");
+    seed_session(&store, "session-wait-origin", "default");
+    seed_running_tool_context(
+        &store,
+        "session-tool-wait",
+        "default",
+        "mission-tool-wait",
+        "job-tool-wait",
+        "run-tool-wait",
+    );
+
+    app.send_session_agent_message(
+        "session-wait-origin",
+        "judge",
+        "Привет, расскажи о себе.",
+        20,
+    )
+    .expect("queue child session");
+    let child_session = store
+        .list_sessions()
+        .expect("list sessions")
+        .into_iter()
+        .find(|record| record.parent_session_id.as_deref() == Some("session-wait-origin"))
+        .expect("child session");
+
+    let report = app
+        .request_tool_approval(
+            "job-tool-wait",
+            "run-tool-wait",
+            &ToolCall::SessionWait(SessionWaitInput {
+                session_id: child_session.id.clone(),
+                wait_timeout_ms: Some(1_500),
+                mode: Some(SessionReadMode::Transcript),
+                cursor: None,
+                max_items: Some(10),
+                max_bytes: None,
+                include_tools: Some(false),
+            }),
+            21,
+        )
+        .expect("session_wait should settle child session");
+    let judge_request = requests
+        .recv_timeout(Duration::from_secs(2))
+        .expect("judge request");
+    handle.join().expect("join server");
+
+    assert_eq!(report.run_status, RunStatus::Completed);
+    assert!(
+        report
+            .output_summary
+            .as_deref()
+            .unwrap_or_default()
+            .contains("session_wait")
+    );
+    assert!(
+        report
+            .output_summary
+            .as_deref()
+            .unwrap_or_default()
+            .contains("settled=true")
+    );
+
+    let judge_transcript = store
+        .list_transcripts_for_session(&child_session.id)
+        .expect("judge transcript");
+    assert!(judge_transcript.iter().any(|record| {
+        record.kind == "assistant"
+            && record.content == "Я Judge. Проверяю результаты и выношу вердикт."
+    }));
+    let judge_job = store
+        .list_jobs()
+        .expect("list jobs")
+        .into_iter()
+        .find(|record| record.kind == "interagent_message")
+        .expect("judge job");
+    assert_eq!(judge_job.status, "completed");
+
+    assert!(judge_request.contains("[agent:Ассистент]"));
+    assert!(judge_request.contains("Привет, расскажи о себе."));
 }
 
 #[test]

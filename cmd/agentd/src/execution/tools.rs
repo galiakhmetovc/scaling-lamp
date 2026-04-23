@@ -3,11 +3,12 @@ use agent_runtime::mission::{JobResult, MissionStatus};
 use agent_runtime::run::{ActiveProcess, ApprovalRequest};
 use agent_runtime::tool::{ProcessKind, ToolCatalog, ToolOutput, ToolRuntime};
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Clone, Copy)]
 struct ToolExecutionContext<'a> {
     approved_approval_id: Option<&'a str>,
     workspace_root: Option<&'a Path>,
     evidence: Option<&'a EvidenceBundle>,
+    provider: Option<&'a dyn ProviderDriver>,
     now: i64,
 }
 
@@ -62,6 +63,7 @@ impl ExecutionService {
     pub fn request_tool_approval(
         &self,
         store: &PersistenceStore,
+        provider: Option<&dyn ProviderDriver>,
         job_id: &str,
         run_id: &str,
         tool_call: &ToolCall,
@@ -76,6 +78,7 @@ impl ExecutionService {
                 approved_approval_id: None,
                 workspace_root: None,
                 evidence: None,
+                provider,
                 now,
             },
         )
@@ -95,6 +98,7 @@ impl ExecutionService {
                 approved_approval_id: Some(request.approval_id),
                 workspace_root: Some(request.workspace_root),
                 evidence: request.evidence,
+                provider: None,
                 now: request.now,
             },
         )
@@ -269,6 +273,7 @@ impl ExecutionService {
             | ToolCall::KnowledgeRead(_)
             | ToolCall::SessionSearch(_)
             | ToolCall::SessionRead(_)
+            | ToolCall::SessionWait(_)
             | ToolCall::AgentList(_)
             | ToolCall::AgentRead(_)
             | ToolCall::AgentCreate(_)
@@ -283,6 +288,7 @@ impl ExecutionService {
                 let mut tool_runtime = self.tool_runtime();
                 self.execute_model_tool_call(
                     store,
+                    context.provider,
                     &session_id,
                     &mut tool_runtime,
                     tool_call,
@@ -306,6 +312,7 @@ impl ExecutionService {
                 );
                 self.execute_model_tool_call(
                     store,
+                    context.provider,
                     &session_id,
                     &mut tool_runtime,
                     tool_call,

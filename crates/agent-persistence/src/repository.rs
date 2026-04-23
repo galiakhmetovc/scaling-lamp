@@ -114,6 +114,17 @@ pub trait RunRepository {
     fn put_run(&self, record: &RunRecord) -> Result<(), StoreError>;
     fn get_run(&self, id: &str) -> Result<Option<RunRecord>, StoreError>;
     fn list_runs(&self) -> Result<Vec<RunRecord>, StoreError>;
+    fn list_runs_for_session(&self, session_id: &str) -> Result<Vec<RunRecord>, StoreError>;
+    fn list_recent_runs_for_session(
+        &self,
+        session_id: &str,
+        limit: usize,
+    ) -> Result<Vec<RunRecord>, StoreError>;
+    fn get_latest_run_summary_rollup_for_session(
+        &self,
+        session_id: &str,
+    ) -> Result<Option<RunSummaryRollup>, StoreError>;
+    fn session_has_pending_approval(&self, session_id: &str) -> Result<bool, StoreError>;
     fn list_run_summary_rollups(&self) -> Result<Vec<RunSummaryRollup>, StoreError>;
     fn list_run_summary_rollups_for_session(
         &self,
@@ -150,6 +161,11 @@ pub trait TranscriptRepository {
     fn list_transcripts_for_session(
         &self,
         session_id: &str,
+    ) -> Result<Vec<TranscriptRecord>, StoreError>;
+    fn list_transcripts_tail_for_session(
+        &self,
+        session_id: &str,
+        limit: usize,
     ) -> Result<Vec<TranscriptRecord>, StoreError>;
 }
 

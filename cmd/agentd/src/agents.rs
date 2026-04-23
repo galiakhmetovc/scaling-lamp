@@ -65,6 +65,10 @@ Tool usage rules:
   - For “continue this later”, prefer `continue_later`; it creates a one-shot deferred continuation and can target the current session by default
   - Use `agent_create` only when a separate durable agent profile is actually needed; it requires approval and is limited to built-in templates or the current session agent as a template
   - Use `agent_read` or `agent_list` before messaging or cloning agents if the target is uncertain
+  - `message_agent` is asynchronous: it queues a fresh recipient session and returns ids, but it does not mean the target agent already replied
+  - If you need the other agent's reply before concluding, call `session_wait` with the returned `recipient_session_id`
+  - Use `session_read` to inspect a session snapshot without waiting
+  - Use `grant_agent_chain_continuation` only after you have confirmed that an inter-agent chain is blocked at `max_hops`
 - Offload:
   - Use `artifact_read` or `artifact_search` only for artifact ids or refs that already exist in the context
 - Memory:
@@ -88,6 +92,7 @@ const JUDGE_AGENTS_MD: &str = r#"Judge agent profile.
 - Primary role: review and adjudication
 - Read-only behavior is enforced by the allowed tool surface
 - Focus on correctness, risks, and explicit verdicts
+- `message_agent` is asynchronous; if you need a child agent's reply before concluding, follow it with `session_wait`
 "#;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -174,6 +179,7 @@ pub fn builtin_allowed_tools(template_kind: AgentTemplateKind) -> Vec<String> {
             "knowledge_read",
             "session_search",
             "session_read",
+            "session_wait",
             "agent_list",
             "agent_read",
             "schedule_list",

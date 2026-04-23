@@ -8,12 +8,13 @@ pub mod worker;
 
 use crate::bootstrap::{
     AgentScheduleCreateOptions, AgentScheduleUpdatePatch, App, BootstrapError,
-    McpConnectorCreateOptions, McpConnectorUpdatePatch,
+    McpConnectorCreateOptions, McpConnectorUpdatePatch, SessionSummary,
 };
 use crate::daemon;
 use crate::execution::ChatExecutionEvent;
 use crate::help::{HelpTopic, parse_help_topic, render_command_usage_error, render_help};
 use crate::http::client::{DaemonConnectOptions, connect_or_autospawn_detailed};
+use agent_persistence::RuntimeTimingConfig;
 use agent_runtime::tool::{
     KnowledgeReadInput, KnowledgeReadMode, KnowledgeSearchInput, SessionReadInput, SessionReadMode,
     SessionSearchInput,
@@ -33,7 +34,7 @@ use ratatui::backend::CrosstermBackend;
 use std::fs;
 use std::io::{self, Stdout};
 use std::path::PathBuf;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{SystemTime, UNIX_EPOCH};
 use timeline::Timeline;
 use worker::{ActiveRunHandle, QueuedDraftMode, WorkerEvent, WorkerOutcome};
 
@@ -80,7 +81,7 @@ pub fn run_daemon_backed(app: &App, options: DaemonConnectOptions) -> Result<(),
         daemon::spawn_local_process().map_err(BootstrapError::Stream)
     })?;
     let client = connection.client().clone();
-    let result = run_with_backend(client);
+    let result = run_with_backend(client, &app.config.runtime_timing);
     let shutdown_result = connection.shutdown_if_autospawned();
     match (result, shutdown_result) {
         (Ok(()), Ok(())) => Ok(()),
@@ -89,7 +90,10 @@ pub fn run_daemon_backed(app: &App, options: DaemonConnectOptions) -> Result<(),
     }
 }
 
-pub fn run_with_backend<B>(backend: B) -> Result<(), BootstrapError>
+pub fn run_with_backend<B>(
+    backend: B,
+    runtime_timing: &RuntimeTimingConfig,
+) -> Result<(), BootstrapError>
 where
     B: TuiBackend,
 {
@@ -104,14 +108,14 @@ where
     };
 
     loop {
-        pump_background(&backend, &mut state, &mut redraw)?;
+        pump_background(&backend, &mut state, &mut redraw, runtime_timing)?;
         redraw(&state)?;
 
         if state.should_exit() {
             return Ok(());
         }
 
-        if !event::poll(Duration::from_millis(100)).map_err(BootstrapError::Stream)? {
+        if !event::poll(runtime_timing.tui_event_poll_interval()).map_err(BootstrapError::Stream)? {
             continue;
         }
 
@@ -1104,6 +1108,13 @@ where
                         unix_timestamp()?,
                     );
                 }
+                "/logs" => {
+                    let logs = app.render_diagnostics_tail(parse_optional_positive_usize(
+                        option_arg(rest).as_deref(),
+                        "/logs",
+                    )?)?;
+                    state.timeline_mut().push_system(&logs, unix_timestamp()?);
+                }
                 "/skills" => {
                     let rendered = render_session_skills(app.session_skills(&current_session_id)?);
                     state
@@ -1322,6 +1333,7 @@ pub fn pump_background<B>(
     app: &B,
     state: &mut TuiAppState,
     redraw: &mut dyn FnMut(&TuiAppState) -> Result<(), BootstrapError>,
+    runtime_timing: &RuntimeTimingConfig,
 ) -> Result<(), BootstrapError>
 where
     B: TuiBackend,
@@ -1365,9 +1377,12 @@ where
     }
 
     if outcome.is_none()
-        && let Some(message) = state
-            .active_run_mut()
-            .and_then(|active_run| active_run.heartbeat_notice(now, 30))
+        && let Some(message) = state.active_run_mut().and_then(|active_run| {
+            active_run.heartbeat_notice(
+                now,
+                runtime_timing.tui_active_run_heartbeat_notice_interval_seconds as i64,
+            )
+        })
     {
         state.timeline_mut().push_system(&message, now);
     }
@@ -1570,7 +1585,7 @@ fn load_session_into_state<B>(
 where
     B: TuiBackend,
 {
-    let summary = app.session_summary(session_id)?;
+    let summary = resolve_session_summary_for_state(app, state, session_id)?;
     let timeline = load_session_timeline(app, session_id)?;
     state.set_current_session(summary, timeline);
     state.scroll_to_bottom();
@@ -1584,7 +1599,7 @@ where
     let sessions = app.list_session_summaries()?;
     state.sync_sessions(sessions);
     if let Some(session_id) = state.current_session_id().map(ToString::to_string) {
-        let summary = app.session_summary(&session_id)?;
+        let summary = resolve_session_summary_for_state(app, state, &session_id)?;
         state.replace_current_summary(summary);
         let previous_timeline = state.timeline().clone();
         let mut timeline = load_session_timeline(app, &session_id)?;
@@ -1594,11 +1609,32 @@ where
     Ok(())
 }
 
+fn resolve_session_summary_for_state<B>(
+    app: &B,
+    state: &TuiAppState,
+    session_id: &str,
+) -> Result<SessionSummary, BootstrapError>
+where
+    B: TuiBackend,
+{
+    if let Some(summary) = state
+        .sessions()
+        .iter()
+        .find(|summary| summary.id == session_id)
+        .cloned()
+    {
+        return Ok(summary);
+    }
+
+    app.session_summary(session_id)
+}
+
 fn load_session_timeline<B>(app: &B, session_id: &str) -> Result<Timeline, BootstrapError>
 where
     B: TuiBackend,
 {
-    let transcript = app.session_transcript(session_id)?;
+    const TUI_TRANSCRIPT_TAIL_LIMIT: usize = 200;
+    let transcript = app.session_transcript_tail(session_id, TUI_TRANSCRIPT_TAIL_LIMIT)?;
     let pending = app.pending_approvals(session_id)?;
     Ok(Timeline::from_session_view(&transcript, &pending))
 }
@@ -1762,6 +1798,24 @@ fn option_arg(raw: &str) -> Option<String> {
     (!raw.trim().is_empty()).then(|| raw.trim().to_string())
 }
 
+fn parse_optional_positive_usize(
+    raw: Option<&str>,
+    command: &str,
+) -> Result<Option<usize>, BootstrapError> {
+    let Some(raw) = raw else {
+        return Ok(None);
+    };
+    let value = raw.parse::<usize>().map_err(|_| BootstrapError::Usage {
+        reason: render_command_usage_error(command, "ожидается положительное целое число"),
+    })?;
+    if value == 0 {
+        return Err(BootstrapError::Usage {
+            reason: render_command_usage_error(command, "значение должно быть больше нуля"),
+        });
+    }
+    Ok(Some(value))
+}
+
 fn parse_completion_nudges(raw: &str) -> Result<Option<u32>, BootstrapError> {
     let trimmed = raw.trim();
     if matches!(trimmed, "off" | "выкл" | "disable") {
@@ -1823,6 +1877,7 @@ fn canonical_command(command: &str) -> Option<&'static str> {
         "/clear" | "\\очистить" => Some("/clear"),
         "/help" | "\\помощь" => Some("/help"),
         "/version" | "/версия" | "\\версия" => Some("/version"),
+        "/logs" | "/логи" | "\\логи" => Some("/logs"),
         "/update" | "/обновить" | "\\обновить" => Some("/update"),
         "/settings" | "\\настройки" => Some("/settings"),
         "/debug" | "\\отладка" => Some("/debug"),
@@ -3147,6 +3202,18 @@ mod tests {
             Ok("версия=test".to_string())
         }
 
+        fn render_diagnostics_tail(
+            &self,
+            max_lines: Option<usize>,
+        ) -> Result<String, BootstrapError> {
+            Ok(format!(
+                "diagnostics max_lines={}",
+                max_lines.unwrap_or(
+                    agent_persistence::RuntimeLimitsConfig::default().diagnostic_tail_lines
+                )
+            ))
+        }
+
         fn update_runtime(&self, _tag: Option<&str>) -> Result<String, BootstrapError> {
             Ok("обновлено".to_string())
         }
@@ -3880,6 +3947,13 @@ mod tests {
             panic!("unused in test")
         }
 
+        fn render_diagnostics_tail(
+            &self,
+            _max_lines: Option<usize>,
+        ) -> Result<String, BootstrapError> {
+            panic!("unused in test")
+        }
+
         fn update_runtime(&self, _tag: Option<&str>) -> Result<String, BootstrapError> {
             panic!("unused in test")
         }
@@ -4115,6 +4189,7 @@ mod tests {
     fn canonical_command_accepts_debug_aliases() {
         assert_eq!(canonical_command("/debug"), Some("/debug"));
         assert_eq!(canonical_command("\\отладка"), Some("/debug"));
+        assert_eq!(canonical_command("\\логи"), Some("/logs"));
     }
 
     #[test]
@@ -4308,6 +4383,60 @@ mod tests {
         assert!(saved.contains("timeline_scroll_top="));
         assert!(saved.contains("Backend Bundle Contents:"));
         assert!(saved.contains("Debug Bundle\nctx=42"));
+    }
+
+    #[test]
+    fn logs_command_renders_diagnostic_tail_into_timeline() {
+        fn redraw(_: &TuiAppState) -> Result<(), BootstrapError> {
+            Ok(())
+        }
+
+        let backend = FakeBackend {
+            summary: SessionSummary {
+                id: "session-a".to_string(),
+                title: "Session A".to_string(),
+                agent_profile_id: "default".to_string(),
+                agent_name: "Default".to_string(),
+                scheduled_by: None,
+                schedule: None,
+                model: Some("glm-5-turbo".to_string()),
+                reasoning_visible: true,
+                think_level: None,
+                compactifications: 0,
+                completion_nudges: None,
+                auto_approve: false,
+                context_tokens: 0,
+                usage_input_tokens: None,
+                usage_output_tokens: None,
+                usage_total_tokens: None,
+                has_pending_approval: false,
+                last_message_preview: None,
+                message_count: 0,
+                background_job_count: 0,
+                running_background_job_count: 0,
+                queued_background_job_count: 0,
+                created_at: 1,
+                updated_at: 2,
+            },
+            pending: Vec::new(),
+            transcript: SessionTranscriptView {
+                session_id: "session-a".to_string(),
+                entries: Vec::new(),
+            },
+            debug_bundle: "debug-bundle.txt".to_string(),
+        };
+        let mut state = TuiAppState::new(
+            vec![backend.summary.clone()],
+            Some(backend.summary.id.clone()),
+        );
+        state.set_current_session(backend.summary.clone(), Timeline::default());
+
+        handle_command(&backend, &mut state, "\\логи 12", &mut redraw).expect("handle command");
+
+        let entries = state.timeline().entries(true);
+        let last = entries.last().expect("timeline entry");
+        assert!(matches!(last.kind, TimelineEntryKind::System));
+        assert!(last.content.contains("diagnostics max_lines=12"));
     }
 
     #[test]
@@ -5420,5 +5549,54 @@ mod tests {
             )
         }));
         assert_eq!(state.scroll_offset(), 0);
+    }
+
+    #[test]
+    fn resolve_session_summary_prefers_state_sessions_before_backend_fetch() {
+        let list_summary = SessionSummary {
+            id: "session-a".to_string(),
+            title: "List Summary".to_string(),
+            agent_profile_id: "default".to_string(),
+            agent_name: "Default".to_string(),
+            scheduled_by: None,
+            schedule: None,
+            model: Some("glm-5-turbo".to_string()),
+            reasoning_visible: true,
+            think_level: None,
+            compactifications: 0,
+            completion_nudges: None,
+            auto_approve: false,
+            context_tokens: 0,
+            usage_input_tokens: None,
+            usage_output_tokens: None,
+            usage_total_tokens: None,
+            has_pending_approval: false,
+            last_message_preview: None,
+            message_count: 0,
+            background_job_count: 0,
+            running_background_job_count: 0,
+            queued_background_job_count: 0,
+            created_at: 1,
+            updated_at: 2,
+        };
+        let backend_summary = SessionSummary {
+            title: "Backend Summary".to_string(),
+            ..list_summary.clone()
+        };
+        let backend = FakeBackend {
+            summary: backend_summary,
+            pending: Vec::new(),
+            transcript: SessionTranscriptView {
+                session_id: "session-a".to_string(),
+                entries: Vec::new(),
+            },
+            debug_bundle: "unused".to_string(),
+        };
+        let state = TuiAppState::new(vec![list_summary.clone()], Some(list_summary.id.clone()));
+
+        let summary =
+            resolve_session_summary_for_state(&backend, &state, &list_summary.id).expect("summary");
+
+        assert_eq!(summary.title, "List Summary");
     }
 }

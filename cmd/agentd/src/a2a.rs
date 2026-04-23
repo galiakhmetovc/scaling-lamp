@@ -1,4 +1,4 @@
-use agent_persistence::A2APeerConfig;
+use agent_persistence::{A2APeerConfig, AppConfig};
 use reqwest::blocking::Client;
 use serde::Serialize;
 use serde::de::DeserializeOwned;
@@ -9,7 +9,6 @@ use crate::http::types::{
     A2ADelegationAcceptedResponse, A2ADelegationCompletionRequest, A2ADelegationCreateRequest,
     ErrorResponse,
 };
-
 #[derive(Debug, Clone)]
 pub struct A2AClient {
     http: Client,
@@ -17,17 +16,25 @@ pub struct A2AClient {
 
 impl Default for A2AClient {
     fn default() -> Self {
+        Self::new(
+            AppConfig::default()
+                .runtime_timing
+                .a2a_http_connect_timeout(),
+        )
+    }
+}
+
+impl A2AClient {
+    pub fn new(connect_timeout: Duration) -> Self {
         Self {
             http: Client::builder()
-                .connect_timeout(Duration::from_secs(2))
+                .connect_timeout(connect_timeout)
                 .timeout(None::<Duration>)
                 .build()
                 .expect("build a2a http client"),
         }
     }
-}
 
-impl A2AClient {
     pub fn send_delegation(
         &self,
         peer: &A2APeerConfig,
