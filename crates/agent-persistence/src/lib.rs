@@ -18,8 +18,9 @@ pub use records::{
 pub use repository::{
     AgentRepository, ArtifactRepository, ContextOffloadRepository, ContextSummaryRepository,
     JobRepository, KnowledgeRepository, McpRepository, MissionRepository, PlanRepository,
-    RunRepository, SessionInboxRepository, SessionRepository, SessionRetentionRepository,
-    SessionSearchRepository, TranscriptRepository,
+    RunRepository, RunSummaryRollup, SessionActiveJobCounts, SessionInboxRepository,
+    SessionRepository, SessionRetentionRepository, SessionSearchRepository, TranscriptRepository,
+    TranscriptSessionStats,
 };
 pub use store::{ExecutionStateSnapshot, PersistenceStore, StoreError, StoreLayout};
 

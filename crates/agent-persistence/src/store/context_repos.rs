@@ -22,6 +22,28 @@ impl ContextSummaryRepository for PersistenceStore {
         Ok(())
     }
 
+    fn list_context_summaries(&self) -> Result<Vec<ContextSummaryRecord>, StoreError> {
+        let mut statement = self.connection.prepare(
+            "SELECT session_id, summary_text, covered_message_count, summary_token_estimate, updated_at
+             FROM context_summaries
+             ORDER BY updated_at ASC, session_id ASC",
+        )?;
+        let mut rows = statement.query([])?;
+        let mut summaries = Vec::new();
+
+        while let Some(row) = rows.next()? {
+            summaries.push(ContextSummaryRecord {
+                session_id: row.get(0)?,
+                summary_text: row.get(1)?,
+                covered_message_count: row.get(2)?,
+                summary_token_estimate: row.get(3)?,
+                updated_at: row.get(4)?,
+            });
+        }
+
+        Ok(summaries)
+    }
+
     fn get_context_summary(
         &self,
         session_id: &str,

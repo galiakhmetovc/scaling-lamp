@@ -1,4 +1,7 @@
 use super::*;
+use crate::{RunSummaryRollup, SessionActiveJobCounts};
+use agent_runtime::provider::ProviderUsage;
+use rusqlite::OptionalExtension;
 
 impl RunRepository for PersistenceStore {
     fn put_run(&self, record: &RunRecord) -> Result<(), StoreError> {
@@ -109,6 +112,28 @@ impl RunRepository for PersistenceStore {
         }
 
         Ok(runs)
+    }
+
+    fn list_run_summary_rollups(&self) -> Result<Vec<RunSummaryRollup>, StoreError> {
+        let mut statement = self.connection.prepare(
+            "SELECT id, session_id, provider_usage_json, pending_approvals_json, started_at, updated_at
+             FROM runs
+             ORDER BY updated_at ASC, started_at ASC, id ASC",
+        )?;
+        collect_run_summary_rollups(&mut statement, &[] as &[&dyn rusqlite::ToSql])
+    }
+
+    fn list_run_summary_rollups_for_session(
+        &self,
+        session_id: &str,
+    ) -> Result<Vec<RunSummaryRollup>, StoreError> {
+        let mut statement = self.connection.prepare(
+            "SELECT id, session_id, provider_usage_json, pending_approvals_json, started_at, updated_at
+             FROM runs
+             WHERE session_id = ?1
+             ORDER BY updated_at ASC, started_at ASC, id ASC",
+        )?;
+        collect_run_summary_rollups(&mut statement, &[&session_id])
     }
 }
 
@@ -252,6 +277,78 @@ impl JobRepository for PersistenceStore {
         )?;
         collect_jobs(&mut statement, &[&session_id])
     }
+
+    fn list_active_job_counts(&self) -> Result<Vec<SessionActiveJobCounts>, StoreError> {
+        let mut statement = self.connection.prepare(
+            "SELECT session_id,
+                    COUNT(*) AS active_count,
+                    SUM(CASE WHEN status = 'running' THEN 1 ELSE 0 END) AS running_count,
+                    SUM(CASE WHEN status = 'queued' THEN 1 ELSE 0 END) AS queued_count
+             FROM jobs
+             WHERE status IN ('queued', 'running', 'waiting_external', 'blocked')
+             GROUP BY session_id
+             ORDER BY session_id ASC",
+        )?;
+        collect_active_job_counts(&mut statement, &[] as &[&dyn rusqlite::ToSql])
+    }
+
+    fn get_active_job_counts_for_session(
+        &self,
+        session_id: &str,
+    ) -> Result<Option<SessionActiveJobCounts>, StoreError> {
+        self.connection
+            .query_row(
+                "SELECT session_id,
+                        COUNT(*) AS active_count,
+                        SUM(CASE WHEN status = 'running' THEN 1 ELSE 0 END) AS running_count,
+                        SUM(CASE WHEN status = 'queued' THEN 1 ELSE 0 END) AS queued_count
+                 FROM jobs
+                 WHERE session_id = ?1
+                   AND status IN ('queued', 'running', 'waiting_external', 'blocked')
+                 GROUP BY session_id",
+                [session_id],
+                |row| {
+                    Ok(SessionActiveJobCounts {
+                        session_id: row.get(0)?,
+                        active_count: row.get::<_, i64>(1)?.max(0) as usize,
+                        running_count: row.get::<_, i64>(2)?.max(0) as usize,
+                        queued_count: row.get::<_, i64>(3)?.max(0) as usize,
+                    })
+                },
+            )
+            .optional()
+            .map_err(StoreError::from)
+    }
+}
+
+fn collect_run_summary_rollups(
+    statement: &mut rusqlite::Statement<'_>,
+    params: &[&dyn rusqlite::ToSql],
+) -> Result<Vec<RunSummaryRollup>, StoreError> {
+    let mut rows = statement.query(params)?;
+    let mut rollups = Vec::new();
+
+    while let Some(row) = rows.next()? {
+        let provider_usage_json: String = row.get(2)?;
+        let pending_approvals_json: String = row.get(3)?;
+        let latest_provider_usage =
+            serde_json::from_str::<Option<ProviderUsage>>(&provider_usage_json).unwrap_or(None);
+        let pending_approval_count =
+            serde_json::from_str::<Vec<serde_json::Value>>(&pending_approvals_json)
+                .map(|entries| entries.len())
+                .unwrap_or(0);
+
+        rollups.push(RunSummaryRollup {
+            id: row.get(0)?,
+            session_id: row.get(1)?,
+            latest_provider_usage,
+            pending_approval_count,
+            started_at: row.get(4)?,
+            updated_at: row.get(5)?,
+        });
+    }
+
+    Ok(rollups)
 }
 
 fn collect_jobs(
@@ -290,4 +387,23 @@ fn collect_jobs(
     }
 
     Ok(jobs)
+}
+
+fn collect_active_job_counts(
+    statement: &mut rusqlite::Statement<'_>,
+    params: &[&dyn rusqlite::ToSql],
+) -> Result<Vec<SessionActiveJobCounts>, StoreError> {
+    let mut rows = statement.query(params)?;
+    let mut counts = Vec::new();
+
+    while let Some(row) = rows.next()? {
+        counts.push(SessionActiveJobCounts {
+            session_id: row.get(0)?,
+            active_count: row.get::<_, i64>(1)?.max(0) as usize,
+            running_count: row.get::<_, i64>(2)?.max(0) as usize,
+            queued_count: row.get::<_, i64>(3)?.max(0) as usize,
+        });
+    }
+
+    Ok(counts)
 }

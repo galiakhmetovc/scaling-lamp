@@ -356,6 +356,71 @@ fn session_summary_ignores_corrupt_unrelated_session_records() {
 }
 
 #[test]
+fn session_summary_does_not_require_all_transcript_payloads_for_same_session() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let app = build_from_config(AppConfig {
+        data_dir: temp.path().join("state-root"),
+        ..AppConfig::default()
+    })
+    .expect("build app");
+    let store = PersistenceStore::open(&app.persistence).expect("open store");
+
+    store
+        .put_session(&SessionRecord {
+            id: "session-good".to_string(),
+            title: "Good Session".to_string(),
+            prompt_override: None,
+            settings_json: serde_json::to_string(&SessionSettings::default())
+                .expect("serialize settings"),
+            agent_profile_id: "default".to_string(),
+            active_mission_id: None,
+            parent_session_id: None,
+            parent_job_id: None,
+            delegation_label: None,
+            created_at: 10,
+            updated_at: 10,
+        })
+        .expect("put good session");
+    store
+        .put_transcript(&agent_persistence::TranscriptRecord {
+            id: "transcript-old".to_string(),
+            session_id: "session-good".to_string(),
+            run_id: None,
+            kind: "user".to_string(),
+            content: "first".to_string(),
+            created_at: 11,
+        })
+        .expect("put old transcript");
+    store
+        .put_transcript(&agent_persistence::TranscriptRecord {
+            id: "transcript-new".to_string(),
+            session_id: "session-good".to_string(),
+            run_id: None,
+            kind: "assistant".to_string(),
+            content: "second".to_string(),
+            created_at: 12,
+        })
+        .expect("put new transcript");
+
+    std::fs::remove_file(
+        app.persistence
+            .stores
+            .transcripts_dir
+            .join("transcript-old.txt"),
+    )
+    .expect("remove old transcript payload");
+
+    let summary = app
+        .session_summary("session-good")
+        .expect("session summary should not require every transcript payload");
+
+    assert_eq!(summary.id, "session-good");
+    assert_eq!(summary.title, "Good Session");
+    assert_eq!(summary.message_count, 2);
+    assert_eq!(summary.last_message_preview, None);
+}
+
+#[test]
 fn create_session_succeeds_even_with_corrupt_unrelated_session_records() {
     let temp = tempfile::tempdir().expect("tempdir");
     let app = build_from_config(AppConfig {
@@ -446,6 +511,263 @@ fn list_session_summaries_ignores_corrupt_unrelated_session_records() {
     assert_eq!(summaries.len(), 1);
     assert_eq!(summaries[0].id, "session-good");
     assert_eq!(summaries[0].title, "Good Session");
+}
+
+#[test]
+fn list_session_summaries_does_not_require_transcript_payloads_for_same_session() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let app = build_from_config(AppConfig {
+        data_dir: temp.path().join("state-root"),
+        ..AppConfig::default()
+    })
+    .expect("build app");
+    let store = PersistenceStore::open(&app.persistence).expect("open store");
+
+    store
+        .put_session(&SessionRecord {
+            id: "session-good".to_string(),
+            title: "Good Session".to_string(),
+            prompt_override: None,
+            settings_json: serde_json::to_string(&SessionSettings::default())
+                .expect("serialize settings"),
+            agent_profile_id: "default".to_string(),
+            active_mission_id: None,
+            parent_session_id: None,
+            parent_job_id: None,
+            delegation_label: None,
+            created_at: 10,
+            updated_at: 10,
+        })
+        .expect("put good session");
+    store
+        .put_transcript(&agent_persistence::TranscriptRecord {
+            id: "transcript-old".to_string(),
+            session_id: "session-good".to_string(),
+            run_id: None,
+            kind: "user".to_string(),
+            content: "first".to_string(),
+            created_at: 11,
+        })
+        .expect("put old transcript");
+    store
+        .put_transcript(&agent_persistence::TranscriptRecord {
+            id: "transcript-new".to_string(),
+            session_id: "session-good".to_string(),
+            run_id: None,
+            kind: "assistant".to_string(),
+            content: "second".to_string(),
+            created_at: 12,
+        })
+        .expect("put new transcript");
+
+    std::fs::remove_file(
+        app.persistence
+            .stores
+            .transcripts_dir
+            .join("transcript-old.txt"),
+    )
+    .expect("remove old transcript payload");
+
+    let summaries = app
+        .list_session_summaries()
+        .expect("session list should not require every transcript payload");
+
+    assert_eq!(summaries.len(), 1);
+    assert_eq!(summaries[0].id, "session-good");
+    assert_eq!(summaries[0].title, "Good Session");
+    assert_eq!(summaries[0].message_count, 2);
+    assert_eq!(summaries[0].last_message_preview, None);
+}
+
+#[test]
+fn list_session_summaries_uses_run_rollups_without_full_run_record_conversion() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let app = build_from_config(AppConfig {
+        data_dir: temp.path().join("state-root"),
+        ..AppConfig::default()
+    })
+    .expect("build app");
+    let store = PersistenceStore::open(&app.persistence).expect("open store");
+
+    store
+        .put_session(&SessionRecord {
+            id: "session-good".to_string(),
+            title: "Good Session".to_string(),
+            prompt_override: None,
+            settings_json: serde_json::to_string(&SessionSettings::default())
+                .expect("serialize settings"),
+            agent_profile_id: "default".to_string(),
+            active_mission_id: None,
+            parent_session_id: None,
+            parent_job_id: None,
+            delegation_label: None,
+            created_at: 10,
+            updated_at: 10,
+        })
+        .expect("put good session");
+
+    let connection =
+        rusqlite::Connection::open(&app.persistence.stores.metadata_db).expect("open sqlite");
+    connection
+        .execute(
+            "INSERT INTO runs (
+                id, session_id, mission_id, status, error, result, provider_usage_json,
+                active_processes_json, recent_steps_json, evidence_refs_json,
+                pending_approvals_json, provider_loop_json, delegate_runs_json,
+                started_at, updated_at, finished_at
+            ) VALUES (?1, ?2, NULL, ?3, NULL, NULL, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, NULL)",
+            rusqlite::params![
+                "run-heavy",
+                "session-good",
+                agent_runtime::run::RunStatus::Running.as_str(),
+                r#"{"input_tokens":123,"output_tokens":9,"total_tokens":132}"#,
+                "[]",
+                "[]",
+                "[]",
+                r#"[{"id":"approval-1","tool_call_id":"tool-1","summary":"need approval","requested_at":12}]"#,
+                "{not-json",
+                "[]",
+                11i64,
+                12i64
+            ],
+        )
+        .expect("insert partially corrupt run row");
+
+    let summaries = app
+        .list_session_summaries()
+        .expect("session list should not require full run conversion");
+
+    assert_eq!(summaries.len(), 1);
+    assert_eq!(summaries[0].id, "session-good");
+    assert_eq!(summaries[0].usage_input_tokens, Some(123));
+    assert!(summaries[0].has_pending_approval);
+    assert!(summaries[0].updated_at >= 12);
+}
+
+#[test]
+fn list_session_summaries_uses_job_counts_without_full_job_record_conversion() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let app = build_from_config(AppConfig {
+        data_dir: temp.path().join("state-root"),
+        ..AppConfig::default()
+    })
+    .expect("build app");
+    let store = PersistenceStore::open(&app.persistence).expect("open store");
+
+    store
+        .put_session(&SessionRecord {
+            id: "session-good".to_string(),
+            title: "Good Session".to_string(),
+            prompt_override: None,
+            settings_json: serde_json::to_string(&SessionSettings::default())
+                .expect("serialize settings"),
+            agent_profile_id: "default".to_string(),
+            active_mission_id: None,
+            parent_session_id: None,
+            parent_job_id: None,
+            delegation_label: None,
+            created_at: 10,
+            updated_at: 10,
+        })
+        .expect("put good session");
+
+    let connection =
+        rusqlite::Connection::open(&app.persistence.stores.metadata_db).expect("open sqlite");
+    connection
+        .execute(
+            "INSERT INTO jobs (
+                id, session_id, mission_id, run_id, parent_job_id, kind, status, input_json,
+                result_json, error, created_at, updated_at, started_at, finished_at,
+                attempt_count, max_attempts, lease_owner, lease_expires_at, heartbeat_at,
+                cancel_requested_at, last_progress_message, callback_json, callback_sent_at
+            ) VALUES (?1, ?2, NULL, NULL, NULL, ?3, ?4, ?5, NULL, NULL, ?6, ?7, ?8, NULL, 0, 3, NULL, NULL, NULL, NULL, NULL, ?9, NULL)",
+            rusqlite::params![
+                "job-heavy",
+                "session-good",
+                agent_runtime::mission::JobKind::ChatTurn.as_str(),
+                agent_runtime::mission::JobStatus::Running.as_str(),
+                r#"{"message":"hello"}"#,
+                11i64,
+                12i64,
+                12i64,
+                "{not-json"
+            ],
+        )
+        .expect("insert partially corrupt job row");
+
+    let summaries = app
+        .list_session_summaries()
+        .expect("session list should not require full job conversion");
+
+    assert_eq!(summaries.len(), 1);
+    assert_eq!(summaries[0].id, "session-good");
+    assert_eq!(summaries[0].background_job_count, 1);
+    assert_eq!(summaries[0].running_background_job_count, 1);
+    assert_eq!(summaries[0].queued_background_job_count, 0);
+}
+
+#[test]
+fn session_summary_uses_run_rollups_without_full_run_record_conversion() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let app = build_from_config(AppConfig {
+        data_dir: temp.path().join("state-root"),
+        ..AppConfig::default()
+    })
+    .expect("build app");
+    let store = PersistenceStore::open(&app.persistence).expect("open store");
+
+    store
+        .put_session(&SessionRecord {
+            id: "session-good".to_string(),
+            title: "Good Session".to_string(),
+            prompt_override: None,
+            settings_json: serde_json::to_string(&SessionSettings::default())
+                .expect("serialize settings"),
+            agent_profile_id: "default".to_string(),
+            active_mission_id: None,
+            parent_session_id: None,
+            parent_job_id: None,
+            delegation_label: None,
+            created_at: 10,
+            updated_at: 10,
+        })
+        .expect("put good session");
+
+    let connection =
+        rusqlite::Connection::open(&app.persistence.stores.metadata_db).expect("open sqlite");
+    connection
+        .execute(
+            "INSERT INTO runs (
+                id, session_id, mission_id, status, error, result, provider_usage_json,
+                active_processes_json, recent_steps_json, evidence_refs_json,
+                pending_approvals_json, provider_loop_json, delegate_runs_json,
+                started_at, updated_at, finished_at
+            ) VALUES (?1, ?2, NULL, ?3, NULL, NULL, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, NULL)",
+            rusqlite::params![
+                "run-heavy",
+                "session-good",
+                agent_runtime::run::RunStatus::Running.as_str(),
+                r#"{"input_tokens":123,"output_tokens":9,"total_tokens":132}"#,
+                "[]",
+                "[]",
+                "[]",
+                r#"[{"id":"approval-1","tool_call_id":"tool-1","summary":"need approval","requested_at":12}]"#,
+                "{not-json",
+                "[]",
+                11i64,
+                12i64
+            ],
+        )
+        .expect("insert partially corrupt run row");
+
+    let summary = app
+        .session_summary("session-good")
+        .expect("single session summary should not require full run conversion");
+
+    assert_eq!(summary.id, "session-good");
+    assert_eq!(summary.usage_input_tokens, Some(123));
+    assert!(summary.has_pending_approval);
+    assert!(summary.updated_at >= 12);
 }
 
 #[test]

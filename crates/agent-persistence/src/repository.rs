@@ -7,6 +7,32 @@ use crate::records::{
 };
 use crate::store::StoreError;
 use agent_runtime::context::ContextOffloadPayload;
+use agent_runtime::provider::ProviderUsage;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TranscriptSessionStats {
+    pub session_id: String,
+    pub transcript_count: usize,
+    pub latest_transcript_created_at: Option<i64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RunSummaryRollup {
+    pub id: String,
+    pub session_id: String,
+    pub started_at: i64,
+    pub updated_at: i64,
+    pub latest_provider_usage: Option<ProviderUsage>,
+    pub pending_approval_count: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SessionActiveJobCounts {
+    pub session_id: String,
+    pub active_count: usize,
+    pub running_count: usize,
+    pub queued_count: usize,
+}
 
 pub trait SessionRepository {
     fn put_session(&self, record: &SessionRecord) -> Result<(), StoreError>;
@@ -88,6 +114,11 @@ pub trait RunRepository {
     fn put_run(&self, record: &RunRecord) -> Result<(), StoreError>;
     fn get_run(&self, id: &str) -> Result<Option<RunRecord>, StoreError>;
     fn list_runs(&self) -> Result<Vec<RunRecord>, StoreError>;
+    fn list_run_summary_rollups(&self) -> Result<Vec<RunSummaryRollup>, StoreError>;
+    fn list_run_summary_rollups_for_session(
+        &self,
+        session_id: &str,
+    ) -> Result<Vec<RunSummaryRollup>, StoreError>;
 }
 
 pub trait JobRepository {
@@ -96,11 +127,21 @@ pub trait JobRepository {
     fn list_jobs(&self) -> Result<Vec<JobRecord>, StoreError>;
     fn list_jobs_for_session(&self, session_id: &str) -> Result<Vec<JobRecord>, StoreError>;
     fn list_active_jobs_for_session(&self, session_id: &str) -> Result<Vec<JobRecord>, StoreError>;
+    fn list_active_job_counts(&self) -> Result<Vec<SessionActiveJobCounts>, StoreError>;
+    fn get_active_job_counts_for_session(
+        &self,
+        session_id: &str,
+    ) -> Result<Option<SessionActiveJobCounts>, StoreError>;
 }
 
 pub trait TranscriptRepository {
     fn put_transcript(&self, record: &TranscriptRecord) -> Result<(), StoreError>;
     fn get_transcript(&self, id: &str) -> Result<Option<TranscriptRecord>, StoreError>;
+    fn list_transcript_session_stats(&self) -> Result<Vec<TranscriptSessionStats>, StoreError>;
+    fn get_latest_transcript_created_at_for_session(
+        &self,
+        session_id: &str,
+    ) -> Result<Option<i64>, StoreError>;
     fn get_latest_transcript_for_session(
         &self,
         session_id: &str,
@@ -131,6 +172,7 @@ pub trait SessionInboxRepository {
 
 pub trait ContextSummaryRepository {
     fn put_context_summary(&self, record: &ContextSummaryRecord) -> Result<(), StoreError>;
+    fn list_context_summaries(&self) -> Result<Vec<ContextSummaryRecord>, StoreError>;
     fn get_context_summary(
         &self,
         session_id: &str,

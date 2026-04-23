@@ -287,6 +287,29 @@ impl TranscriptRepository for PersistenceStore {
         }
     }
 
+    fn list_transcript_session_stats(
+        &self,
+    ) -> Result<Vec<crate::repository::TranscriptSessionStats>, StoreError> {
+        let mut statement = self.connection.prepare(
+            "SELECT session_id, COUNT(*), MAX(created_at)
+             FROM transcripts
+             GROUP BY session_id
+             ORDER BY session_id ASC",
+        )?;
+        let mut rows = statement.query([])?;
+        let mut stats = Vec::new();
+
+        while let Some(row) = rows.next()? {
+            stats.push(crate::repository::TranscriptSessionStats {
+                session_id: row.get(0)?,
+                transcript_count: row.get::<_, i64>(1)?.max(0) as usize,
+                latest_transcript_created_at: row.get(2)?,
+            });
+        }
+
+        Ok(stats)
+    }
+
     fn get_latest_transcript_for_session(
         &self,
         session_id: &str,
@@ -319,6 +342,24 @@ impl TranscriptRepository for PersistenceStore {
             Some(row) => Ok(Some(self.hydrate_transcript_record(row)?)),
             None => Ok(None),
         }
+    }
+
+    fn get_latest_transcript_created_at_for_session(
+        &self,
+        session_id: &str,
+    ) -> Result<Option<i64>, StoreError> {
+        self.connection
+            .query_row(
+                "SELECT created_at
+                 FROM transcripts
+                 WHERE session_id = ?1
+                 ORDER BY created_at DESC, id DESC
+                 LIMIT 1",
+                [session_id],
+                |row| row.get::<_, i64>(0),
+            )
+            .optional()
+            .map_err(StoreError::from)
     }
 
     fn count_transcripts_for_session(&self, session_id: &str) -> Result<usize, StoreError> {
