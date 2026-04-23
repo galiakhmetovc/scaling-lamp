@@ -7,5 +7,6 @@ pub mod daemon;
 pub mod execution;
 pub mod help;
 pub mod http;
+pub mod mcp;
 pub mod prompting;
 pub mod tui;

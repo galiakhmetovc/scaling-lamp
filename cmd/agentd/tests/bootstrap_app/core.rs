@@ -301,6 +301,98 @@ fn run_with_args_inspects_and_updates_runs_jobs_approvals_and_delegates() {
 }
 
 #[test]
+fn session_summary_ignores_corrupt_unrelated_session_records() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let app = build_from_config(AppConfig {
+        data_dir: temp.path().join("state-root"),
+        ..AppConfig::default()
+    })
+    .expect("build app");
+    let store = PersistenceStore::open(&app.persistence).expect("open store");
+
+    store
+        .put_session(&SessionRecord {
+            id: "session-good".to_string(),
+            title: "Good Session".to_string(),
+            prompt_override: None,
+            settings_json: serde_json::to_string(&SessionSettings::default())
+                .expect("serialize settings"),
+            agent_profile_id: "default".to_string(),
+            active_mission_id: None,
+            parent_session_id: None,
+            parent_job_id: None,
+            delegation_label: None,
+            created_at: 10,
+            updated_at: 10,
+        })
+        .expect("put good session");
+
+    let connection =
+        rusqlite::Connection::open(&app.persistence.stores.metadata_db).expect("open sqlite");
+    connection
+        .execute(
+            "INSERT INTO sessions (
+                id, title, prompt_override, settings_json, agent_profile_id,
+                active_mission_id, parent_session_id, parent_job_id, delegation_label,
+                created_at, updated_at
+            ) VALUES (?1, ?2, NULL, ?3, ?4, NULL, NULL, NULL, NULL, ?5, ?6)",
+            rusqlite::params![
+                "session-bad",
+                "Broken Session",
+                "{not-json",
+                "default",
+                11i64,
+                11i64
+            ],
+        )
+        .expect("insert corrupt session row");
+
+    let summary = app
+        .session_summary("session-good")
+        .expect("session summary should ignore unrelated corrupt rows");
+
+    assert_eq!(summary.id, "session-good");
+    assert_eq!(summary.title, "Good Session");
+}
+
+#[test]
+fn create_session_succeeds_even_with_corrupt_unrelated_session_records() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let app = build_from_config(AppConfig {
+        data_dir: temp.path().join("state-root"),
+        ..AppConfig::default()
+    })
+    .expect("build app");
+
+    let connection =
+        rusqlite::Connection::open(&app.persistence.stores.metadata_db).expect("open sqlite");
+    connection
+        .execute(
+            "INSERT INTO sessions (
+                id, title, prompt_override, settings_json, agent_profile_id,
+                active_mission_id, parent_session_id, parent_job_id, delegation_label,
+                created_at, updated_at
+            ) VALUES (?1, ?2, NULL, ?3, ?4, NULL, NULL, NULL, NULL, ?5, ?6)",
+            rusqlite::params![
+                "session-bad",
+                "Broken Session",
+                "{not-json",
+                "default",
+                11i64,
+                11i64
+            ],
+        )
+        .expect("insert corrupt session row");
+
+    let summary = app
+        .create_session("session-new", "Fresh Session")
+        .expect("create session should not depend on unrelated corrupt rows");
+
+    assert_eq!(summary.id, "session-new");
+    assert_eq!(summary.title, "Fresh Session");
+}
+
+#[test]
 fn build_from_config_interrupts_unrecoverable_runs_but_keeps_approvals_pending() {
     let temp = tempfile::tempdir().expect("tempdir");
     let data_dir = temp.path().join("state-root");

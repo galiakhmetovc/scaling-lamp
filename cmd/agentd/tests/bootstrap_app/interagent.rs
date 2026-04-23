@@ -3,6 +3,25 @@ use agent_runtime::interagent::{AgentChainState, AgentMessageChain, DEFAULT_MAX_
 use agent_runtime::session::TranscriptEntry;
 use agent_runtime::tool::{GrantAgentChainContinuationInput, MessageAgentInput};
 
+fn seed_session(store: &PersistenceStore, session_id: &str, agent_profile_id: &str) {
+    store
+        .put_session(&SessionRecord {
+            id: session_id.to_string(),
+            title: session_id.to_string(),
+            prompt_override: None,
+            settings_json: serde_json::to_string(&SessionSettings::default())
+                .expect("serialize settings"),
+            agent_profile_id: agent_profile_id.to_string(),
+            active_mission_id: None,
+            parent_session_id: None,
+            parent_job_id: None,
+            delegation_label: None,
+            created_at: 1,
+            updated_at: 1,
+        })
+        .expect("put session");
+}
+
 fn seed_running_tool_context(
     store: &PersistenceStore,
     session_id: &str,
@@ -64,6 +83,103 @@ fn seed_running_tool_context(
     store
         .put_job(&JobRecord::try_from(&job).expect("job record"))
         .expect("put job");
+}
+
+#[test]
+fn operator_send_session_agent_message_queues_recipient_session_and_job() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let app = build_from_config(AppConfig {
+        data_dir: temp.path().join("state-root"),
+        permissions: PermissionConfig {
+            mode: PermissionMode::AcceptEdits,
+            rules: Vec::new(),
+        },
+        ..AppConfig::default()
+    })
+    .expect("build app");
+    let store = PersistenceStore::open(&app.persistence).expect("open store");
+    seed_session(&store, "session-operator-origin", "default");
+
+    let rendered = app
+        .send_session_agent_message(
+            "session-operator-origin",
+            "judge",
+            "Проверь последний результат.",
+            20,
+        )
+        .expect("operator message should queue");
+
+    assert!(rendered.contains("сообщение отправлено агенту judge"));
+    assert!(rendered.contains("chain_id="));
+    let sessions = store.list_sessions().expect("list sessions");
+    let recipient = sessions
+        .into_iter()
+        .find(|record| record.id != "session-operator-origin")
+        .expect("recipient session");
+    assert_eq!(recipient.agent_profile_id, "judge");
+    assert_eq!(
+        recipient.parent_session_id.as_deref(),
+        Some("session-operator-origin")
+    );
+
+    let jobs = store.list_jobs().expect("list jobs");
+    let recipient_job = jobs.into_iter().next().expect("recipient job");
+    assert_eq!(recipient_job.kind, "interagent_message");
+    assert_eq!(recipient_job.status, "running");
+}
+
+#[test]
+fn operator_grant_session_chain_continuation_persists_grant() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let app = build_from_config(AppConfig {
+        data_dir: temp.path().join("state-root"),
+        permissions: PermissionConfig {
+            mode: PermissionMode::AcceptEdits,
+            rules: Vec::new(),
+        },
+        ..AppConfig::default()
+    })
+    .expect("build app");
+    let store = PersistenceStore::open(&app.persistence).expect("open store");
+    seed_session(&store, "session-operator-grant", "judge");
+    let blocked_chain = AgentMessageChain::new(
+        "chain-operator-grant",
+        "session-origin",
+        "default",
+        DEFAULT_MAX_HOPS,
+        DEFAULT_MAX_HOPS,
+        Some("session-parent".to_string()),
+        AgentChainState::BlockedMaxHops,
+    )
+    .expect("blocked chain");
+    store
+        .put_transcript(&agent_persistence::TranscriptRecord::from(
+            &TranscriptEntry::system(
+                "transcript-operator-grant",
+                "session-operator-grant",
+                None,
+                blocked_chain.to_transcript_metadata(),
+                10,
+            ),
+        ))
+        .expect("put chain transcript");
+
+    let rendered = app
+        .grant_session_chain_continuation(
+            "session-operator-grant",
+            "chain-operator-grant",
+            "Нужен ещё один hop.",
+            20,
+        )
+        .expect("grant continuation");
+
+    assert!(rendered.contains("цепочка chain-operator-grant продолжена"));
+    assert!(
+        store
+            .get_agent_chain_continuation("chain-operator-grant")
+            .expect("get grant")
+            .is_some()
+    );
 }
 
 #[test]

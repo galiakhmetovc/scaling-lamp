@@ -104,6 +104,13 @@ impl SessionRepository for PersistenceStore {
     fn delete_session(&self, id: &str) -> Result<bool, StoreError> {
         let transcript_paths = self.session_transcript_payload_paths(id)?;
         let artifact_paths = self.session_artifact_payload_paths(id)?;
+        self.connection.execute(
+            "DELETE FROM session_search_fts
+             WHERE doc_id IN (
+                 SELECT doc_id FROM session_search_docs WHERE session_id = ?1
+             )",
+            [id],
+        )?;
         let deleted = self
             .connection
             .execute("DELETE FROM sessions WHERE id = ?1", [id])?;

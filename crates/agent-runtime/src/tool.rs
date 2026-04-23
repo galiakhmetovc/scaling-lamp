@@ -1,3 +1,5 @@
+use crate::agent::{AgentScheduleDeliveryMode, AgentScheduleMode, AgentTemplateKind};
+use crate::memory::SessionRetentionTier;
 use crate::plan::{PlanItem, PlanItemStatus, PlanItemStatusParseError, PlanLintIssue};
 use crate::workspace::{
     WorkspaceEntry, WorkspaceError, WorkspaceRef, WorkspaceSearchMatch, WriteMode,
@@ -31,6 +33,9 @@ pub enum ToolFamily {
     Exec,
     Planning,
     Offload,
+    Memory,
+    Mcp,
+    Agent,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -69,6 +74,24 @@ pub enum ToolName {
     PlanLint,
     ArtifactRead,
     ArtifactSearch,
+    KnowledgeSearch,
+    KnowledgeRead,
+    SessionSearch,
+    SessionRead,
+    McpCall,
+    McpSearchResources,
+    McpReadResource,
+    McpSearchPrompts,
+    McpGetPrompt,
+    AgentList,
+    AgentRead,
+    AgentCreate,
+    ContinueLater,
+    ScheduleList,
+    ScheduleRead,
+    ScheduleCreate,
+    ScheduleUpdate,
+    ScheduleDelete,
     MessageAgent,
     GrantAgentChainContinuation,
 }
@@ -341,6 +364,143 @@ pub struct ArtifactSearchInput {
     pub limit: usize,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum KnowledgeSourceKind {
+    RootDoc,
+    ProjectDoc,
+    ProjectNote,
+    ExtraDoc,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum KnowledgeRoot {
+    RootDocs,
+    Docs,
+    Projects,
+    Notes,
+    Extra,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct KnowledgeSearchInput {
+    pub query: String,
+    #[serde(default)]
+    pub limit: Option<usize>,
+    #[serde(default)]
+    pub offset: Option<usize>,
+    #[serde(default)]
+    pub kinds: Option<Vec<KnowledgeSourceKind>>,
+    #[serde(default)]
+    pub roots: Option<Vec<KnowledgeRoot>>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum KnowledgeReadMode {
+    Excerpt,
+    Full,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct KnowledgeReadInput {
+    pub path: String,
+    #[serde(default)]
+    pub mode: Option<KnowledgeReadMode>,
+    #[serde(default)]
+    pub cursor: Option<usize>,
+    #[serde(default)]
+    pub max_bytes: Option<usize>,
+    #[serde(default)]
+    pub max_lines: Option<usize>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SessionSearchInput {
+    pub query: String,
+    #[serde(default)]
+    pub limit: Option<usize>,
+    #[serde(default)]
+    pub offset: Option<usize>,
+    #[serde(default)]
+    pub tiers: Option<Vec<SessionRetentionTier>>,
+    #[serde(default)]
+    pub agent_identifier: Option<String>,
+    #[serde(default)]
+    pub updated_after: Option<i64>,
+    #[serde(default)]
+    pub updated_before: Option<i64>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SessionReadMode {
+    Summary,
+    Timeline,
+    Transcript,
+    Artifacts,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SessionReadInput {
+    pub session_id: String,
+    #[serde(default)]
+    pub mode: Option<SessionReadMode>,
+    #[serde(default)]
+    pub cursor: Option<usize>,
+    #[serde(default)]
+    pub max_items: Option<usize>,
+    #[serde(default)]
+    pub max_bytes: Option<usize>,
+    #[serde(default)]
+    pub include_tools: Option<bool>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct McpSearchResourcesInput {
+    #[serde(default)]
+    pub connector_id: Option<String>,
+    #[serde(default)]
+    pub query: Option<String>,
+    #[serde(default)]
+    pub limit: Option<usize>,
+    #[serde(default)]
+    pub offset: Option<usize>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct McpReadResourceInput {
+    pub connector_id: String,
+    pub uri: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct McpSearchPromptsInput {
+    #[serde(default)]
+    pub connector_id: Option<String>,
+    #[serde(default)]
+    pub query: Option<String>,
+    #[serde(default)]
+    pub limit: Option<usize>,
+    #[serde(default)]
+    pub offset: Option<usize>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct McpGetPromptInput {
+    pub connector_id: String,
+    pub name: String,
+    #[serde(default)]
+    pub arguments: Option<BTreeMap<String, String>>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct McpCallInput {
+    pub exposed_name: String,
+    pub arguments_json: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct MessageAgentInput {
     pub target_agent_id: String,
@@ -351,6 +511,90 @@ pub struct MessageAgentInput {
 pub struct GrantAgentChainContinuationInput {
     pub chain_id: String,
     pub reason: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AgentListInput {
+    #[serde(default)]
+    pub limit: Option<usize>,
+    #[serde(default)]
+    pub offset: Option<usize>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AgentReadInput {
+    pub identifier: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AgentCreateInput {
+    pub name: String,
+    #[serde(default)]
+    pub template_identifier: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ContinueLaterInput {
+    pub delay_seconds: u64,
+    pub handoff_payload: String,
+    #[serde(default)]
+    pub delivery_mode: Option<AgentScheduleDeliveryMode>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ScheduleListInput {
+    #[serde(default)]
+    pub limit: Option<usize>,
+    #[serde(default)]
+    pub offset: Option<usize>,
+    #[serde(default)]
+    pub agent_identifier: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ScheduleReadInput {
+    pub id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ScheduleCreateInput {
+    pub id: String,
+    #[serde(default)]
+    pub agent_identifier: Option<String>,
+    pub prompt: String,
+    #[serde(default)]
+    pub mode: Option<AgentScheduleMode>,
+    #[serde(default)]
+    pub delivery_mode: Option<AgentScheduleDeliveryMode>,
+    #[serde(default)]
+    pub target_session_id: Option<String>,
+    pub interval_seconds: u64,
+    #[serde(default)]
+    pub enabled: Option<bool>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ScheduleUpdateInput {
+    pub id: String,
+    #[serde(default)]
+    pub agent_identifier: Option<String>,
+    #[serde(default)]
+    pub prompt: Option<String>,
+    #[serde(default)]
+    pub mode: Option<AgentScheduleMode>,
+    #[serde(default)]
+    pub delivery_mode: Option<AgentScheduleDeliveryMode>,
+    #[serde(default)]
+    pub target_session_id: Option<String>,
+    #[serde(default)]
+    pub interval_seconds: Option<u64>,
+    #[serde(default)]
+    pub enabled: Option<bool>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ScheduleDeleteInput {
+    pub id: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -389,6 +633,24 @@ pub enum ToolCall {
     PlanLint(PlanLintInput),
     ArtifactRead(ArtifactReadInput),
     ArtifactSearch(ArtifactSearchInput),
+    KnowledgeSearch(KnowledgeSearchInput),
+    KnowledgeRead(KnowledgeReadInput),
+    SessionSearch(SessionSearchInput),
+    SessionRead(SessionReadInput),
+    McpCall(McpCallInput),
+    McpSearchResources(McpSearchResourcesInput),
+    McpReadResource(McpReadResourceInput),
+    McpSearchPrompts(McpSearchPromptsInput),
+    McpGetPrompt(McpGetPromptInput),
+    AgentList(AgentListInput),
+    AgentRead(AgentReadInput),
+    AgentCreate(AgentCreateInput),
+    ContinueLater(ContinueLaterInput),
+    ScheduleList(ScheduleListInput),
+    ScheduleRead(ScheduleReadInput),
+    ScheduleCreate(ScheduleCreateInput),
+    ScheduleUpdate(ScheduleUpdateInput),
+    ScheduleDelete(ScheduleDeleteInput),
     MessageAgent(MessageAgentInput),
     GrantAgentChainContinuation(GrantAgentChainContinuationInput),
 }
@@ -658,6 +920,310 @@ pub struct ArtifactSearchOutput {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct KnowledgeSearchResultOutput {
+    pub path: String,
+    pub kind: KnowledgeSourceKind,
+    pub snippet: String,
+    pub sha256: String,
+    pub mtime: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct KnowledgeSearchOutput {
+    pub query: String,
+    pub results: Vec<KnowledgeSearchResultOutput>,
+    pub truncated: bool,
+    pub offset: usize,
+    pub limit: usize,
+    pub total_results: usize,
+    pub next_offset: Option<usize>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct KnowledgeReadOutput {
+    pub path: String,
+    pub kind: KnowledgeSourceKind,
+    pub sha256: String,
+    pub mtime: i64,
+    pub mode: KnowledgeReadMode,
+    pub cursor: usize,
+    pub next_cursor: Option<usize>,
+    pub truncated: bool,
+    pub total_lines: usize,
+    pub start_line: usize,
+    pub end_line: usize,
+    pub text: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SessionSearchMatchSource {
+    Title,
+    Summary,
+    Plan,
+    SystemNote,
+    Transcript,
+    Artifact,
+    ArchiveSummary,
+    ArchiveTranscript,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SessionSearchResultOutput {
+    pub session_id: String,
+    pub title: String,
+    pub agent_profile_id: String,
+    pub tier: SessionRetentionTier,
+    pub updated_at: i64,
+    pub match_source: SessionSearchMatchSource,
+    pub snippet: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SessionSearchOutput {
+    pub query: String,
+    pub results: Vec<SessionSearchResultOutput>,
+    pub truncated: bool,
+    pub offset: usize,
+    pub limit: usize,
+    pub total_results: usize,
+    pub next_offset: Option<usize>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SessionReadSummaryOutput {
+    pub summary_text: String,
+    pub covered_message_count: u32,
+    pub summary_token_estimate: u32,
+    pub updated_at: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SessionReadMessageOutput {
+    pub id: String,
+    pub run_id: Option<String>,
+    pub role: String,
+    pub created_at: i64,
+    pub content: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SessionReadArtifactOutput {
+    pub artifact_id: String,
+    pub kind: String,
+    pub path: String,
+    pub byte_len: u64,
+    pub created_at: i64,
+    pub label: Option<String>,
+    pub summary: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SessionReadOutput {
+    pub session_id: String,
+    pub title: String,
+    pub agent_profile_id: String,
+    pub mode: SessionReadMode,
+    pub tier: SessionRetentionTier,
+    pub from_archive: bool,
+    pub cursor: usize,
+    pub next_cursor: Option<usize>,
+    pub truncated: bool,
+    pub total_items: usize,
+    pub summary: Option<SessionReadSummaryOutput>,
+    pub messages: Vec<SessionReadMessageOutput>,
+    pub artifacts: Vec<SessionReadArtifactOutput>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct McpDiscoveredResourceOutput {
+    pub connector_id: String,
+    pub uri: String,
+    pub name: String,
+    pub title: Option<String>,
+    pub description: Option<String>,
+    pub mime_type: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct McpSearchResourcesOutput {
+    pub connector_id: Option<String>,
+    pub query: Option<String>,
+    pub results: Vec<McpDiscoveredResourceOutput>,
+    pub truncated: bool,
+    pub offset: usize,
+    pub limit: usize,
+    pub total_results: usize,
+    pub next_offset: Option<usize>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct McpResourceContentOutput {
+    pub kind: String,
+    pub uri: String,
+    pub mime_type: Option<String>,
+    pub text: Option<String>,
+    pub blob: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct McpReadResourceOutput {
+    pub connector_id: String,
+    pub uri: String,
+    pub text: String,
+    pub contents: Vec<McpResourceContentOutput>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct McpPromptArgumentOutput {
+    pub name: String,
+    pub description: Option<String>,
+    pub required: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct McpDiscoveredPromptOutput {
+    pub connector_id: String,
+    pub name: String,
+    pub title: Option<String>,
+    pub description: Option<String>,
+    pub arguments: Vec<McpPromptArgumentOutput>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct McpSearchPromptsOutput {
+    pub connector_id: Option<String>,
+    pub query: Option<String>,
+    pub results: Vec<McpDiscoveredPromptOutput>,
+    pub truncated: bool,
+    pub offset: usize,
+    pub limit: usize,
+    pub total_results: usize,
+    pub next_offset: Option<usize>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct McpPromptMessageOutput {
+    pub role: String,
+    pub content_type: String,
+    pub text: Option<String>,
+    pub uri: Option<String>,
+    pub mime_type: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct McpGetPromptOutput {
+    pub connector_id: String,
+    pub name: String,
+    pub description: Option<String>,
+    pub text: String,
+    pub messages: Vec<McpPromptMessageOutput>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct McpCallOutput {
+    pub connector_id: String,
+    pub exposed_name: String,
+    pub remote_name: String,
+    pub content_text: String,
+    pub structured_content_json: Option<String>,
+    pub is_error: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AgentSummaryOutput {
+    pub id: String,
+    pub name: String,
+    pub template_kind: AgentTemplateKind,
+    pub agent_home: String,
+    pub allowed_tool_count: usize,
+    pub created_from_template_id: Option<String>,
+    pub created_by_session_id: Option<String>,
+    pub created_by_agent_profile_id: Option<String>,
+    pub created_at: i64,
+    pub updated_at: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AgentListOutput {
+    pub agents: Vec<AgentSummaryOutput>,
+    pub truncated: bool,
+    pub offset: usize,
+    pub limit: usize,
+    pub total_agents: usize,
+    pub next_offset: Option<usize>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AgentReadOutput {
+    pub agent: AgentSummaryOutput,
+    pub allowed_tools: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AgentCreateOutput {
+    pub agent: AgentSummaryOutput,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ContinueLaterOutput {
+    pub schedule: ScheduleViewOutput,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ScheduleViewOutput {
+    pub id: String,
+    pub agent_profile_id: String,
+    pub workspace_root: String,
+    pub prompt: String,
+    pub mode: AgentScheduleMode,
+    pub delivery_mode: AgentScheduleDeliveryMode,
+    pub target_session_id: Option<String>,
+    pub interval_seconds: u64,
+    pub next_fire_at: i64,
+    pub enabled: bool,
+    pub last_triggered_at: Option<i64>,
+    pub last_finished_at: Option<i64>,
+    pub last_session_id: Option<String>,
+    pub last_job_id: Option<String>,
+    pub last_result: Option<String>,
+    pub last_error: Option<String>,
+    pub created_at: i64,
+    pub updated_at: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ScheduleListOutput {
+    pub schedules: Vec<ScheduleViewOutput>,
+    pub truncated: bool,
+    pub offset: usize,
+    pub limit: usize,
+    pub total_schedules: usize,
+    pub next_offset: Option<usize>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ScheduleReadOutput {
+    pub schedule: ScheduleViewOutput,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ScheduleCreateOutput {
+    pub schedule: ScheduleViewOutput,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ScheduleUpdateOutput {
+    pub schedule: ScheduleViewOutput,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ScheduleDeleteOutput {
+    pub id: String,
+    pub deleted: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MessageAgentOutput {
     pub target_agent_id: String,
     pub recipient_session_id: String,
@@ -707,6 +1273,24 @@ pub enum ToolOutput {
     PlanLint(PlanLintOutput),
     ArtifactRead(ArtifactReadOutput),
     ArtifactSearch(ArtifactSearchOutput),
+    KnowledgeSearch(KnowledgeSearchOutput),
+    KnowledgeRead(KnowledgeReadOutput),
+    SessionSearch(SessionSearchOutput),
+    SessionRead(SessionReadOutput),
+    McpCall(McpCallOutput),
+    McpSearchResources(McpSearchResourcesOutput),
+    McpReadResource(McpReadResourceOutput),
+    McpSearchPrompts(McpSearchPromptsOutput),
+    McpGetPrompt(McpGetPromptOutput),
+    AgentList(AgentListOutput),
+    AgentRead(AgentReadOutput),
+    AgentCreate(AgentCreateOutput),
+    ContinueLater(ContinueLaterOutput),
+    ScheduleList(ScheduleListOutput),
+    ScheduleRead(ScheduleReadOutput),
+    ScheduleCreate(ScheduleCreateOutput),
+    ScheduleUpdate(ScheduleUpdateOutput),
+    ScheduleDelete(ScheduleDeleteOutput),
     MessageAgent(MessageAgentOutput),
     GrantAgentChainContinuation(GrantAgentChainContinuationOutput),
 }
@@ -742,6 +1326,15 @@ pub enum ToolError {
         source: std::io::Error,
     },
     InvalidPlanWrite {
+        reason: String,
+    },
+    InvalidMemoryTool {
+        reason: String,
+    },
+    InvalidMcpTool {
+        reason: String,
+    },
+    InvalidAgentTool {
         reason: String,
     },
     InvalidArtifactTool {
@@ -823,6 +1416,9 @@ impl ToolFamily {
             Self::Exec => "exec",
             Self::Planning => "plan",
             Self::Offload => "offload",
+            Self::Memory => "memory",
+            Self::Mcp => "mcp",
+            Self::Agent => "agent",
         }
     }
 }
@@ -864,6 +1460,24 @@ impl ToolName {
             Self::PlanLint => "plan_lint",
             Self::ArtifactRead => "artifact_read",
             Self::ArtifactSearch => "artifact_search",
+            Self::KnowledgeSearch => "knowledge_search",
+            Self::KnowledgeRead => "knowledge_read",
+            Self::SessionSearch => "session_search",
+            Self::SessionRead => "session_read",
+            Self::McpCall => "mcp_call",
+            Self::McpSearchResources => "mcp_search_resources",
+            Self::McpReadResource => "mcp_read_resource",
+            Self::McpSearchPrompts => "mcp_search_prompts",
+            Self::McpGetPrompt => "mcp_get_prompt",
+            Self::AgentList => "agent_list",
+            Self::AgentRead => "agent_read",
+            Self::AgentCreate => "agent_create",
+            Self::ContinueLater => "continue_later",
+            Self::ScheduleList => "schedule_list",
+            Self::ScheduleRead => "schedule_read",
+            Self::ScheduleCreate => "schedule_create",
+            Self::ScheduleUpdate => "schedule_update",
+            Self::ScheduleDelete => "schedule_delete",
             Self::MessageAgent => "message_agent",
             Self::GrantAgentChainContinuation => "grant_agent_chain_continuation",
         }
@@ -919,6 +1533,23 @@ impl ToolCatalog {
                         | ToolName::PlanLint
                         | ToolName::ArtifactRead
                         | ToolName::ArtifactSearch
+                        | ToolName::KnowledgeSearch
+                        | ToolName::KnowledgeRead
+                        | ToolName::SessionSearch
+                        | ToolName::SessionRead
+                        | ToolName::McpSearchResources
+                        | ToolName::McpReadResource
+                        | ToolName::McpSearchPrompts
+                        | ToolName::McpGetPrompt
+                        | ToolName::AgentList
+                        | ToolName::AgentRead
+                        | ToolName::AgentCreate
+                        | ToolName::ContinueLater
+                        | ToolName::ScheduleList
+                        | ToolName::ScheduleRead
+                        | ToolName::ScheduleCreate
+                        | ToolName::ScheduleUpdate
+                        | ToolName::ScheduleDelete
                         | ToolName::MessageAgent
                         | ToolName::GrantAgentChainContinuation
                 )
@@ -1269,6 +1900,186 @@ impl ToolCatalog {
                 },
             },
             ToolDefinition {
+                name: ToolName::KnowledgeSearch,
+                family: ToolFamily::Memory,
+                description: "Search project knowledge roots with bounded pagination and canonical source metadata",
+                policy: ToolPolicy {
+                    read_only: true,
+                    destructive: false,
+                    requires_approval: false,
+                },
+            },
+            ToolDefinition {
+                name: ToolName::KnowledgeRead,
+                family: ToolFamily::Memory,
+                description: "Read one project knowledge source in a bounded excerpt or full-text view",
+                policy: ToolPolicy {
+                    read_only: true,
+                    destructive: false,
+                    requires_approval: false,
+                },
+            },
+            ToolDefinition {
+                name: ToolName::SessionSearch,
+                family: ToolFamily::Memory,
+                description: "Search historical sessions with bounded pagination and retention-aware metadata",
+                policy: ToolPolicy {
+                    read_only: true,
+                    destructive: false,
+                    requires_approval: false,
+                },
+            },
+            ToolDefinition {
+                name: ToolName::SessionRead,
+                family: ToolFamily::Memory,
+                description: "Read one historical session in bounded summary, timeline, transcript, or artifact views",
+                policy: ToolPolicy {
+                    read_only: true,
+                    destructive: false,
+                    requires_approval: false,
+                },
+            },
+            ToolDefinition {
+                name: ToolName::McpCall,
+                family: ToolFamily::Mcp,
+                description: "Call one dynamically discovered MCP tool through the canonical runtime path",
+                policy: ToolPolicy {
+                    read_only: false,
+                    destructive: false,
+                    requires_approval: true,
+                },
+            },
+            ToolDefinition {
+                name: ToolName::McpSearchResources,
+                family: ToolFamily::Mcp,
+                description: "Search discovered MCP resources with bounded pagination",
+                policy: ToolPolicy {
+                    read_only: true,
+                    destructive: false,
+                    requires_approval: false,
+                },
+            },
+            ToolDefinition {
+                name: ToolName::McpReadResource,
+                family: ToolFamily::Mcp,
+                description: "Read one MCP resource by connector id and URI",
+                policy: ToolPolicy {
+                    read_only: true,
+                    destructive: false,
+                    requires_approval: false,
+                },
+            },
+            ToolDefinition {
+                name: ToolName::McpSearchPrompts,
+                family: ToolFamily::Mcp,
+                description: "Search discovered MCP prompts with bounded pagination",
+                policy: ToolPolicy {
+                    read_only: true,
+                    destructive: false,
+                    requires_approval: false,
+                },
+            },
+            ToolDefinition {
+                name: ToolName::McpGetPrompt,
+                family: ToolFamily::Mcp,
+                description: "Fetch one MCP prompt by connector id and prompt name",
+                policy: ToolPolicy {
+                    read_only: true,
+                    destructive: false,
+                    requires_approval: false,
+                },
+            },
+            ToolDefinition {
+                name: ToolName::AgentList,
+                family: ToolFamily::Agent,
+                description: "List available agent profiles with bounded pagination",
+                policy: ToolPolicy {
+                    read_only: true,
+                    destructive: false,
+                    requires_approval: false,
+                },
+            },
+            ToolDefinition {
+                name: ToolName::AgentRead,
+                family: ToolFamily::Agent,
+                description: "Read one agent profile by id or name",
+                policy: ToolPolicy {
+                    read_only: true,
+                    destructive: false,
+                    requires_approval: false,
+                },
+            },
+            ToolDefinition {
+                name: ToolName::AgentCreate,
+                family: ToolFamily::Agent,
+                description: "Create a new agent profile from a built-in or existing template",
+                policy: ToolPolicy {
+                    read_only: false,
+                    destructive: false,
+                    requires_approval: true,
+                },
+            },
+            ToolDefinition {
+                name: ToolName::ContinueLater,
+                family: ToolFamily::Agent,
+                description: "Create a self-addressed one-shot deferred continuation schedule",
+                policy: ToolPolicy {
+                    read_only: false,
+                    destructive: false,
+                    requires_approval: false,
+                },
+            },
+            ToolDefinition {
+                name: ToolName::ScheduleList,
+                family: ToolFamily::Agent,
+                description: "List agent schedules for the current workspace with bounded pagination",
+                policy: ToolPolicy {
+                    read_only: true,
+                    destructive: false,
+                    requires_approval: false,
+                },
+            },
+            ToolDefinition {
+                name: ToolName::ScheduleRead,
+                family: ToolFamily::Agent,
+                description: "Read one agent schedule by id",
+                policy: ToolPolicy {
+                    read_only: true,
+                    destructive: false,
+                    requires_approval: false,
+                },
+            },
+            ToolDefinition {
+                name: ToolName::ScheduleCreate,
+                family: ToolFamily::Agent,
+                description: "Create an agent schedule in the current workspace",
+                policy: ToolPolicy {
+                    read_only: false,
+                    destructive: false,
+                    requires_approval: false,
+                },
+            },
+            ToolDefinition {
+                name: ToolName::ScheduleUpdate,
+                family: ToolFamily::Agent,
+                description: "Update an existing agent schedule in the current workspace",
+                policy: ToolPolicy {
+                    read_only: false,
+                    destructive: false,
+                    requires_approval: false,
+                },
+            },
+            ToolDefinition {
+                name: ToolName::ScheduleDelete,
+                family: ToolFamily::Agent,
+                description: "Delete an existing agent schedule in the current workspace",
+                policy: ToolPolicy {
+                    read_only: false,
+                    destructive: false,
+                    requires_approval: false,
+                },
+            },
+            ToolDefinition {
                 name: ToolName::MessageAgent,
                 family: ToolFamily::Planning,
                 description: "Send a structured message to another agent by creating a one-shot recipient session and queued background work",
@@ -1295,7 +2106,9 @@ impl ToolCatalog {
 impl Default for ToolCatalog {
     fn default() -> Self {
         Self {
-            families: vec!["fs", "web", "exec", "plan", "offload"],
+            families: vec![
+                "fs", "web", "exec", "plan", "offload", "memory", "mcp", "agent",
+            ],
             definitions: Self::definitions(),
         }
     }
@@ -1561,6 +2374,31 @@ impl ToolRuntime {
             | ToolCall::MessageAgent(_)
             | ToolCall::GrantAgentChainContinuation(_) => Err(ToolError::InvalidPlanWrite {
                 reason: "planning tools must execute through the canonical session path"
+                    .to_string(),
+            }),
+            ToolCall::KnowledgeSearch(_)
+            | ToolCall::KnowledgeRead(_)
+            | ToolCall::SessionSearch(_)
+            | ToolCall::SessionRead(_) => Err(ToolError::InvalidMemoryTool {
+                reason: "memory tools must execute through the canonical session path".to_string(),
+            }),
+            ToolCall::McpCall(_)
+            | ToolCall::McpSearchResources(_)
+            | ToolCall::McpReadResource(_)
+            | ToolCall::McpSearchPrompts(_)
+            | ToolCall::McpGetPrompt(_) => Err(ToolError::InvalidMcpTool {
+                reason: "MCP tools must execute through the canonical session path".to_string(),
+            }),
+            ToolCall::AgentList(_)
+            | ToolCall::AgentRead(_)
+            | ToolCall::AgentCreate(_)
+            | ToolCall::ContinueLater(_)
+            | ToolCall::ScheduleList(_)
+            | ToolCall::ScheduleRead(_)
+            | ToolCall::ScheduleCreate(_)
+            | ToolCall::ScheduleUpdate(_)
+            | ToolCall::ScheduleDelete(_) => Err(ToolError::InvalidAgentTool {
+                reason: "agent and schedule tools must execute through the canonical session path"
                     .to_string(),
             }),
             ToolCall::ArtifactRead(_) | ToolCall::ArtifactSearch(_) => {
@@ -2100,6 +2938,24 @@ impl ToolCall {
             Self::PlanLint(_) => ToolName::PlanLint,
             Self::ArtifactRead(_) => ToolName::ArtifactRead,
             Self::ArtifactSearch(_) => ToolName::ArtifactSearch,
+            Self::KnowledgeSearch(_) => ToolName::KnowledgeSearch,
+            Self::KnowledgeRead(_) => ToolName::KnowledgeRead,
+            Self::SessionSearch(_) => ToolName::SessionSearch,
+            Self::SessionRead(_) => ToolName::SessionRead,
+            Self::McpCall(_) => ToolName::McpCall,
+            Self::McpSearchResources(_) => ToolName::McpSearchResources,
+            Self::McpReadResource(_) => ToolName::McpReadResource,
+            Self::McpSearchPrompts(_) => ToolName::McpSearchPrompts,
+            Self::McpGetPrompt(_) => ToolName::McpGetPrompt,
+            Self::AgentList(_) => ToolName::AgentList,
+            Self::AgentRead(_) => ToolName::AgentRead,
+            Self::AgentCreate(_) => ToolName::AgentCreate,
+            Self::ContinueLater(_) => ToolName::ContinueLater,
+            Self::ScheduleList(_) => ToolName::ScheduleList,
+            Self::ScheduleRead(_) => ToolName::ScheduleRead,
+            Self::ScheduleCreate(_) => ToolName::ScheduleCreate,
+            Self::ScheduleUpdate(_) => ToolName::ScheduleUpdate,
+            Self::ScheduleDelete(_) => ToolName::ScheduleDelete,
             Self::MessageAgent(_) => ToolName::MessageAgent,
             Self::GrantAgentChainContinuation(_) => ToolName::GrantAgentChainContinuation,
         }
@@ -2137,8 +2993,26 @@ impl ToolCall {
             | Self::EditTask(_)
             | Self::PlanSnapshot(_)
             | Self::PlanLint(_)
+            | Self::KnowledgeSearch(_)
+            | Self::KnowledgeRead(_)
+            | Self::SessionSearch(_)
+            | Self::SessionRead(_)
+            | Self::McpSearchResources(_)
+            | Self::McpSearchPrompts(_)
+            | Self::AgentList(_)
+            | Self::AgentRead(_)
+            | Self::AgentCreate(_)
+            | Self::ContinueLater(_)
+            | Self::ScheduleList(_)
+            | Self::ScheduleRead(_)
+            | Self::ScheduleCreate(_)
+            | Self::ScheduleUpdate(_)
+            | Self::ScheduleDelete(_)
             | Self::MessageAgent(_)
             | Self::GrantAgentChainContinuation(_) => None,
+            Self::McpCall(input) => Some(input.exposed_name.clone()),
+            Self::McpReadResource(input) => Some(format!("{}:{}", input.connector_id, input.uri)),
+            Self::McpGetPrompt(input) => Some(format!("{}:{}", input.connector_id, input.name)),
             Self::ArtifactRead(input) => Some(input.artifact_id.clone()),
             Self::ArtifactSearch(_) => None,
         }
@@ -2276,6 +3150,83 @@ impl ToolCall {
                     input.query, input.limit
                 )
             }
+            Self::KnowledgeSearch(input) => format!(
+                "knowledge_search query={} offset={} limit={}",
+                input.query,
+                input.offset.unwrap_or(0),
+                input.limit.unwrap_or(0)
+            ),
+            Self::KnowledgeRead(input) => format!(
+                "knowledge_read path={} mode={}",
+                normalize_tool_path(&input.path),
+                input.mode.unwrap_or(KnowledgeReadMode::Excerpt).as_str()
+            ),
+            Self::SessionSearch(input) => format!(
+                "session_search query={} offset={} limit={}",
+                input.query,
+                input.offset.unwrap_or(0),
+                input.limit.unwrap_or(0)
+            ),
+            Self::SessionRead(input) => format!(
+                "session_read session_id={} mode={}",
+                input.session_id,
+                input.mode.unwrap_or(SessionReadMode::Summary).as_str()
+            ),
+            Self::McpCall(input) => format!("mcp_call exposed_name={}", input.exposed_name),
+            Self::McpSearchResources(input) => format!(
+                "mcp_search_resources connector={} query={} offset={} limit={}",
+                input.connector_id.as_deref().unwrap_or("*"),
+                input.query.as_deref().unwrap_or("*"),
+                input.offset.unwrap_or(0),
+                input.limit.unwrap_or(0)
+            ),
+            Self::McpReadResource(input) => format!(
+                "mcp_read_resource connector_id={} uri={}",
+                input.connector_id, input.uri
+            ),
+            Self::McpSearchPrompts(input) => format!(
+                "mcp_search_prompts connector={} query={} offset={} limit={}",
+                input.connector_id.as_deref().unwrap_or("*"),
+                input.query.as_deref().unwrap_or("*"),
+                input.offset.unwrap_or(0),
+                input.limit.unwrap_or(0)
+            ),
+            Self::McpGetPrompt(input) => format!(
+                "mcp_get_prompt connector_id={} name={}",
+                input.connector_id, input.name
+            ),
+            Self::AgentList(input) => format!(
+                "agent_list offset={} limit={}",
+                input.offset.unwrap_or(0),
+                input.limit.unwrap_or(0)
+            ),
+            Self::AgentRead(input) => format!("agent_read identifier={}", input.identifier),
+            Self::AgentCreate(input) => format!(
+                "agent_create name={} template={}",
+                input.name,
+                input.template_identifier.as_deref().unwrap_or("current")
+            ),
+            Self::ContinueLater(input) => format!(
+                "continue_later delay_seconds={} delivery_mode={}",
+                input.delay_seconds,
+                input
+                    .delivery_mode
+                    .unwrap_or(AgentScheduleDeliveryMode::ExistingSession)
+                    .as_str()
+            ),
+            Self::ScheduleList(input) => format!(
+                "schedule_list agent={} offset={} limit={}",
+                input.agent_identifier.as_deref().unwrap_or("*"),
+                input.offset.unwrap_or(0),
+                input.limit.unwrap_or(0)
+            ),
+            Self::ScheduleRead(input) => format!("schedule_read id={}", input.id),
+            Self::ScheduleCreate(input) => format!(
+                "schedule_create id={} interval_seconds={}",
+                input.id, input.interval_seconds
+            ),
+            Self::ScheduleUpdate(input) => format!("schedule_update id={}", input.id),
+            Self::ScheduleDelete(input) => format!("schedule_delete id={}", input.id),
             Self::MessageAgent(input) => format!(
                 "message_agent target_agent_id={} message_bytes={}",
                 input.target_agent_id,
@@ -2493,6 +3444,108 @@ impl ToolCall {
                     name: name.to_string(),
                     source,
                 }),
+            "knowledge_search" => serde_json::from_str(arguments)
+                .map(Self::KnowledgeSearch)
+                .map_err(|source| ToolCallParseError::InvalidArguments {
+                    name: name.to_string(),
+                    source,
+                }),
+            "knowledge_read" => serde_json::from_str(arguments)
+                .map(Self::KnowledgeRead)
+                .map_err(|source| ToolCallParseError::InvalidArguments {
+                    name: name.to_string(),
+                    source,
+                }),
+            "session_search" => serde_json::from_str(arguments)
+                .map(Self::SessionSearch)
+                .map_err(|source| ToolCallParseError::InvalidArguments {
+                    name: name.to_string(),
+                    source,
+                }),
+            "session_read" => serde_json::from_str(arguments)
+                .map(Self::SessionRead)
+                .map_err(|source| ToolCallParseError::InvalidArguments {
+                    name: name.to_string(),
+                    source,
+                }),
+            "mcp_search_resources" => serde_json::from_str(arguments)
+                .map(Self::McpSearchResources)
+                .map_err(|source| ToolCallParseError::InvalidArguments {
+                    name: name.to_string(),
+                    source,
+                }),
+            "mcp_read_resource" => serde_json::from_str(arguments)
+                .map(Self::McpReadResource)
+                .map_err(|source| ToolCallParseError::InvalidArguments {
+                    name: name.to_string(),
+                    source,
+                }),
+            "mcp_search_prompts" => serde_json::from_str(arguments)
+                .map(Self::McpSearchPrompts)
+                .map_err(|source| ToolCallParseError::InvalidArguments {
+                    name: name.to_string(),
+                    source,
+                }),
+            "mcp_get_prompt" => serde_json::from_str(arguments)
+                .map(Self::McpGetPrompt)
+                .map_err(|source| ToolCallParseError::InvalidArguments {
+                    name: name.to_string(),
+                    source,
+                }),
+            "agent_list" => serde_json::from_str(arguments)
+                .map(Self::AgentList)
+                .map_err(|source| ToolCallParseError::InvalidArguments {
+                    name: name.to_string(),
+                    source,
+                }),
+            "agent_read" => serde_json::from_str(arguments)
+                .map(Self::AgentRead)
+                .map_err(|source| ToolCallParseError::InvalidArguments {
+                    name: name.to_string(),
+                    source,
+                }),
+            "agent_create" => serde_json::from_str(arguments)
+                .map(Self::AgentCreate)
+                .map_err(|source| ToolCallParseError::InvalidArguments {
+                    name: name.to_string(),
+                    source,
+                }),
+            "continue_later" => serde_json::from_str(arguments)
+                .map(Self::ContinueLater)
+                .map_err(|source| ToolCallParseError::InvalidArguments {
+                    name: name.to_string(),
+                    source,
+                }),
+            "schedule_list" => serde_json::from_str(arguments)
+                .map(Self::ScheduleList)
+                .map_err(|source| ToolCallParseError::InvalidArguments {
+                    name: name.to_string(),
+                    source,
+                }),
+            "schedule_read" => serde_json::from_str(arguments)
+                .map(Self::ScheduleRead)
+                .map_err(|source| ToolCallParseError::InvalidArguments {
+                    name: name.to_string(),
+                    source,
+                }),
+            "schedule_create" => serde_json::from_str(arguments)
+                .map(Self::ScheduleCreate)
+                .map_err(|source| ToolCallParseError::InvalidArguments {
+                    name: name.to_string(),
+                    source,
+                }),
+            "schedule_update" => serde_json::from_str(arguments)
+                .map(Self::ScheduleUpdate)
+                .map_err(|source| ToolCallParseError::InvalidArguments {
+                    name: name.to_string(),
+                    source,
+                }),
+            "schedule_delete" => serde_json::from_str(arguments)
+                .map(Self::ScheduleDelete)
+                .map_err(|source| ToolCallParseError::InvalidArguments {
+                    name: name.to_string(),
+                    source,
+                }),
             "message_agent" => serde_json::from_str(arguments)
                 .map(Self::MessageAgent)
                 .map_err(|source| ToolCallParseError::InvalidArguments {
@@ -2505,6 +3558,31 @@ impl ToolCall {
                     name: name.to_string(),
                     source,
                 }),
+            _ if name.starts_with("mcp__") => {
+                let parsed = if arguments.trim().is_empty() {
+                    json!({})
+                } else {
+                    serde_json::from_str::<Value>(arguments).map_err(|source| {
+                        ToolCallParseError::InvalidArguments {
+                            name: name.to_string(),
+                            source,
+                        }
+                    })?
+                };
+                if !parsed.is_object() {
+                    return Err(ToolCallParseError::InvalidArguments {
+                        name: name.to_string(),
+                        source: serde_json::Error::io(std::io::Error::new(
+                            std::io::ErrorKind::InvalidInput,
+                            "dynamic MCP tool arguments must be a JSON object",
+                        )),
+                    });
+                }
+                Ok(Self::McpCall(McpCallInput {
+                    exposed_name: name.to_string(),
+                    arguments_json: parsed.to_string(),
+                }))
+            }
             _ => Err(ToolCallParseError::UnknownTool {
                 name: name.to_string(),
             }),
@@ -2542,6 +3620,64 @@ impl ProcessOutputStatus {
             Self::Running => "running",
             Self::Exited => "exited",
             Self::Killed => "killed",
+        }
+    }
+}
+
+impl KnowledgeSourceKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::RootDoc => "root_doc",
+            Self::ProjectDoc => "project_doc",
+            Self::ProjectNote => "project_note",
+            Self::ExtraDoc => "extra_doc",
+        }
+    }
+}
+
+impl KnowledgeRoot {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::RootDocs => "root_docs",
+            Self::Docs => "docs",
+            Self::Projects => "projects",
+            Self::Notes => "notes",
+            Self::Extra => "extra",
+        }
+    }
+}
+
+impl KnowledgeReadMode {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Excerpt => "excerpt",
+            Self::Full => "full",
+        }
+    }
+}
+
+impl SessionReadMode {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Summary => "summary",
+            Self::Timeline => "timeline",
+            Self::Transcript => "transcript",
+            Self::Artifacts => "artifacts",
+        }
+    }
+}
+
+impl SessionSearchMatchSource {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Title => "title",
+            Self::Summary => "summary",
+            Self::Plan => "plan",
+            Self::SystemNote => "system_note",
+            Self::Transcript => "transcript",
+            Self::Artifact => "artifact",
+            Self::ArchiveSummary => "archive_summary",
+            Self::ArchiveTranscript => "archive_transcript",
         }
     }
 }
@@ -2634,6 +3770,34 @@ impl ToolOutput {
     pub fn into_process_result(self) -> Option<ProcessResult> {
         match self {
             Self::ProcessResult(output) => Some(output),
+            _ => None,
+        }
+    }
+
+    pub fn into_knowledge_search(self) -> Option<KnowledgeSearchOutput> {
+        match self {
+            Self::KnowledgeSearch(output) => Some(output),
+            _ => None,
+        }
+    }
+
+    pub fn into_knowledge_read(self) -> Option<KnowledgeReadOutput> {
+        match self {
+            Self::KnowledgeRead(output) => Some(output),
+            _ => None,
+        }
+    }
+
+    pub fn into_session_search(self) -> Option<SessionSearchOutput> {
+        match self {
+            Self::SessionSearch(output) => Some(output),
+            _ => None,
+        }
+    }
+
+    pub fn into_session_read(self) -> Option<SessionReadOutput> {
+        match self {
+            Self::SessionRead(output) => Some(output),
             _ => None,
         }
     }
@@ -2806,6 +3970,136 @@ impl ToolOutput {
                     "artifact_search query={} results={}",
                     output.query,
                     output.results.len()
+                )
+            }
+            Self::KnowledgeSearch(output) => {
+                if let Some(next_offset) = output.next_offset {
+                    format!(
+                        "knowledge_search results={} total={} truncated next_offset={}",
+                        output.results.len(),
+                        output.total_results,
+                        next_offset
+                    )
+                } else {
+                    format!("knowledge_search results={}", output.results.len())
+                }
+            }
+            Self::KnowledgeRead(output) => format!(
+                "knowledge_read path={} mode={} lines={} truncated={}",
+                output.path,
+                output.mode.as_str(),
+                output.text.lines().count(),
+                output.truncated
+            ),
+            Self::SessionSearch(output) => {
+                if let Some(next_offset) = output.next_offset {
+                    format!(
+                        "session_search results={} total={} truncated next_offset={}",
+                        output.results.len(),
+                        output.total_results,
+                        next_offset
+                    )
+                } else {
+                    format!("session_search results={}", output.results.len())
+                }
+            }
+            Self::SessionRead(output) => format!(
+                "session_read session_id={} mode={} tier={} from_archive={} messages={} artifacts={}",
+                output.session_id,
+                output.mode.as_str(),
+                output.tier.as_str(),
+                output.from_archive,
+                output.messages.len(),
+                output.artifacts.len()
+            ),
+            Self::McpCall(output) => format!(
+                "mcp_call connector_id={} exposed_name={} is_error={}",
+                output.connector_id, output.exposed_name, output.is_error
+            ),
+            Self::McpSearchResources(output) => {
+                if let Some(next_offset) = output.next_offset {
+                    format!(
+                        "mcp_search_resources results={} total={} truncated next_offset={}",
+                        output.results.len(),
+                        output.total_results,
+                        next_offset
+                    )
+                } else {
+                    format!("mcp_search_resources results={}", output.results.len())
+                }
+            }
+            Self::McpReadResource(output) => format!(
+                "mcp_read_resource connector_id={} uri={} contents={}",
+                output.connector_id,
+                output.uri,
+                output.contents.len()
+            ),
+            Self::McpSearchPrompts(output) => {
+                if let Some(next_offset) = output.next_offset {
+                    format!(
+                        "mcp_search_prompts results={} total={} truncated next_offset={}",
+                        output.results.len(),
+                        output.total_results,
+                        next_offset
+                    )
+                } else {
+                    format!("mcp_search_prompts results={}", output.results.len())
+                }
+            }
+            Self::McpGetPrompt(output) => format!(
+                "mcp_get_prompt connector_id={} name={} messages={}",
+                output.connector_id,
+                output.name,
+                output.messages.len()
+            ),
+            Self::AgentList(output) => {
+                if let Some(next_offset) = output.next_offset {
+                    format!(
+                        "agent_list agents={} total={} truncated next_offset={}",
+                        output.agents.len(),
+                        output.total_agents,
+                        next_offset
+                    )
+                } else {
+                    format!("agent_list agents={}", output.agents.len())
+                }
+            }
+            Self::AgentRead(output) => format!("agent_read id={}", output.agent.id),
+            Self::AgentCreate(output) => format!(
+                "agent_create id={} template={}",
+                output.agent.id,
+                output.agent.template_kind.as_str()
+            ),
+            Self::ContinueLater(output) => format!(
+                "continue_later schedule_id={} delivery_mode={}",
+                output.schedule.id,
+                output.schedule.delivery_mode.as_str()
+            ),
+            Self::ScheduleList(output) => {
+                if let Some(next_offset) = output.next_offset {
+                    format!(
+                        "schedule_list schedules={} total={} truncated next_offset={}",
+                        output.schedules.len(),
+                        output.total_schedules,
+                        next_offset
+                    )
+                } else {
+                    format!("schedule_list schedules={}", output.schedules.len())
+                }
+            }
+            Self::ScheduleRead(output) => format!("schedule_read id={}", output.schedule.id),
+            Self::ScheduleCreate(output) => format!(
+                "schedule_create id={} agent_profile_id={}",
+                output.schedule.id, output.schedule.agent_profile_id
+            ),
+            Self::ScheduleUpdate(output) => format!(
+                "schedule_update id={} enabled={}",
+                output.schedule.id, output.schedule.enabled
+            ),
+            Self::ScheduleDelete(output) => {
+                format!(
+                    "schedule_delete id={} deleted={}",
+                    output.id, output.deleted
                 )
             }
             Self::MessageAgent(output) => format!(
@@ -3067,6 +4361,359 @@ impl ToolOutput {
                     "message_count": result.message_count,
                     "preview": result.preview,
                 })).collect::<Vec<_>>(),
+            })
+            .to_string(),
+            Self::KnowledgeSearch(output) => json!({
+                "tool": "knowledge_search",
+                "query": output.query,
+                "results": output.results.iter().map(|result| json!({
+                    "path": result.path,
+                    "kind": result.kind.as_str(),
+                    "snippet": result.snippet,
+                    "sha256": result.sha256,
+                    "mtime": result.mtime,
+                })).collect::<Vec<_>>(),
+                "truncated": output.truncated,
+                "offset": output.offset,
+                "limit": output.limit,
+                "total_results": output.total_results,
+                "next_offset": output.next_offset,
+            })
+            .to_string(),
+            Self::KnowledgeRead(output) => json!({
+                "tool": "knowledge_read",
+                "path": output.path,
+                "kind": output.kind.as_str(),
+                "sha256": output.sha256,
+                "mtime": output.mtime,
+                "mode": output.mode.as_str(),
+                "cursor": output.cursor,
+                "next_cursor": output.next_cursor,
+                "truncated": output.truncated,
+                "total_lines": output.total_lines,
+                "start_line": output.start_line,
+                "end_line": output.end_line,
+                "text": output.text,
+            })
+            .to_string(),
+            Self::SessionSearch(output) => json!({
+                "tool": "session_search",
+                "query": output.query,
+                "results": output.results.iter().map(|result| json!({
+                    "session_id": result.session_id,
+                    "title": result.title,
+                    "agent_profile_id": result.agent_profile_id,
+                    "tier": result.tier.as_str(),
+                    "updated_at": result.updated_at,
+                    "match_source": result.match_source.as_str(),
+                    "snippet": result.snippet,
+                })).collect::<Vec<_>>(),
+                "truncated": output.truncated,
+                "offset": output.offset,
+                "limit": output.limit,
+                "total_results": output.total_results,
+                "next_offset": output.next_offset,
+            })
+            .to_string(),
+            Self::SessionRead(output) => json!({
+                "tool": "session_read",
+                "session_id": output.session_id,
+                "title": output.title,
+                "agent_profile_id": output.agent_profile_id,
+                "mode": output.mode.as_str(),
+                "tier": output.tier.as_str(),
+                "from_archive": output.from_archive,
+                "cursor": output.cursor,
+                "next_cursor": output.next_cursor,
+                "truncated": output.truncated,
+                "total_items": output.total_items,
+                "summary": output.summary.as_ref().map(|summary| json!({
+                    "summary_text": summary.summary_text,
+                    "covered_message_count": summary.covered_message_count,
+                    "summary_token_estimate": summary.summary_token_estimate,
+                    "updated_at": summary.updated_at,
+                })),
+                "messages": output.messages.iter().map(|message| json!({
+                    "id": message.id,
+                    "run_id": message.run_id,
+                    "role": message.role,
+                    "created_at": message.created_at,
+                    "content": message.content,
+                })).collect::<Vec<_>>(),
+                "artifacts": output.artifacts.iter().map(|artifact| json!({
+                    "artifact_id": artifact.artifact_id,
+                    "kind": artifact.kind,
+                    "path": artifact.path,
+                    "byte_len": artifact.byte_len,
+                    "created_at": artifact.created_at,
+                    "label": artifact.label,
+                    "summary": artifact.summary,
+                })).collect::<Vec<_>>(),
+            })
+            .to_string(),
+            Self::McpCall(output) => json!({
+                "tool": "mcp_call",
+                "connector_id": output.connector_id,
+                "exposed_name": output.exposed_name,
+                "remote_name": output.remote_name,
+                "content_text": output.content_text,
+                "structured_content_json": output.structured_content_json,
+                "is_error": output.is_error,
+            })
+            .to_string(),
+            Self::McpSearchResources(output) => json!({
+                "tool": "mcp_search_resources",
+                "connector_id": output.connector_id,
+                "query": output.query,
+                "results": output.results.iter().map(|result| json!({
+                    "connector_id": result.connector_id,
+                    "uri": result.uri,
+                    "name": result.name,
+                    "title": result.title,
+                    "description": result.description,
+                    "mime_type": result.mime_type,
+                })).collect::<Vec<_>>(),
+                "truncated": output.truncated,
+                "offset": output.offset,
+                "limit": output.limit,
+                "total_results": output.total_results,
+                "next_offset": output.next_offset,
+            })
+            .to_string(),
+            Self::McpReadResource(output) => json!({
+                "tool": "mcp_read_resource",
+                "connector_id": output.connector_id,
+                "uri": output.uri,
+                "text": output.text,
+                "contents": output.contents.iter().map(|content| json!({
+                    "kind": content.kind,
+                    "uri": content.uri,
+                    "mime_type": content.mime_type,
+                    "text": content.text,
+                    "blob": content.blob,
+                })).collect::<Vec<_>>(),
+            })
+            .to_string(),
+            Self::McpSearchPrompts(output) => json!({
+                "tool": "mcp_search_prompts",
+                "connector_id": output.connector_id,
+                "query": output.query,
+                "results": output.results.iter().map(|result| json!({
+                    "connector_id": result.connector_id,
+                    "name": result.name,
+                    "title": result.title,
+                    "description": result.description,
+                    "arguments": result.arguments.iter().map(|argument| json!({
+                        "name": argument.name,
+                        "description": argument.description,
+                        "required": argument.required,
+                    })).collect::<Vec<_>>(),
+                })).collect::<Vec<_>>(),
+                "truncated": output.truncated,
+                "offset": output.offset,
+                "limit": output.limit,
+                "total_results": output.total_results,
+                "next_offset": output.next_offset,
+            })
+            .to_string(),
+            Self::McpGetPrompt(output) => json!({
+                "tool": "mcp_get_prompt",
+                "connector_id": output.connector_id,
+                "name": output.name,
+                "description": output.description,
+                "text": output.text,
+                "messages": output.messages.iter().map(|message| json!({
+                    "role": message.role,
+                    "content_type": message.content_type,
+                    "text": message.text,
+                    "uri": message.uri,
+                    "mime_type": message.mime_type,
+                })).collect::<Vec<_>>(),
+            })
+            .to_string(),
+            Self::AgentList(output) => json!({
+                "tool": "agent_list",
+                "agents": output.agents.iter().map(|agent| json!({
+                    "id": agent.id,
+                    "name": agent.name,
+                    "template_kind": agent.template_kind.as_str(),
+                    "agent_home": agent.agent_home,
+                    "allowed_tool_count": agent.allowed_tool_count,
+                    "created_from_template_id": agent.created_from_template_id,
+                    "created_by_session_id": agent.created_by_session_id,
+                    "created_by_agent_profile_id": agent.created_by_agent_profile_id,
+                    "created_at": agent.created_at,
+                    "updated_at": agent.updated_at,
+                })).collect::<Vec<_>>(),
+                "truncated": output.truncated,
+                "offset": output.offset,
+                "limit": output.limit,
+                "total_agents": output.total_agents,
+                "next_offset": output.next_offset,
+            })
+            .to_string(),
+            Self::AgentRead(output) => json!({
+                "tool": "agent_read",
+                "agent": {
+                    "id": output.agent.id,
+                    "name": output.agent.name,
+                    "template_kind": output.agent.template_kind.as_str(),
+                    "agent_home": output.agent.agent_home,
+                    "allowed_tool_count": output.agent.allowed_tool_count,
+                    "created_from_template_id": output.agent.created_from_template_id,
+                    "created_by_session_id": output.agent.created_by_session_id,
+                    "created_by_agent_profile_id": output.agent.created_by_agent_profile_id,
+                    "created_at": output.agent.created_at,
+                    "updated_at": output.agent.updated_at,
+                },
+                "allowed_tools": output.allowed_tools,
+            })
+            .to_string(),
+            Self::AgentCreate(output) => json!({
+                "tool": "agent_create",
+                "agent": {
+                    "id": output.agent.id,
+                    "name": output.agent.name,
+                    "template_kind": output.agent.template_kind.as_str(),
+                    "agent_home": output.agent.agent_home,
+                    "allowed_tool_count": output.agent.allowed_tool_count,
+                    "created_from_template_id": output.agent.created_from_template_id,
+                    "created_by_session_id": output.agent.created_by_session_id,
+                    "created_by_agent_profile_id": output.agent.created_by_agent_profile_id,
+                    "created_at": output.agent.created_at,
+                    "updated_at": output.agent.updated_at,
+                }
+            })
+            .to_string(),
+            Self::ContinueLater(output) => json!({
+                "tool": "continue_later",
+                "schedule": {
+                    "id": output.schedule.id,
+                    "agent_profile_id": output.schedule.agent_profile_id,
+                    "workspace_root": output.schedule.workspace_root,
+                    "prompt": output.schedule.prompt,
+                    "mode": output.schedule.mode.as_str(),
+                    "delivery_mode": output.schedule.delivery_mode.as_str(),
+                    "target_session_id": output.schedule.target_session_id,
+                    "interval_seconds": output.schedule.interval_seconds,
+                    "next_fire_at": output.schedule.next_fire_at,
+                    "enabled": output.schedule.enabled,
+                    "last_triggered_at": output.schedule.last_triggered_at,
+                    "last_finished_at": output.schedule.last_finished_at,
+                    "last_session_id": output.schedule.last_session_id,
+                    "last_job_id": output.schedule.last_job_id,
+                    "last_result": output.schedule.last_result,
+                    "last_error": output.schedule.last_error,
+                    "created_at": output.schedule.created_at,
+                    "updated_at": output.schedule.updated_at,
+                }
+            })
+            .to_string(),
+            Self::ScheduleList(output) => json!({
+                "tool": "schedule_list",
+                "schedules": output.schedules.iter().map(|schedule| json!({
+                    "id": schedule.id,
+                    "agent_profile_id": schedule.agent_profile_id,
+                    "workspace_root": schedule.workspace_root,
+                    "prompt": schedule.prompt,
+                    "mode": schedule.mode.as_str(),
+                    "delivery_mode": schedule.delivery_mode.as_str(),
+                    "target_session_id": schedule.target_session_id,
+                    "interval_seconds": schedule.interval_seconds,
+                    "next_fire_at": schedule.next_fire_at,
+                    "enabled": schedule.enabled,
+                    "last_triggered_at": schedule.last_triggered_at,
+                    "last_finished_at": schedule.last_finished_at,
+                    "last_session_id": schedule.last_session_id,
+                    "last_job_id": schedule.last_job_id,
+                    "last_result": schedule.last_result,
+                    "last_error": schedule.last_error,
+                    "created_at": schedule.created_at,
+                    "updated_at": schedule.updated_at,
+                })).collect::<Vec<_>>(),
+                "truncated": output.truncated,
+                "offset": output.offset,
+                "limit": output.limit,
+                "total_schedules": output.total_schedules,
+                "next_offset": output.next_offset,
+            })
+            .to_string(),
+            Self::ScheduleRead(output) => json!({
+                "tool": "schedule_read",
+                "schedule": {
+                    "id": output.schedule.id,
+                    "agent_profile_id": output.schedule.agent_profile_id,
+                    "workspace_root": output.schedule.workspace_root,
+                    "prompt": output.schedule.prompt,
+                    "mode": output.schedule.mode.as_str(),
+                    "delivery_mode": output.schedule.delivery_mode.as_str(),
+                    "target_session_id": output.schedule.target_session_id,
+                    "interval_seconds": output.schedule.interval_seconds,
+                    "next_fire_at": output.schedule.next_fire_at,
+                    "enabled": output.schedule.enabled,
+                    "last_triggered_at": output.schedule.last_triggered_at,
+                    "last_finished_at": output.schedule.last_finished_at,
+                    "last_session_id": output.schedule.last_session_id,
+                    "last_job_id": output.schedule.last_job_id,
+                    "last_result": output.schedule.last_result,
+                    "last_error": output.schedule.last_error,
+                    "created_at": output.schedule.created_at,
+                    "updated_at": output.schedule.updated_at,
+                }
+            })
+            .to_string(),
+            Self::ScheduleCreate(output) => json!({
+                "tool": "schedule_create",
+                "schedule": {
+                    "id": output.schedule.id,
+                    "agent_profile_id": output.schedule.agent_profile_id,
+                    "workspace_root": output.schedule.workspace_root,
+                    "prompt": output.schedule.prompt,
+                    "mode": output.schedule.mode.as_str(),
+                    "delivery_mode": output.schedule.delivery_mode.as_str(),
+                    "target_session_id": output.schedule.target_session_id,
+                    "interval_seconds": output.schedule.interval_seconds,
+                    "next_fire_at": output.schedule.next_fire_at,
+                    "enabled": output.schedule.enabled,
+                    "last_triggered_at": output.schedule.last_triggered_at,
+                    "last_finished_at": output.schedule.last_finished_at,
+                    "last_session_id": output.schedule.last_session_id,
+                    "last_job_id": output.schedule.last_job_id,
+                    "last_result": output.schedule.last_result,
+                    "last_error": output.schedule.last_error,
+                    "created_at": output.schedule.created_at,
+                    "updated_at": output.schedule.updated_at,
+                }
+            })
+            .to_string(),
+            Self::ScheduleUpdate(output) => json!({
+                "tool": "schedule_update",
+                "schedule": {
+                    "id": output.schedule.id,
+                    "agent_profile_id": output.schedule.agent_profile_id,
+                    "workspace_root": output.schedule.workspace_root,
+                    "prompt": output.schedule.prompt,
+                    "mode": output.schedule.mode.as_str(),
+                    "delivery_mode": output.schedule.delivery_mode.as_str(),
+                    "target_session_id": output.schedule.target_session_id,
+                    "interval_seconds": output.schedule.interval_seconds,
+                    "next_fire_at": output.schedule.next_fire_at,
+                    "enabled": output.schedule.enabled,
+                    "last_triggered_at": output.schedule.last_triggered_at,
+                    "last_finished_at": output.schedule.last_finished_at,
+                    "last_session_id": output.schedule.last_session_id,
+                    "last_job_id": output.schedule.last_job_id,
+                    "last_result": output.schedule.last_result,
+                    "last_error": output.schedule.last_error,
+                    "created_at": output.schedule.created_at,
+                    "updated_at": output.schedule.updated_at,
+                }
+            })
+            .to_string(),
+            Self::ScheduleDelete(output) => json!({
+                "tool": "schedule_delete",
+                "id": output.id,
+                "deleted": output.deleted,
             })
             .to_string(),
             Self::MessageAgent(output) => json!({
@@ -3431,6 +5078,212 @@ impl ToolName {
                 "required": ["query", "limit"],
                 "additionalProperties": false,
             }),
+            Self::KnowledgeSearch => json!({
+                "type": "object",
+                "properties": {
+                    "query": { "type": "string", "description": "Search query across canonical project knowledge roots" },
+                    "limit": { "type": ["integer", "null"], "minimum": 1, "description": "Optional maximum number of search results to return" },
+                    "offset": { "type": ["integer", "null"], "minimum": 0, "description": "Optional pagination offset" },
+                    "kinds": {
+                        "type": ["array", "null"],
+                        "items": { "type": "string", "enum": ["root_doc", "project_doc", "project_note", "extra_doc"] },
+                        "description": "Optional knowledge source kind filters"
+                    },
+                    "roots": {
+                        "type": ["array", "null"],
+                        "items": { "type": "string", "enum": ["root_docs", "docs", "projects", "notes", "extra"] },
+                        "description": "Optional canonical knowledge root filters"
+                    }
+                },
+                "required": ["query"],
+                "additionalProperties": false,
+            }),
+            Self::KnowledgeRead => json!({
+                "type": "object",
+                "properties": {
+                    "path": { "type": "string", "description": "Relative knowledge file path to read" },
+                    "mode": { "type": ["string", "null"], "enum": ["excerpt", "full", null], "description": "Optional view mode; defaults to excerpt" },
+                    "cursor": { "type": ["integer", "null"], "minimum": 0, "description": "Optional zero-based line cursor returned by a previous knowledge_read call" },
+                    "max_bytes": { "type": ["integer", "null"], "minimum": 1, "description": "Optional maximum UTF-8 bytes to return" },
+                    "max_lines": { "type": ["integer", "null"], "minimum": 1, "description": "Optional maximum number of lines to return" }
+                },
+                "required": ["path"],
+                "additionalProperties": false,
+            }),
+            Self::SessionSearch => json!({
+                "type": "object",
+                "properties": {
+                    "query": { "type": "string", "description": "Search query across historical sessions" },
+                    "limit": { "type": ["integer", "null"], "minimum": 1, "description": "Optional maximum number of search results to return" },
+                    "offset": { "type": ["integer", "null"], "minimum": 0, "description": "Optional pagination offset" },
+                    "tiers": {
+                        "type": ["array", "null"],
+                        "items": { "type": "string", "enum": ["active", "warm", "cold"] },
+                        "description": "Optional retention tier filters"
+                    },
+                    "agent_identifier": { "type": ["string", "null"], "description": "Optional agent id or name filter" },
+                    "updated_after": { "type": ["integer", "null"], "description": "Optional inclusive lower updated_at bound" },
+                    "updated_before": { "type": ["integer", "null"], "description": "Optional inclusive upper updated_at bound" }
+                },
+                "required": ["query"],
+                "additionalProperties": false,
+            }),
+            Self::SessionRead => json!({
+                "type": "object",
+                "properties": {
+                    "session_id": { "type": "string", "description": "Historical session id to read" },
+                    "mode": { "type": ["string", "null"], "enum": ["summary", "timeline", "transcript", "artifacts", null], "description": "Optional view mode; defaults to summary" },
+                    "cursor": { "type": ["integer", "null"], "minimum": 0, "description": "Optional item cursor returned by a previous session_read call" },
+                    "max_items": { "type": ["integer", "null"], "minimum": 1, "description": "Optional maximum number of messages or artifacts to return" },
+                    "max_bytes": { "type": ["integer", "null"], "minimum": 1, "description": "Optional maximum content bytes to return across message bodies" },
+                    "include_tools": { "type": ["boolean", "null"], "description": "Whether transcript and timeline modes should include tool-role entries; defaults to true" }
+                },
+                "required": ["session_id"],
+                "additionalProperties": false,
+            }),
+            Self::McpCall => json!({
+                "type": "object",
+                "properties": {
+                    "arguments": {
+                        "type": "object",
+                        "description": "Dynamic MCP tool arguments; this schema is replaced at runtime with the discovered MCP tool schema"
+                    }
+                },
+                "additionalProperties": true,
+            }),
+            Self::McpSearchResources => json!({
+                "type": "object",
+                "properties": {
+                    "connector_id": { "type": ["string", "null"], "description": "Optional MCP connector id filter" },
+                    "query": { "type": ["string", "null"], "description": "Optional search query against resource metadata" },
+                    "limit": { "type": ["integer", "null"], "minimum": 1, "description": "Optional maximum number of results to return" },
+                    "offset": { "type": ["integer", "null"], "minimum": 0, "description": "Optional pagination offset" }
+                },
+                "additionalProperties": false,
+            }),
+            Self::McpReadResource => json!({
+                "type": "object",
+                "properties": {
+                    "connector_id": { "type": "string", "description": "MCP connector id" },
+                    "uri": { "type": "string", "description": "Resource URI to read" }
+                },
+                "required": ["connector_id", "uri"],
+                "additionalProperties": false,
+            }),
+            Self::McpSearchPrompts => json!({
+                "type": "object",
+                "properties": {
+                    "connector_id": { "type": ["string", "null"], "description": "Optional MCP connector id filter" },
+                    "query": { "type": ["string", "null"], "description": "Optional search query against prompt metadata" },
+                    "limit": { "type": ["integer", "null"], "minimum": 1, "description": "Optional maximum number of results to return" },
+                    "offset": { "type": ["integer", "null"], "minimum": 0, "description": "Optional pagination offset" }
+                },
+                "additionalProperties": false,
+            }),
+            Self::McpGetPrompt => json!({
+                "type": "object",
+                "properties": {
+                    "connector_id": { "type": "string", "description": "MCP connector id" },
+                    "name": { "type": "string", "description": "Prompt name to retrieve" },
+                    "arguments": {
+                        "type": ["object", "null"],
+                        "description": "Optional prompt arguments",
+                        "additionalProperties": { "type": "string" }
+                    }
+                },
+                "required": ["connector_id", "name"],
+                "additionalProperties": false,
+            }),
+            Self::AgentList => json!({
+                "type": "object",
+                "properties": {
+                    "limit": { "type": ["integer", "null"], "minimum": 1, "description": "Optional maximum number of agents to return" },
+                    "offset": { "type": ["integer", "null"], "minimum": 0, "description": "Optional pagination offset" }
+                },
+                "additionalProperties": false,
+            }),
+            Self::AgentRead => json!({
+                "type": "object",
+                "properties": {
+                    "identifier": { "type": "string", "description": "Agent id or name to resolve" }
+                },
+                "required": ["identifier"],
+                "additionalProperties": false,
+            }),
+            Self::AgentCreate => json!({
+                "type": "object",
+                "properties": {
+                    "name": { "type": "string", "description": "Display name for the new agent" },
+                    "template_identifier": { "type": ["string", "null"], "description": "Optional template agent id or name; defaults to the current session agent" }
+                },
+                "required": ["name"],
+                "additionalProperties": false,
+            }),
+            Self::ContinueLater => json!({
+                "type": "object",
+                "properties": {
+                    "delay_seconds": { "type": "integer", "minimum": 1, "description": "How many seconds to wait before resuming work" },
+                    "handoff_payload": { "type": "string", "description": "Explicit handoff payload for the future continuation" },
+                    "delivery_mode": { "type": ["string", "null"], "enum": ["fresh_session", "existing_session", null], "description": "Optional delivery mode; defaults to existing_session for self-resume" }
+                },
+                "required": ["delay_seconds", "handoff_payload"],
+                "additionalProperties": false,
+            }),
+            Self::ScheduleList => json!({
+                "type": "object",
+                "properties": {
+                    "limit": { "type": ["integer", "null"], "minimum": 1, "description": "Optional maximum number of schedules to return" },
+                    "offset": { "type": ["integer", "null"], "minimum": 0, "description": "Optional pagination offset" },
+                    "agent_identifier": { "type": ["string", "null"], "description": "Optional agent id or name filter" }
+                },
+                "additionalProperties": false,
+            }),
+            Self::ScheduleRead => json!({
+                "type": "object",
+                "properties": {
+                    "id": { "type": "string", "description": "Schedule id to read" }
+                },
+                "required": ["id"],
+                "additionalProperties": false,
+            }),
+            Self::ScheduleCreate => json!({
+                "type": "object",
+                "properties": {
+                    "id": { "type": "string", "description": "Stable schedule id" },
+                    "agent_identifier": { "type": ["string", "null"], "description": "Optional agent id or name; defaults to the current session agent" },
+                    "prompt": { "type": "string", "description": "Prompt delivered when the schedule fires" },
+                    "mode": { "type": ["string", "null"], "enum": ["interval", "after_completion", "once", null], "description": "Optional schedule mode; defaults to interval" },
+                    "delivery_mode": { "type": ["string", "null"], "enum": ["fresh_session", "existing_session", null], "description": "Optional delivery mode; defaults to fresh_session" },
+                    "target_session_id": { "type": ["string", "null"], "description": "Optional target session id; for existing_session defaults to the current session" },
+                    "interval_seconds": { "type": "integer", "minimum": 1, "description": "Positive schedule interval in seconds" },
+                    "enabled": { "type": ["boolean", "null"], "description": "Optional enabled state; defaults to true" }
+                },
+                "required": ["id", "prompt", "interval_seconds"],
+                "additionalProperties": false,
+            }),
+            Self::ScheduleUpdate => json!({
+                "type": "object",
+                "properties": {
+                    "id": { "type": "string", "description": "Schedule id to update" },
+                    "agent_identifier": { "type": ["string", "null"], "description": "Optional agent id or name override" },
+                    "prompt": { "type": ["string", "null"], "description": "Optional replacement prompt" },
+                    "mode": { "type": ["string", "null"], "enum": ["interval", "after_completion", "once", null], "description": "Optional replacement mode" },
+                    "delivery_mode": { "type": ["string", "null"], "enum": ["fresh_session", "existing_session", null], "description": "Optional replacement delivery mode" },
+                    "target_session_id": { "type": ["string", "null"], "description": "Optional replacement target session id" },
+                    "interval_seconds": { "type": ["integer", "null"], "minimum": 1, "description": "Optional replacement interval in seconds" },
+                    "enabled": { "type": ["boolean", "null"], "description": "Optional replacement enabled state" }
+                },
+                "required": ["id"],
+                "additionalProperties": false,
+            }),
+            Self::ScheduleDelete => json!({
+                "type": "object",
+                "properties": {
+                    "id": { "type": "string", "description": "Schedule id to delete" }
+                },
+                "required": ["id"],
+                "additionalProperties": false,
+            }),
             Self::MessageAgent => json!({
                 "type": "object",
                 "properties": {
@@ -3491,6 +5344,15 @@ impl fmt::Display for ToolError {
             Self::InvalidPlanWrite { reason } => {
                 write!(formatter, "invalid plan write request: {reason}")
             }
+            Self::InvalidMemoryTool { reason } => {
+                write!(formatter, "invalid memory request: {reason}")
+            }
+            Self::InvalidMcpTool { reason } => {
+                write!(formatter, "invalid MCP request: {reason}")
+            }
+            Self::InvalidAgentTool { reason } => {
+                write!(formatter, "invalid agent tool request: {reason}")
+            }
             Self::InvalidArtifactTool { reason } => {
                 write!(formatter, "invalid offload retrieval request: {reason}")
             }
@@ -3515,6 +5377,9 @@ impl Error for ToolError {
             | Self::WebParse { .. }
             | Self::ProcessFamilyMismatch { .. }
             | Self::InvalidPlanWrite { .. }
+            | Self::InvalidMemoryTool { .. }
+            | Self::InvalidMcpTool { .. }
+            | Self::InvalidAgentTool { .. }
             | Self::InvalidArtifactTool { .. }
             | Self::UnknownProcess { .. } => None,
         }

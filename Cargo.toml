@@ -7,7 +7,7 @@ edition = "2024"
 license = "MIT"
 repository = "https://github.com/galiakhmetovc/scaling-lamp"
 rust-version = "1.95"
-version = "1.0.0"
+version = "1.0.1"
 
 [workspace.dependencies]
 crossterm = "0.28"

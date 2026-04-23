@@ -18,7 +18,7 @@ use time::macros::format_description;
 use time::{Date, OffsetDateTime};
 use unicode_width::UnicodeWidthStr;
 
-const MAX_SESSION_HEADER_HEIGHT: u16 = 7;
+const MAX_SESSION_HEADER_HEIGHT: u16 = 9;
 const MAX_COMPOSER_INPUT_LINES: u16 = 6;
 const MAX_ACTIVE_DETAIL_CHARS: usize = 180;
 
@@ -41,7 +41,7 @@ pub fn render(frame: &mut Frame<'_>, state: &TuiAppState) {
     match state.active_screen() {
         TuiScreen::Sessions => render_session_screen(frame, state),
         TuiScreen::Chat => render_chat_screen(frame, state),
-        TuiScreen::Agents | TuiScreen::Schedules | TuiScreen::Artifacts => {
+        TuiScreen::Agents | TuiScreen::Schedules | TuiScreen::Mcp | TuiScreen::Artifacts => {
             render_inspector_screen(frame, state)
         }
     }
@@ -67,15 +67,15 @@ fn render_session_screen(frame: &mut Frame<'_>, state: &TuiAppState) {
                 ""
             };
             let preview = session.last_message_preview.as_deref().unwrap_or("<пусто>");
-            let title = session
-                .scheduled_by
-                .as_deref()
-                .map(|schedule_id| format!("{} [расписание:{}]", session.title, schedule_id))
-                .unwrap_or_else(|| session.title.clone());
+            let schedule_capsule = format_session_schedule_capsule(session)
+                .map(|value| format!(" | {value}"))
+                .unwrap_or_default();
             let label = format!(
-                "{prefix}{} | агент={} | обновлено={} | сообщений={}{}",
-                title,
+                "{prefix}{} | агент={} ({}){} | обновлено={} | сообщений={}{}",
+                session.title,
                 session.agent_name,
+                session.agent_profile_id,
+                schedule_capsule,
                 format_timestamp(session.updated_at, now),
                 session.message_count,
                 approval
@@ -112,6 +112,7 @@ fn render_inspector_screen(frame: &mut Frame<'_>, state: &TuiAppState) {
         .unwrap_or(match state.active_screen() {
             TuiScreen::Agents => "Агенты",
             TuiScreen::Schedules => "Расписания",
+            TuiScreen::Mcp => "MCP",
             TuiScreen::Artifacts => "Артефакты",
             _ => "Просмотр",
         });
@@ -263,7 +264,7 @@ fn render_chat_screen(frame: &mut Frame<'_>, state: &TuiAppState) {
         .wrap(Wrap { trim: false })
         .scroll((composer_scroll_top, 0));
     let hint = Paragraph::new(Line::from(format!(
-        "Enter=отправить после шага инструмента | Tab=в очередь после полного хода | Shift+Tab=перебор команд | \\процессы | \\пауза | \\стоп | \\отмена | {}",
+        "Enter=отправить после шага инструмента | Tab=в очередь после полного хода | Shift+Tab=перебор команд | Ctrl+J судья | Ctrl+G chain grant | \\процессы | \\пауза | \\стоп | \\отмена | {}",
         describe_run_status(state, now)
     )));
 
@@ -340,10 +341,11 @@ fn session_header_lines(state: &TuiAppState, now: i64) -> Vec<Line<'static>> {
     if let Some(summary) = state.current_session_summary() {
         let mut lines = vec![
             Line::from(format!(
-                "{} | версия={} | агент={} | модель={} | размышления={} | думай={} | доводка={} | апрув={} | usage={} | сжатия={} | сообщений={} | фон={} (выполняется={} в очереди={})",
+                "{} | версия={} | агент={} ({}) | модель={} | размышления={} | думай={} | доводка={} | апрув={} | usage={} | сжатия={} | сообщений={} | фон={} (выполняется={} в очереди={})",
                 summary.title,
                 APP_VERSION,
                 summary.agent_name,
+                summary.agent_profile_id,
                 summary.model.as_deref().unwrap_or("<по умолчанию>"),
                 if summary.reasoning_visible {
                     "вкл"
@@ -376,12 +378,70 @@ fn session_header_lines(state: &TuiAppState, now: i64) -> Vec<Line<'static>> {
                 state.queued_deferred_count()
             )),
         ];
+        if let Some(schedule_line) = render_session_schedule_header_line(summary, now) {
+            lines.push(Line::from(schedule_line));
+        }
+        if let Some(schedule_state_line) = render_session_schedule_state_line(summary) {
+            lines.push(Line::from(schedule_state_line));
+        }
         if let Some(detail) = active_run_detail_line(state) {
             lines.push(Line::from(detail));
         }
         lines
     } else {
         vec![Line::from("Нет активной сессии")]
+    }
+}
+
+fn format_session_schedule_capsule(summary: &SessionSummary) -> Option<String> {
+    summary
+        .schedule
+        .as_ref()
+        .map(|schedule| {
+            format!(
+                "расписание={} {}/{}",
+                schedule.id,
+                schedule.mode.as_str(),
+                schedule.delivery_mode.as_str()
+            )
+        })
+        .or_else(|| {
+            summary
+                .scheduled_by
+                .as_deref()
+                .map(|schedule_id| format!("расписание={schedule_id}"))
+        })
+}
+
+fn render_session_schedule_header_line(summary: &SessionSummary, now: i64) -> Option<String> {
+    summary.schedule.as_ref().map(|schedule| {
+        format!(
+            "расписание={} | mode={} | delivery={} | enabled={} | next={}",
+            schedule.id,
+            schedule.mode.as_str(),
+            schedule.delivery_mode.as_str(),
+            schedule.enabled,
+            format_timestamp(schedule.next_fire_at, now)
+        )
+    })
+}
+
+fn render_session_schedule_state_line(summary: &SessionSummary) -> Option<String> {
+    let schedule = summary.schedule.as_ref()?;
+    let mut parts = Vec::new();
+    if let Some(target_session_id) = schedule.target_session_id.as_deref() {
+        parts.push(format!("target_session={target_session_id}"));
+    }
+    if let Some(last_result) = schedule.last_result.as_deref() {
+        parts.push(format!("last_result={last_result}"));
+    }
+    if let Some(last_error) = schedule.last_error.as_deref() {
+        parts.push(format!("last_error={last_error}"));
+    }
+    if parts.is_empty() {
+        None
+    } else {
+        Some(parts.join(" | "))
     }
 }
 
@@ -1185,9 +1245,13 @@ fn render_dialog(frame: &mut Frame<'_>, dialog: DialogState) {
         DialogState::CreateAgent { value } => format!(
             "Создать агента\n\n{value}\n\nФормат: <имя> [из <шаблона>]\nПример: ревьюер из judge\n\nEnter подтвердить, Esc отмена"
         ),
-        DialogState::CreateSchedule { value } => format!(
-            "Создать расписание\n\n{value}\n\nФормат: <id> <секунды> [agent=<id>] :: <промпт>\nПример: pulse 300 :: проверь очередь задач\n\nEnter подтвердить, Esc отмена"
-        ),
+        DialogState::CreateScheduleForm { form } | DialogState::EditScheduleForm { form } => {
+            form.render_lines().join("\n")
+        }
+        DialogState::CreateMcpConnectorForm { form }
+        | DialogState::EditMcpConnectorForm { form } => form.render_lines().join("\n"),
+        DialogState::SendAgentMessageForm { form } => form.render_lines().join("\n"),
+        DialogState::GrantChainContinuationForm { form } => form.render_lines().join("\n"),
         DialogState::BrowserSearch { value } => format!(
             "Поиск в просмотре\n\n{value}\n\nПустая строка очищает поиск.\n\nEnter подтвердить, Esc отмена"
         ),
@@ -1202,6 +1266,9 @@ fn render_dialog(frame: &mut Frame<'_>, dialog: DialogState) {
         }
         DialogState::ConfirmDeleteSchedule { id } => {
             format!("Удалить расписание {id}?\n\nEnter подтвердить, Esc отмена")
+        }
+        DialogState::ConfirmDeleteMcpConnector { id } => {
+            format!("Удалить MCP-коннектор {id}?\n\nEnter подтвердить, Esc отмена")
         }
     };
     let paragraph = Paragraph::new(content)
@@ -1292,10 +1359,11 @@ fn chat_scroll_top(total_lines: usize, viewport_lines: usize, offset_from_bottom
 #[cfg(test)]
 mod tests {
     use super::{chat_scroll_top, format_timestamp, render_markdown_entry, render_timeline_entry};
-    use crate::bootstrap::SessionSummary;
+    use crate::bootstrap::{SessionScheduleSummary, SessionSummary};
     use crate::tui::app::{BrowserItem, TuiAppState};
     use crate::tui::timeline::Timeline;
     use crate::tui::timeline::{TimelineEntry, TimelineEntryKind};
+    use agent_runtime::agent::{AgentScheduleDeliveryMode, AgentScheduleMode};
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
     use ratatui::style::Modifier;
@@ -1411,6 +1479,7 @@ mod tests {
                 agent_profile_id: "default".to_string(),
                 agent_name: "Default".to_string(),
                 scheduled_by: None,
+                schedule: None,
                 model: Some("glm-5-turbo".to_string()),
                 reasoning_visible: true,
                 think_level: None,
@@ -1474,6 +1543,16 @@ mod tests {
             agent_profile_id: "default".to_string(),
             agent_name: "Default".to_string(),
             scheduled_by: None,
+            schedule: Some(SessionScheduleSummary {
+                id: "pulse".to_string(),
+                mode: AgentScheduleMode::Interval,
+                delivery_mode: AgentScheduleDeliveryMode::ExistingSession,
+                enabled: true,
+                next_fire_at: 1_775_200_010,
+                target_session_id: Some("session-wrap".to_string()),
+                last_result: Some("running".to_string()),
+                last_error: None,
+            }),
             model: Some("glm-5-turbo".to_string()),
             reasoning_visible: true,
             think_level: None,
@@ -1511,7 +1590,9 @@ mod tests {
             rendered.push('\n');
         }
 
-        assert!(rendered.contains("агент=Default"));
+        assert!(rendered.contains("агент=Default (default)"));
+        assert!(rendered.contains("расписание=pulse"));
+        assert!(rendered.contains("delivery=existing_session"));
         assert!(rendered.contains("usage=5990/15/6005"));
         assert!(rendered.contains("фон=0"));
         assert!(rendered.contains("выполняется=0"));
@@ -1525,6 +1606,7 @@ mod tests {
             agent_profile_id: "default".to_string(),
             agent_name: "Default".to_string(),
             scheduled_by: None,
+            schedule: None,
             model: Some("glm-5-turbo".to_string()),
             reasoning_visible: true,
             think_level: None,
@@ -1562,7 +1644,8 @@ mod tests {
             rendered.push('\n');
         }
 
-        assert!(rendered.contains("Новая сессия."));
+        assert!(rendered.contains("\\апрув [id]"));
+        assert!(rendered.contains("\\выход"));
         assert!(rendered.contains("\\процессы"));
     }
 
@@ -1574,6 +1657,7 @@ mod tests {
             agent_profile_id: "default".to_string(),
             agent_name: "Default".to_string(),
             scheduled_by: None,
+            schedule: None,
             model: Some("glm-5-turbo".to_string()),
             reasoning_visible: true,
             think_level: None,
@@ -1628,6 +1712,7 @@ mod tests {
             agent_profile_id: "default".to_string(),
             agent_name: "Default".to_string(),
             scheduled_by: None,
+            schedule: None,
             model: Some("glm-5-turbo".to_string()),
             reasoning_visible: true,
             think_level: None,
@@ -1678,6 +1763,7 @@ mod tests {
             agent_profile_id: "default".to_string(),
             agent_name: "Default".to_string(),
             scheduled_by: None,
+            schedule: None,
             model: Some("glm-5-turbo".to_string()),
             reasoning_visible: true,
             think_level: None,
@@ -1755,6 +1841,7 @@ mod tests {
             agent_profile_id: "default".to_string(),
             agent_name: "Default".to_string(),
             scheduled_by: None,
+            schedule: None,
             model: Some("glm-5-turbo".to_string()),
             reasoning_visible: true,
             think_level: None,

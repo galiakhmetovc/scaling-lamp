@@ -1,9 +1,15 @@
 use agent_persistence::{
-    AppConfig, ContextSummaryRepository, JobRecord, JobRepository, MissionRecord,
-    MissionRepository, PersistenceStore, RunRecord, RunRepository, SessionInboxRepository,
-    SessionRecord, SessionRepository, TranscriptRepository,
+    AgentRepository, AgentScheduleRecord, AppConfig, ContextOffloadRepository,
+    ContextSummaryRepository, JobRecord, JobRepository, MissionRecord, MissionRepository,
+    PersistenceStore, RunRecord, RunRepository, SessionInboxRepository, SessionRecord,
+    SessionRepository, TranscriptRepository,
 };
+use agent_runtime::agent::{
+    AgentSchedule, AgentScheduleDeliveryMode, AgentScheduleInit, AgentScheduleMode,
+};
+use agent_runtime::context::{ContextOffloadPayload, ContextOffloadRef, ContextOffloadSnapshot};
 use agent_runtime::inbox::SessionInboxEvent;
+use agent_runtime::interagent::{AgentChainState, AgentMessageChain, DEFAULT_MAX_HOPS};
 use agent_runtime::mission::{JobSpec, JobStatus, MissionSpec, MissionStatus};
 use agent_runtime::run::{ActiveProcess, RunEngine};
 use agent_runtime::session::{Session, SessionSettings};
@@ -84,6 +90,73 @@ fn render_context_state_explains_usage_summary_and_compaction_policy() {
 }
 
 #[test]
+fn render_context_state_includes_offload_snapshot_details() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let app = build_from_config(AppConfig {
+        data_dir: temp.path().join("state-root"),
+        ..AppConfig::default()
+    })
+    .expect("build app");
+    let store = PersistenceStore::open(&app.persistence).expect("open store");
+    let session = app
+        .create_session_auto(Some("Offload Context Session"))
+        .expect("create session");
+
+    store
+        .put_context_offload(
+            &agent_persistence::ContextOffloadRecord::try_from(&ContextOffloadSnapshot {
+                session_id: session.id.clone(),
+                refs: vec![
+                    ContextOffloadRef {
+                        id: "offload-1".to_string(),
+                        label: "Large fs_read_text".to_string(),
+                        summary: "Big document offloaded".to_string(),
+                        artifact_id: "artifact-offload-1".to_string(),
+                        token_estimate: 120,
+                        message_count: 3,
+                        created_at: 77,
+                    },
+                    ContextOffloadRef {
+                        id: "offload-2".to_string(),
+                        label: "Second payload".to_string(),
+                        summary: "Another large block".to_string(),
+                        artifact_id: "artifact-offload-2".to_string(),
+                        token_estimate: 80,
+                        message_count: 2,
+                        created_at: 88,
+                    },
+                ],
+                updated_at: 99,
+            })
+            .expect("offload record"),
+            &[
+                ContextOffloadPayload {
+                    artifact_id: "artifact-offload-1".to_string(),
+                    bytes: b"payload-1".to_vec(),
+                },
+                ContextOffloadPayload {
+                    artifact_id: "artifact-offload-2".to_string(),
+                    bytes: b"payload-2".to_vec(),
+                },
+            ],
+        )
+        .expect("put context offload");
+
+    let rendered = app
+        .render_context_state(&session.id)
+        .expect("render context state");
+
+    assert!(rendered.contains("offload_tokens=200"));
+    assert!(rendered.contains("offload_refs=2"));
+    assert!(rendered.contains("offload_messages=5"));
+    assert!(rendered.contains("offload_updated_at=99"));
+    assert!(rendered.contains("Offload:"));
+    assert!(rendered.contains("artifact-offload-1"));
+    assert!(rendered.contains("Large fs_read_text"));
+    assert!(rendered.contains("Big document offloaded"));
+}
+
+#[test]
 fn session_head_prefers_latest_provider_usage_input_tokens_for_ctx() {
     let temp = tempfile::tempdir().expect("tempdir");
     let app = build_from_config(AppConfig {
@@ -149,6 +222,78 @@ fn session_head_prefers_latest_provider_usage_input_tokens_for_ctx() {
 }
 
 #[test]
+fn session_head_includes_agent_and_schedule_metadata() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let app = build_from_config(AppConfig {
+        data_dir: temp.path().join("state-root"),
+        ..AppConfig::default()
+    })
+    .expect("build app");
+    let store = PersistenceStore::open(&app.persistence).expect("open store");
+
+    store
+        .put_session(&SessionRecord {
+            id: "session-scheduled-head".to_string(),
+            title: "Scheduled Session".to_string(),
+            prompt_override: None,
+            settings_json: serde_json::to_string(&SessionSettings::default())
+                .expect("serialize settings"),
+            agent_profile_id: "judge".to_string(),
+            active_mission_id: None,
+            parent_session_id: None,
+            parent_job_id: None,
+            delegation_label: Some("agent-schedule:judge-pulse".to_string()),
+            created_at: 1,
+            updated_at: 1,
+        })
+        .expect("put session");
+    store
+        .put_agent_schedule(&AgentScheduleRecord::from(
+            &AgentSchedule::new(AgentScheduleInit {
+                id: "judge-pulse".to_string(),
+                agent_profile_id: "judge".to_string(),
+                workspace_root: fs::canonicalize(".").expect("canonical workspace"),
+                prompt: "watch for regressions".to_string(),
+                mode: AgentScheduleMode::Interval,
+                delivery_mode: AgentScheduleDeliveryMode::ExistingSession,
+                target_session_id: Some("session-scheduled-head".to_string()),
+                interval_seconds: 300,
+                next_fire_at: 123,
+                enabled: true,
+                last_triggered_at: None,
+                last_finished_at: None,
+                last_session_id: None,
+                last_job_id: None,
+                last_result: Some("running".to_string()),
+                last_error: None,
+                created_at: 1,
+                updated_at: 2,
+            })
+            .expect("schedule"),
+        ))
+        .expect("put schedule");
+
+    let head = app
+        .session_head("session-scheduled-head")
+        .expect("session head");
+
+    assert_eq!(head.agent_profile_id, "judge");
+    assert_eq!(head.agent_name, "Judge");
+    let schedule = head.schedule.expect("schedule metadata");
+    assert_eq!(schedule.id, "judge-pulse");
+    assert_eq!(schedule.mode, AgentScheduleMode::Interval);
+    assert_eq!(
+        schedule.delivery_mode,
+        AgentScheduleDeliveryMode::ExistingSession
+    );
+    assert_eq!(
+        schedule.target_session_id.as_deref(),
+        Some("session-scheduled-head")
+    );
+    assert_eq!(schedule.last_result.as_deref(), Some("running"));
+}
+
+#[test]
 fn render_active_run_shows_usage_and_active_processes() {
     let temp = tempfile::tempdir().expect("tempdir");
     let app = build_from_config(AppConfig {
@@ -169,11 +314,36 @@ fn render_active_run_shows_usage_and_active_processes() {
             active_mission_id: None,
             parent_session_id: None,
             parent_job_id: None,
-            delegation_label: None,
+            delegation_label: Some("agent-schedule:judge-pulse".to_string()),
             created_at: 1,
             updated_at: 1,
         })
         .expect("put session");
+    store
+        .put_agent_schedule(&AgentScheduleRecord::from(
+            &AgentSchedule::new(AgentScheduleInit {
+                id: "judge-pulse".to_string(),
+                agent_profile_id: "judge".to_string(),
+                workspace_root: fs::canonicalize(".").expect("canonical workspace"),
+                prompt: "review the latest change".to_string(),
+                mode: AgentScheduleMode::Interval,
+                delivery_mode: AgentScheduleDeliveryMode::FreshSession,
+                target_session_id: None,
+                interval_seconds: 300,
+                next_fire_at: 123,
+                enabled: true,
+                last_triggered_at: None,
+                last_finished_at: None,
+                last_session_id: None,
+                last_job_id: None,
+                last_result: Some("running".to_string()),
+                last_error: None,
+                created_at: 1,
+                updated_at: 2,
+            })
+            .expect("schedule"),
+        ))
+        .expect("put schedule");
 
     let mut run = RunEngine::new("run-live", "session-run", None, 10);
     run.start(10).expect("start run");
@@ -213,8 +383,15 @@ fn render_active_run_shows_usage_and_active_processes() {
         .expect("render active run");
 
     assert!(rendered.contains("Ход:"));
+    assert!(rendered.contains("сессия: Session Run"));
+    assert!(rendered.contains("агент: Ассистент (default)"));
     assert!(rendered.contains("run-live"));
     assert!(rendered.contains("статус: running"));
+    assert!(
+        rendered
+            .contains("расписание: judge-pulse mode=interval delivery=fresh_session enabled=true")
+    );
+    assert!(rendered.contains("last_result: running"));
     assert!(rendered.contains("usage: input=400 output=40 total=440"));
     assert!(rendered.contains(
         "последний шаг: fs_list path=projects/adqm/infra/ansible recursive=true -> fs_list entries=46959"
@@ -225,6 +402,80 @@ fn render_active_run_shows_usage_and_active_processes() {
     assert!(rendered.contains("exec-9 (exec) pid:4242"));
     assert!(rendered.contains("команда: curl -fL https://example.test/govc.tar.gz"));
     assert!(rendered.contains("cwd: /workspace"));
+}
+
+#[test]
+fn render_active_run_includes_interagent_chain_state() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let app = build_from_config(AppConfig {
+        data_dir: temp.path().join("state-root"),
+        ..AppConfig::default()
+    })
+    .expect("build app");
+    let store = PersistenceStore::open(&app.persistence).expect("open store");
+
+    store
+        .put_session(&SessionRecord {
+            id: "session-run-chain".to_string(),
+            title: "Session Run Chain".to_string(),
+            prompt_override: None,
+            settings_json: serde_json::to_string(&SessionSettings::default())
+                .expect("serialize settings"),
+            agent_profile_id: "judge".to_string(),
+            active_mission_id: None,
+            parent_session_id: Some("session-origin".to_string()),
+            parent_job_id: None,
+            delegation_label: Some("agent-chain:chain-status".to_string()),
+            created_at: 1,
+            updated_at: 1,
+        })
+        .expect("put session");
+    store
+        .put_transcript(&agent_persistence::TranscriptRecord::from(
+            &agent_runtime::session::TranscriptEntry::system(
+                "transcript-run-chain",
+                "session-run-chain",
+                None,
+                AgentMessageChain::new(
+                    "chain-status",
+                    "session-origin",
+                    "default",
+                    DEFAULT_MAX_HOPS,
+                    DEFAULT_MAX_HOPS,
+                    Some("session-parent".to_string()),
+                    AgentChainState::BlockedMaxHops,
+                )
+                .expect("blocked chain")
+                .to_transcript_metadata(),
+                10,
+            ),
+        ))
+        .expect("put chain transcript");
+    app.grant_session_chain_continuation(
+        "session-run-chain",
+        "chain-status",
+        "Нужен ещё один hop.",
+        11,
+    )
+    .expect("grant continuation");
+
+    let mut run = RunEngine::new("run-chain", "session-run-chain", None, 10);
+    run.start(10).expect("start run");
+    store
+        .put_run(&RunRecord::try_from(run.snapshot()).expect("run record"))
+        .expect("put run");
+
+    let rendered = app
+        .render_active_run("session-run-chain")
+        .expect("render active run");
+
+    assert!(rendered.contains("межагент: chain_id=chain-status state=blocked_max_hops"));
+    assert!(rendered.contains(&format!("hop={}/{}", DEFAULT_MAX_HOPS, DEFAULT_MAX_HOPS)));
+    assert!(rendered.contains("origin_session: session-origin"));
+    assert!(rendered.contains("origin_agent: default"));
+    assert!(rendered.contains("parent_interagent_session: session-parent"));
+    assert!(rendered.contains("parent_session: session-origin"));
+    assert!(rendered.contains("continuation_grant: pending"));
 }
 
 #[test]
@@ -315,6 +566,69 @@ fn render_active_run_shows_live_exec_output_tail() {
         );
         thread::sleep(Duration::from_millis(25));
     }
+}
+
+#[test]
+fn render_system_blocks_include_interagent_section() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let app = build_from_config(AppConfig {
+        data_dir: temp.path().join("state-root"),
+        ..AppConfig::default()
+    })
+    .expect("build app");
+    let store = PersistenceStore::open(&app.persistence).expect("open store");
+
+    store
+        .put_session(&SessionRecord {
+            id: "session-system-chain".to_string(),
+            title: "Session System Chain".to_string(),
+            prompt_override: None,
+            settings_json: serde_json::to_string(&SessionSettings::default())
+                .expect("serialize settings"),
+            agent_profile_id: "judge".to_string(),
+            active_mission_id: None,
+            parent_session_id: Some("session-origin".to_string()),
+            parent_job_id: None,
+            delegation_label: Some("agent-chain:chain-system".to_string()),
+            created_at: 1,
+            updated_at: 1,
+        })
+        .expect("put session");
+    store
+        .put_transcript(&agent_persistence::TranscriptRecord::from(
+            &agent_runtime::session::TranscriptEntry::system(
+                "transcript-system-chain",
+                "session-system-chain",
+                None,
+                AgentMessageChain::new(
+                    "chain-system",
+                    "session-origin",
+                    "default",
+                    1,
+                    DEFAULT_MAX_HOPS,
+                    Some("session-parent".to_string()),
+                    AgentChainState::ContinuedOnce,
+                )
+                .expect("continued chain")
+                .to_transcript_metadata(),
+                10,
+            ),
+        ))
+        .expect("put chain transcript");
+
+    let rendered = app
+        .render_system_blocks("session-system-chain")
+        .expect("render system blocks");
+
+    assert!(rendered.contains("[InterAgent]"));
+    assert!(rendered.contains("chain_id=chain-system state=continued_once hop=1"));
+    assert!(rendered.contains("max_hops=3"));
+    assert!(rendered.contains("origin_session_id=session-origin"));
+    assert!(rendered.contains("origin_agent_id=default"));
+    assert!(rendered.contains("parent_interagent_session_id=session-parent"));
+    assert!(rendered.contains("parent_session_id=session-origin"));
+    assert!(rendered.contains("delegation_label=agent-chain:chain-system"));
+    assert!(rendered.contains("continuation_grant_pending=false"));
 }
 
 #[cfg(unix)]

@@ -1,7 +1,8 @@
 use super::*;
 use crate::http::types::{
     AgentCreateRequest, AgentRenderResponse, AgentResolveRequest, AgentScheduleCreateRequest,
-    AgentScheduleResolveRequest, AgentSelectRequest, ErrorResponse,
+    AgentScheduleDetailResponse, AgentScheduleResolveRequest, AgentScheduleUpdateRequest,
+    AgentSelectRequest, ErrorResponse,
 };
 use tiny_http::{Method, StatusCode};
 
@@ -167,6 +168,36 @@ pub(super) fn handle_show_agent_schedule(app: &App, mut request: Request) -> std
     }
 }
 
+pub(super) fn handle_resolve_agent_schedule(
+    app: &App,
+    mut request: Request,
+) -> std::io::Result<()> {
+    let payload = match parse_json_body::<AgentScheduleResolveRequest>(&mut request) {
+        Ok(payload) => payload,
+        Err(error) => {
+            return respond_json(
+                request,
+                StatusCode(400),
+                &ErrorResponse {
+                    error: format!("invalid agent schedule resolve request: {error}"),
+                },
+            );
+        }
+    };
+
+    match app.agent_schedule_view(&payload.id) {
+        Ok(schedule) => respond_json(
+            request,
+            StatusCode(200),
+            &AgentScheduleDetailResponse { schedule },
+        ),
+        Err(error) => {
+            let (status, payload) = map_bootstrap_error(error);
+            respond_json(request, status, &payload)
+        }
+    }
+}
+
 pub(super) fn handle_create_agent_schedule(app: &App, mut request: Request) -> std::io::Result<()> {
     let payload = match parse_json_body::<AgentScheduleCreateRequest>(&mut request) {
         Ok(payload) => payload,
@@ -181,12 +212,7 @@ pub(super) fn handle_create_agent_schedule(app: &App, mut request: Request) -> s
         }
     };
 
-    match app.create_agent_schedule(
-        &payload.id,
-        payload.interval_seconds,
-        &payload.prompt,
-        payload.agent_identifier.as_deref(),
-    ) {
+    match app.create_agent_schedule_with_options(&payload.id, payload.options) {
         Ok(schedule) => respond_json(
             request,
             StatusCode(201),
@@ -226,6 +252,43 @@ pub(super) fn handle_agent_schedule_nested_routes(
     };
 
     match (method, tail) {
+        (Method::Patch, schedule_id) => {
+            let mut request = request;
+            let payload = match parse_json_body::<AgentScheduleUpdateRequest>(&mut request) {
+                Ok(payload) => payload,
+                Err(error) => {
+                    return respond_json(
+                        request,
+                        StatusCode(400),
+                        &ErrorResponse {
+                            error: format!("invalid agent schedule update request: {error}"),
+                        },
+                    );
+                }
+            };
+
+            match app.update_agent_schedule(schedule_id, payload.patch) {
+                Ok(schedule) => respond_json(
+                    request,
+                    StatusCode(200),
+                    &AgentRenderResponse {
+                        message: format!(
+                            "обновлено расписание {} agent={} mode={} delivery={} enabled={} interval={}s",
+                            schedule.id,
+                            schedule.agent_profile_id,
+                            schedule.mode.as_str(),
+                            schedule.delivery_mode.as_str(),
+                            schedule.enabled,
+                            schedule.interval_seconds
+                        ),
+                    },
+                ),
+                Err(error) => {
+                    let (status, payload) = map_bootstrap_error(error);
+                    respond_json(request, status, &payload)
+                }
+            }
+        }
         (Method::Delete, schedule_id) => match app.delete_agent_schedule(schedule_id) {
             Ok(true) => respond_json(
                 request,

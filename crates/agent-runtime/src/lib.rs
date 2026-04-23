@@ -1,8 +1,10 @@
 pub mod agent;
+pub mod archive;
 pub mod context;
 pub mod delegation;
 pub mod inbox;
 pub mod interagent;
+pub mod mcp;
 pub mod memory;
 pub mod mission;
 pub mod permission;
@@ -70,7 +72,9 @@ mod tests {
         assert_eq!(scaffold.run.status, RunStatus::Queued);
         assert_eq!(
             scaffold.tools.families,
-            ["fs", "web", "exec", "plan", "offload"]
+            [
+                "fs", "web", "exec", "plan", "offload", "memory", "mcp", "agent"
+            ]
         );
         workspace.root.push("runs");
         assert_eq!(workspace.root, PathBuf::from("./runs"));

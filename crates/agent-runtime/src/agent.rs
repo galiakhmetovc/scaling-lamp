@@ -16,6 +16,7 @@ pub enum AgentTemplateKind {
 pub enum AgentScheduleMode {
     Interval,
     AfterCompletion,
+    Once,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -47,6 +48,9 @@ pub struct AgentProfile {
     pub template_kind: AgentTemplateKind,
     pub agent_home: PathBuf,
     pub allowed_tools: Vec<String>,
+    pub created_from_template_id: Option<String>,
+    pub created_by_session_id: Option<String>,
+    pub created_by_agent_profile_id: Option<String>,
     pub created_at: i64,
     pub updated_at: i64,
 }
@@ -148,6 +152,7 @@ impl AgentScheduleMode {
         match self {
             Self::Interval => "interval",
             Self::AfterCompletion => "after_completion",
+            Self::Once => "once",
         }
     }
 }
@@ -183,6 +188,7 @@ impl TryFrom<&str> for AgentScheduleMode {
         match value {
             "interval" => Ok(Self::Interval),
             "after_completion" => Ok(Self::AfterCompletion),
+            "once" => Ok(Self::Once),
             other => Err(AgentScheduleModeParseError {
                 value: other.to_string(),
             }),
@@ -242,6 +248,33 @@ impl AgentProfile {
         created_at: i64,
         updated_at: i64,
     ) -> Result<Self, AgentProfileError> {
+        Self::new_with_provenance(
+            id,
+            name,
+            template_kind,
+            agent_home,
+            allowed_tools,
+            None,
+            None,
+            None,
+            created_at,
+            updated_at,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn new_with_provenance(
+        id: impl Into<String>,
+        name: impl Into<String>,
+        template_kind: AgentTemplateKind,
+        agent_home: impl AsRef<Path>,
+        allowed_tools: Vec<String>,
+        created_from_template_id: Option<String>,
+        created_by_session_id: Option<String>,
+        created_by_agent_profile_id: Option<String>,
+        created_at: i64,
+        updated_at: i64,
+    ) -> Result<Self, AgentProfileError> {
         let id = id.into().trim().to_string();
         if id.is_empty() {
             return Err(AgentProfileError::EmptyId);
@@ -274,6 +307,15 @@ impl AgentProfile {
             template_kind,
             agent_home,
             allowed_tools: normalized_tools,
+            created_from_template_id: created_from_template_id
+                .map(|value| value.trim().to_string())
+                .filter(|value| !value.is_empty()),
+            created_by_session_id: created_by_session_id
+                .map(|value| value.trim().to_string())
+                .filter(|value| !value.is_empty()),
+            created_by_agent_profile_id: created_by_agent_profile_id
+                .map(|value| value.trim().to_string())
+                .filter(|value| !value.is_empty()),
             created_at,
             updated_at,
         })
@@ -283,6 +325,15 @@ impl AgentProfile {
         self.allowed_tools
             .binary_search_by(|candidate| candidate.as_str().cmp(tool_id))
             .is_ok()
+            || (tool_id.starts_with("mcp__")
+                && (self
+                    .allowed_tools
+                    .binary_search_by(|candidate| candidate.as_str().cmp("mcp"))
+                    .is_ok()
+                    || self
+                        .allowed_tools
+                        .binary_search_by(|candidate| candidate.as_str().cmp("mcp_call"))
+                        .is_ok()))
     }
 }
 
@@ -672,6 +723,35 @@ mod tests {
             schedule.last_error.as_deref(),
             Some("tool execution failed")
         );
+    }
+
+    #[test]
+    fn agent_schedule_supports_once_mode_for_one_shot_continuations() {
+        let schedule = AgentSchedule::new(AgentScheduleInit {
+            id: "continue-later".to_string(),
+            agent_profile_id: "default".to_string(),
+            workspace_root: PathBuf::from("/tmp/project"),
+            prompt: "resume from handoff".to_string(),
+            mode: AgentScheduleMode::Once,
+            delivery_mode: AgentScheduleDeliveryMode::ExistingSession,
+            target_session_id: Some("session-bound".to_string()),
+            interval_seconds: 900,
+            next_fire_at: 42,
+            enabled: true,
+            last_triggered_at: None,
+            last_finished_at: None,
+            last_session_id: None,
+            last_job_id: None,
+            last_result: None,
+            last_error: None,
+            created_at: 10,
+            updated_at: 11,
+        })
+        .expect("schedule");
+
+        assert_eq!(schedule.mode, AgentScheduleMode::Once);
+        assert_eq!(schedule.interval_seconds, 900);
+        assert!(schedule.enabled);
     }
 
     #[test]

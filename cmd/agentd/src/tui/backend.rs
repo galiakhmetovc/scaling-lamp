@@ -1,10 +1,16 @@
 use crate::bootstrap::{
-    App, BootstrapError, SessionPendingApproval, SessionPreferencesPatch, SessionSkillStatus,
-    SessionSummary, SessionTranscriptView,
+    AgentScheduleCreateOptions, AgentScheduleUpdatePatch, AgentScheduleView, App, BootstrapError,
+    McpConnectorCreateOptions, McpConnectorUpdatePatch, McpConnectorView, SessionPendingApproval,
+    SessionPreferencesPatch, SessionSkillStatus, SessionSummary, SessionTranscriptView,
+    render_mcp_connector_view, render_mcp_connectors_view,
 };
 use crate::execution::{ApprovalContinuationReport, ChatExecutionEvent, ChatTurnExecutionReport};
 use crate::http::client::DaemonClient;
+use agent_runtime::tool::{
+    KnowledgeReadInput, KnowledgeSearchInput, SessionReadInput, SessionSearchInput,
+};
 use std::sync::atomic::AtomicBool;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 pub trait TuiBackend: Clone + Send + Sync + 'static {
     fn render_agents(&self) -> Result<String, BootstrapError>;
@@ -16,8 +22,33 @@ pub trait TuiBackend: Clone + Send + Sync + 'static {
         template_identifier: Option<&str>,
     ) -> Result<String, BootstrapError>;
     fn open_agent_home(&self, identifier: Option<&str>) -> Result<String, BootstrapError>;
+    fn send_agent_message(
+        &self,
+        session_id: &str,
+        target_agent_id: &str,
+        message: &str,
+    ) -> Result<String, BootstrapError>;
+    fn grant_chain_continuation(
+        &self,
+        session_id: &str,
+        chain_id: &str,
+        reason: &str,
+    ) -> Result<String, BootstrapError>;
     fn render_agent_schedules(&self) -> Result<String, BootstrapError>;
     fn render_agent_schedule(&self, id: &str) -> Result<String, BootstrapError>;
+    fn load_agent_schedule(&self, id: &str) -> Result<AgentScheduleView, BootstrapError>;
+    fn create_agent_schedule_with_options(
+        &self,
+        id: &str,
+        options: AgentScheduleCreateOptions,
+    ) -> Result<String, BootstrapError>;
+    fn update_agent_schedule(
+        &self,
+        id: &str,
+        patch: AgentScheduleUpdatePatch,
+    ) -> Result<String, BootstrapError>;
+    fn set_agent_schedule_enabled(&self, id: &str, enabled: bool)
+    -> Result<String, BootstrapError>;
     fn create_agent_schedule(
         &self,
         id: &str,
@@ -26,6 +57,22 @@ pub trait TuiBackend: Clone + Send + Sync + 'static {
         agent_identifier: Option<&str>,
     ) -> Result<String, BootstrapError>;
     fn delete_agent_schedule(&self, id: &str) -> Result<String, BootstrapError>;
+    fn render_mcp_connectors(&self) -> Result<String, BootstrapError>;
+    fn render_mcp_connector(&self, id: &str) -> Result<String, BootstrapError>;
+    fn load_mcp_connector(&self, id: &str) -> Result<McpConnectorView, BootstrapError>;
+    fn create_mcp_connector(
+        &self,
+        id: &str,
+        options: McpConnectorCreateOptions,
+    ) -> Result<String, BootstrapError>;
+    fn update_mcp_connector(
+        &self,
+        id: &str,
+        patch: McpConnectorUpdatePatch,
+    ) -> Result<String, BootstrapError>;
+    fn set_mcp_connector_enabled(&self, id: &str, enabled: bool) -> Result<String, BootstrapError>;
+    fn restart_mcp_connector(&self, id: &str) -> Result<String, BootstrapError>;
+    fn delete_mcp_connector(&self, id: &str) -> Result<String, BootstrapError>;
     fn list_session_summaries(&self) -> Result<Vec<SessionSummary>, BootstrapError>;
     fn create_session_auto(&self, title: Option<&str>) -> Result<SessionSummary, BootstrapError>;
     fn update_session_preferences(
@@ -67,13 +114,24 @@ pub trait TuiBackend: Clone + Send + Sync + 'static {
     fn render_plan(&self, session_id: &str) -> Result<String, BootstrapError>;
     fn render_artifacts(&self, session_id: &str) -> Result<String, BootstrapError>;
     fn read_artifact(&self, session_id: &str, artifact_id: &str) -> Result<String, BootstrapError>;
+    fn render_session_memory_search(
+        &self,
+        input: SessionSearchInput,
+    ) -> Result<String, BootstrapError>;
+    fn render_session_memory_read(&self, input: SessionReadInput)
+    -> Result<String, BootstrapError>;
+    fn render_knowledge_search(
+        &self,
+        input: KnowledgeSearchInput,
+    ) -> Result<String, BootstrapError>;
+    fn render_knowledge_read(&self, input: KnowledgeReadInput) -> Result<String, BootstrapError>;
     fn render_active_jobs(&self, session_id: &str) -> Result<String, BootstrapError>;
     fn render_active_run(&self, session_id: &str) -> Result<String, BootstrapError>;
     fn cancel_active_run(&self, session_id: &str, now: i64) -> Result<String, BootstrapError>;
     fn cancel_all_session_work(&self, session_id: &str, now: i64)
     -> Result<String, BootstrapError>;
     fn render_version_info(&self) -> Result<String, BootstrapError>;
-    fn update_runtime(&self) -> Result<String, BootstrapError>;
+    fn update_runtime(&self, tag: Option<&str>) -> Result<String, BootstrapError>;
     fn write_debug_bundle(&self, session_id: &str) -> Result<String, BootstrapError>;
     fn compact_session(&self, session_id: &str) -> Result<SessionSummary, BootstrapError>;
     fn execute_chat_turn_with_control_and_observer(
@@ -126,12 +184,86 @@ impl TuiBackend for App {
         App::render_agent_home(self, identifier)
     }
 
+    fn send_agent_message(
+        &self,
+        session_id: &str,
+        target_agent_id: &str,
+        message: &str,
+    ) -> Result<String, BootstrapError> {
+        App::send_session_agent_message(
+            self,
+            session_id,
+            target_agent_id,
+            message,
+            unix_timestamp()?,
+        )
+    }
+
+    fn grant_chain_continuation(
+        &self,
+        session_id: &str,
+        chain_id: &str,
+        reason: &str,
+    ) -> Result<String, BootstrapError> {
+        App::grant_session_chain_continuation(self, session_id, chain_id, reason, unix_timestamp()?)
+    }
+
     fn render_agent_schedules(&self) -> Result<String, BootstrapError> {
         App::render_agent_schedules(self)
     }
 
     fn render_agent_schedule(&self, id: &str) -> Result<String, BootstrapError> {
         App::render_agent_schedule(self, id)
+    }
+
+    fn load_agent_schedule(&self, id: &str) -> Result<AgentScheduleView, BootstrapError> {
+        App::agent_schedule_view(self, id)
+    }
+
+    fn create_agent_schedule_with_options(
+        &self,
+        id: &str,
+        options: AgentScheduleCreateOptions,
+    ) -> Result<String, BootstrapError> {
+        let schedule = App::create_agent_schedule_with_options(self, id, options)?;
+        Ok(format!(
+            "создано расписание {} agent={} interval={}s",
+            schedule.id, schedule.agent_profile_id, schedule.interval_seconds
+        ))
+    }
+
+    fn update_agent_schedule(
+        &self,
+        id: &str,
+        patch: AgentScheduleUpdatePatch,
+    ) -> Result<String, BootstrapError> {
+        let schedule = App::update_agent_schedule(self, id, patch)?;
+        Ok(format!(
+            "обновлено расписание {} agent={} mode={} delivery={} enabled={} interval={}s",
+            schedule.id,
+            schedule.agent_profile_id,
+            schedule.mode.as_str(),
+            schedule.delivery_mode.as_str(),
+            schedule.enabled,
+            schedule.interval_seconds
+        ))
+    }
+
+    fn set_agent_schedule_enabled(
+        &self,
+        id: &str,
+        enabled: bool,
+    ) -> Result<String, BootstrapError> {
+        let schedule = App::set_agent_schedule_enabled(self, id, enabled)?;
+        Ok(format!(
+            "расписание {} {}",
+            schedule.id,
+            if schedule.enabled {
+                "включено"
+            } else {
+                "выключено"
+            }
+        ))
     }
 
     fn create_agent_schedule(
@@ -141,8 +273,19 @@ impl TuiBackend for App {
         prompt: &str,
         agent_identifier: Option<&str>,
     ) -> Result<String, BootstrapError> {
-        let schedule =
-            App::create_agent_schedule(self, id, interval_seconds, prompt, agent_identifier)?;
+        let schedule = App::create_agent_schedule_with_options(
+            self,
+            id,
+            AgentScheduleCreateOptions {
+                agent_identifier: agent_identifier.map(str::to_string),
+                prompt: prompt.to_string(),
+                mode: agent_runtime::agent::AgentScheduleMode::Interval,
+                delivery_mode: agent_runtime::agent::AgentScheduleDeliveryMode::FreshSession,
+                target_session_id: None,
+                interval_seconds,
+                enabled: true,
+            },
+        )?;
         Ok(format!(
             "создано расписание {} agent={} interval={}s",
             schedule.id, schedule.agent_profile_id, schedule.interval_seconds
@@ -155,6 +298,65 @@ impl TuiBackend for App {
         } else {
             Err(BootstrapError::MissingRecord {
                 kind: "agent schedule",
+                id: id.to_string(),
+            })
+        }
+    }
+
+    fn render_mcp_connectors(&self) -> Result<String, BootstrapError> {
+        App::render_mcp_connectors(self)
+    }
+
+    fn render_mcp_connector(&self, id: &str) -> Result<String, BootstrapError> {
+        App::render_mcp_connector(self, id)
+    }
+
+    fn load_mcp_connector(&self, id: &str) -> Result<McpConnectorView, BootstrapError> {
+        App::mcp_connector(self, id)
+    }
+
+    fn create_mcp_connector(
+        &self,
+        id: &str,
+        options: McpConnectorCreateOptions,
+    ) -> Result<String, BootstrapError> {
+        let connector = App::create_mcp_connector(self, id, options)?;
+        Ok(format!("создан MCP коннектор {}", connector.id))
+    }
+
+    fn update_mcp_connector(
+        &self,
+        id: &str,
+        patch: McpConnectorUpdatePatch,
+    ) -> Result<String, BootstrapError> {
+        let connector = App::update_mcp_connector(self, id, patch)?;
+        Ok(format!("обновлён MCP коннектор {}", connector.id))
+    }
+
+    fn set_mcp_connector_enabled(&self, id: &str, enabled: bool) -> Result<String, BootstrapError> {
+        let connector = App::set_mcp_connector_enabled(self, id, enabled)?;
+        Ok(format!(
+            "MCP коннектор {} {}",
+            connector.id,
+            if connector.enabled {
+                "включен"
+            } else {
+                "выключен"
+            }
+        ))
+    }
+
+    fn restart_mcp_connector(&self, id: &str) -> Result<String, BootstrapError> {
+        let connector = App::restart_mcp_connector(self, id)?;
+        Ok(format!("MCP коннектор {} перезапущен", connector.id))
+    }
+
+    fn delete_mcp_connector(&self, id: &str) -> Result<String, BootstrapError> {
+        if App::delete_mcp_connector(self, id)? {
+            Ok(format!("MCP коннектор {id} удалён"))
+        } else {
+            Err(BootstrapError::MissingRecord {
+                kind: "mcp connector",
                 id: id.to_string(),
             })
         }
@@ -254,6 +456,31 @@ impl TuiBackend for App {
         App::read_session_artifact(self, session_id, artifact_id)
     }
 
+    fn render_session_memory_search(
+        &self,
+        input: SessionSearchInput,
+    ) -> Result<String, BootstrapError> {
+        App::render_session_memory_search(self, input)
+    }
+
+    fn render_session_memory_read(
+        &self,
+        input: SessionReadInput,
+    ) -> Result<String, BootstrapError> {
+        App::render_session_memory_read(self, input)
+    }
+
+    fn render_knowledge_search(
+        &self,
+        input: KnowledgeSearchInput,
+    ) -> Result<String, BootstrapError> {
+        App::render_knowledge_search(self, input)
+    }
+
+    fn render_knowledge_read(&self, input: KnowledgeReadInput) -> Result<String, BootstrapError> {
+        App::render_knowledge_read(self, input)
+    }
+
     fn render_active_jobs(&self, session_id: &str) -> Result<String, BootstrapError> {
         App::render_session_background_jobs(self, session_id)
     }
@@ -278,8 +505,8 @@ impl TuiBackend for App {
         App::render_version_info(self)
     }
 
-    fn update_runtime(&self) -> Result<String, BootstrapError> {
-        App::update_runtime_binary(self)
+    fn update_runtime(&self, tag: Option<&str>) -> Result<String, BootstrapError> {
+        App::update_runtime_binary(self, tag)
     }
 
     fn write_debug_bundle(&self, session_id: &str) -> Result<String, BootstrapError> {
@@ -327,6 +554,13 @@ impl TuiBackend for App {
     }
 }
 
+fn unix_timestamp() -> Result<i64, BootstrapError> {
+    let duration = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_err(|error| BootstrapError::Stream(std::io::Error::other(error.to_string())))?;
+    Ok(duration.as_secs() as i64)
+}
+
 impl TuiBackend for DaemonClient {
     fn render_agents(&self) -> Result<String, BootstrapError> {
         DaemonClient::render_agents(self)
@@ -352,12 +586,65 @@ impl TuiBackend for DaemonClient {
         DaemonClient::open_agent_home(self, identifier)
     }
 
+    fn send_agent_message(
+        &self,
+        session_id: &str,
+        target_agent_id: &str,
+        message: &str,
+    ) -> Result<String, BootstrapError> {
+        DaemonClient::send_agent_message(self, session_id, target_agent_id, message)
+    }
+
+    fn grant_chain_continuation(
+        &self,
+        session_id: &str,
+        chain_id: &str,
+        reason: &str,
+    ) -> Result<String, BootstrapError> {
+        DaemonClient::grant_chain_continuation(self, session_id, chain_id, reason)
+    }
+
     fn render_agent_schedules(&self) -> Result<String, BootstrapError> {
         DaemonClient::render_agent_schedules(self)
     }
 
     fn render_agent_schedule(&self, id: &str) -> Result<String, BootstrapError> {
         DaemonClient::render_agent_schedule(self, id)
+    }
+
+    fn load_agent_schedule(&self, id: &str) -> Result<AgentScheduleView, BootstrapError> {
+        DaemonClient::resolve_agent_schedule(self, id)
+    }
+
+    fn create_agent_schedule_with_options(
+        &self,
+        id: &str,
+        options: AgentScheduleCreateOptions,
+    ) -> Result<String, BootstrapError> {
+        DaemonClient::create_agent_schedule_with_options(self, id, options)
+    }
+
+    fn update_agent_schedule(
+        &self,
+        id: &str,
+        patch: AgentScheduleUpdatePatch,
+    ) -> Result<String, BootstrapError> {
+        DaemonClient::update_agent_schedule(self, id, patch)
+    }
+
+    fn set_agent_schedule_enabled(
+        &self,
+        id: &str,
+        enabled: bool,
+    ) -> Result<String, BootstrapError> {
+        DaemonClient::update_agent_schedule(
+            self,
+            id,
+            AgentScheduleUpdatePatch {
+                enabled: Some(enabled),
+                ..AgentScheduleUpdatePatch::default()
+            },
+        )
     }
 
     fn create_agent_schedule(
@@ -372,6 +659,70 @@ impl TuiBackend for DaemonClient {
 
     fn delete_agent_schedule(&self, id: &str) -> Result<String, BootstrapError> {
         DaemonClient::delete_agent_schedule(self, id)
+    }
+
+    fn render_mcp_connectors(&self) -> Result<String, BootstrapError> {
+        Ok(render_mcp_connectors_view(
+            &DaemonClient::list_mcp_connectors(self)?,
+        ))
+    }
+
+    fn render_mcp_connector(&self, id: &str) -> Result<String, BootstrapError> {
+        Ok(render_mcp_connector_view(&DaemonClient::mcp_connector(
+            self, id,
+        )?))
+    }
+
+    fn load_mcp_connector(&self, id: &str) -> Result<McpConnectorView, BootstrapError> {
+        DaemonClient::mcp_connector(self, id)
+    }
+
+    fn create_mcp_connector(
+        &self,
+        id: &str,
+        options: McpConnectorCreateOptions,
+    ) -> Result<String, BootstrapError> {
+        let connector = DaemonClient::create_mcp_connector(self, id, options)?;
+        Ok(format!("создан MCP коннектор {}", connector.id))
+    }
+
+    fn update_mcp_connector(
+        &self,
+        id: &str,
+        patch: McpConnectorUpdatePatch,
+    ) -> Result<String, BootstrapError> {
+        let connector = DaemonClient::update_mcp_connector(self, id, patch)?;
+        Ok(format!("обновлён MCP коннектор {}", connector.id))
+    }
+
+    fn set_mcp_connector_enabled(&self, id: &str, enabled: bool) -> Result<String, BootstrapError> {
+        let connector = DaemonClient::update_mcp_connector(
+            self,
+            id,
+            McpConnectorUpdatePatch {
+                enabled: Some(enabled),
+                ..McpConnectorUpdatePatch::default()
+            },
+        )?;
+        Ok(format!(
+            "MCP коннектор {} {}",
+            connector.id,
+            if connector.enabled {
+                "включен"
+            } else {
+                "выключен"
+            }
+        ))
+    }
+
+    fn restart_mcp_connector(&self, id: &str) -> Result<String, BootstrapError> {
+        let connector = DaemonClient::restart_mcp_connector(self, id)?;
+        Ok(format!("MCP коннектор {} перезапущен", connector.id))
+    }
+
+    fn delete_mcp_connector(&self, id: &str) -> Result<String, BootstrapError> {
+        DaemonClient::delete_mcp_connector(self, id)?;
+        Ok(format!("MCP коннектор {id} удалён"))
     }
 
     fn list_session_summaries(&self) -> Result<Vec<SessionSummary>, BootstrapError> {
@@ -468,6 +819,31 @@ impl TuiBackend for DaemonClient {
         DaemonClient::read_session_artifact(self, session_id, artifact_id)
     }
 
+    fn render_session_memory_search(
+        &self,
+        input: SessionSearchInput,
+    ) -> Result<String, BootstrapError> {
+        DaemonClient::render_session_memory_search(self, input)
+    }
+
+    fn render_session_memory_read(
+        &self,
+        input: SessionReadInput,
+    ) -> Result<String, BootstrapError> {
+        DaemonClient::render_session_memory_read(self, input)
+    }
+
+    fn render_knowledge_search(
+        &self,
+        input: KnowledgeSearchInput,
+    ) -> Result<String, BootstrapError> {
+        DaemonClient::render_knowledge_search(self, input)
+    }
+
+    fn render_knowledge_read(&self, input: KnowledgeReadInput) -> Result<String, BootstrapError> {
+        DaemonClient::render_knowledge_read(self, input)
+    }
+
     fn render_active_jobs(&self, session_id: &str) -> Result<String, BootstrapError> {
         DaemonClient::render_session_background_jobs(self, session_id)
     }
@@ -492,8 +868,8 @@ impl TuiBackend for DaemonClient {
         DaemonClient::about(self)
     }
 
-    fn update_runtime(&self) -> Result<String, BootstrapError> {
-        DaemonClient::update_runtime(self)
+    fn update_runtime(&self, tag: Option<&str>) -> Result<String, BootstrapError> {
+        DaemonClient::update_runtime(self, tag)
     }
 
     fn write_debug_bundle(&self, session_id: &str) -> Result<String, BootstrapError> {

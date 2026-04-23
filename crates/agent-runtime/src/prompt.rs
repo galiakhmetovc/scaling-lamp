@@ -1,3 +1,4 @@
+use crate::agent::{AgentScheduleDeliveryMode, AgentScheduleMode};
 use crate::context::{ContextOffloadSnapshot, ContextSummary};
 use crate::plan::PlanSnapshot;
 use crate::provider::ProviderMessage;
@@ -25,6 +26,18 @@ pub struct SessionHeadWorkspaceEntry {
     pub kind: SessionHeadWorkspaceEntryKind,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SessionHeadScheduleSummary {
+    pub id: String,
+    pub mode: AgentScheduleMode,
+    pub delivery_mode: AgentScheduleDeliveryMode,
+    pub enabled: bool,
+    pub next_fire_at: i64,
+    pub target_session_id: Option<String>,
+    pub last_result: Option<String>,
+    pub last_error: Option<String>,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SessionHeadWorkspaceEntryKind {
     File,
@@ -35,6 +48,9 @@ pub enum SessionHeadWorkspaceEntryKind {
 pub struct SessionHead {
     pub session_id: String,
     pub title: String,
+    pub agent_profile_id: String,
+    pub agent_name: String,
+    pub schedule: Option<SessionHeadScheduleSummary>,
     pub message_count: usize,
     pub context_tokens: u32,
     pub compactifications: u32,
@@ -53,10 +69,30 @@ impl SessionHead {
         let mut lines = vec![
             format!("Session: {}", self.title),
             format!("Session ID: {}", self.session_id),
+            format!("Agent: {} ({})", self.agent_name, self.agent_profile_id),
             format!("Messages: {}", self.message_count),
             format!("Context Tokens: {}", self.context_tokens),
             format!("Compactifications: {}", self.compactifications),
         ];
+        if let Some(schedule) = self.schedule.as_ref() {
+            lines.push(format!(
+                "Schedule: {} mode={} delivery={} enabled={} next_fire_at={}",
+                schedule.id,
+                schedule.mode.as_str(),
+                schedule.delivery_mode.as_str(),
+                schedule.enabled,
+                schedule.next_fire_at
+            ));
+            if let Some(target_session_id) = schedule.target_session_id.as_deref() {
+                lines.push(format!("Schedule Target: {target_session_id}"));
+            }
+            if let Some(last_result) = schedule.last_result.as_deref() {
+                lines.push(format!("Schedule Last Result: {last_result}"));
+            }
+            if let Some(last_error) = schedule.last_error.as_deref() {
+                lines.push(format!("Schedule Last Error: {last_error}"));
+            }
+        }
         if self.summary_covered_message_count > 0 {
             lines.push(format!(
                 "Summary Covers: {} messages",
@@ -244,8 +280,10 @@ fn render_context_offload_refs(snapshot: &ContextOffloadSnapshot) -> Option<Stri
 mod tests {
     use super::{
         PromptAssembly, PromptAssemblyInput, SessionHead, SessionHeadFsActivity,
-        SessionHeadProcessActivity, SessionHeadWorkspaceEntry, SessionHeadWorkspaceEntryKind,
+        SessionHeadProcessActivity, SessionHeadScheduleSummary, SessionHeadWorkspaceEntry,
+        SessionHeadWorkspaceEntryKind,
     };
+    use crate::agent::{AgentScheduleDeliveryMode, AgentScheduleMode};
     use crate::context::{ContextOffloadRef, ContextOffloadSnapshot, ContextSummary};
     use crate::plan::PlanSnapshot;
     use crate::provider::ProviderMessage;
@@ -256,6 +294,18 @@ mod tests {
         let rendered = SessionHead {
             session_id: "session-1".to_string(),
             title: "Compacted Chat".to_string(),
+            agent_profile_id: "judge".to_string(),
+            agent_name: "Judge".to_string(),
+            schedule: Some(SessionHeadScheduleSummary {
+                id: "judge-pulse".to_string(),
+                mode: AgentScheduleMode::Interval,
+                delivery_mode: AgentScheduleDeliveryMode::FreshSession,
+                enabled: true,
+                next_fire_at: 77,
+                target_session_id: None,
+                last_result: Some("running".to_string()),
+                last_error: None,
+            }),
             message_count: 8,
             context_tokens: 42,
             compactifications: 1,
@@ -307,6 +357,11 @@ mod tests {
 
         assert!(rendered.contains("Session: Compacted Chat"));
         assert!(rendered.contains("Session ID: session-1"));
+        assert!(rendered.contains("Agent: Judge (judge)"));
+        assert!(rendered.contains(
+            "Schedule: judge-pulse mode=interval delivery=fresh_session enabled=true next_fire_at=77"
+        ));
+        assert!(rendered.contains("Schedule Last Result: running"));
         assert!(rendered.contains("Messages: 8"));
         assert!(rendered.contains("Context Tokens: 42"));
         assert!(rendered.contains("Compactifications: 1"));
@@ -334,6 +389,9 @@ mod tests {
             session_head: Some(SessionHead {
                 session_id: "session-1".to_string(),
                 title: "Compacted Chat".to_string(),
+                agent_profile_id: "default".to_string(),
+                agent_name: "Assistant".to_string(),
+                schedule: None,
                 message_count: 8,
                 context_tokens: 42,
                 compactifications: 1,
@@ -425,6 +483,9 @@ mod tests {
             session_head: Some(SessionHead {
                 session_id: "session-1".to_string(),
                 title: "Plan Chat".to_string(),
+                agent_profile_id: "default".to_string(),
+                agent_name: "Assistant".to_string(),
+                schedule: None,
                 message_count: 3,
                 context_tokens: 9,
                 compactifications: 0,
@@ -491,6 +552,9 @@ mod tests {
             session_head: Some(SessionHead {
                 session_id: "session-1".to_string(),
                 title: "Prompt Order".to_string(),
+                agent_profile_id: "default".to_string(),
+                agent_name: "Assistant".to_string(),
+                schedule: None,
                 message_count: 2,
                 context_tokens: 8,
                 compactifications: 0,

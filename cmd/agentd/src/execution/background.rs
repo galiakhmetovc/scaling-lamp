@@ -20,6 +20,8 @@ impl ExecutionService {
         provider: &dyn ProviderDriver,
         now: i64,
     ) -> Result<BackgroundWorkerTickReport, ExecutionError> {
+        self.maintain_mcp_connectors(store, now)?;
+        self.maintain_memory(store, now)?;
         let fired_schedules = self.dispatch_due_agent_schedules(store, now)?;
         let supervisor = self.supervisor_tick(store, now, &[])?;
         let mut report = BackgroundWorkerTickReport {
@@ -549,7 +551,9 @@ impl ExecutionService {
                             .map_err(ExecutionError::Store)?;
                         continue;
                     }
-                    AgentScheduleMode::AfterCompletion => {}
+                    AgentScheduleMode::AfterCompletion | AgentScheduleMode::Once => {
+                        continue;
+                    }
                 }
             }
 
@@ -594,8 +598,14 @@ impl ExecutionService {
             schedule.last_job_id = Some(job_id);
             schedule.last_result = Some("running".to_string());
             schedule.last_error = None;
-            if schedule.mode == AgentScheduleMode::Interval {
-                schedule.next_fire_at = advance_interval_schedule_cadence(&schedule, now);
+            match schedule.mode {
+                AgentScheduleMode::Interval => {
+                    schedule.next_fire_at = advance_interval_schedule_cadence(&schedule, now);
+                }
+                AgentScheduleMode::Once => {
+                    schedule.enabled = false;
+                }
+                AgentScheduleMode::AfterCompletion => {}
             }
             schedule.updated_at = now;
             store
@@ -770,7 +780,7 @@ impl ExecutionService {
         .map_err(ExecutionError::RecordConversion)
     }
 
-    fn session_has_active_run(
+    pub(crate) fn session_has_active_run(
         &self,
         store: &PersistenceStore,
         session_id: &str,

@@ -1,13 +1,17 @@
 use super::*;
 use crate::http::types::{
     ClearSessionRequest, CreateSessionRequest, DebugBundleResponse, ErrorResponse,
-    SessionArtifactResponse, SessionArtifactsResponse, SessionBackgroundJobResponse,
-    SessionBackgroundJobsResponse, SessionDetailResponse, SessionPendingApprovalsResponse,
+    MemoryRenderResponse, SessionAgentMessageRequest, SessionArtifactResponse,
+    SessionArtifactsResponse, SessionBackgroundJobResponse, SessionBackgroundJobsResponse,
+    SessionChainGrantRequest, SessionDetailResponse, SessionPendingApprovalsResponse,
     SessionPreferencesRequest, SessionRunControlResponse, SessionRunStatusResponse,
     SessionSkillsResponse, SessionSummaryResponse, SessionSystemResponse,
     SessionTranscriptResponse, SkillCommandRequest,
 };
 use agent_persistence::{AgentRepository, SessionRepository};
+use agent_runtime::tool::{
+    KnowledgeReadInput, KnowledgeSearchInput, SessionReadInput, SessionSearchInput,
+};
 use std::time::{SystemTime, UNIX_EPOCH};
 use tiny_http::Method;
 
@@ -64,6 +68,85 @@ pub(super) fn handle_list_sessions(app: &App, request: Request) -> std::io::Resu
         }
     };
     respond_json(request, StatusCode(200), &sessions)
+}
+
+pub(super) fn handle_memory_session_search(app: &App, mut request: Request) -> std::io::Result<()> {
+    match parse_json_body::<SessionSearchInput>(&mut request) {
+        Ok(input) => match app.render_session_memory_search(input) {
+            Ok(memory) => respond_json(request, StatusCode(200), &MemoryRenderResponse { memory }),
+            Err(error) => {
+                let (status, payload) = map_bootstrap_error(error);
+                respond_json(request, status, &payload)
+            }
+        },
+        Err(error) => respond_json(
+            request,
+            StatusCode(400),
+            &ErrorResponse {
+                error: format!("invalid session memory search request: {error}"),
+            },
+        ),
+    }
+}
+
+pub(super) fn handle_memory_session_read(app: &App, mut request: Request) -> std::io::Result<()> {
+    match parse_json_body::<SessionReadInput>(&mut request) {
+        Ok(input) => match app.render_session_memory_read(input) {
+            Ok(memory) => respond_json(request, StatusCode(200), &MemoryRenderResponse { memory }),
+            Err(error) => {
+                let (status, payload) = map_bootstrap_error(error);
+                respond_json(request, status, &payload)
+            }
+        },
+        Err(error) => respond_json(
+            request,
+            StatusCode(400),
+            &ErrorResponse {
+                error: format!("invalid session memory read request: {error}"),
+            },
+        ),
+    }
+}
+
+pub(super) fn handle_memory_knowledge_search(
+    app: &App,
+    mut request: Request,
+) -> std::io::Result<()> {
+    match parse_json_body::<KnowledgeSearchInput>(&mut request) {
+        Ok(input) => match app.render_knowledge_search(input) {
+            Ok(memory) => respond_json(request, StatusCode(200), &MemoryRenderResponse { memory }),
+            Err(error) => {
+                let (status, payload) = map_bootstrap_error(error);
+                respond_json(request, status, &payload)
+            }
+        },
+        Err(error) => respond_json(
+            request,
+            StatusCode(400),
+            &ErrorResponse {
+                error: format!("invalid knowledge memory search request: {error}"),
+            },
+        ),
+    }
+}
+
+pub(super) fn handle_memory_knowledge_read(app: &App, mut request: Request) -> std::io::Result<()> {
+    match parse_json_body::<KnowledgeReadInput>(&mut request) {
+        Ok(input) => match app.render_knowledge_read(input) {
+            Ok(memory) => respond_json(request, StatusCode(200), &MemoryRenderResponse { memory }),
+            Err(error) => {
+                let (status, payload) = map_bootstrap_error(error);
+                respond_json(request, status, &payload)
+            }
+        },
+        Err(error) => respond_json(
+            request,
+            StatusCode(400),
+            &ErrorResponse {
+                error: format!("invalid knowledge memory read request: {error}"),
+            },
+        ),
+    }
 }
 
 pub(super) fn handle_nested_routes(app: &App, request: Request) -> std::io::Result<()> {
@@ -150,6 +233,12 @@ pub(super) fn handle_nested_routes(app: &App, request: Request) -> std::io::Resu
         }
         (Method::Post, [session_id, cancel_all]) if cancel_all == "cancel-all-work" => {
             handle_cancel_all_session_work(app, request, session_id.as_str())
+        }
+        (Method::Post, [session_id, agent_message]) if agent_message == "agent-message" => {
+            handle_send_agent_message(app, request, session_id.as_str())
+        }
+        (Method::Post, [session_id, chain_grant]) if chain_grant == "chain-grant" => {
+            handle_grant_chain_continuation(app, request, session_id.as_str())
         }
         _ => respond_json(
             request,
@@ -351,10 +440,7 @@ fn handle_render_active_run(app: &App, request: Request, session_id: &str) -> st
 }
 
 fn handle_cancel_active_run(app: &App, request: Request, session_id: &str) -> std::io::Result<()> {
-    let now = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|duration| duration.as_secs() as i64)
-        .unwrap_or(0);
+    let now = current_unix_timestamp();
     match app.cancel_latest_session_run(session_id, now) {
         Ok(message) => respond_json(
             request,
@@ -373,10 +459,7 @@ fn handle_cancel_all_session_work(
     request: Request,
     session_id: &str,
 ) -> std::io::Result<()> {
-    let now = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|duration| duration.as_secs() as i64)
-        .unwrap_or_default();
+    let now = current_unix_timestamp();
 
     match app.cancel_all_session_work(session_id, now) {
         Ok(message) => respond_json(
@@ -389,6 +472,85 @@ fn handle_cancel_all_session_work(
             respond_json(request, status, &payload)
         }
     }
+}
+
+fn handle_send_agent_message(
+    app: &App,
+    mut request: Request,
+    session_id: &str,
+) -> std::io::Result<()> {
+    let payload = match parse_json_body::<SessionAgentMessageRequest>(&mut request) {
+        Ok(payload) => payload,
+        Err(error) => {
+            return respond_json(
+                request,
+                StatusCode(400),
+                &ErrorResponse {
+                    error: format!("invalid session agent message request: {error}"),
+                },
+            );
+        }
+    };
+
+    match app.send_session_agent_message(
+        session_id,
+        payload.target_agent_id.as_str(),
+        payload.message.as_str(),
+        current_unix_timestamp(),
+    ) {
+        Ok(message) => respond_json(
+            request,
+            StatusCode(200),
+            &SessionRunControlResponse { message },
+        ),
+        Err(error) => {
+            let (status, payload) = map_bootstrap_error(error);
+            respond_json(request, status, &payload)
+        }
+    }
+}
+
+fn handle_grant_chain_continuation(
+    app: &App,
+    mut request: Request,
+    session_id: &str,
+) -> std::io::Result<()> {
+    let payload = match parse_json_body::<SessionChainGrantRequest>(&mut request) {
+        Ok(payload) => payload,
+        Err(error) => {
+            return respond_json(
+                request,
+                StatusCode(400),
+                &ErrorResponse {
+                    error: format!("invalid session chain grant request: {error}"),
+                },
+            );
+        }
+    };
+
+    match app.grant_session_chain_continuation(
+        session_id,
+        payload.chain_id.as_str(),
+        payload.reason.as_str(),
+        current_unix_timestamp(),
+    ) {
+        Ok(message) => respond_json(
+            request,
+            StatusCode(200),
+            &SessionRunControlResponse { message },
+        ),
+        Err(error) => {
+            let (status, payload) = map_bootstrap_error(error);
+            respond_json(request, status, &payload)
+        }
+    }
+}
+
+fn current_unix_timestamp() -> i64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_secs() as i64)
+        .unwrap_or_default()
 }
 
 fn handle_session_skills(app: &App, request: Request, session_id: &str) -> std::io::Result<()> {

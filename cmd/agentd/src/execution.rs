@@ -1,10 +1,13 @@
 #![cfg_attr(not(test), allow(dead_code))]
 
+mod autonomy;
 mod background;
 mod chat;
 mod delegate_jobs;
 mod delegation;
 mod interagent;
+mod mcp;
+mod memory;
 mod mission;
 mod provider_loop;
 mod supervisor;
@@ -12,11 +15,12 @@ mod tools;
 mod wakeup;
 
 use crate::a2a::A2AClient;
+use crate::mcp::SharedMcpRegistry;
 use agent_persistence::{
     A2APeerConfig, AgentRepository, ContextOffloadRepository, ContextSummaryRepository, JobRecord,
-    JobRepository, MissionRecord, MissionRepository, PersistenceStore, PlanRecord, PlanRepository,
-    RecordConversionError, RunRecord, RunRepository, SessionInboxRepository, SessionRepository,
-    StoreError, TranscriptRecord, TranscriptRepository,
+    JobRepository, McpRepository, MissionRecord, MissionRepository, PersistenceStore, PlanRecord,
+    PlanRepository, RecordConversionError, RunRecord, RunRepository, SessionInboxRepository,
+    SessionRepository, StoreError, TranscriptRecord, TranscriptRepository,
 };
 use agent_runtime::agent::AgentProfile;
 use agent_runtime::inbox::SessionInboxEvent;
@@ -190,6 +194,7 @@ pub struct ExecutionService {
     supervisor: SupervisorLoop,
     workspace: WorkspaceRef,
     processes: SharedProcessRegistry,
+    mcp: SharedMcpRegistry,
     a2a: A2AClient,
 }
 
@@ -245,6 +250,7 @@ impl Default for ExecutionService {
             PermissionConfig::default(),
             WorkspaceRef::default(),
             SharedProcessRegistry::default(),
+            SharedMcpRegistry::default(),
             ExecutionServiceConfig {
                 skills_dir: PathBuf::from("skills"),
                 ..ExecutionServiceConfig::default()
@@ -258,6 +264,7 @@ impl ExecutionService {
         permissions: PermissionConfig,
         workspace: WorkspaceRef,
         processes: SharedProcessRegistry,
+        mcp: SharedMcpRegistry,
         config: ExecutionServiceConfig,
     ) -> Self {
         Self {
@@ -266,6 +273,7 @@ impl ExecutionService {
             supervisor: SupervisorLoop::default(),
             workspace,
             processes,
+            mcp,
             a2a: A2AClient::default(),
         }
     }

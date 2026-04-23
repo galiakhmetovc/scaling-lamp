@@ -10,6 +10,7 @@ pub(super) fn prepare_layout(layout: &StoreLayout) -> Result<(), StoreError> {
     create_directory(&layout.runs_dir)?;
     create_directory(&layout.transcripts_dir)?;
     create_directory(&layout.artifacts_dir)?;
+    create_directory(&layout.archives_dir)?;
     Ok(())
 }
 

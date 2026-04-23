@@ -15,11 +15,14 @@ libc = "0.2"
 pulldown-cmark.workspace = true
 ratatui = { workspace = true, features = ["unstable-rendered-line-info"] }
 reqwest.workspace = true
+rmcp = { version = "0.16", features = ["client", "transport-child-process"] }
 rusqlite.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+sha2.workspace = true
 time.workspace = true
 tiny_http.workspace = true
+tokio = { version = "1", features = ["process", "rt", "time"] }
 unicode-width.workspace = true
 
 [dev-dependencies]

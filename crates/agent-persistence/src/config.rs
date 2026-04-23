@@ -1,3 +1,4 @@
+use agent_runtime::mcp::McpConnectorTransport;
 use agent_runtime::permission::{PermissionConfig, PermissionMode};
 use agent_runtime::provider::{ConfiguredProvider, ProviderKind};
 use agent_runtime::{context::CompactionPolicy, session::SessionSettings};
@@ -34,6 +35,7 @@ pub struct DaemonConfig {
     pub skills_dir: PathBuf,
     pub public_base_url: Option<String>,
     pub a2a_peers: BTreeMap<String, A2APeerConfig>,
+    pub mcp_connectors: BTreeMap<String, McpConnectorSeedConfig>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
@@ -57,6 +59,17 @@ pub struct ContextConfig {
 pub struct A2APeerConfig {
     pub base_url: String,
     pub bearer_token: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(default)]
+pub struct McpConnectorSeedConfig {
+    pub transport: McpConnectorTransport,
+    pub command: String,
+    pub args: Vec<String>,
+    pub env: BTreeMap<String, String>,
+    pub cwd: Option<PathBuf>,
+    pub enabled: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -140,6 +153,20 @@ impl Default for DaemonConfig {
             skills_dir: PathBuf::from(DEFAULT_DAEMON_SKILLS_DIR),
             public_base_url: None,
             a2a_peers: BTreeMap::new(),
+            mcp_connectors: BTreeMap::new(),
+        }
+    }
+}
+
+impl Default for McpConnectorSeedConfig {
+    fn default() -> Self {
+        Self {
+            transport: McpConnectorTransport::Stdio,
+            command: String::new(),
+            args: Vec::new(),
+            env: BTreeMap::new(),
+            cwd: None,
+            enabled: true,
         }
     }
 }

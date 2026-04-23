@@ -24,7 +24,7 @@ use agent_runtime::tool::{
     AddTaskNoteOutput, AddTaskOutput, ArtifactReadOutput, ArtifactSearchOutput,
     ArtifactSearchResult, EditTaskOutput, InitPlanOutput, PlanLintOutput, PlanReadOutput,
     PlanSnapshotOutput, PlanWriteOutput, SetTaskStatusOutput, ToolCatalog, ToolDefinition,
-    ToolName, ToolOutput, ToolRuntime,
+    ToolFamily, ToolName, ToolOutput, ToolPolicy, ToolRuntime,
 };
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread;
@@ -368,6 +368,23 @@ impl ProviderLoopCursor {
     }
 }
 
+fn normalized_mcp_pagination(
+    total: usize,
+    offset: Option<usize>,
+    limit: Option<usize>,
+    default_limit: usize,
+    max_limit: usize,
+) -> (usize, usize, Option<usize>) {
+    let offset = offset.unwrap_or(0).min(total);
+    let limit = limit.unwrap_or(default_limit).clamp(1, max_limit);
+    let next_offset = if offset.saturating_add(limit) < total {
+        Some(offset + limit)
+    } else {
+        None
+    };
+    (offset, limit, next_offset)
+}
+
 impl ExecutionService {
     fn is_stale_context_offload_payload_error(error: &agent_persistence::StoreError) -> bool {
         match error {
@@ -611,7 +628,7 @@ impl ExecutionService {
         }
 
         let has_context_offload = context_offload.is_some_and(|snapshot| !snapshot.is_empty());
-        ToolCatalog::default()
+        let mut tools = ToolCatalog::default()
             .automatic_model_definitions()
             .into_iter()
             .filter(|definition| {
@@ -627,7 +644,23 @@ impl ExecutionService {
                 description: definition.description.to_string(),
                 parameters: definition.name.input_schema(),
             })
-            .collect()
+            .collect::<Vec<_>>();
+
+        tools.extend(
+            self.mcp
+                .list_discovered_tools()
+                .into_iter()
+                .filter(|tool| agent_profile.allows_tool_id(tool.exposed_name.as_str()))
+                .map(|tool| ProviderToolDefinition {
+                    name: tool.exposed_name,
+                    description: tool
+                        .description
+                        .unwrap_or_else(|| format!("MCP tool {}", tool.remote_name)),
+                    parameters: tool.input_schema,
+                }),
+        );
+
+        tools
     }
 
     fn prompt_messages(
@@ -687,8 +720,36 @@ impl ExecutionService {
             .map(RunSnapshot::try_from)
             .collect::<Result<Vec<_>, _>>()
             .map_err(ExecutionError::RecordConversion)?;
+        let agent_name = store
+            .get_agent_profile(&session.agent_profile_id)
+            .map_err(ExecutionError::Store)?
+            .map(|record| record.name)
+            .unwrap_or_else(|| session.agent_profile_id.clone());
+        let schedule = session
+            .delegation_label
+            .as_deref()
+            .and_then(|label| label.strip_prefix("agent-schedule:"))
+            .map(str::to_string)
+            .map(|schedule_id| {
+                store
+                    .get_agent_schedule(&schedule_id)
+                    .map_err(ExecutionError::Store)?
+                    .map(agent_runtime::agent::AgentSchedule::try_from)
+                    .transpose()
+                    .map_err(ExecutionError::RecordConversion)
+                    .map(|maybe| {
+                        maybe
+                            .map(crate::bootstrap::SessionScheduleSummary::from)
+                            .as_ref()
+                            .map(crate::bootstrap::session_head_schedule_summary)
+                    })
+            })
+            .transpose()?
+            .flatten();
         let session_head = prompting::build_session_head(
             &session,
+            &agent_name,
+            schedule,
             &transcripts,
             context_summary.as_ref(),
             &runs,
@@ -1219,23 +1280,47 @@ impl ExecutionService {
         }
     }
 
-    fn resolve_provider_tool_call<'a>(
+    fn resolve_provider_tool_call(
         &self,
-        catalog: &'a ToolCatalog,
+        catalog: &ToolCatalog,
         tool_call: &ProviderToolCall,
-    ) -> Result<(ToolCall, &'a ToolDefinition), ExecutionError> {
+    ) -> Result<(ToolCall, ToolDefinition), ExecutionError> {
         let parsed = ToolCall::from_openai_function(&tool_call.name, &tool_call.arguments)
             .map_err(|source| ExecutionError::ToolCallParse {
                 name: tool_call.name.clone(),
                 reason: source.to_string(),
             })?;
-        let definition =
-            catalog
-                .definition_for_call(&parsed)
+        if let ToolCall::McpCall(input) = &parsed {
+            let discovered = self
+                .mcp
+                .list_discovered_tools()
+                .into_iter()
+                .find(|tool| tool.exposed_name == input.exposed_name)
                 .ok_or_else(|| ExecutionError::ToolCallParse {
                     name: tool_call.name.clone(),
-                    reason: "tool is not in the catalog".to_string(),
+                    reason: format!("unknown MCP tool {}", input.exposed_name),
                 })?;
+            return Ok((
+                parsed,
+                ToolDefinition {
+                    name: ToolName::McpCall,
+                    family: ToolFamily::Mcp,
+                    description: "invoke a discovered MCP tool",
+                    policy: ToolPolicy {
+                        read_only: discovered.read_only,
+                        destructive: discovered.destructive,
+                        requires_approval: discovered.destructive || !discovered.read_only,
+                    },
+                },
+            ));
+        }
+        let definition = catalog
+            .definition_for_call(&parsed)
+            .ok_or_else(|| ExecutionError::ToolCallParse {
+                name: tool_call.name.clone(),
+                reason: "tool is not in the catalog".to_string(),
+            })?
+            .clone();
         Ok((parsed, definition))
     }
 
@@ -1401,6 +1486,78 @@ impl ExecutionService {
                     input.limit,
                 )?,
             )),
+            ToolCall::KnowledgeSearch(input) => Ok(ToolOutput::KnowledgeSearch(
+                self.search_knowledge(store, input)?,
+            )),
+            ToolCall::KnowledgeRead(input) => Ok(ToolOutput::KnowledgeRead(
+                self.read_knowledge(store, input)?,
+            )),
+            ToolCall::McpCall(input) => Ok(ToolOutput::McpCall(
+                self.mcp
+                    .call_tool(&input.exposed_name, &input.arguments_json)
+                    .map_err(|reason| {
+                        ExecutionError::Tool(agent_runtime::tool::ToolError::InvalidMcpTool {
+                            reason,
+                        })
+                    })?,
+            )),
+            ToolCall::McpSearchResources(input) => Ok(ToolOutput::McpSearchResources(
+                self.search_mcp_resources(input),
+            )),
+            ToolCall::McpReadResource(input) => Ok(ToolOutput::McpReadResource(
+                self.mcp
+                    .read_resource(&input.connector_id, &input.uri)
+                    .map_err(|reason| {
+                        ExecutionError::Tool(agent_runtime::tool::ToolError::InvalidMcpTool {
+                            reason,
+                        })
+                    })?,
+            )),
+            ToolCall::McpSearchPrompts(input) => {
+                Ok(ToolOutput::McpSearchPrompts(self.search_mcp_prompts(input)))
+            }
+            ToolCall::McpGetPrompt(input) => Ok(ToolOutput::McpGetPrompt(
+                self.mcp
+                    .get_prompt(&input.connector_id, &input.name, input.arguments.clone())
+                    .map_err(|reason| {
+                        ExecutionError::Tool(agent_runtime::tool::ToolError::InvalidMcpTool {
+                            reason,
+                        })
+                    })?,
+            )),
+            ToolCall::SessionSearch(input) => Ok(ToolOutput::SessionSearch(
+                self.search_sessions(store, input)?,
+            )),
+            ToolCall::SessionRead(input) => {
+                Ok(ToolOutput::SessionRead(self.read_session(store, input)?))
+            }
+            ToolCall::AgentList(input) => {
+                Ok(ToolOutput::AgentList(self.list_tool_agents(store, input)?))
+            }
+            ToolCall::AgentRead(input) => {
+                Ok(ToolOutput::AgentRead(self.read_tool_agent(store, input)?))
+            }
+            ToolCall::AgentCreate(input) => Ok(ToolOutput::AgentCreate(
+                self.create_tool_agent(store, session_id, input, now)?,
+            )),
+            ToolCall::ContinueLater(input) => Ok(ToolOutput::ContinueLater(
+                self.continue_later_tool(store, session_id, input, now)?,
+            )),
+            ToolCall::ScheduleList(input) => Ok(ToolOutput::ScheduleList(
+                self.list_tool_schedules(store, input)?,
+            )),
+            ToolCall::ScheduleRead(input) => Ok(ToolOutput::ScheduleRead(
+                self.read_tool_schedule(store, input)?,
+            )),
+            ToolCall::ScheduleCreate(input) => Ok(ToolOutput::ScheduleCreate(
+                self.create_tool_schedule(store, session_id, input, now)?,
+            )),
+            ToolCall::ScheduleUpdate(input) => Ok(ToolOutput::ScheduleUpdate(
+                self.update_tool_schedule(store, session_id, input, now)?,
+            )),
+            ToolCall::ScheduleDelete(input) => Ok(ToolOutput::ScheduleDelete(
+                self.delete_tool_schedule(store, input)?,
+            )),
             ToolCall::MessageAgent(input) => Ok(ToolOutput::MessageAgent(
                 self.queue_interagent_message(store, session_id, input, now)?,
             )),
@@ -1412,6 +1569,164 @@ impl ExecutionService {
             _ => tool_runtime
                 .invoke(parsed.clone())
                 .map_err(ExecutionError::Tool),
+        }
+    }
+
+    fn search_mcp_resources(
+        &self,
+        input: &agent_runtime::tool::McpSearchResourcesInput,
+    ) -> agent_runtime::tool::McpSearchResourcesOutput {
+        const DEFAULT_LIMIT: usize = 20;
+        const MAX_LIMIT: usize = 100;
+
+        let query = input
+            .query
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_string);
+        let query_lower = query.as_ref().map(|value| value.to_ascii_lowercase());
+
+        let mut results = self
+            .mcp
+            .list_discovered_resources(input.connector_id.as_deref())
+            .into_iter()
+            .filter(|resource| {
+                query_lower.as_ref().is_none_or(|needle| {
+                    resource.uri.to_ascii_lowercase().contains(needle)
+                        || resource.name.to_ascii_lowercase().contains(needle)
+                        || resource
+                            .title
+                            .as_ref()
+                            .is_some_and(|value| value.to_ascii_lowercase().contains(needle))
+                        || resource
+                            .description
+                            .as_ref()
+                            .is_some_and(|value| value.to_ascii_lowercase().contains(needle))
+                        || resource
+                            .mime_type
+                            .as_ref()
+                            .is_some_and(|value| value.to_ascii_lowercase().contains(needle))
+                })
+            })
+            .map(
+                |resource| agent_runtime::tool::McpDiscoveredResourceOutput {
+                    connector_id: resource.connector_id,
+                    uri: resource.uri,
+                    name: resource.name,
+                    title: resource.title,
+                    description: resource.description,
+                    mime_type: resource.mime_type,
+                },
+            )
+            .collect::<Vec<_>>();
+        results.sort_by(|left, right| {
+            left.connector_id
+                .cmp(&right.connector_id)
+                .then_with(|| left.uri.cmp(&right.uri))
+        });
+
+        let (offset, limit, next_offset) = normalized_mcp_pagination(
+            results.len(),
+            input.offset,
+            input.limit,
+            DEFAULT_LIMIT,
+            MAX_LIMIT,
+        );
+        let end = offset.saturating_add(limit).min(results.len());
+        let page = results[offset..end].to_vec();
+
+        agent_runtime::tool::McpSearchResourcesOutput {
+            connector_id: input.connector_id.clone(),
+            query,
+            results: page,
+            truncated: next_offset.is_some(),
+            offset,
+            limit,
+            total_results: results.len(),
+            next_offset,
+        }
+    }
+
+    fn search_mcp_prompts(
+        &self,
+        input: &agent_runtime::tool::McpSearchPromptsInput,
+    ) -> agent_runtime::tool::McpSearchPromptsOutput {
+        const DEFAULT_LIMIT: usize = 20;
+        const MAX_LIMIT: usize = 100;
+
+        let query = input
+            .query
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_string);
+        let query_lower = query.as_ref().map(|value| value.to_ascii_lowercase());
+
+        let mut results = self
+            .mcp
+            .list_discovered_prompts(input.connector_id.as_deref())
+            .into_iter()
+            .filter(|prompt| {
+                query_lower.as_ref().is_none_or(|needle| {
+                    prompt.name.to_ascii_lowercase().contains(needle)
+                        || prompt
+                            .title
+                            .as_ref()
+                            .is_some_and(|value| value.to_ascii_lowercase().contains(needle))
+                        || prompt
+                            .description
+                            .as_ref()
+                            .is_some_and(|value| value.to_ascii_lowercase().contains(needle))
+                        || prompt.arguments.iter().any(|argument| {
+                            argument.name.to_ascii_lowercase().contains(needle)
+                                || argument.description.as_ref().is_some_and(|value| {
+                                    value.to_ascii_lowercase().contains(needle)
+                                })
+                        })
+                })
+            })
+            .map(|prompt| agent_runtime::tool::McpDiscoveredPromptOutput {
+                connector_id: prompt.connector_id,
+                name: prompt.name,
+                title: prompt.title,
+                description: prompt.description,
+                arguments: prompt
+                    .arguments
+                    .into_iter()
+                    .map(|argument| agent_runtime::tool::McpPromptArgumentOutput {
+                        name: argument.name,
+                        description: argument.description,
+                        required: argument.required,
+                    })
+                    .collect(),
+            })
+            .collect::<Vec<_>>();
+        results.sort_by(|left, right| {
+            left.connector_id
+                .cmp(&right.connector_id)
+                .then_with(|| left.name.cmp(&right.name))
+        });
+
+        let (offset, limit, next_offset) = normalized_mcp_pagination(
+            results.len(),
+            input.offset,
+            input.limit,
+            DEFAULT_LIMIT,
+            MAX_LIMIT,
+        );
+        let end = offset.saturating_add(limit).min(results.len());
+        let page = results[offset..end].to_vec();
+
+        agent_runtime::tool::McpSearchPromptsOutput {
+            connector_id: input.connector_id.clone(),
+            query,
+            results: page,
+            truncated: next_offset.is_some(),
+            offset,
+            limit,
+            total_results: results.len(),
+            next_offset,
         }
     }
 
@@ -2402,7 +2717,7 @@ impl ExecutionService {
                     }
                     return Err(error);
                 }
-                let permission = self.permissions.resolve(definition, &parsed);
+                let permission = self.permissions.resolve(&definition, &parsed);
 
                 match permission.action {
                     PermissionAction::Allow => {}

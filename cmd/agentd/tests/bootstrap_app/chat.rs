@@ -1,4 +1,10 @@
 use super::support::*;
+use agent_runtime::tool::{McpPromptMessageOutput, McpResourceContentOutput};
+use agentd::mcp::{
+    McpDiscoveredPrompt, McpDiscoveredPromptArgument, McpDiscoveredResource, McpDiscoveredTool,
+    MockMcpConnectorRuntime, MockMcpPromptGet, MockMcpResourceRead, MockMcpToolResult,
+    SharedMcpRegistry,
+};
 
 #[test]
 fn execute_chat_turn_creates_a_run_and_appends_transcript_history() {
@@ -246,6 +252,338 @@ fn execute_chat_turn_can_finish_after_an_allowed_web_tool_call() {
     assert!(normalized_web.contains("get "));
     assert!(normalized_web.contains("/doc"));
     assert!(web_base.contains("127.0.0.1"));
+}
+
+#[test]
+fn execute_chat_turn_can_finish_after_a_dynamic_mcp_tool_call() {
+    let first_provider_response = r#"{
+                "id":"resp_mcp_tool_call",
+                "model":"gpt-5.4",
+                "output":[
+                    {
+                        "id":"fc_mcp_1",
+                        "type":"function_call",
+                        "status":"completed",
+                        "call_id":"call_mcp_search_code",
+                        "name":"mcp__docs__search_code",
+                        "arguments":"{\"query\":\"MCP\"}"
+                    }
+                ],
+                "usage":{"input_tokens":19,"output_tokens":7,"total_tokens":26}
+            }"#;
+    let (provider_api_base, provider_requests, provider_handle) = spawn_json_server_sequence(vec![
+        first_provider_response.to_string(),
+        r#"{
+                    "id":"resp_mcp_tool_final",
+                    "model":"gpt-5.4",
+                    "output":[
+                        {
+                            "id":"msg_1",
+                            "type":"message",
+                            "status":"completed",
+                            "role":"assistant",
+                            "content":[
+                                {
+                                    "type":"output_text",
+                                    "text":"Used MCP docs search"
+                                }
+                            ]
+                        }
+                    ],
+                    "usage":{"input_tokens":31,"output_tokens":4,"total_tokens":35}
+                }"#
+        .to_string(),
+    ]);
+    let temp = tempfile::tempdir().expect("tempdir");
+    let mut app = build_from_config(AppConfig {
+        data_dir: temp.path().join("state-root"),
+        daemon: Default::default(),
+        provider: ConfiguredProvider {
+            kind: ProviderKind::OpenAiResponses,
+            api_base: Some(format!("{provider_api_base}/v1")),
+            api_key: Some("test-key".to_string()),
+            default_model: Some("gpt-5.4".to_string()),
+            ..ConfiguredProvider::default()
+        },
+        ..AppConfig::default()
+    })
+    .expect("build app");
+    app.mcp = SharedMcpRegistry::with_mock_connectors(vec![MockMcpConnectorRuntime {
+        id: "docs".to_string(),
+        tools: vec![McpDiscoveredTool {
+            exposed_name: "mcp__docs__search_code".to_string(),
+            remote_name: "search_code".to_string(),
+            title: Some("Search code".to_string()),
+            description: Some("Search code through MCP".to_string()),
+            input_schema: serde_json::json!({
+                "type":"object",
+                "properties":{"query":{"type":"string"}},
+                "required":["query"],
+                "additionalProperties": false
+            }),
+            read_only: true,
+            destructive: false,
+        }],
+        resources: Vec::new(),
+        prompts: Vec::new(),
+        tool_results: std::collections::BTreeMap::from([(
+            "search_code".to_string(),
+            MockMcpToolResult {
+                content_text: "MCP docs search hit".to_string(),
+                structured_content: Some(serde_json::json!({
+                    "matches":[{"path":"docs/mcp.md","line":12}]
+                })),
+                is_error: false,
+            },
+        )]),
+        resource_reads: std::collections::BTreeMap::new(),
+        prompt_gets: std::collections::BTreeMap::new(),
+    }]);
+    let store = PersistenceStore::open(&app.persistence).expect("open store");
+
+    store
+        .put_session(&SessionRecord {
+            id: "session-chat-mcp".to_string(),
+            title: "Chat MCP session".to_string(),
+            prompt_override: Some("Use MCP when useful.".to_string()),
+            settings_json: serde_json::to_string(&SessionSettings::default())
+                .expect("serialize settings"),
+            agent_profile_id: "default".to_string(),
+            active_mission_id: None,
+            parent_session_id: None,
+            parent_job_id: None,
+            delegation_label: None,
+            created_at: 1,
+            updated_at: 1,
+        })
+        .expect("put session");
+
+    let report = app
+        .execute_chat_turn("session-chat-mcp", "Search MCP docs", 10)
+        .expect("execute chat turn");
+    let first_request = provider_requests.recv().expect("first provider request");
+    let second_request = provider_requests.recv().expect("second provider request");
+    provider_handle.join().expect("join provider server");
+
+    assert_eq!(report.response_id, "resp_mcp_tool_final");
+    assert_eq!(report.output_text, "Used MCP docs search");
+
+    let normalized_first = first_request.to_ascii_lowercase();
+    assert!(normalized_first.contains("\"name\":\"mcp__docs__search_code\""));
+
+    let normalized_second = second_request.to_ascii_lowercase();
+    assert!(normalized_second.contains("\"call_id\":\"call_mcp_search_code\""));
+    assert!(normalized_second.contains("mcp docs search hit"));
+    assert!(normalized_second.contains("docs/mcp.md"));
+}
+
+#[test]
+fn execute_chat_turn_can_finish_after_mcp_resource_and_prompt_utility_calls() {
+    let (provider_api_base, provider_requests, provider_handle) = spawn_json_server_sequence(vec![
+        r#"{
+                "id":"resp_mcp_search_resources",
+                "model":"gpt-5.4",
+                "output":[
+                    {
+                        "id":"fc_mcp_resources",
+                        "type":"function_call",
+                        "status":"completed",
+                        "call_id":"call_mcp_resources",
+                        "name":"mcp_search_resources",
+                        "arguments":"{\"connector_id\":\"docs\",\"query\":\"runbook\"}"
+                    }
+                ],
+                "usage":{"input_tokens":20,"output_tokens":7,"total_tokens":27}
+            }"#
+        .to_string(),
+        r#"{
+                "id":"resp_mcp_read_resource",
+                "model":"gpt-5.4",
+                "output":[
+                    {
+                        "id":"fc_mcp_read_resource",
+                        "type":"function_call",
+                        "status":"completed",
+                        "call_id":"call_mcp_read_resource",
+                        "name":"mcp_read_resource",
+                        "arguments":"{\"connector_id\":\"docs\",\"uri\":\"file:///docs/runbook.md\"}"
+                    }
+                ],
+                "usage":{"input_tokens":25,"output_tokens":8,"total_tokens":33}
+            }"#
+        .to_string(),
+        r#"{
+                "id":"resp_mcp_search_prompts",
+                "model":"gpt-5.4",
+                "output":[
+                    {
+                        "id":"fc_mcp_prompts",
+                        "type":"function_call",
+                        "status":"completed",
+                        "call_id":"call_mcp_prompts",
+                        "name":"mcp_search_prompts",
+                        "arguments":"{\"connector_id\":\"docs\",\"query\":\"triage\"}"
+                    }
+                ],
+                "usage":{"input_tokens":24,"output_tokens":7,"total_tokens":31}
+            }"#
+        .to_string(),
+        r#"{
+                "id":"resp_mcp_get_prompt",
+                "model":"gpt-5.4",
+                "output":[
+                    {
+                        "id":"fc_mcp_get_prompt",
+                        "type":"function_call",
+                        "status":"completed",
+                        "call_id":"call_mcp_get_prompt",
+                        "name":"mcp_get_prompt",
+                        "arguments":"{\"connector_id\":\"docs\",\"name\":\"incident_triage\",\"arguments\":{\"service\":\"api\"}}"
+                    }
+                ],
+                "usage":{"input_tokens":28,"output_tokens":9,"total_tokens":37}
+            }"#
+        .to_string(),
+        r#"{
+                "id":"resp_mcp_resources_and_prompts_final",
+                "model":"gpt-5.4",
+                "output":[
+                    {
+                        "id":"msg_mcp_resources_prompts_done",
+                        "type":"message",
+                        "status":"completed",
+                        "role":"assistant",
+                        "content":[
+                            {
+                                "type":"output_text",
+                                "text":"Used MCP resources and prompts"
+                            }
+                        ]
+                    }
+                ],
+                "usage":{"input_tokens":36,"output_tokens":5,"total_tokens":41}
+            }"#
+        .to_string(),
+    ]);
+    let temp = tempfile::tempdir().expect("tempdir");
+    let mut app = build_from_config(AppConfig {
+        data_dir: temp.path().join("state-root"),
+        daemon: Default::default(),
+        provider: ConfiguredProvider {
+            kind: ProviderKind::OpenAiResponses,
+            api_base: Some(format!("{provider_api_base}/v1")),
+            api_key: Some("test-key".to_string()),
+            default_model: Some("gpt-5.4".to_string()),
+            ..ConfiguredProvider::default()
+        },
+        ..AppConfig::default()
+    })
+    .expect("build app");
+    app.mcp = SharedMcpRegistry::with_mock_connectors(vec![MockMcpConnectorRuntime {
+        id: "docs".to_string(),
+        tools: Vec::new(),
+        resources: vec![McpDiscoveredResource {
+            connector_id: "docs".to_string(),
+            uri: "file:///docs/runbook.md".to_string(),
+            name: "runbook".to_string(),
+            title: Some("Incident runbook".to_string()),
+            description: Some("Production runbook".to_string()),
+            mime_type: Some("text/markdown".to_string()),
+        }],
+        prompts: vec![McpDiscoveredPrompt {
+            connector_id: "docs".to_string(),
+            name: "incident_triage".to_string(),
+            title: Some("Incident triage".to_string()),
+            description: Some("Prompt for incident triage".to_string()),
+            arguments: vec![McpDiscoveredPromptArgument {
+                name: "service".to_string(),
+                description: Some("Service name".to_string()),
+                required: false,
+            }],
+        }],
+        tool_results: std::collections::BTreeMap::new(),
+        resource_reads: std::collections::BTreeMap::from([(
+            "file:///docs/runbook.md".to_string(),
+            MockMcpResourceRead {
+                text: "Runbook says restart the API deployment.".to_string(),
+                contents: vec![McpResourceContentOutput {
+                    kind: "text".to_string(),
+                    uri: "file:///docs/runbook.md".to_string(),
+                    mime_type: Some("text/markdown".to_string()),
+                    text: Some("Runbook says restart the API deployment.".to_string()),
+                    blob: None,
+                }],
+            },
+        )]),
+        prompt_gets: std::collections::BTreeMap::from([(
+            "incident_triage".to_string(),
+            MockMcpPromptGet {
+                description: Some("Prompt for incident triage".to_string()),
+                text: "Investigate the api service and summarize probable causes.".to_string(),
+                messages: vec![McpPromptMessageOutput {
+                    role: "user".to_string(),
+                    content_type: "text".to_string(),
+                    text: Some(
+                        "Investigate the api service and summarize probable causes.".to_string(),
+                    ),
+                    uri: None,
+                    mime_type: None,
+                }],
+            },
+        )]),
+    }]);
+    let store = PersistenceStore::open(&app.persistence).expect("open store");
+
+    store
+        .put_session(&SessionRecord {
+            id: "session-chat-mcp-resources-prompts".to_string(),
+            title: "Chat MCP resource and prompt session".to_string(),
+            prompt_override: Some("Use MCP resources and prompts when useful.".to_string()),
+            settings_json: serde_json::to_string(&SessionSettings::default())
+                .expect("serialize settings"),
+            agent_profile_id: "default".to_string(),
+            active_mission_id: None,
+            parent_session_id: None,
+            parent_job_id: None,
+            delegation_label: None,
+            created_at: 1,
+            updated_at: 1,
+        })
+        .expect("put session");
+
+    let report = app
+        .execute_chat_turn(
+            "session-chat-mcp-resources-prompts",
+            "Use docs MCP context",
+            10,
+        )
+        .expect("execute chat turn");
+    let first_request = provider_requests.recv().expect("first provider request");
+    let second_request = provider_requests.recv().expect("second provider request");
+    let third_request = provider_requests.recv().expect("third provider request");
+    let fourth_request = provider_requests.recv().expect("fourth provider request");
+    let fifth_request = provider_requests.recv().expect("fifth provider request");
+    provider_handle.join().expect("join provider server");
+
+    assert_eq!(report.response_id, "resp_mcp_resources_and_prompts_final");
+    assert_eq!(report.output_text, "Used MCP resources and prompts");
+
+    let normalized_first = first_request.to_ascii_lowercase();
+    assert!(normalized_first.contains("\"name\":\"mcp_search_resources\""));
+
+    let normalized_second = second_request.to_ascii_lowercase();
+    assert!(normalized_second.contains("file:///docs/runbook.md"));
+
+    let normalized_third = third_request.to_ascii_lowercase();
+    assert!(normalized_third.contains("\"name\":\"mcp_search_prompts\""));
+    assert!(normalized_third.contains("restart the api deployment"));
+
+    let normalized_fourth = fourth_request.to_ascii_lowercase();
+    assert!(normalized_fourth.contains("\"name\":\"mcp_get_prompt\""));
+    assert!(normalized_fourth.contains("incident_triage"));
+
+    let normalized_fifth = fifth_request.to_ascii_lowercase();
+    assert!(normalized_fifth.contains("investigate the api service"));
 }
 
 #[test]

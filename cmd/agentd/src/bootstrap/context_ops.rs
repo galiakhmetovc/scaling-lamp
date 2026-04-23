@@ -10,7 +10,45 @@ use agent_runtime::session::{MessageRole, Session};
 use agent_runtime::skills::{
     parse_skill_document, resolve_session_skill_status, scan_skill_catalog_with_overrides,
 };
+use agent_runtime::tool::{
+    KnowledgeReadInput, KnowledgeReadOutput, KnowledgeSearchInput, KnowledgeSearchOutput,
+    SessionReadInput, SessionReadOutput, SessionSearchInput, SessionSearchOutput,
+};
 use std::path::PathBuf;
+
+fn load_session_head_metadata(
+    store: &PersistenceStore,
+    session: &Session,
+) -> Result<
+    (
+        String,
+        Option<agent_runtime::prompt::SessionHeadScheduleSummary>,
+    ),
+    BootstrapError,
+> {
+    let agent_name = store
+        .get_agent_profile(&session.agent_profile_id)?
+        .map(|record| record.name)
+        .unwrap_or_else(|| session.agent_profile_id.clone());
+    let schedule = session
+        .delegation_label
+        .as_deref()
+        .and_then(|label| label.strip_prefix("agent-schedule:"))
+        .map(str::to_string)
+        .map(|schedule_id| {
+            store
+                .get_agent_schedule(&schedule_id)?
+                .map(AgentSchedule::try_from)
+                .transpose()
+                .map_err(BootstrapError::RecordConversion)
+                .map(|maybe| maybe.map(SessionScheduleSummary::from))
+        })
+        .transpose()?
+        .flatten()
+        .as_ref()
+        .map(crate::bootstrap::session_head_schedule_summary);
+    Ok((agent_name, schedule))
+}
 
 impl App {
     fn compaction_policy(&self) -> CompactionPolicy {
@@ -45,9 +83,12 @@ impl App {
             .map(RunSnapshot::try_from)
             .collect::<Result<Vec<_>, _>>()
             .map_err(BootstrapError::RecordConversion)?;
+        let (agent_name, schedule) = load_session_head_metadata(&store, &session)?;
 
         Ok(prompting::build_session_head(
             &session,
+            &agent_name,
+            schedule,
             &transcripts,
             context_summary.as_ref(),
             &runs,
@@ -182,6 +223,58 @@ impl App {
     }
 
     #[cfg_attr(not(test), allow(dead_code))]
+    pub fn render_session_memory_search(
+        &self,
+        input: SessionSearchInput,
+    ) -> Result<String, BootstrapError> {
+        let store = self.store()?;
+        let output = self
+            .execution_service()
+            .search_sessions(&store, &input)
+            .map_err(BootstrapError::Execution)?;
+        Ok(render_session_search_output(&output))
+    }
+
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub fn render_session_memory_read(
+        &self,
+        input: SessionReadInput,
+    ) -> Result<String, BootstrapError> {
+        let store = self.store()?;
+        let output = self
+            .execution_service()
+            .read_session(&store, &input)
+            .map_err(BootstrapError::Execution)?;
+        Ok(render_session_read_output(&output))
+    }
+
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub fn render_knowledge_search(
+        &self,
+        input: KnowledgeSearchInput,
+    ) -> Result<String, BootstrapError> {
+        let store = self.store()?;
+        let output = self
+            .execution_service()
+            .search_knowledge(&store, &input)
+            .map_err(BootstrapError::Execution)?;
+        Ok(render_knowledge_search_output(&output))
+    }
+
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub fn render_knowledge_read(
+        &self,
+        input: KnowledgeReadInput,
+    ) -> Result<String, BootstrapError> {
+        let store = self.store()?;
+        let output = self
+            .execution_service()
+            .read_knowledge(&store, &input)
+            .map_err(BootstrapError::Execution)?;
+        Ok(render_knowledge_read_output(&output))
+    }
+
+    #[cfg_attr(not(test), allow(dead_code))]
     pub fn render_context_state(&self, session_id: &str) -> Result<String, BootstrapError> {
         let store = self.store()?;
         let session = Session::try_from(store.get_session(session_id)?.ok_or_else(|| {
@@ -209,8 +302,11 @@ impl App {
             .map(RunSnapshot::try_from)
             .collect::<Result<Vec<_>, _>>()
             .map_err(BootstrapError::RecordConversion)?;
+        let (agent_name, schedule) = load_session_head_metadata(&store, &session)?;
         let session_head = prompting::build_session_head(
             &session,
+            &agent_name,
+            schedule,
             &transcripts,
             context_summary.as_ref(),
             &runs,
@@ -229,6 +325,9 @@ impl App {
         let offload_tokens = context_offload
             .as_ref()
             .map_or(0u32, |snapshot| snapshot.total_token_estimate());
+        let offload_messages = context_offload
+            .as_ref()
+            .map_or(0u32, total_offload_message_count);
 
         let mut lines = vec![
             "Context:".to_string(),
@@ -253,6 +352,7 @@ impl App {
             ),
             format!("offload_tokens={offload_tokens}"),
             format!("offload_refs={offload_refs}"),
+            format!("offload_messages={offload_messages}"),
             format!("compactifications={}", session.settings.compactifications),
             format!(
                 "compaction_manual={} threshold_messages={} keep_tail={}",
@@ -269,6 +369,12 @@ impl App {
         } else {
             lines.push("summary_covers_messages=0".to_string());
             lines.push("summary_updated_at=<none>".to_string());
+        }
+        if let Some(snapshot) = context_offload.as_ref() {
+            lines.push(format!("offload_updated_at={}", snapshot.updated_at));
+            lines.extend(render_offload_snapshot_lines(snapshot));
+        } else {
+            lines.push("offload_updated_at=<none>".to_string());
         }
 
         Ok(lines.join("\n"))
@@ -313,8 +419,11 @@ impl App {
             .map(RunSnapshot::try_from)
             .collect::<Result<Vec<_>, _>>()
             .map_err(BootstrapError::RecordConversion)?;
+        let (agent_name, schedule) = load_session_head_metadata(&store, &session)?;
         let session_head = prompting::build_session_head(
             &session,
+            &agent_name,
+            schedule,
             &transcripts,
             context_summary.as_ref(),
             &runs,
@@ -341,6 +450,7 @@ impl App {
             &transcript_entries,
         );
         let agent_profile = self.agent_profile(&session.agent_profile_id)?;
+        let interagent = super::session_ops::load_session_interagent_summary(&store, session_id)?;
 
         let mut lines = vec![
             "Системные блоки:".to_string(),
@@ -367,11 +477,86 @@ impl App {
             "[AGENTS.md]".to_string(),
             agents_prompt.unwrap_or_else(|| "<none>".to_string()),
             String::new(),
+            "[InterAgent]".to_string(),
+            String::new(),
             "[SessionHead]".to_string(),
             session_head.render(),
             String::new(),
             "[Plan]".to_string(),
         ];
+
+        match interagent.as_ref() {
+            Some(summary) => {
+                lines.insert(
+                    lines.len().saturating_sub(4),
+                    format!(
+                        "continuation_grant_pending={}",
+                        summary.continuation_grant_pending
+                    ),
+                );
+                if let Some(delegation_label) = summary.delegation_label.as_deref() {
+                    lines.insert(
+                        lines.len().saturating_sub(4),
+                        format!("delegation_label={delegation_label}"),
+                    );
+                }
+                if let Some(parent_session_id) = summary.parent_session_id.as_deref() {
+                    lines.insert(
+                        lines.len().saturating_sub(4),
+                        format!("parent_session_id={parent_session_id}"),
+                    );
+                }
+                if let Some(parent_interagent_session_id) =
+                    summary.parent_interagent_session_id.as_deref()
+                {
+                    lines.insert(
+                        lines.len().saturating_sub(4),
+                        format!("parent_interagent_session_id={parent_interagent_session_id}"),
+                    );
+                }
+                if let Some(recipient_session_id) = summary.recipient_session_id.as_deref() {
+                    lines.insert(
+                        lines.len().saturating_sub(4),
+                        format!("recipient_session_id={recipient_session_id}"),
+                    );
+                }
+                if let Some(target_agent_id) = summary.target_agent_id.as_deref() {
+                    lines.insert(
+                        lines.len().saturating_sub(4),
+                        format!("target_agent_id={target_agent_id}"),
+                    );
+                }
+                if let Some(origin_agent_id) = summary.origin_agent_id.as_deref() {
+                    lines.insert(
+                        lines.len().saturating_sub(4),
+                        format!("origin_agent_id={origin_agent_id}"),
+                    );
+                }
+                if let Some(origin_session_id) = summary.origin_session_id.as_deref() {
+                    lines.insert(
+                        lines.len().saturating_sub(4),
+                        format!("origin_session_id={origin_session_id}"),
+                    );
+                }
+                lines.insert(
+                    lines.len().saturating_sub(4),
+                    format!(
+                        "chain_id={} state={} hop={} max_hops={}",
+                        summary.chain_id,
+                        summary.state,
+                        summary
+                            .hop_count
+                            .map(|value| value.to_string())
+                            .unwrap_or_else(|| "<unknown>".to_string()),
+                        summary
+                            .max_hops
+                            .map(|value| value.to_string())
+                            .unwrap_or_else(|| "<unknown>".to_string())
+                    ),
+                );
+            }
+            None => lines.insert(lines.len().saturating_sub(4), "<none>".to_string()),
+        }
 
         match plan_snapshot {
             Some(snapshot) if !snapshot.is_empty() => lines.push(snapshot.system_message_text()),
@@ -530,7 +715,30 @@ impl App {
             return Ok("Артефакты: нет".to_string());
         }
 
-        let mut lines = vec!["Артефакты:".to_string()];
+        let open_hint = snapshot
+            .refs
+            .first()
+            .map(|reference| {
+                format!(
+                    "подсказка: используйте \\артефакт {}, чтобы открыть конкретный payload",
+                    reference.artifact_id
+                )
+            })
+            .unwrap_or_else(|| {
+                "подсказка: используйте \\артефакт <artifact_id>, чтобы открыть конкретный payload"
+                    .to_string()
+            });
+        let mut lines = vec![
+            "Артефакты:".to_string(),
+            format!(
+                "refs={} tokens={} messages={} updated_at={}",
+                snapshot.refs.len(),
+                snapshot.total_token_estimate(),
+                total_offload_message_count(&snapshot),
+                snapshot.updated_at
+            ),
+            open_hint,
+        ];
         for reference in snapshot.refs {
             lines.push(format!(
                 "- {} [{}] {}",
@@ -859,6 +1067,180 @@ impl App {
 
         Ok(lines.join("\n"))
     }
+}
+
+fn total_offload_message_count(snapshot: &agent_runtime::context::ContextOffloadSnapshot) -> u32 {
+    snapshot
+        .refs
+        .iter()
+        .map(|reference| reference.message_count)
+        .sum()
+}
+
+fn render_offload_snapshot_lines(
+    snapshot: &agent_runtime::context::ContextOffloadSnapshot,
+) -> Vec<String> {
+    if snapshot.refs.is_empty() {
+        return vec!["Offload: none".to_string()];
+    }
+    let mut lines = vec!["Offload:".to_string()];
+    for reference in &snapshot.refs {
+        lines.push(format!(
+            "- [{}] {} | artifact_id={} | tokens={} | messages={} | summary={}",
+            reference.id,
+            reference.label,
+            reference.artifact_id,
+            reference.token_estimate,
+            reference.message_count,
+            reference.summary
+        ));
+    }
+    lines
+}
+
+fn render_session_search_output(output: &SessionSearchOutput) -> String {
+    if output.results.is_empty() {
+        return format!("Память сессий: ничего не найдено\nquery={}", output.query);
+    }
+
+    let mut lines = vec![
+        "Память сессий:".to_string(),
+        format!(
+            "query={} offset={} limit={} total={} next_offset={} truncated={}",
+            output.query,
+            output.offset,
+            output.limit,
+            output.total_results,
+            output
+                .next_offset
+                .map(|value| value.to_string())
+                .unwrap_or_else(|| "-".to_string()),
+            output.truncated
+        ),
+    ];
+    for result in &output.results {
+        lines.push(format!(
+            "- {} | title={} | agent={} | tier={} | source={} | updated_at={}",
+            result.session_id,
+            result.title,
+            result.agent_profile_id,
+            result.tier.as_str(),
+            result.match_source.as_str(),
+            result.updated_at
+        ));
+        lines.push(format!("  snippet: {}", result.snippet));
+    }
+    lines.join("\n")
+}
+
+fn render_session_read_output(output: &SessionReadOutput) -> String {
+    let mut lines = vec![
+        "Память сессии:".to_string(),
+        format!(
+            "session_id={} title={} agent={} mode={} tier={} from_archive={} cursor={} next_cursor={} total_items={} truncated={}",
+            output.session_id,
+            output.title,
+            output.agent_profile_id,
+            output.mode.as_str(),
+            output.tier.as_str(),
+            output.from_archive,
+            output.cursor,
+            output
+                .next_cursor
+                .map(|value| value.to_string())
+                .unwrap_or_else(|| "-".to_string()),
+            output.total_items,
+            output.truncated
+        ),
+    ];
+    if let Some(summary) = output.summary.as_ref() {
+        lines.push(format!(
+            "summary covered={} tokens={} updated_at={}",
+            summary.covered_message_count, summary.summary_token_estimate, summary.updated_at
+        ));
+        lines.push(summary.summary_text.clone());
+    }
+    for message in &output.messages {
+        lines.push(format!(
+            "- [{}] {}: {}",
+            message.created_at, message.role, message.content
+        ));
+    }
+    for artifact in &output.artifacts {
+        lines.push(format!(
+            "- artifact {} | kind={} | bytes={} | created_at={} | path={}",
+            artifact.artifact_id,
+            artifact.kind,
+            artifact.byte_len,
+            artifact.created_at,
+            artifact.path
+        ));
+        if let Some(label) = artifact.label.as_ref() {
+            lines.push(format!("  label: {label}"));
+        }
+        if let Some(summary) = artifact.summary.as_ref() {
+            lines.push(format!("  summary: {summary}"));
+        }
+    }
+    lines.join("\n")
+}
+
+fn render_knowledge_search_output(output: &KnowledgeSearchOutput) -> String {
+    if output.results.is_empty() {
+        return format!("Память знаний: ничего не найдено\nquery={}", output.query);
+    }
+
+    let mut lines = vec![
+        "Память знаний:".to_string(),
+        format!(
+            "query={} offset={} limit={} total={} next_offset={} truncated={}",
+            output.query,
+            output.offset,
+            output.limit,
+            output.total_results,
+            output
+                .next_offset
+                .map(|value| value.to_string())
+                .unwrap_or_else(|| "-".to_string()),
+            output.truncated
+        ),
+    ];
+    for result in &output.results {
+        lines.push(format!(
+            "- {} | kind={} | mtime={}",
+            result.path,
+            result.kind.as_str(),
+            result.mtime
+        ));
+        lines.push(format!("  snippet: {}", result.snippet));
+    }
+    lines.join("\n")
+}
+
+fn render_knowledge_read_output(output: &KnowledgeReadOutput) -> String {
+    [
+        "Файл знаний:".to_string(),
+        format!(
+            "path={} kind={} mode={} lines={}-{} total_lines={} cursor={} next_cursor={} truncated={} mtime={}",
+            output.path,
+            output.kind.as_str(),
+            output.mode.as_str(),
+            output.start_line,
+            output.end_line,
+            output.total_lines,
+            output.cursor,
+            output
+                .next_cursor
+                .map(|value| value.to_string())
+                .unwrap_or_else(|| "-".to_string()),
+            output.truncated,
+            output.mtime
+        ),
+        format!("sha256={}", output.sha256),
+        String::new(),
+        output.text.clone(),
+    ]
+    .join("\n")
 }
 
 fn sanitize_debug_filename(session_id: &str) -> String {

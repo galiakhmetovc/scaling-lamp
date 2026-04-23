@@ -4,16 +4,21 @@ use super::{
 };
 use crate::{
     AgentProfileRecord, AgentRepository, AgentScheduleRecord, ArtifactRecord, ArtifactRepository,
-    ContextOffloadRecord, ContextOffloadRepository, JobRecord, JobRepository, MissionRecord,
-    MissionRepository, PersistenceScaffold, PlanRecord, PlanRepository, RunRecord, RunRepository,
-    SessionInboxRepository, SessionRecord, SessionRepository, TranscriptRecord,
-    TranscriptRepository,
+    ContextOffloadRecord, ContextOffloadRepository, ContextSummaryRepository, JobRecord,
+    JobRepository, KnowledgeRepository, KnowledgeSearchDocRecord, KnowledgeSourceRecord,
+    McpConnectorRecord, McpRepository, MissionRecord, MissionRepository, PersistenceScaffold,
+    PlanRecord, PlanRepository, RunRecord, RunRepository, SessionInboxRepository, SessionRecord,
+    SessionRepository, SessionRetentionRecord, SessionRetentionRepository, SessionSearchDocRecord,
+    SessionSearchRepository, TranscriptRecord, TranscriptRepository,
 };
 use agent_runtime::agent::{
     AgentChainContinuationGrant, AgentProfile, AgentSchedule, AgentScheduleDeliveryMode,
     AgentScheduleInit, AgentScheduleMode, AgentTemplateKind,
 };
+use agent_runtime::archive::SessionArchiveManifest;
 use agent_runtime::context::{ContextOffloadPayload, ContextOffloadRef, ContextOffloadSnapshot};
+use agent_runtime::mcp::{McpConnectorConfig, McpConnectorTransport};
+use agent_runtime::memory::{SessionRetentionState, SessionRetentionTier};
 use agent_runtime::mission::JobExecutionInput;
 use agent_runtime::plan::{PlanItem, PlanItemStatus, PlanSnapshot};
 use rusqlite::params;
@@ -333,6 +338,335 @@ fn agent_repository_round_trips_schedules() {
         store.list_agent_schedules().expect("list schedules"),
         vec![record]
     );
+}
+
+#[test]
+fn session_retention_repository_round_trips_retention_state() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let scaffold = PersistenceScaffold::from_config(crate::AppConfig {
+        data_dir: temp.path().join("state-root"),
+        ..crate::AppConfig::default()
+    });
+    let store = super::PersistenceStore::open(&scaffold).expect("open store");
+
+    let session = SessionRecord {
+        id: "session-retention".to_string(),
+        title: "Retention".to_string(),
+        prompt_override: None,
+        settings_json: "{}".to_string(),
+        agent_profile_id: "default".to_string(),
+        active_mission_id: None,
+        parent_session_id: None,
+        parent_job_id: None,
+        delegation_label: None,
+        created_at: 1,
+        updated_at: 2,
+    };
+    store.put_session(&session).expect("put session");
+
+    let retention = SessionRetentionState {
+        session_id: session.id.clone(),
+        tier: SessionRetentionTier::Cold,
+        last_accessed_at: 20,
+        archived_at: Some(30),
+        archive_manifest_path: Some(
+            "archives/sessions/session-retention/manifest.json".to_string(),
+        ),
+        archive_version: Some(1),
+        updated_at: 31,
+    };
+    let record = SessionRetentionRecord::from(&retention);
+
+    store
+        .put_session_retention(&record)
+        .expect("put session retention");
+
+    assert_eq!(
+        store
+            .get_session_retention(&session.id)
+            .expect("get session retention"),
+        Some(record.clone())
+    );
+    assert_eq!(
+        store
+            .list_session_retentions()
+            .expect("list session retentions"),
+        vec![record]
+    );
+}
+
+#[test]
+fn knowledge_source_repository_round_trips_sources_and_docs() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let scaffold = PersistenceScaffold::from_config(crate::AppConfig {
+        data_dir: temp.path().join("state-root"),
+        ..crate::AppConfig::default()
+    });
+    let store = super::PersistenceStore::open(&scaffold).expect("open store");
+
+    let source = KnowledgeSourceRecord {
+        source_id: "docs/architecture.md".to_string(),
+        path: "docs/architecture.md".to_string(),
+        kind: "project_doc".to_string(),
+        sha256: "abc123".to_string(),
+        byte_len: 128,
+        mtime: 42,
+        indexed_at: 50,
+    };
+    let doc = KnowledgeSearchDocRecord {
+        doc_id: "docs/architecture.md#0".to_string(),
+        source_id: source.source_id.clone(),
+        path: source.path.clone(),
+        kind: source.kind.clone(),
+        body: "System architecture notes".to_string(),
+        updated_at: 50,
+    };
+
+    store
+        .put_knowledge_source(&source)
+        .expect("put knowledge source");
+    store
+        .replace_knowledge_search_docs(&source.source_id, std::slice::from_ref(&doc))
+        .expect("replace docs");
+
+    assert_eq!(
+        store
+            .get_knowledge_source_by_path("docs/architecture.md")
+            .expect("get source by path"),
+        Some(source.clone())
+    );
+    assert_eq!(
+        store.list_knowledge_sources().expect("list sources"),
+        vec![source]
+    );
+    assert_eq!(
+        store
+            .list_knowledge_search_docs()
+            .expect("list knowledge docs"),
+        vec![doc]
+    );
+}
+
+#[test]
+fn mcp_connector_repository_round_trips_connector_configs() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let scaffold = PersistenceScaffold::from_config(crate::AppConfig {
+        data_dir: temp.path().join("state-root"),
+        ..crate::AppConfig::default()
+    });
+    let store = super::PersistenceStore::open(&scaffold).expect("open store");
+
+    let connector = McpConnectorConfig {
+        id: "filesystem".to_string(),
+        transport: McpConnectorTransport::Stdio,
+        command: "npx".to_string(),
+        args: vec![
+            "-y".to_string(),
+            "@modelcontextprotocol/server-filesystem".to_string(),
+            "/workspace".to_string(),
+        ],
+        env: [("DEBUG".to_string(), "1".to_string())]
+            .into_iter()
+            .collect(),
+        cwd: Some("/srv/mcp".to_string()),
+        enabled: true,
+        created_at: 10,
+        updated_at: 11,
+    };
+    let record = McpConnectorRecord::try_from(&connector).expect("connector to record");
+
+    store.put_mcp_connector(&record).expect("put mcp connector");
+
+    assert_eq!(
+        store
+            .get_mcp_connector(&connector.id)
+            .expect("get mcp connector"),
+        Some(record.clone())
+    );
+    assert_eq!(
+        store.list_mcp_connectors().expect("list mcp connectors"),
+        vec![record]
+    );
+    assert!(
+        store
+            .delete_mcp_connector(&connector.id)
+            .expect("delete mcp connector")
+    );
+    assert_eq!(
+        store
+            .get_mcp_connector(&connector.id)
+            .expect("connector deleted"),
+        None
+    );
+}
+
+#[test]
+fn session_search_repository_round_trips_docs() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let scaffold = PersistenceScaffold::from_config(crate::AppConfig {
+        data_dir: temp.path().join("state-root"),
+        ..crate::AppConfig::default()
+    });
+    let store = super::PersistenceStore::open(&scaffold).expect("open store");
+
+    let session = SessionRecord {
+        id: "session-search".to_string(),
+        title: "Search me".to_string(),
+        prompt_override: None,
+        settings_json: "{}".to_string(),
+        agent_profile_id: "default".to_string(),
+        active_mission_id: None,
+        parent_session_id: None,
+        parent_job_id: None,
+        delegation_label: None,
+        created_at: 1,
+        updated_at: 2,
+    };
+    store.put_session(&session).expect("put session");
+
+    let docs = vec![
+        SessionSearchDocRecord {
+            doc_id: "session-search#title".to_string(),
+            session_id: session.id.clone(),
+            source_kind: "title".to_string(),
+            source_ref: "session-search".to_string(),
+            body: "Search me".to_string(),
+            updated_at: 2,
+        },
+        SessionSearchDocRecord {
+            doc_id: "session-search#plan".to_string(),
+            session_id: session.id.clone(),
+            source_kind: "plan".to_string(),
+            source_ref: "session-search".to_string(),
+            body: "Install offline bundle".to_string(),
+            updated_at: 3,
+        },
+    ];
+
+    store
+        .replace_session_search_docs(&session.id, &docs)
+        .expect("replace session docs");
+
+    assert_eq!(
+        store
+            .list_session_search_docs()
+            .expect("list session search docs"),
+        vec![docs[1].clone(), docs[0].clone()]
+    );
+}
+
+#[test]
+fn archive_bundle_round_trips_manifest_and_payloads() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let scaffold = PersistenceScaffold::from_config(crate::AppConfig {
+        data_dir: temp.path().join("state-root"),
+        ..crate::AppConfig::default()
+    });
+    let store = super::PersistenceStore::open(&scaffold).expect("open store");
+
+    let session = SessionRecord {
+        id: "session-archive".to_string(),
+        title: "Archive me".to_string(),
+        prompt_override: None,
+        settings_json: "{}".to_string(),
+        agent_profile_id: "default".to_string(),
+        active_mission_id: None,
+        parent_session_id: None,
+        parent_job_id: None,
+        delegation_label: None,
+        created_at: 1,
+        updated_at: 2,
+    };
+    store.put_session(&session).expect("put session");
+
+    let transcript = TranscriptRecord {
+        id: "transcript-archive-1".to_string(),
+        session_id: session.id.clone(),
+        run_id: None,
+        kind: "assistant".to_string(),
+        content: "archived transcript entry".to_string(),
+        created_at: 3,
+    };
+    store.put_transcript(&transcript).expect("put transcript");
+
+    store
+        .put_context_summary(&crate::ContextSummaryRecord {
+            session_id: session.id.clone(),
+            summary_text: "cold archive summary".to_string(),
+            covered_message_count: 1,
+            summary_token_estimate: 8,
+            updated_at: 4,
+        })
+        .expect("put context summary");
+
+    let artifact = ArtifactRecord {
+        id: "artifact-archive-1".to_string(),
+        session_id: session.id.clone(),
+        kind: "report".to_string(),
+        metadata_json: "{\"scope\":\"archive\"}".to_string(),
+        path: PathBuf::from("artifacts/artifact-archive-1.bin"),
+        bytes: b"archive payload".to_vec(),
+        created_at: 5,
+    };
+    store.put_artifact(&artifact).expect("put artifact");
+
+    let manifest = store
+        .archive_session_bundle(&session.id, 50)
+        .expect("archive session bundle");
+
+    assert_eq!(manifest.session_id, session.id);
+    assert_eq!(manifest.archive_version, 1);
+    assert_eq!(manifest.archived_at, 50);
+    assert!(manifest.summary_path.is_some());
+    assert_eq!(manifest.transcript_count, 1);
+    assert_eq!(manifest.artifacts.len(), 1);
+
+    let manifest_path = scaffold
+        .stores
+        .archives_dir
+        .join("sessions")
+        .join(&session.id)
+        .join("manifest.json");
+    assert!(manifest_path.is_file());
+    assert!(
+        scaffold
+            .stores
+            .archives_dir
+            .join("sessions")
+            .join(&session.id)
+            .join("summary.json")
+            .is_file()
+    );
+    assert!(
+        scaffold
+            .stores
+            .archives_dir
+            .join("sessions")
+            .join(&session.id)
+            .join("transcript.ndjson")
+            .is_file()
+    );
+    assert!(
+        scaffold
+            .stores
+            .archives_dir
+            .join("sessions")
+            .join(&session.id)
+            .join("artifacts")
+            .join("artifact-archive-1.bin")
+            .is_file()
+    );
+
+    let reread = store
+        .read_session_archive_manifest(&session.id)
+        .expect("read archive manifest")
+        .expect("manifest exists");
+    assert_eq!(reread, manifest);
+
+    let parsed: SessionArchiveManifest =
+        serde_json::from_str(&fs::read_to_string(manifest_path).expect("read manifest file"))
+            .expect("parse manifest");
+    assert_eq!(parsed, manifest);
 }
 
 #[test]

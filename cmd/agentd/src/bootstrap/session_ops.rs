@@ -1,6 +1,7 @@
 use super::*;
 use crate::agents;
 use agent_persistence::JobRepository;
+use agent_runtime::interagent::{AgentChainState, AgentMessageChain};
 use agent_runtime::mission::JobSpec;
 use agent_runtime::run::{RunSnapshot, RunStatus, RunStepKind};
 use agent_runtime::session::{
@@ -143,13 +144,8 @@ impl App {
 
     #[cfg_attr(not(test), allow(dead_code))]
     pub fn session_summary(&self, session_id: &str) -> Result<SessionSummary, BootstrapError> {
-        self.list_session_summaries()?
-            .into_iter()
-            .find(|summary| summary.id == session_id)
-            .ok_or_else(|| BootstrapError::MissingRecord {
-                kind: "session",
-                id: session_id.to_string(),
-            })
+        let store = self.store()?;
+        build_single_session_summary(&store, &self.config, &self.runtime.workspace, session_id)
     }
 
     #[cfg_attr(not(test), allow(dead_code))]
@@ -277,14 +273,23 @@ impl App {
         else {
             return Ok("Ход: активного выполнения нет".to_string());
         };
+        let summary = self.session_summary(session_id)?;
+        let interagent = load_session_interagent_summary(&store, session_id)?;
 
         let mut lines = vec![
             "Ход:".to_string(),
+            format!("- сессия: {}", summary.title),
+            format!(
+                "- агент: {} ({})",
+                summary.agent_name, summary.agent_profile_id
+            ),
             format!("- id: {}", run.id),
             format!("- статус: {}", run.status.as_str()),
             format!("- начат: {}", format_background_job_time(run.started_at)),
             format!("- обновлён: {}", format_background_job_time(run.updated_at)),
         ];
+        lines.extend(render_session_schedule_lines(&summary));
+        lines.extend(render_session_interagent_lines(interagent.as_ref()));
         if let Some(usage) = run.latest_provider_usage.as_ref() {
             lines.push(format!(
                 "- usage: input={} output={} total={}",
@@ -640,6 +645,163 @@ fn render_active_process_output_tail(app: &App, process_id: &str) -> Option<Vec<
     Some(lines)
 }
 
+fn render_session_schedule_lines(summary: &SessionSummary) -> Vec<String> {
+    if let Some(schedule) = summary.schedule.as_ref() {
+        let mut lines = vec![format!(
+            "- расписание: {} mode={} delivery={} enabled={} next_fire_at={}",
+            schedule.id,
+            schedule.mode.as_str(),
+            schedule.delivery_mode.as_str(),
+            schedule.enabled,
+            format_background_job_time(schedule.next_fire_at)
+        )];
+        if let Some(target_session_id) = schedule.target_session_id.as_deref() {
+            lines.push(format!("  target_session: {target_session_id}"));
+        }
+        if let Some(last_result) = schedule.last_result.as_deref() {
+            lines.push(format!("  last_result: {last_result}"));
+        }
+        if let Some(last_error) = schedule.last_error.as_deref() {
+            lines.push(format!("  last_error: {last_error}"));
+        }
+        return lines;
+    }
+    summary
+        .scheduled_by
+        .as_deref()
+        .map(|schedule_id| vec![format!("- расписание: {schedule_id}")])
+        .unwrap_or_default()
+}
+
+pub(super) fn load_session_interagent_summary(
+    store: &PersistenceStore,
+    session_id: &str,
+) -> Result<Option<SessionInteragentSummary>, BootstrapError> {
+    let Some(session_record) = store.get_session(session_id)? else {
+        return Ok(None);
+    };
+    let session = Session::try_from(session_record).map_err(BootstrapError::RecordConversion)?;
+    let transcripts = store.list_transcripts_for_session(session_id)?;
+    let latest_chain = transcripts
+        .iter()
+        .rev()
+        .find_map(|record| AgentMessageChain::from_transcript_metadata(&record.content));
+    if let Some(chain) = latest_chain {
+        return Ok(Some(SessionInteragentSummary {
+            chain_id: chain.chain_id.clone(),
+            hop_count: Some(chain.hop_count),
+            max_hops: Some(chain.max_hops),
+            state: describe_interagent_chain_state(&chain.state).to_string(),
+            origin_session_id: Some(chain.origin_session_id.clone()),
+            origin_agent_id: Some(chain.origin_agent_id.clone()),
+            target_agent_id: None,
+            recipient_session_id: None,
+            parent_interagent_session_id: chain.parent_interagent_session_id.clone(),
+            parent_session_id: session.parent_session_id.clone(),
+            delegation_label: session.delegation_label.clone(),
+            continuation_grant_pending: store
+                .get_agent_chain_continuation(&chain.chain_id)?
+                .is_some(),
+        }));
+    }
+
+    if let Some(summary) = transcripts
+        .iter()
+        .rev()
+        .find_map(|record| parse_outbound_interagent_summary(record.content.as_str()))
+    {
+        return Ok(Some(SessionInteragentSummary {
+            chain_id: summary.chain_id.clone(),
+            hop_count: Some(summary.hop_count),
+            max_hops: None,
+            state: "queued".to_string(),
+            origin_session_id: None,
+            origin_agent_id: None,
+            target_agent_id: Some(summary.target_agent_id),
+            recipient_session_id: Some(summary.recipient_session_id),
+            parent_interagent_session_id: None,
+            parent_session_id: session.parent_session_id.clone(),
+            delegation_label: session.delegation_label.clone(),
+            continuation_grant_pending: store
+                .get_agent_chain_continuation(&summary.chain_id)?
+                .is_some(),
+        }));
+    }
+
+    if let Some(chain_id) = session
+        .delegation_label
+        .as_deref()
+        .and_then(|label| label.strip_prefix("agent-chain:"))
+    {
+        return Ok(Some(SessionInteragentSummary {
+            chain_id: chain_id.to_string(),
+            hop_count: None,
+            max_hops: None,
+            state: "delegated".to_string(),
+            origin_session_id: None,
+            origin_agent_id: None,
+            target_agent_id: None,
+            recipient_session_id: None,
+            parent_interagent_session_id: None,
+            parent_session_id: session.parent_session_id.clone(),
+            delegation_label: session.delegation_label.clone(),
+            continuation_grant_pending: store.get_agent_chain_continuation(chain_id)?.is_some(),
+        }));
+    }
+
+    Ok(None)
+}
+
+fn render_session_interagent_lines(summary: Option<&SessionInteragentSummary>) -> Vec<String> {
+    let Some(summary) = summary else {
+        return Vec::new();
+    };
+
+    let mut headline = format!(
+        "- межагент: chain_id={} state={}",
+        summary.chain_id, summary.state
+    );
+    if let Some(hop_count) = summary.hop_count {
+        match summary.max_hops {
+            Some(max_hops) => {
+                headline.push_str(&format!(" hop={hop_count}/{max_hops}"));
+            }
+            None => {
+                headline.push_str(&format!(" hop={hop_count}"));
+            }
+        }
+    }
+
+    let mut lines = vec![headline];
+    if let Some(origin_session_id) = summary.origin_session_id.as_deref() {
+        lines.push(format!("  origin_session: {origin_session_id}"));
+    }
+    if let Some(origin_agent_id) = summary.origin_agent_id.as_deref() {
+        lines.push(format!("  origin_agent: {origin_agent_id}"));
+    }
+    if let Some(target_agent_id) = summary.target_agent_id.as_deref() {
+        lines.push(format!("  target_agent: {target_agent_id}"));
+    }
+    if let Some(recipient_session_id) = summary.recipient_session_id.as_deref() {
+        lines.push(format!("  recipient_session: {recipient_session_id}"));
+    }
+    if let Some(parent_interagent_session_id) = summary.parent_interagent_session_id.as_deref() {
+        lines.push(format!(
+            "  parent_interagent_session: {parent_interagent_session_id}"
+        ));
+    }
+    if let Some(parent_session_id) = summary.parent_session_id.as_deref() {
+        lines.push(format!("  parent_session: {parent_session_id}"));
+    }
+    if let Some(delegation_label) = summary.delegation_label.as_deref() {
+        lines.push(format!("  delegation_label: {delegation_label}"));
+    }
+    if summary.continuation_grant_pending {
+        lines.push("  continuation_grant: pending".to_string());
+    }
+    lines
+}
+
 fn active_run_step_is_relevant(kind: RunStepKind) -> bool {
     matches!(
         kind,
@@ -669,6 +831,48 @@ fn transcript_line_sort_weight(line: &SessionTranscriptLine) -> u8 {
         "assistant" => 5,
         _ => 6,
     }
+}
+
+#[derive(Debug, Clone)]
+struct OutboundInteragentSummary {
+    chain_id: String,
+    hop_count: u32,
+    target_agent_id: String,
+    recipient_session_id: String,
+}
+
+fn describe_interagent_chain_state(state: &AgentChainState) -> &'static str {
+    match state {
+        AgentChainState::Active => "active",
+        AgentChainState::BlockedMaxHops => "blocked_max_hops",
+        AgentChainState::ContinuedOnce => "continued_once",
+    }
+}
+
+fn parse_outbound_interagent_summary(content: &str) -> Option<OutboundInteragentSummary> {
+    let body = content.strip_prefix("message_agent queued: ")?;
+    let mut target_agent_id = None;
+    let mut recipient_session_id = None;
+    let mut chain_id = None;
+    let mut hop_count = None;
+
+    for token in body.split_whitespace() {
+        let (key, value) = token.split_once('=')?;
+        match key {
+            "target" => target_agent_id = Some(value.to_string()),
+            "recipient_session" => recipient_session_id = Some(value.to_string()),
+            "chain_id" => chain_id = Some(value.to_string()),
+            "hop_count" => hop_count = value.parse::<u32>().ok(),
+            _ => {}
+        }
+    }
+
+    Some(OutboundInteragentSummary {
+        chain_id: chain_id?,
+        hop_count: hop_count?,
+        target_agent_id: target_agent_id?,
+        recipient_session_id: recipient_session_id?,
+    })
 }
 
 fn parse_tool_step_detail(detail: &str) -> (String, String, String) {

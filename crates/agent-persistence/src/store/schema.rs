@@ -119,6 +119,9 @@ pub(super) fn bootstrap_schema(connection: &Connection) -> Result<(), StoreError
              template_kind TEXT NOT NULL,
              agent_home TEXT NOT NULL,
              allowed_tools_json TEXT NOT NULL,
+             created_from_template_id TEXT,
+             created_by_session_id TEXT,
+             created_by_agent_profile_id TEXT,
              created_at INTEGER NOT NULL,
              updated_at INTEGER NOT NULL
          );
@@ -172,6 +175,74 @@ pub(super) fn bootstrap_schema(connection: &Connection) -> Result<(), StoreError
              FOREIGN KEY(session_id) REFERENCES sessions(id) ON DELETE CASCADE
          );
 
+         CREATE TABLE IF NOT EXISTS session_retention (
+             session_id TEXT PRIMARY KEY,
+             tier TEXT NOT NULL,
+             last_accessed_at INTEGER NOT NULL,
+             archived_at INTEGER,
+             archive_manifest_path TEXT,
+             archive_version INTEGER,
+             updated_at INTEGER NOT NULL,
+             FOREIGN KEY(session_id) REFERENCES sessions(id) ON DELETE CASCADE
+         );
+
+         CREATE TABLE IF NOT EXISTS session_search_docs (
+             doc_id TEXT PRIMARY KEY,
+             session_id TEXT NOT NULL,
+             source_kind TEXT NOT NULL,
+             source_ref TEXT NOT NULL,
+             body TEXT NOT NULL,
+             updated_at INTEGER NOT NULL,
+             FOREIGN KEY(session_id) REFERENCES sessions(id) ON DELETE CASCADE
+         );
+
+         CREATE VIRTUAL TABLE IF NOT EXISTS session_search_fts USING fts5(
+             doc_id UNINDEXED,
+             session_id UNINDEXED,
+             source_kind,
+             source_ref,
+             body
+         );
+
+         CREATE TABLE IF NOT EXISTS knowledge_sources (
+             source_id TEXT PRIMARY KEY,
+             path TEXT NOT NULL UNIQUE,
+             kind TEXT NOT NULL,
+             sha256 TEXT NOT NULL,
+             byte_len INTEGER NOT NULL,
+             mtime INTEGER NOT NULL,
+             indexed_at INTEGER NOT NULL
+         );
+
+         CREATE TABLE IF NOT EXISTS mcp_connectors (
+             id TEXT PRIMARY KEY,
+             transport TEXT NOT NULL,
+             command TEXT NOT NULL,
+             args_json TEXT NOT NULL,
+             env_json TEXT NOT NULL,
+             cwd TEXT,
+             enabled INTEGER NOT NULL DEFAULT 1,
+             created_at INTEGER NOT NULL,
+             updated_at INTEGER NOT NULL
+         );
+
+         CREATE TABLE IF NOT EXISTS knowledge_search_docs (
+             doc_id TEXT PRIMARY KEY,
+             source_id TEXT NOT NULL,
+             path TEXT NOT NULL,
+             kind TEXT NOT NULL,
+             body TEXT NOT NULL,
+             updated_at INTEGER NOT NULL,
+             FOREIGN KEY(source_id) REFERENCES knowledge_sources(source_id) ON DELETE CASCADE
+         );
+
+         CREATE VIRTUAL TABLE IF NOT EXISTS knowledge_search_fts USING fts5(
+             doc_id UNINDEXED,
+             path,
+             kind,
+             body
+         );
+
          CREATE TABLE IF NOT EXISTS plans (
              session_id TEXT PRIMARY KEY,
              items_json TEXT NOT NULL,
@@ -211,6 +282,11 @@ pub(super) fn bootstrap_schema(connection: &Connection) -> Result<(), StoreError
          CREATE INDEX IF NOT EXISTS idx_agent_schedules_next_fire_at ON agent_schedules(next_fire_at);
          CREATE INDEX IF NOT EXISTS idx_context_summaries_updated_at ON context_summaries(updated_at);
          CREATE INDEX IF NOT EXISTS idx_context_offloads_updated_at ON context_offloads(updated_at);
+         CREATE INDEX IF NOT EXISTS idx_session_retention_tier_updated_at ON session_retention(tier, updated_at);
+         CREATE INDEX IF NOT EXISTS idx_session_search_docs_session_id ON session_search_docs(session_id);
+         CREATE INDEX IF NOT EXISTS idx_knowledge_sources_kind_mtime ON knowledge_sources(kind, mtime DESC);
+         CREATE INDEX IF NOT EXISTS idx_mcp_connectors_enabled_updated_at ON mcp_connectors(enabled, updated_at DESC);
+         CREATE INDEX IF NOT EXISTS idx_knowledge_search_docs_source_id ON knowledge_search_docs(source_id);
          CREATE INDEX IF NOT EXISTS idx_artifacts_session_id ON artifacts(session_id);",
     )?;
 
@@ -242,6 +318,19 @@ pub(super) fn validate_schema(connection: &Connection) -> Result<(), StoreError>
     validate_column(connection, "agent_profiles", "template_kind", true)?;
     validate_column(connection, "agent_profiles", "agent_home", true)?;
     validate_column(connection, "agent_profiles", "allowed_tools_json", true)?;
+    validate_column(
+        connection,
+        "agent_profiles",
+        "created_from_template_id",
+        false,
+    )?;
+    validate_column(connection, "agent_profiles", "created_by_session_id", false)?;
+    validate_column(
+        connection,
+        "agent_profiles",
+        "created_by_agent_profile_id",
+        false,
+    )?;
     validate_column(connection, "agent_profiles", "created_at", true)?;
     validate_column(connection, "agent_profiles", "updated_at", true)?;
     validate_column(connection, "daemon_state", "key", true)?;
@@ -301,6 +390,7 @@ pub(super) fn validate_schema(connection: &Connection) -> Result<(), StoreError>
     )?;
     validate_column(connection, "context_offloads", "session_id", true)?;
     validate_column(connection, "context_offloads", "refs_json", true)?;
+    validate_column(connection, "context_offloads", "updated_at", true)?;
     validate_foreign_key(
         connection,
         "context_offloads",
@@ -308,8 +398,70 @@ pub(super) fn validate_schema(connection: &Connection) -> Result<(), StoreError>
         "sessions",
         "CASCADE",
     )?;
+    validate_column(connection, "session_retention", "session_id", true)?;
+    validate_column(connection, "session_retention", "tier", true)?;
+    validate_column(connection, "session_retention", "last_accessed_at", true)?;
+    validate_column(connection, "session_retention", "archived_at", false)?;
+    validate_column(
+        connection,
+        "session_retention",
+        "archive_manifest_path",
+        false,
+    )?;
+    validate_column(connection, "session_retention", "archive_version", false)?;
+    validate_column(connection, "session_retention", "updated_at", true)?;
+    validate_foreign_key(
+        connection,
+        "session_retention",
+        "session_id",
+        "sessions",
+        "CASCADE",
+    )?;
+    validate_column(connection, "session_search_docs", "doc_id", true)?;
+    validate_column(connection, "session_search_docs", "session_id", true)?;
+    validate_column(connection, "session_search_docs", "source_kind", true)?;
+    validate_column(connection, "session_search_docs", "source_ref", true)?;
+    validate_column(connection, "session_search_docs", "body", true)?;
+    validate_column(connection, "session_search_docs", "updated_at", true)?;
+    validate_foreign_key(
+        connection,
+        "session_search_docs",
+        "session_id",
+        "sessions",
+        "CASCADE",
+    )?;
+    validate_column(connection, "knowledge_sources", "source_id", true)?;
+    validate_column(connection, "knowledge_sources", "path", true)?;
+    validate_column(connection, "knowledge_sources", "kind", true)?;
+    validate_column(connection, "knowledge_sources", "sha256", true)?;
+    validate_column(connection, "knowledge_sources", "byte_len", true)?;
+    validate_column(connection, "knowledge_sources", "mtime", true)?;
+    validate_column(connection, "knowledge_sources", "indexed_at", true)?;
+    validate_column(connection, "mcp_connectors", "id", true)?;
+    validate_column(connection, "mcp_connectors", "transport", true)?;
+    validate_column(connection, "mcp_connectors", "command", true)?;
+    validate_column(connection, "mcp_connectors", "args_json", true)?;
+    validate_column(connection, "mcp_connectors", "env_json", true)?;
+    validate_column(connection, "mcp_connectors", "cwd", false)?;
+    validate_column(connection, "mcp_connectors", "enabled", true)?;
+    validate_column(connection, "mcp_connectors", "created_at", true)?;
+    validate_column(connection, "mcp_connectors", "updated_at", true)?;
+    validate_column(connection, "knowledge_search_docs", "doc_id", true)?;
+    validate_column(connection, "knowledge_search_docs", "source_id", true)?;
+    validate_column(connection, "knowledge_search_docs", "path", true)?;
+    validate_column(connection, "knowledge_search_docs", "kind", true)?;
+    validate_column(connection, "knowledge_search_docs", "body", true)?;
+    validate_column(connection, "knowledge_search_docs", "updated_at", true)?;
+    validate_foreign_key(
+        connection,
+        "knowledge_search_docs",
+        "source_id",
+        "knowledge_sources",
+        "CASCADE",
+    )?;
     validate_column(connection, "plans", "session_id", true)?;
     validate_column(connection, "plans", "items_json", true)?;
+    validate_column(connection, "plans", "updated_at", true)?;
     validate_foreign_key(connection, "plans", "session_id", "sessions", "CASCADE")?;
     validate_column(connection, "artifacts", "session_id", true)?;
     validate_column(connection, "artifacts", "metadata_json", true)?;
@@ -386,6 +538,24 @@ pub(super) fn migrate_schema(connection: &Connection) -> Result<(), StoreError> 
     add_column_if_missing(connection, "sessions", "parent_session_id", "TEXT")?;
     add_column_if_missing(connection, "sessions", "parent_job_id", "TEXT")?;
     add_column_if_missing(connection, "sessions", "delegation_label", "TEXT")?;
+    add_column_if_missing(
+        connection,
+        "agent_profiles",
+        "created_from_template_id",
+        "TEXT",
+    )?;
+    add_column_if_missing(
+        connection,
+        "agent_profiles",
+        "created_by_session_id",
+        "TEXT",
+    )?;
+    add_column_if_missing(
+        connection,
+        "agent_profiles",
+        "created_by_agent_profile_id",
+        "TEXT",
+    )?;
     add_column_if_missing(
         connection,
         "agent_schedules",

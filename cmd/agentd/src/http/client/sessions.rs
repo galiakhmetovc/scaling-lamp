@@ -1,10 +1,16 @@
 use super::*;
+use crate::bootstrap::{AgentScheduleCreateOptions, AgentScheduleUpdatePatch, AgentScheduleView};
 use crate::http::types::{
     AgentCreateRequest, AgentRenderResponse, AgentResolveRequest, AgentScheduleCreateRequest,
-    AgentScheduleResolveRequest, AgentSelectRequest, ClearSessionRequest, CreateSessionRequest,
-    DebugBundleResponse, SessionArtifactResponse, SessionArtifactsResponse,
-    SessionBackgroundJobsResponse, SessionDetailResponse, SessionRunControlResponse,
-    SessionRunStatusResponse, SessionSystemResponse, SkillCommandRequest,
+    AgentScheduleDetailResponse, AgentScheduleResolveRequest, AgentScheduleUpdateRequest,
+    AgentSelectRequest, ClearSessionRequest, CreateSessionRequest, DebugBundleResponse,
+    MemoryRenderResponse, SessionAgentMessageRequest, SessionArtifactResponse,
+    SessionArtifactsResponse, SessionBackgroundJobsResponse, SessionChainGrantRequest,
+    SessionDetailResponse, SessionRunControlResponse, SessionRunStatusResponse,
+    SessionSystemResponse, SkillCommandRequest,
+};
+use agent_runtime::tool::{
+    KnowledgeReadInput, KnowledgeSearchInput, SessionReadInput, SessionSearchInput,
 };
 
 impl DaemonClient {
@@ -83,14 +89,51 @@ impl DaemonClient {
         prompt: &str,
         agent_identifier: Option<&str>,
     ) -> Result<String, BootstrapError> {
+        self.create_agent_schedule_with_options(
+            id,
+            AgentScheduleCreateOptions {
+                agent_identifier: agent_identifier.map(str::to_string),
+                prompt: prompt.to_string(),
+                mode: agent_runtime::agent::AgentScheduleMode::Interval,
+                delivery_mode: agent_runtime::agent::AgentScheduleDeliveryMode::FreshSession,
+                target_session_id: None,
+                interval_seconds,
+                enabled: true,
+            },
+        )
+    }
+
+    pub fn create_agent_schedule_with_options(
+        &self,
+        id: &str,
+        options: AgentScheduleCreateOptions,
+    ) -> Result<String, BootstrapError> {
         let response: AgentRenderResponse = self.post_json(
             "/v1/agent-schedules",
             &AgentScheduleCreateRequest {
                 id: id.to_string(),
-                agent_identifier: agent_identifier.map(str::to_string),
-                interval_seconds,
-                prompt: prompt.to_string(),
+                options,
             },
+        )?;
+        Ok(response.message)
+    }
+
+    pub fn resolve_agent_schedule(&self, id: &str) -> Result<AgentScheduleView, BootstrapError> {
+        let response: AgentScheduleDetailResponse = self.post_json(
+            "/v1/agent-schedules/resolve",
+            &AgentScheduleResolveRequest { id: id.to_string() },
+        )?;
+        Ok(response.schedule)
+    }
+
+    pub fn update_agent_schedule(
+        &self,
+        id: &str,
+        patch: AgentScheduleUpdatePatch,
+    ) -> Result<String, BootstrapError> {
+        let response: AgentRenderResponse = self.patch_json(
+            &format!("/v1/agent-schedules/{id}"),
+            &AgentScheduleUpdateRequest { patch },
         )?;
         Ok(response.message)
     }
@@ -155,6 +198,38 @@ impl DaemonClient {
             },
         )?;
         Ok(summary.into())
+    }
+
+    pub fn send_agent_message(
+        &self,
+        session_id: &str,
+        target_agent_id: &str,
+        message: &str,
+    ) -> Result<String, BootstrapError> {
+        let response: SessionRunControlResponse = self.post_json(
+            &format!("/v1/sessions/{session_id}/agent-message"),
+            &SessionAgentMessageRequest {
+                target_agent_id: target_agent_id.to_string(),
+                message: message.to_string(),
+            },
+        )?;
+        Ok(response.message)
+    }
+
+    pub fn grant_chain_continuation(
+        &self,
+        session_id: &str,
+        chain_id: &str,
+        reason: &str,
+    ) -> Result<String, BootstrapError> {
+        let response: SessionRunControlResponse = self.post_json(
+            &format!("/v1/sessions/{session_id}/chain-grant"),
+            &SessionChainGrantRequest {
+                chain_id: chain_id.to_string(),
+                reason: reason.to_string(),
+            },
+        )?;
+        Ok(response.message)
     }
 
     pub fn session_summary(&self, session_id: &str) -> Result<SessionSummary, BootstrapError> {
@@ -242,6 +317,39 @@ impl DaemonClient {
             .and_then(serde_json::Value::as_str)
             .map(str::to_string)
             .ok_or_else(|| BootstrapError::Stream(std::io::Error::other("missing plan field")))
+    }
+
+    pub fn render_session_memory_search(
+        &self,
+        input: SessionSearchInput,
+    ) -> Result<String, BootstrapError> {
+        let response: MemoryRenderResponse = self.post_json("/v1/memory/session-search", &input)?;
+        Ok(response.memory)
+    }
+
+    pub fn render_session_memory_read(
+        &self,
+        input: SessionReadInput,
+    ) -> Result<String, BootstrapError> {
+        let response: MemoryRenderResponse = self.post_json("/v1/memory/session-read", &input)?;
+        Ok(response.memory)
+    }
+
+    pub fn render_knowledge_search(
+        &self,
+        input: KnowledgeSearchInput,
+    ) -> Result<String, BootstrapError> {
+        let response: MemoryRenderResponse =
+            self.post_json("/v1/memory/knowledge-search", &input)?;
+        Ok(response.memory)
+    }
+
+    pub fn render_knowledge_read(
+        &self,
+        input: KnowledgeReadInput,
+    ) -> Result<String, BootstrapError> {
+        let response: MemoryRenderResponse = self.post_json("/v1/memory/knowledge-read", &input)?;
+        Ok(response.memory)
     }
 
     pub fn render_context_state(&self, session_id: &str) -> Result<String, BootstrapError> {

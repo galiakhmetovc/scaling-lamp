@@ -9,7 +9,7 @@ use agent_runtime::session::TranscriptEntry;
 use agent_runtime::tool::{GrantAgentChainContinuationOutput, MessageAgentOutput};
 
 impl ExecutionService {
-    pub(super) fn queue_interagent_message(
+    pub(crate) fn queue_interagent_message(
         &self,
         store: &PersistenceStore,
         session_id: &str,
@@ -155,7 +155,7 @@ impl ExecutionService {
         })
     }
 
-    pub(super) fn grant_agent_chain_continuation(
+    pub(crate) fn grant_agent_chain_continuation(
         &self,
         store: &PersistenceStore,
         input: &agent_runtime::tool::GrantAgentChainContinuationInput,
@@ -181,7 +181,7 @@ impl ExecutionService {
         })
     }
 
-    pub(super) fn load_session_interagent_chain(
+    pub(crate) fn load_session_interagent_chain(
         &self,
         store: &PersistenceStore,
         session_id: &str,

@@ -14,6 +14,9 @@ fn skills_prompt_places_active_skill_blocks_between_agents_and_session_head() {
         session_head: Some(SessionHead {
             session_id: "session-1".to_string(),
             title: "Skill Prompt".to_string(),
+            agent_profile_id: "default".to_string(),
+            agent_name: "Assistant".to_string(),
+            schedule: None,
             message_count: 1,
             context_tokens: 5,
             compactifications: 0,

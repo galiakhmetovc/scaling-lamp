@@ -9,6 +9,12 @@ use agent_runtime::inbox::{
     SessionInboxEvent, SessionInboxEventParseError, SessionInboxEventPayload,
     SessionInboxEventStatus,
 };
+use agent_runtime::mcp::{
+    McpConnectorConfig, McpConnectorTransport, McpConnectorTransportParseError,
+};
+use agent_runtime::memory::{
+    SessionRetentionState, SessionRetentionTier, SessionRetentionTierParseError,
+};
 use agent_runtime::mission::{
     JobKind, JobKindParseError, JobResult, JobSpec, JobSpecValidationError, JobStatus,
     JobStatusParseError, MissionExecutionIntent, MissionExecutionIntentParseError, MissionSchedule,
@@ -44,12 +50,70 @@ pub struct SessionRecord {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SessionRetentionRecord {
+    pub session_id: String,
+    pub tier: String,
+    pub last_accessed_at: i64,
+    pub archived_at: Option<i64>,
+    pub archive_manifest_path: Option<String>,
+    pub archive_version: Option<i64>,
+    pub updated_at: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct KnowledgeSourceRecord {
+    pub source_id: String,
+    pub path: String,
+    pub kind: String,
+    pub sha256: String,
+    pub byte_len: i64,
+    pub mtime: i64,
+    pub indexed_at: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct KnowledgeSearchDocRecord {
+    pub doc_id: String,
+    pub source_id: String,
+    pub path: String,
+    pub kind: String,
+    pub body: String,
+    pub updated_at: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SessionSearchDocRecord {
+    pub doc_id: String,
+    pub session_id: String,
+    pub source_kind: String,
+    pub source_ref: String,
+    pub body: String,
+    pub updated_at: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct McpConnectorRecord {
+    pub id: String,
+    pub transport: String,
+    pub command: String,
+    pub args_json: String,
+    pub env_json: String,
+    pub cwd: Option<String>,
+    pub enabled: bool,
+    pub created_at: i64,
+    pub updated_at: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AgentProfileRecord {
     pub id: String,
     pub name: String,
     pub template_kind: String,
     pub agent_home: String,
     pub allowed_tools_json: String,
+    pub created_from_template_id: Option<String>,
+    pub created_by_session_id: Option<String>,
+    pub created_by_agent_profile_id: Option<String>,
     pub created_at: i64,
     pub updated_at: i64,
 }
@@ -223,6 +287,9 @@ pub enum RecordConversionError {
     InvalidAgentScheduleInterval { value: i64 },
     InvalidAgentTemplateKind(AgentTemplateKindParseError),
     InvalidAgentAllowedTools(serde_json::Error),
+    InvalidMcpConnectorArgs(serde_json::Error),
+    InvalidMcpConnectorEnv(serde_json::Error),
+    InvalidMcpConnectorTransport(McpConnectorTransportParseError),
     InvalidContextSummaryCoveredMessageCount { value: i64 },
     InvalidContextSummaryTokenEstimate { value: i64 },
     InvalidMessageRole { value: String },
@@ -242,9 +309,13 @@ pub enum RecordConversionError {
     InvalidRunEvidenceRefs(serde_json::Error),
     InvalidRunStatus(RunStatusParseError),
     InvalidSessionSettings(serde_json::Error),
+    InvalidSessionRetentionArchiveVersion { value: i64 },
+    InvalidSessionRetentionTier(SessionRetentionTierParseError),
     SerializeContextOffloadRefs(serde_json::Error),
     SerializeInboxEventPayload(serde_json::Error),
     SerializeAgentAllowedTools(serde_json::Error),
+    SerializeMcpConnectorArgs(serde_json::Error),
+    SerializeMcpConnectorEnv(serde_json::Error),
     SerializeJobInput(serde_json::Error),
     SerializeJobResult(serde_json::Error),
     SerializeMissionAcceptance(serde_json::Error),
@@ -314,6 +385,85 @@ impl TryFrom<SessionRecord> for Session {
     }
 }
 
+impl From<&SessionRetentionState> for SessionRetentionRecord {
+    fn from(state: &SessionRetentionState) -> Self {
+        Self {
+            session_id: state.session_id.clone(),
+            tier: state.tier.as_str().to_string(),
+            last_accessed_at: state.last_accessed_at,
+            archived_at: state.archived_at,
+            archive_manifest_path: state.archive_manifest_path.clone(),
+            archive_version: state.archive_version.map(i64::from),
+            updated_at: state.updated_at,
+        }
+    }
+}
+
+impl TryFrom<SessionRetentionRecord> for SessionRetentionState {
+    type Error = RecordConversionError;
+
+    fn try_from(record: SessionRetentionRecord) -> Result<Self, Self::Error> {
+        Ok(Self {
+            session_id: record.session_id,
+            tier: SessionRetentionTier::try_from(record.tier.as_str())
+                .map_err(RecordConversionError::InvalidSessionRetentionTier)?,
+            last_accessed_at: record.last_accessed_at,
+            archived_at: record.archived_at,
+            archive_manifest_path: record.archive_manifest_path,
+            archive_version: record
+                .archive_version
+                .map(|value| {
+                    u32::try_from(value).map_err(|_| {
+                        RecordConversionError::InvalidSessionRetentionArchiveVersion { value }
+                    })
+                })
+                .transpose()?,
+            updated_at: record.updated_at,
+        })
+    }
+}
+
+impl TryFrom<&McpConnectorConfig> for McpConnectorRecord {
+    type Error = RecordConversionError;
+
+    fn try_from(connector: &McpConnectorConfig) -> Result<Self, Self::Error> {
+        Ok(Self {
+            id: connector.id.clone(),
+            transport: connector.transport.as_str().to_string(),
+            command: connector.command.clone(),
+            args_json: serde_json::to_string(&connector.args)
+                .map_err(RecordConversionError::SerializeMcpConnectorArgs)?,
+            env_json: serde_json::to_string(&connector.env)
+                .map_err(RecordConversionError::SerializeMcpConnectorEnv)?,
+            cwd: connector.cwd.clone(),
+            enabled: connector.enabled,
+            created_at: connector.created_at,
+            updated_at: connector.updated_at,
+        })
+    }
+}
+
+impl TryFrom<McpConnectorRecord> for McpConnectorConfig {
+    type Error = RecordConversionError;
+
+    fn try_from(record: McpConnectorRecord) -> Result<Self, Self::Error> {
+        Ok(Self {
+            id: record.id,
+            transport: McpConnectorTransport::try_from(record.transport.as_str())
+                .map_err(RecordConversionError::InvalidMcpConnectorTransport)?,
+            command: record.command,
+            args: serde_json::from_str(&record.args_json)
+                .map_err(RecordConversionError::InvalidMcpConnectorArgs)?,
+            env: serde_json::from_str(&record.env_json)
+                .map_err(RecordConversionError::InvalidMcpConnectorEnv)?,
+            cwd: record.cwd,
+            enabled: record.enabled,
+            created_at: record.created_at,
+            updated_at: record.updated_at,
+        })
+    }
+}
+
 impl TryFrom<&AgentProfile> for AgentProfileRecord {
     type Error = RecordConversionError;
 
@@ -325,6 +475,9 @@ impl TryFrom<&AgentProfile> for AgentProfileRecord {
             agent_home: profile.agent_home.display().to_string(),
             allowed_tools_json: serde_json::to_string(&profile.allowed_tools)
                 .map_err(RecordConversionError::SerializeAgentAllowedTools)?,
+            created_from_template_id: profile.created_from_template_id.clone(),
+            created_by_session_id: profile.created_by_session_id.clone(),
+            created_by_agent_profile_id: profile.created_by_agent_profile_id.clone(),
             created_at: profile.created_at,
             updated_at: profile.updated_at,
         })
@@ -337,13 +490,16 @@ impl TryFrom<AgentProfileRecord> for AgentProfile {
     fn try_from(record: AgentProfileRecord) -> Result<Self, Self::Error> {
         let allowed_tools = serde_json::from_str::<Vec<String>>(&record.allowed_tools_json)
             .map_err(RecordConversionError::InvalidAgentAllowedTools)?;
-        AgentProfile::new(
+        AgentProfile::new_with_provenance(
             record.id,
             record.name,
             AgentTemplateKind::try_from(record.template_kind.as_str())
                 .map_err(RecordConversionError::InvalidAgentTemplateKind)?,
             record.agent_home,
             allowed_tools,
+            record.created_from_template_id,
+            record.created_by_session_id,
+            record.created_by_agent_profile_id,
             record.created_at,
             record.updated_at,
         )
@@ -870,6 +1026,15 @@ impl fmt::Display for RecordConversionError {
             Self::InvalidAgentAllowedTools(source) => {
                 write!(formatter, "invalid agent allowed tools: {source}")
             }
+            Self::InvalidMcpConnectorArgs(source) => {
+                write!(formatter, "invalid MCP connector args: {source}")
+            }
+            Self::InvalidMcpConnectorEnv(source) => {
+                write!(formatter, "invalid MCP connector env: {source}")
+            }
+            Self::InvalidMcpConnectorTransport(source) => {
+                write!(formatter, "invalid MCP connector transport: {source}")
+            }
             Self::InvalidContextOffloadRefs(source) => {
                 write!(formatter, "invalid context offload refs: {source}")
             }
@@ -940,6 +1105,15 @@ impl fmt::Display for RecordConversionError {
             Self::InvalidSessionSettings(source) => {
                 write!(formatter, "invalid session settings: {source}")
             }
+            Self::InvalidSessionRetentionArchiveVersion { value } => {
+                write!(
+                    formatter,
+                    "invalid session retention archive_version: {value}"
+                )
+            }
+            Self::InvalidSessionRetentionTier(source) => {
+                write!(formatter, "invalid session retention tier: {source}")
+            }
             Self::SerializeContextOffloadRefs(source) => {
                 write!(
                     formatter,
@@ -951,6 +1125,15 @@ impl fmt::Display for RecordConversionError {
                     formatter,
                     "failed to serialize agent allowed tools: {source}"
                 )
+            }
+            Self::SerializeMcpConnectorArgs(source) => {
+                write!(
+                    formatter,
+                    "failed to serialize MCP connector args: {source}"
+                )
+            }
+            Self::SerializeMcpConnectorEnv(source) => {
+                write!(formatter, "failed to serialize MCP connector env: {source}")
             }
             Self::SerializeInboxEventPayload(source) => {
                 write!(
@@ -1033,6 +1216,9 @@ impl Error for RecordConversionError {
             Self::InvalidAgentScheduleInterval { .. } => None,
             Self::InvalidAgentTemplateKind(source) => Some(source),
             Self::InvalidAgentAllowedTools(source) => Some(source),
+            Self::InvalidMcpConnectorArgs(source) => Some(source),
+            Self::InvalidMcpConnectorEnv(source) => Some(source),
+            Self::InvalidMcpConnectorTransport(source) => Some(source),
             Self::InvalidContextOffloadRefs(source) => Some(source),
             Self::InvalidInboxEventPayload(source) => Some(source),
             Self::InvalidInboxEventStatus(source) => Some(source),
@@ -1053,8 +1239,12 @@ impl Error for RecordConversionError {
             Self::InvalidRunEvidenceRefs(source) => Some(source),
             Self::InvalidRunStatus(source) => Some(source),
             Self::InvalidSessionSettings(source) => Some(source),
+            Self::InvalidSessionRetentionArchiveVersion { .. } => None,
+            Self::InvalidSessionRetentionTier(source) => Some(source),
             Self::SerializeContextOffloadRefs(source) => Some(source),
             Self::SerializeAgentAllowedTools(source) => Some(source),
+            Self::SerializeMcpConnectorArgs(source) => Some(source),
+            Self::SerializeMcpConnectorEnv(source) => Some(source),
             Self::SerializeInboxEventPayload(source) => Some(source),
             Self::SerializeJobInput(source) => Some(source),
             Self::SerializeJobResult(source) => Some(source),

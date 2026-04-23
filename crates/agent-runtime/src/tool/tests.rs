@@ -1,11 +1,14 @@
 use super::{
     ExecStartInput, FsFindInFilesInput, FsGlobInput, FsInsertTextInput, FsListInput, FsMkdirInput,
     FsMoveInput, FsPatchTextInput, FsReadLinesInput, FsReadTextInput, FsReplaceLinesInput,
-    FsSearchTextInput, FsTrashInput, FsWriteMode, FsWriteTextInput, ProcessKillInput,
+    FsSearchTextInput, FsTrashInput, FsWriteMode, FsWriteTextInput, KnowledgeReadInput,
+    KnowledgeReadMode, KnowledgeRoot, KnowledgeSearchInput, KnowledgeSourceKind, ProcessKillInput,
     ProcessOutputStatus, ProcessOutputStream, ProcessReadOutputInput, ProcessResultStatus,
-    ProcessWaitInput, SharedProcessRegistry, ToolCall, ToolCatalog, ToolFamily, ToolName,
-    ToolRuntime, WebFetchInput, WebSearchInput, WebToolClient,
+    ProcessWaitInput, SessionReadInput, SessionReadMode, SessionSearchInput, SharedProcessRegistry,
+    ToolCall, ToolCatalog, ToolFamily, ToolName, ToolRuntime, WebFetchInput, WebSearchInput,
+    WebToolClient,
 };
+use crate::memory::SessionRetentionTier;
 use crate::workspace::WorkspaceRef;
 use std::io::{Read, Write};
 use std::net::TcpListener;
@@ -37,14 +40,42 @@ fn catalog_exposes_distinct_families_and_policy_flags() {
     let fs_trash = catalog.definition(ToolName::FsTrash).expect("fs_trash");
     let plan_read = catalog.definition(ToolName::PlanRead).expect("plan_read");
     let plan_write = catalog.definition(ToolName::PlanWrite).expect("plan_write");
+    let agent_list = catalog.definition(ToolName::AgentList).expect("agent_list");
+    let agent_create = catalog
+        .definition(ToolName::AgentCreate)
+        .expect("agent_create");
+    let schedule_read = catalog
+        .definition(ToolName::ScheduleRead)
+        .expect("schedule_read");
     let web_fetch = catalog.definition(ToolName::WebFetch).expect("web_fetch");
     let web_search = catalog.definition(ToolName::WebSearch).expect("web_search");
     let fs_read = catalog.definition(ToolName::FsRead).expect("fs_read");
     let fs_write = catalog.definition(ToolName::FsWrite).expect("fs_write");
 
-    assert_eq!(catalog.families, ["fs", "web", "exec", "plan", "offload"]);
+    assert_eq!(
+        catalog.families,
+        [
+            "fs", "web", "exec", "plan", "offload", "memory", "mcp", "agent"
+        ]
+    );
     assert_eq!(artifact_read.family, ToolFamily::Offload);
     assert_eq!(artifact_search.family, ToolFamily::Offload);
+    assert_eq!(
+        catalog
+            .definition(ToolName::SessionSearch)
+            .expect("session_search")
+            .family,
+        ToolFamily::Memory
+    );
+    assert_eq!(agent_list.family, ToolFamily::Agent);
+    assert_eq!(agent_create.family, ToolFamily::Agent);
+    assert_eq!(
+        catalog
+            .definition(ToolName::McpSearchResources)
+            .expect("mcp_search_resources")
+            .family,
+        ToolFamily::Mcp
+    );
     assert_eq!(exec_start.family, ToolFamily::Exec);
     assert_eq!(fs_glob.family, ToolFamily::Filesystem);
     assert_eq!(fs_read_lines.family, ToolFamily::Filesystem);
@@ -55,8 +86,12 @@ fn catalog_exposes_distinct_families_and_policy_flags() {
     assert_eq!(fs_patch.family, ToolFamily::Filesystem);
     assert_eq!(plan_read.family, ToolFamily::Planning);
     assert_eq!(plan_write.family, ToolFamily::Planning);
+    assert_eq!(schedule_read.family, ToolFamily::Agent);
     assert_eq!(web_fetch.family, ToolFamily::Web);
     assert_eq!(web_search.family, ToolFamily::Web);
+    assert!(agent_list.policy.read_only);
+    assert!(!agent_create.policy.read_only);
+    assert!(agent_create.policy.requires_approval);
     assert!(artifact_read.policy.read_only);
     assert!(artifact_search.policy.read_only);
     assert!(exec_start.policy.requires_approval);
@@ -107,6 +142,208 @@ fn automatic_model_definitions_include_granular_planning_tools() {
     assert!(names.contains(&ToolName::EditTask));
     assert!(names.contains(&ToolName::PlanSnapshot));
     assert!(names.contains(&ToolName::PlanLint));
+}
+
+#[test]
+fn automatic_model_definitions_include_agent_and_schedule_tools() {
+    let catalog = ToolCatalog::default();
+    let names = catalog
+        .automatic_model_definitions()
+        .into_iter()
+        .map(|definition| definition.name)
+        .collect::<Vec<_>>();
+
+    assert!(names.contains(&ToolName::AgentList));
+    assert!(names.contains(&ToolName::AgentRead));
+    assert!(names.contains(&ToolName::AgentCreate));
+    assert!(names.contains(&ToolName::ContinueLater));
+    assert!(names.contains(&ToolName::ScheduleList));
+    assert!(names.contains(&ToolName::ScheduleRead));
+    assert!(names.contains(&ToolName::ScheduleCreate));
+    assert!(names.contains(&ToolName::ScheduleUpdate));
+    assert!(names.contains(&ToolName::ScheduleDelete));
+}
+
+#[test]
+fn automatic_model_definitions_include_mcp_utility_tools() {
+    let catalog = ToolCatalog::default();
+    let names = catalog
+        .automatic_model_definitions()
+        .into_iter()
+        .map(|definition| definition.name)
+        .collect::<Vec<_>>();
+
+    assert!(names.contains(&ToolName::McpSearchResources));
+    assert!(names.contains(&ToolName::McpReadResource));
+    assert!(names.contains(&ToolName::McpSearchPrompts));
+    assert!(names.contains(&ToolName::McpGetPrompt));
+}
+
+#[test]
+fn tool_call_parses_mcp_utility_inputs() {
+    let search_resources = ToolCall::from_openai_function(
+        "mcp_search_resources",
+        r#"{"connector_id":"docs","query":"onboarding","limit":5}"#,
+    )
+    .expect("parse mcp_search_resources");
+    let read_resource = ToolCall::from_openai_function(
+        "mcp_read_resource",
+        r#"{"connector_id":"docs","uri":"file:///guides/onboarding.md"}"#,
+    )
+    .expect("parse mcp_read_resource");
+    let search_prompts = ToolCall::from_openai_function(
+        "mcp_search_prompts",
+        r#"{"connector_id":"docs","query":"incident","limit":3}"#,
+    )
+    .expect("parse mcp_search_prompts");
+    let get_prompt = ToolCall::from_openai_function(
+        "mcp_get_prompt",
+        r#"{"connector_id":"docs","name":"onboarding","arguments":{"audience":"operator"}}"#,
+    )
+    .expect("parse mcp_get_prompt");
+
+    assert_eq!(
+        search_resources,
+        ToolCall::McpSearchResources(super::McpSearchResourcesInput {
+            connector_id: Some("docs".to_string()),
+            query: Some("onboarding".to_string()),
+            limit: Some(5),
+            offset: None,
+        })
+    );
+    assert_eq!(
+        read_resource,
+        ToolCall::McpReadResource(super::McpReadResourceInput {
+            connector_id: "docs".to_string(),
+            uri: "file:///guides/onboarding.md".to_string(),
+        })
+    );
+    assert_eq!(
+        search_prompts,
+        ToolCall::McpSearchPrompts(super::McpSearchPromptsInput {
+            connector_id: Some("docs".to_string()),
+            query: Some("incident".to_string()),
+            limit: Some(3),
+            offset: None,
+        })
+    );
+    assert_eq!(
+        get_prompt,
+        ToolCall::McpGetPrompt(super::McpGetPromptInput {
+            connector_id: "docs".to_string(),
+            name: "onboarding".to_string(),
+            arguments: Some(std::collections::BTreeMap::from([(
+                "audience".to_string(),
+                "operator".to_string(),
+            )])),
+        })
+    );
+}
+
+#[test]
+fn tool_call_parses_continue_later_inputs() {
+    let call = ToolCall::from_openai_function(
+        "continue_later",
+        r#"{"delay_seconds":900,"handoff_payload":"resume from this handoff","delivery_mode":"existing_session"}"#,
+    )
+    .expect("parse continue_later");
+
+    assert_eq!(
+        call,
+        ToolCall::ContinueLater(super::ContinueLaterInput {
+            delay_seconds: 900,
+            handoff_payload: "resume from this handoff".to_string(),
+            delivery_mode: Some(crate::agent::AgentScheduleDeliveryMode::ExistingSession),
+        })
+    );
+}
+
+#[test]
+fn automatic_model_definitions_include_session_memory_tools() {
+    let catalog = ToolCatalog::default();
+    let names = catalog
+        .automatic_model_definitions()
+        .into_iter()
+        .map(|definition| definition.name)
+        .collect::<Vec<_>>();
+
+    assert!(names.contains(&ToolName::SessionSearch));
+    assert!(names.contains(&ToolName::SessionRead));
+    assert!(names.contains(&ToolName::KnowledgeSearch));
+    assert!(names.contains(&ToolName::KnowledgeRead));
+}
+
+#[test]
+fn tool_call_parses_session_memory_inputs() {
+    let search = ToolCall::from_openai_function(
+        "session_search",
+        r#"{"query":"ADQM","tiers":["warm"],"limit":5}"#,
+    )
+    .expect("parse session_search");
+    let read = ToolCall::from_openai_function(
+        "session_read",
+        r#"{"session_id":"session-1","mode":"transcript","cursor":3,"max_items":10}"#,
+    )
+    .expect("parse session_read");
+
+    assert_eq!(
+        search,
+        ToolCall::SessionSearch(SessionSearchInput {
+            query: "ADQM".to_string(),
+            limit: Some(5),
+            offset: None,
+            tiers: Some(vec![SessionRetentionTier::Warm]),
+            agent_identifier: None,
+            updated_after: None,
+            updated_before: None,
+        })
+    );
+    assert_eq!(
+        read,
+        ToolCall::SessionRead(SessionReadInput {
+            session_id: "session-1".to_string(),
+            mode: Some(SessionReadMode::Transcript),
+            cursor: Some(3),
+            max_items: Some(10),
+            max_bytes: None,
+            include_tools: None,
+        })
+    );
+}
+
+#[test]
+fn tool_call_parses_knowledge_memory_inputs() {
+    let search = ToolCall::from_openai_function(
+        "knowledge_search",
+        r#"{"query":"architecture","kinds":["project_doc"],"roots":["docs"],"limit":5}"#,
+    )
+    .expect("parse knowledge_search");
+    let read = ToolCall::from_openai_function(
+        "knowledge_read",
+        r#"{"path":"docs/architecture.md","mode":"excerpt","cursor":10,"max_lines":20}"#,
+    )
+    .expect("parse knowledge_read");
+
+    assert_eq!(
+        search,
+        ToolCall::KnowledgeSearch(KnowledgeSearchInput {
+            query: "architecture".to_string(),
+            limit: Some(5),
+            offset: None,
+            kinds: Some(vec![KnowledgeSourceKind::ProjectDoc]),
+            roots: Some(vec![KnowledgeRoot::Docs]),
+        })
+    );
+    assert_eq!(
+        read,
+        ToolCall::KnowledgeRead(KnowledgeReadInput {
+            path: "docs/architecture.md".to_string(),
+            mode: Some(KnowledgeReadMode::Excerpt),
+            cursor: Some(10),
+            max_bytes: None,
+            max_lines: Some(20),
+        })
+    );
 }
 
 #[test]

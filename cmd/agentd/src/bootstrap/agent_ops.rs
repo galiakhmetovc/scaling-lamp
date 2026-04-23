@@ -1,11 +1,83 @@
 use super::{App, BootstrapError, unix_timestamp};
 use crate::agents;
-use agent_persistence::{AgentProfileRecord, AgentRepository, AgentScheduleRecord};
+use agent_persistence::{
+    AgentProfileRecord, AgentRepository, AgentScheduleRecord, SessionRepository,
+};
 use agent_runtime::agent::{
     AgentProfile, AgentSchedule, AgentScheduleDeliveryMode, AgentScheduleInit, AgentScheduleMode,
     AgentTemplateKind,
 };
+use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AgentScheduleCreateOptions {
+    pub agent_identifier: Option<String>,
+    pub prompt: String,
+    pub mode: AgentScheduleMode,
+    pub delivery_mode: AgentScheduleDeliveryMode,
+    pub target_session_id: Option<String>,
+    pub interval_seconds: u64,
+    pub enabled: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AgentScheduleView {
+    pub id: String,
+    pub agent_profile_id: String,
+    pub workspace_root: PathBuf,
+    pub prompt: String,
+    pub mode: AgentScheduleMode,
+    pub delivery_mode: AgentScheduleDeliveryMode,
+    pub target_session_id: Option<String>,
+    pub interval_seconds: u64,
+    pub next_fire_at: i64,
+    pub enabled: bool,
+    pub last_triggered_at: Option<i64>,
+    pub last_finished_at: Option<i64>,
+    pub last_session_id: Option<String>,
+    pub last_job_id: Option<String>,
+    pub last_result: Option<String>,
+    pub last_error: Option<String>,
+    pub created_at: i64,
+    pub updated_at: i64,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AgentScheduleUpdatePatch {
+    pub agent_identifier: Option<String>,
+    pub prompt: Option<String>,
+    pub mode: Option<AgentScheduleMode>,
+    pub delivery_mode: Option<AgentScheduleDeliveryMode>,
+    pub target_session_id: Option<String>,
+    pub interval_seconds: Option<u64>,
+    pub enabled: Option<bool>,
+}
+
+impl From<AgentSchedule> for AgentScheduleView {
+    fn from(value: AgentSchedule) -> Self {
+        Self {
+            id: value.id,
+            agent_profile_id: value.agent_profile_id,
+            workspace_root: value.workspace_root,
+            prompt: value.prompt,
+            mode: value.mode,
+            delivery_mode: value.delivery_mode,
+            target_session_id: value.target_session_id,
+            interval_seconds: value.interval_seconds,
+            next_fire_at: value.next_fire_at,
+            enabled: value.enabled,
+            last_triggered_at: value.last_triggered_at,
+            last_finished_at: value.last_finished_at,
+            last_session_id: value.last_session_id,
+            last_job_id: value.last_job_id,
+            last_result: value.last_result,
+            last_error: value.last_error,
+            created_at: value.created_at,
+            updated_at: value.updated_at,
+        }
+    }
+}
 
 impl App {
     pub(crate) fn ensure_builtin_agents_bootstrapped(&self) -> Result<(), BootstrapError> {
@@ -136,12 +208,15 @@ impl App {
         })?;
 
         let now = unix_timestamp()?;
-        let profile = AgentProfile::new(
+        let profile = AgentProfile::new_with_provenance(
             &agent_id,
             name.trim(),
             AgentTemplateKind::Custom,
             &agent_home,
             template.allowed_tools.clone(),
+            Some(template.id.clone()),
+            None,
+            None,
             now,
             now,
         )
@@ -192,6 +267,10 @@ impl App {
         Ok(schedule)
     }
 
+    pub fn agent_schedule_view(&self, id: &str) -> Result<AgentScheduleView, BootstrapError> {
+        self.agent_schedule(id).map(AgentScheduleView::from)
+    }
+
     pub fn create_agent_schedule(
         &self,
         id: &str,
@@ -199,31 +278,46 @@ impl App {
         prompt: &str,
         agent_identifier: Option<&str>,
     ) -> Result<AgentSchedule, BootstrapError> {
+        self.create_agent_schedule_with_options(
+            id,
+            AgentScheduleCreateOptions {
+                agent_identifier: agent_identifier.map(str::to_string),
+                prompt: prompt.to_string(),
+                mode: AgentScheduleMode::Interval,
+                delivery_mode: AgentScheduleDeliveryMode::FreshSession,
+                target_session_id: None,
+                interval_seconds,
+                enabled: true,
+            },
+        )
+    }
+
+    pub fn create_agent_schedule_with_options(
+        &self,
+        id: &str,
+        options: AgentScheduleCreateOptions,
+    ) -> Result<AgentSchedule, BootstrapError> {
         let store = self.store()?;
-        let agent = match agent_identifier
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-        {
-            Some(identifier) => load_agent_profile(&store, identifier)?.ok_or_else(|| {
-                BootstrapError::MissingRecord {
-                    kind: "agent",
-                    id: identifier.to_string(),
-                }
-            })?,
-            None => self.current_agent_profile()?,
-        };
+        let agent =
+            resolve_schedule_agent(self, &store, options.agent_identifier.as_deref(), None)?;
+        let target_session_id = validate_schedule_target_session(
+            &store,
+            &agent.id,
+            options.delivery_mode,
+            options.target_session_id,
+        )?;
         let now = unix_timestamp()?;
         let schedule = AgentSchedule::new(AgentScheduleInit {
             id: id.to_string(),
             agent_profile_id: agent.id.clone(),
             workspace_root: current_workspace_root(&self.runtime.workspace.root),
-            prompt: prompt.to_string(),
-            mode: AgentScheduleMode::Interval,
-            delivery_mode: AgentScheduleDeliveryMode::FreshSession,
-            target_session_id: None,
-            interval_seconds,
+            prompt: options.prompt,
+            mode: options.mode,
+            delivery_mode: options.delivery_mode,
+            target_session_id,
+            interval_seconds: options.interval_seconds,
             next_fire_at: now,
-            enabled: true,
+            enabled: options.enabled,
             last_triggered_at: None,
             last_finished_at: None,
             last_session_id: None,
@@ -238,6 +332,71 @@ impl App {
         })?;
         store.put_agent_schedule(&AgentScheduleRecord::from(&schedule))?;
         Ok(schedule)
+    }
+
+    pub fn update_agent_schedule(
+        &self,
+        id: &str,
+        patch: AgentScheduleUpdatePatch,
+    ) -> Result<AgentSchedule, BootstrapError> {
+        let store = self.store()?;
+        let current = self.agent_schedule(id)?;
+        let agent = resolve_schedule_agent(
+            self,
+            &store,
+            patch.agent_identifier.as_deref(),
+            Some(current.agent_profile_id.as_str()),
+        )?;
+        let mode = patch.mode.unwrap_or(current.mode);
+        let delivery_mode = patch.delivery_mode.unwrap_or(current.delivery_mode);
+        let target_session_id = validate_schedule_target_session(
+            &store,
+            &agent.id,
+            delivery_mode,
+            patch
+                .target_session_id
+                .or(current.target_session_id.clone()),
+        )?;
+        let now = unix_timestamp()?;
+        let updated = AgentSchedule::new(AgentScheduleInit {
+            id: current.id.clone(),
+            agent_profile_id: agent.id,
+            workspace_root: current.workspace_root.clone(),
+            prompt: patch.prompt.unwrap_or(current.prompt.clone()),
+            mode,
+            delivery_mode,
+            target_session_id,
+            interval_seconds: patch.interval_seconds.unwrap_or(current.interval_seconds),
+            next_fire_at: current.next_fire_at,
+            enabled: patch.enabled.unwrap_or(current.enabled),
+            last_triggered_at: current.last_triggered_at,
+            last_finished_at: current.last_finished_at,
+            last_session_id: current.last_session_id.clone(),
+            last_job_id: current.last_job_id.clone(),
+            last_result: current.last_result.clone(),
+            last_error: current.last_error.clone(),
+            created_at: current.created_at,
+            updated_at: now,
+        })
+        .map_err(|error| BootstrapError::Usage {
+            reason: error.to_string(),
+        })?;
+        store.put_agent_schedule(&AgentScheduleRecord::from(&updated))?;
+        Ok(updated)
+    }
+
+    pub fn set_agent_schedule_enabled(
+        &self,
+        id: &str,
+        enabled: bool,
+    ) -> Result<AgentSchedule, BootstrapError> {
+        self.update_agent_schedule(
+            id,
+            AgentScheduleUpdatePatch {
+                enabled: Some(enabled),
+                ..AgentScheduleUpdatePatch::default()
+            },
+        )
     }
 
     pub fn delete_agent_schedule(&self, id: &str) -> Result<bool, BootstrapError> {
@@ -390,6 +549,24 @@ fn render_agent_profile(profile: &AgentProfile) -> String {
         format!("template={}", profile.template_kind.as_str()),
         format!("home={}", profile.agent_home.display()),
         format!(
+            "created_from_template={}",
+            profile
+                .created_from_template_id
+                .as_deref()
+                .unwrap_or("<none>")
+        ),
+        format!(
+            "created_by_session={}",
+            profile.created_by_session_id.as_deref().unwrap_or("<none>")
+        ),
+        format!(
+            "created_by_agent={}",
+            profile
+                .created_by_agent_profile_id
+                .as_deref()
+                .unwrap_or("<none>")
+        ),
+        format!(
             "system_md={}",
             profile.agent_home.join("SYSTEM.md").display()
         ),
@@ -425,6 +602,68 @@ fn load_agent_profile(
         .map(AgentProfile::try_from)
         .transpose()
         .map_err(BootstrapError::RecordConversion)
+}
+
+fn resolve_schedule_agent(
+    app: &App,
+    store: &agent_persistence::PersistenceStore,
+    agent_identifier: Option<&str>,
+    fallback_agent_id: Option<&str>,
+) -> Result<AgentProfile, BootstrapError> {
+    match agent_identifier
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        Some(identifier) => {
+            load_agent_profile(store, identifier)?.ok_or_else(|| BootstrapError::MissingRecord {
+                kind: "agent",
+                id: identifier.to_string(),
+            })
+        }
+        None => match fallback_agent_id {
+            Some(agent_id) => {
+                load_agent_profile(store, agent_id)?.ok_or_else(|| BootstrapError::MissingRecord {
+                    kind: "agent",
+                    id: agent_id.to_string(),
+                })
+            }
+            None => app.current_agent_profile(),
+        },
+    }
+}
+
+fn validate_schedule_target_session(
+    store: &agent_persistence::PersistenceStore,
+    agent_profile_id: &str,
+    delivery_mode: AgentScheduleDeliveryMode,
+    target_session_id: Option<String>,
+) -> Result<Option<String>, BootstrapError> {
+    match delivery_mode {
+        AgentScheduleDeliveryMode::FreshSession => Ok(None),
+        AgentScheduleDeliveryMode::ExistingSession => {
+            let target_session_id = target_session_id
+                .map(|value| value.trim().to_string())
+                .filter(|value| !value.is_empty())
+                .ok_or_else(|| BootstrapError::Usage {
+                    reason: "existing_session расписание требует target_session_id".to_string(),
+                })?;
+            let session = store.get_session(&target_session_id)?.ok_or_else(|| {
+                BootstrapError::MissingRecord {
+                    kind: "session",
+                    id: target_session_id.clone(),
+                }
+            })?;
+            if session.agent_profile_id != agent_profile_id {
+                return Err(BootstrapError::Usage {
+                    reason: format!(
+                        "target_session_id {} привязан к агенту {}, а не {}",
+                        target_session_id, session.agent_profile_id, agent_profile_id
+                    ),
+                });
+            }
+            Ok(Some(target_session_id))
+        }
+    }
 }
 
 fn next_available_agent_id(

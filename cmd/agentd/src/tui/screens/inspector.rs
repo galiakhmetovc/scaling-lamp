@@ -1,7 +1,7 @@
 use crate::bootstrap::BootstrapError;
-use crate::tui::app::{BrowserKind, TuiAppState};
+use crate::tui::app::{BrowserKind, DialogState, TuiAppState};
 use crate::tui::events::TuiAction;
-use crossterm::event::{KeyCode, KeyEvent};
+use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 pub fn handle_key(state: &mut TuiAppState, key: KeyEvent) -> Result<TuiAction, BootstrapError> {
     if state.dialog_state().is_some() {
@@ -26,6 +26,30 @@ pub fn handle_key(state: &mut TuiAppState, key: KeyEvent) -> Result<TuiAction, B
         KeyCode::Enter if state.browser_state().is_some() => TuiAction::BrowserActivate,
         KeyCode::Char('н') | KeyCode::Char('Н') if state.browser_state().is_some() => {
             TuiAction::BrowserCreate
+        }
+        KeyCode::Char('р') | KeyCode::Char('Р')
+            if matches!(
+                state.browser_state().map(|browser| browser.kind()),
+                Some(BrowserKind::Schedules | BrowserKind::Mcp)
+            ) =>
+        {
+            TuiAction::BrowserEdit
+        }
+        KeyCode::Char('п') | KeyCode::Char('П')
+            if matches!(
+                state.browser_state().map(|browser| browser.kind()),
+                Some(BrowserKind::Schedules | BrowserKind::Mcp)
+            ) =>
+        {
+            TuiAction::BrowserToggle
+        }
+        KeyCode::Char('с') | KeyCode::Char('С')
+            if matches!(
+                state.browser_state().map(|browser| browser.kind()),
+                Some(BrowserKind::Mcp)
+            ) =>
+        {
+            TuiAction::BrowserMessage
         }
         KeyCode::Char('/')
             if matches!(
@@ -63,7 +87,7 @@ pub fn handle_key(state: &mut TuiAppState, key: KeyEvent) -> Result<TuiAction, B
         KeyCode::Char('у') | KeyCode::Char('У')
             if matches!(
                 state.browser_state().map(|browser| browser.kind()),
-                Some(BrowserKind::Schedules)
+                Some(BrowserKind::Schedules | BrowserKind::Mcp)
             ) =>
         {
             TuiAction::BrowserDelete
@@ -76,12 +100,59 @@ pub fn handle_key(state: &mut TuiAppState, key: KeyEvent) -> Result<TuiAction, B
         {
             TuiAction::BrowserOpenSelected
         }
+        KeyCode::Char('с') | KeyCode::Char('С')
+            if matches!(
+                state.browser_state().map(|browser| browser.kind()),
+                Some(BrowserKind::Agents)
+            ) =>
+        {
+            TuiAction::BrowserMessage
+        }
         _ => TuiAction::None,
     };
     Ok(action)
 }
 
 fn handle_dialog_key(state: &mut TuiAppState, key: KeyEvent) -> TuiAction {
+    if matches!(
+        state.dialog_state(),
+        Some(
+            DialogState::CreateScheduleForm { .. }
+                | DialogState::EditScheduleForm { .. }
+                | DialogState::CreateMcpConnectorForm { .. }
+                | DialogState::EditMcpConnectorForm { .. }
+                | DialogState::SendAgentMessageForm { .. }
+                | DialogState::GrantChainContinuationForm { .. }
+        )
+    ) {
+        return match key.code {
+            KeyCode::Esc => {
+                state.close_dialog();
+                TuiAction::None
+            }
+            KeyCode::Enter => TuiAction::ConfirmDialog,
+            KeyCode::Tab | KeyCode::Down => {
+                state.dialog_next_field();
+                TuiAction::None
+            }
+            KeyCode::BackTab | KeyCode::Up => {
+                state.dialog_previous_field();
+                TuiAction::None
+            }
+            KeyCode::Backspace => {
+                state.pop_dialog_input();
+                TuiAction::None
+            }
+            KeyCode::Char(c)
+                if key.modifiers.is_empty() || key.modifiers == KeyModifiers::SHIFT =>
+            {
+                state.append_dialog_input(c);
+                TuiAction::None
+            }
+            _ => TuiAction::None,
+        };
+    }
+
     match key.code {
         KeyCode::Esc => {
             state.close_dialog();
@@ -192,6 +263,22 @@ mod tests {
             .expect("delete key"),
             TuiAction::BrowserDelete
         );
+        assert_eq!(
+            handle_key(
+                &mut state,
+                KeyEvent::new(KeyCode::Char('р'), KeyModifiers::NONE)
+            )
+            .expect("edit key"),
+            TuiAction::BrowserEdit
+        );
+        assert_eq!(
+            handle_key(
+                &mut state,
+                KeyEvent::new(KeyCode::Char('п'), KeyModifiers::NONE)
+            )
+            .expect("toggle key"),
+            TuiAction::BrowserToggle
+        );
 
         state.open_artifact_browser(
             "Артефакты".to_string(),
@@ -226,6 +313,26 @@ mod tests {
                 .expect("full preview down key"),
             TuiAction::BrowserPreviewScrollDown
         );
+
+        state.open_mcp_browser(
+            "MCP".to_string(),
+            "↑↓ выбор | Н создать | Р изменить | П вкл/выкл | С перезапуск | У удалить".to_string(),
+            vec![BrowserItem {
+                id: "docs".to_string(),
+                label: "docs transport=stdio".to_string(),
+            }],
+            0,
+            "MCP docs".to_string(),
+            "id=docs".to_string(),
+        );
+        assert_eq!(
+            handle_key(
+                &mut state,
+                KeyEvent::new(KeyCode::Char('с'), KeyModifiers::NONE)
+            )
+            .expect("restart key"),
+            TuiAction::BrowserMessage
+        );
     }
 
     #[test]
@@ -250,5 +357,37 @@ mod tests {
             .expect("confirm key"),
             TuiAction::ConfirmDialog
         );
+    }
+
+    #[test]
+    fn schedule_form_dialog_cycles_fields() {
+        let mut state = TuiAppState::new(Vec::new(), Some("session-a".to_string()));
+        state.open_create_schedule_dialog();
+
+        assert_eq!(state.dialog_input(), Some(""));
+        assert_eq!(
+            handle_key(&mut state, KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE))
+                .expect("tab key"),
+            TuiAction::None
+        );
+        assert_eq!(state.dialog_input(), Some(""));
+        assert_eq!(
+            handle_key(
+                &mut state,
+                KeyEvent::new(KeyCode::Char('j'), KeyModifiers::NONE)
+            )
+            .expect("text key"),
+            TuiAction::None
+        );
+        assert_eq!(state.dialog_input(), Some("j"));
+        assert_eq!(
+            handle_key(
+                &mut state,
+                KeyEvent::new(KeyCode::BackTab, KeyModifiers::SHIFT)
+            )
+            .expect("backtab key"),
+            TuiAction::None
+        );
+        assert_eq!(state.dialog_input(), Some(""));
     }
 }

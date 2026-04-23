@@ -6,11 +6,18 @@ pub mod screens;
 pub mod timeline;
 pub mod worker;
 
-use crate::bootstrap::{App, BootstrapError};
+use crate::bootstrap::{
+    AgentScheduleCreateOptions, AgentScheduleUpdatePatch, App, BootstrapError,
+    McpConnectorCreateOptions, McpConnectorUpdatePatch,
+};
 use crate::daemon;
 use crate::execution::ChatExecutionEvent;
 use crate::help::{HelpTopic, parse_help_topic, render_command_usage_error, render_help};
 use crate::http::client::{DaemonConnectOptions, connect_or_autospawn_detailed};
+use agent_runtime::tool::{
+    KnowledgeReadInput, KnowledgeReadMode, KnowledgeSearchInput, SessionReadInput, SessionReadMode,
+    SessionSearchInput,
+};
 use app::{BrowserItem, BrowserKind, DialogState, TuiAppState};
 use backend::TuiBackend;
 use crossterm::event::{
@@ -130,9 +137,10 @@ fn dispatch_terminal_event(
             let action = match state.active_screen() {
                 TuiScreen::Sessions => screens::session::handle_key(state, key)?,
                 TuiScreen::Chat => screens::chat::handle_key(state, key)?,
-                TuiScreen::Agents | TuiScreen::Schedules | TuiScreen::Artifacts => {
-                    screens::inspector::handle_key(state, key)?
-                }
+                TuiScreen::Agents
+                | TuiScreen::Schedules
+                | TuiScreen::Mcp
+                | TuiScreen::Artifacts => screens::inspector::handle_key(state, key)?,
             };
 
             Ok(action)
@@ -184,6 +192,15 @@ where
         TuiAction::BrowserCreate => {
             open_browser_create_dialog(state);
         }
+        TuiAction::BrowserMessage => {
+            handle_browser_message_action(app, state)?;
+        }
+        TuiAction::BrowserEdit => {
+            open_browser_edit_dialog(app, state)?;
+        }
+        TuiAction::BrowserToggle => {
+            toggle_browser_schedule(app, state)?;
+        }
         TuiAction::BrowserDelete => {
             open_browser_delete_dialog(state);
         }
@@ -207,6 +224,12 @@ where
         }
         TuiAction::OpenClearDialog => {
             let _ = state.open_clear_dialog();
+        }
+        TuiAction::OpenJudgeDialog => {
+            state.open_send_agent_message_dialog(Some("judge".to_string()));
+        }
+        TuiAction::OpenChainGrantDialog => {
+            state.open_grant_chain_dialog(None);
         }
         TuiAction::ActivateSelectedSession => {
             if let Ok(session_id) = state.activate_selected_session() {
@@ -236,21 +259,71 @@ where
                     .timeline_mut()
                     .push_system(&message, unix_timestamp()?);
             }
-            Some(DialogState::CreateSchedule { value }) => {
-                let spec = require_arg(value.as_str(), "/schedule")?;
-                let (id, interval_seconds, agent_identifier, prompt) =
-                    parse_schedule_create_spec(spec.as_str())?;
-                let message = app.create_agent_schedule(
-                    &id,
-                    interval_seconds,
-                    &prompt,
-                    agent_identifier.as_deref(),
-                )?;
+            Some(DialogState::CreateScheduleForm { form }) => {
+                let (id, options) = schedule_form_create_spec(&form)?;
+                let message = app.create_agent_schedule_with_options(&id, options)?;
                 state.close_dialog();
                 open_schedule_browser(app, state, Some(id.as_str()))?;
                 state
                     .timeline_mut()
                     .push_system(&message, unix_timestamp()?);
+            }
+            Some(DialogState::EditScheduleForm { form }) => {
+                let (id, patch) = schedule_form_edit_spec(&form)?;
+                let message = app.update_agent_schedule(&id, patch)?;
+                state.close_dialog();
+                open_schedule_browser(app, state, Some(id.as_str()))?;
+                state
+                    .timeline_mut()
+                    .push_system(&message, unix_timestamp()?);
+            }
+            Some(DialogState::CreateMcpConnectorForm { form }) => {
+                let (id, options) = mcp_form_create_spec(&form)?;
+                let message = app.create_mcp_connector(&id, options)?;
+                state.close_dialog();
+                open_mcp_browser(app, state, Some(id.as_str()))?;
+                state
+                    .timeline_mut()
+                    .push_system(&message, unix_timestamp()?);
+            }
+            Some(DialogState::EditMcpConnectorForm { form }) => {
+                let (id, patch) = mcp_form_edit_spec(&form)?;
+                let message = app.update_mcp_connector(&id, patch)?;
+                state.close_dialog();
+                open_mcp_browser(app, state, Some(id.as_str()))?;
+                state
+                    .timeline_mut()
+                    .push_system(&message, unix_timestamp()?);
+            }
+            Some(DialogState::SendAgentMessageForm { form }) => {
+                let (target_agent_id, message) = agent_message_form_spec(&form)?;
+                let current_session_id = state
+                    .current_session_id()
+                    .ok_or_else(|| BootstrapError::Usage {
+                        reason: "не выбрана текущая сессия".to_string(),
+                    })?
+                    .to_string();
+                let rendered =
+                    app.send_agent_message(&current_session_id, &target_agent_id, &message)?;
+                state.close_dialog();
+                state
+                    .timeline_mut()
+                    .push_system(&rendered, unix_timestamp()?);
+            }
+            Some(DialogState::GrantChainContinuationForm { form }) => {
+                let (chain_id, reason) = chain_grant_form_spec(&form)?;
+                let current_session_id = state
+                    .current_session_id()
+                    .ok_or_else(|| BootstrapError::Usage {
+                        reason: "не выбрана текущая сессия".to_string(),
+                    })?
+                    .to_string();
+                let rendered =
+                    app.grant_chain_continuation(&current_session_id, &chain_id, &reason)?;
+                state.close_dialog();
+                state
+                    .timeline_mut()
+                    .push_system(&rendered, unix_timestamp()?);
             }
             Some(DialogState::BrowserSearch { value }) => {
                 state.apply_browser_search(value);
@@ -295,6 +368,14 @@ where
                 let message = app.delete_agent_schedule(&id)?;
                 state.close_dialog();
                 open_schedule_browser(app, state, None)?;
+                state
+                    .timeline_mut()
+                    .push_system(&message, unix_timestamp()?);
+            }
+            Some(DialogState::ConfirmDeleteMcpConnector { id }) => {
+                let message = app.delete_mcp_connector(&id)?;
+                state.close_dialog();
+                open_mcp_browser(app, state, None)?;
                 state
                     .timeline_mut()
                     .push_system(&message, unix_timestamp()?);
@@ -371,7 +452,7 @@ where
     let preview_content = app.render_agent(Some(selected_id.as_str()))?;
     state.open_agent_browser(
         "Агенты".to_string(),
-        "↑↓ выбор | Enter выбрать | Н создать | О дом".to_string(),
+        "↑↓ выбор | Enter выбрать | Н создать | С написать | О дом".to_string(),
         parsed.items,
         selected_index,
         format!("Агент {selected_id}"),
@@ -412,10 +493,51 @@ where
     let preview_content = app.render_agent_schedule(selected_id.as_str())?;
     state.open_schedule_browser(
         "Расписания".to_string(),
-        "↑↓ выбор | Н создать | У удалить".to_string(),
+        "↑↓ выбор | Н создать | Р изменить | П вкл/выкл | У удалить".to_string(),
         items,
         selected_index,
         format!("Расписание {selected_id}"),
+        preview_content,
+    );
+    Ok(())
+}
+
+fn open_mcp_browser<B>(
+    app: &B,
+    state: &mut TuiAppState,
+    preferred_id: Option<&str>,
+) -> Result<(), BootstrapError>
+where
+    B: TuiBackend,
+{
+    let rendered = app.render_mcp_connectors()?;
+    let items = parse_mcp_browser_items(&rendered);
+    if items.is_empty() {
+        state.open_mcp_browser(
+            "MCP".to_string(),
+            "Н создать".to_string(),
+            Vec::new(),
+            0,
+            "MCP".to_string(),
+            rendered,
+        );
+        return Ok(());
+    }
+    let selected_index = preferred_id
+        .and_then(|id| items.iter().position(|item| item.id == id))
+        .unwrap_or(0);
+    let selected_id = items
+        .get(selected_index)
+        .map(|item| item.id.as_str())
+        .unwrap_or_default()
+        .to_string();
+    let preview_content = app.render_mcp_connector(selected_id.as_str())?;
+    state.open_mcp_browser(
+        "MCP".to_string(),
+        "↑↓ выбор | Н создать | Р изменить | П вкл/выкл | С перезапуск | У удалить".to_string(),
+        items,
+        selected_index,
+        format!("MCP {}", selected_id),
         preview_content,
     );
     Ok(())
@@ -482,6 +604,10 @@ where
             format!("Расписание {}", selected.id),
             app.render_agent_schedule(selected.id.as_str())?,
         ),
+        BrowserKind::Mcp => (
+            format!("MCP {}", selected.id),
+            app.render_mcp_connector(selected.id.as_str())?,
+        ),
         BrowserKind::Artifacts => {
             let session_id = state
                 .current_session_id()
@@ -520,6 +646,9 @@ where
         BrowserKind::Schedules => {
             refresh_browser_preview(app, state)?;
         }
+        BrowserKind::Mcp => {
+            refresh_browser_preview(app, state)?;
+        }
         BrowserKind::Artifacts => state.toggle_browser_full_preview(),
     }
     Ok(())
@@ -540,7 +669,7 @@ where
             let home = app.open_agent_home(Some(selected_id.as_str()))?;
             state.set_browser_preview(format!("Дом агента {selected_id}"), home);
         }
-        BrowserKind::Schedules | BrowserKind::Artifacts => {
+        BrowserKind::Schedules | BrowserKind::Mcp | BrowserKind::Artifacts => {
             refresh_browser_preview(app, state)?;
         }
     }
@@ -551,8 +680,57 @@ fn open_browser_create_dialog(state: &mut TuiAppState) {
     match state.browser_state().map(|browser| browser.kind()) {
         Some(BrowserKind::Agents) => state.open_create_agent_dialog(),
         Some(BrowserKind::Schedules) => state.open_create_schedule_dialog(),
+        Some(BrowserKind::Mcp) => state.open_create_mcp_connector_dialog(),
         Some(BrowserKind::Artifacts) | None => {}
     }
+}
+
+fn handle_browser_message_action<B>(app: &B, state: &mut TuiAppState) -> Result<(), BootstrapError>
+where
+    B: TuiBackend,
+{
+    if matches!(
+        state.browser_state().map(|browser| browser.kind()),
+        Some(BrowserKind::Agents)
+    ) {
+        let target_agent_id = state.browser_selected_item().map(|item| item.id.clone());
+        state.open_send_agent_message_dialog(target_agent_id);
+        return Ok(());
+    }
+    if matches!(
+        state.browser_state().map(|browser| browser.kind()),
+        Some(BrowserKind::Mcp)
+    ) && let Some(selected_id) = state.browser_selected_item().map(|item| item.id.clone())
+    {
+        let message = app.restart_mcp_connector(selected_id.as_str())?;
+        open_mcp_browser(app, state, Some(selected_id.as_str()))?;
+        state
+            .timeline_mut()
+            .push_system(&message, unix_timestamp()?);
+    }
+    Ok(())
+}
+
+fn open_browser_edit_dialog<B>(app: &B, state: &mut TuiAppState) -> Result<(), BootstrapError>
+where
+    B: TuiBackend,
+{
+    if matches!(
+        state.browser_state().map(|browser| browser.kind()),
+        Some(BrowserKind::Schedules)
+    ) && let Some(selected) = state.browser_selected_item()
+    {
+        let schedule = app.load_agent_schedule(selected.id.as_str())?;
+        state.open_edit_schedule_dialog(schedule);
+    } else if matches!(
+        state.browser_state().map(|browser| browser.kind()),
+        Some(BrowserKind::Mcp)
+    ) && let Some(selected) = state.browser_selected_item()
+    {
+        let connector = app.load_mcp_connector(selected.id.as_str())?;
+        state.open_edit_mcp_connector_dialog(connector);
+    }
+    Ok(())
 }
 
 fn open_browser_delete_dialog(state: &mut TuiAppState) {
@@ -562,7 +740,46 @@ fn open_browser_delete_dialog(state: &mut TuiAppState) {
     ) && let Some(selected) = state.browser_selected_item()
     {
         state.open_delete_schedule_dialog(selected.id.clone());
+    } else if matches!(
+        state.browser_state().map(|browser| browser.kind()),
+        Some(BrowserKind::Mcp)
+    ) && let Some(selected) = state.browser_selected_item()
+    {
+        state.open_delete_mcp_connector_dialog(selected.id.clone());
     }
+}
+
+fn toggle_browser_schedule<B>(app: &B, state: &mut TuiAppState) -> Result<(), BootstrapError>
+where
+    B: TuiBackend,
+{
+    if !matches!(
+        state.browser_state().map(|browser| browser.kind()),
+        Some(BrowserKind::Schedules | BrowserKind::Mcp)
+    ) {
+        return Ok(());
+    }
+    let Some(selected_id) = state.browser_selected_item().map(|item| item.id.clone()) else {
+        return Ok(());
+    };
+    let message = if matches!(
+        state.browser_state().map(|browser| browser.kind()),
+        Some(BrowserKind::Schedules)
+    ) {
+        let schedule = app.load_agent_schedule(selected_id.as_str())?;
+        let message = app.set_agent_schedule_enabled(selected_id.as_str(), !schedule.enabled)?;
+        open_schedule_browser(app, state, Some(selected_id.as_str()))?;
+        message
+    } else {
+        let connector = app.load_mcp_connector(selected_id.as_str())?;
+        let message = app.set_mcp_connector_enabled(selected_id.as_str(), !connector.enabled)?;
+        open_mcp_browser(app, state, Some(selected_id.as_str()))?;
+        message
+    };
+    state
+        .timeline_mut()
+        .push_system(&message, unix_timestamp()?);
+    Ok(())
 }
 
 fn open_browser_search_dialog(state: &mut TuiAppState) {
@@ -635,6 +852,20 @@ fn parse_schedule_browser_items(rendered: &str) -> Vec<BrowserItem> {
         .collect()
 }
 
+fn parse_mcp_browser_items(rendered: &str) -> Vec<BrowserItem> {
+    rendered
+        .lines()
+        .filter_map(|line| {
+            let body = line.trim_start().strip_prefix("- ")?;
+            let id = body.split_whitespace().next()?.to_string();
+            Some(BrowserItem {
+                id,
+                label: body.to_string(),
+            })
+        })
+        .collect()
+}
+
 fn parse_artifact_browser_items(rendered: &str) -> Vec<BrowserItem> {
     rendered
         .lines()
@@ -673,7 +904,8 @@ where
             open_agents_browser(app, state, None)?;
         }
         Some("/agent") => {
-            let message = handle_agent_command(app, rest)?;
+            let current_session_id = state.current_session_id().map(str::to_string);
+            let message = handle_agent_command(app, current_session_id.as_deref(), rest)?;
             if rest.is_empty() || rest.starts_with("показать") || rest.starts_with("show") {
                 let identifier = option_arg(rest.strip_prefix("показать").unwrap_or(rest))
                     .or_else(|| option_arg(rest.strip_prefix("show").unwrap_or(rest)));
@@ -689,8 +921,40 @@ where
             }
             state.sync_sessions(app.list_session_summaries()?);
         }
+        Some("/judge") => {
+            let current_session_id = state
+                .current_session_id()
+                .ok_or_else(|| BootstrapError::Usage {
+                    reason: "не выбрана текущая сессия".to_string(),
+                })?
+                .to_string();
+            let message = app.send_agent_message(
+                &current_session_id,
+                "judge",
+                require_arg(rest, "/judge")?.as_str(),
+            )?;
+            state
+                .timeline_mut()
+                .push_system(&message, unix_timestamp()?);
+        }
         Some("/schedules") => {
             open_schedule_browser(app, state, None)?;
+        }
+        Some("/mcp") => {
+            let message = handle_mcp_command(app, rest)?;
+            if rest.is_empty() || rest.starts_with("показать") || rest.starts_with("show") {
+                let selected_id = option_arg(rest.strip_prefix("показать").unwrap_or(rest))
+                    .or_else(|| option_arg(rest.strip_prefix("show").unwrap_or(rest)));
+                if let Some(selected_id) = selected_id.as_deref() {
+                    state.open_mcp_screen(format!("MCP {selected_id}"), message);
+                } else {
+                    open_mcp_browser(app, state, None)?;
+                }
+            } else {
+                state
+                    .timeline_mut()
+                    .push_system(&message, unix_timestamp()?);
+            }
         }
         Some("/schedule") => {
             let message = handle_schedule_command(app, rest)?;
@@ -713,7 +977,7 @@ where
             state.timeline_mut().push_system(&about, unix_timestamp()?);
         }
         Some("/update") => {
-            let message = app.update_runtime()?;
+            let message = app.update_runtime(option_arg(rest).as_deref())?;
             state
                 .timeline_mut()
                 .push_system(&message, unix_timestamp()?);
@@ -761,6 +1025,12 @@ where
                     let plan = app.render_plan(&current_session_id)?;
                     state.timeline_mut().push_system(&plan, unix_timestamp()?);
                 }
+                "/chain" => {
+                    let message = handle_chain_command(app, &current_session_id, rest)?;
+                    state
+                        .timeline_mut()
+                        .push_system(&message, unix_timestamp()?);
+                }
                 "/status" => {
                     let run = app.render_active_run(&current_session_id)?;
                     state.timeline_mut().push_system(&run, unix_timestamp()?);
@@ -804,6 +1074,10 @@ where
                 "/jobs" => {
                     let jobs = app.render_active_jobs(&current_session_id)?;
                     state.timeline_mut().push_system(&jobs, unix_timestamp()?);
+                }
+                "/memory" => {
+                    let memory = handle_memory_command(app, rest)?;
+                    state.timeline_mut().push_system(&memory, unix_timestamp()?);
                 }
                 "/artifacts" => {
                     open_artifact_browser(app, state, &current_session_id, None)?;
@@ -1539,8 +1813,12 @@ fn canonical_command(command: &str) -> Option<&'static str> {
         "/new" | "\\новая" => Some("/new"),
         "/agents" | "\\агенты" => Some("/agents"),
         "/agent" | "\\агент" => Some("/agent"),
+        "/judge" | "/судья" | "\\судья" => Some("/judge"),
         "/schedules" | "\\расписания" => Some("/schedules"),
         "/schedule" | "\\расписание" => Some("/schedule"),
+        "/mcp" | "\\mcp" => Some("/mcp"),
+        "/memory" | "/память" | "\\память" => Some("/memory"),
+        "/chain" | "/цепочка" | "\\цепочка" => Some("/chain"),
         "/rename" | "\\переименовать" => Some("/rename"),
         "/clear" | "\\очистить" => Some("/clear"),
         "/help" | "\\помощь" => Some("/help"),
@@ -1574,7 +1852,11 @@ fn canonical_command(command: &str) -> Option<&'static str> {
     }
 }
 
-fn handle_agent_command<B>(app: &B, raw: &str) -> Result<String, BootstrapError>
+fn handle_agent_command<B>(
+    app: &B,
+    session_id: Option<&str>,
+    raw: &str,
+) -> Result<String, BootstrapError>
 where
     B: TuiBackend,
 {
@@ -1594,10 +1876,20 @@ where
             app.create_agent(&name, template_identifier.as_deref())
         }
         "открыть" | "open" => app.open_agent_home(option_arg(tail).as_deref()),
+        "написать" | "message" => {
+            let session_id = session_id.ok_or_else(|| BootstrapError::Usage {
+                reason: "не выбрана текущая сессия".to_string(),
+            })?;
+            let (target_agent_id, message) =
+                split_head_tail(tail).ok_or_else(|| BootstrapError::Usage {
+                    reason: render_command_usage_error("/agent", "не хватает аргументов"),
+                })?;
+            app.send_agent_message(session_id, target_agent_id, message)
+        }
         _ => Err(BootstrapError::Usage {
             reason: render_command_usage_error(
                 "/agent",
-                "неизвестная подкоманда агента; ожидается показать|выбрать|создать|открыть",
+                "неизвестная подкоманда агента; ожидается показать|выбрать|создать|открыть|написать",
             ),
         }),
     }
@@ -1640,25 +1932,224 @@ where
         "показать" | "show" => app.render_agent_schedule(&require_arg(tail, "/schedule")?),
         "создать" | "create" => {
             let spec = require_arg(tail, "/schedule")?;
-            let (id, interval_seconds, agent_identifier, prompt) =
-                parse_schedule_create_spec(spec.as_str())?;
-            app.create_agent_schedule(&id, interval_seconds, &prompt, agent_identifier.as_deref())
+            let (id, options) = parse_schedule_create_spec(spec.as_str())?;
+            app.create_agent_schedule_with_options(&id, options)
         }
+        "изменить" | "edit" => {
+            let spec = require_arg(tail, "/schedule")?;
+            let (id, patch) = parse_schedule_edit_spec(spec.as_str())?;
+            app.update_agent_schedule(&id, patch)
+        }
+        "включить" | "enable" => app.update_agent_schedule(
+            &require_arg(tail, "/schedule")?,
+            AgentScheduleUpdatePatch {
+                enabled: Some(true),
+                ..AgentScheduleUpdatePatch::default()
+            },
+        ),
+        "выключить" | "disable" => app.update_agent_schedule(
+            &require_arg(tail, "/schedule")?,
+            AgentScheduleUpdatePatch {
+                enabled: Some(false),
+                ..AgentScheduleUpdatePatch::default()
+            },
+        ),
         "удалить" | "delete" | "remove" => {
             app.delete_agent_schedule(&require_arg(tail, "/schedule")?)
         }
         _ => Err(BootstrapError::Usage {
             reason: render_command_usage_error(
                 "/schedule",
-                "неизвестная подкоманда расписания; ожидается показать|создать|удалить",
+                "неизвестная подкоманда расписания; ожидается показать|создать|изменить|включить|выключить|удалить",
             ),
         }),
     }
 }
 
+fn handle_mcp_command<B>(app: &B, raw: &str) -> Result<String, BootstrapError>
+where
+    B: TuiBackend,
+{
+    let trimmed = raw.trim();
+    let (action, tail) = match trimmed.split_once(' ') {
+        Some((action, tail)) => (action.trim(), tail.trim()),
+        None => (trimmed, ""),
+    };
+
+    match action {
+        "" => app.render_mcp_connectors(),
+        "показать" | "show" => app.render_mcp_connector(&require_arg(tail, "/mcp")?),
+        "создать" | "create" => {
+            let spec = require_arg(tail, "/mcp")?;
+            let (id, options) = parse_mcp_create_spec(spec.as_str())?;
+            app.create_mcp_connector(&id, options)
+        }
+        "изменить" | "edit" => {
+            let spec = require_arg(tail, "/mcp")?;
+            let (id, patch) = parse_mcp_edit_spec(spec.as_str())?;
+            app.update_mcp_connector(&id, patch)
+        }
+        "включить" | "enable" => {
+            app.set_mcp_connector_enabled(&require_arg(tail, "/mcp")?, true)
+        }
+        "выключить" | "disable" => {
+            app.set_mcp_connector_enabled(&require_arg(tail, "/mcp")?, false)
+        }
+        "перезапустить" | "restart" => {
+            app.restart_mcp_connector(&require_arg(tail, "/mcp")?)
+        }
+        "удалить" | "delete" | "remove" => {
+            app.delete_mcp_connector(&require_arg(tail, "/mcp")?)
+        }
+        _ => Err(BootstrapError::Usage {
+            reason: render_command_usage_error(
+                "/mcp",
+                "неизвестная подкоманда mcp; ожидается показать|создать|изменить|включить|выключить|перезапустить|удалить",
+            ),
+        }),
+    }
+}
+
+fn handle_memory_command<B>(app: &B, raw: &str) -> Result<String, BootstrapError>
+where
+    B: TuiBackend,
+{
+    let trimmed = raw.trim();
+    let (action, tail) = match trimmed.split_once(' ') {
+        Some((action, tail)) => (action.trim(), tail.trim()),
+        None => (trimmed, ""),
+    };
+
+    match action {
+        "сессии" | "sessions" => app.render_session_memory_search(SessionSearchInput {
+            query: require_arg(tail, "/memory")?,
+            limit: None,
+            offset: Some(0),
+            tiers: None,
+            agent_identifier: None,
+            updated_after: None,
+            updated_before: None,
+        }),
+        "сессия" | "session" => {
+            let value = require_arg(tail, "/memory")?;
+            let (session_id, mode) = parse_memory_session_read(value.as_str())?;
+            app.render_session_memory_read(SessionReadInput {
+                session_id,
+                mode: Some(mode),
+                cursor: None,
+                max_items: None,
+                max_bytes: None,
+                include_tools: Some(true),
+            })
+        }
+        "знания" | "knowledge" => app.render_knowledge_search(KnowledgeSearchInput {
+            query: require_arg(tail, "/memory")?,
+            limit: None,
+            offset: Some(0),
+            kinds: None,
+            roots: None,
+        }),
+        "файл" | "file" => {
+            let value = require_arg(tail, "/memory")?;
+            let (path, mode) = parse_memory_knowledge_read(value.as_str());
+            app.render_knowledge_read(KnowledgeReadInput {
+                path,
+                mode: Some(mode),
+                cursor: None,
+                max_bytes: None,
+                max_lines: None,
+            })
+        }
+        _ => Err(BootstrapError::Usage {
+            reason: render_command_usage_error(
+                "/memory",
+                "неизвестная подкоманда памяти; ожидается сессии|сессия|знания|файл",
+            ),
+        }),
+    }
+}
+
+fn parse_memory_session_read(raw: &str) -> Result<(String, SessionReadMode), BootstrapError> {
+    let trimmed = raw.trim();
+    let Some((session_id, maybe_mode)) = trimmed.split_once(' ') else {
+        return Ok((trimmed.to_string(), SessionReadMode::Summary));
+    };
+    Ok((
+        session_id.trim().to_string(),
+        parse_session_read_mode(maybe_mode.trim())?,
+    ))
+}
+
+fn parse_session_read_mode(raw: &str) -> Result<SessionReadMode, BootstrapError> {
+    match raw {
+        "" | "summary" | "сводка" => Ok(SessionReadMode::Summary),
+        "timeline" | "таймлайн" => Ok(SessionReadMode::Timeline),
+        "transcript" | "транскрипт" => Ok(SessionReadMode::Transcript),
+        "artifacts" | "артефакты" => Ok(SessionReadMode::Artifacts),
+        other => Err(BootstrapError::Usage {
+            reason: render_command_usage_error(
+                "/memory",
+                &format!("неизвестный режим чтения сессии {other}"),
+            ),
+        }),
+    }
+}
+
+fn parse_memory_knowledge_read(raw: &str) -> (String, KnowledgeReadMode) {
+    let trimmed = raw.trim();
+    if let Some((path, mode)) = trimmed.rsplit_once(' ') {
+        let mode = match mode.trim() {
+            "full" | "полный" => Some(KnowledgeReadMode::Full),
+            "excerpt" | "выдержка" => Some(KnowledgeReadMode::Excerpt),
+            _ => None,
+        };
+        if let Some(mode) = mode {
+            return (path.trim().to_string(), mode);
+        }
+    }
+    (trimmed.to_string(), KnowledgeReadMode::Excerpt)
+}
+
+fn handle_chain_command<B>(app: &B, session_id: &str, raw: &str) -> Result<String, BootstrapError>
+where
+    B: TuiBackend,
+{
+    let trimmed = raw.trim();
+    let (action, tail) = match trimmed.split_once(' ') {
+        Some((action, tail)) => (action.trim(), tail.trim()),
+        None => (trimmed, ""),
+    };
+
+    match action {
+        "продолжить" | "grant" | "continue" => {
+            let (chain_id, reason) =
+                split_head_tail(tail).ok_or_else(|| BootstrapError::Usage {
+                    reason: render_command_usage_error("/chain", "не хватает аргументов"),
+                })?;
+            app.grant_chain_continuation(session_id, chain_id, reason)
+        }
+        _ => Err(BootstrapError::Usage {
+            reason: render_command_usage_error(
+                "/chain",
+                "неизвестная подкоманда цепочки; ожидается продолжить",
+            ),
+        }),
+    }
+}
+
+fn split_head_tail(raw: &str) -> Option<(&str, &str)> {
+    let (head, tail) = raw.split_once(' ')?;
+    let head = head.trim();
+    let tail = tail.trim();
+    if head.is_empty() || tail.is_empty() {
+        return None;
+    }
+    Some((head, tail))
+}
+
 fn parse_schedule_create_spec(
     raw: &str,
-) -> Result<(String, u64, Option<String>, String), BootstrapError> {
+) -> Result<(String, AgentScheduleCreateOptions), BootstrapError> {
     let trimmed = raw.trim();
     let Some((head, prompt)) = trimmed.split_once("::") else {
         return Err(BootstrapError::Usage {
@@ -1675,57 +2166,144 @@ fn parse_schedule_create_spec(
         });
     }
 
-    let mut parts = head.split_whitespace();
-    let Some(id) = parts
-        .next()
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-    else {
+    let parsed = parse_schedule_field_tokens(head)?;
+    let Some(id) = parsed.id else {
         return Err(BootstrapError::Usage {
             reason: render_command_usage_error("/schedule", "не хватает id расписания"),
         });
     };
-    let Some(interval_raw) = parts
-        .next()
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-    else {
+    let Some(interval_seconds) = parsed.interval_seconds else {
         return Err(BootstrapError::Usage {
             reason: render_command_usage_error("/schedule", "не хватает interval_seconds"),
         });
     };
-    let interval_seconds = interval_raw
-        .parse::<u64>()
-        .map_err(|_| BootstrapError::Usage {
-            reason: render_command_usage_error(
-                "/schedule",
-                "interval_seconds должен быть положительным целым числом",
-            ),
-        })?;
-    if interval_seconds == 0 {
+
+    Ok((
+        id,
+        AgentScheduleCreateOptions {
+            agent_identifier: parsed.agent_identifier,
+            prompt,
+            mode: parsed
+                .mode
+                .unwrap_or(agent_runtime::agent::AgentScheduleMode::Interval),
+            delivery_mode: parsed
+                .delivery_mode
+                .unwrap_or(agent_runtime::agent::AgentScheduleDeliveryMode::FreshSession),
+            target_session_id: parsed.target_session_id,
+            interval_seconds,
+            enabled: parsed.enabled.unwrap_or(true),
+        },
+    ))
+}
+
+fn parse_schedule_edit_spec(
+    raw: &str,
+) -> Result<(String, AgentScheduleUpdatePatch), BootstrapError> {
+    let trimmed = raw.trim();
+    let (head, prompt) = match trimmed.split_once("::") {
+        Some((head, prompt)) => (head.trim(), Some(prompt.trim().to_string())),
+        None => (trimmed, None),
+    };
+    let parsed = parse_schedule_field_tokens(head)?;
+    let Some(id) = parsed.id else {
+        return Err(BootstrapError::Usage {
+            reason: render_command_usage_error("/schedule", "не хватает id расписания"),
+        });
+    };
+    let patch = AgentScheduleUpdatePatch {
+        agent_identifier: parsed.agent_identifier,
+        prompt: prompt.filter(|value| !value.is_empty()),
+        mode: parsed.mode,
+        delivery_mode: parsed.delivery_mode,
+        target_session_id: parsed.target_session_id,
+        interval_seconds: parsed.interval_seconds,
+        enabled: parsed.enabled,
+    };
+    if patch == AgentScheduleUpdatePatch::default() {
         return Err(BootstrapError::Usage {
             reason: render_command_usage_error(
                 "/schedule",
-                "interval_seconds должен быть больше нуля",
+                "для edit укажите хотя бы одно поле или новый prompt",
             ),
         });
     }
+    Ok((id, patch))
+}
 
-    let remainder = parts.collect::<Vec<_>>();
-    let agent_identifier = match remainder.as_slice() {
-        [] => None,
-        [value] => parse_schedule_agent_override(value)?,
-        _ => {
-            return Err(BootstrapError::Usage {
-                reason: render_command_usage_error(
-                    "/schedule",
-                    "лишние аргументы; после interval_seconds допускается только agent=<id>",
-                ),
-            });
+#[derive(Default)]
+struct ParsedScheduleFields {
+    id: Option<String>,
+    agent_identifier: Option<String>,
+    mode: Option<agent_runtime::agent::AgentScheduleMode>,
+    delivery_mode: Option<agent_runtime::agent::AgentScheduleDeliveryMode>,
+    target_session_id: Option<String>,
+    interval_seconds: Option<u64>,
+    enabled: Option<bool>,
+}
+
+fn parse_schedule_field_tokens(raw: &str) -> Result<ParsedScheduleFields, BootstrapError> {
+    let mut parsed = ParsedScheduleFields::default();
+    for token in raw.split_whitespace() {
+        if token.trim().is_empty() {
+            continue;
         }
-    };
+        if let Some((key, value)) = token.split_once('=') {
+            let key = key.trim();
+            let value = value.trim();
+            if value.is_empty() {
+                return Err(BootstrapError::Usage {
+                    reason: render_command_usage_error(
+                        "/schedule",
+                        &format!("пустое значение для поля {key}"),
+                    ),
+                });
+            }
+            match key {
+                "id" | "ид" => parsed.id = Some(value.to_string()),
+                "agent" | "агент" => parsed.agent_identifier = Some(value.to_string()),
+                "mode" | "режим" => parsed.mode = Some(parse_schedule_mode(value)?),
+                "delivery" | "доставка" => {
+                    parsed.delivery_mode = Some(parse_schedule_delivery_mode(value)?)
+                }
+                "session" | "сессия" => parsed.target_session_id = Some(value.to_string()),
+                "interval" | "секунды" => {
+                    parsed.interval_seconds = Some(parse_schedule_interval_seconds(value)?)
+                }
+                "enabled" | "включено" => {
+                    parsed.enabled = Some(parse_schedule_enabled(value)?)
+                }
+                other => {
+                    return Err(BootstrapError::Usage {
+                        reason: render_command_usage_error(
+                            "/schedule",
+                            &format!("неизвестное поле {other}"),
+                        ),
+                    });
+                }
+            }
+            continue;
+        }
 
-    Ok((id.to_string(), interval_seconds, agent_identifier, prompt))
+        if parsed.id.is_none() {
+            parsed.id = Some(token.to_string());
+            continue;
+        }
+        if parsed.interval_seconds.is_none() {
+            parsed.interval_seconds = Some(parse_schedule_interval_seconds(token)?);
+            continue;
+        }
+        if let Some(agent_identifier) = parse_schedule_agent_override(token)? {
+            parsed.agent_identifier = Some(agent_identifier);
+            continue;
+        }
+        return Err(BootstrapError::Usage {
+            reason: render_command_usage_error(
+                "/schedule",
+                "лишние аргументы в спецификации расписания",
+            ),
+        });
+    }
+    Ok(parsed)
 }
 
 fn parse_schedule_agent_override(raw: &str) -> Result<Option<String>, BootstrapError> {
@@ -1743,13 +2321,361 @@ fn parse_schedule_agent_override(raw: &str) -> Result<Option<String>, BootstrapE
             return Ok(Some(value.to_string()));
         }
     }
+    Ok(None)
+}
 
-    Err(BootstrapError::Usage {
+fn parse_schedule_interval_seconds(raw: &str) -> Result<u64, BootstrapError> {
+    let interval_seconds = raw.parse::<u64>().map_err(|_| BootstrapError::Usage {
         reason: render_command_usage_error(
             "/schedule",
-            "неподдерживаемый override агента; используйте agent=<id> или агент=<id>",
+            "interval_seconds должен быть положительным целым числом",
         ),
-    })
+    })?;
+    if interval_seconds == 0 {
+        return Err(BootstrapError::Usage {
+            reason: render_command_usage_error(
+                "/schedule",
+                "interval_seconds должен быть больше нуля",
+            ),
+        });
+    }
+    Ok(interval_seconds)
+}
+
+fn parse_schedule_mode(
+    raw: &str,
+) -> Result<agent_runtime::agent::AgentScheduleMode, BootstrapError> {
+    match raw {
+        "interval" => Ok(agent_runtime::agent::AgentScheduleMode::Interval),
+        "after_completion" => Ok(agent_runtime::agent::AgentScheduleMode::AfterCompletion),
+        "once" => Ok(agent_runtime::agent::AgentScheduleMode::Once),
+        other => Err(BootstrapError::Usage {
+            reason: render_command_usage_error(
+                "/schedule",
+                &format!("неподдерживаемый mode {other}; ожидается interval|after_completion|once"),
+            ),
+        }),
+    }
+}
+
+fn parse_schedule_delivery_mode(
+    raw: &str,
+) -> Result<agent_runtime::agent::AgentScheduleDeliveryMode, BootstrapError> {
+    match raw {
+        "fresh_session" => Ok(agent_runtime::agent::AgentScheduleDeliveryMode::FreshSession),
+        "existing_session" => Ok(agent_runtime::agent::AgentScheduleDeliveryMode::ExistingSession),
+        other => Err(BootstrapError::Usage {
+            reason: render_command_usage_error(
+                "/schedule",
+                &format!(
+                    "неподдерживаемый delivery {other}; ожидается fresh_session|existing_session"
+                ),
+            ),
+        }),
+    }
+}
+
+fn parse_schedule_enabled(raw: &str) -> Result<bool, BootstrapError> {
+    match raw {
+        "true" | "yes" | "on" | "1" | "да" | "вкл" => Ok(true),
+        "false" | "no" | "off" | "0" | "нет" | "выкл" => Ok(false),
+        other => Err(BootstrapError::Usage {
+            reason: render_command_usage_error(
+                "/schedule",
+                &format!("неподдерживаемый enabled {other}; ожидается true|false"),
+            ),
+        }),
+    }
+}
+
+fn schedule_form_create_spec(
+    form: &app::ScheduleFormState,
+) -> Result<(String, AgentScheduleCreateOptions), BootstrapError> {
+    let id = require_nonempty_schedule_field(form.id(), "id")?;
+    let prompt = require_nonempty_schedule_field(form.prompt(), "prompt")?;
+    Ok((
+        id,
+        AgentScheduleCreateOptions {
+            agent_identifier: optional_schedule_field(form.agent_identifier()),
+            prompt,
+            mode: parse_schedule_mode(form.mode().trim())?,
+            delivery_mode: parse_schedule_delivery_mode(form.delivery_mode().trim())?,
+            target_session_id: optional_schedule_field(form.target_session_id()),
+            interval_seconds: parse_schedule_interval_seconds(form.interval_seconds().trim())?,
+            enabled: parse_schedule_enabled(form.enabled().trim())?,
+        },
+    ))
+}
+
+fn schedule_form_edit_spec(
+    form: &app::ScheduleFormState,
+) -> Result<(String, AgentScheduleUpdatePatch), BootstrapError> {
+    let id = require_nonempty_schedule_field(form.id(), "id")?;
+    let prompt = require_nonempty_schedule_field(form.prompt(), "prompt")?;
+    Ok((
+        id,
+        AgentScheduleUpdatePatch {
+            agent_identifier: optional_schedule_field(form.agent_identifier()),
+            prompt: Some(prompt),
+            mode: Some(parse_schedule_mode(form.mode().trim())?),
+            delivery_mode: Some(parse_schedule_delivery_mode(form.delivery_mode().trim())?),
+            target_session_id: optional_schedule_field(form.target_session_id()),
+            interval_seconds: Some(parse_schedule_interval_seconds(
+                form.interval_seconds().trim(),
+            )?),
+            enabled: Some(parse_schedule_enabled(form.enabled().trim())?),
+        },
+    ))
+}
+
+fn agent_message_form_spec(
+    form: &app::AgentMessageFormState,
+) -> Result<(String, String), BootstrapError> {
+    let target_agent_id =
+        require_nonempty_command_field(form.target_agent_id(), "/agent", "agent")?;
+    let message = require_nonempty_command_field(form.message(), "/agent", "message")?;
+    Ok((target_agent_id, message))
+}
+
+fn chain_grant_form_spec(
+    form: &app::ChainGrantFormState,
+) -> Result<(String, String), BootstrapError> {
+    let chain_id = require_nonempty_command_field(form.chain_id(), "/chain", "chain_id")?;
+    let reason = require_nonempty_command_field(form.reason(), "/chain", "reason")?;
+    Ok((chain_id, reason))
+}
+
+fn mcp_form_create_spec(
+    form: &app::McpConnectorFormState,
+) -> Result<(String, McpConnectorCreateOptions), BootstrapError> {
+    let id = require_nonempty_command_field(form.id(), "/mcp", "id")?;
+    let command = require_nonempty_command_field(form.command(), "/mcp", "command")?;
+    Ok((
+        id,
+        McpConnectorCreateOptions {
+            transport: agent_runtime::mcp::McpConnectorTransport::Stdio,
+            command,
+            args: parse_mcp_args(form.args()),
+            env: parse_mcp_env(form.env(), "/mcp")?,
+            cwd: optional_mcp_field(form.cwd()),
+            enabled: parse_mcp_enabled(form.enabled())?,
+        },
+    ))
+}
+
+fn mcp_form_edit_spec(
+    form: &app::McpConnectorFormState,
+) -> Result<(String, McpConnectorUpdatePatch), BootstrapError> {
+    let id = require_nonempty_command_field(form.id(), "/mcp", "id")?;
+    let command = require_nonempty_command_field(form.command(), "/mcp", "command")?;
+    Ok((
+        id,
+        McpConnectorUpdatePatch {
+            command: Some(command),
+            args: Some(parse_mcp_args(form.args())),
+            env: Some(parse_mcp_env(form.env(), "/mcp")?),
+            cwd: Some(optional_mcp_field(form.cwd())),
+            enabled: Some(parse_mcp_enabled(form.enabled())?),
+        },
+    ))
+}
+
+fn parse_mcp_create_spec(raw: &str) -> Result<(String, McpConnectorCreateOptions), BootstrapError> {
+    let (id, assignments) = split_head_tail(raw).ok_or_else(|| BootstrapError::Usage {
+        reason: render_command_usage_error("/mcp", "не хватает аргументов"),
+    })?;
+    let fields = parse_mcp_assignment_fields(assignments, "/mcp")?;
+    Ok((
+        id.to_string(),
+        McpConnectorCreateOptions {
+            transport: agent_runtime::mcp::McpConnectorTransport::Stdio,
+            command: required_mcp_assignment(&fields, "command", "/mcp")?,
+            args: parse_mcp_args(fields.get("args").map(String::as_str).unwrap_or_default()),
+            env: parse_mcp_env(
+                fields.get("env").map(String::as_str).unwrap_or_default(),
+                "/mcp",
+            )?,
+            cwd: optional_mcp_field(fields.get("cwd").map(String::as_str).unwrap_or_default()),
+            enabled: parse_mcp_enabled(
+                fields.get("enabled").map(String::as_str).unwrap_or("true"),
+            )?,
+        },
+    ))
+}
+
+fn parse_mcp_edit_spec(raw: &str) -> Result<(String, McpConnectorUpdatePatch), BootstrapError> {
+    let (id, assignments) = split_head_tail(raw).ok_or_else(|| BootstrapError::Usage {
+        reason: render_command_usage_error("/mcp", "не хватает аргументов"),
+    })?;
+    let fields = parse_mcp_assignment_fields(assignments, "/mcp")?;
+    if fields.is_empty() {
+        return Err(BootstrapError::Usage {
+            reason: render_command_usage_error("/mcp", "не указаны поля для изменения"),
+        });
+    }
+    Ok((
+        id.to_string(),
+        McpConnectorUpdatePatch {
+            command: fields.get("command").map(|value| value.trim().to_string()),
+            args: fields
+                .get("args")
+                .map(|value| parse_mcp_args(value.as_str())),
+            env: if fields.contains_key("env") {
+                Some(parse_mcp_env(
+                    fields.get("env").map(String::as_str).unwrap_or_default(),
+                    "/mcp",
+                )?)
+            } else {
+                None
+            },
+            cwd: if fields.contains_key("cwd") {
+                Some(optional_mcp_field(
+                    fields.get("cwd").map(String::as_str).unwrap_or_default(),
+                ))
+            } else {
+                None
+            },
+            enabled: if let Some(value) = fields.get("enabled") {
+                Some(parse_mcp_enabled(value)?)
+            } else {
+                None
+            },
+        },
+    ))
+}
+
+fn parse_mcp_assignment_fields(
+    raw: &str,
+    command: &str,
+) -> Result<std::collections::BTreeMap<String, String>, BootstrapError> {
+    let mut fields = std::collections::BTreeMap::new();
+    for token in raw.split_whitespace() {
+        let Some((key, value)) = token.split_once('=') else {
+            return Err(BootstrapError::Usage {
+                reason: render_command_usage_error(
+                    command,
+                    &format!("ожидается field=value, получено {token}"),
+                ),
+            });
+        };
+        fields.insert(key.trim().to_string(), value.to_string());
+    }
+    Ok(fields)
+}
+
+fn required_mcp_assignment(
+    fields: &std::collections::BTreeMap<String, String>,
+    key: &str,
+    command: &str,
+) -> Result<String, BootstrapError> {
+    fields
+        .get(key)
+        .map(String::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToString::to_string)
+        .ok_or_else(|| BootstrapError::Usage {
+            reason: render_command_usage_error(command, &format!("не хватает {key}")),
+        })
+}
+
+fn parse_mcp_args(raw: &str) -> Vec<String> {
+    raw.split(',')
+        .filter_map(|value| {
+            let trimmed = value.trim();
+            (!trimmed.is_empty()).then(|| trimmed.to_string())
+        })
+        .collect()
+}
+
+fn parse_mcp_env(
+    raw: &str,
+    command: &str,
+) -> Result<std::collections::BTreeMap<String, String>, BootstrapError> {
+    let mut env = std::collections::BTreeMap::new();
+    for pair in raw.split(';') {
+        let trimmed = pair.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        let Some((key, value)) = trimmed.split_once('=') else {
+            return Err(BootstrapError::Usage {
+                reason: render_command_usage_error(
+                    command,
+                    &format!("ожидается env KEY=VALUE, получено {trimmed}"),
+                ),
+            });
+        };
+        let key = key.trim();
+        if key.is_empty() {
+            return Err(BootstrapError::Usage {
+                reason: render_command_usage_error(command, "ключ env не должен быть пустым"),
+            });
+        }
+        env.insert(key.to_string(), value.to_string());
+    }
+    Ok(env)
+}
+
+fn parse_mcp_enabled(raw: &str) -> Result<bool, BootstrapError> {
+    match raw.trim() {
+        "true" | "yes" | "1" | "on" => Ok(true),
+        "false" | "no" | "0" | "off" => Ok(false),
+        other => Err(BootstrapError::Usage {
+            reason: render_command_usage_error(
+                "/mcp",
+                &format!("неподдерживаемый enabled {other}; ожидается true|false"),
+            ),
+        }),
+    }
+}
+
+fn optional_mcp_field(raw: &str) -> Option<String> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(trimmed.to_string())
+    }
+}
+
+fn optional_schedule_field(raw: &str) -> Option<String> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(trimmed.to_string())
+    }
+}
+
+fn require_nonempty_schedule_field(raw: &str, field: &str) -> Result<String, BootstrapError> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return Err(BootstrapError::Usage {
+            reason: render_command_usage_error(
+                "/schedule",
+                &format!("поле {field} не должно быть пустым"),
+            ),
+        });
+    }
+    Ok(trimmed.to_string())
+}
+
+fn require_nonempty_command_field(
+    raw: &str,
+    command: &str,
+    field: &str,
+) -> Result<String, BootstrapError> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return Err(BootstrapError::Usage {
+            reason: render_command_usage_error(
+                command,
+                &format!("поле {field} не должно быть пустым"),
+            ),
+        });
+    }
+    Ok(trimmed.to_string())
 }
 
 fn render_session_skills(skills: Vec<crate::bootstrap::SessionSkillStatus>) -> String {
@@ -1801,6 +2727,8 @@ mod tests {
     use super::should_dispatch_key_event;
     use super::*;
     use crate::bootstrap::{
+        AgentScheduleCreateOptions, AgentScheduleUpdatePatch, AgentScheduleView,
+        McpConnectorCreateOptions, McpConnectorUpdatePatch, McpConnectorView,
         SessionPendingApproval, SessionPreferencesPatch, SessionSkillStatus, SessionSummary,
         SessionTranscriptView,
     };
@@ -1808,7 +2736,10 @@ mod tests {
     use crate::tui::app::TuiScreen;
     use crate::tui::backend::TuiBackend;
     use crate::tui::timeline::TimelineEntryKind;
+    use agent_runtime::agent::{AgentScheduleDeliveryMode, AgentScheduleMode};
+    use agent_runtime::mcp::McpConnectorTransport;
     use crossterm::event::{Event, KeyCode, KeyEvent, KeyEventKind, KeyEventState, KeyModifiers};
+    use std::path::PathBuf;
     use std::sync::atomic::AtomicBool;
     use std::sync::{Arc, Mutex};
 
@@ -1859,6 +2790,28 @@ mod tests {
             Ok("/tmp/test-agent".to_string())
         }
 
+        fn send_agent_message(
+            &self,
+            session_id: &str,
+            target_agent_id: &str,
+            message: &str,
+        ) -> Result<String, BootstrapError> {
+            Ok(format!(
+                "сообщение отправлено агенту {target_agent_id} из {session_id}: {message}"
+            ))
+        }
+
+        fn grant_chain_continuation(
+            &self,
+            session_id: &str,
+            chain_id: &str,
+            reason: &str,
+        ) -> Result<String, BootstrapError> {
+            Ok(format!(
+                "цепочка {chain_id} продолжена из {session_id}: {reason}"
+            ))
+        }
+
         fn render_agent_schedules(&self) -> Result<String, BootstrapError> {
             Ok(
                 "Расписания: workspace=/tmp/test\n- pulse agent=default interval=300 next_fire_at=10"
@@ -1868,6 +2821,70 @@ mod tests {
 
         fn render_agent_schedule(&self, id: &str) -> Result<String, BootstrapError> {
             Ok(format!("id={id}"))
+        }
+
+        fn load_agent_schedule(&self, id: &str) -> Result<AgentScheduleView, BootstrapError> {
+            Ok(AgentScheduleView {
+                id: id.to_string(),
+                agent_profile_id: self.summary.agent_profile_id.clone(),
+                workspace_root: PathBuf::from("/tmp/test"),
+                prompt: "проверь очередь".to_string(),
+                mode: AgentScheduleMode::Interval,
+                delivery_mode: AgentScheduleDeliveryMode::FreshSession,
+                target_session_id: None,
+                interval_seconds: 300,
+                next_fire_at: 10,
+                enabled: true,
+                last_triggered_at: None,
+                last_finished_at: None,
+                last_session_id: None,
+                last_job_id: None,
+                last_result: None,
+                last_error: None,
+                created_at: 1,
+                updated_at: 2,
+            })
+        }
+
+        fn create_agent_schedule_with_options(
+            &self,
+            id: &str,
+            options: AgentScheduleCreateOptions,
+        ) -> Result<String, BootstrapError> {
+            Ok(format!(
+                "создано расписание {id} agent={} interval={}s",
+                options
+                    .agent_identifier
+                    .as_deref()
+                    .unwrap_or(&self.summary.agent_profile_id),
+                options.interval_seconds
+            ))
+        }
+
+        fn update_agent_schedule(
+            &self,
+            id: &str,
+            patch: AgentScheduleUpdatePatch,
+        ) -> Result<String, BootstrapError> {
+            Ok(format!(
+                "обновлено расписание {id} enabled={}",
+                patch.enabled.unwrap_or(true)
+            ))
+        }
+
+        fn set_agent_schedule_enabled(
+            &self,
+            id: &str,
+            enabled: bool,
+        ) -> Result<String, BootstrapError> {
+            Ok(format!(
+                "расписание {id} {}",
+                if enabled {
+                    "включено"
+                } else {
+                    "выключено"
+                }
+            ))
         }
 
         fn create_agent_schedule(
@@ -1886,6 +2903,84 @@ mod tests {
 
         fn delete_agent_schedule(&self, id: &str) -> Result<String, BootstrapError> {
             Ok(format!("расписание {id} удалено"))
+        }
+
+        fn render_mcp_connectors(&self) -> Result<String, BootstrapError> {
+            Ok("MCP коннекторы:\n- docs transport=stdio enabled=yes state=running pid=4242 restarts=0 command=npx args=-y,@modelcontextprotocol/server-filesystem,/workspace cwd=/srv/mcp".to_string())
+        }
+
+        fn render_mcp_connector(&self, id: &str) -> Result<String, BootstrapError> {
+            Ok(format!(
+                "id={id}\ntransport=stdio\nenabled=true\nstate=running\npid=4242\nstarted_at=10\nstopped_at=<none>\nrestart_count=0\nlast_error=<none>\ncommand=npx\nargs=-y,@modelcontextprotocol/server-filesystem,/workspace\ncwd=/srv/mcp\nenv=DEBUG=1;TRACE=yes\ncreated_at=1\nupdated_at=2"
+            ))
+        }
+
+        fn load_mcp_connector(&self, id: &str) -> Result<McpConnectorView, BootstrapError> {
+            Ok(McpConnectorView {
+                id: id.to_string(),
+                transport: McpConnectorTransport::Stdio,
+                command: "npx".to_string(),
+                args: vec![
+                    "-y".to_string(),
+                    "@modelcontextprotocol/server-filesystem".to_string(),
+                    "/workspace".to_string(),
+                ],
+                env: std::collections::BTreeMap::from([
+                    ("DEBUG".to_string(), "1".to_string()),
+                    ("TRACE".to_string(), "yes".to_string()),
+                ]),
+                cwd: Some("/srv/mcp".to_string()),
+                enabled: true,
+                created_at: 1,
+                updated_at: 2,
+                runtime: crate::mcp::McpConnectorRuntimeStatus {
+                    state: crate::mcp::McpConnectorState::Running,
+                    pid: Some(4242),
+                    started_at: Some(10),
+                    stopped_at: None,
+                    last_error: None,
+                    restart_count: 0,
+                },
+            })
+        }
+
+        fn create_mcp_connector(
+            &self,
+            id: &str,
+            _options: McpConnectorCreateOptions,
+        ) -> Result<String, BootstrapError> {
+            Ok(format!("создан MCP коннектор {id}"))
+        }
+
+        fn update_mcp_connector(
+            &self,
+            id: &str,
+            _patch: McpConnectorUpdatePatch,
+        ) -> Result<String, BootstrapError> {
+            Ok(format!("обновлён MCP коннектор {id}"))
+        }
+
+        fn set_mcp_connector_enabled(
+            &self,
+            id: &str,
+            enabled: bool,
+        ) -> Result<String, BootstrapError> {
+            Ok(format!(
+                "MCP коннектор {id} {}",
+                if enabled {
+                    "включен"
+                } else {
+                    "выключен"
+                }
+            ))
+        }
+
+        fn restart_mcp_connector(&self, id: &str) -> Result<String, BootstrapError> {
+            Ok(format!("MCP коннектор {id} перезапущен"))
+        }
+
+        fn delete_mcp_connector(&self, id: &str) -> Result<String, BootstrapError> {
+            Ok(format!("MCP коннектор {id} удалён"))
         }
 
         fn list_session_summaries(&self) -> Result<Vec<SessionSummary>, BootstrapError> {
@@ -1935,6 +3030,42 @@ mod tests {
             _session_id: &str,
         ) -> Result<Vec<SessionPendingApproval>, BootstrapError> {
             Ok(self.pending.clone())
+        }
+
+        fn render_session_memory_search(
+            &self,
+            input: SessionSearchInput,
+        ) -> Result<String, BootstrapError> {
+            Ok(format!("memory sessions query={}", input.query))
+        }
+
+        fn render_session_memory_read(
+            &self,
+            input: SessionReadInput,
+        ) -> Result<String, BootstrapError> {
+            Ok(format!(
+                "memory session id={} mode={}",
+                input.session_id,
+                input.mode.unwrap_or(SessionReadMode::Summary).as_str()
+            ))
+        }
+
+        fn render_knowledge_search(
+            &self,
+            input: KnowledgeSearchInput,
+        ) -> Result<String, BootstrapError> {
+            Ok(format!("memory knowledge query={}", input.query))
+        }
+
+        fn render_knowledge_read(
+            &self,
+            input: KnowledgeReadInput,
+        ) -> Result<String, BootstrapError> {
+            Ok(format!(
+                "memory file path={} mode={}",
+                input.path,
+                input.mode.unwrap_or(KnowledgeReadMode::Excerpt).as_str()
+            ))
         }
 
         fn session_skills(
@@ -2016,7 +3147,7 @@ mod tests {
             Ok("версия=test".to_string())
         }
 
-        fn update_runtime(&self) -> Result<String, BootstrapError> {
+        fn update_runtime(&self, _tag: Option<&str>) -> Result<String, BootstrapError> {
             Ok("обновлено".to_string())
         }
 
@@ -2065,7 +3196,34 @@ mod tests {
     struct BrowserBackendState {
         current_agent_id: String,
         agents: Vec<(String, String)>,
-        schedules: Vec<String>,
+        schedules: Vec<BrowserSchedule>,
+        connectors: Vec<BrowserMcpConnector>,
+        sent_messages: Vec<(String, String, String)>,
+        chain_grants: Vec<(String, String, String)>,
+    }
+
+    #[derive(Clone)]
+    struct BrowserSchedule {
+        id: String,
+        agent_profile_id: String,
+        prompt: String,
+        mode: AgentScheduleMode,
+        delivery_mode: AgentScheduleDeliveryMode,
+        target_session_id: Option<String>,
+        interval_seconds: u64,
+        enabled: bool,
+    }
+
+    #[derive(Clone)]
+    struct BrowserMcpConnector {
+        id: String,
+        command: String,
+        args: Vec<String>,
+        cwd: Option<String>,
+        env: std::collections::BTreeMap<String, String>,
+        enabled: bool,
+        state: crate::mcp::McpConnectorState,
+        restart_count: u32,
     }
 
     impl TuiBackend for BrowserBackend {
@@ -2127,40 +3285,224 @@ mod tests {
             Ok(format!("/tmp/{id}"))
         }
 
+        fn send_agent_message(
+            &self,
+            session_id: &str,
+            target_agent_id: &str,
+            message: &str,
+        ) -> Result<String, BootstrapError> {
+            self.state
+                .lock()
+                .expect("browser backend state")
+                .sent_messages
+                .push((
+                    session_id.to_string(),
+                    target_agent_id.to_string(),
+                    message.to_string(),
+                ));
+            Ok(format!(
+                "сообщение отправлено агенту {target_agent_id} из {session_id}: {message}"
+            ))
+        }
+
+        fn grant_chain_continuation(
+            &self,
+            session_id: &str,
+            chain_id: &str,
+            reason: &str,
+        ) -> Result<String, BootstrapError> {
+            self.state
+                .lock()
+                .expect("browser backend state")
+                .chain_grants
+                .push((
+                    session_id.to_string(),
+                    chain_id.to_string(),
+                    reason.to_string(),
+                ));
+            Ok(format!(
+                "цепочка {chain_id} продолжена из {session_id}: {reason}"
+            ))
+        }
+
         fn render_agent_schedules(&self) -> Result<String, BootstrapError> {
             let state = self.state.lock().expect("browser backend state");
             if state.schedules.is_empty() {
                 return Ok("Расписания: для workspace /tmp/test ничего не настроено".to_string());
             }
             let mut lines = vec!["Расписания: workspace=/tmp/test".to_string()];
-            for id in &state.schedules {
+            for schedule in &state.schedules {
                 lines.push(format!(
-                    "- {id} agent={} interval=300 next_fire_at=10",
-                    state.current_agent_id
+                    "- {} agent={} mode={} delivery={} enabled={} interval={} next_fire_at=10",
+                    schedule.id,
+                    schedule.agent_profile_id,
+                    schedule.mode.as_str(),
+                    schedule.delivery_mode.as_str(),
+                    schedule.enabled,
+                    schedule.interval_seconds
                 ));
             }
             Ok(lines.join("\n"))
         }
 
         fn render_agent_schedule(&self, id: &str) -> Result<String, BootstrapError> {
-            Ok(format!("id={id}"))
+            let state = self.state.lock().expect("browser backend state");
+            let schedule = state
+                .schedules
+                .iter()
+                .find(|schedule| schedule.id == id)
+                .expect("schedule exists");
+            Ok(format!(
+                "id={}\nagent={}\nmode={}\ndelivery={}\nenabled={}\ninterval={}s\nprompt={}",
+                schedule.id,
+                schedule.agent_profile_id,
+                schedule.mode.as_str(),
+                schedule.delivery_mode.as_str(),
+                schedule.enabled,
+                schedule.interval_seconds,
+                schedule.prompt
+            ))
         }
 
-        fn create_agent_schedule(
+        fn load_agent_schedule(&self, id: &str) -> Result<AgentScheduleView, BootstrapError> {
+            let state = self.state.lock().expect("browser backend state");
+            let schedule = state
+                .schedules
+                .iter()
+                .find(|schedule| schedule.id == id)
+                .expect("schedule exists");
+            Ok(AgentScheduleView {
+                id: schedule.id.clone(),
+                agent_profile_id: schedule.agent_profile_id.clone(),
+                workspace_root: PathBuf::from("/tmp/test"),
+                prompt: schedule.prompt.clone(),
+                mode: schedule.mode,
+                delivery_mode: schedule.delivery_mode,
+                target_session_id: schedule.target_session_id.clone(),
+                interval_seconds: schedule.interval_seconds,
+                next_fire_at: 10,
+                enabled: schedule.enabled,
+                last_triggered_at: None,
+                last_finished_at: None,
+                last_session_id: None,
+                last_job_id: None,
+                last_result: None,
+                last_error: None,
+                created_at: 1,
+                updated_at: 2,
+            })
+        }
+
+        fn create_agent_schedule_with_options(
             &self,
             id: &str,
-            _interval_seconds: u64,
-            _prompt: &str,
-            _agent_identifier: Option<&str>,
+            options: AgentScheduleCreateOptions,
         ) -> Result<String, BootstrapError> {
             self.state
                 .lock()
                 .expect("browser backend state")
                 .schedules
-                .push(id.to_string());
+                .push(BrowserSchedule {
+                    id: id.to_string(),
+                    agent_profile_id: options
+                        .agent_identifier
+                        .clone()
+                        .unwrap_or_else(|| "default".to_string()),
+                    prompt: options.prompt.clone(),
+                    mode: options.mode,
+                    delivery_mode: options.delivery_mode,
+                    target_session_id: options.target_session_id.clone(),
+                    interval_seconds: options.interval_seconds,
+                    enabled: options.enabled,
+                });
             Ok(format!(
-                "создано расписание {id} agent=default interval=300s"
+                "создано расписание {id} agent={} interval={}s",
+                options
+                    .agent_identifier
+                    .unwrap_or_else(|| "default".to_string()),
+                options.interval_seconds
             ))
+        }
+
+        fn update_agent_schedule(
+            &self,
+            id: &str,
+            patch: AgentScheduleUpdatePatch,
+        ) -> Result<String, BootstrapError> {
+            let mut state = self.state.lock().expect("browser backend state");
+            let schedule = state
+                .schedules
+                .iter_mut()
+                .find(|schedule| schedule.id == id)
+                .expect("schedule exists");
+            if let Some(agent_identifier) = patch.agent_identifier {
+                schedule.agent_profile_id = agent_identifier;
+            }
+            if let Some(prompt) = patch.prompt {
+                schedule.prompt = prompt;
+            }
+            if let Some(mode) = patch.mode {
+                schedule.mode = mode;
+            }
+            if let Some(delivery_mode) = patch.delivery_mode {
+                schedule.delivery_mode = delivery_mode;
+            }
+            if patch.target_session_id.is_some() {
+                schedule.target_session_id = patch.target_session_id;
+            }
+            if let Some(interval_seconds) = patch.interval_seconds {
+                schedule.interval_seconds = interval_seconds;
+            }
+            if let Some(enabled) = patch.enabled {
+                schedule.enabled = enabled;
+            }
+            Ok(format!(
+                "обновлено расписание {id} enabled={}",
+                schedule.enabled
+            ))
+        }
+
+        fn set_agent_schedule_enabled(
+            &self,
+            id: &str,
+            enabled: bool,
+        ) -> Result<String, BootstrapError> {
+            let mut state = self.state.lock().expect("browser backend state");
+            let schedule = state
+                .schedules
+                .iter_mut()
+                .find(|schedule| schedule.id == id)
+                .expect("schedule exists");
+            schedule.enabled = enabled;
+            Ok(format!(
+                "расписание {id} {}",
+                if enabled {
+                    "включено"
+                } else {
+                    "выключено"
+                }
+            ))
+        }
+
+        fn create_agent_schedule(
+            &self,
+            id: &str,
+            interval_seconds: u64,
+            prompt: &str,
+            agent_identifier: Option<&str>,
+        ) -> Result<String, BootstrapError> {
+            self.create_agent_schedule_with_options(
+                id,
+                AgentScheduleCreateOptions {
+                    agent_identifier: agent_identifier.map(str::to_string),
+                    prompt: prompt.to_string(),
+                    mode: AgentScheduleMode::Interval,
+                    delivery_mode: AgentScheduleDeliveryMode::FreshSession,
+                    target_session_id: None,
+                    interval_seconds,
+                    enabled: true,
+                },
+            )
         }
 
         fn delete_agent_schedule(&self, id: &str) -> Result<String, BootstrapError> {
@@ -2168,8 +3510,194 @@ mod tests {
                 .lock()
                 .expect("browser backend state")
                 .schedules
-                .retain(|value| value != id);
+                .retain(|schedule| schedule.id != id);
             Ok(format!("расписание {id} удалено"))
+        }
+
+        fn render_mcp_connectors(&self) -> Result<String, BootstrapError> {
+            let state = self.state.lock().expect("browser backend state");
+            if state.connectors.is_empty() {
+                return Ok("MCP коннекторы: ничего не настроено".to_string());
+            }
+            let mut lines = vec!["MCP коннекторы:".to_string()];
+            for connector in &state.connectors {
+                lines.push(format!(
+                    "- {} transport=stdio enabled={} state={} pid=<none> restarts={} command={} args={} cwd={}",
+                    connector.id,
+                    if connector.enabled { "yes" } else { "no" },
+                    connector.state.as_str(),
+                    connector.restart_count,
+                    connector.command,
+                    connector.args.join(","),
+                    connector.cwd.as_deref().unwrap_or("<none>")
+                ));
+            }
+            Ok(lines.join("\n"))
+        }
+
+        fn render_mcp_connector(&self, id: &str) -> Result<String, BootstrapError> {
+            let state = self.state.lock().expect("browser backend state");
+            let connector = state
+                .connectors
+                .iter()
+                .find(|connector| connector.id == id)
+                .expect("connector exists");
+            Ok(format!(
+                "id={}\ntransport=stdio\nenabled={}\nstate={}\npid=<none>\nstarted_at=<none>\nstopped_at=<none>\nrestart_count={}\nlast_error=<none>\ncommand={}\nargs={}\ncwd={}\nenv={}\ncreated_at=1\nupdated_at=2",
+                connector.id,
+                connector.enabled,
+                connector.state.as_str(),
+                connector.restart_count,
+                connector.command,
+                connector.args.join(","),
+                connector.cwd.as_deref().unwrap_or("<none>"),
+                connector
+                    .env
+                    .iter()
+                    .map(|(key, value)| format!("{key}={value}"))
+                    .collect::<Vec<_>>()
+                    .join(";")
+            ))
+        }
+
+        fn load_mcp_connector(&self, id: &str) -> Result<McpConnectorView, BootstrapError> {
+            let state = self.state.lock().expect("browser backend state");
+            let connector = state
+                .connectors
+                .iter()
+                .find(|connector| connector.id == id)
+                .expect("connector exists");
+            Ok(McpConnectorView {
+                id: connector.id.clone(),
+                transport: McpConnectorTransport::Stdio,
+                command: connector.command.clone(),
+                args: connector.args.clone(),
+                env: connector.env.clone(),
+                cwd: connector.cwd.clone(),
+                enabled: connector.enabled,
+                created_at: 1,
+                updated_at: 2,
+                runtime: crate::mcp::McpConnectorRuntimeStatus {
+                    state: connector.state,
+                    pid: None,
+                    started_at: None,
+                    stopped_at: None,
+                    last_error: None,
+                    restart_count: connector.restart_count,
+                },
+            })
+        }
+
+        fn create_mcp_connector(
+            &self,
+            id: &str,
+            options: McpConnectorCreateOptions,
+        ) -> Result<String, BootstrapError> {
+            self.state
+                .lock()
+                .expect("browser backend state")
+                .connectors
+                .push(BrowserMcpConnector {
+                    id: id.to_string(),
+                    command: options.command.clone(),
+                    args: options.args.clone(),
+                    cwd: options.cwd.clone(),
+                    env: options.env.clone(),
+                    enabled: options.enabled,
+                    state: if options.enabled {
+                        crate::mcp::McpConnectorState::Running
+                    } else {
+                        crate::mcp::McpConnectorState::Stopped
+                    },
+                    restart_count: 0,
+                });
+            Ok(format!("создан MCP коннектор {id}"))
+        }
+
+        fn update_mcp_connector(
+            &self,
+            id: &str,
+            patch: McpConnectorUpdatePatch,
+        ) -> Result<String, BootstrapError> {
+            let mut state = self.state.lock().expect("browser backend state");
+            let connector = state
+                .connectors
+                .iter_mut()
+                .find(|connector| connector.id == id)
+                .expect("connector exists");
+            if let Some(command) = patch.command {
+                connector.command = command;
+            }
+            if let Some(args) = patch.args {
+                connector.args = args;
+            }
+            if let Some(env) = patch.env {
+                connector.env = env;
+            }
+            if let Some(cwd) = patch.cwd {
+                connector.cwd = cwd;
+            }
+            if let Some(enabled) = patch.enabled {
+                connector.enabled = enabled;
+                connector.state = if enabled {
+                    crate::mcp::McpConnectorState::Running
+                } else {
+                    crate::mcp::McpConnectorState::Stopped
+                };
+            }
+            Ok(format!("обновлён MCP коннектор {id}"))
+        }
+
+        fn set_mcp_connector_enabled(
+            &self,
+            id: &str,
+            enabled: bool,
+        ) -> Result<String, BootstrapError> {
+            let mut state = self.state.lock().expect("browser backend state");
+            let connector = state
+                .connectors
+                .iter_mut()
+                .find(|connector| connector.id == id)
+                .expect("connector exists");
+            connector.enabled = enabled;
+            connector.state = if enabled {
+                crate::mcp::McpConnectorState::Running
+            } else {
+                crate::mcp::McpConnectorState::Stopped
+            };
+            Ok(format!(
+                "MCP коннектор {id} {}",
+                if enabled {
+                    "включен"
+                } else {
+                    "выключен"
+                }
+            ))
+        }
+
+        fn restart_mcp_connector(&self, id: &str) -> Result<String, BootstrapError> {
+            let mut state = self.state.lock().expect("browser backend state");
+            let connector = state
+                .connectors
+                .iter_mut()
+                .find(|connector| connector.id == id)
+                .expect("connector exists");
+            connector.restart_count += 1;
+            connector.state = if connector.enabled {
+                crate::mcp::McpConnectorState::Running
+            } else {
+                crate::mcp::McpConnectorState::Stopped
+            };
+            Ok(format!("MCP коннектор {id} перезапущен"))
+        }
+
+        fn delete_mcp_connector(&self, id: &str) -> Result<String, BootstrapError> {
+            self.state
+                .lock()
+                .expect("browser backend state")
+                .connectors
+                .retain(|connector| connector.id != id);
+            Ok(format!("MCP коннектор {id} удалён"))
         }
 
         fn list_session_summaries(&self) -> Result<Vec<SessionSummary>, BootstrapError> {
@@ -2231,6 +3759,42 @@ mod tests {
             _session_id: &str,
         ) -> Result<Vec<SessionPendingApproval>, BootstrapError> {
             Ok(Vec::new())
+        }
+
+        fn render_session_memory_search(
+            &self,
+            input: SessionSearchInput,
+        ) -> Result<String, BootstrapError> {
+            Ok(format!("browser memory sessions query={}", input.query))
+        }
+
+        fn render_session_memory_read(
+            &self,
+            input: SessionReadInput,
+        ) -> Result<String, BootstrapError> {
+            Ok(format!(
+                "browser memory session id={} mode={}",
+                input.session_id,
+                input.mode.unwrap_or(SessionReadMode::Summary).as_str()
+            ))
+        }
+
+        fn render_knowledge_search(
+            &self,
+            input: KnowledgeSearchInput,
+        ) -> Result<String, BootstrapError> {
+            Ok(format!("browser memory knowledge query={}", input.query))
+        }
+
+        fn render_knowledge_read(
+            &self,
+            input: KnowledgeReadInput,
+        ) -> Result<String, BootstrapError> {
+            Ok(format!(
+                "browser memory file path={} mode={}",
+                input.path,
+                input.mode.unwrap_or(KnowledgeReadMode::Excerpt).as_str()
+            ))
         }
 
         fn session_skills(
@@ -2316,7 +3880,7 @@ mod tests {
             panic!("unused in test")
         }
 
-        fn update_runtime(&self) -> Result<String, BootstrapError> {
+        fn update_runtime(&self, _tag: Option<&str>) -> Result<String, BootstrapError> {
             panic!("unused in test")
         }
 
@@ -2391,6 +3955,7 @@ mod tests {
                 agent_profile_id: "default".to_string(),
                 agent_name: "Default".to_string(),
                 scheduled_by: None,
+                schedule: None,
                 model: Some("glm-5-turbo".to_string()),
                 reasoning_visible: true,
                 think_level: None,
@@ -2432,6 +3997,7 @@ mod tests {
                 agent_profile_id: "default".to_string(),
                 agent_name: "Default".to_string(),
                 scheduled_by: None,
+                schedule: None,
                 model: Some("glm-5-turbo".to_string()),
                 reasoning_visible: true,
                 think_level: None,
@@ -2482,6 +4048,7 @@ mod tests {
                 agent_profile_id: "default".to_string(),
                 agent_name: "Default".to_string(),
                 scheduled_by: None,
+                schedule: None,
                 model: Some("glm-5-turbo".to_string()),
                 reasoning_visible: true,
                 think_level: None,
@@ -2571,6 +4138,7 @@ mod tests {
                 agent_profile_id: "default".to_string(),
                 agent_name: "Default".to_string(),
                 scheduled_by: None,
+                schedule: None,
                 model: Some("glm-5-turbo".to_string()),
                 reasoning_visible: true,
                 think_level: None,
@@ -2623,6 +4191,7 @@ mod tests {
                 agent_profile_id: "default".to_string(),
                 agent_name: "Default".to_string(),
                 scheduled_by: None,
+                schedule: None,
                 model: Some("glm-5-turbo".to_string()),
                 reasoning_visible: true,
                 think_level: None,
@@ -2688,6 +4257,7 @@ mod tests {
                 agent_profile_id: "default".to_string(),
                 agent_name: "Default".to_string(),
                 scheduled_by: None,
+                schedule: None,
                 model: Some("glm-5-turbo".to_string()),
                 reasoning_visible: true,
                 think_level: None,
@@ -2753,6 +4323,7 @@ mod tests {
                 agent_profile_id: "default".to_string(),
                 agent_name: "Default".to_string(),
                 scheduled_by: None,
+                schedule: None,
                 model: Some("glm-5-turbo".to_string()),
                 reasoning_visible: true,
                 think_level: None,
@@ -2808,6 +4379,7 @@ mod tests {
                 agent_profile_id: "default".to_string(),
                 agent_name: "Default".to_string(),
                 scheduled_by: None,
+                schedule: None,
                 model: Some("glm-5-turbo".to_string()),
                 reasoning_visible: true,
                 think_level: None,
@@ -2877,6 +4449,7 @@ mod tests {
                 agent_profile_id: "default".to_string(),
                 agent_name: "Default".to_string(),
                 scheduled_by: None,
+                schedule: None,
                 model: Some("glm-5-turbo".to_string()),
                 reasoning_visible: true,
                 think_level: None,
@@ -2947,6 +4520,7 @@ mod tests {
                 agent_profile_id: "default".to_string(),
                 agent_name: "Default".to_string(),
                 scheduled_by: None,
+                schedule: None,
                 model: Some("glm-5-turbo".to_string()),
                 reasoning_visible: true,
                 think_level: None,
@@ -3020,6 +4594,7 @@ mod tests {
             agent_profile_id: "default".to_string(),
             agent_name: "Default".to_string(),
             scheduled_by: None,
+            schedule: None,
             model: Some("glm-5-turbo".to_string()),
             reasoning_visible: true,
             think_level: None,
@@ -3047,7 +4622,19 @@ mod tests {
                     ("default".to_string(), "Default".to_string()),
                     ("judge".to_string(), "Judge".to_string()),
                 ],
-                schedules: vec!["pulse".to_string()],
+                schedules: vec![BrowserSchedule {
+                    id: "pulse".to_string(),
+                    agent_profile_id: "default".to_string(),
+                    prompt: "проверь очередь".to_string(),
+                    mode: AgentScheduleMode::Interval,
+                    delivery_mode: AgentScheduleDeliveryMode::FreshSession,
+                    target_session_id: None,
+                    interval_seconds: 300,
+                    enabled: true,
+                }],
+                connectors: Vec::new(),
+                sent_messages: Vec::new(),
+                chain_grants: Vec::new(),
             })),
         };
         let mut state = TuiAppState::new(vec![summary.clone()], Some(summary.id.clone()));
@@ -3102,6 +4689,7 @@ mod tests {
             agent_profile_id: "default".to_string(),
             agent_name: "Default".to_string(),
             scheduled_by: None,
+            schedule: None,
             model: Some("glm-5-turbo".to_string()),
             reasoning_visible: true,
             think_level: None,
@@ -3129,7 +4717,19 @@ mod tests {
                     ("default".to_string(), "Default".to_string()),
                     ("judge".to_string(), "Judge".to_string()),
                 ],
-                schedules: vec!["pulse".to_string()],
+                schedules: vec![BrowserSchedule {
+                    id: "pulse".to_string(),
+                    agent_profile_id: "default".to_string(),
+                    prompt: "проверь очередь".to_string(),
+                    mode: AgentScheduleMode::Interval,
+                    delivery_mode: AgentScheduleDeliveryMode::FreshSession,
+                    target_session_id: None,
+                    interval_seconds: 300,
+                    enabled: true,
+                }],
+                connectors: Vec::new(),
+                sent_messages: Vec::new(),
+                chain_grants: Vec::new(),
             })),
         };
         let mut state = TuiAppState::new(vec![summary.clone()], Some(summary.id.clone()));
@@ -3170,9 +4770,13 @@ mod tests {
             .expect("open create schedule dialog");
         assert!(matches!(
             state.dialog_state(),
-            Some(DialogState::CreateSchedule { .. })
+            Some(DialogState::CreateScheduleForm { .. })
         ));
-        state.set_dialog_input("pulse2 300 :: проверь очередь".to_string());
+        state.set_dialog_input("pulse2".to_string());
+        for _ in 0..7 {
+            state.dialog_next_field();
+        }
+        state.set_dialog_input("проверь очередь".to_string());
         dispatch_action(&backend, &mut state, TuiAction::ConfirmDialog, &mut redraw)
             .expect("confirm create schedule");
         assert!(
@@ -3180,6 +4784,34 @@ mod tests {
                 .render_agent_schedules()
                 .expect("render schedules")
                 .contains("pulse2")
+        );
+
+        dispatch_action(&backend, &mut state, TuiAction::BrowserToggle, &mut redraw)
+            .expect("toggle schedule");
+        assert!(
+            backend
+                .render_agent_schedule("pulse2")
+                .expect("render toggled schedule")
+                .contains("enabled=false")
+        );
+
+        dispatch_action(&backend, &mut state, TuiAction::BrowserEdit, &mut redraw)
+            .expect("open edit schedule dialog");
+        assert!(matches!(
+            state.dialog_state(),
+            Some(DialogState::EditScheduleForm { .. })
+        ));
+        for _ in 0..6 {
+            state.dialog_next_field();
+        }
+        state.set_dialog_input("обнови очередь и проверь ADET".to_string());
+        dispatch_action(&backend, &mut state, TuiAction::ConfirmDialog, &mut redraw)
+            .expect("confirm edit schedule");
+        assert!(
+            backend
+                .render_agent_schedule("pulse2")
+                .expect("render edited schedule")
+                .contains("обнови очередь и проверь ADET")
         );
 
         dispatch_action(&backend, &mut state, TuiAction::BrowserDelete, &mut redraw)
@@ -3199,6 +4831,513 @@ mod tests {
     }
 
     #[test]
+    fn mcp_commands_open_browser_and_manage_connectors() {
+        fn redraw(_: &TuiAppState) -> Result<(), BootstrapError> {
+            Ok(())
+        }
+
+        let summary = SessionSummary {
+            id: "session-a".to_string(),
+            title: "Session A".to_string(),
+            agent_profile_id: "default".to_string(),
+            agent_name: "Default".to_string(),
+            scheduled_by: None,
+            schedule: None,
+            model: Some("glm-5-turbo".to_string()),
+            reasoning_visible: true,
+            think_level: None,
+            compactifications: 0,
+            completion_nudges: None,
+            auto_approve: false,
+            context_tokens: 0,
+            usage_input_tokens: None,
+            usage_output_tokens: None,
+            usage_total_tokens: None,
+            has_pending_approval: false,
+            last_message_preview: None,
+            message_count: 0,
+            background_job_count: 0,
+            running_background_job_count: 0,
+            queued_background_job_count: 0,
+            created_at: 1,
+            updated_at: 2,
+        };
+        let backend = BrowserBackend {
+            summary: summary.clone(),
+            state: Arc::new(Mutex::new(BrowserBackendState {
+                current_agent_id: "default".to_string(),
+                agents: vec![
+                    ("default".to_string(), "Default".to_string()),
+                    ("judge".to_string(), "Judge".to_string()),
+                ],
+                schedules: Vec::new(),
+                connectors: vec![BrowserMcpConnector {
+                    id: "docs".to_string(),
+                    command: "npx".to_string(),
+                    args: vec![
+                        "-y".to_string(),
+                        "@modelcontextprotocol/server-filesystem".to_string(),
+                        "/workspace".to_string(),
+                    ],
+                    cwd: Some("/srv/mcp".to_string()),
+                    env: std::collections::BTreeMap::from([
+                        ("DEBUG".to_string(), "1".to_string()),
+                        ("TRACE".to_string(), "yes".to_string()),
+                    ]),
+                    enabled: true,
+                    state: crate::mcp::McpConnectorState::Running,
+                    restart_count: 0,
+                }],
+                sent_messages: Vec::new(),
+                chain_grants: Vec::new(),
+            })),
+        };
+        let mut state = TuiAppState::new(vec![summary.clone()], Some(summary.id.clone()));
+        state.set_current_session(summary, Timeline::default());
+
+        handle_command(&backend, &mut state, "\\mcp", &mut redraw).expect("mcp command");
+        assert_eq!(state.active_screen(), TuiScreen::Mcp);
+        assert_eq!(
+            state.browser_selected_item().map(|item| item.id.as_str()),
+            Some("docs")
+        );
+        assert!(
+            state
+                .browser_state()
+                .expect("mcp browser")
+                .preview_content()
+                .contains("command=npx")
+        );
+
+        dispatch_action(&backend, &mut state, TuiAction::BrowserCreate, &mut redraw)
+            .expect("open create connector dialog");
+        assert!(matches!(
+            state.dialog_state(),
+            Some(DialogState::CreateMcpConnectorForm { .. })
+        ));
+        state.set_dialog_input("git".to_string());
+        state.dialog_next_field();
+        state.set_dialog_input("uvx".to_string());
+        state.dialog_next_field();
+        state.set_dialog_input("mcp-server-git".to_string());
+        state.dialog_next_field();
+        state.set_dialog_input("/srv/git".to_string());
+        state.dialog_next_field();
+        state.set_dialog_input("TRACE=1".to_string());
+        dispatch_action(&backend, &mut state, TuiAction::ConfirmDialog, &mut redraw)
+            .expect("confirm create connector");
+        assert!(
+            backend
+                .render_mcp_connectors()
+                .expect("render mcp")
+                .contains("git")
+        );
+
+        dispatch_action(&backend, &mut state, TuiAction::BrowserToggle, &mut redraw)
+            .expect("toggle connector");
+        assert!(
+            backend
+                .render_mcp_connector("git")
+                .expect("render connector")
+                .contains("enabled=false")
+        );
+
+        dispatch_action(&backend, &mut state, TuiAction::BrowserMessage, &mut redraw)
+            .expect("restart connector");
+        assert!(
+            backend
+                .render_mcp_connector("git")
+                .expect("render restarted connector")
+                .contains("restart_count=1")
+        );
+
+        dispatch_action(&backend, &mut state, TuiAction::BrowserEdit, &mut redraw)
+            .expect("open edit connector dialog");
+        assert!(matches!(
+            state.dialog_state(),
+            Some(DialogState::EditMcpConnectorForm { .. })
+        ));
+        state.dialog_next_field();
+        state.dialog_next_field();
+        state.dialog_next_field();
+        state.dialog_next_field();
+        state.set_dialog_input("true".to_string());
+        dispatch_action(&backend, &mut state, TuiAction::ConfirmDialog, &mut redraw)
+            .expect("confirm edit connector");
+        assert!(
+            backend
+                .render_mcp_connector("git")
+                .expect("render edited connector")
+                .contains("enabled=true")
+        );
+
+        dispatch_action(&backend, &mut state, TuiAction::BrowserDelete, &mut redraw)
+            .expect("open delete connector dialog");
+        assert!(matches!(
+            state.dialog_state(),
+            Some(DialogState::ConfirmDeleteMcpConnector { .. })
+        ));
+        dispatch_action(&backend, &mut state, TuiAction::ConfirmDialog, &mut redraw)
+            .expect("confirm delete connector");
+        assert!(
+            !backend
+                .render_mcp_connectors()
+                .expect("render mcp after delete")
+                .contains("git")
+        );
+    }
+
+    #[test]
+    fn browser_message_action_opens_prefilled_dialog_and_sends_message() {
+        fn redraw(_: &TuiAppState) -> Result<(), BootstrapError> {
+            Ok(())
+        }
+
+        let summary = SessionSummary {
+            id: "session-a".to_string(),
+            title: "Session A".to_string(),
+            agent_profile_id: "default".to_string(),
+            agent_name: "Default".to_string(),
+            scheduled_by: None,
+            schedule: None,
+            model: Some("glm-5-turbo".to_string()),
+            reasoning_visible: true,
+            think_level: None,
+            compactifications: 0,
+            completion_nudges: None,
+            auto_approve: false,
+            context_tokens: 0,
+            usage_input_tokens: None,
+            usage_output_tokens: None,
+            usage_total_tokens: None,
+            has_pending_approval: false,
+            last_message_preview: None,
+            message_count: 0,
+            background_job_count: 0,
+            running_background_job_count: 0,
+            queued_background_job_count: 0,
+            created_at: 1,
+            updated_at: 2,
+        };
+        let backend = BrowserBackend {
+            summary: summary.clone(),
+            state: Arc::new(Mutex::new(BrowserBackendState {
+                current_agent_id: "default".to_string(),
+                agents: vec![
+                    ("default".to_string(), "Default".to_string()),
+                    ("judge".to_string(), "Judge".to_string()),
+                ],
+                schedules: Vec::new(),
+                connectors: Vec::new(),
+                sent_messages: Vec::new(),
+                chain_grants: Vec::new(),
+            })),
+        };
+        let mut state = TuiAppState::new(vec![summary.clone()], Some(summary.id.clone()));
+        state.set_current_session(summary, Timeline::default());
+
+        handle_command(&backend, &mut state, "\\агенты", &mut redraw).expect("agents command");
+        dispatch_action(
+            &backend,
+            &mut state,
+            TuiAction::BrowserSelectNext,
+            &mut redraw,
+        )
+        .expect("select judge");
+        dispatch_action(&backend, &mut state, TuiAction::BrowserMessage, &mut redraw)
+            .expect("open message dialog");
+
+        match state.dialog_state() {
+            Some(DialogState::SendAgentMessageForm { form }) => {
+                assert_eq!(form.target_agent_id(), "judge");
+            }
+            other => panic!("unexpected dialog state: {other:?}"),
+        }
+        state.dialog_next_field();
+        state.set_dialog_input("Проверь последний вывод".to_string());
+        dispatch_action(&backend, &mut state, TuiAction::ConfirmDialog, &mut redraw)
+            .expect("confirm send message");
+
+        let locked = backend.state.lock().expect("browser backend state");
+        assert_eq!(
+            locked.sent_messages,
+            vec![(
+                "session-a".to_string(),
+                "judge".to_string(),
+                "Проверь последний вывод".to_string()
+            )]
+        );
+    }
+
+    #[test]
+    fn judge_and_chain_commands_route_operator_actions() {
+        fn redraw(_: &TuiAppState) -> Result<(), BootstrapError> {
+            Ok(())
+        }
+
+        let summary = SessionSummary {
+            id: "session-a".to_string(),
+            title: "Session A".to_string(),
+            agent_profile_id: "default".to_string(),
+            agent_name: "Default".to_string(),
+            scheduled_by: None,
+            schedule: None,
+            model: Some("glm-5-turbo".to_string()),
+            reasoning_visible: true,
+            think_level: None,
+            compactifications: 0,
+            completion_nudges: None,
+            auto_approve: false,
+            context_tokens: 0,
+            usage_input_tokens: None,
+            usage_output_tokens: None,
+            usage_total_tokens: None,
+            has_pending_approval: false,
+            last_message_preview: None,
+            message_count: 0,
+            background_job_count: 0,
+            running_background_job_count: 0,
+            queued_background_job_count: 0,
+            created_at: 1,
+            updated_at: 2,
+        };
+        let backend = BrowserBackend {
+            summary: summary.clone(),
+            state: Arc::new(Mutex::new(BrowserBackendState {
+                current_agent_id: "default".to_string(),
+                agents: vec![
+                    ("default".to_string(), "Default".to_string()),
+                    ("judge".to_string(), "Judge".to_string()),
+                ],
+                schedules: Vec::new(),
+                connectors: Vec::new(),
+                sent_messages: Vec::new(),
+                chain_grants: Vec::new(),
+            })),
+        };
+        let mut state = TuiAppState::new(vec![summary.clone()], Some(summary.id.clone()));
+        state.set_current_session(summary, Timeline::default());
+
+        handle_command(
+            &backend,
+            &mut state,
+            "\\судья проверь этот результат",
+            &mut redraw,
+        )
+        .expect("judge command");
+        handle_command(
+            &backend,
+            &mut state,
+            "\\цепочка продолжить chain-123 нужен ещё один hop",
+            &mut redraw,
+        )
+        .expect("chain command");
+
+        let locked = backend.state.lock().expect("browser backend state");
+        assert_eq!(
+            locked.sent_messages,
+            vec![(
+                "session-a".to_string(),
+                "judge".to_string(),
+                "проверь этот результат".to_string()
+            )]
+        );
+        assert_eq!(
+            locked.chain_grants,
+            vec![(
+                "session-a".to_string(),
+                "chain-123".to_string(),
+                "нужен ещё один hop".to_string()
+            )]
+        );
+    }
+
+    #[test]
+    fn memory_commands_render_results_into_timeline() {
+        fn redraw(_: &TuiAppState) -> Result<(), BootstrapError> {
+            Ok(())
+        }
+
+        let summary = SessionSummary {
+            id: "session-a".to_string(),
+            title: "Session A".to_string(),
+            agent_profile_id: "default".to_string(),
+            agent_name: "Default".to_string(),
+            scheduled_by: None,
+            schedule: None,
+            model: Some("glm-5-turbo".to_string()),
+            reasoning_visible: true,
+            think_level: None,
+            compactifications: 0,
+            completion_nudges: None,
+            auto_approve: false,
+            context_tokens: 0,
+            usage_input_tokens: None,
+            usage_output_tokens: None,
+            usage_total_tokens: None,
+            has_pending_approval: false,
+            last_message_preview: None,
+            message_count: 0,
+            background_job_count: 0,
+            running_background_job_count: 0,
+            queued_background_job_count: 0,
+            created_at: 1,
+            updated_at: 2,
+        };
+        let backend = FakeBackend {
+            summary: summary.clone(),
+            pending: Vec::new(),
+            transcript: SessionTranscriptView {
+                session_id: "session-a".to_string(),
+                entries: Vec::new(),
+            },
+            debug_bundle: "unused".to_string(),
+        };
+        let mut state = TuiAppState::new(vec![summary.clone()], Some(summary.id.clone()));
+        state.set_current_session(summary, Timeline::default());
+
+        handle_command(&backend, &mut state, "\\память сессии offline", &mut redraw)
+            .expect("memory sessions");
+        handle_command(
+            &backend,
+            &mut state,
+            "\\память сессия session-a transcript",
+            &mut redraw,
+        )
+        .expect("memory session");
+        handle_command(
+            &backend,
+            &mut state,
+            "\\память знания README.md",
+            &mut redraw,
+        )
+        .expect("memory knowledge");
+        handle_command(
+            &backend,
+            &mut state,
+            "\\память файл README.md full",
+            &mut redraw,
+        )
+        .expect("memory file");
+
+        let rendered = state
+            .timeline()
+            .entries(true)
+            .iter()
+            .map(|entry| entry.content.as_str())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(rendered.contains("memory sessions query=offline"));
+        assert!(rendered.contains("memory session id=session-a mode=transcript"));
+        assert!(rendered.contains("memory knowledge query=README.md"));
+        assert!(rendered.contains("memory file path=README.md mode=full"));
+    }
+
+    #[test]
+    fn context_command_renders_offload_overview_into_timeline() {
+        fn redraw(_: &TuiAppState) -> Result<(), BootstrapError> {
+            Ok(())
+        }
+
+        let summary = SessionSummary {
+            id: "session-a".to_string(),
+            title: "Session A".to_string(),
+            agent_profile_id: "default".to_string(),
+            agent_name: "Default".to_string(),
+            scheduled_by: None,
+            schedule: None,
+            model: Some("glm-5-turbo".to_string()),
+            reasoning_visible: true,
+            think_level: None,
+            compactifications: 0,
+            completion_nudges: None,
+            auto_approve: false,
+            context_tokens: 0,
+            usage_input_tokens: None,
+            usage_output_tokens: None,
+            usage_total_tokens: None,
+            has_pending_approval: false,
+            last_message_preview: None,
+            message_count: 0,
+            background_job_count: 0,
+            running_background_job_count: 0,
+            queued_background_job_count: 0,
+            created_at: 1,
+            updated_at: 2,
+        };
+        let backend = FakeBackend {
+            summary: summary.clone(),
+            pending: Vec::new(),
+            transcript: SessionTranscriptView {
+                session_id: "session-a".to_string(),
+                entries: Vec::new(),
+            },
+            debug_bundle: "unused".to_string(),
+        };
+        let mut state = TuiAppState::new(vec![summary.clone()], Some(summary.id.clone()));
+        state.set_current_session(summary, Timeline::default());
+
+        handle_command(&backend, &mut state, "\\контекст", &mut redraw).expect("context");
+
+        let rendered = state
+            .timeline()
+            .entries(true)
+            .iter()
+            .map(|entry| entry.content.as_str())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(rendered.contains("Context:"));
+        assert!(rendered.contains("ctx=0"));
+    }
+
+    #[test]
+    fn chat_shortcuts_open_interagent_dialogs() {
+        let mut state = TuiAppState::new(
+            vec![SessionSummary {
+                id: "session-a".to_string(),
+                title: "Session A".to_string(),
+                agent_profile_id: "default".to_string(),
+                agent_name: "Default".to_string(),
+                scheduled_by: None,
+                schedule: None,
+                model: Some("glm-5-turbo".to_string()),
+                reasoning_visible: true,
+                think_level: None,
+                compactifications: 0,
+                completion_nudges: None,
+                auto_approve: false,
+                context_tokens: 0,
+                usage_input_tokens: None,
+                usage_output_tokens: None,
+                usage_total_tokens: None,
+                has_pending_approval: false,
+                last_message_preview: None,
+                message_count: 0,
+                background_job_count: 0,
+                running_background_job_count: 0,
+                queued_background_job_count: 0,
+                created_at: 1,
+                updated_at: 2,
+            }],
+            Some("session-a".to_string()),
+        );
+
+        let action = crate::tui::screens::chat::handle_key(
+            &mut state,
+            KeyEvent::new(KeyCode::Char('j'), KeyModifiers::CONTROL),
+        )
+        .expect("ctrl+j");
+        assert_eq!(action, TuiAction::OpenJudgeDialog);
+
+        let action = crate::tui::screens::chat::handle_key(
+            &mut state,
+            KeyEvent::new(KeyCode::Char('g'), KeyModifiers::CONTROL),
+        )
+        .expect("ctrl+g");
+        assert_eq!(action, TuiAction::OpenChainGrantDialog);
+    }
+
+    #[test]
     fn refresh_current_session_rebuilds_timeline_from_backend_transcript() {
         let summary = SessionSummary {
             id: "session-a".to_string(),
@@ -3206,6 +5345,7 @@ mod tests {
             agent_profile_id: "default".to_string(),
             agent_name: "Default".to_string(),
             scheduled_by: None,
+            schedule: None,
             model: Some("glm-5-turbo".to_string()),
             reasoning_visible: true,
             think_level: None,

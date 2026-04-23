@@ -9,7 +9,7 @@ use agent_runtime::mission::{JobResult, JobSpec, JobStatus};
 use agent_runtime::run::{RunEngine, RunSnapshot};
 use agent_runtime::scheduler::MissionVerificationSummary;
 use agent_runtime::session::{Session, SessionSettings, TranscriptEntry};
-use agent_runtime::tool::ToolCall;
+use agent_runtime::tool::{GrantAgentChainContinuationInput, MessageAgentInput, ToolCall};
 use std::sync::atomic::AtomicBool;
 
 impl App {
@@ -251,6 +251,77 @@ impl App {
         self.execution_service()
             .request_tool_approval(&store, job_id, run_id, tool_call, now)
             .map_err(BootstrapError::Execution)
+    }
+
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub fn send_session_agent_message(
+        &self,
+        session_id: &str,
+        target_agent_id: &str,
+        message: &str,
+        now: i64,
+    ) -> Result<String, BootstrapError> {
+        let store = self.store()?;
+        if store.get_session(session_id)?.is_none() {
+            return Err(BootstrapError::MissingRecord {
+                kind: "session",
+                id: session_id.to_string(),
+            });
+        }
+
+        let output = self
+            .execution_service()
+            .queue_interagent_message(
+                &store,
+                session_id,
+                &MessageAgentInput {
+                    target_agent_id: target_agent_id.to_string(),
+                    message: message.to_string(),
+                },
+                now,
+            )
+            .map_err(BootstrapError::Execution)?;
+        Ok(format!(
+            "сообщение отправлено агенту {}: recipient_session={} recipient_job={} chain_id={} hop_count={}",
+            output.target_agent_id,
+            output.recipient_session_id,
+            output.recipient_job_id,
+            output.chain_id,
+            output.hop_count
+        ))
+    }
+
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub fn grant_session_chain_continuation(
+        &self,
+        session_id: &str,
+        chain_id: &str,
+        reason: &str,
+        now: i64,
+    ) -> Result<String, BootstrapError> {
+        let store = self.store()?;
+        if store.get_session(session_id)?.is_none() {
+            return Err(BootstrapError::MissingRecord {
+                kind: "session",
+                id: session_id.to_string(),
+            });
+        }
+
+        let output = self
+            .execution_service()
+            .grant_agent_chain_continuation(
+                &store,
+                &GrantAgentChainContinuationInput {
+                    chain_id: chain_id.to_string(),
+                    reason: reason.to_string(),
+                },
+                now,
+            )
+            .map_err(BootstrapError::Execution)?;
+        Ok(format!(
+            "цепочка {} продолжена: granted_hops={}",
+            output.chain_id, output.granted_hops
+        ))
     }
 
     #[cfg_attr(not(test), allow(dead_code))]

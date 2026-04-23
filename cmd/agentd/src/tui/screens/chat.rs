@@ -75,6 +75,10 @@ pub fn handle_key(state: &mut TuiAppState, key: KeyEvent) -> Result<TuiAction, B
             state.move_input_cursor_end();
             TuiAction::None
         }
+        KeyCode::Char('j') if key.modifiers == KeyModifiers::CONTROL => TuiAction::OpenJudgeDialog,
+        KeyCode::Char('g') if key.modifiers == KeyModifiers::CONTROL => {
+            TuiAction::OpenChainGrantDialog
+        }
         KeyCode::Char(c) if key.modifiers.is_empty() || key.modifiers == KeyModifiers::SHIFT => {
             state.push_input_char(c);
             TuiAction::None

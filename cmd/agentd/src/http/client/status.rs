@@ -1,4 +1,5 @@
 use super::*;
+use crate::http::types::UpdateRuntimeRequest;
 
 impl DaemonClient {
     pub fn about(&self) -> Result<String, BootstrapError> {
@@ -6,9 +7,13 @@ impl DaemonClient {
         Ok(response.about)
     }
 
-    pub fn update_runtime(&self) -> Result<String, BootstrapError> {
-        let response: UpdateRuntimeResponse =
-            self.post_json("/v1/update", &serde_json::json!({}))?;
+    pub fn update_runtime(&self, tag: Option<&str>) -> Result<String, BootstrapError> {
+        let response: UpdateRuntimeResponse = self.post_json(
+            "/v1/update",
+            &UpdateRuntimeRequest {
+                tag: tag.map(str::to_string),
+            },
+        )?;
         Ok(response.message)
     }
 

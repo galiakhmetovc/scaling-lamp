@@ -1,21 +1,39 @@
-use crate::bootstrap::SessionSummary;
+use crate::bootstrap::{AgentScheduleView, McpConnectorView, SessionSummary};
 use crate::tui::timeline::Timeline;
 use crate::tui::worker::{
     ActiveRunHandle, ActiveRunPhase, ComposerQueue, QueuedDraft, QueuedDraftMode,
 };
 
-const COMMAND_HINTS: [&str; 40] = [
+const COMMAND_HINTS: [&str; 58] = [
     "\\сессии",
     "\\новая",
     "\\агенты",
     "\\агент показать",
     "\\агент выбрать",
     "\\агент создать",
+    "\\агент написать",
     "\\агент открыть",
+    "\\судья",
     "\\расписания",
     "\\расписание показать",
     "\\расписание создать",
+    "\\расписание изменить",
+    "\\расписание включить",
+    "\\расписание выключить",
     "\\расписание удалить",
+    "\\mcp",
+    "\\mcp показать",
+    "\\mcp создать",
+    "\\mcp изменить",
+    "\\mcp включить",
+    "\\mcp выключить",
+    "\\mcp перезапустить",
+    "\\mcp удалить",
+    "\\память сессии",
+    "\\память сессия",
+    "\\память знания",
+    "\\память файл",
+    "\\цепочка продолжить",
     "\\переименовать",
     "\\очистить",
     "\\версия",
@@ -46,18 +64,36 @@ const COMMAND_HINTS: [&str; 40] = [
     "\\компакт",
     "\\выход",
 ];
-const COMMAND_STEMS: [&str; 40] = [
+const COMMAND_STEMS: [&str; 58] = [
     "сессии",
     "новая",
     "агенты",
     "агент показать",
     "агент выбрать",
     "агент создать",
+    "агент написать",
     "агент открыть",
+    "судья",
     "расписания",
     "расписание показать",
     "расписание создать",
+    "расписание изменить",
+    "расписание включить",
+    "расписание выключить",
     "расписание удалить",
+    "mcp",
+    "mcp показать",
+    "mcp создать",
+    "mcp изменить",
+    "mcp включить",
+    "mcp выключить",
+    "mcp перезапустить",
+    "mcp удалить",
+    "память сессии",
+    "память сессия",
+    "память знания",
+    "память файл",
+    "цепочка продолжить",
     "переименовать",
     "очистить",
     "версия",
@@ -96,6 +132,7 @@ pub enum TuiScreen {
     Chat,
     Agents,
     Schedules,
+    Mcp,
     Artifacts,
 }
 
@@ -103,6 +140,7 @@ pub enum TuiScreen {
 pub enum BrowserKind {
     Agents,
     Schedules,
+    Mcp,
     Artifacts,
 }
 
@@ -131,12 +169,703 @@ pub struct BrowserState {
 pub enum DialogState {
     CreateSession { value: String },
     CreateAgent { value: String },
-    CreateSchedule { value: String },
+    CreateScheduleForm { form: ScheduleFormState },
+    EditScheduleForm { form: ScheduleFormState },
+    CreateMcpConnectorForm { form: McpConnectorFormState },
+    EditMcpConnectorForm { form: McpConnectorFormState },
+    SendAgentMessageForm { form: AgentMessageFormState },
+    GrantChainContinuationForm { form: ChainGrantFormState },
     BrowserSearch { value: String },
     RenameSession { session_id: String, value: String },
     ConfirmDelete { session_id: String },
     ConfirmClear { session_id: String },
     ConfirmDeleteSchedule { id: String },
+    ConfirmDeleteMcpConnector { id: String },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ScheduleFormKind {
+    Create,
+    Edit,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ScheduleFormField {
+    Id,
+    Agent,
+    Mode,
+    DeliveryMode,
+    TargetSessionId,
+    IntervalSeconds,
+    Enabled,
+    Prompt,
+}
+
+const CREATE_SCHEDULE_FORM_FIELDS: [ScheduleFormField; 8] = [
+    ScheduleFormField::Id,
+    ScheduleFormField::Agent,
+    ScheduleFormField::Mode,
+    ScheduleFormField::DeliveryMode,
+    ScheduleFormField::TargetSessionId,
+    ScheduleFormField::IntervalSeconds,
+    ScheduleFormField::Enabled,
+    ScheduleFormField::Prompt,
+];
+
+const EDIT_SCHEDULE_FORM_FIELDS: [ScheduleFormField; 7] = [
+    ScheduleFormField::Agent,
+    ScheduleFormField::Mode,
+    ScheduleFormField::DeliveryMode,
+    ScheduleFormField::TargetSessionId,
+    ScheduleFormField::IntervalSeconds,
+    ScheduleFormField::Enabled,
+    ScheduleFormField::Prompt,
+];
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ScheduleFormState {
+    kind: ScheduleFormKind,
+    active_index: usize,
+    id: String,
+    agent_identifier: String,
+    mode: String,
+    delivery_mode: String,
+    target_session_id: String,
+    interval_seconds: String,
+    enabled: String,
+    prompt: String,
+}
+
+impl ScheduleFormState {
+    pub fn new_create() -> Self {
+        Self {
+            kind: ScheduleFormKind::Create,
+            active_index: 0,
+            id: String::new(),
+            agent_identifier: String::new(),
+            mode: "interval".to_string(),
+            delivery_mode: "fresh_session".to_string(),
+            target_session_id: String::new(),
+            interval_seconds: "300".to_string(),
+            enabled: "true".to_string(),
+            prompt: String::new(),
+        }
+    }
+
+    pub fn from_schedule(schedule: AgentScheduleView) -> Self {
+        Self {
+            kind: ScheduleFormKind::Edit,
+            active_index: 0,
+            id: schedule.id,
+            agent_identifier: schedule.agent_profile_id,
+            mode: schedule.mode.as_str().to_string(),
+            delivery_mode: schedule.delivery_mode.as_str().to_string(),
+            target_session_id: schedule.target_session_id.unwrap_or_default(),
+            interval_seconds: schedule.interval_seconds.to_string(),
+            enabled: schedule.enabled.to_string(),
+            prompt: schedule.prompt,
+        }
+    }
+
+    pub fn kind(&self) -> ScheduleFormKind {
+        self.kind
+    }
+
+    pub fn title(&self) -> &'static str {
+        match self.kind {
+            ScheduleFormKind::Create => "Создать расписание",
+            ScheduleFormKind::Edit => "Изменить расписание",
+        }
+    }
+
+    pub fn fields(&self) -> &[ScheduleFormField] {
+        match self.kind {
+            ScheduleFormKind::Create => &CREATE_SCHEDULE_FORM_FIELDS,
+            ScheduleFormKind::Edit => &EDIT_SCHEDULE_FORM_FIELDS,
+        }
+    }
+
+    pub fn active_field(&self) -> ScheduleFormField {
+        self.fields()[self.active_index.min(self.fields().len().saturating_sub(1))]
+    }
+
+    pub fn active_field_label(&self) -> &'static str {
+        Self::field_label(self.active_field())
+    }
+
+    pub fn next_field(&mut self) {
+        let fields = self.fields();
+        if fields.is_empty() {
+            self.active_index = 0;
+            return;
+        }
+        self.active_index = (self.active_index + 1) % fields.len();
+    }
+
+    pub fn previous_field(&mut self) {
+        let fields = self.fields();
+        if fields.is_empty() {
+            self.active_index = 0;
+            return;
+        }
+        self.active_index = if self.active_index == 0 {
+            fields.len().saturating_sub(1)
+        } else {
+            self.active_index - 1
+        };
+    }
+
+    pub fn current_value(&self) -> &str {
+        self.value_for(self.active_field())
+    }
+
+    pub fn set_current_value(&mut self, value: String) {
+        *self.value_for_mut(self.active_field()) = value;
+    }
+
+    pub fn push_current_char(&mut self, value: char) {
+        self.value_for_mut(self.active_field()).push(value);
+    }
+
+    pub fn pop_current_char(&mut self) {
+        self.value_for_mut(self.active_field()).pop();
+    }
+
+    pub fn render_lines(&self) -> Vec<String> {
+        let mut lines = vec![self.title().to_string(), String::new()];
+        let id_marker = if self.active_field() == ScheduleFormField::Id {
+            ">"
+        } else {
+            " "
+        };
+        lines.push(format!(
+            "{id_marker} {}: {}",
+            Self::field_label(ScheduleFormField::Id),
+            self.id
+        ));
+        for field in self.fields() {
+            if *field == ScheduleFormField::Id {
+                continue;
+            }
+            let marker = if *field == self.active_field() {
+                ">"
+            } else {
+                " "
+            };
+            lines.push(format!(
+                "{marker} {}: {}",
+                Self::field_label(*field),
+                self.value_for(*field)
+            ));
+        }
+        lines.push(String::new());
+        lines.push("Пустой agent -> оставить текущий/дефолтный.".to_string());
+        lines.push("session нужен только для delivery=existing_session.".to_string());
+        lines.push("Tab/Shift+Tab или ↑/↓ поле, Enter сохранить, Esc отмена".to_string());
+        lines
+    }
+
+    pub fn id(&self) -> &str {
+        &self.id
+    }
+
+    pub fn agent_identifier(&self) -> &str {
+        &self.agent_identifier
+    }
+
+    pub fn mode(&self) -> &str {
+        &self.mode
+    }
+
+    pub fn delivery_mode(&self) -> &str {
+        &self.delivery_mode
+    }
+
+    pub fn target_session_id(&self) -> &str {
+        &self.target_session_id
+    }
+
+    pub fn interval_seconds(&self) -> &str {
+        &self.interval_seconds
+    }
+
+    pub fn enabled(&self) -> &str {
+        &self.enabled
+    }
+
+    pub fn prompt(&self) -> &str {
+        &self.prompt
+    }
+
+    fn field_label(field: ScheduleFormField) -> &'static str {
+        match field {
+            ScheduleFormField::Id => "id",
+            ScheduleFormField::Agent => "agent",
+            ScheduleFormField::Mode => "mode",
+            ScheduleFormField::DeliveryMode => "delivery",
+            ScheduleFormField::TargetSessionId => "session",
+            ScheduleFormField::IntervalSeconds => "interval",
+            ScheduleFormField::Enabled => "enabled",
+            ScheduleFormField::Prompt => "prompt",
+        }
+    }
+
+    fn value_for(&self, field: ScheduleFormField) -> &str {
+        match field {
+            ScheduleFormField::Id => &self.id,
+            ScheduleFormField::Agent => &self.agent_identifier,
+            ScheduleFormField::Mode => &self.mode,
+            ScheduleFormField::DeliveryMode => &self.delivery_mode,
+            ScheduleFormField::TargetSessionId => &self.target_session_id,
+            ScheduleFormField::IntervalSeconds => &self.interval_seconds,
+            ScheduleFormField::Enabled => &self.enabled,
+            ScheduleFormField::Prompt => &self.prompt,
+        }
+    }
+
+    fn value_for_mut(&mut self, field: ScheduleFormField) -> &mut String {
+        match field {
+            ScheduleFormField::Id => &mut self.id,
+            ScheduleFormField::Agent => &mut self.agent_identifier,
+            ScheduleFormField::Mode => &mut self.mode,
+            ScheduleFormField::DeliveryMode => &mut self.delivery_mode,
+            ScheduleFormField::TargetSessionId => &mut self.target_session_id,
+            ScheduleFormField::IntervalSeconds => &mut self.interval_seconds,
+            ScheduleFormField::Enabled => &mut self.enabled,
+            ScheduleFormField::Prompt => &mut self.prompt,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum McpConnectorFormKind {
+    Create,
+    Edit,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum McpConnectorFormField {
+    Id,
+    Command,
+    Args,
+    Cwd,
+    Env,
+    Enabled,
+}
+
+const CREATE_MCP_CONNECTOR_FORM_FIELDS: [McpConnectorFormField; 6] = [
+    McpConnectorFormField::Id,
+    McpConnectorFormField::Command,
+    McpConnectorFormField::Args,
+    McpConnectorFormField::Cwd,
+    McpConnectorFormField::Env,
+    McpConnectorFormField::Enabled,
+];
+
+const EDIT_MCP_CONNECTOR_FORM_FIELDS: [McpConnectorFormField; 5] = [
+    McpConnectorFormField::Command,
+    McpConnectorFormField::Args,
+    McpConnectorFormField::Cwd,
+    McpConnectorFormField::Env,
+    McpConnectorFormField::Enabled,
+];
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct McpConnectorFormState {
+    kind: McpConnectorFormKind,
+    active_index: usize,
+    id: String,
+    command: String,
+    args: String,
+    cwd: String,
+    env: String,
+    enabled: String,
+}
+
+impl McpConnectorFormState {
+    pub fn new_create() -> Self {
+        Self {
+            kind: McpConnectorFormKind::Create,
+            active_index: 0,
+            id: String::new(),
+            command: String::new(),
+            args: String::new(),
+            cwd: String::new(),
+            env: String::new(),
+            enabled: "true".to_string(),
+        }
+    }
+
+    pub fn from_connector(connector: McpConnectorView) -> Self {
+        Self {
+            kind: McpConnectorFormKind::Edit,
+            active_index: 0,
+            id: connector.id,
+            command: connector.command,
+            args: connector.args.join(","),
+            cwd: connector.cwd.unwrap_or_default(),
+            env: connector
+                .env
+                .iter()
+                .map(|(key, value)| format!("{key}={value}"))
+                .collect::<Vec<_>>()
+                .join(";"),
+            enabled: connector.enabled.to_string(),
+        }
+    }
+
+    pub fn title(&self) -> &'static str {
+        match self.kind {
+            McpConnectorFormKind::Create => "Создать MCP-коннектор",
+            McpConnectorFormKind::Edit => "Изменить MCP-коннектор",
+        }
+    }
+
+    pub fn fields(&self) -> &[McpConnectorFormField] {
+        match self.kind {
+            McpConnectorFormKind::Create => &CREATE_MCP_CONNECTOR_FORM_FIELDS,
+            McpConnectorFormKind::Edit => &EDIT_MCP_CONNECTOR_FORM_FIELDS,
+        }
+    }
+
+    pub fn active_field(&self) -> McpConnectorFormField {
+        self.fields()[self.active_index.min(self.fields().len().saturating_sub(1))]
+    }
+
+    pub fn next_field(&mut self) {
+        let fields = self.fields();
+        if fields.is_empty() {
+            self.active_index = 0;
+            return;
+        }
+        self.active_index = (self.active_index + 1) % fields.len();
+    }
+
+    pub fn previous_field(&mut self) {
+        let fields = self.fields();
+        if fields.is_empty() {
+            self.active_index = 0;
+            return;
+        }
+        self.active_index = if self.active_index == 0 {
+            fields.len().saturating_sub(1)
+        } else {
+            self.active_index - 1
+        };
+    }
+
+    pub fn current_value(&self) -> &str {
+        self.value_for(self.active_field())
+    }
+
+    pub fn set_current_value(&mut self, value: String) {
+        *self.value_for_mut(self.active_field()) = value;
+    }
+
+    pub fn push_current_char(&mut self, value: char) {
+        self.value_for_mut(self.active_field()).push(value);
+    }
+
+    pub fn pop_current_char(&mut self) {
+        self.value_for_mut(self.active_field()).pop();
+    }
+
+    pub fn render_lines(&self) -> Vec<String> {
+        let mut lines = vec![self.title().to_string(), String::new()];
+        let id_marker = if self.active_field() == McpConnectorFormField::Id {
+            ">"
+        } else {
+            " "
+        };
+        lines.push(format!(
+            "{id_marker} {}: {}",
+            Self::field_label(McpConnectorFormField::Id),
+            self.id
+        ));
+        for field in self.fields() {
+            if *field == McpConnectorFormField::Id {
+                continue;
+            }
+            let marker = if *field == self.active_field() {
+                ">"
+            } else {
+                " "
+            };
+            lines.push(format!(
+                "{marker} {}: {}",
+                Self::field_label(*field),
+                self.value_for(*field)
+            ));
+        }
+        lines.push(String::new());
+        lines.push("args: через запятую. env: KEY=VALUE;KEY2=VALUE2.".to_string());
+        lines.push("Пустой cwd очищает рабочую директорию.".to_string());
+        lines.push("Tab/Shift+Tab или ↑/↓ поле, Enter сохранить, Esc отмена".to_string());
+        lines
+    }
+
+    pub fn id(&self) -> &str {
+        &self.id
+    }
+
+    pub fn command(&self) -> &str {
+        &self.command
+    }
+
+    pub fn args(&self) -> &str {
+        &self.args
+    }
+
+    pub fn cwd(&self) -> &str {
+        &self.cwd
+    }
+
+    pub fn env(&self) -> &str {
+        &self.env
+    }
+
+    pub fn enabled(&self) -> &str {
+        &self.enabled
+    }
+
+    fn field_label(field: McpConnectorFormField) -> &'static str {
+        match field {
+            McpConnectorFormField::Id => "id",
+            McpConnectorFormField::Command => "command",
+            McpConnectorFormField::Args => "args",
+            McpConnectorFormField::Cwd => "cwd",
+            McpConnectorFormField::Env => "env",
+            McpConnectorFormField::Enabled => "enabled",
+        }
+    }
+
+    fn value_for(&self, field: McpConnectorFormField) -> &str {
+        match field {
+            McpConnectorFormField::Id => &self.id,
+            McpConnectorFormField::Command => &self.command,
+            McpConnectorFormField::Args => &self.args,
+            McpConnectorFormField::Cwd => &self.cwd,
+            McpConnectorFormField::Env => &self.env,
+            McpConnectorFormField::Enabled => &self.enabled,
+        }
+    }
+
+    fn value_for_mut(&mut self, field: McpConnectorFormField) -> &mut String {
+        match field {
+            McpConnectorFormField::Id => &mut self.id,
+            McpConnectorFormField::Command => &mut self.command,
+            McpConnectorFormField::Args => &mut self.args,
+            McpConnectorFormField::Cwd => &mut self.cwd,
+            McpConnectorFormField::Env => &mut self.env,
+            McpConnectorFormField::Enabled => &mut self.enabled,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AgentMessageFormField {
+    TargetAgentId,
+    Message,
+}
+
+const AGENT_MESSAGE_FORM_FIELDS: [AgentMessageFormField; 2] = [
+    AgentMessageFormField::TargetAgentId,
+    AgentMessageFormField::Message,
+];
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AgentMessageFormState {
+    active_index: usize,
+    target_agent_id: String,
+    message: String,
+}
+
+impl AgentMessageFormState {
+    pub fn new(target_agent_id: Option<String>) -> Self {
+        Self {
+            active_index: 0,
+            target_agent_id: target_agent_id.unwrap_or_default(),
+            message: String::new(),
+        }
+    }
+
+    pub fn title(&self) -> &'static str {
+        "Написать агенту"
+    }
+
+    pub fn active_field(&self) -> AgentMessageFormField {
+        AGENT_MESSAGE_FORM_FIELDS[self
+            .active_index
+            .min(AGENT_MESSAGE_FORM_FIELDS.len().saturating_sub(1))]
+    }
+
+    pub fn next_field(&mut self) {
+        self.active_index = (self.active_index + 1) % AGENT_MESSAGE_FORM_FIELDS.len();
+    }
+
+    pub fn previous_field(&mut self) {
+        self.active_index = if self.active_index == 0 {
+            AGENT_MESSAGE_FORM_FIELDS.len().saturating_sub(1)
+        } else {
+            self.active_index - 1
+        };
+    }
+
+    pub fn current_value(&self) -> &str {
+        match self.active_field() {
+            AgentMessageFormField::TargetAgentId => &self.target_agent_id,
+            AgentMessageFormField::Message => &self.message,
+        }
+    }
+
+    pub fn set_current_value(&mut self, value: String) {
+        *self.current_value_mut() = value;
+    }
+
+    pub fn push_current_char(&mut self, value: char) {
+        self.current_value_mut().push(value);
+    }
+
+    pub fn pop_current_char(&mut self) {
+        self.current_value_mut().pop();
+    }
+
+    pub fn render_lines(&self) -> Vec<String> {
+        let mut lines = vec![self.title().to_string(), String::new()];
+        for field in AGENT_MESSAGE_FORM_FIELDS {
+            let marker = if field == self.active_field() {
+                ">"
+            } else {
+                " "
+            };
+            let (label, value) = match field {
+                AgentMessageFormField::TargetAgentId => ("agent", self.target_agent_id.as_str()),
+                AgentMessageFormField::Message => ("message", self.message.as_str()),
+            };
+            lines.push(format!("{marker} {label}: {value}"));
+        }
+        lines.push(String::new());
+        lines.push("Пустой agent недопустим.".to_string());
+        lines.push("Tab/Shift+Tab или ↑/↓ поле, Enter отправить, Esc отмена".to_string());
+        lines
+    }
+
+    pub fn target_agent_id(&self) -> &str {
+        &self.target_agent_id
+    }
+
+    pub fn message(&self) -> &str {
+        &self.message
+    }
+
+    fn current_value_mut(&mut self) -> &mut String {
+        match self.active_field() {
+            AgentMessageFormField::TargetAgentId => &mut self.target_agent_id,
+            AgentMessageFormField::Message => &mut self.message,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ChainGrantFormField {
+    ChainId,
+    Reason,
+}
+
+const CHAIN_GRANT_FORM_FIELDS: [ChainGrantFormField; 2] =
+    [ChainGrantFormField::ChainId, ChainGrantFormField::Reason];
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ChainGrantFormState {
+    active_index: usize,
+    chain_id: String,
+    reason: String,
+}
+
+impl ChainGrantFormState {
+    pub fn new(chain_id: Option<String>) -> Self {
+        Self {
+            active_index: 0,
+            chain_id: chain_id.unwrap_or_default(),
+            reason: String::new(),
+        }
+    }
+
+    pub fn title(&self) -> &'static str {
+        "Продолжить цепочку"
+    }
+
+    pub fn active_field(&self) -> ChainGrantFormField {
+        CHAIN_GRANT_FORM_FIELDS[self
+            .active_index
+            .min(CHAIN_GRANT_FORM_FIELDS.len().saturating_sub(1))]
+    }
+
+    pub fn next_field(&mut self) {
+        self.active_index = (self.active_index + 1) % CHAIN_GRANT_FORM_FIELDS.len();
+    }
+
+    pub fn previous_field(&mut self) {
+        self.active_index = if self.active_index == 0 {
+            CHAIN_GRANT_FORM_FIELDS.len().saturating_sub(1)
+        } else {
+            self.active_index - 1
+        };
+    }
+
+    pub fn current_value(&self) -> &str {
+        match self.active_field() {
+            ChainGrantFormField::ChainId => &self.chain_id,
+            ChainGrantFormField::Reason => &self.reason,
+        }
+    }
+
+    pub fn set_current_value(&mut self, value: String) {
+        *self.current_value_mut() = value;
+    }
+
+    pub fn push_current_char(&mut self, value: char) {
+        self.current_value_mut().push(value);
+    }
+
+    pub fn pop_current_char(&mut self) {
+        self.current_value_mut().pop();
+    }
+
+    pub fn render_lines(&self) -> Vec<String> {
+        let mut lines = vec![self.title().to_string(), String::new()];
+        for field in CHAIN_GRANT_FORM_FIELDS {
+            let marker = if field == self.active_field() {
+                ">"
+            } else {
+                " "
+            };
+            let (label, value) = match field {
+                ChainGrantFormField::ChainId => ("chain_id", self.chain_id.as_str()),
+                ChainGrantFormField::Reason => ("reason", self.reason.as_str()),
+            };
+            lines.push(format!("{marker} {label}: {value}"));
+        }
+        lines.push(String::new());
+        lines.push("Укажите chain_id и краткую причину continuation grant.".to_string());
+        lines.push("Tab/Shift+Tab или ↑/↓ поле, Enter сохранить, Esc отмена".to_string());
+        lines
+    }
+
+    pub fn chain_id(&self) -> &str {
+        &self.chain_id
+    }
+
+    pub fn reason(&self) -> &str {
+        &self.reason
+    }
+
+    fn current_value_mut(&mut self) -> &mut String {
+        match self.active_field() {
+            ChainGrantFormField::ChainId => &mut self.chain_id,
+            ChainGrantFormField::Reason => &mut self.reason,
+        }
+    }
 }
 
 pub struct TuiAppState {
@@ -298,9 +1027,14 @@ impl TuiAppState {
         match self.dialog_state.as_ref() {
             Some(DialogState::CreateSession { value })
             | Some(DialogState::CreateAgent { value })
-            | Some(DialogState::CreateSchedule { value })
             | Some(DialogState::BrowserSearch { value })
             | Some(DialogState::RenameSession { value, .. }) => Some(value.as_str()),
+            Some(DialogState::CreateScheduleForm { form })
+            | Some(DialogState::EditScheduleForm { form }) => Some(form.current_value()),
+            Some(DialogState::CreateMcpConnectorForm { form })
+            | Some(DialogState::EditMcpConnectorForm { form }) => Some(form.current_value()),
+            Some(DialogState::SendAgentMessageForm { form }) => Some(form.current_value()),
+            Some(DialogState::GrantChainContinuationForm { form }) => Some(form.current_value()),
             _ => None,
         }
     }
@@ -309,10 +1043,21 @@ impl TuiAppState {
         match self.dialog_state.as_mut() {
             Some(DialogState::CreateSession { value: current })
             | Some(DialogState::CreateAgent { value: current })
-            | Some(DialogState::CreateSchedule { value: current })
             | Some(DialogState::BrowserSearch { value: current })
             | Some(DialogState::RenameSession { value: current, .. }) => {
                 *current = value;
+            }
+            Some(DialogState::CreateScheduleForm { form })
+            | Some(DialogState::EditScheduleForm { form }) => {
+                form.set_current_value(value);
+            }
+            Some(DialogState::CreateMcpConnectorForm { form })
+            | Some(DialogState::EditMcpConnectorForm { form }) => {
+                form.set_current_value(value);
+            }
+            Some(DialogState::SendAgentMessageForm { form }) => form.set_current_value(value),
+            Some(DialogState::GrantChainContinuationForm { form }) => {
+                form.set_current_value(value);
             }
             _ => {}
         }
@@ -322,10 +1067,21 @@ impl TuiAppState {
         match self.dialog_state.as_mut() {
             Some(DialogState::CreateSession { value: current })
             | Some(DialogState::CreateAgent { value: current })
-            | Some(DialogState::CreateSchedule { value: current })
             | Some(DialogState::BrowserSearch { value: current })
             | Some(DialogState::RenameSession { value: current, .. }) => {
                 current.push(value);
+            }
+            Some(DialogState::CreateScheduleForm { form })
+            | Some(DialogState::EditScheduleForm { form }) => {
+                form.push_current_char(value);
+            }
+            Some(DialogState::CreateMcpConnectorForm { form })
+            | Some(DialogState::EditMcpConnectorForm { form }) => {
+                form.push_current_char(value);
+            }
+            Some(DialogState::SendAgentMessageForm { form }) => form.push_current_char(value),
+            Some(DialogState::GrantChainContinuationForm { form }) => {
+                form.push_current_char(value);
             }
             _ => {}
         }
@@ -335,11 +1091,44 @@ impl TuiAppState {
         match self.dialog_state.as_mut() {
             Some(DialogState::CreateSession { value })
             | Some(DialogState::CreateAgent { value })
-            | Some(DialogState::CreateSchedule { value })
             | Some(DialogState::BrowserSearch { value })
             | Some(DialogState::RenameSession { value, .. }) => {
                 value.pop();
             }
+            Some(DialogState::CreateScheduleForm { form })
+            | Some(DialogState::EditScheduleForm { form }) => {
+                form.pop_current_char();
+            }
+            Some(DialogState::CreateMcpConnectorForm { form })
+            | Some(DialogState::EditMcpConnectorForm { form }) => {
+                form.pop_current_char();
+            }
+            Some(DialogState::SendAgentMessageForm { form }) => form.pop_current_char(),
+            Some(DialogState::GrantChainContinuationForm { form }) => form.pop_current_char(),
+            _ => {}
+        }
+    }
+
+    pub fn dialog_next_field(&mut self) {
+        match self.dialog_state.as_mut() {
+            Some(DialogState::CreateScheduleForm { form })
+            | Some(DialogState::EditScheduleForm { form }) => form.next_field(),
+            Some(DialogState::CreateMcpConnectorForm { form })
+            | Some(DialogState::EditMcpConnectorForm { form }) => form.next_field(),
+            Some(DialogState::SendAgentMessageForm { form }) => form.next_field(),
+            Some(DialogState::GrantChainContinuationForm { form }) => form.next_field(),
+            _ => {}
+        }
+    }
+
+    pub fn dialog_previous_field(&mut self) {
+        match self.dialog_state.as_mut() {
+            Some(DialogState::CreateScheduleForm { form })
+            | Some(DialogState::EditScheduleForm { form }) => form.previous_field(),
+            Some(DialogState::CreateMcpConnectorForm { form })
+            | Some(DialogState::EditMcpConnectorForm { form }) => form.previous_field(),
+            Some(DialogState::SendAgentMessageForm { form }) => form.previous_field(),
+            Some(DialogState::GrantChainContinuationForm { form }) => form.previous_field(),
             _ => {}
         }
     }
@@ -361,8 +1150,38 @@ impl TuiAppState {
     }
 
     pub fn open_create_schedule_dialog(&mut self) {
-        self.dialog_state = Some(DialogState::CreateSchedule {
-            value: String::new(),
+        self.dialog_state = Some(DialogState::CreateScheduleForm {
+            form: ScheduleFormState::new_create(),
+        });
+    }
+
+    pub fn open_edit_schedule_dialog(&mut self, schedule: AgentScheduleView) {
+        self.dialog_state = Some(DialogState::EditScheduleForm {
+            form: ScheduleFormState::from_schedule(schedule),
+        });
+    }
+
+    pub fn open_create_mcp_connector_dialog(&mut self) {
+        self.dialog_state = Some(DialogState::CreateMcpConnectorForm {
+            form: McpConnectorFormState::new_create(),
+        });
+    }
+
+    pub fn open_edit_mcp_connector_dialog(&mut self, connector: McpConnectorView) {
+        self.dialog_state = Some(DialogState::EditMcpConnectorForm {
+            form: McpConnectorFormState::from_connector(connector),
+        });
+    }
+
+    pub fn open_send_agent_message_dialog(&mut self, target_agent_id: Option<String>) {
+        self.dialog_state = Some(DialogState::SendAgentMessageForm {
+            form: AgentMessageFormState::new(target_agent_id),
+        });
+    }
+
+    pub fn open_grant_chain_dialog(&mut self, chain_id: Option<String>) {
+        self.dialog_state = Some(DialogState::GrantChainContinuationForm {
+            form: ChainGrantFormState::new(chain_id),
         });
     }
 
@@ -408,6 +1227,10 @@ impl TuiAppState {
         self.dialog_state = Some(DialogState::ConfirmDeleteSchedule { id });
     }
 
+    pub fn open_delete_mcp_connector_dialog(&mut self, id: String) {
+        self.dialog_state = Some(DialogState::ConfirmDeleteMcpConnector { id });
+    }
+
     pub fn open_session_screen(&mut self) {
         self.previous_session_id = self.current_session_id.clone();
         self.active_screen = TuiScreen::Sessions;
@@ -423,6 +1246,10 @@ impl TuiAppState {
 
     pub fn open_schedule_screen(&mut self, title: String, content: String) {
         self.open_inspector_screen(TuiScreen::Schedules, title, content);
+    }
+
+    pub fn open_mcp_screen(&mut self, title: String, content: String) {
+        self.open_inspector_screen(TuiScreen::Mcp, title, content);
     }
 
     pub fn open_artifact_screen(&mut self, title: String, content: String) {
@@ -496,6 +1323,33 @@ impl TuiAppState {
             TuiScreen::Artifacts,
             BrowserState {
                 kind: BrowserKind::Artifacts,
+                title,
+                action_hint,
+                items,
+                selected_index,
+                preview_title,
+                preview_content,
+                preview_scroll: 0,
+                full_preview: false,
+                search_query: None,
+                search_match_index: 0,
+            },
+        );
+    }
+
+    pub fn open_mcp_browser(
+        &mut self,
+        title: String,
+        action_hint: String,
+        items: Vec<BrowserItem>,
+        selected_index: usize,
+        preview_title: String,
+        preview_content: String,
+    ) {
+        self.open_browser_screen(
+            TuiScreen::Mcp,
+            BrowserState {
+                kind: BrowserKind::Mcp,
                 title,
                 action_hint,
                 items,
@@ -705,7 +1559,7 @@ impl TuiAppState {
                     self.active_screen = TuiScreen::Chat;
                 }
             }
-            TuiScreen::Agents | TuiScreen::Schedules | TuiScreen::Artifacts => {
+            TuiScreen::Agents | TuiScreen::Schedules | TuiScreen::Mcp | TuiScreen::Artifacts => {
                 self.active_screen = self.previous_screen.take().unwrap_or_else(|| {
                     if self.current_session_id.is_some() {
                         TuiScreen::Chat

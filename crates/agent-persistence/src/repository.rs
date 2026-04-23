@@ -1,7 +1,9 @@
 use crate::records::{
     AgentChainContinuationRecord, AgentProfileRecord, AgentScheduleRecord, ArtifactRecord,
-    ContextOffloadRecord, ContextSummaryRecord, JobRecord, MissionRecord, PlanRecord, RunRecord,
-    SessionInboxEventRecord, SessionRecord, TranscriptRecord,
+    ContextOffloadRecord, ContextSummaryRecord, JobRecord, KnowledgeSearchDocRecord,
+    KnowledgeSourceRecord, McpConnectorRecord, MissionRecord, PlanRecord, RunRecord,
+    SessionInboxEventRecord, SessionRecord, SessionRetentionRecord, SessionSearchDocRecord,
+    TranscriptRecord,
 };
 use crate::store::StoreError;
 use agent_runtime::context::ContextOffloadPayload;
@@ -11,6 +13,47 @@ pub trait SessionRepository {
     fn get_session(&self, id: &str) -> Result<Option<SessionRecord>, StoreError>;
     fn list_sessions(&self) -> Result<Vec<SessionRecord>, StoreError>;
     fn delete_session(&self, id: &str) -> Result<bool, StoreError>;
+}
+
+pub trait SessionRetentionRepository {
+    fn put_session_retention(&self, record: &SessionRetentionRecord) -> Result<(), StoreError>;
+    fn get_session_retention(
+        &self,
+        session_id: &str,
+    ) -> Result<Option<SessionRetentionRecord>, StoreError>;
+    fn list_session_retentions(&self) -> Result<Vec<SessionRetentionRecord>, StoreError>;
+}
+
+pub trait SessionSearchRepository {
+    fn replace_session_search_docs(
+        &self,
+        session_id: &str,
+        docs: &[SessionSearchDocRecord],
+    ) -> Result<(), StoreError>;
+    fn list_session_search_docs(&self) -> Result<Vec<SessionSearchDocRecord>, StoreError>;
+}
+
+pub trait KnowledgeRepository {
+    fn put_knowledge_source(&self, record: &KnowledgeSourceRecord) -> Result<(), StoreError>;
+    fn get_knowledge_source_by_path(
+        &self,
+        path: &str,
+    ) -> Result<Option<KnowledgeSourceRecord>, StoreError>;
+    fn list_knowledge_sources(&self) -> Result<Vec<KnowledgeSourceRecord>, StoreError>;
+    fn delete_knowledge_source(&self, source_id: &str) -> Result<bool, StoreError>;
+    fn replace_knowledge_search_docs(
+        &self,
+        source_id: &str,
+        docs: &[KnowledgeSearchDocRecord],
+    ) -> Result<(), StoreError>;
+    fn list_knowledge_search_docs(&self) -> Result<Vec<KnowledgeSearchDocRecord>, StoreError>;
+}
+
+pub trait McpRepository {
+    fn put_mcp_connector(&self, record: &McpConnectorRecord) -> Result<(), StoreError>;
+    fn get_mcp_connector(&self, id: &str) -> Result<Option<McpConnectorRecord>, StoreError>;
+    fn list_mcp_connectors(&self) -> Result<Vec<McpConnectorRecord>, StoreError>;
+    fn delete_mcp_connector(&self, id: &str) -> Result<bool, StoreError>;
 }
 
 pub trait AgentRepository {

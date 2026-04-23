@@ -799,6 +799,108 @@ fn background_worker_after_completion_uses_own_terminal_job_state_for_due_time()
 }
 
 #[test]
+fn background_worker_fires_one_shot_existing_session_schedule_once_and_disables_it() {
+    let (api_base, requests, handle) = spawn_json_server(
+        r#"{
+            "id":"resp_continue_once",
+            "model":"gpt-5.4",
+            "output":[
+                {
+                    "id":"msg_continue_once",
+                    "type":"message",
+                    "status":"completed",
+                    "role":"assistant",
+                    "content":[{"type":"output_text","text":"continued once"}]
+                }
+            ],
+            "usage":{"input_tokens":13,"output_tokens":3,"total_tokens":16}
+        }"#,
+    );
+    let temp = tempfile::tempdir().expect("tempdir");
+    let app = build_from_config(AppConfig {
+        data_dir: temp.path().join("state-root"),
+        permissions: PermissionConfig {
+            mode: PermissionMode::Plan,
+            rules: Vec::new(),
+        },
+        provider: ConfiguredProvider {
+            kind: ProviderKind::OpenAiResponses,
+            api_base: Some(format!("{api_base}/v1")),
+            api_key: Some("test-key".to_string()),
+            default_model: Some("gpt-5.4".to_string()),
+            ..ConfiguredProvider::default()
+        },
+        ..AppConfig::default()
+    })
+    .expect("build app");
+    let store = PersistenceStore::open(&app.persistence).expect("open store");
+
+    store
+        .put_session(&SessionRecord {
+            id: "session-continue-once".to_string(),
+            title: "Continue Once".to_string(),
+            prompt_override: None,
+            settings_json: serde_json::to_string(&SessionSettings::default())
+                .expect("serialize settings"),
+            agent_profile_id: "default".to_string(),
+            active_mission_id: None,
+            parent_session_id: None,
+            parent_job_id: None,
+            delegation_label: None,
+            created_at: 1,
+            updated_at: 1,
+        })
+        .expect("put session");
+
+    let schedule = AgentSchedule::new(AgentScheduleInit {
+        id: "continue-once".to_string(),
+        agent_profile_id: "default".to_string(),
+        workspace_root: fs::canonicalize(".").expect("canonical workspace"),
+        prompt: "Продолжи работу позже с handoff payload.".to_string(),
+        mode: AgentScheduleMode::Once,
+        delivery_mode: AgentScheduleDeliveryMode::ExistingSession,
+        target_session_id: Some("session-continue-once".to_string()),
+        interval_seconds: 300,
+        next_fire_at: 10,
+        enabled: true,
+        last_triggered_at: None,
+        last_finished_at: None,
+        last_session_id: None,
+        last_job_id: None,
+        last_result: None,
+        last_error: None,
+        created_at: 1,
+        updated_at: 1,
+    })
+    .expect("build schedule");
+    store
+        .put_agent_schedule(&AgentScheduleRecord::from(&schedule))
+        .expect("put schedule");
+
+    let first = app.background_worker_tick(10).expect("first tick");
+    let request = requests.recv().expect("provider request");
+    assert_eq!(first.executed_jobs, 1);
+
+    let updated = app
+        .agent_schedule("continue-once")
+        .expect("updated schedule");
+    assert!(!updated.enabled);
+    assert_eq!(updated.last_triggered_at, Some(10));
+    assert_eq!(
+        updated.target_session_id.as_deref(),
+        Some("session-continue-once")
+    );
+
+    let second = app.background_worker_tick(400).expect("second tick");
+    handle.join().expect("join server");
+
+    assert_eq!(second.executed_jobs, 0);
+    assert!(request.contains("Продолжи работу позже"));
+    let jobs = store.list_jobs().expect("list jobs");
+    assert_eq!(jobs.len(), 1);
+}
+
+#[test]
 fn background_worker_existing_session_rebinds_deleted_target_session() {
     let (api_base, requests, handle) = spawn_json_server(
         r#"{

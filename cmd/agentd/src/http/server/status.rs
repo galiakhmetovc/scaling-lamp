@@ -1,5 +1,7 @@
 use super::*;
-use crate::http::types::{AboutResponse, StatusResponse, UpdateRuntimeResponse};
+use crate::http::types::{
+    AboutResponse, StatusResponse, UpdateRuntimeRequest, UpdateRuntimeResponse,
+};
 use agent_persistence::{JobRepository, MissionRepository, SessionRepository};
 
 pub(super) fn handle_status(app: &App, request: Request) -> std::io::Result<()> {
@@ -64,8 +66,21 @@ pub(super) fn handle_about(app: &App, request: Request) -> std::io::Result<()> {
     }
 }
 
-pub(super) fn handle_update_runtime(app: &App, request: Request) -> std::io::Result<()> {
-    match app.update_runtime_binary() {
+pub(super) fn handle_update_runtime(app: &App, mut request: Request) -> std::io::Result<()> {
+    let payload = match parse_json_body::<Option<UpdateRuntimeRequest>>(&mut request) {
+        Ok(payload) => payload.unwrap_or(UpdateRuntimeRequest { tag: None }),
+        Err(error) => {
+            return respond_json(
+                request,
+                StatusCode(400),
+                &crate::http::types::ErrorResponse {
+                    error: format!("invalid update request: {error}"),
+                },
+            );
+        }
+    };
+
+    match app.update_runtime_binary(payload.tag.as_deref()) {
         Ok(message) => respond_json(request, StatusCode(200), &UpdateRuntimeResponse { message }),
         Err(error) => {
             let (status, payload) = map_bootstrap_error(error);

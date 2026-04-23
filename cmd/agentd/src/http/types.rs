@@ -1,5 +1,7 @@
 use crate::bootstrap::{
-    SessionBackgroundJob, SessionPendingApproval, SessionPreferencesPatch, SessionSkillStatus,
+    AgentScheduleCreateOptions, AgentScheduleUpdatePatch, AgentScheduleView,
+    McpConnectorCreateOptions, McpConnectorUpdatePatch, McpConnectorView, SessionBackgroundJob,
+    SessionPendingApproval, SessionPreferencesPatch, SessionScheduleSummary, SessionSkillStatus,
     SessionSummary, SessionTranscriptView,
 };
 use crate::execution::{ApprovalContinuationReport, ChatExecutionEvent, ChatTurnExecutionReport};
@@ -44,6 +46,7 @@ pub struct SessionSummaryResponse {
     pub agent_profile_id: String,
     pub agent_name: String,
     pub scheduled_by: Option<String>,
+    pub schedule: Option<SessionScheduleSummaryResponse>,
     pub model: Option<String>,
     pub reasoning_visible: bool,
     pub think_level: Option<String>,
@@ -62,6 +65,18 @@ pub struct SessionSummaryResponse {
     pub queued_background_job_count: usize,
     pub created_at: i64,
     pub updated_at: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SessionScheduleSummaryResponse {
+    pub id: String,
+    pub mode: agent_runtime::agent::AgentScheduleMode,
+    pub delivery_mode: agent_runtime::agent::AgentScheduleDeliveryMode,
+    pub enabled: bool,
+    pub next_fire_at: i64,
+    pub target_session_id: Option<String>,
+    pub last_result: Option<String>,
+    pub last_error: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -96,6 +111,11 @@ pub struct UpdateRuntimeResponse {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct UpdateRuntimeRequest {
+    pub tag: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SessionRunStatusResponse {
     pub run: String,
 }
@@ -103,6 +123,18 @@ pub struct SessionRunStatusResponse {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SessionRunControlResponse {
     pub message: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SessionAgentMessageRequest {
+    pub target_agent_id: String,
+    pub message: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SessionChainGrantRequest {
+    pub chain_id: String,
+    pub reason: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -118,6 +150,11 @@ pub struct SessionArtifactsResponse {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SessionArtifactResponse {
     pub artifact: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MemoryRenderResponse {
+    pub memory: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -144,14 +181,38 @@ pub struct AgentResolveRequest {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AgentScheduleCreateRequest {
     pub id: String,
-    pub agent_identifier: Option<String>,
-    pub interval_seconds: u64,
-    pub prompt: String,
+    pub options: AgentScheduleCreateOptions,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AgentScheduleResolveRequest {
     pub id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AgentScheduleDetailResponse {
+    pub schedule: AgentScheduleView,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AgentScheduleUpdateRequest {
+    pub patch: AgentScheduleUpdatePatch,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct McpConnectorCreateRequest {
+    pub id: String,
+    pub options: McpConnectorCreateOptions,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct McpConnectorUpdateRequest {
+    pub patch: McpConnectorUpdatePatch,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct McpConnectorDetailResponse {
+    pub connector: McpConnectorView,
 }
 
 impl From<SessionSummary> for SessionSummaryResponse {
@@ -162,6 +223,7 @@ impl From<SessionSummary> for SessionSummaryResponse {
             agent_profile_id: value.agent_profile_id,
             agent_name: value.agent_name,
             scheduled_by: value.scheduled_by,
+            schedule: value.schedule.map(SessionScheduleSummaryResponse::from),
             model: value.model,
             reasoning_visible: value.reasoning_visible,
             think_level: value.think_level,
@@ -180,6 +242,21 @@ impl From<SessionSummary> for SessionSummaryResponse {
             queued_background_job_count: value.queued_background_job_count,
             created_at: value.created_at,
             updated_at: value.updated_at,
+        }
+    }
+}
+
+impl From<SessionScheduleSummary> for SessionScheduleSummaryResponse {
+    fn from(value: SessionScheduleSummary) -> Self {
+        Self {
+            id: value.id,
+            mode: value.mode,
+            delivery_mode: value.delivery_mode,
+            enabled: value.enabled,
+            next_fire_at: value.next_fire_at,
+            target_session_id: value.target_session_id,
+            last_result: value.last_result,
+            last_error: value.last_error,
         }
     }
 }

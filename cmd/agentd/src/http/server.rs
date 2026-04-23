@@ -1,6 +1,7 @@
 mod a2a;
 mod agents;
 mod chat;
+mod mcp;
 mod sessions;
 mod status;
 
@@ -71,8 +72,29 @@ fn handle_request(app: &App, shutdown: &Arc<AtomicBool>, request: Request) -> st
         (&tiny_http::Method::Post, "/v1/agent-schedules/show") => {
             agents::handle_show_agent_schedule(app, request)
         }
+        (&tiny_http::Method::Post, "/v1/agent-schedules/resolve") => {
+            agents::handle_resolve_agent_schedule(app, request)
+        }
         (&tiny_http::Method::Post, "/v1/agent-schedules") => {
             agents::handle_create_agent_schedule(app, request)
+        }
+        (&tiny_http::Method::Get, "/v1/mcp/connectors") => {
+            mcp::handle_list_mcp_connectors(app, request)
+        }
+        (&tiny_http::Method::Post, "/v1/mcp/connectors") => {
+            mcp::handle_create_mcp_connector(app, request)
+        }
+        (&tiny_http::Method::Post, "/v1/memory/session-search") => {
+            sessions::handle_memory_session_search(app, request)
+        }
+        (&tiny_http::Method::Post, "/v1/memory/session-read") => {
+            sessions::handle_memory_session_read(app, request)
+        }
+        (&tiny_http::Method::Post, "/v1/memory/knowledge-search") => {
+            sessions::handle_memory_knowledge_search(app, request)
+        }
+        (&tiny_http::Method::Post, "/v1/memory/knowledge-read") => {
+            sessions::handle_memory_knowledge_read(app, request)
         }
         (&tiny_http::Method::Post, "/v1/a2a/delegations") => {
             a2a::handle_create_delegation(app, request)
@@ -92,6 +114,9 @@ fn handle_request(app: &App, shutdown: &Arc<AtomicBool>, request: Request) -> st
         }
         _ if request.url().starts_with("/v1/agent-schedules/") => {
             agents::handle_agent_schedule_nested_routes(app, request)
+        }
+        _ if request.url().starts_with("/v1/mcp/connectors/") => {
+            mcp::handle_mcp_connector_nested_routes(app, request)
         }
         _ => sessions::handle_nested_routes(app, request),
     }

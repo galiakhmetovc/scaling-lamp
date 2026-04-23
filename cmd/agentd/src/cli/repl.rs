@@ -1,6 +1,16 @@
 use super::*;
-use crate::bootstrap::SessionPreferencesPatch;
+use crate::bootstrap::{
+    AgentScheduleCreateOptions, AgentScheduleUpdatePatch, McpConnectorCreateOptions,
+    McpConnectorUpdatePatch, SessionPreferencesPatch, render_mcp_connector_view,
+    render_mcp_connectors_view,
+};
 use crate::help::{HelpTopic, parse_help_topic, render_command_usage_error, render_help};
+use agent_runtime::mcp::McpConnectorTransport;
+use agent_runtime::tool::{
+    KnowledgeReadInput, KnowledgeReadMode, KnowledgeSearchInput, SessionReadInput, SessionReadMode,
+    SessionSearchInput,
+};
+use std::collections::BTreeMap;
 
 pub(super) trait ChatReplBackend {
     fn show_chat(&self, session_id: &str) -> Result<String, BootstrapError>;
@@ -13,23 +23,64 @@ pub(super) trait ChatReplBackend {
         template_identifier: Option<&str>,
     ) -> Result<String, BootstrapError>;
     fn open_agent_home(&self, identifier: Option<&str>) -> Result<String, BootstrapError>;
+    fn send_agent_message(
+        &self,
+        session_id: &str,
+        target_agent_id: &str,
+        message: &str,
+    ) -> Result<String, BootstrapError>;
+    fn grant_chain_continuation(
+        &self,
+        session_id: &str,
+        chain_id: &str,
+        reason: &str,
+    ) -> Result<String, BootstrapError>;
     fn render_agent_schedules(&self) -> Result<String, BootstrapError>;
     fn render_agent_schedule(&self, id: &str) -> Result<String, BootstrapError>;
-    fn create_agent_schedule(
+    fn create_agent_schedule_with_options(
         &self,
         id: &str,
-        interval_seconds: u64,
-        prompt: &str,
-        agent_identifier: Option<&str>,
+        options: AgentScheduleCreateOptions,
+    ) -> Result<String, BootstrapError>;
+    fn update_agent_schedule(
+        &self,
+        id: &str,
+        patch: AgentScheduleUpdatePatch,
     ) -> Result<String, BootstrapError>;
     fn delete_agent_schedule(&self, id: &str) -> Result<String, BootstrapError>;
+    fn render_mcp_connectors(&self) -> Result<String, BootstrapError>;
+    fn render_mcp_connector(&self, id: &str) -> Result<String, BootstrapError>;
+    fn create_mcp_connector(
+        &self,
+        id: &str,
+        options: McpConnectorCreateOptions,
+    ) -> Result<String, BootstrapError>;
+    fn update_mcp_connector(
+        &self,
+        id: &str,
+        patch: McpConnectorUpdatePatch,
+    ) -> Result<String, BootstrapError>;
+    fn set_mcp_connector_enabled(&self, id: &str, enabled: bool) -> Result<String, BootstrapError>;
+    fn restart_mcp_connector(&self, id: &str) -> Result<String, BootstrapError>;
+    fn delete_mcp_connector(&self, id: &str) -> Result<String, BootstrapError>;
     fn render_version_info(&self) -> Result<String, BootstrapError>;
-    fn update_runtime(&self) -> Result<String, BootstrapError>;
+    fn update_runtime(&self, tag: Option<&str>) -> Result<String, BootstrapError>;
     fn render_system(&self, session_id: &str) -> Result<String, BootstrapError>;
     fn render_context(&self, session_id: &str) -> Result<String, BootstrapError>;
     fn render_plan(&self, session_id: &str) -> Result<String, BootstrapError>;
     fn render_artifacts(&self, session_id: &str) -> Result<String, BootstrapError>;
     fn read_artifact(&self, session_id: &str, artifact_id: &str) -> Result<String, BootstrapError>;
+    fn render_session_memory_search(
+        &self,
+        input: SessionSearchInput,
+    ) -> Result<String, BootstrapError>;
+    fn render_session_memory_read(&self, input: SessionReadInput)
+    -> Result<String, BootstrapError>;
+    fn render_knowledge_search(
+        &self,
+        input: KnowledgeSearchInput,
+    ) -> Result<String, BootstrapError>;
+    fn render_knowledge_read(&self, input: KnowledgeReadInput) -> Result<String, BootstrapError>;
     fn render_active_run(&self, session_id: &str) -> Result<String, BootstrapError>;
     fn cancel_active_run(&self, session_id: &str) -> Result<String, BootstrapError>;
     fn cancel_all_session_work(&self, session_id: &str) -> Result<String, BootstrapError>;
@@ -106,6 +157,24 @@ impl ChatReplBackend for App {
         self.render_agent_home(identifier)
     }
 
+    fn send_agent_message(
+        &self,
+        session_id: &str,
+        target_agent_id: &str,
+        message: &str,
+    ) -> Result<String, BootstrapError> {
+        self.send_session_agent_message(session_id, target_agent_id, message, unix_timestamp()?)
+    }
+
+    fn grant_chain_continuation(
+        &self,
+        session_id: &str,
+        chain_id: &str,
+        reason: &str,
+    ) -> Result<String, BootstrapError> {
+        self.grant_session_chain_continuation(session_id, chain_id, reason, unix_timestamp()?)
+    }
+
     fn render_agent_schedules(&self) -> Result<String, BootstrapError> {
         App::render_agent_schedules(self)
     }
@@ -114,18 +183,32 @@ impl ChatReplBackend for App {
         App::render_agent_schedule(self, id)
     }
 
-    fn create_agent_schedule(
+    fn create_agent_schedule_with_options(
         &self,
         id: &str,
-        interval_seconds: u64,
-        prompt: &str,
-        agent_identifier: Option<&str>,
+        options: AgentScheduleCreateOptions,
     ) -> Result<String, BootstrapError> {
-        let schedule =
-            App::create_agent_schedule(self, id, interval_seconds, prompt, agent_identifier)?;
+        let schedule = App::create_agent_schedule_with_options(self, id, options)?;
         Ok(format!(
             "создано расписание {} agent={} interval={}s",
             schedule.id, schedule.agent_profile_id, schedule.interval_seconds
+        ))
+    }
+
+    fn update_agent_schedule(
+        &self,
+        id: &str,
+        patch: AgentScheduleUpdatePatch,
+    ) -> Result<String, BootstrapError> {
+        let schedule = App::update_agent_schedule(self, id, patch)?;
+        Ok(format!(
+            "обновлено расписание {} agent={} mode={} delivery={} enabled={} interval={}s",
+            schedule.id,
+            schedule.agent_profile_id,
+            schedule.mode.as_str(),
+            schedule.delivery_mode.as_str(),
+            schedule.enabled,
+            schedule.interval_seconds
         ))
     }
 
@@ -140,12 +223,67 @@ impl ChatReplBackend for App {
         }
     }
 
+    fn render_mcp_connectors(&self) -> Result<String, BootstrapError> {
+        App::render_mcp_connectors(self)
+    }
+
+    fn render_mcp_connector(&self, id: &str) -> Result<String, BootstrapError> {
+        App::render_mcp_connector(self, id)
+    }
+
+    fn create_mcp_connector(
+        &self,
+        id: &str,
+        options: McpConnectorCreateOptions,
+    ) -> Result<String, BootstrapError> {
+        let connector = App::create_mcp_connector(self, id, options)?;
+        Ok(format!("создан MCP коннектор {}", connector.id))
+    }
+
+    fn update_mcp_connector(
+        &self,
+        id: &str,
+        patch: McpConnectorUpdatePatch,
+    ) -> Result<String, BootstrapError> {
+        let connector = App::update_mcp_connector(self, id, patch)?;
+        Ok(format!("обновлён MCP коннектор {}", connector.id))
+    }
+
+    fn set_mcp_connector_enabled(&self, id: &str, enabled: bool) -> Result<String, BootstrapError> {
+        let connector = App::set_mcp_connector_enabled(self, id, enabled)?;
+        Ok(format!(
+            "MCP коннектор {} {}",
+            connector.id,
+            if connector.enabled {
+                "включен"
+            } else {
+                "выключен"
+            }
+        ))
+    }
+
+    fn restart_mcp_connector(&self, id: &str) -> Result<String, BootstrapError> {
+        let connector = App::restart_mcp_connector(self, id)?;
+        Ok(format!("MCP коннектор {} перезапущен", connector.id))
+    }
+
+    fn delete_mcp_connector(&self, id: &str) -> Result<String, BootstrapError> {
+        if App::delete_mcp_connector(self, id)? {
+            Ok(format!("MCP коннектор {id} удалён"))
+        } else {
+            Err(BootstrapError::MissingRecord {
+                kind: "mcp connector",
+                id: id.to_string(),
+            })
+        }
+    }
+
     fn render_version_info(&self) -> Result<String, BootstrapError> {
         App::render_version_info(self)
     }
 
-    fn update_runtime(&self) -> Result<String, BootstrapError> {
-        App::update_runtime_binary(self)
+    fn update_runtime(&self, tag: Option<&str>) -> Result<String, BootstrapError> {
+        App::update_runtime_binary(self, tag)
     }
 
     fn render_system(&self, session_id: &str) -> Result<String, BootstrapError> {
@@ -166,6 +304,31 @@ impl ChatReplBackend for App {
 
     fn read_artifact(&self, session_id: &str, artifact_id: &str) -> Result<String, BootstrapError> {
         self.read_session_artifact(session_id, artifact_id)
+    }
+
+    fn render_session_memory_search(
+        &self,
+        input: SessionSearchInput,
+    ) -> Result<String, BootstrapError> {
+        App::render_session_memory_search(self, input)
+    }
+
+    fn render_session_memory_read(
+        &self,
+        input: SessionReadInput,
+    ) -> Result<String, BootstrapError> {
+        App::render_session_memory_read(self, input)
+    }
+
+    fn render_knowledge_search(
+        &self,
+        input: KnowledgeSearchInput,
+    ) -> Result<String, BootstrapError> {
+        App::render_knowledge_search(self, input)
+    }
+
+    fn render_knowledge_read(&self, input: KnowledgeReadInput) -> Result<String, BootstrapError> {
+        App::render_knowledge_read(self, input)
     }
 
     fn render_active_run(&self, session_id: &str) -> Result<String, BootstrapError> {
@@ -275,6 +438,24 @@ impl ChatReplBackend for DaemonClient {
         DaemonClient::open_agent_home(self, identifier)
     }
 
+    fn send_agent_message(
+        &self,
+        session_id: &str,
+        target_agent_id: &str,
+        message: &str,
+    ) -> Result<String, BootstrapError> {
+        DaemonClient::send_agent_message(self, session_id, target_agent_id, message)
+    }
+
+    fn grant_chain_continuation(
+        &self,
+        session_id: &str,
+        chain_id: &str,
+        reason: &str,
+    ) -> Result<String, BootstrapError> {
+        DaemonClient::grant_chain_continuation(self, session_id, chain_id, reason)
+    }
+
     fn render_agent_schedules(&self) -> Result<String, BootstrapError> {
         DaemonClient::render_agent_schedules(self)
     }
@@ -283,26 +464,92 @@ impl ChatReplBackend for DaemonClient {
         DaemonClient::render_agent_schedule(self, id)
     }
 
-    fn create_agent_schedule(
+    fn create_agent_schedule_with_options(
         &self,
         id: &str,
-        interval_seconds: u64,
-        prompt: &str,
-        agent_identifier: Option<&str>,
+        options: AgentScheduleCreateOptions,
     ) -> Result<String, BootstrapError> {
-        DaemonClient::create_agent_schedule(self, id, interval_seconds, prompt, agent_identifier)
+        DaemonClient::create_agent_schedule_with_options(self, id, options)
+    }
+
+    fn update_agent_schedule(
+        &self,
+        id: &str,
+        patch: AgentScheduleUpdatePatch,
+    ) -> Result<String, BootstrapError> {
+        DaemonClient::update_agent_schedule(self, id, patch)
     }
 
     fn delete_agent_schedule(&self, id: &str) -> Result<String, BootstrapError> {
         DaemonClient::delete_agent_schedule(self, id)
     }
 
+    fn render_mcp_connectors(&self) -> Result<String, BootstrapError> {
+        Ok(render_mcp_connectors_view(
+            &DaemonClient::list_mcp_connectors(self)?,
+        ))
+    }
+
+    fn render_mcp_connector(&self, id: &str) -> Result<String, BootstrapError> {
+        Ok(render_mcp_connector_view(&DaemonClient::mcp_connector(
+            self, id,
+        )?))
+    }
+
+    fn create_mcp_connector(
+        &self,
+        id: &str,
+        options: McpConnectorCreateOptions,
+    ) -> Result<String, BootstrapError> {
+        let connector = DaemonClient::create_mcp_connector(self, id, options)?;
+        Ok(format!("создан MCP коннектор {}", connector.id))
+    }
+
+    fn update_mcp_connector(
+        &self,
+        id: &str,
+        patch: McpConnectorUpdatePatch,
+    ) -> Result<String, BootstrapError> {
+        let connector = DaemonClient::update_mcp_connector(self, id, patch)?;
+        Ok(format!("обновлён MCP коннектор {}", connector.id))
+    }
+
+    fn set_mcp_connector_enabled(&self, id: &str, enabled: bool) -> Result<String, BootstrapError> {
+        let connector = DaemonClient::update_mcp_connector(
+            self,
+            id,
+            McpConnectorUpdatePatch {
+                enabled: Some(enabled),
+                ..McpConnectorUpdatePatch::default()
+            },
+        )?;
+        Ok(format!(
+            "MCP коннектор {} {}",
+            connector.id,
+            if connector.enabled {
+                "включен"
+            } else {
+                "выключен"
+            }
+        ))
+    }
+
+    fn restart_mcp_connector(&self, id: &str) -> Result<String, BootstrapError> {
+        let connector = DaemonClient::restart_mcp_connector(self, id)?;
+        Ok(format!("MCP коннектор {} перезапущен", connector.id))
+    }
+
+    fn delete_mcp_connector(&self, id: &str) -> Result<String, BootstrapError> {
+        DaemonClient::delete_mcp_connector(self, id)?;
+        Ok(format!("MCP коннектор {id} удалён"))
+    }
+
     fn render_version_info(&self) -> Result<String, BootstrapError> {
         DaemonClient::about(self)
     }
 
-    fn update_runtime(&self) -> Result<String, BootstrapError> {
-        DaemonClient::update_runtime(self)
+    fn update_runtime(&self, tag: Option<&str>) -> Result<String, BootstrapError> {
+        DaemonClient::update_runtime(self, tag)
     }
 
     fn render_system(&self, session_id: &str) -> Result<String, BootstrapError> {
@@ -323,6 +570,31 @@ impl ChatReplBackend for DaemonClient {
 
     fn read_artifact(&self, session_id: &str, artifact_id: &str) -> Result<String, BootstrapError> {
         self.read_session_artifact(session_id, artifact_id)
+    }
+
+    fn render_session_memory_search(
+        &self,
+        input: SessionSearchInput,
+    ) -> Result<String, BootstrapError> {
+        self.render_session_memory_search(input)
+    }
+
+    fn render_session_memory_read(
+        &self,
+        input: SessionReadInput,
+    ) -> Result<String, BootstrapError> {
+        self.render_session_memory_read(input)
+    }
+
+    fn render_knowledge_search(
+        &self,
+        input: KnowledgeSearchInput,
+    ) -> Result<String, BootstrapError> {
+        self.render_knowledge_search(input)
+    }
+
+    fn render_knowledge_read(&self, input: KnowledgeReadInput) -> Result<String, BootstrapError> {
+        self.render_knowledge_read(input)
     }
 
     fn render_active_run(&self, session_id: &str) -> Result<String, BootstrapError> {
@@ -623,7 +895,24 @@ where
                 }
                 Some("/agent") => {
                     renderer.finish_turn()?;
-                    let message = handle_agent_command(backend, split_command_arg(trimmed))?;
+                    let message =
+                        handle_agent_command(backend, session_id, split_command_arg(trimmed))?;
+                    writeln!(renderer.output, "{message}").map_err(BootstrapError::Stream)?;
+                }
+                Some("/judge") => {
+                    renderer.finish_turn()?;
+                    let message = backend.send_agent_message(
+                        session_id,
+                        "judge",
+                        require_arg(split_command_arg(trimmed).unwrap_or_default(), "/judge")?
+                            .as_str(),
+                    )?;
+                    writeln!(renderer.output, "{message}").map_err(BootstrapError::Stream)?;
+                }
+                Some("/chain") => {
+                    renderer.finish_turn()?;
+                    let message =
+                        handle_chain_command(backend, session_id, split_command_arg(trimmed))?;
                     writeln!(renderer.output, "{message}").map_err(BootstrapError::Stream)?;
                 }
                 Some("/schedules") => {
@@ -636,6 +925,11 @@ where
                     let message = handle_schedule_command(backend, split_command_arg(trimmed))?;
                     writeln!(renderer.output, "{message}").map_err(BootstrapError::Stream)?;
                 }
+                Some("/mcp") => {
+                    renderer.finish_turn()?;
+                    let message = handle_mcp_command(backend, split_command_arg(trimmed))?;
+                    writeln!(renderer.output, "{message}").map_err(BootstrapError::Stream)?;
+                }
                 Some("/version") => {
                     renderer.finish_turn()?;
                     let about = backend.render_version_info()?;
@@ -643,7 +937,7 @@ where
                 }
                 Some("/update") => {
                     renderer.finish_turn()?;
-                    let message = backend.update_runtime()?;
+                    let message = backend.update_runtime(split_command_arg(trimmed))?;
                     writeln!(renderer.output, "{message}").map_err(BootstrapError::Stream)?;
                 }
                 Some("/show") => {
@@ -704,6 +998,11 @@ where
                     renderer.finish_turn()?;
                     let artifacts = backend.render_artifacts(session_id)?;
                     writeln!(renderer.output, "{artifacts}").map_err(BootstrapError::Stream)?;
+                }
+                Some("/memory") => {
+                    renderer.finish_turn()?;
+                    let memory = handle_memory_command(backend, split_command_arg(trimmed))?;
+                    writeln!(renderer.output, "{memory}").map_err(BootstrapError::Stream)?;
                 }
                 Some("/artifact") => {
                     renderer.finish_turn()?;
@@ -1021,6 +1320,7 @@ fn canonical_repl_command(raw: &str) -> Option<&'static str> {
         "/agent" | "\\агент" => Some("/agent"),
         "/schedules" | "\\расписания" => Some("/schedules"),
         "/schedule" | "\\расписание" => Some("/schedule"),
+        "/mcp" | "\\mcp" => Some("/mcp"),
         "/version" | "/версия" | "\\версия" => Some("/version"),
         "/update" | "/обновить" | "\\обновить" => Some("/update"),
         "/settings" | "\\настройки" => Some("/settings"),
@@ -1034,9 +1334,12 @@ fn canonical_repl_command(raw: &str) -> Option<&'static str> {
         "/stop" | "\\стоп" => Some("/stop"),
         "/cancel" | "\\отмена" => Some("/cancel"),
         "/jobs" | "\\задачи" => Some("/jobs"),
+        "/memory" | "/память" | "\\память" => Some("/memory"),
         "/artifacts" | "/артефакты" | "\\артефакты" => Some("/artifacts"),
         "/artifact" | "/артефакт" | "\\артефакт" => Some("/artifact"),
         "/debug" | "\\отладка" => Some("/debug"),
+        "/judge" | "/судья" | "\\судья" => Some("/judge"),
+        "/chain" | "/цепочка" | "\\цепочка" => Some("/chain"),
         "/completion" | "\\доводка" => Some("/completion"),
         "/autoapprove" | "\\автоапрув" => Some("/autoapprove"),
         "/skills" | "\\скиллы" => Some("/skills"),
@@ -1047,7 +1350,11 @@ fn canonical_repl_command(raw: &str) -> Option<&'static str> {
     }
 }
 
-fn handle_agent_command<B>(backend: &B, raw: Option<&str>) -> Result<String, BootstrapError>
+fn handle_agent_command<B>(
+    backend: &B,
+    session_id: &str,
+    raw: Option<&str>,
+) -> Result<String, BootstrapError>
 where
     B: ChatReplBackend,
 {
@@ -1075,13 +1382,71 @@ where
             backend.create_agent(&name, template_identifier.as_deref())
         }
         "открыть" | "open" => backend.open_agent_home(split_command_arg(raw)),
+        "написать" | "message" => {
+            let (target_agent_id, message) =
+                split_head_tail(tail).ok_or_else(|| BootstrapError::Usage {
+                    reason: render_command_usage_error("/agent", "не хватает аргументов"),
+                })?;
+            backend.send_agent_message(session_id, target_agent_id, message)
+        }
         _ => Err(BootstrapError::Usage {
             reason: render_command_usage_error(
                 "/agent",
-                "неизвестная подкоманда агента; ожидается показать|выбрать|создать|открыть",
+                "неизвестная подкоманда агента; ожидается показать|выбрать|создать|открыть|написать",
             ),
         }),
     }
+}
+
+fn handle_chain_command<B>(
+    backend: &B,
+    session_id: &str,
+    raw: Option<&str>,
+) -> Result<String, BootstrapError>
+where
+    B: ChatReplBackend,
+{
+    let raw = raw.unwrap_or_default().trim();
+    let (action, tail) = match raw.split_once(' ') {
+        Some((action, tail)) => (action.trim(), tail.trim()),
+        None => (raw, ""),
+    };
+
+    match action {
+        "продолжить" | "grant" | "continue" => {
+            let (chain_id, reason) =
+                split_head_tail(tail).ok_or_else(|| BootstrapError::Usage {
+                    reason: render_command_usage_error("/chain", "не хватает аргументов"),
+                })?;
+            backend.grant_chain_continuation(session_id, chain_id, reason)
+        }
+        _ => Err(BootstrapError::Usage {
+            reason: render_command_usage_error(
+                "/chain",
+                "неизвестная подкоманда цепочки; ожидается продолжить",
+            ),
+        }),
+    }
+}
+
+fn split_head_tail(raw: &str) -> Option<(&str, &str)> {
+    let (head, tail) = raw.split_once(' ')?;
+    let head = head.trim();
+    let tail = tail.trim();
+    if head.is_empty() || tail.is_empty() {
+        return None;
+    }
+    Some((head, tail))
+}
+
+fn require_arg(raw: &str, command: &str) -> Result<String, BootstrapError> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return Err(BootstrapError::Usage {
+            reason: render_command_usage_error(command, "не хватает аргументов"),
+        });
+    }
+    Ok(trimmed.to_string())
 }
 
 fn handle_schedule_command<B>(backend: &B, raw: Option<&str>) -> Result<String, BootstrapError>
@@ -1110,15 +1475,37 @@ where
                     reason: render_command_usage_error("/schedule", "не хватает аргументов"),
                 });
             }
-            let (id, interval_seconds, agent_identifier, prompt) =
-                parse_schedule_create_spec(spec)?;
-            backend.create_agent_schedule(
-                &id,
-                interval_seconds,
-                &prompt,
-                agent_identifier.as_deref(),
-            )
+            let (id, options) = parse_schedule_create_spec(spec)?;
+            backend.create_agent_schedule_with_options(&id, options)
         }
+        "изменить" | "edit" => {
+            let spec = tail.trim();
+            if spec.is_empty() {
+                return Err(BootstrapError::Usage {
+                    reason: render_command_usage_error("/schedule", "не хватает аргументов"),
+                });
+            }
+            let (id, patch) = parse_schedule_edit_spec(spec)?;
+            backend.update_agent_schedule(&id, patch)
+        }
+        "включить" | "enable" => backend.update_agent_schedule(
+            split_command_arg(raw).ok_or_else(|| BootstrapError::Usage {
+                reason: render_command_usage_error("/schedule", "не хватает аргументов"),
+            })?,
+            AgentScheduleUpdatePatch {
+                enabled: Some(true),
+                ..AgentScheduleUpdatePatch::default()
+            },
+        ),
+        "выключить" | "disable" => backend.update_agent_schedule(
+            split_command_arg(raw).ok_or_else(|| BootstrapError::Usage {
+                reason: render_command_usage_error("/schedule", "не хватает аргументов"),
+            })?,
+            AgentScheduleUpdatePatch {
+                enabled: Some(false),
+                ..AgentScheduleUpdatePatch::default()
+            },
+        ),
         "удалить" | "delete" | "remove" => {
             backend.delete_agent_schedule(split_command_arg(raw).ok_or_else(|| {
                 BootstrapError::Usage {
@@ -1129,9 +1516,337 @@ where
         _ => Err(BootstrapError::Usage {
             reason: render_command_usage_error(
                 "/schedule",
-                "неизвестная подкоманда расписания; ожидается показать|создать|удалить",
+                "неизвестная подкоманда расписания; ожидается показать|создать|изменить|включить|выключить|удалить",
             ),
         }),
+    }
+}
+
+fn handle_mcp_command<B>(backend: &B, raw: Option<&str>) -> Result<String, BootstrapError>
+where
+    B: ChatReplBackend,
+{
+    let raw = raw.unwrap_or_default().trim();
+    let (action, tail) = match raw.split_once(' ') {
+        Some((action, tail)) => (action.trim(), tail.trim()),
+        None => (raw, ""),
+    };
+
+    match action {
+        "" => backend.render_mcp_connectors(),
+        "показать" | "show" => {
+            backend.render_mcp_connector(split_command_arg(raw).ok_or_else(|| {
+                BootstrapError::Usage {
+                    reason: render_command_usage_error("/mcp", "не хватает аргументов"),
+                }
+            })?)
+        }
+        "создать" | "create" => {
+            let spec = require_arg(tail, "/mcp")?;
+            let (id, options) = parse_mcp_create_spec(spec.as_str())?;
+            backend.create_mcp_connector(&id, options)
+        }
+        "изменить" | "edit" => {
+            let spec = require_arg(tail, "/mcp")?;
+            let (id, patch) = parse_mcp_edit_spec(spec.as_str())?;
+            backend.update_mcp_connector(&id, patch)
+        }
+        "включить" | "enable" => backend.set_mcp_connector_enabled(
+            split_command_arg(raw).ok_or_else(|| BootstrapError::Usage {
+                reason: render_command_usage_error("/mcp", "не хватает аргументов"),
+            })?,
+            true,
+        ),
+        "выключить" | "disable" => backend.set_mcp_connector_enabled(
+            split_command_arg(raw).ok_or_else(|| BootstrapError::Usage {
+                reason: render_command_usage_error("/mcp", "не хватает аргументов"),
+            })?,
+            false,
+        ),
+        "перезапустить" | "restart" => {
+            backend.restart_mcp_connector(split_command_arg(raw).ok_or_else(|| {
+                BootstrapError::Usage {
+                    reason: render_command_usage_error("/mcp", "не хватает аргументов"),
+                }
+            })?)
+        }
+        "удалить" | "delete" | "remove" => {
+            backend.delete_mcp_connector(split_command_arg(raw).ok_or_else(|| {
+                BootstrapError::Usage {
+                    reason: render_command_usage_error("/mcp", "не хватает аргументов"),
+                }
+            })?)
+        }
+        _ => Err(BootstrapError::Usage {
+            reason: render_command_usage_error(
+                "/mcp",
+                "неизвестная подкоманда mcp; ожидается показать|создать|изменить|включить|выключить|перезапустить|удалить",
+            ),
+        }),
+    }
+}
+
+fn handle_memory_command<B>(backend: &B, raw: Option<&str>) -> Result<String, BootstrapError>
+where
+    B: ChatReplBackend,
+{
+    let raw = raw.unwrap_or_default().trim();
+    let (action, tail) = match raw.split_once(' ') {
+        Some((action, tail)) => (action.trim(), tail.trim()),
+        None => (raw, ""),
+    };
+
+    match action {
+        "сессии" | "sessions" => backend.render_session_memory_search(SessionSearchInput {
+            query: require_arg(tail, "/memory")?,
+            limit: None,
+            offset: Some(0),
+            tiers: None,
+            agent_identifier: None,
+            updated_after: None,
+            updated_before: None,
+        }),
+        "сессия" | "session" => {
+            let session_id = require_arg(tail, "/memory")?;
+            let (session_id, mode) = parse_memory_session_read(session_id.as_str())?;
+            backend.render_session_memory_read(SessionReadInput {
+                session_id,
+                mode: Some(mode),
+                cursor: None,
+                max_items: None,
+                max_bytes: None,
+                include_tools: Some(true),
+            })
+        }
+        "знания" | "knowledge" => backend.render_knowledge_search(KnowledgeSearchInput {
+            query: require_arg(tail, "/memory")?,
+            limit: None,
+            offset: Some(0),
+            kinds: None,
+            roots: None,
+        }),
+        "файл" | "file" => {
+            let value = require_arg(tail, "/memory")?;
+            let (path, mode) = parse_memory_knowledge_read(value.as_str());
+            backend.render_knowledge_read(KnowledgeReadInput {
+                path,
+                mode: Some(mode),
+                cursor: None,
+                max_bytes: None,
+                max_lines: None,
+            })
+        }
+        _ => Err(BootstrapError::Usage {
+            reason: render_command_usage_error(
+                "/memory",
+                "неизвестная подкоманда памяти; ожидается сессии|сессия|знания|файл",
+            ),
+        }),
+    }
+}
+
+fn parse_memory_session_read(raw: &str) -> Result<(String, SessionReadMode), BootstrapError> {
+    let trimmed = raw.trim();
+    let Some((session_id, maybe_mode)) = trimmed.split_once(' ') else {
+        return Ok((trimmed.to_string(), SessionReadMode::Summary));
+    };
+    Ok((
+        session_id.trim().to_string(),
+        parse_session_read_mode(maybe_mode.trim())?,
+    ))
+}
+
+fn parse_session_read_mode(raw: &str) -> Result<SessionReadMode, BootstrapError> {
+    match raw {
+        "" | "summary" | "сводка" => Ok(SessionReadMode::Summary),
+        "timeline" | "таймлайн" => Ok(SessionReadMode::Timeline),
+        "transcript" | "транскрипт" => Ok(SessionReadMode::Transcript),
+        "artifacts" | "артефакты" => Ok(SessionReadMode::Artifacts),
+        other => Err(BootstrapError::Usage {
+            reason: render_command_usage_error(
+                "/memory",
+                &format!("неизвестный режим чтения сессии {other}"),
+            ),
+        }),
+    }
+}
+
+fn parse_memory_knowledge_read(raw: &str) -> (String, KnowledgeReadMode) {
+    let trimmed = raw.trim();
+    if let Some((path, mode)) = trimmed.rsplit_once(' ') {
+        let mode = match mode.trim() {
+            "full" | "полный" => Some(KnowledgeReadMode::Full),
+            "excerpt" | "выдержка" => Some(KnowledgeReadMode::Excerpt),
+            _ => None,
+        };
+        if let Some(mode) = mode {
+            return (path.trim().to_string(), mode);
+        }
+    }
+    (trimmed.to_string(), KnowledgeReadMode::Excerpt)
+}
+
+fn parse_mcp_create_spec(raw: &str) -> Result<(String, McpConnectorCreateOptions), BootstrapError> {
+    let (id, assignments) = split_head_tail(raw).ok_or_else(|| BootstrapError::Usage {
+        reason: render_command_usage_error("/mcp", "не хватает аргументов"),
+    })?;
+    let fields = parse_assignment_fields(assignments, "/mcp")?;
+    let command = required_assignment(&fields, "command", "/mcp")?;
+    Ok((
+        id.to_string(),
+        McpConnectorCreateOptions {
+            transport: McpConnectorTransport::Stdio,
+            command,
+            args: parse_mcp_args(fields.get("args").map(String::as_str)),
+            env: parse_mcp_env(fields.get("env").map(String::as_str), "/mcp")?,
+            cwd: parse_mcp_cwd(fields.get("cwd").map(String::as_str)),
+            enabled: parse_mcp_enabled(fields.get("enabled").map(String::as_str))?,
+        },
+    ))
+}
+
+fn parse_mcp_edit_spec(raw: &str) -> Result<(String, McpConnectorUpdatePatch), BootstrapError> {
+    let (id, assignments) = split_head_tail(raw).ok_or_else(|| BootstrapError::Usage {
+        reason: render_command_usage_error("/mcp", "не хватает аргументов"),
+    })?;
+    let fields = parse_assignment_fields(assignments, "/mcp")?;
+    if fields.is_empty() {
+        return Err(BootstrapError::Usage {
+            reason: render_command_usage_error("/mcp", "не указаны поля для изменения"),
+        });
+    }
+    Ok((
+        id.to_string(),
+        McpConnectorUpdatePatch {
+            command: optional_assignment(&fields, "command"),
+            args: fields
+                .get("args")
+                .map(|value| parse_mcp_args(Some(value.as_str()))),
+            env: if fields.contains_key("env") {
+                Some(parse_mcp_env(
+                    fields.get("env").map(String::as_str),
+                    "/mcp",
+                )?)
+            } else {
+                None
+            },
+            cwd: if fields.contains_key("cwd") {
+                Some(parse_mcp_cwd(fields.get("cwd").map(String::as_str)))
+            } else {
+                None
+            },
+            enabled: parse_mcp_enabled_patch(fields.get("enabled").map(String::as_str))?,
+        },
+    ))
+}
+
+fn parse_assignment_fields(
+    raw: &str,
+    command: &str,
+) -> Result<BTreeMap<String, String>, BootstrapError> {
+    let mut fields = BTreeMap::new();
+    for token in raw.split_whitespace() {
+        let Some((key, value)) = token.split_once('=') else {
+            return Err(BootstrapError::Usage {
+                reason: render_command_usage_error(
+                    command,
+                    &format!("ожидается field=value, получено {token}"),
+                ),
+            });
+        };
+        fields.insert(key.trim().to_string(), value.to_string());
+    }
+    Ok(fields)
+}
+
+fn required_assignment(
+    fields: &BTreeMap<String, String>,
+    key: &str,
+    command: &str,
+) -> Result<String, BootstrapError> {
+    let value = fields
+        .get(key)
+        .map(String::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| BootstrapError::Usage {
+            reason: render_command_usage_error(command, &format!("не хватает {key}")),
+        })?;
+    Ok(value.to_string())
+}
+
+fn optional_assignment(fields: &BTreeMap<String, String>, key: &str) -> Option<String> {
+    fields
+        .get(key)
+        .map(String::as_str)
+        .map(str::trim)
+        .map(ToString::to_string)
+}
+
+fn parse_mcp_args(value: Option<&str>) -> Vec<String> {
+    value
+        .unwrap_or_default()
+        .split(',')
+        .filter_map(|item| {
+            let trimmed = item.trim();
+            (!trimmed.is_empty()).then(|| trimmed.to_string())
+        })
+        .collect()
+}
+
+fn parse_mcp_env(
+    value: Option<&str>,
+    command: &str,
+) -> Result<BTreeMap<String, String>, BootstrapError> {
+    let mut env = BTreeMap::new();
+    for pair in value.unwrap_or_default().split(';') {
+        let trimmed = pair.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        let Some((key, raw_value)) = trimmed.split_once('=') else {
+            return Err(BootstrapError::Usage {
+                reason: render_command_usage_error(
+                    command,
+                    &format!("ожидается env KEY=VALUE, получено {trimmed}"),
+                ),
+            });
+        };
+        let key = key.trim();
+        if key.is_empty() {
+            return Err(BootstrapError::Usage {
+                reason: render_command_usage_error(command, "ключ env не должен быть пустым"),
+            });
+        }
+        env.insert(key.to_string(), raw_value.to_string());
+    }
+    Ok(env)
+}
+
+fn parse_mcp_cwd(value: Option<&str>) -> Option<String> {
+    value
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToString::to_string)
+}
+
+fn parse_mcp_enabled(value: Option<&str>) -> Result<bool, BootstrapError> {
+    match value.unwrap_or("true").trim() {
+        "true" | "yes" | "1" | "on" => Ok(true),
+        "false" | "no" | "0" | "off" => Ok(false),
+        other => Err(BootstrapError::Usage {
+            reason: render_command_usage_error(
+                "/mcp",
+                &format!("неподдерживаемый enabled {other}; ожидается true|false"),
+            ),
+        }),
+    }
+}
+
+fn parse_mcp_enabled_patch(value: Option<&str>) -> Result<Option<bool>, BootstrapError> {
+    match value {
+        Some(value) => parse_mcp_enabled(Some(value)).map(Some),
+        None => Ok(None),
     }
 }
 
@@ -1158,7 +1873,7 @@ fn parse_agent_create_spec(raw: &str) -> Result<(String, Option<String>), Bootst
 
 fn parse_schedule_create_spec(
     raw: &str,
-) -> Result<(String, u64, Option<String>, String), BootstrapError> {
+) -> Result<(String, AgentScheduleCreateOptions), BootstrapError> {
     let trimmed = raw.trim();
     let Some((head, prompt)) = trimmed.split_once("::") else {
         return Err(BootstrapError::Usage {
@@ -1175,57 +1890,144 @@ fn parse_schedule_create_spec(
         });
     }
 
-    let mut parts = head.split_whitespace();
-    let Some(id) = parts
-        .next()
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-    else {
+    let parsed = parse_schedule_field_tokens(head)?;
+    let Some(id) = parsed.id else {
         return Err(BootstrapError::Usage {
             reason: render_command_usage_error("/schedule", "не хватает id расписания"),
         });
     };
-    let Some(interval_raw) = parts
-        .next()
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-    else {
+    let Some(interval_seconds) = parsed.interval_seconds else {
         return Err(BootstrapError::Usage {
             reason: render_command_usage_error("/schedule", "не хватает interval_seconds"),
         });
     };
-    let interval_seconds = interval_raw
-        .parse::<u64>()
-        .map_err(|_| BootstrapError::Usage {
-            reason: render_command_usage_error(
-                "/schedule",
-                "interval_seconds должен быть положительным целым числом",
-            ),
-        })?;
-    if interval_seconds == 0 {
+
+    Ok((
+        id,
+        AgentScheduleCreateOptions {
+            agent_identifier: parsed.agent_identifier,
+            prompt,
+            mode: parsed
+                .mode
+                .unwrap_or(agent_runtime::agent::AgentScheduleMode::Interval),
+            delivery_mode: parsed
+                .delivery_mode
+                .unwrap_or(agent_runtime::agent::AgentScheduleDeliveryMode::FreshSession),
+            target_session_id: parsed.target_session_id,
+            interval_seconds,
+            enabled: parsed.enabled.unwrap_or(true),
+        },
+    ))
+}
+
+fn parse_schedule_edit_spec(
+    raw: &str,
+) -> Result<(String, AgentScheduleUpdatePatch), BootstrapError> {
+    let trimmed = raw.trim();
+    let (head, prompt) = match trimmed.split_once("::") {
+        Some((head, prompt)) => (head.trim(), Some(prompt.trim().to_string())),
+        None => (trimmed, None),
+    };
+    let parsed = parse_schedule_field_tokens(head)?;
+    let Some(id) = parsed.id else {
+        return Err(BootstrapError::Usage {
+            reason: render_command_usage_error("/schedule", "не хватает id расписания"),
+        });
+    };
+    let patch = AgentScheduleUpdatePatch {
+        agent_identifier: parsed.agent_identifier,
+        prompt: prompt.filter(|value| !value.is_empty()),
+        mode: parsed.mode,
+        delivery_mode: parsed.delivery_mode,
+        target_session_id: parsed.target_session_id,
+        interval_seconds: parsed.interval_seconds,
+        enabled: parsed.enabled,
+    };
+    if patch == AgentScheduleUpdatePatch::default() {
         return Err(BootstrapError::Usage {
             reason: render_command_usage_error(
                 "/schedule",
-                "interval_seconds должен быть больше нуля",
+                "для edit укажите хотя бы одно поле или новый prompt",
             ),
         });
     }
+    Ok((id, patch))
+}
 
-    let remainder = parts.collect::<Vec<_>>();
-    let agent_identifier = match remainder.as_slice() {
-        [] => None,
-        [value] => parse_schedule_agent_override(value)?,
-        _ => {
-            return Err(BootstrapError::Usage {
-                reason: render_command_usage_error(
-                    "/schedule",
-                    "лишние аргументы; после interval_seconds допускается только агент=<id>",
-                ),
-            });
+#[derive(Default)]
+struct ParsedScheduleFields {
+    id: Option<String>,
+    agent_identifier: Option<String>,
+    mode: Option<agent_runtime::agent::AgentScheduleMode>,
+    delivery_mode: Option<agent_runtime::agent::AgentScheduleDeliveryMode>,
+    target_session_id: Option<String>,
+    interval_seconds: Option<u64>,
+    enabled: Option<bool>,
+}
+
+fn parse_schedule_field_tokens(raw: &str) -> Result<ParsedScheduleFields, BootstrapError> {
+    let mut parsed = ParsedScheduleFields::default();
+    for token in raw.split_whitespace() {
+        if token.trim().is_empty() {
+            continue;
         }
-    };
+        if let Some((key, value)) = token.split_once('=') {
+            let key = key.trim();
+            let value = value.trim();
+            if value.is_empty() {
+                return Err(BootstrapError::Usage {
+                    reason: render_command_usage_error(
+                        "/schedule",
+                        &format!("пустое значение для поля {key}"),
+                    ),
+                });
+            }
+            match key {
+                "id" | "ид" => parsed.id = Some(value.to_string()),
+                "agent" | "агент" => parsed.agent_identifier = Some(value.to_string()),
+                "mode" | "режим" => parsed.mode = Some(parse_schedule_mode(value)?),
+                "delivery" | "доставка" => {
+                    parsed.delivery_mode = Some(parse_schedule_delivery_mode(value)?)
+                }
+                "session" | "сессия" => parsed.target_session_id = Some(value.to_string()),
+                "interval" | "секунды" => {
+                    parsed.interval_seconds = Some(parse_schedule_interval_seconds(value)?)
+                }
+                "enabled" | "включено" => {
+                    parsed.enabled = Some(parse_schedule_enabled(value)?)
+                }
+                other => {
+                    return Err(BootstrapError::Usage {
+                        reason: render_command_usage_error(
+                            "/schedule",
+                            &format!("неизвестное поле {other}"),
+                        ),
+                    });
+                }
+            }
+            continue;
+        }
 
-    Ok((id.to_string(), interval_seconds, agent_identifier, prompt))
+        if parsed.id.is_none() {
+            parsed.id = Some(token.to_string());
+            continue;
+        }
+        if parsed.interval_seconds.is_none() {
+            parsed.interval_seconds = Some(parse_schedule_interval_seconds(token)?);
+            continue;
+        }
+        if let Some(agent_identifier) = parse_schedule_agent_override(token)? {
+            parsed.agent_identifier = Some(agent_identifier);
+            continue;
+        }
+        return Err(BootstrapError::Usage {
+            reason: render_command_usage_error(
+                "/schedule",
+                "лишние аргументы в спецификации расписания",
+            ),
+        });
+    }
+    Ok(parsed)
 }
 
 fn parse_schedule_agent_override(raw: &str) -> Result<Option<String>, BootstrapError> {
@@ -1243,13 +2045,71 @@ fn parse_schedule_agent_override(raw: &str) -> Result<Option<String>, BootstrapE
             return Ok(Some(value.to_string()));
         }
     }
+    Ok(None)
+}
 
-    Err(BootstrapError::Usage {
+fn parse_schedule_interval_seconds(raw: &str) -> Result<u64, BootstrapError> {
+    let interval_seconds = raw.parse::<u64>().map_err(|_| BootstrapError::Usage {
         reason: render_command_usage_error(
             "/schedule",
-            "неподдерживаемый override агента; используйте agent=<id> или агент=<id>",
+            "interval_seconds должен быть положительным целым числом",
         ),
-    })
+    })?;
+    if interval_seconds == 0 {
+        return Err(BootstrapError::Usage {
+            reason: render_command_usage_error(
+                "/schedule",
+                "interval_seconds должен быть больше нуля",
+            ),
+        });
+    }
+    Ok(interval_seconds)
+}
+
+fn parse_schedule_mode(
+    raw: &str,
+) -> Result<agent_runtime::agent::AgentScheduleMode, BootstrapError> {
+    match raw {
+        "interval" => Ok(agent_runtime::agent::AgentScheduleMode::Interval),
+        "after_completion" => Ok(agent_runtime::agent::AgentScheduleMode::AfterCompletion),
+        "once" => Ok(agent_runtime::agent::AgentScheduleMode::Once),
+        other => Err(BootstrapError::Usage {
+            reason: render_command_usage_error(
+                "/schedule",
+                &format!("неподдерживаемый mode {other}; ожидается interval|after_completion|once"),
+            ),
+        }),
+    }
+}
+
+fn parse_schedule_delivery_mode(
+    raw: &str,
+) -> Result<agent_runtime::agent::AgentScheduleDeliveryMode, BootstrapError> {
+    match raw {
+        "fresh_session" => Ok(agent_runtime::agent::AgentScheduleDeliveryMode::FreshSession),
+        "existing_session" => Ok(agent_runtime::agent::AgentScheduleDeliveryMode::ExistingSession),
+        other => Err(BootstrapError::Usage {
+            reason: render_command_usage_error(
+                "/schedule",
+                &format!(
+                    "неподдерживаемый delivery {other}; ожидается fresh_session|existing_session"
+                ),
+            ),
+        }),
+    }
+}
+
+fn parse_schedule_enabled(raw: &str) -> Result<bool, BootstrapError> {
+    match raw {
+        "true" | "yes" | "on" | "1" | "да" | "вкл" => Ok(true),
+        "false" | "no" | "off" | "0" | "нет" | "выкл" => Ok(false),
+        other => Err(BootstrapError::Usage {
+            reason: render_command_usage_error(
+                "/schedule",
+                &format!("неподдерживаемый enabled {other}; ожидается true|false"),
+            ),
+        }),
+    }
 }
 
 fn split_command_arg(raw: &str) -> Option<&str> {

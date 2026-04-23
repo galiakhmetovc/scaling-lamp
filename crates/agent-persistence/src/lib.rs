@@ -5,16 +5,21 @@ pub mod recovery;
 pub mod repository;
 pub mod store;
 
-pub use config::{A2APeerConfig, AppConfig, ConfigEnv, ConfigError, DaemonConfig};
+pub use config::{
+    A2APeerConfig, AppConfig, ConfigEnv, ConfigError, DaemonConfig, McpConnectorSeedConfig,
+};
 pub use records::{
     AgentChainContinuationRecord, AgentProfileRecord, AgentScheduleRecord, ArtifactRecord,
-    ContextOffloadRecord, ContextSummaryRecord, JobRecord, MissionRecord, PlanRecord,
-    RecordConversionError, RunRecord, SessionInboxEventRecord, SessionRecord, TranscriptRecord,
+    ContextOffloadRecord, ContextSummaryRecord, JobRecord, KnowledgeSearchDocRecord,
+    KnowledgeSourceRecord, McpConnectorRecord, MissionRecord, PlanRecord, RecordConversionError,
+    RunRecord, SessionInboxEventRecord, SessionRecord, SessionRetentionRecord,
+    SessionSearchDocRecord, TranscriptRecord,
 };
 pub use repository::{
     AgentRepository, ArtifactRepository, ContextOffloadRepository, ContextSummaryRepository,
-    JobRepository, MissionRepository, PlanRepository, RunRepository, SessionInboxRepository,
-    SessionRepository, TranscriptRepository,
+    JobRepository, KnowledgeRepository, McpRepository, MissionRepository, PlanRepository,
+    RunRepository, SessionInboxRepository, SessionRepository, SessionRetentionRepository,
+    SessionSearchRepository, TranscriptRepository,
 };
 pub use store::{ExecutionStateSnapshot, PersistenceStore, StoreError, StoreLayout};
 

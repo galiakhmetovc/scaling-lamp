@@ -10,6 +10,8 @@ mod context;
 mod core;
 #[path = "bootstrap_app/interagent.rs"]
 mod interagent;
+#[path = "bootstrap_app/mcp.rs"]
+mod mcp;
 #[path = "bootstrap_app/repl.rs"]
 mod repl;
 #[path = "bootstrap_app/schedules.rs"]

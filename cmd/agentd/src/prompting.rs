@@ -2,8 +2,8 @@ use crate::agents;
 use agent_persistence::TranscriptRecord;
 use agent_runtime::context::{ContextSummary, approximate_token_count};
 use agent_runtime::prompt::{
-    SessionHead, SessionHeadFsActivity, SessionHeadProcessActivity, SessionHeadWorkspaceEntry,
-    SessionHeadWorkspaceEntryKind,
+    SessionHead, SessionHeadFsActivity, SessionHeadProcessActivity, SessionHeadScheduleSummary,
+    SessionHeadWorkspaceEntry, SessionHeadWorkspaceEntryKind,
 };
 use agent_runtime::run::{RunSnapshot, RunStatus, RunStepKind};
 use agent_runtime::session::Session;
@@ -21,6 +21,8 @@ const WORKSPACE_TREE_LIMIT: usize = 12;
 
 pub(crate) fn build_session_head(
     session: &Session,
+    agent_name: &str,
+    schedule: Option<SessionHeadScheduleSummary>,
     transcripts: &[TranscriptRecord],
     context_summary: Option<&ContextSummary>,
     runs: &[RunSnapshot],
@@ -65,6 +67,9 @@ pub(crate) fn build_session_head(
     SessionHead {
         session_id: session.id.clone(),
         title: session.title.clone(),
+        agent_profile_id: session.agent_profile_id.clone(),
+        agent_name: agent_name.to_string(),
+        schedule,
         message_count,
         context_tokens: provider_input_tokens
             .unwrap_or(uncovered_transcript_tokens + summary_tokens),

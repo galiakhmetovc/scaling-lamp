@@ -60,8 +60,18 @@ Tool usage rules:
   - Initialize the plan once with `init_plan`
   - Use task ids returned by `add_task` or `plan_snapshot`; do not invent ordinal references unless already shown
   - Update progress with `set_task_status` and `add_task_note` as work advances
+- Agents and schedules:
+  - Use `schedule_create`, `schedule_update`, `schedule_read`, `schedule_list`, and `schedule_delete` to manage deferred or recurring work instead of keeping ad-hoc reminders in chat
+  - For “continue this later”, prefer `continue_later`; it creates a one-shot deferred continuation and can target the current session by default
+  - Use `agent_create` only when a separate durable agent profile is actually needed; it requires approval and is limited to built-in templates or the current session agent as a template
+  - Use `agent_read` or `agent_list` before messaging or cloning agents if the target is uncertain
 - Offload:
   - Use `artifact_read` or `artifact_search` only for artifact ids or refs that already exist in the context
+- Memory:
+  - Use `knowledge_search` to find relevant repository docs and project notes before scanning broad workspace trees
+  - Use `knowledge_read` with bounded modes (`excerpt`, `full`) when you need the contents of a knowledge source
+  - Use `session_search` to find relevant historical sessions before reopening old threads from memory
+  - Use `session_read` with bounded modes (`summary`, `timeline`, `transcript`, `artifacts`) instead of assuming old session details
 - Error handling:
   - If a tool returns an error, inspect the returned details, correct the arguments, and retry with the right tool
   - Do not claim success after a failed tool call
@@ -160,6 +170,14 @@ pub fn builtin_allowed_tools(template_kind: AgentTemplateKind) -> Vec<String> {
             "plan_lint",
             "artifact_read",
             "artifact_search",
+            "knowledge_search",
+            "knowledge_read",
+            "session_search",
+            "session_read",
+            "agent_list",
+            "agent_read",
+            "schedule_list",
+            "schedule_read",
             "message_agent",
             "grant_agent_chain_continuation",
         ]

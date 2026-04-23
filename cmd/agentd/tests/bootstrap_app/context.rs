@@ -1,4 +1,8 @@
 use super::support::*;
+use agentd::mcp::{
+    McpDiscoveredPrompt, McpDiscoveredPromptArgument, McpDiscoveredResource, McpDiscoveredTool,
+    MockMcpConnectorRuntime, SharedMcpRegistry,
+};
 
 #[test]
 fn tui_like_session_metadata_persists_and_lists_for_ui() {
@@ -332,6 +336,55 @@ fn render_context_state_explains_ctx_summary_and_compaction_policy() {
     assert!(rendered.contains("threshold_messages=12"));
     assert!(rendered.contains("keep_tail=4"));
     assert!(rendered.contains("summary_covers_messages=2"));
+}
+
+#[test]
+fn render_session_artifacts_includes_offload_totals_and_open_hint() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let app = build_from_config(AppConfig {
+        data_dir: temp.path().join("state-root"),
+        ..AppConfig::default()
+    })
+    .expect("build app");
+    let store = PersistenceStore::open(&app.persistence).expect("open store");
+    let session = app
+        .create_session_auto(Some("Artifacts Session"))
+        .expect("create session");
+
+    store
+        .put_context_offload(
+            &agent_persistence::ContextOffloadRecord::try_from(&ContextOffloadSnapshot {
+                session_id: session.id.clone(),
+                refs: vec![ContextOffloadRef {
+                    id: "offload-artifacts-1".to_string(),
+                    label: "Tool trace".to_string(),
+                    summary: "Large tool output".to_string(),
+                    artifact_id: "artifact-offload-1".to_string(),
+                    token_estimate: 120,
+                    message_count: 3,
+                    created_at: 77,
+                }],
+                updated_at: 101,
+            })
+            .expect("offload record"),
+            &[ContextOffloadPayload {
+                artifact_id: "artifact-offload-1".to_string(),
+                bytes: b"payload".to_vec(),
+            }],
+        )
+        .expect("put offload");
+
+    let rendered = app
+        .render_session_artifacts(&session.id)
+        .expect("render session artifacts");
+
+    assert!(rendered.contains("Артефакты:"));
+    assert!(rendered.contains("refs=1"));
+    assert!(rendered.contains("tokens=120"));
+    assert!(rendered.contains("messages=3"));
+    assert!(rendered.contains("updated_at=101"));
+    assert!(rendered.contains("\\артефакт artifact-offload-1"));
+    assert!(rendered.contains("- artifact-offload-1 [offload-artifacts-1] Tool trace"));
 }
 
 #[test]
@@ -2383,4 +2436,98 @@ fn provider_request_preview_filters_tools_by_agent_allowlist() {
     assert!(judge_preview.contains("\"name\": \"plan_snapshot\""));
     assert!(!judge_preview.contains("\"name\": \"exec_start\""));
     assert!(!judge_preview.contains("\"name\": \"fs_write_text\""));
+}
+
+#[test]
+fn provider_request_preview_merges_dynamic_mcp_tools_for_default_agents_only() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let mut app = build_from_config(AppConfig {
+        data_dir: temp.path().join("state-root"),
+        provider: ConfiguredProvider {
+            kind: ProviderKind::OpenAiResponses,
+            api_base: Some("http://127.0.0.1:65535/v1".to_string()),
+            api_key: Some("test-key".to_string()),
+            default_model: Some("gpt-5.4".to_string()),
+            ..ConfiguredProvider::default()
+        },
+        ..AppConfig::default()
+    })
+    .expect("build app");
+    app.mcp = SharedMcpRegistry::with_mock_connectors(vec![MockMcpConnectorRuntime {
+        id: "docs".to_string(),
+        tools: vec![McpDiscoveredTool {
+            exposed_name: "mcp__docs__search_code".to_string(),
+            remote_name: "search_code".to_string(),
+            title: Some("Search code".to_string()),
+            description: Some("Search the docs code index".to_string()),
+            input_schema: serde_json::json!({
+                "type":"object",
+                "properties":{"query":{"type":"string"}},
+                "required":["query"],
+                "additionalProperties": false
+            }),
+            read_only: true,
+            destructive: false,
+        }],
+        resources: vec![McpDiscoveredResource {
+            connector_id: "docs".to_string(),
+            uri: "file:///guides/onboarding.md".to_string(),
+            name: "onboarding".to_string(),
+            title: Some("Onboarding".to_string()),
+            description: Some("Operator onboarding guide".to_string()),
+            mime_type: Some("text/markdown".to_string()),
+        }],
+        prompts: vec![McpDiscoveredPrompt {
+            connector_id: "docs".to_string(),
+            name: "incident_triage".to_string(),
+            title: Some("Incident triage".to_string()),
+            description: Some("Triage incidents from docs".to_string()),
+            arguments: vec![McpDiscoveredPromptArgument {
+                name: "service".to_string(),
+                description: Some("Service name".to_string()),
+                required: false,
+            }],
+        }],
+        tool_results: std::collections::BTreeMap::new(),
+        resource_reads: std::collections::BTreeMap::new(),
+        prompt_gets: std::collections::BTreeMap::new(),
+    }]);
+    let store = PersistenceStore::open(&app.persistence).expect("open store");
+
+    for (session_id, title, agent_profile_id) in [
+        ("session-preview-mcp-default", "Default Preview", "default"),
+        ("session-preview-mcp-judge", "Judge Preview", "judge"),
+    ] {
+        store
+            .put_session(&SessionRecord {
+                id: session_id.to_string(),
+                title: title.to_string(),
+                prompt_override: None,
+                settings_json: serde_json::to_string(&SessionSettings::default())
+                    .expect("serialize settings"),
+                agent_profile_id: agent_profile_id.to_string(),
+                active_mission_id: None,
+                parent_session_id: None,
+                parent_job_id: None,
+                delegation_label: None,
+                created_at: 1,
+                updated_at: 1,
+            })
+            .expect("put session");
+    }
+
+    let default_preview = app
+        .render_provider_request_preview("session-preview-mcp-default")
+        .expect("default provider preview");
+    let judge_preview = app
+        .render_provider_request_preview("session-preview-mcp-judge")
+        .expect("judge provider preview");
+
+    assert!(default_preview.contains("\"name\": \"mcp__docs__search_code\""));
+    assert!(default_preview.contains("\"name\": \"mcp_search_resources\""));
+    assert!(default_preview.contains("\"name\": \"mcp_get_prompt\""));
+
+    assert!(!judge_preview.contains("\"name\": \"mcp__docs__search_code\""));
+    assert!(!judge_preview.contains("\"name\": \"mcp_search_resources\""));
+    assert!(!judge_preview.contains("\"name\": \"mcp_get_prompt\""));
 }

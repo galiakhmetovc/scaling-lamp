@@ -1,4 +1,7 @@
 use super::support::*;
+use agent_runtime::interagent::{AgentChainState, AgentMessageChain, DEFAULT_MAX_HOPS};
+use agent_runtime::session::TranscriptEntry;
+use agentd::mcp::{McpWorkerControl, SharedMcpRegistry};
 
 #[test]
 fn run_with_args_shows_and_sends_chat_turns() {
@@ -231,6 +234,274 @@ fn repl_runs_chat_turns_and_supports_show_and_exit_commands() {
     assert!(rendered.contains("["));
     assert!(rendered.contains("user: Hello from repl"));
     assert!(rendered.contains("выход из чатового режима"));
+}
+
+#[test]
+fn repl_supports_memory_commands() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let app = build_from_config(AppConfig {
+        data_dir: temp.path().join("state-root"),
+        daemon: Default::default(),
+        ..AppConfig::default()
+    })
+    .expect("build app");
+    let knowledge_path = "docs/repl-memory-fixture.md";
+    let knowledge_absolute = app.runtime.workspace.root.join(knowledge_path);
+    std::fs::create_dir_all(
+        knowledge_absolute
+            .parent()
+            .expect("fixture parent directory"),
+    )
+    .expect("create fixture dir");
+    std::fs::write(
+        &knowledge_absolute,
+        "# REPL memory fixture\nmemory foundation fixture\n",
+    )
+    .expect("write fixture");
+    let store = PersistenceStore::open(&app.persistence).expect("open store");
+
+    store
+        .put_session(&SessionRecord {
+            id: "session-chat-repl-memory".to_string(),
+            title: "Memory Search Session".to_string(),
+            prompt_override: None,
+            settings_json: serde_json::to_string(&SessionSettings::default())
+                .expect("serialize settings"),
+            agent_profile_id: "default".to_string(),
+            active_mission_id: None,
+            parent_session_id: None,
+            parent_job_id: None,
+            delegation_label: None,
+            created_at: 1,
+            updated_at: 1,
+        })
+        .expect("put session");
+    store
+        .put_transcript(&agent_persistence::TranscriptRecord {
+            id: "memory-transcript-1".to_string(),
+            session_id: "session-chat-repl-memory".to_string(),
+            run_id: None,
+            kind: "user".to_string(),
+            content: "offline adet install notes".to_string(),
+            created_at: 2,
+        })
+        .expect("put transcript");
+
+    let input_text = format!(
+        "\\память сессии offline adet\n\\память сессия session-chat-repl-memory transcript\n\\память знания memory foundation fixture\n\\память файл {knowledge_path} excerpt\n/exit\n"
+    );
+    let mut input = Cursor::new(input_text.as_bytes().to_vec());
+    let mut output = Vec::new();
+    app.run_with_io(
+        ["chat", "repl", "session-chat-repl-memory"],
+        &mut input,
+        &mut output,
+    )
+    .expect("repl");
+
+    let rendered = String::from_utf8(output).expect("utf8");
+    assert!(rendered.contains("Память сессий:"));
+    assert!(rendered.contains("session-chat-repl-memory"));
+    assert!(rendered.contains("offline adet install notes"));
+    assert!(rendered.contains("Память знаний:"));
+    assert!(rendered.contains("Файл знаний:"));
+    let _ = std::fs::remove_file(knowledge_absolute);
+}
+
+#[test]
+fn repl_supports_mcp_commands() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let mut app = build_from_config(AppConfig {
+        data_dir: temp.path().join("state-root"),
+        daemon: Default::default(),
+        ..AppConfig::default()
+    })
+    .expect("build app");
+    let store = PersistenceStore::open(&app.persistence).expect("open store");
+
+    app.mcp = SharedMcpRegistry::with_starter(move |connector, registry, now| {
+        registry.mark_running(&connector.id, now, Some(4242));
+        Ok(McpWorkerControl::noop())
+    });
+
+    store
+        .put_session(&SessionRecord {
+            id: "session-chat-repl-mcp".to_string(),
+            title: "Chat REPL MCP session".to_string(),
+            prompt_override: None,
+            settings_json: serde_json::to_string(&SessionSettings::default())
+                .expect("serialize settings"),
+            agent_profile_id: "default".to_string(),
+            active_mission_id: None,
+            parent_session_id: None,
+            parent_job_id: None,
+            delegation_label: None,
+            created_at: 1,
+            updated_at: 1,
+        })
+        .expect("put session");
+
+    let mut input = Cursor::new(
+        concat!(
+            "/mcp\n",
+            "/mcp create docs command=npx args=-y,@modelcontextprotocol/server-filesystem,/workspace cwd=/srv/mcp env=DEBUG=1;TRACE=yes enabled=true\n",
+            "/mcp show docs\n",
+            "/mcp disable docs\n",
+            "/mcp enable docs\n",
+            "/mcp restart docs\n",
+            "/mcp edit docs command=uvx args=mcp-server-git cwd= env=TRACE=1 enabled=true\n",
+            "/mcp delete docs\n",
+            "/exit\n"
+        )
+        .as_bytes()
+        .to_vec(),
+    );
+    let mut output = Vec::new();
+    app.run_with_io(
+        ["chat", "repl", "session-chat-repl-mcp"],
+        &mut input,
+        &mut output,
+    )
+    .expect("run repl");
+
+    let rendered = String::from_utf8(output).expect("utf8");
+    assert!(rendered.contains("MCP коннекторы:"));
+    assert!(rendered.contains("создан MCP коннектор docs"));
+    assert!(rendered.contains("id=docs"));
+    assert!(rendered.contains("command=npx"));
+    assert!(rendered.contains("MCP коннектор docs выключен"));
+    assert!(rendered.contains("MCP коннектор docs включен"));
+    assert!(rendered.contains("MCP коннектор docs перезапущен"));
+    assert!(rendered.contains("обновлён MCP коннектор docs"));
+    assert!(rendered.contains("MCP коннектор docs удалён"));
+}
+
+#[test]
+fn repl_supports_judge_command_and_queues_interagent_message() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let app = build_from_config(AppConfig {
+        data_dir: temp.path().join("state-root"),
+        daemon: Default::default(),
+        ..AppConfig::default()
+    })
+    .expect("build app");
+    let store = PersistenceStore::open(&app.persistence).expect("open store");
+
+    store
+        .put_session(&SessionRecord {
+            id: "session-chat-repl-judge".to_string(),
+            title: "Chat REPL judge session".to_string(),
+            prompt_override: None,
+            settings_json: serde_json::to_string(&SessionSettings::default())
+                .expect("serialize settings"),
+            agent_profile_id: "default".to_string(),
+            active_mission_id: None,
+            parent_session_id: None,
+            parent_job_id: None,
+            delegation_label: None,
+            created_at: 1,
+            updated_at: 1,
+        })
+        .expect("put session");
+
+    let mut input = Cursor::new(
+        "/judge Проверь последний вывод\n/exit\n"
+            .as_bytes()
+            .to_vec(),
+    );
+    let mut output = Vec::new();
+    app.run_with_io(
+        ["chat", "repl", "session-chat-repl-judge"],
+        &mut input,
+        &mut output,
+    )
+    .expect("run repl");
+
+    let rendered = String::from_utf8(output).expect("utf8");
+    assert!(rendered.contains("сообщение отправлено агенту judge"));
+
+    let sessions = store.list_sessions().expect("list sessions");
+    let recipient = sessions
+        .into_iter()
+        .find(|record| record.id != "session-chat-repl-judge")
+        .expect("recipient session");
+    assert_eq!(recipient.agent_profile_id, "judge");
+    assert_eq!(
+        recipient.parent_session_id.as_deref(),
+        Some("session-chat-repl-judge")
+    );
+}
+
+#[test]
+fn repl_supports_chain_grant_command() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let app = build_from_config(AppConfig {
+        data_dir: temp.path().join("state-root"),
+        daemon: Default::default(),
+        ..AppConfig::default()
+    })
+    .expect("build app");
+    let store = PersistenceStore::open(&app.persistence).expect("open store");
+
+    store
+        .put_session(&SessionRecord {
+            id: "session-chat-repl-chain".to_string(),
+            title: "Chat REPL chain session".to_string(),
+            prompt_override: None,
+            settings_json: serde_json::to_string(&SessionSettings::default())
+                .expect("serialize settings"),
+            agent_profile_id: "judge".to_string(),
+            active_mission_id: None,
+            parent_session_id: None,
+            parent_job_id: None,
+            delegation_label: None,
+            created_at: 1,
+            updated_at: 1,
+        })
+        .expect("put session");
+    let blocked_chain = AgentMessageChain::new(
+        "chain-repl-grant",
+        "session-origin",
+        "default",
+        DEFAULT_MAX_HOPS,
+        DEFAULT_MAX_HOPS,
+        Some("session-parent".to_string()),
+        AgentChainState::BlockedMaxHops,
+    )
+    .expect("blocked chain");
+    store
+        .put_transcript(&agent_persistence::TranscriptRecord::from(
+            &TranscriptEntry::system(
+                "transcript-repl-grant",
+                "session-chat-repl-chain",
+                None,
+                blocked_chain.to_transcript_metadata(),
+                10,
+            ),
+        ))
+        .expect("put chain transcript");
+
+    let mut input = Cursor::new(
+        "/chain continue chain-repl-grant Нужен еще один hop\n/exit\n"
+            .as_bytes()
+            .to_vec(),
+    );
+    let mut output = Vec::new();
+    app.run_with_io(
+        ["chat", "repl", "session-chat-repl-chain"],
+        &mut input,
+        &mut output,
+    )
+    .expect("run repl");
+
+    let rendered = String::from_utf8(output).expect("utf8");
+    assert!(rendered.contains("цепочка chain-repl-grant продолжена"));
+    assert!(
+        store
+            .get_agent_chain_continuation("chain-repl-grant")
+            .expect("load grant")
+            .is_some()
+    );
 }
 
 #[test]

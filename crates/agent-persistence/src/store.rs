@@ -2,6 +2,8 @@ mod agent_repos;
 mod context_repos;
 mod execution_repos;
 mod inbox_repos;
+mod mcp_repos;
+mod memory_repos;
 mod payloads;
 mod schema;
 mod session_mission;
@@ -10,13 +12,17 @@ use crate::PersistenceScaffold;
 use crate::config::AppConfig;
 use crate::records::{
     AgentChainContinuationRecord, AgentProfileRecord, AgentScheduleRecord, ArtifactRecord,
-    ContextOffloadRecord, ContextSummaryRecord, JobRecord, MissionRecord, PlanRecord, RunRecord,
-    SessionInboxEventRecord, SessionRecord, TranscriptRecord,
+    ContextOffloadRecord, ContextSummaryRecord, JobRecord, McpConnectorRecord, MissionRecord,
+    PlanRecord, RunRecord, SessionInboxEventRecord, SessionRecord, SessionRetentionRecord,
+    TranscriptRecord,
 };
 use crate::repository::{
     AgentRepository, ArtifactRepository, ContextOffloadRepository, ContextSummaryRepository,
-    JobRepository, MissionRepository, PlanRepository, RunRepository, SessionInboxRepository,
-    SessionRepository, TranscriptRepository,
+    JobRepository, McpRepository, MissionRepository, PlanRepository, RunRepository,
+    SessionInboxRepository, SessionRepository, SessionRetentionRepository, TranscriptRepository,
+};
+use agent_runtime::archive::{
+    ArchivedArtifactEntry, ArchivedSummary, ArchivedTranscriptEntry, SessionArchiveManifest,
 };
 use agent_runtime::context::{ContextOffloadPayload, ContextOffloadSnapshot};
 use rusqlite::{Connection, OptionalExtension, params};
@@ -29,6 +35,7 @@ use std::path::{Path, PathBuf};
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StoreLayout {
     pub artifacts_dir: PathBuf,
+    pub archives_dir: PathBuf,
     pub metadata_db: PathBuf,
     pub runs_dir: PathBuf,
     pub transcripts_dir: PathBuf,
@@ -40,6 +47,7 @@ impl StoreLayout {
 
         Self {
             artifacts_dir: root.join("artifacts"),
+            archives_dir: root.join("archives"),
             metadata_db: root.join("state.sqlite"),
             runs_dir: root.join("runs"),
             transcripts_dir: root.join("transcripts"),
@@ -60,6 +68,10 @@ pub enum StoreError {
     },
     InvalidContextOffload {
         session_id: String,
+        reason: String,
+    },
+    InvalidArchiveManifest {
+        path: PathBuf,
         reason: String,
     },
     Io {
@@ -132,6 +144,13 @@ impl fmt::Display for StoreError {
                     "invalid context offload for {session_id}: {reason}"
                 )
             }
+            Self::InvalidArchiveManifest { path, reason } => {
+                write!(
+                    formatter,
+                    "invalid archive manifest at {}: {reason}",
+                    path.display()
+                )
+            }
             Self::Io { path, source } => {
                 write!(
                     formatter,
@@ -165,6 +184,7 @@ impl Error for StoreError {
             Self::ImmutableSessionAgentProfile { .. }
             | Self::InvalidIdentifier { .. }
             | Self::InvalidContextOffload { .. }
+            | Self::InvalidArchiveManifest { .. }
             | Self::MissingPayload { .. }
             | Self::IntegrityMismatch { .. }
             | Self::SchemaMismatch { .. } => None,
@@ -218,6 +238,29 @@ impl PersistenceStore {
     fn artifact_relative_path(&self, id: &str) -> Result<PathBuf, StoreError> {
         validate_identifier(id)?;
         Ok(PathBuf::from("artifacts").join(format!("{id}.bin")))
+    }
+
+    fn session_archive_dir(&self, session_id: &str) -> Result<PathBuf, StoreError> {
+        validate_identifier(session_id)?;
+        Ok(self.layout.archives_dir.join("sessions").join(session_id))
+    }
+
+    fn session_archive_manifest_path(&self, session_id: &str) -> Result<PathBuf, StoreError> {
+        Ok(self.session_archive_dir(session_id)?.join("manifest.json"))
+    }
+
+    fn session_archive_summary_path(&self, session_id: &str) -> Result<PathBuf, StoreError> {
+        Ok(self.session_archive_dir(session_id)?.join("summary.json"))
+    }
+
+    fn session_archive_transcript_path(&self, session_id: &str) -> Result<PathBuf, StoreError> {
+        Ok(self
+            .session_archive_dir(session_id)?
+            .join("transcript.ndjson"))
+    }
+
+    fn session_archive_artifacts_dir(&self, session_id: &str) -> Result<PathBuf, StoreError> {
+        Ok(self.session_archive_dir(session_id)?.join("artifacts"))
     }
 
     fn reconcile_orphan_payloads(&self) -> Result<(), StoreError> {
@@ -310,6 +353,235 @@ impl PersistenceStore {
         remove_payload_if_exists(&path)?;
         remove_payload_if_exists(&backup_path(&path))?;
         Ok(true)
+    }
+
+    fn list_artifact_ids_for_session(&self, session_id: &str) -> Result<Vec<String>, StoreError> {
+        let mut statement = self
+            .connection
+            .prepare("SELECT id FROM artifacts WHERE session_id = ?1 ORDER BY id ASC")?;
+        let mut rows = statement.query([session_id])?;
+        let mut ids = Vec::new();
+
+        while let Some(row) = rows.next()? {
+            ids.push(row.get::<_, String>(0)?);
+        }
+
+        Ok(ids)
+    }
+
+    pub fn list_artifacts_for_session(
+        &self,
+        session_id: &str,
+    ) -> Result<Vec<ArtifactRecord>, StoreError> {
+        let mut artifacts = Vec::new();
+        for artifact_id in self.list_artifact_ids_for_session(session_id)? {
+            if let Some(artifact) = self.get_artifact(&artifact_id)? {
+                artifacts.push(artifact);
+            }
+        }
+        Ok(artifacts)
+    }
+
+    pub fn archive_session_bundle(
+        &self,
+        session_id: &str,
+        archived_at: i64,
+    ) -> Result<SessionArchiveManifest, StoreError> {
+        if self.get_session(session_id)?.is_none() {
+            return Err(StoreError::InvalidIdentifier {
+                id: session_id.to_string(),
+                reason: "session does not exist",
+            });
+        }
+
+        let archive_dir = self.session_archive_dir(session_id)?;
+        let artifacts_dir = self.session_archive_artifacts_dir(session_id)?;
+        payloads::create_directory(&archive_dir)?;
+        payloads::create_directory(&artifacts_dir)?;
+
+        let transcripts = self.list_transcripts_for_session(session_id)?;
+        let transcript_entries = transcripts
+            .iter()
+            .map(|record| ArchivedTranscriptEntry {
+                id: record.id.clone(),
+                run_id: record.run_id.clone(),
+                kind: record.kind.clone(),
+                content: record.content.clone(),
+                created_at: record.created_at,
+            })
+            .collect::<Vec<_>>();
+        let transcript_path = self.session_archive_transcript_path(session_id)?;
+        let transcript_bytes = transcript_entries
+            .iter()
+            .map(serde_json::to_string)
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|source| StoreError::InvalidArchiveManifest {
+                path: transcript_path.clone(),
+                reason: source.to_string(),
+            })?
+            .join("\n");
+        fs::write(&transcript_path, transcript_bytes.as_bytes()).map_err(|source| {
+            StoreError::Io {
+                path: transcript_path.clone(),
+                source,
+            }
+        })?;
+
+        let summary_path = if let Some(summary) = self.get_context_summary(session_id)? {
+            let archived_summary = ArchivedSummary {
+                summary_text: summary.summary_text,
+                covered_message_count: u32::try_from(summary.covered_message_count).unwrap_or(0),
+                summary_token_estimate: u32::try_from(summary.summary_token_estimate).unwrap_or(0),
+                updated_at: summary.updated_at,
+            };
+            let path = self.session_archive_summary_path(session_id)?;
+            let summary_json = serde_json::to_vec_pretty(&archived_summary).map_err(|source| {
+                StoreError::InvalidArchiveManifest {
+                    path: path.clone(),
+                    reason: source.to_string(),
+                }
+            })?;
+            fs::write(&path, summary_json).map_err(|source| StoreError::Io {
+                path: path.clone(),
+                source,
+            })?;
+            Some("summary.json".to_string())
+        } else {
+            None
+        };
+
+        let mut artifacts = Vec::new();
+        for artifact_id in self.list_artifact_ids_for_session(session_id)? {
+            let artifact =
+                self.get_artifact(&artifact_id)?
+                    .ok_or_else(|| StoreError::InvalidIdentifier {
+                        id: artifact_id.clone(),
+                        reason: "artifact missing during archive",
+                    })?;
+            let file_name = artifact
+                .path
+                .file_name()
+                .and_then(|name| name.to_str())
+                .ok_or_else(|| StoreError::InvalidIdentifier {
+                    id: artifact.id.clone(),
+                    reason: "artifact path must resolve to a valid file name",
+                })?
+                .to_string();
+            let relative_path = PathBuf::from("artifacts").join(&file_name);
+            let archive_path = archive_dir.join(&relative_path);
+            if let Some(parent) = archive_path.parent() {
+                payloads::create_directory(parent)?;
+            }
+            fs::write(&archive_path, &artifact.bytes).map_err(|source| StoreError::Io {
+                path: archive_path.clone(),
+                source,
+            })?;
+            artifacts.push(ArchivedArtifactEntry {
+                artifact_id: artifact.id.clone(),
+                kind: artifact.kind.clone(),
+                relative_path: relative_path.display().to_string(),
+                byte_len: artifact.bytes.len() as u64,
+                sha256: sha256_hex(&artifact.bytes),
+                created_at: artifact.created_at,
+            });
+        }
+
+        let manifest = SessionArchiveManifest {
+            session_id: session_id.to_string(),
+            archive_version: 1,
+            archived_at,
+            transcript_path: "transcript.ndjson".to_string(),
+            transcript_count: u32::try_from(transcript_entries.len()).unwrap_or(u32::MAX),
+            summary_path,
+            artifacts,
+        };
+        let manifest_path = self.session_archive_manifest_path(session_id)?;
+        let manifest_json = serde_json::to_vec_pretty(&manifest).map_err(|source| {
+            StoreError::InvalidArchiveManifest {
+                path: manifest_path.clone(),
+                reason: source.to_string(),
+            }
+        })?;
+        fs::write(&manifest_path, manifest_json).map_err(|source| StoreError::Io {
+            path: manifest_path.clone(),
+            source,
+        })?;
+
+        Ok(manifest)
+    }
+
+    pub fn read_session_archive_manifest(
+        &self,
+        session_id: &str,
+    ) -> Result<Option<SessionArchiveManifest>, StoreError> {
+        let path = self.session_archive_manifest_path(session_id)?;
+        let content = match read_string_payload(&path) {
+            Ok(content) => content,
+            Err(StoreError::MissingPayload { .. }) => return Ok(None),
+            Err(error) => return Err(error),
+        };
+        serde_json::from_str(&content).map(Some).map_err(|source| {
+            StoreError::InvalidArchiveManifest {
+                path,
+                reason: source.to_string(),
+            }
+        })
+    }
+
+    pub fn read_session_archive_summary(
+        &self,
+        session_id: &str,
+    ) -> Result<Option<ArchivedSummary>, StoreError> {
+        let Some(manifest) = self.read_session_archive_manifest(session_id)? else {
+            return Ok(None);
+        };
+        let Some(relative_path) = manifest.summary_path else {
+            return Ok(None);
+        };
+        let path = self.session_archive_dir(session_id)?.join(relative_path);
+        let content = match read_string_payload(&path) {
+            Ok(content) => content,
+            Err(StoreError::MissingPayload { .. }) => return Ok(None),
+            Err(error) => return Err(error),
+        };
+        serde_json::from_str(&content).map(Some).map_err(|source| {
+            StoreError::InvalidArchiveManifest {
+                path,
+                reason: source.to_string(),
+            }
+        })
+    }
+
+    pub fn read_session_archive_transcripts(
+        &self,
+        session_id: &str,
+    ) -> Result<Option<Vec<ArchivedTranscriptEntry>>, StoreError> {
+        let Some(manifest) = self.read_session_archive_manifest(session_id)? else {
+            return Ok(None);
+        };
+        let path = self
+            .session_archive_dir(session_id)?
+            .join(manifest.transcript_path);
+        let content = match read_string_payload(&path) {
+            Ok(content) => content,
+            Err(StoreError::MissingPayload { .. }) => return Ok(None),
+            Err(error) => return Err(error),
+        };
+        let mut entries = Vec::new();
+        for (index, line) in content.lines().enumerate() {
+            if line.trim().is_empty() {
+                continue;
+            }
+            let entry =
+                serde_json::from_str::<ArchivedTranscriptEntry>(line).map_err(|source| {
+                    StoreError::InvalidArchiveManifest {
+                        path: path.clone(),
+                        reason: format!("line {}: {}", index + 1, source),
+                    }
+                })?;
+            entries.push(entry);
+        }
+        Ok(Some(entries))
     }
 }
 

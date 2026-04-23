@@ -91,12 +91,15 @@ fn session_records_accept_legacy_partial_settings_json() {
 
 #[test]
 fn agent_profile_records_round_trip_with_domain_agents() {
-    let profile = AgentProfile::new(
+    let profile = AgentProfile::new_with_provenance(
         "judge",
         "Judge",
         AgentTemplateKind::Judge,
         "/var/lib/teamd/agents/judge",
         vec!["fs_read_text".to_string(), "plan_snapshot".to_string()],
+        Some("default".to_string()),
+        Some("session-1".to_string()),
+        Some("default".to_string()),
         10,
         11,
     )
@@ -126,7 +129,7 @@ fn agent_schedule_records_round_trip() {
         agent_profile_id: "judge".to_string(),
         workspace_root: "/workspace/project".into(),
         prompt: "Check the latest diff and summarize it.".to_string(),
-        mode: AgentScheduleMode::AfterCompletion,
+        mode: AgentScheduleMode::Once,
         delivery_mode: AgentScheduleDeliveryMode::ExistingSession,
         target_session_id: Some("session-bound".to_string()),
         interval_seconds: 300,

@@ -1,11 +1,12 @@
 mod chat;
 mod internal;
+mod mcp;
 mod sessions;
 mod status;
 
 use crate::bootstrap::{
     BootstrapError, SessionBackgroundJob, SessionPendingApproval, SessionPreferencesPatch,
-    SessionSkillStatus, SessionSummary, SessionTranscriptView,
+    SessionScheduleSummary, SessionSkillStatus, SessionSummary, SessionTranscriptView,
 };
 use crate::execution::{ApprovalContinuationReport, ChatExecutionEvent, ChatTurnExecutionReport};
 use crate::http::types::{
@@ -157,6 +158,16 @@ impl From<SessionSummaryResponse> for SessionSummary {
             agent_profile_id: value.agent_profile_id,
             agent_name: value.agent_name,
             scheduled_by: value.scheduled_by,
+            schedule: value.schedule.map(|schedule| SessionScheduleSummary {
+                id: schedule.id,
+                mode: schedule.mode,
+                delivery_mode: schedule.delivery_mode,
+                enabled: schedule.enabled,
+                next_fire_at: schedule.next_fire_at,
+                target_session_id: schedule.target_session_id,
+                last_result: schedule.last_result,
+                last_error: schedule.last_error,
+            }),
             model: value.model,
             reasoning_visible: value.reasoning_visible,
             think_level: value.think_level,

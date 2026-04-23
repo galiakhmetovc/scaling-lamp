@@ -5,6 +5,17 @@ pub struct MemoryIndex {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SessionRetentionState {
+    pub session_id: String,
+    pub tier: SessionRetentionTier,
+    pub last_accessed_at: i64,
+    pub archived_at: Option<i64>,
+    pub archive_manifest_path: Option<String>,
+    pub archive_version: Option<u32>,
+    pub updated_at: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WorkingMemory {
     limit: usize,
     notes: Vec<MemoryNote>,
@@ -32,11 +43,57 @@ pub enum MemorySource {
     Derived,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SessionRetentionTier {
+    Active,
+    Warm,
+    Cold,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SessionRetentionTierParseError {
+    value: String,
+}
+
 impl Default for MemoryIndex {
     fn default() -> Self {
         Self::with_working_limit(64)
     }
 }
+
+impl SessionRetentionTier {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Active => "active",
+            Self::Warm => "warm",
+            Self::Cold => "cold",
+        }
+    }
+}
+
+impl TryFrom<&str> for SessionRetentionTier {
+    type Error = SessionRetentionTierParseError;
+
+    fn try_from(value: &str) -> Result<Self, Self::Error> {
+        match value {
+            "active" => Ok(Self::Active),
+            "warm" => Ok(Self::Warm),
+            "cold" => Ok(Self::Cold),
+            _ => Err(SessionRetentionTierParseError {
+                value: value.to_string(),
+            }),
+        }
+    }
+}
+
+impl std::fmt::Display for SessionRetentionTierParseError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "invalid session retention tier: {}", self.value)
+    }
+}
+
+impl std::error::Error for SessionRetentionTierParseError {}
 
 impl MemoryIndex {
     pub fn with_working_limit(limit: usize) -> Self {
@@ -113,7 +170,9 @@ impl MemoryNote {
 
 #[cfg(test)]
 mod tests {
-    use super::{MemoryIndex, MemoryNote, MemorySource};
+    use super::{
+        MemoryIndex, MemoryNote, MemorySource, SessionRetentionTier, SessionRetentionTierParseError,
+    };
 
     #[test]
     fn working_memory_evicts_oldest_note_when_limit_is_reached() {
@@ -168,5 +227,36 @@ mod tests {
         assert_eq!(project[0].topic, "repo-shape");
         assert_eq!(project[0].detail, "prefer modular monolith in Rust");
         assert_eq!(project[0].recorded_at, 11);
+    }
+
+    #[test]
+    fn session_retention_tier_round_trips_through_str() {
+        assert_eq!(SessionRetentionTier::Active.as_str(), "active");
+        assert_eq!(SessionRetentionTier::Warm.as_str(), "warm");
+        assert_eq!(SessionRetentionTier::Cold.as_str(), "cold");
+
+        assert_eq!(
+            SessionRetentionTier::try_from("active").expect("active tier"),
+            SessionRetentionTier::Active
+        );
+        assert_eq!(
+            SessionRetentionTier::try_from("warm").expect("warm tier"),
+            SessionRetentionTier::Warm
+        );
+        assert_eq!(
+            SessionRetentionTier::try_from("cold").expect("cold tier"),
+            SessionRetentionTier::Cold
+        );
+    }
+
+    #[test]
+    fn session_retention_tier_rejects_unknown_value() {
+        let error = SessionRetentionTier::try_from("frozen").expect_err("unknown tier");
+        assert_eq!(
+            error,
+            SessionRetentionTierParseError {
+                value: "frozen".to_string()
+            }
+        );
     }
 }

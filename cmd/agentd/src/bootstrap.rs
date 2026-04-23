@@ -1,15 +1,21 @@
 mod agent_ops;
 mod context_ops;
 mod execution_ops;
+mod mcp_ops;
 mod session_ops;
 
-use crate::{cli, execution, prompting};
+pub use agent_ops::{AgentScheduleCreateOptions, AgentScheduleUpdatePatch, AgentScheduleView};
+pub use mcp_ops::{McpConnectorCreateOptions, McpConnectorUpdatePatch, McpConnectorView};
+pub(crate) use mcp_ops::{render_mcp_connector_view, render_mcp_connectors_view};
+
+use crate::{about::RuntimeReleaseUpdater, cli, execution, mcp::SharedMcpRegistry, prompting};
 use agent_persistence::{
     AgentRepository, AppConfig, ConfigError, ContextSummaryRepository, JobRepository,
     PersistenceScaffold, PersistenceStore, PlanRepository, RecordConversionError, RunRecord,
     RunRepository, SessionRepository, StoreError, TranscriptRepository, recovery,
 };
 use agent_runtime::RuntimeScaffold;
+use agent_runtime::agent::{AgentSchedule, AgentScheduleDeliveryMode, AgentScheduleMode};
 use agent_runtime::context::{ContextSummary, approximate_token_count};
 use agent_runtime::provider::{
     DEFAULT_PROVIDER_MAX_TOOL_ROUNDS, ProviderBuildError, ProviderDriver, ProviderError,
@@ -63,6 +69,8 @@ pub struct App {
     pub persistence: PersistenceScaffold,
     pub runtime: RuntimeScaffold,
     pub processes: SharedProcessRegistry,
+    pub mcp: SharedMcpRegistry,
+    pub(crate) updater: RuntimeReleaseUpdater,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -86,12 +94,55 @@ pub struct SessionTranscriptLine {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SessionScheduleSummary {
+    pub id: String,
+    pub mode: AgentScheduleMode,
+    pub delivery_mode: AgentScheduleDeliveryMode,
+    pub enabled: bool,
+    pub next_fire_at: i64,
+    pub target_session_id: Option<String>,
+    pub last_result: Option<String>,
+    pub last_error: Option<String>,
+}
+
+impl From<AgentSchedule> for SessionScheduleSummary {
+    fn from(value: AgentSchedule) -> Self {
+        Self {
+            id: value.id,
+            mode: value.mode,
+            delivery_mode: value.delivery_mode,
+            enabled: value.enabled,
+            next_fire_at: value.next_fire_at,
+            target_session_id: value.target_session_id,
+            last_result: value.last_result,
+            last_error: value.last_error,
+        }
+    }
+}
+
+pub(crate) fn session_head_schedule_summary(
+    value: &SessionScheduleSummary,
+) -> agent_runtime::prompt::SessionHeadScheduleSummary {
+    agent_runtime::prompt::SessionHeadScheduleSummary {
+        id: value.id.clone(),
+        mode: value.mode,
+        delivery_mode: value.delivery_mode,
+        enabled: value.enabled,
+        next_fire_at: value.next_fire_at,
+        target_session_id: value.target_session_id.clone(),
+        last_result: value.last_result.clone(),
+        last_error: value.last_error.clone(),
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SessionSummary {
     pub id: String,
     pub title: String,
     pub agent_profile_id: String,
     pub agent_name: String,
     pub scheduled_by: Option<String>,
+    pub schedule: Option<SessionScheduleSummary>,
     pub model: Option<String>,
     pub reasoning_visible: bool,
     pub think_level: Option<String>,
@@ -131,6 +182,22 @@ pub struct SessionPendingApproval {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SessionInteragentSummary {
+    pub chain_id: String,
+    pub hop_count: Option<u32>,
+    pub max_hops: Option<u32>,
+    pub state: String,
+    pub origin_session_id: Option<String>,
+    pub origin_agent_id: Option<String>,
+    pub target_agent_id: Option<String>,
+    pub recipient_session_id: Option<String>,
+    pub parent_interagent_session_id: Option<String>,
+    pub parent_session_id: Option<String>,
+    pub delegation_label: Option<String>,
+    pub continuation_grant_pending: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SessionSkillStatus {
     pub name: String,
     pub description: String,
@@ -154,6 +221,7 @@ impl App {
             self.config.permissions.clone(),
             self.runtime.workspace.clone(),
             self.processes.clone(),
+            self.mcp.clone(),
             execution::ExecutionServiceConfig {
                 data_dir: self.config.data_dir.clone(),
                 provider_max_tool_rounds: self
@@ -267,13 +335,82 @@ fn build_session_summaries(
         .map(agent_runtime::mission::JobSpec::try_from)
         .collect::<Result<Vec<_>, _>>()
         .map_err(BootstrapError::RecordConversion)?;
+    let schedules = store
+        .list_agent_schedules()?
+        .into_iter()
+        .map(AgentSchedule::try_from)
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(BootstrapError::RecordConversion)?;
+    let schedules_by_id = schedules
+        .into_iter()
+        .map(|schedule| (schedule.id.clone(), schedule))
+        .collect::<std::collections::HashMap<_, _>>();
 
     sessions
         .into_iter()
         .map(|session| {
-            session_summary_from_session(store, config, &runs, &jobs, &session, workspace)
+            let schedule = session
+                .delegation_label
+                .as_deref()
+                .and_then(|label| label.strip_prefix("agent-schedule:"))
+                .and_then(|schedule_id| schedules_by_id.get(schedule_id))
+                .cloned()
+                .map(SessionScheduleSummary::from);
+            session_summary_from_session(
+                store, config, &runs, &jobs, &schedule, &session, workspace,
+            )
         })
         .collect()
+}
+
+pub(crate) fn build_single_session_summary(
+    store: &PersistenceStore,
+    config: &AppConfig,
+    workspace: &agent_runtime::workspace::WorkspaceRef,
+    session_id: &str,
+) -> Result<SessionSummary, BootstrapError> {
+    let session =
+        agent_runtime::session::Session::try_from(store.get_session(session_id)?.ok_or_else(
+            || BootstrapError::MissingRecord {
+                kind: "session",
+                id: session_id.to_string(),
+            },
+        )?)
+        .map_err(BootstrapError::RecordConversion)?;
+    let runs = store
+        .list_runs()?
+        .into_iter()
+        .map(RunSnapshot::try_from)
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(BootstrapError::RecordConversion)?
+        .into_iter()
+        .filter(|run| run.session_id == session.id)
+        .collect::<Vec<_>>();
+    let jobs = store
+        .list_active_jobs_for_session(&session.id)?
+        .into_iter()
+        .map(agent_runtime::mission::JobSpec::try_from)
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(BootstrapError::RecordConversion)?;
+    let scheduled_by = session
+        .delegation_label
+        .as_deref()
+        .and_then(|label| label.strip_prefix("agent-schedule:"))
+        .map(str::to_string);
+    let schedule = scheduled_by
+        .as_deref()
+        .map(|schedule_id| {
+            store
+                .get_agent_schedule(schedule_id)?
+                .map(AgentSchedule::try_from)
+                .transpose()
+                .map_err(BootstrapError::RecordConversion)
+                .map(|schedule| schedule.map(SessionScheduleSummary::from))
+        })
+        .transpose()?
+        .flatten();
+
+    session_summary_from_session(store, config, &runs, &jobs, &schedule, &session, workspace)
 }
 
 fn session_summary_from_session(
@@ -281,6 +418,7 @@ fn session_summary_from_session(
     config: &AppConfig,
     runs: &[RunSnapshot],
     jobs: &[agent_runtime::mission::JobSpec],
+    schedule: &Option<SessionScheduleSummary>,
     session: &agent_runtime::session::Session,
     workspace: &agent_runtime::workspace::WorkspaceRef,
 ) -> Result<SessionSummary, BootstrapError> {
@@ -290,8 +428,19 @@ fn session_summary_from_session(
         .map(ContextSummary::try_from)
         .transpose()
         .map_err(BootstrapError::RecordConversion)?;
+    let agent_name = store
+        .get_agent_profile(&session.agent_profile_id)?
+        .map(|record| record.name)
+        .unwrap_or_else(|| session.agent_profile_id.clone());
+    let scheduled_by = session
+        .delegation_label
+        .as_deref()
+        .and_then(|label| label.strip_prefix("agent-schedule:"))
+        .map(str::to_string);
     let session_head = prompting::build_session_head(
         session,
+        &agent_name,
+        schedule.as_ref().map(session_head_schedule_summary),
         &transcripts,
         context_summary.as_ref(),
         runs,
@@ -333,21 +482,13 @@ fn session_summary_from_session(
         .max(context_updated_at)
         .max(run_updated_at);
     let latest_usage = latest_provider_usage(runs, &session.id);
-    let agent_name = store
-        .get_agent_profile(&session.agent_profile_id)?
-        .map(|record| record.name)
-        .unwrap_or_else(|| session.agent_profile_id.clone());
-    let scheduled_by = session
-        .delegation_label
-        .as_deref()
-        .and_then(|label| label.strip_prefix("agent-schedule:"))
-        .map(str::to_string);
     Ok(SessionSummary {
         id: session.id.clone(),
         title: session.title.clone(),
         agent_profile_id: session.agent_profile_id.clone(),
         agent_name,
         scheduled_by,
+        schedule: schedule.clone(),
         model: session
             .settings
             .model
@@ -533,8 +674,11 @@ pub fn build_from_config(config: AppConfig) -> Result<App, BootstrapError> {
         persistence,
         runtime: RuntimeScaffold::default(),
         processes: SharedProcessRegistry::default(),
+        mcp: SharedMcpRegistry::default(),
+        updater: RuntimeReleaseUpdater::github_default()?,
     };
     app.ensure_builtin_agents_bootstrapped()?;
+    app.ensure_mcp_connectors_bootstrapped()?;
     Ok(app)
 }
 

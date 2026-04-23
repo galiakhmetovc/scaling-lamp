@@ -6,13 +6,18 @@ use agent_runtime::mission::{
     JobExecutionInput, JobResult, JobSpec, JobStatus, MissionExecutionIntent, MissionSchedule,
     MissionStatus,
 };
+use agent_runtime::tool::{
+    KnowledgeReadInput, KnowledgeReadMode, KnowledgeSearchInput, SessionReadInput, SessionReadMode,
+    SessionSearchInput,
+};
 use agentd::bootstrap;
 use agentd::daemon;
 use agentd::http::types::{
     A2ACallbackTargetRequest, A2ADelegationAcceptedResponse, A2ADelegationCompletionOutcomeRequest,
     A2ADelegationCompletionRequest, A2ADelegationCreateRequest, CreateSessionRequest,
-    DaemonStopResponse, ErrorResponse, SessionBackgroundJobResponse, SessionSummaryResponse,
-    SkillCommandRequest, StatusResponse,
+    DaemonStopResponse, ErrorResponse, McpConnectorCreateRequest, McpConnectorDetailResponse,
+    McpConnectorUpdateRequest, MemoryRenderResponse, SessionBackgroundJobResponse,
+    SessionSummaryResponse, SkillCommandRequest, StatusResponse,
 };
 use reqwest::StatusCode;
 use reqwest::blocking::Client;
@@ -119,6 +124,216 @@ fn daemon_http_can_create_a_session_over_json() {
     assert!(!session.id.is_empty());
 
     handle.stop().expect("stop daemon");
+}
+
+#[test]
+fn daemon_http_can_manage_mcp_connector_lifecycle() {
+    let (_temp, app, base_url) = test_app(Some("secret-token"));
+    let handle = daemon::spawn_for_test(app).expect("spawn daemon");
+    let client = Client::new();
+
+    let created = client
+        .post(format!("{base_url}/v1/mcp/connectors"))
+        .bearer_auth("secret-token")
+        .json(&McpConnectorCreateRequest {
+            id: "filesystem".to_string(),
+            options: bootstrap::McpConnectorCreateOptions {
+                transport: agent_runtime::mcp::McpConnectorTransport::Stdio,
+                command: "npx".to_string(),
+                args: vec![
+                    "-y".to_string(),
+                    "@modelcontextprotocol/server-filesystem".to_string(),
+                    "/workspace".to_string(),
+                ],
+                env: BTreeMap::new(),
+                cwd: None,
+                enabled: false,
+            },
+        })
+        .send()
+        .expect("create mcp connector");
+
+    assert_eq!(created.status(), StatusCode::CREATED);
+    let created: McpConnectorDetailResponse = created.json().expect("created json");
+    assert_eq!(created.connector.id, "filesystem");
+    assert!(!created.connector.enabled);
+    assert_eq!(created.connector.runtime.state.as_str(), "stopped");
+
+    let list = client
+        .get(format!("{base_url}/v1/mcp/connectors"))
+        .bearer_auth("secret-token")
+        .send()
+        .expect("list mcp connectors");
+    assert_eq!(list.status(), StatusCode::OK);
+    let list: Vec<bootstrap::McpConnectorView> = list.json().expect("list json");
+    assert_eq!(list.len(), 1);
+
+    let resolved = client
+        .get(format!("{base_url}/v1/mcp/connectors/filesystem"))
+        .bearer_auth("secret-token")
+        .send()
+        .expect("get mcp connector");
+    assert_eq!(resolved.status(), StatusCode::OK);
+    let resolved: McpConnectorDetailResponse = resolved.json().expect("resolved json");
+    assert_eq!(resolved.connector.command, "npx");
+
+    let updated = client
+        .patch(format!("{base_url}/v1/mcp/connectors/filesystem"))
+        .bearer_auth("secret-token")
+        .json(&McpConnectorUpdateRequest {
+            patch: bootstrap::McpConnectorUpdatePatch {
+                command: Some("uvx".to_string()),
+                args: Some(vec!["mcp-server-filesystem".to_string()]),
+                env: None,
+                cwd: Some(Some("/srv/mcp".to_string())),
+                enabled: Some(false),
+            },
+        })
+        .send()
+        .expect("update mcp connector");
+    assert_eq!(updated.status(), StatusCode::OK);
+    let updated: McpConnectorDetailResponse = updated.json().expect("updated json");
+    assert_eq!(updated.connector.command, "uvx");
+    assert_eq!(updated.connector.cwd.as_deref(), Some("/srv/mcp"));
+    assert_eq!(updated.connector.runtime.state.as_str(), "stopped");
+
+    let restarted = client
+        .post(format!("{base_url}/v1/mcp/connectors/filesystem/restart"))
+        .bearer_auth("secret-token")
+        .json(&())
+        .send()
+        .expect("restart mcp connector");
+    assert_eq!(restarted.status(), StatusCode::OK);
+    let restarted: McpConnectorDetailResponse = restarted.json().expect("restart json");
+    assert_eq!(restarted.connector.runtime.state.as_str(), "stopped");
+
+    let deleted = client
+        .delete(format!("{base_url}/v1/mcp/connectors/filesystem"))
+        .bearer_auth("secret-token")
+        .send()
+        .expect("delete mcp connector");
+    assert_eq!(deleted.status(), StatusCode::OK);
+
+    let missing = client
+        .get(format!("{base_url}/v1/mcp/connectors/filesystem"))
+        .bearer_auth("secret-token")
+        .send()
+        .expect("get missing mcp connector");
+    assert_eq!(missing.status(), StatusCode::NOT_FOUND);
+
+    handle.stop().expect("stop daemon");
+}
+
+#[test]
+fn daemon_http_exposes_memory_render_routes() {
+    let (_temp, app, base_url) = test_app(Some("secret-token"));
+    let knowledge_path = "docs/http-memory-fixture.md";
+    let knowledge_absolute = app.runtime.workspace.root.join(knowledge_path);
+    std::fs::create_dir_all(
+        knowledge_absolute
+            .parent()
+            .expect("fixture parent directory"),
+    )
+    .expect("create fixture dir");
+    std::fs::write(
+        &knowledge_absolute,
+        "# HTTP memory fixture\nmemory foundation fixture\n",
+    )
+    .expect("write knowledge fixture");
+    let session = app
+        .create_session_auto(Some("Memory Search Session"))
+        .expect("create session");
+    let store = PersistenceStore::open(&app.persistence).expect("open store");
+    store
+        .put_transcript(&agent_persistence::TranscriptRecord {
+            id: "memory-msg-1".to_string(),
+            session_id: session.id.clone(),
+            run_id: None,
+            kind: "user".to_string(),
+            content: "offline adet install notes".to_string(),
+            created_at: 2,
+        })
+        .expect("put transcript");
+    let handle = daemon::spawn_for_test(app).expect("spawn daemon");
+    let client = Client::new();
+
+    let session_search = client
+        .post(format!("{base_url}/v1/memory/session-search"))
+        .bearer_auth("secret-token")
+        .json(&SessionSearchInput {
+            query: "offline adet".to_string(),
+            limit: None,
+            offset: Some(0),
+            tiers: None,
+            agent_identifier: None,
+            updated_after: None,
+            updated_before: None,
+        })
+        .send()
+        .expect("session search");
+    assert_eq!(session_search.status(), StatusCode::OK);
+    let session_search: MemoryRenderResponse = session_search.json().expect("memory json");
+    assert!(session_search.memory.contains("Память сессий:"));
+    assert!(session_search.memory.contains(&session.id));
+
+    let session_read = client
+        .post(format!("{base_url}/v1/memory/session-read"))
+        .bearer_auth("secret-token")
+        .json(&SessionReadInput {
+            session_id: session.id.clone(),
+            mode: Some(SessionReadMode::Transcript),
+            cursor: None,
+            max_items: None,
+            max_bytes: None,
+            include_tools: Some(true),
+        })
+        .send()
+        .expect("session read");
+    assert_eq!(session_read.status(), StatusCode::OK);
+    let session_read: MemoryRenderResponse = session_read.json().expect("memory json");
+    assert!(session_read.memory.contains("Память сессии:"));
+    assert!(session_read.memory.contains("offline adet install notes"));
+
+    let knowledge_search = client
+        .post(format!("{base_url}/v1/memory/knowledge-search"))
+        .bearer_auth("secret-token")
+        .json(&KnowledgeSearchInput {
+            query: "memory foundation fixture".to_string(),
+            limit: None,
+            offset: Some(0),
+            kinds: None,
+            roots: None,
+        })
+        .send()
+        .expect("knowledge search");
+    assert_eq!(knowledge_search.status(), StatusCode::OK);
+    let knowledge_search: MemoryRenderResponse = knowledge_search.json().expect("memory json");
+    assert!(knowledge_search.memory.contains("Память знаний:"));
+    assert!(knowledge_search.memory.contains(knowledge_path));
+
+    let knowledge_read = client
+        .post(format!("{base_url}/v1/memory/knowledge-read"))
+        .bearer_auth("secret-token")
+        .json(&KnowledgeReadInput {
+            path: knowledge_path.to_string(),
+            mode: Some(KnowledgeReadMode::Excerpt),
+            cursor: None,
+            max_bytes: None,
+            max_lines: None,
+        })
+        .send()
+        .expect("knowledge read");
+    assert_eq!(knowledge_read.status(), StatusCode::OK);
+    let knowledge_read: MemoryRenderResponse = knowledge_read.json().expect("memory json");
+    assert!(knowledge_read.memory.contains("Файл знаний:"));
+    assert!(
+        knowledge_read
+            .memory
+            .contains(&format!("path={knowledge_path}"))
+    );
+
+    handle.stop().expect("stop daemon");
+    let _ = std::fs::remove_file(knowledge_absolute);
 }
 
 #[test]

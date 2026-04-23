@@ -7,13 +7,18 @@ impl AgentRepository for PersistenceStore {
         validate_identifier(&record.id)?;
         self.connection.execute(
             "INSERT INTO agent_profiles (
-                id, name, template_kind, agent_home, allowed_tools_json, created_at, updated_at
-             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+                id, name, template_kind, agent_home, allowed_tools_json,
+                created_from_template_id, created_by_session_id, created_by_agent_profile_id,
+                created_at, updated_at
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
              ON CONFLICT(id) DO UPDATE SET
                 name = excluded.name,
                 template_kind = excluded.template_kind,
                 agent_home = excluded.agent_home,
                 allowed_tools_json = excluded.allowed_tools_json,
+                created_from_template_id = excluded.created_from_template_id,
+                created_by_session_id = excluded.created_by_session_id,
+                created_by_agent_profile_id = excluded.created_by_agent_profile_id,
                 created_at = excluded.created_at,
                 updated_at = excluded.updated_at",
             params![
@@ -22,6 +27,9 @@ impl AgentRepository for PersistenceStore {
                 record.template_kind,
                 record.agent_home,
                 record.allowed_tools_json,
+                record.created_from_template_id,
+                record.created_by_session_id,
+                record.created_by_agent_profile_id,
                 record.created_at,
                 record.updated_at,
             ],
@@ -32,7 +40,9 @@ impl AgentRepository for PersistenceStore {
     fn get_agent_profile(&self, id: &str) -> Result<Option<AgentProfileRecord>, StoreError> {
         self.connection
             .query_row(
-                "SELECT id, name, template_kind, agent_home, allowed_tools_json, created_at, updated_at
+                "SELECT id, name, template_kind, agent_home, allowed_tools_json,
+                        created_from_template_id, created_by_session_id, created_by_agent_profile_id,
+                        created_at, updated_at
                  FROM agent_profiles
                  WHERE id = ?1",
                 [id],
@@ -43,8 +53,11 @@ impl AgentRepository for PersistenceStore {
                         template_kind: row.get(2)?,
                         agent_home: row.get(3)?,
                         allowed_tools_json: row.get(4)?,
-                        created_at: row.get(5)?,
-                        updated_at: row.get(6)?,
+                        created_from_template_id: row.get(5)?,
+                        created_by_session_id: row.get(6)?,
+                        created_by_agent_profile_id: row.get(7)?,
+                        created_at: row.get(8)?,
+                        updated_at: row.get(9)?,
                     })
                 },
             )
@@ -54,7 +67,9 @@ impl AgentRepository for PersistenceStore {
 
     fn list_agent_profiles(&self) -> Result<Vec<AgentProfileRecord>, StoreError> {
         let mut statement = self.connection.prepare(
-            "SELECT id, name, template_kind, agent_home, allowed_tools_json, created_at, updated_at
+            "SELECT id, name, template_kind, agent_home, allowed_tools_json,
+                    created_from_template_id, created_by_session_id, created_by_agent_profile_id,
+                    created_at, updated_at
              FROM agent_profiles
              ORDER BY created_at ASC, id ASC",
         )?;
@@ -68,8 +83,11 @@ impl AgentRepository for PersistenceStore {
                 template_kind: row.get(2)?,
                 agent_home: row.get(3)?,
                 allowed_tools_json: row.get(4)?,
-                created_at: row.get(5)?,
-                updated_at: row.get(6)?,
+                created_from_template_id: row.get(5)?,
+                created_by_session_id: row.get(6)?,
+                created_by_agent_profile_id: row.get(7)?,
+                created_at: row.get(8)?,
+                updated_at: row.get(9)?,
             });
         }
 
