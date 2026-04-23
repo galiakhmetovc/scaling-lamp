@@ -40,6 +40,119 @@
 - конфиг живёт в `config.toml`, секреты — в `.env`;
 - Telegram surface запускается отдельной командой, а не как часть daemon lifecycle.
 
+## Telegram Platform Constraints
+
+Ниже перечислены ограничения, которые Telegram документирует официально для Bot API и которые нужно принять как реальные product/runtime constraints.
+
+### 1. Message and Caption Sizes
+
+- текст сообщения:
+  - `1-4096` символов после entity parsing;
+- редактируемый текст:
+  - `1-4096` символов после entity parsing;
+- caption у документов/медиа:
+  - `0-1024` символов после entity parsing.
+
+Следствие для дизайна:
+
+- длинные runtime ответы нужно автоматически разбивать на сообщения или отправлять как файл/артефакт;
+- длинные status/error dumps нельзя слать одним сообщением “как есть”;
+- summaries для артефактов/файлов должны быть короткими, а полный контент — через файл или последовательность сообщений.
+
+### 2. Bot Commands
+
+- у одного набора команд максимум `100` команд;
+- `BotCommand.command`:
+  - `1-32` символа;
+  - только строчные английские буквы, цифры и `_`;
+- `BotCommand.description`:
+  - `1-256` символов.
+
+Следствие для дизайна:
+
+- Telegram command registry должен публиковать только компактный операторский слой;
+- нельзя механически выгрузить “весь help TUI” как список Telegram commands;
+- длинные и редкие команды должны оставаться вызываемыми вручную текстом, даже если не все из них попадают в зарегистрированный список команд.
+
+### 3. Long Polling
+
+Для `getUpdates`:
+
+- `limit` принимает значения `1-100`;
+- положительный `timeout` используется для long polling;
+- без offset подтверждаются только уже обработанные обновления, поэтому нужно durable хранение update cursor.
+
+Следствие для дизайна:
+
+- worker должен обрабатывать обновления батчами размером не больше 100;
+- обязательно хранить последний подтверждённый `update_id`;
+- нельзя рассчитывать на “бесконечный backlog за один запрос”.
+
+### 4. File Transfer Limits on Official Cloud Bot API
+
+Для обычного облачного Bot API:
+
+- скачивание через `getFile` работает только для файлов до `20 MB`;
+- multipart upload:
+  - до `10 MB` для photos;
+  - до `50 MB` для других файлов;
+- отправка по URL:
+  - до `5 MB` для photos;
+  - до `20 MB` для других типов контента.
+
+Следствие для дизайна:
+
+- входящий файл больше `20 MB` нельзя считать поддержанным в базовом облачном сценарии, даже если бот получил update с metadata;
+- безопасный baseline для первого релиза:
+  - принимать входящие файлы только до `20 MB`;
+  - отправлять исходящие документы только до `50 MB`;
+- `telegram.max_upload_bytes` и `telegram.max_download_bytes` в конфиге должны валидироваться против этих ceiling’ов по умолчанию;
+- если позже появится поддержка Local Bot API, эти лимиты можно будет расширять отдельно и явно.
+
+### 5. Broadcast and Per-Chat Rate Limits
+
+Из официального Bots FAQ:
+
+- в одном чате не стоит отправлять больше `1 сообщения в секунду`;
+- в группе бот не может отправлять больше `20 сообщений в минуту`;
+- bulk notifications:
+  - примерно `30 сообщений в секунду` бесплатно;
+  - до `1000 сообщений в секунду` только через paid broadcasts, при выполнении условий Telegram.
+
+Следствие для дизайна:
+
+- текущий user requirement “не чаще раза в 30 секунд” для progress updates правильный и должен остаться hard limit;
+- в группе нужно считать не только progress, но и стартовые/финальные/system сообщения;
+- предпочтительная стратегия — редактировать одно status-message вместо отправки новых сообщений, когда это возможно;
+- Telegram surface не должен делать chatty tool-by-tool narration.
+
+### 6. Callback and Button Limits
+
+- `InlineKeyboardButton.callback_data`:
+  - `1-64` байта;
+- callback query после нажатия кнопки должна завершаться вызовом `answerCallbackQuery`, иначе клиент показывает progress bar.
+
+Следствие для дизайна:
+
+- если позже появятся inline-кнопки для approvals/navigation, в callback payload нельзя запихивать большие структурированные данные;
+- нужно использовать короткие opaque identifiers и хранить состояние на сервере;
+- любой callback flow обязан быстро отвечать `answerCallbackQuery`, даже если основная работа идёт асинхронно.
+
+### 7. What Telegram Does Not Document Precisely
+
+Telegram не даёт официальной, полной таблицы лимитов для:
+
+- частоты `editMessageText`;
+- частоты `answerCallbackQuery`;
+- сложных комбинаций send/edit/delete в одном чате;
+- некоторых nuanced anti-spam heuristics.
+
+Следствие для дизайна:
+
+- опираться нужно только на официально документированные send/broadcast limits;
+- для edit-heavy UX не делать агрессивных предположений;
+- worker должен уметь получать `429` и откатываться через backoff/retry policy вместо жёстко прошитых “магических” предположений.
+
 ## Existing Baseline
 
 В системе уже есть каноническая архитектура:
@@ -510,3 +623,20 @@ Telegram state должен жить в `agent-persistence`, а не в отде
 9. Команды бота регистрируются в Telegram.
 10. Telegram state durable и переживает рестарт.
 11. Integration/e2e tests покрывают transport-to-runtime flow.
+
+## Source References
+
+Официальные источники, на которые опирается этот design:
+
+- Telegram Bot API:
+  - https://core.telegram.org/bots/api
+- Bots FAQ:
+  - https://core.telegram.org/bots/faq
+- Bot commands:
+  - https://core.telegram.org/method/bots.setBotCommands
+- Telegram command model:
+  - https://core.telegram.org/api/bots/commands
+- File transfer details:
+  - https://core.telegram.org/bots/api#getfile
+- Local Bot API capabilities:
+  - https://core.telegram.org/bots/features#local-bot-api
