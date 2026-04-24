@@ -8,6 +8,7 @@
 - [`01-system-context.md`](01-system-context.md) — текстовое описание C4 Level 1 System Context и ссылка на view `SystemContext`.
 - [`docs/`](docs/) — Markdown-документация, подключённая в Structurizr local через `!docs docs`.
 - [`teamd-docs/`](teamd-docs/) — Markdown-документация, подключённая к C4-элементу `teamD Runtime` через `!docs teamd-docs`.
+- [`container-docs/`](container-docs/) — Markdown-документация, подключённая к containers внутри `teamD Runtime`.
 
 GitHub не рендерит Structurizr DSL напрямую. Поэтому GitHub используется для чтения текста и просмотра исходной модели, а точные диаграммы смотрятся локально через Structurizr.
 
@@ -22,6 +23,7 @@ GitHub не рендерит Structurizr DSL напрямую. Поэтому Gi
 
 - [`docs/`](docs/) через workspace-level `!docs docs`: общая навигация, карта связей и терминология.
 - [`teamd-docs/`](teamd-docs/) через `!docs teamd-docs` внутри `softwareSystem "teamD Runtime"`: описание конкретной системы.
+- [`container-docs/*`](container-docs/) через `!docs` внутри containers: описание конкретных внутренних частей.
 
 После запуска Structurizr local эти разделы доступны в UI рядом с диаграммами:
 
@@ -31,6 +33,7 @@ GitHub не рендерит Structurizr DSL напрямую. Поэтому Gi
 - `teamd-docs/01-system-context.md` — описание view `SystemContext` с фокусом на `teamD Runtime`.
 - `teamd-docs/02-runtime-boundary.md` — что входит и не входит в границу `teamD Runtime`.
 - `teamd-docs/03-containers.md` — крупные внутренние части `teamD Runtime`.
+- `container-docs/*/01-overview.md` — документация конкретных containers, открываемая через double-click по элементу.
 
 ## Как посмотреть локально
 

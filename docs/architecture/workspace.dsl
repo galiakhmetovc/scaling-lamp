@@ -7,9 +7,15 @@ workspace "teamD" "C4-модель архитектуры локального r
 
         teamd = softwareSystem "teamD Runtime" "Локальная среда для AI-агентов общего назначения: каноническое выполнение, tools, schedules, memory, inter-agent workflows и интерфейсы оператора." {
             !docs teamd-docs
-            surfaces = container "Operator Surfaces" "CLI, TUI, HTTP API и Telegram adapters. Тонкие интерфейсы над одним runtime path." "Rust binary/modules"
-            runtime = container "App / Runtime Core" "Каноническое выполнение chat turns, prompt assembly, provider loop, tools, approvals, schedules и inter-agent routing." "Rust"
-            store = container "Runtime Store" "Persistent state: sessions, transcripts, runs, jobs, plans, schedules, artifacts и audit trail." "SQLite + payload files"
+            surfaces = container "Operator Surfaces" "CLI, TUI, HTTP API и Telegram adapters. Тонкие интерфейсы над одним runtime path." "Rust binary/modules" {
+                !docs container-docs/operator-surfaces
+            }
+            runtime = container "App / Runtime Core" "Каноническое выполнение chat turns, prompt assembly, provider loop, tools, approvals, schedules и inter-agent routing." "Rust" {
+                !docs container-docs/app-runtime-core
+            }
+            store = container "Runtime Store" "Persistent state: sessions, transcripts, runs, jobs, plans, schedules, artifacts и audit trail." "SQLite + payload files" {
+                !docs container-docs/runtime-store
+            }
             tags "System"
         }
 

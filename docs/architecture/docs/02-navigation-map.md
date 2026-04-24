@@ -15,13 +15,18 @@
 | `SystemContext` | `teamD Runtime` | `teamd-docs/01-system-context.md` |
 | `SystemContext` | `teamD Runtime` boundary | `teamd-docs/02-runtime-boundary.md` |
 | `Containers` | `teamD Runtime` internals | `teamd-docs/03-containers.md` |
+| `Containers` | `Operator Surfaces` | `container-docs/operator-surfaces/01-overview.md` |
+| `Containers` | `App / Runtime Core` | `container-docs/app-runtime-core/01-overview.md` |
+| `Containers` | `Runtime Store` | `container-docs/runtime-store/01-overview.md` |
 | Все views | Термины и сущности | `docs/03-terms.md` |
 
 ## Как это выглядит в Structurizr
 
 1. Workspace-level docs объясняют, как устроен набор документов.
 2. View `SystemContext` показывает систему и внешние зависимости.
-3. Docs у `teamD Runtime` объясняют конкретную систему, а не весь workspace.
+3. Double-click по `teamD Runtime` открывает выбор между zoom-in/docs.
+4. View `Containers` показывает внутренние containers.
+5. Double-click по container открывает документацию конкретного container.
 
 ## Что добавлять дальше
 

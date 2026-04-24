@@ -16,12 +16,13 @@ Markdown-разделы подключены в двух местах:
 
 - `docs/` подключена на уровне workspace через `!docs docs`.
 - `teamd-docs/` подключена к `softwareSystem "teamD Runtime"` через `!docs teamd-docs`.
+- `container-docs/*` подключены к конкретным containers через `!docs`.
 
 ## Как читать
 
 1. Откройте view `SystemContext`.
-2. Найдите на диаграмме `teamD Runtime`.
-3. Откройте документацию, привязанную к `teamD Runtime`.
+2. Сделайте double-click по `teamD Runtime`, чтобы перейти к его документации или view `Containers`.
+3. В view `Containers` сделайте double-click по нужному container, чтобы открыть его документацию.
 4. Используйте раздел `Термины и сущности`, чтобы не смешивать бизнес-термины, C4-элементы и программные сущности.
 
 ## Что не является целью этого слоя
