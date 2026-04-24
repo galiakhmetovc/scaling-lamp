@@ -4,10 +4,10 @@
 
 ## Как устроено
 
-- [`workspace.dsl`](workspace.dsl) — Structurizr DSL модель.
-- [`01-system-context.md`](01-system-context.md) — C4 Level 1 System Context, продублированный в Mermaid для GitHub.
+- [`workspace.dsl`](workspace.dsl) — модель Structurizr DSL.
+- [`01-system-context.md`](01-system-context.md) — C4 Level 1 System Context, продублированный в Mermaid C4 для GitHub.
 
-GitHub не рендерит Structurizr DSL напрямую, поэтому Markdown-страницы содержат Mermaid-версии ключевых views. Structurizr DSL остаётся строгой моделью, а Mermaid нужен для просмотра прямо в репозитории.
+GitHub не рендерит Structurizr DSL напрямую, поэтому Markdown-страницы содержат Mermaid C4-версии ключевых представлений. Structurizr DSL остаётся строгой моделью, а Mermaid нужен для просмотра прямо в репозитории.
 
 ## Диаграммы
 
@@ -31,8 +31,8 @@ http://localhost:8080
 
 ## Что уже есть
 
-- Structurizr view `SystemContext`.
-- GitHub-renderable Mermaid page [01-system-context.md](01-system-context.md).
+- Представление Structurizr `SystemContext`.
+- Mermaid C4-страница [01-system-context.md](01-system-context.md), которую GitHub рендерит прямо в Markdown.
 
 ## Как проверять
 
@@ -47,4 +47,4 @@ structurizr inspect -workspace docs/architecture/workspace.dsl -severity error,w
 
 ## Правило поддержки
 
-Текстовая документация в `docs/current` объясняет поведение, `workspace.dsl` хранит C4-модель, а Markdown-страницы в этом каталоге дают GitHub-renderable представление. При изменении границ системы, внешних интеграций или основных runtime-потоков обновляйте все затронутые слои.
+Текстовая документация в `docs/current` объясняет поведение, `workspace.dsl` хранит C4-модель, а Markdown-страницы в этом каталоге дают представление, которое GitHub рендерит прямо в репозитории. При изменении границ системы, внешних интеграций или основных runtime-потоков обновляйте все затронутые слои.

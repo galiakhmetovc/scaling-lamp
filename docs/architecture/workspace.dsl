@@ -1,40 +1,40 @@
-workspace "teamD" "C4 architecture model for the local AI-agent runtime." {
+workspace "teamD" "C4-модель архитектуры локального runtime для AI-агентов." {
     !identifiers hierarchical
 
     model {
-        operator = person "Operator" "A user, developer, or administrator who works with agents, reviews results, approves actions, and manages runtime state."
+        operator = person "Operator" "Пользователь, разработчик или администратор: общается с агентами, читает результаты, подтверждает действия и управляет runtime."
 
-        teamd = softwareSystem "teamD Runtime" "Local general-purpose AI-agent runtime with canonical execution, tools, schedules, memory, inter-agent workflows, and operator surfaces." {
+        teamd = softwareSystem "teamD Runtime" "Локальная среда для AI-агентов общего назначения: каноническое выполнение, tools, schedules, memory, inter-agent workflows и интерфейсы оператора." {
             tags "System"
         }
 
-        llmProvider = softwareSystem "LLM Provider" "External model API used to generate assistant text, reasoning, and structured tool calls." {
+        llmProvider = softwareSystem "LLM Provider" "Внешний API модели: принимает запросы provider и возвращает assistant text, reasoning и structured tool calls." {
             tags "External"
         }
 
-        telegram = softwareSystem "Telegram Bot API" "External Telegram API used for operator chat access, pairing, commands, and outbound notifications." {
+        telegram = softwareSystem "Telegram Bot API" "Внешний API Telegram: доступ оператора к чату, pairing, commands и исходящие notifications." {
             tags "External"
         }
 
-        mcpServers = softwareSystem "MCP Servers" "External or local MCP-compatible servers that expose additional tools, resources, and prompts." {
+        mcpServers = softwareSystem "MCP Servers" "Внешние или локальные MCP-совместимые серверы: дополнительные tools, resources и prompts." {
             tags "External"
         }
 
-        githubReleases = softwareSystem "GitHub Releases" "Release source used by the updater to check and download published agentd binaries." {
+        githubReleases = softwareSystem "GitHub Releases" "Источник release-артефактов для проверки и загрузки опубликованных бинарников agentd." {
             tags "External"
         }
 
-        localHost = softwareSystem "Local Host" "The operator's machine or server: filesystem, OS processes, terminal, workspace, SQLite database, and payload files." {
+        localHost = softwareSystem "Local Host" "Машина или сервер оператора: filesystem, процессы OS, terminal, workspace, SQLite database и payload-файлы." {
             tags "External"
         }
 
-        operator -> teamd "Works with agents through CLI, TUI, Telegram, and HTTP surfaces"
-        teamd -> llmProvider "Sends provider requests and receives text, reasoning, and tool calls"
-        teamd -> telegram "Polls updates, registers commands, sends replies and notifications"
-        teamd -> mcpServers "Discovers and invokes external capabilities"
-        teamd -> githubReleases "Checks and downloads runtime updates"
-        teamd -> localHost "Reads/writes workspace files, runs processes, and stores persistent state"
-        operator -> localHost "Runs agentd, edits configuration, and opens local UI/browser views"
+        operator -> teamd "Работает с агентами через CLI, TUI, Telegram и HTTP"
+        teamd -> llmProvider "Отправляет provider requests и получает текст, reasoning и tool calls"
+        teamd -> telegram "Получает updates, регистрирует commands, отправляет replies и notifications"
+        teamd -> mcpServers "Ищет и вызывает внешние возможности"
+        teamd -> githubReleases "Проверяет и скачивает обновления runtime"
+        teamd -> localHost "Читает и пишет workspace, запускает процессы и хранит состояние"
+        operator -> localHost "Запускает agentd, редактирует config и открывает локальные UI/browser-представления"
     }
 
     views {
@@ -42,7 +42,7 @@ workspace "teamD" "C4 architecture model for the local AI-agent runtime." {
             include *
             autoLayout lr
             title "teamD - System Context"
-            description "Shows teamD as a local AI-agent runtime and the external systems/operators it interacts with."
+            description "Показывает teamD как локальный AI-agent runtime и внешние системы/оператора, с которыми он взаимодействует."
         }
 
         styles {
