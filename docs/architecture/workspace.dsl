@@ -1,74 +1,115 @@
-workspace "teamD" "C4-модель архитектуры локального runtime для AI-агентов." {
+workspace "teamD" "C4-модель архитектуры локальной среды для AI-агентов." {
     !identifiers hierarchical
     !docs docs
 
     model {
-        operator = person "Operator" "Пользователь, разработчик или администратор: общается с агентами, читает результаты, подтверждает действия и управляет runtime."
+        operators = person "Operators" "Люди или внешние automation-участники: работают с агентами, читают результаты, подтверждают действия и управляют runtime."
 
-        teamd = softwareSystem "teamD Runtime" "Локальная среда для AI-агентов общего назначения: каноническое выполнение, tools, schedules, memory, inter-agent workflows и интерфейсы оператора." {
-            !docs teamd-docs
-            surfaces = container "Operator Surfaces" "CLI, TUI, HTTP API и Telegram adapters. Тонкие интерфейсы над одним runtime path." "Rust binary/modules" {
-                !docs container-docs/operator-surfaces
+        agentdClients = softwareSystem "agentd Clients" "CLI, TUI, HTTP clients и Telegram-mediated client flow. Клиенты отправляют команды и показывают состояние, но не исполняют агентскую работу." {
+            !docs system-docs/agentd-clients
+            tags "Client"
+        }
+
+        executionMesh = softwareSystem "teamD Execution Mesh" "Один или несколько execution nodes с agentd, связанных в mesh. Здесь исполняются sessions, jobs, tools, schedules, inter-agent flows и provider calls." {
+            !docs system-docs/execution-mesh
+
+            agentd = container "agentd" "Daemon/runtime process внутри execution node: HTTP API, canonical runtime, provider loop, tools, approvals, schedules, persistence, inter-agent routing." "Rust binary" {
+                !docs container-docs/agentd
             }
-            runtime = container "App / Runtime Core" "Каноническое выполнение chat turns, prompt assembly, provider loop, tools, approvals, schedules и inter-agent routing." "Rust" {
-                !docs container-docs/app-runtime-core
+
+            internalMcp = container "Internal MCP Server" "MCP server, запущенный внутри execution node или управляемый тем же окружением. Даёт agentd локальные tools/resources/prompts." "MCP server" {
+                !docs container-docs/internal-mcp-server
             }
-            store = container "Runtime Store" "Persistent state: sessions, transcripts, runs, jobs, plans, schedules, artifacts и audit trail." "SQLite + payload files" {
-                !docs container-docs/runtime-store
-            }
+
             tags "System"
         }
 
-        llmProvider = softwareSystem "LLM Provider" "Внешний API модели: принимает запросы provider и возвращает assistant text, reasoning и structured tool calls." {
+        llmProviderApis = softwareSystem "LLM Provider APIs" "Внешние API моделей: принимают provider requests и возвращают assistant text, reasoning и structured tool calls." {
             tags "External"
         }
 
-        telegram = softwareSystem "Telegram Bot API" "Внешний API Telegram: доступ оператора к чату, pairing, commands и исходящие notifications." {
-            tags "External"
+        mcpCapabilityProviders = softwareSystem "MCP Capability Providers" "Внешние или внутренние поставщики capabilities: MCP tools, resources и prompts. На deployment view раскладываются на internal/external MCP servers." {
+            !docs system-docs/mcp-capability-providers
+            tags "Capability Boundary"
         }
 
-        mcpServers = softwareSystem "MCP Servers" "Внешние или локальные MCP-совместимые серверы: дополнительные tools, resources и prompts." {
-            tags "External"
+        targetResources = softwareSystem "Target Resources" "Ресурсы, на которые agentd или MCP tools могут воздействовать: workspace, filesystem, OS processes, Git repos, APIs, infrastructure, databases, cloud resources." {
+            !docs system-docs/target-resources
+            tags "Resource Boundary"
         }
 
-        githubReleases = softwareSystem "GitHub Releases" "Источник release-артефактов для проверки и загрузки опубликованных бинарников agentd." {
-            tags "External"
-        }
+        operators -> agentdClients "Работают через CLI, TUI, HTTP или Telegram"
+        agentdClients -> executionMesh "Отправляют команды, сообщения и читают состояние"
+        executionMesh -> llmProviderApis "Отправляет provider requests"
+        executionMesh -> mcpCapabilityProviders "Ищет и вызывает capabilities"
+        executionMesh -> targetResources "Воздействует напрямую через built-in tools"
+        mcpCapabilityProviders -> targetResources "Воздействуют через MCP tools"
 
-        localHost = softwareSystem "Local Host" "Машина или сервер оператора: filesystem, процессы OS, terminal, workspace, SQLite database и payload-файлы." {
-            tags "External"
-        }
+        agentdClients -> executionMesh.agentd "Подключаются к daemon API"
+        executionMesh.agentd -> llmProviderApis "Отправляет provider requests"
+        executionMesh.agentd -> mcpCapabilityProviders "Вызывает MCP capabilities"
+        executionMesh.agentd -> executionMesh.internalMcp "Вызывает локальные MCP tools/resources/prompts"
+        executionMesh.agentd -> targetResources "Читает/пишет workspace, запускает processes, вызывает APIs"
+        executionMesh.internalMcp -> targetResources "Воздействует на локальные или внешние resources"
 
-        operator -> teamd "Работает с агентами через CLI, TUI, Telegram и HTTP"
-        operator -> teamd.surfaces "Работает через CLI, TUI, HTTP и Telegram"
-        teamd.surfaces -> teamd.runtime "Вызывает canonical runtime operations"
-        teamd.runtime -> teamd.store "Читает и пишет persistent state"
-        teamd -> llmProvider "Отправляет provider requests и получает текст, reasoning и tool calls"
-        teamd.runtime -> llmProvider "Отправляет provider requests"
-        teamd -> telegram "Получает updates, регистрирует commands, отправляет replies и notifications"
-        teamd.surfaces -> telegram "Получает updates и отправляет notifications"
-        teamd -> mcpServers "Ищет и вызывает внешние возможности"
-        teamd.runtime -> mcpServers "Ищет и вызывает tools/resources/prompts"
-        teamd -> githubReleases "Проверяет и скачивает обновления runtime"
-        teamd.runtime -> githubReleases "Проверяет и скачивает updates"
-        teamd -> localHost "Читает и пишет workspace, запускает процессы и хранит состояние"
-        teamd.runtime -> localHost "Читает workspace и запускает processes"
-        operator -> localHost "Запускает agentd, редактирует config и открывает локальные UI/browser-представления"
+        production = deploymentEnvironment "Runtime Mesh" {
+            nodeA = deploymentNode "Execution Node A" "Машина или окружение, где запущен agentd daemon и локальное состояние." "Linux/WSL/server" {
+                agentdA = containerInstance executionMesh.agentd
+                internalMcpA = containerInstance executionMesh.internalMcp
+                localResourcesA = infrastructureNode "Local Target Resources A" "Workspace, filesystem, OS processes и локальные tools этого execution node." "Local resources" "Resource Boundary"
+            }
+
+            nodeB = deploymentNode "Execution Node B" "Второй execution node в mesh. Может быть локальным, удалённым или временным." "Linux/WSL/server" {
+                agentdB = containerInstance executionMesh.agentd
+                localResourcesB = infrastructureNode "Local Target Resources B" "Workspace, filesystem, OS processes и локальные tools этого execution node." "Local resources" "Resource Boundary"
+            }
+
+            externalMcp = deploymentNode "External MCP Server" "MCP server вне execution nodes: отдельный сервис, remote tool gateway или shared capability provider." "MCP server" {
+                externalMcpServer = infrastructureNode "External MCP Endpoint" "MCP tools/resources/prompts outside the execution mesh." "MCP"
+            }
+
+            externalResources = deploymentNode "External Target Resources" "Ресурсы вне execution nodes: GitHub, cloud, databases, Kubernetes, external APIs, infrastructure." "External systems" {
+                externalTargets = infrastructureNode "External APIs / Infrastructure" "External resources controlled through built-in tools or MCP tools." "External resources" "Resource Boundary"
+            }
+
+            production.nodeA -> production.nodeB "Mesh: remote delegation, inter-agent routing, future A2A"
+            production.nodeB -> production.nodeA "Mesh: callbacks and reverse delegation"
+            production.nodeA.agentdA -> production.nodeA.localResourcesA "Built-in tools"
+            production.nodeB.agentdB -> production.nodeB.localResourcesB "Built-in tools"
+            production.nodeA.internalMcpA -> production.nodeA.localResourcesA "MCP tools"
+            production.nodeA.agentdA -> production.externalMcp.externalMcpServer "MCP protocol"
+            production.nodeB.agentdB -> production.externalMcp.externalMcpServer "MCP protocol"
+            production.externalMcp.externalMcpServer -> production.externalResources.externalTargets "MCP tools"
+            production.nodeA.agentdA -> production.externalResources.externalTargets "Built-in tools / remote APIs"
+            production.nodeB.agentdB -> production.externalResources.externalTargets "Built-in tools / remote APIs"
+        }
     }
 
     views {
-        systemContext teamd "SystemContext" {
-            include *
+        systemContext executionMesh "SystemContext" {
+            include operators
+            include agentdClients
+            include executionMesh
+            include llmProviderApis
+            include mcpCapabilityProviders
+            include targetResources
             autoLayout lr 320 240
             title "teamD - System Context"
-            description "Показывает teamD как локальный AI-agent runtime и внешние системы/оператора, с которыми он взаимодействует."
+            description "Показывает Operators, agentd Clients, teamD Execution Mesh, LLM Provider APIs, MCP Capability Providers и Target Resources."
         }
 
-        container teamd "Containers" {
+        container executionMesh "Containers" {
             include *
             autoLayout lr 320 240
-            title "teamD Runtime - Containers"
-            description "Показывает крупные внутренние части teamD Runtime и их связи с внешними системами."
+            title "teamD Execution Mesh - Containers"
+            description "Показывает внутренние containers execution mesh: agentd и internal MCP server."
+        }
+
+        deployment executionMesh production "Deployment" {
+            include *
+            autoLayout lr 320 240
+            title "teamD Execution Mesh - Deployment"
+            description "Показывает execution nodes, agentd instances, internal/external MCP и target resources."
         }
 
         styles {
@@ -83,9 +124,30 @@ workspace "teamD" "C4-модель архитектуры локального r
                 color #ffffff
             }
 
+            element "Client" {
+                background #3a6ea5
+                color #ffffff
+            }
+
             element "External" {
                 background #f4d35e
                 color #17202a
+            }
+
+            element "Capability Boundary" {
+                background #f4a261
+                color #17202a
+            }
+
+            element "Resource Boundary" {
+                background #e9ecef
+                color #17202a
+            }
+
+            element "Deployment Node" {
+                background #ffffff
+                color #17202a
+                stroke #697386
             }
 
             relationship "Relationship" {

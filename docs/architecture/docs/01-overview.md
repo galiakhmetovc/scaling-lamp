@@ -4,26 +4,28 @@
 
 На архитектурном уровне система описывается через C4:
 
-- `System Context` показывает `teamD Runtime`, оператора и внешние системы.
-- `Container`-уровень описывает крупные внутренние части `teamD Runtime`: `Operator Surfaces`, `App / Runtime Core`, `Runtime Store`.
-- `Component`-уровень будет использоваться только там, где контейнер становится слишком крупным для понимания.
+- `System Context` показывает `Operators`, `agentd Clients`, `teamD Execution Mesh`, `LLM Provider APIs`, `MCP Capability Providers` и `Target Resources`.
+- `Container`-уровень описывает containers внутри `teamD Execution Mesh`: `agentd`, `Internal MCP Server`.
+- `Deployment`-уровень показывает execution nodes, agentd instances, internal/external MCP и target resources.
+- `Component`-уровень будет использоваться только там, где container становится слишком крупным для понимания.
 
 ## Источник правды
 
 Каноническая архитектурная модель хранится в `workspace.dsl`.
 
-Markdown-разделы подключены в двух местах:
+Markdown-разделы подключены в трёх местах:
 
 - `docs/` подключена на уровне workspace через `!docs docs`.
-- `teamd-docs/` подключена к `softwareSystem "teamD Runtime"` через `!docs teamd-docs`.
+- `system-docs/*` подключены к конкретным software systems через `!docs`.
 - `container-docs/*` подключены к конкретным containers через `!docs`.
 
 ## Как читать
 
 1. Откройте view `SystemContext`.
-2. Сделайте double-click по `teamD Runtime`, чтобы перейти к его документации или view `Containers`.
-3. В view `Containers` сделайте double-click по нужному container, чтобы открыть его документацию.
-4. Используйте раздел `Термины и сущности`, чтобы не смешивать бизнес-термины, C4-элементы и программные сущности.
+2. Сделайте double-click по `teamD Execution Mesh`, чтобы перейти к его документации или к view `Containers`.
+3. Откройте view `Deployment`, чтобы увидеть execution nodes и mesh-связи.
+4. В view `Containers` сделайте double-click по нужному container, чтобы открыть его документацию.
+5. Используйте раздел `Термины и сущности`, чтобы не смешивать бизнес-термины, C4-элементы и программные сущности.
 
 ## Что не является целью этого слоя
 

@@ -7,32 +7,31 @@
 - [`workspace.dsl`](workspace.dsl) — каноническая модель Structurizr DSL.
 - [`01-system-context.md`](01-system-context.md) — текстовое описание C4 Level 1 System Context и ссылка на view `SystemContext`.
 - [`docs/`](docs/) — Markdown-документация, подключённая в Structurizr local через `!docs docs`.
-- [`teamd-docs/`](teamd-docs/) — Markdown-документация, подключённая к C4-элементу `teamD Runtime` через `!docs teamd-docs`.
-- [`container-docs/`](container-docs/) — Markdown-документация, подключённая к containers внутри `teamD Runtime`.
+- [`system-docs/`](system-docs/) — Markdown-документация, подключённая к C4-элементам `teamD Execution Mesh`, `agentd Clients`, `MCP Capability Providers`, `Target Resources`.
+- [`container-docs/`](container-docs/) — Markdown-документация, подключённая к containers внутри `teamD Execution Mesh`.
 
 GitHub не рендерит Structurizr DSL напрямую. Поэтому GitHub используется для чтения текста и просмотра исходной модели, а точные диаграммы смотрятся локально через Structurizr.
 
 ## Диаграммы
 
-1. [System Context](01-system-context.md) — граница `teamD Runtime`, оператор и внешние системы.
-2. `Containers` — внутренние части `teamD Runtime`: `Operator Surfaces`, `App / Runtime Core`, `Runtime Store`.
+1. [System Context](01-system-context.md) — `Operators`, `agentd Clients`, `teamD Execution Mesh`, `LLM Provider APIs`, `MCP Capability Providers`, `Target Resources`.
+2. `Containers` — containers внутри `teamD Execution Mesh`: `agentd`, `Internal MCP Server`.
+3. `Deployment` — execution nodes, agentd instances, internal/external MCP и target resources.
 
 ## Документация внутри Structurizr
 
-`workspace.dsl` подключает два уровня документации:
+`workspace.dsl` подключает несколько уровней документации:
 
 - [`docs/`](docs/) через workspace-level `!docs docs`: общая навигация, карта связей и терминология.
-- [`teamd-docs/`](teamd-docs/) через `!docs teamd-docs` внутри `softwareSystem "teamD Runtime"`: описание конкретной системы.
-- [`container-docs/*`](container-docs/) через `!docs` внутри containers: описание конкретных внутренних частей.
+- [`system-docs/*`](system-docs/) через `!docs` внутри software systems: описание конкретных систем и boundaries.
+- [`container-docs/*`](container-docs/) через `!docs` внутри containers: описание конкретных runtime containers.
 
 После запуска Structurizr local эти разделы доступны в UI рядом с диаграммами:
 
 - `01-overview.md` — как читать архитектурную документацию.
 - `02-navigation-map.md` — как связаны views, C4-элементы и документы.
 - `03-terms.md` — единая терминология: C4-элементы, бизнес-сущности и программные сущности.
-- `teamd-docs/01-system-context.md` — описание view `SystemContext` с фокусом на `teamD Runtime`.
-- `teamd-docs/02-runtime-boundary.md` — что входит и не входит в границу `teamD Runtime`.
-- `teamd-docs/03-containers.md` — крупные внутренние части `teamD Runtime`.
+- `system-docs/*/01-overview.md` — документация конкретных software systems, открываемая через double-click по элементу.
 - `container-docs/*/01-overview.md` — документация конкретных containers, открываемая через double-click по элементу.
 
 ## Как посмотреть локально
@@ -70,9 +69,11 @@ http://localhost:8080
 
 - Представление Structurizr `SystemContext` в [`workspace.dsl`](workspace.dsl).
 - Представление Structurizr `Containers` в [`workspace.dsl`](workspace.dsl).
+- Представление Structurizr `Deployment` в [`workspace.dsl`](workspace.dsl).
 - Текстовое описание System Context в [01-system-context.md](01-system-context.md).
 - Markdown-документация для Structurizr local в [`docs/`](docs/).
-- Markdown-документация `teamD Runtime` в [`teamd-docs/`](teamd-docs/).
+- Markdown-документация systems в [`system-docs/`](system-docs/).
+- Markdown-документация containers в [`container-docs/`](container-docs/).
 
 ## Как проверять
 
@@ -91,4 +92,4 @@ structurizr inspect -workspace docs/architecture/workspace.dsl -severity error,w
 
 ## Правило поддержки
 
-Текстовая документация в `docs/current` объясняет поведение, `workspace.dsl` хранит C4-модель, а Markdown-страницы в этом каталоге объясняют, что именно смотреть в Structurizr. Папка `docs/architecture/docs` импортируется на уровне workspace, а `docs/architecture/teamd-docs` привязана к `teamD Runtime`. При изменении границ системы, внешних интеграций или основных runtime-потоков обновляйте все затронутые слои.
+Текстовая документация в `docs/current` объясняет поведение, `workspace.dsl` хранит C4-модель, а Markdown-страницы в этом каталоге объясняют, что именно смотреть в Structurizr. Папка `docs/architecture/docs` импортируется на уровне workspace, `system-docs/*` привязаны к software systems, а `container-docs/*` привязаны к containers. При изменении границ системы, внешних интеграций или основных runtime-потоков обновляйте все затронутые слои.

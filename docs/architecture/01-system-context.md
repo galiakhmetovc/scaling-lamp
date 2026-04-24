@@ -20,36 +20,35 @@ STRUCTURIZR_PORT=18080 ./docs/architecture/run-local.sh
 
 ## Граница системы
 
-`teamD Runtime` — локальная среда для AI-агентов общего назначения. На этом уровне она считается одной системой: внутренние части (`agentd`, daemon, TUI backend, Telegram worker, persistence, provider loop) будут раскрыты на диаграммах C4 Container и C4 Component.
+`teamD Execution Mesh` — основная система. Это один или несколько execution nodes с `agentd`, которые исполняют агентскую работу и могут образовывать mesh.
 
 ## Люди и внешние системы
 
 | C4-элемент | Название | Роль |
 | --- | --- | --- |
-| Person | `Operator` | Пользователь, разработчик или администратор: общается с агентами, читает результаты, подтверждает действия, управляет runtime. |
-| Software System | `LLM Provider` | Внешний API модели: принимает запросы provider и возвращает текст, reasoning, tool calls. |
-| Software System | `Telegram Bot API` | Внешний API Telegram: long polling, команды, pairing, входящие и исходящие сообщения. |
-| Software System | `MCP Servers` | Внешние или локальные MCP-серверы: дополнительные tools, resources, prompts. |
-| Software System | `GitHub Releases` | Источник release-артефактов для self-update. |
-| Software System | `Local Host` | Машина или сервер оператора: workspace, процессы OS, terminal, SQLite DB, payload-файлы. |
+| Person | `Operators` | Люди или automation-участники: работают с агентами, читают результаты, подтверждают действия. |
+| Software System | `agentd Clients` | CLI, TUI, HTTP clients и Telegram-mediated client flow. Клиенты не исполняют агентскую работу. |
+| Software System | `teamD Execution Mesh` | Execution nodes с `agentd`, где выполняются sessions, jobs, tools, schedules и provider calls. |
+| Software System | `LLM Provider APIs` | Внешние API моделей. |
+| Software System | `MCP Capability Providers` | Internal/external MCP providers, которые дают tools/resources/prompts. |
+| Software System | `Target Resources` | Ресурсы, на которые воздействуют agentd или MCP tools. |
 
 ## Основные связи
 
 | Откуда | Куда | Смысл |
 | --- | --- | --- |
-| `Operator` | `teamD Runtime` | Работает с агентами через CLI, TUI, Telegram и HTTP. |
-| `Operator` | `Local Host` | Запускает `agentd`, редактирует конфиг, открывает локальные представления. |
-| `teamD Runtime` | `LLM Provider` | Отправляет provider requests и получает ответы модели и tool calls. |
-| `teamD Runtime` | `Telegram Bot API` | Получает updates и отправляет replies/notifications. |
-| `teamD Runtime` | `MCP Servers` | Ищет и вызывает внешние возможности. |
-| `teamD Runtime` | `GitHub Releases` | Проверяет и скачивает обновления. |
-| `teamD Runtime` | `Local Host` | Читает и пишет workspace, запускает процессы, хранит состояние. |
+| `Operators` | `agentd Clients` | Работают через CLI, TUI, HTTP или Telegram. |
+| `agentd Clients` | `teamD Execution Mesh` | Отправляют команды, сообщения и читают состояние. |
+| `teamD Execution Mesh` | `LLM Provider APIs` | Отправляет provider requests. |
+| `teamD Execution Mesh` | `MCP Capability Providers` | Ищет и вызывает capabilities. |
+| `teamD Execution Mesh` | `Target Resources` | Воздействует напрямую через built-in tools. |
+| `MCP Capability Providers` | `Target Resources` | Воздействуют через MCP tools. |
 
 ## Что не показано на этом уровне
 
-- Внутренние контейнеры `teamD Runtime`.
-- Модель данных runtime: `Session`, `Run`, `Job`, `Tool`, `Artifact`.
-- Конкретные HTTP endpoints и экраны TUI.
+- Execution nodes и agentd instances внутри mesh.
+- Internal/external MCP placement.
+- Конкретные containers внутри `agentd`.
 - Детальный поток `chat turn`.
 
-Следующий уровень: view `Containers` для `teamD Runtime`.
+Следующие уровни: view `Containers` для `teamD Execution Mesh` и view `Deployment` для execution nodes.

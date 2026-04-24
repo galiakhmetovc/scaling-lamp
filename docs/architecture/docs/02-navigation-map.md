@@ -12,21 +12,23 @@
 
 | View | Главный C4-элемент | Где читать подробности |
 | --- | --- | --- |
-| `SystemContext` | `teamD Runtime` | `teamd-docs/01-system-context.md` |
-| `SystemContext` | `teamD Runtime` boundary | `teamd-docs/02-runtime-boundary.md` |
-| `Containers` | `teamD Runtime` internals | `teamd-docs/03-containers.md` |
-| `Containers` | `Operator Surfaces` | `container-docs/operator-surfaces/01-overview.md` |
-| `Containers` | `App / Runtime Core` | `container-docs/app-runtime-core/01-overview.md` |
-| `Containers` | `Runtime Store` | `container-docs/runtime-store/01-overview.md` |
+| `SystemContext` | `teamD Execution Mesh` | `system-docs/execution-mesh/01-overview.md` |
+| `SystemContext` | `agentd Clients` | `system-docs/agentd-clients/01-overview.md` |
+| `SystemContext` | `MCP Capability Providers` | `system-docs/mcp-capability-providers/01-overview.md` |
+| `SystemContext` | `Target Resources` | `system-docs/target-resources/01-overview.md` |
+| `Containers` | `agentd` | `container-docs/agentd/01-overview.md` |
+| `Containers` | `Internal MCP Server` | `container-docs/internal-mcp-server/01-overview.md` |
+| `Deployment` | execution nodes and mesh | `system-docs/execution-mesh/01-overview.md` |
 | Все views | Термины и сущности | `docs/03-terms.md` |
 
 ## Как это выглядит в Structurizr
 
 1. Workspace-level docs объясняют, как устроен набор документов.
-2. View `SystemContext` показывает систему и внешние зависимости.
-3. Double-click по `teamD Runtime` открывает выбор между zoom-in/docs.
-4. View `Containers` показывает внутренние containers.
+2. View `SystemContext` показывает mesh и внешние boundaries.
+3. Double-click по `teamD Execution Mesh` открывает выбор между zoom-in/docs.
+4. View `Containers` показывает containers внутри mesh.
 5. Double-click по container открывает документацию конкретного container.
+6. View `Deployment` показывает execution nodes, agentd instances и MCP/resource placement.
 
 ## Что добавлять дальше
 

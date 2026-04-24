@@ -1,8 +1,9 @@
 # Термины и сущности
 
-Этот раздел разделяет три слоя терминов:
+Этот раздел разделяет четыре слоя терминов:
 
 - C4-элементы: то, что видно на архитектурных диаграммах.
+- Deployment-термины: где живут процессы и ресурсы.
 - Бизнес-сущности: понятия предметной области для пользователя и оператора.
 - Программные сущности: структуры и компоненты внутри кода.
 
@@ -10,21 +11,28 @@
 
 | Термин | Слой | Значение |
 | --- | --- | --- |
-| `Operator` | Person | Человек, который работает с агентами и управляет runtime. |
-| `teamD Runtime` | Software System | Локальная система, внутри которой выполняются агенты, инструменты, расписания и интеграции. |
-| `LLM Provider` | Software System | Внешний поставщик модели. |
-| `Telegram Bot API` | Software System | Внешняя система доставки сообщений через Telegram. |
-| `MCP Servers` | Software System | Внешние или локальные источники дополнительных tools/resources/prompts. |
-| `GitHub Releases` | Software System | Источник опубликованных release-артефактов. |
-| `Local Host` | Software System | Машина или сервер, где работает `agentd` и хранится локальное состояние. |
+| `Operators` | Person | Люди или automation-участники, которые работают с агентами и управляют runtime. |
+| `agentd Clients` | Software System | Клиенты взаимодействия: CLI, TUI, HTTP clients и Telegram-mediated client flow. |
+| `teamD Execution Mesh` | Software System | Основная система: execution nodes с agentd instances, где выполняется агентская работа. |
+| `LLM Provider APIs` | Software System | Внешние API моделей. |
+| `MCP Capability Providers` | Software System | Internal/external providers, которые дают tools/resources/prompts. |
+| `Target Resources` | Software System | Ресурсы, на которые agentd или MCP tools могут воздействовать. |
 
-## C4 containers внутри `teamD Runtime`
+## C4 containers внутри `teamD Execution Mesh`
 
 | Термин | Значение |
 | --- | --- |
-| `Operator Surfaces` | CLI, TUI, HTTP API и Telegram adapters; тонкие интерфейсы над runtime. |
-| `App / Runtime Core` | Канонический слой выполнения: chat turns, prompt assembly, provider loop, tools, approvals, schedules, inter-agent routing. |
-| `Runtime Store` | Persistent state: SQLite metadata и payload-файлы. |
+| `agentd` | Daemon/runtime process внутри execution node. |
+| `Internal MCP Server` | MCP server внутри execution node или управляемый тем же окружением. |
+
+## Deployment-термины
+
+| Термин | Значение |
+| --- | --- |
+| `Execution Node` | Машина или окружение, где запущен `agentd` и локальное состояние. |
+| `agentd mesh` | Связи между agentd instances: remote delegation, inter-agent routing, future A2A. |
+| `External MCP Server` | MCP server вне execution nodes. |
+| `External Target Resources` | Ресурсы вне execution nodes: GitHub, cloud, DB, Kubernetes, external APIs, infrastructure. |
 
 ## Бизнес-сущности
 
