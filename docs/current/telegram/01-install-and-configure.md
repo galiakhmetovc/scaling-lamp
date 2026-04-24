@@ -12,6 +12,8 @@
 
 Скрипт:
 
+- проверяет native build dependencies;
+- если не хватает `pkg-config`, OpenSSL dev headers или C toolchain, ставит системные пакеты через доступный package manager;
 - проверяет `cargo`/`rustc`;
 - если Rust отсутствует или слишком старый для edition 2024, ставит/обновляет stable Rust через `rustup`;
 - собирает `agentd` в release mode;
@@ -38,6 +40,19 @@ TEAMD_TELEGRAM_BOT_TOKEN='123456789:test-token' \
 
 В этом режиме скрипт завершится ошибкой, если `cargo`/`rustc` отсутствуют или старее минимальной версии.
 
+Если системные build dependencies ставить автоматически нельзя, используйте:
+
+```bash
+./scripts/deploy-teamd.sh --no-install-system-deps
+```
+
+Тогда заранее установите пакеты вручную. Для Ubuntu/Debian минимум:
+
+```bash
+sudo apt-get update
+sudo apt-get install -y pkg-config libssl-dev build-essential ca-certificates curl
+```
+
 Если секреты уже есть в environment, можно запустить без интерактивного ввода:
 
 ```bash
@@ -59,6 +74,7 @@ sudo -u teamd sh -lc 'set -a; . /etc/teamd/teamd.env; set +a; /opt/teamd/bin/age
 Нужны:
 
 - Linux/WSL/server с доступом в интернет;
+- package manager для установки `pkg-config`, OpenSSL dev headers и C toolchain, либо заранее установленные build dependencies;
 - Rust toolchain с `cargo`, либо разрешение скрипту поставить Rust через `rustup`;
 - Telegram bot token от `@BotFather`;
 - LLM provider key;

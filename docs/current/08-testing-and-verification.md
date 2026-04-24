@@ -121,6 +121,8 @@ sh scripts/test-deploy-teamd.sh
 
 Дополнительно smoke-test симулирует старый `cargo 1.75.0`, чтобы проверить bootstrap ветку: deploy script должен предложить установку/обновление stable Rust через `rustup`, потому что проект использует edition 2024.
 
+Ещё один smoke сценарий симулирует failing `pkg-config`, чтобы проверить bootstrap ветку системных build dependencies: deploy script должен предложить установку `pkg-config`, OpenSSL dev headers и C toolchain до `cargo build`.
+
 ## Что проверять руками
 
 Автотесты важны, но для операторского UX полезно иногда прогонять и руками:

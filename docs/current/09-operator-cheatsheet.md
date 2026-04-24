@@ -25,7 +25,7 @@ cargo run -p agentd -- tui
 ./scripts/deploy-teamd.sh
 ```
 
-Скрипт проверит `cargo`/`rustc`, при необходимости поставит или обновит stable Rust через `rustup`, интерактивно спросит Telegram bot token и Z.ai/API key, соберёт release binary, установит `/opt/teamd/bin/agentd`, создаст `/etc/teamd/config.toml`, `/etc/teamd/teamd.env` и два systemd service.
+Скрипт проверит native build dependencies, `cargo` и `rustc`; при необходимости поставит системные build-пакеты и stable Rust через `rustup`; интерактивно спросит Telegram bot token и Z.ai/API key, соберёт release binary, установит `/opt/teamd/bin/agentd`, создаст `/etc/teamd/config.toml`, `/etc/teamd/teamd.env` и два systemd service.
 
 Проверить действия без установки:
 
@@ -39,6 +39,12 @@ TEAMD_TELEGRAM_BOT_TOKEN='123456789:test-token' \
 
 ```bash
 ./scripts/deploy-teamd.sh --no-install-rust
+```
+
+Запретить автоустановку системных build dependencies:
+
+```bash
+./scripts/deploy-teamd.sh --no-install-system-deps
 ```
 
 Минимальный набор:

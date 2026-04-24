@@ -10,6 +10,7 @@ NON_INTERACTIVE=0
 SKIP_BUILD=0
 SKIP_START=0
 INSTALL_RUST=${TEAMD_DEPLOY_INSTALL_RUST:-1}
+INSTALL_SYSTEM_DEPS=${TEAMD_DEPLOY_INSTALL_SYSTEM_DEPS:-1}
 MIN_RUST_VERSION=${TEAMD_DEPLOY_MIN_RUST_VERSION:-1.85.0}
 OVERWRITE_CONFIG=0
 OVERWRITE_ENV=0
@@ -49,6 +50,8 @@ Options:
   --non-interactive   Do not prompt; require secrets from environment.
   --no-build          Do not run cargo build --release -p agentd.
   --no-install-rust   Fail if cargo/rustc are missing instead of installing Rust.
+  --no-install-system-deps
+                      Fail if native build dependencies are missing.
   --no-start          Install files but do not enable/start services.
   --overwrite-config  Replace existing $CONFIG_FILE.
   --overwrite-env     Replace existing $ENV_FILE.
@@ -62,6 +65,8 @@ Environment overrides:
   TEAMD_PROVIDER_API_BASE        Provider API base, default: $PROVIDER_API_BASE.
   TEAMD_PROVIDER_MODEL           Provider model, default: $PROVIDER_MODEL.
   TEAMD_DEPLOY_INSTALL_RUST      Auto-install Rust when missing, default: $INSTALL_RUST.
+  TEAMD_DEPLOY_INSTALL_SYSTEM_DEPS
+                                 Auto-install pkg-config/OpenSSL/build deps, default: $INSTALL_SYSTEM_DEPS.
   TEAMD_DEPLOY_MIN_RUST_VERSION  Minimum cargo/rustc version, default: $MIN_RUST_VERSION.
   TEAMD_DEPLOY_RUSTUP_INIT_URL   rustup installer URL, default: $RUSTUP_INIT_URL.
   TEAMD_DEPLOY_INSTALL_PREFIX    Install prefix, default: $INSTALL_PREFIX.
@@ -172,6 +177,111 @@ read_secret() {
 
 need_command() {
   command -v "$1" >/dev/null 2>&1 || fail "required command not found: $1"
+}
+
+has_c_compiler() {
+  command -v cc >/dev/null 2>&1 ||
+    command -v gcc >/dev/null 2>&1 ||
+    command -v clang >/dev/null 2>&1
+}
+
+openssl_configured_by_env() {
+  [ -n "${OPENSSL_DIR:-}" ] ||
+    { [ -n "${OPENSSL_LIB_DIR:-}" ] && [ -n "${OPENSSL_INCLUDE_DIR:-}" ]; }
+}
+
+system_build_deps_missing_reason() {
+  if ! has_c_compiler; then
+    printf 'C compiler not found'
+    return 0
+  fi
+
+  if openssl_configured_by_env; then
+    return 1
+  fi
+
+  if ! command -v pkg-config >/dev/null 2>&1; then
+    printf 'pkg-config not found'
+    return 0
+  fi
+
+  if ! pkg-config --exists openssl >/dev/null 2>&1; then
+    printf 'OpenSSL development package not found via pkg-config'
+    return 0
+  fi
+
+  return 1
+}
+
+detect_package_manager() {
+  if command -v apt-get >/dev/null 2>&1; then
+    printf 'apt'
+  elif command -v dnf >/dev/null 2>&1; then
+    printf 'dnf'
+  elif command -v yum >/dev/null 2>&1; then
+    printf 'yum'
+  elif command -v apk >/dev/null 2>&1; then
+    printf 'apk'
+  elif command -v pacman >/dev/null 2>&1; then
+    printf 'pacman'
+  elif command -v zypper >/dev/null 2>&1; then
+    printf 'zypper'
+  else
+    return 1
+  fi
+}
+
+install_system_build_deps() {
+  reason=$1
+
+  if [ "$INSTALL_SYSTEM_DEPS" != "1" ]; then
+    fail "$reason; install pkg-config, OpenSSL development headers and a C compiler, or remove --no-install-system-deps"
+  fi
+
+  manager=$(detect_package_manager || true)
+  [ -n "$manager" ] || fail "$reason; supported package manager not found. Install pkg-config, OpenSSL development headers and a C compiler manually"
+
+  printf '%s. Installing system build dependencies with %s.\n' "$reason" "$manager"
+
+  case "$manager" in
+    apt)
+      run_root env DEBIAN_FRONTEND=noninteractive apt-get update
+      run_root env DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+        pkg-config libssl-dev build-essential ca-certificates curl
+      ;;
+    dnf)
+      run_root dnf install -y pkgconf-pkg-config openssl-devel gcc gcc-c++ make ca-certificates curl
+      ;;
+    yum)
+      run_root yum install -y pkgconfig openssl-devel gcc gcc-c++ make ca-certificates curl
+      ;;
+    apk)
+      run_root apk add --no-cache pkgconfig openssl-dev build-base ca-certificates curl
+      ;;
+    pacman)
+      run_root pacman -Sy --noconfirm --needed pkgconf openssl base-devel ca-certificates curl
+      ;;
+    zypper)
+      run_root zypper --non-interactive install pkg-config libopenssl-devel gcc gcc-c++ make ca-certificates curl
+      ;;
+    *) fail "unsupported package manager: $manager" ;;
+  esac
+}
+
+ensure_system_build_deps() {
+  [ "$SKIP_BUILD" -eq 0 ] || return 0
+
+  reason=$(system_build_deps_missing_reason || true)
+  if [ -z "$reason" ]; then
+    return 0
+  fi
+
+  install_system_build_deps "$reason"
+
+  if [ "$DRY_RUN" -eq 0 ]; then
+    reason=$(system_build_deps_missing_reason || true)
+    [ -z "$reason" ] || fail "system build dependencies are still missing after install: $reason"
+  fi
 }
 
 find_in_path_or_cargo_home() {
@@ -301,6 +411,7 @@ while [ "$#" -gt 0 ]; do
     --non-interactive) NON_INTERACTIVE=1 ;;
     --no-build) SKIP_BUILD=1 ;;
     --no-install-rust) INSTALL_RUST=0 ;;
+    --no-install-system-deps) INSTALL_SYSTEM_DEPS=0 ;;
     --no-start) SKIP_START=1 ;;
     --overwrite-config) OVERWRITE_CONFIG=1 ;;
     --overwrite-env) OVERWRITE_ENV=1 ;;
@@ -331,6 +442,7 @@ if [ "$DRY_RUN" -eq 0 ]; then
   need_command mktemp
 fi
 
+ensure_system_build_deps
 ensure_rust_toolchain
 
 if [ "$SKIP_BUILD" -eq 0 ]; then

@@ -87,4 +87,23 @@ set -e
 [ "$no_install_status" -ne 0 ] || fail "expected --no-install-rust to fail with old cargo"
 assert_contains "$no_install_output" "install Rust >= 1.85.0"
 
+deps_bin="$existing_env_dir/deps-bin"
+mkdir -p "$deps_bin"
+cat > "$deps_bin/pkg-config" <<'EOF'
+#!/bin/sh
+exit 1
+EOF
+chmod +x "$deps_bin/pkg-config"
+
+deps_output=$(
+  PATH="$deps_bin:/usr/bin:/bin" \
+    TEAMD_TELEGRAM_BOT_TOKEN='123456789:test-token' \
+    TEAMD_PROVIDER_API_KEY='zai-test-key' \
+    "$DEPLOY_SCRIPT" --dry-run --non-interactive --no-start 2>&1
+)
+
+assert_contains "$deps_output" "OpenSSL development package not found via pkg-config"
+assert_contains "$deps_output" "Installing system build dependencies"
+assert_contains "$deps_output" "pkg-config"
+
 printf 'ok deploy-teamd smoke\n'
