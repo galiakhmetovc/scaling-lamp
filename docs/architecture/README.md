@@ -4,10 +4,11 @@
 
 ## Как устроено
 
-- [`workspace.dsl`](workspace.dsl) — модель Structurizr DSL.
-- [`01-system-context.md`](01-system-context.md) — C4 Level 1 System Context, продублированный в Mermaid C4 для GitHub.
+- [`workspace.dsl`](workspace.dsl) — каноническая модель Structurizr DSL.
+- [`01-system-context.md`](01-system-context.md) — C4 Level 1 System Context для чтения в GitHub.
+- [`assets/system-context.svg`](assets/system-context.svg) — SVG-представление System Context с ручным orthogonal routing.
 
-GitHub не рендерит Structurizr DSL напрямую, поэтому Markdown-страницы содержат Mermaid C4-версии ключевых представлений. Structurizr DSL остаётся строгой моделью, а Mermaid нужен для просмотра прямо в репозитории.
+GitHub не рендерит Structurizr DSL напрямую, поэтому Markdown-страницы содержат версии ключевых представлений, которые можно читать прямо в GitHub. Structurizr DSL остаётся строгой моделью, а SVG нужен для аккуратного просмотра прямо в репозитории без локальных рендереров.
 
 ## Диаграммы
 
@@ -32,7 +33,7 @@ http://localhost:8080
 ## Что уже есть
 
 - Представление Structurizr `SystemContext`.
-- Mermaid C4-страница [01-system-context.md](01-system-context.md), которую GitHub рендерит прямо в Markdown.
+- SVG-страница [01-system-context.md](01-system-context.md), которую GitHub рендерит прямо в Markdown.
 
 ## Как проверять
 
@@ -47,4 +48,4 @@ structurizr inspect -workspace docs/architecture/workspace.dsl -severity error,w
 
 ## Правило поддержки
 
-Текстовая документация в `docs/current` объясняет поведение, `workspace.dsl` хранит C4-модель, а Markdown-страницы в этом каталоге дают представление, которое GitHub рендерит прямо в репозитории. При изменении границ системы, внешних интеграций или основных runtime-потоков обновляйте все затронутые слои.
+Текстовая документация в `docs/current` объясняет поведение, `workspace.dsl` хранит C4-модель, а Markdown/SVG-страницы в этом каталоге дают представление, которое GitHub рендерит прямо в репозитории. При изменении границ системы, внешних интеграций или основных runtime-потоков обновляйте все затронутые слои.

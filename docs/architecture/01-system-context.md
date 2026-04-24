@@ -2,36 +2,11 @@
 
 Источник модели: [`workspace.dsl`](workspace.dsl), представление `SystemContext`.
 
-Эта страница дублирует System Context из Structurizr DSL в Mermaid C4, потому что GitHub рендерит Mermaid прямо в Markdown без локальных рендереров.
+Эта страница дублирует System Context из Structurizr DSL в SVG, потому что GitHub показывает SVG прямо в Markdown без локальных рендереров.
 
-В Mermaid C4 расположение элементов задаётся порядком объявления и `UpdateLayoutConfig`, поэтому блоки ниже объявлены по строкам: оператор, целевая система и локальная машина; затем внешние API; затем источник обновлений.
+SVG здесь — только GitHub-представление. Каноническая C4-модель остаётся в [`workspace.dsl`](workspace.dsl). SVG выбран для этого уровня, потому что Mermaid C4 не гарантирует orthogonal routing и может проводить линии через соседние блоки.
 
-```mermaid
-C4Context
-  title teamD Runtime - System Context
-
-  Person(operator, "Operator", "Пользователь, разработчик или администратор")
-
-  System(teamd, "teamD Runtime", "Локальный runtime для AI-агентов общего назначения")
-
-  System_Ext(localHost, "Local Host", "Workspace, процессы OS, terminal, SQLite DB, payload-файлы")
-
-  System_Ext(llmProvider, "LLM Provider", "Внешний API модели")
-  System_Ext(telegram, "Telegram Bot API", "Long polling, команды, pairing, уведомления")
-  System_Ext(mcpServers, "MCP Servers", "Дополнительные tools, resources и prompts")
-
-  System_Ext(githubReleases, "GitHub Releases", "Источник release-артефактов для self-update.")
-
-  Rel_R(operator, teamd, "Работает через CLI, TUI, Telegram и HTTP")
-  Rel_R(operator, localHost, "Запускает agentd и редактирует config")
-  Rel_D(teamd, llmProvider, "Provider requests")
-  Rel_D(teamd, telegram, "Updates, replies, notifications")
-  Rel_D(teamd, mcpServers, "Внешние возможности")
-  Rel_D(teamd, githubReleases, "Обновления runtime")
-  Rel_R(teamd, localHost, "Workspace, процессы, состояние")
-
-  UpdateLayoutConfig($c4ShapeInRow="3", $c4BoundaryInRow="1")
-```
+![C4 System Context для teamD Runtime](assets/system-context.svg)
 
 ## Граница системы
 
