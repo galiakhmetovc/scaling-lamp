@@ -52,4 +52,4 @@ STRUCTURIZR_PORT=18080 ./docs/architecture/run-local.sh
 - Конкретные HTTP endpoints и экраны TUI.
 - Детальный поток `chat turn`.
 
-Следующий уровень: C4 Container diagram для `teamD Runtime`.
+Следующий уровень: view `Containers` для `teamD Runtime`.

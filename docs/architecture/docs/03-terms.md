@@ -18,6 +18,14 @@
 | `GitHub Releases` | Software System | Источник опубликованных release-артефактов. |
 | `Local Host` | Software System | Машина или сервер, где работает `agentd` и хранится локальное состояние. |
 
+## C4 containers внутри `teamD Runtime`
+
+| Термин | Значение |
+| --- | --- |
+| `Operator Surfaces` | CLI, TUI, HTTP API и Telegram adapters; тонкие интерфейсы над runtime. |
+| `App / Runtime Core` | Канонический слой выполнения: chat turns, prompt assembly, provider loop, tools, approvals, schedules, inter-agent routing. |
+| `Runtime Store` | Persistent state: SQLite metadata и payload-файлы. |
+
 ## Бизнес-сущности
 
 | Термин | Значение |

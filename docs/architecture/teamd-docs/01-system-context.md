@@ -1,6 +1,8 @@
-# System Context
+# teamD Runtime: System Context
 
-Источник модели: `workspace.dsl`, view `SystemContext`.
+Связанное представление: `SystemContext`.
+
+Связанный C4-элемент: `teamD Runtime`.
 
 `SystemContext` показывает `teamD Runtime` как одну систему и фиксирует её связи с оператором и внешними системами.
 
