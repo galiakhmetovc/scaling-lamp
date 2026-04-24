@@ -2,11 +2,15 @@
 
 Источник модели: [`workspace.dsl`](workspace.dsl), представление `SystemContext`.
 
-Эта страница дублирует System Context из Structurizr DSL в SVG, потому что GitHub показывает SVG прямо в Markdown без локальных рендереров.
+Эта страница описывает System Context, который задан в Structurizr DSL.
 
-SVG здесь — только GitHub-представление. Каноническая C4-модель остаётся в [`workspace.dsl`](workspace.dsl). SVG выбран для этого уровня, потому что Mermaid C4 не гарантирует orthogonal routing и может проводить линии через соседние блоки.
+Точная диаграмма не дублируется в Markdown. Смотрите view `SystemContext` локально через Structurizr, чтобы не поддерживать вторую ручную картинку рядом с канонической моделью.
 
-![C4 System Context для teamD Runtime](assets/system-context.svg)
+```bash
+./docs/architecture/run-local.sh
+```
+
+После запуска открыть `http://localhost:8080` и выбрать view `SystemContext`.
 
 ## Граница системы
 
