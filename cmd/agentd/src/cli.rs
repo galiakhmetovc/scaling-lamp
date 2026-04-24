@@ -57,6 +57,7 @@ enum Command {
         id: String,
         limit: Option<usize>,
         offset: usize,
+        format: SessionToolsFormat,
     },
     ChatSend {
         session_id: String,
@@ -137,6 +138,12 @@ struct ProcessInvocation {
     command: Command,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SessionToolsFormat {
+    Human,
+    Raw,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum ChatSendOutcome {
     Completed {
@@ -174,9 +181,12 @@ where
         Command::ProviderSmoke { prompt } => render::run_provider_smoke(app, &prompt),
         Command::ChatShow { session_id } => render::show_chat(app, &session_id),
         Command::SessionTranscript { id } => render::show_chat(app, &id),
-        Command::SessionTools { id, limit, offset } => {
-            render::show_session_tools(&app.store()?, &id, limit, offset)
-        }
+        Command::SessionTools {
+            id,
+            limit,
+            offset,
+            format,
+        } => render::show_session_tools(&app.store()?, &id, limit, offset, format),
         Command::ChatSend {
             session_id,
             message,

@@ -232,10 +232,18 @@ agentd session tools <session_id> --limit 50 --offset 0
 
 `session tools` рендерит ledger вызовов tools по сессии. Он нужен для аудита и улучшения инструкций агентам: видно, какой tool был запрошен, с какими аргументами, в каком run, чем закончился вызов и была ли ошибка. Полные большие результаты tool’ов по-прежнему должны уходить в artifacts/offloads, а не в этот ledger.
 
-`session tools` постраничный: по умолчанию показывает до 50 записей, а в заголовке печатает `total`, `showing`, `limit`, `offset` и `next_offset`. Следующую страницу можно запросить так:
+`session tools` постраничный: по умолчанию показывает до 50 записей, а в заголовке печатает `total`, `showing`, `limit`, `offset` и `next_offset`. Обычный вывод рассчитан на человека: вызовы сгруппированы по `run`, каждый вызов имеет номер, ISO-время вызова, `summary`, pretty-printed `args`, `status` и `error`.
+
+Следующую страницу можно запросить так:
 
 ```bash
 agentd session tools <session_id> --limit 50 --offset <next_offset>
+```
+
+Для машинного аудита, `grep` и старых скриптов есть однострочный формат:
+
+```bash
+agentd session tools <session_id> --raw --limit 50 --offset 0
 ```
 
 Для production-like systemd:
@@ -244,6 +252,7 @@ agentd session tools <session_id> --limit 50 --offset <next_offset>
 teamdctl session list
 teamdctl session transcript <session_id>
 teamdctl session tools <session_id> --limit 50 --offset 0
+teamdctl session tools <session_id> --raw --limit 50 --offset 0
 ```
 
 ## Version/build identity

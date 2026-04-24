@@ -1,4 +1,5 @@
 use super::*;
+use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 
 const DEFAULT_SESSION_TOOL_PAGE_LIMIT: usize = 50;
 
@@ -114,6 +115,7 @@ pub(super) fn show_session_tools(
     session_id: &str,
     limit: Option<usize>,
     offset: usize,
+    format: SessionToolsFormat,
 ) -> Result<String, BootstrapError> {
     if store.get_session(session_id)?.is_none() {
         return Err(BootstrapError::MissingRecord {
@@ -124,13 +126,6 @@ pub(super) fn show_session_tools(
 
     let calls = store.list_tool_calls_for_session(session_id)?;
     let total = calls.len();
-    if calls.is_empty() {
-        return Ok(format!(
-            "session tools session_id={} total=0 showing=0-0 next_offset=<none>\n<empty>",
-            session_id
-        ));
-    }
-
     let limit = limit.unwrap_or(DEFAULT_SESSION_TOOL_PAGE_LIMIT);
     let page_start = offset.min(total);
     let page_end = page_start.saturating_add(limit).min(total);
@@ -144,16 +139,61 @@ pub(super) fn show_session_tools(
     } else {
         "<none>".to_string()
     };
-    let header = format!(
-        "session tools session_id={} total={} showing={} limit={} offset={} next_offset={}",
-        session_id, total, showing, limit, offset, next_offset
-    );
+    let page = SessionToolsPage {
+        session_id,
+        total,
+        showing,
+        limit,
+        offset,
+        next_offset,
+    };
 
     if page_start == page_end {
-        return Ok(format!("{header}\n<empty-page>"));
+        return Ok(render_empty_session_tools(&page, format));
     }
 
-    let lines = calls[page_start..page_end]
+    let page_calls = &calls[page_start..page_end];
+    Ok(match format {
+        SessionToolsFormat::Human => render_human_session_tools(&page, page_calls),
+        SessionToolsFormat::Raw => render_raw_session_tools(&page, page_calls),
+    })
+}
+
+struct SessionToolsPage<'a> {
+    session_id: &'a str,
+    total: usize,
+    showing: String,
+    limit: usize,
+    offset: usize,
+    next_offset: String,
+}
+
+fn render_empty_session_tools(page: &SessionToolsPage<'_>, format: SessionToolsFormat) -> String {
+    match format {
+        SessionToolsFormat::Human => format!(
+            "Session tools\nsession: {}\ntotal: {} | showing: {} | limit: {} | offset: {} | next_offset: {}\n\n<empty>",
+            page.session_id, page.total, page.showing, page.limit, page.offset, page.next_offset
+        ),
+        SessionToolsFormat::Raw if page.total == 0 => format!(
+            "session tools session_id={} total=0 showing=0-0 next_offset=<none>\n<empty>",
+            page.session_id
+        ),
+        SessionToolsFormat::Raw => format!(
+            "session tools session_id={} total={} showing={} limit={} offset={} next_offset={}\n<empty-page>",
+            page.session_id, page.total, page.showing, page.limit, page.offset, page.next_offset
+        ),
+    }
+}
+
+fn render_raw_session_tools(
+    page: &SessionToolsPage<'_>,
+    calls: &[agent_persistence::ToolCallRecord],
+) -> String {
+    let header = format!(
+        "session tools session_id={} total={} showing={} limit={} offset={} next_offset={}",
+        page.session_id, page.total, page.showing, page.limit, page.offset, page.next_offset
+    );
+    let lines = calls
         .iter()
         .map(|call| {
             let error = call.error.as_deref().unwrap_or("<none>");
@@ -173,7 +213,85 @@ pub(super) fn show_session_tools(
         })
         .collect::<Vec<_>>()
         .join("\n");
-    Ok(format!("{header}\n{lines}"))
+    format!("{header}\n{lines}")
+}
+
+fn render_human_session_tools(
+    page: &SessionToolsPage<'_>,
+    calls: &[agent_persistence::ToolCallRecord],
+) -> String {
+    let mut lines = vec![
+        "Session tools".to_string(),
+        format!("session: {}", page.session_id),
+        format!(
+            "total: {} | showing: {} | limit: {} | offset: {} | next_offset: {}",
+            page.total, page.showing, page.limit, page.offset, page.next_offset
+        ),
+    ];
+
+    let mut current_run_id: Option<&str> = None;
+    for (index, call) in calls.iter().enumerate() {
+        if current_run_id != Some(call.run_id.as_str()) {
+            lines.push(String::new());
+            lines.push(format!("Run {}", call.run_id));
+            current_run_id = Some(call.run_id.as_str());
+        }
+
+        lines.push(format!(
+            "  {}. {} [{}]",
+            page.offset + index + 1,
+            call.tool_name,
+            call.status
+        ));
+        lines.push(format!(
+            "     requested: {}",
+            format_unix_timestamp(call.requested_at)
+        ));
+        lines.push(format!(
+            "     updated: {}",
+            format_unix_timestamp(call.updated_at)
+        ));
+        lines.push(format!("     summary: {}", call.summary));
+        lines.push(format!(
+            "     provider_call_id: {}",
+            call.provider_tool_call_id
+        ));
+        lines.push(format!("     tool_call_id: {}", call.id));
+        lines.push("     args:".to_string());
+        lines.extend(indent_lines(
+            &pretty_json_or_raw(&call.arguments_json),
+            "       ",
+        ));
+        lines.push(format!(
+            "     error: {}",
+            call.error.as_deref().unwrap_or("<none>")
+        ));
+    }
+
+    lines.join("\n")
+}
+
+fn pretty_json_or_raw(raw: &str) -> String {
+    serde_json::from_str::<serde_json::Value>(raw)
+        .and_then(|value| serde_json::to_string_pretty(&value))
+        .unwrap_or_else(|_| raw.to_string())
+}
+
+fn indent_lines(text: &str, indent: &str) -> Vec<String> {
+    if text.is_empty() {
+        return vec![indent.to_string()];
+    }
+    text.lines().map(|line| format!("{indent}{line}")).collect()
+}
+
+fn format_unix_timestamp(epoch_seconds: i64) -> String {
+    match OffsetDateTime::from_unix_timestamp(epoch_seconds) {
+        Ok(datetime) => match datetime.format(&Rfc3339) {
+            Ok(formatted) => format!("{formatted} ({epoch_seconds})"),
+            Err(_) => epoch_seconds.to_string(),
+        },
+        Err(_) => epoch_seconds.to_string(),
+    }
 }
 
 pub(super) fn send_chat(

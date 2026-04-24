@@ -629,7 +629,10 @@ teamdctl telegram logs
 teamdctl session list
 teamdctl session transcript <session_id>
 teamdctl session tools <session_id> --limit 50 --offset 0
+teamdctl session tools <session_id> --raw --limit 50 --offset 0
 ```
+
+Обычный `session tools` выводит читаемый отчёт по tool calls. `--raw` нужен только для однострочного машинного формата.
 
 Типовые проблемы:
 

@@ -46,9 +46,12 @@ pub(super) fn execute_command(app: &App, command: Command) -> Result<String, Boo
         Command::ProviderSmoke { prompt } => render::run_provider_smoke(app, &prompt),
         Command::ChatShow { session_id } => render::show_chat(app, &session_id),
         Command::SessionTranscript { id } => render::show_chat(app, &id),
-        Command::SessionTools { id, limit, offset } => {
-            render::show_session_tools(&app.store()?, &id, limit, offset)
-        }
+        Command::SessionTools {
+            id,
+            limit,
+            offset,
+            format,
+        } => render::show_session_tools(&app.store()?, &id, limit, offset, format),
         Command::ChatSend {
             session_id,
             message,

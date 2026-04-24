@@ -21,6 +21,7 @@ Examples:
   $PROGRAM telegram pair tg...
   $PROGRAM session list
   $PROGRAM session tools <session_id> --limit 50 --offset 0
+  $PROGRAM session tools <session_id> --raw --limit 50 --offset 0
   $PROGRAM daemon restart
   $PROGRAM telegram logs
 EOF

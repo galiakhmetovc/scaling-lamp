@@ -196,9 +196,27 @@ fn parse_log_lines(raw: &str) -> Result<usize, BootstrapError> {
 fn parse_session_tools_command(id: &str, args: &[String]) -> Result<Command, BootstrapError> {
     let mut limit = None;
     let mut offset = 0;
+    let mut format = SessionToolsFormat::Human;
     let mut index = 0;
     while index < args.len() {
         match args[index].as_str() {
+            "--raw" => {
+                format = SessionToolsFormat::Raw;
+                index += 1;
+            }
+            "--human" => {
+                format = SessionToolsFormat::Human;
+                index += 1;
+            }
+            "--format" => {
+                let Some(value) = args.get(index + 1) else {
+                    return Err(BootstrapError::Usage {
+                        reason: "session tools --format requires a value".to_string(),
+                    });
+                };
+                format = parse_session_tools_format(value)?;
+                index += 2;
+            }
             "--limit" => {
                 let Some(value) = args.get(index + 1) else {
                     return Err(BootstrapError::Usage {
@@ -229,7 +247,18 @@ fn parse_session_tools_command(id: &str, args: &[String]) -> Result<Command, Boo
         id: id.to_string(),
         limit,
         offset,
+        format,
     })
+}
+
+fn parse_session_tools_format(raw: &str) -> Result<SessionToolsFormat, BootstrapError> {
+    match raw {
+        "human" | "человек" => Ok(SessionToolsFormat::Human),
+        "raw" | "line" | "lines" | "сырой" => Ok(SessionToolsFormat::Raw),
+        other => Err(BootstrapError::Usage {
+            reason: format!("unsupported session tools format {other}; expected human|raw"),
+        }),
+    }
 }
 
 fn parse_positive_usize(raw: &str, label: &str) -> Result<usize, BootstrapError> {

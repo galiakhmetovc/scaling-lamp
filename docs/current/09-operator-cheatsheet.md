@@ -190,7 +190,10 @@ agentd session list
 agentd sessions
 agentd session transcript <session_id>
 agentd session tools <session_id> --limit 50 --offset 0
+agentd session tools <session_id> --raw --limit 50 --offset 0
 ```
+
+`session tools` без `--raw` показывает человекочитаемый отчёт. `--raw` оставлен для grep, diff и внешних скриптов.
 
 Для systemd-установки:
 
@@ -198,6 +201,7 @@ agentd session tools <session_id> --limit 50 --offset 0
 teamdctl session list
 teamdctl session transcript <session_id>
 teamdctl session tools <session_id> --limit 50 --offset 0
+teamdctl session tools <session_id> --raw --limit 50 --offset 0
 ```
 
 ## Открыть TUI
