@@ -12,6 +12,8 @@
 
 Скрипт:
 
+- проверяет `cargo`/`rustc`;
+- если Rust отсутствует или слишком старый для edition 2024, ставит/обновляет stable Rust через `rustup`;
 - собирает `agentd` в release mode;
 - ставит binary в `/opt/teamd/bin/agentd`;
 - создаёт пользователя `teamd`;
@@ -27,6 +29,14 @@ TEAMD_TELEGRAM_BOT_TOKEN='123456789:test-token' \
   TEAMD_PROVIDER_API_KEY='zai-test-key' \
   ./scripts/deploy-teamd.sh --dry-run --non-interactive --no-build --no-start
 ```
+
+Если Rust ставить автоматически нельзя, используйте:
+
+```bash
+./scripts/deploy-teamd.sh --no-install-rust
+```
+
+В этом режиме скрипт завершится ошибкой, если `cargo`/`rustc` отсутствуют или старее минимальной версии.
 
 Если секреты уже есть в environment, можно запустить без интерактивного ввода:
 
@@ -49,7 +59,7 @@ sudo -u teamd sh -lc 'set -a; . /etc/teamd/teamd.env; set +a; /opt/teamd/bin/age
 Нужны:
 
 - Linux/WSL/server с доступом в интернет;
-- Rust toolchain с `cargo`;
+- Rust toolchain с `cargo`, либо разрешение скрипту поставить Rust через `rustup`;
 - Telegram bot token от `@BotFather`;
 - LLM provider key;
 - доступ к GitHub-репозиторию `galiakhmetovc/scaling-lamp`.

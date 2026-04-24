@@ -47,4 +47,44 @@ existing_env_output=$(
 assert_contains "$existing_env_output" "Keeping existing environment file"
 assert_contains "$existing_env_output" "teamd-telegram.service"
 
+fake_bin="$existing_env_dir/fake-bin"
+fake_cargo_home="$existing_env_dir/fake-cargo-home"
+fake_rustup_home="$existing_env_dir/fake-rustup-home"
+mkdir -p "$fake_bin" "$fake_cargo_home" "$fake_rustup_home"
+cat > "$fake_bin/cargo" <<'EOF'
+#!/bin/sh
+echo 'cargo 1.75.0 (fake)'
+EOF
+cat > "$fake_bin/rustc" <<'EOF'
+#!/bin/sh
+echo 'rustc 1.75.0 (fake)'
+EOF
+chmod +x "$fake_bin/cargo" "$fake_bin/rustc"
+
+old_rust_output=$(
+  PATH="$fake_bin:/usr/bin:/bin" \
+    CARGO_HOME="$fake_cargo_home" \
+    RUSTUP_HOME="$fake_rustup_home" \
+    TEAMD_TELEGRAM_BOT_TOKEN='123456789:test-token' \
+    TEAMD_PROVIDER_API_KEY='zai-test-key' \
+    "$DEPLOY_SCRIPT" --dry-run --non-interactive --no-start 2>&1
+)
+
+assert_contains "$old_rust_output" "cargo 1.75.0 is too old"
+assert_contains "$old_rust_output" "sh.rustup.rs"
+assert_contains "$old_rust_output" "build --release -p agentd"
+
+set +e
+no_install_output=$(
+  PATH="$fake_bin:/usr/bin:/bin" \
+    CARGO_HOME="$fake_cargo_home" \
+    RUSTUP_HOME="$fake_rustup_home" \
+    "$DEPLOY_SCRIPT" --dry-run --non-interactive --no-install-rust --no-start 2>&1
+)
+no_install_status=$?
+set -e
+
+[ "$no_install_status" -ne 0 ] || fail "expected --no-install-rust to fail with old cargo"
+assert_contains "$no_install_output" "install Rust >= 1.85.0"
+
 printf 'ok deploy-teamd smoke\n'

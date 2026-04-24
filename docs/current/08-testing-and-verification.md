@@ -119,6 +119,8 @@ sh scripts/test-deploy-teamd.sh
 
 `test-deploy-teamd.sh` запускает `deploy-teamd.sh --help` и dry-run с fake secrets. Он не пишет в `/etc`, не вызывает real systemd start и нужен как быстрый guard для операторского install path.
 
+Дополнительно smoke-test симулирует старый `cargo 1.75.0`, чтобы проверить bootstrap ветку: deploy script должен предложить установку/обновление stable Rust через `rustup`, потому что проект использует edition 2024.
+
 ## Что проверять руками
 
 Автотесты важны, но для операторского UX полезно иногда прогонять и руками:

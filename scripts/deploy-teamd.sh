@@ -9,6 +9,8 @@ DRY_RUN=0
 NON_INTERACTIVE=0
 SKIP_BUILD=0
 SKIP_START=0
+INSTALL_RUST=${TEAMD_DEPLOY_INSTALL_RUST:-1}
+MIN_RUST_VERSION=${TEAMD_DEPLOY_MIN_RUST_VERSION:-1.85.0}
 OVERWRITE_CONFIG=0
 OVERWRITE_ENV=0
 ASSUME_YES=${TEAMD_DEPLOY_ASSUME_YES:-0}
@@ -29,8 +31,12 @@ PROVIDER_API_BASE=${TEAMD_PROVIDER_API_BASE:-https://api.z.ai/api/coding/paas/v4
 PROVIDER_MODEL=${TEAMD_PROVIDER_MODEL:-glm-5-turbo}
 TELEGRAM_TOKEN=${TEAMD_TELEGRAM_BOT_TOKEN:-}
 PROVIDER_KEY=${TEAMD_PROVIDER_API_KEY:-}
+CARGO_HOME=${CARGO_HOME:-$HOME/.cargo}
+RUSTUP_HOME=${RUSTUP_HOME:-$HOME/.rustup}
+RUSTUP_INIT_URL=${TEAMD_DEPLOY_RUSTUP_INIT_URL:-https://sh.rustup.rs}
 CONFIG_PARENT=$(dirname "$CONFIG_FILE")
 ENV_PARENT=$(dirname "$ENV_FILE")
+CARGO_BIN=
 
 usage() {
   cat <<EOF
@@ -42,6 +48,7 @@ Options:
   --dry-run           Print actions without changing the system.
   --non-interactive   Do not prompt; require secrets from environment.
   --no-build          Do not run cargo build --release -p agentd.
+  --no-install-rust   Fail if cargo/rustc are missing instead of installing Rust.
   --no-start          Install files but do not enable/start services.
   --overwrite-config  Replace existing $CONFIG_FILE.
   --overwrite-env     Replace existing $ENV_FILE.
@@ -54,6 +61,9 @@ Environment overrides:
   TEAMD_PROVIDER_KIND            Provider kind, default: $PROVIDER_KIND.
   TEAMD_PROVIDER_API_BASE        Provider API base, default: $PROVIDER_API_BASE.
   TEAMD_PROVIDER_MODEL           Provider model, default: $PROVIDER_MODEL.
+  TEAMD_DEPLOY_INSTALL_RUST      Auto-install Rust when missing, default: $INSTALL_RUST.
+  TEAMD_DEPLOY_MIN_RUST_VERSION  Minimum cargo/rustc version, default: $MIN_RUST_VERSION.
+  TEAMD_DEPLOY_RUSTUP_INIT_URL   rustup installer URL, default: $RUSTUP_INIT_URL.
   TEAMD_DEPLOY_INSTALL_PREFIX    Install prefix, default: $INSTALL_PREFIX.
   TEAMD_DEPLOY_CONFIG_FILE       Config path, default: $CONFIG_FILE.
   TEAMD_DEPLOY_ENV_FILE          Environment file, default: $ENV_FILE.
@@ -164,11 +174,133 @@ need_command() {
   command -v "$1" >/dev/null 2>&1 || fail "required command not found: $1"
 }
 
+find_in_path_or_cargo_home() {
+  name=$1
+  candidate="$CARGO_HOME/bin/$name"
+  if [ -x "$candidate" ]; then
+    printf '%s\n' "$candidate"
+    return 0
+  fi
+
+  if command -v "$name" >/dev/null 2>&1; then
+    command -v "$name"
+    return 0
+  fi
+
+  return 1
+}
+
+tool_version() {
+  tool_path=$1
+  "$tool_path" --version 2>/dev/null | sed 's/^[^ ]* //; s/ .*//; s/[^0-9.].*$//'
+}
+
+version_at_least() {
+  current=$1
+  minimum=$2
+
+  old_ifs=$IFS
+  IFS=.
+  set -- $current
+  current_major=${1:-0}
+  current_minor=${2:-0}
+  current_patch=${3:-0}
+  set -- $minimum
+  minimum_major=${1:-0}
+  minimum_minor=${2:-0}
+  minimum_patch=${3:-0}
+  IFS=$old_ifs
+
+  [ "$current_major" -gt "$minimum_major" ] && return 0
+  [ "$current_major" -lt "$minimum_major" ] && return 1
+  [ "$current_minor" -gt "$minimum_minor" ] && return 0
+  [ "$current_minor" -lt "$minimum_minor" ] && return 1
+  [ "$current_patch" -ge "$minimum_patch" ]
+}
+
+install_rust_toolchain() {
+  reason=$1
+  if [ "$INSTALL_RUST" != "1" ]; then
+    fail "$reason; install Rust >= $MIN_RUST_VERSION or remove --no-install-rust"
+  fi
+
+  printf '%s Installing/updating stable Rust with rustup.\n' "$reason"
+  export CARGO_HOME RUSTUP_HOME
+
+  rustup_path=$(find_in_path_or_cargo_home rustup || true)
+  if [ -n "$rustup_path" ]; then
+    run_cmd "$rustup_path" toolchain install stable --profile minimal
+    PATH="$CARGO_HOME/bin:$PATH"
+    export PATH CARGO_HOME RUSTUP_HOME
+    return 0
+  fi
+
+  if command -v curl >/dev/null 2>&1; then
+    run_cmd sh -c "curl --proto '=https' --tlsv1.2 -sSf $(quote_arg "$RUSTUP_INIT_URL") | sh -s -- -y --profile minimal"
+  elif command -v wget >/dev/null 2>&1; then
+    run_cmd sh -c "wget -qO- $(quote_arg "$RUSTUP_INIT_URL") | sh -s -- -y --profile minimal"
+  else
+    fail "curl or wget is required to install Rust with rustup"
+  fi
+
+  PATH="$CARGO_HOME/bin:$PATH"
+  export PATH CARGO_HOME RUSTUP_HOME
+}
+
+ensure_rust_toolchain() {
+  [ "$SKIP_BUILD" -eq 0 ] || return 0
+
+  cargo_path=$(find_in_path_or_cargo_home cargo || true)
+  rustc_path=$(find_in_path_or_cargo_home rustc || true)
+  installed_rust=0
+
+  if [ -z "$cargo_path" ] || [ -z "$rustc_path" ]; then
+    install_rust_toolchain "cargo/rustc not found."
+    installed_rust=1
+  else
+    cargo_version=$(tool_version "$cargo_path")
+    rustc_version=$(tool_version "$rustc_path")
+    if [ -z "$cargo_version" ]; then
+      install_rust_toolchain "cannot determine cargo version at $cargo_path."
+      installed_rust=1
+    elif [ -z "$rustc_version" ]; then
+      install_rust_toolchain "cannot determine rustc version at $rustc_path."
+      installed_rust=1
+    elif ! version_at_least "$cargo_version" "$MIN_RUST_VERSION"; then
+      install_rust_toolchain "cargo $cargo_version is too old; need >= $MIN_RUST_VERSION."
+      installed_rust=1
+    elif ! version_at_least "$rustc_version" "$MIN_RUST_VERSION"; then
+      install_rust_toolchain "rustc $rustc_version is too old; need >= $MIN_RUST_VERSION."
+      installed_rust=1
+    fi
+  fi
+
+  if [ "$DRY_RUN" -eq 1 ] && [ "$installed_rust" -eq 1 ]; then
+    cargo_path="$CARGO_HOME/bin/cargo"
+    rustc_path="$CARGO_HOME/bin/rustc"
+  else
+    cargo_path=$(find_in_path_or_cargo_home cargo || true)
+    rustc_path=$(find_in_path_or_cargo_home rustc || true)
+  fi
+
+  if [ "$DRY_RUN" -eq 1 ]; then
+    [ -n "$cargo_path" ] || cargo_path="$CARGO_HOME/bin/cargo"
+    [ -n "$rustc_path" ] || rustc_path="$CARGO_HOME/bin/rustc"
+  fi
+
+  [ -n "$cargo_path" ] || fail "cargo was not found after Rust installation"
+  [ -n "$rustc_path" ] || fail "rustc was not found after Rust installation"
+
+  CARGO_BIN=$cargo_path
+  printf 'Using cargo: %s\n' "$CARGO_BIN"
+}
+
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --dry-run) DRY_RUN=1 ;;
     --non-interactive) NON_INTERACTIVE=1 ;;
     --no-build) SKIP_BUILD=1 ;;
+    --no-install-rust) INSTALL_RUST=0 ;;
     --no-start) SKIP_START=1 ;;
     --overwrite-config) OVERWRITE_CONFIG=1 ;;
     --overwrite-env) OVERWRITE_ENV=1 ;;
@@ -191,10 +323,6 @@ need_command sed
 need_command id
 need_command getent
 
-if [ "$SKIP_BUILD" -eq 0 ]; then
-  need_command cargo
-fi
-
 if [ "$(id -u)" -ne 0 ] && [ "$DRY_RUN" -eq 0 ]; then
   need_command sudo
 fi
@@ -203,8 +331,10 @@ if [ "$DRY_RUN" -eq 0 ]; then
   need_command mktemp
 fi
 
+ensure_rust_toolchain
+
 if [ "$SKIP_BUILD" -eq 0 ]; then
-  run_cmd sh -c "cd $(quote_arg "$REPO_ROOT") && cargo build --release -p agentd"
+  run_cmd sh -c "cd $(quote_arg "$REPO_ROOT") && $(quote_arg "$CARGO_BIN") build --release -p agentd"
 fi
 
 BINARY="$REPO_ROOT/target/release/agentd"
