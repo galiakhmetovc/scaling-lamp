@@ -36,6 +36,7 @@ assert_contains "$dry_run_output" "teamd-telegram.service"
 assert_contains "$dry_run_output" "/usr/local/bin/agentd"
 assert_contains "$dry_run_output" "/usr/local/bin/teamdctl"
 assert_contains "$dry_run_output" "telegram pair"
+assert_contains "$dry_run_output" "session list"
 
 existing_env_dir="$SCRIPT_DIR/../target/deploy-script-test"
 existing_env="$existing_env_dir/existing.env"

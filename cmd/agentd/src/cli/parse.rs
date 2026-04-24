@@ -88,6 +88,13 @@ impl Command {
                     title,
                 })
             }
+            [command] if command == "sessions" || command == "сессии" => Ok(Self::SessionList),
+            [scope, action]
+                if (scope == "session" || scope == "сессия")
+                    && (action == "list" || action == "список") =>
+            {
+                Ok(Self::SessionList)
+            }
             [scope, action, id] if scope == "session" && action == "show" => {
                 Ok(Self::SessionShow { id: id.clone() })
             }
@@ -175,7 +182,7 @@ impl Command {
                 })
             }
             _ => Err(BootstrapError::Usage {
-                reason: "expected one of: status | logs [max_lines] | version | update [tag] | tui | telegram run|pair|pairings | daemon | daemon stop | provider smoke | chat show/send/repl | mission create/show/tick | session create/show/transcript/tools/skills/enable-skill/disable-skill | run show | job show/execute | approval list/approve | delegate list | verification show".to_string(),
+                reason: "expected one of: status | logs [max_lines] | version | update [tag] | tui | telegram run|pair|pairings | daemon | daemon stop | provider smoke | chat show/send/repl | mission create/show/tick | sessions | session create/list/show/transcript/tools/skills/enable-skill/disable-skill | run show | job show/execute | approval list/approve | delegate list | verification show".to_string(),
             }),
         }
     }

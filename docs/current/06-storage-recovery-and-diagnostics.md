@@ -217,12 +217,16 @@ teamdctl logs 200
 
 ## Чтение сессий и tool calls
 
-Для оператора есть две CLI-команды поверх того же store:
+Для оператора есть CLI-команды поверх того же store:
 
 ```bash
+agentd session list
+agentd sessions
 agentd session transcript <session_id>
 agentd session tools <session_id> --limit 50 --offset 0
 ```
+
+`session list` показывает список sessions: `session_id`, title, agent profile, message count, `updated_at`, pending approval flag, background job counts и последний preview. Alias `sessions` делает то же самое.
 
 `session transcript` рендерит transcript view сессии. Это удобнее, чем вручную смотреть payload-файлы в `transcripts/<session_id>/`, потому команда берёт порядок, роли и связи из SQLite.
 
@@ -237,6 +241,7 @@ agentd session tools <session_id> --limit 50 --offset <next_offset>
 Для production-like systemd:
 
 ```bash
+teamdctl session list
 teamdctl session transcript <session_id>
 teamdctl session tools <session_id> --limit 50 --offset 0
 ```

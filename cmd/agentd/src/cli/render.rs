@@ -70,6 +70,45 @@ pub(super) fn show_chat_via_client(
     Ok(rendered)
 }
 
+pub(super) fn show_session_list(sessions: &[SessionSummary]) -> Result<String, BootstrapError> {
+    if sessions.is_empty() {
+        return Ok("sessions total=0\n<empty>".to_string());
+    }
+
+    let lines = sessions
+        .iter()
+        .map(|session| {
+            let pending = if session.has_pending_approval {
+                "yes"
+            } else {
+                "no"
+            };
+            let preview = session
+                .last_message_preview
+                .as_deref()
+                .unwrap_or("<none>")
+                .replace('\n', " ");
+            format!(
+                "session id={} title={} agent={} ({}) messages={} updated_at={} pending_approval={} background={} running={} queued={} preview={}",
+                session.id,
+                session.title,
+                session.agent_name,
+                session.agent_profile_id,
+                session.message_count,
+                session.updated_at,
+                pending,
+                session.background_job_count,
+                session.running_background_job_count,
+                session.queued_background_job_count,
+                preview
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    Ok(format!("sessions total={}\n{lines}", sessions.len()))
+}
+
 pub(super) fn show_session_tools(
     store: &PersistenceStore,
     session_id: &str,

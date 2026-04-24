@@ -3,7 +3,7 @@ mod process;
 mod render;
 mod repl;
 
-use crate::bootstrap::{App, BootstrapError};
+use crate::bootstrap::{App, BootstrapError, SessionSummary};
 use crate::daemon;
 use crate::execution::{ChatExecutionEvent, ExecutionError, ToolExecutionStatus};
 use crate::help::QUICK_HELP_LINE;
@@ -83,6 +83,7 @@ enum Command {
         id: String,
         title: String,
     },
+    SessionList,
     SessionShow {
         id: String,
     },
@@ -199,6 +200,7 @@ where
         }),
         Command::MissionTick { now } => render::run_mission_tick(app, now),
         Command::SessionCreate { id, title } => render::create_session(&app.store()?, &id, &title),
+        Command::SessionList => render::show_session_list(&app.list_session_summaries()?),
         Command::SessionShow { id } => render::show_session(&app.store()?, &id),
         Command::SessionSkills { id } => app.render_session_skills(&id),
         Command::SessionEnableSkill { id, skill_name } => {

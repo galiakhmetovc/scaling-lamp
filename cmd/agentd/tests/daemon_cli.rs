@@ -160,6 +160,18 @@ fn process_cli_can_create_and_show_sessions_over_remote_daemon() {
     let create_output = String::from_utf8(create_output).expect("utf8");
     assert!(create_output.contains("created session session-remote"));
 
+    let mut list_output = Vec::new();
+    cli::execute_process_with_io(
+        &app,
+        ["--host", "127.0.0.1", "--port", &port, "session", "list"],
+        &mut Cursor::new(Vec::<u8>::new()),
+        &mut list_output,
+    )
+    .expect("remote list sessions");
+    let list_output = String::from_utf8(list_output).expect("utf8");
+    assert!(list_output.contains("sessions total=1"));
+    assert!(list_output.contains("session id=session-remote"));
+
     let mut show_output = Vec::new();
     cli::execute_process_with_io(
         &app,

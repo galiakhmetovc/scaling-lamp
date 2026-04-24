@@ -648,6 +648,7 @@ Deployment commands:
     teamdctl provider smoke
 
   Session audit:
+    teamdctl session list
     teamdctl session transcript <session_id>
     teamdctl session tools <session_id> --limit 50 --offset 0
 

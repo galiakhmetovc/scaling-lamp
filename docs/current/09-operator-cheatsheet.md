@@ -183,9 +183,11 @@ teamdctl logs 200
 
 `agentd logs` читает `audit/runtime.jsonl`. Это diagnostic log процесса, не transcript агента.
 
-## Прочитать session и tool-call ledger
+## Список sessions, transcript и tool-call ledger
 
 ```bash
+agentd session list
+agentd sessions
 agentd session transcript <session_id>
 agentd session tools <session_id> --limit 50 --offset 0
 ```
@@ -193,6 +195,7 @@ agentd session tools <session_id> --limit 50 --offset 0
 Для systemd-установки:
 
 ```bash
+teamdctl session list
 teamdctl session transcript <session_id>
 teamdctl session tools <session_id> --limit 50 --offset 0
 ```

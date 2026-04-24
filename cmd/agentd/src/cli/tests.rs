@@ -34,6 +34,28 @@ fn process_cli_accepts_telegram_commands() {
 }
 
 #[test]
+fn process_cli_accepts_session_list_commands() {
+    let session_list =
+        super::ProcessInvocation::parse(["session", "list"]).expect("parse session list");
+    let sessions = super::ProcessInvocation::parse(["sessions"]).expect("parse sessions alias");
+    let russian_sessions =
+        super::ProcessInvocation::parse(["сессии"]).expect("parse russian sessions alias");
+    let russian_session_list =
+        super::ProcessInvocation::parse(["сессия", "список"]).expect("parse russian session list");
+
+    assert!(matches!(session_list.command, super::Command::SessionList));
+    assert!(matches!(sessions.command, super::Command::SessionList));
+    assert!(matches!(
+        russian_sessions.command,
+        super::Command::SessionList
+    ));
+    assert!(matches!(
+        russian_session_list.command,
+        super::Command::SessionList
+    ));
+}
+
+#[test]
 fn process_cli_accepts_session_transcript_and_tool_commands() {
     let transcript = super::ProcessInvocation::parse(["session", "transcript", "session-1"])
         .expect("parse transcript");
@@ -74,6 +96,28 @@ fn process_cli_accepts_session_transcript_and_tool_commands() {
         russian_tools.command,
         super::Command::SessionTools { ref id, limit: None, offset: 0 } if id == "session-1"
     ));
+}
+
+#[test]
+fn execute_renders_session_list() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let app = crate::bootstrap::build_from_config(agent_persistence::AppConfig {
+        data_dir: temp.path().join("state-root"),
+        ..agent_persistence::AppConfig::default()
+    })
+    .expect("build app");
+
+    super::execute(&app, ["session", "create", "session-1", "Alpha"]).expect("create alpha");
+    super::execute(&app, ["session", "create", "session-2", "Beta"]).expect("create beta");
+
+    let rendered = super::execute(&app, ["session", "list"]).expect("render session list");
+
+    assert!(rendered.contains("sessions total=2"));
+    assert!(rendered.contains("session id=session-1 title=Alpha"));
+    assert!(rendered.contains("session id=session-2 title=Beta"));
+    assert!(rendered.contains("agent=Ассистент (default)"));
+    assert!(rendered.contains("messages=0"));
+    assert!(rendered.contains("updated_at="));
 }
 
 #[test]

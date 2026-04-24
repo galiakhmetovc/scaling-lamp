@@ -623,9 +623,10 @@ teamdctl daemon logs
 teamdctl telegram logs
 ```
 
-Прочитать конкретную session и вызовы tools:
+Получить список sessions, прочитать transcript и вызовы tools:
 
 ```bash
+teamdctl session list
 teamdctl session transcript <session_id>
 teamdctl session tools <session_id> --limit 50 --offset 0
 ```
