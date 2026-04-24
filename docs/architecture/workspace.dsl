@@ -83,6 +83,32 @@ workspace "teamD" "C4-модель архитектуры локальной с�
             production.nodeA.agentdA -> production.externalResources.externalTargets "Built-in tools / remote APIs"
             production.nodeB.agentdB -> production.externalResources.externalTargets "Built-in tools / remote APIs"
         }
+
+        telegramRuntime = deploymentEnvironment "Telegram Runtime" {
+            operatorDevice = deploymentNode "Operator Device" "Устройство оператора с Telegram client." "Phone/Desktop" {
+                telegramClient = infrastructureNode "Telegram Client" "Мобильный или desktop Telegram client оператора." "Telegram client" "Client"
+            }
+
+            telegramCloud = deploymentNode "Telegram Cloud" "Внешняя инфраструктура Telegram." "Telegram" {
+                telegramBotApi = infrastructureNode "Telegram Bot API" "Bot API endpoint: long polling, commands, pairing keys, replies and notifications." "Telegram Bot API" "External"
+            }
+
+            executionNode = deploymentNode "Execution Node" "Машина или окружение, где запущен agentd daemon с Telegram long polling." "Linux/WSL/server" {
+                agentdTelegram = containerInstance executionMesh.agentd
+                localState = infrastructureNode "Local State" "SQLite metadata, payload files, config and .env for this node." "SQLite + files" "Resource Boundary"
+                localResources = infrastructureNode "Local Target Resources" "Workspace, filesystem, OS processes and local tools." "Local resources" "Resource Boundary"
+            }
+
+            llmCloud = deploymentNode "LLM Provider" "Внешний provider API, который обслуживает agent turns." "External API" {
+                llmEndpoint = infrastructureNode "LLM Provider API" "Model endpoint for assistant text, reasoning and tool calls." "HTTPS API" "External"
+            }
+
+            telegramRuntime.operatorDevice.telegramClient -> telegramRuntime.telegramCloud.telegramBotApi "Messages and commands"
+            telegramRuntime.telegramCloud.telegramBotApi -> telegramRuntime.executionNode.agentdTelegram "Updates via long polling; replies use Bot API"
+            telegramRuntime.executionNode.agentdTelegram -> telegramRuntime.executionNode.localState "Stores sessions, jobs, schedules, artifacts"
+            telegramRuntime.executionNode.agentdTelegram -> telegramRuntime.executionNode.localResources "Built-in tools"
+            telegramRuntime.executionNode.agentdTelegram -> telegramRuntime.llmCloud.llmEndpoint "Provider requests"
+        }
     }
 
     views {
@@ -110,6 +136,13 @@ workspace "teamD" "C4-модель архитектуры локальной с�
             autoLayout lr 320 240
             title "teamD Execution Mesh - Deployment"
             description "Показывает execution nodes, agentd instances, internal/external MCP и target resources."
+        }
+
+        deployment executionMesh telegramRuntime "TelegramDeployment" {
+            include *
+            autoLayout lr 320 240
+            title "teamD Telegram Runtime - Deployment"
+            description "Показывает практический deployment для работы оператора через Telegram: client, Bot API, один execution node с agentd, local state/resources и LLM provider."
         }
 
         styles {

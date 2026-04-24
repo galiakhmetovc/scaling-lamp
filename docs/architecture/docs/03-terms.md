@@ -38,6 +38,7 @@
 | `External Target Resources` | Ресурсы вне execution nodes: GitHub, cloud, DB, Kubernetes, external APIs, infrastructure. |
 | `External MCP Server` | MCP server вне execution nodes: отдельный сервис, remote tool gateway или shared capability provider. |
 | `External MCP Endpoint` | Конкретная точка подключения к external MCP server. |
+| `TelegramDeployment` | Deployment view, который показывает практический путь работы через Telegram: `Telegram Client`, `Telegram Bot API`, `agentd`, local state/resources и LLM provider. |
 
 ## Interaction и transports
 

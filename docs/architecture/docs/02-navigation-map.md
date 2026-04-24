@@ -19,6 +19,7 @@
 | `Containers` | `agentd` | `container-docs/agentd/01-overview.md` |
 | `Containers` | `Internal MCP Server` | `container-docs/internal-mcp-server/01-overview.md` |
 | `Deployment` | execution nodes and mesh | `system-docs/execution-mesh/01-overview.md` |
+| `TelegramDeployment` | Telegram runtime path | `../02-telegram-deployment.md` |
 | Все views | Глоссарий | `docs/03-terms.md` |
 
 ## Как это выглядит в Structurizr
@@ -29,6 +30,7 @@
 4. View `Containers` показывает containers внутри mesh.
 5. Double-click по container открывает документацию конкретного container.
 6. View `Deployment` показывает execution nodes, agentd instances и MCP/resource placement.
+7. View `TelegramDeployment` показывает основной practical path для Telegram: client, Bot API, execution node, local state/resources и LLM provider.
 
 ## Что добавлять дальше
 

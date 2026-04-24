@@ -6,6 +6,7 @@
 
 - [`workspace.dsl`](workspace.dsl) — каноническая модель Structurizr DSL.
 - [`01-system-context.md`](01-system-context.md) — текстовое описание C4 Level 1 System Context и ссылка на view `SystemContext`.
+- [`02-telegram-deployment.md`](02-telegram-deployment.md) — текстовое описание deployment view для работы через Telegram.
 - [`docs/`](docs/) — Markdown-документация, подключённая в Structurizr local через `!docs docs`.
 - [`system-docs/`](system-docs/) — Markdown-документация, подключённая к C4-элементам `teamD Execution Mesh`, `agentd Clients`, `MCP Capability Providers`, `Target Resources`.
 - [`container-docs/`](container-docs/) — Markdown-документация, подключённая к containers внутри `teamD Execution Mesh`.
@@ -17,6 +18,7 @@ GitHub не рендерит Structurizr DSL напрямую. Поэтому Gi
 1. [System Context](01-system-context.md) — `Operators`, `agentd Clients`, `teamD Execution Mesh`, `LLM Provider APIs`, `MCP Capability Providers`, `Target Resources`.
 2. `Containers` — containers внутри `teamD Execution Mesh`: `agentd`, `Internal MCP Server`.
 3. `Deployment` — execution nodes, agentd instances, internal/external MCP и target resources.
+4. [TelegramDeployment](02-telegram-deployment.md) — практический deployment для работы оператора через Telegram.
 
 ## Документация внутри Structurizr
 
@@ -70,7 +72,9 @@ http://localhost:8080
 - Представление Structurizr `SystemContext` в [`workspace.dsl`](workspace.dsl).
 - Представление Structurizr `Containers` в [`workspace.dsl`](workspace.dsl).
 - Представление Structurizr `Deployment` в [`workspace.dsl`](workspace.dsl).
+- Представление Structurizr `TelegramDeployment` в [`workspace.dsl`](workspace.dsl).
 - Текстовое описание System Context в [01-system-context.md](01-system-context.md).
+- Текстовое описание Telegram deployment в [02-telegram-deployment.md](02-telegram-deployment.md).
 - Markdown-документация для Structurizr local в [`docs/`](docs/).
 - Markdown-документация systems в [`system-docs/`](system-docs/).
 - Markdown-документация containers в [`container-docs/`](container-docs/).
