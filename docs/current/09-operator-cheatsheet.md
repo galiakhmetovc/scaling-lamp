@@ -15,6 +15,46 @@ cargo run -p agentd -- version
 cargo run -p agentd -- tui
 ```
 
+## Telegram быстрый старт
+
+Полная инструкция: [telegram/01-install-and-configure.md](telegram/01-install-and-configure.md).
+
+Минимальный набор:
+
+```bash
+git clone https://github.com/galiakhmetovc/scaling-lamp.git
+cd scaling-lamp
+cargo build --release -p agentd
+mkdir -p ~/.config/teamd
+cp config.example.toml ~/.config/teamd/config.toml
+```
+
+В `~/.config/teamd/config.toml` включить:
+
+```toml
+[telegram]
+enabled = true
+```
+
+Секреты задать через `.env` или environment:
+
+```bash
+export TEAMD_TELEGRAM_BOT_TOKEN='...'
+export TEAMD_PROVIDER_API_KEY='...'
+```
+
+Запуск:
+
+```bash
+./target/release/agentd telegram run
+```
+
+Pairing:
+
+1. отправить боту `/start`;
+2. выполнить на сервере `./target/release/agentd telegram pair <key>` или `agentd telegram pair <key>`, если бинарь установлен в `PATH`;
+3. проверить `./target/release/agentd telegram pairings` или `agentd telegram pairings`.
+
 ## Проверить версию и release state
 
 ```bash

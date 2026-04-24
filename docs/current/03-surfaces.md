@@ -1,4 +1,4 @@
-# Поверхности: CLI, daemon, HTTP API и TUI
+# Поверхности: CLI, daemon, HTTP API, TUI и Telegram
 
 ## Общий принцип
 
@@ -8,6 +8,7 @@
 - daemon
 - HTTP API
 - TUI
+- Telegram
 
 Они различаются только способом взаимодействия с оператором и транспортом, но не должны расходиться по semantics.
 
@@ -160,3 +161,31 @@ TUI/REPL используют русскоязычную командную по
 - daemon compatibility checks
 
 а не через отдельные TUI hacks.
+
+## Telegram
+
+Основные файлы:
+
+- entrypoint: [`cmd/agentd/src/telegram.rs`](../../cmd/agentd/src/telegram.rs)
+- routing: [`cmd/agentd/src/telegram/router.rs`](../../cmd/agentd/src/telegram/router.rs)
+- Bot API client: [`cmd/agentd/src/telegram/client.rs`](../../cmd/agentd/src/telegram/client.rs)
+- rendering: [`cmd/agentd/src/telegram/render.rs`](../../cmd/agentd/src/telegram/render.rs)
+- polling: [`cmd/agentd/src/telegram/polling.rs`](../../cmd/agentd/src/telegram/polling.rs)
+
+Telegram запускается отдельной командой:
+
+```bash
+agentd telegram run
+```
+
+Этот процесс:
+
+- получает updates через Telegram Bot API long polling;
+- подключается к локальному daemon или autospawn-ит его;
+- маршрутизирует обычные сообщения в canonical chat turn;
+- отправляет replies, progress updates и reminders обратно в Telegram;
+- хранит pairing records, chat bindings и update cursor в обычном runtime store.
+
+Важно: Telegram не имеет отдельного prompt assembly, provider loop или tool loop. Это thin surface над тем же daemon/app/runtime path.
+
+Практический setup описан в [telegram/01-install-and-configure.md](telegram/01-install-and-configure.md).

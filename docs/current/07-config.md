@@ -48,6 +48,26 @@
 
 Определяет permission mode для tool execution. Это часть общей security/control модели runtime.
 
+### `[telegram]`
+
+Управляет Telegram-интеграцией. Практический setup описан отдельно в [telegram/01-install-and-configure.md](telegram/01-install-and-configure.md).
+
+Основные параметры:
+
+- `enabled`
+- `bot_token`
+- `poll_interval_ms`
+- `poll_request_timeout_seconds`
+- `progress_update_min_interval_ms`
+- `pairing_token_ttl_seconds`
+- `max_upload_bytes`
+- `max_download_bytes`
+- `private_chat_auto_create_session`
+- `group_require_mention`
+- `default_autoapprove`
+
+Рекомендуемое правило: `telegram.bot_token` не хранить в `config.toml`, а задавать через `TEAMD_TELEGRAM_BOT_TOKEN` в `.env` или environment.
+
 ### `[session_defaults]`
 
 Управляет настройками новых session:
@@ -105,6 +125,7 @@
 - data dir;
 - daemon bind host/port/token/public URL/skills dir;
 - context compaction thresholds;
+- Telegram bot token;
 - provider kind/base/key/model/timeouts/max rounds/max output tokens;
 - permission mode;
 - session defaults.

@@ -15,8 +15,9 @@
 Если вы оператор:
 
 1. [09-operator-cheatsheet.md](09-operator-cheatsheet.md)
-2. [07-config.md](07-config.md)
-3. [06-storage-recovery-and-diagnostics.md](06-storage-recovery-and-diagnostics.md)
+2. [telegram/01-install-and-configure.md](telegram/01-install-and-configure.md)
+3. [07-config.md](07-config.md)
+4. [06-storage-recovery-and-diagnostics.md](06-storage-recovery-and-diagnostics.md)
 
 Если вы разработчик, который будет менять runtime:
 
@@ -49,6 +50,7 @@
 - CLI: [`cmd/agentd/src/cli.rs`](../../cmd/agentd/src/cli.rs)
 - HTTP: [`cmd/agentd/src/http/server.rs`](../../cmd/agentd/src/http/server.rs), [`cmd/agentd/src/http/client.rs`](../../cmd/agentd/src/http/client.rs)
 - TUI: [`cmd/agentd/src/tui.rs`](../../cmd/agentd/src/tui.rs), [`cmd/agentd/src/tui/app.rs`](../../cmd/agentd/src/tui/app.rs), [`cmd/agentd/src/tui/backend.rs`](../../cmd/agentd/src/tui/backend.rs)
+- Telegram: [`cmd/agentd/src/telegram.rs`](../../cmd/agentd/src/telegram.rs), [`cmd/agentd/src/telegram/router.rs`](../../cmd/agentd/src/telegram/router.rs), [`cmd/agentd/src/telegram/client.rs`](../../cmd/agentd/src/telegram/client.rs)
 
 ## Архитектурные диаграммы
 
