@@ -1,0 +1,399 @@
+#!/bin/sh
+set -eu
+
+PROGRAM=$(basename "$0")
+SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+REPO_ROOT=$(CDPATH= cd -- "$SCRIPT_DIR/.." && pwd)
+
+DRY_RUN=0
+NON_INTERACTIVE=0
+SKIP_BUILD=0
+SKIP_START=0
+OVERWRITE_CONFIG=0
+OVERWRITE_ENV=0
+ASSUME_YES=${TEAMD_DEPLOY_ASSUME_YES:-0}
+
+INSTALL_PREFIX=${TEAMD_DEPLOY_INSTALL_PREFIX:-/opt/teamd}
+BIN_DIR=${TEAMD_DEPLOY_BIN_DIR:-$INSTALL_PREFIX/bin}
+CONFIG_DIR=${TEAMD_DEPLOY_CONFIG_DIR:-/etc/teamd}
+CONFIG_FILE=${TEAMD_DEPLOY_CONFIG_FILE:-$CONFIG_DIR/config.toml}
+ENV_FILE=${TEAMD_DEPLOY_ENV_FILE:-$CONFIG_DIR/teamd.env}
+WORK_DIR=${TEAMD_DEPLOY_WORK_DIR:-/var/lib/teamd}
+DATA_DIR=${TEAMD_DEPLOY_DATA_DIR:-$WORK_DIR/state}
+SERVICE_USER=${TEAMD_DEPLOY_USER:-teamd}
+SERVICE_GROUP=${TEAMD_DEPLOY_GROUP:-$SERVICE_USER}
+DAEMON_SERVICE=${TEAMD_DEPLOY_DAEMON_SERVICE:-teamd-daemon.service}
+TELEGRAM_SERVICE=${TEAMD_DEPLOY_TELEGRAM_SERVICE:-teamd-telegram.service}
+PROVIDER_KIND=${TEAMD_PROVIDER_KIND:-zai_chat_completions}
+PROVIDER_API_BASE=${TEAMD_PROVIDER_API_BASE:-https://api.z.ai/api/coding/paas/v4}
+PROVIDER_MODEL=${TEAMD_PROVIDER_MODEL:-glm-5-turbo}
+TELEGRAM_TOKEN=${TEAMD_TELEGRAM_BOT_TOKEN:-}
+PROVIDER_KEY=${TEAMD_PROVIDER_API_KEY:-}
+CONFIG_PARENT=$(dirname "$CONFIG_FILE")
+ENV_PARENT=$(dirname "$ENV_FILE")
+
+usage() {
+  cat <<EOF
+Usage: $PROGRAM [options]
+
+Build and deploy teamD agentd with daemon + Telegram systemd services.
+
+Options:
+  --dry-run           Print actions without changing the system.
+  --non-interactive   Do not prompt; require secrets from environment.
+  --no-build          Do not run cargo build --release -p agentd.
+  --no-start          Install files but do not enable/start services.
+  --overwrite-config  Replace existing $CONFIG_FILE.
+  --overwrite-env     Replace existing $ENV_FILE.
+  -y, --yes           Assume yes for overwrite prompts.
+  -h, --help          Show this help.
+
+Environment overrides:
+  TEAMD_TELEGRAM_BOT_TOKEN       Telegram bot token.
+  TEAMD_PROVIDER_API_KEY         Z.ai/API provider key.
+  TEAMD_PROVIDER_KIND            Provider kind, default: $PROVIDER_KIND.
+  TEAMD_PROVIDER_API_BASE        Provider API base, default: $PROVIDER_API_BASE.
+  TEAMD_PROVIDER_MODEL           Provider model, default: $PROVIDER_MODEL.
+  TEAMD_DEPLOY_INSTALL_PREFIX    Install prefix, default: $INSTALL_PREFIX.
+  TEAMD_DEPLOY_CONFIG_FILE       Config path, default: $CONFIG_FILE.
+  TEAMD_DEPLOY_ENV_FILE          Environment file, default: $ENV_FILE.
+  TEAMD_DEPLOY_DATA_DIR          Runtime state dir, default: $DATA_DIR.
+  TEAMD_DEPLOY_USER              Service user, default: $SERVICE_USER.
+EOF
+}
+
+fail() {
+  printf 'error: %s\n' "$1" >&2
+  exit 1
+}
+
+quote_arg() {
+  printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")"
+}
+
+print_cmd() {
+  printf '+'
+  for arg in "$@"; do
+    printf ' %s' "$(quote_arg "$arg")"
+  done
+  printf '\n'
+}
+
+run_cmd() {
+  if [ "$DRY_RUN" -eq 1 ]; then
+    print_cmd "$@"
+  else
+    "$@"
+  fi
+}
+
+run_root() {
+  if [ "$(id -u)" -eq 0 ]; then
+    run_cmd "$@"
+  else
+    run_cmd sudo "$@"
+  fi
+}
+
+confirm() {
+  prompt=$1
+  default=${2:-no}
+
+  if [ "$ASSUME_YES" = "1" ]; then
+    return 0
+  fi
+
+  if [ "$NON_INTERACTIVE" -eq 1 ]; then
+    [ "$default" = "yes" ]
+    return $?
+  fi
+
+  if [ "$default" = "yes" ]; then
+    suffix='[Y/n]'
+  else
+    suffix='[y/N]'
+  fi
+
+  printf '%s %s ' "$prompt" "$suffix" >&2
+  IFS= read -r answer
+  case "$answer" in
+    y|Y|yes|YES|Yes|д|Д|да|Да|ДА) return 0 ;;
+    n|N|no|NO|No|н|Н|нет|Нет|НЕТ) return 1 ;;
+    '')
+      [ "$default" = "yes" ]
+      return $?
+      ;;
+    *) return 1 ;;
+  esac
+}
+
+read_secret() {
+  var_name=$1
+  prompt=$2
+  current=$3
+
+  if [ -n "$current" ]; then
+    printf '%s' "$current"
+    return 0
+  fi
+
+  if [ "$NON_INTERACTIVE" -eq 1 ]; then
+    fail "$var_name is required in --non-interactive mode"
+  fi
+
+  printf '%s: ' "$prompt" >&2
+  if [ -t 0 ]; then
+    saved_stty=$(stty -g 2>/dev/null || printf '')
+    stty -echo 2>/dev/null || true
+    IFS= read -r value
+    if [ -n "$saved_stty" ]; then
+      stty "$saved_stty" 2>/dev/null || true
+    else
+      stty echo 2>/dev/null || true
+    fi
+    printf '\n' >&2
+  else
+    IFS= read -r value
+  fi
+
+  [ -n "$value" ] || fail "$var_name cannot be empty"
+  printf '%s' "$value"
+}
+
+need_command() {
+  command -v "$1" >/dev/null 2>&1 || fail "required command not found: $1"
+}
+
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --dry-run) DRY_RUN=1 ;;
+    --non-interactive) NON_INTERACTIVE=1 ;;
+    --no-build) SKIP_BUILD=1 ;;
+    --no-start) SKIP_START=1 ;;
+    --overwrite-config) OVERWRITE_CONFIG=1 ;;
+    --overwrite-env) OVERWRITE_ENV=1 ;;
+    -y|--yes) ASSUME_YES=1 ;;
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    *) fail "unknown option: $1" ;;
+  esac
+  shift
+done
+
+if [ "$DRY_RUN" -eq 1 ]; then
+  printf 'DRY RUN: no system files or services will be changed.\n'
+fi
+
+need_command install
+need_command sed
+need_command id
+need_command getent
+
+if [ "$SKIP_BUILD" -eq 0 ]; then
+  need_command cargo
+fi
+
+if [ "$(id -u)" -ne 0 ] && [ "$DRY_RUN" -eq 0 ]; then
+  need_command sudo
+fi
+
+if [ "$DRY_RUN" -eq 0 ]; then
+  need_command mktemp
+fi
+
+if [ "$SKIP_BUILD" -eq 0 ]; then
+  run_cmd sh -c "cd $(quote_arg "$REPO_ROOT") && cargo build --release -p agentd"
+fi
+
+BINARY="$REPO_ROOT/target/release/agentd"
+if [ "$DRY_RUN" -eq 0 ] && [ ! -x "$BINARY" ]; then
+  fail "agentd binary not found or not executable: $BINARY"
+fi
+
+TMP_DIR=
+if [ "$DRY_RUN" -eq 0 ]; then
+  TMP_DIR=$(mktemp -d)
+  chmod 0700 "$TMP_DIR"
+  trap 'rm -rf "$TMP_DIR"' EXIT INT TERM
+else
+  TMP_DIR="$REPO_ROOT/target/deploy-teamd-dry-run"
+fi
+
+CONFIG_TMP="$TMP_DIR/config.toml"
+ENV_TMP="$TMP_DIR/teamd.env"
+DAEMON_UNIT_TMP="$TMP_DIR/$DAEMON_SERVICE"
+TELEGRAM_UNIT_TMP="$TMP_DIR/$TELEGRAM_SERVICE"
+
+WRITE_CONFIG=1
+if [ -f "$CONFIG_FILE" ] && [ "$OVERWRITE_CONFIG" -ne 1 ]; then
+  if confirm "$CONFIG_FILE already exists. Overwrite it?" no; then
+    WRITE_CONFIG=1
+  else
+    WRITE_CONFIG=0
+    printf 'Keeping existing config: %s\n' "$CONFIG_FILE"
+  fi
+fi
+
+WRITE_ENV=1
+if [ -f "$ENV_FILE" ] && [ "$OVERWRITE_ENV" -ne 1 ]; then
+  if confirm "$ENV_FILE already exists. Overwrite it?" no; then
+    WRITE_ENV=1
+  else
+    WRITE_ENV=0
+    printf 'Keeping existing environment file: %s\n' "$ENV_FILE"
+  fi
+fi
+
+if [ "$WRITE_ENV" -eq 1 ]; then
+  TELEGRAM_TOKEN=$(read_secret TEAMD_TELEGRAM_BOT_TOKEN "Telegram bot token" "$TELEGRAM_TOKEN")
+  PROVIDER_KEY=$(read_secret TEAMD_PROVIDER_API_KEY "Provider API key" "$PROVIDER_KEY")
+fi
+
+if [ "$DRY_RUN" -eq 0 ]; then
+  cat > "$CONFIG_TMP" <<EOF
+data_dir = "$DATA_DIR"
+
+[daemon]
+bind_host = "127.0.0.1"
+bind_port = 5140
+skills_dir = "skills"
+
+[telegram]
+enabled = true
+poll_interval_ms = 1000
+poll_request_timeout_seconds = 50
+progress_update_min_interval_ms = 1250
+pairing_token_ttl_seconds = 900
+max_upload_bytes = 16777216
+max_download_bytes = 41943040
+private_chat_auto_create_session = true
+group_require_mention = true
+default_autoapprove = true
+
+[provider]
+kind = "$PROVIDER_KIND"
+api_base = "$PROVIDER_API_BASE"
+default_model = "$PROVIDER_MODEL"
+connect_timeout_seconds = 15
+stream_idle_timeout_seconds = 1200
+max_tool_rounds = 24
+
+[permissions]
+mode = "default"
+EOF
+
+  {
+    printf 'TEAMD_CONFIG=%s\n' "$(quote_arg "$CONFIG_FILE")"
+    printf 'TEAMD_DATA_DIR=%s\n' "$(quote_arg "$DATA_DIR")"
+    printf 'TEAMD_TELEGRAM_BOT_TOKEN=%s\n' "$(quote_arg "$TELEGRAM_TOKEN")"
+    printf 'TEAMD_PROVIDER_API_KEY=%s\n' "$(quote_arg "$PROVIDER_KEY")"
+  } > "$ENV_TMP"
+  chmod 0600 "$ENV_TMP"
+
+  cat > "$DAEMON_UNIT_TMP" <<EOF
+[Unit]
+Description=teamD daemon
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=$SERVICE_USER
+Group=$SERVICE_GROUP
+EnvironmentFile=$ENV_FILE
+WorkingDirectory=$WORK_DIR
+ExecStart=$BIN_DIR/agentd daemon
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+  cat > "$TELEGRAM_UNIT_TMP" <<EOF
+[Unit]
+Description=teamD Telegram worker
+After=network-online.target $DAEMON_SERVICE
+Wants=network-online.target
+Requires=$DAEMON_SERVICE
+
+[Service]
+Type=simple
+User=$SERVICE_USER
+Group=$SERVICE_GROUP
+EnvironmentFile=$ENV_FILE
+WorkingDirectory=$WORK_DIR
+ExecStart=$BIN_DIR/agentd telegram run
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+EOF
+else
+  print_cmd sh -c "generate $CONFIG_FILE, $ENV_FILE and systemd unit files with redacted secrets"
+fi
+
+if ! getent group "$SERVICE_GROUP" >/dev/null 2>&1; then
+  run_root groupadd --system "$SERVICE_GROUP"
+fi
+
+if ! id -u "$SERVICE_USER" >/dev/null 2>&1; then
+  run_root useradd --system --gid "$SERVICE_GROUP" --create-home --home-dir "$WORK_DIR" --shell /usr/sbin/nologin "$SERVICE_USER"
+fi
+
+if [ "$CONFIG_PARENT" = "$ENV_PARENT" ]; then
+  run_root mkdir -p "$BIN_DIR" "$CONFIG_PARENT" "$WORK_DIR" "$DATA_DIR"
+else
+  run_root mkdir -p "$BIN_DIR" "$CONFIG_PARENT" "$ENV_PARENT" "$WORK_DIR" "$DATA_DIR"
+fi
+run_root install -m 0755 "$BINARY" "$BIN_DIR/agentd"
+
+if [ "$WRITE_CONFIG" -eq 1 ]; then
+  run_root install -m 0644 -o root -g root "$CONFIG_TMP" "$CONFIG_FILE"
+fi
+
+if [ "$WRITE_ENV" -eq 1 ]; then
+  run_root install -m 0640 -o root -g "$SERVICE_GROUP" "$ENV_TMP" "$ENV_FILE"
+fi
+
+run_root chown -R "$SERVICE_USER:$SERVICE_GROUP" "$WORK_DIR"
+
+run_root install -m 0644 -o root -g root "$DAEMON_UNIT_TMP" "/etc/systemd/system/$DAEMON_SERVICE"
+run_root install -m 0644 -o root -g root "$TELEGRAM_UNIT_TMP" "/etc/systemd/system/$TELEGRAM_SERVICE"
+
+run_root systemctl daemon-reload
+
+if [ "$SKIP_START" -eq 0 ]; then
+  run_root systemctl enable --now "$DAEMON_SERVICE"
+  run_root systemctl enable --now "$TELEGRAM_SERVICE"
+else
+  printf 'Skipping service start because --no-start was set.\n'
+fi
+
+cat <<EOF
+
+Deployment commands:
+  Status:
+    systemctl status $DAEMON_SERVICE
+    systemctl status $TELEGRAM_SERVICE
+
+  Logs:
+    journalctl -u $TELEGRAM_SERVICE -f
+    journalctl -u $DAEMON_SERVICE -n 100 --no-pager
+
+  Restart:
+    sudo systemctl restart $DAEMON_SERVICE
+    sudo systemctl restart $TELEGRAM_SERVICE
+
+  Pairing after Telegram /start:
+    sudo -u $SERVICE_USER sh -lc 'set -a; . $ENV_FILE; set +a; $BIN_DIR/agentd telegram pair <key>'
+
+  List pairings:
+    sudo -u $SERVICE_USER sh -lc 'set -a; . $ENV_FILE; set +a; $BIN_DIR/agentd telegram pairings'
+
+  Provider smoke:
+    sudo -u $SERVICE_USER sh -lc 'set -a; . $ENV_FILE; set +a; $BIN_DIR/agentd provider smoke'
+EOF

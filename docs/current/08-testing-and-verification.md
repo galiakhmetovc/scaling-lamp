@@ -110,6 +110,15 @@ cargo test -p agentd --test daemon_tui daemon_backed_tui_can_send_judge_message_
 less target/test-artifacts/daemon-tui-interagent-judge-chat.log
 ```
 
+### Проверить deploy script без systemd-изменений
+
+```bash
+sh -n scripts/deploy-teamd.sh
+sh scripts/test-deploy-teamd.sh
+```
+
+`test-deploy-teamd.sh` запускает `deploy-teamd.sh --help` и dry-run с fake secrets. Он не пишет в `/etc`, не вызывает real systemd start и нужен как быстрый guard для операторского install path.
+
 ## Что проверять руками
 
 Автотесты важны, но для операторского UX полезно иногда прогонять и руками:

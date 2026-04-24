@@ -19,6 +19,22 @@ cargo run -p agentd -- tui
 
 Полная инструкция: [telegram/01-install-and-configure.md](telegram/01-install-and-configure.md).
 
+Самый короткий production-like путь из checkout:
+
+```bash
+./scripts/deploy-teamd.sh
+```
+
+Скрипт интерактивно спросит Telegram bot token и Z.ai/API key, соберёт release binary, установит `/opt/teamd/bin/agentd`, создаст `/etc/teamd/config.toml`, `/etc/teamd/teamd.env` и два systemd service.
+
+Проверить действия без установки:
+
+```bash
+TEAMD_TELEGRAM_BOT_TOKEN='123456789:test-token' \
+  TEAMD_PROVIDER_API_KEY='zai-test-key' \
+  ./scripts/deploy-teamd.sh --dry-run --non-interactive --no-build --no-start
+```
+
 Минимальный набор:
 
 ```bash
@@ -60,7 +76,7 @@ Pairing:
 
 ## Telegram под systemd
 
-Полная инструкция: [telegram/01-install-and-configure.md#9-настроить-systemd](telegram/01-install-and-configure.md#9-настроить-systemd).
+Полная инструкция: [telegram/01-install-and-configure.md#9-настроить-systemd-вручную](telegram/01-install-and-configure.md#9-настроить-systemd-вручную).
 
 Базовая схема:
 

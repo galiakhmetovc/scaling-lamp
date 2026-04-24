@@ -29,6 +29,18 @@ cargo run -p agentd -- tui
 
 Если нужен конфиг, возьмите за основу [config.example.toml](config.example.toml) и положите копию в `~/.config/teamd/config.toml` или укажите путь через `TEAMD_CONFIG`.
 
+## Быстрый deploy Telegram/systemd
+
+Из checkout можно развернуть production-like локальный runtime скриптом:
+
+```bash
+./scripts/deploy-teamd.sh
+```
+
+Он интерактивно спросит Telegram bot token и Z.ai/API key, соберёт release binary, установит `agentd` в `/opt/teamd/bin`, создаст `/etc/teamd/config.toml`, `/etc/teamd/teamd.env` и systemd services `teamd-daemon.service`/`teamd-telegram.service`.
+
+Подробности: [docs/current/telegram/01-install-and-configure.md](docs/current/telegram/01-install-and-configure.md).
+
 ## Каноническая документация по текущему состоянию
 
 Эта документация описывает не vision и не roadmap, а то, как система устроена сейчас.

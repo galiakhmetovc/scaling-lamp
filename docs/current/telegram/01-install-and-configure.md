@@ -2,6 +2,48 @@
 
 Документ описывает базовый путь: скачать репозиторий, собрать `agentd`, включить Telegram-интеграцию, запустить worker и привязать Telegram-пользователя через pairing.
 
+## Быстрый путь: deploy script
+
+Из корня checkout:
+
+```bash
+./scripts/deploy-teamd.sh
+```
+
+Скрипт:
+
+- собирает `agentd` в release mode;
+- ставит binary в `/opt/teamd/bin/agentd`;
+- создаёт пользователя `teamd`;
+- пишет `/etc/teamd/config.toml` и `/etc/teamd/teamd.env`;
+- спрашивает Telegram bot token и Z.ai/API key скрытым вводом;
+- создаёт `teamd-daemon.service` и `teamd-telegram.service`;
+- включает автозапуск и запускает оба service.
+
+Проверить без изменений на машине:
+
+```bash
+TEAMD_TELEGRAM_BOT_TOKEN='123456789:test-token' \
+  TEAMD_PROVIDER_API_KEY='zai-test-key' \
+  ./scripts/deploy-teamd.sh --dry-run --non-interactive --no-build --no-start
+```
+
+Если секреты уже есть в environment, можно запустить без интерактивного ввода:
+
+```bash
+TEAMD_TELEGRAM_BOT_TOKEN='123456789:real-token' \
+  TEAMD_PROVIDER_API_KEY='real-provider-key' \
+  ./scripts/deploy-teamd.sh --non-interactive
+```
+
+После `/start` в Telegram pairing key активируется так:
+
+```bash
+sudo -u teamd sh -lc 'set -a; . /etc/teamd/teamd.env; set +a; /opt/teamd/bin/agentd telegram pair <key>'
+```
+
+Ручные шаги ниже описывают то же самое подробно и полезны для отладки.
+
 ## 1. Требования
 
 Нужны:
@@ -224,7 +266,7 @@ cargo run -p agentd -- telegram run
 
 Процесс должен оставаться запущенным, пока нужен Telegram-доступ.
 
-## 9. Настроить systemd
+## 9. Настроить systemd вручную
 
 Для постоянного сервера лучше запускать два systemd unit’а:
 
