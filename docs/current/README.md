@@ -50,6 +50,10 @@
 - HTTP: [`cmd/agentd/src/http/server.rs`](../../cmd/agentd/src/http/server.rs), [`cmd/agentd/src/http/client.rs`](../../cmd/agentd/src/http/client.rs)
 - TUI: [`cmd/agentd/src/tui.rs`](../../cmd/agentd/src/tui.rs), [`cmd/agentd/src/tui/app.rs`](../../cmd/agentd/src/tui/app.rs), [`cmd/agentd/src/tui/backend.rs`](../../cmd/agentd/src/tui/backend.rs)
 
+## Архитектурные диаграммы
+
+C4-модель хранится отдельно в [`docs/architecture`](../architecture). Источник истины для диаграмм — [`workspace.dsl`](../architecture/workspace.dsl), а команды локального просмотра описаны в [`docs/architecture/README.md`](../architecture/README.md).
+
 ## Что важно помнить
 
 - Эта документация описывает **текущее состояние**, а не целевую архитектуру “когда-нибудь”.
