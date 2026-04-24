@@ -21,6 +21,7 @@ const DEFAULT_DAEMON_SKILLS_DIR: &str = "skills";
 pub struct AppConfig {
     pub data_dir: PathBuf,
     pub daemon: DaemonConfig,
+    pub telegram: TelegramConfig,
     pub permissions: PermissionConfig,
     pub provider: ConfiguredProvider,
     pub session_defaults: SessionDefaultsConfig,
@@ -39,6 +40,22 @@ pub struct DaemonConfig {
     pub public_base_url: Option<String>,
     pub a2a_peers: BTreeMap<String, A2APeerConfig>,
     pub mcp_connectors: BTreeMap<String, McpConnectorSeedConfig>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(default)]
+pub struct TelegramConfig {
+    pub enabled: bool,
+    pub bot_token: Option<String>,
+    pub poll_interval_ms: u64,
+    pub poll_request_timeout_seconds: u64,
+    pub progress_update_min_interval_ms: u64,
+    pub pairing_token_ttl_seconds: u64,
+    pub max_upload_bytes: usize,
+    pub max_download_bytes: usize,
+    pub private_chat_auto_create_session: bool,
+    pub group_require_mention: bool,
+    pub default_autoapprove: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
@@ -140,6 +157,7 @@ pub struct ConfigEnv {
     pub daemon_public_base_url_override: Option<String>,
     pub daemon_skills_dir_override: Option<PathBuf>,
     pub home_dir: Option<PathBuf>,
+    pub telegram_bot_token_override: Option<String>,
     pub context_compaction_keep_tail_messages_override: Option<usize>,
     pub context_compaction_max_output_tokens_override: Option<u32>,
     pub context_compaction_max_summary_chars_override: Option<usize>,
@@ -196,6 +214,7 @@ pub enum ConfigError {
 struct FileConfig {
     data_dir: Option<PathBuf>,
     daemon: Option<DaemonConfig>,
+    telegram: Option<TelegramConfig>,
     permissions: Option<PermissionConfig>,
     provider: Option<ConfiguredProvider>,
     session_defaults: Option<SessionDefaultsConfig>,
@@ -214,6 +233,24 @@ impl Default for DaemonConfig {
             public_base_url: None,
             a2a_peers: BTreeMap::new(),
             mcp_connectors: BTreeMap::new(),
+        }
+    }
+}
+
+impl Default for TelegramConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            bot_token: None,
+            poll_interval_ms: 1_000,
+            poll_request_timeout_seconds: 50,
+            progress_update_min_interval_ms: 1_250,
+            pairing_token_ttl_seconds: 15 * 60,
+            max_upload_bytes: 16 * 1024 * 1024,
+            max_download_bytes: 40 * 1024 * 1024,
+            private_chat_auto_create_session: true,
+            group_require_mention: true,
+            default_autoapprove: true,
         }
     }
 }
@@ -448,6 +485,7 @@ impl ConfigEnv {
             ),
             daemon_skills_dir_override: read_path_var("TEAMD_DAEMON_SKILLS_DIR", &dotenv)?,
             home_dir: read_path_var("HOME", &dotenv)?,
+            telegram_bot_token_override: read_string_var("TEAMD_TELEGRAM_BOT_TOKEN", &dotenv),
             context_compaction_keep_tail_messages_override: read_usize_var(
                 "TEAMD_CONTEXT_COMPACTION_KEEP_TAIL_MESSAGES",
                 &dotenv,
@@ -555,6 +593,10 @@ impl AppConfig {
             .as_ref()
             .and_then(|config| config.daemon.clone())
             .unwrap_or_default();
+        let mut telegram = file_config
+            .as_ref()
+            .and_then(|config| config.telegram.clone())
+            .unwrap_or_default();
         let mut provider = file_config
             .as_ref()
             .and_then(|config| config.provider.clone())
@@ -593,6 +635,9 @@ impl AppConfig {
         }
         if let Some(skills_dir) = &env.daemon_skills_dir_override {
             daemon.skills_dir = skills_dir.clone();
+        }
+        if let Some(bot_token) = &env.telegram_bot_token_override {
+            telegram.bot_token = Some(bot_token.clone());
         }
         if let Some(kind) = env.provider_kind_override.as_deref() {
             provider.kind = parse_provider_kind(kind)?;
@@ -652,6 +697,7 @@ impl AppConfig {
         let config = Self {
             data_dir,
             daemon,
+            telegram,
             permissions,
             provider,
             session_defaults,
@@ -727,6 +773,24 @@ impl AppConfig {
             });
         }
 
+        if self.telegram.enabled && self.telegram.bot_token.is_none() {
+            return Err(ConfigError::InvalidProviderValue {
+                name: "telegram.bot_token",
+                value: String::new(),
+                reason: "must be set when telegram.enabled is true",
+            });
+        }
+
+        if let Some(bot_token) = &self.telegram.bot_token
+            && bot_token.trim().is_empty()
+        {
+            return Err(ConfigError::InvalidProviderValue {
+                name: "telegram.bot_token",
+                value: bot_token.clone(),
+                reason: "must not be empty",
+            });
+        }
+
         for (peer_id, peer) in &self.daemon.a2a_peers {
             if peer.base_url.trim().is_empty() {
                 return Err(ConfigError::InvalidProviderValue {
@@ -754,6 +818,24 @@ impl AppConfig {
         validate_positive_usize_value(
             "session_defaults.working_memory_limit",
             self.session_defaults.working_memory_limit,
+        )?;
+        validate_positive_u64_value("telegram.poll_interval_ms", self.telegram.poll_interval_ms)?;
+        validate_positive_u64_value(
+            "telegram.poll_request_timeout_seconds",
+            self.telegram.poll_request_timeout_seconds,
+        )?;
+        validate_positive_u64_value(
+            "telegram.progress_update_min_interval_ms",
+            self.telegram.progress_update_min_interval_ms,
+        )?;
+        validate_positive_u64_value(
+            "telegram.pairing_token_ttl_seconds",
+            self.telegram.pairing_token_ttl_seconds,
+        )?;
+        validate_positive_usize_value("telegram.max_upload_bytes", self.telegram.max_upload_bytes)?;
+        validate_positive_usize_value(
+            "telegram.max_download_bytes",
+            self.telegram.max_download_bytes,
         )?;
         validate_positive_usize_value(
             "context.compaction_min_messages",
@@ -1040,6 +1122,7 @@ fn load_file_config(path: &Path, required: bool) -> Result<FileConfig, ConfigErr
             return Ok(FileConfig {
                 data_dir: None,
                 daemon: None,
+                telegram: None,
                 permissions: None,
                 provider: None,
                 session_defaults: None,
@@ -1345,6 +1428,7 @@ impl Default for AppConfig {
         Self {
             data_dir: default_data_dir(),
             daemon: DaemonConfig::default(),
+            telegram: TelegramConfig::default(),
             permissions: PermissionConfig::default(),
             provider: ConfiguredProvider::default(),
             session_defaults: SessionDefaultsConfig::default(),

@@ -1,4 +1,7 @@
 /target
+**/target/
 /.env
 /.superpowers
 /dist
+/.local.tar
+/anton.local.tar

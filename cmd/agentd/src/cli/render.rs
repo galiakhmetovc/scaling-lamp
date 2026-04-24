@@ -376,6 +376,7 @@ pub(super) fn run_provider_smoke(app: &App, prompt: &str) -> Result<String, Boot
         model: None,
         instructions: Some("Reply tersely.".to_string()),
         messages: vec![ProviderMessage::new(MessageRole::User, prompt)],
+        think_level: None,
         previous_response_id: None,
         continuation_messages: Vec::new(),
         tools: Vec::new(),

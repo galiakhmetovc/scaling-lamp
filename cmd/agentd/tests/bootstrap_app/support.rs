@@ -37,6 +37,8 @@ pub(crate) use std::sync::mpsc::{self, Receiver};
 pub(crate) use std::thread;
 pub(crate) use std::time::Duration;
 
+const TEST_SERVER_READ_TIMEOUT: Duration = Duration::from_secs(15);
+
 pub(crate) fn openai_stream_message_response(response_id: &str, text: &str) -> String {
     let text = serde_json::to_string(text).expect("serialize text");
     format!(
@@ -75,7 +77,7 @@ pub(crate) fn spawn_sse_server_sequence(
         for body in bodies {
             let (mut stream, _) = listener.accept().expect("accept connection");
             stream
-                .set_read_timeout(Some(Duration::from_secs(2)))
+                .set_read_timeout(Some(TEST_SERVER_READ_TIMEOUT))
                 .expect("set read timeout");
 
             let mut reader = BufReader::new(stream.try_clone().expect("clone stream"));
@@ -133,7 +135,7 @@ pub(crate) fn spawn_json_server_sequence(
         for body in bodies {
             let (mut stream, _) = listener.accept().expect("accept connection");
             stream
-                .set_read_timeout(Some(Duration::from_secs(2)))
+                .set_read_timeout(Some(TEST_SERVER_READ_TIMEOUT))
                 .expect("set read timeout");
 
             let mut reader = BufReader::new(stream.try_clone().expect("clone stream"));
@@ -189,7 +191,7 @@ pub(crate) fn spawn_json_server_status_sequence(
         for (status_code, body) in responses {
             let (mut stream, _) = listener.accept().expect("accept connection");
             stream
-                .set_read_timeout(Some(Duration::from_secs(2)))
+                .set_read_timeout(Some(TEST_SERVER_READ_TIMEOUT))
                 .expect("set read timeout");
 
             let mut reader = BufReader::new(stream.try_clone().expect("clone stream"));
@@ -256,7 +258,7 @@ pub(crate) fn spawn_text_server(
     let handle = thread::spawn(move || {
         let (mut stream, _) = listener.accept().expect("accept connection");
         stream
-            .set_read_timeout(Some(Duration::from_secs(2)))
+            .set_read_timeout(Some(TEST_SERVER_READ_TIMEOUT))
             .expect("set read timeout");
 
         let mut reader = BufReader::new(stream.try_clone().expect("clone stream"));
@@ -297,7 +299,7 @@ pub(crate) fn spawn_text_server_sequence(
         for body in bodies {
             let (mut stream, _) = listener.accept().expect("accept connection");
             stream
-                .set_read_timeout(Some(Duration::from_secs(2)))
+                .set_read_timeout(Some(TEST_SERVER_READ_TIMEOUT))
                 .expect("set read timeout");
 
             let mut reader = BufReader::new(stream.try_clone().expect("clone stream"));

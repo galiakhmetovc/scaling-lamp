@@ -162,11 +162,13 @@ impl ProviderLoopCursor {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn build_request(
         &self,
         base_messages: &[ProviderMessage],
         model: Option<&str>,
         instructions: Option<&str>,
+        think_level: Option<&str>,
         tools: &[ProviderToolDefinition],
         stream: ProviderStreamMode,
         max_output_tokens: Option<u32>,
@@ -183,6 +185,7 @@ impl ProviderLoopCursor {
             model: model.map(str::to_string),
             instructions: instructions.map(str::to_string),
             messages,
+            think_level: think_level.map(str::to_string),
             previous_response_id: if self.supports_previous_response_id {
                 self.previous_response_id.clone()
             } else {
@@ -832,6 +835,7 @@ impl ExecutionService {
                 .prompt_override
                 .as_ref()
                 .map(|override_| override_.as_str()),
+            session.settings.think_level.as_deref(),
             &tools,
             cursor.stream_mode(true),
             self.config.provider_max_output_tokens,
@@ -2084,6 +2088,23 @@ impl ExecutionService {
         Ok(session.settings.auto_approve)
     }
 
+    fn session_think_level(
+        &self,
+        store: &PersistenceStore,
+        session_id: &str,
+    ) -> Result<Option<String>, ExecutionError> {
+        let session = Session::try_from(
+            store
+                .get_session(session_id)
+                .map_err(ExecutionError::Store)?
+                .ok_or_else(|| ExecutionError::MissingSession {
+                    id: session_id.to_string(),
+                })?,
+        )
+        .map_err(ExecutionError::RecordConversion)?;
+        Ok(session.settings.think_level)
+    }
+
     fn build_completion_nudge_message(
         &self,
         snapshot: &PlanSnapshot,
@@ -2499,6 +2520,7 @@ impl ExecutionService {
         let mut tool_runtime = self.tool_runtime();
         let auto_approve =
             auto_approve_override.unwrap_or(self.session_auto_approve_enabled(store, session_id)?);
+        let think_level = self.session_think_level(store, session_id)?;
         let mut cursor = ProviderLoopCursor::new(
             provider,
             initial_loop_state,
@@ -2550,6 +2572,7 @@ impl ExecutionService {
                 &prompt_messages.messages,
                 model.as_deref(),
                 instructions.as_deref(),
+                think_level.as_deref(),
                 &tools,
                 cursor.stream_mode(observer.is_some()),
                 self.config.provider_max_output_tokens,
@@ -2970,6 +2993,7 @@ mod tests {
             &[ProviderMessage::new(MessageRole::User, "hello")],
             Some("test-model"),
             None,
+            None,
             &[],
             ProviderStreamMode::Disabled,
             None,
@@ -2986,6 +3010,7 @@ mod tests {
         let request = cursor.build_request(
             &[ProviderMessage::new(MessageRole::User, "hello")],
             Some("test-model"),
+            None,
             None,
             &[],
             ProviderStreamMode::Disabled,

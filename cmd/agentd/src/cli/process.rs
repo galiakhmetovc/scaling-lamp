@@ -53,6 +53,11 @@ pub(super) fn execute_command(app: &App, command: Command) -> Result<String, Boo
         Command::Tui { .. } => Err(BootstrapError::Usage {
             reason: "tui requires interactive terminal I/O".to_string(),
         }),
+        Command::TelegramRun => Err(BootstrapError::Usage {
+            reason: "telegram run requires process I/O".to_string(),
+        }),
+        Command::TelegramPair { key } => crate::telegram::activate_pairing(app, &key),
+        Command::TelegramPairings => crate::telegram::render_pairings(app),
         Command::Daemon => Err(BootstrapError::Usage {
             reason: "daemon requires server mode I/O".to_string(),
         }),
@@ -109,6 +114,9 @@ pub(super) fn execute_daemon_command(
                 reason: "interactive command requires process I/O path".to_string(),
             })
         }
+        Command::TelegramRun => Err(BootstrapError::Usage {
+            reason: "telegram run requires process I/O path".to_string(),
+        }),
         Command::SessionCreate { id, title } => {
             let summary = client.create_session(Some(&id), Some(&title))?;
             Ok(format!(
@@ -128,6 +136,9 @@ pub(super) fn execute_daemon_command(
             let skills = client.disable_session_skill(&id, &skill_name)?;
             render::render_session_skills_list(skills)
         }
+        Command::TelegramPair { .. } | Command::TelegramPairings => Err(BootstrapError::Usage {
+            reason: "telegram pairing commands are local-only".to_string(),
+        }),
         _ => Err(BootstrapError::Usage {
             reason: "this command is not available over daemon transport yet".to_string(),
         }),

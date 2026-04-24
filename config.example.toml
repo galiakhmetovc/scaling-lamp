@@ -8,6 +8,19 @@ skills_dir = "skills"
 # bearer_token = "replace-me"
 # public_base_url = "https://teamd.example"
 
+[telegram]
+enabled = false
+# bot_token = "prefer TEAMD_TELEGRAM_BOT_TOKEN in .env"
+poll_interval_ms = 1000
+poll_request_timeout_seconds = 50
+progress_update_min_interval_ms = 1250
+pairing_token_ttl_seconds = 900
+max_upload_bytes = 16777216
+max_download_bytes = 41943040
+private_chat_auto_create_session = true
+group_require_mention = true
+default_autoapprove = true
+
 [provider]
 kind = "openai_responses"
 # api_base = "https://api.openai.com/v1"

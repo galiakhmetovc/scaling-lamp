@@ -105,6 +105,38 @@ pub struct McpConnectorRecord {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TelegramUserPairingRecord {
+    pub token: String,
+    pub telegram_user_id: i64,
+    pub telegram_chat_id: i64,
+    pub telegram_username: Option<String>,
+    pub telegram_display_name: String,
+    pub status: String,
+    pub created_at: i64,
+    pub expires_at: i64,
+    pub activated_at: Option<i64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TelegramChatBindingRecord {
+    pub telegram_chat_id: i64,
+    pub scope: String,
+    pub owner_telegram_user_id: Option<i64>,
+    pub selected_session_id: Option<String>,
+    pub last_delivered_transcript_created_at: Option<i64>,
+    pub last_delivered_transcript_id: Option<String>,
+    pub created_at: i64,
+    pub updated_at: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TelegramUpdateCursorRecord {
+    pub consumer: String,
+    pub update_id: i64,
+    pub updated_at: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AgentProfileRecord {
     pub id: String,
     pub name: String,

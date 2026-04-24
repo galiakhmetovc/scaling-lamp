@@ -3,6 +3,7 @@ use crate::records::{
     ContextOffloadRecord, ContextSummaryRecord, JobRecord, KnowledgeSearchDocRecord,
     KnowledgeSourceRecord, McpConnectorRecord, MissionRecord, PlanRecord, RunRecord,
     SessionInboxEventRecord, SessionRecord, SessionRetentionRecord, SessionSearchDocRecord,
+    TelegramChatBindingRecord, TelegramUpdateCursorRecord, TelegramUserPairingRecord,
     TranscriptRecord,
 };
 use crate::store::StoreError;
@@ -80,6 +81,39 @@ pub trait McpRepository {
     fn get_mcp_connector(&self, id: &str) -> Result<Option<McpConnectorRecord>, StoreError>;
     fn list_mcp_connectors(&self) -> Result<Vec<McpConnectorRecord>, StoreError>;
     fn delete_mcp_connector(&self, id: &str) -> Result<bool, StoreError>;
+}
+
+pub trait TelegramRepository {
+    fn put_telegram_user_pairing(
+        &self,
+        record: &TelegramUserPairingRecord,
+    ) -> Result<(), StoreError>;
+    fn get_telegram_user_pairing_by_token(
+        &self,
+        token: &str,
+    ) -> Result<Option<TelegramUserPairingRecord>, StoreError>;
+    fn get_telegram_user_pairing_by_user_id(
+        &self,
+        telegram_user_id: i64,
+    ) -> Result<Option<TelegramUserPairingRecord>, StoreError>;
+    fn list_telegram_user_pairings(&self) -> Result<Vec<TelegramUserPairingRecord>, StoreError>;
+    fn put_telegram_chat_binding(
+        &self,
+        record: &TelegramChatBindingRecord,
+    ) -> Result<(), StoreError>;
+    fn get_telegram_chat_binding(
+        &self,
+        telegram_chat_id: i64,
+    ) -> Result<Option<TelegramChatBindingRecord>, StoreError>;
+    fn list_telegram_chat_bindings(&self) -> Result<Vec<TelegramChatBindingRecord>, StoreError>;
+    fn put_telegram_update_cursor(
+        &self,
+        record: &TelegramUpdateCursorRecord,
+    ) -> Result<(), StoreError>;
+    fn get_telegram_update_cursor(
+        &self,
+        consumer: &str,
+    ) -> Result<Option<TelegramUpdateCursorRecord>, StoreError>;
 }
 
 pub trait AgentRepository {

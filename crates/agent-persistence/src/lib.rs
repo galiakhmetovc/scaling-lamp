@@ -7,21 +7,22 @@ pub mod store;
 
 pub use config::{
     A2APeerConfig, AppConfig, ConfigEnv, ConfigError, DaemonConfig, McpConnectorSeedConfig,
-    RuntimeLimitsConfig, RuntimeTimingConfig,
+    RuntimeLimitsConfig, RuntimeTimingConfig, TelegramConfig,
 };
 pub use records::{
     AgentChainContinuationRecord, AgentProfileRecord, AgentScheduleRecord, ArtifactRecord,
     ContextOffloadRecord, ContextSummaryRecord, JobRecord, KnowledgeSearchDocRecord,
     KnowledgeSourceRecord, McpConnectorRecord, MissionRecord, PlanRecord, RecordConversionError,
     RunRecord, SessionInboxEventRecord, SessionRecord, SessionRetentionRecord,
-    SessionSearchDocRecord, TranscriptRecord,
+    SessionSearchDocRecord, TelegramChatBindingRecord, TelegramUpdateCursorRecord,
+    TelegramUserPairingRecord, TranscriptRecord,
 };
 pub use repository::{
     AgentRepository, ArtifactRepository, ContextOffloadRepository, ContextSummaryRepository,
     JobRepository, KnowledgeRepository, McpRepository, MissionRepository, PlanRepository,
     RunRepository, RunSummaryRollup, SessionActiveJobCounts, SessionInboxRepository,
-    SessionRepository, SessionRetentionRepository, SessionSearchRepository, TranscriptRepository,
-    TranscriptSessionStats,
+    SessionRepository, SessionRetentionRepository, SessionSearchRepository, TelegramRepository,
+    TranscriptRepository, TranscriptSessionStats,
 };
 pub use store::{ExecutionStateSnapshot, PersistenceStore, StoreError, StoreLayout};
 

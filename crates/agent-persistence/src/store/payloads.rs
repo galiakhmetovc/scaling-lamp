@@ -163,27 +163,11 @@ pub(super) fn remove_payload_if_exists(path: &Path) -> Result<(), StoreError> {
 }
 
 pub(super) fn read_string_payload(path: &Path) -> Result<String, StoreError> {
-    fs::read_to_string(path).map_err(|source| match source.kind() {
-        std::io::ErrorKind::NotFound => StoreError::MissingPayload {
-            path: path.to_path_buf(),
-        },
-        _ => StoreError::Io {
-            path: path.to_path_buf(),
-            source,
-        },
-    })
+    read_payload_with_stage_fallback(path, |candidate| fs::read_to_string(candidate))
 }
 
 pub(super) fn read_binary_payload(path: &Path) -> Result<Vec<u8>, StoreError> {
-    fs::read(path).map_err(|source| match source.kind() {
-        std::io::ErrorKind::NotFound => StoreError::MissingPayload {
-            path: path.to_path_buf(),
-        },
-        _ => StoreError::Io {
-            path: path.to_path_buf(),
-            source,
-        },
-    })
+    read_payload_with_stage_fallback(path, |candidate| fs::read(candidate))
 }
 
 pub(super) fn validate_integrity(
@@ -202,6 +186,39 @@ pub(super) fn validate_integrity(
     }
 
     Ok(())
+}
+
+fn read_payload_with_stage_fallback<T, F>(path: &Path, read: F) -> Result<T, StoreError>
+where
+    F: for<'a> Fn(&'a Path) -> Result<T, std::io::Error>,
+{
+    match read(path) {
+        Ok(payload) => Ok(payload),
+        Err(source) if source.kind() == std::io::ErrorKind::NotFound => {
+            for staged_path in [pending_path(path), backup_path(path)] {
+                match read(&staged_path) {
+                    Ok(payload) => return Ok(payload),
+                    Err(stage_error) if stage_error.kind() == std::io::ErrorKind::NotFound => {
+                        continue;
+                    }
+                    Err(stage_error) => {
+                        return Err(StoreError::Io {
+                            path: staged_path,
+                            source: stage_error,
+                        });
+                    }
+                }
+            }
+
+            Err(StoreError::MissingPayload {
+                path: path.to_path_buf(),
+            })
+        }
+        Err(source) => Err(StoreError::Io {
+            path: path.to_path_buf(),
+            source,
+        }),
+    }
 }
 
 pub(super) fn sha256_hex(bytes: &[u8]) -> String {

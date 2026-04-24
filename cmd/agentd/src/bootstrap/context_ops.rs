@@ -896,6 +896,7 @@ impl App {
             model: session.settings.model.clone(),
             instructions: Some(compaction_instructions()),
             messages: summary_messages,
+            think_level: None,
             previous_response_id: None,
             continuation_messages: Vec::new(),
             tools: Vec::new(),

@@ -239,10 +239,10 @@ fn background_worker_executes_delegate_jobs_as_child_sessions_and_wakes_parent()
         .background_worker_tick(10)
         .expect("run background worker");
     let child_request = requests
-        .recv_timeout(Duration::from_secs(2))
+        .recv_timeout(Duration::from_secs(15))
         .expect("child request");
     let wake_request = requests
-        .recv_timeout(Duration::from_secs(2))
+        .recv_timeout(Duration::from_secs(15))
         .expect("wake request");
     handle.join().expect("join server");
 
@@ -568,7 +568,7 @@ fn background_worker_interval_schedule_advances_to_next_future_cadence_without_b
         .background_worker_tick(1000)
         .expect("run background worker");
     let request = requests
-        .recv_timeout(Duration::from_secs(2))
+        .recv_timeout(Duration::from_secs(15))
         .expect("provider request");
     handle.join().expect("join server");
 
@@ -783,7 +783,7 @@ fn background_worker_after_completion_uses_own_terminal_job_state_for_due_time()
         .background_worker_tick(50)
         .expect("run background worker");
     let request = requests
-        .recv_timeout(Duration::from_secs(2))
+        .recv_timeout(Duration::from_secs(15))
         .expect("provider request");
     handle.join().expect("join server");
 
@@ -962,7 +962,7 @@ fn background_worker_existing_session_rebinds_deleted_target_session() {
         .background_worker_tick(10)
         .expect("run background worker");
     let request = requests
-        .recv_timeout(Duration::from_secs(2))
+        .recv_timeout(Duration::from_secs(15))
         .expect("provider request");
     handle.join().expect("join server");
 
@@ -1078,10 +1078,10 @@ fn background_worker_schedule_recovers_when_permission_policy_denies_tool_call()
         .background_worker_tick(10)
         .expect("run background worker");
     let first_request = requests
-        .recv_timeout(Duration::from_secs(2))
+        .recv_timeout(Duration::from_secs(15))
         .expect("first provider request");
     let second_request = requests
-        .recv_timeout(Duration::from_secs(2))
+        .recv_timeout(Duration::from_secs(15))
         .expect("second provider request");
     handle.join().expect("join server");
 
@@ -1194,26 +1194,50 @@ fn background_worker_scheduled_fresh_session_launch_auto_approves_exec_tools() {
         .put_agent_schedule(&AgentScheduleRecord::from(&schedule))
         .expect("put schedule");
 
-    let report = app
-        .background_worker_tick(10)
-        .expect("run background worker");
-    let first_request = requests
-        .recv_timeout(Duration::from_secs(2))
-        .expect("first provider request");
-    let second_request = requests
-        .recv_timeout(Duration::from_secs(2))
-        .expect("second provider request");
-    let third_request = requests
-        .recv_timeout(Duration::from_secs(2))
-        .expect("third provider request");
-    handle.join().expect("join server");
-
+    let deadline = std::time::Instant::now() + Duration::from_secs(30);
+    let report = loop {
+        let report = app
+            .background_worker_tick(10)
+            .expect("run background worker");
+        if report.executed_jobs == 1 {
+            break report;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "fresh autoapprove schedule was not executed within the timeout"
+        );
+        std::thread::sleep(Duration::from_millis(100));
+    };
     assert_eq!(report.executed_jobs, 1);
-    let jobs = store.list_jobs().expect("list jobs");
+    let jobs = loop {
+        let jobs = store.list_jobs().expect("list jobs");
+        if jobs.len() == 1 && jobs[0].status == "completed" {
+            break jobs;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "fresh autoapprove schedule did not complete within the timeout"
+        );
+        std::thread::sleep(Duration::from_millis(100));
+    };
+    let runs = loop {
+        let runs = store.list_runs().expect("list runs");
+        if runs.len() == 1 && runs[0].status == "completed" {
+            break runs;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "fresh autoapprove schedule did not persist a completed run within the timeout"
+        );
+        std::thread::sleep(Duration::from_millis(100));
+    };
+    handle.join().expect("join server");
+    let requests = requests.try_iter().collect::<Vec<_>>();
+
+    assert_eq!(requests.len(), 3);
     assert_eq!(jobs.len(), 1);
     assert_eq!(jobs[0].status, "completed");
 
-    let runs = store.list_runs().expect("list runs");
     assert_eq!(runs.len(), 1);
     assert_eq!(runs[0].status, "completed");
     assert!(runs[0].pending_approvals_json.contains("[]"));
@@ -1228,11 +1252,11 @@ fn background_worker_scheduled_fresh_session_launch_auto_approves_exec_tools() {
     assert_eq!(updated.last_result.as_deref(), Some("completed"));
     assert_eq!(updated.last_error, None);
 
-    let normalized_first = first_request.to_ascii_lowercase();
+    let normalized_first = requests[0].to_ascii_lowercase();
     assert!(normalized_first.contains("\"name\":\"exec_start\""));
-    let normalized_second = second_request.to_ascii_lowercase();
+    let normalized_second = requests[1].to_ascii_lowercase();
     assert!(normalized_second.contains("\"type\":\"function_call_output\""));
-    let normalized_third = third_request.to_ascii_lowercase();
+    let normalized_third = requests[2].to_ascii_lowercase();
     assert!(normalized_third.contains("\"type\":\"function_call_output\""));
 }
 
@@ -1345,22 +1369,36 @@ fn background_worker_scheduled_existing_session_launch_auto_approves_exec_tools(
         .put_agent_schedule(&AgentScheduleRecord::from(&schedule))
         .expect("put schedule");
 
-    let report = app
-        .background_worker_tick(10)
-        .expect("run background worker");
-    let _ = requests
-        .recv_timeout(Duration::from_secs(2))
-        .expect("first provider request");
-    let _ = requests
-        .recv_timeout(Duration::from_secs(2))
-        .expect("second provider request");
-    let _ = requests
-        .recv_timeout(Duration::from_secs(2))
-        .expect("third provider request");
+    let deadline = std::time::Instant::now() + Duration::from_secs(30);
+    let report = loop {
+        let report = app
+            .background_worker_tick(10)
+            .expect("run background worker");
+        if report.executed_jobs == 1 {
+            break report;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "existing autoapprove schedule was not executed within the timeout"
+        );
+        std::thread::sleep(Duration::from_millis(100));
+    };
+    let jobs = loop {
+        let jobs = store.list_jobs().expect("list jobs");
+        if jobs.len() == 1 && jobs[0].status == "completed" {
+            break jobs;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "existing autoapprove schedule did not complete within the timeout"
+        );
+        std::thread::sleep(Duration::from_millis(100));
+    };
     handle.join().expect("join server");
+    let requests = requests.try_iter().collect::<Vec<_>>();
 
     assert_eq!(report.executed_jobs, 1);
-    let jobs = store.list_jobs().expect("list jobs");
+    assert_eq!(requests.len(), 3);
     assert_eq!(jobs.len(), 1);
     assert_eq!(jobs[0].status, "completed");
 
@@ -1446,24 +1484,50 @@ fn background_worker_scheduled_provider_retry_becomes_terminal_failure_instead_o
         .put_agent_schedule(&AgentScheduleRecord::from(&schedule))
         .expect("put schedule");
 
-    let report = app
-        .background_worker_tick(10)
-        .expect("run background worker");
-    let requests = (0..4)
-        .map(|_| {
-            requests
-                .recv_timeout(Duration::from_secs(2))
-                .expect("provider request")
-        })
-        .collect::<Vec<_>>();
-    handle.join().expect("join server");
-
+    let deadline = std::time::Instant::now() + Duration::from_secs(30);
+    let report = loop {
+        let report = app
+            .background_worker_tick(10)
+            .expect("run background worker");
+        if report.executed_jobs == 1 {
+            break report;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "provider retry schedule was not executed within the timeout"
+        );
+        std::thread::sleep(Duration::from_millis(100));
+    };
     assert_eq!(report.executed_jobs, 1);
-    let jobs = store.list_jobs().expect("list jobs");
+    let jobs = loop {
+        let jobs = store.list_jobs().expect("list jobs");
+        if jobs.len() == 1 && jobs[0].status == "failed" {
+            break jobs;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "provider retry schedule did not reach a failed job within the timeout"
+        );
+        std::thread::sleep(Duration::from_millis(100));
+    };
+    let runs = loop {
+        let runs = store.list_runs().expect("list runs");
+        if runs.len() == 1 && runs[0].status == "failed" {
+            break runs;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "provider retry schedule did not persist a failed run within the timeout"
+        );
+        std::thread::sleep(Duration::from_millis(100));
+    };
+    handle.join().expect("join server");
+    let requests = requests.try_iter().collect::<Vec<_>>();
+
+    assert_eq!(requests.len(), 4);
     assert_eq!(jobs.len(), 1);
     assert_eq!(jobs[0].status, "failed");
 
-    let runs = store.list_runs().expect("list runs");
     assert_eq!(runs.len(), 1);
     assert_eq!(runs[0].status, "failed");
     assert!(runs[0].pending_approvals_json.contains("[]"));

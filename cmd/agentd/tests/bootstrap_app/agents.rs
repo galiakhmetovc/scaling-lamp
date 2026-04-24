@@ -213,6 +213,8 @@ fn build_from_config_refreshes_legacy_default_prompts_but_preserves_custom_edits
     assert!(refreshed_agents.contains("exec_read_output"));
     assert!(refreshed_agents.contains("knowledge_search"));
     assert!(refreshed_agents.contains("session_search"));
+    assert!(refreshed_agents.contains("use `continue_later` with `delay_seconds`"));
+    assert!(refreshed_agents.contains("set `delivery_mode` to `existing_session`"));
 
     fs::write(default_home.join("AGENTS.md"), "custom prompt preserved\n")
         .expect("write custom agents");

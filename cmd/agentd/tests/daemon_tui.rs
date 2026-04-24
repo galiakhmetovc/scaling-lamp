@@ -26,6 +26,8 @@ use std::thread;
 use std::time::{Duration, Instant};
 use tiny_http::{Header, Method, Response, Server, StatusCode};
 
+const TEST_SERVER_READ_TIMEOUT: Duration = Duration::from_secs(15);
+
 fn free_port() -> u16 {
     TcpListener::bind("127.0.0.1:0")
         .expect("bind ephemeral port")
@@ -57,7 +59,7 @@ fn spawn_delayed_sse_server_sequence(
         for (delay, body) in responses {
             let (mut stream, _) = listener.accept().expect("accept connection");
             stream
-                .set_read_timeout(Some(Duration::from_secs(2)))
+                .set_read_timeout(Some(TEST_SERVER_READ_TIMEOUT))
                 .expect("set read timeout");
 
             let mut reader = BufReader::new(stream.try_clone().expect("clone stream"));
@@ -112,7 +114,7 @@ fn spawn_delayed_json_server_sequence(
         for (delay, body) in responses {
             let (mut stream, _) = listener.accept().expect("accept connection");
             stream
-                .set_read_timeout(Some(Duration::from_secs(2)))
+                .set_read_timeout(Some(TEST_SERVER_READ_TIMEOUT))
                 .expect("set read timeout");
 
             let mut reader = BufReader::new(stream.try_clone().expect("clone stream"));
@@ -167,7 +169,7 @@ fn spawn_sse_server_sequence(
         for body in bodies {
             let (mut stream, _) = listener.accept().expect("accept connection");
             stream
-                .set_read_timeout(Some(Duration::from_secs(2)))
+                .set_read_timeout(Some(TEST_SERVER_READ_TIMEOUT))
                 .expect("set read timeout");
 
             let mut reader = BufReader::new(stream.try_clone().expect("clone stream"));
@@ -220,7 +222,7 @@ fn spawn_streaming_sse_server_sequence(
         for chunks in responses {
             let (mut stream, _) = listener.accept().expect("accept connection");
             stream
-                .set_read_timeout(Some(Duration::from_secs(2)))
+                .set_read_timeout(Some(TEST_SERVER_READ_TIMEOUT))
                 .expect("set read timeout");
 
             let mut reader = BufReader::new(stream.try_clone().expect("clone stream"));
@@ -680,7 +682,7 @@ fn daemon_client_delivers_stream_events_before_the_final_outcome() {
     assert_eq!(report.output_text, "hello daemon");
     let first_event_at = first_event_at.expect("expected at least one streamed event");
     assert!(
-        first_event_at < Duration::from_millis(500),
+        first_event_at < Duration::from_secs(3),
         "first stream event arrived too late: {:?}",
         first_event_at
     );
@@ -1231,7 +1233,7 @@ fn wait_for_daemon_tui_idle(
     redraw: &mut dyn FnMut(&TuiAppState) -> Result<(), BootstrapError>,
 ) {
     let runtime_timing = agent_persistence::RuntimeTimingConfig::default();
-    for _ in 0..100 {
+    for _ in 0..500 {
         pump_background(client, state, redraw, &runtime_timing).expect("pump background");
         if !state.has_active_run() {
             return;

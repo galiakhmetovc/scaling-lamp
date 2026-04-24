@@ -363,6 +363,34 @@ fn interagent_tool_definitions_are_explicit_about_async_follow_up_flow() {
 }
 
 #[test]
+fn scheduling_tool_definitions_steer_reminders_to_continue_later() {
+    let catalog = ToolCatalog::default();
+    let continue_later = catalog
+        .definition(ToolName::ContinueLater)
+        .expect("continue_later");
+    let schedule_create = catalog
+        .definition(ToolName::ScheduleCreate)
+        .expect("schedule_create");
+    let continue_schema = continue_later.openai_function_schema().to_string();
+    let schedule_schema = schedule_create.openai_function_schema().to_string();
+
+    assert!(
+        continue_later
+            .description
+            .contains("user asks you to remind or message them later")
+    );
+    assert!(
+        schedule_create
+            .description
+            .contains("For simple one-shot reminders, prefer continue_later")
+    );
+    assert!(continue_schema.contains("same session"));
+    assert!(continue_schema.contains("what to say or do when the timer fires"));
+    assert!(schedule_schema.contains("advanced or recurring"));
+    assert!(schedule_schema.contains("existing_session"));
+}
+
+#[test]
 fn tool_call_parses_knowledge_memory_inputs() {
     let search = ToolCall::from_openai_function(
         "knowledge_search",

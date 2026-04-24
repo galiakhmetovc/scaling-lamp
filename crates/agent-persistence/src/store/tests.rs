@@ -9,7 +9,8 @@ use crate::{
     McpConnectorRecord, McpRepository, MissionRecord, MissionRepository, PersistenceScaffold,
     PlanRecord, PlanRepository, RunRecord, RunRepository, SessionInboxRepository, SessionRecord,
     SessionRepository, SessionRetentionRecord, SessionRetentionRepository, SessionSearchDocRecord,
-    SessionSearchRepository, TranscriptRecord, TranscriptRepository,
+    SessionSearchRepository, TelegramChatBindingRecord, TelegramRepository,
+    TelegramUpdateCursorRecord, TelegramUserPairingRecord, TranscriptRecord, TranscriptRepository,
 };
 use agent_runtime::agent::{
     AgentChainContinuationGrant, AgentProfile, AgentSchedule, AgentScheduleDeliveryMode,
@@ -27,6 +28,88 @@ use std::path::PathBuf;
 use std::sync::mpsc;
 use std::thread;
 use std::time::Duration;
+
+#[test]
+fn telegram_repository_round_trips_pairings_bindings_and_update_cursor() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let scaffold = PersistenceScaffold::from_config(crate::AppConfig {
+        data_dir: temp.path().join("state-root"),
+        ..crate::AppConfig::default()
+    });
+
+    let pairing = TelegramUserPairingRecord {
+        token: "pair-123".to_string(),
+        telegram_user_id: 42,
+        telegram_chat_id: 42,
+        telegram_username: Some("alice".to_string()),
+        telegram_display_name: "Alice".to_string(),
+        status: "pending".to_string(),
+        created_at: 100,
+        expires_at: 1000,
+        activated_at: None,
+    };
+    let binding = TelegramChatBindingRecord {
+        telegram_chat_id: 42,
+        scope: "private".to_string(),
+        owner_telegram_user_id: Some(42),
+        selected_session_id: Some("session-telegram-1".to_string()),
+        last_delivered_transcript_created_at: Some(115),
+        last_delivered_transcript_id: Some("transcript-telegram-1".to_string()),
+        created_at: 110,
+        updated_at: 120,
+    };
+    let cursor = TelegramUpdateCursorRecord {
+        consumer: "telegram-long-poll".to_string(),
+        update_id: 501,
+        updated_at: 130,
+    };
+
+    {
+        let store = super::PersistenceStore::open(&scaffold).expect("open store");
+        store
+            .put_telegram_user_pairing(&pairing)
+            .expect("store pairing");
+        store
+            .put_telegram_chat_binding(&binding)
+            .expect("store binding");
+        store
+            .put_telegram_update_cursor(&cursor)
+            .expect("store cursor");
+    }
+
+    let reopened = super::PersistenceStore::open(&scaffold).expect("reopen store");
+
+    assert_eq!(
+        reopened
+            .get_telegram_user_pairing_by_token("pair-123")
+            .expect("get pairing by token"),
+        Some(pairing.clone())
+    );
+    assert_eq!(
+        reopened
+            .get_telegram_user_pairing_by_user_id(42)
+            .expect("get pairing by user id"),
+        Some(pairing)
+    );
+    assert_eq!(
+        reopened
+            .get_telegram_chat_binding(42)
+            .expect("get chat binding"),
+        Some(binding.clone())
+    );
+    assert_eq!(
+        reopened
+            .list_telegram_chat_bindings()
+            .expect("list chat bindings"),
+        vec![binding]
+    );
+    assert_eq!(
+        reopened
+            .get_telegram_update_cursor("telegram-long-poll")
+            .expect("get update cursor"),
+        Some(cursor)
+    );
+}
 
 #[test]
 fn open_bootstraps_schema_and_round_trips_structured_and_file_backed_data() {
@@ -1856,6 +1939,82 @@ fn open_does_not_prune_payloads_that_are_mid_commit() {
             .get_transcript("transcript-race")
             .expect("get transcript"),
         Some(transcript)
+    );
+}
+
+#[test]
+fn list_transcripts_for_session_reads_pending_payload_during_commit_window() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let scaffold = PersistenceScaffold::from_config(crate::AppConfig {
+        data_dir: temp.path().join("state-root"),
+        ..crate::AppConfig::default()
+    });
+    let store = super::PersistenceStore::open(&scaffold).expect("open store");
+
+    let session = SessionRecord {
+        id: "session-1".to_string(),
+        title: "Store payloads".to_string(),
+        prompt_override: None,
+        settings_json: "{\"model\":\"gpt-5.4\"}".to_string(),
+        agent_profile_id: "default".to_string(),
+        active_mission_id: None,
+        parent_session_id: None,
+        parent_job_id: None,
+        delegation_label: None,
+        created_at: 1,
+        updated_at: 1,
+    };
+    store.put_session(&session).expect("store session");
+
+    let transcript = TranscriptRecord {
+        id: "transcript-race".to_string(),
+        session_id: session.id.clone(),
+        run_id: None,
+        kind: "user".to_string(),
+        content: "mid-commit transcript".to_string(),
+        created_at: 2,
+    };
+    let path = scaffold.stores.transcripts_dir.join("transcript-race.txt");
+    let pending_path = super::payloads::pending_path(&path);
+    let storage_key = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .expect("storage key")
+        .to_string();
+    let sha256 = super::sha256_hex(transcript.content.as_bytes());
+    std::fs::create_dir_all(&scaffold.stores.transcripts_dir).expect("create transcript dir");
+    std::fs::write(&pending_path, transcript.content.as_bytes()).expect("write pending payload");
+    assert!(
+        !path.exists(),
+        "main payload must be absent in the commit window"
+    );
+
+    let concurrent = super::PersistenceStore::open(&scaffold).expect("concurrent open");
+
+    store
+        .connection
+        .execute(
+            "INSERT INTO transcripts (
+                id, session_id, run_id, kind, storage_key, byte_len, sha256, created_at
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+            params![
+                transcript.id.clone(),
+                transcript.session_id.clone(),
+                transcript.run_id.clone(),
+                transcript.kind.clone(),
+                storage_key.clone(),
+                transcript.content.len() as i64,
+                sha256.clone(),
+                transcript.created_at
+            ],
+        )
+        .expect("insert transcript metadata");
+
+    assert_eq!(
+        concurrent
+            .list_transcripts_for_session(&session.id)
+            .expect("list transcripts during commit window"),
+        vec![transcript]
     );
 }
 

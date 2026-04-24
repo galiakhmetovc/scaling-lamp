@@ -1538,6 +1538,15 @@ where
     if state.has_active_run() {
         return Ok(());
     }
+    if let Some(next_priority) = state.next_priority_draft() {
+        return start_chat_run(
+            app,
+            state,
+            session_id,
+            next_priority.content.as_str(),
+            next_priority.queued_at.max(unix_timestamp()?),
+        );
+    }
     if state
         .current_session_summary()
         .is_some_and(|summary| summary.auto_approve)
@@ -1562,10 +1571,7 @@ where
     if app.latest_pending_approval(session_id, None)?.is_some() {
         return Ok(());
     }
-    let next_draft = state
-        .next_priority_draft()
-        .or_else(|| state.next_deferred_draft());
-    let Some(next_draft) = next_draft else {
+    let Some(next_draft) = state.next_deferred_draft() else {
         return Ok(());
     };
     start_chat_run(

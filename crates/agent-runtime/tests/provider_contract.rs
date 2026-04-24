@@ -134,6 +134,7 @@ fn zai_complete_posts_chat_completions_payload_and_extracts_output_text() {
         model: None,
         instructions: Some("Be brief".to_string()),
         messages: vec![ProviderMessage::new(MessageRole::User, "Say hi")],
+        think_level: None,
         previous_response_id: None,
         continuation_messages: Vec::new(),
         tools: Vec::new(),
@@ -199,6 +200,7 @@ fn zai_complete_waits_for_slow_response_when_request_timeout_is_unset() {
         model: None,
         instructions: Some("Be brief".to_string()),
         messages: vec![ProviderMessage::new(MessageRole::User, "Say hi slowly")],
+        think_level: None,
         previous_response_id: None,
         continuation_messages: Vec::new(),
         tools: Vec::new(),
@@ -263,6 +265,7 @@ fn zai_complete_accepts_function_call_only_responses() {
         model: None,
         instructions: Some("Use tools when needed".to_string()),
         messages: vec![ProviderMessage::new(MessageRole::User, "Fetch the doc")],
+        think_level: None,
         previous_response_id: None,
         continuation_messages: Vec::new(),
         tools: vec![ProviderToolDefinition {
@@ -327,6 +330,7 @@ data: [DONE]\n\n",
         model: None,
         instructions: Some("Be brief".to_string()),
         messages: vec![ProviderMessage::new(MessageRole::User, "Say hi")],
+        think_level: None,
         previous_response_id: None,
         continuation_messages: Vec::new(),
         tools: Vec::new(),
@@ -382,6 +386,43 @@ data: [DONE]\n\n",
 }
 
 #[test]
+fn zai_stream_request_disables_thinking_when_think_level_is_off() {
+    let (api_base, requests, handle) = spawn_sse_server(
+        "data: {\"id\":\"chatcmpl-stream-off-1\",\"model\":\"glm-5-turbo\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"hello\"},\"finish_reason\":\"stop\"}]}\n\n\
+data: [DONE]\n\n",
+    );
+    let driver = build_driver(&ConfiguredProvider {
+        kind: ProviderKind::ZaiChatCompletions,
+        api_base: Some(api_base),
+        api_key: Some("zai-key".to_string()),
+        default_model: Some("glm-5-turbo".to_string()),
+        ..ConfiguredProvider::default()
+    })
+    .expect("build zai driver");
+    let request = ProviderRequest {
+        model: None,
+        instructions: Some("Be brief".to_string()),
+        messages: vec![ProviderMessage::new(MessageRole::User, "Say hi")],
+        think_level: Some("off".to_string()),
+        previous_response_id: None,
+        continuation_messages: Vec::new(),
+        tools: Vec::new(),
+        tool_outputs: Vec::new(),
+        max_output_tokens: Some(64),
+        stream: ProviderStreamMode::Enabled,
+    };
+
+    let mut stream = driver.stream(&request).expect("stream");
+    let _ = stream.next_event().expect("completed event");
+    let raw_request = requests.recv().expect("raw request");
+    handle.join().expect("join server");
+
+    let normalized_request = raw_request.to_ascii_lowercase();
+    assert!(normalized_request.contains("\"stream\":true"));
+    assert!(normalized_request.contains("\"thinking\":{\"type\":\"disabled\"}"));
+}
+
+#[test]
 fn zai_stream_rejects_terminal_response_without_text_or_tool_calls() {
     let (api_base, requests, handle) = spawn_sse_server(
         "data: {\"id\":\"chatcmpl-empty-1\",\"model\":\"glm-5-turbo\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"\"},\"finish_reason\":\"stop\"}]}\n\n\
@@ -399,6 +440,7 @@ data: [DONE]\n\n",
         model: None,
         instructions: Some("Be brief".to_string()),
         messages: vec![ProviderMessage::new(MessageRole::User, "Say hi")],
+        think_level: None,
         previous_response_id: None,
         continuation_messages: Vec::new(),
         tools: Vec::new(),
@@ -459,6 +501,7 @@ fn complete_posts_responses_payload_and_extracts_output_text() {
         model: None,
         instructions: Some("Be brief".to_string()),
         messages: vec![ProviderMessage::new(MessageRole::User, "Write a haiku")],
+        think_level: None,
         previous_response_id: None,
         continuation_messages: Vec::new(),
         tools: Vec::new(),
@@ -524,6 +567,7 @@ fn complete_accepts_function_call_only_responses_for_openai() {
             MessageRole::User,
             "Fetch the local document",
         )],
+        think_level: None,
         previous_response_id: None,
         continuation_messages: Vec::new(),
         tools: vec![ProviderToolDefinition {
@@ -589,6 +633,7 @@ data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_stream_123\",
         model: Some("gpt-5.4".to_string()),
         instructions: Some("Be brief".to_string()),
         messages: vec![ProviderMessage::new(MessageRole::User, "ping")],
+        think_level: None,
         previous_response_id: None,
         continuation_messages: Vec::new(),
         tools: Vec::new(),
@@ -648,6 +693,42 @@ data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_stream_123\",
 }
 
 #[test]
+fn openai_stream_request_omits_reasoning_when_think_level_is_off() {
+    let (api_base, requests, handle) = spawn_sse_server(
+        "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_stream_off\",\"model\":\"gpt-5.4\",\"output\":[{\"id\":\"msg_off\",\"type\":\"message\",\"status\":\"completed\",\"role\":\"assistant\",\"content\":[{\"type\":\"output_text\",\"text\":\"hello\",\"annotations\":[]}]}],\"usage\":{\"input_tokens\":11,\"output_tokens\":7,\"total_tokens\":18}}}\n\n",
+    );
+    let driver = OpenAiResponsesDriver::new(OpenAiResponsesConfig {
+        api_base,
+        api_key: "test-key".to_string(),
+        default_model: Some("gpt-5.4".to_string()),
+        connect_timeout_seconds: Some(15),
+        request_timeout_seconds: None,
+        stream_idle_timeout_seconds: Some(1200),
+    });
+    let request = ProviderRequest {
+        model: Some("gpt-5.4".to_string()),
+        instructions: Some("Be brief".to_string()),
+        messages: vec![ProviderMessage::new(MessageRole::User, "ping")],
+        think_level: Some("off".to_string()),
+        previous_response_id: None,
+        continuation_messages: Vec::new(),
+        tools: Vec::new(),
+        tool_outputs: Vec::new(),
+        max_output_tokens: None,
+        stream: ProviderStreamMode::Enabled,
+    };
+
+    let mut stream = driver.stream(&request).expect("stream");
+    let _ = stream.next_event().expect("completed event");
+    let raw_request = requests.recv().expect("raw request");
+    handle.join().expect("join server");
+
+    let normalized_request = raw_request.to_ascii_lowercase();
+    assert!(normalized_request.contains("\"stream\":true"));
+    assert!(!normalized_request.contains("\"reasoning\":"));
+}
+
+#[test]
 fn openai_stream_times_out_after_configured_idle_period_without_new_bytes() {
     let (api_base, requests, handle) = spawn_stalled_sse_server(Duration::from_secs(2));
     let driver = OpenAiResponsesDriver::new(OpenAiResponsesConfig {
@@ -662,6 +743,7 @@ fn openai_stream_times_out_after_configured_idle_period_without_new_bytes() {
         model: Some("gpt-5.4".to_string()),
         instructions: Some("Be brief".to_string()),
         messages: vec![ProviderMessage::new(MessageRole::User, "ping")],
+        think_level: None,
         previous_response_id: None,
         continuation_messages: Vec::new(),
         tools: Vec::new(),

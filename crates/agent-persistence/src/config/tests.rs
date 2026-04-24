@@ -19,6 +19,7 @@ fn base_env(root: &Path) -> ConfigEnv {
         daemon_public_base_url_override: None,
         daemon_skills_dir_override: None,
         home_dir: Some(root.join("home")),
+        telegram_bot_token_override: None,
         context_compaction_keep_tail_messages_override: None,
         context_compaction_max_output_tokens_override: None,
         context_compaction_max_summary_chars_override: None,
@@ -79,6 +80,7 @@ fn validate_rejects_relative_data_dir() {
     let config = AppConfig {
         data_dir: PathBuf::from("relative/teamd"),
         daemon: Default::default(),
+        telegram: Default::default(),
         permissions: Default::default(),
         provider: Default::default(),
         session_defaults: Default::default(),
@@ -264,6 +266,53 @@ knowledge_read_max_bytes = 128000
 }
 
 #[test]
+fn load_merges_telegram_config_and_env_override() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let config_path = temp.path().join("teamd.toml");
+
+    fs::write(
+        &config_path,
+        r#"
+data_dir = "/tmp/teamd-config"
+
+[telegram]
+enabled = true
+poll_interval_ms = 1500
+poll_request_timeout_seconds = 40
+progress_update_min_interval_ms = 1250
+pairing_token_ttl_seconds = 900
+max_upload_bytes = 16777216
+max_download_bytes = 41943040
+private_chat_auto_create_session = true
+group_require_mention = true
+default_autoapprove = true
+"#,
+    )
+    .expect("write config");
+
+    let mut env = base_env(temp.path());
+    env.config_path = Some(config_path);
+    env.telegram_bot_token_override = Some("telegram-secret-token".to_string());
+
+    let config = AppConfig::load_from_env(&env).expect("load config");
+
+    assert!(config.telegram.enabled);
+    assert_eq!(
+        config.telegram.bot_token.as_deref(),
+        Some("telegram-secret-token")
+    );
+    assert_eq!(config.telegram.poll_interval_ms, 1500);
+    assert_eq!(config.telegram.poll_request_timeout_seconds, 40);
+    assert_eq!(config.telegram.progress_update_min_interval_ms, 1250);
+    assert_eq!(config.telegram.pairing_token_ttl_seconds, 900);
+    assert_eq!(config.telegram.max_upload_bytes, 16 * 1024 * 1024);
+    assert_eq!(config.telegram.max_download_bytes, 40 * 1024 * 1024);
+    assert!(config.telegram.private_chat_auto_create_session);
+    assert!(config.telegram.group_require_mention);
+    assert!(config.telegram.default_autoapprove);
+}
+
+#[test]
 fn config_example_toml_loads() {
     let temp = tempfile::tempdir().expect("tempdir");
     let config_path = temp.path().join("config.example.toml");
@@ -288,6 +337,7 @@ fn validate_rejects_invalid_runtime_limit_bounds() {
     let config = AppConfig {
         data_dir: PathBuf::from("/tmp/teamd"),
         daemon: Default::default(),
+        telegram: Default::default(),
         permissions: Default::default(),
         provider: Default::default(),
         session_defaults: Default::default(),

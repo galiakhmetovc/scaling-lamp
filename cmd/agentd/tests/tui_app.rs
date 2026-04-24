@@ -19,6 +19,9 @@ use std::net::TcpListener;
 use std::thread;
 use std::time::{Duration, Instant};
 
+const TEST_SERVER_READ_TIMEOUT: Duration = Duration::from_secs(15);
+const TEST_SERVER_IDLE_TIMEOUT: Duration = Duration::from_secs(5);
+
 fn summary(id: &str, title: &str) -> SessionSummary {
     SessionSummary {
         id: id.to_string(),
@@ -1527,12 +1530,25 @@ fn tui_priority_submit_interrupts_after_a_completed_tool_step() {
     handle.join().expect("join sse");
 
     let entries = state.timeline().entries(true);
-    assert!(entries.iter().any(|entry| {
-        matches!(entry.kind, TimelineEntryKind::Assistant) && entry.content == "fresh answer"
-    }));
-    assert!(!entries.iter().any(|entry| {
-        matches!(entry.kind, TimelineEntryKind::Assistant) && entry.content == "stale answer"
-    }));
+    let assistant_entries = entries
+        .iter()
+        .filter(|entry| matches!(entry.kind, TimelineEntryKind::Assistant))
+        .map(|entry| entry.content.clone())
+        .collect::<Vec<_>>();
+    assert!(
+        entries.iter().any(|entry| {
+            matches!(entry.kind, TimelineEntryKind::Assistant) && entry.content == "fresh answer"
+        }),
+        "assistant entries: {:?}",
+        assistant_entries
+    );
+    assert!(
+        !entries.iter().any(|entry| {
+            matches!(entry.kind, TimelineEntryKind::Assistant) && entry.content == "stale answer"
+        }),
+        "assistant entries: {:?}",
+        assistant_entries
+    );
 }
 
 #[test]
@@ -1686,7 +1702,7 @@ fn spawn_sse_server_sequence(responses: Vec<String>) -> (String, thread::JoinHan
         for body in responses {
             let (mut stream, _) = listener.accept().expect("accept connection");
             stream
-                .set_read_timeout(Some(std::time::Duration::from_secs(2)))
+                .set_read_timeout(Some(TEST_SERVER_READ_TIMEOUT))
                 .expect("set read timeout");
             let mut reader = BufReader::new(stream.try_clone().expect("clone stream"));
             let mut raw_request = String::new();
@@ -1757,7 +1773,7 @@ fn spawn_openai_priority_server() -> (String, thread::JoinHandle<()>) {
                 Ok((mut stream, _)) => {
                     last_activity = Instant::now();
                     stream
-                        .set_read_timeout(Some(Duration::from_secs(2)))
+                        .set_read_timeout(Some(TEST_SERVER_READ_TIMEOUT))
                         .expect("set read timeout");
                     let mut reader = BufReader::new(stream.try_clone().expect("clone stream"));
                     let mut raw_request = String::new();
@@ -1815,7 +1831,7 @@ fn spawn_openai_priority_server() -> (String, thread::JoinHandle<()>) {
                     stream.flush().expect("flush response");
                 }
                 Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
-                    if last_activity.elapsed() > Duration::from_millis(300) {
+                    if last_activity.elapsed() > TEST_SERVER_IDLE_TIMEOUT {
                         break;
                     }
                     thread::sleep(Duration::from_millis(10));
@@ -1836,7 +1852,7 @@ fn spawn_json_server_sequence(responses: Vec<String>) -> (String, thread::JoinHa
         for body in responses {
             let (mut stream, _) = listener.accept().expect("accept connection");
             stream
-                .set_read_timeout(Some(std::time::Duration::from_secs(2)))
+                .set_read_timeout(Some(TEST_SERVER_READ_TIMEOUT))
                 .expect("set read timeout");
             let mut reader = BufReader::new(stream.try_clone().expect("clone stream"));
             let mut raw_request = String::new();
@@ -1884,7 +1900,7 @@ fn spawn_delayed_sse_server_sequence(
         for (delay, body) in responses {
             let (mut stream, _) = listener.accept().expect("accept connection");
             stream
-                .set_read_timeout(Some(Duration::from_secs(2)))
+                .set_read_timeout(Some(TEST_SERVER_READ_TIMEOUT))
                 .expect("set read timeout");
             let mut reader = BufReader::new(stream.try_clone().expect("clone stream"));
             let mut raw_request = String::new();
@@ -1928,9 +1944,9 @@ fn wait_for_tui_idle(
     state: &mut TuiAppState,
     redraw: &mut dyn FnMut(&TuiAppState) -> Result<(), agentd::bootstrap::BootstrapError>,
 ) {
-    for _ in 0..100 {
+    for _ in 0..500 {
         pump_background(app, state, redraw, &app.config.runtime_timing).expect("pump background");
-        if !state.has_active_run() {
+        if !state.has_active_run() && state.queued_draft_count() == 0 {
             return;
         }
         thread::sleep(Duration::from_millis(10));

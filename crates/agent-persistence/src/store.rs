@@ -7,6 +7,7 @@ mod memory_repos;
 mod payloads;
 mod schema;
 mod session_mission;
+mod telegram_repos;
 
 use crate::PersistenceScaffold;
 use crate::audit::{AuditLogConfig, DiagnosticEvent};
@@ -20,7 +21,8 @@ use crate::records::{
 use crate::repository::{
     AgentRepository, ArtifactRepository, ContextOffloadRepository, ContextSummaryRepository,
     JobRepository, McpRepository, MissionRepository, PlanRepository, RunRepository,
-    SessionInboxRepository, SessionRepository, SessionRetentionRepository, TranscriptRepository,
+    SessionInboxRepository, SessionRepository, SessionRetentionRepository, TelegramRepository,
+    TranscriptRepository,
 };
 use agent_runtime::archive::{
     ArchivedArtifactEntry, ArchivedSummary, ArchivedTranscriptEntry, SessionArchiveManifest,

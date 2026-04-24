@@ -9,6 +9,7 @@ use crate::execution::{ChatExecutionEvent, ExecutionError, ToolExecutionStatus};
 use crate::help::QUICK_HELP_LINE;
 use crate::http::client::{DaemonClient, DaemonConnectOptions};
 use crate::http::types::{SessionDetailResponse, StatusResponse};
+use crate::telegram;
 use crate::tui;
 use agent_persistence::{
     JobRepository, MissionRecord, MissionRepository, PersistenceStore, RunRepository,
@@ -60,6 +61,11 @@ enum Command {
         host: Option<String>,
         port: Option<u16>,
     },
+    TelegramRun,
+    TelegramPair {
+        key: String,
+    },
+    TelegramPairings,
     Daemon,
     DaemonStop,
     MissionTick {
@@ -168,6 +174,11 @@ where
         Command::Tui { .. } => Err(BootstrapError::Usage {
             reason: "tui requires interactive terminal I/O".to_string(),
         }),
+        Command::TelegramRun => Err(BootstrapError::Usage {
+            reason: "telegram run requires process I/O".to_string(),
+        }),
+        Command::TelegramPair { key } => telegram::activate_pairing(app, &key),
+        Command::TelegramPairings => telegram::render_pairings(app),
         Command::Daemon => Err(BootstrapError::Usage {
             reason: "daemon requires server mode I/O".to_string(),
         }),
@@ -231,6 +242,7 @@ where
             let connect = merge_connect_options(connect, host, port);
             tui::run_daemon_backed(app, connect)
         }
+        Command::TelegramRun => telegram::run(app),
         Command::ChatRepl { session_id } => {
             let connection = daemon_connection_for_process(app, &connect)?;
             let result =
@@ -290,6 +302,7 @@ where
         Command::Tui { host, port } => {
             tui::run_daemon_backed(app, DaemonConnectOptions { host, port })
         }
+        Command::TelegramRun => telegram::run(app),
         Command::Daemon => daemon::serve(app.clone()).map_err(BootstrapError::Stream),
         other => {
             let rendered = execute_command(app, other)?;

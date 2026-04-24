@@ -86,6 +86,7 @@ pub struct ProviderRequest {
     pub model: Option<String>,
     pub instructions: Option<String>,
     pub messages: Vec<ProviderMessage>,
+    pub think_level: Option<String>,
     pub previous_response_id: Option<String>,
     pub continuation_messages: Vec<ProviderContinuationMessage>,
     pub tools: Vec<ProviderToolDefinition>,
@@ -781,8 +782,9 @@ impl OpenAiResponsesDriver {
             instructions: request.instructions.as_deref(),
             previous_response_id: request.previous_response_id.as_deref(),
             input,
-            reasoning: (request.stream == ProviderStreamMode::Enabled)
-                .then_some(OpenAiResponsesReasoningConfig { summary: "auto" }),
+            reasoning: (request.stream == ProviderStreamMode::Enabled
+                && !think_level_disables_reasoning(request.think_level.as_deref()))
+            .then_some(OpenAiResponsesReasoningConfig { summary: "auto" }),
             tools,
             max_output_tokens: request.max_output_tokens,
             stream: request.stream == ProviderStreamMode::Enabled,
@@ -911,7 +913,9 @@ impl ZaiChatCompletionsDriver {
             model,
             messages,
             thinking: ZaiThinkingConfig {
-                thinking_type: if request.stream == ProviderStreamMode::Enabled {
+                thinking_type: if request.stream == ProviderStreamMode::Enabled
+                    && !think_level_disables_reasoning(request.think_level.as_deref())
+                {
                     "enabled"
                 } else {
                     "disabled"
@@ -926,6 +930,16 @@ impl ZaiChatCompletionsDriver {
             stream: request.stream == ProviderStreamMode::Enabled,
         })
     }
+}
+
+fn think_level_disables_reasoning(think_level: Option<&str>) -> bool {
+    matches!(
+        think_level.map(str::trim).filter(|value| !value.is_empty()),
+        Some(value)
+            if value.eq_ignore_ascii_case("off")
+                || value.eq_ignore_ascii_case("disabled")
+                || value.eq_ignore_ascii_case("none")
+    )
 }
 
 fn build_http_client(

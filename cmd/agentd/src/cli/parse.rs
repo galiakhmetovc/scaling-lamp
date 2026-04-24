@@ -38,6 +38,13 @@ impl Command {
                 port: None,
             }),
             [command, rest @ ..] if command == "tui" => parse_tui_command(rest),
+            [scope, action] if scope == "telegram" && action == "run" => Ok(Self::TelegramRun),
+            [scope, action, key] if scope == "telegram" && action == "pair" => {
+                Ok(Self::TelegramPair { key: key.clone() })
+            }
+            [scope, action] if scope == "telegram" && action == "pairings" => {
+                Ok(Self::TelegramPairings)
+            }
             [command] if command == "daemon" => Ok(Self::Daemon),
             [scope, action] if scope == "daemon" && action == "stop" => Ok(Self::DaemonStop),
             [scope, action] if scope == "provider" && action == "smoke" => {
@@ -156,7 +163,7 @@ impl Command {
                 })
             }
             _ => Err(BootstrapError::Usage {
-                reason: "expected one of: status | logs [max_lines] | version | update [tag] | tui | daemon | daemon stop | provider smoke | chat show/send/repl | mission create/show/tick | session create/show/skills/enable-skill/disable-skill | run show | job show/execute | approval list/approve | delegate list | verification show".to_string(),
+                reason: "expected one of: status | logs [max_lines] | version | update [tag] | tui | telegram run|pair|pairings | daemon | daemon stop | provider smoke | chat show/send/repl | mission create/show/tick | session create/show/skills/enable-skill/disable-skill | run show | job show/execute | approval list/approve | delegate list | verification show".to_string(),
             }),
         }
     }

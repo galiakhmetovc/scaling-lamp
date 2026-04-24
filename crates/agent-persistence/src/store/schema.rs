@@ -226,6 +226,35 @@ pub(super) fn bootstrap_schema(connection: &Connection) -> Result<(), StoreError
              updated_at INTEGER NOT NULL
          );
 
+         CREATE TABLE IF NOT EXISTS telegram_user_pairings (
+             token TEXT PRIMARY KEY,
+             telegram_user_id INTEGER NOT NULL UNIQUE,
+             telegram_chat_id INTEGER NOT NULL,
+             telegram_username TEXT,
+             telegram_display_name TEXT NOT NULL,
+             status TEXT NOT NULL,
+             created_at INTEGER NOT NULL,
+             expires_at INTEGER NOT NULL,
+             activated_at INTEGER
+         );
+
+         CREATE TABLE IF NOT EXISTS telegram_chat_bindings (
+             telegram_chat_id INTEGER PRIMARY KEY,
+             scope TEXT NOT NULL,
+             owner_telegram_user_id INTEGER,
+             selected_session_id TEXT,
+             last_delivered_transcript_created_at INTEGER,
+             last_delivered_transcript_id TEXT,
+             created_at INTEGER NOT NULL,
+             updated_at INTEGER NOT NULL
+         );
+
+         CREATE TABLE IF NOT EXISTS telegram_update_cursors (
+             consumer TEXT PRIMARY KEY,
+             update_id INTEGER NOT NULL,
+             updated_at INTEGER NOT NULL
+         );
+
          CREATE TABLE IF NOT EXISTS knowledge_search_docs (
              doc_id TEXT PRIMARY KEY,
              source_id TEXT NOT NULL,
@@ -286,6 +315,8 @@ pub(super) fn bootstrap_schema(connection: &Connection) -> Result<(), StoreError
          CREATE INDEX IF NOT EXISTS idx_session_search_docs_session_id ON session_search_docs(session_id);
          CREATE INDEX IF NOT EXISTS idx_knowledge_sources_kind_mtime ON knowledge_sources(kind, mtime DESC);
          CREATE INDEX IF NOT EXISTS idx_mcp_connectors_enabled_updated_at ON mcp_connectors(enabled, updated_at DESC);
+         CREATE INDEX IF NOT EXISTS idx_telegram_user_pairings_status_expires_at ON telegram_user_pairings(status, expires_at);
+         CREATE INDEX IF NOT EXISTS idx_telegram_chat_bindings_scope_updated_at ON telegram_chat_bindings(scope, updated_at DESC);
          CREATE INDEX IF NOT EXISTS idx_knowledge_search_docs_source_id ON knowledge_search_docs(source_id);
          CREATE INDEX IF NOT EXISTS idx_artifacts_session_id ON artifacts(session_id);",
     )?;
@@ -446,6 +477,71 @@ pub(super) fn validate_schema(connection: &Connection) -> Result<(), StoreError>
     validate_column(connection, "mcp_connectors", "enabled", true)?;
     validate_column(connection, "mcp_connectors", "created_at", true)?;
     validate_column(connection, "mcp_connectors", "updated_at", true)?;
+    validate_column(connection, "telegram_user_pairings", "token", true)?;
+    validate_column(
+        connection,
+        "telegram_user_pairings",
+        "telegram_user_id",
+        true,
+    )?;
+    validate_column(
+        connection,
+        "telegram_user_pairings",
+        "telegram_chat_id",
+        true,
+    )?;
+    validate_column(
+        connection,
+        "telegram_user_pairings",
+        "telegram_username",
+        false,
+    )?;
+    validate_column(
+        connection,
+        "telegram_user_pairings",
+        "telegram_display_name",
+        true,
+    )?;
+    validate_column(connection, "telegram_user_pairings", "status", true)?;
+    validate_column(connection, "telegram_user_pairings", "created_at", true)?;
+    validate_column(connection, "telegram_user_pairings", "expires_at", true)?;
+    validate_column(connection, "telegram_user_pairings", "activated_at", false)?;
+    validate_column(
+        connection,
+        "telegram_chat_bindings",
+        "telegram_chat_id",
+        true,
+    )?;
+    validate_column(connection, "telegram_chat_bindings", "scope", true)?;
+    validate_column(
+        connection,
+        "telegram_chat_bindings",
+        "owner_telegram_user_id",
+        false,
+    )?;
+    validate_column(
+        connection,
+        "telegram_chat_bindings",
+        "selected_session_id",
+        false,
+    )?;
+    validate_column(
+        connection,
+        "telegram_chat_bindings",
+        "last_delivered_transcript_created_at",
+        false,
+    )?;
+    validate_column(
+        connection,
+        "telegram_chat_bindings",
+        "last_delivered_transcript_id",
+        false,
+    )?;
+    validate_column(connection, "telegram_chat_bindings", "created_at", true)?;
+    validate_column(connection, "telegram_chat_bindings", "updated_at", true)?;
+    validate_column(connection, "telegram_update_cursors", "consumer", true)?;
+    validate_column(connection, "telegram_update_cursors", "update_id", true)?;
+    validate_column(connection, "telegram_update_cursors", "updated_at", true)?;
     validate_column(connection, "knowledge_search_docs", "doc_id", true)?;
     validate_column(connection, "knowledge_search_docs", "source_id", true)?;
     validate_column(connection, "knowledge_search_docs", "path", true)?;
@@ -634,6 +730,18 @@ pub(super) fn migrate_schema(connection: &Connection) -> Result<(), StoreError> 
     )?;
     add_column_if_missing(connection, "jobs", "callback_json", "TEXT")?;
     add_column_if_missing(connection, "jobs", "callback_sent_at", "INTEGER")?;
+    add_column_if_missing(
+        connection,
+        "telegram_chat_bindings",
+        "last_delivered_transcript_created_at",
+        "INTEGER",
+    )?;
+    add_column_if_missing(
+        connection,
+        "telegram_chat_bindings",
+        "last_delivered_transcript_id",
+        "TEXT",
+    )?;
     add_column_if_missing(
         connection,
         "missions",

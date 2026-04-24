@@ -2068,7 +2068,7 @@ impl ToolCatalog {
             ToolDefinition {
                 name: ToolName::ContinueLater,
                 family: ToolFamily::Agent,
-                description: "Create a self-addressed one-shot deferred continuation schedule",
+                description: "Create a self-addressed one-shot timer in the same session; use this when the user asks you to remind or message them later",
                 policy: ToolPolicy {
                     read_only: false,
                     destructive: false,
@@ -2098,7 +2098,7 @@ impl ToolCatalog {
             ToolDefinition {
                 name: ToolName::ScheduleCreate,
                 family: ToolFamily::Agent,
-                description: "Create an agent schedule in the current workspace",
+                description: "Create an advanced or recurring agent schedule in the current workspace. For simple one-shot reminders, prefer continue_later",
                 policy: ToolPolicy {
                     read_only: false,
                     destructive: false,
@@ -5361,9 +5361,9 @@ impl ToolName {
             Self::ContinueLater => json!({
                 "type": "object",
                 "properties": {
-                    "delay_seconds": { "type": "integer", "minimum": 1, "description": "How many seconds to wait before resuming work" },
-                    "handoff_payload": { "type": "string", "description": "Explicit handoff payload for the future continuation" },
-                    "delivery_mode": { "type": ["string", "null"], "enum": ["fresh_session", "existing_session", null], "description": "Optional delivery mode; defaults to existing_session for self-resume" }
+                    "delay_seconds": { "type": "integer", "minimum": 1, "description": "How many seconds to wait before the same session wakes up" },
+                    "handoff_payload": { "type": "string", "description": "what to say or do when the timer fires; include the user's requested reminder text and any relevant context" },
+                    "delivery_mode": { "type": ["string", "null"], "enum": ["fresh_session", "existing_session", null], "description": "Optional delivery mode; defaults to existing_session, which resumes the same session and is the right default for reminders" }
                 },
                 "required": ["delay_seconds", "handoff_payload"],
                 "additionalProperties": false,
@@ -5390,11 +5390,11 @@ impl ToolName {
                 "properties": {
                     "id": { "type": "string", "description": "Stable schedule id" },
                     "agent_identifier": { "type": ["string", "null"], "description": "Optional agent id or name; defaults to the current session agent" },
-                    "prompt": { "type": "string", "description": "Prompt delivered when the schedule fires" },
-                    "mode": { "type": ["string", "null"], "enum": ["interval", "after_completion", "once", null], "description": "Optional schedule mode; defaults to interval" },
-                    "delivery_mode": { "type": ["string", "null"], "enum": ["fresh_session", "existing_session", null], "description": "Optional delivery mode; defaults to fresh_session" },
+                    "prompt": { "type": "string", "description": "Prompt delivered when the advanced or recurring schedule fires" },
+                    "mode": { "type": ["string", "null"], "enum": ["interval", "after_completion", "once", null], "description": "Optional schedule mode; defaults to interval. Use once only for explicit one-shot schedules; for simple reminders use continue_later instead" },
+                    "delivery_mode": { "type": ["string", "null"], "enum": ["fresh_session", "existing_session", null], "description": "Optional delivery mode; defaults to fresh_session. Use existing_session when the result must appear in the current chat/session" },
                     "target_session_id": { "type": ["string", "null"], "description": "Optional target session id; for existing_session defaults to the current session" },
-                    "interval_seconds": { "type": "integer", "minimum": 1, "description": "Positive schedule interval in seconds" },
+                    "interval_seconds": { "type": "integer", "minimum": 1, "description": "Positive schedule cadence in seconds; this is not the preferred field for a simple user reminder" },
                     "enabled": { "type": ["boolean", "null"], "description": "Optional enabled state; defaults to true" }
                 },
                 "required": ["id", "prompt", "interval_seconds"],
