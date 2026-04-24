@@ -27,13 +27,9 @@ pub(super) fn reconcile_directory(
         let stored_path: String = row.get(0)?;
         let byte_len: i64 = row.get(1)?;
         let sha256: String = row.get(2)?;
-        let file_name = PathBuf::from(stored_path)
-            .file_name()
-            .and_then(|name| name.to_str())
-            .map(ToOwned::to_owned);
 
-        if let Some(file_name) = file_name {
-            expected.insert(file_name, (byte_len as u64, sha256));
+        if let Some(storage_key) = expected_storage_key(directory, &stored_path) {
+            expected.insert(storage_key, (byte_len as u64, sha256));
         }
     }
 
@@ -43,33 +39,15 @@ pub(super) fn reconcile_directory(
 
     restore_backups(directory, &expected)?;
 
-    for entry in fs::read_dir(directory).map_err(|source| StoreError::Io {
-        path: directory.to_path_buf(),
-        source,
-    })? {
-        let entry = entry.map_err(|source| StoreError::Io {
-            path: directory.to_path_buf(),
-            source,
-        })?;
-        let path = entry.path();
-
-        if !path.is_file() {
-            continue;
-        }
-
-        if path
-            .file_name()
-            .and_then(|name| name.to_str())
-            .is_some_and(|name| name.ends_with(".bak") || name.ends_with(".pending"))
-        {
-            continue;
-        }
-
-        let Some(file_name) = path.file_name().and_then(|name| name.to_str()) else {
+    for path in collect_payload_files(directory)? {
+        let Some(storage_key) = payload_key_for_path(directory, &path) else {
             continue;
         };
+        if storage_key.ends_with(".bak") || storage_key.ends_with(".pending") {
+            continue;
+        }
 
-        let should_remove = match expected.get(file_name) {
+        let should_remove = match expected.get(&storage_key) {
             Some((expected_len, expected_sha256)) => {
                 let (actual_len, actual_sha256) = payload_fingerprint(&path)?;
                 actual_len != *expected_len || actual_sha256 != *expected_sha256
@@ -85,6 +63,7 @@ pub(super) fn reconcile_directory(
         }
     }
 
+    remove_empty_child_directories(directory, directory)?;
     Ok(())
 }
 
@@ -256,32 +235,19 @@ pub(super) fn restore_backups(
     directory: &Path,
     expected: &std::collections::BTreeMap<String, (u64, String)>,
 ) -> Result<(), StoreError> {
-    for entry in fs::read_dir(directory).map_err(|source| StoreError::Io {
-        path: directory.to_path_buf(),
-        source,
-    })? {
-        let entry = entry.map_err(|source| StoreError::Io {
-            path: directory.to_path_buf(),
-            source,
-        })?;
-        let path = entry.path();
-
-        if !path.is_file() {
-            continue;
-        }
-
-        let Some(file_name) = path.file_name().and_then(|name| name.to_str()) else {
+    for path in collect_payload_files(directory)? {
+        let Some(storage_key) = payload_key_for_path(directory, &path) else {
             continue;
         };
 
-        let (original_name, is_backup) = if let Some(original_name) = file_name.strip_suffix(".bak")
-        {
-            (original_name, true)
-        } else if let Some(original_name) = file_name.strip_suffix(".pending") {
-            (original_name, false)
-        } else {
-            continue;
-        };
+        let (original_name, is_backup) =
+            if let Some(original_name) = storage_key.strip_suffix(".bak") {
+                (original_name, true)
+            } else if let Some(original_name) = storage_key.strip_suffix(".pending") {
+                (original_name, false)
+            } else {
+                continue;
+            };
         let Some((expected_len, expected_sha256)) = expected.get(original_name) else {
             if is_backup {
                 fs::remove_file(&path).map_err(|source| StoreError::Io {
@@ -329,5 +295,111 @@ pub(super) fn restore_backups(
         }
     }
 
+    Ok(())
+}
+
+fn expected_storage_key(directory: &Path, stored_path: &str) -> Option<String> {
+    let path = PathBuf::from(stored_path);
+    let relative = if path.is_absolute() {
+        path.strip_prefix(directory).ok()?.to_path_buf()
+    } else if first_component_matches_directory(&path, directory) {
+        strip_first_component(&path)?
+    } else {
+        path
+    };
+    safe_relative_key(&relative)
+}
+
+fn first_component_matches_directory(path: &Path, directory: &Path) -> bool {
+    let Some(directory_name) = directory.file_name() else {
+        return false;
+    };
+    matches!(
+        path.components().next(),
+        Some(std::path::Component::Normal(component)) if component == directory_name
+    )
+}
+
+fn strip_first_component(path: &Path) -> Option<PathBuf> {
+    let mut components = path.components();
+    components.next()?;
+    Some(components.as_path().to_path_buf())
+}
+
+fn payload_key_for_path(directory: &Path, path: &Path) -> Option<String> {
+    safe_relative_key(path.strip_prefix(directory).ok()?)
+}
+
+fn safe_relative_key(path: &Path) -> Option<String> {
+    let mut normalized = PathBuf::new();
+    for component in path.components() {
+        match component {
+            std::path::Component::Normal(part) => normalized.push(part),
+            _ => return None,
+        }
+    }
+    if normalized.as_os_str().is_empty() {
+        return None;
+    }
+    Some(normalized.to_string_lossy().replace('\\', "/"))
+}
+
+fn collect_payload_files(directory: &Path) -> Result<Vec<PathBuf>, StoreError> {
+    let mut files = Vec::new();
+    collect_payload_files_into(directory, &mut files)?;
+    Ok(files)
+}
+
+fn collect_payload_files_into(
+    directory: &Path,
+    files: &mut Vec<PathBuf>,
+) -> Result<(), StoreError> {
+    for entry in fs::read_dir(directory).map_err(|source| StoreError::Io {
+        path: directory.to_path_buf(),
+        source,
+    })? {
+        let entry = entry.map_err(|source| StoreError::Io {
+            path: directory.to_path_buf(),
+            source,
+        })?;
+        let path = entry.path();
+        if path.is_dir() {
+            collect_payload_files_into(&path, files)?;
+        } else if path.is_file() {
+            files.push(path);
+        }
+    }
+    Ok(())
+}
+
+fn remove_empty_child_directories(root: &Path, directory: &Path) -> Result<(), StoreError> {
+    for entry in fs::read_dir(directory).map_err(|source| StoreError::Io {
+        path: directory.to_path_buf(),
+        source,
+    })? {
+        let entry = entry.map_err(|source| StoreError::Io {
+            path: directory.to_path_buf(),
+            source,
+        })?;
+        let path = entry.path();
+        if path.is_dir() {
+            remove_empty_child_directories(root, &path)?;
+        }
+    }
+
+    if directory != root
+        && fs::read_dir(directory)
+            .map_err(|source| StoreError::Io {
+                path: directory.to_path_buf(),
+                source,
+            })?
+            .next()
+            .is_none()
+    {
+        fs::remove_dir(directory).map_err(|source| StoreError::Io {
+            path: directory.to_path_buf(),
+            source,
+        })?;
+    }
     Ok(())
 }

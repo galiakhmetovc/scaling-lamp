@@ -18,6 +18,8 @@
 - если Rust отсутствует или слишком старый для edition 2024, ставит/обновляет stable Rust через `rustup`;
 - собирает `agentd` в release mode;
 - ставит binary в `/opt/teamd/bin/agentd`;
+- регистрирует `agentd` в `PATH` через `/usr/local/bin/agentd`;
+- ставит operator helper `/usr/local/bin/teamdctl`;
 - создаёт пользователя `teamd`;
 - пишет `/etc/teamd/config.toml` и `/etc/teamd/teamd.env`;
 - спрашивает Telegram bot token и Z.ai/API key скрытым вводом;
@@ -64,7 +66,7 @@ TEAMD_TELEGRAM_BOT_TOKEN='123456789:real-token' \
 После `/start` в Telegram pairing key активируется так:
 
 ```bash
-sudo -u teamd sh -lc 'set -a; . /etc/teamd/teamd.env; set +a; /opt/teamd/bin/agentd telegram pair <key>'
+teamdctl telegram pair <key>
 ```
 
 Ручные шаги ниже описывают то же самое подробно и полезны для отладки.
@@ -309,6 +311,8 @@ if ! id -u teamd >/dev/null 2>&1; then
 fi
 sudo mkdir -p /opt/teamd/bin /etc/teamd /var/lib/teamd/state
 sudo install -m 0755 ./target/release/agentd /opt/teamd/bin/agentd
+sudo ln -sf /opt/teamd/bin/agentd /usr/local/bin/agentd
+sudo install -m 0755 ./scripts/teamdctl.sh /usr/local/bin/teamdctl
 sudo test -f /etc/teamd/config.toml || sudo cp config.example.toml /etc/teamd/config.toml
 sudo chown -R teamd:teamd /var/lib/teamd
 ```
@@ -462,6 +466,8 @@ cargo build --release -p agentd
 sudo systemctl stop teamd-telegram.service
 sudo systemctl stop teamd-daemon.service
 sudo install -m 0755 ./target/release/agentd /opt/teamd/bin/agentd
+sudo ln -sf /opt/teamd/bin/agentd /usr/local/bin/agentd
+sudo install -m 0755 ./scripts/teamdctl.sh /usr/local/bin/teamdctl
 sudo systemctl start teamd-daemon.service
 sudo systemctl start teamd-telegram.service
 ```
@@ -469,7 +475,7 @@ sudo systemctl start teamd-telegram.service
 Проверить версию после обновления:
 
 ```bash
-/opt/teamd/bin/agentd version
+agentd version
 journalctl -u teamd-telegram.service -n 100 --no-pager
 ```
 
@@ -501,7 +507,7 @@ agentd telegram pair tg...
 Если используется systemd-установка из примера, pairing key не передаётся в service unit и не требует рестарта сервиса. Его надо один раз активировать локальной CLI-командой, запущенной от того же unix-пользователя и с тем же env, что и `teamd-telegram.service`:
 
 ```bash
-sudo -u teamd sh -lc 'set -a; . /etc/teamd/teamd.env; set +a; /opt/teamd/bin/agentd telegram pair tg...'
+teamdctl telegram pair tg...
 ```
 
 Эта команда находит pending pairing record в `TEAMD_DATA_DIR`, помечает его как activated и привязывает Telegram account к runtime state. Уже запущенный Telegram worker увидит эту запись без перезапуска.
@@ -515,7 +521,7 @@ agentd telegram pairings
 Для systemd-установки:
 
 ```bash
-sudo -u teamd sh -lc 'set -a; . /etc/teamd/teamd.env; set +a; /opt/teamd/bin/agentd telegram pairings'
+teamdctl telegram pairings
 ```
 
 После активации пользователь может писать боту обычные сообщения.
@@ -559,6 +565,22 @@ sudo -u teamd sh -lc 'set -a; . /etc/teamd/teamd.env; set +a; /opt/teamd/bin/age
 
 ## 14. Важные параметры Telegram
 
+Официальные страницы Telegram, на которые завязаны лимиты и API-поля:
+
+- Bot FAQ про rate limits: <https://core.telegram.org/bots/faq#my-bot-is-hitting-limits-how-do-i-avoid-this>
+- `getUpdates`: <https://core.telegram.org/bots/api#getupdates>
+- `sendMessage`: <https://core.telegram.org/bots/api#sendmessage>
+- `sendDocument`: <https://core.telegram.org/bots/api#senddocument>
+
+В коде мы целимся не в 100% лимита, а примерно в 80% безопасной скорости:
+
+- один chat: официальный ориентир — не больше 1 сообщения/секунду; в конфиге `progress_update_min_interval_ms = 1250`, то есть 0.8 сообщения/секунду;
+- group chat: официальный ориентир — не больше 20 сообщений/минуту; для групповых broadcast-сценариев нужен cap около 16 сообщений/минуту на группу;
+- bulk notifications: официальный ориентир — около 30 сообщений/секунду; для массовой рассылки нужен global cap около 24 сообщений/секунду;
+- `getUpdates.limit`: Bot API принимает 1-100, текущая реализация использует верхнюю границу 100;
+- `sendMessage.text`: Bot API принимает 1-4096 characters after entities parsing, поэтому длинные ответы надо дробить до лимита;
+- captions: Bot API для media captions обычно ограничивает 0-1024 characters after entities parsing, поэтому длинный текст лучше отправлять отдельными text messages или document.
+
 | Параметр | Значение по умолчанию | Смысл |
 | --- | --- | --- |
 | `telegram.enabled` | `false` | Включает Telegram-интеграцию. |
@@ -578,6 +600,34 @@ sudo -u teamd sh -lc 'set -a; . /etc/teamd/teamd.env; set +a; /opt/teamd/bin/age
 
 ```bash
 agentd logs 200
+```
+
+Если binary установлен deploy script’ом, он лежит в `/opt/teamd/bin/agentd` и дополнительно доступен как `/usr/local/bin/agentd`:
+
+```bash
+agentd logs 200
+```
+
+Для systemd-установки запускайте CLI через `teamdctl`, чтобы использовать того же пользователя `teamd`, тот же `/etc/teamd/teamd.env` и тот же `TEAMD_DATA_DIR`:
+
+```bash
+teamdctl logs 200
+```
+
+`agentd logs` читает `data_dir/audit/runtime.jsonl`. Это structured diagnostic log runtime/daemon/Telegram/provider-loop, а не transcript конкретного агента.
+
+Для stdout/stderr systemd unit’ов используйте `teamdctl` shortcuts над `journalctl`:
+
+```bash
+teamdctl daemon logs
+teamdctl telegram logs
+```
+
+Прочитать конкретную session и вызовы tools:
+
+```bash
+teamdctl session transcript <session_id>
+teamdctl session tools <session_id> --limit 50 --offset 0
 ```
 
 Типовые проблемы:

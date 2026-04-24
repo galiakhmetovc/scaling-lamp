@@ -91,6 +91,18 @@ impl Command {
             [scope, action, id] if scope == "session" && action == "show" => {
                 Ok(Self::SessionShow { id: id.clone() })
             }
+            [scope, action, id]
+                if (scope == "session" || scope == "сессия")
+                    && (action == "transcript" || action == "транскрипт") =>
+            {
+                Ok(Self::SessionTranscript { id: id.clone() })
+            }
+            [scope, action, id, rest @ ..]
+                if (scope == "session" || scope == "сессия")
+                    && (action == "tools" || action == "инструменты" || action == "тулы") =>
+            {
+                parse_session_tools_command(id, rest)
+            }
             [scope, action, id] if scope == "session" && action == "skills" => {
                 Ok(Self::SessionSkills { id: id.clone() })
             }
@@ -163,22 +175,70 @@ impl Command {
                 })
             }
             _ => Err(BootstrapError::Usage {
-                reason: "expected one of: status | logs [max_lines] | version | update [tag] | tui | telegram run|pair|pairings | daemon | daemon stop | provider smoke | chat show/send/repl | mission create/show/tick | session create/show/skills/enable-skill/disable-skill | run show | job show/execute | approval list/approve | delegate list | verification show".to_string(),
+                reason: "expected one of: status | logs [max_lines] | version | update [tag] | tui | telegram run|pair|pairings | daemon | daemon stop | provider smoke | chat show/send/repl | mission create/show/tick | session create/show/transcript/tools/skills/enable-skill/disable-skill | run show | job show/execute | approval list/approve | delegate list | verification show".to_string(),
             }),
         }
     }
 }
 
 fn parse_log_lines(raw: &str) -> Result<usize, BootstrapError> {
-    let value = raw.parse::<usize>().map_err(|_| BootstrapError::Usage {
-        reason: "logs max_lines must be a positive integer".to_string(),
-    })?;
+    let value = parse_positive_usize(raw, "logs max_lines")?;
+    Ok(value)
+}
+
+fn parse_session_tools_command(id: &str, args: &[String]) -> Result<Command, BootstrapError> {
+    let mut limit = None;
+    let mut offset = 0;
+    let mut index = 0;
+    while index < args.len() {
+        match args[index].as_str() {
+            "--limit" => {
+                let Some(value) = args.get(index + 1) else {
+                    return Err(BootstrapError::Usage {
+                        reason: "session tools --limit requires a value".to_string(),
+                    });
+                };
+                limit = Some(parse_positive_usize(value, "session tools --limit")?);
+                index += 2;
+            }
+            "--offset" => {
+                let Some(value) = args.get(index + 1) else {
+                    return Err(BootstrapError::Usage {
+                        reason: "session tools --offset requires a value".to_string(),
+                    });
+                };
+                offset = parse_usize(value, "session tools --offset")?;
+                index += 2;
+            }
+            other => {
+                return Err(BootstrapError::Usage {
+                    reason: format!("unsupported session tools argument {other}"),
+                });
+            }
+        }
+    }
+
+    Ok(Command::SessionTools {
+        id: id.to_string(),
+        limit,
+        offset,
+    })
+}
+
+fn parse_positive_usize(raw: &str, label: &str) -> Result<usize, BootstrapError> {
+    let value = parse_usize(raw, label)?;
     if value == 0 {
         return Err(BootstrapError::Usage {
-            reason: "logs max_lines must be greater than zero".to_string(),
+            reason: format!("{label} must be greater than zero"),
         });
     }
     Ok(value)
+}
+
+fn parse_usize(raw: &str, label: &str) -> Result<usize, BootstrapError> {
+    raw.parse::<usize>().map_err(|_| BootstrapError::Usage {
+        reason: format!("{label} must be a non-negative integer"),
+    })
 }
 
 impl ProcessInvocation {

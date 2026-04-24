@@ -113,6 +113,16 @@
 
 Это важно для TUI и REPL: интерфейс показывает не “сырой шум”, а компактный статус каждого tool step.
 
+Кроме event stream, runtime пишет persistent tool-call ledger в таблицу `tool_calls`. Там фиксируется сам факт вызова: `session_id`, `run_id`, provider call id, tool name, arguments JSON, summary, status, error и timestamps. Полный большой результат tool’а туда не кладётся; он остаётся в transcript/model continuation или уходит в artifacts/offloads.
+
+Операторская команда:
+
+```bash
+agentd session tools <session_id> --limit 50 --offset 0
+```
+
+Команда постраничная: заголовок показывает `total`, текущий диапазон `showing` и `next_offset` для следующей страницы. Она нужна для аудита и для улучшения инструкций агентам: можно увидеть, какие tools модель выбирала, какие аргументы передавала и где ошибалась.
+
 ## Approval model
 
 Approval — это не отдельная мини-сессия. Это состояние того же run.

@@ -28,6 +28,7 @@
 5. [05-interagent-background-and-schedules.md](05-interagent-background-and-schedules.md)
 6. [08-testing-and-verification.md](08-testing-and-verification.md)
 7. [10-tool-usability-assessment.md](10-tool-usability-assessment.md)
+8. [11-workspace-modernization-plan.md](11-workspace-modernization-plan.md)
 
 ## Словарь
 
@@ -37,6 +38,9 @@
 - **job** — фоновая или сервисная работа вокруг run: chat turn, approval continuation, inter-agent message, schedule delivery, delegate job.
 - **tool** — структурированный capability call модели.
 - **artifact** — большой offloaded payload, который не кладут напрямую в prompt.
+- **tool-call ledger** — журнал фактов вызова tools: имя, arguments, статус, ошибка, run/session.
+- **agent home** — каталог prompts/skills конкретного agent profile; это не project workspace.
+- **workspace** — рабочий каталог проекта, где tools читают/пишут файлы и запускают команды.
 - **context summary / compaction** — сжатие истории сессии в summary.
 - **SessionHead** — сжатая сводка о состоянии сессии, которую модель получает перед transcript tail.
 

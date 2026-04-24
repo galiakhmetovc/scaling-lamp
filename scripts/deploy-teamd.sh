@@ -18,6 +18,8 @@ ASSUME_YES=${TEAMD_DEPLOY_ASSUME_YES:-0}
 
 INSTALL_PREFIX=${TEAMD_DEPLOY_INSTALL_PREFIX:-/opt/teamd}
 BIN_DIR=${TEAMD_DEPLOY_BIN_DIR:-$INSTALL_PREFIX/bin}
+PATH_LINK=${TEAMD_DEPLOY_PATH_LINK:-/usr/local/bin/agentd}
+CTL_BIN=${TEAMD_DEPLOY_CTL_BIN:-/usr/local/bin/teamdctl}
 CONFIG_DIR=${TEAMD_DEPLOY_CONFIG_DIR:-/etc/teamd}
 CONFIG_FILE=${TEAMD_DEPLOY_CONFIG_FILE:-$CONFIG_DIR/config.toml}
 ENV_FILE=${TEAMD_DEPLOY_ENV_FILE:-$CONFIG_DIR/teamd.env}
@@ -37,6 +39,9 @@ RUSTUP_HOME=${RUSTUP_HOME:-$HOME/.rustup}
 RUSTUP_INIT_URL=${TEAMD_DEPLOY_RUSTUP_INIT_URL:-https://sh.rustup.rs}
 CONFIG_PARENT=$(dirname "$CONFIG_FILE")
 ENV_PARENT=$(dirname "$ENV_FILE")
+PATH_LINK_PARENT=$(dirname "$PATH_LINK")
+CTL_BIN_PARENT=$(dirname "$CTL_BIN")
+CTL_SCRIPT="$REPO_ROOT/scripts/teamdctl.sh"
 CARGO_BIN=
 
 usage() {
@@ -70,6 +75,8 @@ Environment overrides:
   TEAMD_DEPLOY_MIN_RUST_VERSION  Minimum cargo/rustc version, default: $MIN_RUST_VERSION.
   TEAMD_DEPLOY_RUSTUP_INIT_URL   rustup installer URL, default: $RUSTUP_INIT_URL.
   TEAMD_DEPLOY_INSTALL_PREFIX    Install prefix, default: $INSTALL_PREFIX.
+  TEAMD_DEPLOY_PATH_LINK         agentd PATH symlink, default: $PATH_LINK.
+  TEAMD_DEPLOY_CTL_BIN           teamdctl helper path, default: $CTL_BIN.
   TEAMD_DEPLOY_CONFIG_FILE       Config path, default: $CONFIG_FILE.
   TEAMD_DEPLOY_ENV_FILE          Environment file, default: $ENV_FILE.
   TEAMD_DEPLOY_DATA_DIR          Runtime state dir, default: $DATA_DIR.
@@ -453,6 +460,9 @@ BINARY="$REPO_ROOT/target/release/agentd"
 if [ "$DRY_RUN" -eq 0 ] && [ ! -x "$BINARY" ]; then
   fail "agentd binary not found or not executable: $BINARY"
 fi
+if [ "$DRY_RUN" -eq 0 ] && [ ! -f "$CTL_SCRIPT" ]; then
+  fail "teamdctl helper script not found: $CTL_SCRIPT"
+fi
 
 TMP_DIR=
 if [ "$DRY_RUN" -eq 0 ]; then
@@ -586,12 +596,10 @@ if ! id -u "$SERVICE_USER" >/dev/null 2>&1; then
   run_root useradd --system --gid "$SERVICE_GROUP" --create-home --home-dir "$WORK_DIR" --shell /usr/sbin/nologin "$SERVICE_USER"
 fi
 
-if [ "$CONFIG_PARENT" = "$ENV_PARENT" ]; then
-  run_root mkdir -p "$BIN_DIR" "$CONFIG_PARENT" "$WORK_DIR" "$DATA_DIR"
-else
-  run_root mkdir -p "$BIN_DIR" "$CONFIG_PARENT" "$ENV_PARENT" "$WORK_DIR" "$DATA_DIR"
-fi
+run_root mkdir -p "$BIN_DIR" "$CONFIG_PARENT" "$ENV_PARENT" "$PATH_LINK_PARENT" "$CTL_BIN_PARENT" "$WORK_DIR" "$DATA_DIR"
 run_root install -m 0755 "$BINARY" "$BIN_DIR/agentd"
+run_root ln -sf "$BIN_DIR/agentd" "$PATH_LINK"
+run_root install -m 0755 -o root -g root "$CTL_SCRIPT" "$CTL_BIN"
 
 if [ "$WRITE_CONFIG" -eq 1 ]; then
   run_root install -m 0644 -o root -g root "$CONFIG_TMP" "$CONFIG_FILE"
@@ -631,11 +639,20 @@ Deployment commands:
     sudo systemctl restart $TELEGRAM_SERVICE
 
   Pairing after Telegram /start:
-    sudo -u $SERVICE_USER sh -lc 'set -a; . $ENV_FILE; set +a; $BIN_DIR/agentd telegram pair <key>'
+    teamdctl telegram pair <key>
 
   List pairings:
-    sudo -u $SERVICE_USER sh -lc 'set -a; . $ENV_FILE; set +a; $BIN_DIR/agentd telegram pairings'
+    teamdctl telegram pairings
 
   Provider smoke:
-    sudo -u $SERVICE_USER sh -lc 'set -a; . $ENV_FILE; set +a; $BIN_DIR/agentd provider smoke'
+    teamdctl provider smoke
+
+  Session audit:
+    teamdctl session transcript <session_id>
+    teamdctl session tools <session_id> --limit 50 --offset 0
+
+  Service shortcuts:
+    teamdctl daemon status
+    teamdctl daemon restart
+    teamdctl telegram logs
 EOF

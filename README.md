@@ -1,6 +1,6 @@
 # teamD Agent Runtime
 
-`teamD` — локальная среда для автономных кодирующих агентов. В текущем состоянии это не набор разрозненных скриптов, а один daemon-centered runtime с общей моделью данных, общим execution path и несколькими операторскими поверхностями поверх него: CLI, HTTP API и TUI.
+`teamD` — локальная среда для автономных агентов общего назначения. В текущем состоянии это не набор разрозненных скриптов, а один daemon-centered runtime с общей моделью данных, общим execution path и несколькими операторскими поверхностями поверх него: CLI, HTTP API, TUI и Telegram.
 
 Главная идея проекта: любой ход агента, approval, фоновая задача, межагентное сообщение, MCP-вызов или wakeup должны проходить через один и тот же runtime, а не через отдельные “особые режимы” для разных интерфейсов.
 
@@ -37,7 +37,7 @@ cargo run -p agentd -- tui
 ./scripts/deploy-teamd.sh
 ```
 
-Он проверит native build dependencies, `cargo` и `rustc`; при необходимости поставит системные build-пакеты и stable Rust через `rustup`; интерактивно спросит Telegram bot token и Z.ai/API key, соберёт release binary, установит `agentd` в `/opt/teamd/bin`, создаст `/etc/teamd/config.toml`, `/etc/teamd/teamd.env` и systemd services `teamd-daemon.service`/`teamd-telegram.service`.
+Он проверит native build dependencies, `cargo` и `rustc`; при необходимости поставит системные build-пакеты и stable Rust через `rustup`; интерактивно спросит Telegram bot token и Z.ai/API key, соберёт release binary, установит `agentd` в `/opt/teamd/bin`, добавит `/usr/local/bin/agentd`, установит `/usr/local/bin/teamdctl`, создаст `/etc/teamd/config.toml`, `/etc/teamd/teamd.env` и systemd services `teamd-daemon.service`/`teamd-telegram.service`.
 
 Подробности: [docs/current/telegram/01-install-and-configure.md](docs/current/telegram/01-install-and-configure.md).
 

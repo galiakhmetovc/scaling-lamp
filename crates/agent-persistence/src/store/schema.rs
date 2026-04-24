@@ -97,6 +97,22 @@ pub(super) fn bootstrap_schema(connection: &Connection) -> Result<(), StoreError
              FOREIGN KEY(run_id) REFERENCES runs(id) ON DELETE SET NULL
          );
 
+         CREATE TABLE IF NOT EXISTS tool_calls (
+             id TEXT PRIMARY KEY,
+             session_id TEXT NOT NULL,
+             run_id TEXT NOT NULL,
+             provider_tool_call_id TEXT NOT NULL,
+             tool_name TEXT NOT NULL,
+             arguments_json TEXT NOT NULL,
+             summary TEXT NOT NULL,
+             status TEXT NOT NULL,
+             error TEXT,
+             requested_at INTEGER NOT NULL,
+             updated_at INTEGER NOT NULL,
+             FOREIGN KEY(session_id) REFERENCES sessions(id) ON DELETE CASCADE,
+             FOREIGN KEY(run_id) REFERENCES runs(id) ON DELETE CASCADE
+         );
+
          CREATE TABLE IF NOT EXISTS session_inbox_events (
              id TEXT PRIMARY KEY,
              session_id TEXT NOT NULL,
@@ -304,6 +320,9 @@ pub(super) fn bootstrap_schema(connection: &Connection) -> Result<(), StoreError
          CREATE INDEX IF NOT EXISTS idx_jobs_parent_job_id ON jobs(parent_job_id);
          CREATE INDEX IF NOT EXISTS idx_transcripts_session_id ON transcripts(session_id);
          CREATE INDEX IF NOT EXISTS idx_transcripts_run_id ON transcripts(run_id);
+         CREATE INDEX IF NOT EXISTS idx_tool_calls_session_id ON tool_calls(session_id);
+         CREATE INDEX IF NOT EXISTS idx_tool_calls_run_id ON tool_calls(run_id);
+         CREATE INDEX IF NOT EXISTS idx_tool_calls_status ON tool_calls(status);
          CREATE INDEX IF NOT EXISTS idx_session_inbox_events_session_id ON session_inbox_events(session_id);
          CREATE INDEX IF NOT EXISTS idx_session_inbox_events_status_available_at ON session_inbox_events(status, available_at);
          CREATE INDEX IF NOT EXISTS idx_agent_profiles_updated_at ON agent_profiles(updated_at);
@@ -402,6 +421,17 @@ pub(super) fn validate_schema(connection: &Connection) -> Result<(), StoreError>
     validate_column(connection, "runs", "delegate_runs_json", true)?;
     validate_column(connection, "runs", "result", false)?;
     validate_column(connection, "transcripts", "sha256", true)?;
+    validate_column(connection, "tool_calls", "id", true)?;
+    validate_column(connection, "tool_calls", "session_id", true)?;
+    validate_column(connection, "tool_calls", "run_id", true)?;
+    validate_column(connection, "tool_calls", "provider_tool_call_id", true)?;
+    validate_column(connection, "tool_calls", "tool_name", true)?;
+    validate_column(connection, "tool_calls", "arguments_json", true)?;
+    validate_column(connection, "tool_calls", "summary", true)?;
+    validate_column(connection, "tool_calls", "status", true)?;
+    validate_column(connection, "tool_calls", "error", false)?;
+    validate_column(connection, "tool_calls", "requested_at", true)?;
+    validate_column(connection, "tool_calls", "updated_at", true)?;
     validate_column(connection, "session_inbox_events", "session_id", true)?;
     validate_column(connection, "session_inbox_events", "kind", true)?;
     validate_column(connection, "session_inbox_events", "payload_json", true)?;
@@ -584,6 +614,14 @@ pub(super) fn validate_schema(connection: &Connection) -> Result<(), StoreError>
         "SET NULL",
     )?;
     validate_foreign_key(connection, "artifacts", "session_id", "sessions", "CASCADE")?;
+    validate_foreign_key(
+        connection,
+        "tool_calls",
+        "session_id",
+        "sessions",
+        "CASCADE",
+    )?;
+    validate_foreign_key(connection, "tool_calls", "run_id", "runs", "CASCADE")?;
     validate_foreign_key(connection, "jobs", "session_id", "sessions", "CASCADE")?;
     validate_foreign_key(connection, "jobs", "mission_id", "missions", "SET NULL")?;
     validate_foreign_key(

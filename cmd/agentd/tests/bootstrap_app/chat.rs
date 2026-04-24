@@ -1854,6 +1854,21 @@ fn execute_chat_turn_can_finish_after_exec_start_and_exec_wait_tool_calls() {
     assert_eq!(report.response_id, "resp_exec_tools_3");
     assert_eq!(report.output_text, "Executed command.");
 
+    let tool_calls = store
+        .list_tool_calls_for_session("session-exec-tools")
+        .expect("list tool call ledger");
+    assert_eq!(tool_calls.len(), 2);
+    assert!(tool_calls.iter().any(|call| {
+        call.tool_name == "exec_start"
+            && call.status == "completed"
+            && call.arguments_json.contains("\"executable\":\"/bin/sh\"")
+    }));
+    assert!(tool_calls.iter().any(|call| {
+        call.tool_name == "exec_wait"
+            && call.status == "completed"
+            && call.arguments_json.contains("\"process_id\":\"exec-1\"")
+    }));
+
     let normalized_second = second_request.to_ascii_lowercase();
     assert!(normalized_second.contains("\"call_id\":\"call_exec_start\""));
     assert!(normalized_second.contains("\"type\":\"function_call_output\""));

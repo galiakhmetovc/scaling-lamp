@@ -8,6 +8,7 @@ mod payloads;
 mod schema;
 mod session_mission;
 mod telegram_repos;
+mod tool_call_repos;
 
 use crate::PersistenceScaffold;
 use crate::audit::{AuditLogConfig, DiagnosticEvent};
@@ -16,13 +17,13 @@ use crate::records::{
     AgentChainContinuationRecord, AgentProfileRecord, AgentScheduleRecord, ArtifactRecord,
     ContextOffloadRecord, ContextSummaryRecord, JobRecord, McpConnectorRecord, MissionRecord,
     PlanRecord, RunRecord, SessionInboxEventRecord, SessionRecord, SessionRetentionRecord,
-    TranscriptRecord,
+    ToolCallRecord, TranscriptRecord,
 };
 use crate::repository::{
     AgentRepository, ArtifactRepository, ContextOffloadRepository, ContextSummaryRepository,
     JobRepository, McpRepository, MissionRepository, PlanRepository, RunRepository,
     SessionInboxRepository, SessionRepository, SessionRetentionRepository, TelegramRepository,
-    TranscriptRepository,
+    ToolCallRepository, TranscriptRepository,
 };
 use agent_runtime::archive::{
     ArchivedArtifactEntry, ArchivedSummary, ArchivedTranscriptEntry, SessionArchiveManifest,
@@ -285,9 +286,24 @@ impl PersistenceStore {
             .map_err(StoreError::from)
     }
 
-    fn transcript_path(&self, id: &str) -> Result<PathBuf, StoreError> {
+    fn transcript_path(&self, session_id: &str, id: &str) -> Result<PathBuf, StoreError> {
+        validate_identifier(session_id)?;
         validate_identifier(id)?;
-        Ok(self.layout.transcripts_dir.join(format!("{id}.txt")))
+        Ok(self
+            .layout
+            .transcripts_dir
+            .join(session_id)
+            .join(format!("{id}.txt")))
+    }
+
+    fn transcript_storage_key(&self, session_id: &str, id: &str) -> Result<String, StoreError> {
+        let path = self.transcript_path(session_id, id)?;
+        path.strip_prefix(&self.layout.transcripts_dir)
+            .map_err(|_| StoreError::InvalidIdentifier {
+                id: id.to_string(),
+                reason: "must produce a valid transcript storage key",
+            })
+            .map(|path| path.to_string_lossy().to_string())
     }
 
     fn artifact_path(&self, id: &str) -> Result<PathBuf, StoreError> {

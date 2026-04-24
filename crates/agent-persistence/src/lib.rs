@@ -15,14 +15,14 @@ pub use records::{
     KnowledgeSourceRecord, McpConnectorRecord, MissionRecord, PlanRecord, RecordConversionError,
     RunRecord, SessionInboxEventRecord, SessionRecord, SessionRetentionRecord,
     SessionSearchDocRecord, TelegramChatBindingRecord, TelegramUpdateCursorRecord,
-    TelegramUserPairingRecord, TranscriptRecord,
+    TelegramUserPairingRecord, ToolCallRecord, TranscriptRecord,
 };
 pub use repository::{
     AgentRepository, ArtifactRepository, ContextOffloadRepository, ContextSummaryRepository,
     JobRepository, KnowledgeRepository, McpRepository, MissionRepository, PlanRepository,
     RunRepository, RunSummaryRollup, SessionActiveJobCounts, SessionInboxRepository,
     SessionRepository, SessionRetentionRepository, SessionSearchRepository, TelegramRepository,
-    TranscriptRepository, TranscriptSessionStats,
+    ToolCallRepository, TranscriptRepository, TranscriptSessionStats,
 };
 pub use store::{ExecutionStateSnapshot, PersistenceStore, StoreError, StoreLayout};
 

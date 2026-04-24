@@ -25,7 +25,7 @@ cargo run -p agentd -- tui
 ./scripts/deploy-teamd.sh
 ```
 
-Скрипт проверит native build dependencies, `cargo` и `rustc`; при необходимости поставит системные build-пакеты и stable Rust через `rustup`; интерактивно спросит Telegram bot token и Z.ai/API key, соберёт release binary, установит `/opt/teamd/bin/agentd`, создаст `/etc/teamd/config.toml`, `/etc/teamd/teamd.env` и два systemd service.
+Скрипт проверит native build dependencies, `cargo` и `rustc`; при необходимости поставит системные build-пакеты и stable Rust через `rustup`; интерактивно спросит Telegram bot token и Z.ai/API key, соберёт release binary, установит `/opt/teamd/bin/agentd`, зарегистрирует `agentd` в `PATH` через `/usr/local/bin/agentd`, установит операторский helper `/usr/local/bin/teamdctl`, создаст `/etc/teamd/config.toml`, `/etc/teamd/teamd.env` и два systemd service.
 
 Проверить действия без установки:
 
@@ -83,8 +83,9 @@ export TEAMD_PROVIDER_API_KEY='...'
 Pairing:
 
 1. отправить боту `/start`;
-2. выполнить на сервере `./target/release/agentd telegram pair <key>` или `agentd telegram pair <key>`, если бинарь установлен в `PATH`;
-3. проверить `./target/release/agentd telegram pairings` или `agentd telegram pairings`.
+2. для ручного запуска выполнить `./target/release/agentd telegram pair <key>` или `agentd telegram pair <key>`, если бинарь установлен в `PATH`;
+3. для systemd-установки выполнить `teamdctl telegram pair <key>`;
+4. проверить `agentd telegram pairings` или `teamdctl telegram pairings`.
 
 ## Telegram под systemd
 
@@ -116,7 +117,8 @@ journalctl -u teamd-telegram.service -f
 Pairing key из Telegram `/start` активируется не через unit-файл, а отдельной локальной командой от пользователя `teamd`:
 
 ```bash
-sudo -u teamd sh -lc 'set -a; . /etc/teamd/teamd.env; set +a; /opt/teamd/bin/agentd telegram pair tg...'
+teamdctl telegram pair tg...
+teamdctl telegram pairings
 ```
 
 Рестарт:
@@ -125,6 +127,28 @@ sudo -u teamd sh -lc 'set -a; . /etc/teamd/teamd.env; set +a; /opt/teamd/bin/age
 sudo systemctl restart teamd-daemon.service
 sudo systemctl restart teamd-telegram.service
 ```
+
+То же через helper:
+
+```bash
+teamdctl daemon status
+teamdctl daemon restart
+teamdctl telegram status
+teamdctl telegram logs
+```
+
+## Binary в PATH и production helper
+
+Если установка делалась не через `deploy-teamd.sh`, зарегистрировать binary в `PATH` можно так:
+
+```bash
+sudo mkdir -p /usr/local/bin
+sudo ln -sf /opt/teamd/bin/agentd /usr/local/bin/agentd
+hash -r
+agentd version
+```
+
+`agentd` из `PATH` запускается от текущего пользователя и использует его environment. Для production-state под `/var/lib/teamd/state` используйте `teamdctl`: он сам читает `/etc/teamd/teamd.env`, переключается на пользователя `teamd` и запускает `/opt/teamd/bin/agentd`.
 
 ## Проверить версию и release state
 
@@ -150,6 +174,28 @@ agentd logs 200
 или в TUI:
 
 - `\логи 200`
+
+В systemd-установке:
+
+```bash
+teamdctl logs 200
+```
+
+`agentd logs` читает `audit/runtime.jsonl`. Это diagnostic log процесса, не transcript агента.
+
+## Прочитать session и tool-call ledger
+
+```bash
+agentd session transcript <session_id>
+agentd session tools <session_id> --limit 50 --offset 0
+```
+
+Для systemd-установки:
+
+```bash
+teamdctl session transcript <session_id>
+teamdctl session tools <session_id> --limit 50 --offset 0
+```
 
 ## Открыть TUI
 

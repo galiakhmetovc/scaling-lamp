@@ -10,7 +10,8 @@ use crate::{
     PlanRecord, PlanRepository, RunRecord, RunRepository, SessionInboxRepository, SessionRecord,
     SessionRepository, SessionRetentionRecord, SessionRetentionRepository, SessionSearchDocRecord,
     SessionSearchRepository, TelegramChatBindingRecord, TelegramRepository,
-    TelegramUpdateCursorRecord, TelegramUserPairingRecord, TranscriptRecord, TranscriptRepository,
+    TelegramUpdateCursorRecord, TelegramUserPairingRecord, ToolCallRecord, ToolCallRepository,
+    TranscriptRecord, TranscriptRepository,
 };
 use agent_runtime::agent::{
     AgentChainContinuationGrant, AgentProfile, AgentSchedule, AgentScheduleDeliveryMode,
@@ -279,6 +280,15 @@ fn open_bootstraps_schema_and_round_trips_structured_and_file_backed_data() {
     );
     assert_eq!(reopened.get_run(&run.id).expect("get run"), Some(run));
     assert_eq!(reopened.get_job(&job.id).expect("get job"), Some(job));
+    assert!(
+        scaffold
+            .stores
+            .transcripts_dir
+            .join("session-1")
+            .join("transcript-1.txt")
+            .exists(),
+        "new transcript payloads should be grouped by session id"
+    );
     assert_eq!(
         reopened
             .get_transcript(&transcript.id)
@@ -319,6 +329,110 @@ fn open_bootstraps_schema_and_round_trips_structured_and_file_backed_data() {
         Some(artifact)
     );
     assert!(scaffold.stores.metadata_db.exists());
+}
+
+#[test]
+fn tool_call_repository_round_trips_session_and_run_ledgers() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let scaffold = PersistenceScaffold::from_config(crate::AppConfig {
+        data_dir: temp.path().join("state-root"),
+        ..crate::AppConfig::default()
+    });
+    let store = super::PersistenceStore::open(&scaffold).expect("open store");
+
+    let session = SessionRecord {
+        id: "session-1".to_string(),
+        title: "Tool ledger".to_string(),
+        prompt_override: None,
+        settings_json: "{}".to_string(),
+        agent_profile_id: "default".to_string(),
+        active_mission_id: None,
+        parent_session_id: None,
+        parent_job_id: None,
+        delegation_label: None,
+        created_at: 1,
+        updated_at: 1,
+    };
+    let run = RunRecord {
+        id: "run-1".to_string(),
+        session_id: session.id.clone(),
+        mission_id: None,
+        status: "running".to_string(),
+        error: None,
+        result: None,
+        provider_usage_json: "null".to_string(),
+        active_processes_json: "[]".to_string(),
+        recent_steps_json: "[]".to_string(),
+        evidence_refs_json: "[]".to_string(),
+        pending_approvals_json: "[]".to_string(),
+        provider_loop_json: "null".to_string(),
+        delegate_runs_json: "[]".to_string(),
+        started_at: 2,
+        updated_at: 2,
+        finished_at: None,
+    };
+    store.put_session(&session).expect("put session");
+    store.put_run(&run).expect("put run");
+
+    let first = ToolCallRecord {
+        id: "tool-call-1".to_string(),
+        session_id: session.id.clone(),
+        run_id: run.id.clone(),
+        provider_tool_call_id: "provider-call-1".to_string(),
+        tool_name: "fs_read_text".to_string(),
+        arguments_json: "{\"path\":\"README.md\"}".to_string(),
+        summary: "fs_read_text path=README.md".to_string(),
+        status: "requested".to_string(),
+        error: None,
+        requested_at: 10,
+        updated_at: 10,
+    };
+    let second = ToolCallRecord {
+        id: "tool-call-2".to_string(),
+        provider_tool_call_id: "provider-call-2".to_string(),
+        tool_name: "exec_start".to_string(),
+        arguments_json: "{\"cmd\":\"cargo test\"}".to_string(),
+        summary: "exec_start cmd=cargo test".to_string(),
+        requested_at: 9,
+        updated_at: 9,
+        ..first.clone()
+    };
+
+    store.put_tool_call(&first).expect("put first tool call");
+    store.put_tool_call(&second).expect("put second tool call");
+
+    assert_eq!(
+        store
+            .list_tool_calls_for_session(&session.id)
+            .expect("list session tool calls")
+            .into_iter()
+            .map(|call| call.id)
+            .collect::<Vec<_>>(),
+        vec!["tool-call-2", "tool-call-1"]
+    );
+
+    let completed = ToolCallRecord {
+        status: "completed".to_string(),
+        updated_at: 12,
+        ..first.clone()
+    };
+    store
+        .put_tool_call(&completed)
+        .expect("update first tool call");
+
+    assert_eq!(
+        store
+            .get_tool_call("tool-call-1")
+            .expect("get updated call"),
+        Some(completed.clone())
+    );
+    assert_eq!(
+        store
+            .list_tool_calls_for_run(&run.id)
+            .expect("list run tool calls")
+            .len(),
+        2
+    );
 }
 
 #[test]
@@ -2237,11 +2351,12 @@ fn open_removes_payloads_that_do_not_match_metadata() {
     store.put_artifact(&artifact).expect("store artifact");
     drop(store);
 
-    fs::write(
-        scaffold.stores.transcripts_dir.join("transcript-1.txt"),
-        "tampered transcript",
-    )
-    .expect("tamper transcript");
+    let transcript_path = scaffold
+        .stores
+        .transcripts_dir
+        .join(&session.id)
+        .join("transcript-1.txt");
+    fs::write(&transcript_path, "tampered transcript").expect("tamper transcript");
     fs::write(
         scaffold.stores.artifacts_dir.join("artifact-1.bin"),
         b"tampered artifact",
@@ -2250,13 +2365,7 @@ fn open_removes_payloads_that_do_not_match_metadata() {
 
     let _store = super::PersistenceStore::open(&scaffold).expect("reopen store");
 
-    assert!(
-        !scaffold
-            .stores
-            .transcripts_dir
-            .join("transcript-1.txt")
-            .exists()
-    );
+    assert!(!transcript_path.exists());
     assert!(
         !scaffold
             .stores
@@ -2455,11 +2564,12 @@ fn reads_fail_when_payloads_no_longer_match_metadata() {
     };
     store.put_artifact(&artifact).expect("store artifact");
 
-    fs::write(
-        scaffold.stores.transcripts_dir.join("transcript-1.txt"),
-        "tampered transcript",
-    )
-    .expect("tamper transcript");
+    let transcript_path = scaffold
+        .stores
+        .transcripts_dir
+        .join(&session.id)
+        .join("transcript-1.txt");
+    fs::write(&transcript_path, "tampered transcript").expect("tamper transcript");
     fs::write(
         scaffold.stores.artifacts_dir.join("artifact-1.bin"),
         b"tampered artifact",
@@ -2569,8 +2679,16 @@ fn open_restores_matching_backups_before_pruning_corrupt_payloads() {
     store.put_artifact(&artifact).expect("store artifact");
     drop(store);
 
-    let transcript_path = scaffold.stores.transcripts_dir.join("transcript-1.txt");
-    let transcript_backup = scaffold.stores.transcripts_dir.join("transcript-1.txt.bak");
+    let transcript_path = scaffold
+        .stores
+        .transcripts_dir
+        .join(&session.id)
+        .join("transcript-1.txt");
+    let transcript_backup = scaffold
+        .stores
+        .transcripts_dir
+        .join(&session.id)
+        .join("transcript-1.txt.bak");
     fs::rename(&transcript_path, &transcript_backup).expect("backup transcript");
     fs::write(&transcript_path, "tampered transcript").expect("write bad transcript");
 

@@ -18,6 +18,7 @@ pub(super) fn daemon_supports_command(command: &Command) -> bool {
             | Command::ChatShow { .. }
             | Command::ChatSend { .. }
             | Command::ChatRepl { .. }
+            | Command::SessionTranscript { .. }
             | Command::SessionCreate { .. }
             | Command::SessionShow { .. }
             | Command::SessionSkills { .. }
@@ -43,6 +44,10 @@ pub(super) fn execute_command(app: &App, command: Command) -> Result<String, Boo
         Command::Update { tag } => app.update_runtime_binary(tag.as_deref()),
         Command::ProviderSmoke { prompt } => render::run_provider_smoke(app, &prompt),
         Command::ChatShow { session_id } => render::show_chat(app, &session_id),
+        Command::SessionTranscript { id } => render::show_chat(app, &id),
+        Command::SessionTools { id, limit, offset } => {
+            render::show_session_tools(&app.store()?, &id, limit, offset)
+        }
         Command::ChatSend {
             session_id,
             message,
@@ -105,6 +110,7 @@ pub(super) fn execute_daemon_command(
         Command::Version => client.about(),
         Command::Update { tag } => client.update_runtime(tag.as_deref()),
         Command::ChatShow { session_id } => render::show_chat_via_client(client, &session_id),
+        Command::SessionTranscript { id } => render::show_chat_via_client(client, &id),
         Command::ChatSend {
             session_id,
             message,
@@ -136,9 +142,11 @@ pub(super) fn execute_daemon_command(
             let skills = client.disable_session_skill(&id, &skill_name)?;
             render::render_session_skills_list(skills)
         }
-        Command::TelegramPair { .. } | Command::TelegramPairings => Err(BootstrapError::Usage {
-            reason: "telegram pairing commands are local-only".to_string(),
-        }),
+        Command::TelegramPair { .. } | Command::TelegramPairings | Command::SessionTools { .. } => {
+            Err(BootstrapError::Usage {
+                reason: "this command is local-only".to_string(),
+            })
+        }
         _ => Err(BootstrapError::Usage {
             reason: "this command is not available over daemon transport yet".to_string(),
         }),

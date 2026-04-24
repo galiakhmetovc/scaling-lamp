@@ -114,10 +114,11 @@ less target/test-artifacts/daemon-tui-interagent-judge-chat.log
 
 ```bash
 sh -n scripts/deploy-teamd.sh
+sh -n scripts/teamdctl.sh
 sh scripts/test-deploy-teamd.sh
 ```
 
-`test-deploy-teamd.sh` запускает `deploy-teamd.sh --help` и dry-run с fake secrets. Он не пишет в `/etc`, не вызывает real systemd start и нужен как быстрый guard для операторского install path.
+`test-deploy-teamd.sh` запускает `deploy-teamd.sh --help`, dry-run с fake secrets и smoke для `teamdctl telegram pair`. Он не пишет в `/etc`, не вызывает real systemd start и нужен как быстрый guard для операторского install path.
 
 Дополнительно smoke-test симулирует старый `cargo 1.75.0`, чтобы проверить bootstrap ветку: deploy script должен предложить установку/обновление stable Rust через `rustup`, потому что проект использует edition 2024.
 

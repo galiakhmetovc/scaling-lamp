@@ -34,6 +34,270 @@ fn process_cli_accepts_telegram_commands() {
 }
 
 #[test]
+fn process_cli_accepts_session_transcript_and_tool_commands() {
+    let transcript = super::ProcessInvocation::parse(["session", "transcript", "session-1"])
+        .expect("parse transcript");
+    let tools =
+        super::ProcessInvocation::parse(["session", "tools", "session-1"]).expect("parse tools");
+    let paged_tools = super::ProcessInvocation::parse([
+        "session",
+        "tools",
+        "session-1",
+        "--limit",
+        "25",
+        "--offset",
+        "50",
+    ])
+    .expect("parse paged tools");
+    let russian_transcript = super::ProcessInvocation::parse(["сессия", "транскрипт", "session-1"])
+        .expect("parse russian transcript");
+    let russian_tools = super::ProcessInvocation::parse(["сессия", "инструменты", "session-1"])
+        .expect("parse russian tools");
+
+    assert!(matches!(
+        transcript.command,
+        super::Command::SessionTranscript { ref id } if id == "session-1"
+    ));
+    assert!(matches!(
+        tools.command,
+        super::Command::SessionTools { ref id, limit: None, offset: 0 } if id == "session-1"
+    ));
+    assert!(matches!(
+        paged_tools.command,
+        super::Command::SessionTools { ref id, limit: Some(25), offset: 50 } if id == "session-1"
+    ));
+    assert!(matches!(
+        russian_transcript.command,
+        super::Command::SessionTranscript { ref id } if id == "session-1"
+    ));
+    assert!(matches!(
+        russian_tools.command,
+        super::Command::SessionTools { ref id, limit: None, offset: 0 } if id == "session-1"
+    ));
+}
+
+#[test]
+fn execute_renders_session_transcript() {
+    use agent_persistence::{
+        SessionRecord, SessionRepository, TranscriptRecord, TranscriptRepository,
+    };
+
+    let temp = tempfile::tempdir().expect("tempdir");
+    let app = crate::bootstrap::build_from_config(agent_persistence::AppConfig {
+        data_dir: temp.path().join("state-root"),
+        ..agent_persistence::AppConfig::default()
+    })
+    .expect("build app");
+    let store = app.store().expect("open store");
+    store
+        .put_session(&SessionRecord {
+            id: "session-1".to_string(),
+            title: "Transcript".to_string(),
+            prompt_override: None,
+            settings_json: "{}".to_string(),
+            agent_profile_id: "default".to_string(),
+            active_mission_id: None,
+            parent_session_id: None,
+            parent_job_id: None,
+            delegation_label: None,
+            created_at: 1,
+            updated_at: 1,
+        })
+        .expect("put session");
+    store
+        .put_transcript(&TranscriptRecord {
+            id: "transcript-1".to_string(),
+            session_id: "session-1".to_string(),
+            run_id: None,
+            kind: "user".to_string(),
+            content: "hello from transcript".to_string(),
+            created_at: 2,
+        })
+        .expect("put transcript");
+
+    let rendered =
+        super::execute(&app, ["session", "transcript", "session-1"]).expect("render transcript");
+
+    assert!(rendered.contains("hello from transcript"));
+}
+
+#[test]
+fn execute_renders_session_tool_calls() {
+    use agent_persistence::{
+        RunRecord, RunRepository, SessionRecord, SessionRepository, ToolCallRecord,
+        ToolCallRepository,
+    };
+
+    let temp = tempfile::tempdir().expect("tempdir");
+    let app = crate::bootstrap::build_from_config(agent_persistence::AppConfig {
+        data_dir: temp.path().join("state-root"),
+        ..agent_persistence::AppConfig::default()
+    })
+    .expect("build app");
+    let store = app.store().expect("open store");
+    store
+        .put_session(&SessionRecord {
+            id: "session-1".to_string(),
+            title: "Tools".to_string(),
+            prompt_override: None,
+            settings_json: "{}".to_string(),
+            agent_profile_id: "default".to_string(),
+            active_mission_id: None,
+            parent_session_id: None,
+            parent_job_id: None,
+            delegation_label: None,
+            created_at: 1,
+            updated_at: 1,
+        })
+        .expect("put session");
+    store
+        .put_run(&RunRecord {
+            id: "run-1".to_string(),
+            session_id: "session-1".to_string(),
+            mission_id: None,
+            status: "running".to_string(),
+            error: None,
+            result: None,
+            provider_usage_json: "null".to_string(),
+            active_processes_json: "[]".to_string(),
+            recent_steps_json: "[]".to_string(),
+            evidence_refs_json: "[]".to_string(),
+            pending_approvals_json: "[]".to_string(),
+            provider_loop_json: "null".to_string(),
+            delegate_runs_json: "[]".to_string(),
+            started_at: 2,
+            updated_at: 2,
+            finished_at: None,
+        })
+        .expect("put run");
+    store
+        .put_tool_call(&ToolCallRecord {
+            id: "tool-call-1".to_string(),
+            session_id: "session-1".to_string(),
+            run_id: "run-1".to_string(),
+            provider_tool_call_id: "provider-call-1".to_string(),
+            tool_name: "fs_read_text".to_string(),
+            arguments_json: "{\"path\":\"README.md\"}".to_string(),
+            summary: "fs_read_text path=README.md".to_string(),
+            status: "completed".to_string(),
+            error: None,
+            requested_at: 3,
+            updated_at: 4,
+        })
+        .expect("put tool call");
+    store
+        .put_tool_call(&ToolCallRecord {
+            id: "tool-call-2".to_string(),
+            session_id: "session-1".to_string(),
+            run_id: "run-1".to_string(),
+            provider_tool_call_id: "provider-call-2".to_string(),
+            tool_name: "exec_wait".to_string(),
+            arguments_json: "{\"process_id\":\"exec-1\"}".to_string(),
+            summary: "exec_wait process_id=exec-1".to_string(),
+            status: "failed".to_string(),
+            error: Some("process not found".to_string()),
+            requested_at: 5,
+            updated_at: 6,
+        })
+        .expect("put second tool call");
+
+    let rendered = super::execute(&app, ["session", "tools", "session-1"]).expect("render tools");
+
+    assert!(rendered.contains("session tools session_id=session-1 total=2 showing=1-2"));
+    assert!(rendered.contains("tool=fs_read_text"));
+    assert!(rendered.contains("status=completed"));
+    assert!(rendered.contains("args={\"path\":\"README.md\"}"));
+}
+
+#[test]
+fn execute_renders_session_tool_calls_page() {
+    use agent_persistence::{
+        RunRecord, RunRepository, SessionRecord, SessionRepository, ToolCallRecord,
+        ToolCallRepository,
+    };
+
+    let temp = tempfile::tempdir().expect("tempdir");
+    let app = crate::bootstrap::build_from_config(agent_persistence::AppConfig {
+        data_dir: temp.path().join("state-root"),
+        ..agent_persistence::AppConfig::default()
+    })
+    .expect("build app");
+    let store = app.store().expect("open store");
+    store
+        .put_session(&SessionRecord {
+            id: "session-1".to_string(),
+            title: "Tools".to_string(),
+            prompt_override: None,
+            settings_json: "{}".to_string(),
+            agent_profile_id: "default".to_string(),
+            active_mission_id: None,
+            parent_session_id: None,
+            parent_job_id: None,
+            delegation_label: None,
+            created_at: 1,
+            updated_at: 1,
+        })
+        .expect("put session");
+    store
+        .put_run(&RunRecord {
+            id: "run-1".to_string(),
+            session_id: "session-1".to_string(),
+            mission_id: None,
+            status: "running".to_string(),
+            error: None,
+            result: None,
+            provider_usage_json: "null".to_string(),
+            active_processes_json: "[]".to_string(),
+            recent_steps_json: "[]".to_string(),
+            evidence_refs_json: "[]".to_string(),
+            pending_approvals_json: "[]".to_string(),
+            provider_loop_json: "null".to_string(),
+            delegate_runs_json: "[]".to_string(),
+            started_at: 2,
+            updated_at: 2,
+            finished_at: None,
+        })
+        .expect("put run");
+    for index in 1..=3 {
+        store
+            .put_tool_call(&ToolCallRecord {
+                id: format!("tool-call-{index}"),
+                session_id: "session-1".to_string(),
+                run_id: "run-1".to_string(),
+                provider_tool_call_id: format!("provider-call-{index}"),
+                tool_name: format!("tool_{index}"),
+                arguments_json: "{}".to_string(),
+                summary: format!("tool_{index}"),
+                status: "completed".to_string(),
+                error: None,
+                requested_at: index,
+                updated_at: index,
+            })
+            .expect("put tool call");
+    }
+
+    let rendered = super::execute(
+        &app,
+        [
+            "session",
+            "tools",
+            "session-1",
+            "--limit",
+            "1",
+            "--offset",
+            "1",
+        ],
+    )
+    .expect("render tools page");
+
+    assert!(rendered.contains("session tools session_id=session-1 total=3 showing=2-2"));
+    assert!(rendered.contains("next_offset=2"));
+    assert!(rendered.contains("tool=tool_2"));
+    assert!(!rendered.contains("tool=tool_1"));
+    assert!(!rendered.contains("tool=tool_3"));
+}
+
+#[test]
 fn execute_process_with_io_renders_version_for_russian_alias() {
     let temp = tempfile::tempdir().expect("tempdir");
     let app = crate::bootstrap::build_from_config(agent_persistence::AppConfig {

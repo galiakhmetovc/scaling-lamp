@@ -536,6 +536,7 @@ fn session_summary_does_not_require_all_transcript_payloads_for_same_session() {
         app.persistence
             .stores
             .transcripts_dir
+            .join("session-good")
             .join("transcript-old.txt"),
     )
     .expect("remove old transcript payload");
@@ -788,6 +789,7 @@ fn list_session_summaries_does_not_require_transcript_payloads_for_same_session(
         app.persistence
             .stores
             .transcripts_dir
+            .join("session-good")
             .join("transcript-old.txt"),
     )
     .expect("remove old transcript payload");

@@ -1,5 +1,7 @@
 use super::*;
 
+const DEFAULT_SESSION_TOOL_PAGE_LIMIT: usize = 50;
+
 pub(super) fn show_session_via_client(
     client: &DaemonClient,
     id: &str,
@@ -66,6 +68,73 @@ pub(super) fn show_chat_via_client(
     }
 
     Ok(rendered)
+}
+
+pub(super) fn show_session_tools(
+    store: &PersistenceStore,
+    session_id: &str,
+    limit: Option<usize>,
+    offset: usize,
+) -> Result<String, BootstrapError> {
+    if store.get_session(session_id)?.is_none() {
+        return Err(BootstrapError::MissingRecord {
+            kind: "session",
+            id: session_id.to_string(),
+        });
+    }
+
+    let calls = store.list_tool_calls_for_session(session_id)?;
+    let total = calls.len();
+    if calls.is_empty() {
+        return Ok(format!(
+            "session tools session_id={} total=0 showing=0-0 next_offset=<none>\n<empty>",
+            session_id
+        ));
+    }
+
+    let limit = limit.unwrap_or(DEFAULT_SESSION_TOOL_PAGE_LIMIT);
+    let page_start = offset.min(total);
+    let page_end = page_start.saturating_add(limit).min(total);
+    let showing = if page_start < page_end {
+        format!("{}-{}", page_start + 1, page_end)
+    } else {
+        "0-0".to_string()
+    };
+    let next_offset = if page_end < total {
+        page_end.to_string()
+    } else {
+        "<none>".to_string()
+    };
+    let header = format!(
+        "session tools session_id={} total={} showing={} limit={} offset={} next_offset={}",
+        session_id, total, showing, limit, offset, next_offset
+    );
+
+    if page_start == page_end {
+        return Ok(format!("{header}\n<empty-page>"));
+    }
+
+    let lines = calls[page_start..page_end]
+        .iter()
+        .map(|call| {
+            let error = call.error.as_deref().unwrap_or("<none>");
+            format!(
+                "tool_call id={} run_id={} provider_call_id={} tool={} status={} requested_at={} updated_at={} summary={} args={} error={}",
+                call.id,
+                call.run_id,
+                call.provider_tool_call_id,
+                call.tool_name,
+                call.status,
+                call.requested_at,
+                call.updated_at,
+                call.summary,
+                call.arguments_json,
+                error
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    Ok(format!("{header}\n{lines}"))
 }
 
 pub(super) fn send_chat(

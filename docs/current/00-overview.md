@@ -12,7 +12,7 @@
 - вызывает provider;
 - provider может попросить инструменты;
 - runtime исполняет инструменты, approval’ы и фоновые jobs;
-- результаты сохраняются в SQLite и связанных payload-файлах;
+- результаты сохраняются в SQLite и связанных payload-файлах: sessions, runs, jobs, approvals, tool-call ledger, indexes, transcripts, artifacts, context summaries, schedules, Telegram bindings и diagnostic events;
 - CLI/TUI/HTTP просто показывают одно и то же состояние разными способами.
 
 ## System Context
@@ -23,13 +23,37 @@ C4 System Context хранится в [docs/architecture/01-system-context.md](.
 
 ## Главные сущности
 
+В документации ниже разделяются два уровня терминов:
+
+- **Предметные сущности** — то, чем оперирует пользователь: `Session`, `Agent profile`, `Run`, `Job`, `Tool`, `Artifact`.
+- **Программные сущности** — Rust-типы и сервисные объекты, через которые это реализовано: `App`, `ExecutionService`, `PersistenceStore`, HTTP/TUI/Telegram handlers.
+
+Связь простая: поверхности взаимодействия вызывают методы `App`, `App` создаёт `ExecutionService`, `ExecutionService` меняет предметные сущности и сохраняет их через `PersistenceStore`.
+
+```mermaid
+flowchart LR
+    Operator[Оператор]
+    Surface[CLI / TUI / HTTP / Telegram]
+    App[App]
+    Execution[ExecutionService]
+    Store[PersistenceStore]
+    Domain[Session / Run / Job / Tool / Artifact]
+
+    Operator --> Surface
+    Surface --> App
+    App --> Execution
+    Execution --> Domain
+    Execution --> Store
+    Store --> Domain
+```
+
 ### App
 
 [`App`](../../cmd/agentd/src/bootstrap.rs) — корневой объект процесса. Он знает:
 
 - какой конфиг загружен;
 - где лежат persistent stores;
-- где workspace;
+- какой workspace/scaffold передан процессу;
 - как собран runtime scaffold;
 - как ходить к release updater, processes registry и MCP registry.
 
@@ -37,7 +61,7 @@ C4 System Context хранится в [docs/architecture/01-system-context.md](.
 
 ### Session
 
-`Session` — один диалог агента. У него есть:
+`Session` — один диалог/контекст агента. Это предметная сущность, которую оператор видит как “чат”. У неё есть:
 
 - `id`
 - `title`
@@ -50,7 +74,7 @@ C4 System Context хранится в [docs/architecture/01-system-context.md](.
 
 ### Run
 
-`Run` — конкретный ход модели. Обычно это:
+`Run` — конкретное выполнение модели внутри session. Обычно это:
 
 - обычный chat turn;
 - background chat turn;
@@ -80,19 +104,23 @@ C4 System Context хранится в [docs/architecture/01-system-context.md](.
 
 Главная идея: модель не должна изобретать shell snippets. Она вызывает named tool с typed input, а runtime сам решает, как это выполнить и как отдать результат обратно.
 
+Runtime отдельно пишет ledger вызовов tools в таблицу `tool_calls`: tool name, arguments JSON, status, error и timestamps. Это не замена artifact’ам и не полный output; это audit trail “что модель просила сделать”.
+
 ### Artifact
 
 Большие tool outputs не пихаются целиком в prompt. Они уходят в artifact/offload storage, а модель получает bounded summary и ссылку на артефакт.
 
 ### Agent profile
 
-Agent profile — это персонализация агента:
+`Agent profile` — это персонализация агента:
 
 - имя;
 - шаблон (`default`, `judge`);
 - `SYSTEM.md` и `AGENTS.md` в `agent_home`;
 - allowlist capabilities;
 - operator-visible metadata.
+
+Текущий `agent_home` живёт в `data_dir/agents/<agent_id>/` и содержит `SYSTEM.md`, `AGENTS.md` и `skills/`. Это похоже на editable profile home, а не на полноценный project workspace. План разделения `agent templates`, `agent profiles` и рабочих директорий описан в [11-workspace-modernization-plan.md](11-workspace-modernization-plan.md).
 
 ## Как один запрос проходит через систему
 
@@ -108,6 +136,34 @@ Agent profile — это персонализация агента:
 8. `provider_loop.rs` выполняет tool round’ы, approvals и continuation logic.
 9. Все изменения пишутся в `PersistenceStore`.
 10. CLI/TUI/HTTP читают обновлённое состояние из store.
+
+```mermaid
+sequenceDiagram
+    participant Operator as Оператор
+    participant Surface as Surface
+    participant App
+    participant Exec as ExecutionService
+    participant Store as PersistenceStore
+    participant Provider as LLM Provider
+    participant Tool as Tool Runtime
+
+    Operator->>Surface: сообщение
+    Surface->>App: chat turn
+    App->>Exec: execute
+    Exec->>Store: load session/transcripts/plan/context
+    Exec->>Provider: prompt + tools
+    Provider-->>Exec: text или tool calls
+    opt tool call
+        Exec->>Store: record tool_call requested/running
+        Exec->>Tool: execute structured tool
+        Tool-->>Exec: tool output
+        Exec->>Store: record tool_call completed/failed
+        Exec->>Provider: tool output continuation
+    end
+    Exec->>Store: persist run/transcript/jobs/artifacts
+    Surface->>Store: read updated view
+    Surface-->>Operator: ответ
+```
 
 ## Почему daemon-centered
 

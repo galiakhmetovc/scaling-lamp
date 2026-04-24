@@ -904,17 +904,22 @@ impl ExecutionService {
                 );
 
                 let mut tool_runtime = self.tool_runtime();
+                let run_id = run.snapshot().id.clone();
                 let model_output = self.invoke_provider_tool_call(
                     super::provider_loop::ProviderToolExecutionContext {
                         store,
                         provider,
                         session_id: &session.id,
+                        run_id: &run_id,
                         now,
                     },
                     &mut run,
                     &mut tool_runtime,
-                    pending_tool_approval.provider_tool_call_id.as_str(),
-                    &parsed,
+                    super::provider_loop::ProviderToolCallInvocation {
+                        tool_call_id: pending_tool_approval.provider_tool_call_id.as_str(),
+                        arguments_json: pending_tool_approval.tool_arguments.as_str(),
+                        parsed: &parsed,
+                    },
                     observer,
                 )?;
                 if interrupt_after_tool_step

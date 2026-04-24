@@ -11,7 +11,7 @@
 - `archives/` — архивы сессий
 - `agents/` — agent home directories, которые bootstrap создаёт рядом с store
 - `runs/` — run-related payload storage
-- `transcripts/` — transcript payload storage
+- `transcripts/` — transcript payload storage, новые записи группируются по `session_id`
 - `audit/runtime.jsonl` — structured diagnostic log
 
 То есть состояние — это не “только SQLite”. SQLite хранит метаданные и индексы, а большие тела лежат рядом на файловой системе.
@@ -37,7 +37,7 @@
 
 `/etc/teamd/config.toml` — основной TOML-конфиг без секретов. Там задаются `data_dir`, daemon bind address/port, Telegram enable flag, provider kind/base/model и permission mode.
 
-`/etc/teamd/teamd.env` — environment file для systemd unit’ов и операторских CLI-команд. Там лежат секреты и env overrides: `TEAMD_CONFIG`, `TEAMD_DATA_DIR`, `TEAMD_TELEGRAM_BOT_TOKEN`, `TEAMD_PROVIDER_API_KEY`. Deploy script создаёт файл как `root:teamd 0640`: `systemd` читает его через `EnvironmentFile`, а операторские команды вида `sudo -u teamd ... agentd telegram pair <key>` могут использовать тот же env и тот же state root.
+`/etc/teamd/teamd.env` — environment file для systemd unit’ов и операторских CLI-команд. Там лежат секреты и env overrides: `TEAMD_CONFIG`, `TEAMD_DATA_DIR`, `TEAMD_TELEGRAM_BOT_TOKEN`, `TEAMD_PROVIDER_API_KEY`. Deploy script создаёт файл как `root:teamd 0640`: `systemd` читает его через `EnvironmentFile`, а операторский helper `teamdctl` использует тот же env и тот же state root.
 
 `/var/lib/teamd/state` — runtime `data_dir`. Если daemon, Telegram worker и CLI смотрят в разные `data_dir`, вы получите разные sessions, pairings и transcripts. Поэтому для production-like запуска все systemd services и ручные команды должны использовать один и тот же `TEAMD_DATA_DIR=/var/lib/teamd/state`.
 
@@ -53,16 +53,18 @@
 | `audit/runtime.jsonl` | Append-only diagnostic events: bootstrap, HTTP requests, daemon lifecycle, Telegram worker, provider loop и ошибки. | Читать можно. Редактировать не нужно. |
 | `runs/` | Run-related payload directory, создаётся layout’ом. Большая часть run state сейчас хранится в `state.sqlite`. | Нет. |
 | `state.sqlite` | Главная SQLite БД с метаданными, индексами и runtime state. | Нет, кроме read-only диагностики. |
-| `transcripts/` | Text payload files для transcript entries. SQLite хранит index и hash, файл хранит body сообщения. | Нет. |
+| `transcripts/<session_id>/` | Text payload files для новых transcript entries. SQLite хранит index и hash, файл хранит body сообщения. Старые flat-файлы в `transcripts/` остаются читаемыми для обратной совместимости. | Нет. |
 
 Пример transcript payload:
 
 ```text
-transcripts/transcript-run-chat-session-1777036286947-1777036286-01-user.txt
-transcripts/transcript-run-chat-session-1777036286947-1777036286-02-assistant.txt
+transcripts/session-1777036286947/transcript-run-chat-session-1777036286947-1777036286-01-user.txt
+transcripts/session-1777036286947/transcript-run-chat-session-1777036286947-1777036286-02-assistant.txt
 ```
 
-Имя файла — storage key. Смысл записи хранится не только в имени, а в `state.sqlite`: `session_id`, `run_id`, `kind`, `created_at`, `byte_len`, `sha256`.
+Storage key теперь обычно содержит `session_id/filename.txt`. Смысл записи хранится не только в имени, а в `state.sqlite`: `session_id`, `run_id`, `kind`, `created_at`, `byte_len`, `sha256`.
+
+Важно: `agents/<agent_id>/` сейчас является `agent_home`, а не project workspace. Там лежат prompt-файлы и skills профиля агента. Рабочая директория выполнения tool’ов пока приходит из runtime/session/schedule context и требует отдельной модернизации. План описан в [11-workspace-modernization-plan.md](11-workspace-modernization-plan.md).
 
 ## Что хранит `state.sqlite`
 
@@ -75,6 +77,7 @@ transcripts/transcript-run-chat-session-1777036286947-1777036286-02-assistant.tx
 | `runs` | Execution runs: status, provider usage, recent steps, pending approvals, provider loop state, delegates. |
 | `jobs` | Очередь фоновой работы: chat turns, scheduled work, callbacks, leases, attempts, cancellation. |
 | `transcripts` | Индекс transcript payload files в `transcripts/`: role/kind, session/run links, storage key, hash. |
+| `tool_calls` | Ledger вызовов tools: provider call id, tool name, arguments JSON, summary, status, error, timestamps. Хранит сам факт вызова и состояние, а не полный результат tool output. |
 | `artifacts` | Индекс artifact payload files в `artifacts/`: kind, path, metadata, size, hash. |
 | `agent_profiles` | Agent profiles, template kind, allowed tools, путь к `agent_home`. |
 | `agent_schedules` | Deferred/recurring schedules для agent profiles. |
@@ -162,7 +165,7 @@ transcripts/transcript-run-chat-session-1777036286947-1777036286-02-assistant.tx
 
 Файл: [`cmd/agentd/src/diagnostics.rs`](../../cmd/agentd/src/diagnostics.rs)
 
-Диагностика пишется structured JSON events в:
+Диагностика процесса пишется structured JSON events в:
 
 - `data_dir/audit/runtime.jsonl`
 
@@ -179,6 +182,64 @@ transcripts/transcript-run-chat-session-1777036286947-1777036286-02-assistant.tx
 - structured fields.
 
 Это особенно полезно для разборов таймаутов и “где именно подвисло”.
+
+`audit/runtime.jsonl` — это лог runtime/daemon/surface-слоёв, а не transcript агента. Там есть события bootstrap, HTTP client/server, daemon lifecycle, Telegram worker, provider loop, ошибки и timing. Сообщения пользователя/ассистента лежат в `transcripts/` и индексируются в таблице `transcripts`.
+
+Команда:
+
+```bash
+agentd logs 200
+```
+
+читает последние строки именно из `audit/runtime.jsonl`. То есть `agentd logs` — это diagnostic logs `agentd`, а не “логи одного агента”.
+
+В установке через `deploy-teamd.sh` создаются два operator entrypoint:
+
+- `/usr/local/bin/agentd` — symlink на `/opt/teamd/bin/agentd`, удобен для ручного локального запуска от текущего пользователя;
+- `/usr/local/bin/teamdctl` — helper для production-state: читает `/etc/teamd/teamd.env`, переключается на пользователя `teamd` и запускает `/opt/teamd/bin/agentd`.
+
+Если binary ставился вручную, зарегистрировать `agentd` в `PATH` можно так:
+
+```bash
+sudo mkdir -p /usr/local/bin
+sudo ln -sf /opt/teamd/bin/agentd /usr/local/bin/agentd
+hash -r
+agentd version
+```
+
+`journalctl` показывает stdout/stderr systemd unit’ов, а `agentd logs` показывает structured audit file из `data_dir`. Обычно нужны оба источника:
+
+```bash
+teamdctl daemon logs
+teamdctl telegram logs
+teamdctl logs 200
+```
+
+## Чтение сессий и tool calls
+
+Для оператора есть две CLI-команды поверх того же store:
+
+```bash
+agentd session transcript <session_id>
+agentd session tools <session_id> --limit 50 --offset 0
+```
+
+`session transcript` рендерит transcript view сессии. Это удобнее, чем вручную смотреть payload-файлы в `transcripts/<session_id>/`, потому команда берёт порядок, роли и связи из SQLite.
+
+`session tools` рендерит ledger вызовов tools по сессии. Он нужен для аудита и улучшения инструкций агентам: видно, какой tool был запрошен, с какими аргументами, в каком run, чем закончился вызов и была ли ошибка. Полные большие результаты tool’ов по-прежнему должны уходить в artifacts/offloads, а не в этот ledger.
+
+`session tools` постраничный: по умолчанию показывает до 50 записей, а в заголовке печатает `total`, `showing`, `limit`, `offset` и `next_offset`. Следующую страницу можно запросить так:
+
+```bash
+agentd session tools <session_id> --limit 50 --offset <next_offset>
+```
+
+Для production-like systemd:
+
+```bash
+teamdctl session transcript <session_id>
+teamdctl session tools <session_id> --limit 50 --offset 0
+```
 
 ## Version/build identity
 

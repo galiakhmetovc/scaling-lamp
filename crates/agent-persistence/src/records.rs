@@ -252,6 +252,21 @@ pub struct TranscriptRecord {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ToolCallRecord {
+    pub id: String,
+    pub session_id: String,
+    pub run_id: String,
+    pub provider_tool_call_id: String,
+    pub tool_name: String,
+    pub arguments_json: String,
+    pub summary: String,
+    pub status: String,
+    pub error: Option<String>,
+    pub requested_at: i64,
+    pub updated_at: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SessionInboxEventRecord {
     pub id: String,
     pub session_id: String,

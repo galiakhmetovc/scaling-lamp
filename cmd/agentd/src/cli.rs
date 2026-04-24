@@ -13,7 +13,7 @@ use crate::telegram;
 use crate::tui;
 use agent_persistence::{
     JobRepository, MissionRecord, MissionRepository, PersistenceStore, RunRepository,
-    SessionRecord, SessionRepository,
+    SessionRecord, SessionRepository, ToolCallRepository,
 };
 use agent_runtime::mission::{MissionExecutionIntent, MissionSchedule, MissionSpec, MissionStatus};
 use agent_runtime::provider::{FinishReason, ProviderMessage, ProviderRequest, ProviderStreamMode};
@@ -49,6 +49,14 @@ enum Command {
     },
     ChatShow {
         session_id: String,
+    },
+    SessionTranscript {
+        id: String,
+    },
+    SessionTools {
+        id: String,
+        limit: Option<usize>,
+        offset: usize,
     },
     ChatSend {
         session_id: String,
@@ -164,6 +172,10 @@ where
         Command::Update { tag } => app.update_runtime_binary(tag.as_deref()),
         Command::ProviderSmoke { prompt } => render::run_provider_smoke(app, &prompt),
         Command::ChatShow { session_id } => render::show_chat(app, &session_id),
+        Command::SessionTranscript { id } => render::show_chat(app, &id),
+        Command::SessionTools { id, limit, offset } => {
+            render::show_session_tools(&app.store()?, &id, limit, offset)
+        }
         Command::ChatSend {
             session_id,
             message,

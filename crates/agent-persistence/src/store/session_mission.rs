@@ -246,15 +246,8 @@ impl MissionRepository for PersistenceStore {
 
 impl TranscriptRepository for PersistenceStore {
     fn put_transcript(&self, record: &TranscriptRecord) -> Result<(), StoreError> {
-        let path = self.transcript_path(&record.id)?;
-        let storage_key = path
-            .file_name()
-            .and_then(|name| name.to_str())
-            .ok_or_else(|| StoreError::InvalidIdentifier {
-                id: record.id.clone(),
-                reason: "must produce a valid payload filename",
-            })?
-            .to_string();
+        let path = self.transcript_path(&record.session_id, &record.id)?;
+        let storage_key = self.transcript_storage_key(&record.session_id, &record.id)?;
         let sha256 = sha256_hex(record.content.as_bytes());
 
         persist_payload_with_commit(&path, record.content.as_bytes(), || {

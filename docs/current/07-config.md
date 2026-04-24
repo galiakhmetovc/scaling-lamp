@@ -179,6 +179,8 @@ export TEAMD_PROVIDER_API_KEY='replace-with-zai-key'
 
 Если запускать бинарь то из-под пользователя, то из-под `root`, легко случайно получить два разных state root’а. Поэтому в production-like запуске стоит явно понимать, какой `data_dir` вы используете.
 
+`data_dir/agents/<agent_id>` сейчас является `agent_home` профиля агента: там prompts и skills, а не рабочий каталог проекта. План явного разделения `agent_home` и `workspace` описан в [11-workspace-modernization-plan.md](11-workspace-modernization-plan.md).
+
 Подробная карта файлов в `data_dir` описана в [06-storage-recovery-and-diagnostics.md](06-storage-recovery-and-diagnostics.md).
 
 ## MCP connectors в конфиге

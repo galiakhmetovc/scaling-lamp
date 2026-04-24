@@ -3,6 +3,7 @@ set -eu
 
 SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 DEPLOY_SCRIPT="$SCRIPT_DIR/deploy-teamd.sh"
+TEAMDCTL_SCRIPT="$SCRIPT_DIR/teamdctl.sh"
 
 fail() {
   printf 'FAIL: %s\n' "$1" >&2
@@ -32,6 +33,8 @@ dry_run_output=$(
 assert_contains "$dry_run_output" "DRY RUN"
 assert_contains "$dry_run_output" "teamd-daemon.service"
 assert_contains "$dry_run_output" "teamd-telegram.service"
+assert_contains "$dry_run_output" "/usr/local/bin/agentd"
+assert_contains "$dry_run_output" "/usr/local/bin/teamdctl"
 assert_contains "$dry_run_output" "telegram pair"
 
 existing_env_dir="$SCRIPT_DIR/../target/deploy-script-test"
@@ -105,5 +108,31 @@ deps_output=$(
 assert_contains "$deps_output" "OpenSSL development package not found via pkg-config"
 assert_contains "$deps_output" "Installing system build dependencies"
 assert_contains "$deps_output" "pkg-config"
+
+fake_ctl_dir="$existing_env_dir/fake-teamdctl"
+fake_agentd="$fake_ctl_dir/agentd"
+fake_env="$fake_ctl_dir/teamd.env"
+mkdir -p "$fake_ctl_dir"
+cat > "$fake_agentd" <<'EOF'
+#!/bin/sh
+printf 'fake-agentd'
+for arg in "$@"; do
+  printf ' %s' "$arg"
+done
+printf '\n'
+EOF
+chmod +x "$fake_agentd"
+cat > "$fake_env" <<'EOF'
+TEAMD_DATA_DIR='/tmp/fake-teamd-state'
+EOF
+
+teamdctl_pair_output=$(
+  TEAMD_RUN_USER="$(id -un)" \
+    TEAMD_ENV_FILE="$fake_env" \
+    TEAMD_AGENTD_BIN="$fake_agentd" \
+    "$TEAMDCTL_SCRIPT" telegram pair tg-test
+)
+
+assert_contains "$teamdctl_pair_output" "fake-agentd telegram pair tg-test"
 
 printf 'ok deploy-teamd smoke\n'

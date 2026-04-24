@@ -4,7 +4,7 @@ use crate::records::{
     KnowledgeSourceRecord, McpConnectorRecord, MissionRecord, PlanRecord, RunRecord,
     SessionInboxEventRecord, SessionRecord, SessionRetentionRecord, SessionSearchDocRecord,
     TelegramChatBindingRecord, TelegramUpdateCursorRecord, TelegramUserPairingRecord,
-    TranscriptRecord,
+    ToolCallRecord, TranscriptRecord,
 };
 use crate::store::StoreError;
 use agent_runtime::context::ContextOffloadPayload;
@@ -201,6 +201,16 @@ pub trait TranscriptRepository {
         session_id: &str,
         limit: usize,
     ) -> Result<Vec<TranscriptRecord>, StoreError>;
+}
+
+pub trait ToolCallRepository {
+    fn put_tool_call(&self, record: &ToolCallRecord) -> Result<(), StoreError>;
+    fn get_tool_call(&self, id: &str) -> Result<Option<ToolCallRecord>, StoreError>;
+    fn list_tool_calls_for_session(
+        &self,
+        session_id: &str,
+    ) -> Result<Vec<ToolCallRecord>, StoreError>;
+    fn list_tool_calls_for_run(&self, run_id: &str) -> Result<Vec<ToolCallRecord>, StoreError>;
 }
 
 pub trait SessionInboxRepository {

@@ -1,7 +1,7 @@
 use super::*;
 use crate::agents;
 use crate::prompting;
-use agent_persistence::ContextOffloadRepository;
+use agent_persistence::{ContextOffloadRepository, ToolCallRecord, ToolCallRepository};
 use agent_runtime::context::{
     ContextOffloadPayload, ContextOffloadRef, ContextOffloadSnapshot, ContextSummary,
     approximate_token_count,
@@ -49,7 +49,27 @@ pub(super) struct ProviderToolExecutionContext<'a> {
     pub(super) store: &'a PersistenceStore,
     pub(super) provider: &'a dyn ProviderDriver,
     pub(super) session_id: &'a str,
+    pub(super) run_id: &'a str,
     pub(super) now: i64,
+}
+
+pub(super) struct ProviderToolCallInvocation<'a> {
+    pub(super) tool_call_id: &'a str,
+    pub(super) arguments_json: &'a str,
+    pub(super) parsed: &'a ToolCall,
+}
+
+struct ToolCallLedgerUpdate<'a> {
+    store: &'a PersistenceStore,
+    session_id: &'a str,
+    run_id: &'a str,
+    provider_tool_call_id: &'a str,
+    tool_name: &'a str,
+    arguments_json: &'a str,
+    summary: &'a str,
+    status: ToolExecutionStatus,
+    error: Option<String>,
+    now: i64,
 }
 
 #[derive(Debug, Clone)]
@@ -455,6 +475,40 @@ impl ExecutionService {
             "retryable": true,
         })
         .to_string()
+    }
+
+    fn tool_call_ledger_id(run_id: &str, provider_tool_call_id: &str) -> String {
+        format!(
+            "toolcall-{}-{}",
+            sanitize_identifier(run_id),
+            sanitize_identifier(provider_tool_call_id)
+        )
+    }
+
+    fn record_tool_call_ledger(update: ToolCallLedgerUpdate<'_>) -> Result<(), ExecutionError> {
+        let id = Self::tool_call_ledger_id(update.run_id, update.provider_tool_call_id);
+        let requested_at = update
+            .store
+            .get_tool_call(&id)
+            .map_err(ExecutionError::Store)?
+            .map(|record| record.requested_at)
+            .unwrap_or(update.now);
+        update
+            .store
+            .put_tool_call(&ToolCallRecord {
+                id,
+                session_id: update.session_id.to_string(),
+                run_id: update.run_id.to_string(),
+                provider_tool_call_id: update.provider_tool_call_id.to_string(),
+                tool_name: update.tool_name.to_string(),
+                arguments_json: update.arguments_json.to_string(),
+                summary: update.summary.to_string(),
+                status: update.status.as_str().to_string(),
+                error: update.error,
+                requested_at,
+                updated_at: update.now,
+            })
+            .map_err(ExecutionError::Store)
     }
 
     fn retryable_provider_tool_output(
@@ -1333,10 +1387,22 @@ impl ExecutionService {
         context: ProviderToolExecutionContext<'_>,
         run: &mut RunEngine,
         tool_runtime: &mut ToolRuntime,
-        tool_call_id: &str,
-        parsed: &ToolCall,
+        invocation: ProviderToolCallInvocation<'_>,
         observer: &mut Option<&mut dyn FnMut(ChatExecutionEvent)>,
     ) -> Result<String, ExecutionError> {
+        let parsed = invocation.parsed;
+        Self::record_tool_call_ledger(ToolCallLedgerUpdate {
+            store: context.store,
+            session_id: context.session_id,
+            run_id: context.run_id,
+            provider_tool_call_id: invocation.tool_call_id,
+            tool_name: parsed.name().as_str(),
+            arguments_json: invocation.arguments_json,
+            summary: &parsed.summary(),
+            status: ToolExecutionStatus::Running,
+            error: None,
+            now: context.now,
+        })?;
         Self::emit_event(
             observer,
             ChatExecutionEvent::ToolStatus {
@@ -1363,6 +1429,18 @@ impl ExecutionService {
                         status: ToolExecutionStatus::Failed,
                     },
                 );
+                Self::record_tool_call_ledger(ToolCallLedgerUpdate {
+                    store: context.store,
+                    session_id: context.session_id,
+                    run_id: context.run_id,
+                    provider_tool_call_id: invocation.tool_call_id,
+                    tool_name: parsed.name().as_str(),
+                    arguments_json: invocation.arguments_json,
+                    summary: &parsed.summary(),
+                    status: ToolExecutionStatus::Failed,
+                    error: Some(source.to_string()),
+                    now: context.now,
+                })?;
                 return Err(source);
             }
         };
@@ -1407,10 +1485,22 @@ impl ExecutionService {
                 status: ToolExecutionStatus::Completed,
             },
         );
+        Self::record_tool_call_ledger(ToolCallLedgerUpdate {
+            store: context.store,
+            session_id: context.session_id,
+            run_id: context.run_id,
+            provider_tool_call_id: invocation.tool_call_id,
+            tool_name: parsed.name().as_str(),
+            arguments_json: invocation.arguments_json,
+            summary: &parsed.summary(),
+            status: ToolExecutionStatus::Completed,
+            error: None,
+            now: context.now,
+        })?;
         self.prepare_model_tool_output(
             context.store,
             context.session_id,
-            tool_call_id,
+            invocation.tool_call_id,
             parsed,
             &output,
             model_output,
@@ -2694,10 +2784,23 @@ impl ExecutionService {
             cursor.note_assistant_tool_calls(&response);
             cursor.begin_tool_round();
             for tool_call in &response.tool_calls {
+                let run_id = run.snapshot().id.clone();
                 let (parsed, definition) =
                     match self.resolve_provider_tool_call(&catalog, tool_call) {
                         Ok(resolved) => resolved,
                         Err(ExecutionError::ToolCallParse { reason, .. }) => {
+                            Self::record_tool_call_ledger(ToolCallLedgerUpdate {
+                                store,
+                                session_id,
+                                run_id: &run_id,
+                                provider_tool_call_id: &tool_call.call_id,
+                                tool_name: &tool_call.name,
+                                arguments_json: &tool_call.arguments,
+                                summary: &tool_call.name,
+                                status: ToolExecutionStatus::Failed,
+                                error: Some(format!("invalid arguments: {reason}")),
+                                now,
+                            })?;
                             Self::emit_event(
                                 observer,
                                 ChatExecutionEvent::ToolStatus {
@@ -2719,6 +2822,18 @@ impl ExecutionService {
                         }
                         Err(other) => return Err(other),
                     };
+                Self::record_tool_call_ledger(ToolCallLedgerUpdate {
+                    store,
+                    session_id,
+                    run_id: &run_id,
+                    provider_tool_call_id: &tool_call.call_id,
+                    tool_name: parsed.name().as_str(),
+                    arguments_json: &tool_call.arguments,
+                    summary: &parsed.summary(),
+                    status: ToolExecutionStatus::Requested,
+                    error: None,
+                    now,
+                })?;
                 Self::emit_event(
                     observer,
                     ChatExecutionEvent::ToolStatus {
@@ -2729,6 +2844,18 @@ impl ExecutionService {
                 );
                 if let Err(error) = self.ensure_agent_tool_allowed(store, session_id, parsed.name())
                 {
+                    Self::record_tool_call_ledger(ToolCallLedgerUpdate {
+                        store,
+                        session_id,
+                        run_id: &run_id,
+                        provider_tool_call_id: &tool_call.call_id,
+                        tool_name: parsed.name().as_str(),
+                        arguments_json: &tool_call.arguments,
+                        summary: &parsed.summary(),
+                        status: ToolExecutionStatus::Failed,
+                        error: Some(error.to_string()),
+                        now,
+                    })?;
                     Self::emit_event(
                         observer,
                         ChatExecutionEvent::ToolStatus {
@@ -2755,6 +2882,23 @@ impl ExecutionService {
                 match permission.action {
                     PermissionAction::Allow => {}
                     PermissionAction::Deny => {
+                        let reason = format!(
+                            "tool {} denied by permission policy: {}",
+                            parsed.name().as_str(),
+                            permission.reason
+                        );
+                        Self::record_tool_call_ledger(ToolCallLedgerUpdate {
+                            store,
+                            session_id,
+                            run_id: &run_id,
+                            provider_tool_call_id: &tool_call.call_id,
+                            tool_name: parsed.name().as_str(),
+                            arguments_json: &tool_call.arguments,
+                            summary: &parsed.summary(),
+                            status: ToolExecutionStatus::Failed,
+                            error: Some(reason.clone()),
+                            now,
+                        })?;
                         Self::emit_event(
                             observer,
                             ChatExecutionEvent::ToolStatus {
@@ -2762,11 +2906,6 @@ impl ExecutionService {
                                 summary: parsed.summary(),
                                 status: ToolExecutionStatus::Failed,
                             },
-                        );
-                        let reason = format!(
-                            "tool {} denied by permission policy: {}",
-                            parsed.name().as_str(),
-                            permission.reason
                         );
                         run.record_tool_completion(
                             format!("{} tool error: {reason}", parsed.summary()),
@@ -2797,6 +2936,18 @@ impl ExecutionService {
                     }
                     PermissionAction::Ask => {
                         if auto_approve {
+                            Self::record_tool_call_ledger(ToolCallLedgerUpdate {
+                                store,
+                                session_id,
+                                run_id: &run_id,
+                                provider_tool_call_id: &tool_call.call_id,
+                                tool_name: parsed.name().as_str(),
+                                arguments_json: &tool_call.arguments,
+                                summary: &parsed.summary(),
+                                status: ToolExecutionStatus::Approved,
+                                error: None,
+                                now,
+                            })?;
                             Self::emit_event(
                                 observer,
                                 ChatExecutionEvent::ToolStatus {
@@ -2806,14 +2957,6 @@ impl ExecutionService {
                                 },
                             );
                         } else {
-                            Self::emit_event(
-                                observer,
-                                ChatExecutionEvent::ToolStatus {
-                                    tool_name: parsed.name().as_str().to_string(),
-                                    summary: parsed.summary(),
-                                    status: ToolExecutionStatus::WaitingApproval,
-                                },
-                            );
                             let approval_id = format!(
                                 "approval-{}-{}",
                                 run.snapshot().id,
@@ -2824,6 +2967,26 @@ impl ExecutionService {
                                 parsed.name().as_str(),
                                 parsed.summary(),
                                 permission.reason
+                            );
+                            Self::record_tool_call_ledger(ToolCallLedgerUpdate {
+                                store,
+                                session_id,
+                                run_id: &run_id,
+                                provider_tool_call_id: &tool_call.call_id,
+                                tool_name: parsed.name().as_str(),
+                                arguments_json: &tool_call.arguments,
+                                summary: &parsed.summary(),
+                                status: ToolExecutionStatus::WaitingApproval,
+                                error: Some(reason.clone()),
+                                now,
+                            })?;
+                            Self::emit_event(
+                                observer,
+                                ChatExecutionEvent::ToolStatus {
+                                    tool_name: parsed.name().as_str().to_string(),
+                                    summary: parsed.summary(),
+                                    status: ToolExecutionStatus::WaitingApproval,
+                                },
                             );
                             let approval_state = cursor.pending_approval_state(
                                 &response,
@@ -2858,12 +3021,16 @@ impl ExecutionService {
                         store,
                         provider,
                         session_id,
+                        run_id: &run_id,
                         now,
                     },
                     run,
                     &mut tool_runtime,
-                    &tool_call.call_id,
-                    &parsed,
+                    ProviderToolCallInvocation {
+                        tool_call_id: &tool_call.call_id,
+                        arguments_json: &tool_call.arguments,
+                        parsed: &parsed,
+                    },
                     observer,
                 ) {
                     Ok(model_output) => model_output,
