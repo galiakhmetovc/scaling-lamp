@@ -84,7 +84,9 @@ enum Command {
         id: String,
         title: String,
     },
-    SessionList,
+    SessionList {
+        format: SessionListFormat,
+    },
     SessionShow {
         id: String,
     },
@@ -140,6 +142,12 @@ struct ProcessInvocation {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum SessionToolsFormat {
+    Human,
+    Raw,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SessionListFormat {
     Human,
     Raw,
 }
@@ -210,7 +218,9 @@ where
         }),
         Command::MissionTick { now } => render::run_mission_tick(app, now),
         Command::SessionCreate { id, title } => render::create_session(&app.store()?, &id, &title),
-        Command::SessionList => render::show_session_list(&app.list_session_summaries()?),
+        Command::SessionList { format } => {
+            render::show_session_list(&app.list_session_summaries()?, format)
+        }
         Command::SessionShow { id } => render::show_session(&app.store()?, &id),
         Command::SessionSkills { id } => app.render_session_skills(&id),
         Command::SessionEnableSkill { id, skill_name } => {

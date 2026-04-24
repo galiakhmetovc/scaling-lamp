@@ -88,12 +88,14 @@ impl Command {
                     title,
                 })
             }
-            [command] if command == "sessions" || command == "сессии" => Ok(Self::SessionList),
-            [scope, action]
+            [command, rest @ ..] if command == "sessions" || command == "сессии" => {
+                parse_session_list_command(rest)
+            }
+            [scope, action, rest @ ..]
                 if (scope == "session" || scope == "сессия")
                     && (action == "list" || action == "список") =>
             {
-                Ok(Self::SessionList)
+                parse_session_list_command(rest)
             }
             [scope, action, id] if scope == "session" && action == "show" => {
                 Ok(Self::SessionShow { id: id.clone() })
@@ -191,6 +193,49 @@ impl Command {
 fn parse_log_lines(raw: &str) -> Result<usize, BootstrapError> {
     let value = parse_positive_usize(raw, "logs max_lines")?;
     Ok(value)
+}
+
+fn parse_session_list_command(args: &[String]) -> Result<Command, BootstrapError> {
+    let mut format = SessionListFormat::Human;
+    let mut index = 0;
+    while index < args.len() {
+        match args[index].as_str() {
+            "--raw" => {
+                format = SessionListFormat::Raw;
+                index += 1;
+            }
+            "--human" => {
+                format = SessionListFormat::Human;
+                index += 1;
+            }
+            "--format" => {
+                let Some(value) = args.get(index + 1) else {
+                    return Err(BootstrapError::Usage {
+                        reason: "session list --format requires a value".to_string(),
+                    });
+                };
+                format = parse_session_list_format(value)?;
+                index += 2;
+            }
+            other => {
+                return Err(BootstrapError::Usage {
+                    reason: format!("unsupported session list argument {other}"),
+                });
+            }
+        }
+    }
+
+    Ok(Command::SessionList { format })
+}
+
+fn parse_session_list_format(raw: &str) -> Result<SessionListFormat, BootstrapError> {
+    match raw {
+        "human" | "человек" => Ok(SessionListFormat::Human),
+        "raw" | "line" | "lines" | "сырой" => Ok(SessionListFormat::Raw),
+        other => Err(BootstrapError::Usage {
+            reason: format!("unsupported session list format {other}; expected human|raw"),
+        }),
+    }
 }
 
 fn parse_session_tools_command(id: &str, args: &[String]) -> Result<Command, BootstrapError> {

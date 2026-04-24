@@ -188,10 +188,13 @@ teamdctl logs 200
 ```bash
 agentd session list
 agentd sessions
+agentd session list --raw
 agentd session transcript <session_id>
 agentd session tools <session_id> --limit 50 --offset 0
 agentd session tools <session_id> --raw --limit 50 --offset 0
 ```
+
+`session list` без `--raw` показывает человекочитаемый отчёт. `--raw` оставлен для grep, diff и внешних скриптов.
 
 `session tools` без `--raw` показывает человекочитаемый отчёт. `--raw` оставлен для grep, diff и внешних скриптов.
 
@@ -199,6 +202,7 @@ agentd session tools <session_id> --raw --limit 50 --offset 0
 
 ```bash
 teamdctl session list
+teamdctl session list --raw
 teamdctl session transcript <session_id>
 teamdctl session tools <session_id> --limit 50 --offset 0
 teamdctl session tools <session_id> --raw --limit 50 --offset 0

@@ -38,20 +38,42 @@ fn process_cli_accepts_session_list_commands() {
     let session_list =
         super::ProcessInvocation::parse(["session", "list"]).expect("parse session list");
     let sessions = super::ProcessInvocation::parse(["sessions"]).expect("parse sessions alias");
+    let raw_sessions =
+        super::ProcessInvocation::parse(["sessions", "--raw"]).expect("parse raw sessions alias");
     let russian_sessions =
         super::ProcessInvocation::parse(["сессии"]).expect("parse russian sessions alias");
     let russian_session_list =
         super::ProcessInvocation::parse(["сессия", "список"]).expect("parse russian session list");
 
-    assert!(matches!(session_list.command, super::Command::SessionList));
-    assert!(matches!(sessions.command, super::Command::SessionList));
+    assert!(matches!(
+        session_list.command,
+        super::Command::SessionList {
+            format: super::SessionListFormat::Human
+        }
+    ));
+    assert!(matches!(
+        sessions.command,
+        super::Command::SessionList {
+            format: super::SessionListFormat::Human
+        }
+    ));
+    assert!(matches!(
+        raw_sessions.command,
+        super::Command::SessionList {
+            format: super::SessionListFormat::Raw
+        }
+    ));
     assert!(matches!(
         russian_sessions.command,
-        super::Command::SessionList
+        super::Command::SessionList {
+            format: super::SessionListFormat::Human
+        }
     ));
     assert!(matches!(
         russian_session_list.command,
-        super::Command::SessionList
+        super::Command::SessionList {
+            format: super::SessionListFormat::Human
+        }
     ));
 }
 
@@ -118,9 +140,36 @@ fn execute_renders_session_list() {
 
     let rendered = super::execute(&app, ["session", "list"]).expect("render session list");
 
-    assert!(rendered.contains("sessions total=2"));
+    assert!(rendered.contains("Sessions"));
+    assert!(rendered.contains("total: 2"));
+    assert!(rendered.contains("1. Alpha"));
+    assert!(rendered.contains("id: session-1"));
+    assert!(rendered.contains("2. Beta"));
+    assert!(rendered.contains("id: session-2"));
+    assert!(rendered.contains("agent: Ассистент (default)"));
+    assert!(rendered.contains("messages: 0"));
+    assert!(rendered.contains("pending approval: no"));
+    assert!(rendered.contains("background jobs: 0 total, 0 running, 0 queued"));
+    assert!(rendered.contains("preview: <none>"));
+    assert!(!rendered.contains("session id="));
+}
+
+#[test]
+fn execute_renders_session_list_raw_format() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let app = crate::bootstrap::build_from_config(agent_persistence::AppConfig {
+        data_dir: temp.path().join("state-root"),
+        ..agent_persistence::AppConfig::default()
+    })
+    .expect("build app");
+
+    super::execute(&app, ["session", "create", "session-1", "Alpha"]).expect("create alpha");
+
+    let rendered =
+        super::execute(&app, ["session", "list", "--raw"]).expect("render raw session list");
+
+    assert!(rendered.contains("sessions total=1"));
     assert!(rendered.contains("session id=session-1 title=Alpha"));
-    assert!(rendered.contains("session id=session-2 title=Beta"));
     assert!(rendered.contains("agent=Ассистент (default)"));
     assert!(rendered.contains("messages=0"));
     assert!(rendered.contains("updated_at="));

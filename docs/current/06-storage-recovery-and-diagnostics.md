@@ -222,11 +222,19 @@ teamdctl logs 200
 ```bash
 agentd session list
 agentd sessions
+agentd session list --raw
 agentd session transcript <session_id>
 agentd session tools <session_id> --limit 50 --offset 0
 ```
 
-`session list` показывает список sessions: `session_id`, title, agent profile, message count, `updated_at`, pending approval flag, background job counts и последний preview. Alias `sessions` делает то же самое.
+`session list` показывает список sessions. По умолчанию это человекочитаемый отчёт: title, `session_id`, agent profile, timestamps, message count, context/usage, pending approval flag, auto-approve flag, background job counts, schedule summary и последний preview. Alias `sessions` делает то же самое.
+
+Если нужен старый однострочный формат для `grep`, diff или внешних скриптов:
+
+```bash
+agentd session list --raw
+agentd sessions --raw
+```
 
 `session transcript` рендерит transcript view сессии. Это удобнее, чем вручную смотреть payload-файлы в `transcripts/<session_id>/`, потому команда берёт порядок, роли и связи из SQLite.
 
@@ -250,6 +258,7 @@ agentd session tools <session_id> --raw --limit 50 --offset 0
 
 ```bash
 teamdctl session list
+teamdctl session list --raw
 teamdctl session transcript <session_id>
 teamdctl session tools <session_id> --limit 50 --offset 0
 teamdctl session tools <session_id> --raw --limit 50 --offset 0

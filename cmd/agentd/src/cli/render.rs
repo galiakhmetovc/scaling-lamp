@@ -71,9 +71,19 @@ pub(super) fn show_chat_via_client(
     Ok(rendered)
 }
 
-pub(super) fn show_session_list(sessions: &[SessionSummary]) -> Result<String, BootstrapError> {
+pub(super) fn show_session_list(
+    sessions: &[SessionSummary],
+    format: SessionListFormat,
+) -> Result<String, BootstrapError> {
+    Ok(match format {
+        SessionListFormat::Human => render_human_session_list(sessions),
+        SessionListFormat::Raw => render_raw_session_list(sessions),
+    })
+}
+
+fn render_raw_session_list(sessions: &[SessionSummary]) -> String {
     if sessions.is_empty() {
-        return Ok("sessions total=0\n<empty>".to_string());
+        return "sessions total=0\n<empty>".to_string();
     }
 
     let lines = sessions
@@ -107,7 +117,97 @@ pub(super) fn show_session_list(sessions: &[SessionSummary]) -> Result<String, B
         .collect::<Vec<_>>()
         .join("\n");
 
-    Ok(format!("sessions total={}\n{lines}", sessions.len()))
+    format!("sessions total={}\n{lines}", sessions.len())
+}
+
+fn render_human_session_list(sessions: &[SessionSummary]) -> String {
+    let mut lines = vec!["Sessions".to_string(), format!("total: {}", sessions.len())];
+
+    if sessions.is_empty() {
+        lines.push(String::new());
+        lines.push("<empty>".to_string());
+        return lines.join("\n");
+    }
+
+    for (index, session) in sessions.iter().enumerate() {
+        lines.push(String::new());
+        lines.push(format!("{}. {}", index + 1, session.title));
+        lines.push(format!("   id: {}", session.id));
+        lines.push(format!(
+            "   agent: {} ({})",
+            session.agent_name, session.agent_profile_id
+        ));
+        if let Some(model) = session.model.as_deref() {
+            lines.push(format!("   model: {model}"));
+        }
+        lines.push(format!(
+            "   updated: {}",
+            format_unix_timestamp(session.updated_at)
+        ));
+        lines.push(format!(
+            "   created: {}",
+            format_unix_timestamp(session.created_at)
+        ));
+        lines.push(format!("   messages: {}", session.message_count));
+        lines.push(format!("   context tokens: {}", session.context_tokens));
+        lines.push(format!(
+            "   usage: {}",
+            format_session_usage(
+                session.usage_input_tokens,
+                session.usage_output_tokens,
+                session.usage_total_tokens
+            )
+        ));
+        lines.push(format!(
+            "   pending approval: {}",
+            yes_no(session.has_pending_approval)
+        ));
+        lines.push(format!("   auto approve: {}", yes_no(session.auto_approve)));
+        lines.push(format!(
+            "   background jobs: {} total, {} running, {} queued",
+            session.background_job_count,
+            session.running_background_job_count,
+            session.queued_background_job_count
+        ));
+        if let Some(schedule) = session.schedule.as_ref() {
+            lines.push(format!(
+                "   schedule: {} {} enabled={}",
+                schedule.id,
+                schedule.mode.as_str(),
+                yes_no(schedule.enabled)
+            ));
+        }
+        let preview = session
+            .last_message_preview
+            .as_deref()
+            .unwrap_or("<none>")
+            .replace('\n', " ");
+        lines.push(format!("   preview: {preview}"));
+    }
+
+    lines.join("\n")
+}
+
+fn yes_no(value: bool) -> &'static str {
+    if value { "yes" } else { "no" }
+}
+
+fn format_session_usage(input: Option<u32>, output: Option<u32>, total: Option<u32>) -> String {
+    match (input, output, total) {
+        (None, None, None) => "<none>".to_string(),
+        _ => format!(
+            "input={}, output={}, total={}",
+            input
+                .map(|value| value.to_string())
+                .unwrap_or_else(|| "<none>".to_string()),
+            output
+                .map(|value| value.to_string())
+                .unwrap_or_else(|| "<none>".to_string()),
+            total
+                .map(|value| value.to_string())
+                .unwrap_or_else(|| "<none>".to_string())
+        ),
+    }
 }
 
 pub(super) fn show_session_tools(

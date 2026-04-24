@@ -20,7 +20,7 @@ pub(super) fn daemon_supports_command(command: &Command) -> bool {
             | Command::ChatRepl { .. }
             | Command::SessionTranscript { .. }
             | Command::SessionCreate { .. }
-            | Command::SessionList
+            | Command::SessionList { .. }
             | Command::SessionShow { .. }
             | Command::SessionSkills { .. }
             | Command::SessionEnableSkill { .. }
@@ -75,7 +75,9 @@ pub(super) fn execute_command(app: &App, command: Command) -> Result<String, Boo
         }),
         Command::MissionTick { now } => render::run_mission_tick(app, now),
         Command::SessionCreate { id, title } => render::create_session(&app.store()?, &id, &title),
-        Command::SessionList => render::show_session_list(&app.list_session_summaries()?),
+        Command::SessionList { format } => {
+            render::show_session_list(&app.list_session_summaries()?, format)
+        }
         Command::SessionShow { id } => render::show_session(&app.store()?, &id),
         Command::SessionSkills { id } => app.render_session_skills(&id),
         Command::SessionEnableSkill { id, skill_name } => {
@@ -135,7 +137,9 @@ pub(super) fn execute_daemon_command(
                 summary.id, summary.title
             ))
         }
-        Command::SessionList => render::show_session_list(&client.list_session_summaries()?),
+        Command::SessionList { format } => {
+            render::show_session_list(&client.list_session_summaries()?, format)
+        }
         Command::SessionShow { id } => render::show_session_via_client(client, &id),
         Command::SessionSkills { id } => {
             render::render_session_skills_list(client.session_skills(&id)?)
