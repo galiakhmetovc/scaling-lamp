@@ -15,7 +15,7 @@ use agent_runtime::tool::{
     KnowledgeReadInput, KnowledgeReadOutput, KnowledgeSearchInput, KnowledgeSearchOutput,
     SessionReadInput, SessionReadOutput, SessionSearchInput, SessionSearchOutput,
 };
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::Instant;
 
 fn load_session_head_metadata(
@@ -928,19 +928,22 @@ impl App {
     #[cfg_attr(not(test), allow(dead_code))]
     pub fn write_debug_bundle(&self, session_id: &str) -> Result<PathBuf, BootstrapError> {
         let bundle = self.render_debug_bundle(session_id)?;
-        let relative_path = format!(
-            ".teamd-debug/{}-{}.txt",
-            sanitize_debug_filename(session_id),
-            unique_timestamp_token()?
-        );
-        self.runtime
-            .workspace
-            .write_text(relative_path.as_str(), bundle.as_str())
-            .map_err(map_workspace_error)?;
-        self.runtime
-            .workspace
-            .resolve(relative_path.as_str())
-            .map_err(map_workspace_error)
+        let path = self.debug_bundle_output_path(session_id)?;
+        write_debug_bundle_file(&path, bundle.as_str())?;
+        Ok(path)
+    }
+
+    fn debug_bundle_output_path(&self, session_id: &str) -> Result<PathBuf, BootstrapError> {
+        Ok(self
+            .config
+            .data_dir
+            .join("audit")
+            .join("debug-bundles")
+            .join(format!(
+                "{}-{}.txt",
+                sanitize_debug_filename(session_id),
+                unique_timestamp_token()?
+            )))
     }
 
     #[cfg_attr(not(test), allow(dead_code))]
@@ -1304,6 +1307,19 @@ fn sanitize_debug_filename(session_id: &str) -> String {
         .collect()
 }
 
+fn write_debug_bundle_file(path: &Path, content: &str) -> Result<(), BootstrapError> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).map_err(|source| BootstrapError::Io {
+            path: parent.to_path_buf(),
+            source,
+        })?;
+    }
+    fs::write(path, content).map_err(|source| BootstrapError::Io {
+        path: path.to_path_buf(),
+        source,
+    })
+}
+
 fn render_debug_run(run: &RunSnapshot) -> Vec<String> {
     let mut lines = vec![format!(
         "- id={} status={} started_at={} updated_at={} finished_at={:?}",
@@ -1394,19 +1410,5 @@ fn describe_pending_provider_approval(pending: Option<&PendingProviderApproval>)
             "provider_retry:{} error={}",
             approval.approval_id, approval.error_summary
         ),
-    }
-}
-
-fn map_workspace_error(error: agent_runtime::workspace::WorkspaceError) -> BootstrapError {
-    match error {
-        agent_runtime::workspace::WorkspaceError::InvalidPath { path, reason } => {
-            BootstrapError::InvalidPath {
-                path: PathBuf::from(path),
-                reason,
-            }
-        }
-        agent_runtime::workspace::WorkspaceError::Io { path, source } => {
-            BootstrapError::Io { path, source }
-        }
     }
 }

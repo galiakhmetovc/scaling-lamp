@@ -1,7 +1,7 @@
 use super::*;
 use crate::agents;
 use crate::diagnostics::DiagnosticEventBuilder;
-use agent_persistence::{JobRepository, RunRepository};
+use agent_persistence::{JobRepository, RunRepository, ToolCallRepository};
 use agent_runtime::interagent::{AgentChainState, AgentMessageChain};
 use agent_runtime::mission::JobSpec;
 use agent_runtime::run::{RunSnapshot, RunStatus, RunStepKind};
@@ -15,6 +15,8 @@ use std::time::Instant;
 use time::OffsetDateTime;
 use time::UtcOffset;
 use time::format_description::well_known::Rfc3339;
+
+const DEBUG_ARTIFACT_PREVIEW_CHAR_LIMIT: usize = 64 * 1024;
 
 impl App {
     #[cfg_attr(not(test), allow(dead_code))]
@@ -37,6 +39,43 @@ impl App {
             self.config.runtime_limits.transcript_tail_run_limit
         };
         self.build_session_transcript_view(session_id, Some(max_entries), Some(run_limit))
+    }
+
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub fn session_debug_view(&self, session_id: &str) -> Result<SessionDebugView, BootstrapError> {
+        let store = self.store()?;
+        if !store.session_exists(session_id)? {
+            return Err(BootstrapError::MissingRecord {
+                kind: "session",
+                id: session_id.to_string(),
+            });
+        }
+
+        let mut entries = Vec::new();
+        for record in store.list_transcripts_for_session(session_id)? {
+            entries.push(debug_entry_from_transcript(record)?);
+        }
+        for record in store.list_tool_calls_for_session(session_id)? {
+            entries.push(debug_entry_from_tool_call(record));
+        }
+        for record in store.list_artifacts_for_session(session_id)? {
+            entries.push(debug_entry_from_artifact(record));
+        }
+
+        entries.sort_by(|left, right| {
+            left.created_at
+                .cmp(&right.created_at)
+                .then_with(|| {
+                    debug_entry_sort_weight(left.kind.as_str())
+                        .cmp(&debug_entry_sort_weight(right.kind.as_str()))
+                })
+                .then_with(|| left.id.cmp(&right.id))
+        });
+
+        Ok(SessionDebugView {
+            session_id: session_id.to_string(),
+            entries,
+        })
     }
 
     fn build_session_transcript_view(
@@ -1172,10 +1211,222 @@ fn format_background_job_time(timestamp: i64) -> String {
         .unwrap_or_else(|_| timestamp.to_string())
 }
 
+fn debug_entry_from_transcript(
+    record: agent_persistence::TranscriptRecord,
+) -> Result<SessionDebugEntry, BootstrapError> {
+    let entry = TranscriptEntry::try_from(record).map_err(BootstrapError::RecordConversion)?;
+    let role = entry.role.as_str();
+    let summary = first_debug_line(entry.content.as_str());
+    let label = format!(
+        "[{}] message {}: {}",
+        format_background_job_time(entry.created_at),
+        role,
+        summary
+    );
+    let detail = [
+        "Message".to_string(),
+        format!("id: {}", entry.id),
+        format!("role: {role}"),
+        format!(
+            "created_at: {} ({})",
+            format_background_job_time(entry.created_at),
+            entry.created_at
+        ),
+        format!("run_id: {}", entry.run_id.as_deref().unwrap_or("<none>")),
+        String::new(),
+        "content:".to_string(),
+        entry.content.clone(),
+    ];
+
+    Ok(SessionDebugEntry {
+        id: entry.id,
+        kind: "message".to_string(),
+        label,
+        detail_title: format!("Message {role}"),
+        detail: detail.join("\n"),
+        created_at: entry.created_at,
+        run_id: entry.run_id,
+        artifact_id: None,
+    })
+}
+
+fn debug_entry_from_tool_call(record: agent_persistence::ToolCallRecord) -> SessionDebugEntry {
+    let label = format!(
+        "[{}] tool {} [{}]: {}",
+        format_background_job_time(record.requested_at),
+        record.tool_name,
+        record.status,
+        first_debug_line(record.summary.as_str())
+    );
+    let mut detail = vec![
+        "Tool Call".to_string(),
+        format!("id: {}", record.id),
+        format!("run_id: {}", record.run_id),
+        format!("provider_call_id: {}", record.provider_tool_call_id),
+        format!("tool: {}", record.tool_name),
+        format!("status: {}", record.status),
+        format!(
+            "requested_at: {} ({})",
+            format_background_job_time(record.requested_at),
+            record.requested_at
+        ),
+        format!(
+            "updated_at: {} ({})",
+            format_background_job_time(record.updated_at),
+            record.updated_at
+        ),
+        format!("summary: {}", record.summary),
+    ];
+    if let Some(error) = record.error.as_deref() {
+        detail.push(format!("error: {error}"));
+    }
+    detail.extend([
+        String::new(),
+        "arguments:".to_string(),
+        pretty_json_str(record.arguments_json.as_str()),
+    ]);
+    if record.result_summary.is_some()
+        || record.result_preview.is_some()
+        || record.result_artifact_id.is_some()
+        || record.result_byte_len.is_some()
+    {
+        detail.extend([
+            String::new(),
+            "result:".to_string(),
+            format!(
+                "result_summary: {}",
+                record.result_summary.as_deref().unwrap_or("<none>")
+            ),
+            format!(
+                "result_byte_len: {}",
+                record
+                    .result_byte_len
+                    .map(|value| value.to_string())
+                    .unwrap_or_else(|| "<none>".to_string())
+            ),
+            format!("result_truncated: {}", record.result_truncated),
+            format!(
+                "result_artifact_id: {}",
+                record.result_artifact_id.as_deref().unwrap_or("<none>")
+            ),
+        ]);
+        if let Some(preview) = record.result_preview.as_deref() {
+            detail.extend([
+                String::new(),
+                "result_preview:".to_string(),
+                pretty_json_str(preview),
+            ]);
+        }
+    }
+
+    SessionDebugEntry {
+        id: record.id,
+        kind: "tool_call".to_string(),
+        label,
+        detail_title: format!("Tool {}", record.tool_name),
+        detail: detail.join("\n"),
+        created_at: record.requested_at,
+        run_id: Some(record.run_id),
+        artifact_id: record.result_artifact_id,
+    }
+}
+
+fn debug_entry_from_artifact(record: agent_persistence::ArtifactRecord) -> SessionDebugEntry {
+    let byte_len = record.bytes.len();
+    let mut content = String::from_utf8_lossy(record.bytes.as_slice()).to_string();
+    let truncated = content.chars().count() > DEBUG_ARTIFACT_PREVIEW_CHAR_LIMIT;
+    if truncated {
+        content = content
+            .chars()
+            .take(DEBUG_ARTIFACT_PREVIEW_CHAR_LIMIT)
+            .collect::<String>();
+    }
+    let metadata = pretty_json_str(record.metadata_json.as_str());
+    let label = format!(
+        "[{}] artifact {} [{}] bytes={}",
+        format_background_job_time(record.created_at),
+        record.id,
+        record.kind,
+        byte_len
+    );
+    let mut detail = vec![
+        "Artifact".to_string(),
+        format!("id: {}", record.id),
+        format!("kind: {}", record.kind),
+        format!(
+            "created_at: {} ({})",
+            format_background_job_time(record.created_at),
+            record.created_at
+        ),
+        format!("byte_len: {byte_len}"),
+        format!("path: {}", record.path.display()),
+        String::new(),
+        "metadata:".to_string(),
+        metadata,
+        String::new(),
+        "content:".to_string(),
+        content,
+    ];
+    if truncated {
+        detail.push(format!(
+            "... <truncated after {DEBUG_ARTIFACT_PREVIEW_CHAR_LIMIT} chars>"
+        ));
+    }
+
+    SessionDebugEntry {
+        id: record.id.clone(),
+        kind: "artifact".to_string(),
+        label,
+        detail_title: format!("Artifact {}", record.id),
+        detail: detail.join("\n"),
+        created_at: record.created_at,
+        run_id: None,
+        artifact_id: Some(record.id),
+    }
+}
+
+fn debug_entry_sort_weight(kind: &str) -> u8 {
+    match kind {
+        "message" => 0,
+        "tool_call" => 1,
+        "artifact" => 2,
+        _ => 9,
+    }
+}
+
+fn first_debug_line(value: &str) -> String {
+    let line = value
+        .lines()
+        .find(|line| !line.trim().is_empty())
+        .unwrap_or(value)
+        .trim();
+    if line.chars().count() <= 120 {
+        line.to_string()
+    } else {
+        format!("{}...", line.chars().take(117).collect::<String>())
+    }
+}
+
+fn pretty_json_str(raw: &str) -> String {
+    serde_json::from_str::<serde_json::Value>(raw)
+        .map(|value| pretty_json_value(&value))
+        .unwrap_or_else(|_| raw.to_string())
+}
+
+fn pretty_json_value(value: &serde_json::Value) -> String {
+    serde_json::to_string_pretty(value).unwrap_or_else(|_| value.to_string())
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{build_synthetic_run_lines, parse_tool_step_detail};
+    use super::*;
+    use agent_persistence::{
+        ArtifactRecord, ArtifactRepository, RunRecord, RunRepository, SessionRecord,
+        SessionRepository, ToolCallRecord, ToolCallRepository, TranscriptRecord,
+        TranscriptRepository,
+    };
     use agent_runtime::run::{RunSnapshot, RunStatus, RunStep, RunStepKind};
+    use std::path::PathBuf;
 
     #[test]
     fn parse_tool_step_detail_marks_tool_error_as_failed() {
@@ -1213,5 +1464,118 @@ mod tests {
         assert_eq!(tool_line.tool_name.as_deref(), Some("fs_read_text"));
         assert_eq!(tool_line.tool_status.as_deref(), Some("failed"));
         assert!(tool_line.content.contains("tool error:"));
+    }
+
+    #[test]
+    fn session_debug_view_combines_messages_tool_calls_and_artifacts() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let app = crate::bootstrap::build_from_config(agent_persistence::AppConfig {
+            data_dir: temp.path().join("state-root"),
+            ..agent_persistence::AppConfig::default()
+        })
+        .expect("build app");
+        let store = app.store().expect("open store");
+        store
+            .put_session(&SessionRecord {
+                id: "session-1".to_string(),
+                title: "Debug".to_string(),
+                prompt_override: None,
+                settings_json: "{}".to_string(),
+                agent_profile_id: "default".to_string(),
+                active_mission_id: None,
+                parent_session_id: None,
+                parent_job_id: None,
+                delegation_label: None,
+                created_at: 1,
+                updated_at: 5,
+            })
+            .expect("put session");
+        store
+            .put_run(&RunRecord {
+                id: "run-1".to_string(),
+                session_id: "session-1".to_string(),
+                mission_id: None,
+                status: "completed".to_string(),
+                error: None,
+                result: Some("ok".to_string()),
+                provider_usage_json: "null".to_string(),
+                active_processes_json: "[]".to_string(),
+                recent_steps_json: "[]".to_string(),
+                evidence_refs_json: "[]".to_string(),
+                pending_approvals_json: "[]".to_string(),
+                provider_loop_json: "null".to_string(),
+                delegate_runs_json: "[]".to_string(),
+                started_at: 2,
+                updated_at: 4,
+                finished_at: Some(4),
+            })
+            .expect("put run");
+        store
+            .put_transcript(&TranscriptRecord {
+                id: "transcript-1".to_string(),
+                session_id: "session-1".to_string(),
+                run_id: Some("run-1".to_string()),
+                kind: "user".to_string(),
+                content: "покажи файлы".to_string(),
+                created_at: 2,
+            })
+            .expect("put transcript");
+        store
+            .put_artifact(&ArtifactRecord {
+                id: "artifact-tool-result-1".to_string(),
+                session_id: "session-1".to_string(),
+                kind: "tool_output".to_string(),
+                metadata_json: "{\"summary\":\"exec output\"}".to_string(),
+                path: PathBuf::from("artifacts").join("artifact-tool-result-1.bin"),
+                bytes: b"{\"stdout\":\"hello\",\"stderr\":\"\"}".to_vec(),
+                created_at: 4,
+            })
+            .expect("put artifact");
+        store
+            .put_tool_call(&ToolCallRecord {
+                id: "tool-call-1".to_string(),
+                session_id: "session-1".to_string(),
+                run_id: "run-1".to_string(),
+                provider_tool_call_id: "provider-call-1".to_string(),
+                tool_name: "exec_wait".to_string(),
+                arguments_json: "{\"process_id\":\"exec-1\"}".to_string(),
+                summary: "exec_wait process_id=exec-1".to_string(),
+                status: "completed".to_string(),
+                error: None,
+                result_summary: Some("exit_code=Some(0)".to_string()),
+                result_preview: Some("{\"stdout\":\"hello\"}".to_string()),
+                result_artifact_id: Some("artifact-tool-result-1".to_string()),
+                result_truncated: true,
+                result_byte_len: Some(30),
+                requested_at: 3,
+                updated_at: 4,
+            })
+            .expect("put tool call");
+
+        let view = app.session_debug_view("session-1").expect("debug view");
+
+        assert_eq!(view.session_id, "session-1");
+        assert_eq!(
+            view.entries
+                .iter()
+                .map(|entry| entry.kind.as_str())
+                .collect::<Vec<_>>(),
+            vec!["message", "tool_call", "artifact"]
+        );
+        assert!(view.entries[0].label.contains("user"));
+        assert!(view.entries[0].detail.contains("покажи файлы"));
+        assert!(view.entries[1].label.contains("exec_wait"));
+        assert!(
+            view.entries[1]
+                .detail
+                .contains("\"process_id\": \"exec-1\"")
+        );
+        assert!(
+            view.entries[1]
+                .detail
+                .contains("result_artifact_id: artifact-tool-result-1")
+        );
+        assert!(view.entries[2].label.contains("artifact-tool-result-1"));
+        assert!(view.entries[2].detail.contains("\"stdout\":\"hello\""));
     }
 }

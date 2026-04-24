@@ -5,6 +5,7 @@
 ## Документы
 
 1. [01-install-and-configure.md](01-install-and-configure.md) — установка из репозитория, сборка `agentd`, `config.toml`, `.env`, запуск Telegram worker и pairing.
+2. [02-file-transfer-plan.md](02-file-transfer-plan.md) — черновик приёма и отправки файлов через Telegram: UX, artifacts, commands, limits и безопасность.
 
 ## Связанные архитектурные материалы
 

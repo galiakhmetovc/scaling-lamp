@@ -6,6 +6,7 @@ pub enum TuiAction {
     OpenSessionScreen,
     OpenAgentsScreen,
     OpenSchedulesScreen,
+    OpenDebugScreen,
     BrowserSelectPrevious,
     BrowserSelectNext,
     BrowserActivate,

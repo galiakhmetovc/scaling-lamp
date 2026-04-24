@@ -54,7 +54,7 @@ pub fn handle_key(state: &mut TuiAppState, key: KeyEvent) -> Result<TuiAction, B
         KeyCode::Char('/')
             if matches!(
                 state.browser_state().map(|browser| browser.kind()),
-                Some(BrowserKind::Artifacts)
+                Some(BrowserKind::Artifacts | BrowserKind::Debug)
             ) =>
         {
             TuiAction::BrowserSearch
@@ -63,7 +63,7 @@ pub fn handle_key(state: &mut TuiAppState, key: KeyEvent) -> Result<TuiAction, B
             if key.modifiers == crossterm::event::KeyModifiers::CONTROL
                 && matches!(
                     state.browser_state().map(|browser| browser.kind()),
-                    Some(BrowserKind::Artifacts)
+                    Some(BrowserKind::Artifacts | BrowserKind::Debug)
                 ) =>
         {
             TuiAction::BrowserSearch
@@ -71,7 +71,7 @@ pub fn handle_key(state: &mut TuiAppState, key: KeyEvent) -> Result<TuiAction, B
         KeyCode::Char('n')
             if matches!(
                 state.browser_state().map(|browser| browser.kind()),
-                Some(BrowserKind::Artifacts)
+                Some(BrowserKind::Artifacts | BrowserKind::Debug)
             ) =>
         {
             TuiAction::BrowserSearchNext
@@ -79,7 +79,7 @@ pub fn handle_key(state: &mut TuiAppState, key: KeyEvent) -> Result<TuiAction, B
         KeyCode::Char('N')
             if matches!(
                 state.browser_state().map(|browser| browser.kind()),
-                Some(BrowserKind::Artifacts)
+                Some(BrowserKind::Artifacts | BrowserKind::Debug)
             ) =>
         {
             TuiAction::BrowserSearchPrevious
@@ -188,14 +188,8 @@ mod tests {
             "Агенты".to_string(),
             "↑↓ выбор | Enter выбрать".to_string(),
             vec![
-                BrowserItem {
-                    id: "default".to_string(),
-                    label: "Default (default)".to_string(),
-                },
-                BrowserItem {
-                    id: "judge".to_string(),
-                    label: "Judge (judge)".to_string(),
-                },
+                BrowserItem::new("default", "Default (default)"),
+                BrowserItem::new("judge", "Judge (judge)"),
             ],
             0,
             "Агент default".to_string(),
@@ -247,10 +241,7 @@ mod tests {
         state.open_schedule_browser(
             "Расписания".to_string(),
             "↑↓ выбор | Н создать | У удалить".to_string(),
-            vec![BrowserItem {
-                id: "pulse".to_string(),
-                label: "pulse".to_string(),
-            }],
+            vec![BrowserItem::new("pulse", "pulse")],
             0,
             "Расписание pulse".to_string(),
             "id=pulse".to_string(),
@@ -283,10 +274,7 @@ mod tests {
         state.open_artifact_browser(
             "Артефакты".to_string(),
             "↑↓ выбор | Enter полный".to_string(),
-            vec![BrowserItem {
-                id: "artifact-1".to_string(),
-                label: "artifact-1 [ref]".to_string(),
-            }],
+            vec![BrowserItem::new("artifact-1", "artifact-1 [ref]")],
             0,
             "Артефакт artifact-1".to_string(),
             "payload".to_string(),
@@ -317,10 +305,7 @@ mod tests {
         state.open_mcp_browser(
             "MCP".to_string(),
             "↑↓ выбор | Н создать | Р изменить | П вкл/выкл | С перезапуск | У удалить".to_string(),
-            vec![BrowserItem {
-                id: "docs".to_string(),
-                label: "docs transport=stdio".to_string(),
-            }],
+            vec![BrowserItem::new("docs", "docs transport=stdio")],
             0,
             "MCP docs".to_string(),
             "id=docs".to_string(),

@@ -1,8 +1,8 @@
 use crate::bootstrap::{
     AgentScheduleCreateOptions, AgentScheduleUpdatePatch, AgentScheduleView, App, BootstrapError,
-    McpConnectorCreateOptions, McpConnectorUpdatePatch, McpConnectorView, SessionPendingApproval,
-    SessionPreferencesPatch, SessionSkillStatus, SessionSummary, SessionTranscriptView,
-    render_mcp_connector_view, render_mcp_connectors_view,
+    McpConnectorCreateOptions, McpConnectorUpdatePatch, McpConnectorView, SessionDebugEntry,
+    SessionDebugView, SessionPendingApproval, SessionPreferencesPatch, SessionSkillStatus,
+    SessionSummary, SessionTranscriptView, render_mcp_connector_view, render_mcp_connectors_view,
 };
 use crate::execution::{ApprovalContinuationReport, ChatExecutionEvent, ChatTurnExecutionReport};
 use crate::http::client::DaemonClient;
@@ -89,6 +89,43 @@ pub trait TuiBackend: Clone + Send + Sync + 'static {
     fn session_summary(&self, session_id: &str) -> Result<SessionSummary, BootstrapError>;
     fn session_transcript(&self, session_id: &str)
     -> Result<SessionTranscriptView, BootstrapError>;
+    fn session_debug_view(&self, session_id: &str) -> Result<SessionDebugView, BootstrapError> {
+        let transcript = self.session_transcript(session_id)?;
+        let entries = transcript
+            .entries
+            .into_iter()
+            .enumerate()
+            .map(|(index, entry)| {
+                let id = format!("transcript-{index}");
+                let label = format!(
+                    "[{}] message {}: {}",
+                    entry.created_at,
+                    entry.role,
+                    entry.content.lines().next().unwrap_or("")
+                );
+                SessionDebugEntry {
+                    id,
+                    kind: "message".to_string(),
+                    label,
+                    detail_title: format!("Message {}", entry.role),
+                    detail: format!(
+                        "Message\nrole: {}\ncreated_at: {}\nrun_id: {}\n\ncontent:\n{}",
+                        entry.role,
+                        entry.created_at,
+                        entry.run_id.as_deref().unwrap_or("<none>"),
+                        entry.content
+                    ),
+                    created_at: entry.created_at,
+                    run_id: entry.run_id,
+                    artifact_id: None,
+                }
+            })
+            .collect();
+        Ok(SessionDebugView {
+            session_id: session_id.to_string(),
+            entries,
+        })
+    }
     fn session_transcript_tail(
         &self,
         session_id: &str,
@@ -412,6 +449,10 @@ impl TuiBackend for App {
         session_id: &str,
     ) -> Result<SessionTranscriptView, BootstrapError> {
         App::session_transcript(self, session_id)
+    }
+
+    fn session_debug_view(&self, session_id: &str) -> Result<SessionDebugView, BootstrapError> {
+        App::session_debug_view(self, session_id)
     }
 
     fn session_transcript_tail(
@@ -790,6 +831,10 @@ impl TuiBackend for DaemonClient {
         session_id: &str,
     ) -> Result<SessionTranscriptView, BootstrapError> {
         DaemonClient::session_transcript(self, session_id)
+    }
+
+    fn session_debug_view(&self, session_id: &str) -> Result<SessionDebugView, BootstrapError> {
+        DaemonClient::session_debug_view(self, session_id)
     }
 
     fn session_transcript_tail(

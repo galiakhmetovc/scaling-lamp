@@ -110,7 +110,7 @@ TUI отвечает за:
 - чат-экран;
 - composer;
 - dialogs/forms;
-- browser’ы агентов, расписаний, MCP и artifacts;
+- browser’ы агентов, расписаний, MCP, artifacts и session debug-view;
 - локальный UI state.
 
 ### Что TUI не должен делать
@@ -132,7 +132,7 @@ TUI не должен:
 - отправлять chat turns;
 - approval continuation;
 - работать с агентами, расписаниями, MCP;
-- читать память, артефакты, debug bundle;
+- читать память, артефакты, debug bundle и structured session debug-view;
 - отправлять agent messages и grants.
 
 Важно: backend intentionally high-level. Он даёт TUI готовые операции, но не прячет отдельный runtime.

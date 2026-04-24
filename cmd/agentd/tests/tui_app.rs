@@ -175,14 +175,8 @@ fn tui_shell_navigation_can_enter_and_navigate_browser_screens() {
         "Агенты".to_string(),
         "↑↓ выбор | Enter выбрать".to_string(),
         vec![
-            BrowserItem {
-                id: "default".to_string(),
-                label: "Default (default)".to_string(),
-            },
-            BrowserItem {
-                id: "judge".to_string(),
-                label: "Judge (judge)".to_string(),
-            },
+            BrowserItem::new("default", "Default (default)"),
+            BrowserItem::new("judge", "Judge (judge)"),
         ],
         0,
         "Агент default".to_string(),
@@ -291,14 +285,8 @@ fn tui_render_browser_screens_show_list_preview_and_hints() {
         "Агенты".to_string(),
         "↑↓ выбор | Enter выбрать".to_string(),
         vec![
-            BrowserItem {
-                id: "default".to_string(),
-                label: "Default (default)".to_string(),
-            },
-            BrowserItem {
-                id: "judge".to_string(),
-                label: "Judge (judge)".to_string(),
-            },
+            BrowserItem::new("default", "Default (default)"),
+            BrowserItem::new("judge", "Judge (judge)"),
         ],
         1,
         "Агент judge".to_string(),

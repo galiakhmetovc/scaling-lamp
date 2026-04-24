@@ -76,6 +76,7 @@ pub fn handle_key(state: &mut TuiAppState, key: KeyEvent) -> Result<TuiAction, B
             TuiAction::None
         }
         KeyCode::Char('j') if key.modifiers == KeyModifiers::CONTROL => TuiAction::OpenJudgeDialog,
+        KeyCode::Char('d') if key.modifiers == KeyModifiers::CONTROL => TuiAction::OpenDebugScreen,
         KeyCode::Char('g') if key.modifiers == KeyModifiers::CONTROL => {
             TuiAction::OpenChainGrantDialog
         }

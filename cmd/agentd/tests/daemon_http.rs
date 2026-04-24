@@ -1,7 +1,7 @@
 use agent_persistence::{
     A2APeerConfig, AppConfig, JobRecord, JobRepository, MissionRecord, MissionRepository,
-    PersistenceStore, SessionInboxRepository, SessionRepository, TranscriptRepository,
-    audit::DiagnosticEvent,
+    PersistenceStore, SessionInboxRepository, SessionRecord, SessionRepository, TranscriptRecord,
+    TranscriptRepository, audit::DiagnosticEvent,
 };
 use agent_runtime::mission::{
     JobExecutionInput, JobResult, JobSpec, JobStatus, MissionExecutionIntent, MissionSchedule,
@@ -18,8 +18,8 @@ use agentd::http::types::{
     A2ADelegationCompletionRequest, A2ADelegationCreateRequest, CreateSessionRequest,
     DaemonStopResponse, DiagnosticsTailRequest, DiagnosticsTailResponse, ErrorResponse,
     McpConnectorCreateRequest, McpConnectorDetailResponse, McpConnectorUpdateRequest,
-    MemoryRenderResponse, SessionBackgroundJobResponse, SessionSummaryResponse,
-    SkillCommandRequest, StatusResponse,
+    MemoryRenderResponse, SessionBackgroundJobResponse, SessionDebugResponse,
+    SessionSummaryResponse, SkillCommandRequest, StatusResponse,
 };
 use reqwest::StatusCode;
 use reqwest::blocking::Client;
@@ -129,6 +129,54 @@ fn daemon_http_can_create_a_session_over_json() {
     assert_eq!(session.title, "Daemon Session");
     assert_eq!(session.message_count, 0);
     assert!(!session.id.is_empty());
+
+    handle.stop().expect("stop daemon");
+}
+
+#[test]
+fn daemon_http_can_render_session_debug_view() {
+    let (_temp, app, base_url) = test_app(Some("secret-token"));
+    let store = app.store().expect("open store");
+    store
+        .put_session(&SessionRecord {
+            id: "session-debug".to_string(),
+            title: "Debug".to_string(),
+            prompt_override: None,
+            settings_json: "{}".to_string(),
+            agent_profile_id: "default".to_string(),
+            active_mission_id: None,
+            parent_session_id: None,
+            parent_job_id: None,
+            delegation_label: None,
+            created_at: 1,
+            updated_at: 2,
+        })
+        .expect("put session");
+    store
+        .put_transcript(&TranscriptRecord {
+            id: "transcript-debug-1".to_string(),
+            session_id: "session-debug".to_string(),
+            run_id: None,
+            kind: "user".to_string(),
+            content: "debug me".to_string(),
+            created_at: 2,
+        })
+        .expect("put transcript");
+
+    let handle = daemon::spawn_for_test(app).expect("spawn daemon");
+    let client = Client::new();
+    let response = client
+        .get(format!("{base_url}/v1/sessions/session-debug/debug"))
+        .bearer_auth("secret-token")
+        .send()
+        .expect("debug view response");
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let debug: SessionDebugResponse = response.json().expect("debug json");
+    assert_eq!(debug.session_id, "session-debug");
+    assert_eq!(debug.entries.len(), 1);
+    assert_eq!(debug.entries[0].kind, "message");
+    assert!(debug.entries[0].detail.contains("debug me"));
 
     handle.stop().expect("stop daemon");
 }

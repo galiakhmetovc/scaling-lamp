@@ -97,6 +97,26 @@ pub struct SessionTranscriptLine {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SessionDebugView {
+    pub session_id: String,
+    pub entries: Vec<SessionDebugEntry>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SessionDebugEntry {
+    pub id: String,
+    pub kind: String,
+    pub label: String,
+    pub detail_title: String,
+    pub detail: String,
+    pub created_at: i64,
+    #[serde(default)]
+    pub run_id: Option<String>,
+    #[serde(default)]
+    pub artifact_id: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SessionScheduleSummary {
     pub id: String,
     pub mode: AgentScheduleMode,

@@ -29,6 +29,7 @@ pub fn handle_key(state: &mut TuiAppState, key: KeyEvent) -> Result<TuiAction, B
         KeyCode::Char('п') | KeyCode::Char('П') => TuiAction::OpenRenameDialog,
         KeyCode::Char('а') | KeyCode::Char('А') => TuiAction::OpenAgentsScreen,
         KeyCode::Char('р') | KeyCode::Char('Р') => TuiAction::OpenSchedulesScreen,
+        KeyCode::Char('д') | KeyCode::Char('Д') => TuiAction::OpenDebugScreen,
         _ => TuiAction::None,
     };
 
@@ -104,6 +105,14 @@ mod tests {
             )
             .expect("schedules key"),
             TuiAction::OpenSchedulesScreen
+        );
+        assert_eq!(
+            handle_key(
+                &mut state,
+                KeyEvent::new(KeyCode::Char('д'), KeyModifiers::NONE)
+            )
+            .expect("debug key"),
+            TuiAction::OpenDebugScreen
         );
     }
 }

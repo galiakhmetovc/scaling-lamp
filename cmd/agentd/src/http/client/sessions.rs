@@ -252,6 +252,13 @@ impl DaemonClient {
         self.get_json(&format!("/v1/sessions/{session_id}/transcript"))
     }
 
+    pub fn session_debug_view(
+        &self,
+        session_id: &str,
+    ) -> Result<crate::bootstrap::SessionDebugView, BootstrapError> {
+        self.get_json(&format!("/v1/sessions/{session_id}/debug"))
+    }
+
     pub fn session_transcript_tail(
         &self,
         session_id: &str,

@@ -184,5 +184,6 @@ sequenceDiagram
 
 - Общая архитектура: [01-architecture.md](01-architecture.md)
 - Prompt и chat turn: [02-prompt-and-turn-flow.md](02-prompt-and-turn-flow.md)
+- Детальный prompt contract: [12-prompt-contract-decision.md](12-prompt-contract-decision.md)
 - Интерфейсы CLI/HTTP/TUI: [03-surfaces.md](03-surfaces.md)
 - Хранилище и recovery: [06-storage-recovery-and-diagnostics.md](06-storage-recovery-and-diagnostics.md)

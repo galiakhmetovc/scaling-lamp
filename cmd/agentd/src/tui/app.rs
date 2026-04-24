@@ -4,7 +4,7 @@ use crate::tui::worker::{
     ActiveRunHandle, ActiveRunPhase, ComposerQueue, QueuedDraft, QueuedDraftMode,
 };
 
-const COMMAND_HINTS: [&str; 59] = [
+const COMMAND_HINTS: [&str; 60] = [
     "\\сессии",
     "\\новая",
     "\\агенты",
@@ -42,6 +42,7 @@ const COMMAND_HINTS: [&str; 59] = [
     "\\помощь",
     "\\настройки",
     "\\отладка",
+    "\\дебаг",
     "\\система",
     "\\контекст",
     "\\план",
@@ -65,7 +66,7 @@ const COMMAND_HINTS: [&str; 59] = [
     "\\компакт",
     "\\выход",
 ];
-const COMMAND_STEMS: [&str; 59] = [
+const COMMAND_STEMS: [&str; 60] = [
     "сессии",
     "новая",
     "агенты",
@@ -103,6 +104,7 @@ const COMMAND_STEMS: [&str; 59] = [
     "помощь",
     "настройки",
     "отладка",
+    "дебаг",
     "система",
     "контекст",
     "план",
@@ -136,6 +138,7 @@ pub enum TuiScreen {
     Schedules,
     Mcp,
     Artifacts,
+    Debug,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -144,12 +147,15 @@ pub enum BrowserKind {
     Schedules,
     Mcp,
     Artifacts,
+    Debug,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BrowserItem {
     pub id: String,
     pub label: String,
+    pub preview_title: Option<String>,
+    pub preview_content: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -165,6 +171,31 @@ pub struct BrowserState {
     full_preview: bool,
     search_query: Option<String>,
     search_match_index: usize,
+}
+
+impl BrowserItem {
+    pub fn new(id: impl Into<String>, label: impl Into<String>) -> Self {
+        Self {
+            id: id.into(),
+            label: label.into(),
+            preview_title: None,
+            preview_content: None,
+        }
+    }
+
+    pub fn with_preview(
+        id: impl Into<String>,
+        label: impl Into<String>,
+        preview_title: impl Into<String>,
+        preview_content: impl Into<String>,
+    ) -> Self {
+        Self {
+            id: id.into(),
+            label: label.into(),
+            preview_title: Some(preview_title.into()),
+            preview_content: Some(preview_content.into()),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1258,6 +1289,10 @@ impl TuiAppState {
         self.open_inspector_screen(TuiScreen::Artifacts, title, content);
     }
 
+    pub fn open_debug_screen(&mut self, title: String, content: String) {
+        self.open_inspector_screen(TuiScreen::Debug, title, content);
+    }
+
     pub fn open_agent_browser(
         &mut self,
         title: String,
@@ -1352,6 +1387,33 @@ impl TuiAppState {
             TuiScreen::Mcp,
             BrowserState {
                 kind: BrowserKind::Mcp,
+                title,
+                action_hint,
+                items,
+                selected_index,
+                preview_title,
+                preview_content,
+                preview_scroll: 0,
+                full_preview: false,
+                search_query: None,
+                search_match_index: 0,
+            },
+        );
+    }
+
+    pub fn open_debug_browser(
+        &mut self,
+        title: String,
+        action_hint: String,
+        items: Vec<BrowserItem>,
+        selected_index: usize,
+        preview_title: String,
+        preview_content: String,
+    ) {
+        self.open_browser_screen(
+            TuiScreen::Debug,
+            BrowserState {
+                kind: BrowserKind::Debug,
                 title,
                 action_hint,
                 items,
@@ -1561,7 +1623,11 @@ impl TuiAppState {
                     self.active_screen = TuiScreen::Chat;
                 }
             }
-            TuiScreen::Agents | TuiScreen::Schedules | TuiScreen::Mcp | TuiScreen::Artifacts => {
+            TuiScreen::Agents
+            | TuiScreen::Schedules
+            | TuiScreen::Mcp
+            | TuiScreen::Artifacts
+            | TuiScreen::Debug => {
                 self.active_screen = self.previous_screen.take().unwrap_or_else(|| {
                     if self.current_session_id.is_some() {
                         TuiScreen::Chat
@@ -1953,10 +2019,7 @@ mod tests {
         state.open_artifact_browser(
             "Артефакты".to_string(),
             "↑↓ выбор | Enter полный".to_string(),
-            vec![BrowserItem {
-                id: "artifact-1".to_string(),
-                label: "artifact-1 [ref]".to_string(),
-            }],
+            vec![BrowserItem::new("artifact-1", "artifact-1 [ref]")],
             0,
             "Артефакт artifact-1".to_string(),
             "alpha\nbeta\nGamma".to_string(),

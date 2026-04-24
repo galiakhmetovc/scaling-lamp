@@ -41,9 +41,11 @@ pub fn render(frame: &mut Frame<'_>, state: &TuiAppState) {
     match state.active_screen() {
         TuiScreen::Sessions => render_session_screen(frame, state),
         TuiScreen::Chat => render_chat_screen(frame, state),
-        TuiScreen::Agents | TuiScreen::Schedules | TuiScreen::Mcp | TuiScreen::Artifacts => {
-            render_inspector_screen(frame, state)
-        }
+        TuiScreen::Agents
+        | TuiScreen::Schedules
+        | TuiScreen::Mcp
+        | TuiScreen::Artifacts
+        | TuiScreen::Debug => render_inspector_screen(frame, state),
     }
 
     if let Some(dialog) = state.dialog_state() {
@@ -92,7 +94,7 @@ fn render_session_screen(frame: &mut Frame<'_>, state: &TuiAppState) {
     let list = List::new(items).block(
         Block::default()
             .title(format!(
-                "Сессии | {} | Enter открыть | Н новая | У удалить | П переименовать | А агенты | Р расписания | Esc назад",
+                "Сессии | {} | Enter открыть | Д debug | Н новая | У удалить | П переименовать | А агенты | Р расписания | Esc назад",
                 short_version_label()
             ))
             .borders(Borders::ALL),
@@ -114,6 +116,7 @@ fn render_inspector_screen(frame: &mut Frame<'_>, state: &TuiAppState) {
             TuiScreen::Schedules => "Расписания",
             TuiScreen::Mcp => "MCP",
             TuiScreen::Artifacts => "Артефакты",
+            TuiScreen::Debug => "Debug",
             _ => "Просмотр",
         });
     let content = state.active_inspector_content().unwrap_or("<пусто>");
@@ -1504,10 +1507,10 @@ mod tests {
         state.open_artifact_browser(
             "Артефакты".to_string(),
             "↑↓ выбор | Enter полный | / поиск | PgUp/PgDn".to_string(),
-            vec![BrowserItem {
-                id: "artifact-1".to_string(),
-                label: "artifact-1 [ref] Tool trace".to_string(),
-            }],
+            vec![BrowserItem::new(
+                "artifact-1",
+                "artifact-1 [ref] Tool trace",
+            )],
             0,
             "Артефакт artifact-1".to_string(),
             "первая строка\nвторая строка\nneedle строка".to_string(),

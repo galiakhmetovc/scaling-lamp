@@ -144,7 +144,8 @@ fn dispatch_terminal_event(
                 TuiScreen::Agents
                 | TuiScreen::Schedules
                 | TuiScreen::Mcp
-                | TuiScreen::Artifacts => screens::inspector::handle_key(state, key)?,
+                | TuiScreen::Artifacts
+                | TuiScreen::Debug => screens::inspector::handle_key(state, key)?,
             };
 
             Ok(action)
@@ -178,6 +179,9 @@ where
         }
         TuiAction::OpenSchedulesScreen => {
             open_schedule_browser(app, state, None)?;
+        }
+        TuiAction::OpenDebugScreen => {
+            open_debug_browser(app, state)?;
         }
         TuiAction::BrowserSelectPrevious => {
             state.browser_select_previous();
@@ -389,12 +393,13 @@ where
         TuiAction::SubmitChatInput(input) => {
             if is_command_input(input.as_str()) {
                 if let Err(error) = handle_command(app, state, input.trim(), redraw) {
-                    match error {
-                        BootstrapError::Usage { reason } => {
-                            state.timeline_mut().push_system(&reason, unix_timestamp()?);
-                        }
-                        other => return Err(other),
-                    }
+                    let message = match error {
+                        BootstrapError::Usage { reason } => reason,
+                        other => format!("ошибка команды: {other}"),
+                    };
+                    state
+                        .timeline_mut()
+                        .push_system(&message, unix_timestamp()?);
                 }
             } else {
                 submit_chat_message(app, state, input.trim(), QueuedDraftMode::Priority)?;
@@ -589,6 +594,60 @@ where
     Ok(())
 }
 
+fn open_debug_browser<B>(app: &B, state: &mut TuiAppState) -> Result<(), BootstrapError>
+where
+    B: TuiBackend,
+{
+    let session_id = if state.active_screen() == TuiScreen::Sessions {
+        state
+            .selected_session()
+            .map(|session| session.id.clone())
+            .ok_or_else(|| BootstrapError::Usage {
+                reason: "не выбрана сессия для debug-view".to_string(),
+            })?
+    } else {
+        state
+            .current_session_id()
+            .map(str::to_string)
+            .ok_or_else(|| BootstrapError::Usage {
+                reason: "не выбрана текущая сессия".to_string(),
+            })?
+    };
+    let view = app.session_debug_view(session_id.as_str())?;
+    let items = view
+        .entries
+        .into_iter()
+        .map(|entry| {
+            BrowserItem::with_preview(entry.id, entry.label, entry.detail_title, entry.detail)
+        })
+        .collect::<Vec<_>>();
+    if items.is_empty() {
+        state.open_debug_browser(
+            format!("Debug {session_id}"),
+            "↑↓ выбор | Enter полный | / поиск | n/N | PgUp/PgDn".to_string(),
+            Vec::new(),
+            0,
+            "Debug".to_string(),
+            "В сессии пока нет сообщений, вызовов тулов или артефактов.".to_string(),
+        );
+        return Ok(());
+    }
+    let preview_title = items[0]
+        .preview_title
+        .clone()
+        .unwrap_or_else(|| items[0].id.clone());
+    let preview_content = items[0].preview_content.clone().unwrap_or_default();
+    state.open_debug_browser(
+        format!("Debug {session_id}"),
+        "↑↓ выбор | Enter полный | / поиск | n/N | PgUp/PgDn".to_string(),
+        items,
+        0,
+        preview_title,
+        preview_content,
+    );
+    Ok(())
+}
+
 fn refresh_browser_preview<B>(app: &B, state: &mut TuiAppState) -> Result<(), BootstrapError>
 where
     B: TuiBackend,
@@ -623,6 +682,13 @@ where
                 app.read_artifact(session_id, selected.id.as_str())?,
             )
         }
+        BrowserKind::Debug => (
+            selected
+                .preview_title
+                .clone()
+                .unwrap_or_else(|| selected.id.clone()),
+            selected.preview_content.clone().unwrap_or_default(),
+        ),
     };
     state.set_browser_preview(title, content);
     Ok(())
@@ -653,7 +719,7 @@ where
         BrowserKind::Mcp => {
             refresh_browser_preview(app, state)?;
         }
-        BrowserKind::Artifacts => state.toggle_browser_full_preview(),
+        BrowserKind::Artifacts | BrowserKind::Debug => state.toggle_browser_full_preview(),
     }
     Ok(())
 }
@@ -673,7 +739,7 @@ where
             let home = app.open_agent_home(Some(selected_id.as_str()))?;
             state.set_browser_preview(format!("Дом агента {selected_id}"), home);
         }
-        BrowserKind::Schedules | BrowserKind::Mcp | BrowserKind::Artifacts => {
+        BrowserKind::Schedules | BrowserKind::Mcp | BrowserKind::Artifacts | BrowserKind::Debug => {
             refresh_browser_preview(app, state)?;
         }
     }
@@ -685,7 +751,7 @@ fn open_browser_create_dialog(state: &mut TuiAppState) {
         Some(BrowserKind::Agents) => state.open_create_agent_dialog(),
         Some(BrowserKind::Schedules) => state.open_create_schedule_dialog(),
         Some(BrowserKind::Mcp) => state.open_create_mcp_connector_dialog(),
-        Some(BrowserKind::Artifacts) | None => {}
+        Some(BrowserKind::Artifacts | BrowserKind::Debug) | None => {}
     }
 }
 
@@ -789,7 +855,7 @@ where
 fn open_browser_search_dialog(state: &mut TuiAppState) {
     if matches!(
         state.browser_state().map(|browser| browser.kind()),
-        Some(BrowserKind::Artifacts)
+        Some(BrowserKind::Artifacts | BrowserKind::Debug)
     ) {
         state.open_browser_search_dialog();
     }
@@ -822,7 +888,7 @@ fn parse_agent_browser_items(rendered: &str) -> ParsedAgentBrowser {
         if marker == '*' {
             selected_index = items.len();
         }
-        items.push(BrowserItem { id, label });
+        items.push(BrowserItem::new(id, label));
     }
     ParsedAgentBrowser {
         items,
@@ -848,10 +914,7 @@ fn parse_schedule_browser_items(rendered: &str) -> Vec<BrowserItem> {
         .filter_map(|line| {
             let body = line.trim_start().strip_prefix("- ")?;
             let id = body.split_whitespace().next()?.to_string();
-            Some(BrowserItem {
-                id,
-                label: body.to_string(),
-            })
+            Some(BrowserItem::new(id, body.to_string()))
         })
         .collect()
 }
@@ -862,10 +925,7 @@ fn parse_mcp_browser_items(rendered: &str) -> Vec<BrowserItem> {
         .filter_map(|line| {
             let body = line.trim_start().strip_prefix("- ")?;
             let id = body.split_whitespace().next()?.to_string();
-            Some(BrowserItem {
-                id,
-                label: body.to_string(),
-            })
+            Some(BrowserItem::new(id, body.to_string()))
         })
         .collect()
 }
@@ -876,10 +936,7 @@ fn parse_artifact_browser_items(rendered: &str) -> Vec<BrowserItem> {
         .filter_map(|line| {
             let body = line.trim_start().strip_prefix("- ")?;
             let id = body.split_whitespace().next()?.to_string();
-            Some(BrowserItem {
-                id,
-                label: body.to_string(),
-            })
+            Some(BrowserItem::new(id, body.to_string()))
         })
         .collect()
 }
@@ -1094,6 +1151,9 @@ where
                         &current_session_id,
                         Some(artifact_id.as_str()),
                     )?;
+                }
+                "/debug-view" => {
+                    open_debug_browser(app, state)?;
                 }
                 "/debug" => {
                     let backend_saved = app.write_debug_bundle(&current_session_id)?;
@@ -1887,6 +1947,7 @@ fn canonical_command(command: &str) -> Option<&'static str> {
         "/update" | "/обновить" | "\\обновить" => Some("/update"),
         "/settings" | "\\настройки" => Some("/settings"),
         "/debug" | "\\отладка" => Some("/debug"),
+        "/debug-view" | "\\дебаг" | "\\отладчик" => Some("/debug-view"),
         "/system" | "/система" | "\\система" => Some("/system"),
         "/plan" | "\\план" => Some("/plan"),
         "/status" | "\\статус" => Some("/status"),
@@ -2791,7 +2852,7 @@ mod tests {
         AgentScheduleCreateOptions, AgentScheduleUpdatePatch, AgentScheduleView,
         McpConnectorCreateOptions, McpConnectorUpdatePatch, McpConnectorView,
         SessionPendingApproval, SessionPreferencesPatch, SessionSkillStatus, SessionSummary,
-        SessionTranscriptView,
+        SessionTranscriptLine, SessionTranscriptView,
     };
     use crate::execution::{ApprovalContinuationReport, ChatTurnExecutionReport};
     use crate::tui::app::TuiScreen;
@@ -2810,6 +2871,7 @@ mod tests {
         pending: Vec<SessionPendingApproval>,
         transcript: SessionTranscriptView,
         debug_bundle: String,
+        fail_debug_bundle: bool,
     }
 
     impl TuiBackend for FakeBackend {
@@ -3229,6 +3291,12 @@ mod tests {
         }
 
         fn write_debug_bundle(&self, _session_id: &str) -> Result<String, BootstrapError> {
+            if self.fail_debug_bundle {
+                return Err(BootstrapError::Stream(std::io::Error::new(
+                    std::io::ErrorKind::PermissionDenied,
+                    "permission denied",
+                )));
+            }
             Ok(self.debug_bundle.clone())
         }
 
@@ -4159,6 +4227,7 @@ mod tests {
                 entries: Vec::new(),
             },
             debug_bundle: "unused".to_string(),
+            fail_debug_bundle: false,
         };
         let mut state = TuiAppState::new(
             vec![backend.summary.clone()],
@@ -4195,6 +4264,8 @@ mod tests {
     fn canonical_command_accepts_debug_aliases() {
         assert_eq!(canonical_command("/debug"), Some("/debug"));
         assert_eq!(canonical_command("\\отладка"), Some("/debug"));
+        assert_eq!(canonical_command("/debug-view"), Some("/debug-view"));
+        assert_eq!(canonical_command("\\дебаг"), Some("/debug-view"));
         assert_eq!(canonical_command("\\логи"), Some("/logs"));
     }
 
@@ -4245,6 +4316,7 @@ mod tests {
                 entries: Vec::new(),
             },
             debug_bundle: "unused".to_string(),
+            fail_debug_bundle: false,
         };
         let mut state = TuiAppState::new(
             vec![backend.summary.clone()],
@@ -4298,6 +4370,7 @@ mod tests {
                 entries: Vec::new(),
             },
             debug_bundle: "unused".to_string(),
+            fail_debug_bundle: false,
         };
         let mut state = TuiAppState::new(
             vec![backend.summary.clone()],
@@ -4364,6 +4437,7 @@ mod tests {
                 entries: Vec::new(),
             },
             debug_bundle: backend_bundle.display().to_string(),
+            fail_debug_bundle: false,
         };
         let mut state = TuiAppState::new(
             vec![backend.summary.clone()],
@@ -4389,6 +4463,69 @@ mod tests {
         assert!(saved.contains("timeline_scroll_top="));
         assert!(saved.contains("Backend Bundle Contents:"));
         assert!(saved.contains("Debug Bundle\nctx=42"));
+    }
+
+    #[test]
+    fn command_errors_stay_inside_timeline_instead_of_exiting_tui() {
+        fn redraw(_: &TuiAppState) -> Result<(), BootstrapError> {
+            Ok(())
+        }
+
+        let backend = FakeBackend {
+            summary: SessionSummary {
+                id: "session-a".to_string(),
+                title: "Session A".to_string(),
+                agent_profile_id: "default".to_string(),
+                agent_name: "Default".to_string(),
+                scheduled_by: None,
+                schedule: None,
+                model: Some("glm-5-turbo".to_string()),
+                reasoning_visible: true,
+                think_level: None,
+                compactifications: 0,
+                completion_nudges: None,
+                auto_approve: false,
+                context_tokens: 0,
+                usage_input_tokens: None,
+                usage_output_tokens: None,
+                usage_total_tokens: None,
+                has_pending_approval: false,
+                last_message_preview: None,
+                message_count: 0,
+                background_job_count: 0,
+                running_background_job_count: 0,
+                queued_background_job_count: 0,
+                created_at: 1,
+                updated_at: 2,
+            },
+            pending: Vec::new(),
+            transcript: SessionTranscriptView {
+                session_id: "session-a".to_string(),
+                entries: Vec::new(),
+            },
+            debug_bundle: "unused".to_string(),
+            fail_debug_bundle: true,
+        };
+        let mut state = TuiAppState::new(
+            vec![backend.summary.clone()],
+            Some(backend.summary.id.clone()),
+        );
+        state.set_current_session(backend.summary.clone(), Timeline::default());
+        let mut redraw = redraw;
+
+        dispatch_action(
+            &backend,
+            &mut state,
+            TuiAction::SubmitChatInput("\\отладка".to_string()),
+            &mut redraw,
+        )
+        .expect("command error should be rendered, not returned");
+
+        let entries = state.timeline().entries(true);
+        let last = entries.last().expect("timeline entry");
+        assert!(matches!(last.kind, TimelineEntryKind::System));
+        assert!(last.content.contains("ошибка команды"));
+        assert!(last.content.contains("permission denied"));
     }
 
     #[test]
@@ -4430,6 +4567,7 @@ mod tests {
                 entries: Vec::new(),
             },
             debug_bundle: "debug-bundle.txt".to_string(),
+            fail_debug_bundle: false,
         };
         let mut state = TuiAppState::new(
             vec![backend.summary.clone()],
@@ -4484,6 +4622,7 @@ mod tests {
                 entries: Vec::new(),
             },
             debug_bundle: "unused".to_string(),
+            fail_debug_bundle: false,
         };
         let mut state = TuiAppState::new(
             vec![backend.summary.clone()],
@@ -4540,6 +4679,7 @@ mod tests {
                 entries: Vec::new(),
             },
             debug_bundle: "unused".to_string(),
+            fail_debug_bundle: false,
         };
         let mut state = TuiAppState::new(
             vec![backend.summary.clone()],
@@ -4610,6 +4750,7 @@ mod tests {
                 entries: Vec::new(),
             },
             debug_bundle: "unused".to_string(),
+            fail_debug_bundle: false,
         };
         let mut state = TuiAppState::new(
             vec![backend.summary.clone()],
@@ -4681,6 +4822,7 @@ mod tests {
                 entries: Vec::new(),
             },
             debug_bundle: "unused".to_string(),
+            fail_debug_bundle: false,
         };
         let mut state = TuiAppState::new(
             vec![backend.summary.clone()],
@@ -4714,6 +4856,103 @@ mod tests {
                 .expect("artifact browser")
                 .search_query(),
             Some("artifact_id")
+        );
+    }
+
+    #[test]
+    fn debug_action_opens_browser_and_updates_selected_detail() {
+        fn redraw(_: &TuiAppState) -> Result<(), BootstrapError> {
+            Ok(())
+        }
+
+        let summary = SessionSummary {
+            id: "session-a".to_string(),
+            title: "Session A".to_string(),
+            agent_profile_id: "default".to_string(),
+            agent_name: "Default".to_string(),
+            scheduled_by: None,
+            schedule: None,
+            model: Some("glm-5-turbo".to_string()),
+            reasoning_visible: true,
+            think_level: None,
+            compactifications: 0,
+            completion_nudges: None,
+            auto_approve: false,
+            context_tokens: 0,
+            usage_input_tokens: None,
+            usage_output_tokens: None,
+            usage_total_tokens: None,
+            has_pending_approval: false,
+            last_message_preview: None,
+            message_count: 2,
+            background_job_count: 0,
+            running_background_job_count: 0,
+            queued_background_job_count: 0,
+            created_at: 1,
+            updated_at: 2,
+        };
+        let backend = FakeBackend {
+            summary: summary.clone(),
+            pending: Vec::new(),
+            transcript: SessionTranscriptView {
+                session_id: "session-a".to_string(),
+                entries: vec![
+                    SessionTranscriptLine {
+                        role: "user".to_string(),
+                        content: "первое сообщение".to_string(),
+                        run_id: Some("run-1".to_string()),
+                        created_at: 10,
+                        tool_name: None,
+                        tool_status: None,
+                        approval_id: None,
+                    },
+                    SessionTranscriptLine {
+                        role: "assistant".to_string(),
+                        content: "второе сообщение".to_string(),
+                        run_id: Some("run-1".to_string()),
+                        created_at: 11,
+                        tool_name: None,
+                        tool_status: None,
+                        approval_id: None,
+                    },
+                ],
+            },
+            debug_bundle: "unused".to_string(),
+            fail_debug_bundle: false,
+        };
+        let mut state = TuiAppState::new(vec![summary.clone()], Some(summary.id.clone()));
+        state.set_current_session(summary, Timeline::default());
+
+        dispatch_action(
+            &backend,
+            &mut state,
+            TuiAction::OpenDebugScreen,
+            &mut redraw,
+        )
+        .expect("open debug browser");
+        assert_eq!(state.active_screen(), TuiScreen::Debug);
+        assert_eq!(state.browser_state().expect("browser").items().len(), 2);
+        assert!(
+            state
+                .browser_state()
+                .expect("browser")
+                .preview_content()
+                .contains("первое сообщение")
+        );
+
+        dispatch_action(
+            &backend,
+            &mut state,
+            TuiAction::BrowserSelectNext,
+            &mut redraw,
+        )
+        .expect("select next debug entry");
+        assert!(
+            state
+                .browser_state()
+                .expect("browser")
+                .preview_content()
+                .contains("второе сообщение")
         );
     }
 
@@ -5327,6 +5566,7 @@ mod tests {
                 entries: Vec::new(),
             },
             debug_bundle: "unused".to_string(),
+            fail_debug_bundle: false,
         };
         let mut state = TuiAppState::new(vec![summary.clone()], Some(summary.id.clone()));
         state.set_current_session(summary, Timeline::default());
@@ -5408,6 +5648,7 @@ mod tests {
                 entries: Vec::new(),
             },
             debug_bundle: "unused".to_string(),
+            fail_debug_bundle: false,
         };
         let mut state = TuiAppState::new(vec![summary.clone()], Some(summary.id.clone()));
         state.set_current_session(summary, Timeline::default());
@@ -5470,6 +5711,52 @@ mod tests {
         )
         .expect("ctrl+g");
         assert_eq!(action, TuiAction::OpenChainGrantDialog);
+    }
+
+    #[test]
+    fn debug_shortcuts_route_operator_actions() {
+        let summary = SessionSummary {
+            id: "session-a".to_string(),
+            title: "Session A".to_string(),
+            agent_profile_id: "default".to_string(),
+            agent_name: "Default".to_string(),
+            scheduled_by: None,
+            schedule: None,
+            model: Some("glm-5-turbo".to_string()),
+            reasoning_visible: true,
+            think_level: None,
+            compactifications: 0,
+            completion_nudges: None,
+            auto_approve: false,
+            context_tokens: 0,
+            usage_input_tokens: None,
+            usage_output_tokens: None,
+            usage_total_tokens: None,
+            has_pending_approval: false,
+            last_message_preview: None,
+            message_count: 0,
+            background_job_count: 0,
+            running_background_job_count: 0,
+            queued_background_job_count: 0,
+            created_at: 1,
+            updated_at: 2,
+        };
+        let mut session_state = TuiAppState::new(vec![summary.clone()], Some(summary.id.clone()));
+        let action = crate::tui::screens::session::handle_key(
+            &mut session_state,
+            KeyEvent::new(KeyCode::Char('д'), KeyModifiers::NONE),
+        )
+        .expect("session debug key");
+        assert_eq!(action, TuiAction::OpenDebugScreen);
+
+        let mut chat_state = TuiAppState::new(vec![summary.clone()], Some(summary.id.clone()));
+        chat_state.set_current_session(summary, Timeline::default());
+        let action = crate::tui::screens::chat::handle_key(
+            &mut chat_state,
+            KeyEvent::new(KeyCode::Char('d'), KeyModifiers::CONTROL),
+        )
+        .expect("chat debug key");
+        assert_eq!(action, TuiAction::OpenDebugScreen);
     }
 
     #[test]
@@ -5536,6 +5823,7 @@ mod tests {
                 ],
             },
             debug_bundle: "unused".to_string(),
+            fail_debug_bundle: false,
         };
         let mut state = TuiAppState::new(vec![summary.clone()], Some(summary.id.clone()));
         state.set_current_session(summary, Timeline::default());
@@ -5597,6 +5885,7 @@ mod tests {
                 entries: Vec::new(),
             },
             debug_bundle: "unused".to_string(),
+            fail_debug_bundle: false,
         };
         let state = TuiAppState::new(vec![list_summary.clone()], Some(list_summary.id.clone()));
 

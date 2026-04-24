@@ -1,8 +1,8 @@
 use crate::bootstrap::{
     AgentScheduleCreateOptions, AgentScheduleUpdatePatch, AgentScheduleView,
     McpConnectorCreateOptions, McpConnectorUpdatePatch, McpConnectorView, SessionBackgroundJob,
-    SessionPendingApproval, SessionPreferencesPatch, SessionScheduleSummary, SessionSkillStatus,
-    SessionSummary, SessionTranscriptView,
+    SessionDebugView, SessionPendingApproval, SessionPreferencesPatch, SessionScheduleSummary,
+    SessionSkillStatus, SessionSummary, SessionTranscriptView,
 };
 use crate::execution::{ApprovalContinuationReport, ChatExecutionEvent, ChatTurnExecutionReport};
 use agent_runtime::delegation::{DelegateResultPackage, DelegateWriteScope};
@@ -401,6 +401,7 @@ pub enum WorkerStreamEventResponse {
 }
 
 pub type SessionTranscriptResponse = SessionTranscriptView;
+pub type SessionDebugResponse = SessionDebugView;
 pub type SessionPendingApprovalsResponse = Vec<SessionPendingApproval>;
 pub type SessionPreferencesRequest = SessionPreferencesPatch;
 pub type SessionSkillsResponse = Vec<SessionSkillStatus>;

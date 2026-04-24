@@ -3,9 +3,9 @@ use crate::http::types::{
     ClearSessionRequest, CreateSessionRequest, DebugBundleResponse, ErrorResponse,
     MemoryRenderResponse, SessionAgentMessageRequest, SessionArtifactResponse,
     SessionArtifactsResponse, SessionBackgroundJobResponse, SessionBackgroundJobsResponse,
-    SessionChainGrantRequest, SessionDetailResponse, SessionPendingApprovalsResponse,
-    SessionPreferencesRequest, SessionRunControlResponse, SessionRunStatusResponse,
-    SessionSkillsResponse, SessionSummaryResponse, SessionSystemResponse,
+    SessionChainGrantRequest, SessionDebugResponse, SessionDetailResponse,
+    SessionPendingApprovalsResponse, SessionPreferencesRequest, SessionRunControlResponse,
+    SessionRunStatusResponse, SessionSkillsResponse, SessionSummaryResponse, SessionSystemResponse,
     SessionTranscriptResponse, SkillCommandRequest,
 };
 use agent_persistence::{AgentRepository, SessionRepository};
@@ -179,6 +179,9 @@ pub(super) fn handle_nested_routes(app: &App, request: Request) -> std::io::Resu
         (Method::Get, [session_id, transcript]) if transcript == "transcript" => {
             handle_session_transcript(app, request, session_id.as_str())
         }
+        (Method::Get, [session_id, debug]) if debug == "debug" => {
+            handle_session_debug(app, request, session_id.as_str())
+        }
         (Method::Get, [session_id, transcript_tail, limit])
             if transcript_tail == "transcript-tail" =>
         {
@@ -322,6 +325,16 @@ fn handle_session_transcript(app: &App, request: Request, session_id: &str) -> s
         Ok(transcript) => {
             respond_json::<SessionTranscriptResponse>(request, StatusCode(200), &transcript)
         }
+        Err(error) => {
+            let (status, payload) = map_bootstrap_error(error);
+            respond_json(request, status, &payload)
+        }
+    }
+}
+
+fn handle_session_debug(app: &App, request: Request, session_id: &str) -> std::io::Result<()> {
+    match app.session_debug_view(session_id) {
+        Ok(debug) => respond_json::<SessionDebugResponse>(request, StatusCode(200), &debug),
         Err(error) => {
             let (status, payload) = map_bootstrap_error(error);
             respond_json(request, status, &payload)

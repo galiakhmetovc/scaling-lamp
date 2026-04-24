@@ -169,14 +169,14 @@ fn build_from_config_rejects_invalid_paths_before_side_effects() {
 }
 
 #[test]
-fn write_debug_bundle_persists_session_snapshot_into_workspace_file() {
+fn write_debug_bundle_persists_session_snapshot_into_runtime_audit_file() {
     let temp = tempfile::tempdir().expect("tempdir");
     let mut app = build_from_config(AppConfig {
         data_dir: temp.path().join("state-root"),
         ..AppConfig::default()
     })
     .expect("build app");
-    app.runtime.workspace = WorkspaceRef::new(temp.path());
+    app.runtime.workspace = WorkspaceRef::new(temp.path().join("workspace-without-write-contract"));
 
     let store = PersistenceStore::open(&app.persistence).expect("open store");
     store
@@ -210,7 +210,14 @@ fn write_debug_bundle_persists_session_snapshot_into_workspace_file() {
         .write_debug_bundle("session-debug")
         .expect("write debug bundle");
 
-    assert!(path.starts_with(temp.path()));
+    assert!(
+        path.starts_with(
+            temp.path()
+                .join("state-root")
+                .join("audit")
+                .join("debug-bundles")
+        )
+    );
     assert!(path.is_file());
 
     let bundle = fs::read_to_string(&path).expect("read bundle");

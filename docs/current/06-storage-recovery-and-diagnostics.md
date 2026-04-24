@@ -246,6 +246,16 @@ agentd sessions --raw
 
 По умолчанию список не печатает tool output, чтобы оставаться читаемым. Для глубокого debug используйте `--results`: рядом с каждым вызовом появятся `result_summary`, `result_byte_len`, `result_truncated`, `result_artifact_id` и bounded preview. Для полного output одного вызова используйте `session tool-result <tool_call_id>`. Если результат крупный, команда прочитает payload из `artifacts`; если маленький, покажет сохранённый preview целиком.
 
+В TUI для той же задачи есть интерактивный `Debug` browser:
+
+- на экране списка sessions выберите session и нажмите `Д`;
+- внутри chat нажмите `Ctrl+D`;
+- или выполните команду `\дебаг`.
+
+Debug browser показывает единый timeline из сообщений, tool calls и artifacts. Слева список записей, справа детали выбранной записи. `↑/↓` меняют запись, `Enter` открывает текущие детали на весь экран, `/` ищет по detail pane, `n/N` переходят по совпадениям. Это не отдельный runtime path: локальный TUI читает `App::session_debug_view`, daemon-backed TUI читает тот же view через `GET /v1/sessions/<session_id>/debug`.
+
+Команда `\отладка` отличается от `\дебаг`: она сохраняет текстовый debug bundle в файл. Daemon-side bundle пишется не в workspace, а в runtime state: `DATA_DIR/audit/debug-bundles/<session_id>-<timestamp>.txt`. Для systemd-установки это обычно `/var/lib/teamd/state/audit/debug-bundles/...`. Такое размещение важно для сервисного режима: daemon всегда пишет в свою state-директорию и не зависит от прав текущего workspace.
+
 Следующую страницу можно запросить так:
 
 ```bash
@@ -315,7 +325,8 @@ agentd update
 
 - `\версия`
 - `\логи [N]`
-- `\отладка`
+- `\дебаг` — интерактивный просмотр session debug-view
+- `\отладка` — сохранить debug bundle в `DATA_DIR/audit/debug-bundles`
 
 ## Что смотреть при проблемах
 
