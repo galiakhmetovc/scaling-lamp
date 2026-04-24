@@ -23,11 +23,17 @@ GitHub не рендерит Structurizr DSL напрямую. Поэтому Gi
 ./docs/architecture/run-local.sh
 ```
 
+Если порт `8080` занят:
+
+```bash
+STRUCTURIZR_PORT=18080 ./docs/architecture/run-local.sh
+```
+
 Эквивалентная команда без скрипта:
 
 ```bash
 docker pull structurizr/structurizr
-docker run -it --rm -p 8080:8080 \
+docker run --rm --user "$(id -u):$(id -g)" -p 8080:8080 \
   -v "$PWD/docs/architecture:/usr/local/structurizr" \
   structurizr/structurizr local
 ```
@@ -52,7 +58,7 @@ structurizr validate -workspace docs/architecture/workspace.dsl
 structurizr inspect -workspace docs/architecture/workspace.dsl -severity error,warning
 ```
 
-Если CLI нет, используйте локальный просмотр через Docker. Structurizr local парсит тот же `workspace.dsl` и покажет ошибки синтаксиса при открытии.
+Если CLI нет, используйте локальный просмотр через Docker. Structurizr local парсит тот же `workspace.dsl` и покажет ошибки синтаксиса при открытии. Служебные файлы `.structurizr/` и `workspace.json` создаются локально и игнорируются Git.
 
 ## Правило по диаграммам
 

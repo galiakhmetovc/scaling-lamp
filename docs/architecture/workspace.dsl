@@ -41,7 +41,6 @@ workspace "teamD" "C4-модель архитектуры локального r
         systemContext teamd "SystemContext" {
             include *
             autoLayout lr 320 240
-            routing Orthogonal
             title "teamD - System Context"
             description "Показывает teamD как локальный AI-agent runtime и внешние системы/оператора, с которыми он взаимодействует."
         }
@@ -61,6 +60,10 @@ workspace "teamD" "C4-модель архитектуры локального r
             element "External" {
                 background #f4d35e
                 color #17202a
+            }
+
+            relationship "Relationship" {
+                routing Orthogonal
             }
         }
     }

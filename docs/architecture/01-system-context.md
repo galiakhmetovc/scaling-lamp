@@ -12,6 +12,12 @@
 
 После запуска открыть `http://localhost:8080` и выбрать view `SystemContext`.
 
+Если порт `8080` занят, запустить с другим портом:
+
+```bash
+STRUCTURIZR_PORT=18080 ./docs/architecture/run-local.sh
+```
+
 ## Граница системы
 
 `teamD Runtime` — локальная среда для AI-агентов общего назначения. На этом уровне она считается одной системой: внутренние части (`agentd`, daemon, TUI backend, Telegram worker, persistence, provider loop) будут раскрыты на диаграммах C4 Container и C4 Component.
