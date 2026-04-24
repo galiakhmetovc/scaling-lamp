@@ -30,7 +30,7 @@ GitHub не рендерит Structurizr DSL напрямую. Поэтому Gi
 
 - `01-overview.md` — как читать архитектурную документацию.
 - `02-navigation-map.md` — как связаны views, C4-элементы и документы.
-- `03-terms.md` — единая терминология: C4-элементы, бизнес-сущности и программные сущности.
+- `03-terms.md` — глоссарий: C4 model, deployment, domain и runtime/code термины.
 - `system-docs/*/01-overview.md` — документация конкретных software systems, открываемая через double-click по элементу.
 - `container-docs/*/01-overview.md` — документация конкретных containers, открываемая через double-click по элементу.
 

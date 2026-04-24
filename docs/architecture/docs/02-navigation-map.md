@@ -19,7 +19,7 @@
 | `Containers` | `agentd` | `container-docs/agentd/01-overview.md` |
 | `Containers` | `Internal MCP Server` | `container-docs/internal-mcp-server/01-overview.md` |
 | `Deployment` | execution nodes and mesh | `system-docs/execution-mesh/01-overview.md` |
-| Все views | Термины и сущности | `docs/03-terms.md` |
+| Все views | Глоссарий | `docs/03-terms.md` |
 
 ## Как это выглядит в Structurizr
 
