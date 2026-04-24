@@ -1,5 +1,6 @@
 workspace "teamD" "C4-модель архитектуры локального runtime для AI-агентов." {
     !identifiers hierarchical
+    !docs docs
 
     model {
         operator = person "Operator" "Пользователь, разработчик или администратор: общается с агентами, читает результаты, подтверждает действия и управляет runtime."
