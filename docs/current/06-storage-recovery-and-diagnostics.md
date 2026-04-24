@@ -9,10 +9,88 @@
 - `state.sqlite` — метаданные
 - `artifacts/` — бинарные payload’ы
 - `archives/` — архивы сессий
+- `agents/` — agent home directories, которые bootstrap создаёт рядом с store
 - `runs/` — run-related payload storage
 - `transcripts/` — transcript payload storage
+- `audit/runtime.jsonl` — structured diagnostic log
 
 То есть состояние — это не “только SQLite”. SQLite хранит метаданные и индексы, а большие тела лежат рядом на файловой системе.
+
+## Production layout после `scripts/deploy-teamd.sh`
+
+Скрипт установки по умолчанию разделяет config и runtime state:
+
+```text
+/etc/teamd/
+├── config.toml
+└── teamd.env
+
+/var/lib/teamd/state/
+├── agents/
+├── archives/
+├── artifacts/
+├── audit/
+├── runs/
+├── state.sqlite
+└── transcripts/
+```
+
+`/etc/teamd/config.toml` — основной TOML-конфиг без секретов. Там задаются `data_dir`, daemon bind address/port, Telegram enable flag, provider kind/base/model и permission mode.
+
+`/etc/teamd/teamd.env` — environment file для systemd unit’ов и операторских CLI-команд. Там лежат секреты и env overrides: `TEAMD_CONFIG`, `TEAMD_DATA_DIR`, `TEAMD_TELEGRAM_BOT_TOKEN`, `TEAMD_PROVIDER_API_KEY`. Deploy script создаёт файл как `root:teamd 0640`: `systemd` читает его через `EnvironmentFile`, а операторские команды вида `sudo -u teamd ... agentd telegram pair <key>` могут использовать тот же env и тот же state root.
+
+`/var/lib/teamd/state` — runtime `data_dir`. Если daemon, Telegram worker и CLI смотрят в разные `data_dir`, вы получите разные sessions, pairings и transcripts. Поэтому для production-like запуска все systemd services и ручные команды должны использовать один и тот же `TEAMD_DATA_DIR=/var/lib/teamd/state`.
+
+## Что лежит в `data_dir`
+
+| Path | Что это | Можно ли редактировать руками |
+| --- | --- | --- |
+| `agents/<agent_id>/SYSTEM.md` | System prompt конкретного agent profile. Runtime читает его при сборке prompt. | Да, осознанно. Влияет на будущие turns этого agent profile. |
+| `agents/<agent_id>/AGENTS.md` | Инструкции и tool-usage guidance конкретного agent profile. | Да, осознанно. Влияет на будущие turns. |
+| `agents/<agent_id>/skills/` | Локальные skills для agent profile. | Да, если понимаете формат skills. |
+| `archives/` | Архивированные sessions и их payload’ы. Для session archive используется `archives/sessions/<session_id>/`. | Обычно нет. Лучше читать через runtime commands. |
+| `artifacts/` | Binary payload files для artifacts/context offload. Файл обычно называется `<artifact_id>.bin`. | Нет. Integrity проверяется через SQLite metadata. |
+| `audit/runtime.jsonl` | Append-only diagnostic events: bootstrap, HTTP requests, daemon lifecycle, Telegram worker, provider loop и ошибки. | Читать можно. Редактировать не нужно. |
+| `runs/` | Run-related payload directory, создаётся layout’ом. Большая часть run state сейчас хранится в `state.sqlite`. | Нет. |
+| `state.sqlite` | Главная SQLite БД с метаданными, индексами и runtime state. | Нет, кроме read-only диагностики. |
+| `transcripts/` | Text payload files для transcript entries. SQLite хранит index и hash, файл хранит body сообщения. | Нет. |
+
+Пример transcript payload:
+
+```text
+transcripts/transcript-run-chat-session-1777036286947-1777036286-01-user.txt
+transcripts/transcript-run-chat-session-1777036286947-1777036286-02-assistant.txt
+```
+
+Имя файла — storage key. Смысл записи хранится не только в имени, а в `state.sqlite`: `session_id`, `run_id`, `kind`, `created_at`, `byte_len`, `sha256`.
+
+## Что хранит `state.sqlite`
+
+`state.sqlite` — это не payload store, а metadata/control plane. Основные таблицы:
+
+| Table | Что хранит |
+| --- | --- |
+| `sessions` | Сессии, title, settings, выбранный `agent_profile_id`, parent/delegation metadata. |
+| `missions` | Долгоживущие цели, status, schedule и acceptance criteria. |
+| `runs` | Execution runs: status, provider usage, recent steps, pending approvals, provider loop state, delegates. |
+| `jobs` | Очередь фоновой работы: chat turns, scheduled work, callbacks, leases, attempts, cancellation. |
+| `transcripts` | Индекс transcript payload files в `transcripts/`: role/kind, session/run links, storage key, hash. |
+| `artifacts` | Индекс artifact payload files в `artifacts/`: kind, path, metadata, size, hash. |
+| `agent_profiles` | Agent profiles, template kind, allowed tools, путь к `agent_home`. |
+| `agent_schedules` | Deferred/recurring schedules для agent profiles. |
+| `agent_chain_continuations` | Grants для inter-agent chain continuation. |
+| `plans` | Structured plan items по session. |
+| `context_summaries` | Compact summaries старого transcript tail по session. |
+| `context_offloads` | Ссылки на offloaded context chunks, payload лежит в `artifacts/`. |
+| `session_inbox_events` | Deferred wakeups, inbox events и продолжения работы. |
+| `session_retention` | Retention/archive metadata по sessions. |
+| `session_search_docs`, `session_search_fts` | Search index по session history. |
+| `knowledge_sources`, `knowledge_search_docs`, `knowledge_search_fts` | Indexed knowledge/docs для поиска. |
+| `mcp_connectors` | Configured MCP connectors и их persisted config. |
+| `telegram_user_pairings` | Pending/activated Telegram pairing keys и Telegram user metadata. |
+| `telegram_chat_bindings` | Привязка Telegram chat к выбранной session и delivery cursor. |
+| `telegram_update_cursors` | Last processed Telegram update id для long polling consumer. |
+| `daemon_state` | Небольшой key/value state daemon-level настроек. |
 
 ## Два режима открытия store
 

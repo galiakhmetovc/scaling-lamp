@@ -12,6 +12,14 @@
 
 Полный пример лежит в [config.example.toml](../../config.example.toml).
 
+В systemd-установке из `scripts/deploy-teamd.sh` используется явный production-like layout:
+
+- `/etc/teamd/config.toml` — TOML-конфиг без секретов;
+- `/etc/teamd/teamd.env` — секреты и env overrides для systemd/CLI;
+- `/var/lib/teamd/state` — `data_dir`, то есть runtime state.
+
+`config.toml` и `teamd.env` не дублируют друг друга. TOML описывает устойчивую конфигурацию, а env file хранит секреты и то, что удобно переопределять вне TOML.
+
 ## Главные секции
 
 ### `[daemon]`
@@ -161,6 +169,7 @@ export TEAMD_PROVIDER_API_KEY='replace-with-zai-key'
 
 `data_dir` особенно важен. От него зависят:
 
+- `agents/`
 - `state.sqlite`
 - `artifacts/`
 - `archives/`
@@ -169,6 +178,8 @@ export TEAMD_PROVIDER_API_KEY='replace-with-zai-key'
 - `audit/runtime.jsonl`
 
 Если запускать бинарь то из-под пользователя, то из-под `root`, легко случайно получить два разных state root’а. Поэтому в production-like запуске стоит явно понимать, какой `data_dir` вы используете.
+
+Подробная карта файлов в `data_dir` описана в [06-storage-recovery-and-diagnostics.md](06-storage-recovery-and-diagnostics.md).
 
 ## MCP connectors в конфиге
 
