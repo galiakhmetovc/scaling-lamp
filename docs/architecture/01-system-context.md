@@ -4,27 +4,31 @@
 
 Эта страница дублирует System Context из Structurizr DSL в Mermaid C4, потому что GitHub рендерит Mermaid прямо в Markdown без локальных рендереров.
 
+В Mermaid C4 расположение элементов задаётся порядком объявления и `UpdateLayoutConfig`, поэтому блоки ниже объявлены по строкам: оператор, целевая система и локальная машина; затем внешние API; затем источник обновлений.
+
 ```mermaid
 C4Context
   title teamD Runtime - System Context
 
-  Person(operator, "Operator", "Пользователь, разработчик или администратор: общается с агентами, читает результаты, подтверждает действия и управляет runtime.")
+  Person(operator, "Operator", "Пользователь, разработчик или администратор")
 
-  System(teamd, "teamD Runtime", "Локальная среда для AI-агентов общего назначения: сессии, инструменты, расписания, память, межагентные цепочки и интерфейсы оператора.")
+  System(teamd, "teamD Runtime", "Локальный runtime для AI-агентов общего назначения")
 
-  System_Ext(llmProvider, "LLM Provider", "Внешний API модели: принимает запросы provider и возвращает текст, reasoning и tool calls.")
-  System_Ext(telegram, "Telegram Bot API", "Внешний API Telegram: long polling, команды, pairing, входящие сообщения и исходящие уведомления.")
-  System_Ext(mcpServers, "MCP Servers", "Внешние или локальные MCP-серверы: дополнительные tools, resources и prompts.")
+  System_Ext(localHost, "Local Host", "Workspace, процессы OS, terminal, SQLite DB, payload-файлы")
+
+  System_Ext(llmProvider, "LLM Provider", "Внешний API модели")
+  System_Ext(telegram, "Telegram Bot API", "Long polling, команды, pairing, уведомления")
+  System_Ext(mcpServers, "MCP Servers", "Дополнительные tools, resources и prompts")
+
   System_Ext(githubReleases, "GitHub Releases", "Источник release-артефактов для self-update.")
-  System_Ext(localHost, "Local Host", "Машина или сервер оператора: workspace, процессы OS, terminal, SQLite DB и payload-файлы.")
 
-  Rel(operator, teamd, "Работает с агентами через CLI, TUI, Telegram и HTTP")
-  Rel(operator, localHost, "Запускает agentd, редактирует config и открывает локальные представления")
-  Rel(teamd, llmProvider, "Отправляет provider requests и получает ответы модели")
-  Rel(teamd, telegram, "Получает updates и отправляет replies/notifications")
-  Rel(teamd, mcpServers, "Ищет и вызывает внешние возможности")
-  Rel(teamd, githubReleases, "Проверяет и скачивает обновления")
-  Rel(teamd, localHost, "Читает и пишет workspace, запускает процессы и хранит состояние")
+  Rel_R(operator, teamd, "Работает через CLI, TUI, Telegram и HTTP")
+  Rel_R(operator, localHost, "Запускает agentd и редактирует config")
+  Rel_D(teamd, llmProvider, "Provider requests")
+  Rel_D(teamd, telegram, "Updates, replies, notifications")
+  Rel_D(teamd, mcpServers, "Внешние возможности")
+  Rel_D(teamd, githubReleases, "Обновления runtime")
+  Rel_R(teamd, localHost, "Workspace, процессы, состояние")
 
   UpdateLayoutConfig($c4ShapeInRow="3", $c4BoundaryInRow="1")
 ```
