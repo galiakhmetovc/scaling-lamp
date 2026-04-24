@@ -77,7 +77,7 @@ Storage key теперь обычно содержит `session_id/filename.txt`
 | `runs` | Execution runs: status, provider usage, recent steps, pending approvals, provider loop state, delegates. |
 | `jobs` | Очередь фоновой работы: chat turns, scheduled work, callbacks, leases, attempts, cancellation. |
 | `transcripts` | Индекс transcript payload files в `transcripts/`: role/kind, session/run links, storage key, hash. |
-| `tool_calls` | Ledger вызовов tools: provider call id, tool name, arguments JSON, summary, status, error, timestamps. Хранит сам факт вызова и состояние, а не полный результат tool output. |
+| `tool_calls` | Ledger вызовов tools: provider call id, tool name, arguments JSON, summary, status, error, timestamps, result summary, result preview и ссылку на artifact полного результата. |
 | `artifacts` | Индекс artifact payload files в `artifacts/`: kind, path, metadata, size, hash. |
 | `agent_profiles` | Agent profiles, template kind, allowed tools, путь к `agent_home`. |
 | `agent_schedules` | Deferred/recurring schedules для agent profiles. |
@@ -225,6 +225,8 @@ agentd sessions
 agentd session list --raw
 agentd session transcript <session_id>
 agentd session tools <session_id> --limit 50 --offset 0
+agentd session tools <session_id> --results --limit 50 --offset 0
+agentd session tool-result <tool_call_id>
 ```
 
 `session list` показывает список sessions. По умолчанию это человекочитаемый отчёт: title, `session_id`, agent profile, timestamps, message count, context/usage, pending approval flag, auto-approve flag, background job counts, schedule summary и последний preview. Alias `sessions` делает то же самое.
@@ -238,14 +240,23 @@ agentd sessions --raw
 
 `session transcript` рендерит transcript view сессии. Это удобнее, чем вручную смотреть payload-файлы в `transcripts/<session_id>/`, потому команда берёт порядок, роли и связи из SQLite.
 
-`session tools` рендерит ledger вызовов tools по сессии. Он нужен для аудита и улучшения инструкций агентам: видно, какой tool был запрошен, с какими аргументами, в каком run, чем закончился вызов и была ли ошибка. Полные большие результаты tool’ов по-прежнему должны уходить в artifacts/offloads, а не в этот ledger.
+`session tools` рендерит ledger вызовов tools по сессии. Он нужен для аудита и улучшения инструкций агентам: видно, какой tool был запрошен, с какими аргументами, в каком run, чем закончился вызов и была ли ошибка.
 
 `session tools` постраничный: по умолчанию показывает до 50 записей, а в заголовке печатает `total`, `showing`, `limit`, `offset` и `next_offset`. Обычный вывод рассчитан на человека: вызовы сгруппированы по `run`, каждый вызов имеет номер, ISO-время вызова, `summary`, pretty-printed `args`, `status` и `error`.
+
+По умолчанию список не печатает tool output, чтобы оставаться читаемым. Для глубокого debug используйте `--results`: рядом с каждым вызовом появятся `result_summary`, `result_byte_len`, `result_truncated`, `result_artifact_id` и bounded preview. Для полного output одного вызова используйте `session tool-result <tool_call_id>`. Если результат крупный, команда прочитает payload из `artifacts`; если маленький, покажет сохранённый preview целиком.
 
 Следующую страницу можно запросить так:
 
 ```bash
 agentd session tools <session_id> --limit 50 --offset <next_offset>
+```
+
+Полный результат конкретного tool call:
+
+```bash
+agentd session tool-result <tool_call_id>
+agentd session tool-result <tool_call_id> --raw
 ```
 
 Для машинного аудита, `grep` и старых скриптов есть однострочный формат:
@@ -261,6 +272,8 @@ teamdctl session list
 teamdctl session list --raw
 teamdctl session transcript <session_id>
 teamdctl session tools <session_id> --limit 50 --offset 0
+teamdctl session tools <session_id> --results --limit 50 --offset 0
+teamdctl session tool-result <tool_call_id>
 teamdctl session tools <session_id> --raw --limit 50 --offset 0
 ```
 

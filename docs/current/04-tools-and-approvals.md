@@ -113,15 +113,17 @@
 
 Это важно для TUI и REPL: интерфейс показывает не “сырой шум”, а компактный статус каждого tool step.
 
-Кроме event stream, runtime пишет persistent tool-call ledger в таблицу `tool_calls`. Там фиксируется сам факт вызова: `session_id`, `run_id`, provider call id, tool name, arguments JSON, summary, status, error и timestamps. Полный большой результат tool’а туда не кладётся; он остаётся в transcript/model continuation или уходит в artifacts/offloads.
+Кроме event stream, runtime пишет persistent tool-call ledger в таблицу `tool_calls`. Там фиксируется сам факт вызова: `session_id`, `run_id`, provider call id, tool name, arguments JSON, summary, status, error, timestamps и bounded preview результата. Полный большой результат tool’а не кладётся в SQLite целиком; он сохраняется как artifact `tool_output`, а ledger хранит `result_artifact_id`.
 
 Операторская команда:
 
 ```bash
 agentd session tools <session_id> --limit 50 --offset 0
+agentd session tools <session_id> --results --limit 50 --offset 0
+agentd session tool-result <tool_call_id>
 ```
 
-По умолчанию команда печатает человекочитаемый отчёт: группирует вызовы по `run`, нумерует tool calls, отдельно показывает ISO-время вызова, `summary`, pretty-printed `args`, `status` и `error`. Команда постраничная: заголовок показывает `total`, текущий диапазон `showing` и `next_offset` для следующей страницы.
+По умолчанию команда печатает человекочитаемый отчёт: группирует вызовы по `run`, нумерует tool calls, отдельно показывает ISO-время вызова, `summary`, pretty-printed `args`, `status` и `error`. Команда постраничная: заголовок показывает `total`, текущий диапазон `showing` и `next_offset` для следующей страницы. Для просмотра stdout/stderr или другого tool output добавьте `--results`; для полного результата одного вызова используйте `session tool-result <tool_call_id>`.
 
 Если нужен старый однострочный формат для `grep`, diff или внешнего парсинга, используйте:
 

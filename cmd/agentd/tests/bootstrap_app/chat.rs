@@ -1868,6 +1868,25 @@ fn execute_chat_turn_can_finish_after_exec_start_and_exec_wait_tool_calls() {
             && call.status == "completed"
             && call.arguments_json.contains("\"process_id\":\"exec-1\"")
     }));
+    let exec_wait_call = tool_calls
+        .iter()
+        .find(|call| call.tool_name == "exec_wait")
+        .expect("exec_wait ledger");
+    assert!(
+        exec_wait_call
+            .result_summary
+            .as_deref()
+            .is_some_and(|summary| summary.contains("process_result process_id=exec-1"))
+    );
+    assert!(
+        exec_wait_call
+            .result_preview
+            .as_deref()
+            .is_some_and(|preview| preview.contains("exec-ok"))
+    );
+    assert_eq!(exec_wait_call.result_artifact_id, None);
+    assert!(!exec_wait_call.result_truncated);
+    assert!(exec_wait_call.result_byte_len.is_some_and(|len| len > 0));
 
     let normalized_second = second_request.to_ascii_lowercase();
     assert!(normalized_second.contains("\"call_id\":\"call_exec_start\""));

@@ -22,6 +22,8 @@ Examples:
   $PROGRAM session list
   $PROGRAM session list --raw
   $PROGRAM session tools <session_id> --limit 50 --offset 0
+  $PROGRAM session tools <session_id> --results --limit 50 --offset 0
+  $PROGRAM session tool-result <tool_call_id>
   $PROGRAM session tools <session_id> --raw --limit 50 --offset 0
   $PROGRAM daemon restart
   $PROGRAM telegram logs

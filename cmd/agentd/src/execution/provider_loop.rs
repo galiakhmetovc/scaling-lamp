@@ -1,7 +1,10 @@
 use super::*;
 use crate::agents;
 use crate::prompting;
-use agent_persistence::{ContextOffloadRepository, ToolCallRecord, ToolCallRepository};
+use agent_persistence::{
+    ArtifactRecord, ArtifactRepository, ContextOffloadRepository, ToolCallRecord,
+    ToolCallRepository,
+};
 use agent_runtime::context::{
     ContextOffloadPayload, ContextOffloadRef, ContextOffloadSnapshot, ContextSummary,
     approximate_token_count,
@@ -26,12 +29,14 @@ use agent_runtime::tool::{
     PlanSnapshotOutput, PlanWriteOutput, SetTaskStatusOutput, ToolCatalog, ToolDefinition,
     ToolFamily, ToolName, ToolOutput, ToolPolicy, ToolRuntime,
 };
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread;
 
 const MAX_CONTEXT_OFFLOAD_REFS: usize = 16;
 const INLINE_TOOL_OUTPUT_TOKEN_LIMIT: u32 = 512;
 const INLINE_FIND_IN_FILES_PREVIEW_LIMIT: usize = 6;
+const TOOL_RESULT_PREVIEW_CHAR_LIMIT: usize = 16 * 1024;
 const MAX_CONSECUTIVE_IDENTICAL_TOOL_SIGNATURES: usize = 3;
 const MAX_TRANSIENT_PROVIDER_RETRIES: usize = 3;
 const MAX_EMPTY_RESPONSE_RECOVERIES: usize = 1;
@@ -69,6 +74,17 @@ struct ToolCallLedgerUpdate<'a> {
     summary: &'a str,
     status: ToolExecutionStatus,
     error: Option<String>,
+    now: i64,
+}
+
+struct ToolCallResultLedgerUpdate<'a> {
+    store: &'a PersistenceStore,
+    session_id: &'a str,
+    run_id: &'a str,
+    provider_tool_call_id: &'a str,
+    tool_name: &'a str,
+    result_summary: &'a str,
+    result_output: &'a str,
     now: i64,
 }
 
@@ -487,10 +503,12 @@ impl ExecutionService {
 
     fn record_tool_call_ledger(update: ToolCallLedgerUpdate<'_>) -> Result<(), ExecutionError> {
         let id = Self::tool_call_ledger_id(update.run_id, update.provider_tool_call_id);
-        let requested_at = update
+        let existing = update
             .store
             .get_tool_call(&id)
-            .map_err(ExecutionError::Store)?
+            .map_err(ExecutionError::Store)?;
+        let requested_at = existing
+            .as_ref()
             .map(|record| record.requested_at)
             .unwrap_or(update.now);
         update
@@ -505,10 +523,103 @@ impl ExecutionService {
                 summary: update.summary.to_string(),
                 status: update.status.as_str().to_string(),
                 error: update.error,
+                result_summary: existing
+                    .as_ref()
+                    .and_then(|record| record.result_summary.clone()),
+                result_preview: existing
+                    .as_ref()
+                    .and_then(|record| record.result_preview.clone()),
+                result_artifact_id: existing
+                    .as_ref()
+                    .and_then(|record| record.result_artifact_id.clone()),
+                result_truncated: existing
+                    .as_ref()
+                    .is_some_and(|record| record.result_truncated),
+                result_byte_len: existing.as_ref().and_then(|record| record.result_byte_len),
                 requested_at,
                 updated_at: update.now,
             })
             .map_err(ExecutionError::Store)
+    }
+
+    fn record_tool_call_result(
+        update: ToolCallResultLedgerUpdate<'_>,
+    ) -> Result<(), ExecutionError> {
+        let id = Self::tool_call_ledger_id(update.run_id, update.provider_tool_call_id);
+        let Some(mut record) = update
+            .store
+            .get_tool_call(&id)
+            .map_err(ExecutionError::Store)?
+        else {
+            return Ok(());
+        };
+
+        let (result_preview, result_truncated) = Self::tool_result_preview(update.result_output);
+        let result_artifact_id = if result_truncated {
+            let artifact_id =
+                Self::tool_result_artifact_id(update.run_id, update.provider_tool_call_id);
+            update
+                .store
+                .put_artifact(&ArtifactRecord {
+                    id: artifact_id.clone(),
+                    session_id: update.session_id.to_string(),
+                    kind: "tool_output".to_string(),
+                    metadata_json: serde_json::json!({
+                        "tool_call_id": id,
+                        "run_id": update.run_id,
+                        "provider_tool_call_id": update.provider_tool_call_id,
+                        "tool_name": update.tool_name,
+                        "summary": update.result_summary,
+                        "created_at": update.now,
+                    })
+                    .to_string(),
+                    path: PathBuf::from("artifacts").join(format!("{artifact_id}.bin")),
+                    bytes: update.result_output.as_bytes().to_vec(),
+                    created_at: update.now,
+                })
+                .map_err(ExecutionError::Store)?;
+            Some(artifact_id)
+        } else {
+            None
+        };
+
+        record.result_summary = Some(update.result_summary.to_string());
+        record.result_preview = Some(result_preview);
+        record.result_artifact_id = result_artifact_id;
+        record.result_truncated = result_truncated;
+        record.result_byte_len = Some(update.result_output.len() as i64);
+        record.updated_at = update.now;
+        update
+            .store
+            .put_tool_call(&record)
+            .map_err(ExecutionError::Store)
+    }
+
+    fn tool_result_preview(result_output: &str) -> (String, bool) {
+        let mut chars = result_output.chars();
+        let preview = chars
+            .by_ref()
+            .take(TOOL_RESULT_PREVIEW_CHAR_LIMIT)
+            .collect::<String>();
+        let truncated = chars.next().is_some();
+        if truncated {
+            (
+                format!(
+                    "{preview}\n... <truncated; use session tool-result with this tool_call_id>"
+                ),
+                true,
+            )
+        } else {
+            (preview, false)
+        }
+    }
+
+    fn tool_result_artifact_id(run_id: &str, provider_tool_call_id: &str) -> String {
+        format!(
+            "artifact-tool-result-{}-{}",
+            sanitize_identifier(run_id),
+            sanitize_identifier(provider_tool_call_id)
+        )
     }
 
     fn retryable_provider_tool_output(
@@ -1481,7 +1592,7 @@ impl ExecutionService {
             observer,
             ChatExecutionEvent::ToolStatus {
                 tool_name: parsed.name().as_str().to_string(),
-                summary: output_summary,
+                summary: output_summary.clone(),
                 status: ToolExecutionStatus::Completed,
             },
         );
@@ -1495,6 +1606,16 @@ impl ExecutionService {
             summary: &parsed.summary(),
             status: ToolExecutionStatus::Completed,
             error: None,
+            now: context.now,
+        })?;
+        Self::record_tool_call_result(ToolCallResultLedgerUpdate {
+            store: context.store,
+            session_id: context.session_id,
+            run_id: context.run_id,
+            provider_tool_call_id: invocation.tool_call_id,
+            tool_name: parsed.name().as_str(),
+            result_summary: &output_summary,
+            result_output: &model_output,
             now: context.now,
         })?;
         self.prepare_model_tool_output(
@@ -3231,6 +3352,101 @@ mod tests {
         assert!(output.contains("\"retryable\":true"));
         assert!(output.contains("/home/user/.twcrc"));
         assert!(output.contains("workspace_relative_only"));
+    }
+
+    #[test]
+    fn record_tool_call_result_offloads_large_outputs_to_artifact() {
+        use agent_persistence::{
+            ArtifactRepository, RunRecord, RunRepository, SessionRecord, SessionRepository,
+            ToolCallRepository,
+        };
+
+        let temp = tempfile::tempdir().expect("tempdir");
+        let scaffold =
+            agent_persistence::PersistenceScaffold::from_config(agent_persistence::AppConfig {
+                data_dir: temp.path().join("state-root"),
+                ..agent_persistence::AppConfig::default()
+            });
+        let store = PersistenceStore::open(&scaffold).expect("open store");
+        store
+            .put_session(&SessionRecord {
+                id: "session-1".to_string(),
+                title: "Tool output".to_string(),
+                prompt_override: None,
+                settings_json: "{}".to_string(),
+                agent_profile_id: "default".to_string(),
+                active_mission_id: None,
+                parent_session_id: None,
+                parent_job_id: None,
+                delegation_label: None,
+                created_at: 1,
+                updated_at: 1,
+            })
+            .expect("put session");
+        store
+            .put_run(&RunRecord {
+                id: "run-1".to_string(),
+                session_id: "session-1".to_string(),
+                mission_id: None,
+                status: "running".to_string(),
+                error: None,
+                result: None,
+                provider_usage_json: "null".to_string(),
+                active_processes_json: "[]".to_string(),
+                recent_steps_json: "[]".to_string(),
+                evidence_refs_json: "[]".to_string(),
+                pending_approvals_json: "[]".to_string(),
+                provider_loop_json: "null".to_string(),
+                delegate_runs_json: "[]".to_string(),
+                started_at: 2,
+                updated_at: 2,
+                finished_at: None,
+            })
+            .expect("put run");
+        ExecutionService::record_tool_call_ledger(ToolCallLedgerUpdate {
+            store: &store,
+            session_id: "session-1",
+            run_id: "run-1",
+            provider_tool_call_id: "provider-call-1",
+            tool_name: "exec_wait",
+            arguments_json: "{\"process_id\":\"exec-1\"}",
+            summary: "exec_wait process_id=exec-1",
+            status: ToolExecutionStatus::Completed,
+            error: None,
+            now: 3,
+        })
+        .expect("record ledger");
+
+        let output = "x".repeat(TOOL_RESULT_PREVIEW_CHAR_LIMIT + 32);
+        ExecutionService::record_tool_call_result(ToolCallResultLedgerUpdate {
+            store: &store,
+            session_id: "session-1",
+            run_id: "run-1",
+            provider_tool_call_id: "provider-call-1",
+            tool_name: "exec_wait",
+            result_summary: "process_result process_id=exec-1 status=exited exit_code=Some(0)",
+            result_output: &output,
+            now: 4,
+        })
+        .expect("record result");
+
+        let call = store
+            .get_tool_call("toolcall-run-1-provider-call-1")
+            .expect("get tool call")
+            .expect("tool call exists");
+        assert!(call.result_truncated);
+        assert!(
+            call.result_preview
+                .as_deref()
+                .is_some_and(|preview| preview.contains("<truncated"))
+        );
+        let artifact_id = call.result_artifact_id.expect("artifact id");
+        let artifact = store
+            .get_artifact(&artifact_id)
+            .expect("get artifact")
+            .expect("artifact exists");
+        assert_eq!(artifact.kind, "tool_output");
+        assert_eq!(artifact.bytes, output.as_bytes());
     }
 
     #[test]

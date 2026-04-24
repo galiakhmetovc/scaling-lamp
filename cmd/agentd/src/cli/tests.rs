@@ -106,15 +106,15 @@ fn process_cli_accepts_session_transcript_and_tool_commands() {
     ));
     assert!(matches!(
         tools.command,
-        super::Command::SessionTools { ref id, limit: None, offset: 0, format: super::SessionToolsFormat::Human } if id == "session-1"
+        super::Command::SessionTools { ref id, limit: None, offset: 0, format: super::SessionToolsFormat::Human, include_results: false } if id == "session-1"
     ));
     assert!(matches!(
         paged_tools.command,
-        super::Command::SessionTools { ref id, limit: Some(25), offset: 50, format: super::SessionToolsFormat::Human } if id == "session-1"
+        super::Command::SessionTools { ref id, limit: Some(25), offset: 50, format: super::SessionToolsFormat::Human, include_results: false } if id == "session-1"
     ));
     assert!(matches!(
         raw_tools.command,
-        super::Command::SessionTools { ref id, limit: None, offset: 0, format: super::SessionToolsFormat::Raw } if id == "session-1"
+        super::Command::SessionTools { ref id, limit: None, offset: 0, format: super::SessionToolsFormat::Raw, include_results: false } if id == "session-1"
     ));
     assert!(matches!(
         russian_transcript.command,
@@ -122,7 +122,7 @@ fn process_cli_accepts_session_transcript_and_tool_commands() {
     ));
     assert!(matches!(
         russian_tools.command,
-        super::Command::SessionTools { ref id, limit: None, offset: 0, format: super::SessionToolsFormat::Human } if id == "session-1"
+        super::Command::SessionTools { ref id, limit: None, offset: 0, format: super::SessionToolsFormat::Human, include_results: false } if id == "session-1"
     ));
 }
 
@@ -280,6 +280,11 @@ fn execute_renders_session_tool_calls() {
             summary: "fs_read_text path=README.md".to_string(),
             status: "completed".to_string(),
             error: None,
+            result_summary: None,
+            result_preview: None,
+            result_artifact_id: None,
+            result_truncated: false,
+            result_byte_len: None,
             requested_at: 3,
             updated_at: 4,
         })
@@ -295,6 +300,11 @@ fn execute_renders_session_tool_calls() {
             summary: "exec_wait process_id=exec-1".to_string(),
             status: "failed".to_string(),
             error: Some("process not found".to_string()),
+            result_summary: None,
+            result_preview: None,
+            result_artifact_id: None,
+            result_truncated: false,
+            result_byte_len: None,
             requested_at: 5,
             updated_at: 6,
         })
@@ -381,6 +391,11 @@ fn execute_renders_session_tool_calls_raw_format() {
             summary: "fs_read_text path=README.md".to_string(),
             status: "completed".to_string(),
             error: None,
+            result_summary: None,
+            result_preview: None,
+            result_artifact_id: None,
+            result_truncated: false,
+            result_byte_len: None,
             requested_at: 3,
             updated_at: 4,
         })
@@ -393,6 +408,182 @@ fn execute_renders_session_tool_calls_raw_format() {
     assert!(rendered.contains("tool_call id=tool-call-1"));
     assert!(rendered.contains("tool=fs_read_text"));
     assert!(rendered.contains("args={\"path\":\"README.md\"}"));
+}
+
+#[test]
+fn execute_renders_session_tool_calls_with_result_previews() {
+    use agent_persistence::{
+        RunRecord, RunRepository, SessionRecord, SessionRepository, ToolCallRecord,
+        ToolCallRepository,
+    };
+
+    let temp = tempfile::tempdir().expect("tempdir");
+    let app = crate::bootstrap::build_from_config(agent_persistence::AppConfig {
+        data_dir: temp.path().join("state-root"),
+        ..agent_persistence::AppConfig::default()
+    })
+    .expect("build app");
+    let store = app.store().expect("open store");
+    store
+        .put_session(&SessionRecord {
+            id: "session-1".to_string(),
+            title: "Tools".to_string(),
+            prompt_override: None,
+            settings_json: "{}".to_string(),
+            agent_profile_id: "default".to_string(),
+            active_mission_id: None,
+            parent_session_id: None,
+            parent_job_id: None,
+            delegation_label: None,
+            created_at: 1,
+            updated_at: 1,
+        })
+        .expect("put session");
+    store
+        .put_run(&RunRecord {
+            id: "run-1".to_string(),
+            session_id: "session-1".to_string(),
+            mission_id: None,
+            status: "running".to_string(),
+            error: None,
+            result: None,
+            provider_usage_json: "null".to_string(),
+            active_processes_json: "[]".to_string(),
+            recent_steps_json: "[]".to_string(),
+            evidence_refs_json: "[]".to_string(),
+            pending_approvals_json: "[]".to_string(),
+            provider_loop_json: "null".to_string(),
+            delegate_runs_json: "[]".to_string(),
+            started_at: 2,
+            updated_at: 2,
+            finished_at: None,
+        })
+        .expect("put run");
+    store
+        .put_tool_call(&ToolCallRecord {
+            id: "tool-call-1".to_string(),
+            session_id: "session-1".to_string(),
+            run_id: "run-1".to_string(),
+            provider_tool_call_id: "provider-call-1".to_string(),
+            tool_name: "exec_wait".to_string(),
+            arguments_json: "{\"process_id\":\"exec-1\"}".to_string(),
+            summary: "exec_wait process_id=exec-1".to_string(),
+            status: "completed".to_string(),
+            error: None,
+            result_summary: Some("exec_wait process_id=exec-1 exit_code=Some(0)".to_string()),
+            result_preview: Some(
+                "{\"tool\":\"process_result\",\"stdout\":\"hello\\n\",\"stderr\":\"\"}".to_string(),
+            ),
+            result_artifact_id: None,
+            result_truncated: false,
+            result_byte_len: Some(58),
+            requested_at: 3,
+            updated_at: 4,
+        })
+        .expect("put tool call");
+
+    let rendered =
+        super::execute(&app, ["session", "tools", "session-1", "--results"]).expect("render tools");
+
+    assert!(rendered.contains("result_summary: exec_wait process_id=exec-1 exit_code=Some(0)"));
+    assert!(rendered.contains("result_byte_len: 58"));
+    assert!(rendered.contains("result_truncated: false"));
+    assert!(rendered.contains("result_artifact_id: <none>"));
+    assert!(rendered.contains("\"stdout\": \"hello\\n\""));
+}
+
+#[test]
+fn execute_renders_full_session_tool_result_from_artifact() {
+    use agent_persistence::{
+        ArtifactRecord, ArtifactRepository, RunRecord, RunRepository, SessionRecord,
+        SessionRepository, ToolCallRecord, ToolCallRepository,
+    };
+
+    let temp = tempfile::tempdir().expect("tempdir");
+    let app = crate::bootstrap::build_from_config(agent_persistence::AppConfig {
+        data_dir: temp.path().join("state-root"),
+        ..agent_persistence::AppConfig::default()
+    })
+    .expect("build app");
+    let store = app.store().expect("open store");
+    store
+        .put_session(&SessionRecord {
+            id: "session-1".to_string(),
+            title: "Tools".to_string(),
+            prompt_override: None,
+            settings_json: "{}".to_string(),
+            agent_profile_id: "default".to_string(),
+            active_mission_id: None,
+            parent_session_id: None,
+            parent_job_id: None,
+            delegation_label: None,
+            created_at: 1,
+            updated_at: 1,
+        })
+        .expect("put session");
+    store
+        .put_run(&RunRecord {
+            id: "run-1".to_string(),
+            session_id: "session-1".to_string(),
+            mission_id: None,
+            status: "running".to_string(),
+            error: None,
+            result: None,
+            provider_usage_json: "null".to_string(),
+            active_processes_json: "[]".to_string(),
+            recent_steps_json: "[]".to_string(),
+            evidence_refs_json: "[]".to_string(),
+            pending_approvals_json: "[]".to_string(),
+            provider_loop_json: "null".to_string(),
+            delegate_runs_json: "[]".to_string(),
+            started_at: 2,
+            updated_at: 2,
+            finished_at: None,
+        })
+        .expect("put run");
+    store
+        .put_artifact(&ArtifactRecord {
+            id: "artifact-tool-result-1".to_string(),
+            session_id: "session-1".to_string(),
+            kind: "tool_output".to_string(),
+            metadata_json: "{}".to_string(),
+            path: std::path::PathBuf::from("artifacts").join("artifact-tool-result-1.bin"),
+            bytes: b"{\"tool\":\"process_result\",\"stdout\":\"full stdout\",\"stderr\":\"full stderr\"}"
+                .to_vec(),
+            created_at: 4,
+        })
+        .expect("put artifact");
+    store
+        .put_tool_call(&ToolCallRecord {
+            id: "tool-call-1".to_string(),
+            session_id: "session-1".to_string(),
+            run_id: "run-1".to_string(),
+            provider_tool_call_id: "provider-call-1".to_string(),
+            tool_name: "exec_wait".to_string(),
+            arguments_json: "{\"process_id\":\"exec-1\"}".to_string(),
+            summary: "exec_wait process_id=exec-1".to_string(),
+            status: "completed".to_string(),
+            error: None,
+            result_summary: Some("exec_wait process_id=exec-1 exit_code=Some(0)".to_string()),
+            result_preview: Some(
+                "{\"tool\":\"process_result\",\"stdout\":\"full st...".to_string(),
+            ),
+            result_artifact_id: Some("artifact-tool-result-1".to_string()),
+            result_truncated: true,
+            result_byte_len: Some(72),
+            requested_at: 3,
+            updated_at: 4,
+        })
+        .expect("put tool call");
+
+    let rendered =
+        super::execute(&app, ["session", "tool-result", "tool-call-1"]).expect("render result");
+
+    assert!(rendered.contains("Session tool result"));
+    assert!(rendered.contains("tool_call_id: tool-call-1"));
+    assert!(rendered.contains("result_artifact_id: artifact-tool-result-1"));
+    assert!(rendered.contains("\"stdout\": \"full stdout\""));
+    assert!(rendered.contains("\"stderr\": \"full stderr\""));
 }
 
 #[test]
@@ -492,6 +683,11 @@ fn execute_renders_session_tool_calls_page() {
                 summary: format!("tool_{index}"),
                 status: "completed".to_string(),
                 error: None,
+                result_summary: None,
+                result_preview: None,
+                result_artifact_id: None,
+                result_truncated: false,
+                result_byte_len: None,
                 requested_at: index,
                 updated_at: index,
             })

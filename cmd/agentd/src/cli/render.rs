@@ -216,6 +216,7 @@ pub(super) fn show_session_tools(
     limit: Option<usize>,
     offset: usize,
     format: SessionToolsFormat,
+    include_results: bool,
 ) -> Result<String, BootstrapError> {
     if store.get_session(session_id)?.is_none() {
         return Err(BootstrapError::MissingRecord {
@@ -254,9 +255,64 @@ pub(super) fn show_session_tools(
 
     let page_calls = &calls[page_start..page_end];
     Ok(match format {
-        SessionToolsFormat::Human => render_human_session_tools(&page, page_calls),
-        SessionToolsFormat::Raw => render_raw_session_tools(&page, page_calls),
+        SessionToolsFormat::Human => render_human_session_tools(&page, page_calls, include_results),
+        SessionToolsFormat::Raw => render_raw_session_tools(&page, page_calls, include_results),
     })
+}
+
+pub(super) fn show_session_tool_result(
+    store: &PersistenceStore,
+    tool_call_id: &str,
+    raw: bool,
+) -> Result<String, BootstrapError> {
+    let Some(call) = store.get_tool_call(tool_call_id)? else {
+        return Err(BootstrapError::MissingRecord {
+            kind: "tool_call",
+            id: tool_call_id.to_string(),
+        });
+    };
+    let result_text = load_tool_result_text(store, &call)?;
+
+    if raw {
+        return Ok(result_text.unwrap_or_else(|| "<none>".to_string()));
+    }
+
+    let mut lines = vec![
+        "Session tool result".to_string(),
+        format!("tool_call_id: {}", call.id),
+        format!("session: {}", call.session_id),
+        format!("run: {}", call.run_id),
+        format!("tool: {} [{}]", call.tool_name, call.status),
+        format!("provider_call_id: {}", call.provider_tool_call_id),
+        format!("summary: {}", call.summary),
+        format!(
+            "result_summary: {}",
+            call.result_summary.as_deref().unwrap_or("<none>")
+        ),
+        format!(
+            "result_byte_len: {}",
+            call.result_byte_len
+                .map(|value| value.to_string())
+                .unwrap_or_else(|| "<none>".to_string())
+        ),
+        format!("result_truncated: {}", call.result_truncated),
+        format!(
+            "result_artifact_id: {}",
+            call.result_artifact_id.as_deref().unwrap_or("<none>")
+        ),
+        "args:".to_string(),
+    ];
+    lines.extend(indent_lines(
+        &pretty_json_or_raw(&call.arguments_json),
+        "  ",
+    ));
+    lines.push("result:".to_string());
+    match result_text {
+        Some(result_text) => lines.extend(indent_lines(&pretty_json_or_raw(&result_text), "  ")),
+        None => lines.push("  <none>".to_string()),
+    }
+
+    Ok(lines.join("\n"))
 }
 
 struct SessionToolsPage<'a> {
@@ -288,6 +344,7 @@ fn render_empty_session_tools(page: &SessionToolsPage<'_>, format: SessionToolsF
 fn render_raw_session_tools(
     page: &SessionToolsPage<'_>,
     calls: &[agent_persistence::ToolCallRecord],
+    include_results: bool,
 ) -> String {
     let header = format!(
         "session tools session_id={} total={} showing={} limit={} offset={} next_offset={}",
@@ -297,7 +354,7 @@ fn render_raw_session_tools(
         .iter()
         .map(|call| {
             let error = call.error.as_deref().unwrap_or("<none>");
-            format!(
+            let mut line = format!(
                 "tool_call id={} run_id={} provider_call_id={} tool={} status={} requested_at={} updated_at={} summary={} args={} error={}",
                 call.id,
                 call.run_id,
@@ -309,7 +366,20 @@ fn render_raw_session_tools(
                 call.summary,
                 call.arguments_json,
                 error
-            )
+            );
+            if include_results {
+                line.push_str(&format!(
+                    " result_summary={} result_byte_len={} result_truncated={} result_artifact_id={} result_preview={}",
+                    raw_optional_string(call.result_summary.as_deref()),
+                    call.result_byte_len
+                        .map(|value| value.to_string())
+                        .unwrap_or_else(|| "<none>".to_string()),
+                    call.result_truncated,
+                    call.result_artifact_id.as_deref().unwrap_or("<none>"),
+                    raw_optional_string(call.result_preview.as_deref())
+                ));
+            }
+            line
         })
         .collect::<Vec<_>>()
         .join("\n");
@@ -319,6 +389,7 @@ fn render_raw_session_tools(
 fn render_human_session_tools(
     page: &SessionToolsPage<'_>,
     calls: &[agent_persistence::ToolCallRecord],
+    include_results: bool,
 ) -> String {
     let mut lines = vec![
         "Session tools".to_string(),
@@ -366,9 +437,62 @@ fn render_human_session_tools(
             "     error: {}",
             call.error.as_deref().unwrap_or("<none>")
         ));
+        if include_results {
+            append_human_tool_result_preview(&mut lines, call);
+        }
     }
 
     lines.join("\n")
+}
+
+fn append_human_tool_result_preview(
+    lines: &mut Vec<String>,
+    call: &agent_persistence::ToolCallRecord,
+) {
+    lines.push(format!(
+        "     result_summary: {}",
+        call.result_summary.as_deref().unwrap_or("<none>")
+    ));
+    lines.push(format!(
+        "     result_byte_len: {}",
+        call.result_byte_len
+            .map(|value| value.to_string())
+            .unwrap_or_else(|| "<none>".to_string())
+    ));
+    lines.push(format!("     result_truncated: {}", call.result_truncated));
+    lines.push(format!(
+        "     result_artifact_id: {}",
+        call.result_artifact_id.as_deref().unwrap_or("<none>")
+    ));
+    lines.push("     result_preview:".to_string());
+    match call.result_preview.as_deref() {
+        Some(result_preview) => {
+            lines.extend(indent_lines(&pretty_json_or_raw(result_preview), "       "));
+        }
+        None => lines.push("       <none>".to_string()),
+    }
+}
+
+fn load_tool_result_text(
+    store: &PersistenceStore,
+    call: &agent_persistence::ToolCallRecord,
+) -> Result<Option<String>, BootstrapError> {
+    if let Some(artifact_id) = call.result_artifact_id.as_deref() {
+        return Ok(match store.get_artifact(artifact_id)? {
+            Some(artifact) => Some(String::from_utf8_lossy(&artifact.bytes).to_string()),
+            None => call.result_preview.as_ref().map(|preview| {
+                format!("{preview}\n\n<artifact {artifact_id} is missing; showing stored preview>")
+            }),
+        });
+    }
+
+    Ok(call.result_preview.clone())
+}
+
+fn raw_optional_string(value: Option<&str>) -> String {
+    value
+        .map(|value| serde_json::to_string(value).unwrap_or_else(|_| value.to_string()))
+        .unwrap_or_else(|| "<none>".to_string())
 }
 
 fn pretty_json_or_raw(raw: &str) -> String {

@@ -112,6 +112,14 @@ impl Command {
             {
                 parse_session_tools_command(id, rest)
             }
+            [scope, action, tool_call_id, rest @ ..]
+                if (scope == "session" || scope == "сессия")
+                    && (action == "tool-result"
+                        || action == "tool-output"
+                        || action == "результат-тула") =>
+            {
+                parse_session_tool_result_command(tool_call_id, rest)
+            }
             [scope, action, id] if scope == "session" && action == "skills" => {
                 Ok(Self::SessionSkills { id: id.clone() })
             }
@@ -242,6 +250,7 @@ fn parse_session_tools_command(id: &str, args: &[String]) -> Result<Command, Boo
     let mut limit = None;
     let mut offset = 0;
     let mut format = SessionToolsFormat::Human;
+    let mut include_results = false;
     let mut index = 0;
     while index < args.len() {
         match args[index].as_str() {
@@ -251,6 +260,10 @@ fn parse_session_tools_command(id: &str, args: &[String]) -> Result<Command, Boo
             }
             "--human" => {
                 format = SessionToolsFormat::Human;
+                index += 1;
+            }
+            "--results" | "--result" | "--outputs" | "--output" => {
+                include_results = true;
                 index += 1;
             }
             "--format" => {
@@ -293,6 +306,30 @@ fn parse_session_tools_command(id: &str, args: &[String]) -> Result<Command, Boo
         limit,
         offset,
         format,
+        include_results,
+    })
+}
+
+fn parse_session_tool_result_command(
+    tool_call_id: &str,
+    args: &[String],
+) -> Result<Command, BootstrapError> {
+    let mut raw = false;
+    for arg in args {
+        match arg.as_str() {
+            "--raw" => raw = true,
+            "--human" => raw = false,
+            other => {
+                return Err(BootstrapError::Usage {
+                    reason: format!("unsupported session tool-result argument {other}"),
+                });
+            }
+        }
+    }
+
+    Ok(Command::SessionToolResult {
+        tool_call_id: tool_call_id.to_string(),
+        raw,
     })
 }
 

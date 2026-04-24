@@ -51,7 +51,11 @@ pub(super) fn execute_command(app: &App, command: Command) -> Result<String, Boo
             limit,
             offset,
             format,
-        } => render::show_session_tools(&app.store()?, &id, limit, offset, format),
+            include_results,
+        } => render::show_session_tools(&app.store()?, &id, limit, offset, format, include_results),
+        Command::SessionToolResult { tool_call_id, raw } => {
+            render::show_session_tool_result(&app.store()?, &tool_call_id, raw)
+        }
         Command::ChatSend {
             session_id,
             message,
@@ -152,11 +156,12 @@ pub(super) fn execute_daemon_command(
             let skills = client.disable_session_skill(&id, &skill_name)?;
             render::render_session_skills_list(skills)
         }
-        Command::TelegramPair { .. } | Command::TelegramPairings | Command::SessionTools { .. } => {
-            Err(BootstrapError::Usage {
-                reason: "this command is local-only".to_string(),
-            })
-        }
+        Command::TelegramPair { .. }
+        | Command::TelegramPairings
+        | Command::SessionTools { .. }
+        | Command::SessionToolResult { .. } => Err(BootstrapError::Usage {
+            reason: "this command is local-only".to_string(),
+        }),
         _ => Err(BootstrapError::Usage {
             reason: "this command is not available over daemon transport yet".to_string(),
         }),

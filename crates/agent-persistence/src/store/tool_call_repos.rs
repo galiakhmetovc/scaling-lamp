@@ -10,8 +10,9 @@ impl ToolCallRepository for PersistenceStore {
         self.connection.execute(
             "INSERT INTO tool_calls (
                 id, session_id, run_id, provider_tool_call_id, tool_name, arguments_json,
-                summary, status, error, requested_at, updated_at
-             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)
+                summary, status, error, result_summary, result_preview, result_artifact_id,
+                result_truncated, result_byte_len, requested_at, updated_at
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)
              ON CONFLICT(id) DO UPDATE SET
                 session_id = excluded.session_id,
                 run_id = excluded.run_id,
@@ -21,6 +22,11 @@ impl ToolCallRepository for PersistenceStore {
                 summary = excluded.summary,
                 status = excluded.status,
                 error = excluded.error,
+                result_summary = excluded.result_summary,
+                result_preview = excluded.result_preview,
+                result_artifact_id = excluded.result_artifact_id,
+                result_truncated = excluded.result_truncated,
+                result_byte_len = excluded.result_byte_len,
                 requested_at = excluded.requested_at,
                 updated_at = excluded.updated_at",
             params![
@@ -33,6 +39,11 @@ impl ToolCallRepository for PersistenceStore {
                 record.summary,
                 record.status,
                 record.error,
+                record.result_summary,
+                record.result_preview,
+                record.result_artifact_id,
+                record.result_truncated,
+                record.result_byte_len,
                 record.requested_at,
                 record.updated_at
             ],
@@ -45,7 +56,8 @@ impl ToolCallRepository for PersistenceStore {
         self.connection
             .query_row(
                 "SELECT id, session_id, run_id, provider_tool_call_id, tool_name, arguments_json,
-                        summary, status, error, requested_at, updated_at
+                        summary, status, error, result_summary, result_preview, result_artifact_id,
+                        result_truncated, result_byte_len, requested_at, updated_at
                  FROM tool_calls
                  WHERE id = ?1",
                 [id],
@@ -62,7 +74,8 @@ impl ToolCallRepository for PersistenceStore {
         validate_identifier(session_id)?;
         let mut statement = self.connection.prepare(
             "SELECT id, session_id, run_id, provider_tool_call_id, tool_name, arguments_json,
-                    summary, status, error, requested_at, updated_at
+                    summary, status, error, result_summary, result_preview, result_artifact_id,
+                    result_truncated, result_byte_len, requested_at, updated_at
              FROM tool_calls
              WHERE session_id = ?1
              ORDER BY requested_at ASC, id ASC",
@@ -75,7 +88,8 @@ impl ToolCallRepository for PersistenceStore {
         validate_identifier(run_id)?;
         let mut statement = self.connection.prepare(
             "SELECT id, session_id, run_id, provider_tool_call_id, tool_name, arguments_json,
-                    summary, status, error, requested_at, updated_at
+                    summary, status, error, result_summary, result_preview, result_artifact_id,
+                    result_truncated, result_byte_len, requested_at, updated_at
              FROM tool_calls
              WHERE run_id = ?1
              ORDER BY requested_at ASC, id ASC",
@@ -104,7 +118,12 @@ fn tool_call_record_from_row(row: &Row<'_>) -> rusqlite::Result<ToolCallRecord> 
         summary: row.get(6)?,
         status: row.get(7)?,
         error: row.get(8)?,
-        requested_at: row.get(9)?,
-        updated_at: row.get(10)?,
+        result_summary: row.get(9)?,
+        result_preview: row.get(10)?,
+        result_artifact_id: row.get(11)?,
+        result_truncated: row.get(12)?,
+        result_byte_len: row.get(13)?,
+        requested_at: row.get(14)?,
+        updated_at: row.get(15)?,
     })
 }

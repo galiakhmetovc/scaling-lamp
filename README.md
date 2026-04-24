@@ -89,6 +89,8 @@ cargo run -p agentd -- daemon
 cargo run -p agentd -- daemon stop
 cargo run -p agentd -- session list
 cargo run -p agentd -- session list --raw
+cargo run -p agentd -- session tools <session_id> --results --limit 50 --offset 0
+cargo run -p agentd -- session tool-result <tool_call_id>
 ```
 
 Через TUI/REPL основные русские команды описаны в [`cmd/agentd/src/help.rs`](cmd/agentd/src/help.rs) и собраны в [docs/current/09-operator-cheatsheet.md](docs/current/09-operator-cheatsheet.md).

@@ -262,6 +262,11 @@ pub struct ToolCallRecord {
     pub summary: String,
     pub status: String,
     pub error: Option<String>,
+    pub result_summary: Option<String>,
+    pub result_preview: Option<String>,
+    pub result_artifact_id: Option<String>,
+    pub result_truncated: bool,
+    pub result_byte_len: Option<i64>,
     pub requested_at: i64,
     pub updated_at: i64,
 }

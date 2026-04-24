@@ -630,10 +630,12 @@ teamdctl session list
 teamdctl session list --raw
 teamdctl session transcript <session_id>
 teamdctl session tools <session_id> --limit 50 --offset 0
+teamdctl session tools <session_id> --results --limit 50 --offset 0
+teamdctl session tool-result <tool_call_id>
 teamdctl session tools <session_id> --raw --limit 50 --offset 0
 ```
 
-Обычный `session list` и `session tools` выводят читаемые отчёты. `--raw` нужен только для однострочного машинного формата.
+Обычный `session list` и `session tools` выводят читаемые отчёты. `session tools --results` добавляет preview результатов вызовов, а `session tool-result <tool_call_id>` показывает полный output конкретного вызова из preview или artifact. `--raw` нужен только для однострочного машинного формата.
 
 Типовые проблемы:
 

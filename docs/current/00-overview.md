@@ -104,7 +104,7 @@ flowchart LR
 
 Главная идея: модель не должна изобретать shell snippets. Она вызывает named tool с typed input, а runtime сам решает, как это выполнить и как отдать результат обратно.
 
-Runtime отдельно пишет ledger вызовов tools в таблицу `tool_calls`: tool name, arguments JSON, status, error и timestamps. Это не замена artifact’ам и не полный output; это audit trail “что модель просила сделать”.
+Runtime отдельно пишет ledger вызовов tools в таблицу `tool_calls`: tool name, arguments JSON, status, error, timestamps и bounded preview результата. Это audit trail “что модель просила сделать” и “что runtime вернул”. Полный крупный output не раздувает SQLite: он сохраняется в `artifacts` как `tool_output`, а `tool_calls.result_artifact_id` указывает на payload.
 
 ### Artifact
 

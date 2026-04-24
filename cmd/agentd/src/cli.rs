@@ -12,8 +12,8 @@ use crate::http::types::{SessionDetailResponse, StatusResponse};
 use crate::telegram;
 use crate::tui;
 use agent_persistence::{
-    JobRepository, MissionRecord, MissionRepository, PersistenceStore, RunRepository,
-    SessionRecord, SessionRepository, ToolCallRepository,
+    ArtifactRepository, JobRepository, MissionRecord, MissionRepository, PersistenceStore,
+    RunRepository, SessionRecord, SessionRepository, ToolCallRepository,
 };
 use agent_runtime::mission::{MissionExecutionIntent, MissionSchedule, MissionSpec, MissionStatus};
 use agent_runtime::provider::{FinishReason, ProviderMessage, ProviderRequest, ProviderStreamMode};
@@ -58,6 +58,11 @@ enum Command {
         limit: Option<usize>,
         offset: usize,
         format: SessionToolsFormat,
+        include_results: bool,
+    },
+    SessionToolResult {
+        tool_call_id: String,
+        raw: bool,
     },
     ChatSend {
         session_id: String,
@@ -194,7 +199,11 @@ where
             limit,
             offset,
             format,
-        } => render::show_session_tools(&app.store()?, &id, limit, offset, format),
+            include_results,
+        } => render::show_session_tools(&app.store()?, &id, limit, offset, format, include_results),
+        Command::SessionToolResult { tool_call_id, raw } => {
+            render::show_session_tool_result(&app.store()?, &tool_call_id, raw)
+        }
         Command::ChatSend {
             session_id,
             message,

@@ -651,6 +651,8 @@ Deployment commands:
     teamdctl session list
     teamdctl session transcript <session_id>
     teamdctl session tools <session_id> --limit 50 --offset 0
+    teamdctl session tools <session_id> --results --limit 50 --offset 0
+    teamdctl session tool-result <tool_call_id>
 
   Service shortcuts:
     teamdctl daemon status

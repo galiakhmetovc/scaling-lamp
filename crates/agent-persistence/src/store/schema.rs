@@ -107,6 +107,11 @@ pub(super) fn bootstrap_schema(connection: &Connection) -> Result<(), StoreError
              summary TEXT NOT NULL,
              status TEXT NOT NULL,
              error TEXT,
+             result_summary TEXT,
+             result_preview TEXT,
+             result_artifact_id TEXT,
+             result_truncated INTEGER NOT NULL DEFAULT 0,
+             result_byte_len INTEGER,
              requested_at INTEGER NOT NULL,
              updated_at INTEGER NOT NULL,
              FOREIGN KEY(session_id) REFERENCES sessions(id) ON DELETE CASCADE,
@@ -430,6 +435,11 @@ pub(super) fn validate_schema(connection: &Connection) -> Result<(), StoreError>
     validate_column(connection, "tool_calls", "summary", true)?;
     validate_column(connection, "tool_calls", "status", true)?;
     validate_column(connection, "tool_calls", "error", false)?;
+    validate_column(connection, "tool_calls", "result_summary", false)?;
+    validate_column(connection, "tool_calls", "result_preview", false)?;
+    validate_column(connection, "tool_calls", "result_artifact_id", false)?;
+    validate_column(connection, "tool_calls", "result_truncated", true)?;
+    validate_column(connection, "tool_calls", "result_byte_len", false)?;
     validate_column(connection, "tool_calls", "requested_at", true)?;
     validate_column(connection, "tool_calls", "updated_at", true)?;
     validate_column(connection, "session_inbox_events", "session_id", true)?;
@@ -780,6 +790,16 @@ pub(super) fn migrate_schema(connection: &Connection) -> Result<(), StoreError> 
         "last_delivered_transcript_id",
         "TEXT",
     )?;
+    add_column_if_missing(connection, "tool_calls", "result_summary", "TEXT")?;
+    add_column_if_missing(connection, "tool_calls", "result_preview", "TEXT")?;
+    add_column_if_missing(connection, "tool_calls", "result_artifact_id", "TEXT")?;
+    add_column_if_missing(
+        connection,
+        "tool_calls",
+        "result_truncated",
+        "INTEGER NOT NULL DEFAULT 0",
+    )?;
+    add_column_if_missing(connection, "tool_calls", "result_byte_len", "INTEGER")?;
     add_column_if_missing(
         connection,
         "missions",

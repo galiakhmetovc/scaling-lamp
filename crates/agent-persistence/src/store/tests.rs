@@ -384,6 +384,11 @@ fn tool_call_repository_round_trips_session_and_run_ledgers() {
         summary: "fs_read_text path=README.md".to_string(),
         status: "requested".to_string(),
         error: None,
+        result_summary: None,
+        result_preview: None,
+        result_artifact_id: None,
+        result_truncated: false,
+        result_byte_len: None,
         requested_at: 10,
         updated_at: 10,
     };
@@ -413,6 +418,11 @@ fn tool_call_repository_round_trips_session_and_run_ledgers() {
 
     let completed = ToolCallRecord {
         status: "completed".to_string(),
+        result_summary: Some("read README.md".to_string()),
+        result_preview: Some("{\"content\":\"hello\"}".to_string()),
+        result_artifact_id: Some("artifact-tool-result-1".to_string()),
+        result_truncated: true,
+        result_byte_len: Some(1234),
         updated_at: 12,
         ..first.clone()
     };
