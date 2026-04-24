@@ -34,6 +34,9 @@ cp config.example.toml ~/.config/teamd/config.toml
 ```toml
 [telegram]
 enabled = true
+
+[provider]
+kind = "zai_chat_completions"
 ```
 
 Секреты задать через `.env` или environment:
@@ -54,6 +57,46 @@ Pairing:
 1. отправить боту `/start`;
 2. выполнить на сервере `./target/release/agentd telegram pair <key>` или `agentd telegram pair <key>`, если бинарь установлен в `PATH`;
 3. проверить `./target/release/agentd telegram pairings` или `agentd telegram pairings`.
+
+## Telegram под systemd
+
+Полная инструкция: [telegram/01-install-and-configure.md#9-настроить-systemd](telegram/01-install-and-configure.md#9-настроить-systemd).
+
+Базовая схема:
+
+- `teamd-daemon.service` держит daemon;
+- `teamd-telegram.service` держит Telegram long polling worker;
+- оба читают `/etc/teamd/teamd.env`;
+- оба используют один `TEAMD_DATA_DIR`, например `/var/lib/teamd/state`.
+
+Автозапуск и старт:
+
+```bash
+sudo systemctl daemon-reload
+sudo systemctl enable --now teamd-daemon.service
+sudo systemctl enable --now teamd-telegram.service
+```
+
+Статус и логи:
+
+```bash
+systemctl status teamd-daemon.service
+systemctl status teamd-telegram.service
+journalctl -u teamd-telegram.service -f
+```
+
+Pairing key из Telegram `/start` активируется не через unit-файл, а отдельной локальной командой от пользователя `teamd`:
+
+```bash
+sudo -u teamd sh -lc 'set -a; . /etc/teamd/teamd.env; set +a; /opt/teamd/bin/agentd telegram pair tg...'
+```
+
+Рестарт:
+
+```bash
+sudo systemctl restart teamd-daemon.service
+sudo systemctl restart teamd-telegram.service
+```
 
 ## Проверить версию и release state
 

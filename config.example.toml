@@ -26,6 +26,11 @@ kind = "openai_responses"
 # api_base = "https://api.openai.com/v1"
 # api_key = "replace-me"
 # default_model = "gpt-5.4"
+#
+# Z.ai example:
+# kind = "zai_chat_completions"
+# api_base = "https://api.z.ai/api/coding/paas/v4"
+# default_model = "glm-5-turbo"
 connect_timeout_seconds = 15
 # request_timeout_seconds = 3600
 stream_idle_timeout_seconds = 1200

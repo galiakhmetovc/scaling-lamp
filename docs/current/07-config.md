@@ -42,7 +42,28 @@
 - `max_tool_rounds`
 - `max_output_tokens`
 
-Из коробки пример ориентирован на `openai_responses`, но код также знает и другие provider kinds.
+Поддерживаемые provider kinds:
+
+- `openai_responses` — OpenAI Responses API;
+- `zai_chat_completions` — Z.ai Chat Completions-compatible API.
+
+Для Z.ai достаточно указать kind и ключ в environment:
+
+```toml
+[provider]
+kind = "zai_chat_completions"
+```
+
+```bash
+export TEAMD_PROVIDER_API_KEY='replace-with-zai-key'
+```
+
+Если `api_base` и `default_model` не заданы, runtime использует defaults:
+
+- `api_base = "https://api.z.ai/api/coding/paas/v4"`
+- `default_model = "glm-5-turbo"`
+
+`/chat/completions` дописывать в `api_base` не надо: driver добавляет endpoint сам.
 
 ### `[permissions]`
 
@@ -184,6 +205,21 @@ mode = "default"
 ```
 
 и ключа в env.
+
+Для Z.ai минимум выглядит так:
+
+```toml
+[provider]
+kind = "zai_chat_completions"
+
+[permissions]
+mode = "default"
+```
+
+```bash
+export TEAMD_PROVIDER_API_KEY='...'
+agentd provider smoke
+```
 
 ## Где смотреть в коде
 

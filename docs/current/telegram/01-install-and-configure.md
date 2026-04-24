@@ -82,8 +82,7 @@ group_require_mention = true
 default_autoapprove = true
 
 [provider]
-kind = "openai_responses"
-default_model = "gpt-5.4"
+kind = "zai_chat_completions"
 
 [permissions]
 mode = "default"
@@ -91,7 +90,60 @@ mode = "default"
 
 `telegram.bot_token` лучше не писать в `config.toml`; храните его в `.env` или в environment.
 
-## 5. Настроить секреты
+## 5. Настроить Z.ai provider
+
+Для Z.ai используйте provider kind:
+
+```toml
+[provider]
+kind = "zai_chat_completions"
+```
+
+Если `api_base` и `default_model` не заданы, `agentd` выставит значения по умолчанию:
+
+```toml
+[provider]
+kind = "zai_chat_completions"
+api_base = "https://api.z.ai/api/coding/paas/v4"
+default_model = "glm-5-turbo"
+```
+
+Код добавляет `/chat/completions` сам, поэтому в `api_base` не надо дописывать этот suffix.
+
+Минимальный практический вариант:
+
+```toml
+[provider]
+kind = "zai_chat_completions"
+```
+
+Ключ задайте через environment или `.env`:
+
+```bash
+export TEAMD_PROVIDER_API_KEY='replace-with-zai-key'
+```
+
+Если нужно временно переопределить provider без редактирования TOML:
+
+```bash
+export TEAMD_PROVIDER_KIND='zai_chat_completions'
+export TEAMD_PROVIDER_API_KEY='replace-with-zai-key'
+export TEAMD_PROVIDER_MODEL='glm-5-turbo'
+```
+
+Проверка provider:
+
+```bash
+agentd provider smoke
+```
+
+Если запускаете из репозитория:
+
+```bash
+cargo run -p agentd -- provider smoke
+```
+
+## 6. Настроить секреты
 
 `agentd` читает `.env` из текущей рабочей директории или из директории рядом с исполняемым бинарём.
 
@@ -100,7 +152,7 @@ mode = "default"
 ```bash
 cat > .env <<'EOF'
 TEAMD_TELEGRAM_BOT_TOKEN=123456789:replace-with-real-token
-TEAMD_PROVIDER_API_KEY=replace-with-provider-key
+TEAMD_PROVIDER_API_KEY=replace-with-zai-key
 EOF
 chmod 0600 .env
 ```
@@ -109,7 +161,7 @@ chmod 0600 .env
 
 ```bash
 export TEAMD_TELEGRAM_BOT_TOKEN='123456789:replace-with-real-token'
-export TEAMD_PROVIDER_API_KEY='replace-with-provider-key'
+export TEAMD_PROVIDER_API_KEY='replace-with-zai-key'
 ```
 
 Если нужен нестандартный путь к конфигу:
@@ -124,11 +176,12 @@ export TEAMD_CONFIG=/absolute/path/to/config.toml
 export TEAMD_DATA_DIR=/absolute/path/to/teamd-state
 ```
 
-## 6. Проверить конфиг
+## 7. Проверить конфиг
 
 ```bash
 agentd version
 agentd status
+agentd provider smoke
 ```
 
 Если запускаете из репозитория без установленного бинаря:
@@ -136,6 +189,7 @@ agentd status
 ```bash
 cargo run -p agentd -- version
 cargo run -p agentd -- status
+cargo run -p agentd -- provider smoke
 ```
 
 Если `telegram.enabled = true`, но token не найден, команда завершится ошибкой вида:
@@ -146,7 +200,7 @@ telegram.bot_token must be set when telegram.enabled is true
 
 Проверьте `.env`, environment и рабочую директорию запуска.
 
-## 7. Запустить Telegram worker
+## 8. Запустить Telegram worker вручную
 
 Из установленного бинаря:
 
@@ -170,7 +224,190 @@ cargo run -p agentd -- telegram run
 
 Процесс должен оставаться запущенным, пока нужен Telegram-доступ.
 
-## 8. Pairing пользователя
+## 9. Настроить systemd
+
+Для постоянного сервера лучше запускать два systemd unit’а:
+
+- `teamd-daemon.service` — держит daemon process;
+- `teamd-telegram.service` — держит Telegram long polling worker.
+
+Так Telegram worker не зависит от unmanaged autospawn daemon, а systemd отдельно показывает статус и логи обоих процессов.
+
+### 9.1. Подготовить пользователя и каталоги
+
+```bash
+if ! id -u teamd >/dev/null 2>&1; then
+  sudo useradd --system --create-home --home-dir /var/lib/teamd --shell /usr/sbin/nologin teamd
+fi
+sudo mkdir -p /opt/teamd/bin /etc/teamd /var/lib/teamd/state
+sudo install -m 0755 ./target/release/agentd /opt/teamd/bin/agentd
+sudo test -f /etc/teamd/config.toml || sudo cp config.example.toml /etc/teamd/config.toml
+sudo chown -R teamd:teamd /var/lib/teamd
+```
+
+В `/etc/teamd/config.toml` включите Telegram и Z.ai:
+
+```toml
+data_dir = "/var/lib/teamd/state"
+
+[daemon]
+bind_host = "127.0.0.1"
+bind_port = 5140
+skills_dir = "skills"
+
+[telegram]
+enabled = true
+
+[provider]
+kind = "zai_chat_completions"
+
+[permissions]
+mode = "default"
+```
+
+### 9.2. Создать environment file
+
+Для systemd не полагайтесь на `.env` из текущей директории. Заведите один явный `EnvironmentFile`, который будут использовать оба unit’а и операторские CLI-команды.
+
+```bash
+sudo tee /etc/teamd/teamd.env >/dev/null <<'EOF'
+TEAMD_CONFIG=/etc/teamd/config.toml
+TEAMD_DATA_DIR=/var/lib/teamd/state
+TEAMD_TELEGRAM_BOT_TOKEN=123456789:replace-with-real-token
+TEAMD_PROVIDER_API_KEY=replace-with-zai-key
+EOF
+sudo chown root:teamd /etc/teamd/teamd.env
+sudo chmod 0640 /etc/teamd/teamd.env
+```
+
+`root:teamd 0640` нужен не systemd, а операторским командам вроде `telegram pair`: их надо запускать от пользователя `teamd`, чтобы они писали в тот же `TEAMD_DATA_DIR`, что и сервисы.
+
+### 9.3. Создать daemon unit
+
+```bash
+sudo tee /etc/systemd/system/teamd-daemon.service >/dev/null <<'EOF'
+[Unit]
+Description=teamD daemon
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=teamd
+Group=teamd
+EnvironmentFile=/etc/teamd/teamd.env
+WorkingDirectory=/var/lib/teamd
+ExecStart=/opt/teamd/bin/agentd daemon
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+EOF
+```
+
+### 9.4. Создать Telegram unit
+
+```bash
+sudo tee /etc/systemd/system/teamd-telegram.service >/dev/null <<'EOF'
+[Unit]
+Description=teamD Telegram worker
+After=network-online.target teamd-daemon.service
+Wants=network-online.target
+Requires=teamd-daemon.service
+
+[Service]
+Type=simple
+User=teamd
+Group=teamd
+EnvironmentFile=/etc/teamd/teamd.env
+WorkingDirectory=/var/lib/teamd
+ExecStart=/opt/teamd/bin/agentd telegram run
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+EOF
+```
+
+### 9.5. Включить автозапуск и запустить
+
+```bash
+sudo systemctl daemon-reload
+sudo systemctl enable --now teamd-daemon.service
+sudo systemctl enable --now teamd-telegram.service
+```
+
+Проверить:
+
+```bash
+systemctl status teamd-daemon.service
+systemctl status teamd-telegram.service
+journalctl -u teamd-daemon.service -n 100 --no-pager
+journalctl -u teamd-telegram.service -n 100 --no-pager
+```
+
+### 9.6. Перезапуск и остановка
+
+Перезапустить Telegram worker:
+
+```bash
+sudo systemctl restart teamd-telegram.service
+```
+
+Перезапустить daemon и Telegram worker:
+
+```bash
+sudo systemctl restart teamd-daemon.service
+sudo systemctl restart teamd-telegram.service
+```
+
+Остановить:
+
+```bash
+sudo systemctl stop teamd-telegram.service
+sudo systemctl stop teamd-daemon.service
+```
+
+Отключить автозапуск:
+
+```bash
+sudo systemctl disable teamd-telegram.service teamd-daemon.service
+```
+
+Перезагрузить сервер целиком:
+
+```bash
+sudo reboot
+```
+
+После reboot оба сервиса должны подняться сами, если они были включены через `systemctl enable`.
+
+## 10. Обновление установленного systemd-сервиса
+
+Из checkout репозитория:
+
+```bash
+git pull --ff-only
+cargo build --release -p agentd
+sudo systemctl stop teamd-telegram.service
+sudo systemctl stop teamd-daemon.service
+sudo install -m 0755 ./target/release/agentd /opt/teamd/bin/agentd
+sudo systemctl start teamd-daemon.service
+sudo systemctl start teamd-telegram.service
+```
+
+Проверить версию после обновления:
+
+```bash
+/opt/teamd/bin/agentd version
+journalctl -u teamd-telegram.service -n 100 --no-pager
+```
+
+Если установленный binary лежит в `~/.local/bin/agentd`, обновление аналогичное: пересобрать, заменить binary и перезапустить процессы, которые его используют.
+
+## 11. Pairing пользователя
 
 1. В Telegram откройте бота и отправьте:
 
@@ -193,15 +430,29 @@ agentd telegram pair tg...
 agentd telegram pair tg...
 ```
 
+Если используется systemd-установка из примера, pairing key не передаётся в service unit и не требует рестарта сервиса. Его надо один раз активировать локальной CLI-командой, запущенной от того же unix-пользователя и с тем же env, что и `teamd-telegram.service`:
+
+```bash
+sudo -u teamd sh -lc 'set -a; . /etc/teamd/teamd.env; set +a; /opt/teamd/bin/agentd telegram pair tg...'
+```
+
+Эта команда находит pending pairing record в `TEAMD_DATA_DIR`, помечает его как activated и привязывает Telegram account к runtime state. Уже запущенный Telegram worker увидит эту запись без перезапуска.
+
 4. Проверить список pairing records:
 
 ```bash
 agentd telegram pairings
 ```
 
+Для systemd-установки:
+
+```bash
+sudo -u teamd sh -lc 'set -a; . /etc/teamd/teamd.env; set +a; /opt/teamd/bin/agentd telegram pairings'
+```
+
 После активации пользователь может писать боту обычные сообщения.
 
-## 9. Минимальная smoke-проверка
+## 12. Минимальная smoke-проверка
 
 В Telegram:
 
@@ -222,7 +473,7 @@ agentd telegram pairings
 - ответ проходит через LLM provider;
 - state сохраняется в `data_dir`.
 
-## 10. Команды Telegram
+## 13. Команды Telegram
 
 Текущий набор slash-команд:
 
@@ -238,7 +489,7 @@ agentd telegram pairings
 
 Обычный текст без slash-команды отправляется в выбранную session как chat turn.
 
-## 11. Важные параметры Telegram
+## 14. Важные параметры Telegram
 
 | Параметр | Значение по умолчанию | Смысл |
 | --- | --- | --- |
@@ -253,7 +504,7 @@ agentd telegram pairings
 | `telegram.group_require_mention` | `true` | В группах реагировать только на mention/targeted command. |
 | `telegram.default_autoapprove` | `true` | Включать auto-approve по умолчанию для Telegram-created sessions. |
 
-## 12. Диагностика
+## 15. Диагностика
 
 Посмотреть последние runtime logs:
 
@@ -269,10 +520,12 @@ agentd logs 200
 | `telegram.bot_token is not configured` | `TEAMD_TELEGRAM_BOT_TOKEN` должен быть в environment или `.env`, который видит процесс. |
 | `/start` не отвечает | Запущен ли `agentd telegram run`; нет ли другого процесса, который уже polling-ит того же бота. |
 | Pairing key истёк | Повторить `/start` и активировать новый key. |
+| Provider не отвечает | Проверить `TEAMD_PROVIDER_API_KEY`, `provider.kind = "zai_chat_completions"` и `agentd provider smoke`. |
 | Сообщения не доходят | Проверить `agentd logs 200`, provider key, daemon connectivity и selected session. |
 | Ответы идут не в тот state | Проверить `TEAMD_DATA_DIR`, пользователя запуска и `data_dir` в `agentd version`. |
+| systemd service падает | Проверить `journalctl -u teamd-daemon.service` и `journalctl -u teamd-telegram.service`. |
 
-## 13. Что не делать
+## 16. Что не делать
 
 - Не коммитьте реальные tokens в Git.
 - Не запускайте два `agentd telegram run` на один и тот же Bot API token: long polling будет конфликтовать.
