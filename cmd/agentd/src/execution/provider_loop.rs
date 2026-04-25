@@ -1535,6 +1535,7 @@ impl ExecutionService {
         Self::emit_event(
             observer,
             ChatExecutionEvent::ToolStatus {
+                tool_call_id: invocation.tool_call_id.to_string(),
                 tool_name: parsed.name().as_str().to_string(),
                 summary: parsed.summary(),
                 status: ToolExecutionStatus::Running,
@@ -1553,6 +1554,7 @@ impl ExecutionService {
                 Self::emit_event(
                     observer,
                     ChatExecutionEvent::ToolStatus {
+                        tool_call_id: invocation.tool_call_id.to_string(),
                         tool_name: parsed.name().as_str().to_string(),
                         summary: parsed.summary(),
                         status: ToolExecutionStatus::Failed,
@@ -1609,6 +1611,7 @@ impl ExecutionService {
         Self::emit_event(
             observer,
             ChatExecutionEvent::ToolStatus {
+                tool_call_id: invocation.tool_call_id.to_string(),
                 tool_name: parsed.name().as_str().to_string(),
                 summary: output_summary.clone(),
                 status: ToolExecutionStatus::Completed,
@@ -2971,6 +2974,7 @@ impl ExecutionService {
                             Self::emit_event(
                                 observer,
                                 ChatExecutionEvent::ToolStatus {
+                                    tool_call_id: tool_call.call_id.clone(),
                                     tool_name: tool_call.name.clone(),
                                     summary: format!("invalid arguments: {reason}"),
                                     status: ToolExecutionStatus::Failed,
@@ -3004,6 +3008,7 @@ impl ExecutionService {
                 Self::emit_event(
                     observer,
                     ChatExecutionEvent::ToolStatus {
+                        tool_call_id: tool_call.call_id.clone(),
                         tool_name: parsed.name().as_str().to_string(),
                         summary: parsed.summary(),
                         status: ToolExecutionStatus::Requested,
@@ -3026,6 +3031,7 @@ impl ExecutionService {
                     Self::emit_event(
                         observer,
                         ChatExecutionEvent::ToolStatus {
+                            tool_call_id: tool_call.call_id.clone(),
                             tool_name: parsed.name().as_str().to_string(),
                             summary: format!("tool error: {error}"),
                             status: ToolExecutionStatus::Failed,
@@ -3069,6 +3075,7 @@ impl ExecutionService {
                         Self::emit_event(
                             observer,
                             ChatExecutionEvent::ToolStatus {
+                                tool_call_id: tool_call.call_id.clone(),
                                 tool_name: parsed.name().as_str().to_string(),
                                 summary: parsed.summary(),
                                 status: ToolExecutionStatus::Failed,
@@ -3118,6 +3125,7 @@ impl ExecutionService {
                             Self::emit_event(
                                 observer,
                                 ChatExecutionEvent::ToolStatus {
+                                    tool_call_id: tool_call.call_id.clone(),
                                     tool_name: parsed.name().as_str().to_string(),
                                     summary: parsed.summary(),
                                     status: ToolExecutionStatus::Approved,
@@ -3150,6 +3158,7 @@ impl ExecutionService {
                             Self::emit_event(
                                 observer,
                                 ChatExecutionEvent::ToolStatus {
+                                    tool_call_id: tool_call.call_id.clone(),
                                     tool_name: parsed.name().as_str().to_string(),
                                     summary: parsed.summary(),
                                     status: ToolExecutionStatus::WaitingApproval,
@@ -3208,6 +3217,7 @@ impl ExecutionService {
                             Self::emit_event(
                                 observer,
                                 ChatExecutionEvent::ToolStatus {
+                                    tool_call_id: tool_call.call_id.clone(),
                                     tool_name: parsed.name().as_str().to_string(),
                                     summary: format!("tool error: {error}"),
                                     status: ToolExecutionStatus::Failed,

@@ -7,7 +7,7 @@ use teloxide::net::Download;
 use teloxide::payloads::{EditMessageTextSetters, GetUpdatesSetters, SendMessageSetters};
 use teloxide::requests::{Request, Requester};
 use teloxide::types::{
-    BotCommand, ChatId, File, FileId, Me, Message, MessageId, ParseMode, Update,
+    BotCommand, ChatAction, ChatId, File, FileId, Me, Message, MessageId, ParseMode, Update,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -139,6 +139,28 @@ impl TelegramClient {
             .parse_mode(ParseMode::Html)
             .send()
             .await
+            .map_err(TelegramClientError::Request)
+    }
+
+    pub async fn delete_message(
+        &self,
+        chat_id: i64,
+        message_id: i32,
+    ) -> Result<(), TelegramClientError> {
+        self.bot
+            .delete_message(ChatId(chat_id), MessageId(message_id))
+            .send()
+            .await
+            .map(|_| ())
+            .map_err(TelegramClientError::Request)
+    }
+
+    pub async fn send_typing(&self, chat_id: i64) -> Result<(), TelegramClientError> {
+        self.bot
+            .send_chat_action(ChatId(chat_id), ChatAction::Typing)
+            .send()
+            .await
+            .map(|_| ())
             .map_err(TelegramClientError::Request)
     }
 

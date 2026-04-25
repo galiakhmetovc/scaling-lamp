@@ -3,8 +3,8 @@ use crate::records::{
     ContextOffloadRecord, ContextSummaryRecord, JobRecord, KnowledgeSearchDocRecord,
     KnowledgeSourceRecord, McpConnectorRecord, MissionRecord, PlanRecord, RunRecord,
     SessionInboxEventRecord, SessionRecord, SessionRetentionRecord, SessionSearchDocRecord,
-    TelegramChatBindingRecord, TelegramUpdateCursorRecord, TelegramUserPairingRecord,
-    ToolCallRecord, TranscriptRecord,
+    TelegramChatBindingRecord, TelegramChatStatusRecord, TelegramUpdateCursorRecord,
+    TelegramUserPairingRecord, ToolCallRecord, TranscriptRecord,
 };
 use crate::store::StoreError;
 use agent_runtime::context::ContextOffloadPayload;
@@ -106,6 +106,14 @@ pub trait TelegramRepository {
         telegram_chat_id: i64,
     ) -> Result<Option<TelegramChatBindingRecord>, StoreError>;
     fn list_telegram_chat_bindings(&self) -> Result<Vec<TelegramChatBindingRecord>, StoreError>;
+    fn put_telegram_chat_status(&self, record: &TelegramChatStatusRecord)
+    -> Result<(), StoreError>;
+    fn get_telegram_chat_status(
+        &self,
+        telegram_chat_id: i64,
+    ) -> Result<Option<TelegramChatStatusRecord>, StoreError>;
+    fn list_telegram_chat_statuses(&self) -> Result<Vec<TelegramChatStatusRecord>, StoreError>;
+    fn delete_telegram_chat_status(&self, telegram_chat_id: i64) -> Result<bool, StoreError>;
     fn put_telegram_update_cursor(
         &self,
         record: &TelegramUpdateCursorRecord,

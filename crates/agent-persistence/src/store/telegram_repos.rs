@@ -1,6 +1,7 @@
 use super::*;
 use crate::records::{
-    TelegramChatBindingRecord, TelegramUpdateCursorRecord, TelegramUserPairingRecord,
+    TelegramChatBindingRecord, TelegramChatStatusRecord, TelegramUpdateCursorRecord,
+    TelegramUserPairingRecord,
 };
 
 impl TelegramRepository for PersistenceStore {
@@ -207,6 +208,88 @@ impl TelegramRepository for PersistenceStore {
         }
 
         Ok(bindings)
+    }
+
+    fn put_telegram_chat_status(
+        &self,
+        record: &TelegramChatStatusRecord,
+    ) -> Result<(), StoreError> {
+        self.connection.execute(
+            "INSERT INTO telegram_chat_statuses (
+                telegram_chat_id, message_id, state, expires_at, created_at, updated_at
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+             ON CONFLICT(telegram_chat_id) DO UPDATE SET
+                message_id = excluded.message_id,
+                state = excluded.state,
+                expires_at = excluded.expires_at,
+                created_at = excluded.created_at,
+                updated_at = excluded.updated_at",
+            params![
+                record.telegram_chat_id,
+                record.message_id,
+                record.state,
+                record.expires_at,
+                record.created_at,
+                record.updated_at,
+            ],
+        )?;
+        Ok(())
+    }
+
+    fn get_telegram_chat_status(
+        &self,
+        telegram_chat_id: i64,
+    ) -> Result<Option<TelegramChatStatusRecord>, StoreError> {
+        self.connection
+            .query_row(
+                "SELECT telegram_chat_id, message_id, state, expires_at, created_at, updated_at
+                 FROM telegram_chat_statuses
+                 WHERE telegram_chat_id = ?1",
+                [telegram_chat_id],
+                |row| {
+                    Ok(TelegramChatStatusRecord {
+                        telegram_chat_id: row.get(0)?,
+                        message_id: row.get(1)?,
+                        state: row.get(2)?,
+                        expires_at: row.get(3)?,
+                        created_at: row.get(4)?,
+                        updated_at: row.get(5)?,
+                    })
+                },
+            )
+            .optional()
+            .map_err(StoreError::from)
+    }
+
+    fn list_telegram_chat_statuses(&self) -> Result<Vec<TelegramChatStatusRecord>, StoreError> {
+        let mut statement = self.connection.prepare(
+            "SELECT telegram_chat_id, message_id, state, expires_at, created_at, updated_at
+             FROM telegram_chat_statuses
+             ORDER BY telegram_chat_id ASC",
+        )?;
+        let mut rows = statement.query([])?;
+        let mut statuses = Vec::new();
+
+        while let Some(row) = rows.next()? {
+            statuses.push(TelegramChatStatusRecord {
+                telegram_chat_id: row.get(0)?,
+                message_id: row.get(1)?,
+                state: row.get(2)?,
+                expires_at: row.get(3)?,
+                created_at: row.get(4)?,
+                updated_at: row.get(5)?,
+            });
+        }
+
+        Ok(statuses)
+    }
+
+    fn delete_telegram_chat_status(&self, telegram_chat_id: i64) -> Result<bool, StoreError> {
+        let affected = self.connection.execute(
+            "DELETE FROM telegram_chat_statuses WHERE telegram_chat_id = ?1",
+            [telegram_chat_id],
+        )?;
+        Ok(affected > 0)
     }
 
     fn put_telegram_update_cursor(

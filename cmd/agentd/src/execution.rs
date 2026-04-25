@@ -123,6 +123,7 @@ pub enum ChatExecutionEvent {
         max_rounds: usize,
     },
     ToolStatus {
+        tool_call_id: String,
         tool_name: String,
         summary: String,
         status: ToolExecutionStatus,

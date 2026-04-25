@@ -9,9 +9,9 @@ use crate::{
     McpConnectorRecord, McpRepository, MissionRecord, MissionRepository, PersistenceScaffold,
     PlanRecord, PlanRepository, RunRecord, RunRepository, SessionInboxRepository, SessionRecord,
     SessionRepository, SessionRetentionRecord, SessionRetentionRepository, SessionSearchDocRecord,
-    SessionSearchRepository, TelegramChatBindingRecord, TelegramRepository,
-    TelegramUpdateCursorRecord, TelegramUserPairingRecord, ToolCallRecord, ToolCallRepository,
-    TranscriptRecord, TranscriptRepository,
+    SessionSearchRepository, TelegramChatBindingRecord, TelegramChatStatusRecord,
+    TelegramRepository, TelegramUpdateCursorRecord, TelegramUserPairingRecord, ToolCallRecord,
+    ToolCallRepository, TranscriptRecord, TranscriptRepository,
 };
 use agent_runtime::agent::{
     AgentChainContinuationGrant, AgentProfile, AgentSchedule, AgentScheduleDeliveryMode,
@@ -64,6 +64,14 @@ fn telegram_repository_round_trips_pairings_bindings_and_update_cursor() {
         update_id: 501,
         updated_at: 130,
     };
+    let status = TelegramChatStatusRecord {
+        telegram_chat_id: 42,
+        message_id: 9001,
+        state: "stale".to_string(),
+        expires_at: Some(1800),
+        created_at: 125,
+        updated_at: 126,
+    };
 
     {
         let store = super::PersistenceStore::open(&scaffold).expect("open store");
@@ -73,6 +81,9 @@ fn telegram_repository_round_trips_pairings_bindings_and_update_cursor() {
         store
             .put_telegram_chat_binding(&binding)
             .expect("store binding");
+        store
+            .put_telegram_chat_status(&status)
+            .expect("store status");
         store
             .put_telegram_update_cursor(&cursor)
             .expect("store cursor");
@@ -103,6 +114,29 @@ fn telegram_repository_round_trips_pairings_bindings_and_update_cursor() {
             .list_telegram_chat_bindings()
             .expect("list chat bindings"),
         vec![binding]
+    );
+    assert_eq!(
+        reopened
+            .get_telegram_chat_status(42)
+            .expect("get chat status"),
+        Some(status.clone())
+    );
+    assert_eq!(
+        reopened
+            .list_telegram_chat_statuses()
+            .expect("list chat statuses"),
+        vec![status.clone()]
+    );
+    assert!(
+        reopened
+            .delete_telegram_chat_status(42)
+            .expect("delete chat status")
+    );
+    assert_eq!(
+        reopened
+            .get_telegram_chat_status(42)
+            .expect("status removed"),
+        None
     );
     assert_eq!(
         reopened

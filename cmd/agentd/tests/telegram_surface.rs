@@ -310,6 +310,47 @@ fn telegram_client_sends_edits_and_registers_commands() {
 }
 
 #[test]
+fn telegram_client_sends_typing_and_deletes_messages() {
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("runtime");
+    let (api_url, requests, handle) = spawn_fake_telegram_api(vec![
+        json_response(r#"{"ok":true,"result":true}"#),
+        json_response(r#"{"ok":true,"result":true}"#),
+    ]);
+    let client = TelegramClient::new(TelegramClientConfig {
+        token: "test-token".to_string(),
+        api_url: Some(api_url),
+        poll_request_timeout_seconds: 40,
+    })
+    .expect("telegram client");
+
+    runtime
+        .block_on(client.send_typing(42))
+        .expect("send typing");
+    runtime
+        .block_on(client.delete_message(42, 100))
+        .expect("delete message");
+
+    let typing_request = requests
+        .recv_timeout(Duration::from_secs(2))
+        .expect("captured sendChatAction");
+    assert_eq!(typing_request.path, "/bottest-token/SendChatAction");
+    assert!(typing_request.body.contains("\"chat_id\":42"));
+    assert!(typing_request.body.contains("\"action\":\"typing\""));
+
+    let delete_request = requests
+        .recv_timeout(Duration::from_secs(2))
+        .expect("captured deleteMessage");
+    assert_eq!(delete_request.path, "/bottest-token/DeleteMessage");
+    assert!(delete_request.body.contains("\"chat_id\":42"));
+    assert!(delete_request.body.contains("\"message_id\":100"));
+
+    handle.join().expect("join fake api");
+}
+
+#[test]
 fn telegram_client_fetches_file_metadata_and_downloads_bytes() {
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
@@ -711,12 +752,14 @@ fn telegram_worker_auto_creates_private_session_and_routes_text_turn() {
     let send_message = requests
         .recv_timeout(Duration::from_secs(2))
         .expect("captured start ack");
-    assert!(send_message.body.contains("Working"));
-    let edit_message = requests
+    assert_eq!(send_message.path, "/bottest-token/SendMessage");
+    assert!(send_message.body.contains("\"parse_mode\":\"HTML\""));
+    assert!(send_message.body.contains("Стадия: запуск"));
+    let final_message = requests
         .recv_timeout(Duration::from_secs(2))
-        .expect("captured final edit");
-    assert_eq!(edit_message.path, "/bottest-token/EditMessageText");
-    assert!(edit_message.body.contains("Hello from agent."));
+        .expect("captured final message");
+    assert_eq!(final_message.path, "/bottest-token/SendMessage");
+    assert!(final_message.body.contains("Hello from agent."));
 
     handle.join().expect("join fake api");
 }
@@ -803,12 +846,14 @@ fn telegram_worker_group_mention_creates_shared_session_and_routes_text_turn() {
     let send_message = requests
         .recv_timeout(Duration::from_secs(2))
         .expect("captured start ack");
-    assert!(send_message.body.contains("Working"));
-    let edit_message = requests
+    assert_eq!(send_message.path, "/bottest-token/SendMessage");
+    assert!(send_message.body.contains("\"parse_mode\":\"HTML\""));
+    assert!(send_message.body.contains("Стадия: запуск"));
+    let final_message = requests
         .recv_timeout(Duration::from_secs(2))
-        .expect("captured final edit");
-    assert_eq!(edit_message.path, "/bottest-token/EditMessageText");
-    assert!(edit_message.body.contains("Hello from group agent."));
+        .expect("captured final message");
+    assert_eq!(final_message.path, "/bottest-token/SendMessage");
+    assert!(final_message.body.contains("Hello from group agent."));
 
     handle.join().expect("join fake api");
 }
@@ -1029,6 +1074,7 @@ fn telegram_worker_caches_bot_identity_across_group_mentions() {
         json_response(
             r#"{"ok":true,"result":{"message_id":42,"date":0,"chat":{"id":9000,"type":"group","title":"Team Chat"},"text":"Cached group reply."}}"#,
         ),
+        json_response(r#"{"ok":true,"result":true}"#),
         json_response(
             r#"{"ok":true,"result":{"message_id":43,"date":0,"chat":{"id":9000,"type":"group","title":"Team Chat"},"text":"working"}}"#,
         ),
@@ -1082,18 +1128,29 @@ fn telegram_worker_caches_bot_identity_across_group_mentions() {
         .recv_timeout(Duration::from_secs(2))
         .expect("captured first ack");
     assert_eq!(ack_first.path, "/bottest-token/SendMessage");
-    let edit_first = requests
+    assert!(ack_first.body.contains("\"parse_mode\":\"HTML\""));
+    assert!(ack_first.body.contains("Стадия: запуск"));
+    let final_first = requests
         .recv_timeout(Duration::from_secs(2))
-        .expect("captured first final edit");
-    assert_eq!(edit_first.path, "/bottest-token/EditMessageText");
+        .expect("captured first final message");
+    assert_eq!(final_first.path, "/bottest-token/SendMessage");
+    assert!(final_first.body.contains("Cached group reply."));
+    let delete_stale = requests
+        .recv_timeout(Duration::from_secs(2))
+        .expect("captured stale status cleanup");
+    assert_eq!(delete_stale.path, "/bottest-token/DeleteMessage");
+    assert!(delete_stale.body.contains("\"message_id\":42"));
     let ack_second = requests
         .recv_timeout(Duration::from_secs(2))
         .expect("captured second ack");
     assert_eq!(ack_second.path, "/bottest-token/SendMessage");
-    let edit_second = requests
+    assert!(ack_second.body.contains("\"parse_mode\":\"HTML\""));
+    assert!(ack_second.body.contains("Стадия: запуск"));
+    let final_second = requests
         .recv_timeout(Duration::from_secs(2))
-        .expect("captured second final edit");
-    assert_eq!(edit_second.path, "/bottest-token/EditMessageText");
+        .expect("captured second final message");
+    assert_eq!(final_second.path, "/bottest-token/SendMessage");
+    assert!(final_second.body.contains("Cached group reply."));
 
     handle.join().expect("join fake api");
 }
@@ -1170,10 +1227,11 @@ fn telegram_worker_normalizes_existing_private_session_preferences_before_turn()
     let _ = requests
         .recv_timeout(Duration::from_secs(2))
         .expect("captured ack");
-    let final_edit = requests
+    let final_message = requests
         .recv_timeout(Duration::from_secs(2))
-        .expect("captured final edit");
-    assert!(final_edit.body.contains("Hello from existing session."));
+        .expect("captured final message");
+    assert_eq!(final_message.path, "/bottest-token/SendMessage");
+    assert!(final_message.body.contains("Hello from existing session."));
 
     handle.join().expect("join fake api");
 }
@@ -1311,6 +1369,7 @@ fn telegram_worker_rate_limits_progress_edits_on_the_status_message() {
         execution_events: vec![(
             5,
             ChatExecutionEvent::ToolStatus {
+                tool_call_id: "call_web_search_1".to_string(),
                 tool_name: "web_search".to_string(),
                 summary: "Fetching results".to_string(),
                 status: agentd::execution::ToolExecutionStatus::Running,
@@ -1349,20 +1408,26 @@ fn telegram_worker_rate_limits_progress_edits_on_the_status_message() {
     let send_message = requests
         .recv_timeout(Duration::from_secs(2))
         .expect("captured ack");
-    assert!(send_message.body.contains("Working"));
+    assert_eq!(send_message.path, "/bottest-token/SendMessage");
+    assert!(send_message.body.contains("Стадия: запуск"));
     let progress_edit = requests
         .recv_timeout(Duration::from_secs(2))
         .expect("captured progress edit");
     assert_eq!(progress_edit.path, "/bottest-token/EditMessageText");
-    assert!(progress_edit.body.contains("Phase: tool"));
-    assert!(progress_edit.body.contains("Tool: web_search"));
-    assert!(progress_edit.body.contains("Status: running"));
+    assert!(progress_edit.body.contains("Работаю с инструментами"));
+    assert!(
+        progress_edit
+            .body
+            .contains("Инструмент: <code>web_search</code>")
+    );
+    assert!(progress_edit.body.contains("Статус: выполняется"));
     assert!(progress_edit.body.contains("Fetching results"));
-    let final_edit = requests
+    assert!(progress_edit.body.contains("Вызовы: 1"));
+    let final_message = requests
         .recv_timeout(Duration::from_secs(2))
-        .expect("captured final edit");
-    assert_eq!(final_edit.path, "/bottest-token/EditMessageText");
-    assert!(final_edit.body.contains("Final reply."));
+        .expect("captured final message");
+    assert_eq!(final_message.path, "/bottest-token/SendMessage");
+    assert!(final_message.body.contains("Final reply."));
 
     handle.join().expect("join fake api");
 }
@@ -1419,12 +1484,245 @@ fn telegram_worker_reports_drafting_phase_before_final_reply() {
         .recv_timeout(Duration::from_secs(2))
         .expect("captured progress edit");
     assert_eq!(progress_edit.path, "/bottest-token/EditMessageText");
-    assert!(progress_edit.body.contains("Phase: drafting"));
-    let final_edit = requests
+    assert!(progress_edit.body.contains("Пишу ответ"));
+    let final_message = requests
         .recv_timeout(Duration::from_secs(2))
-        .expect("captured final edit");
-    assert_eq!(final_edit.path, "/bottest-token/EditMessageText");
-    assert!(final_edit.body.contains("Final reply."));
+        .expect("captured final message");
+    assert_eq!(final_message.path, "/bottest-token/SendMessage");
+    assert!(final_message.body.contains("Final reply."));
+
+    handle.join().expect("join fake api");
+}
+
+#[test]
+fn telegram_worker_sends_final_reply_as_a_new_message_after_temporary_status() {
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("runtime");
+    let (_temp, app) = telegram_test_app_with_progress_interval_ms(10);
+    seed_activated_pairing(&app, "pair-separate-final", 777, 42);
+    let backend = RecordingTelegramBackend::with_state(RecordingTelegramBackendState {
+        create_session_results: vec![session_summary("session-1", "Telegram Chat", false)],
+        next_chat_output: "Final reply.".to_string(),
+        ..RecordingTelegramBackendState::default()
+    });
+    let (api_url, requests, handle) = spawn_fake_telegram_api(vec![
+        json_response(
+            r#"{"ok":true,"result":[{"update_id":109,"message":{"message_id":21,"date":0,"chat":{"id":42,"type":"private"},"from":{"id":777,"is_bot":false,"first_name":"Alice","username":"alice"},"text":"separate final please"}}]}"#,
+        ),
+        json_response(
+            r#"{"ok":true,"result":{"message_id":22,"date":0,"chat":{"id":42,"type":"private"},"text":"working"}}"#,
+        ),
+        json_response(
+            r#"{"ok":true,"result":{"message_id":23,"date":0,"chat":{"id":42,"type":"private"},"text":"final"}}"#,
+        ),
+    ]);
+    let client = TelegramClient::new(TelegramClientConfig {
+        token: "test-token".to_string(),
+        api_url: Some(api_url),
+        poll_request_timeout_seconds: 40,
+    })
+    .expect("telegram client");
+    let worker = TelegramWorker::with_consumer(app, backend, client, "telegram-test");
+
+    runtime.block_on(worker.poll_once()).expect("poll once");
+
+    let _ = requests
+        .recv_timeout(Duration::from_secs(2))
+        .expect("captured getUpdates");
+    let status_message = requests
+        .recv_timeout(Duration::from_secs(2))
+        .expect("captured temporary status message");
+    assert_eq!(status_message.path, "/bottest-token/SendMessage");
+    let final_message = requests
+        .recv_timeout(Duration::from_secs(2))
+        .expect("captured final response");
+    assert_eq!(final_message.path, "/bottest-token/SendMessage");
+    assert!(final_message.body.contains("\"text\":\"Final reply.\""));
+
+    handle.join().expect("join fake api");
+}
+
+#[test]
+fn telegram_worker_deletes_previous_temporary_status_on_next_user_message() {
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("runtime");
+    let (_temp, app) = telegram_test_app_with_progress_interval_ms(10);
+    seed_activated_pairing(&app, "pair-delete-stale", 777, 42);
+    let backend = RecordingTelegramBackend::with_state(RecordingTelegramBackendState {
+        create_session_results: vec![session_summary("session-1", "Telegram Chat", false)],
+        next_chat_output: "Final reply.".to_string(),
+        ..RecordingTelegramBackendState::default()
+    });
+    let (api_url, requests, handle) = spawn_fake_telegram_api(vec![
+        json_response(
+            r#"{"ok":true,"result":[{"update_id":120,"message":{"message_id":21,"date":0,"chat":{"id":42,"type":"private"},"from":{"id":777,"is_bot":false,"first_name":"Alice","username":"alice"},"text":"first turn"}}]}"#,
+        ),
+        json_response(
+            r#"{"ok":true,"result":{"message_id":22,"date":0,"chat":{"id":42,"type":"private"},"text":"status 1"}}"#,
+        ),
+        json_response(
+            r#"{"ok":true,"result":{"message_id":23,"date":0,"chat":{"id":42,"type":"private"},"text":"final 1"}}"#,
+        ),
+        json_response(
+            r#"{"ok":true,"result":[{"update_id":121,"message":{"message_id":24,"date":0,"chat":{"id":42,"type":"private"},"from":{"id":777,"is_bot":false,"first_name":"Alice","username":"alice"},"text":"second turn"}}]}"#,
+        ),
+        json_response(r#"{"ok":true,"result":true}"#),
+        json_response(
+            r#"{"ok":true,"result":{"message_id":25,"date":0,"chat":{"id":42,"type":"private"},"text":"status 2"}}"#,
+        ),
+        json_response(
+            r#"{"ok":true,"result":{"message_id":26,"date":0,"chat":{"id":42,"type":"private"},"text":"final 2"}}"#,
+        ),
+    ]);
+    let client = TelegramClient::new(TelegramClientConfig {
+        token: "test-token".to_string(),
+        api_url: Some(api_url),
+        poll_request_timeout_seconds: 40,
+    })
+    .expect("telegram client");
+    let worker = TelegramWorker::with_consumer(app, backend, client, "telegram-test");
+
+    runtime.block_on(worker.poll_once()).expect("first poll");
+    runtime.block_on(worker.poll_once()).expect("second poll");
+
+    let _ = requests
+        .recv_timeout(Duration::from_secs(2))
+        .expect("captured first getUpdates");
+    let _ = requests
+        .recv_timeout(Duration::from_secs(2))
+        .expect("captured first status message");
+    let _ = requests
+        .recv_timeout(Duration::from_secs(2))
+        .expect("captured first final message");
+    let _ = requests
+        .recv_timeout(Duration::from_secs(2))
+        .expect("captured second getUpdates");
+    let delete_request = requests
+        .recv_timeout(Duration::from_secs(2))
+        .expect("captured stale status delete");
+    assert_eq!(delete_request.path, "/bottest-token/DeleteMessage");
+    assert!(delete_request.body.contains("\"message_id\":22"));
+    let second_status = requests
+        .recv_timeout(Duration::from_secs(2))
+        .expect("captured second status message");
+    assert_eq!(second_status.path, "/bottest-token/SendMessage");
+    let second_final = requests
+        .recv_timeout(Duration::from_secs(2))
+        .expect("captured second final message");
+    assert_eq!(second_final.path, "/bottest-token/SendMessage");
+
+    handle.join().expect("join fake api");
+}
+
+#[test]
+fn telegram_worker_deletes_expired_stale_status_during_polling() {
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("runtime");
+    let (_temp, app) = telegram_test_app_with_progress_interval_ms(10);
+    app.store()
+        .expect("open store")
+        .put_telegram_chat_status(&agent_persistence::TelegramChatStatusRecord {
+            telegram_chat_id: 42,
+            message_id: 333,
+            state: "stale".to_string(),
+            expires_at: Some(1),
+            created_at: 1,
+            updated_at: 1,
+        })
+        .expect("seed expired status");
+    let backend = RecordingTelegramBackend::default();
+    let (api_url, requests, handle) = spawn_fake_telegram_api(vec![
+        json_response(r#"{"ok":true,"result":true}"#),
+        json_response(r#"{"ok":true,"result":[]}"#),
+    ]);
+    let client = TelegramClient::new(TelegramClientConfig {
+        token: "test-token".to_string(),
+        api_url: Some(api_url),
+        poll_request_timeout_seconds: 40,
+    })
+    .expect("telegram client");
+    let worker = TelegramWorker::with_consumer(app.clone(), backend, client, "telegram-test");
+
+    runtime.block_on(worker.poll_once()).expect("poll once");
+
+    let delete_request = requests
+        .recv_timeout(Duration::from_secs(2))
+        .expect("captured deleteMessage");
+    assert_eq!(delete_request.path, "/bottest-token/DeleteMessage");
+    assert!(delete_request.body.contains("\"message_id\":333"));
+    let get_updates = requests
+        .recv_timeout(Duration::from_secs(2))
+        .expect("captured getUpdates");
+    assert_eq!(get_updates.path, "/bottest-token/GetUpdates");
+    assert_eq!(
+        app.store()
+            .expect("open store")
+            .get_telegram_chat_status(42)
+            .expect("status lookup"),
+        None
+    );
+
+    handle.join().expect("join fake api");
+}
+
+#[test]
+fn telegram_worker_sends_typing_while_turn_is_running() {
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("runtime");
+    let (_temp, app) = telegram_test_app_with_progress_interval_ms(10);
+    seed_activated_pairing(&app, "pair-typing", 777, 42);
+    let backend = RecordingTelegramBackend::with_state(RecordingTelegramBackendState {
+        create_session_results: vec![session_summary("session-1", "Telegram Chat", false)],
+        next_chat_output: "Final reply.".to_string(),
+        response_delay_ms: 900,
+        ..RecordingTelegramBackendState::default()
+    });
+    let (api_url, requests, handle) = spawn_fake_telegram_api(vec![
+        json_response(
+            r#"{"ok":true,"result":[{"update_id":122,"message":{"message_id":21,"date":0,"chat":{"id":42,"type":"private"},"from":{"id":777,"is_bot":false,"first_name":"Alice","username":"alice"},"text":"show typing"}}]}"#,
+        ),
+        json_response(
+            r#"{"ok":true,"result":{"message_id":22,"date":0,"chat":{"id":42,"type":"private"},"text":"status"}}"#,
+        ),
+        json_response(r#"{"ok":true,"result":true}"#),
+        json_response(
+            r#"{"ok":true,"result":{"message_id":23,"date":0,"chat":{"id":42,"type":"private"},"text":"final"}}"#,
+        ),
+    ]);
+    let client = TelegramClient::new(TelegramClientConfig {
+        token: "test-token".to_string(),
+        api_url: Some(api_url),
+        poll_request_timeout_seconds: 40,
+    })
+    .expect("telegram client");
+    let worker = TelegramWorker::with_consumer(app, backend, client, "telegram-test");
+
+    runtime.block_on(worker.poll_once()).expect("poll once");
+
+    let _ = requests
+        .recv_timeout(Duration::from_secs(2))
+        .expect("captured getUpdates");
+    let status_message = requests
+        .recv_timeout(Duration::from_secs(2))
+        .expect("captured status message");
+    assert_eq!(status_message.path, "/bottest-token/SendMessage");
+    let typing_request = requests
+        .recv_timeout(Duration::from_secs(2))
+        .expect("captured sendChatAction");
+    assert_eq!(typing_request.path, "/bottest-token/SendChatAction");
+    assert!(typing_request.body.contains("\"action\":\"typing\""));
+    let final_message = requests
+        .recv_timeout(Duration::from_secs(2))
+        .expect("captured final message");
+    assert_eq!(final_message.path, "/bottest-token/SendMessage");
 
     handle.join().expect("join fake api");
 }
@@ -1470,21 +1768,83 @@ fn telegram_worker_formats_markdown_reply_as_html() {
     let _ = requests
         .recv_timeout(Duration::from_secs(2))
         .expect("captured ack");
-    let final_edit = requests
+    let final_message = requests
         .recv_timeout(Duration::from_secs(2))
-        .expect("captured final edit");
-    assert_eq!(final_edit.path, "/bottest-token/EditMessageText");
-    assert!(final_edit.body.contains("\"parse_mode\":\"HTML\""));
-    assert!(final_edit.body.contains("<b>Title</b>"));
-    assert!(final_edit.body.contains("<b>bold</b>"));
-    assert!(final_edit.body.contains("<code>code</code>"));
+        .expect("captured final message");
+    assert_eq!(final_message.path, "/bottest-token/SendMessage");
+    assert!(final_message.body.contains("\"parse_mode\":\"HTML\""));
+    assert!(final_message.body.contains("<b>Title</b>"));
+    assert!(final_message.body.contains("<b>bold</b>"));
+    assert!(final_message.body.contains("<code>code</code>"));
     assert!(
-        final_edit
+        final_message
             .body
             .contains("<a href=\\\"https://example.com\\\">")
     );
-    assert!(final_edit.body.contains(">link</a>"));
-    assert!(!final_edit.body.contains("**bold**"));
+    assert!(final_message.body.contains(">link</a>"));
+    assert!(!final_message.body.contains("**bold**"));
+
+    handle.join().expect("join fake api");
+}
+
+#[test]
+fn telegram_worker_renders_markdown_tables_as_preformatted_html() {
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("runtime");
+    let (_temp, app) = telegram_test_app();
+    seed_activated_pairing(&app, "pair-markdown-table", 777, 42);
+    let backend = RecordingTelegramBackend::with_state(RecordingTelegramBackendState {
+        create_session_results: vec![session_summary("session-1", "Telegram Chat", false)],
+        next_chat_output: [
+            "Готово!",
+            "",
+            "| Заметка | Что внутри |",
+            "| --- | --- |",
+            "| Дом.md | Главная зона |",
+            "| Гарвардская тарелка.md | Чеклист на 2 недели |",
+        ]
+        .join("\n"),
+        ..RecordingTelegramBackendState::default()
+    });
+    let (api_url, requests, handle) = spawn_fake_telegram_api(vec![
+        json_response(
+            r#"{"ok":true,"result":[{"update_id":117,"message":{"message_id":46,"date":0,"chat":{"id":42,"type":"private"},"from":{"id":777,"is_bot":false,"first_name":"Alice","username":"alice"},"text":"format markdown table please"}}]}"#,
+        ),
+        json_response(
+            r#"{"ok":true,"result":{"message_id":47,"date":0,"chat":{"id":42,"type":"private"},"text":"working"}}"#,
+        ),
+        json_response(
+            r#"{"ok":true,"result":{"message_id":47,"date":0,"chat":{"id":42,"type":"private"},"text":"formatted table"}}"#,
+        ),
+    ]);
+    let client = TelegramClient::new(TelegramClientConfig {
+        token: "test-token".to_string(),
+        api_url: Some(api_url),
+        poll_request_timeout_seconds: 40,
+    })
+    .expect("telegram client");
+    let worker = TelegramWorker::with_consumer(app, backend, client, "telegram-test");
+
+    runtime.block_on(worker.poll_once()).expect("poll once");
+
+    let _ = requests
+        .recv_timeout(Duration::from_secs(2))
+        .expect("captured getUpdates");
+    let _ = requests
+        .recv_timeout(Duration::from_secs(2))
+        .expect("captured ack");
+    let final_message = requests
+        .recv_timeout(Duration::from_secs(2))
+        .expect("captured final message");
+    assert_eq!(final_message.path, "/bottest-token/SendMessage");
+    assert!(final_message.body.contains("\"parse_mode\":\"HTML\""));
+    assert!(final_message.body.contains("<pre><code>| Заметка"));
+    assert!(final_message.body.contains("| Дом.md"));
+    assert!(final_message.body.contains("| Гарвардская тарелка.md"));
+    assert!(final_message.body.contains("</code></pre>"));
+    assert!(!final_message.body.contains("ЗаметкаЧто внутри"));
 
     handle.join().expect("join fake api");
 }
@@ -1647,11 +2007,11 @@ fn telegram_worker_flushes_pending_transcripts_before_new_inbound_turn() {
         .recv_timeout(Duration::from_secs(2))
         .expect("captured working ack");
     assert_eq!(working.path, "/bottest-token/SendMessage");
-    assert!(working.body.contains("Working"));
+    assert!(working.body.contains("Стадия: запуск"));
     let direct = requests
         .recv_timeout(Duration::from_secs(2))
-        .expect("captured direct final edit");
-    assert_eq!(direct.path, "/bottest-token/EditMessageText");
+        .expect("captured direct final message");
+    assert_eq!(direct.path, "/bottest-token/SendMessage");
     assert!(direct.body.contains("Direct reply after inbound message."));
 
     let binding = app
@@ -1753,12 +2113,15 @@ fn telegram_worker_real_daemon_backend_uses_canonical_chat_path() {
     let send_message = requests
         .recv_timeout(Duration::from_secs(2))
         .expect("captured ack");
-    assert!(send_message.body.contains("Working"));
-    let edit_message = requests
+    assert_eq!(send_message.path, "/bottest-token/SendMessage");
+    assert!(send_message.body.contains("\"parse_mode\":\"HTML\""));
+    assert!(send_message.body.contains("Стадия: запуск"));
+    let final_message = requests
         .recv_timeout(Duration::from_secs(2))
-        .expect("captured final edit");
+        .expect("captured final message");
+    assert_eq!(final_message.path, "/bottest-token/SendMessage");
     assert!(
-        edit_message
+        final_message
             .body
             .contains("Provider-backed telegram reply.")
     );

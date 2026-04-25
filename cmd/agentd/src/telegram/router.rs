@@ -2,17 +2,19 @@ use super::backend::TelegramBackend;
 use super::client::{TelegramClient, TelegramClientError, TelegramCommandSpec};
 use super::polling::next_confirmed_offset;
 use super::render::{
-    TELEGRAM_MESSAGE_TEXT_SOFT_CAP, TelegramRenderedChunk, chunk_message_text, render_help_message,
+    TELEGRAM_MESSAGE_TEXT_SOFT_CAP, chunk_message_text, render_help_message,
     render_model_response_chunks, render_pairing_message, render_pairing_required_message,
     render_session_created, render_session_list, render_session_selected, render_usage,
 };
 use crate::bootstrap::{App, BootstrapError, SessionPreferencesPatch, SessionSummary};
 use crate::diagnostics::DiagnosticEventBuilder;
-use crate::execution::{ChatExecutionEvent, ChatTurnExecutionReport};
+use crate::execution::{ChatExecutionEvent, ChatTurnExecutionReport, ToolExecutionStatus};
 use agent_persistence::{
-    TelegramChatBindingRecord, TelegramRepository, TelegramUpdateCursorRecord,
-    TelegramUserPairingRecord, TranscriptRecord, TranscriptRepository, audit::AuditLogConfig,
+    TelegramChatBindingRecord, TelegramChatStatusRecord, TelegramRepository,
+    TelegramUpdateCursorRecord, TelegramUserPairingRecord, TranscriptRecord, TranscriptRepository,
+    audit::AuditLogConfig,
 };
+use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -23,7 +25,11 @@ const TELEGRAM_SCOPE_PRIVATE: &str = "private";
 const TELEGRAM_SCOPE_GROUP: &str = "group";
 const TELEGRAM_PAIRING_STATUS_PENDING: &str = "pending";
 const TELEGRAM_PAIRING_STATUS_ACTIVATED: &str = "activated";
-const TELEGRAM_WORKING_TEXT: &str = "Working...";
+const TELEGRAM_CHAT_STATUS_ACTIVE: &str = "active";
+const TELEGRAM_CHAT_STATUS_STALE: &str = "stale";
+const TELEGRAM_TYPING_INITIAL_DELAY_MILLIS: u64 = 750;
+const TELEGRAM_TYPING_HEARTBEAT_INTERVAL_SECONDS: u64 = 4;
+const TELEGRAM_STATUS_TTL_SECONDS: i64 = 30 * 60;
 
 static TELEGRAM_PAIRING_COUNTER: AtomicU64 = AtomicU64::new(0);
 
@@ -84,6 +90,7 @@ where
     }
 
     pub async fn poll_once(&self) -> Result<usize, BootstrapError> {
+        self.cleanup_expired_chat_statuses().await?;
         self.deliver_pending_session_notifications().await?;
 
         let offset = {
@@ -100,6 +107,7 @@ where
         let count = updates.len();
 
         self.deliver_pending_session_notifications().await?;
+        self.cleanup_expired_chat_statuses().await?;
 
         for update in updates {
             let next_offset = next_confirmed_offset(std::slice::from_ref(&update))
@@ -160,6 +168,9 @@ where
             return Ok(());
         }
 
+        self.cleanup_chat_status_for_new_input(message.chat.id.0)
+            .await?;
+
         if message.chat.is_private() {
             return self.handle_private_message(&message, from, text).await;
         }
@@ -196,26 +207,21 @@ where
         let session = self
             .resolve_or_create_private_session(chat_id, telegram_user_id(from)?, now)
             .await?;
-        let ack = self
-            .client
-            .send_text(chat_id, TELEGRAM_WORKING_TEXT)
-            .await
-            .map_err(map_client_error)?;
+        let ack = self.send_temporary_status_message(chat_id, now).await?;
         let result = self
             .execute_chat_turn(chat_id, ack.id.0, session.id.clone(), text.to_string(), now)
             .await;
 
         match result {
             Ok(report) => {
-                self.deliver_chat_report(chat_id, ack.id.0, &report).await?;
+                self.deliver_chat_report(chat_id, &report, ack.id.0, now)
+                    .await?;
                 self.mark_chat_delivered_to_latest_transcript(chat_id, report.session_id.as_str())?;
                 Ok(())
             }
             Err(error) => {
-                self.client
-                    .edit_text(chat_id, ack.id.0, &format!("Chat turn failed: {error}"))
-                    .await
-                    .map_err(map_client_error)?;
+                self.fail_temporary_status_message(chat_id, ack.id.0, &error.to_string(), now)
+                    .await?;
                 Ok(())
             }
         }
@@ -262,26 +268,21 @@ where
 
         let now = unix_timestamp()?;
         let session = self.resolve_or_create_group_session(chat_id, now).await?;
-        let ack = self
-            .client
-            .send_text(chat_id, TELEGRAM_WORKING_TEXT)
-            .await
-            .map_err(map_client_error)?;
+        let ack = self.send_temporary_status_message(chat_id, now).await?;
         let result = self
             .execute_chat_turn(chat_id, ack.id.0, session.id.clone(), content, now)
             .await;
 
         match result {
             Ok(report) => {
-                self.deliver_chat_report(chat_id, ack.id.0, &report).await?;
+                self.deliver_chat_report(chat_id, &report, ack.id.0, now)
+                    .await?;
                 self.mark_chat_delivered_to_latest_transcript(chat_id, report.session_id.as_str())?;
                 Ok(())
             }
             Err(error) => {
-                self.client
-                    .edit_text(chat_id, ack.id.0, &format!("Chat turn failed: {error}"))
-                    .await
-                    .map_err(map_client_error)?;
+                self.fail_temporary_status_message(chat_id, ack.id.0, &error.to_string(), now)
+                    .await?;
                 Ok(())
             }
         }
@@ -536,43 +537,130 @@ where
         Ok(())
     }
 
-    async fn deliver_chat_report(
+    async fn send_temporary_status_message(
+        &self,
+        chat_id: i64,
+        now: i64,
+    ) -> Result<Message, BootstrapError> {
+        let status = TelegramProgressState::default();
+        let message = self
+            .client
+            .send_html(chat_id, &render_temporary_status_html(&status))
+            .await
+            .map_err(map_client_error)?;
+        self.put_chat_status_record(
+            chat_id,
+            message.id.0,
+            TELEGRAM_CHAT_STATUS_ACTIVE,
+            None,
+            now,
+        )?;
+        Ok(message)
+    }
+
+    async fn fail_temporary_status_message(
         &self,
         chat_id: i64,
         message_id: i32,
-        report: &ChatTurnExecutionReport,
+        error: &str,
+        now: i64,
     ) -> Result<(), BootstrapError> {
-        let mut chunks =
-            render_model_response_chunks(&report.output_text, TELEGRAM_MESSAGE_TEXT_SOFT_CAP)
-                .into_iter();
-        let first = chunks.next().unwrap_or(TelegramRenderedChunk {
-            text: String::new(),
-            parse_mode_html: false,
-        });
-        if first.parse_mode_html {
-            self.client
-                .edit_html(chat_id, message_id, &first.text)
+        self.client
+            .edit_html(
+                chat_id,
+                message_id,
+                &render_failed_temporary_status_html(error),
+            )
+            .await
+            .map_err(map_client_error)?;
+        self.mark_chat_status_stale(chat_id, message_id, now)?;
+        Ok(())
+    }
+
+    fn put_chat_status_record(
+        &self,
+        chat_id: i64,
+        message_id: i32,
+        state: &str,
+        expires_at: Option<i64>,
+        now: i64,
+    ) -> Result<(), BootstrapError> {
+        self.app
+            .store()?
+            .put_telegram_chat_status(&TelegramChatStatusRecord {
+                telegram_chat_id: chat_id,
+                message_id,
+                state: state.to_string(),
+                expires_at,
+                created_at: self
+                    .app
+                    .store()?
+                    .get_telegram_chat_status(chat_id)?
+                    .map(|record| record.created_at)
+                    .unwrap_or(now),
+                updated_at: now,
+            })?;
+        Ok(())
+    }
+
+    fn mark_chat_status_stale(
+        &self,
+        chat_id: i64,
+        message_id: i32,
+        now: i64,
+    ) -> Result<(), BootstrapError> {
+        self.put_chat_status_record(
+            chat_id,
+            message_id,
+            TELEGRAM_CHAT_STATUS_STALE,
+            Some(now + TELEGRAM_STATUS_TTL_SECONDS),
+            now,
+        )
+    }
+
+    async fn cleanup_chat_status_for_new_input(&self, chat_id: i64) -> Result<(), BootstrapError> {
+        let Some(status) = self.app.store()?.get_telegram_chat_status(chat_id)? else {
+            return Ok(());
+        };
+        let _ = self.client.delete_message(chat_id, status.message_id).await;
+        self.app.store()?.delete_telegram_chat_status(chat_id)?;
+        Ok(())
+    }
+
+    async fn cleanup_expired_chat_statuses(&self) -> Result<(), BootstrapError> {
+        let now = unix_timestamp()?;
+        let statuses = self.app.store()?.list_telegram_chat_statuses()?;
+        for status in statuses {
+            if status.state != TELEGRAM_CHAT_STATUS_STALE {
+                continue;
+            }
+            if status.expires_at.is_none_or(|expires_at| expires_at > now) {
+                continue;
+            }
+            if self
+                .client
+                .delete_message(status.telegram_chat_id, status.message_id)
                 .await
-                .map_err(map_client_error)?;
-        } else {
-            self.client
-                .edit_text(chat_id, message_id, &first.text)
-                .await
-                .map_err(map_client_error)?;
-        }
-        for chunk in chunks {
-            if chunk.parse_mode_html {
-                self.client
-                    .send_html(chat_id, &chunk.text)
-                    .await
-                    .map_err(map_client_error)?;
-            } else {
-                self.client
-                    .send_text(chat_id, &chunk.text)
-                    .await
-                    .map_err(map_client_error)?;
+                .is_ok()
+            {
+                self.app
+                    .store()?
+                    .delete_telegram_chat_status(status.telegram_chat_id)?;
             }
         }
+        Ok(())
+    }
+
+    async fn deliver_chat_report(
+        &self,
+        chat_id: i64,
+        report: &ChatTurnExecutionReport,
+        status_message_id: i32,
+        now: i64,
+    ) -> Result<(), BootstrapError> {
+        self.send_model_text_chunks(chat_id, &report.output_text)
+            .await?;
+        self.mark_chat_status_stale(chat_id, status_message_id, now)?;
         Ok(())
     }
 
@@ -1012,11 +1100,16 @@ where
         });
         tokio::pin!(join_handle);
 
-        let mut pending_status = None::<String>;
-        let mut last_status = TELEGRAM_WORKING_TEXT.to_string();
-        let interval = self.progress_update_min_interval();
-        let sleep = tokio::time::sleep(interval);
-        tokio::pin!(sleep);
+        let mut progress = TelegramProgressTracker::default();
+        let mut pending_status_html = None::<String>;
+        let mut last_status_html = render_temporary_status_html(progress.state());
+        let edit_interval = self.progress_update_min_interval();
+        let edit_sleep = tokio::time::sleep(edit_interval);
+        tokio::pin!(edit_sleep);
+        let typing_interval = Duration::from_secs(TELEGRAM_TYPING_HEARTBEAT_INTERVAL_SECONDS);
+        let typing_sleep =
+            tokio::time::sleep(Duration::from_millis(TELEGRAM_TYPING_INITIAL_DELAY_MILLIS));
+        tokio::pin!(typing_sleep);
 
         loop {
             tokio::select! {
@@ -1027,64 +1120,30 @@ where
                     let Some(event) = maybe_event else {
                         continue;
                     };
-                    if let Some(status_text) = render_progress_status(&event) {
-                        pending_status = Some(status_text);
+                    if progress.apply(&event) {
+                        let status_html = render_temporary_status_html(progress.state());
+                        if status_html != last_status_html {
+                            pending_status_html = Some(status_html);
+                        }
                     }
                 }
-                _ = &mut sleep, if pending_status.is_some() => {
-                    let status_text = pending_status.take().expect("pending status");
-                    if status_text != last_status {
+                _ = &mut edit_sleep, if pending_status_html.is_some() => {
+                    let status_html = pending_status_html.take().expect("pending status");
+                    if status_html != last_status_html {
                         self.client
-                            .edit_text(chat_id, message_id, &status_text)
+                            .edit_html(chat_id, message_id, &status_html)
                             .await
                             .map_err(map_client_error)?;
-                        last_status = status_text;
+                        last_status_html = status_html;
                     }
-                    sleep.as_mut().reset(tokio::time::Instant::now() + interval);
+                    edit_sleep.as_mut().reset(tokio::time::Instant::now() + edit_interval);
+                }
+                _ = &mut typing_sleep => {
+                    let _ = self.client.send_typing(chat_id).await;
+                    typing_sleep.as_mut().reset(tokio::time::Instant::now() + typing_interval);
                 }
             }
         }
-    }
-}
-
-fn render_progress_status(event: &ChatExecutionEvent) -> Option<String> {
-    let details = match event {
-        ChatExecutionEvent::ReasoningDelta(_) => vec!["Phase: thinking".to_string()],
-        ChatExecutionEvent::AssistantTextDelta(_) => vec!["Phase: drafting".to_string()],
-        ChatExecutionEvent::ProviderLoopProgress {
-            current_round,
-            max_rounds,
-        } => vec![
-            "Phase: continuation".to_string(),
-            format!("Round: {current_round}/{max_rounds}"),
-        ],
-        ChatExecutionEvent::ToolStatus {
-            tool_name,
-            summary,
-            status,
-        } => {
-            let mut details = vec![
-                "Phase: tool".to_string(),
-                format!("Tool: {tool_name}"),
-                format!("Status: {}", render_tool_status_label(status)),
-            ];
-            if !summary.trim().is_empty() {
-                details.push(format!("Detail: {summary}"));
-            }
-            details
-        }
-    };
-    Some(format!("{TELEGRAM_WORKING_TEXT}\n{}", details.join("\n")))
-}
-
-fn render_tool_status_label(status: &crate::execution::ToolExecutionStatus) -> &'static str {
-    match status {
-        crate::execution::ToolExecutionStatus::Requested => "requested",
-        crate::execution::ToolExecutionStatus::WaitingApproval => "waiting approval",
-        crate::execution::ToolExecutionStatus::Approved => "approved",
-        crate::execution::ToolExecutionStatus::Running => "running",
-        crate::execution::ToolExecutionStatus::Completed => "completed",
-        crate::execution::ToolExecutionStatus::Failed => "failed",
     }
 }
 
@@ -1186,6 +1245,165 @@ fn parse_command_parts(command: &str, args: &str) -> Option<ParsedTelegramComman
         }
         _ => None,
     }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct TelegramProgressState {
+    phase: TelegramProgressPhase,
+    current_round: Option<(usize, usize)>,
+    current_tool_name: Option<String>,
+    current_tool_status: Option<ToolExecutionStatus>,
+    current_tool_summary: Option<String>,
+    total_tool_calls: usize,
+    failed_tool_calls: usize,
+}
+
+impl Default for TelegramProgressState {
+    fn default() -> Self {
+        Self {
+            phase: TelegramProgressPhase::Starting,
+            current_round: None,
+            current_tool_name: None,
+            current_tool_status: None,
+            current_tool_summary: None,
+            total_tool_calls: 0,
+            failed_tool_calls: 0,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum TelegramProgressPhase {
+    Starting,
+    Thinking,
+    Drafting,
+    Continuation,
+    Tool,
+}
+
+#[derive(Debug, Default)]
+struct TelegramProgressTracker {
+    state: TelegramProgressState,
+    tool_calls: BTreeMap<String, ToolExecutionStatus>,
+}
+
+impl TelegramProgressTracker {
+    fn state(&self) -> &TelegramProgressState {
+        &self.state
+    }
+
+    fn apply(&mut self, event: &ChatExecutionEvent) -> bool {
+        let previous = self.state.clone();
+        match event {
+            ChatExecutionEvent::ReasoningDelta(_) => {
+                self.state.phase = TelegramProgressPhase::Thinking;
+            }
+            ChatExecutionEvent::AssistantTextDelta(_) => {
+                self.state.phase = TelegramProgressPhase::Drafting;
+            }
+            ChatExecutionEvent::ProviderLoopProgress {
+                current_round,
+                max_rounds,
+            } => {
+                self.state.phase = TelegramProgressPhase::Continuation;
+                self.state.current_round = Some((*current_round, *max_rounds));
+            }
+            ChatExecutionEvent::ToolStatus {
+                tool_call_id,
+                tool_name,
+                summary,
+                status,
+            } => {
+                self.state.phase = TelegramProgressPhase::Tool;
+                self.state.current_tool_name = Some(tool_name.clone());
+                self.state.current_tool_status = Some(status.clone());
+                self.state.current_tool_summary = if summary.trim().is_empty() {
+                    None
+                } else {
+                    Some(summary.clone())
+                };
+                let previous_status = self.tool_calls.insert(tool_call_id.clone(), status.clone());
+                if previous_status.is_none() {
+                    self.state.total_tool_calls += 1;
+                }
+                if !matches!(previous_status, Some(ToolExecutionStatus::Failed))
+                    && matches!(status, ToolExecutionStatus::Failed)
+                {
+                    self.state.failed_tool_calls += 1;
+                }
+            }
+        }
+        self.state != previous
+    }
+}
+
+fn render_temporary_status_html(state: &TelegramProgressState) -> String {
+    let (title, phase_label) = match (&state.phase, state.current_tool_status.as_ref()) {
+        (TelegramProgressPhase::Starting, _) => ("⏳ Работаю", "запуск"),
+        (TelegramProgressPhase::Thinking, _) => ("🧠 Анализирую", "анализ"),
+        (TelegramProgressPhase::Drafting, _) => ("✍️ Пишу ответ", "черновик ответа"),
+        (TelegramProgressPhase::Continuation, _) => ("🔁 Продолжаю", "продолжение"),
+        (TelegramProgressPhase::Tool, Some(ToolExecutionStatus::WaitingApproval)) => {
+            ("🛂 Жду подтверждение", "ожидаю апрув")
+        }
+        (TelegramProgressPhase::Tool, Some(ToolExecutionStatus::Failed)) => {
+            ("⚠️ Ошибка инструмента", "инструменты")
+        }
+        (TelegramProgressPhase::Tool, _) => ("🔧 Работаю с инструментами", "инструменты"),
+    };
+
+    let mut lines = vec![
+        format!("<b>{title}</b>"),
+        format!("Стадия: {phase_label}"),
+        format!(
+            "Вызовы: {} · Ошибки: {}",
+            state.total_tool_calls, state.failed_tool_calls
+        ),
+    ];
+
+    if let Some((current_round, max_rounds)) = state.current_round {
+        lines.push(format!("Раунд: {current_round}/{max_rounds}"));
+    }
+    if let Some(tool_name) = state.current_tool_name.as_deref() {
+        lines.push(format!(
+            "Инструмент: <code>{}</code>",
+            escape_telegram_html(tool_name)
+        ));
+    }
+    if let Some(status) = state.current_tool_status.as_ref() {
+        lines.push(format!("Статус: {}", render_tool_status_label(status)));
+    }
+    if let Some(summary) = state.current_tool_summary.as_deref() {
+        lines.push(format!("Деталь: {}", escape_telegram_html(summary)));
+    }
+
+    lines.join("\n")
+}
+
+fn render_failed_temporary_status_html(error: &str) -> String {
+    [
+        "<b>❌ Ошибка</b>".to_string(),
+        "Стадия: выполнение не завершилось".to_string(),
+        format!("Деталь: {}", escape_telegram_html(error)),
+    ]
+    .join("\n")
+}
+
+fn render_tool_status_label(status: &ToolExecutionStatus) -> &'static str {
+    match status {
+        ToolExecutionStatus::Requested => "запрошен",
+        ToolExecutionStatus::WaitingApproval => "ожидает апрув",
+        ToolExecutionStatus::Approved => "подтверждён",
+        ToolExecutionStatus::Running => "выполняется",
+        ToolExecutionStatus::Completed => "завершён",
+        ToolExecutionStatus::Failed => "ошибка",
+    }
+}
+
+fn escape_telegram_html(text: &str) -> String {
+    text.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

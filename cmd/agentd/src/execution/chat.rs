@@ -897,6 +897,7 @@ impl ExecutionService {
                 Self::emit_event(
                     observer,
                     ChatExecutionEvent::ToolStatus {
+                        tool_call_id: pending_tool_approval.provider_tool_call_id.clone(),
                         tool_name: parsed.name().as_str().to_string(),
                         summary: parsed.summary(),
                         status: ToolExecutionStatus::Approved,

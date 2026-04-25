@@ -725,6 +725,7 @@ impl<'a, W: Write> ReplRenderer<'a, W> {
                 tool_name,
                 summary,
                 status,
+                ..
             } => self.write_tool_status(&tool_name, &summary, status),
         }
     }

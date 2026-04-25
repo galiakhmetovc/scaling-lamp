@@ -1425,6 +1425,7 @@ where
                         tool_name,
                         summary,
                         status,
+                        ..
                     } => {
                         state
                             .timeline_mut()

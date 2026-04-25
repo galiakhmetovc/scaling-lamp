@@ -130,6 +130,16 @@ pub struct TelegramChatBindingRecord {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TelegramChatStatusRecord {
+    pub telegram_chat_id: i64,
+    pub message_id: i32,
+    pub state: String,
+    pub expires_at: Option<i64>,
+    pub created_at: i64,
+    pub updated_at: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TelegramUpdateCursorRecord {
     pub consumer: String,
     pub update_id: i64,

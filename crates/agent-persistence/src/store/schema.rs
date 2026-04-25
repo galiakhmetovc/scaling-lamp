@@ -270,6 +270,15 @@ pub(super) fn bootstrap_schema(connection: &Connection) -> Result<(), StoreError
              updated_at INTEGER NOT NULL
          );
 
+         CREATE TABLE IF NOT EXISTS telegram_chat_statuses (
+             telegram_chat_id INTEGER PRIMARY KEY,
+             message_id INTEGER NOT NULL,
+             state TEXT NOT NULL,
+             expires_at INTEGER,
+             created_at INTEGER NOT NULL,
+             updated_at INTEGER NOT NULL
+         );
+
          CREATE TABLE IF NOT EXISTS telegram_update_cursors (
              consumer TEXT PRIMARY KEY,
              update_id INTEGER NOT NULL,
@@ -341,6 +350,7 @@ pub(super) fn bootstrap_schema(connection: &Connection) -> Result<(), StoreError
          CREATE INDEX IF NOT EXISTS idx_mcp_connectors_enabled_updated_at ON mcp_connectors(enabled, updated_at DESC);
          CREATE INDEX IF NOT EXISTS idx_telegram_user_pairings_status_expires_at ON telegram_user_pairings(status, expires_at);
          CREATE INDEX IF NOT EXISTS idx_telegram_chat_bindings_scope_updated_at ON telegram_chat_bindings(scope, updated_at DESC);
+         CREATE INDEX IF NOT EXISTS idx_telegram_chat_statuses_state_expires_at ON telegram_chat_statuses(state, expires_at);
          CREATE INDEX IF NOT EXISTS idx_knowledge_search_docs_source_id ON knowledge_search_docs(source_id);
          CREATE INDEX IF NOT EXISTS idx_artifacts_session_id ON artifacts(session_id);",
     )?;
@@ -579,6 +589,17 @@ pub(super) fn validate_schema(connection: &Connection) -> Result<(), StoreError>
     )?;
     validate_column(connection, "telegram_chat_bindings", "created_at", true)?;
     validate_column(connection, "telegram_chat_bindings", "updated_at", true)?;
+    validate_column(
+        connection,
+        "telegram_chat_statuses",
+        "telegram_chat_id",
+        true,
+    )?;
+    validate_column(connection, "telegram_chat_statuses", "message_id", true)?;
+    validate_column(connection, "telegram_chat_statuses", "state", true)?;
+    validate_column(connection, "telegram_chat_statuses", "expires_at", false)?;
+    validate_column(connection, "telegram_chat_statuses", "created_at", true)?;
+    validate_column(connection, "telegram_chat_statuses", "updated_at", true)?;
     validate_column(connection, "telegram_update_cursors", "consumer", true)?;
     validate_column(connection, "telegram_update_cursors", "update_id", true)?;
     validate_column(connection, "telegram_update_cursors", "updated_at", true)?;

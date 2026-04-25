@@ -1,5 +1,6 @@
 use crate::bootstrap::SessionSummary;
 use pulldown_cmark::{CodeBlockKind, Event, Options, Parser, Tag, TagEnd};
+use unicode_width::UnicodeWidthStr;
 
 pub const TELEGRAM_MESSAGE_TEXT_SOFT_CAP: usize = 3_276;
 pub const TELEGRAM_CAPTION_SOFT_CAP: usize = 819;
@@ -56,11 +57,12 @@ pub fn render_model_response_chunks(text: &str, soft_cap: usize) -> Vec<Telegram
 }
 
 pub fn render_markdown_to_telegram_html(markdown: &str) -> String {
+    let markdown = rewrite_markdown_tables_as_code_blocks(markdown);
     let mut output = String::new();
     let mut list_stack = Vec::<ListState>::new();
     let mut link_stack = Vec::<String>::new();
 
-    for event in Parser::new_ext(markdown, Options::all()) {
+    for event in Parser::new_ext(&markdown, Options::all()) {
         match event {
             Event::Start(tag) => match tag {
                 Tag::Paragraph => start_block(&mut output),
@@ -172,10 +174,11 @@ pub fn render_markdown_to_telegram_html(markdown: &str) -> String {
 }
 
 pub fn render_markdown_to_plain_text(markdown: &str) -> String {
+    let markdown = rewrite_markdown_tables_as_code_blocks(markdown);
     let mut output = String::new();
     let mut list_stack = Vec::<ListState>::new();
 
-    for event in Parser::new_ext(markdown, Options::all()) {
+    for event in Parser::new_ext(&markdown, Options::all()) {
         match event {
             Event::Start(tag) => match tag {
                 Tag::Paragraph => start_block(&mut output),
@@ -296,6 +299,183 @@ pub fn render_usage(command: &str, usage: &str) -> String {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct ListState {
     next_ordinal: Option<u64>,
+}
+
+fn rewrite_markdown_tables_as_code_blocks(markdown: &str) -> String {
+    if !markdown.contains('|') || !markdown.contains('-') {
+        return markdown.to_string();
+    }
+
+    let lines = markdown.lines().collect::<Vec<_>>();
+    let had_trailing_newline = markdown.ends_with('\n');
+    let mut rewritten = Vec::with_capacity(lines.len());
+    let mut index = 0;
+    let mut in_code_fence = false;
+
+    while index < lines.len() {
+        let line = lines[index];
+        if line.trim_start().starts_with("```") {
+            in_code_fence = !in_code_fence;
+            rewritten.push(line.to_string());
+            index += 1;
+            continue;
+        }
+
+        if !in_code_fence
+            && let Some((table_rows, next_index)) = collect_markdown_table_block(&lines, index)
+        {
+            rewritten.push("```".to_string());
+            rewritten.extend(render_markdown_table_block(&table_rows));
+            rewritten.push("```".to_string());
+            index = next_index;
+            continue;
+        }
+
+        rewritten.push(line.to_string());
+        index += 1;
+    }
+
+    let mut result = rewritten.join("\n");
+    if had_trailing_newline {
+        result.push('\n');
+    }
+    result
+}
+
+fn collect_markdown_table_block(lines: &[&str], start: usize) -> Option<(Vec<Vec<String>>, usize)> {
+    let header = lines.get(start)?.trim();
+    let separator = lines.get(start + 1)?.trim();
+    if !looks_like_markdown_table_row(header) || !looks_like_markdown_table_separator(separator) {
+        return None;
+    }
+
+    let mut rows = vec![parse_markdown_table_cells(header)];
+    let mut index = start + 2;
+    while index < lines.len() {
+        let row = lines[index].trim();
+        if !looks_like_markdown_table_row(row) {
+            break;
+        }
+        rows.push(parse_markdown_table_cells(row));
+        index += 1;
+    }
+
+    Some((rows, index))
+}
+
+fn looks_like_markdown_table_row(line: &str) -> bool {
+    let trimmed = line.trim();
+    !trimmed.is_empty() && trimmed.contains('|')
+}
+
+fn looks_like_markdown_table_separator(line: &str) -> bool {
+    let trimmed = line.trim();
+    if !looks_like_markdown_table_row(trimmed) {
+        return false;
+    }
+
+    let cells = trimmed
+        .trim_matches('|')
+        .split('|')
+        .map(str::trim)
+        .collect::<Vec<_>>();
+    if cells.len() < 2 {
+        return false;
+    }
+
+    cells
+        .iter()
+        .all(|cell| !cell.is_empty() && cell.chars().all(|ch| matches!(ch, '-' | ':' | ' ')))
+}
+
+fn parse_markdown_table_cells(line: &str) -> Vec<String> {
+    line.trim()
+        .trim_matches('|')
+        .split('|')
+        .map(|cell| inline_markdown_plain_text(cell.trim()))
+        .collect()
+}
+
+fn render_markdown_table_block(rows: &[Vec<String>]) -> Vec<String> {
+    if rows.is_empty() {
+        return Vec::new();
+    }
+
+    let column_count = rows.iter().map(Vec::len).max().unwrap_or(0);
+    let normalized = rows
+        .iter()
+        .map(|row| {
+            (0..column_count)
+                .map(|column| row.get(column).cloned().unwrap_or_default())
+                .collect::<Vec<_>>()
+        })
+        .collect::<Vec<_>>();
+
+    let mut widths = vec![0; column_count];
+    for row in &normalized {
+        for (index, cell) in row.iter().enumerate() {
+            widths[index] = widths[index].max(UnicodeWidthStr::width(cell.as_str()));
+        }
+    }
+
+    let mut lines = Vec::with_capacity(normalized.len() + 1);
+    for (index, row) in normalized.iter().enumerate() {
+        lines.push(format_markdown_table_row(row, &widths));
+        if index == 0 {
+            lines.push(format_markdown_table_separator(&widths));
+        }
+    }
+    lines
+}
+
+fn format_markdown_table_row(row: &[String], widths: &[usize]) -> String {
+    let cells = row
+        .iter()
+        .enumerate()
+        .map(|(index, cell)| {
+            let width = widths.get(index).copied().unwrap_or_default();
+            format!(" {}{} ", cell, pad_display_width(cell, width))
+        })
+        .collect::<Vec<_>>();
+    format!("|{}|", cells.join("|"))
+}
+
+fn format_markdown_table_separator(widths: &[usize]) -> String {
+    let cells = widths
+        .iter()
+        .map(|width| format!(" {} ", "-".repeat((*width).max(1))))
+        .collect::<Vec<_>>();
+    format!("|{}|", cells.join("|"))
+}
+
+fn inline_markdown_plain_text(content: &str) -> String {
+    let mut output = String::new();
+    for event in Parser::new_ext(content, Options::all()) {
+        match event {
+            Event::Text(text)
+            | Event::Code(text)
+            | Event::InlineMath(text)
+            | Event::DisplayMath(text)
+            | Event::Html(text)
+            | Event::InlineHtml(text) => output.push_str(text.as_ref()),
+            Event::SoftBreak | Event::HardBreak => output.push(' '),
+            Event::TaskListMarker(checked) => {
+                output.push_str(if checked { "[x] " } else { "[ ] " });
+            }
+            Event::FootnoteReference(name) => {
+                output.push('[');
+                output.push_str(name.as_ref());
+                output.push(']');
+            }
+            _ => {}
+        }
+    }
+    output
+}
+
+fn pad_display_width(text: &str, width: usize) -> String {
+    let current = UnicodeWidthStr::width(text);
+    " ".repeat(width.saturating_sub(current))
 }
 
 fn start_block(output: &mut String) {

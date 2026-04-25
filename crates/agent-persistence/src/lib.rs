@@ -14,8 +14,8 @@ pub use records::{
     ContextOffloadRecord, ContextSummaryRecord, JobRecord, KnowledgeSearchDocRecord,
     KnowledgeSourceRecord, McpConnectorRecord, MissionRecord, PlanRecord, RecordConversionError,
     RunRecord, SessionInboxEventRecord, SessionRecord, SessionRetentionRecord,
-    SessionSearchDocRecord, TelegramChatBindingRecord, TelegramUpdateCursorRecord,
-    TelegramUserPairingRecord, ToolCallRecord, TranscriptRecord,
+    SessionSearchDocRecord, TelegramChatBindingRecord, TelegramChatStatusRecord,
+    TelegramUpdateCursorRecord, TelegramUserPairingRecord, ToolCallRecord, TranscriptRecord,
 };
 pub use repository::{
     AgentRepository, ArtifactRepository, ContextOffloadRepository, ContextSummaryRepository,

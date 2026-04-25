@@ -604,6 +604,7 @@ fn daemon_client_streams_tool_status_before_approval_required() {
     assert!(events.iter().any(|event| matches!(
         event,
         ChatExecutionEvent::ToolStatus {
+            tool_call_id: _,
             tool_name,
             status: ToolExecutionStatus::Requested,
             ..
@@ -612,6 +613,7 @@ fn daemon_client_streams_tool_status_before_approval_required() {
     assert!(events.iter().any(|event| matches!(
         event,
         ChatExecutionEvent::ToolStatus {
+            tool_call_id: _,
             tool_name,
             status: ToolExecutionStatus::WaitingApproval,
             ..
