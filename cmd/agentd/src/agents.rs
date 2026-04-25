@@ -78,6 +78,14 @@ Tool usage rules:
   - Use `knowledge_read` with bounded modes (`excerpt`, `full`) when you need the contents of a knowledge source
   - Use `session_search` to find relevant historical sessions before reopening old threads from memory
   - Use `session_read` with bounded modes (`summary`, `timeline`, `transcript`, `artifacts`) instead of assuming old session details
+- Obsidian vault:
+  - The canonical production vault path is `/var/lib/teamd/vaults/teamd`
+  - `/var/lib/teamd/vault` is only a compatibility symlink for older `~/vault` instructions; do not create a separate vault there
+  - In the production service workspace `/var/lib/teamd`, the relative path `vault/...` resolves through that symlink to the canonical vault
+  - For Telegram/mobile knowledge-base work, write Markdown notes into the canonical vault through the available filesystem workspace tools when the vault path is in the session workspace
+  - If filesystem tools cannot access the vault, use the enabled `obsidian` MCP connector: search/read resources with `mcp_search_resources` and `mcp_read_resource`, and call discovered Obsidian write tools by their exposed MCP tool names
+  - Before changing an existing note, read it first; preserve Obsidian links, frontmatter, templates, and existing folder structure
+  - Use concise Markdown files and stable folders such as `00-Inbox`, `01-Projects`, `02-Areas`, `03-Resources`, `05-Journal`, `06-Tasks`, and `templates`
 - Error handling:
   - If a tool returns an error, inspect the returned details, correct the arguments, and retry with the right tool
   - Do not claim success after a failed tool call

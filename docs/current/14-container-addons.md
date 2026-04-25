@@ -97,10 +97,13 @@ Default paths:
 
 - vaults: `/var/lib/teamd/vaults`;
 - managed vault: `/var/lib/teamd/vaults/teamd`;
+- compatibility path для агентов, которые ошибочно пишут в `~/vault`: `/var/lib/teamd/vault -> /var/lib/teamd/vaults/teamd`;
 - container config: `/var/lib/teamd/containers/obsidian/config`;
 - local URL: `http://127.0.0.1:8080/obsidian/`.
 
 В этой схеме Obsidian — это внешний UI для человека. Оператор открывает его в браузере, редактирует vault и управляет плагинами. `agentd` не встраивает Obsidian в prompt path автоматически.
+
+Канонический путь vault для всех агентов и операторских команд — `/var/lib/teamd/vaults/teamd`. Путь `/var/lib/teamd/vault` существует только как совместимость с ошибочным `~/vault`, потому что production user `teamd` имеет home `/var/lib/teamd`. Production `agentd` запускается с `WorkingDirectory=/var/lib/teamd`, поэтому workspace-relative path `vault/...` тоже попадает в этот же vault через symlink. Новые инструкции, skills и tooling должны считать canonical source of truth путём `/var/lib/teamd/vaults/teamd`.
 
 Без отдельного домена скрипт запускает Obsidian в subfolder mode:
 
@@ -271,7 +274,13 @@ TEAMD_CADDY_DOMAIN='example.com' ./scripts/deploy-teamd-containers.sh --with-obs
 
 Текущий контейнер Obsidian (`ghcr.io/sytone/obsidian-remote`) публикует desktop Obsidian через browser/VNC-подобный web UI. Это рабочий вариант для desktop browser, но не полноценный мобильный web client. На телефоне интерфейс мелкий, жесты и ввод неудобны, и это ограничение выбранного контейнера, а не ошибка Caddy.
 
-Для нормального mobile-first доступа нужен отдельный слой поверх vault:
+Принятый mobile workflow на текущем этапе:
+
+- оператор пишет агенту в Telegram;
+- агент создаёт и обновляет Markdown-файлы в `/var/lib/teamd/vaults/teamd`;
+- Obsidian web UI остаётся desktop/admin-интерфейсом для проверки vault, включения plugins и ручного редактирования с большого экрана.
+
+Если нужен прямой mobile UI для заметок, это следующий отдельный слой поверх vault:
 
 - оставить Obsidian container как desktop/admin UI;
 - добавить web UI для Markdown vault, который рассчитан на мобильный браузер;

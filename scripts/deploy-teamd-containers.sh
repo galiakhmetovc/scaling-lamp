@@ -38,6 +38,7 @@ OBSIDIAN_DIR=$CONTAINERS_ROOT/obsidian
 OBSIDIAN_VAULTS_DIR=${TEAMD_OBSIDIAN_VAULTS_DIR:-/var/lib/teamd/vaults}
 OBSIDIAN_VAULT_NAME=${TEAMD_OBSIDIAN_VAULT_NAME:-teamd}
 OBSIDIAN_VAULT_DIR=${TEAMD_OBSIDIAN_VAULT_DIR:-$OBSIDIAN_VAULTS_DIR/$OBSIDIAN_VAULT_NAME}
+OBSIDIAN_LEGACY_VAULT_LINK=${TEAMD_OBSIDIAN_LEGACY_VAULT_LINK:-/var/lib/teamd/vault}
 OBSIDIAN_CONFIG_DIR=${TEAMD_OBSIDIAN_CONFIG_DIR:-$DATA_ROOT/obsidian/config}
 OBSIDIAN_COMPOSE=$OBSIDIAN_DIR/docker-compose.yml
 OBSIDIAN_PLUGIN_ID=obsidian-local-rest-api
@@ -123,6 +124,10 @@ Environment overrides:
   TEAMD_OBSIDIAN_VAULTS_DIR      Vaults directory, default: $OBSIDIAN_VAULTS_DIR.
   TEAMD_OBSIDIAN_VAULT_NAME      Default managed vault name, default: $OBSIDIAN_VAULT_NAME.
   TEAMD_OBSIDIAN_VAULT_DIR       Managed vault directory, default: $OBSIDIAN_VAULT_DIR.
+  TEAMD_OBSIDIAN_LEGACY_VAULT_LINK
+                                 Compatibility symlink for agents using ~/vault,
+                                 default: $OBSIDIAN_LEGACY_VAULT_LINK.
+                                 Set empty to disable.
   TEAMD_OBSIDIAN_CONFIG_DIR      Obsidian config directory, default: $OBSIDIAN_CONFIG_DIR.
   TEAMD_OBSIDIAN_SUBFOLDER       Obsidian reverse-proxy subfolder.
                                  Default: "$OBSIDIAN_SUBFOLDER".
@@ -551,6 +556,39 @@ EOF
   run_root chown -R "$OBSIDIAN_PUID:$OBSIDIAN_PGID" "$OBSIDIAN_CONFIG_DIR/.config"
 }
 
+ensure_obsidian_legacy_vault_link() {
+  [ -n "$OBSIDIAN_LEGACY_VAULT_LINK" ] || return 0
+  [ "$OBSIDIAN_LEGACY_VAULT_LINK" != "$OBSIDIAN_VAULT_DIR" ] || return 0
+
+  if [ "$DRY_RUN" -eq 1 ]; then
+    print_cmd sh -c "create compatibility symlink $OBSIDIAN_LEGACY_VAULT_LINK -> $OBSIDIAN_VAULT_DIR when path is absent"
+    return 0
+  fi
+
+  target_real=$(readlink -f "$OBSIDIAN_VAULT_DIR")
+
+  if [ -L "$OBSIDIAN_LEGACY_VAULT_LINK" ]; then
+    link_real=$(readlink -f "$OBSIDIAN_LEGACY_VAULT_LINK" || true)
+    if [ "$link_real" = "$target_real" ]; then
+      return 0
+    fi
+    printf 'Warning: %s is a symlink to %s, not %s; leaving it unchanged.\n' \
+      "$OBSIDIAN_LEGACY_VAULT_LINK" "${link_real:-unknown}" "$OBSIDIAN_VAULT_DIR" >&2
+    return 0
+  fi
+
+  if [ -e "$OBSIDIAN_LEGACY_VAULT_LINK" ]; then
+    printf 'Warning: %s already exists and is not a symlink; not migrating automatically. Move it into %s manually, then replace it with a symlink.\n' \
+      "$OBSIDIAN_LEGACY_VAULT_LINK" "$OBSIDIAN_VAULT_DIR" >&2
+    return 0
+  fi
+
+  legacy_parent=$(dirname "$OBSIDIAN_LEGACY_VAULT_LINK")
+  run_root mkdir -p "$legacy_parent"
+  run_root ln -s "$OBSIDIAN_VAULT_DIR" "$OBSIDIAN_LEGACY_VAULT_LINK"
+  run_root chown -h "$OBSIDIAN_PUID:$OBSIDIAN_PGID" "$OBSIDIAN_LEGACY_VAULT_LINK"
+}
+
 write_obsidian_mcp_example() {
   if [ "$DRY_RUN" -eq 1 ]; then
     print_cmd mkdir -p "$OBSIDIAN_DIR"
@@ -880,6 +918,7 @@ fi
 
 if [ "$ENABLE_OBSIDIAN" -eq 1 ]; then
   write_obsidian_files
+  ensure_obsidian_legacy_vault_link
   if [ "$ENABLE_OBSIDIAN_MCP" -eq 1 ]; then
     write_obsidian_vault_config
   fi
