@@ -226,6 +226,11 @@ teamdctl session skills <session_id>
 - агент работает с vault через `obsidian` MCP connector first;
 - агент не использует generic filesystem write tools для нормальной работы с заметками;
 - filesystem fallback допустим только для аварийной/admin-операции, если MCP недоступен и оператор явно согласился;
+- vault — это shared working knowledge layer для агента и оператора;
+- vault не является runtime state: transcripts, runs, tool calls, artifacts, schedules, approvals, audit logs и SQLite state остаются в `agentd`;
+- vault не заменяет canonical repository documentation: стабильная документация живёт в git под `docs/`;
+- vault используется для working notes, drafts, decisions, research, project logs и подготовки материала перед переносом в repo docs;
+- поверх vault позже можно добавить semantic search/indexing; поэтому notes должны иметь понятный title, summary, stable headings, explicit links и frontmatter where useful;
 - перед изменением существующей заметки агент сначала читает её;
 - после успешного write/update агент сообщает, что именно изменил и где;
 - если tool call упал, агент не утверждает, что заметка сохранена.
@@ -298,6 +303,19 @@ Operating rules:
 - при неоднозначном target folder выбрать ближайший PARA folder и явно назвать assumption;
 - имена notes должны быть стабильными и читаемыми; timestamp-only filenames допустимы только для daily notes;
 - если пользовательское сообщение содержит durable fact, decision, task или resource, агент должен предложить сохранить это или сохранить сразу, если запрос подразумевает persistence.
+- перед substantial work агент ищет/читает релевантные project, area или resource notes;
+- после важного решения или завершённой задачи агент обновляет соответствующую project note или daily journal;
+- когда working note стала стабильной документацией, агент предлагает перенести её в repository docs и commit.
+
+Роль Obsidian в общей архитектуре:
+
+```text
+Telegram/TUI dialogue
+-> agent reasoning and tools
+-> Obsidian working notes via MCP
+-> optional semantic search index over vault
+-> stable docs promoted to git docs/current
+```
 
 Быстрая проверка на production host:
 

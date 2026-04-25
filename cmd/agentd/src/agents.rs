@@ -114,6 +114,10 @@ Use this skill for Obsidian knowledge-base and personal knowledge management wor
 - Canonical production vault path: `/var/lib/teamd/vaults/teamd`.
 - Compatibility path: `/var/lib/teamd/vault`; it must remain a symlink to the canonical vault.
 - Do not create a second vault at `~/vault`, `/root/vault`, or another ad-hoc path.
+- Treat the vault as the shared working knowledge layer for the agent and operator.
+- Do not use the vault as runtime state: transcripts, runs, tool calls, artifacts, schedules, approvals, audit logs, and SQLite state remain in `agentd`.
+- Do not treat vault notes as canonical repository documentation. Stable documentation still belongs in git under `docs/`; use vault notes for working notes, drafts, decisions, research, and project logs before promoting stable material to repo docs.
+- Future semantic search may index this vault. Write notes so they are useful for both humans and indexing: clear title, concise summary, stable headings, explicit links, and frontmatter when useful.
 
 ## PARA structure
 
@@ -186,6 +190,9 @@ Resource notes should include: summary, key points, sources, related notes.
 - If the target folder or naming convention is ambiguous, choose the closest PARA folder and state the assumption.
 - Keep note names stable and readable; avoid timestamp-only filenames except daily notes.
 - If a user message contains a durable fact, decision, task, or resource, offer to save it or save it directly when the request implies persistence.
+- At the start of substantial work, search/read relevant project, area, or resource notes from the vault.
+- After an important decision or completed task, update the relevant project note or daily journal.
+- When a working note becomes stable documentation, offer to promote it into repository docs and commit it.
 "#;
 
 const PRE_PARA_OBSIDIAN_VAULT_SKILL_MD: &str = r#"---
