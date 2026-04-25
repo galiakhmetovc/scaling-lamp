@@ -27,7 +27,9 @@ pub(crate) use agent_runtime::tool::{FsWriteInput, ToolCall};
 pub(crate) use agent_runtime::verification::VerificationStatus;
 pub(crate) use agent_runtime::verification::{CheckOutcome, EvidenceBundle};
 pub(crate) use agent_runtime::workspace::WorkspaceRef;
-pub(crate) use agentd::bootstrap::{BootstrapError, SessionPreferencesPatch, build_from_config};
+pub(crate) use agentd::bootstrap::{
+    BootstrapError, SessionPreferencesPatch, build_from_config, build_from_config_without_recovery,
+};
 pub(crate) use agentd::execution;
 pub(crate) use agentd::execution::ExecutionError;
 pub(crate) use std::fs;

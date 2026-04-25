@@ -1189,6 +1189,96 @@ fn build_from_config_interrupts_unrecoverable_runs_but_keeps_approvals_pending()
 }
 
 #[test]
+fn client_build_from_config_does_not_interrupt_active_runs() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let data_dir = temp.path().join("state-root");
+    let app = build_from_config(AppConfig {
+        data_dir: data_dir.clone(),
+        ..AppConfig::default()
+    })
+    .expect("build app");
+    let store = PersistenceStore::open(&app.persistence).expect("open store");
+
+    store
+        .put_session(&SessionRecord {
+            id: "session-client-recovery".to_string(),
+            title: "Client recovery session".to_string(),
+            prompt_override: None,
+            settings_json: serde_json::to_string(&SessionSettings::default())
+                .expect("serialize settings"),
+            agent_profile_id: "default".to_string(),
+            active_mission_id: None,
+            parent_session_id: None,
+            parent_job_id: None,
+            delegation_label: None,
+            created_at: 1,
+            updated_at: 1,
+        })
+        .expect("put session");
+    store
+        .put_run(&RunRecord {
+            id: "run-client-active".to_string(),
+            session_id: "session-client-recovery".to_string(),
+            mission_id: None,
+            status: RunStatus::Running.as_str().to_string(),
+            error: None,
+            result: None,
+            provider_usage_json: "null".to_string(),
+            active_processes_json: "[]".to_string(),
+            recent_steps_json: "[]".to_string(),
+            evidence_refs_json: "[]".to_string(),
+            pending_approvals_json: "[]".to_string(),
+            provider_loop_json: "null".to_string(),
+            delegate_runs_json: "[]".to_string(),
+            started_at: 3,
+            updated_at: 4,
+            finished_at: None,
+        })
+        .expect("put run");
+
+    drop(store);
+    drop(app);
+
+    let client_app = build_from_config_without_recovery(AppConfig {
+        data_dir,
+        ..AppConfig::default()
+    })
+    .expect("build client app");
+    let client_store = PersistenceStore::open_runtime(&client_app.persistence).expect("open store");
+    let active = RunSnapshot::try_from(
+        client_store
+            .get_run("run-client-active")
+            .expect("get active run")
+            .expect("active run exists"),
+    )
+    .expect("active snapshot");
+
+    assert_eq!(active.status, RunStatus::Running);
+    assert_eq!(active.error, None);
+    assert_eq!(active.finished_at, None);
+}
+
+#[test]
+fn client_build_from_config_without_recovery_bootstraps_empty_store() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let data_dir = temp.path().join("state-root");
+
+    let app = build_from_config_without_recovery(AppConfig {
+        data_dir,
+        ..AppConfig::default()
+    })
+    .expect("build client app");
+    let store = PersistenceStore::open_runtime(&app.persistence).expect("open runtime store");
+
+    assert!(
+        store
+            .get_agent_profile("default")
+            .expect("get default profile")
+            .is_some()
+    );
+}
+
+#[test]
 fn run_show_surfaces_error_details_for_interrupted_runs() {
     let temp = tempfile::tempdir().expect("tempdir");
     let app = build_from_config(AppConfig {

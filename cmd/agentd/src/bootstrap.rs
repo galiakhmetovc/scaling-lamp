@@ -914,7 +914,35 @@ pub fn build() -> Result<App, BootstrapError> {
     build_from_config(config)
 }
 
+pub fn build_without_recovery() -> Result<App, BootstrapError> {
+    let config = AppConfig::load()?;
+    build_from_config_without_recovery(config)
+}
+
+pub fn build_for_args<I, S>(args: I) -> Result<App, BootstrapError>
+where
+    I: IntoIterator<Item = S>,
+    S: AsRef<str>,
+{
+    if should_reconcile_recovery_for_args(args) {
+        build()
+    } else {
+        build_without_recovery()
+    }
+}
+
 pub fn build_from_config(config: AppConfig) -> Result<App, BootstrapError> {
+    build_from_config_inner(config, true)
+}
+
+pub fn build_from_config_without_recovery(config: AppConfig) -> Result<App, BootstrapError> {
+    build_from_config_inner(config, false)
+}
+
+fn build_from_config_inner(
+    config: AppConfig,
+    reconcile_recovery: bool,
+) -> Result<App, BootstrapError> {
     let started = Instant::now();
     config.validate()?;
 
@@ -928,12 +956,17 @@ pub fn build_from_config(config: AppConfig) -> Result<App, BootstrapError> {
     )
     .field("bind_host", &config.daemon.bind_host)
     .field("bind_port", config.daemon.bind_port)
+    .field("reconcile_recovery", reconcile_recovery)
     .field("home", std::env::var("HOME").ok())
     .field("xdg_state_home", std::env::var("XDG_STATE_HOME").ok())
     .field("teamd_data_dir", std::env::var("TEAMD_DATA_DIR").ok())
     .emit(&persistence.audit);
     ensure_runtime_layout(&persistence)?;
-    reconcile_recovery_state(&persistence)?;
+    if reconcile_recovery {
+        reconcile_recovery_state(&persistence)?;
+    } else {
+        initialize_metadata_schema(&persistence)?;
+    }
     let mcp = SharedMcpRegistry::from_runtime_timing(&config.runtime_timing);
 
     let app = App {
@@ -961,6 +994,16 @@ pub fn build_from_config(config: AppConfig) -> Result<App, BootstrapError> {
     )
     .emit(&app.persistence.audit);
     Ok(app)
+}
+
+fn should_reconcile_recovery_for_args<I, S>(args: I) -> bool
+where
+    I: IntoIterator<Item = S>,
+    S: AsRef<str>,
+{
+    args.into_iter()
+        .next()
+        .is_some_and(|arg| arg.as_ref() == "daemon")
 }
 
 fn ensure_runtime_layout(persistence: &PersistenceScaffold) -> Result<(), BootstrapError> {
@@ -1020,6 +1063,11 @@ fn create_directory(path: &Path) -> Result<(), BootstrapError> {
     })
 }
 
+fn initialize_metadata_schema(persistence: &PersistenceScaffold) -> Result<(), BootstrapError> {
+    let _store = PersistenceStore::open_bootstrap_schema(persistence)?;
+    Ok(())
+}
+
 fn reconcile_recovery_state(persistence: &PersistenceScaffold) -> Result<(), BootstrapError> {
     let store = PersistenceStore::open(persistence)?;
     recovery::reconcile_runs(&store, persistence.recovery, unix_timestamp()?)?;
@@ -1038,4 +1086,21 @@ fn unique_timestamp_token() -> Result<u128, BootstrapError> {
         .duration_since(UNIX_EPOCH)
         .map_err(BootstrapError::Clock)?
         .as_millis())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::should_reconcile_recovery_for_args;
+
+    #[test]
+    fn recovery_reconcile_is_daemon_only() {
+        assert!(should_reconcile_recovery_for_args(["daemon"]));
+        assert!(!should_reconcile_recovery_for_args(["version"]));
+        assert!(!should_reconcile_recovery_for_args(["session", "list"]));
+        assert!(!should_reconcile_recovery_for_args(["telegram", "run"]));
+        assert!(!should_reconcile_recovery_for_args(["tui"]));
+        assert!(!should_reconcile_recovery_for_args(
+            std::iter::empty::<&str>()
+        ));
+    }
 }

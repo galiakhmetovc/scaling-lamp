@@ -131,6 +131,7 @@ const LEGACY_MISSION_PREFIX: &str = "legacy-mission-";
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum OpenMode {
     BootstrapAndReconcile,
+    BootstrapSchemaOnly,
     RuntimeRequestPath,
 }
 
@@ -215,6 +216,10 @@ impl PersistenceStore {
         Self::open_internal(scaffold, OpenMode::BootstrapAndReconcile)
     }
 
+    pub fn open_bootstrap_schema(scaffold: &PersistenceScaffold) -> Result<Self, StoreError> {
+        Self::open_internal(scaffold, OpenMode::BootstrapSchemaOnly)
+    }
+
     pub fn open_runtime(scaffold: &PersistenceScaffold) -> Result<Self, StoreError> {
         Self::open_internal(scaffold, OpenMode::RuntimeRequestPath)
     }
@@ -224,7 +229,7 @@ impl PersistenceStore {
 
         let connection = Connection::open(&scaffold.stores.metadata_db)?;
         configure_connection(&connection, &scaffold.config, mode)?;
-        if mode == OpenMode::BootstrapAndReconcile {
+        if mode != OpenMode::RuntimeRequestPath {
             bootstrap_schema(&connection)?;
             validate_schema(&connection)?;
         }
@@ -733,7 +738,7 @@ fn configure_connection(
 ) -> Result<(), StoreError> {
     connection.busy_timeout(config.runtime_timing.sqlite_busy_timeout())?;
     connection.execute_batch("PRAGMA foreign_keys = ON;")?;
-    if mode == OpenMode::BootstrapAndReconcile {
+    if mode != OpenMode::RuntimeRequestPath {
         connection.pragma_update(None, "journal_mode", "WAL")?;
         connection.pragma_update(None, "synchronous", "NORMAL")?;
     }

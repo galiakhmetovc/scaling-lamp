@@ -1991,6 +1991,25 @@ fn open_removes_orphan_payload_files() {
 }
 
 #[test]
+fn open_bootstrap_schema_creates_tables_without_pruning_payloads() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let scaffold = PersistenceScaffold::from_config(crate::AppConfig {
+        data_dir: temp.path().join("state-root"),
+        ..crate::AppConfig::default()
+    });
+
+    fs::create_dir_all(&scaffold.stores.transcripts_dir).expect("create transcript dir");
+    let orphan_transcript = scaffold.stores.transcripts_dir.join("orphan.txt");
+    fs::write(&orphan_transcript, "orphan transcript").expect("write transcript");
+
+    let store =
+        super::PersistenceStore::open_bootstrap_schema(&scaffold).expect("open bootstrap schema");
+
+    assert_eq!(store.count_sessions().expect("count sessions"), 0);
+    assert!(orphan_transcript.exists());
+}
+
+#[test]
 fn open_does_not_prune_payloads_that_are_mid_commit() {
     let temp = tempfile::tempdir().expect("tempdir");
     let scaffold = PersistenceScaffold::from_config(crate::AppConfig {
