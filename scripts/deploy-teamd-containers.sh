@@ -9,6 +9,7 @@ SKIP_START=0
 INSTALL_DOCKER=${TEAMD_CONTAINERS_INSTALL_DOCKER:-1}
 ENABLE_SEARXNG=1
 ENABLE_OBSIDIAN=0
+WRITE_OBSIDIAN_MCP_EXAMPLE=0
 ENABLE_CADDY=1
 
 CONTAINERS_ROOT=${TEAMD_CONTAINERS_ROOT:-/opt/teamd/containers}
@@ -30,6 +31,14 @@ OBSIDIAN_DIR=$CONTAINERS_ROOT/obsidian
 OBSIDIAN_VAULTS_DIR=${TEAMD_OBSIDIAN_VAULTS_DIR:-/var/lib/teamd/vaults}
 OBSIDIAN_CONFIG_DIR=${TEAMD_OBSIDIAN_CONFIG_DIR:-$DATA_ROOT/obsidian/config}
 OBSIDIAN_COMPOSE=$OBSIDIAN_DIR/docker-compose.yml
+OBSIDIAN_MCP_EXAMPLE=$OBSIDIAN_DIR/obsidian-mcp.example.toml
+OBSIDIAN_MCP_ENV_EXAMPLE=$OBSIDIAN_DIR/obsidian-mcp.env.example
+OBSIDIAN_MCP_ENV_FILE=${TEAMD_OBSIDIAN_MCP_ENV_FILE:-/etc/teamd/obsidian-mcp.env}
+OBSIDIAN_MCP_IMAGE=${TEAMD_OBSIDIAN_MCP_IMAGE:-ghcr.io/oleksandrkucherenko/obsidian-mcp:latest}
+OBSIDIAN_REST_API_URLS=${TEAMD_OBSIDIAN_REST_API_URLS:-}
+if [ -z "$OBSIDIAN_REST_API_URLS" ]; then
+  OBSIDIAN_REST_API_URLS='["https://127.0.0.1:27124","http://127.0.0.1:27123"]'
+fi
 OBSIDIAN_PUID=${TEAMD_OBSIDIAN_PUID:-}
 OBSIDIAN_PGID=${TEAMD_OBSIDIAN_PGID:-}
 
@@ -73,6 +82,8 @@ Options:
   --no-searxng          Do not deploy SearXNG.
   --no-caddy            Do not deploy Caddy reverse proxy.
   --with-obsidian       Also deploy browser-accessible Obsidian container.
+  --with-obsidian-mcp-example
+                         Write an agentd stdio MCP connector example for Obsidian Local REST API.
   --searxng-port PORT   Local SearXNG port, default: $SEARXNG_PORT.
   --obsidian-port PORT  Local Obsidian port, default: $OBSIDIAN_PORT.
   -h, --help            Show this help.
@@ -89,6 +100,10 @@ Environment overrides:
   TEAMD_OBSIDIAN_PORT            Obsidian localhost port, default: $OBSIDIAN_PORT.
   TEAMD_OBSIDIAN_VAULTS_DIR      Vaults directory, default: $OBSIDIAN_VAULTS_DIR.
   TEAMD_OBSIDIAN_CONFIG_DIR      Obsidian config directory, default: $OBSIDIAN_CONFIG_DIR.
+  TEAMD_OBSIDIAN_MCP_IMAGE       Obsidian MCP image, default: $OBSIDIAN_MCP_IMAGE.
+  TEAMD_OBSIDIAN_MCP_ENV_FILE    Runtime env file for Obsidian MCP connector, default: $OBSIDIAN_MCP_ENV_FILE.
+  TEAMD_OBSIDIAN_REST_API_URLS   JSON array of Local REST API URLs seen from MCP container,
+                                 default: $OBSIDIAN_REST_API_URLS.
   TEAMD_CADDY_DOMAIN             Optional base domain; creates search.<domain> and obsidian.<domain>.
   TEAMD_CADDY_HTTP_PORT          Caddy HTTP host port, default: $CADDY_HTTP_PORT.
   TEAMD_CADDY_HTTPS_PORT         Caddy HTTPS host port, default: ${CADDY_HTTPS_PORT:-disabled}.
@@ -355,6 +370,58 @@ EOF
   run_root install -m 0644 -o root -g root "$tmp_compose" "$OBSIDIAN_COMPOSE"
 }
 
+write_obsidian_mcp_example() {
+  if [ "$DRY_RUN" -eq 1 ]; then
+    print_cmd mkdir -p "$OBSIDIAN_DIR"
+    print_cmd sh -c "write $OBSIDIAN_MCP_EXAMPLE and $OBSIDIAN_MCP_ENV_EXAMPLE"
+    return 0
+  fi
+
+  run_root mkdir -p "$OBSIDIAN_DIR"
+  tmp_config=$(mktemp)
+  tmp_env=$(mktemp)
+  trap 'rm -f "$tmp_config" "$tmp_env"' EXIT INT TERM
+
+  cat > "$tmp_config" <<EOF
+# Copy this block into /etc/teamd/config.toml under [daemon.mcp_connectors]
+# after enabling Obsidian Local REST API plugin and copying
+# $OBSIDIAN_MCP_ENV_EXAMPLE to $OBSIDIAN_MCP_ENV_FILE.
+#
+# Current agentd MCP transport is stdio, so this connector starts the MCP
+# server through docker run -i --rm. This is an operator opt-in because the
+# teamd service user must be allowed to run this exact Docker command.
+#
+# The MCP container shares teamd-obsidian network namespace. That lets it reach
+# the Local REST API plugin on 127.0.0.1 inside the Obsidian container without
+# publishing REST API ports on the host.
+
+[daemon.mcp_connectors.obsidian]
+transport = "stdio"
+command = "docker"
+args = [
+  "run",
+  "-i",
+  "--rm",
+  "--network", "container:teamd-obsidian",
+  "--env-file", "$OBSIDIAN_MCP_ENV_FILE",
+  "$OBSIDIAN_MCP_IMAGE",
+]
+enabled = false
+EOF
+
+  cat > "$tmp_env" <<EOF
+# Copy this file to $OBSIDIAN_MCP_ENV_FILE, set mode 0640,
+# and put the API key from Obsidian Local REST API plugin into API_KEY.
+# This file is consumed by docker run --env-file, so do not shell-quote values.
+API_KEY=replace-with-local-rest-api-key
+API_URLS=$OBSIDIAN_REST_API_URLS
+VERIFY_SSL=false
+EOF
+
+  run_root install -m 0644 -o root -g root "$tmp_config" "$OBSIDIAN_MCP_EXAMPLE"
+  run_root install -m 0640 -o root -g root "$tmp_env" "$OBSIDIAN_MCP_ENV_EXAMPLE"
+}
+
 write_caddy_files() {
   if [ "$DRY_RUN" -eq 1 ]; then
     print_cmd mkdir -p "$CADDY_DIR" "$CADDY_DATA_DIR" "$CADDY_CONFIG_DIR"
@@ -441,6 +508,10 @@ while [ "$#" -gt 0 ]; do
     --no-searxng) ENABLE_SEARXNG=0 ;;
     --no-caddy) ENABLE_CADDY=0 ;;
     --with-obsidian) ENABLE_OBSIDIAN=1 ;;
+    --with-obsidian-mcp-example)
+      ENABLE_OBSIDIAN=1
+      WRITE_OBSIDIAN_MCP_EXAMPLE=1
+      ;;
     --searxng-port)
       shift
       [ "$#" -gt 0 ] || fail "--searxng-port requires a value"
@@ -492,6 +563,10 @@ if [ "$ENABLE_OBSIDIAN" -eq 1 ]; then
   compose_up "$OBSIDIAN_COMPOSE"
 fi
 
+if [ "$WRITE_OBSIDIAN_MCP_EXAMPLE" -eq 1 ]; then
+  write_obsidian_mcp_example
+fi
+
 if [ "$ENABLE_CADDY" -eq 1 ]; then
   write_caddy_files
   compose_up "$CADDY_COMPOSE"
@@ -527,7 +602,19 @@ if [ "$ENABLE_OBSIDIAN" -eq 1 ]; then
     Compose: $OBSIDIAN_COMPOSE
     Start command: docker compose -f $OBSIDIAN_COMPOSE up -d
     Vaults: $OBSIDIAN_VAULTS_DIR
+    Local REST API plugin:
+      install inside Obsidian, then copy API key to $OBSIDIAN_MCP_ENV_FILE as API_KEY
 EOF
+  if [ "$WRITE_OBSIDIAN_MCP_EXAMPLE" -eq 1 ]; then
+    cat <<EOF
+    MCP example: $OBSIDIAN_MCP_EXAMPLE
+    MCP env example: $OBSIDIAN_MCP_ENV_EXAMPLE
+    MCP env target: $OBSIDIAN_MCP_ENV_FILE
+    MCP image: $OBSIDIAN_MCP_IMAGE
+    MCP API_URLS: $OBSIDIAN_REST_API_URLS
+    MCP network: container:teamd-obsidian
+EOF
+  fi
 fi
 
 if [ "$ENABLE_CADDY" -eq 1 ]; then

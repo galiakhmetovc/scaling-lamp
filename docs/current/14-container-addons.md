@@ -84,7 +84,7 @@ search_url = "http://127.0.0.1:8888/search"
 
 Ориентир по проекту: <https://github.com/ihor-sokoliuk/mcp-searxng>.
 
-## Obsidian
+## Obsidian: web UI для оператора
 
 Obsidian включается явно:
 
@@ -98,13 +98,110 @@ Default paths:
 - container config: `/var/lib/teamd/containers/obsidian/config`;
 - local URL: `http://127.0.0.1:8080`.
 
-Идея для первого этапа:
+В этой схеме Obsidian — это внешний UI для человека. Оператор открывает его в браузере, редактирует vault и управляет плагинами. `agentd` не встраивает Obsidian в prompt path автоматически.
 
-- оператор редактирует заметки в браузере;
-- agentd получает доступ к vault как к обычным файлам или через будущий MCP/skill слой;
-- Obsidian не становится частью prompt path автоматически.
+Если включён Caddy, нормальный доступ выглядит так:
 
-Про `obsidian-cli` skill можно смотреть здесь: <https://github.com/kepano/obsidian-skills/blob/main/skills/obsidian-cli/SKILL.md>.
+```bash
+TEAMD_CADDY_DOMAIN='example.com' ./scripts/deploy-teamd-containers.sh --with-obsidian
+```
+
+После этого web UI доступен как `obsidian.example.com`.
+
+## Obsidian: доступ агента через Local REST API + MCP
+
+Первый поддерживаемый вариант для агента:
+
+```text
+agentd -> stdio MCP connector -> docker run obsidian-mcp -> Obsidian Local REST API -> vault
+```
+
+Почему так:
+
+- Obsidian остаётся в Docker и доступен оператору через web UI;
+- Local REST API plugin живёт внутри Obsidian;
+- MCP server превращает Obsidian REST API в MCP tools/resources;
+- текущий `agentd` поддерживает MCP transport только `stdio`, поэтому MCP запускается как дочерний процесс `docker run -i --rm`, а не как постоянный HTTP/SSE sidecar.
+
+Сгенерировать пример коннектора:
+
+```bash
+./scripts/deploy-teamd-containers.sh --with-obsidian-mcp-example
+```
+
+Скрипт создаёт:
+
+```text
+/opt/teamd/containers/obsidian/obsidian-mcp.example.toml
+/opt/teamd/containers/obsidian/obsidian-mcp.env.example
+```
+
+Дальше порядок такой:
+
+1. Откройте Obsidian web UI.
+2. Установите и включите community plugin `Local REST API`.
+3. Скопируйте API key из настроек plugin.
+4. Создайте runtime env file:
+
+```bash
+sudo install -m 0640 -o root -g teamd \
+  /opt/teamd/containers/obsidian/obsidian-mcp.env.example \
+  /etc/teamd/obsidian-mcp.env
+sudoedit /etc/teamd/obsidian-mcp.env
+```
+
+Внутри `/etc/teamd/obsidian-mcp.env` должны быть значения вида:
+
+```text
+API_KEY=replace-with-local-rest-api-key
+API_URLS=["https://127.0.0.1:27124","http://127.0.0.1:27123"]
+VERIFY_SSL=false
+```
+
+`API_URLS` указывает адреса Local REST API с точки зрения MCP-контейнера. Пример запускает MCP-контейнер с `--network container:teamd-obsidian`, поэтому `127.0.0.1` — это network namespace контейнера Obsidian, а не host. Контейнер `teamd-obsidian` должен быть запущен. REST API не публикуется наружу отдельным портом.
+
+Затем перенесите блок из:
+
+```text
+/opt/teamd/containers/obsidian/obsidian-mcp.example.toml
+```
+
+в `/etc/teamd/config.toml` и поменяйте:
+
+```toml
+enabled = true
+```
+
+Перезапустите сервисы:
+
+```bash
+sudo systemctl restart teamd-daemon.service teamd-telegram.service
+```
+
+Проверка через TUI/REPL:
+
+```bash
+teamdctl tui
+```
+
+Дальше используйте `\mcp`, чтобы увидеть коннектор, или попросите агента найти/прочитать заметку через MCP tools.
+
+### Важное ограничение Docker/MCP
+
+Такой коннектор требует, чтобы systemd-пользователь `teamd` мог выполнить `docker run ...`. Самый простой способ — добавить `teamd` в группу `docker`, но это почти root-level право. Поэтому deploy script только пишет пример и не включает его автоматически.
+
+Более строгий вариант на будущее:
+
+- добавить в `agentd` MCP transport `streamable-http`/SSE;
+- держать Obsidian MCP как отдельный long-running container;
+- подключать его по HTTP с bearer token;
+- не давать `teamd` прямой доступ к Docker socket.
+
+### Skill, MCP и CLI
+
+В этой схеме `obsidian-cli` не обязателен: MCP server работает через Local REST API plugin. Skill остаётся полезным как слой инструкций для агента: как называть заметки, как искать, как писать daily notes, как не ломать структуру vault.
+
+Отдельный `obsidian-cli` path можно добавить позже, если понадобится именно CLI workflow. Его надо проектировать отдельно, чтобы не создать второй скрытый tool loop. Ориентир по skill: <https://github.com/kepano/obsidian-skills/blob/main/skills/obsidian-cli/SKILL.md>.
 
 ## Caddy
 
@@ -147,3 +244,5 @@ TEAMD_CADDY_DOMAIN='example.com' ./scripts/deploy-teamd-containers.sh --with-obs
 - SearXNG Docker install: <https://docs.searxng.org/admin/installation-docker.html>
 - SearXNG MCP example project: <https://github.com/ihor-sokoliuk/mcp-searxng>
 - Obsidian CLI skill: <https://github.com/kepano/obsidian-skills/blob/main/skills/obsidian-cli/SKILL.md>
+- Obsidian MCP via Local REST API: <https://github.com/OleksandrKucherenko/mcp-obsidian-via-rest>
+- Obsidian MCP Docker image docs: <https://hub.docker.com/r/oleksandrkucherenko/obsidian-mcp>

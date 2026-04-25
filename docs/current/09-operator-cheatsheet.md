@@ -56,12 +56,20 @@ Core `agentd` ставится отдельно от контейнерной о
 ```bash
 ./scripts/deploy-teamd-containers.sh
 ./scripts/deploy-teamd-containers.sh --with-obsidian
+./scripts/deploy-teamd-containers.sh --with-obsidian-mcp-example
 ```
 
 Проверка без изменений:
 
 ```bash
 ./scripts/deploy-teamd-containers.sh --dry-run --non-interactive --no-start --with-obsidian
+```
+
+`--with-obsidian-mcp-example` дополнительно пишет шаблон MCP connector для Obsidian Local REST API:
+
+```text
+/opt/teamd/containers/obsidian/obsidian-mcp.example.toml
+/opt/teamd/containers/obsidian/obsidian-mcp.env.example
 ```
 
 Чтобы переключить встроенный `web_search` на SearXNG, добавьте в `/etc/teamd/teamd.env`:
