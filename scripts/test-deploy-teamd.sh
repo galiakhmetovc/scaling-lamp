@@ -3,6 +3,7 @@ set -eu
 
 SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 DEPLOY_SCRIPT="$SCRIPT_DIR/deploy-teamd.sh"
+CONTAINERS_DEPLOY_SCRIPT="$SCRIPT_DIR/deploy-teamd-containers.sh"
 TEAMDCTL_SCRIPT="$SCRIPT_DIR/teamdctl.sh"
 DIAGNOSTICS_SCRIPT="$SCRIPT_DIR/collect-teamd-diagnostics.sh"
 
@@ -25,6 +26,12 @@ assert_contains "$help_output" "Usage:"
 assert_contains "$help_output" "--dry-run"
 assert_contains "$help_output" "--non-interactive"
 
+containers_help_output=$("$CONTAINERS_DEPLOY_SCRIPT" --help)
+assert_contains "$containers_help_output" "container add-ons"
+assert_contains "$containers_help_output" "--with-obsidian"
+assert_contains "$containers_help_output" "--no-searxng"
+assert_contains "$containers_help_output" "--no-caddy"
+
 diagnostics_help_output=$("$DIAGNOSTICS_SCRIPT" --help)
 assert_contains "$diagnostics_help_output" "collects production diagnostics"
 assert_contains "$diagnostics_help_output" "--session"
@@ -42,6 +49,20 @@ assert_contains "$dry_run_output" "/usr/local/bin/agentd"
 assert_contains "$dry_run_output" "/usr/local/bin/teamdctl"
 assert_contains "$dry_run_output" "telegram pair"
 assert_contains "$dry_run_output" "session list"
+
+containers_dry_run_output=$(
+  "$CONTAINERS_DEPLOY_SCRIPT" --dry-run --non-interactive --no-start --with-obsidian 2>&1
+)
+
+assert_contains "$containers_dry_run_output" "DRY RUN"
+assert_contains "$containers_dry_run_output" "teamd-searxng"
+assert_contains "$containers_dry_run_output" "127.0.0.1:8888"
+assert_contains "$containers_dry_run_output" "mcp-searxng"
+assert_contains "$containers_dry_run_output" "teamd-obsidian"
+assert_contains "$containers_dry_run_output" "teamd-caddy"
+assert_contains "$containers_dry_run_output" "docker compose"
+assert_contains "$containers_dry_run_output" "TEAMD_WEB_SEARCH_BACKEND=searxng_json"
+assert_contains "$containers_dry_run_output" "TEAMD_WEB_SEARCH_URL=http://127.0.0.1:8888/search"
 
 existing_env_dir="$SCRIPT_DIR/../target/deploy-script-test"
 existing_env="$existing_env_dir/existing.env"

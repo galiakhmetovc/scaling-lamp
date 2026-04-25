@@ -113,6 +113,41 @@ export TEAMD_PROVIDER_API_KEY='replace-with-zai-key'
 - `compaction_max_output_tokens`
 - `compaction_max_summary_chars`
 
+### `[web]`
+
+Управляет встроенными web tools.
+
+Сейчас конфигурируется `web_search`:
+
+- `search_backend = "duckduckgo_html"` — default: встроенный HTML-парсер DuckDuckGo;
+- `search_backend = "searxng_json"` — локальный/свой SearXNG endpoint с JSON output;
+- `search_url` — endpoint поиска.
+
+Пример default:
+
+```toml
+[web]
+search_backend = "duckduckgo_html"
+search_url = "https://duckduckgo.com/html/"
+```
+
+Пример локального SearXNG из `scripts/deploy-teamd-containers.sh`:
+
+```toml
+[web]
+search_backend = "searxng_json"
+search_url = "http://127.0.0.1:8888/search"
+```
+
+То же через env:
+
+```bash
+export TEAMD_WEB_SEARCH_BACKEND='searxng_json'
+export TEAMD_WEB_SEARCH_URL='http://127.0.0.1:8888/search'
+```
+
+Важно: `web_fetch` не переключается на SearXNG. Это прямой HTTP fetch указанного URL. SearXNG закрывает именно search backend.
+
 ### `[runtime_timing]`
 
 Это теперь каноническое место для всех operator-facing timing policies:
@@ -154,6 +189,7 @@ export TEAMD_PROVIDER_API_KEY='replace-with-zai-key'
 - data dir;
 - daemon bind host/port/token/public URL/skills dir;
 - context compaction thresholds;
+- web search backend/URL;
 - Telegram bot token;
 - provider kind/base/key/model/timeouts/max rounds/max output tokens;
 - permission mode;

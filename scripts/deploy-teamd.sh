@@ -532,6 +532,10 @@ connect_timeout_seconds = 15
 stream_idle_timeout_seconds = 1200
 max_tool_rounds = 24
 
+[web]
+search_backend = "duckduckgo_html"
+search_url = "https://duckduckgo.com/html/"
+
 [permissions]
 mode = "default"
 EOF

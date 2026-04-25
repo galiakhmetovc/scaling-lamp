@@ -4,6 +4,7 @@ use super::{
 };
 use agent_runtime::permission::{PermissionAction, PermissionMode};
 use agent_runtime::provider::ProviderKind;
+use agent_runtime::tool::WebSearchBackend;
 use std::collections::BTreeMap;
 use std::ffi::OsString;
 use std::fs;
@@ -24,6 +25,8 @@ fn base_env(root: &Path) -> ConfigEnv {
         context_compaction_max_output_tokens_override: None,
         context_compaction_max_summary_chars_override: None,
         context_compaction_min_messages_override: None,
+        web_search_backend_override: None,
+        web_search_url_override: None,
         provider_api_base_override: None,
         provider_api_key_override: None,
         provider_connect_timeout_override: None,
@@ -85,6 +88,7 @@ fn validate_rejects_relative_data_dir() {
         provider: Default::default(),
         session_defaults: Default::default(),
         context: Default::default(),
+        web: Default::default(),
         runtime_timing: Default::default(),
         runtime_limits: Default::default(),
     };
@@ -328,8 +332,36 @@ fn config_example_toml_loads() {
     let config = AppConfig::load_from_env(&env).expect("load config example");
 
     assert_eq!(config.daemon.bind_port, 5140);
+    assert_eq!(config.web.search_backend, WebSearchBackend::DuckDuckGoHtml);
     assert_eq!(config.runtime_timing.daemon_http_request_timeout_ms, 5000);
     assert_eq!(config.runtime_limits.diagnostic_tail_lines, 80);
+}
+
+#[test]
+fn load_merges_web_search_backend_from_file_and_env() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let config_path = temp.path().join("teamd.toml");
+    fs::write(
+        &config_path,
+        r#"
+data_dir = "/tmp/teamd"
+
+[web]
+search_backend = "searxng_json"
+search_url = "http://127.0.0.1:8888/search"
+"#,
+    )
+    .expect("write config");
+
+    let mut env = base_env(temp.path());
+    env.config_path = Some(config_path);
+    env.web_search_backend_override = Some("duckduckgo_html".to_string());
+    env.web_search_url_override = Some("https://duckduckgo.com/html/".to_string());
+
+    let config = AppConfig::load_from_env(&env).expect("load config");
+
+    assert_eq!(config.web.search_backend, WebSearchBackend::DuckDuckGoHtml);
+    assert_eq!(config.web.search_url, "https://duckduckgo.com/html/");
 }
 
 #[test]
@@ -342,6 +374,7 @@ fn validate_rejects_invalid_runtime_limit_bounds() {
         provider: Default::default(),
         session_defaults: Default::default(),
         context: Default::default(),
+        web: Default::default(),
         runtime_timing: Default::default(),
         runtime_limits: super::RuntimeLimitsConfig {
             agent_list_default_limit: 200,

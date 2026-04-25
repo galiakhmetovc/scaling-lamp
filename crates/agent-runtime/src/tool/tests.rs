@@ -6,7 +6,7 @@ use super::{
     ProcessOutputStatus, ProcessOutputStream, ProcessReadOutputInput, ProcessResultStatus,
     ProcessWaitInput, SessionReadInput, SessionReadMode, SessionSearchInput, SessionWaitInput,
     SharedProcessRegistry, ToolCall, ToolCatalog, ToolFamily, ToolName, ToolRuntime, WebFetchInput,
-    WebSearchInput, WebToolClient,
+    WebSearchBackend, WebSearchInput, WebToolClient,
 };
 use crate::memory::SessionRetentionTier;
 use crate::workspace::WorkspaceRef;
@@ -1136,6 +1136,38 @@ fn web_search_parses_duckduckgo_html_with_extra_anchor_attributes() {
     assert_eq!(results[0].snippet.as_deref(), Some("Сейчас в Москве +7°"));
 }
 
+#[test]
+fn web_search_can_use_searxng_json_backend() {
+    let server = TestHttpServer::spawn();
+    let temp = tempfile::tempdir().expect("tempdir");
+    let workspace = WorkspaceRef::new(temp.path());
+    let mut runtime = ToolRuntime::with_web_client(
+        workspace,
+        WebToolClient::for_tests_with_search_backend(
+            WebSearchBackend::SearxngJson,
+            server.base_url(),
+            server.search_url(),
+        ),
+    );
+
+    let searched = runtime
+        .invoke(ToolCall::WebSearch(WebSearchInput {
+            query: "agent runtime".to_string(),
+            limit: 1,
+        }))
+        .expect("web_search")
+        .into_web_search()
+        .expect("web_search output");
+
+    assert_eq!(searched.results.len(), 1);
+    assert_eq!(searched.results[0].title, "SearXNG result");
+    assert_eq!(searched.results[0].url, "https://example.test/searxng");
+    assert_eq!(
+        searched.results[0].snippet.as_deref(),
+        Some("JSON search result")
+    );
+}
+
 struct TestHttpServer {
     base_url: String,
     search_url: String,
@@ -1160,21 +1192,35 @@ impl TestHttpServer {
                     .and_then(|line| line.split_whitespace().nth(1))
                     .unwrap_or("/");
 
-                let body = if path.starts_with("/search") {
-                    "<html><body>\
+                let (content_type, body) = if path.starts_with("/search")
+                    && path.contains("format=json")
+                {
+                    (
+                        "application/json",
+                        "{\"results\":[{\"title\":\"SearXNG result\",\"url\":\"https://example.test/searxng\",\"content\":\"JSON search result\"},{\"title\":\"Second\",\"url\":\"https://example.test/second\",\"content\":\"Ignored by limit\"}]}",
+                    )
+                } else if path.starts_with("/search") {
+                    (
+                        "text/html; charset=utf-8",
+                        "<html><body>\
                      <a class=\"result__a\" href=\"https://example.test/docs\">Agent runtime docs</a>\
                      <a class=\"result__snippet\">Typed tools and run engine</a>\
                      <a class=\"result__a\" href=\"https://example.test/blog\">Blog post</a>\
                      <a class=\"result__snippet\">Web tool coverage</a>\
-                     </body></html>"
+                     </body></html>",
+                    )
                 } else {
-                    "<html><head><title>Agent runtime page</title></head>\
-                     <body>Agent runtime page body</body></html>"
+                    (
+                        "text/html; charset=utf-8",
+                        "<html><head><title>Agent runtime page</title></head>\
+                     <body>Agent runtime page body</body></html>",
+                    )
                 };
 
                 write!(
                     stream,
-                    "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                    "HTTP/1.1 200 OK\r\nContent-Type: {}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                    content_type,
                     body.len(),
                     body
                 )

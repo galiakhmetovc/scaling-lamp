@@ -50,6 +50,13 @@ compaction_keep_tail_messages = 6
 compaction_max_output_tokens = 4096
 compaction_max_summary_chars = 12000
 
+[web]
+search_backend = "duckduckgo_html"
+search_url = "https://duckduckgo.com/html/"
+# Local SearXNG example:
+# search_backend = "searxng_json"
+# search_url = "http://127.0.0.1:8888/search"
+
 [runtime_timing]
 sqlite_busy_timeout_ms = 5000
 daemon_http_connect_timeout_ms = 2000

@@ -1,0 +1,544 @@
+#!/bin/sh
+set -eu
+
+PROGRAM=$(basename "$0")
+
+DRY_RUN=0
+NON_INTERACTIVE=0
+SKIP_START=0
+INSTALL_DOCKER=${TEAMD_CONTAINERS_INSTALL_DOCKER:-1}
+ENABLE_SEARXNG=1
+ENABLE_OBSIDIAN=0
+ENABLE_CADDY=1
+
+CONTAINERS_ROOT=${TEAMD_CONTAINERS_ROOT:-/opt/teamd/containers}
+DATA_ROOT=${TEAMD_CONTAINERS_DATA_ROOT:-/var/lib/teamd/containers}
+EDGE_NETWORK=${TEAMD_CONTAINERS_EDGE_NETWORK:-teamd-edge}
+
+SEARXNG_PORT=${TEAMD_SEARXNG_PORT:-8888}
+SEARXNG_IMAGE=${TEAMD_SEARXNG_IMAGE:-docker.io/searxng/searxng:latest}
+SEARXNG_DIR=$CONTAINERS_ROOT/searxng
+SEARXNG_CONFIG_DIR=$DATA_ROOT/searxng/config
+SEARXNG_DATA_DIR=$DATA_ROOT/searxng/data
+SEARXNG_COMPOSE=$SEARXNG_DIR/docker-compose.yml
+SEARXNG_SETTINGS=$SEARXNG_CONFIG_DIR/settings.yml
+SEARXNG_MCP_EXAMPLE=$SEARXNG_DIR/mcp-searxng.example.json
+
+OBSIDIAN_PORT=${TEAMD_OBSIDIAN_PORT:-8080}
+OBSIDIAN_IMAGE=${TEAMD_OBSIDIAN_IMAGE:-ghcr.io/sytone/obsidian-remote:latest}
+OBSIDIAN_DIR=$CONTAINERS_ROOT/obsidian
+OBSIDIAN_VAULTS_DIR=${TEAMD_OBSIDIAN_VAULTS_DIR:-/var/lib/teamd/vaults}
+OBSIDIAN_CONFIG_DIR=${TEAMD_OBSIDIAN_CONFIG_DIR:-$DATA_ROOT/obsidian/config}
+OBSIDIAN_COMPOSE=$OBSIDIAN_DIR/docker-compose.yml
+OBSIDIAN_PUID=${TEAMD_OBSIDIAN_PUID:-}
+OBSIDIAN_PGID=${TEAMD_OBSIDIAN_PGID:-}
+
+CADDY_DOMAIN=${TEAMD_CADDY_DOMAIN:-}
+if [ -n "${TEAMD_CADDY_HTTP_PORT:-}" ]; then
+  CADDY_HTTP_PORT=$TEAMD_CADDY_HTTP_PORT
+elif [ -n "$CADDY_DOMAIN" ]; then
+  CADDY_HTTP_PORT=80
+else
+  CADDY_HTTP_PORT=8088
+fi
+if [ -n "${TEAMD_CADDY_HTTPS_PORT:-}" ]; then
+  CADDY_HTTPS_PORT=$TEAMD_CADDY_HTTPS_PORT
+elif [ -n "$CADDY_DOMAIN" ]; then
+  CADDY_HTTPS_PORT=443
+else
+  CADDY_HTTPS_PORT=
+fi
+CADDY_IMAGE=${TEAMD_CADDY_IMAGE:-docker.io/library/caddy:2}
+CADDY_DIR=$CONTAINERS_ROOT/caddy
+CADDY_DATA_DIR=$DATA_ROOT/caddy/data
+CADDY_CONFIG_DIR=$DATA_ROOT/caddy/config
+CADDY_COMPOSE=$CADDY_DIR/docker-compose.yml
+CADDYFILE=$CADDY_DIR/Caddyfile
+
+usage() {
+  cat <<EOF
+Usage: $PROGRAM [options]
+
+Deploy teamD container add-ons without changing the main agentd deploy path.
+
+By default this installs/uses Docker Engine, deploys a local SearXNG instance
+bound to 127.0.0.1:$SEARXNG_PORT, and starts Caddy as an edge reverse proxy.
+Obsidian is opt-in.
+
+Options:
+  --dry-run             Print actions without changing the system.
+  --non-interactive     Do not prompt.
+  --no-install-docker   Fail if Docker Engine or Docker Compose plugin is missing.
+  --no-start            Write files but do not start containers.
+  --no-searxng          Do not deploy SearXNG.
+  --no-caddy            Do not deploy Caddy reverse proxy.
+  --with-obsidian       Also deploy browser-accessible Obsidian container.
+  --searxng-port PORT   Local SearXNG port, default: $SEARXNG_PORT.
+  --obsidian-port PORT  Local Obsidian port, default: $OBSIDIAN_PORT.
+  -h, --help            Show this help.
+
+Environment overrides:
+  TEAMD_CONTAINERS_ROOT          Compose files root, default: $CONTAINERS_ROOT.
+  TEAMD_CONTAINERS_DATA_ROOT     Persistent container data root, default: $DATA_ROOT.
+  TEAMD_CONTAINERS_EDGE_NETWORK  Shared Docker network, default: $EDGE_NETWORK.
+  TEAMD_CONTAINERS_INSTALL_DOCKER
+                                 Auto-install Docker when missing, default: $INSTALL_DOCKER.
+  TEAMD_SEARXNG_IMAGE            SearXNG image, default: $SEARXNG_IMAGE.
+  TEAMD_SEARXNG_PORT             SearXNG localhost port, default: $SEARXNG_PORT.
+  TEAMD_OBSIDIAN_IMAGE           Obsidian image, default: $OBSIDIAN_IMAGE.
+  TEAMD_OBSIDIAN_PORT            Obsidian localhost port, default: $OBSIDIAN_PORT.
+  TEAMD_OBSIDIAN_VAULTS_DIR      Vaults directory, default: $OBSIDIAN_VAULTS_DIR.
+  TEAMD_OBSIDIAN_CONFIG_DIR      Obsidian config directory, default: $OBSIDIAN_CONFIG_DIR.
+  TEAMD_CADDY_DOMAIN             Optional base domain; creates search.<domain> and obsidian.<domain>.
+  TEAMD_CADDY_HTTP_PORT          Caddy HTTP host port, default: $CADDY_HTTP_PORT.
+  TEAMD_CADDY_HTTPS_PORT         Caddy HTTPS host port, default: ${CADDY_HTTPS_PORT:-disabled}.
+EOF
+}
+
+fail() {
+  printf 'error: %s\n' "$1" >&2
+  exit 1
+}
+
+quote_arg() {
+  printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")"
+}
+
+print_cmd() {
+  printf '+'
+  for arg in "$@"; do
+    printf ' %s' "$(quote_arg "$arg")"
+  done
+  printf '\n'
+}
+
+run_cmd() {
+  if [ "$DRY_RUN" -eq 1 ]; then
+    print_cmd "$@"
+  else
+    "$@"
+  fi
+}
+
+run_root() {
+  if [ "$(id -u)" -eq 0 ]; then
+    run_cmd "$@"
+  else
+    run_cmd sudo "$@"
+  fi
+}
+
+need_command() {
+  command -v "$1" >/dev/null 2>&1 || fail "required command not found: $1"
+}
+
+valid_port() {
+  case "$1" in
+    ''|*[!0-9]*) return 1 ;;
+    *)
+      [ "$1" -ge 1 ] && [ "$1" -le 65535 ]
+      ;;
+  esac
+}
+
+docker_compose_available() {
+  command -v docker >/dev/null 2>&1 && docker compose version >/dev/null 2>&1
+}
+
+detect_os_for_docker_apt() {
+  [ -r /etc/os-release ] || return 1
+  # shellcheck disable=SC1091
+  . /etc/os-release
+  case "${ID:-}" in
+    ubuntu|debian)
+      printf '%s %s\n' "$ID" "${UBUNTU_CODENAME:-${VERSION_CODENAME:-}}"
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
+install_docker_with_apt() {
+  os_info=$(detect_os_for_docker_apt || true)
+  [ -n "$os_info" ] || fail "Docker auto-install currently supports Ubuntu/Debian apt only"
+  set -- $os_info
+  docker_os=$1
+  docker_codename=${2:-}
+  [ -n "$docker_codename" ] || fail "cannot detect OS codename for Docker apt repository"
+
+  printf 'Installing Docker Engine and Compose plugin from Docker apt repository.\n'
+  run_root env DEBIAN_FRONTEND=noninteractive apt-get update
+  run_root env DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+    ca-certificates curl
+  run_root install -m 0755 -d /etc/apt/keyrings
+  run_root sh -c "curl -fsSL https://download.docker.com/linux/$docker_os/gpg -o /etc/apt/keyrings/docker.asc"
+  run_root chmod a+r /etc/apt/keyrings/docker.asc
+  arch=$(dpkg --print-architecture)
+  run_root sh -c "cat > /etc/apt/sources.list.d/docker.sources <<EOF
+Types: deb
+URIs: https://download.docker.com/linux/$docker_os
+Suites: $docker_codename
+Components: stable
+Architectures: $arch
+Signed-By: /etc/apt/keyrings/docker.asc
+EOF"
+  run_root env DEBIAN_FRONTEND=noninteractive apt-get update
+  run_root env DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+    docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+  if command -v systemctl >/dev/null 2>&1; then
+    run_root systemctl enable --now docker
+  fi
+}
+
+ensure_docker() {
+  if [ "$DRY_RUN" -eq 1 ]; then
+    printf 'DRY RUN: ensure Docker Engine and Docker Compose plugin are available.\n'
+    return 0
+  fi
+
+  if docker_compose_available; then
+    return 0
+  fi
+
+  if [ "$INSTALL_DOCKER" != "1" ]; then
+    fail "Docker Engine with Compose plugin is required; install Docker or omit --no-install-docker"
+  fi
+
+  install_docker_with_apt
+  docker_compose_available || fail "Docker Compose plugin is still unavailable after Docker install"
+}
+
+ensure_edge_network() {
+  if [ "$DRY_RUN" -eq 1 ]; then
+    print_cmd docker network create "$EDGE_NETWORK"
+    return 0
+  fi
+
+  if docker network inspect "$EDGE_NETWORK" >/dev/null 2>&1; then
+    return 0
+  fi
+  run_root docker network create "$EDGE_NETWORK"
+}
+
+generate_secret_key() {
+  if command -v openssl >/dev/null 2>&1; then
+    openssl rand -hex 32
+    return 0
+  fi
+  od -An -N32 -tx1 /dev/urandom | tr -d ' \n'
+}
+
+write_searxng_files() {
+  if [ "$DRY_RUN" -eq 1 ]; then
+    print_cmd mkdir -p "$SEARXNG_DIR" "$SEARXNG_CONFIG_DIR" "$SEARXNG_DATA_DIR"
+    print_cmd sh -c "write $SEARXNG_COMPOSE, $SEARXNG_SETTINGS and $SEARXNG_MCP_EXAMPLE"
+    return 0
+  fi
+
+  run_root mkdir -p "$SEARXNG_DIR" "$SEARXNG_CONFIG_DIR" "$SEARXNG_DATA_DIR"
+  secret_key=$(generate_secret_key)
+
+  tmp_settings=$(mktemp)
+  tmp_compose=$(mktemp)
+  tmp_mcp=$(mktemp)
+  trap 'rm -f "$tmp_settings" "$tmp_compose" "$tmp_mcp"' EXIT INT TERM
+
+  cat > "$tmp_settings" <<EOF
+use_default_settings: true
+
+server:
+  secret_key: "$secret_key"
+  limiter: false
+  image_proxy: false
+
+search:
+  formats:
+    - html
+    - json
+EOF
+
+  cat > "$tmp_compose" <<EOF
+services:
+  searxng:
+    image: $SEARXNG_IMAGE
+    container_name: teamd-searxng
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:$SEARXNG_PORT:8080"
+    networks:
+      - $EDGE_NETWORK
+    volumes:
+      - "$SEARXNG_CONFIG_DIR:/etc/searxng:rw"
+      - "$SEARXNG_DATA_DIR:/var/cache/searxng:rw"
+    environment:
+      - SEARXNG_BASE_URL=http://127.0.0.1:$SEARXNG_PORT/
+      - FORCE_OWNERSHIP=true
+
+networks:
+  $EDGE_NETWORK:
+    external: true
+EOF
+
+  cat > "$tmp_mcp" <<EOF
+{
+  "mcpServers": {
+    "searxng": {
+      "command": "npx",
+      "args": ["-y", "mcp-searxng"],
+      "env": {
+        "SEARXNG_URL": "http://127.0.0.1:$SEARXNG_PORT"
+      }
+    }
+  }
+}
+EOF
+
+  run_root install -m 0644 -o root -g root "$tmp_settings" "$SEARXNG_SETTINGS"
+  run_root install -m 0644 -o root -g root "$tmp_compose" "$SEARXNG_COMPOSE"
+  run_root install -m 0644 -o root -g root "$tmp_mcp" "$SEARXNG_MCP_EXAMPLE"
+}
+
+resolve_obsidian_ids() {
+  if [ -n "$OBSIDIAN_PUID" ] && [ -n "$OBSIDIAN_PGID" ]; then
+    return 0
+  fi
+
+  if id -u teamd >/dev/null 2>&1; then
+    OBSIDIAN_PUID=$(id -u teamd)
+    OBSIDIAN_PGID=$(id -g teamd)
+  else
+    OBSIDIAN_PUID=$(id -u)
+    OBSIDIAN_PGID=$(id -g)
+  fi
+}
+
+write_obsidian_files() {
+  resolve_obsidian_ids
+
+  if [ "$DRY_RUN" -eq 1 ]; then
+    print_cmd mkdir -p "$OBSIDIAN_DIR" "$OBSIDIAN_VAULTS_DIR" "$OBSIDIAN_CONFIG_DIR"
+    print_cmd sh -c "write $OBSIDIAN_COMPOSE for teamd-obsidian"
+    return 0
+  fi
+
+  run_root mkdir -p "$OBSIDIAN_DIR" "$OBSIDIAN_VAULTS_DIR" "$OBSIDIAN_CONFIG_DIR"
+  tmp_compose=$(mktemp)
+  trap 'rm -f "$tmp_compose"' EXIT INT TERM
+
+  cat > "$tmp_compose" <<EOF
+services:
+  obsidian:
+    image: $OBSIDIAN_IMAGE
+    container_name: teamd-obsidian
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:$OBSIDIAN_PORT:8080"
+    networks:
+      - $EDGE_NETWORK
+    volumes:
+      - "$OBSIDIAN_VAULTS_DIR:/vaults:rw"
+      - "$OBSIDIAN_CONFIG_DIR:/config:rw"
+    environment:
+      - PUID=$OBSIDIAN_PUID
+      - PGID=$OBSIDIAN_PGID
+      - TZ=Etc/UTC
+      - CUSTOM_PORT=8080
+      - SUBFOLDER=obsidian
+      - DOCKER_MODS=linuxserver/mods:universal-git
+
+networks:
+  $EDGE_NETWORK:
+    external: true
+EOF
+
+  run_root install -m 0644 -o root -g root "$tmp_compose" "$OBSIDIAN_COMPOSE"
+}
+
+write_caddy_files() {
+  if [ "$DRY_RUN" -eq 1 ]; then
+    print_cmd mkdir -p "$CADDY_DIR" "$CADDY_DATA_DIR" "$CADDY_CONFIG_DIR"
+    print_cmd sh -c "write $CADDY_COMPOSE and $CADDYFILE for teamd-caddy"
+    return 0
+  fi
+
+  run_root mkdir -p "$CADDY_DIR" "$CADDY_DATA_DIR" "$CADDY_CONFIG_DIR"
+  tmp_compose=$(mktemp)
+  tmp_caddyfile=$(mktemp)
+  trap 'rm -f "$tmp_compose" "$tmp_caddyfile"' EXIT INT TERM
+
+  ports_block="      - \"$CADDY_HTTP_PORT:80\""
+  if [ -n "$CADDY_HTTPS_PORT" ]; then
+    ports_block="$ports_block
+      - \"$CADDY_HTTPS_PORT:443\""
+  fi
+
+  cat > "$tmp_compose" <<EOF
+services:
+  caddy:
+    image: $CADDY_IMAGE
+    container_name: teamd-caddy
+    restart: unless-stopped
+    ports:
+$ports_block
+    volumes:
+      - "$CADDYFILE:/etc/caddy/Caddyfile:ro"
+      - "$CADDY_DATA_DIR:/data:rw"
+      - "$CADDY_CONFIG_DIR:/config:rw"
+    networks:
+      - $EDGE_NETWORK
+
+networks:
+  $EDGE_NETWORK:
+    external: true
+EOF
+
+  if [ -n "$CADDY_DOMAIN" ]; then
+    cat > "$tmp_caddyfile" <<EOF
+search.$CADDY_DOMAIN {
+  reverse_proxy teamd-searxng:8080
+}
+
+obsidian.$CADDY_DOMAIN {
+  reverse_proxy teamd-obsidian:8080
+}
+EOF
+  else
+    cat > "$tmp_caddyfile" <<EOF
+:80 {
+  handle_path /searxng/* {
+    reverse_proxy teamd-searxng:8080
+  }
+
+  handle_path /obsidian/* {
+    reverse_proxy teamd-obsidian:8080
+  }
+
+  respond / "teamD container edge: /searxng/ and /obsidian/"
+}
+EOF
+  fi
+
+  run_root install -m 0644 -o root -g root "$tmp_compose" "$CADDY_COMPOSE"
+  run_root install -m 0644 -o root -g root "$tmp_caddyfile" "$CADDYFILE"
+}
+
+compose_up() {
+  compose_file=$1
+  if [ "$SKIP_START" -eq 1 ]; then
+    printf 'Skipping container start for %s because --no-start was set.\n' "$compose_file"
+    return 0
+  fi
+  run_root docker compose -f "$compose_file" up -d
+}
+
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --dry-run) DRY_RUN=1 ;;
+    --non-interactive) NON_INTERACTIVE=1 ;;
+    --no-install-docker) INSTALL_DOCKER=0 ;;
+    --no-start) SKIP_START=1 ;;
+    --no-searxng) ENABLE_SEARXNG=0 ;;
+    --no-caddy) ENABLE_CADDY=0 ;;
+    --with-obsidian) ENABLE_OBSIDIAN=1 ;;
+    --searxng-port)
+      shift
+      [ "$#" -gt 0 ] || fail "--searxng-port requires a value"
+      valid_port "$1" || fail "invalid --searxng-port: $1"
+      SEARXNG_PORT=$1
+      ;;
+    --obsidian-port)
+      shift
+      [ "$#" -gt 0 ] || fail "--obsidian-port requires a value"
+      valid_port "$1" || fail "invalid --obsidian-port: $1"
+      OBSIDIAN_PORT=$1
+      ;;
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    *) fail "unknown option: $1" ;;
+  esac
+  shift
+done
+
+[ "$NON_INTERACTIVE" -eq 0 ] || true
+
+if [ "$DRY_RUN" -eq 1 ]; then
+  printf 'DRY RUN: no Docker packages, compose files, data directories or containers will be changed.\n'
+fi
+
+need_command id
+need_command sed
+
+if [ "$(id -u)" -ne 0 ] && [ "$DRY_RUN" -eq 0 ]; then
+  need_command sudo
+fi
+
+if [ "$ENABLE_SEARXNG" -eq 0 ] && [ "$ENABLE_OBSIDIAN" -eq 0 ] && [ "$ENABLE_CADDY" -eq 0 ]; then
+  fail "nothing to deploy: SearXNG disabled and Obsidian not enabled"
+fi
+
+ensure_docker
+ensure_edge_network
+
+if [ "$ENABLE_SEARXNG" -eq 1 ]; then
+  write_searxng_files
+  compose_up "$SEARXNG_COMPOSE"
+fi
+
+if [ "$ENABLE_OBSIDIAN" -eq 1 ]; then
+  write_obsidian_files
+  compose_up "$OBSIDIAN_COMPOSE"
+fi
+
+if [ "$ENABLE_CADDY" -eq 1 ]; then
+  write_caddy_files
+  compose_up "$CADDY_COMPOSE"
+fi
+
+cat <<EOF
+
+Container add-ons:
+EOF
+
+if [ "$ENABLE_SEARXNG" -eq 1 ]; then
+  cat <<EOF
+  SearXNG:
+    Container: teamd-searxng
+    URL: http://127.0.0.1:$SEARXNG_PORT
+    Compose: $SEARXNG_COMPOSE
+    Start command: docker compose -f $SEARXNG_COMPOSE up -d
+    Settings: $SEARXNG_SETTINGS
+    agentd web_search:
+      TEAMD_WEB_SEARCH_BACKEND=searxng_json
+      TEAMD_WEB_SEARCH_URL=http://127.0.0.1:$SEARXNG_PORT/search
+    MCP example: $SEARXNG_MCP_EXAMPLE
+    MCP env: SEARXNG_URL=http://127.0.0.1:$SEARXNG_PORT
+    JSON smoke: curl 'http://127.0.0.1:$SEARXNG_PORT/search?q=test&format=json'
+EOF
+fi
+
+if [ "$ENABLE_OBSIDIAN" -eq 1 ]; then
+  cat <<EOF
+  Obsidian:
+    Container: teamd-obsidian
+    URL: http://127.0.0.1:$OBSIDIAN_PORT
+    Compose: $OBSIDIAN_COMPOSE
+    Start command: docker compose -f $OBSIDIAN_COMPOSE up -d
+    Vaults: $OBSIDIAN_VAULTS_DIR
+EOF
+fi
+
+if [ "$ENABLE_CADDY" -eq 1 ]; then
+  cat <<EOF
+  Caddy:
+    Container: teamd-caddy
+    URL: http://127.0.0.1:$CADDY_HTTP_PORT
+    Compose: $CADDY_COMPOSE
+    Start command: docker compose -f $CADDY_COMPOSE up -d
+    Caddyfile: $CADDYFILE
+    Routes without TEAMD_CADDY_DOMAIN: /searxng/ and /obsidian/
+    Routes with TEAMD_CADDY_DOMAIN: search.<domain> and obsidian.<domain>
+EOF
+fi

@@ -1,6 +1,7 @@
 use agent_runtime::mcp::McpConnectorTransport;
 use agent_runtime::permission::{PermissionConfig, PermissionMode};
 use agent_runtime::provider::{ConfiguredProvider, ProviderKind};
+use agent_runtime::tool::WebSearchBackend;
 use agent_runtime::{context::CompactionPolicy, session::SessionSettings};
 use serde::Deserialize;
 use std::collections::BTreeMap;
@@ -16,6 +17,7 @@ const DEFAULT_ZAI_MODEL: &str = "glm-5-turbo";
 const DEFAULT_DAEMON_BIND_HOST: &str = "127.0.0.1";
 const DEFAULT_DAEMON_BIND_PORT: u16 = 5140;
 const DEFAULT_DAEMON_SKILLS_DIR: &str = "skills";
+const DEFAULT_WEB_SEARCH_URL: &str = "https://duckduckgo.com/html/";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AppConfig {
@@ -26,6 +28,7 @@ pub struct AppConfig {
     pub provider: ConfiguredProvider,
     pub session_defaults: SessionDefaultsConfig,
     pub context: ContextConfig,
+    pub web: WebConfig,
     pub runtime_timing: RuntimeTimingConfig,
     pub runtime_limits: RuntimeLimitsConfig,
 }
@@ -72,6 +75,13 @@ pub struct ContextConfig {
     pub compaction_keep_tail_messages: usize,
     pub compaction_max_output_tokens: u32,
     pub compaction_max_summary_chars: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(default)]
+pub struct WebConfig {
+    pub search_backend: WebSearchBackend,
+    pub search_url: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
@@ -162,6 +172,8 @@ pub struct ConfigEnv {
     pub context_compaction_max_output_tokens_override: Option<u32>,
     pub context_compaction_max_summary_chars_override: Option<usize>,
     pub context_compaction_min_messages_override: Option<usize>,
+    pub web_search_backend_override: Option<String>,
+    pub web_search_url_override: Option<String>,
     pub provider_api_base_override: Option<String>,
     pub provider_api_key_override: Option<String>,
     pub provider_connect_timeout_override: Option<u64>,
@@ -219,6 +231,7 @@ struct FileConfig {
     provider: Option<ConfiguredProvider>,
     session_defaults: Option<SessionDefaultsConfig>,
     context: Option<ContextConfig>,
+    web: Option<WebConfig>,
     runtime_timing: Option<RuntimeTimingConfig>,
     runtime_limits: Option<RuntimeLimitsConfig>,
 }
@@ -251,6 +264,15 @@ impl Default for TelegramConfig {
             private_chat_auto_create_session: true,
             group_require_mention: true,
             default_autoapprove: true,
+        }
+    }
+}
+
+impl Default for WebConfig {
+    fn default() -> Self {
+        Self {
+            search_backend: WebSearchBackend::default(),
+            search_url: DEFAULT_WEB_SEARCH_URL.to_string(),
         }
     }
 }
@@ -502,6 +524,8 @@ impl ConfigEnv {
                 "TEAMD_CONTEXT_COMPACTION_MIN_MESSAGES",
                 &dotenv,
             )?,
+            web_search_backend_override: read_string_var("TEAMD_WEB_SEARCH_BACKEND", &dotenv),
+            web_search_url_override: read_string_var("TEAMD_WEB_SEARCH_URL", &dotenv),
             provider_api_base_override: read_string_var("TEAMD_PROVIDER_API_BASE", &dotenv),
             provider_api_key_override: read_string_var("TEAMD_PROVIDER_API_KEY", &dotenv),
             provider_connect_timeout_override: read_u64_var(
@@ -609,6 +633,10 @@ impl AppConfig {
             .as_ref()
             .and_then(|config| config.context.clone())
             .unwrap_or_default();
+        let mut web = file_config
+            .as_ref()
+            .and_then(|config| config.web.clone())
+            .unwrap_or_default();
         let runtime_timing = file_config
             .as_ref()
             .and_then(|config| config.runtime_timing.clone())
@@ -687,6 +715,12 @@ impl AppConfig {
         if let Some(value) = env.context_compaction_max_summary_chars_override {
             context.compaction_max_summary_chars = value;
         }
+        if let Some(search_backend) = env.web_search_backend_override.as_deref() {
+            web.search_backend = parse_web_search_backend(search_backend)?;
+        }
+        if let Some(search_url) = &env.web_search_url_override {
+            web.search_url = search_url.clone();
+        }
         if provider.kind == ProviderKind::ZaiChatCompletions && provider.api_base.is_none() {
             provider.api_base = Some(DEFAULT_ZAI_API_BASE.to_string());
         }
@@ -702,6 +736,7 @@ impl AppConfig {
             provider,
             session_defaults,
             context,
+            web,
             runtime_timing,
             runtime_limits,
         };
@@ -787,6 +822,14 @@ impl AppConfig {
             return Err(ConfigError::InvalidProviderValue {
                 name: "telegram.bot_token",
                 value: bot_token.clone(),
+                reason: "must not be empty",
+            });
+        }
+
+        if self.web.search_url.trim().is_empty() {
+            return Err(ConfigError::InvalidProviderValue {
+                name: "web.search_url",
+                value: self.web.search_url.clone(),
                 reason: "must not be empty",
             });
         }
@@ -1127,6 +1170,7 @@ fn load_file_config(path: &Path, required: bool) -> Result<FileConfig, ConfigErr
                 provider: None,
                 session_defaults: None,
                 context: None,
+                web: None,
                 runtime_timing: None,
                 runtime_limits: None,
             });
@@ -1240,6 +1284,18 @@ fn parse_provider_kind(value: &str) -> Result<ProviderKind, ConfigError> {
     ProviderKind::try_from(value).map_err(|_| ConfigError::InvalidProviderKind {
         value: value.to_string(),
     })
+}
+
+fn parse_web_search_backend(value: &str) -> Result<WebSearchBackend, ConfigError> {
+    match value {
+        "duckduckgo_html" => Ok(WebSearchBackend::DuckDuckGoHtml),
+        "searxng_json" => Ok(WebSearchBackend::SearxngJson),
+        _ => Err(ConfigError::InvalidProviderValue {
+            name: "web.search_backend",
+            value: value.to_string(),
+            reason: "supported values are duckduckgo_html and searxng_json",
+        }),
+    }
 }
 
 fn parse_permission_mode(value: &str) -> Result<PermissionMode, ConfigError> {
@@ -1433,6 +1489,7 @@ impl Default for AppConfig {
             provider: ConfiguredProvider::default(),
             session_defaults: SessionDefaultsConfig::default(),
             context: ContextConfig::default(),
+            web: WebConfig::default(),
             runtime_timing: RuntimeTimingConfig::default(),
             runtime_limits: RuntimeLimitsConfig::default(),
         }

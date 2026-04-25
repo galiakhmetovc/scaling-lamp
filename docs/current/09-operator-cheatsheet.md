@@ -47,6 +47,36 @@ TEAMD_TELEGRAM_BOT_TOKEN='123456789:test-token' \
 ./scripts/deploy-teamd.sh --no-install-system-deps
 ```
 
+## Container add-ons
+
+Полная инструкция: [14-container-addons.md](14-container-addons.md).
+
+Core `agentd` ставится отдельно от контейнерной обвязки. Второй скрипт поднимает SearXNG/Caddy и опционально Obsidian:
+
+```bash
+./scripts/deploy-teamd-containers.sh
+./scripts/deploy-teamd-containers.sh --with-obsidian
+```
+
+Проверка без изменений:
+
+```bash
+./scripts/deploy-teamd-containers.sh --dry-run --non-interactive --no-start --with-obsidian
+```
+
+Чтобы переключить встроенный `web_search` на SearXNG, добавьте в `/etc/teamd/teamd.env`:
+
+```bash
+TEAMD_WEB_SEARCH_BACKEND='searxng_json'
+TEAMD_WEB_SEARCH_URL='http://127.0.0.1:8888/search'
+```
+
+и перезапустите:
+
+```bash
+sudo systemctl restart teamd-daemon.service teamd-telegram.service
+```
+
 Минимальный набор:
 
 ```bash

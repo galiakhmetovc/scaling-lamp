@@ -33,7 +33,10 @@ use agent_runtime::provider::{ProviderDriver, ProviderError};
 use agent_runtime::run::{RunEngine, RunSnapshot, RunStatus, RunTransitionError};
 use agent_runtime::scheduler::{MissionVerificationSummary, SupervisorAction, SupervisorLoop};
 use agent_runtime::session::{Session, SessionSettings};
-use agent_runtime::tool::{SharedProcessRegistry, ToolCall, ToolError, ToolName, ToolRuntime};
+use agent_runtime::tool::{
+    SharedProcessRegistry, ToolCall, ToolError, ToolName, ToolRuntime, WebSearchBackend,
+    WebToolClient,
+};
 use agent_runtime::verification::EvidenceBundle;
 use agent_runtime::workspace::WorkspaceRef;
 use serde::{Deserialize, Serialize};
@@ -170,6 +173,8 @@ pub struct ExecutionServiceConfig {
     pub a2a_public_base_url: Option<String>,
     pub a2a_callback_bearer_token: Option<String>,
     pub a2a_peers: BTreeMap<String, A2APeerConfig>,
+    pub web_search_backend: WebSearchBackend,
+    pub web_search_url: String,
     pub runtime_timing: RuntimeTimingConfig,
     pub runtime_limits: RuntimeLimitsConfig,
 }
@@ -186,6 +191,8 @@ impl Default for ExecutionServiceConfig {
             a2a_public_base_url: None,
             a2a_callback_bearer_token: None,
             a2a_peers: BTreeMap::new(),
+            web_search_backend: WebSearchBackend::default(),
+            web_search_url: "https://duckduckgo.com/html/".to_string(),
             runtime_timing: RuntimeTimingConfig::default(),
             runtime_limits: RuntimeLimitsConfig::default(),
         }
@@ -285,7 +292,14 @@ impl ExecutionService {
     }
 
     fn tool_runtime(&self) -> ToolRuntime {
-        ToolRuntime::with_shared_process_registry(self.workspace.clone(), self.processes.clone())
+        ToolRuntime::with_web_client_and_process_registry(
+            self.workspace.clone(),
+            WebToolClient::new(
+                self.config.web_search_backend,
+                self.config.web_search_url.clone(),
+            ),
+            self.processes.clone(),
+        )
     }
 
     fn load_session(

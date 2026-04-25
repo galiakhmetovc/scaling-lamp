@@ -31,6 +31,7 @@
 8. [11-workspace-modernization-plan.md](11-workspace-modernization-plan.md)
 9. [12-prompt-contract-decision.md](12-prompt-contract-decision.md)
 10. [13-observability-tracing-plan.md](13-observability-tracing-plan.md)
+11. [14-container-addons.md](14-container-addons.md)
 
 ## Словарь
 
@@ -47,6 +48,7 @@
 - **SessionHead** — сжатая сводка о состоянии сессии, которую модель получает перед transcript tail.
 - **Prompt contract** — договорённость о том, какие runtime/user/history blocks модель получает, в каком порядке и с какими ограничениями размера.
 - **Trace / span** — спорная observability-модель для причинной связи между surface event, run, tool call, artifact и delivery; см. [13-observability-tracing-plan.md](13-observability-tracing-plan.md).
+- **Container add-ons** — внешняя обвязка вокруг host `agentd`: Docker, SearXNG, Obsidian, Caddy; см. [14-container-addons.md](14-container-addons.md).
 
 ## Где искать код
 

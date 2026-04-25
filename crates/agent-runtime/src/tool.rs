@@ -1403,7 +1403,17 @@ pub struct ToolRuntime {
 #[derive(Debug, Clone)]
 pub struct WebToolClient {
     client: Client,
+    search_backend: WebSearchBackend,
     search_url: String,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum WebSearchBackend {
+    #[serde(rename = "duckduckgo_html")]
+    #[default]
+    DuckDuckGoHtml,
+    #[serde(rename = "searxng_json")]
+    SearxngJson,
 }
 
 #[derive(Debug)]
@@ -5766,18 +5776,39 @@ impl Default for WebToolClient {
                 .user_agent("teamd-agent/0.1")
                 .build()
                 .expect("web tool client"),
+            search_backend: WebSearchBackend::default(),
             search_url: "https://duckduckgo.com/html/".to_string(),
         }
     }
 }
 
 impl WebToolClient {
+    pub fn new(search_backend: WebSearchBackend, search_url: impl Into<String>) -> Self {
+        Self {
+            client: Client::builder()
+                .user_agent("teamd-agent/0.1")
+                .build()
+                .expect("web tool client"),
+            search_backend,
+            search_url: search_url.into(),
+        }
+    }
+
     pub fn for_tests(_base_url: impl Into<String>, search_url: impl Into<String>) -> Self {
+        Self::for_tests_with_search_backend(WebSearchBackend::DuckDuckGoHtml, _base_url, search_url)
+    }
+
+    pub fn for_tests_with_search_backend(
+        search_backend: WebSearchBackend,
+        _base_url: impl Into<String>,
+        search_url: impl Into<String>,
+    ) -> Self {
         Self {
             client: Client::builder()
                 .user_agent("teamd-agent-test/0.1")
                 .build()
                 .expect("test web tool client"),
+            search_backend,
             search_url: search_url.into(),
         }
     }
@@ -5814,13 +5845,24 @@ impl WebToolClient {
             });
         }
 
-        let mut url = Url::parse(&self.search_url).map_err(|_| ToolError::InvalidWebRequest {
-            reason: format!("invalid search URL: {}", self.search_url),
-        })?;
-        url.query_pairs_mut().append_pair("q", query);
+        let mut url = self.search_url()?;
+        {
+            let mut query_pairs = url.query_pairs_mut();
+            query_pairs.append_pair("q", query);
+            if self.search_backend == WebSearchBackend::SearxngJson {
+                query_pairs.append_pair("format", "json");
+            }
+        }
 
         let fetch = self.fetch(url.as_str())?;
-        let mut results = parse_search_results(&fetch.body, fetch.url.as_str())?;
+        let mut results = match self.search_backend {
+            WebSearchBackend::DuckDuckGoHtml => {
+                parse_search_results(&fetch.body, fetch.url.as_str())?
+            }
+            WebSearchBackend::SearxngJson => {
+                parse_searxng_json_results(&fetch.body, fetch.url.as_str())?
+            }
+        };
         if limit > 0 && results.len() > limit {
             results.truncate(limit);
         }
@@ -5828,6 +5870,12 @@ impl WebToolClient {
         Ok(WebSearchOutput {
             query: query.to_string(),
             results,
+        })
+    }
+
+    fn search_url(&self) -> Result<Url, ToolError> {
+        Url::parse(&self.search_url).map_err(|_| ToolError::InvalidWebRequest {
+            reason: format!("invalid search URL: {}", self.search_url),
         })
     }
 }
@@ -5973,6 +6021,50 @@ fn parse_search_results(html: &str, source_url: &str) -> Result<Vec<WebSearchRes
     }
 
     Ok(results)
+}
+
+#[derive(Debug, Deserialize)]
+struct SearxngSearchResponse {
+    #[serde(default)]
+    results: Vec<SearxngSearchResult>,
+}
+
+#[derive(Debug, Deserialize)]
+struct SearxngSearchResult {
+    title: Option<String>,
+    url: Option<String>,
+    content: Option<String>,
+}
+
+fn parse_searxng_json_results(
+    body: &str,
+    source_url: &str,
+) -> Result<Vec<WebSearchResult>, ToolError> {
+    let response: SearxngSearchResponse =
+        serde_json::from_str(body).map_err(|error| ToolError::WebParse {
+            url: source_url.to_string(),
+            reason: format!("invalid SearXNG JSON response: {error}"),
+        })?;
+
+    Ok(response
+        .results
+        .into_iter()
+        .filter_map(|result| {
+            let title = result.title?.trim().to_string();
+            let url = result.url?.trim().to_string();
+            if title.is_empty() || url.is_empty() {
+                return None;
+            }
+            Some(WebSearchResult {
+                title,
+                url,
+                snippet: result
+                    .content
+                    .map(|content| content.trim().to_string())
+                    .filter(|content| !content.is_empty()),
+            })
+        })
+        .collect())
 }
 
 fn find_anchor_tag_with_class<'a>(

@@ -275,6 +275,8 @@ impl App {
                 a2a_public_base_url: self.config.daemon.public_base_url.clone(),
                 a2a_callback_bearer_token: self.config.daemon.bearer_token.clone(),
                 a2a_peers: self.config.daemon.a2a_peers.clone(),
+                web_search_backend: self.config.web.search_backend,
+                web_search_url: self.config.web.search_url.clone(),
                 runtime_timing: self.config.runtime_timing.clone(),
                 runtime_limits: self.config.runtime_limits.clone(),
             },
