@@ -80,6 +80,11 @@ containers_dry_run_start_output=$(
 assert_contains "$containers_dry_run_start_output" "'caddy' 'reload'"
 assert_contains "$containers_dry_run_start_output" "--force-recreate"
 
+grep -q 'redir /searxng /searxng/ 308' "$CONTAINERS_DEPLOY_SCRIPT" \
+  || fail "expected SearXNG slash redirect in Caddyfile template"
+grep -q 'header_up X-Script-Name /searxng' "$CONTAINERS_DEPLOY_SCRIPT" \
+  || fail "expected SearXNG X-Script-Name header in Caddyfile template"
+
 existing_env_dir="$SCRIPT_DIR/../target/deploy-script-test"
 existing_env="$existing_env_dir/existing.env"
 mkdir -p "$existing_env_dir"

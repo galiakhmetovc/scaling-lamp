@@ -757,8 +757,12 @@ EOF
     fi
     cat > "$tmp_caddyfile" <<EOF
 :80 {
-  handle_path /searxng/* {
-    reverse_proxy teamd-searxng:8080
+  redir /searxng /searxng/ 308
+
+  handle /searxng/* {
+    reverse_proxy teamd-searxng:8080 {
+      header_up X-Script-Name /searxng
+    }
   }
 
   $obsidian_route {

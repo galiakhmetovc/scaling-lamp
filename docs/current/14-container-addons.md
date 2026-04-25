@@ -250,7 +250,9 @@ Routes:
 - `/searxng/`;
 - `/obsidian/`.
 
-В path mode `/searxng/` прокидывается через `handle_path`, потому что SearXNG живёт от root path. `/obsidian/` прокидывается без срезания префикса, потому что Obsidian container сам запущен с `SUBFOLDER=/obsidian/`.
+В path mode `/searxng/` прокидывается без срезания префикса и с upstream header `X-Script-Name: /searxng`. Это важно: SearXNG генерирует root-relative ссылки и `form action`; без `X-Script-Name` browser UI уходит на `/search`, `/static/...` и фактически выпадает из `/searxng/`. Для `/searxng` без trailing slash Caddy делает redirect на `/searxng/`.
+
+`/obsidian/` тоже прокидывается без срезания префикса, потому что Obsidian container сам запущен с `SUBFOLDER=/obsidian/`.
 
 После записи Caddyfile deploy script пересоздаёт `teamd-caddy` через `docker compose up -d --force-recreate`, затем делает `caddy reload`. Это важно: Caddyfile смонтирован как отдельный bind-mounted file, а атомарная замена файла на host может оставить уже запущенный контейнер на старом inode.
 
@@ -264,6 +266,16 @@ TEAMD_CADDY_DOMAIN='example.com' ./scripts/deploy-teamd-containers.sh --with-obs
 
 - `search.example.com`;
 - `obsidian.example.com`.
+
+## Obsidian web UI и мобильный браузер
+
+Текущий контейнер Obsidian (`ghcr.io/sytone/obsidian-remote`) публикует desktop Obsidian через browser/VNC-подобный web UI. Это рабочий вариант для desktop browser, но не полноценный мобильный web client. На телефоне интерфейс мелкий, жесты и ввод неудобны, и это ограничение выбранного контейнера, а не ошибка Caddy.
+
+Для нормального mobile-first доступа нужен отдельный слой поверх vault:
+
+- оставить Obsidian container как desktop/admin UI;
+- добавить web UI для Markdown vault, который рассчитан на мобильный браузер;
+- либо перейти на dedicated domain/TLS/auth и использовать нативный Obsidian-клиент с синхронизацией vault вне этого контейнера.
 
 ## Почему `agentd` пока не в Docker
 
@@ -280,6 +292,7 @@ TEAMD_CADDY_DOMAIN='example.com' ./scripts/deploy-teamd-containers.sh --with-obs
 
 - Docker Engine install: <https://docs.docker.com/engine/install/ubuntu/>
 - SearXNG Docker install: <https://docs.searxng.org/admin/installation-docker.html>
+- SearXNG reverse proxy subpath header `X-Script-Name`: <https://docs.searxng.org/admin/installation-nginx.html>
 - SearXNG MCP example project: <https://github.com/ihor-sokoliuk/mcp-searxng>
 - Obsidian remote Docker image: <https://github.com/sytone/obsidian-remote>
 - Obsidian CLI skill: <https://github.com/kepano/obsidian-skills/blob/main/skills/obsidian-cli/SKILL.md>
