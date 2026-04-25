@@ -73,6 +73,12 @@ assert_contains "$containers_dry_run_output" "docker compose"
 assert_contains "$containers_dry_run_output" "TEAMD_WEB_SEARCH_BACKEND=searxng_json"
 assert_contains "$containers_dry_run_output" "TEAMD_WEB_SEARCH_URL=http://127.0.0.1:8888/search"
 
+containers_dry_run_start_output=$(
+  "$CONTAINERS_DEPLOY_SCRIPT" --dry-run --non-interactive --with-obsidian-mcp 2>&1
+)
+
+assert_contains "$containers_dry_run_start_output" "'caddy' 'reload'"
+
 existing_env_dir="$SCRIPT_DIR/../target/deploy-script-test"
 existing_env="$existing_env_dir/existing.env"
 mkdir -p "$existing_env_dir"

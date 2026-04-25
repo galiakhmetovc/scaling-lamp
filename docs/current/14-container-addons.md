@@ -252,6 +252,8 @@ Routes:
 
 В path mode `/searxng/` прокидывается через `handle_path`, потому что SearXNG живёт от root path. `/obsidian/` прокидывается без срезания префикса, потому что Obsidian container сам запущен с `SUBFOLDER=/obsidian/`.
 
+После записи Caddyfile deploy script делает `caddy reload`; если reload не проходит, перезапускает контейнер `teamd-caddy`. Иначе Docker Compose не обязан перечитывать уже смонтированный конфиг.
+
 Для нормального browser usage можно задать домен:
 
 ```bash

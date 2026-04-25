@@ -783,6 +783,20 @@ compose_up() {
   run_root docker compose -f "$compose_file" up -d
 }
 
+reload_caddy_if_running() {
+  [ "$ENABLE_CADDY" -eq 1 ] || return 0
+  [ "$SKIP_START" -eq 0 ] || return 0
+
+  if [ "$DRY_RUN" -eq 1 ]; then
+    print_cmd docker exec teamd-caddy caddy reload --config /etc/caddy/Caddyfile
+    return 0
+  fi
+
+  if ! run_root docker exec teamd-caddy caddy reload --config /etc/caddy/Caddyfile >/dev/null 2>&1; then
+    run_root docker restart teamd-caddy >/dev/null
+  fi
+}
+
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --dry-run) DRY_RUN=1 ;;
@@ -870,6 +884,7 @@ fi
 if [ "$ENABLE_CADDY" -eq 1 ]; then
   write_caddy_files
   compose_up "$CADDY_COMPOSE"
+  reload_caddy_if_running
 fi
 
 if [ "$ENABLE_OBSIDIAN_MCP" -eq 1 ]; then
