@@ -38,22 +38,37 @@ pub fn truncate_caption(text: &str, soft_cap: usize) -> String {
 }
 
 pub fn render_model_response_chunks(text: &str, soft_cap: usize) -> Vec<TelegramRenderedChunk> {
-    let html = render_markdown_to_telegram_html(text);
-    if !html.is_empty() && html.len() <= soft_cap {
-        return vec![TelegramRenderedChunk {
-            text: html,
-            parse_mode_html: true,
-        }];
+    let markdown_chunks = split_markdown_render_chunks(text, soft_cap);
+    let mut rendered = Vec::new();
+    for markdown_chunk in markdown_chunks {
+        let html = render_markdown_to_telegram_html(&markdown_chunk);
+        if !html.is_empty() && html.len() <= soft_cap {
+            rendered.push(TelegramRenderedChunk {
+                text: html,
+                parse_mode_html: true,
+            });
+            continue;
+        }
+
+        let plain = render_markdown_to_plain_text(&markdown_chunk);
+        rendered.extend(
+            chunk_message_text(&plain, soft_cap)
+                .into_iter()
+                .map(|text| TelegramRenderedChunk {
+                    text,
+                    parse_mode_html: false,
+                }),
+        );
     }
 
-    let plain = render_markdown_to_plain_text(text);
-    chunk_message_text(&plain, soft_cap)
-        .into_iter()
-        .map(|text| TelegramRenderedChunk {
-            text,
+    if rendered.is_empty() {
+        vec![TelegramRenderedChunk {
+            text: String::new(),
             parse_mode_html: false,
-        })
-        .collect()
+        }]
+    } else {
+        rendered
+    }
 }
 
 pub fn render_markdown_to_telegram_html(markdown: &str) -> String {
@@ -299,6 +314,178 @@ pub fn render_usage(command: &str, usage: &str) -> String {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct ListState {
     next_ordinal: Option<u64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum MarkdownRenderBlock {
+    Text(String),
+    Table(Vec<Vec<String>>),
+}
+
+fn split_markdown_render_chunks(markdown: &str, soft_cap: usize) -> Vec<String> {
+    if markdown.trim().is_empty() {
+        return vec![String::new()];
+    }
+
+    let blocks = parse_markdown_render_blocks(markdown);
+    let mut chunks = Vec::new();
+    let mut current = String::new();
+
+    for block in blocks {
+        for block_markdown in normalize_markdown_block_for_soft_cap(block, soft_cap) {
+            if current.is_empty() {
+                current = block_markdown;
+                continue;
+            }
+
+            let candidate = format!("{current}\n\n{block_markdown}");
+            if render_markdown_to_telegram_html(&candidate).len() <= soft_cap {
+                current = candidate;
+            } else {
+                chunks.push(std::mem::take(&mut current));
+                current = block_markdown;
+            }
+        }
+    }
+
+    if !current.is_empty() {
+        chunks.push(current);
+    }
+
+    if chunks.is_empty() {
+        vec![String::new()]
+    } else {
+        chunks
+    }
+}
+
+fn parse_markdown_render_blocks(markdown: &str) -> Vec<MarkdownRenderBlock> {
+    let lines = markdown.lines().collect::<Vec<_>>();
+    let mut blocks = Vec::new();
+    let mut current_text = Vec::new();
+    let mut index = 0;
+
+    while index < lines.len() {
+        let line = lines[index];
+
+        if line.trim_start().starts_with("```") {
+            flush_text_markdown_block(&mut blocks, &mut current_text);
+            let mut code_lines = vec![line.to_string()];
+            index += 1;
+            while index < lines.len() {
+                let code_line = lines[index];
+                code_lines.push(code_line.to_string());
+                index += 1;
+                if code_line.trim_start().starts_with("```") {
+                    break;
+                }
+            }
+            blocks.push(MarkdownRenderBlock::Text(code_lines.join("\n")));
+            continue;
+        }
+
+        if let Some((rows, next_index)) = collect_markdown_table_block(&lines, index) {
+            flush_text_markdown_block(&mut blocks, &mut current_text);
+            blocks.push(MarkdownRenderBlock::Table(rows));
+            index = next_index;
+            continue;
+        }
+
+        if line.trim().is_empty() {
+            flush_text_markdown_block(&mut blocks, &mut current_text);
+            index += 1;
+            continue;
+        }
+
+        current_text.push(line.to_string());
+        index += 1;
+    }
+
+    flush_text_markdown_block(&mut blocks, &mut current_text);
+    blocks
+}
+
+fn flush_text_markdown_block(
+    blocks: &mut Vec<MarkdownRenderBlock>,
+    current_text: &mut Vec<String>,
+) {
+    if current_text.is_empty() {
+        return;
+    }
+    blocks.push(MarkdownRenderBlock::Text(current_text.join("\n")));
+    current_text.clear();
+}
+
+fn normalize_markdown_block_for_soft_cap(
+    block: MarkdownRenderBlock,
+    soft_cap: usize,
+) -> Vec<String> {
+    match block {
+        MarkdownRenderBlock::Text(text) => vec![text],
+        MarkdownRenderBlock::Table(rows) => split_markdown_table_for_soft_cap(&rows, soft_cap),
+    }
+}
+
+fn split_markdown_table_for_soft_cap(rows: &[Vec<String>], soft_cap: usize) -> Vec<String> {
+    if rows.len() <= 1 {
+        return vec![markdown_table_to_markdown(rows)];
+    }
+
+    let header = rows[0].clone();
+    let mut chunks = Vec::new();
+    let mut current_rows = vec![header.clone()];
+
+    for row in rows.iter().skip(1) {
+        let mut candidate_rows = current_rows.clone();
+        candidate_rows.push(row.clone());
+        let candidate = markdown_table_to_markdown(&candidate_rows);
+
+        if render_markdown_to_telegram_html(&candidate).len() <= soft_cap {
+            current_rows = candidate_rows;
+            continue;
+        }
+
+        if current_rows.len() > 1 {
+            chunks.push(markdown_table_to_markdown(&current_rows));
+            current_rows = vec![header.clone(), row.clone()];
+            continue;
+        }
+
+        chunks.push(candidate);
+        current_rows = vec![header.clone()];
+    }
+
+    if current_rows.len() > 1 {
+        chunks.push(markdown_table_to_markdown(&current_rows));
+    }
+
+    if chunks.is_empty() {
+        vec![markdown_table_to_markdown(rows)]
+    } else {
+        chunks
+    }
+}
+
+fn markdown_table_to_markdown(rows: &[Vec<String>]) -> String {
+    if rows.is_empty() {
+        return String::new();
+    }
+
+    let mut lines = Vec::with_capacity(rows.len() + 1);
+    lines.push(markdown_table_row(&rows[0]));
+    lines.push(markdown_table_separator(rows[0].len()));
+    for row in rows.iter().skip(1) {
+        lines.push(markdown_table_row(row));
+    }
+    lines.join("\n")
+}
+
+fn markdown_table_row(cells: &[String]) -> String {
+    format!("| {} |", cells.join(" | "))
+}
+
+fn markdown_table_separator(column_count: usize) -> String {
+    format!("| {} |", vec!["---"; column_count].join(" | "))
 }
 
 fn rewrite_markdown_tables_as_code_blocks(markdown: &str) -> String {
@@ -548,4 +735,90 @@ fn escape_html_text(text: &str) -> String {
 
 fn escape_html_attribute(text: &str) -> String {
     escape_html_text(text).replace('"', "&quot;")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        TELEGRAM_MESSAGE_TEXT_SOFT_CAP, render_markdown_to_telegram_html,
+        render_model_response_chunks,
+    };
+
+    #[test]
+    fn render_model_response_chunks_splits_large_tables_into_html_chunks() {
+        let mut markdown =
+            String::from("## Прогноз\n\n| Параметр | Утро | День | Вечер |\n|---|---|---|---|\n");
+        for index in 0..20 {
+            markdown.push_str(&format!(
+                "| Строка {index} | +{index}° | дождь | ветер {index} |\n"
+            ));
+        }
+
+        let chunks = render_model_response_chunks(&markdown, 260);
+        assert!(chunks.len() > 1);
+        assert!(chunks.iter().all(|chunk| chunk.parse_mode_html));
+        assert!(chunks.iter().all(|chunk| chunk.text.len() <= 260));
+        assert!(chunks.iter().all(|chunk| chunk.text.contains("Параметр")));
+
+        let table_chunks = chunks
+            .iter()
+            .filter(|chunk| chunk.text.contains("<pre><code>"))
+            .collect::<Vec<_>>();
+        assert!(table_chunks.len() >= 2);
+        assert!(
+            table_chunks
+                .iter()
+                .all(|chunk| chunk.text.contains("| Параметр"))
+        );
+    }
+
+    #[test]
+    fn render_model_response_chunks_keeps_short_html_responses_in_html_mode() {
+        let markdown = "| A | B |\n|---|---|\n| 1 | 2 |";
+        let chunks = render_model_response_chunks(markdown, TELEGRAM_MESSAGE_TEXT_SOFT_CAP);
+        assert_eq!(chunks.len(), 1);
+        assert!(chunks[0].parse_mode_html);
+        assert_eq!(chunks[0].text, render_markdown_to_telegram_html(markdown));
+    }
+
+    #[test]
+    fn render_model_response_chunks_keeps_long_multi_table_responses_in_html_mode() {
+        let markdown = r#"Теперь у меня есть данные из 3 источников. Формирую полный прогноз.
+
+## Прогноз погоды
+
+### Сводка
+
+| Параметр | Утром | Днём | Вечером | Ночью |
+|---|---|---|---|---|
+| Температура | от +6 до +9° | от +10 до +11° | от +5 до +6° | от +2 до +7° |
+| Ощущается как | от +2 до +4° | от +6 до +7° | от -2 до +1° | от -3 до +4° |
+| Осадки | Дождь | Ливневый дождь | Дождь → снег | Снег |
+| Ветер | 4–5 м/с | 5–6 м/с | 5–6 м/с | 4–6 м/с |
+| Давление | 744–748 | 743–744 | 743–744 | 743–746 |
+| Влажность | 83–86% | 68–77% | 77–91% | 74–87% |
+
+### Расхождения между источниками
+
+| Источник | Мин/Макс | Днём | Ветер | Особенности |
+|---|---|---|---|---|
+| wttr.in | +1 / +10 | Слабый ливневой дождь | 6,4 м/с | Снег к вечеру |
+| Яндекс.Погода | +1 / +11 | Небольшой дождь | 6 м/с | Слабая магнитная буря |
+| Gismeteo | +1 / +11 | Небольшой дождь | — | Выпадающий снег вечером |
+
+> Ключевой вывод: день дождливый, вечером переход в снег.
+
+### Дополнительно
+- Восход: 04:58
+- Закат: 19:56
+- Магнитное поле: слабая буря
+"#;
+
+        let chunks = render_model_response_chunks(markdown, 600);
+        assert!(chunks.len() > 1);
+        assert!(chunks.iter().all(|chunk| chunk.parse_mode_html));
+        assert!(chunks.iter().all(|chunk| chunk.text.len() <= 600));
+        assert!(chunks.iter().any(|chunk| chunk.text.contains("Параметр")));
+        assert!(chunks.iter().any(|chunk| chunk.text.contains("Источник")));
+    }
 }
