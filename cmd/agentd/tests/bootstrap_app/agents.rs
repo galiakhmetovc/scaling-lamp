@@ -224,6 +224,8 @@ fn build_from_config_refreshes_legacy_default_prompts_but_preserves_custom_edits
         .expect("read obsidian skill");
     assert!(obsidian_skill.contains("name: obsidian-vault"));
     assert!(obsidian_skill.contains("Use the `obsidian` MCP connector first"));
+    assert!(obsidian_skill.contains("## PARA structure"));
+    assert!(obsidian_skill.contains("04-Archive"));
 
     fs::write(default_home.join("AGENTS.md"), "custom prompt preserved\n")
         .expect("write custom agents");
