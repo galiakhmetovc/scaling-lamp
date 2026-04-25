@@ -69,6 +69,8 @@ Core `agentd` ставится отдельно от контейнерной о
 
 `--with-obsidian-mcp` ставит Obsidian, Local REST API plugin, `/etc/teamd/obsidian-mcp.env`, enabled MCP connector в `/etc/teamd/config.toml` и перезапускает `teamd` сервисы, если они уже установлены.
 
+Без `TEAMD_CADDY_DOMAIN` Obsidian web UI доступен в subfolder mode: `http://127.0.0.1:8080/obsidian/` напрямую или `http://127.0.0.1:8088/obsidian/` через Caddy. Если нужен dedicated domain, задайте `TEAMD_CADDY_DOMAIN`, и скрипт уберёт Obsidian subfolder.
+
 `--with-obsidian-mcp-example` дополнительно пишет шаблон MCP connector для Obsidian Local REST API:
 
 ```text

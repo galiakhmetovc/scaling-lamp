@@ -237,6 +237,8 @@ export TEAMD_WEB_SEARCH_URL='http://127.0.0.1:8888/search'
 ./scripts/deploy-teamd-containers.sh --with-obsidian-mcp
 ```
 
+По умолчанию без dedicated domain Obsidian запускается с `TEAMD_OBSIDIAN_SUBFOLDER=/obsidian/`. Значение должно быть пустым или иметь ведущий и завершающий `/`, иначе web route у контейнера будет некорректным.
+
 Если нужен только шаблон без изменения `/etc/teamd/config.toml`, используйте:
 
 ```bash

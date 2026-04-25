@@ -98,9 +98,17 @@ Default paths:
 - vaults: `/var/lib/teamd/vaults`;
 - managed vault: `/var/lib/teamd/vaults/teamd`;
 - container config: `/var/lib/teamd/containers/obsidian/config`;
-- local URL: `http://127.0.0.1:8080`.
+- local URL: `http://127.0.0.1:8080/obsidian/`.
 
 В этой схеме Obsidian — это внешний UI для человека. Оператор открывает его в браузере, редактирует vault и управляет плагинами. `agentd` не встраивает Obsidian в prompt path автоматически.
+
+Без отдельного домена скрипт запускает Obsidian в subfolder mode:
+
+```text
+SUBFOLDER=/obsidian/
+```
+
+Важно: у образа `ghcr.io/sytone/obsidian-remote` subfolder должен начинаться и заканчиваться `/`. Значение `obsidian` без слэшей ломает web route. Caddy в этом режиме не срезает `/obsidian/`, а прокидывает путь как есть.
 
 Если включён Caddy, нормальный доступ выглядит так:
 
@@ -242,7 +250,9 @@ Routes:
 - `/searxng/`;
 - `/obsidian/`.
 
-Этот path mode полезен для локального smoke. Для нормального browser usage лучше задать домен:
+В path mode `/searxng/` прокидывается через `handle_path`, потому что SearXNG живёт от root path. `/obsidian/` прокидывается без срезания префикса, потому что Obsidian container сам запущен с `SUBFOLDER=/obsidian/`.
+
+Для нормального browser usage можно задать домен:
 
 ```bash
 TEAMD_CADDY_DOMAIN='example.com' ./scripts/deploy-teamd-containers.sh --with-obsidian
@@ -269,6 +279,7 @@ TEAMD_CADDY_DOMAIN='example.com' ./scripts/deploy-teamd-containers.sh --with-obs
 - Docker Engine install: <https://docs.docker.com/engine/install/ubuntu/>
 - SearXNG Docker install: <https://docs.searxng.org/admin/installation-docker.html>
 - SearXNG MCP example project: <https://github.com/ihor-sokoliuk/mcp-searxng>
+- Obsidian remote Docker image: <https://github.com/sytone/obsidian-remote>
 - Obsidian CLI skill: <https://github.com/kepano/obsidian-skills/blob/main/skills/obsidian-cli/SKILL.md>
 - Obsidian MCP via Local REST API: <https://github.com/OleksandrKucherenko/mcp-obsidian-via-rest>
 - Obsidian MCP Docker image docs: <https://hub.docker.com/r/oleksandrkucherenko/obsidian-mcp>

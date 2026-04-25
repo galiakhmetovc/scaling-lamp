@@ -56,6 +56,13 @@ OBSIDIAN_PUID=${TEAMD_OBSIDIAN_PUID:-}
 OBSIDIAN_PGID=${TEAMD_OBSIDIAN_PGID:-}
 
 CADDY_DOMAIN=${TEAMD_CADDY_DOMAIN:-}
+if [ "${TEAMD_OBSIDIAN_SUBFOLDER+x}" ]; then
+  OBSIDIAN_SUBFOLDER=$TEAMD_OBSIDIAN_SUBFOLDER
+elif [ -n "$CADDY_DOMAIN" ]; then
+  OBSIDIAN_SUBFOLDER=
+else
+  OBSIDIAN_SUBFOLDER=/obsidian/
+fi
 if [ -n "${TEAMD_CADDY_HTTP_PORT:-}" ]; then
   CADDY_HTTP_PORT=$TEAMD_CADDY_HTTP_PORT
 elif [ -n "$CADDY_DOMAIN" ]; then
@@ -117,6 +124,9 @@ Environment overrides:
   TEAMD_OBSIDIAN_VAULT_NAME      Default managed vault name, default: $OBSIDIAN_VAULT_NAME.
   TEAMD_OBSIDIAN_VAULT_DIR       Managed vault directory, default: $OBSIDIAN_VAULT_DIR.
   TEAMD_OBSIDIAN_CONFIG_DIR      Obsidian config directory, default: $OBSIDIAN_CONFIG_DIR.
+  TEAMD_OBSIDIAN_SUBFOLDER       Obsidian reverse-proxy subfolder.
+                                 Default: "$OBSIDIAN_SUBFOLDER".
+                                 Use empty value with a dedicated domain.
   TEAMD_OBSIDIAN_API_KEY         Optional fixed Local REST API key; generated when absent.
   TEAMD_OBSIDIAN_LOCAL_REST_API_VERSION
                                  Local REST API plugin version, default: $OBSIDIAN_PLUGIN_VERSION.
@@ -246,6 +256,18 @@ ensure_docker() {
 
   install_docker_with_apt
   docker_compose_available || fail "Docker Compose plugin is still unavailable after Docker install"
+}
+
+validate_obsidian_subfolder() {
+  [ "$ENABLE_OBSIDIAN" -eq 1 ] || return 0
+  [ -n "$OBSIDIAN_SUBFOLDER" ] || return 0
+
+  case "$OBSIDIAN_SUBFOLDER" in
+    /*/) ;;
+    *)
+      fail "TEAMD_OBSIDIAN_SUBFOLDER must be empty or use leading and trailing slashes, e.g. /obsidian/"
+      ;;
+  esac
 }
 
 ensure_edge_network() {
@@ -384,7 +406,7 @@ services:
       - PGID=$OBSIDIAN_PGID
       - TZ=Etc/UTC
       - CUSTOM_PORT=8080
-      - SUBFOLDER=obsidian
+      - SUBFOLDER=$OBSIDIAN_SUBFOLDER
       - DOCKER_MODS=linuxserver/mods:universal-git
 
 networks:
@@ -728,13 +750,18 @@ obsidian.$CADDY_DOMAIN {
 }
 EOF
   else
+    if [ -n "$OBSIDIAN_SUBFOLDER" ]; then
+      obsidian_route='handle /obsidian/*'
+    else
+      obsidian_route='handle_path /obsidian/*'
+    fi
     cat > "$tmp_caddyfile" <<EOF
 :80 {
   handle_path /searxng/* {
     reverse_proxy teamd-searxng:8080
   }
 
-  handle_path /obsidian/* {
+  $obsidian_route {
     reverse_proxy teamd-obsidian:8080
   }
 
@@ -804,6 +831,7 @@ fi
 
 need_command id
 need_command sed
+validate_obsidian_subfolder
 
 if [ "$(id -u)" -ne 0 ] && [ "$DRY_RUN" -eq 0 ]; then
   need_command sudo
@@ -874,7 +902,7 @@ if [ "$ENABLE_OBSIDIAN" -eq 1 ]; then
   cat <<EOF
   Obsidian:
     Container: teamd-obsidian
-    URL: http://127.0.0.1:$OBSIDIAN_PORT
+    URL: http://127.0.0.1:$OBSIDIAN_PORT$OBSIDIAN_SUBFOLDER
     Compose: $OBSIDIAN_COMPOSE
     Start command: docker compose -f $OBSIDIAN_COMPOSE up -d
     Vaults: $OBSIDIAN_VAULTS_DIR
