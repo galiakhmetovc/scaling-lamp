@@ -206,6 +206,108 @@ teamdctl tui
 - перед изменением существующей заметки агент читает её через MCP;
 - generic `fs_write_text`/`fs_patch_text` для vault — только аварийный fallback, если MCP недоступен и оператор явно согласился.
 
+## Obsidian vault skill и PARA contract
+
+Default agent получает встроенный agent-local skill:
+
+```text
+/var/lib/teamd/state/agents/default/skills/obsidian-vault/SKILL.md
+```
+
+Skill активируется автоматически, когда в сессии есть контекст про `Obsidian`, `vault`, `PARA`, `projects`, `areas`, `resources`, `archive`, `notes`, `knowledge base`, Markdown notes, daily notes, tasks, links или frontmatter. Его также можно включить вручную:
+
+```bash
+teamdctl session enable-skill <session_id> obsidian-vault
+teamdctl session skills <session_id>
+```
+
+Итоговый контракт skill:
+
+- агент работает с vault через `obsidian` MCP connector first;
+- агент не использует generic filesystem write tools для нормальной работы с заметками;
+- filesystem fallback допустим только для аварийной/admin-операции, если MCP недоступен и оператор явно согласился;
+- перед изменением существующей заметки агент сначала читает её;
+- после успешного write/update агент сообщает, что именно изменил и где;
+- если tool call упал, агент не утверждает, что заметка сохранена.
+
+PARA — default organization model:
+
+| Folder | Назначение |
+| --- | --- |
+| `00-Inbox` | Быстрые captures, сырые идеи, unsorted Telegram notes, временный вход. |
+| `01-Projects` | Активные outcomes с deadline или понятным finish condition. |
+| `02-Areas` | Постоянные области ответственности без даты завершения. |
+| `03-Resources` | Reference material, research, guides, snippets, domain notes. |
+| `04-Archive` | Неактивные проекты, старые resources, завершённые или deprecated notes. |
+| `05-Journal` | Daily notes, reviews, logs, timeline entries. |
+| `06-Tasks` | Task notes, когда задаче нужна отдельная страница. |
+| `attachments` | Файлы, embedded или linked from notes. |
+| `templates` | Reusable note templates. |
+
+Daily notes по умолчанию живут в:
+
+```text
+05-Journal/YYYY-MM-DD.md
+```
+
+Не создавайте отдельный `daily/` tree, если он уже не существует или оператор явно не попросил.
+
+Common operations:
+
+- capture idea: создать/дополнить короткую заметку в `00-Inbox` с source и timestamp;
+- create task: создать/обновить note в `06-Tasks` с checklist и priority;
+- start project: создать `01-Projects/<project-name>.md` с goal, status, next actions, resources, open questions;
+- add resource: создать `03-Resources/<topic>.md` с summary, source links, related notes;
+- add daily entry: обновить `05-Journal/YYYY-MM-DD.md`;
+- process inbox: разложить inbox items в Projects, Areas, Resources, Archive или Tasks;
+- complete work: обновить status/result и переносить в `04-Archive` только если пользователь согласился или завершение явно следует из note;
+- search: искать существующие notes перед созданием дубля.
+
+Lightweight frontmatter для новых notes, когда это полезно:
+
+```markdown
+---
+type: project|area|resource|task|daily|note
+status: active|waiting|done|archived
+created: YYYY-MM-DD
+updated: YYYY-MM-DD
+tags: []
+---
+```
+
+Recommended note contents:
+
+- project: goal, status, next actions, decisions, resources, log;
+- task: priority, status, checklist, context, result;
+- daily: date, focus, log, tasks, captures;
+- resource: summary, key points, sources, related notes.
+
+Tags and Obsidian syntax:
+
+- use tags sparingly: `#project`, `#area`, `#resource`, `#task`, `#daily`, `#inbox`, `#archive`;
+- priority tags: `#p0`, `#p1`, `#p2`, `#p3`, only when priority matters;
+- prefer wikilinks like `[[note name]]`;
+- use checkboxes `- [ ]` and `- [x]`;
+- use callouts for important blocks: `> [!note]`, `> [!warning]`, `> [!decision]`;
+- preserve embeds `![[...]]`, links, aliases, headings and frontmatter.
+
+Operating rules:
+
+- не удалять и не архивировать user material без запроса или явного основания в note;
+- не выдумывать completed tasks, sources, dates или decisions;
+- при неоднозначном target folder выбрать ближайший PARA folder и явно назвать assumption;
+- имена notes должны быть стабильными и читаемыми; timestamp-only filenames допустимы только для daily notes;
+- если пользовательское сообщение содержит durable fact, decision, task или resource, агент должен предложить сохранить это или сохранить сразу, если запрос подразумевает persistence.
+
+Быстрая проверка на production host:
+
+```bash
+teamdctl session skills <session_id>
+grep -nE 'PARA structure|04-Archive|Templates' \
+  /var/lib/teamd/state/agents/default/skills/obsidian-vault/SKILL.md
+curl -fsS http://127.0.0.1:5140/v1/mcp/connectors
+```
+
 ### Важное ограничение Docker/MCP
 
 Такой коннектор требует, чтобы systemd-пользователь `teamd` мог выполнить `docker run ...`. Автоматический режим `--with-obsidian-mcp` добавляет `teamd` в группу `docker`. Это почти root-level право, потому что доступ к Docker socket фактически позволяет управлять host'ом. Если это неприемлемо, используйте `--with-obsidian-mcp-example` и настройте более узкий wrapper/transport вручную.
