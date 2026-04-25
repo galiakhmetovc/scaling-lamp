@@ -231,11 +231,13 @@ export TEAMD_WEB_SEARCH_URL='http://127.0.0.1:8888/search'
 
 Это initial state для MCP runtime surface. Потом оператор может управлять коннекторами через TUI/HTTP/CLI.
 
-Автоматический Obsidian Local REST API connector добавляет второй deploy script:
+Автоматический Obsidian vault MCP connector добавляет второй deploy script:
 
 ```bash
 ./scripts/deploy-teamd-containers.sh --with-obsidian-mcp
 ```
+
+Этот connector работает через `stdio`: `agentd` запускает `docker run -i --rm ... node:22-alpine npx -y @bitbonsai/mcpvault@latest /vault`, где `/vault` — mount на `/var/lib/teamd/vaults/teamd`. Поэтому для базовой работы не нужен Obsidian Local REST API plugin и не нужен ручной клик в Obsidian UI.
 
 По умолчанию без dedicated domain Obsidian запускается с `TEAMD_OBSIDIAN_SUBFOLDER=/obsidian/`. Значение должно быть пустым или иметь ведущий и завершающий `/`, иначе web route у контейнера будет некорректным.
 

@@ -41,18 +41,9 @@ OBSIDIAN_VAULT_DIR=${TEAMD_OBSIDIAN_VAULT_DIR:-$OBSIDIAN_VAULTS_DIR/$OBSIDIAN_VA
 OBSIDIAN_LEGACY_VAULT_LINK=${TEAMD_OBSIDIAN_LEGACY_VAULT_LINK:-/var/lib/teamd/vault}
 OBSIDIAN_CONFIG_DIR=${TEAMD_OBSIDIAN_CONFIG_DIR:-$DATA_ROOT/obsidian/config}
 OBSIDIAN_COMPOSE=$OBSIDIAN_DIR/docker-compose.yml
-OBSIDIAN_PLUGIN_ID=obsidian-local-rest-api
-OBSIDIAN_PLUGIN_VERSION=${TEAMD_OBSIDIAN_LOCAL_REST_API_VERSION:-latest}
-OBSIDIAN_PLUGIN_BASE_URL=${TEAMD_OBSIDIAN_LOCAL_REST_API_BASE_URL:-https://github.com/coddingtonbear/obsidian-local-rest-api/releases}
 OBSIDIAN_MCP_EXAMPLE=$OBSIDIAN_DIR/obsidian-mcp.example.toml
-OBSIDIAN_MCP_ENV_EXAMPLE=$OBSIDIAN_DIR/obsidian-mcp.env.example
-OBSIDIAN_MCP_ENV_FILE=${TEAMD_OBSIDIAN_MCP_ENV_FILE:-/etc/teamd/obsidian-mcp.env}
-OBSIDIAN_MCP_IMAGE=${TEAMD_OBSIDIAN_MCP_IMAGE:-ghcr.io/oleksandrkucherenko/obsidian-mcp:latest}
-OBSIDIAN_API_KEY=${TEAMD_OBSIDIAN_API_KEY:-}
-OBSIDIAN_REST_API_URLS=${TEAMD_OBSIDIAN_REST_API_URLS:-}
-if [ -z "$OBSIDIAN_REST_API_URLS" ]; then
-  OBSIDIAN_REST_API_URLS='["https://127.0.0.1:27124","http://127.0.0.1:27123"]'
-fi
+OBSIDIAN_MCP_PACKAGE=${TEAMD_OBSIDIAN_MCP_PACKAGE:-@bitbonsai/mcpvault@latest}
+OBSIDIAN_MCP_NODE_IMAGE=${TEAMD_OBSIDIAN_MCP_NODE_IMAGE:-docker.io/library/node:22-alpine}
 OBSIDIAN_PUID=${TEAMD_OBSIDIAN_PUID:-}
 OBSIDIAN_PGID=${TEAMD_OBSIDIAN_PGID:-}
 
@@ -103,9 +94,9 @@ Options:
   --no-searxng          Do not deploy SearXNG.
   --no-caddy            Do not deploy Caddy reverse proxy.
   --with-obsidian       Also deploy browser-accessible Obsidian container.
-  --with-obsidian-mcp   Fully install Obsidian Local REST API + agentd MCP connector.
+  --with-obsidian-mcp   Deploy Obsidian and an agentd MCP connector for the vault.
   --with-obsidian-mcp-example
-                         Write an agentd stdio MCP connector example for Obsidian Local REST API.
+                         Write an agentd stdio MCP connector example for the vault.
   --no-restart-teamd    Do not restart teamd systemd services after writing MCP config.
   --searxng-port PORT   Local SearXNG port, default: $SEARXNG_PORT.
   --obsidian-port PORT  Local Obsidian port, default: $OBSIDIAN_PORT.
@@ -132,13 +123,10 @@ Environment overrides:
   TEAMD_OBSIDIAN_SUBFOLDER       Obsidian reverse-proxy subfolder.
                                  Default: "$OBSIDIAN_SUBFOLDER".
                                  Use empty value with a dedicated domain.
-  TEAMD_OBSIDIAN_API_KEY         Optional fixed Local REST API key; generated when absent.
-  TEAMD_OBSIDIAN_LOCAL_REST_API_VERSION
-                                 Local REST API plugin version, default: $OBSIDIAN_PLUGIN_VERSION.
-  TEAMD_OBSIDIAN_MCP_IMAGE       Obsidian MCP image, default: $OBSIDIAN_MCP_IMAGE.
-  TEAMD_OBSIDIAN_MCP_ENV_FILE    Runtime env file for Obsidian MCP connector, default: $OBSIDIAN_MCP_ENV_FILE.
-  TEAMD_OBSIDIAN_REST_API_URLS   JSON array of Local REST API URLs seen from MCP container,
-                                 default: $OBSIDIAN_REST_API_URLS.
+  TEAMD_OBSIDIAN_MCP_PACKAGE     npm package for Obsidian vault MCP,
+                                 default: $OBSIDIAN_MCP_PACKAGE.
+  TEAMD_OBSIDIAN_MCP_NODE_IMAGE  Docker image used to run the MCP package,
+                                 default: $OBSIDIAN_MCP_NODE_IMAGE.
   TEAMD_CONFIG / TEAMD_DEPLOY_CONFIG_FILE
                                  agentd config.toml path, default: $CONFIG_FILE.
   TEAMD_DEPLOY_USER              teamd system user, default: $SERVICE_USER.
@@ -422,102 +410,18 @@ EOF
   run_root install -m 0644 -o root -g root "$tmp_compose" "$OBSIDIAN_COMPOSE"
 }
 
-obsidian_plugin_asset_url() {
-  asset=$1
-  if [ "$OBSIDIAN_PLUGIN_VERSION" = "latest" ]; then
-    printf '%s/latest/download/%s' "$OBSIDIAN_PLUGIN_BASE_URL" "$asset"
-  else
-    printf '%s/download/%s/%s' "$OBSIDIAN_PLUGIN_BASE_URL" "$OBSIDIAN_PLUGIN_VERSION" "$asset"
-  fi
-}
-
-ensure_obsidian_community_plugin_enabled() {
-  community_file=$OBSIDIAN_VAULT_DIR/.obsidian/community-plugins.json
-
-  if [ "$DRY_RUN" -eq 1 ]; then
-    print_cmd sh -c "ensure $OBSIDIAN_PLUGIN_ID is present in $community_file"
-    return 0
-  fi
-
-  tmp_plugins=$(mktemp)
-  trap 'rm -f "$tmp_plugins"' EXIT INT TERM
-
-  if [ ! -s "$community_file" ]; then
-    cat > "$tmp_plugins" <<EOF
-[
-  "$OBSIDIAN_PLUGIN_ID"
-]
-EOF
-    run_root install -m 0644 -o "$OBSIDIAN_PUID" -g "$OBSIDIAN_PGID" "$tmp_plugins" "$community_file"
-    return 0
-  fi
-
-  if grep -F "\"$OBSIDIAN_PLUGIN_ID\"" "$community_file" >/dev/null 2>&1; then
-    return 0
-  fi
-
-  compact=$(tr -d '[:space:]' < "$community_file")
-  if [ "$compact" = "[]" ]; then
-    cat > "$tmp_plugins" <<EOF
-[
-  "$OBSIDIAN_PLUGIN_ID"
-]
-EOF
-  else
-    sed "0,/]/s//,\\
-  \"$OBSIDIAN_PLUGIN_ID\"\\
-]/" "$community_file" > "$tmp_plugins"
-  fi
-  run_root install -m 0644 -o "$OBSIDIAN_PUID" -g "$OBSIDIAN_PGID" "$tmp_plugins" "$community_file"
-}
-
 write_obsidian_vault_config() {
   config_dir=$OBSIDIAN_VAULT_DIR/.obsidian
-  plugin_dir=$config_dir/plugins/$OBSIDIAN_PLUGIN_ID
-  data_file=$plugin_dir/data.json
   app_vault_file=$OBSIDIAN_CONFIG_DIR/.config/obsidian/obsidian.json
 
-  if [ -z "$OBSIDIAN_API_KEY" ]; then
-    OBSIDIAN_API_KEY=$(generate_secret_key)
-  fi
-
   if [ "$DRY_RUN" -eq 1 ]; then
-    print_cmd mkdir -p "$plugin_dir" "$OBSIDIAN_CONFIG_DIR/.config/obsidian"
-    print_cmd sh -c "download Obsidian Local REST API plugin files into $plugin_dir"
-    print_cmd sh -c "write $data_file with generated API_KEY and enable $OBSIDIAN_PLUGIN_ID"
+    print_cmd mkdir -p "$config_dir" "$OBSIDIAN_CONFIG_DIR/.config/obsidian"
     print_cmd sh -c "seed Obsidian vault registry at $app_vault_file"
+    print_cmd sh -c "write managed vault welcome note when missing"
     return 0
   fi
 
-  need_command curl
-
-  tmp_dir=$(mktemp -d)
-  trap 'rm -rf "$tmp_dir"' EXIT INT TERM
-
-  for asset in main.js manifest.json styles.css; do
-    curl -fsSL "$(obsidian_plugin_asset_url "$asset")" -o "$tmp_dir/$asset"
-  done
-
-  run_root mkdir -p "$plugin_dir" "$OBSIDIAN_CONFIG_DIR/.config/obsidian"
-  run_root install -m 0644 -o "$OBSIDIAN_PUID" -g "$OBSIDIAN_PGID" "$tmp_dir/main.js" "$plugin_dir/main.js"
-  run_root install -m 0644 -o "$OBSIDIAN_PUID" -g "$OBSIDIAN_PGID" "$tmp_dir/manifest.json" "$plugin_dir/manifest.json"
-  run_root install -m 0644 -o "$OBSIDIAN_PUID" -g "$OBSIDIAN_PGID" "$tmp_dir/styles.css" "$plugin_dir/styles.css"
-
-  tmp_data=$(mktemp)
-  cat > "$tmp_data" <<EOF
-{
-  "apiKey": "$OBSIDIAN_API_KEY",
-  "port": 27124,
-  "insecurePort": 27123,
-  "enableInsecureServer": false,
-  "enableSecureServer": true,
-  "bindingHost": "127.0.0.1"
-}
-EOF
-  run_root install -m 0600 -o "$OBSIDIAN_PUID" -g "$OBSIDIAN_PGID" "$tmp_data" "$data_file"
-  rm -f "$tmp_data"
-
-  ensure_obsidian_community_plugin_enabled
+  run_root mkdir -p "$config_dir" "$OBSIDIAN_CONFIG_DIR/.config/obsidian"
 
   if [ ! -e "$app_vault_file" ]; then
     vault_ts=$(date +%s)
@@ -546,7 +450,8 @@ EOF
 Этот vault создан deploy script'ом teamD.
 
 - Obsidian UI редактирует заметки здесь.
-- agentd обращается к vault через Obsidian Local REST API и MCP connector.
+- agentd обращается к vault через Obsidian MCP connector.
+- Прямые filesystem writes нужны только для аварийной миграции или восстановления.
 EOF
     run_root install -m 0644 -o "$OBSIDIAN_PUID" -g "$OBSIDIAN_PGID" "$tmp_welcome" "$welcome_file"
     rm -f "$tmp_welcome"
@@ -592,27 +497,20 @@ ensure_obsidian_legacy_vault_link() {
 write_obsidian_mcp_example() {
   if [ "$DRY_RUN" -eq 1 ]; then
     print_cmd mkdir -p "$OBSIDIAN_DIR"
-    print_cmd sh -c "write $OBSIDIAN_MCP_EXAMPLE and $OBSIDIAN_MCP_ENV_EXAMPLE"
+    print_cmd sh -c "write $OBSIDIAN_MCP_EXAMPLE for filesystem-backed Obsidian MCP"
     return 0
   fi
 
   run_root mkdir -p "$OBSIDIAN_DIR"
   tmp_config=$(mktemp)
-  tmp_env=$(mktemp)
-  trap 'rm -f "$tmp_config" "$tmp_env"' EXIT INT TERM
+  trap 'rm -f "$tmp_config"' EXIT INT TERM
 
   cat > "$tmp_config" <<EOF
 # Copy this block into /etc/teamd/config.toml under [daemon.mcp_connectors]
-# after enabling Obsidian Local REST API plugin and copying
-# $OBSIDIAN_MCP_ENV_EXAMPLE to $OBSIDIAN_MCP_ENV_FILE.
 #
-# Current agentd MCP transport is stdio, so this connector starts the MCP
-# server through docker run -i --rm. This is an operator opt-in because the
-# teamd service user must be allowed to run this exact Docker command.
-#
-# The MCP container shares teamd-obsidian network namespace. That lets it reach
-# the Local REST API plugin on 127.0.0.1 inside the Obsidian container without
-# publishing REST API ports on the host.
+# This is the primary supported path for agent access to Obsidian:
+# agentd -> stdio MCP -> docker run node -> $OBSIDIAN_MCP_PACKAGE -> vault.
+# It does not require the Obsidian desktop app, a community plugin, or REST API.
 
 [daemon.mcp_connectors.obsidian]
 transport = "stdio"
@@ -621,46 +519,17 @@ args = [
   "run",
   "-i",
   "--rm",
-  "--network", "container:teamd-obsidian",
-  "--env-file", "$OBSIDIAN_MCP_ENV_FILE",
-  "$OBSIDIAN_MCP_IMAGE",
+  "-v", "$OBSIDIAN_VAULT_DIR:/vault:rw",
+  "$OBSIDIAN_MCP_NODE_IMAGE",
+  "npx",
+  "-y",
+  "$OBSIDIAN_MCP_PACKAGE",
+  "/vault",
 ]
 enabled = false
 EOF
 
-  cat > "$tmp_env" <<EOF
-# Copy this file to $OBSIDIAN_MCP_ENV_FILE, set mode 0640,
-# and put the API key from Obsidian Local REST API plugin into API_KEY.
-# This file is consumed by docker run --env-file, so do not shell-quote values.
-API_KEY=replace-with-local-rest-api-key
-API_URLS=$OBSIDIAN_REST_API_URLS
-VERIFY_SSL=false
-EOF
-
   run_root install -m 0644 -o root -g root "$tmp_config" "$OBSIDIAN_MCP_EXAMPLE"
-  run_root install -m 0640 -o root -g root "$tmp_env" "$OBSIDIAN_MCP_ENV_EXAMPLE"
-}
-
-write_obsidian_mcp_runtime() {
-  if [ -z "$OBSIDIAN_API_KEY" ]; then
-    OBSIDIAN_API_KEY=$(generate_secret_key)
-  fi
-
-  if [ "$DRY_RUN" -eq 1 ]; then
-    print_cmd sh -c "write $OBSIDIAN_MCP_ENV_FILE with generated API_KEY"
-    return 0
-  fi
-
-  env_parent=$(dirname "$OBSIDIAN_MCP_ENV_FILE")
-  run_root mkdir -p "$env_parent"
-  tmp_env=$(mktemp)
-  trap 'rm -f "$tmp_env"' EXIT INT TERM
-  cat > "$tmp_env" <<EOF
-API_KEY=$OBSIDIAN_API_KEY
-API_URLS=$OBSIDIAN_REST_API_URLS
-VERIFY_SSL=false
-EOF
-  run_root install -m 0640 -o root -g "$SERVICE_GROUP" "$tmp_env" "$OBSIDIAN_MCP_ENV_FILE"
 }
 
 append_obsidian_mcp_connector_config() {
@@ -668,20 +537,16 @@ append_obsidian_mcp_connector_config() {
 
   if [ "$DRY_RUN" -eq 1 ]; then
     print_cmd mkdir -p "$config_parent"
-    print_cmd sh -c "append enabled Obsidian MCP connector to $CONFIG_FILE if missing"
+    print_cmd sh -c "upsert enabled filesystem-backed Obsidian MCP connector in $CONFIG_FILE"
     return 0
   fi
 
   run_root mkdir -p "$config_parent"
-  if [ -e "$CONFIG_FILE" ] && grep -F "[daemon.mcp_connectors.obsidian]" "$CONFIG_FILE" >/dev/null 2>&1; then
-    printf 'Keeping existing Obsidian MCP connector in %s.\n' "$CONFIG_FILE"
-    return 0
-  fi
 
+  tmp_block=$(mktemp)
   tmp_config=$(mktemp)
-  trap 'rm -f "$tmp_config"' EXIT INT TERM
-  cat > "$tmp_config" <<EOF
-
+  trap 'rm -f "$tmp_block" "$tmp_config"' EXIT INT TERM
+  cat > "$tmp_block" <<EOF
 [daemon.mcp_connectors.obsidian]
 transport = "stdio"
 command = "docker"
@@ -689,13 +554,47 @@ args = [
   "run",
   "-i",
   "--rm",
-  "--network", "container:teamd-obsidian",
-  "--env-file", "$OBSIDIAN_MCP_ENV_FILE",
-  "$OBSIDIAN_MCP_IMAGE",
+  "-v", "$OBSIDIAN_VAULT_DIR:/vault:rw",
+  "$OBSIDIAN_MCP_NODE_IMAGE",
+  "npx",
+  "-y",
+  "$OBSIDIAN_MCP_PACKAGE",
+  "/vault",
 ]
 enabled = true
 EOF
-  run_root sh -c "cat '$tmp_config' >> '$CONFIG_FILE'"
+
+  if [ -e "$CONFIG_FILE" ]; then
+    if grep -F "[daemon.mcp_connectors.obsidian]" "$CONFIG_FILE" >/dev/null 2>&1; then
+      awk -v block="$tmp_block" '
+        function print_block() {
+          while ((getline line < block) > 0) print line
+          close(block)
+        }
+        /^\[daemon\.mcp_connectors\.obsidian\][[:space:]]*$/ {
+          print_block()
+          in_obsidian = 1
+          next
+        }
+        in_obsidian && /^\[/ {
+          in_obsidian = 0
+        }
+        !in_obsidian {
+          print
+        }
+      ' "$CONFIG_FILE" > "$tmp_config"
+    else
+      {
+        cat "$CONFIG_FILE"
+        printf '\n'
+        cat "$tmp_block"
+      } > "$tmp_config"
+    fi
+  else
+    cat "$tmp_block" > "$tmp_config"
+  fi
+
+  run_root install -m 0644 -o root -g root "$tmp_config" "$CONFIG_FILE"
 }
 
 ensure_teamd_docker_access() {
@@ -919,9 +818,7 @@ fi
 if [ "$ENABLE_OBSIDIAN" -eq 1 ]; then
   write_obsidian_files
   ensure_obsidian_legacy_vault_link
-  if [ "$ENABLE_OBSIDIAN_MCP" -eq 1 ]; then
-    write_obsidian_vault_config
-  fi
+  write_obsidian_vault_config
   compose_up "$OBSIDIAN_COMPOSE"
 fi
 
@@ -930,7 +827,6 @@ if [ "$WRITE_OBSIDIAN_MCP_EXAMPLE" -eq 1 ]; then
 fi
 
 if [ "$ENABLE_OBSIDIAN_MCP" -eq 1 ]; then
-  write_obsidian_mcp_runtime
   append_obsidian_mcp_connector_config
   ensure_teamd_docker_access
 fi
@@ -979,31 +875,25 @@ if [ "$ENABLE_OBSIDIAN" -eq 1 ]; then
 EOF
   if [ "$ENABLE_OBSIDIAN_MCP" -eq 1 ]; then
     cat <<EOF
-    Local REST API plugin:
-      installed into managed vault and configured with generated API_KEY
-EOF
-    cat <<EOF
     Automated MCP:
-      Plugin: $OBSIDIAN_PLUGIN_ID ($OBSIDIAN_PLUGIN_VERSION)
-      Runtime env: $OBSIDIAN_MCP_ENV_FILE
+      Package: $OBSIDIAN_MCP_PACKAGE
+      Runtime image: $OBSIDIAN_MCP_NODE_IMAGE
+      Vault mount: $OBSIDIAN_VAULT_DIR:/vault:rw
       agentd config: $CONFIG_FILE
       Service user Docker access: $SERVICE_USER -> docker group
       Restarted services unless absent/no-start: $DAEMON_SERVICE, $TELEGRAM_SERVICE
 EOF
   else
     cat <<EOF
-    Local REST API plugin:
-      install inside Obsidian, then copy API key to $OBSIDIAN_MCP_ENV_FILE as API_KEY
+    Agent access:
+      run again with --with-obsidian-mcp to add filesystem-backed Obsidian MCP
 EOF
   fi
   if [ "$WRITE_OBSIDIAN_MCP_EXAMPLE" -eq 1 ]; then
     cat <<EOF
     MCP example: $OBSIDIAN_MCP_EXAMPLE
-    MCP env example: $OBSIDIAN_MCP_ENV_EXAMPLE
-    MCP env target: $OBSIDIAN_MCP_ENV_FILE
-    MCP image: $OBSIDIAN_MCP_IMAGE
-    MCP API_URLS: $OBSIDIAN_REST_API_URLS
-    MCP network: container:teamd-obsidian
+    MCP package: $OBSIDIAN_MCP_PACKAGE
+    MCP runtime image: $OBSIDIAN_MCP_NODE_IMAGE
 EOF
   fi
 fi

@@ -82,8 +82,9 @@ Tool usage rules:
   - The canonical production vault path is `/var/lib/teamd/vaults/teamd`
   - `/var/lib/teamd/vault` is only a compatibility symlink for older `~/vault` instructions; do not create a separate vault there
   - In the production service workspace `/var/lib/teamd`, the relative path `vault/...` resolves through that symlink to the canonical vault
-  - For Telegram/mobile knowledge-base work, write Markdown notes into the canonical vault through the available filesystem workspace tools when the vault path is in the session workspace
-  - If filesystem tools cannot access the vault, use the enabled `obsidian` MCP connector: search/read resources with `mcp_search_resources` and `mcp_read_resource`, and call discovered Obsidian write tools by their exposed MCP tool names
+  - For Telegram/mobile knowledge-base work, use the enabled `obsidian` MCP connector first
+  - Search/read resources with `mcp_search_resources` and `mcp_read_resource`, then call discovered Obsidian tools by their exposed MCP tool names such as `mcp__obsidian__read_note`, `mcp__obsidian__write_note`, or `mcp__obsidian__search_notes` when present
+  - Do not use generic filesystem write tools for normal Obsidian note work; direct filesystem writes are only an emergency/admin fallback when the Obsidian MCP connector is unavailable and the user explicitly accepts the fallback
   - Before changing an existing note, read it first; preserve Obsidian links, frontmatter, templates, and existing folder structure
   - Use concise Markdown files and stable folders such as `00-Inbox`, `01-Projects`, `02-Areas`, `03-Resources`, `05-Journal`, `06-Tasks`, and `templates`
 - Error handling:

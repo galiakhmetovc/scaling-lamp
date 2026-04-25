@@ -67,17 +67,16 @@ Core `agentd` ставится отдельно от контейнерной о
 ./scripts/deploy-teamd-containers.sh --dry-run --non-interactive --no-start --with-obsidian-mcp
 ```
 
-`--with-obsidian-mcp` ставит Obsidian, Local REST API plugin, `/etc/teamd/obsidian-mcp.env`, enabled MCP connector в `/etc/teamd/config.toml` и перезапускает `teamd` сервисы, если они уже установлены.
+`--with-obsidian-mcp` ставит Obsidian, добавляет enabled filesystem-backed MCP connector для vault в `/etc/teamd/config.toml` и перезапускает `teamd` сервисы, если они уже установлены. Этот путь не требует Obsidian Local REST API plugin: агент работает с vault через MCP tools, а Obsidian web UI остаётся интерфейсом для человека.
 
 Без `TEAMD_CADDY_DOMAIN` Obsidian web UI доступен в subfolder mode: `http://127.0.0.1:8080/obsidian/` напрямую или `http://127.0.0.1:8088/obsidian/` через Caddy. Если нужен dedicated domain, задайте `TEAMD_CADDY_DOMAIN`, и скрипт уберёт Obsidian subfolder.
 
-Канонический vault path: `/var/lib/teamd/vaults/teamd`. Compatibility path `/var/lib/teamd/vault` должен быть symlink на canonical vault, чтобы агентские ошибки вида `~/vault` не создавали второй vault. Так как production services работают из `/var/lib/teamd`, агент может писать в workspace-relative `vault/...`, но смыслово это тот же canonical vault.
+Канонический vault path: `/var/lib/teamd/vaults/teamd`. Compatibility path `/var/lib/teamd/vault` должен быть symlink на canonical vault, чтобы старые инструкции вида `~/vault` не создавали второй vault. Для нормальной работы агент должен использовать Obsidian MCP connector, а не generic filesystem writes.
 
-`--with-obsidian-mcp-example` дополнительно пишет шаблон MCP connector для Obsidian Local REST API:
+`--with-obsidian-mcp-example` дополнительно пишет шаблон MCP connector для filesystem-backed Obsidian vault access:
 
 ```text
 /opt/teamd/containers/obsidian/obsidian-mcp.example.toml
-/opt/teamd/containers/obsidian/obsidian-mcp.env.example
 ```
 
 Чтобы переключить встроенный `web_search` на SearXNG, добавьте в `/etc/teamd/teamd.env`:
