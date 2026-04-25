@@ -18,6 +18,7 @@ use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
 use std::sync::{Arc, Mutex};
 use std::thread;
+use std::time::{Duration, Instant};
 
 const DEFAULT_FS_LIST_LIMIT: usize = 200;
 const MAX_FS_LIST_LIMIT: usize = 1_000;
@@ -25,6 +26,7 @@ const DEFAULT_PROCESS_OUTPUT_READ_MAX_BYTES: usize = 4 * 1024;
 const MAX_PROCESS_OUTPUT_READ_MAX_BYTES: usize = 32 * 1024;
 const DEFAULT_PROCESS_OUTPUT_READ_MAX_LINES: usize = 20;
 const MAX_PROCESS_OUTPUT_READ_MAX_LINES: usize = 200;
+const PROCESS_READER_DRAIN_GRACE: Duration = Duration::from_millis(200);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ToolFamily {
@@ -2588,7 +2590,7 @@ impl ToolRuntime {
             output.finished_status = Some(ProcessResultStatus::Exited);
             output.exit_code = exit_status.code();
         }
-        managed.join_readers();
+        managed.drain_readers(PROCESS_READER_DRAIN_GRACE);
         self.remove_process(process_id);
         let output = managed
             .output
@@ -2627,7 +2629,7 @@ impl ToolRuntime {
             output.finished_status = Some(ProcessResultStatus::Killed);
             output.exit_code = exit_status.code();
         }
-        managed.join_readers();
+        managed.drain_readers(PROCESS_READER_DRAIN_GRACE);
         self.remove_process(process_id);
         let output = managed
             .output
@@ -2701,23 +2703,34 @@ impl ManagedProcess {
         Ok(ProcessOutputStatus::Running)
     }
 
-    fn join_readers(&self) {
-        if let Some(handle) = self
-            .stdout_reader
-            .lock()
-            .expect("stdout reader mutex poisoned")
-            .take()
-        {
-            let _ = handle.join();
+    fn drain_readers(&self, max_wait: Duration) {
+        let deadline = Instant::now() + max_wait;
+        loop {
+            let stdout_done = Self::join_reader_if_finished(&self.stdout_reader);
+            let stderr_done = Self::join_reader_if_finished(&self.stderr_reader);
+            if stdout_done && stderr_done {
+                break;
+            }
+            if Instant::now() >= deadline {
+                break;
+            }
+            thread::sleep(Duration::from_millis(5));
         }
-        if let Some(handle) = self
-            .stderr_reader
-            .lock()
-            .expect("stderr reader mutex poisoned")
-            .take()
-        {
-            let _ = handle.join();
+    }
+
+    fn join_reader_if_finished(slot: &Mutex<Option<thread::JoinHandle<()>>>) -> bool {
+        let mut guard = slot.lock().expect("reader mutex poisoned");
+        let Some(handle) = guard.as_ref() else {
+            return true;
+        };
+        if !handle.is_finished() {
+            return false;
         }
+        let Some(handle) = guard.take() else {
+            return true;
+        };
+        let _ = handle.join();
+        true
     }
 }
 

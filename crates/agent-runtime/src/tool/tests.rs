@@ -916,6 +916,43 @@ fn structured_exec_processes_survive_runtime_recreation_with_shared_registry() {
 }
 
 #[test]
+fn exec_wait_returns_when_shell_exits_even_if_background_child_keeps_pipe_open() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let workspace = WorkspaceRef::new(temp.path());
+    let mut runtime = ToolRuntime::new(workspace);
+
+    let started = runtime
+        .invoke(ToolCall::ExecStart(ExecStartInput {
+            executable: "/bin/sh".to_string(),
+            args: vec![
+                "-c".to_string(),
+                "printf 'shell-done\\n'; sleep 2 &".to_string(),
+            ],
+            cwd: None,
+        }))
+        .expect("exec_start")
+        .into_process_start()
+        .expect("process start");
+
+    let started_at = Instant::now();
+    let waited = runtime
+        .invoke(ToolCall::ExecWait(ProcessWaitInput {
+            process_id: started.process_id,
+        }))
+        .expect("exec_wait")
+        .into_process_result()
+        .expect("process result");
+
+    assert!(
+        started_at.elapsed() < Duration::from_secs(1),
+        "exec_wait should not wait for background descendants that inherited stdout/stderr"
+    );
+    assert_eq!(waited.status, ProcessResultStatus::Exited);
+    assert_eq!(waited.exit_code, Some(0));
+    assert!(waited.stdout.contains("shell-done"));
+}
+
+#[test]
 fn structured_exec_can_read_live_output_with_cursor_and_merged_stream() {
     let temp = tempfile::tempdir().expect("tempdir");
     let workspace = WorkspaceRef::new(temp.path());
