@@ -372,6 +372,24 @@ impl ProviderLoopCursor {
         self.continuation_input_messages.extend(messages);
     }
 
+    fn queue_post_tool_continuation_messages(&mut self, messages: Vec<ProviderMessage>) {
+        self.continuation_input_messages.clear();
+        if self.supports_previous_response_id {
+            self.continuation_input_messages.extend(messages);
+            return;
+        }
+
+        self.continuation_messages
+            .extend(
+                messages
+                    .into_iter()
+                    .map(|message| ProviderContinuationMessage::Message {
+                        role: message.role,
+                        content: message.content,
+                    }),
+            );
+    }
+
     fn clear_continuation_input_messages(&mut self) {
         self.continuation_input_messages.clear();
     }
@@ -2805,7 +2823,7 @@ impl ExecutionService {
                         now,
                     )
                     .map_err(ExecutionError::RunTransition)?;
-                    cursor.queue_continuation_input_messages(
+                    cursor.queue_post_tool_continuation_messages(
                         self.empty_response_continuation_messages(
                             cursor.supports_previous_response_id,
                         ),

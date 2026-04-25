@@ -1753,6 +1753,152 @@ fn execute_chat_turn_can_finish_after_an_allowed_web_tool_call_with_zai() {
 }
 
 #[test]
+fn execute_chat_turn_recovers_from_empty_zai_response_after_tool_results() {
+    let (web_base, web_requests, web_handle) = spawn_text_server("/doc", "local doc");
+    let tool_call_response = format!(
+        r#"{{
+                "id":"chatcmpl-empty-zai-1",
+                "model":"glm-5.1",
+                "choices":[
+                    {{
+                        "index":0,
+                        "finish_reason":"tool_calls",
+                        "message":{{
+                            "role":"assistant",
+                            "content":"",
+                            "tool_calls":[
+                                {{
+                                    "id":"call_web_fetch",
+                                    "type":"function",
+                                    "function":{{
+                                        "name":"web_fetch",
+                                        "arguments":"{{\"url\":\"{}\"}}"
+                                    }}
+                                }}
+                            ]
+                        }}
+                    }}
+                ],
+                "usage":{{"prompt_tokens":19,"completion_tokens":7,"total_tokens":26}}
+            }}"#,
+        web_base
+    );
+    let empty_response = r#"{
+                "id":"chatcmpl-empty-zai-empty",
+                "model":"glm-5.1",
+                "choices":[
+                    {
+                        "index":0,
+                        "finish_reason":"stop",
+                        "message":{
+                            "role":"assistant",
+                            "content":""
+                        }
+                    }
+                ],
+                "usage":{"prompt_tokens":31,"completion_tokens":0,"total_tokens":31}
+            }"#
+    .to_string();
+    let final_response = r#"{
+                "id":"chatcmpl-empty-zai-done",
+                "model":"glm-5.1",
+                "choices":[
+                    {
+                        "index":0,
+                        "finish_reason":"stop",
+                        "message":{
+                            "role":"assistant",
+                            "content":"Recovered after post-tool continuation"
+                        }
+                    }
+                ],
+                "usage":{"prompt_tokens":35,"completion_tokens":5,"total_tokens":40}
+            }"#
+    .to_string();
+    let (provider_api_base, provider_requests, provider_handle) = spawn_json_server_sequence(vec![
+        tool_call_response,
+        empty_response.clone(),
+        empty_response.clone(),
+        empty_response.clone(),
+        empty_response,
+        final_response,
+    ]);
+    let temp = tempfile::tempdir().expect("tempdir");
+    let app = build_from_config(AppConfig {
+        data_dir: temp.path().join("state-root"),
+        daemon: Default::default(),
+        provider: ConfiguredProvider {
+            kind: ProviderKind::ZaiChatCompletions,
+            api_base: Some(format!("{provider_api_base}/v1")),
+            api_key: Some("test-key".to_string()),
+            default_model: Some("glm-5.1".to_string()),
+            ..ConfiguredProvider::default()
+        },
+        ..AppConfig::default()
+    })
+    .expect("build app");
+    let store = PersistenceStore::open(&app.persistence).expect("open store");
+
+    store
+        .put_session(&SessionRecord {
+            id: "session-chat-empty-zai".to_string(),
+            title: "Chat empty zai session".to_string(),
+            prompt_override: Some("Use tools when useful.".to_string()),
+            settings_json: serde_json::to_string(&SessionSettings::default())
+                .expect("serialize settings"),
+            agent_profile_id: "default".to_string(),
+            active_mission_id: None,
+            parent_session_id: None,
+            parent_job_id: None,
+            delegation_label: None,
+            created_at: 1,
+            updated_at: 1,
+        })
+        .expect("put session");
+
+    let report = app
+        .execute_chat_turn("session-chat-empty-zai", "Fetch the local doc", 10)
+        .expect("execute chat turn");
+    let _first_request = provider_requests.recv().expect("first provider request");
+    let _second_request = provider_requests.recv().expect("second provider request");
+    let _third_request = provider_requests.recv().expect("third provider request");
+    let _fourth_request = provider_requests.recv().expect("fourth provider request");
+    let _fifth_request = provider_requests.recv().expect("fifth provider request");
+    let sixth_request = provider_requests.recv().expect("sixth provider request");
+    let web_request = web_requests.recv().expect("web request");
+    provider_handle.join().expect("join provider server");
+    web_handle.join().expect("join web server");
+
+    assert_eq!(report.run_id, "run-chat-session-chat-empty-zai-10");
+    assert_eq!(report.output_text, "Recovered after post-tool continuation");
+
+    let request_body = sixth_request
+        .split("\r\n\r\n")
+        .nth(1)
+        .expect("request body");
+    let request_json: serde_json::Value =
+        serde_json::from_str(request_body).expect("parse request body");
+    let messages = request_json["messages"].as_array().expect("messages array");
+    let tool_result_index = messages
+        .iter()
+        .position(|message| message["role"] == "tool")
+        .expect("tool result message");
+    let recovery_index = messages
+        .iter()
+        .position(|message| {
+            message["content"]
+                .as_str()
+                .is_some_and(|content| content.to_lowercase().contains("не возвращай пустой ответ"))
+        })
+        .expect("empty response recovery message");
+    assert!(
+        tool_result_index < recovery_index,
+        "empty-response recovery instruction must be sent after tool results"
+    );
+    assert!(web_request.to_ascii_lowercase().contains("get "));
+}
+
+#[test]
 fn execute_chat_turn_can_finish_after_exec_start_and_exec_wait_tool_calls() {
     let (api_base, requests, handle) = spawn_json_server_sequence(vec![
         r#"{

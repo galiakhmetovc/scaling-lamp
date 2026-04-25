@@ -124,6 +124,10 @@ pub enum ProviderContinuationMessage {
         tool_call_id: String,
         content: String,
     },
+    Message {
+        role: MessageRole,
+        content: String,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -903,6 +907,22 @@ impl ZaiChatCompletionsDriver {
                         role: "tool",
                         content: Some(content.as_str()),
                         tool_call_id: Some(tool_call_id.as_str()),
+                        tool_calls: None,
+                    });
+                }
+                ProviderContinuationMessage::Message { role, content } => {
+                    let role = match role {
+                        MessageRole::System => "system",
+                        MessageRole::User => "user",
+                        MessageRole::Assistant => "assistant",
+                        MessageRole::Tool => {
+                            return Err(ProviderError::UnsupportedMessageRole { role: *role });
+                        }
+                    };
+                    messages.push(ZaiChatCompletionMessage {
+                        role,
+                        content: Some(content.as_str()),
+                        tool_call_id: None,
                         tool_calls: None,
                     });
                 }
