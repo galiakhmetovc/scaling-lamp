@@ -95,6 +95,11 @@ fn build_from_config_bootstraps_builtin_agents_and_selects_default() {
         assert!(agent_home.join("AGENTS.md").is_file());
         assert!(agent_home.join("skills").is_dir());
     }
+    assert!(
+        data_dir
+            .join("agents/default/skills/obsidian-vault/SKILL.md")
+            .is_file()
+    );
 
     let store = PersistenceStore::open(&app.persistence).expect("open store");
     assert_eq!(
@@ -215,6 +220,10 @@ fn build_from_config_refreshes_legacy_default_prompts_but_preserves_custom_edits
     assert!(refreshed_agents.contains("session_search"));
     assert!(refreshed_agents.contains("use `continue_later` with `delay_seconds`"));
     assert!(refreshed_agents.contains("set `delivery_mode` to `existing_session`"));
+    let obsidian_skill = fs::read_to_string(default_home.join("skills/obsidian-vault/SKILL.md"))
+        .expect("read obsidian skill");
+    assert!(obsidian_skill.contains("name: obsidian-vault"));
+    assert!(obsidian_skill.contains("Use the `obsidian` MCP connector first"));
 
     fs::write(default_home.join("AGENTS.md"), "custom prompt preserved\n")
         .expect("write custom agents");
