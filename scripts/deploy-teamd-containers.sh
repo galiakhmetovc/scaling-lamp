@@ -783,6 +783,17 @@ compose_up() {
   run_root docker compose -f "$compose_file" up -d
 }
 
+compose_up_caddy() {
+  if [ "$SKIP_START" -eq 1 ]; then
+    printf 'Skipping container start for %s because --no-start was set.\n' "$CADDY_COMPOSE"
+    return 0
+  fi
+
+  # Caddyfile is mounted as a single bind-mounted file. Recreate avoids stale
+  # inode mounts after atomic config replacement on the host.
+  run_root docker compose -f "$CADDY_COMPOSE" up -d --force-recreate
+}
+
 reload_caddy_if_running() {
   [ "$ENABLE_CADDY" -eq 1 ] || return 0
   [ "$SKIP_START" -eq 0 ] || return 0
@@ -883,7 +894,7 @@ fi
 
 if [ "$ENABLE_CADDY" -eq 1 ]; then
   write_caddy_files
-  compose_up "$CADDY_COMPOSE"
+  compose_up_caddy
   reload_caddy_if_running
 fi
 

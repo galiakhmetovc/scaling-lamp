@@ -78,6 +78,7 @@ containers_dry_run_start_output=$(
 )
 
 assert_contains "$containers_dry_run_start_output" "'caddy' 'reload'"
+assert_contains "$containers_dry_run_start_output" "--force-recreate"
 
 existing_env_dir="$SCRIPT_DIR/../target/deploy-script-test"
 existing_env="$existing_env_dir/existing.env"
