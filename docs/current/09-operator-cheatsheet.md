@@ -56,6 +56,7 @@ Core `agentd` ставится отдельно от контейнерной о
 ```bash
 ./scripts/deploy-teamd-containers.sh
 ./scripts/deploy-teamd-containers.sh --with-obsidian
+./scripts/deploy-teamd-containers.sh --with-obsidian-mcp
 ./scripts/deploy-teamd-containers.sh --with-obsidian-mcp-example
 ```
 
@@ -63,7 +64,10 @@ Core `agentd` ставится отдельно от контейнерной о
 
 ```bash
 ./scripts/deploy-teamd-containers.sh --dry-run --non-interactive --no-start --with-obsidian
+./scripts/deploy-teamd-containers.sh --dry-run --non-interactive --no-start --with-obsidian-mcp
 ```
+
+`--with-obsidian-mcp` ставит Obsidian, Local REST API plugin, `/etc/teamd/obsidian-mcp.env`, enabled MCP connector в `/etc/teamd/config.toml` и перезапускает `teamd` сервисы, если они уже установлены.
 
 `--with-obsidian-mcp-example` дополнительно пишет шаблон MCP connector для Obsidian Local REST API:
 

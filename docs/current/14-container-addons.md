@@ -28,6 +28,7 @@ Container add-ons ставятся отдельно:
 Опционально:
 
 - `teamd-obsidian` — browser-accessible Obsidian container, если передать `--with-obsidian`.
+- Obsidian Local REST API plugin + MCP connector для `agentd`, если передать `--with-obsidian-mcp`.
 
 Проверить действия без изменений:
 
@@ -86,7 +87,7 @@ search_url = "http://127.0.0.1:8888/search"
 
 ## Obsidian: web UI для оператора
 
-Obsidian включается явно:
+Obsidian UI включается явно:
 
 ```bash
 ./scripts/deploy-teamd-containers.sh --with-obsidian
@@ -95,6 +96,7 @@ Obsidian включается явно:
 Default paths:
 
 - vaults: `/var/lib/teamd/vaults`;
+- managed vault: `/var/lib/teamd/vaults/teamd`;
 - container config: `/var/lib/teamd/containers/obsidian/config`;
 - local URL: `http://127.0.0.1:8080`.
 
@@ -123,7 +125,31 @@ agentd -> stdio MCP connector -> docker run obsidian-mcp -> Obsidian Local REST 
 - MCP server превращает Obsidian REST API в MCP tools/resources;
 - текущий `agentd` поддерживает MCP transport только `stdio`, поэтому MCP запускается как дочерний процесс `docker run -i --rm`, а не как постоянный HTTP/SSE sidecar.
 
-Сгенерировать пример коннектора:
+Полностью автоматический путь:
+
+```bash
+./scripts/deploy-teamd-containers.sh --with-obsidian-mcp
+```
+
+Он делает всё, что нужно для первого запуска:
+
+- создаёт managed vault `/var/lib/teamd/vaults/teamd`;
+- скачивает `main.js`, `manifest.json`, `styles.css` plugin'а `obsidian-local-rest-api` из GitHub release;
+- пишет plugin config `data.json` с сгенерированным `API_KEY`;
+- добавляет `obsidian-local-rest-api` в `.obsidian/community-plugins.json`;
+- seed'ит Obsidian vault registry в `/var/lib/teamd/containers/obsidian/config/.config/obsidian/obsidian.json`;
+- пишет `/etc/teamd/obsidian-mcp.env`;
+- добавляет enabled MCP connector `[daemon.mcp_connectors.obsidian]` в `/etc/teamd/config.toml`, если его ещё нет;
+- добавляет systemd-пользователя `teamd` в группу `docker`, чтобы `agentd` мог запускать stdio MCP через `docker run`;
+- перезапускает `teamd-daemon.service` и `teamd-telegram.service`, если они существуют и не указан `--no-start`.
+
+Проверка без изменений:
+
+```bash
+./scripts/deploy-teamd-containers.sh --dry-run --non-interactive --no-start --with-obsidian-mcp
+```
+
+Ручной fallback — только сгенерировать пример коннектора:
 
 ```bash
 ./scripts/deploy-teamd-containers.sh --with-obsidian-mcp-example
@@ -136,7 +162,7 @@ agentd -> stdio MCP connector -> docker run obsidian-mcp -> Obsidian Local REST 
 /opt/teamd/containers/obsidian/obsidian-mcp.env.example
 ```
 
-Дальше порядок такой:
+Для ручного fallback порядок такой:
 
 1. Откройте Obsidian web UI.
 2. Установите и включите community plugin `Local REST API`.
@@ -188,7 +214,7 @@ teamdctl tui
 
 ### Важное ограничение Docker/MCP
 
-Такой коннектор требует, чтобы systemd-пользователь `teamd` мог выполнить `docker run ...`. Самый простой способ — добавить `teamd` в группу `docker`, но это почти root-level право. Поэтому deploy script только пишет пример и не включает его автоматически.
+Такой коннектор требует, чтобы systemd-пользователь `teamd` мог выполнить `docker run ...`. Автоматический режим `--with-obsidian-mcp` добавляет `teamd` в группу `docker`. Это почти root-level право, потому что доступ к Docker socket фактически позволяет управлять host'ом. Если это неприемлемо, используйте `--with-obsidian-mcp-example` и настройте более узкий wrapper/transport вручную.
 
 Более строгий вариант на будущее:
 

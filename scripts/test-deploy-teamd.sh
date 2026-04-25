@@ -29,6 +29,7 @@ assert_contains "$help_output" "--non-interactive"
 containers_help_output=$("$CONTAINERS_DEPLOY_SCRIPT" --help)
 assert_contains "$containers_help_output" "container add-ons"
 assert_contains "$containers_help_output" "--with-obsidian"
+assert_contains "$containers_help_output" "--with-obsidian-mcp"
 assert_contains "$containers_help_output" "--no-searxng"
 assert_contains "$containers_help_output" "--no-caddy"
 assert_contains "$containers_help_output" "--with-obsidian-mcp-example"
@@ -52,7 +53,7 @@ assert_contains "$dry_run_output" "telegram pair"
 assert_contains "$dry_run_output" "session list"
 
 containers_dry_run_output=$(
-  "$CONTAINERS_DEPLOY_SCRIPT" --dry-run --non-interactive --no-start --with-obsidian-mcp-example 2>&1
+  "$CONTAINERS_DEPLOY_SCRIPT" --dry-run --non-interactive --no-start --with-obsidian-mcp 2>&1
 )
 
 assert_contains "$containers_dry_run_output" "DRY RUN"
@@ -60,9 +61,12 @@ assert_contains "$containers_dry_run_output" "teamd-searxng"
 assert_contains "$containers_dry_run_output" "127.0.0.1:8888"
 assert_contains "$containers_dry_run_output" "mcp-searxng"
 assert_contains "$containers_dry_run_output" "teamd-obsidian"
+assert_contains "$containers_dry_run_output" "download Obsidian Local REST API plugin files"
+assert_contains "$containers_dry_run_output" "append enabled Obsidian MCP connector"
 assert_contains "$containers_dry_run_output" "obsidian-mcp.example.toml"
 assert_contains "$containers_dry_run_output" "API_KEY"
 assert_contains "$containers_dry_run_output" "container:teamd-obsidian"
+assert_contains "$containers_dry_run_output" "usermod"
 assert_contains "$containers_dry_run_output" "teamd-caddy"
 assert_contains "$containers_dry_run_output" "docker compose"
 assert_contains "$containers_dry_run_output" "TEAMD_WEB_SEARCH_BACKEND=searxng_json"

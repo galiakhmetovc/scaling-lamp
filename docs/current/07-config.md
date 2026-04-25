@@ -231,13 +231,19 @@ export TEAMD_WEB_SEARCH_URL='http://127.0.0.1:8888/search'
 
 Это initial state для MCP runtime surface. Потом оператор может управлять коннекторами через TUI/HTTP/CLI.
 
-Пример для Obsidian Local REST API генерирует второй deploy script:
+Автоматический Obsidian Local REST API connector добавляет второй deploy script:
+
+```bash
+./scripts/deploy-teamd-containers.sh --with-obsidian-mcp
+```
+
+Если нужен только шаблон без изменения `/etc/teamd/config.toml`, используйте:
 
 ```bash
 ./scripts/deploy-teamd-containers.sh --with-obsidian-mcp-example
 ```
 
-Он пишет шаблон `stdio`-коннектора в `/opt/teamd/containers/obsidian/obsidian-mcp.example.toml`. Подробный runbook: [14-container-addons.md](14-container-addons.md).
+Шаблон `stdio`-коннектора лежит в `/opt/teamd/containers/obsidian/obsidian-mcp.example.toml`. Подробный runbook: [14-container-addons.md](14-container-addons.md).
 
 ## A2A peers в конфиге
 
