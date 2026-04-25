@@ -4,6 +4,7 @@ set -eu
 SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 DEPLOY_SCRIPT="$SCRIPT_DIR/deploy-teamd.sh"
 TEAMDCTL_SCRIPT="$SCRIPT_DIR/teamdctl.sh"
+DIAGNOSTICS_SCRIPT="$SCRIPT_DIR/collect-teamd-diagnostics.sh"
 
 fail() {
   printf 'FAIL: %s\n' "$1" >&2
@@ -23,6 +24,10 @@ help_output=$("$DEPLOY_SCRIPT" --help)
 assert_contains "$help_output" "Usage:"
 assert_contains "$help_output" "--dry-run"
 assert_contains "$help_output" "--non-interactive"
+
+diagnostics_help_output=$("$DIAGNOSTICS_SCRIPT" --help)
+assert_contains "$diagnostics_help_output" "collects production diagnostics"
+assert_contains "$diagnostics_help_output" "--session"
 
 dry_run_output=$(
   TEAMD_TELEGRAM_BOT_TOKEN='123456789:test-token' \

@@ -5919,27 +5919,16 @@ fn glob_match_segment_chars(pattern: &[char], candidate: &[char]) -> bool {
 fn parse_search_results(html: &str, source_url: &str) -> Result<Vec<WebSearchResult>, ToolError> {
     let mut results = Vec::new();
     let mut cursor = html;
-    let link_prefix = "<a class=\"result__a\" href=\"";
-    let snippet_prefix = "<a class=\"result__snippet\">";
 
-    while let Some(index) = cursor.find(link_prefix) {
-        cursor = &cursor[index + link_prefix.len()..];
-        let Some(url_end) = cursor.find('"') else {
+    while let Some((_, tag_end, tag)) = find_anchor_tag_with_class(cursor, "result__a") {
+        let Some(raw_url) = extract_html_attr(tag, "href") else {
             return Err(ToolError::WebParse {
                 url: source_url.to_string(),
-                reason: "result href was not terminated".to_string(),
+                reason: "result href was missing".to_string(),
             });
         };
-        let url = decode_html_entities(&cursor[..url_end]);
-        cursor = &cursor[url_end + 1..];
-
-        let Some(tag_close) = cursor.find('>') else {
-            return Err(ToolError::WebParse {
-                url: source_url.to_string(),
-                reason: "result anchor was malformed".to_string(),
-            });
-        };
-        cursor = &cursor[tag_close + 1..];
+        let url = normalize_duckduckgo_result_url(&decode_html_entities(raw_url));
+        cursor = &cursor[tag_end + 1..];
 
         let Some(title_end) = cursor.find("</a>") else {
             return Err(ToolError::WebParse {
@@ -5950,12 +5939,18 @@ fn parse_search_results(html: &str, source_url: &str) -> Result<Vec<WebSearchRes
         let title = strip_html_tags(&decode_html_entities(&cursor[..title_end]));
         cursor = &cursor[title_end + 4..];
 
-        let snippet = cursor.find(snippet_prefix).and_then(|snippet_index| {
-            let after_prefix = &cursor[snippet_index + snippet_prefix.len()..];
-            after_prefix.find("</a>").map(|snippet_end| {
-                strip_html_tags(&decode_html_entities(&after_prefix[..snippet_end]))
-            })
-        });
+        let next_result = find_anchor_tag_with_class(cursor, "result__a")
+            .map(|(index, _, _)| index)
+            .unwrap_or(cursor.len());
+        let snippet_region = &cursor[..next_result];
+        let snippet = find_anchor_tag_with_class(snippet_region, "result__snippet").and_then(
+            |(_, snippet_tag_end, _)| {
+                let after_tag = &snippet_region[snippet_tag_end + 1..];
+                after_tag.find("</a>").map(|snippet_end| {
+                    strip_html_tags(&decode_html_entities(&after_tag[..snippet_end]))
+                })
+            },
+        );
 
         results.push(WebSearchResult {
             title,
@@ -5965,6 +5960,65 @@ fn parse_search_results(html: &str, source_url: &str) -> Result<Vec<WebSearchRes
     }
 
     Ok(results)
+}
+
+fn find_anchor_tag_with_class<'a>(
+    haystack: &'a str,
+    class_name: &str,
+) -> Option<(usize, usize, &'a str)> {
+    let mut search_from = 0;
+    while let Some(relative_start) = haystack[search_from..].find("<a") {
+        let start = search_from + relative_start;
+        let relative_end = haystack[start..].find('>')?;
+        let end = start + relative_end;
+        let tag = &haystack[start..=end];
+        if html_tag_has_class(tag, class_name) {
+            return Some((start, end, tag));
+        }
+        search_from = end + 1;
+    }
+    None
+}
+
+fn html_tag_has_class(tag: &str, expected: &str) -> bool {
+    extract_html_attr(tag, "class")
+        .map(|classes| classes.split_whitespace().any(|class| class == expected))
+        .unwrap_or(false)
+}
+
+fn extract_html_attr<'a>(tag: &'a str, name: &str) -> Option<&'a str> {
+    for quote in ['"', '\''] {
+        let prefix = format!("{name}={quote}");
+        if let Some(start) = tag.find(prefix.as_str()) {
+            let value_start = start + prefix.len();
+            let value_end = tag[value_start..].find(quote)?;
+            return Some(&tag[value_start..value_start + value_end]);
+        }
+    }
+    None
+}
+
+fn normalize_duckduckgo_result_url(url: &str) -> String {
+    let absolute = if url.starts_with("//") {
+        format!("https:{url}")
+    } else {
+        url.to_string()
+    };
+    let Ok(parsed) = Url::parse(absolute.as_str()) else {
+        return url.to_string();
+    };
+    let is_duckduckgo_redirect = parsed
+        .host_str()
+        .is_some_and(|host| host.ends_with("duckduckgo.com"))
+        && parsed.path().starts_with("/l/");
+    if !is_duckduckgo_redirect {
+        return absolute;
+    }
+    parsed
+        .query_pairs()
+        .find(|(key, _)| key == "uddg")
+        .map(|(_, value)| value.into_owned())
+        .unwrap_or(absolute)
 }
 
 fn strip_html_tags(input: &str) -> String {

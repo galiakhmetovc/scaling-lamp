@@ -1082,6 +1082,23 @@ fn web_tools_fetch_pages_and_return_search_results() {
     assert_eq!(searched.results[0].url, "https://example.test/docs");
 }
 
+#[test]
+fn web_search_parses_duckduckgo_html_with_extra_anchor_attributes() {
+    let html = "\
+        <html><body>\
+        <a rel=\"nofollow\" class=\"result__a\" href=\"//duckduckgo.com/l/?uddg=https%3A%2F%2Fyandex.ru%2Fpogoda%2Fru%2Fmoscow&amp;rut=abc\">Погода в Москве — Прогноз</a>\
+        <a class=\"result__snippet\" href=\"//duckduckgo.com/l/?uddg=https%3A%2F%2Fyandex.ru%2Fpogoda%2Fru%2Fmoscow&amp;rut=abc\">Сейчас <b>в</b> <b>Москве</b> +7°</a>\
+        </body></html>";
+
+    let results = super::parse_search_results(html, "https://duckduckgo.com/html/?q=weather")
+        .expect("parse search results");
+
+    assert_eq!(results.len(), 1);
+    assert_eq!(results[0].title, "Погода в Москве — Прогноз");
+    assert_eq!(results[0].url, "https://yandex.ru/pogoda/ru/moscow");
+    assert_eq!(results[0].snippet.as_deref(), Some("Сейчас в Москве +7°"));
+}
+
 struct TestHttpServer {
     base_url: String,
     search_url: String,

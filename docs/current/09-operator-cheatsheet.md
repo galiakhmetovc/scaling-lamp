@@ -356,6 +356,18 @@ agentd logs 200
 
 Если нужен файл для баг-репорта, используйте `\отладка`. Команда сохраняет daemon-side bundle в `DATA_DIR/audit/debug-bundles`; при systemd-установке путь обычно начинается с `/var/lib/teamd/state/audit/debug-bundles`.
 
+Для быстрого сбора production-диагностики с удалённого узла есть операторский скрипт:
+
+```bash
+scripts/collect-teamd-diagnostics.sh --host teamd-ams1
+scripts/collect-teamd-diagnostics.sh --host teamd-ams1 --session session-...
+scripts/collect-teamd-diagnostics.sh --local
+```
+
+По умолчанию скрипт берёт последнюю session по `updated_at` из `teamdctl session list --raw` и складывает локальный bundle в `diagnostics/`: статусы сервисов, `journalctl`, tail `audit/runtime.jsonl`, список sessions, transcript, tool ledger с results, `run show` по всем run выбранной session, JSON debug-view и payload-файлы transcript/artifacts. В конце он создаёт архив всего bundle: `diagnostics/teamd-diagnostics-...tar.gz`.
+
+Удалённый режим использует SSH host alias. Для такого сценария удобно завести SSH alias с ключом, чтобы не передавать пароль в диагностических командах. Локальный режим `--local` запускает те же команды на текущей машине. Он работает, если на этой машине доступны `teamdctl`, `journalctl`, `curl` и production state в ожидаемом `TEAMD_DIAG_STATE_DIR` (`/var/lib/teamd/state` по умолчанию).
+
 ## Если TUI подвисает
 
 1. Не гадайте.

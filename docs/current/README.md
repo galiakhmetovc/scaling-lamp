@@ -30,6 +30,7 @@
 7. [10-tool-usability-assessment.md](10-tool-usability-assessment.md)
 8. [11-workspace-modernization-plan.md](11-workspace-modernization-plan.md)
 9. [12-prompt-contract-decision.md](12-prompt-contract-decision.md)
+10. [13-observability-tracing-plan.md](13-observability-tracing-plan.md)
 
 ## Словарь
 
@@ -45,6 +46,7 @@
 - **context summary / compaction** — сжатие истории сессии в summary.
 - **SessionHead** — сжатая сводка о состоянии сессии, которую модель получает перед transcript tail.
 - **Prompt contract** — договорённость о том, какие runtime/user/history blocks модель получает, в каком порядке и с какими ограничениями размера.
+- **Trace / span** — спорная observability-модель для причинной связи между surface event, run, tool call, artifact и delivery; см. [13-observability-tracing-plan.md](13-observability-tracing-plan.md).
 
 ## Где искать код
 
