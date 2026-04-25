@@ -458,8 +458,11 @@ fn daemon_http_lists_and_updates_session_skills() {
         .expect("list skills");
     assert_eq!(listed.status(), StatusCode::OK);
     let listed: Vec<bootstrap::SessionSkillStatus> = listed.json().expect("skills json");
-    assert_eq!(listed.len(), 1);
-    assert_eq!(listed[0].mode, "inactive");
+    let rust_debug = listed
+        .iter()
+        .find(|skill| skill.name == "rust-debug")
+        .expect("rust-debug listed");
+    assert_eq!(rust_debug.mode, "inactive");
 
     let enabled = client
         .post(format!(
@@ -474,7 +477,11 @@ fn daemon_http_lists_and_updates_session_skills() {
         .expect("enable skill");
     assert_eq!(enabled.status(), StatusCode::OK);
     let enabled: Vec<bootstrap::SessionSkillStatus> = enabled.json().expect("enabled json");
-    assert_eq!(enabled[0].mode, "manual");
+    let rust_debug = enabled
+        .iter()
+        .find(|skill| skill.name == "rust-debug")
+        .expect("rust-debug enabled");
+    assert_eq!(rust_debug.mode, "manual");
 
     let disabled = client
         .post(format!(
@@ -489,7 +496,11 @@ fn daemon_http_lists_and_updates_session_skills() {
         .expect("disable skill");
     assert_eq!(disabled.status(), StatusCode::OK);
     let disabled: Vec<bootstrap::SessionSkillStatus> = disabled.json().expect("disabled json");
-    assert_eq!(disabled[0].mode, "disabled");
+    let rust_debug = disabled
+        .iter()
+        .find(|skill| skill.name == "rust-debug")
+        .expect("rust-debug disabled");
+    assert_eq!(rust_debug.mode, "disabled");
 
     handle.stop().expect("stop daemon");
 }

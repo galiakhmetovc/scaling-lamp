@@ -1113,10 +1113,46 @@ fn web_tools_fetch_pages_and_return_search_results() {
 
     assert_eq!(fetched.url, server.page_url());
     assert_eq!(fetched.status_code, 200);
-    assert!(fetched.body.contains("Agent runtime page"));
+    assert_eq!(fetched.title.as_deref(), Some("Agent runtime page"));
+    assert!(fetched.extracted_from_html);
+    assert!(fetched.body.contains("# Agent runtime page"));
+    assert!(fetched.body.contains("Agent runtime page body & notes."));
+    assert!(fetched.body.contains("Second paragraph."));
+    assert!(
+        fetched
+            .body
+            .contains("[Reference spec](https://example.test/spec)")
+    );
+    assert!(!fetched.body.contains("<html"));
+    assert!(!fetched.body.contains("console.log"));
     assert_eq!(searched.results.len(), 2);
     assert_eq!(searched.results[0].title, "Agent runtime docs");
     assert_eq!(searched.results[0].url, "https://example.test/docs");
+}
+
+#[test]
+fn web_fetch_preserves_plain_text_responses() {
+    let server = TestHttpServer::spawn_with_requests(1);
+    let temp = tempfile::tempdir().expect("tempdir");
+    let workspace = WorkspaceRef::new(temp.path());
+    let mut runtime = ToolRuntime::with_web_client(
+        workspace,
+        WebToolClient::for_tests(server.base_url(), server.search_url()),
+    );
+
+    let fetched = runtime
+        .invoke(ToolCall::WebFetch(WebFetchInput {
+            url: server.plain_url(),
+        }))
+        .expect("web_fetch")
+        .into_web_fetch()
+        .expect("web_fetch output");
+
+    assert_eq!(fetched.url, server.plain_url());
+    assert_eq!(fetched.status_code, 200);
+    assert_eq!(fetched.title, None);
+    assert!(!fetched.extracted_from_html);
+    assert_eq!(fetched.body, "plain weather text");
 }
 
 #[test]
@@ -1175,13 +1211,17 @@ struct TestHttpServer {
 
 impl TestHttpServer {
     fn spawn() -> Self {
+        Self::spawn_with_requests(2)
+    }
+
+    fn spawn_with_requests(request_count: usize) -> Self {
         let listener = TcpListener::bind("127.0.0.1:0").expect("bind test server");
         let address = listener.local_addr().expect("local addr");
         let base_url = format!("http://{}", address);
         let search_url = format!("{}/search", base_url);
 
         thread::spawn(move || {
-            for _ in 0..2 {
+            for _ in 0..request_count {
                 let (mut stream, _) = listener.accept().expect("accept");
                 let mut buffer = [0_u8; 4096];
                 let bytes = stream.read(&mut buffer).expect("read request");
@@ -1209,11 +1249,17 @@ impl TestHttpServer {
                      <a class=\"result__snippet\">Web tool coverage</a>\
                      </body></html>",
                     )
+                } else if path == "/plain" {
+                    ("text/plain; charset=utf-8", "plain weather text")
                 } else {
                     (
                         "text/html; charset=utf-8",
-                        "<html><head><title>Agent runtime page</title></head>\
-                     <body>Agent runtime page body</body></html>",
+                        "<html><head><title>Agent runtime page</title>\
+                     <style>.hidden{display:none}</style>\
+                     <script>console.log('skip me')</script></head>\
+                     <body><main><h1>Agent runtime page</h1>\
+                     <p>Agent runtime page body &amp; notes.</p><p><a href=\"https://example.test/spec\">Reference spec</a></p>\
+                     <p>Second paragraph.</p></main></body></html>",
                     )
                 };
 
@@ -1244,5 +1290,9 @@ impl TestHttpServer {
 
     fn page_url(&self) -> String {
         format!("{}/page", self.base_url)
+    }
+
+    fn plain_url(&self) -> String {
+        format!("{}/plain", self.base_url)
     }
 }

@@ -85,6 +85,24 @@ grep -q 'redir /searxng /searxng/ 308' "$CONTAINERS_DEPLOY_SCRIPT" \
   || fail "expected SearXNG slash redirect in Caddyfile template"
 grep -q 'header_up X-Script-Name /searxng' "$CONTAINERS_DEPLOY_SCRIPT" \
   || fail "expected SearXNG X-Script-Name header in Caddyfile template"
+grep -q 'OBSIDIAN_IMAGE=${TEAMD_OBSIDIAN_IMAGE:-lscr.io/linuxserver/obsidian:latest}' "$CONTAINERS_DEPLOY_SCRIPT" \
+  || fail "expected linuxserver Obsidian image default"
+grep -q '"127.0.0.1:$OBSIDIAN_PORT:$OBSIDIAN_CONTAINER_PORT"' "$CONTAINERS_DEPLOY_SCRIPT" \
+  || fail "expected configurable Obsidian container port mapping"
+grep -q 'reverse_proxy teamd-obsidian:$OBSIDIAN_CONTAINER_PORT' "$CONTAINERS_DEPLOY_SCRIPT" \
+  || fail "expected Caddy to proxy to configurable Obsidian container port"
+grep -q 'tls internal' "$CONTAINERS_DEPLOY_SCRIPT" \
+  || fail "expected internal TLS support for Obsidian without a dedicated domain"
+grep -q 'redir /obsidian/\* https://$CADDY_HOST:$CADDY_HTTPS_PORT{uri} 308' "$CONTAINERS_DEPLOY_SCRIPT" \
+  || fail "expected HTTP Obsidian traffic to redirect to HTTPS"
+grep -q 'TEAMD_CADDY_HOST' "$CONTAINERS_DEPLOY_SCRIPT" \
+  || fail "expected configurable Caddy host for internal TLS"
+grep -q 'https://$CADDY_HOST {' "$CONTAINERS_DEPLOY_SCRIPT" \
+  || fail "expected host-bound HTTPS site for internal TLS"
+grep -q 'detect_primary_ipv4' "$CONTAINERS_DEPLOY_SCRIPT" \
+  || fail "expected automatic primary IPv4 detection for Caddy host"
+grep -q 'default_sni $CADDY_HOST' "$CONTAINERS_DEPLOY_SCRIPT" \
+  || fail "expected default_sni for IP-based TLS without explicit SNI"
 
 existing_env_dir="$SCRIPT_DIR/../target/deploy-script-test"
 existing_env="$existing_env_dir/existing.env"

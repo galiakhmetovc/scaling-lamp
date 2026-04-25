@@ -1422,6 +1422,154 @@ fn execute_chat_turn_offloads_large_fs_read_text_results_into_artifacts() {
 }
 
 #[test]
+fn execute_chat_turn_offloads_large_web_fetch_results_into_artifacts() {
+    let large_html = format!(
+        "<html><head><title>Readable web page</title>\
+         <style>.hidden{{display:none}}</style>\
+         <script>console.log('ignore me');</script></head>\
+         <body><article><h1>Readable web page</h1><p>{}</p><p>{}</p></article></body></html>",
+        "WEB-OFFLOAD-MARKER ".repeat(700),
+        "second readable paragraph ".repeat(500)
+    );
+    let (web_base, _web_requests, web_handle) =
+        spawn_http_server("/page", "text/html; charset=utf-8", large_html);
+    let (api_base, requests, handle) = spawn_json_server_sequence(vec![
+        format!(
+            r#"{{
+                    "id":"resp_offload_web_fetch_1",
+                    "model":"gpt-5.4",
+                    "output":[
+                        {{
+                            "id":"fc_web_fetch_large",
+                            "type":"function_call",
+                            "call_id":"call_web_fetch_large",
+                            "name":"web_fetch",
+                            "arguments":"{{\"url\":\"{}\"}}"
+                        }}
+                    ],
+                    "usage":{{"input_tokens":40,"output_tokens":12,"total_tokens":52}}
+                }}"#,
+            web_base
+        ),
+        r#"{
+                "id":"resp_offload_web_fetch_2",
+                "model":"gpt-5.4",
+                "output":[
+                    {
+                        "id":"msg_offload_web_fetch",
+                        "type":"message",
+                        "status":"completed",
+                        "role":"assistant",
+                        "content":[
+                            {
+                                "type":"output_text",
+                                "text":"Large web fetch result was offloaded."
+                            }
+                        ]
+                    }
+                ],
+                "usage":{"input_tokens":18,"output_tokens":6,"total_tokens":24}
+            }"#
+        .to_string(),
+    ]);
+    let temp = tempfile::tempdir().expect("tempdir");
+    let mut app = build_from_config(AppConfig {
+        data_dir: temp.path().join("state-root"),
+        daemon: Default::default(),
+        provider: ConfiguredProvider {
+            kind: ProviderKind::OpenAiResponses,
+            api_base: Some(format!("{api_base}/v1")),
+            api_key: Some("test-key".to_string()),
+            default_model: Some("gpt-5.4".to_string()),
+            ..ConfiguredProvider::default()
+        },
+        ..AppConfig::default()
+    })
+    .expect("build app");
+    app.runtime.workspace = WorkspaceRef::new(temp.path());
+    let store = PersistenceStore::open(&app.persistence).expect("open store");
+    store
+        .put_session(&SessionRecord {
+            id: "session-offload-large-web-fetch".to_string(),
+            title: "Large Web Fetch".to_string(),
+            prompt_override: None,
+            settings_json: serde_json::to_string(&SessionSettings::default())
+                .expect("serialize settings"),
+            agent_profile_id: "default".to_string(),
+            active_mission_id: None,
+            parent_session_id: None,
+            parent_job_id: None,
+            delegation_label: None,
+            created_at: 1,
+            updated_at: 1,
+        })
+        .expect("put session");
+
+    let report = app
+        .execute_chat_turn(
+            "session-offload-large-web-fetch",
+            "fetch the large readable web page",
+            10,
+        )
+        .expect("execute chat turn");
+    let _first_request = requests.recv().expect("first provider request");
+    let second_request = requests.recv().expect("second provider request");
+    handle.join().expect("join server");
+    web_handle.join().expect("join web server");
+
+    assert_eq!(report.output_text, "Large web fetch result was offloaded.");
+
+    let snapshot = ContextOffloadSnapshot::try_from(
+        store
+            .get_context_offload("session-offload-large-web-fetch")
+            .expect("get context offload")
+            .expect("context offload exists"),
+    )
+    .expect("restore offload snapshot");
+    assert_eq!(snapshot.refs.len(), 1);
+    assert!(snapshot.refs[0].label.contains("web_fetch"));
+    assert!(snapshot.refs[0].summary.contains(&web_base));
+
+    let payload = store
+        .get_context_offload_payload(&snapshot.refs[0].artifact_id)
+        .expect("get payload")
+        .expect("payload exists");
+    let payload_text = String::from_utf8_lossy(&payload.bytes);
+    assert!(payload_text.contains("# Readable web page"));
+    assert!(payload_text.contains("Readable web page"));
+    assert!(payload_text.contains("WEB-OFFLOAD-MARKER"));
+    assert!(!payload_text.contains("<html"));
+    assert!(!payload_text.contains("console.log"));
+
+    let second_request_body = second_request
+        .split_once("\r\n\r\n")
+        .map(|(_, body)| body)
+        .expect("extract second provider request body");
+    let second_request_json: serde_json::Value =
+        serde_json::from_str(second_request_body).expect("parse second provider request");
+    let tool_output = second_request_json["input"][0]["output"]
+        .as_str()
+        .expect("tool output string");
+    let tool_output_json: serde_json::Value =
+        serde_json::from_str(tool_output).expect("parse compact tool output");
+
+    assert_eq!(tool_output_json["tool"], serde_json::json!("web_fetch"));
+    assert_eq!(tool_output_json["offloaded"], serde_json::json!(true));
+    assert_eq!(tool_output_json["url"], serde_json::json!(web_base));
+    assert_eq!(
+        tool_output_json["title"],
+        serde_json::json!("Readable web page")
+    );
+    assert_eq!(
+        tool_output_json["extracted_from_html"],
+        serde_json::json!(true)
+    );
+    assert!(tool_output_json.get("artifact_id").is_some());
+    assert!(!tool_output.contains("<html"));
+    assert!(!tool_output.contains("console.log"));
+}
+
+#[test]
 fn execute_chat_turn_prunes_stale_offload_refs_when_a_payload_file_is_missing() {
     let (api_base, requests, handle) = spawn_json_server_sequence(vec![
         r#"{

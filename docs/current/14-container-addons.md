@@ -73,6 +73,8 @@ search_url = "http://127.0.0.1:8888/search"
 
 `web_fetch` остаётся прямым HTTP fetch tool. Он не ходит через SearXNG, потому что SearXNG — поисковый backend, а не универсальный proxy.
 
+Для HTML-страниц runtime теперь конвертирует ответ в markdown-подобный readable text и `title`, а не прокидывает сырой HTML в модель. Это делается внутри встроенного `web_fetch` через `html-to-markdown-rs`; SearXNG здесь не участвует. Если результат слишком большой, он offloadится в artifact и в prompt попадает только компактная ссылка+preview.
+
 ## MCP для SearXNG
 
 Скрипт также пишет пример MCP-конфига:
@@ -99,7 +101,8 @@ Default paths:
 - managed vault: `/var/lib/teamd/vaults/teamd`;
 - compatibility path для агентов, которые ошибочно пишут в `~/vault`: `/var/lib/teamd/vault -> /var/lib/teamd/vaults/teamd`;
 - container config: `/var/lib/teamd/containers/obsidian/config`;
-- local URL: `http://127.0.0.1:8080/obsidian/`.
+- local URL: `http://127.0.0.1:8080/obsidian/`;
+- default Caddy HTTPS URL без домена: `https://127.0.0.1:8443/obsidian/`.
 
 В этой схеме Obsidian — это внешний UI для человека. Оператор открывает его в браузере и редактирует vault. `agentd` не встраивает Obsidian в prompt path автоматически.
 
@@ -111,7 +114,19 @@ Default paths:
 SUBFOLDER=/obsidian/
 ```
 
-Важно: у образа `ghcr.io/sytone/obsidian-remote` subfolder должен начинаться и заканчиваться `/`. Значение `obsidian` без слэшей ломает web route. Caddy в этом режиме не срезает `/obsidian/`, а прокидывает путь как есть.
+Текущий образ по умолчанию: `lscr.io/linuxserver/obsidian:latest`.
+
+Внутри контейнера web UI слушает `3000/tcp`, а deploy script публикует его на host как `127.0.0.1:${TEAMD_OBSIDIAN_PORT:-8080}` и проксирует через Caddy.
+
+Важно: значение `SUBFOLDER` должно начинаться и заканчиваться `/`. Значение `obsidian` без слэшей ломает web route. Caddy в этом режиме не срезает `/obsidian/`, а прокидывает путь как есть.
+
+Важно: Selkies/WebCodecs требует secure context. Поэтому без dedicated domain deploy script автоматически включает Caddy HTTPS на `8443`, пытается определить primary host/IP сервера, и делает `http://.../obsidian/ -> https://<host>:8443/obsidian/` redirect. HTTP-only доступ для Obsidian в этой схеме не считается рабочим.
+
+Если автоопределение выбрало не тот адрес, задайте его явно:
+
+```bash
+TEAMD_CADDY_HOST='31.130.128.89' ./scripts/deploy-teamd-containers.sh --with-obsidian
+```
 
 Если включён Caddy, нормальный доступ выглядит так:
 
@@ -375,7 +390,13 @@ TEAMD_CADDY_DOMAIN='example.com' ./scripts/deploy-teamd-containers.sh --with-obs
 
 ## Obsidian web UI и мобильный браузер
 
-Текущий контейнер Obsidian (`ghcr.io/sytone/obsidian-remote`) публикует desktop Obsidian через browser/VNC-подобный web UI. Это рабочий вариант для desktop browser, но не полноценный мобильный web client. На телефоне интерфейс мелкий, жесты и ввод неудобны, и это ограничение выбранного контейнера, а не ошибка Caddy.
+Текущий контейнер Obsidian (`lscr.io/linuxserver/obsidian`) публикует desktop Obsidian через web desktop layer на базе Selkies/X11. Это более поддерживаемый вариант и он устойчивее, чем старый `obsidian-remote`, но это всё ещё desktop-first интерфейс, а не специальный mobile client.
+
+Практически это значит:
+
+- desktop browser: рабочий путь;
+- mobile browser: возможен, но зависит от HTTPS, размера экрана и терпимости к desktop UI;
+- plain HTTP по IP для Obsidian не подходит, потому что Selkies не поднимает поток без secure context.
 
 Принятый mobile workflow на текущем этапе:
 
@@ -406,6 +427,6 @@ TEAMD_CADDY_DOMAIN='example.com' ./scripts/deploy-teamd-containers.sh --with-obs
 - SearXNG Docker install: <https://docs.searxng.org/admin/installation-docker.html>
 - SearXNG reverse proxy subpath header `X-Script-Name`: <https://docs.searxng.org/admin/installation-nginx.html>
 - SearXNG MCP example project: <https://github.com/ihor-sokoliuk/mcp-searxng>
-- Obsidian remote Docker image: <https://github.com/sytone/obsidian-remote>
+- LinuxServer Obsidian Docker image: <https://github.com/linuxserver/docker-obsidian>
 - MCPVault filesystem-backed Obsidian MCP: <https://github.com/bitbonsai/mcpvault>
 - Obsidian CLI skill: <https://github.com/kepano/obsidian-skills/blob/main/skills/obsidian-cli/SKILL.md>

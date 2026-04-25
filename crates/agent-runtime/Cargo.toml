@@ -7,6 +7,7 @@ rust-version.workspace = true
 version.workspace = true
 
 [dependencies]
+html-to-markdown-rs.workspace = true
 libc = "0.2"
 reqwest.workspace = true
 serde.workspace = true

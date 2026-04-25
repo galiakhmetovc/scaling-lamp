@@ -148,6 +148,8 @@ export TEAMD_WEB_SEARCH_URL='http://127.0.0.1:8888/search'
 
 Важно: `web_fetch` не переключается на SearXNG. Это прямой HTTP fetch указанного URL. SearXNG закрывает именно search backend.
 
+Важно: для `text/html`/`xhtml` `web_fetch` теперь не отдаёт модели сырой HTML по умолчанию. Runtime конвертирует HTML в markdown-подобный readable text через `html-to-markdown-rs`, извлекает заголовок страницы, а большие результаты уводит в context offload artifact вместо inline prompt payload.
+
 ### `[runtime_timing]`
 
 Это теперь каноническое место для всех operator-facing timing policies:
@@ -240,6 +242,12 @@ export TEAMD_WEB_SEARCH_URL='http://127.0.0.1:8888/search'
 Этот connector работает через `stdio`: `agentd` запускает `docker run -i --rm ... node:22-alpine npx -y @bitbonsai/mcpvault@latest /vault`, где `/vault` — mount на `/var/lib/teamd/vaults/teamd`. Поэтому для базовой работы не нужен Obsidian Local REST API plugin и не нужен ручной клик в Obsidian UI.
 
 По умолчанию без dedicated domain Obsidian запускается с `TEAMD_OBSIDIAN_SUBFOLDER=/obsidian/`. Значение должно быть пустым или иметь ведущий и завершающий `/`, иначе web route у контейнера будет некорректным.
+
+По умолчанию deploy script использует образ `lscr.io/linuxserver/obsidian:latest`. Его web UI внутри контейнера слушает `TEAMD_OBSIDIAN_CONTAINER_PORT=3000`, а наружу публикуется как `TEAMD_OBSIDIAN_PORT` и затем проксируется Caddy.
+
+Если Obsidian включён без `TEAMD_CADDY_DOMAIN`, deploy script автоматически включает `TEAMD_CADDY_HTTPS_PORT=8443` и переводит внешний доступ к `/obsidian/` на HTTPS, потому что Selkies/WebCodecs не работает в plain HTTP origin.
+
+Для self-signed HTTPS без домена deploy script использует `TEAMD_CADDY_HOST`. Если переменная не задана, он пытается определить primary IPv4 автоматически. Если снаружи нужен другой адрес, задайте `TEAMD_CADDY_HOST` явно.
 
 Если нужен только шаблон без изменения `/etc/teamd/config.toml`, используйте:
 

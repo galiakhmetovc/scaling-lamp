@@ -249,10 +249,12 @@ pub(crate) fn spawn_json_server_status_sequence(
     (format!("http://{address}"), receiver, handle)
 }
 
-pub(crate) fn spawn_text_server(
+pub(crate) fn spawn_http_server(
     path: &'static str,
-    body: &'static str,
+    content_type: &'static str,
+    body: impl Into<String>,
 ) -> (String, Receiver<String>, thread::JoinHandle<()>) {
+    let body = body.into();
     let listener = TcpListener::bind("127.0.0.1:0").expect("bind listener");
     let address = listener.local_addr().expect("local addr");
     let (sender, receiver) = mpsc::channel();
@@ -277,7 +279,8 @@ pub(crate) fn spawn_text_server(
 
         sender.send(raw_request).expect("send request");
         let response = format!(
-            "HTTP/1.1 200 OK\r\ncontent-type: text/plain\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
+            "HTTP/1.1 200 OK\r\ncontent-type: {}\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
+            content_type,
             body.len(),
             body
         );
@@ -288,6 +291,13 @@ pub(crate) fn spawn_text_server(
     });
 
     (format!("http://{address}{path}"), receiver, handle)
+}
+
+pub(crate) fn spawn_text_server(
+    path: &'static str,
+    body: &'static str,
+) -> (String, Receiver<String>, thread::JoinHandle<()>) {
+    spawn_http_server(path, "text/plain", body)
 }
 
 pub(crate) fn spawn_text_server_sequence(

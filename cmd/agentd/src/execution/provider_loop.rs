@@ -2593,6 +2593,34 @@ impl ExecutionService {
                     .to_string(),
                 )))
             }
+            ToolOutput::WebFetch(result) => {
+                let payload = output.model_output().into_bytes();
+                let preview = prompting::preview_text(result.body.as_str(), 240);
+                let summary = if result.extracted_from_html {
+                    format!("Large readable web fetch from {}", result.url)
+                } else {
+                    format!("Large web fetch response from {}", result.url)
+                };
+                Ok(Some((
+                    format!("web_fetch {}", result.url),
+                    summary.clone(),
+                    payload,
+                    serde_json::json!({
+                        "tool": "web_fetch",
+                        "url": result.url,
+                        "status_code": result.status_code,
+                        "content_type": result.content_type,
+                        "title": result.title,
+                        "extracted_from_html": result.extracted_from_html,
+                        "offloaded": true,
+                        "artifact_id": "__ARTIFACT_ID__",
+                        "ref_id": "__REF_ID__",
+                        "summary": summary,
+                        "preview": preview,
+                    })
+                    .to_string(),
+                )))
+            }
             ToolOutput::ProcessResult(result) => {
                 let payload = output.model_output().into_bytes();
                 let stdout_preview = prompting::preview_text(result.stdout.as_str(), 180);

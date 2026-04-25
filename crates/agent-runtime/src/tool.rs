@@ -4,6 +4,7 @@ use crate::plan::{PlanItem, PlanItemStatus, PlanItemStatusParseError, PlanLintIs
 use crate::workspace::{
     WorkspaceEntry, WorkspaceError, WorkspaceRef, WorkspaceSearchMatch, WriteMode,
 };
+use html_to_markdown_rs::convert as convert_html_to_markdown;
 use reqwest::Url;
 use reqwest::blocking::Client;
 use serde::{Deserialize, Serialize};
@@ -800,6 +801,8 @@ pub struct WebFetchOutput {
     pub url: String,
     pub status_code: u16,
     pub content_type: Option<String>,
+    pub title: Option<String>,
+    pub extracted_from_html: bool,
     pub body: String,
 }
 
@@ -1780,7 +1783,7 @@ impl ToolCatalog {
             ToolDefinition {
                 name: ToolName::WebFetch,
                 family: ToolFamily::Web,
-                description: "Fetch a URL and return its response body",
+                description: "Fetch a URL and return readable response text; HTML pages are converted into markdown-like readable text",
                 policy: ToolPolicy {
                     read_only: true,
                     destructive: false,
@@ -4343,6 +4346,8 @@ impl ToolOutput {
                 "url": output.url,
                 "status_code": output.status_code,
                 "content_type": output.content_type,
+                "title": output.title,
+                "extracted_from_html": output.extracted_from_html,
                 "body": output.body,
             })
             .to_string(),
@@ -5073,7 +5078,7 @@ impl ToolName {
             Self::WebFetch => json!({
                 "type": "object",
                 "properties": {
-                    "url": { "type": "string", "description": "Absolute URL to fetch" }
+                    "url": { "type": "string", "description": "Absolute URL to fetch and convert into readable text" }
                 },
                 "required": ["url"],
                 "additionalProperties": false,
@@ -5814,6 +5819,33 @@ impl WebToolClient {
     }
 
     fn fetch(&self, url: &str) -> Result<WebFetchOutput, ToolError> {
+        let RawWebResponse {
+            url,
+            status_code,
+            content_type,
+            body,
+        } = self.fetch_raw(url)?;
+        let extracted_from_html = is_html_response(content_type.as_deref(), body.as_str());
+        let title = extracted_from_html
+            .then(|| extract_html_title(body.as_str()))
+            .flatten();
+        let body = if extracted_from_html {
+            render_html_fetch_body(body.as_str())
+        } else {
+            body
+        };
+
+        Ok(WebFetchOutput {
+            url,
+            status_code,
+            content_type,
+            title,
+            extracted_from_html,
+            body,
+        })
+    }
+
+    fn fetch_raw(&self, url: &str) -> Result<RawWebResponse, ToolError> {
         let response = self.client.get(url).send().map_err(ToolError::WebHttp)?;
         let status_code = response.status().as_u16();
         if !response.status().is_success() {
@@ -5830,7 +5862,7 @@ impl WebToolClient {
             .map(str::to_owned);
         let body = response.text().map_err(ToolError::WebHttp)?;
 
-        Ok(WebFetchOutput {
+        Ok(RawWebResponse {
             url: url.to_string(),
             status_code,
             content_type,
@@ -5854,7 +5886,7 @@ impl WebToolClient {
             }
         }
 
-        let fetch = self.fetch(url.as_str())?;
+        let fetch = self.fetch_raw(url.as_str())?;
         let mut results = match self.search_backend {
             WebSearchBackend::DuckDuckGoHtml => {
                 parse_search_results(&fetch.body, fetch.url.as_str())?
@@ -6036,6 +6068,14 @@ struct SearxngSearchResult {
     content: Option<String>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct RawWebResponse {
+    url: String,
+    status_code: u16,
+    content_type: Option<String>,
+    body: String,
+}
+
 fn parse_searxng_json_results(
     body: &str,
     source_url: &str,
@@ -6124,6 +6164,62 @@ fn normalize_duckduckgo_result_url(url: &str) -> String {
         .find(|(key, _)| key == "uddg")
         .map(|(_, value)| value.into_owned())
         .unwrap_or(absolute)
+}
+
+fn is_html_response(content_type: Option<&str>, body: &str) -> bool {
+    if let Some(content_type) = content_type {
+        let normalized = content_type.to_ascii_lowercase();
+        if normalized.contains("html") || normalized.contains("xhtml") {
+            return true;
+        }
+    }
+
+    let trimmed = body.trim_start().to_ascii_lowercase();
+    trimmed.starts_with("<!doctype html")
+        || trimmed.starts_with("<html")
+        || trimmed.starts_with("<head")
+        || trimmed.starts_with("<body")
+}
+
+fn extract_html_title(input: &str) -> Option<String> {
+    extract_html_tag_text(input, "title")
+}
+
+fn extract_html_tag_text(input: &str, tag_name: &str) -> Option<String> {
+    let lower = input.to_ascii_lowercase();
+    let open_pattern = format!("<{tag_name}");
+    let close_pattern = format!("</{tag_name}>");
+    let start = lower.find(open_pattern.as_str())?;
+    let open_end = input[start..].find('>')? + start + 1;
+    let close_start = lower[open_end..].find(close_pattern.as_str())? + open_end;
+    let text = strip_html_tags(&decode_html_entities(&input[open_end..close_start]));
+    (!text.is_empty()).then_some(text)
+}
+
+fn render_html_fetch_body(input: &str) -> String {
+    match convert_html_to_markdown(input, None) {
+        Ok(markdown) => {
+            let normalized = normalize_markdown_output(markdown.content.as_deref().unwrap_or(""));
+            if normalized.is_empty() {
+                fallback_extract_html_text(input)
+            } else {
+                normalized
+            }
+        }
+        Err(_) => fallback_extract_html_text(input),
+    }
+}
+
+fn normalize_markdown_output(input: &str) -> String {
+    input.replace("\r\n", "\n").trim().to_string()
+}
+
+fn fallback_extract_html_text(input: &str) -> String {
+    collapse_inline_whitespace(&strip_html_tags(&decode_html_entities(input)))
+}
+
+fn collapse_inline_whitespace(input: &str) -> String {
+    input.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
 fn strip_html_tags(input: &str) -> String {

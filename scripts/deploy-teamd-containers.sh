@@ -33,7 +33,8 @@ SEARXNG_SETTINGS=$SEARXNG_CONFIG_DIR/settings.yml
 SEARXNG_MCP_EXAMPLE=$SEARXNG_DIR/mcp-searxng.example.json
 
 OBSIDIAN_PORT=${TEAMD_OBSIDIAN_PORT:-8080}
-OBSIDIAN_IMAGE=${TEAMD_OBSIDIAN_IMAGE:-ghcr.io/sytone/obsidian-remote:latest}
+OBSIDIAN_CONTAINER_PORT=${TEAMD_OBSIDIAN_CONTAINER_PORT:-3000}
+OBSIDIAN_IMAGE=${TEAMD_OBSIDIAN_IMAGE:-lscr.io/linuxserver/obsidian:latest}
 OBSIDIAN_DIR=$CONTAINERS_ROOT/obsidian
 OBSIDIAN_VAULTS_DIR=${TEAMD_OBSIDIAN_VAULTS_DIR:-/var/lib/teamd/vaults}
 OBSIDIAN_VAULT_NAME=${TEAMD_OBSIDIAN_VAULT_NAME:-teamd}
@@ -48,6 +49,7 @@ OBSIDIAN_PUID=${TEAMD_OBSIDIAN_PUID:-}
 OBSIDIAN_PGID=${TEAMD_OBSIDIAN_PGID:-}
 
 CADDY_DOMAIN=${TEAMD_CADDY_DOMAIN:-}
+CADDY_HOST=${TEAMD_CADDY_HOST:-}
 if [ "${TEAMD_OBSIDIAN_SUBFOLDER+x}" ]; then
   OBSIDIAN_SUBFOLDER=$TEAMD_OBSIDIAN_SUBFOLDER
 elif [ -n "$CADDY_DOMAIN" ]; then
@@ -112,6 +114,8 @@ Environment overrides:
   TEAMD_SEARXNG_PORT             SearXNG localhost port, default: $SEARXNG_PORT.
   TEAMD_OBSIDIAN_IMAGE           Obsidian image, default: $OBSIDIAN_IMAGE.
   TEAMD_OBSIDIAN_PORT            Obsidian localhost port, default: $OBSIDIAN_PORT.
+  TEAMD_OBSIDIAN_CONTAINER_PORT  Obsidian web port inside container,
+                                 default: $OBSIDIAN_CONTAINER_PORT.
   TEAMD_OBSIDIAN_VAULTS_DIR      Vaults directory, default: $OBSIDIAN_VAULTS_DIR.
   TEAMD_OBSIDIAN_VAULT_NAME      Default managed vault name, default: $OBSIDIAN_VAULT_NAME.
   TEAMD_OBSIDIAN_VAULT_DIR       Managed vault directory, default: $OBSIDIAN_VAULT_DIR.
@@ -132,8 +136,12 @@ Environment overrides:
   TEAMD_DEPLOY_USER              teamd system user, default: $SERVICE_USER.
   TEAMD_DEPLOY_GROUP             teamd system group, default: $SERVICE_GROUP.
   TEAMD_CADDY_DOMAIN             Optional base domain; creates search.<domain> and obsidian.<domain>.
+  TEAMD_CADDY_HOST               Hostname or IP for internal TLS without a dedicated domain.
+                                 If unset, deploy script tries to detect the primary IPv4 address.
   TEAMD_CADDY_HTTP_PORT          Caddy HTTP host port, default: $CADDY_HTTP_PORT.
-  TEAMD_CADDY_HTTPS_PORT         Caddy HTTPS host port, default: ${CADDY_HTTPS_PORT:-disabled}.
+  TEAMD_CADDY_HTTPS_PORT         Caddy HTTPS host port. Default: 443 with TEAMD_CADDY_DOMAIN,
+                                 8443 when Obsidian is enabled without a domain,
+                                 otherwise disabled.
 EOF
 }
 
@@ -263,6 +271,45 @@ validate_obsidian_subfolder() {
   esac
 }
 
+ensure_obsidian_https_port() {
+  [ "$ENABLE_OBSIDIAN" -eq 1 ] || return 0
+  [ "$ENABLE_CADDY" -eq 1 ] || return 0
+  [ -n "$CADDY_DOMAIN" ] && return 0
+  [ -n "$CADDY_HTTPS_PORT" ] && return 0
+
+  CADDY_HTTPS_PORT=8443
+}
+
+detect_primary_ipv4() {
+  if command -v ip >/dev/null 2>&1; then
+    ip route get 1.1.1.1 2>/dev/null | awk '/src/ { for (i = 1; i <= NF; i++) if ($i == "src") { print $(i + 1); exit } }'
+    return 0
+  fi
+
+  if command -v hostname >/dev/null 2>&1; then
+    hostname -I 2>/dev/null | awk '{ print $1 }'
+    return 0
+  fi
+
+  return 1
+}
+
+ensure_caddy_host() {
+  [ "$ENABLE_OBSIDIAN" -eq 1 ] || return 0
+  [ "$ENABLE_CADDY" -eq 1 ] || return 0
+  [ -n "$CADDY_DOMAIN" ] && return 0
+  [ -n "$CADDY_HTTPS_PORT" ] || return 0
+  [ -n "$CADDY_HOST" ] && return 0
+
+  if [ "$DRY_RUN" -eq 1 ]; then
+    CADDY_HOST=127.0.0.1
+    return 0
+  fi
+
+  CADDY_HOST=$(detect_primary_ipv4 || true)
+  [ -n "$CADDY_HOST" ] || fail "cannot detect Caddy host/IP for Obsidian HTTPS; set TEAMD_CADDY_HOST explicitly"
+}
+
 ensure_edge_network() {
   if [ "$DRY_RUN" -eq 1 ]; then
     print_cmd docker network create "$EDGE_NETWORK"
@@ -387,8 +434,9 @@ services:
     image: $OBSIDIAN_IMAGE
     container_name: teamd-obsidian
     restart: unless-stopped
+    shm_size: "1gb"
     ports:
-      - "127.0.0.1:$OBSIDIAN_PORT:8080"
+      - "127.0.0.1:$OBSIDIAN_PORT:$OBSIDIAN_CONTAINER_PORT"
     networks:
       - $EDGE_NETWORK
     volumes:
@@ -398,7 +446,6 @@ services:
       - PUID=$OBSIDIAN_PUID
       - PGID=$OBSIDIAN_PGID
       - TZ=Etc/UTC
-      - CUSTOM_PORT=8080
       - SUBFOLDER=$OBSIDIAN_SUBFOLDER
       - DOCKER_MODS=linuxserver/mods:universal-git
 
@@ -683,7 +730,7 @@ search.$CADDY_DOMAIN {
 }
 
 obsidian.$CADDY_DOMAIN {
-  reverse_proxy teamd-obsidian:8080
+  reverse_proxy teamd-obsidian:$OBSIDIAN_CONTAINER_PORT
 }
 EOF
   else
@@ -692,7 +739,46 @@ EOF
     else
       obsidian_route='handle_path /obsidian/*'
     fi
-    cat > "$tmp_caddyfile" <<EOF
+
+    if [ -n "$CADDY_HTTPS_PORT" ]; then
+      cat > "$tmp_caddyfile" <<EOF
+{
+  auto_https disable_redirects
+  default_sni $CADDY_HOST
+}
+
+:80 {
+  redir /searxng /searxng/ 308
+  redir /obsidian https://$CADDY_HOST:$CADDY_HTTPS_PORT/obsidian/ 308
+  redir /obsidian/* https://$CADDY_HOST:$CADDY_HTTPS_PORT{uri} 308
+
+  handle /searxng/* {
+    reverse_proxy teamd-searxng:8080 {
+      header_up X-Script-Name /searxng
+    }
+  }
+
+  respond / "teamD container edge: /searxng/ on HTTP, /obsidian/ on HTTPS"
+}
+
+https://$CADDY_HOST {
+  tls internal
+
+  handle /searxng/* {
+    reverse_proxy teamd-searxng:8080 {
+      header_up X-Script-Name /searxng
+    }
+  }
+
+  $obsidian_route {
+    reverse_proxy teamd-obsidian:$OBSIDIAN_CONTAINER_PORT
+  }
+
+  respond / "teamD container edge (TLS): /searxng/ and /obsidian/"
+}
+EOF
+    else
+      cat > "$tmp_caddyfile" <<EOF
 :80 {
   redir /searxng /searxng/ 308
 
@@ -703,12 +789,13 @@ EOF
   }
 
   $obsidian_route {
-    reverse_proxy teamd-obsidian:8080
+    reverse_proxy teamd-obsidian:$OBSIDIAN_CONTAINER_PORT
   }
 
   respond / "teamD container edge: /searxng/ and /obsidian/"
 }
 EOF
+    fi
   fi
 
   run_root install -m 0644 -o root -g root "$tmp_compose" "$CADDY_COMPOSE"
@@ -798,6 +885,8 @@ fi
 need_command id
 need_command sed
 validate_obsidian_subfolder
+ensure_obsidian_https_port
+ensure_caddy_host
 
 if [ "$(id -u)" -ne 0 ] && [ "$DRY_RUN" -eq 0 ]; then
   need_command sudo
@@ -867,12 +956,21 @@ if [ "$ENABLE_OBSIDIAN" -eq 1 ]; then
   cat <<EOF
   Obsidian:
     Container: teamd-obsidian
-    URL: http://127.0.0.1:$OBSIDIAN_PORT$OBSIDIAN_SUBFOLDER
+    Local URL: http://127.0.0.1:$OBSIDIAN_PORT$OBSIDIAN_SUBFOLDER
     Compose: $OBSIDIAN_COMPOSE
     Start command: docker compose -f $OBSIDIAN_COMPOSE up -d
     Vaults: $OBSIDIAN_VAULTS_DIR
     Managed vault: $OBSIDIAN_VAULT_DIR
 EOF
+  if [ -n "$CADDY_DOMAIN" ]; then
+    cat <<EOF
+    Caddy URL: https://obsidian.$CADDY_DOMAIN/
+EOF
+  elif [ -n "$CADDY_HTTPS_PORT" ]; then
+    cat <<EOF
+    Caddy URL: https://$CADDY_HOST:$CADDY_HTTPS_PORT/obsidian/
+EOF
+  fi
   if [ "$ENABLE_OBSIDIAN_MCP" -eq 1 ]; then
     cat <<EOF
     Automated MCP:
@@ -906,7 +1004,20 @@ if [ "$ENABLE_CADDY" -eq 1 ]; then
     Compose: $CADDY_COMPOSE
     Start command: docker compose -f $CADDY_COMPOSE up -d
     Caddyfile: $CADDYFILE
-    Routes without TEAMD_CADDY_DOMAIN: /searxng/ and /obsidian/
+EOF
+  if [ -n "$CADDY_DOMAIN" ]; then
+    cat <<EOF
     Routes with TEAMD_CADDY_DOMAIN: search.<domain> and obsidian.<domain>
 EOF
+  elif [ -n "$CADDY_HTTPS_PORT" ]; then
+    cat <<EOF
+    Routes without TEAMD_CADDY_DOMAIN:
+      HTTP: /searxng/
+      HTTPS: https://$CADDY_HOST:$CADDY_HTTPS_PORT/obsidian/
+EOF
+  else
+    cat <<EOF
+    Routes without TEAMD_CADDY_DOMAIN: /searxng/ and /obsidian/
+EOF
+  fi
 fi
