@@ -7,6 +7,7 @@ use crate::workspace::{
 use html_to_markdown_rs::convert as convert_html_to_markdown;
 use reqwest::Url;
 use reqwest::blocking::Client;
+use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
@@ -28,6 +29,43 @@ const MAX_PROCESS_OUTPUT_READ_MAX_BYTES: usize = 32 * 1024;
 const DEFAULT_PROCESS_OUTPUT_READ_MAX_LINES: usize = 20;
 const MAX_PROCESS_OUTPUT_READ_MAX_LINES: usize = 200;
 const PROCESS_READER_DRAIN_GRACE: Duration = Duration::from_millis(200);
+
+#[derive(Debug, Clone, Copy)]
+struct EnumLikeFieldRepair {
+    field: &'static str,
+    allowed_values: &'static [&'static str],
+}
+
+const KNOWLEDGE_READ_ENUM_REPAIRS: &[EnumLikeFieldRepair] = &[EnumLikeFieldRepair {
+    field: "mode",
+    allowed_values: &["excerpt", "full"],
+}];
+
+const SESSION_READ_ENUM_REPAIRS: &[EnumLikeFieldRepair] = &[EnumLikeFieldRepair {
+    field: "mode",
+    allowed_values: &["summary", "timeline", "transcript", "artifacts"],
+}];
+
+const SESSION_WAIT_ENUM_REPAIRS: &[EnumLikeFieldRepair] = &[EnumLikeFieldRepair {
+    field: "mode",
+    allowed_values: &["summary", "timeline", "transcript", "artifacts"],
+}];
+
+const CONTINUE_LATER_ENUM_REPAIRS: &[EnumLikeFieldRepair] = &[EnumLikeFieldRepair {
+    field: "delivery_mode",
+    allowed_values: &["fresh_session", "existing_session"],
+}];
+
+const SCHEDULE_ENUM_REPAIRS: &[EnumLikeFieldRepair] = &[
+    EnumLikeFieldRepair {
+        field: "mode",
+        allowed_values: &["interval", "after_completion", "once"],
+    },
+    EnumLikeFieldRepair {
+        field: "delivery_mode",
+        allowed_values: &["fresh_session", "existing_session"],
+    },
+];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ToolFamily {
@@ -1410,6 +1448,109 @@ pub struct WebToolClient {
     search_url: String,
 }
 
+fn repair_bare_enum_like_values(input: &str, repairs: &[EnumLikeFieldRepair]) -> Option<String> {
+    fn allowed_values_for_field<'a>(
+        repairs: &'a [EnumLikeFieldRepair],
+        field: &str,
+    ) -> Option<&'a [&'static str]> {
+        repairs
+            .iter()
+            .find(|repair| repair.field == field)
+            .map(|repair| repair.allowed_values)
+    }
+
+    fn is_enum_token_byte(byte: u8) -> bool {
+        byte.is_ascii_lowercase() || byte == b'_'
+    }
+
+    let bytes = input.as_bytes();
+    let mut replacements: Vec<(usize, usize, String)> = Vec::new();
+    let mut index = 0usize;
+
+    while index < bytes.len() {
+        if bytes[index] != b'"' {
+            index += 1;
+            continue;
+        }
+
+        let key_start = index + 1;
+        index += 1;
+        let mut escaped = false;
+        while index < bytes.len() {
+            let byte = bytes[index];
+            if escaped {
+                escaped = false;
+            } else if byte == b'\\' {
+                escaped = true;
+            } else if byte == b'"' {
+                break;
+            }
+            index += 1;
+        }
+        if index >= bytes.len() {
+            break;
+        }
+
+        let key = &input[key_start..index];
+        index += 1;
+
+        let mut cursor = index;
+        while cursor < bytes.len() && bytes[cursor].is_ascii_whitespace() {
+            cursor += 1;
+        }
+        if cursor >= bytes.len() || bytes[cursor] != b':' {
+            continue;
+        }
+        cursor += 1;
+        while cursor < bytes.len() && bytes[cursor].is_ascii_whitespace() {
+            cursor += 1;
+        }
+        let Some(allowed_values) = allowed_values_for_field(repairs, key) else {
+            continue;
+        };
+        if cursor >= bytes.len() || bytes[cursor] == b'"' {
+            continue;
+        }
+
+        let value_start = cursor;
+        while cursor < bytes.len() && is_enum_token_byte(bytes[cursor]) {
+            cursor += 1;
+        }
+        if cursor == value_start {
+            continue;
+        }
+
+        let token = &input[value_start..cursor];
+        if !allowed_values.contains(&token) {
+            continue;
+        }
+
+        let mut delimiter = cursor;
+        while delimiter < bytes.len() && bytes[delimiter].is_ascii_whitespace() {
+            delimiter += 1;
+        }
+        if delimiter < bytes.len() && !matches!(bytes[delimiter], b',' | b'}' | b']') {
+            continue;
+        }
+
+        replacements.push((value_start, cursor, format!("\"{token}\"")));
+    }
+
+    if replacements.is_empty() {
+        return None;
+    }
+
+    let mut repaired = String::with_capacity(input.len() + replacements.len() * 2);
+    let mut cursor = 0usize;
+    for (start, end, replacement) in replacements {
+        repaired.push_str(&input[cursor..start]);
+        repaired.push_str(&replacement);
+        cursor = end;
+    }
+    repaired.push_str(&input[cursor..]);
+    Some(repaired)
+}
+
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum WebSearchBackend {
     #[serde(rename = "duckduckgo_html")]
@@ -1993,7 +2134,7 @@ impl ToolCatalog {
             ToolDefinition {
                 name: ToolName::SessionWait,
                 family: ToolFamily::Agent,
-                description: "Wait for queued or running work in a session to settle, then return a bounded session snapshot; use this after message_agent when you need the other agent's reply before concluding",
+                description: "Wait for queued or running work in a session to settle, then return a bounded session snapshot; use this after message_agent when you need the other agent's reply before concluding. If you set mode, send it as a quoted JSON string, for example {\"session_id\":\"...\",\"mode\":\"transcript\"}",
                 policy: ToolPolicy {
                     read_only: true,
                     destructive: false,
@@ -2083,7 +2224,7 @@ impl ToolCatalog {
             ToolDefinition {
                 name: ToolName::ContinueLater,
                 family: ToolFamily::Agent,
-                description: "Create a self-addressed one-shot timer in the same session; use this when the user asks you to remind or message them later. Enum-like arguments such as delivery_mode must be quoted JSON strings",
+                description: "Create a self-addressed one-shot timer in the same session; use this when the user asks you to remind or message them later. If you set delivery_mode, send it as a quoted JSON string, for example {\"delay_seconds\":300,\"handoff_payload\":\"...\",\"delivery_mode\":\"existing_session\"}",
                 policy: ToolPolicy {
                     read_only: false,
                     destructive: false,
@@ -2113,7 +2254,7 @@ impl ToolCatalog {
             ToolDefinition {
                 name: ToolName::ScheduleCreate,
                 family: ToolFamily::Agent,
-                description: "Create an advanced or recurring agent schedule in the current workspace. For simple one-shot reminders, prefer continue_later. Enum-like arguments such as mode and delivery_mode must be quoted JSON strings",
+                description: "Create an advanced or recurring agent schedule in the current workspace. For simple one-shot reminders, prefer continue_later. If you set mode or delivery_mode, send them as quoted JSON strings, for example {\"id\":\"nightly\",\"prompt\":\"...\",\"interval_seconds\":3600,\"mode\":\"once\",\"delivery_mode\":\"fresh_session\"}",
                 policy: ToolPolicy {
                     read_only: false,
                     destructive: false,
@@ -2123,7 +2264,7 @@ impl ToolCatalog {
             ToolDefinition {
                 name: ToolName::ScheduleUpdate,
                 family: ToolFamily::Agent,
-                description: "Update an existing agent schedule in the current workspace. Enum-like arguments such as mode and delivery_mode must be quoted JSON strings",
+                description: "Update an existing agent schedule in the current workspace. If you set mode or delivery_mode, send them as quoted JSON strings, for example {\"id\":\"nightly\",\"mode\":\"once\",\"delivery_mode\":\"existing_session\"}",
                 policy: ToolPolicy {
                     read_only: false,
                     destructive: false,
@@ -2975,6 +3116,31 @@ impl SharedProcessRegistry {
 }
 
 impl ToolCall {
+    fn invalid_arguments_error(name: &str, source: serde_json::Error) -> ToolCallParseError {
+        ToolCallParseError::InvalidArguments {
+            name: name.to_string(),
+            source,
+        }
+    }
+
+    fn parse_arguments_with_enum_repair<T: DeserializeOwned>(
+        name: &str,
+        arguments: &str,
+        repairs: &[EnumLikeFieldRepair],
+    ) -> Result<T, ToolCallParseError> {
+        match serde_json::from_str(arguments) {
+            Ok(parsed) => Ok(parsed),
+            Err(source) => {
+                if let Some(repaired) = repair_bare_enum_like_values(arguments, repairs) {
+                    if let Ok(parsed) = serde_json::from_str(&repaired) {
+                        return Ok(parsed);
+                    }
+                }
+                Err(Self::invalid_arguments_error(name, source))
+            }
+        }
+    }
+
     pub fn name(&self) -> ToolName {
         match self {
             Self::FsRead(_) => ToolName::FsRead,
@@ -3531,30 +3697,24 @@ impl ToolCall {
                     name: name.to_string(),
                     source,
                 }),
-            "knowledge_read" => serde_json::from_str(arguments)
-                .map(Self::KnowledgeRead)
-                .map_err(|source| ToolCallParseError::InvalidArguments {
-                    name: name.to_string(),
-                    source,
-                }),
+            "knowledge_read" => {
+                Self::parse_arguments_with_enum_repair(name, arguments, KNOWLEDGE_READ_ENUM_REPAIRS)
+                    .map(Self::KnowledgeRead)
+            }
             "session_search" => serde_json::from_str(arguments)
                 .map(Self::SessionSearch)
                 .map_err(|source| ToolCallParseError::InvalidArguments {
                     name: name.to_string(),
                     source,
                 }),
-            "session_read" => serde_json::from_str(arguments)
-                .map(Self::SessionRead)
-                .map_err(|source| ToolCallParseError::InvalidArguments {
-                    name: name.to_string(),
-                    source,
-                }),
-            "session_wait" => serde_json::from_str(arguments)
-                .map(Self::SessionWait)
-                .map_err(|source| ToolCallParseError::InvalidArguments {
-                    name: name.to_string(),
-                    source,
-                }),
+            "session_read" => {
+                Self::parse_arguments_with_enum_repair(name, arguments, SESSION_READ_ENUM_REPAIRS)
+                    .map(Self::SessionRead)
+            }
+            "session_wait" => {
+                Self::parse_arguments_with_enum_repair(name, arguments, SESSION_WAIT_ENUM_REPAIRS)
+                    .map(Self::SessionWait)
+            }
             "mcp_search_resources" => serde_json::from_str(arguments)
                 .map(Self::McpSearchResources)
                 .map_err(|source| ToolCallParseError::InvalidArguments {
@@ -3597,12 +3757,10 @@ impl ToolCall {
                     name: name.to_string(),
                     source,
                 }),
-            "continue_later" => serde_json::from_str(arguments)
-                .map(Self::ContinueLater)
-                .map_err(|source| ToolCallParseError::InvalidArguments {
-                    name: name.to_string(),
-                    source,
-                }),
+            "continue_later" => {
+                Self::parse_arguments_with_enum_repair(name, arguments, CONTINUE_LATER_ENUM_REPAIRS)
+                    .map(Self::ContinueLater)
+            }
             "schedule_list" => serde_json::from_str(arguments)
                 .map(Self::ScheduleList)
                 .map_err(|source| ToolCallParseError::InvalidArguments {
@@ -3615,18 +3773,14 @@ impl ToolCall {
                     name: name.to_string(),
                     source,
                 }),
-            "schedule_create" => serde_json::from_str(arguments)
-                .map(Self::ScheduleCreate)
-                .map_err(|source| ToolCallParseError::InvalidArguments {
-                    name: name.to_string(),
-                    source,
-                }),
-            "schedule_update" => serde_json::from_str(arguments)
-                .map(Self::ScheduleUpdate)
-                .map_err(|source| ToolCallParseError::InvalidArguments {
-                    name: name.to_string(),
-                    source,
-                }),
+            "schedule_create" => {
+                Self::parse_arguments_with_enum_repair(name, arguments, SCHEDULE_ENUM_REPAIRS)
+                    .map(Self::ScheduleCreate)
+            }
+            "schedule_update" => {
+                Self::parse_arguments_with_enum_repair(name, arguments, SCHEDULE_ENUM_REPAIRS)
+                    .map(Self::ScheduleUpdate)
+            }
             "schedule_delete" => serde_json::from_str(arguments)
                 .map(Self::ScheduleDelete)
                 .map_err(|source| ToolCallParseError::InvalidArguments {

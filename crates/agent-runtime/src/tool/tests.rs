@@ -262,6 +262,24 @@ fn tool_call_parses_continue_later_inputs() {
 }
 
 #[test]
+fn tool_call_parses_continue_later_inputs_with_bare_delivery_mode() {
+    let call = ToolCall::from_openai_function(
+        "continue_later",
+        r#"{"delay_seconds":900,"handoff_payload":"resume from this handoff","delivery_mode":existing_session}"#,
+    )
+    .expect("parse continue_later with bare enum");
+
+    assert_eq!(
+        call,
+        ToolCall::ContinueLater(super::ContinueLaterInput {
+            delay_seconds: 900,
+            handoff_payload: "resume from this handoff".to_string(),
+            delivery_mode: Some(crate::agent::AgentScheduleDeliveryMode::ExistingSession),
+        })
+    );
+}
+
+#[test]
 fn automatic_model_definitions_include_session_memory_tools() {
     let catalog = ToolCatalog::default();
     let names = catalog
@@ -337,6 +355,74 @@ fn tool_call_parses_session_wait_inputs() {
 }
 
 #[test]
+fn tool_call_parses_session_wait_inputs_with_bare_mode() {
+    let wait = ToolCall::from_openai_function(
+        "session_wait",
+        r#"{"session_id":"session-agentmsg-1","wait_timeout_ms":1500,"mode":transcript,"max_items":10}"#,
+    )
+    .expect("parse session_wait with bare enum");
+
+    assert_eq!(
+        wait,
+        ToolCall::SessionWait(SessionWaitInput {
+            session_id: "session-agentmsg-1".to_string(),
+            wait_timeout_ms: Some(1500),
+            mode: Some(SessionReadMode::Transcript),
+            cursor: None,
+            max_items: Some(10),
+            max_bytes: None,
+            include_tools: None,
+        })
+    );
+}
+
+#[test]
+fn tool_call_parses_schedule_create_inputs_with_bare_enums() {
+    let create = ToolCall::from_openai_function(
+        "schedule_create",
+        r#"{"id":"t486-cycle-152","prompt":"Continue cycle 152","interval_seconds":300,"mode":once,"delivery_mode":fresh_session}"#,
+    )
+    .expect("parse schedule_create with bare enums");
+
+    assert_eq!(
+        create,
+        ToolCall::ScheduleCreate(super::ScheduleCreateInput {
+            id: "t486-cycle-152".to_string(),
+            agent_identifier: None,
+            prompt: "Continue cycle 152".to_string(),
+            mode: Some(crate::agent::AgentScheduleMode::Once),
+            delivery_mode: Some(crate::agent::AgentScheduleDeliveryMode::FreshSession),
+            target_session_id: None,
+            interval_seconds: 300,
+            enabled: None,
+        })
+    );
+}
+
+#[test]
+fn tool_call_parses_schedule_update_inputs_with_bare_enums() {
+    let update = ToolCall::from_openai_function(
+        "schedule_update",
+        r#"{"id":"t486-cycle-152","mode":once,"delivery_mode":existing_session,"enabled":true}"#,
+    )
+    .expect("parse schedule_update with bare enums");
+
+    assert_eq!(
+        update,
+        ToolCall::ScheduleUpdate(super::ScheduleUpdateInput {
+            id: "t486-cycle-152".to_string(),
+            agent_identifier: None,
+            prompt: None,
+            mode: Some(crate::agent::AgentScheduleMode::Once),
+            delivery_mode: Some(crate::agent::AgentScheduleDeliveryMode::ExistingSession),
+            target_session_id: None,
+            interval_seconds: None,
+            enabled: Some(true),
+        })
+    );
+}
+
+#[test]
 fn interagent_tool_definitions_are_explicit_about_async_follow_up_flow() {
     let catalog = ToolCatalog::default();
     let message_agent = catalog
@@ -360,6 +446,7 @@ fn interagent_tool_definitions_are_explicit_about_async_follow_up_flow() {
             .description
             .contains("use this after message_agent")
     );
+    assert!(session_wait.description.contains(r#""mode":"transcript""#));
     assert!(message_schema.contains("does not wait for the reply"));
     assert!(session_wait_schema.contains("recipient_session_id"));
 }
@@ -386,6 +473,12 @@ fn scheduling_tool_definitions_steer_reminders_to_continue_later() {
             .description
             .contains("For simple one-shot reminders, prefer continue_later")
     );
+    assert!(
+        continue_later
+            .description
+            .contains(r#""delivery_mode":"existing_session""#)
+    );
+    assert!(schedule_create.description.contains(r#""mode":"once""#));
     assert!(continue_schema.contains("same session"));
     assert!(continue_schema.contains("what to say or do when the timer fires"));
     assert!(schedule_schema.contains("advanced or recurring"));
