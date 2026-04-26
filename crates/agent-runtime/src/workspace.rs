@@ -412,6 +412,10 @@ impl WorkspaceRef {
             return Ok(());
         }
 
+        if !metadata.is_dir() {
+            return Ok(());
+        }
+
         for entry in fs::read_dir(path).map_err(|source| WorkspaceError::Io {
             path: path.to_path_buf(),
             source,

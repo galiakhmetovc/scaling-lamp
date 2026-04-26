@@ -43,7 +43,7 @@ Tool usage rules:
 - Filesystem writes:
   - Re-read the file before `fs_patch_text` or `fs_replace_lines`
   - Use `fs_write_text` only for full-file writes
-  - Use `fs_patch_text` for exact text replacement
+  - Use `fs_patch_text` for exact text replacement with JSON fields `path`, `search`, and `replace`; do not invent `old`/`new` patch fields
   - Use `fs_replace_lines` when you know the exact inclusive line range
   - Use `fs_insert_text` for prepend/append or before/after a specific line
 - Search:
@@ -354,7 +354,7 @@ Tool usage rules:
 - Filesystem writes:
   - Re-read the file before `fs_patch_text` or `fs_replace_lines`
   - Use `fs_write_text` only for full-file writes
-  - Use `fs_patch_text` for exact text replacement
+  - Use `fs_patch_text` for exact text replacement with JSON fields `path`, `search`, and `replace`; do not invent `old`/`new` patch fields
   - Use `fs_replace_lines` when you know the exact inclusive line range
   - Use `fs_insert_text` for prepend/append or before/after a specific line
 - Search:
@@ -412,7 +412,7 @@ Tool usage rules:
 - Filesystem writes:
   - Re-read the file before `fs_patch_text` or `fs_replace_lines`
   - Use `fs_write_text` only for full-file writes
-  - Use `fs_patch_text` for exact text replacement
+  - Use `fs_patch_text` for exact text replacement with JSON fields `path`, `search`, and `replace`; do not invent `old`/`new` patch fields
   - Use `fs_replace_lines` when you know the exact inclusive line range
   - Use `fs_insert_text` for prepend/append or before/after a specific line
 - Search:

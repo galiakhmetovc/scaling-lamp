@@ -130,10 +130,13 @@ struct ProviderLoopCursor {
 impl ProviderLoopCursor {
     fn permits_repeated_tool_signature(response: &ProviderResponse) -> bool {
         !response.tool_calls.is_empty()
-            && response
-                .tool_calls
-                .iter()
-                .all(|tool_call| tool_call.name == ToolName::ExecReadOutput.as_str())
+            && response.tool_calls.iter().all(|tool_call| {
+                matches!(
+                    tool_call.name.as_str(),
+                    name if name == ToolName::ExecReadOutput.as_str()
+                        || name == ToolName::SessionWait.as_str()
+                )
+            })
     }
 
     fn new(
@@ -3468,8 +3471,8 @@ mod tests {
     use super::*;
     use agent_runtime::plan::PlanItemStatus;
     use agent_runtime::provider::{
-        ModelCapabilities, ProviderDescriptor, ProviderError, ProviderRequest, ProviderResponse,
-        ProviderResponseStream,
+        FinishReason, ModelCapabilities, ProviderDescriptor, ProviderError, ProviderRequest,
+        ProviderResponse, ProviderResponseStream, ProviderToolCall,
     };
     use std::io;
 
@@ -3511,6 +3514,21 @@ mod tests {
         }
     }
 
+    fn response_with_tool_call(name: &str, arguments: &str) -> ProviderResponse {
+        ProviderResponse {
+            response_id: "resp-test".to_string(),
+            model: "test-model".to_string(),
+            output_text: String::new(),
+            tool_calls: vec![ProviderToolCall {
+                call_id: "call-1".to_string(),
+                name: name.to_string(),
+                arguments: arguments.to_string(),
+            }],
+            finish_reason: FinishReason::Completed,
+            usage: None,
+        }
+    }
+
     #[test]
     fn build_request_omits_max_output_tokens_when_not_configured() {
         let provider = provider();
@@ -3545,6 +3563,26 @@ mod tests {
         );
 
         assert_eq!(request.max_output_tokens, Some(8192));
+    }
+
+    #[test]
+    fn remember_tool_signature_allows_repeated_session_wait_polling() {
+        let provider = provider();
+        let mut cursor = ProviderLoopCursor::new(&provider, None, 24);
+        let response = response_with_tool_call(
+            ToolName::SessionWait.as_str(),
+            r#"{"max_bytes":8000,"max_items":10,"mode":"transcript","session_id":"session-agentmsg-1","wait_timeout_ms":0}"#,
+        );
+
+        cursor
+            .remember_tool_signature(&response)
+            .expect("first repeated session_wait should be tracked");
+        cursor
+            .remember_tool_signature(&response)
+            .expect("second repeated session_wait should be tracked");
+        cursor
+            .remember_tool_signature(&response)
+            .expect("third repeated session_wait should be allowed");
     }
 
     #[test]

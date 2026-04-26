@@ -221,6 +221,7 @@ fn build_from_config_refreshes_legacy_default_prompts_but_preserves_custom_edits
     assert!(refreshed_agents.contains("use `continue_later` with `delay_seconds`"));
     assert!(refreshed_agents.contains("set `delivery_mode` to `existing_session`"));
     assert!(refreshed_agents.contains("Arguments must be strict JSON"));
+    assert!(refreshed_agents.contains("do not invent `old`/`new` patch fields"));
     let obsidian_skill = fs::read_to_string(default_home.join("skills/obsidian-vault/SKILL.md"))
         .expect("read obsidian skill");
     assert!(obsidian_skill.contains("name: obsidian-vault"));

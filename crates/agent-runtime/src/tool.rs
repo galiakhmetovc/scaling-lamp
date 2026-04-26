@@ -1673,7 +1673,7 @@ impl ToolCatalog {
             ToolDefinition {
                 name: ToolName::FsFindInFiles,
                 family: ToolFamily::Filesystem,
-                description: "Search for literal text across workspace files, optionally constrained by glob",
+                description: "Search for literal text across regular workspace files, optionally constrained by glob; special files such as sockets are ignored",
                 policy: ToolPolicy {
                     read_only: true,
                     destructive: false,
@@ -1693,7 +1693,7 @@ impl ToolCatalog {
             ToolDefinition {
                 name: ToolName::FsPatchText,
                 family: ToolFamily::Filesystem,
-                description: "Replace one exact text fragment inside a UTF-8 text file",
+                description: "Replace one exact text fragment inside a UTF-8 text file. Use JSON fields `search` and `replace`; do not send `old`/`new` patch arrays",
                 policy: ToolPolicy {
                     read_only: false,
                     destructive: true,
@@ -4972,8 +4972,8 @@ impl ToolName {
                 "type": "object",
                 "properties": {
                     "path": { "type": "string", "description": "Relative workspace path to patch" },
-                    "search": { "type": "string" },
-                    "replace": { "type": "string" }
+                    "search": { "type": "string", "description": "Exact existing text fragment to replace. Do not send old/new patch arrays; use this `search` field directly." },
+                    "replace": { "type": "string", "description": "Replacement text for the first matching `search` fragment." }
                 },
                 "required": ["path", "search", "replace"],
                 "additionalProperties": false,

@@ -16,6 +16,8 @@
 
 Определения живут в [`crates/agent-runtime/src/tool.rs`](../../crates/agent-runtime/src/tool.rs).
 
+Подробный справочник по model-facing tools, их сигнатурам и тому, как они выглядят для provider, вынесен отдельно в [15-tool-reference.md](15-tool-reference.md).
+
 ## Семейства tool surface
 
 ### Filesystem

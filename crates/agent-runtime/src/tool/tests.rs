@@ -12,6 +12,8 @@ use crate::memory::SessionRetentionTier;
 use crate::workspace::WorkspaceRef;
 use std::io::{Read, Write};
 use std::net::TcpListener;
+#[cfg(unix)]
+use std::os::unix::net::UnixListener;
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -418,6 +420,22 @@ fn enum_like_tool_parameters_require_quoted_json_strings_in_schema() {
 }
 
 #[test]
+fn fs_patch_text_definition_is_explicit_about_search_and_replace_fields() {
+    let catalog = ToolCatalog::default();
+    let fs_patch_text = catalog
+        .definition(ToolName::FsPatchText)
+        .expect("fs_patch_text");
+    let schema = fs_patch_text.openai_function_schema().to_string();
+
+    assert!(fs_patch_text.description.contains("Use JSON fields"));
+    assert!(fs_patch_text.description.contains("search"));
+    assert!(fs_patch_text.description.contains("replace"));
+    assert!(schema.contains("search"));
+    assert!(schema.contains("replace"));
+    assert!(schema.contains("Do not send old/new"));
+}
+
+#[test]
 fn tool_call_parses_knowledge_memory_inputs() {
     let search = ToolCall::from_openai_function(
         "knowledge_search",
@@ -597,6 +615,31 @@ fn filesystem_tools_glob_and_patch_files_with_exact_edits() {
     );
     assert_eq!(patched.summary(), "fs_patch_text path=src/main.rs");
     assert!(read.content.contains("println!(\"new\");"));
+}
+
+#[cfg(unix)]
+#[test]
+fn fs_find_in_files_ignores_unix_sockets_and_returns_regular_file_matches() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let workspace = WorkspaceRef::new(temp.path());
+    let mut runtime = ToolRuntime::new(workspace);
+
+    std::fs::write(temp.path().join("notes.txt"), "alpha\nneedle\n").expect("write notes");
+    let _socket = UnixListener::bind(temp.path().join("agent.sock")).expect("bind unix socket");
+
+    let search = runtime
+        .invoke(ToolCall::FsFindInFiles(FsFindInFilesInput {
+            query: "needle".to_string(),
+            glob: None,
+            limit: Some(10),
+        }))
+        .expect("fs_find_in_files with socket present")
+        .into_fs_find_in_files()
+        .expect("fs_find_in_files output");
+
+    assert_eq!(search.matches.len(), 1);
+    assert_eq!(search.matches[0].path, "notes.txt");
+    assert_eq!(search.matches[0].line_number, 2);
 }
 
 #[test]

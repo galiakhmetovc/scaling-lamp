@@ -32,6 +32,7 @@
 9. [12-prompt-contract-decision.md](12-prompt-contract-decision.md)
 10. [13-observability-tracing-plan.md](13-observability-tracing-plan.md)
 11. [14-container-addons.md](14-container-addons.md)
+12. [15-tool-reference.md](15-tool-reference.md)
 
 ## Словарь
 
