@@ -58,7 +58,7 @@ search_url = "https://duckduckgo.com/html/"
 # search_url = "http://127.0.0.1:8888/search"
 
 [runtime_timing]
-sqlite_busy_timeout_ms = 5000
+sqlite_busy_timeout_ms = 15000
 daemon_http_connect_timeout_ms = 2000
 daemon_http_request_timeout_ms = 5000
 a2a_http_connect_timeout_ms = 2000

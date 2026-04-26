@@ -1,6 +1,9 @@
 use super::*;
 use crate::agents;
 use crate::prompting;
+use crate::store_retry::{
+    SQLITE_LOCK_RETRY_ATTEMPTS, SQLITE_LOCK_RETRY_DELAY_MS, retry_store_sync,
+};
 use agent_persistence::{
     ArtifactRecord, ArtifactRepository, ContextOffloadRepository, ToolCallRecord,
     ToolCallRepository,
@@ -32,6 +35,7 @@ use agent_runtime::tool::{
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread;
+use std::time::Duration;
 
 const MAX_CONTEXT_OFFLOAD_REFS: usize = 16;
 const INLINE_TOOL_OUTPUT_TOKEN_LIMIT: u32 = 512;
@@ -520,97 +524,96 @@ impl ExecutionService {
     }
 
     fn record_tool_call_ledger(update: ToolCallLedgerUpdate<'_>) -> Result<(), ExecutionError> {
-        let id = Self::tool_call_ledger_id(update.run_id, update.provider_tool_call_id);
-        let existing = update
-            .store
-            .get_tool_call(&id)
-            .map_err(ExecutionError::Store)?;
-        let requested_at = existing
-            .as_ref()
-            .map(|record| record.requested_at)
-            .unwrap_or(update.now);
-        update
-            .store
-            .put_tool_call(&ToolCallRecord {
-                id,
-                session_id: update.session_id.to_string(),
-                run_id: update.run_id.to_string(),
-                provider_tool_call_id: update.provider_tool_call_id.to_string(),
-                tool_name: update.tool_name.to_string(),
-                arguments_json: update.arguments_json.to_string(),
-                summary: update.summary.to_string(),
-                status: update.status.as_str().to_string(),
-                error: update.error,
-                result_summary: existing
+        retry_store_sync(
+            SQLITE_LOCK_RETRY_ATTEMPTS,
+            Duration::from_millis(SQLITE_LOCK_RETRY_DELAY_MS),
+            || {
+                let id = Self::tool_call_ledger_id(update.run_id, update.provider_tool_call_id);
+                let existing = update.store.get_tool_call(&id)?;
+                let requested_at = existing
                     .as_ref()
-                    .and_then(|record| record.result_summary.clone()),
-                result_preview: existing
-                    .as_ref()
-                    .and_then(|record| record.result_preview.clone()),
-                result_artifact_id: existing
-                    .as_ref()
-                    .and_then(|record| record.result_artifact_id.clone()),
-                result_truncated: existing
-                    .as_ref()
-                    .is_some_and(|record| record.result_truncated),
-                result_byte_len: existing.as_ref().and_then(|record| record.result_byte_len),
-                requested_at,
-                updated_at: update.now,
-            })
-            .map_err(ExecutionError::Store)
+                    .map(|record| record.requested_at)
+                    .unwrap_or(update.now);
+                update.store.put_tool_call(&ToolCallRecord {
+                    id,
+                    session_id: update.session_id.to_string(),
+                    run_id: update.run_id.to_string(),
+                    provider_tool_call_id: update.provider_tool_call_id.to_string(),
+                    tool_name: update.tool_name.to_string(),
+                    arguments_json: update.arguments_json.to_string(),
+                    summary: update.summary.to_string(),
+                    status: update.status.as_str().to_string(),
+                    error: update.error.clone(),
+                    result_summary: existing
+                        .as_ref()
+                        .and_then(|record| record.result_summary.clone()),
+                    result_preview: existing
+                        .as_ref()
+                        .and_then(|record| record.result_preview.clone()),
+                    result_artifact_id: existing
+                        .as_ref()
+                        .and_then(|record| record.result_artifact_id.clone()),
+                    result_truncated: existing
+                        .as_ref()
+                        .is_some_and(|record| record.result_truncated),
+                    result_byte_len: existing.as_ref().and_then(|record| record.result_byte_len),
+                    requested_at,
+                    updated_at: update.now,
+                })
+            },
+        )
+        .map_err(ExecutionError::Store)
     }
 
     fn record_tool_call_result(
         update: ToolCallResultLedgerUpdate<'_>,
     ) -> Result<(), ExecutionError> {
-        let id = Self::tool_call_ledger_id(update.run_id, update.provider_tool_call_id);
-        let Some(mut record) = update
-            .store
-            .get_tool_call(&id)
-            .map_err(ExecutionError::Store)?
-        else {
-            return Ok(());
-        };
+        retry_store_sync(
+            SQLITE_LOCK_RETRY_ATTEMPTS,
+            Duration::from_millis(SQLITE_LOCK_RETRY_DELAY_MS),
+            || {
+                let id = Self::tool_call_ledger_id(update.run_id, update.provider_tool_call_id);
+                let Some(mut record) = update.store.get_tool_call(&id)? else {
+                    return Ok(());
+                };
 
-        let (result_preview, result_truncated) = Self::tool_result_preview(update.result_output);
-        let result_artifact_id = if result_truncated {
-            let artifact_id =
-                Self::tool_result_artifact_id(update.run_id, update.provider_tool_call_id);
-            update
-                .store
-                .put_artifact(&ArtifactRecord {
-                    id: artifact_id.clone(),
-                    session_id: update.session_id.to_string(),
-                    kind: "tool_output".to_string(),
-                    metadata_json: serde_json::json!({
-                        "tool_call_id": id,
-                        "run_id": update.run_id,
-                        "provider_tool_call_id": update.provider_tool_call_id,
-                        "tool_name": update.tool_name,
-                        "summary": update.result_summary,
-                        "created_at": update.now,
-                    })
-                    .to_string(),
-                    path: PathBuf::from("artifacts").join(format!("{artifact_id}.bin")),
-                    bytes: update.result_output.as_bytes().to_vec(),
-                    created_at: update.now,
-                })
-                .map_err(ExecutionError::Store)?;
-            Some(artifact_id)
-        } else {
-            None
-        };
+                let (result_preview, result_truncated) =
+                    Self::tool_result_preview(update.result_output);
+                let result_artifact_id = if result_truncated {
+                    let artifact_id =
+                        Self::tool_result_artifact_id(update.run_id, update.provider_tool_call_id);
+                    update.store.put_artifact(&ArtifactRecord {
+                        id: artifact_id.clone(),
+                        session_id: update.session_id.to_string(),
+                        kind: "tool_output".to_string(),
+                        metadata_json: serde_json::json!({
+                            "tool_call_id": id,
+                            "run_id": update.run_id,
+                            "provider_tool_call_id": update.provider_tool_call_id,
+                            "tool_name": update.tool_name,
+                            "summary": update.result_summary,
+                            "created_at": update.now,
+                        })
+                        .to_string(),
+                        path: PathBuf::from("artifacts").join(format!("{artifact_id}.bin")),
+                        bytes: update.result_output.as_bytes().to_vec(),
+                        created_at: update.now,
+                    })?;
+                    Some(artifact_id)
+                } else {
+                    None
+                };
 
-        record.result_summary = Some(update.result_summary.to_string());
-        record.result_preview = Some(result_preview);
-        record.result_artifact_id = result_artifact_id;
-        record.result_truncated = result_truncated;
-        record.result_byte_len = Some(update.result_output.len() as i64);
-        record.updated_at = update.now;
-        update
-            .store
-            .put_tool_call(&record)
-            .map_err(ExecutionError::Store)
+                record.result_summary = Some(update.result_summary.to_string());
+                record.result_preview = Some(result_preview);
+                record.result_artifact_id = result_artifact_id;
+                record.result_truncated = result_truncated;
+                record.result_byte_len = Some(update.result_output.len() as i64);
+                record.updated_at = update.now;
+                update.store.put_tool_call(&record)
+            },
+        )
+        .map_err(ExecutionError::Store)
     }
 
     fn tool_result_preview(result_output: &str) -> (String, bool) {
@@ -1030,11 +1033,14 @@ impl ExecutionService {
         store: &PersistenceStore,
         run: &RunEngine,
     ) -> Result<(), ExecutionError> {
-        store
-            .put_run(
-                &RunRecord::try_from(run.snapshot()).map_err(ExecutionError::RecordConversion)?,
-            )
-            .map_err(ExecutionError::Store)
+        let record =
+            RunRecord::try_from(run.snapshot()).map_err(ExecutionError::RecordConversion)?;
+        retry_store_sync(
+            SQLITE_LOCK_RETRY_ATTEMPTS,
+            Duration::from_millis(SQLITE_LOCK_RETRY_DELAY_MS),
+            || store.put_run(&record),
+        )
+        .map_err(ExecutionError::Store)
     }
 
     pub(crate) fn latest_active_session_run(
@@ -1242,9 +1248,13 @@ impl ExecutionService {
         job.lease_expires_at = None;
         job.heartbeat_at = Some(now);
         job.last_progress_message = Some(reason.to_string());
-        store
-            .put_job(&JobRecord::try_from(&*job).map_err(ExecutionError::RecordConversion)?)
-            .map_err(ExecutionError::Store)
+        let record = JobRecord::try_from(&*job).map_err(ExecutionError::RecordConversion)?;
+        retry_store_sync(
+            SQLITE_LOCK_RETRY_ATTEMPTS,
+            Duration::from_millis(SQLITE_LOCK_RETRY_DELAY_MS),
+            || store.put_job(&record),
+        )
+        .map_err(ExecutionError::Store)
     }
 
     pub(super) fn run_was_cancelled_by_operator(

@@ -9,6 +9,9 @@ pub use mcp_ops::{McpConnectorCreateOptions, McpConnectorUpdatePatch, McpConnect
 pub(crate) use mcp_ops::{render_mcp_connector_view, render_mcp_connectors_view};
 
 use crate::diagnostics::DiagnosticEventBuilder;
+use crate::store_retry::{
+    SQLITE_LOCK_RETRY_ATTEMPTS, SQLITE_LOCK_RETRY_DELAY_MS, retry_store_sync,
+};
 use crate::{about::RuntimeReleaseUpdater, cli, execution, mcp::SharedMcpRegistry, prompting};
 use agent_persistence::{
     AgentRepository, AppConfig, ConfigError, ContextSummaryRepository, JobRepository,
@@ -34,7 +37,7 @@ use std::fs;
 use std::io::{BufRead, Write};
 use std::path::{Path, PathBuf};
 use std::time::Instant;
-use std::time::{SystemTime, SystemTimeError, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, SystemTimeError, UNIX_EPOCH};
 
 #[derive(Debug)]
 pub enum BootstrapError {
@@ -316,7 +319,12 @@ impl App {
     }
 
     pub fn store(&self) -> Result<PersistenceStore, BootstrapError> {
-        PersistenceStore::open_runtime(&self.persistence).map_err(BootstrapError::Store)
+        retry_store_sync(
+            SQLITE_LOCK_RETRY_ATTEMPTS,
+            Duration::from_millis(SQLITE_LOCK_RETRY_DELAY_MS),
+            || PersistenceStore::open_runtime(&self.persistence),
+        )
+        .map_err(BootstrapError::Store)
     }
 
     pub fn runtime_status_snapshot(&self) -> Result<RuntimeStatusSnapshot, BootstrapError> {

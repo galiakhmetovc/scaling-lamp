@@ -124,9 +124,10 @@ Storage key теперь обычно содержит `session_id/filename.txt`
 Сейчас для SQLite явно настроены:
 
 - `WAL` для лучшего read/write поведения;
-- `busy_timeout`, который читается из `runtime_timing.sqlite_busy_timeout_ms`.
+- `busy_timeout`, который читается из `runtime_timing.sqlite_busy_timeout_ms` и по умолчанию равен `15000` мс;
+- retry на transient SQLite lock errors (`SQLITE_BUSY`, `SQLITE_LOCKED`) в request-path/runtime-path hot spots: store open, tool-call ledger/result persistence и Telegram polling/binding updates.
 
-Это уменьшает риск `database is locked` в сценариях, где TUI/daemon/request-path пересекаются с writer lock.
+Это уменьшает риск `database is locked` в сценариях, где TUI/daemon/request-path пересекаются с writer lock. Важно: retry не заменяет правильную WAL-конфигурацию и короткие транзакции, а только закрывает короткие окна contention, которые раньше протекали в пользовательские ошибки.
 
 ## Почему store больше не должен тормозить TUI
 

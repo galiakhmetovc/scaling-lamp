@@ -9,10 +9,13 @@ use super::render::{
 use crate::bootstrap::{App, BootstrapError, SessionPreferencesPatch, SessionSummary};
 use crate::diagnostics::DiagnosticEventBuilder;
 use crate::execution::{ChatExecutionEvent, ChatTurnExecutionReport, ToolExecutionStatus};
+use crate::store_retry::{
+    SQLITE_LOCK_RETRY_ATTEMPTS, SQLITE_LOCK_RETRY_DELAY_MS, retry_store_sync,
+};
 use agent_persistence::{
-    TelegramChatBindingRecord, TelegramChatStatusRecord, TelegramRepository,
-    TelegramUpdateCursorRecord, TelegramUserPairingRecord, TranscriptRecord, TranscriptRepository,
-    audit::AuditLogConfig,
+    PersistenceStore, StoreError, TelegramChatBindingRecord, TelegramChatStatusRecord,
+    TelegramRepository, TelegramUpdateCursorRecord, TelegramUserPairingRecord, TranscriptRecord,
+    TranscriptRepository, audit::AuditLogConfig,
 };
 use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -93,12 +96,11 @@ where
         self.cleanup_expired_chat_statuses().await?;
         self.deliver_pending_session_notifications().await?;
 
-        let offset = {
-            let store = self.app.store()?;
+        let offset = self.with_store_retry(|store| {
             store
-                .get_telegram_update_cursor(&self.consumer)?
-                .and_then(|record| i32::try_from(record.update_id).ok())
-        };
+                .get_telegram_update_cursor(&self.consumer)
+                .map(|cursor| cursor.and_then(|record| i32::try_from(record.update_id).ok()))
+        })?;
         let updates = self
             .client
             .poll_updates(offset, 100, self.poll_timeout_seconds())
@@ -585,22 +587,21 @@ where
         expires_at: Option<i64>,
         now: i64,
     ) -> Result<(), BootstrapError> {
-        self.app
-            .store()?
-            .put_telegram_chat_status(&TelegramChatStatusRecord {
+        self.with_store_retry(|store| {
+            let created_at = store
+                .get_telegram_chat_status(chat_id)?
+                .map(|record| record.created_at)
+                .unwrap_or(now);
+            store.put_telegram_chat_status(&TelegramChatStatusRecord {
                 telegram_chat_id: chat_id,
                 message_id,
                 state: state.to_string(),
                 expires_at,
-                created_at: self
-                    .app
-                    .store()?
-                    .get_telegram_chat_status(chat_id)?
-                    .map(|record| record.created_at)
-                    .unwrap_or(now),
+                created_at,
                 updated_at: now,
-            })?;
-        Ok(())
+            })
+        })
+        .map(|_| ())
     }
 
     fn mark_chat_status_stale(
@@ -619,17 +620,19 @@ where
     }
 
     async fn cleanup_chat_status_for_new_input(&self, chat_id: i64) -> Result<(), BootstrapError> {
-        let Some(status) = self.app.store()?.get_telegram_chat_status(chat_id)? else {
+        let Some(status) =
+            self.with_store_retry(|store| store.get_telegram_chat_status(chat_id))?
+        else {
             return Ok(());
         };
         let _ = self.client.delete_message(chat_id, status.message_id).await;
-        self.app.store()?.delete_telegram_chat_status(chat_id)?;
+        self.with_store_retry(|store| store.delete_telegram_chat_status(chat_id))?;
         Ok(())
     }
 
     async fn cleanup_expired_chat_statuses(&self) -> Result<(), BootstrapError> {
         let now = unix_timestamp()?;
-        let statuses = self.app.store()?.list_telegram_chat_statuses()?;
+        let statuses = self.with_store_retry(|store| store.list_telegram_chat_statuses())?;
         for status in statuses {
             if status.state != TELEGRAM_CHAT_STATUS_STALE {
                 continue;
@@ -643,9 +646,9 @@ where
                 .await
                 .is_ok()
             {
-                self.app
-                    .store()?
-                    .delete_telegram_chat_status(status.telegram_chat_id)?;
+                self.with_store_retry(|store| {
+                    store.delete_telegram_chat_status(status.telegram_chat_id)
+                })?;
             }
         }
         Ok(())
@@ -747,28 +750,28 @@ where
         selected_session_id: Option<String>,
         now: i64,
     ) -> Result<(), BootstrapError> {
-        let existing = self.app.store()?.get_telegram_chat_binding(chat_id)?;
-        let cursor = binding_cursor_for_selection(
-            &self.app,
-            existing.as_ref(),
-            selected_session_id.as_deref(),
-        )?;
-        self.app
-            .store()?
-            .put_telegram_chat_binding(&TelegramChatBindingRecord {
+        let existing = self.with_store_retry(|store| store.get_telegram_chat_binding(chat_id))?;
+        let cursor =
+            self.binding_cursor_for_selection(existing.as_ref(), selected_session_id.as_deref())?;
+        let existing_created_at = existing
+            .as_ref()
+            .map(|record| record.created_at)
+            .unwrap_or(now);
+        let cursor_created_at = cursor.created_at;
+        let cursor_transcript_id = cursor.transcript_id;
+        self.with_store_retry(|store| {
+            store.put_telegram_chat_binding(&TelegramChatBindingRecord {
                 telegram_chat_id: chat_id,
                 scope: TELEGRAM_SCOPE_PRIVATE.to_string(),
                 owner_telegram_user_id: Some(telegram_user_id),
-                selected_session_id,
-                last_delivered_transcript_created_at: cursor.created_at,
-                last_delivered_transcript_id: cursor.transcript_id,
-                created_at: existing
-                    .as_ref()
-                    .map(|record| record.created_at)
-                    .unwrap_or(now),
+                selected_session_id: selected_session_id.clone(),
+                last_delivered_transcript_created_at: cursor_created_at,
+                last_delivered_transcript_id: cursor_transcript_id.clone(),
+                created_at: existing_created_at,
                 updated_at: now,
-            })?;
-        Ok(())
+            })
+        })
+        .map(|_| ())
     }
 
     fn put_group_binding(
@@ -777,28 +780,28 @@ where
         selected_session_id: Option<String>,
         now: i64,
     ) -> Result<(), BootstrapError> {
-        let existing = self.app.store()?.get_telegram_chat_binding(chat_id)?;
-        let cursor = binding_cursor_for_selection(
-            &self.app,
-            existing.as_ref(),
-            selected_session_id.as_deref(),
-        )?;
-        self.app
-            .store()?
-            .put_telegram_chat_binding(&TelegramChatBindingRecord {
+        let existing = self.with_store_retry(|store| store.get_telegram_chat_binding(chat_id))?;
+        let cursor =
+            self.binding_cursor_for_selection(existing.as_ref(), selected_session_id.as_deref())?;
+        let existing_created_at = existing
+            .as_ref()
+            .map(|record| record.created_at)
+            .unwrap_or(now);
+        let cursor_created_at = cursor.created_at;
+        let cursor_transcript_id = cursor.transcript_id;
+        self.with_store_retry(|store| {
+            store.put_telegram_chat_binding(&TelegramChatBindingRecord {
                 telegram_chat_id: chat_id,
                 scope: TELEGRAM_SCOPE_GROUP.to_string(),
                 owner_telegram_user_id: None,
-                selected_session_id,
-                last_delivered_transcript_created_at: cursor.created_at,
-                last_delivered_transcript_id: cursor.transcript_id,
-                created_at: existing
-                    .as_ref()
-                    .map(|record| record.created_at)
-                    .unwrap_or(now),
+                selected_session_id: selected_session_id.clone(),
+                last_delivered_transcript_created_at: cursor_created_at,
+                last_delivered_transcript_id: cursor_transcript_id.clone(),
+                created_at: existing_created_at,
                 updated_at: now,
-            })?;
-        Ok(())
+            })
+        })
+        .map(|_| ())
     }
 
     fn ensure_chat_delivery_cursor_initialized(
@@ -806,7 +809,9 @@ where
         chat_id: i64,
         session_id: &str,
     ) -> Result<(), BootstrapError> {
-        let Some(binding) = self.app.store()?.get_telegram_chat_binding(chat_id)? else {
+        let Some(binding) =
+            self.with_store_retry(|store| store.get_telegram_chat_binding(chat_id))?
+        else {
             return Ok(());
         };
         if binding.last_delivered_transcript_created_at.is_some()
@@ -817,7 +822,7 @@ where
         self.update_chat_delivery_cursor(
             chat_id,
             session_id,
-            latest_delivery_cursor(&self.app, session_id)?,
+            self.latest_delivery_cursor(session_id)?,
         )
     }
 
@@ -829,7 +834,7 @@ where
         self.update_chat_delivery_cursor(
             chat_id,
             session_id,
-            latest_delivery_cursor(&self.app, session_id)?,
+            self.latest_delivery_cursor(session_id)?,
         )
     }
 
@@ -855,7 +860,9 @@ where
         session_id: &str,
         cursor: DeliveryCursor,
     ) -> Result<(), BootstrapError> {
-        let Some(mut binding) = self.app.store()?.get_telegram_chat_binding(chat_id)? else {
+        let Some(mut binding) =
+            self.with_store_retry(|store| store.get_telegram_chat_binding(chat_id))?
+        else {
             return Ok(());
         };
         if binding.selected_session_id.as_deref() != Some(session_id) {
@@ -864,12 +871,12 @@ where
         binding.last_delivered_transcript_created_at = cursor.created_at.or(Some(0));
         binding.last_delivered_transcript_id = cursor.transcript_id.or_else(|| Some(String::new()));
         binding.updated_at = unix_timestamp()?;
-        self.app.store()?.put_telegram_chat_binding(&binding)?;
+        self.with_store_retry(|store| store.put_telegram_chat_binding(&binding))?;
         Ok(())
     }
 
     async fn deliver_pending_session_notifications(&self) -> Result<(), BootstrapError> {
-        let bindings = self.app.store()?.list_telegram_chat_bindings()?;
+        let bindings = self.with_store_retry(|store| store.list_telegram_chat_bindings())?;
         for binding in bindings {
             let Some(session_id) = binding.selected_session_id.as_deref() else {
                 continue;
@@ -899,12 +906,13 @@ where
             self.update_chat_delivery_cursor(
                 binding.telegram_chat_id,
                 session_id,
-                latest_delivery_cursor(&self.app, session_id)?,
+                self.latest_delivery_cursor(session_id)?,
             )?;
             return Ok(Vec::new());
         }
 
-        let transcripts = self.app.store()?.list_transcripts_for_session(session_id)?;
+        let transcripts =
+            self.with_store_retry(|store| store.list_transcripts_for_session(session_id))?;
         Ok(transcripts
             .into_iter()
             .filter(|transcript| transcript.kind == "assistant")
@@ -918,26 +926,29 @@ where
         chat_id: i64,
     ) -> Result<String, BootstrapError> {
         let now = unix_timestamp()?;
-        if let Some(existing) = self.load_activated_pairing(telegram_user_id(from)?)? {
+        let telegram_user_id = telegram_user_id(from)?;
+        if let Some(existing) = self.load_activated_pairing(telegram_user_id)? {
             return Ok(existing.token);
         }
 
         let token = generate_pairing_token();
-        self.app
-            .store()?
-            .put_telegram_user_pairing(&TelegramUserPairingRecord {
+        let telegram_username = from.username.clone();
+        let telegram_display_name = telegram_display_name(from);
+        let expires_at =
+            now + i64::try_from(self.app.config.telegram.pairing_token_ttl_seconds).unwrap_or(0);
+        self.with_store_retry(|store| {
+            store.put_telegram_user_pairing(&TelegramUserPairingRecord {
                 token: token.clone(),
-                telegram_user_id: telegram_user_id(from)?,
+                telegram_user_id,
                 telegram_chat_id: chat_id,
-                telegram_username: from.username.clone(),
-                telegram_display_name: telegram_display_name(from),
+                telegram_username: telegram_username.clone(),
+                telegram_display_name: telegram_display_name.clone(),
                 status: TELEGRAM_PAIRING_STATUS_PENDING.to_string(),
                 created_at: now,
-                expires_at: now
-                    + i64::try_from(self.app.config.telegram.pairing_token_ttl_seconds)
-                        .unwrap_or(0),
+                expires_at,
                 activated_at: None,
-            })?;
+            })
+        })?;
         Ok(token)
     }
 
@@ -946,9 +957,7 @@ where
         telegram_user_id: i64,
     ) -> Result<Option<TelegramUserPairingRecord>, BootstrapError> {
         Ok(self
-            .app
-            .store()?
-            .get_telegram_user_pairing_by_user_id(telegram_user_id)?
+            .with_store_retry(|store| store.get_telegram_user_pairing_by_user_id(telegram_user_id))?
             .filter(|record| record.status == TELEGRAM_PAIRING_STATUS_ACTIVATED))
     }
 
@@ -956,14 +965,68 @@ where
         if next_offset <= 0 {
             return Ok(());
         }
-        self.app
-            .store()?
-            .put_telegram_update_cursor(&TelegramUpdateCursorRecord {
+        let updated_at = unix_timestamp()?;
+        self.with_store_retry(|store| {
+            store.put_telegram_update_cursor(&TelegramUpdateCursorRecord {
                 consumer: self.consumer.clone(),
                 update_id: next_offset,
-                updated_at: unix_timestamp()?,
-            })?;
-        Ok(())
+                updated_at,
+            })
+        })
+        .map(|_| ())
+    }
+
+    fn binding_cursor_for_selection(
+        &self,
+        existing: Option<&TelegramChatBindingRecord>,
+        selected_session_id: Option<&str>,
+    ) -> Result<DeliveryCursor, BootstrapError> {
+        let Some(selected_session_id) = selected_session_id else {
+            return Ok(DeliveryCursor {
+                created_at: None,
+                transcript_id: None,
+            });
+        };
+        if existing.and_then(|record| record.selected_session_id.as_deref())
+            == Some(selected_session_id)
+        {
+            return Ok(DeliveryCursor {
+                created_at: existing.and_then(|record| record.last_delivered_transcript_created_at),
+                transcript_id: existing
+                    .and_then(|record| record.last_delivered_transcript_id.clone()),
+            });
+        }
+        self.latest_delivery_cursor(selected_session_id)
+    }
+
+    fn latest_delivery_cursor(&self, session_id: &str) -> Result<DeliveryCursor, BootstrapError> {
+        let latest =
+            self.with_store_retry(|store| store.get_latest_transcript_for_session(session_id))?;
+        Ok(match latest {
+            Some(transcript) => DeliveryCursor {
+                created_at: Some(transcript.created_at),
+                transcript_id: Some(transcript.id),
+            },
+            None => DeliveryCursor {
+                created_at: Some(0),
+                transcript_id: Some(String::new()),
+            },
+        })
+    }
+
+    fn with_store_retry<T, F>(&self, mut operation: F) -> Result<T, BootstrapError>
+    where
+        F: FnMut(&PersistenceStore) -> Result<T, StoreError>,
+    {
+        retry_store_sync(
+            SQLITE_LOCK_RETRY_ATTEMPTS,
+            Duration::from_millis(SQLITE_LOCK_RETRY_DELAY_MS),
+            || {
+                let store = PersistenceStore::open_runtime(&self.app.persistence)?;
+                operation(&store)
+            },
+        )
+        .map_err(BootstrapError::Store)
     }
 
     fn poll_interval(&self) -> Duration {
@@ -1410,42 +1473,6 @@ fn escape_telegram_html(text: &str) -> String {
 struct DeliveryCursor {
     created_at: Option<i64>,
     transcript_id: Option<String>,
-}
-
-fn binding_cursor_for_selection(
-    app: &App,
-    existing: Option<&TelegramChatBindingRecord>,
-    selected_session_id: Option<&str>,
-) -> Result<DeliveryCursor, BootstrapError> {
-    let Some(selected_session_id) = selected_session_id else {
-        return Ok(DeliveryCursor {
-            created_at: None,
-            transcript_id: None,
-        });
-    };
-    if existing.and_then(|record| record.selected_session_id.as_deref())
-        == Some(selected_session_id)
-    {
-        return Ok(DeliveryCursor {
-            created_at: existing.and_then(|record| record.last_delivered_transcript_created_at),
-            transcript_id: existing.and_then(|record| record.last_delivered_transcript_id.clone()),
-        });
-    }
-    latest_delivery_cursor(app, selected_session_id)
-}
-
-fn latest_delivery_cursor(app: &App, session_id: &str) -> Result<DeliveryCursor, BootstrapError> {
-    let latest = app.store()?.get_latest_transcript_for_session(session_id)?;
-    Ok(match latest {
-        Some(transcript) => DeliveryCursor {
-            created_at: Some(transcript.created_at),
-            transcript_id: Some(transcript.id),
-        },
-        None => DeliveryCursor {
-            created_at: Some(0),
-            transcript_id: Some(String::new()),
-        },
-    })
 }
 
 fn transcript_is_after_binding_cursor(

@@ -10,5 +10,6 @@ pub mod help;
 pub mod http;
 pub mod mcp;
 pub mod prompting;
+pub mod store_retry;
 pub mod telegram;
 pub mod tui;

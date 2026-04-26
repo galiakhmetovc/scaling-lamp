@@ -315,7 +315,7 @@ impl Default for ContextConfig {
 impl Default for RuntimeTimingConfig {
     fn default() -> Self {
         Self {
-            sqlite_busy_timeout_ms: 5_000,
+            sqlite_busy_timeout_ms: 15_000,
             daemon_http_connect_timeout_ms: 2_000,
             daemon_http_request_timeout_ms: 5_000,
             a2a_http_connect_timeout_ms: 2_000,

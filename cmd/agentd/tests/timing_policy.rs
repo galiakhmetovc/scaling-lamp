@@ -7,7 +7,7 @@ fn runtime_timing_policy_is_explicit_and_centralized() {
 
     assert_eq!(
         config.runtime_timing.sqlite_busy_timeout(),
-        Duration::from_secs(5)
+        Duration::from_secs(15)
     );
     assert_eq!(
         config.runtime_timing.daemon_http_connect_timeout(),
