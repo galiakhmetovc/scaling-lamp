@@ -561,7 +561,7 @@ Group=$SERVICE_GROUP
 EnvironmentFile=$ENV_FILE
 WorkingDirectory=$WORK_DIR
 ExecStart=$BIN_DIR/agentd daemon
-Restart=on-failure
+Restart=always
 RestartSec=5
 
 [Install]
@@ -582,7 +582,7 @@ Group=$SERVICE_GROUP
 EnvironmentFile=$ENV_FILE
 WorkingDirectory=$WORK_DIR
 ExecStart=$BIN_DIR/agentd telegram run
-Restart=on-failure
+Restart=always
 RestartSec=5
 
 [Install]

@@ -370,7 +370,7 @@ Group=teamd
 EnvironmentFile=/etc/teamd/teamd.env
 WorkingDirectory=/var/lib/teamd
 ExecStart=/opt/teamd/bin/agentd daemon
-Restart=on-failure
+Restart=always
 RestartSec=5
 
 [Install]
@@ -395,7 +395,7 @@ Group=teamd
 EnvironmentFile=/etc/teamd/teamd.env
 WorkingDirectory=/var/lib/teamd
 ExecStart=/opt/teamd/bin/agentd telegram run
-Restart=on-failure
+Restart=always
 RestartSec=5
 
 [Install]
