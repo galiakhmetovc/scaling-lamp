@@ -693,6 +693,79 @@ fn knowledge_source_repository_round_trips_sources_and_docs() {
 }
 
 #[test]
+fn delete_knowledge_source_removes_docs_and_fts_entries() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let scaffold = PersistenceScaffold::from_config(crate::AppConfig {
+        data_dir: temp.path().join("state-root"),
+        ..crate::AppConfig::default()
+    });
+    let store = super::PersistenceStore::open(&scaffold).expect("open store");
+
+    let source = KnowledgeSourceRecord {
+        source_id: "docs/knowledge-source.md".to_string(),
+        path: "docs/knowledge-source.md".to_string(),
+        kind: "project_doc".to_string(),
+        sha256: "def456".to_string(),
+        byte_len: 256,
+        mtime: 43,
+        indexed_at: 60,
+    };
+    let docs = vec![
+        KnowledgeSearchDocRecord {
+            doc_id: "docs/knowledge-source.md#0".to_string(),
+            source_id: source.source_id.clone(),
+            path: source.path.clone(),
+            kind: source.kind.clone(),
+            body: "First knowledge slice".to_string(),
+            updated_at: 60,
+        },
+        KnowledgeSearchDocRecord {
+            doc_id: "docs/knowledge-source.md#1".to_string(),
+            source_id: source.source_id.clone(),
+            path: source.path.clone(),
+            kind: source.kind.clone(),
+            body: "Second knowledge slice".to_string(),
+            updated_at: 61,
+        },
+    ];
+
+    store
+        .put_knowledge_source(&source)
+        .expect("put knowledge source");
+    store
+        .replace_knowledge_search_docs(&source.source_id, &docs)
+        .expect("replace docs");
+
+    assert!(
+        store
+            .delete_knowledge_source(&source.source_id)
+            .expect("delete knowledge source")
+    );
+    assert_eq!(
+        store
+            .get_knowledge_source_by_path(&source.path)
+            .expect("get source after delete"),
+        None
+    );
+    assert!(
+        store
+            .list_knowledge_search_docs()
+            .expect("list docs after delete")
+            .into_iter()
+            .all(|doc| doc.source_id != source.source_id)
+    );
+    let fts_count = store
+        .connection
+        .query_row(
+            "SELECT COUNT(*) FROM knowledge_search_fts WHERE doc_id LIKE ?1",
+            [format!("{}#%", source.source_id)],
+            |row| row.get::<_, i64>(0),
+        )
+        .expect("count knowledge fts rows");
+    assert_eq!(fts_count, 0);
+}
+
+#[test]
 fn mcp_connector_repository_round_trips_connector_configs() {
     let temp = tempfile::tempdir().expect("tempdir");
     let scaffold = PersistenceScaffold::from_config(crate::AppConfig {
@@ -880,6 +953,168 @@ fn replace_session_search_docs_serializes_concurrent_rebuilds() {
         .filter(|doc| doc.session_id == session.id)
         .collect::<Vec<_>>();
     assert_eq!(indexed.len(), docs.len());
+}
+
+#[test]
+fn put_telegram_user_pairing_serializes_concurrent_replacements() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let scaffold = PersistenceScaffold::from_config(crate::AppConfig {
+        data_dir: temp.path().join("state-root"),
+        ..crate::AppConfig::default()
+    });
+    let _bootstrap = super::PersistenceStore::open(&scaffold).expect("bootstrap store");
+
+    let barrier = Arc::new(Barrier::new(3));
+    let (tx, rx) = mpsc::channel();
+    let mut handles = Vec::new();
+
+    for worker_id in 0..2 {
+        let scaffold_clone = scaffold.clone();
+        let barrier_clone = Arc::clone(&barrier);
+        let tx_clone = tx.clone();
+        handles.push(thread::spawn(move || {
+            let store =
+                super::PersistenceStore::open_runtime(&scaffold_clone).expect("open runtime");
+            barrier_clone.wait();
+            let result = (0..100).try_for_each(|attempt| {
+                store.put_telegram_user_pairing(&TelegramUserPairingRecord {
+                    token: format!("pair-{worker_id}-{attempt}"),
+                    telegram_user_id: 42,
+                    telegram_chat_id: 4200 + worker_id as i64,
+                    telegram_username: Some("alice".to_string()),
+                    telegram_display_name: format!("Alice worker {worker_id}"),
+                    status: "pending".to_string(),
+                    created_at: attempt,
+                    expires_at: 10_000 + attempt,
+                    activated_at: None,
+                })
+            });
+            tx_clone.send(result).expect("send pairing result");
+        }));
+    }
+    drop(tx);
+
+    barrier.wait();
+
+    for _ in 0..2 {
+        rx.recv_timeout(Duration::from_secs(10))
+            .expect("receive pairing result")
+            .expect("concurrent telegram pairing replacement");
+    }
+
+    for handle in handles {
+        handle.join().expect("join pairing thread");
+    }
+
+    let reopened = super::PersistenceStore::open_runtime(&scaffold).expect("reopen store");
+    let pairings = reopened
+        .list_telegram_user_pairings()
+        .expect("list telegram pairings");
+    assert_eq!(pairings.len(), 1);
+    assert_eq!(pairings[0].telegram_user_id, 42);
+}
+
+#[test]
+fn delete_session_removes_search_docs_fts_and_payloads() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let scaffold = PersistenceScaffold::from_config(crate::AppConfig {
+        data_dir: temp.path().join("state-root"),
+        ..crate::AppConfig::default()
+    });
+    let store = super::PersistenceStore::open(&scaffold).expect("open store");
+
+    let session = SessionRecord {
+        id: "session-delete-atomic".to_string(),
+        title: "Delete me".to_string(),
+        prompt_override: None,
+        settings_json: "{}".to_string(),
+        agent_profile_id: "default".to_string(),
+        active_mission_id: None,
+        parent_session_id: None,
+        parent_job_id: None,
+        delegation_label: None,
+        created_at: 1,
+        updated_at: 2,
+    };
+    store.put_session(&session).expect("put session");
+
+    let transcript = TranscriptRecord {
+        id: "transcript-delete-atomic".to_string(),
+        session_id: session.id.clone(),
+        run_id: None,
+        kind: "assistant".to_string(),
+        content: "persisted transcript".to_string(),
+        created_at: 3,
+    };
+    store.put_transcript(&transcript).expect("put transcript");
+
+    let artifact = ArtifactRecord {
+        id: "artifact-delete-atomic".to_string(),
+        session_id: session.id.clone(),
+        kind: "report".to_string(),
+        metadata_json: "{\"source\":\"test\"}".to_string(),
+        path: store
+            .artifact_relative_path("artifact-delete-atomic")
+            .expect("artifact relative path"),
+        bytes: b"artifact bytes".to_vec(),
+        created_at: 4,
+    };
+    store.put_artifact(&artifact).expect("put artifact");
+
+    let docs = vec![
+        SessionSearchDocRecord {
+            doc_id: "session-delete-atomic#title".to_string(),
+            session_id: session.id.clone(),
+            source_kind: "title".to_string(),
+            source_ref: "session".to_string(),
+            body: "Delete me".to_string(),
+            updated_at: 5,
+        },
+        SessionSearchDocRecord {
+            doc_id: "session-delete-atomic#transcript".to_string(),
+            session_id: session.id.clone(),
+            source_kind: "transcript".to_string(),
+            source_ref: transcript.id.clone(),
+            body: "persisted transcript".to_string(),
+            updated_at: 6,
+        },
+    ];
+    store
+        .replace_session_search_docs(&session.id, &docs)
+        .expect("replace session docs");
+
+    let transcript_path = store
+        .transcript_path(&session.id, &transcript.id)
+        .expect("transcript path");
+    let artifact_path = store.artifact_path(&artifact.id).expect("artifact path");
+    assert!(transcript_path.exists());
+    assert!(artifact_path.exists());
+
+    assert!(store.delete_session(&session.id).expect("delete session"));
+    assert_eq!(
+        store
+            .get_session(&session.id)
+            .expect("get session after delete"),
+        None
+    );
+    assert!(
+        store
+            .list_session_search_docs()
+            .expect("list session search docs after delete")
+            .into_iter()
+            .all(|doc| doc.session_id != session.id)
+    );
+    let fts_count = store
+        .connection
+        .query_row(
+            "SELECT COUNT(*) FROM session_search_fts WHERE session_id = ?1",
+            [&session.id],
+            |row| row.get::<_, i64>(0),
+        )
+        .expect("count session fts rows");
+    assert_eq!(fts_count, 0);
+    assert!(!transcript_path.exists());
+    assert!(!artifact_path.exists());
 }
 
 #[test]

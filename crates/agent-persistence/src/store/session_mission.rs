@@ -119,16 +119,18 @@ impl SessionRepository for PersistenceStore {
                 ),
             ]),
         );
-        self.connection.execute(
+        let transaction = rusqlite::Transaction::new_unchecked(
+            &self.connection,
+            rusqlite::TransactionBehavior::Immediate,
+        )?;
+        transaction.execute(
             "DELETE FROM session_search_fts
              WHERE doc_id IN (
                  SELECT doc_id FROM session_search_docs WHERE session_id = ?1
              )",
             [id],
         )?;
-        let deleted = self
-            .connection
-            .execute("DELETE FROM sessions WHERE id = ?1", [id])?;
+        let deleted = transaction.execute("DELETE FROM sessions WHERE id = ?1", [id])?;
 
         if deleted == 0 {
             self.append_diagnostic_event(
@@ -139,6 +141,7 @@ impl SessionRepository for PersistenceStore {
             );
             return Ok(false);
         }
+        transaction.commit()?;
 
         for path in transcript_paths.into_iter().chain(artifact_paths) {
             remove_payload_if_exists(&path)?;

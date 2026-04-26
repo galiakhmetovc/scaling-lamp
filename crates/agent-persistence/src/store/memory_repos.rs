@@ -238,21 +238,22 @@ impl KnowledgeRepository for PersistenceStore {
     }
 
     fn delete_knowledge_source(&self, source_id: &str) -> Result<bool, StoreError> {
-        self.connection.execute(
+        let transaction = rusqlite::Transaction::new_unchecked(
+            &self.connection,
+            rusqlite::TransactionBehavior::Immediate,
+        )?;
+        transaction.execute(
             "DELETE FROM knowledge_search_fts
              WHERE doc_id IN (
                  SELECT doc_id FROM knowledge_search_docs WHERE source_id = ?1
              )",
             [source_id],
         )?;
-        self.connection.execute(
-            "DELETE FROM knowledge_search_docs WHERE source_id = ?1",
-            [source_id],
-        )?;
-        let deleted = self.connection.execute(
+        let deleted = transaction.execute(
             "DELETE FROM knowledge_sources WHERE source_id = ?1",
             [source_id],
         )?;
+        transaction.commit()?;
         Ok(deleted > 0)
     }
 

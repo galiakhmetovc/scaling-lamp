@@ -119,6 +119,25 @@ Storage key теперь обычно содержит `session_id/filename.txt`
 
 Это разделение устраняет зависания вроде “открытие transcript-tail внезапно 10 секунд думает”.
 
+## Атомарность multi-step SQLite-paths
+
+В storage слое есть несколько путей, где логически одна операция требует нескольких SQL statement’ов: перестройка search-индекса, очистка FTS при delete, замена Telegram pairing key.
+
+Для подтверждённых hot-path операций runtime теперь использует `BEGIN IMMEDIATE` transaction, чтобы не открывать окна гонки между отдельными statement’ами:
+
+- `replace_session_search_docs`
+- `replace_knowledge_search_docs`
+- `put_telegram_user_pairing`
+- `delete_knowledge_source`
+- `delete_session` (DB-часть; payload cleanup остаётся после commit)
+
+Это убирает два класса проблем:
+
+- transient `UNIQUE constraint failed` при конкурентной замене одних и тех же logical rows;
+- частично видимые состояния вида “metadata/search docs ещё есть, а FTS уже удалён” между независимыми autocommit statement’ами.
+
+Если вы ловите новый `sqlite constraint` или странный search mismatch, первым делом смотрите, не появился ли ещё один multi-step mutation path без общей транзакции.
+
 ## SQLite runtime политика
 
 Сейчас для SQLite явно настроены:

@@ -10,11 +10,15 @@ impl TelegramRepository for PersistenceStore {
         record: &TelegramUserPairingRecord,
     ) -> Result<(), StoreError> {
         validate_identifier(&record.token)?;
-        self.connection.execute(
+        let transaction = rusqlite::Transaction::new_unchecked(
+            &self.connection,
+            rusqlite::TransactionBehavior::Immediate,
+        )?;
+        transaction.execute(
             "DELETE FROM telegram_user_pairings WHERE telegram_user_id = ?1 OR token = ?2",
             params![record.telegram_user_id, record.token],
         )?;
-        self.connection.execute(
+        transaction.execute(
             "INSERT INTO telegram_user_pairings (
                 token, telegram_user_id, telegram_chat_id, telegram_username,
                 telegram_display_name, status, created_at, expires_at, activated_at
@@ -31,6 +35,7 @@ impl TelegramRepository for PersistenceStore {
                 record.activated_at,
             ],
         )?;
+        transaction.commit()?;
         Ok(())
     }
 
