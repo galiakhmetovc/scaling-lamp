@@ -27,6 +27,7 @@ use rusqlite::params;
 use std::fs;
 use std::path::PathBuf;
 use std::sync::mpsc;
+use std::sync::{Arc, Barrier};
 use std::thread;
 use std::time::Duration;
 
@@ -797,6 +798,88 @@ fn session_search_repository_round_trips_docs() {
             .expect("list session search docs"),
         vec![docs[1].clone(), docs[0].clone()]
     );
+}
+
+#[test]
+fn replace_session_search_docs_serializes_concurrent_rebuilds() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let scaffold = PersistenceScaffold::from_config(crate::AppConfig {
+        data_dir: temp.path().join("state-root"),
+        ..crate::AppConfig::default()
+    });
+    let bootstrap = super::PersistenceStore::open(&scaffold).expect("open store");
+
+    let session = SessionRecord {
+        id: "session-search-race".to_string(),
+        title: "Search race".to_string(),
+        prompt_override: None,
+        settings_json: "{}".to_string(),
+        agent_profile_id: "default".to_string(),
+        active_mission_id: None,
+        parent_session_id: None,
+        parent_job_id: None,
+        delegation_label: None,
+        created_at: 1,
+        updated_at: 2,
+    };
+    bootstrap.put_session(&session).expect("put session");
+    drop(bootstrap);
+
+    let docs = (0..256)
+        .map(|index| SessionSearchDocRecord {
+            doc_id: format!("{}#transcript:entry-{index}", session.id),
+            session_id: session.id.clone(),
+            source_kind: "transcript".to_string(),
+            source_ref: format!("entry-{index}"),
+            body: format!("session search document {index}"),
+            updated_at: 10 + index as i64,
+        })
+        .collect::<Vec<_>>();
+
+    let barrier = Arc::new(Barrier::new(3));
+    let (tx, rx) = mpsc::channel();
+    let mut handles = Vec::new();
+
+    for _ in 0..2 {
+        let scaffold_clone = scaffold.clone();
+        let barrier_clone = Arc::clone(&barrier);
+        let tx_clone = tx.clone();
+        let docs_clone = docs.clone();
+        let session_id = session.id.clone();
+        handles.push(thread::spawn(move || {
+            let store =
+                super::PersistenceStore::open_runtime(&scaffold_clone).expect("open runtime store");
+            barrier_clone.wait();
+            let result = (0..25).try_for_each(|_| {
+                store.replace_session_search_docs(session_id.as_str(), &docs_clone)
+            });
+            tx_clone
+                .send(result)
+                .expect("send concurrent replace result");
+        }));
+    }
+    drop(tx);
+
+    barrier.wait();
+
+    for _ in 0..2 {
+        rx.recv_timeout(Duration::from_secs(10))
+            .expect("receive concurrent replace result")
+            .expect("concurrent replace session search docs");
+    }
+
+    for handle in handles {
+        handle.join().expect("join replace thread");
+    }
+
+    let reopened = super::PersistenceStore::open_runtime(&scaffold).expect("reopen runtime store");
+    let indexed = reopened
+        .list_session_search_docs()
+        .expect("list session search docs after concurrent replace")
+        .into_iter()
+        .filter(|doc| doc.session_id == session.id)
+        .collect::<Vec<_>>();
+    assert_eq!(indexed.len(), docs.len());
 }
 
 #[test]

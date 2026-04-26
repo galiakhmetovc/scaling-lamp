@@ -1963,7 +1963,7 @@ impl ToolCatalog {
             ToolDefinition {
                 name: ToolName::KnowledgeRead,
                 family: ToolFamily::Memory,
-                description: "Read one project knowledge source in a bounded excerpt or full-text view",
+                description: "Read one project knowledge source in a bounded excerpt or full-text view; enum-like arguments such as mode must be quoted JSON strings",
                 policy: ToolPolicy {
                     read_only: true,
                     destructive: false,
@@ -2083,7 +2083,7 @@ impl ToolCatalog {
             ToolDefinition {
                 name: ToolName::ContinueLater,
                 family: ToolFamily::Agent,
-                description: "Create a self-addressed one-shot timer in the same session; use this when the user asks you to remind or message them later",
+                description: "Create a self-addressed one-shot timer in the same session; use this when the user asks you to remind or message them later. Enum-like arguments such as delivery_mode must be quoted JSON strings",
                 policy: ToolPolicy {
                     read_only: false,
                     destructive: false,
@@ -2113,7 +2113,7 @@ impl ToolCatalog {
             ToolDefinition {
                 name: ToolName::ScheduleCreate,
                 family: ToolFamily::Agent,
-                description: "Create an advanced or recurring agent schedule in the current workspace. For simple one-shot reminders, prefer continue_later",
+                description: "Create an advanced or recurring agent schedule in the current workspace. For simple one-shot reminders, prefer continue_later. Enum-like arguments such as mode and delivery_mode must be quoted JSON strings",
                 policy: ToolPolicy {
                     read_only: false,
                     destructive: false,
@@ -2123,7 +2123,7 @@ impl ToolCatalog {
             ToolDefinition {
                 name: ToolName::ScheduleUpdate,
                 family: ToolFamily::Agent,
-                description: "Update an existing agent schedule in the current workspace",
+                description: "Update an existing agent schedule in the current workspace. Enum-like arguments such as mode and delivery_mode must be quoted JSON strings",
                 policy: ToolPolicy {
                     read_only: false,
                     destructive: false,
@@ -5255,7 +5255,7 @@ impl ToolName {
                 "type": "object",
                 "properties": {
                     "path": { "type": "string", "description": "Relative knowledge file path to read" },
-                    "mode": { "type": ["string", "null"], "enum": ["excerpt", "full", null], "description": "Optional view mode; defaults to excerpt" },
+                    "mode": { "type": ["string", "null"], "enum": ["excerpt", "full", null], "description": "Optional view mode as a quoted JSON string; use \"excerpt\" or \"full\". Defaults to excerpt" },
                     "cursor": { "type": ["integer", "null"], "minimum": 0, "description": "Optional zero-based line cursor returned by a previous knowledge_read call" },
                     "max_bytes": { "type": ["integer", "null"], "minimum": 1, "description": "Optional maximum UTF-8 bytes to return" },
                     "max_lines": { "type": ["integer", "null"], "minimum": 1, "description": "Optional maximum number of lines to return" }
@@ -5285,7 +5285,7 @@ impl ToolName {
                 "type": "object",
                 "properties": {
                     "session_id": { "type": "string", "description": "Session id to inspect without waiting for new work" },
-                    "mode": { "type": ["string", "null"], "enum": ["summary", "timeline", "transcript", "artifacts", null], "description": "Optional bounded view mode; defaults to summary" },
+                    "mode": { "type": ["string", "null"], "enum": ["summary", "timeline", "transcript", "artifacts", null], "description": "Optional bounded view mode as a quoted JSON string; use \"summary\", \"timeline\", \"transcript\", or \"artifacts\". Defaults to summary" },
                     "cursor": { "type": ["integer", "null"], "minimum": 0, "description": "Optional item cursor returned by a previous session_read call" },
                     "max_items": { "type": ["integer", "null"], "minimum": 1, "description": "Optional maximum number of messages or artifacts to return" },
                     "max_bytes": { "type": ["integer", "null"], "minimum": 1, "description": "Optional maximum content bytes to return across message bodies" },
@@ -5299,7 +5299,7 @@ impl ToolName {
                 "properties": {
                     "session_id": { "type": "string", "description": "Session id to wait on; after message_agent this should normally be the returned recipient_session_id" },
                     "wait_timeout_ms": { "type": ["integer", "null"], "minimum": 0, "description": "Optional wait timeout in milliseconds; defaults to the runtime request timeout and 0 means read immediately without waiting" },
-                    "mode": { "type": ["string", "null"], "enum": ["summary", "timeline", "transcript", "artifacts", null], "description": "Optional bounded view mode for the returned snapshot; defaults to transcript" },
+                    "mode": { "type": ["string", "null"], "enum": ["summary", "timeline", "transcript", "artifacts", null], "description": "Optional bounded view mode for the returned snapshot as a quoted JSON string; use \"summary\", \"timeline\", \"transcript\", or \"artifacts\". Defaults to transcript" },
                     "cursor": { "type": ["integer", "null"], "minimum": 0, "description": "Optional item cursor returned by a previous session_wait or session_read call" },
                     "max_items": { "type": ["integer", "null"], "minimum": 1, "description": "Optional maximum number of messages or artifacts to return" },
                     "max_bytes": { "type": ["integer", "null"], "minimum": 1, "description": "Optional maximum content bytes to return across message bodies" },
@@ -5391,7 +5391,7 @@ impl ToolName {
                 "properties": {
                     "delay_seconds": { "type": "integer", "minimum": 1, "description": "How many seconds to wait before the same session wakes up" },
                     "handoff_payload": { "type": "string", "description": "what to say or do when the timer fires; include the user's requested reminder text and any relevant context" },
-                    "delivery_mode": { "type": ["string", "null"], "enum": ["fresh_session", "existing_session", null], "description": "Optional delivery mode; defaults to existing_session, which resumes the same session and is the right default for reminders" }
+                    "delivery_mode": { "type": ["string", "null"], "enum": ["fresh_session", "existing_session", null], "description": "Optional delivery mode as a quoted JSON string; use \"fresh_session\" or \"existing_session\". Defaults to existing_session, which resumes the same session and is the right default for reminders" }
                 },
                 "required": ["delay_seconds", "handoff_payload"],
                 "additionalProperties": false,
@@ -5419,8 +5419,8 @@ impl ToolName {
                     "id": { "type": "string", "description": "Stable schedule id" },
                     "agent_identifier": { "type": ["string", "null"], "description": "Optional agent id or name; defaults to the current session agent" },
                     "prompt": { "type": "string", "description": "Prompt delivered when the advanced or recurring schedule fires" },
-                    "mode": { "type": ["string", "null"], "enum": ["interval", "after_completion", "once", null], "description": "Optional schedule mode; defaults to interval. Use once only for explicit one-shot schedules; for simple reminders use continue_later instead" },
-                    "delivery_mode": { "type": ["string", "null"], "enum": ["fresh_session", "existing_session", null], "description": "Optional delivery mode; defaults to fresh_session. Use existing_session when the result must appear in the current chat/session" },
+                    "mode": { "type": ["string", "null"], "enum": ["interval", "after_completion", "once", null], "description": "Optional schedule mode as a quoted JSON string; use \"interval\", \"after_completion\", or \"once\". Defaults to interval. Use once only for explicit one-shot schedules; for simple reminders use continue_later instead" },
+                    "delivery_mode": { "type": ["string", "null"], "enum": ["fresh_session", "existing_session", null], "description": "Optional delivery mode as a quoted JSON string; use \"fresh_session\" or \"existing_session\". Defaults to fresh_session. Use existing_session when the result must appear in the current chat/session" },
                     "target_session_id": { "type": ["string", "null"], "description": "Optional target session id; for existing_session defaults to the current session" },
                     "interval_seconds": { "type": "integer", "minimum": 1, "description": "Positive schedule cadence in seconds; this is not the preferred field for a simple user reminder" },
                     "enabled": { "type": ["boolean", "null"], "description": "Optional enabled state; defaults to true" }
@@ -5434,8 +5434,8 @@ impl ToolName {
                     "id": { "type": "string", "description": "Schedule id to update" },
                     "agent_identifier": { "type": ["string", "null"], "description": "Optional agent id or name override" },
                     "prompt": { "type": ["string", "null"], "description": "Optional replacement prompt" },
-                    "mode": { "type": ["string", "null"], "enum": ["interval", "after_completion", "once", null], "description": "Optional replacement mode" },
-                    "delivery_mode": { "type": ["string", "null"], "enum": ["fresh_session", "existing_session", null], "description": "Optional replacement delivery mode" },
+                    "mode": { "type": ["string", "null"], "enum": ["interval", "after_completion", "once", null], "description": "Optional replacement mode as a quoted JSON string; use \"interval\", \"after_completion\", or \"once\"" },
+                    "delivery_mode": { "type": ["string", "null"], "enum": ["fresh_session", "existing_session", null], "description": "Optional replacement delivery mode as a quoted JSON string; use \"fresh_session\" or \"existing_session\"" },
                     "target_session_id": { "type": ["string", "null"], "description": "Optional replacement target session id" },
                     "interval_seconds": { "type": ["integer", "null"], "minimum": 1, "description": "Optional replacement interval in seconds" },
                     "enabled": { "type": ["boolean", "null"], "description": "Optional replacement enabled state" }

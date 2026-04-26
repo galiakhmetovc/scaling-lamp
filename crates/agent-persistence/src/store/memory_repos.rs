@@ -90,20 +90,24 @@ impl SessionSearchRepository for PersistenceStore {
         session_id: &str,
         docs: &[SessionSearchDocRecord],
     ) -> Result<(), StoreError> {
-        self.connection.execute(
+        let transaction = rusqlite::Transaction::new_unchecked(
+            &self.connection,
+            rusqlite::TransactionBehavior::Immediate,
+        )?;
+        transaction.execute(
             "DELETE FROM session_search_fts
              WHERE doc_id IN (
                  SELECT doc_id FROM session_search_docs WHERE session_id = ?1
              )",
             [session_id],
         )?;
-        self.connection.execute(
+        transaction.execute(
             "DELETE FROM session_search_docs WHERE session_id = ?1",
             [session_id],
         )?;
 
         for doc in docs {
-            self.connection.execute(
+            transaction.execute(
                 "INSERT INTO session_search_docs (
                     doc_id, session_id, source_kind, source_ref, body, updated_at
                  ) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
@@ -116,7 +120,7 @@ impl SessionSearchRepository for PersistenceStore {
                     doc.updated_at,
                 ],
             )?;
-            self.connection.execute(
+            transaction.execute(
                 "INSERT INTO session_search_fts (doc_id, session_id, source_kind, source_ref, body)
                  VALUES (?1, ?2, ?3, ?4, ?5)",
                 params![
@@ -129,6 +133,7 @@ impl SessionSearchRepository for PersistenceStore {
             )?;
         }
 
+        transaction.commit()?;
         Ok(())
     }
 
@@ -256,20 +261,24 @@ impl KnowledgeRepository for PersistenceStore {
         source_id: &str,
         docs: &[KnowledgeSearchDocRecord],
     ) -> Result<(), StoreError> {
-        self.connection.execute(
+        let transaction = rusqlite::Transaction::new_unchecked(
+            &self.connection,
+            rusqlite::TransactionBehavior::Immediate,
+        )?;
+        transaction.execute(
             "DELETE FROM knowledge_search_fts
              WHERE doc_id IN (
                  SELECT doc_id FROM knowledge_search_docs WHERE source_id = ?1
              )",
             [source_id],
         )?;
-        self.connection.execute(
+        transaction.execute(
             "DELETE FROM knowledge_search_docs WHERE source_id = ?1",
             [source_id],
         )?;
 
         for doc in docs {
-            self.connection.execute(
+            transaction.execute(
                 "INSERT INTO knowledge_search_docs (
                     doc_id, source_id, path, kind, body, updated_at
                  ) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
@@ -282,13 +291,14 @@ impl KnowledgeRepository for PersistenceStore {
                     doc.updated_at,
                 ],
             )?;
-            self.connection.execute(
+            transaction.execute(
                 "INSERT INTO knowledge_search_fts (doc_id, path, kind, body)
                  VALUES (?1, ?2, ?3, ?4)",
                 params![doc.doc_id, doc.path, doc.kind, doc.body],
             )?;
         }
 
+        transaction.commit()?;
         Ok(())
     }
 

@@ -65,6 +65,7 @@ Tool usage rules:
   - If the user asks you to remind them, message them, or continue in this same chat after a timer, use `continue_later` with `delay_seconds` and an explicit `handoff_payload`
   - For “continue this later”, prefer `continue_later`; it creates a one-shot deferred continuation in the current session by default
   - Use `schedule_create` for advanced or recurring schedules; if the result must appear in the current chat, set `delivery_mode` to `existing_session`
+  - Arguments must be strict JSON. Enum-like values must be quoted strings, for example `{\"mode\":\"full\"}` or `{\"delivery_mode\":\"existing_session\"}`; never emit bare words such as `mode: full`
   - Use `agent_create` only when a separate durable agent profile is actually needed; it requires approval and is limited to built-in templates or the current session agent as a template
   - Use `agent_read` or `agent_list` before messaging or cloning agents if the target is uncertain
   - `message_agent` is asynchronous: it queues a fresh recipient session and returns ids, but it does not mean the target agent already replied
@@ -373,6 +374,7 @@ Tool usage rules:
 - Agents and schedules:
   - Use `schedule_create`, `schedule_update`, `schedule_read`, `schedule_list`, and `schedule_delete` to manage deferred or recurring work instead of keeping ad-hoc reminders in chat
   - For “continue this later”, prefer `continue_later`; it creates a one-shot deferred continuation and can target the current session by default
+  - Arguments must be strict JSON. Enum-like values must be quoted strings, for example `{\"mode\":\"full\"}` or `{\"delivery_mode\":\"existing_session\"}`; never emit bare words such as `mode: full`
   - Use `agent_create` only when a separate durable agent profile is actually needed; it requires approval and is limited to built-in templates or the current session agent as a template
   - Use `agent_read` or `agent_list` before messaging or cloning agents if the target is uncertain
   - `message_agent` is asynchronous: it queues a fresh recipient session and returns ids, but it does not mean the target agent already replied
@@ -430,6 +432,7 @@ Tool usage rules:
 - Agents and schedules:
   - Use `schedule_create`, `schedule_update`, `schedule_read`, `schedule_list`, and `schedule_delete` to manage deferred or recurring work instead of keeping ad-hoc reminders in chat
   - For “continue this later”, prefer `continue_later`; it creates a one-shot deferred continuation and can target the current session by default
+  - Arguments must be strict JSON. Enum-like values must be quoted strings, for example `{\"mode\":\"full\"}` or `{\"delivery_mode\":\"existing_session\"}`; never emit bare words such as `mode: full`
   - Use `agent_create` only when a separate durable agent profile is actually needed; it requires approval and is limited to built-in templates or the current session agent as a template
   - Use `agent_read` or `agent_list` before messaging or cloning agents if the target is uncertain
 - Offload:
@@ -760,6 +763,7 @@ mod tests {
             fs::read_to_string(default_home.join("AGENTS.md")).expect("read refreshed prompt");
         assert!(refreshed.contains("use `continue_later` with `delay_seconds`"));
         assert!(refreshed.contains("set `delivery_mode` to `existing_session`"));
+        assert!(refreshed.contains("Arguments must be strict JSON"));
         assert!(refreshed.contains("call `session_wait`"));
 
         let obsidian_skill =

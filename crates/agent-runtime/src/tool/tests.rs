@@ -391,6 +391,33 @@ fn scheduling_tool_definitions_steer_reminders_to_continue_later() {
 }
 
 #[test]
+fn enum_like_tool_parameters_require_quoted_json_strings_in_schema() {
+    let catalog = ToolCatalog::default();
+    let knowledge_read = catalog
+        .definition(ToolName::KnowledgeRead)
+        .expect("knowledge_read");
+    let continue_later = catalog
+        .definition(ToolName::ContinueLater)
+        .expect("continue_later");
+    let schedule_create = catalog
+        .definition(ToolName::ScheduleCreate)
+        .expect("schedule_create");
+    let schedule_update = catalog
+        .definition(ToolName::ScheduleUpdate)
+        .expect("schedule_update");
+
+    let knowledge_read_schema = knowledge_read.openai_function_schema().to_string();
+    let continue_later_schema = continue_later.openai_function_schema().to_string();
+    let schedule_create_schema = schedule_create.openai_function_schema().to_string();
+    let schedule_update_schema = schedule_update.openai_function_schema().to_string();
+
+    assert!(knowledge_read_schema.contains("quoted JSON string"));
+    assert!(continue_later_schema.contains("quoted JSON string"));
+    assert!(schedule_create_schema.contains("quoted JSON string"));
+    assert!(schedule_update_schema.contains("quoted JSON string"));
+}
+
+#[test]
 fn tool_call_parses_knowledge_memory_inputs() {
     let search = ToolCall::from_openai_function(
         "knowledge_search",
