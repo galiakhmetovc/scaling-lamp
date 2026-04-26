@@ -25,6 +25,8 @@ fn base_env(root: &Path) -> ConfigEnv {
         context_compaction_max_output_tokens_override: None,
         context_compaction_max_summary_chars_override: None,
         context_compaction_min_messages_override: None,
+        context_auto_compaction_trigger_ratio_override: None,
+        context_window_tokens_override: None,
         web_search_backend_override: None,
         web_search_url_override: None,
         provider_api_base_override: None,
@@ -186,6 +188,8 @@ compaction_min_messages = 12
 compaction_keep_tail_messages = 4
 compaction_max_output_tokens = 2048
 compaction_max_summary_chars = 8192
+auto_compaction_trigger_ratio = 0.7
+context_window_tokens_override = 200000
 "#,
     )
     .expect("write config");
@@ -201,6 +205,8 @@ compaction_max_summary_chars = 8192
     assert_eq!(config.context.compaction_keep_tail_messages, 4);
     assert_eq!(config.context.compaction_max_output_tokens, 2048);
     assert_eq!(config.context.compaction_max_summary_chars, 8192);
+    assert_eq!(config.context.auto_compaction_trigger_ratio, 0.7);
+    assert_eq!(config.context.context_window_tokens_override, Some(200_000));
 }
 
 #[test]
@@ -436,6 +442,44 @@ fn load_applies_provider_runtime_env_overrides() {
     assert_eq!(config.provider.stream_idle_timeout_seconds, Some(1800));
     assert_eq!(config.provider.max_tool_rounds, Some(32));
     assert_eq!(config.provider.max_output_tokens, Some(8192));
+}
+
+#[test]
+fn load_applies_context_auto_compaction_env_overrides() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let mut env = base_env(temp.path());
+    env.xdg_config_home = None;
+    env.context_auto_compaction_trigger_ratio_override = Some(0.8);
+    env.context_window_tokens_override = Some(140_000);
+
+    let config = AppConfig::load_from_env(&env).expect("load config");
+
+    assert_eq!(config.context.auto_compaction_trigger_ratio, 0.8);
+    assert_eq!(config.context.context_window_tokens_override, Some(140_000));
+}
+
+#[test]
+fn validate_rejects_invalid_auto_compaction_ratio() {
+    let config = AppConfig {
+        data_dir: PathBuf::from("/tmp/teamd"),
+        daemon: Default::default(),
+        telegram: Default::default(),
+        permissions: Default::default(),
+        provider: Default::default(),
+        session_defaults: Default::default(),
+        context: super::ContextConfig {
+            auto_compaction_trigger_ratio: 1.5,
+            ..Default::default()
+        },
+        web: Default::default(),
+        runtime_timing: Default::default(),
+        runtime_limits: Default::default(),
+    };
+
+    let error = config
+        .validate()
+        .expect_err("invalid ratio must fail validation");
+    assert!(matches!(error, ConfigError::InvalidProviderValue { .. }));
 }
 
 #[test]

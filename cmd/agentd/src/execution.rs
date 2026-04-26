@@ -170,6 +170,12 @@ pub struct ExecutionServiceConfig {
     pub provider_max_tool_rounds: usize,
     pub provider_max_output_tokens: Option<u32>,
     pub session_defaults: SessionSettings,
+    pub context_compaction_min_messages: usize,
+    pub context_compaction_keep_tail_messages: usize,
+    pub context_compaction_max_output_tokens: u32,
+    pub context_compaction_max_summary_chars: usize,
+    pub context_auto_compaction_trigger_ratio: f64,
+    pub context_window_tokens_override: Option<u32>,
     pub skills_dir: PathBuf,
     pub a2a_public_base_url: Option<String>,
     pub a2a_callback_bearer_token: Option<String>,
@@ -188,6 +194,16 @@ impl Default for ExecutionServiceConfig {
                 as usize,
             provider_max_output_tokens: None,
             session_defaults: SessionSettings::default(),
+            context_compaction_min_messages: agent_runtime::context::CompactionPolicy::default()
+                .min_messages,
+            context_compaction_keep_tail_messages:
+                agent_runtime::context::CompactionPolicy::default().keep_tail_messages,
+            context_compaction_max_output_tokens:
+                agent_runtime::context::CompactionPolicy::default().max_output_tokens,
+            context_compaction_max_summary_chars:
+                agent_runtime::context::CompactionPolicy::default().max_summary_chars,
+            context_auto_compaction_trigger_ratio: 0.7,
+            context_window_tokens_override: None,
             skills_dir: PathBuf::new(),
             a2a_public_base_url: None,
             a2a_callback_bearer_token: None,

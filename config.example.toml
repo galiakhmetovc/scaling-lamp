@@ -49,6 +49,10 @@ compaction_min_messages = 20
 compaction_keep_tail_messages = 6
 compaction_max_output_tokens = 4096
 compaction_max_summary_chars = 12000
+auto_compaction_trigger_ratio = 0.7
+# Optional explicit context window override for auto-compaction.
+# If omitted, runtime uses a built-in model mapping when it knows one.
+# context_window_tokens_override = 200000
 
 [web]
 search_backend = "duckduckgo_html"

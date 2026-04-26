@@ -9,8 +9,8 @@ use agent_persistence::{
     ToolCallRepository,
 };
 use agent_runtime::context::{
-    ContextOffloadPayload, ContextOffloadRef, ContextOffloadSnapshot, ContextSummary,
-    approximate_token_count,
+    CompactionPolicy, ContextOffloadPayload, ContextOffloadRef, ContextOffloadSnapshot,
+    ContextSummary, approximate_token_count,
 };
 use agent_runtime::permission::PermissionAction;
 use agent_runtime::plan::{PlanItem, PlanItemStatus, PlanSnapshot};
@@ -96,6 +96,13 @@ struct ToolCallResultLedgerUpdate<'a> {
 struct PromptMessages {
     messages: Vec<ProviderMessage>,
     context_offload: Option<ContextOffloadSnapshot>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct AutoCompactionDecision {
+    estimated_prompt_tokens: u32,
+    trigger_threshold_tokens: u32,
+    context_window_tokens: u32,
 }
 
 #[derive(Debug, Clone)]
@@ -850,6 +857,148 @@ impl ExecutionService {
         );
 
         tools
+    }
+
+    fn compaction_policy(&self) -> CompactionPolicy {
+        CompactionPolicy {
+            min_messages: self.config.context_compaction_min_messages,
+            keep_tail_messages: self.config.context_compaction_keep_tail_messages,
+            max_output_tokens: self.config.context_compaction_max_output_tokens,
+            max_summary_chars: self.config.context_compaction_max_summary_chars,
+        }
+    }
+
+    fn resolve_context_window_tokens(
+        &self,
+        provider: &dyn ProviderDriver,
+        model: Option<&str>,
+    ) -> Option<u32> {
+        self.config.context_window_tokens_override.or_else(|| {
+            let resolved_model = model
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .or(provider.descriptor().default_model.as_deref())?
+                .trim()
+                .to_ascii_lowercase();
+            match (
+                provider.descriptor().model_family.as_str(),
+                resolved_model.as_str(),
+            ) {
+                ("zai", "glm-5-turbo") => Some(200_000),
+                _ => None,
+            }
+        })
+    }
+
+    fn estimate_prompt_tokens(messages: &[ProviderMessage], instructions: Option<&str>) -> u32 {
+        let instruction_tokens = instructions.map_or(0, approximate_token_count);
+        instruction_tokens.saturating_add(
+            messages
+                .iter()
+                .map(|message| approximate_token_count(&message.content))
+                .sum::<u32>(),
+        )
+    }
+
+    fn auto_compaction_decision(
+        &self,
+        store: &PersistenceStore,
+        provider: &dyn ProviderDriver,
+        session_id: &str,
+        model: Option<&str>,
+        instructions: Option<&str>,
+    ) -> Result<Option<AutoCompactionDecision>, ExecutionError> {
+        let Some(context_window_tokens) = self.resolve_context_window_tokens(provider, model)
+        else {
+            return Ok(None);
+        };
+        let prompt_messages = self.prompt_messages(store, session_id)?;
+        let estimated_prompt_tokens =
+            Self::estimate_prompt_tokens(&prompt_messages.messages, instructions);
+        let trigger_threshold_tokens = ((context_window_tokens as f64)
+            * self.config.context_auto_compaction_trigger_ratio)
+            .floor() as u32;
+        if estimated_prompt_tokens < trigger_threshold_tokens {
+            return Ok(None);
+        }
+        Ok(Some(AutoCompactionDecision {
+            estimated_prompt_tokens,
+            trigger_threshold_tokens,
+            context_window_tokens,
+        }))
+    }
+
+    pub(crate) fn compact_session_at(
+        &self,
+        store: &PersistenceStore,
+        provider: &dyn ProviderDriver,
+        session_id: &str,
+        now: i64,
+    ) -> Result<bool, ExecutionError> {
+        let session = self.load_session(store, session_id)?;
+        let transcripts = store
+            .list_transcripts_for_session(session_id)
+            .map_err(ExecutionError::Store)?;
+        let policy = self.compaction_policy();
+        if !policy.should_compact(transcripts.len()) {
+            return Ok(false);
+        }
+
+        let covered_message_count = policy.covered_message_count(transcripts.len());
+        let summary_messages = transcripts
+            .iter()
+            .take(covered_message_count)
+            .map(|record| {
+                let role = MessageRole::try_from(record.kind.as_str()).map_err(|_| {
+                    ExecutionError::RecordConversion(RecordConversionError::InvalidMessageRole {
+                        value: record.kind.clone(),
+                    })
+                })?;
+                Ok::<ProviderMessage, ExecutionError>(ProviderMessage {
+                    role,
+                    content: record.content.clone(),
+                })
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+
+        let response = provider
+            .complete(&ProviderRequest {
+                model: session.settings.model.clone(),
+                instructions: Some(crate::bootstrap::compaction_instructions()),
+                messages: summary_messages,
+                think_level: None,
+                previous_response_id: None,
+                continuation_messages: Vec::new(),
+                tools: Vec::new(),
+                tool_outputs: Vec::new(),
+                max_output_tokens: Some(policy.max_output_tokens),
+                stream: ProviderStreamMode::Disabled,
+            })
+            .map_err(ExecutionError::Provider)?;
+        let summary_text = policy.trim_summary_text(&response.output_text);
+        let context_summary = ContextSummary {
+            session_id: session.id.clone(),
+            summary_text: summary_text.clone(),
+            covered_message_count: covered_message_count as u32,
+            summary_token_estimate: approximate_token_count(&summary_text),
+            updated_at: now,
+        };
+        store
+            .put_context_summary(&agent_persistence::ContextSummaryRecord::from(
+                &context_summary,
+            ))
+            .map_err(ExecutionError::Store)?;
+
+        let mut updated_session = session;
+        updated_session.settings.compactifications += 1;
+        updated_session.updated_at = now;
+        store
+            .put_session(
+                &agent_persistence::SessionRecord::try_from(&updated_session)
+                    .map_err(ExecutionError::RecordConversion)?,
+            )
+            .map_err(ExecutionError::Store)?;
+        Ok(true)
     }
 
     fn prompt_messages(
@@ -2779,6 +2928,30 @@ impl ExecutionService {
         interrupt_after_tool_step: Option<&AtomicBool>,
         observer: &mut Option<&mut dyn FnMut(ChatExecutionEvent)>,
     ) -> Result<ProviderResponse, ExecutionError> {
+        if initial_loop_state.is_none()
+            && let Some(decision) = self.auto_compaction_decision(
+                store,
+                provider,
+                session_id,
+                model.as_deref(),
+                instructions.as_deref(),
+            )?
+            && self.compact_session_at(store, provider, session_id, now)?
+        {
+            run.record_system_note(
+                format!(
+                    "automatic context compaction triggered before provider turn: estimated_prompt_tokens={} threshold_tokens={} context_window_tokens={} ratio={:.2}",
+                    decision.estimated_prompt_tokens,
+                    decision.trigger_threshold_tokens,
+                    decision.context_window_tokens,
+                    self.config.context_auto_compaction_trigger_ratio
+                ),
+                now,
+            )
+            .map_err(ExecutionError::RunTransition)?;
+            self.persist_run(store, run)?;
+        }
+
         let prompt_messages = self.prompt_messages(store, session_id)?;
         let catalog = ToolCatalog::default();
         let agent_profile = self.load_agent_profile_for_session(store, session_id)?;

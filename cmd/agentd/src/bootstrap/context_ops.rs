@@ -395,8 +395,16 @@ impl App {
             format!("offload_messages={offload_messages}"),
             format!("compactifications={}", session.settings.compactifications),
             format!(
-                "compaction_manual={} threshold_messages={} keep_tail={}",
-                true, policy.min_messages, policy.keep_tail_messages
+                "compaction_manual_available=true auto_trigger_ratio={:.2} context_window_override={}",
+                self.config.context.auto_compaction_trigger_ratio,
+                self.config
+                    .context
+                    .context_window_tokens_override
+                    .map_or_else(|| "<resolver>".to_string(), |value| value.to_string())
+            ),
+            format!(
+                "threshold_messages={} keep_tail={}",
+                policy.min_messages, policy.keep_tail_messages
             ),
         ];
 
@@ -858,70 +866,16 @@ impl App {
     #[cfg_attr(not(test), allow(dead_code))]
     pub fn compact_session(&self, session_id: &str) -> Result<SessionSummary, BootstrapError> {
         let store = self.store()?;
-        let session_record =
-            store
-                .get_session(session_id)?
-                .ok_or_else(|| BootstrapError::MissingRecord {
-                    kind: "session",
-                    id: session_id.to_string(),
-                })?;
-        let mut session =
-            Session::try_from(session_record).map_err(BootstrapError::RecordConversion)?;
-        let transcripts = store.list_transcripts_for_session(session_id)?;
-        let policy = self.compaction_policy();
-
-        if !policy.should_compact(transcripts.len()) {
-            return self.session_summary(session_id);
+        if store.get_session(session_id)?.is_none() {
+            return Err(BootstrapError::MissingRecord {
+                kind: "session",
+                id: session_id.to_string(),
+            });
         }
-
-        let covered_message_count = policy.covered_message_count(transcripts.len());
-        let summary_messages = transcripts
-            .iter()
-            .take(covered_message_count)
-            .map(|record| {
-                let role = MessageRole::try_from(record.kind.as_str()).map_err(|_| {
-                    BootstrapError::RecordConversion(RecordConversionError::InvalidMessageRole {
-                        value: record.kind.clone(),
-                    })
-                })?;
-                Ok::<ProviderMessage, BootstrapError>(ProviderMessage {
-                    role,
-                    content: record.content.clone(),
-                })
-            })
-            .collect::<Result<Vec<_>, _>>()?;
-
         let provider = self.provider_driver()?;
-        let response = provider.complete(&agent_runtime::provider::ProviderRequest {
-            model: session.settings.model.clone(),
-            instructions: Some(compaction_instructions()),
-            messages: summary_messages,
-            think_level: None,
-            previous_response_id: None,
-            continuation_messages: Vec::new(),
-            tools: Vec::new(),
-            tool_outputs: Vec::new(),
-            max_output_tokens: Some(policy.max_output_tokens),
-            stream: agent_runtime::provider::ProviderStreamMode::Disabled,
-        })?;
-        let now = unix_timestamp()?;
-        let summary_text = policy.trim_summary_text(&response.output_text);
-        let context_summary = ContextSummary {
-            session_id: session.id.clone(),
-            summary_text: summary_text.clone(),
-            covered_message_count: covered_message_count as u32,
-            summary_token_estimate: approximate_token_count(&summary_text),
-            updated_at: now,
-        };
-        store.put_context_summary(&agent_persistence::ContextSummaryRecord::from(
-            &context_summary,
-        ))?;
-
-        session.settings.compactifications += 1;
-        session.updated_at = now;
-        let session_record = agent_persistence::SessionRecord::try_from(&session)
-            .map_err(BootstrapError::RecordConversion)?;
-        store.put_session(&session_record)?;
+        self.execution_service()
+            .compact_session_at(&store, provider.as_ref(), session_id, unix_timestamp()?)
+            .map_err(BootstrapError::Execution)?;
         self.session_summary(session_id)
     }
 

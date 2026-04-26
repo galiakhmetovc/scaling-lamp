@@ -83,7 +83,9 @@ fn render_context_state_explains_usage_summary_and_compaction_policy() {
     assert!(rendered.contains("messages_total=8"));
     assert!(rendered.contains("messages_uncovered=6"));
     assert!(rendered.contains("summary_tokens=4"));
-    assert!(rendered.contains("compaction_manual=true"));
+    assert!(rendered.contains("compaction_manual_available=true"));
+    assert!(rendered.contains("auto_trigger_ratio=0.70"));
+    assert!(rendered.contains("context_window_override=<resolver>"));
     assert!(rendered.contains("threshold_messages=12"));
     assert!(rendered.contains("keep_tail=4"));
     assert!(rendered.contains("summary_covers_messages=2"));

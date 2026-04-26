@@ -19,7 +19,7 @@ const DEFAULT_DAEMON_BIND_PORT: u16 = 5140;
 const DEFAULT_DAEMON_SKILLS_DIR: &str = "skills";
 const DEFAULT_WEB_SEARCH_URL: &str = "https://duckduckgo.com/html/";
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct AppConfig {
     pub data_dir: PathBuf,
     pub daemon: DaemonConfig,
@@ -68,13 +68,15 @@ pub struct SessionDefaultsConfig {
     pub project_memory_enabled: bool,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize)]
 #[serde(default)]
 pub struct ContextConfig {
     pub compaction_min_messages: usize,
     pub compaction_keep_tail_messages: usize,
     pub compaction_max_output_tokens: u32,
     pub compaction_max_summary_chars: usize,
+    pub auto_compaction_trigger_ratio: f64,
+    pub context_window_tokens_override: Option<u32>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
@@ -157,7 +159,7 @@ pub struct McpConnectorSeedConfig {
     pub enabled: bool,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct ConfigEnv {
     pub config_path: Option<PathBuf>,
     pub data_dir_override: Option<PathBuf>,
@@ -172,6 +174,8 @@ pub struct ConfigEnv {
     pub context_compaction_max_output_tokens_override: Option<u32>,
     pub context_compaction_max_summary_chars_override: Option<usize>,
     pub context_compaction_min_messages_override: Option<usize>,
+    pub context_auto_compaction_trigger_ratio_override: Option<f64>,
+    pub context_window_tokens_override: Option<u32>,
     pub web_search_backend_override: Option<String>,
     pub web_search_url_override: Option<String>,
     pub provider_api_base_override: Option<String>,
@@ -308,6 +312,8 @@ impl Default for ContextConfig {
             compaction_keep_tail_messages: defaults.keep_tail_messages,
             compaction_max_output_tokens: defaults.max_output_tokens,
             compaction_max_summary_chars: defaults.max_summary_chars,
+            auto_compaction_trigger_ratio: 0.7,
+            context_window_tokens_override: None,
         }
     }
 }
@@ -524,6 +530,11 @@ impl ConfigEnv {
                 "TEAMD_CONTEXT_COMPACTION_MIN_MESSAGES",
                 &dotenv,
             )?,
+            context_auto_compaction_trigger_ratio_override: read_f64_var(
+                "TEAMD_CONTEXT_AUTO_COMPACTION_TRIGGER_RATIO",
+                &dotenv,
+            )?,
+            context_window_tokens_override: read_u32_var("TEAMD_CONTEXT_WINDOW_TOKENS", &dotenv)?,
             web_search_backend_override: read_string_var("TEAMD_WEB_SEARCH_BACKEND", &dotenv),
             web_search_url_override: read_string_var("TEAMD_WEB_SEARCH_URL", &dotenv),
             provider_api_base_override: read_string_var("TEAMD_PROVIDER_API_BASE", &dotenv),
@@ -715,6 +726,12 @@ impl AppConfig {
         if let Some(value) = env.context_compaction_max_summary_chars_override {
             context.compaction_max_summary_chars = value;
         }
+        if let Some(value) = env.context_auto_compaction_trigger_ratio_override {
+            context.auto_compaction_trigger_ratio = value;
+        }
+        if let Some(value) = env.context_window_tokens_override {
+            context.context_window_tokens_override = Some(value);
+        }
         if let Some(search_backend) = env.web_search_backend_override.as_deref() {
             web.search_backend = parse_web_search_backend(search_backend)?;
         }
@@ -895,6 +912,14 @@ impl AppConfig {
         validate_positive_usize_value(
             "context.compaction_max_summary_chars",
             self.context.compaction_max_summary_chars,
+        )?;
+        validate_ratio_value(
+            "context.auto_compaction_trigger_ratio",
+            self.context.auto_compaction_trigger_ratio,
+        )?;
+        validate_positive_provider_value(
+            "context.context_window_tokens_override",
+            self.context.context_window_tokens_override,
         )?;
         validate_positive_u64_value(
             "runtime_timing.sqlite_busy_timeout_ms",
@@ -1251,6 +1276,15 @@ fn read_bool_var(
         .transpose()
 }
 
+fn read_f64_var(
+    name: &'static str,
+    dotenv: &BTreeMap<String, String>,
+) -> Result<Option<f64>, ConfigError> {
+    read_string_var(name, dotenv)
+        .map(|value| parse_positive_ratio(name, &value))
+        .transpose()
+}
+
 fn path_from_env_value(
     _name: &'static str,
     value: Option<std::ffi::OsString>,
@@ -1337,6 +1371,24 @@ fn parse_bool(name: &'static str, value: &str) -> Result<bool, ConfigError> {
     }
 }
 
+fn parse_positive_ratio(name: &'static str, value: &str) -> Result<f64, ConfigError> {
+    let parsed = value
+        .parse::<f64>()
+        .map_err(|_| ConfigError::InvalidProviderValue {
+            name,
+            value: value.to_string(),
+            reason: "must be a positive decimal ratio",
+        })?;
+    if !(parsed > 0.0 && parsed <= 1.0) {
+        return Err(ConfigError::InvalidProviderValue {
+            name,
+            value: value.to_string(),
+            reason: "must be greater than zero and less than or equal to one",
+        });
+    }
+    Ok(parsed)
+}
+
 fn validate_positive_provider_value<T>(
     name: &'static str,
     value: Option<T>,
@@ -1385,6 +1437,17 @@ fn validate_positive_u64_value(name: &'static str, value: u64) -> Result<(), Con
             name,
             value: value.to_string(),
             reason: "must be greater than zero",
+        });
+    }
+    Ok(())
+}
+
+fn validate_ratio_value(name: &'static str, value: f64) -> Result<(), ConfigError> {
+    if !(value > 0.0 && value <= 1.0) {
+        return Err(ConfigError::InvalidProviderValue {
+            name,
+            value: value.to_string(),
+            reason: "must be greater than zero and less than or equal to one",
         });
     }
     Ok(())

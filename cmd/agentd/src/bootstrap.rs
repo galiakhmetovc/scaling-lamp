@@ -21,7 +21,7 @@ use agent_persistence::{
 };
 use agent_runtime::RuntimeScaffold;
 use agent_runtime::agent::{AgentSchedule, AgentScheduleDeliveryMode, AgentScheduleMode};
-use agent_runtime::context::{ContextSummary, approximate_token_count};
+use agent_runtime::context::ContextSummary;
 use agent_runtime::provider::{
     DEFAULT_PROVIDER_MAX_TOOL_ROUNDS, ProviderBuildError, ProviderDriver, ProviderError,
     build_driver,
@@ -274,6 +274,24 @@ impl App {
                     project_memory_enabled: self.config.session_defaults.project_memory_enabled,
                     ..SessionSettings::default()
                 },
+                context_compaction_min_messages: self.config.context.compaction_min_messages,
+                context_compaction_keep_tail_messages: self
+                    .config
+                    .context
+                    .compaction_keep_tail_messages,
+                context_compaction_max_output_tokens: self
+                    .config
+                    .context
+                    .compaction_max_output_tokens,
+                context_compaction_max_summary_chars: self
+                    .config
+                    .context
+                    .compaction_max_summary_chars,
+                context_auto_compaction_trigger_ratio: self
+                    .config
+                    .context
+                    .auto_compaction_trigger_ratio,
+                context_window_tokens_override: self.config.context.context_window_tokens_override,
                 skills_dir: self.config.daemon.skills_dir.clone(),
                 a2a_public_base_url: self.config.daemon.public_base_url.clone(),
                 a2a_callback_bearer_token: self.config.daemon.bearer_token.clone(),
@@ -817,7 +835,7 @@ impl From<RuntimeSessionSkillStatus> for SessionSkillStatus {
     }
 }
 
-fn compaction_instructions() -> String {
+pub(crate) fn compaction_instructions() -> String {
     "Summarize the provided earlier conversation into a concise operational context summary. Preserve user goals, key decisions, important files and paths, blockers, approvals, and unresolved next steps. Keep the summary short and actionable.".to_string()
 }
 

@@ -332,7 +332,9 @@ fn render_context_state_explains_ctx_summary_and_compaction_policy() {
     assert!(rendered.contains("messages_total=8"));
     assert!(rendered.contains("messages_uncovered=6"));
     assert!(rendered.contains("summary_tokens=4"));
-    assert!(rendered.contains("compaction_manual=true"));
+    assert!(rendered.contains("compaction_manual_available=true"));
+    assert!(rendered.contains("auto_trigger_ratio=0.70"));
+    assert!(rendered.contains("context_window_override=<resolver>"));
     assert!(rendered.contains("threshold_messages=12"));
     assert!(rendered.contains("keep_tail=4"));
     assert!(rendered.contains("summary_covers_messages=2"));
@@ -981,6 +983,414 @@ fn execute_chat_turn_uses_the_context_summary_and_only_the_uncovered_messages() 
     assert!(normalized_request.contains("\"text\":\"latest question\""));
     assert!(!normalized_request.contains("\"text\":\"covered user one\""));
     assert!(!normalized_request.contains("\"text\":\"covered assistant one\""));
+}
+
+#[test]
+fn execute_chat_turn_auto_compacts_before_provider_turn_when_prompt_reaches_threshold() {
+    let (api_base, requests, handle) = spawn_json_server_sequence(vec![
+        r#"{
+                "id":"resp_auto_compact",
+                "model":"gpt-5.4",
+                "output":[
+                    {
+                        "id":"msg_auto_compact",
+                        "type":"message",
+                        "status":"completed",
+                        "role":"assistant",
+                        "content":[
+                            {
+                                "type":"output_text",
+                                "text":"Auto compact summary."
+                            }
+                        ]
+                    }
+                ],
+                "usage":{"input_tokens":30,"output_tokens":8,"total_tokens":38}
+            }"#
+        .to_string(),
+        r#"{
+                "id":"resp_after_auto_compact",
+                "model":"gpt-5.4",
+                "output":[
+                    {
+                        "id":"msg_after_auto_compact",
+                        "type":"message",
+                        "status":"completed",
+                        "role":"assistant",
+                        "content":[
+                            {
+                                "type":"output_text",
+                                "text":"Answer after auto compaction."
+                            }
+                        ]
+                    }
+                ],
+                "usage":{"input_tokens":18,"output_tokens":6,"total_tokens":24}
+            }"#
+        .to_string(),
+    ]);
+    let temp = tempfile::tempdir().expect("tempdir");
+    let mut config = AppConfig {
+        data_dir: temp.path().join("state-root"),
+        daemon: Default::default(),
+        provider: ConfiguredProvider {
+            kind: ProviderKind::OpenAiResponses,
+            api_base: Some(format!("{api_base}/v1")),
+            api_key: Some("test-key".to_string()),
+            default_model: Some("gpt-5.4".to_string()),
+            ..ConfiguredProvider::default()
+        },
+        ..AppConfig::default()
+    };
+    config.context.compaction_min_messages = 8;
+    config.context.compaction_keep_tail_messages = 6;
+    config.context.auto_compaction_trigger_ratio = 0.5;
+    config.context.context_window_tokens_override = Some(20);
+    let app = build_from_config(config).expect("build app");
+    let store = PersistenceStore::open(&app.persistence).expect("open store");
+    let session = app
+        .create_session_auto(Some("Auto Compact Session"))
+        .expect("create session");
+
+    for (index, (kind, content)) in [
+        ("user", "covered user one with enough text to matter"),
+        (
+            "assistant",
+            "covered assistant one with enough text to matter",
+        ),
+        ("user", "recent user one with enough text to matter"),
+        (
+            "assistant",
+            "recent assistant one with enough text to matter",
+        ),
+        ("user", "recent user two with enough text to matter"),
+        (
+            "assistant",
+            "recent assistant two with enough text to matter",
+        ),
+        ("user", "recent user three with enough text to matter"),
+        (
+            "assistant",
+            "recent assistant three with enough text to matter",
+        ),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        store
+            .put_transcript(&agent_persistence::TranscriptRecord {
+                id: format!("auto-compact-transcript-{index}"),
+                session_id: session.id.clone(),
+                run_id: None,
+                kind: kind.to_string(),
+                content: content.to_string(),
+                created_at: 100 + index as i64,
+            })
+            .expect("put transcript");
+    }
+
+    let report = app
+        .execute_chat_turn(
+            &session.id,
+            "latest question that should trigger auto compaction",
+            200,
+        )
+        .expect("execute chat turn with auto compaction");
+    let compact_request = requests.recv().expect("auto compact request");
+    let chat_request = requests.recv().expect("chat request after auto compact");
+    handle.join().expect("join server");
+
+    assert_eq!(report.response_id, "resp_after_auto_compact");
+    assert_eq!(report.output_text, "Answer after auto compaction.");
+
+    let summary = app
+        .context_summary(&session.id)
+        .expect("load context summary")
+        .expect("context summary should exist");
+    assert_eq!(summary.summary_text, "Auto compact summary.");
+    assert!(summary.covered_message_count > 0);
+
+    let updated = app
+        .session_summary(&session.id)
+        .expect("session summary after auto compaction");
+    assert_eq!(updated.compactifications, 1);
+
+    let normalized_compact = compact_request.to_ascii_lowercase();
+    assert!(normalized_compact.contains("summarize the provided earlier conversation"));
+    assert!(
+        normalized_compact.contains("\"text\":\"covered user one with enough text to matter\"")
+    );
+
+    let normalized_chat = chat_request.to_ascii_lowercase();
+    assert!(normalized_chat.contains("auto compact summary."));
+    assert!(
+        normalized_chat
+            .contains("\"text\":\"latest question that should trigger auto compaction\"")
+    );
+    assert!(!normalized_chat.contains("\"text\":\"covered user one with enough text to matter\""));
+}
+
+#[test]
+fn execute_chat_turn_skips_auto_compaction_below_threshold() {
+    let (api_base, requests, handle) = spawn_json_server_sequence(vec![
+        r#"{
+                "id":"resp_without_auto_compact",
+                "model":"gpt-5.4",
+                "output":[
+                    {
+                        "id":"msg_without_auto_compact",
+                        "type":"message",
+                        "status":"completed",
+                        "role":"assistant",
+                        "content":[
+                            {
+                                "type":"output_text",
+                                "text":"Answer without auto compaction."
+                            }
+                        ]
+                    }
+                ],
+                "usage":{"input_tokens":12,"output_tokens":5,"total_tokens":17}
+            }"#
+        .to_string(),
+    ]);
+    let temp = tempfile::tempdir().expect("tempdir");
+    let mut config = AppConfig {
+        data_dir: temp.path().join("state-root"),
+        daemon: Default::default(),
+        provider: ConfiguredProvider {
+            kind: ProviderKind::OpenAiResponses,
+            api_base: Some(format!("{api_base}/v1")),
+            api_key: Some("test-key".to_string()),
+            default_model: Some("gpt-5.4".to_string()),
+            ..ConfiguredProvider::default()
+        },
+        ..AppConfig::default()
+    };
+    config.context.auto_compaction_trigger_ratio = 0.7;
+    config.context.context_window_tokens_override = Some(10_000);
+    let app = build_from_config(config).expect("build app");
+    let store = PersistenceStore::open(&app.persistence).expect("open store");
+    let session = app
+        .create_session_auto(Some("No Auto Compact Session"))
+        .expect("create session");
+
+    for (index, (kind, content)) in [("user", "hello"), ("assistant", "world")]
+        .into_iter()
+        .enumerate()
+    {
+        store
+            .put_transcript(&agent_persistence::TranscriptRecord {
+                id: format!("no-auto-compact-transcript-{index}"),
+                session_id: session.id.clone(),
+                run_id: None,
+                kind: kind.to_string(),
+                content: content.to_string(),
+                created_at: 300 + index as i64,
+            })
+            .expect("put transcript");
+    }
+
+    let report = app
+        .execute_chat_turn(&session.id, "follow-up question", 400)
+        .expect("execute chat turn without auto compaction");
+    let chat_request = requests.recv().expect("single chat request");
+    handle.join().expect("join server");
+
+    assert_eq!(report.response_id, "resp_without_auto_compact");
+    assert_eq!(report.output_text, "Answer without auto compaction.");
+    assert!(
+        app.context_summary(&session.id)
+            .expect("load context summary")
+            .is_none()
+    );
+    assert_eq!(
+        app.session_summary(&session.id)
+            .expect("session summary")
+            .compactifications,
+        0
+    );
+
+    let normalized_chat = chat_request.to_ascii_lowercase();
+    assert!(normalized_chat.contains("\"text\":\"hello\""));
+    assert!(normalized_chat.contains("\"text\":\"follow-up question\""));
+}
+
+#[test]
+fn execute_mission_turn_job_auto_compacts_before_provider_turn_when_prompt_reaches_threshold() {
+    let (api_base, requests, handle) = spawn_json_server_sequence(vec![
+        r#"{
+                "id":"resp_auto_compact_mission",
+                "model":"gpt-5.4",
+                "output":[
+                    {
+                        "id":"msg_auto_compact_mission",
+                        "type":"message",
+                        "status":"completed",
+                        "role":"assistant",
+                        "content":[
+                            {
+                                "type":"output_text",
+                                "text":"Mission auto compact summary."
+                            }
+                        ]
+                    }
+                ],
+                "usage":{"input_tokens":32,"output_tokens":8,"total_tokens":40}
+            }"#
+        .to_string(),
+        r#"{
+                "id":"resp_mission_after_auto_compact",
+                "model":"gpt-5.4",
+                "output":[
+                    {
+                        "id":"msg_mission_after_auto_compact",
+                        "type":"message",
+                        "status":"completed",
+                        "role":"assistant",
+                        "content":[
+                            {
+                                "type":"output_text",
+                                "text":"Mission answer after auto compaction."
+                            }
+                        ]
+                    }
+                ],
+                "usage":{"input_tokens":20,"output_tokens":6,"total_tokens":26}
+            }"#
+        .to_string(),
+    ]);
+    let temp = tempfile::tempdir().expect("tempdir");
+    let mut config = AppConfig {
+        data_dir: temp.path().join("state-root"),
+        daemon: Default::default(),
+        provider: ConfiguredProvider {
+            kind: ProviderKind::OpenAiResponses,
+            api_base: Some(format!("{api_base}/v1")),
+            api_key: Some("test-key".to_string()),
+            default_model: Some("gpt-5.4".to_string()),
+            ..ConfiguredProvider::default()
+        },
+        ..AppConfig::default()
+    };
+    config.context.compaction_min_messages = 8;
+    config.context.compaction_keep_tail_messages = 6;
+    config.context.auto_compaction_trigger_ratio = 0.5;
+    config.context.context_window_tokens_override = Some(20);
+    let app = build_from_config(config).expect("build app");
+    let store = PersistenceStore::open(&app.persistence).expect("open store");
+    let session = app
+        .create_session_auto(Some("Mission Auto Compact Session"))
+        .expect("create session");
+
+    let mission_id = "mission-auto-compact";
+    store
+        .put_mission(&MissionRecord {
+            id: mission_id.to_string(),
+            session_id: session.id.clone(),
+            objective: "Mission objective".to_string(),
+            status: MissionStatus::Running.as_str().to_string(),
+            execution_intent: agent_runtime::mission::MissionExecutionIntent::Autonomous
+                .as_str()
+                .to_string(),
+            schedule_json: serde_json::to_string(&agent_runtime::mission::MissionSchedule::once())
+                .expect("serialize schedule"),
+            acceptance_json: "[]".to_string(),
+            created_at: 10,
+            updated_at: 10,
+            completed_at: None,
+        })
+        .expect("put mission");
+
+    let job = JobSpec::mission_turn(
+        "job-mission-auto-compact",
+        &session.id,
+        mission_id,
+        None,
+        None,
+        "Mission goal that should trigger auto compaction.",
+        11,
+    );
+    store
+        .put_job(&JobRecord::try_from(&job).expect("job record"))
+        .expect("put mission job");
+
+    for (index, (kind, content)) in [
+        (
+            "user",
+            "mission covered user one with enough text to matter",
+        ),
+        (
+            "assistant",
+            "mission covered assistant one with enough text to matter",
+        ),
+        ("user", "mission recent user one with enough text to matter"),
+        (
+            "assistant",
+            "mission recent assistant one with enough text to matter",
+        ),
+        ("user", "mission recent user two with enough text to matter"),
+        (
+            "assistant",
+            "mission recent assistant two with enough text to matter",
+        ),
+        (
+            "user",
+            "mission recent user three with enough text to matter",
+        ),
+        (
+            "assistant",
+            "mission recent assistant three with enough text to matter",
+        ),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        store
+            .put_transcript(&agent_persistence::TranscriptRecord {
+                id: format!("mission-auto-compact-transcript-{index}"),
+                session_id: session.id.clone(),
+                run_id: None,
+                kind: kind.to_string(),
+                content: content.to_string(),
+                created_at: 50 + index as i64,
+            })
+            .expect("put transcript");
+    }
+
+    let report = app
+        .execute_mission_turn_job("job-mission-auto-compact", 200)
+        .expect("execute mission turn job");
+    let compact_request = requests.recv().expect("mission auto compact request");
+    let mission_request = requests.recv().expect("mission request after auto compact");
+    handle.join().expect("join server");
+
+    assert_eq!(report.response_id, "resp_mission_after_auto_compact");
+    assert_eq!(report.output_text, "Mission answer after auto compaction.");
+    assert_eq!(
+        app.session_summary(&session.id)
+            .expect("session summary after mission auto compaction")
+            .compactifications,
+        1
+    );
+    assert_eq!(
+        app.context_summary(&session.id)
+            .expect("load mission context summary")
+            .expect("mission context summary should exist")
+            .summary_text,
+        "Mission auto compact summary."
+    );
+
+    let normalized_compact = compact_request.to_ascii_lowercase();
+    assert!(normalized_compact.contains("summarize the provided earlier conversation"));
+
+    let normalized_mission = mission_request.to_ascii_lowercase();
+    assert!(normalized_mission.contains("mission auto compact summary."));
+    assert!(normalized_mission.contains("mission goal that should trigger auto compaction."));
+    assert!(
+        !normalized_mission
+            .contains("\"text\":\"mission covered user one with enough text to matter\"")
+    );
 }
 
 #[test]

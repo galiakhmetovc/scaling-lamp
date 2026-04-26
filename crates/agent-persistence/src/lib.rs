@@ -26,7 +26,7 @@ pub use repository::{
 };
 pub use store::{ExecutionStateSnapshot, PersistenceStore, StoreError, StoreLayout};
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct PersistenceScaffold {
     pub audit: audit::AuditLogConfig,
     pub config: config::AppConfig,

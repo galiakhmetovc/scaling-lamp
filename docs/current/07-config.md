@@ -112,6 +112,35 @@ export TEAMD_PROVIDER_API_KEY='replace-with-zai-key'
 - `compaction_keep_tail_messages`
 - `compaction_max_output_tokens`
 - `compaction_max_summary_chars`
+- `auto_compaction_trigger_ratio`
+- `context_window_tokens_override`
+
+Роли полей:
+
+- `compaction_*` управляют тем, как именно создаётся summary;
+- `auto_compaction_trigger_ratio` управляет тем, когда runtime автоматически запускает compaction перед provider turn;
+- `context_window_tokens_override` явно задаёт размер окна контекста для auto-compaction.
+
+Пример:
+
+```toml
+[context]
+compaction_min_messages = 20
+compaction_keep_tail_messages = 6
+compaction_max_output_tokens = 4096
+compaction_max_summary_chars = 12000
+auto_compaction_trigger_ratio = 0.7
+context_window_tokens_override = 200000
+```
+
+То же через env:
+
+```bash
+export TEAMD_CONTEXT_AUTO_COMPACTION_TRIGGER_RATIO='0.7'
+export TEAMD_CONTEXT_WINDOW_TOKENS='200000'
+```
+
+Если `context_window_tokens_override` не задан, runtime сначала пытается использовать built-in mapping для известных моделей. Если модель неизвестна и override не задан, автоматическая compaction не сработает заранее и останется доступна только ручная `\компакт`.
 
 ### `[web]`
 

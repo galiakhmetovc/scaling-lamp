@@ -632,15 +632,15 @@ covered_message_count = context_summary.covered_message_count
 - можно ли compaction делать без reasoning;
 - какие metadata сохраняются для reproducibility.
 
-### Вопрос на решение
+### Принятое решение
 
-Decision D6: compaction должен быть:
+Decision D6 принят так:
 
-- Option A: только manual.
-- Option B: automatic при достижении threshold, но с audit event.
-- Option C: automatic только для background/scheduled sessions.
+- compaction остаётся доступной вручную;
+- runtime также запускает auto-compaction перед provider turn при достижении `auto_compaction_trigger_ratio` от известного context window;
+- trigger не создаёт второй prompt path: после compaction используется тот же prompt contract и тот же prompt assembly order.
 
-Практическая рекомендация: оставить manual до стабилизации prompt contract, затем добавить auto с явными audit events и UI-индикатором.
+На текущем этапе UI уже показывает итоговый `compactifications`, а distinction `manual` vs `auto` можно дообогатить audit/UI later.
 
 ## OffloadRefs
 
@@ -1000,4 +1000,3 @@ sequenceDiagram
 Если принять рекомендации, contract можно сформулировать так:
 
 `teamD` собирает provider messages из profile prompt-файлов, активных skills, компактного runtime state, компактного plan state, summary старой истории, bounded offload refs и uncovered transcript tail. Prompt-файлы имеют общий emergency fallback. Полные планы, tool outputs, artifacts, audit logs и debug data не вставляются в prompt по умолчанию, а читаются явно через tools или operator/debug surfaces.
-
