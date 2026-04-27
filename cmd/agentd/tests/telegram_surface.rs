@@ -1625,6 +1625,66 @@ fn telegram_worker_supports_new_sessions_listing_and_use_command() {
 }
 
 #[test]
+fn telegram_worker_advances_cursor_after_single_update_handler_error() {
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("runtime");
+    let (_temp, app) = telegram_test_app();
+    seed_activated_pairing(&app, "pair-activated", 777, 42);
+    seed_binding(&app, 42, 777, Some("session-1"));
+    let backend = RecordingTelegramBackend::with_state(RecordingTelegramBackendState {
+        listed_sessions: vec![session_summary("session-1", "Alpha", true)],
+        session_lookup: BTreeMap::from([(
+            "session-1".to_string(),
+            session_summary("session-1", "Alpha", true),
+        )]),
+        ..RecordingTelegramBackendState::default()
+    });
+    let (api_url, requests, handle) = spawn_fake_telegram_api(vec![
+        json_response(
+            r#"{"ok":true,"result":[
+                {"update_id":200,"message":{"message_id":30,"date":0,"chat":{"id":42,"type":"private"},"from":{"id":777,"is_bot":false,"first_name":"Alice","username":"alice"},"text":"/use session-missing"}},
+                {"update_id":201,"message":{"message_id":31,"date":0,"chat":{"id":42,"type":"private"},"from":{"id":777,"is_bot":false,"first_name":"Alice","username":"alice"},"text":"/sessions"}}
+            ]}"#,
+        ),
+        json_response(
+            r#"{"ok":true,"result":{"message_id":32,"date":0,"chat":{"id":42,"type":"private"},"text":"sessions"}}"#,
+        ),
+    ]);
+    let client = TelegramClient::new(TelegramClientConfig {
+        token: "test-token".to_string(),
+        api_url: Some(api_url),
+        poll_request_timeout_seconds: 40,
+    })
+    .expect("telegram client");
+    let worker =
+        TelegramWorker::with_consumer(app.clone(), backend.clone(), client, "telegram-test");
+
+    let processed = runtime.block_on(worker.poll_once()).expect("poll once");
+    assert_eq!(processed, 2);
+
+    let cursor = app
+        .store()
+        .expect("open store")
+        .get_telegram_update_cursor("telegram-test")
+        .expect("get cursor")
+        .expect("cursor exists");
+    assert_eq!(cursor.update_id, 202);
+
+    let _ = requests
+        .recv_timeout(Duration::from_secs(2))
+        .expect("captured getUpdates");
+    let sessions_message = requests
+        .recv_timeout(Duration::from_secs(2))
+        .expect("captured sessions response");
+    assert!(sessions_message.body.contains("Sessions"));
+    assert!(sessions_message.body.contains("* Alpha (session-1)"));
+
+    handle.join().expect("join fake api");
+}
+
+#[test]
 fn telegram_worker_rate_limits_progress_edits_on_the_status_message() {
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()

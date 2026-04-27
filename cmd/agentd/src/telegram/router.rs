@@ -130,10 +130,22 @@ where
         self.cleanup_expired_chat_statuses().await?;
 
         for update in updates {
+            let update_id = update.id.0;
             let next_offset = next_confirmed_offset(std::slice::from_ref(&update))
                 .map(i64::from)
                 .unwrap_or_default();
-            self.handle_update(update).await?;
+            if let Err(error) = self.handle_update(update).await {
+                DiagnosticEventBuilder::new(
+                    &self.app.config,
+                    "error",
+                    "telegram",
+                    "update.error",
+                    "telegram update handling failed",
+                )
+                .error(error.to_string())
+                .field("update_id", i64::from(update_id))
+                .emit(&self.audit);
+            }
             self.persist_update_cursor(next_offset)?;
         }
 
