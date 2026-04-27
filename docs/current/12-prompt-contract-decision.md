@@ -776,7 +776,7 @@ Rules:
 - auto-pinned refs появляются после 3 explicit `artifact_read` в рамках session;
 - newest refs заполняют остаток budget;
 - prompt показывает hidden count, если refs не поместились;
-- полный payload читается через `artifact_read`/`artifact_search`;
+- payload читается через `artifact_search` или страницами через `artifact_read`;
 - manual pin управляется через `artifact_pin`/`artifact_unpin`.
 
 `usable_context_tokens`:

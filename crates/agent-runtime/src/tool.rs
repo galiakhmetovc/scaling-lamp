@@ -514,6 +514,10 @@ pub struct SkillActivationInput {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ArtifactReadInput {
     pub artifact_id: String,
+    #[serde(default)]
+    pub offset: Option<usize>,
+    #[serde(default)]
+    pub max_bytes: Option<usize>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1229,6 +1233,11 @@ pub struct ArtifactReadOutput {
     pub label: String,
     pub summary: String,
     pub content: String,
+    pub offset: usize,
+    pub content_byte_len: usize,
+    pub total_byte_len: usize,
+    pub content_truncated: bool,
+    pub next_offset: Option<usize>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -2448,7 +2457,7 @@ impl ToolCatalog {
             ToolDefinition {
                 name: ToolName::ArtifactRead,
                 family: ToolFamily::Offload,
-                description: "Read the full content of an offloaded context artifact by artifact_id",
+                description: "Read a bounded page of an offloaded context artifact by artifact_id; use next_offset to continue large payloads",
                 policy: ToolPolicy {
                     read_only: true,
                     destructive: false,
@@ -4774,9 +4783,12 @@ impl ToolOutput {
             }
             Self::ArtifactRead(output) => {
                 format!(
-                    "artifact_read artifact_id={} bytes={}",
+                    "artifact_read artifact_id={} offset={} bytes={}/{} truncated={}",
                     output.artifact_id,
-                    output.content.len()
+                    output.offset,
+                    output.content_byte_len,
+                    output.total_byte_len,
+                    output.content_truncated
                 )
             }
             Self::ArtifactSearch(output) => {
@@ -5273,6 +5285,11 @@ impl ToolOutput {
                 "label": output.label,
                 "summary": output.summary,
                 "content": output.content,
+                "offset": output.offset,
+                "content_byte_len": output.content_byte_len,
+                "total_byte_len": output.total_byte_len,
+                "content_truncated": output.content_truncated,
+                "next_offset": output.next_offset,
             })
             .to_string(),
             Self::ArtifactSearch(output) => json!({
@@ -6136,7 +6153,9 @@ impl ToolName {
             Self::ArtifactRead => json!({
                 "type": "object",
                 "properties": {
-                    "artifact_id": { "type": "string", "description": "Artifact id from the offloaded context references block" }
+                    "artifact_id": { "type": "string", "description": "Artifact id from the offloaded context references block" },
+                    "offset": { "type": ["integer", "null"], "minimum": 0, "description": "Optional byte offset returned as next_offset by a previous artifact_read call" },
+                    "max_bytes": { "type": ["integer", "null"], "minimum": 1, "description": "Optional maximum UTF-8 bytes to return; defaults to a safe page, use next_offset to continue reading" }
                 },
                 "required": ["artifact_id"],
                 "additionalProperties": false,

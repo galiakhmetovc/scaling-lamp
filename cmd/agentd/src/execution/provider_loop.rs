@@ -33,12 +33,12 @@ use agent_runtime::skills::{
     resolve_session_skill_status, scan_skill_catalog_with_overrides,
 };
 use agent_runtime::tool::{
-    AddTaskNoteOutput, AddTaskOutput, ArtifactPinOutput, ArtifactReadOutput, ArtifactSearchOutput,
-    ArtifactSearchResult, EditTaskOutput, InitPlanOutput, PlanLintOutput, PlanReadOutput,
-    PlanSnapshotOutput, PlanWriteOutput, PromptBudgetLayerOutput, PromptBudgetReadOutput,
-    PromptBudgetUpdateOutput, PromptBudgetUpdateScope, SetTaskStatusOutput, SkillActivationOutput,
-    SkillListOutput, SkillReadOutput, SkillStatusOutput, ToolCatalog, ToolDefinition, ToolFamily,
-    ToolName, ToolOutput, ToolPolicy, ToolRuntime,
+    AddTaskNoteOutput, AddTaskOutput, ArtifactPinOutput, ArtifactReadInput, ArtifactReadOutput,
+    ArtifactSearchOutput, ArtifactSearchResult, EditTaskOutput, InitPlanOutput, PlanLintOutput,
+    PlanReadOutput, PlanSnapshotOutput, PlanWriteOutput, PromptBudgetLayerOutput,
+    PromptBudgetReadOutput, PromptBudgetUpdateOutput, PromptBudgetUpdateScope, SetTaskStatusOutput,
+    SkillActivationOutput, SkillListOutput, SkillReadOutput, SkillStatusOutput, ToolCatalog,
+    ToolDefinition, ToolFamily, ToolName, ToolOutput, ToolPolicy, ToolRuntime,
 };
 use agent_runtime::workspace::WorkspaceRef;
 use std::path::PathBuf;
@@ -57,6 +57,8 @@ const DEFAULT_SKILL_LIST_LIMIT: usize = 64;
 const MAX_SKILL_LIST_LIMIT: usize = 256;
 const DEFAULT_SKILL_READ_MAX_BYTES: usize = 16 * 1024;
 const MAX_SKILL_READ_MAX_BYTES: usize = 128 * 1024;
+const DEFAULT_ARTIFACT_READ_MAX_BYTES: usize = 8 * 1024;
+const MAX_ARTIFACT_READ_MAX_BYTES: usize = 32 * 1024;
 
 type OffloadableToolOutput = (String, String, Vec<u8>, String);
 
@@ -507,6 +509,31 @@ fn truncate_utf8_bytes(value: &str, max_bytes: usize) -> (String, bool) {
         return (String::new(), true);
     }
     (value[..end].to_string(), true)
+}
+
+fn utf8_boundary_at_or_after(value: &str, mut offset: usize) -> usize {
+    offset = offset.min(value.len());
+    while offset < value.len() && !value.is_char_boundary(offset) {
+        offset += 1;
+    }
+    offset
+}
+
+fn utf8_byte_page(
+    value: &str,
+    offset: Option<usize>,
+    max_bytes: Option<usize>,
+    default_max_bytes: usize,
+    hard_max_bytes: usize,
+) -> (String, usize, Option<usize>) {
+    let start = utf8_boundary_at_or_after(value, offset.unwrap_or(0));
+    let limit = max_bytes
+        .unwrap_or(default_max_bytes)
+        .clamp(1, hard_max_bytes);
+    let (content, _) = truncate_utf8_bytes(&value[start..], limit);
+    let end = start + content.len();
+    let next_offset = (end < value.len()).then_some(end);
+    (content, start, next_offset)
 }
 
 impl ExecutionService {
@@ -2614,7 +2641,7 @@ impl ExecutionService {
                 self.update_session_skill_for_tool(store, session_id, input, false, now)?,
             )),
             ToolCall::ArtifactRead(input) => Ok(ToolOutput::ArtifactRead(
-                self.read_context_offload_artifact(store, session_id, input.artifact_id.as_str())?,
+                self.read_context_offload_artifact(store, session_id, input)?,
             )),
             ToolCall::ArtifactSearch(input) => Ok(ToolOutput::ArtifactSearch(
                 self.search_context_offload_artifacts(
@@ -3576,22 +3603,22 @@ impl ExecutionService {
         &self,
         store: &PersistenceStore,
         session_id: &str,
-        artifact_id: &str,
+        input: &ArtifactReadInput,
     ) -> Result<ArtifactReadOutput, ExecutionError> {
         let mut snapshot = self.require_context_offload_snapshot(store, session_id)?;
         let reference_index = snapshot
             .refs
             .iter()
-            .position(|reference| reference.artifact_id == artifact_id)
+            .position(|reference| reference.artifact_id == input.artifact_id)
             .ok_or_else(|| {
                 ExecutionError::Tool(ToolError::InvalidArtifactTool {
                     reason: format!(
                         "artifact {} is not referenced by the current session offload snapshot",
-                        artifact_id
+                        input.artifact_id
                     ),
                 })
             })?;
-        let payload = self.load_context_offload_payload_for_tool(store, artifact_id)?;
+        let payload = self.load_context_offload_payload_for_tool(store, &input.artifact_id)?;
         snapshot.refs[reference_index].explicit_read_count = snapshot.refs[reference_index]
             .explicit_read_count
             .saturating_add(1);
@@ -3599,15 +3626,30 @@ impl ExecutionService {
         self.persist_context_offload_snapshot_preserving_payloads(
             store,
             &snapshot,
-            Some(artifact_id),
+            Some(&input.artifact_id),
         )?;
+        let full_content = String::from_utf8_lossy(&payload.bytes).to_string();
+        let total_byte_len = full_content.len();
+        let (content, offset, next_offset) = utf8_byte_page(
+            &full_content,
+            input.offset,
+            input.max_bytes,
+            DEFAULT_ARTIFACT_READ_MAX_BYTES,
+            MAX_ARTIFACT_READ_MAX_BYTES,
+        );
+        let content_byte_len = content.len();
 
         Ok(ArtifactReadOutput {
             ref_id: reference.id,
             artifact_id: reference.artifact_id,
             label: reference.label,
             summary: reference.summary,
-            content: String::from_utf8_lossy(&payload.bytes).to_string(),
+            content,
+            offset,
+            content_byte_len,
+            total_byte_len,
+            content_truncated: next_offset.is_some(),
+            next_offset,
         })
     }
 

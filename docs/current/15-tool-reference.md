@@ -736,19 +736,27 @@ skill_disable({ name: string })
 Сигнатура:
 
 ```text
-artifact_read({ artifact_id: string })
+artifact_read({
+  artifact_id: string,
+  offset?: integer | null,
+  max_bytes?: integer | null
+})
 ```
 
 Что делает:
 
-- читает полный payload offloaded artifact по `artifact_id`;
+- читает bounded page offloaded artifact по `artifact_id`;
+- по умолчанию возвращает безопасную страницу, а не весь большой payload;
+- `offset` продолжает чтение с byte offset из `next_offset`;
+- `max_bytes` задаёт размер страницы, runtime режет по UTF-8 границе и ограничивает hard cap;
+- в output возвращает `content`, `offset`, `content_byte_len`, `total_byte_len`, `content_truncated`, `next_offset`;
 - увеличивает `explicit_read_count` у соответствующего `ContextOffloadRef`;
 - после 3 явных чтений ref становится auto-pinned и получает приоритет в будущих `OffloadRefs`.
 
 Когда использовать:
 
 - если transcript/tool result дал только artifact reference;
-- если нужен большой output целиком.
+- если нужен большой output частями, без раздувания следующего provider request.
 
 ### `artifact_search`
 

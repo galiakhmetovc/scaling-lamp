@@ -3693,6 +3693,120 @@ fn execute_chat_turn_can_retrieve_offloaded_context_via_artifact_read() {
 }
 
 #[test]
+fn execute_chat_turn_truncates_large_artifact_read_output_by_default() {
+    let (api_base, requests, handle) = spawn_json_server_sequence(vec![
+        r#"{
+                "id":"resp_large_artifact_read_1",
+                "model":"gpt-5.4",
+                "output":[
+                    {
+                        "id":"fc_large_artifact_read",
+                        "type":"function_call",
+                        "call_id":"call_large_artifact_read",
+                        "name":"artifact_read",
+                        "arguments":"{\"artifact_id\":\"artifact-offload-large\"}"
+                    }
+                ],
+                "usage":{"input_tokens":40,"output_tokens":12,"total_tokens":52}
+            }"#
+        .to_string(),
+        r#"{
+                "id":"resp_large_artifact_read_2",
+                "model":"gpt-5.4",
+                "output":[
+                    {
+                        "id":"msg_large_artifact_read",
+                        "type":"message",
+                        "status":"completed",
+                        "role":"assistant",
+                        "content":[
+                            {
+                                "type":"output_text",
+                                "text":"Large artifact read safely."
+                            }
+                        ]
+                    }
+                ],
+                "usage":{"input_tokens":24,"output_tokens":6,"total_tokens":30}
+            }"#
+        .to_string(),
+    ]);
+    let temp = tempfile::tempdir().expect("tempdir");
+    let app = build_from_config(AppConfig {
+        data_dir: temp.path().join("state-root"),
+        daemon: Default::default(),
+        provider: ConfiguredProvider {
+            kind: ProviderKind::OpenAiResponses,
+            api_base: Some(format!("{api_base}/v1")),
+            api_key: Some("test-key".to_string()),
+            default_model: Some("gpt-5.4".to_string()),
+            ..ConfiguredProvider::default()
+        },
+        ..AppConfig::default()
+    })
+    .expect("build app");
+    let store = PersistenceStore::open(&app.persistence).expect("open store");
+
+    store
+        .put_session(&SessionRecord {
+            id: "session-large-artifact-read".to_string(),
+            title: "Large Artifact Read".to_string(),
+            prompt_override: Some(
+                "Use retrieval tools when offloaded context is relevant.".to_string(),
+            ),
+            settings_json: serde_json::to_string(&SessionSettings::default())
+                .expect("serialize settings"),
+            workspace_root: app.runtime.workspace.root.display().to_string(),
+            agent_profile_id: "default".to_string(),
+            active_mission_id: None,
+            parent_session_id: None,
+            parent_job_id: None,
+            delegation_label: None,
+            created_at: 1,
+            updated_at: 1,
+        })
+        .expect("put session");
+    let payload = format!("{}TAIL-MUST-NOT-BE-IN-FIRST-PAGE", "x".repeat(20_000));
+    store
+        .put_context_offload(
+            &agent_persistence::ContextOffloadRecord::try_from(&ContextOffloadSnapshot {
+                session_id: "session-large-artifact-read".to_string(),
+                refs: vec![ContextOffloadRef {
+                    id: "offload-large".to_string(),
+                    label: "Large diagnostics".to_string(),
+                    summary: "Large diagnostics from an earlier tool call".to_string(),
+                    artifact_id: "artifact-offload-large".to_string(),
+                    token_estimate: 5_200,
+                    message_count: 1,
+                    created_at: 2,
+                    pinned: false,
+                    explicit_read_count: 0,
+                }],
+                updated_at: 3,
+            })
+            .expect("offload record"),
+            &[ContextOffloadPayload {
+                artifact_id: "artifact-offload-large".to_string(),
+                bytes: payload.into_bytes(),
+            }],
+        )
+        .expect("put context offload");
+
+    let report = app
+        .execute_chat_turn("session-large-artifact-read", "Read the large artifact", 10)
+        .expect("execute chat turn");
+    let _first_request = requests.recv().expect("first provider request");
+    let second_request = requests.recv().expect("second provider request");
+    handle.join().expect("join server");
+
+    assert_eq!(report.output_text, "Large artifact read safely.");
+    assert!(second_request.contains("content_truncated"));
+    assert!(second_request.contains("total_byte_len"));
+    assert!(second_request.contains("next_offset"));
+    assert!(!second_request.contains("TAIL-MUST-NOT-BE-IN-FIRST-PAGE"));
+}
+
+#[test]
 fn execute_chat_turn_can_pin_and_unpin_offloaded_context_refs() {
     let (api_base, requests, handle) = spawn_json_server_sequence(vec![
         r#"{
