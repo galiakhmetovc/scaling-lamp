@@ -229,6 +229,24 @@ teamdctl analytics 200
 
 `analytics` показывает количество audit events в выбранном tail, группировки по `level`, `surface`, `component`, `op`, Telegram delivery attempts/failures/average latency и сводку tool calls по SQLite ledger. Это локальная аналитика, а не внешний OpenTelemetry exporter.
 
+Локальный trace-view:
+
+```bash
+agentd trace run <run_id>
+agentd trace show <trace_id>
+agentd trace export <trace_id>
+```
+
+Для systemd-установки:
+
+```bash
+teamdctl trace run <run_id>
+teamdctl trace show <trace_id>
+teamdctl trace export <trace_id>
+```
+
+Trace хранится в SQLite sidecar-таблице `trace_links`. Она связывает доменные сущности (`run`, `provider_round`, `transcript`, `tool_call`, `artifact`) с `trace_id`, `span_id`, `parent_span_id`, `surface`, `entrypoint` и компактными attributes. `trace run` удобен после `session tools`, потому у каждого tool call виден `run_id`. `trace export` печатает OTel-like JSON shape, но не отправляет данные в Jaeger/OTLP.
+
 В установке через `deploy-teamd.sh` создаются два operator entrypoint:
 
 - `/usr/local/bin/agentd` — symlink на `/opt/teamd/bin/agentd`, удобен для ручного локального запуска от текущего пользователя;

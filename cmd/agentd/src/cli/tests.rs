@@ -17,6 +17,15 @@ fn process_cli_accepts_russian_version_and_update_commands() {
     assert!(super::ProcessInvocation::parse(["logs", "25"]).is_ok());
     assert!(super::ProcessInvocation::parse(["analytics"]).is_ok());
     assert!(super::ProcessInvocation::parse(["аналитика", "25"]).is_ok());
+    assert!(
+        super::ProcessInvocation::parse(["trace", "show", "0123456789abcdef0123456789abcdef"])
+            .is_ok()
+    );
+    assert!(super::ProcessInvocation::parse(["trace", "run", "run-trace-1"]).is_ok());
+    assert!(
+        super::ProcessInvocation::parse(["trace", "export", "0123456789abcdef0123456789abcdef"])
+            .is_ok()
+    );
 }
 
 #[test]
@@ -931,6 +940,104 @@ fn execute_process_with_io_renders_runtime_analytics() {
     assert!(rendered.contains("tool_calls: total=1 failed=1"));
     assert!(rendered.contains("- web_fetch: total=1 failed=1"));
     assert!(rendered.contains("- telegram: 1"));
+}
+
+#[test]
+fn execute_process_with_io_renders_trace_links() {
+    use agent_persistence::{
+        RunRecord, RunRepository, SessionRecord, SessionRepository, TraceLinkRecord,
+        TraceRepository,
+    };
+
+    let temp = tempfile::tempdir().expect("tempdir");
+    let app = crate::bootstrap::build_from_config(agent_persistence::AppConfig {
+        data_dir: temp.path().join("state-root"),
+        ..agent_persistence::AppConfig::default()
+    })
+    .expect("build app");
+    let store = app.store().expect("open store");
+    store
+        .put_session(&SessionRecord {
+            id: "session-trace".to_string(),
+            title: "Trace".to_string(),
+            prompt_override: None,
+            settings_json: "{}".to_string(),
+            workspace_root: app.runtime.workspace.root.display().to_string(),
+            agent_profile_id: "default".to_string(),
+            active_mission_id: None,
+            parent_session_id: None,
+            parent_job_id: None,
+            delegation_label: None,
+            created_at: 1,
+            updated_at: 1,
+        })
+        .expect("put session");
+    store
+        .put_run(&RunRecord {
+            id: "run-trace".to_string(),
+            session_id: "session-trace".to_string(),
+            mission_id: None,
+            status: "completed".to_string(),
+            error: None,
+            result: None,
+            provider_usage_json: "null".to_string(),
+            active_processes_json: "[]".to_string(),
+            recent_steps_json: "[]".to_string(),
+            evidence_refs_json: "[]".to_string(),
+            pending_approvals_json: "[]".to_string(),
+            provider_loop_json: "null".to_string(),
+            delegate_runs_json: "[]".to_string(),
+            started_at: 2,
+            updated_at: 3,
+            finished_at: Some(3),
+        })
+        .expect("put run");
+    let trace_id = "0123456789abcdef0123456789abcdef";
+    store
+        .put_trace_link(&TraceLinkRecord {
+            entity_kind: "run".to_string(),
+            entity_id: "run-trace".to_string(),
+            trace_id: trace_id.to_string(),
+            span_id: "0123456789abcdef".to_string(),
+            parent_span_id: None,
+            surface: Some("telegram".to_string()),
+            entrypoint: Some("telegram.message".to_string()),
+            attributes_json: serde_json::json!({"session_id":"session-trace"}).to_string(),
+            created_at: 2,
+        })
+        .expect("put run trace");
+    store
+        .put_trace_link(&TraceLinkRecord {
+            entity_kind: "tool_call".to_string(),
+            entity_id: "tool-call-trace".to_string(),
+            trace_id: trace_id.to_string(),
+            span_id: "fedcba9876543210".to_string(),
+            parent_span_id: Some("0123456789abcdef".to_string()),
+            surface: Some("telegram".to_string()),
+            entrypoint: Some("telegram.message".to_string()),
+            attributes_json: serde_json::json!({"tool_name":"web_fetch"}).to_string(),
+            created_at: 3,
+        })
+        .expect("put tool trace");
+
+    let mut input = std::io::Cursor::new(Vec::<u8>::new());
+    let mut output = Vec::new();
+
+    super::execute_process_with_io(&app, ["trace", "run", "run-trace"], &mut input, &mut output)
+        .expect("render trace by run");
+
+    let rendered = String::from_utf8(output).expect("utf8");
+    assert!(rendered.contains("Trace"));
+    assert!(rendered.contains(trace_id));
+    assert!(rendered.contains("surface: telegram"));
+    assert!(rendered.contains("run run-trace"));
+    assert!(rendered.contains("tool_call tool-call-trace"));
+
+    let exported =
+        super::execute(&app, ["trace", "export", trace_id]).expect("render otel json export");
+    assert!(exported.contains("\"traceId\""));
+    assert!(exported.contains("\"spanId\""));
+    assert!(exported.contains("\"parentSpanId\""));
 }
 
 #[test]

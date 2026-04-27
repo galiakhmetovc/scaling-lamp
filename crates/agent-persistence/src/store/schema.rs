@@ -119,6 +119,19 @@ pub(super) fn bootstrap_schema(connection: &Connection) -> Result<(), StoreError
              FOREIGN KEY(run_id) REFERENCES runs(id) ON DELETE CASCADE
          );
 
+         CREATE TABLE IF NOT EXISTS trace_links (
+             entity_kind TEXT NOT NULL,
+             entity_id TEXT NOT NULL,
+             trace_id TEXT NOT NULL,
+             span_id TEXT NOT NULL,
+             parent_span_id TEXT,
+             surface TEXT,
+             entrypoint TEXT,
+             attributes_json TEXT NOT NULL,
+             created_at INTEGER NOT NULL,
+             PRIMARY KEY(entity_kind, entity_id)
+         );
+
          CREATE TABLE IF NOT EXISTS session_inbox_events (
              id TEXT PRIMARY KEY,
              session_id TEXT NOT NULL,
@@ -339,6 +352,8 @@ pub(super) fn bootstrap_schema(connection: &Connection) -> Result<(), StoreError
          CREATE INDEX IF NOT EXISTS idx_tool_calls_session_id ON tool_calls(session_id);
          CREATE INDEX IF NOT EXISTS idx_tool_calls_run_id ON tool_calls(run_id);
          CREATE INDEX IF NOT EXISTS idx_tool_calls_status ON tool_calls(status);
+         CREATE INDEX IF NOT EXISTS idx_trace_links_trace_id ON trace_links(trace_id);
+         CREATE INDEX IF NOT EXISTS idx_trace_links_created_at ON trace_links(created_at DESC);
          CREATE INDEX IF NOT EXISTS idx_session_inbox_events_session_id ON session_inbox_events(session_id);
          CREATE INDEX IF NOT EXISTS idx_session_inbox_events_status_available_at ON session_inbox_events(status, available_at);
          CREATE INDEX IF NOT EXISTS idx_agent_profiles_updated_at ON agent_profiles(updated_at);
@@ -461,6 +476,15 @@ pub(super) fn validate_schema(connection: &Connection) -> Result<(), StoreError>
     validate_column(connection, "tool_calls", "result_byte_len", false)?;
     validate_column(connection, "tool_calls", "requested_at", true)?;
     validate_column(connection, "tool_calls", "updated_at", true)?;
+    validate_column(connection, "trace_links", "entity_kind", true)?;
+    validate_column(connection, "trace_links", "entity_id", true)?;
+    validate_column(connection, "trace_links", "trace_id", true)?;
+    validate_column(connection, "trace_links", "span_id", true)?;
+    validate_column(connection, "trace_links", "parent_span_id", false)?;
+    validate_column(connection, "trace_links", "surface", false)?;
+    validate_column(connection, "trace_links", "entrypoint", false)?;
+    validate_column(connection, "trace_links", "attributes_json", true)?;
+    validate_column(connection, "trace_links", "created_at", true)?;
     validate_column(connection, "session_inbox_events", "session_id", true)?;
     validate_column(connection, "session_inbox_events", "kind", true)?;
     validate_column(connection, "session_inbox_events", "payload_json", true)?;

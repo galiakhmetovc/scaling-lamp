@@ -65,6 +65,31 @@ impl App {
     }
 
     #[cfg_attr(not(test), allow(dead_code))]
+    pub fn execute_chat_turn_with_trace(
+        &self,
+        session_id: &str,
+        message: &str,
+        now: i64,
+        trace_source: Option<crate::trace::TurnTraceSource>,
+    ) -> Result<execution::ChatTurnExecutionReport, BootstrapError> {
+        let store = self.store()?;
+        let provider = self.provider_driver()?;
+        let mut observer = None;
+        self.execution_service()
+            .execute_chat_turn_with_control_and_trace(
+                &store,
+                provider.as_ref(),
+                session_id,
+                message,
+                now,
+                None,
+                &mut observer,
+                trace_source,
+            )
+            .map_err(BootstrapError::Execution)
+    }
+
+    #[cfg_attr(not(test), allow(dead_code))]
     pub fn execute_chat_turn_with_observer(
         &self,
         session_id: &str,
@@ -83,11 +108,30 @@ impl App {
         interrupt_after_tool_step: Option<&AtomicBool>,
         observer: &mut dyn FnMut(execution::ChatExecutionEvent),
     ) -> Result<execution::ChatTurnExecutionReport, BootstrapError> {
+        self.execute_chat_turn_with_trace_control_and_observer(
+            session_id,
+            message,
+            now,
+            interrupt_after_tool_step,
+            observer,
+            None,
+        )
+    }
+
+    pub fn execute_chat_turn_with_trace_control_and_observer(
+        &self,
+        session_id: &str,
+        message: &str,
+        now: i64,
+        interrupt_after_tool_step: Option<&AtomicBool>,
+        observer: &mut dyn FnMut(execution::ChatExecutionEvent),
+        trace_source: Option<crate::trace::TurnTraceSource>,
+    ) -> Result<execution::ChatTurnExecutionReport, BootstrapError> {
         let store = self.store()?;
         let provider = self.provider_driver()?;
         let mut observer = Some(observer as &mut dyn FnMut(execution::ChatExecutionEvent));
         self.execution_service()
-            .execute_chat_turn_with_control(
+            .execute_chat_turn_with_control_and_trace(
                 &store,
                 provider.as_ref(),
                 session_id,
@@ -95,6 +139,7 @@ impl App {
                 now,
                 interrupt_after_tool_step,
                 &mut observer,
+                trace_source,
             )
             .map_err(BootstrapError::Execution)
     }

@@ -13,7 +13,7 @@ use crate::telegram;
 use crate::tui;
 use agent_persistence::{
     ArtifactRepository, JobRepository, MissionRecord, MissionRepository, PersistenceStore,
-    RunRepository, SessionRecord, SessionRepository, ToolCallRepository,
+    RunRepository, SessionRecord, SessionRepository, ToolCallRepository, TraceRepository,
 };
 use agent_runtime::mission::{MissionExecutionIntent, MissionSchedule, MissionSpec, MissionStatus};
 use agent_runtime::provider::{FinishReason, ProviderMessage, ProviderRequest, ProviderStreamMode};
@@ -42,6 +42,15 @@ enum Command {
     },
     Analytics {
         max_lines: Option<usize>,
+    },
+    TraceShow {
+        trace_id: String,
+    },
+    TraceRun {
+        run_id: String,
+    },
+    TraceExport {
+        trace_id: String,
     },
     Version,
     Update {
@@ -207,6 +216,9 @@ where
         Command::Status => render::render_status(app),
         Command::Logs { max_lines } => render::render_diagnostics_tail(app, max_lines),
         Command::Analytics { max_lines } => render::render_runtime_analytics(app, max_lines),
+        Command::TraceShow { trace_id } => render::show_trace(&app.store()?, &trace_id),
+        Command::TraceRun { run_id } => render::show_trace_for_run(&app.store()?, &run_id),
+        Command::TraceExport { trace_id } => render::export_trace_json(&app.store()?, &trace_id),
         Command::Version => app.render_version_info(),
         Command::Update { tag } => app.update_runtime_binary(tag.as_deref()),
         Command::ProviderSmoke { prompt } => render::run_provider_smoke(app, &prompt),

@@ -53,6 +53,30 @@ impl ExecutionService {
         interrupt_after_tool_step: Option<&AtomicBool>,
         observer: &mut Option<&mut dyn FnMut(ChatExecutionEvent)>,
     ) -> Result<ChatTurnExecutionReport, ExecutionError> {
+        self.execute_chat_turn_with_control_and_trace(
+            store,
+            provider,
+            session_id,
+            message,
+            now,
+            interrupt_after_tool_step,
+            observer,
+            None,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn execute_chat_turn_with_control_and_trace(
+        &self,
+        store: &PersistenceStore,
+        provider: &dyn ProviderDriver,
+        session_id: &str,
+        message: &str,
+        now: i64,
+        interrupt_after_tool_step: Option<&AtomicBool>,
+        observer: &mut Option<&mut dyn FnMut(ChatExecutionEvent)>,
+        trace_source: Option<TurnTraceSource>,
+    ) -> Result<ChatTurnExecutionReport, ExecutionError> {
         let mut session_record = store
             .get_session(session_id)
             .map_err(ExecutionError::Store)?
@@ -63,12 +87,14 @@ impl ExecutionService {
             Session::try_from(session_record.clone()).map_err(ExecutionError::RecordConversion)?;
         let run_id = ensure_unique_run_id(store, format!("run-chat-{session_id}-{now}"))?;
         let mut run = RunEngine::new(run_id.clone(), session.id.clone(), None, now);
+        let trace_context = RuntimeTraceContext::for_run(&run_id, trace_source.as_ref());
         run.start(now).map_err(ExecutionError::RunTransition)?;
         store
             .put_run(
                 &RunRecord::try_from(run.snapshot()).map_err(ExecutionError::RecordConversion)?,
             )
             .map_err(ExecutionError::Store)?;
+        self.record_run_trace(store, &trace_context, &run_id, &session.id, now)?;
 
         let user_entry = TranscriptEntry::user(
             format!("transcript-{run_id}-01-user"),
@@ -80,6 +106,7 @@ impl ExecutionService {
         store
             .put_transcript(&TranscriptRecord::from(&user_entry))
             .map_err(ExecutionError::Store)?;
+        self.record_transcript_trace(store, &trace_context, &user_entry)?;
 
         session_record.updated_at = now;
         store
@@ -134,6 +161,7 @@ impl ExecutionService {
         store
             .put_transcript(&TranscriptRecord::from(&assistant_entry))
             .map_err(ExecutionError::Store)?;
+        self.record_transcript_trace(store, &trace_context, &assistant_entry)?;
 
         Ok(ChatTurnExecutionReport {
             session_id: session.id,
@@ -191,12 +219,24 @@ impl ExecutionService {
             .clone()
             .unwrap_or_else(|| format!("run-{}", job.id));
         let mut run = RunEngine::new(run_id.clone(), session.id.clone(), None, now);
+        let trace_context = RuntimeTraceContext::for_run(
+            &run_id,
+            Some(&TurnTraceSource::new(
+                "scheduler",
+                if schedule_id.is_some() {
+                    "schedule.chat_turn"
+                } else {
+                    "background.chat_turn"
+                },
+            )),
+        );
         run.start(now).map_err(ExecutionError::RunTransition)?;
         store
             .put_run(
                 &RunRecord::try_from(run.snapshot()).map_err(ExecutionError::RecordConversion)?,
             )
             .map_err(ExecutionError::Store)?;
+        self.record_run_trace(store, &trace_context, &run_id, &session.id, now)?;
 
         job.status = JobStatus::Running;
         job.run_id = Some(run_id.clone());
@@ -223,6 +263,7 @@ impl ExecutionService {
                 store
                     .put_transcript(&TranscriptRecord::from(&metadata_entry))
                     .map_err(ExecutionError::Store)?;
+                self.record_transcript_trace(store, &trace_context, &metadata_entry)?;
             }
         }
 
@@ -236,6 +277,7 @@ impl ExecutionService {
         store
             .put_transcript(&TranscriptRecord::from(&user_entry))
             .map_err(ExecutionError::Store)?;
+        self.record_transcript_trace(store, &trace_context, &user_entry)?;
 
         let mut observer = None;
         let response = match self.execute_provider_turn_loop(
@@ -322,6 +364,7 @@ impl ExecutionService {
         store
             .put_transcript(&TranscriptRecord::from(&assistant_entry))
             .map_err(ExecutionError::Store)?;
+        self.record_transcript_trace(store, &trace_context, &assistant_entry)?;
 
         job.status = JobStatus::Completed;
         job.result = Some(JobResult::Summary {
@@ -402,12 +445,20 @@ impl ExecutionService {
             .clone()
             .unwrap_or_else(|| format!("run-{}", job.id));
         let mut run = RunEngine::new(run_id.clone(), session.id.clone(), None, now);
+        let trace_context = RuntimeTraceContext::for_run(
+            &run_id,
+            Some(&TurnTraceSource::new(
+                "agent2agent",
+                "agent2agent.recipient_turn",
+            )),
+        );
         run.start(now).map_err(ExecutionError::RunTransition)?;
         store
             .put_run(
                 &RunRecord::try_from(run.snapshot()).map_err(ExecutionError::RecordConversion)?,
             )
             .map_err(ExecutionError::Store)?;
+        self.record_run_trace(store, &trace_context, &run_id, &session.id, now)?;
 
         job.status = JobStatus::Running;
         job.run_id = Some(run_id.clone());
@@ -425,6 +476,7 @@ impl ExecutionService {
             &job.id,
             &session.id,
             &run_id,
+            &trace_context,
             source_session_id.as_str(),
             source_agent_id.as_str(),
             source_agent_name.as_str(),
@@ -513,6 +565,7 @@ impl ExecutionService {
         store
             .put_transcript(&TranscriptRecord::from(&assistant_entry))
             .map_err(ExecutionError::Store)?;
+        self.record_transcript_trace(store, &trace_context, &assistant_entry)?;
 
         job.status = JobStatus::Completed;
         job.result = Some(JobResult::Summary {
@@ -540,6 +593,7 @@ impl ExecutionService {
         job_id: &str,
         session_id: &str,
         run_id: &str,
+        trace_context: &RuntimeTraceContext,
         source_session_id: &str,
         source_agent_id: &str,
         source_agent_name: &str,
@@ -558,6 +612,7 @@ impl ExecutionService {
         store
             .put_transcript(&TranscriptRecord::from(&chain_entry))
             .map_err(ExecutionError::Store)?;
+        self.record_transcript_trace(store, trace_context, &chain_entry)?;
 
         let system_entry = TranscriptEntry::system(
             format!("transcript-{job_id}-02-system-interagent"),
@@ -572,6 +627,7 @@ impl ExecutionService {
         store
             .put_transcript(&TranscriptRecord::from(&system_entry))
             .map_err(ExecutionError::Store)?;
+        self.record_transcript_trace(store, trace_context, &system_entry)?;
 
         let user_entry = TranscriptEntry::user(
             format!("transcript-{job_id}-03-user"),
@@ -582,6 +638,41 @@ impl ExecutionService {
         );
         store
             .put_transcript(&TranscriptRecord::from(&user_entry))
+            .map_err(ExecutionError::Store)?;
+        self.record_transcript_trace(store, trace_context, &user_entry)
+    }
+
+    fn record_run_trace(
+        &self,
+        store: &PersistenceStore,
+        trace_context: &RuntimeTraceContext,
+        run_id: &str,
+        session_id: &str,
+        now: i64,
+    ) -> Result<(), ExecutionError> {
+        store
+            .put_trace_link(&trace_context.run_link(run_id, session_id, now))
+            .map_err(ExecutionError::Store)
+    }
+
+    fn record_transcript_trace(
+        &self,
+        store: &PersistenceStore,
+        trace_context: &RuntimeTraceContext,
+        entry: &TranscriptEntry,
+    ) -> Result<(), ExecutionError> {
+        store
+            .put_trace_link(&trace_context.child_link(
+                "transcript",
+                &entry.id,
+                serde_json::json!({
+                    "session_id": entry.session_id,
+                    "run_id": entry.run_id,
+                    "role": entry.role.as_str(),
+                    "byte_len": entry.content.len(),
+                }),
+                entry.created_at,
+            ))
             .map_err(ExecutionError::Store)
     }
 

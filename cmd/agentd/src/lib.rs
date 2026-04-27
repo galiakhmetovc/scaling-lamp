@@ -12,4 +12,5 @@ pub mod mcp;
 pub mod prompting;
 pub mod store_retry;
 pub mod telegram;
+pub mod trace;
 pub mod tui;

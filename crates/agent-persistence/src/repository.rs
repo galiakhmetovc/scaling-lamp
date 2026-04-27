@@ -4,7 +4,7 @@ use crate::records::{
     KnowledgeSourceRecord, McpConnectorRecord, MissionRecord, PlanRecord, RunRecord,
     SessionInboxEventRecord, SessionRecord, SessionRetentionRecord, SessionSearchDocRecord,
     TelegramChatBindingRecord, TelegramChatStatusRecord, TelegramUpdateCursorRecord,
-    TelegramUserPairingRecord, ToolCallRecord, TranscriptRecord,
+    TelegramUserPairingRecord, ToolCallRecord, TraceLinkRecord, TranscriptRecord,
 };
 use crate::store::StoreError;
 use agent_runtime::context::ContextOffloadPayload;
@@ -219,6 +219,20 @@ pub trait ToolCallRepository {
         session_id: &str,
     ) -> Result<Vec<ToolCallRecord>, StoreError>;
     fn list_tool_calls_for_run(&self, run_id: &str) -> Result<Vec<ToolCallRecord>, StoreError>;
+}
+
+pub trait TraceRepository {
+    fn put_trace_link(&self, record: &TraceLinkRecord) -> Result<(), StoreError>;
+    fn get_trace_link(
+        &self,
+        entity_kind: &str,
+        entity_id: &str,
+    ) -> Result<Option<TraceLinkRecord>, StoreError>;
+    fn list_trace_links_for_trace(
+        &self,
+        trace_id: &str,
+    ) -> Result<Vec<TraceLinkRecord>, StoreError>;
+    fn list_recent_trace_links(&self, limit: usize) -> Result<Vec<TraceLinkRecord>, StoreError>;
 }
 
 pub trait SessionInboxRepository {

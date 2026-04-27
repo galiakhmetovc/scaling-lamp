@@ -1265,9 +1265,17 @@ fn send_chat_outcome_internal(
 ) -> Result<ChatSendOutcome, BootstrapError> {
     let now = unix_timestamp()?;
     let run_id = format!("run-chat-{session_id}-{now}");
+    let trace_source = Some(crate::trace::TurnTraceSource::new("cli", "cli.chat_send"));
     let result = match observer.as_deref_mut() {
-        Some(observer) => app.execute_chat_turn_with_observer(session_id, message, now, observer),
-        None => app.execute_chat_turn(session_id, message, now),
+        Some(observer) => app.execute_chat_turn_with_trace_control_and_observer(
+            session_id,
+            message,
+            now,
+            None,
+            observer,
+            trace_source.clone(),
+        ),
+        None => app.execute_chat_turn_with_trace(session_id, message, now, trace_source),
     };
     let report = match result {
         Ok(report) => report,
@@ -1298,12 +1306,25 @@ fn send_chat_outcome_via_client_internal(
 ) -> Result<ChatSendOutcome, BootstrapError> {
     let now = unix_timestamp()?;
     let result = match observer.as_deref_mut() {
-        Some(observer) => client
-            .execute_chat_turn_with_control_and_observer(session_id, message, now, None, observer),
+        Some(observer) => client.execute_chat_turn_with_trace_control_and_observer(
+            session_id,
+            message,
+            now,
+            None,
+            observer,
+            Some("cli"),
+            Some("cli.chat_send"),
+        ),
         None => {
             let mut noop = |_| {};
-            client.execute_chat_turn_with_control_and_observer(
-                session_id, message, now, None, &mut noop,
+            client.execute_chat_turn_with_trace_control_and_observer(
+                session_id,
+                message,
+                now,
+                None,
+                &mut noop,
+                Some("cli"),
+                Some("cli.chat_send"),
             )
         }
     };

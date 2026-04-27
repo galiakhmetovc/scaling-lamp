@@ -315,6 +315,10 @@ pub struct ChatTurnRequest {
     pub now: i64,
     #[serde(default)]
     pub interrupt_after_tool_step: bool,
+    #[serde(default)]
+    pub surface: Option<String>,
+    #[serde(default)]
+    pub entrypoint: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

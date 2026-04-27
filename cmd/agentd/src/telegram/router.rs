@@ -15,7 +15,8 @@ use crate::store_retry::{
 use agent_persistence::{
     ArtifactRecord, ArtifactRepository, PersistenceStore, StoreError, TelegramChatBindingRecord,
     TelegramChatStatusRecord, TelegramRepository, TelegramUpdateCursorRecord,
-    TelegramUserPairingRecord, TranscriptRecord, TranscriptRepository, audit::AuditLogConfig,
+    TelegramUserPairingRecord, TraceRepository, TranscriptRecord, TranscriptRepository,
+    audit::AuditLogConfig,
 };
 use serde_json::json;
 use std::collections::BTreeMap;
@@ -64,6 +65,12 @@ enum ParsedTelegramCommand {
         message: String,
     },
     InvalidUsage(String),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct TelegramDeliveryTrace {
+    trace_id: String,
+    parent_span_id: String,
 }
 
 #[derive(Debug, Clone)]
@@ -775,7 +782,17 @@ where
         chat_id: i64,
         text: &str,
     ) -> Result<Message, BootstrapError> {
-        self.deliver_with_retry(chat_id, "send_text", || {
+        self.send_text_delivered_with_trace(chat_id, text, None)
+            .await
+    }
+
+    async fn send_text_delivered_with_trace(
+        &self,
+        chat_id: i64,
+        text: &str,
+        trace: Option<&TelegramDeliveryTrace>,
+    ) -> Result<Message, BootstrapError> {
+        self.deliver_with_retry_with_trace(chat_id, "send_text", trace, || {
             let client = self.client.clone();
             let text = text.to_string();
             async move { client.send_text(chat_id, &text).await }
@@ -788,7 +805,17 @@ where
         chat_id: i64,
         html: &str,
     ) -> Result<Message, BootstrapError> {
-        self.deliver_with_retry(chat_id, "send_html", || {
+        self.send_html_delivered_with_trace(chat_id, html, None)
+            .await
+    }
+
+    async fn send_html_delivered_with_trace(
+        &self,
+        chat_id: i64,
+        html: &str,
+        trace: Option<&TelegramDeliveryTrace>,
+    ) -> Result<Message, BootstrapError> {
+        self.deliver_with_retry_with_trace(chat_id, "send_html", trace, || {
             let client = self.client.clone();
             let html = html.to_string();
             async move { client.send_html(chat_id, &html).await }
@@ -855,6 +882,21 @@ where
         &self,
         chat_id: i64,
         op: &'static str,
+        action: F,
+    ) -> Result<T, BootstrapError>
+    where
+        F: FnMut() -> Fut,
+        Fut: Future<Output = Result<T, TelegramClientError>>,
+    {
+        self.deliver_with_retry_with_trace(chat_id, op, None, action)
+            .await
+    }
+
+    async fn deliver_with_retry_with_trace<T, F, Fut>(
+        &self,
+        chat_id: i64,
+        op: &'static str,
+        trace: Option<&TelegramDeliveryTrace>,
         mut action: F,
     ) -> Result<T, BootstrapError>
     where
@@ -866,7 +908,7 @@ where
             self.wait_for_delivery_slot(chat_id).await;
             match action().await {
                 Ok(value) => {
-                    self.emit_delivery_event(chat_id, op, attempt, started.elapsed(), None);
+                    self.emit_delivery_event(chat_id, op, attempt, started.elapsed(), None, trace);
                     return Ok(value);
                 }
                 Err(error) if attempt < TELEGRAM_DELIVERY_RETRY_ATTEMPTS => {
@@ -899,6 +941,7 @@ where
                         attempt,
                         started.elapsed(),
                         Some(error_message.clone()),
+                        trace,
                     );
                     return Err(BootstrapError::Stream(std::io::Error::other(error_message)));
                 }
@@ -953,7 +996,19 @@ where
         attempt: usize,
         elapsed: Duration,
         error: Option<String>,
+        trace: Option<&TelegramDeliveryTrace>,
     ) {
+        let trace_id = trace
+            .map(|trace| trace.trace_id.clone())
+            .unwrap_or_else(|| telegram_trace_id(chat_id));
+        let span_id = trace
+            .map(|trace| {
+                crate::trace::otel_span_id(
+                    "telegram_delivery",
+                    &format!("{}:{op}:{attempt}", trace.trace_id),
+                )
+            })
+            .unwrap_or_else(|| telegram_span_id(chat_id, op, attempt));
         let mut event = DiagnosticEventBuilder::new(
             &self.app.config,
             if error.is_some() { "error" } else { "info" },
@@ -963,13 +1018,16 @@ where
         )
         .surface("telegram")
         .entrypoint("telegram")
-        .trace_id(telegram_trace_id(chat_id))
-        .span_id(telegram_span_id(chat_id, op, attempt))
+        .trace_id(trace_id)
+        .span_id(span_id)
         .outcome(if error.is_some() { "error" } else { "ok" })
         .elapsed_ms(duration_millis(elapsed))
         .field("chat_id", chat_id)
         .field("delivery_op", op)
         .field("attempt", attempt);
+        if let Some(trace) = trace {
+            event = event.parent_span_id(trace.parent_span_id.clone());
+        }
         if let Some(error) = error {
             event = event.error(error);
         }
@@ -984,11 +1042,23 @@ where
     }
 
     async fn send_model_text_chunks(&self, chat_id: i64, text: &str) -> Result<(), BootstrapError> {
+        self.send_model_text_chunks_with_trace(chat_id, text, None)
+            .await
+    }
+
+    async fn send_model_text_chunks_with_trace(
+        &self,
+        chat_id: i64,
+        text: &str,
+        trace: Option<&TelegramDeliveryTrace>,
+    ) -> Result<(), BootstrapError> {
         for chunk in render_model_response_chunks(text, TELEGRAM_MESSAGE_TEXT_SOFT_CAP) {
             if chunk.parse_mode_html {
-                self.send_html_delivered(chat_id, &chunk.text).await?;
+                self.send_html_delivered_with_trace(chat_id, &chunk.text, trace)
+                    .await?;
             } else {
-                self.send_text_delivered(chat_id, &chunk.text).await?;
+                self.send_text_delivered_with_trace(chat_id, &chunk.text, trace)
+                    .await?;
             }
         }
         Ok(())
@@ -1113,10 +1183,23 @@ where
         status_message_id: i32,
         now: i64,
     ) -> Result<(), BootstrapError> {
-        self.send_model_text_chunks(chat_id, &report.output_text)
+        let trace = self.telegram_delivery_trace_for_run(&report.run_id)?;
+        self.send_model_text_chunks_with_trace(chat_id, &report.output_text, trace.as_ref())
             .await?;
         self.mark_chat_status_stale(chat_id, status_message_id, now)?;
         Ok(())
+    }
+
+    fn telegram_delivery_trace_for_run(
+        &self,
+        run_id: &str,
+    ) -> Result<Option<TelegramDeliveryTrace>, BootstrapError> {
+        Ok(self
+            .with_store_retry(|store| store.get_trace_link("run", run_id))?
+            .map(|link| TelegramDeliveryTrace {
+                trace_id: link.trace_id,
+                parent_span_id: link.span_id,
+            }))
     }
 
     async fn resolve_or_create_private_session(

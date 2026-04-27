@@ -9,6 +9,7 @@ mod schema;
 mod session_mission;
 mod telegram_repos;
 mod tool_call_repos;
+mod trace_repos;
 
 use crate::PersistenceScaffold;
 use crate::audit::{AuditLogConfig, DiagnosticEvent};
@@ -17,13 +18,13 @@ use crate::records::{
     AgentChainContinuationRecord, AgentProfileRecord, AgentScheduleRecord, ArtifactRecord,
     ContextOffloadRecord, ContextSummaryRecord, JobRecord, McpConnectorRecord, MissionRecord,
     PlanRecord, RunRecord, SessionInboxEventRecord, SessionRecord, SessionRetentionRecord,
-    ToolCallRecord, TranscriptRecord,
+    ToolCallRecord, TraceLinkRecord, TranscriptRecord,
 };
 use crate::repository::{
     AgentRepository, ArtifactRepository, ContextOffloadRepository, ContextSummaryRepository,
     JobRepository, McpRepository, MissionRepository, PlanRepository, RunRepository,
     SessionInboxRepository, SessionRepository, SessionRetentionRepository, TelegramRepository,
-    ToolCallRepository, TranscriptRepository,
+    ToolCallRepository, TraceRepository, TranscriptRepository,
 };
 use agent_runtime::archive::{
     ArchivedArtifactEntry, ArchivedSummary, ArchivedTranscriptEntry, SessionArchiveManifest,

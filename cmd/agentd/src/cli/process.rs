@@ -47,6 +47,9 @@ pub(super) fn execute_command(app: &App, command: Command) -> Result<String, Boo
         Command::Status => render::render_status(app),
         Command::Logs { max_lines } => render::render_diagnostics_tail(app, max_lines),
         Command::Analytics { max_lines } => render::render_runtime_analytics(app, max_lines),
+        Command::TraceShow { trace_id } => render::show_trace(&app.store()?, &trace_id),
+        Command::TraceRun { run_id } => render::show_trace_for_run(&app.store()?, &run_id),
+        Command::TraceExport { trace_id } => render::export_trace_json(&app.store()?, &trace_id),
         Command::Version => app.render_version_info(),
         Command::Update { tag } => app.update_runtime_binary(tag.as_deref()),
         Command::ProviderSmoke { prompt } => render::run_provider_smoke(app, &prompt),
@@ -192,6 +195,9 @@ pub(super) fn execute_daemon_command(
         Command::TelegramPair { .. }
         | Command::TelegramPairings
         | Command::Analytics { .. }
+        | Command::TraceShow { .. }
+        | Command::TraceRun { .. }
+        | Command::TraceExport { .. }
         | Command::SessionTools { .. }
         | Command::SessionToolResult { .. } => Err(BootstrapError::Usage {
             reason: "this command is local-only".to_string(),

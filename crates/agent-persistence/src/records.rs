@@ -285,6 +285,19 @@ pub struct ToolCallRecord {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TraceLinkRecord {
+    pub entity_kind: String,
+    pub entity_id: String,
+    pub trace_id: String,
+    pub span_id: String,
+    pub parent_span_id: Option<String>,
+    pub surface: Option<String>,
+    pub entrypoint: Option<String>,
+    pub attributes_json: String,
+    pub created_at: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SessionInboxEventRecord {
     pub id: String,
     pub session_id: String,

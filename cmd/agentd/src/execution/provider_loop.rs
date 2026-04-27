@@ -586,6 +586,43 @@ impl ExecutionService {
         )
     }
 
+    fn provider_round_trace_id(run_id: &str, round: usize) -> String {
+        format!("provider-round-{}-r{round}", sanitize_identifier(run_id))
+    }
+
+    fn record_provider_round_trace(
+        store: &PersistenceStore,
+        run_id: &str,
+        session_id: &str,
+        round: usize,
+        max_rounds: usize,
+        request: &ProviderRequest,
+        now: i64,
+    ) -> Result<(), ExecutionError> {
+        let trace_context = RuntimeTraceContext::from_run_link_or_default(store, run_id)
+            .map_err(ExecutionError::Store)?;
+        let entity_id = Self::provider_round_trace_id(run_id, round);
+        store
+            .put_trace_link(&trace_context.child_link(
+                "provider_round",
+                &entity_id,
+                serde_json::json!({
+                    "session_id": session_id,
+                    "run_id": run_id,
+                    "round": round,
+                    "max_rounds": max_rounds,
+                    "model": request.model.as_deref(),
+                    "stream": matches!(request.stream, ProviderStreamMode::Enabled),
+                    "message_count": request.messages.len(),
+                    "tool_definition_count": request.tools.len(),
+                    "tool_output_count": request.tool_outputs.len(),
+                    "continuation_message_count": request.continuation_messages.len(),
+                }),
+                now,
+            ))
+            .map_err(ExecutionError::Store)
+    }
+
     fn record_tool_call_ledger(update: ToolCallLedgerUpdate<'_>) -> Result<(), ExecutionError> {
         retry_store_sync(
             SQLITE_LOCK_RETRY_ATTEMPTS,
@@ -597,8 +634,10 @@ impl ExecutionService {
                     .as_ref()
                     .map(|record| record.requested_at)
                     .unwrap_or(update.now);
+                let trace_context =
+                    RuntimeTraceContext::from_run_link_or_default(update.store, update.run_id)?;
                 update.store.put_tool_call(&ToolCallRecord {
-                    id,
+                    id: id.clone(),
                     session_id: update.session_id.to_string(),
                     run_id: update.run_id.to_string(),
                     provider_tool_call_id: update.provider_tool_call_id.to_string(),
@@ -622,7 +661,20 @@ impl ExecutionService {
                     result_byte_len: existing.as_ref().and_then(|record| record.result_byte_len),
                     requested_at,
                     updated_at: update.now,
-                })
+                })?;
+                update.store.put_trace_link(&trace_context.child_link(
+                    "tool_call",
+                    &id,
+                    serde_json::json!({
+                        "session_id": update.session_id,
+                        "run_id": update.run_id,
+                        "provider_tool_call_id": update.provider_tool_call_id,
+                        "tool_name": update.tool_name,
+                        "status": update.status.as_str(),
+                        "summary": update.summary,
+                    }),
+                    requested_at,
+                ))
             },
         )
         .map_err(ExecutionError::Store)
@@ -639,6 +691,8 @@ impl ExecutionService {
                 let Some(mut record) = update.store.get_tool_call(&id)? else {
                     return Ok(());
                 };
+                let trace_context =
+                    RuntimeTraceContext::from_run_link_or_default(update.store, update.run_id)?;
 
                 let (result_preview, result_truncated) =
                     Self::tool_result_preview(update.result_output);
@@ -662,6 +716,18 @@ impl ExecutionService {
                         bytes: update.result_output.as_bytes().to_vec(),
                         created_at: update.now,
                     })?;
+                    update.store.put_trace_link(&trace_context.child_link(
+                        "artifact",
+                        &artifact_id,
+                        serde_json::json!({
+                            "session_id": update.session_id,
+                            "run_id": update.run_id,
+                            "tool_call_id": id,
+                            "kind": "tool_output",
+                            "byte_len": update.result_output.len(),
+                        }),
+                        update.now,
+                    ))?;
                     Some(artifact_id)
                 } else {
                     None
@@ -3813,6 +3879,15 @@ impl ExecutionService {
                 cursor.stream_mode(observer.is_some()),
                 self.config.provider_max_output_tokens,
             );
+            Self::record_provider_round_trace(
+                store,
+                run.snapshot().id.as_str(),
+                session_id,
+                cursor.round.saturating_add(1),
+                cursor.max_rounds,
+                &request,
+                now,
+            )?;
             let observed = match self.request_provider_response_with_retries(
                 store, run, provider, &request, now, observer,
             ) {

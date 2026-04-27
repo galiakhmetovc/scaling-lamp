@@ -14,6 +14,28 @@ impl DaemonClient {
         interrupt_after_tool_step: Option<&AtomicBool>,
         observer: &mut dyn FnMut(ChatExecutionEvent),
     ) -> Result<ChatTurnExecutionReport, BootstrapError> {
+        self.execute_chat_turn_with_trace_control_and_observer(
+            session_id,
+            message,
+            now,
+            interrupt_after_tool_step,
+            observer,
+            None,
+            None,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn execute_chat_turn_with_trace_control_and_observer(
+        &self,
+        session_id: &str,
+        message: &str,
+        now: i64,
+        interrupt_after_tool_step: Option<&AtomicBool>,
+        observer: &mut dyn FnMut(ChatExecutionEvent),
+        surface: Option<&str>,
+        entrypoint: Option<&str>,
+    ) -> Result<ChatTurnExecutionReport, BootstrapError> {
         let mut final_outcome = None;
         self.post_json_long_stream(
             "/v1/chat/turn/stream",
@@ -23,6 +45,8 @@ impl DaemonClient {
                 now,
                 interrupt_after_tool_step: interrupt_after_tool_step
                     .is_some_and(|flag| flag.load(std::sync::atomic::Ordering::SeqCst)),
+                surface: surface.map(str::to_string),
+                entrypoint: entrypoint.map(str::to_string),
             },
             |line| {
                 let event: WorkerStreamEventResponse =

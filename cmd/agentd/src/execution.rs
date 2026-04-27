@@ -16,12 +16,13 @@ mod wakeup;
 
 use crate::a2a::A2AClient;
 use crate::mcp::SharedMcpRegistry;
+use crate::trace::{RuntimeTraceContext, TurnTraceSource};
 use agent_persistence::{
     A2APeerConfig, AgentRepository, ContextOffloadRepository, ContextSummaryRepository, JobRecord,
     JobRepository, McpRepository, MissionRecord, MissionRepository, PersistenceStore, PlanRecord,
     PlanRepository, RecordConversionError, RunRecord, RunRepository, RuntimeLimitsConfig,
-    RuntimeTimingConfig, SessionInboxRepository, SessionRepository, StoreError, TranscriptRecord,
-    TranscriptRepository,
+    RuntimeTimingConfig, SessionInboxRepository, SessionRepository, StoreError, TraceRepository,
+    TranscriptRecord, TranscriptRepository,
 };
 use agent_runtime::agent::AgentProfile;
 use agent_runtime::inbox::SessionInboxEvent;

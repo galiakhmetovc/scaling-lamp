@@ -70,7 +70,15 @@ impl TelegramBackend for DaemonTelegramBackend {
         observer: &mut dyn FnMut(ChatExecutionEvent),
     ) -> Result<ChatTurnExecutionReport, BootstrapError> {
         self.client
-            .execute_chat_turn_with_control_and_observer(session_id, message, now, None, observer)
+            .execute_chat_turn_with_trace_control_and_observer(
+                session_id,
+                message,
+                now,
+                None,
+                observer,
+                Some("telegram"),
+                Some("telegram.message"),
+            )
     }
 
     fn send_agent_message(

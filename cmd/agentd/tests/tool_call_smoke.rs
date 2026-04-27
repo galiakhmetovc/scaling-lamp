@@ -42,6 +42,7 @@ fn operator_can_run_a_chat_turn_that_uses_an_allowed_web_tool() {
     assert!(sent.contains("chat send session_id=session-tool-smoke"));
     assert!(sent.contains("response_id=resp_tool_smoke_2"));
     assert!(sent.contains("output=tool smoke ok"));
+    let run_id = parse_run_id(&sent);
 
     let shown = run_agentd(
         &data_dir,
@@ -65,6 +66,18 @@ fn operator_can_run_a_chat_turn_that_uses_an_allowed_web_tool() {
 
     let normalized_web = web_request.to_ascii_lowercase();
     assert!(normalized_web.contains("get /doc http/1.1"));
+
+    let trace = run_agentd(
+        &data_dir,
+        &api_base,
+        daemon_port,
+        &["trace", "run", &run_id],
+    );
+    assert!(trace.contains("Trace"));
+    assert!(trace.contains(&format!("run {run_id}")));
+    assert!(trace.contains("provider_round "));
+    assert!(trace.contains("transcript "));
+    assert!(trace.contains("tool_call "));
 }
 
 fn run_agentd(
@@ -104,6 +117,15 @@ fn free_port() -> u16 {
         .local_addr()
         .expect("local addr")
         .port()
+}
+
+fn parse_run_id(output: &str) -> String {
+    output
+        .split_whitespace()
+        .find_map(|part| part.strip_prefix("run_id="))
+        .filter(|value| !value.is_empty())
+        .expect("run_id in output")
+        .to_string()
 }
 
 fn spawn_sse_server_sequence(

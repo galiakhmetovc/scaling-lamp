@@ -109,7 +109,12 @@ pub(super) fn handle_chat_turn(app: &App, mut request: Request) -> std::io::Resu
             );
         }
     };
-    match app.execute_chat_turn(&body.session_id, &body.message, body.now) {
+    let trace_source = Some(crate::trace::TurnTraceSource::new(
+        body.surface.as_deref().unwrap_or("http"),
+        body.entrypoint.as_deref().unwrap_or("http.chat_turn"),
+    ));
+    match app.execute_chat_turn_with_trace(&body.session_id, &body.message, body.now, trace_source)
+    {
         Ok(report) => respond_json(
             request,
             StatusCode(200),
@@ -158,12 +163,17 @@ pub(super) fn handle_chat_turn_stream(app: &App, mut request: Request) -> std::i
         let mut observer = |event| {
             let _ = emit(WorkerStreamEventResponse::ChatEvent { event });
         };
-        let outcome = map_chat_turn_outcome(app.execute_chat_turn_with_control_and_observer(
+        let trace_source = Some(crate::trace::TurnTraceSource::new(
+            body.surface.as_deref().unwrap_or("http"),
+            body.entrypoint.as_deref().unwrap_or("http.chat_turn"),
+        ));
+        let outcome = map_chat_turn_outcome(app.execute_chat_turn_with_trace_control_and_observer(
             &body.session_id,
             &body.message,
             body.now,
             Some(&interrupt_after_tool_step),
             &mut observer,
+            trace_source,
         ));
         emit(WorkerStreamEventResponse::Finished { outcome })
     })

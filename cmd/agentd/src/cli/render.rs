@@ -1062,6 +1062,149 @@ fn average_u64(total: u64, count: usize) -> u64 {
     }
 }
 
+pub(super) fn show_trace_for_run(
+    store: &PersistenceStore,
+    run_id: &str,
+) -> Result<String, BootstrapError> {
+    let link =
+        store
+            .get_trace_link("run", run_id)?
+            .ok_or_else(|| BootstrapError::MissingRecord {
+                kind: "trace_link",
+                id: format!("run:{run_id}"),
+            })?;
+    show_trace(store, &link.trace_id)
+}
+
+pub(super) fn show_trace(
+    store: &PersistenceStore,
+    trace_id: &str,
+) -> Result<String, BootstrapError> {
+    let links = store.list_trace_links_for_trace(trace_id)?;
+    if links.is_empty() {
+        return Err(BootstrapError::MissingRecord {
+            kind: "trace",
+            id: trace_id.to_string(),
+        });
+    }
+
+    let mut lines = vec![
+        "Trace".to_string(),
+        format!("trace_id: {trace_id}"),
+        format!("spans: {}", links.len()),
+    ];
+
+    for link in links {
+        lines.push(String::new());
+        lines.push(format!("{} {}", link.entity_kind, link.entity_id));
+        lines.push(format!("  span_id: {}", link.span_id));
+        lines.push(format!(
+            "  parent_span_id: {}",
+            link.parent_span_id.as_deref().unwrap_or("<none>")
+        ));
+        lines.push(format!(
+            "  surface: {}",
+            link.surface.as_deref().unwrap_or("<none>")
+        ));
+        lines.push(format!(
+            "  entrypoint: {}",
+            link.entrypoint.as_deref().unwrap_or("<none>")
+        ));
+        lines.push(format!(
+            "  created: {}",
+            format_unix_timestamp(link.created_at)
+        ));
+        lines.push("  attributes:".to_string());
+        lines.extend(indent_lines(
+            &pretty_json_or_raw(&link.attributes_json),
+            "    ",
+        ));
+    }
+
+    Ok(lines.join("\n"))
+}
+
+pub(super) fn export_trace_json(
+    store: &PersistenceStore,
+    trace_id: &str,
+) -> Result<String, BootstrapError> {
+    let links = store.list_trace_links_for_trace(trace_id)?;
+    if links.is_empty() {
+        return Err(BootstrapError::MissingRecord {
+            kind: "trace",
+            id: trace_id.to_string(),
+        });
+    }
+
+    let spans = links
+        .iter()
+        .map(|link| {
+            let mut attributes = serde_json::Map::new();
+            attributes.insert(
+                "teamd.entity_kind".to_string(),
+                serde_json::Value::String(link.entity_kind.clone()),
+            );
+            attributes.insert(
+                "teamd.entity_id".to_string(),
+                serde_json::Value::String(link.entity_id.clone()),
+            );
+            if let Some(surface) = link.surface.as_deref() {
+                attributes.insert(
+                    "teamd.surface".to_string(),
+                    serde_json::Value::String(surface.to_string()),
+                );
+            }
+            if let Some(entrypoint) = link.entrypoint.as_deref() {
+                attributes.insert(
+                    "teamd.entrypoint".to_string(),
+                    serde_json::Value::String(entrypoint.to_string()),
+                );
+            }
+            if let Ok(serde_json::Value::Object(extra)) =
+                serde_json::from_str::<serde_json::Value>(&link.attributes_json)
+            {
+                for (key, value) in extra {
+                    attributes.insert(format!("teamd.{key}"), value);
+                }
+            }
+
+            serde_json::json!({
+                "traceId": link.trace_id,
+                "spanId": link.span_id,
+                "parentSpanId": link.parent_span_id,
+                "name": format!("{} {}", link.entity_kind, link.entity_id),
+                "kind": "SPAN_KIND_INTERNAL",
+                "startTimeUnixNano": link.created_at.saturating_mul(1_000_000_000),
+                "endTimeUnixNano": link.created_at.saturating_mul(1_000_000_000),
+                "attributes": attributes,
+            })
+        })
+        .collect::<Vec<_>>();
+
+    serde_json::to_string_pretty(&serde_json::json!({
+        "resourceSpans": [
+            {
+                "resource": {
+                    "attributes": {
+                        "service.name": "teamd",
+                    }
+                },
+                "scopeSpans": [
+                    {
+                        "scope": {
+                            "name": "teamd.runtime"
+                        },
+                        "spans": spans
+                    }
+                ]
+            }
+        ]
+    }))
+    .map_err(|source| BootstrapError::Usage {
+        reason: format!("trace export serialization failed: {source}"),
+    })
+}
+
 fn map_audit_error(error: agent_persistence::audit::AuditLogError) -> BootstrapError {
     match error {
         agent_persistence::audit::AuditLogError::Io { path, source } => {
