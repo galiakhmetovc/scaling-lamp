@@ -352,6 +352,35 @@ Decision D2: `AGENTS.md` должен быть:
 
 Практическая рекомендация: Option A для текущей архитектуры. Если позже появится сложная иерархия profiles, можно ввести explicit includes.
 
+## Self-learning и workspace hygiene
+
+### Что уже принято
+
+`SYSTEM.md` и `AGENTS.md` должны явно задавать правила самообучения и чистого workspace.
+
+Самообучение означает не “модель сама где-то запомнила”, а управляемый workflow:
+
+- агент замечает повторяющиеся tool failures, корректировки оператора, успешные workflows и устойчивые предпочтения;
+- агент не полагается на hidden memory;
+- если урок нужен дальше, он записывается в inspectable durable surface: knowledge/memory tools, Obsidian/MCP note, artifact, documentation или согласованное изменение profile/skill prompts;
+- широкие правила не выводятся из одного случая без подтверждения оператора;
+- изменение `SYSTEM.md`, `AGENTS.md`, skills или документации должно быть явным и проверяемым.
+
+Workspace hygiene означает:
+
+- корень workspace не используется как место для scratch files;
+- временная работа идёт в dedicated scratch path;
+- долговременные outputs попадают в canonical directories;
+- агент перед завершением работы учитывает созданные/изменённые файлы и убирает случайный мусор.
+
+### Почему это часть prompt contract
+
+Эти правила должны жить в profile prompts, потому что они управляют поведением модели до первого tool call. Документации недостаточно: если правило не попало в prompt, агент не обязан помнить его в конкретном turn.
+
+### Open implementation tail
+
+Нужно отдельно решить, какие canonical tools/paths считать preferred для записи durable lessons. Текущая безопасная политика: сначала использовать уже существующие inspectable поверхности, а не вводить скрытую “agent memory” без просмотра и управления оператором.
+
 ## Active skills
 
 ### Как сейчас
@@ -1189,7 +1218,7 @@ sequenceDiagram
 
 ## Резюме решений
 
-Перед изменением кода нужно принять восемь решений:
+Перед изменением кода нужно принять набор решений:
 
 | ID | Вопрос | Рекомендация |
 | --- | --- | --- |
@@ -1209,9 +1238,11 @@ Additional accepted direction:
 | D9 | Где держать schedules/subagents/A2A/mesh state? | Отдельный bounded `AutonomyState` layer после `SessionHead`. |
 | D10 | Как считать budgets? | От `usable_context_tokens = effective_context_window_tokens * auto_compaction_trigger_ratio`. |
 | D11 | Может ли агент менять budget percentages? | Да, через guardrailed session/turn overrides and audit/debug visibility. |
+| D12 | Как работает самообучение? | Только через explicit, inspectable durable surfaces; hidden memory не считается источником истины. |
+| D13 | Как поддерживать workspace hygiene? | Не писать scratch/mусор в workspace root; использовать dedicated scratch path и canonical directories. |
 
 ## Минимальный contract после утверждения
 
 Если принять рекомендации, contract можно сформулировать так:
 
-`teamD` собирает provider messages из profile prompt-файлов, активных skills, компактного runtime state, autonomy state, компактного plan state, summary старой истории, bounded offload refs, recent tool activity и uncovered transcript tail. Prompt-файлы имеют общий emergency fallback. Полные планы, полные tool outputs, artifacts, audit logs и debug data не вставляются в prompt по умолчанию, а читаются явно через tools или operator/debug surfaces. Prompt является bounded view поверх управляемого состояния, а не единственной копией состояния.
+`teamD` собирает provider messages из profile prompt-файлов, активных skills, компактного runtime state, autonomy state, компактного plan state, summary старой истории, bounded offload refs, recent tool activity и uncovered transcript tail. Prompt-файлы имеют общий emergency fallback. Полные планы, полные tool outputs, artifacts, audit logs и debug data не вставляются в prompt по умолчанию, а читаются явно через tools или operator/debug surfaces. Самообучение фиксируется только через явные durable surfaces, а workspace root не используется для временного мусора. Prompt является bounded view поверх управляемого состояния, а не единственной копией состояния.

@@ -99,6 +99,15 @@ fn build_from_config_bootstraps_builtin_agents_and_selects_default() {
         assert!(agent_home.join("AGENTS.md").is_file());
         assert!(agent_home.join("skills").is_dir());
     }
+    let default_system =
+        fs::read_to_string(data_dir.join("agents/default/SYSTEM.md")).expect("read default system");
+    assert!(default_system.contains("Self-learning"));
+    assert!(default_system.contains("Do not rely on hidden memory"));
+    assert!(default_system.contains("Keep the workspace clean"));
+    let judge_system =
+        fs::read_to_string(data_dir.join("agents/judge/SYSTEM.md")).expect("read judge system");
+    assert!(judge_system.contains("Self-learning"));
+    assert!(judge_system.contains("Keep the workspace clean"));
     assert!(
         data_dir
             .join("agents/default/skills/obsidian-vault/SKILL.md")
@@ -253,9 +262,14 @@ fn build_from_config_refreshes_legacy_default_prompts_but_preserves_custom_edits
         fs::read_to_string(default_home.join("SYSTEM.md")).expect("read refreshed system");
     let refreshed_agents =
         fs::read_to_string(default_home.join("AGENTS.md")).expect("read refreshed agents");
-    assert!(refreshed_system.contains("assistant autonomous coding agent runtime profile"));
+    assert!(refreshed_system.contains("general-purpose autonomous agent running inside teamD"));
+    assert!(refreshed_system.contains("Self-learning"));
+    assert!(refreshed_system.contains("Do not rely on hidden memory"));
+    assert!(refreshed_system.contains("Keep the workspace clean"));
     assert!(refreshed_agents.contains("Assistant agent profile."));
     assert!(refreshed_agents.contains("Never invent tool names"));
+    assert!(refreshed_agents.contains("Use a dedicated scratch path"));
+    assert!(refreshed_agents.contains("Record reusable lessons"));
     assert!(refreshed_agents.contains("exec_read_output"));
     assert!(refreshed_agents.contains("knowledge_search"));
     assert!(refreshed_agents.contains("session_search"));
