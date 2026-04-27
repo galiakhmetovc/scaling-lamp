@@ -67,4 +67,4 @@
 - [x] **Step 4: Run `cargo test --workspace --all-features`**
 - [x] **Step 5: Run `cargo build -p agentd`**
 - [x] **Step 6: Run `cargo build --release -p agentd`**
-- [ ] **Step 7: Commit, push, and deploy to the remote server**
+- [x] **Step 7: Commit, push, and deploy to the remote server**
