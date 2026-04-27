@@ -54,6 +54,8 @@ JAEGER_UI_PORT=${TEAMD_JAEGER_UI_PORT:-16686}
 JAEGER_OTLP_GRPC_PORT=${TEAMD_JAEGER_OTLP_GRPC_PORT:-4317}
 JAEGER_OTLP_HTTP_PORT=${TEAMD_JAEGER_OTLP_HTTP_PORT:-4318}
 JAEGER_IMAGE=${TEAMD_JAEGER_IMAGE:-docker.io/jaegertracing/all-in-one:1.76.0}
+JAEGER_UID=${TEAMD_JAEGER_UID:-10001}
+JAEGER_GID=${TEAMD_JAEGER_GID:-10001}
 JAEGER_DIR=$CONTAINERS_ROOT/jaeger
 JAEGER_DATA_DIR=$DATA_ROOT/jaeger/badger
 JAEGER_COMPOSE=$JAEGER_DIR/docker-compose.yml
@@ -152,6 +154,8 @@ Environment overrides:
   TEAMD_OBSIDIAN_MCP_NODE_IMAGE  Docker image used to run the MCP package,
                                  default: $OBSIDIAN_MCP_NODE_IMAGE.
   TEAMD_JAEGER_IMAGE             Jaeger all-in-one image, default: $JAEGER_IMAGE.
+  TEAMD_JAEGER_UID               Jaeger container UID for Badger storage, default: $JAEGER_UID.
+  TEAMD_JAEGER_GID               Jaeger container GID for Badger storage, default: $JAEGER_GID.
   TEAMD_JAEGER_UI_PORT           Jaeger UI localhost port, default: $JAEGER_UI_PORT.
   TEAMD_JAEGER_OTLP_GRPC_PORT    Jaeger OTLP/gRPC localhost port, default: $JAEGER_OTLP_GRPC_PORT.
   TEAMD_JAEGER_OTLP_HTTP_PORT    Jaeger OTLP/HTTP localhost port, default: $JAEGER_OTLP_HTTP_PORT.
@@ -468,11 +472,13 @@ configure_agentd_web_search_env() {
 write_jaeger_files() {
   if [ "$DRY_RUN" -eq 1 ]; then
     print_cmd mkdir -p "$JAEGER_DIR" "$JAEGER_DATA_DIR"
+    print_cmd chown -R "$JAEGER_UID:$JAEGER_GID" "$JAEGER_DATA_DIR"
     print_cmd sh -c "write $JAEGER_COMPOSE for teamd-jaeger"
     return 0
   fi
 
   run_root mkdir -p "$JAEGER_DIR" "$JAEGER_DATA_DIR"
+  run_root chown -R "$JAEGER_UID:$JAEGER_GID" "$JAEGER_DATA_DIR"
   tmp_compose=$(mktemp)
   trap 'rm -f "$tmp_compose"' EXIT INT TERM
 

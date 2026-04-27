@@ -375,6 +375,7 @@ Jaeger включается явно:
 - публикует OTLP/gRPC на `127.0.0.1:${TEAMD_JAEGER_OTLP_GRPC_PORT:-4317}`;
 - публикует OTLP/HTTP на `127.0.0.1:${TEAMD_JAEGER_OTLP_HTTP_PORT:-4318}`;
 - включает persistent Badger storage в `/var/lib/teamd/containers/jaeger/badger`;
+- выставляет ownership Badger storage под UID/GID контейнера Jaeger (`TEAMD_JAEGER_UID`, `TEAMD_JAEGER_GID`, default `10001:10001`);
 - upsert-ит в `/etc/teamd/teamd.env` настройки auto-export для `agentd`;
 - перезапускает `teamd-daemon.service` и `teamd-telegram.service`, если они существуют и не указан `--no-start`/`--no-restart-teamd`.
 

@@ -81,6 +81,7 @@ containers_jaeger_dry_run_output=$(
 )
 
 assert_contains "$containers_jaeger_dry_run_output" "teamd-jaeger"
+assert_contains "$containers_jaeger_dry_run_output" "'chown' '-R' '10001:10001' '/var/lib/teamd/containers/jaeger/badger'"
 assert_contains "$containers_jaeger_dry_run_output" "127.0.0.1:16686"
 assert_contains "$containers_jaeger_dry_run_output" "127.0.0.1:4318"
 assert_contains "$containers_jaeger_dry_run_output" "upsert OTLP trace export defaults in /etc/teamd/teamd.env"
@@ -119,6 +120,10 @@ grep -q 'default_sni $CADDY_HOST' "$CONTAINERS_DEPLOY_SCRIPT" \
   || fail "expected default_sni for IP-based TLS without explicit SNI"
 grep -q 'teamd-jaeger' "$CONTAINERS_DEPLOY_SCRIPT" \
   || fail "expected Jaeger container support"
+grep -q 'JAEGER_UID=${TEAMD_JAEGER_UID:-10001}' "$CONTAINERS_DEPLOY_SCRIPT" \
+  || fail "expected Jaeger Badger storage UID default"
+grep -q 'chown -R "$JAEGER_UID:$JAEGER_GID" "$JAEGER_DATA_DIR"' "$CONTAINERS_DEPLOY_SCRIPT" \
+  || fail "expected Jaeger Badger storage ownership fix"
 grep -q 'QUERY_BASE_PATH=$JAEGER_BASE_PATH' "$CONTAINERS_DEPLOY_SCRIPT" \
   || fail "expected Jaeger subpath support"
 grep -q 'TEAMD_OTLP_ENDPOINT' "$CONTAINERS_DEPLOY_SCRIPT" \
