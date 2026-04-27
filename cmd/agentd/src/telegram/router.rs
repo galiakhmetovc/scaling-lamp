@@ -13,14 +13,17 @@ use crate::store_retry::{
     SQLITE_LOCK_RETRY_ATTEMPTS, SQLITE_LOCK_RETRY_DELAY_MS, retry_store_sync,
 };
 use agent_persistence::{
-    PersistenceStore, StoreError, TelegramChatBindingRecord, TelegramChatStatusRecord,
-    TelegramRepository, TelegramUpdateCursorRecord, TelegramUserPairingRecord, TranscriptRecord,
-    TranscriptRepository, audit::AuditLogConfig,
+    ArtifactRecord, ArtifactRepository, PersistenceStore, StoreError, TelegramChatBindingRecord,
+    TelegramChatStatusRecord, TelegramRepository, TelegramUpdateCursorRecord,
+    TelegramUserPairingRecord, TranscriptRecord, TranscriptRepository, audit::AuditLogConfig,
 };
+use serde_json::json;
 use std::collections::BTreeMap;
+use std::future::Future;
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use teloxide::types::{Message, Update, UpdateKind, User};
 
 const TELEGRAM_CONSUMER_DEFAULT: &str = "telegram-main";
@@ -33,6 +36,8 @@ const TELEGRAM_CHAT_STATUS_STALE: &str = "stale";
 const TELEGRAM_TYPING_INITIAL_DELAY_MILLIS: u64 = 750;
 const TELEGRAM_TYPING_HEARTBEAT_INTERVAL_SECONDS: u64 = 4;
 const TELEGRAM_STATUS_TTL_SECONDS: i64 = 30 * 60;
+const TELEGRAM_DELIVERY_RETRY_ATTEMPTS: usize = 3;
+const TELEGRAM_DELIVERY_RETRY_BASE_DELAY_MS: u64 = 250;
 
 static TELEGRAM_PAIRING_COUNTER: AtomicU64 = AtomicU64::new(0);
 
@@ -46,6 +51,10 @@ enum ParsedTelegramCommand {
     Sessions,
     Use {
         session_id: String,
+    },
+    Files,
+    File {
+        artifact_id: String,
     },
     Judge {
         message: String,
@@ -65,6 +74,7 @@ pub struct TelegramWorker<B> {
     consumer: String,
     audit: AuditLogConfig,
     bot_username: Arc<Mutex<Option<String>>>,
+    delivery_limiter: Arc<Mutex<TelegramDeliveryLimiter>>,
 }
 
 impl<B> TelegramWorker<B>
@@ -89,6 +99,7 @@ where
             consumer: consumer.into(),
             audit,
             bot_username: Arc::new(Mutex::new(None)),
+            delivery_limiter: Arc::new(Mutex::new(TelegramDeliveryLimiter::default())),
         }
     }
 
@@ -162,6 +173,13 @@ where
         let Some(from) = message.from.as_ref() else {
             return Ok(());
         };
+        self.cleanup_chat_status_for_new_input(message.chat.id.0)
+            .await?;
+
+        if let Some(file) = extract_incoming_file(&message) {
+            return self.handle_file_message(&message, from, file).await;
+        }
+
         let Some(raw_text) = message.text() else {
             return Ok(());
         };
@@ -169,9 +187,6 @@ where
         if text.is_empty() {
             return Ok(());
         }
-
-        self.cleanup_chat_status_for_new_input(message.chat.id.0)
-            .await?;
 
         if message.chat.is_private() {
             return self.handle_private_message(&message, from, text).await;
@@ -290,6 +305,65 @@ where
         }
     }
 
+    async fn handle_file_message(
+        &self,
+        message: &Message,
+        from: &User,
+        file: IncomingTelegramFile,
+    ) -> Result<(), BootstrapError> {
+        let chat_id = message.chat.id.0;
+        let telegram_user_id = telegram_user_id(from)?;
+        let now = unix_timestamp()?;
+
+        if self.load_activated_pairing(telegram_user_id)?.is_none() {
+            self.send_text_chunks(chat_id, &render_pairing_required_message())
+                .await?;
+            return Ok(());
+        }
+
+        let session = if message.chat.is_private() {
+            self.resolve_or_create_private_session(chat_id, telegram_user_id, now)
+                .await?
+        } else if message.chat.is_group() || message.chat.is_supergroup() {
+            if self.app.config.telegram.group_require_mention {
+                let caption = message.caption().unwrap_or_default();
+                if strip_bot_mention(caption, &self.bot_username().await?).is_none() {
+                    return Ok(());
+                }
+            }
+            self.resolve_or_create_group_session(chat_id, now).await?
+        } else {
+            return Ok(());
+        };
+
+        let artifact = self
+            .download_and_store_telegram_file(message, &session, &file, now)
+            .await?;
+        let caption = message
+            .caption()
+            .map(str::trim)
+            .filter(|value| !value.is_empty());
+        let turn_input = render_uploaded_file_turn_input(&artifact, &file, caption);
+        let ack = self.send_temporary_status_message(chat_id, now).await?;
+        let result = self
+            .execute_chat_turn(chat_id, ack.id.0, session.id.clone(), turn_input, now)
+            .await;
+
+        match result {
+            Ok(report) => {
+                self.deliver_chat_report(chat_id, &report, ack.id.0, now)
+                    .await?;
+                self.mark_chat_delivered_to_latest_transcript(chat_id, report.session_id.as_str())?;
+                Ok(())
+            }
+            Err(error) => {
+                self.fail_temporary_status_message(chat_id, ack.id.0, &error.to_string(), now)
+                    .await?;
+                Ok(())
+            }
+        }
+    }
+
     async fn handle_group_command(
         &self,
         message: &Message,
@@ -359,6 +433,23 @@ where
                     .await?;
                 self.put_group_binding(chat_id, Some(summary.id.clone()), now)?;
                 self.send_text_chunks(chat_id, &render_session_selected(&summary))
+                    .await
+            }
+            ParsedTelegramCommand::Files => {
+                if self.load_activated_pairing(telegram_user_id)?.is_none() {
+                    self.send_text_chunks(chat_id, &render_pairing_required_message())
+                        .await?;
+                    return Ok(());
+                }
+                self.send_chat_files_list(chat_id).await
+            }
+            ParsedTelegramCommand::File { artifact_id } => {
+                if self.load_activated_pairing(telegram_user_id)?.is_none() {
+                    self.send_text_chunks(chat_id, &render_pairing_required_message())
+                        .await?;
+                    return Ok(());
+                }
+                self.send_chat_artifact_file(chat_id, artifact_id.as_str())
                     .await
             }
             ParsedTelegramCommand::Judge { message } => {
@@ -469,6 +560,23 @@ where
                 self.send_text_chunks(chat_id, &render_session_selected(&summary))
                     .await
             }
+            ParsedTelegramCommand::Files => {
+                if self.load_activated_pairing(telegram_user_id)?.is_none() {
+                    self.send_text_chunks(chat_id, &render_pairing_required_message())
+                        .await?;
+                    return Ok(());
+                }
+                self.send_chat_files_list(chat_id).await
+            }
+            ParsedTelegramCommand::File { artifact_id } => {
+                if self.load_activated_pairing(telegram_user_id)?.is_none() {
+                    self.send_text_chunks(chat_id, &render_pairing_required_message())
+                        .await?;
+                    return Ok(());
+                }
+                self.send_chat_artifact_file(chat_id, artifact_id.as_str())
+                    .await
+            }
             ParsedTelegramCommand::Judge { message } => {
                 if self.load_activated_pairing(telegram_user_id)?.is_none() {
                     self.send_text_chunks(chat_id, &render_pairing_required_message())
@@ -512,12 +620,365 @@ where
         }
     }
 
+    async fn download_and_store_telegram_file(
+        &self,
+        message: &Message,
+        session: &SessionSummary,
+        file: &IncomingTelegramFile,
+        now: i64,
+    ) -> Result<ArtifactRecord, BootstrapError> {
+        let advertised_size = usize::try_from(file.size).unwrap_or(usize::MAX);
+        if advertised_size > self.app.config.telegram.max_download_bytes {
+            return Err(BootstrapError::Usage {
+                reason: format!(
+                    "telegram file {} is too large: {} bytes > {} bytes",
+                    file.file_name, advertised_size, self.app.config.telegram.max_download_bytes
+                ),
+            });
+        }
+
+        let remote_file = self
+            .client
+            .get_file(&file.file_id)
+            .await
+            .map_err(map_client_error)?;
+        let bytes = self
+            .client
+            .download_file(remote_file.path.as_str())
+            .await
+            .map_err(map_client_error)?;
+        if bytes.len() > self.app.config.telegram.max_download_bytes {
+            return Err(BootstrapError::Usage {
+                reason: format!(
+                    "downloaded telegram file {} is too large: {} bytes > {} bytes",
+                    file.file_name,
+                    bytes.len(),
+                    self.app.config.telegram.max_download_bytes
+                ),
+            });
+        }
+
+        let artifact_id = telegram_artifact_id(message.chat.id.0, message.id.0);
+        let metadata = json!({
+            "source": "telegram",
+            "telegram_content_kind": file.content_kind,
+            "telegram_chat_id": message.chat.id.0,
+            "telegram_message_id": message.id.0,
+            "telegram_file_id": file.file_id,
+            "telegram_file_unique_id": file.file_unique_id,
+            "telegram_file_path": remote_file.path,
+            "file_name": file.file_name,
+            "mime_type": file.mime_type,
+            "file_size": file.size,
+            "caption": message.caption(),
+        });
+        let artifact = ArtifactRecord {
+            id: artifact_id.clone(),
+            session_id: session.id.clone(),
+            kind: "telegram_file".to_string(),
+            metadata_json: serde_json::to_string(&metadata).map_err(|source| {
+                BootstrapError::Usage {
+                    reason: format!("failed to serialize telegram artifact metadata: {source}"),
+                }
+            })?,
+            path: PathBuf::from("artifacts").join(format!("{artifact_id}.bin")),
+            bytes,
+            created_at: now,
+        };
+        self.with_store_retry(|store| store.put_artifact(&artifact))?;
+        Ok(artifact)
+    }
+
+    async fn send_chat_files_list(&self, chat_id: i64) -> Result<(), BootstrapError> {
+        let Some(session_id) = self.selected_session_id_for_chat(chat_id)? else {
+            self.send_text_chunks(
+                chat_id,
+                "No selected session. Use /new or /use <session_id>.",
+            )
+            .await?;
+            return Ok(());
+        };
+        let artifacts =
+            self.with_store_retry(|store| store.list_artifacts_for_session(session_id.as_str()))?;
+        let files = artifacts
+            .into_iter()
+            .filter(|artifact| artifact.kind == "telegram_file")
+            .collect::<Vec<_>>();
+        if files.is_empty() {
+            self.send_text_chunks(chat_id, "Files in current session: <empty>")
+                .await?;
+            return Ok(());
+        }
+
+        let mut lines = vec![format!("Files in current session ({session_id}):")];
+        for artifact in files {
+            let metadata = artifact_metadata_value(&artifact);
+            let file_name = metadata_string(&metadata, "file_name")
+                .unwrap_or_else(|| format!("{}.bin", artifact.id));
+            let file_size = metadata
+                .get("file_size")
+                .and_then(|value| value.as_u64())
+                .map(|value| value.to_string())
+                .unwrap_or_else(|| artifact.bytes.len().to_string());
+            lines.push(format!(
+                "- {file_name} ({}) bytes={} command=/file {}",
+                artifact.id, file_size, artifact.id
+            ));
+        }
+
+        self.send_text_chunks(chat_id, &lines.join("\n")).await
+    }
+
+    async fn send_chat_artifact_file(
+        &self,
+        chat_id: i64,
+        artifact_id: &str,
+    ) -> Result<(), BootstrapError> {
+        let Some(session_id) = self.selected_session_id_for_chat(chat_id)? else {
+            self.send_text_chunks(
+                chat_id,
+                "No selected session. Use /new or /use <session_id>.",
+            )
+            .await?;
+            return Ok(());
+        };
+        let Some(artifact) = self.with_store_retry(|store| store.get_artifact(artifact_id))? else {
+            self.send_text_chunks(chat_id, &format!("File not found: {artifact_id}"))
+                .await?;
+            return Ok(());
+        };
+        if artifact.session_id != session_id {
+            self.send_text_chunks(
+                chat_id,
+                &format!("File not found in current session: {artifact_id}"),
+            )
+            .await?;
+            return Ok(());
+        }
+        let metadata = artifact_metadata_value(&artifact);
+        let file_name = metadata_string(&metadata, "file_name")
+            .unwrap_or_else(|| format!("{}.bin", artifact.id));
+        let caption = format!("artifact_id={}\nfile_name={file_name}", artifact.id);
+        self.send_document_delivered(chat_id, artifact.bytes, &file_name, Some(&caption))
+            .await?;
+        Ok(())
+    }
+
+    fn selected_session_id_for_chat(&self, chat_id: i64) -> Result<Option<String>, BootstrapError> {
+        Ok(self
+            .with_store_retry(|store| store.get_telegram_chat_binding(chat_id))?
+            .and_then(|binding| binding.selected_session_id))
+    }
+
+    async fn send_text_delivered(
+        &self,
+        chat_id: i64,
+        text: &str,
+    ) -> Result<Message, BootstrapError> {
+        self.deliver_with_retry(chat_id, "send_text", || {
+            let client = self.client.clone();
+            let text = text.to_string();
+            async move { client.send_text(chat_id, &text).await }
+        })
+        .await
+    }
+
+    async fn send_html_delivered(
+        &self,
+        chat_id: i64,
+        html: &str,
+    ) -> Result<Message, BootstrapError> {
+        self.deliver_with_retry(chat_id, "send_html", || {
+            let client = self.client.clone();
+            let html = html.to_string();
+            async move { client.send_html(chat_id, &html).await }
+        })
+        .await
+    }
+
+    async fn edit_html_delivered(
+        &self,
+        chat_id: i64,
+        message_id: i32,
+        html: &str,
+    ) -> Result<Message, BootstrapError> {
+        self.deliver_with_retry(chat_id, "edit_html", || {
+            let client = self.client.clone();
+            let html = html.to_string();
+            async move { client.edit_html(chat_id, message_id, &html).await }
+        })
+        .await
+    }
+
+    async fn delete_message_delivered(
+        &self,
+        chat_id: i64,
+        message_id: i32,
+    ) -> Result<(), BootstrapError> {
+        self.deliver_with_retry(chat_id, "delete_message", || {
+            let client = self.client.clone();
+            async move { client.delete_message(chat_id, message_id).await }
+        })
+        .await
+    }
+
+    async fn send_typing_delivered(&self, chat_id: i64) -> Result<(), BootstrapError> {
+        self.deliver_with_retry(chat_id, "send_typing", || {
+            let client = self.client.clone();
+            async move { client.send_typing(chat_id).await }
+        })
+        .await
+    }
+
+    async fn send_document_delivered(
+        &self,
+        chat_id: i64,
+        bytes: Vec<u8>,
+        file_name: &str,
+        caption: Option<&str>,
+    ) -> Result<Message, BootstrapError> {
+        self.deliver_with_retry(chat_id, "send_document", || {
+            let client = self.client.clone();
+            let bytes = bytes.clone();
+            let file_name = file_name.to_string();
+            let caption = caption.map(str::to_string);
+            async move {
+                client
+                    .send_document(chat_id, bytes, &file_name, caption.as_deref())
+                    .await
+            }
+        })
+        .await
+    }
+
+    async fn deliver_with_retry<T, F, Fut>(
+        &self,
+        chat_id: i64,
+        op: &'static str,
+        mut action: F,
+    ) -> Result<T, BootstrapError>
+    where
+        F: FnMut() -> Fut,
+        Fut: Future<Output = Result<T, TelegramClientError>>,
+    {
+        let started = Instant::now();
+        for attempt in 1..=TELEGRAM_DELIVERY_RETRY_ATTEMPTS {
+            self.wait_for_delivery_slot(chat_id).await;
+            match action().await {
+                Ok(value) => {
+                    self.emit_delivery_event(chat_id, op, attempt, started.elapsed(), None);
+                    return Ok(value);
+                }
+                Err(error) if attempt < TELEGRAM_DELIVERY_RETRY_ATTEMPTS => {
+                    DiagnosticEventBuilder::new(
+                        &self.app.config,
+                        "warn",
+                        "telegram",
+                        "delivery.retry",
+                        "telegram delivery attempt failed",
+                    )
+                    .surface("telegram")
+                    .entrypoint("telegram")
+                    .outcome("retry")
+                    .elapsed_ms(duration_millis(started.elapsed()))
+                    .field("chat_id", chat_id)
+                    .field("delivery_op", op)
+                    .field("attempt", attempt)
+                    .error(error.to_string())
+                    .emit(&self.audit);
+                    tokio::time::sleep(Duration::from_millis(
+                        TELEGRAM_DELIVERY_RETRY_BASE_DELAY_MS * attempt as u64,
+                    ))
+                    .await;
+                }
+                Err(error) => {
+                    let error_message = error.to_string();
+                    self.emit_delivery_event(
+                        chat_id,
+                        op,
+                        attempt,
+                        started.elapsed(),
+                        Some(error_message.clone()),
+                    );
+                    return Err(BootstrapError::Stream(std::io::Error::other(error_message)));
+                }
+            }
+        }
+
+        Err(BootstrapError::Stream(std::io::Error::other(
+            "telegram delivery retry loop exhausted",
+        )))
+    }
+
+    async fn wait_for_delivery_slot(&self, chat_id: i64) {
+        let scope = self.delivery_scope_for_chat(chat_id);
+        let global_interval =
+            Duration::from_millis(self.app.config.telegram.global_send_min_interval_ms);
+        let chat_interval = match scope {
+            TelegramDeliveryScope::Private => {
+                Duration::from_millis(self.app.config.telegram.private_chat_send_min_interval_ms)
+            }
+            TelegramDeliveryScope::Group => {
+                Duration::from_millis(self.app.config.telegram.group_chat_send_min_interval_ms)
+            }
+        };
+        let delay = self
+            .delivery_limiter
+            .lock()
+            .expect("telegram delivery limiter")
+            .reserve(chat_id, global_interval, chat_interval);
+        if !delay.is_zero() {
+            tokio::time::sleep(delay).await;
+        }
+    }
+
+    fn delivery_scope_for_chat(&self, chat_id: i64) -> TelegramDeliveryScope {
+        if let Ok(Some(binding)) =
+            self.with_store_retry(|store| store.get_telegram_chat_binding(chat_id))
+            && binding.scope == TELEGRAM_SCOPE_GROUP
+        {
+            return TelegramDeliveryScope::Group;
+        }
+        if chat_id < 0 {
+            TelegramDeliveryScope::Group
+        } else {
+            TelegramDeliveryScope::Private
+        }
+    }
+
+    fn emit_delivery_event(
+        &self,
+        chat_id: i64,
+        op: &'static str,
+        attempt: usize,
+        elapsed: Duration,
+        error: Option<String>,
+    ) {
+        let mut event = DiagnosticEventBuilder::new(
+            &self.app.config,
+            if error.is_some() { "error" } else { "info" },
+            "telegram",
+            "delivery.request",
+            "telegram delivery request completed",
+        )
+        .surface("telegram")
+        .entrypoint("telegram")
+        .trace_id(telegram_trace_id(chat_id))
+        .span_id(telegram_span_id(chat_id, op, attempt))
+        .outcome(if error.is_some() { "error" } else { "ok" })
+        .elapsed_ms(duration_millis(elapsed))
+        .field("chat_id", chat_id)
+        .field("delivery_op", op)
+        .field("attempt", attempt);
+        if let Some(error) = error {
+            event = event.error(error);
+        }
+        event.emit(&self.audit);
+    }
+
     async fn send_text_chunks(&self, chat_id: i64, text: &str) -> Result<(), BootstrapError> {
         for chunk in chunk_message_text(text, TELEGRAM_MESSAGE_TEXT_SOFT_CAP) {
-            self.client
-                .send_text(chat_id, &chunk)
-                .await
-                .map_err(map_client_error)?;
+            self.send_text_delivered(chat_id, &chunk).await?;
         }
         Ok(())
     }
@@ -525,15 +986,9 @@ where
     async fn send_model_text_chunks(&self, chat_id: i64, text: &str) -> Result<(), BootstrapError> {
         for chunk in render_model_response_chunks(text, TELEGRAM_MESSAGE_TEXT_SOFT_CAP) {
             if chunk.parse_mode_html {
-                self.client
-                    .send_html(chat_id, &chunk.text)
-                    .await
-                    .map_err(map_client_error)?;
+                self.send_html_delivered(chat_id, &chunk.text).await?;
             } else {
-                self.client
-                    .send_text(chat_id, &chunk.text)
-                    .await
-                    .map_err(map_client_error)?;
+                self.send_text_delivered(chat_id, &chunk.text).await?;
             }
         }
         Ok(())
@@ -546,10 +1001,8 @@ where
     ) -> Result<Message, BootstrapError> {
         let status = TelegramProgressState::default();
         let message = self
-            .client
-            .send_html(chat_id, &render_temporary_status_html(&status))
-            .await
-            .map_err(map_client_error)?;
+            .send_html_delivered(chat_id, &render_temporary_status_html(&status))
+            .await?;
         self.put_chat_status_record(
             chat_id,
             message.id.0,
@@ -567,14 +1020,12 @@ where
         error: &str,
         now: i64,
     ) -> Result<(), BootstrapError> {
-        self.client
-            .edit_html(
-                chat_id,
-                message_id,
-                &render_failed_temporary_status_html(error),
-            )
-            .await
-            .map_err(map_client_error)?;
+        self.edit_html_delivered(
+            chat_id,
+            message_id,
+            &render_failed_temporary_status_html(error),
+        )
+        .await?;
         self.mark_chat_status_stale(chat_id, message_id, now)?;
         Ok(())
     }
@@ -625,7 +1076,9 @@ where
         else {
             return Ok(());
         };
-        let _ = self.client.delete_message(chat_id, status.message_id).await;
+        let _ = self
+            .delete_message_delivered(chat_id, status.message_id)
+            .await;
         self.with_store_retry(|store| store.delete_telegram_chat_status(chat_id))?;
         Ok(())
     }
@@ -641,8 +1094,7 @@ where
                 continue;
             }
             if self
-                .client
-                .delete_message(status.telegram_chat_id, status.message_id)
+                .delete_message_delivered(status.telegram_chat_id, status.message_id)
                 .await
                 .is_ok()
             {
@@ -1193,16 +1645,13 @@ where
                 _ = &mut edit_sleep, if pending_status_html.is_some() => {
                     let status_html = pending_status_html.take().expect("pending status");
                     if status_html != last_status_html {
-                        self.client
-                            .edit_html(chat_id, message_id, &status_html)
-                            .await
-                            .map_err(map_client_error)?;
+                        self.edit_html_delivered(chat_id, message_id, &status_html).await?;
                         last_status_html = status_html;
                     }
                     edit_sleep.as_mut().reset(tokio::time::Instant::now() + edit_interval);
                 }
                 _ = &mut typing_sleep => {
-                    let _ = self.client.send_typing(chat_id).await;
+                    let _ = self.send_typing_delivered(chat_id).await;
                     typing_sleep.as_mut().reset(tokio::time::Instant::now() + typing_interval);
                 }
             }
@@ -1217,6 +1666,8 @@ pub fn default_command_specs() -> Vec<TelegramCommandSpec> {
         TelegramCommandSpec::new("new", "Create and select a session"),
         TelegramCommandSpec::new("sessions", "List sessions"),
         TelegramCommandSpec::new("use", "Select a session by id"),
+        TelegramCommandSpec::new("files", "List files in the current session"),
+        TelegramCommandSpec::new("file", "Send a session file by artifact id"),
         TelegramCommandSpec::new("judge", "Send a message to Judge"),
         TelegramCommandSpec::new("agent", "Send a message to another agent"),
     ]
@@ -1262,6 +1713,19 @@ fn parse_command_parts(command: &str, args: &str) -> Option<ParsedTelegramComman
             title: (!args.is_empty()).then(|| args.to_string()),
         }),
         "sessions" => Some(ParsedTelegramCommand::Sessions),
+        "files" => Some(ParsedTelegramCommand::Files),
+        "file" => {
+            if args.is_empty() {
+                Some(ParsedTelegramCommand::InvalidUsage(render_usage(
+                    "file",
+                    "<artifact_id>",
+                )))
+            } else {
+                Some(ParsedTelegramCommand::File {
+                    artifact_id: args.to_string(),
+                })
+            }
+        }
         "use" => {
             if args.is_empty() {
                 Some(ParsedTelegramCommand::InvalidUsage(render_usage(
@@ -1308,6 +1772,153 @@ fn parse_command_parts(command: &str, args: &str) -> Option<ParsedTelegramComman
         }
         _ => None,
     }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct IncomingTelegramFile {
+    content_kind: &'static str,
+    file_id: String,
+    file_unique_id: String,
+    file_name: String,
+    mime_type: Option<String>,
+    size: u32,
+}
+
+fn extract_incoming_file(message: &Message) -> Option<IncomingTelegramFile> {
+    if let Some(document) = message.document() {
+        return Some(IncomingTelegramFile {
+            content_kind: "document",
+            file_id: document.file.id.0.clone(),
+            file_unique_id: document.file.unique_id.0.clone(),
+            file_name: sanitize_file_name(
+                document
+                    .file_name
+                    .as_deref()
+                    .unwrap_or("telegram-document.bin"),
+            ),
+            mime_type: document.mime_type.as_ref().map(ToString::to_string),
+            size: document.file.size,
+        });
+    }
+
+    let photo = message
+        .photo()
+        .and_then(|photos| photos.iter().max_by_key(|photo| photo.file.size))?;
+    Some(IncomingTelegramFile {
+        content_kind: "photo",
+        file_id: photo.file.id.0.clone(),
+        file_unique_id: photo.file.unique_id.0.clone(),
+        file_name: format!("telegram-photo-{}.jpg", message.id.0),
+        mime_type: Some("image/jpeg".to_string()),
+        size: photo.file.size,
+    })
+}
+
+#[derive(Debug, Default)]
+struct TelegramDeliveryLimiter {
+    global_next_at: Option<Instant>,
+    chat_next_at: BTreeMap<i64, Instant>,
+}
+
+impl TelegramDeliveryLimiter {
+    fn reserve(
+        &mut self,
+        chat_id: i64,
+        global_interval: Duration,
+        chat_interval: Duration,
+    ) -> Duration {
+        let now = Instant::now();
+        let mut slot = now;
+        if let Some(global_next_at) = self.global_next_at {
+            slot = slot.max(global_next_at);
+        }
+        if let Some(chat_next_at) = self.chat_next_at.get(&chat_id).copied() {
+            slot = slot.max(chat_next_at);
+        }
+        self.global_next_at = Some(slot + global_interval);
+        self.chat_next_at.insert(chat_id, slot + chat_interval);
+        slot.saturating_duration_since(now)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TelegramDeliveryScope {
+    Private,
+    Group,
+}
+
+fn render_uploaded_file_turn_input(
+    artifact: &ArtifactRecord,
+    file: &IncomingTelegramFile,
+    caption: Option<&str>,
+) -> String {
+    let mut lines = vec![
+        "Пользователь загрузил файл.".to_string(),
+        format!("artifact_id={}", artifact.id),
+        format!("kind={}", file.content_kind),
+        format!("name={}", file.file_name),
+        format!("size={}", artifact.bytes.len()),
+    ];
+    if let Some(mime_type) = file.mime_type.as_deref() {
+        lines.push(format!("mime_type={mime_type}"));
+    }
+    if let Some(caption) = caption {
+        lines.push(format!("caption={caption}"));
+    }
+    lines.push("Используй artifact_read, если нужно прочитать содержимое файла.".to_string());
+    lines.join("\n")
+}
+
+fn telegram_artifact_id(chat_id: i64, message_id: i32) -> String {
+    let chat = chat_id.to_string().replace('-', "n");
+    format!("artifact-telegram-{chat}-{message_id}")
+}
+
+fn sanitize_file_name(value: &str) -> String {
+    let sanitized = value
+        .chars()
+        .map(|ch| {
+            if ch.is_ascii_alphanumeric() || matches!(ch, '.' | '-' | '_') {
+                ch
+            } else {
+                '_'
+            }
+        })
+        .collect::<String>();
+    let trimmed = sanitized.trim_matches('_');
+    if trimmed.is_empty() {
+        "telegram-file.bin".to_string()
+    } else {
+        trimmed.to_string()
+    }
+}
+
+fn artifact_metadata_value(artifact: &ArtifactRecord) -> serde_json::Value {
+    serde_json::from_str(&artifact.metadata_json).unwrap_or_else(|_| json!({}))
+}
+
+fn metadata_string(value: &serde_json::Value, key: &str) -> Option<String> {
+    value
+        .get(key)
+        .and_then(|value| value.as_str())
+        .filter(|value| !value.trim().is_empty())
+        .map(str::to_string)
+}
+
+fn telegram_trace_id(chat_id: i64) -> String {
+    format!("trace-telegram-{}", chat_id.to_string().replace('-', "n"))
+}
+
+fn telegram_span_id(chat_id: i64, op: &str, attempt: usize) -> String {
+    format!(
+        "span-telegram-{}-{}-{attempt}",
+        chat_id.to_string().replace('-', "n"),
+        op.replace('_', "-")
+    )
+}
+
+fn duration_millis(duration: Duration) -> u64 {
+    u64::try_from(duration.as_millis()).unwrap_or(u64::MAX)
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

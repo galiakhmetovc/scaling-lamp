@@ -60,6 +60,31 @@ impl DiagnosticEventBuilder {
         self
     }
 
+    pub fn trace_id(mut self, trace_id: impl Into<String>) -> Self {
+        self.event.trace_id = Some(trace_id.into());
+        self
+    }
+
+    pub fn span_id(mut self, span_id: impl Into<String>) -> Self {
+        self.event.span_id = Some(span_id.into());
+        self
+    }
+
+    pub fn parent_span_id(mut self, parent_span_id: impl Into<String>) -> Self {
+        self.event.parent_span_id = Some(parent_span_id.into());
+        self
+    }
+
+    pub fn surface(mut self, surface: impl Into<String>) -> Self {
+        self.event.surface = Some(surface.into());
+        self
+    }
+
+    pub fn entrypoint(mut self, entrypoint: impl Into<String>) -> Self {
+        self.event.entrypoint = Some(entrypoint.into());
+        self
+    }
+
     pub fn outcome(mut self, outcome: impl Into<String>) -> Self {
         self.event.outcome = Some(outcome.into());
         self

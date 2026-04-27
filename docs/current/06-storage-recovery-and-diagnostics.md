@@ -198,6 +198,8 @@ Storage key теперь обычно содержит `session_id/filename.txt`
 - message;
 - pid/uid/euid;
 - optional session/run/job ids;
+- optional trace/span ids;
+- optional surface/entrypoint;
 - optional outcome/error/elapsed_ms;
 - structured fields.
 
@@ -212,6 +214,20 @@ agentd logs 200
 ```
 
 читает последние строки именно из `audit/runtime.jsonl`. То есть `agentd logs` — это diagnostic logs `agentd`, а не “логи одного агента”.
+
+Быстрый агрегированный срез по diagnostics и tool ledger:
+
+```bash
+agentd analytics 200
+```
+
+Для systemd-установки:
+
+```bash
+teamdctl analytics 200
+```
+
+`analytics` показывает количество audit events в выбранном tail, группировки по `level`, `surface`, `component`, `op`, Telegram delivery attempts/failures/average latency и сводку tool calls по SQLite ledger. Это локальная аналитика, а не внешний OpenTelemetry exporter.
 
 В установке через `deploy-teamd.sh` создаются два operator entrypoint:
 

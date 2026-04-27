@@ -267,6 +267,8 @@ pub fn render_help_message() -> String {
         "/new [title] - create and select a session",
         "/sessions - list sessions",
         "/use <session_id> - select a session",
+        "/files - list files in the current session",
+        "/file <artifact_id> - send a session file back to Telegram",
         "/judge <message> - send a message to the Judge agent",
         "/agent <agent_id> <message> - send a message to another agent",
         "",

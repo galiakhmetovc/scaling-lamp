@@ -40,6 +40,9 @@ enum Command {
     Logs {
         max_lines: Option<usize>,
     },
+    Analytics {
+        max_lines: Option<usize>,
+    },
     Version,
     Update {
         tag: Option<String>,
@@ -203,6 +206,7 @@ where
     match command {
         Command::Status => render::render_status(app),
         Command::Logs { max_lines } => render::render_diagnostics_tail(app, max_lines),
+        Command::Analytics { max_lines } => render::render_runtime_analytics(app, max_lines),
         Command::Version => app.render_version_info(),
         Command::Update { tag } => app.update_runtime_binary(tag.as_deref()),
         Command::ProviderSmoke { prompt } => render::run_provider_smoke(app, &prompt),

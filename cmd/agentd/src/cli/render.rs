@@ -1,4 +1,5 @@
 use super::*;
+use std::collections::BTreeMap;
 use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 
 const DEFAULT_SESSION_TOOL_PAGE_LIMIT: usize = 50;
@@ -907,6 +908,169 @@ pub(super) fn render_diagnostics_tail(
     app.render_diagnostics_tail(
         max_lines.unwrap_or(app.config.runtime_limits.diagnostic_tail_lines),
     )
+}
+
+pub(super) fn render_runtime_analytics(
+    app: &App,
+    max_lines: Option<usize>,
+) -> Result<String, BootstrapError> {
+    let max_lines = max_lines.unwrap_or(app.config.runtime_limits.diagnostic_tail_lines);
+    let audit_lines = app
+        .persistence
+        .audit
+        .read_tail_lines(max_lines)
+        .map_err(map_audit_error)?;
+    let audit_events = audit_lines
+        .iter()
+        .filter_map(|line| {
+            serde_json::from_str::<agent_persistence::audit::DiagnosticEvent>(line).ok()
+        })
+        .collect::<Vec<_>>();
+
+    let mut by_level = BTreeMap::<String, usize>::new();
+    let mut by_component = BTreeMap::<String, usize>::new();
+    let mut by_op = BTreeMap::<String, usize>::new();
+    let mut by_surface = BTreeMap::<String, usize>::new();
+    let mut delivery_attempts = 0usize;
+    let mut delivery_failed = 0usize;
+    let mut delivery_elapsed_total = 0u64;
+
+    for event in &audit_events {
+        increment_counter(&mut by_level, &event.level);
+        increment_counter(&mut by_component, &event.component);
+        increment_counter(&mut by_op, &event.op);
+        if let Some(surface) = event.surface.as_deref() {
+            increment_counter(&mut by_surface, surface);
+        }
+        if event.component == "telegram" && event.op.starts_with("delivery.") {
+            delivery_attempts += 1;
+            if event.outcome.as_deref() == Some("error") {
+                delivery_failed += 1;
+            }
+            delivery_elapsed_total =
+                delivery_elapsed_total.saturating_add(event.elapsed_ms.unwrap_or(0));
+        }
+    }
+
+    let store = app.store()?;
+    let sessions = store.list_sessions()?;
+    let runs = store.list_runs()?;
+    let mut run_completed = 0usize;
+    let mut run_failed = 0usize;
+    let mut run_duration_total = 0u64;
+    let mut run_duration_count = 0usize;
+    for run in &runs {
+        if run.status == "completed" {
+            run_completed += 1;
+        }
+        if run.status == "failed" || run.error.is_some() {
+            run_failed += 1;
+        }
+        if let Some(finished_at) = run.finished_at {
+            let duration = finished_at.saturating_sub(run.started_at);
+            if duration >= 0 {
+                run_duration_total = run_duration_total.saturating_add(duration as u64);
+                run_duration_count += 1;
+            }
+        }
+    }
+    let mut tool_total = 0usize;
+    let mut tool_failed = 0usize;
+    let mut tools = BTreeMap::<String, ToolAnalytics>::new();
+    for session in &sessions {
+        for call in store.list_tool_calls_for_session(&session.id)? {
+            tool_total += 1;
+            let entry = tools.entry(call.tool_name.clone()).or_default();
+            entry.total += 1;
+            if call.status == "failed" {
+                tool_failed += 1;
+                entry.failed += 1;
+            }
+        }
+    }
+
+    let mut lines = vec![
+        "Analytics".to_string(),
+        format!("audit_tail_lines: {max_lines}"),
+        format!("audit_events: {}", audit_events.len()),
+        format!("sessions: {}", sessions.len()),
+        format!(
+            "runs: total={} completed={} failed={} avg_duration_sec={}",
+            runs.len(),
+            run_completed,
+            run_failed,
+            average_u64(run_duration_total, run_duration_count)
+        ),
+        format!("tool_calls: total={} failed={}", tool_total, tool_failed),
+        format!(
+            "telegram_delivery: attempts={} failed={} avg_elapsed_ms={}",
+            delivery_attempts,
+            delivery_failed,
+            average_u64(delivery_elapsed_total, delivery_attempts)
+        ),
+    ];
+
+    append_counter_section(&mut lines, "levels", &by_level);
+    append_counter_section(&mut lines, "surfaces", &by_surface);
+    append_counter_section(&mut lines, "components", &by_component);
+    append_counter_section(&mut lines, "operations", &by_op);
+    lines.push("tools:".to_string());
+    if tools.is_empty() {
+        lines.push("- <empty>".to_string());
+    } else {
+        for (tool_name, analytics) in tools {
+            lines.push(format!(
+                "- {tool_name}: total={} failed={}",
+                analytics.total, analytics.failed
+            ));
+        }
+    }
+
+    Ok(lines.join("\n"))
+}
+
+#[derive(Debug, Default)]
+struct ToolAnalytics {
+    total: usize,
+    failed: usize,
+}
+
+fn increment_counter(counters: &mut BTreeMap<String, usize>, key: &str) {
+    *counters.entry(key.to_string()).or_default() += 1;
+}
+
+fn append_counter_section(
+    lines: &mut Vec<String>,
+    title: &str,
+    counters: &BTreeMap<String, usize>,
+) {
+    lines.push(format!("{title}:"));
+    if counters.is_empty() {
+        lines.push("- <empty>".to_string());
+        return;
+    }
+    for (key, count) in counters {
+        lines.push(format!("- {key}: {count}"));
+    }
+}
+
+fn average_u64(total: u64, count: usize) -> u64 {
+    if count == 0 {
+        0
+    } else {
+        total / u64::try_from(count).unwrap_or(u64::MAX).max(1)
+    }
+}
+
+fn map_audit_error(error: agent_persistence::audit::AuditLogError) -> BootstrapError {
+    match error {
+        agent_persistence::audit::AuditLogError::Io { path, source } => {
+            BootstrapError::Io { path, source }
+        }
+        agent_persistence::audit::AuditLogError::Serialize(source) => BootstrapError::Usage {
+            reason: format!("diagnostic log serialization failed: {source}"),
+        },
+    }
 }
 
 pub(super) fn render_daemon_status(status: &StatusResponse) -> Result<String, BootstrapError> {

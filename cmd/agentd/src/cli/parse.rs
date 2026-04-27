@@ -22,6 +22,14 @@ impl Command {
                     max_lines: Some(parse_log_lines(max_lines)?),
                 })
             }
+            [command] if command == "analytics" || command == "аналитика" => {
+                Ok(Self::Analytics { max_lines: None })
+            }
+            [command, max_lines] if command == "analytics" || command == "аналитика" => {
+                Ok(Self::Analytics {
+                    max_lines: Some(parse_log_lines(max_lines)?),
+                })
+            }
             [command] if command == "version" || command == "версия" => Ok(Self::Version),
             [command] if command == "update" || command == "обновить" => {
                 Ok(Self::Update { tag: None })
@@ -196,7 +204,7 @@ impl Command {
                 })
             }
             _ => Err(BootstrapError::Usage {
-                reason: "expected one of: status | logs [max_lines] | version | update [tag] | tui | telegram run|pair|pairings | daemon | daemon stop | provider smoke | agent list/show/select/create/open | chat show/send/repl | mission create/show/tick | sessions | session create/list/show/transcript/tools/skills/enable-skill/disable-skill | run show | job show/execute | approval list/approve | delegate list | verification show".to_string(),
+                reason: "expected one of: status | logs [max_lines] | analytics [max_lines] | version | update [tag] | tui | telegram run|pair|pairings | daemon | daemon stop | provider smoke | agent list/show/select/create/open | chat show/send/repl | mission create/show/tick | sessions | session create/list/show/transcript/tools/skills/enable-skill/disable-skill | run show | job show/execute | approval list/approve | delegate list | verification show".to_string(),
             }),
         }
     }

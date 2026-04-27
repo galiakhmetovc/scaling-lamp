@@ -1,10 +1,18 @@
-# Observability tracing: спорный план
+# Observability tracing: план и текущий v1
 
-Статус: спорный черновик, не принятое решение.
+Статус: v1 частично реализован, полный OTel/exporter ещё не принят.
 
 Дата фиксации: 2026-04-25.
 
-Этот документ фиксирует идею “пронизывать” пользовательский запрос, run модели, tool calls, результаты, artifacts, delivery и межагентские переходы единым trace, а поверх traces собирать аналитику качества, задержек и использования. Это не текущая реализация и не утверждённый roadmap. Цель документа — сохранить вариант для сравнения с альтернативными идеями.
+Этот документ фиксирует идею “пронизывать” пользовательский запрос, run модели, tool calls, результаты, artifacts, delivery и межагентские переходы единым trace, а поверх traces собирать аналитику качества, задержек и использования.
+
+Текущий v1:
+
+- `DiagnosticEvent` получил first-class поля `trace_id`, `span_id`, `parent_span_id`, `surface`, `entrypoint`;
+- Telegram delivery пишет audit events `component=telegram`, `op=delivery.request`/`delivery.retry`, `surface=telegram`;
+- появился локальный CLI-срез `agentd analytics [N]` / `teamdctl analytics [N]`;
+- analytics читает tail `audit/runtime.jsonl` и tool ledger из SQLite;
+- OTLP exporter, Jaeger integration, span tree в store и trace propagation между всеми runtime сущностями пока не реализованы.
 
 ## Проблема
 
@@ -185,13 +193,14 @@ Metrics backend сможет показать:
 - локальный runtime должен оставаться полезным без внешнего observability stack.
 - analytics backend не должен быть единственным местом, где хранится качество диалогов: локальный store остаётся источником истины.
 
-Рекомендуемая траектория, если идею принимать:
+Рекомендуемая траектория:
 
-1. Ввести внутреннюю trace-модель в store.
-2. Добавить trace fields в существующие сущности.
-3. Обновить debug-view, чтобы строить trace tree локально.
-4. Добавить локальные агрегаты/analytics events.
-5. Только потом добавить OTLP exporter и metrics exporter.
+1. Добавить trace fields в diagnostic audit events. Статус: сделано для `DiagnosticEvent`.
+2. Добавить локальные агрегаты поверх audit/tool ledger. Статус: сделано минимально через `agentd analytics [N]`.
+3. Ввести внутреннюю trace-модель в store для runs/tool calls/artifacts/transcripts. Статус: не сделано.
+4. Обновить debug-view, чтобы строить trace tree локально. Статус: не сделано.
+5. Добавить propagation для schedules, subagents, inter-agent и A2A. Статус: не сделано.
+6. Только потом добавить OTLP exporter и metrics exporter. Статус: не сделано.
 
 ## Surfaces и entrypoints
 

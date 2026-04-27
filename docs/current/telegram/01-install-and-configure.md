@@ -144,6 +144,9 @@ enabled = true
 poll_interval_ms = 1000
 poll_request_timeout_seconds = 50
 progress_update_min_interval_ms = 1250
+global_send_min_interval_ms = 42
+private_chat_send_min_interval_ms = 1250
+group_chat_send_min_interval_ms = 3750
 pairing_token_ttl_seconds = 900
 max_upload_bytes = 16777216
 max_download_bytes = 41943040
@@ -159,6 +162,14 @@ mode = "default"
 ```
 
 `telegram.bot_token` лучше не писать в `config.toml`; храните его в `.env` или в environment.
+
+Параметры `*_send_min_interval_ms` задают delivery budget для Bot API:
+
+- `global_send_min_interval_ms = 42` — примерно 24 сообщения/сек, около 80% от массового ориентира 30 сообщений/сек;
+- `private_chat_send_min_interval_ms = 1250` — не чаще 0.8 сообщения/сек в один private chat;
+- `group_chat_send_min_interval_ms = 3750` — примерно 16 сообщений/мин в один group/supergroup chat.
+
+Worker применяет эти интервалы ко всем отправкам: `sendMessage`, `editMessageText`, `deleteMessage`, `sendChatAction`, `sendDocument`. При временной ошибке Bot API delivery повторяется несколько раз и пишет событие в `audit/runtime.jsonl`.
 
 ## 5. Настроить Z.ai provider
 
@@ -524,7 +535,18 @@ agentd telegram pairings
 teamdctl telegram pairings
 ```
 
-После активации пользователь может писать боту обычные сообщения.
+После активации пользователь может писать боту обычные сообщения, отправлять `document` и `photo`.
+
+Файлы сохраняются в runtime как `Artifact` текущей `Session`. Агент получает короткое сообщение с `artifact_id`, именем файла, размером и caption, а бинарный payload остаётся в artifact storage.
+
+Команды для файлов:
+
+```text
+/files
+/file <artifact_id>
+```
+
+`/files` показывает файлы текущей session, `/file` отправляет выбранный artifact обратно в Telegram через `sendDocument`.
 
 ## 12. Минимальная smoke-проверка
 
@@ -596,9 +618,9 @@ teamdctl telegram pairings
 
 В коде мы целимся не в 100% лимита, а примерно в 80% безопасной скорости:
 
-- один chat: официальный ориентир — не больше 1 сообщения/секунду; в конфиге `progress_update_min_interval_ms = 1250`, то есть 0.8 сообщения/секунду;
-- group chat: официальный ориентир — не больше 20 сообщений/минуту; для групповых broadcast-сценариев нужен cap около 16 сообщений/минуту на группу;
-- bulk notifications: официальный ориентир — около 30 сообщений/секунду; для массовой рассылки нужен global cap около 24 сообщений/секунду;
+- один private chat: официальный ориентир — не больше 1 сообщения/секунду; в конфиге `private_chat_send_min_interval_ms = 1250`, то есть 0.8 delivery operations/секунду;
+- group chat: официальный ориентир — не больше 20 сообщений/минуту; в конфиге `group_chat_send_min_interval_ms = 3750`, то есть около 16 delivery operations/минуту;
+- bulk notifications: официальный ориентир — около 30 сообщений/секунду; в конфиге `global_send_min_interval_ms = 42`, то есть около 24 delivery operations/секунду;
 - `getUpdates.limit`: Bot API принимает 1-100, текущая реализация использует верхнюю границу 100;
 - `sendMessage.text`: Bot API принимает 1-4096 characters after entities parsing, поэтому длинные ответы надо дробить до лимита;
 - captions: Bot API для media captions обычно ограничивает 0-1024 characters after entities parsing, поэтому длинный текст лучше отправлять отдельными text messages или document.
@@ -608,7 +630,10 @@ teamdctl telegram pairings
 | `telegram.enabled` | `false` | Включает Telegram-интеграцию. |
 | `telegram.poll_interval_ms` | `1000` | Пауза между polling-итерациями. |
 | `telegram.poll_request_timeout_seconds` | `50` | Timeout long polling request к Bot API. |
-| `telegram.progress_update_min_interval_ms` | `1250` | Минимальный интервал progress updates. |
+| `telegram.progress_update_min_interval_ms` | `1250` | Минимальный интервал edits для temporary status. |
+| `telegram.global_send_min_interval_ms` | `42` | Global send budget: около 24 Bot API delivery operations/sec. |
+| `telegram.private_chat_send_min_interval_ms` | `1250` | Per-private-chat delivery budget: около 0.8 операций/sec. |
+| `telegram.group_chat_send_min_interval_ms` | `3750` | Per-group delivery budget: около 16 операций/min. |
 | `telegram.pairing_token_ttl_seconds` | `900` | TTL pairing key. |
 | `telegram.max_upload_bytes` | `16777216` | Soft cap для upload. |
 | `telegram.max_download_bytes` | `41943040` | Soft cap для download. |

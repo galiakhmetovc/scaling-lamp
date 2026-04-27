@@ -4,10 +4,13 @@ use std::fmt;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use teloxide::Bot;
 use teloxide::net::Download;
-use teloxide::payloads::{EditMessageTextSetters, GetUpdatesSetters, SendMessageSetters};
+use teloxide::payloads::{
+    EditMessageTextSetters, GetUpdatesSetters, SendDocumentSetters, SendMessageSetters,
+};
 use teloxide::requests::{Request, Requester};
 use teloxide::types::{
-    BotCommand, ChatAction, ChatId, File, FileId, Me, Message, MessageId, ParseMode, Update,
+    BotCommand, ChatAction, ChatId, File, FileId, InputFile, Me, Message, MessageId, ParseMode,
+    Update,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -162,6 +165,22 @@ impl TelegramClient {
             .await
             .map(|_| ())
             .map_err(TelegramClientError::Request)
+    }
+
+    pub async fn send_document(
+        &self,
+        chat_id: i64,
+        bytes: Vec<u8>,
+        file_name: &str,
+        caption: Option<&str>,
+    ) -> Result<Message, TelegramClientError> {
+        let document = InputFile::memory(bytes).file_name(file_name.to_string());
+        let request = self.bot.send_document(ChatId(chat_id), document);
+        let request = match caption {
+            Some(caption) if !caption.trim().is_empty() => request.caption(caption.to_string()),
+            _ => request,
+        };
+        request.send().await.map_err(TelegramClientError::Request)
     }
 
     pub async fn register_commands(

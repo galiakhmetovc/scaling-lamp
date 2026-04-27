@@ -15,6 +15,8 @@ fn process_cli_accepts_russian_version_and_update_commands() {
     assert!(super::ProcessInvocation::parse(["обновить", "v1.0.1"]).is_ok());
     assert!(super::ProcessInvocation::parse(["логи"]).is_ok());
     assert!(super::ProcessInvocation::parse(["logs", "25"]).is_ok());
+    assert!(super::ProcessInvocation::parse(["analytics"]).is_ok());
+    assert!(super::ProcessInvocation::parse(["аналитика", "25"]).is_ok());
 }
 
 #[test]
@@ -824,6 +826,111 @@ fn execute_process_with_io_renders_diagnostics_tail() {
     let rendered = String::from_utf8(output).expect("utf8");
     assert!(rendered.contains("diagnostic test line"));
     assert!(!rendered.contains("версия="));
+}
+
+#[test]
+fn execute_process_with_io_renders_runtime_analytics() {
+    use agent_persistence::{
+        RunRecord, RunRepository, SessionRecord, SessionRepository, ToolCallRecord,
+        ToolCallRepository,
+    };
+
+    let temp = tempfile::tempdir().expect("tempdir");
+    let app = crate::bootstrap::build_from_config(agent_persistence::AppConfig {
+        data_dir: temp.path().join("state-root"),
+        ..agent_persistence::AppConfig::default()
+    })
+    .expect("build app");
+    let store = app.store().expect("open store");
+    store
+        .put_session(&SessionRecord {
+            id: "session-analytics".to_string(),
+            title: "Analytics".to_string(),
+            prompt_override: None,
+            settings_json: "{}".to_string(),
+            workspace_root: app.runtime.workspace.root.display().to_string(),
+            agent_profile_id: "default".to_string(),
+            active_mission_id: None,
+            parent_session_id: None,
+            parent_job_id: None,
+            delegation_label: None,
+            created_at: 1,
+            updated_at: 1,
+        })
+        .expect("put session");
+    store
+        .put_run(&RunRecord {
+            id: "run-analytics".to_string(),
+            session_id: "session-analytics".to_string(),
+            mission_id: None,
+            status: "completed".to_string(),
+            error: None,
+            result: None,
+            provider_usage_json: "null".to_string(),
+            active_processes_json: "[]".to_string(),
+            recent_steps_json: "[]".to_string(),
+            evidence_refs_json: "[]".to_string(),
+            pending_approvals_json: "[]".to_string(),
+            provider_loop_json: "null".to_string(),
+            delegate_runs_json: "[]".to_string(),
+            started_at: 2,
+            updated_at: 3,
+            finished_at: Some(3),
+        })
+        .expect("put run");
+    store
+        .put_tool_call(&ToolCallRecord {
+            id: "tool-call-analytics-1".to_string(),
+            session_id: "session-analytics".to_string(),
+            run_id: "run-analytics".to_string(),
+            provider_tool_call_id: "provider-call-analytics-1".to_string(),
+            tool_name: "web_fetch".to_string(),
+            arguments_json: "{\"url\":\"https://example.com\"}".to_string(),
+            summary: "web_fetch url=https://example.com".to_string(),
+            status: "failed".to_string(),
+            error: Some("network error".to_string()),
+            result_summary: None,
+            result_preview: None,
+            result_artifact_id: None,
+            result_truncated: false,
+            result_byte_len: None,
+            requested_at: 4,
+            updated_at: 5,
+        })
+        .expect("put tool call");
+
+    let mut event = agent_persistence::audit::DiagnosticEvent::new(
+        "info",
+        "telegram",
+        "delivery.request",
+        "telegram delivery request completed",
+        app.config.data_dir.display().to_string(),
+    );
+    event.trace_id = Some("trace-telegram-42".to_string());
+    event.span_id = Some("span-telegram-42-send-text-1".to_string());
+    event.surface = Some("telegram".to_string());
+    event.entrypoint = Some("telegram".to_string());
+    event.elapsed_ms = Some(12);
+    event.outcome = Some("ok".to_string());
+    app.persistence
+        .audit
+        .append_event(&event)
+        .expect("append diagnostic event");
+
+    let mut input = std::io::Cursor::new(Vec::<u8>::new());
+    let mut output = Vec::new();
+
+    super::execute_process_with_io(&app, ["analytics", "50"], &mut input, &mut output)
+        .expect("render analytics");
+
+    let rendered = String::from_utf8(output).expect("utf8");
+    assert!(rendered.contains("Analytics"));
+    assert!(rendered.contains("audit_events:"));
+    assert!(rendered.contains("runs: total=1 completed=1 failed=0 avg_duration_sec=1"));
+    assert!(rendered.contains("telegram_delivery: attempts=1 failed=0 avg_elapsed_ms=12"));
+    assert!(rendered.contains("tool_calls: total=1 failed=1"));
+    assert!(rendered.contains("- web_fetch: total=1 failed=1"));
+    assert!(rendered.contains("- telegram: 1"));
 }
 
 #[test]

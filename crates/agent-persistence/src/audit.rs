@@ -44,6 +44,16 @@ pub struct DiagnosticEvent {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub daemon_base_url: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub trace_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub span_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub parent_span_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub surface: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub entrypoint: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub elapsed_ms: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub outcome: Option<String>,
@@ -95,6 +105,11 @@ impl DiagnosticEvent {
             run_id: None,
             job_id: None,
             daemon_base_url: None,
+            trace_id: None,
+            span_id: None,
+            parent_span_id: None,
+            surface: None,
+            entrypoint: None,
             elapsed_ms: None,
             outcome: None,
             error: None,

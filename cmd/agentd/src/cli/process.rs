@@ -46,6 +46,7 @@ pub(super) fn execute_command(app: &App, command: Command) -> Result<String, Boo
     match command {
         Command::Status => render::render_status(app),
         Command::Logs { max_lines } => render::render_diagnostics_tail(app, max_lines),
+        Command::Analytics { max_lines } => render::render_runtime_analytics(app, max_lines),
         Command::Version => app.render_version_info(),
         Command::Update { tag } => app.update_runtime_binary(tag.as_deref()),
         Command::ProviderSmoke { prompt } => render::run_provider_smoke(app, &prompt),
@@ -190,6 +191,7 @@ pub(super) fn execute_daemon_command(
         }
         Command::TelegramPair { .. }
         | Command::TelegramPairings
+        | Command::Analytics { .. }
         | Command::SessionTools { .. }
         | Command::SessionToolResult { .. } => Err(BootstrapError::Usage {
             reason: "this command is local-only".to_string(),

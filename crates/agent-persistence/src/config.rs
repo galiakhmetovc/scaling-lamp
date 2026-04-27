@@ -54,6 +54,9 @@ pub struct TelegramConfig {
     pub poll_interval_ms: u64,
     pub poll_request_timeout_seconds: u64,
     pub progress_update_min_interval_ms: u64,
+    pub global_send_min_interval_ms: u64,
+    pub private_chat_send_min_interval_ms: u64,
+    pub group_chat_send_min_interval_ms: u64,
     pub pairing_token_ttl_seconds: u64,
     pub max_upload_bytes: usize,
     pub max_download_bytes: usize,
@@ -271,6 +274,9 @@ impl Default for TelegramConfig {
             poll_interval_ms: 1_000,
             poll_request_timeout_seconds: 50,
             progress_update_min_interval_ms: 1_250,
+            global_send_min_interval_ms: 42,
+            private_chat_send_min_interval_ms: 1_250,
+            group_chat_send_min_interval_ms: 3_750,
             pairing_token_ttl_seconds: 15 * 60,
             max_upload_bytes: 16 * 1024 * 1024,
             max_download_bytes: 40 * 1024 * 1024,
@@ -922,6 +928,18 @@ impl AppConfig {
         validate_positive_u64_value(
             "telegram.progress_update_min_interval_ms",
             self.telegram.progress_update_min_interval_ms,
+        )?;
+        validate_positive_u64_value(
+            "telegram.global_send_min_interval_ms",
+            self.telegram.global_send_min_interval_ms,
+        )?;
+        validate_positive_u64_value(
+            "telegram.private_chat_send_min_interval_ms",
+            self.telegram.private_chat_send_min_interval_ms,
+        )?;
+        validate_positive_u64_value(
+            "telegram.group_chat_send_min_interval_ms",
+            self.telegram.group_chat_send_min_interval_ms,
         )?;
         validate_positive_u64_value(
             "telegram.pairing_token_ttl_seconds",
