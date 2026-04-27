@@ -18,6 +18,7 @@ const DEFAULT_DAEMON_BIND_HOST: &str = "127.0.0.1";
 const DEFAULT_DAEMON_BIND_PORT: u16 = 5140;
 const DEFAULT_DAEMON_SKILLS_DIR: &str = "skills";
 const DEFAULT_WEB_SEARCH_URL: &str = "https://duckduckgo.com/html/";
+const DEFAULT_OTLP_ENDPOINT: &str = "http://127.0.0.1:4318/v1/traces";
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct AppConfig {
@@ -30,6 +31,7 @@ pub struct AppConfig {
     pub workspace: WorkspaceConfig,
     pub context: ContextConfig,
     pub web: WebConfig,
+    pub observability: ObservabilityConfig,
     pub runtime_timing: RuntimeTimingConfig,
     pub runtime_limits: RuntimeLimitsConfig,
 }
@@ -94,6 +96,14 @@ pub struct ContextConfig {
 pub struct WebConfig {
     pub search_backend: WebSearchBackend,
     pub search_url: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(default)]
+pub struct ObservabilityConfig {
+    pub otlp_export_enabled: bool,
+    pub otlp_endpoint: String,
+    pub otlp_timeout_ms: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
@@ -189,6 +199,9 @@ pub struct ConfigEnv {
     pub context_window_tokens_override: Option<u32>,
     pub web_search_backend_override: Option<String>,
     pub web_search_url_override: Option<String>,
+    pub otlp_export_enabled_override: Option<bool>,
+    pub otlp_endpoint_override: Option<String>,
+    pub otlp_timeout_ms_override: Option<u64>,
     pub provider_api_base_override: Option<String>,
     pub provider_api_key_override: Option<String>,
     pub provider_connect_timeout_override: Option<u64>,
@@ -248,6 +261,7 @@ struct FileConfig {
     workspace: Option<WorkspaceConfig>,
     context: Option<ContextConfig>,
     web: Option<WebConfig>,
+    observability: Option<ObservabilityConfig>,
     runtime_timing: Option<RuntimeTimingConfig>,
     runtime_limits: Option<RuntimeLimitsConfig>,
 }
@@ -292,6 +306,16 @@ impl Default for WebConfig {
         Self {
             search_backend: WebSearchBackend::default(),
             search_url: DEFAULT_WEB_SEARCH_URL.to_string(),
+        }
+    }
+}
+
+impl Default for ObservabilityConfig {
+    fn default() -> Self {
+        Self {
+            otlp_export_enabled: false,
+            otlp_endpoint: DEFAULT_OTLP_ENDPOINT.to_string(),
+            otlp_timeout_ms: 2_000,
         }
     }
 }
@@ -556,6 +580,9 @@ impl ConfigEnv {
             context_window_tokens_override: read_u32_var("TEAMD_CONTEXT_WINDOW_TOKENS", &dotenv)?,
             web_search_backend_override: read_string_var("TEAMD_WEB_SEARCH_BACKEND", &dotenv),
             web_search_url_override: read_string_var("TEAMD_WEB_SEARCH_URL", &dotenv),
+            otlp_export_enabled_override: read_bool_var("TEAMD_OTLP_EXPORT_ENABLED", &dotenv)?,
+            otlp_endpoint_override: read_string_var("TEAMD_OTLP_ENDPOINT", &dotenv),
+            otlp_timeout_ms_override: read_u64_var("TEAMD_OTLP_TIMEOUT_MS", &dotenv)?,
             provider_api_base_override: read_string_var("TEAMD_PROVIDER_API_BASE", &dotenv),
             provider_api_key_override: read_string_var("TEAMD_PROVIDER_API_KEY", &dotenv),
             provider_connect_timeout_override: read_u64_var(
@@ -671,6 +698,10 @@ impl AppConfig {
             .as_ref()
             .and_then(|config| config.web.clone())
             .unwrap_or_default();
+        let mut observability = file_config
+            .as_ref()
+            .and_then(|config| config.observability.clone())
+            .unwrap_or_default();
         let runtime_timing = file_config
             .as_ref()
             .and_then(|config| config.runtime_timing.clone())
@@ -764,6 +795,15 @@ impl AppConfig {
         if let Some(search_url) = &env.web_search_url_override {
             web.search_url = search_url.clone();
         }
+        if let Some(enabled) = env.otlp_export_enabled_override {
+            observability.otlp_export_enabled = enabled;
+        }
+        if let Some(endpoint) = &env.otlp_endpoint_override {
+            observability.otlp_endpoint = endpoint.clone();
+        }
+        if let Some(timeout_ms) = env.otlp_timeout_ms_override {
+            observability.otlp_timeout_ms = timeout_ms;
+        }
         if provider.kind == ProviderKind::ZaiChatCompletions && provider.api_base.is_none() {
             provider.api_base = Some(DEFAULT_ZAI_API_BASE.to_string());
         }
@@ -781,6 +821,7 @@ impl AppConfig {
             workspace,
             context,
             web,
+            observability,
             runtime_timing,
             runtime_limits,
         };
@@ -874,6 +915,13 @@ impl AppConfig {
             return Err(ConfigError::InvalidProviderValue {
                 name: "web.search_url",
                 value: self.web.search_url.clone(),
+                reason: "must not be empty",
+            });
+        }
+        if self.observability.otlp_endpoint.trim().is_empty() {
+            return Err(ConfigError::InvalidProviderValue {
+                name: "observability.otlp_endpoint",
+                value: self.observability.otlp_endpoint.clone(),
                 reason: "must not be empty",
             });
         }
@@ -973,6 +1021,10 @@ impl AppConfig {
         validate_positive_provider_value(
             "context.context_window_tokens_override",
             self.context.context_window_tokens_override,
+        )?;
+        validate_positive_u64_value(
+            "observability.otlp_timeout_ms",
+            self.observability.otlp_timeout_ms,
         )?;
         validate_positive_u64_value(
             "runtime_timing.sqlite_busy_timeout_ms",
@@ -1250,6 +1302,7 @@ fn load_file_config(path: &Path, required: bool) -> Result<FileConfig, ConfigErr
                 workspace: None,
                 context: None,
                 web: None,
+                observability: None,
                 runtime_timing: None,
                 runtime_limits: None,
             });
@@ -1661,6 +1714,7 @@ impl Default for AppConfig {
             workspace: WorkspaceConfig::default(),
             context: ContextConfig::default(),
             web: WebConfig::default(),
+            observability: ObservabilityConfig::default(),
             runtime_timing: RuntimeTimingConfig::default(),
             runtime_limits: RuntimeLimitsConfig::default(),
         }

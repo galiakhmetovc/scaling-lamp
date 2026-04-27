@@ -1,6 +1,6 @@
 # Observability tracing: план и текущий v2
 
-Статус: v2 локально реализует причинные trace links для основных runtime-сущностей. Полный OTLP exporter и Jaeger integration ещё не приняты.
+Статус: v2 локально реализует причинные trace links для основных runtime-сущностей. OTLP/HTTP export и optional Jaeger add-on приняты как первый внешний observability path. Metrics/quality analytics остаются отдельным планом.
 
 Дата фиксации: 2026-04-27.
 
@@ -15,8 +15,11 @@
 - SQLite получил таблицу `trace_links`, которая связывает `run`, `provider_round`, `transcript`, `tool_call`, `artifact` с `trace_id`/`span_id`;
 - chat turns создают root run span, provider round spans, transcript spans и tool call spans в одном canonical execution path;
 - Telegram final delivery audit events могут наследовать `trace_id`/`parent_span_id` от run;
-- появились команды `agentd trace run <run_id>`, `agentd trace show <trace_id>`, `agentd trace export <trace_id>`;
-- `trace export` выдаёт OTel-like JSON shape для локального анализа, но это ещё не сетевой OTLP exporter.
+- появились команды `agentd trace run <run_id>`, `agentd trace show <trace_id>`, `agentd trace export <trace_id>`, `agentd trace push <trace_id>`;
+- `trace export` выдаёт OTLP-compatible JSON payload для локального анализа;
+- `trace push` отправляет trace в configured OTLP/HTTP endpoint;
+- `observability.otlp_export_enabled=true` включает best-effort auto-export completed run traces;
+- `deploy-teamd-containers.sh --with-jaeger` поднимает `teamd-jaeger` и включает auto-export через `/etc/teamd/teamd.env`.
 
 ## Проблема
 
@@ -205,7 +208,7 @@ Metrics backend сможет показать:
 4. Добавить локальный CLI trace-view/export. Статус: сделано через `agentd trace run|show|export`.
 5. Обновить TUI debug-view, чтобы строить trace tree локально. Статус: не сделано.
 6. Расширить propagation для schedules, subagents, inter-agent и A2A. Статус: частично сделано для scheduled/background/inter-agent recipient turns; A2A и links между async событиями не сделаны.
-7. Только потом добавить OTLP exporter и metrics exporter. Статус: не сделано.
+7. Только потом добавить OTLP exporter и metrics exporter. Статус: OTLP trace exporter сделан; metrics exporter не сделан.
 
 ## Как смотреть trace сейчас
 
@@ -223,11 +226,18 @@ agentd trace show <trace_id>
 teamdctl trace show <trace_id>
 ```
 
-OTel-like JSON export:
+OTLP JSON export:
 
 ```bash
 agentd trace export <trace_id>
 teamdctl trace export <trace_id>
+```
+
+Ручная отправка в configured OTLP/HTTP endpoint:
+
+```bash
+agentd trace push <trace_id>
+teamdctl trace push <trace_id>
 ```
 
 Вывод `trace run/show` показывает:
@@ -239,7 +249,24 @@ teamdctl trace export <trace_id>
 - `surface` и `entrypoint`;
 - `attributes_json` с локальными ссылками на `session_id`, `run_id`, `tool_name`, `role`, `byte_len`.
 
-`trace export` намеренно не отправляет данные наружу. Он печатает JSON с полями `traceId`, `spanId`, `parentSpanId`, `name`, `kind`, `attributes`, похожий на OpenTelemetry-модель. Это удобно для локального анализа и будущего OTLP exporter, но не является полноценным OTLP payload.
+`trace export` намеренно не отправляет данные наружу. Он печатает OTLP JSON payload с `resourceSpans`, `scopeSpans`, `traceId`, `spanId`, `parentSpanId`, `name`, `kind`, `attributes` и timestamp-полями. `trace push` отправляет тот же payload через OTLP/HTTP.
+
+Включить auto-export:
+
+```toml
+[observability]
+otlp_export_enabled = true
+otlp_endpoint = "http://127.0.0.1:4318/v1/traces"
+otlp_timeout_ms = 2000
+```
+
+Для production-like установки проще использовать container add-on:
+
+```bash
+./scripts/deploy-teamd-containers.sh --with-jaeger
+```
+
+Auto-export выполняется best-effort после завершения run. Если Jaeger недоступен, пользовательский turn не падает: ошибка записывается в `audit/runtime.jsonl` как `component=otel`, `op=export`, `outcome=error`.
 
 ## Surfaces и entrypoints
 
@@ -535,7 +562,7 @@ trace_links(entity_kind='artifact', entity_id=artifacts.id)
 3. Какой минимальный trace полезен без Jaeger? В v2 минимально полезный набор: `run`, `provider_round`, `transcript`, `tool_call`, `artifact`, Telegram final delivery audit.
 4. Что именно модель должна видеть: `TraceSummary`, `TurnContext` или ничего? Пока модель не видит raw trace; это осознанно, чтобы не раздувать prompt.
 5. Какой уровень redaction нужен для Telegram/operator данных?
-6. Нужно ли делать exporter в Jaeger сразу или сначала локальный trace debug-view? В v2 выбран локальный trace-view/export; Jaeger позже.
+6. Нужно ли делать exporter в Jaeger сразу или сначала локальный trace debug-view? В v2 выбран порядок: сначала локальный trace-view/export, затем минимальный Jaeger/OTLP add-on. Следующий вопрос — redaction/metrics/quality analytics, а не расширение raw payload export.
 7. Где граница между `runtime.jsonl` diagnostic events и trace spans?
 8. Какие quality signals считаются достаточными для аналитики качества?
 9. Нужен ли отдельный curated dataset для успешных/неуспешных диалогов?
@@ -554,7 +581,7 @@ trace_links(entity_kind='artifact', entity_id=artifacts.id)
 - Telegram final delivery audit можно связать с run trace;
 - async links для schedule/inter-agent/A2A ещё не полные.
 
-OTLP/Jaeger exporter стоит делать только после того, как локальная модель доказала пользу.
+OTLP/Jaeger exporter добавлен после локальной trace-модели и должен оставаться тонким внешним слоем: экспортирует compact spans и ссылки на локальные сущности, но не создаёт второй store истины.
 
 Analytics стоит развивать параллельно, но как отдельный слой:
 

@@ -62,6 +62,13 @@ auto_compaction_trigger_ratio = 0.7
 # If omitted, runtime uses a built-in model mapping when it knows one.
 # context_window_tokens_override = 200000
 
+[observability]
+# Disabled by default. deploy-teamd-containers.sh --with-jaeger enables these
+# through /etc/teamd/teamd.env for production-like installs.
+otlp_export_enabled = false
+otlp_endpoint = "http://127.0.0.1:4318/v1/traces"
+otlp_timeout_ms = 2000
+
 [web]
 search_backend = "duckduckgo_html"
 search_url = "https://duckduckgo.com/html/"

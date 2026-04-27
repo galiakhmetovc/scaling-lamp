@@ -1128,81 +1128,40 @@ pub(super) fn export_trace_json(
     store: &PersistenceStore,
     trace_id: &str,
 ) -> Result<String, BootstrapError> {
-    let links = store.list_trace_links_for_trace(trace_id)?;
-    if links.is_empty() {
-        return Err(BootstrapError::MissingRecord {
+    crate::otel::trace_export_payload_json(store, trace_id).map_err(map_otlp_error)
+}
+
+pub(super) fn push_trace_to_otlp(app: &App, trace_id: &str) -> Result<String, BootstrapError> {
+    let config = &app.config.observability;
+    let report = crate::otel::export_trace_to_otlp_http(
+        &app.store()?,
+        trace_id,
+        &config.otlp_endpoint,
+        std::time::Duration::from_millis(config.otlp_timeout_ms),
+    )
+    .map_err(map_otlp_error)?;
+
+    Ok(format!(
+        "trace pushed trace_id={} spans={} endpoint={} status={}",
+        report.trace_id, report.span_count, report.endpoint, report.status_code
+    ))
+}
+
+fn map_otlp_error(error: crate::otel::OtlpExportError) -> BootstrapError {
+    match error {
+        crate::otel::OtlpExportError::MissingTrace { trace_id } => BootstrapError::MissingRecord {
             kind: "trace",
-            id: trace_id.to_string(),
-        });
+            id: trace_id,
+        },
+        crate::otel::OtlpExportError::MissingRunTrace { run_id } => BootstrapError::MissingRecord {
+            kind: "trace_link",
+            id: format!("run:{run_id}"),
+        },
+        crate::otel::OtlpExportError::Store(source) => BootstrapError::Store(source),
+        other => BootstrapError::Usage {
+            reason: other.to_string(),
+        },
     }
-
-    let spans = links
-        .iter()
-        .map(|link| {
-            let mut attributes = serde_json::Map::new();
-            attributes.insert(
-                "teamd.entity_kind".to_string(),
-                serde_json::Value::String(link.entity_kind.clone()),
-            );
-            attributes.insert(
-                "teamd.entity_id".to_string(),
-                serde_json::Value::String(link.entity_id.clone()),
-            );
-            if let Some(surface) = link.surface.as_deref() {
-                attributes.insert(
-                    "teamd.surface".to_string(),
-                    serde_json::Value::String(surface.to_string()),
-                );
-            }
-            if let Some(entrypoint) = link.entrypoint.as_deref() {
-                attributes.insert(
-                    "teamd.entrypoint".to_string(),
-                    serde_json::Value::String(entrypoint.to_string()),
-                );
-            }
-            if let Ok(serde_json::Value::Object(extra)) =
-                serde_json::from_str::<serde_json::Value>(&link.attributes_json)
-            {
-                for (key, value) in extra {
-                    attributes.insert(format!("teamd.{key}"), value);
-                }
-            }
-
-            serde_json::json!({
-                "traceId": link.trace_id,
-                "spanId": link.span_id,
-                "parentSpanId": link.parent_span_id,
-                "name": format!("{} {}", link.entity_kind, link.entity_id),
-                "kind": "SPAN_KIND_INTERNAL",
-                "startTimeUnixNano": link.created_at.saturating_mul(1_000_000_000),
-                "endTimeUnixNano": link.created_at.saturating_mul(1_000_000_000),
-                "attributes": attributes,
-            })
-        })
-        .collect::<Vec<_>>();
-
-    serde_json::to_string_pretty(&serde_json::json!({
-        "resourceSpans": [
-            {
-                "resource": {
-                    "attributes": {
-                        "service.name": "teamd",
-                    }
-                },
-                "scopeSpans": [
-                    {
-                        "scope": {
-                            "name": "teamd.runtime"
-                        },
-                        "spans": spans
-                    }
-                ]
-            }
-        ]
-    }))
-    .map_err(|source| BootstrapError::Usage {
-        reason: format!("trace export serialization failed: {source}"),
-    })
 }
 
 fn map_audit_error(error: agent_persistence::audit::AuditLogError) -> BootstrapError {

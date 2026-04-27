@@ -32,9 +32,14 @@ impl App {
     ) -> Result<execution::BackgroundWorkerTickReport, BootstrapError> {
         let store = self.store()?;
         let provider = self.provider_driver()?;
-        self.execution_service()
+        let report = self
+            .execution_service()
             .background_worker_tick(&store, provider.as_ref(), now)
-            .map_err(BootstrapError::Execution)
+            .map_err(BootstrapError::Execution)?;
+        for run_id in &report.terminal_run_ids {
+            self.export_run_trace_best_effort(&store, run_id, "background.worker");
+        }
+        Ok(report)
     }
 
     #[cfg_attr(not(test), allow(dead_code))]
@@ -45,9 +50,12 @@ impl App {
     ) -> Result<execution::MissionTurnExecutionReport, BootstrapError> {
         let store = self.store()?;
         let provider = self.provider_driver()?;
-        self.execution_service()
+        let report = self
+            .execution_service()
             .execute_mission_turn_job(&store, provider.as_ref(), job_id, now)
-            .map_err(BootstrapError::Execution)
+            .map_err(BootstrapError::Execution)?;
+        self.export_run_trace_best_effort(&store, &report.run_id, "mission.turn");
+        Ok(report)
     }
 
     #[cfg_attr(not(test), allow(dead_code))]
@@ -59,9 +67,12 @@ impl App {
     ) -> Result<execution::ChatTurnExecutionReport, BootstrapError> {
         let store = self.store()?;
         let provider = self.provider_driver()?;
-        self.execution_service()
+        let report = self
+            .execution_service()
             .execute_chat_turn(&store, provider.as_ref(), session_id, message, now)
-            .map_err(BootstrapError::Execution)
+            .map_err(BootstrapError::Execution)?;
+        self.export_run_trace_best_effort(&store, &report.run_id, "chat.turn");
+        Ok(report)
     }
 
     #[cfg_attr(not(test), allow(dead_code))]
@@ -75,7 +86,8 @@ impl App {
         let store = self.store()?;
         let provider = self.provider_driver()?;
         let mut observer = None;
-        self.execution_service()
+        let report = self
+            .execution_service()
             .execute_chat_turn_with_control_and_trace(
                 &store,
                 provider.as_ref(),
@@ -86,7 +98,9 @@ impl App {
                 &mut observer,
                 trace_source,
             )
-            .map_err(BootstrapError::Execution)
+            .map_err(BootstrapError::Execution)?;
+        self.export_run_trace_best_effort(&store, &report.run_id, "chat.turn");
+        Ok(report)
     }
 
     #[cfg_attr(not(test), allow(dead_code))]
@@ -130,7 +144,8 @@ impl App {
         let store = self.store()?;
         let provider = self.provider_driver()?;
         let mut observer = Some(observer as &mut dyn FnMut(execution::ChatExecutionEvent));
-        self.execution_service()
+        let report = self
+            .execution_service()
             .execute_chat_turn_with_control_and_trace(
                 &store,
                 provider.as_ref(),
@@ -141,7 +156,62 @@ impl App {
                 &mut observer,
                 trace_source,
             )
-            .map_err(BootstrapError::Execution)
+            .map_err(BootstrapError::Execution)?;
+        self.export_run_trace_best_effort(&store, &report.run_id, "chat.turn");
+        Ok(report)
+    }
+
+    fn export_run_trace_best_effort(&self, store: &PersistenceStore, run_id: &str, op: &str) {
+        let config = &self.config.observability;
+        if !config.otlp_export_enabled {
+            return;
+        }
+
+        let started = Instant::now();
+        let trace_link = store.get_trace_link("run", run_id).ok().flatten();
+        let result = crate::otel::export_run_trace_to_otlp_http(
+            store,
+            run_id,
+            &config.otlp_endpoint,
+            Duration::from_millis(config.otlp_timeout_ms),
+        );
+        let elapsed_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
+        let mut event = DiagnosticEventBuilder::new(
+            &self.config,
+            if result.is_ok() { "info" } else { "error" },
+            "otel",
+            "export",
+            "OTLP trace export finished",
+        )
+        .run_id(run_id)
+        .surface("runtime")
+        .entrypoint(op)
+        .elapsed_ms(elapsed_ms)
+        .field("endpoint", &config.otlp_endpoint);
+
+        if let Some(link) = trace_link {
+            event = event
+                .trace_id(link.trace_id)
+                .span_id(link.span_id)
+                .field("entity_kind", link.entity_kind)
+                .field("entity_id", link.entity_id);
+        }
+
+        match result {
+            Ok(report) => {
+                event
+                    .outcome("ok")
+                    .field("span_count", report.span_count)
+                    .field("status_code", report.status_code)
+                    .emit(&self.persistence.audit);
+            }
+            Err(error) => {
+                event
+                    .outcome("error")
+                    .error(error.to_string())
+                    .emit(&self.persistence.audit);
+            }
+        }
     }
 
     #[cfg_attr(not(test), allow(dead_code))]

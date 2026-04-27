@@ -104,6 +104,7 @@ pub struct BackgroundWorkerTickReport {
     pub emitted_inbox_events: usize,
     pub woken_sessions: usize,
     pub failed_jobs: usize,
+    pub terminal_run_ids: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]

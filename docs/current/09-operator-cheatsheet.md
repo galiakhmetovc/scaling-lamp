@@ -51,13 +51,14 @@ TEAMD_TELEGRAM_BOT_TOKEN='123456789:test-token' \
 
 Полная инструкция: [14-container-addons.md](14-container-addons.md).
 
-Core `agentd` ставится отдельно от контейнерной обвязки. Второй скрипт поднимает SearXNG/Caddy и опционально Obsidian:
+Core `agentd` ставится отдельно от контейнерной обвязки. Второй скрипт поднимает SearXNG/Caddy и опционально Obsidian/Jaeger:
 
 ```bash
 ./scripts/deploy-teamd-containers.sh
 ./scripts/deploy-teamd-containers.sh --with-obsidian
 ./scripts/deploy-teamd-containers.sh --with-obsidian-mcp
 ./scripts/deploy-teamd-containers.sh --with-obsidian-mcp-example
+./scripts/deploy-teamd-containers.sh --with-jaeger
 ```
 
 Проверка без изменений:
@@ -65,9 +66,20 @@ Core `agentd` ставится отдельно от контейнерной о
 ```bash
 ./scripts/deploy-teamd-containers.sh --dry-run --non-interactive --no-start --with-obsidian
 ./scripts/deploy-teamd-containers.sh --dry-run --non-interactive --no-start --with-obsidian-mcp
+./scripts/deploy-teamd-containers.sh --dry-run --non-interactive --no-start --with-jaeger
 ```
 
 `--with-obsidian-mcp` ставит Obsidian, добавляет enabled filesystem-backed MCP connector для vault в `/etc/teamd/config.toml` и перезапускает `teamd` сервисы, если они уже установлены. Этот путь не требует Obsidian Local REST API plugin: агент работает с vault через MCP tools, а Obsidian web UI остаётся интерфейсом для человека.
+
+`--with-jaeger` ставит `teamd-jaeger`, включает OTLP receiver и прописывает в `/etc/teamd/teamd.env`:
+
+```bash
+TEAMD_OTLP_EXPORT_ENABLED='true'
+TEAMD_OTLP_ENDPOINT='http://127.0.0.1:4318/v1/traces'
+TEAMD_OTLP_TIMEOUT_MS='2000'
+```
+
+После этого completed run traces автоматически экспортируются best-effort. UI без домена: `http://127.0.0.1:16686/jaeger/` напрямую или `http://127.0.0.1:8088/jaeger/` через Caddy. С `TEAMD_CADDY_DOMAIN` используется `https://jaeger.<domain>/`.
 
 Без `TEAMD_CADDY_DOMAIN` Obsidian web UI доступен в subfolder mode: `http://127.0.0.1:8080/obsidian/` напрямую или `http://127.0.0.1:8088/obsidian/` через Caddy. Если нужен dedicated domain, задайте `TEAMD_CADDY_DOMAIN`, и скрипт уберёт Obsidian subfolder.
 

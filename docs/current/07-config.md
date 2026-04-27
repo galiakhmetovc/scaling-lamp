@@ -216,6 +216,37 @@ export TEAMD_WEB_SEARCH_URL='http://127.0.0.1:8888/search'
 
 Важно: для `text/html`/`xhtml` `web_fetch` теперь не отдаёт модели сырой HTML по умолчанию. Runtime конвертирует HTML в markdown-подобный readable text через `html-to-markdown-rs`, извлекает заголовок страницы, а большие результаты уводит в context offload artifact вместо inline prompt payload.
 
+### `[observability]`
+
+Управляет внешним экспортом runtime traces.
+
+Параметры:
+
+- `otlp_export_enabled` — включает best-effort auto-export completed run traces;
+- `otlp_endpoint` — OTLP/HTTP endpoint, обычно `http://127.0.0.1:4318/v1/traces`;
+- `otlp_timeout_ms` — timeout одной отправки trace.
+
+Default:
+
+```toml
+[observability]
+otlp_export_enabled = false
+otlp_endpoint = "http://127.0.0.1:4318/v1/traces"
+otlp_timeout_ms = 2000
+```
+
+То же через env:
+
+```bash
+export TEAMD_OTLP_EXPORT_ENABLED='true'
+export TEAMD_OTLP_ENDPOINT='http://127.0.0.1:4318/v1/traces'
+export TEAMD_OTLP_TIMEOUT_MS='2000'
+```
+
+`scripts/deploy-teamd-containers.sh --with-jaeger` поднимает локальный Jaeger и upsert-ит эти env-переменные в `/etc/teamd/teamd.env`.
+
+Важно: exporter не отправляет raw prompts, transcript bodies или большие tool outputs. В spans попадают compact attributes и ссылки на локальные сущности (`session_id`, `run_id`, `tool_call_id`, `artifact_id`). Сбой OTLP export не ломает пользовательский turn, а пишется в `audit/runtime.jsonl`.
+
 ### `[runtime_timing]`
 
 Это теперь каноническое место для всех operator-facing timing policies:
@@ -259,6 +290,7 @@ export TEAMD_WEB_SEARCH_URL='http://127.0.0.1:8888/search'
 - daemon bind host/port/token/public URL/skills dir;
 - context compaction thresholds;
 - web search backend/URL;
+- observability OTLP endpoint/export flag/timeout;
 - Telegram bot token;
 - provider kind/base/key/model/timeouts/max rounds/max output tokens;
 - permission mode;

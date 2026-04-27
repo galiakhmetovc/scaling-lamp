@@ -235,6 +235,7 @@ teamdctl analytics 200
 agentd trace run <run_id>
 agentd trace show <trace_id>
 agentd trace export <trace_id>
+agentd trace push <trace_id>
 ```
 
 Для systemd-установки:
@@ -243,9 +244,27 @@ agentd trace export <trace_id>
 teamdctl trace run <run_id>
 teamdctl trace show <trace_id>
 teamdctl trace export <trace_id>
+teamdctl trace push <trace_id>
 ```
 
-Trace хранится в SQLite sidecar-таблице `trace_links`. Она связывает доменные сущности (`run`, `provider_round`, `transcript`, `tool_call`, `artifact`) с `trace_id`, `span_id`, `parent_span_id`, `surface`, `entrypoint` и компактными attributes. `trace run` удобен после `session tools`, потому у каждого tool call виден `run_id`. `trace export` печатает OTel-like JSON shape, но не отправляет данные в Jaeger/OTLP.
+Trace хранится в SQLite sidecar-таблице `trace_links`. Она связывает доменные сущности (`run`, `provider_round`, `transcript`, `tool_call`, `artifact`) с `trace_id`, `span_id`, `parent_span_id`, `surface`, `entrypoint` и компактными attributes. `trace run` удобен после `session tools`, потому у каждого tool call виден `run_id`. `trace export` печатает OTLP-compatible JSON payload без сетевой отправки. `trace push` отправляет этот payload в configured OTLP/HTTP endpoint.
+
+Auto-export включается конфигом:
+
+```toml
+[observability]
+otlp_export_enabled = true
+otlp_endpoint = "http://127.0.0.1:4318/v1/traces"
+otlp_timeout_ms = 2000
+```
+
+Для production-like установки с локальным web UI используйте:
+
+```bash
+./scripts/deploy-teamd-containers.sh --with-jaeger
+```
+
+Сбой OTLP/Jaeger экспорта не должен ломать пользовательский turn. Runtime пишет диагностическое событие `component=otel`, `op=export`, `outcome=error` в `audit/runtime.jsonl`, а локальные `trace_links`, transcripts, tool calls и artifacts остаются источником истины.
 
 В установке через `deploy-teamd.sh` создаются два operator entrypoint:
 

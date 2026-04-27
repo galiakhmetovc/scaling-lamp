@@ -45,6 +45,11 @@ impl Command {
                     trace_id: trace_id.clone(),
                 })
             }
+            [scope, action, trace_id] if scope == "trace" && action == "push" => {
+                Ok(Self::TracePush {
+                    trace_id: trace_id.clone(),
+                })
+            }
             [command] if command == "version" || command == "версия" => Ok(Self::Version),
             [command] if command == "update" || command == "обновить" => {
                 Ok(Self::Update { tag: None })
@@ -219,7 +224,7 @@ impl Command {
                 })
             }
             _ => Err(BootstrapError::Usage {
-                reason: "expected one of: status | logs [max_lines] | analytics [max_lines] | trace show|run|export | version | update [tag] | tui | telegram run|pair|pairings | daemon | daemon stop | provider smoke | agent list/show/select/create/open | chat show/send/repl | mission create/show/tick | sessions | session create/list/show/transcript/tools/skills/enable-skill/disable-skill | run show | job show/execute | approval list/approve | delegate list | verification show".to_string(),
+                reason: "expected one of: status | logs [max_lines] | analytics [max_lines] | trace show|run|export|push | version | update [tag] | tui | telegram run|pair|pairings | daemon | daemon stop | provider smoke | agent list/show/select/create/open | chat show/send/repl | mission create/show/tick | sessions | session create/list/show/transcript/tools/skills/enable-skill/disable-skill | run show | job show/execute | approval list/approve | delegate list | verification show".to_string(),
             }),
         }
     }

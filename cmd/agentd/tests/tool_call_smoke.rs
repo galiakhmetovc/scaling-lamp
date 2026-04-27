@@ -7,6 +7,7 @@ use std::thread;
 #[test]
 fn operator_can_run_a_chat_turn_that_uses_an_allowed_web_tool() {
     let (web_base, web_requests, web_handle) = spawn_text_server("/doc", "tool smoke doc");
+    let (otlp_endpoint, otlp_requests, otlp_handle) = spawn_otlp_server(1);
     let first_provider_response = format!(
         "data: {{\"type\":\"response.completed\",\"response\":{{\"id\":\"resp_tool_smoke_1\",\"model\":\"gpt-5.4\",\"output\":[{{\"id\":\"fc_1\",\"type\":\"function_call\",\"status\":\"completed\",\"call_id\":\"call_web_fetch\",\"name\":\"web_fetch\",\"arguments\":\"{{\\\"url\\\":\\\"{}\\\"}}\"}}],\"usage\":{{\"input_tokens\":19,\"output_tokens\":7,\"total_tokens\":26}}}}}}\n\n",
         web_base
@@ -23,6 +24,7 @@ fn operator_can_run_a_chat_turn_that_uses_an_allowed_web_tool() {
         &data_dir,
         &api_base,
         daemon_port,
+        None,
         &["session", "create", "session-tool-smoke", "Tool", "Smoke"],
     );
     assert!(created_session.contains("created session session-tool-smoke"));
@@ -31,13 +33,16 @@ fn operator_can_run_a_chat_turn_that_uses_an_allowed_web_tool() {
         &data_dir,
         &api_base,
         daemon_port,
+        Some(&otlp_endpoint),
         &["chat", "send", "session-tool-smoke", "Fetch", "the", "doc"],
     );
     let first_request = provider_requests.recv().expect("first provider request");
     let second_request = provider_requests.recv().expect("second provider request");
     let web_request = web_requests.recv().expect("web request");
+    let otlp_request = otlp_requests.recv().expect("otlp export request");
     provider_handle.join().expect("join provider server");
     web_handle.join().expect("join web server");
+    otlp_handle.join().expect("join otlp server");
 
     assert!(sent.contains("chat send session_id=session-tool-smoke"));
     assert!(sent.contains("response_id=resp_tool_smoke_2"));
@@ -48,6 +53,7 @@ fn operator_can_run_a_chat_turn_that_uses_an_allowed_web_tool() {
         &data_dir,
         &api_base,
         daemon_port,
+        None,
         &["chat", "show", "session-tool-smoke"],
     );
     assert!(shown.contains("user: Fetch the doc"));
@@ -67,10 +73,17 @@ fn operator_can_run_a_chat_turn_that_uses_an_allowed_web_tool() {
     let normalized_web = web_request.to_ascii_lowercase();
     assert!(normalized_web.contains("get /doc http/1.1"));
 
+    let normalized_otlp = otlp_request.to_ascii_lowercase();
+    assert!(normalized_otlp.contains("post /v1/traces http/1.1"));
+    assert!(otlp_request.contains("\"resourceSpans\""));
+    assert!(otlp_request.contains("\"traceId\""));
+    assert!(otlp_request.contains("\"teamd.entity_kind\""));
+
     let trace = run_agentd(
         &data_dir,
         &api_base,
         daemon_port,
+        None,
         &["trace", "run", &run_id],
     );
     assert!(trace.contains("Trace"));
@@ -84,18 +97,25 @@ fn run_agentd(
     data_dir: &std::path::Path,
     api_base: &str,
     daemon_port: u16,
+    otlp_endpoint: Option<&str>,
     args: &[&str],
 ) -> String {
-    let output = Command::new(env!("CARGO_BIN_EXE_agentd"))
+    let mut command = Command::new(env!("CARGO_BIN_EXE_agentd"));
+    command
         .args(args)
         .env("TEAMD_DATA_DIR", data_dir)
         .env("TEAMD_DAEMON_BIND_PORT", daemon_port.to_string())
         .env("TEAMD_PROVIDER_KIND", "openai_responses")
         .env("TEAMD_PROVIDER_API_BASE", format!("{api_base}/v1"))
         .env("TEAMD_PROVIDER_API_KEY", "test-key")
-        .env("TEAMD_PROVIDER_MODEL", "gpt-5.4")
-        .output()
-        .expect("run agentd");
+        .env("TEAMD_PROVIDER_MODEL", "gpt-5.4");
+    if let Some(endpoint) = otlp_endpoint {
+        command
+            .env("TEAMD_OTLP_EXPORT_ENABLED", "true")
+            .env("TEAMD_OTLP_ENDPOINT", endpoint)
+            .env("TEAMD_OTLP_TIMEOUT_MS", "2000");
+    }
+    let output = command.output().expect("run agentd");
 
     assert!(
         output.status.success(),
@@ -233,4 +253,63 @@ fn spawn_text_server(
     });
 
     (format!("http://{}{path}", address), rx, handle)
+}
+
+fn spawn_otlp_server(
+    expected_requests: usize,
+) -> (String, Receiver<String>, thread::JoinHandle<()>) {
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind listener");
+    let address = listener.local_addr().expect("local addr");
+    let (tx, rx) = mpsc::channel();
+
+    let handle = thread::spawn(move || {
+        for _ in 0..expected_requests {
+            let (mut stream, _) = listener.accept().expect("accept connection");
+            stream
+                .set_read_timeout(Some(std::time::Duration::from_secs(2)))
+                .expect("set read timeout");
+
+            let mut reader = BufReader::new(stream.try_clone().expect("clone stream"));
+            let mut request = String::new();
+            loop {
+                let mut line = String::new();
+                let bytes = reader.read_line(&mut line).expect("read request line");
+                if bytes == 0 {
+                    break;
+                }
+                request.push_str(&line);
+                if line == "\r\n" {
+                    break;
+                }
+            }
+
+            let content_length = request
+                .lines()
+                .find_map(|line| {
+                    let mut parts = line.splitn(2, ':');
+                    let header = parts.next()?.trim();
+                    let value = parts.next()?.trim();
+                    if header.eq_ignore_ascii_case("content-length") {
+                        Some(value.parse::<usize>().expect("content-length"))
+                    } else {
+                        None
+                    }
+                })
+                .unwrap_or(0);
+            if content_length > 0 {
+                let mut body_bytes = vec![0; content_length];
+                reader.read_exact(&mut body_bytes).expect("read body");
+                request.push_str(&String::from_utf8(body_bytes).expect("utf8 body"));
+            }
+            tx.send(request).expect("send request");
+
+            let response = "HTTP/1.1 200 OK\r\ncontent-length: 2\r\nconnection: close\r\n\r\n{}";
+            stream
+                .write_all(response.as_bytes())
+                .expect("write response");
+            stream.flush().expect("flush response");
+        }
+    });
+
+    (format!("http://{address}/v1/traces"), rx, handle)
 }

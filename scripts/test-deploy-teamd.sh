@@ -30,6 +30,7 @@ containers_help_output=$("$CONTAINERS_DEPLOY_SCRIPT" --help)
 assert_contains "$containers_help_output" "container add-ons"
 assert_contains "$containers_help_output" "--with-obsidian"
 assert_contains "$containers_help_output" "--with-obsidian-mcp"
+assert_contains "$containers_help_output" "--with-jaeger"
 assert_contains "$containers_help_output" "--no-searxng"
 assert_contains "$containers_help_output" "--no-caddy"
 assert_contains "$containers_help_output" "--with-obsidian-mcp-example"
@@ -75,6 +76,18 @@ assert_contains "$containers_dry_run_output" "upsert SearXNG web_search defaults
 assert_contains "$containers_dry_run_output" "TEAMD_WEB_SEARCH_BACKEND=searxng_json"
 assert_contains "$containers_dry_run_output" "TEAMD_WEB_SEARCH_URL=http://127.0.0.1:8888/search"
 
+containers_jaeger_dry_run_output=$(
+  "$CONTAINERS_DEPLOY_SCRIPT" --dry-run --non-interactive --no-start --with-jaeger 2>&1
+)
+
+assert_contains "$containers_jaeger_dry_run_output" "teamd-jaeger"
+assert_contains "$containers_jaeger_dry_run_output" "127.0.0.1:16686"
+assert_contains "$containers_jaeger_dry_run_output" "127.0.0.1:4318"
+assert_contains "$containers_jaeger_dry_run_output" "upsert OTLP trace export defaults in /etc/teamd/teamd.env"
+assert_contains "$containers_jaeger_dry_run_output" "TEAMD_OTLP_EXPORT_ENABLED=true"
+assert_contains "$containers_jaeger_dry_run_output" "TEAMD_OTLP_ENDPOINT=http://127.0.0.1:4318/v1/traces"
+assert_contains "$containers_jaeger_dry_run_output" "/jaeger/"
+
 containers_dry_run_start_output=$(
   "$CONTAINERS_DEPLOY_SCRIPT" --dry-run --non-interactive --with-obsidian-mcp 2>&1
 )
@@ -104,6 +117,12 @@ grep -q 'detect_primary_ipv4' "$CONTAINERS_DEPLOY_SCRIPT" \
   || fail "expected automatic primary IPv4 detection for Caddy host"
 grep -q 'default_sni $CADDY_HOST' "$CONTAINERS_DEPLOY_SCRIPT" \
   || fail "expected default_sni for IP-based TLS without explicit SNI"
+grep -q 'teamd-jaeger' "$CONTAINERS_DEPLOY_SCRIPT" \
+  || fail "expected Jaeger container support"
+grep -q 'QUERY_BASE_PATH=$JAEGER_BASE_PATH' "$CONTAINERS_DEPLOY_SCRIPT" \
+  || fail "expected Jaeger subpath support"
+grep -q 'TEAMD_OTLP_ENDPOINT' "$CONTAINERS_DEPLOY_SCRIPT" \
+  || fail "expected agentd OTLP env upsert"
 
 existing_env_dir="$SCRIPT_DIR/../target/deploy-script-test"
 existing_env="$existing_env_dir/existing.env"

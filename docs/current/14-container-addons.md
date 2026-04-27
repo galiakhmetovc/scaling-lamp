@@ -1,4 +1,4 @@
-# Container add-ons: Docker, SearXNG, Obsidian, Caddy
+# Container add-ons: Docker, SearXNG, Obsidian, Jaeger, Caddy
 
 Этот документ описывает второй deploy path: не core `agentd`, а внешнюю обвязку вокруг него.
 
@@ -29,6 +29,7 @@ Container add-ons ставятся отдельно:
 
 - `teamd-obsidian` — browser-accessible Obsidian container, если передать `--with-obsidian`.
 - filesystem-backed Obsidian MCP connector для `agentd`, если передать `--with-obsidian-mcp`.
+- `teamd-jaeger` — Jaeger UI и OTLP receiver для runtime traces, если передать `--with-jaeger`.
 
 Проверить действия без изменений:
 
@@ -358,6 +359,85 @@ curl -fsS http://127.0.0.1:5140/v1/mcp/connectors
 
 Отдельный `obsidian-cli` path можно добавить позже, если понадобится именно CLI workflow. Его надо проектировать отдельно, чтобы не создать второй скрытый tool loop. Ориентир по skill: <https://github.com/kepano/obsidian-skills/blob/main/skills/obsidian-cli/SKILL.md>.
 
+## Jaeger: web UI для runtime traces
+
+Jaeger включается явно:
+
+```bash
+./scripts/deploy-teamd-containers.sh --with-jaeger
+```
+
+Что делает скрипт:
+
+- поднимает контейнер `teamd-jaeger` на образе `jaegertracing/all-in-one`;
+- включает OTLP receiver внутри Jaeger (`COLLECTOR_OTLP_ENABLED=true`);
+- публикует UI на `127.0.0.1:${TEAMD_JAEGER_UI_PORT:-16686}`;
+- публикует OTLP/gRPC на `127.0.0.1:${TEAMD_JAEGER_OTLP_GRPC_PORT:-4317}`;
+- публикует OTLP/HTTP на `127.0.0.1:${TEAMD_JAEGER_OTLP_HTTP_PORT:-4318}`;
+- включает persistent Badger storage в `/var/lib/teamd/containers/jaeger/badger`;
+- upsert-ит в `/etc/teamd/teamd.env` настройки auto-export для `agentd`;
+- перезапускает `teamd-daemon.service` и `teamd-telegram.service`, если они существуют и не указан `--no-start`/`--no-restart-teamd`.
+
+Фактические env-переменные:
+
+```bash
+TEAMD_OTLP_EXPORT_ENABLED='true'
+TEAMD_OTLP_ENDPOINT='http://127.0.0.1:4318/v1/traces'
+TEAMD_OTLP_TIMEOUT_MS='2000'
+```
+
+Эти значения можно задать вручную без контейнерного скрипта:
+
+```toml
+[observability]
+otlp_export_enabled = true
+otlp_endpoint = "http://127.0.0.1:4318/v1/traces"
+otlp_timeout_ms = 2000
+```
+
+После включения `agentd` автоматически экспортирует completed run traces в OTLP/HTTP. Экспорт best-effort:
+
+- сбой Jaeger/OTLP не ломает chat turn;
+- ошибка экспорта пишется в `audit/runtime.jsonl` как `component=otel`, `op=export`;
+- в Jaeger уходят compact span attributes и ссылки на локальные сущности (`session_id`, `run_id`, `tool_call_id`, `artifact_id`), а не raw transcript/tool output;
+- локальный `state.sqlite`, `transcripts/`, `artifacts/` и debug-view остаются источником истины.
+
+Ручной экспорт уже существующего trace:
+
+```bash
+teamdctl trace push <trace_id>
+```
+
+Локальный просмотр без Jaeger:
+
+```bash
+teamdctl trace run <run_id>
+teamdctl trace show <trace_id>
+teamdctl trace export <trace_id>
+```
+
+URL без dedicated domain:
+
+```text
+Direct UI: http://127.0.0.1:16686/jaeger/
+Caddy UI: http://127.0.0.1:8088/jaeger/
+OTLP HTTP: http://127.0.0.1:4318/v1/traces
+```
+
+С `TEAMD_CADDY_DOMAIN='example.com'` Jaeger публикуется как:
+
+```text
+https://jaeger.example.com/
+```
+
+Почему Jaeger, а не Grafana Tempo сразу:
+
+- Jaeger all-in-one проще для одного host: один контейнер, UI и collector в одном процессе;
+- Tempo обычно требует Grafana рядом, зато лучше подходит для долгосрочного хранения большого объёма traces;
+- OpenTelemetry Collector можно добавить позже как отдельный routing/redaction layer между `agentd` и backend.
+
+Важно: Jaeger — это visual/debug слой, не база знаний и не transcript store. Не кладите в OTLP raw prompts, user messages, assistant answers, API keys, Telegram names или большие tool outputs. Для глубокого debug используйте `teamdctl session tools --results`, `teamdctl session tool-result`, `teamdctl trace show` и TUI debug-view.
+
 ## Caddy
 
 Без домена Caddy слушает local port:
@@ -370,6 +450,7 @@ Routes:
 
 - `/searxng/`;
 - `/obsidian/`.
+- `/jaeger/`, если включён `--with-jaeger`.
 
 В path mode `/searxng/` прокидывается без срезания префикса и с upstream header `X-Script-Name: /searxng`. Это важно: SearXNG генерирует root-relative ссылки и `form action`; без `X-Script-Name` browser UI уходит на `/search`, `/static/...` и фактически выпадает из `/searxng/`. Для `/searxng` без trailing slash Caddy делает redirect на `/searxng/`.
 
@@ -387,6 +468,7 @@ TEAMD_CADDY_DOMAIN='example.com' ./scripts/deploy-teamd-containers.sh --with-obs
 
 - `search.example.com`;
 - `obsidian.example.com`.
+- `jaeger.example.com`, если включён `--with-jaeger`.
 
 ## Obsidian web UI и мобильный браузер
 
@@ -430,3 +512,6 @@ TEAMD_CADDY_DOMAIN='example.com' ./scripts/deploy-teamd-containers.sh --with-obs
 - LinuxServer Obsidian Docker image: <https://github.com/linuxserver/docker-obsidian>
 - MCPVault filesystem-backed Obsidian MCP: <https://github.com/bitbonsai/mcpvault>
 - Obsidian CLI skill: <https://github.com/kepano/obsidian-skills/blob/main/skills/obsidian-cli/SKILL.md>
+- Jaeger getting started: <https://www.jaegertracing.io/docs/latest/getting-started/>
+- Jaeger deployment/docker: <https://www.jaegertracing.io/docs/latest/deployment/>
+- OpenTelemetry OTLP protocol: <https://opentelemetry.io/docs/specs/otlp/>

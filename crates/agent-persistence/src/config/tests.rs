@@ -45,6 +45,9 @@ fn base_env(root: &Path) -> ConfigEnv {
         xdg_config_home: Some(root.join("xdg-config")),
         xdg_state_home: Some(root.join("xdg-state")),
         workspace_default_root_override: None,
+        otlp_export_enabled_override: None,
+        otlp_endpoint_override: None,
+        otlp_timeout_ms_override: None,
     }
 }
 
@@ -93,6 +96,7 @@ fn validate_rejects_relative_data_dir() {
         context: Default::default(),
         workspace: Default::default(),
         web: Default::default(),
+        observability: Default::default(),
         runtime_timing: Default::default(),
         runtime_limits: Default::default(),
     };
@@ -373,6 +377,39 @@ search_url = "http://127.0.0.1:8888/search"
 }
 
 #[test]
+fn load_merges_observability_otlp_from_file_and_env() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let config_path = temp.path().join("teamd.toml");
+    fs::write(
+        &config_path,
+        r#"
+data_dir = "/tmp/teamd"
+
+[observability]
+otlp_export_enabled = false
+otlp_endpoint = "http://127.0.0.1:4318/v1/traces"
+otlp_timeout_ms = 2500
+"#,
+    )
+    .expect("write config");
+
+    let mut env = base_env(temp.path());
+    env.config_path = Some(config_path);
+    env.otlp_export_enabled_override = Some(true);
+    env.otlp_endpoint_override = Some("http://127.0.0.1:4319/v1/traces".to_string());
+    env.otlp_timeout_ms_override = Some(1500);
+
+    let config = AppConfig::load_from_env(&env).expect("load config");
+
+    assert!(config.observability.otlp_export_enabled);
+    assert_eq!(
+        config.observability.otlp_endpoint,
+        "http://127.0.0.1:4319/v1/traces"
+    );
+    assert_eq!(config.observability.otlp_timeout_ms, 1500);
+}
+
+#[test]
 fn validate_rejects_invalid_runtime_limit_bounds() {
     let config = AppConfig {
         data_dir: PathBuf::from("/tmp/teamd"),
@@ -384,6 +421,7 @@ fn validate_rejects_invalid_runtime_limit_bounds() {
         context: Default::default(),
         workspace: Default::default(),
         web: Default::default(),
+        observability: Default::default(),
         runtime_timing: Default::default(),
         runtime_limits: super::RuntimeLimitsConfig {
             agent_list_default_limit: 200,
@@ -476,6 +514,7 @@ fn validate_rejects_invalid_auto_compaction_ratio() {
         },
         workspace: Default::default(),
         web: Default::default(),
+        observability: Default::default(),
         runtime_timing: Default::default(),
         runtime_limits: Default::default(),
     };

@@ -26,6 +26,10 @@ fn process_cli_accepts_russian_version_and_update_commands() {
         super::ProcessInvocation::parse(["trace", "export", "0123456789abcdef0123456789abcdef"])
             .is_ok()
     );
+    assert!(
+        super::ProcessInvocation::parse(["trace", "push", "0123456789abcdef0123456789abcdef"])
+            .is_ok()
+    );
 }
 
 #[test]

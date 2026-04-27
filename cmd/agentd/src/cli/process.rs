@@ -50,6 +50,7 @@ pub(super) fn execute_command(app: &App, command: Command) -> Result<String, Boo
         Command::TraceShow { trace_id } => render::show_trace(&app.store()?, &trace_id),
         Command::TraceRun { run_id } => render::show_trace_for_run(&app.store()?, &run_id),
         Command::TraceExport { trace_id } => render::export_trace_json(&app.store()?, &trace_id),
+        Command::TracePush { trace_id } => render::push_trace_to_otlp(app, &trace_id),
         Command::Version => app.render_version_info(),
         Command::Update { tag } => app.update_runtime_binary(tag.as_deref()),
         Command::ProviderSmoke { prompt } => render::run_provider_smoke(app, &prompt),

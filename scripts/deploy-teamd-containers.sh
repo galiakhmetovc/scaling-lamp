@@ -11,6 +11,7 @@ ENABLE_SEARXNG=1
 ENABLE_OBSIDIAN=0
 ENABLE_OBSIDIAN_MCP=0
 WRITE_OBSIDIAN_MCP_EXAMPLE=0
+ENABLE_JAEGER=0
 ENABLE_CADDY=1
 RESTART_TEAMD_SERVICES=1
 
@@ -48,6 +49,22 @@ OBSIDIAN_MCP_PACKAGE=${TEAMD_OBSIDIAN_MCP_PACKAGE:-@bitbonsai/mcpvault@latest}
 OBSIDIAN_MCP_NODE_IMAGE=${TEAMD_OBSIDIAN_MCP_NODE_IMAGE:-docker.io/library/node:22-alpine}
 OBSIDIAN_PUID=${TEAMD_OBSIDIAN_PUID:-}
 OBSIDIAN_PGID=${TEAMD_OBSIDIAN_PGID:-}
+
+JAEGER_UI_PORT=${TEAMD_JAEGER_UI_PORT:-16686}
+JAEGER_OTLP_GRPC_PORT=${TEAMD_JAEGER_OTLP_GRPC_PORT:-4317}
+JAEGER_OTLP_HTTP_PORT=${TEAMD_JAEGER_OTLP_HTTP_PORT:-4318}
+JAEGER_IMAGE=${TEAMD_JAEGER_IMAGE:-docker.io/jaegertracing/all-in-one:1.76.0}
+JAEGER_DIR=$CONTAINERS_ROOT/jaeger
+JAEGER_DATA_DIR=$DATA_ROOT/jaeger/badger
+JAEGER_COMPOSE=$JAEGER_DIR/docker-compose.yml
+if [ "${TEAMD_JAEGER_BASE_PATH+x}" ]; then
+  JAEGER_BASE_PATH=$TEAMD_JAEGER_BASE_PATH
+elif [ -n "${TEAMD_CADDY_DOMAIN:-}" ]; then
+  JAEGER_BASE_PATH=/
+else
+  JAEGER_BASE_PATH=/jaeger
+fi
+OTLP_EXPORT_TIMEOUT_MS=${TEAMD_OTLP_TIMEOUT_MS:-2000}
 
 CADDY_DOMAIN=${TEAMD_CADDY_DOMAIN:-}
 CADDY_HOST=${TEAMD_CADDY_HOST:-}
@@ -100,9 +117,11 @@ Options:
   --with-obsidian-mcp   Deploy Obsidian and an agentd MCP connector for the vault.
   --with-obsidian-mcp-example
                          Write an agentd stdio MCP connector example for the vault.
+  --with-jaeger         Also deploy Jaeger UI and enable agentd OTLP auto-export.
   --no-restart-teamd    Do not restart teamd systemd services after writing MCP config.
   --searxng-port PORT   Local SearXNG port, default: $SEARXNG_PORT.
   --obsidian-port PORT  Local Obsidian port, default: $OBSIDIAN_PORT.
+  --jaeger-ui-port PORT Local Jaeger UI port, default: $JAEGER_UI_PORT.
   -h, --help            Show this help.
 
 Environment overrides:
@@ -132,6 +151,12 @@ Environment overrides:
                                  default: $OBSIDIAN_MCP_PACKAGE.
   TEAMD_OBSIDIAN_MCP_NODE_IMAGE  Docker image used to run the MCP package,
                                  default: $OBSIDIAN_MCP_NODE_IMAGE.
+  TEAMD_JAEGER_IMAGE             Jaeger all-in-one image, default: $JAEGER_IMAGE.
+  TEAMD_JAEGER_UI_PORT           Jaeger UI localhost port, default: $JAEGER_UI_PORT.
+  TEAMD_JAEGER_OTLP_GRPC_PORT    Jaeger OTLP/gRPC localhost port, default: $JAEGER_OTLP_GRPC_PORT.
+  TEAMD_JAEGER_OTLP_HTTP_PORT    Jaeger OTLP/HTTP localhost port, default: $JAEGER_OTLP_HTTP_PORT.
+  TEAMD_JAEGER_BASE_PATH         Jaeger UI base path. Default: "$JAEGER_BASE_PATH".
+  TEAMD_OTLP_TIMEOUT_MS          agentd OTLP export timeout, default: $OTLP_EXPORT_TIMEOUT_MS.
   TEAMD_CONFIG / TEAMD_DEPLOY_CONFIG_FILE
                                  agentd config.toml path, default: $CONFIG_FILE.
   TEAMD_DEPLOY_ENV_FILE          agentd env file path, default: $ENV_FILE.
@@ -430,6 +455,87 @@ configure_agentd_web_search_env() {
     [ ! -s "$tmp_env" ] || printf '\n'
     printf 'TEAMD_WEB_SEARCH_BACKEND=%s\n' "$(quote_arg "searxng_json")"
     printf 'TEAMD_WEB_SEARCH_URL=%s\n' "$(quote_arg "$search_url")"
+  } > "$tmp_new"
+
+  env_group=root
+  if getent group "$SERVICE_GROUP" >/dev/null 2>&1; then
+    env_group=$SERVICE_GROUP
+  fi
+  run_root install -m 0640 -o root -g "$env_group" "$tmp_new" "$ENV_FILE"
+  rm -f "$tmp_env" "$tmp_new"
+}
+
+write_jaeger_files() {
+  if [ "$DRY_RUN" -eq 1 ]; then
+    print_cmd mkdir -p "$JAEGER_DIR" "$JAEGER_DATA_DIR"
+    print_cmd sh -c "write $JAEGER_COMPOSE for teamd-jaeger"
+    return 0
+  fi
+
+  run_root mkdir -p "$JAEGER_DIR" "$JAEGER_DATA_DIR"
+  tmp_compose=$(mktemp)
+  trap 'rm -f "$tmp_compose"' EXIT INT TERM
+
+  cat > "$tmp_compose" <<EOF
+services:
+  jaeger:
+    image: $JAEGER_IMAGE
+    container_name: teamd-jaeger
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:$JAEGER_UI_PORT:16686"
+      - "127.0.0.1:$JAEGER_OTLP_GRPC_PORT:4317"
+      - "127.0.0.1:$JAEGER_OTLP_HTTP_PORT:4318"
+    networks:
+      - $EDGE_NETWORK
+    volumes:
+      - "$JAEGER_DATA_DIR:/badger:rw"
+    environment:
+      - COLLECTOR_OTLP_ENABLED=true
+      - SPAN_STORAGE_TYPE=badger
+      - BADGER_EPHEMERAL=false
+      - BADGER_DIRECTORY_VALUE=/badger/data
+      - BADGER_DIRECTORY_KEY=/badger/key
+      - QUERY_BASE_PATH=$JAEGER_BASE_PATH
+
+networks:
+  $EDGE_NETWORK:
+    external: true
+EOF
+
+  run_root install -m 0644 -o root -g root "$tmp_compose" "$JAEGER_COMPOSE"
+}
+
+configure_agentd_otlp_env() {
+  env_parent=$(dirname "$ENV_FILE")
+  otlp_endpoint="http://127.0.0.1:$JAEGER_OTLP_HTTP_PORT/v1/traces"
+
+  if [ "$DRY_RUN" -eq 1 ]; then
+    print_cmd mkdir -p "$env_parent"
+    print_cmd sh -c "upsert OTLP trace export defaults in $ENV_FILE"
+    return 0
+  fi
+
+  run_root mkdir -p "$env_parent"
+
+  tmp_env=$(mktemp)
+  tmp_new=$(mktemp)
+  if [ -e "$ENV_FILE" ]; then
+    awk '
+      !/^(export[[:space:]]+)?TEAMD_OTLP_EXPORT_ENABLED=/ &&
+      !/^(export[[:space:]]+)?TEAMD_OTLP_ENDPOINT=/ &&
+      !/^(export[[:space:]]+)?TEAMD_OTLP_TIMEOUT_MS=/
+    ' "$ENV_FILE" > "$tmp_env"
+  else
+    : > "$tmp_env"
+  fi
+
+  {
+    cat "$tmp_env"
+    [ ! -s "$tmp_env" ] || printf '\n'
+    printf 'TEAMD_OTLP_EXPORT_ENABLED=%s\n' "$(quote_arg "true")"
+    printf 'TEAMD_OTLP_ENDPOINT=%s\n' "$(quote_arg "$otlp_endpoint")"
+    printf 'TEAMD_OTLP_TIMEOUT_MS=%s\n' "$(quote_arg "$OTLP_EXPORT_TIMEOUT_MS")"
   } > "$tmp_new"
 
   env_group=root
@@ -763,6 +869,24 @@ networks:
     external: true
 EOF
 
+  jaeger_domain_block=
+  jaeger_http_redirect=
+  jaeger_handle=
+  if [ "$ENABLE_JAEGER" -eq 1 ]; then
+    if [ -n "$CADDY_DOMAIN" ]; then
+      jaeger_domain_block="
+jaeger.$CADDY_DOMAIN {
+  reverse_proxy teamd-jaeger:16686
+}
+"
+    else
+      jaeger_http_redirect="  redir /jaeger /jaeger/ 308"
+      jaeger_handle='  handle /jaeger/* {
+    reverse_proxy teamd-jaeger:16686
+  }'
+    fi
+  fi
+
   if [ -n "$CADDY_DOMAIN" ]; then
     cat > "$tmp_caddyfile" <<EOF
 search.$CADDY_DOMAIN {
@@ -772,6 +896,7 @@ search.$CADDY_DOMAIN {
 obsidian.$CADDY_DOMAIN {
   reverse_proxy teamd-obsidian:$OBSIDIAN_CONTAINER_PORT
 }
+$jaeger_domain_block
 EOF
   else
     if [ -n "$OBSIDIAN_SUBFOLDER" ]; then
@@ -791,12 +916,14 @@ EOF
   redir /searxng /searxng/ 308
   redir /obsidian https://$CADDY_HOST:$CADDY_HTTPS_PORT/obsidian/ 308
   redir /obsidian/* https://$CADDY_HOST:$CADDY_HTTPS_PORT{uri} 308
+$jaeger_http_redirect
 
   handle /searxng/* {
     reverse_proxy teamd-searxng:8080 {
       header_up X-Script-Name /searxng
     }
   }
+$jaeger_handle
 
   respond / "teamD container edge: /searxng/ on HTTP, /obsidian/ on HTTPS"
 }
@@ -809,6 +936,7 @@ https://$CADDY_HOST {
       header_up X-Script-Name /searxng
     }
   }
+$jaeger_handle
 
   $obsidian_route {
     reverse_proxy teamd-obsidian:$OBSIDIAN_CONTAINER_PORT
@@ -821,12 +949,14 @@ EOF
       cat > "$tmp_caddyfile" <<EOF
 :80 {
   redir /searxng /searxng/ 308
+$jaeger_http_redirect
 
   handle /searxng/* {
     reverse_proxy teamd-searxng:8080 {
       header_up X-Script-Name /searxng
     }
   }
+$jaeger_handle
 
   $obsidian_route {
     reverse_proxy teamd-obsidian:$OBSIDIAN_CONTAINER_PORT
@@ -894,6 +1024,7 @@ while [ "$#" -gt 0 ]; do
       ENABLE_OBSIDIAN=1
       WRITE_OBSIDIAN_MCP_EXAMPLE=1
       ;;
+    --with-jaeger) ENABLE_JAEGER=1 ;;
     --no-restart-teamd) RESTART_TEAMD_SERVICES=0 ;;
     --searxng-port)
       shift
@@ -906,6 +1037,12 @@ while [ "$#" -gt 0 ]; do
       [ "$#" -gt 0 ] || fail "--obsidian-port requires a value"
       valid_port "$1" || fail "invalid --obsidian-port: $1"
       OBSIDIAN_PORT=$1
+      ;;
+    --jaeger-ui-port)
+      shift
+      [ "$#" -gt 0 ] || fail "--jaeger-ui-port requires a value"
+      valid_port "$1" || fail "invalid --jaeger-ui-port: $1"
+      JAEGER_UI_PORT=$1
       ;;
     -h|--help)
       usage
@@ -932,8 +1069,8 @@ if [ "$(id -u)" -ne 0 ] && [ "$DRY_RUN" -eq 0 ]; then
   need_command sudo
 fi
 
-if [ "$ENABLE_SEARXNG" -eq 0 ] && [ "$ENABLE_OBSIDIAN" -eq 0 ] && [ "$ENABLE_CADDY" -eq 0 ]; then
-  fail "nothing to deploy: SearXNG disabled and Obsidian not enabled"
+if [ "$ENABLE_SEARXNG" -eq 0 ] && [ "$ENABLE_OBSIDIAN" -eq 0 ] && [ "$ENABLE_JAEGER" -eq 0 ] && [ "$ENABLE_CADDY" -eq 0 ]; then
+  fail "nothing to deploy: SearXNG disabled, Obsidian not enabled, Jaeger not enabled, and Caddy disabled"
 fi
 
 ensure_docker
@@ -952,6 +1089,12 @@ if [ "$ENABLE_OBSIDIAN" -eq 1 ]; then
   compose_up "$OBSIDIAN_COMPOSE"
 fi
 
+if [ "$ENABLE_JAEGER" -eq 1 ]; then
+  write_jaeger_files
+  configure_agentd_otlp_env
+  compose_up "$JAEGER_COMPOSE"
+fi
+
 if [ "$WRITE_OBSIDIAN_MCP_EXAMPLE" -eq 1 ]; then
   write_obsidian_mcp_example
 fi
@@ -967,7 +1110,7 @@ if [ "$ENABLE_CADDY" -eq 1 ]; then
   reload_caddy_if_running
 fi
 
-if [ "$ENABLE_SEARXNG" -eq 1 ] || [ "$ENABLE_OBSIDIAN_MCP" -eq 1 ]; then
+if [ "$ENABLE_SEARXNG" -eq 1 ] || [ "$ENABLE_OBSIDIAN_MCP" -eq 1 ] || [ "$ENABLE_JAEGER" -eq 1 ]; then
   restart_teamd_services
 fi
 
@@ -1038,6 +1181,33 @@ EOF
   fi
 fi
 
+if [ "$ENABLE_JAEGER" -eq 1 ]; then
+  cat <<EOF
+  Jaeger:
+    Container: teamd-jaeger
+    UI URL: http://127.0.0.1:$JAEGER_UI_PORT$JAEGER_BASE_PATH
+    OTLP gRPC: 127.0.0.1:$JAEGER_OTLP_GRPC_PORT
+    OTLP HTTP: http://127.0.0.1:$JAEGER_OTLP_HTTP_PORT/v1/traces
+    Compose: $JAEGER_COMPOSE
+    Start command: docker compose -f $JAEGER_COMPOSE up -d
+    Storage: $JAEGER_DATA_DIR
+    agentd OTLP auto-export:
+      Env file: $ENV_FILE
+      TEAMD_OTLP_EXPORT_ENABLED=true
+      TEAMD_OTLP_ENDPOINT=http://127.0.0.1:$JAEGER_OTLP_HTTP_PORT/v1/traces
+      TEAMD_OTLP_TIMEOUT_MS=$OTLP_EXPORT_TIMEOUT_MS
+EOF
+  if [ -n "$CADDY_DOMAIN" ]; then
+    cat <<EOF
+    Caddy URL: https://jaeger.$CADDY_DOMAIN/
+EOF
+  else
+    cat <<EOF
+    Caddy URL: http://127.0.0.1:$CADDY_HTTP_PORT/jaeger/
+EOF
+  fi
+fi
+
 if [ "$ENABLE_CADDY" -eq 1 ]; then
   cat <<EOF
   Caddy:
@@ -1049,17 +1219,18 @@ if [ "$ENABLE_CADDY" -eq 1 ]; then
 EOF
   if [ -n "$CADDY_DOMAIN" ]; then
     cat <<EOF
-    Routes with TEAMD_CADDY_DOMAIN: search.<domain> and obsidian.<domain>
+    Routes with TEAMD_CADDY_DOMAIN: search.<domain>, obsidian.<domain> and jaeger.<domain> when enabled
 EOF
   elif [ -n "$CADDY_HTTPS_PORT" ]; then
     cat <<EOF
     Routes without TEAMD_CADDY_DOMAIN:
       HTTP: /searxng/
+      HTTP: /jaeger/ when enabled
       HTTPS: https://$CADDY_HOST:$CADDY_HTTPS_PORT/obsidian/
 EOF
   else
     cat <<EOF
-    Routes without TEAMD_CADDY_DOMAIN: /searxng/ and /obsidian/
+    Routes without TEAMD_CADDY_DOMAIN: /searxng/, /obsidian/ and /jaeger/ when enabled
 EOF
   fi
 fi

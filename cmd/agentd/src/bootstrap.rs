@@ -17,8 +17,8 @@ use agent_persistence::{
     AgentRepository, AppConfig, ConfigError, ContextSummaryRepository, JobRepository,
     PersistenceScaffold, PersistenceStore, PlanRepository, RecordConversionError, RunRecord,
     RunRepository, RunSummaryRollup, SessionActiveJobCounts, SessionRepository, StoreError,
-    TranscriptRepository, audit::AuditLogConfig, normalize_absolute_path, recovery,
-    validate_workspace_root_path,
+    TraceRepository, TranscriptRepository, audit::AuditLogConfig, normalize_absolute_path,
+    recovery, validate_workspace_root_path,
 };
 use agent_runtime::RuntimeScaffold;
 use agent_runtime::agent::{AgentSchedule, AgentScheduleDeliveryMode, AgentScheduleMode};

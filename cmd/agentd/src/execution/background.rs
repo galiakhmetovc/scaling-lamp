@@ -71,6 +71,17 @@ impl ExecutionService {
             }
 
             let updated_job = self.load_job(store, &job.id)?;
+            if matches!(
+                updated_job.status,
+                JobStatus::Completed
+                    | JobStatus::Failed
+                    | JobStatus::Blocked
+                    | JobStatus::Cancelled
+            ) && let Some(run_id) = updated_job.run_id.clone()
+                && !report.terminal_run_ids.contains(&run_id)
+            {
+                report.terminal_run_ids.push(run_id);
+            }
             self.sync_schedule_state_from_job(store, &updated_job, now)?;
             self.deliver_callback_for_job(store, &updated_job, now)?;
             let updated_job = self.load_job(store, &job.id)?;
