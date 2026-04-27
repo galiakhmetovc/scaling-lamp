@@ -2,7 +2,7 @@ use agent_persistence::{
     AgentRepository, AgentScheduleRecord, AppConfig, ContextOffloadRepository,
     ContextSummaryRepository, JobRecord, JobRepository, MissionRecord, MissionRepository,
     PersistenceStore, RunRecord, RunRepository, SessionInboxRepository, SessionRecord,
-    SessionRepository, TranscriptRepository,
+    SessionRepository, ToolCallRecord, ToolCallRepository, TranscriptRepository,
 };
 use agent_runtime::agent::{
     AgentSchedule, AgentScheduleDeliveryMode, AgentScheduleInit, AgentScheduleMode,
@@ -623,6 +623,32 @@ fn render_system_blocks_include_interagent_section() {
             ),
         ))
         .expect("put chain transcript");
+    let mut run = RunEngine::new("run-system-chain", "session-system-chain", None, 20);
+    run.start(20).expect("start run");
+    run.complete("done", 21).expect("complete run");
+    store
+        .put_run(&RunRecord::try_from(run.snapshot()).expect("run record"))
+        .expect("put run");
+    store
+        .put_tool_call(&ToolCallRecord {
+            id: "toolcall-system-chain-1".to_string(),
+            session_id: "session-system-chain".to_string(),
+            run_id: "run-system-chain".to_string(),
+            provider_tool_call_id: "call-system-chain-1".to_string(),
+            tool_name: "schedule_create".to_string(),
+            arguments_json: r#"{"mode":once}"#.to_string(),
+            summary: "schedule_create mode=once".to_string(),
+            status: "failed".to_string(),
+            error: Some("invalid JSON: mode must be quoted".to_string()),
+            result_summary: None,
+            result_preview: None,
+            result_artifact_id: None,
+            result_truncated: false,
+            result_byte_len: None,
+            requested_at: 30,
+            updated_at: 31,
+        })
+        .expect("put tool call");
 
     let rendered = app
         .render_system_blocks("session-system-chain")
@@ -637,6 +663,13 @@ fn render_system_blocks_include_interagent_section() {
     assert!(rendered.contains("parent_session_id=session-origin"));
     assert!(rendered.contains("delegation_label=agent-chain:chain-system"));
     assert!(rendered.contains("continuation_grant_pending=false"));
+    assert!(rendered.contains("[AutonomyState]"));
+    assert!(rendered.contains("Autonomy State:"));
+    assert!(rendered.contains("InterAgent Chain: chain-system state=continued_once"));
+    assert!(rendered.contains("[RecentToolActivity]"));
+    assert!(rendered.contains("Recent Tool Activity:"));
+    assert!(rendered.contains("failed schedule_create"));
+    assert!(rendered.contains("mode must be quoted"));
 }
 
 #[cfg(unix)]

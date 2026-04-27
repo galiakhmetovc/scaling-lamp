@@ -126,6 +126,51 @@ impl PlanSnapshot {
         lines.join("\n")
     }
 
+    pub fn prompt_view_text(&self) -> String {
+        if self.is_empty() {
+            return String::new();
+        }
+
+        let mut lines = vec!["Plan:".to_string()];
+        if let Some(goal) = &self.goal {
+            lines.push(format!("Goal: {goal}"));
+        }
+
+        push_plan_section(
+            &mut lines,
+            "Current:",
+            self.items
+                .iter()
+                .filter(|item| item.status == PlanItemStatus::InProgress),
+        );
+        push_plan_section(
+            &mut lines,
+            "Blocked:",
+            self.items
+                .iter()
+                .filter(|item| item.status == PlanItemStatus::Blocked),
+        );
+        push_plan_section(
+            &mut lines,
+            "Next:",
+            self.items
+                .iter()
+                .filter(|item| item.status == PlanItemStatus::Pending)
+                .take(3),
+        );
+
+        let completed_count = self
+            .items
+            .iter()
+            .filter(|item| item.status == PlanItemStatus::Completed)
+            .count();
+        if completed_count > 0 {
+            lines.push(format!("Completed: {completed_count}"));
+        }
+        lines.push("Use plan_snapshot for the full plan.".to_string());
+        lines.join("\n")
+    }
+
     pub fn plan_exists(&self) -> bool {
         self.goal.is_some() || !self.items.is_empty()
     }
@@ -437,6 +482,33 @@ impl PlanSnapshot {
     }
 }
 
+fn push_plan_section<'a>(
+    lines: &mut Vec<String>,
+    heading: &str,
+    items: impl Iterator<Item = &'a PlanItem>,
+) {
+    let items = items.collect::<Vec<_>>();
+    if items.is_empty() {
+        return;
+    }
+
+    lines.push(heading.to_string());
+    for item in items {
+        lines.push(format!(
+            "- [{}] {}: {}",
+            item.status.as_str(),
+            item.id,
+            item.content
+        ));
+        if !item.depends_on.is_empty() {
+            lines.push(format!("  depends_on: {}", item.depends_on.join(", ")));
+        }
+        if let Some(blocked_reason) = &item.blocked_reason {
+            lines.push(format!("  blocked_reason: {blocked_reason}"));
+        }
+    }
+}
+
 impl fmt::Display for PlanMutationError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -514,6 +586,96 @@ mod tests {
         assert!(rendered.contains("- [in_progress] persist: Persist plan snapshot"));
         assert!(rendered.contains("depends_on: inspect"));
         assert!(rendered.contains("- [completed] wire: Wire prompt assembly"));
+    }
+
+    #[test]
+    fn prompt_view_text_keeps_current_blocked_next_and_completed_count() {
+        let snapshot = PlanSnapshot {
+            session_id: "session-1".to_string(),
+            goal: Some("Ship budgeted prompt contract".to_string()),
+            items: vec![
+                PlanItem {
+                    id: "done-1".to_string(),
+                    content: "Read existing prompt code".to_string(),
+                    status: PlanItemStatus::Completed,
+                    depends_on: Vec::new(),
+                    notes: Vec::new(),
+                    blocked_reason: None,
+                    parent_task_id: None,
+                },
+                PlanItem {
+                    id: "current".to_string(),
+                    content: "Implement PlanPromptView".to_string(),
+                    status: PlanItemStatus::InProgress,
+                    depends_on: Vec::new(),
+                    notes: Vec::new(),
+                    blocked_reason: None,
+                    parent_task_id: None,
+                },
+                PlanItem {
+                    id: "blocked".to_string(),
+                    content: "Verify remote deployment".to_string(),
+                    status: PlanItemStatus::Blocked,
+                    depends_on: Vec::new(),
+                    notes: Vec::new(),
+                    blocked_reason: Some("waiting for server token".to_string()),
+                    parent_task_id: None,
+                },
+                PlanItem {
+                    id: "next-1".to_string(),
+                    content: "Add AutonomyState layer".to_string(),
+                    status: PlanItemStatus::Pending,
+                    depends_on: Vec::new(),
+                    notes: Vec::new(),
+                    blocked_reason: None,
+                    parent_task_id: None,
+                },
+                PlanItem {
+                    id: "next-2".to_string(),
+                    content: "Add RecentToolActivity layer".to_string(),
+                    status: PlanItemStatus::Pending,
+                    depends_on: Vec::new(),
+                    notes: Vec::new(),
+                    blocked_reason: None,
+                    parent_task_id: None,
+                },
+                PlanItem {
+                    id: "next-3".to_string(),
+                    content: "Update system view".to_string(),
+                    status: PlanItemStatus::Pending,
+                    depends_on: Vec::new(),
+                    notes: Vec::new(),
+                    blocked_reason: None,
+                    parent_task_id: None,
+                },
+                PlanItem {
+                    id: "next-4".to_string(),
+                    content: "Write deployment notes".to_string(),
+                    status: PlanItemStatus::Pending,
+                    depends_on: Vec::new(),
+                    notes: Vec::new(),
+                    blocked_reason: None,
+                    parent_task_id: None,
+                },
+            ],
+            updated_at: 10,
+        };
+
+        let rendered = snapshot.prompt_view_text();
+
+        assert!(rendered.contains("Plan:"));
+        assert!(rendered.contains("Goal: Ship budgeted prompt contract"));
+        assert!(rendered.contains("Current:"));
+        assert!(rendered.contains("- [in_progress] current: Implement PlanPromptView"));
+        assert!(rendered.contains("Blocked:"));
+        assert!(rendered.contains("- [blocked] blocked: Verify remote deployment"));
+        assert!(rendered.contains("blocked_reason: waiting for server token"));
+        assert!(rendered.contains("Next:"));
+        assert!(rendered.contains("- [pending] next-1: Add AutonomyState layer"));
+        assert!(rendered.contains("- [pending] next-3: Update system view"));
+        assert!(!rendered.contains("next-4"));
+        assert!(rendered.contains("Completed: 1"));
+        assert!(rendered.contains("Use plan_snapshot for the full plan."));
     }
 
     #[test]

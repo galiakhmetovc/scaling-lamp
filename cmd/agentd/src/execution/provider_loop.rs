@@ -14,7 +14,10 @@ use agent_runtime::context::{
 };
 use agent_runtime::permission::PermissionAction;
 use agent_runtime::plan::{PlanItem, PlanItemStatus, PlanSnapshot};
-use agent_runtime::prompt::{PromptAssembly, PromptAssemblyInput};
+use agent_runtime::prompt::{
+    AutonomyState, PromptAssembly, PromptAssemblyInput, RecentToolActivity,
+    RecentToolActivityEntry, SessionHeadRuntime,
+};
 use agent_runtime::provider::{
     ProviderContinuationMessage, ProviderError, ProviderMessage, ProviderRequest, ProviderResponse,
     ProviderStreamEvent, ProviderStreamMode, ProviderToolCall, ProviderToolDefinition,
@@ -104,6 +107,21 @@ struct AutoCompactionDecision {
     estimated_prompt_tokens: u32,
     trigger_threshold_tokens: u32,
     context_window_tokens: u32,
+}
+
+fn recent_tool_activity_entry(record: ToolCallRecord) -> RecentToolActivityEntry {
+    let summary = record
+        .result_summary
+        .clone()
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or(record.summary);
+    RecentToolActivityEntry {
+        status: record.status,
+        tool_name: record.tool_name,
+        summary,
+        artifact_id: record.result_artifact_id,
+        error: record.error,
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -904,6 +922,96 @@ impl ExecutionService {
         )
     }
 
+    fn session_head_runtime(
+        &self,
+        provider: Option<&dyn ProviderDriver>,
+        session: &Session,
+        model: Option<&str>,
+    ) -> SessionHeadRuntime {
+        let resolved_model = model
+            .map(str::to_string)
+            .or_else(|| session.settings.model.clone())
+            .or_else(|| provider.and_then(|provider| provider.descriptor().default_model.clone()));
+        let context_window_tokens =
+            provider.and_then(|provider| self.resolve_context_window_tokens(provider, model));
+        let auto_compaction_trigger_ratio = Some(self.config.context_auto_compaction_trigger_ratio);
+        SessionHeadRuntime {
+            provider_name: provider.map(|provider| provider.descriptor().name.clone()),
+            model: resolved_model,
+            think_level: session.settings.think_level.clone(),
+            context_window_tokens,
+            auto_compaction_trigger_ratio,
+            usable_context_tokens: SessionHeadRuntime::usable_context_tokens(
+                context_window_tokens,
+                auto_compaction_trigger_ratio,
+            ),
+            estimated_prompt_tokens: None,
+        }
+    }
+
+    fn autonomy_state_for_session(
+        &self,
+        session: &Session,
+        schedule: Option<agent_runtime::prompt::SessionHeadScheduleSummary>,
+    ) -> Option<AutonomyState> {
+        let turn_source = session
+            .delegation_label
+            .as_deref()
+            .and_then(|label| {
+                if label.starts_with("agent-schedule:") {
+                    Some("schedule")
+                } else if label.starts_with("agent-chain:") {
+                    Some("agent2agent")
+                } else {
+                    None
+                }
+            })
+            .or_else(|| session.parent_session_id.as_ref().map(|_| "subagent"))
+            .map(str::to_string);
+        if turn_source.is_none() && schedule.is_none() {
+            return None;
+        }
+        Some(AutonomyState {
+            turn_source,
+            schedule,
+            interagent_lines: Vec::new(),
+        })
+    }
+
+    fn recent_tool_activity(
+        &self,
+        store: &PersistenceStore,
+        session_id: &str,
+    ) -> Result<Option<RecentToolActivity>, ExecutionError> {
+        let mut failures = Vec::new();
+        let mut successes = Vec::new();
+        for record in store
+            .list_tool_calls_for_session(session_id)
+            .map_err(ExecutionError::Store)?
+            .into_iter()
+            .rev()
+        {
+            if record.status == "failed" && failures.len() < 8 {
+                failures.push(recent_tool_activity_entry(record));
+            } else if record.status == "completed"
+                && (record.result_summary.is_some() || record.result_artifact_id.is_some())
+                && successes.len() < 3
+            {
+                successes.push(recent_tool_activity_entry(record));
+            }
+            if failures.len() >= 8 && successes.len() >= 3 {
+                break;
+            }
+        }
+        failures.reverse();
+        successes.reverse();
+        let entries = failures.into_iter().chain(successes).collect::<Vec<_>>();
+        if entries.is_empty() {
+            return Ok(None);
+        }
+        Ok(Some(RecentToolActivity { entries }))
+    }
+
     fn auto_compaction_decision(
         &self,
         store: &PersistenceStore,
@@ -917,7 +1025,14 @@ impl ExecutionService {
             return Ok(None);
         };
         let workspace = self.load_session_workspace(store, session_id)?;
-        let prompt_messages = self.prompt_messages(store, session_id, &workspace)?;
+        let prompt_messages = self.prompt_messages(
+            store,
+            Some(provider),
+            session_id,
+            &workspace,
+            model,
+            instructions,
+        )?;
         let estimated_prompt_tokens =
             Self::estimate_prompt_tokens(&prompt_messages.messages, instructions);
         let trigger_threshold_tokens = ((context_window_tokens as f64)
@@ -1009,8 +1124,11 @@ impl ExecutionService {
     fn prompt_messages(
         &self,
         store: &PersistenceStore,
+        provider: Option<&dyn ProviderDriver>,
         session_id: &str,
         workspace: &WorkspaceRef,
+        model: Option<&str>,
+        instructions: Option<&str>,
     ) -> Result<PromptMessages, ExecutionError> {
         let session = Session::try_from(
             store
@@ -1090,15 +1208,20 @@ impl ExecutionService {
             })
             .transpose()?
             .flatten();
-        let session_head = prompting::build_session_head(
-            &session,
-            &agent_name,
+        let agent_home = agents::agent_home(&self.config.data_dir, &session.agent_profile_id);
+        let runtime = self.session_head_runtime(provider, &session, model);
+        let schedule_for_autonomy = schedule.clone();
+        let session_head = prompting::build_session_head(prompting::BuildSessionHeadInput {
+            session: &session,
+            agent_name: &agent_name,
+            agent_home: Some(agent_home.as_path()),
+            runtime: Some(runtime),
             schedule,
-            &transcripts,
-            context_summary.as_ref(),
-            &runs,
+            transcripts: &transcripts,
+            context_summary: context_summary.as_ref(),
+            runs: &runs,
             workspace,
-        );
+        });
         let system_prompt =
             prompting::load_system_prompt(&self.config.data_dir, &session.agent_profile_id);
         let agents_prompt =
@@ -1130,18 +1253,29 @@ impl ExecutionService {
         );
         let active_skill_prompts =
             prompting::load_active_skill_prompts(&skills_catalog, &active_skill_status);
+        let autonomy_state = self.autonomy_state_for_session(&session, schedule_for_autonomy);
+        let recent_tool_activity = self.recent_tool_activity(store, session_id)?;
+
+        let mut input = PromptAssemblyInput {
+            system_prompt: Some(system_prompt),
+            agents_prompt,
+            active_skill_prompts,
+            session_head: Some(session_head),
+            autonomy_state,
+            plan_snapshot,
+            context_summary,
+            context_offload: context_offload.clone(),
+            recent_tool_activity,
+            transcript_messages,
+        };
+        let first_messages = PromptAssembly::build_messages(input.clone());
+        if let Some(session_head) = input.session_head.as_mut() {
+            session_head.estimated_prompt_tokens =
+                Some(Self::estimate_prompt_tokens(&first_messages, instructions));
+        }
 
         Ok(PromptMessages {
-            messages: PromptAssembly::build_messages(PromptAssemblyInput {
-                system_prompt: Some(system_prompt),
-                agents_prompt,
-                active_skill_prompts,
-                session_head: Some(session_head),
-                plan_snapshot,
-                context_summary,
-                context_offload: context_offload.clone(),
-                transcript_messages,
-            }),
+            messages: PromptAssembly::build_messages(input),
             context_offload,
         })
     }
@@ -1163,7 +1297,17 @@ impl ExecutionService {
         .map_err(ExecutionError::RecordConversion)?;
         let agent_profile = self.load_agent_profile(store, &session.agent_profile_id)?;
         let workspace = WorkspaceRef::new(&session.workspace_root);
-        let prompt = self.prompt_messages(store, session_id, &workspace)?;
+        let prompt = self.prompt_messages(
+            store,
+            Some(provider),
+            session_id,
+            &workspace,
+            session.settings.model.as_deref(),
+            session
+                .prompt_override
+                .as_ref()
+                .map(|override_| override_.as_str()),
+        )?;
         let tools = self.automatic_provider_tools(
             provider,
             prompt.context_offload.as_ref(),
@@ -2960,7 +3104,14 @@ impl ExecutionService {
         }
 
         let workspace = self.load_session_workspace(store, session_id)?;
-        let prompt_messages = self.prompt_messages(store, session_id, &workspace)?;
+        let prompt_messages = self.prompt_messages(
+            store,
+            Some(provider),
+            session_id,
+            &workspace,
+            model.as_deref(),
+            instructions.as_deref(),
+        )?;
         let catalog = ToolCatalog::default();
         let agent_profile = self.load_agent_profile_for_session(store, session_id)?;
         let tools = self.automatic_provider_tools(

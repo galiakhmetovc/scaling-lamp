@@ -44,12 +44,45 @@ pub enum SessionHeadWorkspaceEntryKind {
     Directory,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
+pub struct SessionHeadRuntime {
+    pub provider_name: Option<String>,
+    pub model: Option<String>,
+    pub think_level: Option<String>,
+    pub context_window_tokens: Option<u32>,
+    pub auto_compaction_trigger_ratio: Option<f64>,
+    pub usable_context_tokens: Option<u32>,
+    pub estimated_prompt_tokens: Option<u32>,
+}
+
+impl SessionHeadRuntime {
+    pub fn usable_context_tokens(
+        context_window_tokens: Option<u32>,
+        auto_compaction_trigger_ratio: Option<f64>,
+    ) -> Option<u32> {
+        Some(
+            ((context_window_tokens? as f64) * auto_compaction_trigger_ratio?)
+                .floor()
+                .max(0.0) as u32,
+        )
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
 pub struct SessionHead {
     pub session_id: String,
     pub title: String,
     pub agent_profile_id: String,
     pub agent_name: String,
+    pub agent_home: Option<String>,
+    pub provider_name: Option<String>,
+    pub model: Option<String>,
+    pub think_level: Option<String>,
+    pub context_window_tokens: Option<u32>,
+    pub auto_compaction_trigger_ratio: Option<f64>,
+    pub usable_context_tokens: Option<u32>,
+    pub estimated_prompt_tokens: Option<u32>,
+    pub workspace_root: Option<String>,
     pub schedule: Option<SessionHeadScheduleSummary>,
     pub message_count: usize,
     pub context_tokens: u32,
@@ -74,24 +107,45 @@ impl SessionHead {
             format!("Context Tokens: {}", self.context_tokens),
             format!("Compactifications: {}", self.compactifications),
         ];
-        if let Some(schedule) = self.schedule.as_ref() {
+        if let Some(agent_home) = self.agent_home.as_deref() {
+            lines.push(format!("Agent Home: {agent_home}"));
+        }
+        if let Some(provider_name) = self.provider_name.as_deref() {
+            lines.push(format!("Provider: {provider_name}"));
+        }
+        if let Some(model) = self.model.as_deref() {
+            lines.push(format!("Model: {model}"));
+        }
+        if let Some(think_level) = self.think_level.as_deref() {
+            lines.push(format!("Think Level: {think_level}"));
+        }
+        if let Some(context_window_tokens) = self.context_window_tokens {
+            lines.push(format!("Context Window: {context_window_tokens}"));
+        }
+        if let Some(auto_compaction_trigger_ratio) = self.auto_compaction_trigger_ratio {
             lines.push(format!(
-                "Schedule: {} mode={} delivery={} enabled={} next_fire_at={}",
-                schedule.id,
-                schedule.mode.as_str(),
-                schedule.delivery_mode.as_str(),
-                schedule.enabled,
-                schedule.next_fire_at
+                "Auto Compaction Trigger Ratio: {auto_compaction_trigger_ratio:.2}"
             ));
-            if let Some(target_session_id) = schedule.target_session_id.as_deref() {
-                lines.push(format!("Schedule Target: {target_session_id}"));
+        }
+        if let Some(usable_context_tokens) = self.usable_context_tokens {
+            lines.push(format!("Usable Context Tokens: {usable_context_tokens}"));
+        }
+        if let Some(estimated_prompt_tokens) = self.estimated_prompt_tokens {
+            let percent = self
+                .usable_context_tokens
+                .filter(|usable| *usable > 0)
+                .map(|usable| (estimated_prompt_tokens as f64 / usable as f64) * 100.0);
+            match percent {
+                Some(percent) => lines.push(format!(
+                    "Estimated Prompt Tokens: {estimated_prompt_tokens} ({percent:.1}% usable)"
+                )),
+                None => lines.push(format!(
+                    "Estimated Prompt Tokens: {estimated_prompt_tokens}"
+                )),
             }
-            if let Some(last_result) = schedule.last_result.as_deref() {
-                lines.push(format!("Schedule Last Result: {last_result}"));
-            }
-            if let Some(last_error) = schedule.last_error.as_deref() {
-                lines.push(format!("Schedule Last Error: {last_error}"));
-            }
+        }
+        if let Some(workspace_root) = self.workspace_root.as_deref() {
+            lines.push(format!("Workspace Root: {workspace_root}"));
         }
         if self.summary_covered_message_count > 0 {
             lines.push(format!(
@@ -144,16 +198,96 @@ impl SessionHead {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct PromptAssemblyInput {
     pub system_prompt: Option<String>,
     pub agents_prompt: Option<String>,
     pub active_skill_prompts: Vec<String>,
     pub session_head: Option<SessionHead>,
+    pub autonomy_state: Option<AutonomyState>,
     pub plan_snapshot: Option<PlanSnapshot>,
     pub context_summary: Option<ContextSummary>,
     pub context_offload: Option<ContextOffloadSnapshot>,
+    pub recent_tool_activity: Option<RecentToolActivity>,
     pub transcript_messages: Vec<ProviderMessage>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AutonomyState {
+    pub turn_source: Option<String>,
+    pub schedule: Option<SessionHeadScheduleSummary>,
+    pub interagent_lines: Vec<String>,
+}
+
+impl AutonomyState {
+    pub fn render(&self) -> String {
+        let mut lines = Vec::new();
+        if let Some(turn_source) = self.turn_source.as_deref() {
+            lines.push(format!("Turn Source: {turn_source}"));
+        }
+        if let Some(schedule) = self.schedule.as_ref() {
+            lines.push(format!(
+                "Schedule: {} mode={} delivery={} enabled={} next_fire_at={}",
+                schedule.id,
+                schedule.mode.as_str(),
+                schedule.delivery_mode.as_str(),
+                schedule.enabled,
+                schedule.next_fire_at
+            ));
+            if let Some(target_session_id) = schedule.target_session_id.as_deref() {
+                lines.push(format!("Schedule Target: {target_session_id}"));
+            }
+            if let Some(last_result) = schedule.last_result.as_deref() {
+                lines.push(format!("Schedule Last Result: {last_result}"));
+            }
+            if let Some(last_error) = schedule.last_error.as_deref() {
+                lines.push(format!("Schedule Last Error: {last_error}"));
+            }
+        }
+        lines.extend(self.interagent_lines.iter().cloned());
+        if lines.is_empty() {
+            return String::new();
+        }
+
+        let mut rendered = vec!["Autonomy State:".to_string()];
+        rendered.extend(lines);
+        rendered.join("\n")
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RecentToolActivityEntry {
+    pub status: String,
+    pub tool_name: String,
+    pub summary: String,
+    pub artifact_id: Option<String>,
+    pub error: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RecentToolActivity {
+    pub entries: Vec<RecentToolActivityEntry>,
+}
+
+impl RecentToolActivity {
+    pub fn render(&self) -> String {
+        if self.entries.is_empty() {
+            return String::new();
+        }
+        let mut lines = vec!["Recent Tool Activity:".to_string()];
+        for entry in &self.entries {
+            let mut line = format!("- {} {}: {}", entry.status, entry.tool_name, entry.summary);
+            if let Some(error) = entry.error.as_deref() {
+                line.push_str(&format!(" | error={error}"));
+            }
+            if let Some(artifact_id) = entry.artifact_id.as_deref() {
+                line.push_str(&format!(" | artifact_id={artifact_id}"));
+            }
+            lines.push(line);
+        }
+        lines.push("Use tool activity/debug surfaces and artifacts for full details.".to_string());
+        lines.join("\n")
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -162,7 +296,7 @@ pub struct PromptAssembly;
 impl PromptAssembly {
     pub fn build_messages(input: PromptAssemblyInput) -> Vec<ProviderMessage> {
         let mut messages = Vec::with_capacity(
-            input.transcript_messages.len() + 6 + input.active_skill_prompts.len(),
+            input.transcript_messages.len() + 8 + input.active_skill_prompts.len(),
         );
 
         if let Some(system_prompt) = input.system_prompt
@@ -203,12 +337,22 @@ impl PromptAssembly {
             }
         }
 
+        if let Some(autonomy_state) = input.autonomy_state {
+            let rendered = autonomy_state.render();
+            if !rendered.trim().is_empty() {
+                messages.push(ProviderMessage {
+                    role: MessageRole::System,
+                    content: rendered,
+                });
+            }
+        }
+
         if let Some(plan_snapshot) = input.plan_snapshot
             && !plan_snapshot.is_empty()
         {
             messages.push(ProviderMessage {
                 role: MessageRole::System,
-                content: plan_snapshot.system_message_text(),
+                content: plan_snapshot.prompt_view_text(),
             });
         }
 
@@ -235,6 +379,16 @@ impl PromptAssembly {
                 role: MessageRole::System,
                 content: rendered,
             });
+        }
+
+        if let Some(recent_tool_activity) = input.recent_tool_activity {
+            let rendered = recent_tool_activity.render();
+            if !rendered.trim().is_empty() {
+                messages.push(ProviderMessage {
+                    role: MessageRole::System,
+                    content: rendered,
+                });
+            }
         }
 
         messages.extend(
@@ -279,9 +433,9 @@ fn render_context_offload_refs(snapshot: &ContextOffloadSnapshot) -> Option<Stri
 #[cfg(test)]
 mod tests {
     use super::{
-        PromptAssembly, PromptAssemblyInput, SessionHead, SessionHeadFsActivity,
-        SessionHeadProcessActivity, SessionHeadScheduleSummary, SessionHeadWorkspaceEntry,
-        SessionHeadWorkspaceEntryKind,
+        AutonomyState, PromptAssembly, PromptAssemblyInput, RecentToolActivity,
+        RecentToolActivityEntry, SessionHead, SessionHeadFsActivity, SessionHeadProcessActivity,
+        SessionHeadScheduleSummary, SessionHeadWorkspaceEntry, SessionHeadWorkspaceEntryKind,
     };
     use crate::agent::{AgentScheduleDeliveryMode, AgentScheduleMode};
     use crate::context::{ContextOffloadRef, ContextOffloadSnapshot, ContextSummary};
@@ -296,6 +450,15 @@ mod tests {
             title: "Compacted Chat".to_string(),
             agent_profile_id: "judge".to_string(),
             agent_name: "Judge".to_string(),
+            agent_home: Some("/state/agents/judge".to_string()),
+            provider_name: Some("zai".to_string()),
+            model: Some("glm-5-turbo".to_string()),
+            think_level: Some("off".to_string()),
+            context_window_tokens: Some(200_000),
+            auto_compaction_trigger_ratio: Some(0.7),
+            usable_context_tokens: Some(140_000),
+            estimated_prompt_tokens: Some(42),
+            workspace_root: Some("/work/teamD".to_string()),
             schedule: Some(SessionHeadScheduleSummary {
                 id: "judge-pulse".to_string(),
                 mode: AgentScheduleMode::Interval,
@@ -358,10 +521,15 @@ mod tests {
         assert!(rendered.contains("Session: Compacted Chat"));
         assert!(rendered.contains("Session ID: session-1"));
         assert!(rendered.contains("Agent: Judge (judge)"));
-        assert!(rendered.contains(
-            "Schedule: judge-pulse mode=interval delivery=fresh_session enabled=true next_fire_at=77"
-        ));
-        assert!(rendered.contains("Schedule Last Result: running"));
+        assert!(rendered.contains("Agent Home: /state/agents/judge"));
+        assert!(rendered.contains("Provider: zai"));
+        assert!(rendered.contains("Model: glm-5-turbo"));
+        assert!(rendered.contains("Think Level: off"));
+        assert!(rendered.contains("Context Window: 200000"));
+        assert!(rendered.contains("Auto Compaction Trigger Ratio: 0.70"));
+        assert!(rendered.contains("Usable Context Tokens: 140000"));
+        assert!(rendered.contains("Estimated Prompt Tokens: 42 (0.0% usable)"));
+        assert!(rendered.contains("Workspace Root: /work/teamD"));
         assert!(rendered.contains("Messages: 8"));
         assert!(rendered.contains("Context Tokens: 42"));
         assert!(rendered.contains("Compactifications: 1"));
@@ -391,6 +559,15 @@ mod tests {
                 title: "Compacted Chat".to_string(),
                 agent_profile_id: "default".to_string(),
                 agent_name: "Assistant".to_string(),
+                agent_home: None,
+                provider_name: None,
+                model: None,
+                think_level: None,
+                context_window_tokens: None,
+                auto_compaction_trigger_ratio: None,
+                usable_context_tokens: None,
+                estimated_prompt_tokens: None,
+                workspace_root: None,
                 schedule: None,
                 message_count: 8,
                 context_tokens: 42,
@@ -419,6 +596,7 @@ mod tests {
                 }],
                 workspace_tree_truncated: false,
             }),
+            autonomy_state: None,
             plan_snapshot: None,
             context_summary: Some(ContextSummary {
                 session_id: "session-1".to_string(),
@@ -428,6 +606,7 @@ mod tests {
                 updated_at: 10,
             }),
             context_offload: None,
+            recent_tool_activity: None,
             transcript_messages: vec![
                 ProviderMessage {
                     role: MessageRole::User,
@@ -460,9 +639,11 @@ mod tests {
             agents_prompt: None,
             active_skill_prompts: Vec::new(),
             session_head: None,
+            autonomy_state: None,
             plan_snapshot: None,
             context_summary: None,
             context_offload: None,
+            recent_tool_activity: None,
             transcript_messages: vec![ProviderMessage {
                 role: MessageRole::User,
                 content: "hello".to_string(),
@@ -485,6 +666,15 @@ mod tests {
                 title: "Plan Chat".to_string(),
                 agent_profile_id: "default".to_string(),
                 agent_name: "Assistant".to_string(),
+                agent_home: None,
+                provider_name: None,
+                model: None,
+                think_level: None,
+                context_window_tokens: None,
+                auto_compaction_trigger_ratio: None,
+                usable_context_tokens: None,
+                estimated_prompt_tokens: None,
+                workspace_root: None,
                 schedule: None,
                 message_count: 3,
                 context_tokens: 9,
@@ -498,6 +688,7 @@ mod tests {
                 workspace_tree: Vec::new(),
                 workspace_tree_truncated: false,
             }),
+            autonomy_state: None,
             plan_snapshot: Some(PlanSnapshot {
                 session_id: "session-1".to_string(),
                 goal: Some("Ship planning tools".to_string()),
@@ -520,6 +711,7 @@ mod tests {
                 updated_at: 10,
             }),
             context_offload: None,
+            recent_tool_activity: None,
             transcript_messages: vec![
                 ProviderMessage {
                     role: MessageRole::User,
@@ -554,6 +746,15 @@ mod tests {
                 title: "Prompt Order".to_string(),
                 agent_profile_id: "default".to_string(),
                 agent_name: "Assistant".to_string(),
+                agent_home: None,
+                provider_name: None,
+                model: None,
+                think_level: None,
+                context_window_tokens: None,
+                auto_compaction_trigger_ratio: None,
+                usable_context_tokens: None,
+                estimated_prompt_tokens: None,
+                workspace_root: None,
                 schedule: None,
                 message_count: 2,
                 context_tokens: 8,
@@ -567,9 +768,11 @@ mod tests {
                 workspace_tree: Vec::new(),
                 workspace_tree_truncated: false,
             }),
+            autonomy_state: None,
             plan_snapshot: None,
             context_summary: None,
             context_offload: None,
+            recent_tool_activity: None,
             transcript_messages: vec![ProviderMessage {
                 role: MessageRole::User,
                 content: "hello".to_string(),
@@ -592,12 +795,123 @@ mod tests {
     }
 
     #[test]
+    fn prompt_assembly_places_autonomy_and_tool_activity_in_contract_order() {
+        let messages = PromptAssembly::build_messages(PromptAssemblyInput {
+            system_prompt: Some("SYSTEM".to_string()),
+            agents_prompt: Some("AGENTS".to_string()),
+            active_skill_prompts: vec!["SKILL".to_string()],
+            session_head: Some(SessionHead {
+                session_id: "session-1".to_string(),
+                title: "Prompt Order".to_string(),
+                agent_profile_id: "default".to_string(),
+                agent_name: "Assistant".to_string(),
+                agent_home: Some("/state/agents/default".to_string()),
+                provider_name: Some("zai".to_string()),
+                model: Some("glm-5-turbo".to_string()),
+                think_level: Some("off".to_string()),
+                context_window_tokens: Some(200_000),
+                auto_compaction_trigger_ratio: Some(0.7),
+                usable_context_tokens: Some(140_000),
+                estimated_prompt_tokens: Some(7_000),
+                workspace_root: Some("/work/teamD".to_string()),
+                schedule: None,
+                message_count: 2,
+                context_tokens: 8,
+                compactifications: 0,
+                summary_covered_message_count: 0,
+                pending_approval_count: 0,
+                last_user_preview: None,
+                last_assistant_preview: None,
+                recent_filesystem_activity: Vec::new(),
+                recent_process_activity: Vec::new(),
+                workspace_tree: Vec::new(),
+                workspace_tree_truncated: false,
+            }),
+            autonomy_state: Some(AutonomyState {
+                turn_source: Some("telegram".to_string()),
+                schedule: Some(SessionHeadScheduleSummary {
+                    id: "wake-1".to_string(),
+                    mode: AgentScheduleMode::Once,
+                    delivery_mode: AgentScheduleDeliveryMode::ExistingSession,
+                    enabled: true,
+                    next_fire_at: 77,
+                    target_session_id: Some("session-1".to_string()),
+                    last_result: None,
+                    last_error: None,
+                }),
+                interagent_lines: vec!["chain_id=chain-1 state=active hop=1/3".to_string()],
+            }),
+            plan_snapshot: Some(PlanSnapshot {
+                session_id: "session-1".to_string(),
+                goal: Some("Ship prompt contract".to_string()),
+                items: Vec::new(),
+                updated_at: 1,
+            }),
+            context_summary: Some(ContextSummary {
+                session_id: "session-1".to_string(),
+                summary_text: "Summary".to_string(),
+                covered_message_count: 1,
+                summary_token_estimate: 1,
+                updated_at: 1,
+            }),
+            context_offload: Some(ContextOffloadSnapshot {
+                session_id: "session-1".to_string(),
+                refs: vec![ContextOffloadRef {
+                    id: "offload-1".to_string(),
+                    label: "Tool dump".to_string(),
+                    summary: "large output".to_string(),
+                    artifact_id: "artifact-1".to_string(),
+                    token_estimate: 10,
+                    message_count: 1,
+                    created_at: 1,
+                }],
+                updated_at: 1,
+            }),
+            recent_tool_activity: Some(RecentToolActivity {
+                entries: vec![RecentToolActivityEntry {
+                    status: "failed".to_string(),
+                    tool_name: "schedule_create".to_string(),
+                    summary: "invalid JSON argument".to_string(),
+                    artifact_id: None,
+                    error: Some("delivery_mode must be a quoted string".to_string()),
+                }],
+            }),
+            transcript_messages: vec![
+                ProviderMessage {
+                    role: MessageRole::User,
+                    content: "covered".to_string(),
+                },
+                ProviderMessage {
+                    role: MessageRole::User,
+                    content: "tail".to_string(),
+                },
+            ],
+        });
+
+        let contents = messages
+            .iter()
+            .map(|message| message.content.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(contents[0], "SYSTEM");
+        assert_eq!(contents[1], "AGENTS");
+        assert_eq!(contents[2], "SKILL");
+        assert!(contents[3].contains("Session: Prompt Order"));
+        assert!(contents[4].contains("Autonomy State:"));
+        assert!(contents[5].contains("Plan:"));
+        assert!(contents[6].contains("Summary"));
+        assert!(contents[7].contains("Offloaded Context References:"));
+        assert!(contents[8].contains("Recent Tool Activity:"));
+        assert_eq!(contents[9], "tail");
+    }
+
+    #[test]
     fn prompt_assembly_places_offload_refs_after_summary_and_before_transcript_tail() {
         let messages = PromptAssembly::build_messages(PromptAssemblyInput {
             system_prompt: None,
             agents_prompt: None,
             active_skill_prompts: Vec::new(),
             session_head: None,
+            autonomy_state: None,
             plan_snapshot: None,
             context_summary: Some(ContextSummary {
                 session_id: "session-1".to_string(),
@@ -619,6 +933,7 @@ mod tests {
                 }],
                 updated_at: 12,
             }),
+            recent_tool_activity: None,
             transcript_messages: vec![
                 ProviderMessage {
                     role: MessageRole::User,

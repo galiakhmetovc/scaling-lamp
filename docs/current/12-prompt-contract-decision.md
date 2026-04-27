@@ -249,7 +249,7 @@ flowchart TD
 - `continuation_messages`;
 - `previous_response_id`.
 
-Нюанс: корневые инструкции репозитория сейчас описывают canonical order без отдельного пункта `active skill prompts`. Код фактически вставляет active skills между `AGENTS.md` и `SessionHead`. Это нужно явно закрепить или изменить.
+Нюанс: корневые инструкции репозитория сейчас описывают canonical order без отдельного пункта `active skill prompts`. Contract должен явно закрепить active skills как отдельный слой между `AGENTS.md` и `SessionHead`.
 
 ## SYSTEM.md
 
@@ -361,7 +361,13 @@ Runtime сканирует:
 - общий `skills_dir`;
 - `data_dir/agents/<agent_id>/skills`.
 
-Потом `resolve_session_skill_status` определяет активные skills по session settings, title и transcript. В prompt вставляются только body активных `SKILL.md`.
+Потом `resolve_session_skill_status` определяет активные skills:
+
+- `enabled_skills` в session settings активируются вручную;
+- `disabled_skills` явно отключают skill;
+- иначе automatic activation делает token overlap по `skill.name`/`skill.description` с title и последними user-сообщениями.
+
+В prompt сейчас вставляется body активных `SKILL.md`.
 
 ### Что важно
 
@@ -383,6 +389,16 @@ Runtime сканирует:
 - через operator/debug UI;
 - через tools, если агенту нужно обнаружить capability;
 - через документацию.
+
+Prompt layer должен быть budgeted. Для каждого активного skill модель должна видеть минимум:
+
+- `name`;
+- `path` или stable ref;
+- activation mode: `manual` или `automatic`;
+- activation reason, если его можно вычислить;
+- bounded body/excerpt.
+
+Полный текст skill должен быть доступен агенту через отдельный read tool или artifact-backed ref. Manual skills получают приоритет над automatic skills внутри budget.
 
 ### Вопрос на решение
 
@@ -468,20 +484,25 @@ Decision D3: где должны стоять active skills в порядке pr
 - session id;
 - title;
 - agent profile;
+- agent profile path;
+- provider, model and think level;
+- context window, auto-compaction trigger ratio, usable context budget, estimated prompt usage;
 - turn source: direct, Telegram, schedule, inter-agent, wakeup, approval continuation;
-- schedule/inter-agent summary, если применимо;
 - compactification state;
 - pending approvals, если есть;
 - last user preview, если tail не начинается с актуального user request;
 - короткий workspace root/current directory, если это влияет на tools.
+- compact workspace overview: shallow directories and file-extension counts, not a full tree.
 
 Предлагаемое вынести из default SessionHead:
 
 - recent filesystem activity;
 - recent process activity;
-- workspace tree.
+- full workspace tree.
 
 Эти данные лучше показывать в debug browser или давать через tools, потому что они больше похожи на operational diagnostics.
+
+Schedule, subagent, agent-to-agent and mesh state should not be hidden inside `SessionHead`. It has its own layer: `AutonomyState`.
 
 ### Вопрос на решение
 
@@ -681,6 +702,8 @@ MAX_REFS = 8
 
 То есть даже если snapshot хранит до 16 refs, prompt показывает только первые 8.
 
+Это исторический safety cap, а не целевая архитектурная policy.
+
 ### Что важно
 
 Offload refs — это не “все artifacts сессии”.
@@ -711,8 +734,31 @@ Decision D7: как выбирать offload refs для prompt?
 - Option A: newest first, max 8 — как сейчас.
 - Option B: pinned + newest, max 8.
 - Option C: relevance-ranked by current user message/plan, max 8.
+- Option D: pinned + auto-pinned + newest внутри token budget от `usable_context_tokens`.
 
-Практическая рекомендация: сначала Option B. Pinned refs дадут оператору контроль без сложного ranking.
+Принятое направление: Option D.
+
+Rules:
+
+- budget считается от `usable_context_tokens`, а не от фиксированного числа refs;
+- pinned refs идут первыми;
+- auto-pinned refs появляются после 3 explicit reads/requests в рамках session;
+- newest refs заполняют остаток budget;
+- prompt показывает hidden count, если refs не поместились;
+- полный payload читается через `artifact_read`/`artifact_search`.
+
+`usable_context_tokens`:
+
+```text
+usable_context_tokens = effective_context_window_tokens * auto_compaction_trigger_ratio
+```
+
+Оба параметра настраиваются:
+
+- `[context].context_window_tokens_override` / `TEAMD_CONTEXT_WINDOW_TOKENS`;
+- `[context].auto_compaction_trigger_ratio` / `TEAMD_CONTEXT_AUTO_COMPACTION_TRIGGER_RATIO`.
+
+Если `context_window_tokens_override` не задан, runtime берёт known model/provider window или conservative fallback.
 
 ## Uncovered transcript tail
 
@@ -756,7 +802,85 @@ Decision D8: какие system events должны попадать в transcrip
 - только user-visible system events;
 - system events должны быть отдельным `RuntimeEventSummary` block, а transcript tail должен быть только user/assistant.
 
-Практическая рекомендация: оставить user-visible system events в transcript, а internal diagnostics держать в audit/debug.
+Принятое направление: transcript tail остаётся user/assistant плюс user-visible runtime events, но tool history выносится в отдельный bounded слой `RecentToolActivity`.
+
+Это важно: модель не должна терять память о том, какие tools она вызывала, где ошибалась и какие результаты получила.
+
+Разделение:
+
+- current turn tool outputs идут через provider continuation/tool output path;
+- прошлые tool calls видны через bounded `RecentToolActivity`;
+- полный tool ledger, raw stdout/stderr, arguments, result preview и artifacts читаются через tools/operator debug surfaces.
+
+## AutonomyState
+
+### Зачем нужен отдельный слой
+
+`SessionHead` отвечает на вопрос “кто я, где я и в каком runtime context”. `AutonomyState` отвечает на другой вопрос: “какие у меня автономные обязательства и связи с другими агентами”.
+
+Для автономности и mesh-сети это отдельный first-class слой prompt contract.
+
+### Что туда входит
+
+Bounded prompt view должен показывать:
+
+- turn source: direct user, Telegram, schedule, wakeup, inter-agent, continuation;
+- active/current schedule summary;
+- pending schedules or wakeups relevant to this session;
+- subagent/delegated child sessions: active, waiting, completed summary;
+- agent-to-agent chain: `chain_id`, hop count, max hops, origin/target/parent sessions, continuation grant state;
+- mesh/node identity and peer hints, когда mesh станет runtime-сущностью.
+
+### Source of truth и tools
+
+Source of truth:
+
+- schedules table;
+- session/inter-agent metadata;
+- runs/jobs;
+- child/delegated sessions;
+- future mesh node/peer tables.
+
+Tools:
+
+- schedules: `schedule_list`, `schedule_read`, `schedule_create`, `schedule_update`, `schedule_delete`, `continue_later`;
+- subagents/A2A: `agent_list`, `agent_read`, `message_agent`, `session_wait`, `grant_agent_chain_continuation`;
+- future aggregate read tool: `autonomy_state_read`;
+- future mesh tools: `mesh_peer_list`, `mesh_route_read`.
+
+Budget считается от `usable_context_tokens`.
+
+## RecentToolActivity
+
+### Зачем нужен отдельный слой
+
+Модель должна видеть недавние tool outcomes, чтобы не повторять ошибки и понимать, какие данные уже получены. При этом prompt не должен становиться audit log.
+
+### Что туда входит
+
+Bounded prompt view:
+
+- recent failed tool calls, especially argument/permission/runtime errors;
+- recent significant successful tool calls;
+- result summary;
+- result artifact/ref id, если output offloaded;
+- short hint, если ошибка похожа на known tool-usage issue.
+
+Full details остаются в persisted `tool_calls` и artifacts.
+
+### Source of truth и tools
+
+Source of truth:
+
+- `tool_calls` ledger;
+- artifacts for large outputs;
+- run steps.
+
+Tools:
+
+- future model-facing read tool: `tool_activity_read`;
+- existing operator commands: `teamdctl session tools`, TUI debug, `session tool-result`;
+- payload retrieval: `artifact_read`, `artifact_search`.
 
 ## Provider loop additions: не путать с prompt assembly
 
@@ -805,10 +929,12 @@ Runtime может добавить system nudges:
 2. AGENTS.md
 3. ActiveSkillPrompts
 4. SessionHead
-5. PlanPromptView
-6. ContextSummary
-7. OffloadRefs
-8. UncoveredTranscriptTail
+5. AutonomyState
+6. PlanPromptView
+7. ContextSummary
+8. OffloadRefs
+9. RecentToolActivity
+10. UncoveredTranscriptTail
 ```
 
 Смысл каждого слоя:
@@ -819,10 +945,20 @@ Runtime может добавить system nudges:
 | `AGENTS.md` | Tool guidance и profile instructions. | Средний, stable. |
 | `ActiveSkillPrompts` | Task-specific дополнительные инструкции. | Только активные skills. |
 | `SessionHead` | Runtime orientation. | Малый. |
+| `AutonomyState` | Schedules, subagents, A2A, mesh obligations. | Bounded budget. |
 | `PlanPromptView` | Текущий progress и next actions. | Малый, не full plan. |
 | `ContextSummary` | Сжатая старая история. | Bounded. |
-| `OffloadRefs` | Ссылки на крупный context. | До N refs. |
+| `OffloadRefs` | Ссылки на крупный context. | Bounded budget. |
+| `RecentToolActivity` | Недавние ошибки/результаты tools. | Bounded budget. |
 | `UncoveredTranscriptTail` | Последняя сырая история. | Tail после compaction. |
+
+Все bounded layers считают budget от:
+
+```text
+usable_context_tokens = effective_context_window_tokens * auto_compaction_trigger_ratio
+```
+
+Агент может менять session/turn-level prompt budget percentages через будущие budget tools, если задача этого требует. Overrides должны иметь guardrails, попадать в audit/debug и не могут молча занулить critical layers.
 
 ## Что надо изменить в коде, если этот contract принять
 
@@ -873,7 +1009,7 @@ Runtime может добавить system nudges:
 
 - решить состав;
 - убрать или сделать optional recent fs/process/workspace tree;
-- добавить turn source/inter-agent/wakeup metadata, если этого не хватает.
+- добавить provider/model/context budget/workspace/profile path metadata.
 
 ### Change C5: уточнить offload refs policy
 
@@ -883,7 +1019,7 @@ Runtime может добавить system nudges:
 
 Нужно:
 
-- решить newest vs pinned vs relevance;
+- заменить fixed ref count на budgeted pinned + auto-pinned + newest policy;
 - отразить это в docs и tests.
 
 ### Change C6: явно документировать transcript tail policy
@@ -896,7 +1032,20 @@ Runtime может добавить system nudges:
 Нужно:
 
 - решить, какие `system` entries должны идти в model prompt;
-- отделить internal diagnostics от user-visible runtime events.
+- отделить internal diagnostics от user-visible runtime events;
+- добавить bounded `RecentToolActivity` для tool outcomes прошлого context.
+
+### Change C7: добавить `AutonomyState`
+
+Сейчас:
+
+- schedule/inter-agent metadata частично расползлись по `SessionHead`, transcript events и debug views.
+
+Нужно:
+
+- добавить отдельный prompt layer для schedules, subagents, A2A and mesh obligations;
+- оставить full state доступным через existing tools and future `autonomy_state_read`;
+- покрыть layer order тестами.
 
 ## Как оператору проверить текущую сборку
 
@@ -954,9 +1103,11 @@ flowchart TD
     M --> A[AGENTS.md]
     M --> K[ActiveSkillPrompts]
     M --> H[SessionHead]
+    M --> AU[AutonomyState]
     M --> PL[PlanPromptView]
     M --> CS[ContextSummary]
     M --> OR[OffloadRefs]
+    M --> TA[RecentToolActivity]
     M --> TT[UncoveredTranscriptTail]
 ```
 
@@ -989,14 +1140,22 @@ sequenceDiagram
 | D1 | Какой fallback у `SYSTEM.md`? | Profile file, общий fallback только emergency. |
 | D2 | Какой fallback у `AGENTS.md`? | Profile file, общий fallback только emergency. |
 | D3 | Где стоят active skills? | После `AGENTS.md`, перед `SessionHead`. |
-| D4 | Насколько толстый `SessionHead`? | Runtime-orientation only, diagnostics в debug. |
+| D4 | Насколько толстый `SessionHead`? | Runtime-orientation only: identity, provider/model, context budget, workspace/profile paths. Diagnostics в debug. |
 | D5 | Как рендерить plan? | `PlanPromptView`: current, blocked, next 3, completed count. |
-| D6 | Когда делать compaction? | Пока manual, auto позже с audit/UI. |
-| D7 | Какие offload refs класть? | Pinned + newest, max 8. |
-| D8 | Какие system events идут в tail? | User-visible system events; internal diagnostics только audit/debug. |
+| D6 | Когда делать compaction? | Manual + auto before provider turn at configured context-window ratio. |
+| D7 | Какие offload refs класть? | Budgeted pinned + auto-pinned after 3 reads + newest. |
+| D8 | Какие system/tool events идут в prompt? | User-visible system events в tail; tool outcomes в bounded `RecentToolActivity`. |
+
+Additional accepted direction:
+
+| ID | Вопрос | Решение |
+| --- | --- | --- |
+| D9 | Где держать schedules/subagents/A2A/mesh state? | Отдельный bounded `AutonomyState` layer после `SessionHead`. |
+| D10 | Как считать budgets? | От `usable_context_tokens = effective_context_window_tokens * auto_compaction_trigger_ratio`. |
+| D11 | Может ли агент менять budget percentages? | Да, через guardrailed session/turn overrides and audit/debug visibility. |
 
 ## Минимальный contract после утверждения
 
 Если принять рекомендации, contract можно сформулировать так:
 
-`teamD` собирает provider messages из profile prompt-файлов, активных skills, компактного runtime state, компактного plan state, summary старой истории, bounded offload refs и uncovered transcript tail. Prompt-файлы имеют общий emergency fallback. Полные планы, tool outputs, artifacts, audit logs и debug data не вставляются в prompt по умолчанию, а читаются явно через tools или operator/debug surfaces.
+`teamD` собирает provider messages из profile prompt-файлов, активных skills, компактного runtime state, autonomy state, компактного plan state, summary старой истории, bounded offload refs, recent tool activity и uncovered transcript tail. Prompt-файлы имеют общий emergency fallback. Полные планы, полные tool outputs, artifacts, audit logs и debug data не вставляются в prompt по умолчанию, а читаются явно через tools или operator/debug surfaces. Prompt является bounded view поверх управляемого состояния, а не единственной копией состояния.

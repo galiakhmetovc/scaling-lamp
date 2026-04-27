@@ -2,8 +2,8 @@ use crate::agents;
 use agent_persistence::TranscriptRecord;
 use agent_runtime::context::{ContextSummary, approximate_token_count};
 use agent_runtime::prompt::{
-    SessionHead, SessionHeadFsActivity, SessionHeadProcessActivity, SessionHeadScheduleSummary,
-    SessionHeadWorkspaceEntry, SessionHeadWorkspaceEntryKind,
+    SessionHead, SessionHeadFsActivity, SessionHeadProcessActivity, SessionHeadRuntime,
+    SessionHeadScheduleSummary, SessionHeadWorkspaceEntry, SessionHeadWorkspaceEntryKind,
 };
 use agent_runtime::run::{RunSnapshot, RunStatus, RunStepKind};
 use agent_runtime::session::Session;
@@ -19,15 +19,30 @@ const RECENT_FILESYSTEM_ACTIVITY_LIMIT: usize = 6;
 const RECENT_PROCESS_ACTIVITY_LIMIT: usize = 6;
 const WORKSPACE_TREE_LIMIT: usize = 12;
 
-pub(crate) fn build_session_head(
-    session: &Session,
-    agent_name: &str,
-    schedule: Option<SessionHeadScheduleSummary>,
-    transcripts: &[TranscriptRecord],
-    context_summary: Option<&ContextSummary>,
-    runs: &[RunSnapshot],
-    workspace: &WorkspaceRef,
-) -> SessionHead {
+pub(crate) struct BuildSessionHeadInput<'a> {
+    pub session: &'a Session,
+    pub agent_name: &'a str,
+    pub agent_home: Option<&'a Path>,
+    pub runtime: Option<SessionHeadRuntime>,
+    pub schedule: Option<SessionHeadScheduleSummary>,
+    pub transcripts: &'a [TranscriptRecord],
+    pub context_summary: Option<&'a ContextSummary>,
+    pub runs: &'a [RunSnapshot],
+    pub workspace: &'a WorkspaceRef,
+}
+
+pub(crate) fn build_session_head(input: BuildSessionHeadInput<'_>) -> SessionHead {
+    let BuildSessionHeadInput {
+        session,
+        agent_name,
+        agent_home,
+        runtime,
+        schedule,
+        transcripts,
+        context_summary,
+        runs,
+        workspace,
+    } = input;
     let message_count = transcripts.len();
     let covered_message_count = context_summary
         .map(|summary| summary.covered_message_count as usize)
@@ -64,11 +79,30 @@ pub(crate) fn build_session_head(
 
     let (workspace_tree, workspace_tree_truncated) = build_workspace_tree(workspace);
 
+    let runtime = runtime.unwrap_or(SessionHeadRuntime {
+        provider_name: None,
+        model: session.settings.model.clone(),
+        think_level: session.settings.think_level.clone(),
+        context_window_tokens: None,
+        auto_compaction_trigger_ratio: None,
+        usable_context_tokens: None,
+        estimated_prompt_tokens: None,
+    });
+
     SessionHead {
         session_id: session.id.clone(),
         title: session.title.clone(),
         agent_profile_id: session.agent_profile_id.clone(),
         agent_name: agent_name.to_string(),
+        agent_home: agent_home.map(|path| path.display().to_string()),
+        provider_name: runtime.provider_name,
+        model: runtime.model,
+        think_level: runtime.think_level,
+        context_window_tokens: runtime.context_window_tokens,
+        auto_compaction_trigger_ratio: runtime.auto_compaction_trigger_ratio,
+        usable_context_tokens: runtime.usable_context_tokens,
+        estimated_prompt_tokens: runtime.estimated_prompt_tokens,
+        workspace_root: Some(workspace.root.display().to_string()),
         schedule,
         message_count,
         context_tokens: provider_input_tokens

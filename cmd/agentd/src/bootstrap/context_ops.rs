@@ -1,10 +1,15 @@
 use super::*;
 use crate::agents;
 use crate::diagnostics::{DiagnosticEventBuilder, render_diagnostic_tail};
-use agent_persistence::{ContextOffloadRepository, RunRepository};
+use agent_persistence::{
+    ContextOffloadRepository, RunRepository, ToolCallRecord, ToolCallRepository,
+};
 use agent_runtime::context::CompactionPolicy;
 use agent_runtime::plan::PlanSnapshot;
-use agent_runtime::prompt::{PromptAssembly, PromptAssemblyInput, SessionHead};
+use agent_runtime::prompt::{
+    AutonomyState, PromptAssembly, PromptAssemblyInput, RecentToolActivity,
+    RecentToolActivityEntry, SessionHead,
+};
 use agent_runtime::provider::ProviderMessage;
 use agent_runtime::run::{PendingProviderApproval, RunSnapshot};
 use agent_runtime::session::{MessageRole, Session};
@@ -52,6 +57,106 @@ fn load_session_head_metadata(
     Ok((agent_name, schedule))
 }
 
+fn autonomy_state_for_session(
+    session: &Session,
+    schedule: Option<agent_runtime::prompt::SessionHeadScheduleSummary>,
+    interagent: Option<&SessionInteragentSummary>,
+) -> Option<AutonomyState> {
+    let turn_source = session
+        .delegation_label
+        .as_deref()
+        .and_then(|label| {
+            if label.starts_with("agent-schedule:") {
+                Some("schedule")
+            } else if label.starts_with("agent-chain:") {
+                Some("agent2agent")
+            } else {
+                None
+            }
+        })
+        .or_else(|| session.parent_session_id.as_ref().map(|_| "subagent"))
+        .map(str::to_string);
+    let interagent_lines = interagent
+        .map(|summary| {
+            let mut lines = vec![format!(
+                "InterAgent Chain: {} state={}",
+                summary.chain_id, summary.state
+            )];
+            if let Some(hop_count) = summary.hop_count {
+                match summary.max_hops {
+                    Some(max_hops) => lines.push(format!("InterAgent Hop: {hop_count}/{max_hops}")),
+                    None => lines.push(format!("InterAgent Hop: {hop_count}")),
+                }
+            }
+            if let Some(origin_session_id) = summary.origin_session_id.as_deref() {
+                lines.push(format!("InterAgent Origin Session: {origin_session_id}"));
+            }
+            if let Some(target_agent_id) = summary.target_agent_id.as_deref() {
+                lines.push(format!("InterAgent Target Agent: {target_agent_id}"));
+            }
+            if summary.continuation_grant_pending {
+                lines.push("InterAgent Continuation Grant: pending".to_string());
+            }
+            lines
+        })
+        .unwrap_or_default();
+    if turn_source.is_none() && schedule.is_none() && interagent_lines.is_empty() {
+        return None;
+    }
+    Some(AutonomyState {
+        turn_source,
+        schedule,
+        interagent_lines,
+    })
+}
+
+fn recent_tool_activity_entry(record: ToolCallRecord) -> RecentToolActivityEntry {
+    let summary = record
+        .result_summary
+        .clone()
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or(record.summary);
+    RecentToolActivityEntry {
+        status: record.status,
+        tool_name: record.tool_name,
+        summary,
+        artifact_id: record.result_artifact_id,
+        error: record.error,
+    }
+}
+
+fn recent_tool_activity_for_system_view(
+    store: &PersistenceStore,
+    session_id: &str,
+) -> Result<Option<RecentToolActivity>, BootstrapError> {
+    let mut failures = Vec::new();
+    let mut successes = Vec::new();
+    for record in store
+        .list_tool_calls_for_session(session_id)?
+        .into_iter()
+        .rev()
+    {
+        if record.status == "failed" && failures.len() < 8 {
+            failures.push(recent_tool_activity_entry(record));
+        } else if record.status == "completed"
+            && (record.result_summary.is_some() || record.result_artifact_id.is_some())
+            && successes.len() < 3
+        {
+            successes.push(recent_tool_activity_entry(record));
+        }
+        if failures.len() >= 8 && successes.len() >= 3 {
+            break;
+        }
+    }
+    failures.reverse();
+    successes.reverse();
+    let entries = failures.into_iter().chain(successes).collect::<Vec<_>>();
+    if entries.is_empty() {
+        return Ok(None);
+    }
+    Ok(Some(RecentToolActivity { entries }))
+}
+
 impl App {
     fn compaction_policy(&self) -> CompactionPolicy {
         CompactionPolicy {
@@ -59,6 +164,27 @@ impl App {
             keep_tail_messages: self.config.context.compaction_keep_tail_messages,
             max_output_tokens: self.config.context.compaction_max_output_tokens,
             max_summary_chars: self.config.context.compaction_max_summary_chars,
+        }
+    }
+
+    fn session_head_runtime(&self, session: &Session) -> agent_runtime::prompt::SessionHeadRuntime {
+        let context_window_tokens = self.config.context.context_window_tokens_override;
+        let auto_compaction_trigger_ratio = Some(self.config.context.auto_compaction_trigger_ratio);
+        agent_runtime::prompt::SessionHeadRuntime {
+            provider_name: Some(self.config.provider.kind.as_str().to_string()),
+            model: session
+                .settings
+                .model
+                .clone()
+                .or_else(|| self.config.provider.default_model.clone()),
+            think_level: session.settings.think_level.clone(),
+            context_window_tokens,
+            auto_compaction_trigger_ratio,
+            usable_context_tokens: agent_runtime::prompt::SessionHeadRuntime::usable_context_tokens(
+                context_window_tokens,
+                auto_compaction_trigger_ratio,
+            ),
+            estimated_prompt_tokens: None,
         }
     }
 
@@ -87,14 +213,19 @@ impl App {
         let (agent_name, schedule) = load_session_head_metadata(&store, &session)?;
         let workspace = agent_runtime::workspace::WorkspaceRef::new(&session.workspace_root);
 
+        let agent_home = agents::agent_home(&self.config.data_dir, &session.agent_profile_id);
         Ok(prompting::build_session_head(
-            &session,
-            &agent_name,
-            schedule,
-            &transcripts,
-            context_summary.as_ref(),
-            &runs,
-            &workspace,
+            prompting::BuildSessionHeadInput {
+                session: &session,
+                agent_name: &agent_name,
+                agent_home: Some(agent_home.as_path()),
+                runtime: Some(self.session_head_runtime(&session)),
+                schedule,
+                transcripts: &transcripts,
+                context_summary: context_summary.as_ref(),
+                runs: &runs,
+                workspace: &workspace,
+            },
         ))
     }
 
@@ -345,15 +476,18 @@ impl App {
             .map_err(BootstrapError::RecordConversion)?;
         let (agent_name, schedule) = load_session_head_metadata(&store, &session)?;
         let workspace = agent_runtime::workspace::WorkspaceRef::new(&session.workspace_root);
-        let session_head = prompting::build_session_head(
-            &session,
-            &agent_name,
+        let agent_home = agents::agent_home(&self.config.data_dir, &session.agent_profile_id);
+        let session_head = prompting::build_session_head(prompting::BuildSessionHeadInput {
+            session: &session,
+            agent_name: &agent_name,
+            agent_home: Some(agent_home.as_path()),
+            runtime: Some(self.session_head_runtime(&session)),
             schedule,
-            &transcripts,
-            context_summary.as_ref(),
-            &runs,
-            &workspace,
-        );
+            transcripts: &transcripts,
+            context_summary: context_summary.as_ref(),
+            runs: &runs,
+            workspace: &workspace,
+        });
         let policy = self.compaction_policy();
         let uncovered_messages = transcripts.len().saturating_sub(
             context_summary
@@ -469,16 +603,20 @@ impl App {
             .collect::<Result<Vec<_>, _>>()
             .map_err(BootstrapError::RecordConversion)?;
         let (agent_name, schedule) = load_session_head_metadata(&store, &session)?;
+        let schedule_for_autonomy = schedule.clone();
         let workspace = agent_runtime::workspace::WorkspaceRef::new(&session.workspace_root);
-        let session_head = prompting::build_session_head(
-            &session,
-            &agent_name,
+        let agent_home = agents::agent_home(&self.config.data_dir, &session.agent_profile_id);
+        let session_head = prompting::build_session_head(prompting::BuildSessionHeadInput {
+            session: &session,
+            agent_name: &agent_name,
+            agent_home: Some(agent_home.as_path()),
+            runtime: Some(self.session_head_runtime(&session)),
             schedule,
-            &transcripts,
-            context_summary.as_ref(),
-            &runs,
-            &workspace,
-        );
+            transcripts: &transcripts,
+            context_summary: context_summary.as_ref(),
+            runs: &runs,
+            workspace: &workspace,
+        });
         let system_prompt =
             prompting::load_system_prompt(&self.config.data_dir, &session.agent_profile_id);
         let agents_prompt =
@@ -501,6 +639,9 @@ impl App {
         );
         let agent_profile = self.agent_profile(&session.agent_profile_id)?;
         let interagent = super::session_ops::load_session_interagent_summary(&store, session_id)?;
+        let autonomy_state =
+            autonomy_state_for_session(&session, schedule_for_autonomy, interagent.as_ref());
+        let recent_tool_activity = recent_tool_activity_for_system_view(&store, session_id)?;
 
         let mut lines = vec![
             "Системные блоки:".to_string(),
@@ -516,10 +657,12 @@ impl App {
             "2. AGENTS.md".to_string(),
             "3. active skill prompts".to_string(),
             "4. SessionHead".to_string(),
-            "5. Plan".to_string(),
-            "6. ContextSummary".to_string(),
-            "7. offload refs".to_string(),
-            "8. uncovered transcript tail".to_string(),
+            "5. AutonomyState".to_string(),
+            "6. PlanPromptView".to_string(),
+            "7. ContextSummary".to_string(),
+            "8. offload refs".to_string(),
+            "9. RecentToolActivity".to_string(),
+            "10. uncovered transcript tail".to_string(),
             String::new(),
             "[SYSTEM.md]".to_string(),
             system_prompt,
@@ -532,7 +675,6 @@ impl App {
             "[SessionHead]".to_string(),
             session_head.render(),
             String::new(),
-            "[Plan]".to_string(),
         ];
 
         match interagent.as_ref() {
@@ -608,8 +750,17 @@ impl App {
             None => lines.insert(lines.len().saturating_sub(4), "<none>".to_string()),
         }
 
-        match plan_snapshot {
-            Some(snapshot) if !snapshot.is_empty() => lines.push(snapshot.system_message_text()),
+        lines.push(String::new());
+        lines.push("[AutonomyState]".to_string());
+        match autonomy_state.as_ref() {
+            Some(state) if !state.render().trim().is_empty() => lines.push(state.render()),
+            _ => lines.push("<none>".to_string()),
+        }
+
+        lines.push(String::new());
+        lines.push("[PlanPromptView]".to_string());
+        match plan_snapshot.clone() {
+            Some(snapshot) if !snapshot.is_empty() => lines.push(snapshot.prompt_view_text()),
             _ => lines.push("<none>".to_string()),
         }
 
@@ -638,6 +789,13 @@ impl App {
                     ));
                 }
             }
+            _ => lines.push("<none>".to_string()),
+        }
+
+        lines.push(String::new());
+        lines.push("[RecentToolActivity]".to_string());
+        match recent_tool_activity.as_ref() {
+            Some(activity) if !activity.render().trim().is_empty() => lines.push(activity.render()),
             _ => lines.push("<none>".to_string()),
         }
 
@@ -701,6 +859,7 @@ impl App {
                 &active_skill_status,
             ),
             session_head: Some(session_head),
+            autonomy_state,
             plan_snapshot: store
                 .get_plan(session_id)?
                 .map(PlanSnapshot::try_from)
@@ -716,6 +875,7 @@ impl App {
                 .map(agent_runtime::context::ContextOffloadSnapshot::try_from)
                 .transpose()
                 .map_err(BootstrapError::RecordConversion)?,
+            recent_tool_activity,
             transcript_messages: transcripts
                 .iter()
                 .map(|record| {
