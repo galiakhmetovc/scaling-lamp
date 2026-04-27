@@ -2183,7 +2183,7 @@ impl ToolCatalog {
             ToolDefinition {
                 name: ToolName::WebFetch,
                 family: ToolFamily::Web,
-                description: "Fetch a URL and return readable response text; HTML pages are converted into markdown-like readable text",
+                description: "Fetch an exact URL and return readable response text; prefer web_search first unless the user supplied the URL, web_search returned it, or it is a known canonical source",
                 policy: ToolPolicy {
                     read_only: true,
                     destructive: false,
@@ -2193,7 +2193,7 @@ impl ToolCatalog {
             ToolDefinition {
                 name: ToolName::WebSearch,
                 family: ToolFamily::Web,
-                description: "Run a search query against the configured web search backend",
+                description: "Search first for current or external information via the configured backend; deployments may use SearXNG",
                 policy: ToolPolicy {
                     read_only: true,
                     destructive: false,
@@ -5797,7 +5797,7 @@ impl ToolName {
             Self::WebFetch => json!({
                 "type": "object",
                 "properties": {
-                    "url": { "type": "string", "description": "Absolute URL to fetch and convert into readable text" }
+                    "url": { "type": "string", "description": "Absolute exact URL to fetch and convert into readable text. Prefer web_search first unless the user supplied this URL, web_search returned it, or it is a known canonical source." }
                 },
                 "required": ["url"],
                 "additionalProperties": false,
@@ -5805,7 +5805,7 @@ impl ToolName {
             Self::WebSearch => json!({
                 "type": "object",
                 "properties": {
-                    "query": { "type": "string", "description": "Search query text" },
+                    "query": { "type": "string", "description": "Search query text. Use this first for current or external information; configured deployments may use SearXNG." },
                     "limit": { "type": "integer", "minimum": 1, "description": "Maximum number of results" }
                 },
                 "required": ["query", "limit"],

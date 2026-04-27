@@ -79,14 +79,14 @@ Core `agentd` ставится отдельно от контейнерной о
 /opt/teamd/containers/obsidian/obsidian-mcp.example.toml
 ```
 
-Чтобы переключить встроенный `web_search` на SearXNG, добавьте в `/etc/teamd/teamd.env`:
+Если SearXNG включён, `deploy-teamd-containers.sh` сам upsert-ит в `/etc/teamd/teamd.env`:
 
 ```bash
 TEAMD_WEB_SEARCH_BACKEND='searxng_json'
 TEAMD_WEB_SEARCH_URL='http://127.0.0.1:8888/search'
 ```
 
-и перезапустите:
+и перезапускает активные `teamd` services, если не указан `--no-start` или `--no-restart-teamd`. Ручной перезапуск после ручной правки:
 
 ```bash
 sudo systemctl restart teamd-daemon.service teamd-telegram.service

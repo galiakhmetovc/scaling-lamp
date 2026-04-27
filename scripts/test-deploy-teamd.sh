@@ -71,6 +71,7 @@ assert_contains "$containers_dry_run_output" "docker.io/library/node:22-alpine"
 assert_contains "$containers_dry_run_output" "usermod"
 assert_contains "$containers_dry_run_output" "teamd-caddy"
 assert_contains "$containers_dry_run_output" "docker compose"
+assert_contains "$containers_dry_run_output" "upsert SearXNG web_search defaults in /etc/teamd/teamd.env"
 assert_contains "$containers_dry_run_output" "TEAMD_WEB_SEARCH_BACKEND=searxng_json"
 assert_contains "$containers_dry_run_output" "TEAMD_WEB_SEARCH_URL=http://127.0.0.1:8888/search"
 

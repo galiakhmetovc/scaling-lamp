@@ -18,6 +18,7 @@ CONTAINERS_ROOT=${TEAMD_CONTAINERS_ROOT:-/opt/teamd/containers}
 DATA_ROOT=${TEAMD_CONTAINERS_DATA_ROOT:-/var/lib/teamd/containers}
 EDGE_NETWORK=${TEAMD_CONTAINERS_EDGE_NETWORK:-teamd-edge}
 CONFIG_FILE=${TEAMD_CONFIG:-${TEAMD_DEPLOY_CONFIG_FILE:-/etc/teamd/config.toml}}
+ENV_FILE=${TEAMD_DEPLOY_ENV_FILE:-/etc/teamd/teamd.env}
 SERVICE_USER=${TEAMD_DEPLOY_USER:-teamd}
 SERVICE_GROUP=${TEAMD_DEPLOY_GROUP:-$SERVICE_USER}
 DAEMON_SERVICE=${TEAMD_DEPLOY_DAEMON_SERVICE:-teamd-daemon.service}
@@ -133,6 +134,7 @@ Environment overrides:
                                  default: $OBSIDIAN_MCP_NODE_IMAGE.
   TEAMD_CONFIG / TEAMD_DEPLOY_CONFIG_FILE
                                  agentd config.toml path, default: $CONFIG_FILE.
+  TEAMD_DEPLOY_ENV_FILE          agentd env file path, default: $ENV_FILE.
   TEAMD_DEPLOY_USER              teamd system user, default: $SERVICE_USER.
   TEAMD_DEPLOY_GROUP             teamd system group, default: $SERVICE_GROUP.
   TEAMD_CADDY_DOMAIN             Optional base domain; creates search.<domain> and obsidian.<domain>.
@@ -398,6 +400,44 @@ EOF
   run_root install -m 0644 -o root -g root "$tmp_settings" "$SEARXNG_SETTINGS"
   run_root install -m 0644 -o root -g root "$tmp_compose" "$SEARXNG_COMPOSE"
   run_root install -m 0644 -o root -g root "$tmp_mcp" "$SEARXNG_MCP_EXAMPLE"
+}
+
+configure_agentd_web_search_env() {
+  env_parent=$(dirname "$ENV_FILE")
+  search_url="http://127.0.0.1:$SEARXNG_PORT/search"
+
+  if [ "$DRY_RUN" -eq 1 ]; then
+    print_cmd mkdir -p "$env_parent"
+    print_cmd sh -c "upsert SearXNG web_search defaults in $ENV_FILE"
+    return 0
+  fi
+
+  run_root mkdir -p "$env_parent"
+
+  tmp_env=$(mktemp)
+  tmp_new=$(mktemp)
+  if [ -e "$ENV_FILE" ]; then
+    awk '
+      !/^(export[[:space:]]+)?TEAMD_WEB_SEARCH_BACKEND=/ &&
+      !/^(export[[:space:]]+)?TEAMD_WEB_SEARCH_URL=/
+    ' "$ENV_FILE" > "$tmp_env"
+  else
+    : > "$tmp_env"
+  fi
+
+  {
+    cat "$tmp_env"
+    [ ! -s "$tmp_env" ] || printf '\n'
+    printf 'TEAMD_WEB_SEARCH_BACKEND=%s\n' "$(quote_arg "searxng_json")"
+    printf 'TEAMD_WEB_SEARCH_URL=%s\n' "$(quote_arg "$search_url")"
+  } > "$tmp_new"
+
+  env_group=root
+  if getent group "$SERVICE_GROUP" >/dev/null 2>&1; then
+    env_group=$SERVICE_GROUP
+  fi
+  run_root install -m 0640 -o root -g "$env_group" "$tmp_new" "$ENV_FILE"
+  rm -f "$tmp_env" "$tmp_new"
 }
 
 resolve_obsidian_ids() {
@@ -901,6 +941,7 @@ ensure_edge_network
 
 if [ "$ENABLE_SEARXNG" -eq 1 ]; then
   write_searxng_files
+  configure_agentd_web_search_env
   compose_up "$SEARXNG_COMPOSE"
 fi
 
@@ -926,7 +967,7 @@ if [ "$ENABLE_CADDY" -eq 1 ]; then
   reload_caddy_if_running
 fi
 
-if [ "$ENABLE_OBSIDIAN_MCP" -eq 1 ]; then
+if [ "$ENABLE_SEARXNG" -eq 1 ] || [ "$ENABLE_OBSIDIAN_MCP" -eq 1 ]; then
   restart_teamd_services
 fi
 
@@ -944,6 +985,7 @@ if [ "$ENABLE_SEARXNG" -eq 1 ]; then
     Start command: docker compose -f $SEARXNG_COMPOSE up -d
     Settings: $SEARXNG_SETTINGS
     agentd web_search:
+      Env file: $ENV_FILE
       TEAMD_WEB_SEARCH_BACKEND=searxng_json
       TEAMD_WEB_SEARCH_URL=http://127.0.0.1:$SEARXNG_PORT/search
     MCP example: $SEARXNG_MCP_EXAMPLE

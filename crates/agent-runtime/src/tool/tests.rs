@@ -114,6 +114,25 @@ fn catalog_exposes_distinct_families_and_policy_flags() {
 }
 
 #[test]
+fn web_tool_definitions_are_search_first_and_searxng_aware() {
+    let catalog = ToolCatalog::default();
+    let web_search = catalog.definition(ToolName::WebSearch).expect("web_search");
+    let web_fetch = catalog.definition(ToolName::WebFetch).expect("web_fetch");
+
+    assert!(web_search.description.contains("first"));
+    assert!(web_search.description.contains("SearXNG"));
+    assert!(web_fetch.description.contains("exact URL"));
+    assert!(web_fetch.description.contains("web_search"));
+
+    let search_schema = web_search.openai_function_schema().to_string();
+    let fetch_schema = web_fetch.openai_function_schema().to_string();
+    assert!(search_schema.contains("first"));
+    assert!(search_schema.contains("SearXNG"));
+    assert!(fetch_schema.contains("exact URL"));
+    assert!(fetch_schema.contains("web_search"));
+}
+
+#[test]
 fn automatic_model_definitions_include_structured_exec_tools() {
     let catalog = ToolCatalog::default();
     let names = catalog

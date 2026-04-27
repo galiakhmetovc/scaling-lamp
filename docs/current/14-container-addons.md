@@ -38,7 +38,7 @@ Container add-ons ставятся отдельно:
 
 ## SearXNG для `web_search`
 
-Скрипт поднимает SearXNG на localhost:
+Скрипт поднимает SearXNG на localhost и автоматически прописывает для `agentd` search backend в `/etc/teamd/teamd.env`:
 
 ```text
 http://127.0.0.1:8888
@@ -50,14 +50,14 @@ http://127.0.0.1:8888
 curl 'http://127.0.0.1:8888/search?q=test&format=json'
 ```
 
-Чтобы `agentd web_search` использовал SearXNG, добавьте в `/etc/teamd/teamd.env`:
+Фактические env-переменные, которые upsert-ит скрипт:
 
 ```bash
 TEAMD_WEB_SEARCH_BACKEND='searxng_json'
 TEAMD_WEB_SEARCH_URL='http://127.0.0.1:8888/search'
 ```
 
-Потом перезапустите сервисы:
+Если `teamd` systemd services уже установлены и активны, скрипт перезапускает их сам. Ручной перезапуск нужен только после ручной правки env/config:
 
 ```bash
 sudo systemctl restart teamd-daemon.service teamd-telegram.service
@@ -71,7 +71,7 @@ search_backend = "searxng_json"
 search_url = "http://127.0.0.1:8888/search"
 ```
 
-`web_fetch` остаётся прямым HTTP fetch tool. Он не ходит через SearXNG, потому что SearXNG — поисковый backend, а не универсальный proxy.
+`web_fetch` остаётся прямым HTTP fetch tool. Он не ходит через SearXNG, потому что SearXNG — поисковый backend, а не универсальный proxy. Агенту в prompts явно сказано: сначала `web_search`, потом `web_fetch` по точному URL из результата поиска, user input или known canonical source.
 
 Для HTML-страниц runtime теперь конвертирует ответ в markdown-подобный readable text и `title`, а не прокидывает сырой HTML в модель. Это делается внутри встроенного `web_fetch` через `html-to-markdown-rs`; SearXNG здесь не участвует. Если результат слишком большой, он offloadится в artifact и в prompt попадает только компактная ссылка+preview.
 

@@ -203,7 +203,9 @@ export TEAMD_WEB_SEARCH_BACKEND='searxng_json'
 export TEAMD_WEB_SEARCH_URL='http://127.0.0.1:8888/search'
 ```
 
-Важно: `web_fetch` не переключается на SearXNG. Это прямой HTTP fetch указанного URL. SearXNG закрывает именно search backend.
+`scripts/deploy-teamd-containers.sh` upsert-ит эти env-переменные в `/etc/teamd/teamd.env`, когда SearXNG включён.
+
+Важно: `web_fetch` не переключается на SearXNG. Это прямой HTTP fetch указанного URL. SearXNG закрывает именно search backend. Model-facing guidance требует сначала использовать `web_search` для current/external информации и только потом `web_fetch` по точному URL.
 
 Важно: для `text/html`/`xhtml` `web_fetch` теперь не отдаёт модели сырой HTML по умолчанию. Runtime конвертирует HTML в markdown-подобный readable text через `html-to-markdown-rs`, извлекает заголовок страницы, а большие результаты уводит в context offload artifact вместо inline prompt payload.
 

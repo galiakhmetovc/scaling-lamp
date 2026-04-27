@@ -33,6 +33,12 @@ const DEFAULT_SKILL_TOOL_GUIDANCE_SECTION: &str = r#"- Skills:
 
 const DEFAULT_AUTONOMY_STATE_GUIDANCE_LINE: &str = "  - Use `autonomy_state_read` when you need one compact view of current schedules, active jobs, child sessions, inbox events, inter-agent chain state, and configured A2A peers\n";
 
+const DEFAULT_WEB_SEARCH_FIRST_GUIDANCE_SECTION: &str = r#"- Web:
+  - Use `web_search` first for current or external information, discovery, news, product data, law, weather, and uncertain sources; configured deployments may use SearXNG
+  - Use `web_fetch` only for an exact URL supplied by the user, a URL returned by `web_search`, or a known canonical documentation/source URL
+  - Do not guess fetch-only endpoints as search; if `web_search` returns no results, reformulate once or state that no source was found
+"#;
+
 const DEFAULT_AGENTS_MD: &str = r#"Assistant agent profile.
 
 - Primary role: general-purpose coding agent
@@ -58,6 +64,10 @@ Tool usage rules:
 - Search:
   - Use `fs_search_text` for one known file
   - Use `fs_find_in_files` when searching across the workspace
+- Web:
+  - Use `web_search` first for current or external information, discovery, news, product data, law, weather, and uncertain sources; configured deployments may use SearXNG
+  - Use `web_fetch` only for an exact URL supplied by the user, a URL returned by `web_search`, or a known canonical documentation/source URL
+  - Do not guess fetch-only endpoints as search; if `web_search` returns no results, reformulate once or state that no source was found
 - Exec:
   - `exec_start` takes one executable plus literal args; do not mash a full shell command into `executable`
   - If you need shell syntax, run the shell explicitly, for example executable `/bin/sh` with args `["-c", "..."]`
@@ -722,19 +732,10 @@ fn sync_builtin_default_agents_prompt_file(
         Ok(existing) => {
             let existing = normalize_prompt_contents(&existing);
             let current = normalize_prompt_contents(current);
-            let without_skill_guidance = current.replace(DEFAULT_SKILL_TOOL_GUIDANCE_SECTION, "");
-            let without_autonomy_guidance =
-                current.replace(DEFAULT_AUTONOMY_STATE_GUIDANCE_LINE, "");
-            let without_skill_and_autonomy_guidance =
-                without_skill_guidance.replace(DEFAULT_AUTONOMY_STATE_GUIDANCE_LINE, "");
-            let pre_skill_guidance = normalize_prompt_contents(&without_skill_guidance);
-            let pre_autonomy_guidance = normalize_prompt_contents(&without_autonomy_guidance);
-            let pre_skill_and_autonomy_guidance =
-                normalize_prompt_contents(&without_skill_and_autonomy_guidance);
+            let previous_generated_prompts =
+                previous_generated_default_agents_prompt_variants(&current);
             if existing == current
-                || existing == pre_skill_guidance
-                || existing == pre_autonomy_guidance
-                || existing == pre_skill_and_autonomy_guidance
+                || previous_generated_prompts.contains(&existing)
                 || legacy_variants
                     .iter()
                     .any(|candidate| existing == normalize_prompt_contents(candidate))
@@ -747,6 +748,25 @@ fn sync_builtin_default_agents_prompt_file(
         Err(source) if source.kind() == io::ErrorKind::NotFound => fs::write(path, current),
         Err(source) => Err(source),
     }
+}
+
+fn previous_generated_default_agents_prompt_variants(current: &str) -> Vec<String> {
+    let optional_blocks = [
+        DEFAULT_WEB_SEARCH_FIRST_GUIDANCE_SECTION,
+        DEFAULT_SKILL_TOOL_GUIDANCE_SECTION,
+        DEFAULT_AUTONOMY_STATE_GUIDANCE_LINE,
+    ];
+    let mut variants = Vec::new();
+    for mask in 1..(1usize << optional_blocks.len()) {
+        let mut candidate = current.to_string();
+        for (index, block) in optional_blocks.iter().enumerate() {
+            if mask & (1usize << index) != 0 {
+                candidate = candidate.replace(block, "");
+            }
+        }
+        variants.push(normalize_prompt_contents(&candidate));
+    }
+    variants
 }
 
 fn normalize_prompt_contents(contents: &str) -> String {
@@ -836,6 +856,7 @@ mod tests {
         assert!(refreshed.contains("call `session_wait`"));
         assert!(refreshed.contains("Use `skill_list`"));
         assert!(refreshed.contains("Use `autonomy_state_read`"));
+        assert!(refreshed.contains("Use `web_search` first"));
 
         fs::write(
             default_home.join("AGENTS.md"),
@@ -852,6 +873,7 @@ mod tests {
         assert!(refreshed_pre_skill.contains("Use `skill_list`"));
         assert!(refreshed_pre_skill.contains("Use `skill_enable` or `skill_disable`"));
         assert!(refreshed_pre_skill.contains("Use `autonomy_state_read`"));
+        assert!(refreshed_pre_skill.contains("Use `web_search` first"));
 
         let obsidian_skill =
             fs::read_to_string(default_home.join("skills/obsidian-vault/SKILL.md"))
