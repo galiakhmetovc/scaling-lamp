@@ -32,8 +32,9 @@ use agent_runtime::skills::{resolve_session_skill_status, scan_skill_catalog_wit
 use agent_runtime::tool::{
     AddTaskNoteOutput, AddTaskOutput, ArtifactReadOutput, ArtifactSearchOutput,
     ArtifactSearchResult, EditTaskOutput, InitPlanOutput, PlanLintOutput, PlanReadOutput,
-    PlanSnapshotOutput, PlanWriteOutput, SetTaskStatusOutput, ToolCatalog, ToolDefinition,
-    ToolFamily, ToolName, ToolOutput, ToolPolicy, ToolRuntime,
+    PlanSnapshotOutput, PlanWriteOutput, PromptBudgetLayerOutput, PromptBudgetReadOutput,
+    PromptBudgetUpdateOutput, SetTaskStatusOutput, ToolCatalog, ToolDefinition, ToolFamily,
+    ToolName, ToolOutput, ToolPolicy, ToolRuntime,
 };
 use agent_runtime::workspace::WorkspaceRef;
 use std::path::PathBuf;
@@ -947,6 +948,132 @@ impl ExecutionService {
             ),
             estimated_prompt_tokens: None,
         }
+    }
+
+    fn prompt_budget_context_window_tokens(
+        &self,
+        provider: Option<&dyn ProviderDriver>,
+        session: &Session,
+    ) -> Option<u32> {
+        provider
+            .and_then(|provider| {
+                self.resolve_context_window_tokens(provider, session.settings.model.as_deref())
+            })
+            .or(self.config.context_window_tokens_override)
+    }
+
+    fn prompt_budget_read_output_for_session(
+        &self,
+        provider: Option<&dyn ProviderDriver>,
+        session: &Session,
+    ) -> PromptBudgetReadOutput {
+        let context_window_tokens = self.prompt_budget_context_window_tokens(provider, session);
+        let auto_compaction_trigger_ratio = Some(self.config.context_auto_compaction_trigger_ratio);
+        let usable_context_tokens = SessionHeadRuntime::usable_context_tokens(
+            context_window_tokens,
+            auto_compaction_trigger_ratio,
+        );
+        let policy = &session.settings.prompt_budget;
+        let target_tokens = |percent: u8| {
+            usable_context_tokens
+                .map(|tokens| ((u64::from(tokens) * u64::from(percent)) / 100) as u32)
+        };
+        let layer = |name: &str, percent: u8| PromptBudgetLayerOutput {
+            layer: name.to_string(),
+            percent,
+            target_tokens: target_tokens(percent),
+        };
+        PromptBudgetReadOutput {
+            session_id: session.id.clone(),
+            source: if *policy == agent_runtime::session::PromptBudgetPolicy::default() {
+                "runtime_default".to_string()
+            } else {
+                "session_override".to_string()
+            },
+            context_window_tokens,
+            auto_compaction_trigger_basis_points: (self
+                .config
+                .context_auto_compaction_trigger_ratio
+                * 10_000.0)
+                .round()
+                .max(0.0) as u32,
+            usable_context_tokens,
+            total_percent: policy.total_percent(),
+            layers: vec![
+                layer("system", policy.system),
+                layer("agents", policy.agents),
+                layer("active_skills", policy.active_skills),
+                layer("session_head", policy.session_head),
+                layer("autonomy_state", policy.autonomy_state),
+                layer("plan", policy.plan),
+                layer("context_summary", policy.context_summary),
+                layer("offload_refs", policy.offload_refs),
+                layer("recent_tool_activity", policy.recent_tool_activity),
+                layer("transcript_tail", policy.transcript_tail),
+            ],
+        }
+    }
+
+    fn read_prompt_budget_policy(
+        &self,
+        store: &PersistenceStore,
+        provider: Option<&dyn ProviderDriver>,
+        session_id: &str,
+    ) -> Result<PromptBudgetReadOutput, ExecutionError> {
+        let session = Session::try_from(
+            store
+                .get_session(session_id)
+                .map_err(ExecutionError::Store)?
+                .ok_or_else(|| ExecutionError::MissingSession {
+                    id: session_id.to_string(),
+                })?,
+        )
+        .map_err(ExecutionError::RecordConversion)?;
+        Ok(self.prompt_budget_read_output_for_session(provider, &session))
+    }
+
+    fn update_prompt_budget_policy(
+        &self,
+        store: &PersistenceStore,
+        provider: Option<&dyn ProviderDriver>,
+        session_id: &str,
+        input: &agent_runtime::tool::PromptBudgetUpdateInput,
+        now: i64,
+    ) -> Result<PromptBudgetUpdateOutput, ExecutionError> {
+        let mut session = Session::try_from(
+            store
+                .get_session(session_id)
+                .map_err(ExecutionError::Store)?
+                .ok_or_else(|| ExecutionError::MissingSession {
+                    id: session_id.to_string(),
+                })?,
+        )
+        .map_err(ExecutionError::RecordConversion)?;
+        let mut policy = if input.reset {
+            agent_runtime::session::PromptBudgetPolicy::default()
+        } else {
+            session.settings.prompt_budget.clone()
+        };
+        if let Some(percentages) = &input.percentages {
+            percentages.apply_to(&mut policy);
+        }
+        policy.validate().map_err(|source| {
+            ExecutionError::Tool(agent_runtime::tool::ToolError::InvalidPlanWrite {
+                reason: source.to_string(),
+            })
+        })?;
+        session.settings.prompt_budget = policy;
+        session.updated_at = now;
+        let record = agent_persistence::SessionRecord::try_from(&session)
+            .map_err(ExecutionError::RecordConversion)?;
+        store.put_session(&record).map_err(ExecutionError::Store)?;
+        let budget = self.prompt_budget_read_output_for_session(provider, &session);
+        Ok(PromptBudgetUpdateOutput {
+            session_id: session.id,
+            reset: input.reset,
+            reason: input.reason.clone(),
+            budget,
+        })
     }
 
     fn autonomy_state_for_session(
@@ -2022,6 +2149,12 @@ impl ExecutionService {
             )),
             ToolCall::PlanLint(_) => Ok(ToolOutput::PlanLint(
                 self.lint_plan_snapshot(store, session_id)?,
+            )),
+            ToolCall::PromptBudgetRead(_) => Ok(ToolOutput::PromptBudgetRead(
+                self.read_prompt_budget_policy(store, provider, session_id)?,
+            )),
+            ToolCall::PromptBudgetUpdate(input) => Ok(ToolOutput::PromptBudgetUpdate(
+                self.update_prompt_budget_policy(store, provider, session_id, input, now)?,
             )),
             ToolCall::ArtifactRead(input) => Ok(ToolOutput::ArtifactRead(
                 self.read_context_offload_artifact(store, session_id, input.artifact_id.as_str())?,

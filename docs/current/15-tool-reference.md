@@ -531,6 +531,60 @@ plan_lint({})
 - валидирует план;
 - возвращает найденные structural issues.
 
+### `prompt_budget_read`
+
+Сигнатура:
+
+```text
+prompt_budget_read({})
+```
+
+Что делает:
+
+- читает текущую session-scoped prompt budget policy;
+- возвращает `context_window_tokens`, `auto_compaction_trigger_basis_points`, `usable_context_tokens`;
+- возвращает проценты и target tokens для слоёв `SYSTEM`, `AGENTS`, active skills, `SessionHead`, `AutonomyState`, plan, summary, offload refs, recent tool activity и transcript tail.
+
+Когда использовать:
+
+- если нужно понять, сколько usable context доступно;
+- перед изменением prompt allocation через `prompt_budget_update`.
+
+### `prompt_budget_update`
+
+Сигнатура:
+
+```text
+prompt_budget_update({
+  reset?: boolean,
+  percentages?: {
+    system?: integer | null,
+    agents?: integer | null,
+    active_skills?: integer | null,
+    session_head?: integer | null,
+    autonomy_state?: integer | null,
+    plan?: integer | null,
+    context_summary?: integer | null,
+    offload_refs?: integer | null,
+    recent_tool_activity?: integer | null,
+    transcript_tail?: integer | null
+  } | null,
+  reason?: string | null
+})
+```
+
+Что делает:
+
+- меняет session-scoped prompt budget policy;
+- если `reset=true`, сначала возвращает policy к default;
+- затем merge-ит переданные проценты;
+- отклоняет изменение, если итоговая сумма процентов не равна `100`.
+
+Когда использовать:
+
+- когда текущей задаче реально нужен другой context allocation;
+- например временно увеличить `transcript_tail` или `recent_tool_activity`, чтобы модель лучше видела свежую историю или недавние tool ошибки.
+
 ## Offload
 
 ### `artifact_read`

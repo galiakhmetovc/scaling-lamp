@@ -34,6 +34,22 @@ pub struct SessionSettings {
     pub auto_approve: bool,
     pub enabled_skills: Vec<String>,
     pub disabled_skills: Vec<String>,
+    pub prompt_budget: PromptBudgetPolicy,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct PromptBudgetPolicy {
+    pub system: u8,
+    pub agents: u8,
+    pub active_skills: u8,
+    pub session_head: u8,
+    pub autonomy_state: u8,
+    pub plan: u8,
+    pub context_summary: u8,
+    pub offload_refs: u8,
+    pub recent_tool_activity: u8,
+    pub transcript_tail: u8,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -42,6 +58,11 @@ pub struct PromptOverride(String);
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SessionError {
     EmptyPromptOverride,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PromptBudgetPolicyError {
+    InvalidTotalPercent { total_percent: u16 },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -116,7 +137,48 @@ impl Default for SessionSettings {
             auto_approve: false,
             enabled_skills: Vec::new(),
             disabled_skills: Vec::new(),
+            prompt_budget: PromptBudgetPolicy::default(),
         }
+    }
+}
+
+impl Default for PromptBudgetPolicy {
+    fn default() -> Self {
+        Self {
+            system: 5,
+            agents: 8,
+            active_skills: 12,
+            session_head: 5,
+            autonomy_state: 5,
+            plan: 8,
+            context_summary: 15,
+            offload_refs: 15,
+            recent_tool_activity: 7,
+            transcript_tail: 20,
+        }
+    }
+}
+
+impl PromptBudgetPolicy {
+    pub fn total_percent(&self) -> u16 {
+        u16::from(self.system)
+            + u16::from(self.agents)
+            + u16::from(self.active_skills)
+            + u16::from(self.session_head)
+            + u16::from(self.autonomy_state)
+            + u16::from(self.plan)
+            + u16::from(self.context_summary)
+            + u16::from(self.offload_refs)
+            + u16::from(self.recent_tool_activity)
+            + u16::from(self.transcript_tail)
+    }
+
+    pub fn validate(&self) -> Result<(), PromptBudgetPolicyError> {
+        let total_percent = self.total_percent();
+        if total_percent != 100 {
+            return Err(PromptBudgetPolicyError::InvalidTotalPercent { total_percent });
+        }
+        Ok(())
     }
 }
 
@@ -169,6 +231,19 @@ impl SessionSettings {
         changed
     }
 }
+
+impl fmt::Display for PromptBudgetPolicyError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::InvalidTotalPercent { total_percent } => write!(
+                formatter,
+                "prompt budget percentages must sum to 100, got {total_percent}"
+            ),
+        }
+    }
+}
+
+impl Error for PromptBudgetPolicyError {}
 
 fn normalize_skill_name(skill_name: &str) -> Option<String> {
     let trimmed = skill_name.trim().to_lowercase();
@@ -393,8 +468,8 @@ impl Error for MessageRoleParseError {}
 #[cfg(test)]
 mod tests {
     use super::{
-        MessageRole, PromptOverride, Session, SessionSettings, Transcript, TranscriptEntry,
-        parse_scheduled_input_metadata, scheduled_input_metadata,
+        MessageRole, PromptBudgetPolicy, PromptOverride, Session, SessionSettings, Transcript,
+        TranscriptEntry, parse_scheduled_input_metadata, scheduled_input_metadata,
     };
 
     #[test]
@@ -412,6 +487,23 @@ mod tests {
         assert_eq!(session.settings.compactifications, 0);
         assert!(session.settings.enabled_skills.is_empty());
         assert!(session.settings.disabled_skills.is_empty());
+        assert_eq!(session.settings.prompt_budget.total_percent(), 100);
+        assert_eq!(session.settings.prompt_budget.transcript_tail, 20);
+    }
+
+    #[test]
+    fn prompt_budget_policy_rejects_invalid_total_percent() {
+        let policy = PromptBudgetPolicy {
+            transcript_tail: 25,
+            ..PromptBudgetPolicy::default()
+        };
+
+        let error = policy.validate().expect_err("invalid total");
+
+        assert_eq!(
+            error.to_string(),
+            "prompt budget percentages must sum to 100, got 105"
+        );
     }
 
     #[test]

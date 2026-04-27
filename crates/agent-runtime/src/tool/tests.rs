@@ -4,9 +4,9 @@ use super::{
     FsSearchTextInput, FsTrashInput, FsWriteMode, FsWriteTextInput, KnowledgeReadInput,
     KnowledgeReadMode, KnowledgeRoot, KnowledgeSearchInput, KnowledgeSourceKind, ProcessKillInput,
     ProcessOutputStatus, ProcessOutputStream, ProcessReadOutputInput, ProcessResultStatus,
-    ProcessWaitInput, SessionReadInput, SessionReadMode, SessionSearchInput, SessionWaitInput,
-    SharedProcessRegistry, ToolCall, ToolCatalog, ToolFamily, ToolName, ToolRuntime, WebFetchInput,
-    WebSearchBackend, WebSearchInput, WebToolClient,
+    ProcessWaitInput, PromptBudgetLayerPercentagesInput, SessionReadInput, SessionReadMode,
+    SessionSearchInput, SessionWaitInput, SharedProcessRegistry, ToolCall, ToolCatalog, ToolFamily,
+    ToolName, ToolRuntime, WebFetchInput, WebSearchBackend, WebSearchInput, WebToolClient,
 };
 use crate::memory::SessionRetentionTier;
 use crate::workspace::WorkspaceRef;
@@ -144,6 +144,19 @@ fn automatic_model_definitions_include_granular_planning_tools() {
     assert!(names.contains(&ToolName::EditTask));
     assert!(names.contains(&ToolName::PlanSnapshot));
     assert!(names.contains(&ToolName::PlanLint));
+}
+
+#[test]
+fn automatic_model_definitions_include_prompt_budget_tools() {
+    let catalog = ToolCatalog::default();
+    let names = catalog
+        .automatic_model_definitions()
+        .into_iter()
+        .map(|definition| definition.name)
+        .collect::<Vec<_>>();
+
+    assert!(names.contains(&ToolName::PromptBudgetRead));
+    assert!(names.contains(&ToolName::PromptBudgetUpdate));
 }
 
 #[test]
@@ -510,6 +523,55 @@ fn enum_like_tool_parameters_require_quoted_json_strings_in_schema() {
     assert!(continue_later_schema.contains("quoted JSON string"));
     assert!(schedule_create_schema.contains("quoted JSON string"));
     assert!(schedule_update_schema.contains("quoted JSON string"));
+}
+
+#[test]
+fn prompt_budget_tool_definitions_and_parsing_are_explicit() {
+    let catalog = ToolCatalog::default();
+    let read = catalog
+        .definition(ToolName::PromptBudgetRead)
+        .expect("prompt_budget_read");
+    let update = catalog
+        .definition(ToolName::PromptBudgetUpdate)
+        .expect("prompt_budget_update");
+    let update_schema = update.openai_function_schema().to_string();
+
+    assert_eq!(read.family, ToolFamily::Planning);
+    assert!(read.policy.read_only);
+    assert!(!update.policy.read_only);
+    assert!(!update.policy.requires_approval);
+    assert!(update.description.contains("session-scoped"));
+    assert!(update_schema.contains("percentages"));
+    assert!(update_schema.contains("reset"));
+    assert!(update_schema.contains("sum to 100"));
+
+    let read_call = ToolCall::from_openai_function("prompt_budget_read", "{}").expect("parse read");
+    assert!(matches!(read_call, ToolCall::PromptBudgetRead(_)));
+
+    let update_call = ToolCall::from_openai_function(
+        "prompt_budget_update",
+        r#"{"percentages":{"system":5,"agents":8,"active_skills":12,"session_head":5,"autonomy_state":5,"plan":8,"context_summary":15,"offload_refs":15,"recent_tool_activity":7,"transcript_tail":20},"reason":"need more transcript tail"}"#,
+    )
+    .expect("parse update");
+    assert_eq!(
+        update_call,
+        ToolCall::PromptBudgetUpdate(super::PromptBudgetUpdateInput {
+            reset: false,
+            percentages: Some(PromptBudgetLayerPercentagesInput {
+                system: Some(5),
+                agents: Some(8),
+                active_skills: Some(12),
+                session_head: Some(5),
+                autonomy_state: Some(5),
+                plan: Some(8),
+                context_summary: Some(15),
+                offload_refs: Some(15),
+                recent_tool_activity: Some(7),
+                transcript_tail: Some(20),
+            }),
+            reason: Some("need more transcript tail".to_string()),
+        })
+    );
 }
 
 #[test]

@@ -958,7 +958,7 @@ Runtime может добавить system nudges:
 usable_context_tokens = effective_context_window_tokens * auto_compaction_trigger_ratio
 ```
 
-Агент может менять session/turn-level prompt budget percentages через будущие budget tools, если задача этого требует. Overrides должны иметь guardrails, попадать в audit/debug и не могут молча занулить critical layers.
+Агент может менять session-level prompt budget percentages через `prompt_budget_read` и `prompt_budget_update`, если задача этого требует. Overrides имеют guardrail: после merge сумма процентов должна быть `100`. Изменения попадают в обычный tool-call ledger и debug surfaces. Turn-level overrides и physical per-layer truncation по этим процентам остаются отдельными follow-up шагами.
 
 ## Что надо изменить в коде, если этот contract принять
 
@@ -1034,6 +1034,22 @@ usable_context_tokens = effective_context_window_tokens * auto_compaction_trigge
 - решить, какие `system` entries должны идти в model prompt;
 - отделить internal diagnostics от user-visible runtime events;
 - добавить bounded `RecentToolActivity` для tool outcomes прошлого context.
+
+### Change C6b: добавить prompt budget tools
+
+Сейчас:
+
+- `SessionHead` показывает `context_window_tokens`, `auto_compaction_trigger_ratio` и `usable_context_tokens`;
+- session хранит `PromptBudgetPolicy`;
+- модель может вызвать `prompt_budget_read` и увидеть проценты слоёв и target tokens;
+- модель может вызвать `prompt_budget_update` для session-scoped override или reset;
+- invalid policy с суммой не `100` возвращает tool error.
+
+Что ещё не сделано:
+
+- turn-level ephemeral overrides;
+- strict per-layer truncation по policy;
+- operator UI для сравнения default vs override.
 
 ### Change C7: добавить `AutonomyState`
 

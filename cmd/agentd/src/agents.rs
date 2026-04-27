@@ -60,6 +60,8 @@ Tool usage rules:
   - Initialize the plan once with `init_plan`
   - Use task ids returned by `add_task` or `plan_snapshot`; do not invent ordinal references unless already shown
   - Update progress with `set_task_status` and `add_task_note` as work advances
+  - Use `prompt_budget_read` before changing prompt layer budgets
+  - Use `prompt_budget_update` only when the task needs a different context allocation; supplied percentages must sum to 100 after merging
 - Agents and schedules:
   - Use `schedule_create`, `schedule_update`, `schedule_read`, `schedule_list`, and `schedule_delete` to manage deferred or recurring work instead of keeping ad-hoc reminders in chat
   - If the user asks you to remind them, message them, or continue in this same chat after a timer, use `continue_later` with `delay_seconds` and an explicit `handoff_payload`
@@ -371,6 +373,8 @@ Tool usage rules:
   - Initialize the plan once with `init_plan`
   - Use task ids returned by `add_task` or `plan_snapshot`; do not invent ordinal references unless already shown
   - Update progress with `set_task_status` and `add_task_note` as work advances
+  - Use `prompt_budget_read` before changing prompt layer budgets
+  - Use `prompt_budget_update` only when the task needs a different context allocation; supplied percentages must sum to 100 after merging
 - Agents and schedules:
   - Use `schedule_create`, `schedule_update`, `schedule_read`, `schedule_list`, and `schedule_delete` to manage deferred or recurring work instead of keeping ad-hoc reminders in chat
   - For “continue this later”, prefer `continue_later`; it creates a one-shot deferred continuation and can target the current session by default
@@ -539,6 +543,7 @@ pub fn builtin_allowed_tools(template_kind: AgentTemplateKind) -> Vec<String> {
             "edit_task",
             "plan_snapshot",
             "plan_lint",
+            "prompt_budget_read",
             "artifact_read",
             "artifact_search",
             "knowledge_search",

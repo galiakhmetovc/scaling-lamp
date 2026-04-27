@@ -2577,6 +2577,173 @@ fn execute_chat_turn_can_finish_after_granular_plan_tool_calls() {
 }
 
 #[test]
+fn execute_chat_turn_can_read_and_update_prompt_budget_policy() {
+    let (api_base, requests, handle) = spawn_json_server_sequence(vec![
+        r#"{
+                "id":"resp_prompt_budget_1",
+                "model":"gpt-5.4",
+                "output":[
+                    {
+                        "id":"fc_prompt_budget_update",
+                        "type":"function_call",
+                        "call_id":"call_prompt_budget_update",
+                        "name":"prompt_budget_update",
+                        "arguments":"{\"percentages\":{\"system\":5,\"agents\":7,\"active_skills\":12,\"session_head\":5,\"autonomy_state\":5,\"plan\":8,\"context_summary\":15,\"offload_refs\":15,\"recent_tool_activity\":8,\"transcript_tail\":20},\"reason\":\"give tool activity a little more room\"}"
+                    }
+                ],
+                "usage":{"input_tokens":30,"output_tokens":10,"total_tokens":40}
+            }"#
+        .to_string(),
+        r#"{
+                "id":"resp_prompt_budget_2",
+                "model":"gpt-5.4",
+                "output":[
+                    {
+                        "id":"fc_prompt_budget_read",
+                        "type":"function_call",
+                        "call_id":"call_prompt_budget_read",
+                        "name":"prompt_budget_read",
+                        "arguments":"{}"
+                    }
+                ],
+                "usage":{"input_tokens":24,"output_tokens":8,"total_tokens":32}
+            }"#
+        .to_string(),
+        r#"{
+                "id":"resp_prompt_budget_3",
+                "model":"gpt-5.4",
+                "output":[
+                    {
+                        "id":"msg_prompt_budget",
+                        "type":"message",
+                        "status":"completed",
+                        "role":"assistant",
+                        "content":[
+                            {
+                                "type":"output_text",
+                                "text":"Prompt budget updated and read back."
+                            }
+                        ]
+                    }
+                ],
+                "usage":{"input_tokens":22,"output_tokens":6,"total_tokens":28}
+            }"#
+        .to_string(),
+    ]);
+    let temp = tempfile::tempdir().expect("tempdir");
+    let app = build_from_config(AppConfig {
+        data_dir: temp.path().join("state-root"),
+        daemon: Default::default(),
+        provider: ConfiguredProvider {
+            kind: ProviderKind::OpenAiResponses,
+            api_base: Some(format!("{api_base}/v1")),
+            api_key: Some("test-key".to_string()),
+            default_model: Some("gpt-5.4".to_string()),
+            ..ConfiguredProvider::default()
+        },
+        context: agent_persistence::config::ContextConfig {
+            auto_compaction_trigger_ratio: 0.8,
+            context_window_tokens_override: Some(10_000),
+            ..agent_persistence::config::ContextConfig::default()
+        },
+        ..AppConfig::default()
+    })
+    .expect("build app");
+    let store = PersistenceStore::open(&app.persistence).expect("open store");
+
+    store
+        .put_session(&SessionRecord {
+            id: "session-prompt-budget".to_string(),
+            title: "Prompt Budget".to_string(),
+            prompt_override: None,
+            settings_json: serde_json::to_string(&SessionSettings::default())
+                .expect("serialize settings"),
+            workspace_root: app.runtime.workspace.root.display().to_string(),
+            agent_profile_id: "default".to_string(),
+            active_mission_id: None,
+            parent_session_id: None,
+            parent_job_id: None,
+            delegation_label: None,
+            created_at: 1,
+            updated_at: 1,
+        })
+        .expect("put session");
+
+    let report = app
+        .execute_chat_turn("session-prompt-budget", "adjust prompt budget", 10)
+        .expect("execute chat turn");
+    let _first_request = requests.recv().expect("first provider request");
+    let second_request = requests.recv().expect("second provider request");
+    let third_request = requests.recv().expect("third provider request");
+    handle.join().expect("join server");
+
+    assert_eq!(report.response_id, "resp_prompt_budget_3");
+    assert_eq!(report.output_text, "Prompt budget updated and read back.");
+
+    let updated = Session::try_from(
+        store
+            .get_session("session-prompt-budget")
+            .expect("get session")
+            .expect("session exists"),
+    )
+    .expect("restore session");
+    assert_eq!(updated.settings.prompt_budget.agents, 7);
+    assert_eq!(updated.settings.prompt_budget.recent_tool_activity, 8);
+
+    let second_request_body = second_request
+        .split_once("\r\n\r\n")
+        .map(|(_, body)| body)
+        .expect("extract second provider request body");
+    let second_request_json: serde_json::Value =
+        serde_json::from_str(second_request_body).expect("parse second provider request");
+    let update_tool_output = second_request_json["input"][0]["output"]
+        .as_str()
+        .expect("update tool output string");
+    let update_tool_output_json: serde_json::Value =
+        serde_json::from_str(update_tool_output).expect("parse update tool output");
+
+    assert_eq!(
+        update_tool_output_json["tool"],
+        serde_json::json!("prompt_budget_update")
+    );
+    assert_eq!(
+        update_tool_output_json["usable_context_tokens"],
+        serde_json::json!(8000)
+    );
+    assert_eq!(
+        update_tool_output_json["source"],
+        serde_json::json!("session_override")
+    );
+
+    let third_request_body = third_request
+        .split_once("\r\n\r\n")
+        .map(|(_, body)| body)
+        .expect("extract third provider request body");
+    let third_request_json: serde_json::Value =
+        serde_json::from_str(third_request_body).expect("parse third provider request");
+    let read_tool_output = third_request_json["input"][0]["output"]
+        .as_str()
+        .expect("read tool output string");
+    let read_tool_output_json: serde_json::Value =
+        serde_json::from_str(read_tool_output).expect("parse read tool output");
+    let recent_tool_activity_layer = read_tool_output_json["layers"]
+        .as_array()
+        .expect("layers array")
+        .iter()
+        .find(|layer| layer["layer"] == serde_json::json!("recent_tool_activity"))
+        .expect("recent tool activity layer");
+
+    assert_eq!(
+        read_tool_output_json["tool"],
+        serde_json::json!("prompt_budget_read")
+    );
+    assert_eq!(
+        recent_tool_activity_layer["target_tokens"],
+        serde_json::json!(640)
+    );
+}
+
+#[test]
 fn execute_chat_turn_treats_repeated_init_plan_as_idempotent() {
     let (api_base, requests, handle) = spawn_json_server_sequence(vec![
         r#"{

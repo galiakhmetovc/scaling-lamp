@@ -1,6 +1,7 @@
 use crate::agent::{AgentScheduleDeliveryMode, AgentScheduleMode, AgentTemplateKind};
 use crate::memory::SessionRetentionTier;
 use crate::plan::{PlanItem, PlanItemStatus, PlanItemStatusParseError, PlanLintIssue};
+use crate::session::PromptBudgetPolicy;
 use crate::workspace::{
     WorkspaceEntry, WorkspaceError, WorkspaceRef, WorkspaceSearchMatch, WriteMode,
 };
@@ -113,6 +114,8 @@ pub enum ToolName {
     EditTask,
     PlanSnapshot,
     PlanLint,
+    PromptBudgetRead,
+    PromptBudgetUpdate,
     ArtifactRead,
     ArtifactSearch,
     KnowledgeSearch,
@@ -394,6 +397,67 @@ pub struct PlanSnapshotInput {}
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PlanLintInput {}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PromptBudgetReadInput {}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct PromptBudgetLayerPercentagesInput {
+    pub system: Option<u8>,
+    pub agents: Option<u8>,
+    pub active_skills: Option<u8>,
+    pub session_head: Option<u8>,
+    pub autonomy_state: Option<u8>,
+    pub plan: Option<u8>,
+    pub context_summary: Option<u8>,
+    pub offload_refs: Option<u8>,
+    pub recent_tool_activity: Option<u8>,
+    pub transcript_tail: Option<u8>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct PromptBudgetUpdateInput {
+    pub reset: bool,
+    pub percentages: Option<PromptBudgetLayerPercentagesInput>,
+    pub reason: Option<String>,
+}
+
+impl PromptBudgetLayerPercentagesInput {
+    pub fn apply_to(&self, policy: &mut PromptBudgetPolicy) {
+        if let Some(value) = self.system {
+            policy.system = value;
+        }
+        if let Some(value) = self.agents {
+            policy.agents = value;
+        }
+        if let Some(value) = self.active_skills {
+            policy.active_skills = value;
+        }
+        if let Some(value) = self.session_head {
+            policy.session_head = value;
+        }
+        if let Some(value) = self.autonomy_state {
+            policy.autonomy_state = value;
+        }
+        if let Some(value) = self.plan {
+            policy.plan = value;
+        }
+        if let Some(value) = self.context_summary {
+            policy.context_summary = value;
+        }
+        if let Some(value) = self.offload_refs {
+            policy.offload_refs = value;
+        }
+        if let Some(value) = self.recent_tool_activity {
+            policy.recent_tool_activity = value;
+        }
+        if let Some(value) = self.transcript_tail {
+            policy.transcript_tail = value;
+        }
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ArtifactReadInput {
@@ -690,6 +754,8 @@ pub enum ToolCall {
     EditTask(EditTaskInput),
     PlanSnapshot(PlanSnapshotInput),
     PlanLint(PlanLintInput),
+    PromptBudgetRead(PromptBudgetReadInput),
+    PromptBudgetUpdate(PromptBudgetUpdateInput),
     ArtifactRead(ArtifactReadInput),
     ArtifactSearch(ArtifactSearchInput),
     KnowledgeSearch(KnowledgeSearchInput),
@@ -953,6 +1019,32 @@ pub struct PlanSnapshotOutput {
 pub struct PlanLintOutput {
     pub ok: bool,
     pub issues: Vec<PlanLintIssue>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PromptBudgetLayerOutput {
+    pub layer: String,
+    pub percent: u8,
+    pub target_tokens: Option<u32>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PromptBudgetReadOutput {
+    pub session_id: String,
+    pub source: String,
+    pub context_window_tokens: Option<u32>,
+    pub auto_compaction_trigger_basis_points: u32,
+    pub usable_context_tokens: Option<u32>,
+    pub total_percent: u16,
+    pub layers: Vec<PromptBudgetLayerOutput>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PromptBudgetUpdateOutput {
+    pub session_id: String,
+    pub reset: bool,
+    pub reason: Option<String>,
+    pub budget: PromptBudgetReadOutput,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1347,6 +1439,8 @@ pub enum ToolOutput {
     EditTask(EditTaskOutput),
     PlanSnapshot(PlanSnapshotOutput),
     PlanLint(PlanLintOutput),
+    PromptBudgetRead(PromptBudgetReadOutput),
+    PromptBudgetUpdate(PromptBudgetUpdateOutput),
     ArtifactRead(ArtifactReadOutput),
     ArtifactSearch(ArtifactSearchOutput),
     KnowledgeSearch(KnowledgeSearchOutput),
@@ -1648,6 +1742,8 @@ impl ToolName {
             Self::EditTask => "edit_task",
             Self::PlanSnapshot => "plan_snapshot",
             Self::PlanLint => "plan_lint",
+            Self::PromptBudgetRead => "prompt_budget_read",
+            Self::PromptBudgetUpdate => "prompt_budget_update",
             Self::ArtifactRead => "artifact_read",
             Self::ArtifactSearch => "artifact_search",
             Self::KnowledgeSearch => "knowledge_search",
@@ -1722,6 +1818,8 @@ impl ToolCatalog {
                         | ToolName::EditTask
                         | ToolName::PlanSnapshot
                         | ToolName::PlanLint
+                        | ToolName::PromptBudgetRead
+                        | ToolName::PromptBudgetUpdate
                         | ToolName::ArtifactRead
                         | ToolName::ArtifactSearch
                         | ToolName::KnowledgeSearch
@@ -2067,6 +2165,26 @@ impl ToolCatalog {
                 description: "Validate the current structured session plan and report issues",
                 policy: ToolPolicy {
                     read_only: true,
+                    destructive: false,
+                    requires_approval: false,
+                },
+            },
+            ToolDefinition {
+                name: ToolName::PromptBudgetRead,
+                family: ToolFamily::Planning,
+                description: "Read the current session prompt budget policy, usable context basis, layer percentages, and target tokens",
+                policy: ToolPolicy {
+                    read_only: true,
+                    destructive: false,
+                    requires_approval: false,
+                },
+            },
+            ToolDefinition {
+                name: ToolName::PromptBudgetUpdate,
+                family: ToolFamily::Planning,
+                description: "Update or reset the session-scoped prompt budget policy. Percentages are guard-railed: after merging supplied percentages, all layer percentages must sum to 100",
+                policy: ToolPolicy {
+                    read_only: false,
                     destructive: false,
                     requires_approval: false,
                 },
@@ -2572,7 +2690,9 @@ impl ToolRuntime {
             | ToolCall::AddTaskNote(_)
             | ToolCall::EditTask(_)
             | ToolCall::PlanSnapshot(_)
-            | ToolCall::PlanLint(_) => Err(ToolError::InvalidPlanWrite {
+            | ToolCall::PlanLint(_)
+            | ToolCall::PromptBudgetRead(_)
+            | ToolCall::PromptBudgetUpdate(_) => Err(ToolError::InvalidPlanWrite {
                 reason: "planning tools must execute through the canonical session path"
                     .to_string(),
             }),
@@ -3175,6 +3295,8 @@ impl ToolCall {
             Self::EditTask(_) => ToolName::EditTask,
             Self::PlanSnapshot(_) => ToolName::PlanSnapshot,
             Self::PlanLint(_) => ToolName::PlanLint,
+            Self::PromptBudgetRead(_) => ToolName::PromptBudgetRead,
+            Self::PromptBudgetUpdate(_) => ToolName::PromptBudgetUpdate,
             Self::ArtifactRead(_) => ToolName::ArtifactRead,
             Self::ArtifactSearch(_) => ToolName::ArtifactSearch,
             Self::KnowledgeSearch(_) => ToolName::KnowledgeSearch,
@@ -3233,6 +3355,8 @@ impl ToolCall {
             | Self::EditTask(_)
             | Self::PlanSnapshot(_)
             | Self::PlanLint(_)
+            | Self::PromptBudgetRead(_)
+            | Self::PromptBudgetUpdate(_)
             | Self::KnowledgeSearch(_)
             | Self::KnowledgeRead(_)
             | Self::SessionSearch(_)
@@ -3384,6 +3508,12 @@ impl ToolCall {
             Self::EditTask(input) => format!("edit_task task_id={}", input.task_id),
             Self::PlanSnapshot(_) => "plan_snapshot".to_string(),
             Self::PlanLint(_) => "plan_lint".to_string(),
+            Self::PromptBudgetRead(_) => "prompt_budget_read".to_string(),
+            Self::PromptBudgetUpdate(input) => format!(
+                "prompt_budget_update reset={} percentages={}",
+                input.reset,
+                input.percentages.is_some()
+            ),
             Self::ArtifactRead(input) => format!("artifact_read artifact_id={}", input.artifact_id),
             Self::ArtifactSearch(input) => {
                 format!(
@@ -3675,6 +3805,18 @@ impl ToolCall {
                 }),
             "plan_lint" => serde_json::from_str(arguments)
                 .map(Self::PlanLint)
+                .map_err(|source| ToolCallParseError::InvalidArguments {
+                    name: name.to_string(),
+                    source,
+                }),
+            "prompt_budget_read" => serde_json::from_str(arguments)
+                .map(Self::PromptBudgetRead)
+                .map_err(|source| ToolCallParseError::InvalidArguments {
+                    name: name.to_string(),
+                    source,
+                }),
+            "prompt_budget_update" => serde_json::from_str(arguments)
+                .map(Self::PromptBudgetUpdate)
                 .map_err(|source| ToolCallParseError::InvalidArguments {
                     name: name.to_string(),
                     source,
@@ -4206,6 +4348,24 @@ impl ToolOutput {
             Self::PlanLint(output) => {
                 format!("plan_lint ok={} issues={}", output.ok, output.issues.len())
             }
+            Self::PromptBudgetRead(output) => format!(
+                "prompt_budget_read source={} usable_context_tokens={}",
+                output.source,
+                output
+                    .usable_context_tokens
+                    .map(|value| value.to_string())
+                    .unwrap_or_else(|| "unknown".to_string())
+            ),
+            Self::PromptBudgetUpdate(output) => format!(
+                "prompt_budget_update reset={} source={} usable_context_tokens={}",
+                output.reset,
+                output.budget.source,
+                output
+                    .budget
+                    .usable_context_tokens
+                    .map(|value| value.to_string())
+                    .unwrap_or_else(|| "unknown".to_string())
+            ),
             Self::ArtifactRead(output) => {
                 format!(
                     "artifact_read artifact_id={} bytes={}",
@@ -4596,6 +4756,38 @@ impl ToolOutput {
                     "severity": issue.severity,
                     "task_id": issue.task_id,
                     "message": issue.message,
+                })).collect::<Vec<_>>(),
+            })
+            .to_string(),
+            Self::PromptBudgetRead(output) => json!({
+                "tool": "prompt_budget_read",
+                "session_id": output.session_id,
+                "source": output.source,
+                "context_window_tokens": output.context_window_tokens,
+                "auto_compaction_trigger_basis_points": output.auto_compaction_trigger_basis_points,
+                "usable_context_tokens": output.usable_context_tokens,
+                "total_percent": output.total_percent,
+                "layers": output.layers.iter().map(|layer| json!({
+                    "layer": layer.layer,
+                    "percent": layer.percent,
+                    "target_tokens": layer.target_tokens,
+                })).collect::<Vec<_>>(),
+            })
+            .to_string(),
+            Self::PromptBudgetUpdate(output) => json!({
+                "tool": "prompt_budget_update",
+                "session_id": output.session_id,
+                "reset": output.reset,
+                "reason": output.reason,
+                "source": output.budget.source,
+                "context_window_tokens": output.budget.context_window_tokens,
+                "auto_compaction_trigger_basis_points": output.budget.auto_compaction_trigger_basis_points,
+                "usable_context_tokens": output.budget.usable_context_tokens,
+                "total_percent": output.budget.total_percent,
+                "layers": output.budget.layers.iter().map(|layer| json!({
+                    "layer": layer.layer,
+                    "percent": layer.percent,
+                    "target_tokens": layer.target_tokens,
                 })).collect::<Vec<_>>(),
             })
             .to_string(),
@@ -5366,6 +5558,36 @@ impl ToolName {
             Self::PlanSnapshot | Self::PlanLint => json!({
                 "type": "object",
                 "properties": {},
+                "additionalProperties": false,
+            }),
+            Self::PromptBudgetRead => json!({
+                "type": "object",
+                "properties": {},
+                "additionalProperties": false,
+            }),
+            Self::PromptBudgetUpdate => json!({
+                "type": "object",
+                "properties": {
+                    "reset": { "type": "boolean", "description": "Reset the session-scoped prompt budget policy back to runtime defaults before applying any supplied percentages" },
+                    "percentages": {
+                        "type": ["object", "null"],
+                        "description": "Optional layer percentage overrides. Supplied values merge into the current session policy; after merging, all percentages must sum to 100.",
+                        "properties": {
+                            "system": { "type": ["integer", "null"], "minimum": 0, "maximum": 100 },
+                            "agents": { "type": ["integer", "null"], "minimum": 0, "maximum": 100 },
+                            "active_skills": { "type": ["integer", "null"], "minimum": 0, "maximum": 100 },
+                            "session_head": { "type": ["integer", "null"], "minimum": 0, "maximum": 100 },
+                            "autonomy_state": { "type": ["integer", "null"], "minimum": 0, "maximum": 100 },
+                            "plan": { "type": ["integer", "null"], "minimum": 0, "maximum": 100 },
+                            "context_summary": { "type": ["integer", "null"], "minimum": 0, "maximum": 100 },
+                            "offload_refs": { "type": ["integer", "null"], "minimum": 0, "maximum": 100 },
+                            "recent_tool_activity": { "type": ["integer", "null"], "minimum": 0, "maximum": 100 },
+                            "transcript_tail": { "type": ["integer", "null"], "minimum": 0, "maximum": 100 }
+                        },
+                        "additionalProperties": false
+                    },
+                    "reason": { "type": ["string", "null"], "description": "Short explanation for audit/debug views" }
+                },
                 "additionalProperties": false,
             }),
             Self::ArtifactRead => json!({
