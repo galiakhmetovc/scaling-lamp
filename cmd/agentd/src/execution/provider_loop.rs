@@ -28,13 +28,17 @@ use agent_runtime::run::{
     ProviderLoopState, RunStepKind,
 };
 use agent_runtime::session::{MessageRole, TranscriptEntry};
-use agent_runtime::skills::{resolve_session_skill_status, scan_skill_catalog_with_overrides};
+use agent_runtime::skills::{
+    SessionSkillStatus, SkillActivationMode, SkillCatalog, SkillSummary, parse_skill_document,
+    resolve_session_skill_status, scan_skill_catalog_with_overrides,
+};
 use agent_runtime::tool::{
     AddTaskNoteOutput, AddTaskOutput, ArtifactReadOutput, ArtifactSearchOutput,
     ArtifactSearchResult, EditTaskOutput, InitPlanOutput, PlanLintOutput, PlanReadOutput,
     PlanSnapshotOutput, PlanWriteOutput, PromptBudgetLayerOutput, PromptBudgetReadOutput,
-    PromptBudgetUpdateOutput, SetTaskStatusOutput, ToolCatalog, ToolDefinition, ToolFamily,
-    ToolName, ToolOutput, ToolPolicy, ToolRuntime,
+    PromptBudgetUpdateOutput, SetTaskStatusOutput, SkillActivationOutput, SkillListOutput,
+    SkillReadOutput, SkillStatusOutput, ToolCatalog, ToolDefinition, ToolFamily, ToolName,
+    ToolOutput, ToolPolicy, ToolRuntime,
 };
 use agent_runtime::workspace::WorkspaceRef;
 use std::path::PathBuf;
@@ -49,6 +53,10 @@ const TOOL_RESULT_PREVIEW_CHAR_LIMIT: usize = 16 * 1024;
 const MAX_CONSECUTIVE_IDENTICAL_TOOL_SIGNATURES: usize = 3;
 const MAX_TRANSIENT_PROVIDER_RETRIES: usize = 3;
 const MAX_EMPTY_RESPONSE_RECOVERIES: usize = 1;
+const DEFAULT_SKILL_LIST_LIMIT: usize = 64;
+const MAX_SKILL_LIST_LIMIT: usize = 256;
+const DEFAULT_SKILL_READ_MAX_BYTES: usize = 16 * 1024;
+const MAX_SKILL_READ_MAX_BYTES: usize = 128 * 1024;
 
 type OffloadableToolOutput = (String, String, Vec<u8>, String);
 
@@ -474,6 +482,23 @@ fn normalized_mcp_pagination(
         None
     };
     (offset, limit, next_offset)
+}
+
+fn truncate_utf8_bytes(value: &str, max_bytes: usize) -> (String, bool) {
+    if value.len() <= max_bytes {
+        return (value.to_string(), false);
+    }
+    let mut end = 0;
+    for (index, _) in value.char_indices() {
+        if index > max_bytes {
+            break;
+        }
+        end = index;
+    }
+    if end == 0 {
+        return (String::new(), true);
+    }
+    (value[..end].to_string(), true)
 }
 
 impl ExecutionService {
@@ -1073,6 +1098,254 @@ impl ExecutionService {
             reset: input.reset,
             reason: input.reason.clone(),
             budget,
+        })
+    }
+
+    fn skill_catalog_for_agent(
+        &self,
+        agent_profile_id: &str,
+    ) -> Result<SkillCatalog, ExecutionError> {
+        let agent_skills_dir =
+            agents::agent_home(&self.config.data_dir, agent_profile_id).join("skills");
+        scan_skill_catalog_with_overrides(&self.config.skills_dir, Some(agent_skills_dir.as_path()))
+            .map_err(|source| ExecutionError::ProviderLoop {
+                reason: format!(
+                    "failed to scan merged skills catalog at {} and {}: {source}",
+                    self.config.skills_dir.display(),
+                    agent_skills_dir.display()
+                ),
+            })
+    }
+
+    fn session_skill_statuses(
+        &self,
+        store: &PersistenceStore,
+        session: &Session,
+        catalog: &SkillCatalog,
+    ) -> Result<Vec<SessionSkillStatus>, ExecutionError> {
+        let transcripts = store
+            .list_transcripts_for_session(session.id.as_str())
+            .map_err(ExecutionError::Store)?
+            .into_iter()
+            .map(TranscriptEntry::try_from)
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(ExecutionError::RecordConversion)?;
+        Ok(resolve_session_skill_status(
+            catalog,
+            &session.settings,
+            &session.title,
+            &transcripts,
+        ))
+    }
+
+    fn skill_status_outputs(
+        &self,
+        catalog: &SkillCatalog,
+        statuses: &[SessionSkillStatus],
+        include_inactive: bool,
+    ) -> Vec<SkillStatusOutput> {
+        let statuses_by_name = statuses
+            .iter()
+            .map(|status| (status.name.to_ascii_lowercase(), status))
+            .collect::<BTreeMap<_, _>>();
+
+        catalog
+            .entries
+            .iter()
+            .filter_map(|entry| {
+                let status = statuses_by_name.get(&entry.name.to_ascii_lowercase())?;
+                if !include_inactive && status.mode == SkillActivationMode::Inactive {
+                    return None;
+                }
+                Some(Self::skill_status_output(entry, status))
+            })
+            .collect()
+    }
+
+    fn skill_status_output(entry: &SkillSummary, status: &SessionSkillStatus) -> SkillStatusOutput {
+        SkillStatusOutput {
+            name: entry.name.clone(),
+            description: entry.description.clone(),
+            mode: Self::skill_mode_string(status.mode).to_string(),
+            skill_dir: entry.skill_dir.display().to_string(),
+            skill_md_path: entry.skill_md_path.display().to_string(),
+        }
+    }
+
+    fn skill_mode_string(mode: SkillActivationMode) -> &'static str {
+        match mode {
+            SkillActivationMode::Inactive => "inactive",
+            SkillActivationMode::Automatic => "automatic",
+            SkillActivationMode::Manual => "manual",
+            SkillActivationMode::Disabled => "disabled",
+        }
+    }
+
+    fn find_skill_entry<'a>(
+        catalog: &'a SkillCatalog,
+        skill_name: &str,
+    ) -> Result<&'a SkillSummary, ExecutionError> {
+        let normalized = skill_name.trim().to_ascii_lowercase();
+        if normalized.is_empty() {
+            return Err(ExecutionError::Tool(
+                agent_runtime::tool::ToolError::InvalidMemoryTool {
+                    reason: "skill name must not be empty".to_string(),
+                },
+            ));
+        }
+        catalog
+            .entries
+            .iter()
+            .find(|entry| entry.name.eq_ignore_ascii_case(skill_name.trim()))
+            .or_else(|| {
+                catalog
+                    .entries
+                    .iter()
+                    .find(|entry| entry.name.to_ascii_lowercase() == normalized)
+            })
+            .ok_or_else(|| {
+                ExecutionError::Tool(agent_runtime::tool::ToolError::InvalidMemoryTool {
+                    reason: format!("unknown skill {skill_name}"),
+                })
+            })
+    }
+
+    fn list_session_skills_for_tool(
+        &self,
+        store: &PersistenceStore,
+        session_id: &str,
+        input: &agent_runtime::tool::SkillListInput,
+    ) -> Result<SkillListOutput, ExecutionError> {
+        let session = Session::try_from(
+            store
+                .get_session(session_id)
+                .map_err(ExecutionError::Store)?
+                .ok_or_else(|| ExecutionError::MissingSession {
+                    id: session_id.to_string(),
+                })?,
+        )
+        .map_err(ExecutionError::RecordConversion)?;
+        let catalog = self.skill_catalog_for_agent(&session.agent_profile_id)?;
+        let statuses = self.session_skill_statuses(store, &session, &catalog)?;
+        let include_inactive = input.include_inactive.unwrap_or(true);
+        let results = self.skill_status_outputs(&catalog, &statuses, include_inactive);
+        let (offset, limit, next_offset) = normalized_mcp_pagination(
+            results.len(),
+            input.offset,
+            input.limit,
+            DEFAULT_SKILL_LIST_LIMIT,
+            MAX_SKILL_LIST_LIMIT,
+        );
+        let end = offset.saturating_add(limit).min(results.len());
+        Ok(SkillListOutput {
+            session_id: session.id,
+            include_inactive,
+            offset,
+            limit,
+            total_results: results.len(),
+            next_offset,
+            skills: results[offset..end].to_vec(),
+        })
+    }
+
+    fn read_session_skill_for_tool(
+        &self,
+        store: &PersistenceStore,
+        session_id: &str,
+        input: &agent_runtime::tool::SkillReadInput,
+    ) -> Result<SkillReadOutput, ExecutionError> {
+        let session = Session::try_from(
+            store
+                .get_session(session_id)
+                .map_err(ExecutionError::Store)?
+                .ok_or_else(|| ExecutionError::MissingSession {
+                    id: session_id.to_string(),
+                })?,
+        )
+        .map_err(ExecutionError::RecordConversion)?;
+        let catalog = self.skill_catalog_for_agent(&session.agent_profile_id)?;
+        let statuses = self.session_skill_statuses(store, &session, &catalog)?;
+        let entry = Self::find_skill_entry(&catalog, &input.name)?;
+        let status = statuses
+            .iter()
+            .find(|status| status.name.eq_ignore_ascii_case(&entry.name))
+            .ok_or_else(|| {
+                ExecutionError::Tool(agent_runtime::tool::ToolError::InvalidMemoryTool {
+                    reason: format!("skill {} has no activation status", entry.name),
+                })
+            })?;
+        let contents = std::fs::read_to_string(&entry.skill_md_path).map_err(|source| {
+            ExecutionError::ProviderLoop {
+                reason: format!(
+                    "failed to read skill {} at {}: {source}",
+                    entry.name,
+                    entry.skill_md_path.display()
+                ),
+            }
+        })?;
+        let document = parse_skill_document(&entry.skill_md_path, &contents).map_err(|reason| {
+            ExecutionError::Tool(agent_runtime::tool::ToolError::InvalidMemoryTool { reason })
+        })?;
+        let max_bytes = input
+            .max_bytes
+            .unwrap_or(DEFAULT_SKILL_READ_MAX_BYTES)
+            .clamp(1, MAX_SKILL_READ_MAX_BYTES);
+        let (body, body_truncated) = truncate_utf8_bytes(&document.body, max_bytes);
+        Ok(SkillReadOutput {
+            session_id: session.id,
+            name: entry.name.clone(),
+            description: entry.description.clone(),
+            mode: Self::skill_mode_string(status.mode).to_string(),
+            skill_dir: entry.skill_dir.display().to_string(),
+            skill_md_path: entry.skill_md_path.display().to_string(),
+            body,
+            body_byte_len: document.body.len(),
+            body_truncated,
+        })
+    }
+
+    fn update_session_skill_for_tool(
+        &self,
+        store: &PersistenceStore,
+        session_id: &str,
+        input: &agent_runtime::tool::SkillActivationInput,
+        enable: bool,
+        now: i64,
+    ) -> Result<SkillActivationOutput, ExecutionError> {
+        let mut session = Session::try_from(
+            store
+                .get_session(session_id)
+                .map_err(ExecutionError::Store)?
+                .ok_or_else(|| ExecutionError::MissingSession {
+                    id: session_id.to_string(),
+                })?,
+        )
+        .map_err(ExecutionError::RecordConversion)?;
+        let catalog = self.skill_catalog_for_agent(&session.agent_profile_id)?;
+        let entry = Self::find_skill_entry(&catalog, &input.name)?;
+        if enable {
+            session.settings.enable_skill(&entry.name);
+        } else {
+            session.settings.disable_skill(&entry.name);
+        }
+        session.updated_at = now;
+        let record = agent_persistence::SessionRecord::try_from(&session)
+            .map_err(ExecutionError::RecordConversion)?;
+        store.put_session(&record).map_err(ExecutionError::Store)?;
+
+        let statuses = self.session_skill_statuses(store, &session, &catalog)?;
+        let skills = self.skill_status_outputs(&catalog, &statuses, true);
+        let mode = statuses
+            .iter()
+            .find(|status| status.name.eq_ignore_ascii_case(&entry.name))
+            .map(|status| Self::skill_mode_string(status.mode))
+            .unwrap_or("inactive")
+            .to_string();
+        Ok(SkillActivationOutput {
+            session_id: session.id,
+            name: entry.name.clone(),
+            mode,
+            skills,
         })
     }
 
@@ -2160,6 +2433,18 @@ impl ExecutionService {
             )),
             ToolCall::PromptBudgetUpdate(input) => Ok(ToolOutput::PromptBudgetUpdate(
                 self.update_prompt_budget_policy(store, provider, session_id, input, now)?,
+            )),
+            ToolCall::SkillList(input) => Ok(ToolOutput::SkillList(
+                self.list_session_skills_for_tool(store, session_id, input)?,
+            )),
+            ToolCall::SkillRead(input) => Ok(ToolOutput::SkillRead(
+                self.read_session_skill_for_tool(store, session_id, input)?,
+            )),
+            ToolCall::SkillEnable(input) => Ok(ToolOutput::SkillEnable(
+                self.update_session_skill_for_tool(store, session_id, input, true, now)?,
+            )),
+            ToolCall::SkillDisable(input) => Ok(ToolOutput::SkillDisable(
+                self.update_session_skill_for_tool(store, session_id, input, false, now)?,
             )),
             ToolCall::ArtifactRead(input) => Ok(ToolOutput::ArtifactRead(
                 self.read_context_offload_artifact(store, session_id, input.artifact_id.as_str())?,

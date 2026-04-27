@@ -116,6 +116,10 @@ pub enum ToolName {
     PlanLint,
     PromptBudgetRead,
     PromptBudgetUpdate,
+    SkillList,
+    SkillRead,
+    SkillEnable,
+    SkillDisable,
     ArtifactRead,
     ArtifactSearch,
     KnowledgeSearch,
@@ -459,6 +463,26 @@ impl PromptBudgetLayerPercentagesInput {
     }
 }
 
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct SkillListInput {
+    pub include_inactive: Option<bool>,
+    pub limit: Option<usize>,
+    pub offset: Option<usize>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SkillReadInput {
+    pub name: String,
+    #[serde(default)]
+    pub max_bytes: Option<usize>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SkillActivationInput {
+    pub name: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ArtifactReadInput {
     pub artifact_id: String,
@@ -756,6 +780,10 @@ pub enum ToolCall {
     PlanLint(PlanLintInput),
     PromptBudgetRead(PromptBudgetReadInput),
     PromptBudgetUpdate(PromptBudgetUpdateInput),
+    SkillList(SkillListInput),
+    SkillRead(SkillReadInput),
+    SkillEnable(SkillActivationInput),
+    SkillDisable(SkillActivationInput),
     ArtifactRead(ArtifactReadInput),
     ArtifactSearch(ArtifactSearchInput),
     KnowledgeSearch(KnowledgeSearchInput),
@@ -1045,6 +1073,47 @@ pub struct PromptBudgetUpdateOutput {
     pub reset: bool,
     pub reason: Option<String>,
     pub budget: PromptBudgetReadOutput,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SkillStatusOutput {
+    pub name: String,
+    pub description: String,
+    pub mode: String,
+    pub skill_dir: String,
+    pub skill_md_path: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SkillListOutput {
+    pub session_id: String,
+    pub include_inactive: bool,
+    pub offset: usize,
+    pub limit: usize,
+    pub total_results: usize,
+    pub next_offset: Option<usize>,
+    pub skills: Vec<SkillStatusOutput>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SkillReadOutput {
+    pub session_id: String,
+    pub name: String,
+    pub description: String,
+    pub mode: String,
+    pub skill_dir: String,
+    pub skill_md_path: String,
+    pub body: String,
+    pub body_byte_len: usize,
+    pub body_truncated: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SkillActivationOutput {
+    pub session_id: String,
+    pub name: String,
+    pub mode: String,
+    pub skills: Vec<SkillStatusOutput>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1441,6 +1510,10 @@ pub enum ToolOutput {
     PlanLint(PlanLintOutput),
     PromptBudgetRead(PromptBudgetReadOutput),
     PromptBudgetUpdate(PromptBudgetUpdateOutput),
+    SkillList(SkillListOutput),
+    SkillRead(SkillReadOutput),
+    SkillEnable(SkillActivationOutput),
+    SkillDisable(SkillActivationOutput),
     ArtifactRead(ArtifactReadOutput),
     ArtifactSearch(ArtifactSearchOutput),
     KnowledgeSearch(KnowledgeSearchOutput),
@@ -1744,6 +1817,10 @@ impl ToolName {
             Self::PlanLint => "plan_lint",
             Self::PromptBudgetRead => "prompt_budget_read",
             Self::PromptBudgetUpdate => "prompt_budget_update",
+            Self::SkillList => "skill_list",
+            Self::SkillRead => "skill_read",
+            Self::SkillEnable => "skill_enable",
+            Self::SkillDisable => "skill_disable",
             Self::ArtifactRead => "artifact_read",
             Self::ArtifactSearch => "artifact_search",
             Self::KnowledgeSearch => "knowledge_search",
@@ -1820,6 +1897,10 @@ impl ToolCatalog {
                         | ToolName::PlanLint
                         | ToolName::PromptBudgetRead
                         | ToolName::PromptBudgetUpdate
+                        | ToolName::SkillList
+                        | ToolName::SkillRead
+                        | ToolName::SkillEnable
+                        | ToolName::SkillDisable
                         | ToolName::ArtifactRead
                         | ToolName::ArtifactSearch
                         | ToolName::KnowledgeSearch
@@ -2183,6 +2264,46 @@ impl ToolCatalog {
                 name: ToolName::PromptBudgetUpdate,
                 family: ToolFamily::Planning,
                 description: "Update or reset the session-scoped prompt budget policy. Percentages are guard-railed: after merging supplied percentages, all layer percentages must sum to 100",
+                policy: ToolPolicy {
+                    read_only: false,
+                    destructive: false,
+                    requires_approval: false,
+                },
+            },
+            ToolDefinition {
+                name: ToolName::SkillList,
+                family: ToolFamily::Memory,
+                description: "List skills available to the current session, including activation mode and source paths. Use before enabling, disabling, or reading a skill.",
+                policy: ToolPolicy {
+                    read_only: true,
+                    destructive: false,
+                    requires_approval: false,
+                },
+            },
+            ToolDefinition {
+                name: ToolName::SkillRead,
+                family: ToolFamily::Memory,
+                description: "Read one skill's SKILL.md body by name with an optional max_bytes bound. Use this instead of guessing skill instructions.",
+                policy: ToolPolicy {
+                    read_only: true,
+                    destructive: false,
+                    requires_approval: false,
+                },
+            },
+            ToolDefinition {
+                name: ToolName::SkillEnable,
+                family: ToolFamily::Memory,
+                description: "Manually enable one skill for the current session. This changes session settings only; use skill_list or skill_read first if unsure.",
+                policy: ToolPolicy {
+                    read_only: false,
+                    destructive: false,
+                    requires_approval: false,
+                },
+            },
+            ToolDefinition {
+                name: ToolName::SkillDisable,
+                family: ToolFamily::Memory,
+                description: "Manually disable one skill for the current session. This changes session settings only; use when an automatic skill is distracting or wrong.",
                 policy: ToolPolicy {
                     read_only: false,
                     destructive: false,
@@ -2695,6 +2816,12 @@ impl ToolRuntime {
             | ToolCall::PromptBudgetUpdate(_) => Err(ToolError::InvalidPlanWrite {
                 reason: "planning tools must execute through the canonical session path"
                     .to_string(),
+            }),
+            ToolCall::SkillList(_)
+            | ToolCall::SkillRead(_)
+            | ToolCall::SkillEnable(_)
+            | ToolCall::SkillDisable(_) => Err(ToolError::InvalidMemoryTool {
+                reason: "skill tools must execute through the canonical session path".to_string(),
             }),
             ToolCall::KnowledgeSearch(_)
             | ToolCall::KnowledgeRead(_)
@@ -3297,6 +3424,10 @@ impl ToolCall {
             Self::PlanLint(_) => ToolName::PlanLint,
             Self::PromptBudgetRead(_) => ToolName::PromptBudgetRead,
             Self::PromptBudgetUpdate(_) => ToolName::PromptBudgetUpdate,
+            Self::SkillList(_) => ToolName::SkillList,
+            Self::SkillRead(_) => ToolName::SkillRead,
+            Self::SkillEnable(_) => ToolName::SkillEnable,
+            Self::SkillDisable(_) => ToolName::SkillDisable,
             Self::ArtifactRead(_) => ToolName::ArtifactRead,
             Self::ArtifactSearch(_) => ToolName::ArtifactSearch,
             Self::KnowledgeSearch(_) => ToolName::KnowledgeSearch,
@@ -3357,6 +3488,10 @@ impl ToolCall {
             | Self::PlanLint(_)
             | Self::PromptBudgetRead(_)
             | Self::PromptBudgetUpdate(_)
+            | Self::SkillList(_)
+            | Self::SkillRead(_)
+            | Self::SkillEnable(_)
+            | Self::SkillDisable(_)
             | Self::KnowledgeSearch(_)
             | Self::KnowledgeRead(_)
             | Self::SessionSearch(_)
@@ -3514,6 +3649,22 @@ impl ToolCall {
                 input.reset,
                 input.percentages.is_some()
             ),
+            Self::SkillList(input) => format!(
+                "skill_list include_inactive={} offset={} limit={}",
+                input.include_inactive.unwrap_or(true),
+                input.offset.unwrap_or(0),
+                input.limit.unwrap_or(20)
+            ),
+            Self::SkillRead(input) => format!(
+                "skill_read name={} max_bytes={}",
+                input.name,
+                input
+                    .max_bytes
+                    .map(|value| value.to_string())
+                    .unwrap_or_else(|| "default".to_string())
+            ),
+            Self::SkillEnable(input) => format!("skill_enable name={}", input.name),
+            Self::SkillDisable(input) => format!("skill_disable name={}", input.name),
             Self::ArtifactRead(input) => format!("artifact_read artifact_id={}", input.artifact_id),
             Self::ArtifactSearch(input) => {
                 format!(
@@ -3817,6 +3968,30 @@ impl ToolCall {
                 }),
             "prompt_budget_update" => serde_json::from_str(arguments)
                 .map(Self::PromptBudgetUpdate)
+                .map_err(|source| ToolCallParseError::InvalidArguments {
+                    name: name.to_string(),
+                    source,
+                }),
+            "skill_list" => serde_json::from_str(arguments)
+                .map(Self::SkillList)
+                .map_err(|source| ToolCallParseError::InvalidArguments {
+                    name: name.to_string(),
+                    source,
+                }),
+            "skill_read" => serde_json::from_str(arguments)
+                .map(Self::SkillRead)
+                .map_err(|source| ToolCallParseError::InvalidArguments {
+                    name: name.to_string(),
+                    source,
+                }),
+            "skill_enable" => serde_json::from_str(arguments)
+                .map(Self::SkillEnable)
+                .map_err(|source| ToolCallParseError::InvalidArguments {
+                    name: name.to_string(),
+                    source,
+                }),
+            "skill_disable" => serde_json::from_str(arguments)
+                .map(Self::SkillDisable)
                 .map_err(|source| ToolCallParseError::InvalidArguments {
                     name: name.to_string(),
                     source,
@@ -4366,6 +4541,28 @@ impl ToolOutput {
                     .map(|value| value.to_string())
                     .unwrap_or_else(|| "unknown".to_string())
             ),
+            Self::SkillList(output) => {
+                if let Some(next_offset) = output.next_offset {
+                    format!(
+                        "skill_list skills={} total={} truncated next_offset={}",
+                        output.skills.len(),
+                        output.total_results,
+                        next_offset
+                    )
+                } else {
+                    format!("skill_list skills={}", output.skills.len())
+                }
+            }
+            Self::SkillRead(output) => format!(
+                "skill_read name={} mode={} bytes={} truncated={}",
+                output.name, output.mode, output.body_byte_len, output.body_truncated
+            ),
+            Self::SkillEnable(output) => {
+                format!("skill_enable name={} mode={}", output.name, output.mode)
+            }
+            Self::SkillDisable(output) => {
+                format!("skill_disable name={} mode={}", output.name, output.mode)
+            }
             Self::ArtifactRead(output) => {
                 format!(
                     "artifact_read artifact_id={} bytes={}",
@@ -4789,6 +4986,46 @@ impl ToolOutput {
                     "percent": layer.percent,
                     "target_tokens": layer.target_tokens,
                 })).collect::<Vec<_>>(),
+            })
+            .to_string(),
+            Self::SkillList(output) => json!({
+                "tool": "skill_list",
+                "session_id": output.session_id,
+                "include_inactive": output.include_inactive,
+                "offset": output.offset,
+                "limit": output.limit,
+                "total_results": output.total_results,
+                "next_offset": output.next_offset,
+                "skills": output.skills.iter().map(skill_status_json).collect::<Vec<_>>(),
+            })
+            .to_string(),
+            Self::SkillRead(output) => json!({
+                "tool": "skill_read",
+                "session_id": output.session_id,
+                "name": output.name,
+                "description": output.description,
+                "mode": output.mode,
+                "skill_dir": output.skill_dir,
+                "skill_md_path": output.skill_md_path,
+                "body": output.body,
+                "body_byte_len": output.body_byte_len,
+                "body_truncated": output.body_truncated,
+            })
+            .to_string(),
+            Self::SkillEnable(output) => json!({
+                "tool": "skill_enable",
+                "session_id": output.session_id,
+                "name": output.name,
+                "mode": output.mode,
+                "skills": output.skills.iter().map(skill_status_json).collect::<Vec<_>>(),
+            })
+            .to_string(),
+            Self::SkillDisable(output) => json!({
+                "tool": "skill_disable",
+                "session_id": output.session_id,
+                "name": output.name,
+                "mode": output.mode,
+                "skills": output.skills.iter().map(skill_status_json).collect::<Vec<_>>(),
             })
             .to_string(),
             Self::ArtifactRead(output) => json!({
@@ -5590,6 +5827,40 @@ impl ToolName {
                 },
                 "additionalProperties": false,
             }),
+            Self::SkillList => json!({
+                "type": "object",
+                "properties": {
+                    "include_inactive": { "type": ["boolean", "null"], "description": "Whether to include inactive skills. Defaults to true so the model can discover the full skill catalog before activation." },
+                    "limit": { "type": ["integer", "null"], "minimum": 1, "description": "Optional maximum number of skills to return" },
+                    "offset": { "type": ["integer", "null"], "minimum": 0, "description": "Optional pagination offset" }
+                },
+                "additionalProperties": false,
+            }),
+            Self::SkillRead => json!({
+                "type": "object",
+                "properties": {
+                    "name": { "type": "string", "description": "Skill name from skill_list" },
+                    "max_bytes": { "type": ["integer", "null"], "minimum": 1, "description": "Optional maximum UTF-8 bytes from SKILL.md body to return" }
+                },
+                "required": ["name"],
+                "additionalProperties": false,
+            }),
+            Self::SkillEnable => json!({
+                "type": "object",
+                "properties": {
+                    "name": { "type": "string", "description": "Skill name from skill_list to manually enable for the current session" }
+                },
+                "required": ["name"],
+                "additionalProperties": false,
+            }),
+            Self::SkillDisable => json!({
+                "type": "object",
+                "properties": {
+                    "name": { "type": "string", "description": "Skill name from skill_list to manually disable for the current session" }
+                },
+                "required": ["name"],
+                "additionalProperties": false,
+            }),
             Self::ArtifactRead => json!({
                 "type": "object",
                 "properties": {
@@ -6131,6 +6402,16 @@ fn plan_item_json(item: &PlanItem) -> Value {
         "notes": item.notes,
         "blocked_reason": item.blocked_reason,
         "parent_task_id": item.parent_task_id,
+    })
+}
+
+fn skill_status_json(skill: &SkillStatusOutput) -> Value {
+    json!({
+        "name": skill.name,
+        "description": skill.description,
+        "mode": skill.mode,
+        "skill_dir": skill.skill_dir,
+        "skill_md_path": skill.skill_md_path,
     })
 }
 

@@ -1628,6 +1628,160 @@ fn execute_chat_turn_places_active_skills_between_agents_and_session_head() {
 }
 
 #[test]
+fn execute_chat_turn_can_list_read_and_enable_skills_with_tools() {
+    let (api_base, requests, handle) = spawn_json_server_sequence(vec![
+        r#"{
+                "id":"resp_skill_tools_1",
+                "model":"gpt-5.4",
+                "output":[
+                    {
+                        "id":"fc_skill_list",
+                        "type":"function_call",
+                        "call_id":"call_skill_list",
+                        "name":"skill_list",
+                        "arguments":"{\"include_inactive\":true,\"limit\":10}"
+                    }
+                ],
+                "usage":{"input_tokens":30,"output_tokens":10,"total_tokens":40}
+            }"#
+        .to_string(),
+        r#"{
+                "id":"resp_skill_tools_2",
+                "model":"gpt-5.4",
+                "output":[
+                    {
+                        "id":"fc_skill_read",
+                        "type":"function_call",
+                        "call_id":"call_skill_read",
+                        "name":"skill_read",
+                        "arguments":"{\"name\":\"rust-debug\",\"max_bytes\":64}"
+                    }
+                ],
+                "usage":{"input_tokens":22,"output_tokens":8,"total_tokens":30}
+            }"#
+        .to_string(),
+        r#"{
+                "id":"resp_skill_tools_3",
+                "model":"gpt-5.4",
+                "output":[
+                    {
+                        "id":"fc_skill_enable",
+                        "type":"function_call",
+                        "call_id":"call_skill_enable",
+                        "name":"skill_enable",
+                        "arguments":"{\"name\":\"rust-debug\"}"
+                    }
+                ],
+                "usage":{"input_tokens":22,"output_tokens":8,"total_tokens":30}
+            }"#
+        .to_string(),
+        r#"{
+                "id":"resp_skill_tools_4",
+                "model":"gpt-5.4",
+                "output":[
+                    {
+                        "id":"msg_skill_tools",
+                        "type":"message",
+                        "status":"completed",
+                        "role":"assistant",
+                        "content":[
+                            {
+                                "type":"output_text",
+                                "text":"Skill inspected and enabled."
+                            }
+                        ]
+                    }
+                ],
+                "usage":{"input_tokens":24,"output_tokens":6,"total_tokens":30}
+            }"#
+        .to_string(),
+    ]);
+    let temp = tempfile::tempdir().expect("tempdir");
+    let skills_dir = temp.path().join("skills");
+    fs::create_dir_all(skills_dir.join("rust-debug")).expect("create skill dir");
+    fs::write(
+        skills_dir.join("rust-debug").join("SKILL.md"),
+        "---\nname: rust-debug\ndescription: Inspect Rust failures.\n---\n\n# rust-debug\nUse this skill when debugging Rust compiler and test failures. Always start from the first failing diagnostic.\n",
+    )
+    .expect("write skill prompt");
+
+    let mut config = AppConfig {
+        data_dir: temp.path().join("state-root"),
+        daemon: Default::default(),
+        provider: ConfiguredProvider {
+            kind: ProviderKind::OpenAiResponses,
+            api_base: Some(format!("{api_base}/v1")),
+            api_key: Some("test-key".to_string()),
+            default_model: Some("gpt-5.4".to_string()),
+            ..ConfiguredProvider::default()
+        },
+        ..AppConfig::default()
+    };
+    config.daemon.skills_dir = skills_dir;
+    let app = build_from_config(config).expect("build app");
+    let store = PersistenceStore::open(&app.persistence).expect("open store");
+    store
+        .put_session(&SessionRecord {
+            id: "session-skill-tools".to_string(),
+            title: "Skill Tool Session".to_string(),
+            prompt_override: None,
+            settings_json: serde_json::to_string(&SessionSettings::default())
+                .expect("serialize settings"),
+            workspace_root: app.runtime.workspace.root.display().to_string(),
+            agent_profile_id: "default".to_string(),
+            active_mission_id: None,
+            parent_session_id: None,
+            parent_job_id: None,
+            delegation_label: None,
+            created_at: 1,
+            updated_at: 1,
+        })
+        .expect("put session");
+
+    let report = app
+        .execute_chat_turn("session-skill-tools", "inspect available skills", 10)
+        .expect("execute chat turn");
+    let _first_request = requests.recv().expect("first provider request");
+    let second_request = requests.recv().expect("second provider request");
+    let third_request = requests.recv().expect("third provider request");
+    let fourth_request = requests.recv().expect("fourth provider request");
+    handle.join().expect("join server");
+
+    assert_eq!(report.response_id, "resp_skill_tools_4");
+    assert_eq!(report.output_text, "Skill inspected and enabled.");
+
+    let normalized_second = second_request.to_ascii_lowercase();
+    assert!(normalized_second.contains("\"call_id\":\"call_skill_list\""));
+    assert!(normalized_second.contains("skill_list"));
+    assert!(normalized_second.contains("rust-debug"));
+    assert!(normalized_second.contains("inspect rust failures"));
+
+    let normalized_third = third_request.to_ascii_lowercase();
+    assert!(normalized_third.contains("\"call_id\":\"call_skill_read\""));
+    assert!(normalized_third.contains("skill_read"));
+    assert!(normalized_third.contains("debugging rust compiler"));
+    assert!(normalized_third.contains("body_truncated"));
+
+    let normalized_fourth = fourth_request.to_ascii_lowercase();
+    assert!(normalized_fourth.contains("\"call_id\":\"call_skill_enable\""));
+    assert!(normalized_fourth.contains("skill_enable"));
+    assert!(normalized_fourth.contains("manual"));
+
+    let session = Session::try_from(
+        store
+            .get_session("session-skill-tools")
+            .expect("get session")
+            .expect("session exists"),
+    )
+    .expect("restore session");
+    assert_eq!(
+        session.settings.enabled_skills,
+        vec!["rust-debug".to_string()]
+    );
+    assert!(session.settings.disabled_skills.is_empty());
+}
+
+#[test]
 fn execute_chat_turn_falls_back_to_builtin_agent_prompts_when_agent_files_are_missing() {
     let (api_base, requests, handle) = spawn_json_server_sequence(vec![
         r#"{

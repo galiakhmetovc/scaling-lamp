@@ -592,6 +592,90 @@ prompt_budget_update({
 - `transcript_tail` сохраняет новые сообщения, а старые uncovered messages скрываются первыми;
 - скрытое содержимое не теряется: его можно читать через transcript/debug/session/artifact surfaces.
 
+## Skills
+
+### `skill_list`
+
+Сигнатура:
+
+```text
+skill_list({
+  include_inactive?: boolean | null,
+  limit?: integer | null,
+  offset?: integer | null
+})
+```
+
+Что делает:
+
+- показывает merged skill catalog для текущей session: global skills плюс agent-local overrides;
+- возвращает `name`, `description`, activation `mode`, `skill_dir`, `skill_md_path`;
+- по умолчанию `include_inactive=true`, чтобы модель могла обнаружить полный каталог до активации;
+- поддерживает пагинацию.
+
+Когда использовать:
+
+- если задача похожа на специализированный workflow, но нужный skill ещё не активен;
+- перед `skill_read`, `skill_enable` или `skill_disable`, если точное имя skill неизвестно.
+
+### `skill_read`
+
+Сигнатура:
+
+```text
+skill_read({ name: string, max_bytes?: integer | null })
+```
+
+Что делает:
+
+- читает body `SKILL.md` для skill из текущего merged catalog;
+- возвращает description, activation mode, paths, body, исходный `body_byte_len` и `body_truncated`;
+- `max_bytes` bounded и режется по UTF-8 границе.
+
+Когда использовать:
+
+- перед тем как полагаться на детальные правила skill;
+- если active skill prompt был усечён budget policy;
+- если нужно понять, как правильно пользоваться внешним workflow или MCP connector.
+
+### `skill_enable`
+
+Сигнатура:
+
+```text
+skill_enable({ name: string })
+```
+
+Что делает:
+
+- вручную включает skill для текущей session через `SessionSettings.enabled_skills`;
+- снимает конфликтующий disabled override;
+- не редактирует `SKILL.md` и не меняет global/agent template.
+
+Когда использовать:
+
+- если модель поняла, что skill нужен дальше в этой session;
+- после `skill_list`/`skill_read`, когда activation должна стать устойчивой для следующих turns.
+
+### `skill_disable`
+
+Сигнатура:
+
+```text
+skill_disable({ name: string })
+```
+
+Что делает:
+
+- вручную отключает skill для текущей session через `SessionSettings.disabled_skills`;
+- снимает конфликтующий enabled override;
+- не удаляет и не изменяет skill file.
+
+Когда использовать:
+
+- если auto-activation мешает текущей задаче;
+- если пользователь явно просит не использовать конкретный skill в этой session.
+
 ## Offload
 
 ### `artifact_read`

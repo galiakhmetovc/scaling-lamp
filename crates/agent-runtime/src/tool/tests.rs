@@ -308,6 +308,21 @@ fn automatic_model_definitions_include_session_memory_tools() {
 }
 
 #[test]
+fn automatic_model_definitions_include_skill_tools() {
+    let catalog = ToolCatalog::default();
+    let names = catalog
+        .automatic_model_definitions()
+        .into_iter()
+        .map(|definition| definition.name)
+        .collect::<Vec<_>>();
+
+    assert!(names.contains(&ToolName::SkillList));
+    assert!(names.contains(&ToolName::SkillRead));
+    assert!(names.contains(&ToolName::SkillEnable));
+    assert!(names.contains(&ToolName::SkillDisable));
+}
+
+#[test]
 fn tool_call_parses_session_memory_inputs() {
     let search = ToolCall::from_openai_function(
         "session_search",
@@ -570,6 +585,72 @@ fn prompt_budget_tool_definitions_and_parsing_are_explicit() {
                 transcript_tail: Some(20),
             }),
             reason: Some("need more transcript tail".to_string()),
+        })
+    );
+}
+
+#[test]
+fn skill_tool_definitions_and_parsing_are_explicit() {
+    let catalog = ToolCatalog::default();
+    let list = catalog.definition(ToolName::SkillList).expect("skill_list");
+    let read = catalog.definition(ToolName::SkillRead).expect("skill_read");
+    let enable = catalog
+        .definition(ToolName::SkillEnable)
+        .expect("skill_enable");
+    let disable = catalog
+        .definition(ToolName::SkillDisable)
+        .expect("skill_disable");
+
+    assert_eq!(list.family, ToolFamily::Memory);
+    assert!(list.policy.read_only);
+    assert!(read.policy.read_only);
+    assert!(!enable.policy.read_only);
+    assert!(!enable.policy.requires_approval);
+    assert!(!disable.policy.read_only);
+    assert!(
+        read.openai_function_schema()
+            .to_string()
+            .contains("max_bytes")
+    );
+
+    let list_call =
+        ToolCall::from_openai_function("skill_list", r#"{"include_inactive":false,"limit":5}"#)
+            .expect("parse list");
+    assert_eq!(
+        list_call,
+        ToolCall::SkillList(super::SkillListInput {
+            include_inactive: Some(false),
+            limit: Some(5),
+            offset: None,
+        })
+    );
+
+    let read_call =
+        ToolCall::from_openai_function("skill_read", r#"{"name":"rust-debug","max_bytes":512}"#)
+            .expect("parse read");
+    assert_eq!(
+        read_call,
+        ToolCall::SkillRead(super::SkillReadInput {
+            name: "rust-debug".to_string(),
+            max_bytes: Some(512),
+        })
+    );
+
+    let enable_call = ToolCall::from_openai_function("skill_enable", r#"{"name":"rust-debug"}"#)
+        .expect("parse enable");
+    assert_eq!(
+        enable_call,
+        ToolCall::SkillEnable(super::SkillActivationInput {
+            name: "rust-debug".to_string(),
+        })
+    );
+
+    let disable_call = ToolCall::from_openai_function("skill_disable", r#"{"name":"rust-debug"}"#)
+        .expect("parse disable");
+    assert_eq!(
+        disable_call,
+        ToolCall::SkillDisable(super::SkillActivationInput {
+            name: "rust-debug".to_string(),
         })
     );
 }

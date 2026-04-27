@@ -24,6 +24,13 @@ const LEGACY_DEFAULT_AGENTS_MD: &str = r#"Default agent profile.
 - Keep tool usage explicit and minimal
 "#;
 
+const DEFAULT_SKILL_TOOL_GUIDANCE_SECTION: &str = r#"- Skills:
+  - Use `skill_list` to inspect the session-visible skill catalog before assuming a specialized workflow exists
+  - Use `skill_read` before relying on detailed skill instructions; it returns the SKILL.md body with bounded `max_bytes`
+  - Use `skill_enable` or `skill_disable` for session-scoped activation changes; do not edit skill files just to activate or deactivate a skill
+  - If a skill is already active in the prompt, follow it directly; use `skill_read` only when you need the full instructions
+"#;
+
 const DEFAULT_AGENTS_MD: &str = r#"Assistant agent profile.
 
 - Primary role: general-purpose coding agent
@@ -62,6 +69,11 @@ Tool usage rules:
   - Update progress with `set_task_status` and `add_task_note` as work advances
   - Use `prompt_budget_read` before changing prompt layer budgets
   - Use `prompt_budget_update` only when the task needs a different context allocation; supplied percentages must sum to 100 after merging
+- Skills:
+  - Use `skill_list` to inspect the session-visible skill catalog before assuming a specialized workflow exists
+  - Use `skill_read` before relying on detailed skill instructions; it returns the SKILL.md body with bounded `max_bytes`
+  - Use `skill_enable` or `skill_disable` for session-scoped activation changes; do not edit skill files just to activate or deactivate a skill
+  - If a skill is already active in the prompt, follow it directly; use `skill_read` only when you need the full instructions
 - Agents and schedules:
   - Use `schedule_create`, `schedule_update`, `schedule_read`, `schedule_list`, and `schedule_delete` to manage deferred or recurring work instead of keeping ad-hoc reminders in chat
   - If the user asks you to remind them, message them, or continue in this same chat after a timer, use `continue_later` with `delay_seconds` and an explicit `handoff_payload`
@@ -463,6 +475,7 @@ const JUDGE_AGENTS_MD: &str = r#"Judge agent profile.
 - Read-only behavior is enforced by the allowed tool surface
 - Focus on correctness, risks, and explicit verdicts
 - `message_agent` is asynchronous; if you need a child agent's reply before concluding, follow it with `session_wait`
+- Use `skill_list` and `skill_read` if specialized review instructions are needed; do not mutate skills
 "#;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -544,6 +557,8 @@ pub fn builtin_allowed_tools(template_kind: AgentTemplateKind) -> Vec<String> {
             "plan_snapshot",
             "plan_lint",
             "prompt_budget_read",
+            "skill_list",
+            "skill_read",
             "artifact_read",
             "artifact_search",
             "knowledge_search",
@@ -575,11 +590,19 @@ pub fn ensure_builtin_agent_home_layout(
         template.system_md,
         builtin_legacy_system_variants(template.id),
     )?;
-    sync_builtin_prompt_file(
-        &agent_home.join("AGENTS.md"),
-        template.agents_md,
-        builtin_legacy_agents_variants(template.id),
-    )?;
+    if template.id == DEFAULT_AGENT_ID {
+        sync_builtin_default_agents_prompt_file(
+            &agent_home.join("AGENTS.md"),
+            template.agents_md,
+            builtin_legacy_agents_variants(template.id),
+        )?;
+    } else {
+        sync_builtin_prompt_file(
+            &agent_home.join("AGENTS.md"),
+            template.agents_md,
+            builtin_legacy_agents_variants(template.id),
+        )?;
+    }
     if template.id == DEFAULT_AGENT_ID {
         sync_builtin_default_skill(
             agent_home,
@@ -685,6 +708,34 @@ fn sync_builtin_prompt_file(
     }
 }
 
+fn sync_builtin_default_agents_prompt_file(
+    path: &Path,
+    current: &str,
+    legacy_variants: &[&str],
+) -> io::Result<()> {
+    match fs::read_to_string(path) {
+        Ok(existing) => {
+            let existing = normalize_prompt_contents(&existing);
+            let current = normalize_prompt_contents(current);
+            let pre_skill_guidance = normalize_prompt_contents(
+                &current.replace(DEFAULT_SKILL_TOOL_GUIDANCE_SECTION, ""),
+            );
+            if existing == current
+                || existing == pre_skill_guidance
+                || legacy_variants
+                    .iter()
+                    .any(|candidate| existing == normalize_prompt_contents(candidate))
+            {
+                fs::write(path, current)
+            } else {
+                Ok(())
+            }
+        }
+        Err(source) if source.kind() == io::ErrorKind::NotFound => fs::write(path, current),
+        Err(source) => Err(source),
+    }
+}
+
 fn normalize_prompt_contents(contents: &str) -> String {
     let normalized = contents.replace("\r\n", "\n");
     if normalized.ends_with('\n') {
@@ -770,6 +821,22 @@ mod tests {
         assert!(refreshed.contains("set `delivery_mode` to `existing_session`"));
         assert!(refreshed.contains("Arguments must be strict JSON"));
         assert!(refreshed.contains("call `session_wait`"));
+        assert!(refreshed.contains("Use `skill_list`"));
+
+        fs::write(
+            default_home.join("AGENTS.md"),
+            DEFAULT_AGENTS_MD.replace(DEFAULT_SKILL_TOOL_GUIDANCE_SECTION, ""),
+        )
+        .expect("write pre-skill generated agents prompt");
+        ensure_builtin_agent_home_layout(
+            &default_home,
+            builtin_template(DEFAULT_AGENT_ID).expect("default template"),
+        )
+        .expect("refresh pre-skill prompt");
+        let refreshed_pre_skill =
+            fs::read_to_string(default_home.join("AGENTS.md")).expect("read refreshed prompt");
+        assert!(refreshed_pre_skill.contains("Use `skill_list`"));
+        assert!(refreshed_pre_skill.contains("Use `skill_enable` or `skill_disable`"));
 
         let obsidian_skill =
             fs::read_to_string(default_home.join("skills/obsidian-vault/SKILL.md"))
