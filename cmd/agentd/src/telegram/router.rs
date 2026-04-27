@@ -39,6 +39,7 @@ const TELEGRAM_TYPING_HEARTBEAT_INTERVAL_SECONDS: u64 = 4;
 const TELEGRAM_STATUS_TTL_SECONDS: i64 = 30 * 60;
 const TELEGRAM_DELIVERY_RETRY_ATTEMPTS: usize = 3;
 const TELEGRAM_DELIVERY_RETRY_BASE_DELAY_MS: u64 = 250;
+const TELEGRAM_STATUS_DETAIL_CHAR_CAP: usize = 700;
 
 static TELEGRAM_PAIRING_COUNTER: AtomicU64 = AtomicU64::new(0);
 
@@ -923,7 +924,10 @@ where
                     self.emit_delivery_event(chat_id, op, attempt, started.elapsed(), None, trace);
                     return Ok(value);
                 }
-                Err(error) if attempt < TELEGRAM_DELIVERY_RETRY_ATTEMPTS => {
+                Err(error)
+                    if attempt < TELEGRAM_DELIVERY_RETRY_ATTEMPTS
+                        && !telegram_delivery_error_is_permanent(&error) =>
+                {
                     DiagnosticEventBuilder::new(
                         &self.app.config,
                         "warn",
@@ -1740,7 +1744,19 @@ where
                 _ = &mut edit_sleep, if pending_status_html.is_some() => {
                     let status_html = pending_status_html.take().expect("pending status");
                     if status_html != last_status_html {
-                        self.edit_html_delivered(chat_id, message_id, &status_html).await?;
+                        if let Err(error) = self.edit_html_delivered(chat_id, message_id, &status_html).await {
+                            DiagnosticEventBuilder::new(
+                                &self.app.config,
+                                "warn",
+                                "telegram",
+                                "status_edit.skipped",
+                                "telegram progress status edit failed",
+                            )
+                            .error(error.to_string())
+                            .field("chat_id", chat_id)
+                            .field("message_id", i64::from(message_id))
+                            .emit(&self.audit);
+                        }
                         last_status_html = status_html;
                     }
                     edit_sleep.as_mut().reset(tokio::time::Instant::now() + edit_interval);
@@ -2143,7 +2159,7 @@ fn render_temporary_status_html(state: &TelegramProgressState) -> String {
         lines.push(format!("Статус: {}", render_tool_status_label(status)));
     }
     if let Some(summary) = state.current_tool_summary.as_deref() {
-        lines.push(format!("Деталь: {}", escape_telegram_html(summary)));
+        lines.push(format!("Деталь: {}", render_status_detail(summary)));
     }
 
     lines.join("\n")
@@ -2167,6 +2183,29 @@ fn render_tool_status_label(status: &ToolExecutionStatus) -> &'static str {
         ToolExecutionStatus::Completed => "завершён",
         ToolExecutionStatus::Failed => "ошибка",
     }
+}
+
+fn render_status_detail(summary: &str) -> String {
+    let compact = summary.split_whitespace().collect::<Vec<_>>().join(" ");
+    let total_chars = compact.chars().count();
+    if total_chars <= TELEGRAM_STATUS_DETAIL_CHAR_CAP {
+        return escape_telegram_html(&compact);
+    }
+
+    let visible: String = compact
+        .chars()
+        .take(TELEGRAM_STATUS_DETAIL_CHAR_CAP)
+        .collect();
+    format!(
+        "{}… (обрезано, ещё {} симв.)",
+        escape_telegram_html(&visible),
+        total_chars.saturating_sub(TELEGRAM_STATUS_DETAIL_CHAR_CAP)
+    )
+}
+
+fn telegram_delivery_error_is_permanent(error: &TelegramClientError) -> bool {
+    let message = error.to_string();
+    message.contains("MESSAGE_TOO_LONG")
 }
 
 fn escape_telegram_html(text: &str) -> String {

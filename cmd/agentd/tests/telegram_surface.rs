@@ -10,7 +10,9 @@ use agentd::execution::{ChatExecutionEvent, ChatTurnExecutionReport};
 use agentd::http::client::{DaemonClient, DaemonConnectOptions};
 use agentd::telegram::backend::{DaemonTelegramBackend, TelegramBackend};
 use agentd::telegram::client::{TelegramClient, TelegramClientConfig, TelegramCommandSpec};
-use agentd::telegram::render::{chunk_message_text, truncate_caption};
+use agentd::telegram::render::{
+    TELEGRAM_MESSAGE_TEXT_SOFT_CAP, chunk_message_text, truncate_caption,
+};
 use agentd::telegram::router::TelegramWorker;
 use std::collections::BTreeMap;
 use std::io::{Read, Write};
@@ -1757,6 +1759,154 @@ fn telegram_worker_rate_limits_progress_edits_on_the_status_message() {
         .expect("captured final message");
     assert_eq!(final_message.path, "/bottest-token/SendMessage");
     assert!(final_message.body.contains("Final reply."));
+
+    handle.join().expect("join fake api");
+}
+
+#[test]
+fn telegram_worker_bounds_long_progress_status_edits() {
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("runtime");
+    let (_temp, app) = telegram_test_app_with_progress_interval_ms(10);
+    seed_activated_pairing(&app, "pair-long-progress", 777, 42);
+    let long_summary = format!("exec_wait process_id=exec-10 stdout={}", "x".repeat(8_000));
+    let backend = RecordingTelegramBackend::with_state(RecordingTelegramBackendState {
+        create_session_results: vec![session_summary("session-1", "Telegram Chat", false)],
+        next_chat_output: "Final reply after long tool output.".to_string(),
+        execution_events: vec![(
+            5,
+            ChatExecutionEvent::ToolStatus {
+                tool_call_id: "call_exec_wait_10".to_string(),
+                tool_name: "exec_wait".to_string(),
+                summary: long_summary,
+                status: agentd::execution::ToolExecutionStatus::Running,
+            },
+        )],
+        response_delay_ms: 20,
+        ..RecordingTelegramBackendState::default()
+    });
+    let (api_url, requests, handle) = spawn_fake_telegram_api(vec![
+        json_response(
+            r#"{"ok":true,"result":[{"update_id":134,"message":{"message_id":80,"date":0,"chat":{"id":42,"type":"private"},"from":{"id":777,"is_bot":false,"first_name":"Alice","username":"alice"},"text":"long progress please"}}]}"#,
+        ),
+        json_response(
+            r#"{"ok":true,"result":{"message_id":81,"date":0,"chat":{"id":42,"type":"private"},"text":"working"}}"#,
+        ),
+        json_response(
+            r#"{"ok":true,"result":{"message_id":81,"date":0,"chat":{"id":42,"type":"private"},"text":"progress"}}"#,
+        ),
+        json_response(
+            r#"{"ok":true,"result":{"message_id":82,"date":0,"chat":{"id":42,"type":"private"},"text":"final"}}"#,
+        ),
+    ]);
+    let client = TelegramClient::new(TelegramClientConfig {
+        token: "test-token".to_string(),
+        api_url: Some(api_url),
+        poll_request_timeout_seconds: 40,
+    })
+    .expect("telegram client");
+    let worker = TelegramWorker::with_consumer(app, backend, client, "telegram-test");
+
+    runtime.block_on(worker.poll_once()).expect("poll once");
+
+    let _ = requests
+        .recv_timeout(Duration::from_secs(2))
+        .expect("captured getUpdates");
+    let _ = requests
+        .recv_timeout(Duration::from_secs(2))
+        .expect("captured ack");
+    let progress_edit = requests
+        .recv_timeout(Duration::from_secs(2))
+        .expect("captured progress edit");
+    assert_eq!(progress_edit.path, "/bottest-token/EditMessageText");
+    assert!(progress_edit.body.contains("exec_wait"));
+    assert!(
+        progress_edit.body.len() <= TELEGRAM_MESSAGE_TEXT_SOFT_CAP + 512,
+        "progress edit body should stay below Telegram message limits, got {} bytes",
+        progress_edit.body.len()
+    );
+    assert!(!progress_edit.body.contains(&"x".repeat(4_000)));
+    let final_message = requests
+        .recv_timeout(Duration::from_secs(2))
+        .expect("captured final message");
+    assert_eq!(final_message.path, "/bottest-token/SendMessage");
+    assert!(
+        final_message
+            .body
+            .contains("Final reply after long tool output.")
+    );
+
+    handle.join().expect("join fake api");
+}
+
+#[test]
+fn telegram_worker_keeps_turn_alive_when_progress_edit_is_too_long() {
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("runtime");
+    let (_temp, app) = telegram_test_app_with_progress_interval_ms(10);
+    seed_activated_pairing(&app, "pair-progress-too-long", 777, 42);
+    let backend = RecordingTelegramBackend::with_state(RecordingTelegramBackendState {
+        create_session_results: vec![session_summary("session-1", "Telegram Chat", false)],
+        next_chat_output: "Final reply after rejected status edit.".to_string(),
+        execution_events: vec![(
+            5,
+            ChatExecutionEvent::ToolStatus {
+                tool_call_id: "call_exec_wait_10".to_string(),
+                tool_name: "exec_wait".to_string(),
+                summary: "exec_wait process_id=exec-10".to_string(),
+                status: agentd::execution::ToolExecutionStatus::Running,
+            },
+        )],
+        response_delay_ms: 20,
+        ..RecordingTelegramBackendState::default()
+    });
+    let (api_url, requests, handle) = spawn_fake_telegram_api(vec![
+        json_response(
+            r#"{"ok":true,"result":[{"update_id":135,"message":{"message_id":90,"date":0,"chat":{"id":42,"type":"private"},"from":{"id":777,"is_bot":false,"first_name":"Alice","username":"alice"},"text":"status too long please"}}]}"#,
+        ),
+        json_response(
+            r#"{"ok":true,"result":{"message_id":91,"date":0,"chat":{"id":42,"type":"private"},"text":"working"}}"#,
+        ),
+        json_response(
+            r#"{"ok":false,"error_code":400,"description":"Bad Request: MESSAGE_TOO_LONG"}"#,
+        ),
+        json_response(
+            r#"{"ok":true,"result":{"message_id":92,"date":0,"chat":{"id":42,"type":"private"},"text":"final"}}"#,
+        ),
+    ]);
+    let client = TelegramClient::new(TelegramClientConfig {
+        token: "test-token".to_string(),
+        api_url: Some(api_url),
+        poll_request_timeout_seconds: 40,
+    })
+    .expect("telegram client");
+    let worker = TelegramWorker::with_consumer(app, backend, client, "telegram-test");
+
+    runtime.block_on(worker.poll_once()).expect("poll once");
+
+    let _ = requests
+        .recv_timeout(Duration::from_secs(2))
+        .expect("captured getUpdates");
+    let _ = requests
+        .recv_timeout(Duration::from_secs(2))
+        .expect("captured ack");
+    let failed_edit = requests
+        .recv_timeout(Duration::from_secs(2))
+        .expect("captured rejected progress edit");
+    assert_eq!(failed_edit.path, "/bottest-token/EditMessageText");
+    let final_message = requests
+        .recv_timeout(Duration::from_secs(2))
+        .expect("captured final message");
+    assert_eq!(final_message.path, "/bottest-token/SendMessage");
+    assert!(
+        final_message
+            .body
+            .contains("Final reply after rejected status edit.")
+    );
 
     handle.join().expect("join fake api");
 }
