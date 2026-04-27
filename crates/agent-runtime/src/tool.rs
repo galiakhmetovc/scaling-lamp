@@ -116,6 +116,7 @@ pub enum ToolName {
     PlanLint,
     PromptBudgetRead,
     PromptBudgetUpdate,
+    AutonomyStateRead,
     SkillList,
     SkillRead,
     SkillEnable,
@@ -471,6 +472,13 @@ pub struct SkillListInput {
     pub offset: Option<usize>,
 }
 
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct AutonomyStateReadInput {
+    pub max_items: Option<usize>,
+    pub include_inactive_schedules: Option<bool>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SkillReadInput {
     pub name: String,
@@ -780,6 +788,7 @@ pub enum ToolCall {
     PlanLint(PlanLintInput),
     PromptBudgetRead(PromptBudgetReadInput),
     PromptBudgetUpdate(PromptBudgetUpdateInput),
+    AutonomyStateRead(AutonomyStateReadInput),
     SkillList(SkillListInput),
     SkillRead(SkillReadInput),
     SkillEnable(SkillActivationInput),
@@ -1114,6 +1123,74 @@ pub struct SkillActivationOutput {
     pub name: String,
     pub mode: String,
     pub skills: Vec<SkillStatusOutput>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AutonomyJobOutput {
+    pub id: String,
+    pub kind: String,
+    pub status: String,
+    pub run_id: Option<String>,
+    pub parent_job_id: Option<String>,
+    pub last_progress_message: Option<String>,
+    pub updated_at: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AutonomyChildSessionOutput {
+    pub id: String,
+    pub title: String,
+    pub agent_profile_id: String,
+    pub parent_job_id: Option<String>,
+    pub delegation_label: Option<String>,
+    pub updated_at: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AutonomyInboxEventOutput {
+    pub id: String,
+    pub kind: String,
+    pub job_id: Option<String>,
+    pub status: String,
+    pub available_at: i64,
+    pub error: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AutonomyInteragentOutput {
+    pub chain_id: String,
+    pub origin_session_id: String,
+    pub origin_agent_id: String,
+    pub hop_count: u32,
+    pub max_hops: u32,
+    pub parent_interagent_session_id: Option<String>,
+    pub state: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AutonomyMeshPeerOutput {
+    pub peer_id: String,
+    pub base_url: String,
+    pub has_bearer_token: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AutonomyStateReadOutput {
+    pub session_id: String,
+    pub title: String,
+    pub agent_profile_id: String,
+    pub turn_source: Option<String>,
+    pub parent_session_id: Option<String>,
+    pub parent_job_id: Option<String>,
+    pub delegation_label: Option<String>,
+    pub schedules: Vec<ScheduleViewOutput>,
+    pub active_jobs: Vec<AutonomyJobOutput>,
+    pub child_sessions: Vec<AutonomyChildSessionOutput>,
+    pub inbox_events: Vec<AutonomyInboxEventOutput>,
+    pub interagent: Option<AutonomyInteragentOutput>,
+    pub mesh_peers: Vec<AutonomyMeshPeerOutput>,
+    pub truncated: bool,
+    pub max_items: usize,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1510,6 +1587,7 @@ pub enum ToolOutput {
     PlanLint(PlanLintOutput),
     PromptBudgetRead(PromptBudgetReadOutput),
     PromptBudgetUpdate(PromptBudgetUpdateOutput),
+    AutonomyStateRead(AutonomyStateReadOutput),
     SkillList(SkillListOutput),
     SkillRead(SkillReadOutput),
     SkillEnable(SkillActivationOutput),
@@ -1817,6 +1895,7 @@ impl ToolName {
             Self::PlanLint => "plan_lint",
             Self::PromptBudgetRead => "prompt_budget_read",
             Self::PromptBudgetUpdate => "prompt_budget_update",
+            Self::AutonomyStateRead => "autonomy_state_read",
             Self::SkillList => "skill_list",
             Self::SkillRead => "skill_read",
             Self::SkillEnable => "skill_enable",
@@ -1897,6 +1976,7 @@ impl ToolCatalog {
                         | ToolName::PlanLint
                         | ToolName::PromptBudgetRead
                         | ToolName::PromptBudgetUpdate
+                        | ToolName::AutonomyStateRead
                         | ToolName::SkillList
                         | ToolName::SkillRead
                         | ToolName::SkillEnable
@@ -2266,6 +2346,16 @@ impl ToolCatalog {
                 description: "Update or reset the session-scoped prompt budget policy. Percentages are guard-railed: after merging supplied percentages, all layer percentages must sum to 100",
                 policy: ToolPolicy {
                     read_only: false,
+                    destructive: false,
+                    requires_approval: false,
+                },
+            },
+            ToolDefinition {
+                name: ToolName::AutonomyStateRead,
+                family: ToolFamily::Memory,
+                description: "Read a bounded aggregate autonomy state for the current session: related schedules, active jobs, delegated child sessions, inbox events, inter-agent chain metadata, and configured mesh/A2A peers.",
+                policy: ToolPolicy {
+                    read_only: true,
                     destructive: false,
                     requires_approval: false,
                 },
@@ -2817,11 +2907,13 @@ impl ToolRuntime {
                 reason: "planning tools must execute through the canonical session path"
                     .to_string(),
             }),
-            ToolCall::SkillList(_)
+            ToolCall::AutonomyStateRead(_)
+            | ToolCall::SkillList(_)
             | ToolCall::SkillRead(_)
             | ToolCall::SkillEnable(_)
             | ToolCall::SkillDisable(_) => Err(ToolError::InvalidMemoryTool {
-                reason: "skill tools must execute through the canonical session path".to_string(),
+                reason: "autonomy and skill tools must execute through the canonical session path"
+                    .to_string(),
             }),
             ToolCall::KnowledgeSearch(_)
             | ToolCall::KnowledgeRead(_)
@@ -3424,6 +3516,7 @@ impl ToolCall {
             Self::PlanLint(_) => ToolName::PlanLint,
             Self::PromptBudgetRead(_) => ToolName::PromptBudgetRead,
             Self::PromptBudgetUpdate(_) => ToolName::PromptBudgetUpdate,
+            Self::AutonomyStateRead(_) => ToolName::AutonomyStateRead,
             Self::SkillList(_) => ToolName::SkillList,
             Self::SkillRead(_) => ToolName::SkillRead,
             Self::SkillEnable(_) => ToolName::SkillEnable,
@@ -3488,6 +3581,7 @@ impl ToolCall {
             | Self::PlanLint(_)
             | Self::PromptBudgetRead(_)
             | Self::PromptBudgetUpdate(_)
+            | Self::AutonomyStateRead(_)
             | Self::SkillList(_)
             | Self::SkillRead(_)
             | Self::SkillEnable(_)
@@ -3648,6 +3742,14 @@ impl ToolCall {
                 "prompt_budget_update reset={} percentages={}",
                 input.reset,
                 input.percentages.is_some()
+            ),
+            Self::AutonomyStateRead(input) => format!(
+                "autonomy_state_read max_items={} include_inactive_schedules={}",
+                input
+                    .max_items
+                    .map(|value| value.to_string())
+                    .unwrap_or_else(|| "default".to_string()),
+                input.include_inactive_schedules.unwrap_or(false)
             ),
             Self::SkillList(input) => format!(
                 "skill_list include_inactive={} offset={} limit={}",
@@ -3968,6 +4070,12 @@ impl ToolCall {
                 }),
             "prompt_budget_update" => serde_json::from_str(arguments)
                 .map(Self::PromptBudgetUpdate)
+                .map_err(|source| ToolCallParseError::InvalidArguments {
+                    name: name.to_string(),
+                    source,
+                }),
+            "autonomy_state_read" => serde_json::from_str(arguments)
+                .map(Self::AutonomyStateRead)
                 .map_err(|source| ToolCallParseError::InvalidArguments {
                     name: name.to_string(),
                     source,
@@ -4541,6 +4649,15 @@ impl ToolOutput {
                     .map(|value| value.to_string())
                     .unwrap_or_else(|| "unknown".to_string())
             ),
+            Self::AutonomyStateRead(output) => format!(
+                "autonomy_state_read schedules={} active_jobs={} child_sessions={} inbox_events={} mesh_peers={} truncated={}",
+                output.schedules.len(),
+                output.active_jobs.len(),
+                output.child_sessions.len(),
+                output.inbox_events.len(),
+                output.mesh_peers.len(),
+                output.truncated
+            ),
             Self::SkillList(output) => {
                 if let Some(next_offset) = output.next_offset {
                     format!(
@@ -4986,6 +5103,25 @@ impl ToolOutput {
                     "percent": layer.percent,
                     "target_tokens": layer.target_tokens,
                 })).collect::<Vec<_>>(),
+            })
+            .to_string(),
+            Self::AutonomyStateRead(output) => json!({
+                "tool": "autonomy_state_read",
+                "session_id": output.session_id,
+                "title": output.title,
+                "agent_profile_id": output.agent_profile_id,
+                "turn_source": output.turn_source,
+                "parent_session_id": output.parent_session_id,
+                "parent_job_id": output.parent_job_id,
+                "delegation_label": output.delegation_label,
+                "schedules": output.schedules.iter().map(schedule_view_json).collect::<Vec<_>>(),
+                "active_jobs": output.active_jobs.iter().map(autonomy_job_json).collect::<Vec<_>>(),
+                "child_sessions": output.child_sessions.iter().map(autonomy_child_session_json).collect::<Vec<_>>(),
+                "inbox_events": output.inbox_events.iter().map(autonomy_inbox_event_json).collect::<Vec<_>>(),
+                "interagent": output.interagent.as_ref().map(autonomy_interagent_json),
+                "mesh_peers": output.mesh_peers.iter().map(autonomy_mesh_peer_json).collect::<Vec<_>>(),
+                "truncated": output.truncated,
+                "max_items": output.max_items,
             })
             .to_string(),
             Self::SkillList(output) => json!({
@@ -5836,6 +5972,14 @@ impl ToolName {
                 },
                 "additionalProperties": false,
             }),
+            Self::AutonomyStateRead => json!({
+                "type": "object",
+                "properties": {
+                    "max_items": { "type": ["integer", "null"], "minimum": 1, "description": "Optional maximum number of schedules, jobs, child sessions, inbox events, and mesh peers per section" },
+                    "include_inactive_schedules": { "type": ["boolean", "null"], "description": "Whether to include disabled schedules in the related schedules section. Defaults to false." }
+                },
+                "additionalProperties": false,
+            }),
             Self::SkillRead => json!({
                 "type": "object",
                 "properties": {
@@ -6402,6 +6546,83 @@ fn plan_item_json(item: &PlanItem) -> Value {
         "notes": item.notes,
         "blocked_reason": item.blocked_reason,
         "parent_task_id": item.parent_task_id,
+    })
+}
+
+fn schedule_view_json(schedule: &ScheduleViewOutput) -> Value {
+    json!({
+        "id": schedule.id,
+        "agent_profile_id": schedule.agent_profile_id,
+        "workspace_root": schedule.workspace_root,
+        "prompt": schedule.prompt,
+        "mode": schedule.mode.as_str(),
+        "delivery_mode": schedule.delivery_mode.as_str(),
+        "target_session_id": schedule.target_session_id,
+        "interval_seconds": schedule.interval_seconds,
+        "next_fire_at": schedule.next_fire_at,
+        "enabled": schedule.enabled,
+        "last_triggered_at": schedule.last_triggered_at,
+        "last_finished_at": schedule.last_finished_at,
+        "last_session_id": schedule.last_session_id,
+        "last_job_id": schedule.last_job_id,
+        "last_result": schedule.last_result,
+        "last_error": schedule.last_error,
+        "created_at": schedule.created_at,
+        "updated_at": schedule.updated_at,
+    })
+}
+
+fn autonomy_job_json(job: &AutonomyJobOutput) -> Value {
+    json!({
+        "id": job.id,
+        "kind": job.kind,
+        "status": job.status,
+        "run_id": job.run_id,
+        "parent_job_id": job.parent_job_id,
+        "last_progress_message": job.last_progress_message,
+        "updated_at": job.updated_at,
+    })
+}
+
+fn autonomy_child_session_json(session: &AutonomyChildSessionOutput) -> Value {
+    json!({
+        "id": session.id,
+        "title": session.title,
+        "agent_profile_id": session.agent_profile_id,
+        "parent_job_id": session.parent_job_id,
+        "delegation_label": session.delegation_label,
+        "updated_at": session.updated_at,
+    })
+}
+
+fn autonomy_inbox_event_json(event: &AutonomyInboxEventOutput) -> Value {
+    json!({
+        "id": event.id,
+        "kind": event.kind,
+        "job_id": event.job_id,
+        "status": event.status,
+        "available_at": event.available_at,
+        "error": event.error,
+    })
+}
+
+fn autonomy_interagent_json(chain: &AutonomyInteragentOutput) -> Value {
+    json!({
+        "chain_id": chain.chain_id,
+        "origin_session_id": chain.origin_session_id,
+        "origin_agent_id": chain.origin_agent_id,
+        "hop_count": chain.hop_count,
+        "max_hops": chain.max_hops,
+        "parent_interagent_session_id": chain.parent_interagent_session_id,
+        "state": chain.state,
+    })
+}
+
+fn autonomy_mesh_peer_json(peer: &AutonomyMeshPeerOutput) -> Value {
+    json!({
+        "peer_id": peer.peer_id,
+        "base_url": peer.base_url,
+        "has_bearer_token": peer.has_bearer_token,
     })
 }
 

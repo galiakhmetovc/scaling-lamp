@@ -1782,6 +1782,220 @@ fn execute_chat_turn_can_list_read_and_enable_skills_with_tools() {
 }
 
 #[test]
+fn execute_chat_turn_can_read_aggregate_autonomy_state_with_tool() {
+    let (api_base, requests, handle) = spawn_json_server_sequence(vec![
+        r#"{
+                "id":"resp_autonomy_state_1",
+                "model":"gpt-5.4",
+                "output":[
+                    {
+                        "id":"fc_autonomy_state",
+                        "type":"function_call",
+                        "call_id":"call_autonomy_state",
+                        "name":"autonomy_state_read",
+                        "arguments":"{\"max_items\":5,\"include_inactive_schedules\":true}"
+                    }
+                ],
+                "usage":{"input_tokens":30,"output_tokens":10,"total_tokens":40}
+            }"#
+        .to_string(),
+        r#"{
+                "id":"resp_autonomy_state_2",
+                "model":"gpt-5.4",
+                "output":[
+                    {
+                        "id":"msg_autonomy_state",
+                        "type":"message",
+                        "status":"completed",
+                        "role":"assistant",
+                        "content":[
+                            {
+                                "type":"output_text",
+                                "text":"Autonomy state inspected."
+                            }
+                        ]
+                    }
+                ],
+                "usage":{"input_tokens":24,"output_tokens":6,"total_tokens":30}
+            }"#
+        .to_string(),
+    ]);
+    let temp = tempfile::tempdir().expect("tempdir");
+    let workspace_root = temp.path().join("workspace");
+    fs::create_dir_all(&workspace_root).expect("create workspace");
+    let mut config = AppConfig {
+        data_dir: temp.path().join("state-root"),
+        daemon: Default::default(),
+        provider: ConfiguredProvider {
+            kind: ProviderKind::OpenAiResponses,
+            api_base: Some(format!("{api_base}/v1")),
+            api_key: Some("test-key".to_string()),
+            default_model: Some("gpt-5.4".to_string()),
+            ..ConfiguredProvider::default()
+        },
+        ..AppConfig::default()
+    };
+    config.daemon.a2a_peers.insert(
+        "judge".to_string(),
+        agent_persistence::A2APeerConfig {
+            base_url: "https://judge.example.test".to_string(),
+            bearer_token: Some("secret".to_string()),
+        },
+    );
+    let mut app = build_from_config(config).expect("build app");
+    app.runtime.workspace = WorkspaceRef::new(&workspace_root);
+    let workspace_root = std::fs::canonicalize(&workspace_root).expect("canonical workspace");
+    let store = PersistenceStore::open(&app.persistence).expect("open store");
+
+    store
+        .put_session(&SessionRecord {
+            id: "session-autonomy-state".to_string(),
+            title: "Autonomy State".to_string(),
+            prompt_override: None,
+            settings_json: serde_json::to_string(&SessionSettings::default())
+                .expect("serialize settings"),
+            workspace_root: workspace_root.display().to_string(),
+            agent_profile_id: "default".to_string(),
+            active_mission_id: None,
+            parent_session_id: None,
+            parent_job_id: None,
+            delegation_label: Some("agent-chain:chain-autonomy".to_string()),
+            created_at: 1,
+            updated_at: 1,
+        })
+        .expect("put parent session");
+
+    let schedule =
+        agent_runtime::agent::AgentSchedule::new(agent_runtime::agent::AgentScheduleInit {
+            id: "continue-later-session-autonomy-state".to_string(),
+            agent_profile_id: "default".to_string(),
+            workspace_root: workspace_root.clone(),
+            prompt: "continue autonomy work".to_string(),
+            mode: agent_runtime::agent::AgentScheduleMode::Once,
+            delivery_mode: agent_runtime::agent::AgentScheduleDeliveryMode::ExistingSession,
+            target_session_id: Some("session-autonomy-state".to_string()),
+            interval_seconds: 120,
+            next_fire_at: 200,
+            enabled: true,
+            last_triggered_at: None,
+            last_finished_at: None,
+            last_session_id: None,
+            last_job_id: None,
+            last_result: None,
+            last_error: None,
+            created_at: 2,
+            updated_at: 2,
+        })
+        .expect("schedule");
+    store
+        .put_agent_schedule(&AgentScheduleRecord::from(&schedule))
+        .expect("put schedule");
+
+    store
+        .put_job(&JobRecord {
+            id: "job-autonomy-delegate".to_string(),
+            session_id: "session-autonomy-state".to_string(),
+            mission_id: None,
+            run_id: None,
+            parent_job_id: None,
+            kind: "delegate".to_string(),
+            status: "running".to_string(),
+            input_json: None,
+            result_json: None,
+            error: None,
+            created_at: 3,
+            updated_at: 5,
+            started_at: Some(4),
+            finished_at: None,
+            attempt_count: 1,
+            max_attempts: 1,
+            lease_owner: None,
+            lease_expires_at: None,
+            heartbeat_at: None,
+            cancel_requested_at: None,
+            last_progress_message: Some("delegated child session running".to_string()),
+            callback_json: None,
+            callback_sent_at: None,
+        })
+        .expect("put active job");
+
+    store
+        .put_session(&SessionRecord {
+            id: "session-delegate-job-autonomy-delegate".to_string(),
+            title: "Delegate Child".to_string(),
+            prompt_override: None,
+            settings_json: serde_json::to_string(&SessionSettings::default())
+                .expect("serialize child settings"),
+            workspace_root: workspace_root.display().to_string(),
+            agent_profile_id: "default".to_string(),
+            active_mission_id: None,
+            parent_session_id: Some("session-autonomy-state".to_string()),
+            parent_job_id: Some("job-autonomy-delegate".to_string()),
+            delegation_label: Some("delegate:review".to_string()),
+            created_at: 4,
+            updated_at: 6,
+        })
+        .expect("put child session");
+
+    store
+        .put_session_inbox_event(&agent_persistence::SessionInboxEventRecord {
+            id: "inbox-autonomy".to_string(),
+            session_id: "session-autonomy-state".to_string(),
+            job_id: Some("job-autonomy-delegate".to_string()),
+            kind: "delegation_result_ready".to_string(),
+            payload_json: "{}".to_string(),
+            status: "queued".to_string(),
+            created_at: 7,
+            available_at: 8,
+            claimed_at: None,
+            processed_at: None,
+            error: None,
+        })
+        .expect("put inbox");
+
+    let chain = agent_runtime::interagent::AgentMessageChain::new(
+        "chain-autonomy",
+        "session-origin",
+        "default",
+        1,
+        3,
+        Some("session-origin".to_string()),
+        agent_runtime::interagent::AgentChainState::Active,
+    )
+    .expect("chain");
+    store
+        .put_transcript(&agent_persistence::TranscriptRecord {
+            id: "transcript-autonomy-chain".to_string(),
+            session_id: "session-autonomy-state".to_string(),
+            run_id: None,
+            kind: "system".to_string(),
+            content: chain.to_transcript_metadata(),
+            created_at: 9,
+        })
+        .expect("put chain transcript");
+
+    let report = app
+        .execute_chat_turn("session-autonomy-state", "inspect autonomy", 10)
+        .expect("execute chat turn");
+    let _first_request = requests.recv().expect("first provider request");
+    let second_request = requests.recv().expect("second provider request");
+    handle.join().expect("join server");
+
+    assert_eq!(report.response_id, "resp_autonomy_state_2");
+    assert_eq!(report.output_text, "Autonomy state inspected.");
+
+    let normalized_second = second_request.to_ascii_lowercase();
+    assert!(normalized_second.contains("\"call_id\":\"call_autonomy_state\""));
+    assert!(normalized_second.contains("autonomy_state_read"));
+    assert!(normalized_second.contains("continue-later-session-autonomy-state"));
+    assert!(normalized_second.contains("job-autonomy-delegate"));
+    assert!(normalized_second.contains("session-delegate-job-autonomy-delegate"));
+    assert!(normalized_second.contains("delegation_result_ready"));
+    assert!(normalized_second.contains("chain-autonomy"));
+    assert!(normalized_second.contains("judge.example.test"));
+}
+
+#[test]
 fn execute_chat_turn_falls_back_to_builtin_agent_prompts_when_agent_files_are_missing() {
     let (api_base, requests, handle) = spawn_json_server_sequence(vec![
         r#"{

@@ -656,6 +656,39 @@ fn skill_tool_definitions_and_parsing_are_explicit() {
 }
 
 #[test]
+fn autonomy_state_read_definition_and_parsing_are_explicit() {
+    let catalog = ToolCatalog::default();
+    let definition = catalog
+        .definition(ToolName::AutonomyStateRead)
+        .expect("autonomy_state_read");
+    let automatic_names = catalog
+        .automatic_model_definitions()
+        .into_iter()
+        .map(|definition| definition.name)
+        .collect::<Vec<_>>();
+
+    assert!(automatic_names.contains(&ToolName::AutonomyStateRead));
+    assert_eq!(definition.family, ToolFamily::Memory);
+    assert!(definition.policy.read_only);
+    let schema = definition.openai_function_schema().to_string();
+    assert!(schema.contains("max_items"));
+    assert!(schema.contains("include_inactive_schedules"));
+
+    let call = ToolCall::from_openai_function(
+        "autonomy_state_read",
+        r#"{"max_items":5,"include_inactive_schedules":false}"#,
+    )
+    .expect("parse autonomy_state_read");
+    assert_eq!(
+        call,
+        ToolCall::AutonomyStateRead(super::AutonomyStateReadInput {
+            max_items: Some(5),
+            include_inactive_schedules: Some(false),
+        })
+    );
+}
+
+#[test]
 fn fs_patch_text_definition_is_explicit_about_search_and_replace_fields() {
     let catalog = ToolCatalog::default();
     let fs_patch_text = catalog

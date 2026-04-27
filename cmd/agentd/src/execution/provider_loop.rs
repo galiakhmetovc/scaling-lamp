@@ -2434,6 +2434,9 @@ impl ExecutionService {
             ToolCall::PromptBudgetUpdate(input) => Ok(ToolOutput::PromptBudgetUpdate(
                 self.update_prompt_budget_policy(store, provider, session_id, input, now)?,
             )),
+            ToolCall::AutonomyStateRead(input) => Ok(ToolOutput::AutonomyStateRead(
+                self.read_autonomy_state_tool(store, session_id, input)?,
+            )),
             ToolCall::SkillList(input) => Ok(ToolOutput::SkillList(
                 self.list_session_skills_for_tool(store, session_id, input)?,
             )),

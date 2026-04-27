@@ -592,6 +592,39 @@ prompt_budget_update({
 - `transcript_tail` сохраняет новые сообщения, а старые uncovered messages скрываются первыми;
 - скрытое содержимое не теряется: его можно читать через transcript/debug/session/artifact surfaces.
 
+## Autonomy
+
+### `autonomy_state_read`
+
+Сигнатура:
+
+```text
+autonomy_state_read({
+  max_items?: integer | null,
+  include_inactive_schedules?: boolean | null
+})
+```
+
+Что делает:
+
+- возвращает bounded aggregate state текущей session;
+- показывает `turn_source`, parent session/job, `delegation_label`;
+- показывает связанные schedules текущего workspace и agent/session;
+- показывает active jobs, child sessions, inbox events;
+- показывает inter-agent chain metadata, если session является частью A2A chain;
+- показывает configured A2A/mesh peers из daemon config.
+
+Когда использовать:
+
+- перед автономной работой по расписанию, wakeup, delegation или agent-to-agent flow;
+- если нужно понять, почему session проснулась или какие фоновые работы сейчас связаны с ней;
+- если нужно одно компактное представление вместо отдельных `schedule_list`, `session_read`, `agent_list` и debug views.
+
+Важно:
+
+- это read-only aggregate, а не отдельный runtime path;
+- полные детали по-прежнему читаются каноническими tools: `schedule_read`, `session_read`, `session_wait`, debug/TUI views.
+
 ## Skills
 
 ### `skill_list`

@@ -7,14 +7,187 @@ use agent_runtime::agent::{
 };
 use agent_runtime::tool::{
     AgentCreateInput, AgentCreateOutput, AgentListInput, AgentListOutput, AgentReadInput,
-    AgentReadOutput, AgentSummaryOutput, ContinueLaterInput, ContinueLaterOutput,
-    ScheduleCreateInput, ScheduleCreateOutput, ScheduleDeleteInput, ScheduleDeleteOutput,
-    ScheduleListInput, ScheduleListOutput, ScheduleReadInput, ScheduleReadOutput,
-    ScheduleUpdateInput, ScheduleUpdateOutput, ScheduleViewOutput, ToolError,
+    AgentReadOutput, AgentSummaryOutput, AutonomyChildSessionOutput, AutonomyInboxEventOutput,
+    AutonomyInteragentOutput, AutonomyJobOutput, AutonomyMeshPeerOutput, AutonomyStateReadInput,
+    AutonomyStateReadOutput, ContinueLaterInput, ContinueLaterOutput, ScheduleCreateInput,
+    ScheduleCreateOutput, ScheduleDeleteInput, ScheduleDeleteOutput, ScheduleListInput,
+    ScheduleListOutput, ScheduleReadInput, ScheduleReadOutput, ScheduleUpdateInput,
+    ScheduleUpdateOutput, ScheduleViewOutput, ToolError,
 };
 use std::path::{Path, PathBuf};
 
+const DEFAULT_AUTONOMY_STATE_LIMIT: usize = 8;
+const MAX_AUTONOMY_STATE_LIMIT: usize = 50;
+
 impl ExecutionService {
+    pub(crate) fn read_autonomy_state_tool(
+        &self,
+        store: &PersistenceStore,
+        session_id: &str,
+        input: &AutonomyStateReadInput,
+    ) -> Result<AutonomyStateReadOutput, ExecutionError> {
+        let session = load_session_or_internal(store, session_id)?;
+        let max_items = input
+            .max_items
+            .unwrap_or(DEFAULT_AUTONOMY_STATE_LIMIT)
+            .clamp(1, MAX_AUTONOMY_STATE_LIMIT);
+        let include_inactive_schedules = input.include_inactive_schedules.unwrap_or(false);
+        let current_workspace = current_workspace_root(self.workspace.root.as_path());
+
+        let mut schedules = store
+            .list_agent_schedules()
+            .map_err(ExecutionError::Store)?
+            .into_iter()
+            .map(AgentSchedule::try_from)
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(ExecutionError::RecordConversion)?;
+        schedules.retain(|schedule| {
+            schedule.workspace_root == current_workspace
+                && (schedule.agent_profile_id == session.agent_profile_id
+                    || schedule.target_session_id.as_deref() == Some(session.id.as_str())
+                    || schedule.last_session_id.as_deref() == Some(session.id.as_str()))
+                && (include_inactive_schedules || schedule.enabled)
+        });
+        schedules.sort_by(|left, right| {
+            left.next_fire_at
+                .cmp(&right.next_fire_at)
+                .then_with(|| left.id.cmp(&right.id))
+        });
+        let total_schedules = schedules.len();
+        let schedules = schedules
+            .iter()
+            .take(max_items)
+            .map(schedule_view_output)
+            .collect::<Vec<_>>();
+
+        let mut active_jobs = store
+            .list_active_jobs_for_session(session.id.as_str())
+            .map_err(ExecutionError::Store)?;
+        active_jobs.sort_by(|left, right| {
+            right
+                .updated_at
+                .cmp(&left.updated_at)
+                .then_with(|| left.id.cmp(&right.id))
+        });
+        let total_active_jobs = active_jobs.len();
+        let active_jobs = active_jobs
+            .into_iter()
+            .take(max_items)
+            .map(|job| AutonomyJobOutput {
+                id: job.id,
+                kind: job.kind,
+                status: job.status,
+                run_id: job.run_id,
+                parent_job_id: job.parent_job_id,
+                last_progress_message: job.last_progress_message,
+                updated_at: job.updated_at,
+            })
+            .collect::<Vec<_>>();
+
+        let mut child_sessions = store
+            .list_sessions()
+            .map_err(ExecutionError::Store)?
+            .into_iter()
+            .filter(|record| record.parent_session_id.as_deref() == Some(session.id.as_str()))
+            .collect::<Vec<_>>();
+        child_sessions.sort_by(|left, right| {
+            right
+                .updated_at
+                .cmp(&left.updated_at)
+                .then_with(|| left.id.cmp(&right.id))
+        });
+        let total_child_sessions = child_sessions.len();
+        let child_sessions = child_sessions
+            .into_iter()
+            .take(max_items)
+            .map(|record| AutonomyChildSessionOutput {
+                id: record.id,
+                title: record.title,
+                agent_profile_id: record.agent_profile_id,
+                parent_job_id: record.parent_job_id,
+                delegation_label: record.delegation_label,
+                updated_at: record.updated_at,
+            })
+            .collect::<Vec<_>>();
+
+        let mut inbox_events = store
+            .list_session_inbox_events_for_session(session.id.as_str())
+            .map_err(ExecutionError::Store)?;
+        inbox_events.sort_by(|left, right| {
+            right
+                .available_at
+                .cmp(&left.available_at)
+                .then_with(|| left.id.cmp(&right.id))
+        });
+        let total_inbox_events = inbox_events.len();
+        let inbox_events = inbox_events
+            .into_iter()
+            .take(max_items)
+            .map(|event| AutonomyInboxEventOutput {
+                id: event.id,
+                kind: event.kind,
+                job_id: event.job_id,
+                status: event.status,
+                available_at: event.available_at,
+                error: event.error,
+            })
+            .collect::<Vec<_>>();
+
+        let interagent = self
+            .load_session_interagent_chain(store, session.id.as_str())?
+            .map(|chain| AutonomyInteragentOutput {
+                chain_id: chain.chain_id,
+                origin_session_id: chain.origin_session_id,
+                origin_agent_id: chain.origin_agent_id,
+                hop_count: chain.hop_count,
+                max_hops: chain.max_hops,
+                parent_interagent_session_id: chain.parent_interagent_session_id,
+                state: match chain.state {
+                    agent_runtime::interagent::AgentChainState::Active => "active",
+                    agent_runtime::interagent::AgentChainState::BlockedMaxHops => {
+                        "blocked_max_hops"
+                    }
+                    agent_runtime::interagent::AgentChainState::ContinuedOnce => "continued_once",
+                }
+                .to_string(),
+            });
+
+        let total_mesh_peers = self.config.a2a_peers.len();
+        let mesh_peers = self
+            .config
+            .a2a_peers
+            .iter()
+            .take(max_items)
+            .map(|(peer_id, peer)| AutonomyMeshPeerOutput {
+                peer_id: peer_id.clone(),
+                base_url: peer.base_url.clone(),
+                has_bearer_token: peer.bearer_token.is_some(),
+            })
+            .collect::<Vec<_>>();
+
+        Ok(AutonomyStateReadOutput {
+            session_id: session.id.clone(),
+            title: session.title.clone(),
+            agent_profile_id: session.agent_profile_id.clone(),
+            turn_source: autonomy_turn_source(&session),
+            parent_session_id: session.parent_session_id.clone(),
+            parent_job_id: session.parent_job_id.clone(),
+            delegation_label: session.delegation_label.clone(),
+            schedules,
+            active_jobs,
+            child_sessions,
+            inbox_events,
+            interagent,
+            mesh_peers,
+            truncated: total_schedules > max_items
+                || total_active_jobs > max_items
+                || total_child_sessions > max_items
+                || total_inbox_events > max_items
+                || total_mesh_peers > max_items,
+            max_items,
+        })
+    }
+
     pub(crate) fn list_tool_agents(
         &self,
         store: &PersistenceStore,
@@ -351,6 +524,23 @@ impl ExecutionService {
             deleted,
         })
     }
+}
+
+fn autonomy_turn_source(session: &Session) -> Option<String> {
+    session
+        .delegation_label
+        .as_deref()
+        .and_then(|label| {
+            if label.starts_with("agent-schedule:") {
+                Some("schedule")
+            } else if label.starts_with("agent-chain:") {
+                Some("agent2agent")
+            } else {
+                None
+            }
+        })
+        .or_else(|| session.parent_session_id.as_ref().map(|_| "subagent"))
+        .map(str::to_string)
 }
 
 fn load_session_or_internal(

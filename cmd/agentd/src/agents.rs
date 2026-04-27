@@ -31,6 +31,8 @@ const DEFAULT_SKILL_TOOL_GUIDANCE_SECTION: &str = r#"- Skills:
   - If a skill is already active in the prompt, follow it directly; use `skill_read` only when you need the full instructions
 "#;
 
+const DEFAULT_AUTONOMY_STATE_GUIDANCE_LINE: &str = "  - Use `autonomy_state_read` when you need one compact view of current schedules, active jobs, child sessions, inbox events, inter-agent chain state, and configured A2A peers\n";
+
 const DEFAULT_AGENTS_MD: &str = r#"Assistant agent profile.
 
 - Primary role: general-purpose coding agent
@@ -75,6 +77,7 @@ Tool usage rules:
   - Use `skill_enable` or `skill_disable` for session-scoped activation changes; do not edit skill files just to activate or deactivate a skill
   - If a skill is already active in the prompt, follow it directly; use `skill_read` only when you need the full instructions
 - Agents and schedules:
+  - Use `autonomy_state_read` when you need one compact view of current schedules, active jobs, child sessions, inbox events, inter-agent chain state, and configured A2A peers
   - Use `schedule_create`, `schedule_update`, `schedule_read`, `schedule_list`, and `schedule_delete` to manage deferred or recurring work instead of keeping ad-hoc reminders in chat
   - If the user asks you to remind them, message them, or continue in this same chat after a timer, use `continue_later` with `delay_seconds` and an explicit `handoff_payload`
   - For “continue this later”, prefer `continue_later`; it creates a one-shot deferred continuation in the current session by default
@@ -476,6 +479,7 @@ const JUDGE_AGENTS_MD: &str = r#"Judge agent profile.
 - Focus on correctness, risks, and explicit verdicts
 - `message_agent` is asynchronous; if you need a child agent's reply before concluding, follow it with `session_wait`
 - Use `skill_list` and `skill_read` if specialized review instructions are needed; do not mutate skills
+- Use `autonomy_state_read` when reviewing delegated, scheduled, or inter-agent state
 "#;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -557,6 +561,7 @@ pub fn builtin_allowed_tools(template_kind: AgentTemplateKind) -> Vec<String> {
             "plan_snapshot",
             "plan_lint",
             "prompt_budget_read",
+            "autonomy_state_read",
             "skill_list",
             "skill_read",
             "artifact_read",
@@ -717,11 +722,19 @@ fn sync_builtin_default_agents_prompt_file(
         Ok(existing) => {
             let existing = normalize_prompt_contents(&existing);
             let current = normalize_prompt_contents(current);
-            let pre_skill_guidance = normalize_prompt_contents(
-                &current.replace(DEFAULT_SKILL_TOOL_GUIDANCE_SECTION, ""),
-            );
+            let without_skill_guidance = current.replace(DEFAULT_SKILL_TOOL_GUIDANCE_SECTION, "");
+            let without_autonomy_guidance =
+                current.replace(DEFAULT_AUTONOMY_STATE_GUIDANCE_LINE, "");
+            let without_skill_and_autonomy_guidance =
+                without_skill_guidance.replace(DEFAULT_AUTONOMY_STATE_GUIDANCE_LINE, "");
+            let pre_skill_guidance = normalize_prompt_contents(&without_skill_guidance);
+            let pre_autonomy_guidance = normalize_prompt_contents(&without_autonomy_guidance);
+            let pre_skill_and_autonomy_guidance =
+                normalize_prompt_contents(&without_skill_and_autonomy_guidance);
             if existing == current
                 || existing == pre_skill_guidance
+                || existing == pre_autonomy_guidance
+                || existing == pre_skill_and_autonomy_guidance
                 || legacy_variants
                     .iter()
                     .any(|candidate| existing == normalize_prompt_contents(candidate))
@@ -822,6 +835,7 @@ mod tests {
         assert!(refreshed.contains("Arguments must be strict JSON"));
         assert!(refreshed.contains("call `session_wait`"));
         assert!(refreshed.contains("Use `skill_list`"));
+        assert!(refreshed.contains("Use `autonomy_state_read`"));
 
         fs::write(
             default_home.join("AGENTS.md"),
@@ -837,6 +851,7 @@ mod tests {
             fs::read_to_string(default_home.join("AGENTS.md")).expect("read refreshed prompt");
         assert!(refreshed_pre_skill.contains("Use `skill_list`"));
         assert!(refreshed_pre_skill.contains("Use `skill_enable` or `skill_disable`"));
+        assert!(refreshed_pre_skill.contains("Use `autonomy_state_read`"));
 
         let obsidian_skill =
             fs::read_to_string(default_home.join("skills/obsidian-vault/SKILL.md"))

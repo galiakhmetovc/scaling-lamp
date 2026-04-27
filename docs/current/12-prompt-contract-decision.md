@@ -1088,11 +1088,13 @@ usable_context_tokens = effective_context_window_tokens * auto_compaction_trigge
 Сейчас:
 
 - schedule/inter-agent metadata частично расползлись по `SessionHead`, transcript events и debug views.
+- `AutonomyState` уже является отдельным prompt layer;
+- `autonomy_state_read` уже даёт модели bounded aggregate state по schedules, active jobs, child sessions, inbox events, A2A chain и configured peers.
 
 Нужно:
 
-- добавить отдельный prompt layer для schedules, subagents, A2A and mesh obligations;
-- оставить full state доступным через existing tools and future `autonomy_state_read`;
+- расширять сам prompt layer осторожно, только короткой ориентацией;
+- оставлять full state доступным через `autonomy_state_read` и existing tools;
 - покрыть layer order тестами.
 
 ## Как оператору проверить текущую сборку
