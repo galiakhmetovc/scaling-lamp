@@ -57,6 +57,10 @@ impl Command {
                     prompt: join_required(prompt, "smoke prompt")?,
                 })
             }
+            [command] if command == "agents" || command == "агенты" => Ok(Self::AgentList),
+            [command, rest @ ..] if command == "agent" || command == "агент" => {
+                parse_agent_command(rest)
+            }
             [scope, action, session_id] if scope == "chat" && action == "show" => {
                 Ok(Self::ChatShow {
                     session_id: session_id.clone(),
@@ -192,9 +196,75 @@ impl Command {
                 })
             }
             _ => Err(BootstrapError::Usage {
-                reason: "expected one of: status | logs [max_lines] | version | update [tag] | tui | telegram run|pair|pairings | daemon | daemon stop | provider smoke | chat show/send/repl | mission create/show/tick | sessions | session create/list/show/transcript/tools/skills/enable-skill/disable-skill | run show | job show/execute | approval list/approve | delegate list | verification show".to_string(),
+                reason: "expected one of: status | logs [max_lines] | version | update [tag] | tui | telegram run|pair|pairings | daemon | daemon stop | provider smoke | agent list/show/select/create/open | chat show/send/repl | mission create/show/tick | sessions | session create/list/show/transcript/tools/skills/enable-skill/disable-skill | run show | job show/execute | approval list/approve | delegate list | verification show".to_string(),
             }),
         }
+    }
+}
+
+fn parse_agent_command(args: &[String]) -> Result<Command, BootstrapError> {
+    let Some((action, rest)) = args.split_first() else {
+        return Ok(Command::AgentList);
+    };
+    match action.as_str() {
+        "list" | "список" => Ok(Command::AgentList),
+        "show" | "показать" => Ok(Command::AgentShow {
+            identifier: optional_join(rest),
+        }),
+        "select" | "выбрать" => Ok(Command::AgentSelect {
+            identifier: join_required(rest, "agent identifier")?,
+        }),
+        "create" | "создать" => {
+            let spec = join_required(rest, "agent create spec")?;
+            let (name, template_identifier) = parse_agent_create_spec(&spec)?;
+            Ok(Command::AgentCreate {
+                name,
+                template_identifier,
+            })
+        }
+        "open" | "открыть" => Ok(Command::AgentOpen {
+            identifier: optional_join(rest),
+        }),
+        other => Err(BootstrapError::Usage {
+            reason: format!(
+                "unsupported agent command {other}; expected list|show|select|create|open"
+            ),
+        }),
+    }
+}
+
+fn parse_agent_create_spec(raw: &str) -> Result<(String, Option<String>), BootstrapError> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return Err(BootstrapError::Usage {
+            reason: "agent create requires a name".to_string(),
+        });
+    }
+
+    for delimiter in [" from ", " из "] {
+        if let Some((name, template)) = trimmed.split_once(delimiter) {
+            let name = name.trim();
+            let template = template.trim();
+            if !name.is_empty() && !template.is_empty() {
+                return Ok((name.to_string(), Some(template.to_string())));
+            }
+        }
+    }
+
+    Ok((trimmed.to_string(), None))
+}
+
+fn optional_join(values: &[String]) -> Option<String> {
+    let joined = values
+        .iter()
+        .map(String::as_str)
+        .collect::<Vec<_>>()
+        .join(" ");
+    let trimmed = joined.trim();
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(trimmed.to_string())
     }
 }
 

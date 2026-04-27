@@ -251,6 +251,7 @@ impl ExecutionService {
         let base_id = agents::normalize_agent_id(&input.name);
         let agent_id = next_available_agent_id(store, &base_id)?;
         let agent_home = agents::agent_home(&self.config.data_dir, &agent_id);
+        let agent_workspace = agents::agent_workspace(&self.config.data_dir, &agent_id);
         agents::clone_agent_home(
             &template.agent_home,
             &agent_home,
@@ -258,13 +259,22 @@ impl ExecutionService {
             template_fallback.agents_md,
         )
         .map_err(io_agent_tool_error)?;
+        agents::ensure_agent_workspace_layout(&agent_workspace).map_err(io_agent_tool_error)?;
+        agent_persistence::validate_workspace_root_path(
+            "agent.default_workspace_root",
+            &agent_workspace,
+            &self.config.data_dir,
+        )
+        .map_err(|error| {
+            invalid_agent_tool(format!("agent_create workspace path is invalid: {error}"))
+        })?;
         let profile = AgentProfile::new_with_provenance(
             &agent_id,
             input.name.trim(),
             AgentTemplateKind::Custom,
             &agent_home,
             template.allowed_tools.clone(),
-            template.default_workspace_root.clone(),
+            Some(agent_workspace),
             Some(template.id.clone()),
             Some(session.id.clone()),
             Some(session.agent_profile_id.clone()),
@@ -736,6 +746,10 @@ fn agent_summary_output(profile: &AgentProfile) -> AgentSummaryOutput {
         name: profile.name.clone(),
         template_kind: profile.template_kind,
         agent_home: profile.agent_home.display().to_string(),
+        default_workspace_root: profile
+            .default_workspace_root
+            .as_deref()
+            .map(|path| path.display().to_string()),
         allowed_tool_count: profile.allowed_tools.len(),
         created_from_template_id: profile.created_from_template_id.clone(),
         created_by_session_id: profile.created_by_session_id.clone(),

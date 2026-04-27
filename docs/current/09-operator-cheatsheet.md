@@ -92,6 +92,49 @@ TEAMD_WEB_SEARCH_URL='http://127.0.0.1:8888/search'
 sudo systemctl restart teamd-daemon.service teamd-telegram.service
 ```
 
+## Agent profiles
+
+Agent profile — это durable профиль поведения, а не отдельный running process. Он содержит `SYSTEM.md`, `AGENTS.md`, локальные `skills/`, allowlist tools и свой default workspace.
+
+Базовые команды:
+
+```bash
+teamdctl agent list
+teamdctl agent show default
+teamdctl agent create "Reviewer" from judge
+teamdctl agent select Reviewer
+teamdctl agent open Reviewer
+```
+
+После `agent create` runtime создаёт:
+
+```text
+/var/lib/teamd/state/agents/<agent_id>/        # prompts и локальные skills
+/var/lib/teamd/workspaces/agents/<agent_id>/   # рабочая директория tools для новых session этого агента
+```
+
+Новая session берёт выбранный `Agent profile` и сохраняет конкретный `workspace_root` в session. Старые session не мигрируют автоматически.
+
+## Skills
+
+Активные skills попадают в prompt между `AGENTS.md` и `SessionHead`.
+
+Проверить skills конкретной session:
+
+```bash
+teamdctl session skills <session_id>
+teamdctl session enable-skill <session_id> <skill_name>
+teamdctl session disable-skill <session_id> <skill_name>
+```
+
+Как activation работает внутри runtime:
+
+- global catalog берётся из configured `skills_dir`;
+- agent-local overrides берутся из `agent_home/skills/`;
+- manual enable/disable хранится в `SessionSettings`;
+- automatic activation сравнивает tokens из `skill.name`/`skill.description` с title и последними user messages;
+- полный `SKILL.md` агент читает через `skill_read`, если prompt excerpt недостаточен.
+
 Минимальный набор:
 
 ```bash

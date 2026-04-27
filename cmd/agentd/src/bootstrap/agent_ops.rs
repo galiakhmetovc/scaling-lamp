@@ -86,12 +86,25 @@ impl App {
 
         for template in agents::builtin_templates() {
             let home = agents::agent_home(&self.config.data_dir, template.id);
+            let workspace = agents::agent_workspace(&self.config.data_dir, template.id);
             agents::ensure_builtin_agent_home_layout(&home, *template).map_err(|source| {
                 BootstrapError::Io {
                     path: home.clone(),
                     source,
                 }
             })?;
+            agents::ensure_agent_workspace_layout(&workspace).map_err(|source| {
+                BootstrapError::Io {
+                    path: workspace.clone(),
+                    source,
+                }
+            })?;
+            agent_persistence::validate_workspace_root_path(
+                "agent.default_workspace_root",
+                &workspace,
+                &self.config.data_dir,
+            )
+            .map_err(BootstrapError::Config)?;
 
             let created_at = store
                 .get_agent_profile(template.id)?
@@ -103,7 +116,7 @@ impl App {
                 template.template_kind,
                 &home,
                 agents::builtin_allowed_tools(template.template_kind),
-                self.config.workspace.default_root.clone(),
+                Some(workspace),
                 created_at,
                 now,
             )
@@ -197,6 +210,7 @@ impl App {
         let base_id = agents::normalize_agent_id(name);
         let agent_id = next_available_agent_id(&store, &base_id)?;
         let agent_home = agents::agent_home(&self.config.data_dir, &agent_id);
+        let agent_workspace = agents::agent_workspace(&self.config.data_dir, &agent_id);
         agents::clone_agent_home(
             &template.agent_home,
             &agent_home,
@@ -207,6 +221,18 @@ impl App {
             path: agent_home.clone(),
             source,
         })?;
+        agents::ensure_agent_workspace_layout(&agent_workspace).map_err(|source| {
+            BootstrapError::Io {
+                path: agent_workspace.clone(),
+                source,
+            }
+        })?;
+        agent_persistence::validate_workspace_root_path(
+            "agent.default_workspace_root",
+            &agent_workspace,
+            &self.config.data_dir,
+        )
+        .map_err(BootstrapError::Config)?;
 
         let now = unix_timestamp()?;
         let profile = AgentProfile::new_with_provenance(
@@ -215,7 +241,7 @@ impl App {
             AgentTemplateKind::Custom,
             &agent_home,
             template.allowed_tools.clone(),
-            template.default_workspace_root.clone(),
+            Some(agent_workspace),
             Some(template.id.clone()),
             None,
             None,
@@ -445,7 +471,18 @@ impl App {
             Some(identifier) => self.agent_profile(identifier)?,
             None => self.current_agent_profile()?,
         };
-        Ok(profile.agent_home.display().to_string())
+        Ok(format!(
+            "agent_home={}\nSYSTEM.md={}\nAGENTS.md={}\nskills_dir={}\ndefault_workspace_root={}",
+            profile.agent_home.display(),
+            profile.agent_home.join("SYSTEM.md").display(),
+            profile.agent_home.join("AGENTS.md").display(),
+            profile.agent_home.join("skills").display(),
+            profile
+                .default_workspace_root
+                .as_deref()
+                .map(|path| path.display().to_string())
+                .unwrap_or_else(|| "<none>".to_string())
+        ))
     }
 
     pub fn render_agent_schedules(&self) -> Result<String, BootstrapError> {
@@ -550,6 +587,14 @@ fn render_agent_profile(profile: &AgentProfile) -> String {
         format!("name={}", profile.name),
         format!("template={}", profile.template_kind.as_str()),
         format!("home={}", profile.agent_home.display()),
+        format!(
+            "default_workspace_root={}",
+            profile
+                .default_workspace_root
+                .as_deref()
+                .map(|path| path.display().to_string())
+                .unwrap_or_else(|| "<none>".to_string())
+        ),
         format!(
             "created_from_template={}",
             profile

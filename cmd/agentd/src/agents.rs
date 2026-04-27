@@ -618,6 +618,19 @@ pub fn agent_home(data_dir: &Path, agent_id: &str) -> PathBuf {
     agents_root(data_dir).join(agent_id)
 }
 
+pub fn agent_workspace(data_dir: &Path, agent_id: &str) -> PathBuf {
+    data_dir
+        .parent()
+        .unwrap_or(data_dir)
+        .join("workspaces")
+        .join("agents")
+        .join(agent_id)
+}
+
+pub fn ensure_agent_workspace_layout(agent_workspace: &Path) -> io::Result<()> {
+    fs::create_dir_all(agent_workspace)
+}
+
 pub fn builtin_allowed_tools(template_kind: AgentTemplateKind) -> Vec<String> {
     match template_kind {
         AgentTemplateKind::Default => ToolCatalog::default()

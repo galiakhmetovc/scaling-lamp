@@ -1025,6 +1025,13 @@ agent_create({
 Что делает:
 
 - создаёт новый agent profile из встроенного или существующего template.
+- копирует `SYSTEM.md`, `AGENTS.md` и template skills в отдельный `agent_home`;
+- создаёт отдельный default workspace для нового профиля: `workspaces/agents/<agent_id>`.
+
+Важно:
+
+- это не запускает отдельный процесс агента;
+- это создаёт durable `Agent profile`, который можно выбрать для новых session или использовать в schedules/inter-agent calls.
 
 ### `continue_later`
 

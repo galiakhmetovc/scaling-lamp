@@ -1,5 +1,5 @@
 use agent_persistence::{
-    AgentRepository, AgentScheduleRecord, AppConfig, ContextOffloadRepository,
+    AgentProfileRecord, AgentRepository, AgentScheduleRecord, AppConfig, ContextOffloadRepository,
     ContextSummaryRepository, JobRecord, JobRepository, MissionRecord, MissionRepository,
     PersistenceStore, RunRecord, RunRepository, SessionInboxRepository, SessionRecord,
     SessionRepository, ToolCallRecord, ToolCallRepository, TranscriptRepository,
@@ -943,12 +943,17 @@ fn session_head_usage_fixture_workspace_tree_still_builds() {
     let workspace_root = temp.path().join("workspace");
     fs::create_dir_all(workspace_root.join("crates")).expect("create crates dir");
     fs::write(workspace_root.join("README.md"), "hello\n").expect("write readme");
-    let mut app = build_from_config(AppConfig {
+    let app = build_from_config(AppConfig {
         data_dir: temp.path().join("state-root"),
         ..AppConfig::default()
     })
     .expect("build app");
-    app.runtime.workspace = WorkspaceRef::new(&workspace_root);
+    let mut default_agent = app.agent_profile("default").expect("default agent");
+    default_agent.default_workspace_root = Some(workspace_root.clone());
+    let store = app.store().expect("open store");
+    store
+        .put_agent_profile(&AgentProfileRecord::try_from(&default_agent).expect("agent record"))
+        .expect("put agent profile");
 
     let summary = app
         .create_session_auto(Some("Workspace Fixture"))

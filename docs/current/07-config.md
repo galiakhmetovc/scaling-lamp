@@ -106,7 +106,7 @@ export TEAMD_PROVIDER_API_KEY='replace-with-zai-key'
 
 ### `[workspace]`
 
-Управляет default project workspace для новых session.
+Управляет fallback project workspace для новых session.
 
 Параметры:
 
@@ -114,7 +114,7 @@ export TEAMD_PROVIDER_API_KEY='replace-with-zai-key'
 
 Порядок выбора workspace при создании session:
 
-- если у выбранного `Agent profile` задан `default_workspace_root`, используется он;
+- если у выбранного `Agent profile` задан `default_workspace_root`, используется он. Built-in profiles и новые profiles из templates получают отдельный workspace вида `<data_dir-parent>/workspaces/agents/<agent_id>/`;
 - иначе используется `workspace.default_root`;
 - если и он не задан, bootstrap fallback идёт в текущий process workspace;
 - `data_dir`, `audit`, `transcripts`, `artifacts` и `runs` использовать как workspace нельзя.
@@ -124,6 +124,13 @@ export TEAMD_PROVIDER_API_KEY='replace-with-zai-key'
 ```toml
 [workspace]
 default_root = "/srv/projects/teamd"
+```
+
+Важно: `workspace.default_root` теперь именно fallback/base runtime workspace, а не “один каталог для всех агентов”. Нормальный рабочий путь для нового agent profile хранится в `agent_profiles.default_workspace_root` и виден через:
+
+```bash
+teamdctl agent show <agent_id>
+teamdctl agent open <agent_id>
 ```
 
 То же через env:

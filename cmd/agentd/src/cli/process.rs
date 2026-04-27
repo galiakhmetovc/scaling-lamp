@@ -15,6 +15,11 @@ pub(super) fn daemon_supports_command(command: &Command) -> bool {
     matches!(
         command,
         Command::Status
+            | Command::AgentList
+            | Command::AgentShow { .. }
+            | Command::AgentSelect { .. }
+            | Command::AgentCreate { .. }
+            | Command::AgentOpen { .. }
             | Command::ChatShow { .. }
             | Command::ChatSend { .. }
             | Command::ChatRepl { .. }
@@ -44,6 +49,25 @@ pub(super) fn execute_command(app: &App, command: Command) -> Result<String, Boo
         Command::Version => app.render_version_info(),
         Command::Update { tag } => app.update_runtime_binary(tag.as_deref()),
         Command::ProviderSmoke { prompt } => render::run_provider_smoke(app, &prompt),
+        Command::AgentList => app.render_agents(),
+        Command::AgentShow { identifier } => app.render_agent_profile(identifier.as_deref()),
+        Command::AgentSelect { identifier } => {
+            let profile = app.select_agent_profile(&identifier)?;
+            Ok(format!("текущий агент: {} ({})", profile.name, profile.id))
+        }
+        Command::AgentCreate {
+            name,
+            template_identifier,
+        } => {
+            let profile = app.create_agent_from_template(&name, template_identifier.as_deref())?;
+            Ok(format!(
+                "создан агент {} ({}) из шаблона {}",
+                profile.name,
+                profile.id,
+                profile.template_kind.as_str()
+            ))
+        }
+        Command::AgentOpen { identifier } => app.render_agent_home(identifier.as_deref()),
         Command::ChatShow { session_id } => render::show_chat(app, &session_id),
         Command::SessionTranscript { id } => render::show_chat(app, &id),
         Command::SessionTools {
@@ -120,6 +144,14 @@ pub(super) fn execute_daemon_command(
         Command::Logs { max_lines } => client.render_diagnostics_tail(max_lines),
         Command::Version => client.about(),
         Command::Update { tag } => client.update_runtime(tag.as_deref()),
+        Command::AgentList => client.render_agents(),
+        Command::AgentShow { identifier } => client.render_agent(identifier.as_deref()),
+        Command::AgentSelect { identifier } => client.select_agent(&identifier),
+        Command::AgentCreate {
+            name,
+            template_identifier,
+        } => client.create_agent(&name, template_identifier.as_deref()),
+        Command::AgentOpen { identifier } => client.open_agent_home(identifier.as_deref()),
         Command::ChatShow { session_id } => render::show_chat_via_client(client, &session_id),
         Command::SessionTranscript { id } => render::show_chat_via_client(client, &id),
         Command::ChatSend {

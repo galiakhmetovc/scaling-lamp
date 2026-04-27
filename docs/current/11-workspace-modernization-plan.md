@@ -35,7 +35,7 @@
 | Термин | Смысл |
 | --- | --- |
 | `Agent template` | Исходный шаблон агента: базовые `SYSTEM.md`, `AGENTS.md`, набор skills и allowed tools. |
-| `Agent profile` | Созданный из template профиль агента. Имеет id, имя, `agent_home`, allowed tools и operator-visible metadata. |
+| `Agent profile` | Созданный из template профиль агента. Имеет id, имя, `agent_home`, `default_workspace_root`, allowed tools и operator-visible metadata. |
 | `agent_home` | Каталог профиля агента с prompts и skills. Это не project workspace. |
 | `Workspace` | Рабочий каталог, где tools читают/пишут проектные файлы и запускают команды. |
 | `Session workspace` | Workspace, закреплённый за session. Нужен, чтобы один и тот же диалог стабильно работал в одном проекте. |
@@ -58,10 +58,11 @@ Workspace — это место работы над проектом, а не к
 Сейчас:
 
 - `agent_profiles.agent_home` указывает на `data_dir/agents/<agent_id>`;
+- `agent_profiles.default_workspace_root` для built-in и newly-created profiles указывает на отдельный каталог `workspaces/agents/<agent_id>` рядом с `data_dir`;
 - bootstrap создаёт builtin profiles `default` и `judge`;
 - prompt assembly читает `SYSTEM.md`, `AGENTS.md` и skills из `agent_home`;
 - schedules уже имеют поле `workspace_root`;
-- обычные sessions уже имеют persisted `workspace_root`, но operator surfaces ещё нужно довести до полностью удобного состояния;
+- обычные sessions уже имеют persisted `workspace_root` и получают его из выбранного `Agent profile`, если у профиля задан default workspace;
 - execution path не должен создавать отдельный runtime для Telegram/TUI/CLI.
 
 Вывод: `data_dir/agents/<agent_id>` сейчас ближе к profile home/template copy, чем к workspace.
@@ -91,7 +92,8 @@ agent templates -> agent profiles -> session/schedule workspaces
 └── ...
 
 /var/lib/teamd/workspaces/
-└── <workspace_id>/
+└── agents/
+    └── <agent_id>/
 ```
 
 Если понадобится хранить operator-editable templates отдельно от state, возможен отдельный каталог:
@@ -111,6 +113,7 @@ agent templates -> agent profiles -> session/schedule workspaces
 Рекомендуемая политика:
 
 - при создании `Agent profile` копировать `SYSTEM.md` и `AGENTS.md` из `Agent template` в `agent_home`;
+- при создании `Agent profile` создавать отдельный `default_workspace_root` в `workspaces/agents/<agent_id>`;
 - skills тоже копировать в `agent_home/skills/`, если они являются частью поведения профиля;
 - изменения template после создания профиля не должны молча менять уже существующий profile;
 - если нужен общий skill catalog, он должен быть отдельным слоем и явно подключаться, а не подменять profile-local skills.

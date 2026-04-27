@@ -1,6 +1,7 @@
 use super::support::*;
 use agent_runtime::agent::AgentTemplateKind;
 use agent_runtime::tool::{AgentCreateInput, AgentListInput, AgentReadInput};
+use std::path::Path;
 
 fn seed_running_tool_context(
     store: &PersistenceStore,
@@ -92,12 +93,27 @@ fn build_from_config_bootstraps_builtin_agents_and_selects_default() {
     assert_eq!(current.id, "default");
     assert_eq!(current.name, "Ассистент");
     assert_eq!(current.template_kind, AgentTemplateKind::Default);
+    let default_workspace = current
+        .default_workspace_root
+        .as_ref()
+        .expect("default agent workspace");
+    assert!(default_workspace.is_dir());
+    assert!(default_workspace.ends_with(Path::new("workspaces/agents/default")));
+    assert!(!default_workspace.starts_with(&data_dir));
 
     for agent_id in ["default", "judge"] {
         let agent_home = data_dir.join("agents").join(agent_id);
         assert!(agent_home.join("SYSTEM.md").is_file());
         assert!(agent_home.join("AGENTS.md").is_file());
         assert!(agent_home.join("skills").is_dir());
+        let profile = app.agent_profile(agent_id).expect("agent profile");
+        let workspace = profile
+            .default_workspace_root
+            .as_ref()
+            .expect("agent workspace");
+        assert!(workspace.is_dir());
+        assert!(workspace.ends_with(Path::new(&format!("workspaces/agents/{agent_id}"))));
+        assert!(!workspace.starts_with(&data_dir));
     }
     let default_system =
         fs::read_to_string(data_dir.join("agents/default/SYSTEM.md")).expect("read default system");
@@ -206,6 +222,18 @@ fn create_agent_from_template_copies_template_files_independently() {
         .expect("create agent from judge");
     assert_eq!(created.template_kind, AgentTemplateKind::Custom);
     assert_ne!(created.agent_home, judge_home);
+    let created_workspace = created
+        .default_workspace_root
+        .as_ref()
+        .expect("created agent workspace");
+    assert!(created_workspace.is_dir());
+    assert!(created_workspace.ends_with(Path::new("workspaces/agents/judge-copy")));
+    assert_ne!(
+        created.default_workspace_root,
+        app.agent_profile("judge")
+            .expect("judge profile")
+            .default_workspace_root
+    );
 
     assert_eq!(
         fs::read_to_string(created.agent_home.join("SYSTEM.md")).expect("read copied system"),
@@ -222,7 +250,20 @@ fn create_agent_from_template_copies_template_files_independently() {
         judge_agents_before
     );
 
+    app.select_agent_profile("Judge Copy")
+        .expect("select copied agent");
+    let session = app
+        .create_session_auto(Some("Copied Agent Workspace"))
+        .expect("create copied agent session");
     let store = PersistenceStore::open(&app.persistence).expect("open store");
+    let stored_session = store
+        .get_session(&session.id)
+        .expect("get session")
+        .expect("session exists");
+    assert_eq!(
+        stored_session.workspace_root,
+        created_workspace.display().to_string()
+    );
     let stored = store
         .get_agent_profile(&created.id)
         .expect("get created agent profile")

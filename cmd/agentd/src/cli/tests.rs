@@ -78,6 +78,54 @@ fn process_cli_accepts_session_list_commands() {
 }
 
 #[test]
+fn process_cli_accepts_agent_profile_commands() {
+    assert!(super::ProcessInvocation::parse(["agents"]).is_ok());
+    assert!(super::ProcessInvocation::parse(["agent", "list"]).is_ok());
+    assert!(super::ProcessInvocation::parse(["агенты"]).is_ok());
+    assert!(super::ProcessInvocation::parse(["агент", "список"]).is_ok());
+    assert!(super::ProcessInvocation::parse(["agent", "show", "judge"]).is_ok());
+    assert!(super::ProcessInvocation::parse(["agent", "select", "judge"]).is_ok());
+    assert!(super::ProcessInvocation::parse(["agent", "open", "judge"]).is_ok());
+    assert!(
+        super::ProcessInvocation::parse(["agent", "create", "Reviewer", "from", "judge"]).is_ok()
+    );
+    assert!(
+        super::ProcessInvocation::parse(["агент", "создать", "Ревьюер", "из", "judge"]).is_ok()
+    );
+}
+
+#[test]
+fn execute_renders_agent_profile_commands() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let app = crate::bootstrap::build_from_config(agent_persistence::AppConfig {
+        data_dir: temp.path().join("state-root"),
+        ..agent_persistence::AppConfig::default()
+    })
+    .expect("build app");
+
+    let agents = super::execute(&app, ["agent", "list"]).expect("list agents");
+    assert!(agents.contains("default"));
+    assert!(agents.contains("judge"));
+
+    let created =
+        super::execute(&app, ["agent", "create", "Reviewer", "from", "judge"]).expect("create");
+    assert!(created.contains("Reviewer"));
+    assert!(created.contains("reviewer"));
+
+    let shown = super::execute(&app, ["agent", "show", "Reviewer"]).expect("show reviewer");
+    assert!(shown.contains("id=reviewer"));
+    assert!(shown.contains("name=Reviewer"));
+    assert!(shown.contains("default_workspace_root="));
+
+    let selected = super::execute(&app, ["agent", "select", "Reviewer"]).expect("select");
+    assert!(selected.contains("Reviewer"));
+
+    let open = super::execute(&app, ["agent", "open", "Reviewer"]).expect("open");
+    assert!(open.contains("SYSTEM.md"));
+    assert!(open.contains("AGENTS.md"));
+}
+
+#[test]
 fn process_cli_accepts_session_transcript_and_tool_commands() {
     let transcript = super::ProcessInvocation::parse(["session", "transcript", "session-1"])
         .expect("parse transcript");

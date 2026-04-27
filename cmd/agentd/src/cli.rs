@@ -47,6 +47,20 @@ enum Command {
     ProviderSmoke {
         prompt: String,
     },
+    AgentList,
+    AgentShow {
+        identifier: Option<String>,
+    },
+    AgentSelect {
+        identifier: String,
+    },
+    AgentCreate {
+        name: String,
+        template_identifier: Option<String>,
+    },
+    AgentOpen {
+        identifier: Option<String>,
+    },
     ChatShow {
         session_id: String,
     },
@@ -192,6 +206,25 @@ where
         Command::Version => app.render_version_info(),
         Command::Update { tag } => app.update_runtime_binary(tag.as_deref()),
         Command::ProviderSmoke { prompt } => render::run_provider_smoke(app, &prompt),
+        Command::AgentList => app.render_agents(),
+        Command::AgentShow { identifier } => app.render_agent_profile(identifier.as_deref()),
+        Command::AgentSelect { identifier } => {
+            let profile = app.select_agent_profile(&identifier)?;
+            Ok(format!("текущий агент: {} ({})", profile.name, profile.id))
+        }
+        Command::AgentCreate {
+            name,
+            template_identifier,
+        } => {
+            let profile = app.create_agent_from_template(&name, template_identifier.as_deref())?;
+            Ok(format!(
+                "создан агент {} ({}) из шаблона {}",
+                profile.name,
+                profile.id,
+                profile.template_kind.as_str()
+            ))
+        }
+        Command::AgentOpen { identifier } => app.render_agent_home(identifier.as_deref()),
         Command::ChatShow { session_id } => render::show_chat(app, &session_id),
         Command::SessionTranscript { id } => render::show_chat(app, &id),
         Command::SessionTools {

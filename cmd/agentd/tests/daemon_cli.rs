@@ -87,6 +87,57 @@ fn process_cli_routes_status_and_session_skills_over_remote_daemon() {
 }
 
 #[test]
+fn process_cli_routes_agent_profile_commands_over_remote_daemon() {
+    let (_temp, config) = test_config();
+    let app = bootstrap::build_from_config(config.clone()).expect("build app");
+    let handle = daemon::spawn_for_test(app.clone()).expect("spawn daemon");
+
+    let port = config.daemon.bind_port.to_string();
+    let base_args = ["--host", "127.0.0.1", "--port", port.as_str()];
+
+    let mut list_output = Vec::new();
+    cli::execute_process_with_io(
+        &app,
+        base_args.into_iter().chain(["agent", "list"]),
+        &mut Cursor::new(Vec::<u8>::new()),
+        &mut list_output,
+    )
+    .expect("remote agent list");
+    let list_output = String::from_utf8(list_output).expect("utf8");
+    assert!(list_output.contains("default"));
+    assert!(list_output.contains("judge"));
+
+    let mut create_output = Vec::new();
+    cli::execute_process_with_io(
+        &app,
+        base_args
+            .into_iter()
+            .chain(["agent", "create", "Remote Reviewer", "from", "judge"]),
+        &mut Cursor::new(Vec::<u8>::new()),
+        &mut create_output,
+    )
+    .expect("remote agent create");
+    let create_output = String::from_utf8(create_output).expect("utf8");
+    assert!(create_output.contains("Remote Reviewer"));
+
+    let mut show_output = Vec::new();
+    cli::execute_process_with_io(
+        &app,
+        base_args
+            .into_iter()
+            .chain(["agent", "show", "Remote Reviewer"]),
+        &mut Cursor::new(Vec::<u8>::new()),
+        &mut show_output,
+    )
+    .expect("remote agent show");
+    let show_output = String::from_utf8(show_output).expect("utf8");
+    assert!(show_output.contains("id=remote-reviewer"));
+    assert!(show_output.contains("default_workspace_root="));
+
+    handle.stop().expect("stop daemon");
+}
+
+#[test]
 fn process_cli_chat_repl_uses_remote_daemon_for_skill_commands() {
     let (temp, mut config) = test_config();
     let skills_dir = temp.path().join("skills");
