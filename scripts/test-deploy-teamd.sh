@@ -128,6 +128,10 @@ grep -q 'QUERY_BASE_PATH=$JAEGER_BASE_PATH' "$CONTAINERS_DEPLOY_SCRIPT" \
   || fail "expected Jaeger subpath support"
 grep -q 'TEAMD_OTLP_ENDPOINT' "$CONTAINERS_DEPLOY_SCRIPT" \
   || fail "expected agentd OTLP env upsert"
+grep -q 'chown_work_dir()' "$DEPLOY_SCRIPT" \
+  || fail "expected resilient work-dir ownership helper"
+grep -q 'Retrying ownership update' "$DEPLOY_SCRIPT" \
+  || fail "expected retry for transient SQLite WAL/SHM ownership races"
 
 existing_env_dir="$SCRIPT_DIR/../target/deploy-script-test"
 existing_env="$existing_env_dir/existing.env"

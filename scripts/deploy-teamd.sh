@@ -117,6 +117,22 @@ run_root() {
   fi
 }
 
+chown_work_dir() {
+  attempt=1
+  while [ "$attempt" -le 3 ]; do
+    if run_root chown -R "$SERVICE_USER:$SERVICE_GROUP" "$WORK_DIR"; then
+      return 0
+    fi
+    if [ "$attempt" -lt 3 ]; then
+      printf 'Retrying ownership update for %s after transient filesystem change...\n' "$WORK_DIR" >&2
+      sleep 1
+    fi
+    attempt=$((attempt + 1))
+  done
+
+  fail "failed to update ownership for $WORK_DIR"
+}
+
 confirm() {
   prompt=$1
   default=${2:-no}
@@ -616,7 +632,7 @@ if [ "$WRITE_ENV" -eq 1 ]; then
   run_root install -m 0640 -o root -g "$SERVICE_GROUP" "$ENV_TMP" "$ENV_FILE"
 fi
 
-run_root chown -R "$SERVICE_USER:$SERVICE_GROUP" "$WORK_DIR"
+chown_work_dir
 
 run_root install -m 0644 -o root -g root "$DAEMON_UNIT_TMP" "/etc/systemd/system/$DAEMON_SERVICE"
 run_root install -m 0644 -o root -g root "$TELEGRAM_UNIT_TMP" "/etc/systemd/system/$TELEGRAM_SERVICE"
