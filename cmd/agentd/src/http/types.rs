@@ -93,6 +93,7 @@ pub struct SessionDetailResponse {
     pub title: String,
     pub agent_profile_id: String,
     pub agent_name: String,
+    pub workspace_root: String,
     pub prompt_override: Option<String>,
     pub settings_json: String,
     pub active_mission_id: Option<String>,

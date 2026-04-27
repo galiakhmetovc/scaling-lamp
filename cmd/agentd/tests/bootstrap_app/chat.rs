@@ -52,6 +52,7 @@ fn execute_chat_turn_creates_a_run_and_appends_transcript_history() {
             prompt_override: Some("Be concise.".to_string()),
             settings_json: serde_json::to_string(&SessionSettings::default())
                 .expect("serialize settings"),
+            workspace_root: app.runtime.workspace.root.display().to_string(),
             agent_profile_id: "default".to_string(),
             active_mission_id: None,
             parent_session_id: None,
@@ -114,6 +115,123 @@ fn execute_chat_turn_creates_a_run_and_appends_transcript_history() {
     assert!(normalized_request.contains("\"text\":\"hello there\""));
     assert!(normalized_request.contains("\"text\":\"general kenobi\""));
     assert!(normalized_request.contains("\"text\":\"how are you?\""));
+}
+
+#[test]
+fn execute_chat_turn_uses_the_session_workspace_for_prompt_and_tools() {
+    let first_provider_response = r#"{
+                "id":"resp_workspace_tool",
+                "model":"gpt-5.4",
+                "output":[
+                    {
+                        "id":"fc_workspace_1",
+                        "type":"function_call",
+                        "status":"completed",
+                        "call_id":"call_workspace_write",
+                        "name":"fs_write_text",
+                        "arguments":"{\"path\":\"note.txt\",\"content\":\"from session workspace\",\"mode\":\"create\"}"
+                    }
+                ],
+                "usage":{"input_tokens":18,"output_tokens":5,"total_tokens":23}
+            }"#
+    .to_string();
+    let final_provider_response = r#"{
+                "id":"resp_workspace_final",
+                "model":"gpt-5.4",
+                "output":[
+                    {
+                        "id":"msg_workspace_1",
+                        "type":"message",
+                        "status":"completed",
+                        "role":"assistant",
+                        "content":[
+                            {
+                                "type":"output_text",
+                                "text":"workspace handled"
+                            }
+                        ]
+                    }
+                ],
+                "usage":{"input_tokens":22,"output_tokens":6,"total_tokens":28}
+            }"#
+    .to_string();
+    let (provider_api_base, provider_requests, provider_handle) =
+        spawn_json_server_sequence(vec![first_provider_response, final_provider_response]);
+
+    let temp = tempfile::tempdir().expect("tempdir");
+    let global_workspace = temp.path().join("global-workspace");
+    let session_workspace = temp.path().join("session-workspace");
+    fs::create_dir_all(&global_workspace).expect("create global workspace");
+    fs::create_dir_all(&session_workspace).expect("create session workspace");
+    fs::write(global_workspace.join("global-only.txt"), "global").expect("write global marker");
+    fs::write(session_workspace.join("session-only.txt"), "session").expect("write session marker");
+
+    let mut config = AppConfig {
+        data_dir: temp.path().join("state-root"),
+        permissions: PermissionConfig {
+            mode: PermissionMode::BypassPermissions,
+            ..PermissionConfig::default()
+        },
+        provider: ConfiguredProvider {
+            kind: ProviderKind::OpenAiResponses,
+            api_base: Some(format!("{provider_api_base}/v1")),
+            api_key: Some("test-key".to_string()),
+            default_model: Some("gpt-5.4".to_string()),
+            ..ConfiguredProvider::default()
+        },
+        ..AppConfig::default()
+    };
+    config.workspace.default_root = Some(global_workspace.clone());
+    let app = build_from_config(config).expect("build app");
+    let store = PersistenceStore::open(&app.persistence).expect("open store");
+
+    store
+        .put_session(&SessionRecord {
+            id: "session-workspace-turn".to_string(),
+            title: "Workspace turn".to_string(),
+            prompt_override: None,
+            settings_json: serde_json::to_string(&SessionSettings::default())
+                .expect("serialize settings"),
+            workspace_root: session_workspace.display().to_string(),
+            agent_profile_id: "default".to_string(),
+            active_mission_id: None,
+            parent_session_id: None,
+            parent_job_id: None,
+            delegation_label: None,
+            created_at: 1,
+            updated_at: 1,
+        })
+        .expect("put session");
+
+    let report = app
+        .execute_chat_turn(
+            "session-workspace-turn",
+            "Проверь workspace и запиши note",
+            10,
+        )
+        .expect("execute chat turn");
+
+    let first_request = provider_requests.recv().expect("first provider request");
+    let _second_request = provider_requests.recv().expect("second provider request");
+    provider_handle.join().expect("join provider server");
+
+    assert_eq!(report.output_text, "workspace handled");
+    assert!(
+        session_workspace.join("note.txt").is_file(),
+        "file should be written into the session workspace"
+    );
+    assert!(
+        !global_workspace.join("note.txt").exists(),
+        "global default workspace must not receive the file"
+    );
+    assert!(
+        first_request.contains("session-only.txt"),
+        "prompt should describe the session workspace tree"
+    );
+    assert!(
+        !first_request.contains("global-only.txt"),
+        "prompt must not leak the global workspace tree into this session"
+    );
 }
 
 #[test]
@@ -184,6 +302,7 @@ fn execute_chat_turn_can_finish_after_an_allowed_web_tool_call() {
             prompt_override: Some("Use tools when useful.".to_string()),
             settings_json: serde_json::to_string(&SessionSettings::default())
                 .expect("serialize settings"),
+            workspace_root: app.runtime.workspace.root.display().to_string(),
             agent_profile_id: "default".to_string(),
             active_mission_id: None,
             parent_session_id: None,
@@ -348,6 +467,7 @@ fn execute_chat_turn_can_finish_after_a_dynamic_mcp_tool_call() {
             prompt_override: Some("Use MCP when useful.".to_string()),
             settings_json: serde_json::to_string(&SessionSettings::default())
                 .expect("serialize settings"),
+            workspace_root: app.runtime.workspace.root.display().to_string(),
             agent_profile_id: "default".to_string(),
             active_mission_id: None,
             parent_session_id: None,
@@ -541,6 +661,7 @@ fn execute_chat_turn_can_finish_after_mcp_resource_and_prompt_utility_calls() {
             prompt_override: Some("Use MCP resources and prompts when useful.".to_string()),
             settings_json: serde_json::to_string(&SessionSettings::default())
                 .expect("serialize settings"),
+            workspace_root: app.runtime.workspace.root.display().to_string(),
             agent_profile_id: "default".to_string(),
             active_mission_id: None,
             parent_session_id: None,
@@ -675,6 +796,7 @@ fn execute_chat_turn_recovers_from_invalid_tool_arguments_and_retries() {
             prompt_override: Some("Use tools when useful.".to_string()),
             settings_json: serde_json::to_string(&SessionSettings::default())
                 .expect("serialize settings"),
+            workspace_root: app.runtime.workspace.root.display().to_string(),
             agent_profile_id: "default".to_string(),
             active_mission_id: None,
             parent_session_id: None,
@@ -784,6 +906,7 @@ fn execute_chat_turn_requests_operator_reset_when_tool_round_budget_is_exhausted
             prompt_override: Some("Use tools when useful.".to_string()),
             settings_json: serde_json::to_string(&SessionSettings::default())
                 .expect("serialize settings"),
+            workspace_root: app.runtime.workspace.root.display().to_string(),
             agent_profile_id: "default".to_string(),
             active_mission_id: None,
             parent_session_id: None,
@@ -980,6 +1103,7 @@ fn execute_chat_turn_auto_nudges_when_model_stops_with_unfinished_plan_work() {
             title: "Completion nudge".to_string(),
             prompt_override: Some("Keep working until the task is done.".to_string()),
             settings_json: serde_json::to_string(&settings).expect("serialize settings"),
+            workspace_root: app.runtime.workspace.root.display().to_string(),
             agent_profile_id: "default".to_string(),
             active_mission_id: None,
             parent_session_id: None,
@@ -1158,6 +1282,7 @@ fn execute_chat_turn_requests_operator_approval_after_completion_nudges_are_exha
             title: "Completion approval".to_string(),
             prompt_override: Some("Keep working until the task is done.".to_string()),
             settings_json: serde_json::to_string(&settings).expect("serialize settings"),
+            workspace_root: app.runtime.workspace.root.display().to_string(),
             agent_profile_id: "default".to_string(),
             active_mission_id: None,
             parent_session_id: None,
@@ -1305,6 +1430,7 @@ fn execute_chat_turn_allows_more_than_eight_unique_tool_rounds() {
             prompt_override: Some("Use tools when useful.".to_string()),
             settings_json: serde_json::to_string(&SessionSettings::default())
                 .expect("serialize settings"),
+            workspace_root: app.runtime.workspace.root.display().to_string(),
             agent_profile_id: "default".to_string(),
             active_mission_id: None,
             parent_session_id: None,
@@ -1402,6 +1528,7 @@ fn execute_chat_turn_retries_after_transient_provider_failure_and_records_system
             prompt_override: Some("Keep going.".to_string()),
             settings_json: serde_json::to_string(&SessionSettings::default())
                 .expect("serialize settings"),
+            workspace_root: app.runtime.workspace.root.display().to_string(),
             agent_profile_id: "default".to_string(),
             active_mission_id: None,
             parent_session_id: None,
@@ -1535,6 +1662,7 @@ fn execute_chat_turn_recovers_after_persistent_empty_provider_responses_followin
             prompt_override: Some("Use tools when useful.".to_string()),
             settings_json: serde_json::to_string(&SessionSettings::default())
                 .expect("serialize settings"),
+            workspace_root: app.runtime.workspace.root.display().to_string(),
             agent_profile_id: "default".to_string(),
             active_mission_id: None,
             parent_session_id: None,
@@ -1683,6 +1811,7 @@ fn execute_chat_turn_can_finish_after_an_allowed_web_tool_call_with_zai() {
             prompt_override: Some("Use tools when useful.".to_string()),
             settings_json: serde_json::to_string(&SessionSettings::default())
                 .expect("serialize settings"),
+            workspace_root: app.runtime.workspace.root.display().to_string(),
             agent_profile_id: "default".to_string(),
             active_mission_id: None,
             parent_session_id: None,
@@ -1846,6 +1975,7 @@ fn execute_chat_turn_recovers_from_empty_zai_response_after_tool_results() {
             prompt_override: Some("Use tools when useful.".to_string()),
             settings_json: serde_json::to_string(&SessionSettings::default())
                 .expect("serialize settings"),
+            workspace_root: app.runtime.workspace.root.display().to_string(),
             agent_profile_id: "default".to_string(),
             active_mission_id: None,
             parent_session_id: None,
@@ -1979,6 +2109,7 @@ fn execute_chat_turn_can_finish_after_exec_start_and_exec_wait_tool_calls() {
             prompt_override: Some("Use tools when useful.".to_string()),
             settings_json: serde_json::to_string(&SessionSettings::default())
                 .expect("serialize settings"),
+            workspace_root: app.runtime.workspace.root.display().to_string(),
             agent_profile_id: "default".to_string(),
             active_mission_id: None,
             parent_session_id: None,
@@ -2121,6 +2252,7 @@ fn approval_approve_resumes_an_openai_chat_tool_call_and_completes_the_run() {
             prompt_override: Some("Use tools when useful.".to_string()),
             settings_json: serde_json::to_string(&SessionSettings::default())
                 .expect("serialize settings"),
+            workspace_root: app.runtime.workspace.root.display().to_string(),
             agent_profile_id: "default".to_string(),
             active_mission_id: None,
             parent_session_id: None,
@@ -2291,6 +2423,7 @@ fn approval_approve_resumes_a_zai_chat_tool_call_and_completes_the_run() {
             prompt_override: Some("Use tools when useful.".to_string()),
             settings_json: serde_json::to_string(&SessionSettings::default())
                 .expect("serialize settings"),
+            workspace_root: app.runtime.workspace.root.display().to_string(),
             agent_profile_id: "default".to_string(),
             active_mission_id: None,
             parent_session_id: None,
@@ -2455,6 +2588,7 @@ fn approval_approve_resumes_a_mission_turn_and_completes_the_job() {
             prompt_override: Some("Use tools when useful.".to_string()),
             settings_json: serde_json::to_string(&SessionSettings::default())
                 .expect("serialize settings"),
+            workspace_root: app.runtime.workspace.root.display().to_string(),
             agent_profile_id: "default".to_string(),
             active_mission_id: None,
             parent_session_id: None,
@@ -2624,6 +2758,7 @@ fn execute_chat_turn_fails_when_the_provider_repeats_the_same_tool_signature() {
             prompt_override: Some("Use tools when useful.".to_string()),
             settings_json: serde_json::to_string(&SessionSettings::default())
                 .expect("serialize settings"),
+            workspace_root: app.runtime.workspace.root.display().to_string(),
             agent_profile_id: "default".to_string(),
             active_mission_id: None,
             parent_session_id: None,
@@ -2790,6 +2925,7 @@ fn execute_chat_turn_allows_repeated_exec_read_output_polling() {
             prompt_override: Some("Use tools when useful.".to_string()),
             settings_json: serde_json::to_string(&SessionSettings::default())
                 .expect("serialize settings"),
+            workspace_root: app.runtime.workspace.root.display().to_string(),
             agent_profile_id: "default".to_string(),
             active_mission_id: None,
             parent_session_id: None,
@@ -2919,6 +3055,7 @@ fn execute_chat_turn_only_sends_new_tool_outputs_for_each_continuation_round() {
             prompt_override: Some("Use tools when useful.".to_string()),
             settings_json: serde_json::to_string(&SessionSettings::default())
                 .expect("serialize settings"),
+            workspace_root: app.runtime.workspace.root.display().to_string(),
             agent_profile_id: "default".to_string(),
             active_mission_id: None,
             parent_session_id: None,
@@ -3020,6 +3157,7 @@ fn judge_session_turn_recovers_when_provider_calls_a_forbidden_tool() {
             prompt_override: None,
             settings_json: serde_json::to_string(&SessionSettings::default())
                 .expect("serialize settings"),
+            workspace_root: app.runtime.workspace.root.display().to_string(),
             agent_profile_id: "judge".to_string(),
             active_mission_id: None,
             parent_session_id: None,
@@ -3124,6 +3262,7 @@ fn execute_chat_turn_recovers_when_tool_call_returns_web_fetch_error() {
             prompt_override: Some("Use tools when useful.".to_string()),
             settings_json: serde_json::to_string(&SessionSettings::default())
                 .expect("serialize settings"),
+            workspace_root: app.runtime.workspace.root.display().to_string(),
             agent_profile_id: "default".to_string(),
             active_mission_id: None,
             parent_session_id: None,
@@ -3245,6 +3384,7 @@ fn execute_chat_turn_recovers_when_permission_policy_denies_tool_call() {
             prompt_override: Some("Use tools when useful.".to_string()),
             settings_json: serde_json::to_string(&SessionSettings::default())
                 .expect("serialize settings"),
+            workspace_root: app.runtime.workspace.root.display().to_string(),
             agent_profile_id: "default".to_string(),
             active_mission_id: None,
             parent_session_id: None,

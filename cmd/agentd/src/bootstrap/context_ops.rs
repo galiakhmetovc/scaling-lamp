@@ -85,6 +85,7 @@ impl App {
             .collect::<Result<Vec<_>, _>>()
             .map_err(BootstrapError::RecordConversion)?;
         let (agent_name, schedule) = load_session_head_metadata(&store, &session)?;
+        let workspace = agent_runtime::workspace::WorkspaceRef::new(&session.workspace_root);
 
         Ok(prompting::build_session_head(
             &session,
@@ -93,7 +94,7 @@ impl App {
             &transcripts,
             context_summary.as_ref(),
             &runs,
-            &self.runtime.workspace,
+            &workspace,
         ))
     }
 
@@ -343,6 +344,7 @@ impl App {
             .collect::<Result<Vec<_>, _>>()
             .map_err(BootstrapError::RecordConversion)?;
         let (agent_name, schedule) = load_session_head_metadata(&store, &session)?;
+        let workspace = agent_runtime::workspace::WorkspaceRef::new(&session.workspace_root);
         let session_head = prompting::build_session_head(
             &session,
             &agent_name,
@@ -350,7 +352,7 @@ impl App {
             &transcripts,
             context_summary.as_ref(),
             &runs,
-            &self.runtime.workspace,
+            &workspace,
         );
         let policy = self.compaction_policy();
         let uncovered_messages = transcripts.len().saturating_sub(
@@ -467,6 +469,7 @@ impl App {
             .collect::<Result<Vec<_>, _>>()
             .map_err(BootstrapError::RecordConversion)?;
         let (agent_name, schedule) = load_session_head_metadata(&store, &session)?;
+        let workspace = agent_runtime::workspace::WorkspaceRef::new(&session.workspace_root);
         let session_head = prompting::build_session_head(
             &session,
             &agent_name,
@@ -474,7 +477,7 @@ impl App {
             &transcripts,
             context_summary.as_ref(),
             &runs,
-            &self.runtime.workspace,
+            &workspace,
         );
         let system_prompt =
             prompting::load_system_prompt(&self.config.data_dir, &session.agent_profile_id);
@@ -872,6 +875,16 @@ impl App {
                 id: session_id.to_string(),
             });
         }
+        let transcript_count = store.list_transcripts_for_session(session_id)?.len();
+        let policy = CompactionPolicy {
+            min_messages: self.config.context.compaction_min_messages,
+            keep_tail_messages: self.config.context.compaction_keep_tail_messages,
+            max_output_tokens: self.config.context.compaction_max_output_tokens,
+            max_summary_chars: self.config.context.compaction_max_summary_chars,
+        };
+        if !policy.should_compact(transcript_count) {
+            return self.session_summary(session_id);
+        }
         let provider = self.provider_driver()?;
         self.execution_service()
             .compact_session_at(&store, provider.as_ref(), session_id, unix_timestamp()?)
@@ -941,7 +954,7 @@ impl App {
             "Debug Bundle".to_string(),
             format!("generated_at={}", unix_timestamp()?),
             format!("version={}", crate::about::APP_VERSION),
-            format!("workspace_root={}", self.runtime.workspace.root.display()),
+            format!("workspace_root={}", session_record.workspace_root),
             format!("data_dir={}", self.config.data_dir.display()),
             format!("state_db={}", self.persistence.stores.metadata_db.display()),
             String::new(),

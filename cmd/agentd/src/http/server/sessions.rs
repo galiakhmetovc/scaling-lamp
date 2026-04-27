@@ -281,6 +281,7 @@ fn handle_session_detail(app: &App, request: Request, session_id: &str) -> std::
                     title: record.title,
                     agent_profile_id: record.agent_profile_id,
                     agent_name,
+                    workspace_root: record.workspace_root,
                     prompt_override: record.prompt_override,
                     settings_json: record.settings_json,
                     active_mission_id: record.active_mission_id,

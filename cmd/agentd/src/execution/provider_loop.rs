@@ -32,6 +32,7 @@ use agent_runtime::tool::{
     PlanSnapshotOutput, PlanWriteOutput, SetTaskStatusOutput, ToolCatalog, ToolDefinition,
     ToolFamily, ToolName, ToolOutput, ToolPolicy, ToolRuntime,
 };
+use agent_runtime::workspace::WorkspaceRef;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread;
@@ -915,7 +916,8 @@ impl ExecutionService {
         else {
             return Ok(None);
         };
-        let prompt_messages = self.prompt_messages(store, session_id)?;
+        let workspace = self.load_session_workspace(store, session_id)?;
+        let prompt_messages = self.prompt_messages(store, session_id, &workspace)?;
         let estimated_prompt_tokens =
             Self::estimate_prompt_tokens(&prompt_messages.messages, instructions);
         let trigger_threshold_tokens = ((context_window_tokens as f64)
@@ -1008,6 +1010,7 @@ impl ExecutionService {
         &self,
         store: &PersistenceStore,
         session_id: &str,
+        workspace: &WorkspaceRef,
     ) -> Result<PromptMessages, ExecutionError> {
         let session = Session::try_from(
             store
@@ -1094,7 +1097,7 @@ impl ExecutionService {
             &transcripts,
             context_summary.as_ref(),
             &runs,
-            &self.workspace,
+            workspace,
         );
         let system_prompt =
             prompting::load_system_prompt(&self.config.data_dir, &session.agent_profile_id);
@@ -1159,7 +1162,8 @@ impl ExecutionService {
         )
         .map_err(ExecutionError::RecordConversion)?;
         let agent_profile = self.load_agent_profile(store, &session.agent_profile_id)?;
-        let prompt = self.prompt_messages(store, session_id)?;
+        let workspace = WorkspaceRef::new(&session.workspace_root);
+        let prompt = self.prompt_messages(store, session_id, &workspace)?;
         let tools = self.automatic_provider_tools(
             provider,
             prompt.context_offload.as_ref(),
@@ -2955,7 +2959,8 @@ impl ExecutionService {
             self.persist_run(store, run)?;
         }
 
-        let prompt_messages = self.prompt_messages(store, session_id)?;
+        let workspace = self.load_session_workspace(store, session_id)?;
+        let prompt_messages = self.prompt_messages(store, session_id, &workspace)?;
         let catalog = ToolCatalog::default();
         let agent_profile = self.load_agent_profile_for_session(store, session_id)?;
         let tools = self.automatic_provider_tools(
@@ -2963,7 +2968,7 @@ impl ExecutionService {
             prompt_messages.context_offload.as_ref(),
             &agent_profile,
         );
-        let mut tool_runtime = self.tool_runtime();
+        let mut tool_runtime = self.tool_runtime_for_workspace(workspace);
         let auto_approve =
             auto_approve_override.unwrap_or(self.session_auto_approve_enabled(store, session_id)?);
         let think_level = self.session_think_level(store, session_id)?;
@@ -3651,6 +3656,10 @@ mod tests {
                 title: "Tool output".to_string(),
                 prompt_override: None,
                 settings_json: "{}".to_string(),
+                workspace_root: std::env::current_dir()
+                    .expect("current dir")
+                    .display()
+                    .to_string(),
                 agent_profile_id: "default".to_string(),
                 active_mission_id: None,
                 parent_session_id: None,

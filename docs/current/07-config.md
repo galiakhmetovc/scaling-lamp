@@ -104,6 +104,34 @@ export TEAMD_PROVIDER_API_KEY='replace-with-zai-key'
 - `working_memory_limit`
 - `project_memory_enabled`
 
+### `[workspace]`
+
+Управляет default project workspace для новых session.
+
+Параметры:
+
+- `default_root`
+
+Порядок выбора workspace при создании session:
+
+- если у выбранного `Agent profile` задан `default_workspace_root`, используется он;
+- иначе используется `workspace.default_root`;
+- если и он не задан, bootstrap fallback идёт в текущий process workspace;
+- `data_dir`, `audit`, `transcripts`, `artifacts` и `runs` использовать как workspace нельзя.
+
+Пример:
+
+```toml
+[workspace]
+default_root = "/srv/projects/teamd"
+```
+
+То же через env:
+
+```bash
+export TEAMD_WORKSPACE_DEFAULT_ROOT='/srv/projects/teamd'
+```
+
 ### `[context]`
 
 Управляет compaction policy:
@@ -218,6 +246,7 @@ export TEAMD_WEB_SEARCH_URL='http://127.0.0.1:8888/search'
 Полезно знать, что можно переопределять:
 
 - data dir;
+- workspace default root;
 - daemon bind host/port/token/public URL/skills dir;
 - context compaction thresholds;
 - web search backend/URL;

@@ -186,6 +186,7 @@ fn write_debug_bundle_persists_session_snapshot_into_runtime_audit_file() {
             prompt_override: None,
             settings_json: serde_json::to_string(&SessionSettings::default())
                 .expect("serialize settings"),
+            workspace_root: app.runtime.workspace.root.display().to_string(),
             agent_profile_id: "default".to_string(),
             active_mission_id: None,
             parent_session_id: None,
@@ -320,6 +321,7 @@ fn run_with_args_inspects_and_updates_runs_jobs_approvals_and_delegates() {
             prompt_override: None,
             settings_json: serde_json::to_string(&SessionSettings::default())
                 .expect("serialize settings"),
+            workspace_root: app.runtime.workspace.root.display().to_string(),
             agent_profile_id: "default".to_string(),
             active_mission_id: None,
             parent_session_id: None,
@@ -454,6 +456,7 @@ fn session_summary_ignores_corrupt_unrelated_session_records() {
             prompt_override: None,
             settings_json: serde_json::to_string(&SessionSettings::default())
                 .expect("serialize settings"),
+            workspace_root: app.runtime.workspace.root.display().to_string(),
             agent_profile_id: "default".to_string(),
             active_mission_id: None,
             parent_session_id: None,
@@ -509,6 +512,7 @@ fn session_summary_does_not_require_all_transcript_payloads_for_same_session() {
             prompt_override: None,
             settings_json: serde_json::to_string(&SessionSettings::default())
                 .expect("serialize settings"),
+            workspace_root: app.runtime.workspace.root.display().to_string(),
             agent_profile_id: "default".to_string(),
             active_mission_id: None,
             parent_session_id: None,
@@ -612,6 +616,7 @@ fn pending_approvals_ignores_corrupt_unrelated_run_records() {
             prompt_override: None,
             settings_json: serde_json::to_string(&SessionSettings::default())
                 .expect("serialize settings"),
+            workspace_root: app.runtime.workspace.root.display().to_string(),
             agent_profile_id: "default".to_string(),
             active_mission_id: None,
             parent_session_id: None,
@@ -706,6 +711,7 @@ fn list_session_summaries_ignores_corrupt_unrelated_session_records() {
             prompt_override: None,
             settings_json: serde_json::to_string(&SessionSettings::default())
                 .expect("serialize settings"),
+            workspace_root: app.runtime.workspace.root.display().to_string(),
             agent_profile_id: "default".to_string(),
             active_mission_id: None,
             parent_session_id: None,
@@ -762,6 +768,7 @@ fn list_session_summaries_does_not_require_transcript_payloads_for_same_session(
             prompt_override: None,
             settings_json: serde_json::to_string(&SessionSettings::default())
                 .expect("serialize settings"),
+            workspace_root: app.runtime.workspace.root.display().to_string(),
             agent_profile_id: "default".to_string(),
             active_mission_id: None,
             parent_session_id: None,
@@ -829,6 +836,7 @@ fn list_session_summaries_uses_run_rollups_without_full_run_record_conversion() 
             prompt_override: None,
             settings_json: serde_json::to_string(&SessionSettings::default())
                 .expect("serialize settings"),
+            workspace_root: app.runtime.workspace.root.display().to_string(),
             agent_profile_id: "default".to_string(),
             active_mission_id: None,
             parent_session_id: None,
@@ -894,6 +902,7 @@ fn list_session_summaries_uses_job_counts_without_full_job_record_conversion() {
             prompt_override: None,
             settings_json: serde_json::to_string(&SessionSettings::default())
                 .expect("serialize settings"),
+            workspace_root: app.runtime.workspace.root.display().to_string(),
             agent_profile_id: "default".to_string(),
             active_mission_id: None,
             parent_session_id: None,
@@ -956,6 +965,7 @@ fn session_summary_uses_run_rollups_without_full_run_record_conversion() {
             prompt_override: None,
             settings_json: serde_json::to_string(&SessionSettings::default())
                 .expect("serialize settings"),
+            workspace_root: app.runtime.workspace.root.display().to_string(),
             agent_profile_id: "default".to_string(),
             active_mission_id: None,
             parent_session_id: None,
@@ -1021,6 +1031,7 @@ fn build_from_config_interrupts_unrecoverable_runs_but_keeps_approvals_pending()
             prompt_override: None,
             settings_json: serde_json::to_string(&SessionSettings::default())
                 .expect("serialize settings"),
+            workspace_root: app.runtime.workspace.root.display().to_string(),
             agent_profile_id: "default".to_string(),
             active_mission_id: None,
             parent_session_id: None,
@@ -1206,6 +1217,7 @@ fn client_build_from_config_does_not_interrupt_active_runs() {
             prompt_override: None,
             settings_json: serde_json::to_string(&SessionSettings::default())
                 .expect("serialize settings"),
+            workspace_root: app.runtime.workspace.root.display().to_string(),
             agent_profile_id: "default".to_string(),
             active_mission_id: None,
             parent_session_id: None,
@@ -1295,6 +1307,7 @@ fn run_show_surfaces_error_details_for_interrupted_runs() {
             prompt_override: None,
             settings_json: serde_json::to_string(&SessionSettings::default())
                 .expect("serialize settings"),
+            workspace_root: app.runtime.workspace.root.display().to_string(),
             agent_profile_id: "default".to_string(),
             active_mission_id: None,
             parent_session_id: None,
@@ -1462,6 +1475,7 @@ fn supervisor_tick_queues_due_mission_turn_jobs_from_persisted_state() {
             prompt_override: None,
             settings_json: serde_json::to_string(&SessionSettings::default())
                 .expect("serialize settings"),
+            workspace_root: app.runtime.workspace.root.display().to_string(),
             agent_profile_id: "default".to_string(),
             active_mission_id: None,
             parent_session_id: None,
@@ -1527,6 +1541,7 @@ fn supervisor_tick_dispatches_queued_jobs_and_completes_verified_missions() {
             prompt_override: None,
             settings_json: serde_json::to_string(&SessionSettings::default())
                 .expect("serialize settings"),
+            workspace_root: app.runtime.workspace.root.display().to_string(),
             agent_profile_id: "default".to_string(),
             active_mission_id: None,
             parent_session_id: None,
@@ -1684,6 +1699,7 @@ fn execute_mission_turn_job_creates_a_run_calls_provider_and_persists_transcript
             prompt_override: Some("Reply tersely.".to_string()),
             settings_json: serde_json::to_string(&SessionSettings::default())
                 .expect("serialize settings"),
+            workspace_root: app.runtime.workspace.root.display().to_string(),
             agent_profile_id: "default".to_string(),
             active_mission_id: None,
             parent_session_id: None,
@@ -1787,6 +1803,7 @@ fn tool_execution_pauses_for_approval_then_resumes_and_records_evidence() {
             prompt_override: None,
             settings_json: serde_json::to_string(&SessionSettings::default())
                 .expect("serialize settings"),
+            workspace_root: app.runtime.workspace.root.display().to_string(),
             agent_profile_id: "default".to_string(),
             active_mission_id: None,
             parent_session_id: None,
@@ -1970,6 +1987,7 @@ fn accept_edits_mode_skips_approval_for_filesystem_edits() {
             prompt_override: None,
             settings_json: serde_json::to_string(&SessionSettings::default())
                 .expect("serialize settings"),
+            workspace_root: app.runtime.workspace.root.display().to_string(),
             agent_profile_id: "default".to_string(),
             active_mission_id: None,
             parent_session_id: None,
@@ -2065,6 +2083,7 @@ fn deny_rule_fails_tool_execution_before_approval_is_created() {
             prompt_override: None,
             settings_json: serde_json::to_string(&SessionSettings::default())
                 .expect("serialize settings"),
+            workspace_root: app.runtime.workspace.root.display().to_string(),
             agent_profile_id: "default".to_string(),
             active_mission_id: None,
             parent_session_id: None,
@@ -2167,6 +2186,7 @@ fn judge_agent_profile_denies_exec_start_during_direct_tool_execution() {
             prompt_override: None,
             settings_json: serde_json::to_string(&SessionSettings::default())
                 .expect("serialize settings"),
+            workspace_root: app.runtime.workspace.root.display().to_string(),
             agent_profile_id: "judge".to_string(),
             active_mission_id: None,
             parent_session_id: None,
@@ -2265,6 +2285,7 @@ fn judge_agent_profile_denies_fs_write_text_during_direct_tool_execution() {
             prompt_override: None,
             settings_json: serde_json::to_string(&SessionSettings::default())
                 .expect("serialize settings"),
+            workspace_root: app.runtime.workspace.root.display().to_string(),
             agent_profile_id: "judge".to_string(),
             active_mission_id: None,
             parent_session_id: None,
@@ -2393,6 +2414,7 @@ fn run_with_args_executes_mission_ticks_and_jobs() {
             prompt_override: Some("Reply tersely.".to_string()),
             settings_json: serde_json::to_string(&SessionSettings::default())
                 .expect("serialize settings"),
+            workspace_root: app.runtime.workspace.root.display().to_string(),
             agent_profile_id: "default".to_string(),
             active_mission_id: None,
             parent_session_id: None,
@@ -2476,6 +2498,7 @@ fn session_transcript_view_renders_entries_in_chronological_order() {
             prompt_override: None,
             settings_json: serde_json::to_string(&SessionSettings::default())
                 .expect("serialize settings"),
+            workspace_root: app.runtime.workspace.root.display().to_string(),
             agent_profile_id: "default".to_string(),
             active_mission_id: None,
             parent_session_id: None,
@@ -2536,6 +2559,7 @@ fn session_transcript_ignores_corrupt_unrelated_run_records() {
             prompt_override: None,
             settings_json: serde_json::to_string(&SessionSettings::default())
                 .expect("serialize settings"),
+            workspace_root: app.runtime.workspace.root.display().to_string(),
             agent_profile_id: "default".to_string(),
             active_mission_id: None,
             parent_session_id: None,
@@ -2626,6 +2650,7 @@ fn session_transcript_tail_limits_entries_and_ignores_corrupt_unrelated_run_reco
             prompt_override: None,
             settings_json: serde_json::to_string(&SessionSettings::default())
                 .expect("serialize settings"),
+            workspace_root: app.runtime.workspace.root.display().to_string(),
             agent_profile_id: "default".to_string(),
             active_mission_id: None,
             parent_session_id: None,
@@ -2723,6 +2748,7 @@ fn session_transcript_places_persisted_reasoning_before_final_assistant_for_same
             prompt_override: None,
             settings_json: serde_json::to_string(&SessionSettings::default())
                 .expect("serialize settings"),
+            workspace_root: app.runtime.workspace.root.display().to_string(),
             agent_profile_id: "default".to_string(),
             active_mission_id: None,
             parent_session_id: None,
@@ -2796,6 +2822,7 @@ fn session_transcript_coalesces_reasoning_deltas_into_one_line() {
             prompt_override: None,
             settings_json: serde_json::to_string(&SessionSettings::default())
                 .expect("serialize settings"),
+            workspace_root: app.runtime.workspace.root.display().to_string(),
             agent_profile_id: "default".to_string(),
             active_mission_id: None,
             parent_session_id: None,

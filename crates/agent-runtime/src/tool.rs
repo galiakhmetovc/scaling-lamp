@@ -3131,10 +3131,10 @@ impl ToolCall {
         match serde_json::from_str(arguments) {
             Ok(parsed) => Ok(parsed),
             Err(source) => {
-                if let Some(repaired) = repair_bare_enum_like_values(arguments, repairs) {
-                    if let Ok(parsed) = serde_json::from_str(&repaired) {
-                        return Ok(parsed);
-                    }
+                if let Some(repaired) = repair_bare_enum_like_values(arguments, repairs)
+                    && let Ok(parsed) = serde_json::from_str(&repaired)
+                {
+                    return Ok(parsed);
                 }
                 Err(Self::invalid_arguments_error(name, source))
             }

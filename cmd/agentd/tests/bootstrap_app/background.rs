@@ -70,6 +70,7 @@ fn background_worker_completes_chat_turn_jobs_and_wakes_idle_sessions() {
             prompt_override: None,
             settings_json: serde_json::to_string(&SessionSettings::default())
                 .expect("serialize settings"),
+            workspace_root: app.runtime.workspace.root.display().to_string(),
             agent_profile_id: "default".to_string(),
             active_mission_id: None,
             parent_session_id: None,
@@ -207,6 +208,7 @@ fn background_worker_executes_delegate_jobs_as_child_sessions_and_wakes_parent()
             prompt_override: None,
             settings_json: serde_json::to_string(&SessionSettings::default())
                 .expect("serialize settings"),
+            workspace_root: app.runtime.workspace.root.display().to_string(),
             agent_profile_id: "default".to_string(),
             active_mission_id: None,
             parent_session_id: None,
@@ -351,6 +353,7 @@ fn background_worker_blocks_remote_delegate_jobs_without_falling_back_to_local()
             prompt_override: None,
             settings_json: serde_json::to_string(&SessionSettings::default())
                 .expect("serialize settings"),
+            workspace_root: app.runtime.workspace.root.display().to_string(),
             agent_profile_id: "default".to_string(),
             active_mission_id: None,
             parent_session_id: None,
@@ -454,6 +457,7 @@ fn background_worker_cancels_jobs_with_cancel_requested_at() {
             prompt_override: None,
             settings_json: serde_json::to_string(&SessionSettings::default())
                 .expect("serialize settings"),
+            workspace_root: app.runtime.workspace.root.display().to_string(),
             agent_profile_id: "default".to_string(),
             active_mission_id: None,
             parent_session_id: None,
@@ -608,6 +612,7 @@ fn background_worker_interval_existing_session_skips_busy_target_session() {
             prompt_override: None,
             settings_json: serde_json::to_string(&SessionSettings::default())
                 .expect("serialize settings"),
+            workspace_root: app.runtime.workspace.root.display().to_string(),
             agent_profile_id: "default".to_string(),
             active_mission_id: None,
             parent_session_id: None,
@@ -708,6 +713,7 @@ fn background_worker_after_completion_uses_own_terminal_job_state_for_due_time()
             prompt_override: None,
             settings_json: serde_json::to_string(&SessionSettings::default())
                 .expect("serialize settings"),
+            workspace_root: app.runtime.workspace.root.display().to_string(),
             agent_profile_id: "default".to_string(),
             active_mission_id: None,
             parent_session_id: None,
@@ -842,6 +848,7 @@ fn background_worker_fires_one_shot_existing_session_schedule_once_and_disables_
             prompt_override: None,
             settings_json: serde_json::to_string(&SessionSettings::default())
                 .expect("serialize settings"),
+            workspace_root: app.runtime.workspace.root.display().to_string(),
             agent_profile_id: "default".to_string(),
             active_mission_id: None,
             parent_session_id: None,
@@ -1334,6 +1341,7 @@ fn background_worker_scheduled_existing_session_launch_auto_approves_exec_tools(
             prompt_override: None,
             settings_json: serde_json::to_string(&SessionSettings::default())
                 .expect("serialize settings"),
+            workspace_root: app.runtime.workspace.root.display().to_string(),
             agent_profile_id: "default".to_string(),
             active_mission_id: None,
             parent_session_id: None,

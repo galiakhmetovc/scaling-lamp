@@ -175,6 +175,7 @@ fn session_head_prefers_latest_provider_usage_input_tokens_for_ctx() {
             prompt_override: None,
             settings_json: serde_json::to_string(&SessionSettings::default())
                 .expect("serialize settings"),
+            workspace_root: app.runtime.workspace.root.display().to_string(),
             agent_profile_id: "default".to_string(),
             active_mission_id: None,
             parent_session_id: None,
@@ -240,6 +241,7 @@ fn session_head_includes_agent_and_schedule_metadata() {
             prompt_override: None,
             settings_json: serde_json::to_string(&SessionSettings::default())
                 .expect("serialize settings"),
+            workspace_root: app.runtime.workspace.root.display().to_string(),
             agent_profile_id: "judge".to_string(),
             active_mission_id: None,
             parent_session_id: None,
@@ -312,6 +314,7 @@ fn render_active_run_shows_usage_and_active_processes() {
             prompt_override: None,
             settings_json: serde_json::to_string(&SessionSettings::default())
                 .expect("serialize settings"),
+            workspace_root: app.runtime.workspace.root.display().to_string(),
             agent_profile_id: "default".to_string(),
             active_mission_id: None,
             parent_session_id: None,
@@ -423,6 +426,7 @@ fn render_active_run_includes_interagent_chain_state() {
             prompt_override: None,
             settings_json: serde_json::to_string(&SessionSettings::default())
                 .expect("serialize settings"),
+            workspace_root: app.runtime.workspace.root.display().to_string(),
             agent_profile_id: "judge".to_string(),
             active_mission_id: None,
             parent_session_id: Some("session-origin".to_string()),
@@ -498,6 +502,7 @@ fn render_active_run_shows_live_exec_output_tail() {
             prompt_override: None,
             settings_json: serde_json::to_string(&SessionSettings::default())
                 .expect("serialize settings"),
+            workspace_root: app.runtime.workspace.root.display().to_string(),
             agent_profile_id: "default".to_string(),
             active_mission_id: None,
             parent_session_id: None,
@@ -587,6 +592,7 @@ fn render_system_blocks_include_interagent_section() {
             prompt_override: None,
             settings_json: serde_json::to_string(&SessionSettings::default())
                 .expect("serialize settings"),
+            workspace_root: app.runtime.workspace.root.display().to_string(),
             agent_profile_id: "judge".to_string(),
             active_mission_id: None,
             parent_session_id: Some("session-origin".to_string()),

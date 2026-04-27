@@ -44,6 +44,7 @@ fn base_env(root: &Path) -> ConfigEnv {
         temp_dir: root.join("tmp"),
         xdg_config_home: Some(root.join("xdg-config")),
         xdg_state_home: Some(root.join("xdg-state")),
+        workspace_default_root_override: None,
     }
 }
 
@@ -90,6 +91,7 @@ fn validate_rejects_relative_data_dir() {
         provider: Default::default(),
         session_defaults: Default::default(),
         context: Default::default(),
+        workspace: Default::default(),
         web: Default::default(),
         runtime_timing: Default::default(),
         runtime_limits: Default::default(),
@@ -380,6 +382,7 @@ fn validate_rejects_invalid_runtime_limit_bounds() {
         provider: Default::default(),
         session_defaults: Default::default(),
         context: Default::default(),
+        workspace: Default::default(),
         web: Default::default(),
         runtime_timing: Default::default(),
         runtime_limits: super::RuntimeLimitsConfig {
@@ -471,6 +474,7 @@ fn validate_rejects_invalid_auto_compaction_ratio() {
             auto_compaction_trigger_ratio: 1.5,
             ..Default::default()
         },
+        workspace: Default::default(),
         web: Default::default(),
         runtime_timing: Default::default(),
         runtime_limits: Default::default(),

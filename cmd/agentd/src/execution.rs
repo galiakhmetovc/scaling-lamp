@@ -309,8 +309,12 @@ impl ExecutionService {
     }
 
     fn tool_runtime(&self) -> ToolRuntime {
+        self.tool_runtime_for_workspace(self.workspace.clone())
+    }
+
+    fn tool_runtime_for_workspace(&self, workspace: WorkspaceRef) -> ToolRuntime {
         ToolRuntime::with_web_client_and_process_registry(
-            self.workspace.clone(),
+            workspace,
             WebToolClient::new(
                 self.config.web_search_backend,
                 self.config.web_search_url.clone(),
@@ -333,6 +337,15 @@ impl ExecutionService {
                 })?,
         )
         .map_err(ExecutionError::RecordConversion)
+    }
+
+    fn load_session_workspace(
+        &self,
+        store: &PersistenceStore,
+        session_id: &str,
+    ) -> Result<WorkspaceRef, ExecutionError> {
+        let session = self.load_session(store, session_id)?;
+        Ok(WorkspaceRef::new(&session.workspace_root))
     }
 
     fn load_agent_profile(

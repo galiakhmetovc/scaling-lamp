@@ -1,6 +1,14 @@
 # План модернизации workspace-модели
 
-Этот документ фиксирует текущую проблему и целевую модель. Это не описание уже готовой реализации.
+Этот документ начинался как целевой план. Часть шагов уже реализована:
+
+- у `agent_profiles` есть persisted `default_workspace_root`;
+- у `sessions` есть persisted `workspace_root`;
+- session create path выбирает effective workspace по profile/config/runtime fallback;
+- prompt assembly и `ToolRuntime` берут workspace из persisted session context;
+- `workspace.default_root` вынесен в operator-facing config.
+
+Ниже остаются исходная постановка проблемы, целевая модель и хвосты, которые ещё полезно добить.
 
 ## Проблема
 
@@ -41,7 +49,7 @@
 - bootstrap создаёт builtin profiles `default` и `judge`;
 - prompt assembly читает `SYSTEM.md`, `AGENTS.md` и skills из `agent_home`;
 - schedules уже имеют поле `workspace_root`;
-- обычные sessions ещё не имеют явного persisted `workspace_root`;
+- обычные sessions уже имеют persisted `workspace_root`, но operator surfaces ещё нужно довести до полностью удобного состояния;
 - execution path не должен создавать отдельный runtime для Telegram/TUI/CLI.
 
 Вывод: `data_dir/agents/<agent_id>` сейчас ближе к profile home/template copy, чем к workspace.

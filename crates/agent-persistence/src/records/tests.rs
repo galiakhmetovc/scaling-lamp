@@ -15,6 +15,7 @@ use agent_runtime::plan::{PlanItem, PlanItemStatus, PlanSnapshot};
 use agent_runtime::run::{ActiveProcess, ApprovalRequest, DelegateRun, RunEngine, RunSnapshot};
 use agent_runtime::session::{MessageRole, PromptOverride, Session, TranscriptEntry};
 use agent_runtime::verification::{CheckOutcome, EvidenceBundle};
+use std::path::PathBuf;
 
 #[test]
 fn session_records_round_trip_with_domain_sessions() {
@@ -23,6 +24,7 @@ fn session_records_round_trip_with_domain_sessions() {
         title: "Bootstrap".to_string(),
         prompt_override: Some(PromptOverride::new("Always verify").expect("prompt override")),
         settings: Default::default(),
+        workspace_root: PathBuf::from("/workspace/bootstrap"),
         agent_profile_id: "default".to_string(),
         active_mission_id: Some("mission-1".to_string()),
         parent_session_id: None,
@@ -45,6 +47,7 @@ fn session_records_round_trip_with_delegation_lineage_metadata() {
         title: "Delegate: verification".to_string(),
         prompt_override: None,
         settings: Default::default(),
+        workspace_root: PathBuf::from("/workspace/delegate"),
         agent_profile_id: "judge".to_string(),
         active_mission_id: None,
         parent_session_id: Some("session-parent".to_string()),
@@ -73,6 +76,7 @@ fn session_records_accept_legacy_partial_settings_json() {
         title: "Legacy".to_string(),
         prompt_override: None,
         settings_json: "{\"model\":\"gpt-5.4\"}".to_string(),
+        workspace_root: "/workspace/legacy".to_string(),
         agent_profile_id: "default".to_string(),
         active_mission_id: None,
         parent_session_id: None,
@@ -97,6 +101,7 @@ fn agent_profile_records_round_trip_with_domain_agents() {
         AgentTemplateKind::Judge,
         "/var/lib/teamd/agents/judge",
         vec!["fs_read_text".to_string(), "plan_snapshot".to_string()],
+        Some("/workspace/judge-default".into()),
         Some("default".to_string()),
         Some("session-1".to_string()),
         Some("default".to_string()),
@@ -109,6 +114,58 @@ fn agent_profile_records_round_trip_with_domain_agents() {
     let restored = AgentProfile::try_from(stored).expect("record to profile");
 
     assert_eq!(restored, profile);
+}
+
+#[test]
+fn session_and_agent_profile_records_preserve_workspace_roots() {
+    let session = Session {
+        id: "session-workspace".to_string(),
+        title: "Workspace Session".to_string(),
+        prompt_override: None,
+        settings: Default::default(),
+        workspace_root: PathBuf::from("/workspace/project-a"),
+        agent_profile_id: "default".to_string(),
+        active_mission_id: None,
+        parent_session_id: None,
+        parent_job_id: None,
+        delegation_label: None,
+        created_at: 100,
+        updated_at: 101,
+    };
+
+    let stored_session = SessionRecord::try_from(&session).expect("session to record");
+    assert_eq!(stored_session.workspace_root, "/workspace/project-a");
+    let restored_session = Session::try_from(stored_session).expect("record to session");
+    assert_eq!(
+        restored_session.workspace_root,
+        PathBuf::from("/workspace/project-a")
+    );
+
+    let profile = AgentProfile::new_with_provenance(
+        "default",
+        "Assistant",
+        AgentTemplateKind::Default,
+        "/var/lib/teamd/agents/default",
+        vec!["fs_read_text".to_string()],
+        Some("/workspace/default-root".into()),
+        None,
+        None,
+        None,
+        110,
+        111,
+    )
+    .expect("agent profile");
+
+    let stored_profile = AgentProfileRecord::try_from(&profile).expect("profile to record");
+    assert_eq!(
+        stored_profile.default_workspace_root.as_deref(),
+        Some("/workspace/default-root")
+    );
+    let restored_profile = AgentProfile::try_from(stored_profile).expect("record to profile");
+    assert_eq!(
+        restored_profile.default_workspace_root,
+        Some(PathBuf::from("/workspace/default-root"))
+    );
 }
 
 #[test]

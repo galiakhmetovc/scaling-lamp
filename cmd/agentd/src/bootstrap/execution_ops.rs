@@ -363,6 +363,7 @@ impl App {
                 title: format!("A2A Delegate: {}", request.label),
                 prompt_override: None,
                 settings: SessionSettings::default(),
+                workspace_root: self.runtime.workspace.root.to_path_buf(),
                 agent_profile_id: "default".to_string(),
                 active_mission_id: None,
                 parent_session_id: Some(request.parent_session_id.clone()),

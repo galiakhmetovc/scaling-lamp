@@ -91,6 +91,7 @@ impl ExecutionService {
             AgentTemplateKind::Custom,
             &agent_home,
             template.allowed_tools.clone(),
+            template.default_workspace_root.clone(),
             Some(template.id.clone()),
             Some(session.id.clone()),
             Some(session.agent_profile_id.clone()),

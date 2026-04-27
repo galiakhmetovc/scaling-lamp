@@ -279,6 +279,7 @@ impl ExecutionService {
                     store,
                     &schedule.id,
                     &schedule.agent_profile_id,
+                    &schedule.workspace_root,
                     delegation_label,
                     now,
                 )?;
@@ -311,6 +312,7 @@ impl ExecutionService {
                         store,
                         &schedule.id,
                         &schedule.agent_profile_id,
+                        &schedule.workspace_root,
                         delegation_label,
                         now,
                     )?;
@@ -326,6 +328,7 @@ impl ExecutionService {
         store: &PersistenceStore,
         schedule_id: &str,
         agent_profile_id: &str,
+        workspace_root: &std::path::Path,
         delegation_label: &str,
         now: i64,
     ) -> Result<String, ExecutionError> {
@@ -339,6 +342,7 @@ impl ExecutionService {
             title: format!("Расписание: {}", schedule_id),
             prompt_override: None,
             settings: self.config.session_defaults.clone(),
+            workspace_root: workspace_root.to_path_buf(),
             agent_profile_id: agent_profile_id.to_string(),
             active_mission_id: None,
             parent_session_id: None,

@@ -14,13 +14,14 @@ impl SessionRepository for PersistenceStore {
 
         self.connection.execute(
             "INSERT INTO sessions (
-                id, title, prompt_override, settings_json, agent_profile_id, active_mission_id,
+                id, title, prompt_override, settings_json, workspace_root, agent_profile_id, active_mission_id,
                 parent_session_id, parent_job_id, delegation_label, created_at, updated_at
-             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)
              ON CONFLICT(id) DO UPDATE SET
                 title = excluded.title,
                 prompt_override = excluded.prompt_override,
                 settings_json = excluded.settings_json,
+                workspace_root = excluded.workspace_root,
                 agent_profile_id = excluded.agent_profile_id,
                 active_mission_id = excluded.active_mission_id,
                 parent_session_id = excluded.parent_session_id,
@@ -33,6 +34,7 @@ impl SessionRepository for PersistenceStore {
                 record.title,
                 record.prompt_override,
                 &record.settings_json,
+                &record.workspace_root,
                 &record.agent_profile_id,
                 record.active_mission_id,
                 record.parent_session_id,
@@ -48,7 +50,7 @@ impl SessionRepository for PersistenceStore {
     fn get_session(&self, id: &str) -> Result<Option<SessionRecord>, StoreError> {
         self.connection
             .query_row(
-                "SELECT id, title, prompt_override, settings_json, agent_profile_id, active_mission_id,
+                "SELECT id, title, prompt_override, settings_json, workspace_root, agent_profile_id, active_mission_id,
                         parent_session_id, parent_job_id, delegation_label, created_at, updated_at
                  FROM sessions WHERE id = ?1",
                 [id],
@@ -58,13 +60,14 @@ impl SessionRepository for PersistenceStore {
                         title: row.get(1)?,
                         prompt_override: row.get(2)?,
                         settings_json: row.get(3)?,
-                        agent_profile_id: row.get(4)?,
-                        active_mission_id: row.get(5)?,
-                        parent_session_id: row.get(6)?,
-                        parent_job_id: row.get(7)?,
-                        delegation_label: row.get(8)?,
-                        created_at: row.get(9)?,
-                        updated_at: row.get(10)?,
+                        workspace_root: row.get(4)?,
+                        agent_profile_id: row.get(5)?,
+                        active_mission_id: row.get(6)?,
+                        parent_session_id: row.get(7)?,
+                        parent_job_id: row.get(8)?,
+                        delegation_label: row.get(9)?,
+                        created_at: row.get(10)?,
+                        updated_at: row.get(11)?,
                     })
                 },
             )
@@ -74,7 +77,7 @@ impl SessionRepository for PersistenceStore {
 
     fn list_sessions(&self) -> Result<Vec<SessionRecord>, StoreError> {
         let mut statement = self.connection.prepare(
-            "SELECT id, title, prompt_override, settings_json, agent_profile_id, active_mission_id,
+            "SELECT id, title, prompt_override, settings_json, workspace_root, agent_profile_id, active_mission_id,
                     parent_session_id, parent_job_id, delegation_label, created_at, updated_at
              FROM sessions
              ORDER BY created_at ASC, id ASC",
@@ -88,13 +91,14 @@ impl SessionRepository for PersistenceStore {
                 title: row.get(1)?,
                 prompt_override: row.get(2)?,
                 settings_json: row.get(3)?,
-                agent_profile_id: row.get(4)?,
-                active_mission_id: row.get(5)?,
-                parent_session_id: row.get(6)?,
-                parent_job_id: row.get(7)?,
-                delegation_label: row.get(8)?,
-                created_at: row.get(9)?,
-                updated_at: row.get(10)?,
+                workspace_root: row.get(4)?,
+                agent_profile_id: row.get(5)?,
+                active_mission_id: row.get(6)?,
+                parent_session_id: row.get(7)?,
+                parent_job_id: row.get(8)?,
+                delegation_label: row.get(9)?,
+                created_at: row.get(10)?,
+                updated_at: row.get(11)?,
             });
         }
 

@@ -12,7 +12,7 @@ mod tool_call_repos;
 
 use crate::PersistenceScaffold;
 use crate::audit::{AuditLogConfig, DiagnosticEvent};
-use crate::config::AppConfig;
+use crate::config::{AppConfig, normalize_absolute_path};
 use crate::records::{
     AgentChainContinuationRecord, AgentProfileRecord, AgentScheduleRecord, ArtifactRecord,
     ContextOffloadRecord, ContextSummaryRecord, JobRecord, McpConnectorRecord, MissionRecord,
@@ -232,6 +232,7 @@ impl PersistenceStore {
         if mode != OpenMode::RuntimeRequestPath {
             bootstrap_schema(&connection)?;
             validate_schema(&connection)?;
+            reconcile_legacy_session_workspace_roots(&connection, &scaffold.config)?;
         }
 
         let store = Self {
@@ -759,6 +760,59 @@ fn validate_schema(connection: &Connection) -> Result<(), StoreError> {
 
 fn validate_identifier(id: &str) -> Result<(), StoreError> {
     schema::validate_identifier(id)
+}
+
+fn reconcile_legacy_session_workspace_roots(
+    connection: &Connection,
+    config: &AppConfig,
+) -> Result<(), StoreError> {
+    let fallback_root = default_session_workspace_root(config)?;
+    let mut statement =
+        connection.prepare("SELECT id, workspace_root FROM sessions ORDER BY id ASC")?;
+    let legacy_rows = statement
+        .query_map([], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })?
+        .collect::<Result<Vec<_>, _>>()?
+        .into_iter()
+        .filter(|(_, workspace_root)| !Path::new(workspace_root).is_absolute())
+        .collect::<Vec<_>>();
+    drop(statement);
+
+    if legacy_rows.is_empty() {
+        return Ok(());
+    }
+
+    connection.execute_batch("BEGIN IMMEDIATE TRANSACTION;")?;
+    let result = (|| -> Result<(), StoreError> {
+        for (session_id, _) in &legacy_rows {
+            connection.execute(
+                "UPDATE sessions SET workspace_root = ?1 WHERE id = ?2",
+                params![fallback_root.display().to_string(), session_id],
+            )?;
+        }
+        connection.execute_batch("COMMIT TRANSACTION;")?;
+        Ok(())
+    })();
+
+    if result.is_err() {
+        let _ = connection.execute_batch("ROLLBACK TRANSACTION;");
+    }
+
+    result
+}
+
+fn default_session_workspace_root(config: &AppConfig) -> Result<PathBuf, StoreError> {
+    let cwd = std::env::current_dir().map_err(|source| StoreError::Io {
+        path: ".".into(),
+        source,
+    })?;
+    Ok(config
+        .workspace
+        .default_root
+        .as_deref()
+        .map(|path| normalize_absolute_path(path, &cwd))
+        .unwrap_or(cwd))
 }
 
 fn persist_payload_with_commit<F>(path: &Path, bytes: &[u8], commit: F) -> Result<(), StoreError>

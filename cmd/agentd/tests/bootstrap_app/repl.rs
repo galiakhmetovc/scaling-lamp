@@ -49,6 +49,7 @@ fn run_with_args_shows_and_sends_chat_turns() {
             prompt_override: Some("Keep it short.".to_string()),
             settings_json: serde_json::to_string(&SessionSettings::default())
                 .expect("serialize settings"),
+            workspace_root: app.runtime.workspace.root.display().to_string(),
             agent_profile_id: "default".to_string(),
             active_mission_id: None,
             parent_session_id: None,
@@ -151,6 +152,7 @@ fn run_with_args_chat_send_reports_waiting_approval_details() {
             prompt_override: Some("Use tools when useful.".to_string()),
             settings_json: serde_json::to_string(&SessionSettings::default())
                 .expect("serialize settings"),
+            workspace_root: app.runtime.workspace.root.display().to_string(),
             agent_profile_id: "default".to_string(),
             active_mission_id: None,
             parent_session_id: None,
@@ -209,6 +211,7 @@ fn repl_runs_chat_turns_and_supports_show_and_exit_commands() {
             prompt_override: Some("Keep it short.".to_string()),
             settings_json: serde_json::to_string(&SessionSettings::default())
                 .expect("serialize settings"),
+            workspace_root: app.runtime.workspace.root.display().to_string(),
             agent_profile_id: "default".to_string(),
             active_mission_id: None,
             parent_session_id: None,
@@ -267,6 +270,7 @@ fn repl_supports_memory_commands() {
             prompt_override: None,
             settings_json: serde_json::to_string(&SessionSettings::default())
                 .expect("serialize settings"),
+            workspace_root: app.runtime.workspace.root.display().to_string(),
             agent_profile_id: "default".to_string(),
             active_mission_id: None,
             parent_session_id: None,
@@ -331,6 +335,7 @@ fn repl_supports_mcp_commands() {
             prompt_override: None,
             settings_json: serde_json::to_string(&SessionSettings::default())
                 .expect("serialize settings"),
+            workspace_root: app.runtime.workspace.root.display().to_string(),
             agent_profile_id: "default".to_string(),
             active_mission_id: None,
             parent_session_id: None,
@@ -394,6 +399,7 @@ fn repl_supports_judge_command_and_queues_interagent_message() {
             prompt_override: None,
             settings_json: serde_json::to_string(&SessionSettings::default())
                 .expect("serialize settings"),
+            workspace_root: app.runtime.workspace.root.display().to_string(),
             agent_profile_id: "default".to_string(),
             active_mission_id: None,
             parent_session_id: None,
@@ -450,6 +456,7 @@ fn repl_supports_chain_grant_command() {
             prompt_override: None,
             settings_json: serde_json::to_string(&SessionSettings::default())
                 .expect("serialize settings"),
+            workspace_root: app.runtime.workspace.root.display().to_string(),
             agent_profile_id: "judge".to_string(),
             active_mission_id: None,
             parent_session_id: None,
@@ -522,6 +529,7 @@ fn repl_command_without_required_argument_prints_usage_instead_of_failing() {
             prompt_override: None,
             settings_json: serde_json::to_string(&SessionSettings::default())
                 .expect("serialize settings"),
+            workspace_root: app.runtime.workspace.root.display().to_string(),
             agent_profile_id: "default".to_string(),
             active_mission_id: None,
             parent_session_id: None,
@@ -564,6 +572,7 @@ fn repl_runs_plan_command_and_renders_current_plan() {
             prompt_override: None,
             settings_json: serde_json::to_string(&SessionSettings::default())
                 .expect("serialize settings"),
+            workspace_root: app.runtime.workspace.root.display().to_string(),
             agent_profile_id: "default".to_string(),
             active_mission_id: None,
             parent_session_id: None,
@@ -640,6 +649,7 @@ fn repl_supports_russian_skill_commands_with_session_scoped_overrides() {
             prompt_override: None,
             settings_json: serde_json::to_string(&SessionSettings::default())
                 .expect("serialize settings"),
+            workspace_root: app.runtime.workspace.root.display().to_string(),
             agent_profile_id: "default".to_string(),
             active_mission_id: None,
             parent_session_id: None,
@@ -743,6 +753,7 @@ fn repl_accepts_cp1251_terminal_input_without_utf8_failure() {
             prompt_override: None,
             settings_json: serde_json::to_string(&SessionSettings::default())
                 .expect("serialize settings"),
+            workspace_root: app.runtime.workspace.root.display().to_string(),
             agent_profile_id: "default".to_string(),
             active_mission_id: None,
             parent_session_id: None,
@@ -814,6 +825,7 @@ fn repl_surfaces_waiting_approval_and_can_approve_latest_pending_turn() {
             prompt_override: Some("Use tools when useful.".to_string()),
             settings_json: serde_json::to_string(&SessionSettings::default())
                 .expect("serialize settings"),
+            workspace_root: app.runtime.workspace.root.display().to_string(),
             agent_profile_id: "default".to_string(),
             active_mission_id: None,
             parent_session_id: None,
@@ -888,6 +900,7 @@ fn repl_rehydrates_latest_pending_approval_after_restart() {
             prompt_override: Some("Use tools when useful.".to_string()),
             settings_json: serde_json::to_string(&SessionSettings::default())
                 .expect("serialize settings"),
+            workspace_root: app.runtime.workspace.root.display().to_string(),
             agent_profile_id: "default".to_string(),
             active_mission_id: None,
             parent_session_id: None,
@@ -989,6 +1002,7 @@ fn repl_rejects_new_turns_while_an_approval_is_pending() {
             prompt_override: Some("Use tools when useful.".to_string()),
             settings_json: serde_json::to_string(&SessionSettings::default())
                 .expect("serialize settings"),
+            workspace_root: app.runtime.workspace.root.display().to_string(),
             agent_profile_id: "default".to_string(),
             active_mission_id: None,
             parent_session_id: None,
@@ -1064,6 +1078,7 @@ data: [DONE]\n\n"
             prompt_override: Some("Use tools when useful.".to_string()),
             settings_json: serde_json::to_string(&SessionSettings::default())
                 .expect("serialize settings"),
+            workspace_root: app.runtime.workspace.root.display().to_string(),
             agent_profile_id: "default".to_string(),
             active_mission_id: None,
             parent_session_id: None,
@@ -1142,6 +1157,7 @@ data: [DONE]\n\n"
             prompt_override: Some("Use tools when useful.".to_string()),
             settings_json: serde_json::to_string(&SessionSettings::default())
                 .expect("serialize settings"),
+            workspace_root: app.runtime.workspace.root.display().to_string(),
             agent_profile_id: "default".to_string(),
             active_mission_id: None,
             parent_session_id: None,
@@ -1222,6 +1238,7 @@ data: [DONE]\n\n"
             prompt_override: Some("Use tools when useful.".to_string()),
             settings_json: serde_json::to_string(&SessionSettings::default())
                 .expect("serialize settings"),
+            workspace_root: app.runtime.workspace.root.display().to_string(),
             agent_profile_id: "default".to_string(),
             active_mission_id: None,
             parent_session_id: None,
@@ -1278,6 +1295,7 @@ data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_stream_repl\"
             prompt_override: Some("Be brief.".to_string()),
             settings_json: serde_json::to_string(&SessionSettings::default())
                 .expect("serialize settings"),
+            workspace_root: app.runtime.workspace.root.display().to_string(),
             agent_profile_id: "default".to_string(),
             active_mission_id: None,
             parent_session_id: None,

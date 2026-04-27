@@ -17,7 +17,8 @@ use agent_persistence::{
     AgentRepository, AppConfig, ConfigError, ContextSummaryRepository, JobRepository,
     PersistenceScaffold, PersistenceStore, PlanRepository, RecordConversionError, RunRecord,
     RunRepository, RunSummaryRollup, SessionActiveJobCounts, SessionRepository, StoreError,
-    TranscriptRepository, audit::AuditLogConfig, recovery,
+    TranscriptRepository, audit::AuditLogConfig, normalize_absolute_path, recovery,
+    validate_workspace_root_path,
 };
 use agent_runtime::RuntimeScaffold;
 use agent_runtime::agent::{AgentSchedule, AgentScheduleDeliveryMode, AgentScheduleMode};
@@ -30,6 +31,7 @@ use agent_runtime::run::RunTransitionError;
 use agent_runtime::session::SessionSettings;
 use agent_runtime::skills::SessionSkillStatus as RuntimeSessionSkillStatus;
 use agent_runtime::tool::SharedProcessRegistry;
+use agent_runtime::workspace::WorkspaceRef;
 use serde::{Deserialize, Serialize};
 use std::error::Error;
 use std::fmt;
@@ -997,10 +999,14 @@ fn build_from_config_inner(
     }
     let mcp = SharedMcpRegistry::from_runtime_timing(&config.runtime_timing);
 
+    let default_workspace_root = default_runtime_workspace_root(&config)?;
     let app = App {
         config,
         persistence,
-        runtime: RuntimeScaffold::default(),
+        runtime: RuntimeScaffold {
+            workspace: WorkspaceRef::new(default_workspace_root),
+            ..RuntimeScaffold::default()
+        },
         processes: SharedProcessRegistry::default(),
         mcp,
         updater: RuntimeReleaseUpdater::github_default()?,
@@ -1022,6 +1028,22 @@ fn build_from_config_inner(
     )
     .emit(&app.persistence.audit);
     Ok(app)
+}
+
+fn default_runtime_workspace_root(config: &AppConfig) -> Result<PathBuf, BootstrapError> {
+    let cwd = std::env::current_dir().map_err(|source| BootstrapError::Io {
+        path: PathBuf::from("."),
+        source,
+    })?;
+    let raw = config
+        .workspace
+        .default_root
+        .clone()
+        .unwrap_or_else(|| cwd.clone());
+    let normalized = normalize_absolute_path(&raw, &cwd);
+    validate_workspace_root_path("workspace.default_root", &normalized, &config.data_dir)
+        .map_err(BootstrapError::Config)?;
+    Ok(normalized)
 }
 
 fn should_reconcile_recovery_for_args<I, S>(args: I) -> bool

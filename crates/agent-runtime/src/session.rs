@@ -1,6 +1,7 @@
 use serde::{Deserialize, Serialize};
 use std::error::Error;
 use std::fmt;
+use std::path::PathBuf;
 
 pub const SCHEDULE_INPUT_METADATA_PREFIX: &str = "schedule_input:";
 
@@ -10,6 +11,7 @@ pub struct Session {
     pub title: String,
     pub prompt_override: Option<PromptOverride>,
     pub settings: SessionSettings,
+    pub workspace_root: PathBuf,
     pub agent_profile_id: String,
     pub active_mission_id: Option<String>,
     pub parent_session_id: Option<String>,
@@ -89,6 +91,7 @@ impl Default for Session {
             title: "bootstrap".to_string(),
             prompt_override: None,
             settings: SessionSettings::default(),
+            workspace_root: PathBuf::from("."),
             agent_profile_id: "default".to_string(),
             active_mission_id: None,
             parent_session_id: None,

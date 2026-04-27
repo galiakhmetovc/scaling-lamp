@@ -268,13 +268,19 @@ impl App {
             project_memory_enabled: self.config.session_defaults.project_memory_enabled,
             ..SessionSettings::default()
         };
-        let agent_profile_id = self.current_agent_profile_id()?;
+        let agent_profile = self.current_agent_profile()?;
+        let workspace_root = resolve_session_workspace_root(
+            &self.config,
+            &self.runtime.workspace.root,
+            agent_profile.default_workspace_root.as_deref(),
+        )?;
         let session = Session {
             id: id.to_string(),
             title: title.trim().to_string(),
             prompt_override: None,
             settings,
-            agent_profile_id,
+            workspace_root,
+            agent_profile_id: agent_profile.id,
             active_mission_id: None,
             parent_session_id: None,
             parent_job_id: None,
@@ -1417,6 +1423,29 @@ fn pretty_json_value(value: &serde_json::Value) -> String {
     serde_json::to_string_pretty(value).unwrap_or_else(|_| value.to_string())
 }
 
+fn resolve_session_workspace_root(
+    config: &AppConfig,
+    app_workspace_root: &std::path::Path,
+    agent_default_workspace_root: Option<&std::path::Path>,
+) -> Result<std::path::PathBuf, BootstrapError> {
+    let cwd = std::env::current_dir().map_err(|source| BootstrapError::Io {
+        path: std::path::PathBuf::from("."),
+        source,
+    })?;
+    let raw = agent_default_workspace_root
+        .map(std::path::Path::to_path_buf)
+        .or_else(|| config.workspace.default_root.clone())
+        .unwrap_or_else(|| app_workspace_root.to_path_buf());
+    let normalized = agent_persistence::normalize_absolute_path(&raw, &cwd);
+    agent_persistence::validate_workspace_root_path(
+        "session.workspace_root",
+        &normalized,
+        &config.data_dir,
+    )
+    .map_err(BootstrapError::Config)?;
+    Ok(normalized)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1481,6 +1510,7 @@ mod tests {
                 title: "Debug".to_string(),
                 prompt_override: None,
                 settings_json: "{}".to_string(),
+                workspace_root: app.runtime.workspace.root.display().to_string(),
                 agent_profile_id: "default".to_string(),
                 active_mission_id: None,
                 parent_session_id: None,

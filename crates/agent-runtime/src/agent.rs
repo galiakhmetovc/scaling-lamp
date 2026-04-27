@@ -48,6 +48,7 @@ pub struct AgentProfile {
     pub template_kind: AgentTemplateKind,
     pub agent_home: PathBuf,
     pub allowed_tools: Vec<String>,
+    pub default_workspace_root: Option<PathBuf>,
     pub created_from_template_id: Option<String>,
     pub created_by_session_id: Option<String>,
     pub created_by_agent_profile_id: Option<String>,
@@ -239,12 +240,14 @@ impl fmt::Display for AgentScheduleDeliveryModeParseError {
 impl Error for AgentScheduleDeliveryModeParseError {}
 
 impl AgentProfile {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         id: impl Into<String>,
         name: impl Into<String>,
         template_kind: AgentTemplateKind,
         agent_home: impl AsRef<Path>,
         allowed_tools: Vec<String>,
+        default_workspace_root: Option<PathBuf>,
         created_at: i64,
         updated_at: i64,
     ) -> Result<Self, AgentProfileError> {
@@ -254,6 +257,7 @@ impl AgentProfile {
             template_kind,
             agent_home,
             allowed_tools,
+            default_workspace_root,
             None,
             None,
             None,
@@ -269,6 +273,7 @@ impl AgentProfile {
         template_kind: AgentTemplateKind,
         agent_home: impl AsRef<Path>,
         allowed_tools: Vec<String>,
+        default_workspace_root: Option<PathBuf>,
         created_from_template_id: Option<String>,
         created_by_session_id: Option<String>,
         created_by_agent_profile_id: Option<String>,
@@ -307,6 +312,8 @@ impl AgentProfile {
             template_kind,
             agent_home,
             allowed_tools: normalized_tools,
+            default_workspace_root: default_workspace_root
+                .filter(|path| !path.as_os_str().is_empty()),
             created_from_template_id: created_from_template_id
                 .map(|value| value.trim().to_string())
                 .filter(|value| !value.is_empty()),
@@ -570,6 +577,7 @@ mod tests {
                 "plan_snapshot".to_string(),
                 "fs_read_text".to_string(),
             ],
+            None,
             1,
             2,
         )
@@ -589,6 +597,7 @@ mod tests {
             AgentTemplateKind::Judge,
             PathBuf::from("/tmp/judge"),
             vec!["   ".to_string()],
+            None,
             1,
             2,
         )
@@ -605,6 +614,7 @@ mod tests {
             AgentTemplateKind::Judge,
             PathBuf::from("/tmp/judge"),
             vec!["plan_snapshot".to_string(), "fs_read_text".to_string()],
+            None,
             1,
             2,
         )

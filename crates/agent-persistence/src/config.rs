@@ -27,6 +27,7 @@ pub struct AppConfig {
     pub permissions: PermissionConfig,
     pub provider: ConfiguredProvider,
     pub session_defaults: SessionDefaultsConfig,
+    pub workspace: WorkspaceConfig,
     pub context: ContextConfig,
     pub web: WebConfig,
     pub runtime_timing: RuntimeTimingConfig,
@@ -66,6 +67,12 @@ pub struct TelegramConfig {
 pub struct SessionDefaultsConfig {
     pub working_memory_limit: usize,
     pub project_memory_enabled: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Default)]
+#[serde(default)]
+pub struct WorkspaceConfig {
+    pub default_root: Option<PathBuf>,
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]
@@ -170,6 +177,7 @@ pub struct ConfigEnv {
     pub daemon_skills_dir_override: Option<PathBuf>,
     pub home_dir: Option<PathBuf>,
     pub telegram_bot_token_override: Option<String>,
+    pub workspace_default_root_override: Option<PathBuf>,
     pub context_compaction_keep_tail_messages_override: Option<usize>,
     pub context_compaction_max_output_tokens_override: Option<u32>,
     pub context_compaction_max_summary_chars_override: Option<usize>,
@@ -234,6 +242,7 @@ struct FileConfig {
     permissions: Option<PermissionConfig>,
     provider: Option<ConfiguredProvider>,
     session_defaults: Option<SessionDefaultsConfig>,
+    workspace: Option<WorkspaceConfig>,
     context: Option<ContextConfig>,
     web: Option<WebConfig>,
     runtime_timing: Option<RuntimeTimingConfig>,
@@ -514,6 +523,10 @@ impl ConfigEnv {
             daemon_skills_dir_override: read_path_var("TEAMD_DAEMON_SKILLS_DIR", &dotenv)?,
             home_dir: read_path_var("HOME", &dotenv)?,
             telegram_bot_token_override: read_string_var("TEAMD_TELEGRAM_BOT_TOKEN", &dotenv),
+            workspace_default_root_override: read_path_var(
+                "TEAMD_WORKSPACE_DEFAULT_ROOT",
+                &dotenv,
+            )?,
             context_compaction_keep_tail_messages_override: read_usize_var(
                 "TEAMD_CONTEXT_COMPACTION_KEEP_TAIL_MESSAGES",
                 &dotenv,
@@ -640,6 +653,10 @@ impl AppConfig {
             .as_ref()
             .and_then(|config| config.session_defaults.clone())
             .unwrap_or_default();
+        let mut workspace = file_config
+            .as_ref()
+            .and_then(|config| config.workspace.clone())
+            .unwrap_or_default();
         let mut context = file_config
             .as_ref()
             .and_then(|config| config.context.clone())
@@ -714,6 +731,9 @@ impl AppConfig {
         if let Some(enabled) = env.session_project_memory_enabled_override {
             session_defaults.project_memory_enabled = enabled;
         }
+        if let Some(path) = &env.workspace_default_root_override {
+            workspace.default_root = Some(path.clone());
+        }
         if let Some(value) = env.context_compaction_min_messages_override {
             context.compaction_min_messages = value;
         }
@@ -752,6 +772,7 @@ impl AppConfig {
             permissions,
             provider,
             session_defaults,
+            workspace,
             context,
             web,
             runtime_timing,
@@ -849,6 +870,20 @@ impl AppConfig {
                 value: self.web.search_url.clone(),
                 reason: "must not be empty",
             });
+        }
+
+        if let Some(default_root) = &self.workspace.default_root {
+            if default_root.as_os_str().is_empty() {
+                return Err(ConfigError::InvalidProviderValue {
+                    name: "workspace.default_root",
+                    value: default_root.display().to_string(),
+                    reason: "must not be empty",
+                });
+            }
+
+            let cwd = env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+            let normalized = normalize_absolute_path(default_root, &cwd);
+            validate_workspace_root_path("workspace.default_root", &normalized, &self.data_dir)?;
         }
 
         for (peer_id, peer) in &self.daemon.a2a_peers {
@@ -1194,6 +1229,7 @@ fn load_file_config(path: &Path, required: bool) -> Result<FileConfig, ConfigErr
                 permissions: None,
                 provider: None,
                 session_defaults: None,
+                workspace: None,
                 context: None,
                 web: None,
                 runtime_timing: None,
@@ -1542,6 +1578,59 @@ fn parse_dotenv(contents: &str) -> BTreeMap<String, String> {
     values
 }
 
+pub fn normalize_absolute_path(path: &Path, cwd: &Path) -> PathBuf {
+    let mut normalized = if path.is_absolute() {
+        PathBuf::new()
+    } else {
+        cwd.to_path_buf()
+    };
+
+    for component in path.components() {
+        match component {
+            std::path::Component::CurDir => {}
+            std::path::Component::Normal(part) => normalized.push(part),
+            std::path::Component::ParentDir => {
+                normalized.pop();
+            }
+            std::path::Component::RootDir => normalized.push(Path::new("/")),
+            std::path::Component::Prefix(prefix) => normalized.push(prefix.as_os_str()),
+        }
+    }
+
+    normalized
+}
+
+pub fn validate_workspace_root_path(
+    field_name: &'static str,
+    workspace_root: &Path,
+    data_dir: &Path,
+) -> Result<(), ConfigError> {
+    let artifacts_dir = data_dir.join("artifacts");
+    let transcripts_dir = data_dir.join("transcripts");
+    let runs_dir = data_dir.join("runs");
+    let audit_dir = data_dir.join("audit");
+    let reserved_roots = [
+        data_dir,
+        &artifacts_dir,
+        &transcripts_dir,
+        &runs_dir,
+        &audit_dir,
+    ];
+
+    if reserved_roots
+        .iter()
+        .any(|reserved| workspace_root == *reserved || workspace_root.starts_with(reserved))
+    {
+        return Err(ConfigError::InvalidProviderValue {
+            name: field_name,
+            value: workspace_root.display().to_string(),
+            reason: "must not point into teamd state directories",
+        });
+    }
+
+    Ok(())
+}
+
 impl Default for AppConfig {
     fn default() -> Self {
         Self {
@@ -1551,6 +1640,7 @@ impl Default for AppConfig {
             permissions: PermissionConfig::default(),
             provider: ConfiguredProvider::default(),
             session_defaults: SessionDefaultsConfig::default(),
+            workspace: WorkspaceConfig::default(),
             context: ContextConfig::default(),
             web: WebConfig::default(),
             runtime_timing: RuntimeTimingConfig::default(),

@@ -13,6 +13,10 @@ fn seed_session(store: &PersistenceStore, session_id: &str, agent_profile_id: &s
             prompt_override: None,
             settings_json: serde_json::to_string(&SessionSettings::default())
                 .expect("serialize settings"),
+            workspace_root: fs::canonicalize(".")
+                .expect("canonical workspace")
+                .display()
+                .to_string(),
             agent_profile_id: agent_profile_id.to_string(),
             active_mission_id: None,
             parent_session_id: None,
@@ -39,6 +43,10 @@ fn seed_running_tool_context(
             prompt_override: None,
             settings_json: serde_json::to_string(&SessionSettings::default())
                 .expect("serialize settings"),
+            workspace_root: fs::canonicalize(".")
+                .expect("canonical workspace")
+                .display()
+                .to_string(),
             agent_profile_id: agent_profile_id.to_string(),
             active_mission_id: None,
             parent_session_id: None,
@@ -741,6 +749,7 @@ fn build_from_config_keeps_active_interagent_job_runs_recoverable_across_restart
                 prompt_override: None,
                 settings_json: serde_json::to_string(&SessionSettings::default())
                     .expect("serialize settings"),
+                workspace_root: app.runtime.workspace.root.display().to_string(),
                 agent_profile_id: agent_profile_id.to_string(),
                 active_mission_id: None,
                 parent_session_id: None,

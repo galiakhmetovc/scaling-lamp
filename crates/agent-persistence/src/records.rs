@@ -27,6 +27,7 @@ use agent_runtime::session::{
 };
 use std::error::Error;
 use std::fmt;
+use std::path::PathBuf;
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 struct PlanRecordPayload {
@@ -40,6 +41,7 @@ pub struct SessionRecord {
     pub title: String,
     pub prompt_override: Option<String>,
     pub settings_json: String,
+    pub workspace_root: String,
     pub agent_profile_id: String,
     pub active_mission_id: Option<String>,
     pub parent_session_id: Option<String>,
@@ -153,6 +155,7 @@ pub struct AgentProfileRecord {
     pub template_kind: String,
     pub agent_home: String,
     pub allowed_tools_json: String,
+    pub default_workspace_root: Option<String>,
     pub created_from_template_id: Option<String>,
     pub created_by_session_id: Option<String>,
     pub created_by_agent_profile_id: Option<String>,
@@ -408,6 +411,7 @@ impl TryFrom<&Session> for SessionRecord {
                 .as_ref()
                 .map(|prompt_override| prompt_override.as_str().to_string()),
             settings_json,
+            workspace_root: session.workspace_root.display().to_string(),
             agent_profile_id: session.agent_profile_id.clone(),
             active_mission_id: session.active_mission_id.clone(),
             parent_session_id: session.parent_session_id.clone(),
@@ -436,6 +440,7 @@ impl TryFrom<SessionRecord> for Session {
             title: record.title,
             prompt_override,
             settings,
+            workspace_root: record.workspace_root.into(),
             agent_profile_id: record.agent_profile_id,
             active_mission_id: record.active_mission_id,
             parent_session_id: record.parent_session_id,
@@ -537,6 +542,10 @@ impl TryFrom<&AgentProfile> for AgentProfileRecord {
             agent_home: profile.agent_home.display().to_string(),
             allowed_tools_json: serde_json::to_string(&profile.allowed_tools)
                 .map_err(RecordConversionError::SerializeAgentAllowedTools)?,
+            default_workspace_root: profile
+                .default_workspace_root
+                .as_ref()
+                .map(|path| path.display().to_string()),
             created_from_template_id: profile.created_from_template_id.clone(),
             created_by_session_id: profile.created_by_session_id.clone(),
             created_by_agent_profile_id: profile.created_by_agent_profile_id.clone(),
@@ -559,6 +568,7 @@ impl TryFrom<AgentProfileRecord> for AgentProfile {
                 .map_err(RecordConversionError::InvalidAgentTemplateKind)?,
             record.agent_home,
             allowed_tools,
+            record.default_workspace_root.map(PathBuf::from),
             record.created_from_template_id,
             record.created_by_session_id,
             record.created_by_agent_profile_id,

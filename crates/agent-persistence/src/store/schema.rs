@@ -9,6 +9,7 @@ pub(super) fn bootstrap_schema(connection: &Connection) -> Result<(), StoreError
              title TEXT NOT NULL,
              prompt_override TEXT,
              settings_json TEXT NOT NULL,
+             workspace_root TEXT NOT NULL DEFAULT '.',
              agent_profile_id TEXT NOT NULL DEFAULT 'default',
              active_mission_id TEXT,
              parent_session_id TEXT,
@@ -140,6 +141,7 @@ pub(super) fn bootstrap_schema(connection: &Connection) -> Result<(), StoreError
              template_kind TEXT NOT NULL,
              agent_home TEXT NOT NULL,
              allowed_tools_json TEXT NOT NULL,
+             default_workspace_root TEXT,
              created_from_template_id TEXT,
              created_by_session_id TEXT,
              created_by_agent_profile_id TEXT,
@@ -374,6 +376,7 @@ pub(super) fn validate_schema(connection: &Connection) -> Result<(), StoreError>
     validate_column(connection, "jobs", "callback_json", false)?;
     validate_column(connection, "jobs", "callback_sent_at", false)?;
     validate_column(connection, "sessions", "settings_json", true)?;
+    validate_column(connection, "sessions", "workspace_root", true)?;
     validate_column(connection, "sessions", "agent_profile_id", true)?;
     validate_column(connection, "sessions", "parent_session_id", false)?;
     validate_column(connection, "sessions", "parent_job_id", false)?;
@@ -383,6 +386,12 @@ pub(super) fn validate_schema(connection: &Connection) -> Result<(), StoreError>
     validate_column(connection, "agent_profiles", "template_kind", true)?;
     validate_column(connection, "agent_profiles", "agent_home", true)?;
     validate_column(connection, "agent_profiles", "allowed_tools_json", true)?;
+    validate_column(
+        connection,
+        "agent_profiles",
+        "default_workspace_root",
+        false,
+    )?;
     validate_column(
         connection,
         "agent_profiles",
@@ -697,12 +706,24 @@ pub(super) fn migrate_schema(connection: &Connection) -> Result<(), StoreError> 
     add_column_if_missing(
         connection,
         "sessions",
+        "workspace_root",
+        "TEXT NOT NULL DEFAULT '.'",
+    )?;
+    add_column_if_missing(
+        connection,
+        "sessions",
         "agent_profile_id",
         "TEXT NOT NULL DEFAULT 'default'",
     )?;
     add_column_if_missing(connection, "sessions", "parent_session_id", "TEXT")?;
     add_column_if_missing(connection, "sessions", "parent_job_id", "TEXT")?;
     add_column_if_missing(connection, "sessions", "delegation_label", "TEXT")?;
+    add_column_if_missing(
+        connection,
+        "agent_profiles",
+        "default_workspace_root",
+        "TEXT",
+    )?;
     add_column_if_missing(
         connection,
         "agent_profiles",

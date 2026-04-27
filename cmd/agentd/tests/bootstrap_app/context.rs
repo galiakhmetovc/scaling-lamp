@@ -413,6 +413,7 @@ fn session_head_derives_counts_previews_and_summary_state() {
                 ..SessionSettings::default()
             })
             .expect("serialize settings"),
+            workspace_root: app.runtime.workspace.root.display().to_string(),
             agent_profile_id: "default".to_string(),
             active_mission_id: None,
             parent_session_id: None,
@@ -543,6 +544,7 @@ fn session_head_prefers_latest_provider_input_tokens_for_ctx() {
             prompt_override: None,
             settings_json: serde_json::to_string(&SessionSettings::default())
                 .expect("serialize settings"),
+            workspace_root: app.runtime.workspace.root.display().to_string(),
             agent_profile_id: "default".to_string(),
             active_mission_id: None,
             parent_session_id: None,
@@ -628,6 +630,7 @@ fn session_summary_counts_active_background_jobs_and_renders_current_session_job
             prompt_override: None,
             settings_json: serde_json::to_string(&SessionSettings::default())
                 .expect("serialize settings"),
+            workspace_root: app.runtime.workspace.root.display().to_string(),
             agent_profile_id: "default".to_string(),
             active_mission_id: None,
             parent_session_id: None,
@@ -644,6 +647,7 @@ fn session_summary_counts_active_background_jobs_and_renders_current_session_job
             prompt_override: None,
             settings_json: serde_json::to_string(&SessionSettings::default())
                 .expect("serialize settings"),
+            workspace_root: app.runtime.workspace.root.display().to_string(),
             agent_profile_id: "default".to_string(),
             active_mission_id: None,
             parent_session_id: None,
@@ -903,6 +907,7 @@ fn execute_chat_turn_uses_the_context_summary_and_only_the_uncovered_messages() 
             prompt_override: Some("Be concise.".to_string()),
             settings_json: serde_json::to_string(&SessionSettings::default())
                 .expect("serialize settings"),
+            workspace_root: app.runtime.workspace.root.display().to_string(),
             agent_profile_id: "default".to_string(),
             active_mission_id: None,
             parent_session_id: None,
@@ -1463,6 +1468,7 @@ fn execute_chat_turn_places_system_and_agents_files_before_runtime_blocks() {
             prompt_override: None,
             settings_json: serde_json::to_string(&SessionSettings::default())
                 .expect("serialize settings"),
+            workspace_root: app.runtime.workspace.root.display().to_string(),
             agent_profile_id: "default".to_string(),
             active_mission_id: None,
             parent_session_id: None,
@@ -1583,6 +1589,7 @@ fn execute_chat_turn_places_active_skills_between_agents_and_session_head() {
                 ..SessionSettings::default()
             })
             .expect("serialize settings"),
+            workspace_root: app.runtime.workspace.root.display().to_string(),
             agent_profile_id: "default".to_string(),
             active_mission_id: None,
             parent_session_id: None,
@@ -1673,6 +1680,7 @@ fn execute_chat_turn_falls_back_to_builtin_agent_prompts_when_agent_files_are_mi
             prompt_override: None,
             settings_json: serde_json::to_string(&SessionSettings::default())
                 .expect("serialize settings"),
+            workspace_root: app.runtime.workspace.root.display().to_string(),
             agent_profile_id: "default".to_string(),
             active_mission_id: None,
             parent_session_id: None,
@@ -1770,6 +1778,7 @@ fn execute_chat_turn_offloads_large_fs_read_text_results_into_artifacts() {
             prompt_override: None,
             settings_json: serde_json::to_string(&SessionSettings::default())
                 .expect("serialize settings"),
+            workspace_root: app.runtime.workspace.root.display().to_string(),
             agent_profile_id: "default".to_string(),
             active_mission_id: None,
             parent_session_id: None,
@@ -1905,6 +1914,7 @@ fn execute_chat_turn_offloads_large_web_fetch_results_into_artifacts() {
             prompt_override: None,
             settings_json: serde_json::to_string(&SessionSettings::default())
                 .expect("serialize settings"),
+            workspace_root: app.runtime.workspace.root.display().to_string(),
             agent_profile_id: "default".to_string(),
             active_mission_id: None,
             parent_session_id: None,
@@ -2092,6 +2102,7 @@ fn execute_chat_turn_prunes_stale_offload_refs_when_a_payload_file_is_missing() 
             prompt_override: None,
             settings_json: serde_json::to_string(&SessionSettings::default())
                 .expect("serialize settings"),
+            workspace_root: app.runtime.workspace.root.display().to_string(),
             agent_profile_id: "default".to_string(),
             active_mission_id: None,
             parent_session_id: None,
@@ -2216,6 +2227,7 @@ fn execute_chat_turn_includes_the_plan_snapshot_before_context_summary() {
             prompt_override: None,
             settings_json: serde_json::to_string(&SessionSettings::default())
                 .expect("serialize settings"),
+            workspace_root: app.runtime.workspace.root.display().to_string(),
             agent_profile_id: "default".to_string(),
             active_mission_id: None,
             parent_session_id: None,
@@ -2361,6 +2373,7 @@ fn execute_chat_turn_can_finish_after_plan_write_and_plan_read_tool_calls() {
             prompt_override: None,
             settings_json: serde_json::to_string(&SessionSettings::default())
                 .expect("serialize settings"),
+            workspace_root: app.runtime.workspace.root.display().to_string(),
             agent_profile_id: "default".to_string(),
             active_mission_id: None,
             parent_session_id: None,
@@ -2514,6 +2527,7 @@ fn execute_chat_turn_can_finish_after_granular_plan_tool_calls() {
             prompt_override: None,
             settings_json: serde_json::to_string(&SessionSettings::default())
                 .expect("serialize settings"),
+            workspace_root: app.runtime.workspace.root.display().to_string(),
             agent_profile_id: "default".to_string(),
             active_mission_id: None,
             parent_session_id: None,
@@ -2654,6 +2668,7 @@ fn execute_chat_turn_treats_repeated_init_plan_as_idempotent() {
             prompt_override: None,
             settings_json: serde_json::to_string(&SessionSettings::default())
                 .expect("serialize settings"),
+            workspace_root: app.runtime.workspace.root.display().to_string(),
             agent_profile_id: "default".to_string(),
             active_mission_id: None,
             parent_session_id: None,
@@ -2760,6 +2775,7 @@ fn execute_chat_turn_can_retrieve_offloaded_context_via_artifact_read() {
             ),
             settings_json: serde_json::to_string(&SessionSettings::default())
                 .expect("serialize settings"),
+            workspace_root: app.runtime.workspace.root.display().to_string(),
             agent_profile_id: "default".to_string(),
             active_mission_id: None,
             parent_session_id: None,
@@ -2883,6 +2899,7 @@ fn execute_chat_turn_recovers_when_artifact_read_payload_is_missing() {
             ),
             settings_json: serde_json::to_string(&SessionSettings::default())
                 .expect("serialize settings"),
+            workspace_root: app.runtime.workspace.root.display().to_string(),
             agent_profile_id: "default".to_string(),
             active_mission_id: None,
             parent_session_id: None,
@@ -2968,6 +2985,7 @@ fn provider_request_preview_filters_tools_by_agent_allowlist() {
                 prompt_override: None,
                 settings_json: serde_json::to_string(&SessionSettings::default())
                     .expect("serialize settings"),
+                workspace_root: app.runtime.workspace.root.display().to_string(),
                 agent_profile_id: agent_profile_id.to_string(),
                 active_mission_id: None,
                 parent_session_id: None,
@@ -3063,6 +3081,7 @@ fn provider_request_preview_merges_dynamic_mcp_tools_for_default_agents_only() {
                 prompt_override: None,
                 settings_json: serde_json::to_string(&SessionSettings::default())
                     .expect("serialize settings"),
+                workspace_root: app.runtime.workspace.root.display().to_string(),
                 agent_profile_id: agent_profile_id.to_string(),
                 active_mission_id: None,
                 parent_session_id: None,

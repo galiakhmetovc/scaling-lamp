@@ -25,6 +25,7 @@ pub(super) fn show_session(store: &PersistenceStore, id: &str) -> Result<String,
         title: record.title,
         agent_profile_id: agent_profile_id.clone(),
         agent_name: agent_profile_id,
+        workspace_root: record.workspace_root,
         prompt_override: record.prompt_override,
         settings_json: record.settings_json,
         active_mission_id: record.active_mission_id,
@@ -38,11 +39,12 @@ pub(super) fn show_session(store: &PersistenceStore, id: &str) -> Result<String,
 
 pub(super) fn render_session_detail(detail: &SessionDetailResponse) -> String {
     format!(
-        "session id={} title={} agent={} ({}) active_mission_id={} settings={}",
+        "session id={} title={} agent={} ({}) workspace_root={} active_mission_id={} settings={}",
         detail.id,
         detail.title,
         detail.agent_name,
         detail.agent_profile_id,
+        detail.workspace_root,
         detail.active_mission_id.as_deref().unwrap_or("<none>"),
         detail.settings_json
     )
@@ -595,6 +597,10 @@ pub(super) fn create_session(
         title: title.to_string(),
         prompt_override: None,
         settings: SessionSettings::default(),
+        workspace_root: std::env::current_dir().map_err(|source| BootstrapError::Io {
+            path: ".".into(),
+            source,
+        })?,
         agent_profile_id: "default".to_string(),
         active_mission_id: None,
         parent_session_id: None,

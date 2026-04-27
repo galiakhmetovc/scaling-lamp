@@ -44,6 +44,11 @@ mode = "default"
 working_memory_limit = 128
 project_memory_enabled = true
 
+[workspace]
+# Default project workspace for new sessions when the selected agent profile
+# does not define its own default workspace root.
+# default_root = "/srv/projects/example"
+
 [context]
 compaction_min_messages = 20
 compaction_keep_tail_messages = 6

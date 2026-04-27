@@ -143,6 +143,7 @@ fn daemon_http_can_render_session_debug_view() {
             title: "Debug".to_string(),
             prompt_override: None,
             settings_json: "{}".to_string(),
+            workspace_root: app.runtime.workspace.root.display().to_string(),
             agent_profile_id: "default".to_string(),
             active_mission_id: None,
             parent_session_id: None,
@@ -839,6 +840,7 @@ fn daemon_a2a_remote_delegate_round_trip_wakes_parent_session() {
                 &agent_runtime::session::SessionSettings::default(),
             )
             .expect("serialize settings"),
+            workspace_root: app_a.runtime.workspace.root.display().to_string(),
             agent_profile_id: "default".to_string(),
             active_mission_id: None,
             parent_session_id: None,

@@ -84,6 +84,10 @@ impl ExecutionService {
             title: format!("Agent: {}", target_profile.name),
             prompt_override: None,
             settings: source_session.settings.clone(),
+            workspace_root: target_profile
+                .default_workspace_root
+                .clone()
+                .unwrap_or_else(|| source_session.workspace_root.clone()),
             agent_profile_id: target_profile.id.clone(),
             active_mission_id: None,
             parent_session_id: Some(source_session.id.clone()),

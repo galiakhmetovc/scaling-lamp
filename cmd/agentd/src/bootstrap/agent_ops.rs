@@ -103,6 +103,7 @@ impl App {
                 template.template_kind,
                 &home,
                 agents::builtin_allowed_tools(template.template_kind),
+                self.config.workspace.default_root.clone(),
                 created_at,
                 now,
             )
@@ -214,6 +215,7 @@ impl App {
             AgentTemplateKind::Custom,
             &agent_home,
             template.allowed_tools.clone(),
+            template.default_workspace_root.clone(),
             Some(template.id.clone()),
             None,
             None,

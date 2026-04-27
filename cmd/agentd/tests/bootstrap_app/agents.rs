@@ -17,6 +17,10 @@ fn seed_running_tool_context(
             prompt_override: None,
             settings_json: serde_json::to_string(&SessionSettings::default())
                 .expect("serialize settings"),
+            workspace_root: fs::canonicalize(".")
+                .expect("canonical workspace")
+                .display()
+                .to_string(),
             agent_profile_id: agent_profile_id.to_string(),
             active_mission_id: None,
             parent_session_id: None,
@@ -134,6 +138,43 @@ fn create_session_binds_the_current_selected_agent_profile() {
         .expect("session exists");
 
     assert_eq!(stored.agent_profile_id, "judge");
+}
+
+#[test]
+fn create_session_prefers_agent_default_workspace_over_global_default() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let global_workspace = temp.path().join("global-workspace");
+    let judge_workspace = temp.path().join("judge-workspace");
+    fs::create_dir_all(&global_workspace).expect("create global workspace");
+    fs::create_dir_all(&judge_workspace).expect("create judge workspace");
+
+    let mut config = AppConfig {
+        data_dir: temp.path().join("state-root"),
+        ..AppConfig::default()
+    };
+    config.workspace.default_root = Some(global_workspace.clone());
+    let app = build_from_config(config).expect("build app");
+    let store = PersistenceStore::open(&app.persistence).expect("open store");
+
+    let mut judge = app.agent_profile("judge").expect("judge profile");
+    judge.default_workspace_root = Some(judge_workspace.clone());
+    store
+        .put_agent_profile(&AgentProfileRecord::try_from(&judge).expect("judge record"))
+        .expect("update judge profile");
+
+    app.select_agent_profile("judge")
+        .expect("select judge profile");
+
+    let session = app
+        .create_session_auto(Some("Judge Workspace Session"))
+        .expect("create session");
+    let stored = store
+        .get_session(&session.id)
+        .expect("get session")
+        .expect("session exists");
+
+    assert_eq!(stored.agent_profile_id, "judge");
+    assert_eq!(stored.workspace_root, judge_workspace.display().to_string());
 }
 
 #[test]

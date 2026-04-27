@@ -21,6 +21,10 @@ fn seed_running_tool_context(
             prompt_override: None,
             settings_json: serde_json::to_string(&SessionSettings::default())
                 .expect("serialize settings"),
+            workspace_root: fs::canonicalize(".")
+                .expect("canonical workspace")
+                .display()
+                .to_string(),
             agent_profile_id: agent_profile_id.to_string(),
             active_mission_id: None,
             parent_session_id: None,
