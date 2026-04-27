@@ -578,12 +578,19 @@ prompt_budget_update({
 - меняет session-scoped prompt budget policy;
 - если `reset=true`, сначала возвращает policy к default;
 - затем merge-ит переданные проценты;
-- отклоняет изменение, если итоговая сумма процентов не равна `100`.
+- отклоняет изменение, если итоговая сумма процентов не равна `100`;
+- влияет на физическое ограничение prompt layers при следующих provider requests.
 
 Когда использовать:
 
 - когда текущей задаче реально нужен другой context allocation;
 - например временно увеличить `transcript_tail` или `recent_tool_activity`, чтобы модель лучше видела свежую историю или недавние tool ошибки.
+
+Важно:
+
+- если layer превышает target, prompt содержит `Prompt Budget Truncation` notice с количеством скрытых approximate tokens/messages;
+- `transcript_tail` сохраняет новые сообщения, а старые uncovered messages скрываются первыми;
+- скрытое содержимое не теряется: его можно читать через transcript/debug/session/artifact surfaces.
 
 ## Offload
 

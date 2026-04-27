@@ -15,7 +15,7 @@ use agent_runtime::context::{
 use agent_runtime::permission::PermissionAction;
 use agent_runtime::plan::{PlanItem, PlanItemStatus, PlanSnapshot};
 use agent_runtime::prompt::{
-    AutonomyState, PromptAssembly, PromptAssemblyInput, RecentToolActivity,
+    AutonomyState, PromptAssembly, PromptAssemblyBudget, PromptAssemblyInput, RecentToolActivity,
     RecentToolActivityEntry, SessionHeadRuntime,
 };
 use agent_runtime::provider::{
@@ -1349,6 +1349,10 @@ impl ExecutionService {
             runs: &runs,
             workspace,
         });
+        let prompt_budget = PromptAssemblyBudget {
+            policy: session.settings.prompt_budget.clone(),
+            usable_context_tokens: session_head.usable_context_tokens,
+        };
         let system_prompt =
             prompting::load_system_prompt(&self.config.data_dir, &session.agent_profile_id);
         let agents_prompt =
@@ -1395,14 +1399,15 @@ impl ExecutionService {
             recent_tool_activity,
             transcript_messages,
         };
-        let first_messages = PromptAssembly::build_messages(input.clone());
+        let first_messages =
+            PromptAssembly::build_messages_with_budget(input.clone(), prompt_budget.clone());
         if let Some(session_head) = input.session_head.as_mut() {
             session_head.estimated_prompt_tokens =
                 Some(Self::estimate_prompt_tokens(&first_messages, instructions));
         }
 
         Ok(PromptMessages {
-            messages: PromptAssembly::build_messages(input),
+            messages: PromptAssembly::build_messages_with_budget(input, prompt_budget),
             context_offload,
         })
     }

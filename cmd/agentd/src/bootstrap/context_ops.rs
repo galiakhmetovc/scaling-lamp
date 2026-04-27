@@ -7,7 +7,7 @@ use agent_persistence::{
 use agent_runtime::context::CompactionPolicy;
 use agent_runtime::plan::PlanSnapshot;
 use agent_runtime::prompt::{
-    AutonomyState, PromptAssembly, PromptAssemblyInput, RecentToolActivity,
+    AutonomyState, PromptAssembly, PromptAssemblyBudget, PromptAssemblyInput, RecentToolActivity,
     RecentToolActivityEntry, SessionHead,
 };
 use agent_runtime::provider::ProviderMessage;
@@ -845,54 +845,61 @@ impl App {
             }
         }
 
-        let assembled = PromptAssembly::build_messages(PromptAssemblyInput {
-            system_prompt: Some(prompting::load_system_prompt(
-                &self.config.data_dir,
-                &session.agent_profile_id,
-            )),
-            agents_prompt: prompting::load_agents_prompt(
-                &self.config.data_dir,
-                &session.agent_profile_id,
-            ),
-            active_skill_prompts: prompting::load_active_skill_prompts(
-                &skills_catalog,
-                &active_skill_status,
-            ),
-            session_head: Some(session_head),
-            autonomy_state,
-            plan_snapshot: store
-                .get_plan(session_id)?
-                .map(PlanSnapshot::try_from)
-                .transpose()
-                .map_err(BootstrapError::RecordConversion)?,
-            context_summary: store
-                .get_context_summary(session_id)?
-                .map(ContextSummary::try_from)
-                .transpose()
-                .map_err(BootstrapError::RecordConversion)?,
-            context_offload: store
-                .get_context_offload(session_id)?
-                .map(agent_runtime::context::ContextOffloadSnapshot::try_from)
-                .transpose()
-                .map_err(BootstrapError::RecordConversion)?,
-            recent_tool_activity,
-            transcript_messages: transcripts
-                .iter()
-                .map(|record| {
-                    let role = MessageRole::try_from(record.kind.as_str()).map_err(|_| {
-                        BootstrapError::RecordConversion(
-                            RecordConversionError::InvalidMessageRole {
-                                value: record.kind.clone(),
-                            },
-                        )
-                    })?;
-                    Ok::<ProviderMessage, BootstrapError>(ProviderMessage {
-                        role,
-                        content: record.content.clone(),
+        let prompt_budget = PromptAssemblyBudget {
+            policy: session.settings.prompt_budget.clone(),
+            usable_context_tokens: session_head.usable_context_tokens,
+        };
+        let assembled = PromptAssembly::build_messages_with_budget(
+            PromptAssemblyInput {
+                system_prompt: Some(prompting::load_system_prompt(
+                    &self.config.data_dir,
+                    &session.agent_profile_id,
+                )),
+                agents_prompt: prompting::load_agents_prompt(
+                    &self.config.data_dir,
+                    &session.agent_profile_id,
+                ),
+                active_skill_prompts: prompting::load_active_skill_prompts(
+                    &skills_catalog,
+                    &active_skill_status,
+                ),
+                session_head: Some(session_head),
+                autonomy_state,
+                plan_snapshot: store
+                    .get_plan(session_id)?
+                    .map(PlanSnapshot::try_from)
+                    .transpose()
+                    .map_err(BootstrapError::RecordConversion)?,
+                context_summary: store
+                    .get_context_summary(session_id)?
+                    .map(ContextSummary::try_from)
+                    .transpose()
+                    .map_err(BootstrapError::RecordConversion)?,
+                context_offload: store
+                    .get_context_offload(session_id)?
+                    .map(agent_runtime::context::ContextOffloadSnapshot::try_from)
+                    .transpose()
+                    .map_err(BootstrapError::RecordConversion)?,
+                recent_tool_activity,
+                transcript_messages: transcripts
+                    .iter()
+                    .map(|record| {
+                        let role = MessageRole::try_from(record.kind.as_str()).map_err(|_| {
+                            BootstrapError::RecordConversion(
+                                RecordConversionError::InvalidMessageRole {
+                                    value: record.kind.clone(),
+                                },
+                            )
+                        })?;
+                        Ok::<ProviderMessage, BootstrapError>(ProviderMessage {
+                            role,
+                            content: record.content.clone(),
+                        })
                     })
-                })
-                .collect::<Result<Vec<_>, _>>()?,
-        });
+                    .collect::<Result<Vec<_>, _>>()?,
+            },
+            prompt_budget,
+        );
         lines.push("[Assembled Prompt Messages]".to_string());
         for (index, message) in assembled.into_iter().enumerate() {
             lines.push(format!("{}. [{}]", index + 1, message.role.as_str()));

@@ -1,8 +1,8 @@
 use crate::agent::{AgentScheduleDeliveryMode, AgentScheduleMode};
-use crate::context::{ContextOffloadSnapshot, ContextSummary};
+use crate::context::{ContextOffloadSnapshot, ContextSummary, approximate_token_count};
 use crate::plan::PlanSnapshot;
 use crate::provider::ProviderMessage;
-use crate::session::MessageRole;
+use crate::session::{MessageRole, PromptBudgetPolicy};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SessionHeadFsActivity {
@@ -213,6 +213,19 @@ pub struct PromptAssemblyInput {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PromptAssemblyBudget {
+    pub policy: PromptBudgetPolicy,
+    pub usable_context_tokens: Option<u32>,
+}
+
+impl PromptAssemblyBudget {
+    fn target_tokens(&self, percent: u8) -> Option<u32> {
+        self.usable_context_tokens
+            .map(|tokens| ((u64::from(tokens) * u64::from(percent)) / 100) as u32)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AutonomyState {
     pub turn_source: Option<String>,
     pub schedule: Option<SessionHeadScheduleSummary>,
@@ -295,29 +308,77 @@ pub struct PromptAssembly;
 
 impl PromptAssembly {
     pub fn build_messages(input: PromptAssemblyInput) -> Vec<ProviderMessage> {
+        Self::build_messages_inner(input, None)
+    }
+
+    pub fn build_messages_with_budget(
+        input: PromptAssemblyInput,
+        budget: PromptAssemblyBudget,
+    ) -> Vec<ProviderMessage> {
+        Self::build_messages_inner(input, Some(budget))
+    }
+
+    fn build_messages_inner(
+        input: PromptAssemblyInput,
+        budget: Option<PromptAssemblyBudget>,
+    ) -> Vec<ProviderMessage> {
         let mut messages = Vec::with_capacity(
             input.transcript_messages.len() + 8 + input.active_skill_prompts.len(),
         );
+        let target = |percent: u8| {
+            budget
+                .as_ref()
+                .and_then(|budget| budget.target_tokens(percent))
+        };
 
         if let Some(system_prompt) = input.system_prompt
             && !system_prompt.trim().is_empty()
+            && let Some(content) = budget_system_layer(
+                "system",
+                system_prompt,
+                target(
+                    budget
+                        .as_ref()
+                        .map(|budget| budget.policy.system)
+                        .unwrap_or(100),
+                ),
+            )
         {
             messages.push(ProviderMessage {
                 role: MessageRole::System,
-                content: system_prompt,
+                content,
             });
         }
 
         if let Some(agents_prompt) = input.agents_prompt
             && !agents_prompt.trim().is_empty()
+            && let Some(content) = budget_system_layer(
+                "agents",
+                agents_prompt,
+                target(
+                    budget
+                        .as_ref()
+                        .map(|budget| budget.policy.agents)
+                        .unwrap_or(100),
+                ),
+            )
         {
             messages.push(ProviderMessage {
                 role: MessageRole::System,
-                content: agents_prompt,
+                content,
             });
         }
 
-        for skill_prompt in input.active_skill_prompts {
+        for skill_prompt in budget_system_layer_sequence(
+            "active_skills",
+            input.active_skill_prompts,
+            target(
+                budget
+                    .as_ref()
+                    .map(|budget| budget.policy.active_skills)
+                    .unwrap_or(100),
+            ),
+        ) {
             if skill_prompt.trim().is_empty() {
                 continue;
             }
@@ -329,30 +390,62 @@ impl PromptAssembly {
 
         if let Some(session_head) = input.session_head {
             let rendered = session_head.render();
-            if !rendered.trim().is_empty() {
+            if !rendered.trim().is_empty()
+                && let Some(content) = budget_system_layer(
+                    "session_head",
+                    rendered,
+                    target(
+                        budget
+                            .as_ref()
+                            .map(|budget| budget.policy.session_head)
+                            .unwrap_or(100),
+                    ),
+                )
+            {
                 messages.push(ProviderMessage {
                     role: MessageRole::System,
-                    content: rendered,
+                    content,
                 });
             }
         }
 
         if let Some(autonomy_state) = input.autonomy_state {
             let rendered = autonomy_state.render();
-            if !rendered.trim().is_empty() {
+            if !rendered.trim().is_empty()
+                && let Some(content) = budget_system_layer(
+                    "autonomy_state",
+                    rendered,
+                    target(
+                        budget
+                            .as_ref()
+                            .map(|budget| budget.policy.autonomy_state)
+                            .unwrap_or(100),
+                    ),
+                )
+            {
                 messages.push(ProviderMessage {
                     role: MessageRole::System,
-                    content: rendered,
+                    content,
                 });
             }
         }
 
         if let Some(plan_snapshot) = input.plan_snapshot
             && !plan_snapshot.is_empty()
+            && let Some(content) = budget_system_layer(
+                "plan",
+                plan_snapshot.prompt_view_text(),
+                target(
+                    budget
+                        .as_ref()
+                        .map(|budget| budget.policy.plan)
+                        .unwrap_or(100),
+                ),
+            )
         {
             messages.push(ProviderMessage {
                 role: MessageRole::System,
-                content: plan_snapshot.prompt_view_text(),
+                content,
             });
         }
 
@@ -365,40 +458,279 @@ impl PromptAssembly {
 
         if let Some(context_summary) = input.context_summary
             && !context_summary.summary_text.trim().is_empty()
+            && let Some(content) = budget_system_layer(
+                "context_summary",
+                context_summary.system_message_text(),
+                target(
+                    budget
+                        .as_ref()
+                        .map(|budget| budget.policy.context_summary)
+                        .unwrap_or(100),
+                ),
+            )
         {
             messages.push(ProviderMessage {
                 role: MessageRole::System,
-                content: context_summary.system_message_text(),
+                content,
             });
         }
 
         if let Some(context_offload) = input.context_offload
             && let Some(rendered) = render_context_offload_refs(&context_offload)
+            && let Some(content) = budget_system_layer(
+                "offload_refs",
+                rendered,
+                target(
+                    budget
+                        .as_ref()
+                        .map(|budget| budget.policy.offload_refs)
+                        .unwrap_or(100),
+                ),
+            )
         {
             messages.push(ProviderMessage {
                 role: MessageRole::System,
-                content: rendered,
+                content,
             });
         }
 
         if let Some(recent_tool_activity) = input.recent_tool_activity {
             let rendered = recent_tool_activity.render();
-            if !rendered.trim().is_empty() {
+            if !rendered.trim().is_empty()
+                && let Some(content) = budget_system_layer(
+                    "recent_tool_activity",
+                    rendered,
+                    target(
+                        budget
+                            .as_ref()
+                            .map(|budget| budget.policy.recent_tool_activity)
+                            .unwrap_or(100),
+                    ),
+                )
+            {
                 messages.push(ProviderMessage {
                     role: MessageRole::System,
-                    content: rendered,
+                    content,
                 });
             }
         }
 
-        messages.extend(
-            input
-                .transcript_messages
-                .into_iter()
-                .skip(covered_message_count),
-        );
+        let transcript_tail = input
+            .transcript_messages
+            .into_iter()
+            .skip(covered_message_count)
+            .collect::<Vec<_>>();
+        messages.extend(budget_transcript_tail(
+            transcript_tail,
+            target(
+                budget
+                    .as_ref()
+                    .map(|budget| budget.policy.transcript_tail)
+                    .unwrap_or(100),
+            ),
+        ));
         messages
     }
+}
+
+fn budget_system_layer(layer: &str, content: String, target_tokens: Option<u32>) -> Option<String> {
+    let trimmed = content.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    let Some(target_tokens) = target_tokens else {
+        return Some(content);
+    };
+    let original_tokens = approximate_token_count(trimmed);
+    if original_tokens <= target_tokens {
+        return Some(content);
+    }
+
+    let visible = truncate_prefix_by_approx_tokens(trimmed, target_tokens);
+    let visible_tokens = approximate_token_count(visible.as_str());
+    let hidden_tokens = original_tokens.saturating_sub(visible_tokens);
+    let notice = prompt_budget_notice(layer, target_tokens, original_tokens, hidden_tokens, None);
+    if visible.trim().is_empty() {
+        Some(notice)
+    } else {
+        Some(format!("{visible}\n\n{notice}"))
+    }
+}
+
+fn budget_system_layer_sequence(
+    layer: &str,
+    contents: Vec<String>,
+    target_tokens: Option<u32>,
+) -> Vec<String> {
+    let Some(target_tokens) = target_tokens else {
+        return contents;
+    };
+    let original_tokens = contents
+        .iter()
+        .map(|content| approximate_token_count(content.as_str()))
+        .sum::<u32>();
+    if original_tokens <= target_tokens {
+        return contents;
+    }
+
+    let mut output = Vec::new();
+    let mut used_tokens = 0u32;
+    let mut hidden_blocks = 0usize;
+    let mut hidden_tokens = 0u32;
+    let total_blocks = contents.len();
+
+    for (index, content) in contents.into_iter().enumerate() {
+        let tokens = approximate_token_count(content.as_str());
+        if used_tokens.saturating_add(tokens) <= target_tokens {
+            used_tokens = used_tokens.saturating_add(tokens);
+            output.push(content);
+            continue;
+        }
+
+        let remaining = target_tokens.saturating_sub(used_tokens);
+        if remaining > 0 {
+            let visible = truncate_prefix_by_approx_tokens(content.as_str(), remaining);
+            let visible_tokens = approximate_token_count(visible.as_str());
+            hidden_blocks = total_blocks.saturating_sub(output.len());
+            hidden_tokens =
+                original_tokens.saturating_sub(used_tokens.saturating_add(visible_tokens));
+            output.push(format!(
+                "{visible}\n\n{}",
+                prompt_budget_notice(
+                    layer,
+                    target_tokens,
+                    original_tokens,
+                    hidden_tokens,
+                    Some(hidden_blocks),
+                )
+            ));
+            break;
+        } else {
+            hidden_blocks = total_blocks.saturating_sub(index);
+            hidden_tokens = original_tokens.saturating_sub(used_tokens);
+            break;
+        }
+    }
+
+    if output.is_empty() {
+        output.push(prompt_budget_notice(
+            layer,
+            target_tokens,
+            original_tokens,
+            hidden_tokens,
+            Some(hidden_blocks),
+        ));
+    }
+
+    output
+}
+
+fn budget_transcript_tail(
+    transcript_messages: Vec<ProviderMessage>,
+    target_tokens: Option<u32>,
+) -> Vec<ProviderMessage> {
+    let Some(target_tokens) = target_tokens else {
+        return transcript_messages;
+    };
+    let total_tokens = transcript_messages
+        .iter()
+        .map(|message| approximate_token_count(message.content.as_str()))
+        .sum::<u32>();
+    if total_tokens <= target_tokens {
+        return transcript_messages;
+    }
+
+    let mut selected = Vec::new();
+    let mut used_tokens = 0u32;
+    let mut hidden_messages = 0usize;
+    let mut hidden_tokens = 0u32;
+
+    for message in transcript_messages.into_iter().rev() {
+        let tokens = approximate_token_count(message.content.as_str());
+        if used_tokens.saturating_add(tokens) <= target_tokens {
+            used_tokens = used_tokens.saturating_add(tokens);
+            selected.push(message);
+            continue;
+        }
+
+        let remaining = target_tokens.saturating_sub(used_tokens);
+        if selected.is_empty() && remaining > 0 {
+            let visible = truncate_suffix_by_approx_tokens(message.content.as_str(), remaining);
+            let visible_tokens = approximate_token_count(visible.as_str());
+            hidden_tokens = hidden_tokens.saturating_add(tokens.saturating_sub(visible_tokens));
+            selected.push(ProviderMessage {
+                role: message.role,
+                content: format!(
+                    "{}\n\n{}",
+                    prompt_budget_notice(
+                        "transcript_tail",
+                        target_tokens,
+                        total_tokens,
+                        hidden_tokens,
+                        None,
+                    ),
+                    visible
+                ),
+            });
+        } else {
+            hidden_messages += 1;
+            hidden_tokens = hidden_tokens.saturating_add(tokens);
+        }
+    }
+
+    selected.reverse();
+    if hidden_messages > 0 || hidden_tokens > 0 {
+        let mut output = Vec::with_capacity(selected.len() + 1);
+        output.push(ProviderMessage {
+            role: MessageRole::System,
+            content: prompt_budget_notice(
+                "transcript_tail",
+                target_tokens,
+                total_tokens,
+                hidden_tokens,
+                Some(hidden_messages),
+            ),
+        });
+        output.extend(selected);
+        output
+    } else {
+        selected
+    }
+}
+
+fn prompt_budget_notice(
+    layer: &str,
+    target_tokens: u32,
+    original_tokens: u32,
+    hidden_tokens: u32,
+    hidden_messages: Option<usize>,
+) -> String {
+    let mut lines = vec![
+        "Prompt Budget Truncation:".to_string(),
+        format!(
+            "layer={layer} target_tokens={target_tokens} original_approx_tokens={original_tokens} hidden_approx_tokens={hidden_tokens}"
+        ),
+    ];
+    if let Some(hidden_messages) = hidden_messages {
+        lines.push(format!("hidden_messages={hidden_messages}"));
+    }
+    lines.push(
+        "Full hidden content remains in the canonical session/debug sources, not in this prompt."
+            .to_string(),
+    );
+    lines.join("\n")
+}
+
+fn truncate_prefix_by_approx_tokens(content: &str, max_tokens: u32) -> String {
+    let max_chars = max_tokens.saturating_mul(4) as usize;
+    content.chars().take(max_chars).collect()
+}
+
+fn truncate_suffix_by_approx_tokens(content: &str, max_tokens: u32) -> String {
+    let max_chars = max_tokens.saturating_mul(4) as usize;
+    let char_count = content.chars().count();
+    let start = char_count.saturating_sub(max_chars);
+    content.chars().skip(start).collect()
 }
 
 fn render_context_offload_refs(snapshot: &ContextOffloadSnapshot) -> Option<String> {
@@ -433,15 +765,16 @@ fn render_context_offload_refs(snapshot: &ContextOffloadSnapshot) -> Option<Stri
 #[cfg(test)]
 mod tests {
     use super::{
-        AutonomyState, PromptAssembly, PromptAssemblyInput, RecentToolActivity,
-        RecentToolActivityEntry, SessionHead, SessionHeadFsActivity, SessionHeadProcessActivity,
-        SessionHeadScheduleSummary, SessionHeadWorkspaceEntry, SessionHeadWorkspaceEntryKind,
+        AutonomyState, PromptAssembly, PromptAssemblyBudget, PromptAssemblyInput,
+        RecentToolActivity, RecentToolActivityEntry, SessionHead, SessionHeadFsActivity,
+        SessionHeadProcessActivity, SessionHeadScheduleSummary, SessionHeadWorkspaceEntry,
+        SessionHeadWorkspaceEntryKind,
     };
     use crate::agent::{AgentScheduleDeliveryMode, AgentScheduleMode};
     use crate::context::{ContextOffloadRef, ContextOffloadSnapshot, ContextSummary};
     use crate::plan::PlanSnapshot;
     use crate::provider::ProviderMessage;
-    use crate::session::MessageRole;
+    use crate::session::{MessageRole, PromptBudgetPolicy};
 
     #[test]
     fn session_head_render_emits_stable_compact_lines() {
@@ -959,5 +1292,90 @@ mod tests {
         assert!(messages[1].content.contains("artifact-offload-1"));
         assert!(messages[1].content.contains("Earlier tool dump"));
         assert_eq!(messages[2].content, "latest question");
+    }
+
+    #[test]
+    fn prompt_assembly_budget_caps_transcript_tail_and_reports_hidden_counts() {
+        let messages = PromptAssembly::build_messages_with_budget(
+            PromptAssemblyInput {
+                system_prompt: None,
+                agents_prompt: None,
+                active_skill_prompts: Vec::new(),
+                session_head: None,
+                autonomy_state: None,
+                plan_snapshot: None,
+                context_summary: None,
+                context_offload: None,
+                recent_tool_activity: None,
+                transcript_messages: vec![
+                    ProviderMessage {
+                        role: MessageRole::User,
+                        content: "old message ".repeat(80),
+                    },
+                    ProviderMessage {
+                        role: MessageRole::Assistant,
+                        content: "middle message ".repeat(80),
+                    },
+                    ProviderMessage {
+                        role: MessageRole::User,
+                        content: "latest short question".to_string(),
+                    },
+                ],
+            },
+            PromptAssemblyBudget {
+                policy: PromptBudgetPolicy {
+                    transcript_tail: 10,
+                    ..PromptBudgetPolicy::default()
+                },
+                usable_context_tokens: Some(100),
+            },
+        );
+
+        assert_eq!(messages.len(), 2);
+        assert_eq!(messages[0].role, MessageRole::System);
+        assert!(messages[0].content.contains("Prompt Budget Truncation:"));
+        assert!(messages[0].content.contains("layer=transcript_tail"));
+        assert!(messages[0].content.contains("hidden_messages=2"));
+        assert_eq!(messages[1].role, MessageRole::User);
+        assert_eq!(messages[1].content, "latest short question");
+    }
+
+    #[test]
+    fn prompt_assembly_budget_caps_active_skills_as_one_layer() {
+        let messages = PromptAssembly::build_messages_with_budget(
+            PromptAssemblyInput {
+                system_prompt: None,
+                agents_prompt: None,
+                active_skill_prompts: vec![
+                    "first skill ".repeat(80),
+                    "SECOND_SKILL_MARKER ".repeat(80),
+                    "THIRD_SKILL_MARKER ".repeat(80),
+                ],
+                session_head: None,
+                autonomy_state: None,
+                plan_snapshot: None,
+                context_summary: None,
+                context_offload: None,
+                recent_tool_activity: None,
+                transcript_messages: Vec::new(),
+            },
+            PromptAssemblyBudget {
+                policy: PromptBudgetPolicy {
+                    active_skills: 10,
+                    transcript_tail: 22,
+                    ..PromptBudgetPolicy::default()
+                },
+                usable_context_tokens: Some(100),
+            },
+        );
+
+        assert_eq!(messages.len(), 1);
+        assert_eq!(messages[0].role, MessageRole::System);
+        assert!(messages[0].content.contains("first skill"));
+        assert!(messages[0].content.contains("Prompt Budget Truncation:"));
+        assert!(messages[0].content.contains("layer=active_skills"));
+        assert!(messages[0].content.contains("hidden_messages=3"));
+        assert!(!messages[0].content.contains("SECOND_SKILL_MARKER"));
+        assert!(!messages[0].content.contains("THIRD_SKILL_MARKER"));
     }
 }

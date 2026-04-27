@@ -958,7 +958,7 @@ Runtime может добавить system nudges:
 usable_context_tokens = effective_context_window_tokens * auto_compaction_trigger_ratio
 ```
 
-Агент может менять session-level prompt budget percentages через `prompt_budget_read` и `prompt_budget_update`, если задача этого требует. Overrides имеют guardrail: после merge сумма процентов должна быть `100`. Изменения попадают в обычный tool-call ledger и debug surfaces. Turn-level overrides и physical per-layer truncation по этим процентам остаются отдельными follow-up шагами.
+Агент может менять session-level prompt budget percentages через `prompt_budget_read` и `prompt_budget_update`, если задача этого требует. Overrides имеют guardrail: после merge сумма процентов должна быть `100`. Изменения попадают в обычный tool-call ledger и debug surfaces. Physical per-layer truncation уже применяется при сборке provider request. Turn-level overrides остаются отдельным follow-up шагом.
 
 ## Что надо изменить в коде, если этот contract принять
 
@@ -1048,8 +1048,22 @@ usable_context_tokens = effective_context_window_tokens * auto_compaction_trigge
 Что ещё не сделано:
 
 - turn-level ephemeral overrides;
-- strict per-layer truncation по policy;
 - operator UI для сравнения default vs override.
+
+### Change C6c: включить physical prompt budget truncation
+
+Сейчас:
+
+- `PromptAssembly` принимает `PromptAssemblyBudget`;
+- target tokens считаются по `usable_context_tokens * layer_percent / 100`;
+- system layers получают bounded prefix/excerpt;
+- `transcript_tail` сохраняет самые новые uncovered messages и скрывает более старые;
+- при скрытии добавляется `Prompt Budget Truncation` notice с counts;
+- provider request preview и debug bundle используют тот же budgeted prompt path.
+
+Ограничение:
+
+- скрытый content не offload-ится автоматически как отдельный artifact, потому что он уже существует в канонических источниках session/debug/files. Если нужен отдельный immutable snapshot скрытого prompt content, это отдельная observability/audit задача.
 
 ### Change C7: добавить `AutonomyState`
 

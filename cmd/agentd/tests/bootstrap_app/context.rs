@@ -2744,6 +2744,117 @@ fn execute_chat_turn_can_read_and_update_prompt_budget_policy() {
 }
 
 #[test]
+fn execute_chat_turn_applies_prompt_budget_to_transcript_tail() {
+    let (api_base, requests, handle) = spawn_json_server_sequence(vec![
+        r#"{
+                "id":"resp_prompt_budget_truncation",
+                "model":"gpt-5.4",
+                "output":[
+                    {
+                        "id":"msg_prompt_budget_truncation",
+                        "type":"message",
+                        "status":"completed",
+                        "role":"assistant",
+                        "content":[
+                            {
+                                "type":"output_text",
+                                "text":"Budgeted prompt received."
+                            }
+                        ]
+                    }
+                ],
+                "usage":{"input_tokens":30,"output_tokens":6,"total_tokens":36}
+            }"#
+        .to_string(),
+    ]);
+    let temp = tempfile::tempdir().expect("tempdir");
+    let settings = SessionSettings {
+        prompt_budget: agent_runtime::session::PromptBudgetPolicy {
+            context_summary: 34,
+            transcript_tail: 1,
+            ..agent_runtime::session::PromptBudgetPolicy::default()
+        },
+        ..SessionSettings::default()
+    };
+    let app = build_from_config(AppConfig {
+        data_dir: temp.path().join("state-root"),
+        daemon: Default::default(),
+        provider: ConfiguredProvider {
+            kind: ProviderKind::OpenAiResponses,
+            api_base: Some(format!("{api_base}/v1")),
+            api_key: Some("test-key".to_string()),
+            default_model: Some("gpt-5.4".to_string()),
+            ..ConfiguredProvider::default()
+        },
+        context: agent_persistence::config::ContextConfig {
+            auto_compaction_trigger_ratio: 1.0,
+            context_window_tokens_override: Some(10_000),
+            ..agent_persistence::config::ContextConfig::default()
+        },
+        ..AppConfig::default()
+    })
+    .expect("build app");
+    let store = PersistenceStore::open(&app.persistence).expect("open store");
+    store
+        .put_session(&SessionRecord {
+            id: "session-prompt-budget-truncate".to_string(),
+            title: "Prompt Budget Truncation".to_string(),
+            prompt_override: None,
+            settings_json: serde_json::to_string(&settings).expect("serialize settings"),
+            workspace_root: app.runtime.workspace.root.display().to_string(),
+            agent_profile_id: "default".to_string(),
+            active_mission_id: None,
+            parent_session_id: None,
+            parent_job_id: None,
+            delegation_label: None,
+            created_at: 1,
+            updated_at: 1,
+        })
+        .expect("put session");
+    store
+        .put_transcript(&agent_persistence::TranscriptRecord {
+            id: "transcript-budget-old-user".to_string(),
+            session_id: "session-prompt-budget-truncate".to_string(),
+            run_id: None,
+            kind: "user".to_string(),
+            content: format!("{}OLD_TRANSCRIPT_MARKER", "old user filler ".repeat(200)),
+            created_at: 2,
+        })
+        .expect("put old transcript");
+    store
+        .put_transcript(&agent_persistence::TranscriptRecord {
+            id: "transcript-budget-old-assistant".to_string(),
+            session_id: "session-prompt-budget-truncate".to_string(),
+            run_id: None,
+            kind: "assistant".to_string(),
+            content: format!(
+                "{}OLD_ASSISTANT_MARKER",
+                "old assistant filler ".repeat(200)
+            ),
+            created_at: 3,
+        })
+        .expect("put old assistant transcript");
+
+    let report = app
+        .execute_chat_turn(
+            "session-prompt-budget-truncate",
+            "latest short budget question",
+            10,
+        )
+        .expect("execute chat turn");
+    let provider_request = requests.recv().expect("provider request");
+    handle.join().expect("join server");
+
+    assert_eq!(report.output_text, "Budgeted prompt received.");
+    assert!(provider_request.contains("Prompt Budget Truncation:"));
+    assert!(provider_request.contains("layer=transcript_tail"));
+    assert!(provider_request.contains("hidden_messages=2"));
+    assert!(provider_request.contains("latest short budget question"));
+    assert!(!provider_request.contains("OLD_TRANSCRIPT_MARKER"));
+    assert!(!provider_request.contains("OLD_ASSISTANT_MARKER"));
+}
+
+#[test]
 fn execute_chat_turn_treats_repeated_init_plan_as_idempotent() {
     let (api_base, requests, handle) = spawn_json_server_sequence(vec![
         r#"{
