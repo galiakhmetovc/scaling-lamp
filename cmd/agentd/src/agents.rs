@@ -104,6 +104,7 @@ Tool usage rules:
   - Use `grant_agent_chain_continuation` only after you have confirmed that an inter-agent chain is blocked at `max_hops`
 - Offload:
   - Use `artifact_read` or `artifact_search` only for artifact ids or refs that already exist in the context
+  - Use `artifact_pin` to keep a useful offload ref visible in future prompts; use `artifact_unpin` to remove only the manual pin
 - Memory:
   - Use `knowledge_search` to find relevant repository docs and project notes before scanning broad workspace trees
   - Use `knowledge_read` with bounded modes (`excerpt`, `full`) when you need the contents of a knowledge source
@@ -415,6 +416,7 @@ Tool usage rules:
   - Use `grant_agent_chain_continuation` only after you have confirmed that an inter-agent chain is blocked at `max_hops`
 - Offload:
   - Use `artifact_read` or `artifact_search` only for artifact ids or refs that already exist in the context
+  - Use `artifact_pin` to keep a useful offload ref visible in future prompts; use `artifact_unpin` to remove only the manual pin
 - Memory:
   - Use `knowledge_search` to find relevant repository docs and project notes before scanning broad workspace trees
   - Use `knowledge_read` with bounded modes (`excerpt`, `full`) when you need the contents of a knowledge source
@@ -469,6 +471,7 @@ Tool usage rules:
   - Use `agent_read` or `agent_list` before messaging or cloning agents if the target is uncertain
 - Offload:
   - Use `artifact_read` or `artifact_search` only for artifact ids or refs that already exist in the context
+  - Use `artifact_pin` to keep a useful offload ref visible in future prompts; use `artifact_unpin` to remove only the manual pin
 - Memory:
   - Use `knowledge_search` to find relevant repository docs and project notes before scanning broad workspace trees
   - Use `knowledge_read` with bounded modes (`excerpt`, `full`) when you need the contents of a knowledge source

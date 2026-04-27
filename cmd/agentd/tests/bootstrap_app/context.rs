@@ -365,6 +365,8 @@ fn render_session_artifacts_includes_offload_totals_and_open_hint() {
                     token_estimate: 120,
                     message_count: 3,
                     created_at: 77,
+                    pinned: false,
+                    explicit_read_count: 0,
                 }],
                 updated_at: 101,
             })
@@ -1050,7 +1052,7 @@ fn execute_chat_turn_auto_compacts_before_provider_turn_when_prompt_reaches_thre
     config.context.compaction_min_messages = 8;
     config.context.compaction_keep_tail_messages = 6;
     config.context.auto_compaction_trigger_ratio = 0.5;
-    config.context.context_window_tokens_override = Some(20);
+    config.context.context_window_tokens_override = Some(400);
     let app = build_from_config(config).expect("build app");
     let store = PersistenceStore::open(&app.persistence).expect("open store");
     let session = app
@@ -1281,7 +1283,7 @@ fn execute_mission_turn_job_auto_compacts_before_provider_turn_when_prompt_reach
     config.context.compaction_min_messages = 8;
     config.context.compaction_keep_tail_messages = 6;
     config.context.auto_compaction_trigger_ratio = 0.5;
-    config.context.context_window_tokens_override = Some(20);
+    config.context.context_window_tokens_override = Some(400);
     let app = build_from_config(config).expect("build app");
     let store = PersistenceStore::open(&app.persistence).expect("open store");
     let session = app
@@ -3639,6 +3641,8 @@ fn execute_chat_turn_can_retrieve_offloaded_context_via_artifact_read() {
                     token_estimate: 120,
                     message_count: 4,
                     created_at: 2,
+                    pinned: false,
+                    explicit_read_count: 0,
                 }],
                 updated_at: 3,
             })
@@ -3675,6 +3679,165 @@ fn execute_chat_turn_can_retrieve_offloaded_context_via_artifact_read() {
     assert!(normalized_second.contains("\"call_id\":\"call_artifact_read\""));
     assert!(normalized_second.contains("artifact_read"));
     assert!(normalized_second.contains("important diagnostic detail"));
+
+    let updated_offload = ContextOffloadSnapshot::try_from(
+        store
+            .get_context_offload("session-offload-tools")
+            .expect("get updated offload")
+            .expect("updated offload exists"),
+    )
+    .expect("restore updated offload");
+    assert_eq!(updated_offload.refs[0].explicit_read_count, 1);
+}
+
+#[test]
+fn execute_chat_turn_can_pin_and_unpin_offloaded_context_refs() {
+    let (api_base, requests, handle) = spawn_json_server_sequence(vec![
+        r#"{
+                "id":"resp_offload_pin_1",
+                "model":"gpt-5.4",
+                "output":[
+                    {
+                        "id":"fc_artifact_pin",
+                        "type":"function_call",
+                        "call_id":"call_artifact_pin",
+                        "name":"artifact_pin",
+                        "arguments":"{\"artifact_id\":\"artifact-offload-pin\"}"
+                    }
+                ],
+                "usage":{"input_tokens":40,"output_tokens":12,"total_tokens":52}
+            }"#
+        .to_string(),
+        r#"{
+                "id":"resp_offload_pin_2",
+                "model":"gpt-5.4",
+                "output":[
+                    {
+                        "id":"fc_artifact_unpin",
+                        "type":"function_call",
+                        "call_id":"call_artifact_unpin",
+                        "name":"artifact_unpin",
+                        "arguments":"{\"artifact_id\":\"artifact-offload-pin\"}"
+                    }
+                ],
+                "usage":{"input_tokens":24,"output_tokens":6,"total_tokens":30}
+            }"#
+        .to_string(),
+        r#"{
+                "id":"resp_offload_pin_3",
+                "model":"gpt-5.4",
+                "output":[
+                    {
+                        "id":"msg_offload_pin",
+                        "type":"message",
+                        "status":"completed",
+                        "role":"assistant",
+                        "content":[
+                            {
+                                "type":"output_text",
+                                "text":"Pinned and unpinned offloaded context."
+                            }
+                        ]
+                    }
+                ],
+                "usage":{"input_tokens":24,"output_tokens":6,"total_tokens":30}
+            }"#
+        .to_string(),
+    ]);
+    let temp = tempfile::tempdir().expect("tempdir");
+    let app = build_from_config(AppConfig {
+        data_dir: temp.path().join("state-root"),
+        daemon: Default::default(),
+        provider: ConfiguredProvider {
+            kind: ProviderKind::OpenAiResponses,
+            api_base: Some(format!("{api_base}/v1")),
+            api_key: Some("test-key".to_string()),
+            default_model: Some("gpt-5.4".to_string()),
+            ..ConfiguredProvider::default()
+        },
+        ..AppConfig::default()
+    })
+    .expect("build app");
+    let store = PersistenceStore::open(&app.persistence).expect("open store");
+
+    store
+        .put_session(&SessionRecord {
+            id: "session-offload-pin".to_string(),
+            title: "Offload Pin".to_string(),
+            prompt_override: Some("Manage offloaded context refs when useful.".to_string()),
+            settings_json: serde_json::to_string(&SessionSettings::default())
+                .expect("serialize settings"),
+            workspace_root: app.runtime.workspace.root.display().to_string(),
+            agent_profile_id: "default".to_string(),
+            active_mission_id: None,
+            parent_session_id: None,
+            parent_job_id: None,
+            delegation_label: None,
+            created_at: 1,
+            updated_at: 1,
+        })
+        .expect("put session");
+    store
+        .put_context_offload(
+            &agent_persistence::ContextOffloadRecord::try_from(&ContextOffloadSnapshot {
+                session_id: "session-offload-pin".to_string(),
+                refs: vec![ContextOffloadRef {
+                    id: "offload-pin".to_string(),
+                    label: "Important diagnostics".to_string(),
+                    summary: "Diagnostics that may matter again".to_string(),
+                    artifact_id: "artifact-offload-pin".to_string(),
+                    token_estimate: 120,
+                    message_count: 4,
+                    created_at: 2,
+                    pinned: false,
+                    explicit_read_count: 2,
+                }],
+                updated_at: 3,
+            })
+            .expect("offload record"),
+            &[ContextOffloadPayload {
+                artifact_id: "artifact-offload-pin".to_string(),
+                bytes: b"pin me if useful\n".to_vec(),
+            }],
+        )
+        .expect("put context offload");
+
+    let report = app
+        .execute_chat_turn("session-offload-pin", "Pin then unpin the diagnostics", 10)
+        .expect("execute chat turn");
+    let first_request = requests.recv().expect("first provider request");
+    let second_request = requests.recv().expect("second provider request");
+    let third_request = requests.recv().expect("third provider request");
+    handle.join().expect("join server");
+
+    assert_eq!(report.response_id, "resp_offload_pin_3");
+    assert_eq!(report.output_text, "Pinned and unpinned offloaded context.");
+
+    let normalized_first = first_request.to_ascii_lowercase();
+    assert!(normalized_first.contains("\"name\":\"artifact_pin\""));
+    assert!(normalized_first.contains("\"name\":\"artifact_unpin\""));
+    assert!(normalized_first.contains("artifact-offload-pin"));
+
+    let normalized_second = second_request.to_ascii_lowercase();
+    assert!(normalized_second.contains("\"call_id\":\"call_artifact_pin\""));
+    assert!(normalized_second.contains("\\\"pin_status\\\":\\\"manual\\\""));
+    assert!(normalized_second.contains("\\\"pinned\\\":true"));
+
+    let normalized_third = third_request.to_ascii_lowercase();
+    assert!(normalized_third.contains("\"call_id\":\"call_artifact_unpin\""));
+    assert!(normalized_third.contains("\\\"pin_status\\\":\\\"none\\\""));
+    assert!(normalized_third.contains("\\\"pinned\\\":false"));
+
+    let updated_offload = ContextOffloadSnapshot::try_from(
+        store
+            .get_context_offload("session-offload-pin")
+            .expect("get updated offload")
+            .expect("updated offload exists"),
+    )
+    .expect("restore updated offload");
+    assert!(!updated_offload.refs[0].pinned);
+    assert_eq!(updated_offload.refs[0].explicit_read_count, 2);
+    assert_eq!(updated_offload.refs[0].pin_status(), "none");
 }
 
 #[test]
@@ -3763,6 +3926,8 @@ fn execute_chat_turn_recovers_when_artifact_read_payload_is_missing() {
                     token_estimate: 120,
                     message_count: 4,
                     created_at: 2,
+                    pinned: false,
+                    explicit_read_count: 0,
                 }],
                 updated_at: 3,
             })

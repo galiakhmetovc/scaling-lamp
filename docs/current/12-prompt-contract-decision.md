@@ -693,18 +693,18 @@ INLINE_TOOL_OUTPUT_TOKEN_LIMIT = 512
 
 ```text
 Offloaded Context References:
-- [ref_id] label | artifact_id=... | tokens=... | messages=... | summary=...
+- [ref_id] label | artifact_id=... | tokens=... | messages=... | pin=... | reads=... | summary=...
 ```
 
-Текущий prompt-render limit:
+Текущий hard safety cap:
 
 ```text
 MAX_REFS = 8
 ```
 
-То есть даже если snapshot хранит до 16 refs, prompt показывает только первые 8.
+Это не основной budget. Основной лимит берётся из слоя `offload_refs` в prompt budget, который считается от `usable_context_tokens`.
 
-Это исторический safety cap, а не целевая архитектурная policy.
+Если refs не помещаются в budget или hard cap, prompt добавляет hidden count и подсказку использовать `artifact_search` или `artifact_read`.
 
 ### Что важно
 
@@ -722,12 +722,12 @@ Offload refs должны быть:
 - пригодны для явного чтения через `artifact_read`/`artifact_search`;
 - не должны подменять transcript или debug ledger.
 
-Сейчас сортировка только по свежести. Позже можно добавить relevance:
+Текущая сортировка:
 
-- refs, связанные с текущей задачей;
-- refs, упомянутые в последнем turn;
-- refs, связанные с active plan task;
-- refs, вручную pinned оператором.
+- manual pinned refs;
+- auto-pinned refs после 3 явных `artifact_read`;
+- newest refs;
+- стабильный tie-breaker по `ref_id`.
 
 ### Вопрос на решение
 
@@ -744,10 +744,11 @@ Rules:
 
 - budget считается от `usable_context_tokens`, а не от фиксированного числа refs;
 - pinned refs идут первыми;
-- auto-pinned refs появляются после 3 explicit reads/requests в рамках session;
+- auto-pinned refs появляются после 3 explicit `artifact_read` в рамках session;
 - newest refs заполняют остаток budget;
 - prompt показывает hidden count, если refs не поместились;
-- полный payload читается через `artifact_read`/`artifact_search`.
+- полный payload читается через `artifact_read`/`artifact_search`;
+- manual pin управляется через `artifact_pin`/`artifact_unpin`.
 
 `usable_context_tokens`:
 
@@ -1015,14 +1016,18 @@ usable_context_tokens = effective_context_window_tokens * auto_compaction_trigge
 
 ### Change C5: уточнить offload refs policy
 
-Сейчас:
+Сделано:
 
-- snapshot хранит до 16, prompt показывает до 8 newest.
+- snapshot хранит до 16 refs;
+- prompt выбирает refs по policy `manual pinned -> auto-pinned -> newest`;
+- auto-pin включается после 3 явных `artifact_read`;
+- selection дополнительно ограничен token budget слоя `offload_refs` от `usable_context_tokens`;
+- prompt показывает hidden count, если refs не поместились;
+- модель может вручную закреплять и откреплять refs через `artifact_pin`/`artifact_unpin`.
 
-Нужно:
+Остаётся возможным развитием:
 
-- заменить fixed ref count на budgeted pinned + auto-pinned + newest policy;
-- отразить это в docs и tests.
+- добавить relevance-ranked выбор по текущему user message, active plan task или explicit topic.
 
 ### Change C6: явно документировать transcript tail policy
 

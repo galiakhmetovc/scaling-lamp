@@ -633,6 +633,51 @@ fn prompt_budget_tool_definitions_and_parsing_are_explicit() {
 }
 
 #[test]
+fn artifact_pin_tools_are_explicit_and_parse_canonical_artifact_ids() {
+    let catalog = ToolCatalog::default();
+    let pin = catalog
+        .definition(ToolName::ArtifactPin)
+        .expect("artifact_pin");
+    let unpin = catalog
+        .definition(ToolName::ArtifactUnpin)
+        .expect("artifact_unpin");
+
+    assert_eq!(pin.family, ToolFamily::Offload);
+    assert_eq!(unpin.family, ToolFamily::Offload);
+    assert!(!pin.policy.read_only);
+    assert!(!unpin.policy.read_only);
+    assert!(pin.description.contains("pin"));
+    assert!(unpin.description.contains("auto-pinned"));
+    assert!(
+        pin.openai_function_schema()
+            .to_string()
+            .contains("artifact_id")
+    );
+    let automatic_names = catalog
+        .automatic_model_definitions()
+        .into_iter()
+        .map(|definition| definition.name)
+        .collect::<Vec<_>>();
+    assert!(automatic_names.contains(&ToolName::ArtifactPin));
+    assert!(automatic_names.contains(&ToolName::ArtifactUnpin));
+
+    assert_eq!(
+        ToolCall::from_openai_function("artifact_pin", r#"{"artifact_id":"artifact-1"}"#)
+            .expect("parse pin"),
+        ToolCall::ArtifactPin(super::ArtifactPinInput {
+            artifact_id: "artifact-1".to_string(),
+        })
+    );
+    assert_eq!(
+        ToolCall::from_openai_function("artifact_unpin", r#"{"artifact_id":"artifact-1"}"#)
+            .expect("parse unpin"),
+        ToolCall::ArtifactUnpin(super::ArtifactPinInput {
+            artifact_id: "artifact-1".to_string(),
+        })
+    );
+}
+
+#[test]
 fn skill_tool_definitions_and_parsing_are_explicit() {
     let catalog = ToolCatalog::default();
     let list = catalog.definition(ToolName::SkillList).expect("skill_list");

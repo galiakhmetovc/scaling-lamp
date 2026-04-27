@@ -33,7 +33,7 @@ use agent_runtime::skills::{
     resolve_session_skill_status, scan_skill_catalog_with_overrides,
 };
 use agent_runtime::tool::{
-    AddTaskNoteOutput, AddTaskOutput, ArtifactReadOutput, ArtifactSearchOutput,
+    AddTaskNoteOutput, AddTaskOutput, ArtifactPinOutput, ArtifactReadOutput, ArtifactSearchOutput,
     ArtifactSearchResult, EditTaskOutput, InitPlanOutput, PlanLintOutput, PlanReadOutput,
     PlanSnapshotOutput, PlanWriteOutput, PromptBudgetLayerOutput, PromptBudgetReadOutput,
     PromptBudgetUpdateOutput, PromptBudgetUpdateScope, SetTaskStatusOutput, SkillActivationOutput,
@@ -888,7 +888,10 @@ impl ExecutionService {
                     && (has_context_offload
                         || !matches!(
                             definition.name,
-                            ToolName::ArtifactRead | ToolName::ArtifactSearch
+                            ToolName::ArtifactRead
+                                | ToolName::ArtifactSearch
+                                | ToolName::ArtifactPin
+                                | ToolName::ArtifactUnpin
                         ))
             })
             .map(|definition| ProviderToolDefinition {
@@ -2555,6 +2558,22 @@ impl ExecutionService {
                     input.limit,
                 )?,
             )),
+            ToolCall::ArtifactPin(input) => {
+                Ok(ToolOutput::ArtifactPin(self.update_context_offload_pin(
+                    store,
+                    session_id,
+                    input.artifact_id.as_str(),
+                    true,
+                )?))
+            }
+            ToolCall::ArtifactUnpin(input) => {
+                Ok(ToolOutput::ArtifactUnpin(self.update_context_offload_pin(
+                    store,
+                    session_id,
+                    input.artifact_id.as_str(),
+                    false,
+                )?))
+            }
             ToolCall::KnowledgeSearch(input) => Ok(ToolOutput::KnowledgeSearch(
                 self.search_knowledge(store, input)?,
             )),
@@ -3283,6 +3302,8 @@ impl ExecutionService {
             token_estimate,
             message_count: 1,
             created_at: now,
+            pinned: false,
+            explicit_read_count: 0,
         };
         snapshot.refs.push(current_ref.clone());
         snapshot.refs.sort_by(|left, right| {
@@ -3491,11 +3512,11 @@ impl ExecutionService {
         session_id: &str,
         artifact_id: &str,
     ) -> Result<ArtifactReadOutput, ExecutionError> {
-        let snapshot = self.require_context_offload_snapshot(store, session_id)?;
-        let reference = snapshot
+        let mut snapshot = self.require_context_offload_snapshot(store, session_id)?;
+        let reference_index = snapshot
             .refs
-            .into_iter()
-            .find(|reference| reference.artifact_id == artifact_id)
+            .iter()
+            .position(|reference| reference.artifact_id == artifact_id)
             .ok_or_else(|| {
                 ExecutionError::Tool(ToolError::InvalidArtifactTool {
                     reason: format!(
@@ -3505,6 +3526,15 @@ impl ExecutionService {
                 })
             })?;
         let payload = self.load_context_offload_payload_for_tool(store, artifact_id)?;
+        snapshot.refs[reference_index].explicit_read_count = snapshot.refs[reference_index]
+            .explicit_read_count
+            .saturating_add(1);
+        let reference = snapshot.refs[reference_index].clone();
+        self.persist_context_offload_snapshot_preserving_payloads(
+            store,
+            &snapshot,
+            Some(artifact_id),
+        )?;
 
         Ok(ArtifactReadOutput {
             ref_id: reference.id,
@@ -3513,6 +3543,86 @@ impl ExecutionService {
             summary: reference.summary,
             content: String::from_utf8_lossy(&payload.bytes).to_string(),
         })
+    }
+
+    fn update_context_offload_pin(
+        &self,
+        store: &PersistenceStore,
+        session_id: &str,
+        artifact_id: &str,
+        pinned: bool,
+    ) -> Result<ArtifactPinOutput, ExecutionError> {
+        let mut snapshot = self.require_context_offload_snapshot(store, session_id)?;
+        let reference_index = snapshot
+            .refs
+            .iter()
+            .position(|reference| reference.artifact_id == artifact_id)
+            .ok_or_else(|| {
+                ExecutionError::Tool(ToolError::InvalidArtifactTool {
+                    reason: format!(
+                        "artifact {} is not referenced by the current session offload snapshot",
+                        artifact_id
+                    ),
+                })
+            })?;
+        snapshot.refs[reference_index].pinned = pinned;
+        let reference = snapshot.refs[reference_index].clone();
+        self.persist_context_offload_snapshot_preserving_payloads(
+            store,
+            &snapshot,
+            Some(artifact_id),
+        )?;
+        let pin_status = reference.pin_status().to_string();
+
+        Ok(ArtifactPinOutput {
+            ref_id: reference.id,
+            artifact_id: reference.artifact_id,
+            pinned: reference.pinned,
+            explicit_read_count: reference.explicit_read_count,
+            pin_status,
+        })
+    }
+
+    fn persist_context_offload_snapshot_preserving_payloads(
+        &self,
+        store: &PersistenceStore,
+        snapshot: &ContextOffloadSnapshot,
+        required_artifact_id: Option<&str>,
+    ) -> Result<ContextOffloadSnapshot, ExecutionError> {
+        let mut retained_refs = Vec::with_capacity(snapshot.refs.len());
+        let mut payloads = Vec::with_capacity(snapshot.refs.len());
+        for reference in &snapshot.refs {
+            match self
+                .load_context_offload_payload_for_refresh(store, reference.artifact_id.as_str())?
+            {
+                Some(payload) => {
+                    retained_refs.push(reference.clone());
+                    payloads.push(payload);
+                }
+                None if required_artifact_id == Some(reference.artifact_id.as_str()) => {
+                    return Err(ExecutionError::Tool(ToolError::InvalidArtifactTool {
+                        reason: format!(
+                            "artifact {} is missing from context offload storage",
+                            reference.artifact_id
+                        ),
+                    }));
+                }
+                None => {}
+            }
+        }
+        let retained_snapshot = ContextOffloadSnapshot {
+            session_id: snapshot.session_id.clone(),
+            refs: retained_refs,
+            updated_at: snapshot.updated_at,
+        };
+        store
+            .put_context_offload(
+                &agent_persistence::ContextOffloadRecord::try_from(&retained_snapshot)
+                    .map_err(ExecutionError::RecordConversion)?,
+                &payloads,
+            )
+            .map_err(ExecutionError::Store)?;
+        Ok(retained_snapshot)
     }
 
     fn search_context_offload_artifacts(

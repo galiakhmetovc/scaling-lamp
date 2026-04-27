@@ -59,7 +59,7 @@ Tools не попадают в prompt как большой текстовый R
    Это итоговый список для конкретного turn:
    - только если provider поддерживает tool calls;
    - только tools, разрешённые `AgentProfile.allowed_tools`;
-   - `artifact_read` и `artifact_search` добавляются только если у session реально есть context offload;
+   - `artifact_read`, `artifact_search`, `artifact_pin` и `artifact_unpin` добавляются только если у session реально есть context offload;
    - dynamic MCP tools добавляются отдельно как самостоятельные provider tools с собственным `exposed_name` и `input_schema`.
 
 ### Что не стоит путать
@@ -741,7 +741,9 @@ artifact_read({ artifact_id: string })
 
 Что делает:
 
-- читает полный payload offloaded artifact по `artifact_id`.
+- читает полный payload offloaded artifact по `artifact_id`;
+- увеличивает `explicit_read_count` у соответствующего `ContextOffloadRef`;
+- после 3 явных чтений ref становится auto-pinned и получает приоритет в будущих `OffloadRefs`.
 
 Когда использовать:
 
@@ -759,6 +761,44 @@ artifact_search({ query: string, limit: integer })
 Что делает:
 
 - ищет по labels, summaries и payloads текущих offloaded artifacts.
+
+### `artifact_pin`
+
+Сигнатура:
+
+```text
+artifact_pin({ artifact_id: string })
+```
+
+Что делает:
+
+- вручную закрепляет offloaded artifact ref;
+- закреплённый ref получает приоритет в будущих prompt `OffloadRefs`;
+- payload не читается автоматически, для этого нужен `artifact_read`.
+
+Когда использовать:
+
+- если artifact содержит важный результат, диагностику или решение, которое должно быть видно модели в следующих turn;
+- если пользователь явно просит “запомнить/держать в контексте” крупный output.
+
+### `artifact_unpin`
+
+Сигнатура:
+
+```text
+artifact_unpin({ artifact_id: string })
+```
+
+Что делает:
+
+- снимает manual pin с offloaded artifact ref;
+- не удаляет artifact и не сбрасывает `explicit_read_count`;
+- если ref уже auto-pinned из-за 3+ `artifact_read`, он всё равно может оставаться приоритетным.
+
+Когда использовать:
+
+- если закреплённый крупный context больше не нужен в ближайших turn;
+- если prompt budget нужно освободить без удаления данных.
 
 ## Memory
 

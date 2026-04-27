@@ -1,5 +1,7 @@
 use serde::{Deserialize, Serialize};
 
+pub const OFFLOAD_AUTO_PIN_READ_THRESHOLD: u32 = 3;
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ContextOffloadRef {
     pub id: String,
@@ -9,6 +11,10 @@ pub struct ContextOffloadRef {
     pub token_estimate: u32,
     pub message_count: u32,
     pub created_at: i64,
+    #[serde(default)]
+    pub pinned: bool,
+    #[serde(default)]
+    pub explicit_read_count: u32,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
@@ -60,6 +66,22 @@ impl ContextOffloadSnapshot {
     }
 }
 
+impl ContextOffloadRef {
+    pub fn is_auto_pinned(&self) -> bool {
+        !self.pinned && self.explicit_read_count >= OFFLOAD_AUTO_PIN_READ_THRESHOLD
+    }
+
+    pub fn pin_status(&self) -> &'static str {
+        if self.pinned {
+            "manual"
+        } else if self.is_auto_pinned() {
+            "auto"
+        } else {
+            "none"
+        }
+    }
+}
+
 impl Default for CompactionPolicy {
     fn default() -> Self {
         Self {
@@ -108,7 +130,7 @@ pub fn approximate_token_count(content: &str) -> u32 {
 mod tests {
     use super::{
         CompactionPolicy, ContextOffloadRef, ContextOffloadSnapshot, ContextSummary,
-        approximate_token_count,
+        OFFLOAD_AUTO_PIN_READ_THRESHOLD, approximate_token_count,
     };
 
     #[test]
@@ -163,6 +185,8 @@ mod tests {
                     token_estimate: 240,
                     message_count: 8,
                     created_at: 10,
+                    pinned: false,
+                    explicit_read_count: 0,
                 },
                 ContextOffloadRef {
                     id: "offload-2".to_string(),
@@ -172,6 +196,8 @@ mod tests {
                     token_estimate: 90,
                     message_count: 2,
                     created_at: 11,
+                    pinned: false,
+                    explicit_read_count: 0,
                 },
             ],
             updated_at: 12,
@@ -179,5 +205,39 @@ mod tests {
 
         assert!(!snapshot.is_empty());
         assert_eq!(snapshot.total_token_estimate(), 330);
+    }
+
+    #[test]
+    fn context_offload_refs_track_manual_and_auto_pin_state() {
+        let legacy: ContextOffloadRef = serde_json::from_str(
+            r#"{
+                "id":"offload-legacy",
+                "label":"Legacy",
+                "summary":"Old ref without pin metadata",
+                "artifact_id":"artifact-legacy",
+                "token_estimate":10,
+                "message_count":1,
+                "created_at":1
+            }"#,
+        )
+        .expect("deserialize legacy ref");
+        assert!(!legacy.pinned);
+        assert_eq!(legacy.explicit_read_count, 0);
+        assert_eq!(legacy.pin_status(), "none");
+
+        let auto = ContextOffloadRef {
+            explicit_read_count: OFFLOAD_AUTO_PIN_READ_THRESHOLD,
+            ..legacy.clone()
+        };
+        assert!(auto.is_auto_pinned());
+        assert_eq!(auto.pin_status(), "auto");
+
+        let manual = ContextOffloadRef {
+            pinned: true,
+            explicit_read_count: OFFLOAD_AUTO_PIN_READ_THRESHOLD,
+            ..legacy
+        };
+        assert!(!manual.is_auto_pinned());
+        assert_eq!(manual.pin_status(), "manual");
     }
 }

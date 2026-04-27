@@ -270,6 +270,8 @@ fn open_bootstraps_schema_and_round_trips_structured_and_file_backed_data() {
             token_estimate: 120,
             message_count: 4,
             created_at: 8,
+            pinned: false,
+            explicit_read_count: 0,
         }])
         .expect("serialize offload"),
         updated_at: 9,
@@ -1530,6 +1532,8 @@ fn context_offload_repository_round_trips_snapshot_and_payloads() {
             token_estimate: 180,
             message_count: 7,
             created_at: 5,
+            pinned: false,
+            explicit_read_count: 0,
         }],
         updated_at: 6,
     };
@@ -1597,6 +1601,8 @@ fn replacing_context_offload_snapshot_prunes_obsolete_artifacts() {
             token_estimate: 42,
             message_count: 2,
             created_at: 2,
+            pinned: false,
+            explicit_read_count: 0,
         }],
         updated_at: 3,
     };
@@ -1620,6 +1626,8 @@ fn replacing_context_offload_snapshot_prunes_obsolete_artifacts() {
             token_estimate: 55,
             message_count: 3,
             created_at: 4,
+            pinned: false,
+            explicit_read_count: 0,
         }],
         updated_at: 5,
     };

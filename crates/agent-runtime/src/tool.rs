@@ -123,6 +123,8 @@ pub enum ToolName {
     SkillDisable,
     ArtifactRead,
     ArtifactSearch,
+    ArtifactPin,
+    ArtifactUnpin,
     KnowledgeSearch,
     KnowledgeRead,
     SessionSearch,
@@ -520,6 +522,11 @@ pub struct ArtifactSearchInput {
     pub limit: usize,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ArtifactPinInput {
+    pub artifact_id: String,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum KnowledgeSourceKind {
@@ -813,6 +820,8 @@ pub enum ToolCall {
     SkillDisable(SkillActivationInput),
     ArtifactRead(ArtifactReadInput),
     ArtifactSearch(ArtifactSearchInput),
+    ArtifactPin(ArtifactPinInput),
+    ArtifactUnpin(ArtifactPinInput),
     KnowledgeSearch(KnowledgeSearchInput),
     KnowledgeRead(KnowledgeReadInput),
     SessionSearch(SessionSearchInput),
@@ -1234,6 +1243,15 @@ pub struct ArtifactSearchResult {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ArtifactPinOutput {
+    pub ref_id: String,
+    pub artifact_id: String,
+    pub pinned: bool,
+    pub explicit_read_count: u32,
+    pub pin_status: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ArtifactSearchOutput {
     pub query: String,
     pub results: Vec<ArtifactSearchResult>,
@@ -1614,6 +1632,8 @@ pub enum ToolOutput {
     SkillDisable(SkillActivationOutput),
     ArtifactRead(ArtifactReadOutput),
     ArtifactSearch(ArtifactSearchOutput),
+    ArtifactPin(ArtifactPinOutput),
+    ArtifactUnpin(ArtifactPinOutput),
     KnowledgeSearch(KnowledgeSearchOutput),
     KnowledgeRead(KnowledgeReadOutput),
     SessionSearch(SessionSearchOutput),
@@ -1922,6 +1942,8 @@ impl ToolName {
             Self::SkillDisable => "skill_disable",
             Self::ArtifactRead => "artifact_read",
             Self::ArtifactSearch => "artifact_search",
+            Self::ArtifactPin => "artifact_pin",
+            Self::ArtifactUnpin => "artifact_unpin",
             Self::KnowledgeSearch => "knowledge_search",
             Self::KnowledgeRead => "knowledge_read",
             Self::SessionSearch => "session_search",
@@ -2003,6 +2025,8 @@ impl ToolCatalog {
                         | ToolName::SkillDisable
                         | ToolName::ArtifactRead
                         | ToolName::ArtifactSearch
+                        | ToolName::ArtifactPin
+                        | ToolName::ArtifactUnpin
                         | ToolName::KnowledgeSearch
                         | ToolName::KnowledgeRead
                         | ToolName::SessionSearch
@@ -2436,6 +2460,26 @@ impl ToolCatalog {
                 description: "Search across the current session's offloaded context references and payloads",
                 policy: ToolPolicy {
                     read_only: true,
+                    destructive: false,
+                    requires_approval: false,
+                },
+            },
+            ToolDefinition {
+                name: ToolName::ArtifactPin,
+                family: ToolFamily::Offload,
+                description: "Manually pin an offloaded context artifact so its ref is prioritized in future prompt OffloadRefs",
+                policy: ToolPolicy {
+                    read_only: false,
+                    destructive: false,
+                    requires_approval: false,
+                },
+            },
+            ToolDefinition {
+                name: ToolName::ArtifactUnpin,
+                family: ToolFamily::Offload,
+                description: "Remove a manual pin from an offloaded context artifact; frequently read artifacts may still be auto-pinned",
+                policy: ToolPolicy {
+                    read_only: false,
                     destructive: false,
                     requires_approval: false,
                 },
@@ -2963,7 +3007,10 @@ impl ToolRuntime {
                 reason: "agent, schedule, and inter-agent tools must execute through the canonical session path"
                     .to_string(),
             }),
-            ToolCall::ArtifactRead(_) | ToolCall::ArtifactSearch(_) => {
+            ToolCall::ArtifactRead(_)
+            | ToolCall::ArtifactSearch(_)
+            | ToolCall::ArtifactPin(_)
+            | ToolCall::ArtifactUnpin(_) => {
                 Err(ToolError::InvalidArtifactTool {
                     reason:
                         "offload retrieval tools must execute through the canonical session path"
@@ -3543,6 +3590,8 @@ impl ToolCall {
             Self::SkillDisable(_) => ToolName::SkillDisable,
             Self::ArtifactRead(_) => ToolName::ArtifactRead,
             Self::ArtifactSearch(_) => ToolName::ArtifactSearch,
+            Self::ArtifactPin(_) => ToolName::ArtifactPin,
+            Self::ArtifactUnpin(_) => ToolName::ArtifactUnpin,
             Self::KnowledgeSearch(_) => ToolName::KnowledgeSearch,
             Self::KnowledgeRead(_) => ToolName::KnowledgeRead,
             Self::SessionSearch(_) => ToolName::SessionSearch,
@@ -3628,6 +3677,9 @@ impl ToolCall {
             Self::McpReadResource(input) => Some(format!("{}:{}", input.connector_id, input.uri)),
             Self::McpGetPrompt(input) => Some(format!("{}:{}", input.connector_id, input.name)),
             Self::ArtifactRead(input) => Some(input.artifact_id.clone()),
+            Self::ArtifactPin(input) | Self::ArtifactUnpin(input) => {
+                Some(input.artifact_id.clone())
+            }
             Self::ArtifactSearch(_) => None,
         }
     }
@@ -3794,6 +3846,10 @@ impl ToolCall {
                     "artifact_search query={} limit={}",
                     input.query, input.limit
                 )
+            }
+            Self::ArtifactPin(input) => format!("artifact_pin artifact_id={}", input.artifact_id),
+            Self::ArtifactUnpin(input) => {
+                format!("artifact_unpin artifact_id={}", input.artifact_id)
             }
             Self::KnowledgeSearch(input) => format!(
                 "knowledge_search query={} offset={} limit={}",
@@ -4133,6 +4189,18 @@ impl ToolCall {
                 }),
             "artifact_search" => serde_json::from_str(arguments)
                 .map(Self::ArtifactSearch)
+                .map_err(|source| ToolCallParseError::InvalidArguments {
+                    name: name.to_string(),
+                    source,
+                }),
+            "artifact_pin" => serde_json::from_str(arguments)
+                .map(Self::ArtifactPin)
+                .map_err(|source| ToolCallParseError::InvalidArguments {
+                    name: name.to_string(),
+                    source,
+                }),
+            "artifact_unpin" => serde_json::from_str(arguments)
+                .map(Self::ArtifactUnpin)
                 .map_err(|source| ToolCallParseError::InvalidArguments {
                     name: name.to_string(),
                     source,
@@ -4717,6 +4785,14 @@ impl ToolOutput {
                     output.results.len()
                 )
             }
+            Self::ArtifactPin(output) => format!(
+                "artifact_pin artifact_id={} pin_status={} reads={}",
+                output.artifact_id, output.pin_status, output.explicit_read_count
+            ),
+            Self::ArtifactUnpin(output) => format!(
+                "artifact_unpin artifact_id={} pin_status={} reads={}",
+                output.artifact_id, output.pin_status, output.explicit_read_count
+            ),
             Self::KnowledgeSearch(output) => {
                 if let Some(next_offset) = output.next_offset {
                     format!(
@@ -5210,6 +5286,24 @@ impl ToolOutput {
                     "message_count": result.message_count,
                     "preview": result.preview,
                 })).collect::<Vec<_>>(),
+            })
+            .to_string(),
+            Self::ArtifactPin(output) => json!({
+                "tool": "artifact_pin",
+                "ref_id": output.ref_id,
+                "artifact_id": output.artifact_id,
+                "pinned": output.pinned,
+                "explicit_read_count": output.explicit_read_count,
+                "pin_status": output.pin_status,
+            })
+            .to_string(),
+            Self::ArtifactUnpin(output) => json!({
+                "tool": "artifact_unpin",
+                "ref_id": output.ref_id,
+                "artifact_id": output.artifact_id,
+                "pinned": output.pinned,
+                "explicit_read_count": output.explicit_read_count,
+                "pin_status": output.pin_status,
             })
             .to_string(),
             Self::KnowledgeSearch(output) => json!({
@@ -6050,6 +6144,14 @@ impl ToolName {
                     "limit": { "type": "integer", "minimum": 1, "description": "Maximum number of matching artifacts to return" }
                 },
                 "required": ["query", "limit"],
+                "additionalProperties": false,
+            }),
+            Self::ArtifactPin | Self::ArtifactUnpin => json!({
+                "type": "object",
+                "properties": {
+                    "artifact_id": { "type": "string", "description": "Artifact id from the offloaded context references block" }
+                },
+                "required": ["artifact_id"],
                 "additionalProperties": false,
             }),
             Self::KnowledgeSearch => json!({

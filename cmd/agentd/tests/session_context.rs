@@ -117,6 +117,8 @@ fn render_context_state_includes_offload_snapshot_details() {
                         token_estimate: 120,
                         message_count: 3,
                         created_at: 77,
+                        pinned: false,
+                        explicit_read_count: 0,
                     },
                     ContextOffloadRef {
                         id: "offload-2".to_string(),
@@ -126,6 +128,8 @@ fn render_context_state_includes_offload_snapshot_details() {
                         token_estimate: 80,
                         message_count: 2,
                         created_at: 88,
+                        pinned: false,
+                        explicit_read_count: 0,
                     },
                 ],
                 updated_at: 99,

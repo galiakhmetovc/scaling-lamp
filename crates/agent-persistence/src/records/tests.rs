@@ -399,6 +399,8 @@ fn context_offload_records_round_trip_with_artifact_refs() {
                 token_estimate: 128,
                 message_count: 6,
                 created_at: 20,
+                pinned: false,
+                explicit_read_count: 0,
             },
             ContextOffloadRef {
                 id: "offload-2".to_string(),
@@ -408,6 +410,8 @@ fn context_offload_records_round_trip_with_artifact_refs() {
                 token_estimate: 64,
                 message_count: 1,
                 created_at: 21,
+                pinned: true,
+                explicit_read_count: 3,
             },
         ],
         updated_at: 22,

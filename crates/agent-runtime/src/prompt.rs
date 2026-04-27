@@ -476,7 +476,15 @@ impl PromptAssembly {
         }
 
         if let Some(context_offload) = input.context_offload
-            && let Some(rendered) = render_context_offload_refs(&context_offload)
+            && let Some(rendered) = render_context_offload_refs(
+                &context_offload,
+                target(
+                    budget
+                        .as_ref()
+                        .map(|budget| budget.policy.offload_refs)
+                        .unwrap_or(100),
+                ),
+            )
             && let Some(content) = budget_system_layer(
                 "offload_refs",
                 rendered,
@@ -733,29 +741,74 @@ fn truncate_suffix_by_approx_tokens(content: &str, max_tokens: u32) -> String {
     content.chars().skip(start).collect()
 }
 
-fn render_context_offload_refs(snapshot: &ContextOffloadSnapshot) -> Option<String> {
+fn render_context_offload_refs(
+    snapshot: &ContextOffloadSnapshot,
+    target_tokens: Option<u32>,
+) -> Option<String> {
     if snapshot.refs.is_empty() {
         return None;
     }
 
     let mut lines = vec!["Offloaded Context References:".to_string()];
     const MAX_REFS: usize = 8;
-    for reference in snapshot.refs.iter().take(MAX_REFS) {
-        lines.push(format!(
-            "- [{}] {} | artifact_id={} | tokens={} | messages={} | summary={}",
+    let mut refs = snapshot.refs.iter().collect::<Vec<_>>();
+    refs.sort_by(|left, right| {
+        let left_rank = if left.pinned {
+            0
+        } else if left.is_auto_pinned() {
+            1
+        } else {
+            2
+        };
+        let right_rank = if right.pinned {
+            0
+        } else if right.is_auto_pinned() {
+            1
+        } else {
+            2
+        };
+        left_rank
+            .cmp(&right_rank)
+            .then_with(|| right.created_at.cmp(&left.created_at))
+            .then_with(|| left.id.cmp(&right.id))
+    });
+
+    let mut selected_count = 0usize;
+    let mut hidden_count = 0usize;
+    for reference in refs {
+        if selected_count >= MAX_REFS {
+            hidden_count += 1;
+            continue;
+        }
+        let line = format!(
+            "- [{}] {} | artifact_id={} | tokens={} | messages={} | pin={} | reads={} | summary={}",
             reference.id,
             reference.label,
             reference.artifact_id,
             reference.token_estimate,
             reference.message_count,
+            reference.pin_status(),
+            reference.explicit_read_count,
             reference.summary
-        ));
+        );
+        if let Some(target_tokens) = target_tokens {
+            let projected = lines
+                .iter()
+                .map(|line| approximate_token_count(line))
+                .sum::<u32>()
+                .saturating_add(approximate_token_count(&line));
+            if selected_count > 0 && projected > target_tokens {
+                hidden_count += 1;
+                continue;
+            }
+        }
+        lines.push(line);
+        selected_count += 1;
     }
 
-    if snapshot.refs.len() > MAX_REFS {
+    if hidden_count > 0 {
         lines.push(format!(
-            "- ... ({} more refs)",
-            snapshot.refs.len() - MAX_REFS
+            "- ... ({hidden_count} hidden refs; use artifact_search or artifact_read for full offloaded context)"
         ));
     }
 
@@ -768,7 +821,7 @@ mod tests {
         AutonomyState, PromptAssembly, PromptAssemblyBudget, PromptAssemblyInput,
         RecentToolActivity, RecentToolActivityEntry, SessionHead, SessionHeadFsActivity,
         SessionHeadProcessActivity, SessionHeadScheduleSummary, SessionHeadWorkspaceEntry,
-        SessionHeadWorkspaceEntryKind,
+        SessionHeadWorkspaceEntryKind, render_context_offload_refs,
     };
     use crate::agent::{AgentScheduleDeliveryMode, AgentScheduleMode};
     use crate::context::{ContextOffloadRef, ContextOffloadSnapshot, ContextSummary};
@@ -1197,6 +1250,8 @@ mod tests {
                     token_estimate: 10,
                     message_count: 1,
                     created_at: 1,
+                    pinned: false,
+                    explicit_read_count: 0,
                 }],
                 updated_at: 1,
             }),
@@ -1263,6 +1318,8 @@ mod tests {
                     token_estimate: 120,
                     message_count: 4,
                     created_at: 11,
+                    pinned: false,
+                    explicit_read_count: 0,
                 }],
                 updated_at: 12,
             }),
@@ -1292,6 +1349,74 @@ mod tests {
         assert!(messages[1].content.contains("artifact-offload-1"));
         assert!(messages[1].content.contains("Earlier tool dump"));
         assert_eq!(messages[2].content, "latest question");
+    }
+
+    #[test]
+    fn context_offload_refs_render_pinned_auto_pinned_then_newest_with_hidden_count() {
+        let snapshot = ContextOffloadSnapshot {
+            session_id: "session-1".to_string(),
+            refs: vec![
+                ContextOffloadRef {
+                    id: "newest".to_string(),
+                    label: "Newest".to_string(),
+                    summary: "Newest unpinned ref".to_string(),
+                    artifact_id: "artifact-newest".to_string(),
+                    token_estimate: 10,
+                    message_count: 1,
+                    created_at: 30,
+                    pinned: false,
+                    explicit_read_count: 0,
+                },
+                ContextOffloadRef {
+                    id: "manual".to_string(),
+                    label: "Manual".to_string(),
+                    summary: "Manually pinned ref".to_string(),
+                    artifact_id: "artifact-manual".to_string(),
+                    token_estimate: 10,
+                    message_count: 1,
+                    created_at: 10,
+                    pinned: true,
+                    explicit_read_count: 0,
+                },
+                ContextOffloadRef {
+                    id: "auto".to_string(),
+                    label: "Auto".to_string(),
+                    summary: "Often read ref".to_string(),
+                    artifact_id: "artifact-auto".to_string(),
+                    token_estimate: 10,
+                    message_count: 1,
+                    created_at: 20,
+                    pinned: false,
+                    explicit_read_count: 3,
+                },
+                ContextOffloadRef {
+                    id: "hidden".to_string(),
+                    label: "Hidden".to_string(),
+                    summary: "Hidden by budget".to_string(),
+                    artifact_id: "artifact-hidden".to_string(),
+                    token_estimate: 10,
+                    message_count: 1,
+                    created_at: 5,
+                    pinned: false,
+                    explicit_read_count: 0,
+                },
+            ],
+            updated_at: 40,
+        };
+
+        let rendered =
+            render_context_offload_refs(&snapshot, Some(120)).expect("render offload refs");
+
+        let manual_index = rendered.find("[manual]").expect("manual ref");
+        let auto_index = rendered.find("[auto]").expect("auto ref");
+        let newest_index = rendered.find("[newest]").expect("newest ref");
+        assert!(manual_index < auto_index);
+        assert!(auto_index < newest_index);
+        assert!(rendered.contains("pin=manual"));
+        assert!(rendered.contains("pin=auto"));
+        assert!(rendered.contains("reads=3"));
+        assert!(rendered.contains("hidden refs"));
+        assert!(!rendered.contains("[hidden]"));
     }
 
     #[test]
