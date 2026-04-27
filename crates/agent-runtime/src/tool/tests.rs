@@ -4,9 +4,10 @@ use super::{
     FsSearchTextInput, FsTrashInput, FsWriteMode, FsWriteTextInput, KnowledgeReadInput,
     KnowledgeReadMode, KnowledgeRoot, KnowledgeSearchInput, KnowledgeSourceKind, ProcessKillInput,
     ProcessOutputStatus, ProcessOutputStream, ProcessReadOutputInput, ProcessResultStatus,
-    ProcessWaitInput, PromptBudgetLayerPercentagesInput, SessionReadInput, SessionReadMode,
-    SessionSearchInput, SessionWaitInput, SharedProcessRegistry, ToolCall, ToolCatalog, ToolFamily,
-    ToolName, ToolRuntime, WebFetchInput, WebSearchBackend, WebSearchInput, WebToolClient,
+    ProcessWaitInput, PromptBudgetLayerPercentagesInput, PromptBudgetUpdateScope, SessionReadInput,
+    SessionReadMode, SessionSearchInput, SessionWaitInput, SharedProcessRegistry, ToolCall,
+    ToolCatalog, ToolFamily, ToolName, ToolRuntime, WebFetchInput, WebSearchBackend,
+    WebSearchInput, WebToolClient,
 };
 use crate::memory::SessionRetentionTier;
 use crate::workspace::WorkspaceRef;
@@ -574,9 +575,12 @@ fn prompt_budget_tool_definitions_and_parsing_are_explicit() {
     assert!(read.policy.read_only);
     assert!(!update.policy.read_only);
     assert!(!update.policy.requires_approval);
-    assert!(update.description.contains("session-scoped"));
+    assert!(update.description.contains("scope=session"));
+    assert!(update.description.contains("scope=next_turn"));
     assert!(update_schema.contains("percentages"));
     assert!(update_schema.contains("reset"));
+    assert!(update_schema.contains("scope"));
+    assert!(update_schema.contains("next_turn"));
     assert!(update_schema.contains("sum to 100"));
 
     let read_call = ToolCall::from_openai_function("prompt_budget_read", "{}").expect("parse read");
@@ -590,6 +594,7 @@ fn prompt_budget_tool_definitions_and_parsing_are_explicit() {
     assert_eq!(
         update_call,
         ToolCall::PromptBudgetUpdate(super::PromptBudgetUpdateInput {
+            scope: PromptBudgetUpdateScope::Session,
             reset: false,
             percentages: Some(PromptBudgetLayerPercentagesInput {
                 system: Some(5),
@@ -604,6 +609,25 @@ fn prompt_budget_tool_definitions_and_parsing_are_explicit() {
                 transcript_tail: Some(20),
             }),
             reason: Some("need more transcript tail".to_string()),
+        })
+    );
+
+    let next_turn_call = ToolCall::from_openai_function(
+        "prompt_budget_update",
+        r#"{"scope":"next_turn","percentages":{"context_summary":34,"transcript_tail":1},"reason":"trim next prompt"}"#,
+    )
+    .expect("parse next-turn update");
+    assert_eq!(
+        next_turn_call,
+        ToolCall::PromptBudgetUpdate(super::PromptBudgetUpdateInput {
+            scope: PromptBudgetUpdateScope::NextTurn,
+            reset: false,
+            percentages: Some(PromptBudgetLayerPercentagesInput {
+                context_summary: Some(34),
+                transcript_tail: Some(1),
+                ..PromptBudgetLayerPercentagesInput::default()
+            }),
+            reason: Some("trim next prompt".to_string()),
         })
     );
 }

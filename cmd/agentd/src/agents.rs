@@ -39,6 +39,9 @@ const DEFAULT_WEB_SEARCH_FIRST_GUIDANCE_SECTION: &str = r#"- Web:
   - Do not guess fetch-only endpoints as search; if `web_search` returns no results, reformulate once or state that no source was found
 "#;
 
+const DEFAULT_PROMPT_BUDGET_UPDATE_GUIDANCE_LINE: &str = "  - Use `prompt_budget_update` with scope `session` only for durable session policy changes, or scope `next_turn` for a one-shot override on the next full prompt assembly; supplied percentages must sum to 100 after merging\n";
+const LEGACY_PROMPT_BUDGET_UPDATE_GUIDANCE_LINE: &str = "  - Use `prompt_budget_update` only when the task needs a different context allocation; supplied percentages must sum to 100 after merging\n";
+
 const DEFAULT_AGENTS_MD: &str = r#"Assistant agent profile.
 
 - Primary role: general-purpose coding agent
@@ -80,7 +83,7 @@ Tool usage rules:
   - Use task ids returned by `add_task` or `plan_snapshot`; do not invent ordinal references unless already shown
   - Update progress with `set_task_status` and `add_task_note` as work advances
   - Use `prompt_budget_read` before changing prompt layer budgets
-  - Use `prompt_budget_update` only when the task needs a different context allocation; supplied percentages must sum to 100 after merging
+  - Use `prompt_budget_update` with scope `session` only for durable session policy changes, or scope `next_turn` for a one-shot override on the next full prompt assembly; supplied percentages must sum to 100 after merging
 - Skills:
   - Use `skill_list` to inspect the session-visible skill catalog before assuming a specialized workflow exists
   - Use `skill_read` before relying on detailed skill instructions; it returns the SKILL.md body with bounded `max_bytes`
@@ -756,15 +759,25 @@ fn previous_generated_default_agents_prompt_variants(current: &str) -> Vec<Strin
         DEFAULT_SKILL_TOOL_GUIDANCE_SECTION,
         DEFAULT_AUTONOMY_STATE_GUIDANCE_LINE,
     ];
+    let bases = [
+        current.to_string(),
+        current.replace(
+            DEFAULT_PROMPT_BUDGET_UPDATE_GUIDANCE_LINE,
+            LEGACY_PROMPT_BUDGET_UPDATE_GUIDANCE_LINE,
+        ),
+    ];
     let mut variants = Vec::new();
-    for mask in 1..(1usize << optional_blocks.len()) {
-        let mut candidate = current.to_string();
-        for (index, block) in optional_blocks.iter().enumerate() {
-            if mask & (1usize << index) != 0 {
-                candidate = candidate.replace(block, "");
+    for (base_index, base) in bases.iter().enumerate() {
+        let start_mask = if base_index == 0 { 1 } else { 0 };
+        for mask in start_mask..(1usize << optional_blocks.len()) {
+            let mut candidate = base.clone();
+            for (index, block) in optional_blocks.iter().enumerate() {
+                if mask & (1usize << index) != 0 {
+                    candidate = candidate.replace(block, "");
+                }
             }
+            variants.push(normalize_prompt_contents(&candidate));
         }
-        variants.push(normalize_prompt_contents(&candidate));
     }
     variants
 }
@@ -857,6 +870,7 @@ mod tests {
         assert!(refreshed.contains("Use `skill_list`"));
         assert!(refreshed.contains("Use `autonomy_state_read`"));
         assert!(refreshed.contains("Use `web_search` first"));
+        assert!(refreshed.contains("scope `next_turn`"));
 
         fs::write(
             default_home.join("AGENTS.md"),
@@ -874,6 +888,24 @@ mod tests {
         assert!(refreshed_pre_skill.contains("Use `skill_enable` or `skill_disable`"));
         assert!(refreshed_pre_skill.contains("Use `autonomy_state_read`"));
         assert!(refreshed_pre_skill.contains("Use `web_search` first"));
+        assert!(refreshed_pre_skill.contains("scope `next_turn`"));
+
+        fs::write(
+            default_home.join("AGENTS.md"),
+            DEFAULT_AGENTS_MD.replace(
+                DEFAULT_PROMPT_BUDGET_UPDATE_GUIDANCE_LINE,
+                LEGACY_PROMPT_BUDGET_UPDATE_GUIDANCE_LINE,
+            ),
+        )
+        .expect("write pre-next-turn budget generated agents prompt");
+        ensure_builtin_agent_home_layout(
+            &default_home,
+            builtin_template(DEFAULT_AGENT_ID).expect("default template"),
+        )
+        .expect("refresh pre-next-turn budget prompt");
+        let refreshed_pre_next_turn =
+            fs::read_to_string(default_home.join("AGENTS.md")).expect("read refreshed prompt");
+        assert!(refreshed_pre_next_turn.contains("scope `next_turn`"));
 
         let obsidian_skill =
             fs::read_to_string(default_home.join("skills/obsidian-vault/SKILL.md"))

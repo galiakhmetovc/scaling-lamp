@@ -960,7 +960,7 @@ Runtime может добавить system nudges:
 usable_context_tokens = effective_context_window_tokens * auto_compaction_trigger_ratio
 ```
 
-Агент может менять session-level prompt budget percentages через `prompt_budget_read` и `prompt_budget_update`, если задача этого требует. Overrides имеют guardrail: после merge сумма процентов должна быть `100`. Изменения попадают в обычный tool-call ledger и debug surfaces. Physical per-layer truncation уже применяется при сборке provider request. Turn-level overrides остаются отдельным follow-up шагом.
+Агент может менять prompt budget percentages через `prompt_budget_read` и `prompt_budget_update`, если задача этого требует. `scope="session"` меняет durable session policy. `scope="next_turn"` ставит одноразовый override на следующий полный prompt assembly, не меняя durable policy, и очищается сразу после применения. Overrides имеют guardrail: после merge сумма процентов должна быть `100`. Изменения попадают в обычный tool-call ledger и debug surfaces. Physical per-layer truncation уже применяется при сборке provider request.
 
 ## Что надо изменить в коде, если этот contract принять
 
@@ -1043,14 +1043,15 @@ usable_context_tokens = effective_context_window_tokens * auto_compaction_trigge
 
 - `SessionHead` показывает `context_window_tokens`, `auto_compaction_trigger_ratio` и `usable_context_tokens`;
 - session хранит `PromptBudgetPolicy`;
-- модель может вызвать `prompt_budget_read` и увидеть проценты слоёв и target tokens;
-- модель может вызвать `prompt_budget_update` для session-scoped override или reset;
+- модель может вызвать `prompt_budget_read` и увидеть effective source, pending next-turn flag, проценты слоёв и target tokens;
+- модель может вызвать `prompt_budget_update(scope="session")` для durable session-scoped override или reset;
+- модель может вызвать `prompt_budget_update(scope="next_turn")` для одноразового override следующего полного prompt assembly;
 - invalid policy с суммой не `100` возвращает tool error.
 
-Что ещё не сделано:
+Ограничения:
 
-- turn-level ephemeral overrides;
 - operator UI для сравнения default vs override.
+- provider continuation rounds не пересобирают base prompt, поэтому `scope="next_turn"` не влияет на текущий tool loop после вызова tool.
 
 ### Change C6c: включить physical prompt budget truncation
 

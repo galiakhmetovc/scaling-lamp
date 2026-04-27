@@ -35,6 +35,7 @@ pub struct SessionSettings {
     pub enabled_skills: Vec<String>,
     pub disabled_skills: Vec<String>,
     pub prompt_budget: PromptBudgetPolicy,
+    pub next_prompt_budget_override: Option<PromptBudgetPolicy>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -138,6 +139,7 @@ impl Default for SessionSettings {
             enabled_skills: Vec::new(),
             disabled_skills: Vec::new(),
             prompt_budget: PromptBudgetPolicy::default(),
+            next_prompt_budget_override: None,
         }
     }
 }
@@ -489,6 +491,7 @@ mod tests {
         assert!(session.settings.disabled_skills.is_empty());
         assert_eq!(session.settings.prompt_budget.total_percent(), 100);
         assert_eq!(session.settings.prompt_budget.transcript_tail, 20);
+        assert!(session.settings.next_prompt_budget_override.is_none());
     }
 
     #[test]

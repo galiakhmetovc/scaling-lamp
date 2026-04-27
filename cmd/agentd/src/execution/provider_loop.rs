@@ -27,7 +27,7 @@ use agent_runtime::run::{
     ApprovalRequest, PendingLoopResetApproval, PendingProviderApproval, PendingToolApproval,
     ProviderLoopState, RunStepKind,
 };
-use agent_runtime::session::{MessageRole, TranscriptEntry};
+use agent_runtime::session::{MessageRole, PromptBudgetPolicy, TranscriptEntry};
 use agent_runtime::skills::{
     SessionSkillStatus, SkillActivationMode, SkillCatalog, SkillSummary, parse_skill_document,
     resolve_session_skill_status, scan_skill_catalog_with_overrides,
@@ -36,9 +36,9 @@ use agent_runtime::tool::{
     AddTaskNoteOutput, AddTaskOutput, ArtifactReadOutput, ArtifactSearchOutput,
     ArtifactSearchResult, EditTaskOutput, InitPlanOutput, PlanLintOutput, PlanReadOutput,
     PlanSnapshotOutput, PlanWriteOutput, PromptBudgetLayerOutput, PromptBudgetReadOutput,
-    PromptBudgetUpdateOutput, SetTaskStatusOutput, SkillActivationOutput, SkillListOutput,
-    SkillReadOutput, SkillStatusOutput, ToolCatalog, ToolDefinition, ToolFamily, ToolName,
-    ToolOutput, ToolPolicy, ToolRuntime,
+    PromptBudgetUpdateOutput, PromptBudgetUpdateScope, SetTaskStatusOutput, SkillActivationOutput,
+    SkillListOutput, SkillReadOutput, SkillStatusOutput, ToolCatalog, ToolDefinition, ToolFamily,
+    ToolName, ToolOutput, ToolPolicy, ToolRuntime,
 };
 use agent_runtime::workspace::WorkspaceRef;
 use std::path::PathBuf;
@@ -109,6 +109,14 @@ struct ToolCallResultLedgerUpdate<'a> {
 struct PromptMessages {
     messages: Vec<ProviderMessage>,
     context_offload: Option<ContextOffloadSnapshot>,
+}
+
+struct PromptMessagesRequest<'a> {
+    session_id: &'a str,
+    workspace: &'a WorkspaceRef,
+    model: Option<&'a str>,
+    instructions: Option<&'a str>,
+    consume_next_turn_prompt_budget: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -992,13 +1000,29 @@ impl ExecutionService {
         provider: Option<&dyn ProviderDriver>,
         session: &Session,
     ) -> PromptBudgetReadOutput {
+        let (policy, source) = if let Some(policy) = &session.settings.next_prompt_budget_override {
+            (policy, "next_turn_override")
+        } else if session.settings.prompt_budget == PromptBudgetPolicy::default() {
+            (&session.settings.prompt_budget, "runtime_default")
+        } else {
+            (&session.settings.prompt_budget, "session_override")
+        };
+        self.prompt_budget_read_output_for_policy(provider, session, policy, source)
+    }
+
+    fn prompt_budget_read_output_for_policy(
+        &self,
+        provider: Option<&dyn ProviderDriver>,
+        session: &Session,
+        policy: &PromptBudgetPolicy,
+        source: &str,
+    ) -> PromptBudgetReadOutput {
         let context_window_tokens = self.prompt_budget_context_window_tokens(provider, session);
         let auto_compaction_trigger_ratio = Some(self.config.context_auto_compaction_trigger_ratio);
         let usable_context_tokens = SessionHeadRuntime::usable_context_tokens(
             context_window_tokens,
             auto_compaction_trigger_ratio,
         );
-        let policy = &session.settings.prompt_budget;
         let target_tokens = |percent: u8| {
             usable_context_tokens
                 .map(|tokens| ((u64::from(tokens) * u64::from(percent)) / 100) as u32)
@@ -1010,11 +1034,8 @@ impl ExecutionService {
         };
         PromptBudgetReadOutput {
             session_id: session.id.clone(),
-            source: if *policy == agent_runtime::session::PromptBudgetPolicy::default() {
-                "runtime_default".to_string()
-            } else {
-                "session_override".to_string()
-            },
+            source: source.to_string(),
+            pending_next_turn_override: session.settings.next_prompt_budget_override.is_some(),
             context_window_tokens,
             auto_compaction_trigger_basis_points: (self
                 .config
@@ -1074,27 +1095,81 @@ impl ExecutionService {
                 })?,
         )
         .map_err(ExecutionError::RecordConversion)?;
-        let mut policy = if input.reset {
-            agent_runtime::session::PromptBudgetPolicy::default()
-        } else {
-            session.settings.prompt_budget.clone()
+
+        let mut selected_policy = match input.scope {
+            PromptBudgetUpdateScope::Session => {
+                if input.reset {
+                    PromptBudgetPolicy::default()
+                } else {
+                    session.settings.prompt_budget.clone()
+                }
+            }
+            PromptBudgetUpdateScope::NextTurn => {
+                if input.reset {
+                    PromptBudgetPolicy::default()
+                } else {
+                    session
+                        .settings
+                        .next_prompt_budget_override
+                        .clone()
+                        .unwrap_or_else(|| session.settings.prompt_budget.clone())
+                }
+            }
         };
         if let Some(percentages) = &input.percentages {
-            percentages.apply_to(&mut policy);
+            percentages.apply_to(&mut selected_policy);
         }
-        policy.validate().map_err(|source| {
+        selected_policy.validate().map_err(|source| {
             ExecutionError::Tool(agent_runtime::tool::ToolError::InvalidPlanWrite {
                 reason: source.to_string(),
             })
         })?;
-        session.settings.prompt_budget = policy;
+
+        let output_policy;
+        let output_source;
+        match input.scope {
+            PromptBudgetUpdateScope::Session => {
+                session.settings.prompt_budget = selected_policy;
+                output_policy = session.settings.prompt_budget.clone();
+                output_source = if output_policy == PromptBudgetPolicy::default() {
+                    "runtime_default"
+                } else {
+                    "session_override"
+                };
+            }
+            PromptBudgetUpdateScope::NextTurn => {
+                if input.reset && input.percentages.is_none() {
+                    session.settings.next_prompt_budget_override = None;
+                    output_policy = session.settings.prompt_budget.clone();
+                    output_source = if output_policy == PromptBudgetPolicy::default() {
+                        "runtime_default"
+                    } else {
+                        "session_override"
+                    };
+                } else {
+                    session.settings.next_prompt_budget_override = Some(selected_policy);
+                    output_policy = session
+                        .settings
+                        .next_prompt_budget_override
+                        .clone()
+                        .expect("queued next-turn override");
+                    output_source = "next_turn_override";
+                }
+            }
+        }
         session.updated_at = now;
         let record = agent_persistence::SessionRecord::try_from(&session)
             .map_err(ExecutionError::RecordConversion)?;
         store.put_session(&record).map_err(ExecutionError::Store)?;
-        let budget = self.prompt_budget_read_output_for_session(provider, &session);
+        let budget = self.prompt_budget_read_output_for_policy(
+            provider,
+            &session,
+            &output_policy,
+            output_source,
+        );
         Ok(PromptBudgetUpdateOutput {
             session_id: session.id,
+            scope: input.scope.as_str().to_string(),
             reset: input.reset,
             reason: input.reason.clone(),
             budget,
@@ -1428,10 +1503,13 @@ impl ExecutionService {
         let prompt_messages = self.prompt_messages(
             store,
             Some(provider),
-            session_id,
-            &workspace,
-            model,
-            instructions,
+            PromptMessagesRequest {
+                session_id,
+                workspace: &workspace,
+                model,
+                instructions,
+                consume_next_turn_prompt_budget: false,
+            },
         )?;
         let estimated_prompt_tokens =
             Self::estimate_prompt_tokens(&prompt_messages.messages, instructions);
@@ -1525,12 +1603,13 @@ impl ExecutionService {
         &self,
         store: &PersistenceStore,
         provider: Option<&dyn ProviderDriver>,
-        session_id: &str,
-        workspace: &WorkspaceRef,
-        model: Option<&str>,
-        instructions: Option<&str>,
+        request: PromptMessagesRequest<'_>,
     ) -> Result<PromptMessages, ExecutionError> {
-        let session = Session::try_from(
+        let session_id = request.session_id;
+        let workspace = request.workspace;
+        let model = request.model;
+        let instructions = request.instructions;
+        let mut session = Session::try_from(
             store
                 .get_session(session_id)
                 .map_err(ExecutionError::Store)?
@@ -1539,6 +1618,19 @@ impl ExecutionService {
                 })?,
         )
         .map_err(ExecutionError::RecordConversion)?;
+        let prompt_budget_policy = session
+            .settings
+            .next_prompt_budget_override
+            .clone()
+            .unwrap_or_else(|| session.settings.prompt_budget.clone());
+        if request.consume_next_turn_prompt_budget
+            && session.settings.next_prompt_budget_override.is_some()
+        {
+            session.settings.next_prompt_budget_override = None;
+            let record = agent_persistence::SessionRecord::try_from(&session)
+                .map_err(ExecutionError::RecordConversion)?;
+            store.put_session(&record).map_err(ExecutionError::Store)?;
+        }
         let transcripts = store
             .list_transcripts_for_session(session_id)
             .map_err(ExecutionError::Store)?;
@@ -1623,7 +1715,7 @@ impl ExecutionService {
             workspace,
         });
         let prompt_budget = PromptAssemblyBudget {
-            policy: session.settings.prompt_budget.clone(),
+            policy: prompt_budget_policy,
             usable_context_tokens: session_head.usable_context_tokens,
         };
         let system_prompt =
@@ -1705,13 +1797,16 @@ impl ExecutionService {
         let prompt = self.prompt_messages(
             store,
             Some(provider),
-            session_id,
-            &workspace,
-            session.settings.model.as_deref(),
-            session
-                .prompt_override
-                .as_ref()
-                .map(|override_| override_.as_str()),
+            PromptMessagesRequest {
+                session_id,
+                workspace: &workspace,
+                model: session.settings.model.as_deref(),
+                instructions: session
+                    .prompt_override
+                    .as_ref()
+                    .map(|override_| override_.as_str()),
+                consume_next_turn_prompt_budget: false,
+            },
         )?;
         let tools = self.automatic_provider_tools(
             provider,
@@ -3533,10 +3628,13 @@ impl ExecutionService {
         let prompt_messages = self.prompt_messages(
             store,
             Some(provider),
-            session_id,
-            &workspace,
-            model.as_deref(),
-            instructions.as_deref(),
+            PromptMessagesRequest {
+                session_id,
+                workspace: &workspace,
+                model: model.as_deref(),
+                instructions: instructions.as_deref(),
+                consume_next_turn_prompt_budget: true,
+            },
         )?;
         let catalog = ToolCatalog::default();
         let agent_profile = self.load_agent_profile_for_session(store, session_id)?;

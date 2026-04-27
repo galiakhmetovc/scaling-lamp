@@ -267,6 +267,7 @@ fn build_from_config_refreshes_legacy_default_prompts_but_preserves_custom_edits
     assert!(refreshed_agents.contains("Use `skill_enable` or `skill_disable`"));
     assert!(refreshed_agents.contains("Use `autonomy_state_read`"));
     assert!(refreshed_agents.contains("Use `web_search` first"));
+    assert!(refreshed_agents.contains("scope `next_turn`"));
     let obsidian_skill = fs::read_to_string(default_home.join("skills/obsidian-vault/SKILL.md"))
         .expect("read obsidian skill");
     assert!(obsidian_skill.contains("name: obsidian-vault"));

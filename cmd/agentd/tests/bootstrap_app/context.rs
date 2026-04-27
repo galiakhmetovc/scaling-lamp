@@ -3112,6 +3112,202 @@ fn execute_chat_turn_can_read_and_update_prompt_budget_policy() {
 }
 
 #[test]
+fn execute_chat_turn_applies_next_turn_prompt_budget_once_without_persisting_session_policy() {
+    let (api_base, requests, handle) = spawn_json_server_sequence(vec![
+        r#"{
+                "id":"resp_next_turn_budget_1",
+                "model":"gpt-5.4",
+                "output":[
+                    {
+                        "id":"fc_prompt_budget_next_turn",
+                        "type":"function_call",
+                        "call_id":"call_prompt_budget_next_turn",
+                        "name":"prompt_budget_update",
+                        "arguments":"{\"scope\":\"next_turn\",\"percentages\":{\"context_summary\":34,\"transcript_tail\":1},\"reason\":\"trim only the next full prompt\"}"
+                    }
+                ],
+                "usage":{"input_tokens":30,"output_tokens":10,"total_tokens":40}
+            }"#
+        .to_string(),
+        r#"{
+                "id":"resp_next_turn_budget_2",
+                "model":"gpt-5.4",
+                "output":[
+                    {
+                        "id":"msg_prompt_budget_next_turn",
+                        "type":"message",
+                        "status":"completed",
+                        "role":"assistant",
+                        "content":[
+                            {
+                                "type":"output_text",
+                                "text":"Next turn budget override queued."
+                            }
+                        ]
+                    }
+                ],
+                "usage":{"input_tokens":22,"output_tokens":6,"total_tokens":28}
+            }"#
+        .to_string(),
+        r#"{
+                "id":"resp_next_turn_budget_3",
+                "model":"gpt-5.4",
+                "output":[
+                    {
+                        "id":"msg_prompt_budget_next_turn_applied",
+                        "type":"message",
+                        "status":"completed",
+                        "role":"assistant",
+                        "content":[
+                            {
+                                "type":"output_text",
+                                "text":"One-shot budget applied."
+                            }
+                        ]
+                    }
+                ],
+                "usage":{"input_tokens":22,"output_tokens":6,"total_tokens":28}
+            }"#
+        .to_string(),
+    ]);
+    let temp = tempfile::tempdir().expect("tempdir");
+    let app = build_from_config(AppConfig {
+        data_dir: temp.path().join("state-root"),
+        daemon: Default::default(),
+        provider: ConfiguredProvider {
+            kind: ProviderKind::OpenAiResponses,
+            api_base: Some(format!("{api_base}/v1")),
+            api_key: Some("test-key".to_string()),
+            default_model: Some("gpt-5.4".to_string()),
+            ..ConfiguredProvider::default()
+        },
+        context: agent_persistence::config::ContextConfig {
+            auto_compaction_trigger_ratio: 1.0,
+            context_window_tokens_override: Some(10_000),
+            ..agent_persistence::config::ContextConfig::default()
+        },
+        ..AppConfig::default()
+    })
+    .expect("build app");
+    let store = PersistenceStore::open(&app.persistence).expect("open store");
+
+    store
+        .put_session(&SessionRecord {
+            id: "session-prompt-budget-next-turn".to_string(),
+            title: "Prompt Budget Next Turn".to_string(),
+            prompt_override: None,
+            settings_json: serde_json::to_string(&SessionSettings::default())
+                .expect("serialize settings"),
+            workspace_root: app.runtime.workspace.root.display().to_string(),
+            agent_profile_id: "default".to_string(),
+            active_mission_id: None,
+            parent_session_id: None,
+            parent_job_id: None,
+            delegation_label: None,
+            created_at: 1,
+            updated_at: 1,
+        })
+        .expect("put session");
+
+    let first_report = app
+        .execute_chat_turn(
+            "session-prompt-budget-next-turn",
+            "queue one-shot budget",
+            10,
+        )
+        .expect("execute first chat turn");
+    let _first_request = requests.recv().expect("first provider request");
+    let second_request = requests.recv().expect("second provider request");
+
+    assert_eq!(
+        first_report.output_text,
+        "Next turn budget override queued."
+    );
+    let queued = Session::try_from(
+        store
+            .get_session("session-prompt-budget-next-turn")
+            .expect("get queued session")
+            .expect("queued session exists"),
+    )
+    .expect("restore queued session");
+    assert_eq!(
+        queued.settings.prompt_budget,
+        agent_runtime::session::PromptBudgetPolicy::default()
+    );
+    assert_eq!(
+        queued
+            .settings
+            .next_prompt_budget_override
+            .as_ref()
+            .expect("next-turn override")
+            .transcript_tail,
+        1
+    );
+
+    let second_request_body = second_request
+        .split_once("\r\n\r\n")
+        .map(|(_, body)| body)
+        .expect("extract second provider request body");
+    let second_request_json: serde_json::Value =
+        serde_json::from_str(second_request_body).expect("parse second provider request");
+    let update_tool_output = second_request_json["input"][0]["output"]
+        .as_str()
+        .expect("update tool output string");
+    let update_tool_output_json: serde_json::Value =
+        serde_json::from_str(update_tool_output).expect("parse update tool output");
+    assert_eq!(
+        update_tool_output_json["scope"],
+        serde_json::json!("next_turn")
+    );
+    assert_eq!(
+        update_tool_output_json["source"],
+        serde_json::json!("next_turn_override")
+    );
+
+    store
+        .put_transcript(&agent_persistence::TranscriptRecord {
+            id: "transcript-next-turn-old-user".to_string(),
+            session_id: "session-prompt-budget-next-turn".to_string(),
+            run_id: None,
+            kind: "user".to_string(),
+            content: format!(
+                "{}OLD_PROMPT_BUDGET_NEXT_TURN_MARKER",
+                "old user filler ".repeat(400)
+            ),
+            created_at: 2,
+        })
+        .expect("put old transcript");
+
+    let second_report = app
+        .execute_chat_turn(
+            "session-prompt-budget-next-turn",
+            "this turn should use the one-shot budget",
+            10,
+        )
+        .expect("execute second chat turn");
+    let third_request = requests.recv().expect("third provider request");
+    handle.join().expect("join server");
+
+    assert_eq!(second_report.output_text, "One-shot budget applied.");
+    assert!(third_request.contains("Prompt Budget Truncation:"));
+    assert!(third_request.contains("layer=transcript_tail"));
+    assert!(!third_request.contains("OLD_PROMPT_BUDGET_NEXT_TURN_MARKER"));
+
+    let consumed = Session::try_from(
+        store
+            .get_session("session-prompt-budget-next-turn")
+            .expect("get consumed session")
+            .expect("consumed session exists"),
+    )
+    .expect("restore consumed session");
+    assert_eq!(
+        consumed.settings.prompt_budget,
+        agent_runtime::session::PromptBudgetPolicy::default()
+    );
+    assert!(consumed.settings.next_prompt_budget_override.is_none());
+}
+
+#[test]
 fn execute_chat_turn_applies_prompt_budget_to_transcript_tail() {
     let (api_base, requests, handle) = spawn_json_server_sequence(vec![
         r#"{

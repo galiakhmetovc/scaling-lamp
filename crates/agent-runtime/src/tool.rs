@@ -406,6 +406,23 @@ pub struct PlanLintInput {}
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PromptBudgetReadInput {}
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PromptBudgetUpdateScope {
+    #[default]
+    Session,
+    NextTurn,
+}
+
+impl PromptBudgetUpdateScope {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Session => "session",
+            Self::NextTurn => "next_turn",
+        }
+    }
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct PromptBudgetLayerPercentagesInput {
@@ -424,6 +441,7 @@ pub struct PromptBudgetLayerPercentagesInput {
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct PromptBudgetUpdateInput {
+    pub scope: PromptBudgetUpdateScope,
     pub reset: bool,
     pub percentages: Option<PromptBudgetLayerPercentagesInput>,
     pub reason: Option<String>,
@@ -1069,6 +1087,7 @@ pub struct PromptBudgetLayerOutput {
 pub struct PromptBudgetReadOutput {
     pub session_id: String,
     pub source: String,
+    pub pending_next_turn_override: bool,
     pub context_window_tokens: Option<u32>,
     pub auto_compaction_trigger_basis_points: u32,
     pub usable_context_tokens: Option<u32>,
@@ -1079,6 +1098,7 @@ pub struct PromptBudgetReadOutput {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PromptBudgetUpdateOutput {
     pub session_id: String,
+    pub scope: String,
     pub reset: bool,
     pub reason: Option<String>,
     pub budget: PromptBudgetReadOutput,
@@ -2333,7 +2353,7 @@ impl ToolCatalog {
             ToolDefinition {
                 name: ToolName::PromptBudgetRead,
                 family: ToolFamily::Planning,
-                description: "Read the current session prompt budget policy, usable context basis, layer percentages, and target tokens",
+                description: "Read the effective prompt budget policy for the next full prompt assembly, including usable context basis, layer percentages, target tokens, and pending one-shot override state",
                 policy: ToolPolicy {
                     read_only: true,
                     destructive: false,
@@ -2343,7 +2363,7 @@ impl ToolCatalog {
             ToolDefinition {
                 name: ToolName::PromptBudgetUpdate,
                 family: ToolFamily::Planning,
-                description: "Update or reset the session-scoped prompt budget policy. Percentages are guard-railed: after merging supplied percentages, all layer percentages must sum to 100",
+                description: "Update or reset prompt budget policy. scope=session persists a session policy; scope=next_turn queues a one-shot override for the next full prompt assembly. Percentages must sum to 100 after merging",
                 policy: ToolPolicy {
                     read_only: false,
                     destructive: false,
@@ -3739,7 +3759,8 @@ impl ToolCall {
             Self::PlanLint(_) => "plan_lint".to_string(),
             Self::PromptBudgetRead(_) => "prompt_budget_read".to_string(),
             Self::PromptBudgetUpdate(input) => format!(
-                "prompt_budget_update reset={} percentages={}",
+                "prompt_budget_update scope={} reset={} percentages={}",
+                input.scope.as_str(),
                 input.reset,
                 input.percentages.is_some()
             ),
@@ -4632,15 +4653,17 @@ impl ToolOutput {
                 format!("plan_lint ok={} issues={}", output.ok, output.issues.len())
             }
             Self::PromptBudgetRead(output) => format!(
-                "prompt_budget_read source={} usable_context_tokens={}",
+                "prompt_budget_read source={} pending_next_turn_override={} usable_context_tokens={}",
                 output.source,
+                output.pending_next_turn_override,
                 output
                     .usable_context_tokens
                     .map(|value| value.to_string())
                     .unwrap_or_else(|| "unknown".to_string())
             ),
             Self::PromptBudgetUpdate(output) => format!(
-                "prompt_budget_update reset={} source={} usable_context_tokens={}",
+                "prompt_budget_update scope={} reset={} source={} usable_context_tokens={}",
+                output.scope,
                 output.reset,
                 output.budget.source,
                 output
@@ -5077,6 +5100,7 @@ impl ToolOutput {
                 "tool": "prompt_budget_read",
                 "session_id": output.session_id,
                 "source": output.source,
+                "pending_next_turn_override": output.pending_next_turn_override,
                 "context_window_tokens": output.context_window_tokens,
                 "auto_compaction_trigger_basis_points": output.auto_compaction_trigger_basis_points,
                 "usable_context_tokens": output.usable_context_tokens,
@@ -5091,6 +5115,7 @@ impl ToolOutput {
             Self::PromptBudgetUpdate(output) => json!({
                 "tool": "prompt_budget_update",
                 "session_id": output.session_id,
+                "scope": output.scope,
                 "reset": output.reset,
                 "reason": output.reason,
                 "source": output.budget.source,
@@ -5941,10 +5966,15 @@ impl ToolName {
             Self::PromptBudgetUpdate => json!({
                 "type": "object",
                 "properties": {
-                    "reset": { "type": "boolean", "description": "Reset the session-scoped prompt budget policy back to runtime defaults before applying any supplied percentages" },
+                    "scope": {
+                        "type": "string",
+                        "enum": ["session", "next_turn"],
+                        "description": "Update scope. Use session for persistent session policy. Use next_turn for a one-shot override applied to the next full prompt assembly only; provider continuation rounds do not rebuild the current prompt."
+                    },
+                    "reset": { "type": "boolean", "description": "Reset the selected prompt budget scope back to runtime defaults before applying any supplied percentages. With scope=next_turn and no percentages, this clears the queued one-shot override." },
                     "percentages": {
                         "type": ["object", "null"],
-                        "description": "Optional layer percentage overrides. Supplied values merge into the current session policy; after merging, all percentages must sum to 100.",
+                        "description": "Optional layer percentage overrides. Supplied values merge into the selected scope's base policy; after merging, all percentages must sum to 100.",
                         "properties": {
                             "system": { "type": ["integer", "null"], "minimum": 0, "maximum": 100 },
                             "agents": { "type": ["integer", "null"], "minimum": 0, "maximum": 100 },

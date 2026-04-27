@@ -554,8 +554,10 @@ prompt_budget_read({})
 
 Что делает:
 
-- читает текущую session-scoped prompt budget policy;
+- читает effective prompt budget policy для следующей полной сборки prompt;
 - возвращает `context_window_tokens`, `auto_compaction_trigger_basis_points`, `usable_context_tokens`;
+- возвращает `source`: `runtime_default`, `session_override` или `next_turn_override`;
+- возвращает `pending_next_turn_override`;
 - возвращает проценты и target tokens для слоёв `SYSTEM`, `AGENTS`, active skills, `SessionHead`, `AutonomyState`, plan, summary, offload refs, recent tool activity и transcript tail.
 
 Когда использовать:
@@ -569,6 +571,7 @@ prompt_budget_read({})
 
 ```text
 prompt_budget_update({
+  scope?: "session" | "next_turn",
   reset?: boolean,
   percentages?: {
     system?: integer | null,
@@ -588,19 +591,23 @@ prompt_budget_update({
 
 Что делает:
 
-- меняет session-scoped prompt budget policy;
-- если `reset=true`, сначала возвращает policy к default;
+- `scope="session"` меняет durable session-scoped prompt budget policy;
+- `scope="next_turn"` ставит одноразовый override на следующий полный prompt assembly, не меняя durable session policy;
+- если `reset=true`, сначала возвращает выбранный scope к default;
+- `scope="next_turn", reset=true` без `percentages` очищает queued one-shot override;
 - затем merge-ит переданные проценты;
 - отклоняет изменение, если итоговая сумма процентов не равна `100`;
 - влияет на физическое ограничение prompt layers при следующих provider requests.
 
 Когда использовать:
 
-- когда текущей задаче реально нужен другой context allocation;
+- `scope="session"` — когда текущей задаче реально нужен durable context allocation;
+- `scope="next_turn"` — когда нужно разово изменить allocation для следующего user/scheduled/inter-agent turn;
 - например временно увеличить `transcript_tail` или `recent_tool_activity`, чтобы модель лучше видела свежую историю или недавние tool ошибки.
 
 Важно:
 
+- provider continuation rounds не пересобирают base prompt, поэтому `scope="next_turn"` не влияет на текущий tool loop после вызова tool;
 - если layer превышает target, prompt содержит `Prompt Budget Truncation` notice с количеством скрытых approximate tokens/messages;
 - `transcript_tail` сохраняет новые сообщения, а старые uncovered messages скрываются первыми;
 - скрытое содержимое не теряется: его можно читать через transcript/debug/session/artifact surfaces.
