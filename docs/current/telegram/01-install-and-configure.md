@@ -602,10 +602,29 @@ teamdctl telegram pairings
 | `/new [title]` | Создать и выбрать session. |
 | `/sessions` | Показать sessions. |
 | `/use <session_id>` | Выбрать session. |
+| `/status` | Показать текущую session, её настройки, job counters и активный run. |
+| `/jobs` | Показать background jobs текущей session. |
+| `/stop` | Остановить активный turn текущей session. |
+| `/pause` | Alias для `/stop`. |
+| `/cancel` | Отменить активную и queued/background работу текущей session. |
+| `/model <model\|default>` | Задать model override для текущей session или сбросить на default. |
+| `/think <off\|low\|medium\|high\|default>` | Задать think level текущей session или сбросить на default. |
+| `/reasoning <on\|off>` | Включить/выключить показ reasoning для текущей session. |
+| `/autoapprove <on\|off>` | Включить/выключить auto-approve для текущей session. |
+| `/compact` | Запустить ручную compaction контекста текущей session. |
+| `/skills` | Показать skills текущей session. |
+| `/enable <skill_name>` | Включить skill для текущей session. |
+| `/disable <skill_name>` | Выключить skill для текущей session. |
+| `/files` | Показать Telegram-файлы, привязанные к текущей session. |
+| `/file <artifact_id>` | Отправить файл из текущей session обратно в Telegram. |
 | `/judge <message>` | Отправить сообщение Judge. |
 | `/agent <agent_id> <message>` | Отправить сообщение другому agent. |
 
 Обычный текст без slash-команды отправляется в выбранную session как chat turn.
+
+Session-level команды требуют выбранную session. Если её нет, создайте `/new` или выберите `/use <session_id>`.
+
+Telegram defaults (`autoapprove`, скрытый reasoning, `think=off`) применяются при создании или выборе session. После этого явные команды `/autoapprove`, `/reasoning`, `/think` сохраняются в настройках session и не перетираются следующим обычным сообщением.
 
 ## 14. Важные параметры Telegram
 

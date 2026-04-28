@@ -50,6 +50,14 @@ struct RecordingTelegramBackendState {
     updated_preferences: Vec<(String, SessionPreferencesPatch)>,
     executed_turns: Vec<(String, String)>,
     agent_messages: Vec<(String, String, String)>,
+    active_run_status: String,
+    background_jobs_status: String,
+    session_skills_status: String,
+    cancelled_active_runs: Vec<String>,
+    cancelled_all_work: Vec<String>,
+    enabled_skills: Vec<(String, String)>,
+    disabled_skills: Vec<(String, String)>,
+    compacted_sessions: Vec<String>,
     next_agent_message_response: String,
     next_chat_output: String,
     response_delay_ms: u64,
@@ -112,6 +120,7 @@ impl TelegramBackend for RecordingTelegramBackend {
             .updated_preferences
             .push((session_id.to_string(), patch.clone()));
         let auto_approve = patch.auto_approve;
+        let model = patch.model.clone();
         let reasoning_visible = patch.reasoning_visible;
         let think_level = patch.think_level.clone();
         {
@@ -123,6 +132,9 @@ impl TelegramBackend for RecordingTelegramBackend {
             })?;
             if let Some(auto_approve) = auto_approve {
                 summary.auto_approve = auto_approve;
+            }
+            if let Some(model) = model.clone() {
+                summary.model = model;
             }
             if let Some(reasoning_visible) = reasoning_visible {
                 summary.reasoning_visible = reasoning_visible;
@@ -138,6 +150,9 @@ impl TelegramBackend for RecordingTelegramBackend {
         {
             if let Some(auto_approve) = auto_approve {
                 listed.auto_approve = auto_approve;
+            }
+            if let Some(model) = model {
+                listed.model = model;
             }
             if let Some(reasoning_visible) = reasoning_visible {
                 listed.reasoning_visible = reasoning_visible;
@@ -179,6 +194,100 @@ impl TelegramBackend for RecordingTelegramBackend {
             message.to_string(),
         ));
         Ok(state.next_agent_message_response.clone())
+    }
+
+    fn render_active_run(&self, session_id: &str) -> Result<String, BootstrapError> {
+        let state = self.state.lock().expect("backend state");
+        if !state.session_lookup.contains_key(session_id) {
+            return Err(BootstrapError::MissingRecord {
+                kind: "session",
+                id: session_id.to_string(),
+            });
+        }
+        Ok(if state.active_run_status.is_empty() {
+            "Ход: активного выполнения нет".to_string()
+        } else {
+            state.active_run_status.clone()
+        })
+    }
+
+    fn cancel_active_run(&self, session_id: &str) -> Result<String, BootstrapError> {
+        let mut state = self.state.lock().expect("backend state");
+        state.cancelled_active_runs.push(session_id.to_string());
+        Ok(format!("stopped {session_id}"))
+    }
+
+    fn cancel_all_session_work(&self, session_id: &str) -> Result<String, BootstrapError> {
+        let mut state = self.state.lock().expect("backend state");
+        state.cancelled_all_work.push(session_id.to_string());
+        Ok(format!("cancelled {session_id}"))
+    }
+
+    fn render_session_background_jobs(&self, session_id: &str) -> Result<String, BootstrapError> {
+        let state = self.state.lock().expect("backend state");
+        if !state.session_lookup.contains_key(session_id) {
+            return Err(BootstrapError::MissingRecord {
+                kind: "session",
+                id: session_id.to_string(),
+            });
+        }
+        Ok(if state.background_jobs_status.is_empty() {
+            "Задачи: активных нет".to_string()
+        } else {
+            state.background_jobs_status.clone()
+        })
+    }
+
+    fn render_session_skills(&self, session_id: &str) -> Result<String, BootstrapError> {
+        let state = self.state.lock().expect("backend state");
+        if !state.session_lookup.contains_key(session_id) {
+            return Err(BootstrapError::MissingRecord {
+                kind: "session",
+                id: session_id.to_string(),
+            });
+        }
+        Ok(if state.session_skills_status.is_empty() {
+            "Скиллы: ничего не найдено".to_string()
+        } else {
+            state.session_skills_status.clone()
+        })
+    }
+
+    fn enable_session_skill(
+        &self,
+        session_id: &str,
+        skill_name: &str,
+    ) -> Result<String, BootstrapError> {
+        let mut state = self.state.lock().expect("backend state");
+        state
+            .enabled_skills
+            .push((session_id.to_string(), skill_name.to_string()));
+        Ok(format!("enabled {skill_name}"))
+    }
+
+    fn disable_session_skill(
+        &self,
+        session_id: &str,
+        skill_name: &str,
+    ) -> Result<String, BootstrapError> {
+        let mut state = self.state.lock().expect("backend state");
+        state
+            .disabled_skills
+            .push((session_id.to_string(), skill_name.to_string()));
+        Ok(format!("disabled {skill_name}"))
+    }
+
+    fn compact_session(&self, session_id: &str) -> Result<SessionSummary, BootstrapError> {
+        let mut state = self.state.lock().expect("backend state");
+        state.compacted_sessions.push(session_id.to_string());
+        let summary = state.session_lookup.get_mut(session_id).ok_or_else(|| {
+            BootstrapError::MissingRecord {
+                kind: "session",
+                id: session_id.to_string(),
+            }
+        })?;
+        summary.compactifications += 1;
+        Ok(summary.clone())
     }
 
     fn execute_chat_turn(
@@ -473,8 +582,257 @@ fn telegram_worker_registers_default_commands() {
     assert!(request.body.contains("\"command\":\"new\""));
     assert!(request.body.contains("\"command\":\"sessions\""));
     assert!(request.body.contains("\"command\":\"use\""));
+    assert!(request.body.contains("\"command\":\"status\""));
+    assert!(request.body.contains("\"command\":\"stop\""));
+    assert!(request.body.contains("\"command\":\"cancel\""));
+    assert!(request.body.contains("\"command\":\"model\""));
+    assert!(request.body.contains("\"command\":\"think\""));
+    assert!(request.body.contains("\"command\":\"autoapprove\""));
+    assert!(
+        request.body.contains("\"command\":\"skills\""),
+        "setMyCommands body missing skills: {}",
+        request.body
+    );
     assert!(request.body.contains("\"command\":\"files\""));
     assert!(request.body.contains("\"command\":\"file\""));
+
+    handle.join().expect("join fake api");
+}
+
+#[test]
+fn telegram_worker_updates_session_preferences_from_operator_commands() {
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("runtime");
+    let (_temp, app) = telegram_test_app();
+    seed_activated_pairing(&app, "pair-operator-prefs", 777, 42);
+    seed_binding(&app, 42, 777, Some("session-operator"));
+    let backend = RecordingTelegramBackend::with_state(RecordingTelegramBackendState {
+        session_lookup: BTreeMap::from([(
+            "session-operator".to_string(),
+            session_summary("session-operator", "Operator", true),
+        )]),
+        listed_sessions: vec![session_summary("session-operator", "Operator", true)],
+        ..RecordingTelegramBackendState::default()
+    });
+    let backend_state = backend.state();
+    let (api_url, requests, handle) = spawn_fake_telegram_api(vec![
+        json_response(
+            r#"{"ok":true,"result":[
+                {"update_id":136,"message":{"message_id":101,"date":0,"chat":{"id":42,"type":"private"},"from":{"id":777,"is_bot":false,"first_name":"Alice","username":"alice"},"text":"/model gpt-5.5"}},
+                {"update_id":137,"message":{"message_id":102,"date":0,"chat":{"id":42,"type":"private"},"from":{"id":777,"is_bot":false,"first_name":"Alice","username":"alice"},"text":"/think high"}},
+                {"update_id":138,"message":{"message_id":103,"date":0,"chat":{"id":42,"type":"private"},"from":{"id":777,"is_bot":false,"first_name":"Alice","username":"alice"},"text":"/reasoning off"}},
+                {"update_id":139,"message":{"message_id":104,"date":0,"chat":{"id":42,"type":"private"},"from":{"id":777,"is_bot":false,"first_name":"Alice","username":"alice"},"text":"/autoapprove off"}}
+            ]}"#,
+        ),
+        json_response(
+            r#"{"ok":true,"result":{"message_id":105,"date":0,"chat":{"id":42,"type":"private"},"text":"model"}}"#,
+        ),
+        json_response(
+            r#"{"ok":true,"result":{"message_id":106,"date":0,"chat":{"id":42,"type":"private"},"text":"think"}}"#,
+        ),
+        json_response(
+            r#"{"ok":true,"result":{"message_id":107,"date":0,"chat":{"id":42,"type":"private"},"text":"reasoning"}}"#,
+        ),
+        json_response(
+            r#"{"ok":true,"result":{"message_id":108,"date":0,"chat":{"id":42,"type":"private"},"text":"autoapprove"}}"#,
+        ),
+    ]);
+    let client = TelegramClient::new(TelegramClientConfig {
+        token: "test-token".to_string(),
+        api_url: Some(api_url),
+        poll_request_timeout_seconds: 40,
+    })
+    .expect("telegram client");
+    let worker =
+        TelegramWorker::with_consumer(app.clone(), backend.clone(), client, "telegram-test");
+
+    let processed = runtime.block_on(worker.poll_once()).expect("poll once");
+    assert_eq!(processed, 4);
+
+    let state = backend_state.lock().expect("backend state");
+    assert_eq!(
+        state.updated_preferences,
+        vec![
+            (
+                "session-operator".to_string(),
+                SessionPreferencesPatch {
+                    model: Some(Some("gpt-5.5".to_string())),
+                    ..SessionPreferencesPatch::default()
+                }
+            ),
+            (
+                "session-operator".to_string(),
+                SessionPreferencesPatch {
+                    think_level: Some(Some("high".to_string())),
+                    ..SessionPreferencesPatch::default()
+                }
+            ),
+            (
+                "session-operator".to_string(),
+                SessionPreferencesPatch {
+                    reasoning_visible: Some(false),
+                    ..SessionPreferencesPatch::default()
+                }
+            ),
+            (
+                "session-operator".to_string(),
+                SessionPreferencesPatch {
+                    auto_approve: Some(false),
+                    ..SessionPreferencesPatch::default()
+                }
+            ),
+        ]
+    );
+    assert!(state.executed_turns.is_empty());
+    drop(state);
+
+    let _ = requests
+        .recv_timeout(Duration::from_secs(2))
+        .expect("captured getUpdates");
+    let model_response = requests
+        .recv_timeout(Duration::from_secs(2))
+        .expect("captured model response");
+    assert!(model_response.body.contains("Model: gpt-5.5"));
+    let think_response = requests
+        .recv_timeout(Duration::from_secs(2))
+        .expect("captured think response");
+    assert!(think_response.body.contains("Think level: high"));
+    let reasoning_response = requests
+        .recv_timeout(Duration::from_secs(2))
+        .expect("captured reasoning response");
+    assert!(reasoning_response.body.contains("Reasoning visible: false"));
+    let autoapprove_response = requests
+        .recv_timeout(Duration::from_secs(2))
+        .expect("captured autoapprove response");
+    assert!(autoapprove_response.body.contains("Auto-approve: false"));
+
+    handle.join().expect("join fake api");
+}
+
+#[test]
+fn telegram_worker_routes_session_operator_commands_to_backend() {
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("runtime");
+    let (_temp, app) = telegram_test_app();
+    seed_activated_pairing(&app, "pair-operator", 777, 42);
+    seed_binding(&app, 42, 777, Some("session-operator"));
+    let mut summary = session_summary("session-operator", "Operator", true);
+    summary.model = Some("gpt-5.5".to_string());
+    summary.think_level = Some("off".to_string());
+    summary.message_count = 7;
+    let backend = RecordingTelegramBackend::with_state(RecordingTelegramBackendState {
+        session_lookup: BTreeMap::from([("session-operator".to_string(), summary)]),
+        active_run_status: "Ход:\n- статус: running".to_string(),
+        background_jobs_status: "Задачи:\n- [running] job-1 (chat_turn)".to_string(),
+        session_skills_status: "Скиллы:\n- [manual] obsidian-vault: Vault".to_string(),
+        ..RecordingTelegramBackendState::default()
+    });
+    let backend_state = backend.state();
+    let (api_url, requests, handle) = spawn_fake_telegram_api(vec![
+        json_response(
+            r#"{"ok":true,"result":[
+                {"update_id":140,"message":{"message_id":109,"date":0,"chat":{"id":42,"type":"private"},"from":{"id":777,"is_bot":false,"first_name":"Alice","username":"alice"},"text":"/status"}},
+                {"update_id":141,"message":{"message_id":110,"date":0,"chat":{"id":42,"type":"private"},"from":{"id":777,"is_bot":false,"first_name":"Alice","username":"alice"},"text":"/jobs"}},
+                {"update_id":142,"message":{"message_id":111,"date":0,"chat":{"id":42,"type":"private"},"from":{"id":777,"is_bot":false,"first_name":"Alice","username":"alice"},"text":"/stop"}},
+                {"update_id":143,"message":{"message_id":112,"date":0,"chat":{"id":42,"type":"private"},"from":{"id":777,"is_bot":false,"first_name":"Alice","username":"alice"},"text":"/cancel"}},
+                {"update_id":144,"message":{"message_id":113,"date":0,"chat":{"id":42,"type":"private"},"from":{"id":777,"is_bot":false,"first_name":"Alice","username":"alice"},"text":"/skills"}},
+                {"update_id":145,"message":{"message_id":114,"date":0,"chat":{"id":42,"type":"private"},"from":{"id":777,"is_bot":false,"first_name":"Alice","username":"alice"},"text":"/enable obsidian-vault"}},
+                {"update_id":146,"message":{"message_id":115,"date":0,"chat":{"id":42,"type":"private"},"from":{"id":777,"is_bot":false,"first_name":"Alice","username":"alice"},"text":"/disable obsidian-vault"}},
+                {"update_id":147,"message":{"message_id":116,"date":0,"chat":{"id":42,"type":"private"},"from":{"id":777,"is_bot":false,"first_name":"Alice","username":"alice"},"text":"/compact"}}
+            ]}"#,
+        ),
+        json_response(
+            r#"{"ok":true,"result":{"message_id":117,"date":0,"chat":{"id":42,"type":"private"},"text":"status"}}"#,
+        ),
+        json_response(
+            r#"{"ok":true,"result":{"message_id":118,"date":0,"chat":{"id":42,"type":"private"},"text":"jobs"}}"#,
+        ),
+        json_response(
+            r#"{"ok":true,"result":{"message_id":119,"date":0,"chat":{"id":42,"type":"private"},"text":"stop"}}"#,
+        ),
+        json_response(
+            r#"{"ok":true,"result":{"message_id":120,"date":0,"chat":{"id":42,"type":"private"},"text":"cancel"}}"#,
+        ),
+        json_response(
+            r#"{"ok":true,"result":{"message_id":121,"date":0,"chat":{"id":42,"type":"private"},"text":"skills"}}"#,
+        ),
+        json_response(
+            r#"{"ok":true,"result":{"message_id":122,"date":0,"chat":{"id":42,"type":"private"},"text":"enable"}}"#,
+        ),
+        json_response(
+            r#"{"ok":true,"result":{"message_id":123,"date":0,"chat":{"id":42,"type":"private"},"text":"disable"}}"#,
+        ),
+        json_response(
+            r#"{"ok":true,"result":{"message_id":124,"date":0,"chat":{"id":42,"type":"private"},"text":"compact"}}"#,
+        ),
+    ]);
+    let client = TelegramClient::new(TelegramClientConfig {
+        token: "test-token".to_string(),
+        api_url: Some(api_url),
+        poll_request_timeout_seconds: 40,
+    })
+    .expect("telegram client");
+    let worker =
+        TelegramWorker::with_consumer(app.clone(), backend.clone(), client, "telegram-test");
+
+    let processed = runtime.block_on(worker.poll_once()).expect("poll once");
+    assert_eq!(processed, 8);
+
+    let state = backend_state.lock().expect("backend state");
+    assert_eq!(state.cancelled_active_runs, vec!["session-operator"]);
+    assert_eq!(state.cancelled_all_work, vec!["session-operator"]);
+    assert_eq!(
+        state.enabled_skills,
+        vec![("session-operator".to_string(), "obsidian-vault".to_string())]
+    );
+    assert_eq!(
+        state.disabled_skills,
+        vec![("session-operator".to_string(), "obsidian-vault".to_string())]
+    );
+    assert_eq!(state.compacted_sessions, vec!["session-operator"]);
+    assert!(state.executed_turns.is_empty());
+    drop(state);
+
+    let _ = requests
+        .recv_timeout(Duration::from_secs(2))
+        .expect("captured getUpdates");
+    let status = requests
+        .recv_timeout(Duration::from_secs(2))
+        .expect("captured status response");
+    assert!(status.body.contains("Current session"));
+    assert!(status.body.contains("Ход"));
+    let jobs = requests
+        .recv_timeout(Duration::from_secs(2))
+        .expect("captured jobs response");
+    assert!(jobs.body.contains("job-1"));
+    let stop = requests
+        .recv_timeout(Duration::from_secs(2))
+        .expect("captured stop response");
+    assert!(stop.body.contains("stopped session-operator"));
+    let cancel = requests
+        .recv_timeout(Duration::from_secs(2))
+        .expect("captured cancel response");
+    assert!(cancel.body.contains("cancelled session-operator"));
+    let skills = requests
+        .recv_timeout(Duration::from_secs(2))
+        .expect("captured skills response");
+    assert!(skills.body.contains("obsidian-vault"));
+    let enable = requests
+        .recv_timeout(Duration::from_secs(2))
+        .expect("captured enable response");
+    assert!(enable.body.contains("enabled obsidian-vault"));
+    let disable = requests
+        .recv_timeout(Duration::from_secs(2))
+        .expect("captured disable response");
+    assert!(disable.body.contains("disabled obsidian-vault"));
+    let compact = requests
+        .recv_timeout(Duration::from_secs(2))
+        .expect("captured compact response");
+    assert!(compact.body.contains("compactifications=1"));
 
     handle.join().expect("join fake api");
 }
@@ -1427,7 +1785,7 @@ fn telegram_worker_caches_bot_identity_across_group_mentions() {
 }
 
 #[test]
-fn telegram_worker_normalizes_existing_private_session_preferences_before_turn() {
+fn telegram_worker_preserves_existing_private_session_preferences_before_turn() {
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
@@ -1471,18 +1829,7 @@ fn telegram_worker_normalizes_existing_private_session_preferences_before_turn()
     runtime.block_on(worker.poll_once()).expect("poll once");
 
     let state = backend_state.lock().expect("backend state");
-    assert_eq!(
-        state.updated_preferences,
-        vec![(
-            "session-1".to_string(),
-            SessionPreferencesPatch {
-                auto_approve: Some(true),
-                reasoning_visible: Some(false),
-                think_level: Some(Some("off".to_string())),
-                ..SessionPreferencesPatch::default()
-            }
-        )]
-    );
+    assert!(state.updated_preferences.is_empty());
     assert_eq!(
         state.executed_turns,
         vec![(
@@ -2665,8 +3012,10 @@ fn read_http_request(stream: &mut std::net::TcpStream) -> CapturedRequest {
     let content_length = headers
         .lines()
         .find_map(|line| {
-            line.strip_prefix("Content-Length: ")
-                .and_then(|value| value.trim().parse::<usize>().ok())
+            let (name, value) = line.split_once(':')?;
+            name.eq_ignore_ascii_case("content-length")
+                .then(|| value.trim().parse::<usize>().ok())
+                .flatten()
         })
         .unwrap_or(0);
 

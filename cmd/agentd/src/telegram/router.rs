@@ -65,6 +65,30 @@ enum ParsedTelegramCommand {
         target_agent_id: String,
         message: String,
     },
+    Status,
+    Jobs,
+    Stop,
+    Cancel,
+    Model {
+        model: Option<String>,
+    },
+    Think {
+        level: Option<String>,
+    },
+    Reasoning {
+        visible: bool,
+    },
+    AutoApprove {
+        enabled: bool,
+    },
+    Compact,
+    Skills,
+    EnableSkill {
+        skill_name: String,
+    },
+    DisableSkill {
+        skill_name: String,
+    },
     InvalidUsage(String),
 }
 
@@ -392,6 +416,14 @@ where
     ) -> Result<(), BootstrapError> {
         let chat_id = message.chat.id.0;
         let telegram_user_id = telegram_user_id(from)?;
+        if is_session_operator_command(&command) {
+            if self.load_activated_pairing(telegram_user_id)?.is_none() {
+                self.send_text_chunks(chat_id, &render_pairing_required_message())
+                    .await?;
+                return Ok(());
+            }
+            return self.handle_session_operator_command(chat_id, command).await;
+        }
         match command {
             ParsedTelegramCommand::Start => {
                 self.send_text_chunks(
@@ -508,6 +540,20 @@ where
             ParsedTelegramCommand::InvalidUsage(message) => {
                 self.send_text_chunks(chat_id, &message).await
             }
+            ParsedTelegramCommand::Status
+            | ParsedTelegramCommand::Jobs
+            | ParsedTelegramCommand::Stop
+            | ParsedTelegramCommand::Cancel
+            | ParsedTelegramCommand::Model { .. }
+            | ParsedTelegramCommand::Think { .. }
+            | ParsedTelegramCommand::Reasoning { .. }
+            | ParsedTelegramCommand::AutoApprove { .. }
+            | ParsedTelegramCommand::Compact
+            | ParsedTelegramCommand::Skills
+            | ParsedTelegramCommand::EnableSkill { .. }
+            | ParsedTelegramCommand::DisableSkill { .. } => {
+                unreachable!("session operator commands are handled before regular group commands")
+            }
         }
     }
 
@@ -519,6 +565,14 @@ where
     ) -> Result<(), BootstrapError> {
         let chat_id = message.chat.id.0;
         let telegram_user_id = telegram_user_id(from)?;
+        if is_session_operator_command(&command) {
+            if self.load_activated_pairing(telegram_user_id)?.is_none() {
+                self.send_text_chunks(chat_id, &render_pairing_required_message())
+                    .await?;
+                return Ok(());
+            }
+            return self.handle_session_operator_command(chat_id, command).await;
+        }
         match command {
             ParsedTelegramCommand::Start => {
                 let token = self.create_or_refresh_pairing(from, chat_id)?;
@@ -637,6 +691,20 @@ where
             ParsedTelegramCommand::InvalidUsage(message) => {
                 self.send_text_chunks(chat_id, &message).await
             }
+            ParsedTelegramCommand::Status
+            | ParsedTelegramCommand::Jobs
+            | ParsedTelegramCommand::Stop
+            | ParsedTelegramCommand::Cancel
+            | ParsedTelegramCommand::Model { .. }
+            | ParsedTelegramCommand::Think { .. }
+            | ParsedTelegramCommand::Reasoning { .. }
+            | ParsedTelegramCommand::AutoApprove { .. }
+            | ParsedTelegramCommand::Compact
+            | ParsedTelegramCommand::Skills
+            | ParsedTelegramCommand::EnableSkill { .. }
+            | ParsedTelegramCommand::DisableSkill { .. } => unreachable!(
+                "session operator commands are handled before regular private commands"
+            ),
         }
     }
 
@@ -782,6 +850,133 @@ where
         self.send_document_delivered(chat_id, artifact.bytes, &file_name, Some(&caption))
             .await?;
         Ok(())
+    }
+
+    async fn handle_session_operator_command(
+        &self,
+        chat_id: i64,
+        command: ParsedTelegramCommand,
+    ) -> Result<(), BootstrapError> {
+        let Some(session_id) = self.selected_session_id_for_chat(chat_id)? else {
+            self.send_text_chunks(
+                chat_id,
+                "No selected session. Use /new or /use <session_id>.",
+            )
+            .await?;
+            return Ok(());
+        };
+
+        match command {
+            ParsedTelegramCommand::Status => {
+                let summary = self.session_summary(session_id.clone()).await?;
+                let active_run = self.render_active_run(session_id).await?;
+                self.send_text_chunks(
+                    chat_id,
+                    &render_session_operator_status(&summary, &active_run),
+                )
+                .await
+            }
+            ParsedTelegramCommand::Jobs => {
+                let jobs = self.render_session_background_jobs(session_id).await?;
+                self.send_text_chunks(chat_id, &jobs).await
+            }
+            ParsedTelegramCommand::Stop => {
+                let response = self.cancel_active_run(session_id).await?;
+                self.send_text_chunks(chat_id, &response).await
+            }
+            ParsedTelegramCommand::Cancel => {
+                let response = self.cancel_all_session_work(session_id).await?;
+                self.send_text_chunks(chat_id, &response).await
+            }
+            ParsedTelegramCommand::Model { model } => {
+                let summary = self
+                    .update_session_preferences(
+                        session_id,
+                        SessionPreferencesPatch {
+                            model: Some(model),
+                            ..SessionPreferencesPatch::default()
+                        },
+                    )
+                    .await?;
+                self.send_text_chunks(
+                    chat_id,
+                    &format!("Model: {}", summary.model.as_deref().unwrap_or("<default>")),
+                )
+                .await
+            }
+            ParsedTelegramCommand::Think { level } => {
+                let summary = self
+                    .update_session_preferences(
+                        session_id,
+                        SessionPreferencesPatch {
+                            think_level: Some(level),
+                            ..SessionPreferencesPatch::default()
+                        },
+                    )
+                    .await?;
+                self.send_text_chunks(
+                    chat_id,
+                    &format!(
+                        "Think level: {}",
+                        summary.think_level.as_deref().unwrap_or("<default>")
+                    ),
+                )
+                .await
+            }
+            ParsedTelegramCommand::Reasoning { visible } => {
+                let summary = self
+                    .update_session_preferences(
+                        session_id,
+                        SessionPreferencesPatch {
+                            reasoning_visible: Some(visible),
+                            ..SessionPreferencesPatch::default()
+                        },
+                    )
+                    .await?;
+                self.send_text_chunks(
+                    chat_id,
+                    &format!("Reasoning visible: {}", summary.reasoning_visible),
+                )
+                .await
+            }
+            ParsedTelegramCommand::AutoApprove { enabled } => {
+                let summary = self
+                    .update_session_preferences(
+                        session_id,
+                        SessionPreferencesPatch {
+                            auto_approve: Some(enabled),
+                            ..SessionPreferencesPatch::default()
+                        },
+                    )
+                    .await?;
+                self.send_text_chunks(chat_id, &format!("Auto-approve: {}", summary.auto_approve))
+                    .await
+            }
+            ParsedTelegramCommand::Compact => {
+                let summary = self.compact_session(session_id).await?;
+                self.send_text_chunks(
+                    chat_id,
+                    &format!(
+                        "Compaction finished: {} ({}) compactifications={}",
+                        summary.title, summary.id, summary.compactifications
+                    ),
+                )
+                .await
+            }
+            ParsedTelegramCommand::Skills => {
+                let skills = self.render_session_skills(session_id).await?;
+                self.send_text_chunks(chat_id, &skills).await
+            }
+            ParsedTelegramCommand::EnableSkill { skill_name } => {
+                let skills = self.enable_session_skill(session_id, skill_name).await?;
+                self.send_text_chunks(chat_id, &skills).await
+            }
+            ParsedTelegramCommand::DisableSkill { skill_name } => {
+                let skills = self.disable_session_skill(session_id, skill_name).await?;
+                self.send_text_chunks(chat_id, &skills).await
+            }
+            _ => Ok(()),
+        }
     }
 
     fn selected_session_id_for_chat(&self, chat_id: i64) -> Result<Option<String>, BootstrapError> {
@@ -1231,9 +1426,7 @@ where
             .and_then(|record| record.selected_session_id);
         if let Some(session_id) = selected_session_id {
             self.ensure_chat_delivery_cursor_initialized(chat_id, session_id.as_str())?;
-            return self
-                .normalize_telegram_session_preferences(self.session_summary(session_id).await?)
-                .await;
+            return self.session_summary(session_id).await;
         }
 
         if !self.app.config.telegram.private_chat_auto_create_session {
@@ -1283,9 +1476,7 @@ where
             .and_then(|record| record.selected_session_id);
         if let Some(session_id) = selected_session_id {
             self.ensure_chat_delivery_cursor_initialized(chat_id, session_id.as_str())?;
-            return self
-                .normalize_telegram_session_preferences(self.session_summary(session_id).await?)
-                .await;
+            return self.session_summary(session_id).await;
         }
 
         let summary = self.create_session_auto(None).await?;
@@ -1644,6 +1835,73 @@ where
             .map_err(map_join_error)?
     }
 
+    async fn render_active_run(&self, session_id: String) -> Result<String, BootstrapError> {
+        let backend = self.backend.clone();
+        tokio::task::spawn_blocking(move || backend.render_active_run(&session_id))
+            .await
+            .map_err(map_join_error)?
+    }
+
+    async fn cancel_active_run(&self, session_id: String) -> Result<String, BootstrapError> {
+        let backend = self.backend.clone();
+        tokio::task::spawn_blocking(move || backend.cancel_active_run(&session_id))
+            .await
+            .map_err(map_join_error)?
+    }
+
+    async fn cancel_all_session_work(&self, session_id: String) -> Result<String, BootstrapError> {
+        let backend = self.backend.clone();
+        tokio::task::spawn_blocking(move || backend.cancel_all_session_work(&session_id))
+            .await
+            .map_err(map_join_error)?
+    }
+
+    async fn render_session_background_jobs(
+        &self,
+        session_id: String,
+    ) -> Result<String, BootstrapError> {
+        let backend = self.backend.clone();
+        tokio::task::spawn_blocking(move || backend.render_session_background_jobs(&session_id))
+            .await
+            .map_err(map_join_error)?
+    }
+
+    async fn render_session_skills(&self, session_id: String) -> Result<String, BootstrapError> {
+        let backend = self.backend.clone();
+        tokio::task::spawn_blocking(move || backend.render_session_skills(&session_id))
+            .await
+            .map_err(map_join_error)?
+    }
+
+    async fn enable_session_skill(
+        &self,
+        session_id: String,
+        skill_name: String,
+    ) -> Result<String, BootstrapError> {
+        let backend = self.backend.clone();
+        tokio::task::spawn_blocking(move || backend.enable_session_skill(&session_id, &skill_name))
+            .await
+            .map_err(map_join_error)?
+    }
+
+    async fn disable_session_skill(
+        &self,
+        session_id: String,
+        skill_name: String,
+    ) -> Result<String, BootstrapError> {
+        let backend = self.backend.clone();
+        tokio::task::spawn_blocking(move || backend.disable_session_skill(&session_id, &skill_name))
+            .await
+            .map_err(map_join_error)?
+    }
+
+    async fn compact_session(&self, session_id: String) -> Result<SessionSummary, BootstrapError> {
+        let backend = self.backend.clone();
+        tokio::task::spawn_blocking(move || backend.compact_session(&session_id))
+            .await
+            .map_err(map_join_error)?
+    }
+
     async fn session_summary(&self, session_id: String) -> Result<SessionSummary, BootstrapError> {
         let backend = self.backend.clone();
         tokio::task::spawn_blocking(move || backend.session_summary(&session_id))
@@ -1777,6 +2035,19 @@ pub fn default_command_specs() -> Vec<TelegramCommandSpec> {
         TelegramCommandSpec::new("new", "Create and select a session"),
         TelegramCommandSpec::new("sessions", "List sessions"),
         TelegramCommandSpec::new("use", "Select a session by id"),
+        TelegramCommandSpec::new("status", "Show current session status"),
+        TelegramCommandSpec::new("jobs", "Show current session jobs"),
+        TelegramCommandSpec::new("stop", "Stop the active turn"),
+        TelegramCommandSpec::new("pause", "Alias for stop"),
+        TelegramCommandSpec::new("cancel", "Cancel current session work"),
+        TelegramCommandSpec::new("model", "Set session model"),
+        TelegramCommandSpec::new("think", "Set session think level"),
+        TelegramCommandSpec::new("reasoning", "Toggle reasoning visibility"),
+        TelegramCommandSpec::new("autoapprove", "Toggle auto-approve"),
+        TelegramCommandSpec::new("compact", "Compact current session context"),
+        TelegramCommandSpec::new("skills", "List session skills"),
+        TelegramCommandSpec::new("enable", "Enable a session skill"),
+        TelegramCommandSpec::new("disable", "Disable a session skill"),
         TelegramCommandSpec::new("files", "List files in the current session"),
         TelegramCommandSpec::new("file", "Send a session file by artifact id"),
         TelegramCommandSpec::new("judge", "Send a message to Judge"),
@@ -1824,6 +2095,74 @@ fn parse_command_parts(command: &str, args: &str) -> Option<ParsedTelegramComman
             title: (!args.is_empty()).then(|| args.to_string()),
         }),
         "sessions" => Some(ParsedTelegramCommand::Sessions),
+        "status" => Some(ParsedTelegramCommand::Status),
+        "jobs" => Some(ParsedTelegramCommand::Jobs),
+        "stop" | "pause" => Some(ParsedTelegramCommand::Stop),
+        "cancel" => Some(ParsedTelegramCommand::Cancel),
+        "model" => {
+            if args.is_empty() {
+                Some(ParsedTelegramCommand::InvalidUsage(render_usage(
+                    "model",
+                    "<model|default>",
+                )))
+            } else {
+                Some(ParsedTelegramCommand::Model {
+                    model: parse_optional_setting(args),
+                })
+            }
+        }
+        "think" => {
+            if args.is_empty() {
+                Some(ParsedTelegramCommand::InvalidUsage(render_usage(
+                    "think",
+                    "<off|low|medium|high|default>",
+                )))
+            } else {
+                Some(ParsedTelegramCommand::Think {
+                    level: parse_optional_setting(args),
+                })
+            }
+        }
+        "reasoning" => match parse_bool_setting(args) {
+            Some(visible) => Some(ParsedTelegramCommand::Reasoning { visible }),
+            None => Some(ParsedTelegramCommand::InvalidUsage(render_usage(
+                "reasoning",
+                "<on|off>",
+            ))),
+        },
+        "autoapprove" => match parse_bool_setting(args) {
+            Some(enabled) => Some(ParsedTelegramCommand::AutoApprove { enabled }),
+            None => Some(ParsedTelegramCommand::InvalidUsage(render_usage(
+                "autoapprove",
+                "<on|off>",
+            ))),
+        },
+        "compact" => Some(ParsedTelegramCommand::Compact),
+        "skills" => Some(ParsedTelegramCommand::Skills),
+        "enable" => {
+            if args.is_empty() {
+                Some(ParsedTelegramCommand::InvalidUsage(render_usage(
+                    "enable",
+                    "<skill_name>",
+                )))
+            } else {
+                Some(ParsedTelegramCommand::EnableSkill {
+                    skill_name: args.to_string(),
+                })
+            }
+        }
+        "disable" => {
+            if args.is_empty() {
+                Some(ParsedTelegramCommand::InvalidUsage(render_usage(
+                    "disable",
+                    "<skill_name>",
+                )))
+            } else {
+                Some(ParsedTelegramCommand::DisableSkill {
+                    skill_name: args.to_string(),
+                })
+            }
+        }
         "files" => Some(ParsedTelegramCommand::Files),
         "file" => {
             if args.is_empty() {
@@ -1883,6 +2222,82 @@ fn parse_command_parts(command: &str, args: &str) -> Option<ParsedTelegramComman
         }
         _ => None,
     }
+}
+
+fn parse_optional_setting(args: &str) -> Option<String> {
+    let value = args.trim();
+    if value.eq_ignore_ascii_case("default")
+        || value.eq_ignore_ascii_case("reset")
+        || value.eq_ignore_ascii_case("none")
+    {
+        None
+    } else {
+        Some(value.to_string())
+    }
+}
+
+fn parse_bool_setting(args: &str) -> Option<bool> {
+    match args.trim().to_ascii_lowercase().as_str() {
+        "on" | "true" | "yes" | "1" | "enable" | "enabled" | "вкл" | "да" => Some(true),
+        "off" | "false" | "no" | "0" | "disable" | "disabled" | "выкл" | "нет" => {
+            Some(false)
+        }
+        _ => None,
+    }
+}
+
+fn is_session_operator_command(command: &ParsedTelegramCommand) -> bool {
+    matches!(
+        command,
+        ParsedTelegramCommand::Status
+            | ParsedTelegramCommand::Jobs
+            | ParsedTelegramCommand::Stop
+            | ParsedTelegramCommand::Cancel
+            | ParsedTelegramCommand::Model { .. }
+            | ParsedTelegramCommand::Think { .. }
+            | ParsedTelegramCommand::Reasoning { .. }
+            | ParsedTelegramCommand::AutoApprove { .. }
+            | ParsedTelegramCommand::Compact
+            | ParsedTelegramCommand::Skills
+            | ParsedTelegramCommand::EnableSkill { .. }
+            | ParsedTelegramCommand::DisableSkill { .. }
+    )
+}
+
+fn render_session_operator_status(summary: &SessionSummary, active_run: &str) -> String {
+    let mut lines = vec![
+        "Current session:".to_string(),
+        format!("- title: {}", summary.title),
+        format!("- id: {}", summary.id),
+        format!(
+            "- agent: {} ({})",
+            summary.agent_name, summary.agent_profile_id
+        ),
+        format!(
+            "- model: {}",
+            summary.model.as_deref().unwrap_or("<default>")
+        ),
+        format!(
+            "- think: {}",
+            summary.think_level.as_deref().unwrap_or("<default>")
+        ),
+        format!("- reasoning_visible: {}", summary.reasoning_visible),
+        format!("- auto_approve: {}", summary.auto_approve),
+        format!("- messages: {}", summary.message_count),
+        format!("- context_tokens: {}", summary.context_tokens),
+        format!(
+            "- background_jobs: {} total, {} running, {} queued",
+            summary.background_job_count,
+            summary.running_background_job_count,
+            summary.queued_background_job_count
+        ),
+    ];
+    if summary.has_pending_approval {
+        lines.push("- pending_approval: yes".to_string());
+    }
+    lines.push(String::new());
+    lines.push(active_run.to_string());
+    lines.join("\n")
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -2289,4 +2704,101 @@ fn unix_timestamp() -> Result<i64, BootstrapError> {
         .duration_since(UNIX_EPOCH)
         .map_err(BootstrapError::Clock)?
         .as_secs() as i64)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_session_operator_commands() {
+        assert_eq!(
+            parse_command("/model gpt-5.5"),
+            Some(ParsedTelegramCommand::Model {
+                model: Some("gpt-5.5".to_string())
+            })
+        );
+        assert_eq!(
+            parse_command("/model default"),
+            Some(ParsedTelegramCommand::Model { model: None })
+        );
+        assert_eq!(
+            parse_command("/think off"),
+            Some(ParsedTelegramCommand::Think {
+                level: Some("off".to_string())
+            })
+        );
+        assert_eq!(
+            parse_command("/think default"),
+            Some(ParsedTelegramCommand::Think { level: None })
+        );
+        assert_eq!(
+            parse_command("/reasoning on"),
+            Some(ParsedTelegramCommand::Reasoning { visible: true })
+        );
+        assert_eq!(
+            parse_command("/autoapprove off"),
+            Some(ParsedTelegramCommand::AutoApprove { enabled: false })
+        );
+        assert_eq!(
+            parse_command("/status"),
+            Some(ParsedTelegramCommand::Status)
+        );
+        assert_eq!(parse_command("/jobs"), Some(ParsedTelegramCommand::Jobs));
+        assert_eq!(parse_command("/pause"), Some(ParsedTelegramCommand::Stop));
+        assert_eq!(parse_command("/stop"), Some(ParsedTelegramCommand::Stop));
+        assert_eq!(
+            parse_command("/cancel"),
+            Some(ParsedTelegramCommand::Cancel)
+        );
+        assert_eq!(
+            parse_command("/compact"),
+            Some(ParsedTelegramCommand::Compact)
+        );
+        assert_eq!(
+            parse_command("/skills"),
+            Some(ParsedTelegramCommand::Skills)
+        );
+        assert_eq!(
+            parse_command("/enable obsidian-vault"),
+            Some(ParsedTelegramCommand::EnableSkill {
+                skill_name: "obsidian-vault".to_string()
+            })
+        );
+        assert_eq!(
+            parse_command("/disable obsidian-vault"),
+            Some(ParsedTelegramCommand::DisableSkill {
+                skill_name: "obsidian-vault".to_string()
+            })
+        );
+    }
+
+    #[test]
+    fn registers_session_operator_commands() {
+        let commands = default_command_specs()
+            .into_iter()
+            .map(|command| command.command)
+            .collect::<Vec<_>>();
+
+        for expected in [
+            "status",
+            "jobs",
+            "stop",
+            "pause",
+            "cancel",
+            "model",
+            "think",
+            "reasoning",
+            "autoapprove",
+            "compact",
+            "skills",
+            "enable",
+            "disable",
+        ] {
+            assert!(
+                commands.iter().any(|command| command == expected),
+                "missing Telegram command: {expected}"
+            );
+        }
+    }
 }

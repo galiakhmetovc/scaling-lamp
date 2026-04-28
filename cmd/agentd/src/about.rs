@@ -465,7 +465,7 @@ mod tests {
             },
             Box::new(MockReleaseClient {
                 latest: Some(ReleaseDescriptor {
-                    tag: "v1.0.5".to_string(),
+                    tag: "v999.0.0".to_string(),
                     assets: vec![ReleaseAsset {
                         name: "agentd".to_string(),
                         download_url: "https://example.invalid/agentd".to_string(),
@@ -483,7 +483,7 @@ mod tests {
         assert!(about.contains(&format!("commit={}", APP_COMMIT)));
         assert!(about.contains(&format!("tree={}", APP_TREE_STATE)));
         assert!(about.contains(&format!("build_id={}", APP_BUILD_ID)));
-        assert!(about.contains("latest_release=v1.0.5"));
+        assert!(about.contains("latest_release=v999.0.0"));
         assert!(about.contains("обновление=доступно"));
     }
 

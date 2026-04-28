@@ -1,4 +1,6 @@
-use crate::bootstrap::{BootstrapError, SessionPreferencesPatch, SessionSummary};
+use crate::bootstrap::{
+    BootstrapError, SessionPreferencesPatch, SessionSkillStatus, SessionSummary,
+};
 use crate::execution::{ChatExecutionEvent, ChatTurnExecutionReport};
 use crate::http::client::DaemonClient;
 
@@ -24,6 +26,22 @@ pub trait TelegramBackend: Clone + Send + Sync + 'static {
         target_agent_id: &str,
         message: &str,
     ) -> Result<String, BootstrapError>;
+    fn render_active_run(&self, session_id: &str) -> Result<String, BootstrapError>;
+    fn cancel_active_run(&self, session_id: &str) -> Result<String, BootstrapError>;
+    fn cancel_all_session_work(&self, session_id: &str) -> Result<String, BootstrapError>;
+    fn render_session_background_jobs(&self, session_id: &str) -> Result<String, BootstrapError>;
+    fn render_session_skills(&self, session_id: &str) -> Result<String, BootstrapError>;
+    fn enable_session_skill(
+        &self,
+        session_id: &str,
+        skill_name: &str,
+    ) -> Result<String, BootstrapError>;
+    fn disable_session_skill(
+        &self,
+        session_id: &str,
+        skill_name: &str,
+    ) -> Result<String, BootstrapError>;
+    fn compact_session(&self, session_id: &str) -> Result<SessionSummary, BootstrapError>;
 }
 
 #[derive(Debug, Clone)]
@@ -90,4 +108,64 @@ impl TelegramBackend for DaemonTelegramBackend {
         self.client
             .send_agent_message(session_id, target_agent_id, message)
     }
+
+    fn render_active_run(&self, session_id: &str) -> Result<String, BootstrapError> {
+        self.client.render_active_run(session_id)
+    }
+
+    fn cancel_active_run(&self, session_id: &str) -> Result<String, BootstrapError> {
+        self.client.cancel_active_run(session_id)
+    }
+
+    fn cancel_all_session_work(&self, session_id: &str) -> Result<String, BootstrapError> {
+        self.client.cancel_all_session_work(session_id)
+    }
+
+    fn render_session_background_jobs(&self, session_id: &str) -> Result<String, BootstrapError> {
+        self.client.render_session_background_jobs(session_id)
+    }
+
+    fn render_session_skills(&self, session_id: &str) -> Result<String, BootstrapError> {
+        Ok(render_session_skills_text(
+            self.client.session_skills(session_id)?,
+        ))
+    }
+
+    fn enable_session_skill(
+        &self,
+        session_id: &str,
+        skill_name: &str,
+    ) -> Result<String, BootstrapError> {
+        Ok(render_session_skills_text(
+            self.client.enable_session_skill(session_id, skill_name)?,
+        ))
+    }
+
+    fn disable_session_skill(
+        &self,
+        session_id: &str,
+        skill_name: &str,
+    ) -> Result<String, BootstrapError> {
+        Ok(render_session_skills_text(
+            self.client.disable_session_skill(session_id, skill_name)?,
+        ))
+    }
+
+    fn compact_session(&self, session_id: &str) -> Result<SessionSummary, BootstrapError> {
+        self.client.compact_session(session_id)
+    }
+}
+
+pub(crate) fn render_session_skills_text(skills: Vec<SessionSkillStatus>) -> String {
+    if skills.is_empty() {
+        return "Скиллы: ничего не найдено".to_string();
+    }
+
+    let mut lines = vec!["Скиллы:".to_string()];
+    lines.extend(
+        skills
+            .into_iter()
+            .map(|skill| format!("- [{}] {}: {}", skill.mode, skill.name, skill.description)),
+    );
+    lines.join("\n")
 }
