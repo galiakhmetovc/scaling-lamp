@@ -108,9 +108,19 @@ impl SessionSearchRepository for PersistenceStore {
 
         for doc in docs {
             transaction.execute(
+                "DELETE FROM session_search_fts WHERE doc_id = ?1",
+                [doc.doc_id.as_str()],
+            )?;
+            transaction.execute(
                 "INSERT INTO session_search_docs (
                     doc_id, session_id, source_kind, source_ref, body, updated_at
-                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+                 ON CONFLICT(doc_id) DO UPDATE SET
+                    session_id = excluded.session_id,
+                    source_kind = excluded.source_kind,
+                    source_ref = excluded.source_ref,
+                    body = excluded.body,
+                    updated_at = excluded.updated_at",
                 params![
                     doc.doc_id,
                     doc.session_id,

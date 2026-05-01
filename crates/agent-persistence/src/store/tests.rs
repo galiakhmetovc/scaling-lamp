@@ -1032,6 +1032,74 @@ fn replace_session_search_docs_serializes_concurrent_rebuilds() {
 }
 
 #[test]
+fn replace_session_search_docs_is_idempotent_for_duplicate_doc_ids() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let scaffold = PersistenceScaffold::from_config(crate::AppConfig {
+        data_dir: temp.path().join("state-root"),
+        ..crate::AppConfig::default()
+    });
+    let store = super::PersistenceStore::open(&scaffold).expect("open store");
+
+    let session = SessionRecord {
+        id: "session-search-duplicate".to_string(),
+        title: "Search duplicate".to_string(),
+        prompt_override: None,
+        settings_json: "{}".to_string(),
+        workspace_root: "/workspace/test".to_string(),
+        agent_profile_id: "default".to_string(),
+        active_mission_id: None,
+        parent_session_id: None,
+        parent_job_id: None,
+        delegation_label: None,
+        created_at: 1,
+        updated_at: 2,
+    };
+    store.put_session(&session).expect("put session");
+
+    let docs = vec![
+        SessionSearchDocRecord {
+            doc_id: "session-search-duplicate#transcript:entry-1".to_string(),
+            session_id: session.id.clone(),
+            source_kind: "transcript".to_string(),
+            source_ref: "entry-1".to_string(),
+            body: "old duplicate body".to_string(),
+            updated_at: 2,
+        },
+        SessionSearchDocRecord {
+            doc_id: "session-search-duplicate#transcript:entry-1".to_string(),
+            session_id: session.id.clone(),
+            source_kind: "transcript".to_string(),
+            source_ref: "entry-1".to_string(),
+            body: "new duplicate body".to_string(),
+            updated_at: 3,
+        },
+    ];
+
+    store
+        .replace_session_search_docs(&session.id, &docs)
+        .expect("duplicate doc ids should be idempotently replaced");
+
+    let indexed = store
+        .list_session_search_docs()
+        .expect("list session search docs after duplicate replace")
+        .into_iter()
+        .filter(|doc| doc.session_id == session.id)
+        .collect::<Vec<_>>();
+    assert_eq!(indexed.len(), 1);
+    assert_eq!(indexed[0].body, "new duplicate body");
+    assert_eq!(indexed[0].updated_at, 3);
+    let fts_count = store
+        .connection
+        .query_row(
+            "SELECT COUNT(*) FROM session_search_fts WHERE doc_id = ?1",
+            ["session-search-duplicate#transcript:entry-1"],
+            |row| row.get::<_, i64>(0),
+        )
+        .expect("count duplicate FTS rows");
+    assert_eq!(fts_count, 1);
+}
+
+#[test]
 fn put_telegram_user_pairing_serializes_concurrent_replacements() {
     let temp = tempfile::tempdir().expect("tempdir");
     let scaffold = PersistenceScaffold::from_config(crate::AppConfig {

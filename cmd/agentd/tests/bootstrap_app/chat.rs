@@ -1739,6 +1739,121 @@ fn execute_chat_turn_recovers_after_persistent_empty_provider_responses_followin
 }
 
 #[test]
+fn execute_chat_turn_records_terminal_empty_provider_error_without_poisoning_session() {
+    let empty_response = r#"{
+                "id":"resp_empty_terminal",
+                "model":"gpt-5.4",
+                "output":[],
+                "usage":{"input_tokens":19,"output_tokens":0,"total_tokens":19}
+            }"#
+    .to_string();
+    let final_response = r#"{
+                "id":"resp_empty_terminal_followup",
+                "model":"gpt-5.4",
+                "output":[
+                    {
+                        "id":"msg_empty_terminal_followup",
+                        "type":"message",
+                        "status":"completed",
+                        "role":"assistant",
+                        "content":[
+                            {
+                                "type":"output_text",
+                                "text":"Follow-up turn still works"
+                            }
+                        ]
+                    }
+                ],
+                "usage":{"input_tokens":31,"output_tokens":4,"total_tokens":35}
+            }"#
+    .to_string();
+    let (provider_api_base, provider_requests, provider_handle) = spawn_json_server_sequence(vec![
+        empty_response.clone(),
+        empty_response.clone(),
+        empty_response.clone(),
+        empty_response,
+        final_response,
+    ]);
+    let temp = tempfile::tempdir().expect("tempdir");
+    let app = build_from_config(AppConfig {
+        data_dir: temp.path().join("state-root"),
+        daemon: Default::default(),
+        provider: ConfiguredProvider {
+            kind: ProviderKind::OpenAiResponses,
+            api_base: Some(format!("{provider_api_base}/v1")),
+            api_key: Some("test-key".to_string()),
+            default_model: Some("gpt-5.4".to_string()),
+            ..ConfiguredProvider::default()
+        },
+        ..AppConfig::default()
+    })
+    .expect("build app");
+    let store = PersistenceStore::open(&app.persistence).expect("open store");
+
+    store
+        .put_session(&SessionRecord {
+            id: "session-provider-empty-terminal".to_string(),
+            title: "Provider empty terminal session".to_string(),
+            prompt_override: None,
+            settings_json: serde_json::to_string(&SessionSettings::default())
+                .expect("serialize settings"),
+            workspace_root: app.runtime.workspace.root.display().to_string(),
+            agent_profile_id: "default".to_string(),
+            active_mission_id: None,
+            parent_session_id: None,
+            parent_job_id: None,
+            delegation_label: None,
+            created_at: 1,
+            updated_at: 1,
+        })
+        .expect("put session");
+
+    let error = app
+        .execute_chat_turn("session-provider-empty-terminal", "Say hi", 10)
+        .expect_err("persistent empty provider responses should fail the turn");
+    assert!(
+        error
+            .to_string()
+            .contains("provider response did not include assistant text")
+    );
+
+    let failed_run = store
+        .get_run("run-chat-session-provider-empty-terminal-10")
+        .expect("get failed run")
+        .expect("failed run exists");
+    assert_eq!(failed_run.status, "failed");
+    assert!(
+        failed_run
+            .error
+            .as_deref()
+            .unwrap_or_default()
+            .contains("provider response did not include assistant text")
+    );
+
+    let transcript = app
+        .session_transcript("session-provider-empty-terminal")
+        .expect("load transcript");
+    assert!(transcript.entries.iter().any(|entry| {
+        entry.role == "system"
+            && entry
+                .content
+                .contains("provider retryable error: provider response did not include assistant text; retrying request (3/3)")
+    }));
+
+    let report = app
+        .execute_chat_turn("session-provider-empty-terminal", "Try again", 20)
+        .expect("follow-up turn should not be poisoned by failed empty-provider run");
+    assert_eq!(report.output_text, "Follow-up turn still works");
+
+    for _ in 0..5 {
+        provider_requests
+            .recv_timeout(Duration::from_secs(1))
+            .expect("provider request");
+    }
+    provider_handle.join().expect("join provider server");
+}
+
+#[test]
 fn execute_chat_turn_can_finish_after_an_allowed_web_tool_call_with_zai() {
     let (web_base, web_requests, web_handle) = spawn_text_server("/doc", "local doc");
     let first_provider_response = format!(

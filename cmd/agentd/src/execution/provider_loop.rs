@@ -172,7 +172,6 @@ impl ProviderLoopCursor {
                 matches!(
                     tool_call.name.as_str(),
                     name if name == ToolName::ExecReadOutput.as_str()
-                        || name == ToolName::SessionWait.as_str()
                 )
             })
     }
@@ -331,7 +330,7 @@ impl ProviderLoopCursor {
         {
             return Err(ExecutionError::ProviderLoop {
                 reason: format!(
-                    "provider repeated tool-call signature {} times in a row: {}",
+                    "provider repeated tool-call signature {} times in a row: {}. Stop repeating the same tool call; inspect the last tool result, change the arguments, choose a different tool, or answer the user with the current limitation.",
                     consecutive_repeats, signature
                 ),
             });
@@ -4473,7 +4472,7 @@ mod tests {
     }
 
     #[test]
-    fn remember_tool_signature_allows_repeated_session_wait_polling() {
+    fn remember_tool_signature_blocks_repeated_session_wait_with_actionable_error() {
         let provider = provider();
         let mut cursor = ProviderLoopCursor::new(&provider, None, 24);
         let response = response_with_tool_call(
@@ -4487,9 +4486,37 @@ mod tests {
         cursor
             .remember_tool_signature(&response)
             .expect("second repeated session_wait should be tracked");
+        let error = cursor
+            .remember_tool_signature(&response)
+            .expect_err("third repeated session_wait should be blocked");
+        let error = error.to_string();
+        assert!(error.contains("provider repeated tool-call signature 3 times in a row"));
+        assert!(error.contains("session_wait"));
+        assert!(error.contains("Stop repeating the same tool call"));
+    }
+
+    #[test]
+    fn remember_tool_signature_blocks_repeated_continue_later_with_actionable_error() {
+        let provider = provider();
+        let mut cursor = ProviderLoopCursor::new(&provider, None, 24);
+        let response = response_with_tool_call(
+            ToolName::ContinueLater.as_str(),
+            r#"{"delay_seconds":120,"handoff_payload":"say hello","delivery_mode":"existing_session"}"#,
+        );
+
         cursor
             .remember_tool_signature(&response)
-            .expect("third repeated session_wait should be allowed");
+            .expect("first repeated continue_later should be tracked");
+        cursor
+            .remember_tool_signature(&response)
+            .expect("second repeated continue_later should be tracked");
+        let error = cursor
+            .remember_tool_signature(&response)
+            .expect_err("third repeated continue_later should be blocked");
+        let error = error.to_string();
+        assert!(error.contains("provider repeated tool-call signature 3 times in a row"));
+        assert!(error.contains("continue_later"));
+        assert!(error.contains("Stop repeating the same tool call"));
     }
 
     #[test]
