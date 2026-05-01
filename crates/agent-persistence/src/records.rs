@@ -346,6 +346,22 @@ pub struct ArtifactRecord {
     pub created_at: i64,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FileDeliveryRequestRecord {
+    pub id: String,
+    pub session_id: String,
+    pub run_id: Option<String>,
+    pub artifact_id: String,
+    pub target: String,
+    pub file_name: String,
+    pub caption: Option<String>,
+    pub status: String,
+    pub created_at: i64,
+    pub updated_at: i64,
+    pub delivered_at: Option<i64>,
+    pub error: Option<String>,
+}
+
 #[derive(Debug)]
 pub enum RecordConversionError {
     InvalidJobInput(serde_json::Error),

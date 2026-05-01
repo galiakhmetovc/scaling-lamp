@@ -2,9 +2,10 @@ use super::backend::TelegramBackend;
 use super::client::{TelegramClient, TelegramClientError, TelegramCommandSpec};
 use super::polling::next_confirmed_offset;
 use super::render::{
-    TELEGRAM_MESSAGE_TEXT_SOFT_CAP, chunk_message_text, render_help_message,
-    render_model_response_chunks, render_pairing_message, render_pairing_required_message,
-    render_session_created, render_session_list, render_session_selected, render_usage,
+    TELEGRAM_CAPTION_SOFT_CAP, TELEGRAM_MESSAGE_TEXT_SOFT_CAP, chunk_message_text,
+    render_help_message, render_model_response_chunks, render_pairing_message,
+    render_pairing_required_message, render_session_created, render_session_list,
+    render_session_selected, render_usage, truncate_caption,
 };
 use crate::bootstrap::{App, BootstrapError, SessionPreferencesPatch, SessionSummary};
 use crate::diagnostics::DiagnosticEventBuilder;
@@ -13,10 +14,10 @@ use crate::store_retry::{
     SQLITE_LOCK_RETRY_ATTEMPTS, SQLITE_LOCK_RETRY_DELAY_MS, retry_store_sync,
 };
 use agent_persistence::{
-    ArtifactRecord, ArtifactRepository, PersistenceStore, StoreError, TelegramChatBindingRecord,
-    TelegramChatStatusRecord, TelegramRepository, TelegramUpdateCursorRecord,
-    TelegramUserPairingRecord, TraceRepository, TranscriptRecord, TranscriptRepository,
-    audit::AuditLogConfig,
+    ArtifactRecord, ArtifactRepository, FileDeliveryRepository, FileDeliveryRequestRecord,
+    PersistenceStore, StoreError, TelegramChatBindingRecord, TelegramChatStatusRecord,
+    TelegramRepository, TelegramUpdateCursorRecord, TelegramUserPairingRecord, TraceRepository,
+    TranscriptRecord, TranscriptRepository, audit::AuditLogConfig,
 };
 use serde_json::json;
 use std::collections::BTreeMap;
@@ -843,6 +844,18 @@ where
             .await?;
             return Ok(());
         }
+        if artifact.bytes.len() > self.app.config.telegram.max_upload_bytes {
+            self.send_text_chunks(
+                chat_id,
+                &format!(
+                    "File is too large for Telegram delivery: {} bytes, limit is {} bytes",
+                    artifact.bytes.len(),
+                    self.app.config.telegram.max_upload_bytes
+                ),
+            )
+            .await?;
+            return Ok(());
+        }
         let metadata = artifact_metadata_value(&artifact);
         let file_name = metadata_string(&metadata, "file_name")
             .unwrap_or_else(|| format!("{}.bin", artifact.id));
@@ -1072,7 +1085,19 @@ where
         file_name: &str,
         caption: Option<&str>,
     ) -> Result<Message, BootstrapError> {
-        self.deliver_with_retry(chat_id, "send_document", || {
+        self.send_document_delivered_with_trace(chat_id, bytes, file_name, caption, None)
+            .await
+    }
+
+    async fn send_document_delivered_with_trace(
+        &self,
+        chat_id: i64,
+        bytes: Vec<u8>,
+        file_name: &str,
+        caption: Option<&str>,
+        trace: Option<&TelegramDeliveryTrace>,
+    ) -> Result<Message, BootstrapError> {
+        self.deliver_with_retry_with_trace(chat_id, "send_document", trace, || {
             let client = self.client.clone();
             let bytes = bytes.clone();
             let file_name = file_name.to_string();
@@ -1397,7 +1422,131 @@ where
         let trace = self.telegram_delivery_trace_for_run(&report.run_id)?;
         self.send_model_text_chunks_with_trace(chat_id, &report.output_text, trace.as_ref())
             .await?;
+        self.deliver_queued_file_requests(chat_id, &report.session_id, trace.as_ref(), now)
+            .await?;
         self.mark_chat_status_stale(chat_id, status_message_id, now)?;
+        Ok(())
+    }
+
+    async fn deliver_queued_file_requests(
+        &self,
+        chat_id: i64,
+        session_id: &str,
+        trace: Option<&TelegramDeliveryTrace>,
+        now: i64,
+    ) -> Result<(), BootstrapError> {
+        let requests = self.with_store_retry(|store| {
+            store.list_queued_file_delivery_requests_for_session(session_id)
+        })?;
+        for request in requests {
+            if let Err(error) = self
+                .deliver_queued_file_request(chat_id, session_id, &request, trace, now)
+                .await
+            {
+                self.mark_file_delivery_request_failed(&request, error.to_string(), now)?;
+                DiagnosticEventBuilder::new(
+                    &self.app.config,
+                    "error",
+                    "telegram",
+                    "file_delivery.error",
+                    "telegram queued file delivery failed",
+                )
+                .surface("telegram")
+                .entrypoint("telegram")
+                .outcome("error")
+                .field("chat_id", chat_id)
+                .field("session_id", session_id)
+                .field("delivery_request_id", request.id.as_str())
+                .field("artifact_id", request.artifact_id.as_str())
+                .error(error.to_string())
+                .emit(&self.audit);
+            }
+        }
+        Ok(())
+    }
+
+    async fn deliver_queued_file_request(
+        &self,
+        chat_id: i64,
+        session_id: &str,
+        request: &FileDeliveryRequestRecord,
+        trace: Option<&TelegramDeliveryTrace>,
+        now: i64,
+    ) -> Result<(), BootstrapError> {
+        if request.target != "current_chat" {
+            return Err(BootstrapError::Usage {
+                reason: format!(
+                    "unsupported file delivery target {}; only current_chat is supported",
+                    request.target
+                ),
+            });
+        }
+        if request.session_id != session_id {
+            return Err(BootstrapError::Usage {
+                reason: format!(
+                    "file delivery request {} belongs to session {}, not {}",
+                    request.id, request.session_id, session_id
+                ),
+            });
+        }
+        let artifact = self
+            .with_store_retry(|store| store.get_artifact(&request.artifact_id))?
+            .ok_or_else(|| BootstrapError::MissingRecord {
+                kind: "artifact",
+                id: request.artifact_id.clone(),
+            })?;
+        if artifact.session_id != session_id {
+            return Err(BootstrapError::Usage {
+                reason: format!(
+                    "artifact {} belongs to session {}, not {}",
+                    artifact.id, artifact.session_id, session_id
+                ),
+            });
+        }
+        if artifact.bytes.len() > self.app.config.telegram.max_upload_bytes {
+            return Err(BootstrapError::Usage {
+                reason: format!(
+                    "artifact {} is too large for Telegram delivery: {} bytes, limit is {} bytes",
+                    artifact.id,
+                    artifact.bytes.len(),
+                    self.app.config.telegram.max_upload_bytes
+                ),
+            });
+        }
+
+        let caption = request
+            .caption
+            .as_deref()
+            .map(|value| truncate_caption(value, TELEGRAM_CAPTION_SOFT_CAP));
+        self.send_document_delivered_with_trace(
+            chat_id,
+            artifact.bytes,
+            &request.file_name,
+            caption.as_deref(),
+            trace,
+        )
+        .await?;
+
+        let mut delivered = request.clone();
+        delivered.status = "delivered".to_string();
+        delivered.updated_at = now;
+        delivered.delivered_at = Some(now);
+        delivered.error = None;
+        self.with_store_retry(|store| store.put_file_delivery_request(&delivered))?;
+        Ok(())
+    }
+
+    fn mark_file_delivery_request_failed(
+        &self,
+        request: &FileDeliveryRequestRecord,
+        error: String,
+        now: i64,
+    ) -> Result<(), BootstrapError> {
+        let mut failed = request.clone();
+        failed.status = "failed".to_string();
+        failed.updated_at = now;
+        failed.error = Some(error);
+        self.with_store_retry(|store| store.put_file_delivery_request(&failed))?;
         Ok(())
     }
 

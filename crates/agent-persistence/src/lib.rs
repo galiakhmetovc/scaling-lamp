@@ -12,19 +12,20 @@ pub use config::{
 };
 pub use records::{
     AgentChainContinuationRecord, AgentProfileRecord, AgentScheduleRecord, ArtifactRecord,
-    ContextOffloadRecord, ContextSummaryRecord, JobRecord, KnowledgeSearchDocRecord,
-    KnowledgeSourceRecord, McpConnectorRecord, MissionRecord, PlanRecord, RecordConversionError,
-    RunRecord, SessionInboxEventRecord, SessionRecord, SessionRetentionRecord,
-    SessionSearchDocRecord, TelegramChatBindingRecord, TelegramChatStatusRecord,
-    TelegramUpdateCursorRecord, TelegramUserPairingRecord, ToolCallRecord, TraceLinkRecord,
-    TranscriptRecord,
+    ContextOffloadRecord, ContextSummaryRecord, FileDeliveryRequestRecord, JobRecord,
+    KnowledgeSearchDocRecord, KnowledgeSourceRecord, McpConnectorRecord, MissionRecord, PlanRecord,
+    RecordConversionError, RunRecord, SessionInboxEventRecord, SessionRecord,
+    SessionRetentionRecord, SessionSearchDocRecord, TelegramChatBindingRecord,
+    TelegramChatStatusRecord, TelegramUpdateCursorRecord, TelegramUserPairingRecord,
+    ToolCallRecord, TraceLinkRecord, TranscriptRecord,
 };
 pub use repository::{
     AgentRepository, ArtifactRepository, ContextOffloadRepository, ContextSummaryRepository,
-    JobRepository, KnowledgeRepository, McpRepository, MissionRepository, PlanRepository,
-    RunRepository, RunSummaryRollup, SessionActiveJobCounts, SessionInboxRepository,
-    SessionRepository, SessionRetentionRepository, SessionSearchRepository, TelegramRepository,
-    ToolCallRepository, TraceRepository, TranscriptRepository, TranscriptSessionStats,
+    FileDeliveryRepository, JobRepository, KnowledgeRepository, McpRepository, MissionRepository,
+    PlanRepository, RunRepository, RunSummaryRollup, SessionActiveJobCounts,
+    SessionInboxRepository, SessionRepository, SessionRetentionRepository, SessionSearchRepository,
+    TelegramRepository, ToolCallRepository, TraceRepository, TranscriptRepository,
+    TranscriptSessionStats,
 };
 pub use store::{ExecutionStateSnapshot, PersistenceStore, StoreError, StoreLayout};
 

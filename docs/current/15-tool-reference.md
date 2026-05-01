@@ -60,6 +60,7 @@ Tools не попадают в prompt как большой текстовый R
    - только если provider поддерживает tool calls;
    - только tools, разрешённые `AgentProfile.allowed_tools`;
    - `artifact_read`, `artifact_search`, `artifact_pin` и `artifact_unpin` добавляются только если у session реально есть context offload;
+   - `deliver_file` доступен как generic delivery tool: он не привязан к Telegram, но Telegram surface умеет доставлять queued requests как documents;
    - dynamic MCP tools добавляются отдельно как самостоятельные provider tools с собственным `exposed_name` и `input_schema`.
 
 ### Что не стоит путать
@@ -807,6 +808,53 @@ artifact_unpin({ artifact_id: string })
 
 - если закреплённый крупный context больше не нужен в ближайших turn;
 - если prompt budget нужно освободить без удаления данных.
+
+### `deliver_file`
+
+Сигнатура:
+
+```text
+deliver_file({
+  artifact_id?: string | null,
+  workspace_path?: string | null,
+  file_name?: string | null,
+  caption?: string | null,
+  target?: "current_chat" | null
+})
+```
+
+Что делает:
+
+- ставит файл в durable очередь доставки `file_delivery_requests`;
+- принимает ровно один источник: либо существующий `artifact_id`, либо `workspace_path`;
+- `artifact_id` должен принадлежать текущей session;
+- `workspace_path` читается только из workspace текущей session, затем сохраняется как artifact `workspace_file`;
+- `file_name` задаёт внешнее имя файла; если его нет, runtime берёт `file_name` из artifact metadata или имя workspace-файла;
+- `caption` передаётся surface как короткая подпись;
+- `target` сейчас поддерживает только `current_chat`.
+
+Что возвращает:
+
+- `request_id`;
+- итоговый `artifact_id`;
+- `target`;
+- `file_name`;
+- `caption`;
+- `status = "queued"`.
+
+Когда использовать:
+
+- когда пользователь просит “пришли файл/отчёт/экспорт”;
+- после создания файла через filesystem tools;
+- чтобы отправить назад файл, который пользователь ранее загрузил в Telegram;
+- когда ответ текстом неудобен или слишком большой, но нужен именно документ.
+
+Важные ограничения:
+
+- это не Telegram-specific tool и не принимает host paths;
+- unsupported surfaces могут только показать actionable queued/result state, а не выполнить `sendDocument`;
+- Telegram worker доставляет queued requests после текущего chat turn;
+- ошибки `missing artifact` и `artifact from another session` возвращаются модели как non-retryable tool error, чтобы она могла выбрать правильный файл.
 
 ## Memory
 

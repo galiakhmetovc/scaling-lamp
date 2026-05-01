@@ -1,10 +1,11 @@
 use crate::records::{
     AgentChainContinuationRecord, AgentProfileRecord, AgentScheduleRecord, ArtifactRecord,
-    ContextOffloadRecord, ContextSummaryRecord, JobRecord, KnowledgeSearchDocRecord,
-    KnowledgeSourceRecord, McpConnectorRecord, MissionRecord, PlanRecord, RunRecord,
-    SessionInboxEventRecord, SessionRecord, SessionRetentionRecord, SessionSearchDocRecord,
-    TelegramChatBindingRecord, TelegramChatStatusRecord, TelegramUpdateCursorRecord,
-    TelegramUserPairingRecord, ToolCallRecord, TraceLinkRecord, TranscriptRecord,
+    ContextOffloadRecord, ContextSummaryRecord, FileDeliveryRequestRecord, JobRecord,
+    KnowledgeSearchDocRecord, KnowledgeSourceRecord, McpConnectorRecord, MissionRecord, PlanRecord,
+    RunRecord, SessionInboxEventRecord, SessionRecord, SessionRetentionRecord,
+    SessionSearchDocRecord, TelegramChatBindingRecord, TelegramChatStatusRecord,
+    TelegramUpdateCursorRecord, TelegramUserPairingRecord, ToolCallRecord, TraceLinkRecord,
+    TranscriptRecord,
 };
 use crate::store::StoreError;
 use agent_runtime::context::ContextOffloadPayload;
@@ -285,4 +286,19 @@ pub trait PlanRepository {
 pub trait ArtifactRepository {
     fn put_artifact(&self, record: &ArtifactRecord) -> Result<(), StoreError>;
     fn get_artifact(&self, id: &str) -> Result<Option<ArtifactRecord>, StoreError>;
+}
+
+pub trait FileDeliveryRepository {
+    fn put_file_delivery_request(
+        &self,
+        record: &FileDeliveryRequestRecord,
+    ) -> Result<(), StoreError>;
+    fn get_file_delivery_request(
+        &self,
+        id: &str,
+    ) -> Result<Option<FileDeliveryRequestRecord>, StoreError>;
+    fn list_queued_file_delivery_requests_for_session(
+        &self,
+        session_id: &str,
+    ) -> Result<Vec<FileDeliveryRequestRecord>, StoreError>;
 }

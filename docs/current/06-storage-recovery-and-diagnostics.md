@@ -79,6 +79,7 @@ Storage key теперь обычно содержит `session_id/filename.txt`
 | `transcripts` | Индекс transcript payload files в `transcripts/`: role/kind, session/run links, storage key, hash. |
 | `tool_calls` | Ledger вызовов tools: provider call id, tool name, arguments JSON, summary, status, error, timestamps, result summary, result preview и ссылку на artifact полного результата. |
 | `artifacts` | Индекс artifact payload files в `artifacts/`: kind, path, metadata, size, hash. |
+| `file_delivery_requests` | Durable очередь доставки файлов текущему оператору: session/run links, artifact id, target, filename, caption, status, timestamps и error. Telegram worker вычитывает queued rows и отправляет их как documents. |
 | `agent_profiles` | Agent profiles, template kind, allowed tools, путь к `agent_home`. |
 | `agent_schedules` | Deferred/recurring schedules для agent profiles. |
 | `agent_chain_continuations` | Grants для inter-agent chain continuation. |

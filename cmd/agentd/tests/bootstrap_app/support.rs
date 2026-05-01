@@ -1,9 +1,9 @@
 pub(crate) use agent_persistence::{
-    AgentProfileRecord, AgentRepository, AgentScheduleRecord, AppConfig, ConfigError,
-    ContextOffloadRepository, ContextSummaryRepository, JobRecord, JobRepository, MissionRecord,
-    MissionRepository, PersistenceStore, PlanRecord, PlanRepository, RunRecord, RunRepository,
-    SessionInboxRepository, SessionRecord, SessionRepository, ToolCallRepository,
-    TranscriptRepository,
+    AgentProfileRecord, AgentRepository, AgentScheduleRecord, AppConfig, ArtifactRecord,
+    ArtifactRepository, ConfigError, ContextOffloadRepository, ContextSummaryRepository,
+    FileDeliveryRepository, JobRecord, JobRepository, MissionRecord, MissionRepository,
+    PersistenceStore, PlanRecord, PlanRepository, RunRecord, RunRepository, SessionInboxRepository,
+    SessionRecord, SessionRepository, ToolCallRepository, TranscriptRepository, WorkspaceConfig,
 };
 pub(crate) use agent_runtime::context::{
     ContextOffloadPayload, ContextOffloadRef, ContextOffloadSnapshot,
@@ -36,6 +36,7 @@ pub(crate) use agentd::execution::ExecutionError;
 pub(crate) use std::fs;
 pub(crate) use std::io::{BufRead, BufReader, Cursor, Read, Write};
 pub(crate) use std::net::TcpListener;
+pub(crate) use std::path::PathBuf;
 pub(crate) use std::sync::mpsc::{self, Receiver};
 pub(crate) use std::thread;
 pub(crate) use std::time::Duration;

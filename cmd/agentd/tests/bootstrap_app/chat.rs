@@ -235,6 +235,443 @@ fn execute_chat_turn_uses_the_session_workspace_for_prompt_and_tools() {
 }
 
 #[test]
+fn execute_chat_turn_queues_file_delivery_for_session_artifact() {
+    let first_provider_response = r#"{
+                "id":"resp_deliver_file_tool",
+                "model":"gpt-5.4",
+                "output":[
+                    {
+                        "id":"fc_deliver_1",
+                        "type":"function_call",
+                        "status":"completed",
+                        "call_id":"call_deliver_file",
+                        "name":"deliver_file",
+                        "arguments":"{\"artifact_id\":\"artifact-report\",\"caption\":\"Отправляю отчёт\"}"
+                    }
+                ],
+                "usage":{"input_tokens":18,"output_tokens":5,"total_tokens":23}
+            }"#
+    .to_string();
+    let final_provider_response = r#"{
+                "id":"resp_deliver_file_final",
+                "model":"gpt-5.4",
+                "output":[
+                    {
+                        "id":"msg_deliver_1",
+                        "type":"message",
+                        "status":"completed",
+                        "role":"assistant",
+                        "content":[
+                            {
+                                "type":"output_text",
+                                "text":"Файл поставлен в очередь на отправку."
+                            }
+                        ]
+                    }
+                ],
+                "usage":{"input_tokens":22,"output_tokens":6,"total_tokens":28}
+            }"#
+    .to_string();
+    let (provider_api_base, _provider_requests, provider_handle) =
+        spawn_json_server_sequence(vec![first_provider_response, final_provider_response]);
+
+    let temp = tempfile::tempdir().expect("tempdir");
+    let app = build_from_config(AppConfig {
+        data_dir: temp.path().join("state-root"),
+        permissions: PermissionConfig {
+            mode: PermissionMode::BypassPermissions,
+            ..PermissionConfig::default()
+        },
+        provider: ConfiguredProvider {
+            kind: ProviderKind::OpenAiResponses,
+            api_base: Some(format!("{provider_api_base}/v1")),
+            api_key: Some("test-key".to_string()),
+            default_model: Some("gpt-5.4".to_string()),
+            ..ConfiguredProvider::default()
+        },
+        ..AppConfig::default()
+    })
+    .expect("build app");
+    let store = PersistenceStore::open(&app.persistence).expect("open store");
+    store
+        .put_session(&SessionRecord {
+            id: "session-deliver-file".to_string(),
+            title: "Deliver file".to_string(),
+            prompt_override: None,
+            settings_json: serde_json::to_string(&SessionSettings::default())
+                .expect("serialize settings"),
+            workspace_root: app.runtime.workspace.root.display().to_string(),
+            agent_profile_id: "default".to_string(),
+            active_mission_id: None,
+            parent_session_id: None,
+            parent_job_id: None,
+            delegation_label: None,
+            created_at: 1,
+            updated_at: 1,
+        })
+        .expect("put session");
+    store
+        .put_artifact(&ArtifactRecord {
+            id: "artifact-report".to_string(),
+            session_id: "session-deliver-file".to_string(),
+            kind: "workspace_file".to_string(),
+            metadata_json: r#"{"file_name":"report.txt","mime_type":"text/plain"}"#.to_string(),
+            path: PathBuf::from("artifacts/artifact-report.bin"),
+            bytes: b"report body".to_vec(),
+            created_at: 2,
+        })
+        .expect("put artifact");
+
+    let report = app
+        .execute_chat_turn("session-deliver-file", "Отправь мне отчёт", 10)
+        .expect("execute chat turn");
+    provider_handle.join().expect("join provider server");
+
+    assert_eq!(report.output_text, "Файл поставлен в очередь на отправку.");
+    let requests = store
+        .list_queued_file_delivery_requests_for_session("session-deliver-file")
+        .expect("list queued file deliveries");
+    assert_eq!(requests.len(), 1);
+    assert_eq!(requests[0].artifact_id, "artifact-report");
+    assert_eq!(requests[0].target, "current_chat");
+    assert_eq!(requests[0].file_name, "report.txt");
+    assert_eq!(requests[0].caption.as_deref(), Some("Отправляю отчёт"));
+    assert_eq!(
+        requests[0].run_id.as_deref(),
+        Some("run-chat-session-deliver-file-10")
+    );
+}
+
+#[test]
+fn execute_chat_turn_queues_file_delivery_for_workspace_file() {
+    let first_provider_response = r#"{
+                "id":"resp_deliver_workspace_file_tool",
+                "model":"gpt-5.4",
+                "output":[
+                    {
+                        "id":"fc_deliver_workspace_1",
+                        "type":"function_call",
+                        "status":"completed",
+                        "call_id":"call_deliver_workspace_file",
+                        "name":"deliver_file",
+                        "arguments":"{\"workspace_path\":\"reports/report.txt\",\"file_name\":\"final-report.txt\",\"caption\":\"Файл из workspace\"}"
+                    }
+                ],
+                "usage":{"input_tokens":18,"output_tokens":5,"total_tokens":23}
+            }"#
+    .to_string();
+    let final_provider_response = r#"{
+                "id":"resp_deliver_workspace_file_final",
+                "model":"gpt-5.4",
+                "output":[
+                    {
+                        "id":"msg_deliver_workspace_1",
+                        "type":"message",
+                        "status":"completed",
+                        "role":"assistant",
+                        "content":[
+                            {
+                                "type":"output_text",
+                                "text":"Файл из workspace поставлен в очередь."
+                            }
+                        ]
+                    }
+                ],
+                "usage":{"input_tokens":22,"output_tokens":6,"total_tokens":28}
+            }"#
+    .to_string();
+    let (provider_api_base, _provider_requests, provider_handle) =
+        spawn_json_server_sequence(vec![first_provider_response, final_provider_response]);
+
+    let temp = tempfile::tempdir().expect("tempdir");
+    let workspace_root = temp.path().join("session-workspace");
+    fs::create_dir_all(workspace_root.join("reports")).expect("create reports dir");
+    fs::write(
+        workspace_root.join("reports/report.txt"),
+        "workspace report",
+    )
+    .expect("write workspace report");
+    let app = build_from_config(AppConfig {
+        data_dir: temp.path().join("state-root"),
+        workspace: WorkspaceConfig {
+            default_root: Some(workspace_root.clone()),
+        },
+        permissions: PermissionConfig {
+            mode: PermissionMode::BypassPermissions,
+            ..PermissionConfig::default()
+        },
+        provider: ConfiguredProvider {
+            kind: ProviderKind::OpenAiResponses,
+            api_base: Some(format!("{provider_api_base}/v1")),
+            api_key: Some("test-key".to_string()),
+            default_model: Some("gpt-5.4".to_string()),
+            ..ConfiguredProvider::default()
+        },
+        ..AppConfig::default()
+    })
+    .expect("build app");
+    let store = PersistenceStore::open(&app.persistence).expect("open store");
+    store
+        .put_session(&SessionRecord {
+            id: "session-deliver-workspace-file".to_string(),
+            title: "Deliver workspace file".to_string(),
+            prompt_override: None,
+            settings_json: serde_json::to_string(&SessionSettings::default())
+                .expect("serialize settings"),
+            workspace_root: workspace_root.display().to_string(),
+            agent_profile_id: "default".to_string(),
+            active_mission_id: None,
+            parent_session_id: None,
+            parent_job_id: None,
+            delegation_label: None,
+            created_at: 1,
+            updated_at: 1,
+        })
+        .expect("put session");
+
+    let report = app
+        .execute_chat_turn("session-deliver-workspace-file", "Отправь report.txt", 10)
+        .expect("execute chat turn");
+    provider_handle.join().expect("join provider server");
+
+    assert_eq!(report.output_text, "Файл из workspace поставлен в очередь.");
+    let requests = store
+        .list_queued_file_delivery_requests_for_session("session-deliver-workspace-file")
+        .expect("list queued file deliveries");
+    assert_eq!(requests.len(), 1);
+    assert_eq!(requests[0].file_name, "final-report.txt");
+    assert_eq!(requests[0].caption.as_deref(), Some("Файл из workspace"));
+
+    let artifact = store
+        .get_artifact(&requests[0].artifact_id)
+        .expect("get artifact")
+        .expect("artifact exists");
+    assert_eq!(artifact.session_id, "session-deliver-workspace-file");
+    assert_eq!(artifact.kind, "workspace_file");
+    assert_eq!(artifact.bytes, b"workspace report");
+    assert!(
+        artifact
+            .metadata_json
+            .contains("\"workspace_path\":\"reports/report.txt\"")
+    );
+}
+
+#[test]
+fn execute_chat_turn_rejects_file_delivery_for_missing_artifact() {
+    let provider_response = r#"{
+                "id":"resp_deliver_missing_tool",
+                "model":"gpt-5.4",
+                "output":[
+                    {
+                        "id":"fc_deliver_missing_1",
+                        "type":"function_call",
+                        "status":"completed",
+                        "call_id":"call_deliver_missing_file",
+                        "name":"deliver_file",
+                        "arguments":"{\"artifact_id\":\"artifact-missing\"}"
+                    }
+                ],
+                "usage":{"input_tokens":18,"output_tokens":5,"total_tokens":23}
+            }"#
+    .to_string();
+    let final_provider_response = r#"{
+                "id":"resp_deliver_missing_final",
+                "model":"gpt-5.4",
+                "output":[
+                    {
+                        "id":"msg_deliver_missing_1",
+                        "type":"message",
+                        "status":"completed",
+                        "role":"assistant",
+                        "content":[
+                            {
+                                "type":"output_text",
+                                "text":"Не смог отправить файл: artifact не найден."
+                            }
+                        ]
+                    }
+                ],
+                "usage":{"input_tokens":22,"output_tokens":6,"total_tokens":28}
+            }"#
+    .to_string();
+    let (provider_api_base, provider_requests, provider_handle) =
+        spawn_json_server_sequence(vec![provider_response, final_provider_response]);
+
+    let temp = tempfile::tempdir().expect("tempdir");
+    let app = build_from_config(AppConfig {
+        data_dir: temp.path().join("state-root"),
+        provider: ConfiguredProvider {
+            kind: ProviderKind::OpenAiResponses,
+            api_base: Some(format!("{provider_api_base}/v1")),
+            api_key: Some("test-key".to_string()),
+            default_model: Some("gpt-5.4".to_string()),
+            ..ConfiguredProvider::default()
+        },
+        ..AppConfig::default()
+    })
+    .expect("build app");
+    let store = PersistenceStore::open(&app.persistence).expect("open store");
+    store
+        .put_session(&SessionRecord {
+            id: "session-deliver-file-missing".to_string(),
+            title: "Deliver missing file".to_string(),
+            prompt_override: None,
+            settings_json: serde_json::to_string(&SessionSettings::default())
+                .expect("serialize settings"),
+            workspace_root: app.runtime.workspace.root.display().to_string(),
+            agent_profile_id: "default".to_string(),
+            active_mission_id: None,
+            parent_session_id: None,
+            parent_job_id: None,
+            delegation_label: None,
+            created_at: 1,
+            updated_at: 1,
+        })
+        .expect("put session");
+
+    let report = app
+        .execute_chat_turn("session-deliver-file-missing", "Отправь файл", 10)
+        .expect("execute chat turn");
+    provider_handle.join().expect("join provider server");
+
+    assert_eq!(
+        report.output_text,
+        "Не смог отправить файл: artifact не найден."
+    );
+    let _first_request = provider_requests.recv().expect("first provider request");
+    let retry_request = provider_requests.recv().expect("retry provider request");
+    assert!(
+        retry_request.contains("invalid offload retrieval request"),
+        "{retry_request}"
+    );
+    assert!(
+        retry_request.contains("artifact artifact-missing does not exist"),
+        "{retry_request}"
+    );
+    assert!(
+        store
+            .list_queued_file_delivery_requests_for_session("session-deliver-file-missing")
+            .expect("list queued")
+            .is_empty()
+    );
+}
+
+#[test]
+fn execute_chat_turn_rejects_file_delivery_for_another_session_artifact() {
+    let provider_response = r#"{
+                "id":"resp_deliver_wrong_session_tool",
+                "model":"gpt-5.4",
+                "output":[
+                    {
+                        "id":"fc_deliver_wrong_session_1",
+                        "type":"function_call",
+                        "status":"completed",
+                        "call_id":"call_deliver_wrong_session_file",
+                        "name":"deliver_file",
+                        "arguments":"{\"artifact_id\":\"artifact-other-session\"}"
+                    }
+                ],
+                "usage":{"input_tokens":18,"output_tokens":5,"total_tokens":23}
+            }"#
+    .to_string();
+    let final_provider_response = r#"{
+                "id":"resp_deliver_wrong_session_final",
+                "model":"gpt-5.4",
+                "output":[
+                    {
+                        "id":"msg_deliver_wrong_session_1",
+                        "type":"message",
+                        "status":"completed",
+                        "role":"assistant",
+                        "content":[
+                            {
+                                "type":"output_text",
+                                "text":"Не смог отправить файл: artifact из другой session."
+                            }
+                        ]
+                    }
+                ],
+                "usage":{"input_tokens":22,"output_tokens":6,"total_tokens":28}
+            }"#
+    .to_string();
+    let (provider_api_base, provider_requests, provider_handle) =
+        spawn_json_server_sequence(vec![provider_response, final_provider_response]);
+
+    let temp = tempfile::tempdir().expect("tempdir");
+    let app = build_from_config(AppConfig {
+        data_dir: temp.path().join("state-root"),
+        provider: ConfiguredProvider {
+            kind: ProviderKind::OpenAiResponses,
+            api_base: Some(format!("{provider_api_base}/v1")),
+            api_key: Some("test-key".to_string()),
+            default_model: Some("gpt-5.4".to_string()),
+            ..ConfiguredProvider::default()
+        },
+        ..AppConfig::default()
+    })
+    .expect("build app");
+    let store = PersistenceStore::open(&app.persistence).expect("open store");
+    for session_id in ["session-deliver-file-current", "session-deliver-file-other"] {
+        store
+            .put_session(&SessionRecord {
+                id: session_id.to_string(),
+                title: session_id.to_string(),
+                prompt_override: None,
+                settings_json: serde_json::to_string(&SessionSettings::default())
+                    .expect("serialize settings"),
+                workspace_root: app.runtime.workspace.root.display().to_string(),
+                agent_profile_id: "default".to_string(),
+                active_mission_id: None,
+                parent_session_id: None,
+                parent_job_id: None,
+                delegation_label: None,
+                created_at: 1,
+                updated_at: 1,
+            })
+            .expect("put session");
+    }
+    store
+        .put_artifact(&ArtifactRecord {
+            id: "artifact-other-session".to_string(),
+            session_id: "session-deliver-file-other".to_string(),
+            kind: "workspace_file".to_string(),
+            metadata_json: r#"{"file_name":"other.txt"}"#.to_string(),
+            path: PathBuf::from("artifacts/artifact-other-session.bin"),
+            bytes: b"other body".to_vec(),
+            created_at: 2,
+        })
+        .expect("put artifact");
+
+    let report = app
+        .execute_chat_turn("session-deliver-file-current", "Отправь файл", 10)
+        .expect("execute chat turn");
+    provider_handle.join().expect("join provider server");
+
+    assert_eq!(
+        report.output_text,
+        "Не смог отправить файл: artifact из другой session."
+    );
+    let _first_request = provider_requests.recv().expect("first provider request");
+    let retry_request = provider_requests.recv().expect("retry provider request");
+    assert!(
+        retry_request.contains("invalid offload retrieval request"),
+        "{retry_request}"
+    );
+    assert!(
+        retry_request.contains(
+            "artifact artifact-other-session belongs to session session-deliver-file-other"
+        ),
+        "{retry_request}"
+    );
+    assert!(
+        store
+            .list_queued_file_delivery_requests_for_session("session-deliver-file-current")
+            .expect("list queued")
+            .is_empty()
+    );
+}
+
+#[test]
 fn execute_chat_turn_can_finish_after_an_allowed_web_tool_call() {
     let (web_base, web_requests, web_handle) = spawn_text_server("/doc", "local doc");
     let web_url = format!("{web_base}/doc");

@@ -125,6 +125,7 @@ pub enum ToolName {
     ArtifactSearch,
     ArtifactPin,
     ArtifactUnpin,
+    DeliverFile,
     KnowledgeSearch,
     KnowledgeRead,
     SessionSearch,
@@ -533,6 +534,22 @@ pub struct ArtifactPinInput {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+pub enum FileDeliveryTarget {
+    CurrentChat,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct DeliverFileInput {
+    pub artifact_id: Option<String>,
+    pub workspace_path: Option<String>,
+    pub file_name: Option<String>,
+    pub caption: Option<String>,
+    pub target: Option<FileDeliveryTarget>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum KnowledgeSourceKind {
     RootDoc,
     ProjectDoc,
@@ -826,6 +843,7 @@ pub enum ToolCall {
     ArtifactSearch(ArtifactSearchInput),
     ArtifactPin(ArtifactPinInput),
     ArtifactUnpin(ArtifactPinInput),
+    DeliverFile(DeliverFileInput),
     KnowledgeSearch(KnowledgeSearchInput),
     KnowledgeRead(KnowledgeReadInput),
     SessionSearch(SessionSearchInput),
@@ -1267,6 +1285,16 @@ pub struct ArtifactSearchOutput {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DeliverFileOutput {
+    pub request_id: String,
+    pub artifact_id: String,
+    pub target: FileDeliveryTarget,
+    pub file_name: String,
+    pub caption: Option<String>,
+    pub status: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct KnowledgeSearchResultOutput {
     pub path: String,
     pub kind: KnowledgeSourceKind,
@@ -1644,6 +1672,7 @@ pub enum ToolOutput {
     ArtifactSearch(ArtifactSearchOutput),
     ArtifactPin(ArtifactPinOutput),
     ArtifactUnpin(ArtifactPinOutput),
+    DeliverFile(DeliverFileOutput),
     KnowledgeSearch(KnowledgeSearchOutput),
     KnowledgeRead(KnowledgeReadOutput),
     SessionSearch(SessionSearchOutput),
@@ -1954,6 +1983,7 @@ impl ToolName {
             Self::ArtifactSearch => "artifact_search",
             Self::ArtifactPin => "artifact_pin",
             Self::ArtifactUnpin => "artifact_unpin",
+            Self::DeliverFile => "deliver_file",
             Self::KnowledgeSearch => "knowledge_search",
             Self::KnowledgeRead => "knowledge_read",
             Self::SessionSearch => "session_search",
@@ -1975,6 +2005,14 @@ impl ToolName {
             Self::ScheduleDelete => "schedule_delete",
             Self::MessageAgent => "message_agent",
             Self::GrantAgentChainContinuation => "grant_agent_chain_continuation",
+        }
+    }
+}
+
+impl FileDeliveryTarget {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::CurrentChat => "current_chat",
         }
     }
 }
@@ -2037,6 +2075,7 @@ impl ToolCatalog {
                         | ToolName::ArtifactSearch
                         | ToolName::ArtifactPin
                         | ToolName::ArtifactUnpin
+                        | ToolName::DeliverFile
                         | ToolName::KnowledgeSearch
                         | ToolName::KnowledgeRead
                         | ToolName::SessionSearch
@@ -2495,6 +2534,16 @@ impl ToolCatalog {
                 },
             },
             ToolDefinition {
+                name: ToolName::DeliverFile,
+                family: ToolFamily::Offload,
+                description: "Queue an existing session artifact or workspace file for delivery to the current operator surface; Telegram delivers it as a document when the current chat supports file delivery.",
+                policy: ToolPolicy {
+                    read_only: false,
+                    destructive: false,
+                    requires_approval: false,
+                },
+            },
+            ToolDefinition {
                 name: ToolName::KnowledgeSearch,
                 family: ToolFamily::Memory,
                 description: "Search project knowledge roots with bounded pagination and canonical source metadata",
@@ -2745,6 +2794,30 @@ impl ToolRuntime {
             web,
             processes,
         }
+    }
+
+    pub fn read_file_bytes(&self, path: &str) -> Result<(String, Vec<u8>), ToolError> {
+        let resolved = self.workspace.resolve(path)?;
+        let metadata = std::fs::metadata(&resolved).map_err(|source| WorkspaceError::Io {
+            path: resolved.clone(),
+            source,
+        })?;
+        if !metadata.is_file() {
+            return Err(ToolError::Workspace(WorkspaceError::InvalidPath {
+                path: path.to_string(),
+                reason: "must point to a file",
+            }));
+        }
+        let bytes = std::fs::read(&resolved).map_err(|source| WorkspaceError::Io {
+            path: resolved.clone(),
+            source,
+        })?;
+        let relative = resolved
+            .strip_prefix(&self.workspace.root)
+            .unwrap_or(resolved.as_path())
+            .to_string_lossy()
+            .replace('\\', "/");
+        Ok((relative, bytes))
     }
 
     pub fn invoke(&mut self, call: ToolCall) -> Result<ToolOutput, ToolError> {
@@ -3020,7 +3093,8 @@ impl ToolRuntime {
             ToolCall::ArtifactRead(_)
             | ToolCall::ArtifactSearch(_)
             | ToolCall::ArtifactPin(_)
-            | ToolCall::ArtifactUnpin(_) => {
+            | ToolCall::ArtifactUnpin(_)
+            | ToolCall::DeliverFile(_) => {
                 Err(ToolError::InvalidArtifactTool {
                     reason:
                         "offload retrieval tools must execute through the canonical session path"
@@ -3602,6 +3676,7 @@ impl ToolCall {
             Self::ArtifactSearch(_) => ToolName::ArtifactSearch,
             Self::ArtifactPin(_) => ToolName::ArtifactPin,
             Self::ArtifactUnpin(_) => ToolName::ArtifactUnpin,
+            Self::DeliverFile(_) => ToolName::DeliverFile,
             Self::KnowledgeSearch(_) => ToolName::KnowledgeSearch,
             Self::KnowledgeRead(_) => ToolName::KnowledgeRead,
             Self::SessionSearch(_) => ToolName::SessionSearch,
@@ -3665,6 +3740,7 @@ impl ToolCall {
             | Self::SkillRead(_)
             | Self::SkillEnable(_)
             | Self::SkillDisable(_)
+            | Self::DeliverFile(_)
             | Self::KnowledgeSearch(_)
             | Self::KnowledgeRead(_)
             | Self::SessionSearch(_)
@@ -3860,6 +3936,16 @@ impl ToolCall {
             Self::ArtifactPin(input) => format!("artifact_pin artifact_id={}", input.artifact_id),
             Self::ArtifactUnpin(input) => {
                 format!("artifact_unpin artifact_id={}", input.artifact_id)
+            }
+            Self::DeliverFile(input) => {
+                if let Some(artifact_id) = &input.artifact_id {
+                    format!("deliver_file artifact_id={artifact_id}")
+                } else {
+                    format!(
+                        "deliver_file workspace_path={}",
+                        input.workspace_path.as_deref().unwrap_or("<missing>")
+                    )
+                }
             }
             Self::KnowledgeSearch(input) => format!(
                 "knowledge_search query={} offset={} limit={}",
@@ -4211,6 +4297,12 @@ impl ToolCall {
                 }),
             "artifact_unpin" => serde_json::from_str(arguments)
                 .map(Self::ArtifactUnpin)
+                .map_err(|source| ToolCallParseError::InvalidArguments {
+                    name: name.to_string(),
+                    source,
+                }),
+            "deliver_file" => serde_json::from_str(arguments)
+                .map(Self::DeliverFile)
                 .map_err(|source| ToolCallParseError::InvalidArguments {
                     name: name.to_string(),
                     source,
@@ -4806,6 +4898,13 @@ impl ToolOutput {
                 "artifact_unpin artifact_id={} pin_status={} reads={}",
                 output.artifact_id, output.pin_status, output.explicit_read_count
             ),
+            Self::DeliverFile(output) => format!(
+                "deliver_file request_id={} artifact_id={} target={} status={}",
+                output.request_id,
+                output.artifact_id,
+                output.target.as_str(),
+                output.status
+            ),
             Self::KnowledgeSearch(output) => {
                 if let Some(next_offset) = output.next_offset {
                     format!(
@@ -5322,6 +5421,17 @@ impl ToolOutput {
                 "pinned": output.pinned,
                 "explicit_read_count": output.explicit_read_count,
                 "pin_status": output.pin_status,
+            })
+            .to_string(),
+            Self::DeliverFile(output) => json!({
+                "tool": "deliver_file",
+                "request_id": output.request_id,
+                "artifact_id": output.artifact_id,
+                "target": output.target.as_str(),
+                "file_name": output.file_name,
+                "caption": output.caption,
+                "status": output.status,
+                "delivery_note": "queued for the current operator surface; Telegram sends queued files as documents after the current turn"
             })
             .to_string(),
             Self::KnowledgeSearch(output) => json!({
@@ -6175,6 +6285,17 @@ impl ToolName {
                     "artifact_id": { "type": "string", "description": "Artifact id from the offloaded context references block" }
                 },
                 "required": ["artifact_id"],
+                "additionalProperties": false,
+            }),
+            Self::DeliverFile => json!({
+                "type": "object",
+                "properties": {
+                    "artifact_id": { "type": ["string", "null"], "description": "Existing artifact id from the current session to send. Use either artifact_id or workspace_path, not both." },
+                    "workspace_path": { "type": ["string", "null"], "description": "Relative workspace file path to send. The runtime first stores it as a session artifact. Use either workspace_path or artifact_id, not both." },
+                    "file_name": { "type": ["string", "null"], "description": "Optional outward filename. Defaults to artifact metadata file_name or the workspace file name." },
+                    "caption": { "type": ["string", "null"], "description": "Optional short caption shown with the document." },
+                    "target": { "type": ["string", "null"], "enum": ["current_chat", null], "description": "Delivery target. Defaults to current_chat." }
+                },
                 "additionalProperties": false,
             }),
             Self::KnowledgeSearch => json!({

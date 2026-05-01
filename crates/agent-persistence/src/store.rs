@@ -1,6 +1,7 @@
 mod agent_repos;
 mod context_repos;
 mod execution_repos;
+mod file_delivery_repos;
 mod inbox_repos;
 mod mcp_repos;
 mod memory_repos;
@@ -16,15 +17,15 @@ use crate::audit::{AuditLogConfig, DiagnosticEvent};
 use crate::config::{AppConfig, normalize_absolute_path};
 use crate::records::{
     AgentChainContinuationRecord, AgentProfileRecord, AgentScheduleRecord, ArtifactRecord,
-    ContextOffloadRecord, ContextSummaryRecord, JobRecord, McpConnectorRecord, MissionRecord,
-    PlanRecord, RunRecord, SessionInboxEventRecord, SessionRecord, SessionRetentionRecord,
-    ToolCallRecord, TraceLinkRecord, TranscriptRecord,
+    ContextOffloadRecord, ContextSummaryRecord, FileDeliveryRequestRecord, JobRecord,
+    McpConnectorRecord, MissionRecord, PlanRecord, RunRecord, SessionInboxEventRecord,
+    SessionRecord, SessionRetentionRecord, ToolCallRecord, TraceLinkRecord, TranscriptRecord,
 };
 use crate::repository::{
     AgentRepository, ArtifactRepository, ContextOffloadRepository, ContextSummaryRepository,
-    JobRepository, McpRepository, MissionRepository, PlanRepository, RunRepository,
-    SessionInboxRepository, SessionRepository, SessionRetentionRepository, TelegramRepository,
-    ToolCallRepository, TraceRepository, TranscriptRepository,
+    FileDeliveryRepository, JobRepository, McpRepository, MissionRepository, PlanRepository,
+    RunRepository, SessionInboxRepository, SessionRepository, SessionRetentionRepository,
+    TelegramRepository, ToolCallRepository, TraceRepository, TranscriptRepository,
 };
 use agent_runtime::archive::{
     ArchivedArtifactEntry, ArchivedSummary, ArchivedTranscriptEntry, SessionArchiveManifest,

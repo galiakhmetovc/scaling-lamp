@@ -1,4 +1,5 @@
 use super::*;
+use crate::execution::provider_loop::ModelToolExecutionContext;
 use agent_runtime::mission::{JobResult, MissionStatus};
 use agent_runtime::run::{ActiveProcess, ApprovalRequest};
 use agent_runtime::tool::{ProcessKind, ToolCatalog, ToolOutput, ToolRuntime};
@@ -269,6 +270,7 @@ impl ExecutionService {
             | ToolCall::PlanLint(_)
             | ToolCall::ArtifactRead(_)
             | ToolCall::ArtifactSearch(_)
+            | ToolCall::DeliverFile(_)
             | ToolCall::KnowledgeSearch(_)
             | ToolCall::KnowledgeRead(_)
             | ToolCall::SessionSearch(_)
@@ -287,12 +289,15 @@ impl ExecutionService {
             | ToolCall::GrantAgentChainContinuation(_) => {
                 let mut tool_runtime = self.tool_runtime();
                 self.execute_model_tool_call(
-                    store,
-                    context.provider,
-                    &session_id,
+                    ModelToolExecutionContext {
+                        store,
+                        provider: context.provider,
+                        session_id: &session_id,
+                        run_id,
+                        now: context.now,
+                    },
                     &mut tool_runtime,
                     tool_call,
-                    context.now,
                 )?
             }
             _ => {
@@ -311,12 +316,15 @@ impl ExecutionService {
                     self.processes.clone(),
                 );
                 self.execute_model_tool_call(
-                    store,
-                    context.provider,
-                    &session_id,
+                    ModelToolExecutionContext {
+                        store,
+                        provider: context.provider,
+                        session_id: &session_id,
+                        run_id,
+                        now: context.now,
+                    },
                     &mut tool_runtime,
                     tool_call,
-                    context.now,
                 )?
             }
         };

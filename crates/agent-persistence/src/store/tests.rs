@@ -4,10 +4,11 @@ use super::{
 };
 use crate::{
     AgentProfileRecord, AgentRepository, AgentScheduleRecord, ArtifactRecord, ArtifactRepository,
-    ContextOffloadRecord, ContextOffloadRepository, ContextSummaryRepository, JobRecord,
-    JobRepository, KnowledgeRepository, KnowledgeSearchDocRecord, KnowledgeSourceRecord,
-    McpConnectorRecord, McpRepository, MissionRecord, MissionRepository, PersistenceScaffold,
-    PlanRecord, PlanRepository, RunRecord, RunRepository, SessionInboxRepository, SessionRecord,
+    ContextOffloadRecord, ContextOffloadRepository, ContextSummaryRepository,
+    FileDeliveryRepository, FileDeliveryRequestRecord, JobRecord, JobRepository,
+    KnowledgeRepository, KnowledgeSearchDocRecord, KnowledgeSourceRecord, McpConnectorRecord,
+    McpRepository, MissionRecord, MissionRepository, PersistenceScaffold, PlanRecord,
+    PlanRepository, RunRecord, RunRepository, SessionInboxRepository, SessionRecord,
     SessionRepository, SessionRetentionRecord, SessionRetentionRepository, SessionSearchDocRecord,
     SessionSearchRepository, TelegramChatBindingRecord, TelegramChatStatusRecord,
     TelegramRepository, TelegramUpdateCursorRecord, TelegramUserPairingRecord, ToolCallRecord,
@@ -549,6 +550,117 @@ fn tool_call_repository_round_trips_session_and_run_ledgers() {
             .expect("list run tool calls")
             .len(),
         2
+    );
+}
+
+#[test]
+fn file_delivery_repository_round_trips_and_lists_queued_requests() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let scaffold = PersistenceScaffold::from_config(crate::AppConfig {
+        data_dir: temp.path().join("state-root"),
+        ..crate::AppConfig::default()
+    });
+    let store = super::PersistenceStore::open(&scaffold).expect("open store");
+
+    let session = SessionRecord {
+        id: "session-files".to_string(),
+        title: "Files".to_string(),
+        prompt_override: None,
+        settings_json: "{}".to_string(),
+        workspace_root: "/workspace/test".to_string(),
+        agent_profile_id: "default".to_string(),
+        active_mission_id: None,
+        parent_session_id: None,
+        parent_job_id: None,
+        delegation_label: None,
+        created_at: 1,
+        updated_at: 1,
+    };
+    store.put_session(&session).expect("put session");
+    store
+        .put_run(&RunRecord {
+            id: "run-1".to_string(),
+            session_id: session.id.clone(),
+            mission_id: None,
+            status: "running".to_string(),
+            error: None,
+            result: None,
+            provider_usage_json: "null".to_string(),
+            active_processes_json: "[]".to_string(),
+            recent_steps_json: "[]".to_string(),
+            evidence_refs_json: "[]".to_string(),
+            pending_approvals_json: "[]".to_string(),
+            provider_loop_json: "null".to_string(),
+            delegate_runs_json: "[]".to_string(),
+            started_at: 2,
+            updated_at: 2,
+            finished_at: None,
+        })
+        .expect("put run");
+    store
+        .put_artifact(&ArtifactRecord {
+            id: "artifact-report".to_string(),
+            session_id: session.id.clone(),
+            kind: "workspace_file".to_string(),
+            metadata_json: r#"{"file_name":"report.txt"}"#.to_string(),
+            path: PathBuf::from("artifacts/artifact-report.bin"),
+            bytes: b"report".to_vec(),
+            created_at: 2,
+        })
+        .expect("put artifact");
+
+    let queued = FileDeliveryRequestRecord {
+        id: "delivery-1".to_string(),
+        session_id: session.id.clone(),
+        run_id: Some("run-1".to_string()),
+        artifact_id: "artifact-report".to_string(),
+        target: "current_chat".to_string(),
+        file_name: "report.txt".to_string(),
+        caption: Some("Готовый отчёт".to_string()),
+        status: "queued".to_string(),
+        created_at: 3,
+        updated_at: 3,
+        delivered_at: None,
+        error: None,
+    };
+    store
+        .put_file_delivery_request(&queued)
+        .expect("put queued request");
+
+    assert_eq!(
+        store
+            .get_file_delivery_request("delivery-1")
+            .expect("get queued request"),
+        Some(queued.clone())
+    );
+    assert_eq!(
+        store
+            .list_queued_file_delivery_requests_for_session("session-files")
+            .expect("list queued"),
+        vec![queued.clone()]
+    );
+
+    let delivered = FileDeliveryRequestRecord {
+        status: "delivered".to_string(),
+        updated_at: 4,
+        delivered_at: Some(4),
+        ..queued
+    };
+    store
+        .put_file_delivery_request(&delivered)
+        .expect("mark delivered");
+
+    assert!(
+        store
+            .list_queued_file_delivery_requests_for_session("session-files")
+            .expect("list queued after delivery")
+            .is_empty()
+    );
+    assert_eq!(
+        store
+            .get_file_delivery_request("delivery-1")
+            .expect("get delivered"),
+        Some(delivered)
     );
 }
 

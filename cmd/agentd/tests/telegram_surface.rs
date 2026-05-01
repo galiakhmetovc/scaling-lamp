@@ -1,6 +1,7 @@
 use agent_persistence::{
-    AppConfig, ArtifactRecord, ArtifactRepository, TelegramRepository, TelegramUserPairingRecord,
-    TranscriptRecord, TranscriptRepository,
+    AppConfig, ArtifactRecord, ArtifactRepository, FileDeliveryRepository,
+    FileDeliveryRequestRecord, TelegramRepository, TelegramUserPairingRecord, TranscriptRecord,
+    TranscriptRepository,
 };
 use agent_runtime::provider::ProviderKind;
 use agentd::bootstrap;
@@ -1073,6 +1074,110 @@ fn telegram_worker_lists_and_sends_session_artifacts_as_files() {
     assert_eq!(send_document.path, "/bottest-token/SendDocument");
     assert!(send_document.body.contains("report.txt"));
     assert!(send_document.body.contains("artifact-report-1"));
+
+    handle.join().expect("join fake api");
+}
+
+#[test]
+fn telegram_worker_sends_queued_file_delivery_requests_after_chat_turn() {
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("runtime");
+    let (_temp, app) = telegram_test_app();
+    seed_activated_pairing(&app, "pair-file-delivery", 777, 42);
+    app.create_session("session-delivery", "Delivery")
+        .expect("create session");
+    seed_binding(&app, 42, 777, Some("session-delivery"));
+    {
+        let store = app.store().expect("open store");
+        store
+            .put_artifact(&ArtifactRecord {
+                id: "artifact-report-queued".to_string(),
+                session_id: "session-delivery".to_string(),
+                kind: "workspace_file".to_string(),
+                metadata_json: r#"{"file_name":"report.txt","mime_type":"text/plain"}"#.to_string(),
+                path: PathBuf::from("artifacts/artifact-report-queued.bin"),
+                bytes: b"report body".to_vec(),
+                created_at: 20,
+            })
+            .expect("put artifact");
+        store
+            .put_file_delivery_request(&FileDeliveryRequestRecord {
+                id: "delivery-queued-1".to_string(),
+                session_id: "session-delivery".to_string(),
+                run_id: None,
+                artifact_id: "artifact-report-queued".to_string(),
+                target: "current_chat".to_string(),
+                file_name: "report.txt".to_string(),
+                caption: Some("Отправляю файл".to_string()),
+                status: "queued".to_string(),
+                created_at: 21,
+                updated_at: 21,
+                delivered_at: None,
+                error: None,
+            })
+            .expect("queue delivery");
+    }
+    let backend = RecordingTelegramBackend::with_state(RecordingTelegramBackendState {
+        session_lookup: BTreeMap::from([(
+            "session-delivery".to_string(),
+            session_summary("session-delivery", "Delivery", true),
+        )]),
+        listed_sessions: vec![session_summary("session-delivery", "Delivery", true)],
+        next_chat_output: "Файл отправляю отдельным документом.".to_string(),
+        ..RecordingTelegramBackendState::default()
+    });
+    let (api_url, requests, handle) = spawn_fake_telegram_api(vec![
+        json_response(
+            r#"{"ok":true,"result":[{"update_id":133,"message":{"message_id":76,"date":0,"chat":{"id":42,"type":"private"},"from":{"id":777,"is_bot":false,"first_name":"Alice","username":"alice"},"text":"пришли файл"}}]}"#,
+        ),
+        json_response(
+            r#"{"ok":true,"result":{"message_id":77,"date":0,"chat":{"id":42,"type":"private"},"text":"working"}}"#,
+        ),
+        json_response(
+            r#"{"ok":true,"result":{"message_id":78,"date":0,"chat":{"id":42,"type":"private"},"text":"final"}}"#,
+        ),
+        json_response(
+            r#"{"ok":true,"result":{"message_id":79,"date":0,"chat":{"id":42,"type":"private"},"document":{"file_id":"sent","file_unique_id":"sent-unique","file_size":11,"file_name":"report.txt","mime_type":"text/plain"}}}"#,
+        ),
+    ]);
+    let client = TelegramClient::new(TelegramClientConfig {
+        token: "test-token".to_string(),
+        api_url: Some(api_url),
+        poll_request_timeout_seconds: 40,
+    })
+    .expect("telegram client");
+    let worker = TelegramWorker::with_consumer(app.clone(), backend, client, "telegram-test");
+
+    runtime.block_on(worker.poll_once()).expect("poll once");
+
+    let _ = requests
+        .recv_timeout(Duration::from_secs(2))
+        .expect("captured getUpdates");
+    let _status = requests
+        .recv_timeout(Duration::from_secs(2))
+        .expect("captured status");
+    let final_message = requests
+        .recv_timeout(Duration::from_secs(2))
+        .expect("captured final");
+    assert_eq!(final_message.path, "/bottest-token/SendMessage");
+    let send_document = requests
+        .recv_timeout(Duration::from_secs(2))
+        .expect("captured queued sendDocument");
+    assert_eq!(send_document.path, "/bottest-token/SendDocument");
+    assert!(send_document.body.contains("report.txt"));
+    assert!(send_document.body.contains("Отправляю файл"));
+
+    let delivered = app
+        .store()
+        .expect("open store")
+        .get_file_delivery_request("delivery-queued-1")
+        .expect("get delivery")
+        .expect("delivery exists");
+    assert_eq!(delivered.status, "delivered");
+    assert!(delivered.delivered_at.is_some());
+    assert!(delivered.error.is_none());
 
     handle.join().expect("join fake api");
 }

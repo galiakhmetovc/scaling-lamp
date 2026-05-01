@@ -201,6 +201,38 @@ fn automatic_model_definitions_include_agent_and_schedule_tools() {
 }
 
 #[test]
+fn automatic_model_definitions_include_file_delivery_tool() {
+    let catalog = ToolCatalog::default();
+    let definition = catalog
+        .definition(ToolName::DeliverFile)
+        .expect("deliver_file");
+    let names = catalog
+        .automatic_model_definitions()
+        .into_iter()
+        .map(|definition| definition.name)
+        .collect::<Vec<_>>();
+
+    assert_eq!(definition.family, ToolFamily::Offload);
+    assert!(!definition.policy.read_only);
+    assert!(!definition.policy.destructive);
+    assert!(!definition.policy.requires_approval);
+    assert!(definition.description.contains("current operator surface"));
+    assert!(
+        definition
+            .openai_function_schema()
+            .to_string()
+            .contains("artifact_id")
+    );
+    assert!(
+        definition
+            .openai_function_schema()
+            .to_string()
+            .contains("workspace_path")
+    );
+    assert!(names.contains(&ToolName::DeliverFile));
+}
+
+#[test]
 fn automatic_model_definitions_include_mcp_utility_tools() {
     let catalog = ToolCatalog::default();
     let names = catalog
@@ -673,6 +705,39 @@ fn artifact_pin_tools_are_explicit_and_parse_canonical_artifact_ids() {
             .expect("parse unpin"),
         ToolCall::ArtifactUnpin(super::ArtifactPinInput {
             artifact_id: "artifact-1".to_string(),
+        })
+    );
+}
+
+#[test]
+fn deliver_file_parses_artifact_and_workspace_sources() {
+    assert_eq!(
+        ToolCall::from_openai_function(
+            "deliver_file",
+            r#"{"artifact_id":"artifact-1","caption":"Отчёт готов"}"#
+        )
+        .expect("parse artifact delivery"),
+        ToolCall::DeliverFile(super::DeliverFileInput {
+            artifact_id: Some("artifact-1".to_string()),
+            workspace_path: None,
+            file_name: None,
+            caption: Some("Отчёт готов".to_string()),
+            target: None,
+        })
+    );
+
+    assert_eq!(
+        ToolCall::from_openai_function(
+            "deliver_file",
+            r#"{"workspace_path":"reports/result.pdf","file_name":"result.pdf"}"#
+        )
+        .expect("parse workspace delivery"),
+        ToolCall::DeliverFile(super::DeliverFileInput {
+            artifact_id: None,
+            workspace_path: Some("reports/result.pdf".to_string()),
+            file_name: Some("result.pdf".to_string()),
+            caption: None,
+            target: None,
         })
     );
 }

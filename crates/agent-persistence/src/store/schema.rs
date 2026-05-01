@@ -334,6 +334,23 @@ pub(super) fn bootstrap_schema(connection: &Connection) -> Result<(), StoreError
              sha256 TEXT NOT NULL,
              created_at INTEGER NOT NULL,
              FOREIGN KEY(session_id) REFERENCES sessions(id) ON DELETE CASCADE
+         );
+         CREATE TABLE IF NOT EXISTS file_delivery_requests (
+             id TEXT PRIMARY KEY,
+             session_id TEXT NOT NULL,
+             run_id TEXT,
+             artifact_id TEXT NOT NULL,
+             target TEXT NOT NULL,
+             file_name TEXT NOT NULL,
+             caption TEXT,
+             status TEXT NOT NULL,
+             created_at INTEGER NOT NULL,
+             updated_at INTEGER NOT NULL,
+             delivered_at INTEGER,
+             error TEXT,
+             FOREIGN KEY(session_id) REFERENCES sessions(id) ON DELETE CASCADE,
+             FOREIGN KEY(run_id) REFERENCES runs(id) ON DELETE SET NULL,
+             FOREIGN KEY(artifact_id) REFERENCES artifacts(id) ON DELETE CASCADE
          );",
     )?;
 
@@ -369,7 +386,8 @@ pub(super) fn bootstrap_schema(connection: &Connection) -> Result<(), StoreError
          CREATE INDEX IF NOT EXISTS idx_telegram_chat_bindings_scope_updated_at ON telegram_chat_bindings(scope, updated_at DESC);
          CREATE INDEX IF NOT EXISTS idx_telegram_chat_statuses_state_expires_at ON telegram_chat_statuses(state, expires_at);
          CREATE INDEX IF NOT EXISTS idx_knowledge_search_docs_source_id ON knowledge_search_docs(source_id);
-         CREATE INDEX IF NOT EXISTS idx_artifacts_session_id ON artifacts(session_id);",
+         CREATE INDEX IF NOT EXISTS idx_artifacts_session_id ON artifacts(session_id);
+         CREATE INDEX IF NOT EXISTS idx_file_delivery_requests_session_status ON file_delivery_requests(session_id, status, created_at);",
     )?;
 
     Ok(())
@@ -656,6 +674,17 @@ pub(super) fn validate_schema(connection: &Connection) -> Result<(), StoreError>
     validate_column(connection, "artifacts", "session_id", true)?;
     validate_column(connection, "artifacts", "metadata_json", true)?;
     validate_column(connection, "artifacts", "sha256", true)?;
+    validate_column(connection, "file_delivery_requests", "session_id", true)?;
+    validate_column(connection, "file_delivery_requests", "run_id", false)?;
+    validate_column(connection, "file_delivery_requests", "artifact_id", true)?;
+    validate_column(connection, "file_delivery_requests", "target", true)?;
+    validate_column(connection, "file_delivery_requests", "file_name", true)?;
+    validate_column(connection, "file_delivery_requests", "caption", false)?;
+    validate_column(connection, "file_delivery_requests", "status", true)?;
+    validate_column(connection, "file_delivery_requests", "created_at", true)?;
+    validate_column(connection, "file_delivery_requests", "updated_at", true)?;
+    validate_column(connection, "file_delivery_requests", "delivered_at", false)?;
+    validate_column(connection, "file_delivery_requests", "error", false)?;
     validate_foreign_key(
         connection,
         "context_summaries",
@@ -678,6 +707,27 @@ pub(super) fn validate_schema(connection: &Connection) -> Result<(), StoreError>
         "SET NULL",
     )?;
     validate_foreign_key(connection, "artifacts", "session_id", "sessions", "CASCADE")?;
+    validate_foreign_key(
+        connection,
+        "file_delivery_requests",
+        "session_id",
+        "sessions",
+        "CASCADE",
+    )?;
+    validate_foreign_key(
+        connection,
+        "file_delivery_requests",
+        "run_id",
+        "runs",
+        "SET NULL",
+    )?;
+    validate_foreign_key(
+        connection,
+        "file_delivery_requests",
+        "artifact_id",
+        "artifacts",
+        "CASCADE",
+    )?;
     validate_foreign_key(
         connection,
         "tool_calls",

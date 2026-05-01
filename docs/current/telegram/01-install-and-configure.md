@@ -548,6 +548,24 @@ teamdctl telegram pairings
 
 `/files` показывает файлы текущей session, `/file` отправляет выбранный artifact обратно в Telegram через `sendDocument`.
 
+Агент тоже может отправить файл сам через canonical tool `deliver_file`. Это не Telegram-specific tool: runtime ставит delivery request в очередь, а Telegram worker после текущего ответа отправляет документ в активный chat.
+
+Примеры model-facing вызова:
+
+```json
+{ "artifact_id": "artifact-report-1", "caption": "Готовый отчёт" }
+```
+
+```json
+{
+  "workspace_path": "reports/report.pdf",
+  "file_name": "report.pdf",
+  "caption": "Файл из workspace"
+}
+```
+
+`artifact_id` обязан принадлежать текущей session. `workspace_path` резолвится только относительно workspace текущей session и перед отправкой сохраняется как artifact. Лимит отправки задаёт `telegram.max_upload_bytes`; при превышении request помечается failed и фиксируется в diagnostic log.
+
 ## 12. Минимальная smoke-проверка
 
 В Telegram:

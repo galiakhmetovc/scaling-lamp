@@ -203,6 +203,15 @@ Approval — это не отдельная мини-сессия. Это сос
 
 Это защищает prompt от silent bloat.
 
+Для файлов есть отдельный generic delivery tool `deliver_file`:
+
+- модель передаёт `artifact_id` текущей session или `workspace_path` внутри текущего workspace;
+- runtime ставит delivery request в SQLite, а не вызывает Telegram напрямую из provider loop;
+- Telegram surface после финального ответа отправляет queued request через `sendDocument`;
+- TUI/CLI/HTTP остаются thin surfaces над тем же runtime state и не получают отдельный tool loop.
+
+Это важно для архитектуры: агент просит “доставить файл текущему оператору”, а конкретная surface решает, как это сделать.
+
 ## Частые ошибки агентов
 
 Система уже пытается объяснить это в tool definitions и agent prompts, но типовые промахи такие:

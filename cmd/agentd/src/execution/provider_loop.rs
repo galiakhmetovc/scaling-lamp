@@ -5,8 +5,8 @@ use crate::store_retry::{
     SQLITE_LOCK_RETRY_ATTEMPTS, SQLITE_LOCK_RETRY_DELAY_MS, retry_store_sync,
 };
 use agent_persistence::{
-    ArtifactRecord, ArtifactRepository, ContextOffloadRepository, ToolCallRecord,
-    ToolCallRepository,
+    ArtifactRecord, ArtifactRepository, ContextOffloadRepository, FileDeliveryRepository,
+    FileDeliveryRequestRecord, ToolCallRecord, ToolCallRepository,
 };
 use agent_runtime::context::{
     CompactionPolicy, ContextOffloadPayload, ContextOffloadRef, ContextOffloadSnapshot,
@@ -34,11 +34,12 @@ use agent_runtime::skills::{
 };
 use agent_runtime::tool::{
     AddTaskNoteOutput, AddTaskOutput, ArtifactPinOutput, ArtifactReadInput, ArtifactReadOutput,
-    ArtifactSearchOutput, ArtifactSearchResult, EditTaskOutput, InitPlanOutput, PlanLintOutput,
-    PlanReadOutput, PlanSnapshotOutput, PlanWriteOutput, PromptBudgetLayerOutput,
-    PromptBudgetReadOutput, PromptBudgetUpdateOutput, PromptBudgetUpdateScope, SetTaskStatusOutput,
-    SkillActivationOutput, SkillListOutput, SkillReadOutput, SkillStatusOutput, ToolCatalog,
-    ToolDefinition, ToolFamily, ToolName, ToolOutput, ToolPolicy, ToolRuntime,
+    ArtifactSearchOutput, ArtifactSearchResult, DeliverFileInput, DeliverFileOutput,
+    EditTaskOutput, FileDeliveryTarget, InitPlanOutput, PlanLintOutput, PlanReadOutput,
+    PlanSnapshotOutput, PlanWriteOutput, PromptBudgetLayerOutput, PromptBudgetReadOutput,
+    PromptBudgetUpdateOutput, PromptBudgetUpdateScope, SetTaskStatusOutput, SkillActivationOutput,
+    SkillListOutput, SkillReadOutput, SkillStatusOutput, ToolCatalog, ToolDefinition, ToolFamily,
+    ToolName, ToolOutput, ToolPolicy, ToolRuntime,
 };
 use agent_runtime::workspace::WorkspaceRef;
 use std::path::PathBuf;
@@ -72,6 +73,15 @@ pub(super) struct CompletionGateDecision {
 pub(super) struct ProviderToolExecutionContext<'a> {
     pub(super) store: &'a PersistenceStore,
     pub(super) provider: &'a dyn ProviderDriver,
+    pub(super) session_id: &'a str,
+    pub(super) run_id: &'a str,
+    pub(super) now: i64,
+}
+
+#[derive(Clone, Copy)]
+pub(super) struct ModelToolExecutionContext<'a> {
+    pub(super) store: &'a PersistenceStore,
+    pub(super) provider: Option<&'a dyn ProviderDriver>,
     pub(super) session_id: &'a str,
     pub(super) run_id: &'a str,
     pub(super) now: i64,
@@ -796,6 +806,72 @@ impl ExecutionService {
             sanitize_identifier(run_id),
             sanitize_identifier(provider_tool_call_id)
         )
+    }
+
+    fn file_delivery_request_id(run_id: &str, artifact_id: &str, now: i64) -> String {
+        format!(
+            "file-delivery-{}-{}-{now}",
+            sanitize_identifier(run_id),
+            sanitize_identifier(artifact_id)
+        )
+    }
+
+    fn next_file_delivery_request_id(
+        store: &PersistenceStore,
+        run_id: &str,
+        artifact_id: &str,
+        now: i64,
+    ) -> Result<String, ExecutionError> {
+        let base = Self::file_delivery_request_id(run_id, artifact_id, now);
+        for suffix in 0..1_000 {
+            let candidate = if suffix == 0 {
+                base.clone()
+            } else {
+                format!("{base}-{suffix}")
+            };
+            if store
+                .get_file_delivery_request(&candidate)
+                .map_err(ExecutionError::Store)?
+                .is_none()
+            {
+                return Ok(candidate);
+            }
+        }
+        Err(ExecutionError::ProviderLoop {
+            reason: format!(
+                "could not allocate unique file delivery request id for run {run_id} and artifact {artifact_id}"
+            ),
+        })
+    }
+
+    fn workspace_file_artifact_id(session_id: &str, run_id: &str, workspace_path: &str) -> String {
+        format!(
+            "artifact-workspace-file-{}-{}-{}",
+            sanitize_identifier(session_id),
+            sanitize_identifier(run_id),
+            sanitize_identifier(workspace_path)
+        )
+    }
+
+    fn artifact_delivery_file_name(artifact: &ArtifactRecord) -> String {
+        serde_json::from_str::<serde_json::Value>(&artifact.metadata_json)
+            .ok()
+            .and_then(|metadata| {
+                metadata
+                    .get("file_name")
+                    .and_then(|value| value.as_str())
+                    .map(sanitize_delivery_file_name)
+            })
+            .unwrap_or_else(|| format!("{}.bin", artifact.id))
+    }
+
+    fn default_workspace_file_name(path: &str) -> String {
+        std::path::Path::new(path)
+            .file_name()
+            .and_then(|name| name.to_str())
+            .map(sanitize_delivery_file_name)
+            .filter(|name| !name.is_empty())
+            .unwrap_or_else(|| "workspace-file.bin".to_string())
     }
 
     fn retryable_provider_tool_output(
@@ -2447,12 +2523,15 @@ impl ExecutionService {
             },
         );
         let output = match self.execute_model_tool_call(
-            context.store,
-            Some(context.provider),
-            context.session_id,
+            ModelToolExecutionContext {
+                store: context.store,
+                provider: Some(context.provider),
+                session_id: context.session_id,
+                run_id: context.run_id,
+                now: context.now,
+            },
             tool_runtime,
             parsed,
-            context.now,
         ) {
             Ok(output) => output,
             Err(source) => {
@@ -2557,13 +2636,15 @@ impl ExecutionService {
 
     pub(super) fn execute_model_tool_call(
         &self,
-        store: &PersistenceStore,
-        provider: Option<&dyn ProviderDriver>,
-        session_id: &str,
+        context: ModelToolExecutionContext<'_>,
         tool_runtime: &mut ToolRuntime,
         parsed: &ToolCall,
-        now: i64,
     ) -> Result<ToolOutput, ExecutionError> {
+        let store = context.store;
+        let provider = context.provider;
+        let session_id = context.session_id;
+        let run_id = context.run_id;
+        let now = context.now;
         match parsed {
             ToolCall::PlanRead(_) => Ok(ToolOutput::PlanRead(
                 self.read_plan_snapshot(store, session_id)?,
@@ -2666,6 +2747,14 @@ impl ExecutionService {
                     false,
                 )?))
             }
+            ToolCall::DeliverFile(input) => Ok(ToolOutput::DeliverFile(self.queue_file_delivery(
+                store,
+                session_id,
+                run_id,
+                tool_runtime,
+                input,
+                now,
+            )?)),
             ToolCall::KnowledgeSearch(input) => Ok(ToolOutput::KnowledgeSearch(
                 self.search_knowledge(store, input)?,
             )),
@@ -2764,6 +2853,129 @@ impl ExecutionService {
                 .invoke(parsed.clone())
                 .map_err(ExecutionError::Tool),
         }
+    }
+
+    fn queue_file_delivery(
+        &self,
+        store: &PersistenceStore,
+        session_id: &str,
+        run_id: &str,
+        tool_runtime: &ToolRuntime,
+        input: &DeliverFileInput,
+        now: i64,
+    ) -> Result<DeliverFileOutput, ExecutionError> {
+        let target = input.target.unwrap_or(FileDeliveryTarget::CurrentChat);
+        let (artifact, default_file_name) = match (
+            input
+                .artifact_id
+                .as_deref()
+                .filter(|value| !value.trim().is_empty()),
+            input
+                .workspace_path
+                .as_deref()
+                .filter(|value| !value.trim().is_empty()),
+        ) {
+            (Some(artifact_id), None) => {
+                let artifact = store
+                    .get_artifact(artifact_id)
+                    .map_err(ExecutionError::Store)?
+                    .ok_or_else(|| {
+                        ExecutionError::Tool(agent_runtime::tool::ToolError::InvalidArtifactTool {
+                            reason: format!("artifact {artifact_id} does not exist"),
+                        })
+                    })?;
+                if artifact.session_id != session_id {
+                    return Err(ExecutionError::Tool(
+                        agent_runtime::tool::ToolError::InvalidArtifactTool {
+                            reason: format!(
+                                "artifact {} belongs to session {}, not current session {}",
+                                artifact.id, artifact.session_id, session_id
+                            ),
+                        },
+                    ));
+                }
+                let file_name = Self::artifact_delivery_file_name(&artifact);
+                (artifact, file_name)
+            }
+            (None, Some(workspace_path)) => {
+                let (relative_path, bytes) = tool_runtime
+                    .read_file_bytes(workspace_path)
+                    .map_err(ExecutionError::Tool)?;
+                let file_name = input
+                    .file_name
+                    .as_deref()
+                    .map(sanitize_delivery_file_name)
+                    .unwrap_or_else(|| Self::default_workspace_file_name(&relative_path));
+                let artifact_id =
+                    Self::workspace_file_artifact_id(session_id, run_id, &relative_path);
+                let artifact = ArtifactRecord {
+                    id: artifact_id.clone(),
+                    session_id: session_id.to_string(),
+                    kind: "workspace_file".to_string(),
+                    metadata_json: serde_json::json!({
+                        "source": "workspace",
+                        "workspace_path": relative_path,
+                        "file_name": file_name,
+                    })
+                    .to_string(),
+                    path: PathBuf::from("artifacts").join(format!("{artifact_id}.bin")),
+                    bytes,
+                    created_at: now,
+                };
+                store
+                    .put_artifact(&artifact)
+                    .map_err(ExecutionError::Store)?;
+                (artifact, file_name)
+            }
+            (Some(_), Some(_)) => {
+                return Err(ExecutionError::Tool(
+                    agent_runtime::tool::ToolError::InvalidArtifactTool {
+                        reason:
+                            "deliver_file accepts either artifact_id or workspace_path, not both"
+                                .to_string(),
+                    },
+                ));
+            }
+            (None, None) => {
+                return Err(ExecutionError::Tool(
+                    agent_runtime::tool::ToolError::InvalidArtifactTool {
+                        reason: "deliver_file requires artifact_id or workspace_path".to_string(),
+                    },
+                ));
+            }
+        };
+
+        let file_name = input
+            .file_name
+            .as_deref()
+            .map(sanitize_delivery_file_name)
+            .unwrap_or(default_file_name);
+        let request_id = Self::next_file_delivery_request_id(store, run_id, &artifact.id, now)?;
+        store
+            .put_file_delivery_request(&FileDeliveryRequestRecord {
+                id: request_id.clone(),
+                session_id: session_id.to_string(),
+                run_id: Some(run_id.to_string()),
+                artifact_id: artifact.id.clone(),
+                target: target.as_str().to_string(),
+                file_name: file_name.clone(),
+                caption: input.caption.clone(),
+                status: "queued".to_string(),
+                created_at: now,
+                updated_at: now,
+                delivered_at: None,
+                error: None,
+            })
+            .map_err(ExecutionError::Store)?;
+
+        Ok(DeliverFileOutput {
+            request_id,
+            artifact_id: artifact.id,
+            target,
+            file_name,
+            caption: input.caption.clone(),
+            status: "queued".to_string(),
+        })
     }
 
     fn search_mcp_resources(
@@ -4369,6 +4581,24 @@ fn sanitize_identifier(value: &str) -> String {
         "artifact".to_string()
     } else {
         compact
+    }
+}
+
+fn sanitize_delivery_file_name(value: &str) -> String {
+    let sanitized = value
+        .chars()
+        .map(|ch| match ch {
+            '/' | '\\' | '\0' => '_',
+            _ => ch,
+        })
+        .collect::<String>()
+        .trim()
+        .trim_matches('.')
+        .to_string();
+    if sanitized.is_empty() {
+        "file.bin".to_string()
+    } else {
+        sanitized
     }
 }
 
