@@ -15,6 +15,9 @@ use super::provider_prompt::{
     recent_tool_activity_entry, session_head_runtime,
 };
 use super::provider_text::truncate_utf8_bytes;
+use super::provider_tool_dispatch::{
+    ModelToolExecutionContext, ProviderToolCallInvocation, ProviderToolExecutionContext,
+};
 use super::*;
 use crate::agents;
 use crate::prompting;
@@ -63,30 +66,6 @@ const DEFAULT_SKILL_LIST_LIMIT: usize = 64;
 const MAX_SKILL_LIST_LIMIT: usize = 256;
 const DEFAULT_SKILL_READ_MAX_BYTES: usize = 16 * 1024;
 const MAX_SKILL_READ_MAX_BYTES: usize = 128 * 1024;
-#[derive(Clone, Copy)]
-pub(super) struct ProviderToolExecutionContext<'a> {
-    pub(super) store: &'a PersistenceStore,
-    pub(super) provider: &'a dyn ProviderDriver,
-    pub(super) session_id: &'a str,
-    pub(super) run_id: &'a str,
-    pub(super) now: i64,
-}
-
-#[derive(Clone, Copy)]
-pub(super) struct ModelToolExecutionContext<'a> {
-    pub(super) store: &'a PersistenceStore,
-    pub(super) provider: Option<&'a dyn ProviderDriver>,
-    pub(super) session_id: &'a str,
-    pub(super) run_id: &'a str,
-    pub(super) now: i64,
-}
-
-pub(super) struct ProviderToolCallInvocation<'a> {
-    pub(super) tool_call_id: &'a str,
-    pub(super) arguments_json: &'a str,
-    pub(super) parsed: &'a ToolCall,
-}
-
 #[derive(Debug, Clone)]
 struct ObservedProviderResponse {
     response: ProviderResponse,

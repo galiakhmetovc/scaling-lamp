@@ -17,6 +17,7 @@ mod provider_loop;
 mod provider_offload;
 mod provider_prompt;
 mod provider_text;
+mod provider_tool_dispatch;
 mod supervisor;
 mod tools;
 mod wakeup;

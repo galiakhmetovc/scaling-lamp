@@ -1,4 +1,5 @@
 use super::provider_completion::completion_continuation_messages;
+use super::provider_tool_dispatch::{ProviderToolCallInvocation, ProviderToolExecutionContext};
 use super::*;
 use agent_runtime::interagent::AgentMessageChain;
 use agent_runtime::mission::{JobResult, MissionStatus};
@@ -999,7 +1000,7 @@ impl ExecutionService {
                 let mut tool_runtime = self.tool_runtime();
                 let run_id = run.snapshot().id.clone();
                 let model_output = self.invoke_provider_tool_call(
-                    super::provider_loop::ProviderToolExecutionContext {
+                    ProviderToolExecutionContext {
                         store,
                         provider,
                         session_id: &session.id,
@@ -1008,7 +1009,7 @@ impl ExecutionService {
                     },
                     &mut run,
                     &mut tool_runtime,
-                    super::provider_loop::ProviderToolCallInvocation {
+                    ProviderToolCallInvocation {
                         tool_call_id: pending_tool_approval.provider_tool_call_id.as_str(),
                         arguments_json: pending_tool_approval.tool_arguments.as_str(),
                         parsed: &parsed,

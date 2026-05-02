@@ -1,5 +1,5 @@
 use super::*;
-use crate::execution::provider_loop::ModelToolExecutionContext;
+use crate::execution::provider_tool_dispatch::ModelToolExecutionContext;
 use agent_runtime::mission::{JobResult, MissionStatus};
 use agent_runtime::run::{ActiveProcess, ApprovalRequest};
 use agent_runtime::tool::{ProcessKind, ToolCatalog, ToolOutput, ToolRuntime};
