@@ -96,6 +96,53 @@ cargo build -p agentd
 cargo build --release -p agentd
 ```
 
+## Матрица targeted checks для рефакторинга
+
+Перед структурным рефакторингом не нужно каждый раз запускать полный release gate на каждый маленький перенос кода. Но у каждого этапа должен быть свой быстрый guard, который покрывает конкретный seam.
+
+| Зона изменения | Что защищает | Быстрая команда |
+| --- | --- | --- |
+| `agent-runtime::tool` | Tool names, schemas, parsing, model-facing output, local `ToolRuntime` behavior. | `CARGO_INCREMENTAL=0 cargo test -p agent-runtime tool` |
+| Provider contract | Совместимость provider request/response abstractions и tool schema contract. | `CARGO_INCREMENTAL=0 cargo test -p agent-runtime --test provider_contract` |
+| Provider loop internals | Repeated tool-call guard, recoverable tool errors, ledger/offload helpers, completion behavior. | `CARGO_INCREMENTAL=0 cargo test -p agentd provider_loop` |
+| Canonical chat path | `App -> ExecutionService -> ProviderLoop -> transcript/run/tool ledger`. | `CARGO_INCREMENTAL=0 cargo test -p agentd --test bootstrap_app chat` |
+| Prompt/context/offload | Prompt budget, compaction, context summary, offload refs/artifacts. | `CARGO_INCREMENTAL=0 cargo test -p agentd --test bootstrap_app context` |
+| Telegram surface | Pairing, commands, queue/coalescing, status, files, delivery. | `CARGO_INCREMENTAL=0 cargo test -p agentd --test telegram_surface` |
+| TUI local/debug | TUI state, render, debug browser, session/tool/artifact views. | `CARGO_INCREMENTAL=0 cargo test -p agentd --test tui_app` |
+| TUI через daemon | `TUI -> daemon client -> HTTP daemon -> runtime` contract. | `CARGO_INCREMENTAL=0 cargo test -p agentd --test daemon_tui` |
+| Persistence/schema | SQLite schema, migrations, repositories, payload/artifact storage, busy/concurrency behavior. | `CARGO_INCREMENTAL=0 cargo test -p agent-persistence store` |
+| Config/deploy scripts | Config/env parsing and operator install/update scripts. | `CARGO_INCREMENTAL=0 cargo test -p agent-persistence config && sh scripts/test-deploy-teamd.sh` |
+| Build baseline | Все crates компилируются со всеми features. | `CARGO_INCREMENTAL=0 cargo check --workspace --all-features` |
+
+Эта матрица задаёт минимальную проверку для refactor tasks из [16-refactoring-audit-and-plan.md](16-refactoring-audit-and-plan.md). Если изменение пересекает несколько зон, запускайте объединение соответствующих команд.
+
+## Full gate перед релизом или деплоем
+
+Перед release/tag/deploy или крупным merge нужен полный набор:
+
+```bash
+cargo fmt --all
+CARGO_INCREMENTAL=0 cargo clippy --workspace --all-targets --all-features -- -D warnings
+CARGO_INCREMENTAL=0 cargo test --workspace --all-features
+CARGO_INCREMENTAL=0 cargo build -p agentd
+CARGO_INCREMENTAL=0 cargo build --release -p agentd
+```
+
+Если на машине мало места, сначала проверьте:
+
+```bash
+df -h .
+du -sh target 2>/dev/null
+```
+
+Безопасная очистка build artifacts:
+
+```bash
+cargo clean
+```
+
+`cargo clean` удаляет только Cargo build output в `target/`; runtime state, workspace files и operator data не трогает.
+
 ## Точечные команды
 
 ### Только daemon-backed TUI inter-agent test
