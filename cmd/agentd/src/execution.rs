@@ -9,6 +9,7 @@ mod interagent;
 mod mcp;
 mod memory;
 mod mission;
+mod provider_cursor;
 mod provider_loop;
 mod supervisor;
 mod tools;
