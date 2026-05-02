@@ -54,7 +54,7 @@ fn git_commit_short() -> Option<String> {
 
 fn git_tree_is_dirty() -> bool {
     let output = Command::new("git")
-        .args(["status", "--porcelain"])
+        .args(["status", "--porcelain", "--untracked-files=no"])
         .current_dir(Path::new(env!("CARGO_MANIFEST_DIR")).join("../.."))
         .output();
     match output {
