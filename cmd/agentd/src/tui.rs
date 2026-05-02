@@ -1,6 +1,7 @@
 pub mod app;
 pub mod backend;
 pub(crate) mod browser_items;
+pub(crate) mod command_parse;
 pub(crate) mod debug_bundle;
 pub mod events;
 pub mod render;
@@ -26,6 +27,10 @@ use backend::TuiBackend;
 use browser_items::{
     parse_agent_browser_items, parse_artifact_browser_items, parse_mcp_browser_items,
     parse_schedule_browser_items,
+};
+use command_parse::{
+    canonical_command, describe_completion_mode, is_command_input, option_arg, parse_auto_approve,
+    parse_completion_nudges, parse_optional_positive_usize, require_arg,
 };
 use crossterm::event::{
     self, DisableBracketedPaste, EnableBracketedPaste, Event, KeyEvent, KeyEventKind,
@@ -1629,129 +1634,6 @@ where
     let transcript = app.session_transcript_tail(session_id, TUI_TRANSCRIPT_TAIL_LIMIT)?;
     let pending = app.pending_approvals(session_id)?;
     Ok(Timeline::from_session_view(&transcript, &pending))
-}
-
-fn require_arg(raw: &str, command: &str) -> Result<String, BootstrapError> {
-    if raw.trim().is_empty() {
-        return Err(BootstrapError::Usage {
-            reason: render_command_usage_error(command, "не хватает аргументов"),
-        });
-    }
-    Ok(raw.trim().to_string())
-}
-
-fn option_arg(raw: &str) -> Option<String> {
-    (!raw.trim().is_empty()).then(|| raw.trim().to_string())
-}
-
-fn parse_optional_positive_usize(
-    raw: Option<&str>,
-    command: &str,
-) -> Result<Option<usize>, BootstrapError> {
-    let Some(raw) = raw else {
-        return Ok(None);
-    };
-    let value = raw.parse::<usize>().map_err(|_| BootstrapError::Usage {
-        reason: render_command_usage_error(command, "ожидается положительное целое число"),
-    })?;
-    if value == 0 {
-        return Err(BootstrapError::Usage {
-            reason: render_command_usage_error(command, "значение должно быть больше нуля"),
-        });
-    }
-    Ok(Some(value))
-}
-
-fn parse_completion_nudges(raw: &str) -> Result<Option<u32>, BootstrapError> {
-    let trimmed = raw.trim();
-    if matches!(trimmed, "off" | "выкл" | "disable") {
-        return Ok(None);
-    }
-    trimmed
-        .parse::<u32>()
-        .map(Some)
-        .map_err(|_| BootstrapError::Usage {
-            reason: render_command_usage_error(
-                "/completion",
-                &format!(
-                    "неподдерживаемый режим доводки {trimmed}; ожидается выкл или неотрицательное число"
-                ),
-            ),
-        })
-}
-
-fn describe_completion_mode(completion_nudges: Option<u32>) -> String {
-    match completion_nudges {
-        None => "выключен".to_string(),
-        Some(0) => "включён: после первой ранней остановки сразу нужен апрув оператора".to_string(),
-        Some(value) => format!("включён: {value} автоматических пинка перед апрувом"),
-    }
-}
-
-fn parse_auto_approve(raw: &str) -> Result<bool, BootstrapError> {
-    match raw.trim() {
-        "on" | "1" | "yes" | "да" | "вкл" | "enable" => Ok(true),
-        "off" | "0" | "no" | "нет" | "выкл" | "disable" => Ok(false),
-        value => Err(BootstrapError::Usage {
-            reason: render_command_usage_error(
-                "/autoapprove",
-                &format!("неподдерживаемый режим автоапрува {value}; ожидается вкл|выкл"),
-            ),
-        }),
-    }
-}
-
-fn is_command_input(input: &str) -> bool {
-    let trimmed = input.trim_start();
-    trimmed.starts_with('/') || trimmed.starts_with('\\')
-}
-
-fn canonical_command(command: &str) -> Option<&'static str> {
-    let normalized = command.trim_end_matches(['\\', '/']);
-    match normalized {
-        "/session" | "\\сессии" => Some("/session"),
-        "/new" | "\\новая" => Some("/new"),
-        "/agents" | "\\агенты" => Some("/agents"),
-        "/agent" | "\\агент" => Some("/agent"),
-        "/judge" | "/судья" | "\\судья" => Some("/judge"),
-        "/schedules" | "\\расписания" => Some("/schedules"),
-        "/schedule" | "\\расписание" => Some("/schedule"),
-        "/mcp" | "\\mcp" => Some("/mcp"),
-        "/memory" | "/память" | "\\память" => Some("/memory"),
-        "/chain" | "/цепочка" | "\\цепочка" => Some("/chain"),
-        "/rename" | "\\переименовать" => Some("/rename"),
-        "/clear" | "\\очистить" => Some("/clear"),
-        "/help" | "\\помощь" => Some("/help"),
-        "/version" | "/версия" | "\\версия" => Some("/version"),
-        "/logs" | "/логи" | "\\логи" => Some("/logs"),
-        "/update" | "/обновить" | "\\обновить" => Some("/update"),
-        "/settings" | "\\настройки" => Some("/settings"),
-        "/debug" | "\\отладка" => Some("/debug"),
-        "/debug-view" | "\\дебаг" | "\\отладчик" => Some("/debug-view"),
-        "/system" | "/система" | "\\система" => Some("/system"),
-        "/plan" | "\\план" => Some("/plan"),
-        "/status" | "\\статус" => Some("/status"),
-        "/processes" | "\\процессы" => Some("/processes"),
-        "/pause" | "\\пауза" => Some("/pause"),
-        "/stop" | "\\стоп" => Some("/stop"),
-        "/cancel" | "\\отмена" => Some("/cancel"),
-        "/jobs" | "\\задачи" => Some("/jobs"),
-        "/artifacts" | "/артефакты" | "\\артефакты" => Some("/artifacts"),
-        "/artifact" | "/артефакт" | "\\артефакт" => Some("/artifact"),
-        "/context" | "\\контекст" => Some("/context"),
-        "/completion" | "\\доводка" => Some("/completion"),
-        "/autoapprove" | "\\автоапрув" => Some("/autoapprove"),
-        "/skills" | "\\скиллы" => Some("/skills"),
-        "/enable" | "\\включить" => Some("/enable"),
-        "/disable" | "\\выключить" => Some("/disable"),
-        "/approve" | "\\апрув" => Some("/approve"),
-        "/model" | "\\модель" => Some("/model"),
-        "/reasoning" | "\\размышления" => Some("/reasoning"),
-        "/think" | "\\думай" => Some("/think"),
-        "/compact" | "\\компакт" => Some("/compact"),
-        "/exit" | "\\выход" => Some("/exit"),
-        _ => None,
-    }
 }
 
 fn handle_agent_command<B>(
