@@ -13,16 +13,16 @@ pub(super) fn private_binding_record(
     cursor: DeliveryCursor,
     default_queue_mode: &str,
 ) -> TelegramChatBindingRecord {
-    binding_record(
+    binding_record(BindingRecordInput {
         chat_id,
-        TELEGRAM_SCOPE_PRIVATE,
-        Some(telegram_user_id),
+        scope: TELEGRAM_SCOPE_PRIVATE,
+        owner_telegram_user_id: Some(telegram_user_id),
         selected_session_id,
         now,
         existing,
         cursor,
         default_queue_mode,
-    )
+    })
 }
 
 pub(super) fn group_binding_record(
@@ -33,28 +33,40 @@ pub(super) fn group_binding_record(
     cursor: DeliveryCursor,
     default_queue_mode: &str,
 ) -> TelegramChatBindingRecord {
-    binding_record(
+    binding_record(BindingRecordInput {
         chat_id,
-        TELEGRAM_SCOPE_GROUP,
-        None,
+        scope: TELEGRAM_SCOPE_GROUP,
+        owner_telegram_user_id: None,
         selected_session_id,
         now,
         existing,
         cursor,
         default_queue_mode,
-    )
+    })
 }
 
-fn binding_record(
+struct BindingRecordInput<'a> {
     chat_id: i64,
-    scope: &str,
+    scope: &'a str,
     owner_telegram_user_id: Option<i64>,
     selected_session_id: Option<String>,
     now: i64,
-    existing: Option<&TelegramChatBindingRecord>,
+    existing: Option<&'a TelegramChatBindingRecord>,
     cursor: DeliveryCursor,
-    default_queue_mode: &str,
-) -> TelegramChatBindingRecord {
+    default_queue_mode: &'a str,
+}
+
+fn binding_record(input: BindingRecordInput<'_>) -> TelegramChatBindingRecord {
+    let BindingRecordInput {
+        chat_id,
+        scope,
+        owner_telegram_user_id,
+        selected_session_id,
+        now,
+        existing,
+        cursor,
+        default_queue_mode,
+    } = input;
     let existing_created_at = existing.map(|record| record.created_at).unwrap_or(now);
     TelegramChatBindingRecord {
         telegram_chat_id: chat_id,

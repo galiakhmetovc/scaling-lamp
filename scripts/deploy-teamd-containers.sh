@@ -15,6 +15,9 @@ ENABLE_JAEGER=0
 ENABLE_SILVERBULLET=0
 ENABLE_SILVERBULLET_MCP=0
 WRITE_SILVERBULLET_MCP_EXAMPLE=0
+ENABLE_LIGHTPANDA=0
+ENABLE_LIGHTPANDA_MCP=0
+WRITE_LIGHTPANDA_MCP_EXAMPLE=0
 ENABLE_CADDY=1
 RESTART_TEAMD_SERVICES=1
 
@@ -72,6 +75,16 @@ SILVERBULLET_MCP_NODE_IMAGE=${TEAMD_SILVERBULLET_MCP_NODE_IMAGE:-docker.io/libra
 SILVERBULLET_MCP_STDIO_WRAPPER=$SILVERBULLET_DIR/silverbullet-mcp-stdio.sh
 SILVERBULLET_MCP_EXAMPLE=$SILVERBULLET_DIR/silverbullet-mcp.example.toml
 LEGACY_LOGSEQ_GRAPH_DIR=${TEAMD_LEGACY_LOGSEQ_GRAPH_DIR:-${TEAMD_LOGSEQ_GRAPH_DIR:-/var/lib/teamd/knowledge/logseq/teamd}}
+
+LIGHTPANDA_RELEASE_TAG=${TEAMD_LIGHTPANDA_RELEASE_TAG:-nightly}
+LIGHTPANDA_DOWNLOAD_URL=${TEAMD_LIGHTPANDA_DOWNLOAD_URL:-}
+LIGHTPANDA_BIN=${TEAMD_LIGHTPANDA_BIN:-/opt/teamd/bin/lightpanda}
+LIGHTPANDA_PATH_LINK=${TEAMD_LIGHTPANDA_PATH_LINK:-/usr/local/bin/lightpanda}
+LIGHTPANDA_DIR=$CONTAINERS_ROOT/lightpanda
+LIGHTPANDA_MCP_STDIO_WRAPPER=${TEAMD_LIGHTPANDA_MCP_STDIO_WRAPPER:-$LIGHTPANDA_DIR/lightpanda-mcp-stdio.sh}
+LIGHTPANDA_MCP_EXAMPLE=$LIGHTPANDA_DIR/lightpanda-mcp.example.toml
+# Default wrapper behavior: LIGHTPANDA_DISABLE_TELEMETRY=true.
+LIGHTPANDA_DISABLE_TELEMETRY=${TEAMD_LIGHTPANDA_DISABLE_TELEMETRY:-true}
 
 JAEGER_UI_PORT=${TEAMD_JAEGER_UI_PORT:-16686}
 JAEGER_OTLP_GRPC_PORT=${TEAMD_JAEGER_OTLP_GRPC_PORT:-4317}
@@ -132,7 +145,7 @@ Deploy teamD container add-ons without changing the main agentd deploy path.
 
 By default this installs/uses Docker Engine, deploys a local SearXNG instance
 bound to 127.0.0.1:$SEARXNG_PORT, and starts Caddy as an edge reverse proxy.
-Obsidian, SilverBullet, SilverBullet MCP, and Jaeger are opt-in.
+Obsidian, SilverBullet, SilverBullet MCP, Lightpanda MCP, and Jaeger are opt-in.
 
 Options:
   --dry-run             Print actions without changing the system.
@@ -151,6 +164,10 @@ Options:
                          Deploy SilverBullet plus MCP bridge and agentd MCP connector.
   --with-silverbullet-mcp-example
                          Write an agentd stdio MCP connector example for SilverBullet.
+  --with-lightpanda      Install the Lightpanda headless browser binary.
+  --with-lightpanda-mcp  Install Lightpanda and an agentd MCP connector.
+  --with-lightpanda-mcp-example
+                         Write an agentd stdio MCP connector example for Lightpanda.
   --single-domain       With TEAMD_CADDY_DOMAIN, publish all add-ons on that
                          exact host: /, /searxng/, /jaeger/.
   --no-restart-teamd    Do not restart teamd systemd services after writing MCP config.
@@ -212,6 +229,15 @@ Environment overrides:
   TEAMD_SILVERBULLET_MCP_NODE_IMAGE
                                  Node image used for mcp-remote stdio bridge,
                                  default: $SILVERBULLET_MCP_NODE_IMAGE.
+  TEAMD_LIGHTPANDA_RELEASE_TAG   Lightpanda GitHub release tag, default: $LIGHTPANDA_RELEASE_TAG.
+  TEAMD_LIGHTPANDA_DOWNLOAD_URL  Explicit Lightpanda binary URL. Overrides release tag/platform detection.
+  TEAMD_LIGHTPANDA_BIN           Installed Lightpanda binary path, default: $LIGHTPANDA_BIN.
+  TEAMD_LIGHTPANDA_PATH_LINK     PATH symlink for Lightpanda, default: $LIGHTPANDA_PATH_LINK.
+  TEAMD_LIGHTPANDA_MCP_STDIO_WRAPPER
+                                 Wrapper used by agentd MCP connector,
+                                 default: $LIGHTPANDA_MCP_STDIO_WRAPPER.
+  TEAMD_LIGHTPANDA_DISABLE_TELEMETRY
+                                 Exported by the MCP wrapper, default: $LIGHTPANDA_DISABLE_TELEMETRY.
   TEAMD_JAEGER_IMAGE             Jaeger all-in-one image, default: $JAEGER_IMAGE.
   TEAMD_JAEGER_UID               Jaeger container UID for Badger storage, default: $JAEGER_UID.
   TEAMD_JAEGER_GID               Jaeger container GID for Badger storage, default: $JAEGER_GID.
@@ -441,6 +467,14 @@ ensure_edge_network() {
     return 0
   fi
   run_root docker network create "$EDGE_NETWORK"
+}
+
+docker_components_enabled() {
+  [ "$ENABLE_SEARXNG" -eq 1 ] ||
+    [ "$ENABLE_OBSIDIAN" -eq 1 ] ||
+    [ "$ENABLE_JAEGER" -eq 1 ] ||
+    [ "$ENABLE_SILVERBULLET" -eq 1 ] ||
+    [ "$ENABLE_CADDY" -eq 1 ]
 }
 
 generate_secret_key() {
@@ -951,6 +985,161 @@ EOF
           in_silverbullet = 0
         }
         !in_silverbullet {
+          print
+        }
+      ' "$CONFIG_FILE" > "$tmp_config"
+    else
+      {
+        cat "$CONFIG_FILE"
+        printf '\n'
+        cat "$tmp_block"
+      } > "$tmp_config"
+    fi
+  else
+    cat "$tmp_block" > "$tmp_config"
+  fi
+
+  run_root install -m 0644 -o root -g root "$tmp_config" "$CONFIG_FILE"
+}
+
+lightpanda_asset_name() {
+  os_name=$(uname -s)
+  arch_name=$(uname -m)
+
+  case "$os_name:$arch_name" in
+    Linux:x86_64) printf 'lightpanda-x86_64-linux' ;;
+    Linux:aarch64|Linux:arm64) printf 'lightpanda-aarch64-linux' ;;
+    Darwin:x86_64) printf 'lightpanda-x86_64-macos' ;;
+    Darwin:arm64|Darwin:aarch64) printf 'lightpanda-aarch64-macos' ;;
+    *) fail "unsupported Lightpanda platform: $os_name $arch_name" ;;
+  esac
+}
+
+lightpanda_download_url() {
+  if [ -n "$LIGHTPANDA_DOWNLOAD_URL" ]; then
+    printf '%s' "$LIGHTPANDA_DOWNLOAD_URL"
+    return 0
+  fi
+
+  printf 'https://github.com/lightpanda-io/browser/releases/download/%s/%s' \
+    "$LIGHTPANDA_RELEASE_TAG" "$(lightpanda_asset_name)"
+}
+
+install_lightpanda_binary() {
+  bin_parent=$(dirname "$LIGHTPANDA_BIN")
+  link_parent=$(dirname "$LIGHTPANDA_PATH_LINK")
+  download_url=$(lightpanda_download_url)
+
+  if [ "$DRY_RUN" -eq 1 ]; then
+    print_cmd mkdir -p "$bin_parent" "$link_parent"
+    print_cmd sh -c "install Lightpanda browser binary from $download_url to $LIGHTPANDA_BIN"
+    print_cmd ln -sf "$LIGHTPANDA_BIN" "$LIGHTPANDA_PATH_LINK"
+    print_cmd "$LIGHTPANDA_BIN" version
+    return 0
+  fi
+
+  need_command curl
+  run_root mkdir -p "$bin_parent" "$link_parent"
+
+  tmp_bin=$(mktemp)
+  trap 'rm -f "$tmp_bin"' EXIT INT TERM
+  curl -fsSL -o "$tmp_bin" "$download_url"
+  chmod 0755 "$tmp_bin"
+  run_root install -m 0755 -o root -g root "$tmp_bin" "$LIGHTPANDA_BIN"
+  run_root ln -sf "$LIGHTPANDA_BIN" "$LIGHTPANDA_PATH_LINK"
+  "$LIGHTPANDA_BIN" version >/dev/null 2>&1 || "$LIGHTPANDA_BIN" --help >/dev/null
+}
+
+write_lightpanda_mcp_wrapper() {
+  wrapper_parent=$(dirname "$LIGHTPANDA_MCP_STDIO_WRAPPER")
+
+  if [ "$DRY_RUN" -eq 1 ]; then
+    print_cmd mkdir -p "$wrapper_parent"
+    print_cmd sh -c "write $LIGHTPANDA_MCP_STDIO_WRAPPER for lightpanda mcp"
+    return 0
+  fi
+
+  run_root mkdir -p "$wrapper_parent"
+  tmp_wrapper=$(mktemp)
+  trap 'rm -f "$tmp_wrapper"' EXIT INT TERM
+  cat > "$tmp_wrapper" <<EOF
+#!/bin/sh
+set -eu
+export LIGHTPANDA_DISABLE_TELEMETRY=$LIGHTPANDA_DISABLE_TELEMETRY
+exec "$LIGHTPANDA_BIN" mcp
+EOF
+
+  wrapper_group=root
+  if getent group "$SERVICE_GROUP" >/dev/null 2>&1; then
+    wrapper_group=$SERVICE_GROUP
+  fi
+  run_root install -m 0750 -o root -g "$wrapper_group" "$tmp_wrapper" "$LIGHTPANDA_MCP_STDIO_WRAPPER"
+}
+
+write_lightpanda_mcp_example() {
+  if [ "$DRY_RUN" -eq 1 ]; then
+    print_cmd mkdir -p "$LIGHTPANDA_DIR"
+    print_cmd sh -c "write $LIGHTPANDA_MCP_EXAMPLE for Lightpanda MCP stdio wrapper"
+    return 0
+  fi
+
+  run_root mkdir -p "$LIGHTPANDA_DIR"
+  tmp_config=$(mktemp)
+  trap 'rm -f "$tmp_config"' EXIT INT TERM
+  cat > "$tmp_config" <<EOF
+# Copy this block into /etc/teamd/config.toml under [daemon.mcp_connectors].
+#
+# agentd -> stdio wrapper -> lightpanda mcp.
+# Lightpanda is a headless browser for JS-capable extraction and automation.
+
+[daemon.mcp_connectors.lightpanda]
+transport = "stdio"
+command = "$LIGHTPANDA_MCP_STDIO_WRAPPER"
+args = []
+enabled = false
+EOF
+
+  run_root install -m 0644 -o root -g root "$tmp_config" "$LIGHTPANDA_MCP_EXAMPLE"
+}
+
+append_lightpanda_mcp_connector_config() {
+  config_parent=$(dirname "$CONFIG_FILE")
+
+  if [ "$DRY_RUN" -eq 1 ]; then
+    print_cmd mkdir -p "$config_parent"
+    print_cmd sh -c "upsert enabled Lightpanda MCP connector in $CONFIG_FILE"
+    return 0
+  fi
+
+  run_root mkdir -p "$config_parent"
+
+  tmp_block=$(mktemp)
+  tmp_config=$(mktemp)
+  trap 'rm -f "$tmp_block" "$tmp_config"' EXIT INT TERM
+  cat > "$tmp_block" <<EOF
+[daemon.mcp_connectors.lightpanda]
+transport = "stdio"
+command = "$LIGHTPANDA_MCP_STDIO_WRAPPER"
+args = []
+enabled = true
+EOF
+
+  if [ -e "$CONFIG_FILE" ]; then
+    if grep -F "[daemon.mcp_connectors.lightpanda]" "$CONFIG_FILE" >/dev/null 2>&1; then
+      awk -v block="$tmp_block" '
+        function print_block() {
+          while ((getline line < block) > 0) print line
+          close(block)
+        }
+        /^\[daemon\.mcp_connectors\.lightpanda\][[:space:]]*$/ {
+          print_block()
+          in_lightpanda = 1
+          next
+        }
+        in_lightpanda && /^\[/ {
+          in_lightpanda = 0
+        }
+        !in_lightpanda {
           print
         }
       ' "$CONFIG_FILE" > "$tmp_config"
@@ -1515,6 +1704,18 @@ while [ "$#" -gt 0 ]; do
       ENABLE_SILVERBULLET=1
       WRITE_SILVERBULLET_MCP_EXAMPLE=1
       ;;
+    --with-lightpanda)
+      ENABLE_LIGHTPANDA=1
+      ;;
+    --with-lightpanda-mcp)
+      ENABLE_LIGHTPANDA=1
+      ENABLE_LIGHTPANDA_MCP=1
+      WRITE_LIGHTPANDA_MCP_EXAMPLE=1
+      ;;
+    --with-lightpanda-mcp-example)
+      ENABLE_LIGHTPANDA=1
+      WRITE_LIGHTPANDA_MCP_EXAMPLE=1
+      ;;
     --single-domain) CADDY_SINGLE_DOMAIN=1 ;;
     --no-restart-teamd) RESTART_TEAMD_SERVICES=0 ;;
     --searxng-port)
@@ -1559,7 +1760,7 @@ done
 [ "$NON_INTERACTIVE" -eq 0 ] || true
 
 if [ "$DRY_RUN" -eq 1 ]; then
-  printf 'DRY RUN: no Docker packages, compose files, data directories or containers will be changed.\n'
+  printf 'DRY RUN: no Docker packages, compose files, data directories, browser binaries or containers will be changed.\n'
 fi
 
 need_command id
@@ -1574,13 +1775,15 @@ if [ "$(id -u)" -ne 0 ] && [ "$DRY_RUN" -eq 0 ]; then
   need_command sudo
 fi
 
-if [ "$ENABLE_SEARXNG" -eq 0 ] && [ "$ENABLE_OBSIDIAN" -eq 0 ] && [ "$ENABLE_JAEGER" -eq 0 ] && [ "$ENABLE_SILVERBULLET" -eq 0 ] && [ "$ENABLE_CADDY" -eq 0 ]; then
-  fail "nothing to deploy: SearXNG disabled, Obsidian not enabled, Jaeger not enabled, SilverBullet not enabled, and Caddy disabled"
+if [ "$ENABLE_SEARXNG" -eq 0 ] && [ "$ENABLE_OBSIDIAN" -eq 0 ] && [ "$ENABLE_JAEGER" -eq 0 ] && [ "$ENABLE_SILVERBULLET" -eq 0 ] && [ "$ENABLE_LIGHTPANDA" -eq 0 ] && [ "$ENABLE_CADDY" -eq 0 ]; then
+  fail "nothing to deploy: SearXNG disabled, Obsidian not enabled, Jaeger not enabled, SilverBullet not enabled, Lightpanda not enabled, and Caddy disabled"
 fi
 
-ensure_docker
-ensure_edge_network
-remove_legacy_logseq_runtime
+if docker_components_enabled; then
+  ensure_docker
+  ensure_edge_network
+  remove_legacy_logseq_runtime
+fi
 
 if [ "$ENABLE_SEARXNG" -eq 1 ]; then
   write_searxng_files
@@ -1618,6 +1821,17 @@ if [ "$WRITE_OBSIDIAN_MCP_EXAMPLE" -eq 1 ]; then
   write_obsidian_mcp_example
 fi
 
+if [ "$ENABLE_LIGHTPANDA" -eq 1 ]; then
+  install_lightpanda_binary
+  if [ "$ENABLE_LIGHTPANDA_MCP" -eq 1 ] || [ "$WRITE_LIGHTPANDA_MCP_EXAMPLE" -eq 1 ]; then
+    write_lightpanda_mcp_wrapper
+  fi
+fi
+
+if [ "$WRITE_LIGHTPANDA_MCP_EXAMPLE" -eq 1 ]; then
+  write_lightpanda_mcp_example
+fi
+
 if [ "$ENABLE_SILVERBULLET_MCP" -eq 1 ]; then
   append_silverbullet_mcp_connector_config
   ensure_teamd_docker_access
@@ -1628,13 +1842,17 @@ if [ "$ENABLE_OBSIDIAN_MCP" -eq 1 ]; then
   ensure_teamd_docker_access
 fi
 
+if [ "$ENABLE_LIGHTPANDA_MCP" -eq 1 ]; then
+  append_lightpanda_mcp_connector_config
+fi
+
 if [ "$ENABLE_CADDY" -eq 1 ]; then
   write_caddy_files
   compose_up_caddy
   reload_caddy_if_running
 fi
 
-if [ "$ENABLE_SEARXNG" -eq 1 ] || [ "$ENABLE_OBSIDIAN_MCP" -eq 1 ] || [ "$ENABLE_SILVERBULLET_MCP" -eq 1 ] || [ "$ENABLE_JAEGER" -eq 1 ]; then
+if [ "$ENABLE_SEARXNG" -eq 1 ] || [ "$ENABLE_OBSIDIAN_MCP" -eq 1 ] || [ "$ENABLE_SILVERBULLET_MCP" -eq 1 ] || [ "$ENABLE_LIGHTPANDA_MCP" -eq 1 ] || [ "$ENABLE_JAEGER" -eq 1 ]; then
   restart_teamd_services
 fi
 
@@ -1787,6 +2005,29 @@ EOF
   else
     cat <<EOF
     Caddy URL: <none; set TEAMD_CADDY_DOMAIN or TEAMD_SILVERBULLET_HTTPS_PORT for browser-safe remote access>
+EOF
+  fi
+fi
+
+if [ "$ENABLE_LIGHTPANDA" -eq 1 ]; then
+  cat <<EOF
+  Lightpanda:
+    Binary: $LIGHTPANDA_BIN
+    PATH symlink: $LIGHTPANDA_PATH_LINK
+    Release tag: $LIGHTPANDA_RELEASE_TAG
+    Download URL: $(lightpanda_download_url)
+    Telemetry disabled: $LIGHTPANDA_DISABLE_TELEMETRY
+EOF
+  if [ "$ENABLE_LIGHTPANDA_MCP" -eq 1 ]; then
+    cat <<EOF
+    MCP stdio wrapper: $LIGHTPANDA_MCP_STDIO_WRAPPER
+    MCP connector: [daemon.mcp_connectors.lightpanda] in $CONFIG_FILE
+    Restarted services unless absent/no-start: $DAEMON_SERVICE, $TELEGRAM_SERVICE
+EOF
+  fi
+  if [ "$WRITE_LIGHTPANDA_MCP_EXAMPLE" -eq 1 ]; then
+    cat <<EOF
+    MCP example: $LIGHTPANDA_MCP_EXAMPLE
 EOF
   fi
 fi

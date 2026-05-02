@@ -1,4 +1,4 @@
-# Container add-ons: Docker, SearXNG, SilverBullet, Jaeger, Caddy
+# Container add-ons: Docker, SearXNG, SilverBullet, Lightpanda, Jaeger, Caddy
 
 Этот документ описывает второй deploy layer вокруг host `agentd`.
 
@@ -22,6 +22,7 @@
 - `teamd-silverbullet` — browser UI для canonical Markdown knowledge space;
 - `teamd-silverbullet-mcp` — SilverBullet MCP bridge;
 - `teamd-jaeger` — Jaeger UI и OTLP receiver для traces;
+- `lightpanda` MCP connector — optional headless browser для JS-страниц, форм, кликов и DOM/content extraction;
 - `teamd-obsidian` — legacy browser Obsidian для восстановления старых vault workflows;
 - `obsidian` MCP connector — legacy filesystem-backed MCP для старого vault.
 
@@ -33,6 +34,18 @@ Logseq Publish больше не является runtime-компонентом
 
 ```bash
 ./scripts/deploy-teamd-containers.sh --with-silverbullet-mcp --with-jaeger --single-domain
+```
+
+Если нужен браузерный MCP add-on для динамических страниц:
+
+```bash
+./scripts/deploy-teamd-containers.sh --with-lightpanda-mcp
+```
+
+Если нужен только Lightpanda без контейнерной обвязки:
+
+```bash
+./scripts/deploy-teamd-containers.sh --no-searxng --no-caddy --with-lightpanda-mcp
 ```
 
 Если нужен только SilverBullet без MCP:
@@ -241,6 +254,94 @@ Smoke check:
 curl 'http://127.0.0.1:8888/search?q=test&format=json'
 ```
 
+## Lightpanda
+
+Lightpanda — optional MCP-first браузерный add-on. Он нужен, когда обычных `web_search` и `web_fetch` недостаточно:
+
+- страница рендерится JavaScript;
+- нужен переход по ссылкам, click/fill/scroll/wait;
+- нужно достать semantic DOM, markdown view, links или structured data после загрузки страницы;
+- нужно проверить форму или интерактивный flow без полноценного screenshot/browser UI.
+
+Он не заменяет канонические `web_search` и `web_fetch`:
+
+- поиск источников по-прежнему начинается с `web_search`;
+- прямой fetch известного URL по-прежнему делает `web_fetch`;
+- Lightpanda включается как discovered MCP tools через общий provider/tool loop;
+- для Lightpanda не создаётся отдельный prompt path, отдельный daemon или второй web extraction loop.
+
+Команды:
+
+```bash
+./scripts/deploy-teamd-containers.sh --with-lightpanda
+./scripts/deploy-teamd-containers.sh --with-lightpanda-mcp
+./scripts/deploy-teamd-containers.sh --with-lightpanda-mcp-example
+```
+
+Deploy script ставит:
+
+```text
+/opt/teamd/bin/lightpanda
+/usr/local/bin/lightpanda
+/opt/teamd/containers/lightpanda/lightpanda-mcp-stdio.sh
+/opt/teamd/containers/lightpanda/lightpanda-mcp.example.toml
+```
+
+`--with-lightpanda-mcp` добавляет enabled connector в `/etc/teamd/config.toml`:
+
+```toml
+[daemon.mcp_connectors.lightpanda]
+transport = "stdio"
+command = "/opt/teamd/containers/lightpanda/lightpanda-mcp-stdio.sh"
+args = []
+enabled = true
+```
+
+Wrapper запускает:
+
+```bash
+/opt/teamd/bin/lightpanda mcp
+```
+
+и по умолчанию выставляет:
+
+```bash
+LIGHTPANDA_DISABLE_TELEMETRY=true
+```
+
+Release tag и download URL можно переопределить:
+
+```bash
+TEAMD_LIGHTPANDA_RELEASE_TAG='nightly' \
+  ./scripts/deploy-teamd-containers.sh --with-lightpanda-mcp
+
+TEAMD_LIGHTPANDA_DOWNLOAD_URL='https://example.invalid/lightpanda' \
+  ./scripts/deploy-teamd-containers.sh --with-lightpanda-mcp
+```
+
+Agent skill:
+
+```text
+lightpanda-browser
+```
+
+Включить вручную:
+
+```bash
+teamdctl session enable-skill <session_id> lightpanda-browser
+teamdctl session skills <session_id>
+```
+
+Ожидаемая модель работы агента:
+
+1. Найти candidate URL через `web_search`, если URL не задан пользователем.
+2. Открыть выбранный URL через discovered Lightpanda MCP tool вроде `mcp__lightpanda__goto`.
+3. Снять markdown/semantic tree/links/structured data через discovered MCP tools.
+4. Для интерактива использовать discovered tools вроде click/fill/scroll/waitForSelector.
+5. Если connector недоступен, явно сказать об этом и не выдумывать browser result.
+
+Важно: Lightpanda сейчас стоит как nightly/beta browser binary. Это нормальный add-on для automation, но не гарантия, что каждая публичная страница примет его как обычный Chrome.
+
 ## Jaeger
 
 `--with-jaeger` поднимает `teamd-jaeger` и включает best-effort OTLP export:
@@ -295,6 +396,7 @@ Compatibility symlink:
 - SilverBullet защищается `SB_USER`.
 - SearXNG и Jaeger в этой схеме не имеют пользовательской авторизации. Не публикуйте их наружу без reverse-proxy auth/firewall/VPN, если сервер доступен не только вам.
 - MCP wrappers требуют Docker access для `teamd`, потому что `agentd` запускает stdio bridge через Docker. Это сильное право; выдавайте его только trusted runtime user.
+- Lightpanda MCP wrapper запускает локальный browser binary от имени runtime user. Не используйте его для обхода access controls и не передавайте ему секреты страниц без явного намерения.
 - Secrets лежат в env files под `/opt/teamd/containers/*/*.env`, а не в git.
 
 ## Проверка после deploy
@@ -316,6 +418,7 @@ MCP config:
 
 ```bash
 grep -A5 'daemon.mcp_connectors.silverbullet' /etc/teamd/config.toml
+grep -A5 'daemon.mcp_connectors.lightpanda' /etc/teamd/config.toml
 systemctl restart teamd-daemon teamd-telegram
 ```
 
@@ -348,10 +451,19 @@ docker logs teamd-silverbullet-mcp
 docker exec teamd-caddy caddy reload --config /etc/caddy/Caddyfile
 ```
 
+Если Lightpanda MCP не появился в tools:
+
+1. проверьте `/etc/teamd/config.toml`;
+2. проверьте `/opt/teamd/containers/lightpanda/lightpanda-mcp-stdio.sh`;
+3. проверьте `lightpanda --help` и `lightpanda mcp`;
+4. перезапустите `teamd-daemon` и `teamd-telegram`.
+
 ## Ссылки
 
 - SilverBullet: <https://silverbullet.md/>
 - SilverBullet community MCP: <https://github.com/Ahmad-A0/silverbullet-mcp>
+- Lightpanda browser: <https://github.com/lightpanda-io/browser>
+- Lightpanda docs: <https://lightpanda.io/docs>
 - SearXNG: <https://docs.searxng.org/>
 - Jaeger: <https://www.jaegertracing.io/>
 - Caddy: <https://caddyserver.com/docs/>

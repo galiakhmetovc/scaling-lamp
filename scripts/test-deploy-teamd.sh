@@ -39,11 +39,13 @@ assert_contains "$containers_help_output" "--with-obsidian-mcp"
 assert_contains "$containers_help_output" "--with-jaeger"
 assert_contains "$containers_help_output" "--with-silverbullet"
 assert_contains "$containers_help_output" "--with-silverbullet-mcp"
+assert_contains "$containers_help_output" "--with-lightpanda-mcp"
 assert_contains "$containers_help_output" "--single-domain"
 assert_contains "$containers_help_output" "--no-searxng"
 assert_contains "$containers_help_output" "--no-caddy"
 assert_contains "$containers_help_output" "--with-obsidian-mcp-example"
 assert_contains "$containers_help_output" "--with-silverbullet-mcp-example"
+assert_contains "$containers_help_output" "--with-lightpanda-mcp-example"
 
 diagnostics_help_output=$("$DIAGNOSTICS_SCRIPT" --help)
 assert_contains "$diagnostics_help_output" "collects production diagnostics"
@@ -117,6 +119,20 @@ assert_contains "$containers_silverbullet_dry_run_output" "MCP stdio wrapper: /o
 assert_contains "$containers_silverbullet_dry_run_output" "Caddy URL: https://127.0.0.1:8444/"
 assert_contains "$containers_silverbullet_dry_run_output" "SB_USER credentials file: /opt/teamd/containers/silverbullet/silverbullet.env"
 
+containers_lightpanda_dry_run_output=$(
+  "$CONTAINERS_DEPLOY_SCRIPT" --dry-run --non-interactive --no-start --no-searxng --no-caddy --with-lightpanda-mcp 2>&1
+)
+
+assert_contains "$containers_lightpanda_dry_run_output" "DRY RUN"
+assert_contains "$containers_lightpanda_dry_run_output" "install Lightpanda browser binary"
+assert_contains "$containers_lightpanda_dry_run_output" "/opt/teamd/bin/lightpanda"
+assert_contains "$containers_lightpanda_dry_run_output" "/usr/local/bin/lightpanda"
+assert_contains "$containers_lightpanda_dry_run_output" "write /opt/teamd/containers/lightpanda/lightpanda-mcp-stdio.sh"
+assert_contains "$containers_lightpanda_dry_run_output" "upsert enabled Lightpanda MCP connector"
+assert_contains "$containers_lightpanda_dry_run_output" "lightpanda-mcp.example.toml"
+assert_contains "$containers_lightpanda_dry_run_output" "MCP connector: [daemon.mcp_connectors.lightpanda]"
+assert_contains "$containers_lightpanda_dry_run_output" "Telemetry disabled: true"
+
 containers_single_domain_dry_run_output=$(
   TEAMD_CADDY_DOMAIN='teamd.qlbc.ru' \
     "$CONTAINERS_DEPLOY_SCRIPT" --dry-run --non-interactive --no-start --with-silverbullet-mcp --with-jaeger --single-domain 2>&1
@@ -182,6 +198,12 @@ grep -q 'teamd-silverbullet-mcp' "$CONTAINERS_DEPLOY_SCRIPT" \
   || fail "expected SilverBullet MCP container support"
 grep -q 'mcp-remote' "$CONTAINERS_DEPLOY_SCRIPT" \
   || fail "expected MCP stdio bridge through mcp-remote"
+grep -q 'LIGHTPANDA_RELEASE_TAG=${TEAMD_LIGHTPANDA_RELEASE_TAG:-nightly}' "$CONTAINERS_DEPLOY_SCRIPT" \
+  || fail "expected configurable Lightpanda release tag"
+grep -q 'lightpanda mcp' "$CONTAINERS_DEPLOY_SCRIPT" \
+  || fail "expected Lightpanda MCP support"
+grep -q 'LIGHTPANDA_DISABLE_TELEMETRY=true' "$CONTAINERS_DEPLOY_SCRIPT" \
+  || fail "expected Lightpanda telemetry disabled by default"
 grep -q 'notes.$CADDY_DOMAIN' "$CONTAINERS_DEPLOY_SCRIPT" \
   || fail "expected SilverBullet dedicated domain route"
 grep -q 'chown_work_dir()' "$DEPLOY_SCRIPT" \

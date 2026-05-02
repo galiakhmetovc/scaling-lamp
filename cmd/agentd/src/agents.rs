@@ -391,6 +391,57 @@ Resource notes should include: summary, key points, sources, related notes.
 - When a working note becomes stable documentation, offer to promote it into repository docs and commit it.
 "#;
 
+const DEFAULT_LIGHTPANDA_BROWSER_SKILL_MD: &str = r#"---
+name: lightpanda-browser
+description: Use when a task needs a real JavaScript-capable headless browser via Lightpanda: dynamic pages, SPAs, forms, clicks, semantic DOM extraction, markdown extraction, links, structured data, or browser automation that web_fetch cannot do.
+---
+
+# Lightpanda Browser
+
+Use this skill when `web_search`/`web_fetch` are not enough and the task needs a real headless browser.
+
+## Primary integration
+
+- Lightpanda is exposed to teamD through the `lightpanda` MCP connector.
+- Discover the connector with `mcp_search_resources`, `mcp_search_prompts`, or the dynamic MCP tool list when unsure.
+- Prefer discovered tools with names like `mcp__lightpanda__goto`, `mcp__lightpanda__markdown`, `mcp__lightpanda__semantic_tree`, `mcp__lightpanda__interactiveElements`, `mcp__lightpanda__click`, `mcp__lightpanda__fill`, `mcp__lightpanda__links`, `mcp__lightpanda__structuredData`, and `mcp__lightpanda__evaluate` when available.
+- If the MCP connector is unavailable, do not invent browser results. Report that Lightpanda is not connected and fall back to `web_search`/`web_fetch` only when that still satisfies the user.
+
+## When to use Lightpanda
+
+Use Lightpanda for:
+
+- JavaScript-rendered pages, SPAs, infinite-load pages, and pages where static HTML is insufficient.
+- Form filling, clicking, scrolling, and other interactive flows.
+- Extracting markdown, semantic trees, links, forms, and structured data from a live page.
+- Following a search result through multiple pages when the user needs current content, not just a snippet.
+- Debugging pages where `web_fetch` returns empty, incomplete, blocked, or script-heavy content.
+
+Do not use Lightpanda for:
+
+- Simple exact-URL reads where `web_fetch` returns enough readable content.
+- Current information discovery before choosing a URL; use `web_search` first.
+- High-frequency scraping, abusive automation, bypassing access controls, or ignoring robots/site policies.
+- Tasks that require graphical rendering or screenshot validation. Lightpanda is headless and optimized for DOM/content automation.
+
+## Typical workflow
+
+1. Use `web_search` to discover candidate URLs when the user did not provide an exact URL.
+2. Use Lightpanda `goto` for the chosen URL.
+3. Use `markdown` or `semantic_tree` to understand the page.
+4. Use `interactiveElements` or `detectForms` before clicking/filling.
+5. Use `click`, `fill`, `scroll`, or `waitForSelector` for interaction.
+6. Use `markdown`, `links`, or `structuredData` to extract the result.
+7. Summarize what was actually observed. Do not claim a browser action happened unless the tool succeeded.
+
+## Operational notes
+
+- Lightpanda can execute JavaScript, but it is still beta. If a page fails, try one corrected attempt and then report the limitation.
+- Respect robots.txt and avoid high-frequency requests.
+- Google may block lightweight browser fingerprints; use DuckDuckGo or another suitable source for search flows.
+- For durable findings, save results through normal teamD surfaces: notes, docs, artifacts, or explicit files in the session workspace.
+"#;
+
 const DEPRECATED_LOGSEQ_GRAPH_SKILL_MD: &str = r#"---
 name: logseq-graph
 description: Deprecated compatibility skill for old Logseq wording. Use silverbullet-space for current knowledge-base work.
@@ -863,6 +914,12 @@ pub fn ensure_builtin_agent_home_layout(
             DEFAULT_SILVERBULLET_SPACE_SKILL_MD,
             &[],
         )?;
+        sync_builtin_default_skill(
+            agent_home,
+            "lightpanda-browser",
+            DEFAULT_LIGHTPANDA_BROWSER_SKILL_MD,
+            &[],
+        )?;
         sync_builtin_default_skill_with_legacy_markers(
             agent_home,
             "logseq-graph",
@@ -1229,5 +1286,13 @@ mod tests {
                 .expect("read legacy obsidian skill");
         assert!(legacy_obsidian_skill.contains("Deprecated"));
         assert!(legacy_obsidian_skill.contains("silverbullet-space"));
+
+        let lightpanda_skill =
+            fs::read_to_string(default_home.join("skills/lightpanda-browser/SKILL.md"))
+                .expect("read lightpanda skill");
+        assert!(lightpanda_skill.contains("name: lightpanda-browser"));
+        assert!(lightpanda_skill.contains("Lightpanda"));
+        assert!(lightpanda_skill.contains("mcp_search_resources"));
+        assert!(lightpanda_skill.contains("mcp__lightpanda__"));
     }
 }

@@ -51,11 +51,12 @@ TEAMD_TELEGRAM_BOT_TOKEN='123456789:test-token' \
 
 Полная инструкция: [14-container-addons.md](14-container-addons.md).
 
-Core `agentd` ставится отдельно от контейнерной обвязки. Второй скрипт поднимает SearXNG/Caddy и опционально SilverBullet, SilverBullet MCP, Jaeger и legacy Obsidian:
+Core `agentd` ставится отдельно от контейнерной обвязки. Второй скрипт поднимает SearXNG/Caddy и опционально SilverBullet, SilverBullet MCP, Lightpanda MCP, Jaeger и legacy Obsidian:
 
 ```bash
 ./scripts/deploy-teamd-containers.sh
 ./scripts/deploy-teamd-containers.sh --with-silverbullet-mcp
+./scripts/deploy-teamd-containers.sh --with-lightpanda-mcp
 ./scripts/deploy-teamd-containers.sh --with-jaeger
 ./scripts/deploy-teamd-containers.sh --with-obsidian
 ./scripts/deploy-teamd-containers.sh --with-obsidian-mcp
@@ -65,6 +66,7 @@ Core `agentd` ставится отдельно от контейнерной о
 
 ```bash
 ./scripts/deploy-teamd-containers.sh --dry-run --non-interactive --no-start --with-silverbullet-mcp
+./scripts/deploy-teamd-containers.sh --dry-run --non-interactive --no-start --no-searxng --no-caddy --with-lightpanda-mcp
 ./scripts/deploy-teamd-containers.sh --dry-run --non-interactive --no-start --with-jaeger
 ./scripts/deploy-teamd-containers.sh --dry-run --non-interactive --no-start --with-obsidian-mcp
 ```
@@ -83,6 +85,23 @@ Default agent получает skill `silverbullet-space`:
 teamdctl session enable-skill <session_id> silverbullet-space
 teamdctl session skills <session_id>
 ```
+
+`--with-lightpanda-mcp` ставит JS-capable headless browser как MCP connector:
+
+- binary: `/opt/teamd/bin/lightpanda`;
+- PATH symlink: `/usr/local/bin/lightpanda`;
+- stdio wrapper: `/opt/teamd/containers/lightpanda/lightpanda-mcp-stdio.sh`;
+- MCP connector: `[daemon.mcp_connectors.lightpanda]` в `/etc/teamd/config.toml`;
+- telemetry в wrapper выключена по умолчанию через `LIGHTPANDA_DISABLE_TELEMETRY=true`.
+
+Default agent получает skill `lightpanda-browser`:
+
+```bash
+teamdctl session enable-skill <session_id> lightpanda-browser
+teamdctl session skills <session_id>
+```
+
+Используйте Lightpanda для динамических страниц, форм, кликов и DOM/markdown extraction. Для обычного поиска и прямого чтения URL оставляйте `web_search` и `web_fetch`.
 
 `--with-jaeger` ставит `teamd-jaeger`, включает OTLP receiver и прописывает в `/etc/teamd/teamd.env`:
 

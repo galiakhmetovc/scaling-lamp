@@ -314,6 +314,11 @@ fs_trash({ path: string })
 
 ## Web
 
+Web tools делятся на две разные capability:
+
+- `web_search`/`web_fetch` — канонические built-in tools для поиска и прямого HTTP fetch;
+- браузерная automation — optional MCP add-on, например Lightpanda, который появляется как dynamic MCP tools и не должен дублироваться отдельными built-in `browser_*` tools.
+
 ### `web_fetch`
 
 Сигнатура:
@@ -363,6 +368,30 @@ web_search({ query: string, limit: integer })
 
 - переформулировать запрос один раз;
 - если снова пусто, явно сказать, что search backend не нашёл источников, а не выдумывать результат.
+
+### Когда нужен браузерный MCP add-on
+
+Используйте discovered browser MCP tools, например Lightpanda, если:
+
+- страница требует JavaScript rendering;
+- нужно нажимать кнопки, заполнять формы, скроллить или ждать DOM selector;
+- нужен semantic DOM, links, structured data или markdown view после выполнения JS;
+- `web_fetch` вернул shell HTML, пустой текст или контент, который явно не соответствует странице в браузере.
+
+Не создавайте для этого второй tool loop. Модель должна видеть Lightpanda как обычные dynamic MCP tools, например:
+
+```text
+mcp__lightpanda__goto({ url: string })
+mcp__lightpanda__markdown({})
+mcp__lightpanda__semantic_tree({})
+mcp__lightpanda__links({})
+mcp__lightpanda__interactiveElements({})
+mcp__lightpanda__click({ ... })
+mcp__lightpanda__fill({ ... })
+mcp__lightpanda__waitForSelector({ ... })
+```
+
+Точные имена и schemas приходят от MCP connector во время discovery, поэтому документация фиксирует не контракт Rust API, а ожидаемую модель использования.
 
 ## Exec
 
@@ -1045,6 +1074,10 @@ mcp_get_prompt({
 - `parameters` берётся из `tool.input_schema`.
 
 То есть provider получает их как обычные полноценные tools, а runtime потом маршрутизирует вызов во внутренний `mcp_call`.
+
+Пример: если включён connector `[daemon.mcp_connectors.lightpanda]`, модель может увидеть browser tools с exposed names вида `mcp__lightpanda__goto`, `mcp__lightpanda__markdown`, `mcp__lightpanda__semantic_tree`, `mcp__lightpanda__click`, `mcp__lightpanda__fill`.
+
+Правило архитектуры: MCP connector расширяет canonical provider tool surface, но не создаёт отдельную модель prompt assembly, отдельный chat loop или отдельный debug ledger. Вызовы Lightpanda должны попадать в тот же tool-call ledger, что и built-in tools.
 
 ## Agent
 
