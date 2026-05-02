@@ -1,3 +1,7 @@
+use super::provider_completion::{
+    CompletionGateDecision, build_completion_nudge_message, completion_continuation_messages,
+    empty_response_continuation_messages,
+};
 use super::provider_cursor::{MAX_EMPTY_RESPONSE_RECOVERIES, ProviderLoopCursor};
 use super::provider_ids::sanitize_identifier;
 #[cfg(test)]
@@ -63,12 +67,6 @@ const DEFAULT_ARTIFACT_READ_MAX_BYTES: usize = 8 * 1024;
 const MAX_ARTIFACT_READ_MAX_BYTES: usize = 32 * 1024;
 
 type OffloadableToolOutput = (String, String, Vec<u8>, String);
-
-#[derive(Debug, Clone)]
-pub(super) struct CompletionGateDecision {
-    pub(super) max_completion_nudges: usize,
-    pub(super) nudge_message: String,
-}
 
 #[derive(Clone, Copy)]
 pub(super) struct ProviderToolExecutionContext<'a> {
@@ -2910,7 +2908,7 @@ impl ExecutionService {
 
         Ok(Some(CompletionGateDecision {
             max_completion_nudges: max_completion_nudges as usize,
-            nudge_message: self.build_completion_nudge_message(&snapshot, &unfinished, response),
+            nudge_message: build_completion_nudge_message(&snapshot, &unfinished, response),
         }))
     }
 
@@ -2946,75 +2944,6 @@ impl ExecutionService {
         )
         .map_err(ExecutionError::RecordConversion)?;
         Ok(session.settings.think_level)
-    }
-
-    fn build_completion_nudge_message(
-        &self,
-        snapshot: &PlanSnapshot,
-        unfinished: &[&PlanItem],
-        response: &ProviderResponse,
-    ) -> String {
-        let remaining = unfinished
-            .iter()
-            .take(3)
-            .map(|item| format!("{} [{}]: {}", item.id, item.status.as_str(), item.content))
-            .collect::<Vec<_>>()
-            .join("; ");
-        let remaining_suffix = if unfinished.len() > 3 {
-            format!("; и ещё {} задач", unfinished.len() - 3)
-        } else {
-            String::new()
-        };
-        let goal = snapshot
-            .goal
-            .as_deref()
-            .filter(|value| !value.trim().is_empty())
-            .map(|value| format!(" Цель плана: {value}."))
-            .unwrap_or_default();
-        let prior_reply = prompting::preview_text(response.output_text.trim(), 180);
-        let prior_reply_suffix = if prior_reply.is_empty() {
-            String::new()
-        } else {
-            format!(" Твой предыдущий ответ был промежуточным: {prior_reply}")
-        };
-        format!(
-            "Ты остановился раньше времени.{goal} В плане остались незавершённые задачи: {remaining}{remaining_suffix}.{prior_reply_suffix} Не заканчивай ход промежуточным резюме. Продолжай работу в этой же сессии: вызывай нужные tools, обновляй план и заверши только когда задачи будут действительно доведены до конца или если нужен approval, blocker или background handoff."
-        )
-    }
-
-    pub(super) fn completion_continuation_messages(
-        &self,
-        supports_previous_response_id: bool,
-        response: &ProviderResponse,
-        nudge_message: &str,
-    ) -> Vec<ProviderMessage> {
-        let mut messages = Vec::new();
-        if !supports_previous_response_id && !response.output_text.trim().is_empty() {
-            messages.push(ProviderMessage::new(
-                MessageRole::Assistant,
-                response.output_text.trim(),
-            ));
-        }
-        messages.push(ProviderMessage::new(MessageRole::System, nudge_message));
-        messages
-    }
-
-    fn empty_response_continuation_messages(
-        &self,
-        supports_previous_response_id: bool,
-    ) -> Vec<ProviderMessage> {
-        let mut messages = Vec::new();
-        if !supports_previous_response_id {
-            messages.push(ProviderMessage::new(
-                MessageRole::Assistant,
-                "Предыдущий ответ после результатов tools оказался пустым.",
-            ));
-        }
-        messages.push(ProviderMessage::new(
-            MessageRole::System,
-            "Твой предыдущий ответ после результатов tools оказался пустым. Не возвращай пустой ответ. Продолжай работу в этой же сессии: либо вызови следующий нужный tool, либо дай обычный assistant reply с конкретным продолжением.",
-        ));
-        messages
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -3616,9 +3545,7 @@ impl ExecutionService {
                     )
                     .map_err(ExecutionError::RunTransition)?;
                     cursor.queue_post_tool_continuation_messages(
-                        self.empty_response_continuation_messages(
-                            cursor.supports_previous_response_id,
-                        ),
+                        empty_response_continuation_messages(cursor.supports_previous_response_id),
                     );
                     run.set_provider_loop_state(cursor.persistent_state(None), now)
                         .map_err(ExecutionError::RunTransition)?;
@@ -3639,13 +3566,11 @@ impl ExecutionService {
                     if cursor.completion_nudges_used < decision.max_completion_nudges {
                         cursor.record_completion_nudge();
                         cursor.adopt_response_anchor(&response);
-                        cursor.queue_continuation_input_messages(
-                            self.completion_continuation_messages(
-                                cursor.supports_previous_response_id,
-                                &response,
-                                decision.nudge_message.as_str(),
-                            ),
-                        );
+                        cursor.queue_continuation_input_messages(completion_continuation_messages(
+                            cursor.supports_previous_response_id,
+                            &response,
+                            decision.nudge_message.as_str(),
+                        ));
                         run.set_provider_loop_state(cursor.persistent_state(None), now)
                             .map_err(ExecutionError::RunTransition)?;
                         self.persist_run(store, run)?;
@@ -3654,13 +3579,11 @@ impl ExecutionService {
 
                     if auto_approve {
                         cursor.adopt_response_anchor(&response);
-                        cursor.queue_continuation_input_messages(
-                            self.completion_continuation_messages(
-                                cursor.supports_previous_response_id,
-                                &response,
-                                decision.nudge_message.as_str(),
-                            ),
-                        );
+                        cursor.queue_continuation_input_messages(completion_continuation_messages(
+                            cursor.supports_previous_response_id,
+                            &response,
+                            decision.nudge_message.as_str(),
+                        ));
                         run.set_provider_loop_state(cursor.persistent_state(None), now)
                             .map_err(ExecutionError::RunTransition)?;
                         self.persist_run(store, run)?;
@@ -3678,13 +3601,11 @@ impl ExecutionService {
                         cursor.completion_nudges_used
                     );
                     cursor.adopt_response_anchor(&response);
-                    cursor.queue_continuation_input_messages(
-                        self.completion_continuation_messages(
-                            cursor.supports_previous_response_id,
-                            &response,
-                            decision.nudge_message.as_str(),
-                        ),
-                    );
+                    cursor.queue_continuation_input_messages(completion_continuation_messages(
+                        cursor.supports_previous_response_id,
+                        &response,
+                        decision.nudge_message.as_str(),
+                    ));
                     let approval_state = cursor
                         .completion_approval_state(&approval_id, decision.max_completion_nudges);
                     run.wait_for_approval(

@@ -1,3 +1,4 @@
+use super::provider_completion::completion_continuation_messages;
 use super::*;
 use agent_runtime::interagent::AgentMessageChain;
 use agent_runtime::mission::{JobResult, MissionStatus};
@@ -1092,15 +1093,14 @@ impl ExecutionService {
                             "approval {approval_id} requested completion continuation but the gate is no longer active"
                         ),
                     })?;
-                resumed_loop_state.continuation_input_messages = self
-                    .completion_continuation_messages(
-                        provider
-                            .descriptor()
-                            .capabilities
-                            .supports_previous_response_id,
-                        &synthetic_response,
-                        decision.nudge_message.as_str(),
-                    );
+                resumed_loop_state.continuation_input_messages = completion_continuation_messages(
+                    provider
+                        .descriptor()
+                        .capabilities
+                        .supports_previous_response_id,
+                    &synthetic_response,
+                    decision.nudge_message.as_str(),
+                );
                 resumed_loop_state.completion_nudges_used =
                     pending_completion_approval.completion_nudges_used;
             }
