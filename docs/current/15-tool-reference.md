@@ -854,7 +854,9 @@ deliver_file({
 Важные ограничения:
 
 - это не Telegram-specific tool и не принимает host paths;
+- если путь к файлу уже известен, агент не должен читать содержимое файла через `fs_read_text`/`artifact_read` перед отправкой; достаточно сразу вызвать `deliver_file` с `workspace_path`;
 - для сгенерированного файла сначала создай файл внутри текущего workspace, затем вызови `deliver_file` с `workspace_path`;
+- `artifact_id` в этом механизме является внутренним durable storage/runtime detail и не должен упоминаться пользователю как “альтернатива” отправке файла;
 - unsupported surfaces могут только показать actionable queued/result state, а не выполнить `sendDocument`;
 - Telegram worker доставляет queued requests после текущего chat turn;
 - ошибки `missing artifact` и `artifact from another session` возвращаются модели как non-retryable tool error, чтобы она могла выбрать правильный файл.

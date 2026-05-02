@@ -217,21 +217,53 @@ fn automatic_model_definitions_include_file_delivery_tool() {
     assert!(!definition.policy.destructive);
     assert!(!definition.policy.requires_approval);
     assert!(definition.description.contains("current operator surface"));
+    assert!(definition.description.contains("Prefer workspace_path"));
+    assert!(
+        definition
+            .description
+            .contains("Do not create or mention artifacts")
+    );
+    assert!(definition.description.contains("Do not read file contents"));
     assert!(definition.description.contains("status=queued"));
     assert!(definition.description.contains("Do not invent Obsidian"));
-    assert!(
-        definition
-            .openai_function_schema()
-            .to_string()
-            .contains("artifact_id")
-    );
-    assert!(
-        definition
-            .openai_function_schema()
-            .to_string()
-            .contains("workspace_path")
-    );
+    let schema = definition.openai_function_schema().to_string();
+    assert!(schema.contains("artifact_id"));
+    assert!(schema.contains("workspace_path"));
+    assert!(schema.contains("Preferred source for ordinary files"));
+    assert!(schema.contains("Do not read file contents before delivery"));
+    assert!(schema.contains("Do not create an artifact just to send a workspace file"));
     assert!(names.contains(&ToolName::DeliverFile));
+}
+
+#[test]
+fn deliver_file_model_output_hides_internal_artifact_id() {
+    let output = super::ToolOutput::DeliverFile(super::DeliverFileOutput {
+        request_id: "delivery-1".to_string(),
+        artifact_id: "artifact-workspace-file-internal".to_string(),
+        target: super::FileDeliveryTarget::CurrentChat,
+        file_name: "report.pdf".to_string(),
+        caption: Some("Готовый отчёт".to_string()),
+        status: "queued".to_string(),
+    });
+
+    assert_eq!(
+        output.summary(),
+        "deliver_file request_id=delivery-1 file_name=report.pdf target=current_chat status=queued"
+    );
+    let value: serde_json::Value =
+        serde_json::from_str(&output.model_output()).expect("deliver_file model output json");
+
+    assert!(value.get("artifact_id").is_none());
+    assert_eq!(value["tool"], "deliver_file");
+    assert_eq!(value["request_id"], "delivery-1");
+    assert_eq!(value["file_name"], "report.pdf");
+    assert_eq!(value["status"], "queued");
+    assert!(
+        value["delivery_note"]
+            .as_str()
+            .expect("delivery note")
+            .contains("do not mention internal artifact ids")
+    );
 }
 
 #[test]

@@ -585,6 +585,8 @@ teamdctl telegram pairings
 
 `artifact_id` обязан принадлежать текущей session. `workspace_path` резолвится только относительно workspace текущей session и перед отправкой сохраняется как artifact. Лимит отправки задаёт `telegram.max_upload_bytes`; при превышении request помечается failed и фиксируется в diagnostic log.
 
+Если агент уже знает путь к файлу в workspace, ему не нужно читать содержимое файла перед отправкой. Правильный короткий путь: сразу вызвать `deliver_file` с `workspace_path`. Внутренний artifact, который runtime создаёт для durable delivery, не является пользовательской альтернативой файлу и не должен упоминаться в ответе как “можно скачать из artifact/vault”.
+
 ## 12. Минимальная smoke-проверка
 
 В Telegram:
