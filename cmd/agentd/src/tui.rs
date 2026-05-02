@@ -1,5 +1,6 @@
 pub mod app;
 pub mod backend;
+pub(crate) mod browser_items;
 pub mod events;
 pub mod render;
 pub mod screens;
@@ -21,6 +22,10 @@ use agent_runtime::tool::{
 };
 use app::{BrowserItem, BrowserKind, DialogState, TuiAppState};
 use backend::TuiBackend;
+use browser_items::{
+    parse_agent_browser_items, parse_artifact_browser_items, parse_mcp_browser_items,
+    parse_schedule_browser_items,
+};
 use crossterm::event::{
     self, DisableBracketedPaste, EnableBracketedPaste, Event, KeyEvent, KeyEventKind,
 };
@@ -859,86 +864,6 @@ fn open_browser_search_dialog(state: &mut TuiAppState) {
     ) {
         state.open_browser_search_dialog();
     }
-}
-
-#[derive(Debug)]
-struct ParsedAgentBrowser {
-    items: Vec<BrowserItem>,
-    selected_index: usize,
-}
-
-fn parse_agent_browser_items(rendered: &str) -> ParsedAgentBrowser {
-    let mut items = Vec::new();
-    let mut selected_index = 0usize;
-    for line in rendered.lines() {
-        let trimmed = line.trim_start();
-        let marker = if trimmed.starts_with("* ") {
-            Some('*')
-        } else if trimmed.starts_with("- ") {
-            Some('-')
-        } else {
-            None
-        };
-        let Some(marker) = marker else {
-            continue;
-        };
-        let Some((id, label)) = parse_agent_browser_line(trimmed) else {
-            continue;
-        };
-        if marker == '*' {
-            selected_index = items.len();
-        }
-        items.push(BrowserItem::new(id, label));
-    }
-    ParsedAgentBrowser {
-        items,
-        selected_index,
-    }
-}
-
-fn parse_agent_browser_line(line: &str) -> Option<(String, String)> {
-    let body = line
-        .strip_prefix("* ")
-        .or_else(|| line.strip_prefix("- "))?
-        .trim();
-    let id_start = body.rfind(" (")?;
-    let id_end = body[id_start + 2..].find(')')? + id_start + 2;
-    let id = body[id_start + 2..id_end].to_string();
-    let label = body.to_string();
-    Some((id, label))
-}
-
-fn parse_schedule_browser_items(rendered: &str) -> Vec<BrowserItem> {
-    rendered
-        .lines()
-        .filter_map(|line| {
-            let body = line.trim_start().strip_prefix("- ")?;
-            let id = body.split_whitespace().next()?.to_string();
-            Some(BrowserItem::new(id, body.to_string()))
-        })
-        .collect()
-}
-
-fn parse_mcp_browser_items(rendered: &str) -> Vec<BrowserItem> {
-    rendered
-        .lines()
-        .filter_map(|line| {
-            let body = line.trim_start().strip_prefix("- ")?;
-            let id = body.split_whitespace().next()?.to_string();
-            Some(BrowserItem::new(id, body.to_string()))
-        })
-        .collect()
-}
-
-fn parse_artifact_browser_items(rendered: &str) -> Vec<BrowserItem> {
-    rendered
-        .lines()
-        .filter_map(|line| {
-            let body = line.trim_start().strip_prefix("- ")?;
-            let id = body.split_whitespace().next()?.to_string();
-            Some(BrowserItem::new(id, body.to_string()))
-        })
-        .collect()
 }
 
 fn handle_command<B>(
