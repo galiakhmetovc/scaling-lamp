@@ -1,11 +1,11 @@
 use super::backend::TelegramBackend;
-use super::client::{TelegramClient, TelegramClientError, TelegramCommandSpec};
+use super::client::{TelegramClient, TelegramClientError};
 use super::commands::{
     ParsedTelegramCommand, TELEGRAM_INBOUND_QUEUE_MODE_COALESCE, TELEGRAM_INBOUND_QUEUE_MODE_QUEUE,
     TELEGRAM_INBOUND_QUEUE_MODE_REJECT, TELEGRAM_INBOUND_QUEUE_MODE_RESTART,
     TELEGRAM_MIN_COALESCE_WINDOW_MS, TelegramQueueAction, coalesce_window_seconds,
-    is_session_operator_command, is_valid_telegram_queue_mode, parse_command,
-    parse_command_for_bot,
+    default_command_specs, is_session_operator_command, is_valid_telegram_queue_mode,
+    parse_command, parse_command_for_bot,
 };
 use super::delivery::{
     DeliveryCursor, TelegramDeliveryLimiter, TelegramDeliveryScope, TelegramDeliveryTrace,
@@ -2558,34 +2558,6 @@ where
     }
 }
 
-pub fn default_command_specs() -> Vec<TelegramCommandSpec> {
-    vec![
-        TelegramCommandSpec::new("start", "Get a pairing key"),
-        TelegramCommandSpec::new("help", "Show Telegram help"),
-        TelegramCommandSpec::new("new", "Create and select a session"),
-        TelegramCommandSpec::new("sessions", "List sessions"),
-        TelegramCommandSpec::new("use", "Select a session by id"),
-        TelegramCommandSpec::new("status", "Show current session status"),
-        TelegramCommandSpec::new("jobs", "Show current session jobs"),
-        TelegramCommandSpec::new("queue", "Show or set inbound queue mode"),
-        TelegramCommandSpec::new("stop", "Stop the active turn"),
-        TelegramCommandSpec::new("pause", "Alias for stop"),
-        TelegramCommandSpec::new("cancel", "Cancel current session work"),
-        TelegramCommandSpec::new("model", "Set session model"),
-        TelegramCommandSpec::new("think", "Set session think level"),
-        TelegramCommandSpec::new("reasoning", "Toggle reasoning visibility"),
-        TelegramCommandSpec::new("autoapprove", "Toggle auto-approve"),
-        TelegramCommandSpec::new("compact", "Compact current session context"),
-        TelegramCommandSpec::new("skills", "List session skills"),
-        TelegramCommandSpec::new("enable", "Enable a session skill"),
-        TelegramCommandSpec::new("disable", "Disable a session skill"),
-        TelegramCommandSpec::new("files", "List files in the current session"),
-        TelegramCommandSpec::new("file", "Send a session file by artifact id"),
-        TelegramCommandSpec::new("judge", "Send a message to Judge"),
-        TelegramCommandSpec::new("agent", "Send a message to another agent"),
-    ]
-}
-
 fn render_session_operator_status(
     summary: &SessionSummary,
     active_run: &str,
@@ -2706,39 +2678,4 @@ fn unix_timestamp() -> Result<i64, BootstrapError> {
         .duration_since(UNIX_EPOCH)
         .map_err(BootstrapError::Clock)?
         .as_secs() as i64)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn registers_session_operator_commands() {
-        let commands = default_command_specs()
-            .into_iter()
-            .map(|command| command.command)
-            .collect::<Vec<_>>();
-
-        for expected in [
-            "status",
-            "jobs",
-            "queue",
-            "stop",
-            "pause",
-            "cancel",
-            "model",
-            "think",
-            "reasoning",
-            "autoapprove",
-            "compact",
-            "skills",
-            "enable",
-            "disable",
-        ] {
-            assert!(
-                commands.iter().any(|command| command == expected),
-                "missing Telegram command: {expected}"
-            );
-        }
-    }
 }

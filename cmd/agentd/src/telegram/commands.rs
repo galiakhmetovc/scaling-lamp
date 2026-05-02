@@ -1,3 +1,4 @@
+use super::client::TelegramCommandSpec;
 use super::render::render_usage;
 
 pub(super) const TELEGRAM_INBOUND_QUEUE_MODE_REJECT: &str = "reject";
@@ -376,6 +377,34 @@ pub(super) fn coalesce_window_seconds(window_ms: u64) -> i64 {
     i64::try_from(seconds).unwrap_or(i64::MAX)
 }
 
+pub(super) fn default_command_specs() -> Vec<TelegramCommandSpec> {
+    vec![
+        TelegramCommandSpec::new("start", "Get a pairing key"),
+        TelegramCommandSpec::new("help", "Show Telegram help"),
+        TelegramCommandSpec::new("new", "Create and select a session"),
+        TelegramCommandSpec::new("sessions", "List sessions"),
+        TelegramCommandSpec::new("use", "Select a session by id"),
+        TelegramCommandSpec::new("status", "Show current session status"),
+        TelegramCommandSpec::new("jobs", "Show current session jobs"),
+        TelegramCommandSpec::new("queue", "Show or set inbound queue mode"),
+        TelegramCommandSpec::new("stop", "Stop the active turn"),
+        TelegramCommandSpec::new("pause", "Alias for stop"),
+        TelegramCommandSpec::new("cancel", "Cancel current session work"),
+        TelegramCommandSpec::new("model", "Set session model"),
+        TelegramCommandSpec::new("think", "Set session think level"),
+        TelegramCommandSpec::new("reasoning", "Toggle reasoning visibility"),
+        TelegramCommandSpec::new("autoapprove", "Toggle auto-approve"),
+        TelegramCommandSpec::new("compact", "Compact current session context"),
+        TelegramCommandSpec::new("skills", "List session skills"),
+        TelegramCommandSpec::new("enable", "Enable a session skill"),
+        TelegramCommandSpec::new("disable", "Disable a session skill"),
+        TelegramCommandSpec::new("files", "List files in the current session"),
+        TelegramCommandSpec::new("file", "Send a session file by artifact id"),
+        TelegramCommandSpec::new("judge", "Send a message to Judge"),
+        TelegramCommandSpec::new("agent", "Send a message to another agent"),
+    ]
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -464,5 +493,35 @@ mod tests {
                 skill_name: "obsidian-vault".to_string()
             })
         );
+    }
+
+    #[test]
+    fn registers_session_operator_commands() {
+        let commands = default_command_specs()
+            .into_iter()
+            .map(|command| command.command)
+            .collect::<Vec<_>>();
+
+        for expected in [
+            "status",
+            "jobs",
+            "queue",
+            "stop",
+            "pause",
+            "cancel",
+            "model",
+            "think",
+            "reasoning",
+            "autoapprove",
+            "compact",
+            "skills",
+            "enable",
+            "disable",
+        ] {
+            assert!(
+                commands.iter().any(|command| command == expected),
+                "missing Telegram command: {expected}"
+            );
+        }
     }
 }
