@@ -39,7 +39,7 @@ use agent_runtime::prompt::{
 };
 use agent_runtime::provider::{
     ProviderError, ProviderMessage, ProviderRequest, ProviderResponse, ProviderStreamEvent,
-    ProviderStreamMode, ProviderToolCall, ProviderToolDefinition,
+    ProviderStreamMode, ProviderToolDefinition,
 };
 use agent_runtime::run::{ApprovalRequest, ProviderLoopState, RunStepKind};
 use agent_runtime::session::{MessageRole, PromptBudgetPolicy, TranscriptEntry};
@@ -52,8 +52,7 @@ use agent_runtime::tool::{
     FileDeliveryTarget, InitPlanOutput, PlanLintOutput, PlanReadOutput, PlanSnapshotOutput,
     PlanWriteOutput, PromptBudgetLayerOutput, PromptBudgetReadOutput, PromptBudgetUpdateOutput,
     PromptBudgetUpdateScope, SetTaskStatusOutput, SkillActivationOutput, SkillListOutput,
-    SkillReadOutput, SkillStatusOutput, ToolCatalog, ToolDefinition, ToolFamily, ToolName,
-    ToolOutput, ToolPolicy, ToolRuntime,
+    SkillReadOutput, SkillStatusOutput, ToolCatalog, ToolName, ToolOutput, ToolRuntime,
 };
 use agent_runtime::workspace::WorkspaceRef;
 use std::path::PathBuf;
@@ -1736,50 +1735,6 @@ impl ExecutionService {
                 Err(error) => return Err(error),
             }
         }
-    }
-
-    fn resolve_provider_tool_call(
-        &self,
-        catalog: &ToolCatalog,
-        tool_call: &ProviderToolCall,
-    ) -> Result<(ToolCall, ToolDefinition), ExecutionError> {
-        let parsed = ToolCall::from_openai_function(&tool_call.name, &tool_call.arguments)
-            .map_err(|source| ExecutionError::ToolCallParse {
-                name: tool_call.name.clone(),
-                reason: source.to_string(),
-            })?;
-        if let ToolCall::McpCall(input) = &parsed {
-            let discovered = self
-                .mcp
-                .list_discovered_tools()
-                .into_iter()
-                .find(|tool| tool.exposed_name == input.exposed_name)
-                .ok_or_else(|| ExecutionError::ToolCallParse {
-                    name: tool_call.name.clone(),
-                    reason: format!("unknown MCP tool {}", input.exposed_name),
-                })?;
-            return Ok((
-                parsed,
-                ToolDefinition {
-                    name: ToolName::McpCall,
-                    family: ToolFamily::Mcp,
-                    description: "invoke a discovered MCP tool",
-                    policy: ToolPolicy {
-                        read_only: discovered.read_only,
-                        destructive: discovered.destructive,
-                        requires_approval: discovered.destructive || !discovered.read_only,
-                    },
-                },
-            ));
-        }
-        let definition = catalog
-            .definition_for_call(&parsed)
-            .ok_or_else(|| ExecutionError::ToolCallParse {
-                name: tool_call.name.clone(),
-                reason: "tool is not in the catalog".to_string(),
-            })?
-            .clone();
-        Ok((parsed, definition))
     }
 
     pub(super) fn invoke_provider_tool_call(
