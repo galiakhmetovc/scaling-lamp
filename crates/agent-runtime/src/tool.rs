@@ -21,6 +21,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 mod parse_repair;
+mod schema;
 mod web;
 
 use parse_repair::{
@@ -5706,17 +5707,6 @@ impl ToolOutput {
             })
             .to_string(),
         }
-    }
-}
-
-impl ToolDefinition {
-    pub fn openai_function_schema(&self) -> Value {
-        json!({
-            "type": "function",
-            "name": self.name.as_str(),
-            "description": self.description,
-            "parameters": self.name.input_schema(),
-        })
     }
 }
 
