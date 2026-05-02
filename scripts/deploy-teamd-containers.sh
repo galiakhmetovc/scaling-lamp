@@ -12,6 +12,8 @@ ENABLE_OBSIDIAN=0
 ENABLE_OBSIDIAN_MCP=0
 WRITE_OBSIDIAN_MCP_EXAMPLE=0
 ENABLE_JAEGER=0
+ENABLE_LOGSEQ=0
+ENABLE_SILVERBULLET=0
 ENABLE_CADDY=1
 RESTART_TEAMD_SERVICES=1
 
@@ -49,6 +51,26 @@ OBSIDIAN_MCP_PACKAGE=${TEAMD_OBSIDIAN_MCP_PACKAGE:-@bitbonsai/mcpvault@latest}
 OBSIDIAN_MCP_NODE_IMAGE=${TEAMD_OBSIDIAN_MCP_NODE_IMAGE:-docker.io/library/node:22-alpine}
 OBSIDIAN_PUID=${TEAMD_OBSIDIAN_PUID:-}
 OBSIDIAN_PGID=${TEAMD_OBSIDIAN_PGID:-}
+
+LOGSEQ_PUBLISH_IMAGE=${TEAMD_LOGSEQ_PUBLISH_IMAGE:-ghcr.io/l-trump/logseq-publish-spa:watch}
+LOGSEQ_DIR=$CONTAINERS_ROOT/logseq
+LOGSEQ_GRAPHS_DIR=${TEAMD_LOGSEQ_GRAPHS_DIR:-/var/lib/teamd/knowledge/logseq}
+LOGSEQ_GRAPH_NAME=${TEAMD_LOGSEQ_GRAPH_NAME:-teamd}
+LOGSEQ_GRAPH_DIR=${TEAMD_LOGSEQ_GRAPH_DIR:-$LOGSEQ_GRAPHS_DIR/$LOGSEQ_GRAPH_NAME}
+LOGSEQ_OUTPUT_DIR=${TEAMD_LOGSEQ_OUTPUT_DIR:-$DATA_ROOT/logseq/output}
+LOGSEQ_COMPOSE=$LOGSEQ_DIR/docker-compose.yml
+LOGSEQ_THEME=${TEAMD_LOGSEQ_THEME:-dark}
+LOGSEQ_ACCENT_COLOR=${TEAMD_LOGSEQ_ACCENT_COLOR:-indigo}
+LOGSEQ_MONITOR_INTERVAL=${TEAMD_LOGSEQ_MONITOR_INTERVAL:-30}
+
+SILVERBULLET_IMAGE=${TEAMD_SILVERBULLET_IMAGE:-ghcr.io/silverbulletmd/silverbullet:latest}
+SILVERBULLET_PORT=${TEAMD_SILVERBULLET_PORT:-8091}
+SILVERBULLET_CONTAINER_PORT=${TEAMD_SILVERBULLET_CONTAINER_PORT:-3000}
+SILVERBULLET_HTTPS_PORT=${TEAMD_SILVERBULLET_HTTPS_PORT:-}
+SILVERBULLET_DIR=$CONTAINERS_ROOT/silverbullet
+SILVERBULLET_COMPOSE=$SILVERBULLET_DIR/docker-compose.yml
+SILVERBULLET_ENV_FILE=${TEAMD_SILVERBULLET_ENV_FILE:-$SILVERBULLET_DIR/silverbullet.env}
+SILVERBULLET_USER=${TEAMD_SILVERBULLET_USER:-}
 
 JAEGER_UI_PORT=${TEAMD_JAEGER_UI_PORT:-16686}
 JAEGER_OTLP_GRPC_PORT=${TEAMD_JAEGER_OTLP_GRPC_PORT:-4317}
@@ -106,7 +128,7 @@ Deploy teamD container add-ons without changing the main agentd deploy path.
 
 By default this installs/uses Docker Engine, deploys a local SearXNG instance
 bound to 127.0.0.1:$SEARXNG_PORT, and starts Caddy as an edge reverse proxy.
-Obsidian is opt-in.
+Obsidian, Logseq Publish, SilverBullet, and Jaeger are opt-in.
 
 Options:
   --dry-run             Print actions without changing the system.
@@ -120,10 +142,17 @@ Options:
   --with-obsidian-mcp-example
                          Write an agentd stdio MCP connector example for the vault.
   --with-jaeger         Also deploy Jaeger UI and enable agentd OTLP auto-export.
+  --with-logseq         Deploy Logseq Publish over the canonical Markdown graph.
+  --with-silverbullet   Deploy SilverBullet editor over the same Logseq graph.
   --no-restart-teamd    Do not restart teamd systemd services after writing MCP config.
   --searxng-port PORT   Local SearXNG port, default: $SEARXNG_PORT.
   --obsidian-port PORT  Local Obsidian port, default: $OBSIDIAN_PORT.
   --jaeger-ui-port PORT Local Jaeger UI port, default: $JAEGER_UI_PORT.
+  --silverbullet-port PORT
+                         Local SilverBullet port, default: $SILVERBULLET_PORT.
+  --silverbullet-https-port PORT
+                         Caddy HTTPS port for SilverBullet without a domain,
+                         default: 8444 when SilverBullet is enabled without TEAMD_CADDY_DOMAIN.
   -h, --help            Show this help.
 
 Environment overrides:
@@ -153,6 +182,23 @@ Environment overrides:
                                  default: $OBSIDIAN_MCP_PACKAGE.
   TEAMD_OBSIDIAN_MCP_NODE_IMAGE  Docker image used to run the MCP package,
                                  default: $OBSIDIAN_MCP_NODE_IMAGE.
+  TEAMD_LOGSEQ_PUBLISH_IMAGE     Logseq Publish image, default: $LOGSEQ_PUBLISH_IMAGE.
+  TEAMD_LOGSEQ_GRAPHS_DIR        Logseq graphs root, default: $LOGSEQ_GRAPHS_DIR.
+  TEAMD_LOGSEQ_GRAPH_NAME        Managed graph name, default: $LOGSEQ_GRAPH_NAME.
+  TEAMD_LOGSEQ_GRAPH_DIR         Managed graph directory, default: $LOGSEQ_GRAPH_DIR.
+  TEAMD_LOGSEQ_OUTPUT_DIR        Generated publish output, default: $LOGSEQ_OUTPUT_DIR.
+  TEAMD_LOGSEQ_THEME             Publish theme, default: $LOGSEQ_THEME.
+  TEAMD_LOGSEQ_ACCENT_COLOR      Publish accent color, default: $LOGSEQ_ACCENT_COLOR.
+  TEAMD_LOGSEQ_MONITOR_INTERVAL  Publish watch interval, default: $LOGSEQ_MONITOR_INTERVAL.
+  TEAMD_SILVERBULLET_IMAGE       SilverBullet image, default: $SILVERBULLET_IMAGE.
+  TEAMD_SILVERBULLET_PORT        SilverBullet localhost port, default: $SILVERBULLET_PORT.
+  TEAMD_SILVERBULLET_CONTAINER_PORT
+                                 SilverBullet web port inside container,
+                                 default: $SILVERBULLET_CONTAINER_PORT.
+  TEAMD_SILVERBULLET_HTTPS_PORT  HTTPS Caddy port without a domain, default: "$SILVERBULLET_HTTPS_PORT".
+  TEAMD_SILVERBULLET_ENV_FILE    SB_USER credentials file, default: $SILVERBULLET_ENV_FILE.
+  TEAMD_SILVERBULLET_USER        SilverBullet auth as username:password.
+                                 If unset, deploy script generates and stores one.
   TEAMD_JAEGER_IMAGE             Jaeger all-in-one image, default: $JAEGER_IMAGE.
   TEAMD_JAEGER_UID               Jaeger container UID for Badger storage, default: $JAEGER_UID.
   TEAMD_JAEGER_GID               Jaeger container GID for Badger storage, default: $JAEGER_GID.
@@ -166,7 +212,8 @@ Environment overrides:
   TEAMD_DEPLOY_ENV_FILE          agentd env file path, default: $ENV_FILE.
   TEAMD_DEPLOY_USER              teamd system user, default: $SERVICE_USER.
   TEAMD_DEPLOY_GROUP             teamd system group, default: $SERVICE_GROUP.
-  TEAMD_CADDY_DOMAIN             Optional base domain; creates search.<domain> and obsidian.<domain>.
+  TEAMD_CADDY_DOMAIN             Optional base domain; creates search.<domain>, obsidian.<domain>,
+                                 logseq.<domain>, notes.<domain>, and jaeger.<domain> when enabled.
   TEAMD_CADDY_HOST               Hostname or IP for internal TLS without a dedicated domain.
                                  If unset, deploy script tries to detect the primary IPv4 address.
   TEAMD_CADDY_HTTP_PORT          Caddy HTTP host port, default: $CADDY_HTTP_PORT.
@@ -311,6 +358,15 @@ ensure_obsidian_https_port() {
   CADDY_HTTPS_PORT=8443
 }
 
+ensure_silverbullet_https_port() {
+  [ "$ENABLE_SILVERBULLET" -eq 1 ] || return 0
+  [ "$ENABLE_CADDY" -eq 1 ] || return 0
+  [ -n "$CADDY_DOMAIN" ] && return 0
+  [ -n "$SILVERBULLET_HTTPS_PORT" ] && return 0
+
+  SILVERBULLET_HTTPS_PORT=8444
+}
+
 detect_primary_ipv4() {
   if command -v ip >/dev/null 2>&1; then
     ip route get 1.1.1.1 2>/dev/null | awk '/src/ { for (i = 1; i <= NF; i++) if ($i == "src") { print $(i + 1); exit } }'
@@ -326,10 +382,16 @@ detect_primary_ipv4() {
 }
 
 ensure_caddy_host() {
-  [ "$ENABLE_OBSIDIAN" -eq 1 ] || return 0
   [ "$ENABLE_CADDY" -eq 1 ] || return 0
   [ -n "$CADDY_DOMAIN" ] && return 0
-  [ -n "$CADDY_HTTPS_PORT" ] || return 0
+  need_host=0
+  if [ "$ENABLE_OBSIDIAN" -eq 1 ] && [ -n "$CADDY_HTTPS_PORT" ]; then
+    need_host=1
+  fi
+  if [ "$ENABLE_SILVERBULLET" -eq 1 ] && [ -n "$SILVERBULLET_HTTPS_PORT" ]; then
+    need_host=1
+  fi
+  [ "$need_host" -eq 1 ] || return 0
   [ -n "$CADDY_HOST" ] && return 0
 
   if [ "$DRY_RUN" -eq 1 ]; then
@@ -338,7 +400,7 @@ ensure_caddy_host() {
   fi
 
   CADDY_HOST=$(detect_primary_ipv4 || true)
-  [ -n "$CADDY_HOST" ] || fail "cannot detect Caddy host/IP for Obsidian HTTPS; set TEAMD_CADDY_HOST explicitly"
+  [ -n "$CADDY_HOST" ] || fail "cannot detect Caddy host/IP for HTTPS add-ons; set TEAMD_CADDY_HOST explicitly"
 }
 
 ensure_edge_network() {
@@ -796,6 +858,163 @@ EOF
   run_root install -m 0644 -o root -g root "$tmp_config" "$CONFIG_FILE"
 }
 
+resolve_service_ids() {
+  if id -u "$SERVICE_USER" >/dev/null 2>&1; then
+    SERVICE_UID=$(id -u "$SERVICE_USER")
+    SERVICE_GID=$(id -g "$SERVICE_USER")
+  else
+    SERVICE_UID=$(id -u)
+    SERVICE_GID=$(id -g)
+  fi
+}
+
+write_logseq_files() {
+  resolve_service_ids
+
+  if [ "$DRY_RUN" -eq 1 ]; then
+    print_cmd mkdir -p "$LOGSEQ_DIR" "$LOGSEQ_GRAPH_DIR/logseq" "$LOGSEQ_OUTPUT_DIR"
+    print_cmd chown -R "$SERVICE_UID:$SERVICE_GID" "$LOGSEQ_GRAPH_DIR"
+    print_cmd sh -c "write $LOGSEQ_COMPOSE for teamd-logseq-publish"
+    print_cmd sh -c "seed Logseq graph config at $LOGSEQ_GRAPH_DIR/logseq/config.edn"
+    return 0
+  fi
+
+  run_root mkdir -p "$LOGSEQ_DIR" "$LOGSEQ_GRAPH_DIR/logseq" "$LOGSEQ_OUTPUT_DIR"
+  run_root chown -R "$SERVICE_UID:$SERVICE_GID" "$LOGSEQ_GRAPH_DIR"
+
+  tmp_compose=$(mktemp)
+  trap 'rm -f "$tmp_compose"' EXIT INT TERM
+
+  cat > "$tmp_compose" <<EOF
+services:
+  logseq-publish:
+    image: $LOGSEQ_PUBLISH_IMAGE
+    container_name: teamd-logseq-publish
+    restart: unless-stopped
+    networks:
+      - $EDGE_NETWORK
+    volumes:
+      - "$LOGSEQ_GRAPH_DIR:/graph:ro"
+      - "$LOGSEQ_OUTPUT_DIR:/out:rw"
+    environment:
+      - PUB_THEME=$LOGSEQ_THEME
+      - PUB_ACCENT_COLOR=$LOGSEQ_ACCENT_COLOR
+      - MONITOR_INTERVAL=$LOGSEQ_MONITOR_INTERVAL
+
+networks:
+  $EDGE_NETWORK:
+    external: true
+EOF
+
+  run_root install -m 0644 -o root -g root "$tmp_compose" "$LOGSEQ_COMPOSE"
+
+  logseq_config=$LOGSEQ_GRAPH_DIR/logseq/config.edn
+  if [ ! -e "$logseq_config" ]; then
+    tmp_config=$(mktemp)
+    cat > "$tmp_config" <<EOF
+{:publishing {:all-pages? true}
+ :journal {:default-page "journal"}}
+EOF
+    run_root install -m 0644 -o "$SERVICE_UID" -g "$SERVICE_GID" "$tmp_config" "$logseq_config"
+    rm -f "$tmp_config"
+  fi
+
+  welcome_file=$LOGSEQ_GRAPH_DIR/teamD.md
+  if [ ! -e "$welcome_file" ]; then
+    tmp_welcome=$(mktemp)
+    cat > "$tmp_welcome" <<EOF
+---
+public: true
+---
+
+# teamD Logseq graph
+
+Этот graph создан deploy script'ом teamD.
+
+- Logseq Publish отдаёт read-only web view.
+- SilverBullet редактирует эти Markdown-файлы через browser UI.
+- agentd может читать и менять graph через обычные workspace/file tools или будущий knowledge layer.
+EOF
+    run_root install -m 0644 -o "$SERVICE_UID" -g "$SERVICE_GID" "$tmp_welcome" "$welcome_file"
+    rm -f "$tmp_welcome"
+  fi
+}
+
+seed_silverbullet_credentials() {
+  env_parent=$(dirname "$SILVERBULLET_ENV_FILE")
+
+  if [ "$DRY_RUN" -eq 1 ]; then
+    print_cmd mkdir -p "$env_parent"
+    print_cmd sh -c "seed SilverBullet credentials at $SILVERBULLET_ENV_FILE"
+    return 0
+  fi
+
+  run_root mkdir -p "$env_parent"
+
+  if [ -n "$SILVERBULLET_USER" ]; then
+    case "$SILVERBULLET_USER" in
+      *'
+'*) fail "TEAMD_SILVERBULLET_USER must be a single line username:password value" ;;
+    esac
+    tmp_env=$(mktemp)
+    printf 'SB_USER=%s\n' "$SILVERBULLET_USER" > "$tmp_env"
+    run_root install -m 0600 -o root -g root "$tmp_env" "$SILVERBULLET_ENV_FILE"
+    rm -f "$tmp_env"
+    return 0
+  fi
+
+  if [ -s "$SILVERBULLET_ENV_FILE" ]; then
+    return 0
+  fi
+
+  generated_password=$(generate_secret_key | cut -c 1-24)
+  tmp_env=$(mktemp)
+  printf 'SB_USER=admin:%s\n' "$generated_password" > "$tmp_env"
+  run_root install -m 0600 -o root -g root "$tmp_env" "$SILVERBULLET_ENV_FILE"
+  rm -f "$tmp_env"
+}
+
+write_silverbullet_files() {
+  resolve_service_ids
+
+  if [ "$DRY_RUN" -eq 1 ]; then
+    print_cmd mkdir -p "$SILVERBULLET_DIR" "$LOGSEQ_GRAPH_DIR"
+    print_cmd chown -R "$SERVICE_UID:$SERVICE_GID" "$LOGSEQ_GRAPH_DIR"
+    print_cmd sh -c "write $SILVERBULLET_COMPOSE for teamd-silverbullet"
+    seed_silverbullet_credentials
+    return 0
+  fi
+
+  run_root mkdir -p "$SILVERBULLET_DIR" "$LOGSEQ_GRAPH_DIR"
+  run_root chown -R "$SERVICE_UID:$SERVICE_GID" "$LOGSEQ_GRAPH_DIR"
+  seed_silverbullet_credentials
+
+  tmp_compose=$(mktemp)
+  trap 'rm -f "$tmp_compose"' EXIT INT TERM
+
+  cat > "$tmp_compose" <<EOF
+services:
+  silverbullet:
+    image: $SILVERBULLET_IMAGE
+    container_name: teamd-silverbullet
+    restart: unless-stopped
+    env_file:
+      - "$SILVERBULLET_ENV_FILE"
+    ports:
+      - "127.0.0.1:$SILVERBULLET_PORT:$SILVERBULLET_CONTAINER_PORT"
+    networks:
+      - $EDGE_NETWORK
+    volumes:
+      - "$LOGSEQ_GRAPH_DIR:/space:rw"
+
+networks:
+  $EDGE_NETWORK:
+    external: true
+EOF
+
+  run_root install -m 0644 -o root -g root "$tmp_compose" "$SILVERBULLET_COMPOSE"
+}
+
 ensure_teamd_docker_access() {
   if [ "$DRY_RUN" -eq 1 ]; then
     print_cmd usermod -aG docker "$SERVICE_USER"
@@ -854,6 +1073,18 @@ write_caddy_files() {
     ports_block="$ports_block
       - \"$CADDY_HTTPS_PORT:443\""
   fi
+  if [ "$ENABLE_SILVERBULLET" -eq 1 ] && [ -n "$SILVERBULLET_HTTPS_PORT" ]; then
+    ports_block="$ports_block
+      - \"$SILVERBULLET_HTTPS_PORT:$SILVERBULLET_HTTPS_PORT\""
+  fi
+
+  caddy_volumes="      - \"$CADDYFILE:/etc/caddy/Caddyfile:ro\"
+      - \"$CADDY_DATA_DIR:/data:rw\"
+      - \"$CADDY_CONFIG_DIR:/config:rw\""
+  if [ "$ENABLE_LOGSEQ" -eq 1 ]; then
+    caddy_volumes="$caddy_volumes
+      - \"$LOGSEQ_OUTPUT_DIR:/srv/logseq:ro\""
+  fi
 
   cat > "$tmp_compose" <<EOF
 services:
@@ -864,9 +1095,7 @@ services:
     ports:
 $ports_block
     volumes:
-      - "$CADDYFILE:/etc/caddy/Caddyfile:ro"
-      - "$CADDY_DATA_DIR:/data:rw"
-      - "$CADDY_CONFIG_DIR:/config:rw"
+$caddy_volumes
     networks:
       - $EDGE_NETWORK
 
@@ -893,25 +1122,85 @@ jaeger.$CADDY_DOMAIN {
     fi
   fi
 
-  if [ -n "$CADDY_DOMAIN" ]; then
-    cat > "$tmp_caddyfile" <<EOF
-search.$CADDY_DOMAIN {
-  reverse_proxy teamd-searxng:8080
+  logseq_domain_block=
+  logseq_http_redirect=
+  logseq_handle=
+  if [ "$ENABLE_LOGSEQ" -eq 1 ]; then
+    if [ -n "$CADDY_DOMAIN" ]; then
+      logseq_domain_block="
+logseq.$CADDY_DOMAIN {
+  root * /srv/logseq
+  try_files {path} /index.html
+  file_server
 }
+"
+    else
+      logseq_http_redirect="  redir /logseq /logseq/ 308"
+      logseq_handle='  handle_path /logseq/* {
+    root * /srv/logseq
+    try_files {path} /index.html
+    file_server
+  }'
+    fi
+  fi
 
+	  silverbullet_domain_block=
+	  silverbullet_https_block=
+	  if [ "$ENABLE_SILVERBULLET" -eq 1 ]; then
+    if [ -n "$CADDY_DOMAIN" ]; then
+      silverbullet_domain_block="
+notes.$CADDY_DOMAIN {
+  reverse_proxy teamd-silverbullet:$SILVERBULLET_CONTAINER_PORT
+}
+"
+    elif [ -n "$SILVERBULLET_HTTPS_PORT" ]; then
+      silverbullet_https_block="
+https://$CADDY_HOST:$SILVERBULLET_HTTPS_PORT {
+  tls internal
+  reverse_proxy teamd-silverbullet:$SILVERBULLET_CONTAINER_PORT
+}
+"
+	    fi
+	  fi
+
+	  obsidian_domain_block=
+	  if [ "$ENABLE_OBSIDIAN" -eq 1 ] && [ -n "$CADDY_DOMAIN" ]; then
+	    obsidian_domain_block="
 obsidian.$CADDY_DOMAIN {
   reverse_proxy teamd-obsidian:$OBSIDIAN_CONTAINER_PORT
 }
-$jaeger_domain_block
-EOF
-  else
-    if [ -n "$OBSIDIAN_SUBFOLDER" ]; then
-      obsidian_route='handle /obsidian/*'
-    else
-      obsidian_route='handle_path /obsidian/*'
-    fi
+"
+	  fi
 
-    if [ -n "$CADDY_HTTPS_PORT" ]; then
+	  if [ -n "$CADDY_DOMAIN" ]; then
+	    cat > "$tmp_caddyfile" <<EOF
+search.$CADDY_DOMAIN {
+  reverse_proxy teamd-searxng:8080
+}
+$obsidian_domain_block
+$jaeger_domain_block
+$logseq_domain_block
+$silverbullet_domain_block
+EOF
+	  else
+	    obsidian_http_redirects=
+	    obsidian_handle=
+	    if [ "$ENABLE_OBSIDIAN" -eq 1 ]; then
+	      if [ -n "$OBSIDIAN_SUBFOLDER" ]; then
+	        obsidian_route='handle /obsidian/*'
+	      else
+	        obsidian_route='handle_path /obsidian/*'
+	      fi
+	      obsidian_handle="  $obsidian_route {
+    reverse_proxy teamd-obsidian:$OBSIDIAN_CONTAINER_PORT
+  }"
+	      if [ -n "$CADDY_HTTPS_PORT" ]; then
+	        obsidian_http_redirects="  redir /obsidian https://$CADDY_HOST:$CADDY_HTTPS_PORT/obsidian/ 308
+  redir /obsidian/* https://$CADDY_HOST:$CADDY_HTTPS_PORT{uri} 308"
+	      fi
+	    fi
+
+	    if [ -n "$CADDY_HTTPS_PORT" ]; then
       cat > "$tmp_caddyfile" <<EOF
 {
   auto_https disable_redirects
@@ -920,9 +1209,9 @@ EOF
 
 :80 {
   redir /searxng /searxng/ 308
-  redir /obsidian https://$CADDY_HOST:$CADDY_HTTPS_PORT/obsidian/ 308
-  redir /obsidian/* https://$CADDY_HOST:$CADDY_HTTPS_PORT{uri} 308
+$obsidian_http_redirects
 $jaeger_http_redirect
+$logseq_http_redirect
 
   handle /searxng/* {
     reverse_proxy teamd-searxng:8080 {
@@ -930,8 +1219,9 @@ $jaeger_http_redirect
     }
   }
 $jaeger_handle
+$logseq_handle
 
-  respond / "teamD container edge: /searxng/ on HTTP, /obsidian/ on HTTPS"
+  respond / "teamD container edge: /searxng/ on HTTP; optional add-ons when enabled"
 }
 
 https://$CADDY_HOST {
@@ -943,19 +1233,20 @@ https://$CADDY_HOST {
     }
   }
 $jaeger_handle
+$logseq_handle
 
-  $obsidian_route {
-    reverse_proxy teamd-obsidian:$OBSIDIAN_CONTAINER_PORT
-  }
+$obsidian_handle
 
-  respond / "teamD container edge (TLS): /searxng/ and /obsidian/"
+  respond / "teamD container edge (TLS): /searxng/ and optional add-ons"
 }
+$silverbullet_https_block
 EOF
     else
       cat > "$tmp_caddyfile" <<EOF
 :80 {
   redir /searxng /searxng/ 308
 $jaeger_http_redirect
+$logseq_http_redirect
 
   handle /searxng/* {
     reverse_proxy teamd-searxng:8080 {
@@ -963,13 +1254,13 @@ $jaeger_http_redirect
     }
   }
 $jaeger_handle
+$logseq_handle
 
-  $obsidian_route {
-    reverse_proxy teamd-obsidian:$OBSIDIAN_CONTAINER_PORT
-  }
+$obsidian_handle
 
-  respond / "teamD container edge: /searxng/ and /obsidian/"
+  respond / "teamD container edge: /searxng/ and optional add-ons"
 }
+$silverbullet_https_block
 EOF
     fi
   fi
@@ -1031,6 +1322,11 @@ while [ "$#" -gt 0 ]; do
       WRITE_OBSIDIAN_MCP_EXAMPLE=1
       ;;
     --with-jaeger) ENABLE_JAEGER=1 ;;
+    --with-logseq) ENABLE_LOGSEQ=1 ;;
+    --with-silverbullet)
+      ENABLE_LOGSEQ=1
+      ENABLE_SILVERBULLET=1
+      ;;
     --no-restart-teamd) RESTART_TEAMD_SERVICES=0 ;;
     --searxng-port)
       shift
@@ -1049,6 +1345,18 @@ while [ "$#" -gt 0 ]; do
       [ "$#" -gt 0 ] || fail "--jaeger-ui-port requires a value"
       valid_port "$1" || fail "invalid --jaeger-ui-port: $1"
       JAEGER_UI_PORT=$1
+      ;;
+    --silverbullet-port)
+      shift
+      [ "$#" -gt 0 ] || fail "--silverbullet-port requires a value"
+      valid_port "$1" || fail "invalid --silverbullet-port: $1"
+      SILVERBULLET_PORT=$1
+      ;;
+    --silverbullet-https-port)
+      shift
+      [ "$#" -gt 0 ] || fail "--silverbullet-https-port requires a value"
+      valid_port "$1" || fail "invalid --silverbullet-https-port: $1"
+      SILVERBULLET_HTTPS_PORT=$1
       ;;
     -h|--help)
       usage
@@ -1069,14 +1377,15 @@ need_command id
 need_command sed
 validate_obsidian_subfolder
 ensure_obsidian_https_port
+ensure_silverbullet_https_port
 ensure_caddy_host
 
 if [ "$(id -u)" -ne 0 ] && [ "$DRY_RUN" -eq 0 ]; then
   need_command sudo
 fi
 
-if [ "$ENABLE_SEARXNG" -eq 0 ] && [ "$ENABLE_OBSIDIAN" -eq 0 ] && [ "$ENABLE_JAEGER" -eq 0 ] && [ "$ENABLE_CADDY" -eq 0 ]; then
-  fail "nothing to deploy: SearXNG disabled, Obsidian not enabled, Jaeger not enabled, and Caddy disabled"
+if [ "$ENABLE_SEARXNG" -eq 0 ] && [ "$ENABLE_OBSIDIAN" -eq 0 ] && [ "$ENABLE_JAEGER" -eq 0 ] && [ "$ENABLE_LOGSEQ" -eq 0 ] && [ "$ENABLE_SILVERBULLET" -eq 0 ] && [ "$ENABLE_CADDY" -eq 0 ]; then
+  fail "nothing to deploy: SearXNG disabled, Obsidian not enabled, Jaeger not enabled, Logseq not enabled, SilverBullet not enabled, and Caddy disabled"
 fi
 
 ensure_docker
@@ -1099,6 +1408,16 @@ if [ "$ENABLE_JAEGER" -eq 1 ]; then
   write_jaeger_files
   configure_agentd_otlp_env
   compose_up "$JAEGER_COMPOSE"
+fi
+
+if [ "$ENABLE_LOGSEQ" -eq 1 ]; then
+  write_logseq_files
+  compose_up "$LOGSEQ_COMPOSE"
+fi
+
+if [ "$ENABLE_SILVERBULLET" -eq 1 ]; then
+  write_silverbullet_files
+  compose_up "$SILVERBULLET_COMPOSE"
 fi
 
 if [ "$WRITE_OBSIDIAN_MCP_EXAMPLE" -eq 1 ]; then
@@ -1214,6 +1533,51 @@ EOF
   fi
 fi
 
+if [ "$ENABLE_LOGSEQ" -eq 1 ]; then
+  cat <<EOF
+  Logseq Publish:
+    Container: teamd-logseq-publish
+    Graph: $LOGSEQ_GRAPH_DIR
+    Output: $LOGSEQ_OUTPUT_DIR
+    Compose: $LOGSEQ_COMPOSE
+    Start command: docker compose -f $LOGSEQ_COMPOSE up -d
+EOF
+  if [ -n "$CADDY_DOMAIN" ]; then
+    cat <<EOF
+    Caddy URL: https://logseq.$CADDY_DOMAIN/
+EOF
+  else
+    cat <<EOF
+    Caddy URL: http://127.0.0.1:$CADDY_HTTP_PORT/logseq/
+EOF
+  fi
+fi
+
+if [ "$ENABLE_SILVERBULLET" -eq 1 ]; then
+  cat <<EOF
+  SilverBullet:
+    Container: teamd-silverbullet
+    Local URL: http://127.0.0.1:$SILVERBULLET_PORT
+    Graph/space: $LOGSEQ_GRAPH_DIR
+    Compose: $SILVERBULLET_COMPOSE
+    Start command: docker compose -f $SILVERBULLET_COMPOSE up -d
+    SB_USER credentials file: $SILVERBULLET_ENV_FILE
+EOF
+  if [ -n "$CADDY_DOMAIN" ]; then
+    cat <<EOF
+    Caddy URL: https://notes.$CADDY_DOMAIN/
+EOF
+  elif [ -n "$SILVERBULLET_HTTPS_PORT" ]; then
+    cat <<EOF
+    Caddy URL: https://$CADDY_HOST:$SILVERBULLET_HTTPS_PORT/
+EOF
+  else
+    cat <<EOF
+    Caddy URL: <none; set TEAMD_CADDY_DOMAIN or TEAMD_SILVERBULLET_HTTPS_PORT for browser-safe remote access>
+EOF
+  fi
+fi
+
 if [ "$ENABLE_CADDY" -eq 1 ]; then
   cat <<EOF
   Caddy:
@@ -1223,20 +1587,22 @@ if [ "$ENABLE_CADDY" -eq 1 ]; then
     Start command: docker compose -f $CADDY_COMPOSE up -d
     Caddyfile: $CADDYFILE
 EOF
-  if [ -n "$CADDY_DOMAIN" ]; then
-    cat <<EOF
-    Routes with TEAMD_CADDY_DOMAIN: search.<domain>, obsidian.<domain> and jaeger.<domain> when enabled
+	  if [ -n "$CADDY_DOMAIN" ]; then
+	    cat <<EOF
+    Routes with TEAMD_CADDY_DOMAIN: search.<domain> plus enabled logseq.<domain>, notes.<domain>, jaeger.<domain>, and legacy obsidian.<domain>
 EOF
-  elif [ -n "$CADDY_HTTPS_PORT" ]; then
-    cat <<EOF
+	  elif [ -n "$CADDY_HTTPS_PORT" ]; then
+	    cat <<EOF
     Routes without TEAMD_CADDY_DOMAIN:
       HTTP: /searxng/
+      HTTP: /logseq/ when enabled
       HTTP: /jaeger/ when enabled
-      HTTPS: https://$CADDY_HOST:$CADDY_HTTPS_PORT/obsidian/
+      HTTPS: https://$CADDY_HOST:$CADDY_HTTPS_PORT/obsidian/ when legacy Obsidian is enabled
+      HTTPS: https://$CADDY_HOST:$SILVERBULLET_HTTPS_PORT/ when SilverBullet is enabled
 EOF
-  else
-    cat <<EOF
-    Routes without TEAMD_CADDY_DOMAIN: /searxng/, /obsidian/ and /jaeger/ when enabled
+	  else
+	    cat <<EOF
+    Routes without TEAMD_CADDY_DOMAIN: /searxng/ plus enabled /logseq/, /jaeger/, and legacy /obsidian/; SilverBullet uses https://$CADDY_HOST:$SILVERBULLET_HTTPS_PORT/ when enabled
 EOF
-  fi
+	  fi
 fi

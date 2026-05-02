@@ -2966,9 +2966,9 @@ fn telegram_worker_real_daemon_backend_uses_canonical_chat_path() {
         .build()
         .expect("runtime");
     let (provider_base, provider_requests, provider_handle) =
-        spawn_provider_sse_server(vec![
+        spawn_provider_sse_server_with_response_delay(vec![
             "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_tg_worker\",\"model\":\"gpt-5.4\",\"output\":[{\"id\":\"msg_tg_worker\",\"type\":\"message\",\"status\":\"completed\",\"role\":\"assistant\",\"content\":[{\"type\":\"output_text\",\"text\":\"Provider-backed telegram reply.\"}]}],\"usage\":{\"input_tokens\":12,\"output_tokens\":5,\"total_tokens\":17}}}\n\n".to_string(),
-        ]);
+        ], Duration::from_millis(900));
     let (_temp, app) = telegram_daemon_test_app(&provider_base);
     let handle = daemon::spawn_for_test(app.clone()).expect("spawn daemon");
     seed_activated_pairing(&app, "pair-real", 777, 42);
@@ -2983,8 +2983,9 @@ fn telegram_worker_real_daemon_backend_uses_canonical_chat_path() {
         json_response(
             r#"{"ok":true,"result":{"message_id":20,"date":0,"chat":{"id":42,"type":"private"},"text":"working"}}"#,
         ),
+        json_response(r#"{"ok":true,"result":true}"#),
         json_response(
-            r#"{"ok":true,"result":{"message_id":20,"date":0,"chat":{"id":42,"type":"private"},"text":"Provider-backed telegram reply."}}"#,
+            r#"{"ok":true,"result":{"message_id":21,"date":0,"chat":{"id":42,"type":"private"},"text":"Provider-backed telegram reply."}}"#,
         ),
     ]);
     let client = TelegramClient::new(TelegramClientConfig {
@@ -3047,6 +3048,11 @@ fn telegram_worker_real_daemon_backend_uses_canonical_chat_path() {
     assert_eq!(send_message.path, "/bottest-token/SendMessage");
     assert!(send_message.body.contains("\"parse_mode\":\"HTML\""));
     assert!(send_message.body.contains("Стадия: запуск"));
+    let typing_request = requests
+        .recv_timeout(Duration::from_secs(2))
+        .expect("captured sendChatAction");
+    assert_eq!(typing_request.path, "/bottest-token/SendChatAction");
+    assert!(typing_request.body.contains("\"action\":\"typing\""));
     let final_message = requests
         .recv_timeout(Duration::from_secs(2))
         .expect("captured final message");
@@ -3266,8 +3272,9 @@ fn free_port() -> u16 {
         .port()
 }
 
-fn spawn_provider_sse_server(
+fn spawn_provider_sse_server_with_response_delay(
     responses: Vec<String>,
+    response_delay: Duration,
 ) -> (String, Receiver<String>, thread::JoinHandle<()>) {
     let listener = TcpListener::bind("127.0.0.1:0").expect("bind provider server");
     let port = listener.local_addr().expect("local addr").port();
@@ -3280,6 +3287,9 @@ fn spawn_provider_sse_server(
             sender
                 .send(request.body.clone())
                 .expect("send provider request");
+            if !response_delay.is_zero() {
+                thread::sleep(response_delay);
+            }
             let response = format!(
                 "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nCache-Control: no-cache\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
                 body.len(),

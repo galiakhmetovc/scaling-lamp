@@ -1,4 +1,4 @@
-# Container add-ons: Docker, SearXNG, Obsidian, Jaeger, Caddy
+# Container add-ons: Docker, SearXNG, Logseq, SilverBullet, Jaeger, Caddy
 
 Этот документ описывает второй deploy path: не core `agentd`, а внешнюю обвязку вокруг него.
 
@@ -27,14 +27,15 @@ Container add-ons ставятся отдельно:
 
 Опционально:
 
-- `teamd-obsidian` — browser-accessible Obsidian container, если передать `--with-obsidian`.
-- filesystem-backed Obsidian MCP connector для `agentd`, если передать `--with-obsidian-mcp`.
+- `teamd-logseq-publish` — read-only web view над canonical Logseq graph, если передать `--with-logseq`.
+- `teamd-silverbullet` — browser editor над тем же Markdown graph, если передать `--with-silverbullet`.
 - `teamd-jaeger` — Jaeger UI и OTLP receiver для runtime traces, если передать `--with-jaeger`.
+- `teamd-obsidian` и filesystem-backed Obsidian MCP connector — legacy path, если явно передать `--with-obsidian` или `--with-obsidian-mcp`.
 
 Проверить действия без изменений:
 
 ```bash
-./scripts/deploy-teamd-containers.sh --dry-run --non-interactive --no-start --with-obsidian
+./scripts/deploy-teamd-containers.sh --dry-run --non-interactive --no-start --with-logseq --with-silverbullet
 ```
 
 ## SearXNG для `web_search`
@@ -88,168 +89,130 @@ search_url = "http://127.0.0.1:8888/search"
 
 Ориентир по проекту: <https://github.com/ihor-sokoliuk/mcp-searxng>.
 
-## Obsidian: web UI для оператора
+## Logseq graph: текущий knowledge layer
 
-Obsidian UI включается явно:
+Текущий основной путь для заметок и working knowledge:
 
 ```bash
-./scripts/deploy-teamd-containers.sh --with-obsidian
+./scripts/deploy-teamd-containers.sh --with-logseq --with-silverbullet
 ```
 
 Default paths:
 
-- vaults: `/var/lib/teamd/vaults`;
-- managed vault: `/var/lib/teamd/vaults/teamd`;
-- compatibility path для агентов, которые ошибочно пишут в `~/vault`: `/var/lib/teamd/vault -> /var/lib/teamd/vaults/teamd`;
-- container config: `/var/lib/teamd/containers/obsidian/config`;
-- local URL: `http://127.0.0.1:8080/obsidian/`;
-- default Caddy HTTPS URL без домена: `https://127.0.0.1:8443/obsidian/`.
+- canonical graph root: `/var/lib/teamd/knowledge/logseq`;
+- canonical graph: `/var/lib/teamd/knowledge/logseq/teamd`;
+- Logseq Publish compose/config: `/opt/teamd/containers/logseq`;
+- Logseq Publish output: `/var/lib/teamd/containers/logseq/output`;
+- SilverBullet compose/config: `/opt/teamd/containers/silverbullet`;
+- SilverBullet credentials: `/opt/teamd/containers/silverbullet/silverbullet.env`.
 
-В этой схеме Obsidian — это внешний UI для человека. Оператор открывает его в браузере и редактирует vault. `agentd` не встраивает Obsidian в prompt path автоматически.
+Смысл разделения:
 
-Канонический путь vault для всех агентов и операторских команд — `/var/lib/teamd/vaults/teamd`. Путь `/var/lib/teamd/vault` существует только как совместимость с ошибочным `~/vault`, потому что production user `teamd` имеет home `/var/lib/teamd`. Production `agentd` запускается с `WorkingDirectory=/var/lib/teamd`, поэтому workspace-relative path `vault/...` тоже попадает в этот же vault через symlink. Новые инструкции, skills и tooling должны считать canonical source of truth путём `/var/lib/teamd/vaults/teamd`.
+- `Logseq Publish` отдаёт read-only browser view, удобный для просмотра графа и ссылок;
+- `SilverBullet` даёт мобильный и desktop web editor для тех же `.md` файлов;
+- `agentd` работает с теми же файлами через canonical filesystem tools и `logseq-graph` skill;
+- graph не является runtime state: transcripts, runs, tool calls, artifacts, schedules, approvals, audit logs и SQLite state остаются в `agentd`;
+- graph не заменяет repository docs: стабильная документация живёт в git под `docs/`, а graph используется для working notes, drafts, decisions, research, project logs и подготовки материала.
 
-Без отдельного домена скрипт запускает Obsidian в subfolder mode:
-
-```text
-SUBFOLDER=/obsidian/
-```
-
-Текущий образ по умолчанию: `lscr.io/linuxserver/obsidian:latest`.
-
-Внутри контейнера web UI слушает `3000/tcp`, а deploy script публикует его на host как `127.0.0.1:${TEAMD_OBSIDIAN_PORT:-8080}` и проксирует через Caddy.
-
-Важно: значение `SUBFOLDER` должно начинаться и заканчиваться `/`. Значение `obsidian` без слэшей ломает web route. Caddy в этом режиме не срезает `/obsidian/`, а прокидывает путь как есть.
-
-Важно: Selkies/WebCodecs требует secure context. Поэтому без dedicated domain deploy script автоматически включает Caddy HTTPS на `8443`, пытается определить primary host/IP сервера, и делает `http://.../obsidian/ -> https://<host>:8443/obsidian/` redirect. HTTP-only доступ для Obsidian в этой схеме не считается рабочим.
-
-Если автоопределение выбрало не тот адрес, задайте его явно:
-
-```bash
-TEAMD_CADDY_HOST='31.130.128.89' ./scripts/deploy-teamd-containers.sh --with-obsidian
-```
-
-Если включён Caddy, нормальный доступ выглядит так:
-
-```bash
-TEAMD_CADDY_DOMAIN='example.com' ./scripts/deploy-teamd-containers.sh --with-obsidian
-```
-
-После этого web UI доступен как `obsidian.example.com`.
-
-## Obsidian: доступ агента через MCP
-
-Первый поддерживаемый вариант для агента:
+Скрипт seed'ит минимальный Logseq config, если его ещё нет:
 
 ```text
-agentd -> stdio MCP connector -> docker run node -> @bitbonsai/mcpvault -> vault
+/var/lib/teamd/knowledge/logseq/teamd/logseq/config.edn
 ```
 
-Почему так:
-
-- Obsidian остаётся в Docker и доступен оператору через web UI;
-- агент работает не generic filesystem write tools, а через Obsidian-aware MCP tools;
-- MCP server работает напрямую с vault directory и не зависит от того, открыт ли Obsidian UI;
-- не нужен Obsidian Local REST API plugin и не нужен ручной клик в GUI для включения plugin;
-- текущий `agentd` поддерживает MCP transport только `stdio`, поэтому MCP запускается как дочерний процесс `docker run -i --rm`, а не как постоянный HTTP/SSE sidecar.
-
-Полностью автоматический путь:
-
-```bash
-./scripts/deploy-teamd-containers.sh --with-obsidian-mcp
-```
-
-Он делает всё, что нужно для первого запуска:
-
-- создаёт managed vault `/var/lib/teamd/vaults/teamd`;
-- seed'ит Obsidian vault registry в `/var/lib/teamd/containers/obsidian/config/.config/obsidian/obsidian.json`;
-- добавляет или заменяет enabled MCP connector `[daemon.mcp_connectors.obsidian]` в `/etc/teamd/config.toml`;
-- connector запускает `docker run -i --rm -v /var/lib/teamd/vaults/teamd:/vault:rw docker.io/library/node:22-alpine npx -y @bitbonsai/mcpvault@latest /vault`;
-- добавляет systemd-пользователя `teamd` в группу `docker`, чтобы `agentd` мог запускать stdio MCP через `docker run`;
-- перезапускает `teamd-daemon.service` и `teamd-telegram.service`, если они существуют и не указан `--no-start`.
-
-Проверка без изменений:
-
-```bash
-./scripts/deploy-teamd-containers.sh --dry-run --non-interactive --no-start --with-obsidian-mcp
-```
-
-Ручной fallback — только сгенерировать пример коннектора:
-
-```bash
-./scripts/deploy-teamd-containers.sh --with-obsidian-mcp-example
-```
-
-Скрипт создаёт:
+И создаёт стартовую страницу:
 
 ```text
-/opt/teamd/containers/obsidian/obsidian-mcp.example.toml
+/var/lib/teamd/knowledge/logseq/teamd/teamD.md
 ```
 
-Для ручного fallback порядок такой:
+Оба файла создаются только если отсутствуют. Существующий graph скрипт не перезаписывает.
 
-1. Скопируйте блок из:
+### Web URLs
+
+Без dedicated domain:
 
 ```text
-/opt/teamd/containers/obsidian/obsidian-mcp.example.toml
+Logseq Publish via Caddy: http://127.0.0.1:8088/logseq/
+SilverBullet local:       http://127.0.0.1:8091/
+SilverBullet via Caddy:   https://<host>:8444/
 ```
 
-2. Вставьте его в `/etc/teamd/config.toml`.
-3. Поменяйте:
+SilverBullet без домена вынесен на отдельный HTTPS site, а не в `/notes/`. Это сделано намеренно: single-page редакторы и web socket/asset paths обычно плохо живут в произвольном subpath.
 
-```toml
-enabled = true
-```
-
-4. Перезапустите сервисы:
+Если автоопределение host выбрало не тот адрес, задайте его явно:
 
 ```bash
-sudo systemctl restart teamd-daemon.service teamd-telegram.service
+TEAMD_CADDY_HOST='31.130.128.89' ./scripts/deploy-teamd-containers.sh --with-logseq --with-silverbullet
 ```
 
-Проверка через TUI/REPL:
+С dedicated domain:
+
+```text
+https://logseq.example.com/
+https://notes.example.com/
+```
+
+Команда:
 
 ```bash
-teamdctl tui
+TEAMD_CADDY_DOMAIN='example.com' ./scripts/deploy-teamd-containers.sh --with-logseq --with-silverbullet
 ```
 
-Дальше используйте `\mcp`, чтобы увидеть коннектор, или попросите агента найти/прочитать заметку через MCP tools.
+### SilverBullet authentication
 
-Нормальный агентский flow:
+SilverBullet требует `SB_USER`. Deploy script делает одно из двух:
 
-- сначала `mcp_search_resources` или прямой вызов обнаруженного MCP tool;
-- затем `mcp__obsidian__read_note`, `mcp__obsidian__search_notes`, `mcp__obsidian__write_note` или другие exposed tools, которые вернул connector;
-- перед изменением существующей заметки агент читает её через MCP;
-- generic `fs_write_text`/`fs_patch_text` для vault — только аварийный fallback, если MCP недоступен и оператор явно согласился.
+- если задан `TEAMD_SILVERBULLET_USER`, записывает его в credentials file;
+- если credentials file уже есть, оставляет его как есть;
+- если ничего нет, генерирует `admin:<random-password>` и сохраняет в `/opt/teamd/containers/silverbullet/silverbullet.env`.
 
-## Obsidian vault skill и PARA contract
+Формат:
+
+```bash
+SB_USER='username:password'
+```
+
+Файл создаётся с mode `0600`. Не коммитьте его в git и не вставляйте пароль в публичные логи.
+
+Проверить credentials на host:
+
+```bash
+sudo cat /opt/teamd/containers/silverbullet/silverbullet.env
+```
+
+### Agent skill и PARA contract
 
 Default agent получает встроенный agent-local skill:
+
+```text
+/var/lib/teamd/state/agents/default/skills/logseq-graph/SKILL.md
+```
+
+Legacy compatibility skill тоже остаётся, но только как указатель на новый путь:
 
 ```text
 /var/lib/teamd/state/agents/default/skills/obsidian-vault/SKILL.md
 ```
 
-Skill активируется автоматически, когда в сессии есть контекст про `Obsidian`, `vault`, `PARA`, `projects`, `areas`, `resources`, `archive`, `notes`, `knowledge base`, Markdown notes, daily notes, tasks, links или frontmatter. Его также можно включить вручную:
+`logseq-graph` активируется автоматически, когда в сессии есть контекст про `Logseq`, `SilverBullet`, `graph`, `PARA`, `projects`, `areas`, `resources`, `archive`, `notes`, `knowledge base`, Markdown notes, daily notes, tasks, links или frontmatter. Его также можно включить вручную:
 
 ```bash
-teamdctl session enable-skill <session_id> obsidian-vault
+teamdctl session enable-skill <session_id> logseq-graph
 teamdctl session skills <session_id>
 ```
 
-Итоговый контракт skill:
+Текущий агентский flow:
 
-- агент работает с vault через `obsidian` MCP connector first;
-- агент не использует generic filesystem write tools для нормальной работы с заметками;
-- filesystem fallback допустим только для аварийной/admin-операции, если MCP недоступен и оператор явно согласился;
-- vault — это shared working knowledge layer для агента и оператора;
-- vault не является runtime state: transcripts, runs, tool calls, artifacts, schedules, approvals, audit logs и SQLite state остаются в `agentd`;
-- vault не заменяет canonical repository documentation: стабильная документация живёт в git под `docs/`;
-- vault используется для working notes, drafts, decisions, research, project logs и подготовки материала перед переносом в repo docs;
-- поверх vault позже можно добавить semantic search/indexing; поэтому notes должны иметь понятный title, summary, stable headings, explicit links и frontmatter where useful;
-- перед изменением существующей заметки агент сначала читает её;
-- после успешного write/update агент сообщает, что именно изменил и где;
-- если tool call упал, агент не утверждает, что заметка сохранена.
+- сначала найти/прочитать существующие notes через `fs_find_in_files`, `fs_list`, `fs_read_text` или `fs_read_lines`;
+- перед изменением существующей заметки обязательно прочитать её;
+- менять graph через `fs_write_text`, `fs_patch_text`, `fs_replace_lines`, `fs_insert_text`, `fs_mkdir`, `fs_move` или `fs_trash`;
+- писать только в canonical graph path `/var/lib/teamd/knowledge/logseq/teamd`;
+- не создавать второй graph в `~/vault`, `/root/vault`, `/var/lib/teamd/vault`, project workspace или старом Obsidian path;
+- после успешного write/update сообщить, что именно изменено и где;
+- если tool call упал, не утверждать, что заметка сохранена.
+
+Отдельного Logseq MCP сейчас нет. Это осознанно: не создаём второй скрытый tool loop. Когда появится нормальный MCP/semantic layer для graph, он должен быть добавлен как connector поверх того же canonical graph path, а не как отдельная база.
 
 PARA — default organization model:
 
@@ -303,14 +266,13 @@ Recommended note contents:
 - daily: date, focus, log, tasks, captures;
 - resource: summary, key points, sources, related notes.
 
-Tags and Obsidian syntax:
+Tags and Logseq syntax:
 
 - use tags sparingly: `#project`, `#area`, `#resource`, `#task`, `#daily`, `#inbox`, `#archive`;
 - priority tags: `#p0`, `#p1`, `#p2`, `#p3`, only when priority matters;
-- prefer wikilinks like `[[note name]]`;
+- prefer page links like `[[note name]]`;
 - use checkboxes `- [ ]` and `- [x]`;
-- use callouts for important blocks: `> [!note]`, `> [!warning]`, `> [!decision]`;
-- preserve embeds `![[...]]`, links, aliases, headings and frontmatter.
+- preserve Logseq properties, block refs, embeds, links, aliases, headings and frontmatter.
 
 Operating rules:
 
@@ -318,18 +280,20 @@ Operating rules:
 - не выдумывать completed tasks, sources, dates или decisions;
 - при неоднозначном target folder выбрать ближайший PARA folder и явно назвать assumption;
 - имена notes должны быть стабильными и читаемыми; timestamp-only filenames допустимы только для daily notes;
-- если пользовательское сообщение содержит durable fact, decision, task или resource, агент должен предложить сохранить это или сохранить сразу, если запрос подразумевает persistence.
+- если пользовательское сообщение содержит durable fact, decision, task или resource, агент должен предложить сохранить это или сохранить сразу, если запрос подразумевает persistence;
 - перед substantial work агент ищет/читает релевантные project, area или resource notes;
 - после важного решения или завершённой задачи агент обновляет соответствующую project note или daily journal;
 - когда working note стала стабильной документацией, агент предлагает перенести её в repository docs и commit.
 
-Роль Obsidian в общей архитектуре:
+Роль Logseq graph в общей архитектуре:
 
 ```text
 Telegram/TUI dialogue
 -> agent reasoning and tools
--> Obsidian working notes via MCP
--> optional semantic search index over vault
+-> Logseq graph notes through canonical filesystem tools
+-> SilverBullet web editing for operator
+-> Logseq Publish read-only graph view
+-> optional semantic search index over graph later
 -> stable docs promoted to git docs/current
 ```
 
@@ -337,27 +301,75 @@ Telegram/TUI dialogue
 
 ```bash
 teamdctl session skills <session_id>
-grep -nE 'PARA structure|04-Archive|Templates' \
-  /var/lib/teamd/state/agents/default/skills/obsidian-vault/SKILL.md
-curl -fsS http://127.0.0.1:5140/v1/mcp/connectors
+grep -nE 'PARA structure|04-Archive|SilverBullet' \
+  /var/lib/teamd/state/agents/default/skills/logseq-graph/SKILL.md
+ls -la /var/lib/teamd/knowledge/logseq/teamd
+curl -fsS http://127.0.0.1:8088/logseq/ >/dev/null
 ```
 
-### Важное ограничение Docker/MCP
+### Миграция из старого Obsidian vault
 
-Такой коннектор требует, чтобы systemd-пользователь `teamd` мог выполнить `docker run ...`. Автоматический режим `--with-obsidian-mcp` добавляет `teamd` в группу `docker`. Это почти root-level право, потому что доступ к Docker socket фактически позволяет управлять host'ом. Если это неприемлемо, используйте `--with-obsidian-mcp-example` и настройте более узкий wrapper/transport вручную.
+Legacy Obsidian path остаётся доступен, но новые заметки должны идти в Logseq graph:
 
-Более строгий вариант на будущее:
+```text
+Old vault:         /var/lib/teamd/vaults/teamd
+Compatibility symlink: /var/lib/teamd/vault
+New graph:         /var/lib/teamd/knowledge/logseq/teamd
+```
 
-- добавить в `agentd` MCP transport `streamable-http`/SSE;
-- держать Obsidian MCP как отдельный long-running container;
-- подключать его по HTTP с bearer token;
-- не давать `teamd` прямой доступ к Docker socket.
+Безопасная ручная миграция:
 
-### Skill, MCP и CLI
+```bash
+sudo mkdir -p /var/lib/teamd/knowledge/logseq/teamd
+sudo rsync -a --ignore-existing \
+  /var/lib/teamd/vaults/teamd/ \
+  /var/lib/teamd/knowledge/logseq/teamd/
+sudo chown -R teamd:teamd /var/lib/teamd/knowledge/logseq/teamd
+```
 
-В этой схеме `obsidian-cli` не обязателен: MCP server уже даёт semantic tools для read/write/search/update frontmatter. Skill остаётся полезным как слой инструкций для агента: как называть заметки, как искать, как писать daily notes, как не ломать структуру vault.
+После миграции проверьте:
 
-Отдельный `obsidian-cli` path можно добавить позже, если понадобится именно CLI workflow. Его надо проектировать отдельно, чтобы не создать второй скрытый tool loop. Ориентир по skill: <https://github.com/kepano/obsidian-skills/blob/main/skills/obsidian-cli/SKILL.md>.
+- нет ли дублей `00-Inbox`, `01-Projects`, `02-Areas`;
+- работают ли links `[[...]]`;
+- attachments лежат в ожидаемом каталоге;
+- старые Obsidian-only callouts/plugins не стали критичными для чтения.
+
+## Obsidian legacy path
+
+Obsidian support не удалён, но больше не является primary path. Он оставлен для старых инсталляций и ручного восстановления старого vault.
+
+Obsidian UI включается явно:
+
+```bash
+./scripts/deploy-teamd-containers.sh --with-obsidian
+```
+
+Obsidian MCP включается явно:
+
+```bash
+./scripts/deploy-teamd-containers.sh --with-obsidian-mcp
+```
+
+Legacy paths:
+
+```text
+Vaults:             /var/lib/teamd/vaults
+Managed vault:      /var/lib/teamd/vaults/teamd
+Compatibility path: /var/lib/teamd/vault -> /var/lib/teamd/vaults/teamd
+Local UI:           http://127.0.0.1:8080/obsidian/
+Caddy HTTPS:        https://<host>:8443/obsidian/
+MCP example:        /opt/teamd/containers/obsidian/obsidian-mcp.example.toml
+```
+
+`--with-obsidian-mcp` добавляет systemd-пользователя `teamd` в группу `docker`, потому что MCP connector запускается через `docker run -i --rm`. Это почти root-level право. Для новой Logseq/SilverBullet схемы это не требуется.
+
+Obsidian compatibility skill:
+
+```text
+/var/lib/teamd/state/agents/default/skills/obsidian-vault/SKILL.md
+```
+
+Новый bootstrap перезаписывает старый generated Obsidian skill коротким deprecated shim, который отправляет агента в `logseq-graph`.
 
 ## Jaeger: web UI для runtime traces
 
@@ -450,10 +462,15 @@ http://127.0.0.1:8088
 Routes:
 
 - `/searxng/`;
-- `/obsidian/`.
+- `/logseq/`, если включён `--with-logseq`;
 - `/jaeger/`, если включён `--with-jaeger`.
+- `/obsidian/`, если включён legacy `--with-obsidian`.
 
 В path mode `/searxng/` прокидывается без срезания префикса и с upstream header `X-Script-Name: /searxng`. Это важно: SearXNG генерирует root-relative ссылки и `form action`; без `X-Script-Name` browser UI уходит на `/search`, `/static/...` и фактически выпадает из `/searxng/`. Для `/searxng` без trailing slash Caddy делает redirect на `/searxng/`.
+
+`/logseq/` отдаёт static SPA из Logseq Publish output и срезает prefix через `handle_path`. Для `/logseq` без trailing slash Caddy делает redirect на `/logseq/`.
+
+SilverBullet без domain не публикуется как subpath. Он получает отдельный Caddy HTTPS site на `https://<host>:8444/`, потому что editor SPA должен видеть себя в root path.
 
 `/obsidian/` тоже прокидывается без срезания префикса, потому что Obsidian container сам запущен с `SUBFOLDER=/obsidian/`.
 
@@ -462,36 +479,35 @@ Routes:
 Для нормального browser usage можно задать домен:
 
 ```bash
-TEAMD_CADDY_DOMAIN='example.com' ./scripts/deploy-teamd-containers.sh --with-obsidian
+TEAMD_CADDY_DOMAIN='example.com' ./scripts/deploy-teamd-containers.sh --with-logseq --with-silverbullet
 ```
 
 Тогда Caddy создаёт:
 
 - `search.example.com`;
-- `obsidian.example.com`.
+- `logseq.example.com`, если включён `--with-logseq`;
+- `notes.example.com`, если включён `--with-silverbullet`;
 - `jaeger.example.com`, если включён `--with-jaeger`.
+- `obsidian.example.com`, если включён legacy `--with-obsidian`.
 
-## Obsidian web UI и мобильный браузер
+## Mobile/browser workflow
 
-Текущий контейнер Obsidian (`lscr.io/linuxserver/obsidian`) публикует desktop Obsidian через web desktop layer на базе Selkies/X11. Это более поддерживаемый вариант и он устойчивее, чем старый `obsidian-remote`, но это всё ещё desktop-first интерфейс, а не специальный mobile client.
-
-Практически это значит:
-
-- desktop browser: рабочий путь;
-- mobile browser: возможен, но зависит от HTTPS, размера экрана и терпимости к desktop UI;
-- plain HTTP по IP для Obsidian не подходит, потому что Selkies не поднимает поток без secure context.
-
-Принятый mobile workflow на текущем этапе:
+Принятый mobile workflow:
 
 - оператор пишет агенту в Telegram;
-- агент создаёт и обновляет заметки через Obsidian MCP connector, который смонтирован на `/var/lib/teamd/vaults/teamd`;
-- Obsidian web UI остаётся desktop/admin-интерфейсом для проверки vault, включения plugins и ручного редактирования с большого экрана.
+- агент создаёт и обновляет Markdown notes в canonical Logseq graph;
+- оператор читает graph через Logseq Publish;
+- оператор редактирует notes через SilverBullet web UI;
+- позже поверх graph можно добавить semantic search/indexing.
 
-Если нужен прямой mobile UI для заметок, это следующий отдельный слой поверх vault:
+Obsidian legacy web UI остаётся desktop/admin интерфейсом. Он не решает mobile editing хорошо, поэтому не является текущим рекомендуемым путём.
 
-- оставить Obsidian container как desktop/admin UI;
-- добавить web UI для Markdown vault, который рассчитан на мобильный браузер;
-- либо перейти на dedicated domain/TLS/auth и использовать нативный Obsidian-клиент с синхронизацией vault вне этого контейнера.
+## Security notes
+
+- `SearXNG` и `Logseq Publish` не имеют встроенной авторизации в этой схеме. Не публикуйте их в публичный интернет без reverse-proxy auth/firewall/VPN.
+- `SilverBullet` защищён `SB_USER`, но пароль всё равно должен быть сильным, а доступ лучше закрывать HTTPS и firewall.
+- `Jaeger` может раскрывать topology, session/run IDs и tool metadata. Не публикуйте Jaeger без доступа только для оператора.
+- Не используйте SSH tunnels как штатный deployment path. Нормальный путь — Caddy, domain/TLS, firewall и явная auth.
 
 ## Почему `agentd` пока не в Docker
 
@@ -510,6 +526,9 @@ TEAMD_CADDY_DOMAIN='example.com' ./scripts/deploy-teamd-containers.sh --with-obs
 - SearXNG Docker install: <https://docs.searxng.org/admin/installation-docker.html>
 - SearXNG reverse proxy subpath header `X-Script-Name`: <https://docs.searxng.org/admin/installation-nginx.html>
 - SearXNG MCP example project: <https://github.com/ihor-sokoliuk/mcp-searxng>
+- Logseq: <https://logseq.com/>
+- Logseq Publish SPA image used by deploy script: <https://github.com/l-trump/logseq-publish-spa>
+- SilverBullet: <https://silverbullet.md/>
 - LinuxServer Obsidian Docker image: <https://github.com/linuxserver/docker-obsidian>
 - MCPVault filesystem-backed Obsidian MCP: <https://github.com/bitbonsai/mcpvault>
 - Obsidian CLI skill: <https://github.com/kepano/obsidian-skills/blob/main/skills/obsidian-cli/SKILL.md>

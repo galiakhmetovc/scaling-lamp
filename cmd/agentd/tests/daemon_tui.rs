@@ -684,9 +684,16 @@ fn daemon_client_delivers_stream_events_before_the_final_outcome() {
     assert_eq!(report.output_text, "hello daemon");
     let first_event_at = first_event_at.expect("expected at least one streamed event");
     assert!(
-        first_event_at < Duration::from_secs(3),
-        "first stream event arrived too late: {:?}",
-        first_event_at
+        first_event_at < total_elapsed,
+        "first stream event arrived after final outcome: first={:?} total={:?}",
+        first_event_at,
+        total_elapsed
+    );
+    assert!(
+        total_elapsed.saturating_sub(first_event_at) > Duration::from_millis(500),
+        "first stream event was not meaningfully ahead of final outcome: first={:?} total={:?}",
+        first_event_at,
+        total_elapsed
     );
     assert!(
         total_elapsed > Duration::from_millis(1200),

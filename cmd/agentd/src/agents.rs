@@ -30,7 +30,7 @@ Core invariants:
 Self-learning:
 - Treat user corrections, repeated tool failures, successful workflows, and stable operator preferences as learning signals.
 - Do not rely on hidden memory. If something should persist, store it explicitly and make it inspectable by the operator.
-- Convert durable lessons through canonical teamD surfaces only: memory/knowledge tools, Obsidian/MCP notes, artifacts, docs, or approved skill/profile updates.
+- Convert durable lessons through canonical teamD surfaces only: memory/knowledge tools, Logseq graph notes, artifacts, docs, or approved skill/profile updates.
 - Before changing durable instructions, skills, SYSTEM.md, AGENTS.md, or docs, explain the intended change and use the proper edit/review path.
 - Prefer small reusable lessons over broad rules; include what failed or worked, the concrete correction, and when to apply it again.
 - Never treat one-off user preferences as global policy unless the user confirms they are durable.
@@ -69,11 +69,31 @@ const LEGACY_PROMPT_BUDGET_UPDATE_GUIDANCE_LINE: &str = "  - Use `prompt_budget_
 
 const DEFAULT_LEARNING_WORKSPACE_GUIDANCE_SECTION: &str = r#"- Self-learning and workspace hygiene:
   - Treat repeated tool failures, user corrections, and successful workflows as learning signals
-  - Record reusable lessons only in inspectable durable places: memory/knowledge tools, Obsidian/MCP notes, artifacts, docs, or approved skill/profile updates
+  - Record reusable lessons only in inspectable durable places: memory/knowledge tools, Logseq graph notes, artifacts, docs, or approved skill/profile updates
   - Do not rely on hidden memory; if a lesson matters for future work, make it explicit and operator-inspectable
   - Use a dedicated scratch path for temporary files; do not leave generated logs, experiments, downloads, or temp scripts in the workspace root
   - Clean up temporary files before finishing unless the user asked to keep them
-  - Keep durable outputs in canonical locations such as docs, artifacts, diagnostics, vault notes, or explicit project directories
+  - Keep durable outputs in canonical locations such as docs, artifacts, diagnostics, Logseq graph notes, or explicit project directories
+"#;
+
+const DEFAULT_LOGSEQ_GRAPH_GUIDANCE_SECTION: &str = r#"- Logseq graph:
+  - The canonical production knowledge graph path is `/var/lib/teamd/knowledge/logseq/teamd`
+  - Logseq Publish is the read-only web view; SilverBullet is the browser editor over the same Markdown files
+  - For knowledge-base work, use the `logseq-graph` skill when it is active; otherwise call `skill_list`/`skill_read` before making durable note changes
+  - Work inside the canonical graph path only; do not create a second graph at `~/vault`, `/root/vault`, `/var/lib/teamd/vault`, or inside a project workspace
+  - Before changing an existing note, read it first; preserve Markdown frontmatter, Logseq properties, page links, block refs, headings, and existing folder structure
+  - Use concise Markdown files and stable folders such as `00-Inbox`, `01-Projects`, `02-Areas`, `03-Resources`, `05-Journal`, `06-Tasks`, and `templates`
+"#;
+
+const LEGACY_OBSIDIAN_VAULT_GUIDANCE_SECTION: &str = r#"- Obsidian vault:
+  - The canonical production vault path is `/var/lib/teamd/vaults/teamd`
+  - `/var/lib/teamd/vault` is only a compatibility symlink for older `~/vault` instructions; do not create a separate vault there
+  - In the production service workspace `/var/lib/teamd`, the relative path `vault/...` resolves through that symlink to the canonical vault
+  - For Telegram/mobile knowledge-base work, use the enabled `obsidian` MCP connector first
+  - Search/read resources with `mcp_search_resources` and `mcp_read_resource`, then call discovered Obsidian tools by their exposed MCP tool names such as `mcp__obsidian__read_note`, `mcp__obsidian__write_note`, or `mcp__obsidian__search_notes` when present
+  - Do not use generic filesystem write tools for normal Obsidian note work; direct filesystem writes are only an emergency/admin fallback when the Obsidian MCP connector is unavailable and the user explicitly accepts the fallback
+  - Before changing an existing note, read it first; preserve Obsidian links, frontmatter, templates, and existing folder structure
+  - Use concise Markdown files and stable folders such as `00-Inbox`, `01-Projects`, `02-Areas`, `03-Resources`, `05-Journal`, `06-Tasks`, and `templates`
 "#;
 
 const DEFAULT_AGENTS_MD: &str = r#"Assistant agent profile.
@@ -144,22 +164,20 @@ Tool usage rules:
   - Use `knowledge_read` with bounded modes (`excerpt`, `full`) when you need the contents of a knowledge source
   - Use `session_search` to find relevant historical sessions before reopening old threads from memory
   - Use `session_read` with bounded modes (`summary`, `timeline`, `transcript`, `artifacts`) instead of assuming old session details
-- Obsidian vault:
-  - The canonical production vault path is `/var/lib/teamd/vaults/teamd`
-  - `/var/lib/teamd/vault` is only a compatibility symlink for older `~/vault` instructions; do not create a separate vault there
-  - In the production service workspace `/var/lib/teamd`, the relative path `vault/...` resolves through that symlink to the canonical vault
-  - For Telegram/mobile knowledge-base work, use the enabled `obsidian` MCP connector first
-  - Search/read resources with `mcp_search_resources` and `mcp_read_resource`, then call discovered Obsidian tools by their exposed MCP tool names such as `mcp__obsidian__read_note`, `mcp__obsidian__write_note`, or `mcp__obsidian__search_notes` when present
-  - Do not use generic filesystem write tools for normal Obsidian note work; direct filesystem writes are only an emergency/admin fallback when the Obsidian MCP connector is unavailable and the user explicitly accepts the fallback
-  - Before changing an existing note, read it first; preserve Obsidian links, frontmatter, templates, and existing folder structure
+- Logseq graph:
+  - The canonical production knowledge graph path is `/var/lib/teamd/knowledge/logseq/teamd`
+  - Logseq Publish is the read-only web view; SilverBullet is the browser editor over the same Markdown files
+  - For knowledge-base work, use the `logseq-graph` skill when it is active; otherwise call `skill_list`/`skill_read` before making durable note changes
+  - Work inside the canonical graph path only; do not create a second graph at `~/vault`, `/root/vault`, `/var/lib/teamd/vault`, or inside a project workspace
+  - Before changing an existing note, read it first; preserve Markdown frontmatter, Logseq properties, page links, block refs, headings, and existing folder structure
   - Use concise Markdown files and stable folders such as `00-Inbox`, `01-Projects`, `02-Areas`, `03-Resources`, `05-Journal`, `06-Tasks`, and `templates`
 - Self-learning and workspace hygiene:
   - Treat repeated tool failures, user corrections, and successful workflows as learning signals
-  - Record reusable lessons only in inspectable durable places: memory/knowledge tools, Obsidian/MCP notes, artifacts, docs, or approved skill/profile updates
+  - Record reusable lessons only in inspectable durable places: memory/knowledge tools, Logseq graph notes, artifacts, docs, or approved skill/profile updates
   - Do not rely on hidden memory; if a lesson matters for future work, make it explicit and operator-inspectable
   - Use a dedicated scratch path for temporary files; do not leave generated logs, experiments, downloads, or temp scripts in the workspace root
   - Clean up temporary files before finishing unless the user asked to keep them
-  - Keep durable outputs in canonical locations such as docs, artifacts, diagnostics, vault notes, or explicit project directories
+  - Keep durable outputs in canonical locations such as docs, artifacts, diagnostics, Logseq graph notes, or explicit project directories
 - Error handling:
   - If a tool returns an error, inspect the returned details, correct the arguments, and retry with the right tool
   - Do not claim success after a failed tool call
@@ -266,6 +284,125 @@ Resource notes should include: summary, key points, sources, related notes.
 - At the start of substantial work, search/read relevant project, area, or resource notes from the vault.
 - After an important decision or completed task, update the relevant project note or daily journal.
 - When a working note becomes stable documentation, offer to promote it into repository docs and commit it.
+"#;
+
+const DEFAULT_LOGSEQ_GRAPH_SKILL_MD: &str = r#"---
+name: logseq-graph
+description: Use when working with Logseq, SilverBullet, graph, PARA, projects, areas, resources, archive, notes, knowledge base, Markdown notes, daily notes, tasks, links, frontmatter, or Telegram-sourced knowledge capture.
+---
+
+# Logseq Graph
+
+Use this skill for Logseq/SilverBullet knowledge-base and personal knowledge management work.
+
+## Primary integration
+
+- Canonical production graph path: `/var/lib/teamd/knowledge/logseq/teamd`.
+- Logseq Publish is the read-only browser view of this graph.
+- SilverBullet is the browser editor over the same Markdown files.
+- There is no separate Logseq MCP path yet; normal note changes use canonical filesystem tools against the graph path.
+- Use direct filesystem writes only inside the canonical graph path and only after reading existing content first.
+- Do not write knowledge notes into project roots, `/root`, `/var/lib/teamd/vault`, or old Obsidian paths.
+
+## Graph contract
+
+- Treat the graph as the shared working knowledge layer for the agent and operator.
+- Do not use the graph as runtime state: transcripts, runs, tool calls, artifacts, schedules, approvals, audit logs, and SQLite state remain in `agentd`.
+- Do not treat graph notes as canonical repository documentation. Stable documentation still belongs in git under `docs/`; use graph notes for working notes, drafts, decisions, research, and project logs before promoting stable material to repo docs.
+- Future semantic search may index this graph. Write notes so they are useful for both humans and indexing: clear title, concise summary, stable headings, explicit links, and frontmatter when useful.
+- Preserve Logseq-friendly Markdown: page links, block refs, properties, tags, headings, checkboxes, and frontmatter.
+
+## PARA structure
+
+Use PARA as the default organization model:
+
+- `00-Inbox` — raw captures, quick ideas, unsorted Telegram notes, temporary input.
+- `01-Projects` — active outcomes with deadlines or clear finish conditions.
+- `02-Areas` — ongoing responsibilities without an end date.
+- `03-Resources` — reusable reference material, research, guides, snippets, domain notes.
+- `04-Archive` — inactive projects, old resources, completed or deprecated material.
+- `05-Journal` — dated daily notes, reviews, logs, and timeline entries.
+- `06-Tasks` — task notes when a task needs its own page.
+- `assets` — files embedded or linked from notes.
+- `templates` — reusable note templates.
+
+Daily notes should normally be `05-Journal/YYYY-MM-DD.md`. Do not create a separate `daily/` tree unless it already exists or the user asks for it.
+
+## Note workflow
+
+1. Search before creating a new note unless the user asks for a clearly new note.
+2. Read an existing note before editing it.
+3. Preserve frontmatter, Logseq properties, links, headings, tasks, and existing folder structure.
+4. Write concise Markdown with stable headings and meaningful filenames.
+5. After a write/update tool succeeds, summarize exactly what changed and where.
+6. If the tool fails, report the failure and retry with corrected arguments; do not claim the note was saved.
+
+## Common operations
+
+- Capture an idea: append/create a short note in `00-Inbox` with source and timestamp.
+- Create a task: create or update a note in `06-Tasks`, with checkboxes and priority.
+- Start a project: create `01-Projects/<project-name>.md` with goal, status, next actions, resources, and open questions.
+- Add a resource: create `03-Resources/<topic>.md` with summary, source links, and related notes.
+- Add a daily entry: update `05-Journal/YYYY-MM-DD.md`.
+- Process inbox: move or rewrite inbox items into Projects, Areas, Resources, Archive, or Tasks.
+- Complete work: update status, add result, then move inactive project notes to `04-Archive` only when the user agrees or completion is explicit.
+- Search: search existing notes before duplicating concepts.
+
+## Templates
+
+When creating new notes, use lightweight frontmatter when useful:
+
+```markdown
+---
+type: project|area|resource|task|daily|note
+status: active|waiting|done|archived
+created: YYYY-MM-DD
+updated: YYYY-MM-DD
+tags: []
+---
+```
+
+Project notes should include: goal, status, next actions, decisions, resources, log.
+Task notes should include: priority, status, checklist, context, result.
+Daily notes should include: date, focus, log, tasks, captures.
+Resource notes should include: summary, key points, sources, related notes.
+
+## Tags and Logseq syntax
+
+- Use tags sparingly: `#project`, `#area`, `#resource`, `#task`, `#daily`, `#inbox`, `#archive`.
+- Priority tags: `#p0`, `#p1`, `#p2`, `#p3` only when priority matters.
+- Prefer wikilinks like `[[note name]]` for internal relationships.
+- Preserve block refs like `((block-id))` and page embeds if they exist.
+- Use checkboxes `- [ ]` and `- [x]` for task lists.
+- Preserve existing links, aliases, headings, frontmatter, and Logseq properties.
+
+## Operating rules
+
+- Never delete or archive user material unless the user asked for it or the note clearly says it is ready to archive.
+- Do not invent completed tasks, sources, dates, or decisions.
+- If the target folder or naming convention is ambiguous, choose the closest PARA folder and state the assumption.
+- Keep note names stable and readable; avoid timestamp-only filenames except daily notes.
+- If a user message contains a durable fact, decision, task, or resource, offer to save it or save it directly when the request implies persistence.
+- At the start of substantial work, search/read relevant project, area, or resource notes from the graph.
+- After an important decision or completed task, update the relevant project note or daily journal.
+- When a working note becomes stable documentation, offer to promote it into repository docs and commit it.
+"#;
+
+const DEPRECATED_OBSIDIAN_VAULT_SKILL_MD: &str = r#"---
+name: obsidian-vault
+description: Deprecated compatibility skill for old Obsidian/vault wording. Use logseq-graph for current knowledge-base work.
+---
+
+# Deprecated Obsidian Vault Skill
+
+This skill is kept only so old sessions and operator commands do not break.
+
+- Current knowledge-base work must use `logseq-graph`.
+- Canonical production graph path: `/var/lib/teamd/knowledge/logseq/teamd`.
+- Logseq Publish provides the read-only web view.
+- SilverBullet provides browser editing over the same Markdown files.
+- Do not create new notes in `/var/lib/teamd/vaults/teamd`, `/var/lib/teamd/vault`, `~/vault`, or `/root/vault` unless the operator explicitly asks for legacy Obsidian recovery.
+- If this skill activates accidentally, call `skill_read` for `logseq-graph` and follow that skill instead.
 "#;
 
 const PRE_WORKING_KNOWLEDGE_OBSIDIAN_VAULT_SKILL_MD: &str = r#"---
@@ -703,8 +840,19 @@ pub fn ensure_builtin_agent_home_layout(
     if template.id == DEFAULT_AGENT_ID {
         sync_builtin_default_skill(
             agent_home,
+            "logseq-graph",
+            DEFAULT_LOGSEQ_GRAPH_SKILL_MD,
+            &[],
+        )?;
+        sync_builtin_default_skill(
+            agent_home,
             "obsidian-vault",
-            DEFAULT_OBSIDIAN_VAULT_SKILL_MD,
+            DEPRECATED_OBSIDIAN_VAULT_SKILL_MD,
+            &[
+                DEFAULT_OBSIDIAN_VAULT_SKILL_MD,
+                PRE_WORKING_KNOWLEDGE_OBSIDIAN_VAULT_SKILL_MD,
+                PRE_PARA_OBSIDIAN_VAULT_SKILL_MD,
+            ],
         )?;
     }
     Ok(())
@@ -714,17 +862,11 @@ fn sync_builtin_default_skill(
     agent_home: &Path,
     skill_name: &str,
     content: &str,
+    legacy_variants: &[&str],
 ) -> io::Result<()> {
     let skill_dir = agent_home.join("skills").join(skill_name);
     fs::create_dir_all(&skill_dir)?;
-    sync_builtin_prompt_file(
-        &skill_dir.join("SKILL.md"),
-        content,
-        &[
-            PRE_WORKING_KNOWLEDGE_OBSIDIAN_VAULT_SKILL_MD,
-            PRE_PARA_OBSIDIAN_VAULT_SKILL_MD,
-        ],
-    )
+    sync_builtin_prompt_file(&skill_dir.join("SKILL.md"), content, legacy_variants)
 }
 
 pub fn clone_agent_home(
@@ -841,6 +983,10 @@ fn previous_generated_default_agents_prompt_variants(current: &str) -> Vec<Strin
     ];
     let bases = [
         current.to_string(),
+        current.replace(
+            DEFAULT_LOGSEQ_GRAPH_GUIDANCE_SECTION,
+            LEGACY_OBSIDIAN_VAULT_GUIDANCE_SECTION,
+        ),
         current.replace(
             DEFAULT_PROMPT_BUDGET_UPDATE_GUIDANCE_LINE,
             LEGACY_PROMPT_BUDGET_UPDATE_GUIDANCE_LINE,
@@ -962,6 +1108,8 @@ mod tests {
         assert!(refreshed.contains("scope `next_turn`"));
         assert!(refreshed.contains("Use a dedicated scratch path"));
         assert!(refreshed.contains("Record reusable lessons"));
+        assert!(refreshed.contains("Logseq graph"));
+        assert!(refreshed.contains("/var/lib/teamd/knowledge/logseq/teamd"));
 
         fs::write(
             default_home.join("AGENTS.md"),
@@ -998,12 +1146,18 @@ mod tests {
             fs::read_to_string(default_home.join("AGENTS.md")).expect("read refreshed prompt");
         assert!(refreshed_pre_next_turn.contains("scope `next_turn`"));
 
-        let obsidian_skill =
+        let logseq_skill = fs::read_to_string(default_home.join("skills/logseq-graph/SKILL.md"))
+            .expect("read logseq skill");
+        assert!(logseq_skill.contains("name: logseq-graph"));
+        assert!(logseq_skill.contains("/var/lib/teamd/knowledge/logseq/teamd"));
+        assert!(logseq_skill.contains("SilverBullet"));
+        assert!(logseq_skill.contains("## PARA structure"));
+        assert!(logseq_skill.contains("04-Archive"));
+
+        let legacy_obsidian_skill =
             fs::read_to_string(default_home.join("skills/obsidian-vault/SKILL.md"))
-                .expect("read obsidian skill");
-        assert!(obsidian_skill.contains("name: obsidian-vault"));
-        assert!(obsidian_skill.contains("Use the `obsidian` MCP connector first"));
-        assert!(obsidian_skill.contains("## PARA structure"));
-        assert!(obsidian_skill.contains("04-Archive"));
+                .expect("read legacy obsidian skill");
+        assert!(legacy_obsidian_skill.contains("Deprecated"));
+        assert!(legacy_obsidian_skill.contains("logseq-graph"));
     }
 }

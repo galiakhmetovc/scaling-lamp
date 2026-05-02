@@ -323,12 +323,19 @@ fn build_from_config_refreshes_legacy_default_prompts_but_preserves_custom_edits
     assert!(refreshed_agents.contains("Use `autonomy_state_read`"));
     assert!(refreshed_agents.contains("Use `web_search` first"));
     assert!(refreshed_agents.contains("scope `next_turn`"));
+    assert!(refreshed_agents.contains("Logseq graph"));
+    assert!(refreshed_agents.contains("/var/lib/teamd/knowledge/logseq/teamd"));
+    let logseq_skill = fs::read_to_string(default_home.join("skills/logseq-graph/SKILL.md"))
+        .expect("read logseq skill");
+    assert!(logseq_skill.contains("name: logseq-graph"));
+    assert!(logseq_skill.contains("SilverBullet"));
+    assert!(logseq_skill.contains("## PARA structure"));
+    assert!(logseq_skill.contains("04-Archive"));
     let obsidian_skill = fs::read_to_string(default_home.join("skills/obsidian-vault/SKILL.md"))
         .expect("read obsidian skill");
     assert!(obsidian_skill.contains("name: obsidian-vault"));
-    assert!(obsidian_skill.contains("Use the `obsidian` MCP connector first"));
-    assert!(obsidian_skill.contains("## PARA structure"));
-    assert!(obsidian_skill.contains("04-Archive"));
+    assert!(obsidian_skill.contains("Deprecated"));
+    assert!(obsidian_skill.contains("logseq-graph"));
 
     fs::write(default_home.join("AGENTS.md"), "custom prompt preserved\n")
         .expect("write custom agents");

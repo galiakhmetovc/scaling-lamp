@@ -332,17 +332,37 @@ export TEAMD_OTLP_TIMEOUT_MS='2000'
 
 Это initial state для MCP runtime surface. Потом оператор может управлять коннекторами через TUI/HTTP/CLI.
 
-Автоматический Obsidian vault MCP connector добавляет второй deploy script:
+Текущий recommended knowledge add-on — Logseq graph + SilverBullet editor:
+
+```bash
+./scripts/deploy-teamd-containers.sh --with-logseq --with-silverbullet
+```
+
+Он не добавляет MCP connector: агент работает с canonical Markdown graph через штатные filesystem tools и `logseq-graph` skill.
+
+Ключевые env-переменные container deploy path:
+
+```bash
+TEAMD_LOGSEQ_GRAPH_DIR='/var/lib/teamd/knowledge/logseq/teamd'
+TEAMD_LOGSEQ_OUTPUT_DIR='/var/lib/teamd/containers/logseq/output'
+TEAMD_SILVERBULLET_PORT='8091'
+TEAMD_SILVERBULLET_HTTPS_PORT='8444'
+TEAMD_SILVERBULLET_USER='username:password'
+TEAMD_CADDY_DOMAIN='example.com'
+TEAMD_CADDY_HOST='31.130.128.89'
+```
+
+Без dedicated domain Logseq Publish публикуется как `http://127.0.0.1:8088/logseq/`, а SilverBullet — как отдельный HTTPS site `https://<host>:8444/`. С `TEAMD_CADDY_DOMAIN` используются `https://logseq.<domain>/` и `https://notes.<domain>/`.
+
+Legacy Obsidian vault MCP connector всё ещё можно добавить вторым deploy script:
 
 ```bash
 ./scripts/deploy-teamd-containers.sh --with-obsidian-mcp
 ```
 
-Этот connector работает через `stdio`: `agentd` запускает `docker run -i --rm ... node:22-alpine npx -y @bitbonsai/mcpvault@latest /vault`, где `/vault` — mount на `/var/lib/teamd/vaults/teamd`. Поэтому для базовой работы не нужен Obsidian Local REST API plugin и не нужен ручной клик в Obsidian UI.
+Этот connector работает через `stdio`: `agentd` запускает `docker run -i --rm ... node:22-alpine npx -y @bitbonsai/mcpvault@latest /vault`, где `/vault` — mount на `/var/lib/teamd/vaults/teamd`. Он нужен только для старых Obsidian vault workflows.
 
-По умолчанию без dedicated domain Obsidian запускается с `TEAMD_OBSIDIAN_SUBFOLDER=/obsidian/`. Значение должно быть пустым или иметь ведущий и завершающий `/`, иначе web route у контейнера будет некорректным.
-
-По умолчанию deploy script использует образ `lscr.io/linuxserver/obsidian:latest`. Его web UI внутри контейнера слушает `TEAMD_OBSIDIAN_CONTAINER_PORT=3000`, а наружу публикуется как `TEAMD_OBSIDIAN_PORT` и затем проксируется Caddy.
+По умолчанию без dedicated domain legacy Obsidian запускается с `TEAMD_OBSIDIAN_SUBFOLDER=/obsidian/`. Значение должно быть пустым или иметь ведущий и завершающий `/`, иначе web route у контейнера будет некорректным.
 
 Если Obsidian включён без `TEAMD_CADDY_DOMAIN`, deploy script автоматически включает `TEAMD_CADDY_HTTPS_PORT=8443` и переводит внешний доступ к `/obsidian/` на HTTPS, потому что Selkies/WebCodecs не работает в plain HTTP origin.
 
