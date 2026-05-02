@@ -1,4 +1,8 @@
 use super::backend::TelegramBackend;
+use super::bindings::{
+    TELEGRAM_SCOPE_GROUP, group_binding_record, private_binding_record,
+    transcript_is_after_binding_cursor,
+};
 use super::client::{TelegramClient, TelegramClientError};
 use super::commands::{
     ParsedTelegramCommand, TELEGRAM_INBOUND_QUEUE_MODE_COALESCE, TELEGRAM_INBOUND_QUEUE_MODE_QUEUE,
@@ -53,8 +57,6 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use teloxide::types::{Message, Update, UpdateKind, User};
 
 const TELEGRAM_CONSUMER_DEFAULT: &str = "telegram-main";
-const TELEGRAM_SCOPE_PRIVATE: &str = "private";
-const TELEGRAM_SCOPE_GROUP: &str = "group";
 const TELEGRAM_PAIRING_STATUS_PENDING: &str = "pending";
 const TELEGRAM_PAIRING_STATUS_ACTIVATED: &str = "activated";
 const TELEGRAM_CHAT_STATUS_ACTIVE: &str = "active";
@@ -1610,32 +1612,17 @@ where
         let existing = self.with_store_retry(|store| store.get_telegram_chat_binding(chat_id))?;
         let cursor =
             self.binding_cursor_for_selection(existing.as_ref(), selected_session_id.as_deref())?;
-        let existing_created_at = existing
-            .as_ref()
-            .map(|record| record.created_at)
-            .unwrap_or(now);
-        let cursor_created_at = cursor.created_at;
-        let cursor_transcript_id = cursor.transcript_id;
-        self.with_store_retry(|store| {
-            store.put_telegram_chat_binding(&TelegramChatBindingRecord {
-                telegram_chat_id: chat_id,
-                scope: TELEGRAM_SCOPE_PRIVATE.to_string(),
-                owner_telegram_user_id: Some(telegram_user_id),
-                selected_session_id: selected_session_id.clone(),
-                last_delivered_transcript_created_at: cursor_created_at,
-                last_delivered_transcript_id: cursor_transcript_id.clone(),
-                inbound_queue_mode: existing
-                    .as_ref()
-                    .map(|record| record.inbound_queue_mode.clone())
-                    .unwrap_or_else(|| self.app.config.telegram.inbound_queue_default_mode.clone()),
-                inbound_coalesce_window_ms: existing
-                    .as_ref()
-                    .and_then(|record| record.inbound_coalesce_window_ms),
-                created_at: existing_created_at,
-                updated_at: now,
-            })
-        })
-        .map(|_| ())
+        let binding = private_binding_record(
+            chat_id,
+            telegram_user_id,
+            selected_session_id,
+            now,
+            existing.as_ref(),
+            cursor,
+            &self.app.config.telegram.inbound_queue_default_mode,
+        );
+        self.with_store_retry(|store| store.put_telegram_chat_binding(&binding))
+            .map(|_| ())
     }
 
     fn put_group_binding(
@@ -1647,32 +1634,16 @@ where
         let existing = self.with_store_retry(|store| store.get_telegram_chat_binding(chat_id))?;
         let cursor =
             self.binding_cursor_for_selection(existing.as_ref(), selected_session_id.as_deref())?;
-        let existing_created_at = existing
-            .as_ref()
-            .map(|record| record.created_at)
-            .unwrap_or(now);
-        let cursor_created_at = cursor.created_at;
-        let cursor_transcript_id = cursor.transcript_id;
-        self.with_store_retry(|store| {
-            store.put_telegram_chat_binding(&TelegramChatBindingRecord {
-                telegram_chat_id: chat_id,
-                scope: TELEGRAM_SCOPE_GROUP.to_string(),
-                owner_telegram_user_id: None,
-                selected_session_id: selected_session_id.clone(),
-                last_delivered_transcript_created_at: cursor_created_at,
-                last_delivered_transcript_id: cursor_transcript_id.clone(),
-                inbound_queue_mode: existing
-                    .as_ref()
-                    .map(|record| record.inbound_queue_mode.clone())
-                    .unwrap_or_else(|| self.app.config.telegram.inbound_queue_default_mode.clone()),
-                inbound_coalesce_window_ms: existing
-                    .as_ref()
-                    .and_then(|record| record.inbound_coalesce_window_ms),
-                created_at: existing_created_at,
-                updated_at: now,
-            })
-        })
-        .map(|_| ())
+        let binding = group_binding_record(
+            chat_id,
+            selected_session_id,
+            now,
+            existing.as_ref(),
+            cursor,
+            &self.app.config.telegram.inbound_queue_default_mode,
+        );
+        self.with_store_retry(|store| store.put_telegram_chat_binding(&binding))
+            .map(|_| ())
     }
 
     fn ensure_chat_delivery_cursor_initialized(
@@ -2593,19 +2564,6 @@ fn render_session_operator_status(
     lines.push(String::new());
     lines.push(active_run.to_string());
     lines.join("\n")
-}
-
-fn transcript_is_after_binding_cursor(
-    transcript: &TranscriptRecord,
-    binding: &TelegramChatBindingRecord,
-) -> bool {
-    let cursor_created_at = binding.last_delivered_transcript_created_at.unwrap_or(0);
-    let cursor_id = binding
-        .last_delivered_transcript_id
-        .as_deref()
-        .unwrap_or("");
-    transcript.created_at > cursor_created_at
-        || (transcript.created_at == cursor_created_at && transcript.id.as_str() > cursor_id)
 }
 
 fn map_client_error(error: TelegramClientError) -> BootstrapError {

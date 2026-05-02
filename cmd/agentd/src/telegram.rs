@@ -1,4 +1,5 @@
 pub mod backend;
+pub(crate) mod bindings;
 pub mod client;
 pub(crate) mod commands;
 pub(crate) mod delivery;
