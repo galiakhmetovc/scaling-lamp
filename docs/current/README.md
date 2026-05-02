@@ -33,6 +33,7 @@
 10. [13-observability-tracing-plan.md](13-observability-tracing-plan.md)
 11. [14-container-addons.md](14-container-addons.md)
 12. [15-tool-reference.md](15-tool-reference.md)
+13. [16-refactoring-audit-and-plan.md](16-refactoring-audit-and-plan.md)
 
 ## Словарь
 
