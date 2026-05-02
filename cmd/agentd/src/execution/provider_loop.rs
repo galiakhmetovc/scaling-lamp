@@ -10,6 +10,10 @@ use super::provider_ledger::{
     ToolCallLedgerUpdate, ToolCallResultLedgerUpdate, record_provider_round_trace,
     record_tool_call_ledger, record_tool_call_result,
 };
+use super::provider_prompt::{
+    AutoCompactionDecision, PromptMessages, PromptMessagesRequest, estimate_prompt_tokens,
+    recent_tool_activity_entry, session_head_runtime,
+};
 use super::provider_text::truncate_utf8_bytes;
 use super::*;
 use crate::agents;
@@ -19,7 +23,7 @@ use crate::store_retry::{
 };
 use agent_persistence::{
     ArtifactRecord, ArtifactRepository, ContextOffloadRepository, FileDeliveryRepository,
-    FileDeliveryRequestRecord, ToolCallRecord, ToolCallRepository,
+    FileDeliveryRequestRecord, ToolCallRepository,
 };
 use agent_runtime::context::{
     CompactionPolicy, ContextOffloadSnapshot, ContextSummary, approximate_token_count,
@@ -28,7 +32,7 @@ use agent_runtime::permission::PermissionAction;
 use agent_runtime::plan::{PlanItem, PlanItemStatus, PlanSnapshot};
 use agent_runtime::prompt::{
     AutonomyState, PromptAssembly, PromptAssemblyBudget, PromptAssemblyInput, RecentToolActivity,
-    RecentToolActivityEntry, SessionHeadRuntime,
+    SessionHeadRuntime,
 };
 use agent_runtime::provider::{
     ProviderError, ProviderMessage, ProviderRequest, ProviderResponse, ProviderStreamEvent,
@@ -81,42 +85,6 @@ pub(super) struct ProviderToolCallInvocation<'a> {
     pub(super) tool_call_id: &'a str,
     pub(super) arguments_json: &'a str,
     pub(super) parsed: &'a ToolCall,
-}
-
-#[derive(Debug, Clone)]
-struct PromptMessages {
-    messages: Vec<ProviderMessage>,
-    context_offload: Option<ContextOffloadSnapshot>,
-}
-
-struct PromptMessagesRequest<'a> {
-    session_id: &'a str,
-    workspace: &'a WorkspaceRef,
-    model: Option<&'a str>,
-    instructions: Option<&'a str>,
-    consume_next_turn_prompt_budget: bool,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq)]
-struct AutoCompactionDecision {
-    estimated_prompt_tokens: u32,
-    trigger_threshold_tokens: u32,
-    context_window_tokens: u32,
-}
-
-fn recent_tool_activity_entry(record: ToolCallRecord) -> RecentToolActivityEntry {
-    let summary = record
-        .result_summary
-        .clone()
-        .filter(|value| !value.trim().is_empty())
-        .unwrap_or(record.summary);
-    RecentToolActivityEntry {
-        status: record.status,
-        tool_name: record.tool_name,
-        summary,
-        artifact_id: record.result_artifact_id,
-        error: record.error,
-    }
 }
 
 #[derive(Debug, Clone)]
@@ -477,41 +445,24 @@ impl ExecutionService {
         })
     }
 
-    fn estimate_prompt_tokens(messages: &[ProviderMessage], instructions: Option<&str>) -> u32 {
-        let instruction_tokens = instructions.map_or(0, approximate_token_count);
-        instruction_tokens.saturating_add(
-            messages
-                .iter()
-                .map(|message| approximate_token_count(&message.content))
-                .sum::<u32>(),
-        )
-    }
-
     fn session_head_runtime(
         &self,
         provider: Option<&dyn ProviderDriver>,
         session: &Session,
         model: Option<&str>,
     ) -> SessionHeadRuntime {
-        let resolved_model = model
-            .map(str::to_string)
-            .or_else(|| session.settings.model.clone())
-            .or_else(|| provider.and_then(|provider| provider.descriptor().default_model.clone()));
         let context_window_tokens =
             provider.and_then(|provider| self.resolve_context_window_tokens(provider, model));
         let auto_compaction_trigger_ratio = Some(self.config.context_auto_compaction_trigger_ratio);
-        SessionHeadRuntime {
-            provider_name: provider.map(|provider| provider.descriptor().name.clone()),
-            model: resolved_model,
-            think_level: session.settings.think_level.clone(),
+        session_head_runtime(
+            provider.map(|provider| provider.descriptor().name.clone()),
+            provider.and_then(|provider| provider.descriptor().default_model.clone()),
+            session.settings.model.clone(),
+            model,
+            session.settings.think_level.clone(),
             context_window_tokens,
             auto_compaction_trigger_ratio,
-            usable_context_tokens: SessionHeadRuntime::usable_context_tokens(
-                context_window_tokens,
-                auto_compaction_trigger_ratio,
-            ),
-            estimated_prompt_tokens: None,
-        }
+        )
     }
 
     fn prompt_budget_context_window_tokens(
@@ -1043,7 +994,7 @@ impl ExecutionService {
             },
         )?;
         let estimated_prompt_tokens =
-            Self::estimate_prompt_tokens(&prompt_messages.messages, instructions);
+            estimate_prompt_tokens(&prompt_messages.messages, instructions);
         let trigger_threshold_tokens = ((context_window_tokens as f64)
             * self.config.context_auto_compaction_trigger_ratio)
             .floor() as u32;
@@ -1299,7 +1250,7 @@ impl ExecutionService {
             PromptAssembly::build_messages_with_budget(input.clone(), prompt_budget.clone());
         if let Some(session_head) = input.session_head.as_mut() {
             session_head.estimated_prompt_tokens =
-                Some(Self::estimate_prompt_tokens(&first_messages, instructions));
+                Some(estimate_prompt_tokens(&first_messages, instructions));
         }
 
         Ok(PromptMessages {
