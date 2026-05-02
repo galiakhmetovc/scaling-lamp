@@ -550,6 +550,8 @@ teamdctl telegram pairings
 
 Агент тоже может отправить файл сам через canonical tool `deliver_file`. Это не Telegram-specific tool: runtime ставит delivery request в очередь, а Telegram worker после текущего ответа отправляет документ в активный chat.
 
+Если `deliver_file` вернул `status=queued`, это успешная постановка в очередь. Финальная доставка происходит после ответа модели. Если Telegram `sendDocument` вернёт ошибку, worker помечает request как `failed`, пишет audit event и отправляет в этот же chat короткое сообщение с именем файла и причиной сбоя.
+
 Примеры model-facing вызова:
 
 ```json

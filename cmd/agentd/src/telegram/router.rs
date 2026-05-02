@@ -1443,7 +1443,8 @@ where
                 .deliver_queued_file_request(chat_id, session_id, &request, trace, now)
                 .await
             {
-                self.mark_file_delivery_request_failed(&request, error.to_string(), now)?;
+                let error_message = error.to_string();
+                self.mark_file_delivery_request_failed(&request, error_message.clone(), now)?;
                 DiagnosticEventBuilder::new(
                     &self.app.config,
                     "error",
@@ -1458,8 +1459,33 @@ where
                 .field("session_id", session_id)
                 .field("delivery_request_id", request.id.as_str())
                 .field("artifact_id", request.artifact_id.as_str())
-                .error(error.to_string())
+                .error(error_message.clone())
                 .emit(&self.audit);
+                if let Err(notify_error) = self
+                    .send_html_delivered_with_trace(
+                        chat_id,
+                        &render_file_delivery_failed_html(&request.file_name, &error_message),
+                        trace,
+                    )
+                    .await
+                {
+                    DiagnosticEventBuilder::new(
+                        &self.app.config,
+                        "warn",
+                        "telegram",
+                        "file_delivery.notify_failed",
+                        "telegram file delivery failure notification failed",
+                    )
+                    .surface("telegram")
+                    .entrypoint("telegram")
+                    .outcome("error")
+                    .field("chat_id", chat_id)
+                    .field("session_id", session_id)
+                    .field("delivery_request_id", request.id.as_str())
+                    .field("artifact_id", request.artifact_id.as_str())
+                    .error(notify_error.to_string())
+                    .emit(&self.audit);
+                }
             }
         }
         Ok(())
@@ -2769,13 +2795,27 @@ fn render_status_detail(summary: &str) -> String {
 
 fn telegram_delivery_error_is_permanent(error: &TelegramClientError) -> bool {
     let message = error.to_string();
-    message.contains("MESSAGE_TOO_LONG")
+    message.contains("MESSAGE_TOO_LONG") || message.contains("Bad Request")
 }
 
 fn escape_telegram_html(text: &str) -> String {
     text.replace('&', "&amp;")
         .replace('<', "&lt;")
         .replace('>', "&gt;")
+}
+
+fn render_file_delivery_failed_html(file_name: &str, error: &str) -> String {
+    [
+        "<b>⚠️ Файл не отправлен</b>".to_string(),
+        "Не удалось отправить файл через Telegram.".to_string(),
+        format!(
+            "Файл: <code>{}</code>",
+            escape_telegram_html(file_name.trim())
+        ),
+        format!("Деталь: {}", render_status_detail(error)),
+        "Запрос доставки помечен как failed; файл остался artifact'ом текущей session.".to_string(),
+    ]
+    .join("\n")
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

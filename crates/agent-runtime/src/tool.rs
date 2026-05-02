@@ -2536,7 +2536,7 @@ impl ToolCatalog {
             ToolDefinition {
                 name: ToolName::DeliverFile,
                 family: ToolFamily::Offload,
-                description: "Queue an existing session artifact or workspace file for delivery to the current operator surface; Telegram delivers it as a document when the current chat supports file delivery.",
+                description: "Queue an existing session artifact or workspace file for delivery to the current operator surface. Use this when the user asks to receive a file. A successful tool result means status=queued, not delivered yet; Telegram sends queued files as documents after the current turn and reports delivery failures to the chat. Do not invent Obsidian/vault fallback paths.",
                 policy: ToolPolicy {
                     read_only: false,
                     destructive: false,
@@ -5431,7 +5431,7 @@ impl ToolOutput {
                 "file_name": output.file_name,
                 "caption": output.caption,
                 "status": output.status,
-                "delivery_note": "queued for the current operator surface; Telegram sends queued files as documents after the current turn"
+                "delivery_note": "queued for the current operator surface; queued is success, not final delivery; Telegram sends queued files as documents after the current turn and reports delivery failures to the chat; do not invent Obsidian/vault fallback paths"
             })
             .to_string(),
             Self::KnowledgeSearch(output) => json!({
@@ -6290,8 +6290,8 @@ impl ToolName {
             Self::DeliverFile => json!({
                 "type": "object",
                 "properties": {
-                    "artifact_id": { "type": ["string", "null"], "description": "Existing artifact id from the current session to send. Use either artifact_id or workspace_path, not both." },
-                    "workspace_path": { "type": ["string", "null"], "description": "Relative workspace file path to send. The runtime first stores it as a session artifact. Use either workspace_path or artifact_id, not both." },
+                    "artifact_id": { "type": ["string", "null"], "description": "Existing artifact id from the current session to send. Use either artifact_id or workspace_path, not both. Do not pass host paths or files from another session." },
+                    "workspace_path": { "type": ["string", "null"], "description": "Relative workspace file path to send. The runtime first stores it as a session artifact. Use either workspace_path or artifact_id, not both. For generated files, create them inside the current workspace first." },
                     "file_name": { "type": ["string", "null"], "description": "Optional outward filename. Defaults to artifact metadata file_name or the workspace file name." },
                     "caption": { "type": ["string", "null"], "description": "Optional short caption shown with the document." },
                     "target": { "type": ["string", "null"], "enum": ["current_chat", null], "description": "Delivery target. Defaults to current_chat." }

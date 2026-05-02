@@ -208,6 +208,8 @@ Approval — это не отдельная мини-сессия. Это сос
 - модель передаёт `artifact_id` текущей session или `workspace_path` внутри текущего workspace;
 - runtime ставит delivery request в SQLite, а не вызывает Telegram напрямую из provider loop;
 - Telegram surface после финального ответа отправляет queued request через `sendDocument`;
+- `status=queued` в tool output — это успех постановки в очередь, не ошибка и не доказательство финальной доставки;
+- если `sendDocument` падает, Telegram worker помечает request как `failed`, пишет audit event и отправляет оператору отдельное сообщение о неудачной доставке;
 - TUI/CLI/HTTP остаются thin surfaces над тем же runtime state и не получают отдельный tool loop.
 
 Это важно для архитектуры: агент просит “доставить файл текущему оператору”, а конкретная surface решает, как это сделать.

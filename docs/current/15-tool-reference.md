@@ -842,6 +842,8 @@ deliver_file({
 - `caption`;
 - `status = "queued"`.
 
+`queued` означает успешную постановку в очередь, а не финальную доставку. Telegram отправляет queued files после текущего ответа модели через `sendDocument`. Если `sendDocument` падает, Telegram worker помечает request как `failed`, пишет ошибку в audit и отправляет в чат отдельное сообщение о неудачной доставке. Агент не должен объявлять `queued` ошибкой и не должен придумывать fallback вроде “сохранил в Obsidian vault”.
+
 Когда использовать:
 
 - когда пользователь просит “пришли файл/отчёт/экспорт”;
@@ -852,6 +854,7 @@ deliver_file({
 Важные ограничения:
 
 - это не Telegram-specific tool и не принимает host paths;
+- для сгенерированного файла сначала создай файл внутри текущего workspace, затем вызови `deliver_file` с `workspace_path`;
 - unsupported surfaces могут только показать actionable queued/result state, а не выполнить `sendDocument`;
 - Telegram worker доставляет queued requests после текущего chat turn;
 - ошибки `missing artifact` и `artifact from another session` возвращаются модели как non-retryable tool error, чтобы она могла выбрать правильный файл.

@@ -217,6 +217,8 @@ fn automatic_model_definitions_include_file_delivery_tool() {
     assert!(!definition.policy.destructive);
     assert!(!definition.policy.requires_approval);
     assert!(definition.description.contains("current operator surface"));
+    assert!(definition.description.contains("status=queued"));
+    assert!(definition.description.contains("Do not invent Obsidian"));
     assert!(
         definition
             .openai_function_schema()
