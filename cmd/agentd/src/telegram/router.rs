@@ -20,7 +20,7 @@ use agent_persistence::{
     TranscriptRecord, TranscriptRepository, audit::AuditLogConfig,
 };
 use serde_json::json;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 use std::future::Future;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -41,6 +41,7 @@ const TELEGRAM_STATUS_TTL_SECONDS: i64 = 30 * 60;
 const TELEGRAM_DELIVERY_RETRY_ATTEMPTS: usize = 3;
 const TELEGRAM_DELIVERY_RETRY_BASE_DELAY_MS: u64 = 250;
 const TELEGRAM_STATUS_DETAIL_CHAR_CAP: usize = 700;
+const TELEGRAM_CHAT_TURN_FAST_SETTLE_MILLIS: u64 = 50;
 
 static TELEGRAM_PAIRING_COUNTER: AtomicU64 = AtomicU64::new(0);
 
@@ -108,6 +109,7 @@ pub struct TelegramWorker<B> {
     audit: AuditLogConfig,
     bot_username: Arc<Mutex<Option<String>>>,
     delivery_limiter: Arc<Mutex<TelegramDeliveryLimiter>>,
+    active_chat_turns: Arc<Mutex<HashSet<String>>>,
 }
 
 impl<B> TelegramWorker<B>
@@ -133,6 +135,7 @@ where
             audit,
             bot_username: Arc::new(Mutex::new(None)),
             delivery_limiter: Arc::new(Mutex::new(TelegramDeliveryLimiter::default())),
+            active_chat_turns: Arc::new(Mutex::new(HashSet::new())),
         }
     }
 
@@ -269,24 +272,8 @@ where
         let session = self
             .resolve_or_create_private_session(chat_id, telegram_user_id(from)?, now)
             .await?;
-        let ack = self.send_temporary_status_message(chat_id, now).await?;
-        let result = self
-            .execute_chat_turn(chat_id, ack.id.0, session.id.clone(), text.to_string(), now)
-            .await;
-
-        match result {
-            Ok(report) => {
-                self.deliver_chat_report(chat_id, &report, ack.id.0, now)
-                    .await?;
-                self.mark_chat_delivered_to_latest_transcript(chat_id, report.session_id.as_str())?;
-                Ok(())
-            }
-            Err(error) => {
-                self.fail_temporary_status_message(chat_id, ack.id.0, &error.to_string(), now)
-                    .await?;
-                Ok(())
-            }
-        }
+        self.start_chat_turn_background(chat_id, session.id, text.to_string(), now)
+            .await
     }
 
     async fn handle_group_message(
@@ -330,24 +317,8 @@ where
 
         let now = unix_timestamp()?;
         let session = self.resolve_or_create_group_session(chat_id, now).await?;
-        let ack = self.send_temporary_status_message(chat_id, now).await?;
-        let result = self
-            .execute_chat_turn(chat_id, ack.id.0, session.id.clone(), content, now)
-            .await;
-
-        match result {
-            Ok(report) => {
-                self.deliver_chat_report(chat_id, &report, ack.id.0, now)
-                    .await?;
-                self.mark_chat_delivered_to_latest_transcript(chat_id, report.session_id.as_str())?;
-                Ok(())
-            }
-            Err(error) => {
-                self.fail_temporary_status_message(chat_id, ack.id.0, &error.to_string(), now)
-                    .await?;
-                Ok(())
-            }
-        }
+        self.start_chat_turn_background(chat_id, session.id, content, now)
+            .await
     }
 
     async fn handle_file_message(
@@ -389,24 +360,8 @@ where
             .map(str::trim)
             .filter(|value| !value.is_empty());
         let turn_input = render_uploaded_file_turn_input(&artifact, &file, caption);
-        let ack = self.send_temporary_status_message(chat_id, now).await?;
-        let result = self
-            .execute_chat_turn(chat_id, ack.id.0, session.id.clone(), turn_input, now)
-            .await;
-
-        match result {
-            Ok(report) => {
-                self.deliver_chat_report(chat_id, &report, ack.id.0, now)
-                    .await?;
-                self.mark_chat_delivered_to_latest_transcript(chat_id, report.session_id.as_str())?;
-                Ok(())
-            }
-            Err(error) => {
-                self.fail_temporary_status_message(chat_id, ack.id.0, &error.to_string(), now)
-                    .await?;
-                Ok(())
-            }
-        }
+        self.start_chat_turn_background(chat_id, session.id, turn_input, now)
+            .await
     }
 
     async fn handle_group_command(
@@ -1367,6 +1322,14 @@ where
         message_id: i32,
         now: i64,
     ) -> Result<(), BootstrapError> {
+        let status_is_current = self.with_store_retry(|store| {
+            Ok(store
+                .get_telegram_chat_status(chat_id)?
+                .is_some_and(|status| status.message_id == message_id))
+        })?;
+        if !status_is_current {
+            return Ok(());
+        }
         self.put_chat_status_record(
             chat_id,
             message_id,
@@ -2127,6 +2090,119 @@ where
         } else {
             Ok(summary)
         }
+    }
+
+    async fn start_chat_turn_background(
+        &self,
+        chat_id: i64,
+        session_id: String,
+        message: String,
+        now: i64,
+    ) -> Result<(), BootstrapError> {
+        if !self.mark_chat_turn_active(&session_id) {
+            self.send_text_chunks(
+                chat_id,
+                "A turn is already running in this session. Use /status to inspect it, /stop to stop the active turn, or /cancel to cancel queued work.",
+            )
+            .await?;
+            return Ok(());
+        }
+
+        let ack = match self.send_temporary_status_message(chat_id, now).await {
+            Ok(ack) => ack,
+            Err(error) => {
+                self.clear_chat_turn_active(&session_id);
+                return Err(error);
+            }
+        };
+
+        let worker = self.clone();
+        let cleanup_session_id = session_id.clone();
+        let task = tokio::spawn(async move {
+            let task_result = worker
+                .finish_chat_turn_background(chat_id, ack.id.0, session_id, message, now)
+                .await;
+            worker.clear_chat_turn_active(&cleanup_session_id);
+            if let Err(error) = task_result {
+                DiagnosticEventBuilder::new(
+                    &worker.app.config,
+                    "error",
+                    "telegram",
+                    "chat_turn.background_error",
+                    "telegram chat turn background delivery failed",
+                )
+                .error(error.to_string())
+                .field("chat_id", chat_id)
+                .emit(&worker.audit);
+            }
+        });
+
+        tokio::select! {
+            result = task => {
+                if let Err(error) = result {
+                    DiagnosticEventBuilder::new(
+                        &self.app.config,
+                        "error",
+                        "telegram",
+                        "chat_turn.background_join_error",
+                        "telegram chat turn background task failed",
+                    )
+                    .error(error.to_string())
+                    .field("chat_id", chat_id)
+                    .emit(&self.audit);
+                }
+            }
+            _ = tokio::time::sleep(Duration::from_millis(TELEGRAM_CHAT_TURN_FAST_SETTLE_MILLIS)) => {}
+        }
+
+        Ok(())
+    }
+
+    async fn finish_chat_turn_background(
+        &self,
+        chat_id: i64,
+        status_message_id: i32,
+        session_id: String,
+        message: String,
+        now: i64,
+    ) -> Result<(), BootstrapError> {
+        match self
+            .execute_chat_turn(chat_id, status_message_id, session_id, message, now)
+            .await
+        {
+            Ok(report) => {
+                let finished_at = unix_timestamp().unwrap_or(now);
+                self.deliver_chat_report(chat_id, &report, status_message_id, finished_at)
+                    .await?;
+                self.mark_chat_delivered_to_latest_transcript(chat_id, report.session_id.as_str())?;
+                Ok(())
+            }
+            Err(error) => {
+                let finished_at = unix_timestamp().unwrap_or(now);
+                self.fail_temporary_status_message(
+                    chat_id,
+                    status_message_id,
+                    &error.to_string(),
+                    finished_at,
+                )
+                .await?;
+                Ok(())
+            }
+        }
+    }
+
+    fn mark_chat_turn_active(&self, session_id: &str) -> bool {
+        self.active_chat_turns
+            .lock()
+            .expect("active telegram chat turns")
+            .insert(session_id.to_string())
+    }
+
+    fn clear_chat_turn_active(&self, session_id: &str) {
+        self.active_chat_turns
+            .lock()
+            .expect("active telegram chat turns")
+            .remove(session_id);
     }
 
     async fn execute_chat_turn(

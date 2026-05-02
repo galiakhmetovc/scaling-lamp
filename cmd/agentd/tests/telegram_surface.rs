@@ -20,7 +20,7 @@ use std::io::{Read, Write};
 use std::net::TcpListener;
 use std::path::PathBuf;
 use std::sync::mpsc::{self, Receiver};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Condvar, Mutex};
 use std::thread;
 use std::time::Duration;
 
@@ -63,6 +63,13 @@ struct RecordingTelegramBackendState {
     next_chat_output: String,
     response_delay_ms: u64,
     execution_events: Vec<(u64, ChatExecutionEvent)>,
+    chat_turn_blocker: Option<ChatTurnBlocker>,
+}
+
+#[derive(Debug, Clone)]
+struct ChatTurnBlocker {
+    started: mpsc::Sender<()>,
+    release: Arc<(Mutex<bool>, Condvar)>,
 }
 
 impl RecordingTelegramBackend {
@@ -305,7 +312,16 @@ impl TelegramBackend for RecordingTelegramBackend {
         let response_delay_ms = state.response_delay_ms;
         let execution_events = state.execution_events.clone();
         let output_text = state.next_chat_output.clone();
+        let chat_turn_blocker = state.chat_turn_blocker.clone();
         drop(state);
+        if let Some(blocker) = chat_turn_blocker {
+            let _ = blocker.started.send(());
+            let (released, condvar) = &*blocker.release;
+            let mut released = released.lock().expect("chat turn release lock");
+            while !*released {
+                released = condvar.wait(released).expect("chat turn release wait");
+            }
+        }
         for (delay_ms, event) in execution_events {
             thread::sleep(Duration::from_millis(delay_ms));
             observer(event);
@@ -834,6 +850,144 @@ fn telegram_worker_routes_session_operator_commands_to_backend() {
         .recv_timeout(Duration::from_secs(2))
         .expect("captured compact response");
     assert!(compact.body.contains("compactifications=1"));
+
+    handle.join().expect("join fake api");
+}
+
+#[test]
+fn telegram_worker_processes_status_and_stop_while_chat_turn_is_running() {
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("runtime");
+    let (_temp, app) = telegram_test_app();
+    seed_activated_pairing(&app, "pair-running-operator", 777, 42);
+    seed_binding(&app, 42, 777, Some("session-running"));
+
+    let (started_sender, started_receiver) = mpsc::channel();
+    let release = Arc::new((Mutex::new(false), Condvar::new()));
+    let backend = RecordingTelegramBackend::with_state(RecordingTelegramBackendState {
+        session_lookup: BTreeMap::from([(
+            "session-running".to_string(),
+            session_summary("session-running", "Running", true),
+        )]),
+        active_run_status: "Ход:\n- статус: running".to_string(),
+        next_chat_output: "Long turn completed.".to_string(),
+        chat_turn_blocker: Some(ChatTurnBlocker {
+            started: started_sender,
+            release: release.clone(),
+        }),
+        ..RecordingTelegramBackendState::default()
+    });
+    let backend_state = backend.state();
+    let (api_url, requests, handle) = spawn_fake_telegram_api(vec![
+        json_response(
+            r#"{"ok":true,"result":[{"update_id":150,"message":{"message_id":125,"date":0,"chat":{"id":42,"type":"private"},"from":{"id":777,"is_bot":false,"first_name":"Alice","username":"alice"},"text":"start a long task"}}]}"#,
+        ),
+        json_response(
+            r#"{"ok":true,"result":{"message_id":126,"date":0,"chat":{"id":42,"type":"private"},"text":"working"}}"#,
+        ),
+        json_response(
+            r#"{"ok":true,"result":[
+                {"update_id":151,"message":{"message_id":127,"date":0,"chat":{"id":42,"type":"private"},"from":{"id":777,"is_bot":false,"first_name":"Alice","username":"alice"},"text":"/status"}},
+                {"update_id":152,"message":{"message_id":128,"date":0,"chat":{"id":42,"type":"private"},"from":{"id":777,"is_bot":false,"first_name":"Alice","username":"alice"},"text":"/stop"}},
+                {"update_id":153,"message":{"message_id":129,"date":0,"chat":{"id":42,"type":"private"},"from":{"id":777,"is_bot":false,"first_name":"Alice","username":"alice"},"text":"/cancel"}}
+            ]}"#,
+        ),
+        json_response(r#"{"ok":true,"result":true}"#),
+        json_response(
+            r#"{"ok":true,"result":{"message_id":130,"date":0,"chat":{"id":42,"type":"private"},"text":"status"}}"#,
+        ),
+        json_response(
+            r#"{"ok":true,"result":{"message_id":131,"date":0,"chat":{"id":42,"type":"private"},"text":"stop"}}"#,
+        ),
+        json_response(
+            r#"{"ok":true,"result":{"message_id":132,"date":0,"chat":{"id":42,"type":"private"},"text":"cancel"}}"#,
+        ),
+        json_response(
+            r#"{"ok":true,"result":{"message_id":133,"date":0,"chat":{"id":42,"type":"private"},"text":"final"}}"#,
+        ),
+    ]);
+    let client = TelegramClient::new(TelegramClientConfig {
+        token: "test-token".to_string(),
+        api_url: Some(api_url),
+        poll_request_timeout_seconds: 40,
+    })
+    .expect("telegram client");
+    let worker =
+        TelegramWorker::with_consumer(app.clone(), backend.clone(), client, "telegram-test");
+
+    let first_poll = runtime.block_on(async {
+        tokio::time::timeout(Duration::from_millis(250), worker.poll_once()).await
+    });
+    if first_poll.is_err() {
+        let (released, condvar) = &*release;
+        *released.lock().expect("release lock") = true;
+        condvar.notify_all();
+    }
+    let processed = first_poll
+        .expect("poll_once should not wait for the full chat turn")
+        .expect("first poll");
+    assert_eq!(processed, 1);
+    started_receiver
+        .recv_timeout(Duration::from_secs(2))
+        .expect("chat turn started");
+
+    let second_poll = runtime.block_on(async {
+        tokio::time::timeout(Duration::from_millis(250), worker.poll_once()).await
+    });
+    let processed = second_poll
+        .expect("operator commands should be processed while the chat turn runs")
+        .expect("second poll");
+    assert_eq!(processed, 3);
+
+    let state = backend_state.lock().expect("backend state");
+    assert_eq!(state.executed_turns.len(), 1);
+    assert_eq!(state.cancelled_active_runs, vec!["session-running"]);
+    assert_eq!(state.cancelled_all_work, vec!["session-running"]);
+    drop(state);
+
+    let (released, condvar) = &*release;
+    *released.lock().expect("release lock") = true;
+    condvar.notify_all();
+    runtime.block_on(async { tokio::time::sleep(Duration::from_millis(50)).await });
+
+    let _ = requests
+        .recv_timeout(Duration::from_secs(2))
+        .expect("captured first getUpdates");
+    let _ = requests
+        .recv_timeout(Duration::from_secs(2))
+        .expect("captured temporary status message");
+    let _ = requests
+        .recv_timeout(Duration::from_secs(2))
+        .expect("captured second getUpdates");
+    let delete_status = requests
+        .recv_timeout(Duration::from_secs(2))
+        .expect("captured temporary status delete");
+    assert_eq!(delete_status.path, "/bottest-token/DeleteMessage");
+    let status = requests
+        .recv_timeout(Duration::from_secs(2))
+        .expect("captured status response");
+    assert!(status.body.contains("Current session"));
+    let stop = requests
+        .recv_timeout(Duration::from_secs(2))
+        .expect("captured stop response");
+    assert!(stop.body.contains("stopped session-running"));
+    let cancel = requests
+        .recv_timeout(Duration::from_secs(2))
+        .expect("captured cancel response");
+    assert!(cancel.body.contains("cancelled session-running"));
+    let final_message = requests
+        .recv_timeout(Duration::from_secs(2))
+        .expect("captured final response");
+    assert_eq!(final_message.path, "/bottest-token/SendMessage");
+    assert_eq!(
+        app.store()
+            .expect("open store")
+            .get_telegram_chat_status(42)
+            .expect("status lookup"),
+        None
+    );
 
     handle.join().expect("join fake api");
 }
@@ -2377,6 +2531,7 @@ fn telegram_worker_bounds_long_progress_status_edits() {
     let worker = TelegramWorker::with_consumer(app, backend, client, "telegram-test");
 
     runtime.block_on(worker.poll_once()).expect("poll once");
+    drive_runtime(&runtime, Duration::from_millis(100));
 
     let _ = requests
         .recv_timeout(Duration::from_secs(2))
@@ -2752,6 +2907,7 @@ fn telegram_worker_sends_typing_while_turn_is_running() {
     let worker = TelegramWorker::with_consumer(app, backend, client, "telegram-test");
 
     runtime.block_on(worker.poll_once()).expect("poll once");
+    drive_runtime(&runtime, Duration::from_millis(1_000));
 
     let _ = requests
         .recv_timeout(Duration::from_secs(2))
@@ -3113,6 +3269,7 @@ fn telegram_worker_real_daemon_backend_uses_canonical_chat_path() {
         TelegramWorker::with_consumer(app.clone(), backend.clone(), client, "telegram-test");
 
     runtime.block_on(worker.poll_once()).expect("poll once");
+    drive_runtime(&runtime, Duration::from_millis(2_500));
 
     let store = app.store().expect("open store");
     let binding = store
@@ -3274,6 +3431,10 @@ fn json_response(body: &str) -> FakeResponse {
 
 fn telegram_test_app() -> (tempfile::TempDir, bootstrap::App) {
     telegram_test_app_with_progress_interval_ms(1_250)
+}
+
+fn drive_runtime(runtime: &tokio::runtime::Runtime, duration: Duration) {
+    runtime.block_on(async { tokio::time::sleep(duration).await });
 }
 
 fn telegram_test_app_with_progress_interval_ms(
