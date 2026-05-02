@@ -1,5 +1,6 @@
 pub mod backend;
 pub mod client;
+pub(crate) mod commands;
 pub mod polling;
 pub mod render;
 pub mod router;
