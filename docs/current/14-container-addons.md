@@ -146,7 +146,7 @@ SilverBullet без домена вынесен на отдельный HTTPS si
 TEAMD_CADDY_HOST='31.130.128.89' ./scripts/deploy-teamd-containers.sh --with-logseq --with-silverbullet
 ```
 
-С dedicated domain:
+С dedicated domain в subdomain mode:
 
 ```text
 https://logseq.example.com/
@@ -158,6 +158,23 @@ https://notes.example.com/
 ```bash
 TEAMD_CADDY_DOMAIN='example.com' ./scripts/deploy-teamd-containers.sh --with-logseq --with-silverbullet
 ```
+
+Если DNS заведён только на один host, используйте single-domain mode:
+
+```bash
+TEAMD_CADDY_DOMAIN='teamd.qlbc.ru' ./scripts/deploy-teamd-containers.sh --with-logseq --with-silverbullet --with-jaeger --single-domain
+```
+
+В этом режиме Caddy публикует всё на одном домене:
+
+```text
+https://teamd.qlbc.ru/         -> SilverBullet editor
+https://teamd.qlbc.ru/logseq/  -> Logseq Publish
+https://teamd.qlbc.ru/searxng/ -> SearXNG browser UI
+https://teamd.qlbc.ru/jaeger/  -> Jaeger UI
+```
+
+SilverBullet остаётся в root path `/`, чтобы editor SPA, websocket/API paths и assets не ломались на произвольном subpath.
 
 ### SilverBullet authentication
 
@@ -437,10 +454,16 @@ Caddy UI: http://127.0.0.1:8088/jaeger/
 OTLP HTTP: http://127.0.0.1:4318/v1/traces
 ```
 
-С `TEAMD_CADDY_DOMAIN='example.com'` Jaeger публикуется как:
+С `TEAMD_CADDY_DOMAIN='example.com'` Jaeger в subdomain mode публикуется как:
 
 ```text
 https://jaeger.example.com/
+```
+
+В single-domain mode:
+
+```text
+https://teamd.qlbc.ru/jaeger/
 ```
 
 Почему Jaeger, а не Grafana Tempo сразу:
@@ -476,7 +499,7 @@ SilverBullet без domain не публикуется как subpath. Он по
 
 После записи Caddyfile deploy script пересоздаёт `teamd-caddy` через `docker compose up -d --force-recreate`, затем делает `caddy reload`. Это важно: Caddyfile смонтирован как отдельный bind-mounted file, а атомарная замена файла на host может оставить уже запущенный контейнер на старом inode.
 
-Для нормального browser usage можно задать домен:
+Для нормального browser usage можно задать домен в subdomain mode:
 
 ```bash
 TEAMD_CADDY_DOMAIN='example.com' ./scripts/deploy-teamd-containers.sh --with-logseq --with-silverbullet
@@ -489,6 +512,20 @@ TEAMD_CADDY_DOMAIN='example.com' ./scripts/deploy-teamd-containers.sh --with-log
 - `notes.example.com`, если включён `--with-silverbullet`;
 - `jaeger.example.com`, если включён `--with-jaeger`.
 - `obsidian.example.com`, если включён legacy `--with-obsidian`.
+
+Если доступен только один DNS host, используйте single-domain mode:
+
+```bash
+TEAMD_CADDY_DOMAIN='teamd.qlbc.ru' ./scripts/deploy-teamd-containers.sh --with-logseq --with-silverbullet --with-jaeger --single-domain
+```
+
+Тогда Caddy создаёт один site `teamd.qlbc.ru`:
+
+- `/` -> SilverBullet, если включён `--with-silverbullet`;
+- `/searxng/`;
+- `/logseq/`, если включён `--with-logseq`;
+- `/jaeger/`, если включён `--with-jaeger`;
+- `/obsidian/`, если включён legacy `--with-obsidian`.
 
 ## Mobile/browser workflow
 

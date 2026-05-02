@@ -33,6 +33,7 @@ assert_contains "$containers_help_output" "--with-obsidian-mcp"
 assert_contains "$containers_help_output" "--with-jaeger"
 assert_contains "$containers_help_output" "--with-logseq"
 assert_contains "$containers_help_output" "--with-silverbullet"
+assert_contains "$containers_help_output" "--single-domain"
 assert_contains "$containers_help_output" "--no-searxng"
 assert_contains "$containers_help_output" "--no-caddy"
 assert_contains "$containers_help_output" "--with-obsidian-mcp-example"
@@ -107,6 +108,19 @@ assert_contains "$containers_logseq_dry_run_output" "SilverBullet"
 assert_contains "$containers_logseq_dry_run_output" "Caddy URL: http://127.0.0.1:8088/logseq/"
 assert_contains "$containers_logseq_dry_run_output" "Caddy URL: https://127.0.0.1:8444/"
 assert_contains "$containers_logseq_dry_run_output" "SB_USER credentials file: /opt/teamd/containers/silverbullet/silverbullet.env"
+
+containers_single_domain_dry_run_output=$(
+  TEAMD_CADDY_DOMAIN='teamd.qlbc.ru' \
+    "$CONTAINERS_DEPLOY_SCRIPT" --dry-run --non-interactive --no-start --with-logseq --with-silverbullet --with-jaeger --single-domain 2>&1
+)
+
+assert_contains "$containers_single_domain_dry_run_output" "Single-domain mode: yes"
+assert_contains "$containers_single_domain_dry_run_output" "UI URL: http://127.0.0.1:16686/jaeger"
+assert_contains "$containers_single_domain_dry_run_output" "Caddy URL: https://teamd.qlbc.ru/searxng/"
+assert_contains "$containers_single_domain_dry_run_output" "Caddy URL: https://teamd.qlbc.ru/jaeger/"
+assert_contains "$containers_single_domain_dry_run_output" "Caddy URL: https://teamd.qlbc.ru/logseq/"
+assert_contains "$containers_single_domain_dry_run_output" "Caddy URL: https://teamd.qlbc.ru/"
+assert_contains "$containers_single_domain_dry_run_output" "Routes with TEAMD_CADDY_DOMAIN single-domain: /, /searxng/, /logseq/, /jaeger/, and legacy /obsidian/ when enabled"
 
 containers_dry_run_start_output=$(
   "$CONTAINERS_DEPLOY_SCRIPT" --dry-run --non-interactive --with-obsidian-mcp 2>&1

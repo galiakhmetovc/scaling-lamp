@@ -81,9 +81,11 @@ JAEGER_GID=${TEAMD_JAEGER_GID:-10001}
 JAEGER_DIR=$CONTAINERS_ROOT/jaeger
 JAEGER_DATA_DIR=$DATA_ROOT/jaeger/badger
 JAEGER_COMPOSE=$JAEGER_DIR/docker-compose.yml
+JAEGER_BASE_PATH_EXPLICIT=0
 if [ "${TEAMD_JAEGER_BASE_PATH+x}" ]; then
+  JAEGER_BASE_PATH_EXPLICIT=1
   JAEGER_BASE_PATH=$TEAMD_JAEGER_BASE_PATH
-elif [ -n "${TEAMD_CADDY_DOMAIN:-}" ]; then
+elif [ -n "${TEAMD_CADDY_DOMAIN:-}" ] && [ "${TEAMD_CADDY_SINGLE_DOMAIN:-0}" != "1" ]; then
   JAEGER_BASE_PATH=/
 else
   JAEGER_BASE_PATH=/jaeger
@@ -91,6 +93,7 @@ fi
 OTLP_EXPORT_TIMEOUT_MS=${TEAMD_OTLP_TIMEOUT_MS:-2000}
 
 CADDY_DOMAIN=${TEAMD_CADDY_DOMAIN:-}
+CADDY_SINGLE_DOMAIN=${TEAMD_CADDY_SINGLE_DOMAIN:-0}
 CADDY_HOST=${TEAMD_CADDY_HOST:-}
 if [ "${TEAMD_OBSIDIAN_SUBFOLDER+x}" ]; then
   OBSIDIAN_SUBFOLDER=$TEAMD_OBSIDIAN_SUBFOLDER
@@ -144,6 +147,8 @@ Options:
   --with-jaeger         Also deploy Jaeger UI and enable agentd OTLP auto-export.
   --with-logseq         Deploy Logseq Publish over the canonical Markdown graph.
   --with-silverbullet   Deploy SilverBullet editor over the same Logseq graph.
+  --single-domain       With TEAMD_CADDY_DOMAIN, publish all add-ons on that
+                         exact host: /, /searxng/, /logseq/, /jaeger/.
   --no-restart-teamd    Do not restart teamd systemd services after writing MCP config.
   --searxng-port PORT   Local SearXNG port, default: $SEARXNG_PORT.
   --obsidian-port PORT  Local Obsidian port, default: $OBSIDIAN_PORT.
@@ -212,8 +217,12 @@ Environment overrides:
   TEAMD_DEPLOY_ENV_FILE          agentd env file path, default: $ENV_FILE.
   TEAMD_DEPLOY_USER              teamd system user, default: $SERVICE_USER.
   TEAMD_DEPLOY_GROUP             teamd system group, default: $SERVICE_GROUP.
-  TEAMD_CADDY_DOMAIN             Optional base domain; creates search.<domain>, obsidian.<domain>,
-                                 logseq.<domain>, notes.<domain>, and jaeger.<domain> when enabled.
+  TEAMD_CADDY_DOMAIN             Optional domain. By default creates search.<domain>,
+                                 obsidian.<domain>, logseq.<domain>, notes.<domain>,
+                                 and jaeger.<domain> when enabled.
+  TEAMD_CADDY_SINGLE_DOMAIN      Set to 1 to use TEAMD_CADDY_DOMAIN as one exact host:
+                                 / for SilverBullet, plus /searxng/, /logseq/,
+                                 /jaeger/, and /obsidian/ when enabled.
   TEAMD_CADDY_HOST               Hostname or IP for internal TLS without a dedicated domain.
                                  If unset, deploy script tries to detect the primary IPv4 address.
   TEAMD_CADDY_HTTP_PORT          Caddy HTTP host port, default: $CADDY_HTTP_PORT.
@@ -347,6 +356,17 @@ validate_obsidian_subfolder() {
       fail "TEAMD_OBSIDIAN_SUBFOLDER must be empty or use leading and trailing slashes, e.g. /obsidian/"
       ;;
   esac
+}
+
+validate_caddy_domain_mode() {
+  case "$CADDY_SINGLE_DOMAIN" in
+    0|1) ;;
+    *) fail "TEAMD_CADDY_SINGLE_DOMAIN must be 0 or 1" ;;
+  esac
+  [ "$CADDY_SINGLE_DOMAIN" -eq 0 ] || [ -n "$CADDY_DOMAIN" ] || fail "--single-domain requires TEAMD_CADDY_DOMAIN"
+  if [ "$CADDY_SINGLE_DOMAIN" -eq 1 ] && [ "$JAEGER_BASE_PATH_EXPLICIT" -eq 0 ]; then
+    JAEGER_BASE_PATH=/jaeger
+  fi
 }
 
 ensure_obsidian_https_port() {
@@ -1108,7 +1128,7 @@ EOF
   jaeger_http_redirect=
   jaeger_handle=
   if [ "$ENABLE_JAEGER" -eq 1 ]; then
-    if [ -n "$CADDY_DOMAIN" ]; then
+    if [ -n "$CADDY_DOMAIN" ] && [ "$CADDY_SINGLE_DOMAIN" -eq 0 ]; then
       jaeger_domain_block="
 jaeger.$CADDY_DOMAIN {
   reverse_proxy teamd-jaeger:16686
@@ -1126,7 +1146,7 @@ jaeger.$CADDY_DOMAIN {
   logseq_http_redirect=
   logseq_handle=
   if [ "$ENABLE_LOGSEQ" -eq 1 ]; then
-    if [ -n "$CADDY_DOMAIN" ]; then
+    if [ -n "$CADDY_DOMAIN" ] && [ "$CADDY_SINGLE_DOMAIN" -eq 0 ]; then
       logseq_domain_block="
 logseq.$CADDY_DOMAIN {
   root * /srv/logseq
@@ -1148,7 +1168,7 @@ logseq.$CADDY_DOMAIN {
 	  silverbullet_https_block=
 	  caddy_global_options=
 	  if [ "$ENABLE_SILVERBULLET" -eq 1 ]; then
-    if [ -n "$CADDY_DOMAIN" ]; then
+    if [ -n "$CADDY_DOMAIN" ] && [ "$CADDY_SINGLE_DOMAIN" -eq 0 ]; then
       silverbullet_domain_block="
 notes.$CADDY_DOMAIN {
   reverse_proxy teamd-silverbullet:$SILVERBULLET_CONTAINER_PORT
@@ -1174,7 +1194,7 @@ https://$CADDY_HOST:$SILVERBULLET_HTTPS_PORT {
 	  fi
 
 	  obsidian_domain_block=
-	  if [ "$ENABLE_OBSIDIAN" -eq 1 ] && [ -n "$CADDY_DOMAIN" ]; then
+	  if [ "$ENABLE_OBSIDIAN" -eq 1 ] && [ -n "$CADDY_DOMAIN" ] && [ "$CADDY_SINGLE_DOMAIN" -eq 0 ]; then
 	    obsidian_domain_block="
 obsidian.$CADDY_DOMAIN {
   reverse_proxy teamd-obsidian:$OBSIDIAN_CONTAINER_PORT
@@ -1182,8 +1202,41 @@ obsidian.$CADDY_DOMAIN {
 "
 	  fi
 
+	  obsidian_single_handle=
+	  if [ "$ENABLE_OBSIDIAN" -eq 1 ]; then
+	    obsidian_single_handle="  handle /obsidian/* {
+    reverse_proxy teamd-obsidian:$OBSIDIAN_CONTAINER_PORT
+  }"
+	  fi
+	  single_domain_root_handle='  respond / "teamD container edge: /searxng/, /logseq/, /jaeger/ and optional add-ons"'
+	  if [ "$ENABLE_SILVERBULLET" -eq 1 ]; then
+	    single_domain_root_handle="  handle {
+    reverse_proxy teamd-silverbullet:$SILVERBULLET_CONTAINER_PORT
+  }"
+	  fi
+
 	  if [ -n "$CADDY_DOMAIN" ]; then
-	    cat > "$tmp_caddyfile" <<EOF
+	    if [ "$CADDY_SINGLE_DOMAIN" -eq 1 ]; then
+	      cat > "$tmp_caddyfile" <<EOF
+$CADDY_DOMAIN {
+  redir /searxng /searxng/ 308
+$jaeger_http_redirect
+$logseq_http_redirect
+
+  handle /searxng/* {
+    reverse_proxy teamd-searxng:8080 {
+      header_up X-Script-Name /searxng
+    }
+  }
+$jaeger_handle
+$logseq_handle
+$obsidian_single_handle
+
+$single_domain_root_handle
+}
+EOF
+	    else
+	      cat > "$tmp_caddyfile" <<EOF
 search.$CADDY_DOMAIN {
   reverse_proxy teamd-searxng:8080
 }
@@ -1192,6 +1245,7 @@ $jaeger_domain_block
 $logseq_domain_block
 $silverbullet_domain_block
 EOF
+	    fi
 	  else
 	    obsidian_http_redirects=
 	    obsidian_handle=
@@ -1334,6 +1388,7 @@ while [ "$#" -gt 0 ]; do
       ENABLE_LOGSEQ=1
       ENABLE_SILVERBULLET=1
       ;;
+    --single-domain) CADDY_SINGLE_DOMAIN=1 ;;
     --no-restart-teamd) RESTART_TEAMD_SERVICES=0 ;;
     --searxng-port)
       shift
@@ -1383,6 +1438,7 @@ fi
 need_command id
 need_command sed
 validate_obsidian_subfolder
+validate_caddy_domain_mode
 ensure_obsidian_https_port
 ensure_silverbullet_https_port
 ensure_caddy_host
@@ -1467,6 +1523,19 @@ if [ "$ENABLE_SEARXNG" -eq 1 ]; then
     MCP env: SEARXNG_URL=http://127.0.0.1:$SEARXNG_PORT
     JSON smoke: curl 'http://127.0.0.1:$SEARXNG_PORT/search?q=test&format=json'
 EOF
+  if [ "$ENABLE_CADDY" -eq 1 ] && [ -n "$CADDY_DOMAIN" ] && [ "$CADDY_SINGLE_DOMAIN" -eq 1 ]; then
+    cat <<EOF
+    Caddy URL: https://$CADDY_DOMAIN/searxng/
+EOF
+  elif [ "$ENABLE_CADDY" -eq 1 ] && [ -n "$CADDY_DOMAIN" ]; then
+    cat <<EOF
+    Caddy URL: https://search.$CADDY_DOMAIN/
+EOF
+  elif [ "$ENABLE_CADDY" -eq 1 ]; then
+    cat <<EOF
+    Caddy URL: http://127.0.0.1:$CADDY_HTTP_PORT/searxng/
+EOF
+  fi
 fi
 
 if [ "$ENABLE_OBSIDIAN" -eq 1 ]; then
@@ -1479,8 +1548,12 @@ if [ "$ENABLE_OBSIDIAN" -eq 1 ]; then
     Vaults: $OBSIDIAN_VAULTS_DIR
     Managed vault: $OBSIDIAN_VAULT_DIR
 EOF
-  if [ -n "$CADDY_DOMAIN" ]; then
-    cat <<EOF
+	  if [ -n "$CADDY_DOMAIN" ] && [ "$CADDY_SINGLE_DOMAIN" -eq 1 ]; then
+	    cat <<EOF
+    Caddy URL: https://$CADDY_DOMAIN/obsidian/
+EOF
+	  elif [ -n "$CADDY_DOMAIN" ]; then
+	    cat <<EOF
     Caddy URL: https://obsidian.$CADDY_DOMAIN/
 EOF
   elif [ -n "$CADDY_HTTPS_PORT" ]; then
@@ -1529,8 +1602,12 @@ if [ "$ENABLE_JAEGER" -eq 1 ]; then
       TEAMD_OTLP_ENDPOINT=http://127.0.0.1:$JAEGER_OTLP_HTTP_PORT/v1/traces
       TEAMD_OTLP_TIMEOUT_MS=$OTLP_EXPORT_TIMEOUT_MS
 EOF
-  if [ -n "$CADDY_DOMAIN" ]; then
-    cat <<EOF
+	  if [ -n "$CADDY_DOMAIN" ] && [ "$CADDY_SINGLE_DOMAIN" -eq 1 ]; then
+	    cat <<EOF
+    Caddy URL: https://$CADDY_DOMAIN/jaeger/
+EOF
+	  elif [ -n "$CADDY_DOMAIN" ]; then
+	    cat <<EOF
     Caddy URL: https://jaeger.$CADDY_DOMAIN/
 EOF
   else
@@ -1549,8 +1626,12 @@ if [ "$ENABLE_LOGSEQ" -eq 1 ]; then
     Compose: $LOGSEQ_COMPOSE
     Start command: docker compose -f $LOGSEQ_COMPOSE up -d
 EOF
-  if [ -n "$CADDY_DOMAIN" ]; then
-    cat <<EOF
+	  if [ -n "$CADDY_DOMAIN" ] && [ "$CADDY_SINGLE_DOMAIN" -eq 1 ]; then
+	    cat <<EOF
+    Caddy URL: https://$CADDY_DOMAIN/logseq/
+EOF
+	  elif [ -n "$CADDY_DOMAIN" ]; then
+	    cat <<EOF
     Caddy URL: https://logseq.$CADDY_DOMAIN/
 EOF
   else
@@ -1570,8 +1651,12 @@ if [ "$ENABLE_SILVERBULLET" -eq 1 ]; then
     Start command: docker compose -f $SILVERBULLET_COMPOSE up -d
     SB_USER credentials file: $SILVERBULLET_ENV_FILE
 EOF
-  if [ -n "$CADDY_DOMAIN" ]; then
-    cat <<EOF
+	  if [ -n "$CADDY_DOMAIN" ] && [ "$CADDY_SINGLE_DOMAIN" -eq 1 ]; then
+	    cat <<EOF
+    Caddy URL: https://$CADDY_DOMAIN/
+EOF
+	  elif [ -n "$CADDY_DOMAIN" ]; then
+	    cat <<EOF
     Caddy URL: https://notes.$CADDY_DOMAIN/
 EOF
   elif [ -n "$SILVERBULLET_HTTPS_PORT" ]; then
@@ -1594,7 +1679,12 @@ if [ "$ENABLE_CADDY" -eq 1 ]; then
     Start command: docker compose -f $CADDY_COMPOSE up -d
     Caddyfile: $CADDYFILE
 EOF
-	  if [ -n "$CADDY_DOMAIN" ]; then
+	  if [ -n "$CADDY_DOMAIN" ] && [ "$CADDY_SINGLE_DOMAIN" -eq 1 ]; then
+	    cat <<EOF
+    Single-domain mode: yes
+    Routes with TEAMD_CADDY_DOMAIN single-domain: /, /searxng/, /logseq/, /jaeger/, and legacy /obsidian/ when enabled
+EOF
+	  elif [ -n "$CADDY_DOMAIN" ]; then
 	    cat <<EOF
     Routes with TEAMD_CADDY_DOMAIN: search.<domain> plus enabled logseq.<domain>, notes.<domain>, jaeger.<domain>, and legacy obsidian.<domain>
 EOF
