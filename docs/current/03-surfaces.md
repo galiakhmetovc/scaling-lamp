@@ -183,8 +183,12 @@ agentd telegram run
 - получает updates через Telegram Bot API long polling;
 - подключается к локальному daemon или autospawn-ит его;
 - маршрутизирует обычные сообщения в canonical chat turn;
+- хранит per-chat binding: выбранную session, default agent profile для новых sessions и queue mode;
+- позволяет оператору переключать agent profile прямо из Telegram через `/agents`, `/agentuse <agent_id>` и `/newagent <agent_id> [title]`;
 - отправляет replies, progress updates и reminders обратно в Telegram;
 - хранит pairing records, chat bindings и update cursor в обычном runtime store.
+
+В группах paired/activated Telegram users могут писать обычным текстом без mention, и сообщение будет routed в group session. Для остальных пользователей при `group_require_mention = true` сохраняется требование mention/targeted command.
 
 Во время активного turn Telegram surface показывает временное status-message с HTML-rendering, стадией выполнения и точными счётчиками tool calls/failed tool calls. Финальный ответ отправляется отдельным сообщением, а временный status удаляется при следующем сообщении пользователя в этом chat или по TTL `30 минут`.
 

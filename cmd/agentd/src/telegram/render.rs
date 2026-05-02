@@ -1,4 +1,5 @@
 use crate::bootstrap::SessionSummary;
+use crate::telegram::backend::TelegramAgentSummary;
 use pulldown_cmark::{CodeBlockKind, Event, Options, Parser, Tag, TagEnd};
 use unicode_width::UnicodeWidthStr;
 
@@ -265,8 +266,11 @@ pub fn render_help_message() -> String {
         "/start - get a pairing key",
         "/help - show this help",
         "/new [title] - create and select a session",
+        "/newagent <agent_id> [title] - create and select a session for an agent",
         "/sessions - list sessions",
         "/use <session_id> - select a session",
+        "/agents - list agent profiles",
+        "/agentuse <agent_id> - set chat default agent for new sessions",
         "/status - show current session status",
         "/jobs - show current session background jobs",
         "/queue [reject|queue|coalesce 5s|restart|flush|clear] - control inbound messages during active turns",
@@ -320,6 +324,33 @@ pub fn render_session_list(
     }
 
     lines.join("\n")
+}
+
+pub fn render_agent_list(
+    agents: &[TelegramAgentSummary],
+    default_agent_profile_id: Option<&str>,
+) -> String {
+    if agents.is_empty() {
+        return "No agents found.".to_string();
+    }
+
+    let mut lines = vec!["Agents:".to_string()];
+    for agent in agents {
+        let marker = if default_agent_profile_id == Some(agent.id.as_str()) {
+            "*"
+        } else {
+            "-"
+        };
+        lines.push(format!(
+            "{marker} {} ({}) template={}",
+            agent.name, agent.id, agent.template_kind
+        ));
+    }
+    lines.join("\n")
+}
+
+pub fn render_agent_selected(agent: &TelegramAgentSummary) -> String {
+    format!("Chat default agent: {} ({})", agent.name, agent.id)
 }
 
 pub fn render_usage(command: &str, usage: &str) -> String {

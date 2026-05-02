@@ -3,8 +3,8 @@ use crate::bootstrap::{AgentScheduleCreateOptions, AgentScheduleUpdatePatch, Age
 use crate::http::types::{
     AgentCreateRequest, AgentRenderResponse, AgentResolveRequest, AgentScheduleCreateRequest,
     AgentScheduleDetailResponse, AgentScheduleResolveRequest, AgentScheduleUpdateRequest,
-    AgentSelectRequest, ClearSessionRequest, CreateSessionRequest, DebugBundleResponse,
-    MemoryRenderResponse, SessionAgentMessageRequest, SessionArtifactResponse,
+    AgentSelectRequest, AgentSummaryResponse, ClearSessionRequest, CreateSessionRequest,
+    DebugBundleResponse, MemoryRenderResponse, SessionAgentMessageRequest, SessionArtifactResponse,
     SessionArtifactsResponse, SessionBackgroundJobsResponse, SessionChainGrantRequest,
     SessionDetailResponse, SessionRunControlResponse, SessionRunStatusResponse,
     SessionSystemResponse, SkillCommandRequest,
@@ -17,6 +17,19 @@ impl DaemonClient {
     pub fn render_agents(&self) -> Result<String, BootstrapError> {
         let response: AgentRenderResponse = self.get_json("/v1/agents")?;
         Ok(response.message)
+    }
+
+    pub fn list_agents(&self) -> Result<Vec<AgentSummaryResponse>, BootstrapError> {
+        self.get_json("/v1/agents/list")
+    }
+
+    pub fn resolve_agent(&self, identifier: &str) -> Result<AgentSummaryResponse, BootstrapError> {
+        self.post_json(
+            "/v1/agents/resolve",
+            &AgentResolveRequest {
+                identifier: Some(identifier.to_string()),
+            },
+        )
     }
 
     pub fn render_current_agent(&self) -> Result<String, BootstrapError> {
@@ -148,7 +161,7 @@ impl DaemonClient {
         &self,
         title: Option<&str>,
     ) -> Result<SessionSummary, BootstrapError> {
-        self.create_session(None, title)
+        self.create_session_for_agent(None, title, None)
     }
 
     pub fn create_session(
@@ -156,11 +169,21 @@ impl DaemonClient {
         id: Option<&str>,
         title: Option<&str>,
     ) -> Result<SessionSummary, BootstrapError> {
+        self.create_session_for_agent(id, title, None)
+    }
+
+    pub fn create_session_for_agent(
+        &self,
+        id: Option<&str>,
+        title: Option<&str>,
+        agent_identifier: Option<&str>,
+    ) -> Result<SessionSummary, BootstrapError> {
         let session: SessionSummaryResponse = self.post_json(
             "/v1/sessions",
             &CreateSessionRequest {
                 id: id.map(str::to_string),
                 title: title.map(str::to_string),
+                agent_identifier: agent_identifier.map(str::to_string),
             },
         )?;
         Ok(session.into())

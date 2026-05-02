@@ -9,7 +9,7 @@ use agentd::bootstrap::{BootstrapError, SessionPreferencesPatch, SessionSummary}
 use agentd::daemon;
 use agentd::execution::{ChatExecutionEvent, ChatTurnExecutionReport};
 use agentd::http::client::{DaemonClient, DaemonConnectOptions};
-use agentd::telegram::backend::{DaemonTelegramBackend, TelegramBackend};
+use agentd::telegram::backend::{DaemonTelegramBackend, TelegramAgentSummary, TelegramBackend};
 use agentd::telegram::client::{TelegramClient, TelegramClientConfig, TelegramCommandSpec};
 use agentd::telegram::render::{
     TELEGRAM_MESSAGE_TEXT_SOFT_CAP, chunk_message_text, truncate_caption,
@@ -47,8 +47,10 @@ struct RecordingTelegramBackend {
 struct RecordingTelegramBackendState {
     listed_sessions: Vec<SessionSummary>,
     session_lookup: BTreeMap<String, SessionSummary>,
+    agent_summaries: Vec<TelegramAgentSummary>,
     create_session_results: Vec<SessionSummary>,
     created_titles: Vec<Option<String>>,
+    created_agent_identifiers: Vec<Option<String>>,
     updated_preferences: Vec<(String, SessionPreferencesPatch)>,
     executed_turns: Vec<(String, String)>,
     agent_messages: Vec<(String, String, String)>,
@@ -92,6 +94,28 @@ impl Default for RecordingTelegramBackend {
 }
 
 impl TelegramBackend for RecordingTelegramBackend {
+    fn list_agents(&self) -> Result<Vec<TelegramAgentSummary>, BootstrapError> {
+        Ok(self
+            .state
+            .lock()
+            .expect("backend state")
+            .agent_summaries
+            .clone())
+    }
+
+    fn resolve_agent(&self, identifier: &str) -> Result<TelegramAgentSummary, BootstrapError> {
+        let state = self.state.lock().expect("backend state");
+        state
+            .agent_summaries
+            .iter()
+            .find(|agent| agent.id == identifier || agent.name.eq_ignore_ascii_case(identifier))
+            .cloned()
+            .ok_or_else(|| BootstrapError::MissingRecord {
+                kind: "agent",
+                id: identifier.to_string(),
+            })
+    }
+
     fn list_session_summaries(&self) -> Result<Vec<SessionSummary>, BootstrapError> {
         Ok(self
             .state
@@ -101,9 +125,16 @@ impl TelegramBackend for RecordingTelegramBackend {
             .clone())
     }
 
-    fn create_session_auto(&self, title: Option<&str>) -> Result<SessionSummary, BootstrapError> {
+    fn create_session_for_agent(
+        &self,
+        title: Option<&str>,
+        agent_identifier: Option<&str>,
+    ) -> Result<SessionSummary, BootstrapError> {
         let mut state = self.state.lock().expect("backend state");
         state.created_titles.push(title.map(str::to_string));
+        state
+            .created_agent_identifiers
+            .push(agent_identifier.map(str::to_string));
         let summary = state
             .create_session_results
             .first()
@@ -112,6 +143,15 @@ impl TelegramBackend for RecordingTelegramBackend {
                 reason: "missing fake create session result".to_string(),
             })?;
         state.create_session_results.remove(0);
+        let mut summary = summary;
+        if let Some(agent_identifier) = agent_identifier
+            && let Some(agent) = state.agent_summaries.iter().find(|agent| {
+                agent.id == agent_identifier || agent.name.eq_ignore_ascii_case(agent_identifier)
+            })
+        {
+            summary.agent_profile_id = agent.id.clone();
+            summary.agent_name = agent.name.clone();
+        }
         state
             .session_lookup
             .insert(summary.id.clone(), summary.clone());
@@ -611,6 +651,9 @@ fn telegram_worker_registers_default_commands() {
         "setMyCommands body missing skills: {}",
         request.body
     );
+    assert!(request.body.contains("\"command\":\"agents\""));
+    assert!(request.body.contains("\"command\":\"agentuse\""));
+    assert!(request.body.contains("\"command\":\"newagent\""));
     assert!(request.body.contains("\"command\":\"files\""));
     assert!(request.body.contains("\"command\":\"file\""));
 
@@ -2116,18 +2159,91 @@ fn telegram_worker_group_mention_creates_shared_session_and_routes_text_turn() {
 }
 
 #[test]
-fn telegram_worker_ignores_group_text_without_bot_mention() {
+fn telegram_worker_routes_group_text_without_bot_mention_from_paired_user() {
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
         .expect("runtime");
     let (_temp, app) = telegram_test_app();
-    seed_activated_pairing(&app, "pair-group-ignore", 777, 42);
-    let backend = RecordingTelegramBackend::default();
+    seed_activated_pairing(&app, "pair-group-no-mention", 777, 42);
+    let backend = RecordingTelegramBackend::with_state(RecordingTelegramBackendState {
+        create_session_results: vec![session_summary("session-group-plain", "Group Chat", false)],
+        next_chat_output: "Hello without mention.".to_string(),
+        ..RecordingTelegramBackendState::default()
+    });
     let backend_state = backend.state();
     let (api_url, requests, handle) = spawn_fake_telegram_api(vec![
         json_response(
             r#"{"ok":true,"result":[{"update_id":110,"message":{"message_id":33,"date":0,"chat":{"id":9000,"type":"group","title":"Team Chat"},"from":{"id":777,"is_bot":false,"first_name":"Alice","username":"alice"},"text":"hello everyone"}}]}"#,
+        ),
+        json_response(
+            r#"{"ok":true,"result":{"message_id":34,"date":0,"chat":{"id":9000,"type":"group","title":"Team Chat"},"text":"working"}}"#,
+        ),
+        json_response(
+            r#"{"ok":true,"result":{"message_id":35,"date":0,"chat":{"id":9000,"type":"group","title":"Team Chat"},"text":"Hello without mention."}}"#,
+        ),
+    ]);
+    let client = TelegramClient::new(TelegramClientConfig {
+        token: "test-token".to_string(),
+        api_url: Some(api_url),
+        poll_request_timeout_seconds: 40,
+    })
+    .expect("telegram client");
+    let worker = TelegramWorker::with_consumer(app.clone(), backend, client, "telegram-test");
+
+    runtime.block_on(worker.poll_once()).expect("poll once");
+    drive_runtime(&runtime, Duration::from_millis(100));
+
+    let binding = app
+        .store()
+        .expect("open store")
+        .get_telegram_chat_binding(9000)
+        .expect("get binding")
+        .expect("binding exists");
+    assert_eq!(
+        binding.selected_session_id.as_deref(),
+        Some("session-group-plain")
+    );
+
+    let state = backend_state.lock().expect("backend state");
+    assert_eq!(state.created_titles, vec![None]);
+    assert_eq!(
+        state.executed_turns,
+        vec![(
+            "session-group-plain".to_string(),
+            "hello everyone".to_string()
+        )]
+    );
+    drop(state);
+
+    let _ = requests
+        .recv_timeout(Duration::from_secs(2))
+        .expect("captured getUpdates");
+    let start_message = requests
+        .recv_timeout(Duration::from_secs(2))
+        .expect("captured start message");
+    assert_eq!(start_message.path, "/bottest-token/SendMessage");
+    let final_message = requests
+        .recv_timeout(Duration::from_secs(2))
+        .expect("captured final message");
+    assert_eq!(final_message.path, "/bottest-token/SendMessage");
+    assert!(final_message.body.contains("Hello without mention."));
+
+    handle.join().expect("join fake api");
+}
+
+#[test]
+fn telegram_worker_ignores_unpaired_group_text_without_bot_mention() {
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("runtime");
+    let (_temp, app) = telegram_test_app();
+    let backend = RecordingTelegramBackend::default();
+    let backend_state = backend.state();
+    let (api_url, requests, handle) = spawn_fake_telegram_api(vec![
+        json_response(
+            r#"{"ok":true,"result":[{"update_id":110,"message":{"message_id":33,"date":0,"chat":{"id":9000,"type":"group","title":"Team Chat"},"from":{"id":778,"is_bot":false,"first_name":"Bob","username":"bob"},"text":"hello everyone"}}]}"#,
         ),
         json_response(
             r#"{"ok":true,"result":{"id":9001,"is_bot":true,"first_name":"teamd","username":"teamd_agent_bot","can_join_groups":true,"can_read_all_group_messages":false,"supports_inline_queries":false,"has_main_web_app":false}}"#,
@@ -2183,6 +2299,7 @@ fn telegram_worker_supports_group_sessions_new_and_use_commands() {
             scope: "group".to_string(),
             owner_telegram_user_id: None,
             selected_session_id: Some("session-1".to_string()),
+            default_agent_profile_id: None,
             last_delivered_transcript_created_at: Some(0),
             last_delivered_transcript_id: Some(String::new()),
             inbound_queue_mode: "coalesce".to_string(),
@@ -2599,6 +2716,119 @@ fn telegram_worker_supports_new_sessions_listing_and_use_command() {
         .recv_timeout(Duration::from_secs(2))
         .expect("captured use response");
     assert!(use_message.body.contains("session-2"));
+
+    handle.join().expect("join fake api");
+}
+
+#[test]
+fn telegram_worker_switches_chat_agent_and_creates_agent_sessions() {
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("runtime");
+    let (_temp, app) = telegram_test_app();
+    seed_activated_pairing(&app, "pair-agent-switch", 777, 42);
+    let backend = RecordingTelegramBackend::with_state(RecordingTelegramBackendState {
+        agent_summaries: vec![
+            agent_summary("default", "Assistant", "default"),
+            agent_summary("judge", "Judge", "judge"),
+        ],
+        create_session_results: vec![
+            session_summary("session-judge", "Review room", false),
+            session_summary("session-default", "Default room", false),
+        ],
+        ..RecordingTelegramBackendState::default()
+    });
+    let backend_state = backend.state();
+    let (api_url, requests, handle) = spawn_fake_telegram_api(vec![
+        json_response(
+            r#"{"ok":true,"result":[
+                {"update_id":301,"message":{"message_id":201,"date":0,"chat":{"id":42,"type":"private"},"from":{"id":777,"is_bot":false,"first_name":"Alice","username":"alice"},"text":"/agents"}},
+                {"update_id":302,"message":{"message_id":202,"date":0,"chat":{"id":42,"type":"private"},"from":{"id":777,"is_bot":false,"first_name":"Alice","username":"alice"},"text":"/agentuse judge"}},
+                {"update_id":303,"message":{"message_id":203,"date":0,"chat":{"id":42,"type":"private"},"from":{"id":777,"is_bot":false,"first_name":"Alice","username":"alice"},"text":"/new Review room"}},
+                {"update_id":304,"message":{"message_id":204,"date":0,"chat":{"id":42,"type":"private"},"from":{"id":777,"is_bot":false,"first_name":"Alice","username":"alice"},"text":"/newagent default Default room"}},
+                {"update_id":305,"message":{"message_id":205,"date":0,"chat":{"id":42,"type":"private"},"from":{"id":777,"is_bot":false,"first_name":"Alice","username":"alice"},"text":"/status"}}
+            ]}"#,
+        ),
+        json_response(
+            r#"{"ok":true,"result":{"message_id":205,"date":0,"chat":{"id":42,"type":"private"},"text":"agents"}}"#,
+        ),
+        json_response(
+            r#"{"ok":true,"result":{"message_id":206,"date":0,"chat":{"id":42,"type":"private"},"text":"agentuse"}}"#,
+        ),
+        json_response(
+            r#"{"ok":true,"result":{"message_id":207,"date":0,"chat":{"id":42,"type":"private"},"text":"new"}}"#,
+        ),
+        json_response(
+            r#"{"ok":true,"result":{"message_id":208,"date":0,"chat":{"id":42,"type":"private"},"text":"newagent"}}"#,
+        ),
+        json_response(
+            r#"{"ok":true,"result":{"message_id":209,"date":0,"chat":{"id":42,"type":"private"},"text":"status"}}"#,
+        ),
+    ]);
+    let client = TelegramClient::new(TelegramClientConfig {
+        token: "test-token".to_string(),
+        api_url: Some(api_url),
+        poll_request_timeout_seconds: 40,
+    })
+    .expect("telegram client");
+    let worker =
+        TelegramWorker::with_consumer(app.clone(), backend.clone(), client, "telegram-test");
+
+    let processed = runtime.block_on(worker.poll_once()).expect("poll once");
+    assert_eq!(processed, 5);
+
+    let binding = app
+        .store()
+        .expect("open store")
+        .get_telegram_chat_binding(42)
+        .expect("get binding")
+        .expect("binding exists");
+    assert_eq!(
+        binding.selected_session_id.as_deref(),
+        Some("session-default")
+    );
+    assert_eq!(binding.default_agent_profile_id.as_deref(), Some("default"));
+
+    let state = backend_state.lock().expect("backend state");
+    assert_eq!(
+        state.created_titles,
+        vec![
+            Some("Review room".to_string()),
+            Some("Default room".to_string())
+        ]
+    );
+    assert_eq!(
+        state.created_agent_identifiers,
+        vec![Some("judge".to_string()), Some("default".to_string())]
+    );
+    drop(state);
+
+    let _ = requests
+        .recv_timeout(Duration::from_secs(2))
+        .expect("captured getUpdates");
+    let agents_message = requests
+        .recv_timeout(Duration::from_secs(2))
+        .expect("captured agents response");
+    assert!(agents_message.body.contains("Agents"));
+    assert!(agents_message.body.contains("Judge (judge)"));
+    let agentuse_message = requests
+        .recv_timeout(Duration::from_secs(2))
+        .expect("captured agentuse response");
+    assert!(agentuse_message.body.contains("Chat default agent"));
+    assert!(agentuse_message.body.contains("Judge (judge)"));
+    let new_message = requests
+        .recv_timeout(Duration::from_secs(2))
+        .expect("captured new response");
+    assert!(new_message.body.contains("session-judge"));
+    let newagent_message = requests
+        .recv_timeout(Duration::from_secs(2))
+        .expect("captured newagent response");
+    assert!(newagent_message.body.contains("session-default"));
+    let status_message = requests
+        .recv_timeout(Duration::from_secs(2))
+        .expect("captured status response");
+    assert!(status_message.body.contains("chat_default_agent: default"));
 
     handle.join().expect("join fake api");
 }
@@ -3334,6 +3564,7 @@ fn telegram_worker_delivers_new_assistant_transcript_for_bound_session() {
             scope: "private".to_string(),
             owner_telegram_user_id: Some(777),
             selected_session_id: Some("session-reminder".to_string()),
+            default_agent_profile_id: None,
             last_delivered_transcript_created_at: Some(10),
             last_delivered_transcript_id: Some("transcript-old".to_string()),
             inbound_queue_mode: "coalesce".to_string(),
@@ -3414,6 +3645,7 @@ fn telegram_worker_flushes_pending_transcripts_before_new_inbound_turn() {
             scope: "private".to_string(),
             owner_telegram_user_id: Some(777),
             selected_session_id: Some("session-reminder".to_string()),
+            default_agent_profile_id: None,
             last_delivered_transcript_created_at: Some(10),
             last_delivered_transcript_id: Some("transcript-old".to_string()),
             inbound_queue_mode: "coalesce".to_string(),
@@ -3871,6 +4103,14 @@ fn session_summary(id: &str, title: &str, auto_approve: bool) -> SessionSummary 
     }
 }
 
+fn agent_summary(id: &str, name: &str, template_kind: &str) -> TelegramAgentSummary {
+    TelegramAgentSummary {
+        id: id.to_string(),
+        name: name.to_string(),
+        template_kind: template_kind.to_string(),
+    }
+}
+
 fn seed_activated_pairing(app: &bootstrap::App, token: &str, user_id: i64, chat_id: i64) {
     app.store()
         .expect("open store")
@@ -3901,6 +4141,7 @@ fn seed_binding(
             scope: "private".to_string(),
             owner_telegram_user_id: Some(owner_user_id),
             selected_session_id: selected_session_id.map(str::to_string),
+            default_agent_profile_id: None,
             last_delivered_transcript_created_at: Some(0),
             last_delivered_transcript_id: Some(String::new()),
             inbound_queue_mode: "coalesce".to_string(),

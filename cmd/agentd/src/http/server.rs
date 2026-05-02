@@ -61,8 +61,14 @@ fn handle_request(app: &App, shutdown: &Arc<AtomicBool>, request: Request) -> st
         (&tiny_http::Method::Post, "/v1/update") => status::handle_update_runtime(app, request),
         (&tiny_http::Method::Post, "/v1/daemon/stop") => handle_shutdown(shutdown, request),
         (&tiny_http::Method::Get, "/v1/agents") => agents::handle_list_agents(app, request),
+        (&tiny_http::Method::Get, "/v1/agents/list") => {
+            agents::handle_list_agent_summaries(app, request)
+        }
         (&tiny_http::Method::Get, "/v1/agents/current") => {
             agents::handle_current_agent(app, request)
+        }
+        (&tiny_http::Method::Post, "/v1/agents/resolve") => {
+            agents::handle_resolve_agent(app, request)
         }
         (&tiny_http::Method::Post, "/v1/agents/show") => agents::handle_show_agent(app, request),
         (&tiny_http::Method::Post, "/v1/agents/select") => {

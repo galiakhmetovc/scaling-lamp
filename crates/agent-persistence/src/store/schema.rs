@@ -279,6 +279,7 @@ pub(super) fn bootstrap_schema(connection: &Connection) -> Result<(), StoreError
              scope TEXT NOT NULL,
              owner_telegram_user_id INTEGER,
              selected_session_id TEXT,
+             default_agent_profile_id TEXT,
              last_delivered_transcript_created_at INTEGER,
              last_delivered_transcript_id TEXT,
              inbound_queue_mode TEXT NOT NULL DEFAULT 'coalesce',
@@ -631,6 +632,12 @@ pub(super) fn validate_schema(connection: &Connection) -> Result<(), StoreError>
     validate_column(
         connection,
         "telegram_chat_bindings",
+        "default_agent_profile_id",
+        false,
+    )?;
+    validate_column(
+        connection,
+        "telegram_chat_bindings",
         "last_delivered_transcript_created_at",
         false,
     )?;
@@ -908,6 +915,12 @@ pub(super) fn migrate_schema(connection: &Connection) -> Result<(), StoreError> 
     )?;
     add_column_if_missing(connection, "jobs", "callback_json", "TEXT")?;
     add_column_if_missing(connection, "jobs", "callback_sent_at", "INTEGER")?;
+    add_column_if_missing(
+        connection,
+        "telegram_chat_bindings",
+        "default_agent_profile_id",
+        "TEXT",
+    )?;
     add_column_if_missing(
         connection,
         "telegram_chat_bindings",

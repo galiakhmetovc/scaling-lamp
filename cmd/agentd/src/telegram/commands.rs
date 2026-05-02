@@ -14,9 +14,17 @@ pub(super) enum ParsedTelegramCommand {
     New {
         title: Option<String>,
     },
+    NewAgent {
+        agent_identifier: String,
+        title: Option<String>,
+    },
     Sessions,
     Use {
         session_id: String,
+    },
+    Agents,
+    AgentUse {
+        agent_identifier: String,
     },
     Files,
     File {
@@ -112,7 +120,21 @@ fn parse_command_parts(command: &str, args: &str) -> Option<ParsedTelegramComman
         "new" => Some(ParsedTelegramCommand::New {
             title: (!args.is_empty()).then(|| args.to_string()),
         }),
+        "newagent" => parse_newagent_command(args),
         "sessions" => Some(ParsedTelegramCommand::Sessions),
+        "agents" => Some(ParsedTelegramCommand::Agents),
+        "agentuse" => {
+            if args.is_empty() {
+                Some(ParsedTelegramCommand::InvalidUsage(render_usage(
+                    "agentuse",
+                    "<agent_id_or_name>",
+                )))
+            } else {
+                Some(ParsedTelegramCommand::AgentUse {
+                    agent_identifier: args.to_string(),
+                })
+            }
+        }
         "status" => Some(ParsedTelegramCommand::Status),
         "jobs" => Some(ParsedTelegramCommand::Jobs),
         "queue" => match parse_queue_action(args) {
@@ -244,6 +266,25 @@ fn parse_command_parts(command: &str, args: &str) -> Option<ParsedTelegramComman
         }
         _ => None,
     }
+}
+
+fn parse_newagent_command(args: &str) -> Option<ParsedTelegramCommand> {
+    let mut parts = args.splitn(2, char::is_whitespace);
+    let Some(agent_identifier) = parts.next().map(str::trim).filter(|part| !part.is_empty()) else {
+        return Some(ParsedTelegramCommand::InvalidUsage(render_usage(
+            "newagent",
+            "<agent_id_or_name> [title]",
+        )));
+    };
+    let title = parts
+        .next()
+        .map(str::trim)
+        .filter(|part| !part.is_empty())
+        .map(str::to_string);
+    Some(ParsedTelegramCommand::NewAgent {
+        agent_identifier: agent_identifier.to_string(),
+        title,
+    })
 }
 
 fn parse_optional_setting(args: &str) -> Option<String> {
@@ -382,8 +423,11 @@ pub(super) fn default_command_specs() -> Vec<TelegramCommandSpec> {
         TelegramCommandSpec::new("start", "Get a pairing key"),
         TelegramCommandSpec::new("help", "Show Telegram help"),
         TelegramCommandSpec::new("new", "Create and select a session"),
+        TelegramCommandSpec::new("newagent", "Create a session for an agent"),
         TelegramCommandSpec::new("sessions", "List sessions"),
         TelegramCommandSpec::new("use", "Select a session by id"),
+        TelegramCommandSpec::new("agents", "List agent profiles"),
+        TelegramCommandSpec::new("agentuse", "Set chat default agent"),
         TelegramCommandSpec::new("status", "Show current session status"),
         TelegramCommandSpec::new("jobs", "Show current session jobs"),
         TelegramCommandSpec::new("queue", "Show or set inbound queue mode"),
@@ -482,6 +526,30 @@ mod tests {
             Some(ParsedTelegramCommand::Skills)
         );
         assert_eq!(
+            parse_command("/agents"),
+            Some(ParsedTelegramCommand::Agents)
+        );
+        assert_eq!(
+            parse_command("/agentuse judge"),
+            Some(ParsedTelegramCommand::AgentUse {
+                agent_identifier: "judge".to_string()
+            })
+        );
+        assert_eq!(
+            parse_command("/newagent judge Review room"),
+            Some(ParsedTelegramCommand::NewAgent {
+                agent_identifier: "judge".to_string(),
+                title: Some("Review room".to_string())
+            })
+        );
+        assert_eq!(
+            parse_command("/newagent judge"),
+            Some(ParsedTelegramCommand::NewAgent {
+                agent_identifier: "judge".to_string(),
+                title: None
+            })
+        );
+        assert_eq!(
             parse_command("/enable obsidian-vault"),
             Some(ParsedTelegramCommand::EnableSkill {
                 skill_name: "obsidian-vault".to_string()
@@ -515,6 +583,9 @@ mod tests {
             "autoapprove",
             "compact",
             "skills",
+            "agents",
+            "agentuse",
+            "newagent",
             "enable",
             "disable",
         ] {

@@ -2,13 +2,73 @@ use super::*;
 use crate::http::types::{
     AgentCreateRequest, AgentRenderResponse, AgentResolveRequest, AgentScheduleCreateRequest,
     AgentScheduleDetailResponse, AgentScheduleResolveRequest, AgentScheduleUpdateRequest,
-    AgentSelectRequest, ErrorResponse,
+    AgentSelectRequest, AgentSummaryResponse, ErrorResponse,
 };
 use tiny_http::{Method, StatusCode};
 
 pub(super) fn handle_list_agents(app: &App, request: Request) -> std::io::Result<()> {
     match app.render_agents() {
         Ok(message) => respond_json(request, StatusCode(200), &AgentRenderResponse { message }),
+        Err(error) => {
+            let (status, payload) = map_bootstrap_error(error);
+            respond_json(request, status, &payload)
+        }
+    }
+}
+
+pub(super) fn handle_list_agent_summaries(app: &App, request: Request) -> std::io::Result<()> {
+    match app.list_agents() {
+        Ok(agents) => {
+            let agents = agents
+                .into_iter()
+                .map(|agent| AgentSummaryResponse {
+                    id: agent.id,
+                    name: agent.name,
+                    template_kind: agent.template_kind.as_str().to_string(),
+                })
+                .collect::<Vec<_>>();
+            respond_json(request, StatusCode(200), &agents)
+        }
+        Err(error) => {
+            let (status, payload) = map_bootstrap_error(error);
+            respond_json(request, status, &payload)
+        }
+    }
+}
+
+pub(super) fn handle_resolve_agent(app: &App, mut request: Request) -> std::io::Result<()> {
+    let payload = match parse_json_body::<AgentResolveRequest>(&mut request) {
+        Ok(payload) => payload,
+        Err(error) => {
+            return respond_json(
+                request,
+                StatusCode(400),
+                &ErrorResponse {
+                    error: format!("invalid agent resolve request: {error}"),
+                },
+            );
+        }
+    };
+    let Some(identifier) = payload.identifier.as_deref() else {
+        return respond_json(
+            request,
+            StatusCode(400),
+            &ErrorResponse {
+                error: "agent identifier is required".to_string(),
+            },
+        );
+    };
+
+    match app.agent_profile(identifier) {
+        Ok(agent) => respond_json(
+            request,
+            StatusCode(200),
+            &AgentSummaryResponse {
+                id: agent.id,
+                name: agent.name,
+                template_kind: agent.template_kind.as_str().to_string(),
+            },
+        ),
         Err(error) => {
             let (status, payload) = map_bootstrap_error(error);
             respond_json(request, status, &payload)

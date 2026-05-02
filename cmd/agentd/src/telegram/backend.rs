@@ -4,9 +4,22 @@ use crate::bootstrap::{
 use crate::execution::{ChatExecutionEvent, ChatTurnExecutionReport};
 use crate::http::client::DaemonClient;
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TelegramAgentSummary {
+    pub id: String,
+    pub name: String,
+    pub template_kind: String,
+}
+
 pub trait TelegramBackend: Clone + Send + Sync + 'static {
+    fn list_agents(&self) -> Result<Vec<TelegramAgentSummary>, BootstrapError>;
+    fn resolve_agent(&self, identifier: &str) -> Result<TelegramAgentSummary, BootstrapError>;
     fn list_session_summaries(&self) -> Result<Vec<SessionSummary>, BootstrapError>;
-    fn create_session_auto(&self, title: Option<&str>) -> Result<SessionSummary, BootstrapError>;
+    fn create_session_for_agent(
+        &self,
+        title: Option<&str>,
+        agent_identifier: Option<&str>,
+    ) -> Result<SessionSummary, BootstrapError>;
     fn update_session_preferences(
         &self,
         session_id: &str,
@@ -60,12 +73,39 @@ impl DaemonTelegramBackend {
 }
 
 impl TelegramBackend for DaemonTelegramBackend {
+    fn list_agents(&self) -> Result<Vec<TelegramAgentSummary>, BootstrapError> {
+        Ok(self
+            .client
+            .list_agents()?
+            .into_iter()
+            .map(|agent| TelegramAgentSummary {
+                id: agent.id,
+                name: agent.name,
+                template_kind: agent.template_kind,
+            })
+            .collect())
+    }
+
+    fn resolve_agent(&self, identifier: &str) -> Result<TelegramAgentSummary, BootstrapError> {
+        let agent = self.client.resolve_agent(identifier)?;
+        Ok(TelegramAgentSummary {
+            id: agent.id,
+            name: agent.name,
+            template_kind: agent.template_kind,
+        })
+    }
+
     fn list_session_summaries(&self) -> Result<Vec<SessionSummary>, BootstrapError> {
         self.client.list_session_summaries()
     }
 
-    fn create_session_auto(&self, title: Option<&str>) -> Result<SessionSummary, BootstrapError> {
-        self.client.create_session_auto(title)
+    fn create_session_for_agent(
+        &self,
+        title: Option<&str>,
+        agent_identifier: Option<&str>,
+    ) -> Result<SessionSummary, BootstrapError> {
+        self.client
+            .create_session_for_agent(None, title, agent_identifier)
     }
 
     fn update_session_preferences(

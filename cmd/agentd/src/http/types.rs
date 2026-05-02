@@ -45,6 +45,7 @@ pub struct DaemonStopResponse {
 pub struct CreateSessionRequest {
     pub id: Option<String>,
     pub title: Option<String>,
+    pub agent_identifier: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -179,6 +180,13 @@ pub struct MemoryRenderResponse {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AgentRenderResponse {
     pub message: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AgentSummaryResponse {
+    pub id: String,
+    pub name: String,
+    pub template_kind: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

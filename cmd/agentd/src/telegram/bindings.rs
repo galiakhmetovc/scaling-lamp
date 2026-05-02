@@ -73,6 +73,8 @@ fn binding_record(input: BindingRecordInput<'_>) -> TelegramChatBindingRecord {
         scope: scope.to_string(),
         owner_telegram_user_id,
         selected_session_id,
+        default_agent_profile_id: existing
+            .and_then(|record| record.default_agent_profile_id.clone()),
         last_delivered_transcript_created_at: cursor.created_at,
         last_delivered_transcript_id: cursor.transcript_id,
         inbound_queue_mode: existing

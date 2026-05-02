@@ -22,6 +22,7 @@ pub(super) fn handle_create_session(app: &App, mut request: Request) -> std::io:
         CreateSessionRequest {
             id: None,
             title: None,
+            agent_identifier: None,
         }
     } else {
         match serde_json::from_str::<CreateSessionRequest>(&body) {
@@ -39,8 +40,15 @@ pub(super) fn handle_create_session(app: &App, mut request: Request) -> std::io:
     };
 
     let session_result = match payload.id.as_deref() {
-        Some(id) => app.create_session(id, payload.title.as_deref().unwrap_or("New Session")),
-        None => app.create_session_auto(payload.title.as_deref()),
+        Some(id) => app.create_session_for_agent(
+            id,
+            payload.title.as_deref().unwrap_or("New Session"),
+            payload.agent_identifier.as_deref(),
+        ),
+        None => app.create_session_auto_for_agent(
+            payload.title.as_deref(),
+            payload.agent_identifier.as_deref(),
+        ),
     };
     let session = match session_result {
         Ok(session) => session,

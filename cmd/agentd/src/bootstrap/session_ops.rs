@@ -242,14 +242,32 @@ impl App {
         &self,
         title: Option<&str>,
     ) -> Result<SessionSummary, BootstrapError> {
-        self.create_session(
+        self.create_session_auto_for_agent(title, None)
+    }
+
+    pub fn create_session_auto_for_agent(
+        &self,
+        title: Option<&str>,
+        agent_identifier: Option<&str>,
+    ) -> Result<SessionSummary, BootstrapError> {
+        self.create_session_for_agent(
             &format!("session-{}", unique_timestamp_token()?),
             title.unwrap_or("New Session").trim(),
+            agent_identifier,
         )
     }
 
     #[cfg_attr(not(test), allow(dead_code))]
     pub fn create_session(&self, id: &str, title: &str) -> Result<SessionSummary, BootstrapError> {
+        self.create_session_for_agent(id, title, None)
+    }
+
+    pub fn create_session_for_agent(
+        &self,
+        id: &str,
+        title: &str,
+        agent_identifier: Option<&str>,
+    ) -> Result<SessionSummary, BootstrapError> {
         let started = Instant::now();
         DiagnosticEventBuilder::new(
             &self.config,
@@ -268,7 +286,13 @@ impl App {
             project_memory_enabled: self.config.session_defaults.project_memory_enabled,
             ..SessionSettings::default()
         };
-        let agent_profile = self.current_agent_profile()?;
+        let agent_profile = match agent_identifier
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        {
+            Some(identifier) => self.agent_profile(identifier)?,
+            None => self.current_agent_profile()?,
+        };
         let workspace_root = resolve_session_workspace_root(
             &self.config,
             &self.runtime.workspace.root,

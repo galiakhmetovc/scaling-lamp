@@ -125,6 +125,7 @@ pub struct TelegramChatBindingRecord {
     pub scope: String,
     pub owner_telegram_user_id: Option<i64>,
     pub selected_session_id: Option<String>,
+    pub default_agent_profile_id: Option<String>,
     pub last_delivered_transcript_created_at: Option<i64>,
     pub last_delivered_transcript_id: Option<String>,
     pub inbound_queue_mode: String,

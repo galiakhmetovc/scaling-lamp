@@ -131,16 +131,20 @@ impl TelegramRepository for PersistenceStore {
         if let Some(selected_session_id) = record.selected_session_id.as_deref() {
             validate_identifier(selected_session_id)?;
         }
+        if let Some(default_agent_profile_id) = record.default_agent_profile_id.as_deref() {
+            validate_identifier(default_agent_profile_id)?;
+        }
         self.connection.execute(
             "INSERT INTO telegram_chat_bindings (
-                telegram_chat_id, scope, owner_telegram_user_id, selected_session_id,
+                telegram_chat_id, scope, owner_telegram_user_id, selected_session_id, default_agent_profile_id,
                 last_delivered_transcript_created_at, last_delivered_transcript_id,
                 inbound_queue_mode, inbound_coalesce_window_ms, created_at, updated_at
-             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)
              ON CONFLICT(telegram_chat_id) DO UPDATE SET
                 scope = excluded.scope,
                 owner_telegram_user_id = excluded.owner_telegram_user_id,
                 selected_session_id = excluded.selected_session_id,
+                default_agent_profile_id = excluded.default_agent_profile_id,
                 last_delivered_transcript_created_at = excluded.last_delivered_transcript_created_at,
                 last_delivered_transcript_id = excluded.last_delivered_transcript_id,
                 inbound_queue_mode = excluded.inbound_queue_mode,
@@ -152,6 +156,7 @@ impl TelegramRepository for PersistenceStore {
                 record.scope,
                 record.owner_telegram_user_id,
                 record.selected_session_id,
+                record.default_agent_profile_id,
                 record.last_delivered_transcript_created_at,
                 record.last_delivered_transcript_id,
                 record.inbound_queue_mode,
@@ -170,7 +175,7 @@ impl TelegramRepository for PersistenceStore {
         self.connection
             .query_row(
                 "SELECT telegram_chat_id, scope, owner_telegram_user_id, selected_session_id,
-                        last_delivered_transcript_created_at, last_delivered_transcript_id,
+                        default_agent_profile_id, last_delivered_transcript_created_at, last_delivered_transcript_id,
                         inbound_queue_mode, inbound_coalesce_window_ms, created_at, updated_at
                  FROM telegram_chat_bindings
                  WHERE telegram_chat_id = ?1",
@@ -181,12 +186,13 @@ impl TelegramRepository for PersistenceStore {
                         scope: row.get(1)?,
                         owner_telegram_user_id: row.get(2)?,
                         selected_session_id: row.get(3)?,
-                        last_delivered_transcript_created_at: row.get(4)?,
-                        last_delivered_transcript_id: row.get(5)?,
-                        inbound_queue_mode: row.get(6)?,
-                        inbound_coalesce_window_ms: row.get(7)?,
-                        created_at: row.get(8)?,
-                        updated_at: row.get(9)?,
+                        default_agent_profile_id: row.get(4)?,
+                        last_delivered_transcript_created_at: row.get(5)?,
+                        last_delivered_transcript_id: row.get(6)?,
+                        inbound_queue_mode: row.get(7)?,
+                        inbound_coalesce_window_ms: row.get(8)?,
+                        created_at: row.get(9)?,
+                        updated_at: row.get(10)?,
                     })
                 },
             )
@@ -197,7 +203,7 @@ impl TelegramRepository for PersistenceStore {
     fn list_telegram_chat_bindings(&self) -> Result<Vec<TelegramChatBindingRecord>, StoreError> {
         let mut statement = self.connection.prepare(
             "SELECT telegram_chat_id, scope, owner_telegram_user_id, selected_session_id,
-                    last_delivered_transcript_created_at, last_delivered_transcript_id,
+                    default_agent_profile_id, last_delivered_transcript_created_at, last_delivered_transcript_id,
                     inbound_queue_mode, inbound_coalesce_window_ms, created_at, updated_at
              FROM telegram_chat_bindings
              ORDER BY telegram_chat_id ASC",
@@ -211,12 +217,13 @@ impl TelegramRepository for PersistenceStore {
                 scope: row.get(1)?,
                 owner_telegram_user_id: row.get(2)?,
                 selected_session_id: row.get(3)?,
-                last_delivered_transcript_created_at: row.get(4)?,
-                last_delivered_transcript_id: row.get(5)?,
-                inbound_queue_mode: row.get(6)?,
-                inbound_coalesce_window_ms: row.get(7)?,
-                created_at: row.get(8)?,
-                updated_at: row.get(9)?,
+                default_agent_profile_id: row.get(4)?,
+                last_delivered_transcript_created_at: row.get(5)?,
+                last_delivered_transcript_id: row.get(6)?,
+                inbound_queue_mode: row.get(7)?,
+                inbound_coalesce_window_ms: row.get(8)?,
+                created_at: row.get(9)?,
+                updated_at: row.get(10)?,
             });
         }
 

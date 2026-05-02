@@ -120,6 +120,7 @@ fn daemon_http_can_create_a_session_over_json() {
         .json(&CreateSessionRequest {
             id: None,
             title: Some("Daemon Session".to_string()),
+            agent_identifier: None,
         })
         .send()
         .expect("create session");
@@ -129,6 +130,32 @@ fn daemon_http_can_create_a_session_over_json() {
     assert_eq!(session.title, "Daemon Session");
     assert_eq!(session.message_count, 0);
     assert!(!session.id.is_empty());
+
+    handle.stop().expect("stop daemon");
+}
+
+#[test]
+fn daemon_http_can_create_a_session_for_agent_profile() {
+    let (_temp, app, base_url) = test_app(Some("secret-token"));
+    let handle = daemon::spawn_for_test(app).expect("spawn daemon");
+    let client = Client::new();
+
+    let response = client
+        .post(format!("{base_url}/v1/sessions"))
+        .bearer_auth("secret-token")
+        .json(&CreateSessionRequest {
+            id: None,
+            title: Some("Judge Session".to_string()),
+            agent_identifier: Some("judge".to_string()),
+        })
+        .send()
+        .expect("create judge session");
+
+    assert_eq!(response.status(), StatusCode::CREATED);
+    let session: SessionSummaryResponse = response.json().expect("session json");
+    assert_eq!(session.title, "Judge Session");
+    assert_eq!(session.agent_profile_id, "judge");
+    assert_eq!(session.agent_name, "Judge");
 
     handle.stop().expect("stop daemon");
 }

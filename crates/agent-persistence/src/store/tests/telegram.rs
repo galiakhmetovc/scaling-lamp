@@ -24,6 +24,7 @@ fn telegram_repository_round_trips_pairings_bindings_and_update_cursor() {
         scope: "private".to_string(),
         owner_telegram_user_id: Some(42),
         selected_session_id: Some("session-telegram-1".to_string()),
+        default_agent_profile_id: Some("judge".to_string()),
         last_delivered_transcript_created_at: Some(115),
         last_delivered_transcript_id: Some("transcript-telegram-1".to_string()),
         inbound_queue_mode: "coalesce".to_string(),

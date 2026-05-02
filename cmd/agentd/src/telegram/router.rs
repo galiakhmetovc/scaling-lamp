@@ -30,9 +30,9 @@ use super::queue::{
 };
 use super::render::{
     TELEGRAM_CAPTION_SOFT_CAP, TELEGRAM_MESSAGE_TEXT_SOFT_CAP, chunk_message_text,
-    render_help_message, render_model_response_chunks, render_pairing_message,
-    render_pairing_required_message, render_session_created, render_session_list,
-    render_session_selected, truncate_caption,
+    render_agent_list, render_agent_selected, render_help_message, render_model_response_chunks,
+    render_pairing_message, render_pairing_required_message, render_session_created,
+    render_session_list, render_session_selected, truncate_caption,
 };
 use crate::bootstrap::{App, BootstrapError, SessionPreferencesPatch, SessionSummary};
 use crate::diagnostics::DiagnosticEventBuilder;
@@ -266,10 +266,20 @@ where
 
         let chat_id = message.chat.id.0;
         let telegram_user_id = telegram_user_id(from)?;
+        let activated_pairing = self.load_activated_pairing(telegram_user_id)?;
         let content = if self.app.config.telegram.group_require_mention {
-            match strip_bot_mention(text, &self.bot_username().await?) {
-                Some(content) => content,
-                None => return Ok(()),
+            if activated_pairing.is_some() {
+                if text.contains('@') {
+                    strip_bot_mention(text, &self.bot_username().await?)
+                        .unwrap_or_else(|| text.to_string())
+                } else {
+                    text.to_string()
+                }
+            } else {
+                match strip_bot_mention(text, &self.bot_username().await?) {
+                    Some(content) => content,
+                    None => return Ok(()),
+                }
             }
         } else {
             text.to_string()
@@ -279,7 +289,7 @@ where
             return Ok(());
         }
 
-        if self.load_activated_pairing(telegram_user_id)?.is_none() {
+        if activated_pairing.is_none() {
             self.send_text_chunks(chat_id, &render_pairing_required_message())
                 .await?;
             return Ok(());
@@ -379,6 +389,29 @@ where
                 self.send_text_chunks(chat_id, &render_session_created(&summary))
                     .await
             }
+            ParsedTelegramCommand::NewAgent {
+                agent_identifier,
+                title,
+            } => {
+                if self.load_activated_pairing(telegram_user_id)?.is_none() {
+                    self.send_text_chunks(chat_id, &render_pairing_required_message())
+                        .await?;
+                    return Ok(());
+                }
+                let now = unix_timestamp()?;
+                let agent = self.resolve_agent(agent_identifier.as_str()).await?;
+                self.set_group_chat_default_agent(chat_id, Some(agent.id.clone()), now)?;
+                let summary = self
+                    .create_and_bind_group_session_for_agent(
+                        chat_id,
+                        title.as_deref(),
+                        Some(agent.id.as_str()),
+                        now,
+                    )
+                    .await?;
+                self.send_text_chunks(chat_id, &render_session_created(&summary))
+                    .await
+            }
             ParsedTelegramCommand::Sessions => {
                 if self.load_activated_pairing(telegram_user_id)?.is_none() {
                     self.send_text_chunks(chat_id, &render_pairing_required_message())
@@ -396,6 +429,32 @@ where
                     &render_session_list(&summaries, selected.as_deref()),
                 )
                 .await
+            }
+            ParsedTelegramCommand::Agents => {
+                if self.load_activated_pairing(telegram_user_id)?.is_none() {
+                    self.send_text_chunks(chat_id, &render_pairing_required_message())
+                        .await?;
+                    return Ok(());
+                }
+                let default_agent = self.chat_default_agent_profile_id(chat_id)?;
+                let agents = self.list_agents().await?;
+                self.send_text_chunks(
+                    chat_id,
+                    &render_agent_list(&agents, default_agent.as_deref()),
+                )
+                .await
+            }
+            ParsedTelegramCommand::AgentUse { agent_identifier } => {
+                if self.load_activated_pairing(telegram_user_id)?.is_none() {
+                    self.send_text_chunks(chat_id, &render_pairing_required_message())
+                        .await?;
+                    return Ok(());
+                }
+                let now = unix_timestamp()?;
+                let agent = self.resolve_agent(agent_identifier.as_str()).await?;
+                self.set_group_chat_default_agent(chat_id, Some(agent.id.clone()), now)?;
+                self.send_text_chunks(chat_id, &render_agent_selected(&agent))
+                    .await
             }
             ParsedTelegramCommand::Use { session_id } => {
                 if self.load_activated_pairing(telegram_user_id)?.is_none() {
@@ -527,6 +586,35 @@ where
                 self.send_text_chunks(chat_id, &render_session_created(&summary))
                     .await
             }
+            ParsedTelegramCommand::NewAgent {
+                agent_identifier,
+                title,
+            } => {
+                if self.load_activated_pairing(telegram_user_id)?.is_none() {
+                    self.send_text_chunks(chat_id, &render_pairing_required_message())
+                        .await?;
+                    return Ok(());
+                }
+                let now = unix_timestamp()?;
+                let agent = self.resolve_agent(agent_identifier.as_str()).await?;
+                self.set_private_chat_default_agent(
+                    chat_id,
+                    telegram_user_id,
+                    Some(agent.id.clone()),
+                    now,
+                )?;
+                let summary = self
+                    .create_and_bind_session_for_agent(
+                        chat_id,
+                        telegram_user_id,
+                        title.as_deref(),
+                        Some(agent.id.as_str()),
+                        now,
+                    )
+                    .await?;
+                self.send_text_chunks(chat_id, &render_session_created(&summary))
+                    .await
+            }
             ParsedTelegramCommand::Sessions => {
                 if self.load_activated_pairing(telegram_user_id)?.is_none() {
                     self.send_text_chunks(chat_id, &render_pairing_required_message())
@@ -544,6 +632,37 @@ where
                     &render_session_list(&summaries, selected.as_deref()),
                 )
                 .await
+            }
+            ParsedTelegramCommand::Agents => {
+                if self.load_activated_pairing(telegram_user_id)?.is_none() {
+                    self.send_text_chunks(chat_id, &render_pairing_required_message())
+                        .await?;
+                    return Ok(());
+                }
+                let default_agent = self.chat_default_agent_profile_id(chat_id)?;
+                let agents = self.list_agents().await?;
+                self.send_text_chunks(
+                    chat_id,
+                    &render_agent_list(&agents, default_agent.as_deref()),
+                )
+                .await
+            }
+            ParsedTelegramCommand::AgentUse { agent_identifier } => {
+                if self.load_activated_pairing(telegram_user_id)?.is_none() {
+                    self.send_text_chunks(chat_id, &render_pairing_required_message())
+                        .await?;
+                    return Ok(());
+                }
+                let now = unix_timestamp()?;
+                let agent = self.resolve_agent(agent_identifier.as_str()).await?;
+                self.set_private_chat_default_agent(
+                    chat_id,
+                    telegram_user_id,
+                    Some(agent.id.clone()),
+                    now,
+                )?;
+                self.send_text_chunks(chat_id, &render_agent_selected(&agent))
+                    .await
             }
             ParsedTelegramCommand::Use { session_id } => {
                 if self.load_activated_pairing(telegram_user_id)?.is_none() {
@@ -811,9 +930,15 @@ where
                 let summary = self.session_summary(session_id.clone()).await?;
                 let active_run = self.render_active_run(session_id).await?;
                 let queue_status = self.render_queue_status(chat_id)?;
+                let default_agent = self.chat_default_agent_profile_id(chat_id)?;
                 self.send_text_chunks(
                     chat_id,
-                    &render_session_operator_status(&summary, &active_run, &queue_status),
+                    &render_session_operator_status(
+                        &summary,
+                        default_agent.as_deref(),
+                        &active_run,
+                        &queue_status,
+                    ),
                 )
                 .await
             }
@@ -1552,8 +1677,15 @@ where
             });
         }
 
-        self.create_and_bind_session(chat_id, telegram_user_id, None, now)
-            .await
+        let default_agent_profile_id = self.chat_default_agent_profile_id(chat_id)?;
+        self.create_and_bind_session_for_agent(
+            chat_id,
+            telegram_user_id,
+            None,
+            default_agent_profile_id.as_deref(),
+            now,
+        )
+        .await
     }
 
     async fn create_and_bind_session(
@@ -1563,7 +1695,31 @@ where
         title: Option<&str>,
         now: i64,
     ) -> Result<SessionSummary, BootstrapError> {
-        let summary = self.create_session_auto(title.map(str::to_string)).await?;
+        let default_agent_profile_id = self.chat_default_agent_profile_id(chat_id)?;
+        self.create_and_bind_session_for_agent(
+            chat_id,
+            telegram_user_id,
+            title,
+            default_agent_profile_id.as_deref(),
+            now,
+        )
+        .await
+    }
+
+    async fn create_and_bind_session_for_agent(
+        &self,
+        chat_id: i64,
+        telegram_user_id: i64,
+        title: Option<&str>,
+        agent_identifier: Option<&str>,
+        now: i64,
+    ) -> Result<SessionSummary, BootstrapError> {
+        let summary = self
+            .create_session_for_agent(
+                title.map(str::to_string),
+                agent_identifier.map(str::to_string),
+            )
+            .await?;
         let summary = self.normalize_telegram_session_preferences(summary).await?;
         self.put_private_binding(chat_id, telegram_user_id, Some(summary.id.clone()), now)?;
         Ok(summary)
@@ -1575,7 +1731,29 @@ where
         title: Option<&str>,
         now: i64,
     ) -> Result<SessionSummary, BootstrapError> {
-        let summary = self.create_session_auto(title.map(str::to_string)).await?;
+        let default_agent_profile_id = self.chat_default_agent_profile_id(chat_id)?;
+        self.create_and_bind_group_session_for_agent(
+            chat_id,
+            title,
+            default_agent_profile_id.as_deref(),
+            now,
+        )
+        .await
+    }
+
+    async fn create_and_bind_group_session_for_agent(
+        &self,
+        chat_id: i64,
+        title: Option<&str>,
+        agent_identifier: Option<&str>,
+        now: i64,
+    ) -> Result<SessionSummary, BootstrapError> {
+        let summary = self
+            .create_session_for_agent(
+                title.map(str::to_string),
+                agent_identifier.map(str::to_string),
+            )
+            .await?;
         let summary = self.normalize_telegram_session_preferences(summary).await?;
         self.put_group_binding(chat_id, Some(summary.id.clone()), now)?;
         Ok(summary)
@@ -1596,7 +1774,10 @@ where
             return self.session_summary(session_id).await;
         }
 
-        let summary = self.create_session_auto(None).await?;
+        let default_agent_profile_id = self.chat_default_agent_profile_id(chat_id)?;
+        let summary = self
+            .create_session_for_agent(None, default_agent_profile_id)
+            .await?;
         let summary = self.normalize_telegram_session_preferences(summary).await?;
         self.put_group_binding(chat_id, Some(summary.id.clone()), now)?;
         Ok(summary)
@@ -1644,6 +1825,67 @@ where
         );
         self.with_store_retry(|store| store.put_telegram_chat_binding(&binding))
             .map(|_| ())
+    }
+
+    fn set_private_chat_default_agent(
+        &self,
+        chat_id: i64,
+        telegram_user_id: i64,
+        default_agent_profile_id: Option<String>,
+        now: i64,
+    ) -> Result<(), BootstrapError> {
+        let existing = self.with_store_retry(|store| store.get_telegram_chat_binding(chat_id))?;
+        let selected_session_id = existing
+            .as_ref()
+            .and_then(|record| record.selected_session_id.clone());
+        let cursor =
+            self.binding_cursor_for_selection(existing.as_ref(), selected_session_id.as_deref())?;
+        let mut binding = private_binding_record(
+            chat_id,
+            telegram_user_id,
+            selected_session_id,
+            now,
+            existing.as_ref(),
+            cursor,
+            &self.app.config.telegram.inbound_queue_default_mode,
+        );
+        binding.default_agent_profile_id = default_agent_profile_id;
+        self.with_store_retry(|store| store.put_telegram_chat_binding(&binding))
+            .map(|_| ())
+    }
+
+    fn set_group_chat_default_agent(
+        &self,
+        chat_id: i64,
+        default_agent_profile_id: Option<String>,
+        now: i64,
+    ) -> Result<(), BootstrapError> {
+        let existing = self.with_store_retry(|store| store.get_telegram_chat_binding(chat_id))?;
+        let selected_session_id = existing
+            .as_ref()
+            .and_then(|record| record.selected_session_id.clone());
+        let cursor =
+            self.binding_cursor_for_selection(existing.as_ref(), selected_session_id.as_deref())?;
+        let mut binding = group_binding_record(
+            chat_id,
+            selected_session_id,
+            now,
+            existing.as_ref(),
+            cursor,
+            &self.app.config.telegram.inbound_queue_default_mode,
+        );
+        binding.default_agent_profile_id = default_agent_profile_id;
+        self.with_store_retry(|store| store.put_telegram_chat_binding(&binding))
+            .map(|_| ())
+    }
+
+    fn chat_default_agent_profile_id(
+        &self,
+        chat_id: i64,
+    ) -> Result<Option<String>, BootstrapError> {
+        Ok(self
+            .with_store_retry(|store| store.get_telegram_chat_binding(chat_id))?
+            .and_then(|binding| binding.default_agent_profile_id))
     }
 
     fn ensure_chat_delivery_cursor_initialized(
@@ -1914,14 +2156,37 @@ where
             .map_err(map_join_error)?
     }
 
-    async fn create_session_auto(
+    async fn list_agents(
         &self,
-        title: Option<String>,
-    ) -> Result<SessionSummary, BootstrapError> {
+    ) -> Result<Vec<super::backend::TelegramAgentSummary>, BootstrapError> {
         let backend = self.backend.clone();
-        tokio::task::spawn_blocking(move || backend.create_session_auto(title.as_deref()))
+        tokio::task::spawn_blocking(move || backend.list_agents())
             .await
             .map_err(map_join_error)?
+    }
+
+    async fn resolve_agent(
+        &self,
+        identifier: &str,
+    ) -> Result<super::backend::TelegramAgentSummary, BootstrapError> {
+        let backend = self.backend.clone();
+        let identifier = identifier.to_string();
+        tokio::task::spawn_blocking(move || backend.resolve_agent(&identifier))
+            .await
+            .map_err(map_join_error)?
+    }
+
+    async fn create_session_for_agent(
+        &self,
+        title: Option<String>,
+        agent_identifier: Option<String>,
+    ) -> Result<SessionSummary, BootstrapError> {
+        let backend = self.backend.clone();
+        tokio::task::spawn_blocking(move || {
+            backend.create_session_for_agent(title.as_deref(), agent_identifier.as_deref())
+        })
+        .await
+        .map_err(map_join_error)?
     }
 
     async fn update_session_preferences(
@@ -2526,6 +2791,7 @@ where
 
 fn render_session_operator_status(
     summary: &SessionSummary,
+    default_agent_profile_id: Option<&str>,
     active_run: &str,
     queue_status: &str,
 ) -> String {
@@ -2536,6 +2802,10 @@ fn render_session_operator_status(
         format!(
             "- agent: {} ({})",
             summary.agent_name, summary.agent_profile_id
+        ),
+        format!(
+            "- chat_default_agent: {}",
+            default_agent_profile_id.unwrap_or("<current runtime default>")
         ),
         format!(
             "- model: {}",
