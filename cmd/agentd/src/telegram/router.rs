@@ -7,6 +7,10 @@ use super::commands::{
     is_session_operator_command, is_valid_telegram_queue_mode, parse_command,
     parse_command_for_bot,
 };
+use super::delivery::{
+    DeliveryCursor, TelegramDeliveryLimiter, TelegramDeliveryScope, TelegramDeliveryTrace,
+    duration_millis, telegram_delivery_error_is_permanent, telegram_span_id, telegram_trace_id,
+};
 use super::files::{
     IncomingTelegramFile, artifact_metadata_value, extract_incoming_file, metadata_string,
     render_uploaded_file_turn_input, telegram_artifact_id,
@@ -37,7 +41,7 @@ use agent_persistence::{
 };
 use agent_runtime::inbox::{SessionInboxEvent, SessionInboxEventPayload};
 use serde_json::json;
-use std::collections::{BTreeMap, HashSet};
+use std::collections::HashSet;
 use std::future::Future;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -61,12 +65,6 @@ const TELEGRAM_CHAT_TURN_FAST_SETTLE_MILLIS: u64 = 50;
 const TELEGRAM_INBOUND_QUEUE_SOURCE: &str = "telegram";
 
 static TELEGRAM_PAIRING_COUNTER: AtomicU64 = AtomicU64::new(0);
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct TelegramDeliveryTrace {
-    trace_id: String,
-    parent_span_id: String,
-}
 
 #[derive(Debug, Clone)]
 pub struct TelegramWorker<B> {
@@ -2637,66 +2635,6 @@ fn is_telegram_inbox_event(record: &SessionInboxEventRecord) -> bool {
         }
         _ => false,
     }
-}
-
-#[derive(Debug, Default)]
-struct TelegramDeliveryLimiter {
-    global_next_at: Option<Instant>,
-    chat_next_at: BTreeMap<i64, Instant>,
-}
-
-impl TelegramDeliveryLimiter {
-    fn reserve(
-        &mut self,
-        chat_id: i64,
-        global_interval: Duration,
-        chat_interval: Duration,
-    ) -> Duration {
-        let now = Instant::now();
-        let mut slot = now;
-        if let Some(global_next_at) = self.global_next_at {
-            slot = slot.max(global_next_at);
-        }
-        if let Some(chat_next_at) = self.chat_next_at.get(&chat_id).copied() {
-            slot = slot.max(chat_next_at);
-        }
-        self.global_next_at = Some(slot + global_interval);
-        self.chat_next_at.insert(chat_id, slot + chat_interval);
-        slot.saturating_duration_since(now)
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum TelegramDeliveryScope {
-    Private,
-    Group,
-}
-
-fn telegram_trace_id(chat_id: i64) -> String {
-    format!("trace-telegram-{}", chat_id.to_string().replace('-', "n"))
-}
-
-fn telegram_span_id(chat_id: i64, op: &str, attempt: usize) -> String {
-    format!(
-        "span-telegram-{}-{}-{attempt}",
-        chat_id.to_string().replace('-', "n"),
-        op.replace('_', "-")
-    )
-}
-
-fn duration_millis(duration: Duration) -> u64 {
-    u64::try_from(duration.as_millis()).unwrap_or(u64::MAX)
-}
-
-fn telegram_delivery_error_is_permanent(error: &TelegramClientError) -> bool {
-    let message = error.to_string();
-    message.contains("MESSAGE_TOO_LONG") || message.contains("Bad Request")
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct DeliveryCursor {
-    created_at: Option<i64>,
-    transcript_id: Option<String>,
 }
 
 fn transcript_is_after_binding_cursor(
