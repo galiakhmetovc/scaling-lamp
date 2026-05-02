@@ -1146,6 +1146,7 @@ logseq.$CADDY_DOMAIN {
 
 	  silverbullet_domain_block=
 	  silverbullet_https_block=
+	  caddy_global_options=
 	  if [ "$ENABLE_SILVERBULLET" -eq 1 ]; then
     if [ -n "$CADDY_DOMAIN" ]; then
       silverbullet_domain_block="
@@ -1161,6 +1162,15 @@ https://$CADDY_HOST:$SILVERBULLET_HTTPS_PORT {
 }
 "
 	    fi
+	  fi
+
+	  if [ -n "$CADDY_HTTPS_PORT" ] || { [ "$ENABLE_SILVERBULLET" -eq 1 ] && [ -n "$SILVERBULLET_HTTPS_PORT" ]; }; then
+	    caddy_global_options="{
+  auto_https disable_redirects
+  default_sni $CADDY_HOST
+}
+
+"
 	  fi
 
 	  obsidian_domain_block=
@@ -1202,11 +1212,7 @@ EOF
 
 	    if [ -n "$CADDY_HTTPS_PORT" ]; then
       cat > "$tmp_caddyfile" <<EOF
-{
-  auto_https disable_redirects
-  default_sni $CADDY_HOST
-}
-
+$caddy_global_options
 :80 {
   redir /searxng /searxng/ 308
 $obsidian_http_redirects
@@ -1243,6 +1249,7 @@ $silverbullet_https_block
 EOF
     else
       cat > "$tmp_caddyfile" <<EOF
+$caddy_global_options
 :80 {
   redir /searxng /searxng/ 308
 $jaeger_http_redirect
