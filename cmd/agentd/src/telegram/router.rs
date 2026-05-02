@@ -15,10 +15,12 @@ use crate::store_retry::{
 };
 use agent_persistence::{
     ArtifactRecord, ArtifactRepository, FileDeliveryRepository, FileDeliveryRequestRecord,
-    PersistenceStore, StoreError, TelegramChatBindingRecord, TelegramChatStatusRecord,
-    TelegramRepository, TelegramUpdateCursorRecord, TelegramUserPairingRecord, TraceRepository,
-    TranscriptRecord, TranscriptRepository, audit::AuditLogConfig,
+    PersistenceStore, SessionInboxEventRecord, SessionInboxRepository, StoreError,
+    TelegramChatBindingRecord, TelegramChatStatusRecord, TelegramRepository,
+    TelegramUpdateCursorRecord, TelegramUserPairingRecord, TraceRepository, TranscriptRecord,
+    TranscriptRepository, audit::AuditLogConfig,
 };
+use agent_runtime::inbox::{SessionInboxEvent, SessionInboxEventPayload};
 use serde_json::json;
 use std::collections::{BTreeMap, HashSet};
 use std::future::Future;
@@ -42,6 +44,12 @@ const TELEGRAM_DELIVERY_RETRY_ATTEMPTS: usize = 3;
 const TELEGRAM_DELIVERY_RETRY_BASE_DELAY_MS: u64 = 250;
 const TELEGRAM_STATUS_DETAIL_CHAR_CAP: usize = 700;
 const TELEGRAM_CHAT_TURN_FAST_SETTLE_MILLIS: u64 = 50;
+const TELEGRAM_INBOUND_QUEUE_MODE_REJECT: &str = "reject";
+const TELEGRAM_INBOUND_QUEUE_MODE_QUEUE: &str = "queue";
+const TELEGRAM_INBOUND_QUEUE_MODE_COALESCE: &str = "coalesce";
+const TELEGRAM_INBOUND_QUEUE_MODE_RESTART: &str = "restart";
+const TELEGRAM_INBOUND_QUEUE_SOURCE: &str = "telegram";
+const TELEGRAM_MIN_COALESCE_WINDOW_MS: u64 = 5_000;
 
 static TELEGRAM_PAIRING_COUNTER: AtomicU64 = AtomicU64::new(0);
 
@@ -69,6 +77,9 @@ enum ParsedTelegramCommand {
     },
     Status,
     Jobs,
+    Queue {
+        action: TelegramQueueAction,
+    },
     Stop,
     Cancel,
     Model {
@@ -92,6 +103,17 @@ enum ParsedTelegramCommand {
         skill_name: String,
     },
     InvalidUsage(String),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum TelegramQueueAction {
+    Show,
+    Set {
+        mode: String,
+        coalesce_window_ms: Option<u64>,
+    },
+    Flush,
+    Clear,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -272,7 +294,7 @@ where
         let session = self
             .resolve_or_create_private_session(chat_id, telegram_user_id(from)?, now)
             .await?;
-        self.start_chat_turn_background(chat_id, session.id, text.to_string(), now)
+        self.start_or_queue_chat_turn(chat_id, message.id.0, session.id, text.to_string(), now)
             .await
     }
 
@@ -317,7 +339,7 @@ where
 
         let now = unix_timestamp()?;
         let session = self.resolve_or_create_group_session(chat_id, now).await?;
-        self.start_chat_turn_background(chat_id, session.id, content, now)
+        self.start_or_queue_chat_turn(chat_id, message.id.0, session.id, content, now)
             .await
     }
 
@@ -360,7 +382,7 @@ where
             .map(str::trim)
             .filter(|value| !value.is_empty());
         let turn_input = render_uploaded_file_turn_input(&artifact, &file, caption);
-        self.start_chat_turn_background(chat_id, session.id, turn_input, now)
+        self.start_or_queue_chat_turn(chat_id, message.id.0, session.id, turn_input, now)
             .await
     }
 
@@ -498,6 +520,7 @@ where
             }
             ParsedTelegramCommand::Status
             | ParsedTelegramCommand::Jobs
+            | ParsedTelegramCommand::Queue { .. }
             | ParsedTelegramCommand::Stop
             | ParsedTelegramCommand::Cancel
             | ParsedTelegramCommand::Model { .. }
@@ -649,6 +672,7 @@ where
             }
             ParsedTelegramCommand::Status
             | ParsedTelegramCommand::Jobs
+            | ParsedTelegramCommand::Queue { .. }
             | ParsedTelegramCommand::Stop
             | ParsedTelegramCommand::Cancel
             | ParsedTelegramCommand::Model { .. }
@@ -838,15 +862,22 @@ where
             ParsedTelegramCommand::Status => {
                 let summary = self.session_summary(session_id.clone()).await?;
                 let active_run = self.render_active_run(session_id).await?;
+                let queue_status = self.render_queue_status(chat_id)?;
                 self.send_text_chunks(
                     chat_id,
-                    &render_session_operator_status(&summary, &active_run),
+                    &render_session_operator_status(&summary, &active_run, &queue_status),
                 )
                 .await
             }
             ParsedTelegramCommand::Jobs => {
                 let jobs = self.render_session_background_jobs(session_id).await?;
                 self.send_text_chunks(chat_id, &jobs).await
+            }
+            ParsedTelegramCommand::Queue { action } => {
+                let response = self
+                    .handle_queue_command(chat_id, session_id, action)
+                    .await?;
+                self.send_text_chunks(chat_id, &response).await
             }
             ParsedTelegramCommand::Stop => {
                 let response = self.cancel_active_run(session_id).await?;
@@ -1647,6 +1678,13 @@ where
                 selected_session_id: selected_session_id.clone(),
                 last_delivered_transcript_created_at: cursor_created_at,
                 last_delivered_transcript_id: cursor_transcript_id.clone(),
+                inbound_queue_mode: existing
+                    .as_ref()
+                    .map(|record| record.inbound_queue_mode.clone())
+                    .unwrap_or_else(|| self.app.config.telegram.inbound_queue_default_mode.clone()),
+                inbound_coalesce_window_ms: existing
+                    .as_ref()
+                    .and_then(|record| record.inbound_coalesce_window_ms),
                 created_at: existing_created_at,
                 updated_at: now,
             })
@@ -1677,6 +1715,13 @@ where
                 selected_session_id: selected_session_id.clone(),
                 last_delivered_transcript_created_at: cursor_created_at,
                 last_delivered_transcript_id: cursor_transcript_id.clone(),
+                inbound_queue_mode: existing
+                    .as_ref()
+                    .map(|record| record.inbound_queue_mode.clone())
+                    .unwrap_or_else(|| self.app.config.telegram.inbound_queue_default_mode.clone()),
+                inbound_coalesce_window_ms: existing
+                    .as_ref()
+                    .and_then(|record| record.inbound_coalesce_window_ms),
                 created_at: existing_created_at,
                 updated_at: now,
             })
@@ -2092,22 +2137,37 @@ where
         }
     }
 
-    async fn start_chat_turn_background(
+    async fn start_or_queue_chat_turn(
+        &self,
+        chat_id: i64,
+        telegram_message_id: i32,
+        session_id: String,
+        message: String,
+        now: i64,
+    ) -> Result<(), BootstrapError> {
+        if !self.mark_chat_turn_active(&session_id) {
+            return self
+                .handle_inbound_while_turn_running(
+                    chat_id,
+                    telegram_message_id,
+                    session_id,
+                    message,
+                    now,
+                )
+                .await;
+        }
+
+        self.start_marked_chat_turn_background(chat_id, session_id, message, now)
+            .await
+    }
+
+    async fn start_marked_chat_turn_background(
         &self,
         chat_id: i64,
         session_id: String,
         message: String,
         now: i64,
     ) -> Result<(), BootstrapError> {
-        if !self.mark_chat_turn_active(&session_id) {
-            self.send_text_chunks(
-                chat_id,
-                "A turn is already running in this session. Use /status to inspect it, /stop to stop the active turn, or /cancel to cancel queued work.",
-            )
-            .await?;
-            return Ok(());
-        }
-
         let ack = match self.send_temporary_status_message(chat_id, now).await {
             Ok(ack) => ack,
             Err(error) => {
@@ -2156,6 +2216,281 @@ where
         }
 
         Ok(())
+    }
+
+    async fn handle_inbound_while_turn_running(
+        &self,
+        chat_id: i64,
+        telegram_message_id: i32,
+        session_id: String,
+        message: String,
+        now: i64,
+    ) -> Result<(), BootstrapError> {
+        let Some(binding) =
+            self.with_store_retry(|store| store.get_telegram_chat_binding(chat_id))?
+        else {
+            self.send_text_chunks(
+                chat_id,
+                "A turn is already running, but this chat is not bound to a session. Use /new or /use <session_id>.",
+            )
+            .await?;
+            return Ok(());
+        };
+        let mode = self.effective_inbound_queue_mode(&binding);
+        match mode.as_str() {
+            TELEGRAM_INBOUND_QUEUE_MODE_REJECT => {
+                self.send_text_chunks(
+                    chat_id,
+                    "A turn is already running in this session. Use /status to inspect it, /stop to stop the active turn, or /queue queue|coalesce to queue new messages.",
+                )
+                .await
+            }
+            TELEGRAM_INBOUND_QUEUE_MODE_QUEUE => {
+                self.queue_telegram_inbound_message(
+                    &session_id,
+                    chat_id,
+                    telegram_message_id,
+                    &message,
+                    now,
+                    now,
+                )?;
+                let queued_count = self.queued_telegram_inbox_count(&session_id)?;
+                self.send_text_chunks(
+                    chat_id,
+                    &format!(
+                        "Queued inbound message.\n- mode: queue\n- queued_inbound: {queued_count}"
+                    ),
+                )
+                .await
+            }
+            TELEGRAM_INBOUND_QUEUE_MODE_COALESCE => {
+                let window_ms = self.effective_inbound_coalesce_window_ms(&binding);
+                let window_seconds = coalesce_window_seconds(window_ms);
+                let available_at = now.saturating_add(window_seconds);
+                self.queue_telegram_inbound_message(
+                    &session_id,
+                    chat_id,
+                    telegram_message_id,
+                    &message,
+                    now,
+                    available_at,
+                )?;
+                let queued_count =
+                    self.refresh_queued_telegram_inbox_available_at(&session_id, available_at)?;
+                self.send_text_chunks(
+                    chat_id,
+                    &format!(
+                        "Queued inbound message.\n- mode: coalesce\n- queued_inbound: {queued_count}\n- coalesce_window_ms: {window_ms}\n- available_in: ~{window_seconds}s"
+                    ),
+                )
+                .await
+            }
+            TELEGRAM_INBOUND_QUEUE_MODE_RESTART => {
+                let _ = self.cancel_active_run(session_id.clone()).await?;
+                self.queue_telegram_inbound_message(
+                    &session_id,
+                    chat_id,
+                    telegram_message_id,
+                    &message,
+                    now,
+                    now,
+                )?;
+                let queued_count = self.queued_telegram_inbox_count(&session_id)?;
+                self.send_text_chunks(
+                    chat_id,
+                    &format!(
+                        "Active turn stop requested; queued inbound message.\n- mode: restart\n- queued_inbound: {queued_count}"
+                    ),
+                )
+                .await
+            }
+            _ => {
+                self.send_text_chunks(
+                    chat_id,
+                    "A turn is already running in this session. Use /status to inspect it.",
+                )
+                .await
+            }
+        }
+    }
+
+    fn render_queue_status(&self, chat_id: i64) -> Result<String, BootstrapError> {
+        let binding = self.with_store_retry(|store| store.get_telegram_chat_binding(chat_id))?;
+        let mode = binding
+            .as_ref()
+            .map(|binding| self.effective_inbound_queue_mode(binding))
+            .unwrap_or_else(|| self.app.config.telegram.inbound_queue_default_mode.clone());
+        let coalesce_window_ms = binding
+            .as_ref()
+            .map(|binding| self.effective_inbound_coalesce_window_ms(binding))
+            .unwrap_or_else(|| self.configured_inbound_coalesce_window_ms());
+        let queued_count = binding
+            .as_ref()
+            .and_then(|binding| binding.selected_session_id.as_deref())
+            .map(|session_id| self.queued_telegram_inbox_count(session_id))
+            .transpose()?
+            .unwrap_or_default();
+        Ok(format!(
+            "Telegram queue:\n- mode: {mode}\n- queued_inbound: {queued_count}\n- coalesce_window_ms: {coalesce_window_ms}"
+        ))
+    }
+
+    async fn handle_queue_command(
+        &self,
+        chat_id: i64,
+        session_id: String,
+        action: TelegramQueueAction,
+    ) -> Result<String, BootstrapError> {
+        match action {
+            TelegramQueueAction::Show => self.render_queue_status(chat_id),
+            TelegramQueueAction::Set {
+                mode,
+                coalesce_window_ms,
+            } => {
+                self.update_telegram_queue_binding(chat_id, &mode, coalesce_window_ms)?;
+                self.render_queue_status(chat_id)
+            }
+            TelegramQueueAction::Flush => {
+                let now = unix_timestamp()?;
+                let count = self.refresh_queued_telegram_inbox_available_at(&session_id, now)?;
+                Ok(format!(
+                    "Telegram queue flushed: {count} inbound message(s) are available now.\n\n{}",
+                    self.render_queue_status(chat_id)?
+                ))
+            }
+            TelegramQueueAction::Clear => {
+                let now = unix_timestamp()?;
+                let count = self.clear_queued_telegram_inbox_events(&session_id, now)?;
+                Ok(format!(
+                    "Telegram queue cleared: {count} inbound message(s).\n\n{}",
+                    self.render_queue_status(chat_id)?
+                ))
+            }
+        }
+    }
+
+    fn update_telegram_queue_binding(
+        &self,
+        chat_id: i64,
+        mode: &str,
+        coalesce_window_ms: Option<u64>,
+    ) -> Result<(), BootstrapError> {
+        let mut binding = self
+            .with_store_retry(|store| store.get_telegram_chat_binding(chat_id))?
+            .ok_or_else(|| BootstrapError::Usage {
+                reason: "No selected session. Use /new or /use <session_id>.".to_string(),
+            })?;
+        binding.inbound_queue_mode = mode.to_string();
+        if let Some(window_ms) = coalesce_window_ms {
+            binding.inbound_coalesce_window_ms = Some(i64::try_from(window_ms).unwrap_or(i64::MAX));
+        }
+        binding.updated_at = unix_timestamp()?;
+        self.with_store_retry(|store| store.put_telegram_chat_binding(&binding))?;
+        Ok(())
+    }
+
+    fn queue_telegram_inbound_message(
+        &self,
+        session_id: &str,
+        chat_id: i64,
+        telegram_message_id: i32,
+        message: &str,
+        now: i64,
+        available_at: i64,
+    ) -> Result<(), BootstrapError> {
+        let event_id = format!("telegram-inbound-{session_id}-{chat_id}-{telegram_message_id}");
+        let mut event = SessionInboxEvent::external_input_received(
+            event_id,
+            session_id,
+            None,
+            TELEGRAM_INBOUND_QUEUE_SOURCE,
+            message,
+            now,
+        );
+        event.available_at = available_at;
+        let record =
+            SessionInboxEventRecord::try_from(&event).map_err(BootstrapError::RecordConversion)?;
+        self.with_store_retry(|store| store.put_session_inbox_event(&record))?;
+        Ok(())
+    }
+
+    fn queued_telegram_inbox_count(&self, session_id: &str) -> Result<usize, BootstrapError> {
+        let records = self.with_store_retry(|store| {
+            store.list_queued_session_inbox_events_for_session(session_id)
+        })?;
+        Ok(records
+            .iter()
+            .filter(|record| is_telegram_inbox_event(record))
+            .count())
+    }
+
+    fn refresh_queued_telegram_inbox_available_at(
+        &self,
+        session_id: &str,
+        available_at: i64,
+    ) -> Result<usize, BootstrapError> {
+        self.with_store_retry(|store| {
+            let mut count = 0usize;
+            for mut record in store.list_queued_session_inbox_events_for_session(session_id)? {
+                if !is_telegram_inbox_event(&record) {
+                    continue;
+                }
+                record.status = "queued".to_string();
+                record.available_at = available_at;
+                record.claimed_at = None;
+                record.processed_at = None;
+                record.error = None;
+                store.put_session_inbox_event(&record)?;
+                count += 1;
+            }
+            Ok(count)
+        })
+    }
+
+    fn clear_queued_telegram_inbox_events(
+        &self,
+        session_id: &str,
+        now: i64,
+    ) -> Result<usize, BootstrapError> {
+        self.with_store_retry(|store| {
+            let mut count = 0usize;
+            for mut record in store.list_queued_session_inbox_events_for_session(session_id)? {
+                if !is_telegram_inbox_event(&record) {
+                    continue;
+                }
+                record.status = "processed".to_string();
+                record.claimed_at = None;
+                record.processed_at = Some(now);
+                record.error = None;
+                store.put_session_inbox_event(&record)?;
+                count += 1;
+            }
+            Ok(count)
+        })
+    }
+
+    fn effective_inbound_queue_mode(&self, binding: &TelegramChatBindingRecord) -> String {
+        if is_valid_telegram_queue_mode(binding.inbound_queue_mode.as_str()) {
+            binding.inbound_queue_mode.clone()
+        } else {
+            self.app.config.telegram.inbound_queue_default_mode.clone()
+        }
+    }
+
+    fn effective_inbound_coalesce_window_ms(&self, binding: &TelegramChatBindingRecord) -> u64 {
+        binding
+            .inbound_coalesce_window_ms
+            .and_then(|value| u64::try_from(value).ok())
+            .unwrap_or_else(|| self.configured_inbound_coalesce_window_ms())
+            .max(TELEGRAM_MIN_COALESCE_WINDOW_MS)
+    }
+
+    fn configured_inbound_coalesce_window_ms(&self) -> u64 {
+        self.app
+            .config
+            .telegram
+            .inbound_coalesce_window_ms
+            .max(TELEGRAM_MIN_COALESCE_WINDOW_MS)
     }
 
     async fn finish_chat_turn_background(
@@ -2288,6 +2623,7 @@ pub fn default_command_specs() -> Vec<TelegramCommandSpec> {
         TelegramCommandSpec::new("use", "Select a session by id"),
         TelegramCommandSpec::new("status", "Show current session status"),
         TelegramCommandSpec::new("jobs", "Show current session jobs"),
+        TelegramCommandSpec::new("queue", "Show or set inbound queue mode"),
         TelegramCommandSpec::new("stop", "Stop the active turn"),
         TelegramCommandSpec::new("pause", "Alias for stop"),
         TelegramCommandSpec::new("cancel", "Cancel current session work"),
@@ -2348,6 +2684,10 @@ fn parse_command_parts(command: &str, args: &str) -> Option<ParsedTelegramComman
         "sessions" => Some(ParsedTelegramCommand::Sessions),
         "status" => Some(ParsedTelegramCommand::Status),
         "jobs" => Some(ParsedTelegramCommand::Jobs),
+        "queue" => match parse_queue_action(args) {
+            Ok(action) => Some(ParsedTelegramCommand::Queue { action }),
+            Err(usage) => Some(ParsedTelegramCommand::InvalidUsage(usage)),
+        },
         "stop" | "pause" => Some(ParsedTelegramCommand::Stop),
         "cancel" => Some(ParsedTelegramCommand::Cancel),
         "model" => {
@@ -2487,6 +2827,78 @@ fn parse_optional_setting(args: &str) -> Option<String> {
     }
 }
 
+fn parse_queue_action(args: &str) -> Result<TelegramQueueAction, String> {
+    let trimmed = args.trim();
+    if trimmed.is_empty() {
+        return Ok(TelegramQueueAction::Show);
+    }
+
+    let mut parts = trimmed.split_whitespace();
+    let command = parts.next().unwrap_or_default().to_ascii_lowercase();
+    match command.as_str() {
+        TELEGRAM_INBOUND_QUEUE_MODE_REJECT
+        | TELEGRAM_INBOUND_QUEUE_MODE_QUEUE
+        | TELEGRAM_INBOUND_QUEUE_MODE_RESTART => {
+            if parts.next().is_some() {
+                return Err(render_usage(
+                    "queue",
+                    "[reject|queue|coalesce [5000ms|5s]|restart|flush|clear]",
+                ));
+            }
+            Ok(TelegramQueueAction::Set {
+                mode: command,
+                coalesce_window_ms: None,
+            })
+        }
+        TELEGRAM_INBOUND_QUEUE_MODE_COALESCE => {
+            let coalesce_window_ms = match parts.next() {
+                Some(value) => Some(parse_queue_duration_ms(value).ok_or_else(|| {
+                    render_usage(
+                        "queue",
+                        "[reject|queue|coalesce [5000ms|5s]|restart|flush|clear]",
+                    )
+                })?),
+                None => None,
+            };
+            if parts.next().is_some() {
+                return Err(render_usage(
+                    "queue",
+                    "[reject|queue|coalesce [5000ms|5s]|restart|flush|clear]",
+                ));
+            }
+            if let Some(value) = coalesce_window_ms
+                && value < TELEGRAM_MIN_COALESCE_WINDOW_MS
+            {
+                return Err("Usage: /queue coalesce <duration>. Minimum is 5s.".to_string());
+            }
+            Ok(TelegramQueueAction::Set {
+                mode: command,
+                coalesce_window_ms,
+            })
+        }
+        "flush" | "start" => Ok(TelegramQueueAction::Flush),
+        "clear" | "stop" => Ok(TelegramQueueAction::Clear),
+        _ => Err(render_usage(
+            "queue",
+            "[reject|queue|coalesce [5000ms|5s]|restart|flush|clear]",
+        )),
+    }
+}
+
+fn parse_queue_duration_ms(value: &str) -> Option<u64> {
+    let lower = value.trim().to_ascii_lowercase();
+    if let Some(ms) = lower.strip_suffix("ms") {
+        return ms.parse::<u64>().ok();
+    }
+    if let Some(seconds) = lower.strip_suffix('s') {
+        return seconds
+            .parse::<u64>()
+            .ok()
+            .map(|value| value.saturating_mul(1_000));
+    }
+    lower.parse::<u64>().ok()
+}
+
 fn parse_bool_setting(args: &str) -> Option<bool> {
     match args.trim().to_ascii_lowercase().as_str() {
         "on" | "true" | "yes" | "1" | "enable" | "enabled" | "вкл" | "да" => Some(true),
@@ -2502,6 +2914,7 @@ fn is_session_operator_command(command: &ParsedTelegramCommand) -> bool {
         command,
         ParsedTelegramCommand::Status
             | ParsedTelegramCommand::Jobs
+            | ParsedTelegramCommand::Queue { .. }
             | ParsedTelegramCommand::Stop
             | ParsedTelegramCommand::Cancel
             | ParsedTelegramCommand::Model { .. }
@@ -2515,7 +2928,11 @@ fn is_session_operator_command(command: &ParsedTelegramCommand) -> bool {
     )
 }
 
-fn render_session_operator_status(summary: &SessionSummary, active_run: &str) -> String {
+fn render_session_operator_status(
+    summary: &SessionSummary,
+    active_run: &str,
+    queue_status: &str,
+) -> String {
     let mut lines = vec![
         "Current session:".to_string(),
         format!("- title: {}", summary.title),
@@ -2547,8 +2964,37 @@ fn render_session_operator_status(summary: &SessionSummary, active_run: &str) ->
         lines.push("- pending_approval: yes".to_string());
     }
     lines.push(String::new());
+    lines.push(queue_status.to_string());
+    lines.push(String::new());
     lines.push(active_run.to_string());
     lines.join("\n")
+}
+
+fn is_valid_telegram_queue_mode(value: &str) -> bool {
+    matches!(
+        value,
+        TELEGRAM_INBOUND_QUEUE_MODE_REJECT
+            | TELEGRAM_INBOUND_QUEUE_MODE_QUEUE
+            | TELEGRAM_INBOUND_QUEUE_MODE_COALESCE
+            | TELEGRAM_INBOUND_QUEUE_MODE_RESTART
+    )
+}
+
+fn coalesce_window_seconds(window_ms: u64) -> i64 {
+    let seconds = window_ms
+        .max(TELEGRAM_MIN_COALESCE_WINDOW_MS)
+        .saturating_add(999)
+        / 1_000;
+    i64::try_from(seconds).unwrap_or(i64::MAX)
+}
+
+fn is_telegram_inbox_event(record: &SessionInboxEventRecord) -> bool {
+    match serde_json::from_str::<SessionInboxEventPayload>(&record.payload_json) {
+        Ok(SessionInboxEventPayload::ExternalInputReceived { source, .. }) => {
+            source == TELEGRAM_INBOUND_QUEUE_SOURCE
+        }
+        _ => false,
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -3010,6 +3456,29 @@ mod tests {
             Some(ParsedTelegramCommand::Status)
         );
         assert_eq!(parse_command("/jobs"), Some(ParsedTelegramCommand::Jobs));
+        assert_eq!(
+            parse_command("/queue coalesce 5s"),
+            Some(ParsedTelegramCommand::Queue {
+                action: TelegramQueueAction::Set {
+                    mode: "coalesce".to_string(),
+                    coalesce_window_ms: Some(5_000)
+                }
+            })
+        );
+        assert!(matches!(
+            parse_command("/queue coalesce 4s"),
+            Some(ParsedTelegramCommand::InvalidUsage(_))
+        ));
+        assert_eq!(
+            parse_command("/queue stop"),
+            Some(ParsedTelegramCommand::Queue {
+                action: TelegramQueueAction::Clear
+            })
+        );
+        assert!(matches!(
+            parse_command("/queue reject extra"),
+            Some(ParsedTelegramCommand::InvalidUsage(_))
+        ));
         assert_eq!(parse_command("/pause"), Some(ParsedTelegramCommand::Stop));
         assert_eq!(parse_command("/stop"), Some(ParsedTelegramCommand::Stop));
         assert_eq!(
@@ -3048,6 +3517,7 @@ mod tests {
         for expected in [
             "status",
             "jobs",
+            "queue",
             "stop",
             "pause",
             "cancel",

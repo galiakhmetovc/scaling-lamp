@@ -65,6 +65,8 @@ pub struct TelegramConfig {
     pub private_chat_auto_create_session: bool,
     pub group_require_mention: bool,
     pub default_autoapprove: bool,
+    pub inbound_queue_default_mode: String,
+    pub inbound_coalesce_window_ms: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
@@ -297,6 +299,8 @@ impl Default for TelegramConfig {
             private_chat_auto_create_session: true,
             group_require_mention: true,
             default_autoapprove: true,
+            inbound_queue_default_mode: "coalesce".to_string(),
+            inbound_coalesce_window_ms: 5_000,
         }
     }
 }
@@ -998,6 +1002,17 @@ impl AppConfig {
             "telegram.max_download_bytes",
             self.telegram.max_download_bytes,
         )?;
+        validate_telegram_inbound_queue_mode(
+            "telegram.inbound_queue_default_mode",
+            self.telegram.inbound_queue_default_mode.as_str(),
+        )?;
+        if self.telegram.inbound_coalesce_window_ms < 5_000 {
+            return Err(ConfigError::InvalidProviderValue {
+                name: "telegram.inbound_coalesce_window_ms",
+                value: self.telegram.inbound_coalesce_window_ms.to_string(),
+                reason: "must be at least 5000",
+            });
+        }
         validate_positive_usize_value(
             "context.compaction_min_messages",
             self.context.compaction_min_messages,
@@ -1547,6 +1562,20 @@ fn validate_positive_u64_value(name: &'static str, value: u64) -> Result<(), Con
         });
     }
     Ok(())
+}
+
+fn validate_telegram_inbound_queue_mode(
+    name: &'static str,
+    value: &str,
+) -> Result<(), ConfigError> {
+    match value {
+        "reject" | "queue" | "coalesce" | "restart" => Ok(()),
+        other => Err(ConfigError::InvalidProviderValue {
+            name,
+            value: other.to_string(),
+            reason: "must be one of reject, queue, coalesce, restart",
+        }),
+    }
 }
 
 fn validate_ratio_value(name: &'static str, value: f64) -> Result<(), ConfigError> {

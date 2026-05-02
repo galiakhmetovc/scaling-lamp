@@ -302,6 +302,8 @@ max_download_bytes = 41943040
 private_chat_auto_create_session = true
 group_require_mention = true
 default_autoapprove = true
+inbound_queue_default_mode = "coalesce"
+inbound_coalesce_window_ms = 5000
 "#,
     )
     .expect("write config");
@@ -326,6 +328,8 @@ default_autoapprove = true
     assert!(config.telegram.private_chat_auto_create_session);
     assert!(config.telegram.group_require_mention);
     assert!(config.telegram.default_autoapprove);
+    assert_eq!(config.telegram.inbound_queue_default_mode, "coalesce");
+    assert_eq!(config.telegram.inbound_coalesce_window_ms, 5000);
 }
 
 #[test]

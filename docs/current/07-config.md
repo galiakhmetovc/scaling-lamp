@@ -94,8 +94,12 @@ export TEAMD_PROVIDER_API_KEY='replace-with-zai-key'
 - `private_chat_auto_create_session`
 - `group_require_mention`
 - `default_autoapprove`
+- `inbound_queue_default_mode`
+- `inbound_coalesce_window_ms`
 
 Рекомендуемое правило: `telegram.bot_token` не хранить в `config.toml`, а задавать через `TEAMD_TELEGRAM_BOT_TOKEN` в `.env` или environment.
+
+`inbound_queue_default_mode` управляет тем, что Telegram worker делает с обычным сообщением, если в выбранной session уже выполняется turn. Допустимые значения: `reject`, `queue`, `coalesce`, `restart`. Default — `coalesce`. `inbound_coalesce_window_ms` задаёт окно объединения входящих сообщений; минимум валидируется как `5000`.
 
 ### `[session_defaults]`
 

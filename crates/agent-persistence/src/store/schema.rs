@@ -281,6 +281,8 @@ pub(super) fn bootstrap_schema(connection: &Connection) -> Result<(), StoreError
              selected_session_id TEXT,
              last_delivered_transcript_created_at INTEGER,
              last_delivered_transcript_id TEXT,
+             inbound_queue_mode TEXT NOT NULL DEFAULT 'coalesce',
+             inbound_coalesce_window_ms INTEGER,
              created_at INTEGER NOT NULL,
              updated_at INTEGER NOT NULL
          );
@@ -638,6 +640,18 @@ pub(super) fn validate_schema(connection: &Connection) -> Result<(), StoreError>
         "last_delivered_transcript_id",
         false,
     )?;
+    validate_column(
+        connection,
+        "telegram_chat_bindings",
+        "inbound_queue_mode",
+        true,
+    )?;
+    validate_column(
+        connection,
+        "telegram_chat_bindings",
+        "inbound_coalesce_window_ms",
+        false,
+    )?;
     validate_column(connection, "telegram_chat_bindings", "created_at", true)?;
     validate_column(connection, "telegram_chat_bindings", "updated_at", true)?;
     validate_column(
@@ -905,6 +919,18 @@ pub(super) fn migrate_schema(connection: &Connection) -> Result<(), StoreError> 
         "telegram_chat_bindings",
         "last_delivered_transcript_id",
         "TEXT",
+    )?;
+    add_column_if_missing(
+        connection,
+        "telegram_chat_bindings",
+        "inbound_queue_mode",
+        "TEXT NOT NULL DEFAULT 'coalesce'",
+    )?;
+    add_column_if_missing(
+        connection,
+        "telegram_chat_bindings",
+        "inbound_coalesce_window_ms",
+        "INTEGER",
     )?;
     add_column_if_missing(connection, "tool_calls", "result_summary", "TEXT")?;
     add_column_if_missing(connection, "tool_calls", "result_preview", "TEXT")?;

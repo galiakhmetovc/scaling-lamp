@@ -127,6 +127,8 @@ pub struct TelegramChatBindingRecord {
     pub selected_session_id: Option<String>,
     pub last_delivered_transcript_created_at: Option<i64>,
     pub last_delivered_transcript_id: Option<String>,
+    pub inbound_queue_mode: String,
+    pub inbound_coalesce_window_ms: Option<i64>,
     pub created_at: i64,
     pub updated_at: i64,
 }

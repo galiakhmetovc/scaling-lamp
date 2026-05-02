@@ -441,6 +441,15 @@ agentd tui
 
 ## Обновить бинарь
 
+Если production host уже настроен, быстрее собрать binary локально и отправить его на сервер без сборки на сервере:
+
+```bash
+cargo build --release -p agentd
+./scripts/deploy-teamd-binary.sh root@31.130.128.89
+```
+
+Скрипт делает backup старого `/opt/teamd/bin/agentd`, ставит новый binary, обновляет `/usr/local/bin/agentd` и перезапускает `teamd-daemon.service` + `teamd-telegram.service`.
+
 ```bash
 agentd update
 agentd update v1.0.3

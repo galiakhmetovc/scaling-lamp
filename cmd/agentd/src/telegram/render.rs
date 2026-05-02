@@ -269,6 +269,7 @@ pub fn render_help_message() -> String {
         "/use <session_id> - select a session",
         "/status - show current session status",
         "/jobs - show current session background jobs",
+        "/queue [reject|queue|coalesce 5s|restart|flush|clear] - control inbound messages during active turns",
         "/stop or /pause - stop the active turn",
         "/cancel - cancel all work for the current session",
         "/model <model|default> - set or reset the session model",

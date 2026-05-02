@@ -126,6 +126,8 @@ fn telegram_repository_round_trips_pairings_bindings_and_update_cursor() {
         selected_session_id: Some("session-telegram-1".to_string()),
         last_delivered_transcript_created_at: Some(115),
         last_delivered_transcript_id: Some("transcript-telegram-1".to_string()),
+        inbound_queue_mode: "coalesce".to_string(),
+        inbound_coalesce_window_ms: None,
         created_at: 110,
         updated_at: 120,
     };

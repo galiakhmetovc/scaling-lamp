@@ -3,6 +3,7 @@ set -eu
 
 SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 DEPLOY_SCRIPT="$SCRIPT_DIR/deploy-teamd.sh"
+BINARY_DEPLOY_SCRIPT="$SCRIPT_DIR/deploy-teamd-binary.sh"
 CONTAINERS_DEPLOY_SCRIPT="$SCRIPT_DIR/deploy-teamd-containers.sh"
 TEAMDCTL_SCRIPT="$SCRIPT_DIR/teamdctl.sh"
 DIAGNOSTICS_SCRIPT="$SCRIPT_DIR/collect-teamd-diagnostics.sh"
@@ -25,6 +26,11 @@ help_output=$("$DEPLOY_SCRIPT" --help)
 assert_contains "$help_output" "Usage:"
 assert_contains "$help_output" "--dry-run"
 assert_contains "$help_output" "--non-interactive"
+
+binary_help_output=$("$BINARY_DEPLOY_SCRIPT" --help)
+assert_contains "$binary_help_output" "already built local agentd binary"
+assert_contains "$binary_help_output" "--no-restart"
+assert_contains "$binary_help_output" "root@31.130.128.89"
 
 containers_help_output=$("$CONTAINERS_DEPLOY_SCRIPT" --help)
 assert_contains "$containers_help_output" "container add-ons"
@@ -175,6 +181,10 @@ grep -q 'chown_work_dir()' "$DEPLOY_SCRIPT" \
   || fail "expected resilient work-dir ownership helper"
 grep -q 'Retrying ownership update' "$DEPLOY_SCRIPT" \
   || fail "expected retry for transient SQLite WAL/SHM ownership races"
+grep -q 'inbound_queue_default_mode = "coalesce"' "$DEPLOY_SCRIPT" \
+  || fail "expected Telegram inbound queue mode in generated config"
+grep -q 'inbound_coalesce_window_ms = 5000' "$DEPLOY_SCRIPT" \
+  || fail "expected Telegram inbound coalesce window in generated config"
 
 existing_env_dir="$SCRIPT_DIR/../target/deploy-script-test"
 existing_env="$existing_env_dir/existing.env"
@@ -188,6 +198,23 @@ existing_env_output=$(
 
 assert_contains "$existing_env_output" "Keeping existing environment file"
 assert_contains "$existing_env_output" "teamd-telegram.service"
+
+fake_release_agentd="$existing_env_dir/fake-release-agentd"
+cat > "$fake_release_agentd" <<'EOF'
+#!/bin/sh
+echo 'fake release agentd'
+EOF
+chmod +x "$fake_release_agentd"
+
+binary_dry_run_output=$(
+  "$BINARY_DEPLOY_SCRIPT" --dry-run --no-restart root@example.invalid "$fake_release_agentd" 2>&1
+)
+
+assert_contains "$binary_dry_run_output" "Deploying"
+assert_contains "$binary_dry_run_output" "scp"
+assert_contains "$binary_dry_run_output" "ssh"
+assert_contains "$binary_dry_run_output" "/opt/teamd/bin/agentd"
+assert_contains "$binary_dry_run_output" "service restart skipped"
 
 fake_bin="$existing_env_dir/fake-bin"
 fake_cargo_home="$existing_env_dir/fake-cargo-home"

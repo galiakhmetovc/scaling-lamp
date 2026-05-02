@@ -135,14 +135,16 @@ impl TelegramRepository for PersistenceStore {
             "INSERT INTO telegram_chat_bindings (
                 telegram_chat_id, scope, owner_telegram_user_id, selected_session_id,
                 last_delivered_transcript_created_at, last_delivered_transcript_id,
-                created_at, updated_at
-             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+                inbound_queue_mode, inbound_coalesce_window_ms, created_at, updated_at
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
              ON CONFLICT(telegram_chat_id) DO UPDATE SET
                 scope = excluded.scope,
                 owner_telegram_user_id = excluded.owner_telegram_user_id,
                 selected_session_id = excluded.selected_session_id,
                 last_delivered_transcript_created_at = excluded.last_delivered_transcript_created_at,
                 last_delivered_transcript_id = excluded.last_delivered_transcript_id,
+                inbound_queue_mode = excluded.inbound_queue_mode,
+                inbound_coalesce_window_ms = excluded.inbound_coalesce_window_ms,
                 created_at = excluded.created_at,
                 updated_at = excluded.updated_at",
             params![
@@ -152,6 +154,8 @@ impl TelegramRepository for PersistenceStore {
                 record.selected_session_id,
                 record.last_delivered_transcript_created_at,
                 record.last_delivered_transcript_id,
+                record.inbound_queue_mode,
+                record.inbound_coalesce_window_ms,
                 record.created_at,
                 record.updated_at,
             ],
@@ -167,7 +171,7 @@ impl TelegramRepository for PersistenceStore {
             .query_row(
                 "SELECT telegram_chat_id, scope, owner_telegram_user_id, selected_session_id,
                         last_delivered_transcript_created_at, last_delivered_transcript_id,
-                        created_at, updated_at
+                        inbound_queue_mode, inbound_coalesce_window_ms, created_at, updated_at
                  FROM telegram_chat_bindings
                  WHERE telegram_chat_id = ?1",
                 [telegram_chat_id],
@@ -179,8 +183,10 @@ impl TelegramRepository for PersistenceStore {
                         selected_session_id: row.get(3)?,
                         last_delivered_transcript_created_at: row.get(4)?,
                         last_delivered_transcript_id: row.get(5)?,
-                        created_at: row.get(6)?,
-                        updated_at: row.get(7)?,
+                        inbound_queue_mode: row.get(6)?,
+                        inbound_coalesce_window_ms: row.get(7)?,
+                        created_at: row.get(8)?,
+                        updated_at: row.get(9)?,
                     })
                 },
             )
@@ -192,7 +198,7 @@ impl TelegramRepository for PersistenceStore {
         let mut statement = self.connection.prepare(
             "SELECT telegram_chat_id, scope, owner_telegram_user_id, selected_session_id,
                     last_delivered_transcript_created_at, last_delivered_transcript_id,
-                    created_at, updated_at
+                    inbound_queue_mode, inbound_coalesce_window_ms, created_at, updated_at
              FROM telegram_chat_bindings
              ORDER BY telegram_chat_id ASC",
         )?;
@@ -207,8 +213,10 @@ impl TelegramRepository for PersistenceStore {
                 selected_session_id: row.get(3)?,
                 last_delivered_transcript_created_at: row.get(4)?,
                 last_delivered_transcript_id: row.get(5)?,
-                created_at: row.get(6)?,
-                updated_at: row.get(7)?,
+                inbound_queue_mode: row.get(6)?,
+                inbound_coalesce_window_ms: row.get(7)?,
+                created_at: row.get(8)?,
+                updated_at: row.get(9)?,
             });
         }
 

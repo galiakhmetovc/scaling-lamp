@@ -39,6 +39,13 @@ cargo run -p agentd -- tui
 
 Он проверит native build dependencies, `cargo` и `rustc`; при необходимости поставит системные build-пакеты и stable Rust через `rustup`; интерактивно спросит Telegram bot token и Z.ai/API key, соберёт release binary, установит `agentd` в `/opt/teamd/bin`, добавит `/usr/local/bin/agentd`, установит `/usr/local/bin/teamdctl`, создаст `/etc/teamd/config.toml`, `/etc/teamd/teamd.env` и systemd services `teamd-daemon.service`/`teamd-telegram.service`.
 
+Если сервер уже установлен и нужно только обновить бинарь без сборки на production host:
+
+```bash
+cargo build --release -p agentd
+./scripts/deploy-teamd-binary.sh root@31.130.128.89
+```
+
 Подробности: [docs/current/telegram/01-install-and-configure.md](docs/current/telegram/01-install-and-configure.md).
 
 ## Каноническая документация по текущему состоянию
