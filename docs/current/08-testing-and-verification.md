@@ -18,6 +18,9 @@
 ### Runtime/persistence tests
 
 - [`crates/agent-persistence/src/store/tests.rs`](../../crates/agent-persistence/src/store/tests.rs)
+- [`crates/agent-persistence/src/store/tests/telegram.rs`](../../crates/agent-persistence/src/store/tests/telegram.rs)
+- [`crates/agent-persistence/src/store/tests/tool_calls.rs`](../../crates/agent-persistence/src/store/tests/tool_calls.rs)
+- [`crates/agent-persistence/src/store/tests/trace.rs`](../../crates/agent-persistence/src/store/tests/trace.rs)
 - [`crates/agent-runtime/src/tool/tests.rs`](../../crates/agent-runtime/src/tool/tests.rs)
 
 Они проверяют:
@@ -27,6 +30,8 @@
 - config parsing;
 - tool schemas и parsing;
 - prompt/tool contract invariants.
+
+Store tests постепенно выносятся из одного большого файла в доменные модули. Цель — чтобы regression по Telegram state, tool-call ledger или traces можно было запускать и читать отдельно, не теряя общий `agent-persistence` gate.
 
 ### Bootstrap/app integration
 
@@ -110,7 +115,11 @@ cargo build --release -p agentd
 | Telegram surface | Pairing, commands, queue/coalescing, status, files, delivery. | `CARGO_INCREMENTAL=0 cargo test -p agentd --test telegram_surface` |
 | TUI local/debug | TUI state, render, debug browser, session/tool/artifact views. | `CARGO_INCREMENTAL=0 cargo test -p agentd --test tui_app` |
 | TUI через daemon | `TUI -> daemon client -> HTTP daemon -> runtime` contract. | `CARGO_INCREMENTAL=0 cargo test -p agentd --test daemon_tui` |
-| Persistence/schema | SQLite schema, migrations, repositories, payload/artifact storage, busy/concurrency behavior. | `CARGO_INCREMENTAL=0 cargo test -p agent-persistence store` |
+| TUI module split smoke | Внутренние TUI helpers: browser items, debug bundle, command parsing, render/debug flows. | `CARGO_INCREMENTAL=0 cargo test -p agentd tui` |
+| Persistence/schema | SQLite schema, migrations, repositories, payload/artifact storage, busy/concurrency behavior. | `CARGO_INCREMENTAL=0 cargo test -p agent-persistence` |
+| Persistence tool-call ledger | Запись arguments/result preview/artifact refs/status/error для tools. | `CARGO_INCREMENTAL=0 cargo test -p agent-persistence tool_calls` |
+| Persistence Telegram state | Pairing, bindings, queue/status/cursor/file delivery records. | `CARGO_INCREMENTAL=0 cargo test -p agent-persistence telegram` |
+| Persistence trace state | Trace links/spans для observability/debug. | `CARGO_INCREMENTAL=0 cargo test -p agent-persistence trace` |
 | Config/deploy scripts | Config/env parsing and operator install/update scripts. | `CARGO_INCREMENTAL=0 cargo test -p agent-persistence config && sh scripts/test-deploy-teamd.sh` |
 | Build baseline | Все crates компилируются со всеми features. | `CARGO_INCREMENTAL=0 cargo check --workspace --all-features` |
 

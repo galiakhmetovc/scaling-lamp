@@ -7,10 +7,11 @@
 Если вы впервые видите проект:
 
 1. [00-overview.md](00-overview.md)
-2. [01-architecture.md](01-architecture.md)
-3. [02-prompt-and-turn-flow.md](02-prompt-and-turn-flow.md)
-4. [03-surfaces.md](03-surfaces.md)
-5. [06-storage-recovery-and-diagnostics.md](06-storage-recovery-and-diagnostics.md)
+2. [17-runtime-mental-model.md](17-runtime-mental-model.md)
+3. [01-architecture.md](01-architecture.md)
+4. [02-prompt-and-turn-flow.md](02-prompt-and-turn-flow.md)
+5. [03-surfaces.md](03-surfaces.md)
+6. [06-storage-recovery-and-diagnostics.md](06-storage-recovery-and-diagnostics.md)
 
 Если вы оператор:
 
@@ -22,18 +23,19 @@
 Если вы разработчик, который будет менять runtime:
 
 1. [00-overview.md](00-overview.md)
-2. [01-architecture.md](01-architecture.md)
-3. [02-prompt-and-turn-flow.md](02-prompt-and-turn-flow.md)
-4. [04-tools-and-approvals.md](04-tools-and-approvals.md)
-5. [05-interagent-background-and-schedules.md](05-interagent-background-and-schedules.md)
-6. [08-testing-and-verification.md](08-testing-and-verification.md)
-7. [10-tool-usability-assessment.md](10-tool-usability-assessment.md)
-8. [11-workspace-modernization-plan.md](11-workspace-modernization-plan.md)
-9. [12-prompt-contract-decision.md](12-prompt-contract-decision.md)
-10. [13-observability-tracing-plan.md](13-observability-tracing-plan.md)
-11. [14-container-addons.md](14-container-addons.md)
-12. [15-tool-reference.md](15-tool-reference.md)
-13. [16-refactoring-audit-and-plan.md](16-refactoring-audit-and-plan.md)
+2. [17-runtime-mental-model.md](17-runtime-mental-model.md)
+3. [01-architecture.md](01-architecture.md)
+4. [02-prompt-and-turn-flow.md](02-prompt-and-turn-flow.md)
+5. [04-tools-and-approvals.md](04-tools-and-approvals.md)
+6. [05-interagent-background-and-schedules.md](05-interagent-background-and-schedules.md)
+7. [08-testing-and-verification.md](08-testing-and-verification.md)
+8. [10-tool-usability-assessment.md](10-tool-usability-assessment.md)
+9. [11-workspace-modernization-plan.md](11-workspace-modernization-plan.md)
+10. [12-prompt-contract-decision.md](12-prompt-contract-decision.md)
+11. [13-observability-tracing-plan.md](13-observability-tracing-plan.md)
+12. [14-container-addons.md](14-container-addons.md)
+13. [15-tool-reference.md](15-tool-reference.md)
+14. [16-refactoring-audit-and-plan.md](16-refactoring-audit-and-plan.md)
 
 ## Словарь
 
@@ -51,18 +53,19 @@
 - **Prompt contract** — договорённость о том, какие runtime/user/history blocks модель получает, в каком порядке и с какими ограничениями размера.
 - **Trace / span** — локальная observability-модель для причинной связи между surface event, run, provider round, transcript, tool call, artifact и delivery; см. [13-observability-tracing-plan.md](13-observability-tracing-plan.md).
 - **Container add-ons** — внешняя обвязка вокруг host `agentd`: Docker, SearXNG, SilverBullet, SilverBullet MCP, Jaeger, Caddy и legacy Obsidian; см. [14-container-addons.md](14-container-addons.md).
+- **Runtime mental model** — сквозная цепочка `Operator -> Surface -> App -> Session -> Run -> ProviderLoop -> ToolCall -> Artifact/Delivery`; см. [17-runtime-mental-model.md](17-runtime-mental-model.md).
 
 ## Где искать код
 
 - Точки входа: [`cmd/agentd/src/main.rs`](../../cmd/agentd/src/main.rs), [`cmd/agentd/src/bootstrap.rs`](../../cmd/agentd/src/bootstrap.rs)
 - Prompt assembly: [`cmd/agentd/src/prompting.rs`](../../cmd/agentd/src/prompting.rs), [`crates/agent-runtime/src/prompt.rs`](../../crates/agent-runtime/src/prompt.rs)
-- Execution: [`cmd/agentd/src/execution.rs`](../../cmd/agentd/src/execution.rs) и подпапка [`cmd/agentd/src/execution`](../../cmd/agentd/src/execution)
+- Execution: [`cmd/agentd/src/execution.rs`](../../cmd/agentd/src/execution.rs) и подпапка [`cmd/agentd/src/execution`](../../cmd/agentd/src/execution); provider loop helpers лежат рядом как `provider_cursor`, `provider_ledger`, `provider_prompt`, `provider_offload`, `provider_tool_dispatch`, `provider_completion`
 - Persistence: [`crates/agent-persistence/src/store.rs`](../../crates/agent-persistence/src/store.rs)
 - Tools: [`crates/agent-runtime/src/tool.rs`](../../crates/agent-runtime/src/tool.rs)
 - CLI: [`cmd/agentd/src/cli.rs`](../../cmd/agentd/src/cli.rs)
 - HTTP: [`cmd/agentd/src/http/server.rs`](../../cmd/agentd/src/http/server.rs), [`cmd/agentd/src/http/client.rs`](../../cmd/agentd/src/http/client.rs)
-- TUI: [`cmd/agentd/src/tui.rs`](../../cmd/agentd/src/tui.rs), [`cmd/agentd/src/tui/app.rs`](../../cmd/agentd/src/tui/app.rs), [`cmd/agentd/src/tui/backend.rs`](../../cmd/agentd/src/tui/backend.rs)
-- Telegram: [`cmd/agentd/src/telegram.rs`](../../cmd/agentd/src/telegram.rs), [`cmd/agentd/src/telegram/router.rs`](../../cmd/agentd/src/telegram/router.rs), [`cmd/agentd/src/telegram/client.rs`](../../cmd/agentd/src/telegram/client.rs)
+- TUI: [`cmd/agentd/src/tui.rs`](../../cmd/agentd/src/tui.rs), [`cmd/agentd/src/tui/app.rs`](../../cmd/agentd/src/tui/app.rs), [`cmd/agentd/src/tui/backend.rs`](../../cmd/agentd/src/tui/backend.rs), debug/browser helpers в [`cmd/agentd/src/tui`](../../cmd/agentd/src/tui)
+- Telegram: [`cmd/agentd/src/telegram.rs`](../../cmd/agentd/src/telegram.rs), [`cmd/agentd/src/telegram/router.rs`](../../cmd/agentd/src/telegram/router.rs), [`cmd/agentd/src/telegram/client.rs`](../../cmd/agentd/src/telegram/client.rs), доменные helpers в [`cmd/agentd/src/telegram`](../../cmd/agentd/src/telegram)
 
 ## Архитектурные диаграммы
 

@@ -2,7 +2,7 @@
 
 Дата: 2026-05-02.
 
-Статус: рабочий план. Цель документа — зафиксировать, где проект уже стал слишком тяжёлым для безопасных изменений, и разложить рефакторинг на небольшие этапы без изменения canonical runtime path.
+Статус: рабочий план с текущим прогрессом. Цель документа — зафиксировать, где проект уже стал слишком тяжёлым для безопасных изменений, и разложить рефакторинг на небольшие этапы без изменения canonical runtime path.
 
 ## Инварианты
 
@@ -30,16 +30,16 @@ CARGO_INCREMENTAL=0 cargo check --workspace --all-features
 
 Результат на момент аудита: проходит.
 
-Самые крупные production-файлы:
+Самые крупные production-файлы после первой волны расслаивания:
 
 | Файл | Строк | Риск |
 | --- | ---: | --- |
-| `crates/agent-runtime/src/tool.rs` | ~7400 | Смешаны типы tools, catalog/schema, parsing, runtime execution, result rendering. Любое изменение tool contract задевает весь файл. |
-| `cmd/agentd/src/tui.rs` | ~5900 | Центральная TUI state machine перегружена экранами, командами, навигацией и debug flows. |
-| `cmd/agentd/src/execution/provider_loop.rs` | ~5000 | Смешаны cursor state, provider retries, prompt context, compaction, tool dispatch, ledger, offload, completion gate. Это самый критичный runtime path. |
-| `cmd/agentd/src/telegram/router.rs` | ~3500 | Смешаны command parsing, pairing, session binding, inbound queue, file transfer, progress/status, delivery cursor. |
-| `crates/agent-persistence/src/store/tests.rs` | ~3500 | Большой монолит тестов хранилища; сложно запускать точечно и понимать покрытие по repository. |
+| `cmd/agentd/src/tui.rs` | ~5100 | Центральная TUI state machine всё ещё крупная, но browser parsing/actions, debug bundle и command parsing уже вынесены. |
+| `cmd/agentd/src/execution/provider_loop.rs` | ~3800 | Главный runtime path уже вынес cursor/ledger/prompt/offload/tool dispatch/completion helpers, но orchestration всё ещё требует осторожности. |
+| `crates/agent-persistence/src/store/tests.rs` | ~3100 | Часть доменных тестов вынесена, но основной store integration файл остаётся крупным. |
+| `cmd/agentd/src/telegram/router.rs` | ~2600 | Команды, bindings, queue, files, progress и delivery вынесены, но worker orchestration остаётся большой. |
 | `crates/agent-persistence/src/config.rs` | ~1750 | Конфиг вырос вместе с deployment/add-ons; риск случайных регрессий при изменении env/config loading. |
+| `crates/agent-runtime/src/tool.rs` | ~500 | Public facade после split; основная реализация лежит в `crates/agent-runtime/src/tool/`. |
 
 Самые тяжёлые тестовые зоны:
 
@@ -60,7 +60,9 @@ CARGO_INCREMENTAL=0 cargo check --workspace --all-features
 
 ### 2. `tool.rs` нужно разделять первым
 
-`tool.rs` сейчас содержит:
+Статус: выполнено первым mechanical split. `crates/agent-runtime/src/tool.rs` теперь public facade, а реализация лежит в `crates/agent-runtime/src/tool/`.
+
+До split `tool.rs` содержал:
 
 - `ToolName`;
 - input/output structs;
@@ -74,9 +76,24 @@ CARGO_INCREMENTAL=0 cargo check --workspace --all-features
 - model-facing output rendering;
 - web/fs/exec helper logic.
 
-Это создаёт прямую причину ошибок вроде неправильного model-facing контракта `deliver_file`: внутренние details легко протекают в schema/output, потому что всё лежит рядом.
+Это создавало прямую причину ошибок вроде неправильного model-facing контракта `deliver_file`: внутренние details легко протекали в schema/output, потому что всё лежало рядом.
 
-Целевое состояние: один публичный `agent_runtime::tool` module остаётся, но реализация раскладывается на подмодули по ответственности.
+Текущее состояние:
+
+```text
+crates/agent-runtime/src/tool.rs          # public re-export facade
+crates/agent-runtime/src/tool/
+├── catalog.rs
+├── inputs.rs
+├── names.rs
+├── outputs.rs
+├── parse.rs
+├── parse_repair.rs
+├── runtime.rs
+├── schema.rs
+├── tests.rs
+└── web.rs
+```
 
 ### 3. `provider_loop.rs` нельзя “переписать”, его надо расслаивать
 
@@ -88,6 +105,19 @@ CARGO_INCREMENTAL=0 cargo check --workspace --all-features
 - после каждого слоя запускать targeted tests.
 
 Любая попытка одновременно поменять поведение provider loop и разрезать файл будет опасной.
+
+Статус: выполнен первый безопасный split без изменения runtime semantics. Вынесены:
+
+- `provider_cursor.rs`;
+- `provider_ledger.rs`;
+- `provider_prompt.rs`;
+- `provider_offload.rs`;
+- `provider_tool_dispatch.rs`;
+- `provider_completion.rs`;
+- `provider_text.rs`;
+- `provider_ids.rs`.
+
+`provider_loop.rs` остаётся orchestration-файлом и всё ещё требует отдельной осторожности для behavior changes.
 
 ### 4. Telegram router уже стал отдельной подсистемой
 
@@ -103,9 +133,29 @@ CARGO_INCREMENTAL=0 cargo check --workspace --all-features
 
 Эти домены можно разделить без изменения Telegram surface semantics. Это даст быстрый выигрыш для поддержки, потому что Telegram сейчас основной пользовательский surface.
 
+Статус: выполнен первый split. Вынесены:
+
+- `commands.rs` — parsing и command registry;
+- `bindings.rs` — pairing/private/group bindings;
+- `queue.rs` — inbound queue/coalescing helpers;
+- `files.rs` — Telegram file upload/download/delivery helpers;
+- `progress.rs` — status/progress rendering и counters;
+- `delivery.rs` — transcript/file delivery helpers.
+
+`router.rs` теперь ближе к worker orchestration, но ещё не маленький.
+
 ### 5. TUI надо рефакторить после стабилизации runtime seams
 
 TUI важен как debug UI, но сейчас риск рефакторинга TUI ниже, чем риск provider loop. Оптимальный порядок: сначала сделать runtime/tool/debug data более чистыми, потом облегчать TUI screens.
+
+Статус: выполнен первый P2 split. Вынесены:
+
+- `browser_items.rs` — parsing/renderable items debug browser;
+- `browser.rs` — browser actions;
+- `command_parse.rs` — command parsing helpers;
+- `debug_bundle.rs` — debug bundle writer.
+
+TUI всё ещё большой, но самые изолируемые debug/browser helpers уже не живут в центральном файле.
 
 ### 6. Legacy надо удалять только после явного compatibility решения
 
@@ -145,6 +195,8 @@ Acceptance:
 
 Цель: уменьшить риск изменений tool contract и сделать schemas/result rendering проверяемыми по семьям tools.
 
+Статус: выполнено.
+
 Предлагаемая структура:
 
 ```text
@@ -177,16 +229,18 @@ CARGO_INCREMENTAL=0 cargo test -p agent-runtime provider_contract
 
 Цель: сделать главный execution loop читаемым без изменения runtime semantics.
 
+Статус: выполнена первая безопасная волна split. Дальнейшие изменения provider behavior делать отдельными задачами.
+
 Предлагаемая структура:
 
 ```text
 cmd/agentd/src/execution/provider_loop.rs      # orchestration only
 cmd/agentd/src/execution/provider_cursor.rs    # ProviderLoopCursor
-cmd/agentd/src/execution/tool_ledger.rs        # tool_calls ledger + output artifacts
-cmd/agentd/src/execution/tool_dispatch.rs      # execute_model_tool_call and helpers
-cmd/agentd/src/execution/prompt_context.rs     # prompt_messages/session head/budget
-cmd/agentd/src/execution/context_offload.rs    # offload read/search/pin/persist helpers
-cmd/agentd/src/execution/completion_gate.rs    # completion nudge/gate decisions
+cmd/agentd/src/execution/provider_ledger.rs    # tool_calls ledger + output artifacts
+cmd/agentd/src/execution/provider_tool_dispatch.rs # execute_model_tool_call and helpers
+cmd/agentd/src/execution/provider_prompt.rs    # prompt_messages/session head/budget
+cmd/agentd/src/execution/provider_offload.rs   # offload read/search/pin/persist helpers
+cmd/agentd/src/execution/provider_completion.rs # completion nudge/gate decisions
 ```
 
 Порядок:
@@ -209,6 +263,8 @@ CARGO_INCREMENTAL=0 cargo test -p agentd --test bootstrap_app context
 ### P1. Разделить Telegram router
 
 Цель: упростить развитие Telegram как основного surface.
+
+Статус: выполнено.
 
 Предлагаемая структура:
 
@@ -239,6 +295,8 @@ CARGO_INCREMENTAL=0 cargo test -p agentd --test telegram_surface
 
 Цель: сделать TUI пригодным для дальнейшего debug UI: traces, tools, artifacts, sessions.
 
+Статус: выполнена первая безопасная волна split. Полное разделение `state/screens/input` пока не сделано, потому что это уже более рискованная state-machine работа.
+
 Предлагаемая структура:
 
 ```text
@@ -261,6 +319,14 @@ CARGO_INCREMENTAL=0 cargo test -p agentd --test daemon_tui
 
 Цель: снизить стоимость изменений SQLite schema/repositories.
 
+Статус: частично выполнено. Вынесены доменные тесты:
+
+- `store/tests/telegram.rs`;
+- `store/tests/tool_calls.rs`;
+- `store/tests/trace.rs`.
+
+Schema helpers пока не переносились: это лучше делать только при следующем изменении schema/migration, чтобы не создавать churn без пользы.
+
 Работы:
 
 - перенести тесты из `store/tests.rs` по доменам: agents, sessions, runs/jobs, transcripts, artifacts, telegram, trace, migrations;
@@ -277,6 +343,8 @@ CARGO_INCREMENTAL=0 cargo test -p agent-persistence config
 ### P2. Почистить legacy и документацию
 
 Цель: уменьшить когнитивный шум для нового разработчика и оператора.
+
+Статус: выполнено для текущей документации. Сквозная модель добавлена в [17-runtime-mental-model.md](17-runtime-mental-model.md). SilverBullet описан как canonical knowledge add-on, Obsidian/Logseq — только как compatibility/recovery/migration paths.
 
 Работы:
 
@@ -302,12 +370,19 @@ rg -n "legacy|Obsidian|Logseq|fs_read\\b|fs_write\\b|fs_patch\\b|fs_search\\b" d
 
 ## Рекомендуемый порядок выполнения
 
-1. P0 safety baseline.
-2. P1 `agent-runtime::tool` split.
-3. P1 `provider_loop.rs` cursor/ledger/prompt/offload split.
-4. P1 Telegram router split.
-5. P2 TUI debug/state split.
-6. P2 persistence tests/schema cleanup.
-7. P2 legacy/docs cleanup.
+1. P0 safety baseline — выполнено документированием test matrix.
+2. P1 `agent-runtime::tool` split — выполнено.
+3. P1 `provider_loop.rs` cursor/ledger/prompt/offload split — выполнена первая безопасная волна.
+4. P1 Telegram router split — выполнено.
+5. P2 TUI debug/state split — выполнена первая безопасная волна.
+6. P2 persistence tests/schema cleanup — частично выполнено; schema helpers оставить до реального schema work.
+7. P2 legacy/docs cleanup — выполнено.
 
 Причина порядка: сначала уменьшаем риск изменения model/tool contracts, затем главный execution loop, затем основной пользовательский surface Telegram, и только потом UI/debug/docs хвосты.
+
+Следующие разумные задачи после этого плана:
+
+- отдельно продолжить уменьшение `tui.rs`, если debug UI будет расти;
+- отдельно чистить `config.rs`, когда появится следующее изменение deploy/config;
+- отдельно развивать trace propagation/OTLP и Jaeger UI по плану observability;
+- отдельно улучшать knowledge layer вокруг SilverBullet MCP/skills.

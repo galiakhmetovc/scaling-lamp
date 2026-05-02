@@ -21,6 +21,8 @@ C4 System Context хранится в [docs/architecture/01-system-context.md](.
 
 Диаграмма намеренно показывает только границу системы. Внутренние контейнеры (`agentd`, daemon, TUI backend, persistence, provider loop) раскрываются на следующих C4-уровнях.
 
+Сквозная runtime-модель без C4-нотации описана отдельно: [17-runtime-mental-model.md](17-runtime-mental-model.md). Если нужно быстро понять, как связаны operator, surfaces, `App`, session, run, provider loop, tool calls, artifacts и delivery, начинайте с неё.
+
 ## Главные сущности
 
 В документации ниже разделяются два уровня терминов:
@@ -185,6 +187,7 @@ sequenceDiagram
 
 ## Куда идти дальше
 
+- Сквозная runtime-модель: [17-runtime-mental-model.md](17-runtime-mental-model.md)
 - Общая архитектура: [01-architecture.md](01-architecture.md)
 - Prompt и chat turn: [02-prompt-and-turn-flow.md](02-prompt-and-turn-flow.md)
 - Детальный prompt contract: [12-prompt-contract-decision.md](12-prompt-contract-decision.md)
