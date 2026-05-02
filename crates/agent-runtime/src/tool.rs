@@ -20,10 +20,12 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 
+mod names;
 mod parse_repair;
 mod schema;
 mod web;
 
+pub use names::{ToolFamily, ToolName};
 use parse_repair::{
     CONTINUE_LATER_ENUM_REPAIRS, EnumLikeFieldRepair, KNOWLEDGE_READ_ENUM_REPAIRS,
     SCHEDULE_ENUM_REPAIRS, SESSION_READ_ENUM_REPAIRS, SESSION_WAIT_ENUM_REPAIRS,
@@ -40,87 +42,6 @@ const MAX_PROCESS_OUTPUT_READ_MAX_BYTES: usize = 32 * 1024;
 const DEFAULT_PROCESS_OUTPUT_READ_MAX_LINES: usize = 20;
 const MAX_PROCESS_OUTPUT_READ_MAX_LINES: usize = 200;
 const PROCESS_READER_DRAIN_GRACE: Duration = Duration::from_millis(200);
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub enum ToolFamily {
-    Filesystem,
-    Web,
-    Exec,
-    Planning,
-    Offload,
-    Memory,
-    Mcp,
-    Agent,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub enum ToolName {
-    FsRead,
-    FsWrite,
-    FsPatch,
-    FsReadText,
-    FsReadLines,
-    FsSearchText,
-    FsFindInFiles,
-    FsWriteText,
-    FsPatchText,
-    FsReplaceLines,
-    FsInsertText,
-    FsMkdir,
-    FsMove,
-    FsTrash,
-    FsList,
-    FsGlob,
-    FsSearch,
-    WebFetch,
-    WebSearch,
-    ExecStart,
-    ExecReadOutput,
-    ExecWait,
-    ExecKill,
-    PlanRead,
-    PlanWrite,
-    InitPlan,
-    AddTask,
-    SetTaskStatus,
-    AddTaskNote,
-    EditTask,
-    PlanSnapshot,
-    PlanLint,
-    PromptBudgetRead,
-    PromptBudgetUpdate,
-    AutonomyStateRead,
-    SkillList,
-    SkillRead,
-    SkillEnable,
-    SkillDisable,
-    ArtifactRead,
-    ArtifactSearch,
-    ArtifactPin,
-    ArtifactUnpin,
-    DeliverFile,
-    KnowledgeSearch,
-    KnowledgeRead,
-    SessionSearch,
-    SessionRead,
-    SessionWait,
-    McpCall,
-    McpSearchResources,
-    McpReadResource,
-    McpSearchPrompts,
-    McpGetPrompt,
-    AgentList,
-    AgentRead,
-    AgentCreate,
-    ContinueLater,
-    ScheduleList,
-    ScheduleRead,
-    ScheduleCreate,
-    ScheduleUpdate,
-    ScheduleDelete,
-    MessageAgent,
-    GrantAgentChainContinuation,
-}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ToolPolicy {
@@ -1772,93 +1693,6 @@ impl Default for ProcessRegistryState {
         Self {
             next_process_id: 1,
             processes: BTreeMap::new(),
-        }
-    }
-}
-
-impl ToolFamily {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::Filesystem => "fs",
-            Self::Web => "web",
-            Self::Exec => "exec",
-            Self::Planning => "plan",
-            Self::Offload => "offload",
-            Self::Memory => "memory",
-            Self::Mcp => "mcp",
-            Self::Agent => "agent",
-        }
-    }
-}
-
-impl ToolName {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::FsRead => "fs_read",
-            Self::FsWrite => "fs_write",
-            Self::FsPatch => "fs_patch",
-            Self::FsReadText => "fs_read_text",
-            Self::FsReadLines => "fs_read_lines",
-            Self::FsSearchText => "fs_search_text",
-            Self::FsFindInFiles => "fs_find_in_files",
-            Self::FsWriteText => "fs_write_text",
-            Self::FsPatchText => "fs_patch_text",
-            Self::FsReplaceLines => "fs_replace_lines",
-            Self::FsInsertText => "fs_insert_text",
-            Self::FsMkdir => "fs_mkdir",
-            Self::FsMove => "fs_move",
-            Self::FsTrash => "fs_trash",
-            Self::FsList => "fs_list",
-            Self::FsGlob => "fs_glob",
-            Self::FsSearch => "fs_search",
-            Self::WebFetch => "web_fetch",
-            Self::WebSearch => "web_search",
-            Self::ExecStart => "exec_start",
-            Self::ExecReadOutput => "exec_read_output",
-            Self::ExecWait => "exec_wait",
-            Self::ExecKill => "exec_kill",
-            Self::PlanRead => "plan_read",
-            Self::PlanWrite => "plan_write",
-            Self::InitPlan => "init_plan",
-            Self::AddTask => "add_task",
-            Self::SetTaskStatus => "set_task_status",
-            Self::AddTaskNote => "add_task_note",
-            Self::EditTask => "edit_task",
-            Self::PlanSnapshot => "plan_snapshot",
-            Self::PlanLint => "plan_lint",
-            Self::PromptBudgetRead => "prompt_budget_read",
-            Self::PromptBudgetUpdate => "prompt_budget_update",
-            Self::AutonomyStateRead => "autonomy_state_read",
-            Self::SkillList => "skill_list",
-            Self::SkillRead => "skill_read",
-            Self::SkillEnable => "skill_enable",
-            Self::SkillDisable => "skill_disable",
-            Self::ArtifactRead => "artifact_read",
-            Self::ArtifactSearch => "artifact_search",
-            Self::ArtifactPin => "artifact_pin",
-            Self::ArtifactUnpin => "artifact_unpin",
-            Self::DeliverFile => "deliver_file",
-            Self::KnowledgeSearch => "knowledge_search",
-            Self::KnowledgeRead => "knowledge_read",
-            Self::SessionSearch => "session_search",
-            Self::SessionRead => "session_read",
-            Self::SessionWait => "session_wait",
-            Self::McpCall => "mcp_call",
-            Self::McpSearchResources => "mcp_search_resources",
-            Self::McpReadResource => "mcp_read_resource",
-            Self::McpSearchPrompts => "mcp_search_prompts",
-            Self::McpGetPrompt => "mcp_get_prompt",
-            Self::AgentList => "agent_list",
-            Self::AgentRead => "agent_read",
-            Self::AgentCreate => "agent_create",
-            Self::ContinueLater => "continue_later",
-            Self::ScheduleList => "schedule_list",
-            Self::ScheduleRead => "schedule_read",
-            Self::ScheduleCreate => "schedule_create",
-            Self::ScheduleUpdate => "schedule_update",
-            Self::ScheduleDelete => "schedule_delete",
-            Self::MessageAgent => "message_agent",
-            Self::GrantAgentChainContinuation => "grant_agent_chain_continuation",
         }
     }
 }
