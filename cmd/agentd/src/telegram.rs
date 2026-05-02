@@ -5,6 +5,7 @@ pub(crate) mod delivery;
 pub(crate) mod files;
 pub mod polling;
 pub(crate) mod progress;
+pub(crate) mod queue;
 pub mod render;
 pub mod router;
 

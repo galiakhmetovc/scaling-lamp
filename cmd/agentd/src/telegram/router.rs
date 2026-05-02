@@ -2,10 +2,9 @@ use super::backend::TelegramBackend;
 use super::client::{TelegramClient, TelegramClientError};
 use super::commands::{
     ParsedTelegramCommand, TELEGRAM_INBOUND_QUEUE_MODE_COALESCE, TELEGRAM_INBOUND_QUEUE_MODE_QUEUE,
-    TELEGRAM_INBOUND_QUEUE_MODE_REJECT, TELEGRAM_INBOUND_QUEUE_MODE_RESTART,
-    TELEGRAM_MIN_COALESCE_WINDOW_MS, TelegramQueueAction, coalesce_window_seconds,
-    default_command_specs, is_session_operator_command, is_valid_telegram_queue_mode,
-    parse_command, parse_command_for_bot,
+    TELEGRAM_INBOUND_QUEUE_MODE_REJECT, TELEGRAM_INBOUND_QUEUE_MODE_RESTART, TelegramQueueAction,
+    coalesce_window_seconds, default_command_specs, is_session_operator_command, parse_command,
+    parse_command_for_bot,
 };
 use super::delivery::{
     DeliveryCursor, TelegramDeliveryLimiter, TelegramDeliveryScope, TelegramDeliveryTrace,
@@ -19,6 +18,11 @@ use super::polling::next_confirmed_offset;
 use super::progress::{
     TelegramProgressTracker, render_failed_temporary_status_html, render_file_delivery_failed_html,
     render_temporary_status_html,
+};
+use super::queue::{
+    build_telegram_inbound_record, configured_inbound_coalesce_window_ms,
+    effective_inbound_coalesce_window_ms, effective_inbound_queue_mode, is_telegram_inbox_event,
+    render_queue_status_text,
 };
 use super::render::{
     TELEGRAM_CAPTION_SOFT_CAP, TELEGRAM_MESSAGE_TEXT_SOFT_CAP, chunk_message_text,
@@ -34,12 +38,11 @@ use crate::store_retry::{
 };
 use agent_persistence::{
     ArtifactRecord, ArtifactRepository, FileDeliveryRepository, FileDeliveryRequestRecord,
-    PersistenceStore, SessionInboxEventRecord, SessionInboxRepository, StoreError,
-    TelegramChatBindingRecord, TelegramChatStatusRecord, TelegramRepository,
-    TelegramUpdateCursorRecord, TelegramUserPairingRecord, TraceRepository, TranscriptRecord,
-    TranscriptRepository, audit::AuditLogConfig,
+    PersistenceStore, SessionInboxRepository, StoreError, TelegramChatBindingRecord,
+    TelegramChatStatusRecord, TelegramRepository, TelegramUpdateCursorRecord,
+    TelegramUserPairingRecord, TraceRepository, TranscriptRecord, TranscriptRepository,
+    audit::AuditLogConfig,
 };
-use agent_runtime::inbox::{SessionInboxEvent, SessionInboxEventPayload};
 use serde_json::json;
 use std::collections::HashSet;
 use std::future::Future;
@@ -62,7 +65,6 @@ const TELEGRAM_STATUS_TTL_SECONDS: i64 = 30 * 60;
 const TELEGRAM_DELIVERY_RETRY_ATTEMPTS: usize = 3;
 const TELEGRAM_DELIVERY_RETRY_BASE_DELAY_MS: u64 = 250;
 const TELEGRAM_CHAT_TURN_FAST_SETTLE_MILLIS: u64 = 50;
-const TELEGRAM_INBOUND_QUEUE_SOURCE: &str = "telegram";
 
 static TELEGRAM_PAIRING_COUNTER: AtomicU64 = AtomicU64::new(0);
 
@@ -2274,8 +2276,10 @@ where
             .map(|session_id| self.queued_telegram_inbox_count(session_id))
             .transpose()?
             .unwrap_or_default();
-        Ok(format!(
-            "Telegram queue:\n- mode: {mode}\n- queued_inbound: {queued_count}\n- coalesce_window_ms: {coalesce_window_ms}"
+        Ok(render_queue_status_text(
+            &mode,
+            queued_count,
+            coalesce_window_ms,
         ))
     }
 
@@ -2342,18 +2346,15 @@ where
         now: i64,
         available_at: i64,
     ) -> Result<(), BootstrapError> {
-        let event_id = format!("telegram-inbound-{session_id}-{chat_id}-{telegram_message_id}");
-        let mut event = SessionInboxEvent::external_input_received(
-            event_id,
+        let record = build_telegram_inbound_record(
             session_id,
-            None,
-            TELEGRAM_INBOUND_QUEUE_SOURCE,
+            chat_id,
+            telegram_message_id,
             message,
             now,
-        );
-        event.available_at = available_at;
-        let record =
-            SessionInboxEventRecord::try_from(&event).map_err(BootstrapError::RecordConversion)?;
+            available_at,
+        )
+        .map_err(BootstrapError::RecordConversion)?;
         self.with_store_retry(|store| store.put_session_inbox_event(&record))?;
         Ok(())
     }
@@ -2414,27 +2415,21 @@ where
     }
 
     fn effective_inbound_queue_mode(&self, binding: &TelegramChatBindingRecord) -> String {
-        if is_valid_telegram_queue_mode(binding.inbound_queue_mode.as_str()) {
-            binding.inbound_queue_mode.clone()
-        } else {
-            self.app.config.telegram.inbound_queue_default_mode.clone()
-        }
+        effective_inbound_queue_mode(
+            binding,
+            &self.app.config.telegram.inbound_queue_default_mode,
+        )
     }
 
     fn effective_inbound_coalesce_window_ms(&self, binding: &TelegramChatBindingRecord) -> u64 {
-        binding
-            .inbound_coalesce_window_ms
-            .and_then(|value| u64::try_from(value).ok())
-            .unwrap_or_else(|| self.configured_inbound_coalesce_window_ms())
-            .max(TELEGRAM_MIN_COALESCE_WINDOW_MS)
+        effective_inbound_coalesce_window_ms(
+            binding,
+            self.app.config.telegram.inbound_coalesce_window_ms,
+        )
     }
 
     fn configured_inbound_coalesce_window_ms(&self) -> u64 {
-        self.app
-            .config
-            .telegram
-            .inbound_coalesce_window_ms
-            .max(TELEGRAM_MIN_COALESCE_WINDOW_MS)
+        configured_inbound_coalesce_window_ms(self.app.config.telegram.inbound_coalesce_window_ms)
     }
 
     async fn finish_chat_turn_background(
@@ -2598,15 +2593,6 @@ fn render_session_operator_status(
     lines.push(String::new());
     lines.push(active_run.to_string());
     lines.join("\n")
-}
-
-fn is_telegram_inbox_event(record: &SessionInboxEventRecord) -> bool {
-    match serde_json::from_str::<SessionInboxEventPayload>(&record.payload_json) {
-        Ok(SessionInboxEventPayload::ExternalInputReceived { source, .. }) => {
-            source == TELEGRAM_INBOUND_QUEUE_SOURCE
-        }
-        _ => false,
-    }
 }
 
 fn transcript_is_after_binding_cursor(
