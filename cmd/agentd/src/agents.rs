@@ -30,7 +30,7 @@ Core invariants:
 Self-learning:
 - Treat user corrections, repeated tool failures, successful workflows, and stable operator preferences as learning signals.
 - Do not rely on hidden memory. If something should persist, store it explicitly and make it inspectable by the operator.
-- Convert durable lessons through canonical teamD surfaces only: memory/knowledge tools, Logseq graph notes, artifacts, docs, or approved skill/profile updates.
+- Convert durable lessons through canonical teamD surfaces only: memory/knowledge tools, SilverBullet Space notes, artifacts, docs, or approved skill/profile updates.
 - Before changing durable instructions, skills, SYSTEM.md, AGENTS.md, or docs, explain the intended change and use the proper edit/review path.
 - Prefer small reusable lessons over broad rules; include what failed or worked, the concrete correction, and when to apply it again.
 - Never treat one-off user preferences as global policy unless the user confirms they are durable.
@@ -69,19 +69,19 @@ const LEGACY_PROMPT_BUDGET_UPDATE_GUIDANCE_LINE: &str = "  - Use `prompt_budget_
 
 const DEFAULT_LEARNING_WORKSPACE_GUIDANCE_SECTION: &str = r#"- Self-learning and workspace hygiene:
   - Treat repeated tool failures, user corrections, and successful workflows as learning signals
-  - Record reusable lessons only in inspectable durable places: memory/knowledge tools, Logseq graph notes, artifacts, docs, or approved skill/profile updates
+  - Record reusable lessons only in inspectable durable places: memory/knowledge tools, SilverBullet Space notes, artifacts, docs, or approved skill/profile updates
   - Do not rely on hidden memory; if a lesson matters for future work, make it explicit and operator-inspectable
   - Use a dedicated scratch path for temporary files; do not leave generated logs, experiments, downloads, or temp scripts in the workspace root
   - Clean up temporary files before finishing unless the user asked to keep them
-  - Keep durable outputs in canonical locations such as docs, artifacts, diagnostics, Logseq graph notes, or explicit project directories
+  - Keep durable outputs in canonical locations such as docs, artifacts, diagnostics, SilverBullet Space notes, or explicit project directories
 "#;
 
-const DEFAULT_LOGSEQ_GRAPH_GUIDANCE_SECTION: &str = r#"- Logseq graph:
-  - The canonical production knowledge graph path is `/var/lib/teamd/knowledge/logseq/teamd`
-  - Logseq Publish is the read-only web view; SilverBullet is the browser editor over the same Markdown files
-  - For knowledge-base work, use the `logseq-graph` skill when it is active; otherwise call `skill_list`/`skill_read` before making durable note changes
-  - Work inside the canonical graph path only; do not create a second graph at `~/vault`, `/root/vault`, `/var/lib/teamd/vault`, or inside a project workspace
-  - Before changing an existing note, read it first; preserve Markdown frontmatter, Logseq properties, page links, block refs, headings, and existing folder structure
+const DEFAULT_SILVERBULLET_SPACE_GUIDANCE_SECTION: &str = r#"- SilverBullet Space:
+  - The canonical production knowledge space path is `/var/lib/teamd/knowledge/silverbullet/teamd`
+  - SilverBullet is the browser UI for the same Markdown files; the optional `silverbullet` MCP connector is the preferred tool path when it is configured
+  - For knowledge-base work, use the `silverbullet-space` skill when it is active; otherwise call `skill_list`/`skill_read` before making durable note changes
+  - Work inside the canonical space path only; do not create a second graph or vault at `~/vault`, `/root/vault`, `/var/lib/teamd/vault`, or inside a project workspace
+  - Before changing an existing note, read it first; preserve Markdown frontmatter, wikilinks, headings, tasks, and existing folder structure
   - Use concise Markdown files and stable folders such as `00-Inbox`, `01-Projects`, `02-Areas`, `03-Resources`, `05-Journal`, `06-Tasks`, and `templates`
 "#;
 
@@ -168,20 +168,20 @@ Tool usage rules:
   - Use `knowledge_read` with bounded modes (`excerpt`, `full`) when you need the contents of a knowledge source
   - Use `session_search` to find relevant historical sessions before reopening old threads from memory
   - Use `session_read` with bounded modes (`summary`, `timeline`, `transcript`, `artifacts`) instead of assuming old session details
-- Logseq graph:
-  - The canonical production knowledge graph path is `/var/lib/teamd/knowledge/logseq/teamd`
-  - Logseq Publish is the read-only web view; SilverBullet is the browser editor over the same Markdown files
-  - For knowledge-base work, use the `logseq-graph` skill when it is active; otherwise call `skill_list`/`skill_read` before making durable note changes
-  - Work inside the canonical graph path only; do not create a second graph at `~/vault`, `/root/vault`, `/var/lib/teamd/vault`, or inside a project workspace
-  - Before changing an existing note, read it first; preserve Markdown frontmatter, Logseq properties, page links, block refs, headings, and existing folder structure
+- SilverBullet Space:
+  - The canonical production knowledge space path is `/var/lib/teamd/knowledge/silverbullet/teamd`
+  - SilverBullet is the browser UI for the same Markdown files; the optional `silverbullet` MCP connector is the preferred tool path when it is configured
+  - For knowledge-base work, use the `silverbullet-space` skill when it is active; otherwise call `skill_list`/`skill_read` before making durable note changes
+  - Work inside the canonical space path only; do not create a second graph or vault at `~/vault`, `/root/vault`, `/var/lib/teamd/vault`, or inside a project workspace
+  - Before changing an existing note, read it first; preserve Markdown frontmatter, wikilinks, headings, tasks, and existing folder structure
   - Use concise Markdown files and stable folders such as `00-Inbox`, `01-Projects`, `02-Areas`, `03-Resources`, `05-Journal`, `06-Tasks`, and `templates`
 - Self-learning and workspace hygiene:
   - Treat repeated tool failures, user corrections, and successful workflows as learning signals
-  - Record reusable lessons only in inspectable durable places: memory/knowledge tools, Logseq graph notes, artifacts, docs, or approved skill/profile updates
+  - Record reusable lessons only in inspectable durable places: memory/knowledge tools, SilverBullet Space notes, artifacts, docs, or approved skill/profile updates
   - Do not rely on hidden memory; if a lesson matters for future work, make it explicit and operator-inspectable
   - Use a dedicated scratch path for temporary files; do not leave generated logs, experiments, downloads, or temp scripts in the workspace root
   - Clean up temporary files before finishing unless the user asked to keep them
-  - Keep durable outputs in canonical locations such as docs, artifacts, diagnostics, Logseq graph notes, or explicit project directories
+  - Keep durable outputs in canonical locations such as docs, artifacts, diagnostics, SilverBullet Space notes, or explicit project directories
 - Error handling:
   - If a tool returns an error, inspect the returned details, correct the arguments, and retry with the right tool
   - Do not claim success after a failed tool call
@@ -290,31 +290,31 @@ Resource notes should include: summary, key points, sources, related notes.
 - When a working note becomes stable documentation, offer to promote it into repository docs and commit it.
 "#;
 
-const DEFAULT_LOGSEQ_GRAPH_SKILL_MD: &str = r#"---
-name: logseq-graph
-description: Use when working with Logseq, SilverBullet, graph, PARA, projects, areas, resources, archive, notes, knowledge base, Markdown notes, daily notes, tasks, links, frontmatter, or Telegram-sourced knowledge capture.
+const DEFAULT_SILVERBULLET_SPACE_SKILL_MD: &str = r#"---
+name: silverbullet-space
+description: Use when working with SilverBullet, space, graph, PARA, projects, areas, resources, archive, notes, knowledge base, Markdown notes, daily notes, tasks, links, frontmatter, or Telegram-sourced knowledge capture.
 ---
 
-# Logseq Graph
+# SilverBullet Space
 
-Use this skill for Logseq/SilverBullet knowledge-base and personal knowledge management work.
+Use this skill for SilverBullet knowledge-base and personal knowledge management work.
 
 ## Primary integration
 
-- Canonical production graph path: `/var/lib/teamd/knowledge/logseq/teamd`.
-- Logseq Publish is the read-only browser view of this graph.
-- SilverBullet is the browser editor over the same Markdown files.
-- There is no separate Logseq MCP path yet; normal note changes use canonical filesystem tools against the graph path.
-- Use direct filesystem writes only inside the canonical graph path and only after reading existing content first.
-- Do not write knowledge notes into project roots, `/root`, `/var/lib/teamd/vault`, or old Obsidian paths.
+- Canonical production space path: `/var/lib/teamd/knowledge/silverbullet/teamd`.
+- SilverBullet is the browser UI over this Markdown space.
+- If the `silverbullet` MCP connector is available, prefer it for note reads/searches/writes.
+- Discover available MCP resources/tools with `mcp_search_resources` when unsure.
+- If the MCP connector is unavailable, use canonical filesystem tools inside the space path only, and only after reading existing content first.
+- Do not write knowledge notes into project roots, `/root`, `/var/lib/teamd/vault`, the legacy Logseq path, or old Obsidian paths.
 
-## Graph contract
+## Space contract
 
-- Treat the graph as the shared working knowledge layer for the agent and operator.
-- Do not use the graph as runtime state: transcripts, runs, tool calls, artifacts, schedules, approvals, audit logs, and SQLite state remain in `agentd`.
-- Do not treat graph notes as canonical repository documentation. Stable documentation still belongs in git under `docs/`; use graph notes for working notes, drafts, decisions, research, and project logs before promoting stable material to repo docs.
-- Future semantic search may index this graph. Write notes so they are useful for both humans and indexing: clear title, concise summary, stable headings, explicit links, and frontmatter when useful.
-- Preserve Logseq-friendly Markdown: page links, block refs, properties, tags, headings, checkboxes, and frontmatter.
+- Treat the space as the shared working knowledge layer for the agent and operator.
+- Do not use the space as runtime state: transcripts, runs, tool calls, artifacts, schedules, approvals, audit logs, and SQLite state remain in `agentd`.
+- Do not treat space notes as canonical repository documentation. Stable documentation still belongs in git under `docs/`; use space notes for working notes, drafts, decisions, research, and project logs before promoting stable material to repo docs.
+- Future semantic search may index this space. Write notes so they are useful for both humans and indexing: clear title, concise summary, stable headings, explicit links, and frontmatter when useful.
+- Preserve Markdown frontmatter, wikilinks, tags, headings, checkboxes, and existing note structure.
 
 ## PARA structure
 
@@ -336,7 +336,7 @@ Daily notes should normally be `05-Journal/YYYY-MM-DD.md`. Do not create a separ
 
 1. Search before creating a new note unless the user asks for a clearly new note.
 2. Read an existing note before editing it.
-3. Preserve frontmatter, Logseq properties, links, headings, tasks, and existing folder structure.
+3. Preserve frontmatter, links, headings, tasks, and existing folder structure.
 4. Write concise Markdown with stable headings and meaningful filenames.
 5. After a write/update tool succeeds, summarize exactly what changed and where.
 6. If the tool fails, report the failure and retry with corrected arguments; do not claim the note was saved.
@@ -371,14 +371,13 @@ Task notes should include: priority, status, checklist, context, result.
 Daily notes should include: date, focus, log, tasks, captures.
 Resource notes should include: summary, key points, sources, related notes.
 
-## Tags and Logseq syntax
+## Tags and Markdown syntax
 
 - Use tags sparingly: `#project`, `#area`, `#resource`, `#task`, `#daily`, `#inbox`, `#archive`.
 - Priority tags: `#p0`, `#p1`, `#p2`, `#p3` only when priority matters.
 - Prefer wikilinks like `[[note name]]` for internal relationships.
-- Preserve block refs like `((block-id))` and page embeds if they exist.
 - Use checkboxes `- [ ]` and `- [x]` for task lists.
-- Preserve existing links, aliases, headings, frontmatter, and Logseq properties.
+- Preserve existing links, aliases, headings, frontmatter, and properties.
 
 ## Operating rules
 
@@ -387,26 +386,42 @@ Resource notes should include: summary, key points, sources, related notes.
 - If the target folder or naming convention is ambiguous, choose the closest PARA folder and state the assumption.
 - Keep note names stable and readable; avoid timestamp-only filenames except daily notes.
 - If a user message contains a durable fact, decision, task, or resource, offer to save it or save it directly when the request implies persistence.
-- At the start of substantial work, search/read relevant project, area, or resource notes from the graph.
+- At the start of substantial work, search/read relevant project, area, or resource notes from the space.
 - After an important decision or completed task, update the relevant project note or daily journal.
 - When a working note becomes stable documentation, offer to promote it into repository docs and commit it.
 "#;
 
+const DEPRECATED_LOGSEQ_GRAPH_SKILL_MD: &str = r#"---
+name: logseq-graph
+description: Deprecated compatibility skill for old Logseq wording. Use silverbullet-space for current knowledge-base work.
+---
+
+# Deprecated Logseq Graph Skill
+
+This skill is kept only so old sessions and operator commands do not break.
+
+- Current knowledge-base work must use `silverbullet-space`.
+- Canonical production space path: `/var/lib/teamd/knowledge/silverbullet/teamd`.
+- SilverBullet provides browser editing over the canonical Markdown space.
+- Logseq Publish is no longer a runtime component.
+- Do not create new notes in `/var/lib/teamd/knowledge/logseq/teamd` unless the operator explicitly asks for legacy data recovery.
+- If this skill activates accidentally, call `skill_read` for `silverbullet-space` and follow that skill instead.
+"#;
+
 const DEPRECATED_OBSIDIAN_VAULT_SKILL_MD: &str = r#"---
 name: obsidian-vault
-description: Deprecated compatibility skill for old Obsidian/vault wording. Use logseq-graph for current knowledge-base work.
+description: Deprecated compatibility skill for old Obsidian/vault wording. Use silverbullet-space for current knowledge-base work.
 ---
 
 # Deprecated Obsidian Vault Skill
 
 This skill is kept only so old sessions and operator commands do not break.
 
-- Current knowledge-base work must use `logseq-graph`.
-- Canonical production graph path: `/var/lib/teamd/knowledge/logseq/teamd`.
-- Logseq Publish provides the read-only web view.
-- SilverBullet provides browser editing over the same Markdown files.
+- Current knowledge-base work must use `silverbullet-space`.
+- Canonical production space path: `/var/lib/teamd/knowledge/silverbullet/teamd`.
+- SilverBullet provides browser editing over the canonical Markdown space.
 - Do not create new notes in `/var/lib/teamd/vaults/teamd`, `/var/lib/teamd/vault`, `~/vault`, or `/root/vault` unless the operator explicitly asks for legacy Obsidian recovery.
-- If this skill activates accidentally, call `skill_read` for `logseq-graph` and follow that skill instead.
+- If this skill activates accidentally, call `skill_read` for `silverbullet-space` and follow that skill instead.
 "#;
 
 const PRE_WORKING_KNOWLEDGE_OBSIDIAN_VAULT_SKILL_MD: &str = r#"---
@@ -844,9 +859,20 @@ pub fn ensure_builtin_agent_home_layout(
     if template.id == DEFAULT_AGENT_ID {
         sync_builtin_default_skill(
             agent_home,
-            "logseq-graph",
-            DEFAULT_LOGSEQ_GRAPH_SKILL_MD,
+            "silverbullet-space",
+            DEFAULT_SILVERBULLET_SPACE_SKILL_MD,
             &[],
+        )?;
+        sync_builtin_default_skill_with_legacy_markers(
+            agent_home,
+            "logseq-graph",
+            DEPRECATED_LOGSEQ_GRAPH_SKILL_MD,
+            &[],
+            &[
+                "# Logseq Graph",
+                "/var/lib/teamd/knowledge/logseq/teamd",
+                "Logseq Publish",
+            ],
         )?;
         sync_builtin_default_skill(
             agent_home,
@@ -871,6 +897,39 @@ fn sync_builtin_default_skill(
     let skill_dir = agent_home.join("skills").join(skill_name);
     fs::create_dir_all(&skill_dir)?;
     sync_builtin_prompt_file(&skill_dir.join("SKILL.md"), content, legacy_variants)
+}
+
+fn sync_builtin_default_skill_with_legacy_markers(
+    agent_home: &Path,
+    skill_name: &str,
+    content: &str,
+    legacy_variants: &[&str],
+    legacy_markers: &[&str],
+) -> io::Result<()> {
+    let skill_dir = agent_home.join("skills").join(skill_name);
+    fs::create_dir_all(&skill_dir)?;
+    let path = skill_dir.join("SKILL.md");
+    match fs::read_to_string(&path) {
+        Ok(existing) => {
+            let existing_normalized = normalize_prompt_contents(&existing);
+            let current = normalize_prompt_contents(content);
+            let has_legacy_markers = legacy_markers
+                .iter()
+                .all(|marker| existing.contains(marker));
+            if existing_normalized == current
+                || has_legacy_markers
+                || legacy_variants
+                    .iter()
+                    .any(|candidate| existing_normalized == normalize_prompt_contents(candidate))
+            {
+                fs::write(path, current)
+            } else {
+                Ok(())
+            }
+        }
+        Err(source) if source.kind() == io::ErrorKind::NotFound => fs::write(path, content),
+        Err(source) => Err(source),
+    }
 }
 
 pub fn clone_agent_home(
@@ -988,7 +1047,7 @@ fn previous_generated_default_agents_prompt_variants(current: &str) -> Vec<Strin
     let bases = [
         current.to_string(),
         current.replace(
-            DEFAULT_LOGSEQ_GRAPH_GUIDANCE_SECTION,
+            DEFAULT_SILVERBULLET_SPACE_GUIDANCE_SECTION,
             LEGACY_OBSIDIAN_VAULT_GUIDANCE_SECTION,
         ),
         current.replace(
@@ -1112,8 +1171,8 @@ mod tests {
         assert!(refreshed.contains("scope `next_turn`"));
         assert!(refreshed.contains("Use a dedicated scratch path"));
         assert!(refreshed.contains("Record reusable lessons"));
-        assert!(refreshed.contains("Logseq graph"));
-        assert!(refreshed.contains("/var/lib/teamd/knowledge/logseq/teamd"));
+        assert!(refreshed.contains("SilverBullet Space"));
+        assert!(refreshed.contains("/var/lib/teamd/knowledge/silverbullet/teamd"));
 
         fs::write(
             default_home.join("AGENTS.md"),
@@ -1150,18 +1209,25 @@ mod tests {
             fs::read_to_string(default_home.join("AGENTS.md")).expect("read refreshed prompt");
         assert!(refreshed_pre_next_turn.contains("scope `next_turn`"));
 
+        let silverbullet_skill =
+            fs::read_to_string(default_home.join("skills/silverbullet-space/SKILL.md"))
+                .expect("read silverbullet skill");
+        assert!(silverbullet_skill.contains("name: silverbullet-space"));
+        assert!(silverbullet_skill.contains("/var/lib/teamd/knowledge/silverbullet/teamd"));
+        assert!(silverbullet_skill.contains("MCP connector"));
+        assert!(silverbullet_skill.contains("## PARA structure"));
+        assert!(silverbullet_skill.contains("04-Archive"));
+
         let logseq_skill = fs::read_to_string(default_home.join("skills/logseq-graph/SKILL.md"))
             .expect("read logseq skill");
         assert!(logseq_skill.contains("name: logseq-graph"));
-        assert!(logseq_skill.contains("/var/lib/teamd/knowledge/logseq/teamd"));
-        assert!(logseq_skill.contains("SilverBullet"));
-        assert!(logseq_skill.contains("## PARA structure"));
-        assert!(logseq_skill.contains("04-Archive"));
+        assert!(logseq_skill.contains("Deprecated"));
+        assert!(logseq_skill.contains("silverbullet-space"));
 
         let legacy_obsidian_skill =
             fs::read_to_string(default_home.join("skills/obsidian-vault/SKILL.md"))
                 .expect("read legacy obsidian skill");
         assert!(legacy_obsidian_skill.contains("Deprecated"));
-        assert!(legacy_obsidian_skill.contains("logseq-graph"));
+        assert!(legacy_obsidian_skill.contains("silverbullet-space"));
     }
 }

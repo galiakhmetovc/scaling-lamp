@@ -51,11 +51,11 @@ TEAMD_TELEGRAM_BOT_TOKEN='123456789:test-token' \
 
 Полная инструкция: [14-container-addons.md](14-container-addons.md).
 
-Core `agentd` ставится отдельно от контейнерной обвязки. Второй скрипт поднимает SearXNG/Caddy и опционально Logseq Publish, SilverBullet, Jaeger и legacy Obsidian:
+Core `agentd` ставится отдельно от контейнерной обвязки. Второй скрипт поднимает SearXNG/Caddy и опционально SilverBullet, SilverBullet MCP, Jaeger и legacy Obsidian:
 
 ```bash
 ./scripts/deploy-teamd-containers.sh
-./scripts/deploy-teamd-containers.sh --with-logseq --with-silverbullet
+./scripts/deploy-teamd-containers.sh --with-silverbullet-mcp
 ./scripts/deploy-teamd-containers.sh --with-jaeger
 ./scripts/deploy-teamd-containers.sh --with-obsidian
 ./scripts/deploy-teamd-containers.sh --with-obsidian-mcp
@@ -64,22 +64,23 @@ Core `agentd` ставится отдельно от контейнерной о
 Проверка без изменений:
 
 ```bash
-./scripts/deploy-teamd-containers.sh --dry-run --non-interactive --no-start --with-logseq --with-silverbullet
+./scripts/deploy-teamd-containers.sh --dry-run --non-interactive --no-start --with-silverbullet-mcp
 ./scripts/deploy-teamd-containers.sh --dry-run --non-interactive --no-start --with-jaeger
 ./scripts/deploy-teamd-containers.sh --dry-run --non-interactive --no-start --with-obsidian-mcp
 ```
 
-`--with-logseq --with-silverbullet` ставит текущий recommended knowledge path:
+`--with-silverbullet-mcp` ставит текущий recommended knowledge path:
 
-- canonical graph: `/var/lib/teamd/knowledge/logseq/teamd`;
-- Logseq Publish read-only UI: `http://127.0.0.1:8088/logseq/` без домена или `https://logseq.<domain>/` с `TEAMD_CADDY_DOMAIN`;
-- SilverBullet editor: `https://<host>:8444/` без домена или `https://notes.<domain>/` с `TEAMD_CADDY_DOMAIN`;
-- credentials: `/opt/teamd/containers/silverbullet/silverbullet.env`, формат `SB_USER=username:password`.
+- canonical space: `/var/lib/teamd/knowledge/silverbullet/teamd`;
+- legacy migration source: `/var/lib/teamd/knowledge/logseq/teamd`, если старый graph существует и новый space пустой;
+- SilverBullet editor: `https://<host>:8444/` без домена, `https://notes.<domain>/` с `TEAMD_CADDY_DOMAIN` или `https://<domain>/` в `--single-domain` mode;
+- credentials/tokens: `/opt/teamd/containers/silverbullet/silverbullet.env`, формат `SB_USER=username:password`, плюс `SB_AUTH_TOKEN` и `MCP_TOKEN`;
+- MCP connector: `[daemon.mcp_connectors.silverbullet]` в `/etc/teamd/config.toml`.
 
-Default agent получает skill `logseq-graph`:
+Default agent получает skill `silverbullet-space`:
 
 ```bash
-teamdctl session enable-skill <session_id> logseq-graph
+teamdctl session enable-skill <session_id> silverbullet-space
 teamdctl session skills <session_id>
 ```
 
@@ -93,7 +94,7 @@ TEAMD_OTLP_TIMEOUT_MS='2000'
 
 После этого completed run traces автоматически экспортируются best-effort. UI без домена: `http://127.0.0.1:16686/jaeger/` напрямую или `http://127.0.0.1:8088/jaeger/` через Caddy. С `TEAMD_CADDY_DOMAIN` используется `https://jaeger.<domain>/`.
 
-`--with-obsidian-mcp` — legacy path. Он ставит Obsidian, добавляет enabled filesystem-backed MCP connector для vault в `/etc/teamd/config.toml` и перезапускает `teamd` сервисы, если они уже установлены. Новые knowledge notes должны идти в Logseq graph, а Obsidian остаётся для старых vault и восстановления.
+`--with-obsidian-mcp` — legacy path. Он ставит Obsidian, добавляет enabled filesystem-backed MCP connector для vault в `/etc/teamd/config.toml` и перезапускает `teamd` сервисы, если они уже установлены. Новые knowledge notes должны идти в SilverBullet Space, а Obsidian остаётся для старых vault и восстановления.
 
 Legacy canonical vault path: `/var/lib/teamd/vaults/teamd`. Compatibility path `/var/lib/teamd/vault` должен быть symlink на canonical vault, чтобы старые инструкции вида `~/vault` не создавали второй vault.
 

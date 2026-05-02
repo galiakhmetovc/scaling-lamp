@@ -37,12 +37,13 @@ assert_contains "$containers_help_output" "container add-ons"
 assert_contains "$containers_help_output" "--with-obsidian"
 assert_contains "$containers_help_output" "--with-obsidian-mcp"
 assert_contains "$containers_help_output" "--with-jaeger"
-assert_contains "$containers_help_output" "--with-logseq"
 assert_contains "$containers_help_output" "--with-silverbullet"
+assert_contains "$containers_help_output" "--with-silverbullet-mcp"
 assert_contains "$containers_help_output" "--single-domain"
 assert_contains "$containers_help_output" "--no-searxng"
 assert_contains "$containers_help_output" "--no-caddy"
 assert_contains "$containers_help_output" "--with-obsidian-mcp-example"
+assert_contains "$containers_help_output" "--with-silverbullet-mcp-example"
 
 diagnostics_help_output=$("$DIAGNOSTICS_SCRIPT" --help)
 assert_contains "$diagnostics_help_output" "collects production diagnostics"
@@ -98,35 +99,35 @@ assert_contains "$containers_jaeger_dry_run_output" "TEAMD_OTLP_EXPORT_ENABLED=t
 assert_contains "$containers_jaeger_dry_run_output" "TEAMD_OTLP_ENDPOINT=http://127.0.0.1:4318/v1/traces"
 assert_contains "$containers_jaeger_dry_run_output" "/jaeger/"
 
-containers_logseq_dry_run_output=$(
-  "$CONTAINERS_DEPLOY_SCRIPT" --dry-run --non-interactive --no-start --with-logseq --with-silverbullet 2>&1
+containers_silverbullet_dry_run_output=$(
+  "$CONTAINERS_DEPLOY_SCRIPT" --dry-run --non-interactive --no-start --with-silverbullet-mcp 2>&1
 )
 
-assert_contains "$containers_logseq_dry_run_output" "teamd-logseq-publish"
-assert_contains "$containers_logseq_dry_run_output" "teamd-silverbullet"
-assert_contains "$containers_logseq_dry_run_output" "/var/lib/teamd/knowledge/logseq/teamd"
-assert_contains "$containers_logseq_dry_run_output" "write /opt/teamd/containers/logseq/docker-compose.yml for teamd-logseq-publish"
-assert_contains "$containers_logseq_dry_run_output" "write /opt/teamd/containers/silverbullet/docker-compose.yml for teamd-silverbullet"
-assert_contains "$containers_logseq_dry_run_output" "seed Logseq graph config"
-assert_contains "$containers_logseq_dry_run_output" "seed SilverBullet credentials"
-assert_contains "$containers_logseq_dry_run_output" "Logseq Publish"
-assert_contains "$containers_logseq_dry_run_output" "SilverBullet"
-assert_contains "$containers_logseq_dry_run_output" "Caddy URL: http://127.0.0.1:8088/logseq/"
-assert_contains "$containers_logseq_dry_run_output" "Caddy URL: https://127.0.0.1:8444/"
-assert_contains "$containers_logseq_dry_run_output" "SB_USER credentials file: /opt/teamd/containers/silverbullet/silverbullet.env"
+assert_contains "$containers_silverbullet_dry_run_output" "remove legacy Logseq Publish containers"
+assert_contains "$containers_silverbullet_dry_run_output" "teamd-silverbullet"
+assert_contains "$containers_silverbullet_dry_run_output" "teamd-silverbullet-mcp"
+assert_contains "$containers_silverbullet_dry_run_output" "/var/lib/teamd/knowledge/silverbullet/teamd"
+assert_contains "$containers_silverbullet_dry_run_output" "/var/lib/teamd/knowledge/logseq/teamd"
+assert_contains "$containers_silverbullet_dry_run_output" "write /opt/teamd/containers/silverbullet/docker-compose.yml for teamd-silverbullet"
+assert_contains "$containers_silverbullet_dry_run_output" "seed SilverBullet credentials and API/MCP tokens"
+assert_contains "$containers_silverbullet_dry_run_output" "upsert enabled SilverBullet MCP connector"
+assert_contains "$containers_silverbullet_dry_run_output" "silverbullet-mcp.example.toml"
+assert_contains "$containers_silverbullet_dry_run_output" "SilverBullet"
+assert_contains "$containers_silverbullet_dry_run_output" "MCP stdio wrapper: /opt/teamd/containers/silverbullet/silverbullet-mcp-stdio.sh"
+assert_contains "$containers_silverbullet_dry_run_output" "Caddy URL: https://127.0.0.1:8444/"
+assert_contains "$containers_silverbullet_dry_run_output" "SB_USER credentials file: /opt/teamd/containers/silverbullet/silverbullet.env"
 
 containers_single_domain_dry_run_output=$(
   TEAMD_CADDY_DOMAIN='teamd.qlbc.ru' \
-    "$CONTAINERS_DEPLOY_SCRIPT" --dry-run --non-interactive --no-start --with-logseq --with-silverbullet --with-jaeger --single-domain 2>&1
+    "$CONTAINERS_DEPLOY_SCRIPT" --dry-run --non-interactive --no-start --with-silverbullet-mcp --with-jaeger --single-domain 2>&1
 )
 
 assert_contains "$containers_single_domain_dry_run_output" "Single-domain mode: yes"
 assert_contains "$containers_single_domain_dry_run_output" "UI URL: http://127.0.0.1:16686/jaeger"
 assert_contains "$containers_single_domain_dry_run_output" "Caddy URL: https://teamd.qlbc.ru/searxng/"
 assert_contains "$containers_single_domain_dry_run_output" "Caddy URL: https://teamd.qlbc.ru/jaeger/"
-assert_contains "$containers_single_domain_dry_run_output" "Caddy URL: https://teamd.qlbc.ru/logseq/"
 assert_contains "$containers_single_domain_dry_run_output" "Caddy URL: https://teamd.qlbc.ru/"
-assert_contains "$containers_single_domain_dry_run_output" "Routes with TEAMD_CADDY_DOMAIN single-domain: /, /searxng/, /logseq/, /jaeger/, and legacy /obsidian/ when enabled"
+assert_contains "$containers_single_domain_dry_run_output" "Routes with TEAMD_CADDY_DOMAIN single-domain: /, /searxng/, /jaeger/, and legacy /obsidian/ when enabled"
 
 containers_dry_run_start_output=$(
   "$CONTAINERS_DEPLOY_SCRIPT" --dry-run --non-interactive --with-obsidian-mcp 2>&1
@@ -167,14 +168,20 @@ grep -q 'QUERY_BASE_PATH=$JAEGER_BASE_PATH' "$CONTAINERS_DEPLOY_SCRIPT" \
   || fail "expected Jaeger subpath support"
 grep -q 'TEAMD_OTLP_ENDPOINT' "$CONTAINERS_DEPLOY_SCRIPT" \
   || fail "expected agentd OTLP env upsert"
-grep -q 'LOGSEQ_GRAPH_DIR=${TEAMD_LOGSEQ_GRAPH_DIR:-$LOGSEQ_GRAPHS_DIR/$LOGSEQ_GRAPH_NAME}' "$CONTAINERS_DEPLOY_SCRIPT" \
-  || fail "expected configurable canonical Logseq graph directory"
 grep -q 'SILVERBULLET_IMAGE=${TEAMD_SILVERBULLET_IMAGE:-ghcr.io/silverbulletmd/silverbullet:latest}' "$CONTAINERS_DEPLOY_SCRIPT" \
   || fail "expected official SilverBullet image default"
+grep -q 'SILVERBULLET_SPACE_DIR=${TEAMD_SILVERBULLET_SPACE_DIR:-$SILVERBULLET_SPACES_DIR/$SILVERBULLET_SPACE_NAME}' "$CONTAINERS_DEPLOY_SCRIPT" \
+  || fail "expected configurable canonical SilverBullet space directory"
 grep -q 'SB_USER=' "$CONTAINERS_DEPLOY_SCRIPT" \
   || fail "expected SilverBullet authentication configuration"
-grep -q 'handle_path /logseq/*' "$CONTAINERS_DEPLOY_SCRIPT" \
-  || fail "expected Logseq Publish subpath route"
+grep -q 'SB_AUTH_TOKEN=' "$CONTAINERS_DEPLOY_SCRIPT" \
+  || fail "expected SilverBullet API token configuration"
+grep -q 'MCP_TOKEN=' "$CONTAINERS_DEPLOY_SCRIPT" \
+  || fail "expected SilverBullet MCP token configuration"
+grep -q 'teamd-silverbullet-mcp' "$CONTAINERS_DEPLOY_SCRIPT" \
+  || fail "expected SilverBullet MCP container support"
+grep -q 'mcp-remote' "$CONTAINERS_DEPLOY_SCRIPT" \
+  || fail "expected MCP stdio bridge through mcp-remote"
 grep -q 'notes.$CADDY_DOMAIN' "$CONTAINERS_DEPLOY_SCRIPT" \
   || fail "expected SilverBullet dedicated domain route"
 grep -q 'chown_work_dir()' "$DEPLOY_SCRIPT" \

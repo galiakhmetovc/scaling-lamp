@@ -336,27 +336,28 @@ export TEAMD_OTLP_TIMEOUT_MS='2000'
 
 Это initial state для MCP runtime surface. Потом оператор может управлять коннекторами через TUI/HTTP/CLI.
 
-Текущий recommended knowledge add-on — Logseq graph + SilverBullet editor:
+Текущий recommended knowledge add-on — SilverBullet Space + optional SilverBullet MCP:
 
 ```bash
-./scripts/deploy-teamd-containers.sh --with-logseq --with-silverbullet
+./scripts/deploy-teamd-containers.sh --with-silverbullet-mcp
 ```
 
-Он не добавляет MCP connector: агент работает с canonical Markdown graph через штатные filesystem tools и `logseq-graph` skill.
+Он создаёт browser-editable Markdown space, поднимает SilverBullet, добавляет `silverbullet` MCP connector в `/etc/teamd/config.toml` и перезапускает `teamd` services. Агент работает с этим knowledge layer через `silverbullet-space` skill; если MCP connector доступен, он предпочтителен, иначе fallback — штатные filesystem tools внутри canonical space path.
 
 Ключевые env-переменные container deploy path:
 
 ```bash
-TEAMD_LOGSEQ_GRAPH_DIR='/var/lib/teamd/knowledge/logseq/teamd'
-TEAMD_LOGSEQ_OUTPUT_DIR='/var/lib/teamd/containers/logseq/output'
+TEAMD_SILVERBULLET_SPACE_DIR='/var/lib/teamd/knowledge/silverbullet/teamd'
+TEAMD_LEGACY_LOGSEQ_GRAPH_DIR='/var/lib/teamd/knowledge/logseq/teamd'
 TEAMD_SILVERBULLET_PORT='8091'
 TEAMD_SILVERBULLET_HTTPS_PORT='8444'
 TEAMD_SILVERBULLET_USER='username:password'
+TEAMD_SILVERBULLET_MCP_PORT='4000'
 TEAMD_CADDY_DOMAIN='example.com'
 TEAMD_CADDY_HOST='31.130.128.89'
 ```
 
-Без dedicated domain Logseq Publish публикуется как `http://127.0.0.1:8088/logseq/`, а SilverBullet — как отдельный HTTPS site `https://<host>:8444/`. С `TEAMD_CADDY_DOMAIN` используются `https://logseq.<domain>/` и `https://notes.<domain>/`.
+Без dedicated domain SilverBullet публикуется как отдельный HTTPS site `https://<host>:8444/`. С `TEAMD_CADDY_DOMAIN` используется `https://notes.<domain>/`, а в `--single-domain` mode — `https://<domain>/`.
 
 Legacy Obsidian vault MCP connector всё ещё можно добавить вторым deploy script:
 

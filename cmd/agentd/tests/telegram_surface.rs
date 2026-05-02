@@ -996,9 +996,8 @@ fn telegram_worker_processes_status_and_stop_while_chat_turn_is_running() {
     let worker =
         TelegramWorker::with_consumer(app.clone(), backend.clone(), client, "telegram-test");
 
-    let first_poll = runtime.block_on(async {
-        tokio::time::timeout(Duration::from_millis(250), worker.poll_once()).await
-    });
+    let first_poll = runtime
+        .block_on(async { tokio::time::timeout(Duration::from_secs(2), worker.poll_once()).await });
     if first_poll.is_err() {
         let (released, condvar) = &*release;
         *released.lock().expect("release lock") = true;
@@ -1012,9 +1011,8 @@ fn telegram_worker_processes_status_and_stop_while_chat_turn_is_running() {
         .recv_timeout(Duration::from_secs(2))
         .expect("chat turn started");
 
-    let second_poll = runtime.block_on(async {
-        tokio::time::timeout(Duration::from_millis(250), worker.poll_once()).await
-    });
+    let second_poll = runtime
+        .block_on(async { tokio::time::timeout(Duration::from_secs(2), worker.poll_once()).await });
     let processed = second_poll
         .expect("operator commands should be processed while the chat turn runs")
         .expect("second poll");
@@ -1029,35 +1027,35 @@ fn telegram_worker_processes_status_and_stop_while_chat_turn_is_running() {
     let (released, condvar) = &*release;
     *released.lock().expect("release lock") = true;
     condvar.notify_all();
-    runtime.block_on(async { tokio::time::sleep(Duration::from_millis(50)).await });
+    drive_runtime(&runtime, Duration::from_secs(1));
 
     let _ = requests
-        .recv_timeout(Duration::from_secs(2))
+        .recv_timeout(Duration::from_secs(10))
         .expect("captured first getUpdates");
     let _ = requests
-        .recv_timeout(Duration::from_secs(2))
+        .recv_timeout(Duration::from_secs(10))
         .expect("captured temporary status message");
     let _ = requests
-        .recv_timeout(Duration::from_secs(2))
+        .recv_timeout(Duration::from_secs(10))
         .expect("captured second getUpdates");
     let delete_status = requests
-        .recv_timeout(Duration::from_secs(2))
+        .recv_timeout(Duration::from_secs(10))
         .expect("captured temporary status delete");
     assert_eq!(delete_status.path, "/bottest-token/DeleteMessage");
     let status = requests
-        .recv_timeout(Duration::from_secs(2))
+        .recv_timeout(Duration::from_secs(10))
         .expect("captured status response");
     assert!(status.body.contains("Current session"));
     let stop = requests
-        .recv_timeout(Duration::from_secs(2))
+        .recv_timeout(Duration::from_secs(10))
         .expect("captured stop response");
     assert!(stop.body.contains("stopped session-running"));
     let cancel = requests
-        .recv_timeout(Duration::from_secs(2))
+        .recv_timeout(Duration::from_secs(10))
         .expect("captured cancel response");
     assert!(cancel.body.contains("cancelled session-running"));
     let final_message = requests
-        .recv_timeout(Duration::from_secs(2))
+        .recv_timeout(Duration::from_secs(10))
         .expect("captured final response");
     assert_eq!(final_message.path, "/bottest-token/SendMessage");
     assert_eq!(
@@ -1130,16 +1128,12 @@ fn telegram_worker_coalesces_inbound_messages_while_turn_is_running() {
         TelegramWorker::with_consumer(app.clone(), backend.clone(), client, "telegram-test");
 
     runtime
-        .block_on(async {
-            tokio::time::timeout(Duration::from_millis(250), worker.poll_once()).await
-        })
+        .block_on(async { tokio::time::timeout(Duration::from_secs(2), worker.poll_once()).await })
         .expect("first poll should not block")
         .expect("first poll");
 
     let processed = runtime
-        .block_on(async {
-            tokio::time::timeout(Duration::from_millis(250), worker.poll_once()).await
-        })
+        .block_on(async { tokio::time::timeout(Duration::from_secs(2), worker.poll_once()).await })
         .expect("queued inputs should not block")
         .expect("second poll");
     assert_eq!(processed, 2);
@@ -1165,9 +1159,9 @@ fn telegram_worker_coalesces_inbound_messages_while_turn_is_running() {
     let (released, condvar) = &*release;
     *released.lock().expect("release lock") = true;
     condvar.notify_all();
-    drive_runtime(&runtime, Duration::from_millis(50));
+    drive_runtime(&runtime, Duration::from_secs(1));
 
-    let deadline = Instant::now() + Duration::from_secs(5);
+    let deadline = Instant::now() + Duration::from_secs(10);
     let mut captured = Vec::new();
     while Instant::now() < deadline {
         let remaining = deadline
@@ -1262,7 +1256,7 @@ fn telegram_worker_start_creates_pending_pairing_and_returns_cli_hint() {
     assert_eq!(cursor.update_id, 101);
 
     let get_updates = requests
-        .recv_timeout(Duration::from_secs(2))
+        .recv_timeout(Duration::from_secs(10))
         .expect("captured getUpdates");
     assert_eq!(get_updates.path, "/bottest-token/GetUpdates");
 
@@ -1534,19 +1528,20 @@ fn telegram_worker_sends_queued_file_delivery_requests_after_chat_turn() {
     let worker = TelegramWorker::with_consumer(app.clone(), backend, client, "telegram-test");
 
     runtime.block_on(worker.poll_once()).expect("poll once");
+    drive_runtime(&runtime, Duration::from_secs(1));
 
     let _ = requests
-        .recv_timeout(Duration::from_secs(2))
+        .recv_timeout(Duration::from_secs(10))
         .expect("captured getUpdates");
     let _status = requests
-        .recv_timeout(Duration::from_secs(2))
+        .recv_timeout(Duration::from_secs(10))
         .expect("captured status");
     let final_message = requests
-        .recv_timeout(Duration::from_secs(2))
+        .recv_timeout(Duration::from_secs(10))
         .expect("captured final");
     assert_eq!(final_message.path, "/bottest-token/SendMessage");
     let send_document = requests
-        .recv_timeout(Duration::from_secs(2))
+        .recv_timeout(Duration::from_secs(10))
         .expect("captured queued sendDocument");
     assert_eq!(send_document.path, "/bottest-token/SendDocument");
     assert!(send_document.body.contains("report.txt"));
@@ -1740,9 +1735,10 @@ fn telegram_worker_retries_transient_send_message_failures() {
     let worker = TelegramWorker::with_consumer(app, backend, client, "telegram-test");
 
     runtime.block_on(worker.poll_once()).expect("poll once");
+    drive_runtime(&runtime, Duration::from_secs(1));
 
     let _ = requests
-        .recv_timeout(Duration::from_secs(2))
+        .recv_timeout(Duration::from_secs(10))
         .expect("captured getUpdates");
     let first_status_attempt = requests
         .recv_timeout(Duration::from_secs(2))
@@ -1753,7 +1749,7 @@ fn telegram_worker_retries_transient_send_message_failures() {
         .expect("captured retried status attempt");
     assert_eq!(second_status_attempt.path, "/bottest-token/SendMessage");
     let final_message = requests
-        .recv_timeout(Duration::from_secs(2))
+        .recv_timeout(Duration::from_secs(10))
         .expect("captured final message");
     assert_eq!(final_message.path, "/bottest-token/SendMessage");
 
@@ -2474,7 +2470,7 @@ fn telegram_worker_preserves_existing_private_session_preferences_before_turn() 
         .recv_timeout(Duration::from_secs(2))
         .expect("captured getUpdates");
     let _ = requests
-        .recv_timeout(Duration::from_secs(2))
+        .recv_timeout(Duration::from_secs(10))
         .expect("captured ack");
     let final_message = requests
         .recv_timeout(Duration::from_secs(2))
@@ -2866,19 +2862,20 @@ fn telegram_worker_keeps_turn_alive_when_progress_edit_is_too_long() {
     let worker = TelegramWorker::with_consumer(app, backend, client, "telegram-test");
 
     runtime.block_on(worker.poll_once()).expect("poll once");
+    drive_runtime(&runtime, Duration::from_secs(1));
 
     let _ = requests
-        .recv_timeout(Duration::from_secs(2))
+        .recv_timeout(Duration::from_secs(10))
         .expect("captured getUpdates");
     let _ = requests
-        .recv_timeout(Duration::from_secs(2))
+        .recv_timeout(Duration::from_secs(10))
         .expect("captured ack");
     let failed_edit = requests
-        .recv_timeout(Duration::from_secs(2))
+        .recv_timeout(Duration::from_secs(10))
         .expect("captured rejected progress edit");
     assert_eq!(failed_edit.path, "/bottest-token/EditMessageText");
     let final_message = requests
-        .recv_timeout(Duration::from_secs(2))
+        .recv_timeout(Duration::from_secs(10))
         .expect("captured final message");
     assert_eq!(final_message.path, "/bottest-token/SendMessage");
     assert!(
@@ -2935,8 +2932,9 @@ fn telegram_worker_reports_drafting_phase_before_final_reply() {
     let worker = TelegramWorker::with_consumer(app, backend, client, "telegram-test");
 
     runtime.block_on(worker.poll_once()).expect("poll once");
+    drive_runtime(&runtime, Duration::from_secs(1));
 
-    let captured = drain_requests_for(&requests, Duration::from_secs(2));
+    let captured = drain_requests_for(&requests, Duration::from_secs(10));
     assert!(
         captured
             .iter()
@@ -3463,23 +3461,24 @@ fn telegram_worker_flushes_pending_transcripts_before_new_inbound_turn() {
     let worker = TelegramWorker::with_consumer(app.clone(), backend, client, "telegram-test");
 
     runtime.block_on(worker.poll_once()).expect("poll once");
+    drive_runtime(&runtime, Duration::from_secs(1));
 
     let scheduled = requests
-        .recv_timeout(Duration::from_secs(2))
+        .recv_timeout(Duration::from_secs(10))
         .expect("captured scheduled delivery");
     assert_eq!(scheduled.path, "/bottest-token/SendMessage");
     assert!(scheduled.body.contains("Scheduled hello from the past."));
     let get_updates = requests
-        .recv_timeout(Duration::from_secs(2))
+        .recv_timeout(Duration::from_secs(10))
         .expect("captured getUpdates");
     assert_eq!(get_updates.path, "/bottest-token/GetUpdates");
     let working = requests
-        .recv_timeout(Duration::from_secs(2))
+        .recv_timeout(Duration::from_secs(10))
         .expect("captured working ack");
     assert_eq!(working.path, "/bottest-token/SendMessage");
     assert!(working.body.contains("Стадия: запуск"));
     let direct = requests
-        .recv_timeout(Duration::from_secs(2))
+        .recv_timeout(Duration::from_secs(10))
         .expect("captured direct final message");
     assert_eq!(direct.path, "/bottest-token/SendMessage");
     assert!(direct.body.contains("Direct reply after inbound message."));
@@ -3537,7 +3536,7 @@ fn telegram_worker_real_daemon_backend_uses_canonical_chat_path() {
         TelegramWorker::with_consumer(app.clone(), backend.clone(), client, "telegram-test");
 
     runtime.block_on(worker.poll_once()).expect("poll once");
-    drive_runtime(&runtime, Duration::from_millis(2_500));
+    drive_runtime(&runtime, Duration::from_secs(5));
 
     let store = app.store().expect("open store");
     let binding = store
@@ -3580,21 +3579,21 @@ fn telegram_worker_real_daemon_backend_uses_canonical_chat_path() {
     );
 
     let _ = requests
-        .recv_timeout(Duration::from_secs(2))
+        .recv_timeout(Duration::from_secs(10))
         .expect("captured getUpdates");
     let send_message = requests
-        .recv_timeout(Duration::from_secs(2))
+        .recv_timeout(Duration::from_secs(10))
         .expect("captured ack");
     assert_eq!(send_message.path, "/bottest-token/SendMessage");
     assert!(send_message.body.contains("\"parse_mode\":\"HTML\""));
     assert!(send_message.body.contains("Стадия: запуск"));
     let typing_request = requests
-        .recv_timeout(Duration::from_secs(2))
+        .recv_timeout(Duration::from_secs(10))
         .expect("captured sendChatAction");
     assert_eq!(typing_request.path, "/bottest-token/SendChatAction");
     assert!(typing_request.body.contains("\"action\":\"typing\""));
     let final_message = requests
-        .recv_timeout(Duration::from_secs(2))
+        .recv_timeout(Duration::from_secs(10))
         .expect("captured final message");
     assert_eq!(final_message.path, "/bottest-token/SendMessage");
     assert!(

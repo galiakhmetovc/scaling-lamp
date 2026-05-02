@@ -362,7 +362,7 @@ Decision D2: `AGENTS.md` должен быть:
 
 - агент замечает повторяющиеся tool failures, корректировки оператора, успешные workflows и устойчивые предпочтения;
 - агент не полагается на hidden memory;
-- если урок нужен дальше, он записывается в inspectable durable surface: knowledge/memory tools, Logseq graph note, artifact, documentation или согласованное изменение profile/skill prompts;
+- если урок нужен дальше, он записывается в inspectable durable surface: knowledge/memory tools, SilverBullet Space note, artifact, documentation или согласованное изменение profile/skill prompts;
 - широкие правила не выводятся из одного случая без подтверждения оператора;
 - изменение `SYSTEM.md`, `AGENTS.md`, skills или документации должно быть явным и проверяемым.
 
