@@ -1828,6 +1828,7 @@ fn telegram_worker_judge_command_queues_interagent_message() {
         TelegramWorker::with_consumer(app.clone(), backend.clone(), client, "telegram-test");
 
     runtime.block_on(worker.poll_once()).expect("poll once");
+    drive_runtime(&runtime, Duration::from_millis(100));
 
     let binding = app
         .store()
@@ -1901,6 +1902,7 @@ fn telegram_worker_agent_command_queues_interagent_message() {
         TelegramWorker::with_consumer(app.clone(), backend.clone(), client, "telegram-test");
 
     runtime.block_on(worker.poll_once()).expect("poll once");
+    drive_runtime(&runtime, Duration::from_millis(100));
 
     let binding = app
         .store()
@@ -1971,6 +1973,7 @@ fn telegram_worker_auto_creates_private_session_and_routes_text_turn() {
         TelegramWorker::with_consumer(app.clone(), backend.clone(), client, "telegram-test");
 
     runtime.block_on(worker.poll_once()).expect("poll once");
+    drive_runtime(&runtime, Duration::from_millis(100));
 
     let binding = app
         .store()
@@ -2706,6 +2709,7 @@ fn telegram_worker_rate_limits_progress_edits_on_the_status_message() {
     let worker = TelegramWorker::with_consumer(app, backend, client, "telegram-test");
 
     runtime.block_on(worker.poll_once()).expect("poll once");
+    drive_runtime(&runtime, Duration::from_millis(100));
 
     let _ = requests
         .recv_timeout(Duration::from_secs(2))
