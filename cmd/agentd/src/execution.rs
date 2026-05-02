@@ -14,6 +14,8 @@ mod provider_cursor;
 mod provider_ids;
 mod provider_ledger;
 mod provider_loop;
+mod provider_offload;
+mod provider_text;
 mod supervisor;
 mod tools;
 mod wakeup;
