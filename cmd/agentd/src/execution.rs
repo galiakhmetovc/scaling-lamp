@@ -10,6 +10,8 @@ mod mcp;
 mod memory;
 mod mission;
 mod provider_cursor;
+mod provider_ids;
+mod provider_ledger;
 mod provider_loop;
 mod supervisor;
 mod tools;

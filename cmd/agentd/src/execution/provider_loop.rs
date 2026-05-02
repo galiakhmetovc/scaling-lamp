@@ -1,4 +1,11 @@
 use super::provider_cursor::{MAX_EMPTY_RESPONSE_RECOVERIES, ProviderLoopCursor};
+use super::provider_ids::sanitize_identifier;
+#[cfg(test)]
+use super::provider_ledger::TOOL_RESULT_PREVIEW_CHAR_LIMIT;
+use super::provider_ledger::{
+    ToolCallLedgerUpdate, ToolCallResultLedgerUpdate, record_provider_round_trace,
+    record_tool_call_ledger, record_tool_call_result,
+};
 use super::*;
 use crate::agents;
 use crate::prompting;
@@ -47,7 +54,6 @@ use std::time::Duration;
 const MAX_CONTEXT_OFFLOAD_REFS: usize = 16;
 const INLINE_TOOL_OUTPUT_TOKEN_LIMIT: u32 = 512;
 const INLINE_FIND_IN_FILES_PREVIEW_LIMIT: usize = 6;
-const TOOL_RESULT_PREVIEW_CHAR_LIMIT: usize = 16 * 1024;
 const MAX_TRANSIENT_PROVIDER_RETRIES: usize = 3;
 const DEFAULT_SKILL_LIST_LIMIT: usize = 64;
 const MAX_SKILL_LIST_LIMIT: usize = 256;
@@ -86,30 +92,6 @@ pub(super) struct ProviderToolCallInvocation<'a> {
     pub(super) tool_call_id: &'a str,
     pub(super) arguments_json: &'a str,
     pub(super) parsed: &'a ToolCall,
-}
-
-struct ToolCallLedgerUpdate<'a> {
-    store: &'a PersistenceStore,
-    session_id: &'a str,
-    run_id: &'a str,
-    provider_tool_call_id: &'a str,
-    tool_name: &'a str,
-    arguments_json: &'a str,
-    summary: &'a str,
-    status: ToolExecutionStatus,
-    error: Option<String>,
-    now: i64,
-}
-
-struct ToolCallResultLedgerUpdate<'a> {
-    store: &'a PersistenceStore,
-    session_id: &'a str,
-    run_id: &'a str,
-    provider_tool_call_id: &'a str,
-    tool_name: &'a str,
-    result_summary: &'a str,
-    result_output: &'a str,
-    now: i64,
 }
 
 #[derive(Debug, Clone)]
@@ -281,200 +263,6 @@ impl ExecutionService {
             "retryable": true,
         })
         .to_string()
-    }
-
-    fn tool_call_ledger_id(run_id: &str, provider_tool_call_id: &str) -> String {
-        format!(
-            "toolcall-{}-{}",
-            sanitize_identifier(run_id),
-            sanitize_identifier(provider_tool_call_id)
-        )
-    }
-
-    fn provider_round_trace_id(run_id: &str, round: usize) -> String {
-        format!("provider-round-{}-r{round}", sanitize_identifier(run_id))
-    }
-
-    fn record_provider_round_trace(
-        store: &PersistenceStore,
-        run_id: &str,
-        session_id: &str,
-        round: usize,
-        max_rounds: usize,
-        request: &ProviderRequest,
-        now: i64,
-    ) -> Result<(), ExecutionError> {
-        let trace_context = RuntimeTraceContext::from_run_link_or_default(store, run_id)
-            .map_err(ExecutionError::Store)?;
-        let entity_id = Self::provider_round_trace_id(run_id, round);
-        store
-            .put_trace_link(&trace_context.child_link(
-                "provider_round",
-                &entity_id,
-                serde_json::json!({
-                    "session_id": session_id,
-                    "run_id": run_id,
-                    "round": round,
-                    "max_rounds": max_rounds,
-                    "model": request.model.as_deref(),
-                    "stream": matches!(request.stream, ProviderStreamMode::Enabled),
-                    "message_count": request.messages.len(),
-                    "tool_definition_count": request.tools.len(),
-                    "tool_output_count": request.tool_outputs.len(),
-                    "continuation_message_count": request.continuation_messages.len(),
-                }),
-                now,
-            ))
-            .map_err(ExecutionError::Store)
-    }
-
-    fn record_tool_call_ledger(update: ToolCallLedgerUpdate<'_>) -> Result<(), ExecutionError> {
-        retry_store_sync(
-            SQLITE_LOCK_RETRY_ATTEMPTS,
-            Duration::from_millis(SQLITE_LOCK_RETRY_DELAY_MS),
-            || {
-                let id = Self::tool_call_ledger_id(update.run_id, update.provider_tool_call_id);
-                let existing = update.store.get_tool_call(&id)?;
-                let requested_at = existing
-                    .as_ref()
-                    .map(|record| record.requested_at)
-                    .unwrap_or(update.now);
-                let trace_context =
-                    RuntimeTraceContext::from_run_link_or_default(update.store, update.run_id)?;
-                update.store.put_tool_call(&ToolCallRecord {
-                    id: id.clone(),
-                    session_id: update.session_id.to_string(),
-                    run_id: update.run_id.to_string(),
-                    provider_tool_call_id: update.provider_tool_call_id.to_string(),
-                    tool_name: update.tool_name.to_string(),
-                    arguments_json: update.arguments_json.to_string(),
-                    summary: update.summary.to_string(),
-                    status: update.status.as_str().to_string(),
-                    error: update.error.clone(),
-                    result_summary: existing
-                        .as_ref()
-                        .and_then(|record| record.result_summary.clone()),
-                    result_preview: existing
-                        .as_ref()
-                        .and_then(|record| record.result_preview.clone()),
-                    result_artifact_id: existing
-                        .as_ref()
-                        .and_then(|record| record.result_artifact_id.clone()),
-                    result_truncated: existing
-                        .as_ref()
-                        .is_some_and(|record| record.result_truncated),
-                    result_byte_len: existing.as_ref().and_then(|record| record.result_byte_len),
-                    requested_at,
-                    updated_at: update.now,
-                })?;
-                update.store.put_trace_link(&trace_context.child_link(
-                    "tool_call",
-                    &id,
-                    serde_json::json!({
-                        "session_id": update.session_id,
-                        "run_id": update.run_id,
-                        "provider_tool_call_id": update.provider_tool_call_id,
-                        "tool_name": update.tool_name,
-                        "status": update.status.as_str(),
-                        "summary": update.summary,
-                    }),
-                    requested_at,
-                ))
-            },
-        )
-        .map_err(ExecutionError::Store)
-    }
-
-    fn record_tool_call_result(
-        update: ToolCallResultLedgerUpdate<'_>,
-    ) -> Result<(), ExecutionError> {
-        retry_store_sync(
-            SQLITE_LOCK_RETRY_ATTEMPTS,
-            Duration::from_millis(SQLITE_LOCK_RETRY_DELAY_MS),
-            || {
-                let id = Self::tool_call_ledger_id(update.run_id, update.provider_tool_call_id);
-                let Some(mut record) = update.store.get_tool_call(&id)? else {
-                    return Ok(());
-                };
-                let trace_context =
-                    RuntimeTraceContext::from_run_link_or_default(update.store, update.run_id)?;
-
-                let (result_preview, result_truncated) =
-                    Self::tool_result_preview(update.result_output);
-                let result_artifact_id = if result_truncated {
-                    let artifact_id =
-                        Self::tool_result_artifact_id(update.run_id, update.provider_tool_call_id);
-                    update.store.put_artifact(&ArtifactRecord {
-                        id: artifact_id.clone(),
-                        session_id: update.session_id.to_string(),
-                        kind: "tool_output".to_string(),
-                        metadata_json: serde_json::json!({
-                            "tool_call_id": id,
-                            "run_id": update.run_id,
-                            "provider_tool_call_id": update.provider_tool_call_id,
-                            "tool_name": update.tool_name,
-                            "summary": update.result_summary,
-                            "created_at": update.now,
-                        })
-                        .to_string(),
-                        path: PathBuf::from("artifacts").join(format!("{artifact_id}.bin")),
-                        bytes: update.result_output.as_bytes().to_vec(),
-                        created_at: update.now,
-                    })?;
-                    update.store.put_trace_link(&trace_context.child_link(
-                        "artifact",
-                        &artifact_id,
-                        serde_json::json!({
-                            "session_id": update.session_id,
-                            "run_id": update.run_id,
-                            "tool_call_id": id,
-                            "kind": "tool_output",
-                            "byte_len": update.result_output.len(),
-                        }),
-                        update.now,
-                    ))?;
-                    Some(artifact_id)
-                } else {
-                    None
-                };
-
-                record.result_summary = Some(update.result_summary.to_string());
-                record.result_preview = Some(result_preview);
-                record.result_artifact_id = result_artifact_id;
-                record.result_truncated = result_truncated;
-                record.result_byte_len = Some(update.result_output.len() as i64);
-                record.updated_at = update.now;
-                update.store.put_tool_call(&record)
-            },
-        )
-        .map_err(ExecutionError::Store)
-    }
-
-    fn tool_result_preview(result_output: &str) -> (String, bool) {
-        let mut chars = result_output.chars();
-        let preview = chars
-            .by_ref()
-            .take(TOOL_RESULT_PREVIEW_CHAR_LIMIT)
-            .collect::<String>();
-        let truncated = chars.next().is_some();
-        if truncated {
-            (
-                format!(
-                    "{preview}\n... <truncated; use session tool-result with this tool_call_id>"
-                ),
-                true,
-            )
-        } else {
-            (preview, false)
-        }
-    }
-
-    fn tool_result_artifact_id(run_id: &str, provider_tool_call_id: &str) -> String {
-        format!(
-            "artifact-tool-result-{}-{}",
-            sanitize_identifier(run_id),
-            sanitize_identifier(provider_tool_call_id)
-        )
     }
 
     fn file_delivery_request_id(run_id: &str, artifact_id: &str, now: i64) -> String {
@@ -2170,7 +1958,7 @@ impl ExecutionService {
         observer: &mut Option<&mut dyn FnMut(ChatExecutionEvent)>,
     ) -> Result<String, ExecutionError> {
         let parsed = invocation.parsed;
-        Self::record_tool_call_ledger(ToolCallLedgerUpdate {
+        record_tool_call_ledger(ToolCallLedgerUpdate {
             store: context.store,
             session_id: context.session_id,
             run_id: context.run_id,
@@ -2213,7 +2001,7 @@ impl ExecutionService {
                         status: ToolExecutionStatus::Failed,
                     },
                 );
-                Self::record_tool_call_ledger(ToolCallLedgerUpdate {
+                record_tool_call_ledger(ToolCallLedgerUpdate {
                     store: context.store,
                     session_id: context.session_id,
                     run_id: context.run_id,
@@ -2270,7 +2058,7 @@ impl ExecutionService {
                 status: ToolExecutionStatus::Completed,
             },
         );
-        Self::record_tool_call_ledger(ToolCallLedgerUpdate {
+        record_tool_call_ledger(ToolCallLedgerUpdate {
             store: context.store,
             session_id: context.session_id,
             run_id: context.run_id,
@@ -2282,7 +2070,7 @@ impl ExecutionService {
             error: None,
             now: context.now,
         })?;
-        Self::record_tool_call_result(ToolCallResultLedgerUpdate {
+        record_tool_call_result(ToolCallResultLedgerUpdate {
             store: context.store,
             session_id: context.session_id,
             run_id: context.run_id,
@@ -3801,7 +3589,7 @@ impl ExecutionService {
                 cursor.stream_mode(observer.is_some()),
                 self.config.provider_max_output_tokens,
             );
-            Self::record_provider_round_trace(
+            record_provider_round_trace(
                 store,
                 run.snapshot().id.as_str(),
                 session_id,
@@ -3932,7 +3720,7 @@ impl ExecutionService {
                     match self.resolve_provider_tool_call(&catalog, tool_call) {
                         Ok(resolved) => resolved,
                         Err(ExecutionError::ToolCallParse { reason, .. }) => {
-                            Self::record_tool_call_ledger(ToolCallLedgerUpdate {
+                            record_tool_call_ledger(ToolCallLedgerUpdate {
                                 store,
                                 session_id,
                                 run_id: &run_id,
@@ -3966,7 +3754,7 @@ impl ExecutionService {
                         }
                         Err(other) => return Err(other),
                     };
-                Self::record_tool_call_ledger(ToolCallLedgerUpdate {
+                record_tool_call_ledger(ToolCallLedgerUpdate {
                     store,
                     session_id,
                     run_id: &run_id,
@@ -3989,7 +3777,7 @@ impl ExecutionService {
                 );
                 if let Err(error) = self.ensure_agent_tool_allowed(store, session_id, parsed.name())
                 {
-                    Self::record_tool_call_ledger(ToolCallLedgerUpdate {
+                    record_tool_call_ledger(ToolCallLedgerUpdate {
                         store,
                         session_id,
                         run_id: &run_id,
@@ -4033,7 +3821,7 @@ impl ExecutionService {
                             parsed.name().as_str(),
                             permission.reason
                         );
-                        Self::record_tool_call_ledger(ToolCallLedgerUpdate {
+                        record_tool_call_ledger(ToolCallLedgerUpdate {
                             store,
                             session_id,
                             run_id: &run_id,
@@ -4083,7 +3871,7 @@ impl ExecutionService {
                     }
                     PermissionAction::Ask => {
                         if auto_approve {
-                            Self::record_tool_call_ledger(ToolCallLedgerUpdate {
+                            record_tool_call_ledger(ToolCallLedgerUpdate {
                                 store,
                                 session_id,
                                 run_id: &run_id,
@@ -4116,7 +3904,7 @@ impl ExecutionService {
                                 parsed.summary(),
                                 permission.reason
                             );
-                            Self::record_tool_call_ledger(ToolCallLedgerUpdate {
+                            record_tool_call_ledger(ToolCallLedgerUpdate {
                                 store,
                                 session_id,
                                 run_id: &run_id,
@@ -4227,29 +4015,6 @@ impl ExecutionService {
             cursor.advance_after_response(&response);
             self.persist_run(store, run)?;
         }
-    }
-}
-
-fn sanitize_identifier(value: &str) -> String {
-    let normalized = value
-        .chars()
-        .map(|ch| {
-            if ch.is_ascii_alphanumeric() {
-                ch.to_ascii_lowercase()
-            } else {
-                '-'
-            }
-        })
-        .collect::<String>();
-    let compact = normalized
-        .split('-')
-        .filter(|part| !part.is_empty())
-        .collect::<Vec<_>>()
-        .join("-");
-    if compact.is_empty() {
-        "artifact".to_string()
-    } else {
-        compact
     }
 }
 
@@ -4517,7 +4282,7 @@ mod tests {
                 finished_at: None,
             })
             .expect("put run");
-        ExecutionService::record_tool_call_ledger(ToolCallLedgerUpdate {
+        record_tool_call_ledger(ToolCallLedgerUpdate {
             store: &store,
             session_id: "session-1",
             run_id: "run-1",
@@ -4532,7 +4297,7 @@ mod tests {
         .expect("record ledger");
 
         let output = "x".repeat(TOOL_RESULT_PREVIEW_CHAR_LIMIT + 32);
-        ExecutionService::record_tool_call_result(ToolCallResultLedgerUpdate {
+        record_tool_call_result(ToolCallResultLedgerUpdate {
             store: &store,
             session_id: "session-1",
             run_id: "run-1",
