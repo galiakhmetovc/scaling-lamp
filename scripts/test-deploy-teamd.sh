@@ -216,6 +216,15 @@ assert_contains "$binary_dry_run_output" "ssh"
 assert_contains "$binary_dry_run_output" "/opt/teamd/bin/agentd"
 assert_contains "$binary_dry_run_output" "service restart skipped"
 
+binary_password_dry_run_output=$(
+  TEAMD_BINARY_DEPLOY_PASSWORD='fake-password' \
+    "$BINARY_DEPLOY_SCRIPT" --dry-run --no-restart root@example.invalid "$fake_release_agentd" 2>&1
+)
+
+assert_contains "$binary_password_dry_run_output" "sshpass"
+assert_contains "$binary_password_dry_run_output" "scp"
+assert_contains "$binary_password_dry_run_output" "ssh"
+
 fake_bin="$existing_env_dir/fake-bin"
 fake_cargo_home="$existing_env_dir/fake-cargo-home"
 fake_rustup_home="$existing_env_dir/fake-rustup-home"

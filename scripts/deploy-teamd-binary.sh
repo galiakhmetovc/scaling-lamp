@@ -9,6 +9,7 @@ DRY_RUN=0
 RESTART_SERVICES=1
 SSH_OPTS=${TEAMD_BINARY_DEPLOY_SSH_OPTS:-}
 SCP_OPTS=${TEAMD_BINARY_DEPLOY_SCP_OPTS:-}
+SSH_PASSWORD=${TEAMD_BINARY_DEPLOY_PASSWORD:-${SSHPASS:-}}
 LOCAL_BINARY=${TEAMD_BINARY_DEPLOY_LOCAL_BINARY:-$REPO_ROOT/target/release/agentd}
 REMOTE_BIN=${TEAMD_BINARY_DEPLOY_REMOTE_BIN:-/opt/teamd/bin/agentd}
 REMOTE_PATH_LINK=${TEAMD_BINARY_DEPLOY_PATH_LINK:-/usr/local/bin/agentd}
@@ -38,6 +39,8 @@ Environment overrides:
                                      Telegram unit, default: $TELEGRAM_SERVICE.
   TEAMD_BINARY_DEPLOY_SSH_OPTS       Extra ssh options as a single string.
   TEAMD_BINARY_DEPLOY_SCP_OPTS       Extra scp options as a single string.
+  TEAMD_BINARY_DEPLOY_PASSWORD       Optional SSH password. Prefer keys; if set,
+                                     sshpass is used for both scp and ssh.
 
 Examples:
   cargo build --release -p agentd
@@ -115,6 +118,9 @@ fi
 [ -x "$LOCAL_BINARY" ] || fail "local binary is not executable: $LOCAL_BINARY"
 command -v ssh >/dev/null 2>&1 || fail "required command not found: ssh"
 command -v scp >/dev/null 2>&1 || fail "required command not found: scp"
+if [ -n "$SSH_PASSWORD" ] && [ "$DRY_RUN" -eq 0 ]; then
+  command -v sshpass >/dev/null 2>&1 || fail "TEAMD_BINARY_DEPLOY_PASSWORD requires sshpass"
+fi
 
 REMOTE_TMP="$REMOTE_TMP_DIR/agentd.$(date +%s).$$"
 REMOTE_SCRIPT=$(cat <<EOF
@@ -153,8 +159,17 @@ EOF
 
 printf 'Deploying %s to %s:%s\n' "$LOCAL_BINARY" "$SSH_TARGET" "$REMOTE_BIN"
 
-# shellcheck disable=SC2086
-run_cmd scp $SCP_OPTS "$LOCAL_BINARY" "$SSH_TARGET:$REMOTE_TMP"
+if [ -n "$SSH_PASSWORD" ]; then
+  export SSHPASS=$SSH_PASSWORD
+  # shellcheck disable=SC2086
+  run_cmd sshpass -e scp $SCP_OPTS "$LOCAL_BINARY" "$SSH_TARGET:$REMOTE_TMP"
 
-# shellcheck disable=SC2086
-run_cmd ssh $SSH_OPTS "$SSH_TARGET" "$REMOTE_SCRIPT"
+  # shellcheck disable=SC2086
+  run_cmd sshpass -e ssh $SSH_OPTS "$SSH_TARGET" "$REMOTE_SCRIPT"
+else
+  # shellcheck disable=SC2086
+  run_cmd scp $SCP_OPTS "$LOCAL_BINARY" "$SSH_TARGET:$REMOTE_TMP"
+
+  # shellcheck disable=SC2086
+  run_cmd ssh $SSH_OPTS "$SSH_TARGET" "$REMOTE_SCRIPT"
+fi

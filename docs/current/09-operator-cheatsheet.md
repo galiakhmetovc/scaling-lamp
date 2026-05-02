@@ -450,6 +450,12 @@ cargo build --release -p agentd
 
 Скрипт делает backup старого `/opt/teamd/bin/agentd`, ставит новый binary, обновляет `/usr/local/bin/agentd` и перезапускает `teamd-daemon.service` + `teamd-telegram.service`.
 
+Если SSH key ещё не настроен:
+
+```bash
+TEAMD_BINARY_DEPLOY_PASSWORD='...' ./scripts/deploy-teamd-binary.sh root@31.130.128.89
+```
+
 ```bash
 agentd update
 agentd update v1.0.3

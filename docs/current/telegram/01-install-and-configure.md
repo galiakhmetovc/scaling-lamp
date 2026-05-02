@@ -480,6 +480,12 @@ cargo build --release -p agentd
 
 Скрипт копирует локальный `target/release/agentd` через `scp`, делает backup старого `/opt/teamd/bin/agentd` в `/opt/teamd/backups/`, обновляет `/usr/local/bin/agentd`, выполняет `agentd version` на сервере и перезапускает `teamd-daemon.service` + `teamd-telegram.service`. Это подходит только для совместимой архитектуры/OS, например local `x86_64-unknown-linux-gnu` -> production `x86_64 Linux`.
 
+Предпочтительный доступ — SSH key. Если на сервере пока только password auth, можно передать пароль через env, скрипт сам использует `sshpass`:
+
+```bash
+TEAMD_BINARY_DEPLOY_PASSWORD='...' ./scripts/deploy-teamd-binary.sh root@31.130.128.89
+```
+
 Из checkout репозитория:
 
 ```bash
