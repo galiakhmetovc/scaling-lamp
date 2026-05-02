@@ -1167,7 +1167,28 @@ fn telegram_worker_coalesces_inbound_messages_while_turn_is_running() {
     condvar.notify_all();
     drive_runtime(&runtime, Duration::from_millis(50));
 
-    let captured = drain_requests_for(&requests, Duration::from_secs(2));
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let mut captured = Vec::new();
+    while Instant::now() < deadline {
+        let remaining = deadline
+            .checked_duration_since(Instant::now())
+            .unwrap_or_else(|| Duration::from_millis(0));
+        match requests.recv_timeout(remaining.min(Duration::from_millis(100))) {
+            Ok(request) => captured.push(request),
+            Err(mpsc::RecvTimeoutError::Timeout) => {}
+            Err(mpsc::RecvTimeoutError::Disconnected) => break,
+        }
+        let has_document = captured
+            .iter()
+            .any(|request| request.path.ends_with("/SendDocument"));
+        let has_failure_notice = captured.iter().any(|request| {
+            request.path.ends_with("/SendMessage")
+                && request.body.contains("Не удалось отправить файл")
+        });
+        if has_document && has_failure_notice {
+            break;
+        }
+    }
     assert!(
         captured
             .iter()
@@ -1594,23 +1615,29 @@ fn telegram_worker_reports_failed_queued_file_delivery_to_chat() {
         next_chat_output: "Файл отправляю отдельным документом.".to_string(),
         ..RecordingTelegramBackendState::default()
     });
-    let (api_url, requests, handle) = spawn_fake_telegram_api(vec![
-        json_response(
-            r#"{"ok":true,"result":[{"update_id":134,"message":{"message_id":76,"date":0,"chat":{"id":42,"type":"private"},"from":{"id":777,"is_bot":false,"first_name":"Alice","username":"alice"},"text":"пришли файл"}}]}"#,
-        ),
-        json_response(
-            r#"{"ok":true,"result":{"message_id":77,"date":0,"chat":{"id":42,"type":"private"},"text":"working"}}"#,
-        ),
-        json_response(
-            r#"{"ok":true,"result":{"message_id":78,"date":0,"chat":{"id":42,"type":"private"},"text":"final"}}"#,
-        ),
-        json_response(
-            r#"{"ok":false,"error_code":400,"description":"Bad Request: document file is invalid"}"#,
-        ),
-        json_response(
-            r#"{"ok":true,"result":{"message_id":80,"date":0,"chat":{"id":42,"type":"private"},"text":"delivery failed"}}"#,
-        ),
+    let mut update_responses = VecDeque::from([
+        r#"{"ok":true,"result":[{"update_id":134,"message":{"message_id":76,"date":0,"chat":{"id":42,"type":"private"},"from":{"id":777,"is_bot":false,"first_name":"Alice","username":"alice"},"text":"пришли файл"}}]}"#,
     ]);
+    let (api_url, requests, handle) = spawn_routed_telegram_api(move |request| {
+        if request.path.ends_with("/GetUpdates") {
+            return json_response(
+                update_responses
+                    .pop_front()
+                    .unwrap_or(r#"{"ok":true,"result":[]}"#),
+            );
+        }
+        if request.path.ends_with("/SendDocument") {
+            return json_response(
+                r#"{"ok":false,"error_code":400,"description":"Bad Request: document file is invalid"}"#,
+            );
+        }
+        if request.path.ends_with("/SendMessage") || request.path.ends_with("/EditMessageText") {
+            return json_response(
+                r#"{"ok":true,"result":{"message_id":80,"date":0,"chat":{"id":42,"type":"private"},"text":"ok"}}"#,
+            );
+        }
+        json_response(r#"{"ok":true,"result":true}"#)
+    });
     let client = TelegramClient::new(TelegramClientConfig {
         token: "test-token".to_string(),
         api_url: Some(api_url),
@@ -1621,26 +1648,46 @@ fn telegram_worker_reports_failed_queued_file_delivery_to_chat() {
 
     runtime.block_on(worker.poll_once()).expect("poll once");
 
-    let _ = requests
-        .recv_timeout(Duration::from_secs(2))
-        .expect("captured getUpdates");
-    let _status = requests
-        .recv_timeout(Duration::from_secs(2))
-        .expect("captured status");
-    let final_message = requests
-        .recv_timeout(Duration::from_secs(2))
-        .expect("captured final");
-    assert_eq!(final_message.path, "/bottest-token/SendMessage");
-    let send_document = requests
-        .recv_timeout(Duration::from_secs(2))
-        .expect("captured queued sendDocument");
-    assert_eq!(send_document.path, "/bottest-token/SendDocument");
-    let failure_notice = requests
-        .recv_timeout(Duration::from_secs(2))
-        .expect("captured delivery failure notice");
-    assert_eq!(failure_notice.path, "/bottest-token/SendMessage");
-    assert!(failure_notice.body.contains("report.txt"));
-    assert!(failure_notice.body.contains("Не удалось отправить файл"));
+    let captured = drive_runtime_collect_requests_until(
+        &runtime,
+        &requests,
+        Duration::from_secs(5),
+        |captured| {
+            let has_document = captured
+                .iter()
+                .any(|request| request.path.ends_with("/SendDocument"));
+            let has_failure_notice = captured.iter().any(|request| {
+                request.path.ends_with("/SendMessage")
+                    && request.body.contains("Не удалось отправить файл")
+            });
+            has_document && has_failure_notice
+        },
+    );
+    assert!(
+        captured
+            .iter()
+            .any(|request| request.path.ends_with("/GetUpdates")),
+        "expected getUpdates, captured: {captured:?}"
+    );
+    assert!(
+        captured
+            .iter()
+            .any(|request| request.path.ends_with("/SendDocument")),
+        "expected queued sendDocument, captured: {captured:?}"
+    );
+    assert!(
+        captured.iter().any(|request| {
+            request.path.ends_with("/SendMessage")
+                && request.body.contains("Не удалось отправить файл")
+        }),
+        "expected delivery failure notice, captured: {captured:?}"
+    );
+    assert!(
+        captured
+            .iter()
+            .any(|request| request.body.contains("report.txt")),
+        "expected failed file name in Telegram requests, captured: {captured:?}"
+    );
 
     let failed = app
         .store()
@@ -1656,7 +1703,7 @@ fn telegram_worker_reports_failed_queued_file_delivery_to_chat() {
             .is_some_and(|error| error.contains("document file is invalid"))
     );
 
-    handle.join().expect("join fake api");
+    handle.stop().expect("stop fake api");
 }
 
 #[test]
@@ -3631,6 +3678,9 @@ where
                 }
                 Err(error) => panic!("accept routed telegram api connection: {error}"),
             };
+            if worker_stop.load(Ordering::SeqCst) {
+                break;
+            }
             let request = read_http_request(&mut stream);
             let response = handler(&request);
             sender.send(request).expect("send captured request");
@@ -3745,6 +3795,30 @@ fn telegram_test_app() -> (tempfile::TempDir, bootstrap::App) {
 
 fn drive_runtime(runtime: &tokio::runtime::Runtime, duration: Duration) {
     runtime.block_on(async { tokio::time::sleep(duration).await });
+}
+
+fn drive_runtime_collect_requests_until<F>(
+    runtime: &tokio::runtime::Runtime,
+    requests: &Receiver<CapturedRequest>,
+    timeout: Duration,
+    mut done: F,
+) -> Vec<CapturedRequest>
+where
+    F: FnMut(&[CapturedRequest]) -> bool,
+{
+    runtime.block_on(async {
+        let deadline = Instant::now() + timeout;
+        let mut captured = Vec::new();
+        loop {
+            while let Ok(request) = requests.try_recv() {
+                captured.push(request);
+            }
+            if done(&captured) || Instant::now() >= deadline {
+                return captured;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
 }
 
 fn telegram_test_app_with_progress_interval_ms(

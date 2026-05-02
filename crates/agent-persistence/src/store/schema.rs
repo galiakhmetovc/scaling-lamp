@@ -963,10 +963,28 @@ pub(super) fn add_column_if_missing(
         return Ok(());
     }
 
-    connection.execute_batch(&format!(
+    match connection.execute_batch(&format!(
         "ALTER TABLE {table} ADD COLUMN {column} {definition};"
-    ))?;
-    Ok(())
+    )) {
+        Ok(()) => Ok(()),
+        Err(error) if sqlite_error_is_duplicate_column(&error, column) => {
+            if table_has_column(connection, table, column)? {
+                Ok(())
+            } else {
+                Err(StoreError::Sqlite(error))
+            }
+        }
+        Err(error) => Err(StoreError::Sqlite(error)),
+    }
+}
+
+pub(super) fn sqlite_error_is_duplicate_column(error: &rusqlite::Error, column: &str) -> bool {
+    match error {
+        rusqlite::Error::SqliteFailure(_, Some(message)) => {
+            message.contains("duplicate column name") && message.contains(column)
+        }
+        _ => false,
+    }
 }
 
 pub(super) fn migrate_jobs_table(connection: &Connection) -> Result<(), StoreError> {

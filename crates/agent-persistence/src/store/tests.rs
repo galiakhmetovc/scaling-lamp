@@ -3074,6 +3074,41 @@ fn jobs_schema_includes_session_scoped_background_columns() {
 }
 
 #[test]
+fn schema_duplicate_column_errors_are_idempotent_migration_races() {
+    let connection = rusqlite::Connection::open_in_memory().expect("open sqlite");
+    connection
+        .execute_batch(
+            "CREATE TABLE telegram_chat_bindings (telegram_chat_id INTEGER PRIMARY KEY);",
+        )
+        .expect("create table");
+    super::schema::add_column_if_missing(
+        &connection,
+        "telegram_chat_bindings",
+        "inbound_queue_mode",
+        "TEXT NOT NULL DEFAULT 'coalesce'",
+    )
+    .expect("add column first time");
+
+    let duplicate = connection
+        .execute_batch(
+            "ALTER TABLE telegram_chat_bindings ADD COLUMN inbound_queue_mode TEXT NOT NULL DEFAULT 'coalesce';",
+        )
+        .expect_err("duplicate column error");
+
+    assert!(super::schema::sqlite_error_is_duplicate_column(
+        &duplicate,
+        "inbound_queue_mode"
+    ));
+    super::schema::add_column_if_missing(
+        &connection,
+        "telegram_chat_bindings",
+        "inbound_queue_mode",
+        "TEXT NOT NULL DEFAULT 'coalesce'",
+    )
+    .expect("idempotent add column");
+}
+
+#[test]
 fn open_rejects_incompatible_existing_schema() {
     let temp = tempfile::tempdir().expect("tempdir");
     let scaffold = PersistenceScaffold::from_config(crate::AppConfig {
