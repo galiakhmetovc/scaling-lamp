@@ -1,4 +1,6 @@
-use agent_persistence::{StoreError, TraceLinkRecord, TraceRepository};
+use agent_persistence::{
+    RunRepository, StoreError, ToolCallRepository, TraceLinkRecord, TraceRepository,
+};
 use reqwest::StatusCode;
 use serde_json::{Map, Value, json};
 use std::error::Error;
@@ -12,6 +14,10 @@ pub struct OtlpExportReport {
     pub endpoint: String,
     pub status_code: u16,
 }
+
+pub trait OtlpTraceRepository: TraceRepository + RunRepository + ToolCallRepository {}
+
+impl<T> OtlpTraceRepository for T where T: TraceRepository + RunRepository + ToolCallRepository {}
 
 #[derive(Debug)]
 pub enum OtlpExportError {
@@ -72,21 +78,22 @@ impl From<reqwest::Error> for OtlpExportError {
 }
 
 pub fn trace_export_payload_json(
-    store: &impl TraceRepository,
+    store: &impl OtlpTraceRepository,
     trace_id: &str,
 ) -> Result<String, OtlpExportError> {
     let links = trace_links(store, trace_id)?;
-    serde_json::to_string_pretty(&trace_export_payload(&links)?).map_err(OtlpExportError::from)
+    serde_json::to_string_pretty(&trace_export_payload(store, &links)?)
+        .map_err(OtlpExportError::from)
 }
 
 pub fn export_trace_to_otlp_http(
-    store: &impl TraceRepository,
+    store: &impl OtlpTraceRepository,
     trace_id: &str,
     endpoint: &str,
     timeout: Duration,
 ) -> Result<OtlpExportReport, OtlpExportError> {
     let links = trace_links(store, trace_id)?;
-    let payload = trace_export_payload(&links)?;
+    let payload = trace_export_payload(store, &links)?;
     let client = reqwest::blocking::Client::builder()
         .timeout(timeout)
         .build()?;
@@ -110,7 +117,7 @@ pub fn export_trace_to_otlp_http(
 }
 
 pub fn export_run_trace_to_otlp_http(
-    store: &impl TraceRepository,
+    store: &impl OtlpTraceRepository,
     run_id: &str,
     endpoint: &str,
     timeout: Duration,
@@ -137,10 +144,13 @@ fn trace_links(
     Ok(links)
 }
 
-fn trace_export_payload(links: &[TraceLinkRecord]) -> Result<Value, OtlpExportError> {
+fn trace_export_payload(
+    store: &impl OtlpTraceRepository,
+    links: &[TraceLinkRecord],
+) -> Result<Value, OtlpExportError> {
     let spans = links
         .iter()
-        .map(trace_link_to_span)
+        .map(|link| trace_link_to_span(store, link))
         .collect::<Result<Vec<_>, _>>()?;
 
     Ok(json!({
@@ -164,7 +174,10 @@ fn trace_export_payload(links: &[TraceLinkRecord]) -> Result<Value, OtlpExportEr
     }))
 }
 
-fn trace_link_to_span(link: &TraceLinkRecord) -> Result<Value, OtlpExportError> {
+fn trace_link_to_span(
+    store: &impl OtlpTraceRepository,
+    link: &TraceLinkRecord,
+) -> Result<Value, OtlpExportError> {
     let mut attributes = Vec::new();
     attributes.push(otlp_attribute(
         "teamd.entity_kind",
@@ -195,6 +208,8 @@ fn trace_link_to_span(link: &TraceLinkRecord) -> Result<Value, OtlpExportError> 
         }
     }
 
+    let timing = resolve_span_timing(store, link)?;
+
     let mut span = Map::new();
     span.insert("traceId".to_string(), Value::String(link.trace_id.clone()));
     span.insert("spanId".to_string(), Value::String(link.span_id.clone()));
@@ -214,19 +229,53 @@ fn trace_link_to_span(link: &TraceLinkRecord) -> Result<Value, OtlpExportError> 
     );
     span.insert(
         "startTimeUnixNano".to_string(),
-        Value::String(unix_seconds_to_nanos(link.created_at)),
+        Value::String(timing.start_unix_nano.to_string()),
     );
     span.insert(
         "endTimeUnixNano".to_string(),
-        Value::String(unix_seconds_to_nanos(link.created_at)),
+        Value::String(timing.end_unix_nano.to_string()),
     );
     span.insert("attributes".to_string(), Value::Array(attributes));
     span.insert("status".to_string(), json!({"code": "STATUS_CODE_UNSET"}));
     Ok(Value::Object(span))
 }
 
-fn unix_seconds_to_nanos(seconds: i64) -> String {
-    seconds.saturating_mul(1_000_000_000).to_string()
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct SpanTiming {
+    start_unix_nano: i64,
+    end_unix_nano: i64,
+}
+
+fn resolve_span_timing(
+    store: &impl OtlpTraceRepository,
+    link: &TraceLinkRecord,
+) -> Result<SpanTiming, OtlpExportError> {
+    let (start_seconds, end_seconds) = match link.entity_kind.as_str() {
+        "run" => store
+            .get_run(&link.entity_id)?
+            .map(|run| (run.started_at, run.finished_at.unwrap_or(run.updated_at)))
+            .unwrap_or((link.created_at, link.created_at)),
+        "tool_call" => store
+            .get_tool_call(&link.entity_id)?
+            .map(|call| (call.requested_at, call.updated_at))
+            .unwrap_or((link.created_at, link.created_at)),
+        _ => (link.created_at, link.created_at),
+    };
+
+    let start_unix_nano = unix_seconds_to_nanos(start_seconds);
+    let mut end_unix_nano = unix_seconds_to_nanos(end_seconds);
+    if end_unix_nano <= start_unix_nano {
+        end_unix_nano = start_unix_nano.saturating_add(1_000_000);
+    }
+
+    Ok(SpanTiming {
+        start_unix_nano,
+        end_unix_nano,
+    })
+}
+
+fn unix_seconds_to_nanos(seconds: i64) -> i64 {
+    seconds.saturating_mul(1_000_000_000)
 }
 
 fn otlp_attribute(key: &str, value: Value) -> Value {
@@ -271,7 +320,10 @@ fn otlp_any_value(value: Value) -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use agent_persistence::{PersistenceScaffold, PersistenceStore};
+    use agent_persistence::{
+        PersistenceScaffold, PersistenceStore, RunRecord, RunRepository, SessionRecord,
+        SessionRepository, ToolCallRecord, ToolCallRepository,
+    };
 
     #[test]
     fn trace_export_payload_uses_otlp_json_shape() {
@@ -306,6 +358,117 @@ mod tests {
         assert!(rendered.contains("\"stringValue\": \"telegram\""));
         assert!(rendered.contains("\"key\": \"teamd.round\""));
         assert!(rendered.contains("\"intValue\": \"2\""));
+    }
+
+    #[test]
+    fn trace_export_payload_uses_entity_timestamps_for_span_intervals() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let store = test_store(temp.path());
+        store
+            .put_session(&SessionRecord {
+                id: "session-otel".to_string(),
+                title: "OTel".to_string(),
+                prompt_override: None,
+                settings_json: "{}".to_string(),
+                workspace_root: temp.path().display().to_string(),
+                agent_profile_id: "default".to_string(),
+                active_mission_id: None,
+                parent_session_id: None,
+                parent_job_id: None,
+                delegation_label: None,
+                created_at: 9,
+                updated_at: 15,
+            })
+            .expect("put session");
+        store
+            .put_run(&RunRecord {
+                id: "run-otel".to_string(),
+                session_id: "session-otel".to_string(),
+                mission_id: None,
+                status: "completed".to_string(),
+                error: None,
+                result: None,
+                provider_usage_json: "null".to_string(),
+                active_processes_json: "[]".to_string(),
+                recent_steps_json: "[]".to_string(),
+                evidence_refs_json: "[]".to_string(),
+                pending_approvals_json: "[]".to_string(),
+                provider_loop_json: "null".to_string(),
+                delegate_runs_json: "[]".to_string(),
+                started_at: 10,
+                updated_at: 15,
+                finished_at: Some(15),
+            })
+            .expect("put run");
+        store
+            .put_tool_call(&ToolCallRecord {
+                id: "toolcall-otel".to_string(),
+                session_id: "session-otel".to_string(),
+                run_id: "run-otel".to_string(),
+                provider_tool_call_id: "call_otel".to_string(),
+                tool_name: "web_fetch".to_string(),
+                arguments_json: "{}".to_string(),
+                summary: "web_fetch".to_string(),
+                status: "completed".to_string(),
+                error: None,
+                result_summary: Some("ok".to_string()),
+                result_preview: Some("ok".to_string()),
+                result_artifact_id: None,
+                result_truncated: false,
+                result_byte_len: Some(2),
+                requested_at: 11,
+                updated_at: 14,
+            })
+            .expect("put tool call");
+        store
+            .put_trace_link(&TraceLinkRecord {
+                entity_kind: "run".to_string(),
+                entity_id: "run-otel".to_string(),
+                trace_id: "0123456789abcdef0123456789abcdef".to_string(),
+                span_id: "0123456789abcdef".to_string(),
+                parent_span_id: None,
+                surface: Some("telegram".to_string()),
+                entrypoint: Some("telegram.message".to_string()),
+                attributes_json: json!({"session_id": "session-otel"}).to_string(),
+                created_at: 10,
+            })
+            .expect("put run trace");
+        store
+            .put_trace_link(&TraceLinkRecord {
+                entity_kind: "tool_call".to_string(),
+                entity_id: "toolcall-otel".to_string(),
+                trace_id: "0123456789abcdef0123456789abcdef".to_string(),
+                span_id: "fedcba9876543210".to_string(),
+                parent_span_id: Some("0123456789abcdef".to_string()),
+                surface: Some("telegram".to_string()),
+                entrypoint: Some("telegram.message".to_string()),
+                attributes_json: json!({"tool_name": "web_fetch"}).to_string(),
+                created_at: 11,
+            })
+            .expect("put tool trace");
+        store
+            .put_trace_link(&TraceLinkRecord {
+                entity_kind: "provider_round".to_string(),
+                entity_id: "provider-round-run-otel-r1".to_string(),
+                trace_id: "0123456789abcdef0123456789abcdef".to_string(),
+                span_id: "0011223344556677".to_string(),
+                parent_span_id: Some("0123456789abcdef".to_string()),
+                surface: Some("telegram".to_string()),
+                entrypoint: Some("telegram.message".to_string()),
+                attributes_json: json!({"round": 1}).to_string(),
+                created_at: 12,
+            })
+            .expect("put provider round trace");
+
+        let rendered = trace_export_payload_json(&store, "0123456789abcdef0123456789abcdef")
+            .expect("render trace");
+
+        assert!(rendered.contains("\"startTimeUnixNano\": \"10000000000\""));
+        assert!(rendered.contains("\"endTimeUnixNano\": \"15000000000\""));
+        assert!(rendered.contains("\"startTimeUnixNano\": \"11000000000\""));
+        assert!(rendered.contains("\"endTimeUnixNano\": \"14000000000\""));
+        assert!(rendered.contains("\"startTimeUnixNano\": \"12000000000\""));
+        assert!(rendered.contains("\"endTimeUnixNano\": \"12001000000\""));
     }
 
     fn test_store(root: &std::path::Path) -> PersistenceStore {
