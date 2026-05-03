@@ -1213,6 +1213,7 @@ impl ExecutionService {
             &session.title,
             &transcripts_for_activation,
         );
+        let active_skill_status_for_events = active_skill_status.clone();
         let active_skill_prompts =
             prompting::load_active_skill_prompts(&skills_catalog, &active_skill_status);
         let autonomy_state = self.autonomy_state_for_session(&session, schedule_for_autonomy);
@@ -1221,6 +1222,7 @@ impl ExecutionService {
         } else {
             None
         };
+        let memory_recall_for_events = memory_recall.clone();
         let recent_tool_activity = self.recent_tool_activity(store, session_id)?;
 
         let mut input = PromptAssemblyInput {
@@ -1246,6 +1248,8 @@ impl ExecutionService {
         Ok(PromptMessages {
             messages: PromptAssembly::build_messages_with_budget(input, prompt_budget),
             context_offload,
+            active_skill_status: active_skill_status_for_events,
+            memory_recall: memory_recall_for_events,
         })
     }
 
@@ -1645,6 +1649,67 @@ impl ExecutionService {
     ) {
         if let Some(observer) = observer.as_deref_mut() {
             observer(event);
+        }
+    }
+
+    fn emit_prompt_context_statuses(
+        observer: &mut Option<&mut dyn FnMut(ChatExecutionEvent)>,
+        prompt_messages: &PromptMessages,
+    ) {
+        let active_skills = prompt_messages
+            .active_skill_status
+            .iter()
+            .filter(|status| {
+                matches!(
+                    status.mode,
+                    SkillActivationMode::Automatic | SkillActivationMode::Manual
+                )
+            })
+            .map(|status| format!("{} ({})", status.name, skill_mode_label(status.mode)))
+            .collect::<Vec<_>>();
+        if !active_skills.is_empty() {
+            Self::emit_event(
+                observer,
+                ChatExecutionEvent::ContextStatus {
+                    label: "skills".to_string(),
+                    summary: format!("Использую skills: {}", active_skills.join(", ")),
+                },
+            );
+        }
+
+        if let Some(memory_recall) = prompt_messages.memory_recall.as_ref() {
+            let query = compact_single_line(&memory_recall.query, 120);
+            let summary = if memory_recall.items.is_empty() {
+                format!("Ищу в памяти: {query}; ничего не найдено")
+            } else {
+                let examples = memory_recall
+                    .items
+                    .iter()
+                    .take(3)
+                    .map(|item| {
+                        format!("{}: {}", item.scope, compact_single_line(&item.memory, 80))
+                    })
+                    .collect::<Vec<_>>()
+                    .join("; ");
+                let suffix = if memory_recall.truncated {
+                    ", есть ещё"
+                } else {
+                    ""
+                };
+                format!(
+                    "Ищу в памяти: {query}; найдено {}{}: {}",
+                    memory_recall.items.len(),
+                    suffix,
+                    examples
+                )
+            };
+            Self::emit_event(
+                observer,
+                ChatExecutionEvent::ContextStatus {
+                    label: "memory".to_string(),
+                    summary,
+                },
+            );
         }
     }
 
@@ -2828,6 +2893,7 @@ impl ExecutionService {
                 include_memory_recall: true,
             },
         )?;
+        Self::emit_prompt_context_statuses(observer, &prompt_messages);
         let catalog = ToolCatalog::default();
         let agent_profile = self.load_agent_profile_for_session(store, session_id)?;
         let tools = self.automatic_provider_tools(
@@ -3384,6 +3450,24 @@ impl ExecutionService {
             self.persist_run(store, run)?;
         }
     }
+}
+
+fn skill_mode_label(mode: SkillActivationMode) -> &'static str {
+    match mode {
+        SkillActivationMode::Automatic => "auto",
+        SkillActivationMode::Manual => "manual",
+        SkillActivationMode::Inactive => "inactive",
+        SkillActivationMode::Disabled => "disabled",
+    }
+}
+
+fn compact_single_line(value: &str, max_bytes: usize) -> String {
+    let compact = value.split_whitespace().collect::<Vec<_>>().join(" ");
+    let (mut preview, truncated) = truncate_utf8_bytes(&compact, max_bytes);
+    if truncated {
+        preview.push('…');
+    }
+    preview
 }
 
 fn sanitize_delivery_file_name(value: &str) -> String {

@@ -721,6 +721,9 @@ impl<'a, W: Write> ReplRenderer<'a, W> {
             ChatExecutionEvent::ReasoningDelta(delta) => self.write_reasoning_delta(&delta),
             ChatExecutionEvent::AssistantTextDelta(delta) => self.write_assistant_delta(&delta),
             ChatExecutionEvent::ProviderLoopProgress { .. } => Ok(()),
+            ChatExecutionEvent::ContextStatus { label, summary } => {
+                self.write_context_status(&label, &summary)
+            }
             ChatExecutionEvent::ToolStatus {
                 tool_name,
                 summary,
@@ -728,6 +731,10 @@ impl<'a, W: Write> ReplRenderer<'a, W> {
                 ..
             } => self.write_tool_status(&tool_name, &summary, status),
         }
+    }
+
+    fn write_context_status(&mut self, label: &str, summary: &str) -> Result<(), BootstrapError> {
+        writeln!(self.output, "[context:{label}] {summary}").map_err(BootstrapError::Stream)
     }
 
     fn finish_turn(&mut self) -> Result<(), BootstrapError> {

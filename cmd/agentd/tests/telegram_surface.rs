@@ -2953,7 +2953,7 @@ fn telegram_worker_rate_limits_progress_edits_on_the_status_message() {
         .recv_timeout(Duration::from_secs(2))
         .expect("captured progress edit");
     assert_eq!(progress_edit.path, "/bottest-token/EditMessageText");
-    assert!(progress_edit.body.contains("Работаю с инструментами"));
+    assert!(progress_edit.body.contains("Работаю с вебом"));
     assert!(
         progress_edit
             .body
@@ -3750,18 +3750,25 @@ fn telegram_worker_real_daemon_backend_uses_canonical_chat_path() {
         &app.config,
         &DaemonConnectOptions::default(),
     ));
-    let (api_url, requests, telegram_handle) = spawn_fake_telegram_api(vec![
-        json_response(
-            r#"{"ok":true,"result":[{"update_id":106,"message":{"message_id":19,"date":0,"chat":{"id":42,"type":"private"},"from":{"id":777,"is_bot":false,"first_name":"Alice","username":"alice"},"text":"hello from real backend"}}]}"#,
-        ),
-        json_response(
-            r#"{"ok":true,"result":{"message_id":20,"date":0,"chat":{"id":42,"type":"private"},"text":"working"}}"#,
-        ),
-        json_response(r#"{"ok":true,"result":true}"#),
-        json_response(
-            r#"{"ok":true,"result":{"message_id":21,"date":0,"chat":{"id":42,"type":"private"},"text":"Provider-backed telegram reply."}}"#,
-        ),
-    ]);
+    let (api_url, requests, telegram_handle) = spawn_routed_telegram_api(|request| {
+        if request.path.ends_with("/GetUpdates") {
+            return json_response(
+                r#"{"ok":true,"result":[{"update_id":106,"message":{"message_id":19,"date":0,"chat":{"id":42,"type":"private"},"from":{"id":777,"is_bot":false,"first_name":"Alice","username":"alice"},"text":"hello from real backend"}}]}"#,
+            );
+        }
+        if request.path.ends_with("/EditMessageText")
+            || request.path.ends_with("/SendChatAction")
+            || request.path.ends_with("/DeleteMessage")
+        {
+            return json_response(r#"{"ok":true,"result":true}"#);
+        }
+        if request.path.ends_with("/SendMessage") {
+            return json_response(
+                r#"{"ok":true,"result":{"message_id":20,"date":0,"chat":{"id":42,"type":"private"},"text":"telegram message"}}"#,
+            );
+        }
+        json_response(r#"{"ok":true,"result":true}"#)
+    });
     let client = TelegramClient::new(TelegramClientConfig {
         token: "test-token".to_string(),
         api_url: Some(api_url),
@@ -3814,32 +3821,38 @@ fn telegram_worker_real_daemon_backend_uses_canonical_chat_path() {
         "unexpected provider request: {provider_request}"
     );
 
-    let _ = requests
-        .recv_timeout(Duration::from_secs(10))
-        .expect("captured getUpdates");
-    let send_message = requests
-        .recv_timeout(Duration::from_secs(10))
-        .expect("captured ack");
-    assert_eq!(send_message.path, "/bottest-token/SendMessage");
-    assert!(send_message.body.contains("\"parse_mode\":\"HTML\""));
-    assert!(send_message.body.contains("Стадия: запуск"));
-    let typing_request = requests
-        .recv_timeout(Duration::from_secs(10))
-        .expect("captured sendChatAction");
-    assert_eq!(typing_request.path, "/bottest-token/SendChatAction");
-    assert!(typing_request.body.contains("\"action\":\"typing\""));
-    let final_message = requests
-        .recv_timeout(Duration::from_secs(10))
-        .expect("captured final message");
-    assert_eq!(final_message.path, "/bottest-token/SendMessage");
-    assert!(
-        final_message
-            .body
-            .contains("Provider-backed telegram reply.")
+    let captured = drive_runtime_collect_requests_until(
+        &runtime,
+        &requests,
+        Duration::from_secs(10),
+        |requests| {
+            requests.iter().any(|request| {
+                request.path == "/bottest-token/SendMessage"
+                    && request.body.contains("Provider-backed telegram reply.")
+            })
+        },
     );
+    assert!(
+        captured
+            .iter()
+            .any(|request| request.path == "/bottest-token/GetUpdates")
+    );
+    assert!(captured.iter().any(|request| {
+        request.path == "/bottest-token/SendMessage"
+            && request.body.contains("\"parse_mode\":\"HTML\"")
+            && request.body.contains("Стадия: запуск")
+    }));
+    assert!(captured.iter().any(|request| {
+        request.path == "/bottest-token/SendMessage"
+            && request.body.contains("Provider-backed telegram reply.")
+    }));
+    assert!(captured.iter().any(|request| {
+        request.path == "/bottest-token/EditMessageText"
+            && (request.body.contains("Собираю контекст") || request.body.contains("Контекст:"))
+    }));
 
     handle.stop().expect("stop daemon");
-    telegram_handle.join().expect("join telegram api");
+    telegram_handle.stop().expect("join telegram api");
     provider_handle.join().expect("join provider api");
 }
 

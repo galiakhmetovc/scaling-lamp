@@ -254,7 +254,8 @@ impl ActiveRunHandle {
         match event {
             ChatExecutionEvent::ReasoningDelta(_)
             | ChatExecutionEvent::AssistantTextDelta(_)
-            | ChatExecutionEvent::ProviderLoopProgress { .. } => {
+            | ChatExecutionEvent::ProviderLoopProgress { .. }
+            | ChatExecutionEvent::ContextStatus { .. } => {
                 self.phase = ActiveRunPhase::Streaming;
             }
             ChatExecutionEvent::ToolStatus {
@@ -305,6 +306,7 @@ fn format_elapsed(total_seconds: i64) -> String {
 fn event_tool_summary(event: &ChatExecutionEvent) -> String {
     match event {
         ChatExecutionEvent::ToolStatus { summary, .. } => summary.clone(),
+        ChatExecutionEvent::ContextStatus { summary, .. } => summary.clone(),
         _ => String::new(),
     }
 }

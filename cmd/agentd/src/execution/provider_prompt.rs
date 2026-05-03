@@ -1,13 +1,16 @@
 use agent_persistence::ToolCallRecord;
 use agent_runtime::context::{ContextOffloadSnapshot, approximate_token_count};
-use agent_runtime::prompt::{RecentToolActivityEntry, SessionHeadRuntime};
+use agent_runtime::prompt::{MemoryRecall, RecentToolActivityEntry, SessionHeadRuntime};
 use agent_runtime::provider::ProviderMessage;
+use agent_runtime::skills::SessionSkillStatus;
 use agent_runtime::workspace::WorkspaceRef;
 
 #[derive(Debug, Clone)]
 pub(super) struct PromptMessages {
     pub(super) messages: Vec<ProviderMessage>,
     pub(super) context_offload: Option<ContextOffloadSnapshot>,
+    pub(super) active_skill_status: Vec<SessionSkillStatus>,
+    pub(super) memory_recall: Option<MemoryRecall>,
 }
 
 pub(super) struct PromptMessagesRequest<'a> {

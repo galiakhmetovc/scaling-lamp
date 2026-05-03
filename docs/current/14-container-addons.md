@@ -1,4 +1,4 @@
-# Container add-ons: Docker, SearXNG, SilverBullet, Browserless, Mem0, Jaeger, Caddy
+# Container add-ons: Docker, SearXNG, SilverBullet, File Browser, Browserless, Mem0, Jaeger, Caddy
 
 Этот документ описывает второй deploy layer вокруг host `agentd`.
 
@@ -21,6 +21,7 @@
 
 - `teamd-silverbullet` — browser UI для canonical Markdown knowledge space;
 - `teamd-silverbullet-mcp` — SilverBullet MCP bridge;
+- `teamd-filebrowser` — browser UI для редактирования agent homes, `SYSTEM.md`, `AGENTS.md`, `skills/`, workspaces, artifacts и knowledge files;
 - `teamd-jaeger` — Jaeger UI и OTLP receiver для traces;
 - `teamd-browserless` + `agent-browser` — recommended browser automation backend для built-in `browser_*` tools;
 - Mem0/OpenMemory REST endpoint — optional semantic long-term memory backend для built-in `memory_*` tools;
@@ -30,12 +31,14 @@
 
 Logseq Publish больше не является runtime-компонентом. Deploy script удаляет legacy containers `teamd-logseq-publish` и `logseq-publish`, если они остались на хосте. Старые Markdown-файлы не удаляются: путь `/var/lib/teamd/knowledge/logseq/teamd` используется только как migration source при первом создании SilverBullet Space.
 
+Если `--with-obsidian-mcp` не указан явно, deploy script отключает legacy connector `[daemon.mcp_connectors.obsidian]` в `/etc/teamd/config.toml`. То же правило действует для legacy Lightpanda MCP. Это нужно, чтобы модель не видела старые dynamic MCP tools в обычном production tool surface.
+
 ## Recommended install
 
 Основной production вариант:
 
 ```bash
-./scripts/deploy-teamd-containers.sh --with-silverbullet-mcp --with-jaeger --single-domain
+./scripts/deploy-teamd-containers.sh --with-silverbullet-mcp --with-filebrowser --with-jaeger --single-domain
 ```
 
 Если нужен recommended browser automation backend:
@@ -69,6 +72,12 @@ TEAMD_MEM0_DEFAULT_USER_ID='anton' \
 
 ```bash
 ./scripts/deploy-teamd-containers.sh --with-silverbullet
+```
+
+Если нужен только File Browser для правки prompts/skills/workspaces:
+
+```bash
+./scripts/deploy-teamd-containers.sh --no-searxng --with-filebrowser
 ```
 
 Dry-run без изменений на сервере:
@@ -194,18 +203,66 @@ TEAMD_SILVERBULLET_MCP_REPOSITORY='https://github.com/Ahmad-A0/silverbullet-mcp.
 TEAMD_SILVERBULLET_MCP_REF='v1.1.0'
 ```
 
-## Agent skill
+## File Browser
 
-Built-in default agent получает основной skill:
+File Browser нужен оператору как простой web editor для runtime-owned файлов, которые неудобно править через SSH:
+
+- agent homes: `/var/lib/teamd/state/agents`;
+- agent workspaces: `/var/lib/teamd/workspaces`;
+- artifacts: `/var/lib/teamd/state/artifacts`;
+- knowledge files: `/var/lib/teamd/knowledge`;
+- optional docs mount через `TEAMD_FILEBROWSER_DOCS_DIR`.
+
+Deploy:
+
+```bash
+./scripts/deploy-teamd-containers.sh --with-filebrowser
+```
+
+Credentials лежат в:
 
 ```text
-silverbullet-space
+/opt/teamd/containers/filebrowser/filebrowser.env
 ```
+
+Если `TEAMD_FILEBROWSER_ADMIN_PASSWORD` не задан, deploy script генерирует пароль и сохраняет его в комментарии внутри этого env file. В `FB_PASSWORD` передаётся hashed password, как ожидает File Browser quick setup. Файл не коммитится.
+
+По умолчанию container слушает только localhost:
+
+```text
+http://127.0.0.1:8092/files
+```
+
+Caddy routes:
+
+- без domain: `http://127.0.0.1:8088/files/`;
+- dedicated domain: `https://files.<domain>/`;
+- single-domain mode: `https://<domain>/files/`.
+
+Безопасность:
+
+- контейнер запускается с `PUID/PGID` service user `teamd`, если этот user существует;
+- root в File Browser равен `/srv`;
+- в `/srv` монтируются только перечисленные allowlisted roots, а не весь host filesystem;
+- `FB_DISABLE_EXEC=true`, то есть shell execution внутри File Browser отключён.
+
+## Agent skills
+
+Built-in default agent получает skills текущего production stack:
+
+- `silverbullet-space` — Markdown knowledge space и SilverBullet UI/MCP;
+- `mem0-memory` — долговременная семантическая память;
+- `scoped-kv` — точные scoped key-value настройки и малые JSON records;
+- `telegram-operator-workflow` — команды и mobile workflow Telegram;
+- `browser-search` — `web_search`, `web_fetch`, Browserless/agent-browser;
+- `file-artifact-workflow` — Telegram documents, artifacts и `deliver_file`;
+- `planning-session-lifecycle` — plan, schedules, `continue_later`, session lifecycle;
+- `agent-browser` — built-in `browser_*` tools.
 
 Путь в agent home:
 
 ```text
-/var/lib/teamd/state/agents/default/skills/silverbullet-space/SKILL.md
+/var/lib/teamd/state/agents/default/skills/<skill-name>/SKILL.md
 ```
 
 Включить вручную:
@@ -215,7 +272,7 @@ teamdctl session enable-skill <session_id> silverbullet-space
 teamdctl session skills <session_id>
 ```
 
-`logseq-graph` и `obsidian-vault` остаются только как deprecated compatibility shims. Если старый prompt или операторская команда активирует их, они должны отправить агента в `silverbullet-space`.
+`logseq-graph`, `obsidian-vault` и `lightpanda-browser` больше не остаются видимыми default skills, если их содержимое совпадает с generated/legacy вариантом. Если оператор создал custom skill с таким именем и изменил его вручную, runtime не удаляет его автоматически.
 
 ## Caddy routes
 
@@ -223,6 +280,7 @@ teamdctl session skills <session_id>
 
 - SearXNG: `http://127.0.0.1:8088/searxng/`;
 - Jaeger через Caddy: `http://127.0.0.1:8088/jaeger/`, если включён `--with-jaeger`;
+- File Browser: `http://127.0.0.1:8088/files/`, если включён `--with-filebrowser`;
 - SilverBullet: `https://<host>:8444/`, если включён `--with-silverbullet` или `--with-silverbullet-mcp`;
 - legacy Obsidian: `https://<host>:8443/obsidian/`, если включён `--with-obsidian`.
 
@@ -238,6 +296,7 @@ Routes:
 - `https://search.example.com/` -> SearXNG;
 - `https://notes.example.com/` -> SilverBullet;
 - `https://jaeger.example.com/` -> Jaeger, если включён;
+- `https://files.example.com/` -> File Browser, если включён;
 - `https://obsidian.example.com/` -> legacy Obsidian, если включён.
 
 Single-domain mode:
@@ -252,6 +311,7 @@ Routes:
 - `https://teamd.qlbc.ru/` -> SilverBullet;
 - `https://teamd.qlbc.ru/searxng/` -> SearXNG;
 - `https://teamd.qlbc.ru/jaeger/` -> Jaeger;
+- `https://teamd.qlbc.ru/files/` -> File Browser;
 - `https://teamd.qlbc.ru/obsidian/` -> legacy Obsidian, если включён.
 
 ## SearXNG

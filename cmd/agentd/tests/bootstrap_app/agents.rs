@@ -126,8 +126,23 @@ fn build_from_config_bootstraps_builtin_agents_and_selects_default() {
     assert!(judge_system.contains("Keep the workspace clean"));
     assert!(
         data_dir
-            .join("agents/default/skills/obsidian-vault/SKILL.md")
+            .join("agents/default/skills/silverbullet-space/SKILL.md")
             .is_file()
+    );
+    assert!(
+        data_dir
+            .join("agents/default/skills/mem0-memory/SKILL.md")
+            .is_file()
+    );
+    assert!(
+        !data_dir
+            .join("agents/default/skills/obsidian-vault/SKILL.md")
+            .exists()
+    );
+    assert!(
+        !data_dir
+            .join("agents/default/skills/logseq-graph/SKILL.md")
+            .exists()
     );
 
     let store = PersistenceStore::open(&app.persistence).expect("open store");
@@ -332,16 +347,23 @@ fn build_from_config_refreshes_legacy_default_prompts_but_preserves_custom_edits
     assert!(silverbullet_skill.contains("/var/lib/teamd/knowledge/silverbullet/teamd"));
     assert!(silverbullet_skill.contains("## PARA structure"));
     assert!(silverbullet_skill.contains("04-Archive"));
-    let logseq_skill = fs::read_to_string(default_home.join("skills/logseq-graph/SKILL.md"))
-        .expect("read logseq skill");
-    assert!(logseq_skill.contains("name: logseq-graph"));
-    assert!(logseq_skill.contains("Deprecated"));
-    assert!(logseq_skill.contains("silverbullet-space"));
-    let obsidian_skill = fs::read_to_string(default_home.join("skills/obsidian-vault/SKILL.md"))
-        .expect("read obsidian skill");
-    assert!(obsidian_skill.contains("name: obsidian-vault"));
-    assert!(obsidian_skill.contains("Deprecated"));
-    assert!(obsidian_skill.contains("silverbullet-space"));
+    let current_stack_skills = [
+        ("mem0-memory", "memory_search"),
+        ("scoped-kv", "kv_get"),
+        ("telegram-operator-workflow", "/status"),
+        ("browser-search", "web_search"),
+        ("file-artifact-workflow", "deliver_file"),
+        ("planning-session-lifecycle", "continue_later"),
+        ("agent-browser", "browser_open"),
+    ];
+    for (skill_name, expected_fragment) in current_stack_skills {
+        let skill = fs::read_to_string(default_home.join(format!("skills/{skill_name}/SKILL.md")))
+            .unwrap_or_else(|source| panic!("read {skill_name} skill: {source}"));
+        assert!(skill.contains(&format!("name: {skill_name}")));
+        assert!(skill.contains(expected_fragment));
+    }
+    assert!(!default_home.join("skills/logseq-graph/SKILL.md").exists());
+    assert!(!default_home.join("skills/obsidian-vault/SKILL.md").exists());
 
     fs::write(default_home.join("AGENTS.md"), "custom prompt preserved\n")
         .expect("write custom agents");

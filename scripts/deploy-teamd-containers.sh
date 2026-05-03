@@ -21,6 +21,7 @@ INSTALL_AGENT_BROWSER=0
 ENABLE_LIGHTPANDA=0
 ENABLE_LIGHTPANDA_MCP=0
 WRITE_LIGHTPANDA_MCP_EXAMPLE=0
+ENABLE_FILEBROWSER=0
 ENABLE_CADDY=1
 RESTART_TEAMD_SERVICES=1
 
@@ -110,6 +111,24 @@ LIGHTPANDA_MCP_STDIO_WRAPPER=${TEAMD_LIGHTPANDA_MCP_STDIO_WRAPPER:-$LIGHTPANDA_D
 LIGHTPANDA_MCP_EXAMPLE=$LIGHTPANDA_DIR/lightpanda-mcp.example.toml
 # Default wrapper behavior: LIGHTPANDA_DISABLE_TELEMETRY=true.
 LIGHTPANDA_DISABLE_TELEMETRY=${TEAMD_LIGHTPANDA_DISABLE_TELEMETRY:-true}
+
+FILEBROWSER_IMAGE=${TEAMD_FILEBROWSER_IMAGE:-docker.io/filebrowser/filebrowser:s6}
+FILEBROWSER_PORT=${TEAMD_FILEBROWSER_PORT:-8092}
+FILEBROWSER_CONTAINER_PORT=${TEAMD_FILEBROWSER_CONTAINER_PORT:-80}
+FILEBROWSER_DIR=$CONTAINERS_ROOT/filebrowser
+FILEBROWSER_COMPOSE=$FILEBROWSER_DIR/docker-compose.yml
+FILEBROWSER_ENV_FILE=${TEAMD_FILEBROWSER_ENV_FILE:-$FILEBROWSER_DIR/filebrowser.env}
+FILEBROWSER_DB_DIR=${TEAMD_FILEBROWSER_DB_DIR:-$DATA_ROOT/filebrowser/database}
+FILEBROWSER_CONFIG_DIR=${TEAMD_FILEBROWSER_CONFIG_DIR:-$DATA_ROOT/filebrowser/config}
+FILEBROWSER_AGENT_HOMES_DIR=${TEAMD_FILEBROWSER_AGENT_HOMES_DIR:-/var/lib/teamd/state/agents}
+FILEBROWSER_WORKSPACES_DIR=${TEAMD_FILEBROWSER_WORKSPACES_DIR:-/var/lib/teamd/workspaces}
+FILEBROWSER_ARTIFACTS_DIR=${TEAMD_FILEBROWSER_ARTIFACTS_DIR:-/var/lib/teamd/state/artifacts}
+FILEBROWSER_KNOWLEDGE_DIR=${TEAMD_FILEBROWSER_KNOWLEDGE_DIR:-/var/lib/teamd/knowledge}
+FILEBROWSER_DOCS_DIR=${TEAMD_FILEBROWSER_DOCS_DIR:-}
+FILEBROWSER_ADMIN_USER=${TEAMD_FILEBROWSER_ADMIN_USER:-admin}
+FILEBROWSER_ADMIN_PASSWORD=${TEAMD_FILEBROWSER_ADMIN_PASSWORD:-}
+FILEBROWSER_PUID=${TEAMD_FILEBROWSER_PUID:-}
+FILEBROWSER_PGID=${TEAMD_FILEBROWSER_PGID:-}
 
 JAEGER_UI_PORT=${TEAMD_JAEGER_UI_PORT:-16686}
 JAEGER_OTLP_GRPC_PORT=${TEAMD_JAEGER_OTLP_GRPC_PORT:-4317}
@@ -206,6 +225,17 @@ CADDY_DATA_DIR=$DATA_ROOT/caddy/data
 CADDY_CONFIG_DIR=$DATA_ROOT/caddy/config
 CADDY_COMPOSE=$CADDY_DIR/docker-compose.yml
 CADDYFILE=$CADDY_DIR/Caddyfile
+FILEBROWSER_BASE_URL=
+
+resolve_filebrowser_base_url() {
+  if [ "${TEAMD_FILEBROWSER_BASE_URL+x}" ]; then
+    FILEBROWSER_BASE_URL=$TEAMD_FILEBROWSER_BASE_URL
+  elif [ -n "$CADDY_DOMAIN" ] && [ "$CADDY_SINGLE_DOMAIN" -eq 0 ]; then
+    FILEBROWSER_BASE_URL=
+  else
+    FILEBROWSER_BASE_URL=/files
+  fi
+}
 
 usage() {
   cat <<EOF
@@ -215,7 +245,7 @@ Deploy teamD container add-ons without changing the main agentd deploy path.
 
 By default this installs/uses Docker Engine, deploys a local SearXNG instance
 bound to 127.0.0.1:$SEARXNG_PORT, and starts Caddy as an edge reverse proxy.
-Obsidian, SilverBullet, SilverBullet MCP, Browserless, Lightpanda MCP, Mem0, and Jaeger are opt-in.
+Obsidian legacy, SilverBullet, SilverBullet MCP, Browserless, Lightpanda MCP, Mem0, File Browser, and Jaeger are opt-in.
 
 Options:
   --dry-run             Print actions without changing the system.
@@ -224,8 +254,8 @@ Options:
   --no-start            Write files but do not start containers.
   --no-searxng          Do not deploy SearXNG.
   --no-caddy            Do not deploy Caddy reverse proxy.
-  --with-obsidian       Also deploy browser-accessible Obsidian container.
-  --with-obsidian-mcp   Deploy Obsidian and an agentd MCP connector for the vault.
+  --with-obsidian       Legacy: deploy browser-accessible Obsidian container.
+  --with-obsidian-mcp   Legacy: deploy Obsidian and an agentd MCP connector for the vault.
   --with-obsidian-mcp-example
                          Write an agentd stdio MCP connector example for the vault.
   --with-jaeger         Also deploy Jaeger UI and enable agentd OTLP auto-export.
@@ -241,8 +271,10 @@ Options:
   --with-lightpanda-mcp  Install Lightpanda and an agentd MCP connector.
   --with-lightpanda-mcp-example
                          Write an agentd stdio MCP connector example for Lightpanda.
+  --with-filebrowser     Deploy File Browser for operator editing of agent homes,
+                         skills, approved workspaces, artifacts, and knowledge files.
   --single-domain       With TEAMD_CADDY_DOMAIN, publish all add-ons on that
-                         exact host: /, /searxng/, /jaeger/.
+                         exact host: /, /searxng/, /jaeger/, /files/.
   --no-restart-teamd    Do not restart teamd systemd services after writing MCP config.
   --searxng-port PORT   Local SearXNG port, default: $SEARXNG_PORT.
   --obsidian-port PORT  Local Obsidian port, default: $OBSIDIAN_PORT.
@@ -252,6 +284,8 @@ Options:
   --silverbullet-https-port PORT
                          Caddy HTTPS port for SilverBullet without a domain,
                          default: 8444 when SilverBullet is enabled without TEAMD_CADDY_DOMAIN.
+  --filebrowser-port PORT
+                         Local File Browser port, default: $FILEBROWSER_PORT.
   -h, --help            Show this help.
 
 Environment overrides:
@@ -367,10 +401,26 @@ Environment overrides:
   TEAMD_MEMORY_CURATOR_MAX_OUTPUT_TOKENS
                                  Curator provider cap, default: $MEMORY_CURATOR_MAX_OUTPUT_TOKENS.
   TEAMD_MEMORY_RECALL_ENABLED   Enable pre-turn prompt Memory Recall when Mem0 is deployed,
-                                default: $MEMORY_RECALL_ENABLED.
+                                 default: $MEMORY_RECALL_ENABLED.
   TEAMD_MEMORY_RECALL_SCOPES    Comma-separated recall scopes, default: $MEMORY_RECALL_SCOPES.
   TEAMD_MEMORY_RECALL_MAX_RESULTS
-                                Max memories inserted into the prompt, default: $MEMORY_RECALL_MAX_RESULTS.
+                                 Max memories inserted into the prompt, default: $MEMORY_RECALL_MAX_RESULTS.
+  TEAMD_FILEBROWSER_IMAGE       File Browser image, default: $FILEBROWSER_IMAGE.
+  TEAMD_FILEBROWSER_PORT        Local File Browser port, default: $FILEBROWSER_PORT.
+  TEAMD_FILEBROWSER_ADMIN_USER  Admin username, default: $FILEBROWSER_ADMIN_USER.
+  TEAMD_FILEBROWSER_ADMIN_PASSWORD
+                                 Admin password; generated into $FILEBROWSER_ENV_FILE when unset.
+  TEAMD_FILEBROWSER_AGENT_HOMES_DIR
+                                 Mounted as /srv/agent-homes, default: $FILEBROWSER_AGENT_HOMES_DIR.
+  TEAMD_FILEBROWSER_WORKSPACES_DIR
+                                 Mounted as /srv/workspaces, default: $FILEBROWSER_WORKSPACES_DIR.
+  TEAMD_FILEBROWSER_ARTIFACTS_DIR
+                                 Mounted as /srv/artifacts, default: $FILEBROWSER_ARTIFACTS_DIR.
+  TEAMD_FILEBROWSER_KNOWLEDGE_DIR
+                                 Mounted as /srv/knowledge, default: $FILEBROWSER_KNOWLEDGE_DIR.
+  TEAMD_FILEBROWSER_DOCS_DIR    Optional docs mount as /srv/docs.
+  TEAMD_FILEBROWSER_BASE_URL    File Browser reverse-proxy base path.
+                                 Default: /files except on dedicated files.<domain>.
   TEAMD_MEMORY_RECALL_MAX_QUERY_CHARS
                                 Max latest-user query chars, default: $MEMORY_RECALL_MAX_QUERY_CHARS.
   TEAMD_MEMORY_RECALL_MAX_MEMORY_CHARS
@@ -642,6 +692,7 @@ docker_components_enabled() {
     [ "$ENABLE_MEM0" -eq 1 ] ||
     [ "$ENABLE_BROWSERLESS" -eq 1 ] ||
     [ "$ENABLE_SILVERBULLET" -eq 1 ] ||
+    [ "$ENABLE_FILEBROWSER" -eq 1 ] ||
     [ "$ENABLE_CADDY" -eq 1 ]
 }
 
@@ -1621,6 +1672,48 @@ EOF
   run_root install -m 0644 -o root -g root "$tmp_config" "$CONFIG_FILE"
 }
 
+disable_obsidian_mcp_connector_config() {
+  if [ "$DRY_RUN" -eq 1 ]; then
+    print_cmd sh -c "disable legacy Obsidian MCP connector in $CONFIG_FILE"
+    return 0
+  fi
+
+  [ -e "$CONFIG_FILE" ] || return 0
+  grep -F "[daemon.mcp_connectors.obsidian]" "$CONFIG_FILE" >/dev/null 2>&1 || return 0
+
+  tmp_config=$(mktemp)
+  trap 'rm -f "$tmp_config"' EXIT INT TERM
+  awk '
+    function emit_disabled_if_missing() {
+      if (in_obsidian && !saw_enabled) {
+        print "enabled = false"
+      }
+    }
+    /^\[daemon\.mcp_connectors\.obsidian\][[:space:]]*$/ {
+      emit_disabled_if_missing()
+      in_obsidian = 1
+      saw_enabled = 0
+      print
+      next
+    }
+    in_obsidian && /^\[/ {
+      emit_disabled_if_missing()
+      in_obsidian = 0
+    }
+    in_obsidian && /^[[:space:]]*enabled[[:space:]]*=/ {
+      print "enabled = false"
+      saw_enabled = 1
+      next
+    }
+    { print }
+    END {
+      emit_disabled_if_missing()
+    }
+  ' "$CONFIG_FILE" > "$tmp_config"
+  run_root install -m 0644 -o root -g root "$tmp_config" "$CONFIG_FILE"
+  rm -f "$tmp_config"
+}
+
 write_silverbullet_mcp_example() {
   if [ "$DRY_RUN" -eq 1 ]; then
     print_cmd mkdir -p "$SILVERBULLET_DIR"
@@ -2098,6 +2191,129 @@ EOF
   fi
 }
 
+resolve_filebrowser_ids() {
+  if [ -n "$FILEBROWSER_PUID" ] && [ -n "$FILEBROWSER_PGID" ]; then
+    return 0
+  fi
+
+  if id "$SERVICE_USER" >/dev/null 2>&1; then
+    FILEBROWSER_PUID=${FILEBROWSER_PUID:-$(id -u "$SERVICE_USER")}
+    FILEBROWSER_PGID=${FILEBROWSER_PGID:-$(id -g "$SERVICE_USER")}
+  else
+    FILEBROWSER_PUID=${FILEBROWSER_PUID:-1000}
+    FILEBROWSER_PGID=${FILEBROWSER_PGID:-1000}
+  fi
+}
+
+hash_filebrowser_password() {
+  password=$1
+  hash=$(run_root docker run --rm --entrypoint filebrowser "$FILEBROWSER_IMAGE" hash "$password")
+  [ -n "$hash" ] || fail "File Browser password hash command returned an empty hash"
+  printf '%s\n' "$hash"
+}
+
+seed_filebrowser_credentials() {
+  if [ -f "$FILEBROWSER_ENV_FILE" ]; then
+    # Preserve existing credentials. Operators rotate them by editing this file
+    # and recreating the container, or through the File Browser admin UI.
+    return 0
+  fi
+
+  password=$FILEBROWSER_ADMIN_PASSWORD
+  if [ -z "$password" ]; then
+    password=$(generate_secret_key | cut -c 1-24)
+  fi
+
+  if [ "$DRY_RUN" -eq 1 ]; then
+    print_cmd sh -c "seed File Browser credentials and config at $FILEBROWSER_ENV_FILE"
+    return 0
+  fi
+
+  hashed_password=$(hash_filebrowser_password "$password")
+  tmp_env=$(mktemp)
+  trap 'rm -f "$tmp_env"' EXIT INT TERM
+  cat > "$tmp_env" <<EOF
+# File Browser admin credentials for operator login.
+# username=$FILEBROWSER_ADMIN_USER
+# password=$password
+FB_ADDRESS=0.0.0.0
+FB_PORT=$FILEBROWSER_CONTAINER_PORT
+FB_ROOT=/srv
+FB_CONFIG=/config/settings.json
+FB_DATABASE=/database/filebrowser.db
+FB_BASEURL=$FILEBROWSER_BASE_URL
+FB_USERNAME=$FILEBROWSER_ADMIN_USER
+FB_PASSWORD=$hashed_password
+FB_DISABLE_EXEC=true
+PUID=$FILEBROWSER_PUID
+PGID=$FILEBROWSER_PGID
+EOF
+  run_root install -m 0600 -o root -g root "$tmp_env" "$FILEBROWSER_ENV_FILE"
+}
+
+write_filebrowser_files() {
+  resolve_filebrowser_ids
+  if [ "$DRY_RUN" -eq 1 ]; then
+    print_cmd mkdir -p "$FILEBROWSER_DIR" "$FILEBROWSER_DB_DIR" "$FILEBROWSER_CONFIG_DIR" "$FILEBROWSER_AGENT_HOMES_DIR" "$FILEBROWSER_WORKSPACES_DIR" "$FILEBROWSER_ARTIFACTS_DIR" "$FILEBROWSER_KNOWLEDGE_DIR"
+    print_cmd sh -c "write $FILEBROWSER_COMPOSE for teamd-filebrowser"
+    return 0
+  fi
+
+  run_root mkdir -p \
+    "$FILEBROWSER_DIR" \
+    "$FILEBROWSER_DB_DIR" \
+    "$FILEBROWSER_CONFIG_DIR" \
+    "$FILEBROWSER_AGENT_HOMES_DIR" \
+    "$FILEBROWSER_WORKSPACES_DIR" \
+    "$FILEBROWSER_ARTIFACTS_DIR" \
+    "$FILEBROWSER_KNOWLEDGE_DIR"
+  seed_filebrowser_credentials
+  run_root chown -R "$FILEBROWSER_PUID:$FILEBROWSER_PGID" \
+    "$FILEBROWSER_DB_DIR" \
+    "$FILEBROWSER_CONFIG_DIR"
+  run_root chown "$FILEBROWSER_PUID:$FILEBROWSER_PGID" \
+    "$FILEBROWSER_AGENT_HOMES_DIR" \
+    "$FILEBROWSER_WORKSPACES_DIR" \
+    "$FILEBROWSER_ARTIFACTS_DIR" \
+    "$FILEBROWSER_KNOWLEDGE_DIR"
+
+  docs_volume=
+  if [ -n "$FILEBROWSER_DOCS_DIR" ]; then
+    run_root mkdir -p "$FILEBROWSER_DOCS_DIR"
+    run_root chown "$FILEBROWSER_PUID:$FILEBROWSER_PGID" "$FILEBROWSER_DOCS_DIR"
+    docs_volume="      - \"$FILEBROWSER_DOCS_DIR:/srv/docs:rw\""
+  fi
+
+  tmp_compose=$(mktemp)
+  trap 'rm -f "$tmp_compose"' EXIT INT TERM
+  cat > "$tmp_compose" <<EOF
+services:
+  filebrowser:
+    image: $FILEBROWSER_IMAGE
+    container_name: teamd-filebrowser
+    restart: unless-stopped
+    env_file:
+      - "$FILEBROWSER_ENV_FILE"
+    ports:
+      - "127.0.0.1:$FILEBROWSER_PORT:$FILEBROWSER_CONTAINER_PORT"
+    networks:
+      - $EDGE_NETWORK
+    volumes:
+      - "$FILEBROWSER_DB_DIR:/database:rw"
+      - "$FILEBROWSER_CONFIG_DIR:/config:rw"
+      - "$FILEBROWSER_AGENT_HOMES_DIR:/srv/agent-homes:rw"
+      - "$FILEBROWSER_WORKSPACES_DIR:/srv/workspaces:rw"
+      - "$FILEBROWSER_ARTIFACTS_DIR:/srv/artifacts:rw"
+      - "$FILEBROWSER_KNOWLEDGE_DIR:/srv/knowledge:rw"
+$docs_volume
+
+networks:
+  $EDGE_NETWORK:
+    external: true
+EOF
+  run_root install -m 0644 -o root -g root "$tmp_compose" "$FILEBROWSER_COMPOSE"
+}
+
 remove_legacy_logseq_runtime() {
   if [ "$DRY_RUN" -eq 1 ]; then
     print_cmd sh -c "remove legacy Logseq Publish containers if present: teamd-logseq-publish logseq-publish"
@@ -2214,6 +2430,24 @@ jaeger.$CADDY_DOMAIN {
     fi
   fi
 
+  filebrowser_domain_block=
+  filebrowser_http_redirect=
+  filebrowser_handle=
+  if [ "$ENABLE_FILEBROWSER" -eq 1 ]; then
+    if [ -n "$CADDY_DOMAIN" ] && [ "$CADDY_SINGLE_DOMAIN" -eq 0 ]; then
+      filebrowser_domain_block="
+files.$CADDY_DOMAIN {
+  reverse_proxy teamd-filebrowser:$FILEBROWSER_CONTAINER_PORT
+}
+"
+    else
+      filebrowser_http_redirect="  redir /files /files/ 308"
+      filebrowser_handle="  handle /files/* {
+    reverse_proxy teamd-filebrowser:$FILEBROWSER_CONTAINER_PORT
+  }"
+    fi
+  fi
+
 	  silverbullet_domain_block=
 	  silverbullet_https_block=
 	  caddy_global_options=
@@ -2271,6 +2505,7 @@ obsidian.$CADDY_DOMAIN {
 $CADDY_DOMAIN {
   redir /searxng /searxng/ 308
 $jaeger_http_redirect
+$filebrowser_http_redirect
 
   handle /searxng/* {
     reverse_proxy teamd-searxng:8080 {
@@ -2278,6 +2513,7 @@ $jaeger_http_redirect
     }
   }
 $jaeger_handle
+$filebrowser_handle
 $obsidian_single_handle
 
 $single_domain_root_handle
@@ -2291,6 +2527,7 @@ search.$CADDY_DOMAIN {
 $obsidian_domain_block
 $jaeger_domain_block
 $silverbullet_domain_block
+$filebrowser_domain_block
 EOF
 	    fi
 	  else
@@ -2318,6 +2555,7 @@ $caddy_global_options
   redir /searxng /searxng/ 308
 $obsidian_http_redirects
 $jaeger_http_redirect
+$filebrowser_http_redirect
 
   handle /searxng/* {
     reverse_proxy teamd-searxng:8080 {
@@ -2325,6 +2563,7 @@ $jaeger_http_redirect
     }
   }
 $jaeger_handle
+$filebrowser_handle
 
   respond / "teamD container edge: /searxng/ on HTTP; optional add-ons when enabled"
 }
@@ -2338,6 +2577,7 @@ https://$CADDY_HOST {
     }
   }
 $jaeger_handle
+$filebrowser_handle
 
 $obsidian_handle
 
@@ -2351,6 +2591,7 @@ $caddy_global_options
 :80 {
   redir /searxng /searxng/ 308
 $jaeger_http_redirect
+$filebrowser_http_redirect
 
   handle /searxng/* {
     reverse_proxy teamd-searxng:8080 {
@@ -2358,6 +2599,7 @@ $jaeger_http_redirect
     }
   }
 $jaeger_handle
+$filebrowser_handle
 
 $obsidian_handle
 
@@ -2475,6 +2717,9 @@ while [ "$#" -gt 0 ]; do
       ENABLE_LIGHTPANDA=1
       WRITE_LIGHTPANDA_MCP_EXAMPLE=1
       ;;
+    --with-filebrowser)
+      ENABLE_FILEBROWSER=1
+      ;;
     --single-domain) CADDY_SINGLE_DOMAIN=1 ;;
     --no-restart-teamd) RESTART_TEAMD_SERVICES=0 ;;
     --searxng-port)
@@ -2507,6 +2752,12 @@ while [ "$#" -gt 0 ]; do
       valid_port "$1" || fail "invalid --silverbullet-https-port: $1"
       SILVERBULLET_HTTPS_PORT=$1
       ;;
+    --filebrowser-port)
+      shift
+      [ "$#" -gt 0 ] || fail "--filebrowser-port requires a value"
+      valid_port "$1" || fail "invalid --filebrowser-port: $1"
+      FILEBROWSER_PORT=$1
+      ;;
     -h|--help)
       usage
       exit 0
@@ -2524,19 +2775,21 @@ fi
 
 need_command id
 need_command sed
+resolve_filebrowser_base_url
 validate_obsidian_subfolder
 validate_caddy_domain_mode
 ensure_obsidian_https_port
 ensure_silverbullet_https_port
 ensure_caddy_host
 valid_port "$MEM0_PORT" || fail "invalid TEAMD_MEM0_PORT: $MEM0_PORT"
+valid_port "$FILEBROWSER_PORT" || fail "invalid TEAMD_FILEBROWSER_PORT: $FILEBROWSER_PORT"
 
 if [ "$(id -u)" -ne 0 ] && [ "$DRY_RUN" -eq 0 ]; then
   need_command sudo
 fi
 
-if [ "$ENABLE_SEARXNG" -eq 0 ] && [ "$ENABLE_OBSIDIAN" -eq 0 ] && [ "$ENABLE_JAEGER" -eq 0 ] && [ "$ENABLE_MEM0" -eq 0 ] && [ "$ENABLE_SILVERBULLET" -eq 0 ] && [ "$ENABLE_BROWSERLESS" -eq 0 ] && [ "$INSTALL_AGENT_BROWSER" -eq 0 ] && [ "$ENABLE_LIGHTPANDA" -eq 0 ] && [ "$ENABLE_CADDY" -eq 0 ]; then
-  fail "nothing to deploy: SearXNG disabled, Obsidian not enabled, Jaeger not enabled, Mem0 not enabled, SilverBullet not enabled, Browserless/agent-browser not enabled, Lightpanda not enabled, and Caddy disabled"
+if [ "$ENABLE_SEARXNG" -eq 0 ] && [ "$ENABLE_OBSIDIAN" -eq 0 ] && [ "$ENABLE_JAEGER" -eq 0 ] && [ "$ENABLE_MEM0" -eq 0 ] && [ "$ENABLE_SILVERBULLET" -eq 0 ] && [ "$ENABLE_BROWSERLESS" -eq 0 ] && [ "$INSTALL_AGENT_BROWSER" -eq 0 ] && [ "$ENABLE_LIGHTPANDA" -eq 0 ] && [ "$ENABLE_FILEBROWSER" -eq 0 ] && [ "$ENABLE_CADDY" -eq 0 ]; then
+  fail "nothing to deploy: SearXNG disabled, Obsidian not enabled, Jaeger not enabled, Mem0 not enabled, SilverBullet not enabled, Browserless/agent-browser not enabled, Lightpanda not enabled, File Browser not enabled, and Caddy disabled"
 fi
 
 if docker_components_enabled; then
@@ -2605,6 +2858,11 @@ if [ "$ENABLE_LIGHTPANDA" -eq 1 ]; then
   fi
 fi
 
+if [ "$ENABLE_FILEBROWSER" -eq 1 ]; then
+  write_filebrowser_files
+  compose_up "$FILEBROWSER_COMPOSE"
+fi
+
 if [ "$WRITE_LIGHTPANDA_MCP_EXAMPLE" -eq 1 ]; then
   write_lightpanda_mcp_example
 fi
@@ -2617,6 +2875,8 @@ fi
 if [ "$ENABLE_OBSIDIAN_MCP" -eq 1 ]; then
   append_obsidian_mcp_connector_config
   ensure_teamd_docker_access
+else
+  disable_obsidian_mcp_connector_config
 fi
 
 if [ "$ENABLE_LIGHTPANDA_MCP" -eq 1 ]; then
@@ -2631,7 +2891,7 @@ if [ "$ENABLE_CADDY" -eq 1 ]; then
   reload_caddy_if_running
 fi
 
-if [ "$ENABLE_SEARXNG" -eq 1 ] || [ "$ENABLE_OBSIDIAN_MCP" -eq 1 ] || [ "$ENABLE_SILVERBULLET_MCP" -eq 1 ] || [ "$ENABLE_LIGHTPANDA_MCP" -eq 1 ] || [ "$ENABLE_JAEGER" -eq 1 ] || [ "$ENABLE_MEM0" -eq 1 ] || [ "$INSTALL_AGENT_BROWSER" -eq 1 ]; then
+if [ "$ENABLE_SEARXNG" -eq 1 ] || [ "$ENABLE_OBSIDIAN_MCP" -eq 1 ] || [ "$ENABLE_SILVERBULLET_MCP" -eq 1 ] || [ "$ENABLE_LIGHTPANDA_MCP" -eq 1 ] || [ "$ENABLE_JAEGER" -eq 1 ] || [ "$ENABLE_MEM0" -eq 1 ] || [ "$ENABLE_FILEBROWSER" -eq 1 ] || [ "$INSTALL_AGENT_BROWSER" -eq 1 ]; then
   restart_teamd_services
 fi
 
@@ -2816,6 +3076,40 @@ if [ "$ENABLE_MEM0" -eq 1 ]; then
 EOF
 fi
 
+if [ "$ENABLE_FILEBROWSER" -eq 1 ]; then
+  cat <<EOF
+  File Browser:
+    Container: teamd-filebrowser
+    Local URL: http://127.0.0.1:$FILEBROWSER_PORT$FILEBROWSER_BASE_URL
+    Compose: $FILEBROWSER_COMPOSE
+    Start command: docker compose -f $FILEBROWSER_COMPOSE up -d
+    Credentials env file: $FILEBROWSER_ENV_FILE
+    Roots:
+      /srv/agent-homes -> $FILEBROWSER_AGENT_HOMES_DIR
+      /srv/workspaces  -> $FILEBROWSER_WORKSPACES_DIR
+      /srv/artifacts   -> $FILEBROWSER_ARTIFACTS_DIR
+      /srv/knowledge   -> $FILEBROWSER_KNOWLEDGE_DIR
+EOF
+  if [ -n "$FILEBROWSER_DOCS_DIR" ]; then
+    cat <<EOF
+      /srv/docs        -> $FILEBROWSER_DOCS_DIR
+EOF
+  fi
+  if [ "$ENABLE_CADDY" -eq 1 ] && [ -n "$CADDY_DOMAIN" ] && [ "$CADDY_SINGLE_DOMAIN" -eq 1 ]; then
+    cat <<EOF
+    Caddy URL: https://$CADDY_DOMAIN/files/
+EOF
+  elif [ "$ENABLE_CADDY" -eq 1 ] && [ -n "$CADDY_DOMAIN" ]; then
+    cat <<EOF
+    Caddy URL: https://files.$CADDY_DOMAIN/
+EOF
+  elif [ "$ENABLE_CADDY" -eq 1 ]; then
+    cat <<EOF
+    Caddy URL: http://127.0.0.1:$CADDY_HTTP_PORT/files/
+EOF
+  fi
+fi
+
 if [ "$ENABLE_SILVERBULLET" -eq 1 ]; then
   cat <<EOF
   SilverBullet:
@@ -2889,23 +3183,24 @@ EOF
 	  if [ -n "$CADDY_DOMAIN" ] && [ "$CADDY_SINGLE_DOMAIN" -eq 1 ]; then
 	    cat <<EOF
     Single-domain mode: yes
-    Routes with TEAMD_CADDY_DOMAIN single-domain: /, /searxng/, /jaeger/, and legacy /obsidian/ when enabled
+    Routes with TEAMD_CADDY_DOMAIN single-domain: /, /searxng/, /jaeger/, /files/ when enabled, and legacy /obsidian/ when enabled
 EOF
 	  elif [ -n "$CADDY_DOMAIN" ]; then
 	    cat <<EOF
-    Routes with TEAMD_CADDY_DOMAIN: search.<domain> plus enabled notes.<domain>, jaeger.<domain>, and legacy obsidian.<domain>
+    Routes with TEAMD_CADDY_DOMAIN: search.<domain> plus enabled notes.<domain>, jaeger.<domain>, files.<domain>, and legacy obsidian.<domain>
 EOF
 	  elif [ -n "$CADDY_HTTPS_PORT" ]; then
 	    cat <<EOF
     Routes without TEAMD_CADDY_DOMAIN:
       HTTP: /searxng/
       HTTP: /jaeger/ when enabled
+      HTTP/HTTPS: /files/ when File Browser is enabled
       HTTPS: https://$CADDY_HOST:$CADDY_HTTPS_PORT/obsidian/ when legacy Obsidian is enabled
       HTTPS: https://$CADDY_HOST:$SILVERBULLET_HTTPS_PORT/ when SilverBullet is enabled
 EOF
 	  else
 	    cat <<EOF
-    Routes without TEAMD_CADDY_DOMAIN: /searxng/ plus enabled /jaeger/ and legacy /obsidian/; SilverBullet uses https://$CADDY_HOST:$SILVERBULLET_HTTPS_PORT/ when enabled
+    Routes without TEAMD_CADDY_DOMAIN: /searxng/ plus enabled /jaeger/, /files/ and legacy /obsidian/; SilverBullet uses https://$CADDY_HOST:$SILVERBULLET_HTTPS_PORT/ when enabled
 EOF
 	  fi
 fi

@@ -292,7 +292,7 @@ Resource notes should include: summary, key points, sources, related notes.
 
 const DEFAULT_SILVERBULLET_SPACE_SKILL_MD: &str = r#"---
 name: silverbullet-space
-description: Use when working with SilverBullet, space, graph, PARA, projects, areas, resources, archive, notes, knowledge base, Markdown notes, daily notes, tasks, links, frontmatter, or Telegram-sourced knowledge capture.
+description: Используй этот skill для заметок, базы знаний, документации, решений, дневника, проектов, PARA, Markdown pages, links, frontmatter, Telegram captures and SilverBullet Space work. Use for notes, knowledge base, docs, decisions, journal, project documentation, PARA, Markdown notes, and SilverBullet pages.
 ---
 
 # SilverBullet Space
@@ -389,6 +389,194 @@ Resource notes should include: summary, key points, sources, related notes.
 - At the start of substantial work, search/read relevant project, area, or resource notes from the space.
 - After an important decision or completed task, update the relevant project note or daily journal.
 - When a working note becomes stable documentation, offer to promote it into repository docs and commit it.
+"#;
+
+const DEFAULT_MEM0_MEMORY_SKILL_MD: &str = r#"---
+name: mem0-memory
+description: Используй этот skill для долговременной памяти: устойчивые предпочтения пользователя, факты, повторяющиеся исправления, правила поведения, long-term context, durable memory, user preferences, stable facts, recurring corrections and remembered behavior. Не используй для точных настроек, временного состояния, файлов или документации.
+---
+
+# Mem0 Memory
+
+Use this skill when the user gives durable semantic context that should be remembered across sessions.
+
+## What belongs in Mem0
+
+- Stable operator preferences, for example language, response style, forbidden approaches, and recurring workflow preferences.
+- Durable project context that is useful semantically but is not canonical documentation.
+- Repeated corrections and successful patterns that should influence future behavior.
+- Facts that can be retrieved approximately by meaning.
+
+## What does not belong in Mem0
+
+- Exact settings, feature flags, selected ids, counters, or small JSON records. Use `scoped-kv` instead.
+- Human-readable documentation, project notes, decisions, and wiki pages. Use `silverbullet-space` instead.
+- Temporary task state, current plan items, raw files, transcripts, tool outputs, and artifacts.
+
+## Tools
+
+- Use `memory_search` before relying on remembered facts when the answer depends on long-term context.
+- Use `memory_add` only for durable facts that the operator would expect the system to remember.
+- Use `memory_delete` only when the user explicitly asks to remove a memory or the memory is clearly wrong.
+
+## Operating rules
+
+1. Keep memories short and factual.
+2. Prefer one memory per durable fact.
+3. Do not store secrets, payment data, tokens, passwords, or private files.
+4. If memory search returns low-confidence or irrelevant results, say that memory did not help and continue from current context.
+5. When saving a memory, summarize what was saved.
+"#;
+
+const DEFAULT_SCOPED_KV_SKILL_MD: &str = r#"---
+name: scoped-kv
+description: Используй этот skill для точных структурированных значений: настройки, флаги, счетчики, выбранный агент, выбранная сессия, workspace, feature toggles, exact key-value state, settings, counters, small JSON records and structured values that must be retrieved exactly.
+---
+
+# Scoped KV
+
+Use this skill for exact structured state that should be read back without semantic guessing.
+
+## What belongs in KV
+
+- Operator/session/workspace/agent settings and small preferences.
+- Selected ids such as current agent, workspace, integration, or feature flag.
+- Counters, timestamps, locks, small JSON records, and exact values.
+- Values that need compare-and-set revision safety.
+
+## What does not belong in KV
+
+- Long notes, documentation, decisions, and research. Use `silverbullet-space`.
+- Semantic memories and broad preferences. Use `mem0-memory`.
+- Large tool outputs, files, screenshots, transcripts, or artifacts.
+
+## Tools
+
+- `kv_get` reads one exact key.
+- `kv_put` writes one exact key and can use `expected_revision` to avoid lost updates.
+- `kv_list` lists keys by prefix inside a scope.
+- `kv_delete` removes one key only when deletion is intended.
+
+## Scope rules
+
+- `operator` is for one human operator.
+- `agent` is private to one agent profile.
+- `agent_shared` is shared by agents.
+- `workspace` is for a workspace/project.
+- `session` is for one session only.
+
+Choose the narrowest scope that still matches the user's intent.
+"#;
+
+const DEFAULT_TELEGRAM_OPERATOR_WORKFLOW_SKILL_MD: &str = r#"---
+name: telegram-operator-workflow
+description: Используй этот skill для работы через Telegram: команды бота, session switching, status, stop, queue, файлы, документы, план, skills, operator workflow, Telegram commands and mobile chat operations.
+---
+
+# Telegram Operator Workflow
+
+Use this skill when the operator is working from Telegram and asks about bot commands, sessions, status, files, plans, queues, or agent switching.
+
+## Rules
+
+- Prefer Telegram commands when the operator asks to inspect or control runtime state from the chat.
+- Use concise replies; Telegram is the primary mobile surface.
+- Do not ask the operator to use SSH, tunnels, or manual server commands unless there is no product command.
+- If a command is missing, state the missing capability and suggest the closest existing command.
+
+## Common commands
+
+- `/status` for current session/runtime state.
+- `/session` for session list and switching.
+- `/skills` to inspect skills.
+- `/enable <skill>` and `/disable <skill>` for session-scoped skill changes.
+- `/stop` or `/cancel` for active work cancellation.
+- `/queue` for inbound queue behavior.
+
+## File handling
+
+When the user sends a Telegram document, it should become a session-scoped artifact or approved workspace file. Confirm filename, size, and how the agent can reference it.
+"#;
+
+const DEFAULT_BROWSER_SEARCH_SKILL_MD: &str = r#"---
+name: browser-search
+description: Используй этот skill для веб-поиска, web_search, web_fetch, browser automation, Browserless, agent-browser, screenshots, dynamic pages, JavaScript pages, current information, research and online sources.
+---
+
+# Browser and Search
+
+Use this skill when current external information or a real browser is needed.
+
+## Tool choice
+
+- Use `web_search` first for discovery, current facts, news, product data, laws, weather, and unknown URLs.
+- Use `web_fetch` for an exact URL supplied by the user or returned by search.
+- Use browser tools for JavaScript-heavy pages, forms, clicks, screenshots, PDFs, and dynamic content that `web_fetch` cannot read.
+
+## Safety
+
+- Prefer primary sources.
+- Do not claim a web or browser result unless the tool succeeded.
+- Keep fetched content bounded and use artifacts for large outputs.
+- Respect access controls and do not perform abusive scraping.
+"#;
+
+const DEFAULT_FILE_ARTIFACT_WORKFLOW_SKILL_MD: &str = r#"---
+name: file-artifact-workflow
+description: Используй этот skill для файлов, документов, Telegram documents, artifacts, deliver_file, attachments, downloads, generated files, screenshots, PDFs and session-scoped file delivery.
+---
+
+# File and Artifact Workflow
+
+Use this skill when the operator sends, requests, edits, or receives files.
+
+## File intake
+
+- Telegram documents should be stored as session-scoped artifacts or approved workspace files.
+- Confirm filename, size, storage location, and artifact id.
+- Reject unsupported or oversized files with a clear explanation.
+
+## File delivery
+
+- If the user asks to receive a file, create or identify it first.
+- Use `deliver_file` with either `workspace_path` or `artifact_id`.
+- Treat `deliver_file` status `queued` as success; Telegram sends the document after the current turn.
+
+## Artifacts
+
+- Use artifacts for large tool outputs, generated files, screenshots, PDFs, diagnostics, and files that should be inspectable later.
+- Use `artifact_read` or `artifact_search` only for known refs.
+- Do not invent fallback delivery paths such as notes storage unless the user asks for that storage location.
+"#;
+
+const DEFAULT_PLANNING_SESSION_LIFECYCLE_SKILL_MD: &str = r#"---
+name: planning-session-lifecycle
+description: Используй этот skill для планов, задач, session lifecycle, retention, archive, delete, watchers, schedules, continue_later, autonomous work, plan visibility and background jobs.
+---
+
+# Planning and Session Lifecycle
+
+Use this skill when the task involves plans, session state, scheduled work, background jobs, lifecycle, retention, archive, delete, or autonomous continuation.
+
+## Planning tools
+
+- Initialize the plan once with `init_plan`.
+- Use task ids from `add_task` or `plan_snapshot`.
+- Update progress with `set_task_status` and `add_task_note`.
+- Use `plan_snapshot` before reporting plan state.
+
+## Session lifecycle
+
+- Do not assume a session is archived, deleted, or inactive without inspecting runtime state.
+- Use session/status tools to inspect current runs, jobs, schedules, approvals, artifacts, and plan state.
+- Do not create autonomous nudges or recurring schedules unless the operator requested them or policy explicitly allows them.
+
+## Scheduling
+
+- Use `continue_later` for one-shot continuation in the current session.
+- Use `schedule_create` for recurring or advanced schedules.
+- Use strict JSON and quoted enum strings.
+- If the result must appear in the current Telegram chat, prefer existing-session delivery when supported.
 "#;
 
 const DEFAULT_AGENT_BROWSER_SKILL_MD: &str = r#"---
@@ -930,6 +1118,32 @@ pub fn ensure_builtin_agent_home_layout(
             DEFAULT_SILVERBULLET_SPACE_SKILL_MD,
             &[],
         )?;
+        sync_builtin_default_skill(agent_home, "mem0-memory", DEFAULT_MEM0_MEMORY_SKILL_MD, &[])?;
+        sync_builtin_default_skill(agent_home, "scoped-kv", DEFAULT_SCOPED_KV_SKILL_MD, &[])?;
+        sync_builtin_default_skill(
+            agent_home,
+            "telegram-operator-workflow",
+            DEFAULT_TELEGRAM_OPERATOR_WORKFLOW_SKILL_MD,
+            &[],
+        )?;
+        sync_builtin_default_skill(
+            agent_home,
+            "browser-search",
+            DEFAULT_BROWSER_SEARCH_SKILL_MD,
+            &[],
+        )?;
+        sync_builtin_default_skill(
+            agent_home,
+            "file-artifact-workflow",
+            DEFAULT_FILE_ARTIFACT_WORKFLOW_SKILL_MD,
+            &[],
+        )?;
+        sync_builtin_default_skill(
+            agent_home,
+            "planning-session-lifecycle",
+            DEFAULT_PLANNING_SESSION_LIFECYCLE_SKILL_MD,
+            &[],
+        )?;
         sync_builtin_default_skill(
             agent_home,
             "agent-browser",
@@ -947,7 +1161,7 @@ pub fn ensure_builtin_agent_home_layout(
                 "Lightpanda is exposed",
             ],
         )?;
-        sync_builtin_default_skill_with_legacy_markers(
+        remove_builtin_default_skill_with_legacy_markers(
             agent_home,
             "logseq-graph",
             DEPRECATED_LOGSEQ_GRAPH_SKILL_MD,
@@ -958,7 +1172,7 @@ pub fn ensure_builtin_agent_home_layout(
                 "Logseq Publish",
             ],
         )?;
-        sync_builtin_default_skill(
+        remove_builtin_default_skill_with_legacy_markers(
             agent_home,
             "obsidian-vault",
             DEPRECATED_OBSIDIAN_VAULT_SKILL_MD,
@@ -966,6 +1180,11 @@ pub fn ensure_builtin_agent_home_layout(
                 DEFAULT_OBSIDIAN_VAULT_SKILL_MD,
                 PRE_WORKING_KNOWLEDGE_OBSIDIAN_VAULT_SKILL_MD,
                 PRE_PARA_OBSIDIAN_VAULT_SKILL_MD,
+            ],
+            &[
+                "# Obsidian Vault",
+                "/var/lib/teamd/vaults/teamd",
+                "mcp__obsidian__",
             ],
         )?;
     }
@@ -981,39 +1200,6 @@ fn sync_builtin_default_skill(
     let skill_dir = agent_home.join("skills").join(skill_name);
     fs::create_dir_all(&skill_dir)?;
     sync_builtin_prompt_file(&skill_dir.join("SKILL.md"), content, legacy_variants)
-}
-
-fn sync_builtin_default_skill_with_legacy_markers(
-    agent_home: &Path,
-    skill_name: &str,
-    content: &str,
-    legacy_variants: &[&str],
-    legacy_markers: &[&str],
-) -> io::Result<()> {
-    let skill_dir = agent_home.join("skills").join(skill_name);
-    fs::create_dir_all(&skill_dir)?;
-    let path = skill_dir.join("SKILL.md");
-    match fs::read_to_string(&path) {
-        Ok(existing) => {
-            let existing_normalized = normalize_prompt_contents(&existing);
-            let current = normalize_prompt_contents(content);
-            let has_legacy_markers = legacy_markers
-                .iter()
-                .all(|marker| existing.contains(marker));
-            if existing_normalized == current
-                || has_legacy_markers
-                || legacy_variants
-                    .iter()
-                    .any(|candidate| existing_normalized == normalize_prompt_contents(candidate))
-            {
-                fs::write(path, current)
-            } else {
-                Ok(())
-            }
-        }
-        Err(source) if source.kind() == io::ErrorKind::NotFound => fs::write(path, content),
-        Err(source) => Err(source),
-    }
 }
 
 fn remove_builtin_default_skill_with_legacy_markers(
@@ -1339,17 +1525,21 @@ mod tests {
         assert!(silverbullet_skill.contains("## PARA structure"));
         assert!(silverbullet_skill.contains("04-Archive"));
 
-        let logseq_skill = fs::read_to_string(default_home.join("skills/logseq-graph/SKILL.md"))
-            .expect("read logseq skill");
-        assert!(logseq_skill.contains("name: logseq-graph"));
-        assert!(logseq_skill.contains("Deprecated"));
-        assert!(logseq_skill.contains("silverbullet-space"));
-
-        let legacy_obsidian_skill =
-            fs::read_to_string(default_home.join("skills/obsidian-vault/SKILL.md"))
-                .expect("read legacy obsidian skill");
-        assert!(legacy_obsidian_skill.contains("Deprecated"));
-        assert!(legacy_obsidian_skill.contains("silverbullet-space"));
+        let current_stack_skills = [
+            ("mem0-memory", "memory_search"),
+            ("scoped-kv", "kv_get"),
+            ("telegram-operator-workflow", "/status"),
+            ("browser-search", "web_search"),
+            ("file-artifact-workflow", "deliver_file"),
+            ("planning-session-lifecycle", "continue_later"),
+        ];
+        for (skill_name, expected_fragment) in current_stack_skills {
+            let skill =
+                fs::read_to_string(default_home.join(format!("skills/{skill_name}/SKILL.md")))
+                    .unwrap_or_else(|source| panic!("read {skill_name} skill: {source}"));
+            assert!(skill.contains(&format!("name: {skill_name}")));
+            assert!(skill.contains(expected_fragment));
+        }
 
         let agent_browser_skill =
             fs::read_to_string(default_home.join("skills/agent-browser/SKILL.md"))
@@ -1364,6 +1554,14 @@ mod tests {
         assert!(
             !lightpanda_skill.exists(),
             "legacy Lightpanda skill must not remain visible to auto-activation"
+        );
+        assert!(
+            !default_home.join("skills/logseq-graph/SKILL.md").exists(),
+            "legacy Logseq skill must not remain visible to auto-activation"
+        );
+        assert!(
+            !default_home.join("skills/obsidian-vault/SKILL.md").exists(),
+            "legacy Obsidian skill must not remain visible to auto-activation"
         );
     }
 }

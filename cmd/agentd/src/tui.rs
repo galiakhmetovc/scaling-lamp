@@ -922,6 +922,9 @@ where
                     } => {
                         state.set_provider_loop_progress(current_round, max_rounds);
                     }
+                    ChatExecutionEvent::ContextStatus { summary, .. } => {
+                        state.timeline_mut().push_system(&summary, at);
+                    }
                     ChatExecutionEvent::ToolStatus {
                         tool_name,
                         summary,

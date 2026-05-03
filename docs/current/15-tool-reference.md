@@ -61,7 +61,7 @@ Tools не попадают в prompt как большой текстовый R
    - только tools, разрешённые `AgentProfile.allowed_tools`;
    - `artifact_read`, `artifact_search`, `artifact_pin` и `artifact_unpin` добавляются только если у session реально есть context offload;
    - `deliver_file` доступен как generic delivery tool: он не привязан к Telegram, но Telegram surface умеет доставлять queued requests как documents;
-   - dynamic MCP tools добавляются отдельно как самостоятельные provider tools с собственным `exposed_name` и `input_schema`.
+   - dynamic MCP tools добавляются отдельно как самостоятельные provider tools с собственным `exposed_name` и `input_schema`, но только для enabled MCP connectors.
 
 ### Что не стоит путать
 
@@ -69,6 +69,7 @@ Tools не попадают в prompt как большой текстовый R
   Вместо него модель видит уже обнаруженные MCP tools по их `exposed_name`.
 - legacy ids вроде `fs_read`, `fs_write`, `fs_patch`, `fs_search` живут в каталоге, но не входят в канонический automatic model-facing surface.
 - `plan_read` и `plan_write` определены, но для обычного model-driven loop вместо них используются более узкие typed planning tools.
+- legacy Obsidian/Lightpanda MCP tools не должны появляться в production surface, если соответствующие connectors не включены явно. Контейнерный deploy отключает `[daemon.mcp_connectors.obsidian]` и `[daemon.mcp_connectors.lightpanda]`, когда operator не просит их через legacy flags.
 
 ## Канонический model-facing tool surface
 
@@ -1338,6 +1339,12 @@ knowledge_search({
 - ищет по canonical knowledge roots проекта;
 - возвращает source metadata и bounded results.
 
+Что это не делает:
+
+- не ищет в Mem0 semantic memory: для этого есть `memory_search`;
+- не читает scoped exact state: для этого есть `kv_get`/`kv_list`;
+- не является SilverBullet-specific API. Если нужен именно SilverBullet Space, сначала используйте active skill `silverbullet-space` и available MCP/filesystem path для этого space.
+
 ### `knowledge_read`
 
 Сигнатура:
@@ -1503,6 +1510,8 @@ mcp_get_prompt({
 То есть provider получает их как обычные полноценные tools, а runtime потом маршрутизирует вызов во внутренний `mcp_call`.
 
 Пример: если оператор явно включил legacy connector `[daemon.mcp_connectors.lightpanda]`, модель может увидеть browser tools с exposed names вида `mcp__lightpanda__goto`, `mcp__lightpanda__markdown`, `mcp__lightpanda__semantic_tree`, `mcp__lightpanda__click`, `mcp__lightpanda__fill`. Для нового браузерного workflow предпочтительны built-in `browser_*` tools.
+
+Legacy Obsidian connector `[daemon.mcp_connectors.obsidian]` аналогично должен быть disabled в текущем production stack. Основной путь для заметок: `silverbullet-space` skill, SilverBullet MCP when enabled, или bounded filesystem tools в canonical Markdown space.
 
 Правило архитектуры: MCP connector расширяет canonical provider tool surface, но не создаёт отдельную модель prompt assembly, отдельный chat loop или отдельный debug ledger. Вызовы MCP tools должны попадать в тот же tool-call ledger, что и built-in tools.
 

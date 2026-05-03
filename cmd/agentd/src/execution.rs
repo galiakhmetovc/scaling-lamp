@@ -138,6 +138,10 @@ pub enum ChatExecutionEvent {
         current_round: usize,
         max_rounds: usize,
     },
+    ContextStatus {
+        label: String,
+        summary: String,
+    },
     ToolStatus {
         tool_call_id: String,
         tool_name: String,
