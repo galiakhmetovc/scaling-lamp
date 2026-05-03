@@ -1223,7 +1223,7 @@ fn semantic_memory_tools_accept_conversation_messages() {
 fn semantic_memory_add_repairs_bare_text_argument() {
     let add = ToolCall::from_openai_function(
         "memory_add",
-        r#"{"text":Пользователю нравится зелёный цвет.}"#,
+        r#"{"text":Пользователю нравится зелёный цвет.,"scope":operator}"#,
     )
     .expect("parse repaired memory_add");
 
@@ -1232,9 +1232,60 @@ fn semantic_memory_add_repairs_bare_text_argument() {
         ToolCall::MemoryAdd(MemoryAddInput {
             text: "Пользователю нравится зелёный цвет.".to_string(),
             messages: Vec::new(),
-            scope: None,
+            scope: Some("operator".to_string()),
             infer: None,
             metadata: serde_json::Value::Null,
+        })
+    );
+}
+
+#[test]
+fn semantic_memory_tools_repair_bare_string_arguments() {
+    let search = ToolCall::from_openai_function(
+        "memory_search",
+        r#"{"query":любимый цвет,"scope":operator,"limit":3}"#,
+    )
+    .expect("parse repaired memory_search");
+    let list = ToolCall::from_openai_function("memory_list", r#"{"scope":workspace,"limit":3}"#)
+        .expect("parse repaired memory_list");
+    let update = ToolCall::from_openai_function(
+        "memory_update",
+        r#"{"memory_id":mem-1,"text":Пользователь предпочитает зелёный.}"#,
+    )
+    .expect("parse repaired memory_update");
+    let delete = ToolCall::from_openai_function("memory_delete", r#"{"memory_id":mem-1}"#)
+        .expect("parse repaired memory_delete");
+
+    assert_eq!(
+        search,
+        ToolCall::MemorySearch(MemorySearchInput {
+            query: "любимый цвет".to_string(),
+            scope: Some("operator".to_string()),
+            limit: Some(3),
+            filters: serde_json::Value::Null,
+        })
+    );
+    assert_eq!(
+        list,
+        ToolCall::MemoryList(MemoryListInput {
+            scope: Some("workspace".to_string()),
+            limit: Some(3),
+            offset: None,
+            filters: serde_json::Value::Null,
+        })
+    );
+    assert_eq!(
+        update,
+        ToolCall::MemoryUpdate(MemoryUpdateInput {
+            memory_id: "mem-1".to_string(),
+            text: "Пользователь предпочитает зелёный.".to_string(),
+            metadata: serde_json::Value::Null,
+        })
+    );
+    assert_eq!(
+        delete,
+        ToolCall::MemoryDelete(MemoryDeleteInput {
+            memory_id: "mem-1".to_string(),
         })
     );
 }

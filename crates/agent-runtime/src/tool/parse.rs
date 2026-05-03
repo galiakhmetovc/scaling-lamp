@@ -7,9 +7,10 @@ use std::fmt;
 use super::parse_repair::{
     BROWSER_OUTPUT_PATH_REPAIRS, BROWSER_TEXT_STRING_REPAIRS, BareStringFieldRepair,
     CONTINUE_LATER_ENUM_REPAIRS, DELIVER_FILE_STRING_REPAIRS, EnumLikeFieldRepair,
-    KNOWLEDGE_READ_ENUM_REPAIRS, MEMORY_ADD_STRING_REPAIRS, SCHEDULE_ENUM_REPAIRS,
-    SESSION_READ_ENUM_REPAIRS, SESSION_WAIT_ENUM_REPAIRS, repair_bare_enum_like_values,
-    repair_bare_string_field_values,
+    KNOWLEDGE_READ_ENUM_REPAIRS, MEMORY_ADD_STRING_REPAIRS, MEMORY_DELETE_STRING_REPAIRS,
+    MEMORY_LIST_STRING_REPAIRS, MEMORY_SEARCH_STRING_REPAIRS, MEMORY_UPDATE_STRING_REPAIRS,
+    SCHEDULE_ENUM_REPAIRS, SESSION_READ_ENUM_REPAIRS, SESSION_WAIT_ENUM_REPAIRS,
+    repair_bare_enum_like_values, repair_bare_string_field_values,
 };
 use super::{
     KnowledgeReadMode, McpCallInput, ProcessOutputStream, SessionReadMode, ToolCall, ToolName,
@@ -950,30 +951,30 @@ impl ToolCall {
                 MEMORY_ADD_STRING_REPAIRS,
             )
             .map(Self::MemoryAdd),
-            "memory_search" => serde_json::from_str(arguments)
-                .map(Self::MemorySearch)
-                .map_err(|source| ToolCallParseError::InvalidArguments {
-                    name: name.to_string(),
-                    source,
-                }),
-            "memory_list" => serde_json::from_str(arguments)
-                .map(Self::MemoryList)
-                .map_err(|source| ToolCallParseError::InvalidArguments {
-                    name: name.to_string(),
-                    source,
-                }),
-            "memory_update" => serde_json::from_str(arguments)
-                .map(Self::MemoryUpdate)
-                .map_err(|source| ToolCallParseError::InvalidArguments {
-                    name: name.to_string(),
-                    source,
-                }),
-            "memory_delete" => serde_json::from_str(arguments)
-                .map(Self::MemoryDelete)
-                .map_err(|source| ToolCallParseError::InvalidArguments {
-                    name: name.to_string(),
-                    source,
-                }),
+            "memory_search" => Self::parse_arguments_with_bare_string_repair(
+                name,
+                arguments,
+                MEMORY_SEARCH_STRING_REPAIRS,
+            )
+            .map(Self::MemorySearch),
+            "memory_list" => Self::parse_arguments_with_bare_string_repair(
+                name,
+                arguments,
+                MEMORY_LIST_STRING_REPAIRS,
+            )
+            .map(Self::MemoryList),
+            "memory_update" => Self::parse_arguments_with_bare_string_repair(
+                name,
+                arguments,
+                MEMORY_UPDATE_STRING_REPAIRS,
+            )
+            .map(Self::MemoryUpdate),
+            "memory_delete" => Self::parse_arguments_with_bare_string_repair(
+                name,
+                arguments,
+                MEMORY_DELETE_STRING_REPAIRS,
+            )
+            .map(Self::MemoryDelete),
             "knowledge_search" => serde_json::from_str(arguments)
                 .map(Self::KnowledgeSearch)
                 .map_err(|source| ToolCallParseError::InvalidArguments {

@@ -58,8 +58,26 @@ pub(super) const DELIVER_FILE_STRING_REPAIRS: &[BareStringFieldRepair] = &[
     BareStringFieldRepair { field: "target" },
 ];
 
-pub(super) const MEMORY_ADD_STRING_REPAIRS: &[BareStringFieldRepair] =
-    &[BareStringFieldRepair { field: "text" }];
+pub(super) const MEMORY_ADD_STRING_REPAIRS: &[BareStringFieldRepair] = &[
+    BareStringFieldRepair { field: "text" },
+    BareStringFieldRepair { field: "scope" },
+];
+
+pub(super) const MEMORY_SEARCH_STRING_REPAIRS: &[BareStringFieldRepair] = &[
+    BareStringFieldRepair { field: "query" },
+    BareStringFieldRepair { field: "scope" },
+];
+
+pub(super) const MEMORY_LIST_STRING_REPAIRS: &[BareStringFieldRepair] =
+    &[BareStringFieldRepair { field: "scope" }];
+
+pub(super) const MEMORY_UPDATE_STRING_REPAIRS: &[BareStringFieldRepair] = &[
+    BareStringFieldRepair { field: "memory_id" },
+    BareStringFieldRepair { field: "text" },
+];
+
+pub(super) const MEMORY_DELETE_STRING_REPAIRS: &[BareStringFieldRepair] =
+    &[BareStringFieldRepair { field: "memory_id" }];
 
 pub(super) fn repair_bare_enum_like_values(
     input: &str,

@@ -233,7 +233,7 @@ Default:
 enabled = false
 api_base = "http://127.0.0.1:18888"
 default_user_id = "local-operator"
-request_timeout_ms = 5000
+request_timeout_ms = 120000
 default_limit = 10
 max_limit = 50
 # api_key = "..."
@@ -246,7 +246,7 @@ export TEAMD_MEM0_ENABLED='true'
 export TEAMD_MEM0_API_BASE='http://127.0.0.1:18888'
 export TEAMD_MEM0_API_KEY='m0sk_or_admin_key'
 export TEAMD_MEM0_DEFAULT_USER_ID='anton'
-export TEAMD_MEM0_REQUEST_TIMEOUT_MS='5000'
+export TEAMD_MEM0_REQUEST_TIMEOUT_MS='120000'
 export TEAMD_MEM0_DEFAULT_LIMIT='10'
 export TEAMD_MEM0_MAX_LIMIT='50'
 ```
