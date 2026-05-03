@@ -95,7 +95,7 @@ teamdctl session skills <session_id>
 - `agent-browser` npm package: `/opt/teamd/agent-browser`;
 - stable wrapper: `/opt/teamd/bin/agent-browser`;
 - PATH symlink: `/usr/local/bin/agent-browser`;
-- agentd env: `TEAMD_BROWSER_ENABLED=true`, `TEAMD_BROWSER_PROVIDER=cdp`, `TEAMD_BROWSERLESS_API_URL=http://127.0.0.1:3000`, `TEAMD_BROWSERLESS_CDP_URL=ws://127.0.0.1:3000?token=<token>`.
+- agentd env: `TEAMD_BROWSER_ENABLED=true`, `TEAMD_BROWSER_PROVIDER=cdp`, `TEAMD_BROWSERLESS_API_URL=http://127.0.0.1:3000`, `TEAMD_BROWSERLESS_CDP_URL=ws://127.0.0.1:3000/chromium?token=<token>`.
 
 Default agent получает skill `agent-browser` и built-in tools `browser_open`, `browser_snapshot`, `browser_click`, `browser_fill`, `browser_text`, `browser_screenshot`, `browser_pdf`.
 

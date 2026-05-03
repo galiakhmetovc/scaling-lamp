@@ -57,7 +57,7 @@ max_output_chars = 20000
 
 [browser.browserless]
 api_url = "http://127.0.0.1:3000"
-cdp_url = "ws://127.0.0.1:3000?token=<token>"
+cdp_url = "ws://127.0.0.1:3000/chromium?token=<token>"
 api_key = ""
 browser_type = "chromium"
 ttl_ms = 300000

@@ -150,7 +150,7 @@ assert_contains "$containers_browserless_dry_run_output" "upsert agent-browser B
 assert_contains "$containers_browserless_dry_run_output" "TEAMD_BROWSER_ENABLED=true"
 assert_contains "$containers_browserless_dry_run_output" "TEAMD_BROWSER_PROVIDER=cdp"
 assert_contains "$containers_browserless_dry_run_output" "TEAMD_BROWSERLESS_API_URL=http://127.0.0.1:3000"
-assert_contains "$containers_browserless_dry_run_output" "TEAMD_BROWSERLESS_CDP_URL=ws://127.0.0.1:3000?token="
+assert_contains "$containers_browserless_dry_run_output" "TEAMD_BROWSERLESS_CDP_URL=ws://127.0.0.1:3000/chromium?token="
 
 containers_single_domain_dry_run_output=$(
   TEAMD_CADDY_DOMAIN='teamd.qlbc.ru' \

@@ -294,7 +294,7 @@ TEAMD_BROWSER_SESSION_PREFIX='teamd'
 TEAMD_BROWSER_DEFAULT_TIMEOUT_MS='30000'
 TEAMD_BROWSER_MAX_OUTPUT_CHARS='20000'
 TEAMD_BROWSERLESS_API_URL='http://127.0.0.1:3000'
-TEAMD_BROWSERLESS_CDP_URL='ws://127.0.0.1:3000?token=<generated token>'
+TEAMD_BROWSERLESS_CDP_URL='ws://127.0.0.1:3000/chromium?token=<generated token>'
 TEAMD_BROWSERLESS_API_KEY='<generated token>'
 TEAMD_BROWSERLESS_BROWSER_TYPE='chromium'
 TEAMD_BROWSERLESS_TTL_MS='300000'
@@ -307,8 +307,8 @@ Smoke checks:
 curl -X POST 'http://127.0.0.1:3000/content?token=<token>' \
   -H 'Content-Type: application/json' \
   -d '{"url":"https://example.com"}'
-AGENT_BROWSER_CDP='ws://127.0.0.1:3000?token=<token>' agent-browser open https://example.com
-AGENT_BROWSER_CDP='ws://127.0.0.1:3000?token=<token>' agent-browser snapshot -i -c
+AGENT_BROWSER_CDP='ws://127.0.0.1:3000/chromium?token=<token>' agent-browser open https://example.com
+AGENT_BROWSER_CDP='ws://127.0.0.1:3000/chromium?token=<token>' agent-browser snapshot -i -c
 ```
 
 Default agent skill:

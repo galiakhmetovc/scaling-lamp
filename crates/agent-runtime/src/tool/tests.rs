@@ -244,7 +244,7 @@ fn browser_tool_client_uses_cdp_env_without_provider_env() {
         max_output_chars: 4_000,
         browserless_api_key: Some("test-token".to_string()),
         browserless_api_url: Some("http://127.0.0.1:3000".to_string()),
-        browserless_cdp_url: Some("ws://127.0.0.1:3000?token=test-token".to_string()),
+        browserless_cdp_url: Some("ws://127.0.0.1:3000/chromium?token=test-token".to_string()),
         browserless_browser_type: Some("chromium".to_string()),
         browserless_ttl_ms: Some(300_000),
         browserless_stealth: Some(true),
@@ -257,7 +257,7 @@ fn browser_tool_client_uses_cdp_env_without_provider_env() {
     assert!(
         output
             .stdout
-            .contains("AGENT_BROWSER_CDP=ws://127.0.0.1:3000?token=test-token\n")
+            .contains("AGENT_BROWSER_CDP=ws://127.0.0.1:3000/chromium?token=test-token\n")
     );
     assert!(!output.stdout.contains("AGENT_BROWSER_PROVIDER="));
 }

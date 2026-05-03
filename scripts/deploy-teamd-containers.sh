@@ -86,7 +86,7 @@ BROWSERLESS_DIR=$CONTAINERS_ROOT/browserless
 BROWSERLESS_COMPOSE=$BROWSERLESS_DIR/docker-compose.yml
 BROWSERLESS_ENV_FILE=${TEAMD_BROWSERLESS_ENV_FILE:-$BROWSERLESS_DIR/browserless.env}
 BROWSERLESS_API_URL=${TEAMD_BROWSERLESS_API_URL:-http://127.0.0.1:$BROWSERLESS_PORT}
-BROWSERLESS_CDP_URL=${TEAMD_BROWSERLESS_CDP_URL:-ws://127.0.0.1:$BROWSERLESS_PORT}
+BROWSERLESS_CDP_URL=${TEAMD_BROWSERLESS_CDP_URL:-ws://127.0.0.1:$BROWSERLESS_PORT/chromium}
 BROWSERLESS_BROWSER_TYPE=${TEAMD_BROWSERLESS_BROWSER_TYPE:-chromium}
 BROWSERLESS_TTL_MS=${TEAMD_BROWSERLESS_TTL_MS:-300000}
 BROWSERLESS_STEALTH=${TEAMD_BROWSERLESS_STEALTH:-true}
@@ -264,7 +264,7 @@ Environment overrides:
   TEAMD_BROWSERLESS_TOKEN        Browserless token. If unset, generated and stored.
   TEAMD_BROWSERLESS_API_URL      agent-browser Browserless URL,
                                  default: $BROWSERLESS_API_URL.
-  TEAMD_BROWSERLESS_CDP_URL      agent-browser CDP URL base for self-hosted Browserless,
+  TEAMD_BROWSERLESS_CDP_URL      agent-browser CDP endpoint for self-hosted Browserless,
                                  default: $BROWSERLESS_CDP_URL?token=<token>.
   TEAMD_BROWSERLESS_BROWSER_TYPE Browser type for agent-browser, default: $BROWSERLESS_BROWSER_TYPE.
   TEAMD_BROWSERLESS_TTL_MS       Browserless session TTL hint, default: $BROWSERLESS_TTL_MS.
