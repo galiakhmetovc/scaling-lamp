@@ -94,6 +94,19 @@ pub struct SessionSearchDocRecord {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct KvEntryRecord {
+    pub scope: String,
+    pub namespace_id: String,
+    pub key: String,
+    pub value_json: String,
+    pub metadata_json: String,
+    pub revision: i64,
+    pub created_at: i64,
+    pub updated_at: i64,
+    pub expires_at: Option<i64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct McpConnectorRecord {
     pub id: String,
     pub transport: String,

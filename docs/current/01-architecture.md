@@ -112,6 +112,8 @@
 - `mission.rs` — mission-turn logic.
 - `memory.rs` — `session_read`, `session_search`, `knowledge_*`.
 - `mem0.rs` — optional semantic long-term memory tools `memory_*` поверх Mem0/OpenMemory REST API.
+- `kv.rs` — deterministic scoped runtime KV tools `kv_*` поверх `state.sqlite`.
+- `scopes.rs` — общий mapping scopes `operator`, `agent`, `agent_shared`, `workspace`, `session` для Mem0 и KV.
 - `delegation.rs` / `delegate_jobs.rs` / `wakeup.rs` / `supervisor.rs` — сервисная orchestration-логика.
 
 Именно это разделение помогает держать систему понятной для начинающего разработчика: один файл — одна группа сценариев.
@@ -212,4 +214,25 @@ Mem0/OpenMemory в этой схеме — внешний durable semantic index
 - Mem0 scopes мапятся на Mem0 entities: `operator -> user_id`, `agent -> agent_id`, `agent_shared -> agent_id=teamd-agent-shared`, `workspace -> app_id`, `session -> run_id`;
 - общий пул памяти агентов реализован как `agent_shared`, но это semantic pool, а не deterministic KV.
 
-Такое разделение оставляет semantic memory inspectable и отключаемой: если Mem0, recall или curator недоступны, основной chat turn не должен падать. Если системе понадобится точное состояние вида `key -> value`, locks, counters или durable queues, это должен быть отдельный KV/runtime-store слой, а не Mem0.
+Такое разделение оставляет semantic memory inspectable и отключаемой: если Mem0, recall или curator недоступны, основной chat turn не должен падать.
+
+## Граница deterministic KV
+
+`kv_get`, `kv_put`, `kv_list` и `kv_delete` являются built-in structured tools и живут в `agent-persistence/state.sqlite`, а не в Mem0, MCP или внешнем Redis.
+
+KV нужен для точного состояния вида `key -> JSON value`:
+
+- настройки и флаги, которые агент должен прочитать по точному ключу;
+- counters, cursors, lightweight locks и markers;
+- durable scratch state, который не должен искаться семантически;
+- small coordination state между sessions/agents/workspaces.
+
+Scopes у KV такие же логически, как у Mem0, но мапятся не на Mem0 entities, а на `(scope, namespace_id, key)`:
+
+- `operator -> namespace_id = mem0.default_user_id`;
+- `agent -> namespace_id = <agent_profile_id>`;
+- `agent_shared -> namespace_id = teamd-agent-shared`;
+- `workspace -> namespace_id = teamd-workspace-<sha256(workspace_root)[0..16]>`;
+- `session -> namespace_id = <session_id>`.
+
+Инфраструктурное решение намеренно простое: SQLite уже является canonical durable store, попадает в backup/recovery flow и работает через те же retry/locking правила. Redis/etcd/Postgres для этого слоя пока не нужны: они добавили бы второй operational plane без выигрыша для текущего single-node runtime.

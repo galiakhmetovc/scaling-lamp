@@ -549,6 +549,52 @@ pub struct MemoryDeleteInput {
     pub memory_id: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct KvGetInput {
+    pub key: String,
+    pub scope: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct KvPutInput {
+    pub key: String,
+    pub value: Value,
+    pub scope: Option<String>,
+    pub metadata: Value,
+    pub expected_revision: Option<i64>,
+    pub ttl_seconds: Option<i64>,
+}
+
+impl Default for KvPutInput {
+    fn default() -> Self {
+        Self {
+            key: String::new(),
+            value: Value::Null,
+            scope: None,
+            metadata: Value::Null,
+            expected_revision: None,
+            ttl_seconds: None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct KvListInput {
+    pub scope: Option<String>,
+    pub prefix: Option<String>,
+    pub limit: Option<usize>,
+    pub offset: Option<usize>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct KvDeleteInput {
+    pub key: String,
+    pub scope: Option<String>,
+    pub expected_revision: Option<i64>,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum KnowledgeSourceKind {
@@ -863,6 +909,10 @@ pub enum ToolCall {
     MemoryList(MemoryListInput),
     MemoryUpdate(MemoryUpdateInput),
     MemoryDelete(MemoryDeleteInput),
+    KvGet(KvGetInput),
+    KvPut(KvPutInput),
+    KvList(KvListInput),
+    KvDelete(KvDeleteInput),
     KnowledgeSearch(KnowledgeSearchInput),
     KnowledgeRead(KnowledgeReadInput),
     SessionSearch(SessionSearchInput),

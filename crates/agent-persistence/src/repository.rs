@@ -1,11 +1,11 @@
 use crate::records::{
     AgentChainContinuationRecord, AgentProfileRecord, AgentScheduleRecord, ArtifactRecord,
     ContextOffloadRecord, ContextSummaryRecord, FileDeliveryRequestRecord, JobRecord,
-    KnowledgeSearchDocRecord, KnowledgeSourceRecord, McpConnectorRecord, MissionRecord, PlanRecord,
-    RunRecord, SessionInboxEventRecord, SessionRecord, SessionRetentionRecord,
-    SessionSearchDocRecord, TelegramChatBindingRecord, TelegramChatStatusRecord,
-    TelegramUpdateCursorRecord, TelegramUserPairingRecord, ToolCallRecord, TraceLinkRecord,
-    TranscriptRecord,
+    KnowledgeSearchDocRecord, KnowledgeSourceRecord, KvEntryRecord, McpConnectorRecord,
+    MissionRecord, PlanRecord, RunRecord, SessionInboxEventRecord, SessionRecord,
+    SessionRetentionRecord, SessionSearchDocRecord, TelegramChatBindingRecord,
+    TelegramChatStatusRecord, TelegramUpdateCursorRecord, TelegramUserPairingRecord,
+    ToolCallRecord, TraceLinkRecord, TranscriptRecord,
 };
 use crate::store::StoreError;
 use agent_runtime::context::ContextOffloadPayload;
@@ -75,6 +75,37 @@ pub trait KnowledgeRepository {
         docs: &[KnowledgeSearchDocRecord],
     ) -> Result<(), StoreError>;
     fn list_knowledge_search_docs(&self) -> Result<Vec<KnowledgeSearchDocRecord>, StoreError>;
+}
+
+pub trait KvRepository {
+    fn put_kv_entry(
+        &self,
+        record: &KvEntryRecord,
+        expected_revision: Option<i64>,
+    ) -> Result<KvEntryRecord, StoreError>;
+    fn get_kv_entry(
+        &self,
+        scope: &str,
+        namespace_id: &str,
+        key: &str,
+        now: i64,
+    ) -> Result<Option<KvEntryRecord>, StoreError>;
+    fn list_kv_entries(
+        &self,
+        scope: &str,
+        namespace_id: &str,
+        prefix: Option<&str>,
+        limit: usize,
+        offset: usize,
+        now: i64,
+    ) -> Result<Vec<KvEntryRecord>, StoreError>;
+    fn delete_kv_entry(
+        &self,
+        scope: &str,
+        namespace_id: &str,
+        key: &str,
+        expected_revision: Option<i64>,
+    ) -> Result<bool, StoreError>;
 }
 
 pub trait McpRepository {

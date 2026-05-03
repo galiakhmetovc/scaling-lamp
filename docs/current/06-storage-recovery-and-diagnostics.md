@@ -86,6 +86,7 @@ Storage key теперь обычно содержит `session_id/filename.txt`
 | `plans` | Structured plan items по session. |
 | `context_summaries` | Compact summaries старого transcript tail по session. |
 | `context_offloads` | Ссылки на offloaded context chunks, payload лежит в `artifacts/`. |
+| `kv_entries` | Scoped deterministic KV: `scope`, `namespace_id`, `key`, JSON value, metadata, revision, timestamps и optional TTL. |
 | `session_inbox_events` | Deferred wakeups, inbox events и продолжения работы. |
 | `session_retention` | Retention/archive metadata по sessions. |
 | `session_search_docs`, `session_search_fts` | Search index по session history. |

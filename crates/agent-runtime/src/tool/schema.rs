@@ -618,6 +618,48 @@ impl ToolName {
                 "required": ["memory_id"],
                 "additionalProperties": false,
             }),
+            Self::KvGet => json!({
+                "type": "object",
+                "properties": {
+                    "key": { "type": "string", "description": "Exact key inside the selected KV scope, for example state/current_task. Must not be empty." },
+                    "scope": { "type": ["string", "null"], "enum": ["operator", "agent", "agent_shared", "workspace", "session", null], "description": "KV scope. Defaults to workspace. Uses the same logical scopes as semantic memory but stores exact state in state.sqlite." }
+                },
+                "required": ["key"],
+                "additionalProperties": false,
+            }),
+            Self::KvPut => json!({
+                "type": "object",
+                "properties": {
+                    "key": { "type": "string", "description": "Exact key inside the selected KV scope, for example state/current_task. Use slash-separated namespaces; do not use secrets." },
+                    "value": { "description": "JSON value to store exactly. Use this for deterministic state, counters, flags, cursors, or compact structured facts that should not be semantic-search memories." },
+                    "scope": { "type": ["string", "null"], "enum": ["operator", "agent", "agent_shared", "workspace", "session", null], "description": "KV scope. Defaults to workspace. Use agent_shared for shared agent state, session for temporary per-session state." },
+                    "metadata": { "type": ["object", "null"], "description": "Optional JSON metadata for audit/debug. Do not put secrets here.", "additionalProperties": true },
+                    "expected_revision": { "type": ["integer", "null"], "minimum": 0, "description": "Optional compare-and-set guard. 0 means create only; current revision means update only if unchanged." },
+                    "ttl_seconds": { "type": ["integer", "null"], "minimum": 1, "description": "Optional expiry in seconds. Expired entries are hidden from kv_get/kv_list." }
+                },
+                "required": ["key", "value"],
+                "additionalProperties": false,
+            }),
+            Self::KvList => json!({
+                "type": "object",
+                "properties": {
+                    "scope": { "type": ["string", "null"], "enum": ["operator", "agent", "agent_shared", "workspace", "session", null], "description": "KV scope. Defaults to workspace." },
+                    "prefix": { "type": ["string", "null"], "description": "Optional key prefix, for example state/." },
+                    "limit": { "type": ["integer", "null"], "minimum": 1, "description": "Maximum number of entries to return." },
+                    "offset": { "type": ["integer", "null"], "minimum": 0, "description": "Pagination offset." }
+                },
+                "additionalProperties": false,
+            }),
+            Self::KvDelete => json!({
+                "type": "object",
+                "properties": {
+                    "key": { "type": "string", "description": "Exact key to delete from the selected KV scope." },
+                    "scope": { "type": ["string", "null"], "enum": ["operator", "agent", "agent_shared", "workspace", "session", null], "description": "KV scope. Defaults to workspace." },
+                    "expected_revision": { "type": ["integer", "null"], "minimum": 0, "description": "Optional compare-and-set guard. If set, delete only when current revision matches." }
+                },
+                "required": ["key"],
+                "additionalProperties": false,
+            }),
             Self::KnowledgeSearch => json!({
                 "type": "object",
                 "properties": {

@@ -98,6 +98,10 @@ impl ToolCatalog {
                         | ToolName::MemoryList
                         | ToolName::MemoryUpdate
                         | ToolName::MemoryDelete
+                        | ToolName::KvGet
+                        | ToolName::KvPut
+                        | ToolName::KvList
+                        | ToolName::KvDelete
                         | ToolName::KnowledgeSearch
                         | ToolName::KnowledgeRead
                         | ToolName::SessionSearch
@@ -739,6 +743,46 @@ impl ToolCatalog {
                 name: ToolName::MemoryDelete,
                 family: ToolFamily::Memory,
                 description: "Delete one existing long-term memory by exact memory_id. Use only when the operator asks to remove or correct a memory.",
+                policy: ToolPolicy {
+                    read_only: false,
+                    destructive: true,
+                    requires_approval: true,
+                },
+            },
+            ToolDefinition {
+                name: ToolName::KvGet,
+                family: ToolFamily::Memory,
+                description: "Read one exact key from the scoped runtime KV store in state.sqlite. Use for deterministic state, not semantic recall.",
+                policy: ToolPolicy {
+                    read_only: true,
+                    destructive: false,
+                    requires_approval: false,
+                },
+            },
+            ToolDefinition {
+                name: ToolName::KvPut,
+                family: ToolFamily::Memory,
+                description: "Store one exact JSON value in the scoped runtime KV store in state.sqlite. Supports optional expected_revision compare-and-set and ttl_seconds.",
+                policy: ToolPolicy {
+                    read_only: false,
+                    destructive: false,
+                    requires_approval: false,
+                },
+            },
+            ToolDefinition {
+                name: ToolName::KvList,
+                family: ToolFamily::Memory,
+                description: "List exact keys from one scoped runtime KV namespace with optional prefix and pagination.",
+                policy: ToolPolicy {
+                    read_only: true,
+                    destructive: false,
+                    requires_approval: false,
+                },
+            },
+            ToolDefinition {
+                name: ToolName::KvDelete,
+                family: ToolFamily::Memory,
+                description: "Delete one exact key from the scoped runtime KV store. Use only when stale state should be removed.",
                 policy: ToolPolicy {
                     read_only: false,
                     destructive: true,

@@ -2028,6 +2028,18 @@ impl ExecutionService {
             ToolCall::MemoryDelete(input) => Ok(ToolOutput::MemoryDelete(
                 self.delete_semantic_memory(input)?,
             )),
+            ToolCall::KvGet(input) => Ok(ToolOutput::KvGet(
+                self.get_kv_entry(store, session_id, input, now)?,
+            )),
+            ToolCall::KvPut(input) => Ok(ToolOutput::KvPut(
+                self.put_kv_entry(store, session_id, input, now)?,
+            )),
+            ToolCall::KvList(input) => Ok(ToolOutput::KvList(
+                self.list_kv_entries(store, session_id, input, now)?,
+            )),
+            ToolCall::KvDelete(input) => Ok(ToolOutput::KvDelete(
+                self.delete_kv_entry(store, session_id, input)?,
+            )),
             ToolCall::KnowledgeSearch(input) => Ok(ToolOutput::KnowledgeSearch(
                 self.search_knowledge(store, input)?,
             )),

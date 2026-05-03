@@ -1066,7 +1066,119 @@ Scope:
 - `workspace` — default scope, память текущего workspace, `app_id = teamd-workspace-<sha256(workspace_root)[0..16]>`;
 - `session` — память текущей session, только `run_id=session_id`.
 
-Runtime добавляет в metadata provenance поля `teamd_scope`, `teamd_session_id`, `teamd_agent_profile_id`, `teamd_workspace_root` и `teamd_source`. Это не KV-хранилище: Mem0 используется для семантических durable facts/lessons, а точные ключи, очереди, locks, counters и runtime state должны оставаться в `agent-persistence` или отдельном KV-слое.
+Runtime добавляет в metadata provenance поля `teamd_scope`, `teamd_session_id`, `teamd_agent_profile_id`, `teamd_workspace_root` и `teamd_source`. Это не KV-хранилище: Mem0 используется для семантических durable facts/lessons, а точные ключи, очереди, locks, counters и runtime state должны оставаться во встроенном KV/runtime-store слое `state.sqlite`.
+
+### Runtime KV через `state.sqlite`
+
+`kv_*` tools всегда идут через тот же canonical provider loop, tool ledger и approval layer. Они не используют Mem0, MCP, Redis или отдельный сервис. Данные лежат в `state.sqlite` в таблице `kv_entries`.
+
+KV хранит exact JSON values. Он не делает embeddings, ranking, inference или semantic search.
+
+Scope mapping:
+
+- `operator` — `namespace_id = mem0.default_user_id`;
+- `agent` — `namespace_id = <agent_profile_id>`;
+- `agent_shared` — `namespace_id = teamd-agent-shared`;
+- `workspace` — default, `namespace_id = teamd-workspace-<sha256(workspace_root)[0..16]>`;
+- `session` — `namespace_id = <session_id>`.
+
+Когда использовать KV:
+
+- точное состояние, которое нужно читать по ключу;
+- counters, cursors, lightweight locks и feature flags;
+- machine-readable state между turns/sessions;
+- short structured state с optional TTL.
+
+Когда не использовать KV:
+
+- для семантических воспоминаний и предпочтений — используйте `memory_*`;
+- для больших payload — используйте artifacts/offload;
+- для знаний и заметок — используйте docs/SilverBullet/knowledge tools.
+
+### `kv_get`
+
+Сигнатура:
+
+```text
+kv_get({
+  key: string,
+  scope?: "operator" | "agent" | "agent_shared" | "workspace" | "session" | null
+})
+```
+
+Что делает:
+
+- читает одну exact запись из `(scope, namespace_id, key)`;
+- default scope — `workspace`;
+- не возвращает expired записи.
+
+### `kv_put`
+
+Сигнатура:
+
+```text
+kv_put({
+  key: string,
+  value: any_json,
+  scope?: "operator" | "agent" | "agent_shared" | "workspace" | "session" | null,
+  metadata?: object | null,
+  expected_revision?: integer | null,
+  ttl_seconds?: integer | null
+})
+```
+
+Что делает:
+
+- пишет JSON value по exact key;
+- увеличивает `revision`;
+- сохраняет `created_at`, `updated_at`, optional `expires_at`;
+- `expected_revision` включает compare-and-set: `0` означает create-only, текущее число означает update-only на ожидаемой версии;
+- `ttl_seconds` задаёт срок жизни записи.
+
+Ограничения:
+
+- key не пустой и не больше 512 bytes;
+- value не больше 64 KiB serialized JSON;
+- metadata — только object или null, не больше 16 KiB serialized JSON.
+
+### `kv_list`
+
+Сигнатура:
+
+```text
+kv_list({
+  scope?: "operator" | "agent" | "agent_shared" | "workspace" | "session" | null,
+  prefix?: string | null,
+  limit?: integer | null,
+  offset?: integer | null
+})
+```
+
+Что делает:
+
+- листит keys текущего namespace;
+- поддерживает prefix filter;
+- default `limit = 50`, hard max `500`;
+- возвращает `next_offset`, если есть следующая page;
+- не возвращает expired записи.
+
+### `kv_delete`
+
+Сигнатура:
+
+```text
+kv_delete({
+  key: string,
+  scope?: "operator" | "agent" | "agent_shared" | "workspace" | "session" | null,
+  expected_revision?: integer | null
+})
+```
+
+Что делает:
+
+- удаляет exact key;
+- destructive tool, проходит через обычный approval layer;
+- поддерживает `expected_revision`, чтобы не удалить запись, которая изменилась после чтения.
 
 ### Post-turn memory curator
 

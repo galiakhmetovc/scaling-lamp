@@ -3,6 +3,7 @@ mod context_repos;
 mod execution_repos;
 mod file_delivery_repos;
 mod inbox_repos;
+mod kv_repos;
 mod mcp_repos;
 mod memory_repos;
 mod payloads;
@@ -91,6 +92,13 @@ pub enum StoreError {
     },
     IntegrityMismatch {
         path: PathBuf,
+    },
+    KvRevisionConflict {
+        scope: String,
+        namespace_id: String,
+        key: String,
+        expected_revision: i64,
+        actual_revision: Option<i64>,
     },
     SchemaMismatch {
         table: &'static str,
@@ -183,6 +191,21 @@ impl fmt::Display for StoreError {
                     path.display()
                 )
             }
+            Self::KvRevisionConflict {
+                scope,
+                namespace_id,
+                key,
+                expected_revision,
+                actual_revision,
+            } => {
+                write!(
+                    formatter,
+                    "kv revision conflict for {scope}/{namespace_id}/{key}: expected {expected_revision}, actual {}",
+                    actual_revision
+                        .map(|revision| revision.to_string())
+                        .unwrap_or_else(|| "<missing>".to_string())
+                )
+            }
             Self::SchemaMismatch { table, reason } => {
                 write!(formatter, "schema mismatch in {table}: {reason}")
             }
@@ -202,6 +225,7 @@ impl Error for StoreError {
             | Self::InvalidArchiveManifest { .. }
             | Self::MissingPayload { .. }
             | Self::IntegrityMismatch { .. }
+            | Self::KvRevisionConflict { .. }
             | Self::SchemaMismatch { .. } => None,
         }
     }

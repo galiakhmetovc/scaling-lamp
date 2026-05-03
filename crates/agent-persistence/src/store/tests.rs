@@ -6,13 +6,14 @@ use crate::{
     AgentProfileRecord, AgentRepository, AgentScheduleRecord, ArtifactRecord, ArtifactRepository,
     ContextOffloadRecord, ContextOffloadRepository, ContextSummaryRepository,
     FileDeliveryRepository, FileDeliveryRequestRecord, JobRecord, JobRepository,
-    KnowledgeRepository, KnowledgeSearchDocRecord, KnowledgeSourceRecord, McpConnectorRecord,
-    McpRepository, MissionRecord, MissionRepository, PersistenceScaffold, PlanRecord,
-    PlanRepository, RunRecord, RunRepository, SessionInboxRepository, SessionRecord,
-    SessionRepository, SessionRetentionRecord, SessionRetentionRepository, SessionSearchDocRecord,
-    SessionSearchRepository, TelegramChatBindingRecord, TelegramChatStatusRecord,
-    TelegramRepository, TelegramUpdateCursorRecord, TelegramUserPairingRecord, ToolCallRecord,
-    ToolCallRepository, TraceLinkRecord, TraceRepository, TranscriptRecord, TranscriptRepository,
+    KnowledgeRepository, KnowledgeSearchDocRecord, KnowledgeSourceRecord, KvEntryRecord,
+    KvRepository, McpConnectorRecord, McpRepository, MissionRecord, MissionRepository,
+    PersistenceScaffold, PlanRecord, PlanRepository, RunRecord, RunRepository,
+    SessionInboxRepository, SessionRecord, SessionRepository, SessionRetentionRecord,
+    SessionRetentionRepository, SessionSearchDocRecord, SessionSearchRepository,
+    TelegramChatBindingRecord, TelegramChatStatusRecord, TelegramRepository,
+    TelegramUpdateCursorRecord, TelegramUserPairingRecord, ToolCallRecord, ToolCallRepository,
+    TraceLinkRecord, TraceRepository, TranscriptRecord, TranscriptRepository,
 };
 use agent_runtime::agent::{
     AgentChainContinuationGrant, AgentProfile, AgentSchedule, AgentScheduleDeliveryMode,
@@ -35,6 +36,123 @@ use std::time::Duration;
 mod telegram;
 mod tool_calls;
 mod trace;
+
+#[test]
+fn kv_repository_scopes_keys_and_round_trips_json_values() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let scaffold = PersistenceScaffold::from_config(crate::AppConfig {
+        data_dir: temp.path().join("state-root"),
+        ..crate::AppConfig::default()
+    });
+    let store = super::PersistenceStore::open(&scaffold).expect("open store");
+
+    let operator_entry = KvEntryRecord {
+        scope: "operator".to_string(),
+        namespace_id: "local-operator".to_string(),
+        key: "preferences/theme".to_string(),
+        value_json: r#"{"color":"green"}"#.to_string(),
+        metadata_json: r#"{"source":"test"}"#.to_string(),
+        revision: 1,
+        created_at: 10,
+        updated_at: 10,
+        expires_at: None,
+    };
+    let workspace_entry = KvEntryRecord {
+        scope: "workspace".to_string(),
+        namespace_id: "teamd-workspace-abc".to_string(),
+        key: "preferences/theme".to_string(),
+        value_json: r#"{"color":"blue"}"#.to_string(),
+        metadata_json: "null".to_string(),
+        revision: 1,
+        created_at: 11,
+        updated_at: 11,
+        expires_at: None,
+    };
+
+    let operator_stored = store
+        .put_kv_entry(&operator_entry, None)
+        .expect("put operator kv");
+    let workspace_stored = store
+        .put_kv_entry(&workspace_entry, None)
+        .expect("put workspace kv");
+
+    assert_eq!(operator_stored.revision, 1);
+    assert_eq!(workspace_stored.revision, 1);
+    assert_eq!(
+        store
+            .get_kv_entry("operator", "local-operator", "preferences/theme", 20)
+            .expect("get operator kv")
+            .expect("operator kv exists")
+            .value_json,
+        r#"{"color":"green"}"#
+    );
+    assert_eq!(
+        store
+            .get_kv_entry("workspace", "teamd-workspace-abc", "preferences/theme", 20)
+            .expect("get workspace kv")
+            .expect("workspace kv exists")
+            .value_json,
+        r#"{"color":"blue"}"#
+    );
+
+    let updated = store
+        .put_kv_entry(
+            &KvEntryRecord {
+                value_json: r#"{"color":"orange"}"#.to_string(),
+                revision: 99,
+                updated_at: 21,
+                ..operator_entry.clone()
+            },
+            Some(1),
+        )
+        .expect("cas update operator kv");
+    assert_eq!(updated.revision, 2);
+    assert_eq!(updated.value_json, r#"{"color":"orange"}"#);
+    assert!(
+        store
+            .put_kv_entry(
+                &KvEntryRecord {
+                    value_json: r#"{"color":"red"}"#.to_string(),
+                    updated_at: 22,
+                    ..operator_entry.clone()
+                },
+                Some(1),
+            )
+            .is_err(),
+        "stale expected_revision must fail"
+    );
+
+    let page = store
+        .list_kv_entries(
+            "operator",
+            "local-operator",
+            Some("preferences/"),
+            10,
+            0,
+            30,
+        )
+        .expect("list kv");
+    assert_eq!(page, vec![updated.clone()]);
+
+    assert!(
+        store
+            .delete_kv_entry("operator", "local-operator", "preferences/theme", Some(2))
+            .expect("delete kv")
+    );
+    assert_eq!(
+        store
+            .get_kv_entry("operator", "local-operator", "preferences/theme", 31)
+            .expect("get deleted kv"),
+        None
+    );
+    assert!(
+        store
+            .get_kv_entry("workspace", "teamd-workspace-abc", "preferences/theme", 31)
+            .expect("get workspace after delete")
+            .is_some(),
+        "deleting operator scope must not delete workspace scope"
+    );
+}
 
 #[test]
 fn open_bootstraps_schema_and_round_trips_structured_and_file_backed_data() {

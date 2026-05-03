@@ -496,6 +496,46 @@ pub struct MemoryDeleteOutput {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct KvEntryOutput {
+    pub scope: String,
+    pub namespace_id: String,
+    pub key: String,
+    pub value: Value,
+    pub metadata: Value,
+    pub revision: i64,
+    pub created_at: i64,
+    pub updated_at: i64,
+    pub expires_at: Option<i64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct KvGetOutput {
+    pub key: String,
+    pub found: bool,
+    pub entry: Option<KvEntryOutput>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct KvPutOutput {
+    pub entry: KvEntryOutput,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct KvListOutput {
+    pub results: Vec<KvEntryOutput>,
+    pub truncated: bool,
+    pub offset: usize,
+    pub limit: usize,
+    pub next_offset: Option<usize>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct KvDeleteOutput {
+    pub key: String,
+    pub deleted: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct KnowledgeSearchResultOutput {
     pub path: String,
     pub kind: KnowledgeSourceKind,
@@ -892,6 +932,10 @@ pub enum ToolOutput {
     MemoryList(MemoryListOutput),
     MemoryUpdate(MemoryUpdateOutput),
     MemoryDelete(MemoryDeleteOutput),
+    KvGet(KvGetOutput),
+    KvPut(KvPutOutput),
+    KvList(KvListOutput),
+    KvDelete(KvDeleteOutput),
     KnowledgeSearch(KnowledgeSearchOutput),
     KnowledgeRead(KnowledgeReadOutput),
     SessionSearch(SessionSearchOutput),
@@ -1388,6 +1432,25 @@ impl ToolOutput {
                     "memory_delete memory_id={} deleted={}",
                     output.memory_id, output.deleted
                 )
+            }
+            Self::KvGet(output) => format!("kv_get key={} found={}", output.key, output.found),
+            Self::KvPut(output) => format!(
+                "kv_put key={} revision={}",
+                output.entry.key, output.entry.revision
+            ),
+            Self::KvList(output) => {
+                if let Some(next_offset) = output.next_offset {
+                    format!(
+                        "kv_list results={} truncated next_offset={}",
+                        output.results.len(),
+                        next_offset
+                    )
+                } else {
+                    format!("kv_list results={}", output.results.len())
+                }
+            }
+            Self::KvDelete(output) => {
+                format!("kv_delete key={} deleted={}", output.key, output.deleted)
             }
             Self::KnowledgeSearch(output) => {
                 if let Some(next_offset) = output.next_offset {
@@ -1976,6 +2039,34 @@ impl ToolOutput {
                 "deleted": output.deleted,
             })
             .to_string(),
+            Self::KvGet(output) => json!({
+                "tool": "kv_get",
+                "key": output.key,
+                "found": output.found,
+                "entry": output.entry.as_ref().map(kv_entry_json),
+            })
+            .to_string(),
+            Self::KvPut(output) => json!({
+                "tool": "kv_put",
+                "entry": kv_entry_json(&output.entry),
+                "note": "kv is exact scoped runtime state in state.sqlite, not semantic memory"
+            })
+            .to_string(),
+            Self::KvList(output) => json!({
+                "tool": "kv_list",
+                "results": output.results.iter().map(kv_entry_json).collect::<Vec<_>>(),
+                "truncated": output.truncated,
+                "offset": output.offset,
+                "limit": output.limit,
+                "next_offset": output.next_offset,
+            })
+            .to_string(),
+            Self::KvDelete(output) => json!({
+                "tool": "kv_delete",
+                "key": output.key,
+                "deleted": output.deleted,
+            })
+            .to_string(),
             Self::KnowledgeSearch(output) => json!({
                 "tool": "knowledge_search",
                 "query": output.query,
@@ -2527,5 +2618,19 @@ fn memory_item_json(memory: &MemoryItemOutput) -> Value {
         "agent_id": memory.agent_id,
         "app_id": memory.app_id,
         "run_id": memory.run_id,
+    })
+}
+
+fn kv_entry_json(entry: &KvEntryOutput) -> Value {
+    json!({
+        "scope": entry.scope,
+        "namespace_id": entry.namespace_id,
+        "key": entry.key,
+        "value": entry.value,
+        "metadata": entry.metadata,
+        "revision": entry.revision,
+        "created_at": entry.created_at,
+        "updated_at": entry.updated_at,
+        "expires_at": entry.expires_at,
     })
 }

@@ -4,13 +4,14 @@ use super::{
     ExecStartInput, FsFindInFilesInput, FsGlobInput, FsInsertTextInput, FsListInput, FsMkdirInput,
     FsMoveInput, FsPatchTextInput, FsReadLinesInput, FsReadTextInput, FsReplaceLinesInput,
     FsSearchTextInput, FsTrashInput, FsWriteMode, FsWriteTextInput, KnowledgeReadInput,
-    KnowledgeReadMode, KnowledgeRoot, KnowledgeSearchInput, KnowledgeSourceKind, MemoryAddInput,
-    MemoryDeleteInput, MemoryListInput, MemoryMessageInput, MemorySearchInput, MemoryUpdateInput,
-    ProcessKillInput, ProcessOutputStatus, ProcessOutputStream, ProcessReadOutputInput,
-    ProcessResultStatus, ProcessWaitInput, PromptBudgetLayerPercentagesInput,
-    PromptBudgetUpdateScope, SessionReadInput, SessionReadMode, SessionSearchInput,
-    SessionWaitInput, SharedProcessRegistry, ToolCall, ToolCatalog, ToolFamily, ToolName,
-    ToolRuntime, WebFetchInput, WebSearchBackend, WebSearchInput, WebToolClient,
+    KnowledgeReadMode, KnowledgeRoot, KnowledgeSearchInput, KnowledgeSourceKind, KvDeleteInput,
+    KvGetInput, KvListInput, KvPutInput, MemoryAddInput, MemoryDeleteInput, MemoryListInput,
+    MemoryMessageInput, MemorySearchInput, MemoryUpdateInput, ProcessKillInput,
+    ProcessOutputStatus, ProcessOutputStream, ProcessReadOutputInput, ProcessResultStatus,
+    ProcessWaitInput, PromptBudgetLayerPercentagesInput, PromptBudgetUpdateScope, SessionReadInput,
+    SessionReadMode, SessionSearchInput, SessionWaitInput, SharedProcessRegistry, ToolCall,
+    ToolCatalog, ToolFamily, ToolName, ToolRuntime, WebFetchInput, WebSearchBackend,
+    WebSearchInput, WebToolClient,
 };
 use crate::memory::SessionRetentionTier;
 use crate::workspace::WorkspaceRef;
@@ -586,6 +587,10 @@ fn automatic_model_definitions_include_session_memory_tools() {
     assert!(names.contains(&ToolName::MemoryList));
     assert!(names.contains(&ToolName::MemoryUpdate));
     assert!(names.contains(&ToolName::MemoryDelete));
+    assert!(names.contains(&ToolName::KvGet));
+    assert!(names.contains(&ToolName::KvPut));
+    assert!(names.contains(&ToolName::KvList));
+    assert!(names.contains(&ToolName::KvDelete));
 }
 
 #[test]
@@ -1187,6 +1192,66 @@ fn tool_call_parses_semantic_memory_inputs() {
         delete,
         ToolCall::MemoryDelete(MemoryDeleteInput {
             memory_id: "mem_1".to_string(),
+        })
+    );
+}
+
+#[test]
+fn tool_call_parses_kv_inputs() {
+    let put = ToolCall::from_openai_function(
+        "kv_put",
+        r#"{"key":"state/current_task","value":{"id":"task-1"},"scope":"agent_shared","metadata":{"source":"test"},"expected_revision":0,"ttl_seconds":3600}"#,
+    )
+    .expect("parse kv_put");
+    let get = ToolCall::from_openai_function(
+        "kv_get",
+        r#"{"key":"state/current_task","scope":"agent_shared"}"#,
+    )
+    .expect("parse kv_get");
+    let list = ToolCall::from_openai_function(
+        "kv_list",
+        r#"{"scope":"workspace","prefix":"state/","limit":10,"offset":20}"#,
+    )
+    .expect("parse kv_list");
+    let delete = ToolCall::from_openai_function(
+        "kv_delete",
+        r#"{"key":"state/current_task","scope":"agent_shared","expected_revision":2}"#,
+    )
+    .expect("parse kv_delete");
+
+    assert_eq!(
+        put,
+        ToolCall::KvPut(KvPutInput {
+            key: "state/current_task".to_string(),
+            value: serde_json::json!({"id":"task-1"}),
+            scope: Some("agent_shared".to_string()),
+            metadata: serde_json::json!({"source":"test"}),
+            expected_revision: Some(0),
+            ttl_seconds: Some(3600),
+        })
+    );
+    assert_eq!(
+        get,
+        ToolCall::KvGet(KvGetInput {
+            key: "state/current_task".to_string(),
+            scope: Some("agent_shared".to_string()),
+        })
+    );
+    assert_eq!(
+        list,
+        ToolCall::KvList(KvListInput {
+            scope: Some("workspace".to_string()),
+            prefix: Some("state/".to_string()),
+            limit: Some(10),
+            offset: Some(20),
+        })
+    );
+    assert_eq!(
+        delete,
+        ToolCall::KvDelete(KvDeleteInput {
+            key: "state/current_task".to_string(),
+            scope: Some("agent_shared".to_string()),
+            expected_revision: Some(2),
         })
     );
 }

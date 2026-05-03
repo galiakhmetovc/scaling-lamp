@@ -6,48 +6,13 @@ use agent_runtime::tool::{
 };
 use reqwest::blocking::{Client, RequestBuilder};
 use serde_json::{Map, Value, json};
-use sha2::{Digest, Sha256};
 use std::time::Duration;
 
-const AGENT_SHARED_MEMORY_ID: &str = "teamd-agent-shared";
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum MemoryScope {
-    Operator,
-    Agent,
-    AgentShared,
-    Workspace,
-    Session,
-}
-
-impl MemoryScope {
-    fn parse(raw: Option<&str>) -> Result<Self, ExecutionError> {
-        match raw.map(str::trim).filter(|value| !value.is_empty()) {
-            None | Some("workspace") => Ok(Self::Workspace),
-            Some("operator") => Ok(Self::Operator),
-            Some("agent") => Ok(Self::Agent),
-            Some("agent_shared") | Some("shared") => Ok(Self::AgentShared),
-            Some("session") => Ok(Self::Session),
-            Some(other) => Err(invalid_mem0_tool(format!(
-                "unsupported memory scope {other}; use operator, agent, agent_shared, workspace, or session"
-            ))),
-        }
-    }
-
-    fn as_str(self) -> &'static str {
-        match self {
-            Self::Operator => "operator",
-            Self::Agent => "agent",
-            Self::AgentShared => "agent_shared",
-            Self::Workspace => "workspace",
-            Self::Session => "session",
-        }
-    }
-}
+use super::scopes::{AGENT_SHARED_SCOPE_ID, RuntimeScope, workspace_scope_id};
 
 #[derive(Debug, Clone)]
 struct Mem0ScopeIds {
-    scope: MemoryScope,
+    scope: RuntimeScope,
     user_id: Option<String>,
     agent_id: Option<String>,
     app_id: Option<String>,
@@ -263,32 +228,32 @@ impl ExecutionService {
         session: &Session,
         raw_scope: Option<&str>,
     ) -> Result<Mem0ScopeIds, ExecutionError> {
-        let scope = MemoryScope::parse(raw_scope)?;
+        let scope = RuntimeScope::parse(raw_scope, "memory")?;
         let user_id = match scope {
-            MemoryScope::Operator => Some(self.config.mem0.default_user_id.trim().to_string()),
-            MemoryScope::Agent
-            | MemoryScope::AgentShared
-            | MemoryScope::Workspace
-            | MemoryScope::Session => None,
+            RuntimeScope::Operator => Some(self.config.mem0.default_user_id.trim().to_string()),
+            RuntimeScope::Agent
+            | RuntimeScope::AgentShared
+            | RuntimeScope::Workspace
+            | RuntimeScope::Session => None,
         };
         let agent_id = match scope {
-            MemoryScope::Agent => Some(session.agent_profile_id.clone()),
-            MemoryScope::AgentShared => Some(AGENT_SHARED_MEMORY_ID.to_string()),
-            MemoryScope::Operator | MemoryScope::Workspace | MemoryScope::Session => None,
+            RuntimeScope::Agent => Some(session.agent_profile_id.clone()),
+            RuntimeScope::AgentShared => Some(AGENT_SHARED_SCOPE_ID.to_string()),
+            RuntimeScope::Operator | RuntimeScope::Workspace | RuntimeScope::Session => None,
         };
         let app_id = match scope {
-            MemoryScope::Workspace => Some(workspace_app_id(session)),
-            MemoryScope::Operator
-            | MemoryScope::Agent
-            | MemoryScope::AgentShared
-            | MemoryScope::Session => None,
+            RuntimeScope::Workspace => Some(workspace_scope_id(session)),
+            RuntimeScope::Operator
+            | RuntimeScope::Agent
+            | RuntimeScope::AgentShared
+            | RuntimeScope::Session => None,
         };
         let run_id = match scope {
-            MemoryScope::Session => Some(session.id.clone()),
-            MemoryScope::Operator
-            | MemoryScope::Agent
-            | MemoryScope::AgentShared
-            | MemoryScope::Workspace => None,
+            RuntimeScope::Session => Some(session.id.clone()),
+            RuntimeScope::Operator
+            | RuntimeScope::Agent
+            | RuntimeScope::AgentShared
+            | RuntimeScope::Workspace => None,
         };
         Ok(Mem0ScopeIds {
             scope,
@@ -450,13 +415,6 @@ fn mem0_entity_filter(ids: &Mem0ScopeIds) -> Map<String, Value> {
         filter.insert("run_id".to_string(), Value::String(run_id.clone()));
     }
     filter
-}
-
-fn workspace_app_id(session: &Session) -> String {
-    let workspace = session.workspace_root.display().to_string();
-    let digest = Sha256::digest(workspace.as_bytes());
-    let hex = format!("{digest:x}");
-    format!("teamd-workspace-{}", &hex[..16])
 }
 
 fn send_mem0_json(request: RequestBuilder) -> Result<Value, ExecutionError> {
@@ -693,7 +651,7 @@ mod tests {
     #[test]
     fn search_body_uses_mem0_filters_and_top_k() {
         let ids = Mem0ScopeIds {
-            scope: MemoryScope::Workspace,
+            scope: RuntimeScope::Workspace,
             user_id: None,
             agent_id: None,
             app_id: Some("teamd-workspace-abc".to_string()),

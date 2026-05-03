@@ -167,6 +167,19 @@ pub(super) fn bootstrap_schema(connection: &Connection) -> Result<(), StoreError
              value TEXT
          );
 
+         CREATE TABLE IF NOT EXISTS kv_entries (
+             scope TEXT NOT NULL,
+             namespace_id TEXT NOT NULL,
+             key TEXT NOT NULL,
+             value_json TEXT NOT NULL,
+             metadata_json TEXT NOT NULL DEFAULT 'null',
+             revision INTEGER NOT NULL,
+             created_at INTEGER NOT NULL,
+             updated_at INTEGER NOT NULL,
+             expires_at INTEGER,
+             PRIMARY KEY(scope, namespace_id, key)
+         );
+
          CREATE TABLE IF NOT EXISTS agent_chain_continuations (
              chain_id TEXT PRIMARY KEY,
              reason TEXT NOT NULL,
@@ -377,6 +390,8 @@ pub(super) fn bootstrap_schema(connection: &Connection) -> Result<(), StoreError
          CREATE INDEX IF NOT EXISTS idx_session_inbox_events_session_id ON session_inbox_events(session_id);
          CREATE INDEX IF NOT EXISTS idx_session_inbox_events_status_available_at ON session_inbox_events(status, available_at);
          CREATE INDEX IF NOT EXISTS idx_agent_profiles_updated_at ON agent_profiles(updated_at);
+         CREATE INDEX IF NOT EXISTS idx_kv_entries_scope_namespace_key ON kv_entries(scope, namespace_id, key);
+         CREATE INDEX IF NOT EXISTS idx_kv_entries_expires_at ON kv_entries(expires_at);
          CREATE INDEX IF NOT EXISTS idx_agent_chain_continuations_granted_at ON agent_chain_continuations(granted_at);
          CREATE INDEX IF NOT EXISTS idx_agent_schedules_next_fire_at ON agent_schedules(next_fire_at);
          CREATE INDEX IF NOT EXISTS idx_context_summaries_updated_at ON context_summaries(updated_at);
@@ -445,6 +460,15 @@ pub(super) fn validate_schema(connection: &Connection) -> Result<(), StoreError>
     validate_column(connection, "agent_profiles", "updated_at", true)?;
     validate_column(connection, "daemon_state", "key", true)?;
     validate_column(connection, "daemon_state", "value", false)?;
+    validate_column(connection, "kv_entries", "scope", true)?;
+    validate_column(connection, "kv_entries", "namespace_id", true)?;
+    validate_column(connection, "kv_entries", "key", true)?;
+    validate_column(connection, "kv_entries", "value_json", true)?;
+    validate_column(connection, "kv_entries", "metadata_json", true)?;
+    validate_column(connection, "kv_entries", "revision", true)?;
+    validate_column(connection, "kv_entries", "created_at", true)?;
+    validate_column(connection, "kv_entries", "updated_at", true)?;
+    validate_column(connection, "kv_entries", "expires_at", false)?;
     validate_column(connection, "agent_chain_continuations", "chain_id", true)?;
     validate_column(connection, "agent_chain_continuations", "reason", true)?;
     validate_column(

@@ -136,6 +136,10 @@ impl ToolCall {
             Self::MemoryList(_) => ToolName::MemoryList,
             Self::MemoryUpdate(_) => ToolName::MemoryUpdate,
             Self::MemoryDelete(_) => ToolName::MemoryDelete,
+            Self::KvGet(_) => ToolName::KvGet,
+            Self::KvPut(_) => ToolName::KvPut,
+            Self::KvList(_) => ToolName::KvList,
+            Self::KvDelete(_) => ToolName::KvDelete,
             Self::KnowledgeSearch(_) => ToolName::KnowledgeSearch,
             Self::KnowledgeRead(_) => ToolName::KnowledgeRead,
             Self::SessionSearch(_) => ToolName::SessionSearch,
@@ -217,6 +221,10 @@ impl ToolCall {
             | Self::MemoryList(_)
             | Self::MemoryUpdate(_)
             | Self::MemoryDelete(_)
+            | Self::KvGet(_)
+            | Self::KvPut(_)
+            | Self::KvList(_)
+            | Self::KvDelete(_)
             | Self::KnowledgeSearch(_)
             | Self::KnowledgeRead(_)
             | Self::SessionSearch(_)
@@ -507,6 +515,36 @@ impl ToolCall {
                 input.text.len()
             ),
             Self::MemoryDelete(input) => format!("memory_delete memory_id={}", input.memory_id),
+            Self::KvGet(input) => format!(
+                "kv_get scope={} key={}",
+                input.scope.as_deref().unwrap_or("default"),
+                input.key
+            ),
+            Self::KvPut(input) => format!(
+                "kv_put scope={} key={} expected_revision={}",
+                input.scope.as_deref().unwrap_or("default"),
+                input.key,
+                input
+                    .expected_revision
+                    .map(|revision| revision.to_string())
+                    .unwrap_or_else(|| "<none>".to_string())
+            ),
+            Self::KvList(input) => format!(
+                "kv_list scope={} prefix={} offset={} limit={}",
+                input.scope.as_deref().unwrap_or("default"),
+                input.prefix.as_deref().unwrap_or(""),
+                input.offset.unwrap_or(0),
+                input.limit.unwrap_or(0)
+            ),
+            Self::KvDelete(input) => format!(
+                "kv_delete scope={} key={} expected_revision={}",
+                input.scope.as_deref().unwrap_or("default"),
+                input.key,
+                input
+                    .expected_revision
+                    .map(|revision| revision.to_string())
+                    .unwrap_or_else(|| "<none>".to_string())
+            ),
             Self::KnowledgeSearch(input) => format!(
                 "knowledge_search query={} offset={} limit={}",
                 input.query,
@@ -975,6 +1013,30 @@ impl ToolCall {
                 MEMORY_DELETE_STRING_REPAIRS,
             )
             .map(Self::MemoryDelete),
+            "kv_get" => serde_json::from_str(arguments)
+                .map(Self::KvGet)
+                .map_err(|source| ToolCallParseError::InvalidArguments {
+                    name: name.to_string(),
+                    source,
+                }),
+            "kv_put" => serde_json::from_str(arguments)
+                .map(Self::KvPut)
+                .map_err(|source| ToolCallParseError::InvalidArguments {
+                    name: name.to_string(),
+                    source,
+                }),
+            "kv_list" => serde_json::from_str(arguments)
+                .map(Self::KvList)
+                .map_err(|source| ToolCallParseError::InvalidArguments {
+                    name: name.to_string(),
+                    source,
+                }),
+            "kv_delete" => serde_json::from_str(arguments)
+                .map(Self::KvDelete)
+                .map_err(|source| ToolCallParseError::InvalidArguments {
+                    name: name.to_string(),
+                    source,
+                }),
             "knowledge_search" => serde_json::from_str(arguments)
                 .map(Self::KnowledgeSearch)
                 .map_err(|source| ToolCallParseError::InvalidArguments {

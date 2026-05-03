@@ -14,16 +14,16 @@ pub use config::{
 pub use records::{
     AgentChainContinuationRecord, AgentProfileRecord, AgentScheduleRecord, ArtifactRecord,
     ContextOffloadRecord, ContextSummaryRecord, FileDeliveryRequestRecord, JobRecord,
-    KnowledgeSearchDocRecord, KnowledgeSourceRecord, McpConnectorRecord, MissionRecord, PlanRecord,
-    RecordConversionError, RunRecord, SessionInboxEventRecord, SessionRecord,
-    SessionRetentionRecord, SessionSearchDocRecord, TelegramChatBindingRecord,
+    KnowledgeSearchDocRecord, KnowledgeSourceRecord, KvEntryRecord, McpConnectorRecord,
+    MissionRecord, PlanRecord, RecordConversionError, RunRecord, SessionInboxEventRecord,
+    SessionRecord, SessionRetentionRecord, SessionSearchDocRecord, TelegramChatBindingRecord,
     TelegramChatStatusRecord, TelegramUpdateCursorRecord, TelegramUserPairingRecord,
     ToolCallRecord, TraceLinkRecord, TranscriptRecord,
 };
 pub use repository::{
     AgentRepository, ArtifactRepository, ContextOffloadRepository, ContextSummaryRepository,
-    FileDeliveryRepository, JobRepository, KnowledgeRepository, McpRepository, MissionRepository,
-    PlanRepository, RunRepository, RunSummaryRollup, SessionActiveJobCounts,
+    FileDeliveryRepository, JobRepository, KnowledgeRepository, KvRepository, McpRepository,
+    MissionRepository, PlanRepository, RunRepository, RunSummaryRollup, SessionActiveJobCounts,
     SessionInboxRepository, SessionRepository, SessionRetentionRepository, SessionSearchRepository,
     TelegramRepository, ToolCallRepository, TraceRepository, TranscriptRepository,
     TranscriptSessionStats,

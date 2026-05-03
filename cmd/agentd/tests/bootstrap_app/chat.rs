@@ -1,10 +1,12 @@
 use super::support::*;
+use agent_persistence::KvRepository;
 use agent_runtime::tool::{McpPromptMessageOutput, McpResourceContentOutput};
 use agentd::mcp::{
     McpDiscoveredPrompt, McpDiscoveredPromptArgument, McpDiscoveredResource, McpDiscoveredTool,
     MockMcpConnectorRuntime, MockMcpPromptGet, MockMcpResourceRead, MockMcpToolResult,
     SharedMcpRegistry,
 };
+use sha2::{Digest, Sha256};
 
 #[test]
 fn execute_chat_turn_creates_a_run_and_appends_transcript_history() {
@@ -1080,6 +1082,129 @@ fn execute_chat_turn_can_finish_after_an_allowed_web_tool_call() {
     assert!(normalized_web.contains("get "));
     assert!(normalized_web.contains("/doc"));
     assert!(web_base.contains("127.0.0.1"));
+}
+
+#[test]
+fn execute_chat_turn_can_use_scoped_kv_tools() {
+    let put_arguments = serde_json::json!({
+        "scope": "workspace",
+        "key": "project/current",
+        "value": {"name": "teamD", "phase": "kv"},
+        "metadata": {"source": "test"}
+    })
+    .to_string();
+    let put_arguments = serde_json::to_string(&put_arguments).expect("serialize put arguments");
+    let get_arguments = serde_json::json!({
+        "scope": "workspace",
+        "key": "project/current"
+    })
+    .to_string();
+    let get_arguments = serde_json::to_string(&get_arguments).expect("serialize get arguments");
+    let first_provider_response = format!(
+        r#"{{
+                "id":"resp_kv_put",
+                "model":"gpt-5.4",
+                "output":[
+                    {{
+                        "id":"fc_1",
+                        "type":"function_call",
+                        "status":"completed",
+                        "call_id":"call_kv_put",
+                        "name":"kv_put",
+                        "arguments":{put_arguments}
+                    }}
+                ],
+                "usage":{{"input_tokens":19,"output_tokens":7,"total_tokens":26}}
+            }}"#
+    );
+    let second_provider_response = format!(
+        r#"{{
+                "id":"resp_kv_get",
+                "model":"gpt-5.4",
+                "output":[
+                    {{
+                        "id":"fc_2",
+                        "type":"function_call",
+                        "status":"completed",
+                        "call_id":"call_kv_get",
+                        "name":"kv_get",
+                        "arguments":{get_arguments}
+                    }}
+                ],
+                "usage":{{"input_tokens":31,"output_tokens":6,"total_tokens":37}}
+            }}"#
+    );
+    let (provider_api_base, provider_requests, provider_handle) = spawn_json_server_sequence(vec![
+        first_provider_response,
+        second_provider_response,
+        openai_message_response_json("resp_kv_final", "KV state stored and read."),
+    ]);
+    let temp = tempfile::tempdir().expect("tempdir");
+    let app = build_from_config(AppConfig {
+        data_dir: temp.path().join("state-root"),
+        daemon: Default::default(),
+        provider: ConfiguredProvider {
+            kind: ProviderKind::OpenAiResponses,
+            api_base: Some(format!("{provider_api_base}/v1")),
+            api_key: Some("test-key".to_string()),
+            default_model: Some("gpt-5.4".to_string()),
+            ..ConfiguredProvider::default()
+        },
+        ..AppConfig::default()
+    })
+    .expect("build app");
+    let store = PersistenceStore::open(&app.persistence).expect("open store");
+
+    store
+        .put_session(&SessionRecord {
+            id: "session-kv-tools".to_string(),
+            title: "KV tool session".to_string(),
+            prompt_override: Some("Use kv tools when useful.".to_string()),
+            settings_json: serde_json::to_string(&SessionSettings::default())
+                .expect("serialize settings"),
+            workspace_root: app.runtime.workspace.root.display().to_string(),
+            agent_profile_id: "default".to_string(),
+            active_mission_id: None,
+            parent_session_id: None,
+            parent_job_id: None,
+            delegation_label: None,
+            created_at: 1,
+            updated_at: 1,
+        })
+        .expect("put session");
+
+    let report = app
+        .execute_chat_turn("session-kv-tools", "Store current project state", 10)
+        .expect("execute chat turn");
+    let first_request = provider_requests.recv().expect("first provider request");
+    let second_request = provider_requests.recv().expect("second provider request");
+    let third_request = provider_requests.recv().expect("third provider request");
+    provider_handle.join().expect("join provider server");
+
+    assert_eq!(report.response_id, "resp_kv_final");
+    assert_eq!(report.output_text, "KV state stored and read.");
+    assert!(first_request.contains("\"name\":\"kv_put\""));
+    assert!(first_request.contains("\"name\":\"kv_get\""));
+    assert!(second_request.contains("\"call_id\":\"call_kv_put\""));
+    assert!(second_request.contains("project/current"));
+    assert!(second_request.contains("revision"));
+    assert!(third_request.contains("\"call_id\":\"call_kv_get\""));
+    assert!(third_request.contains("found"));
+    assert!(third_request.contains("phase"));
+
+    let workspace = app.runtime.workspace.root.display().to_string();
+    let digest = Sha256::digest(workspace.as_bytes());
+    let namespace_id = format!("teamd-workspace-{}", &format!("{digest:x}")[..16]);
+    let stored = store
+        .get_kv_entry("workspace", &namespace_id, "project/current", 10)
+        .expect("get kv entry")
+        .expect("kv entry exists");
+    assert_eq!(stored.revision, 1);
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&stored.value_json)
+            .expect("parse stored kv value"),
+        serde_json::json!({"name": "teamD", "phase": "kv"})
+    );
 }
 
 #[test]
