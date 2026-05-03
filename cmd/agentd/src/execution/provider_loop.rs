@@ -2,7 +2,9 @@ use super::provider_completion::{
     CompletionGateDecision, build_completion_nudge_message, completion_continuation_messages,
     empty_response_continuation_messages,
 };
-use super::provider_cursor::{MAX_EMPTY_RESPONSE_RECOVERIES, ProviderLoopCursor};
+use super::provider_cursor::{
+    MAX_EMPTY_RESPONSE_RECOVERIES, ProviderLoopCursor, ToolSignatureObservation,
+};
 use super::provider_ids::sanitize_identifier;
 #[cfg(test)]
 use super::provider_ledger::TOOL_RESULT_PREVIEW_CHAR_LIMIT;
@@ -2985,9 +2987,79 @@ impl ExecutionService {
                     max_rounds: cursor.max_rounds,
                 },
             );
-            cursor.remember_tool_signature(&response)?;
+            let tool_signature_observation = cursor.remember_tool_signature(&response);
             cursor.note_assistant_tool_calls(&response);
             cursor.begin_tool_round();
+            if let ToolSignatureObservation::RepeatedSuppressed {
+                consecutive_repeats,
+                signature,
+            } = tool_signature_observation
+            {
+                let run_id = run.snapshot().id.clone();
+                let reason = format!(
+                    "repeated identical tool call suppressed after {consecutive_repeats} consecutive attempts"
+                );
+                run.record_system_note(
+                    format!("provider loop guard: {reason}; signature={signature}"),
+                    now,
+                )
+                .map_err(ExecutionError::RunTransition)?;
+                for tool_call in &response.tool_calls {
+                    let model_output = Self::non_retryable_provider_tool_output(
+                        &tool_call.name,
+                        &reason,
+                        serde_json::json!({
+                            "provider_tool_call_id": tool_call.call_id.as_str(),
+                            "tool_name": tool_call.name.as_str(),
+                            "arguments": tool_call.arguments.as_str(),
+                            "consecutive_repeats": consecutive_repeats,
+                            "signature": signature.as_str(),
+                            "hint": "Do not call the same tool with the same arguments again. Inspect the previous tool result, change arguments, choose another tool, or answer the user with the current limitation.",
+                        }),
+                    );
+                    let summary = format!("{} repeated signature suppressed", tool_call.name);
+                    record_tool_call_ledger(ToolCallLedgerUpdate {
+                        store,
+                        session_id,
+                        run_id: &run_id,
+                        provider_tool_call_id: &tool_call.call_id,
+                        tool_name: &tool_call.name,
+                        arguments_json: &tool_call.arguments,
+                        summary: &summary,
+                        status: ToolExecutionStatus::Failed,
+                        error: Some(reason.clone()),
+                        now,
+                    })?;
+                    Self::emit_event(
+                        observer,
+                        ChatExecutionEvent::ToolStatus {
+                            tool_call_id: tool_call.call_id.clone(),
+                            tool_name: tool_call.name.clone(),
+                            summary: reason.clone(),
+                            status: ToolExecutionStatus::Failed,
+                        },
+                    );
+                    run.record_tool_completion(
+                        format!("{} suppressed: {reason}", tool_call.name),
+                        now,
+                    )
+                    .map_err(ExecutionError::RunTransition)?;
+                    record_tool_call_result(ToolCallResultLedgerUpdate {
+                        store,
+                        session_id,
+                        run_id: &run_id,
+                        provider_tool_call_id: &tool_call.call_id,
+                        tool_name: &tool_call.name,
+                        result_summary: &reason,
+                        result_output: &model_output,
+                        now,
+                    })?;
+                    cursor.record_tool_output(&tool_call.call_id, model_output);
+                }
+                cursor.advance_after_response(&response);
+                self.persist_run(store, run)?;
+                continue;
+            }
             for tool_call in &response.tool_calls {
                 let run_id = run.snapshot().id.clone();
                 let (parsed, definition) =
@@ -3410,7 +3482,7 @@ mod tests {
     }
 
     #[test]
-    fn remember_tool_signature_blocks_repeated_session_wait_with_actionable_error() {
+    fn remember_tool_signature_suppresses_repeated_session_wait_without_failing_run() {
         let provider = provider();
         let mut cursor = ProviderLoopCursor::new(&provider, None, 24);
         let response = response_with_tool_call(
@@ -3418,23 +3490,26 @@ mod tests {
             r#"{"max_bytes":8000,"max_items":10,"mode":"transcript","session_id":"session-agentmsg-1","wait_timeout_ms":0}"#,
         );
 
-        cursor
-            .remember_tool_signature(&response)
-            .expect("first repeated session_wait should be tracked");
-        cursor
-            .remember_tool_signature(&response)
-            .expect("second repeated session_wait should be tracked");
-        let error = cursor
-            .remember_tool_signature(&response)
-            .expect_err("third repeated session_wait should be blocked");
-        let error = error.to_string();
-        assert!(error.contains("provider repeated tool-call signature 3 times in a row"));
-        assert!(error.contains("session_wait"));
-        assert!(error.contains("Stop repeating the same tool call"));
+        assert_eq!(
+            cursor.remember_tool_signature(&response),
+            ToolSignatureObservation::Accepted
+        );
+        assert_eq!(
+            cursor.remember_tool_signature(&response),
+            ToolSignatureObservation::Accepted
+        );
+        let observation = cursor.remember_tool_signature(&response);
+        assert!(matches!(
+            observation,
+            ToolSignatureObservation::RepeatedSuppressed {
+                consecutive_repeats: 3,
+                ..
+            }
+        ));
     }
 
     #[test]
-    fn remember_tool_signature_blocks_repeated_continue_later_with_actionable_error() {
+    fn remember_tool_signature_suppresses_repeated_continue_later_without_failing_run() {
         let provider = provider();
         let mut cursor = ProviderLoopCursor::new(&provider, None, 24);
         let response = response_with_tool_call(
@@ -3442,19 +3517,22 @@ mod tests {
             r#"{"delay_seconds":120,"handoff_payload":"say hello","delivery_mode":"existing_session"}"#,
         );
 
-        cursor
-            .remember_tool_signature(&response)
-            .expect("first repeated continue_later should be tracked");
-        cursor
-            .remember_tool_signature(&response)
-            .expect("second repeated continue_later should be tracked");
-        let error = cursor
-            .remember_tool_signature(&response)
-            .expect_err("third repeated continue_later should be blocked");
-        let error = error.to_string();
-        assert!(error.contains("provider repeated tool-call signature 3 times in a row"));
-        assert!(error.contains("continue_later"));
-        assert!(error.contains("Stop repeating the same tool call"));
+        assert_eq!(
+            cursor.remember_tool_signature(&response),
+            ToolSignatureObservation::Accepted
+        );
+        assert_eq!(
+            cursor.remember_tool_signature(&response),
+            ToolSignatureObservation::Accepted
+        );
+        let observation = cursor.remember_tool_signature(&response);
+        assert!(matches!(
+            observation,
+            ToolSignatureObservation::RepeatedSuppressed {
+                consecutive_repeats: 3,
+                ..
+            }
+        ));
     }
 
     #[test]

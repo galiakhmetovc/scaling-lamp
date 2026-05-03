@@ -7,8 +7,9 @@ use std::fmt;
 use super::parse_repair::{
     BROWSER_OUTPUT_PATH_REPAIRS, BROWSER_TEXT_STRING_REPAIRS, BareStringFieldRepair,
     CONTINUE_LATER_ENUM_REPAIRS, DELIVER_FILE_STRING_REPAIRS, EnumLikeFieldRepair,
-    KNOWLEDGE_READ_ENUM_REPAIRS, SCHEDULE_ENUM_REPAIRS, SESSION_READ_ENUM_REPAIRS,
-    SESSION_WAIT_ENUM_REPAIRS, repair_bare_enum_like_values, repair_bare_string_field_values,
+    KNOWLEDGE_READ_ENUM_REPAIRS, MEMORY_ADD_STRING_REPAIRS, SCHEDULE_ENUM_REPAIRS,
+    SESSION_READ_ENUM_REPAIRS, SESSION_WAIT_ENUM_REPAIRS, repair_bare_enum_like_values,
+    repair_bare_string_field_values,
 };
 use super::{
     KnowledgeReadMode, McpCallInput, ProcessOutputStream, SessionReadMode, ToolCall, ToolName,
@@ -943,12 +944,12 @@ impl ToolCall {
                 DELIVER_FILE_STRING_REPAIRS,
             )
             .map(Self::DeliverFile),
-            "memory_add" => serde_json::from_str(arguments)
-                .map(Self::MemoryAdd)
-                .map_err(|source| ToolCallParseError::InvalidArguments {
-                    name: name.to_string(),
-                    source,
-                }),
+            "memory_add" => Self::parse_arguments_with_bare_string_repair(
+                name,
+                arguments,
+                MEMORY_ADD_STRING_REPAIRS,
+            )
+            .map(Self::MemoryAdd),
             "memory_search" => serde_json::from_str(arguments)
                 .map(Self::MemorySearch)
                 .map_err(|source| ToolCallParseError::InvalidArguments {

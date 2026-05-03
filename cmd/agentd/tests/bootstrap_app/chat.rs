@@ -3261,7 +3261,7 @@ fn approval_approve_resumes_a_mission_turn_and_completes_the_job() {
 }
 
 #[test]
-fn execute_chat_turn_fails_when_the_provider_repeats_the_same_tool_signature() {
+fn execute_chat_turn_suppresses_repeated_tool_signature_without_failing_run() {
     let (web_base, web_requests, web_handle) =
         spawn_text_server_sequence(vec!["loop doc", "loop doc"]);
     let repeated_tool_response = format!(
@@ -3282,10 +3282,31 @@ fn execute_chat_turn_fails_when_the_provider_repeats_the_same_tool_signature() {
             }}"#,
         web_base
     );
+    let final_response = r#"{
+                "id":"resp_tool_loop_final",
+                "model":"gpt-5.4",
+                "output":[
+                    {
+                        "id":"msg_tool_loop_final",
+                        "type":"message",
+                        "status":"completed",
+                        "role":"assistant",
+                        "content":[
+                            {
+                                "type":"output_text",
+                                "text":"Stopped duplicate fetch loop."
+                            }
+                        ]
+                    }
+                ],
+                "usage":{"input_tokens":40,"output_tokens":6,"total_tokens":46}
+            }"#
+    .to_string();
     let (provider_api_base, provider_requests, provider_handle) = spawn_json_server_sequence(vec![
         repeated_tool_response.clone(),
         repeated_tool_response.clone(),
         repeated_tool_response,
+        final_response,
     ]);
     let temp = tempfile::tempdir().expect("tempdir");
     let app = build_from_config(AppConfig {
@@ -3321,9 +3342,9 @@ fn execute_chat_turn_fails_when_the_provider_repeats_the_same_tool_signature() {
         })
         .expect("put session");
 
-    let error = app
+    let report = app
         .execute_chat_turn("session-chat-loop", "Fetch the local doc", 10)
-        .expect_err("repeated tool signature must fail");
+        .expect("repeated tool signature should be suppressed");
     let first_request = provider_requests
         .recv_timeout(Duration::from_secs(1))
         .expect("first provider request");
@@ -3333,6 +3354,9 @@ fn execute_chat_turn_fails_when_the_provider_repeats_the_same_tool_signature() {
     let third_request = provider_requests
         .recv_timeout(Duration::from_secs(1))
         .expect("third provider request");
+    let fourth_request = provider_requests
+        .recv_timeout(Duration::from_secs(1))
+        .expect("fourth provider request");
     let web_request = web_requests
         .recv_timeout(Duration::from_secs(1))
         .expect("web request");
@@ -3342,23 +3366,14 @@ fn execute_chat_turn_fails_when_the_provider_repeats_the_same_tool_signature() {
     provider_handle.join().expect("join provider server");
     web_handle.join().expect("join web server");
 
-    assert!(
-        error
-            .to_string()
-            .contains("provider repeated tool-call signature 3 times in a row")
-    );
+    assert_eq!(report.output_text, "Stopped duplicate fetch loop.");
 
     let run = store
         .get_run("run-chat-session-chat-loop-10")
         .expect("get run")
         .expect("run exists");
-    assert_eq!(run.status, "failed");
-    assert!(
-        run.error
-            .as_deref()
-            .unwrap_or_default()
-            .contains("provider repeated tool-call signature 3 times in a row")
-    );
+    assert_eq!(run.status, "completed");
+    assert_eq!(run.result.as_deref(), Some("Stopped duplicate fetch loop."));
 
     let normalized_first = first_request.to_ascii_lowercase();
     assert!(normalized_first.contains("\"name\":\"web_fetch\""));
@@ -3366,6 +3381,9 @@ fn execute_chat_turn_fails_when_the_provider_repeats_the_same_tool_signature() {
     assert!(normalized_second.contains("\"previous_response_id\":\"resp_tool_loop\""));
     let normalized_third = third_request.to_ascii_lowercase();
     assert!(normalized_third.contains("\"previous_response_id\":\"resp_tool_loop\""));
+    let normalized_fourth = fourth_request.to_ascii_lowercase();
+    assert!(normalized_fourth.contains("\"previous_response_id\":\"resp_tool_loop\""));
+    assert!(normalized_fourth.contains("repeated identical tool call suppressed"));
     let normalized_web = web_request.to_ascii_lowercase();
     assert!(normalized_web.contains("get "));
     let normalized_second_web = second_web_request.to_ascii_lowercase();

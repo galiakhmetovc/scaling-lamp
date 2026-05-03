@@ -58,6 +58,9 @@ pub(super) const DELIVER_FILE_STRING_REPAIRS: &[BareStringFieldRepair] = &[
     BareStringFieldRepair { field: "target" },
 ];
 
+pub(super) const MEMORY_ADD_STRING_REPAIRS: &[BareStringFieldRepair] =
+    &[BareStringFieldRepair { field: "text" }];
+
 pub(super) fn repair_bare_enum_like_values(
     input: &str,
     repairs: &[EnumLikeFieldRepair],

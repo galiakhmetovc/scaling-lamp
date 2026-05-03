@@ -1,4 +1,3 @@
-use super::ExecutionError;
 use agent_runtime::provider::{
     ProviderContinuationMessage, ProviderDriver, ProviderMessage, ProviderRequest,
     ProviderResponse, ProviderStreamMode, ProviderToolCall, ProviderToolDefinition,
@@ -11,6 +10,15 @@ use agent_runtime::tool::ToolName;
 
 const MAX_CONSECUTIVE_IDENTICAL_TOOL_SIGNATURES: usize = 3;
 pub(super) const MAX_EMPTY_RESPONSE_RECOVERIES: usize = 1;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) enum ToolSignatureObservation {
+    Accepted,
+    RepeatedSuppressed {
+        consecutive_repeats: usize,
+        signature: String,
+    },
+}
 
 #[derive(Debug, Clone)]
 pub(super) struct ProviderLoopCursor {
@@ -172,7 +180,7 @@ impl ProviderLoopCursor {
     pub(super) fn remember_tool_signature(
         &mut self,
         response: &ProviderResponse,
-    ) -> Result<(), ExecutionError> {
+    ) -> ToolSignatureObservation {
         let signature = response
             .tool_calls
             .iter()
@@ -187,18 +195,16 @@ impl ProviderLoopCursor {
                 break;
             }
         }
+        self.seen_tool_signatures.push(signature.clone());
         if consecutive_repeats >= MAX_CONSECUTIVE_IDENTICAL_TOOL_SIGNATURES
             && !Self::permits_repeated_tool_signature(response)
         {
-            return Err(ExecutionError::ProviderLoop {
-                reason: format!(
-                    "provider repeated tool-call signature {} times in a row: {}. Stop repeating the same tool call; inspect the last tool result, change the arguments, choose a different tool, or answer the user with the current limitation.",
-                    consecutive_repeats, signature
-                ),
-            });
+            return ToolSignatureObservation::RepeatedSuppressed {
+                consecutive_repeats,
+                signature,
+            };
         }
-        self.seen_tool_signatures.push(signature);
-        Ok(())
+        ToolSignatureObservation::Accepted
     }
 
     pub(super) fn note_assistant_tool_calls(&mut self, response: &ProviderResponse) {

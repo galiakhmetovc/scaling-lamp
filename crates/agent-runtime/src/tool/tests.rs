@@ -1220,6 +1220,26 @@ fn semantic_memory_tools_accept_conversation_messages() {
 }
 
 #[test]
+fn semantic_memory_add_repairs_bare_text_argument() {
+    let add = ToolCall::from_openai_function(
+        "memory_add",
+        r#"{"text":Пользователю нравится зелёный цвет.}"#,
+    )
+    .expect("parse repaired memory_add");
+
+    assert_eq!(
+        add,
+        ToolCall::MemoryAdd(MemoryAddInput {
+            text: "Пользователю нравится зелёный цвет.".to_string(),
+            messages: Vec::new(),
+            scope: None,
+            infer: None,
+            metadata: serde_json::Value::Null,
+        })
+    );
+}
+
+#[test]
 fn filesystem_tools_read_write_list_and_search_within_workspace() {
     let temp = tempfile::tempdir().expect("tempdir");
     let workspace = WorkspaceRef::new(temp.path());
