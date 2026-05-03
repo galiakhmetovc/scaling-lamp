@@ -72,6 +72,19 @@ impl ToolCall {
             Self::FsSearch(_) => ToolName::FsSearch,
             Self::WebFetch(_) => ToolName::WebFetch,
             Self::WebSearch(_) => ToolName::WebSearch,
+            Self::BrowserOpen(_) => ToolName::BrowserOpen,
+            Self::BrowserSnapshot(_) => ToolName::BrowserSnapshot,
+            Self::BrowserText(_) => ToolName::BrowserText,
+            Self::BrowserClick(_) => ToolName::BrowserClick,
+            Self::BrowserFill(_) => ToolName::BrowserFill,
+            Self::BrowserPress(_) => ToolName::BrowserPress,
+            Self::BrowserWait(_) => ToolName::BrowserWait,
+            Self::BrowserScroll(_) => ToolName::BrowserScroll,
+            Self::BrowserEval(_) => ToolName::BrowserEval,
+            Self::BrowserScreenshot(_) => ToolName::BrowserScreenshot,
+            Self::BrowserPdf(_) => ToolName::BrowserPdf,
+            Self::BrowserStatus(_) => ToolName::BrowserStatus,
+            Self::BrowserClose(_) => ToolName::BrowserClose,
             Self::ExecStart(_) => ToolName::ExecStart,
             Self::ExecReadOutput(_) => ToolName::ExecReadOutput,
             Self::ExecWait(_) => ToolName::ExecWait,
@@ -142,6 +155,18 @@ impl ToolCall {
             Self::FsSearch(input) => Some(normalize_tool_path(&input.path)),
             Self::WebFetch(input) => Some(input.url.clone()),
             Self::WebSearch(_) => None,
+            Self::BrowserOpen(input) => Some(input.url.clone()),
+            Self::BrowserSnapshot(input) => input.selector.clone(),
+            Self::BrowserText(input) => input.selector.clone(),
+            Self::BrowserClick(input) => Some(input.selector.clone()),
+            Self::BrowserFill(input) => Some(input.selector.clone()),
+            Self::BrowserPress(input) => Some(input.key.clone()),
+            Self::BrowserWait(input) => input.value.clone(),
+            Self::BrowserScroll(input) => Some(input.direction.clone()),
+            Self::BrowserEval(_) => None,
+            Self::BrowserScreenshot(input) => input.path.clone(),
+            Self::BrowserPdf(input) => Some(input.path.clone()),
+            Self::BrowserStatus(_) | Self::BrowserClose(_) => None,
             Self::ExecStart(input) => input.cwd.clone(),
             Self::ExecReadOutput(_) | Self::ExecWait(_) | Self::ExecKill(_) => None,
             Self::PlanRead(_)
@@ -272,6 +297,66 @@ impl ToolCall {
             Self::WebFetch(input) => format!("web_fetch url={}", input.url),
             Self::WebSearch(input) => {
                 format!("web_search query={} limit={}", input.query, input.limit)
+            }
+            Self::BrowserOpen(input) => format!(
+                "browser_open url={} wait_until={}",
+                input.url,
+                input.wait_until.as_deref().unwrap_or("-")
+            ),
+            Self::BrowserSnapshot(input) => format!(
+                "browser_snapshot interactive={} compact={} selector={} max_chars={}",
+                input.interactive.unwrap_or(true),
+                input.compact.unwrap_or(true),
+                input.selector.as_deref().unwrap_or("*"),
+                input
+                    .max_chars
+                    .map(|value| value.to_string())
+                    .unwrap_or_else(|| "default".to_string())
+            ),
+            Self::BrowserText(input) => format!(
+                "browser_text selector={} max_chars={}",
+                input.selector.as_deref().unwrap_or("body"),
+                input
+                    .max_chars
+                    .map(|value| value.to_string())
+                    .unwrap_or_else(|| "default".to_string())
+            ),
+            Self::BrowserClick(input) => format!(
+                "browser_click selector={} wait_until={}",
+                input.selector,
+                input.wait_until.as_deref().unwrap_or("-")
+            ),
+            Self::BrowserFill(input) => format!(
+                "browser_fill selector={} text_bytes={}",
+                input.selector,
+                input.text.len()
+            ),
+            Self::BrowserPress(input) => format!("browser_press key={}", input.key),
+            Self::BrowserWait(input) => format!(
+                "browser_wait kind={} value={} state={}",
+                input.kind,
+                input.value.as_deref().unwrap_or("-"),
+                input.state.as_deref().unwrap_or("-")
+            ),
+            Self::BrowserScroll(input) => format!(
+                "browser_scroll direction={} pixels={}",
+                input.direction,
+                input
+                    .pixels
+                    .map(|value| value.to_string())
+                    .unwrap_or_else(|| "default".to_string())
+            ),
+            Self::BrowserEval(input) => format!("browser_eval script_bytes={}", input.script.len()),
+            Self::BrowserScreenshot(input) => format!(
+                "browser_screenshot path={} full={} annotate={}",
+                input.path.as_deref().unwrap_or("<auto>"),
+                input.full.unwrap_or(false),
+                input.annotate.unwrap_or(false)
+            ),
+            Self::BrowserPdf(input) => format!("browser_pdf path={}", input.path),
+            Self::BrowserStatus(_) => "browser_status".to_string(),
+            Self::BrowserClose(input) => {
+                format!("browser_close all={}", input.all.unwrap_or(false))
             }
             Self::ExecStart(input) => {
                 format!(
@@ -573,6 +658,84 @@ impl ToolCall {
                 }),
             "web_search" => serde_json::from_str(arguments)
                 .map(Self::WebSearch)
+                .map_err(|source| ToolCallParseError::InvalidArguments {
+                    name: name.to_string(),
+                    source,
+                }),
+            "browser_open" => serde_json::from_str(arguments)
+                .map(Self::BrowserOpen)
+                .map_err(|source| ToolCallParseError::InvalidArguments {
+                    name: name.to_string(),
+                    source,
+                }),
+            "browser_snapshot" => serde_json::from_str(arguments)
+                .map(Self::BrowserSnapshot)
+                .map_err(|source| ToolCallParseError::InvalidArguments {
+                    name: name.to_string(),
+                    source,
+                }),
+            "browser_text" => serde_json::from_str(arguments)
+                .map(Self::BrowserText)
+                .map_err(|source| ToolCallParseError::InvalidArguments {
+                    name: name.to_string(),
+                    source,
+                }),
+            "browser_click" => serde_json::from_str(arguments)
+                .map(Self::BrowserClick)
+                .map_err(|source| ToolCallParseError::InvalidArguments {
+                    name: name.to_string(),
+                    source,
+                }),
+            "browser_fill" => serde_json::from_str(arguments)
+                .map(Self::BrowserFill)
+                .map_err(|source| ToolCallParseError::InvalidArguments {
+                    name: name.to_string(),
+                    source,
+                }),
+            "browser_press" => serde_json::from_str(arguments)
+                .map(Self::BrowserPress)
+                .map_err(|source| ToolCallParseError::InvalidArguments {
+                    name: name.to_string(),
+                    source,
+                }),
+            "browser_wait" => serde_json::from_str(arguments)
+                .map(Self::BrowserWait)
+                .map_err(|source| ToolCallParseError::InvalidArguments {
+                    name: name.to_string(),
+                    source,
+                }),
+            "browser_scroll" => serde_json::from_str(arguments)
+                .map(Self::BrowserScroll)
+                .map_err(|source| ToolCallParseError::InvalidArguments {
+                    name: name.to_string(),
+                    source,
+                }),
+            "browser_eval" => serde_json::from_str(arguments)
+                .map(Self::BrowserEval)
+                .map_err(|source| ToolCallParseError::InvalidArguments {
+                    name: name.to_string(),
+                    source,
+                }),
+            "browser_screenshot" => serde_json::from_str(arguments)
+                .map(Self::BrowserScreenshot)
+                .map_err(|source| ToolCallParseError::InvalidArguments {
+                    name: name.to_string(),
+                    source,
+                }),
+            "browser_pdf" => serde_json::from_str(arguments)
+                .map(Self::BrowserPdf)
+                .map_err(|source| ToolCallParseError::InvalidArguments {
+                    name: name.to_string(),
+                    source,
+                }),
+            "browser_status" => serde_json::from_str(arguments)
+                .map(Self::BrowserStatus)
+                .map_err(|source| ToolCallParseError::InvalidArguments {
+                    name: name.to_string(),
+                    source,
+                }),
+            "browser_close" => serde_json::from_str(arguments)
+                .map(Self::BrowserClose)
                 .map_err(|source| ToolCallParseError::InvalidArguments {
                     name: name.to_string(),
                     source,

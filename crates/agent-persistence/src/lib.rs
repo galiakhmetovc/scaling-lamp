@@ -6,9 +6,9 @@ pub mod repository;
 pub mod store;
 
 pub use config::{
-    A2APeerConfig, AppConfig, ConfigEnv, ConfigError, DaemonConfig, McpConnectorSeedConfig,
-    RuntimeLimitsConfig, RuntimeTimingConfig, TelegramConfig, WorkspaceConfig,
-    normalize_absolute_path, validate_workspace_root_path,
+    A2APeerConfig, AppConfig, BrowserConfig, BrowserlessConfig, ConfigEnv, ConfigError,
+    DaemonConfig, McpConnectorSeedConfig, RuntimeLimitsConfig, RuntimeTimingConfig, TelegramConfig,
+    WorkspaceConfig, normalize_absolute_path, validate_workspace_root_path,
 };
 pub use records::{
     AgentChainContinuationRecord, AgentProfileRecord, AgentScheduleRecord, ArtifactRecord,

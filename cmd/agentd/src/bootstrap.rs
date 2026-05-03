@@ -300,6 +300,7 @@ impl App {
                 a2a_peers: self.config.daemon.a2a_peers.clone(),
                 web_search_backend: self.config.web.search_backend,
                 web_search_url: self.config.web.search_url.clone(),
+                browser: self.config.browser.clone(),
                 runtime_timing: self.config.runtime_timing.clone(),
                 runtime_limits: self.config.runtime_limits.clone(),
             },

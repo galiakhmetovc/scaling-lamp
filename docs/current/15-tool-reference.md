@@ -317,7 +317,7 @@ fs_trash({ path: string })
 Web tools делятся на две разные capability:
 
 - `web_search`/`web_fetch` — канонические built-in tools для поиска и прямого HTTP fetch;
-- браузерная automation — optional MCP add-on, например Lightpanda, который появляется как dynamic MCP tools и не должен дублироваться отдельными built-in `browser_*` tools.
+- `browser_*` — канонические built-in tools для real browser automation через `agent-browser`; production backend обычно Browserless.
 
 ### `web_fetch`
 
@@ -369,16 +369,169 @@ web_search({ query: string, limit: integer })
 - переформулировать запрос один раз;
 - если снова пусто, явно сказать, что search backend не нашёл источников, а не выдумывать результат.
 
-### Когда нужен браузерный MCP add-on
+## Browser
 
-Используйте discovered browser MCP tools, например Lightpanda, если:
+Browser tools идут через тот же provider/tool loop, tool ledger, artifacts/offload и debug UI, что и остальные tools. Отдельного browser-agent loop нет.
+
+Runtime вызывает `agent-browser` CLI, а конфигурация задаётся через `[browser]` или `TEAMD_BROWSER_*`. В production рекомендуется Browserless backend:
+
+```toml
+[browser]
+enabled = true
+command = "/opt/teamd/bin/agent-browser"
+provider = "browserless"
+session_prefix = "teamd"
+default_timeout_ms = 30000
+max_output_chars = 20000
+
+[browser.browserless]
+api_url = "http://127.0.0.1:3000"
+api_key = "..."
+browser_type = "chromium"
+ttl_ms = 300000
+stealth = true
+```
+
+### `browser_open`
+
+```text
+browser_open({ url: string, wait_until?: string | null })
+```
+
+- открывает URL в isolated browser session текущей teamD session;
+- `wait_until`: `load`, `domcontentloaded` или `networkidle`.
+
+### `browser_snapshot`
+
+```text
+browser_snapshot({
+  interactive?: boolean | null,
+  compact?: boolean | null,
+  depth?: integer | null,
+  selector?: string | null,
+  max_chars?: integer | null
+})
+```
+
+- возвращает accessibility snapshot;
+- interactive refs вида `@e1` действуют только до следующего page-changing action;
+- большие snapshots уходят в artifact/offload, их нужно читать через `artifact_read`.
+
+### `browser_text`
+
+```text
+browser_text({ selector?: string | null, max_chars?: integer | null })
+```
+
+- возвращает text content указанного selector или `body`.
+
+### `browser_click`
+
+```text
+browser_click({ selector: string, wait_until?: string | null })
+```
+
+- кликает CSS selector или ref из последнего snapshot;
+- после клика нужно заново вызвать `browser_snapshot`, если дальше используются refs.
+
+### `browser_fill`
+
+```text
+browser_fill({ selector: string, text: string })
+```
+
+- очищает и заполняет input/textarea/contenteditable.
+
+### `browser_press`
+
+```text
+browser_press({ key: string })
+```
+
+- отправляет клавишу: `Enter`, `Tab`, `Control+a` и т.п.
+
+### `browser_wait`
+
+```text
+browser_wait({ kind: string, value: string, state?: string | null })
+```
+
+- ждёт selector, milliseconds, url pattern, load state, JS expression или text;
+- `kind`: `selector`, `ms`, `url`, `load`, `fn`, `text`;
+- `state` применим к selector waits: `visible`, `hidden`, `attached`, `detached`.
+
+### `browser_scroll`
+
+```text
+browser_scroll({ direction: string, pixels?: integer | null })
+```
+
+- скроллит страницу: `up`, `down`, `left`, `right`.
+
+### `browser_eval`
+
+```text
+browser_eval({ script: string, max_chars?: integer | null })
+```
+
+- выполняет JavaScript в странице;
+- использовать для inspection/extraction, а не как замену нормальным browser actions.
+
+### `browser_screenshot`
+
+```text
+browser_screenshot({
+  path?: string | null,
+  full?: boolean | null,
+  annotate?: boolean | null
+})
+```
+
+- сохраняет screenshot в workspace-relative path;
+- default path: `scratch/browser/screenshot-<timestamp>.png`.
+
+### `browser_pdf`
+
+```text
+browser_pdf({ path: string })
+```
+
+- сохраняет PDF текущей страницы в workspace-relative path.
+
+### `browser_status`
+
+```text
+browser_status({})
+```
+
+- показывает browser session, текущий URL и title.
+
+### `browser_close`
+
+```text
+browser_close({ all?: boolean | null })
+```
+
+- закрывает текущую browser session или все sessions при `all=true`.
+
+### Когда нужны browser tools
+
+Используйте `browser_*`, если:
 
 - страница требует JavaScript rendering;
 - нужно нажимать кнопки, заполнять формы, скроллить или ждать DOM selector;
-- нужен semantic DOM, links, structured data или markdown view после выполнения JS;
-- `web_fetch` вернул shell HTML, пустой текст или контент, который явно не соответствует странице в браузере.
+- `web_fetch` вернул shell HTML, пустой текст или контент, который явно не соответствует странице в браузере;
+- нужны screenshot/PDF или проверка интерактивного flow.
 
-Не создавайте для этого второй tool loop. Модель должна видеть Lightpanda как обычные dynamic MCP tools, например:
+Не используйте `browser_*`, если:
+
+- достаточно `web_search` или `web_fetch`;
+- нужно просто найти текущий источник;
+- задача похожа на высокочастотный scraping, bypass access controls или игнорирование правил сайта.
+
+### Legacy browser MCP add-ons
+
+Dynamic MCP browser tools всё ещё допустимы для legacy/экспериментов. Пример старого Lightpanda connector:
 
 ```text
 mcp__lightpanda__goto({ url: string })
@@ -391,7 +544,7 @@ mcp__lightpanda__fill({ ... })
 mcp__lightpanda__waitForSelector({ ... })
 ```
 
-Точные имена и schemas приходят от MCP connector во время discovery, поэтому документация фиксирует не контракт Rust API, а ожидаемую модель использования.
+Точные имена и schemas приходят от MCP connector во время discovery. Архитектурное правило сохраняется: MCP connector расширяет canonical provider tool surface, но не создаёт отдельный prompt path, chat loop или debug ledger.
 
 ## Exec
 
@@ -1075,9 +1228,9 @@ mcp_get_prompt({
 
 То есть provider получает их как обычные полноценные tools, а runtime потом маршрутизирует вызов во внутренний `mcp_call`.
 
-Пример: если включён connector `[daemon.mcp_connectors.lightpanda]`, модель может увидеть browser tools с exposed names вида `mcp__lightpanda__goto`, `mcp__lightpanda__markdown`, `mcp__lightpanda__semantic_tree`, `mcp__lightpanda__click`, `mcp__lightpanda__fill`.
+Пример: если включён legacy connector `[daemon.mcp_connectors.lightpanda]`, модель может увидеть browser tools с exposed names вида `mcp__lightpanda__goto`, `mcp__lightpanda__markdown`, `mcp__lightpanda__semantic_tree`, `mcp__lightpanda__click`, `mcp__lightpanda__fill`. Для нового браузерного workflow предпочтительны built-in `browser_*` tools.
 
-Правило архитектуры: MCP connector расширяет canonical provider tool surface, но не создаёт отдельную модель prompt assembly, отдельный chat loop или отдельный debug ledger. Вызовы Lightpanda должны попадать в тот же tool-call ledger, что и built-in tools.
+Правило архитектуры: MCP connector расширяет canonical provider tool surface, но не создаёт отдельную модель prompt assembly, отдельный chat loop или отдельный debug ledger. Вызовы MCP tools должны попадать в тот же tool-call ledger, что и built-in tools.
 
 ## Agent
 

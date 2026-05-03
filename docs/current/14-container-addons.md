@@ -1,4 +1,4 @@
-# Container add-ons: Docker, SearXNG, SilverBullet, Lightpanda, Jaeger, Caddy
+# Container add-ons: Docker, SearXNG, SilverBullet, Browserless, Jaeger, Caddy
 
 Этот документ описывает второй deploy layer вокруг host `agentd`.
 
@@ -22,7 +22,8 @@
 - `teamd-silverbullet` — browser UI для canonical Markdown knowledge space;
 - `teamd-silverbullet-mcp` — SilverBullet MCP bridge;
 - `teamd-jaeger` — Jaeger UI и OTLP receiver для traces;
-- `lightpanda` MCP connector — optional headless browser для JS-страниц, форм, кликов и DOM/content extraction;
+- `teamd-browserless` + `agent-browser` — recommended browser automation backend для built-in `browser_*` tools;
+- `lightpanda` MCP connector — legacy optional headless browser для JS-страниц, форм, кликов и DOM/content extraction;
 - `teamd-obsidian` — legacy browser Obsidian для восстановления старых vault workflows;
 - `obsidian` MCP connector — legacy filesystem-backed MCP для старого vault.
 
@@ -36,13 +37,19 @@ Logseq Publish больше не является runtime-компонентом
 ./scripts/deploy-teamd-containers.sh --with-silverbullet-mcp --with-jaeger --single-domain
 ```
 
-Если нужен браузерный MCP add-on для динамических страниц:
+Если нужен recommended browser automation backend:
 
 ```bash
-./scripts/deploy-teamd-containers.sh --with-lightpanda-mcp
+./scripts/deploy-teamd-containers.sh --with-browserless
 ```
 
-Если нужен только Lightpanda без контейнерной обвязки:
+Если нужен только `agent-browser` CLI/config без Browserless container:
+
+```bash
+./scripts/deploy-teamd-containers.sh --no-searxng --no-caddy --with-agent-browser
+```
+
+Если нужен legacy Lightpanda MCP без контейнерной обвязки:
 
 ```bash
 ./scripts/deploy-teamd-containers.sh --no-searxng --no-caddy --with-lightpanda-mcp
@@ -254,9 +261,85 @@ Smoke check:
 curl 'http://127.0.0.1:8888/search?q=test&format=json'
 ```
 
-## Lightpanda
+## Browserless + agent-browser
 
-Lightpanda — optional MCP-first браузерный add-on. Он нужен, когда обычных `web_search` и `web_fetch` недостаточно:
+`--with-browserless` включает current browser automation path:
+
+- `teamd-browserless` container на `127.0.0.1:3000`;
+- `agent-browser` CLI wrapper `/opt/teamd/bin/agent-browser`;
+- PATH symlink `/usr/local/bin/agent-browser`;
+- Browserless token в `/opt/teamd/containers/browserless/browserless.env`;
+- `TEAMD_BROWSER_*` и `TEAMD_BROWSERLESS_*` в `/etc/teamd/teamd.env`.
+
+Почему так:
+
+- `browser_*` tools являются built-in tools, а не MCP shim;
+- все вызовы идут через обычный provider/tool loop, ledger, artifacts/offload и debug UI;
+- Browserless даёт нормальный Chromium backend без установки отдельного desktop browser в runtime user home;
+- browser session name строится от teamD session id, поэтому разные чаты не делят cookies/state случайно.
+
+Deploy:
+
+```bash
+./scripts/deploy-teamd-containers.sh --with-browserless
+```
+
+Что пишет deploy script:
+
+```bash
+TEAMD_BROWSER_ENABLED='true'
+TEAMD_BROWSER_COMMAND='/opt/teamd/bin/agent-browser'
+TEAMD_BROWSER_PROVIDER='browserless'
+TEAMD_BROWSER_SESSION_PREFIX='teamd'
+TEAMD_BROWSER_DEFAULT_TIMEOUT_MS='30000'
+TEAMD_BROWSER_MAX_OUTPUT_CHARS='20000'
+TEAMD_BROWSERLESS_API_URL='http://127.0.0.1:3000'
+TEAMD_BROWSERLESS_API_KEY='<generated token>'
+TEAMD_BROWSERLESS_BROWSER_TYPE='chromium'
+TEAMD_BROWSERLESS_TTL_MS='300000'
+TEAMD_BROWSERLESS_STEALTH='true'
+```
+
+Smoke checks:
+
+```bash
+curl 'http://127.0.0.1:3000/content?token=<token>&url=https://example.com'
+agent-browser --provider browserless open https://example.com
+agent-browser --provider browserless snapshot -i -c
+```
+
+Default agent skill:
+
+```text
+agent-browser
+```
+
+Включить вручную:
+
+```bash
+teamdctl session enable-skill <session_id> agent-browser
+teamdctl session skills <session_id>
+```
+
+Agent workflow:
+
+1. `web_search`, если URL не задан.
+2. `browser_open` для выбранного URL.
+3. `browser_snapshot` для карты страницы и refs.
+4. `browser_click`/`browser_fill`/`browser_press`/`browser_scroll`/`browser_wait` для интерактива.
+5. После page-changing action снова `browser_snapshot`, потому что старые refs устаревают.
+6. `browser_text`, `browser_eval`, `browser_screenshot`, `browser_pdf` только когда они реально нужны.
+
+Официальные опорные документы:
+
+- Browserless open-source deployment: <https://docs.browserless.io/enterprise/open-source>
+- agent-browser package: <https://www.npmjs.com/package/agent-browser>
+
+## Legacy Lightpanda
+
+Lightpanda — legacy optional MCP-first браузерный add-on. Для новых задач предпочтительнее `agent-browser` + Browserless и built-in `browser_*`.
+
+Lightpanda может быть полезен, когда обычных `web_search` и `web_fetch` недостаточно и вы сознательно тестируете lightweight browser engine:
 
 - страница рендерится JavaScript;
 - нужен переход по ссылкам, click/fill/scroll/wait;
@@ -414,11 +497,20 @@ curl -I http://127.0.0.1:8091/
 ls -la /var/lib/teamd/knowledge/silverbullet/teamd
 ```
 
+Browserless:
+
+```bash
+. /opt/teamd/containers/browserless/browserless.env
+curl "http://127.0.0.1:3000/content?token=$TOKEN&url=https://example.com"
+agent-browser --provider browserless open https://example.com
+agent-browser --provider browserless snapshot -i -c
+```
+
 MCP config:
 
 ```bash
 grep -A5 'daemon.mcp_connectors.silverbullet' /etc/teamd/config.toml
-grep -A5 'daemon.mcp_connectors.lightpanda' /etc/teamd/config.toml
+grep 'TEAMD_BROWSER_' /etc/teamd/teamd.env
 systemctl restart teamd-daemon teamd-telegram
 ```
 
@@ -451,6 +543,14 @@ docker logs teamd-silverbullet-mcp
 docker exec teamd-caddy caddy reload --config /etc/caddy/Caddyfile
 ```
 
+Если `browser_*` tools недоступны агенту:
+
+1. проверьте `/etc/teamd/teamd.env`: `TEAMD_BROWSER_ENABLED`, `TEAMD_BROWSER_COMMAND`, `TEAMD_BROWSER_PROVIDER`;
+2. проверьте `/opt/teamd/bin/agent-browser --help`;
+3. проверьте `docker ps | grep teamd-browserless`;
+4. проверьте Browserless token в `/opt/teamd/containers/browserless/browserless.env`;
+5. перезапустите `teamd-daemon` и `teamd-telegram`.
+
 Если Lightpanda MCP не появился в tools:
 
 1. проверьте `/etc/teamd/config.toml`;
@@ -462,6 +562,8 @@ docker exec teamd-caddy caddy reload --config /etc/caddy/Caddyfile
 
 - SilverBullet: <https://silverbullet.md/>
 - SilverBullet community MCP: <https://github.com/Ahmad-A0/silverbullet-mcp>
+- Browserless open-source deployment: <https://docs.browserless.io/enterprise/open-source>
+- agent-browser npm package: <https://www.npmjs.com/package/agent-browser>
 - Lightpanda browser: <https://github.com/lightpanda-io/browser>
 - Lightpanda docs: <https://lightpanda.io/docs>
 - SearXNG: <https://docs.searxng.org/>

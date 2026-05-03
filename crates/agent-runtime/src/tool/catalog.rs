@@ -61,6 +61,19 @@ impl ToolCatalog {
                         | ToolName::ExecKill
                         | ToolName::WebFetch
                         | ToolName::WebSearch
+                        | ToolName::BrowserOpen
+                        | ToolName::BrowserSnapshot
+                        | ToolName::BrowserText
+                        | ToolName::BrowserClick
+                        | ToolName::BrowserFill
+                        | ToolName::BrowserPress
+                        | ToolName::BrowserWait
+                        | ToolName::BrowserScroll
+                        | ToolName::BrowserEval
+                        | ToolName::BrowserScreenshot
+                        | ToolName::BrowserPdf
+                        | ToolName::BrowserStatus
+                        | ToolName::BrowserClose
                         | ToolName::InitPlan
                         | ToolName::AddTask
                         | ToolName::SetTaskStatus
@@ -293,6 +306,136 @@ impl ToolCatalog {
                 description: "Search first for current or external information via the configured backend; deployments may use SearXNG",
                 policy: ToolPolicy {
                     read_only: true,
+                    destructive: false,
+                    requires_approval: false,
+                },
+            },
+            ToolDefinition {
+                name: ToolName::BrowserOpen,
+                family: ToolFamily::Browser,
+                description: "Open a URL through agent-browser using the session-scoped real browser backend",
+                policy: ToolPolicy {
+                    read_only: true,
+                    destructive: false,
+                    requires_approval: false,
+                },
+            },
+            ToolDefinition {
+                name: ToolName::BrowserSnapshot,
+                family: ToolFamily::Browser,
+                description: "Read an agent-browser accessibility snapshot with fresh @eN refs for click/fill actions",
+                policy: ToolPolicy {
+                    read_only: true,
+                    destructive: false,
+                    requires_approval: false,
+                },
+            },
+            ToolDefinition {
+                name: ToolName::BrowserText,
+                family: ToolFamily::Browser,
+                description: "Read visible text from the browser page or selector through agent-browser",
+                policy: ToolPolicy {
+                    read_only: true,
+                    destructive: false,
+                    requires_approval: false,
+                },
+            },
+            ToolDefinition {
+                name: ToolName::BrowserClick,
+                family: ToolFamily::Browser,
+                description: "Click an agent-browser @eN ref or selector, then re-snapshot before using refs again",
+                policy: ToolPolicy {
+                    read_only: false,
+                    destructive: false,
+                    requires_approval: false,
+                },
+            },
+            ToolDefinition {
+                name: ToolName::BrowserFill,
+                family: ToolFamily::Browser,
+                description: "Fill an input by agent-browser @eN ref or selector",
+                policy: ToolPolicy {
+                    read_only: false,
+                    destructive: false,
+                    requires_approval: false,
+                },
+            },
+            ToolDefinition {
+                name: ToolName::BrowserPress,
+                family: ToolFamily::Browser,
+                description: "Press a key in the current browser page, for example Enter or Control+a",
+                policy: ToolPolicy {
+                    read_only: false,
+                    destructive: false,
+                    requires_approval: false,
+                },
+            },
+            ToolDefinition {
+                name: ToolName::BrowserWait,
+                family: ToolFamily::Browser,
+                description: "Wait for browser state: selector, text, URL, load state, JS function, or duration",
+                policy: ToolPolicy {
+                    read_only: true,
+                    destructive: false,
+                    requires_approval: false,
+                },
+            },
+            ToolDefinition {
+                name: ToolName::BrowserScroll,
+                family: ToolFamily::Browser,
+                description: "Scroll the current browser page up, down, left, or right",
+                policy: ToolPolicy {
+                    read_only: false,
+                    destructive: false,
+                    requires_approval: false,
+                },
+            },
+            ToolDefinition {
+                name: ToolName::BrowserEval,
+                family: ToolFamily::Browser,
+                description: "Evaluate JavaScript in the current browser page and return bounded output",
+                policy: ToolPolicy {
+                    read_only: true,
+                    destructive: false,
+                    requires_approval: false,
+                },
+            },
+            ToolDefinition {
+                name: ToolName::BrowserScreenshot,
+                family: ToolFamily::Browser,
+                description: "Capture a browser screenshot into a workspace file; use deliver_file with workspace_path to send it",
+                policy: ToolPolicy {
+                    read_only: false,
+                    destructive: false,
+                    requires_approval: false,
+                },
+            },
+            ToolDefinition {
+                name: ToolName::BrowserPdf,
+                family: ToolFamily::Browser,
+                description: "Capture the current browser page as a PDF file inside the workspace",
+                policy: ToolPolicy {
+                    read_only: false,
+                    destructive: false,
+                    requires_approval: false,
+                },
+            },
+            ToolDefinition {
+                name: ToolName::BrowserStatus,
+                family: ToolFamily::Browser,
+                description: "Report current browser session, URL, and title through agent-browser",
+                policy: ToolPolicy {
+                    read_only: true,
+                    destructive: false,
+                    requires_approval: false,
+                },
+            },
+            ToolDefinition {
+                name: ToolName::BrowserClose,
+                family: ToolFamily::Browser,
+                description: "Close the current agent-browser session; all=true closes all agent-browser sessions",
+                policy: ToolPolicy {
+                    read_only: false,
                     destructive: false,
                     requires_approval: false,
                 },
@@ -765,7 +908,7 @@ impl Default for ToolCatalog {
     fn default() -> Self {
         Self {
             families: vec![
-                "fs", "web", "exec", "plan", "offload", "memory", "mcp", "agent",
+                "fs", "web", "browser", "exec", "plan", "offload", "memory", "mcp", "agent",
             ],
             definitions: Self::definitions(),
         }

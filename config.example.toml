@@ -78,6 +78,23 @@ search_url = "https://duckduckgo.com/html/"
 # search_backend = "searxng_json"
 # search_url = "http://127.0.0.1:8888/search"
 
+[browser]
+# Disabled by default. deploy-teamd-containers.sh --with-browserless enables
+# this through /etc/teamd/teamd.env for production-like installs.
+enabled = false
+command = "agent-browser"
+provider = "browserless"
+session_prefix = "teamd"
+default_timeout_ms = 30000
+max_output_chars = 20000
+
+[browser.browserless]
+api_url = "http://127.0.0.1:3000"
+# api_key = "prefer TEAMD_BROWSERLESS_API_KEY in .env"
+browser_type = "chromium"
+ttl_ms = 300000
+stealth = true
+
 [runtime_timing]
 sqlite_busy_timeout_ms = 15000
 daemon_http_connect_timeout_ms = 2000

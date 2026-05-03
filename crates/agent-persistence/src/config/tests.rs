@@ -29,6 +29,17 @@ fn base_env(root: &Path) -> ConfigEnv {
         context_window_tokens_override: None,
         web_search_backend_override: None,
         web_search_url_override: None,
+        browser_enabled_override: None,
+        browser_command_override: None,
+        browser_provider_override: None,
+        browser_session_prefix_override: None,
+        browser_default_timeout_ms_override: None,
+        browser_max_output_chars_override: None,
+        browserless_api_url_override: None,
+        browserless_api_key_override: None,
+        browserless_browser_type_override: None,
+        browserless_ttl_ms_override: None,
+        browserless_stealth_override: None,
         provider_api_base_override: None,
         provider_api_key_override: None,
         provider_connect_timeout_override: None,
@@ -49,6 +60,90 @@ fn base_env(root: &Path) -> ConfigEnv {
         otlp_endpoint_override: None,
         otlp_timeout_ms_override: None,
     }
+}
+
+#[test]
+fn load_merges_browser_config_from_file_and_env() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let config_path = temp.path().join("teamd.toml");
+
+    fs::write(
+        &config_path,
+        r#"
+data_dir = "/tmp/teamd-config"
+
+[browser]
+enabled = false
+command = "/opt/teamd/bin/agent-browser"
+provider = "browserless"
+session_prefix = "teamd"
+default_timeout_ms = 30000
+max_output_chars = 20000
+
+[browser.browserless]
+api_url = "http://127.0.0.1:3000"
+api_key = "file-token"
+browser_type = "chromium"
+ttl_ms = 300000
+stealth = true
+"#,
+    )
+    .expect("write config");
+
+    let mut env = base_env(temp.path());
+    env.config_path = Some(config_path);
+    env.browser_enabled_override = Some(true);
+    env.browser_command_override = Some("/usr/local/bin/agent-browser".to_string());
+    env.browser_session_prefix_override = Some("prod".to_string());
+    env.browser_default_timeout_ms_override = Some(45_000);
+    env.browser_max_output_chars_override = Some(32_000);
+    env.browserless_api_key_override = Some("env-token".to_string());
+
+    let config = AppConfig::load_from_env(&env).expect("load config");
+
+    assert!(config.browser.enabled);
+    assert_eq!(config.browser.command, "/usr/local/bin/agent-browser");
+    assert_eq!(config.browser.provider, "browserless");
+    assert_eq!(config.browser.session_prefix, "prod");
+    assert_eq!(config.browser.default_timeout_ms, 45_000);
+    assert_eq!(config.browser.max_output_chars, 32_000);
+    assert_eq!(config.browser.browserless.api_url, "http://127.0.0.1:3000");
+    assert_eq!(
+        config.browser.browserless.api_key.as_deref(),
+        Some("env-token")
+    );
+    assert_eq!(config.browser.browserless.browser_type, "chromium");
+    assert_eq!(config.browser.browserless.ttl_ms, 300_000);
+    assert!(config.browser.browserless.stealth);
+}
+
+#[test]
+fn validate_rejects_enabled_browser_without_command() {
+    let config = AppConfig {
+        data_dir: PathBuf::from("/tmp/teamd"),
+        daemon: Default::default(),
+        telegram: Default::default(),
+        permissions: Default::default(),
+        provider: Default::default(),
+        session_defaults: Default::default(),
+        context: Default::default(),
+        workspace: Default::default(),
+        web: Default::default(),
+        browser: super::BrowserConfig {
+            enabled: true,
+            command: "   ".to_string(),
+            ..Default::default()
+        },
+        observability: Default::default(),
+        runtime_timing: Default::default(),
+        runtime_limits: Default::default(),
+    };
+
+    let error = config
+        .validate()
+        .expect_err("empty browser command must fail");
+
+    assert!(matches!(error, ConfigError::InvalidProviderValue { .. }));
 }
 
 #[test]
@@ -96,6 +191,7 @@ fn validate_rejects_relative_data_dir() {
         context: Default::default(),
         workspace: Default::default(),
         web: Default::default(),
+        browser: Default::default(),
         observability: Default::default(),
         runtime_timing: Default::default(),
         runtime_limits: Default::default(),
@@ -425,6 +521,7 @@ fn validate_rejects_invalid_runtime_limit_bounds() {
         context: Default::default(),
         workspace: Default::default(),
         web: Default::default(),
+        browser: Default::default(),
         observability: Default::default(),
         runtime_timing: Default::default(),
         runtime_limits: super::RuntimeLimitsConfig {
@@ -518,6 +615,7 @@ fn validate_rejects_invalid_auto_compaction_ratio() {
         },
         workspace: Default::default(),
         web: Default::default(),
+        browser: Default::default(),
         observability: Default::default(),
         runtime_timing: Default::default(),
         runtime_limits: Default::default(),

@@ -26,11 +26,11 @@ use crate::a2a::A2AClient;
 use crate::mcp::SharedMcpRegistry;
 use crate::trace::{RuntimeTraceContext, TurnTraceSource};
 use agent_persistence::{
-    A2APeerConfig, AgentRepository, ContextOffloadRepository, ContextSummaryRepository, JobRecord,
-    JobRepository, McpRepository, MissionRecord, MissionRepository, PersistenceStore, PlanRecord,
-    PlanRepository, RecordConversionError, RunRecord, RunRepository, RuntimeLimitsConfig,
-    RuntimeTimingConfig, SessionInboxRepository, SessionRepository, StoreError, TraceRepository,
-    TranscriptRecord, TranscriptRepository,
+    A2APeerConfig, AgentRepository, BrowserConfig, ContextOffloadRepository,
+    ContextSummaryRepository, JobRecord, JobRepository, McpRepository, MissionRecord,
+    MissionRepository, PersistenceStore, PlanRecord, PlanRepository, RecordConversionError,
+    RunRecord, RunRepository, RuntimeLimitsConfig, RuntimeTimingConfig, SessionInboxRepository,
+    SessionRepository, StoreError, TraceRepository, TranscriptRecord, TranscriptRepository,
 };
 use agent_runtime::agent::AgentProfile;
 use agent_runtime::inbox::SessionInboxEvent;
@@ -43,8 +43,8 @@ use agent_runtime::run::{RunEngine, RunSnapshot, RunStatus, RunTransitionError};
 use agent_runtime::scheduler::{MissionVerificationSummary, SupervisorAction, SupervisorLoop};
 use agent_runtime::session::{Session, SessionSettings};
 use agent_runtime::tool::{
-    SharedProcessRegistry, ToolCall, ToolError, ToolName, ToolRuntime, WebSearchBackend,
-    WebToolClient,
+    BrowserToolClient, SharedProcessRegistry, ToolCall, ToolError, ToolFamily, ToolName,
+    ToolRuntime, WebSearchBackend, WebToolClient,
 };
 use agent_runtime::verification::EvidenceBundle;
 use agent_runtime::workspace::WorkspaceRef;
@@ -192,6 +192,7 @@ pub struct ExecutionServiceConfig {
     pub a2a_peers: BTreeMap<String, A2APeerConfig>,
     pub web_search_backend: WebSearchBackend,
     pub web_search_url: String,
+    pub browser: BrowserConfig,
     pub runtime_timing: RuntimeTimingConfig,
     pub runtime_limits: RuntimeLimitsConfig,
 }
@@ -220,6 +221,7 @@ impl Default for ExecutionServiceConfig {
             a2a_peers: BTreeMap::new(),
             web_search_backend: WebSearchBackend::default(),
             web_search_url: "https://duckduckgo.com/html/".to_string(),
+            browser: BrowserConfig::default(),
             runtime_timing: RuntimeTimingConfig::default(),
             runtime_limits: RuntimeLimitsConfig::default(),
         }
@@ -323,13 +325,31 @@ impl ExecutionService {
     }
 
     fn tool_runtime_for_workspace(&self, workspace: WorkspaceRef) -> ToolRuntime {
-        ToolRuntime::with_web_client_and_process_registry(
+        self.tool_runtime_for_session_workspace(workspace, "default")
+    }
+
+    fn tool_runtime_for_session_workspace(
+        &self,
+        workspace: WorkspaceRef,
+        session_id: &str,
+    ) -> ToolRuntime {
+        let browser_session_name = self.browser_session_name(session_id);
+        ToolRuntime::with_clients_and_process_registry(
             workspace,
             WebToolClient::new(
                 self.config.web_search_backend,
                 self.config.web_search_url.clone(),
             ),
+            BrowserToolClient::new(self.config.browser.to_tool_config(browser_session_name)),
             self.processes.clone(),
+        )
+    }
+
+    fn browser_session_name(&self, session_id: &str) -> String {
+        format!(
+            "{}-{}",
+            sanitize_browser_session_segment(&self.config.browser.session_prefix),
+            sanitize_browser_session_segment(session_id)
         )
     }
 
@@ -429,6 +449,28 @@ fn ensure_unique_run_id(
     Ok(format!("{base_id}-{}", unique_execution_token()))
 }
 
+fn sanitize_browser_session_segment(value: &str) -> String {
+    let sanitized = value
+        .chars()
+        .map(|ch| {
+            if ch.is_ascii_alphanumeric() {
+                ch.to_ascii_lowercase()
+            } else {
+                '-'
+            }
+        })
+        .collect::<String>()
+        .split('-')
+        .filter(|part| !part.is_empty())
+        .collect::<Vec<_>>()
+        .join("-");
+    if sanitized.is_empty() {
+        "session".to_string()
+    } else {
+        sanitized
+    }
+}
+
 impl fmt::Display for ExecutionError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -512,5 +554,32 @@ impl Error for ExecutionError {
             | Self::ToolCallParse { .. }
             | Self::UnsupportedJobInput { .. } => None,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn browser_session_name_uses_configured_prefix_and_sanitized_session_id() {
+        let service = ExecutionService::new(
+            PermissionConfig::default(),
+            WorkspaceRef::default(),
+            SharedProcessRegistry::default(),
+            SharedMcpRegistry::default(),
+            ExecutionServiceConfig {
+                browser: BrowserConfig {
+                    session_prefix: "Prod Mesh".to_string(),
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
+        );
+
+        assert_eq!(
+            service.browser_session_name("session-ABC_123:/telegram"),
+            "prod-mesh-session-abc-123-telegram"
+        );
     }
 }

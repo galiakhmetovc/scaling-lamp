@@ -391,55 +391,71 @@ Resource notes should include: summary, key points, sources, related notes.
 - When a working note becomes stable documentation, offer to promote it into repository docs and commit it.
 "#;
 
-const DEFAULT_LIGHTPANDA_BROWSER_SKILL_MD: &str = r#"---
-name: lightpanda-browser
-description: Use when a task needs a real JavaScript-capable headless browser via Lightpanda: dynamic pages, SPAs, forms, clicks, semantic DOM extraction, markdown extraction, links, structured data, or browser automation that web_fetch cannot do.
+const DEFAULT_AGENT_BROWSER_SKILL_MD: &str = r#"---
+name: agent-browser
+description: Use when a task needs a real JavaScript-capable browser through built-in browser_* tools backed by agent-browser and Browserless: dynamic pages, SPAs, forms, clicks, snapshots, screenshots, PDFs, or browser automation that web_fetch cannot do.
 ---
 
-# Lightpanda Browser
+# Agent Browser
 
-Use this skill when `web_search`/`web_fetch` are not enough and the task needs a real headless browser.
+Use this skill when `web_search`/`web_fetch` are not enough and the task needs a real browser.
 
 ## Primary integration
 
-- Lightpanda is exposed to teamD through the `lightpanda` MCP connector.
-- Discover the connector with `mcp_search_resources`, `mcp_search_prompts`, or the dynamic MCP tool list when unsure.
-- Prefer discovered tools with names like `mcp__lightpanda__goto`, `mcp__lightpanda__markdown`, `mcp__lightpanda__semantic_tree`, `mcp__lightpanda__interactiveElements`, `mcp__lightpanda__click`, `mcp__lightpanda__fill`, `mcp__lightpanda__links`, `mcp__lightpanda__structuredData`, and `mcp__lightpanda__evaluate` when available.
-- If the MCP connector is unavailable, do not invent browser results. Report that Lightpanda is not connected and fall back to `web_search`/`web_fetch` only when that still satisfies the user.
+- Browser automation is exposed as built-in `browser_*` tools in the canonical teamD tool loop.
+- The runtime invokes the `agent-browser` CLI; production deployments should use Browserless as the browser backend.
+- Do not call shell commands for browsing when `browser_*` tools are available.
+- If browser tools are disabled or unavailable, say so explicitly and fall back to `web_search`/`web_fetch` only when that still satisfies the user.
 
-## When to use Lightpanda
+## When to use browser tools
 
-Use Lightpanda for:
+Use `browser_*` for:
 
 - JavaScript-rendered pages, SPAs, infinite-load pages, and pages where static HTML is insufficient.
 - Form filling, clicking, scrolling, and other interactive flows.
-- Extracting markdown, semantic trees, links, forms, and structured data from a live page.
+- Extracting text, snapshots, links, forms, and visible state from a live page.
 - Following a search result through multiple pages when the user needs current content, not just a snippet.
 - Debugging pages where `web_fetch` returns empty, incomplete, blocked, or script-heavy content.
+- Screenshots and PDFs that need to be saved into the workspace.
 
 Do not use Lightpanda for:
 
 - Simple exact-URL reads where `web_fetch` returns enough readable content.
 - Current information discovery before choosing a URL; use `web_search` first.
 - High-frequency scraping, abusive automation, bypassing access controls, or ignoring robots/site policies.
-- Tasks that require graphical rendering or screenshot validation. Lightpanda is headless and optimized for DOM/content automation.
 
 ## Typical workflow
 
 1. Use `web_search` to discover candidate URLs when the user did not provide an exact URL.
-2. Use Lightpanda `goto` for the chosen URL.
-3. Use `markdown` or `semantic_tree` to understand the page.
-4. Use `interactiveElements` or `detectForms` before clicking/filling.
-5. Use `click`, `fill`, `scroll`, or `waitForSelector` for interaction.
-6. Use `markdown`, `links`, or `structuredData` to extract the result.
+2. Use `browser_open` for the chosen URL.
+3. Use `browser_snapshot` to understand the page. Interactive refs like `@e1` are valid only for the current snapshot.
+4. Use `browser_click`, `browser_fill`, `browser_press`, `browser_scroll`, or `browser_wait` for interaction.
+5. After each page-changing action, call `browser_snapshot` again before using old interactive refs.
+6. Use `browser_text`, `browser_eval`, `browser_screenshot`, or `browser_pdf` only when they match the task.
 7. Summarize what was actually observed. Do not claim a browser action happened unless the tool succeeded.
 
 ## Operational notes
 
-- Lightpanda can execute JavaScript, but it is still beta. If a page fails, try one corrected attempt and then report the limitation.
+- Browserless sessions are isolated per teamD session.
+- Large snapshots and text outputs are offloaded into artifacts; use `artifact_read` when you need the full payload later.
+- Use workspace-relative paths for screenshots/PDFs, for example `scratch/browser/page.png`.
 - Respect robots.txt and avoid high-frequency requests.
-- Google may block lightweight browser fingerprints; use DuckDuckGo or another suitable source for search flows.
 - For durable findings, save results through normal teamD surfaces: notes, docs, artifacts, or explicit files in the session workspace.
+"#;
+
+const DEFAULT_LIGHTPANDA_BROWSER_SKILL_MD: &str = r#"---
+name: lightpanda-browser
+description: Deprecated compatibility skill for old Lightpanda MCP wording. Use agent-browser for current browser automation.
+---
+
+# Deprecated Lightpanda Browser Skill
+
+This skill is kept only so old sessions and operator commands do not break.
+
+- Current browser automation must use `agent-browser`.
+- Use built-in tools such as `browser_open`, `browser_snapshot`, `browser_click`, `browser_fill`, `browser_text`, `browser_screenshot`, and `browser_pdf`.
+- Do not look for `mcp__lightpanda__*` tools unless the operator explicitly asks to inspect legacy Lightpanda configuration.
+- If this skill activates accidentally, call `skill_read` for `agent-browser` and follow that skill instead.
 "#;
 
 const DEPRECATED_LOGSEQ_GRAPH_SKILL_MD: &str = r#"---
@@ -916,9 +932,20 @@ pub fn ensure_builtin_agent_home_layout(
         )?;
         sync_builtin_default_skill(
             agent_home,
+            "agent-browser",
+            DEFAULT_AGENT_BROWSER_SKILL_MD,
+            &[],
+        )?;
+        sync_builtin_default_skill_with_legacy_markers(
+            agent_home,
             "lightpanda-browser",
             DEFAULT_LIGHTPANDA_BROWSER_SKILL_MD,
             &[],
+            &[
+                "# Lightpanda Browser",
+                "mcp__lightpanda__",
+                "Lightpanda is exposed",
+            ],
         )?;
         sync_builtin_default_skill_with_legacy_markers(
             agent_home,
@@ -1287,12 +1314,20 @@ mod tests {
         assert!(legacy_obsidian_skill.contains("Deprecated"));
         assert!(legacy_obsidian_skill.contains("silverbullet-space"));
 
+        let agent_browser_skill =
+            fs::read_to_string(default_home.join("skills/agent-browser/SKILL.md"))
+                .expect("read agent-browser skill");
+        assert!(agent_browser_skill.contains("name: agent-browser"));
+        assert!(agent_browser_skill.contains("browser_open"));
+        assert!(agent_browser_skill.contains("browser_snapshot"));
+        assert!(agent_browser_skill.contains("Browserless"));
+        assert!(agent_browser_skill.contains("artifact_read"));
+
         let lightpanda_skill =
             fs::read_to_string(default_home.join("skills/lightpanda-browser/SKILL.md"))
                 .expect("read lightpanda skill");
         assert!(lightpanda_skill.contains("name: lightpanda-browser"));
-        assert!(lightpanda_skill.contains("Lightpanda"));
-        assert!(lightpanda_skill.contains("mcp_search_resources"));
-        assert!(lightpanda_skill.contains("mcp__lightpanda__"));
+        assert!(lightpanda_skill.contains("Deprecated"));
+        assert!(lightpanda_skill.contains("agent-browser"));
     }
 }

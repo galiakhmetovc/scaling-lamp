@@ -1,7 +1,7 @@
 use agent_runtime::mcp::McpConnectorTransport;
 use agent_runtime::permission::{PermissionConfig, PermissionMode};
 use agent_runtime::provider::{ConfiguredProvider, ProviderKind};
-use agent_runtime::tool::WebSearchBackend;
+use agent_runtime::tool::{BrowserToolConfig, WebSearchBackend};
 use agent_runtime::{context::CompactionPolicy, session::SessionSettings};
 use serde::Deserialize;
 use std::collections::BTreeMap;
@@ -19,6 +19,14 @@ const DEFAULT_DAEMON_BIND_PORT: u16 = 5140;
 const DEFAULT_DAEMON_SKILLS_DIR: &str = "skills";
 const DEFAULT_WEB_SEARCH_URL: &str = "https://duckduckgo.com/html/";
 const DEFAULT_OTLP_ENDPOINT: &str = "http://127.0.0.1:4318/v1/traces";
+const DEFAULT_BROWSER_COMMAND: &str = "agent-browser";
+const DEFAULT_BROWSER_PROVIDER: &str = "browserless";
+const DEFAULT_BROWSER_SESSION_PREFIX: &str = "teamd";
+const DEFAULT_BROWSER_TIMEOUT_MS: u64 = 30_000;
+const DEFAULT_BROWSER_MAX_OUTPUT_CHARS: usize = 20_000;
+const DEFAULT_BROWSERLESS_API_URL: &str = "http://127.0.0.1:3000";
+const DEFAULT_BROWSERLESS_BROWSER_TYPE: &str = "chromium";
+const DEFAULT_BROWSERLESS_TTL_MS: u64 = 300_000;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct AppConfig {
@@ -31,6 +39,7 @@ pub struct AppConfig {
     pub workspace: WorkspaceConfig,
     pub context: ContextConfig,
     pub web: WebConfig,
+    pub browser: BrowserConfig,
     pub observability: ObservabilityConfig,
     pub runtime_timing: RuntimeTimingConfig,
     pub runtime_limits: RuntimeLimitsConfig,
@@ -98,6 +107,48 @@ pub struct ContextConfig {
 pub struct WebConfig {
     pub search_backend: WebSearchBackend,
     pub search_url: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(default)]
+pub struct BrowserConfig {
+    pub enabled: bool,
+    pub command: String,
+    pub provider: String,
+    pub session_prefix: String,
+    pub default_timeout_ms: u64,
+    pub max_output_chars: usize,
+    pub browserless: BrowserlessConfig,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(default)]
+pub struct BrowserlessConfig {
+    pub api_url: String,
+    pub api_key: Option<String>,
+    pub browser_type: String,
+    pub ttl_ms: u64,
+    pub stealth: bool,
+}
+
+impl BrowserConfig {
+    pub fn to_tool_config(&self, session_name: String) -> BrowserToolConfig {
+        BrowserToolConfig {
+            enabled: self.enabled,
+            command: self.command.clone(),
+            provider: Some(self.provider.clone()).filter(|value| !value.trim().is_empty()),
+            session_name,
+            default_timeout_ms: self.default_timeout_ms,
+            max_output_chars: self.max_output_chars,
+            browserless_api_key: self.browserless.api_key.clone(),
+            browserless_api_url: Some(self.browserless.api_url.clone())
+                .filter(|value| !value.trim().is_empty()),
+            browserless_browser_type: Some(self.browserless.browser_type.clone())
+                .filter(|value| !value.trim().is_empty()),
+            browserless_ttl_ms: Some(self.browserless.ttl_ms),
+            browserless_stealth: Some(self.browserless.stealth),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
@@ -201,6 +252,17 @@ pub struct ConfigEnv {
     pub context_window_tokens_override: Option<u32>,
     pub web_search_backend_override: Option<String>,
     pub web_search_url_override: Option<String>,
+    pub browser_enabled_override: Option<bool>,
+    pub browser_command_override: Option<String>,
+    pub browser_provider_override: Option<String>,
+    pub browser_session_prefix_override: Option<String>,
+    pub browser_default_timeout_ms_override: Option<u64>,
+    pub browser_max_output_chars_override: Option<usize>,
+    pub browserless_api_url_override: Option<String>,
+    pub browserless_api_key_override: Option<String>,
+    pub browserless_browser_type_override: Option<String>,
+    pub browserless_ttl_ms_override: Option<u64>,
+    pub browserless_stealth_override: Option<bool>,
     pub otlp_export_enabled_override: Option<bool>,
     pub otlp_endpoint_override: Option<String>,
     pub otlp_timeout_ms_override: Option<u64>,
@@ -263,6 +325,7 @@ struct FileConfig {
     workspace: Option<WorkspaceConfig>,
     context: Option<ContextConfig>,
     web: Option<WebConfig>,
+    browser: Option<BrowserConfig>,
     observability: Option<ObservabilityConfig>,
     runtime_timing: Option<RuntimeTimingConfig>,
     runtime_limits: Option<RuntimeLimitsConfig>,
@@ -310,6 +373,32 @@ impl Default for WebConfig {
         Self {
             search_backend: WebSearchBackend::default(),
             search_url: DEFAULT_WEB_SEARCH_URL.to_string(),
+        }
+    }
+}
+
+impl Default for BrowserConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            command: DEFAULT_BROWSER_COMMAND.to_string(),
+            provider: DEFAULT_BROWSER_PROVIDER.to_string(),
+            session_prefix: DEFAULT_BROWSER_SESSION_PREFIX.to_string(),
+            default_timeout_ms: DEFAULT_BROWSER_TIMEOUT_MS,
+            max_output_chars: DEFAULT_BROWSER_MAX_OUTPUT_CHARS,
+            browserless: BrowserlessConfig::default(),
+        }
+    }
+}
+
+impl Default for BrowserlessConfig {
+    fn default() -> Self {
+        Self {
+            api_url: DEFAULT_BROWSERLESS_API_URL.to_string(),
+            api_key: None,
+            browser_type: DEFAULT_BROWSERLESS_BROWSER_TYPE.to_string(),
+            ttl_ms: DEFAULT_BROWSERLESS_TTL_MS,
+            stealth: true,
         }
     }
 }
@@ -584,6 +673,29 @@ impl ConfigEnv {
             context_window_tokens_override: read_u32_var("TEAMD_CONTEXT_WINDOW_TOKENS", &dotenv)?,
             web_search_backend_override: read_string_var("TEAMD_WEB_SEARCH_BACKEND", &dotenv),
             web_search_url_override: read_string_var("TEAMD_WEB_SEARCH_URL", &dotenv),
+            browser_enabled_override: read_bool_var("TEAMD_BROWSER_ENABLED", &dotenv)?,
+            browser_command_override: read_string_var("TEAMD_BROWSER_COMMAND", &dotenv),
+            browser_provider_override: read_string_var("TEAMD_BROWSER_PROVIDER", &dotenv),
+            browser_session_prefix_override: read_string_var(
+                "TEAMD_BROWSER_SESSION_PREFIX",
+                &dotenv,
+            ),
+            browser_default_timeout_ms_override: read_u64_var(
+                "TEAMD_BROWSER_DEFAULT_TIMEOUT_MS",
+                &dotenv,
+            )?,
+            browser_max_output_chars_override: read_usize_var(
+                "TEAMD_BROWSER_MAX_OUTPUT_CHARS",
+                &dotenv,
+            )?,
+            browserless_api_url_override: read_string_var("TEAMD_BROWSERLESS_API_URL", &dotenv),
+            browserless_api_key_override: read_string_var("TEAMD_BROWSERLESS_API_KEY", &dotenv),
+            browserless_browser_type_override: read_string_var(
+                "TEAMD_BROWSERLESS_BROWSER_TYPE",
+                &dotenv,
+            ),
+            browserless_ttl_ms_override: read_u64_var("TEAMD_BROWSERLESS_TTL_MS", &dotenv)?,
+            browserless_stealth_override: read_bool_var("TEAMD_BROWSERLESS_STEALTH", &dotenv)?,
             otlp_export_enabled_override: read_bool_var("TEAMD_OTLP_EXPORT_ENABLED", &dotenv)?,
             otlp_endpoint_override: read_string_var("TEAMD_OTLP_ENDPOINT", &dotenv),
             otlp_timeout_ms_override: read_u64_var("TEAMD_OTLP_TIMEOUT_MS", &dotenv)?,
@@ -702,6 +814,10 @@ impl AppConfig {
             .as_ref()
             .and_then(|config| config.web.clone())
             .unwrap_or_default();
+        let mut browser = file_config
+            .as_ref()
+            .and_then(|config| config.browser.clone())
+            .unwrap_or_default();
         let mut observability = file_config
             .as_ref()
             .and_then(|config| config.observability.clone())
@@ -799,6 +915,39 @@ impl AppConfig {
         if let Some(search_url) = &env.web_search_url_override {
             web.search_url = search_url.clone();
         }
+        if let Some(enabled) = env.browser_enabled_override {
+            browser.enabled = enabled;
+        }
+        if let Some(command) = &env.browser_command_override {
+            browser.command = command.clone();
+        }
+        if let Some(provider) = &env.browser_provider_override {
+            browser.provider = provider.clone();
+        }
+        if let Some(session_prefix) = &env.browser_session_prefix_override {
+            browser.session_prefix = session_prefix.clone();
+        }
+        if let Some(timeout_ms) = env.browser_default_timeout_ms_override {
+            browser.default_timeout_ms = timeout_ms;
+        }
+        if let Some(max_output_chars) = env.browser_max_output_chars_override {
+            browser.max_output_chars = max_output_chars;
+        }
+        if let Some(api_url) = &env.browserless_api_url_override {
+            browser.browserless.api_url = api_url.clone();
+        }
+        if let Some(api_key) = &env.browserless_api_key_override {
+            browser.browserless.api_key = Some(api_key.clone());
+        }
+        if let Some(browser_type) = &env.browserless_browser_type_override {
+            browser.browserless.browser_type = browser_type.clone();
+        }
+        if let Some(ttl_ms) = env.browserless_ttl_ms_override {
+            browser.browserless.ttl_ms = ttl_ms;
+        }
+        if let Some(stealth) = env.browserless_stealth_override {
+            browser.browserless.stealth = stealth;
+        }
         if let Some(enabled) = env.otlp_export_enabled_override {
             observability.otlp_export_enabled = enabled;
         }
@@ -825,6 +974,7 @@ impl AppConfig {
             workspace,
             context,
             web,
+            browser,
             observability,
             runtime_timing,
             runtime_limits,
@@ -920,6 +1070,41 @@ impl AppConfig {
                 name: "web.search_url",
                 value: self.web.search_url.clone(),
                 reason: "must not be empty",
+            });
+        }
+        if self.browser.enabled && self.browser.command.trim().is_empty() {
+            return Err(ConfigError::InvalidProviderValue {
+                name: "browser.command",
+                value: self.browser.command.clone(),
+                reason: "must not be empty when browser.enabled is true",
+            });
+        }
+        if self.browser.enabled && self.browser.provider.trim().is_empty() {
+            return Err(ConfigError::InvalidProviderValue {
+                name: "browser.provider",
+                value: self.browser.provider.clone(),
+                reason: "must not be empty when browser.enabled is true",
+            });
+        }
+        if self.browser.session_prefix.trim().is_empty() {
+            return Err(ConfigError::InvalidProviderValue {
+                name: "browser.session_prefix",
+                value: self.browser.session_prefix.clone(),
+                reason: "must not be empty",
+            });
+        }
+        if self.browser.enabled && self.browser.browserless.api_url.trim().is_empty() {
+            return Err(ConfigError::InvalidProviderValue {
+                name: "browser.browserless.api_url",
+                value: self.browser.browserless.api_url.clone(),
+                reason: "must not be empty when browser.enabled is true",
+            });
+        }
+        if self.browser.enabled && self.browser.browserless.browser_type.trim().is_empty() {
+            return Err(ConfigError::InvalidProviderValue {
+                name: "browser.browserless.browser_type",
+                value: self.browser.browserless.browser_type.clone(),
+                reason: "must not be empty when browser.enabled is true",
             });
         }
         if self.observability.otlp_endpoint.trim().is_empty() {
@@ -1040,6 +1225,15 @@ impl AppConfig {
         validate_positive_u64_value(
             "observability.otlp_timeout_ms",
             self.observability.otlp_timeout_ms,
+        )?;
+        validate_positive_u64_value(
+            "browser.default_timeout_ms",
+            self.browser.default_timeout_ms,
+        )?;
+        validate_positive_usize_value("browser.max_output_chars", self.browser.max_output_chars)?;
+        validate_positive_u64_value(
+            "browser.browserless.ttl_ms",
+            self.browser.browserless.ttl_ms,
         )?;
         validate_positive_u64_value(
             "runtime_timing.sqlite_busy_timeout_ms",
@@ -1317,6 +1511,7 @@ fn load_file_config(path: &Path, required: bool) -> Result<FileConfig, ConfigErr
                 workspace: None,
                 context: None,
                 web: None,
+                browser: None,
                 observability: None,
                 runtime_timing: None,
                 runtime_limits: None,
@@ -1743,6 +1938,7 @@ impl Default for AppConfig {
             workspace: WorkspaceConfig::default(),
             context: ContextConfig::default(),
             web: WebConfig::default(),
+            browser: BrowserConfig::default(),
             observability: ObservabilityConfig::default(),
             runtime_timing: RuntimeTimingConfig::default(),
             runtime_limits: RuntimeLimitsConfig::default(),

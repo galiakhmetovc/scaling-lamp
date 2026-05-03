@@ -152,6 +152,15 @@ pub struct WebSearchOutput {
     pub results: Vec<WebSearchResult>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BrowserCommandOutput {
+    pub action: String,
+    pub session: String,
+    pub stdout: String,
+    pub stderr: String,
+    pub workspace_path: Option<String>,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ProcessKind {
     Exec,
@@ -792,6 +801,19 @@ pub enum ToolOutput {
     FsSearch(FsSearchOutput),
     WebFetch(WebFetchOutput),
     WebSearch(WebSearchOutput),
+    BrowserOpen(BrowserCommandOutput),
+    BrowserSnapshot(BrowserCommandOutput),
+    BrowserText(BrowserCommandOutput),
+    BrowserClick(BrowserCommandOutput),
+    BrowserFill(BrowserCommandOutput),
+    BrowserPress(BrowserCommandOutput),
+    BrowserWait(BrowserCommandOutput),
+    BrowserScroll(BrowserCommandOutput),
+    BrowserEval(BrowserCommandOutput),
+    BrowserScreenshot(BrowserCommandOutput),
+    BrowserPdf(BrowserCommandOutput),
+    BrowserStatus(BrowserCommandOutput),
+    BrowserClose(BrowserCommandOutput),
     ProcessStart(ProcessStartOutput),
     ProcessOutputRead(ProcessOutputRead),
     ProcessResult(ProcessResult),
@@ -1123,6 +1145,38 @@ impl ToolOutput {
                 format!("web_fetch url={} status={}", output.url, output.status_code)
             }
             Self::WebSearch(output) => format!("web_search results={}", output.results.len()),
+            Self::BrowserOpen(output)
+            | Self::BrowserSnapshot(output)
+            | Self::BrowserText(output)
+            | Self::BrowserClick(output)
+            | Self::BrowserFill(output)
+            | Self::BrowserPress(output)
+            | Self::BrowserWait(output)
+            | Self::BrowserScroll(output)
+            | Self::BrowserEval(output)
+            | Self::BrowserScreenshot(output)
+            | Self::BrowserPdf(output)
+            | Self::BrowserStatus(output)
+            | Self::BrowserClose(output) => {
+                if let Some(path) = &output.workspace_path {
+                    format!(
+                        "{} session={} path={} stdout_bytes={} stderr_bytes={}",
+                        output.action,
+                        output.session,
+                        path,
+                        output.stdout.len(),
+                        output.stderr.len()
+                    )
+                } else {
+                    format!(
+                        "{} session={} stdout_bytes={} stderr_bytes={}",
+                        output.action,
+                        output.session,
+                        output.stdout.len(),
+                        output.stderr.len()
+                    )
+                }
+            }
             Self::ProcessStart(output) => format!(
                 "{}_start process_id={} pid_ref={} cwd={} command={}",
                 output.kind.as_str(),
@@ -1537,6 +1591,27 @@ impl ToolOutput {
                     "url": result.url,
                     "snippet": result.snippet,
                 })).collect::<Vec<_>>(),
+            })
+            .to_string(),
+            Self::BrowserOpen(output)
+            | Self::BrowserSnapshot(output)
+            | Self::BrowserText(output)
+            | Self::BrowserClick(output)
+            | Self::BrowserFill(output)
+            | Self::BrowserPress(output)
+            | Self::BrowserWait(output)
+            | Self::BrowserScroll(output)
+            | Self::BrowserEval(output)
+            | Self::BrowserScreenshot(output)
+            | Self::BrowserPdf(output)
+            | Self::BrowserStatus(output)
+            | Self::BrowserClose(output) => json!({
+                "tool": output.action,
+                "session": output.session,
+                "stdout": output.stdout,
+                "stderr": output.stderr,
+                "workspace_path": output.workspace_path,
+                "note": "agent-browser refs like @eN are fresh per browser_snapshot and become stale after page-changing actions"
             })
             .to_string(),
             Self::ProcessStart(output) => json!({

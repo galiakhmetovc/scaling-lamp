@@ -51,13 +51,14 @@ TEAMD_TELEGRAM_BOT_TOKEN='123456789:test-token' \
 
 Полная инструкция: [14-container-addons.md](14-container-addons.md).
 
-Core `agentd` ставится отдельно от контейнерной обвязки. Второй скрипт поднимает SearXNG/Caddy и опционально SilverBullet, SilverBullet MCP, Lightpanda MCP, Jaeger и legacy Obsidian:
+Core `agentd` ставится отдельно от контейнерной обвязки. Второй скрипт поднимает SearXNG/Caddy и опционально SilverBullet, SilverBullet MCP, Browserless/agent-browser, Jaeger, legacy Lightpanda MCP и legacy Obsidian:
 
 ```bash
 ./scripts/deploy-teamd-containers.sh
 ./scripts/deploy-teamd-containers.sh --with-silverbullet-mcp
-./scripts/deploy-teamd-containers.sh --with-lightpanda-mcp
+./scripts/deploy-teamd-containers.sh --with-browserless
 ./scripts/deploy-teamd-containers.sh --with-jaeger
+./scripts/deploy-teamd-containers.sh --with-lightpanda-mcp
 ./scripts/deploy-teamd-containers.sh --with-obsidian
 ./scripts/deploy-teamd-containers.sh --with-obsidian-mcp
 ```
@@ -66,6 +67,7 @@ Core `agentd` ставится отдельно от контейнерной о
 
 ```bash
 ./scripts/deploy-teamd-containers.sh --dry-run --non-interactive --no-start --with-silverbullet-mcp
+./scripts/deploy-teamd-containers.sh --dry-run --non-interactive --no-start --no-searxng --no-caddy --with-browserless
 ./scripts/deploy-teamd-containers.sh --dry-run --non-interactive --no-start --no-searxng --no-caddy --with-lightpanda-mcp
 ./scripts/deploy-teamd-containers.sh --dry-run --non-interactive --no-start --with-jaeger
 ./scripts/deploy-teamd-containers.sh --dry-run --non-interactive --no-start --with-obsidian-mcp
@@ -86,7 +88,30 @@ teamdctl session enable-skill <session_id> silverbullet-space
 teamdctl session skills <session_id>
 ```
 
-`--with-lightpanda-mcp` ставит JS-capable headless browser как MCP connector:
+`--with-browserless` ставит текущий recommended browser automation path:
+
+- Browserless container: `teamd-browserless`, localhost `http://127.0.0.1:3000`;
+- Browserless token: `/opt/teamd/containers/browserless/browserless.env`;
+- `agent-browser` npm package: `/opt/teamd/agent-browser`;
+- stable wrapper: `/opt/teamd/bin/agent-browser`;
+- PATH symlink: `/usr/local/bin/agent-browser`;
+- agentd env: `TEAMD_BROWSER_ENABLED=true`, `TEAMD_BROWSER_PROVIDER=browserless`, `TEAMD_BROWSERLESS_API_URL=http://127.0.0.1:3000`.
+
+Default agent получает skill `agent-browser` и built-in tools `browser_open`, `browser_snapshot`, `browser_click`, `browser_fill`, `browser_text`, `browser_screenshot`, `browser_pdf`.
+
+```bash
+teamdctl session enable-skill <session_id> agent-browser
+teamdctl session skills <session_id>
+```
+
+Smoke check:
+
+```bash
+agent-browser --provider browserless open https://example.com
+agent-browser --provider browserless snapshot -i -c
+```
+
+`--with-lightpanda-mcp` остаётся legacy/experimental JS-capable headless browser как MCP connector:
 
 - binary: `/opt/teamd/bin/lightpanda`;
 - PATH symlink: `/usr/local/bin/lightpanda`;
@@ -94,14 +119,14 @@ teamdctl session skills <session_id>
 - MCP connector: `[daemon.mcp_connectors.lightpanda]` в `/etc/teamd/config.toml`;
 - telemetry в wrapper выключена по умолчанию через `LIGHTPANDA_DISABLE_TELEMETRY=true`.
 
-Default agent получает skill `lightpanda-browser`:
+Default agent ещё содержит compatibility skill `lightpanda-browser`, но для новой работы используйте `agent-browser`:
 
 ```bash
 teamdctl session enable-skill <session_id> lightpanda-browser
 teamdctl session skills <session_id>
 ```
 
-Используйте Lightpanda для динамических страниц, форм, кликов и DOM/markdown extraction. Для обычного поиска и прямого чтения URL оставляйте `web_search` и `web_fetch`.
+Lightpanda нужен только для legacy/экспериментов. Для новой browser automation используйте `agent-browser` skill и built-in `browser_*`; для обычного поиска и прямого чтения URL оставляйте `web_search` и `web_fetch`.
 
 `--with-jaeger` ставит `teamd-jaeger`, включает OTLP receiver и прописывает в `/etc/teamd/teamd.env`:
 

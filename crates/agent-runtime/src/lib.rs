@@ -73,7 +73,7 @@ mod tests {
         assert_eq!(
             scaffold.tools.families,
             [
-                "fs", "web", "exec", "plan", "offload", "memory", "mcp", "agent"
+                "fs", "web", "browser", "exec", "plan", "offload", "memory", "mcp", "agent"
             ]
         );
         workspace.root.push("runs");

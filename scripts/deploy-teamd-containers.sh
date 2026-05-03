@@ -15,6 +15,8 @@ ENABLE_JAEGER=0
 ENABLE_SILVERBULLET=0
 ENABLE_SILVERBULLET_MCP=0
 WRITE_SILVERBULLET_MCP_EXAMPLE=0
+ENABLE_BROWSERLESS=0
+INSTALL_AGENT_BROWSER=0
 ENABLE_LIGHTPANDA=0
 ENABLE_LIGHTPANDA_MCP=0
 WRITE_LIGHTPANDA_MCP_EXAMPLE=0
@@ -75,6 +77,27 @@ SILVERBULLET_MCP_NODE_IMAGE=${TEAMD_SILVERBULLET_MCP_NODE_IMAGE:-docker.io/libra
 SILVERBULLET_MCP_STDIO_WRAPPER=$SILVERBULLET_DIR/silverbullet-mcp-stdio.sh
 SILVERBULLET_MCP_EXAMPLE=$SILVERBULLET_DIR/silverbullet-mcp.example.toml
 LEGACY_LOGSEQ_GRAPH_DIR=${TEAMD_LEGACY_LOGSEQ_GRAPH_DIR:-${TEAMD_LOGSEQ_GRAPH_DIR:-/var/lib/teamd/knowledge/logseq/teamd}}
+
+BROWSERLESS_IMAGE=${TEAMD_BROWSERLESS_IMAGE:-ghcr.io/browserless/chromium:latest}
+BROWSERLESS_PORT=${TEAMD_BROWSERLESS_PORT:-3000}
+BROWSERLESS_CONTAINER_PORT=${TEAMD_BROWSERLESS_CONTAINER_PORT:-3000}
+BROWSERLESS_CONCURRENT=${TEAMD_BROWSERLESS_CONCURRENT:-3}
+BROWSERLESS_DIR=$CONTAINERS_ROOT/browserless
+BROWSERLESS_COMPOSE=$BROWSERLESS_DIR/docker-compose.yml
+BROWSERLESS_ENV_FILE=${TEAMD_BROWSERLESS_ENV_FILE:-$BROWSERLESS_DIR/browserless.env}
+BROWSERLESS_API_URL=${TEAMD_BROWSERLESS_API_URL:-http://127.0.0.1:$BROWSERLESS_PORT}
+BROWSERLESS_BROWSER_TYPE=${TEAMD_BROWSERLESS_BROWSER_TYPE:-chromium}
+BROWSERLESS_TTL_MS=${TEAMD_BROWSERLESS_TTL_MS:-300000}
+BROWSERLESS_STEALTH=${TEAMD_BROWSERLESS_STEALTH:-true}
+BROWSERLESS_TOKEN=${TEAMD_BROWSERLESS_TOKEN:-}
+
+AGENT_BROWSER_NPM_PACKAGE=${TEAMD_AGENT_BROWSER_NPM_PACKAGE:-agent-browser@latest}
+AGENT_BROWSER_INSTALL_DIR=${TEAMD_AGENT_BROWSER_INSTALL_DIR:-/opt/teamd/agent-browser}
+AGENT_BROWSER_BIN=${TEAMD_AGENT_BROWSER_BIN:-/opt/teamd/bin/agent-browser}
+AGENT_BROWSER_PATH_LINK=${TEAMD_AGENT_BROWSER_PATH_LINK:-/usr/local/bin/agent-browser}
+AGENT_BROWSER_SESSION_PREFIX=${TEAMD_AGENT_BROWSER_SESSION_PREFIX:-teamd}
+AGENT_BROWSER_DEFAULT_TIMEOUT_MS=${TEAMD_AGENT_BROWSER_DEFAULT_TIMEOUT_MS:-30000}
+AGENT_BROWSER_MAX_OUTPUT_CHARS=${TEAMD_AGENT_BROWSER_MAX_OUTPUT_CHARS:-20000}
 
 LIGHTPANDA_RELEASE_TAG=${TEAMD_LIGHTPANDA_RELEASE_TAG:-nightly}
 LIGHTPANDA_DOWNLOAD_URL=${TEAMD_LIGHTPANDA_DOWNLOAD_URL:-}
@@ -145,7 +168,7 @@ Deploy teamD container add-ons without changing the main agentd deploy path.
 
 By default this installs/uses Docker Engine, deploys a local SearXNG instance
 bound to 127.0.0.1:$SEARXNG_PORT, and starts Caddy as an edge reverse proxy.
-Obsidian, SilverBullet, SilverBullet MCP, Lightpanda MCP, and Jaeger are opt-in.
+Obsidian, SilverBullet, SilverBullet MCP, Browserless, Lightpanda MCP, and Jaeger are opt-in.
 
 Options:
   --dry-run             Print actions without changing the system.
@@ -164,6 +187,8 @@ Options:
                          Deploy SilverBullet plus MCP bridge and agentd MCP connector.
   --with-silverbullet-mcp-example
                          Write an agentd stdio MCP connector example for SilverBullet.
+  --with-browserless     Deploy Browserless and install/configure agent-browser.
+  --with-agent-browser   Install/configure agent-browser without deploying Browserless.
   --with-lightpanda      Install the Lightpanda headless browser binary.
   --with-lightpanda-mcp  Install Lightpanda and an agentd MCP connector.
   --with-lightpanda-mcp-example
@@ -229,6 +254,30 @@ Environment overrides:
   TEAMD_SILVERBULLET_MCP_NODE_IMAGE
                                  Node image used for mcp-remote stdio bridge,
                                  default: $SILVERBULLET_MCP_NODE_IMAGE.
+  TEAMD_BROWSERLESS_IMAGE        Browserless image, default: $BROWSERLESS_IMAGE.
+  TEAMD_BROWSERLESS_PORT         Browserless localhost port, default: $BROWSERLESS_PORT.
+  TEAMD_BROWSERLESS_CONTAINER_PORT
+                                 Browserless container port, default: $BROWSERLESS_CONTAINER_PORT.
+  TEAMD_BROWSERLESS_CONCURRENT   Browserless max concurrency, default: $BROWSERLESS_CONCURRENT.
+  TEAMD_BROWSERLESS_ENV_FILE     Browserless TOKEN env file, default: $BROWSERLESS_ENV_FILE.
+  TEAMD_BROWSERLESS_TOKEN        Browserless token. If unset, generated and stored.
+  TEAMD_BROWSERLESS_API_URL      agent-browser Browserless URL,
+                                 default: $BROWSERLESS_API_URL.
+  TEAMD_BROWSERLESS_BROWSER_TYPE Browser type for agent-browser, default: $BROWSERLESS_BROWSER_TYPE.
+  TEAMD_BROWSERLESS_TTL_MS       Browserless session TTL hint, default: $BROWSERLESS_TTL_MS.
+  TEAMD_BROWSERLESS_STEALTH      agent-browser stealth flag, default: $BROWSERLESS_STEALTH.
+  TEAMD_AGENT_BROWSER_NPM_PACKAGE
+                                 npm package to install, default: $AGENT_BROWSER_NPM_PACKAGE.
+  TEAMD_AGENT_BROWSER_INSTALL_DIR
+                                 npm prefix for agent-browser, default: $AGENT_BROWSER_INSTALL_DIR.
+  TEAMD_AGENT_BROWSER_BIN        Stable wrapper path used by agentd, default: $AGENT_BROWSER_BIN.
+  TEAMD_AGENT_BROWSER_PATH_LINK  PATH symlink, default: $AGENT_BROWSER_PATH_LINK.
+  TEAMD_AGENT_BROWSER_SESSION_PREFIX
+                                 Browser session prefix, default: $AGENT_BROWSER_SESSION_PREFIX.
+  TEAMD_AGENT_BROWSER_DEFAULT_TIMEOUT_MS
+                                 Browser tool timeout, default: $AGENT_BROWSER_DEFAULT_TIMEOUT_MS.
+  TEAMD_AGENT_BROWSER_MAX_OUTPUT_CHARS
+                                 Browser tool output cap, default: $AGENT_BROWSER_MAX_OUTPUT_CHARS.
   TEAMD_LIGHTPANDA_RELEASE_TAG   Lightpanda GitHub release tag, default: $LIGHTPANDA_RELEASE_TAG.
   TEAMD_LIGHTPANDA_DOWNLOAD_URL  Explicit Lightpanda binary URL. Overrides release tag/platform detection.
   TEAMD_LIGHTPANDA_BIN           Installed Lightpanda binary path, default: $LIGHTPANDA_BIN.
@@ -380,6 +429,35 @@ ensure_docker() {
   docker_compose_available || fail "Docker Compose plugin is still unavailable after Docker install"
 }
 
+install_node_npm_with_apt() {
+  os_info=$(detect_os_for_docker_apt || true)
+  [ -n "$os_info" ] || fail "Node/npm auto-install currently supports Ubuntu/Debian apt only"
+
+  printf 'Installing Node.js/npm from apt for agent-browser CLI.\n'
+  run_root env DEBIAN_FRONTEND=noninteractive apt-get update
+  run_root env DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+    nodejs npm
+}
+
+ensure_npm() {
+  if [ "$DRY_RUN" -eq 1 ]; then
+    printf 'DRY RUN: ensure Node.js and npm are available for agent-browser.\n'
+    return 0
+  fi
+
+  if command -v npm >/dev/null 2>&1 && command -v node >/dev/null 2>&1; then
+    return 0
+  fi
+
+  if [ "$INSTALL_DOCKER" != "1" ]; then
+    fail "Node.js/npm is required for agent-browser; install npm or omit --no-install-docker"
+  fi
+
+  install_node_npm_with_apt
+  command -v npm >/dev/null 2>&1 || fail "npm is still unavailable after apt install"
+  command -v node >/dev/null 2>&1 || fail "node is still unavailable after apt install"
+}
+
 validate_obsidian_subfolder() {
   [ "$ENABLE_OBSIDIAN" -eq 1 ] || return 0
   [ -n "$OBSIDIAN_SUBFOLDER" ] || return 0
@@ -473,6 +551,7 @@ docker_components_enabled() {
   [ "$ENABLE_SEARXNG" -eq 1 ] ||
     [ "$ENABLE_OBSIDIAN" -eq 1 ] ||
     [ "$ENABLE_JAEGER" -eq 1 ] ||
+    [ "$ENABLE_BROWSERLESS" -eq 1 ] ||
     [ "$ENABLE_SILVERBULLET" -eq 1 ] ||
     [ "$ENABLE_CADDY" -eq 1 ]
 }
@@ -666,6 +745,151 @@ configure_agentd_otlp_env() {
     printf 'TEAMD_OTLP_EXPORT_ENABLED=%s\n' "$(quote_arg "true")"
     printf 'TEAMD_OTLP_ENDPOINT=%s\n' "$(quote_arg "$otlp_endpoint")"
     printf 'TEAMD_OTLP_TIMEOUT_MS=%s\n' "$(quote_arg "$OTLP_EXPORT_TIMEOUT_MS")"
+  } > "$tmp_new"
+
+  env_group=root
+  if getent group "$SERVICE_GROUP" >/dev/null 2>&1; then
+    env_group=$SERVICE_GROUP
+  fi
+  run_root install -m 0640 -o root -g "$env_group" "$tmp_new" "$ENV_FILE"
+  rm -f "$tmp_env" "$tmp_new"
+}
+
+load_browserless_token() {
+  if [ -n "$BROWSERLESS_TOKEN" ]; then
+    return 0
+  fi
+
+  if [ -r "$BROWSERLESS_ENV_FILE" ]; then
+    BROWSERLESS_TOKEN=$(
+      awk -F= '/^TOKEN=/ { print $2; exit }' "$BROWSERLESS_ENV_FILE" | sed "s/^'//; s/'$//; s/^\"//; s/\"$//"
+    )
+  fi
+
+  if [ -z "$BROWSERLESS_TOKEN" ]; then
+    BROWSERLESS_TOKEN=$(generate_secret_key)
+  fi
+}
+
+write_browserless_files() {
+  if [ "$DRY_RUN" -eq 1 ]; then
+    print_cmd mkdir -p "$BROWSERLESS_DIR"
+    print_cmd sh -c "seed Browserless TOKEN in $BROWSERLESS_ENV_FILE"
+    print_cmd sh -c "write $BROWSERLESS_COMPOSE for teamd-browserless"
+    return 0
+  fi
+
+  load_browserless_token
+  run_root mkdir -p "$BROWSERLESS_DIR"
+  tmp_env=$(mktemp)
+  tmp_compose=$(mktemp)
+  trap 'rm -f "$tmp_env" "$tmp_compose"' EXIT INT TERM
+
+  cat > "$tmp_env" <<EOF
+TOKEN=$BROWSERLESS_TOKEN
+EOF
+
+  cat > "$tmp_compose" <<EOF
+services:
+  browserless:
+    image: $BROWSERLESS_IMAGE
+    container_name: teamd-browserless
+    restart: unless-stopped
+    shm_size: "1gb"
+    ports:
+      - "127.0.0.1:$BROWSERLESS_PORT:$BROWSERLESS_CONTAINER_PORT"
+    networks:
+      - $EDGE_NETWORK
+    env_file:
+      - "$BROWSERLESS_ENV_FILE"
+    environment:
+      - CONCURRENT=$BROWSERLESS_CONCURRENT
+
+networks:
+  $EDGE_NETWORK:
+    external: true
+EOF
+
+  run_root install -m 0640 -o root -g root "$tmp_env" "$BROWSERLESS_ENV_FILE"
+  run_root install -m 0644 -o root -g root "$tmp_compose" "$BROWSERLESS_COMPOSE"
+  rm -f "$tmp_env" "$tmp_compose"
+}
+
+install_agent_browser_cli() {
+  bin_parent=$(dirname "$AGENT_BROWSER_BIN")
+  link_parent=$(dirname "$AGENT_BROWSER_PATH_LINK")
+
+  if [ "$DRY_RUN" -eq 1 ]; then
+    print_cmd mkdir -p "$AGENT_BROWSER_INSTALL_DIR" "$bin_parent" "$link_parent"
+    print_cmd npm install -g --prefix "$AGENT_BROWSER_INSTALL_DIR" "$AGENT_BROWSER_NPM_PACKAGE"
+    print_cmd sh -c "write $AGENT_BROWSER_BIN wrapper for agent-browser"
+    print_cmd ln -sf "$AGENT_BROWSER_BIN" "$AGENT_BROWSER_PATH_LINK"
+    return 0
+  fi
+
+  ensure_npm
+  run_root mkdir -p "$AGENT_BROWSER_INSTALL_DIR" "$bin_parent" "$link_parent"
+  run_root npm install -g --prefix "$AGENT_BROWSER_INSTALL_DIR" "$AGENT_BROWSER_NPM_PACKAGE"
+
+  tmp_wrapper=$(mktemp)
+  trap 'rm -f "$tmp_wrapper"' EXIT INT TERM
+  cat > "$tmp_wrapper" <<EOF
+#!/bin/sh
+set -eu
+exec "$AGENT_BROWSER_INSTALL_DIR/bin/agent-browser" "\$@"
+EOF
+
+  run_root install -m 0755 -o root -g root "$tmp_wrapper" "$AGENT_BROWSER_BIN"
+  run_root ln -sf "$AGENT_BROWSER_BIN" "$AGENT_BROWSER_PATH_LINK"
+  "$AGENT_BROWSER_BIN" --help >/dev/null
+}
+
+configure_agentd_browser_env() {
+  env_parent=$(dirname "$ENV_FILE")
+  [ "$DRY_RUN" -eq 1 ] || load_browserless_token
+
+  if [ "$DRY_RUN" -eq 1 ]; then
+    print_cmd mkdir -p "$env_parent"
+    print_cmd sh -c "upsert agent-browser Browserless defaults in $ENV_FILE"
+    return 0
+  fi
+
+  run_root mkdir -p "$env_parent"
+
+  tmp_env=$(mktemp)
+  tmp_new=$(mktemp)
+  if [ -e "$ENV_FILE" ]; then
+    awk '
+      !/^(export[[:space:]]+)?TEAMD_BROWSER_ENABLED=/ &&
+      !/^(export[[:space:]]+)?TEAMD_BROWSER_COMMAND=/ &&
+      !/^(export[[:space:]]+)?TEAMD_BROWSER_PROVIDER=/ &&
+      !/^(export[[:space:]]+)?TEAMD_BROWSER_SESSION_PREFIX=/ &&
+      !/^(export[[:space:]]+)?TEAMD_BROWSER_DEFAULT_TIMEOUT_MS=/ &&
+      !/^(export[[:space:]]+)?TEAMD_BROWSER_MAX_OUTPUT_CHARS=/ &&
+      !/^(export[[:space:]]+)?TEAMD_BROWSERLESS_API_URL=/ &&
+      !/^(export[[:space:]]+)?TEAMD_BROWSERLESS_API_KEY=/ &&
+      !/^(export[[:space:]]+)?TEAMD_BROWSERLESS_BROWSER_TYPE=/ &&
+      !/^(export[[:space:]]+)?TEAMD_BROWSERLESS_TTL_MS=/ &&
+      !/^(export[[:space:]]+)?TEAMD_BROWSERLESS_STEALTH=/
+    ' "$ENV_FILE" > "$tmp_env"
+  else
+    : > "$tmp_env"
+  fi
+
+  {
+    cat "$tmp_env"
+    [ ! -s "$tmp_env" ] || printf '\n'
+    printf 'TEAMD_BROWSER_ENABLED=%s\n' "$(quote_arg "true")"
+    printf 'TEAMD_BROWSER_COMMAND=%s\n' "$(quote_arg "$AGENT_BROWSER_BIN")"
+    printf 'TEAMD_BROWSER_PROVIDER=%s\n' "$(quote_arg "browserless")"
+    printf 'TEAMD_BROWSER_SESSION_PREFIX=%s\n' "$(quote_arg "$AGENT_BROWSER_SESSION_PREFIX")"
+    printf 'TEAMD_BROWSER_DEFAULT_TIMEOUT_MS=%s\n' "$(quote_arg "$AGENT_BROWSER_DEFAULT_TIMEOUT_MS")"
+    printf 'TEAMD_BROWSER_MAX_OUTPUT_CHARS=%s\n' "$(quote_arg "$AGENT_BROWSER_MAX_OUTPUT_CHARS")"
+    printf 'TEAMD_BROWSERLESS_API_URL=%s\n' "$(quote_arg "$BROWSERLESS_API_URL")"
+    printf 'TEAMD_BROWSERLESS_API_KEY=%s\n' "$(quote_arg "$BROWSERLESS_TOKEN")"
+    printf 'TEAMD_BROWSERLESS_BROWSER_TYPE=%s\n' "$(quote_arg "$BROWSERLESS_BROWSER_TYPE")"
+    printf 'TEAMD_BROWSERLESS_TTL_MS=%s\n' "$(quote_arg "$BROWSERLESS_TTL_MS")"
+    printf 'TEAMD_BROWSERLESS_STEALTH=%s\n' "$(quote_arg "$BROWSERLESS_STEALTH")"
   } > "$tmp_new"
 
   env_group=root
@@ -1704,6 +1928,13 @@ while [ "$#" -gt 0 ]; do
       ENABLE_SILVERBULLET=1
       WRITE_SILVERBULLET_MCP_EXAMPLE=1
       ;;
+    --with-browserless)
+      ENABLE_BROWSERLESS=1
+      INSTALL_AGENT_BROWSER=1
+      ;;
+    --with-agent-browser)
+      INSTALL_AGENT_BROWSER=1
+      ;;
     --with-lightpanda)
       ENABLE_LIGHTPANDA=1
       ;;
@@ -1775,8 +2006,8 @@ if [ "$(id -u)" -ne 0 ] && [ "$DRY_RUN" -eq 0 ]; then
   need_command sudo
 fi
 
-if [ "$ENABLE_SEARXNG" -eq 0 ] && [ "$ENABLE_OBSIDIAN" -eq 0 ] && [ "$ENABLE_JAEGER" -eq 0 ] && [ "$ENABLE_SILVERBULLET" -eq 0 ] && [ "$ENABLE_LIGHTPANDA" -eq 0 ] && [ "$ENABLE_CADDY" -eq 0 ]; then
-  fail "nothing to deploy: SearXNG disabled, Obsidian not enabled, Jaeger not enabled, SilverBullet not enabled, Lightpanda not enabled, and Caddy disabled"
+if [ "$ENABLE_SEARXNG" -eq 0 ] && [ "$ENABLE_OBSIDIAN" -eq 0 ] && [ "$ENABLE_JAEGER" -eq 0 ] && [ "$ENABLE_SILVERBULLET" -eq 0 ] && [ "$ENABLE_BROWSERLESS" -eq 0 ] && [ "$INSTALL_AGENT_BROWSER" -eq 0 ] && [ "$ENABLE_LIGHTPANDA" -eq 0 ] && [ "$ENABLE_CADDY" -eq 0 ]; then
+  fail "nothing to deploy: SearXNG disabled, Obsidian not enabled, Jaeger not enabled, SilverBullet not enabled, Browserless/agent-browser not enabled, Lightpanda not enabled, and Caddy disabled"
 fi
 
 if docker_components_enabled; then
@@ -1802,6 +2033,16 @@ if [ "$ENABLE_JAEGER" -eq 1 ]; then
   write_jaeger_files
   configure_agentd_otlp_env
   compose_up "$JAEGER_COMPOSE"
+fi
+
+if [ "$ENABLE_BROWSERLESS" -eq 1 ]; then
+  write_browserless_files
+  compose_up "$BROWSERLESS_COMPOSE"
+fi
+
+if [ "$INSTALL_AGENT_BROWSER" -eq 1 ]; then
+  install_agent_browser_cli
+  configure_agentd_browser_env
 fi
 
 if [ "$ENABLE_SILVERBULLET" -eq 1 ]; then
@@ -1852,7 +2093,7 @@ if [ "$ENABLE_CADDY" -eq 1 ]; then
   reload_caddy_if_running
 fi
 
-if [ "$ENABLE_SEARXNG" -eq 1 ] || [ "$ENABLE_OBSIDIAN_MCP" -eq 1 ] || [ "$ENABLE_SILVERBULLET_MCP" -eq 1 ] || [ "$ENABLE_LIGHTPANDA_MCP" -eq 1 ] || [ "$ENABLE_JAEGER" -eq 1 ]; then
+if [ "$ENABLE_SEARXNG" -eq 1 ] || [ "$ENABLE_OBSIDIAN_MCP" -eq 1 ] || [ "$ENABLE_SILVERBULLET_MCP" -eq 1 ] || [ "$ENABLE_LIGHTPANDA_MCP" -eq 1 ] || [ "$ENABLE_JAEGER" -eq 1 ] || [ "$INSTALL_AGENT_BROWSER" -eq 1 ]; then
   restart_teamd_services
 fi
 
@@ -1967,6 +2208,40 @@ EOF
   else
     cat <<EOF
     Caddy URL: http://127.0.0.1:$CADDY_HTTP_PORT/jaeger/
+EOF
+  fi
+fi
+
+if [ "$ENABLE_BROWSERLESS" -eq 1 ] || [ "$INSTALL_AGENT_BROWSER" -eq 1 ]; then
+  cat <<EOF
+  Agent Browser / Browserless:
+    agent-browser command: $AGENT_BROWSER_BIN
+    PATH symlink: $AGENT_BROWSER_PATH_LINK
+    npm package: $AGENT_BROWSER_NPM_PACKAGE
+    npm prefix: $AGENT_BROWSER_INSTALL_DIR
+    agentd browser config:
+      Env file: $ENV_FILE
+      TEAMD_BROWSER_ENABLED=true
+      TEAMD_BROWSER_COMMAND=$AGENT_BROWSER_BIN
+      TEAMD_BROWSER_PROVIDER=browserless
+      TEAMD_BROWSER_SESSION_PREFIX=$AGENT_BROWSER_SESSION_PREFIX
+      TEAMD_BROWSER_DEFAULT_TIMEOUT_MS=$AGENT_BROWSER_DEFAULT_TIMEOUT_MS
+      TEAMD_BROWSER_MAX_OUTPUT_CHARS=$AGENT_BROWSER_MAX_OUTPUT_CHARS
+      TEAMD_BROWSERLESS_API_URL=$BROWSERLESS_API_URL
+      TEAMD_BROWSERLESS_BROWSER_TYPE=$BROWSERLESS_BROWSER_TYPE
+      TEAMD_BROWSERLESS_TTL_MS=$BROWSERLESS_TTL_MS
+      TEAMD_BROWSERLESS_STEALTH=$BROWSERLESS_STEALTH
+EOF
+  if [ "$ENABLE_BROWSERLESS" -eq 1 ]; then
+    cat <<EOF
+    Browserless:
+      Container: teamd-browserless
+      Local URL: http://127.0.0.1:$BROWSERLESS_PORT
+      Image: $BROWSERLESS_IMAGE
+      Compose: $BROWSERLESS_COMPOSE
+      Env file: $BROWSERLESS_ENV_FILE
+      Start command: docker compose -f $BROWSERLESS_COMPOSE up -d
+      Smoke: curl 'http://127.0.0.1:$BROWSERLESS_PORT/content?token=<token>&url=https://example.com'
 EOF
   fi
 fi

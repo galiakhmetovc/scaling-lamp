@@ -286,6 +286,44 @@ impl ExecutionService {
                     .to_string(),
                 )))
             }
+            ToolOutput::BrowserOpen(result)
+            | ToolOutput::BrowserSnapshot(result)
+            | ToolOutput::BrowserText(result)
+            | ToolOutput::BrowserClick(result)
+            | ToolOutput::BrowserFill(result)
+            | ToolOutput::BrowserPress(result)
+            | ToolOutput::BrowserWait(result)
+            | ToolOutput::BrowserScroll(result)
+            | ToolOutput::BrowserEval(result)
+            | ToolOutput::BrowserScreenshot(result)
+            | ToolOutput::BrowserPdf(result)
+            | ToolOutput::BrowserStatus(result)
+            | ToolOutput::BrowserClose(result) => {
+                let payload = output.model_output().into_bytes();
+                let stdout_preview = prompting::preview_text(result.stdout.as_str(), 240);
+                let stderr_preview = prompting::preview_text(result.stderr.as_str(), 180);
+                let summary = format!(
+                    "Large {} output from browser session {}",
+                    result.action, result.session
+                );
+                Ok(Some((
+                    format!("{} {}", result.action, result.session),
+                    summary.clone(),
+                    payload,
+                    serde_json::json!({
+                        "tool": result.action,
+                        "session": result.session,
+                        "workspace_path": result.workspace_path,
+                        "offloaded": true,
+                        "artifact_id": "__ARTIFACT_ID__",
+                        "ref_id": "__REF_ID__",
+                        "summary": summary,
+                        "stdout_preview": stdout_preview,
+                        "stderr_preview": stderr_preview,
+                    })
+                    .to_string(),
+                )))
+            }
             ToolOutput::ProcessResult(result) => {
                 let payload = output.model_output().into_bytes();
                 let stdout_preview = prompting::preview_text(result.stdout.as_str(), 180);
@@ -518,5 +556,40 @@ impl ExecutionService {
                     reason: "the current session has no offloaded context".to_string(),
                 })
             })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use agent_runtime::tool::BrowserCommandOutput;
+
+    #[test]
+    fn browser_snapshot_output_is_offloadable() {
+        let service = ExecutionService::default();
+        let parsed = ToolCall::BrowserSnapshot(agent_runtime::tool::BrowserSnapshotInput {
+            interactive: Some(true),
+            compact: Some(true),
+            depth: None,
+            selector: None,
+            max_chars: None,
+        });
+        let output = ToolOutput::BrowserSnapshot(BrowserCommandOutput {
+            action: "browser_snapshot".to_string(),
+            session: "teamd-session-1".to_string(),
+            stdout: "node ".repeat(600),
+            stderr: String::new(),
+            workspace_path: None,
+        });
+
+        let offloadable = service
+            .offloadable_tool_output(&parsed, &output)
+            .expect("offload check")
+            .expect("browser snapshot must be offloadable");
+
+        assert_eq!(offloadable.0, "browser_snapshot teamd-session-1");
+        assert!(offloadable.1.contains("Large browser_snapshot output"));
+        assert!(String::from_utf8_lossy(&offloadable.2).contains("node"));
+        assert!(offloadable.3.contains("\"offloaded\":true"));
     }
 }

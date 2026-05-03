@@ -9,12 +9,16 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 
+use super::browser::{
+    default_browser_screenshot_path, ensure_browser_output_parent, normalize_browser_workspace_path,
+};
 use super::*;
 
 #[derive(Debug)]
 pub struct ToolRuntime {
     workspace: WorkspaceRef,
     web: WebToolClient,
+    browser: BrowserToolClient,
     processes: SharedProcessRegistry,
 }
 
@@ -80,6 +84,21 @@ impl ToolRuntime {
         Self {
             workspace,
             web,
+            browser: BrowserToolClient::disabled(),
+            processes,
+        }
+    }
+
+    pub fn with_clients_and_process_registry(
+        workspace: WorkspaceRef,
+        web: WebToolClient,
+        browser: BrowserToolClient,
+        processes: SharedProcessRegistry,
+    ) -> Self {
+        Self {
+            workspace,
+            web,
+            browser,
             processes,
         }
     }
@@ -318,6 +337,218 @@ impl ToolRuntime {
             ToolCall::WebSearch(input) => Ok(ToolOutput::WebSearch(
                 self.web.search(&input.query, input.limit)?,
             )),
+            ToolCall::BrowserOpen(input) => {
+                let mut args = vec!["open".to_string(), input.url.clone()];
+                let opened = self.browser.invoke("open", args.clone(), None)?;
+                let mut stdout = opened.stdout;
+                let mut stderr = opened.stderr;
+                if let Some(wait_until) = &input.wait_until {
+                    args = vec!["wait".to_string(), "--load".to_string(), wait_until.clone()];
+                    let waited = self.browser.invoke("wait", args, None)?;
+                    if !waited.stdout.is_empty() {
+                        stdout.push_str(&waited.stdout);
+                    }
+                    stderr.push_str(&waited.stderr);
+                }
+                Ok(ToolOutput::BrowserOpen(BrowserCommandOutput {
+                    action: ToolName::BrowserOpen.as_str().to_string(),
+                    session: self.browser.config().session_name.clone(),
+                    stdout,
+                    stderr,
+                    workspace_path: None,
+                }))
+            }
+            ToolCall::BrowserSnapshot(input) => {
+                let mut args = vec!["snapshot".to_string()];
+                if input.interactive.unwrap_or(true) {
+                    args.push("-i".to_string());
+                }
+                if input.compact.unwrap_or(true) {
+                    args.push("-c".to_string());
+                }
+                if let Some(depth) = input.depth {
+                    args.push("-d".to_string());
+                    args.push(depth.to_string());
+                }
+                if let Some(selector) = &input.selector {
+                    args.push("-s".to_string());
+                    args.push(selector.clone());
+                }
+                let result =
+                    self.browser
+                        .invoke("snapshot", args, input.max_chars.map(|value| {
+                            value.clamp(1_000, self.browser.config().max_output_chars.max(1_000))
+                        }))?;
+                Ok(ToolOutput::BrowserSnapshot(BrowserCommandOutput {
+                    action: ToolName::BrowserSnapshot.as_str().to_string(),
+                    session: self.browser.config().session_name.clone(),
+                    stdout: result.stdout,
+                    stderr: result.stderr,
+                    workspace_path: None,
+                }))
+            }
+            ToolCall::BrowserText(input) => {
+                let selector = input.selector.as_deref().unwrap_or("body");
+                let args = vec!["get".to_string(), "text".to_string(), selector.to_string()];
+                let result =
+                    self.browser
+                        .invoke("get text", args, input.max_chars.map(|value| {
+                            value.clamp(1_000, self.browser.config().max_output_chars.max(1_000))
+                        }))?;
+                Ok(ToolOutput::BrowserText(BrowserCommandOutput {
+                    action: ToolName::BrowserText.as_str().to_string(),
+                    session: self.browser.config().session_name.clone(),
+                    stdout: result.stdout,
+                    stderr: result.stderr,
+                    workspace_path: None,
+                }))
+            }
+            ToolCall::BrowserClick(input) => {
+                let args = vec!["click".to_string(), input.selector.clone()];
+                let mut result = self.browser.invoke("click", args, None)?;
+                if let Some(wait_until) = &input.wait_until {
+                    let waited = self.browser.invoke(
+                        "wait",
+                        vec!["wait".to_string(), "--load".to_string(), wait_until.clone()],
+                        None,
+                    )?;
+                    result.stdout.push_str(&waited.stdout);
+                    result.stderr.push_str(&waited.stderr);
+                }
+                Ok(ToolOutput::BrowserClick(BrowserCommandOutput {
+                    action: ToolName::BrowserClick.as_str().to_string(),
+                    session: self.browser.config().session_name.clone(),
+                    stdout: result.stdout,
+                    stderr: result.stderr,
+                    workspace_path: None,
+                }))
+            }
+            ToolCall::BrowserFill(input) => Ok(ToolOutput::BrowserFill(
+                self.browser_command_output(
+                    ToolName::BrowserFill,
+                    "fill",
+                    vec!["fill".to_string(), input.selector.clone(), input.text.clone()],
+                    None,
+                    None,
+                )?,
+            )),
+            ToolCall::BrowserPress(input) => Ok(ToolOutput::BrowserPress(
+                self.browser_command_output(
+                    ToolName::BrowserPress,
+                    "press",
+                    vec!["press".to_string(), input.key.clone()],
+                    None,
+                    None,
+                )?,
+            )),
+            ToolCall::BrowserWait(input) => {
+                let args = browser_wait_args(&input)?;
+                Ok(ToolOutput::BrowserWait(self.browser_command_output(
+                    ToolName::BrowserWait,
+                    "wait",
+                    args,
+                    None,
+                    None,
+                )?))
+            }
+            ToolCall::BrowserScroll(input) => {
+                let mut args = vec!["scroll".to_string(), input.direction.clone()];
+                if let Some(pixels) = input.pixels {
+                    args.push(pixels.to_string());
+                }
+                Ok(ToolOutput::BrowserScroll(self.browser_command_output(
+                    ToolName::BrowserScroll,
+                    "scroll",
+                    args,
+                    None,
+                    None,
+                )?))
+            }
+            ToolCall::BrowserEval(input) => Ok(ToolOutput::BrowserEval(
+                self.browser_command_output(
+                    ToolName::BrowserEval,
+                    "eval",
+                    vec!["eval".to_string(), input.script.clone()],
+                    input.max_chars.map(|value| {
+                        value.clamp(1_000, self.browser.config().max_output_chars.max(1_000))
+                    }),
+                    None,
+                )?,
+            )),
+            ToolCall::BrowserScreenshot(input) => {
+                let default_path;
+                let selected_path = if let Some(path) = input.path.as_deref() {
+                    path
+                } else {
+                    default_path = default_browser_screenshot_path();
+                    default_path.as_str()
+                };
+                let relative_path = normalize_browser_workspace_path(selected_path);
+                let absolute_path = self.workspace.resolve(&relative_path)?;
+                ensure_browser_output_parent(&absolute_path)?;
+                let mut args = vec![
+                    "screenshot".to_string(),
+                    absolute_path.display().to_string(),
+                ];
+                if input.full.unwrap_or(false) {
+                    args.push("--full".to_string());
+                }
+                if input.annotate.unwrap_or(false) {
+                    args.push("--annotate".to_string());
+                }
+                Ok(ToolOutput::BrowserScreenshot(self.browser_command_output(
+                    ToolName::BrowserScreenshot,
+                    "screenshot",
+                    args,
+                    None,
+                    Some(relative_path),
+                )?))
+            }
+            ToolCall::BrowserPdf(input) => {
+                let relative_path = normalize_browser_workspace_path(&input.path);
+                let absolute_path = self.workspace.resolve(&relative_path)?;
+                ensure_browser_output_parent(&absolute_path)?;
+                Ok(ToolOutput::BrowserPdf(self.browser_command_output(
+                    ToolName::BrowserPdf,
+                    "pdf",
+                    vec!["pdf".to_string(), absolute_path.display().to_string()],
+                    None,
+                    Some(relative_path),
+                )?))
+            }
+            ToolCall::BrowserStatus(_) => {
+                let mut stdout = String::new();
+                let mut stderr = String::new();
+                for (action, args) in [
+                    ("session", vec!["session".to_string()]),
+                    ("get url", vec!["get".to_string(), "url".to_string()]),
+                    ("get title", vec!["get".to_string(), "title".to_string()]),
+                ] {
+                    let result = self.browser.invoke(action, args, None)?;
+                    stdout.push_str(&result.stdout);
+                    stderr.push_str(&result.stderr);
+                }
+                Ok(ToolOutput::BrowserStatus(BrowserCommandOutput {
+                    action: ToolName::BrowserStatus.as_str().to_string(),
+                    session: self.browser.config().session_name.clone(),
+                    stdout,
+                    stderr,
+                    workspace_path: None,
+                }))
+            }
+            ToolCall::BrowserClose(input) => {
+                let mut args = vec!["close".to_string()];
+                if input.all.unwrap_or(false) {
+                    args.push("--all".to_string());
+                }
+                Ok(ToolOutput::BrowserClose(self.browser_command_output(
+                    ToolName::BrowserClose,
+                    "close",
+                    args,
+                    None,
+                    None,
+                )?))
+            }
             ToolCall::ExecStart(input) => {
                 let cwd = self.resolve_cwd(input.cwd.as_deref())?;
                 self.start_process(ProcessKind::Exec, &input.executable, &input.args, cwd)
@@ -399,6 +630,24 @@ impl ToolRuntime {
             .ok_or(ToolError::InvalidExec {
                 reason: "working directory resolution failed",
             })
+    }
+
+    fn browser_command_output(
+        &self,
+        tool_name: ToolName,
+        action: &str,
+        args: Vec<String>,
+        max_output_chars: Option<usize>,
+        workspace_path: Option<String>,
+    ) -> Result<BrowserCommandOutput, ToolError> {
+        let result = self.browser.invoke(action, args, max_output_chars)?;
+        Ok(BrowserCommandOutput {
+            action: tool_name.as_str().to_string(),
+            session: self.browser.config().session_name.clone(),
+            stdout: result.stdout,
+            stderr: result.stderr,
+            workspace_path,
+        })
     }
 
     fn start_process(
@@ -698,6 +947,82 @@ fn normalize_process_output_max_bytes(limit: Option<usize>) -> usize {
     limit
         .unwrap_or(DEFAULT_PROCESS_OUTPUT_READ_MAX_BYTES)
         .clamp(1, MAX_PROCESS_OUTPUT_READ_MAX_BYTES)
+}
+
+fn browser_wait_args(input: &BrowserWaitInput) -> Result<Vec<String>, ToolError> {
+    let mut args = vec!["wait".to_string()];
+    match input.kind.as_str() {
+        "selector" => {
+            let value = input
+                .value
+                .as_deref()
+                .filter(|value| !value.trim().is_empty())
+                .ok_or_else(|| ToolError::InvalidBrowserRequest {
+                    reason: "browser_wait kind=selector requires value".to_string(),
+                })?;
+            args.push(value.to_string());
+            if let Some(state) = &input.state {
+                args.push("--state".to_string());
+                args.push(state.clone());
+            }
+        }
+        "text" => {
+            let value = input
+                .value
+                .as_deref()
+                .filter(|value| !value.trim().is_empty())
+                .ok_or_else(|| ToolError::InvalidBrowserRequest {
+                    reason: "browser_wait kind=text requires value".to_string(),
+                })?;
+            args.push("--text".to_string());
+            args.push(value.to_string());
+        }
+        "url" => {
+            let value = input
+                .value
+                .as_deref()
+                .filter(|value| !value.trim().is_empty())
+                .ok_or_else(|| ToolError::InvalidBrowserRequest {
+                    reason: "browser_wait kind=url requires value".to_string(),
+                })?;
+            args.push("--url".to_string());
+            args.push(value.to_string());
+        }
+        "load" => {
+            let value = input.value.as_deref().unwrap_or("networkidle");
+            args.push("--load".to_string());
+            args.push(value.to_string());
+        }
+        "function" => {
+            let value = input
+                .value
+                .as_deref()
+                .filter(|value| !value.trim().is_empty())
+                .ok_or_else(|| ToolError::InvalidBrowserRequest {
+                    reason: "browser_wait kind=function requires value".to_string(),
+                })?;
+            args.push("--fn".to_string());
+            args.push(value.to_string());
+        }
+        "duration_ms" => {
+            let value = input
+                .value
+                .as_deref()
+                .filter(|value| !value.trim().is_empty())
+                .ok_or_else(|| ToolError::InvalidBrowserRequest {
+                    reason: "browser_wait kind=duration_ms requires value".to_string(),
+                })?;
+            args.push(value.to_string());
+        }
+        _ => {
+            return Err(ToolError::InvalidBrowserRequest {
+                reason:
+                    "browser_wait kind must be selector, text, url, load, function, or duration_ms"
+                        .to_string(),
+            });
+        }
+    }
+    Ok(args)
 }
 
 fn normalize_process_output_max_lines(limit: Option<usize>) -> usize {

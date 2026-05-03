@@ -204,6 +204,120 @@ impl ToolName {
                 "required": ["query", "limit"],
                 "additionalProperties": false,
             }),
+            Self::BrowserOpen => json!({
+                "type": "object",
+                "properties": {
+                    "url": { "type": "string", "description": "Absolute URL to open in the session-scoped agent-browser instance" },
+                    "wait_until": { "type": ["string", "null"], "enum": ["load", "domcontentloaded", "networkidle", null], "description": "Optional load state to wait for after navigation; use networkidle for SPAs" }
+                },
+                "required": ["url"],
+                "additionalProperties": false,
+            }),
+            Self::BrowserSnapshot => json!({
+                "type": "object",
+                "properties": {
+                    "interactive": { "type": ["boolean", "null"], "description": "When true, return interactive elements only. Prefer true for @eN ref workflows." },
+                    "compact": { "type": ["boolean", "null"], "description": "When true, remove empty structural nodes to reduce tokens." },
+                    "depth": { "type": ["integer", "null"], "minimum": 1, "description": "Optional tree depth cap." },
+                    "selector": { "type": ["string", "null"], "description": "Optional CSS selector scope for the snapshot." },
+                    "max_chars": { "type": ["integer", "null"], "minimum": 1000, "description": "Optional output cap. Refs like @eN are fresh per snapshot and become stale after page changes." }
+                },
+                "additionalProperties": false,
+            }),
+            Self::BrowserText => json!({
+                "type": "object",
+                "properties": {
+                    "selector": { "type": ["string", "null"], "description": "Optional selector or @eN ref; defaults to body." },
+                    "max_chars": { "type": ["integer", "null"], "minimum": 1000, "description": "Optional output cap." }
+                },
+                "additionalProperties": false,
+            }),
+            Self::BrowserClick => json!({
+                "type": "object",
+                "properties": {
+                    "selector": { "type": "string", "description": "agent-browser @eN ref from the latest snapshot, CSS selector, or supported locator." },
+                    "wait_until": { "type": ["string", "null"], "enum": ["load", "domcontentloaded", "networkidle", null], "description": "Optional load state to wait for after the click. Re-snapshot before using @eN refs again." }
+                },
+                "required": ["selector"],
+                "additionalProperties": false,
+            }),
+            Self::BrowserFill => json!({
+                "type": "object",
+                "properties": {
+                    "selector": { "type": "string", "description": "agent-browser @eN ref from the latest snapshot, CSS selector, or supported locator." },
+                    "text": { "type": "string", "description": "Text to fill into the target input." }
+                },
+                "required": ["selector", "text"],
+                "additionalProperties": false,
+            }),
+            Self::BrowserPress => json!({
+                "type": "object",
+                "properties": {
+                    "key": { "type": "string", "description": "Key or key chord, for example Enter, Tab, or Control+a." }
+                },
+                "required": ["key"],
+                "additionalProperties": false,
+            }),
+            Self::BrowserWait => json!({
+                "type": "object",
+                "properties": {
+                    "kind": { "type": "string", "enum": ["selector", "text", "url", "load", "function", "duration_ms"], "description": "What to wait for." },
+                    "value": { "type": ["string", "null"], "description": "Selector/text/url glob/load state/JS expression/duration milliseconds depending on kind." },
+                    "state": { "type": ["string", "null"], "enum": ["visible", "hidden", "attached", "detached", null], "description": "Optional selector state." }
+                },
+                "required": ["kind"],
+                "additionalProperties": false,
+            }),
+            Self::BrowserScroll => json!({
+                "type": "object",
+                "properties": {
+                    "direction": { "type": "string", "enum": ["up", "down", "left", "right"] },
+                    "pixels": { "type": ["integer", "null"], "minimum": 1 }
+                },
+                "required": ["direction"],
+                "additionalProperties": false,
+            }),
+            Self::BrowserEval => json!({
+                "type": "object",
+                "properties": {
+                    "script": { "type": "string", "description": "JavaScript expression or script to evaluate in the current page." },
+                    "max_chars": { "type": ["integer", "null"], "minimum": 1000, "description": "Optional output cap." }
+                },
+                "required": ["script"],
+                "additionalProperties": false,
+            }),
+            Self::BrowserScreenshot => json!({
+                "type": "object",
+                "properties": {
+                    "path": { "type": ["string", "null"], "description": "Optional workspace path for the PNG/JPEG screenshot; defaults under scratch/browser/." },
+                    "full": { "type": ["boolean", "null"], "description": "Capture full page when true." },
+                    "annotate": { "type": ["boolean", "null"], "description": "Annotate screenshot with numbered element labels." }
+                },
+                "additionalProperties": false,
+            }),
+            Self::BrowserPdf => json!({
+                "type": "object",
+                "properties": {
+                    "path": { "type": "string", "description": "Workspace path for the generated PDF." }
+                },
+                "required": ["path"],
+                "additionalProperties": false,
+            }),
+            Self::BrowserStatus | Self::BrowserClose => match self {
+                Self::BrowserStatus => json!({
+                    "type": "object",
+                    "properties": {},
+                    "additionalProperties": false,
+                }),
+                Self::BrowserClose => json!({
+                    "type": "object",
+                    "properties": {
+                        "all": { "type": ["boolean", "null"], "description": "When true, close all agent-browser sessions. Prefer false for normal cleanup." }
+                    },
+                    "additionalProperties": false,
+                }),
+                _ => unreachable!(),
+            },
             Self::ExecStart => json!({
                 "type": "object",
                 "properties": {

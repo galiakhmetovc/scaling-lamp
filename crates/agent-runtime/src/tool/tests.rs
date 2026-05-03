@@ -1,4 +1,5 @@
 use super::{
+    BrowserCloseInput, BrowserOpenInput, BrowserScreenshotInput, BrowserSnapshotInput,
     ExecStartInput, FsFindInFilesInput, FsGlobInput, FsInsertTextInput, FsListInput, FsMkdirInput,
     FsMoveInput, FsPatchTextInput, FsReadLinesInput, FsReadTextInput, FsReplaceLinesInput,
     FsSearchTextInput, FsTrashInput, FsWriteMode, FsWriteTextInput, KnowledgeReadInput,
@@ -58,7 +59,7 @@ fn catalog_exposes_distinct_families_and_policy_flags() {
     assert_eq!(
         catalog.families,
         [
-            "fs", "web", "exec", "plan", "offload", "memory", "mcp", "agent"
+            "fs", "web", "browser", "exec", "plan", "offload", "memory", "mcp", "agent"
         ]
     );
     assert_eq!(artifact_read.family, ToolFamily::Offload);
@@ -131,6 +132,105 @@ fn web_tool_definitions_are_search_first_and_searxng_aware() {
     assert!(search_schema.contains("SearXNG"));
     assert!(fetch_schema.contains("exact URL"));
     assert!(fetch_schema.contains("web_search"));
+}
+
+#[test]
+fn browser_tool_definitions_are_canonical_and_agent_browser_aware() {
+    let catalog = ToolCatalog::default();
+    let open = catalog
+        .definition(ToolName::BrowserOpen)
+        .expect("browser_open");
+    let snapshot = catalog
+        .definition(ToolName::BrowserSnapshot)
+        .expect("browser_snapshot");
+    let screenshot = catalog
+        .definition(ToolName::BrowserScreenshot)
+        .expect("browser_screenshot");
+
+    assert!(catalog.families.contains(&"browser"));
+    assert_eq!(open.family, ToolFamily::Browser);
+    assert_eq!(snapshot.family, ToolFamily::Browser);
+    assert_eq!(screenshot.family, ToolFamily::Browser);
+    assert!(open.policy.read_only);
+    assert!(snapshot.policy.read_only);
+    assert!(!screenshot.policy.read_only);
+    assert!(!screenshot.policy.destructive);
+    assert!(open.description.contains("agent-browser"));
+    assert!(snapshot.description.contains("@eN"));
+    assert!(screenshot.description.contains("workspace"));
+
+    let names = catalog
+        .automatic_model_definitions()
+        .into_iter()
+        .map(|definition| definition.name)
+        .collect::<Vec<_>>();
+    assert!(names.contains(&ToolName::BrowserOpen));
+    assert!(names.contains(&ToolName::BrowserSnapshot));
+    assert!(names.contains(&ToolName::BrowserScreenshot));
+}
+
+#[test]
+fn browser_tool_calls_parse_structured_arguments() {
+    let open = ToolCall::from_openai_function(
+        "browser_open",
+        r#"{"url":"https://example.com","wait_until":"networkidle"}"#,
+    )
+    .expect("parse browser_open");
+    let snapshot = ToolCall::from_openai_function(
+        "browser_snapshot",
+        r#"{"interactive":true,"compact":true,"depth":3,"selector":"main","max_chars":12000}"#,
+    )
+    .expect("parse browser_snapshot");
+    let screenshot = ToolCall::from_openai_function(
+        "browser_screenshot",
+        r#"{"path":"scratch/browser/home.png","full":true,"annotate":false}"#,
+    )
+    .expect("parse browser_screenshot");
+    let close = ToolCall::from_openai_function("browser_close", r#"{"all":false}"#)
+        .expect("parse browser_close");
+
+    assert_eq!(
+        open,
+        ToolCall::BrowserOpen(BrowserOpenInput {
+            url: "https://example.com".to_string(),
+            wait_until: Some("networkidle".to_string()),
+        })
+    );
+    assert_eq!(
+        snapshot,
+        ToolCall::BrowserSnapshot(BrowserSnapshotInput {
+            interactive: Some(true),
+            compact: Some(true),
+            depth: Some(3),
+            selector: Some("main".to_string()),
+            max_chars: Some(12_000),
+        })
+    );
+    assert_eq!(
+        screenshot,
+        ToolCall::BrowserScreenshot(BrowserScreenshotInput {
+            path: Some("scratch/browser/home.png".to_string()),
+            full: Some(true),
+            annotate: Some(false),
+        })
+    );
+    assert_eq!(
+        close,
+        ToolCall::BrowserClose(BrowserCloseInput { all: Some(false) })
+    );
+}
+
+#[test]
+fn browser_tool_schemas_teach_snapshot_ref_workflow() {
+    let open_schema = ToolName::BrowserOpen.input_schema().to_string();
+    let snapshot_schema = ToolName::BrowserSnapshot.input_schema().to_string();
+    let click_schema = ToolName::BrowserClick.input_schema().to_string();
+
+    assert!(open_schema.contains("networkidle"));
+    assert!(snapshot_schema.contains("interactive"));
+    assert!(snapshot_schema.contains("@eN"));
+    assert!(click_schema.contains("@eN"));
+    assert!(click_schema.contains("selector"));
 }
 
 #[test]

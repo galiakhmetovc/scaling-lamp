@@ -39,6 +39,8 @@ assert_contains "$containers_help_output" "--with-obsidian-mcp"
 assert_contains "$containers_help_output" "--with-jaeger"
 assert_contains "$containers_help_output" "--with-silverbullet"
 assert_contains "$containers_help_output" "--with-silverbullet-mcp"
+assert_contains "$containers_help_output" "--with-browserless"
+assert_contains "$containers_help_output" "--with-agent-browser"
 assert_contains "$containers_help_output" "--with-lightpanda-mcp"
 assert_contains "$containers_help_output" "--single-domain"
 assert_contains "$containers_help_output" "--no-searxng"
@@ -133,6 +135,22 @@ assert_contains "$containers_lightpanda_dry_run_output" "lightpanda-mcp.example.
 assert_contains "$containers_lightpanda_dry_run_output" "MCP connector: [daemon.mcp_connectors.lightpanda]"
 assert_contains "$containers_lightpanda_dry_run_output" "Telemetry disabled: true"
 
+containers_browserless_dry_run_output=$(
+  "$CONTAINERS_DEPLOY_SCRIPT" --dry-run --non-interactive --no-start --no-searxng --no-caddy --with-browserless 2>&1
+)
+
+assert_contains "$containers_browserless_dry_run_output" "teamd-browserless"
+assert_contains "$containers_browserless_dry_run_output" "ghcr.io/browserless/chromium:latest"
+assert_contains "$containers_browserless_dry_run_output" "seed Browserless TOKEN"
+assert_contains "$containers_browserless_dry_run_output" "'npm' 'install' '-g' '--prefix'"
+assert_contains "$containers_browserless_dry_run_output" "agent-browser@latest"
+assert_contains "$containers_browserless_dry_run_output" "/opt/teamd/bin/agent-browser"
+assert_contains "$containers_browserless_dry_run_output" "/usr/local/bin/agent-browser"
+assert_contains "$containers_browserless_dry_run_output" "upsert agent-browser Browserless defaults"
+assert_contains "$containers_browserless_dry_run_output" "TEAMD_BROWSER_ENABLED=true"
+assert_contains "$containers_browserless_dry_run_output" "TEAMD_BROWSER_PROVIDER=browserless"
+assert_contains "$containers_browserless_dry_run_output" "TEAMD_BROWSERLESS_API_URL=http://127.0.0.1:3000"
+
 containers_single_domain_dry_run_output=$(
   TEAMD_CADDY_DOMAIN='teamd.qlbc.ru' \
     "$CONTAINERS_DEPLOY_SCRIPT" --dry-run --non-interactive --no-start --with-silverbullet-mcp --with-jaeger --single-domain 2>&1
@@ -204,6 +222,14 @@ grep -q 'lightpanda mcp' "$CONTAINERS_DEPLOY_SCRIPT" \
   || fail "expected Lightpanda MCP support"
 grep -q 'LIGHTPANDA_DISABLE_TELEMETRY=true' "$CONTAINERS_DEPLOY_SCRIPT" \
   || fail "expected Lightpanda telemetry disabled by default"
+grep -q 'BROWSERLESS_IMAGE=${TEAMD_BROWSERLESS_IMAGE:-ghcr.io/browserless/chromium:latest}' "$CONTAINERS_DEPLOY_SCRIPT" \
+  || fail "expected Browserless chromium image default"
+grep -q 'TOKEN=$BROWSERLESS_TOKEN' "$CONTAINERS_DEPLOY_SCRIPT" \
+  || fail "expected Browserless token env file"
+grep -q 'npm install -g --prefix "$AGENT_BROWSER_INSTALL_DIR" "$AGENT_BROWSER_NPM_PACKAGE"' "$CONTAINERS_DEPLOY_SCRIPT" \
+  || fail "expected agent-browser npm install"
+grep -q 'TEAMD_BROWSER_PROVIDER' "$CONTAINERS_DEPLOY_SCRIPT" \
+  || fail "expected browser provider env upsert"
 grep -q 'notes.$CADDY_DOMAIN' "$CONTAINERS_DEPLOY_SCRIPT" \
   || fail "expected SilverBullet dedicated domain route"
 grep -q 'chown_work_dir()' "$DEPLOY_SCRIPT" \

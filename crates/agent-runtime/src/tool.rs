@@ -4,6 +4,7 @@ use std::error::Error;
 use std::fmt;
 use std::time::Duration;
 
+mod browser;
 mod catalog;
 mod inputs;
 mod names;
@@ -14,6 +15,7 @@ mod runtime;
 mod schema;
 mod web;
 
+pub use browser::{BrowserCommandResult, BrowserToolClient, BrowserToolConfig};
 pub use catalog::{ToolCatalog, ToolDefinition, ToolPolicy};
 pub use inputs::*;
 pub use names::{ToolFamily, ToolName};
@@ -44,6 +46,9 @@ pub enum ToolError {
     InvalidWebRequest {
         reason: String,
     },
+    InvalidBrowserRequest {
+        reason: String,
+    },
     WebHttp(reqwest::Error),
     WebHttpStatus {
         url: String,
@@ -52,6 +57,15 @@ pub enum ToolError {
     WebParse {
         url: String,
         reason: String,
+    },
+    BrowserIo {
+        command: String,
+        source: std::io::Error,
+    },
+    BrowserFailed {
+        command: String,
+        status_code: Option<i32>,
+        stderr: String,
     },
     ProcessFamilyMismatch {
         process_id: String,
@@ -146,6 +160,9 @@ impl fmt::Display for ToolError {
             Self::InvalidWebRequest { reason } => {
                 write!(formatter, "invalid web request: {reason}")
             }
+            Self::InvalidBrowserRequest { reason } => {
+                write!(formatter, "invalid browser request: {reason}")
+            }
             Self::WebHttp(source) => write!(formatter, "web http error: {source}"),
             Self::WebHttpStatus { url, status_code } => {
                 write!(
@@ -159,6 +176,18 @@ impl fmt::Display for ToolError {
                     "failed to parse web response from {url}: {reason}"
                 )
             }
+            Self::BrowserIo { command, source } => {
+                write!(formatter, "browser command `{command}` failed: {source}")
+            }
+            Self::BrowserFailed {
+                command,
+                status_code,
+                stderr,
+            } => write!(
+                formatter,
+                "browser command `{command}` exited with status {:?}: {}",
+                status_code, stderr
+            ),
             Self::ProcessFamilyMismatch {
                 process_id,
                 expected,
@@ -198,13 +227,16 @@ impl Error for ToolError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
             Self::WebHttp(source) => Some(source),
+            Self::BrowserIo { source, .. } => Some(source),
             Self::ProcessIo { source, .. } => Some(source),
             Self::Workspace(source) => Some(source),
             Self::InvalidExec { .. }
             | Self::InvalidPatch { .. }
             | Self::InvalidWebRequest { .. }
+            | Self::InvalidBrowserRequest { .. }
             | Self::WebHttpStatus { .. }
             | Self::WebParse { .. }
+            | Self::BrowserFailed { .. }
             | Self::ProcessFamilyMismatch { .. }
             | Self::InvalidPlanWrite { .. }
             | Self::InvalidMemoryTool { .. }

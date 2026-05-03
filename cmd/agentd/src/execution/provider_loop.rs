@@ -359,6 +359,7 @@ impl ExecutionService {
             .into_iter()
             .filter(|definition| {
                 agent_profile.allows_tool_id(definition.name.as_str())
+                    && (self.config.browser.enabled || definition.family != ToolFamily::Browser)
                     && (has_context_offload
                         || !matches!(
                             definition.name,
@@ -2794,7 +2795,7 @@ impl ExecutionService {
             prompt_messages.context_offload.as_ref(),
             &agent_profile,
         );
-        let mut tool_runtime = self.tool_runtime_for_workspace(workspace);
+        let mut tool_runtime = self.tool_runtime_for_session_workspace(workspace, session_id);
         let auto_approve =
             auto_approve_override.unwrap_or(self.session_auto_approve_enabled(store, session_id)?);
         let think_level = self.session_think_level(store, session_id)?;
@@ -3438,6 +3439,40 @@ mod tests {
         assert!(error.contains("provider repeated tool-call signature 3 times in a row"));
         assert!(error.contains("continue_later"));
         assert!(error.contains("Stop repeating the same tool call"));
+    }
+
+    #[test]
+    fn automatic_provider_tools_hide_browser_tools_when_browser_is_disabled() {
+        use agent_runtime::agent::AgentTemplateKind;
+        use agent_runtime::tool::ToolCatalog;
+
+        let provider = provider();
+        let allowed_tools = ToolCatalog::default()
+            .all_definitions()
+            .iter()
+            .map(|definition| definition.name.as_str().to_string())
+            .collect::<Vec<_>>();
+        let profile = AgentProfile::new(
+            "default",
+            "Default",
+            AgentTemplateKind::Default,
+            "agents/default",
+            allowed_tools,
+            None,
+            1,
+            1,
+        )
+        .expect("profile");
+        let service = ExecutionService::default();
+
+        let names = service
+            .automatic_provider_tools(&provider, None, &profile)
+            .into_iter()
+            .map(|tool| tool.name)
+            .collect::<Vec<_>>();
+
+        assert!(names.iter().any(|name| name == ToolName::WebFetch.as_str()));
+        assert!(!names.iter().any(|name| name.starts_with("browser_")));
     }
 
     #[test]

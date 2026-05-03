@@ -141,6 +141,100 @@ pub struct WebSearchInput {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BrowserOpenInput {
+    pub url: String,
+    #[serde(default)]
+    pub wait_until: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BrowserSnapshotInput {
+    #[serde(default)]
+    pub interactive: Option<bool>,
+    #[serde(default)]
+    pub compact: Option<bool>,
+    #[serde(default)]
+    pub depth: Option<usize>,
+    #[serde(default)]
+    pub selector: Option<String>,
+    #[serde(default)]
+    pub max_chars: Option<usize>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BrowserTextInput {
+    #[serde(default)]
+    pub selector: Option<String>,
+    #[serde(default)]
+    pub max_chars: Option<usize>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BrowserClickInput {
+    pub selector: String,
+    #[serde(default)]
+    pub wait_until: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BrowserFillInput {
+    pub selector: String,
+    pub text: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BrowserPressInput {
+    pub key: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BrowserWaitInput {
+    pub kind: String,
+    #[serde(default)]
+    pub value: Option<String>,
+    #[serde(default)]
+    pub state: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BrowserScrollInput {
+    pub direction: String,
+    #[serde(default)]
+    pub pixels: Option<u32>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BrowserEvalInput {
+    pub script: String,
+    #[serde(default)]
+    pub max_chars: Option<usize>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BrowserScreenshotInput {
+    #[serde(default)]
+    pub path: Option<String>,
+    #[serde(default)]
+    pub full: Option<bool>,
+    #[serde(default)]
+    pub annotate: Option<bool>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BrowserPdfInput {
+    pub path: String,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BrowserStatusInput {}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BrowserCloseInput {
+    #[serde(default)]
+    pub all: Option<bool>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ExecStartInput {
     pub executable: String,
     pub args: Vec<String>,
@@ -653,6 +747,19 @@ pub enum ToolCall {
     FsSearch(FsSearchInput),
     WebFetch(WebFetchInput),
     WebSearch(WebSearchInput),
+    BrowserOpen(BrowserOpenInput),
+    BrowserSnapshot(BrowserSnapshotInput),
+    BrowserText(BrowserTextInput),
+    BrowserClick(BrowserClickInput),
+    BrowserFill(BrowserFillInput),
+    BrowserPress(BrowserPressInput),
+    BrowserWait(BrowserWaitInput),
+    BrowserScroll(BrowserScrollInput),
+    BrowserEval(BrowserEvalInput),
+    BrowserScreenshot(BrowserScreenshotInput),
+    BrowserPdf(BrowserPdfInput),
+    BrowserStatus(BrowserStatusInput),
+    BrowserClose(BrowserCloseInput),
     ExecStart(ExecStartInput),
     ExecReadOutput(ProcessReadOutputInput),
     ExecWait(ProcessWaitInput),
