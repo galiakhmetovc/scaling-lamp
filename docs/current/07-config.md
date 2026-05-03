@@ -251,7 +251,27 @@ export TEAMD_MEM0_DEFAULT_LIMIT='10'
 export TEAMD_MEM0_MAX_LIMIT='50'
 ```
 
-Почему default port `18888`, а не официальный Mem0 `8888`: в стандартной teamD container обвязке `8888` уже занят SearXNG. Если Mem0 запущен по официальной инструкции на `8888`, явно задайте `TEAMD_MEM0_API_BASE=http://127.0.0.1:8888`.
+Backend deploy через `scripts/deploy-teamd-containers.sh --with-mem0`:
+
+- поднимает `teamd-mem0` на `127.0.0.1:18888` и `teamd-mem0-postgres`;
+- использует local `fastembed` для embeddings, default `sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2`, 384 dimensions;
+- использует OpenAI-compatible LLM endpoint для extraction, default `glm-4.5-air` через Z.ai;
+- генерирует `ADMIN_API_KEY`, `JWT_SECRET`, `POSTGRES_PASSWORD` в `/opt/teamd/containers/mem0/mem0.env`;
+- upsert'ит `TEAMD_MEM0_*` в `/etc/teamd/teamd.env`.
+
+Дополнительные env для backend deploy:
+
+```bash
+export TEAMD_MEM0_PORT='18888'
+export TEAMD_MEM0_LLM_API_BASE='https://api.z.ai/api/coding/paas/v4'
+export TEAMD_MEM0_LLM_API_KEY='...' # optional; fallback: TEAMD_PROVIDER_API_KEY
+export TEAMD_MEM0_LLM_MODEL='glm-4.5-air'
+export TEAMD_MEM0_FASTEMBED_MODEL='sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2'
+export TEAMD_MEM0_EMBEDDING_DIMS='384'
+export TEAMD_MEM0_COLLECTION_NAME='teamd_memories_fastembed_384'
+```
+
+Почему default port `18888`, а не официальный Mem0 `8888`: в стандартной teamD container обвязке `8888` уже занят SearXNG. Если Mem0 запущен отдельно на другом endpoint, явно задайте `TEAMD_MEM0_API_BASE`.
 
 Что меняется при `enabled = true`:
 
@@ -266,7 +286,7 @@ export TEAMD_MEM0_MAX_LIMIT='50'
 - transcript, artifacts и `ContextSummary` не переезжают в Mem0;
 - SilverBullet/docs остаются knowledge/documentation layer.
 
-`scripts/deploy-teamd-containers.sh --with-mem0` пока конфигурирует только сторону `agentd`: upsert'ит `TEAMD_MEM0_*` в `/etc/teamd/teamd.env` и перезапускает services. Сам Mem0/OpenMemory REST API нужно поднять отдельно по официальной self-host инструкции или указать существующий endpoint.
+`scripts/deploy-teamd-containers.sh --with-mem0` поднимает backend и конфигурирует `agentd`. Если нужен внешний Mem0/OpenMemory endpoint, задайте `TEAMD_MEM0_API_BASE` и `TEAMD_MEM0_API_KEY` перед запуском script.
 
 ### `[observability]`
 

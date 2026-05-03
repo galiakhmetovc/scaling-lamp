@@ -130,12 +130,40 @@ else
   JAEGER_BASE_PATH=/jaeger
 fi
 
-MEM0_API_BASE=${TEAMD_MEM0_API_BASE:-http://127.0.0.1:18888}
+MEM0_PORT=${TEAMD_MEM0_PORT:-18888}
+MEM0_API_BASE=${TEAMD_MEM0_API_BASE:-http://127.0.0.1:$MEM0_PORT}
 MEM0_API_KEY=${TEAMD_MEM0_API_KEY:-}
 MEM0_DEFAULT_USER_ID=${TEAMD_MEM0_DEFAULT_USER_ID:-local-operator}
 MEM0_REQUEST_TIMEOUT_MS=${TEAMD_MEM0_REQUEST_TIMEOUT_MS:-5000}
 MEM0_DEFAULT_LIMIT=${TEAMD_MEM0_DEFAULT_LIMIT:-10}
 MEM0_MAX_LIMIT=${TEAMD_MEM0_MAX_LIMIT:-50}
+MEM0_DIR=$CONTAINERS_ROOT/mem0
+MEM0_SRC_DIR=$MEM0_DIR/src
+MEM0_COMPOSE=$MEM0_DIR/docker-compose.yml
+MEM0_ENV_FILE=${TEAMD_MEM0_ENV_FILE:-$MEM0_DIR/mem0.env}
+MEM0_INIT_DB=$MEM0_DIR/init-db.sh
+MEM0_DATA_DIR=$DATA_ROOT/mem0
+MEM0_HISTORY_DIR=$MEM0_DATA_DIR/history
+MEM0_POSTGRES_DATA_DIR=$MEM0_DATA_DIR/postgres
+MEM0_CACHE_DIR=$MEM0_DATA_DIR/cache
+MEM0_REPOSITORY=${TEAMD_MEM0_REPOSITORY:-https://github.com/mem0ai/mem0.git}
+MEM0_REF=${TEAMD_MEM0_REF:-main}
+MEM0_IMAGE=${TEAMD_MEM0_IMAGE:-teamd-mem0-api:latest}
+MEM0_POSTGRES_IMAGE=${TEAMD_MEM0_POSTGRES_IMAGE:-ankane/pgvector:v0.5.1}
+MEM0_POSTGRES_DB=${TEAMD_MEM0_POSTGRES_DB:-postgres}
+MEM0_POSTGRES_USER=${TEAMD_MEM0_POSTGRES_USER:-postgres}
+MEM0_POSTGRES_PASSWORD=${TEAMD_MEM0_POSTGRES_PASSWORD:-}
+MEM0_APP_DB_NAME=${TEAMD_MEM0_APP_DB_NAME:-mem0_app}
+MEM0_ADMIN_API_KEY=${TEAMD_MEM0_ADMIN_API_KEY:-$MEM0_API_KEY}
+MEM0_JWT_SECRET=${TEAMD_MEM0_JWT_SECRET:-}
+MEM0_COLLECTION_NAME=${TEAMD_MEM0_COLLECTION_NAME:-teamd_memories_fastembed_384}
+MEM0_EMBEDDING_DIMS=${TEAMD_MEM0_EMBEDDING_DIMS:-384}
+MEM0_FASTEMBED_MODEL=${TEAMD_MEM0_FASTEMBED_MODEL:-sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2}
+MEM0_LLM_API_BASE=${TEAMD_MEM0_LLM_API_BASE:-https://api.z.ai/api/coding/paas/v4}
+MEM0_LLM_API_KEY=${TEAMD_MEM0_LLM_API_KEY:-}
+MEM0_LLM_MODEL=${TEAMD_MEM0_LLM_MODEL:-glm-4.5-air}
+MEM0_LLM_TEMPERATURE=${TEAMD_MEM0_LLM_TEMPERATURE:-0.2}
+MEM0_LLM_MAX_TOKENS=${TEAMD_MEM0_LLM_MAX_TOKENS:-2000}
 OTLP_EXPORT_TIMEOUT_MS=${TEAMD_OTLP_TIMEOUT_MS:-2000}
 
 CADDY_DOMAIN=${TEAMD_CADDY_DOMAIN:-}
@@ -191,7 +219,7 @@ Options:
   --with-obsidian-mcp-example
                          Write an agentd stdio MCP connector example for the vault.
   --with-jaeger         Also deploy Jaeger UI and enable agentd OTLP auto-export.
-  --with-mem0           Configure agentd memory_* tools for a Mem0/OpenMemory REST API.
+  --with-mem0           Deploy Mem0/OpenMemory REST API and configure agentd memory_* tools.
   --with-silverbullet   Deploy SilverBullet editor over the canonical Markdown space.
   --with-silverbullet-mcp
                          Deploy SilverBullet plus MCP bridge and agentd MCP connector.
@@ -301,7 +329,20 @@ Environment overrides:
                                  Exported by the MCP wrapper, default: $LIGHTPANDA_DISABLE_TELEMETRY.
   TEAMD_MEM0_API_BASE            Mem0/OpenMemory REST base URL for agentd,
                                  default: $MEM0_API_BASE.
-  TEAMD_MEM0_API_KEY             Optional Mem0 X-API-Key for protected endpoints.
+  TEAMD_MEM0_PORT                Local Mem0 API port when deploying the bundled
+                                 backend, default: $MEM0_PORT.
+  TEAMD_MEM0_API_KEY             Existing Mem0 X-API-Key for protected endpoints.
+                                 If unset, deploy script generates and stores one.
+  TEAMD_MEM0_REPOSITORY          Mem0 git repository, default: $MEM0_REPOSITORY.
+  TEAMD_MEM0_REF                 Mem0 git ref, default: $MEM0_REF.
+  TEAMD_MEM0_LLM_API_BASE        OpenAI-compatible LLM base URL for Mem0,
+                                 default: $MEM0_LLM_API_BASE.
+  TEAMD_MEM0_LLM_API_KEY         LLM API key for Mem0. If unset, falls back to
+                                 TEAMD_PROVIDER_API_KEY from $ENV_FILE.
+  TEAMD_MEM0_LLM_MODEL           LLM model for Mem0 extraction, default: $MEM0_LLM_MODEL.
+  TEAMD_MEM0_FASTEMBED_MODEL     Local fastembed model, default: $MEM0_FASTEMBED_MODEL.
+  TEAMD_MEM0_EMBEDDING_DIMS      fastembed vector dimensions, default: $MEM0_EMBEDDING_DIMS.
+  TEAMD_MEM0_COLLECTION_NAME     pgvector collection, default: $MEM0_COLLECTION_NAME.
   TEAMD_MEM0_DEFAULT_USER_ID     Default Mem0 user_id scope, default: $MEM0_DEFAULT_USER_ID.
   TEAMD_MEM0_REQUEST_TIMEOUT_MS  Mem0 HTTP request timeout, default: $MEM0_REQUEST_TIMEOUT_MS.
   TEAMD_MEM0_DEFAULT_LIMIT       Default memory list/search limit, default: $MEM0_DEFAULT_LIMIT.
@@ -570,6 +611,7 @@ docker_components_enabled() {
   [ "$ENABLE_SEARXNG" -eq 1 ] ||
     [ "$ENABLE_OBSIDIAN" -eq 1 ] ||
     [ "$ENABLE_JAEGER" -eq 1 ] ||
+    [ "$ENABLE_MEM0" -eq 1 ] ||
     [ "$ENABLE_BROWSERLESS" -eq 1 ] ||
     [ "$ENABLE_SILVERBULLET" -eq 1 ] ||
     [ "$ENABLE_CADDY" -eq 1 ]
@@ -772,6 +814,323 @@ configure_agentd_otlp_env() {
   fi
   run_root install -m 0640 -o root -g "$env_group" "$tmp_new" "$ENV_FILE"
   rm -f "$tmp_env" "$tmp_new"
+}
+
+read_env_file_value() {
+  env_key=$1
+  env_path=$2
+
+  [ -r "$env_path" ] || return 1
+  value=$(sed -n -E "s/^(export[[:space:]]+)?${env_key}=//p" "$env_path" | tail -n 1)
+  [ -n "$value" ] || return 1
+  value=${value#\"}
+  value=${value%\"}
+  value=${value#\'}
+  value=${value%\'}
+  printf '%s\n' "$value"
+}
+
+load_mem0_runtime_config() {
+  if [ -z "$MEM0_LLM_API_KEY" ]; then
+    MEM0_LLM_API_KEY=$(read_env_file_value TEAMD_PROVIDER_API_KEY "$ENV_FILE" 2>/dev/null || true)
+  fi
+
+  if [ -z "$MEM0_ADMIN_API_KEY" ]; then
+    MEM0_ADMIN_API_KEY=$(read_env_file_value ADMIN_API_KEY "$MEM0_ENV_FILE" 2>/dev/null || true)
+  fi
+  if [ -z "$MEM0_ADMIN_API_KEY" ]; then
+    MEM0_ADMIN_API_KEY=$(generate_secret_key)
+  fi
+  MEM0_API_KEY=$MEM0_ADMIN_API_KEY
+
+  if [ -z "$MEM0_JWT_SECRET" ]; then
+    MEM0_JWT_SECRET=$(read_env_file_value JWT_SECRET "$MEM0_ENV_FILE" 2>/dev/null || true)
+  fi
+  if [ -z "$MEM0_JWT_SECRET" ]; then
+    MEM0_JWT_SECRET=$(generate_secret_key)
+  fi
+
+  if [ -z "$MEM0_POSTGRES_PASSWORD" ]; then
+    MEM0_POSTGRES_PASSWORD=$(read_env_file_value POSTGRES_PASSWORD "$MEM0_ENV_FILE" 2>/dev/null || true)
+  fi
+  if [ -z "$MEM0_POSTGRES_PASSWORD" ]; then
+    MEM0_POSTGRES_PASSWORD=$(generate_secret_key)
+  fi
+
+  if [ -z "$MEM0_LLM_API_KEY" ]; then
+    fail "TEAMD_MEM0_LLM_API_KEY is unset and TEAMD_PROVIDER_API_KEY was not found in $ENV_FILE"
+  fi
+}
+
+patch_mem0_server_source() {
+  run_root python3 - "$MEM0_SRC_DIR" <<'PY'
+from pathlib import Path
+import sys
+
+src = Path(sys.argv[1])
+server = src / "server"
+
+requirements = server / "requirements.txt"
+s = requirements.read_text()
+s = s.replace("psycopg>=3.2.8", "psycopg[binary]>=3.2.8")
+if "fastembed" not in s:
+    s += "\n# Local embeddings for TeamD Mem0 deployment\nfastembed>=0.3.1\n"
+requirements.write_text(s)
+
+main = server / "main.py"
+s = main.read_text()
+s = s.replace(
+    'BUNDLED_EMBEDDER_PROVIDERS = ("openai", "gemini")',
+    'BUNDLED_EMBEDDER_PROVIDERS = ("openai", "gemini", "fastembed")',
+)
+old_search = '''@app.post("/search", summary="Search memories")
+def search_memories(search_req: SearchRequest, _auth=Depends(verify_auth)):
+    """Search for memories based on a query."""
+    try:
+        params = {k: v for k, v in search_req.model_dump().items() if v is not None and k != "query"}
+        return get_memory_instance().search(query=search_req.query, **params)
+    except Exception:
+        raise upstream_error()
+'''
+new_search = '''@app.post("/search", summary="Search memories")
+def search_memories(search_req: SearchRequest, _auth=Depends(verify_auth)):
+    """Search for memories based on a query."""
+    try:
+        payload = search_req.model_dump()
+        filters = dict(payload.get("filters") or {})
+        for key in ("user_id", "run_id", "agent_id"):
+            if payload.get(key) is not None:
+                filters[key] = payload[key]
+        params = {k: payload[k] for k in ("top_k", "threshold") if payload.get(k) is not None}
+        if filters:
+            params["filters"] = filters
+        return get_memory_instance().search(query=search_req.query, **params)
+    except Exception:
+        raise upstream_error()
+'''
+if old_search in s:
+    s = s.replace(old_search, new_search)
+main.write_text(s)
+
+dockerfile = server / "Dockerfile"
+s = dockerfile.read_text()
+patch = """RUN python - <<'PATCHPY'\nfrom pathlib import Path\np = Path('/usr/local/lib/python3.12/site-packages/mem0/embeddings/fastembed.py')\ns = p.read_text()\ns = s.replace('        return embeddings[0]\\\\n', '        return embeddings[0].tolist() if hasattr(embeddings[0], \\\\\\"tolist\\\\\\") else embeddings[0]\\\\n')\np.write_text(s)\nPATCHPY\n"""
+if "embeddings[0].tolist()" not in s:
+    s = s.replace("RUN pip install --no-cache-dir -r requirements.txt\n", "RUN pip install --no-cache-dir -r requirements.txt\n\n" + patch)
+dockerfile.write_text(s)
+PY
+}
+
+checkout_mem0_source() {
+  need_command git
+  need_command python3
+
+  if [ -d "$MEM0_SRC_DIR/.git" ]; then
+    run_root git -C "$MEM0_SRC_DIR" fetch --all --tags
+    run_root git -C "$MEM0_SRC_DIR" checkout "$MEM0_REF"
+    run_root git -C "$MEM0_SRC_DIR" pull --ff-only || true
+  else
+    run_root rm -rf "$MEM0_SRC_DIR"
+    run_root git clone "$MEM0_REPOSITORY" "$MEM0_SRC_DIR"
+    run_root git -C "$MEM0_SRC_DIR" checkout "$MEM0_REF"
+  fi
+
+  patch_mem0_server_source
+}
+
+write_mem0_files() {
+  if [ "$DRY_RUN" -eq 1 ]; then
+    print_cmd mkdir -p "$MEM0_DIR" "$MEM0_HISTORY_DIR" "$MEM0_POSTGRES_DATA_DIR" "$MEM0_CACHE_DIR"
+    print_cmd git clone "$MEM0_REPOSITORY" "$MEM0_SRC_DIR"
+    print_cmd sh -c "patch Mem0 server for bundled fastembed, psycopg[binary], pgvector ndarray adaptation, and search filters"
+    print_cmd sh -c "seed Mem0 ADMIN_API_KEY, JWT_SECRET and POSTGRES_PASSWORD in $MEM0_ENV_FILE"
+    print_cmd sh -c "write $MEM0_COMPOSE for teamd-mem0 and teamd-mem0-postgres"
+    print_cmd sh -c "configure Mem0 server at $MEM0_API_BASE/configure with fastembed model $MEM0_FASTEMBED_MODEL and LLM $MEM0_LLM_MODEL"
+    return 0
+  fi
+
+  load_mem0_runtime_config
+  checkout_mem0_source
+
+  run_root mkdir -p "$MEM0_DIR" "$MEM0_HISTORY_DIR" "$MEM0_POSTGRES_DATA_DIR" "$MEM0_CACHE_DIR"
+
+  tmp_env=$(mktemp)
+  tmp_compose=$(mktemp)
+  tmp_init=$(mktemp)
+  trap 'rm -f "$tmp_env" "$tmp_compose" "$tmp_init"' EXIT INT TERM
+
+  cat > "$tmp_env" <<EOF
+OPENAI_API_KEY=$MEM0_LLM_API_KEY
+OPENAI_BASE_URL=$MEM0_LLM_API_BASE
+POSTGRES_HOST=teamd-mem0-postgres
+POSTGRES_PORT=5432
+POSTGRES_DB=$MEM0_POSTGRES_DB
+POSTGRES_USER=$MEM0_POSTGRES_USER
+POSTGRES_PASSWORD=$MEM0_POSTGRES_PASSWORD
+POSTGRES_COLLECTION_NAME=$MEM0_COLLECTION_NAME
+ADMIN_API_KEY=$MEM0_ADMIN_API_KEY
+JWT_SECRET=$MEM0_JWT_SECRET
+AUTH_DISABLED=false
+DASHBOARD_URL=http://localhost:3000
+APP_DB_NAME=$MEM0_APP_DB_NAME
+MEM0_DEFAULT_LLM_MODEL=$MEM0_LLM_MODEL
+MEM0_DEFAULT_EMBEDDER_MODEL=$MEM0_FASTEMBED_MODEL
+MEM0_TELEMETRY=false
+REQUEST_LOG_RETENTION_DAYS=30
+PYTHONUNBUFFERED=1
+EOF
+
+  cat > "$tmp_init" <<EOF
+#!/bin/sh
+set -e
+if ! psql -U "\$POSTGRES_USER" -d "\$POSTGRES_DB" -tAc "SELECT 1 FROM pg_database WHERE datname = '$MEM0_APP_DB_NAME';" | grep -q 1; then
+  createdb -U "\$POSTGRES_USER" "$MEM0_APP_DB_NAME"
+fi
+EOF
+
+  cat > "$tmp_compose" <<EOF
+services:
+  mem0:
+    build:
+      context: $MEM0_SRC_DIR/server
+      dockerfile: Dockerfile
+    image: $MEM0_IMAGE
+    container_name: teamd-mem0
+    restart: unless-stopped
+    env_file:
+      - $MEM0_ENV_FILE
+    ports:
+      - "127.0.0.1:$MEM0_PORT:8000"
+    networks:
+      - $EDGE_NETWORK
+    volumes:
+      - $MEM0_HISTORY_DIR:/app/history
+      - $MEM0_CACHE_DIR:/root/.cache
+    depends_on:
+      postgres:
+        condition: service_healthy
+    command: >
+      sh -lc "alembic upgrade head && uvicorn main:app --host 0.0.0.0 --port 8000"
+
+  postgres:
+    image: $MEM0_POSTGRES_IMAGE
+    container_name: teamd-mem0-postgres
+    restart: unless-stopped
+    env_file:
+      - $MEM0_ENV_FILE
+    volumes:
+      - $MEM0_POSTGRES_DATA_DIR:/var/lib/postgresql/data
+      - $MEM0_INIT_DB:/docker-entrypoint-initdb.d/init-db.sh:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $MEM0_POSTGRES_USER -d $MEM0_POSTGRES_DB"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - $EDGE_NETWORK
+
+networks:
+  $EDGE_NETWORK:
+    external: true
+EOF
+
+  run_root install -m 0640 -o root -g root "$tmp_env" "$MEM0_ENV_FILE"
+  run_root install -m 0644 -o root -g root "$tmp_compose" "$MEM0_COMPOSE"
+  run_root install -m 0644 -o root -g root "$tmp_init" "$MEM0_INIT_DB"
+  rm -f "$tmp_env" "$tmp_compose" "$tmp_init"
+}
+
+configure_mem0_server() {
+  if [ "$DRY_RUN" -eq 1 ]; then
+    print_cmd sh -c "POST $MEM0_API_BASE/configure for Mem0 pgvector + fastembed + OpenAI-compatible LLM"
+    return 0
+  fi
+  if [ "$SKIP_START" -eq 1 ]; then
+    printf 'Skipping Mem0 server configure because --no-start was set.\n'
+    return 0
+  fi
+
+  run_root python3 - "$MEM0_API_BASE" "$MEM0_ADMIN_API_KEY" "$MEM0_LLM_API_KEY" "$MEM0_POSTGRES_PASSWORD" "$MEM0_LLM_API_BASE" "$MEM0_LLM_MODEL" "$MEM0_LLM_TEMPERATURE" "$MEM0_LLM_MAX_TOKENS" "$MEM0_COLLECTION_NAME" "$MEM0_EMBEDDING_DIMS" "$MEM0_FASTEMBED_MODEL" <<'PY'
+import json
+import sys
+import time
+import urllib.request
+
+(
+    api_base,
+    admin_key,
+    llm_api_key,
+    pg_password,
+    llm_api_base,
+    llm_model,
+    llm_temperature,
+    llm_max_tokens,
+    collection_name,
+    embedding_dims,
+    fastembed_model,
+) = sys.argv[1:12]
+
+
+def request(path, method="GET", body=None, timeout=10):
+    data = None if body is None else json.dumps(body).encode()
+    req = urllib.request.Request(
+        api_base.rstrip("/") + path,
+        data=data,
+        method=method,
+        headers={"Content-Type": "application/json", "X-API-Key": admin_key},
+    )
+    with urllib.request.urlopen(req, timeout=timeout) as response:
+        return response.read().decode()
+
+
+deadline = time.time() + 120
+last_error = None
+while time.time() < deadline:
+    try:
+        request("/configure/providers")
+        break
+    except Exception as error:
+        last_error = error
+        time.sleep(2)
+else:
+    raise SystemExit(f"Mem0 API did not become ready: {last_error}")
+
+config = {
+    "version": "v1.1",
+    "vector_store": {
+        "provider": "pgvector",
+        "config": {
+            "host": "teamd-mem0-postgres",
+            "port": 5432,
+            "dbname": "postgres",
+            "user": "postgres",
+            "password": pg_password,
+            "collection_name": collection_name,
+            "embedding_model_dims": int(embedding_dims),
+            "hnsw": True,
+        },
+    },
+    "llm": {
+        "provider": "openai",
+        "config": {
+            "api_key": llm_api_key,
+            "openai_base_url": llm_api_base,
+            "model": llm_model,
+            "temperature": float(llm_temperature),
+            "max_tokens": int(llm_max_tokens),
+        },
+    },
+    "embedder": {
+        "provider": "fastembed",
+        "config": {
+            "model": fastembed_model,
+        },
+    },
+    "history_db_path": "/app/history/history.db",
+}
+request("/configure", method="POST", body=config, timeout=180)
+print("Mem0 server configured.")
+PY
 }
 
 configure_agentd_mem0_env() {
@@ -1967,6 +2326,10 @@ EOF
 
 compose_up() {
   compose_file=$1
+  if [ "$DRY_RUN" -eq 1 ]; then
+    print_cmd docker compose -f "$compose_file" up -d
+    return 0
+  fi
   if [ "$SKIP_START" -eq 1 ]; then
     printf 'Skipping container start for %s because --no-start was set.\n' "$compose_file"
     return 0
@@ -1976,6 +2339,10 @@ compose_up() {
 
 compose_up_build() {
   compose_file=$1
+  if [ "$DRY_RUN" -eq 1 ]; then
+    print_cmd docker compose -f "$compose_file" up -d --build
+    return 0
+  fi
   if [ "$SKIP_START" -eq 1 ]; then
     printf 'Skipping container start for %s because --no-start was set.\n' "$compose_file"
     return 0
@@ -2114,6 +2481,7 @@ validate_caddy_domain_mode
 ensure_obsidian_https_port
 ensure_silverbullet_https_port
 ensure_caddy_host
+valid_port "$MEM0_PORT" || fail "invalid TEAMD_MEM0_PORT: $MEM0_PORT"
 
 if [ "$(id -u)" -ne 0 ] && [ "$DRY_RUN" -eq 0 ]; then
   need_command sudo
@@ -2149,7 +2517,10 @@ if [ "$ENABLE_JAEGER" -eq 1 ]; then
 fi
 
 if [ "$ENABLE_MEM0" -eq 1 ]; then
+  write_mem0_files
   configure_agentd_mem0_env
+  compose_up_build "$MEM0_COMPOSE"
+  configure_mem0_server
 fi
 
 if [ "$ENABLE_BROWSERLESS" -eq 1 ]; then
@@ -2369,14 +2740,21 @@ fi
 if [ "$ENABLE_MEM0" -eq 1 ]; then
   cat <<EOF
   Mem0 semantic memory:
+    Container: teamd-mem0
+    Postgres: teamd-mem0-postgres
     REST API base: $MEM0_API_BASE
-    Env file: $ENV_FILE
+    Compose: $MEM0_COMPOSE
+    Env file: $MEM0_ENV_FILE
+    Local embeddings: fastembed / $MEM0_FASTEMBED_MODEL ($MEM0_EMBEDDING_DIMS dims)
+    LLM extraction: $MEM0_LLM_MODEL via $MEM0_LLM_API_BASE
+    agentd Env file: $ENV_FILE
     TEAMD_MEM0_ENABLED=true
     TEAMD_MEM0_DEFAULT_USER_ID=$MEM0_DEFAULT_USER_ID
     TEAMD_MEM0_REQUEST_TIMEOUT_MS=$MEM0_REQUEST_TIMEOUT_MS
     TEAMD_MEM0_DEFAULT_LIMIT=$MEM0_DEFAULT_LIMIT
     TEAMD_MEM0_MAX_LIMIT=$MEM0_MAX_LIMIT
-    Note: this configures agentd memory_* tools; deploy Mem0/OpenMemory REST API separately or point TEAMD_MEM0_API_BASE at an existing endpoint.
+    Start command: docker compose -f $MEM0_COMPOSE up -d --build
+    Smoke: POST $MEM0_API_BASE/memories and POST $MEM0_API_BASE/search with X-API-Key from $MEM0_ENV_FILE
 EOF
 fi
 
