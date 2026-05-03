@@ -165,6 +165,16 @@ impl ExecutionService {
             .map_err(ExecutionError::Store)?;
         self.record_transcript_trace(store, &trace_context, &assistant_entry)?;
 
+        self.run_memory_curator_after_chat_turn(
+            store,
+            provider,
+            &session,
+            run_id.as_str(),
+            message,
+            response.output_text.as_str(),
+            assistant_at,
+        );
+
         Ok(ChatTurnExecutionReport {
             session_id: session.id,
             run_id,
@@ -367,6 +377,16 @@ impl ExecutionService {
             .put_transcript(&TranscriptRecord::from(&assistant_entry))
             .map_err(ExecutionError::Store)?;
         self.record_transcript_trace(store, &trace_context, &assistant_entry)?;
+
+        self.run_memory_curator_after_chat_turn(
+            store,
+            provider,
+            &session,
+            run_id.as_str(),
+            message.as_str(),
+            response.output_text.as_str(),
+            assistant_at,
+        );
 
         job.status = JobStatus::Completed;
         job.result = Some(JobResult::Summary {

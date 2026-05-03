@@ -1067,6 +1067,29 @@ Scope:
 
 Runtime добавляет в metadata provenance поля `teamd_scope`, `teamd_session_id`, `teamd_agent_profile_id`, `teamd_workspace_root` и `teamd_source`.
 
+### Post-turn memory curator
+
+Кроме ручных `memory_*` tools, teamD может включить автоматический post-turn curator:
+
+```toml
+[memory_curator]
+enabled = true
+mode = "auto"
+min_confidence = 0.8
+max_candidates = 5
+max_output_tokens = 512
+```
+
+Curator запускается после завершения обычного chat turn, делает отдельный короткий provider-вызов без tools и просит модель вернуть strict JSON candidates. Runtime сам применяет candidates через `memory_search` + `memory_add`; модель не получает новый tool loop и не может зависнуть на повторном `memory_add`.
+
+Гарантии:
+
+- основной ответ пользователю уже сохранён, поэтому ошибка curator не валит turn;
+- секреты/токены/пароли/API keys/pairing keys дополнительно отбрасываются runtime-guard'ом;
+- exact duplicates пропускаются после `memory_search`;
+- provenance сохраняется в Mem0 metadata через `teamd_curator_run_id`, `teamd_curator_confidence`, `teamd_curator_reason`;
+- summary pass пишется в `audit/runtime.jsonl` с component `memory_curator`.
+
 ### `memory_add`
 
 Сигнатура:

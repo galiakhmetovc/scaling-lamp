@@ -32,6 +32,10 @@ const DEFAULT_MEM0_DEFAULT_USER_ID: &str = "local-operator";
 const DEFAULT_MEM0_REQUEST_TIMEOUT_MS: u64 = 120_000;
 const DEFAULT_MEM0_DEFAULT_LIMIT: usize = 10;
 const DEFAULT_MEM0_MAX_LIMIT: usize = 50;
+const DEFAULT_MEMORY_CURATOR_MODE: &str = "auto";
+const DEFAULT_MEMORY_CURATOR_MIN_CONFIDENCE: f64 = 0.8;
+const DEFAULT_MEMORY_CURATOR_MAX_CANDIDATES: usize = 5;
+const DEFAULT_MEMORY_CURATOR_MAX_OUTPUT_TOKENS: u32 = 512;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct AppConfig {
@@ -46,6 +50,7 @@ pub struct AppConfig {
     pub web: WebConfig,
     pub browser: BrowserConfig,
     pub mem0: Mem0Config,
+    pub memory_curator: MemoryCuratorConfig,
     pub observability: ObservabilityConfig,
     pub runtime_timing: RuntimeTimingConfig,
     pub runtime_limits: RuntimeLimitsConfig,
@@ -148,6 +153,16 @@ pub struct Mem0Config {
     pub request_timeout_ms: u64,
     pub default_limit: usize,
     pub max_limit: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[serde(default)]
+pub struct MemoryCuratorConfig {
+    pub enabled: bool,
+    pub mode: String,
+    pub min_confidence: f64,
+    pub max_candidates: usize,
+    pub max_output_tokens: u32,
 }
 
 impl BrowserConfig {
@@ -291,6 +306,11 @@ pub struct ConfigEnv {
     pub mem0_request_timeout_ms_override: Option<u64>,
     pub mem0_default_limit_override: Option<usize>,
     pub mem0_max_limit_override: Option<usize>,
+    pub memory_curator_enabled_override: Option<bool>,
+    pub memory_curator_mode_override: Option<String>,
+    pub memory_curator_min_confidence_override: Option<f64>,
+    pub memory_curator_max_candidates_override: Option<usize>,
+    pub memory_curator_max_output_tokens_override: Option<u32>,
     pub otlp_export_enabled_override: Option<bool>,
     pub otlp_endpoint_override: Option<String>,
     pub otlp_timeout_ms_override: Option<u64>,
@@ -355,6 +375,7 @@ struct FileConfig {
     web: Option<WebConfig>,
     browser: Option<BrowserConfig>,
     mem0: Option<Mem0Config>,
+    memory_curator: Option<MemoryCuratorConfig>,
     observability: Option<ObservabilityConfig>,
     runtime_timing: Option<RuntimeTimingConfig>,
     runtime_limits: Option<RuntimeLimitsConfig>,
@@ -443,6 +464,18 @@ impl Default for Mem0Config {
             request_timeout_ms: DEFAULT_MEM0_REQUEST_TIMEOUT_MS,
             default_limit: DEFAULT_MEM0_DEFAULT_LIMIT,
             max_limit: DEFAULT_MEM0_MAX_LIMIT,
+        }
+    }
+}
+
+impl Default for MemoryCuratorConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            mode: DEFAULT_MEMORY_CURATOR_MODE.to_string(),
+            min_confidence: DEFAULT_MEMORY_CURATOR_MIN_CONFIDENCE,
+            max_candidates: DEFAULT_MEMORY_CURATOR_MAX_CANDIDATES,
+            max_output_tokens: DEFAULT_MEMORY_CURATOR_MAX_OUTPUT_TOKENS,
         }
     }
 }
@@ -751,6 +784,23 @@ impl ConfigEnv {
             )?,
             mem0_default_limit_override: read_usize_var("TEAMD_MEM0_DEFAULT_LIMIT", &dotenv)?,
             mem0_max_limit_override: read_usize_var("TEAMD_MEM0_MAX_LIMIT", &dotenv)?,
+            memory_curator_enabled_override: read_bool_var(
+                "TEAMD_MEMORY_CURATOR_ENABLED",
+                &dotenv,
+            )?,
+            memory_curator_mode_override: read_string_var("TEAMD_MEMORY_CURATOR_MODE", &dotenv),
+            memory_curator_min_confidence_override: read_f64_var(
+                "TEAMD_MEMORY_CURATOR_MIN_CONFIDENCE",
+                &dotenv,
+            )?,
+            memory_curator_max_candidates_override: read_usize_var(
+                "TEAMD_MEMORY_CURATOR_MAX_CANDIDATES",
+                &dotenv,
+            )?,
+            memory_curator_max_output_tokens_override: read_u32_var(
+                "TEAMD_MEMORY_CURATOR_MAX_OUTPUT_TOKENS",
+                &dotenv,
+            )?,
             otlp_export_enabled_override: read_bool_var("TEAMD_OTLP_EXPORT_ENABLED", &dotenv)?,
             otlp_endpoint_override: read_string_var("TEAMD_OTLP_ENDPOINT", &dotenv),
             otlp_timeout_ms_override: read_u64_var("TEAMD_OTLP_TIMEOUT_MS", &dotenv)?,
@@ -876,6 +926,10 @@ impl AppConfig {
         let mut mem0 = file_config
             .as_ref()
             .and_then(|config| config.mem0.clone())
+            .unwrap_or_default();
+        let mut memory_curator = file_config
+            .as_ref()
+            .and_then(|config| config.memory_curator.clone())
             .unwrap_or_default();
         let mut observability = file_config
             .as_ref()
@@ -1031,6 +1085,21 @@ impl AppConfig {
         if let Some(limit) = env.mem0_max_limit_override {
             mem0.max_limit = limit;
         }
+        if let Some(enabled) = env.memory_curator_enabled_override {
+            memory_curator.enabled = enabled;
+        }
+        if let Some(mode) = &env.memory_curator_mode_override {
+            memory_curator.mode = mode.clone();
+        }
+        if let Some(confidence) = env.memory_curator_min_confidence_override {
+            memory_curator.min_confidence = confidence;
+        }
+        if let Some(limit) = env.memory_curator_max_candidates_override {
+            memory_curator.max_candidates = limit;
+        }
+        if let Some(tokens) = env.memory_curator_max_output_tokens_override {
+            memory_curator.max_output_tokens = tokens;
+        }
         if let Some(enabled) = env.otlp_export_enabled_override {
             observability.otlp_export_enabled = enabled;
         }
@@ -1059,6 +1128,7 @@ impl AppConfig {
             web,
             browser,
             mem0,
+            memory_curator,
             observability,
             runtime_timing,
             runtime_limits,
@@ -1229,6 +1299,7 @@ impl AppConfig {
                 reason: "must not be empty",
             });
         }
+        validate_memory_curator_mode("memory_curator.mode", self.memory_curator.mode.as_str())?;
         if self.observability.otlp_endpoint.trim().is_empty() {
             return Err(ConfigError::InvalidProviderValue {
                 name: "observability.otlp_endpoint",
@@ -1365,6 +1436,18 @@ impl AppConfig {
             self.mem0.default_limit,
             "mem0.max_limit",
             self.mem0.max_limit,
+        )?;
+        validate_ratio_value(
+            "memory_curator.min_confidence",
+            self.memory_curator.min_confidence,
+        )?;
+        validate_positive_usize_value(
+            "memory_curator.max_candidates",
+            self.memory_curator.max_candidates,
+        )?;
+        validate_positive_u32_value(
+            "memory_curator.max_output_tokens",
+            self.memory_curator.max_output_tokens,
         )?;
         validate_positive_u64_value(
             "runtime_timing.sqlite_busy_timeout_ms",
@@ -1644,6 +1727,7 @@ fn load_file_config(path: &Path, required: bool) -> Result<FileConfig, ConfigErr
                 web: None,
                 browser: None,
                 mem0: None,
+                memory_curator: None,
                 observability: None,
                 runtime_timing: None,
                 runtime_limits: None,
@@ -1905,6 +1989,17 @@ fn validate_telegram_inbound_queue_mode(
     }
 }
 
+fn validate_memory_curator_mode(name: &'static str, value: &str) -> Result<(), ConfigError> {
+    match value {
+        "auto" | "review" | "off" => Ok(()),
+        other => Err(ConfigError::InvalidProviderValue {
+            name,
+            value: other.to_string(),
+            reason: "must be one of auto, review, off",
+        }),
+    }
+}
+
 fn validate_ratio_value(name: &'static str, value: f64) -> Result<(), ConfigError> {
     if !(value > 0.0 && value <= 1.0) {
         return Err(ConfigError::InvalidProviderValue {
@@ -2072,6 +2167,7 @@ impl Default for AppConfig {
             web: WebConfig::default(),
             browser: BrowserConfig::default(),
             mem0: Mem0Config::default(),
+            memory_curator: MemoryCuratorConfig::default(),
             observability: ObservabilityConfig::default(),
             runtime_timing: RuntimeTimingConfig::default(),
             runtime_limits: RuntimeLimitsConfig::default(),

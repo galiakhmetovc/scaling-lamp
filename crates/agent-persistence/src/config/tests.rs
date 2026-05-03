@@ -48,6 +48,11 @@ fn base_env(root: &Path) -> ConfigEnv {
         mem0_request_timeout_ms_override: None,
         mem0_default_limit_override: None,
         mem0_max_limit_override: None,
+        memory_curator_enabled_override: None,
+        memory_curator_mode_override: None,
+        memory_curator_min_confidence_override: None,
+        memory_curator_max_candidates_override: None,
+        memory_curator_max_output_tokens_override: None,
         provider_api_base_override: None,
         provider_api_key_override: None,
         provider_connect_timeout_override: None,
@@ -158,6 +163,7 @@ fn validate_rejects_enabled_browser_without_command() {
             ..Default::default()
         },
         mem0: Default::default(),
+        memory_curator: Default::default(),
         observability: Default::default(),
         runtime_timing: Default::default(),
         runtime_limits: Default::default(),
@@ -217,6 +223,7 @@ fn validate_rejects_relative_data_dir() {
         web: Default::default(),
         browser: Default::default(),
         mem0: Default::default(),
+        memory_curator: Default::default(),
         observability: Default::default(),
         runtime_timing: Default::default(),
         runtime_limits: Default::default(),
@@ -577,6 +584,42 @@ max_limit = 40
 }
 
 #[test]
+fn load_merges_memory_curator_config_from_file_and_env() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let config_path = temp.path().join("teamd.toml");
+    fs::write(
+        &config_path,
+        r#"
+data_dir = "/tmp/teamd"
+
+[memory_curator]
+enabled = false
+mode = "review"
+min_confidence = 0.6
+max_candidates = 3
+max_output_tokens = 256
+"#,
+    )
+    .expect("write config");
+
+    let mut env = base_env(temp.path());
+    env.config_path = Some(config_path);
+    env.memory_curator_enabled_override = Some(true);
+    env.memory_curator_mode_override = Some("auto".to_string());
+    env.memory_curator_min_confidence_override = Some(0.82);
+    env.memory_curator_max_candidates_override = Some(7);
+    env.memory_curator_max_output_tokens_override = Some(768);
+
+    let config = AppConfig::load_from_env(&env).expect("load config");
+
+    assert!(config.memory_curator.enabled);
+    assert_eq!(config.memory_curator.mode, "auto");
+    assert_eq!(config.memory_curator.min_confidence, 0.82);
+    assert_eq!(config.memory_curator.max_candidates, 7);
+    assert_eq!(config.memory_curator.max_output_tokens, 768);
+}
+
+#[test]
 fn validate_rejects_invalid_runtime_limit_bounds() {
     let config = AppConfig {
         data_dir: PathBuf::from("/tmp/teamd"),
@@ -590,6 +633,7 @@ fn validate_rejects_invalid_runtime_limit_bounds() {
         web: Default::default(),
         browser: Default::default(),
         mem0: Default::default(),
+        memory_curator: Default::default(),
         observability: Default::default(),
         runtime_timing: Default::default(),
         runtime_limits: super::RuntimeLimitsConfig {
@@ -685,6 +729,7 @@ fn validate_rejects_invalid_auto_compaction_ratio() {
         web: Default::default(),
         browser: Default::default(),
         mem0: Default::default(),
+        memory_curator: Default::default(),
         observability: Default::default(),
         runtime_timing: Default::default(),
         runtime_limits: Default::default(),

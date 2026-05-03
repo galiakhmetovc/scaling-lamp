@@ -302,6 +302,7 @@ impl App {
                 web_search_url: self.config.web.search_url.clone(),
                 browser: self.config.browser.clone(),
                 mem0: self.config.mem0.clone(),
+                memory_curator: self.config.memory_curator.clone(),
                 runtime_timing: self.config.runtime_timing.clone(),
                 runtime_limits: self.config.runtime_limits.clone(),
             },

@@ -206,8 +206,8 @@ Mem0/OpenMemory в этой схеме — внешний durable semantic index
 
 - `state.sqlite`, transcripts, runs, tool ledger, schedules и artifacts остаются в `agent-persistence`;
 - prompt не получает “скрытую память” автоматически, агент должен явно вызвать `memory_search`/`memory_list`;
-- запись в память происходит только явным `memory_add`/`memory_update`;
+- запись в память происходит либо явным `memory_add`/`memory_update`, либо optional post-turn `memory_curator`, который запускается после завершения chat turn и применяет candidates через тот же Mem0 слой;
 - tool calls проходят через тот же provider loop, approvals, ledger и debug UI;
 - Mem0 REST endpoint настраивается в config/env, но не создаёт второй chat path.
 
-Такое разделение оставляет semantic memory inspectable и отключаемой: если Mem0 недоступен, ломается только capability `memory_*`, а не основная сессия.
+Такое разделение оставляет semantic memory inspectable и отключаемой: если Mem0 или curator недоступны, основной chat turn не должен падать.

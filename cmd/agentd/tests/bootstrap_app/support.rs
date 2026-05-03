@@ -50,6 +50,13 @@ pub(crate) fn openai_stream_message_response(response_id: &str, text: &str) -> S
     )
 }
 
+pub(crate) fn openai_message_response_json(response_id: &str, text: &str) -> String {
+    let text = serde_json::to_string(text).expect("serialize text");
+    format!(
+        "{{\"id\":\"{response_id}\",\"model\":\"gpt-5.4\",\"output\":[{{\"id\":\"msg_1\",\"type\":\"message\",\"status\":\"completed\",\"role\":\"assistant\",\"content\":[{{\"type\":\"output_text\",\"text\":{text}}}]}}],\"usage\":{{\"input_tokens\":16,\"output_tokens\":3,\"total_tokens\":19}}}}"
+    )
+}
+
 pub(crate) fn openai_stream_tool_call_response(
     response_id: &str,
     call_id: &str,

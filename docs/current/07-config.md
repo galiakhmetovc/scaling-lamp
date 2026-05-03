@@ -251,13 +251,49 @@ export TEAMD_MEM0_DEFAULT_LIMIT='10'
 export TEAMD_MEM0_MAX_LIMIT='50'
 ```
 
+### `[memory_curator]`
+
+Управляет post-turn самообучением агента поверх Mem0. Это не отдельный chat loop и не скрытый tool path: основной ответ пользователю сначала полностью завершается и пишется в transcript/run, затем runtime делает отдельный короткий provider-вызов без tools с `think_level = off`, просит вернуть строгий JSON с memory candidates и применяет их через тот же Mem0 слой.
+
+Default:
+
+```toml
+[memory_curator]
+enabled = false
+mode = "auto"
+min_confidence = 0.8
+max_candidates = 5
+max_output_tokens = 512
+```
+
+Env:
+
+```bash
+export TEAMD_MEMORY_CURATOR_ENABLED='true'
+export TEAMD_MEMORY_CURATOR_MODE='auto' # auto | review | off
+export TEAMD_MEMORY_CURATOR_MIN_CONFIDENCE='0.8'
+export TEAMD_MEMORY_CURATOR_MAX_CANDIDATES='5'
+export TEAMD_MEMORY_CURATOR_MAX_OUTPUT_TOKENS='512'
+```
+
+Как работает:
+
+- запускается только если одновременно `memory_curator.enabled = true` и `mem0.enabled = true`;
+- получает compact turn packet: `session_id`, `run_id`, `agent_profile_id`, `workspace_root`, последнее сообщение пользователя, финальный ответ ассистента и summaries tool calls текущего run;
+- сохраняет только durable facts: предпочтения оператора, устойчивые факты проекта/workspace, долгоживущие правила;
+- перед сохранением делает `memory_search` по тому же scope и пропускает exact duplicates;
+- не сохраняет секреты, пароли, токены, API keys, pairing keys и похожие credential-like строки;
+- ошибки curator, provider или Mem0 пишутся в `audit/runtime.jsonl`, но не ломают основной chat turn;
+- в `mode = "review"` candidates только фиксируются в audit как `review_required`, без auto-save;
+- в `mode = "off"` curator не запускается.
+
 Backend deploy через `scripts/deploy-teamd-containers.sh --with-mem0`:
 
 - поднимает `teamd-mem0` на `127.0.0.1:18888` и `teamd-mem0-postgres`;
 - использует local `fastembed` для embeddings, default `sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2`, 384 dimensions;
 - использует OpenAI-compatible LLM endpoint для extraction, default `glm-4.5-air` через Z.ai;
 - генерирует `ADMIN_API_KEY`, `JWT_SECRET`, `POSTGRES_PASSWORD` в `/opt/teamd/containers/mem0/mem0.env`;
-- upsert'ит `TEAMD_MEM0_*` в `/etc/teamd/teamd.env`.
+- upsert'ит `TEAMD_MEM0_*` и `TEAMD_MEMORY_CURATOR_*` в `/etc/teamd/teamd.env`.
 
 Дополнительные env для backend deploy:
 

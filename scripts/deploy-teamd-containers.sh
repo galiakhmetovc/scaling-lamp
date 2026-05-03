@@ -137,6 +137,11 @@ MEM0_DEFAULT_USER_ID=${TEAMD_MEM0_DEFAULT_USER_ID:-local-operator}
 MEM0_REQUEST_TIMEOUT_MS=${TEAMD_MEM0_REQUEST_TIMEOUT_MS:-120000}
 MEM0_DEFAULT_LIMIT=${TEAMD_MEM0_DEFAULT_LIMIT:-10}
 MEM0_MAX_LIMIT=${TEAMD_MEM0_MAX_LIMIT:-50}
+MEMORY_CURATOR_ENABLED=${TEAMD_MEMORY_CURATOR_ENABLED:-true}
+MEMORY_CURATOR_MODE=${TEAMD_MEMORY_CURATOR_MODE:-auto}
+MEMORY_CURATOR_MIN_CONFIDENCE=${TEAMD_MEMORY_CURATOR_MIN_CONFIDENCE:-0.8}
+MEMORY_CURATOR_MAX_CANDIDATES=${TEAMD_MEMORY_CURATOR_MAX_CANDIDATES:-5}
+MEMORY_CURATOR_MAX_OUTPUT_TOKENS=${TEAMD_MEMORY_CURATOR_MAX_OUTPUT_TOKENS:-512}
 MEM0_DIR=$CONTAINERS_ROOT/mem0
 MEM0_SRC_DIR=$MEM0_DIR/src
 MEM0_COMPOSE=$MEM0_DIR/docker-compose.yml
@@ -347,6 +352,15 @@ Environment overrides:
   TEAMD_MEM0_REQUEST_TIMEOUT_MS  Mem0 HTTP request timeout, default: $MEM0_REQUEST_TIMEOUT_MS.
   TEAMD_MEM0_DEFAULT_LIMIT       Default memory list/search limit, default: $MEM0_DEFAULT_LIMIT.
   TEAMD_MEM0_MAX_LIMIT           Maximum memory list/search limit, default: $MEM0_MAX_LIMIT.
+  TEAMD_MEMORY_CURATOR_ENABLED   Enable post-turn memory curator when Mem0 is deployed,
+                                 default: $MEMORY_CURATOR_ENABLED.
+  TEAMD_MEMORY_CURATOR_MODE      Curator mode: auto, review, or off. Default: $MEMORY_CURATOR_MODE.
+  TEAMD_MEMORY_CURATOR_MIN_CONFIDENCE
+                                 Minimum confidence for auto-save, default: $MEMORY_CURATOR_MIN_CONFIDENCE.
+  TEAMD_MEMORY_CURATOR_MAX_CANDIDATES
+                                 Max candidates per turn, default: $MEMORY_CURATOR_MAX_CANDIDATES.
+  TEAMD_MEMORY_CURATOR_MAX_OUTPUT_TOKENS
+                                 Curator provider cap, default: $MEMORY_CURATOR_MAX_OUTPUT_TOKENS.
   TEAMD_JAEGER_IMAGE             Jaeger all-in-one image, default: $JAEGER_IMAGE.
   TEAMD_JAEGER_UID               Jaeger container UID for Badger storage, default: $JAEGER_UID.
   TEAMD_JAEGER_GID               Jaeger container GID for Badger storage, default: $JAEGER_GID.
@@ -1138,7 +1152,7 @@ configure_agentd_mem0_env() {
 
   if [ "$DRY_RUN" -eq 1 ]; then
     print_cmd mkdir -p "$env_parent"
-    print_cmd sh -c "upsert Mem0 semantic memory defaults in $ENV_FILE"
+    print_cmd sh -c "upsert Mem0 semantic memory and memory curator defaults in $ENV_FILE"
     return 0
   fi
 
@@ -1154,7 +1168,12 @@ configure_agentd_mem0_env() {
       !/^(export[[:space:]]+)?TEAMD_MEM0_DEFAULT_USER_ID=/ &&
       !/^(export[[:space:]]+)?TEAMD_MEM0_REQUEST_TIMEOUT_MS=/ &&
       !/^(export[[:space:]]+)?TEAMD_MEM0_DEFAULT_LIMIT=/ &&
-      !/^(export[[:space:]]+)?TEAMD_MEM0_MAX_LIMIT=/
+      !/^(export[[:space:]]+)?TEAMD_MEM0_MAX_LIMIT=/ &&
+      !/^(export[[:space:]]+)?TEAMD_MEMORY_CURATOR_ENABLED=/ &&
+      !/^(export[[:space:]]+)?TEAMD_MEMORY_CURATOR_MODE=/ &&
+      !/^(export[[:space:]]+)?TEAMD_MEMORY_CURATOR_MIN_CONFIDENCE=/ &&
+      !/^(export[[:space:]]+)?TEAMD_MEMORY_CURATOR_MAX_CANDIDATES=/ &&
+      !/^(export[[:space:]]+)?TEAMD_MEMORY_CURATOR_MAX_OUTPUT_TOKENS=/
     ' "$ENV_FILE" > "$tmp_env"
   else
     : > "$tmp_env"
@@ -1172,6 +1191,11 @@ configure_agentd_mem0_env() {
     printf 'TEAMD_MEM0_REQUEST_TIMEOUT_MS=%s\n' "$(quote_arg "$MEM0_REQUEST_TIMEOUT_MS")"
     printf 'TEAMD_MEM0_DEFAULT_LIMIT=%s\n' "$(quote_arg "$MEM0_DEFAULT_LIMIT")"
     printf 'TEAMD_MEM0_MAX_LIMIT=%s\n' "$(quote_arg "$MEM0_MAX_LIMIT")"
+    printf 'TEAMD_MEMORY_CURATOR_ENABLED=%s\n' "$(quote_arg "$MEMORY_CURATOR_ENABLED")"
+    printf 'TEAMD_MEMORY_CURATOR_MODE=%s\n' "$(quote_arg "$MEMORY_CURATOR_MODE")"
+    printf 'TEAMD_MEMORY_CURATOR_MIN_CONFIDENCE=%s\n' "$(quote_arg "$MEMORY_CURATOR_MIN_CONFIDENCE")"
+    printf 'TEAMD_MEMORY_CURATOR_MAX_CANDIDATES=%s\n' "$(quote_arg "$MEMORY_CURATOR_MAX_CANDIDATES")"
+    printf 'TEAMD_MEMORY_CURATOR_MAX_OUTPUT_TOKENS=%s\n' "$(quote_arg "$MEMORY_CURATOR_MAX_OUTPUT_TOKENS")"
   } > "$tmp_new"
 
   env_group=root
@@ -2753,6 +2777,11 @@ if [ "$ENABLE_MEM0" -eq 1 ]; then
     TEAMD_MEM0_REQUEST_TIMEOUT_MS=$MEM0_REQUEST_TIMEOUT_MS
     TEAMD_MEM0_DEFAULT_LIMIT=$MEM0_DEFAULT_LIMIT
     TEAMD_MEM0_MAX_LIMIT=$MEM0_MAX_LIMIT
+    TEAMD_MEMORY_CURATOR_ENABLED=$MEMORY_CURATOR_ENABLED
+    TEAMD_MEMORY_CURATOR_MODE=$MEMORY_CURATOR_MODE
+    TEAMD_MEMORY_CURATOR_MIN_CONFIDENCE=$MEMORY_CURATOR_MIN_CONFIDENCE
+    TEAMD_MEMORY_CURATOR_MAX_CANDIDATES=$MEMORY_CURATOR_MAX_CANDIDATES
+    TEAMD_MEMORY_CURATOR_MAX_OUTPUT_TOKENS=$MEMORY_CURATOR_MAX_OUTPUT_TOKENS
     Start command: docker compose -f $MEM0_COMPOSE up -d --build
     Smoke: POST $MEM0_API_BASE/memories and POST $MEM0_API_BASE/search with X-API-Key from $MEM0_ENV_FILE
 EOF

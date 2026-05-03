@@ -9,6 +9,7 @@ mod interagent;
 mod mcp;
 mod mem0;
 mod memory;
+mod memory_curator;
 mod mission;
 mod provider_completion;
 mod provider_cursor;
@@ -28,10 +29,11 @@ use crate::mcp::SharedMcpRegistry;
 use crate::trace::{RuntimeTraceContext, TurnTraceSource};
 use agent_persistence::{
     A2APeerConfig, AgentRepository, BrowserConfig, ContextOffloadRepository,
-    ContextSummaryRepository, JobRecord, JobRepository, McpRepository, Mem0Config, MissionRecord,
-    MissionRepository, PersistenceStore, PlanRecord, PlanRepository, RecordConversionError,
-    RunRecord, RunRepository, RuntimeLimitsConfig, RuntimeTimingConfig, SessionInboxRepository,
-    SessionRepository, StoreError, TraceRepository, TranscriptRecord, TranscriptRepository,
+    ContextSummaryRepository, JobRecord, JobRepository, McpRepository, Mem0Config,
+    MemoryCuratorConfig, MissionRecord, MissionRepository, PersistenceStore, PlanRecord,
+    PlanRepository, RecordConversionError, RunRecord, RunRepository, RuntimeLimitsConfig,
+    RuntimeTimingConfig, SessionInboxRepository, SessionRepository, StoreError, TraceRepository,
+    TranscriptRecord, TranscriptRepository,
 };
 use agent_runtime::agent::AgentProfile;
 use agent_runtime::inbox::SessionInboxEvent;
@@ -195,6 +197,7 @@ pub struct ExecutionServiceConfig {
     pub web_search_url: String,
     pub browser: BrowserConfig,
     pub mem0: Mem0Config,
+    pub memory_curator: MemoryCuratorConfig,
     pub runtime_timing: RuntimeTimingConfig,
     pub runtime_limits: RuntimeLimitsConfig,
 }
@@ -225,6 +228,7 @@ impl Default for ExecutionServiceConfig {
             web_search_url: "https://duckduckgo.com/html/".to_string(),
             browser: BrowserConfig::default(),
             mem0: Mem0Config::default(),
+            memory_curator: MemoryCuratorConfig::default(),
             runtime_timing: RuntimeTimingConfig::default(),
             runtime_limits: RuntimeLimitsConfig::default(),
         }

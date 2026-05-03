@@ -72,7 +72,7 @@ impl ExecutionService {
             "teamd_workspace_root",
             session.workspace_root.display().to_string(),
         );
-        insert_metadata(&mut metadata, "teamd_source", "memory_add");
+        insert_metadata_if_missing(&mut metadata, "teamd_source", "memory_add");
         insert_metadata(&mut metadata, "teamd_created_at", now);
 
         let mut body = json!({
@@ -369,6 +369,10 @@ fn memory_metadata(value: &Value) -> Result<Map<String, Value>, ExecutionError> 
 
 fn insert_metadata(map: &mut Map<String, Value>, key: &str, value: impl Into<Value>) {
     map.insert(key.to_string(), value.into());
+}
+
+fn insert_metadata_if_missing(map: &mut Map<String, Value>, key: &str, value: impl Into<Value>) {
+    map.entry(key.to_string()).or_insert_with(|| value.into());
 }
 
 fn insert_optional_string(body: &mut Value, key: &str, value: Option<&str>) {

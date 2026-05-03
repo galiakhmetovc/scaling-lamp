@@ -118,6 +118,185 @@ fn execute_chat_turn_creates_a_run_and_appends_transcript_history() {
 }
 
 #[test]
+fn execute_chat_turn_runs_memory_curator_after_assistant_response() {
+    let curator_output = serde_json::json!({
+        "candidates": [
+            {
+                "action": "add",
+                "scope": "operator",
+                "text": "Пользователю нравится зелёный цвет.",
+                "confidence": 0.91,
+                "reason": "explicit user preference"
+            }
+        ],
+        "rejected": []
+    })
+    .to_string();
+    let (provider_api_base, provider_requests, provider_handle) = spawn_json_server_sequence(vec![
+        openai_message_response_json("resp_chat_curator_main", "Запомнил."),
+        openai_message_response_json("resp_chat_curator_memory", &curator_output),
+    ]);
+    let (mem0_api_base, mem0_requests, mem0_handle) = spawn_json_server_sequence(vec![
+        r#"{"results":[]}"#.to_string(),
+        r#"{"results":[{"id":"mem_green","memory":"Пользователю нравится зелёный цвет."}],"status":"created"}"#.to_string(),
+    ]);
+    let temp = tempfile::tempdir().expect("tempdir");
+    let app = build_from_config(AppConfig {
+        data_dir: temp.path().join("state-root"),
+        provider: ConfiguredProvider {
+            kind: ProviderKind::OpenAiResponses,
+            api_base: Some(format!("{provider_api_base}/v1")),
+            api_key: Some("test-key".to_string()),
+            default_model: Some("gpt-5.4".to_string()),
+            ..ConfiguredProvider::default()
+        },
+        mem0: agent_persistence::Mem0Config {
+            enabled: true,
+            api_base: mem0_api_base,
+            default_user_id: "anton".to_string(),
+            request_timeout_ms: 5_000,
+            ..agent_persistence::Mem0Config::default()
+        },
+        memory_curator: agent_persistence::MemoryCuratorConfig {
+            enabled: true,
+            mode: "auto".to_string(),
+            min_confidence: 0.8,
+            max_candidates: 5,
+            max_output_tokens: 512,
+        },
+        ..AppConfig::default()
+    })
+    .expect("build app");
+    let store = PersistenceStore::open(&app.persistence).expect("open store");
+
+    store
+        .put_session(&SessionRecord {
+            id: "session-memory-curator".to_string(),
+            title: "Memory curator".to_string(),
+            prompt_override: Some("Be concise.".to_string()),
+            settings_json: serde_json::to_string(&SessionSettings::default())
+                .expect("serialize settings"),
+            workspace_root: app.runtime.workspace.root.display().to_string(),
+            agent_profile_id: "default".to_string(),
+            active_mission_id: None,
+            parent_session_id: None,
+            parent_job_id: None,
+            delegation_label: None,
+            created_at: 1,
+            updated_at: 1,
+        })
+        .expect("put session");
+
+    let report = app
+        .execute_chat_turn(
+            "session-memory-curator",
+            "Запомни, мне нравится зелёный цвет",
+            10,
+        )
+        .expect("execute chat turn");
+    assert_eq!(report.output_text, "Запомнил.");
+
+    let main_request = provider_requests
+        .recv_timeout(Duration::from_secs(5))
+        .expect("main provider request");
+    let curator_request = provider_requests
+        .recv_timeout(Duration::from_secs(5))
+        .expect("curator provider request");
+    provider_handle.join().expect("join provider");
+    let search_request = mem0_requests
+        .recv_timeout(Duration::from_secs(5))
+        .expect("mem0 search request");
+    let add_request = mem0_requests
+        .recv_timeout(Duration::from_secs(5))
+        .expect("mem0 add request");
+    mem0_handle.join().expect("join mem0");
+
+    assert!(main_request.contains("Запомни, мне нравится зелёный цвет"));
+    assert!(curator_request.contains("memory curator"));
+    assert!(!curator_request.contains("\"tools\""));
+    assert!(curator_request.contains("\"max_output_tokens\":512"));
+    assert!(curator_request.contains("\"stream\":false"));
+    assert!(search_request.contains("/search"));
+    assert!(search_request.contains("Пользователю нравится зел"));
+    assert!(add_request.contains("/memories"));
+    assert!(add_request.contains("Пользователю нравится зел"));
+    assert!(add_request.contains("teamd_curator_run_id"));
+    assert!(add_request.contains("run-chat-session-memory-curator-10"));
+
+    let transcript = app
+        .session_transcript("session-memory-curator")
+        .expect("load transcript");
+    assert_eq!(transcript.entries.len(), 2);
+}
+
+#[test]
+fn execute_chat_turn_does_not_fail_when_memory_curator_output_is_invalid() {
+    let (provider_api_base, provider_requests, provider_handle) = spawn_json_server_sequence(vec![
+        openai_message_response_json("resp_chat_curator_nonfatal", "Ответ готов."),
+        openai_message_response_json("resp_chat_curator_invalid", "not json"),
+    ]);
+    let temp = tempfile::tempdir().expect("tempdir");
+    let app = build_from_config(AppConfig {
+        data_dir: temp.path().join("state-root"),
+        provider: ConfiguredProvider {
+            kind: ProviderKind::OpenAiResponses,
+            api_base: Some(format!("{provider_api_base}/v1")),
+            api_key: Some("test-key".to_string()),
+            default_model: Some("gpt-5.4".to_string()),
+            ..ConfiguredProvider::default()
+        },
+        mem0: agent_persistence::Mem0Config {
+            enabled: true,
+            api_base: "http://127.0.0.1:9".to_string(),
+            default_user_id: "anton".to_string(),
+            request_timeout_ms: 100,
+            ..agent_persistence::Mem0Config::default()
+        },
+        memory_curator: agent_persistence::MemoryCuratorConfig {
+            enabled: true,
+            mode: "auto".to_string(),
+            min_confidence: 0.8,
+            max_candidates: 5,
+            max_output_tokens: 512,
+        },
+        ..AppConfig::default()
+    })
+    .expect("build app");
+    let store = PersistenceStore::open(&app.persistence).expect("open store");
+
+    store
+        .put_session(&SessionRecord {
+            id: "session-memory-curator-invalid".to_string(),
+            title: "Memory curator invalid".to_string(),
+            prompt_override: Some("Be concise.".to_string()),
+            settings_json: serde_json::to_string(&SessionSettings::default())
+                .expect("serialize settings"),
+            workspace_root: app.runtime.workspace.root.display().to_string(),
+            agent_profile_id: "default".to_string(),
+            active_mission_id: None,
+            parent_session_id: None,
+            parent_job_id: None,
+            delegation_label: None,
+            created_at: 1,
+            updated_at: 1,
+        })
+        .expect("put session");
+
+    let report = app
+        .execute_chat_turn("session-memory-curator-invalid", "Запомни тест", 10)
+        .expect("execute chat turn");
+
+    assert_eq!(report.output_text, "Ответ готов.");
+    provider_requests
+        .recv_timeout(Duration::from_secs(5))
+        .expect("main provider request");
+    provider_requests
+        .recv_timeout(Duration::from_secs(5))
+        .expect("curator provider request");
+    provider_handle.join().expect("join provider");
+}
+
+#[test]
 fn execute_chat_turn_uses_the_session_workspace_for_prompt_and_tools() {
     let first_provider_response = r#"{
                 "id":"resp_workspace_tool",
