@@ -2252,6 +2252,27 @@ normalize_existing_filebrowser_credentials() {
   run_root install -m 0600 -o root -g root "$tmp_env" "$FILEBROWSER_ENV_FILE"
 }
 
+write_filebrowser_settings() {
+  if [ "$DRY_RUN" -eq 1 ]; then
+    print_cmd sh -c "write File Browser settings.json with baseURL=$FILEBROWSER_BASE_URL"
+    return 0
+  fi
+
+  tmp_settings=$(mktemp)
+  trap 'rm -f "$tmp_settings"' EXIT INT TERM
+  cat > "$tmp_settings" <<EOF
+{
+  "port": $FILEBROWSER_CONTAINER_PORT,
+  "baseURL": "$FILEBROWSER_BASE_URL",
+  "address": "0.0.0.0",
+  "log": "stdout",
+  "database": "/database/filebrowser.db",
+  "root": "/srv"
+}
+EOF
+  run_root install -m 0644 -o "$FILEBROWSER_PUID" -g "$FILEBROWSER_PGID" "$tmp_settings" "$FILEBROWSER_CONFIG_DIR/settings.json"
+}
+
 seed_filebrowser_credentials() {
   if [ -f "$FILEBROWSER_ENV_FILE" ]; then
     # Preserve existing credentials. Operators rotate them by editing this file
@@ -2313,6 +2334,7 @@ write_filebrowser_files() {
   run_root chown -R "$FILEBROWSER_PUID:$FILEBROWSER_PGID" \
     "$FILEBROWSER_DB_DIR" \
     "$FILEBROWSER_CONFIG_DIR"
+  write_filebrowser_settings
   run_root chown "$FILEBROWSER_PUID:$FILEBROWSER_PGID" \
     "$FILEBROWSER_AGENT_HOMES_DIR" \
     "$FILEBROWSER_WORKSPACES_DIR" \
