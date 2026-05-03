@@ -5,9 +5,10 @@ use std::error::Error;
 use std::fmt;
 
 use super::parse_repair::{
-    CONTINUE_LATER_ENUM_REPAIRS, EnumLikeFieldRepair, KNOWLEDGE_READ_ENUM_REPAIRS,
-    SCHEDULE_ENUM_REPAIRS, SESSION_READ_ENUM_REPAIRS, SESSION_WAIT_ENUM_REPAIRS,
-    repair_bare_enum_like_values,
+    BROWSER_OUTPUT_PATH_REPAIRS, BareStringFieldRepair, CONTINUE_LATER_ENUM_REPAIRS,
+    EnumLikeFieldRepair, KNOWLEDGE_READ_ENUM_REPAIRS, SCHEDULE_ENUM_REPAIRS,
+    SESSION_READ_ENUM_REPAIRS, SESSION_WAIT_ENUM_REPAIRS, repair_bare_enum_like_values,
+    repair_bare_string_field_values,
 };
 use super::{
     KnowledgeReadMode, McpCallInput, ProcessOutputStream, SessionReadMode, ToolCall, ToolName,
@@ -42,6 +43,24 @@ impl ToolCall {
             Ok(parsed) => Ok(parsed),
             Err(source) => {
                 if let Some(repaired) = repair_bare_enum_like_values(arguments, repairs)
+                    && let Ok(parsed) = serde_json::from_str(&repaired)
+                {
+                    return Ok(parsed);
+                }
+                Err(Self::invalid_arguments_error(name, source))
+            }
+        }
+    }
+
+    fn parse_arguments_with_bare_string_repair<T: DeserializeOwned>(
+        name: &str,
+        arguments: &str,
+        repairs: &[BareStringFieldRepair],
+    ) -> Result<T, ToolCallParseError> {
+        match serde_json::from_str(arguments) {
+            Ok(parsed) => Ok(parsed),
+            Err(source) => {
+                if let Some(repaired) = repair_bare_string_field_values(arguments, repairs)
                     && let Ok(parsed) = serde_json::from_str(&repaired)
                 {
                     return Ok(parsed);
@@ -716,18 +735,18 @@ impl ToolCall {
                     name: name.to_string(),
                     source,
                 }),
-            "browser_screenshot" => serde_json::from_str(arguments)
-                .map(Self::BrowserScreenshot)
-                .map_err(|source| ToolCallParseError::InvalidArguments {
-                    name: name.to_string(),
-                    source,
-                }),
-            "browser_pdf" => serde_json::from_str(arguments)
-                .map(Self::BrowserPdf)
-                .map_err(|source| ToolCallParseError::InvalidArguments {
-                    name: name.to_string(),
-                    source,
-                }),
+            "browser_screenshot" => Self::parse_arguments_with_bare_string_repair(
+                name,
+                arguments,
+                BROWSER_OUTPUT_PATH_REPAIRS,
+            )
+            .map(Self::BrowserScreenshot),
+            "browser_pdf" => Self::parse_arguments_with_bare_string_repair(
+                name,
+                arguments,
+                BROWSER_OUTPUT_PATH_REPAIRS,
+            )
+            .map(Self::BrowserPdf),
             "browser_status" => serde_json::from_str(arguments)
                 .map(Self::BrowserStatus)
                 .map_err(|source| ToolCallParseError::InvalidArguments {

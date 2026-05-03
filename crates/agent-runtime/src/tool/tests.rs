@@ -1,11 +1,11 @@
 use super::{
-    BrowserCloseInput, BrowserOpenInput, BrowserScreenshotInput, BrowserSnapshotInput,
-    BrowserToolClient, BrowserToolConfig, ExecStartInput, FsFindInFilesInput, FsGlobInput,
-    FsInsertTextInput, FsListInput, FsMkdirInput, FsMoveInput, FsPatchTextInput, FsReadLinesInput,
-    FsReadTextInput, FsReplaceLinesInput, FsSearchTextInput, FsTrashInput, FsWriteMode,
-    FsWriteTextInput, KnowledgeReadInput, KnowledgeReadMode, KnowledgeRoot, KnowledgeSearchInput,
-    KnowledgeSourceKind, ProcessKillInput, ProcessOutputStatus, ProcessOutputStream,
-    ProcessReadOutputInput, ProcessResultStatus, ProcessWaitInput,
+    BrowserCloseInput, BrowserOpenInput, BrowserPdfInput, BrowserScreenshotInput,
+    BrowserSnapshotInput, BrowserToolClient, BrowserToolConfig, ExecStartInput, FsFindInFilesInput,
+    FsGlobInput, FsInsertTextInput, FsListInput, FsMkdirInput, FsMoveInput, FsPatchTextInput,
+    FsReadLinesInput, FsReadTextInput, FsReplaceLinesInput, FsSearchTextInput, FsTrashInput,
+    FsWriteMode, FsWriteTextInput, KnowledgeReadInput, KnowledgeReadMode, KnowledgeRoot,
+    KnowledgeSearchInput, KnowledgeSourceKind, ProcessKillInput, ProcessOutputStatus,
+    ProcessOutputStream, ProcessReadOutputInput, ProcessResultStatus, ProcessWaitInput,
     PromptBudgetLayerPercentagesInput, PromptBudgetUpdateScope, SessionReadInput, SessionReadMode,
     SessionSearchInput, SessionWaitInput, SharedProcessRegistry, ToolCall, ToolCatalog, ToolFamily,
     ToolName, ToolRuntime, WebFetchInput, WebSearchBackend, WebSearchInput, WebToolClient,
@@ -217,6 +217,32 @@ fn browser_tool_calls_parse_structured_arguments() {
     assert_eq!(
         close,
         ToolCall::BrowserClose(BrowserCloseInput { all: Some(false) })
+    );
+}
+
+#[test]
+fn browser_output_tools_repair_bare_workspace_path_arguments() {
+    let screenshot = ToolCall::from_openai_function(
+        "browser_screenshot",
+        r#"{"path":scratch/browser/example.png}"#,
+    )
+    .expect("repair browser_screenshot path");
+    let pdf = ToolCall::from_openai_function("browser_pdf", r#"{"path":scratch/browser/page.pdf}"#)
+        .expect("repair browser_pdf path");
+
+    assert_eq!(
+        screenshot,
+        ToolCall::BrowserScreenshot(BrowserScreenshotInput {
+            path: Some("scratch/browser/example.png".to_string()),
+            full: None,
+            annotate: None,
+        })
+    );
+    assert_eq!(
+        pdf,
+        ToolCall::BrowserPdf(BrowserPdfInput {
+            path: "scratch/browser/page.pdf".to_string(),
+        })
     );
 }
 
