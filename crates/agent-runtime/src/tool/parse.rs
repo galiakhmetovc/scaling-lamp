@@ -129,6 +129,11 @@ impl ToolCall {
             Self::ArtifactPin(_) => ToolName::ArtifactPin,
             Self::ArtifactUnpin(_) => ToolName::ArtifactUnpin,
             Self::DeliverFile(_) => ToolName::DeliverFile,
+            Self::MemoryAdd(_) => ToolName::MemoryAdd,
+            Self::MemorySearch(_) => ToolName::MemorySearch,
+            Self::MemoryList(_) => ToolName::MemoryList,
+            Self::MemoryUpdate(_) => ToolName::MemoryUpdate,
+            Self::MemoryDelete(_) => ToolName::MemoryDelete,
             Self::KnowledgeSearch(_) => ToolName::KnowledgeSearch,
             Self::KnowledgeRead(_) => ToolName::KnowledgeRead,
             Self::SessionSearch(_) => ToolName::SessionSearch,
@@ -205,6 +210,11 @@ impl ToolCall {
             | Self::SkillEnable(_)
             | Self::SkillDisable(_)
             | Self::DeliverFile(_)
+            | Self::MemoryAdd(_)
+            | Self::MemorySearch(_)
+            | Self::MemoryList(_)
+            | Self::MemoryUpdate(_)
+            | Self::MemoryDelete(_)
             | Self::KnowledgeSearch(_)
             | Self::KnowledgeRead(_)
             | Self::SessionSearch(_)
@@ -471,6 +481,30 @@ impl ToolCall {
                     )
                 }
             }
+            Self::MemoryAdd(input) => format!(
+                "memory_add scope={} text_bytes={} messages={}",
+                input.scope.as_deref().unwrap_or("default"),
+                input.text.len(),
+                input.messages.len()
+            ),
+            Self::MemorySearch(input) => format!(
+                "memory_search scope={} query={} limit={}",
+                input.scope.as_deref().unwrap_or("default"),
+                input.query,
+                input.limit.unwrap_or(0)
+            ),
+            Self::MemoryList(input) => format!(
+                "memory_list scope={} offset={} limit={}",
+                input.scope.as_deref().unwrap_or("default"),
+                input.offset.unwrap_or(0),
+                input.limit.unwrap_or(0)
+            ),
+            Self::MemoryUpdate(input) => format!(
+                "memory_update memory_id={} text_bytes={}",
+                input.memory_id,
+                input.text.len()
+            ),
+            Self::MemoryDelete(input) => format!("memory_delete memory_id={}", input.memory_id),
             Self::KnowledgeSearch(input) => format!(
                 "knowledge_search query={} offset={} limit={}",
                 input.query,
@@ -909,6 +943,36 @@ impl ToolCall {
                 DELIVER_FILE_STRING_REPAIRS,
             )
             .map(Self::DeliverFile),
+            "memory_add" => serde_json::from_str(arguments)
+                .map(Self::MemoryAdd)
+                .map_err(|source| ToolCallParseError::InvalidArguments {
+                    name: name.to_string(),
+                    source,
+                }),
+            "memory_search" => serde_json::from_str(arguments)
+                .map(Self::MemorySearch)
+                .map_err(|source| ToolCallParseError::InvalidArguments {
+                    name: name.to_string(),
+                    source,
+                }),
+            "memory_list" => serde_json::from_str(arguments)
+                .map(Self::MemoryList)
+                .map_err(|source| ToolCallParseError::InvalidArguments {
+                    name: name.to_string(),
+                    source,
+                }),
+            "memory_update" => serde_json::from_str(arguments)
+                .map(Self::MemoryUpdate)
+                .map_err(|source| ToolCallParseError::InvalidArguments {
+                    name: name.to_string(),
+                    source,
+                }),
+            "memory_delete" => serde_json::from_str(arguments)
+                .map(Self::MemoryDelete)
+                .map_err(|source| ToolCallParseError::InvalidArguments {
+                    name: name.to_string(),
+                    source,
+                }),
             "knowledge_search" => serde_json::from_str(arguments)
                 .map(Self::KnowledgeSearch)
                 .map_err(|source| ToolCallParseError::InvalidArguments {

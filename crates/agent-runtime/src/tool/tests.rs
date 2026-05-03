@@ -4,12 +4,13 @@ use super::{
     ExecStartInput, FsFindInFilesInput, FsGlobInput, FsInsertTextInput, FsListInput, FsMkdirInput,
     FsMoveInput, FsPatchTextInput, FsReadLinesInput, FsReadTextInput, FsReplaceLinesInput,
     FsSearchTextInput, FsTrashInput, FsWriteMode, FsWriteTextInput, KnowledgeReadInput,
-    KnowledgeReadMode, KnowledgeRoot, KnowledgeSearchInput, KnowledgeSourceKind, ProcessKillInput,
-    ProcessOutputStatus, ProcessOutputStream, ProcessReadOutputInput, ProcessResultStatus,
-    ProcessWaitInput, PromptBudgetLayerPercentagesInput, PromptBudgetUpdateScope, SessionReadInput,
-    SessionReadMode, SessionSearchInput, SessionWaitInput, SharedProcessRegistry, ToolCall,
-    ToolCatalog, ToolFamily, ToolName, ToolRuntime, WebFetchInput, WebSearchBackend,
-    WebSearchInput, WebToolClient,
+    KnowledgeReadMode, KnowledgeRoot, KnowledgeSearchInput, KnowledgeSourceKind, MemoryAddInput,
+    MemoryDeleteInput, MemoryListInput, MemoryMessageInput, MemorySearchInput, MemoryUpdateInput,
+    ProcessKillInput, ProcessOutputStatus, ProcessOutputStream, ProcessReadOutputInput,
+    ProcessResultStatus, ProcessWaitInput, PromptBudgetLayerPercentagesInput,
+    PromptBudgetUpdateScope, SessionReadInput, SessionReadMode, SessionSearchInput,
+    SessionWaitInput, SharedProcessRegistry, ToolCall, ToolCatalog, ToolFamily, ToolName,
+    ToolRuntime, WebFetchInput, WebSearchBackend, WebSearchInput, WebToolClient,
 };
 use crate::memory::SessionRetentionTier;
 use crate::workspace::WorkspaceRef;
@@ -580,6 +581,11 @@ fn automatic_model_definitions_include_session_memory_tools() {
     assert!(names.contains(&ToolName::SessionRead));
     assert!(names.contains(&ToolName::KnowledgeSearch));
     assert!(names.contains(&ToolName::KnowledgeRead));
+    assert!(names.contains(&ToolName::MemoryAdd));
+    assert!(names.contains(&ToolName::MemorySearch));
+    assert!(names.contains(&ToolName::MemoryList));
+    assert!(names.contains(&ToolName::MemoryUpdate));
+    assert!(names.contains(&ToolName::MemoryDelete));
 }
 
 #[test]
@@ -1111,6 +1117,104 @@ fn tool_call_parses_knowledge_memory_inputs() {
             cursor: Some(10),
             max_bytes: None,
             max_lines: Some(20),
+        })
+    );
+}
+
+#[test]
+fn tool_call_parses_semantic_memory_inputs() {
+    let add = ToolCall::from_openai_function(
+        "memory_add",
+        r#"{"text":"User prefers concise Russian answers.","scope":"operator","infer":false,"metadata":{"source":"manual"}}"#,
+    )
+    .expect("parse memory_add");
+    let search = ToolCall::from_openai_function(
+        "memory_search",
+        r#"{"query":"preferred response style","scope":"operator","limit":5,"filters":{"topic":"style"}}"#,
+    )
+    .expect("parse memory_search");
+    let list = ToolCall::from_openai_function(
+        "memory_list",
+        r#"{"scope":"workspace","limit":10,"offset":20}"#,
+    )
+    .expect("parse memory_list");
+    let update = ToolCall::from_openai_function(
+        "memory_update",
+        r#"{"memory_id":"mem_1","text":"User prefers direct Russian answers.","metadata":{"updated_by":"agent"}}"#,
+    )
+    .expect("parse memory_update");
+    let delete = ToolCall::from_openai_function("memory_delete", r#"{"memory_id":"mem_1"}"#)
+        .expect("parse memory_delete");
+
+    assert_eq!(
+        add,
+        ToolCall::MemoryAdd(MemoryAddInput {
+            text: "User prefers concise Russian answers.".to_string(),
+            messages: Vec::new(),
+            scope: Some("operator".to_string()),
+            infer: Some(false),
+            metadata: serde_json::json!({"source":"manual"}),
+        })
+    );
+    assert_eq!(
+        search,
+        ToolCall::MemorySearch(MemorySearchInput {
+            query: "preferred response style".to_string(),
+            scope: Some("operator".to_string()),
+            limit: Some(5),
+            filters: serde_json::json!({"topic":"style"}),
+        })
+    );
+    assert_eq!(
+        list,
+        ToolCall::MemoryList(MemoryListInput {
+            scope: Some("workspace".to_string()),
+            limit: Some(10),
+            offset: Some(20),
+            filters: serde_json::Value::Null,
+        })
+    );
+    assert_eq!(
+        update,
+        ToolCall::MemoryUpdate(MemoryUpdateInput {
+            memory_id: "mem_1".to_string(),
+            text: "User prefers direct Russian answers.".to_string(),
+            metadata: serde_json::json!({"updated_by":"agent"}),
+        })
+    );
+    assert_eq!(
+        delete,
+        ToolCall::MemoryDelete(MemoryDeleteInput {
+            memory_id: "mem_1".to_string(),
+        })
+    );
+}
+
+#[test]
+fn semantic_memory_tools_accept_conversation_messages() {
+    let add = ToolCall::from_openai_function(
+        "memory_add",
+        r#"{"messages":[{"role":"user","content":"I use Telegram first."},{"role":"assistant","content":"I will remember that."}],"scope":"operator"}"#,
+    )
+    .expect("parse memory_add messages");
+
+    assert_eq!(
+        add,
+        ToolCall::MemoryAdd(MemoryAddInput {
+            text: String::new(),
+            messages: vec![
+                MemoryMessageInput {
+                    role: "user".to_string(),
+                    content: "I use Telegram first.".to_string(),
+                },
+                MemoryMessageInput {
+                    role: "assistant".to_string(),
+                    content: "I will remember that.".to_string(),
+                },
+            ],
+            scope: Some("operator".to_string()),
+            infer: None,
+            metadata: serde_json::Value::Null,
         })
     );
 }

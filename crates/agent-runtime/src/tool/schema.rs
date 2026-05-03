@@ -555,6 +555,68 @@ impl ToolName {
                 },
                 "additionalProperties": false,
             }),
+            Self::MemoryAdd => json!({
+                "type": "object",
+                "properties": {
+                    "text": { "type": ["string", "null"], "description": "Explicit durable memory text to store. Use this for confirmed facts, preferences, durable decisions, or lessons. Either text or messages must be non-empty." },
+                    "messages": {
+                        "type": ["array", "null"],
+                        "description": "Optional conversation turns for Mem0 to infer memories from. Use only when the conversation itself is the source; otherwise prefer explicit text.",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "role": { "type": "string", "enum": ["user", "assistant", "system", "tool"] },
+                                "content": { "type": "string" }
+                            },
+                            "required": ["role", "content"],
+                            "additionalProperties": false
+                        }
+                    },
+                    "scope": { "type": ["string", "null"], "enum": ["operator", "agent", "workspace", "session", null], "description": "Memory scope. Defaults to operator+agent+workspace where runtime has ids. Use session for short-lived session facts; use workspace for project decisions." },
+                    "infer": { "type": ["boolean", "null"], "description": "When false, store the supplied text as-is. When true or omitted, Mem0 may extract concise facts from messages/text." },
+                    "metadata": { "type": ["object", "null"], "description": "Optional provenance/filter metadata. Do not put secrets here.", "additionalProperties": true }
+                },
+                "additionalProperties": false,
+            }),
+            Self::MemorySearch => json!({
+                "type": "object",
+                "properties": {
+                    "query": { "type": "string", "description": "Semantic memory search query. Use this when a durable preference, prior decision, or lesson may help the current task." },
+                    "scope": { "type": ["string", "null"], "enum": ["operator", "agent", "workspace", "session", null], "description": "Optional scope restriction; defaults to the current operator+agent+workspace scope." },
+                    "limit": { "type": ["integer", "null"], "minimum": 1, "description": "Optional maximum number of memories to return" },
+                    "filters": { "type": ["object", "null"], "description": "Optional backend filter object. Prefer scope unless you know the exact metadata key.", "additionalProperties": true }
+                },
+                "required": ["query"],
+                "additionalProperties": false,
+            }),
+            Self::MemoryList => json!({
+                "type": "object",
+                "properties": {
+                    "scope": { "type": ["string", "null"], "enum": ["operator", "agent", "workspace", "session", null], "description": "Optional scope restriction; defaults to the current operator+agent+workspace scope." },
+                    "limit": { "type": ["integer", "null"], "minimum": 1, "description": "Optional maximum number of memories to return" },
+                    "offset": { "type": ["integer", "null"], "minimum": 0, "description": "Optional pagination offset handled by teamD if the backend returns enough rows" },
+                    "filters": { "type": ["object", "null"], "description": "Optional backend filter object. Prefer scope unless you know the exact metadata key.", "additionalProperties": true }
+                },
+                "additionalProperties": false,
+            }),
+            Self::MemoryUpdate => json!({
+                "type": "object",
+                "properties": {
+                    "memory_id": { "type": "string", "description": "Exact memory id returned by memory_search or memory_list" },
+                    "text": { "type": "string", "description": "Replacement memory text" },
+                    "metadata": { "type": ["object", "null"], "description": "Optional metadata merge/update object", "additionalProperties": true }
+                },
+                "required": ["memory_id", "text"],
+                "additionalProperties": false,
+            }),
+            Self::MemoryDelete => json!({
+                "type": "object",
+                "properties": {
+                    "memory_id": { "type": "string", "description": "Exact memory id returned by memory_search or memory_list. Never delete broad memory without explicit user intent." }
+                },
+                "required": ["memory_id"],
+                "additionalProperties": false,
+            }),
             Self::KnowledgeSearch => json!({
                 "type": "object",
                 "properties": {

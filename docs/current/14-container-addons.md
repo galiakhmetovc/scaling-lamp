@@ -1,4 +1,4 @@
-# Container add-ons: Docker, SearXNG, SilverBullet, Browserless, Jaeger, Caddy
+# Container add-ons: Docker, SearXNG, SilverBullet, Browserless, Mem0, Jaeger, Caddy
 
 Этот документ описывает второй deploy layer вокруг host `agentd`.
 
@@ -23,6 +23,7 @@
 - `teamd-silverbullet-mcp` — SilverBullet MCP bridge;
 - `teamd-jaeger` — Jaeger UI и OTLP receiver для traces;
 - `teamd-browserless` + `agent-browser` — recommended browser automation backend для built-in `browser_*` tools;
+- Mem0/OpenMemory REST endpoint — optional semantic long-term memory backend для built-in `memory_*` tools;
 - `lightpanda` MCP connector — legacy optional headless browser для JS-страниц, форм, кликов и DOM/content extraction;
 - `teamd-obsidian` — legacy browser Obsidian для восстановления старых vault workflows;
 - `obsidian` MCP connector — legacy filesystem-backed MCP для старого vault.
@@ -41,6 +42,15 @@ Logseq Publish больше не является runtime-компонентом
 
 ```bash
 ./scripts/deploy-teamd-containers.sh --with-browserless
+```
+
+Если нужно включить `memory_*` tools на уже поднятый Mem0/OpenMemory REST API:
+
+```bash
+TEAMD_MEM0_API_BASE='http://127.0.0.1:18888' \
+TEAMD_MEM0_API_KEY='optional-api-key' \
+TEAMD_MEM0_DEFAULT_USER_ID='anton' \
+  ./scripts/deploy-teamd-containers.sh --no-searxng --no-caddy --with-mem0
 ```
 
 Если нужен только `agent-browser` CLI/config без Browserless container:
@@ -259,6 +269,58 @@ Smoke check:
 
 ```bash
 curl 'http://127.0.0.1:8888/search?q=test&format=json'
+```
+
+## Mem0 semantic memory
+
+Mem0/OpenMemory — optional external semantic memory service. В teamD он подключается как backend для built-in `memory_*` tools:
+
+- `memory_add`;
+- `memory_search`;
+- `memory_list`;
+- `memory_update`;
+- `memory_delete`.
+
+Это не MCP connector и не второй runtime. Tools идут через canonical provider loop, approvals, tool-call ledger и debug UI.
+
+Официальный self-host Mem0 REST API использует paths без `/v1`: `POST /memories`, `POST /search`, `GET /memories`, `PUT /memories/{id}`, `DELETE /memories/{id}`. Auth для self-host endpoint делается через `X-API-Key`.
+
+Ссылки на официальную документацию:
+
+- Self-host setup: <https://docs.mem0.ai/open-source/setup>
+- REST API server: <https://docs.mem0.ai/open-source/features/rest-api>
+- OSS configuration: <https://docs.mem0.ai/open-source/configuration>
+
+Почему `deploy-teamd-containers.sh` не поднимает Mem0 server автоматически:
+
+- официальный self-host bundle требует LLM/embedder provider secrets, JWT/admin bootstrap и собственную DB/vector-store конфигурацию;
+- неправильный автодеплой memory backend опаснее, чем отсутствие memory backend: можно случайно писать персональные данные в неверный endpoint;
+- teamD должен уметь работать с любым self-host Mem0/OpenMemory endpoint, а не владеть его lifecycle.
+
+Поэтому `--with-mem0` делает только client-side настройку `agentd`:
+
+```bash
+TEAMD_MEM0_ENABLED='true'
+TEAMD_MEM0_API_BASE='http://127.0.0.1:18888'
+TEAMD_MEM0_API_KEY='optional'
+TEAMD_MEM0_DEFAULT_USER_ID='local-operator'
+TEAMD_MEM0_REQUEST_TIMEOUT_MS='5000'
+TEAMD_MEM0_DEFAULT_LIMIT='10'
+TEAMD_MEM0_MAX_LIMIT='50'
+```
+
+Если Mem0 поднят по официальному default на `http://127.0.0.1:8888`, задайте `TEAMD_MEM0_API_BASE` явно. В teamD default `18888`, потому что `8888` обычно занят SearXNG.
+
+Smoke check endpoint:
+
+```bash
+curl -sS http://127.0.0.1:18888/docs >/dev/null
+```
+
+Smoke check через агента:
+
+```text
+Запомни в долгосрочную память: я предпочитаю краткие ответы на русском. Затем найди это в памяти.
 ```
 
 ## Browserless + agent-browser

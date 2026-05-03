@@ -2,6 +2,7 @@ use crate::agent::{AgentScheduleDeliveryMode, AgentScheduleMode};
 use crate::memory::SessionRetentionTier;
 use crate::session::PromptBudgetPolicy;
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use std::collections::BTreeMap;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -476,6 +477,74 @@ pub struct DeliverFileInput {
     pub target: Option<FileDeliveryTarget>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MemoryMessageInput {
+    pub role: String,
+    pub content: String,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct MemoryAddInput {
+    pub text: String,
+    pub messages: Vec<MemoryMessageInput>,
+    pub scope: Option<String>,
+    pub infer: Option<bool>,
+    pub metadata: Value,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct MemorySearchInput {
+    pub query: String,
+    pub scope: Option<String>,
+    pub limit: Option<usize>,
+    pub filters: Value,
+}
+
+impl Default for MemorySearchInput {
+    fn default() -> Self {
+        Self {
+            query: String::new(),
+            scope: None,
+            limit: None,
+            filters: Value::Null,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct MemoryListInput {
+    pub scope: Option<String>,
+    pub limit: Option<usize>,
+    pub offset: Option<usize>,
+    pub filters: Value,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct MemoryUpdateInput {
+    pub memory_id: String,
+    pub text: String,
+    pub metadata: Value,
+}
+
+impl Default for MemoryUpdateInput {
+    fn default() -> Self {
+        Self {
+            memory_id: String::new(),
+            text: String::new(),
+            metadata: Value::Null,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MemoryDeleteInput {
+    pub memory_id: String,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum KnowledgeSourceKind {
@@ -785,6 +854,11 @@ pub enum ToolCall {
     ArtifactPin(ArtifactPinInput),
     ArtifactUnpin(ArtifactPinInput),
     DeliverFile(DeliverFileInput),
+    MemoryAdd(MemoryAddInput),
+    MemorySearch(MemorySearchInput),
+    MemoryList(MemoryListInput),
+    MemoryUpdate(MemoryUpdateInput),
+    MemoryDelete(MemoryDeleteInput),
     KnowledgeSearch(KnowledgeSearchInput),
     KnowledgeRead(KnowledgeReadInput),
     SessionSearch(SessionSearchInput),

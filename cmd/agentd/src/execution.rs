@@ -7,6 +7,7 @@ mod delegate_jobs;
 mod delegation;
 mod interagent;
 mod mcp;
+mod mem0;
 mod memory;
 mod mission;
 mod provider_completion;
@@ -27,7 +28,7 @@ use crate::mcp::SharedMcpRegistry;
 use crate::trace::{RuntimeTraceContext, TurnTraceSource};
 use agent_persistence::{
     A2APeerConfig, AgentRepository, BrowserConfig, ContextOffloadRepository,
-    ContextSummaryRepository, JobRecord, JobRepository, McpRepository, MissionRecord,
+    ContextSummaryRepository, JobRecord, JobRepository, McpRepository, Mem0Config, MissionRecord,
     MissionRepository, PersistenceStore, PlanRecord, PlanRepository, RecordConversionError,
     RunRecord, RunRepository, RuntimeLimitsConfig, RuntimeTimingConfig, SessionInboxRepository,
     SessionRepository, StoreError, TraceRepository, TranscriptRecord, TranscriptRepository,
@@ -193,6 +194,7 @@ pub struct ExecutionServiceConfig {
     pub web_search_backend: WebSearchBackend,
     pub web_search_url: String,
     pub browser: BrowserConfig,
+    pub mem0: Mem0Config,
     pub runtime_timing: RuntimeTimingConfig,
     pub runtime_limits: RuntimeLimitsConfig,
 }
@@ -222,6 +224,7 @@ impl Default for ExecutionServiceConfig {
             web_search_backend: WebSearchBackend::default(),
             web_search_url: "https://duckduckgo.com/html/".to_string(),
             browser: BrowserConfig::default(),
+            mem0: Mem0Config::default(),
             runtime_timing: RuntimeTimingConfig::default(),
             runtime_limits: RuntimeLimitsConfig::default(),
         }

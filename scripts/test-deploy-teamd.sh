@@ -37,6 +37,7 @@ assert_contains "$containers_help_output" "container add-ons"
 assert_contains "$containers_help_output" "--with-obsidian"
 assert_contains "$containers_help_output" "--with-obsidian-mcp"
 assert_contains "$containers_help_output" "--with-jaeger"
+assert_contains "$containers_help_output" "--with-mem0"
 assert_contains "$containers_help_output" "--with-silverbullet"
 assert_contains "$containers_help_output" "--with-silverbullet-mcp"
 assert_contains "$containers_help_output" "--with-browserless"
@@ -102,6 +103,16 @@ assert_contains "$containers_jaeger_dry_run_output" "upsert OTLP trace export de
 assert_contains "$containers_jaeger_dry_run_output" "TEAMD_OTLP_EXPORT_ENABLED=true"
 assert_contains "$containers_jaeger_dry_run_output" "TEAMD_OTLP_ENDPOINT=http://127.0.0.1:4318/v1/traces"
 assert_contains "$containers_jaeger_dry_run_output" "/jaeger/"
+
+containers_mem0_dry_run_output=$(
+  "$CONTAINERS_DEPLOY_SCRIPT" --dry-run --non-interactive --no-start --no-searxng --no-caddy --with-mem0 2>&1
+)
+
+assert_contains "$containers_mem0_dry_run_output" "upsert Mem0 semantic memory defaults in /etc/teamd/teamd.env"
+assert_contains "$containers_mem0_dry_run_output" "Mem0 semantic memory:"
+assert_contains "$containers_mem0_dry_run_output" "TEAMD_MEM0_ENABLED=true"
+assert_contains "$containers_mem0_dry_run_output" "REST API base: http://127.0.0.1:18888"
+assert_contains "$containers_mem0_dry_run_output" "TEAMD_MEM0_DEFAULT_USER_ID=local-operator"
 
 containers_silverbullet_dry_run_output=$(
   "$CONTAINERS_DEPLOY_SCRIPT" --dry-run --non-interactive --no-start --with-silverbullet-mcp 2>&1

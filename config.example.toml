@@ -78,6 +78,17 @@ search_url = "https://duckduckgo.com/html/"
 # search_backend = "searxng_json"
 # search_url = "http://127.0.0.1:8888/search"
 
+[mem0]
+# Optional long-term semantic memory. Disabled by default so memory_* tools are
+# hidden from models until a Mem0/OpenMemory REST endpoint is configured.
+enabled = false
+api_base = "http://127.0.0.1:18888"
+# api_key = "prefer TEAMD_MEM0_API_KEY in .env"
+default_user_id = "local-operator"
+request_timeout_ms = 5000
+default_limit = 10
+max_limit = 50
+
 [browser]
 # Disabled by default. deploy-teamd-containers.sh --with-browserless enables
 # this through /etc/teamd/teamd.env for production-like installs.

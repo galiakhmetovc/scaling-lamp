@@ -447,6 +447,54 @@ pub struct DeliverFileOutput {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MemoryItemOutput {
+    pub id: String,
+    pub memory: String,
+    pub score: Option<String>,
+    pub metadata: Value,
+    pub user_id: Option<String>,
+    pub agent_id: Option<String>,
+    pub run_id: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MemoryAddOutput {
+    pub status: String,
+    pub memories: Vec<MemoryItemOutput>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MemorySearchOutput {
+    pub query: String,
+    pub results: Vec<MemoryItemOutput>,
+    pub truncated: bool,
+    pub limit: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MemoryListOutput {
+    pub results: Vec<MemoryItemOutput>,
+    pub truncated: bool,
+    pub offset: usize,
+    pub limit: usize,
+    pub total_results: usize,
+    pub next_offset: Option<usize>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MemoryUpdateOutput {
+    pub memory_id: String,
+    pub updated: bool,
+    pub memory: Option<MemoryItemOutput>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MemoryDeleteOutput {
+    pub memory_id: String,
+    pub deleted: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct KnowledgeSearchResultOutput {
     pub path: String,
     pub kind: KnowledgeSourceKind,
@@ -838,6 +886,11 @@ pub enum ToolOutput {
     ArtifactPin(ArtifactPinOutput),
     ArtifactUnpin(ArtifactPinOutput),
     DeliverFile(DeliverFileOutput),
+    MemoryAdd(MemoryAddOutput),
+    MemorySearch(MemorySearchOutput),
+    MemoryList(MemoryListOutput),
+    MemoryUpdate(MemoryUpdateOutput),
+    MemoryDelete(MemoryDeleteOutput),
     KnowledgeSearch(KnowledgeSearchOutput),
     KnowledgeRead(KnowledgeReadOutput),
     SessionSearch(SessionSearchOutput),
@@ -1298,6 +1351,43 @@ impl ToolOutput {
                 output.target.as_str(),
                 output.status
             ),
+            Self::MemoryAdd(output) => {
+                format!(
+                    "memory_add status={} memories={}",
+                    output.status,
+                    output.memories.len()
+                )
+            }
+            Self::MemorySearch(output) => format!(
+                "memory_search results={} truncated={} limit={}",
+                output.results.len(),
+                output.truncated,
+                output.limit
+            ),
+            Self::MemoryList(output) => {
+                if let Some(next_offset) = output.next_offset {
+                    format!(
+                        "memory_list results={} total={} truncated next_offset={}",
+                        output.results.len(),
+                        output.total_results,
+                        next_offset
+                    )
+                } else {
+                    format!("memory_list results={}", output.results.len())
+                }
+            }
+            Self::MemoryUpdate(output) => {
+                format!(
+                    "memory_update memory_id={} updated={}",
+                    output.memory_id, output.updated
+                )
+            }
+            Self::MemoryDelete(output) => {
+                format!(
+                    "memory_delete memory_id={} deleted={}",
+                    output.memory_id, output.deleted
+                )
+            }
             Self::KnowledgeSearch(output) => {
                 if let Some(next_offset) = output.next_offset {
                     format!(
@@ -1847,6 +1937,44 @@ impl ToolOutput {
                 "delivery_note": "queued for the current operator surface; queued is success, not final delivery; Telegram sends queued files as documents after the current turn and reports delivery failures to the chat; tell the user the file was queued/sent as a document, do not mention internal artifact ids, and do not invent Obsidian/vault fallback paths"
             })
             .to_string(),
+            Self::MemoryAdd(output) => json!({
+                "tool": "memory_add",
+                "status": output.status,
+                "memories": output.memories.iter().map(memory_item_json).collect::<Vec<_>>(),
+                "note": "memory is an inspectable durable recall aid, not hidden source of truth; use memory_search/list to retrieve it later"
+            })
+            .to_string(),
+            Self::MemorySearch(output) => json!({
+                "tool": "memory_search",
+                "query": output.query,
+                "results": output.results.iter().map(memory_item_json).collect::<Vec<_>>(),
+                "truncated": output.truncated,
+                "limit": output.limit,
+            })
+            .to_string(),
+            Self::MemoryList(output) => json!({
+                "tool": "memory_list",
+                "results": output.results.iter().map(memory_item_json).collect::<Vec<_>>(),
+                "truncated": output.truncated,
+                "offset": output.offset,
+                "limit": output.limit,
+                "total_results": output.total_results,
+                "next_offset": output.next_offset,
+            })
+            .to_string(),
+            Self::MemoryUpdate(output) => json!({
+                "tool": "memory_update",
+                "memory_id": output.memory_id,
+                "updated": output.updated,
+                "memory": output.memory.as_ref().map(memory_item_json),
+            })
+            .to_string(),
+            Self::MemoryDelete(output) => json!({
+                "tool": "memory_delete",
+                "memory_id": output.memory_id,
+                "deleted": output.deleted,
+            })
+            .to_string(),
             Self::KnowledgeSearch(output) => json!({
                 "tool": "knowledge_search",
                 "query": output.query,
@@ -2385,5 +2513,17 @@ fn skill_status_json(skill: &SkillStatusOutput) -> Value {
         "mode": skill.mode,
         "skill_dir": skill.skill_dir,
         "skill_md_path": skill.skill_md_path,
+    })
+}
+
+fn memory_item_json(memory: &MemoryItemOutput) -> Value {
+    json!({
+        "id": memory.id,
+        "memory": memory.memory,
+        "score": memory.score,
+        "metadata": memory.metadata,
+        "user_id": memory.user_id,
+        "agent_id": memory.agent_id,
+        "run_id": memory.run_id,
     })
 }

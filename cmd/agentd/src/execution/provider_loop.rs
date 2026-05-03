@@ -360,6 +360,7 @@ impl ExecutionService {
             .filter(|definition| {
                 agent_profile.allows_tool_id(definition.name.as_str())
                     && (self.config.browser.enabled || definition.family != ToolFamily::Browser)
+                    && (self.config.mem0.enabled || !definition.name.is_semantic_memory_tool())
                     && (has_context_offload
                         || !matches!(
                             definition.name,
@@ -2001,6 +2002,21 @@ impl ExecutionService {
                 input,
                 now,
             )?)),
+            ToolCall::MemoryAdd(input) => Ok(ToolOutput::MemoryAdd(
+                self.add_semantic_memory(store, session_id, input, now)?,
+            )),
+            ToolCall::MemorySearch(input) => Ok(ToolOutput::MemorySearch(
+                self.search_semantic_memory(store, session_id, input)?,
+            )),
+            ToolCall::MemoryList(input) => Ok(ToolOutput::MemoryList(
+                self.list_semantic_memories(store, session_id, input)?,
+            )),
+            ToolCall::MemoryUpdate(input) => Ok(ToolOutput::MemoryUpdate(
+                self.update_semantic_memory(input)?,
+            )),
+            ToolCall::MemoryDelete(input) => Ok(ToolOutput::MemoryDelete(
+                self.delete_semantic_memory(input)?,
+            )),
             ToolCall::KnowledgeSearch(input) => Ok(ToolOutput::KnowledgeSearch(
                 self.search_knowledge(store, input)?,
             )),
@@ -3473,6 +3489,61 @@ mod tests {
 
         assert!(names.iter().any(|name| name == ToolName::WebFetch.as_str()));
         assert!(!names.iter().any(|name| name.starts_with("browser_")));
+        assert!(!names.iter().any(|name| name.starts_with("memory_")));
+    }
+
+    #[test]
+    fn automatic_provider_tools_expose_semantic_memory_only_when_enabled() {
+        use agent_runtime::agent::AgentTemplateKind;
+        use agent_runtime::tool::ToolCatalog;
+
+        let provider = provider();
+        let allowed_tools = ToolCatalog::default()
+            .all_definitions()
+            .iter()
+            .map(|definition| definition.name.as_str().to_string())
+            .collect::<Vec<_>>();
+        let profile = AgentProfile::new(
+            "default",
+            "Default",
+            AgentTemplateKind::Default,
+            "agents/default",
+            allowed_tools,
+            None,
+            1,
+            1,
+        )
+        .expect("profile");
+        let service = ExecutionService::new(
+            PermissionConfig::default(),
+            WorkspaceRef::default(),
+            SharedProcessRegistry::default(),
+            SharedMcpRegistry::default(),
+            ExecutionServiceConfig {
+                mem0: agent_persistence::Mem0Config {
+                    enabled: true,
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
+        );
+
+        let names = service
+            .automatic_provider_tools(&provider, None, &profile)
+            .into_iter()
+            .map(|tool| tool.name)
+            .collect::<Vec<_>>();
+
+        assert!(
+            names
+                .iter()
+                .any(|name| name == ToolName::MemoryAdd.as_str())
+        );
+        assert!(
+            names
+                .iter()
+                .any(|name| name == ToolName::MemorySearch.as_str())
+        );
     }
 
     #[test]

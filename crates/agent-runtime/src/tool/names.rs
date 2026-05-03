@@ -72,6 +72,11 @@ pub enum ToolName {
     ArtifactPin,
     ArtifactUnpin,
     DeliverFile,
+    MemoryAdd,
+    MemorySearch,
+    MemoryList,
+    MemoryUpdate,
+    MemoryDelete,
     KnowledgeSearch,
     KnowledgeRead,
     SessionSearch,
@@ -112,6 +117,17 @@ impl ToolFamily {
 }
 
 impl ToolName {
+    pub fn is_semantic_memory_tool(self) -> bool {
+        matches!(
+            self,
+            Self::MemoryAdd
+                | Self::MemorySearch
+                | Self::MemoryList
+                | Self::MemoryUpdate
+                | Self::MemoryDelete
+        )
+    }
+
     pub fn as_str(self) -> &'static str {
         match self {
             Self::FsRead => "fs_read",
@@ -171,6 +187,11 @@ impl ToolName {
             Self::ArtifactPin => "artifact_pin",
             Self::ArtifactUnpin => "artifact_unpin",
             Self::DeliverFile => "deliver_file",
+            Self::MemoryAdd => "memory_add",
+            Self::MemorySearch => "memory_search",
+            Self::MemoryList => "memory_list",
+            Self::MemoryUpdate => "memory_update",
+            Self::MemoryDelete => "memory_delete",
             Self::KnowledgeSearch => "knowledge_search",
             Self::KnowledgeRead => "knowledge_read",
             Self::SessionSearch => "session_search",

@@ -41,6 +41,13 @@ fn base_env(root: &Path) -> ConfigEnv {
         browserless_browser_type_override: None,
         browserless_ttl_ms_override: None,
         browserless_stealth_override: None,
+        mem0_enabled_override: None,
+        mem0_api_base_override: None,
+        mem0_api_key_override: None,
+        mem0_default_user_id_override: None,
+        mem0_request_timeout_ms_override: None,
+        mem0_default_limit_override: None,
+        mem0_max_limit_override: None,
         provider_api_base_override: None,
         provider_api_key_override: None,
         provider_connect_timeout_override: None,
@@ -150,6 +157,7 @@ fn validate_rejects_enabled_browser_without_command() {
             command: "   ".to_string(),
             ..Default::default()
         },
+        mem0: Default::default(),
         observability: Default::default(),
         runtime_timing: Default::default(),
         runtime_limits: Default::default(),
@@ -208,6 +216,7 @@ fn validate_rejects_relative_data_dir() {
         workspace: Default::default(),
         web: Default::default(),
         browser: Default::default(),
+        mem0: Default::default(),
         observability: Default::default(),
         runtime_timing: Default::default(),
         runtime_limits: Default::default(),
@@ -526,6 +535,48 @@ otlp_timeout_ms = 2500
 }
 
 #[test]
+fn load_merges_mem0_config_from_file_and_env() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let config_path = temp.path().join("teamd.toml");
+    fs::write(
+        &config_path,
+        r#"
+data_dir = "/tmp/teamd"
+
+[mem0]
+enabled = false
+api_base = "http://127.0.0.1:8888"
+api_key = "file-key"
+default_user_id = "file-user"
+request_timeout_ms = 5000
+default_limit = 8
+max_limit = 40
+"#,
+    )
+    .expect("write config");
+
+    let mut env = base_env(temp.path());
+    env.config_path = Some(config_path);
+    env.mem0_enabled_override = Some(true);
+    env.mem0_api_base_override = Some("http://127.0.0.1:18888".to_string());
+    env.mem0_api_key_override = Some("env-key".to_string());
+    env.mem0_default_user_id_override = Some("anton".to_string());
+    env.mem0_request_timeout_ms_override = Some(2500);
+    env.mem0_default_limit_override = Some(12);
+    env.mem0_max_limit_override = Some(64);
+
+    let config = AppConfig::load_from_env(&env).expect("load config");
+
+    assert!(config.mem0.enabled);
+    assert_eq!(config.mem0.api_base, "http://127.0.0.1:18888");
+    assert_eq!(config.mem0.api_key.as_deref(), Some("env-key"));
+    assert_eq!(config.mem0.default_user_id, "anton");
+    assert_eq!(config.mem0.request_timeout_ms, 2500);
+    assert_eq!(config.mem0.default_limit, 12);
+    assert_eq!(config.mem0.max_limit, 64);
+}
+
+#[test]
 fn validate_rejects_invalid_runtime_limit_bounds() {
     let config = AppConfig {
         data_dir: PathBuf::from("/tmp/teamd"),
@@ -538,6 +589,7 @@ fn validate_rejects_invalid_runtime_limit_bounds() {
         workspace: Default::default(),
         web: Default::default(),
         browser: Default::default(),
+        mem0: Default::default(),
         observability: Default::default(),
         runtime_timing: Default::default(),
         runtime_limits: super::RuntimeLimitsConfig {
@@ -632,6 +684,7 @@ fn validate_rejects_invalid_auto_compaction_ratio() {
         workspace: Default::default(),
         web: Default::default(),
         browser: Default::default(),
+        mem0: Default::default(),
         observability: Default::default(),
         runtime_timing: Default::default(),
         runtime_limits: Default::default(),

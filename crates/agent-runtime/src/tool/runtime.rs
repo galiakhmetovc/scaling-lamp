@@ -581,7 +581,12 @@ impl ToolRuntime {
                 reason: "autonomy and skill tools must execute through the canonical session path"
                     .to_string(),
             }),
-            ToolCall::KnowledgeSearch(_)
+            ToolCall::MemoryAdd(_)
+            | ToolCall::MemorySearch(_)
+            | ToolCall::MemoryList(_)
+            | ToolCall::MemoryUpdate(_)
+            | ToolCall::MemoryDelete(_)
+            | ToolCall::KnowledgeSearch(_)
             | ToolCall::KnowledgeRead(_)
             | ToolCall::SessionSearch(_)
             | ToolCall::SessionRead(_) => Err(ToolError::InvalidMemoryTool {

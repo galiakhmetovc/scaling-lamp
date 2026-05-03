@@ -1046,6 +1046,129 @@ deliver_file({
 
 ## Memory
 
+### Semantic memory через Mem0
+
+`memory_*` tools появляются в model-facing списке только если включён config:
+
+```toml
+[mem0]
+enabled = true
+api_base = "http://127.0.0.1:18888"
+```
+
+Они работают через тот же canonical provider loop и tool ledger, а не через MCP и не через отдельный prompt path. Mem0 хранит только явно записанные durable memories. Он не заменяет `state.sqlite`, transcript, tool-call ledger, artifacts, `ContextSummary` или SilverBullet/docs.
+
+Scope:
+
+- `operator` — память оператора, только `user_id`;
+- `agent` — память конкретного agent profile, `user_id + agent_id`;
+- `workspace` — default scope, память agent profile в текущем workspace;
+- `session` — память текущей session, `user_id + agent_id + run_id=session_id`.
+
+Runtime добавляет в metadata provenance поля `teamd_scope`, `teamd_session_id`, `teamd_agent_profile_id`, `teamd_workspace_root` и `teamd_source`.
+
+### `memory_add`
+
+Сигнатура:
+
+```text
+memory_add({
+  text?: string,
+  messages?: { role: "user" | "assistant" | "system" | "tool", content: string }[],
+  scope?: "operator" | "agent" | "workspace" | "session" | null,
+  infer?: boolean | null,
+  metadata?: object
+})
+```
+
+Что делает:
+
+- явно записывает факт или фрагмент диалога в Mem0;
+- принимает либо `text`, либо `messages`;
+- отправляет `POST /memories` в self-hosted Mem0/OpenMemory REST API;
+- если задан `api_key`, runtime отправляет его как `X-API-Key`.
+
+Когда использовать:
+
+- пользователь явно просит “запомни”;
+- агент получил устойчивое предпочтение, правило, идентификатор проекта или долгоживущий факт;
+- важно сохранить память между sessions.
+
+Когда не использовать:
+
+- для секретов, токенов, паролей;
+- для временного состояния текущего turn;
+- для tool outputs, которые уже сохранены в artifacts/tool ledger.
+
+### `memory_search`
+
+Сигнатура:
+
+```text
+memory_search({
+  query: string,
+  scope?: "operator" | "agent" | "workspace" | "session" | null,
+  limit?: integer | null,
+  filters?: object
+})
+```
+
+Что делает:
+
+- ищет релевантные memories через `POST /search`;
+- автоматически добавляет entity filters по выбранному scope;
+- ограничивает `limit` через `mem0.default_limit` и `mem0.max_limit`.
+
+Когда использовать:
+
+- до ответа, если агенту нужен долгоживущий контекст о пользователе, проекте или workspace;
+- если обычный `ContextSummary`/transcript tail не должен раздуваться историей.
+
+### `memory_list`
+
+Сигнатура:
+
+```text
+memory_list({
+  scope?: "operator" | "agent" | "workspace" | "session" | null,
+  limit?: integer | null,
+  offset?: integer | null,
+  filters?: object
+})
+```
+
+Что делает:
+
+- читает список memories через `GET /memories`;
+- применяет bounded pagination на стороне runtime;
+- useful для audit/debug и чистки.
+
+### `memory_update`
+
+Сигнатура:
+
+```text
+memory_update({ memory_id: string, text: string, metadata?: object })
+```
+
+Что делает:
+
+- обновляет конкретную memory через `PUT /memories/{memory_id}`;
+- не ищет memory сам, сначала используй `memory_search` или `memory_list`.
+
+### `memory_delete`
+
+Сигнатура:
+
+```text
+memory_delete({ memory_id: string })
+```
+
+Что делает:
+
+- удаляет конкретную memory через `DELETE /memories/{memory_id}`;
+- помечен destructive и требует approval по обычным правилам approval layer.
+
 ### `knowledge_search`
 
 Сигнатура:

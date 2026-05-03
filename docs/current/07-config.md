@@ -222,6 +222,52 @@ export TEAMD_WEB_SEARCH_URL='http://127.0.0.1:8888/search'
 
 Важно: для `text/html`/`xhtml` `web_fetch` теперь не отдаёт модели сырой HTML по умолчанию. Runtime конвертирует HTML в markdown-подобный readable text через `html-to-markdown-rs`, извлекает заголовок страницы, а большие результаты уводит в context offload artifact вместо inline prompt payload.
 
+### `[mem0]`
+
+Управляет optional semantic long-term memory через self-hosted Mem0/OpenMemory REST API.
+
+Default:
+
+```toml
+[mem0]
+enabled = false
+api_base = "http://127.0.0.1:18888"
+default_user_id = "local-operator"
+request_timeout_ms = 5000
+default_limit = 10
+max_limit = 50
+# api_key = "..."
+```
+
+Env:
+
+```bash
+export TEAMD_MEM0_ENABLED='true'
+export TEAMD_MEM0_API_BASE='http://127.0.0.1:18888'
+export TEAMD_MEM0_API_KEY='m0sk_or_admin_key'
+export TEAMD_MEM0_DEFAULT_USER_ID='anton'
+export TEAMD_MEM0_REQUEST_TIMEOUT_MS='5000'
+export TEAMD_MEM0_DEFAULT_LIMIT='10'
+export TEAMD_MEM0_MAX_LIMIT='50'
+```
+
+Почему default port `18888`, а не официальный Mem0 `8888`: в стандартной teamD container обвязке `8888` уже занят SearXNG. Если Mem0 запущен по официальной инструкции на `8888`, явно задайте `TEAMD_MEM0_API_BASE=http://127.0.0.1:8888`.
+
+Что меняется при `enabled = true`:
+
+- model-facing список tools получает `memory_add`, `memory_search`, `memory_list`, `memory_update`, `memory_delete`;
+- runtime вызывает Mem0 endpoints `POST /memories`, `POST /search`, `GET /memories`, `PUT /memories/{id}`, `DELETE /memories/{id}`;
+- при наличии `api_key` он отправляется как `X-API-Key`;
+- все вызовы остаются в canonical provider loop и tool-call ledger.
+
+Что не меняется:
+
+- `state.sqlite` остаётся источником истины для sessions/runs/schedules/tool calls;
+- transcript, artifacts и `ContextSummary` не переезжают в Mem0;
+- SilverBullet/docs остаются knowledge/documentation layer.
+
+`scripts/deploy-teamd-containers.sh --with-mem0` пока конфигурирует только сторону `agentd`: upsert'ит `TEAMD_MEM0_*` в `/etc/teamd/teamd.env` и перезапускает services. Сам Mem0/OpenMemory REST API нужно поднять отдельно по официальной self-host инструкции или указать существующий endpoint.
+
 ### `[observability]`
 
 Управляет внешним экспортом runtime traces.

@@ -93,6 +93,11 @@ impl ToolCatalog {
                         | ToolName::ArtifactPin
                         | ToolName::ArtifactUnpin
                         | ToolName::DeliverFile
+                        | ToolName::MemoryAdd
+                        | ToolName::MemorySearch
+                        | ToolName::MemoryList
+                        | ToolName::MemoryUpdate
+                        | ToolName::MemoryDelete
                         | ToolName::KnowledgeSearch
                         | ToolName::KnowledgeRead
                         | ToolName::SessionSearch
@@ -688,6 +693,56 @@ impl ToolCatalog {
                     read_only: false,
                     destructive: false,
                     requires_approval: false,
+                },
+            },
+            ToolDefinition {
+                name: ToolName::MemoryAdd,
+                family: ToolFamily::Memory,
+                description: "Store an explicit, inspectable long-term semantic memory through the configured Mem0 backend. Use only for confirmed durable preferences, decisions, project facts, or lessons; do not store secrets or raw transcripts by default.",
+                policy: ToolPolicy {
+                    read_only: false,
+                    destructive: false,
+                    requires_approval: false,
+                },
+            },
+            ToolDefinition {
+                name: ToolName::MemorySearch,
+                family: ToolFamily::Memory,
+                description: "Search the configured Mem0 semantic memory backend for relevant durable preferences, decisions, facts, or lessons. Results are bounded and visible in the tool ledger.",
+                policy: ToolPolicy {
+                    read_only: true,
+                    destructive: false,
+                    requires_approval: false,
+                },
+            },
+            ToolDefinition {
+                name: ToolName::MemoryList,
+                family: ToolFamily::Memory,
+                description: "List bounded long-term memories from the configured Mem0 backend for the current scope or explicit filters.",
+                policy: ToolPolicy {
+                    read_only: true,
+                    destructive: false,
+                    requires_approval: false,
+                },
+            },
+            ToolDefinition {
+                name: ToolName::MemoryUpdate,
+                family: ToolFamily::Memory,
+                description: "Replace one existing long-term memory by exact memory_id. Search or list first; do not guess ids.",
+                policy: ToolPolicy {
+                    read_only: false,
+                    destructive: false,
+                    requires_approval: false,
+                },
+            },
+            ToolDefinition {
+                name: ToolName::MemoryDelete,
+                family: ToolFamily::Memory,
+                description: "Delete one existing long-term memory by exact memory_id. Use only when the operator asks to remove or correct a memory.",
+                policy: ToolPolicy {
+                    read_only: false,
+                    destructive: true,
+                    requires_approval: true,
                 },
             },
             ToolDefinition {

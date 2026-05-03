@@ -27,6 +27,11 @@ const DEFAULT_BROWSER_MAX_OUTPUT_CHARS: usize = 20_000;
 const DEFAULT_BROWSERLESS_API_URL: &str = "http://127.0.0.1:3000";
 const DEFAULT_BROWSERLESS_BROWSER_TYPE: &str = "chromium";
 const DEFAULT_BROWSERLESS_TTL_MS: u64 = 300_000;
+const DEFAULT_MEM0_API_BASE: &str = "http://127.0.0.1:18888";
+const DEFAULT_MEM0_DEFAULT_USER_ID: &str = "local-operator";
+const DEFAULT_MEM0_REQUEST_TIMEOUT_MS: u64 = 5_000;
+const DEFAULT_MEM0_DEFAULT_LIMIT: usize = 10;
+const DEFAULT_MEM0_MAX_LIMIT: usize = 50;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct AppConfig {
@@ -40,6 +45,7 @@ pub struct AppConfig {
     pub context: ContextConfig,
     pub web: WebConfig,
     pub browser: BrowserConfig,
+    pub mem0: Mem0Config,
     pub observability: ObservabilityConfig,
     pub runtime_timing: RuntimeTimingConfig,
     pub runtime_limits: RuntimeLimitsConfig,
@@ -130,6 +136,18 @@ pub struct BrowserlessConfig {
     pub browser_type: String,
     pub ttl_ms: u64,
     pub stealth: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(default)]
+pub struct Mem0Config {
+    pub enabled: bool,
+    pub api_base: String,
+    pub api_key: Option<String>,
+    pub default_user_id: String,
+    pub request_timeout_ms: u64,
+    pub default_limit: usize,
+    pub max_limit: usize,
 }
 
 impl BrowserConfig {
@@ -266,6 +284,13 @@ pub struct ConfigEnv {
     pub browserless_browser_type_override: Option<String>,
     pub browserless_ttl_ms_override: Option<u64>,
     pub browserless_stealth_override: Option<bool>,
+    pub mem0_enabled_override: Option<bool>,
+    pub mem0_api_base_override: Option<String>,
+    pub mem0_api_key_override: Option<String>,
+    pub mem0_default_user_id_override: Option<String>,
+    pub mem0_request_timeout_ms_override: Option<u64>,
+    pub mem0_default_limit_override: Option<usize>,
+    pub mem0_max_limit_override: Option<usize>,
     pub otlp_export_enabled_override: Option<bool>,
     pub otlp_endpoint_override: Option<String>,
     pub otlp_timeout_ms_override: Option<u64>,
@@ -329,6 +354,7 @@ struct FileConfig {
     context: Option<ContextConfig>,
     web: Option<WebConfig>,
     browser: Option<BrowserConfig>,
+    mem0: Option<Mem0Config>,
     observability: Option<ObservabilityConfig>,
     runtime_timing: Option<RuntimeTimingConfig>,
     runtime_limits: Option<RuntimeLimitsConfig>,
@@ -403,6 +429,20 @@ impl Default for BrowserlessConfig {
             browser_type: DEFAULT_BROWSERLESS_BROWSER_TYPE.to_string(),
             ttl_ms: DEFAULT_BROWSERLESS_TTL_MS,
             stealth: true,
+        }
+    }
+}
+
+impl Default for Mem0Config {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            api_base: DEFAULT_MEM0_API_BASE.to_string(),
+            api_key: None,
+            default_user_id: DEFAULT_MEM0_DEFAULT_USER_ID.to_string(),
+            request_timeout_ms: DEFAULT_MEM0_REQUEST_TIMEOUT_MS,
+            default_limit: DEFAULT_MEM0_DEFAULT_LIMIT,
+            max_limit: DEFAULT_MEM0_MAX_LIMIT,
         }
     }
 }
@@ -701,6 +741,16 @@ impl ConfigEnv {
             ),
             browserless_ttl_ms_override: read_u64_var("TEAMD_BROWSERLESS_TTL_MS", &dotenv)?,
             browserless_stealth_override: read_bool_var("TEAMD_BROWSERLESS_STEALTH", &dotenv)?,
+            mem0_enabled_override: read_bool_var("TEAMD_MEM0_ENABLED", &dotenv)?,
+            mem0_api_base_override: read_string_var("TEAMD_MEM0_API_BASE", &dotenv),
+            mem0_api_key_override: read_string_var("TEAMD_MEM0_API_KEY", &dotenv),
+            mem0_default_user_id_override: read_string_var("TEAMD_MEM0_DEFAULT_USER_ID", &dotenv),
+            mem0_request_timeout_ms_override: read_u64_var(
+                "TEAMD_MEM0_REQUEST_TIMEOUT_MS",
+                &dotenv,
+            )?,
+            mem0_default_limit_override: read_usize_var("TEAMD_MEM0_DEFAULT_LIMIT", &dotenv)?,
+            mem0_max_limit_override: read_usize_var("TEAMD_MEM0_MAX_LIMIT", &dotenv)?,
             otlp_export_enabled_override: read_bool_var("TEAMD_OTLP_EXPORT_ENABLED", &dotenv)?,
             otlp_endpoint_override: read_string_var("TEAMD_OTLP_ENDPOINT", &dotenv),
             otlp_timeout_ms_override: read_u64_var("TEAMD_OTLP_TIMEOUT_MS", &dotenv)?,
@@ -822,6 +872,10 @@ impl AppConfig {
         let mut browser = file_config
             .as_ref()
             .and_then(|config| config.browser.clone())
+            .unwrap_or_default();
+        let mut mem0 = file_config
+            .as_ref()
+            .and_then(|config| config.mem0.clone())
             .unwrap_or_default();
         let mut observability = file_config
             .as_ref()
@@ -956,6 +1010,27 @@ impl AppConfig {
         if let Some(stealth) = env.browserless_stealth_override {
             browser.browserless.stealth = stealth;
         }
+        if let Some(enabled) = env.mem0_enabled_override {
+            mem0.enabled = enabled;
+        }
+        if let Some(api_base) = &env.mem0_api_base_override {
+            mem0.api_base = api_base.clone();
+        }
+        if let Some(api_key) = &env.mem0_api_key_override {
+            mem0.api_key = Some(api_key.clone());
+        }
+        if let Some(default_user_id) = &env.mem0_default_user_id_override {
+            mem0.default_user_id = default_user_id.clone();
+        }
+        if let Some(timeout_ms) = env.mem0_request_timeout_ms_override {
+            mem0.request_timeout_ms = timeout_ms;
+        }
+        if let Some(limit) = env.mem0_default_limit_override {
+            mem0.default_limit = limit;
+        }
+        if let Some(limit) = env.mem0_max_limit_override {
+            mem0.max_limit = limit;
+        }
         if let Some(enabled) = env.otlp_export_enabled_override {
             observability.otlp_export_enabled = enabled;
         }
@@ -983,6 +1058,7 @@ impl AppConfig {
             context,
             web,
             browser,
+            mem0,
             observability,
             runtime_timing,
             runtime_limits,
@@ -1130,6 +1206,29 @@ impl AppConfig {
                 reason: "must not be empty when browser.enabled is true",
             });
         }
+        if self.mem0.enabled && self.mem0.api_base.trim().is_empty() {
+            return Err(ConfigError::InvalidProviderValue {
+                name: "mem0.api_base",
+                value: self.mem0.api_base.clone(),
+                reason: "must not be empty when mem0.enabled is true",
+            });
+        }
+        if self.mem0.enabled && self.mem0.default_user_id.trim().is_empty() {
+            return Err(ConfigError::InvalidProviderValue {
+                name: "mem0.default_user_id",
+                value: self.mem0.default_user_id.clone(),
+                reason: "must not be empty when mem0.enabled is true",
+            });
+        }
+        if let Some(api_key) = &self.mem0.api_key
+            && api_key.trim().is_empty()
+        {
+            return Err(ConfigError::InvalidProviderValue {
+                name: "mem0.api_key",
+                value: api_key.clone(),
+                reason: "must not be empty",
+            });
+        }
         if self.observability.otlp_endpoint.trim().is_empty() {
             return Err(ConfigError::InvalidProviderValue {
                 name: "observability.otlp_endpoint",
@@ -1257,6 +1356,15 @@ impl AppConfig {
         validate_positive_u64_value(
             "browser.browserless.ttl_ms",
             self.browser.browserless.ttl_ms,
+        )?;
+        validate_positive_u64_value("mem0.request_timeout_ms", self.mem0.request_timeout_ms)?;
+        validate_positive_usize_value("mem0.default_limit", self.mem0.default_limit)?;
+        validate_positive_usize_value("mem0.max_limit", self.mem0.max_limit)?;
+        validate_limit_bounds(
+            "mem0.default_limit",
+            self.mem0.default_limit,
+            "mem0.max_limit",
+            self.mem0.max_limit,
         )?;
         validate_positive_u64_value(
             "runtime_timing.sqlite_busy_timeout_ms",
@@ -1535,6 +1643,7 @@ fn load_file_config(path: &Path, required: bool) -> Result<FileConfig, ConfigErr
                 context: None,
                 web: None,
                 browser: None,
+                mem0: None,
                 observability: None,
                 runtime_timing: None,
                 runtime_limits: None,
@@ -1962,6 +2071,7 @@ impl Default for AppConfig {
             context: ContextConfig::default(),
             web: WebConfig::default(),
             browser: BrowserConfig::default(),
+            mem0: Mem0Config::default(),
             observability: ObservabilityConfig::default(),
             runtime_timing: RuntimeTimingConfig::default(),
             runtime_limits: RuntimeLimitsConfig::default(),

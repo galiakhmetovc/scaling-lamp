@@ -12,6 +12,7 @@ ENABLE_OBSIDIAN=0
 ENABLE_OBSIDIAN_MCP=0
 WRITE_OBSIDIAN_MCP_EXAMPLE=0
 ENABLE_JAEGER=0
+ENABLE_MEM0=0
 ENABLE_SILVERBULLET=0
 ENABLE_SILVERBULLET_MCP=0
 WRITE_SILVERBULLET_MCP_EXAMPLE=0
@@ -128,6 +129,13 @@ elif [ -n "${TEAMD_CADDY_DOMAIN:-}" ] && [ "${TEAMD_CADDY_SINGLE_DOMAIN:-0}" != 
 else
   JAEGER_BASE_PATH=/jaeger
 fi
+
+MEM0_API_BASE=${TEAMD_MEM0_API_BASE:-http://127.0.0.1:18888}
+MEM0_API_KEY=${TEAMD_MEM0_API_KEY:-}
+MEM0_DEFAULT_USER_ID=${TEAMD_MEM0_DEFAULT_USER_ID:-local-operator}
+MEM0_REQUEST_TIMEOUT_MS=${TEAMD_MEM0_REQUEST_TIMEOUT_MS:-5000}
+MEM0_DEFAULT_LIMIT=${TEAMD_MEM0_DEFAULT_LIMIT:-10}
+MEM0_MAX_LIMIT=${TEAMD_MEM0_MAX_LIMIT:-50}
 OTLP_EXPORT_TIMEOUT_MS=${TEAMD_OTLP_TIMEOUT_MS:-2000}
 
 CADDY_DOMAIN=${TEAMD_CADDY_DOMAIN:-}
@@ -169,7 +177,7 @@ Deploy teamD container add-ons without changing the main agentd deploy path.
 
 By default this installs/uses Docker Engine, deploys a local SearXNG instance
 bound to 127.0.0.1:$SEARXNG_PORT, and starts Caddy as an edge reverse proxy.
-Obsidian, SilverBullet, SilverBullet MCP, Browserless, Lightpanda MCP, and Jaeger are opt-in.
+Obsidian, SilverBullet, SilverBullet MCP, Browserless, Lightpanda MCP, Mem0, and Jaeger are opt-in.
 
 Options:
   --dry-run             Print actions without changing the system.
@@ -183,6 +191,7 @@ Options:
   --with-obsidian-mcp-example
                          Write an agentd stdio MCP connector example for the vault.
   --with-jaeger         Also deploy Jaeger UI and enable agentd OTLP auto-export.
+  --with-mem0           Configure agentd memory_* tools for a Mem0/OpenMemory REST API.
   --with-silverbullet   Deploy SilverBullet editor over the canonical Markdown space.
   --with-silverbullet-mcp
                          Deploy SilverBullet plus MCP bridge and agentd MCP connector.
@@ -290,6 +299,13 @@ Environment overrides:
                                  default: $LIGHTPANDA_MCP_STDIO_WRAPPER.
   TEAMD_LIGHTPANDA_DISABLE_TELEMETRY
                                  Exported by the MCP wrapper, default: $LIGHTPANDA_DISABLE_TELEMETRY.
+  TEAMD_MEM0_API_BASE            Mem0/OpenMemory REST base URL for agentd,
+                                 default: $MEM0_API_BASE.
+  TEAMD_MEM0_API_KEY             Optional Mem0 X-API-Key for protected endpoints.
+  TEAMD_MEM0_DEFAULT_USER_ID     Default Mem0 user_id scope, default: $MEM0_DEFAULT_USER_ID.
+  TEAMD_MEM0_REQUEST_TIMEOUT_MS  Mem0 HTTP request timeout, default: $MEM0_REQUEST_TIMEOUT_MS.
+  TEAMD_MEM0_DEFAULT_LIMIT       Default memory list/search limit, default: $MEM0_DEFAULT_LIMIT.
+  TEAMD_MEM0_MAX_LIMIT           Maximum memory list/search limit, default: $MEM0_MAX_LIMIT.
   TEAMD_JAEGER_IMAGE             Jaeger all-in-one image, default: $JAEGER_IMAGE.
   TEAMD_JAEGER_UID               Jaeger container UID for Badger storage, default: $JAEGER_UID.
   TEAMD_JAEGER_GID               Jaeger container GID for Badger storage, default: $JAEGER_GID.
@@ -748,6 +764,55 @@ configure_agentd_otlp_env() {
     printf 'TEAMD_OTLP_EXPORT_ENABLED=%s\n' "$(quote_arg "true")"
     printf 'TEAMD_OTLP_ENDPOINT=%s\n' "$(quote_arg "$otlp_endpoint")"
     printf 'TEAMD_OTLP_TIMEOUT_MS=%s\n' "$(quote_arg "$OTLP_EXPORT_TIMEOUT_MS")"
+  } > "$tmp_new"
+
+  env_group=root
+  if getent group "$SERVICE_GROUP" >/dev/null 2>&1; then
+    env_group=$SERVICE_GROUP
+  fi
+  run_root install -m 0640 -o root -g "$env_group" "$tmp_new" "$ENV_FILE"
+  rm -f "$tmp_env" "$tmp_new"
+}
+
+configure_agentd_mem0_env() {
+  env_parent=$(dirname "$ENV_FILE")
+
+  if [ "$DRY_RUN" -eq 1 ]; then
+    print_cmd mkdir -p "$env_parent"
+    print_cmd sh -c "upsert Mem0 semantic memory defaults in $ENV_FILE"
+    return 0
+  fi
+
+  run_root mkdir -p "$env_parent"
+
+  tmp_env=$(mktemp)
+  tmp_new=$(mktemp)
+  if [ -e "$ENV_FILE" ]; then
+    awk '
+      !/^(export[[:space:]]+)?TEAMD_MEM0_ENABLED=/ &&
+      !/^(export[[:space:]]+)?TEAMD_MEM0_API_BASE=/ &&
+      !/^(export[[:space:]]+)?TEAMD_MEM0_API_KEY=/ &&
+      !/^(export[[:space:]]+)?TEAMD_MEM0_DEFAULT_USER_ID=/ &&
+      !/^(export[[:space:]]+)?TEAMD_MEM0_REQUEST_TIMEOUT_MS=/ &&
+      !/^(export[[:space:]]+)?TEAMD_MEM0_DEFAULT_LIMIT=/ &&
+      !/^(export[[:space:]]+)?TEAMD_MEM0_MAX_LIMIT=/
+    ' "$ENV_FILE" > "$tmp_env"
+  else
+    : > "$tmp_env"
+  fi
+
+  {
+    cat "$tmp_env"
+    [ ! -s "$tmp_env" ] || printf '\n'
+    printf 'TEAMD_MEM0_ENABLED=%s\n' "$(quote_arg "true")"
+    printf 'TEAMD_MEM0_API_BASE=%s\n' "$(quote_arg "$MEM0_API_BASE")"
+    if [ -n "$MEM0_API_KEY" ]; then
+      printf 'TEAMD_MEM0_API_KEY=%s\n' "$(quote_arg "$MEM0_API_KEY")"
+    fi
+    printf 'TEAMD_MEM0_DEFAULT_USER_ID=%s\n' "$(quote_arg "$MEM0_DEFAULT_USER_ID")"
+    printf 'TEAMD_MEM0_REQUEST_TIMEOUT_MS=%s\n' "$(quote_arg "$MEM0_REQUEST_TIMEOUT_MS")"
+    printf 'TEAMD_MEM0_DEFAULT_LIMIT=%s\n' "$(quote_arg "$MEM0_DEFAULT_LIMIT")"
+    printf 'TEAMD_MEM0_MAX_LIMIT=%s\n' "$(quote_arg "$MEM0_MAX_LIMIT")"
   } > "$tmp_new"
 
   env_group=root
@@ -1962,6 +2027,7 @@ while [ "$#" -gt 0 ]; do
       WRITE_OBSIDIAN_MCP_EXAMPLE=1
       ;;
     --with-jaeger) ENABLE_JAEGER=1 ;;
+    --with-mem0) ENABLE_MEM0=1 ;;
     --with-logseq) fail "Logseq Publish has been removed; use --with-silverbullet or --with-silverbullet-mcp" ;;
     --with-silverbullet)
       ENABLE_SILVERBULLET=1
@@ -2053,8 +2119,8 @@ if [ "$(id -u)" -ne 0 ] && [ "$DRY_RUN" -eq 0 ]; then
   need_command sudo
 fi
 
-if [ "$ENABLE_SEARXNG" -eq 0 ] && [ "$ENABLE_OBSIDIAN" -eq 0 ] && [ "$ENABLE_JAEGER" -eq 0 ] && [ "$ENABLE_SILVERBULLET" -eq 0 ] && [ "$ENABLE_BROWSERLESS" -eq 0 ] && [ "$INSTALL_AGENT_BROWSER" -eq 0 ] && [ "$ENABLE_LIGHTPANDA" -eq 0 ] && [ "$ENABLE_CADDY" -eq 0 ]; then
-  fail "nothing to deploy: SearXNG disabled, Obsidian not enabled, Jaeger not enabled, SilverBullet not enabled, Browserless/agent-browser not enabled, Lightpanda not enabled, and Caddy disabled"
+if [ "$ENABLE_SEARXNG" -eq 0 ] && [ "$ENABLE_OBSIDIAN" -eq 0 ] && [ "$ENABLE_JAEGER" -eq 0 ] && [ "$ENABLE_MEM0" -eq 0 ] && [ "$ENABLE_SILVERBULLET" -eq 0 ] && [ "$ENABLE_BROWSERLESS" -eq 0 ] && [ "$INSTALL_AGENT_BROWSER" -eq 0 ] && [ "$ENABLE_LIGHTPANDA" -eq 0 ] && [ "$ENABLE_CADDY" -eq 0 ]; then
+  fail "nothing to deploy: SearXNG disabled, Obsidian not enabled, Jaeger not enabled, Mem0 not enabled, SilverBullet not enabled, Browserless/agent-browser not enabled, Lightpanda not enabled, and Caddy disabled"
 fi
 
 if docker_components_enabled; then
@@ -2080,6 +2146,10 @@ if [ "$ENABLE_JAEGER" -eq 1 ]; then
   write_jaeger_files
   configure_agentd_otlp_env
   compose_up "$JAEGER_COMPOSE"
+fi
+
+if [ "$ENABLE_MEM0" -eq 1 ]; then
+  configure_agentd_mem0_env
 fi
 
 if [ "$ENABLE_BROWSERLESS" -eq 1 ]; then
@@ -2142,7 +2212,7 @@ if [ "$ENABLE_CADDY" -eq 1 ]; then
   reload_caddy_if_running
 fi
 
-if [ "$ENABLE_SEARXNG" -eq 1 ] || [ "$ENABLE_OBSIDIAN_MCP" -eq 1 ] || [ "$ENABLE_SILVERBULLET_MCP" -eq 1 ] || [ "$ENABLE_LIGHTPANDA_MCP" -eq 1 ] || [ "$ENABLE_JAEGER" -eq 1 ] || [ "$INSTALL_AGENT_BROWSER" -eq 1 ]; then
+if [ "$ENABLE_SEARXNG" -eq 1 ] || [ "$ENABLE_OBSIDIAN_MCP" -eq 1 ] || [ "$ENABLE_SILVERBULLET_MCP" -eq 1 ] || [ "$ENABLE_LIGHTPANDA_MCP" -eq 1 ] || [ "$ENABLE_JAEGER" -eq 1 ] || [ "$ENABLE_MEM0" -eq 1 ] || [ "$INSTALL_AGENT_BROWSER" -eq 1 ]; then
   restart_teamd_services
 fi
 
@@ -2294,6 +2364,20 @@ EOF
       Smoke: curl -X POST 'http://127.0.0.1:$BROWSERLESS_PORT/content?token=<token>' -H 'Content-Type: application/json' -d '{"url":"https://example.com"}'
 EOF
   fi
+fi
+
+if [ "$ENABLE_MEM0" -eq 1 ]; then
+  cat <<EOF
+  Mem0 semantic memory:
+    REST API base: $MEM0_API_BASE
+    Env file: $ENV_FILE
+    TEAMD_MEM0_ENABLED=true
+    TEAMD_MEM0_DEFAULT_USER_ID=$MEM0_DEFAULT_USER_ID
+    TEAMD_MEM0_REQUEST_TIMEOUT_MS=$MEM0_REQUEST_TIMEOUT_MS
+    TEAMD_MEM0_DEFAULT_LIMIT=$MEM0_DEFAULT_LIMIT
+    TEAMD_MEM0_MAX_LIMIT=$MEM0_MAX_LIMIT
+    Note: this configures agentd memory_* tools; deploy Mem0/OpenMemory REST API separately or point TEAMD_MEM0_API_BASE at an existing endpoint.
+EOF
 fi
 
 if [ "$ENABLE_SILVERBULLET" -eq 1 ]; then
