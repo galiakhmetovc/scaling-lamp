@@ -2731,6 +2731,20 @@ compose_up_caddy() {
   run_root docker compose -f "$CADDY_COMPOSE" up -d --force-recreate
 }
 
+compose_up_filebrowser() {
+  if [ "$DRY_RUN" -eq 1 ]; then
+    print_cmd docker compose -f "$FILEBROWSER_COMPOSE" up -d --force-recreate
+    return 0
+  fi
+  if [ "$SKIP_START" -eq 1 ]; then
+    printf 'Skipping container start for %s because --no-start was set.\n' "$FILEBROWSER_COMPOSE"
+    return 0
+  fi
+
+  # settings.json is bind-mounted and read on process startup.
+  run_root docker compose -f "$FILEBROWSER_COMPOSE" up -d --force-recreate
+}
+
 reload_caddy_if_running() {
   [ "$ENABLE_CADDY" -eq 1 ] || return 0
   [ "$SKIP_START" -eq 0 ] || return 0
@@ -2941,7 +2955,7 @@ fi
 
 if [ "$ENABLE_FILEBROWSER" -eq 1 ]; then
   write_filebrowser_files
-  compose_up "$FILEBROWSER_COMPOSE"
+  compose_up_filebrowser
 fi
 
 if [ "$WRITE_LIGHTPANDA_MCP_EXAMPLE" -eq 1 ]; then
