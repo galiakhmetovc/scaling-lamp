@@ -1678,40 +1678,58 @@ disable_obsidian_mcp_connector_config() {
     return 0
   fi
 
-  [ -e "$CONFIG_FILE" ] || return 0
-  grep -F "[daemon.mcp_connectors.obsidian]" "$CONFIG_FILE" >/dev/null 2>&1 || return 0
-
+  tmp_block=$(mktemp)
   tmp_config=$(mktemp)
-  trap 'rm -f "$tmp_config"' EXIT INT TERM
-  awk '
-    function emit_disabled_if_missing() {
-      if (in_obsidian && !saw_enabled) {
-        print "enabled = false"
-      }
-    }
-    /^\[daemon\.mcp_connectors\.obsidian\][[:space:]]*$/ {
-      emit_disabled_if_missing()
-      in_obsidian = 1
-      saw_enabled = 0
-      print
-      next
-    }
-    in_obsidian && /^\[/ {
-      emit_disabled_if_missing()
-      in_obsidian = 0
-    }
-    in_obsidian && /^[[:space:]]*enabled[[:space:]]*=/ {
-      print "enabled = false"
-      saw_enabled = 1
-      next
-    }
-    { print }
-    END {
-      emit_disabled_if_missing()
-    }
-  ' "$CONFIG_FILE" > "$tmp_config"
+  trap 'rm -f "$tmp_block" "$tmp_config"' EXIT INT TERM
+  cat > "$tmp_block" <<EOF
+[daemon.mcp_connectors.obsidian]
+transport = "stdio"
+command = "docker"
+args = [
+  "run",
+  "-i",
+  "--rm",
+  "-v", "$OBSIDIAN_VAULT_DIR:/vault:rw",
+  "$OBSIDIAN_MCP_NODE_IMAGE",
+  "npx",
+  "-y",
+  "$OBSIDIAN_MCP_PACKAGE",
+  "/vault",
+]
+enabled = false
+EOF
+
+  if [ -e "$CONFIG_FILE" ]; then
+    if grep -F "[daemon.mcp_connectors.obsidian]" "$CONFIG_FILE" >/dev/null 2>&1; then
+      awk -v block="$tmp_block" '
+        function print_block() {
+          while ((getline line < block) > 0) print line
+          close(block)
+        }
+        /^\[daemon\.mcp_connectors\.obsidian\][[:space:]]*$/ {
+          print_block()
+          in_obsidian = 1
+          next
+        }
+        in_obsidian && /^\[/ {
+          in_obsidian = 0
+        }
+        !in_obsidian {
+          print
+        }
+      ' "$CONFIG_FILE" > "$tmp_config"
+    else
+      {
+        cat "$CONFIG_FILE"
+        printf '\n'
+        cat "$tmp_block"
+      } > "$tmp_config"
+    fi
+  else
+    cat "$tmp_block" > "$tmp_config"
+  fi
+
   run_root install -m 0644 -o root -g root "$tmp_config" "$CONFIG_FILE"
-  rm -f "$tmp_config"
 }
 
 write_silverbullet_mcp_example() {
