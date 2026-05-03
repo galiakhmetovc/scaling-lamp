@@ -118,7 +118,7 @@ assert_contains "$containers_mem0_dry_run_output" "Mem0 semantic memory:"
 assert_contains "$containers_mem0_dry_run_output" "TEAMD_MEM0_ENABLED=true"
 assert_contains "$containers_mem0_dry_run_output" "TEAMD_MEMORY_CURATOR_ENABLED=true"
 assert_contains "$containers_mem0_dry_run_output" "TEAMD_MEMORY_RECALL_ENABLED=true"
-assert_contains "$containers_mem0_dry_run_output" "TEAMD_MEMORY_RECALL_SCOPES=operator,workspace"
+assert_contains "$containers_mem0_dry_run_output" "TEAMD_MEMORY_RECALL_SCOPES=operator,workspace,agent_shared"
 assert_contains "$containers_mem0_dry_run_output" "REST API base: http://127.0.0.1:18888"
 assert_contains "$containers_mem0_dry_run_output" "TEAMD_MEM0_DEFAULT_USER_ID=local-operator"
 

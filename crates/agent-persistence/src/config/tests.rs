@@ -648,7 +648,11 @@ max_memory_chars = 400
     let mut env = base_env(temp.path());
     env.config_path = Some(config_path);
     env.memory_recall_enabled_override = Some(true);
-    env.memory_recall_scopes_override = Some(vec!["operator".to_string(), "workspace".to_string()]);
+    env.memory_recall_scopes_override = Some(vec![
+        "operator".to_string(),
+        "workspace".to_string(),
+        "agent_shared".to_string(),
+    ]);
     env.memory_recall_max_results_override = Some(6);
     env.memory_recall_max_query_chars_override = Some(512);
     env.memory_recall_max_memory_chars_override = Some(800);
@@ -656,7 +660,10 @@ max_memory_chars = 400
     let config = AppConfig::load_from_env(&env).expect("load config");
 
     assert!(config.memory_recall.enabled);
-    assert_eq!(config.memory_recall.scopes, vec!["operator", "workspace"]);
+    assert_eq!(
+        config.memory_recall.scopes,
+        vec!["operator", "workspace", "agent_shared"]
+    );
     assert_eq!(config.memory_recall.max_results, 6);
     assert_eq!(config.memory_recall.max_query_chars, 512);
     assert_eq!(config.memory_recall.max_memory_chars, 800);

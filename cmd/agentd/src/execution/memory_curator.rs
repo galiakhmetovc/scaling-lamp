@@ -278,7 +278,7 @@ impl ExecutionService {
                 text: text.clone(),
                 messages: Vec::new(),
                 scope: Some(scope.clone()),
-                infer: Some(false),
+                infer: None,
                 metadata: json!({
                     "teamd_source": "memory_curator",
                     "teamd_curator_run_id": run_id,

@@ -504,7 +504,11 @@ impl Default for MemoryRecallConfig {
     fn default() -> Self {
         Self {
             enabled: true,
-            scopes: vec!["operator".to_string(), "workspace".to_string()],
+            scopes: vec![
+                "operator".to_string(),
+                "workspace".to_string(),
+                "agent_shared".to_string(),
+            ],
             max_results: DEFAULT_MEMORY_RECALL_MAX_RESULTS,
             max_query_chars: DEFAULT_MEMORY_RECALL_MAX_QUERY_CHARS,
             max_memory_chars: DEFAULT_MEMORY_RECALL_MAX_MEMORY_CHARS,
@@ -2104,12 +2108,12 @@ fn validate_memory_recall_scopes(scopes: &[String]) -> Result<(), ConfigError> {
     }
     for scope in scopes {
         match scope.as_str() {
-            "operator" | "agent" | "workspace" | "session" => {}
+            "operator" | "agent" | "agent_shared" | "workspace" | "session" => {}
             other => {
                 return Err(ConfigError::InvalidProviderValue {
                     name: "memory_recall.scopes",
                     value: other.to_string(),
-                    reason: "must contain only operator, agent, workspace, or session",
+                    reason: "must contain only operator, agent, agent_shared, workspace, or session",
                 });
             }
         }

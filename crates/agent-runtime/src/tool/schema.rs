@@ -573,7 +573,7 @@ impl ToolName {
                             "additionalProperties": false
                         }
                     },
-                    "scope": { "type": ["string", "null"], "enum": ["operator", "agent", "workspace", "session", null], "description": "Memory scope. Defaults to operator+agent+workspace where runtime has ids. Use session for short-lived session facts; use workspace for project decisions." },
+                    "scope": { "type": ["string", "null"], "enum": ["operator", "agent", "agent_shared", "workspace", "session", null], "description": "Memory scope. Defaults to workspace. Use operator for human preferences, agent for this profile, agent_shared for lessons all agents may reuse, workspace for project decisions, session for short-lived session facts." },
                     "infer": { "type": ["boolean", "null"], "description": "When false, store the supplied text as-is. When true or omitted, Mem0 may extract concise facts from messages/text." },
                     "metadata": { "type": ["object", "null"], "description": "Optional provenance/filter metadata. Do not put secrets here.", "additionalProperties": true }
                 },
@@ -583,7 +583,7 @@ impl ToolName {
                 "type": "object",
                 "properties": {
                     "query": { "type": "string", "description": "Semantic memory search query. Use this when a durable preference, prior decision, or lesson may help the current task." },
-                    "scope": { "type": ["string", "null"], "enum": ["operator", "agent", "workspace", "session", null], "description": "Optional scope restriction; defaults to the current operator+agent+workspace scope." },
+                    "scope": { "type": ["string", "null"], "enum": ["operator", "agent", "agent_shared", "workspace", "session", null], "description": "Optional scope restriction; defaults to workspace. Search one entity scope at a time; use repeated searches for multiple scopes." },
                     "limit": { "type": ["integer", "null"], "minimum": 1, "description": "Optional maximum number of memories to return" },
                     "filters": { "type": ["object", "null"], "description": "Optional backend filter object. Prefer scope unless you know the exact metadata key.", "additionalProperties": true }
                 },
@@ -593,7 +593,7 @@ impl ToolName {
             Self::MemoryList => json!({
                 "type": "object",
                 "properties": {
-                    "scope": { "type": ["string", "null"], "enum": ["operator", "agent", "workspace", "session", null], "description": "Optional scope restriction; defaults to the current operator+agent+workspace scope." },
+                    "scope": { "type": ["string", "null"], "enum": ["operator", "agent", "agent_shared", "workspace", "session", null], "description": "Optional scope restriction; defaults to workspace. List one entity scope at a time." },
                     "limit": { "type": ["integer", "null"], "minimum": 1, "description": "Optional maximum number of memories to return" },
                     "offset": { "type": ["integer", "null"], "minimum": 0, "description": "Optional pagination offset handled by teamD if the backend returns enough rows" },
                     "filters": { "type": ["object", "null"], "description": "Optional backend filter object. Prefer scope unless you know the exact metadata key.", "additionalProperties": true }

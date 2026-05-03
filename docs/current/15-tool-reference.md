@@ -1061,11 +1061,12 @@ api_base = "http://127.0.0.1:18888"
 Scope:
 
 - `operator` — память оператора, только `user_id`;
-- `agent` — память конкретного agent profile, `user_id + agent_id`;
-- `workspace` — default scope, память agent profile в текущем workspace;
-- `session` — память текущей session, `user_id + agent_id + run_id=session_id`.
+- `agent` — память конкретного agent profile, только `agent_id`;
+- `agent_shared` — общий пул semantic memories для всех агентов, `agent_id = teamd-agent-shared`;
+- `workspace` — default scope, память текущего workspace, `app_id = teamd-workspace-<sha256(workspace_root)[0..16]>`;
+- `session` — память текущей session, только `run_id=session_id`.
 
-Runtime добавляет в metadata provenance поля `teamd_scope`, `teamd_session_id`, `teamd_agent_profile_id`, `teamd_workspace_root` и `teamd_source`.
+Runtime добавляет в metadata provenance поля `teamd_scope`, `teamd_session_id`, `teamd_agent_profile_id`, `teamd_workspace_root` и `teamd_source`. Это не KV-хранилище: Mem0 используется для семантических durable facts/lessons, а точные ключи, очереди, locks, counters и runtime state должны оставаться в `agent-persistence` или отдельном KV-слое.
 
 ### Post-turn memory curator
 
@@ -1097,7 +1098,8 @@ Curator запускается после завершения обычного 
 Default scopes:
 
 - `operator` — предпочтения и устойчивые факты оператора;
-- `workspace` — проектные решения и workspace-specific lessons.
+- `workspace` — проектные решения и workspace-specific lessons;
+- `agent_shared` — общие уроки и reusable operating knowledge для всех агентов.
 
 Ограничения задаются `memory_recall.max_results`, `memory_recall.max_query_chars` и `memory_recall.max_memory_chars`. Ошибки recall не валят turn; они пишутся в `audit/runtime.jsonl` с component `memory_recall`.
 
@@ -1109,7 +1111,7 @@ Default scopes:
 memory_add({
   text?: string,
   messages?: { role: "user" | "assistant" | "system" | "tool", content: string }[],
-  scope?: "operator" | "agent" | "workspace" | "session" | null,
+  scope?: "operator" | "agent" | "agent_shared" | "workspace" | "session" | null,
   infer?: boolean | null,
   metadata?: object
 })
@@ -1120,6 +1122,7 @@ memory_add({
 - явно записывает факт или фрагмент диалога в Mem0;
 - принимает либо `text`, либо `messages`;
 - отправляет `POST /memories` в self-hosted Mem0/OpenMemory REST API;
+- добавляет ровно один entity id по выбранному scope: `user_id`, `agent_id`, `app_id` или `run_id`;
 - если задан `api_key`, runtime отправляет его как `X-API-Key`.
 
 Когда использовать:
@@ -1141,7 +1144,7 @@ memory_add({
 ```text
 memory_search({
   query: string,
-  scope?: "operator" | "agent" | "workspace" | "session" | null,
+  scope?: "operator" | "agent" | "agent_shared" | "workspace" | "session" | null,
   limit?: integer | null,
   filters?: object
 })
@@ -1151,6 +1154,7 @@ memory_search({
 
 - ищет релевантные memories через `POST /search`;
 - автоматически добавляет entity filters по выбранному scope;
+- отправляет Mem0 body с `filters` и `top_k`; поле tool input `limit` конвертируется в `top_k`;
 - ограничивает `limit` через `mem0.default_limit` и `mem0.max_limit`.
 
 Когда использовать:
@@ -1164,7 +1168,7 @@ memory_search({
 
 ```text
 memory_list({
-  scope?: "operator" | "agent" | "workspace" | "session" | null,
+  scope?: "operator" | "agent" | "agent_shared" | "workspace" | "session" | null,
   limit?: integer | null,
   offset?: integer | null,
   filters?: object

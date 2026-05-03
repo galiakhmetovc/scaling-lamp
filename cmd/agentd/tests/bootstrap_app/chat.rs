@@ -224,6 +224,7 @@ fn execute_chat_turn_runs_memory_curator_after_assistant_response() {
     assert!(search_request.contains("Пользователю нравится зел"));
     assert!(add_request.contains("/memories"));
     assert!(add_request.contains("Пользователю нравится зел"));
+    assert!(!add_request.contains("\"infer\":false"));
     assert!(add_request.contains("teamd_curator_run_id"));
     assert!(add_request.contains("run-chat-session-memory-curator-10"));
 
@@ -310,8 +311,10 @@ fn execute_chat_turn_includes_relevant_memory_recall_before_provider_response() 
 
     assert!(operator_search_request.contains("/search"));
     assert!(operator_search_request.contains("Сделай как я люблю"));
-    assert!(operator_search_request.contains("\"user_id\":\"anton\""));
-    assert!(workspace_search_request.contains("\"agent_id\":\"default\""));
+    assert!(operator_search_request.contains("\"filters\":{\"user_id\":\"anton\"}"));
+    assert!(operator_search_request.contains("\"top_k\":4"));
+    assert!(workspace_search_request.contains("\"filters\":{\"app_id\":\"teamd-workspace-"));
+    assert!(workspace_search_request.contains("\"top_k\":3"));
     assert!(provider_request.contains("Memory Recall:"));
     assert!(provider_request.contains("mem_green"));
     assert!(provider_request.contains("Пользователю нравится зел"));

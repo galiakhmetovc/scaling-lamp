@@ -6,12 +6,16 @@ use agent_runtime::tool::{
 };
 use reqwest::blocking::{Client, RequestBuilder};
 use serde_json::{Map, Value, json};
+use sha2::{Digest, Sha256};
 use std::time::Duration;
+
+const AGENT_SHARED_MEMORY_ID: &str = "teamd-agent-shared";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum MemoryScope {
     Operator,
     Agent,
+    AgentShared,
     Workspace,
     Session,
 }
@@ -22,9 +26,10 @@ impl MemoryScope {
             None | Some("workspace") => Ok(Self::Workspace),
             Some("operator") => Ok(Self::Operator),
             Some("agent") => Ok(Self::Agent),
+            Some("agent_shared") | Some("shared") => Ok(Self::AgentShared),
             Some("session") => Ok(Self::Session),
             Some(other) => Err(invalid_mem0_tool(format!(
-                "unsupported memory scope {other}; use operator, agent, workspace, or session"
+                "unsupported memory scope {other}; use operator, agent, agent_shared, workspace, or session"
             ))),
         }
     }
@@ -33,6 +38,7 @@ impl MemoryScope {
         match self {
             Self::Operator => "operator",
             Self::Agent => "agent",
+            Self::AgentShared => "agent_shared",
             Self::Workspace => "workspace",
             Self::Session => "session",
         }
@@ -42,8 +48,9 @@ impl MemoryScope {
 #[derive(Debug, Clone)]
 struct Mem0ScopeIds {
     scope: MemoryScope,
-    user_id: String,
+    user_id: Option<String>,
     agent_id: Option<String>,
+    app_id: Option<String>,
     run_id: Option<String>,
 }
 
@@ -77,10 +84,11 @@ impl ExecutionService {
 
         let mut body = json!({
             "messages": messages,
-            "user_id": ids.user_id,
             "metadata": Value::Object(metadata),
         });
+        insert_optional_string(&mut body, "user_id", ids.user_id.as_deref());
         insert_optional_string(&mut body, "agent_id", ids.agent_id.as_deref());
+        insert_optional_string(&mut body, "app_id", ids.app_id.as_deref());
         insert_optional_string(&mut body, "run_id", ids.run_id.as_deref());
         if let Some(infer) = input.infer {
             body["infer"] = Value::Bool(infer);
@@ -107,15 +115,7 @@ impl ExecutionService {
         let session = self.load_session(store, session_id)?;
         let ids = self.mem0_scope_ids(&session, input.scope.as_deref())?;
         let limit = self.mem0_limit(input.limit);
-        let filters = self.mem0_filters(&input.filters, &ids)?;
-        let body = json!({
-            "query": input.query,
-            "user_id": ids.user_id,
-            "agent_id": ids.agent_id,
-            "run_id": ids.run_id,
-            "filters": filters,
-            "limit": limit,
-        });
+        let body = mem0_search_body(input.query.as_str(), &ids, limit, &input.filters)?;
         let response = self.mem0_request(Method::Post, "search")?.json(&body);
         let value = send_mem0_json(response)?;
         let mut results = parse_memory_items(&value);
@@ -264,21 +264,37 @@ impl ExecutionService {
         raw_scope: Option<&str>,
     ) -> Result<Mem0ScopeIds, ExecutionError> {
         let scope = MemoryScope::parse(raw_scope)?;
-        let user_id = self.config.mem0.default_user_id.trim().to_string();
+        let user_id = match scope {
+            MemoryScope::Operator => Some(self.config.mem0.default_user_id.trim().to_string()),
+            MemoryScope::Agent
+            | MemoryScope::AgentShared
+            | MemoryScope::Workspace
+            | MemoryScope::Session => None,
+        };
         let agent_id = match scope {
-            MemoryScope::Operator => None,
-            MemoryScope::Agent | MemoryScope::Workspace | MemoryScope::Session => {
-                Some(session.agent_profile_id.clone())
-            }
+            MemoryScope::Agent => Some(session.agent_profile_id.clone()),
+            MemoryScope::AgentShared => Some(AGENT_SHARED_MEMORY_ID.to_string()),
+            MemoryScope::Operator | MemoryScope::Workspace | MemoryScope::Session => None,
+        };
+        let app_id = match scope {
+            MemoryScope::Workspace => Some(workspace_app_id(session)),
+            MemoryScope::Operator
+            | MemoryScope::Agent
+            | MemoryScope::AgentShared
+            | MemoryScope::Session => None,
         };
         let run_id = match scope {
             MemoryScope::Session => Some(session.id.clone()),
-            MemoryScope::Operator | MemoryScope::Agent | MemoryScope::Workspace => None,
+            MemoryScope::Operator
+            | MemoryScope::Agent
+            | MemoryScope::AgentShared
+            | MemoryScope::Workspace => None,
         };
         Ok(Mem0ScopeIds {
             scope,
             user_id,
             agent_id,
+            app_id,
             run_id,
         })
     }
@@ -305,22 +321,6 @@ impl ExecutionService {
         requested
             .unwrap_or(self.config.mem0.default_limit)
             .clamp(1, self.config.mem0.max_limit)
-    }
-
-    fn mem0_filters(
-        &self,
-        input_filters: &Value,
-        ids: &Mem0ScopeIds,
-    ) -> Result<Value, ExecutionError> {
-        let mut filters = memory_metadata(input_filters)?;
-        filters.insert("user_id".to_string(), Value::String(ids.user_id.clone()));
-        if let Some(agent_id) = &ids.agent_id {
-            filters.insert("agent_id".to_string(), Value::String(agent_id.clone()));
-        }
-        if let Some(run_id) = &ids.run_id {
-            filters.insert("run_id".to_string(), Value::String(run_id.clone()));
-        }
-        Ok(Value::Object(filters))
     }
 }
 
@@ -382,14 +382,81 @@ fn insert_optional_string(body: &mut Value, key: &str, value: Option<&str>) {
 }
 
 fn mem0_query_pairs(ids: &Mem0ScopeIds) -> Vec<(&'static str, String)> {
-    let mut pairs = vec![("user_id", ids.user_id.clone())];
+    let mut pairs = Vec::new();
+    if let Some(user_id) = &ids.user_id {
+        pairs.push(("user_id", user_id.clone()));
+    }
     if let Some(agent_id) = &ids.agent_id {
         pairs.push(("agent_id", agent_id.clone()));
+    }
+    if let Some(app_id) = &ids.app_id {
+        pairs.push(("app_id", app_id.clone()));
     }
     if let Some(run_id) = &ids.run_id {
         pairs.push(("run_id", run_id.clone()));
     }
     pairs
+}
+
+fn mem0_search_body(
+    query: &str,
+    ids: &Mem0ScopeIds,
+    limit: usize,
+    input_filters: &Value,
+) -> Result<Value, ExecutionError> {
+    Ok(json!({
+        "query": query,
+        "filters": mem0_filters(input_filters, ids)?,
+        "top_k": limit,
+    }))
+}
+
+fn mem0_filters(input_filters: &Value, ids: &Mem0ScopeIds) -> Result<Value, ExecutionError> {
+    let entity_filter = mem0_entity_filter(ids);
+    let input = memory_metadata(input_filters)?;
+    if input.is_empty() {
+        return Ok(Value::Object(entity_filter));
+    }
+    if input
+        .keys()
+        .any(|key| matches!(key.as_str(), "AND" | "OR" | "NOT"))
+    {
+        return Ok(json!({
+            "AND": [
+                Value::Object(entity_filter),
+                Value::Object(input)
+            ]
+        }));
+    }
+    let mut filters = input;
+    for (key, value) in entity_filter {
+        filters.insert(key, value);
+    }
+    Ok(Value::Object(filters))
+}
+
+fn mem0_entity_filter(ids: &Mem0ScopeIds) -> Map<String, Value> {
+    let mut filter = Map::new();
+    if let Some(user_id) = &ids.user_id {
+        filter.insert("user_id".to_string(), Value::String(user_id.clone()));
+    }
+    if let Some(agent_id) = &ids.agent_id {
+        filter.insert("agent_id".to_string(), Value::String(agent_id.clone()));
+    }
+    if let Some(app_id) = &ids.app_id {
+        filter.insert("app_id".to_string(), Value::String(app_id.clone()));
+    }
+    if let Some(run_id) = &ids.run_id {
+        filter.insert("run_id".to_string(), Value::String(run_id.clone()));
+    }
+    filter
+}
+
+fn workspace_app_id(session: &Session) -> String {
+    let workspace = session.workspace_root.display().to_string();
+    let digest = Sha256::digest(workspace.as_bytes());
+    let hex = format!("{digest:x}");
+    format!("teamd-workspace-{}", &hex[..16])
 }
 
 fn send_mem0_json(request: RequestBuilder) -> Result<Value, ExecutionError> {
@@ -469,6 +536,7 @@ fn memory_item_from_value(value: Value) -> Option<MemoryItemOutput> {
         metadata,
         user_id: string_field(map, nested, &["user_id"]),
         agent_id: string_field(map, nested, &["agent_id"]),
+        app_id: string_field(map, nested, &["app_id"]),
         run_id: string_field(map, nested, &["run_id"]),
     })
 }
@@ -546,7 +614,8 @@ mod tests {
                     "memory": "User prefers Telegram.",
                     "score": 0.87,
                     "metadata": {"topic": "surface"},
-                    "user_id": "operator"
+                    "user_id": "operator",
+                    "app_id": "teamd-workspace-abc"
                 }
             ]
         });
@@ -558,6 +627,7 @@ mod tests {
         assert_eq!(results[0].memory, "User prefers Telegram.");
         assert_eq!(results[0].score.as_deref(), Some("0.8700"));
         assert_eq!(results[0].user_id.as_deref(), Some("operator"));
+        assert_eq!(results[0].app_id.as_deref(), Some("teamd-workspace-abc"));
     }
 
     #[test]
@@ -576,9 +646,19 @@ mod tests {
         let session = Session {
             id: "session-1".to_string(),
             agent_profile_id: "default".to_string(),
+            workspace_root: "/srv/teamd/workspaces/default".into(),
             ..Default::default()
         };
 
+        let operator = service
+            .mem0_scope_ids(&session, Some("operator"))
+            .expect("operator ids");
+        let agent = service
+            .mem0_scope_ids(&session, Some("agent"))
+            .expect("agent ids");
+        let shared = service
+            .mem0_scope_ids(&session, Some("agent_shared"))
+            .expect("shared ids");
         let workspace = service
             .mem0_scope_ids(&session, Some("workspace"))
             .expect("workspace ids");
@@ -586,9 +666,58 @@ mod tests {
             .mem0_scope_ids(&session, Some("session"))
             .expect("session ids");
 
-        assert_eq!(workspace.user_id, "anton");
-        assert_eq!(workspace.agent_id.as_deref(), Some("default"));
+        assert_eq!(operator.user_id.as_deref(), Some("anton"));
+        assert_eq!(operator.agent_id, None);
+        assert_eq!(operator.app_id, None);
+        assert_eq!(operator.run_id, None);
+        assert_eq!(agent.user_id, None);
+        assert_eq!(agent.agent_id.as_deref(), Some("default"));
+        assert_eq!(agent.app_id, None);
+        assert_eq!(agent.run_id, None);
+        assert_eq!(shared.user_id, None);
+        assert_eq!(shared.agent_id.as_deref(), Some("teamd-agent-shared"));
+        assert_eq!(shared.app_id, None);
+        assert_eq!(workspace.user_id, None);
+        assert_eq!(workspace.agent_id, None);
+        assert_eq!(
+            workspace.app_id.as_deref(),
+            Some("teamd-workspace-06851bfb8133809d")
+        );
         assert_eq!(workspace.run_id, None);
+        assert_eq!(session_scope.user_id, None);
+        assert_eq!(session_scope.agent_id, None);
+        assert_eq!(session_scope.app_id, None);
         assert_eq!(session_scope.run_id.as_deref(), Some("session-1"));
+    }
+
+    #[test]
+    fn search_body_uses_mem0_filters_and_top_k() {
+        let ids = Mem0ScopeIds {
+            scope: MemoryScope::Workspace,
+            user_id: None,
+            agent_id: None,
+            app_id: Some("teamd-workspace-abc".to_string()),
+            run_id: None,
+        };
+
+        let body = mem0_search_body(
+            "preferred editor",
+            &ids,
+            4,
+            &json!({"metadata": {"teamd_source": "memory_curator"}}),
+        )
+        .expect("search body");
+
+        assert_eq!(body["query"], json!("preferred editor"));
+        assert_eq!(body["top_k"], json!(4));
+        assert!(body.get("limit").is_none());
+        assert!(body.get("user_id").is_none());
+        assert_eq!(
+            body["filters"],
+            json!({
+                "metadata": {"teamd_source": "memory_curator"},
+                "app_id": "teamd-workspace-abc"
+            })
+        );
     }
 }

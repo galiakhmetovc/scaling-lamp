@@ -454,6 +454,7 @@ pub struct MemoryItemOutput {
     pub metadata: Value,
     pub user_id: Option<String>,
     pub agent_id: Option<String>,
+    pub app_id: Option<String>,
     pub run_id: Option<String>,
 }
 
@@ -2524,6 +2525,7 @@ fn memory_item_json(memory: &MemoryItemOutput) -> Value {
         "metadata": memory.metadata,
         "user_id": memory.user_id,
         "agent_id": memory.agent_id,
+        "app_id": memory.app_id,
         "run_id": memory.run_id,
     })
 }

@@ -296,7 +296,7 @@ Default:
 ```toml
 [memory_recall]
 enabled = true
-scopes = ["operator", "workspace"]
+scopes = ["operator", "workspace", "agent_shared"]
 max_results = 6
 max_query_chars = 512
 max_memory_chars = 800
@@ -306,7 +306,7 @@ Env:
 
 ```bash
 export TEAMD_MEMORY_RECALL_ENABLED='true'
-export TEAMD_MEMORY_RECALL_SCOPES='operator,workspace'
+export TEAMD_MEMORY_RECALL_SCOPES='operator,workspace,agent_shared'
 export TEAMD_MEMORY_RECALL_MAX_RESULTS='6'
 export TEAMD_MEMORY_RECALL_MAX_QUERY_CHARS='512'
 export TEAMD_MEMORY_RECALL_MAX_MEMORY_CHARS='800'
@@ -316,10 +316,20 @@ export TEAMD_MEMORY_RECALL_MAX_MEMORY_CHARS='800'
 
 - запускается только если одновременно `memory_recall.enabled = true` и `mem0.enabled = true`;
 - ищет по последнему `user` transcript entry текущего turn;
-- default scopes: `operator` для предпочтений оператора и `workspace` для проектных решений;
+- default scopes: `operator` для предпочтений оператора, `workspace` для проектных решений и `agent_shared` для общих уроков всех агентов;
 - результат попадает в prompt после `SessionHead`/`AutonomyState` и до `Plan`;
 - блок остаётся inspectable: его видно в provider prompt preview/debug, а не только внутри модели;
 - если модели нужно больше деталей, она всё ещё может явно вызвать `memory_search` или `memory_list`.
+
+Scope mapping в Mem0 сделан через entity filters, чтобы разные уровни памяти не смешивались:
+
+- `operator` -> `user_id = mem0.default_user_id`;
+- `agent` -> `agent_id = <agent_profile_id>`;
+- `agent_shared` -> `agent_id = teamd-agent-shared`;
+- `workspace` -> `app_id = teamd-workspace-<sha256(workspace_root)[0..16]>`;
+- `session` -> `run_id = <session_id>`.
+
+Для поиска runtime отправляет `POST /search` с `filters` и `top_k`, а не отдельные top-level `user_id`/`limit`. Пользовательские `filters` объединяются с entity filter выбранного scope. Mem0 здесь используется как semantic memory, а не как KV/state store: точные ключи, locks, counters и runtime-состояние должны жить в `agent-persistence` или отдельном KV-слое, если он понадобится.
 
 Backend deploy через `scripts/deploy-teamd-containers.sh --with-mem0`:
 
@@ -355,6 +365,7 @@ export TEAMD_MEM0_COLLECTION_NAME='teamd_memories_fastembed_384'
 - `state.sqlite` остаётся источником истины для sessions/runs/schedules/tool calls;
 - transcript, artifacts и `ContextSummary` не переезжают в Mem0;
 - SilverBullet/docs остаются knowledge/documentation layer.
+- KV/state store не появляется: Mem0 хранит семантически извлекаемые memories, а не точные runtime-ключи.
 
 `scripts/deploy-teamd-containers.sh --with-mem0` поднимает backend и конфигурирует `agentd`. Если нужен внешний Mem0/OpenMemory endpoint, задайте `TEAMD_MEM0_API_BASE` и `TEAMD_MEM0_API_KEY` перед запуском script.
 

@@ -143,7 +143,7 @@ MEMORY_CURATOR_MIN_CONFIDENCE=${TEAMD_MEMORY_CURATOR_MIN_CONFIDENCE:-0.8}
 MEMORY_CURATOR_MAX_CANDIDATES=${TEAMD_MEMORY_CURATOR_MAX_CANDIDATES:-5}
 MEMORY_CURATOR_MAX_OUTPUT_TOKENS=${TEAMD_MEMORY_CURATOR_MAX_OUTPUT_TOKENS:-512}
 MEMORY_RECALL_ENABLED=${TEAMD_MEMORY_RECALL_ENABLED:-true}
-MEMORY_RECALL_SCOPES=${TEAMD_MEMORY_RECALL_SCOPES:-operator,workspace}
+MEMORY_RECALL_SCOPES=${TEAMD_MEMORY_RECALL_SCOPES:-operator,workspace,agent_shared}
 MEMORY_RECALL_MAX_RESULTS=${TEAMD_MEMORY_RECALL_MAX_RESULTS:-6}
 MEMORY_RECALL_MAX_QUERY_CHARS=${TEAMD_MEMORY_RECALL_MAX_QUERY_CHARS:-512}
 MEMORY_RECALL_MAX_MEMORY_CHARS=${TEAMD_MEMORY_RECALL_MAX_MEMORY_CHARS:-800}
@@ -926,7 +926,7 @@ def search_memories(search_req: SearchRequest, _auth=Depends(verify_auth)):
     try:
         payload = search_req.model_dump()
         filters = dict(payload.get("filters") or {})
-        for key in ("user_id", "run_id", "agent_id"):
+        for key in ("user_id", "agent_id", "app_id", "run_id"):
             if payload.get(key) is not None:
                 filters[key] = payload[key]
         params = {k: payload[k] for k in ("top_k", "threshold") if payload.get(k) is not None}
