@@ -2327,6 +2327,22 @@ remove_legacy_logseq_runtime() {
   done
 }
 
+remove_legacy_manual_mcp_runtime() {
+  if [ "$DRY_RUN" -eq 1 ]; then
+    print_cmd sh -c "remove legacy anonymous Node MCP containers using mcp-remote or mcpvault"
+    return 0
+  fi
+
+  run_root docker ps -a --no-trunc --format '{{.ID}}\t{{.Image}}\t{{.Command}}' |
+    while IFS='	' read -r container_id image command; do
+      case "$image $command" in
+        *node:22-alpine*mcp-remote*|*node:22-alpine*mcpvault*)
+          run_root docker rm -f "$container_id" >/dev/null
+          ;;
+      esac
+    done
+}
+
 ensure_teamd_docker_access() {
   if [ "$DRY_RUN" -eq 1 ]; then
     print_cmd usermod -aG docker "$SERVICE_USER"
@@ -2796,6 +2812,7 @@ if docker_components_enabled; then
   ensure_docker
   ensure_edge_network
   remove_legacy_logseq_runtime
+  remove_legacy_manual_mcp_runtime
 fi
 
 if [ "$ENABLE_SEARXNG" -eq 1 ]; then

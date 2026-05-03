@@ -29,7 +29,7 @@
 - `teamd-obsidian` — legacy browser Obsidian для восстановления старых vault workflows;
 - `obsidian` MCP connector — legacy filesystem-backed MCP для старого vault.
 
-Logseq Publish больше не является runtime-компонентом. Deploy script удаляет legacy containers `teamd-logseq-publish` и `logseq-publish`, если они остались на хосте. Старые Markdown-файлы не удаляются: путь `/var/lib/teamd/knowledge/logseq/teamd` используется только как migration source при первом создании SilverBullet Space.
+Logseq Publish больше не является runtime-компонентом. Deploy script удаляет legacy containers `teamd-logseq-publish` и `logseq-publish`, если они остались на хосте. Также удаляются старые anonymous Node MCP containers, запущенные через `mcp-remote` или `mcpvault`, потому что они создают неучтённый MCP surface вне managed stack. Старые Markdown-файлы не удаляются: путь `/var/lib/teamd/knowledge/logseq/teamd` используется только как migration source при первом создании SilverBullet Space.
 
 Если `--with-obsidian-mcp` не указан явно, deploy script отключает legacy connector `[daemon.mcp_connectors.obsidian]` в `/etc/teamd/config.toml`. То же правило действует для legacy Lightpanda MCP. Это нужно, чтобы модель не видела старые dynamic MCP tools в обычном production tool surface.
 
@@ -678,6 +678,7 @@ Legacy Logseq runtime должен отсутствовать:
 
 ```bash
 docker ps -a --format '{{.Names}}' | grep -E 'logseq|Logseq' || true
+docker ps -a --no-trunc --format '{{.Names}} {{.Image}} {{.Command}}' | grep -E 'mcp-remote|mcpvault' || true
 ```
 
 ## Troubleshooting
