@@ -1,14 +1,15 @@
 use super::{
     BrowserCloseInput, BrowserOpenInput, BrowserPdfInput, BrowserScreenshotInput,
-    BrowserSnapshotInput, BrowserToolClient, BrowserToolConfig, ExecStartInput, FsFindInFilesInput,
-    FsGlobInput, FsInsertTextInput, FsListInput, FsMkdirInput, FsMoveInput, FsPatchTextInput,
-    FsReadLinesInput, FsReadTextInput, FsReplaceLinesInput, FsSearchTextInput, FsTrashInput,
-    FsWriteMode, FsWriteTextInput, KnowledgeReadInput, KnowledgeReadMode, KnowledgeRoot,
-    KnowledgeSearchInput, KnowledgeSourceKind, ProcessKillInput, ProcessOutputStatus,
-    ProcessOutputStream, ProcessReadOutputInput, ProcessResultStatus, ProcessWaitInput,
-    PromptBudgetLayerPercentagesInput, PromptBudgetUpdateScope, SessionReadInput, SessionReadMode,
-    SessionSearchInput, SessionWaitInput, SharedProcessRegistry, ToolCall, ToolCatalog, ToolFamily,
-    ToolName, ToolRuntime, WebFetchInput, WebSearchBackend, WebSearchInput, WebToolClient,
+    BrowserSnapshotInput, BrowserTextInput, BrowserToolClient, BrowserToolConfig, DeliverFileInput,
+    ExecStartInput, FsFindInFilesInput, FsGlobInput, FsInsertTextInput, FsListInput, FsMkdirInput,
+    FsMoveInput, FsPatchTextInput, FsReadLinesInput, FsReadTextInput, FsReplaceLinesInput,
+    FsSearchTextInput, FsTrashInput, FsWriteMode, FsWriteTextInput, KnowledgeReadInput,
+    KnowledgeReadMode, KnowledgeRoot, KnowledgeSearchInput, KnowledgeSourceKind, ProcessKillInput,
+    ProcessOutputStatus, ProcessOutputStream, ProcessReadOutputInput, ProcessResultStatus,
+    ProcessWaitInput, PromptBudgetLayerPercentagesInput, PromptBudgetUpdateScope, SessionReadInput,
+    SessionReadMode, SessionSearchInput, SessionWaitInput, SharedProcessRegistry, ToolCall,
+    ToolCatalog, ToolFamily, ToolName, ToolRuntime, WebFetchInput, WebSearchBackend,
+    WebSearchInput, WebToolClient,
 };
 use crate::memory::SessionRetentionTier;
 use crate::workspace::WorkspaceRef;
@@ -244,6 +245,39 @@ fn browser_output_tools_repair_bare_workspace_path_arguments() {
             path: "scratch/browser/page.pdf".to_string(),
         })
     );
+}
+
+#[test]
+fn browser_text_and_deliver_file_repair_bare_string_arguments() {
+    let text = ToolCall::from_openai_function("browser_text", r#"{"selector":head title}"#)
+        .expect("repair browser_text selector");
+    let delivery = ToolCall::from_openai_function(
+        "deliver_file",
+        r#"{"workspace_path":scratch/browser/example.png,"caption":Screenshot of example.com}"#,
+    )
+    .expect("repair deliver_file strings");
+    let delivery_caption_first = ToolCall::from_openai_function(
+        "deliver_file",
+        r#"{"caption":Screenshot of example.com,"workspace_path":scratch/browser/example.png}"#,
+    )
+    .expect("repair deliver_file strings with caption first");
+
+    assert_eq!(
+        text,
+        ToolCall::BrowserText(BrowserTextInput {
+            selector: Some("head title".to_string()),
+            max_chars: None,
+        })
+    );
+    assert_eq!(
+        delivery,
+        ToolCall::DeliverFile(DeliverFileInput {
+            workspace_path: Some("scratch/browser/example.png".to_string()),
+            caption: Some("Screenshot of example.com".to_string()),
+            ..DeliverFileInput::default()
+        })
+    );
+    assert_eq!(delivery_caption_first, delivery);
 }
 
 #[test]

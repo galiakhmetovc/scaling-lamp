@@ -43,6 +43,21 @@ pub(super) struct BareStringFieldRepair {
 pub(super) const BROWSER_OUTPUT_PATH_REPAIRS: &[BareStringFieldRepair] =
     &[BareStringFieldRepair { field: "path" }];
 
+pub(super) const BROWSER_TEXT_STRING_REPAIRS: &[BareStringFieldRepair] =
+    &[BareStringFieldRepair { field: "selector" }];
+
+pub(super) const DELIVER_FILE_STRING_REPAIRS: &[BareStringFieldRepair] = &[
+    BareStringFieldRepair {
+        field: "artifact_id",
+    },
+    BareStringFieldRepair {
+        field: "workspace_path",
+    },
+    BareStringFieldRepair { field: "file_name" },
+    BareStringFieldRepair { field: "caption" },
+    BareStringFieldRepair { field: "target" },
+];
+
 pub(super) fn repair_bare_enum_like_values(
     input: &str,
     repairs: &[EnumLikeFieldRepair],
@@ -157,10 +172,6 @@ pub(super) fn repair_bare_string_field_values(
         repairs.iter().any(|repair| repair.field == field)
     }
 
-    fn is_bare_string_byte(byte: u8) -> bool {
-        byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-' | b'.' | b'/' | b':' | b'~')
-    }
-
     let bytes = input.as_bytes();
     let mut replacements: Vec<(usize, usize, String)> = Vec::new();
     let mut index = 0usize;
@@ -211,28 +222,20 @@ pub(super) fn repair_bare_string_field_values(
         }
 
         let value_start = cursor;
-        while cursor < bytes.len() && is_bare_string_byte(bytes[cursor]) {
+        while cursor < bytes.len() && !matches!(bytes[cursor], b',' | b'}' | b']') {
             cursor += 1;
         }
-        if cursor == value_start {
+        let value_end = cursor;
+        let token = input[value_start..value_end].trim_end();
+        if token.is_empty() {
             continue;
         }
-
-        let token = &input[value_start..cursor];
         if matches!(token, "true" | "false" | "null") {
             continue;
         }
 
-        let mut delimiter = cursor;
-        while delimiter < bytes.len() && bytes[delimiter].is_ascii_whitespace() {
-            delimiter += 1;
-        }
-        if delimiter < bytes.len() && !matches!(bytes[delimiter], b',' | b'}' | b']') {
-            continue;
-        }
-
         let quoted = serde_json::to_string(token).ok()?;
-        replacements.push((value_start, cursor, quoted));
+        replacements.push((value_start, value_end, quoted));
     }
 
     if replacements.is_empty() {

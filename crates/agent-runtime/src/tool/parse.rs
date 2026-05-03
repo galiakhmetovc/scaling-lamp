@@ -5,10 +5,10 @@ use std::error::Error;
 use std::fmt;
 
 use super::parse_repair::{
-    BROWSER_OUTPUT_PATH_REPAIRS, BareStringFieldRepair, CONTINUE_LATER_ENUM_REPAIRS,
-    EnumLikeFieldRepair, KNOWLEDGE_READ_ENUM_REPAIRS, SCHEDULE_ENUM_REPAIRS,
-    SESSION_READ_ENUM_REPAIRS, SESSION_WAIT_ENUM_REPAIRS, repair_bare_enum_like_values,
-    repair_bare_string_field_values,
+    BROWSER_OUTPUT_PATH_REPAIRS, BROWSER_TEXT_STRING_REPAIRS, BareStringFieldRepair,
+    CONTINUE_LATER_ENUM_REPAIRS, DELIVER_FILE_STRING_REPAIRS, EnumLikeFieldRepair,
+    KNOWLEDGE_READ_ENUM_REPAIRS, SCHEDULE_ENUM_REPAIRS, SESSION_READ_ENUM_REPAIRS,
+    SESSION_WAIT_ENUM_REPAIRS, repair_bare_enum_like_values, repair_bare_string_field_values,
 };
 use super::{
     KnowledgeReadMode, McpCallInput, ProcessOutputStream, SessionReadMode, ToolCall, ToolName,
@@ -693,12 +693,12 @@ impl ToolCall {
                     name: name.to_string(),
                     source,
                 }),
-            "browser_text" => serde_json::from_str(arguments)
-                .map(Self::BrowserText)
-                .map_err(|source| ToolCallParseError::InvalidArguments {
-                    name: name.to_string(),
-                    source,
-                }),
+            "browser_text" => Self::parse_arguments_with_bare_string_repair(
+                name,
+                arguments,
+                BROWSER_TEXT_STRING_REPAIRS,
+            )
+            .map(Self::BrowserText),
             "browser_click" => serde_json::from_str(arguments)
                 .map(Self::BrowserClick)
                 .map_err(|source| ToolCallParseError::InvalidArguments {
@@ -903,12 +903,12 @@ impl ToolCall {
                     name: name.to_string(),
                     source,
                 }),
-            "deliver_file" => serde_json::from_str(arguments)
-                .map(Self::DeliverFile)
-                .map_err(|source| ToolCallParseError::InvalidArguments {
-                    name: name.to_string(),
-                    source,
-                }),
+            "deliver_file" => Self::parse_arguments_with_bare_string_repair(
+                name,
+                arguments,
+                DELIVER_FILE_STRING_REPAIRS,
+            )
+            .map(Self::DeliverFile),
             "knowledge_search" => serde_json::from_str(arguments)
                 .map(Self::KnowledgeSearch)
                 .map_err(|source| ToolCallParseError::InvalidArguments {
