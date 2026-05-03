@@ -2212,10 +2212,33 @@ hash_filebrowser_password() {
   printf '%s\n' "$hash"
 }
 
+escape_compose_env_dollars() {
+  printf '%s' "$1" | sed 's/\$/$$/g'
+}
+
+normalize_existing_filebrowser_credentials() {
+  [ -f "$FILEBROWSER_ENV_FILE" ] || return 0
+  grep -E '^FB_PASSWORD=.*[$]' "$FILEBROWSER_ENV_FILE" >/dev/null 2>&1 || return 0
+  if grep -E '^FB_PASSWORD=.*[$][$]' "$FILEBROWSER_ENV_FILE" >/dev/null 2>&1; then
+    return 0
+  fi
+
+  if [ "$DRY_RUN" -eq 1 ]; then
+    print_cmd sh -c "escape dollar signs in FB_PASSWORD at $FILEBROWSER_ENV_FILE for Docker Compose"
+    return 0
+  fi
+
+  tmp_env=$(mktemp)
+  trap 'rm -f "$tmp_env"' EXIT INT TERM
+  sed '/^FB_PASSWORD=/ s/\$/$$/g' "$FILEBROWSER_ENV_FILE" > "$tmp_env"
+  run_root install -m 0600 -o root -g root "$tmp_env" "$FILEBROWSER_ENV_FILE"
+}
+
 seed_filebrowser_credentials() {
   if [ -f "$FILEBROWSER_ENV_FILE" ]; then
     # Preserve existing credentials. Operators rotate them by editing this file
     # and recreating the container, or through the File Browser admin UI.
+    normalize_existing_filebrowser_credentials
     return 0
   fi
 
@@ -2230,6 +2253,7 @@ seed_filebrowser_credentials() {
   fi
 
   hashed_password=$(hash_filebrowser_password "$password")
+  escaped_hashed_password=$(escape_compose_env_dollars "$hashed_password")
   tmp_env=$(mktemp)
   trap 'rm -f "$tmp_env"' EXIT INT TERM
   cat > "$tmp_env" <<EOF
@@ -2243,7 +2267,7 @@ FB_CONFIG=/config/settings.json
 FB_DATABASE=/database/filebrowser.db
 FB_BASEURL=$FILEBROWSER_BASE_URL
 FB_USERNAME=$FILEBROWSER_ADMIN_USER
-FB_PASSWORD=$hashed_password
+FB_PASSWORD=$escaped_hashed_password
 FB_DISABLE_EXEC=true
 PUID=$FILEBROWSER_PUID
 PGID=$FILEBROWSER_PGID
