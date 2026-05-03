@@ -418,7 +418,7 @@ Use `browser_*` for:
 - Debugging pages where `web_fetch` returns empty, incomplete, blocked, or script-heavy content.
 - Screenshots and PDFs that need to be saved into the workspace.
 
-Do not use Lightpanda for:
+Do not use browser tools for:
 
 - Simple exact-URL reads where `web_fetch` returns enough readable content.
 - Current information discovery before choosing a URL; use `web_search` first.
@@ -936,7 +936,7 @@ pub fn ensure_builtin_agent_home_layout(
             DEFAULT_AGENT_BROWSER_SKILL_MD,
             &[],
         )?;
-        sync_builtin_default_skill_with_legacy_markers(
+        remove_builtin_default_skill_with_legacy_markers(
             agent_home,
             "lightpanda-browser",
             DEFAULT_LIGHTPANDA_BROWSER_SKILL_MD,
@@ -1014,6 +1014,37 @@ fn sync_builtin_default_skill_with_legacy_markers(
         Err(source) if source.kind() == io::ErrorKind::NotFound => fs::write(path, content),
         Err(source) => Err(source),
     }
+}
+
+fn remove_builtin_default_skill_with_legacy_markers(
+    agent_home: &Path,
+    skill_name: &str,
+    current_generated_content: &str,
+    legacy_variants: &[&str],
+    legacy_markers: &[&str],
+) -> io::Result<()> {
+    let skill_dir = agent_home.join("skills").join(skill_name);
+    let path = skill_dir.join("SKILL.md");
+    let existing = match fs::read_to_string(&path) {
+        Ok(existing) => existing,
+        Err(source) if source.kind() == io::ErrorKind::NotFound => return Ok(()),
+        Err(source) => return Err(source),
+    };
+
+    let existing_normalized = normalize_prompt_contents(&existing);
+    let current = normalize_prompt_contents(current_generated_content);
+    let is_generated = existing_normalized == current
+        || legacy_variants
+            .iter()
+            .any(|candidate| existing_normalized == normalize_prompt_contents(candidate))
+        || legacy_markers
+            .iter()
+            .all(|marker| existing.contains(marker));
+
+    if is_generated {
+        fs::remove_dir_all(skill_dir)?;
+    }
+    Ok(())
 }
 
 pub fn clone_agent_home(
@@ -1225,7 +1256,13 @@ mod tests {
     fn builtin_agent_home_refreshes_previous_generated_prompt_variants() {
         let temp = tempfile::tempdir().expect("tempdir");
         let default_home = temp.path().join(DEFAULT_AGENT_ID);
-        fs::create_dir_all(&default_home).expect("create default home");
+        fs::create_dir_all(default_home.join("skills/lightpanda-browser"))
+            .expect("create default home");
+        fs::write(
+            default_home.join("skills/lightpanda-browser/SKILL.md"),
+            DEFAULT_LIGHTPANDA_BROWSER_SKILL_MD,
+        )
+        .expect("write generated lightpanda skill");
         fs::write(
             default_home.join("AGENTS.md"),
             PRE_INTERAGENT_GUIDANCE_DEFAULT_AGENTS_MD,
@@ -1323,11 +1360,10 @@ mod tests {
         assert!(agent_browser_skill.contains("Browserless"));
         assert!(agent_browser_skill.contains("artifact_read"));
 
-        let lightpanda_skill =
-            fs::read_to_string(default_home.join("skills/lightpanda-browser/SKILL.md"))
-                .expect("read lightpanda skill");
-        assert!(lightpanda_skill.contains("name: lightpanda-browser"));
-        assert!(lightpanda_skill.contains("Deprecated"));
-        assert!(lightpanda_skill.contains("agent-browser"));
+        let lightpanda_skill = default_home.join("skills/lightpanda-browser/SKILL.md");
+        assert!(
+            !lightpanda_skill.exists(),
+            "legacy Lightpanda skill must not remain visible to auto-activation"
+        );
     }
 }

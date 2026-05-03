@@ -383,6 +383,8 @@ args = []
 enabled = true
 ```
 
+Если deploy запускается без `--with-lightpanda-mcp`, скрипт переводит существующий legacy connector в `enabled = false`. Это нужно, чтобы обычный production agent видел canonical `browser_*` tools через Browserless, а не старые `mcp__lightpanda__*` tools.
+
 Wrapper запускает:
 
 ```bash
@@ -403,19 +405,6 @@ TEAMD_LIGHTPANDA_RELEASE_TAG='nightly' \
 
 TEAMD_LIGHTPANDA_DOWNLOAD_URL='https://example.invalid/lightpanda' \
   ./scripts/deploy-teamd-containers.sh --with-lightpanda-mcp
-```
-
-Agent skill:
-
-```text
-lightpanda-browser
-```
-
-Включить вручную:
-
-```bash
-teamdctl session enable-skill <session_id> lightpanda-browser
-teamdctl session skills <session_id>
 ```
 
 Ожидаемая модель работы агента:

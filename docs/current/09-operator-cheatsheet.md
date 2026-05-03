@@ -122,14 +122,7 @@ AGENT_BROWSER_CDP="$TEAMD_BROWSERLESS_CDP_URL" agent-browser snapshot -i -c
 - MCP connector: `[daemon.mcp_connectors.lightpanda]` в `/etc/teamd/config.toml`;
 - telemetry в wrapper выключена по умолчанию через `LIGHTPANDA_DISABLE_TELEMETRY=true`.
 
-Default agent ещё содержит compatibility skill `lightpanda-browser`, но для новой работы используйте `agent-browser`:
-
-```bash
-teamdctl session enable-skill <session_id> lightpanda-browser
-teamdctl session skills <session_id>
-```
-
-Lightpanda нужен только для legacy/экспериментов. Для новой browser automation используйте `agent-browser` skill и built-in `browser_*`; для обычного поиска и прямого чтения URL оставляйте `web_search` и `web_fetch`.
+Lightpanda нужен только для legacy/экспериментов. Для новой browser automation используйте `agent-browser` skill и built-in `browser_*`; для обычного поиска и прямого чтения URL оставляйте `web_search` и `web_fetch`. Если deploy запускается без `--with-lightpanda-mcp`, скрипт выключает старый `[daemon.mcp_connectors.lightpanda]`, чтобы модель не видела `mcp__lightpanda__*` tools.
 
 `--with-jaeger` ставит `teamd-jaeger`, включает OTLP receiver и прописывает в `/etc/teamd/teamd.env`:
 

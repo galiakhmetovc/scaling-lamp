@@ -532,7 +532,7 @@ browser_close({ all?: boolean | null })
 
 ### Legacy browser MCP add-ons
 
-Dynamic MCP browser tools всё ещё допустимы для legacy/экспериментов. Пример старого Lightpanda connector:
+Dynamic MCP browser tools допустимы только для явно включённых legacy/экспериментов. В обычном production deploy старый Lightpanda connector выключается, чтобы модель использовала built-in `browser_*`. Пример старого Lightpanda connector:
 
 ```text
 mcp__lightpanda__goto({ url: string })
@@ -1229,7 +1229,7 @@ mcp_get_prompt({
 
 То есть provider получает их как обычные полноценные tools, а runtime потом маршрутизирует вызов во внутренний `mcp_call`.
 
-Пример: если включён legacy connector `[daemon.mcp_connectors.lightpanda]`, модель может увидеть browser tools с exposed names вида `mcp__lightpanda__goto`, `mcp__lightpanda__markdown`, `mcp__lightpanda__semantic_tree`, `mcp__lightpanda__click`, `mcp__lightpanda__fill`. Для нового браузерного workflow предпочтительны built-in `browser_*` tools.
+Пример: если оператор явно включил legacy connector `[daemon.mcp_connectors.lightpanda]`, модель может увидеть browser tools с exposed names вида `mcp__lightpanda__goto`, `mcp__lightpanda__markdown`, `mcp__lightpanda__semantic_tree`, `mcp__lightpanda__click`, `mcp__lightpanda__fill`. Для нового браузерного workflow предпочтительны built-in `browser_*` tools.
 
 Правило архитектуры: MCP connector расширяет canonical provider tool surface, но не создаёт отдельную модель prompt assembly, отдельный chat loop или отдельный debug ledger. Вызовы MCP tools должны попадать в тот же tool-call ledger, что и built-in tools.
 

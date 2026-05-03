@@ -1386,6 +1386,48 @@ EOF
   run_root install -m 0644 -o root -g root "$tmp_config" "$CONFIG_FILE"
 }
 
+disable_lightpanda_mcp_connector_config() {
+  if [ "$DRY_RUN" -eq 1 ]; then
+    print_cmd sh -c "disable legacy Lightpanda MCP connector in $CONFIG_FILE"
+    return 0
+  fi
+
+  [ -e "$CONFIG_FILE" ] || return 0
+  grep -F "[daemon.mcp_connectors.lightpanda]" "$CONFIG_FILE" >/dev/null 2>&1 || return 0
+
+  tmp_config=$(mktemp)
+  trap 'rm -f "$tmp_config"' EXIT INT TERM
+  awk '
+    function emit_disabled_if_missing() {
+      if (in_lightpanda && !saw_enabled) {
+        print "enabled = false"
+      }
+    }
+    /^\[daemon\.mcp_connectors\.lightpanda\][[:space:]]*$/ {
+      emit_disabled_if_missing()
+      in_lightpanda = 1
+      saw_enabled = 0
+      print
+      next
+    }
+    in_lightpanda && /^\[/ {
+      emit_disabled_if_missing()
+      in_lightpanda = 0
+    }
+    in_lightpanda && /^[[:space:]]*enabled[[:space:]]*=/ {
+      print "enabled = false"
+      saw_enabled = 1
+      next
+    }
+    { print }
+    END {
+      emit_disabled_if_missing()
+    }
+  ' "$CONFIG_FILE" > "$tmp_config"
+  run_root install -m 0644 -o root -g root "$tmp_config" "$CONFIG_FILE"
+  rm -f "$tmp_config"
+}
+
 resolve_service_ids() {
   if id -u "$SERVICE_USER" >/dev/null 2>&1; then
     SERVICE_UID=$(id -u "$SERVICE_USER")
@@ -2090,6 +2132,8 @@ fi
 
 if [ "$ENABLE_LIGHTPANDA_MCP" -eq 1 ]; then
   append_lightpanda_mcp_connector_config
+else
+  disable_lightpanda_mcp_connector_config
 fi
 
 if [ "$ENABLE_CADDY" -eq 1 ]; then
