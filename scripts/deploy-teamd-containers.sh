@@ -2247,7 +2247,7 @@ EOF
       Compose: $BROWSERLESS_COMPOSE
       Env file: $BROWSERLESS_ENV_FILE
       Start command: docker compose -f $BROWSERLESS_COMPOSE up -d
-      Smoke: curl 'http://127.0.0.1:$BROWSERLESS_PORT/content?token=<token>&url=https://example.com'
+      Smoke: curl -X POST 'http://127.0.0.1:$BROWSERLESS_PORT/content?token=<token>' -H 'Content-Type: application/json' -d '{"url":"https://example.com"}'
 EOF
   fi
 fi
