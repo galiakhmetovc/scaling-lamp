@@ -86,6 +86,7 @@ BROWSERLESS_DIR=$CONTAINERS_ROOT/browserless
 BROWSERLESS_COMPOSE=$BROWSERLESS_DIR/docker-compose.yml
 BROWSERLESS_ENV_FILE=${TEAMD_BROWSERLESS_ENV_FILE:-$BROWSERLESS_DIR/browserless.env}
 BROWSERLESS_API_URL=${TEAMD_BROWSERLESS_API_URL:-http://127.0.0.1:$BROWSERLESS_PORT}
+BROWSERLESS_CDP_URL=${TEAMD_BROWSERLESS_CDP_URL:-ws://127.0.0.1:$BROWSERLESS_PORT}
 BROWSERLESS_BROWSER_TYPE=${TEAMD_BROWSERLESS_BROWSER_TYPE:-chromium}
 BROWSERLESS_TTL_MS=${TEAMD_BROWSERLESS_TTL_MS:-300000}
 BROWSERLESS_STEALTH=${TEAMD_BROWSERLESS_STEALTH:-true}
@@ -263,6 +264,8 @@ Environment overrides:
   TEAMD_BROWSERLESS_TOKEN        Browserless token. If unset, generated and stored.
   TEAMD_BROWSERLESS_API_URL      agent-browser Browserless URL,
                                  default: $BROWSERLESS_API_URL.
+  TEAMD_BROWSERLESS_CDP_URL      agent-browser CDP URL base for self-hosted Browserless,
+                                 default: $BROWSERLESS_CDP_URL?token=<token>.
   TEAMD_BROWSERLESS_BROWSER_TYPE Browser type for agent-browser, default: $BROWSERLESS_BROWSER_TYPE.
   TEAMD_BROWSERLESS_TTL_MS       Browserless session TTL hint, default: $BROWSERLESS_TTL_MS.
   TEAMD_BROWSERLESS_STEALTH      agent-browser stealth flag, default: $BROWSERLESS_STEALTH.
@@ -867,6 +870,7 @@ configure_agentd_browser_env() {
       !/^(export[[:space:]]+)?TEAMD_BROWSER_DEFAULT_TIMEOUT_MS=/ &&
       !/^(export[[:space:]]+)?TEAMD_BROWSER_MAX_OUTPUT_CHARS=/ &&
       !/^(export[[:space:]]+)?TEAMD_BROWSERLESS_API_URL=/ &&
+      !/^(export[[:space:]]+)?TEAMD_BROWSERLESS_CDP_URL=/ &&
       !/^(export[[:space:]]+)?TEAMD_BROWSERLESS_API_KEY=/ &&
       !/^(export[[:space:]]+)?TEAMD_BROWSERLESS_BROWSER_TYPE=/ &&
       !/^(export[[:space:]]+)?TEAMD_BROWSERLESS_TTL_MS=/ &&
@@ -881,11 +885,12 @@ configure_agentd_browser_env() {
     [ ! -s "$tmp_env" ] || printf '\n'
     printf 'TEAMD_BROWSER_ENABLED=%s\n' "$(quote_arg "true")"
     printf 'TEAMD_BROWSER_COMMAND=%s\n' "$(quote_arg "$AGENT_BROWSER_BIN")"
-    printf 'TEAMD_BROWSER_PROVIDER=%s\n' "$(quote_arg "browserless")"
+    printf 'TEAMD_BROWSER_PROVIDER=%s\n' "$(quote_arg "cdp")"
     printf 'TEAMD_BROWSER_SESSION_PREFIX=%s\n' "$(quote_arg "$AGENT_BROWSER_SESSION_PREFIX")"
     printf 'TEAMD_BROWSER_DEFAULT_TIMEOUT_MS=%s\n' "$(quote_arg "$AGENT_BROWSER_DEFAULT_TIMEOUT_MS")"
     printf 'TEAMD_BROWSER_MAX_OUTPUT_CHARS=%s\n' "$(quote_arg "$AGENT_BROWSER_MAX_OUTPUT_CHARS")"
     printf 'TEAMD_BROWSERLESS_API_URL=%s\n' "$(quote_arg "$BROWSERLESS_API_URL")"
+    printf 'TEAMD_BROWSERLESS_CDP_URL=%s\n' "$(quote_arg "$BROWSERLESS_CDP_URL?token=$BROWSERLESS_TOKEN")"
     printf 'TEAMD_BROWSERLESS_API_KEY=%s\n' "$(quote_arg "$BROWSERLESS_TOKEN")"
     printf 'TEAMD_BROWSERLESS_BROWSER_TYPE=%s\n' "$(quote_arg "$BROWSERLESS_BROWSER_TYPE")"
     printf 'TEAMD_BROWSERLESS_TTL_MS=%s\n' "$(quote_arg "$BROWSERLESS_TTL_MS")"
@@ -2223,11 +2228,12 @@ if [ "$ENABLE_BROWSERLESS" -eq 1 ] || [ "$INSTALL_AGENT_BROWSER" -eq 1 ]; then
       Env file: $ENV_FILE
       TEAMD_BROWSER_ENABLED=true
       TEAMD_BROWSER_COMMAND=$AGENT_BROWSER_BIN
-      TEAMD_BROWSER_PROVIDER=browserless
+      TEAMD_BROWSER_PROVIDER=cdp
       TEAMD_BROWSER_SESSION_PREFIX=$AGENT_BROWSER_SESSION_PREFIX
       TEAMD_BROWSER_DEFAULT_TIMEOUT_MS=$AGENT_BROWSER_DEFAULT_TIMEOUT_MS
       TEAMD_BROWSER_MAX_OUTPUT_CHARS=$AGENT_BROWSER_MAX_OUTPUT_CHARS
       TEAMD_BROWSERLESS_API_URL=$BROWSERLESS_API_URL
+      TEAMD_BROWSERLESS_CDP_URL=$BROWSERLESS_CDP_URL?token=<redacted>
       TEAMD_BROWSERLESS_BROWSER_TYPE=$BROWSERLESS_BROWSER_TYPE
       TEAMD_BROWSERLESS_TTL_MS=$BROWSERLESS_TTL_MS
       TEAMD_BROWSERLESS_STEALTH=$BROWSERLESS_STEALTH

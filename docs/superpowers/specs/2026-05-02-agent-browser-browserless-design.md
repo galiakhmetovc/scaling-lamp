@@ -50,13 +50,14 @@ Model
 [browser]
 enabled = false
 command = "/opt/teamd/bin/agent-browser"
-provider = "browserless"
+provider = "cdp"
 session_prefix = "teamd"
 default_timeout_ms = 30000
 max_output_chars = 20000
 
 [browser.browserless]
 api_url = "http://127.0.0.1:3000"
+cdp_url = "ws://127.0.0.1:3000?token=<token>"
 api_key = ""
 browser_type = "chromium"
 ttl_ms = 300000
@@ -72,6 +73,7 @@ Env overrides:
 - `TEAMD_BROWSER_DEFAULT_TIMEOUT_MS`
 - `TEAMD_BROWSER_MAX_OUTPUT_CHARS`
 - `TEAMD_BROWSERLESS_API_URL`
+- `TEAMD_BROWSERLESS_CDP_URL`
 - `TEAMD_BROWSERLESS_API_KEY`
 - `TEAMD_BROWSERLESS_BROWSER_TYPE`
 - `TEAMD_BROWSERLESS_TTL_MS`

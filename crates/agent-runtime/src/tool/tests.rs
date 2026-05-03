@@ -1,14 +1,14 @@
 use super::{
     BrowserCloseInput, BrowserOpenInput, BrowserScreenshotInput, BrowserSnapshotInput,
-    ExecStartInput, FsFindInFilesInput, FsGlobInput, FsInsertTextInput, FsListInput, FsMkdirInput,
-    FsMoveInput, FsPatchTextInput, FsReadLinesInput, FsReadTextInput, FsReplaceLinesInput,
-    FsSearchTextInput, FsTrashInput, FsWriteMode, FsWriteTextInput, KnowledgeReadInput,
-    KnowledgeReadMode, KnowledgeRoot, KnowledgeSearchInput, KnowledgeSourceKind, ProcessKillInput,
-    ProcessOutputStatus, ProcessOutputStream, ProcessReadOutputInput, ProcessResultStatus,
-    ProcessWaitInput, PromptBudgetLayerPercentagesInput, PromptBudgetUpdateScope, SessionReadInput,
-    SessionReadMode, SessionSearchInput, SessionWaitInput, SharedProcessRegistry, ToolCall,
-    ToolCatalog, ToolFamily, ToolName, ToolRuntime, WebFetchInput, WebSearchBackend,
-    WebSearchInput, WebToolClient,
+    BrowserToolClient, BrowserToolConfig, ExecStartInput, FsFindInFilesInput, FsGlobInput,
+    FsInsertTextInput, FsListInput, FsMkdirInput, FsMoveInput, FsPatchTextInput, FsReadLinesInput,
+    FsReadTextInput, FsReplaceLinesInput, FsSearchTextInput, FsTrashInput, FsWriteMode,
+    FsWriteTextInput, KnowledgeReadInput, KnowledgeReadMode, KnowledgeRoot, KnowledgeSearchInput,
+    KnowledgeSourceKind, ProcessKillInput, ProcessOutputStatus, ProcessOutputStream,
+    ProcessReadOutputInput, ProcessResultStatus, ProcessWaitInput,
+    PromptBudgetLayerPercentagesInput, PromptBudgetUpdateScope, SessionReadInput, SessionReadMode,
+    SessionSearchInput, SessionWaitInput, SharedProcessRegistry, ToolCall, ToolCatalog, ToolFamily,
+    ToolName, ToolRuntime, WebFetchInput, WebSearchBackend, WebSearchInput, WebToolClient,
 };
 use crate::memory::SessionRetentionTier;
 use crate::workspace::WorkspaceRef;
@@ -231,6 +231,35 @@ fn browser_tool_schemas_teach_snapshot_ref_workflow() {
     assert!(snapshot_schema.contains("@eN"));
     assert!(click_schema.contains("@eN"));
     assert!(click_schema.contains("selector"));
+}
+
+#[test]
+fn browser_tool_client_uses_cdp_env_without_provider_env() {
+    let client = BrowserToolClient::new(BrowserToolConfig {
+        enabled: true,
+        command: "env".to_string(),
+        provider: Some("cdp".to_string()),
+        session_name: "teamd-browser-test".to_string(),
+        default_timeout_ms: 1_000,
+        max_output_chars: 4_000,
+        browserless_api_key: Some("test-token".to_string()),
+        browserless_api_url: Some("http://127.0.0.1:3000".to_string()),
+        browserless_cdp_url: Some("ws://127.0.0.1:3000?token=test-token".to_string()),
+        browserless_browser_type: Some("chromium".to_string()),
+        browserless_ttl_ms: Some(300_000),
+        browserless_stealth: Some(true),
+    });
+
+    let output = client
+        .invoke("env", std::iter::empty::<&str>(), Some(4_000))
+        .expect("invoke env");
+
+    assert!(
+        output
+            .stdout
+            .contains("AGENT_BROWSER_CDP=ws://127.0.0.1:3000?token=test-token\n")
+    );
+    assert!(!output.stdout.contains("AGENT_BROWSER_PROVIDER="));
 }
 
 #[test]

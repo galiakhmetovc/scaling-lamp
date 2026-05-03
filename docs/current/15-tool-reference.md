@@ -379,13 +379,14 @@ Runtime вызывает `agent-browser` CLI, а конфигурация зад
 [browser]
 enabled = true
 command = "/opt/teamd/bin/agent-browser"
-provider = "browserless"
+provider = "cdp"
 session_prefix = "teamd"
 default_timeout_ms = 30000
 max_output_chars = 20000
 
 [browser.browserless]
 api_url = "http://127.0.0.1:3000"
+cdp_url = "ws://127.0.0.1:3000?token=<token>"
 api_key = "..."
 browser_type = "chromium"
 ttl_ms = 300000

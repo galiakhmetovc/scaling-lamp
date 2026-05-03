@@ -148,8 +148,9 @@ assert_contains "$containers_browserless_dry_run_output" "/opt/teamd/bin/agent-b
 assert_contains "$containers_browserless_dry_run_output" "/usr/local/bin/agent-browser"
 assert_contains "$containers_browserless_dry_run_output" "upsert agent-browser Browserless defaults"
 assert_contains "$containers_browserless_dry_run_output" "TEAMD_BROWSER_ENABLED=true"
-assert_contains "$containers_browserless_dry_run_output" "TEAMD_BROWSER_PROVIDER=browserless"
+assert_contains "$containers_browserless_dry_run_output" "TEAMD_BROWSER_PROVIDER=cdp"
 assert_contains "$containers_browserless_dry_run_output" "TEAMD_BROWSERLESS_API_URL=http://127.0.0.1:3000"
+assert_contains "$containers_browserless_dry_run_output" "TEAMD_BROWSERLESS_CDP_URL=ws://127.0.0.1:3000?token="
 
 containers_single_domain_dry_run_output=$(
   TEAMD_CADDY_DOMAIN='teamd.qlbc.ru' \
@@ -230,6 +231,8 @@ grep -q 'npm install -g --prefix "$AGENT_BROWSER_INSTALL_DIR" "$AGENT_BROWSER_NP
   || fail "expected agent-browser npm install"
 grep -q 'TEAMD_BROWSER_PROVIDER' "$CONTAINERS_DEPLOY_SCRIPT" \
   || fail "expected browser provider env upsert"
+grep -q 'TEAMD_BROWSERLESS_CDP_URL' "$CONTAINERS_DEPLOY_SCRIPT" \
+  || fail "expected browser CDP env upsert"
 grep -q 'notes.$CADDY_DOMAIN' "$CONTAINERS_DEPLOY_SCRIPT" \
   || fail "expected SilverBullet dedicated domain route"
 grep -q 'chown_work_dir()' "$DEPLOY_SCRIPT" \

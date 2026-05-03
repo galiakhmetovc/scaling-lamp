@@ -19,6 +19,7 @@ pub struct BrowserToolConfig {
     pub max_output_chars: usize,
     pub browserless_api_key: Option<String>,
     pub browserless_api_url: Option<String>,
+    pub browserless_cdp_url: Option<String>,
     pub browserless_browser_type: Option<String>,
     pub browserless_ttl_ms: Option<u64>,
     pub browserless_stealth: Option<bool>,
@@ -46,6 +47,7 @@ impl Default for BrowserToolConfig {
             max_output_chars: DEFAULT_MAX_OUTPUT_CHARS,
             browserless_api_key: None,
             browserless_api_url: None,
+            browserless_cdp_url: None,
             browserless_browser_type: None,
             browserless_ttl_ms: None,
             browserless_stealth: None,
@@ -160,7 +162,12 @@ impl BrowserToolClient {
                 .max(1)
                 .to_string(),
         );
-        if let Some(provider) = &self.config.provider {
+        if self.config.provider.as_deref() == Some("cdp") {
+            command.env_remove("AGENT_BROWSER_PROVIDER");
+            if let Some(cdp_url) = &self.config.browserless_cdp_url {
+                command.env("AGENT_BROWSER_CDP", cdp_url);
+            }
+        } else if let Some(provider) = &self.config.provider {
             command.env("AGENT_BROWSER_PROVIDER", provider);
         }
         if let Some(api_key) = &self.config.browserless_api_key {

@@ -125,6 +125,7 @@ pub struct BrowserConfig {
 #[serde(default)]
 pub struct BrowserlessConfig {
     pub api_url: String,
+    pub cdp_url: Option<String>,
     pub api_key: Option<String>,
     pub browser_type: String,
     pub ttl_ms: u64,
@@ -143,6 +144,7 @@ impl BrowserConfig {
             browserless_api_key: self.browserless.api_key.clone(),
             browserless_api_url: Some(self.browserless.api_url.clone())
                 .filter(|value| !value.trim().is_empty()),
+            browserless_cdp_url: self.browserless.cdp_url.clone(),
             browserless_browser_type: Some(self.browserless.browser_type.clone())
                 .filter(|value| !value.trim().is_empty()),
             browserless_ttl_ms: Some(self.browserless.ttl_ms),
@@ -259,6 +261,7 @@ pub struct ConfigEnv {
     pub browser_default_timeout_ms_override: Option<u64>,
     pub browser_max_output_chars_override: Option<usize>,
     pub browserless_api_url_override: Option<String>,
+    pub browserless_cdp_url_override: Option<String>,
     pub browserless_api_key_override: Option<String>,
     pub browserless_browser_type_override: Option<String>,
     pub browserless_ttl_ms_override: Option<u64>,
@@ -395,6 +398,7 @@ impl Default for BrowserlessConfig {
     fn default() -> Self {
         Self {
             api_url: DEFAULT_BROWSERLESS_API_URL.to_string(),
+            cdp_url: None,
             api_key: None,
             browser_type: DEFAULT_BROWSERLESS_BROWSER_TYPE.to_string(),
             ttl_ms: DEFAULT_BROWSERLESS_TTL_MS,
@@ -689,6 +693,7 @@ impl ConfigEnv {
                 &dotenv,
             )?,
             browserless_api_url_override: read_string_var("TEAMD_BROWSERLESS_API_URL", &dotenv),
+            browserless_cdp_url_override: read_string_var("TEAMD_BROWSERLESS_CDP_URL", &dotenv),
             browserless_api_key_override: read_string_var("TEAMD_BROWSERLESS_API_KEY", &dotenv),
             browserless_browser_type_override: read_string_var(
                 "TEAMD_BROWSERLESS_BROWSER_TYPE",
@@ -936,6 +941,9 @@ impl AppConfig {
         if let Some(api_url) = &env.browserless_api_url_override {
             browser.browserless.api_url = api_url.clone();
         }
+        if let Some(cdp_url) = &env.browserless_cdp_url_override {
+            browser.browserless.cdp_url = Some(cdp_url.clone());
+        }
         if let Some(api_key) = &env.browserless_api_key_override {
             browser.browserless.api_key = Some(api_key.clone());
         }
@@ -1098,6 +1106,21 @@ impl AppConfig {
                 name: "browser.browserless.api_url",
                 value: self.browser.browserless.api_url.clone(),
                 reason: "must not be empty when browser.enabled is true",
+            });
+        }
+        if self.browser.enabled
+            && self.browser.provider == "cdp"
+            && self
+                .browser
+                .browserless
+                .cdp_url
+                .as_deref()
+                .is_none_or(|value| value.trim().is_empty())
+        {
+            return Err(ConfigError::InvalidProviderValue {
+                name: "browser.browserless.cdp_url",
+                value: self.browser.browserless.cdp_url.clone().unwrap_or_default(),
+                reason: "must not be empty when browser.provider is cdp",
             });
         }
         if self.browser.enabled && self.browser.browserless.browser_type.trim().is_empty() {

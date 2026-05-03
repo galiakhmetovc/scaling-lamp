@@ -95,7 +95,7 @@ teamdctl session skills <session_id>
 - `agent-browser` npm package: `/opt/teamd/agent-browser`;
 - stable wrapper: `/opt/teamd/bin/agent-browser`;
 - PATH symlink: `/usr/local/bin/agent-browser`;
-- agentd env: `TEAMD_BROWSER_ENABLED=true`, `TEAMD_BROWSER_PROVIDER=browserless`, `TEAMD_BROWSERLESS_API_URL=http://127.0.0.1:3000`.
+- agentd env: `TEAMD_BROWSER_ENABLED=true`, `TEAMD_BROWSER_PROVIDER=cdp`, `TEAMD_BROWSERLESS_API_URL=http://127.0.0.1:3000`, `TEAMD_BROWSERLESS_CDP_URL=ws://127.0.0.1:3000?token=<token>`.
 
 Default agent получает skill `agent-browser` и built-in tools `browser_open`, `browser_snapshot`, `browser_click`, `browser_fill`, `browser_text`, `browser_screenshot`, `browser_pdf`.
 
@@ -107,8 +107,11 @@ teamdctl session skills <session_id>
 Smoke check:
 
 ```bash
-agent-browser --provider browserless open https://example.com
-agent-browser --provider browserless snapshot -i -c
+set -a
+. /etc/teamd/teamd.env
+set +a
+AGENT_BROWSER_CDP="$TEAMD_BROWSERLESS_CDP_URL" agent-browser open https://example.com
+AGENT_BROWSER_CDP="$TEAMD_BROWSERLESS_CDP_URL" agent-browser snapshot -i -c
 ```
 
 `--with-lightpanda-mcp` остаётся legacy/experimental JS-capable headless browser как MCP connector:

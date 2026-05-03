@@ -36,6 +36,7 @@ fn base_env(root: &Path) -> ConfigEnv {
         browser_default_timeout_ms_override: None,
         browser_max_output_chars_override: None,
         browserless_api_url_override: None,
+        browserless_cdp_url_override: None,
         browserless_api_key_override: None,
         browserless_browser_type_override: None,
         browserless_ttl_ms_override: None,
@@ -82,6 +83,7 @@ max_output_chars = 20000
 
 [browser.browserless]
 api_url = "http://127.0.0.1:3000"
+cdp_url = "ws://127.0.0.1:3000?token=file-token"
 api_key = "file-token"
 browser_type = "chromium"
 ttl_ms = 300000
@@ -97,17 +99,23 @@ stealth = true
     env.browser_session_prefix_override = Some("prod".to_string());
     env.browser_default_timeout_ms_override = Some(45_000);
     env.browser_max_output_chars_override = Some(32_000);
+    env.browser_provider_override = Some("cdp".to_string());
+    env.browserless_cdp_url_override = Some("ws://127.0.0.1:3000?token=env-token".to_string());
     env.browserless_api_key_override = Some("env-token".to_string());
 
     let config = AppConfig::load_from_env(&env).expect("load config");
 
     assert!(config.browser.enabled);
     assert_eq!(config.browser.command, "/usr/local/bin/agent-browser");
-    assert_eq!(config.browser.provider, "browserless");
+    assert_eq!(config.browser.provider, "cdp");
     assert_eq!(config.browser.session_prefix, "prod");
     assert_eq!(config.browser.default_timeout_ms, 45_000);
     assert_eq!(config.browser.max_output_chars, 32_000);
     assert_eq!(config.browser.browserless.api_url, "http://127.0.0.1:3000");
+    assert_eq!(
+        config.browser.browserless.cdp_url.as_deref(),
+        Some("ws://127.0.0.1:3000?token=env-token")
+    );
     assert_eq!(
         config.browser.browserless.api_key.as_deref(),
         Some("env-token")
@@ -115,6 +123,13 @@ stealth = true
     assert_eq!(config.browser.browserless.browser_type, "chromium");
     assert_eq!(config.browser.browserless.ttl_ms, 300_000);
     assert!(config.browser.browserless.stealth);
+
+    let tool_config = config.browser.to_tool_config("session-1".to_string());
+    assert_eq!(tool_config.provider.as_deref(), Some("cdp"));
+    assert_eq!(
+        tool_config.browserless_cdp_url.as_deref(),
+        Some("ws://127.0.0.1:3000?token=env-token")
+    );
 }
 
 #[test]
