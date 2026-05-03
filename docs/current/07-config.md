@@ -287,13 +287,47 @@ export TEAMD_MEMORY_CURATOR_MAX_OUTPUT_TOKENS='512'
 - в `mode = "review"` candidates только фиксируются в audit как `review_required`, без auto-save;
 - в `mode = "off"` curator не запускается.
 
+### `[memory_recall]`
+
+Управляет pre-turn чтением Mem0. Это не tool loop модели: перед обычным provider request runtime берёт последнее user-сообщение, делает bounded `POST /search` по настроенным scopes и вставляет найденное в prompt отдельным видимым system-блоком `Memory Recall`. Ошибка Mem0 не валит turn: она пишется в `audit/runtime.jsonl`, а prompt собирается без recall-блока.
+
+Default:
+
+```toml
+[memory_recall]
+enabled = true
+scopes = ["operator", "workspace"]
+max_results = 6
+max_query_chars = 512
+max_memory_chars = 800
+```
+
+Env:
+
+```bash
+export TEAMD_MEMORY_RECALL_ENABLED='true'
+export TEAMD_MEMORY_RECALL_SCOPES='operator,workspace'
+export TEAMD_MEMORY_RECALL_MAX_RESULTS='6'
+export TEAMD_MEMORY_RECALL_MAX_QUERY_CHARS='512'
+export TEAMD_MEMORY_RECALL_MAX_MEMORY_CHARS='800'
+```
+
+Как работает:
+
+- запускается только если одновременно `memory_recall.enabled = true` и `mem0.enabled = true`;
+- ищет по последнему `user` transcript entry текущего turn;
+- default scopes: `operator` для предпочтений оператора и `workspace` для проектных решений;
+- результат попадает в prompt после `SessionHead`/`AutonomyState` и до `Plan`;
+- блок остаётся inspectable: его видно в provider prompt preview/debug, а не только внутри модели;
+- если модели нужно больше деталей, она всё ещё может явно вызвать `memory_search` или `memory_list`.
+
 Backend deploy через `scripts/deploy-teamd-containers.sh --with-mem0`:
 
 - поднимает `teamd-mem0` на `127.0.0.1:18888` и `teamd-mem0-postgres`;
 - использует local `fastembed` для embeddings, default `sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2`, 384 dimensions;
 - использует OpenAI-compatible LLM endpoint для extraction, default `glm-4.5-air` через Z.ai;
 - генерирует `ADMIN_API_KEY`, `JWT_SECRET`, `POSTGRES_PASSWORD` в `/opt/teamd/containers/mem0/mem0.env`;
-- upsert'ит `TEAMD_MEM0_*` и `TEAMD_MEMORY_CURATOR_*` в `/etc/teamd/teamd.env`.
+- upsert'ит `TEAMD_MEM0_*`, `TEAMD_MEMORY_CURATOR_*` и `TEAMD_MEMORY_RECALL_*` в `/etc/teamd/teamd.env`.
 
 Дополнительные env для backend deploy:
 

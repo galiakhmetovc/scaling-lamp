@@ -36,6 +36,9 @@ const DEFAULT_MEMORY_CURATOR_MODE: &str = "auto";
 const DEFAULT_MEMORY_CURATOR_MIN_CONFIDENCE: f64 = 0.8;
 const DEFAULT_MEMORY_CURATOR_MAX_CANDIDATES: usize = 5;
 const DEFAULT_MEMORY_CURATOR_MAX_OUTPUT_TOKENS: u32 = 512;
+const DEFAULT_MEMORY_RECALL_MAX_RESULTS: usize = 6;
+const DEFAULT_MEMORY_RECALL_MAX_QUERY_CHARS: usize = 512;
+const DEFAULT_MEMORY_RECALL_MAX_MEMORY_CHARS: usize = 800;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct AppConfig {
@@ -51,6 +54,7 @@ pub struct AppConfig {
     pub browser: BrowserConfig,
     pub mem0: Mem0Config,
     pub memory_curator: MemoryCuratorConfig,
+    pub memory_recall: MemoryRecallConfig,
     pub observability: ObservabilityConfig,
     pub runtime_timing: RuntimeTimingConfig,
     pub runtime_limits: RuntimeLimitsConfig,
@@ -163,6 +167,16 @@ pub struct MemoryCuratorConfig {
     pub min_confidence: f64,
     pub max_candidates: usize,
     pub max_output_tokens: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(default)]
+pub struct MemoryRecallConfig {
+    pub enabled: bool,
+    pub scopes: Vec<String>,
+    pub max_results: usize,
+    pub max_query_chars: usize,
+    pub max_memory_chars: usize,
 }
 
 impl BrowserConfig {
@@ -311,6 +325,11 @@ pub struct ConfigEnv {
     pub memory_curator_min_confidence_override: Option<f64>,
     pub memory_curator_max_candidates_override: Option<usize>,
     pub memory_curator_max_output_tokens_override: Option<u32>,
+    pub memory_recall_enabled_override: Option<bool>,
+    pub memory_recall_scopes_override: Option<Vec<String>>,
+    pub memory_recall_max_results_override: Option<usize>,
+    pub memory_recall_max_query_chars_override: Option<usize>,
+    pub memory_recall_max_memory_chars_override: Option<usize>,
     pub otlp_export_enabled_override: Option<bool>,
     pub otlp_endpoint_override: Option<String>,
     pub otlp_timeout_ms_override: Option<u64>,
@@ -376,6 +395,7 @@ struct FileConfig {
     browser: Option<BrowserConfig>,
     mem0: Option<Mem0Config>,
     memory_curator: Option<MemoryCuratorConfig>,
+    memory_recall: Option<MemoryRecallConfig>,
     observability: Option<ObservabilityConfig>,
     runtime_timing: Option<RuntimeTimingConfig>,
     runtime_limits: Option<RuntimeLimitsConfig>,
@@ -476,6 +496,18 @@ impl Default for MemoryCuratorConfig {
             min_confidence: DEFAULT_MEMORY_CURATOR_MIN_CONFIDENCE,
             max_candidates: DEFAULT_MEMORY_CURATOR_MAX_CANDIDATES,
             max_output_tokens: DEFAULT_MEMORY_CURATOR_MAX_OUTPUT_TOKENS,
+        }
+    }
+}
+
+impl Default for MemoryRecallConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            scopes: vec!["operator".to_string(), "workspace".to_string()],
+            max_results: DEFAULT_MEMORY_RECALL_MAX_RESULTS,
+            max_query_chars: DEFAULT_MEMORY_RECALL_MAX_QUERY_CHARS,
+            max_memory_chars: DEFAULT_MEMORY_RECALL_MAX_MEMORY_CHARS,
         }
     }
 }
@@ -801,6 +833,23 @@ impl ConfigEnv {
                 "TEAMD_MEMORY_CURATOR_MAX_OUTPUT_TOKENS",
                 &dotenv,
             )?,
+            memory_recall_enabled_override: read_bool_var("TEAMD_MEMORY_RECALL_ENABLED", &dotenv)?,
+            memory_recall_scopes_override: read_string_list_var(
+                "TEAMD_MEMORY_RECALL_SCOPES",
+                &dotenv,
+            ),
+            memory_recall_max_results_override: read_usize_var(
+                "TEAMD_MEMORY_RECALL_MAX_RESULTS",
+                &dotenv,
+            )?,
+            memory_recall_max_query_chars_override: read_usize_var(
+                "TEAMD_MEMORY_RECALL_MAX_QUERY_CHARS",
+                &dotenv,
+            )?,
+            memory_recall_max_memory_chars_override: read_usize_var(
+                "TEAMD_MEMORY_RECALL_MAX_MEMORY_CHARS",
+                &dotenv,
+            )?,
             otlp_export_enabled_override: read_bool_var("TEAMD_OTLP_EXPORT_ENABLED", &dotenv)?,
             otlp_endpoint_override: read_string_var("TEAMD_OTLP_ENDPOINT", &dotenv),
             otlp_timeout_ms_override: read_u64_var("TEAMD_OTLP_TIMEOUT_MS", &dotenv)?,
@@ -930,6 +979,10 @@ impl AppConfig {
         let mut memory_curator = file_config
             .as_ref()
             .and_then(|config| config.memory_curator.clone())
+            .unwrap_or_default();
+        let mut memory_recall = file_config
+            .as_ref()
+            .and_then(|config| config.memory_recall.clone())
             .unwrap_or_default();
         let mut observability = file_config
             .as_ref()
@@ -1100,6 +1153,21 @@ impl AppConfig {
         if let Some(tokens) = env.memory_curator_max_output_tokens_override {
             memory_curator.max_output_tokens = tokens;
         }
+        if let Some(enabled) = env.memory_recall_enabled_override {
+            memory_recall.enabled = enabled;
+        }
+        if let Some(scopes) = &env.memory_recall_scopes_override {
+            memory_recall.scopes = scopes.clone();
+        }
+        if let Some(limit) = env.memory_recall_max_results_override {
+            memory_recall.max_results = limit;
+        }
+        if let Some(chars) = env.memory_recall_max_query_chars_override {
+            memory_recall.max_query_chars = chars;
+        }
+        if let Some(chars) = env.memory_recall_max_memory_chars_override {
+            memory_recall.max_memory_chars = chars;
+        }
         if let Some(enabled) = env.otlp_export_enabled_override {
             observability.otlp_export_enabled = enabled;
         }
@@ -1129,6 +1197,7 @@ impl AppConfig {
             browser,
             mem0,
             memory_curator,
+            memory_recall,
             observability,
             runtime_timing,
             runtime_limits,
@@ -1300,6 +1369,7 @@ impl AppConfig {
             });
         }
         validate_memory_curator_mode("memory_curator.mode", self.memory_curator.mode.as_str())?;
+        validate_memory_recall_scopes(&self.memory_recall.scopes)?;
         if self.observability.otlp_endpoint.trim().is_empty() {
             return Err(ConfigError::InvalidProviderValue {
                 name: "observability.otlp_endpoint",
@@ -1448,6 +1518,15 @@ impl AppConfig {
         validate_positive_u32_value(
             "memory_curator.max_output_tokens",
             self.memory_curator.max_output_tokens,
+        )?;
+        validate_positive_usize_value("memory_recall.max_results", self.memory_recall.max_results)?;
+        validate_positive_usize_value(
+            "memory_recall.max_query_chars",
+            self.memory_recall.max_query_chars,
+        )?;
+        validate_positive_usize_value(
+            "memory_recall.max_memory_chars",
+            self.memory_recall.max_memory_chars,
         )?;
         validate_positive_u64_value(
             "runtime_timing.sqlite_busy_timeout_ms",
@@ -1728,6 +1807,7 @@ fn load_file_config(path: &Path, required: bool) -> Result<FileConfig, ConfigErr
                 browser: None,
                 mem0: None,
                 memory_curator: None,
+                memory_recall: None,
                 observability: None,
                 runtime_timing: None,
                 runtime_limits: None,
@@ -1762,6 +1842,20 @@ fn read_string_var(name: &'static str, dotenv: &BTreeMap<String, String>) -> Opt
         .ok()
         .filter(|value| !value.is_empty())
         .or_else(|| dotenv.get(name).cloned())
+}
+
+fn read_string_list_var(
+    name: &'static str,
+    dotenv: &BTreeMap<String, String>,
+) -> Option<Vec<String>> {
+    read_string_var(name, dotenv).map(|value| {
+        value
+            .split(',')
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_string)
+            .collect()
+    })
 }
 
 fn read_u64_var(
@@ -2000,6 +2094,29 @@ fn validate_memory_curator_mode(name: &'static str, value: &str) -> Result<(), C
     }
 }
 
+fn validate_memory_recall_scopes(scopes: &[String]) -> Result<(), ConfigError> {
+    if scopes.is_empty() {
+        return Err(ConfigError::InvalidProviderValue {
+            name: "memory_recall.scopes",
+            value: String::new(),
+            reason: "must contain at least one scope",
+        });
+    }
+    for scope in scopes {
+        match scope.as_str() {
+            "operator" | "agent" | "workspace" | "session" => {}
+            other => {
+                return Err(ConfigError::InvalidProviderValue {
+                    name: "memory_recall.scopes",
+                    value: other.to_string(),
+                    reason: "must contain only operator, agent, workspace, or session",
+                });
+            }
+        }
+    }
+    Ok(())
+}
+
 fn validate_ratio_value(name: &'static str, value: f64) -> Result<(), ConfigError> {
     if !(value > 0.0 && value <= 1.0) {
         return Err(ConfigError::InvalidProviderValue {
@@ -2168,6 +2285,7 @@ impl Default for AppConfig {
             browser: BrowserConfig::default(),
             mem0: Mem0Config::default(),
             memory_curator: MemoryCuratorConfig::default(),
+            memory_recall: MemoryRecallConfig::default(),
             observability: ObservabilityConfig::default(),
             runtime_timing: RuntimeTimingConfig::default(),
             runtime_limits: RuntimeLimitsConfig::default(),

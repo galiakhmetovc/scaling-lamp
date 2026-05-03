@@ -849,7 +849,7 @@ fn prompt_budget_tool_definitions_and_parsing_are_explicit() {
 
     let update_call = ToolCall::from_openai_function(
         "prompt_budget_update",
-        r#"{"percentages":{"system":5,"agents":8,"active_skills":12,"session_head":5,"autonomy_state":5,"plan":8,"context_summary":15,"offload_refs":15,"recent_tool_activity":7,"transcript_tail":20},"reason":"need more transcript tail"}"#,
+        r#"{"percentages":{"system":5,"agents":8,"active_skills":12,"session_head":5,"autonomy_state":5,"memory_recall":5,"plan":8,"context_summary":15,"offload_refs":15,"recent_tool_activity":7,"transcript_tail":15},"reason":"need more transcript tail"}"#,
     )
     .expect("parse update");
     assert_eq!(
@@ -863,11 +863,12 @@ fn prompt_budget_tool_definitions_and_parsing_are_explicit() {
                 active_skills: Some(12),
                 session_head: Some(5),
                 autonomy_state: Some(5),
+                memory_recall: Some(5),
                 plan: Some(8),
                 context_summary: Some(15),
                 offload_refs: Some(15),
                 recent_tool_activity: Some(7),
-                transcript_tail: Some(20),
+                transcript_tail: Some(15),
             }),
             reason: Some("need more transcript tail".to_string()),
         })

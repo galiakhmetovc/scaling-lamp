@@ -46,6 +46,7 @@ pub struct PromptBudgetPolicy {
     pub active_skills: u8,
     pub session_head: u8,
     pub autonomy_state: u8,
+    pub memory_recall: u8,
     pub plan: u8,
     pub context_summary: u8,
     pub offload_refs: u8,
@@ -152,11 +153,12 @@ impl Default for PromptBudgetPolicy {
             active_skills: 12,
             session_head: 5,
             autonomy_state: 5,
+            memory_recall: 5,
             plan: 8,
             context_summary: 15,
             offload_refs: 15,
             recent_tool_activity: 7,
-            transcript_tail: 20,
+            transcript_tail: 15,
         }
     }
 }
@@ -168,6 +170,7 @@ impl PromptBudgetPolicy {
             + u16::from(self.active_skills)
             + u16::from(self.session_head)
             + u16::from(self.autonomy_state)
+            + u16::from(self.memory_recall)
             + u16::from(self.plan)
             + u16::from(self.context_summary)
             + u16::from(self.offload_refs)
@@ -490,7 +493,8 @@ mod tests {
         assert!(session.settings.enabled_skills.is_empty());
         assert!(session.settings.disabled_skills.is_empty());
         assert_eq!(session.settings.prompt_budget.total_percent(), 100);
-        assert_eq!(session.settings.prompt_budget.transcript_tail, 20);
+        assert_eq!(session.settings.prompt_budget.memory_recall, 5);
+        assert_eq!(session.settings.prompt_budget.transcript_tail, 15);
         assert!(session.settings.next_prompt_budget_override.is_none());
     }
 
@@ -505,7 +509,7 @@ mod tests {
 
         assert_eq!(
             error.to_string(),
-            "prompt budget percentages must sum to 100, got 105"
+            "prompt budget percentages must sum to 100, got 110"
         );
     }
 

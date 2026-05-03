@@ -515,6 +515,7 @@ impl ExecutionService {
                 layer("active_skills", policy.active_skills),
                 layer("session_head", policy.session_head),
                 layer("autonomy_state", policy.autonomy_state),
+                layer("memory_recall", policy.memory_recall),
                 layer("plan", policy.plan),
                 layer("context_summary", policy.context_summary),
                 layer("offload_refs", policy.offload_refs),
@@ -973,6 +974,7 @@ impl ExecutionService {
                 model,
                 instructions,
                 consume_next_turn_prompt_budget: false,
+                include_memory_recall: false,
             },
         )?;
         let estimated_prompt_tokens =
@@ -1214,6 +1216,11 @@ impl ExecutionService {
         let active_skill_prompts =
             prompting::load_active_skill_prompts(&skills_catalog, &active_skill_status);
         let autonomy_state = self.autonomy_state_for_session(&session, schedule_for_autonomy);
+        let memory_recall = if request.include_memory_recall {
+            self.memory_recall_for_prompt(store, &session, &transcripts)
+        } else {
+            None
+        };
         let recent_tool_activity = self.recent_tool_activity(store, session_id)?;
 
         let mut input = PromptAssemblyInput {
@@ -1222,6 +1229,7 @@ impl ExecutionService {
             active_skill_prompts,
             session_head: Some(session_head),
             autonomy_state,
+            memory_recall,
             plan_snapshot,
             context_summary,
             context_offload: context_offload.clone(),
@@ -1270,6 +1278,7 @@ impl ExecutionService {
                     .as_ref()
                     .map(|override_| override_.as_str()),
                 consume_next_turn_prompt_budget: false,
+                include_memory_recall: true,
             },
         )?;
         let tools = self.automatic_provider_tools(
@@ -2804,6 +2813,7 @@ impl ExecutionService {
                 model: model.as_deref(),
                 instructions: instructions.as_deref(),
                 consume_next_turn_prompt_budget: true,
+                include_memory_recall: true,
             },
         )?;
         let catalog = ToolCatalog::default();

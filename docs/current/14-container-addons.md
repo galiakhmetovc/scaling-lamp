@@ -291,9 +291,14 @@ TEAMD_MEMORY_CURATOR_MODE=auto
 TEAMD_MEMORY_CURATOR_MIN_CONFIDENCE=0.8
 TEAMD_MEMORY_CURATOR_MAX_CANDIDATES=5
 TEAMD_MEMORY_CURATOR_MAX_OUTPUT_TOKENS=512
+TEAMD_MEMORY_RECALL_ENABLED=true
+TEAMD_MEMORY_RECALL_SCOPES=operator,workspace
+TEAMD_MEMORY_RECALL_MAX_RESULTS=6
+TEAMD_MEMORY_RECALL_MAX_QUERY_CHARS=512
+TEAMD_MEMORY_RECALL_MAX_MEMORY_CHARS=800
 ```
 
-Curator не заменяет ручные `memory_*` tools: агент всё ещё должен явно делать `memory_search`/`memory_list`, если хочет использовать long-term memory в ответе.
+Curator отвечает за post-turn запись durable facts. `memory_recall` отвечает за pre-turn чтение: runtime сам делает bounded search по последнему user-сообщению и вставляет найденное в видимый prompt block `Memory Recall`. Ручные `memory_*` tools остаются нужны для явного поиска, списка, исправления и удаления memories.
 
 Официальный self-host Mem0 REST API использует paths без `/v1`: `POST /memories`, `POST /search`, `GET /memories`, `PUT /memories/{id}`, `DELETE /memories/{id}`. Auth для self-host endpoint делается через `X-API-Key`.
 

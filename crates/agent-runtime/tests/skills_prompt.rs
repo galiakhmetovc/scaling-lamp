@@ -39,6 +39,7 @@ fn skills_prompt_places_active_skill_blocks_between_agents_and_session_head() {
             workspace_tree_truncated: false,
         }),
         autonomy_state: None,
+        memory_recall: None,
         plan_snapshot: None,
         context_summary: None,
         context_offload: None,

@@ -108,7 +108,7 @@ containers_mem0_dry_run_output=$(
   "$CONTAINERS_DEPLOY_SCRIPT" --dry-run --non-interactive --no-start --no-searxng --no-caddy --with-mem0 2>&1
 )
 
-assert_contains "$containers_mem0_dry_run_output" "upsert Mem0 semantic memory and memory curator defaults in /etc/teamd/teamd.env"
+assert_contains "$containers_mem0_dry_run_output" "upsert Mem0 semantic memory, memory curator, and memory recall defaults in /etc/teamd/teamd.env"
 assert_contains "$containers_mem0_dry_run_output" "write /opt/teamd/containers/mem0/docker-compose.yml for teamd-mem0"
 assert_contains "$containers_mem0_dry_run_output" "teamd-mem0-postgres"
 assert_contains "$containers_mem0_dry_run_output" "fastembed"
@@ -117,6 +117,8 @@ assert_contains "$containers_mem0_dry_run_output" "configure Mem0 server at http
 assert_contains "$containers_mem0_dry_run_output" "Mem0 semantic memory:"
 assert_contains "$containers_mem0_dry_run_output" "TEAMD_MEM0_ENABLED=true"
 assert_contains "$containers_mem0_dry_run_output" "TEAMD_MEMORY_CURATOR_ENABLED=true"
+assert_contains "$containers_mem0_dry_run_output" "TEAMD_MEMORY_RECALL_ENABLED=true"
+assert_contains "$containers_mem0_dry_run_output" "TEAMD_MEMORY_RECALL_SCOPES=operator,workspace"
 assert_contains "$containers_mem0_dry_run_output" "REST API base: http://127.0.0.1:18888"
 assert_contains "$containers_mem0_dry_run_output" "TEAMD_MEM0_DEFAULT_USER_ID=local-operator"
 

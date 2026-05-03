@@ -2960,7 +2960,7 @@ fn execute_chat_turn_can_read_and_update_prompt_budget_policy() {
                         "type":"function_call",
                         "call_id":"call_prompt_budget_update",
                         "name":"prompt_budget_update",
-                        "arguments":"{\"percentages\":{\"system\":5,\"agents\":7,\"active_skills\":12,\"session_head\":5,\"autonomy_state\":5,\"plan\":8,\"context_summary\":15,\"offload_refs\":15,\"recent_tool_activity\":8,\"transcript_tail\":20},\"reason\":\"give tool activity a little more room\"}"
+                        "arguments":"{\"percentages\":{\"system\":5,\"agents\":7,\"active_skills\":12,\"session_head\":5,\"autonomy_state\":5,\"memory_recall\":5,\"plan\":8,\"context_summary\":15,\"offload_refs\":15,\"recent_tool_activity\":8,\"transcript_tail\":15},\"reason\":\"give tool activity a little more room\"}"
                     }
                 ],
                 "usage":{"input_tokens":30,"output_tokens":10,"total_tokens":40}
@@ -3127,7 +3127,7 @@ fn execute_chat_turn_applies_next_turn_prompt_budget_once_without_persisting_ses
                         "type":"function_call",
                         "call_id":"call_prompt_budget_next_turn",
                         "name":"prompt_budget_update",
-                        "arguments":"{\"scope\":\"next_turn\",\"percentages\":{\"context_summary\":34,\"transcript_tail\":1},\"reason\":\"trim only the next full prompt\"}"
+                        "arguments":"{\"scope\":\"next_turn\",\"percentages\":{\"memory_recall\":0,\"context_summary\":34,\"transcript_tail\":1},\"reason\":\"trim only the next full prompt\"}"
                     }
                 ],
                 "usage":{"input_tokens":30,"output_tokens":10,"total_tokens":40}
@@ -3338,6 +3338,7 @@ fn execute_chat_turn_applies_prompt_budget_to_transcript_tail() {
     let temp = tempfile::tempdir().expect("tempdir");
     let settings = SessionSettings {
         prompt_budget: agent_runtime::session::PromptBudgetPolicy {
+            memory_recall: 0,
             context_summary: 34,
             transcript_tail: 1,
             ..agent_runtime::session::PromptBudgetPolicy::default()

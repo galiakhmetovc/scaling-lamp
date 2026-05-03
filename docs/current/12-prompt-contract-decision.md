@@ -138,6 +138,12 @@ Prompt получает только ссылку и summary, а не весь a
 
 Это не список всех skills. Общий каталог skills должен быть доступен через tools/операторские команды, но не должен постоянно попадать в prompt.
 
+### MemoryRecall
+
+`MemoryRecall` — bounded блок релевантной семантической памяти, который runtime получает из Mem0 перед основным provider turn.
+
+Это не hidden tool loop модели. Поиск выполняет runtime до сборки `ProviderRequest`, результат явно вставляется в prompt как system block и виден в debug/preview. Агент также может отдельно пользоваться `memory_search`/`memory_list`, если ему нужны дополнительные детали.
+
 ## Инварианты, которые стоит закрепить
 
 ### Один canonical path
@@ -213,11 +219,13 @@ flowchart TD
     B --> G[load Runs]
     B --> H[load AgentProfile name]
     B --> I[load schedule summary]
+    C --> R[pre-turn MemoryRecall search]
     C --> J[build SessionHead]
     D --> J
     E --> K[PromptAssemblyInput]
     F --> K
     J --> K
+    R --> K
     B --> L[load SYSTEM.md]
     B --> M[load AGENTS.md]
     B --> N[resolve active skills]
@@ -235,10 +243,13 @@ flowchart TD
 2. `AGENTS.md`.
 3. active skill prompts.
 4. `SessionHead`.
-5. `Plan`.
-6. `ContextSummary`.
-7. `Offloaded Context References`.
-8. uncovered transcript tail.
+5. `AutonomyState`.
+6. `MemoryRecall`.
+7. `Plan`.
+8. `ContextSummary`.
+9. `Offloaded Context References`.
+10. `RecentToolActivity`.
+11. uncovered transcript tail.
 
 Отдельно от `messages` в `ProviderRequest` добавляются:
 
@@ -249,7 +260,7 @@ flowchart TD
 - `continuation_messages`;
 - `previous_response_id`.
 
-Нюанс: корневые инструкции репозитория сейчас описывают canonical order без отдельного пункта `active skill prompts`. Contract должен явно закрепить active skills как отдельный слой между `AGENTS.md` и `SessionHead`.
+Нюанс: корневые инструкции репозитория описывают базовый canonical order. Contract явно закрепляет дополнительные bounded runtime layers: active skills, `AutonomyState`, `MemoryRecall` и `RecentToolActivity`.
 
 ## SYSTEM.md
 

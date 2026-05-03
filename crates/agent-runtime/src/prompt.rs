@@ -205,6 +205,7 @@ pub struct PromptAssemblyInput {
     pub active_skill_prompts: Vec<String>,
     pub session_head: Option<SessionHead>,
     pub autonomy_state: Option<AutonomyState>,
+    pub memory_recall: Option<MemoryRecall>,
     pub plan_snapshot: Option<PlanSnapshot>,
     pub context_summary: Option<ContextSummary>,
     pub context_offload: Option<ContextOffloadSnapshot>,
@@ -265,6 +266,54 @@ impl AutonomyState {
         let mut rendered = vec!["Autonomy State:".to_string()];
         rendered.extend(lines);
         rendered.join("\n")
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MemoryRecallItem {
+    pub scope: String,
+    pub memory_id: String,
+    pub memory: String,
+    pub score: Option<String>,
+    pub source: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MemoryRecall {
+    pub query: String,
+    pub items: Vec<MemoryRecallItem>,
+    pub truncated: bool,
+}
+
+impl MemoryRecall {
+    pub fn render(&self) -> String {
+        if self.items.is_empty() {
+            return String::new();
+        }
+        let mut lines = vec![
+            "Memory Recall:".to_string(),
+            "Bounded semantic memories retrieved before this turn. Treat them as recall hints; use memory_search/list for more detail if needed.".to_string(),
+            format!("Query: {}", single_line(self.query.as_str())),
+        ];
+        for item in &self.items {
+            let mut line = format!(
+                "- scope={} id={} memory={}",
+                single_line(item.scope.as_str()),
+                single_line(item.memory_id.as_str()),
+                single_line(item.memory.as_str())
+            );
+            if let Some(score) = item.score.as_deref() {
+                line.push_str(&format!(" | score={}", single_line(score)));
+            }
+            if let Some(source) = item.source.as_deref() {
+                line.push_str(&format!(" | source={}", single_line(source)));
+            }
+            lines.push(line);
+        }
+        if self.truncated {
+            lines.push("- ... (more memories hidden by memory_recall.max_results)".to_string());
+        }
+        lines.join("\n")
     }
 }
 
@@ -419,6 +468,27 @@ impl PromptAssembly {
                         budget
                             .as_ref()
                             .map(|budget| budget.policy.autonomy_state)
+                            .unwrap_or(100),
+                    ),
+                )
+            {
+                messages.push(ProviderMessage {
+                    role: MessageRole::System,
+                    content,
+                });
+            }
+        }
+
+        if let Some(memory_recall) = input.memory_recall {
+            let rendered = memory_recall.render();
+            if !rendered.trim().is_empty()
+                && let Some(content) = budget_system_layer(
+                    "memory_recall",
+                    rendered,
+                    target(
+                        budget
+                            .as_ref()
+                            .map(|budget| budget.policy.memory_recall)
                             .unwrap_or(100),
                     ),
                 )
@@ -741,6 +811,10 @@ fn truncate_suffix_by_approx_tokens(content: &str, max_tokens: u32) -> String {
     content.chars().skip(start).collect()
 }
 
+fn single_line(value: &str) -> String {
+    value.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
 fn render_context_offload_refs(
     snapshot: &ContextOffloadSnapshot,
     target_tokens: Option<u32>,
@@ -818,10 +892,10 @@ fn render_context_offload_refs(
 #[cfg(test)]
 mod tests {
     use super::{
-        AutonomyState, PromptAssembly, PromptAssemblyBudget, PromptAssemblyInput,
-        RecentToolActivity, RecentToolActivityEntry, SessionHead, SessionHeadFsActivity,
-        SessionHeadProcessActivity, SessionHeadScheduleSummary, SessionHeadWorkspaceEntry,
-        SessionHeadWorkspaceEntryKind, render_context_offload_refs,
+        AutonomyState, MemoryRecall, MemoryRecallItem, PromptAssembly, PromptAssemblyBudget,
+        PromptAssemblyInput, RecentToolActivity, RecentToolActivityEntry, SessionHead,
+        SessionHeadFsActivity, SessionHeadProcessActivity, SessionHeadScheduleSummary,
+        SessionHeadWorkspaceEntry, SessionHeadWorkspaceEntryKind, render_context_offload_refs,
     };
     use crate::agent::{AgentScheduleDeliveryMode, AgentScheduleMode};
     use crate::context::{ContextOffloadRef, ContextOffloadSnapshot, ContextSummary};
@@ -983,6 +1057,7 @@ mod tests {
                 workspace_tree_truncated: false,
             }),
             autonomy_state: None,
+            memory_recall: None,
             plan_snapshot: None,
             context_summary: Some(ContextSummary {
                 session_id: "session-1".to_string(),
@@ -1026,6 +1101,7 @@ mod tests {
             active_skill_prompts: Vec::new(),
             session_head: None,
             autonomy_state: None,
+            memory_recall: None,
             plan_snapshot: None,
             context_summary: None,
             context_offload: None,
@@ -1075,6 +1151,7 @@ mod tests {
                 workspace_tree_truncated: false,
             }),
             autonomy_state: None,
+            memory_recall: None,
             plan_snapshot: Some(PlanSnapshot {
                 session_id: "session-1".to_string(),
                 goal: Some("Ship planning tools".to_string()),
@@ -1155,6 +1232,7 @@ mod tests {
                 workspace_tree_truncated: false,
             }),
             autonomy_state: None,
+            memory_recall: None,
             plan_snapshot: None,
             context_summary: None,
             context_offload: None,
@@ -1227,6 +1305,17 @@ mod tests {
                 }),
                 interagent_lines: vec!["chain_id=chain-1 state=active hop=1/3".to_string()],
             }),
+            memory_recall: Some(MemoryRecall {
+                query: "tail".to_string(),
+                items: vec![MemoryRecallItem {
+                    scope: "operator".to_string(),
+                    memory_id: "mem-1".to_string(),
+                    memory: "Operator prefers concise status updates.".to_string(),
+                    score: Some("0.9100".to_string()),
+                    source: Some("memory_curator".to_string()),
+                }],
+                truncated: false,
+            }),
             plan_snapshot: Some(PlanSnapshot {
                 session_id: "session-1".to_string(),
                 goal: Some("Ship prompt contract".to_string()),
@@ -1285,11 +1374,13 @@ mod tests {
         assert_eq!(contents[2], "SKILL");
         assert!(contents[3].contains("Session: Prompt Order"));
         assert!(contents[4].contains("Autonomy State:"));
-        assert!(contents[5].contains("Plan:"));
-        assert!(contents[6].contains("Summary"));
-        assert!(contents[7].contains("Offloaded Context References:"));
-        assert!(contents[8].contains("Recent Tool Activity:"));
-        assert_eq!(contents[9], "tail");
+        assert!(contents[5].contains("Memory Recall:"));
+        assert!(contents[5].contains("mem-1"));
+        assert!(contents[6].contains("Plan:"));
+        assert!(contents[7].contains("Summary"));
+        assert!(contents[8].contains("Offloaded Context References:"));
+        assert!(contents[9].contains("Recent Tool Activity:"));
+        assert_eq!(contents[10], "tail");
     }
 
     #[test]
@@ -1300,6 +1391,7 @@ mod tests {
             active_skill_prompts: Vec::new(),
             session_head: None,
             autonomy_state: None,
+            memory_recall: None,
             plan_snapshot: None,
             context_summary: Some(ContextSummary {
                 session_id: "session-1".to_string(),
@@ -1428,6 +1520,7 @@ mod tests {
                 active_skill_prompts: Vec::new(),
                 session_head: None,
                 autonomy_state: None,
+                memory_recall: None,
                 plan_snapshot: None,
                 context_summary: None,
                 context_offload: None,
@@ -1478,6 +1571,7 @@ mod tests {
                 ],
                 session_head: None,
                 autonomy_state: None,
+                memory_recall: None,
                 plan_snapshot: None,
                 context_summary: None,
                 context_offload: None,

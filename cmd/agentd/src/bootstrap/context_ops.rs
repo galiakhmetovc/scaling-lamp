@@ -865,6 +865,7 @@ impl App {
                 ),
                 session_head: Some(session_head),
                 autonomy_state,
+                memory_recall: None,
                 plan_snapshot: store
                     .get_plan(session_id)?
                     .map(PlanSnapshot::try_from)

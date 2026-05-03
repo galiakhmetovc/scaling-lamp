@@ -53,6 +53,11 @@ fn base_env(root: &Path) -> ConfigEnv {
         memory_curator_min_confidence_override: None,
         memory_curator_max_candidates_override: None,
         memory_curator_max_output_tokens_override: None,
+        memory_recall_enabled_override: None,
+        memory_recall_scopes_override: None,
+        memory_recall_max_results_override: None,
+        memory_recall_max_query_chars_override: None,
+        memory_recall_max_memory_chars_override: None,
         provider_api_base_override: None,
         provider_api_key_override: None,
         provider_connect_timeout_override: None,
@@ -164,6 +169,7 @@ fn validate_rejects_enabled_browser_without_command() {
         },
         mem0: Default::default(),
         memory_curator: Default::default(),
+        memory_recall: Default::default(),
         observability: Default::default(),
         runtime_timing: Default::default(),
         runtime_limits: Default::default(),
@@ -224,6 +230,7 @@ fn validate_rejects_relative_data_dir() {
         browser: Default::default(),
         mem0: Default::default(),
         memory_curator: Default::default(),
+        memory_recall: Default::default(),
         observability: Default::default(),
         runtime_timing: Default::default(),
         runtime_limits: Default::default(),
@@ -620,6 +627,42 @@ max_output_tokens = 256
 }
 
 #[test]
+fn load_merges_memory_recall_config_from_file_and_env() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let config_path = temp.path().join("teamd.toml");
+    fs::write(
+        &config_path,
+        r#"
+data_dir = "/tmp/teamd"
+
+[memory_recall]
+enabled = false
+scopes = ["operator"]
+max_results = 2
+max_query_chars = 256
+max_memory_chars = 400
+"#,
+    )
+    .expect("write config");
+
+    let mut env = base_env(temp.path());
+    env.config_path = Some(config_path);
+    env.memory_recall_enabled_override = Some(true);
+    env.memory_recall_scopes_override = Some(vec!["operator".to_string(), "workspace".to_string()]);
+    env.memory_recall_max_results_override = Some(6);
+    env.memory_recall_max_query_chars_override = Some(512);
+    env.memory_recall_max_memory_chars_override = Some(800);
+
+    let config = AppConfig::load_from_env(&env).expect("load config");
+
+    assert!(config.memory_recall.enabled);
+    assert_eq!(config.memory_recall.scopes, vec!["operator", "workspace"]);
+    assert_eq!(config.memory_recall.max_results, 6);
+    assert_eq!(config.memory_recall.max_query_chars, 512);
+    assert_eq!(config.memory_recall.max_memory_chars, 800);
+}
+
+#[test]
 fn validate_rejects_invalid_runtime_limit_bounds() {
     let config = AppConfig {
         data_dir: PathBuf::from("/tmp/teamd"),
@@ -634,6 +677,7 @@ fn validate_rejects_invalid_runtime_limit_bounds() {
         browser: Default::default(),
         mem0: Default::default(),
         memory_curator: Default::default(),
+        memory_recall: Default::default(),
         observability: Default::default(),
         runtime_timing: Default::default(),
         runtime_limits: super::RuntimeLimitsConfig {
@@ -730,6 +774,7 @@ fn validate_rejects_invalid_auto_compaction_ratio() {
         browser: Default::default(),
         mem0: Default::default(),
         memory_curator: Default::default(),
+        memory_recall: Default::default(),
         observability: Default::default(),
         runtime_timing: Default::default(),
         runtime_limits: Default::default(),

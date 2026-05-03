@@ -363,6 +363,7 @@ pub struct PromptBudgetLayerPercentagesInput {
     pub active_skills: Option<u8>,
     pub session_head: Option<u8>,
     pub autonomy_state: Option<u8>,
+    pub memory_recall: Option<u8>,
     pub plan: Option<u8>,
     pub context_summary: Option<u8>,
     pub offload_refs: Option<u8>,
@@ -395,6 +396,9 @@ impl PromptBudgetLayerPercentagesInput {
         }
         if let Some(value) = self.autonomy_state {
             policy.autonomy_state = value;
+        }
+        if let Some(value) = self.memory_recall {
+            policy.memory_recall = value;
         }
         if let Some(value) = self.plan {
             policy.plan = value;

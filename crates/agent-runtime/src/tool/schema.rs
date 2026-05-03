@@ -463,6 +463,7 @@ impl ToolName {
                             "active_skills": { "type": ["integer", "null"], "minimum": 0, "maximum": 100 },
                             "session_head": { "type": ["integer", "null"], "minimum": 0, "maximum": 100 },
                             "autonomy_state": { "type": ["integer", "null"], "minimum": 0, "maximum": 100 },
+                            "memory_recall": { "type": ["integer", "null"], "minimum": 0, "maximum": 100 },
                             "plan": { "type": ["integer", "null"], "minimum": 0, "maximum": 100 },
                             "context_summary": { "type": ["integer", "null"], "minimum": 0, "maximum": 100 },
                             "offload_refs": { "type": ["integer", "null"], "minimum": 0, "maximum": 100 },

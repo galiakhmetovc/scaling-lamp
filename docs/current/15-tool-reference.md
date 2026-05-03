@@ -1090,6 +1090,17 @@ Curator запускается после завершения обычного 
 - provenance сохраняется в Mem0 metadata через `teamd_curator_run_id`, `teamd_curator_confidence`, `teamd_curator_reason`;
 - summary pass пишется в `audit/runtime.jsonl` с component `memory_curator`.
 
+### Pre-turn Memory Recall
+
+Если включены `[mem0]` и `[memory_recall]`, runtime перед provider request сам вызывает Mem0 `POST /search` по последнему user-сообщению. Это не model tool call и не отдельная ветка чата: результат вставляется в canonical prompt как system-блок `Memory Recall` после `SessionHead`/`AutonomyState` и до `Plan`.
+
+Default scopes:
+
+- `operator` — предпочтения и устойчивые факты оператора;
+- `workspace` — проектные решения и workspace-specific lessons.
+
+Ограничения задаются `memory_recall.max_results`, `memory_recall.max_query_chars` и `memory_recall.max_memory_chars`. Ошибки recall не валят turn; они пишутся в `audit/runtime.jsonl` с component `memory_recall`.
+
 ### `memory_add`
 
 Сигнатура:

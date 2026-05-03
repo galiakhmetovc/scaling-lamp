@@ -164,6 +164,10 @@ fn execute_chat_turn_runs_memory_curator_after_assistant_response() {
             max_candidates: 5,
             max_output_tokens: 512,
         },
+        memory_recall: agent_persistence::MemoryRecallConfig {
+            enabled: false,
+            ..agent_persistence::MemoryRecallConfig::default()
+        },
         ..AppConfig::default()
     })
     .expect("build app");
@@ -227,6 +231,92 @@ fn execute_chat_turn_runs_memory_curator_after_assistant_response() {
         .session_transcript("session-memory-curator")
         .expect("load transcript");
     assert_eq!(transcript.entries.len(), 2);
+}
+
+#[test]
+fn execute_chat_turn_includes_relevant_memory_recall_before_provider_response() {
+    let (provider_api_base, provider_requests, provider_handle) =
+        spawn_json_server_sequence(vec![openai_message_response_json(
+            "resp_chat_recall",
+            "Использую память.",
+        )]);
+    let (mem0_api_base, mem0_requests, mem0_handle) = spawn_json_server_sequence(vec![
+        r#"{"results":[{"id":"mem_green","memory":"Пользователю нравится зелёный цвет.","score":0.93,"metadata":{"teamd_source":"memory_curator"}}]}"#.to_string(),
+        r#"{"results":[{"id":"mem_project","memory":"В этом workspace предпочитают SilverBullet вместо Obsidian.","score":0.88,"metadata":{"teamd_source":"memory_add"}}]}"#.to_string(),
+    ]);
+    let temp = tempfile::tempdir().expect("tempdir");
+    let app = build_from_config(AppConfig {
+        data_dir: temp.path().join("state-root"),
+        provider: ConfiguredProvider {
+            kind: ProviderKind::OpenAiResponses,
+            api_base: Some(format!("{provider_api_base}/v1")),
+            api_key: Some("test-key".to_string()),
+            default_model: Some("gpt-5.4".to_string()),
+            ..ConfiguredProvider::default()
+        },
+        mem0: agent_persistence::Mem0Config {
+            enabled: true,
+            api_base: mem0_api_base,
+            default_user_id: "anton".to_string(),
+            request_timeout_ms: 5_000,
+            ..agent_persistence::Mem0Config::default()
+        },
+        memory_recall: agent_persistence::MemoryRecallConfig {
+            enabled: true,
+            scopes: vec!["operator".to_string(), "workspace".to_string()],
+            max_results: 4,
+            max_query_chars: 512,
+            max_memory_chars: 800,
+        },
+        ..AppConfig::default()
+    })
+    .expect("build app");
+    let store = PersistenceStore::open(&app.persistence).expect("open store");
+
+    store
+        .put_session(&SessionRecord {
+            id: "session-memory-recall".to_string(),
+            title: "Memory recall".to_string(),
+            prompt_override: Some("Be concise.".to_string()),
+            settings_json: serde_json::to_string(&SessionSettings::default())
+                .expect("serialize settings"),
+            workspace_root: app.runtime.workspace.root.display().to_string(),
+            agent_profile_id: "default".to_string(),
+            active_mission_id: None,
+            parent_session_id: None,
+            parent_job_id: None,
+            delegation_label: None,
+            created_at: 1,
+            updated_at: 1,
+        })
+        .expect("put session");
+
+    let report = app
+        .execute_chat_turn("session-memory-recall", "Сделай как я люблю", 10)
+        .expect("execute chat turn");
+    assert_eq!(report.output_text, "Использую память.");
+
+    let operator_search_request = mem0_requests
+        .recv_timeout(Duration::from_secs(5))
+        .expect("operator mem0 search request");
+    let workspace_search_request = mem0_requests
+        .recv_timeout(Duration::from_secs(5))
+        .expect("workspace mem0 search request");
+    mem0_handle.join().expect("join mem0");
+    let provider_request = provider_requests
+        .recv_timeout(Duration::from_secs(5))
+        .expect("provider request");
+    provider_handle.join().expect("join provider");
+
+    assert!(operator_search_request.contains("/search"));
+    assert!(operator_search_request.contains("Сделай как я люблю"));
+    assert!(operator_search_request.contains("\"user_id\":\"anton\""));
+    assert!(workspace_search_request.contains("\"agent_id\":\"default\""));
+    assert!(provider_request.contains("Memory Recall:"));
+    assert!(provider_request.contains("mem_green"));
+    assert!(provider_request.contains("Пользователю нравится зел"));
+    assert!(provider_request.contains("mem_project"));
+    assert!(provider_request.contains("SilverBullet"));
 }
 
 #[test]

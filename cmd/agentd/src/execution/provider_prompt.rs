@@ -16,6 +16,7 @@ pub(super) struct PromptMessagesRequest<'a> {
     pub(super) model: Option<&'a str>,
     pub(super) instructions: Option<&'a str>,
     pub(super) consume_next_turn_prompt_budget: bool,
+    pub(super) include_memory_recall: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
