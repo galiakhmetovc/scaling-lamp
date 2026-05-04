@@ -25,6 +25,8 @@ Use this skill when the user gives durable semantic context that should be remem
 - Use `memory_search` before relying on remembered facts when the answer depends on long-term context.
 - Use `memory_add` only for durable facts that the operator would expect the system to remember.
 - Use `memory_delete` only when the user explicitly asks to remove a memory or the memory is clearly wrong.
+- Use Mem0 pointers to reconnect future sessions to durable SilverBullet notes: include note path, topic, short summary, tags, and why it matters.
+- Do not copy whole SilverBullet notes into Mem0. Store the pointer and retrieve/read the note through SilverBullet when details matter.
 
 ## Operating rules
 
@@ -33,3 +35,4 @@ Use this skill when the user gives durable semantic context that should be remem
 3. Do not store secrets, payment data, tokens, passwords, or private files.
 4. If memory search returns low-confidence or irrelevant results, say that memory did not help and continue from current context.
 5. When saving a memory, summarize what was saved.
+6. When a memory points to a note, read the note before acting on detailed content.

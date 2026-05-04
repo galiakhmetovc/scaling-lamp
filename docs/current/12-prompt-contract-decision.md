@@ -144,6 +144,24 @@ Prompt получает только ссылку и summary, а не весь a
 
 Это не hidden tool loop модели. Поиск выполняет runtime до сборки `ProviderRequest`, результат явно вставляется в prompt как system block и виден в debug/preview. Агент также может отдельно пользоваться `memory_search`/`memory_list`, если ему нужны дополнительные детали.
 
+### Operator Context
+
+`Operator Context` — bounded блок из `data_dir/USER.md`, который вставляется в `SessionHead`.
+
+Это не часть agent profile. Файл описывает оператора: язык, timezone, правила интерпретации относительного времени и устойчивые предпочтения, которые должны быть видны всем профилям на этом runtime node.
+
+### SilverBullet Journal Context
+
+`SilverBullet Journal Context` — bounded excerpts `journals/<today>.md` и `journals/<yesterday>.md`, выбранные по `knowledge.operator_timezone`.
+
+Это read-only context в prompt. Перед изменением note агент обязан прочитать целевой файл через SilverBullet MCP или filesystem tools.
+
+### SilverBullet Session Mirror
+
+`SilverBullet Session Mirror` — человекочитаемая Markdown page под `p/teamd-session-<session_id>.md`.
+
+Runtime пишет туда best-effort snapshot: plan, context summary, recent tool activity и artifacts. Mirror не является runtime source of truth и не заменяет SQLite/transcripts/artifacts/tool-call ledger.
+
 ## Инварианты, которые стоит закрепить
 
 ### Один canonical path
@@ -222,9 +240,13 @@ flowchart TD
     B --> G[load Runs]
     B --> H[load AgentProfile name]
     B --> I[load schedule summary]
+    B --> U[load USER.md]
+    B --> V[load SilverBullet today/yesterday journals]
     C --> R[pre-turn MemoryRecall search]
     C --> J[build SessionHead]
     D --> J
+    U --> J
+    V --> J
     E --> K[PromptAssemblyInput]
     F --> K
     J --> K
@@ -475,6 +497,11 @@ Decision D3: где должны стоять active skills в порядке pr
 - session title;
 - session id;
 - agent name и `agent_profile_id`;
+- operator context из `data_dir/USER.md`;
+- provider/model/think level и context window данные;
+- workspace root;
+- SilverBullet today/yesterday journal excerpts, если включено;
+- SilverBullet session mirror path, если включено;
 - message count;
 - context tokens;
 - compactifications;
@@ -517,6 +544,10 @@ Decision D3: где должны стоять active skills в порядке pr
 | --- | --- | --- | --- |
 | `Session` title/id | Есть | Да, ориентация и ссылки. | Малый. |
 | Agent name/profile | Есть | Да, роль профиля. | Малый. |
+| Operator context | Есть | Да, язык/timezone/операторские правила. | Средний: нельзя раздувать USER.md. |
+| Runtime provider/model/context | Есть | Да, модель понимает ограничения. | Малый. |
+| SilverBullet journal context | Есть | Да, ежедневный рабочий контекст. | Средний: только bounded excerpts. |
+| SilverBullet mirror path | Есть | Да, указывает inspectable page. | Малый. |
 | Schedule summary | Есть | Да, особенно для Telegram reminders/wakeup. | Малый, если коротко. |
 | Message count | Есть | Средняя, помогает понять размер истории. | Малый. |
 | Context tokens | Есть | Средняя, но estimate может путать. | Средний. |
@@ -539,8 +570,11 @@ Decision D3: где должны стоять active skills в порядке pr
 - title;
 - agent profile;
 - agent profile path;
+- operator context path and bounded content;
 - provider, model and think level;
 - context window, auto-compaction trigger ratio, usable context budget, estimated prompt usage;
+- bounded SilverBullet today/yesterday journal excerpts;
+- SilverBullet session mirror path;
 - turn source: direct, Telegram, schedule, inter-agent, wakeup, approval continuation;
 - compactification state;
 - pending approvals, если есть;

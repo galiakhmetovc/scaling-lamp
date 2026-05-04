@@ -389,6 +389,47 @@ export TEAMD_MEM0_COLLECTION_NAME='teamd_memories_fastembed_384'
 
 `scripts/deploy-teamd-containers.sh --with-mem0` поднимает backend и конфигурирует `agentd`. Если нужен внешний Mem0/OpenMemory endpoint, задайте `TEAMD_MEM0_API_BASE` и `TEAMD_MEM0_API_KEY` перед запуском script.
 
+### `[knowledge]`
+
+Управляет operator context и SilverBullet-интеграцией, которая попадает в канонический prompt через `SessionHead` и используется для best-effort зеркала сессий.
+
+Параметры:
+
+- `operator_timezone` — timezone оператора для относительных дат, daily journals и человекочитаемых timestamp; production default — `Europe/Moscow`.
+- `silverbullet_space_dir` — путь к canonical SilverBullet Space на диске.
+- `silverbullet_base_url` — optional browser URL; сейчас используется как операторская подсказка/документация, а не как источник runtime state.
+- `silverbullet_journal_context_enabled` — включает bounded чтение `journals/<today>.md` и `journals/<yesterday>.md` в `SessionHead`.
+- `silverbullet_mirror_enabled` — включает best-effort запись runtime mirror pages в SilverBullet Space.
+
+Default:
+
+```toml
+[knowledge]
+operator_timezone = "Europe/Moscow"
+silverbullet_space_dir = "/var/lib/teamd/knowledge/silverbullet/teamd"
+# silverbullet_base_url = "https://teamd.example/sb"
+silverbullet_journal_context_enabled = true
+silverbullet_mirror_enabled = true
+```
+
+Env:
+
+```bash
+export TEAMD_OPERATOR_TIMEZONE='Europe/Moscow'
+export TEAMD_SILVERBULLET_SPACE_DIR='/var/lib/teamd/knowledge/silverbullet/teamd'
+export TEAMD_SILVERBULLET_BASE_URL='https://teamd.example/sb'
+export TEAMD_SILVERBULLET_JOURNAL_CONTEXT_ENABLED='true'
+export TEAMD_SILVERBULLET_MIRROR_ENABLED='true'
+```
+
+Как это работает:
+
+- `data_dir/USER.md` создаётся из встроенного template при первом чтении и потом редактируется оператором без пересборки бинаря;
+- `USER.md` попадает в `SessionHead` bounded-блоком `Operator Context`;
+- если включён journal context и space существует, runtime читает today/yesterday daily notes из `journals/YYYY-MM-DD.md` с учётом `operator_timezone`;
+- если включён mirror и space существует, runtime после успешных chat/wakeup/inter-agent/approval turns и compaction пишет человекочитаемые pages `a/teamd-agents.md` и `p/teamd-session-<session_id>.md`;
+- SilverBullet mirror не является источником истины: plan, transcript, tool calls, artifacts и schedules остаются в `agentd` state, а page нужен для прозрачного просмотра и ручных заметок.
+
 ### `[observability]`
 
 Управляет внешним экспортом runtime traces.
@@ -447,6 +488,9 @@ export TEAMD_OTLP_TIMEOUT_MS='2000'
 - agent/schedule/MCP/session search limits
 - session read limits
 - knowledge read/search limits
+- operator `USER.md` context limit
+- SilverBullet today/yesterday journal context limits
+- SilverBullet text artifact/script mirror limits
 - timeline preview chars
 - session warm idle seconds
 
@@ -463,6 +507,7 @@ export TEAMD_OTLP_TIMEOUT_MS='2000'
 - daemon bind host/port/token/public URL/skills dir;
 - context compaction thresholds;
 - web search backend/URL;
+- knowledge/operator context and SilverBullet mirror toggles;
 - observability OTLP endpoint/export flag/timeout;
 - Telegram bot token;
 - provider kind/base/key/model/timeouts/max rounds/max output tokens;

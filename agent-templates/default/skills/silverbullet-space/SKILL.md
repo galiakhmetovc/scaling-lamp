@@ -31,10 +31,21 @@ If the structure, naming, or query behavior is unclear, read these notes before 
 
 - Treat the space as the shared working knowledge layer for the agent and operator.
 - Do not use the space as runtime state: transcripts, runs, tool calls, artifacts, schedules, approvals, audit logs, and SQLite state remain in `agentd`.
+- `agentd` may mirror runtime state into the space for transparency. Mirror pages are readable/editable notes for the operator, but edits do not mutate runtime state until a tool explicitly imports or applies them.
 - Do not treat space notes as canonical repository documentation. Stable documentation still belongs in git under `docs/`; use space notes for working notes, drafts, decisions, research, and project logs before promoting stable material to repo docs.
 - Future semantic search may index this space. Write notes so they are useful for humans and indexing: clear title, concise summary, stable headings, explicit links, and frontmatter when useful.
 - Preserve Markdown frontmatter, wikilinks, inline `#tags`, headings, checkboxes, queries, and existing note structure.
 - At the start of substantial SilverBullet work, tell the operator briefly what you are doing, for example: `Использую SilverBullet skill: ищу существующие заметки и обновлю память после записи.`
+
+## Daily journal and TeamD mirrors
+
+- The operator timezone is provided in `SessionHead`; use it when choosing `journals/YYYY-MM-DD.md`.
+- Today's and yesterday's journal excerpts may be injected into `SessionHead`. Treat them as context only; read the target note before editing.
+- Each substantial session should append important decisions, durable facts, completed work, blockers, and follow-up tasks to today's journal when persistence is implied.
+- `a/teamd-agents.md` is the TeamD Agents area index for runtime mirrors.
+- `p/teamd-session-<session_id>.md` pages are generated/readable session mirrors with plan snapshot, context summary, tool activity, and artifacts.
+- Do not manually rewrite generated mirror sections unless the operator asks; add operator/agent notes in separate headings when useful.
+- After writing durable SilverBullet content, use `memory_search` then `memory_add` or `memory_update` to maintain a short Mem0 pointer unless the note says `memory: false`.
 
 ## Current structure
 
@@ -101,6 +112,7 @@ Existing legacy or miscellaneous root notes may remain. Do not move or rename th
 - Add an area: create `a/<slug>.md` with `#area`, scope, active projects, key notes, and maintenance rules.
 - Add a resource or guide: create `r/<slug>.md` with `#resource`, summary, sources, related projects/areas, and key points.
 - Add a daily entry: create/update `journals/YYYY-MM-DD.md` with `#daily`, focus, tasks, log, ideas, and links.
+- Add a session work note: append to today's journal and, when relevant, link `[[p/teamd-session-<session_id>]]`.
 - Create a permanent note: use a flat readable page or agreed namespace with `#zettelkasten`; keep it atomic and linked to related notes.
 - Process inbox: turn captures into project actions, resources, permanent notes, archive items, or delete only when the operator agrees.
 - Complete a project: add `#done` or `#archive` and update the result; do not silently delete completed material.

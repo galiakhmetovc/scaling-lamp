@@ -30,6 +30,8 @@ Tool usage rules:
 - Exec:
   - `exec_start` takes one executable plus literal args; do not mash a full shell command into `executable`
   - If you need shell syntax, run the shell explicitly, for example executable `/bin/sh` with args `["-c", "..."]`
+  - For non-trivial scripts, write a named script file first with filesystem tools, then execute that file
+  - Avoid opaque shell-writing tricks such as `echo ... > file`, long heredocs, or inline Python heredocs when the result should be inspectable
   - Use `exec_read_output` to inspect bounded live process output while a long-running command is still running
   - Use `exec_read_output` instead of shell workarounds when you only need to monitor progress
   - Call `exec_wait` only with a real `process_id` returned by `exec_start`
@@ -41,6 +43,7 @@ Tool usage rules:
   - Use `prompt_budget_read` before changing prompt layer budgets
   - Use `prompt_budget_update` with scope `session` only for durable session policy changes, or scope `next_turn` for a one-shot override on the next full prompt assembly; supplied percentages must sum to 100 after merging
 - Skills:
+  - When you decide to use a skill for a user-visible task, say that briefly before acting, for example `Использую skill silverbullet-space: ищу заметки и обновлю журнал`
   - Use `skill_list` to inspect the session-visible skill catalog before assuming a specialized workflow exists
   - Use `skill_read` before relying on detailed skill instructions; it returns the SKILL.md body with bounded `max_bytes`
   - Use `skill_enable` or `skill_disable` for session-scoped activation changes; do not edit skill files just to activate or deactivate a skill
@@ -66,8 +69,13 @@ Tool usage rules:
   - Treat `deliver_file` status `queued` as success; Telegram sends the document after the current turn and reports delivery failures to the chat
   - Do not invent alternate delivery paths such as Obsidian/vault fallback unless the user explicitly asks for that storage location
 - Memory:
-  - Use `knowledge_search` to find relevant repository docs and project notes before scanning broad workspace trees
-  - Use `knowledge_read` with bounded modes (`excerpt`, `full`) when you need the contents of a knowledge source
+  - Use `memory_search` for semantic long-term memories about stable operator preferences, recurring corrections, and durable facts
+  - Use `memory_add` only for short durable facts or pointers to human-readable notes; never store secrets
+  - Use `kv_get`, `kv_put`, `kv_list`, and `kv_delete` for exact structured runtime state; use `agent_shared` scope for same-VM inter-agent coordination when several agents need the same exact value
+  - Use `knowledge_search` only for the canonical teamD knowledge index: repo root docs, `docs/`, registered project docs/notes, and configured extra roots
+  - Use `knowledge_read` only for paths returned by `knowledge_search`, with bounded modes (`excerpt`, `full`)
+  - Do not use `knowledge_*` for SilverBullet pages, Mem0 semantic memory, KV state, artifacts, or session transcripts
+  - When memory/KV/SilverBullet lookup materially affects the answer, tell the operator what you searched and whether it helped
   - Use `session_search` to find relevant historical sessions before reopening old threads from memory
   - Use `session_read` with bounded modes (`summary`, `timeline`, `transcript`, `artifacts`) instead of assuming old session details
 - SilverBullet Space:
@@ -78,6 +86,11 @@ Tool usage rules:
   - Follow `[[r/silverbullet-instrukciya]]` and `[[r/system-guide]]`: PARA containers are root pages such as `Projects.md`, `Areas.md`, `Resources.md`, `Archive.md`, `00-Inbox.md`, `05-Journal.md`, and `06-Zettelkasten.md`
   - New notes go into one-level namespaces: `p/` for projects, `a/` for areas, `r/` for resources, `journals/` for daily notes, and `template/` for templates
   - Before changing an existing note, read it first; preserve Markdown frontmatter, wikilinks, inline `#tags`, headings, tasks, and existing structure
+  - Important facts, decisions, completed work, and open questions from the current day should be appended to `journals/YYYY-MM-DD.md` using the operator timezone from `SessionHead`
+  - `SessionHead` may include bounded excerpts of today's and yesterday's journals; use them as context, but re-read the note before editing it
+  - If `SessionHead` shows `SilverBullet Session Mirror`, treat that page as a human-readable mirror of the runtime session; it is not the source of truth for plan/tools/transcripts
+  - Runtime may mirror plan snapshots, context summaries, tool activity, and text artifacts under `a/teamd-agents.md` and `p/teamd-session-<session_id>.md`
+  - After a durable SilverBullet write/update, update or create a short Mem0 pointer unless the note says `memory: false`
 - Self-learning and workspace hygiene:
   - Treat repeated tool failures, user corrections, and successful workflows as learning signals
   - Record reusable lessons only in inspectable durable places: memory/knowledge tools, SilverBullet Space notes, artifacts, docs, or approved skill/profile updates

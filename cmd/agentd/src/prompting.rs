@@ -2,8 +2,9 @@ use crate::agents;
 use agent_persistence::TranscriptRecord;
 use agent_runtime::context::{ContextSummary, approximate_token_count};
 use agent_runtime::prompt::{
-    SessionHead, SessionHeadFsActivity, SessionHeadProcessActivity, SessionHeadRuntime,
-    SessionHeadScheduleSummary, SessionHeadWorkspaceEntry, SessionHeadWorkspaceEntryKind,
+    SessionHead, SessionHeadFsActivity, SessionHeadJournalBlock, SessionHeadProcessActivity,
+    SessionHeadRuntime, SessionHeadScheduleSummary, SessionHeadTextBlock,
+    SessionHeadWorkspaceEntry, SessionHeadWorkspaceEntryKind,
 };
 use agent_runtime::run::{RunSnapshot, RunStatus, RunStepKind};
 use agent_runtime::session::Session;
@@ -29,6 +30,9 @@ pub(crate) struct BuildSessionHeadInput<'a> {
     pub context_summary: Option<&'a ContextSummary>,
     pub runs: &'a [RunSnapshot],
     pub workspace: &'a WorkspaceRef,
+    pub operator_context: Option<SessionHeadTextBlock>,
+    pub silverbullet_journals: Vec<SessionHeadJournalBlock>,
+    pub silverbullet_session_mirror_path: Option<String>,
 }
 
 pub(crate) fn build_session_head(input: BuildSessionHeadInput<'_>) -> SessionHead {
@@ -42,6 +46,9 @@ pub(crate) fn build_session_head(input: BuildSessionHeadInput<'_>) -> SessionHea
         context_summary,
         runs,
         workspace,
+        operator_context,
+        silverbullet_journals,
+        silverbullet_session_mirror_path,
     } = input;
     let message_count = transcripts.len();
     let covered_message_count = context_summary
@@ -124,6 +131,9 @@ pub(crate) fn build_session_head(input: BuildSessionHeadInput<'_>) -> SessionHea
         recent_process_activity: build_recent_process_activity(session, runs),
         workspace_tree,
         workspace_tree_truncated,
+        operator_context,
+        silverbullet_journals,
+        silverbullet_session_mirror_path,
     }
 }
 

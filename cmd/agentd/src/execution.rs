@@ -6,6 +6,7 @@ mod chat;
 mod delegate_jobs;
 mod delegation;
 mod interagent;
+pub(crate) mod knowledge_context;
 mod kv;
 mod mcp;
 mod mem0;
@@ -98,6 +99,14 @@ pub struct ApprovalContinuationReport {
     pub response_id: Option<String>,
     pub output_text: Option<String>,
     pub approval_id: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CompactionReport {
+    pub session_id: String,
+    pub covered_message_count: u32,
+    pub summary_token_estimate: u32,
+    pub summary_preview: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -206,6 +215,7 @@ pub struct ExecutionServiceConfig {
     pub mem0: Mem0Config,
     pub memory_curator: MemoryCuratorConfig,
     pub memory_recall: MemoryRecallConfig,
+    pub knowledge: agent_persistence::KnowledgeConfig,
     pub runtime_timing: RuntimeTimingConfig,
     pub runtime_limits: RuntimeLimitsConfig,
 }
@@ -238,6 +248,7 @@ impl Default for ExecutionServiceConfig {
             mem0: Mem0Config::default(),
             memory_curator: MemoryCuratorConfig::default(),
             memory_recall: MemoryRecallConfig::default(),
+            knowledge: agent_persistence::KnowledgeConfig::default(),
             runtime_timing: RuntimeTimingConfig::default(),
             runtime_limits: RuntimeLimitsConfig::default(),
         }
@@ -440,6 +451,23 @@ impl ExecutionService {
             })
         }
     }
+
+    fn mirror_session_to_silverbullet_best_effort(
+        &self,
+        store: &PersistenceStore,
+        session: &Session,
+        reason: &str,
+        now: i64,
+    ) {
+        let _ = knowledge_context::mirror_session_snapshot(
+            &self.config.knowledge,
+            store,
+            session,
+            reason,
+            now,
+            &self.config.runtime_limits,
+        );
+    }
 }
 
 fn unique_execution_token() -> String {
@@ -449,6 +477,13 @@ fn unique_execution_token() -> String {
         .unwrap_or(0);
     let seq = EXECUTION_ID_COUNTER.fetch_add(1, Ordering::Relaxed);
     format!("{millis}-{seq}")
+}
+
+fn current_unix_timestamp_lossy() -> i64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_secs() as i64)
+        .unwrap_or(0)
 }
 
 fn ensure_unique_run_id(

@@ -39,6 +39,8 @@ const DEFAULT_MEMORY_CURATOR_MAX_OUTPUT_TOKENS: u32 = 512;
 const DEFAULT_MEMORY_RECALL_MAX_RESULTS: usize = 6;
 const DEFAULT_MEMORY_RECALL_MAX_QUERY_CHARS: usize = 512;
 const DEFAULT_MEMORY_RECALL_MAX_MEMORY_CHARS: usize = 800;
+const DEFAULT_OPERATOR_TIMEZONE: &str = "Europe/Moscow";
+const DEFAULT_SILVERBULLET_SPACE_DIR: &str = "/var/lib/teamd/knowledge/silverbullet/teamd";
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct AppConfig {
@@ -55,6 +57,7 @@ pub struct AppConfig {
     pub mem0: Mem0Config,
     pub memory_curator: MemoryCuratorConfig,
     pub memory_recall: MemoryRecallConfig,
+    pub knowledge: KnowledgeConfig,
     pub observability: ObservabilityConfig,
     pub runtime_timing: RuntimeTimingConfig,
     pub runtime_limits: RuntimeLimitsConfig,
@@ -122,6 +125,16 @@ pub struct ContextConfig {
 pub struct WebConfig {
     pub search_backend: WebSearchBackend,
     pub search_url: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(default)]
+pub struct KnowledgeConfig {
+    pub operator_timezone: String,
+    pub silverbullet_space_dir: Option<PathBuf>,
+    pub silverbullet_base_url: Option<String>,
+    pub silverbullet_journal_context_enabled: bool,
+    pub silverbullet_mirror_enabled: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
@@ -259,6 +272,10 @@ pub struct RuntimeLimitsConfig {
     pub knowledge_read_max_lines: usize,
     pub knowledge_read_default_max_bytes: usize,
     pub knowledge_read_max_bytes: usize,
+    pub operator_user_context_max_chars: usize,
+    pub silverbullet_journal_context_max_chars_per_day: usize,
+    pub silverbullet_mirror_text_artifact_max_chars: usize,
+    pub silverbullet_mirror_script_max_chars: usize,
     pub session_warm_idle_seconds: u64,
     pub timeline_preview_chars: usize,
 }
@@ -330,6 +347,11 @@ pub struct ConfigEnv {
     pub memory_recall_max_results_override: Option<usize>,
     pub memory_recall_max_query_chars_override: Option<usize>,
     pub memory_recall_max_memory_chars_override: Option<usize>,
+    pub operator_timezone_override: Option<String>,
+    pub silverbullet_space_dir_override: Option<PathBuf>,
+    pub silverbullet_base_url_override: Option<String>,
+    pub silverbullet_journal_context_enabled_override: Option<bool>,
+    pub silverbullet_mirror_enabled_override: Option<bool>,
     pub otlp_export_enabled_override: Option<bool>,
     pub otlp_endpoint_override: Option<String>,
     pub otlp_timeout_ms_override: Option<u64>,
@@ -396,6 +418,7 @@ struct FileConfig {
     mem0: Option<Mem0Config>,
     memory_curator: Option<MemoryCuratorConfig>,
     memory_recall: Option<MemoryRecallConfig>,
+    knowledge: Option<KnowledgeConfig>,
     observability: Option<ObservabilityConfig>,
     runtime_timing: Option<RuntimeTimingConfig>,
     runtime_limits: Option<RuntimeLimitsConfig>,
@@ -434,6 +457,18 @@ impl Default for TelegramConfig {
             default_autoapprove: true,
             inbound_queue_default_mode: "coalesce".to_string(),
             inbound_coalesce_window_ms: 5_000,
+        }
+    }
+}
+
+impl Default for KnowledgeConfig {
+    fn default() -> Self {
+        Self {
+            operator_timezone: DEFAULT_OPERATOR_TIMEZONE.to_string(),
+            silverbullet_space_dir: Some(PathBuf::from(DEFAULT_SILVERBULLET_SPACE_DIR)),
+            silverbullet_base_url: None,
+            silverbullet_journal_context_enabled: true,
+            silverbullet_mirror_enabled: true,
         }
     }
 }
@@ -675,6 +710,10 @@ impl Default for RuntimeLimitsConfig {
             knowledge_read_max_lines: 400,
             knowledge_read_default_max_bytes: 8 * 1024,
             knowledge_read_max_bytes: 64 * 1024,
+            operator_user_context_max_chars: 4 * 1024,
+            silverbullet_journal_context_max_chars_per_day: 4 * 1024,
+            silverbullet_mirror_text_artifact_max_chars: 24 * 1024,
+            silverbullet_mirror_script_max_chars: 24 * 1024,
             session_warm_idle_seconds: 60 * 60,
             timeline_preview_chars: 160,
         }
@@ -854,6 +893,20 @@ impl ConfigEnv {
                 "TEAMD_MEMORY_RECALL_MAX_MEMORY_CHARS",
                 &dotenv,
             )?,
+            operator_timezone_override: read_string_var("TEAMD_OPERATOR_TIMEZONE", &dotenv),
+            silverbullet_space_dir_override: read_path_var(
+                "TEAMD_SILVERBULLET_SPACE_DIR",
+                &dotenv,
+            )?,
+            silverbullet_base_url_override: read_string_var("TEAMD_SILVERBULLET_BASE_URL", &dotenv),
+            silverbullet_journal_context_enabled_override: read_bool_var(
+                "TEAMD_SILVERBULLET_JOURNAL_CONTEXT_ENABLED",
+                &dotenv,
+            )?,
+            silverbullet_mirror_enabled_override: read_bool_var(
+                "TEAMD_SILVERBULLET_MIRROR_ENABLED",
+                &dotenv,
+            )?,
             otlp_export_enabled_override: read_bool_var("TEAMD_OTLP_EXPORT_ENABLED", &dotenv)?,
             otlp_endpoint_override: read_string_var("TEAMD_OTLP_ENDPOINT", &dotenv),
             otlp_timeout_ms_override: read_u64_var("TEAMD_OTLP_TIMEOUT_MS", &dotenv)?,
@@ -987,6 +1040,10 @@ impl AppConfig {
         let mut memory_recall = file_config
             .as_ref()
             .and_then(|config| config.memory_recall.clone())
+            .unwrap_or_default();
+        let mut knowledge = file_config
+            .as_ref()
+            .and_then(|config| config.knowledge.clone())
             .unwrap_or_default();
         let mut observability = file_config
             .as_ref()
@@ -1172,6 +1229,21 @@ impl AppConfig {
         if let Some(chars) = env.memory_recall_max_memory_chars_override {
             memory_recall.max_memory_chars = chars;
         }
+        if let Some(timezone) = &env.operator_timezone_override {
+            knowledge.operator_timezone = timezone.clone();
+        }
+        if let Some(path) = &env.silverbullet_space_dir_override {
+            knowledge.silverbullet_space_dir = Some(path.clone());
+        }
+        if let Some(base_url) = &env.silverbullet_base_url_override {
+            knowledge.silverbullet_base_url = Some(base_url.clone());
+        }
+        if let Some(enabled) = env.silverbullet_journal_context_enabled_override {
+            knowledge.silverbullet_journal_context_enabled = enabled;
+        }
+        if let Some(enabled) = env.silverbullet_mirror_enabled_override {
+            knowledge.silverbullet_mirror_enabled = enabled;
+        }
         if let Some(enabled) = env.otlp_export_enabled_override {
             observability.otlp_export_enabled = enabled;
         }
@@ -1202,6 +1274,7 @@ impl AppConfig {
             mem0,
             memory_curator,
             memory_recall,
+            knowledge,
             observability,
             runtime_timing,
             runtime_limits,
@@ -1374,6 +1447,31 @@ impl AppConfig {
         }
         validate_memory_curator_mode("memory_curator.mode", self.memory_curator.mode.as_str())?;
         validate_memory_recall_scopes(&self.memory_recall.scopes)?;
+        if self.knowledge.operator_timezone.trim().is_empty() {
+            return Err(ConfigError::InvalidProviderValue {
+                name: "knowledge.operator_timezone",
+                value: self.knowledge.operator_timezone.clone(),
+                reason: "must not be empty",
+            });
+        }
+        if let Some(path) = &self.knowledge.silverbullet_space_dir
+            && (!path.is_absolute() || has_parent_component(path))
+        {
+            return Err(ConfigError::InvalidProviderValue {
+                name: "knowledge.silverbullet_space_dir",
+                value: path.display().to_string(),
+                reason: "must be an absolute path without parent components",
+            });
+        }
+        if let Some(base_url) = &self.knowledge.silverbullet_base_url
+            && base_url.trim().is_empty()
+        {
+            return Err(ConfigError::InvalidProviderValue {
+                name: "knowledge.silverbullet_base_url",
+                value: base_url.clone(),
+                reason: "must not be empty when configured",
+            });
+        }
         if self.observability.otlp_endpoint.trim().is_empty() {
             return Err(ConfigError::InvalidProviderValue {
                 name: "observability.otlp_endpoint",
@@ -1707,6 +1805,24 @@ impl AppConfig {
             "runtime_limits.knowledge_read_max_bytes",
             self.runtime_limits.knowledge_read_max_bytes,
         )?;
+        validate_positive_usize_value(
+            "runtime_limits.operator_user_context_max_chars",
+            self.runtime_limits.operator_user_context_max_chars,
+        )?;
+        validate_positive_usize_value(
+            "runtime_limits.silverbullet_journal_context_max_chars_per_day",
+            self.runtime_limits
+                .silverbullet_journal_context_max_chars_per_day,
+        )?;
+        validate_positive_usize_value(
+            "runtime_limits.silverbullet_mirror_text_artifact_max_chars",
+            self.runtime_limits
+                .silverbullet_mirror_text_artifact_max_chars,
+        )?;
+        validate_positive_usize_value(
+            "runtime_limits.silverbullet_mirror_script_max_chars",
+            self.runtime_limits.silverbullet_mirror_script_max_chars,
+        )?;
         validate_positive_u64_value(
             "runtime_limits.session_warm_idle_seconds",
             self.runtime_limits.session_warm_idle_seconds,
@@ -1812,6 +1928,7 @@ fn load_file_config(path: &Path, required: bool) -> Result<FileConfig, ConfigErr
                 mem0: None,
                 memory_curator: None,
                 memory_recall: None,
+                knowledge: None,
                 observability: None,
                 runtime_timing: None,
                 runtime_limits: None,
@@ -2243,6 +2360,11 @@ pub fn normalize_absolute_path(path: &Path, cwd: &Path) -> PathBuf {
     normalized
 }
 
+fn has_parent_component(path: &Path) -> bool {
+    path.components()
+        .any(|component| matches!(component, std::path::Component::ParentDir))
+}
+
 pub fn validate_workspace_root_path(
     field_name: &'static str,
     workspace_root: &Path,
@@ -2290,6 +2412,7 @@ impl Default for AppConfig {
             mem0: Mem0Config::default(),
             memory_curator: MemoryCuratorConfig::default(),
             memory_recall: MemoryRecallConfig::default(),
+            knowledge: KnowledgeConfig::default(),
             observability: ObservabilityConfig::default(),
             runtime_timing: RuntimeTimingConfig::default(),
             runtime_limits: RuntimeLimitsConfig::default(),

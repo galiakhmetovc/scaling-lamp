@@ -27,6 +27,23 @@ pub struct SessionHeadWorkspaceEntry {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SessionHeadTextBlock {
+    pub title: String,
+    pub path: String,
+    pub content: String,
+    pub truncated: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SessionHeadJournalBlock {
+    pub label: String,
+    pub date: String,
+    pub path: String,
+    pub content: String,
+    pub truncated: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SessionHeadScheduleSummary {
     pub id: String,
     pub mode: AgentScheduleMode,
@@ -95,6 +112,9 @@ pub struct SessionHead {
     pub recent_process_activity: Vec<SessionHeadProcessActivity>,
     pub workspace_tree: Vec<SessionHeadWorkspaceEntry>,
     pub workspace_tree_truncated: bool,
+    pub operator_context: Option<SessionHeadTextBlock>,
+    pub silverbullet_journals: Vec<SessionHeadJournalBlock>,
+    pub silverbullet_session_mirror_path: Option<String>,
 }
 
 impl SessionHead {
@@ -146,6 +166,40 @@ impl SessionHead {
         }
         if let Some(workspace_root) = self.workspace_root.as_deref() {
             lines.push(format!("Workspace Root: {workspace_root}"));
+        }
+        if let Some(operator_context) = self.operator_context.as_ref() {
+            lines.push(format!(
+                "Operator Context: {} ({}){}",
+                operator_context.title,
+                operator_context.path,
+                if operator_context.truncated {
+                    " truncated"
+                } else {
+                    ""
+                }
+            ));
+            lines.extend(
+                operator_context
+                    .content
+                    .lines()
+                    .map(|line| format!("  {line}")),
+            );
+        }
+        if !self.silverbullet_journals.is_empty() {
+            lines.push("SilverBullet Journal Context:".to_string());
+            for journal in &self.silverbullet_journals {
+                lines.push(format!(
+                    "- {} {} ({}){}",
+                    journal.label,
+                    journal.date,
+                    journal.path,
+                    if journal.truncated { " truncated" } else { "" }
+                ));
+                lines.extend(journal.content.lines().map(|line| format!("  {line}")));
+            }
+        }
+        if let Some(path) = self.silverbullet_session_mirror_path.as_deref() {
+            lines.push(format!("SilverBullet Session Mirror: {path}"));
         }
         if self.summary_covered_message_count > 0 {
             lines.push(format!(
@@ -975,6 +1029,9 @@ mod tests {
                 },
             ],
             workspace_tree_truncated: false,
+            operator_context: None,
+            silverbullet_journals: Vec::new(),
+            silverbullet_session_mirror_path: None,
         }
         .render();
 
@@ -1055,6 +1112,9 @@ mod tests {
                     kind: SessionHeadWorkspaceEntryKind::Directory,
                 }],
                 workspace_tree_truncated: false,
+                operator_context: None,
+                silverbullet_journals: Vec::new(),
+                silverbullet_session_mirror_path: None,
             }),
             autonomy_state: None,
             memory_recall: None,
@@ -1149,6 +1209,9 @@ mod tests {
                 recent_process_activity: Vec::new(),
                 workspace_tree: Vec::new(),
                 workspace_tree_truncated: false,
+                operator_context: None,
+                silverbullet_journals: Vec::new(),
+                silverbullet_session_mirror_path: None,
             }),
             autonomy_state: None,
             memory_recall: None,
@@ -1230,6 +1293,9 @@ mod tests {
                 recent_process_activity: Vec::new(),
                 workspace_tree: Vec::new(),
                 workspace_tree_truncated: false,
+                operator_context: None,
+                silverbullet_journals: Vec::new(),
+                silverbullet_session_mirror_path: None,
             }),
             autonomy_state: None,
             memory_recall: None,
@@ -1290,6 +1356,9 @@ mod tests {
                 recent_process_activity: Vec::new(),
                 workspace_tree: Vec::new(),
                 workspace_tree_truncated: false,
+                operator_context: None,
+                silverbullet_journals: Vec::new(),
+                silverbullet_session_mirror_path: None,
             }),
             autonomy_state: Some(AutonomyState {
                 turn_source: Some("telegram".to_string()),

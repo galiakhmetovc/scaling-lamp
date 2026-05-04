@@ -11,6 +11,7 @@ const DEFAULT_SYSTEM_MD: &str = include_str!("../../../agent-templates/default/S
 const DEFAULT_AGENTS_MD: &str = include_str!("../../../agent-templates/default/AGENTS.md");
 const JUDGE_SYSTEM_MD: &str = include_str!("../../../agent-templates/judge/SYSTEM.md");
 const JUDGE_AGENTS_MD: &str = include_str!("../../../agent-templates/judge/AGENTS.md");
+const OPERATOR_USER_MD: &str = include_str!("../../../agent-templates/operator/USER.md");
 const MEMORY_CURATOR_SYSTEM_MD: &str =
     include_str!("../../../agent-templates/system/memory-curator/SYSTEM.md");
 
@@ -96,6 +97,10 @@ const BUNDLED_TEMPLATE_FILES: &[BundledTemplateFile] = &[
     BundledTemplateFile {
         relative_path: "judge/AGENTS.md",
         content: JUDGE_AGENTS_MD,
+    },
+    BundledTemplateFile {
+        relative_path: "operator/USER.md",
+        content: OPERATOR_USER_MD,
     },
     BundledTemplateFile {
         relative_path: "system/memory-curator/SYSTEM.md",
@@ -362,6 +367,18 @@ pub fn fallback_agents_md(data_dir: &Path, agent_id: &str) -> String {
     load_builtin_template_content(data_dir, template)
         .map(|content| content.agents_md)
         .unwrap_or_else(|_| normalize_prompt_contents(template.agents_md))
+}
+
+pub fn ensure_operator_user_md(data_dir: &Path) -> io::Result<PathBuf> {
+    ensure_runtime_agent_templates_layout(data_dir)?;
+    let path = data_dir.join("USER.md");
+    if path.exists() {
+        return Ok(path);
+    }
+    let contents =
+        read_runtime_template_or_bundled(data_dir, "operator/USER.md", OPERATOR_USER_MD)?;
+    fs::write(&path, contents)?;
+    Ok(path)
 }
 
 pub fn agents_root(data_dir: &Path) -> PathBuf {

@@ -89,6 +89,15 @@ request_timeout_ms = 5000
 default_limit = 10
 max_limit = 50
 
+[knowledge]
+# Operator context and optional SilverBullet integration used by canonical
+# prompt SessionHead and best-effort human-readable session mirrors.
+operator_timezone = "Europe/Moscow"
+silverbullet_space_dir = "/var/lib/teamd/knowledge/silverbullet/teamd"
+# silverbullet_base_url = "https://teamd.example/sb"
+silverbullet_journal_context_enabled = true
+silverbullet_mirror_enabled = true
+
 [browser]
 # Disabled by default. deploy-teamd-containers.sh --with-browserless enables
 # this through /etc/teamd/teamd.env for production-like installs.
@@ -153,5 +162,9 @@ knowledge_read_full_default_max_lines = 200
 knowledge_read_max_lines = 400
 knowledge_read_default_max_bytes = 8192
 knowledge_read_max_bytes = 65536
+operator_user_context_max_chars = 4096
+silverbullet_journal_context_max_chars_per_day = 4096
+silverbullet_mirror_text_artifact_max_chars = 24576
+silverbullet_mirror_script_max_chars = 24576
 session_warm_idle_seconds = 3600
 timeline_preview_chars = 160

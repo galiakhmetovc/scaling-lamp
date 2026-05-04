@@ -58,6 +58,11 @@ fn base_env(root: &Path) -> ConfigEnv {
         memory_recall_max_results_override: None,
         memory_recall_max_query_chars_override: None,
         memory_recall_max_memory_chars_override: None,
+        operator_timezone_override: None,
+        silverbullet_space_dir_override: None,
+        silverbullet_base_url_override: None,
+        silverbullet_journal_context_enabled_override: None,
+        silverbullet_mirror_enabled_override: None,
         provider_api_base_override: None,
         provider_api_key_override: None,
         provider_connect_timeout_override: None,
@@ -170,6 +175,7 @@ fn validate_rejects_enabled_browser_without_command() {
         mem0: Default::default(),
         memory_curator: Default::default(),
         memory_recall: Default::default(),
+        knowledge: Default::default(),
         observability: Default::default(),
         runtime_timing: Default::default(),
         runtime_limits: Default::default(),
@@ -231,6 +237,7 @@ fn validate_rejects_relative_data_dir() {
         mem0: Default::default(),
         memory_curator: Default::default(),
         memory_recall: Default::default(),
+        knowledge: Default::default(),
         observability: Default::default(),
         runtime_timing: Default::default(),
         runtime_limits: Default::default(),
@@ -414,6 +421,49 @@ knowledge_read_max_bytes = 128000
         12000
     );
     assert_eq!(config.runtime_limits.knowledge_read_max_bytes, 128000);
+}
+
+#[test]
+fn load_merges_knowledge_config_from_file_and_env() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let config_path = temp.path().join("teamd.toml");
+
+    fs::write(
+        &config_path,
+        r#"
+data_dir = "/tmp/teamd-config"
+
+[knowledge]
+operator_timezone = "UTC"
+silverbullet_space_dir = "/tmp/teamd-silverbullet-file"
+silverbullet_base_url = "https://file.example/sb"
+silverbullet_journal_context_enabled = false
+silverbullet_mirror_enabled = false
+"#,
+    )
+    .expect("write config");
+
+    let mut env = base_env(temp.path());
+    env.config_path = Some(config_path);
+    env.operator_timezone_override = Some("Europe/Moscow".to_string());
+    env.silverbullet_space_dir_override = Some(PathBuf::from("/tmp/teamd-silverbullet-env"));
+    env.silverbullet_base_url_override = Some("https://env.example/sb".to_string());
+    env.silverbullet_journal_context_enabled_override = Some(true);
+    env.silverbullet_mirror_enabled_override = Some(true);
+
+    let config = AppConfig::load_from_env(&env).expect("load config");
+
+    assert_eq!(config.knowledge.operator_timezone, "Europe/Moscow");
+    assert_eq!(
+        config.knowledge.silverbullet_space_dir.as_deref(),
+        Some(Path::new("/tmp/teamd-silverbullet-env"))
+    );
+    assert_eq!(
+        config.knowledge.silverbullet_base_url.as_deref(),
+        Some("https://env.example/sb")
+    );
+    assert!(config.knowledge.silverbullet_journal_context_enabled);
+    assert!(config.knowledge.silverbullet_mirror_enabled);
 }
 
 #[test]
@@ -685,6 +735,7 @@ fn validate_rejects_invalid_runtime_limit_bounds() {
         mem0: Default::default(),
         memory_curator: Default::default(),
         memory_recall: Default::default(),
+        knowledge: Default::default(),
         observability: Default::default(),
         runtime_timing: Default::default(),
         runtime_limits: super::RuntimeLimitsConfig {
@@ -782,6 +833,7 @@ fn validate_rejects_invalid_auto_compaction_ratio() {
         mem0: Default::default(),
         memory_curator: Default::default(),
         memory_recall: Default::default(),
+        knowledge: Default::default(),
         observability: Default::default(),
         runtime_timing: Default::default(),
         runtime_limits: Default::default(),

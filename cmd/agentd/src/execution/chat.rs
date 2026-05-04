@@ -174,6 +174,12 @@ impl ExecutionService {
             response.output_text.as_str(),
             assistant_at,
         );
+        self.mirror_session_to_silverbullet_best_effort(
+            store,
+            &session,
+            "chat turn completed",
+            assistant_at,
+        );
 
         Ok(ChatTurnExecutionReport {
             session_id: session.id,
@@ -387,6 +393,12 @@ impl ExecutionService {
             response.output_text.as_str(),
             assistant_at,
         );
+        self.mirror_session_to_silverbullet_best_effort(
+            store,
+            &session,
+            "background chat turn completed",
+            assistant_at,
+        );
 
         job.status = JobStatus::Completed;
         job.result = Some(JobResult::Summary {
@@ -588,6 +600,12 @@ impl ExecutionService {
             .put_transcript(&TranscriptRecord::from(&assistant_entry))
             .map_err(ExecutionError::Store)?;
         self.record_transcript_trace(store, &trace_context, &assistant_entry)?;
+        self.mirror_session_to_silverbullet_best_effort(
+            store,
+            &session,
+            "inter-agent turn completed",
+            assistant_at,
+        );
 
         job.status = JobStatus::Completed;
         job.result = Some(JobResult::Summary {
@@ -1234,6 +1252,12 @@ impl ExecutionService {
         store
             .put_transcript(&TranscriptRecord::from(&assistant_entry))
             .map_err(ExecutionError::Store)?;
+        self.mirror_session_to_silverbullet_best_effort(
+            store,
+            &session,
+            "approval continuation completed",
+            assistant_at,
+        );
 
         if let Some(job) = job.as_mut() {
             job.status = JobStatus::Completed;

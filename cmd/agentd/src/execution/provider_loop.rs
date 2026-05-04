@@ -998,14 +998,14 @@ impl ExecutionService {
         provider: &dyn ProviderDriver,
         session_id: &str,
         now: i64,
-    ) -> Result<bool, ExecutionError> {
+    ) -> Result<Option<CompactionReport>, ExecutionError> {
         let session = self.load_session(store, session_id)?;
         let transcripts = store
             .list_transcripts_for_session(session_id)
             .map_err(ExecutionError::Store)?;
         let policy = self.compaction_policy();
         if !policy.should_compact(transcripts.len()) {
-            return Ok(false);
+            return Ok(None);
         }
 
         let covered_message_count = policy.covered_message_count(transcripts.len());
@@ -1062,7 +1062,18 @@ impl ExecutionService {
                     .map_err(ExecutionError::RecordConversion)?,
             )
             .map_err(ExecutionError::Store)?;
-        Ok(true)
+        self.mirror_session_to_silverbullet_best_effort(
+            store,
+            &updated_session,
+            "context compaction",
+            now,
+        );
+        Ok(Some(CompactionReport {
+            session_id: updated_session.id.clone(),
+            covered_message_count: context_summary.covered_message_count,
+            summary_token_estimate: context_summary.summary_token_estimate,
+            summary_preview: knowledge_context::compaction_preview(&context_summary),
+        }))
     }
 
     fn prompt_messages(
@@ -1169,6 +1180,20 @@ impl ExecutionService {
         let agent_home = agents::agent_home(&self.config.data_dir, &session.agent_profile_id);
         let runtime = self.session_head_runtime(provider, &session, model);
         let schedule_for_autonomy = schedule.clone();
+        let now = current_unix_timestamp_lossy();
+        let operator_context = knowledge_context::operator_context_block(
+            &self.config.data_dir,
+            self.config.runtime_limits.operator_user_context_max_chars,
+        );
+        let silverbullet_journals = knowledge_context::silverbullet_journal_context(
+            &self.config.knowledge,
+            now,
+            self.config
+                .runtime_limits
+                .silverbullet_journal_context_max_chars_per_day,
+        );
+        let silverbullet_session_mirror_path =
+            knowledge_context::silverbullet_session_mirror_path(&self.config.knowledge, &session);
         let session_head = prompting::build_session_head(prompting::BuildSessionHeadInput {
             session: &session,
             agent_name: &agent_name,
@@ -1179,6 +1204,9 @@ impl ExecutionService {
             context_summary: context_summary.as_ref(),
             runs: &runs,
             workspace,
+            operator_context,
+            silverbullet_journals,
+            silverbullet_session_mirror_path,
         });
         let prompt_budget = PromptAssemblyBudget {
             policy: prompt_budget_policy,
@@ -2864,7 +2892,7 @@ impl ExecutionService {
                 model.as_deref(),
                 instructions.as_deref(),
             )?
-            && self.compact_session_at(store, provider, session_id, now)?
+            && let Some(compaction) = self.compact_session_at(store, provider, session_id, now)?
         {
             run.record_system_note(
                 format!(
@@ -2878,6 +2906,18 @@ impl ExecutionService {
             )
             .map_err(ExecutionError::RunTransition)?;
             self.persist_run(store, run)?;
+            Self::emit_event(
+                observer,
+                ChatExecutionEvent::ContextStatus {
+                    label: "compaction".to_string(),
+                    summary: format!(
+                        "automatic compaction completed: covered_messages={} summary_tokens={} preview={}",
+                        compaction.covered_message_count,
+                        compaction.summary_token_estimate,
+                        compaction.summary_preview
+                    ),
+                },
+            );
         }
 
         let workspace = self.load_session_workspace(store, session_id)?;

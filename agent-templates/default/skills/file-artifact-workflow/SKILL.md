@@ -24,3 +24,5 @@ Use this skill when the operator sends, requests, edits, or receives files.
 - Use artifacts for large tool outputs, generated files, screenshots, PDFs, diagnostics, and files that should be inspectable later.
 - Use `artifact_read` or `artifact_search` only for known refs.
 - Do not invent fallback delivery paths such as notes storage unless the user asks for that storage location.
+- Text artifacts and scripts may be mirrored to SilverBullet session pages for transparency, but artifacts remain canonical in `agentd`.
+- For generated scripts, prefer an explicit workspace file or artifact with a clear filename, then execute/deliver that file as needed.

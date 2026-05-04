@@ -27,12 +27,19 @@
 
 /var/lib/teamd/state/
 ├── agents/
+├── agent-templates/
 ├── archives/
 ├── artifacts/
 ├── audit/
 ├── runs/
 ├── state.sqlite
-└── transcripts/
+├── transcripts/
+└── USER.md
+
+/var/lib/teamd/knowledge/silverbullet/teamd/
+├── a/teamd-agents.md
+├── journals/YYYY-MM-DD.md
+└── p/teamd-session-<session_id>.md
 ```
 
 `/etc/teamd/config.toml` — основной TOML-конфиг без секретов. Там задаются `data_dir`, daemon bind address/port, Telegram enable flag, provider kind/base/model и permission mode.
@@ -40,6 +47,8 @@
 `/etc/teamd/teamd.env` — environment file для systemd unit’ов и операторских CLI-команд. Там лежат секреты и env overrides: `TEAMD_CONFIG`, `TEAMD_DATA_DIR`, `TEAMD_TELEGRAM_BOT_TOKEN`, `TEAMD_PROVIDER_API_KEY`. Deploy script создаёт файл как `root:teamd 0640`: `systemd` читает его через `EnvironmentFile`, а операторский helper `teamdctl` использует тот же env и тот же state root.
 
 `/var/lib/teamd/state` — runtime `data_dir`. Если daemon, Telegram worker и CLI смотрят в разные `data_dir`, вы получите разные sessions, pairings и transcripts. Поэтому для production-like запуска все systemd services и ручные команды должны использовать один и тот же `TEAMD_DATA_DIR=/var/lib/teamd/state`.
+
+`/var/lib/teamd/knowledge/silverbullet/teamd` — external knowledge space, если включён SilverBullet add-on. Это не `data_dir`: runtime state остаётся в `state.sqlite`, а SilverBullet получает daily notes и best-effort human-readable session mirrors.
 
 ## Что лежит в `data_dir`
 
@@ -49,6 +58,7 @@
 | `agent-templates/<template_id>/AGENTS.md` | Runtime-editable template tool/profile guidance. | Да. Используйте для изменения template без пересборки `agentd`. |
 | `agent-templates/<template_id>/skills/` | Runtime-editable template skills. | Да. Это правильное место для правки shipped skills без rebuild. |
 | `agent-templates/system/memory-curator/SYSTEM.md` | Runtime-editable prompt для post-turn memory curator. Это не agent profile и не skill, а системный короткий provider-вызов для извлечения durable memory candidates. | Да. Правка меняет поведение curator без пересборки `agentd`. |
+| `USER.md` | Operator context: язык, timezone, правила интерпретации времени и устойчивые операторские настройки. Runtime создаёт файл из template при первом чтении. | Да. Влияет на будущие turns всех agent profiles на этом runtime node. |
 | `agents/<agent_id>/SYSTEM.md` | System prompt конкретного agent profile. Runtime читает его при сборке prompt. | Да, осознанно. Влияет на будущие turns этого agent profile. |
 | `agents/<agent_id>/AGENTS.md` | Инструкции и tool-usage guidance конкретного agent profile. | Да, осознанно. Влияет на будущие turns. |
 | `agents/<agent_id>/skills/` | Локальные skills для agent profile. | Да, если понимаете формат skills. |
@@ -69,6 +79,24 @@ transcripts/session-1777036286947/transcript-run-chat-session-1777036286947-1777
 Storage key теперь обычно содержит `session_id/filename.txt`. Смысл записи хранится не только в имени, а в `state.sqlite`: `session_id`, `run_id`, `kind`, `created_at`, `byte_len`, `sha256`.
 
 Важно: `agents/<agent_id>/` сейчас является `agent_home`, а не project workspace. Там лежат prompt-файлы и skills профиля агента. Рабочая директория выполнения tool’ов пока приходит из runtime/session/schedule context и требует отдельной модернизации. План описан в [11-workspace-modernization-plan.md](11-workspace-modernization-plan.md).
+
+## Что лежит в SilverBullet Space
+
+SilverBullet Space конфигурируется через `[knowledge].silverbullet_space_dir` или `TEAMD_SILVERBULLET_SPACE_DIR`. Production default:
+
+```text
+/var/lib/teamd/knowledge/silverbullet/teamd
+```
+
+Ключевые paths:
+
+| Path | Что это | Источник истины |
+| --- | --- | --- |
+| `journals/YYYY-MM-DD.md` | Daily journal оператора/агента. Today/yesterday excerpts могут попадать в `SessionHead`. | SilverBullet note. |
+| `a/teamd-agents.md` | Area index для generated session mirror pages. | SilverBullet mirror/index, не runtime state. |
+| `p/teamd-session-<session_id>.md` | Best-effort mirror сессии: plan snapshot, context summary, recent tool activity, artifacts. | `agentd` остаётся source of truth; page только view. |
+
+Mirror pages можно читать и дополнять операторскими заметками, но ручная правка mirror не меняет runtime plan/transcripts/tool calls. Если нужно изменить runtime state, используйте соответствующие teamD tools/commands.
 
 ## Что хранит `state.sqlite`
 

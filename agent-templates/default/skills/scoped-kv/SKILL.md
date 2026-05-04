@@ -31,8 +31,15 @@ Use this skill for exact structured state that should be read back without seman
 
 - `operator` is for one human operator.
 - `agent` is private to one agent profile.
-- `agent_shared` is shared by agents.
+- `agent_shared` is shared by agents on the same runtime node and is the preferred exact-state channel for same-VM inter-agent coordination.
 - `workspace` is for a workspace/project.
 - `session` is for one session only.
 
 Choose the narrowest scope that still matches the user's intent.
+
+## Inter-agent coordination
+
+- Use `agent_shared` for small exact records that several local agents must read, for example selected environment, shared feature flag, coordination lock, or current handoff id.
+- Keep values small JSON objects with explicit fields such as `owner`, `updated_at`, `expires_at`, and `reason`.
+- Use `expected_revision` when two agents may update the same key.
+- Do not use KV as a chat bus, transcript store, file store, or semantic memory. Use sessions, artifacts, SilverBullet, or Mem0 instead.

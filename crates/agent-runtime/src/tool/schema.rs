@@ -663,7 +663,7 @@ impl ToolName {
             Self::KnowledgeSearch => json!({
                 "type": "object",
                 "properties": {
-                    "query": { "type": "string", "description": "Search query across canonical project knowledge roots" },
+                    "query": { "type": "string", "description": "Search query across canonical teamD knowledge roots: repo root docs, docs/, registered project docs/notes, and extra configured roots. Not SilverBullet, Mem0, or KV." },
                     "limit": { "type": ["integer", "null"], "minimum": 1, "description": "Optional maximum number of search results to return" },
                     "offset": { "type": ["integer", "null"], "minimum": 0, "description": "Optional pagination offset" },
                     "kinds": {
@@ -683,7 +683,7 @@ impl ToolName {
             Self::KnowledgeRead => json!({
                 "type": "object",
                 "properties": {
-                    "path": { "type": "string", "description": "Relative knowledge file path to read" },
+                    "path": { "type": "string", "description": "Relative knowledge source path returned by knowledge_search. Do not pass arbitrary SilverBullet paths here." },
                     "mode": { "type": ["string", "null"], "enum": ["excerpt", "full", null], "description": "Optional view mode as a quoted JSON string; use \"excerpt\" or \"full\". Defaults to excerpt" },
                     "cursor": { "type": ["integer", "null"], "minimum": 0, "description": "Optional zero-based line cursor returned by a previous knowledge_read call" },
                     "max_bytes": { "type": ["integer", "null"], "minimum": 1, "description": "Optional maximum UTF-8 bytes to return" },

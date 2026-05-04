@@ -132,7 +132,7 @@ impl ExecutionService {
         self.persist_run(store, &run)?;
         let assistant_entry = TranscriptEntry::assistant(
             format!("transcript-run-{run_id}-assistant"),
-            session.id,
+            session.id.clone(),
             Some(run_id.as_str()),
             &response.output_text,
             now,
@@ -140,6 +140,12 @@ impl ExecutionService {
         store
             .put_transcript(&TranscriptRecord::from(&assistant_entry))
             .map_err(ExecutionError::Store)?;
+        self.mirror_session_to_silverbullet_best_effort(
+            store,
+            &session,
+            "wakeup turn completed",
+            now,
+        );
         for event in &queued_events {
             store
                 .put_session_inbox_event(

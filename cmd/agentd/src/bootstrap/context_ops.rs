@@ -1,6 +1,7 @@
 use super::*;
 use crate::agents;
 use crate::diagnostics::{DiagnosticEventBuilder, render_diagnostic_tail};
+use crate::execution::knowledge_context;
 use agent_persistence::{
     ContextOffloadRepository, RunRepository, ToolCallRecord, ToolCallRepository,
 };
@@ -214,6 +215,7 @@ impl App {
         let workspace = agent_runtime::workspace::WorkspaceRef::new(&session.workspace_root);
 
         let agent_home = agents::agent_home(&self.config.data_dir, &session.agent_profile_id);
+        let now = unix_timestamp()?;
         Ok(prompting::build_session_head(
             prompting::BuildSessionHeadInput {
                 session: &session,
@@ -225,6 +227,22 @@ impl App {
                 context_summary: context_summary.as_ref(),
                 runs: &runs,
                 workspace: &workspace,
+                operator_context: knowledge_context::operator_context_block(
+                    &self.config.data_dir,
+                    self.config.runtime_limits.operator_user_context_max_chars,
+                ),
+                silverbullet_journals: knowledge_context::silverbullet_journal_context(
+                    &self.config.knowledge,
+                    now,
+                    self.config
+                        .runtime_limits
+                        .silverbullet_journal_context_max_chars_per_day,
+                ),
+                silverbullet_session_mirror_path:
+                    knowledge_context::silverbullet_session_mirror_path(
+                        &self.config.knowledge,
+                        &session,
+                    ),
             },
         ))
     }
@@ -477,6 +495,7 @@ impl App {
         let (agent_name, schedule) = load_session_head_metadata(&store, &session)?;
         let workspace = agent_runtime::workspace::WorkspaceRef::new(&session.workspace_root);
         let agent_home = agents::agent_home(&self.config.data_dir, &session.agent_profile_id);
+        let now = unix_timestamp()?;
         let session_head = prompting::build_session_head(prompting::BuildSessionHeadInput {
             session: &session,
             agent_name: &agent_name,
@@ -487,6 +506,21 @@ impl App {
             context_summary: context_summary.as_ref(),
             runs: &runs,
             workspace: &workspace,
+            operator_context: knowledge_context::operator_context_block(
+                &self.config.data_dir,
+                self.config.runtime_limits.operator_user_context_max_chars,
+            ),
+            silverbullet_journals: knowledge_context::silverbullet_journal_context(
+                &self.config.knowledge,
+                now,
+                self.config
+                    .runtime_limits
+                    .silverbullet_journal_context_max_chars_per_day,
+            ),
+            silverbullet_session_mirror_path: knowledge_context::silverbullet_session_mirror_path(
+                &self.config.knowledge,
+                &session,
+            ),
         });
         let policy = self.compaction_policy();
         let uncovered_messages = transcripts.len().saturating_sub(
@@ -606,6 +640,7 @@ impl App {
         let schedule_for_autonomy = schedule.clone();
         let workspace = agent_runtime::workspace::WorkspaceRef::new(&session.workspace_root);
         let agent_home = agents::agent_home(&self.config.data_dir, &session.agent_profile_id);
+        let now = unix_timestamp()?;
         let session_head = prompting::build_session_head(prompting::BuildSessionHeadInput {
             session: &session,
             agent_name: &agent_name,
@@ -616,6 +651,21 @@ impl App {
             context_summary: context_summary.as_ref(),
             runs: &runs,
             workspace: &workspace,
+            operator_context: knowledge_context::operator_context_block(
+                &self.config.data_dir,
+                self.config.runtime_limits.operator_user_context_max_chars,
+            ),
+            silverbullet_journals: knowledge_context::silverbullet_journal_context(
+                &self.config.knowledge,
+                now,
+                self.config
+                    .runtime_limits
+                    .silverbullet_journal_context_max_chars_per_day,
+            ),
+            silverbullet_session_mirror_path: knowledge_context::silverbullet_session_mirror_path(
+                &self.config.knowledge,
+                &session,
+            ),
         });
         let system_prompt =
             prompting::load_system_prompt(&self.config.data_dir, &session.agent_profile_id);

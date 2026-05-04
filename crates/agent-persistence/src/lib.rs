@@ -7,8 +7,8 @@ pub mod store;
 
 pub use config::{
     A2APeerConfig, AppConfig, BrowserConfig, BrowserlessConfig, ConfigEnv, ConfigError,
-    DaemonConfig, McpConnectorSeedConfig, Mem0Config, MemoryCuratorConfig, MemoryRecallConfig,
-    RuntimeLimitsConfig, RuntimeTimingConfig, TelegramConfig, WorkspaceConfig,
+    DaemonConfig, KnowledgeConfig, McpConnectorSeedConfig, Mem0Config, MemoryCuratorConfig,
+    MemoryRecallConfig, RuntimeLimitsConfig, RuntimeTimingConfig, TelegramConfig, WorkspaceConfig,
     normalize_absolute_path, validate_workspace_root_path,
 };
 pub use records::{

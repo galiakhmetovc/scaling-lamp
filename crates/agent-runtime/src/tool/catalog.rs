@@ -792,7 +792,7 @@ impl ToolCatalog {
             ToolDefinition {
                 name: ToolName::KnowledgeSearch,
                 family: ToolFamily::Memory,
-                description: "Search project knowledge roots with bounded pagination and canonical source metadata",
+                description: "Search the canonical teamD knowledge index (repo root docs, docs/, registered project docs/notes, extra roots) with bounded pagination and source metadata. This is not Mem0 semantic memory, scoped KV, or the SilverBullet Space.",
                 policy: ToolPolicy {
                     read_only: true,
                     destructive: false,
@@ -802,7 +802,7 @@ impl ToolCatalog {
             ToolDefinition {
                 name: ToolName::KnowledgeRead,
                 family: ToolFamily::Memory,
-                description: "Read one project knowledge source in a bounded excerpt or full-text view; enum-like arguments such as mode must be quoted JSON strings",
+                description: "Read one source returned by knowledge_search from the canonical teamD knowledge index in bounded excerpt/full mode. Use SilverBullet MCP/filesystem for SilverBullet pages, memory_search for Mem0, and kv_get/kv_list for exact runtime KV.",
                 policy: ToolPolicy {
                     read_only: true,
                     destructive: false,

@@ -1336,14 +1336,15 @@ knowledge_search({
 
 Что делает:
 
-- ищет по canonical knowledge roots проекта;
+- ищет по canonical teamD knowledge index: root docs, `docs/`, registered project docs/notes и configured extra roots;
 - возвращает source metadata и bounded results.
 
 Что это не делает:
 
 - не ищет в Mem0 semantic memory: для этого есть `memory_search`;
 - не читает scoped exact state: для этого есть `kv_get`/`kv_list`;
-- не является SilverBullet-specific API. Если нужен именно SilverBullet Space, сначала используйте active skill `silverbullet-space` и available MCP/filesystem path для этого space.
+- не читает artifacts, transcripts или tool-call ledger: для этого есть session/debug/artifact surfaces;
+- не является SilverBullet-specific API. Если нужен именно SilverBullet Space, используйте active skill `silverbullet-space` и available MCP/filesystem path для этого space.
 
 ### `knowledge_read`
 
@@ -1361,12 +1362,13 @@ knowledge_read({
 
 Что делает:
 
-- читает один knowledge source в bounded excerpt/full режиме.
+- читает один source из canonical teamD knowledge index в bounded excerpt/full режиме.
 
 Важно:
 
 - enum-like аргументы должны быть quoted JSON strings;
 - то есть `"mode": "full"`, а не `"mode": full`.
+- `path` должен быть путём knowledge source, обычно полученным из `knowledge_search`; произвольные SilverBullet paths сюда не передаются.
 
 ### `session_search`
 
