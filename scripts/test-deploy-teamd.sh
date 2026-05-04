@@ -182,7 +182,7 @@ assert_contains "$containers_single_domain_dry_run_output" "UI URL: http://127.0
 assert_contains "$containers_single_domain_dry_run_output" "Caddy URL: https://teamd.qlbc.ru/searxng/"
 assert_contains "$containers_single_domain_dry_run_output" "Caddy URL: https://teamd.qlbc.ru/jaeger/"
 assert_contains "$containers_single_domain_dry_run_output" "Caddy URL: https://teamd.qlbc.ru/"
-assert_contains "$containers_single_domain_dry_run_output" "Routes with TEAMD_CADDY_DOMAIN single-domain: /, /searxng/, /jaeger/, and legacy /obsidian/ when enabled"
+assert_contains "$containers_single_domain_dry_run_output" "Routes with TEAMD_CADDY_DOMAIN single-domain: /, /searxng/, /jaeger/, /files/ when enabled, and legacy /obsidian/ when enabled"
 
 containers_dry_run_start_output=$(
   "$CONTAINERS_DEPLOY_SCRIPT" --dry-run --non-interactive --with-obsidian-mcp 2>&1
@@ -255,6 +255,10 @@ grep -q 'TEAMD_BROWSERLESS_CDP_URL' "$CONTAINERS_DEPLOY_SCRIPT" \
   || fail "expected browser CDP env upsert"
 grep -q 'notes.$CADDY_DOMAIN' "$CONTAINERS_DEPLOY_SCRIPT" \
   || fail "expected SilverBullet dedicated domain route"
+grep -q 'sync_filebrowser_admin_user()' "$CONTAINERS_DEPLOY_SCRIPT" \
+  || fail "expected File Browser admin user credential reconciliation"
+grep -q 'users update "$FILEBROWSER_ADMIN_USER" --password "$password"' "$CONTAINERS_DEPLOY_SCRIPT" \
+  || fail "expected File Browser DB password update from credentials env"
 grep -q 'chown_work_dir()' "$DEPLOY_SCRIPT" \
   || fail "expected resilient work-dir ownership helper"
 grep -q 'Retrying ownership update' "$DEPLOY_SCRIPT" \

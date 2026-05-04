@@ -2252,6 +2252,57 @@ normalize_existing_filebrowser_credentials() {
   run_root install -m 0600 -o root -g root "$tmp_env" "$FILEBROWSER_ENV_FILE"
 }
 
+filebrowser_plaintext_password_from_env() {
+  sed -n 's/^# password=//p' "$FILEBROWSER_ENV_FILE" | sed -n '1p'
+}
+
+filebrowser_container_running() {
+  if run_root docker ps --format '{{.Names}}' | grep -Fx 'teamd-filebrowser' >/dev/null 2>&1; then
+    return 0
+  fi
+  return 1
+}
+
+stop_running_filebrowser_for_db_update() {
+  filebrowser_container_running || return 0
+  run_root docker stop teamd-filebrowser >/dev/null
+}
+
+sync_filebrowser_admin_user() {
+  [ -f "$FILEBROWSER_ENV_FILE" ] || return 0
+  [ -f "$FILEBROWSER_DB_DIR/filebrowser.db" ] || return 0
+
+  password=$(filebrowser_plaintext_password_from_env)
+  if [ -z "$password" ]; then
+    printf 'File Browser database exists, but %s has no plaintext password comment; skipping admin password reconciliation.\n' "$FILEBROWSER_ENV_FILE" >&2
+    return 0
+  fi
+
+  if [ "$DRY_RUN" -eq 1 ]; then
+    print_cmd sh -c "sync File Browser admin user in $FILEBROWSER_DB_DIR/filebrowser.db from $FILEBROWSER_ENV_FILE"
+    return 0
+  fi
+
+  if [ "$SKIP_START" -eq 1 ] && filebrowser_container_running; then
+    printf 'Skipping File Browser admin password reconciliation because --no-start was set and teamd-filebrowser is running.\n' >&2
+    return 0
+  fi
+
+  stop_running_filebrowser_for_db_update
+  if ! run_root docker run --rm --entrypoint filebrowser \
+    -v "$FILEBROWSER_DB_DIR:/database:rw" \
+    "$FILEBROWSER_IMAGE" \
+    -d /database/filebrowser.db \
+    users update "$FILEBROWSER_ADMIN_USER" --password "$password" --perm.admin=true >/dev/null; then
+    run_root docker run --rm --entrypoint filebrowser \
+      -v "$FILEBROWSER_DB_DIR:/database:rw" \
+      "$FILEBROWSER_IMAGE" \
+      -d /database/filebrowser.db \
+      users add "$FILEBROWSER_ADMIN_USER" "$password" --perm.admin=true >/dev/null
+  fi
+  run_root chown -R "$FILEBROWSER_PUID:$FILEBROWSER_PGID" "$FILEBROWSER_DB_DIR"
+}
+
 write_filebrowser_settings() {
   if [ "$DRY_RUN" -eq 1 ]; then
     print_cmd sh -c "write File Browser settings.json with baseURL=$FILEBROWSER_BASE_URL"
@@ -2335,6 +2386,7 @@ write_filebrowser_files() {
     "$FILEBROWSER_DB_DIR" \
     "$FILEBROWSER_CONFIG_DIR"
   write_filebrowser_settings
+  sync_filebrowser_admin_user
   run_root chown "$FILEBROWSER_PUID:$FILEBROWSER_PGID" \
     "$FILEBROWSER_AGENT_HOMES_DIR" \
     "$FILEBROWSER_WORKSPACES_DIR" \
