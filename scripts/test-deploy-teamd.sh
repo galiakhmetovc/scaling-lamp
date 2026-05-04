@@ -111,6 +111,7 @@ containers_mem0_dry_run_output=$(
 assert_contains "$containers_mem0_dry_run_output" "upsert Mem0 semantic memory, memory curator, and memory recall defaults in /etc/teamd/teamd.env"
 assert_contains "$containers_mem0_dry_run_output" "write /opt/teamd/containers/mem0/docker-compose.yml for teamd-mem0"
 assert_contains "$containers_mem0_dry_run_output" "teamd-mem0-postgres"
+assert_contains "$containers_mem0_dry_run_output" "'chown' '-R' '999:999' '/var/lib/teamd/containers/mem0/postgres'"
 assert_contains "$containers_mem0_dry_run_output" "fastembed"
 assert_contains "$containers_mem0_dry_run_output" "glm-4.5-air"
 assert_contains "$containers_mem0_dry_run_output" "configure Mem0 server at http://127.0.0.1:18888/configure"
@@ -255,6 +256,8 @@ grep -q 'TEAMD_BROWSERLESS_CDP_URL' "$CONTAINERS_DEPLOY_SCRIPT" \
   || fail "expected browser CDP env upsert"
 grep -q 'notes.$CADDY_DOMAIN' "$CONTAINERS_DEPLOY_SCRIPT" \
   || fail "expected SilverBullet dedicated domain route"
+grep -q 'MEM0_POSTGRES_UID=${TEAMD_MEM0_POSTGRES_UID:-999}' "$CONTAINERS_DEPLOY_SCRIPT" \
+  || fail "expected Mem0 Postgres volume UID default"
 grep -q 'sync_filebrowser_admin_user()' "$CONTAINERS_DEPLOY_SCRIPT" \
   || fail "expected File Browser admin user credential reconciliation"
 grep -q 'users update "$FILEBROWSER_ADMIN_USER" --password "$password"' "$CONTAINERS_DEPLOY_SCRIPT" \

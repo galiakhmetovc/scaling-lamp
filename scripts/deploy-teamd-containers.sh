@@ -179,6 +179,8 @@ MEM0_REPOSITORY=${TEAMD_MEM0_REPOSITORY:-https://github.com/mem0ai/mem0.git}
 MEM0_REF=${TEAMD_MEM0_REF:-main}
 MEM0_IMAGE=${TEAMD_MEM0_IMAGE:-teamd-mem0-api:latest}
 MEM0_POSTGRES_IMAGE=${TEAMD_MEM0_POSTGRES_IMAGE:-ankane/pgvector:v0.5.1}
+MEM0_POSTGRES_UID=${TEAMD_MEM0_POSTGRES_UID:-999}
+MEM0_POSTGRES_GID=${TEAMD_MEM0_POSTGRES_GID:-999}
 MEM0_POSTGRES_DB=${TEAMD_MEM0_POSTGRES_DB:-postgres}
 MEM0_POSTGRES_USER=${TEAMD_MEM0_POSTGRES_USER:-postgres}
 MEM0_POSTGRES_PASSWORD=${TEAMD_MEM0_POSTGRES_PASSWORD:-}
@@ -1020,6 +1022,7 @@ checkout_mem0_source() {
 write_mem0_files() {
   if [ "$DRY_RUN" -eq 1 ]; then
     print_cmd mkdir -p "$MEM0_DIR" "$MEM0_HISTORY_DIR" "$MEM0_POSTGRES_DATA_DIR" "$MEM0_CACHE_DIR"
+    print_cmd chown -R "$MEM0_POSTGRES_UID:$MEM0_POSTGRES_GID" "$MEM0_POSTGRES_DATA_DIR"
     print_cmd git clone "$MEM0_REPOSITORY" "$MEM0_SRC_DIR"
     print_cmd sh -c "patch Mem0 server for bundled fastembed, psycopg[binary], pgvector ndarray adaptation, and search filters"
     print_cmd sh -c "seed Mem0 ADMIN_API_KEY, JWT_SECRET and POSTGRES_PASSWORD in $MEM0_ENV_FILE"
@@ -1032,6 +1035,7 @@ write_mem0_files() {
   checkout_mem0_source
 
   run_root mkdir -p "$MEM0_DIR" "$MEM0_HISTORY_DIR" "$MEM0_POSTGRES_DATA_DIR" "$MEM0_CACHE_DIR"
+  run_root chown -R "$MEM0_POSTGRES_UID:$MEM0_POSTGRES_GID" "$MEM0_POSTGRES_DATA_DIR"
 
   tmp_env=$(mktemp)
   tmp_compose=$(mktemp)

@@ -338,8 +338,11 @@ Daily notes should normally be `05-Journal/YYYY-MM-DD.md`. Do not create a separ
 2. Read an existing note before editing it.
 3. Preserve frontmatter, links, headings, tasks, and existing folder structure.
 4. Write concise Markdown with stable headings and meaningful filenames.
-5. After a write/update tool succeeds, summarize exactly what changed and where.
-6. If the tool fails, report the failure and retry with corrected arguments; do not claim the note was saved.
+5. After a durable write/update tool succeeds, create or update a short Mem0 pointer memory unless the note has `memory: false`.
+6. The pointer memory should include note path, title/topic, short summary, tags, and why the note matters; do not copy the whole note into Mem0.
+7. Use `memory_search` before `memory_add` to avoid duplicate pointers when updating an existing note.
+8. After a write/update tool succeeds, summarize exactly what changed and where, and mention whether a Mem0 pointer was saved or skipped.
+9. If the tool fails, report the failure and retry with corrected arguments; do not claim the note was saved.
 
 ## Common operations
 
@@ -1524,6 +1527,7 @@ mod tests {
         assert!(silverbullet_skill.contains("MCP connector"));
         assert!(silverbullet_skill.contains("## PARA structure"));
         assert!(silverbullet_skill.contains("04-Archive"));
+        assert!(silverbullet_skill.contains("short Mem0 pointer memory"));
 
         let current_stack_skills = [
             ("mem0-memory", "memory_search"),

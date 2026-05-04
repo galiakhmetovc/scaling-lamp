@@ -347,6 +347,7 @@ fn build_from_config_refreshes_legacy_default_prompts_but_preserves_custom_edits
     assert!(silverbullet_skill.contains("/var/lib/teamd/knowledge/silverbullet/teamd"));
     assert!(silverbullet_skill.contains("## PARA structure"));
     assert!(silverbullet_skill.contains("04-Archive"));
+    assert!(silverbullet_skill.contains("short Mem0 pointer memory"));
     let current_stack_skills = [
         ("mem0-memory", "memory_search"),
         ("scoped-kv", "kv_get"),
