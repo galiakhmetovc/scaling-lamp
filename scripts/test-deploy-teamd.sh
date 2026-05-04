@@ -270,6 +270,8 @@ grep -Fq 'SB_API_BASE_URL=$silverbullet_api_base_url' "$CONTAINERS_DEPLOY_SCRIPT
   || fail "expected SilverBullet MCP API base to include URL prefix"
 grep -Fq 'handle $silverbullet_prefix/*' "$CONTAINERS_DEPLOY_SCRIPT" \
   || fail "expected SilverBullet single-domain prefixed Caddy route"
+grep -Fq 'redir /r/* $silverbullet_prefix{uri} 308' "$CONTAINERS_DEPLOY_SCRIPT" \
+  || fail "expected SilverBullet legacy /r/* compatibility redirect"
 grep -q 'MEM0_POSTGRES_UID=${TEAMD_MEM0_POSTGRES_UID:-999}' "$CONTAINERS_DEPLOY_SCRIPT" \
   || fail "expected Mem0 Postgres volume UID default"
 grep -q 'sync_filebrowser_admin_user()' "$CONTAINERS_DEPLOY_SCRIPT" \

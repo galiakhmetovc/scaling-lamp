@@ -2624,6 +2624,7 @@ files.$CADDY_DOMAIN {
 	  silverbullet_domain_block=
 	  silverbullet_https_block=
 	  silverbullet_http_redirect=
+	  silverbullet_compat_redirects=
 	  silverbullet_single_handle=
 	  caddy_global_options=
 	  if [ "$ENABLE_SILVERBULLET" -eq 1 ]; then
@@ -2644,6 +2645,23 @@ https://$CADDY_HOST:$SILVERBULLET_HTTPS_PORT {
 	    silverbullet_prefix=$(silverbullet_effective_url_prefix)
 	    if [ -n "$silverbullet_prefix" ] && [ -n "$CADDY_DOMAIN" ] && [ "$CADDY_SINGLE_DOMAIN" -eq 1 ]; then
 	      silverbullet_http_redirect="  redir $silverbullet_prefix $silverbullet_prefix/ 308"
+	      silverbullet_compat_redirects="  redir /r $silverbullet_prefix/r 308
+  redir /r/* $silverbullet_prefix{uri} 308
+  redir /p $silverbullet_prefix/p 308
+  redir /p/* $silverbullet_prefix{uri} 308
+  redir /a $silverbullet_prefix/a 308
+  redir /a/* $silverbullet_prefix{uri} 308
+  redir /journals $silverbullet_prefix/journals 308
+  redir /journals/* $silverbullet_prefix{uri} 308
+  redir /template $silverbullet_prefix/template 308
+  redir /template/* $silverbullet_prefix{uri} 308
+  redir /Projects $silverbullet_prefix/Projects 308
+  redir /Areas $silverbullet_prefix/Areas 308
+  redir /Resources $silverbullet_prefix/Resources 308
+  redir /Archive $silverbullet_prefix/Archive 308
+  redir /00-Inbox $silverbullet_prefix/00-Inbox 308
+  redir /05-Journal $silverbullet_prefix/05-Journal 308
+  redir /06-Zettelkasten $silverbullet_prefix/06-Zettelkasten 308"
 	      silverbullet_single_handle="  handle $silverbullet_prefix/* {
     reverse_proxy teamd-silverbullet:$SILVERBULLET_CONTAINER_PORT
   }"
@@ -2691,6 +2709,7 @@ $CADDY_DOMAIN {
 $jaeger_http_redirect
 $filebrowser_http_redirect
 $silverbullet_http_redirect
+$silverbullet_compat_redirects
 
   handle /searxng/* {
     reverse_proxy teamd-searxng:8080 {

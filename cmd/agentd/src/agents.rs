@@ -316,8 +316,8 @@ When this skill is active and the user asks to work with notes, knowledge, docs,
 
 The operator-facing source guides are inside the space:
 
-- `[[r/silverbullet-instrukciya]]` / `https://teamd.qlbc.ru/r/silverbullet-instrukciya` — practical SilverBullet workflow.
-- `[[r/system-guide]]` / `https://teamd.qlbc.ru/r/system-guide` — PARA + Zettelkasten rules.
+- `[[r/silverbullet-instrukciya]]` / `https://teamd.qlbc.ru/sb/r/silverbullet-instrukciya` — practical SilverBullet workflow.
+- `[[r/system-guide]]` / `https://teamd.qlbc.ru/sb/r/system-guide` — PARA + Zettelkasten rules.
 
 If the structure, naming, or query behavior is unclear, read these notes before editing the space.
 
