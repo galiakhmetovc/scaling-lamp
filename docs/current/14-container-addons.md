@@ -323,11 +323,13 @@ TEAMD_CADDY_DOMAIN='teamd.qlbc.ru' \
 
 Routes:
 
-- `https://teamd.qlbc.ru/` -> SilverBullet;
+- `https://teamd.qlbc.ru/sb/` -> SilverBullet;
 - `https://teamd.qlbc.ru/searxng/` -> SearXNG;
 - `https://teamd.qlbc.ru/jaeger/` -> Jaeger;
 - `https://teamd.qlbc.ru/files/` -> File Browser;
 - `https://teamd.qlbc.ru/obsidian/` -> legacy Obsidian, если включён.
+
+В single-domain mode deploy script автоматически выставляет `SB_URL_PREFIX=/sb` и настраивает SilverBullet MCP на `http://silverbullet:3000/sb`, чтобы браузерный UI и агентский MCP работали через один и тот же prefixed SilverBullet server. Переопределить prefix можно через `TEAMD_SILVERBULLET_URL_PREFIX`; значение должно начинаться с `/` и не должно заканчиваться `/`.
 
 ## SearXNG
 
@@ -666,6 +668,7 @@ SilverBullet:
 
 ```bash
 curl -I http://127.0.0.1:8091/
+curl -I https://teamd.qlbc.ru/sb/
 ls -la /var/lib/teamd/knowledge/silverbullet/teamd
 ```
 

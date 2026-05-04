@@ -141,6 +141,14 @@ assert_contains "$containers_silverbullet_dry_run_output" "MCP stdio wrapper: /o
 assert_contains "$containers_silverbullet_dry_run_output" "Caddy URL: https://127.0.0.1:8444/"
 assert_contains "$containers_silverbullet_dry_run_output" "SB_USER credentials file: /opt/teamd/containers/silverbullet/silverbullet.env"
 
+containers_single_domain_silverbullet_dry_run_output=$(
+  TEAMD_CADDY_DOMAIN=teamd.qlbc.ru "$CONTAINERS_DEPLOY_SCRIPT" --dry-run --non-interactive --no-start --with-silverbullet-mcp --with-filebrowser --single-domain 2>&1
+)
+
+assert_contains "$containers_single_domain_silverbullet_dry_run_output" "set SilverBullet SB_URL_PREFIX=/sb"
+assert_contains "$containers_single_domain_silverbullet_dry_run_output" "URL prefix: /sb"
+assert_contains "$containers_single_domain_silverbullet_dry_run_output" "Caddy URL: https://teamd.qlbc.ru/sb/"
+
 containers_lightpanda_dry_run_output=$(
   "$CONTAINERS_DEPLOY_SCRIPT" --dry-run --non-interactive --no-start --no-searxng --no-caddy --with-lightpanda-mcp 2>&1
 )
@@ -183,7 +191,7 @@ assert_contains "$containers_single_domain_dry_run_output" "UI URL: http://127.0
 assert_contains "$containers_single_domain_dry_run_output" "Caddy URL: https://teamd.qlbc.ru/searxng/"
 assert_contains "$containers_single_domain_dry_run_output" "Caddy URL: https://teamd.qlbc.ru/jaeger/"
 assert_contains "$containers_single_domain_dry_run_output" "Caddy URL: https://teamd.qlbc.ru/"
-assert_contains "$containers_single_domain_dry_run_output" "Routes with TEAMD_CADDY_DOMAIN single-domain: /, /searxng/, /jaeger/, /files/ when enabled, and legacy /obsidian/ when enabled"
+assert_contains "$containers_single_domain_dry_run_output" "Routes with TEAMD_CADDY_DOMAIN single-domain: /sb/ for SilverBullet, /searxng/, /jaeger/, /files/ when enabled, and legacy /obsidian/ when enabled"
 
 containers_dry_run_start_output=$(
   "$CONTAINERS_DEPLOY_SCRIPT" --dry-run --non-interactive --with-obsidian-mcp 2>&1
@@ -256,6 +264,12 @@ grep -q 'TEAMD_BROWSERLESS_CDP_URL' "$CONTAINERS_DEPLOY_SCRIPT" \
   || fail "expected browser CDP env upsert"
 grep -q 'notes.$CADDY_DOMAIN' "$CONTAINERS_DEPLOY_SCRIPT" \
   || fail "expected SilverBullet dedicated domain route"
+grep -Fq 'SB_URL_PREFIX=$silverbullet_url_prefix' "$CONTAINERS_DEPLOY_SCRIPT" \
+  || fail "expected SilverBullet URL prefix env"
+grep -Fq 'SB_API_BASE_URL=$silverbullet_api_base_url' "$CONTAINERS_DEPLOY_SCRIPT" \
+  || fail "expected SilverBullet MCP API base to include URL prefix"
+grep -Fq 'handle $silverbullet_prefix/*' "$CONTAINERS_DEPLOY_SCRIPT" \
+  || fail "expected SilverBullet single-domain prefixed Caddy route"
 grep -q 'MEM0_POSTGRES_UID=${TEAMD_MEM0_POSTGRES_UID:-999}' "$CONTAINERS_DEPLOY_SCRIPT" \
   || fail "expected Mem0 Postgres volume UID default"
 grep -q 'sync_filebrowser_admin_user()' "$CONTAINERS_DEPLOY_SCRIPT" \

@@ -64,6 +64,7 @@ SILVERBULLET_IMAGE=${TEAMD_SILVERBULLET_IMAGE:-ghcr.io/silverbulletmd/silverbull
 SILVERBULLET_PORT=${TEAMD_SILVERBULLET_PORT:-8091}
 SILVERBULLET_CONTAINER_PORT=${TEAMD_SILVERBULLET_CONTAINER_PORT:-3000}
 SILVERBULLET_HTTPS_PORT=${TEAMD_SILVERBULLET_HTTPS_PORT:-}
+SILVERBULLET_URL_PREFIX=${TEAMD_SILVERBULLET_URL_PREFIX:-}
 SILVERBULLET_DIR=$CONTAINERS_ROOT/silverbullet
 SILVERBULLET_COMPOSE=$SILVERBULLET_DIR/docker-compose.yml
 SILVERBULLET_ENV_FILE=${TEAMD_SILVERBULLET_ENV_FILE:-$SILVERBULLET_DIR/silverbullet.env}
@@ -276,7 +277,7 @@ Options:
   --with-filebrowser     Deploy File Browser for operator editing of agent homes,
                          skills, approved workspaces, artifacts, and knowledge files.
   --single-domain       With TEAMD_CADDY_DOMAIN, publish all add-ons on that
-                         exact host: /, /searxng/, /jaeger/, /files/.
+                         exact host: /sb/, /searxng/, /jaeger/, /files/.
   --no-restart-teamd    Do not restart teamd systemd services after writing MCP config.
   --searxng-port PORT   Local SearXNG port, default: $SEARXNG_PORT.
   --obsidian-port PORT  Local Obsidian port, default: $OBSIDIAN_PORT.
@@ -325,6 +326,8 @@ Environment overrides:
                                  SilverBullet web port inside container,
                                  default: $SILVERBULLET_CONTAINER_PORT.
   TEAMD_SILVERBULLET_HTTPS_PORT  HTTPS Caddy port without a domain, default: "$SILVERBULLET_HTTPS_PORT".
+  TEAMD_SILVERBULLET_URL_PREFIX  Optional URL prefix without trailing slash.
+                                 In --single-domain mode default is /sb.
   TEAMD_SILVERBULLET_ENV_FILE    SB_USER credentials file, default: $SILVERBULLET_ENV_FILE.
   TEAMD_SILVERBULLET_USER        SilverBullet auth as username:password.
                                  If unset, deploy script generates and stores one.
@@ -637,6 +640,27 @@ ensure_silverbullet_https_port() {
   [ -n "$SILVERBULLET_HTTPS_PORT" ] && return 0
 
   SILVERBULLET_HTTPS_PORT=8444
+}
+
+silverbullet_effective_url_prefix() {
+  if [ -n "$SILVERBULLET_URL_PREFIX" ]; then
+    printf '%s' "$SILVERBULLET_URL_PREFIX"
+  elif [ "$ENABLE_SILVERBULLET" -eq 1 ] && [ -n "$CADDY_DOMAIN" ] && [ "$CADDY_SINGLE_DOMAIN" -eq 1 ]; then
+    printf '/sb'
+  fi
+}
+
+validate_silverbullet_url_prefix() {
+  local prefix
+  prefix=$(silverbullet_effective_url_prefix)
+  [ -n "$prefix" ] || return 0
+  case "$prefix" in
+    /*) ;;
+    *) fail "TEAMD_SILVERBULLET_URL_PREFIX must start with /: $prefix" ;;
+  esac
+  case "$prefix" in
+    */) fail "TEAMD_SILVERBULLET_URL_PREFIX must not end with /: $prefix" ;;
+  esac
 }
 
 detect_primary_ipv4() {
@@ -2123,11 +2147,23 @@ EOF
 
 write_silverbullet_files() {
   resolve_service_ids
+  local silverbullet_url_prefix
+  local silverbullet_api_base_url
+  local silverbullet_url_prefix_env=
+  silverbullet_url_prefix=$(silverbullet_effective_url_prefix)
+  silverbullet_api_base_url="http://silverbullet:$SILVERBULLET_CONTAINER_PORT$silverbullet_url_prefix"
+  if [ -n "$silverbullet_url_prefix" ]; then
+    silverbullet_url_prefix_env="
+      - SB_URL_PREFIX=$silverbullet_url_prefix"
+  fi
 
   if [ "$DRY_RUN" -eq 1 ]; then
     print_cmd mkdir -p "$SILVERBULLET_DIR" "$SILVERBULLET_SPACE_DIR"
     print_cmd chown -R "$SERVICE_UID:$SERVICE_GID" "$SILVERBULLET_SPACE_DIR"
     print_cmd sh -c "write $SILVERBULLET_COMPOSE for teamd-silverbullet"
+    if [ -n "$silverbullet_url_prefix" ]; then
+      print_cmd sh -c "set SilverBullet SB_URL_PREFIX=$silverbullet_url_prefix"
+    fi
     if [ "$ENABLE_SILVERBULLET_MCP" -eq 1 ]; then
       print_cmd sh -c "include teamd-silverbullet-mcp service built from $SILVERBULLET_MCP_REPOSITORY#$SILVERBULLET_MCP_REF"
       print_cmd sh -c "write $SILVERBULLET_MCP_STDIO_WRAPPER for agentd stdio MCP bridge"
@@ -2162,7 +2198,7 @@ write_silverbullet_files() {
     networks:
       - $EDGE_NETWORK
     environment:
-      - SB_API_BASE_URL=http://silverbullet:$SILVERBULLET_CONTAINER_PORT
+      - SB_API_BASE_URL=$silverbullet_api_base_url
       - PORT=$SILVERBULLET_MCP_CONTAINER_PORT
       - DEBUG_REQUESTS=false
     depends_on:
@@ -2185,6 +2221,7 @@ services:
       - "$SILVERBULLET_SPACE_DIR:/space:rw"
     environment:
       - SB_FOLDER=/space
+$silverbullet_url_prefix_env
 $mcp_service_block
 
 networks:
@@ -2586,6 +2623,8 @@ files.$CADDY_DOMAIN {
 
 	  silverbullet_domain_block=
 	  silverbullet_https_block=
+	  silverbullet_http_redirect=
+	  silverbullet_single_handle=
 	  caddy_global_options=
 	  if [ "$ENABLE_SILVERBULLET" -eq 1 ]; then
     if [ -n "$CADDY_DOMAIN" ] && [ "$CADDY_SINGLE_DOMAIN" -eq 0 ]; then
@@ -2601,6 +2640,13 @@ https://$CADDY_HOST:$SILVERBULLET_HTTPS_PORT {
   reverse_proxy teamd-silverbullet:$SILVERBULLET_CONTAINER_PORT
 }
 "
+	    fi
+	    silverbullet_prefix=$(silverbullet_effective_url_prefix)
+	    if [ -n "$silverbullet_prefix" ] && [ -n "$CADDY_DOMAIN" ] && [ "$CADDY_SINGLE_DOMAIN" -eq 1 ]; then
+	      silverbullet_http_redirect="  redir $silverbullet_prefix $silverbullet_prefix/ 308"
+	      silverbullet_single_handle="  handle $silverbullet_prefix/* {
+    reverse_proxy teamd-silverbullet:$SILVERBULLET_CONTAINER_PORT
+  }"
 	    fi
 	  fi
 
@@ -2629,10 +2675,12 @@ obsidian.$CADDY_DOMAIN {
   }"
 	  fi
 	  single_domain_root_handle='  respond / "teamD container edge: /searxng/, /jaeger/ and optional add-ons"'
-	  if [ "$ENABLE_SILVERBULLET" -eq 1 ]; then
+	  if [ "$ENABLE_SILVERBULLET" -eq 1 ] && [ -z "$silverbullet_single_handle" ]; then
 	    single_domain_root_handle="  handle {
     reverse_proxy teamd-silverbullet:$SILVERBULLET_CONTAINER_PORT
   }"
+	  elif [ "$ENABLE_SILVERBULLET" -eq 1 ]; then
+	    single_domain_root_handle='  respond / "teamD container edge: /sb/, /files/, /searxng/, /jaeger/"'
 	  fi
 
 	  if [ -n "$CADDY_DOMAIN" ]; then
@@ -2642,6 +2690,7 @@ $CADDY_DOMAIN {
   redir /searxng /searxng/ 308
 $jaeger_http_redirect
 $filebrowser_http_redirect
+$silverbullet_http_redirect
 
   handle /searxng/* {
     reverse_proxy teamd-searxng:8080 {
@@ -2650,6 +2699,7 @@ $filebrowser_http_redirect
   }
 $jaeger_handle
 $filebrowser_handle
+$silverbullet_single_handle
 $obsidian_single_handle
 
 $single_domain_root_handle
@@ -2930,6 +2980,7 @@ validate_obsidian_subfolder
 validate_caddy_domain_mode
 ensure_obsidian_https_port
 ensure_silverbullet_https_port
+validate_silverbullet_url_prefix
 ensure_caddy_host
 valid_port "$MEM0_PORT" || fail "invalid TEAMD_MEM0_PORT: $MEM0_PORT"
 valid_port "$FILEBROWSER_PORT" || fail "invalid TEAMD_FILEBROWSER_PORT: $FILEBROWSER_PORT"
@@ -3262,10 +3313,12 @@ EOF
 fi
 
 if [ "$ENABLE_SILVERBULLET" -eq 1 ]; then
+  silverbullet_summary_prefix=$(silverbullet_effective_url_prefix)
   cat <<EOF
   SilverBullet:
     Container: teamd-silverbullet
     Local URL: http://127.0.0.1:$SILVERBULLET_PORT
+    URL prefix: ${silverbullet_summary_prefix:-<none>}
     Space: $SILVERBULLET_SPACE_DIR
     Legacy migration source: $LEGACY_LOGSEQ_GRAPH_DIR
     Compose: $SILVERBULLET_COMPOSE
@@ -3281,8 +3334,12 @@ EOF
 EOF
   fi
 	  if [ -n "$CADDY_DOMAIN" ] && [ "$CADDY_SINGLE_DOMAIN" -eq 1 ]; then
+	    silverbullet_summary_url="https://$CADDY_DOMAIN/"
+	    if [ -n "$silverbullet_summary_prefix" ]; then
+	      silverbullet_summary_url="https://$CADDY_DOMAIN$silverbullet_summary_prefix/"
+	    fi
 	    cat <<EOF
-    Caddy URL: https://$CADDY_DOMAIN/
+    Caddy URL: $silverbullet_summary_url
 EOF
 	  elif [ -n "$CADDY_DOMAIN" ]; then
 	    cat <<EOF
@@ -3334,7 +3391,7 @@ EOF
 	  if [ -n "$CADDY_DOMAIN" ] && [ "$CADDY_SINGLE_DOMAIN" -eq 1 ]; then
 	    cat <<EOF
     Single-domain mode: yes
-    Routes with TEAMD_CADDY_DOMAIN single-domain: /, /searxng/, /jaeger/, /files/ when enabled, and legacy /obsidian/ when enabled
+    Routes with TEAMD_CADDY_DOMAIN single-domain: /sb/ for SilverBullet, /searxng/, /jaeger/, /files/ when enabled, and legacy /obsidian/ when enabled
 EOF
 	  elif [ -n "$CADDY_DOMAIN" ]; then
 	    cat <<EOF
