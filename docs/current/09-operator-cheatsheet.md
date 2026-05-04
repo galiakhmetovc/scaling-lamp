@@ -240,6 +240,21 @@ Pairing:
 3. для systemd-установки выполнить `teamdctl telegram pair <key>`;
 4. проверить `agentd telegram pairings` или `teamdctl telegram pairings`.
 
+Если Telegram user уже активирован, повторный `/start` не создаёт новый pairing key. Бот отвечает текущей выбранной session и коротким списком полезных команд.
+
+Основные Telegram-команды после pairing:
+
+- `/status` — состояние выбранной session, активный run, очередь входящих сообщений и lifecycle.
+- `/sessions` (`/session`) — 5 последних sessions с датой обновления, количеством сообщений и готовой командой `/use <session_id>`.
+- `/use <session_id>` — выбрать session для этого чата.
+- `/plan` — показать текущий structured plan выбранной session.
+- `/jobs` — показать фоновые jobs выбранной session.
+- `/queue` — показать или настроить режим очереди входящих сообщений во время активного run.
+- `/files` — показать session artifacts, полученные из Telegram documents или созданные tools.
+- `/file <artifact_id>` — отправить artifact обратно в Telegram как document.
+
+Документы в Telegram принимаются как session artifacts. После загрузки бот сначала присылает ack с `artifact_id`, затем запускает обычный turn с ссылкой на файл. Если файл больше `telegram.max_download_bytes`, бот отвечает понятной ошибкой и не запускает turn.
+
 ## Telegram под systemd
 
 Полная инструкция: [telegram/01-install-and-configure.md#9-настроить-systemd-вручную](telegram/01-install-and-configure.md#9-настроить-systemd-вручную).
@@ -317,6 +332,12 @@ agentd version
 - `build_id`
 - `binary`
 - `latest_release`
+
+## Release lines
+
+Текущий `master`/`main` используется как production hotfix line: здесь допускаются только безопасные полировки, bugfixes и документация для текущего production runtime.
+
+Новая крупная версия, refactoring эпики и новые product surfaces должны идти в отдельную ветку и на отдельный тестовый сервер. Не смешивайте их с production hotfix line, чтобы оператор мог продолжать пользоваться текущим Telegram runtime.
 
 ## Посмотреть диагностический лог
 

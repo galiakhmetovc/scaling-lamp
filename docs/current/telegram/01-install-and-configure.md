@@ -555,6 +555,7 @@ teamdctl telegram pairings
 После активации пользователь может писать боту обычные сообщения, отправлять `document` и `photo`.
 
 Файлы сохраняются в runtime как `Artifact` текущей `Session`. Агент получает короткое сообщение с `artifact_id`, именем файла, размером и caption, а бинарный payload остаётся в artifact storage.
+После успешного приёма Telegram worker сначала отправляет оператору ack с `artifact_id`, чтобы файл можно было найти через `/files`, даже если последующий model turn упадёт. Если advertised/downloaded размер превышает `telegram.max_download_bytes`, worker отвечает ошибкой приёма файла и не запускает model turn.
 
 Команды для файлов:
 
@@ -636,16 +637,17 @@ teamdctl telegram pairings
 
 | Команда | Назначение |
 | --- | --- |
-| `/start` | Получить pairing key. |
+| `/start` | Получить pairing key. Если пользователь уже activated, показать текущую session и подсказки без создания нового key. |
 | `/help` | Показать помощь. |
 | `/new [title]` | Создать и выбрать session. |
 | `/newagent <agent_id> [title]` | Создать и выбрать session указанного agent profile; также делает его default agent для этого Telegram chat. |
-| `/sessions` | Показать sessions. |
+| `/sessions` (`/session`) | Показать 5 последних sessions с датой обновления и готовой командой `/use`. |
 | `/use <session_id>` | Выбрать session. |
 | `/agents` | Показать доступные agent profiles и текущий default agent для этого Telegram chat. |
 | `/agentuse <agent_id>` | Сделать agent profile default для новых sessions в этом Telegram chat. |
 | `/status` | Показать текущую session, её agent, chat default agent, настройки, job counters и активный run. |
 | `/jobs` | Показать background jobs текущей session. |
+| `/plan` | Показать structured plan текущей session. |
 | `/queue [reject\|queue\|coalesce 5s\|restart\|flush\|clear]` | Показать или изменить обработку входящих Telegram-сообщений во время активного turn. |
 | `/stop` | Остановить активный turn текущей session. |
 | `/pause` | Alias для `/stop`. |

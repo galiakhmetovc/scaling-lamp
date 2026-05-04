@@ -299,6 +299,21 @@ Built-in default agent получает skills текущего production stack
 
 Если нужно поменять shipped skill без пересборки `agentd`, правьте runtime template. Если нужно поменять только поведение уже существующего `default` agent profile, правьте `agents/default/skills/...` напрямую. Bootstrap создаёт отсутствующие template-файлы из bundled repo `agent-templates/`, но не должен молча затирать operator-modified agent files.
 
+Рекомендуемый workflow правки skill через File Browser:
+
+1. Открыть `/srv/state/agent-templates/default/skills/<skill-name>/SKILL.md`, если нужно поменять template для будущих/synced profiles.
+2. Открыть `/srv/state/agents/<agent_id>/skills/<skill-name>/SKILL.md`, если нужно поменять только конкретный agent profile.
+3. Не править generated legacy skills `logseq-graph`, `obsidian-vault`, `lightpanda-browser`, если они не используются явно.
+4. После правки проверить catalog и activation:
+
+```bash
+teamdctl session skills <session_id>
+teamdctl session enable-skill <session_id> <skill-name>
+teamdctl session disable-skill <session_id> <skill-name>
+```
+
+Правка `SKILL.md`, `SYSTEM.md`, `AGENTS.md` не требует пересборки binary. Нужен только новый turn/session; если менялся runtime template и нужно синхронизировать agent home, используйте agent/profile sync команду или создайте новый profile из template.
+
 Включить вручную:
 
 ```bash

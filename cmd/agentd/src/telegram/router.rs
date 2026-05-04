@@ -30,9 +30,10 @@ use super::queue::{
 };
 use super::render::{
     TELEGRAM_CAPTION_SOFT_CAP, TELEGRAM_MESSAGE_TEXT_SOFT_CAP, chunk_message_text,
-    render_agent_list, render_agent_selected, render_help_message, render_model_response_chunks,
-    render_pairing_message, render_pairing_required_message, render_session_created,
-    render_session_list, render_session_selected, truncate_caption,
+    render_agent_list, render_agent_selected, render_already_connected_message,
+    render_help_message, render_model_response_chunks, render_pairing_message,
+    render_pairing_required_message, render_session_created, render_session_list,
+    render_session_selected, truncate_caption,
 };
 use crate::bootstrap::{App, BootstrapError, SessionPreferencesPatch, SessionSummary};
 use crate::diagnostics::DiagnosticEventBuilder;
@@ -332,9 +333,26 @@ where
             return Ok(());
         };
 
-        let artifact = self
+        let artifact = match self
             .download_and_store_telegram_file(message, &session, &file, now)
-            .await?;
+            .await
+        {
+            Ok(artifact) => artifact,
+            Err(error @ BootstrapError::Usage { .. }) => {
+                self.send_text_chunks(chat_id, &format!("File intake failed: {error}"))
+                    .await?;
+                return Ok(());
+            }
+            Err(error) => return Err(error),
+        };
+        self.send_text_chunks(
+            chat_id,
+            &format!(
+                "File attached to session.\nname={}\nbytes={}\nartifact_id={}\nUse /files to list files or mention artifact_id={} to the agent.",
+                file.file_name, file.size, artifact.id, artifact.id
+            ),
+        )
+        .await?;
         let caption = message
             .caption()
             .map(str::trim)
@@ -527,6 +545,7 @@ where
             }
             ParsedTelegramCommand::Status
             | ParsedTelegramCommand::Jobs
+            | ParsedTelegramCommand::Plan
             | ParsedTelegramCommand::Queue { .. }
             | ParsedTelegramCommand::Stop
             | ParsedTelegramCommand::Cancel
@@ -561,9 +580,18 @@ where
         }
         match command {
             ParsedTelegramCommand::Start => {
-                let token = self.create_or_refresh_pairing(from, chat_id)?;
-                self.send_text_chunks(chat_id, &render_pairing_message(&token))
+                if self.load_activated_pairing(telegram_user_id)?.is_some() {
+                    let selected = self.selected_session_id_for_chat(chat_id)?;
+                    self.send_text_chunks(
+                        chat_id,
+                        &render_already_connected_message(selected.as_deref()),
+                    )
                     .await
+                } else {
+                    let token = self.create_or_refresh_pairing(from, chat_id)?;
+                    self.send_text_chunks(chat_id, &render_pairing_message(&token))
+                        .await
+                }
             }
             ParsedTelegramCommand::Help => {
                 if self.load_activated_pairing(telegram_user_id)?.is_none() {
@@ -739,6 +767,7 @@ where
             }
             ParsedTelegramCommand::Status
             | ParsedTelegramCommand::Jobs
+            | ParsedTelegramCommand::Plan
             | ParsedTelegramCommand::Queue { .. }
             | ParsedTelegramCommand::Stop
             | ParsedTelegramCommand::Cancel
@@ -945,6 +974,10 @@ where
             ParsedTelegramCommand::Jobs => {
                 let jobs = self.render_session_background_jobs(session_id).await?;
                 self.send_text_chunks(chat_id, &jobs).await
+            }
+            ParsedTelegramCommand::Plan => {
+                let plan = self.render_plan(session_id).await?;
+                self.send_text_chunks(chat_id, &plan).await
             }
             ParsedTelegramCommand::Queue { action } => {
                 let response = self
@@ -2231,6 +2264,13 @@ where
             .map_err(map_join_error)?
     }
 
+    async fn render_plan(&self, session_id: String) -> Result<String, BootstrapError> {
+        let backend = self.backend.clone();
+        tokio::task::spawn_blocking(move || backend.render_plan(&session_id))
+            .await
+            .map_err(map_join_error)?
+    }
+
     async fn render_session_skills(&self, session_id: String) -> Result<String, BootstrapError> {
         let backend = self.backend.clone();
         tokio::task::spawn_blocking(move || backend.render_session_skills(&session_id))
@@ -2819,6 +2859,8 @@ fn render_session_operator_status(
         format!("- auto_approve: {}", summary.auto_approve),
         format!("- messages: {}", summary.message_count),
         format!("- context_tokens: {}", summary.context_tokens),
+        format!("- updated_at: {}", summary.updated_at),
+        "- lifecycle: active until explicit archive/delete; background workers process queued turns, schedules, wakeups, and delivery; unfinished plans are not auto-run without queued or scheduled work".to_string(),
         format!(
             "- background_jobs: {} total, {} running, {} queued",
             summary.background_job_count,

@@ -12,7 +12,7 @@ use agentd::http::client::{DaemonClient, DaemonConnectOptions};
 use agentd::telegram::backend::{DaemonTelegramBackend, TelegramAgentSummary, TelegramBackend};
 use agentd::telegram::client::{TelegramClient, TelegramClientConfig, TelegramCommandSpec};
 use agentd::telegram::render::{
-    TELEGRAM_MESSAGE_TEXT_SOFT_CAP, chunk_message_text, truncate_caption,
+    TELEGRAM_MESSAGE_TEXT_SOFT_CAP, chunk_message_text, render_session_list, truncate_caption,
 };
 use agentd::telegram::router::TelegramWorker;
 use std::collections::{BTreeMap, VecDeque};
@@ -56,6 +56,7 @@ struct RecordingTelegramBackendState {
     agent_messages: Vec<(String, String, String)>,
     active_run_status: String,
     background_jobs_status: String,
+    plan_status: String,
     session_skills_status: String,
     cancelled_active_runs: Vec<String>,
     cancelled_all_work: Vec<String>,
@@ -284,6 +285,21 @@ impl TelegramBackend for RecordingTelegramBackend {
             "Задачи: активных нет".to_string()
         } else {
             state.background_jobs_status.clone()
+        })
+    }
+
+    fn render_plan(&self, session_id: &str) -> Result<String, BootstrapError> {
+        let state = self.state.lock().expect("backend state");
+        if !state.session_lookup.contains_key(session_id) {
+            return Err(BootstrapError::MissingRecord {
+                kind: "session",
+                id: session_id.to_string(),
+            });
+        }
+        Ok(if state.plan_status.is_empty() {
+            "План: нет активного плана".to_string()
+        } else {
+            state.plan_status.clone()
         })
     }
 
@@ -643,6 +659,7 @@ fn telegram_worker_registers_default_commands() {
     assert!(request.body.contains("\"command\":\"status\""));
     assert!(request.body.contains("\"command\":\"stop\""));
     assert!(request.body.contains("\"command\":\"cancel\""));
+    assert!(request.body.contains("\"command\":\"plan\""));
     assert!(request.body.contains("\"command\":\"model\""));
     assert!(request.body.contains("\"command\":\"think\""));
     assert!(request.body.contains("\"command\":\"autoapprove\""));
@@ -789,6 +806,7 @@ fn telegram_worker_routes_session_operator_commands_to_backend() {
         session_lookup: BTreeMap::from([("session-operator".to_string(), summary)]),
         active_run_status: "Ход:\n- статус: running".to_string(),
         background_jobs_status: "Задачи:\n- [running] job-1 (chat_turn)".to_string(),
+        plan_status: "План:\n- [in_progress] task-1: check".to_string(),
         session_skills_status: "Скиллы:\n- [manual] obsidian-vault: Vault".to_string(),
         ..RecordingTelegramBackendState::default()
     });
@@ -798,12 +816,13 @@ fn telegram_worker_routes_session_operator_commands_to_backend() {
             r#"{"ok":true,"result":[
                 {"update_id":140,"message":{"message_id":109,"date":0,"chat":{"id":42,"type":"private"},"from":{"id":777,"is_bot":false,"first_name":"Alice","username":"alice"},"text":"/status"}},
                 {"update_id":141,"message":{"message_id":110,"date":0,"chat":{"id":42,"type":"private"},"from":{"id":777,"is_bot":false,"first_name":"Alice","username":"alice"},"text":"/jobs"}},
-                {"update_id":142,"message":{"message_id":111,"date":0,"chat":{"id":42,"type":"private"},"from":{"id":777,"is_bot":false,"first_name":"Alice","username":"alice"},"text":"/stop"}},
-                {"update_id":143,"message":{"message_id":112,"date":0,"chat":{"id":42,"type":"private"},"from":{"id":777,"is_bot":false,"first_name":"Alice","username":"alice"},"text":"/cancel"}},
-                {"update_id":144,"message":{"message_id":113,"date":0,"chat":{"id":42,"type":"private"},"from":{"id":777,"is_bot":false,"first_name":"Alice","username":"alice"},"text":"/skills"}},
-                {"update_id":145,"message":{"message_id":114,"date":0,"chat":{"id":42,"type":"private"},"from":{"id":777,"is_bot":false,"first_name":"Alice","username":"alice"},"text":"/enable obsidian-vault"}},
-                {"update_id":146,"message":{"message_id":115,"date":0,"chat":{"id":42,"type":"private"},"from":{"id":777,"is_bot":false,"first_name":"Alice","username":"alice"},"text":"/disable obsidian-vault"}},
-                {"update_id":147,"message":{"message_id":116,"date":0,"chat":{"id":42,"type":"private"},"from":{"id":777,"is_bot":false,"first_name":"Alice","username":"alice"},"text":"/compact"}}
+                {"update_id":142,"message":{"message_id":111,"date":0,"chat":{"id":42,"type":"private"},"from":{"id":777,"is_bot":false,"first_name":"Alice","username":"alice"},"text":"/plan"}},
+                {"update_id":143,"message":{"message_id":112,"date":0,"chat":{"id":42,"type":"private"},"from":{"id":777,"is_bot":false,"first_name":"Alice","username":"alice"},"text":"/stop"}},
+                {"update_id":144,"message":{"message_id":113,"date":0,"chat":{"id":42,"type":"private"},"from":{"id":777,"is_bot":false,"first_name":"Alice","username":"alice"},"text":"/cancel"}},
+                {"update_id":145,"message":{"message_id":114,"date":0,"chat":{"id":42,"type":"private"},"from":{"id":777,"is_bot":false,"first_name":"Alice","username":"alice"},"text":"/skills"}},
+                {"update_id":146,"message":{"message_id":115,"date":0,"chat":{"id":42,"type":"private"},"from":{"id":777,"is_bot":false,"first_name":"Alice","username":"alice"},"text":"/enable obsidian-vault"}},
+                {"update_id":147,"message":{"message_id":116,"date":0,"chat":{"id":42,"type":"private"},"from":{"id":777,"is_bot":false,"first_name":"Alice","username":"alice"},"text":"/disable obsidian-vault"}},
+                {"update_id":148,"message":{"message_id":117,"date":0,"chat":{"id":42,"type":"private"},"from":{"id":777,"is_bot":false,"first_name":"Alice","username":"alice"},"text":"/compact"}}
             ]}"#,
         ),
         json_response(
@@ -813,22 +832,25 @@ fn telegram_worker_routes_session_operator_commands_to_backend() {
             r#"{"ok":true,"result":{"message_id":118,"date":0,"chat":{"id":42,"type":"private"},"text":"jobs"}}"#,
         ),
         json_response(
-            r#"{"ok":true,"result":{"message_id":119,"date":0,"chat":{"id":42,"type":"private"},"text":"stop"}}"#,
+            r#"{"ok":true,"result":{"message_id":119,"date":0,"chat":{"id":42,"type":"private"},"text":"plan"}}"#,
         ),
         json_response(
-            r#"{"ok":true,"result":{"message_id":120,"date":0,"chat":{"id":42,"type":"private"},"text":"cancel"}}"#,
+            r#"{"ok":true,"result":{"message_id":120,"date":0,"chat":{"id":42,"type":"private"},"text":"stop"}}"#,
         ),
         json_response(
-            r#"{"ok":true,"result":{"message_id":121,"date":0,"chat":{"id":42,"type":"private"},"text":"skills"}}"#,
+            r#"{"ok":true,"result":{"message_id":121,"date":0,"chat":{"id":42,"type":"private"},"text":"cancel"}}"#,
         ),
         json_response(
-            r#"{"ok":true,"result":{"message_id":122,"date":0,"chat":{"id":42,"type":"private"},"text":"enable"}}"#,
+            r#"{"ok":true,"result":{"message_id":122,"date":0,"chat":{"id":42,"type":"private"},"text":"skills"}}"#,
         ),
         json_response(
-            r#"{"ok":true,"result":{"message_id":123,"date":0,"chat":{"id":42,"type":"private"},"text":"disable"}}"#,
+            r#"{"ok":true,"result":{"message_id":123,"date":0,"chat":{"id":42,"type":"private"},"text":"enable"}}"#,
         ),
         json_response(
-            r#"{"ok":true,"result":{"message_id":124,"date":0,"chat":{"id":42,"type":"private"},"text":"compact"}}"#,
+            r#"{"ok":true,"result":{"message_id":124,"date":0,"chat":{"id":42,"type":"private"},"text":"disable"}}"#,
+        ),
+        json_response(
+            r#"{"ok":true,"result":{"message_id":125,"date":0,"chat":{"id":42,"type":"private"},"text":"compact"}}"#,
         ),
     ]);
     let client = TelegramClient::new(TelegramClientConfig {
@@ -841,7 +863,7 @@ fn telegram_worker_routes_session_operator_commands_to_backend() {
         TelegramWorker::with_consumer(app.clone(), backend.clone(), client, "telegram-test");
 
     let processed = runtime.block_on(worker.poll_once()).expect("poll once");
-    assert_eq!(processed, 8);
+    assert_eq!(processed, 9);
 
     let state = backend_state.lock().expect("backend state");
     assert_eq!(state.cancelled_active_runs, vec!["session-operator"]);
@@ -866,10 +888,15 @@ fn telegram_worker_routes_session_operator_commands_to_backend() {
         .expect("captured status response");
     assert!(status.body.contains("Current session"));
     assert!(status.body.contains("Ход"));
+    assert!(status.body.contains("lifecycle"));
     let jobs = requests
         .recv_timeout(Duration::from_secs(2))
         .expect("captured jobs response");
     assert!(jobs.body.contains("job-1"));
+    let plan = requests
+        .recv_timeout(Duration::from_secs(2))
+        .expect("captured plan response");
+    assert!(plan.body.contains("task-1"));
     let stop = requests
         .recv_timeout(Duration::from_secs(2))
         .expect("captured stop response");
@@ -1318,6 +1345,86 @@ fn telegram_worker_start_creates_pending_pairing_and_returns_cli_hint() {
 }
 
 #[test]
+fn telegram_worker_start_for_activated_user_keeps_pairing_and_shows_status_hint() {
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("runtime");
+    let (_temp, app) = telegram_test_app();
+    seed_activated_pairing(&app, "pair-activated", 777, 42);
+    seed_binding(&app, 42, 777, Some("session-1"));
+    let backend = RecordingTelegramBackend::default();
+    let (api_url, requests, handle) = spawn_fake_telegram_api(vec![
+        json_response(
+            r#"{"ok":true,"result":[{"update_id":101,"message":{"message_id":9,"date":0,"chat":{"id":42,"type":"private"},"from":{"id":777,"is_bot":false,"first_name":"Alice","username":"alice"},"text":"/start"}}]}"#,
+        ),
+        json_response(
+            r#"{"ok":true,"result":{"message_id":10,"date":0,"chat":{"id":42,"type":"private"},"text":"already connected"}}"#,
+        ),
+    ]);
+    let client = TelegramClient::new(TelegramClientConfig {
+        token: "test-token".to_string(),
+        api_url: Some(api_url),
+        poll_request_timeout_seconds: 40,
+    })
+    .expect("telegram client");
+    let worker =
+        TelegramWorker::with_consumer(app.clone(), backend.clone(), client, "telegram-test");
+
+    let processed = runtime.block_on(worker.poll_once()).expect("poll once");
+    assert_eq!(processed, 1);
+
+    let store = app.store().expect("open store");
+    let pairing = store
+        .get_telegram_user_pairing_by_user_id(777)
+        .expect("get pairing")
+        .expect("pairing exists");
+    assert_eq!(pairing.status, "activated");
+    assert_eq!(pairing.token, "pair-activated");
+
+    let _ = requests
+        .recv_timeout(Duration::from_secs(2))
+        .expect("captured getUpdates");
+    let send_message = requests
+        .recv_timeout(Duration::from_secs(2))
+        .expect("captured sendMessage");
+    assert_eq!(send_message.path, "/bottest-token/SendMessage");
+    assert!(send_message.body.contains("Already connected"));
+    assert!(send_message.body.contains("session-1"));
+    assert!(!send_message.body.contains("agentd telegram pair"));
+
+    handle.join().expect("join fake api");
+}
+
+#[test]
+fn telegram_render_session_list_is_recent_and_actionable() {
+    let mut sessions = (1..=6)
+        .map(|index| {
+            let mut summary = session_summary(
+                &format!("session-177700000000{index}"),
+                &format!("Session {index}"),
+                true,
+            );
+            summary.updated_at = 1_777_000_000 + index as i64;
+            summary.message_count = index;
+            summary
+        })
+        .collect::<Vec<_>>();
+    sessions[0].id = "session-current".to_string();
+
+    let output = render_session_list(&sessions, Some("session-current"));
+
+    assert!(output.contains("Recent sessions:"));
+    assert!(output.contains("> Session 1 [current]"));
+    assert!(output.contains("updated=2026-04-24"));
+    assert!(output.contains("messages=1"));
+    assert!(output.contains("use=/use session-current"));
+    assert!(output.contains("use=/use session-1777000000005"));
+    assert!(!output.contains("use=/use session-1777000000006"));
+    assert!(output.contains("1 older sessions hidden"));
+}
+
+#[test]
 fn telegram_worker_ingests_private_document_as_session_artifact_and_turn_input() {
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
@@ -1345,10 +1452,13 @@ fn telegram_worker_ingests_private_document_as_session_artifact_and_turn_input()
             body: b"report bytes".to_vec(),
         },
         json_response(
-            r#"{"ok":true,"result":{"message_id":71,"date":0,"chat":{"id":42,"type":"private"},"text":"working"}}"#,
+            r#"{"ok":true,"result":{"message_id":71,"date":0,"chat":{"id":42,"type":"private"},"text":"file attached"}}"#,
         ),
         json_response(
-            r#"{"ok":true,"result":{"message_id":72,"date":0,"chat":{"id":42,"type":"private"},"text":"final"}}"#,
+            r#"{"ok":true,"result":{"message_id":72,"date":0,"chat":{"id":42,"type":"private"},"text":"working"}}"#,
+        ),
+        json_response(
+            r#"{"ok":true,"result":{"message_id":73,"date":0,"chat":{"id":42,"type":"private"},"text":"final"}}"#,
         ),
     ]);
     let client = TelegramClient::new(TelegramClientConfig {
@@ -1411,6 +1521,12 @@ fn telegram_worker_ingests_private_document_as_session_artifact_and_turn_input()
         .expect("captured file download");
     assert_eq!(download.method, "GET");
     assert_eq!(download.path, "/file/bottest-token/documents%2Freport.txt");
+    let attached = requests
+        .recv_timeout(Duration::from_secs(2))
+        .expect("captured file attached");
+    assert_eq!(attached.path, "/bottest-token/SendMessage");
+    assert!(attached.body.contains("File attached to session"));
+    assert!(attached.body.contains(&artifacts[0].id));
     let status = requests
         .recv_timeout(Duration::from_secs(2))
         .expect("captured status");
@@ -1419,6 +1535,68 @@ fn telegram_worker_ingests_private_document_as_session_artifact_and_turn_input()
         .recv_timeout(Duration::from_secs(2))
         .expect("captured final");
     assert_eq!(final_message.path, "/bottest-token/SendMessage");
+
+    handle.join().expect("join fake api");
+}
+
+#[test]
+fn telegram_worker_rejects_oversized_document_with_operator_message() {
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("runtime");
+    let (_temp, app) = telegram_test_app_with_max_download_bytes(8);
+    seed_activated_pairing(&app, "pair-file-large", 777, 42);
+    app.create_session("session-file-large", "Telegram Chat")
+        .expect("create session");
+    let backend = RecordingTelegramBackend::with_state(RecordingTelegramBackendState {
+        create_session_results: vec![session_summary(
+            "session-file-large",
+            "Telegram Chat",
+            false,
+        )],
+        next_chat_output: "should not run".to_string(),
+        ..RecordingTelegramBackendState::default()
+    });
+    let backend_state = backend.state();
+    let (api_url, requests, handle) = spawn_fake_telegram_api(vec![
+        json_response(
+            r#"{"ok":true,"result":[{"update_id":131,"message":{"message_id":71,"date":0,"chat":{"id":42,"type":"private"},"from":{"id":777,"is_bot":false,"first_name":"Alice","username":"alice"},"document":{"file_id":"doc-file-big","file_unique_id":"doc-unique-big","file_size":12,"file_name":"big.txt","mime_type":"text/plain"}}}]}"#,
+        ),
+        json_response(
+            r#"{"ok":true,"result":{"message_id":72,"date":0,"chat":{"id":42,"type":"private"},"text":"too large"}}"#,
+        ),
+    ]);
+    let client = TelegramClient::new(TelegramClientConfig {
+        token: "test-token".to_string(),
+        api_url: Some(api_url),
+        poll_request_timeout_seconds: 40,
+    })
+    .expect("telegram client");
+    let worker =
+        TelegramWorker::with_consumer(app.clone(), backend.clone(), client, "telegram-test");
+
+    runtime.block_on(worker.poll_once()).expect("poll once");
+
+    let artifacts = app
+        .store()
+        .expect("open store")
+        .list_artifacts_for_session("session-file-large")
+        .expect("list artifacts");
+    assert!(artifacts.is_empty());
+    let state = backend_state.lock().expect("backend state");
+    assert!(state.executed_turns.is_empty());
+    drop(state);
+
+    let _ = requests
+        .recv_timeout(Duration::from_secs(2))
+        .expect("captured getUpdates");
+    let send_message = requests
+        .recv_timeout(Duration::from_secs(2))
+        .expect("captured oversized message");
+    assert_eq!(send_message.path, "/bottest-token/SendMessage");
+    assert!(send_message.body.contains("File intake failed"));
+    assert!(send_message.body.contains("too large"));
 
     handle.join().expect("join fake api");
 }
@@ -2406,8 +2584,10 @@ fn telegram_worker_supports_group_sessions_new_and_use_commands() {
     let sessions_message = requests
         .recv_timeout(Duration::from_secs(2))
         .expect("captured sessions response");
-    assert!(sessions_message.body.contains("Sessions"));
-    assert!(sessions_message.body.contains("* Alpha (session-1)"));
+    assert!(sessions_message.body.contains("Recent sessions"));
+    assert!(sessions_message.body.contains("> Alpha [1]"));
+    assert!(sessions_message.body.contains("use=/use session-1"));
+    assert!(sessions_message.body.contains("updated=1970-01-01"));
     let new_message = requests
         .recv_timeout(Duration::from_secs(2))
         .expect("captured new response");
@@ -2706,8 +2886,9 @@ fn telegram_worker_supports_new_sessions_listing_and_use_command() {
     let sessions_message = requests
         .recv_timeout(Duration::from_secs(2))
         .expect("captured sessions response");
-    assert!(sessions_message.body.contains("Sessions"));
-    assert!(sessions_message.body.contains("* Alpha (session-1)"));
+    assert!(sessions_message.body.contains("Recent sessions"));
+    assert!(sessions_message.body.contains("> Alpha [1]"));
+    assert!(sessions_message.body.contains("use=/use session-1"));
     let new_message = requests
         .recv_timeout(Duration::from_secs(2))
         .expect("captured new response");
@@ -2887,8 +3068,9 @@ fn telegram_worker_advances_cursor_after_single_update_handler_error() {
     let sessions_message = requests
         .recv_timeout(Duration::from_secs(2))
         .expect("captured sessions response");
-    assert!(sessions_message.body.contains("Sessions"));
-    assert!(sessions_message.body.contains("* Alpha (session-1)"));
+    assert!(sessions_message.body.contains("Recent sessions"));
+    assert!(sessions_message.body.contains("> Alpha [1]"));
+    assert!(sessions_message.body.contains("use=/use session-1"));
 
     handle.join().expect("join fake api");
 }
@@ -4039,6 +4221,24 @@ fn json_response(body: &str) -> FakeResponse {
 
 fn telegram_test_app() -> (tempfile::TempDir, bootstrap::App) {
     telegram_test_app_with_progress_interval_ms(1_250)
+}
+
+fn telegram_test_app_with_max_download_bytes(
+    max_download_bytes: usize,
+) -> (tempfile::TempDir, bootstrap::App) {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let mut config = AppConfig {
+        data_dir: temp.path().join("teamd-state"),
+        ..AppConfig::default()
+    };
+    config.telegram.enabled = true;
+    config.telegram.bot_token = Some("test-token".to_string());
+    config.telegram.max_download_bytes = max_download_bytes;
+    config.telegram.global_send_min_interval_ms = 1;
+    config.telegram.private_chat_send_min_interval_ms = 1;
+    config.telegram.group_chat_send_min_interval_ms = 1;
+    let app = bootstrap::build_from_config(config).expect("build app");
+    (temp, app)
 }
 
 fn drive_runtime(runtime: &tokio::runtime::Runtime, duration: Duration) {

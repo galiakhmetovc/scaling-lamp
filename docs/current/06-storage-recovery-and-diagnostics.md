@@ -98,6 +98,38 @@ SilverBullet Space конфигурируется через `[knowledge].silver
 
 Mirror pages можно читать и дополнять операторскими заметками, но ручная правка mirror не меняет runtime plan/transcripts/tool calls. Если нужно изменить runtime state, используйте соответствующие teamD tools/commands.
 
+## Жизненный цикл session
+
+Session — durable business entity. Она не удаляется и не архивируется автоматически только потому, что оператор давно не писал в чат. Пока нет явной команды удаления/archive или retention policy, session остаётся активной в `state.sqlite`, а transcript/tool ledger/artifacts остаются доступными через CLI/TUI/Telegram debug surfaces.
+
+Что может происходить без нового сообщения оператора:
+
+- Telegram worker доставляет queued session notifications и file delivery requests.
+- Scheduler будит session через `session_inbox_events`/jobs, если агент явно создал schedule или `continue_later`.
+- Background job worker продолжает уже queued work.
+- Recovery при рестарте честно помечает оборванные runs как interrupted, если их нельзя восстановить.
+
+Что runtime не делает сам:
+
+- не “пинает” агента только из-за незавершённого plan;
+- не продолжает план без queued/scheduled work;
+- не удаляет artifacts/transcripts из-за неактивности без отдельной retention policy;
+- не считает SilverBullet mirror источником истины для plan/tool calls.
+
+Операторский `/status` в Telegram показывает lifecycle summary, чтобы было понятно, что session ждёт явного действия, schedule/job или нового сообщения.
+
+## Session artifacts и operator-readable mirror
+
+Канонический artifact store остаётся в `state.sqlite` + `artifacts/`. Telegram documents, screenshots, generated files и offload payloads получают `artifact_id`; читать и доставлять их нужно через `agentd session ...`, `/files`, `/file <artifact_id>` или соответствующие tools.
+
+Если включён SilverBullet mirror, runtime best-effort пишет человекочитаемую page:
+
+```text
+/var/lib/teamd/knowledge/silverbullet/teamd/p/teamd-session-<session_id>.md
+```
+
+Mirror должен помогать оператору видеть plan snapshot, context summary, tool activity и artifacts в браузере. Он не заменяет canonical ledger: ручная правка mirror не меняет runtime plan, transcript или result ledger.
+
 ## Что хранит `state.sqlite`
 
 `state.sqlite` — это не payload store, а metadata/control plane. Основные таблицы:

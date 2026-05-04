@@ -39,6 +39,7 @@ pub(super) enum ParsedTelegramCommand {
     },
     Status,
     Jobs,
+    Plan,
     Queue {
         action: TelegramQueueAction,
     },
@@ -121,7 +122,7 @@ fn parse_command_parts(command: &str, args: &str) -> Option<ParsedTelegramComman
             title: (!args.is_empty()).then(|| args.to_string()),
         }),
         "newagent" => parse_newagent_command(args),
-        "sessions" => Some(ParsedTelegramCommand::Sessions),
+        "session" | "sessions" => Some(ParsedTelegramCommand::Sessions),
         "agents" => Some(ParsedTelegramCommand::Agents),
         "agentuse" => {
             if args.is_empty() {
@@ -137,6 +138,7 @@ fn parse_command_parts(command: &str, args: &str) -> Option<ParsedTelegramComman
         }
         "status" => Some(ParsedTelegramCommand::Status),
         "jobs" => Some(ParsedTelegramCommand::Jobs),
+        "plan" => Some(ParsedTelegramCommand::Plan),
         "queue" => match parse_queue_action(args) {
             Ok(action) => Some(ParsedTelegramCommand::Queue { action }),
             Err(usage) => Some(ParsedTelegramCommand::InvalidUsage(usage)),
@@ -386,6 +388,7 @@ pub(super) fn is_session_operator_command(command: &ParsedTelegramCommand) -> bo
         command,
         ParsedTelegramCommand::Status
             | ParsedTelegramCommand::Jobs
+            | ParsedTelegramCommand::Plan
             | ParsedTelegramCommand::Queue { .. }
             | ParsedTelegramCommand::Stop
             | ParsedTelegramCommand::Cancel
@@ -430,6 +433,7 @@ pub(super) fn default_command_specs() -> Vec<TelegramCommandSpec> {
         TelegramCommandSpec::new("agentuse", "Set chat default agent"),
         TelegramCommandSpec::new("status", "Show current session status"),
         TelegramCommandSpec::new("jobs", "Show current session jobs"),
+        TelegramCommandSpec::new("plan", "Show current session plan"),
         TelegramCommandSpec::new("queue", "Show or set inbound queue mode"),
         TelegramCommandSpec::new("stop", "Stop the active turn"),
         TelegramCommandSpec::new("pause", "Alias for stop"),
@@ -488,6 +492,11 @@ mod tests {
             Some(ParsedTelegramCommand::Status)
         );
         assert_eq!(parse_command("/jobs"), Some(ParsedTelegramCommand::Jobs));
+        assert_eq!(parse_command("/plan"), Some(ParsedTelegramCommand::Plan));
+        assert_eq!(
+            parse_command("/session"),
+            Some(ParsedTelegramCommand::Sessions)
+        );
         assert_eq!(
             parse_command("/queue coalesce 5s"),
             Some(ParsedTelegramCommand::Queue {

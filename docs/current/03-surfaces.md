@@ -185,6 +185,8 @@ agentd telegram run
 - маршрутизирует обычные сообщения в canonical chat turn;
 - хранит per-chat binding: выбранную session, default agent profile для новых sessions и queue mode;
 - позволяет оператору переключать agent profile прямо из Telegram через `/agents`, `/agentuse <agent_id>` и `/newagent <agent_id> [title]`;
+- даёт session operator commands без ожидания model turn: `/status`, `/sessions`, `/use`, `/plan`, `/jobs`, `/queue`, `/stop`, `/cancel`, `/files`, `/file`;
+- принимает Telegram documents как session artifacts и подтверждает `artifact_id` до запуска model turn;
 - отправляет replies, progress updates и reminders обратно в Telegram;
 - хранит pairing records, chat bindings и update cursor в обычном runtime store.
 

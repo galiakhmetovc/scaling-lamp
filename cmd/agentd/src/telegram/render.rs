@@ -1,6 +1,7 @@
 use crate::bootstrap::SessionSummary;
 use crate::telegram::backend::TelegramAgentSummary;
 use pulldown_cmark::{CodeBlockKind, Event, Options, Parser, Tag, TagEnd};
+use time::{OffsetDateTime, macros::format_description};
 use unicode_width::UnicodeWidthStr;
 
 pub const TELEGRAM_MESSAGE_TEXT_SOFT_CAP: usize = 3_276;
@@ -256,6 +257,24 @@ pub fn render_pairing_message(token: &str) -> String {
     format!("Pairing key: {token}\n\nActivate it on the server:\nagentd telegram pair {token}")
 }
 
+pub fn render_already_connected_message(selected_session_id: Option<&str>) -> String {
+    let session_line = selected_session_id
+        .map(|session_id| format!("Current session: {session_id}"))
+        .unwrap_or_else(|| "Current session: <none>. Use /new or /sessions.".to_string());
+    [
+        "Already connected.",
+        session_line.as_str(),
+        "",
+        "Useful commands:",
+        "/status - current session status",
+        "/sessions - recent sessions and /use commands",
+        "/plan - current session plan",
+        "/files - files in the current session",
+        "/help - full command list",
+    ]
+    .join("\n")
+}
+
 pub fn render_pairing_required_message() -> String {
     "Pairing required. Send /start to get a key.".to_string()
 }
@@ -273,6 +292,7 @@ pub fn render_help_message() -> String {
         "/agentuse <agent_id> - set chat default agent for new sessions",
         "/status - show current session status",
         "/jobs - show current session background jobs",
+        "/plan - show current session plan",
         "/queue [reject|queue|coalesce 5s|restart|flush|clear] - control inbound messages during active turns",
         "/stop or /pause - stop the active turn",
         "/cancel - cancel all work for the current session",
@@ -289,7 +309,7 @@ pub fn render_help_message() -> String {
         "/judge <message> - send a message to the Judge agent",
         "/agent <agent_id> <message> - send a message to another agent",
         "",
-        "After pairing, plain text goes to the selected session.",
+        "After pairing, plain text goes to the selected session. Send a Telegram document to attach it as a session artifact; in groups the document caption must mention the bot when mention gating is enabled.",
     ]
     .join("\n")
 }
@@ -310,20 +330,47 @@ pub fn render_session_list(
         return "No sessions yet. Use /new to create one.".to_string();
     }
 
-    let mut lines = vec!["Sessions:".to_string()];
-    for summary in summaries {
+    let shown = summaries.iter().take(5).collect::<Vec<_>>();
+    let hidden_count = summaries.len().saturating_sub(shown.len());
+    let mut lines = vec!["Recent sessions:".to_string()];
+    for summary in shown {
         let marker = if selected_session_id == Some(summary.id.as_str()) {
-            "*"
+            ">"
         } else {
             "-"
         };
         lines.push(format!(
-            "{marker} {} ({}) messages={} autoapprove={}",
-            summary.title, summary.id, summary.message_count, summary.auto_approve
+            "{marker} {} [{}] agent={} updated={} messages={} use=/use {}",
+            summary.title,
+            short_session_id(&summary.id),
+            summary.agent_profile_id,
+            format_unix_time(summary.updated_at),
+            summary.message_count,
+            summary.id
+        ));
+    }
+    if hidden_count > 0 {
+        lines.push(format!(
+            "... {hidden_count} older sessions hidden. Use teamdctl session list for the full list."
         ));
     }
 
     lines.join("\n")
+}
+
+fn short_session_id(session_id: &str) -> &str {
+    session_id.rsplit('-').next().unwrap_or(session_id)
+}
+
+fn format_unix_time(timestamp: i64) -> String {
+    match OffsetDateTime::from_unix_timestamp(timestamp) {
+        Ok(value) => value
+            .format(format_description!(
+                "[year]-[month]-[day] [hour repr:24]:[minute] UTC"
+            ))
+            .unwrap_or_else(|_| timestamp.to_string()),
+        Err(_) => timestamp.to_string(),
+    }
 }
 
 pub fn render_agent_list(
