@@ -81,8 +81,9 @@ const DEFAULT_SILVERBULLET_SPACE_GUIDANCE_SECTION: &str = r#"- SilverBullet Spac
   - SilverBullet is the browser UI for the same Markdown files; the optional `silverbullet` MCP connector is the preferred tool path when it is configured
   - For knowledge-base work, use the `silverbullet-space` skill when it is active; otherwise call `skill_list`/`skill_read` before making durable note changes
   - Work inside the canonical space path only; do not create a second graph or vault at `~/vault`, `/root/vault`, `/var/lib/teamd/vault`, or inside a project workspace
-  - Before changing an existing note, read it first; preserve Markdown frontmatter, wikilinks, headings, tasks, and existing folder structure
-  - Use concise Markdown files and stable folders such as `00-Inbox`, `01-Projects`, `02-Areas`, `03-Resources`, `05-Journal`, `06-Tasks`, and `templates`
+  - Follow `[[r/silverbullet-instrukciya]]` and `[[r/system-guide]]`: PARA containers are root pages such as `Projects.md`, `Areas.md`, `Resources.md`, `Archive.md`, `00-Inbox.md`, `05-Journal.md`, and `06-Zettelkasten.md`
+  - New notes go into one-level namespaces: `p/` for projects, `a/` for areas, `r/` for resources, `journals/` for daily notes, and `template/` for templates
+  - Before changing an existing note, read it first; preserve Markdown frontmatter, wikilinks, inline `#tags`, headings, tasks, and existing structure
 "#;
 
 const LEGACY_OBSIDIAN_VAULT_GUIDANCE_SECTION: &str = r#"- Obsidian vault:
@@ -173,8 +174,9 @@ Tool usage rules:
   - SilverBullet is the browser UI for the same Markdown files; the optional `silverbullet` MCP connector is the preferred tool path when it is configured
   - For knowledge-base work, use the `silverbullet-space` skill when it is active; otherwise call `skill_list`/`skill_read` before making durable note changes
   - Work inside the canonical space path only; do not create a second graph or vault at `~/vault`, `/root/vault`, `/var/lib/teamd/vault`, or inside a project workspace
-  - Before changing an existing note, read it first; preserve Markdown frontmatter, wikilinks, headings, tasks, and existing folder structure
-  - Use concise Markdown files and stable folders such as `00-Inbox`, `01-Projects`, `02-Areas`, `03-Resources`, `05-Journal`, `06-Tasks`, and `templates`
+  - Follow `[[r/silverbullet-instrukciya]]` and `[[r/system-guide]]`: PARA containers are root pages such as `Projects.md`, `Areas.md`, `Resources.md`, `Archive.md`, `00-Inbox.md`, `05-Journal.md`, and `06-Zettelkasten.md`
+  - New notes go into one-level namespaces: `p/` for projects, `a/` for areas, `r/` for resources, `journals/` for daily notes, and `template/` for templates
+  - Before changing an existing note, read it first; preserve Markdown frontmatter, wikilinks, inline `#tags`, headings, tasks, and existing structure
 - Self-learning and workspace hygiene:
   - Treat repeated tool failures, user corrections, and successful workflows as learning signals
   - Record reusable lessons only in inspectable durable places: memory/knowledge tools, SilverBullet Space notes, artifacts, docs, or approved skill/profile updates
@@ -292,12 +294,14 @@ Resource notes should include: summary, key points, sources, related notes.
 
 const DEFAULT_SILVERBULLET_SPACE_SKILL_MD: &str = r#"---
 name: silverbullet-space
-description: Используй этот skill для заметок, базы знаний, документации, решений, дневника, проектов, PARA, Markdown pages, links, frontmatter, Telegram captures and SilverBullet Space work. Use for notes, knowledge base, docs, decisions, journal, project documentation, PARA, Markdown notes, and SilverBullet pages.
+description: Используй этот skill для работы с SilverBullet Space: заметки, база знаний, PARA, Zettelkasten, Markdown pages, wikilinks, inline tags, Telegram captures, project/resource/journal notes. Use when reading, creating, updating, searching, organizing, or remembering knowledge in SilverBullet.
 ---
 
 # SilverBullet Space
 
 Use this skill for SilverBullet knowledge-base and personal knowledge management work.
+
+When this skill is active and the user asks to work with notes, knowledge, docs, PARA, projects, resources, daily notes, or SilverBullet, follow it directly. If it is not active, call `skill_read` for `silverbullet-space` before changing durable notes.
 
 ## Primary integration
 
@@ -308,51 +312,85 @@ Use this skill for SilverBullet knowledge-base and personal knowledge management
 - If the MCP connector is unavailable, use canonical filesystem tools inside the space path only, and only after reading existing content first.
 - Do not write knowledge notes into project roots, `/root`, `/var/lib/teamd/vault`, the legacy Logseq path, or old Obsidian paths.
 
+## Source guides
+
+The operator-facing source guides are inside the space:
+
+- `[[r/silverbullet-instrukciya]]` / `https://teamd.qlbc.ru/r/silverbullet-instrukciya` — practical SilverBullet workflow.
+- `[[r/system-guide]]` / `https://teamd.qlbc.ru/r/system-guide` — PARA + Zettelkasten rules.
+
+If the structure, naming, or query behavior is unclear, read these notes before editing the space.
+
 ## Space contract
 
 - Treat the space as the shared working knowledge layer for the agent and operator.
 - Do not use the space as runtime state: transcripts, runs, tool calls, artifacts, schedules, approvals, audit logs, and SQLite state remain in `agentd`.
 - Do not treat space notes as canonical repository documentation. Stable documentation still belongs in git under `docs/`; use space notes for working notes, drafts, decisions, research, and project logs before promoting stable material to repo docs.
-- Future semantic search may index this space. Write notes so they are useful for both humans and indexing: clear title, concise summary, stable headings, explicit links, and frontmatter when useful.
-- Preserve Markdown frontmatter, wikilinks, tags, headings, checkboxes, and existing note structure.
+- Future semantic search may index this space. Write notes so they are useful for humans and indexing: clear title, concise summary, stable headings, explicit links, and frontmatter when useful.
+- Preserve Markdown frontmatter, wikilinks, inline `#tags`, headings, checkboxes, queries, and existing note structure.
+- At the start of substantial SilverBullet work, tell the operator briefly what you are doing, for example: `Использую SilverBullet skill: ищу существующие заметки и обновлю память после записи.`
 
-## PARA structure
+## Current structure
 
-Use PARA as the default organization model:
+The current space uses PARA + Zettelkasten.
 
-- `00-Inbox` — raw captures, quick ideas, unsorted Telegram notes, temporary input.
-- `01-Projects` — active outcomes with deadlines or clear finish conditions.
-- `02-Areas` — ongoing responsibilities without an end date.
-- `03-Resources` — reusable reference material, research, guides, snippets, domain notes.
-- `04-Archive` — inactive projects, old resources, completed or deprecated material.
-- `05-Journal` — dated daily notes, reviews, logs, and timeline entries.
-- `06-Tasks` — task notes when a task needs its own page.
-- `assets` — files embedded or linked from notes.
-- `templates` — reusable note templates.
+Root container pages are catalogs and live lists. Do not store long content in them:
 
-Daily notes should normally be `05-Journal/YYYY-MM-DD.md`. Do not create a separate `daily/` tree unless it already exists or the user asks for it.
+- `Projects.md` — active and completed projects via `#project`.
+- `Areas.md` — ongoing areas via `#area`.
+- `Resources.md` — references, guides, research, and literature notes via `#resource` and `#literature`.
+- `Archive.md` — archived or inactive material via `#archive`.
+- `00-Inbox.md` — quick captures, fleeting notes, Telegram input.
+- `05-Journal.md` — daily notes via `#daily`.
+- `06-Zettelkasten.md` — permanent notes via `#zettelkasten`.
+
+Use one-level namespaces for actual notes:
+
+- `p/<slug>.md` — projects: concrete outcome, deadline or finish condition.
+- `a/<slug>.md` — areas: ongoing responsibility without an end date.
+- `r/<slug>.md` — resources, guides, research, references, literature notes.
+- `journals/YYYY-MM-DD.md` — daily notes.
+- `template/<name>.md` — reusable templates.
+
+Do not create new top-level folder systems such as `01-Projects/`, `02-Areas/`, `03-Resources/`, `04-Archive/`, `06-Tasks/`, `daily/`, `zettel/`, or nested paths like `p/project/backend/db`. Namespace depth is one level.
+
+Existing legacy or miscellaneous root notes may remain. Do not move or rename them unless the operator asks.
+
+## Tags and queries
+
+- SilverBullet queries use inline `#tags` in the note body. YAML frontmatter `tags:` is useful for humans, but it is not enough for query visibility.
+- Put the type tag near the top of the body, for example `**Тип:** #project`.
+- Use tags sparingly: `#project`, `#area`, `#resource`, `#daily`, `#inbox`, `#fleeting`, `#zettelkasten`, `#evergreen`, `#literature`, `#archive`, `#done`.
+- If unsure, use one type tag plus at most one topic/status tag.
+- Container pages use `[query: ...]`. Do not replace query blocks with static lists unless the operator asks.
 
 ## Note workflow
 
 1. Search before creating a new note unless the user asks for a clearly new note.
-2. Read an existing note before editing it.
-3. Preserve frontmatter, links, headings, tasks, and existing folder structure.
-4. Write concise Markdown with stable headings and meaningful filenames.
-5. After a durable write/update tool succeeds, create or update a short Mem0 pointer memory unless the note has `memory: false`.
-6. The pointer memory should include note path, title/topic, short summary, tags, and why the note matters; do not copy the whole note into Mem0.
-7. Use `memory_search` before `memory_add` to avoid duplicate pointers when updating an existing note.
-8. After a write/update tool succeeds, summarize exactly what changed and where, and mention whether a Mem0 pointer was saved or skipped.
-9. If the tool fails, report the failure and retry with corrected arguments; do not claim the note was saved.
+2. Read existing notes before editing them.
+3. Choose the correct namespace and a stable readable slug.
+4. Preserve frontmatter, wikilinks, query blocks, headings, tasks, and existing structure.
+5. Add inline type tags so container queries can see the note.
+6. Add at least one useful wikilink when natural: project -> area, resource -> project/area, zettel -> related idea.
+7. Write concise Markdown with stable headings and meaningful filenames.
+8. If a container has query blocks, inline tags are normally enough. Add manual links only to curated sections where useful, for example `Resources.md` -> `Инструкции`.
+9. Verify after create/update with a search/read that the note exists and has the expected tag/path.
+10. After a durable write/update tool succeeds, create or update a short Mem0 pointer memory unless the note has `memory: false`.
+11. The pointer memory should include note path, title/topic, short summary, tags, and why the note matters; do not copy the whole note into Mem0.
+12. Use `memory_search` before `memory_add` to avoid duplicate pointers when updating an existing note.
+13. After a write/update succeeds, summarize exactly what changed and where, and mention whether a Mem0 pointer was saved or skipped.
+14. If a tool fails, report the failure and retry with corrected arguments; do not claim the note was saved.
 
 ## Common operations
 
-- Capture an idea: append/create a short note in `00-Inbox` with source and timestamp.
-- Create a task: create or update a note in `06-Tasks`, with checkboxes and priority.
-- Start a project: create `01-Projects/<project-name>.md` with goal, status, next actions, resources, and open questions.
-- Add a resource: create `03-Resources/<topic>.md` with summary, source links, and related notes.
-- Add a daily entry: update `05-Journal/YYYY-MM-DD.md`.
-- Process inbox: move or rewrite inbox items into Projects, Areas, Resources, Archive, or Tasks.
-- Complete work: update status, add result, then move inactive project notes to `04-Archive` only when the user agrees or completion is explicit.
+- Capture an idea: append to `00-Inbox.md` or create a fleeting note with inline `#inbox #fleeting`.
+- Start a project: create `p/<slug>.md` with `#project`, goal, next actions, area link, resources, decisions, and log.
+- Add an area: create `a/<slug>.md` with `#area`, scope, active projects, key notes, and maintenance rules.
+- Add a resource or guide: create `r/<slug>.md` with `#resource`, summary, sources, related projects/areas, and key points.
+- Add a daily entry: create/update `journals/YYYY-MM-DD.md` with `#daily`, focus, tasks, log, ideas, and links.
+- Create a permanent note: use a flat readable page or agreed namespace with `#zettelkasten`; keep it atomic and linked to related notes.
+- Process inbox: turn captures into project actions, resources, permanent notes, archive items, or delete only when the operator agrees.
+- Complete a project: add `#done` or `#archive` and update the result; do not silently delete completed material.
 - Search: search existing notes before duplicating concepts.
 
 ## Templates
@@ -376,8 +414,6 @@ Resource notes should include: summary, key points, sources, related notes.
 
 ## Tags and Markdown syntax
 
-- Use tags sparingly: `#project`, `#area`, `#resource`, `#task`, `#daily`, `#inbox`, `#archive`.
-- Priority tags: `#p0`, `#p1`, `#p2`, `#p3` only when priority matters.
 - Prefer wikilinks like `[[note name]]` for internal relationships.
 - Use checkboxes `- [ ]` and `- [x]` for task lists.
 - Preserve existing links, aliases, headings, frontmatter, and properties.
@@ -386,12 +422,20 @@ Resource notes should include: summary, key points, sources, related notes.
 
 - Never delete or archive user material unless the user asked for it or the note clearly says it is ready to archive.
 - Do not invent completed tasks, sources, dates, or decisions.
-- If the target folder or naming convention is ambiguous, choose the closest PARA folder and state the assumption.
+- If the target namespace or naming convention is ambiguous, choose the closest PARA namespace and state the assumption.
 - Keep note names stable and readable; avoid timestamp-only filenames except daily notes.
 - If a user message contains a durable fact, decision, task, or resource, offer to save it or save it directly when the request implies persistence.
 - At the start of substantial work, search/read relevant project, area, or resource notes from the space.
 - After an important decision or completed task, update the relevant project note or daily journal.
 - When a working note becomes stable documentation, offer to promote it into repository docs and commit it.
+
+## Common mistakes
+
+- Do not create numbered PARA folders like `01-Projects/`; use `p/`, `a/`, `r/`, `journals/`, and root container pages.
+- Do not rely only on YAML `tags:`; add inline `#tags` in the body.
+- Do not store long content in `Projects.md`, `Areas.md`, `Resources.md`, `Archive.md`, `00-Inbox.md`, `05-Journal.md`, or `06-Zettelkasten.md`; those are navigation/query pages.
+- Do not create deep folder hierarchies. Use links and tags for relationships.
+- Do not claim memory was updated unless `memory_search`/`memory_add` actually succeeded.
 "#;
 
 const DEFAULT_MEM0_MEMORY_SKILL_MD: &str = r#"---
@@ -1525,8 +1569,10 @@ mod tests {
         assert!(silverbullet_skill.contains("name: silverbullet-space"));
         assert!(silverbullet_skill.contains("/var/lib/teamd/knowledge/silverbullet/teamd"));
         assert!(silverbullet_skill.contains("MCP connector"));
-        assert!(silverbullet_skill.contains("## PARA structure"));
-        assert!(silverbullet_skill.contains("04-Archive"));
+        assert!(silverbullet_skill.contains("## Current structure"));
+        assert!(silverbullet_skill.contains("r/system-guide"));
+        assert!(silverbullet_skill.contains("Projects.md"));
+        assert!(silverbullet_skill.contains("p/<slug>.md"));
         assert!(silverbullet_skill.contains("short Mem0 pointer memory"));
 
         let current_stack_skills = [
