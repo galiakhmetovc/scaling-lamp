@@ -302,7 +302,7 @@ Semantic memory scopes не смешивают разные сущности:
 - `operator` — предпочтения человека;
 - `agent` — память конкретного профиля агента;
 - `agent_shared` — общий пул lessons для всех агентов;
-- `workspace` — проектная память, привязанная к workspace path-derived `app_id`;
+- `workspace` — проектная память, привязанная к workspace path-derived `agent_id = teamd-workspace-<hash>`;
 - `session` — короткоживущая память конкретной сессии.
 
 Mem0 нельзя использовать как скрытый KV. Для точных ключей, блокировок, счётчиков и runtime-очередей есть built-in `kv_*` tools поверх `state.sqlite`; Mem0 отвечает только за семантический поиск по durable facts.

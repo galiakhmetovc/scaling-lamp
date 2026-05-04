@@ -248,6 +248,9 @@ impl ExecutionService {
             agents::builtin_template(agents::DEFAULT_AGENT_ID)
                 .expect("built-in default agent template must exist"),
         );
+        let template_content =
+            agents::load_builtin_template_content(&self.config.data_dir, template_fallback)
+                .map_err(io_agent_tool_error)?;
         let base_id = agents::normalize_agent_id(&input.name);
         let agent_id = next_available_agent_id(store, &base_id)?;
         let agent_home = agents::agent_home(&self.config.data_dir, &agent_id);
@@ -255,8 +258,8 @@ impl ExecutionService {
         agents::clone_agent_home(
             &template.agent_home,
             &agent_home,
-            template_fallback.system_md,
-            template_fallback.agents_md,
+            &template_content.system_md,
+            &template_content.agents_md,
         )
         .map_err(io_agent_tool_error)?;
         agents::ensure_agent_workspace_layout(&agent_workspace).map_err(io_agent_tool_error)?;

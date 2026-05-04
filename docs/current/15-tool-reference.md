@@ -1064,7 +1064,7 @@ Scope:
 - `operator` — память оператора, только `user_id`;
 - `agent` — память конкретного agent profile, только `agent_id`;
 - `agent_shared` — общий пул semantic memories для всех агентов, `agent_id = teamd-agent-shared`;
-- `workspace` — default scope, память текущего workspace, `app_id = teamd-workspace-<sha256(workspace_root)[0..16]>`;
+- `workspace` — default scope, память текущего workspace, `agent_id = teamd-workspace-<sha256(workspace_root)[0..16]>`;
 - `session` — память текущей session, только `run_id=session_id`.
 
 Runtime добавляет в metadata provenance поля `teamd_scope`, `teamd_session_id`, `teamd_agent_profile_id`, `teamd_workspace_root` и `teamd_source`. Это не KV-хранилище: Mem0 используется для семантических durable facts/lessons, а точные ключи, очереди, locks, counters и runtime state должны оставаться во встроенном KV/runtime-store слое `state.sqlite`.
@@ -1235,7 +1235,7 @@ memory_add({
 - явно записывает факт или фрагмент диалога в Mem0;
 - принимает либо `text`, либо `messages`;
 - отправляет `POST /memories` в self-hosted Mem0/OpenMemory REST API;
-- добавляет ровно один entity id по выбранному scope: `user_id`, `agent_id`, `app_id` или `run_id`;
+- добавляет ровно один entity id по выбранному scope: `user_id`, `agent_id` или `run_id`;
 - если задан `api_key`, runtime отправляет его как `X-API-Key`.
 
 Когда использовать:

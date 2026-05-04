@@ -208,10 +208,10 @@ Mem0/OpenMemory в этой схеме — внешний durable semantic index
 
 - `state.sqlite`, transcripts, runs, tool ledger, schedules и artifacts остаются в `agent-persistence`;
 - prompt не получает “скрытую память”: optional `memory_recall` делает bounded pre-turn search и вставляет результат отдельным видимым блоком `Memory Recall`; для дополнительных деталей агент должен явно вызвать `memory_search`/`memory_list`;
-- запись в память происходит либо явным `memory_add`/`memory_update`, либо optional post-turn `memory_curator`, который запускается после завершения chat turn и применяет candidates через тот же Mem0 слой;
+- запись в память происходит либо явным `memory_add`/`memory_update`, либо optional post-turn `memory_curator`, который запускается после завершения chat turn и применяет candidates через тот же Mem0 слой; prompt curator лежит в `data_dir/agent-templates/system/memory-curator/SYSTEM.md` и редактируется без пересборки;
 - tool calls проходят через тот же provider loop, approvals, ledger и debug UI;
 - Mem0 REST endpoint настраивается в config/env, но не создаёт второй chat path;
-- Mem0 scopes мапятся на Mem0 entities: `operator -> user_id`, `agent -> agent_id`, `agent_shared -> agent_id=teamd-agent-shared`, `workspace -> app_id`, `session -> run_id`;
+- Mem0 scopes мапятся на Mem0 entities: `operator -> user_id`, `agent -> agent_id`, `agent_shared -> agent_id=teamd-agent-shared`, `workspace -> agent_id=teamd-workspace-<hash>`, `session -> run_id`;
 - общий пул памяти агентов реализован как `agent_shared`, но это semantic pool, а не deterministic KV.
 
 Такое разделение оставляет semantic memory inspectable и отключаемой: если Mem0, recall или curator недоступны, основной chat turn не должен падать.

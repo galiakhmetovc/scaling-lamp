@@ -96,17 +96,30 @@ agent templates -> agent profiles -> session/schedule workspaces
     └── <agent_id>/
 ```
 
-Если понадобится хранить operator-editable templates отдельно от state, возможен отдельный каталог:
+Operator-editable templates уже материализуются в `data_dir/agent-templates`. Бинарь содержит только bundled fallback, чтобы первый запуск мог создать файлы. После bootstrap рабочий источник template prompts/skills — обычные Markdown-файлы:
 
 ```text
-/var/lib/teamd/agent-templates/
+data_dir/agent-templates/
 └── <template_id>/
     ├── SYSTEM.md
     ├── AGENTS.md
     └── skills/
 ```
 
-Но миграцию лучше делать осторожно: сначала добавить явные поля в БД и документацию, потом менять layout.
+На production это обычно:
+
+```text
+/var/lib/teamd/state/agent-templates/
+├── default/
+│   ├── SYSTEM.md
+│   ├── AGENTS.md
+│   └── skills/
+└── judge/
+    ├── SYSTEM.md
+    └── AGENTS.md
+```
+
+Правка этих файлов не требует пересборки `agentd`. Уже созданный `agent_home` остаётся отдельным экземпляром: если оператор вручную изменил `data_dir/agents/<agent_id>/SYSTEM.md`, bootstrap не должен молча затирать эту правку.
 
 ## Как копировать prompts и skills
 
@@ -149,7 +162,7 @@ agent templates -> agent profiles -> session/schedule workspaces
 
 1. Schema migration: добавить workspace fields.
 2. Config: добавить operator-facing default workspace root.
-3. Bootstrap: мигрировать `data_dir/agents` к ясному названию или хотя бы документировать как `agent_home`.
+3. Bootstrap: `data_dir/agent-templates` уже отделён от `data_dir/agents`; дальше можно добавить operator command для явного refresh конкретного `agent_home` из template.
 4. Session create path: сохранять effective workspace.
 5. Tool runtime: брать cwd из session workspace.
 6. Surfaces: CLI/TUI/Telegram/HTTP показывают и меняют одно и то же поле session.
@@ -158,7 +171,7 @@ agent templates -> agent profiles -> session/schedule workspaces
 ## Открытые решения
 
 - Нужен ли физический rename `state/agents` -> `state/agent-profiles`, или достаточно документации и новых полей?
-- Нужен ли отдельный global `agent-templates` каталог в `/var/lib/teamd`, или templates пока остаются встроенными в bootstrap?
+- Нужна ли команда `agent refresh-from-template <agent_id>` с diff/confirmation, чтобы явно обновлять agent instance из `data_dir/agent-templates`?
 - Должны ли skills копироваться всегда, или часть skills должна подключаться как shared catalog?
 - Нужен ли один workspace на agent profile или отдельный workspace на session по умолчанию?
 

@@ -45,6 +45,10 @@
 
 | Path | Что это | Можно ли редактировать руками |
 | --- | --- | --- |
+| `agent-templates/<template_id>/SYSTEM.md` | Runtime-editable template system prompt. Используется для bootstrap/update generated agent homes. Если файла нет, daemon создаёт его из bundled repo template. | Да. Правка влияет на будущий bootstrap/sync, но не обязана молча затирать уже вручную изменённый `agent_home`. |
+| `agent-templates/<template_id>/AGENTS.md` | Runtime-editable template tool/profile guidance. | Да. Используйте для изменения template без пересборки `agentd`. |
+| `agent-templates/<template_id>/skills/` | Runtime-editable template skills. | Да. Это правильное место для правки shipped skills без rebuild. |
+| `agent-templates/system/memory-curator/SYSTEM.md` | Runtime-editable prompt для post-turn memory curator. Это не agent profile и не skill, а системный короткий provider-вызов для извлечения durable memory candidates. | Да. Правка меняет поведение curator без пересборки `agentd`. |
 | `agents/<agent_id>/SYSTEM.md` | System prompt конкретного agent profile. Runtime читает его при сборке prompt. | Да, осознанно. Влияет на будущие turns этого agent profile. |
 | `agents/<agent_id>/AGENTS.md` | Инструкции и tool-usage guidance конкретного agent profile. | Да, осознанно. Влияет на будущие turns. |
 | `agents/<agent_id>/skills/` | Локальные skills для agent profile. | Да, если понимаете формат skills. |

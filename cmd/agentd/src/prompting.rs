@@ -143,14 +143,14 @@ pub(crate) fn preview_text(content: &str, limit: usize) -> String {
 pub(crate) fn load_system_prompt(data_dir: &Path, agent_profile_id: &str) -> String {
     read_prompt_file(&agents::agent_home(data_dir, agent_profile_id).join("SYSTEM.md"))
         .filter(|content| !content.trim().is_empty())
-        .unwrap_or_else(|| agents::fallback_system_md(agent_profile_id).to_string())
+        .unwrap_or_else(|| agents::fallback_system_md(data_dir, agent_profile_id))
 }
 
 pub(crate) fn load_agents_prompt(data_dir: &Path, agent_profile_id: &str) -> Option<String> {
     Some(
         read_prompt_file(&agents::agent_home(data_dir, agent_profile_id).join("AGENTS.md"))
             .filter(|content| !content.trim().is_empty())
-            .unwrap_or_else(|| agents::fallback_agents_md(agent_profile_id).to_string()),
+            .unwrap_or_else(|| agents::fallback_agents_md(data_dir, agent_profile_id)),
     )
 }
 

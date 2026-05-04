@@ -125,7 +125,7 @@ Artifacts также используются для файлов: Telegram uplo
 - `default_workspace_root`;
 - operator-visible metadata.
 
-Текущий `agent_home` живёт в `data_dir/agents/<agent_id>/` и содержит `SYSTEM.md`, `AGENTS.md` и `skills/`. Это editable profile home, а не project workspace. Для каждого agent profile также создаётся отдельный default workspace: рядом с `data_dir`, в `workspaces/agents/<agent_id>/`. Новые session берут persisted `workspace_root` из выбранного profile default workspace, если он задан. План дальнейшего разделения `agent templates`, `agent profiles` и рабочих директорий описан в [11-workspace-modernization-plan.md](11-workspace-modernization-plan.md).
+`Agent templates` материализуются в `data_dir/agent-templates/<template_id>/`. Это runtime-editable источник bootstrap prompts и template skills: его можно править без пересборки бинаря. Конкретный `agent_home` живёт в `data_dir/agents/<agent_id>/` и содержит собственные `SYSTEM.md`, `AGENTS.md` и `skills/`. Это editable profile home, а не project workspace. Для каждого agent profile также создаётся отдельный default workspace: рядом с `data_dir`, в `workspaces/agents/<agent_id>/`. Новые session берут persisted `workspace_root` из выбранного profile default workspace, если он задан. Детали разделения `agent templates`, `agent profiles` и рабочих директорий описаны в [11-workspace-modernization-plan.md](11-workspace-modernization-plan.md).
 
 ## Как один запрос проходит через систему
 

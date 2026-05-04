@@ -345,8 +345,9 @@ fn build_from_config_refreshes_legacy_default_prompts_but_preserves_custom_edits
             .expect("read silverbullet skill");
     assert!(silverbullet_skill.contains("name: silverbullet-space"));
     assert!(silverbullet_skill.contains("/var/lib/teamd/knowledge/silverbullet/teamd"));
-    assert!(silverbullet_skill.contains("## PARA structure"));
-    assert!(silverbullet_skill.contains("04-Archive"));
+    assert!(silverbullet_skill.contains("## Current structure"));
+    assert!(silverbullet_skill.contains("Archive.md"));
+    assert!(silverbullet_skill.contains("Space Lua / Lua Integrated Query"));
     assert!(silverbullet_skill.contains("short Mem0 pointer memory"));
     let current_stack_skills = [
         ("mem0-memory", "memory_search"),

@@ -87,12 +87,11 @@ impl App {
         for template in agents::builtin_templates() {
             let home = agents::agent_home(&self.config.data_dir, template.id);
             let workspace = agents::agent_workspace(&self.config.data_dir, template.id);
-            agents::ensure_builtin_agent_home_layout(&home, *template).map_err(|source| {
-                BootstrapError::Io {
+            agents::ensure_builtin_agent_home_layout(&self.config.data_dir, &home, *template)
+                .map_err(|source| BootstrapError::Io {
                     path: home.clone(),
                     source,
-                }
-            })?;
+                })?;
             agents::ensure_agent_workspace_layout(&workspace).map_err(|source| {
                 BootstrapError::Io {
                     path: workspace.clone(),
@@ -206,6 +205,12 @@ impl App {
             agents::builtin_template(agents::DEFAULT_AGENT_ID)
                 .expect("built-in default agent template must exist"),
         );
+        let template_content =
+            agents::load_builtin_template_content(&self.config.data_dir, template_fallback)
+                .map_err(|source| BootstrapError::Io {
+                    path: agents::agent_templates_root(&self.config.data_dir),
+                    source,
+                })?;
 
         let base_id = agents::normalize_agent_id(name);
         let agent_id = next_available_agent_id(&store, &base_id)?;
@@ -214,8 +219,8 @@ impl App {
         agents::clone_agent_home(
             &template.agent_home,
             &agent_home,
-            template_fallback.system_md,
-            template_fallback.agents_md,
+            &template_content.system_md,
+            &template_content.agents_md,
         )
         .map_err(|source| BootstrapError::Io {
             path: agent_home.clone(),

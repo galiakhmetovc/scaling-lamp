@@ -315,7 +315,7 @@ fn execute_chat_turn_includes_relevant_memory_recall_before_provider_response() 
     assert!(operator_search_request.contains("Сделай как я люблю"));
     assert!(operator_search_request.contains("\"filters\":{\"user_id\":\"anton\"}"));
     assert!(operator_search_request.contains("\"top_k\":4"));
-    assert!(workspace_search_request.contains("\"filters\":{\"app_id\":\"teamd-workspace-"));
+    assert!(workspace_search_request.contains("\"filters\":{\"agent_id\":\"teamd-workspace-"));
     assert!(workspace_search_request.contains("\"top_k\":3"));
     assert!(provider_request.contains("Memory Recall:"));
     assert!(provider_request.contains("mem_green"));

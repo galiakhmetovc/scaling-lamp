@@ -6,21 +6,11 @@ use agent_runtime::session::MessageRole;
 use agent_runtime::tool::{MemoryAddInput, MemorySearchInput};
 use serde::Deserialize;
 use serde_json::{Value, json};
+use std::fs;
 
-const MEMORY_CURATOR_INSTRUCTIONS: &str = r#"You are TeamD's memory curator.
-
-Read the compact turn packet and decide whether any durable memories should be stored.
-Return only valid JSON with this shape:
-{"candidates":[{"action":"add","scope":"operator|agent|workspace|session","text":"short durable fact","confidence":0.0-1.0,"reason":"why this is durable"}],"rejected":[]}
-
-Rules:
-- Store only stable facts that will matter in future turns: operator preferences, durable project facts, agent operating preferences, or explicit long-term instructions.
-- Do not store raw transcript, one-off task progress, temporary status, secrets, passwords, tokens, API keys, pairing keys, private credentials, or sensitive document contents.
-- Prefer scope=operator for the human's personal preferences.
-- Prefer scope=workspace for durable project facts.
-- Use action=add only.
-- Keep each text self-contained and concise.
-"#;
+const BUNDLED_MEMORY_CURATOR_INSTRUCTIONS: &str =
+    include_str!("../../../../agent-templates/system/memory-curator/SYSTEM.md");
+const MEMORY_CURATOR_TEMPLATE_PATH: &str = "system/memory-curator/SYSTEM.md";
 
 #[derive(Debug, Default, Deserialize)]
 #[serde(default)]
@@ -143,7 +133,7 @@ impl ExecutionService {
         let response = provider
             .complete(&ProviderRequest {
                 model: session.settings.model.clone(),
-                instructions: Some(MEMORY_CURATOR_INSTRUCTIONS.to_string()),
+                instructions: Some(self.memory_curator_instructions()),
                 messages: vec![ProviderMessage::new(MessageRole::User, packet.to_string())],
                 think_level: Some("off".to_string()),
                 previous_response_id: None,
@@ -191,6 +181,23 @@ impl ExecutionService {
         }
 
         Ok(actions)
+    }
+
+    fn memory_curator_instructions(&self) -> String {
+        let path = crate::agents::agent_templates_root(&self.config.data_dir)
+            .join(MEMORY_CURATOR_TEMPLATE_PATH);
+        match fs::read_to_string(&path) {
+            Ok(contents) => normalize_memory_curator_instructions(&contents),
+            Err(_) => {
+                if let Some(parent) = path.parent() {
+                    let _ = fs::create_dir_all(parent);
+                }
+                let bundled =
+                    normalize_memory_curator_instructions(BUNDLED_MEMORY_CURATOR_INSTRUCTIONS);
+                let _ = fs::write(path, &bundled);
+                bundled
+            }
+        }
     }
 
     fn apply_memory_curator_candidate(
@@ -342,6 +349,10 @@ impl ExecutionService {
         );
         audit.append_event_best_effort(&event);
     }
+}
+
+fn normalize_memory_curator_instructions(contents: &str) -> String {
+    format!("{}\n", contents.trim_end())
 }
 
 fn parse_memory_curator_decision(raw: &str) -> Result<MemoryCuratorDecision, ExecutionError> {
