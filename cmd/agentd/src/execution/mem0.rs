@@ -230,21 +230,23 @@ impl ExecutionService {
     ) -> Result<Mem0ScopeIds, ExecutionError> {
         let scope = RuntimeScope::parse(raw_scope, "memory")?;
         let user_id = match scope {
-            RuntimeScope::Operator | RuntimeScope::Workspace => {
-                Some(self.config.mem0.default_user_id.trim().to_string())
-            }
-            RuntimeScope::Agent | RuntimeScope::AgentShared | RuntimeScope::Session => None,
+            RuntimeScope::Operator => Some(self.config.mem0.default_user_id.trim().to_string()),
+            RuntimeScope::Agent
+            | RuntimeScope::AgentShared
+            | RuntimeScope::Workspace
+            | RuntimeScope::Session => None,
         };
         let agent_id = match scope {
             RuntimeScope::Agent => Some(session.agent_profile_id.clone()),
             RuntimeScope::AgentShared => Some(AGENT_SHARED_SCOPE_ID.to_string()),
-            RuntimeScope::Operator | RuntimeScope::Workspace | RuntimeScope::Session => None,
+            RuntimeScope::Workspace => Some(workspace_scope_id(session)),
+            RuntimeScope::Operator | RuntimeScope::Session => None,
         };
         let app_id = match scope {
-            RuntimeScope::Workspace => Some(workspace_scope_id(session)),
             RuntimeScope::Operator
             | RuntimeScope::Agent
             | RuntimeScope::AgentShared
+            | RuntimeScope::Workspace
             | RuntimeScope::Session => None,
         };
         let run_id = match scope {
@@ -634,12 +636,12 @@ mod tests {
         assert_eq!(shared.user_id, None);
         assert_eq!(shared.agent_id.as_deref(), Some("teamd-agent-shared"));
         assert_eq!(shared.app_id, None);
-        assert_eq!(workspace.user_id.as_deref(), Some("anton"));
-        assert_eq!(workspace.agent_id, None);
+        assert_eq!(workspace.user_id, None);
         assert_eq!(
-            workspace.app_id.as_deref(),
+            workspace.agent_id.as_deref(),
             Some("teamd-workspace-06851bfb8133809d")
         );
+        assert_eq!(workspace.app_id, None);
         assert_eq!(workspace.run_id, None);
         assert_eq!(session_scope.user_id, None);
         assert_eq!(session_scope.agent_id, None);
@@ -651,9 +653,9 @@ mod tests {
     fn search_body_uses_mem0_filters_and_top_k() {
         let ids = Mem0ScopeIds {
             scope: RuntimeScope::Workspace,
-            user_id: Some("anton".to_string()),
-            agent_id: None,
-            app_id: Some("teamd-workspace-abc".to_string()),
+            user_id: None,
+            agent_id: Some("teamd-workspace-abc".to_string()),
+            app_id: None,
             run_id: None,
         };
 
@@ -673,8 +675,7 @@ mod tests {
             body["filters"],
             json!({
                 "metadata": {"teamd_source": "memory_curator"},
-                "user_id": "anton",
-                "app_id": "teamd-workspace-abc"
+                "agent_id": "teamd-workspace-abc"
             })
         );
     }

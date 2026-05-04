@@ -362,7 +362,7 @@ TEAMD_MEMORY_RECALL_MAX_MEMORY_CHARS=800
 
 Curator отвечает за post-turn запись durable facts. `memory_recall` отвечает за pre-turn чтение: runtime сам делает bounded search по последнему user-сообщению и вставляет найденное в видимый prompt block `Memory Recall`. Default recall scopes: `operator`, `workspace`, `agent_shared`. Ручные `memory_*` tools остаются нужны для явного поиска, списка, исправления и удаления memories.
 
-Для Mem0 `workspace` scope хранится как `user_id + app_id`: `user_id` нужен самому Mem0/OpenMemory API как обязательный entity identifier, а `app_id` сохраняет teamD workspace isolation. Если Postgres volume Mem0 переезжал между пользователями, права директории `/var/lib/teamd/containers/mem0/postgres` должны принадлежать uid/gid `999:999` контейнерного Postgres.
+Для Mem0 `workspace` scope хранится как `agent_id = teamd-workspace-<hash>`. Это не профиль агента, а совместимый с Mem0/OpenMemory способ получить изолированный semantic-search namespace, потому что self-hosted Mem0 search стабильно фильтрует по `user_id`, `agent_id` и `run_id`, а не по одному `app_id`. Если Postgres volume Mem0 переезжал между пользователями, права директории `/var/lib/teamd/containers/mem0/postgres` должны принадлежать uid/gid `999:999` контейнерного Postgres.
 
 Официальный self-host Mem0 REST API использует paths без `/v1`: `POST /memories`, `POST /search`, `GET /memories`, `PUT /memories/{id}`, `DELETE /memories/{id}`. Auth для self-host endpoint делается через `X-API-Key`.
 
