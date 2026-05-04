@@ -671,7 +671,6 @@ impl ToolRuntime {
                 reason: "executable must not be empty",
             });
         }
-        validate_exec_start_is_safe_for_host(executable, args)?;
 
         let mut command = Command::new(executable);
         command
@@ -1094,66 +1093,6 @@ fn normalize_process_wait_timeout(timeout_ms: Option<u64>) -> Duration {
         .map(Duration::from_millis)
         .unwrap_or(DEFAULT_PROCESS_WAIT_TIMEOUT)
         .clamp(Duration::from_millis(1), MAX_PROCESS_WAIT_TIMEOUT)
-}
-
-fn validate_exec_start_is_safe_for_host(
-    executable: &str,
-    args: &[String],
-) -> Result<(), ToolError> {
-    let executable_name = executable
-        .rsplit(['/', '\\'])
-        .next()
-        .unwrap_or(executable)
-        .to_ascii_lowercase();
-    let lowered_args: Vec<String> = args.iter().map(|arg| arg.to_ascii_lowercase()).collect();
-
-    if is_vpn_executable(executable_name.as_str())
-        || shell_invocation_contains_host_network_change(executable_name.as_str(), &lowered_args)
-        || docker_invocation_contains_host_network_change(executable_name.as_str(), &lowered_args)
-    {
-        return Err(ToolError::InvalidExec {
-            reason: "host-level VPN or network reconfiguration commands are blocked in exec_start; run them outside teamD or through an operator-controlled deployment step",
-        });
-    }
-    Ok(())
-}
-
-fn is_vpn_executable(executable_name: &str) -> bool {
-    matches!(
-        executable_name,
-        "openconnect" | "openvpn" | "vpnc" | "wg" | "wg-quick" | "tailscale" | "tailscaled"
-    )
-}
-
-fn shell_invocation_contains_host_network_change(executable_name: &str, args: &[String]) -> bool {
-    if !matches!(executable_name, "sh" | "bash" | "dash" | "zsh") {
-        return false;
-    }
-    let script = args.join(" ");
-    contains_host_network_change(script.as_str())
-}
-
-fn docker_invocation_contains_host_network_change(executable_name: &str, args: &[String]) -> bool {
-    if !matches!(executable_name, "docker" | "podman") {
-        return false;
-    }
-    contains_host_network_change(args.join(" ").as_str())
-}
-
-fn contains_host_network_change(command_text: &str) -> bool {
-    command_text.contains("openconnect")
-        || command_text.contains("openvpn")
-        || command_text.contains("wg-quick")
-        || command_text.contains("tailscale")
-        || command_text.contains("--network host")
-        || command_text.contains("--network=host")
-        || command_text.contains("--net host")
-        || command_text.contains("--net=host")
-        || command_text.contains("--privileged")
-        || command_text.contains("net_admin")
-        || command_text.contains("ip route")
-        || command_text.contains("resolvectl")
-        || command_text.contains("systemd-resolved")
 }
 
 fn clamp_utf8_boundary(text: &str, offset: usize) -> usize {

@@ -1833,61 +1833,6 @@ fn structured_exec_treats_shell_tokens_as_literal_args() {
 }
 
 #[test]
-fn exec_start_blocks_host_level_vpn_commands() {
-    let temp = tempfile::tempdir().expect("tempdir");
-    let workspace = WorkspaceRef::new(temp.path());
-    let mut runtime = ToolRuntime::new(workspace);
-
-    let error = runtime
-        .invoke(ToolCall::ExecStart(ExecStartInput {
-            executable: "docker".to_string(),
-            args: vec![
-                "run".to_string(),
-                "--rm".to_string(),
-                "--network".to_string(),
-                "host".to_string(),
-                "--cap-add".to_string(),
-                "NET_ADMIN".to_string(),
-                "openconnect-vpn".to_string(),
-            ],
-            cwd: None,
-        }))
-        .expect_err("host network docker run must be blocked");
-
-    assert!(
-        error
-            .to_string()
-            .contains("host-level VPN or network reconfiguration commands are blocked"),
-        "{error}"
-    );
-}
-
-#[test]
-fn exec_start_blocks_shell_wrapped_vpn_commands() {
-    let temp = tempfile::tempdir().expect("tempdir");
-    let workspace = WorkspaceRef::new(temp.path());
-    let mut runtime = ToolRuntime::new(workspace);
-
-    let error = runtime
-        .invoke(ToolCall::ExecStart(ExecStartInput {
-            executable: "/bin/sh".to_string(),
-            args: vec![
-                "-c".to_string(),
-                "docker run --network=host openconnect-vpn".to_string(),
-            ],
-            cwd: None,
-        }))
-        .expect_err("shell wrapped host network docker run must be blocked");
-
-    assert!(
-        error
-            .to_string()
-            .contains("host-level VPN or network reconfiguration commands are blocked"),
-        "{error}"
-    );
-}
-
-#[test]
 fn exec_kill_terminates_structured_processes() {
     let temp = tempfile::tempdir().expect("tempdir");
     let workspace = WorkspaceRef::new(temp.path());

@@ -567,13 +567,11 @@ exec_start({
 - запускает structured process `executable + args`;
 - не опирается на shell snippets как на основной API;
 - возвращает `process_id`.
-- блокирует host-level VPN/network reconfiguration команды (`openconnect`, `openvpn`, `wg-quick`, `tailscale`, `docker/podman --network host`, `--privileged`, `NET_ADMIN`, изменение routes/DNS), потому что они могут сломать связность самого runtime node.
 
 Когда использовать:
 
 - для запуска тестов, сборки, git, rg, ls и прочих CLI;
 - если нужен дальнейший контроль процесса.
-- не использовать для подключения корпоративного VPN или изменения сетевого состояния хоста; такие операции должен выполнять оператор вне `teamD` или отдельный контролируемый deployment step.
 
 ### `exec_read_output`
 
