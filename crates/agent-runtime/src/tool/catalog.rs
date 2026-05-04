@@ -472,7 +472,7 @@ impl ToolCatalog {
             ToolDefinition {
                 name: ToolName::ExecWait,
                 family: ToolFamily::Exec,
-                description: "Wait for a structured exec process to finish",
+                description: "Wait for a structured exec process to finish with a hard timeout; prefer exec_read_output for long-running processes",
                 policy: ToolPolicy {
                     read_only: false,
                     destructive: false,

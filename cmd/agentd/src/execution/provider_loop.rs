@@ -67,6 +67,29 @@ const DEFAULT_SKILL_LIST_LIMIT: usize = 64;
 const MAX_SKILL_LIST_LIMIT: usize = 256;
 const DEFAULT_SKILL_READ_MAX_BYTES: usize = 16 * 1024;
 const MAX_SKILL_READ_MAX_BYTES: usize = 128 * 1024;
+
+#[cfg(unix)]
+fn signal_process_group(pid: libc::pid_t, signal: libc::c_int) -> std::io::Result<()> {
+    let rc = unsafe { libc::kill(-pid, signal) };
+    if rc == 0 {
+        return Ok(());
+    }
+    let error = std::io::Error::last_os_error();
+    if error.raw_os_error() == Some(libc::ESRCH) {
+        return Ok(());
+    }
+    Err(error)
+}
+
+#[cfg(unix)]
+fn process_group_exists(pid: libc::pid_t) -> bool {
+    let rc = unsafe { libc::kill(-pid, 0) };
+    if rc == 0 {
+        return true;
+    }
+    std::io::Error::last_os_error().raw_os_error() != Some(libc::ESRCH)
+}
+
 #[derive(Debug, Clone)]
 struct ObservedProviderResponse {
     response: ProviderResponse,
@@ -1589,6 +1612,8 @@ impl ExecutionService {
     fn terminate_pid_ref(&self, pid_ref: &str) -> Result<(), ExecutionError> {
         #[cfg(unix)]
         {
+            const TERMINATE_GRACE: Duration = Duration::from_millis(500);
+
             let Some(pid_text) = pid_ref.strip_prefix("pid:") else {
                 return Err(ExecutionError::ProviderLoop {
                     reason: format!("invalid pid_ref {pid_ref}"),
@@ -1600,17 +1625,20 @@ impl ExecutionService {
                     .map_err(|_| ExecutionError::ProviderLoop {
                         reason: format!("invalid pid_ref {pid_ref}"),
                     })?;
-            let rc = unsafe { libc::kill(pid, libc::SIGTERM) };
-            if rc == 0 {
-                return Ok(());
+            signal_process_group(pid, libc::SIGTERM).map_err(|error| {
+                ExecutionError::ProviderLoop {
+                    reason: format!("failed to stop process group for {pid_ref}: {error}"),
+                }
+            })?;
+            thread::sleep(TERMINATE_GRACE);
+            if process_group_exists(pid) {
+                signal_process_group(pid, libc::SIGKILL).map_err(|error| {
+                    ExecutionError::ProviderLoop {
+                        reason: format!("failed to kill process group for {pid_ref}: {error}"),
+                    }
+                })?;
             }
-            let error = std::io::Error::last_os_error();
-            if error.raw_os_error() == Some(libc::ESRCH) {
-                return Ok(());
-            }
-            Err(ExecutionError::ProviderLoop {
-                reason: format!("failed to stop process {pid_ref}: {error}"),
-            })
+            Ok(())
         }
 
         #[cfg(not(unix))]

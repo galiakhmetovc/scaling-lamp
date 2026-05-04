@@ -179,6 +179,7 @@ pub struct ProcessStartOutput {
 pub enum ProcessResultStatus {
     Exited,
     Killed,
+    TimedOut,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -186,6 +187,7 @@ pub enum ProcessOutputStatus {
     Running,
     Exited,
     Killed,
+    TimedOut,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -979,6 +981,17 @@ impl ProcessOutputStatus {
             Self::Running => "running",
             Self::Exited => "exited",
             Self::Killed => "killed",
+            Self::TimedOut => "timed_out",
+        }
+    }
+}
+
+impl ProcessResultStatus {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Exited => "exited",
+            Self::Killed => "killed",
+            Self::TimedOut => "timed_out",
         }
     }
 }
@@ -1792,7 +1805,7 @@ impl ToolOutput {
             Self::ProcessResult(output) => json!({
                 "tool": "process_result",
                 "process_id": output.process_id,
-                "status": format!("{:?}", output.status).to_lowercase(),
+                "status": output.status.as_str(),
                 "exit_code": output.exit_code,
                 "stdout": output.stdout,
                 "stderr": output.stderr,

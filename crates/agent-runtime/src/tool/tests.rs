@@ -22,6 +22,23 @@ use std::os::unix::net::UnixListener;
 use std::thread;
 use std::time::{Duration, Instant};
 
+#[cfg(unix)]
+fn process_exists(pid: libc::pid_t) -> bool {
+    #[cfg(target_os = "linux")]
+    {
+        if let Ok(stat) = std::fs::read_to_string(format!("/proc/{pid}/stat"))
+            && stat.split_whitespace().nth(2) == Some("Z")
+        {
+            return false;
+        }
+    }
+
+    unsafe {
+        libc::kill(pid, 0) == 0
+            || std::io::Error::last_os_error().raw_os_error() != Some(libc::ESRCH)
+    }
+}
+
 #[test]
 fn catalog_exposes_distinct_families_and_policy_flags() {
     let catalog = ToolCatalog::default();
@@ -1804,6 +1821,7 @@ fn structured_exec_treats_shell_tokens_as_literal_args() {
     let waited = runtime
         .invoke(ToolCall::ExecWait(ProcessWaitInput {
             process_id: started.process_id.clone(),
+            timeout_ms: None,
         }))
         .expect("exec_wait")
         .into_process_result()
@@ -1812,6 +1830,61 @@ fn structured_exec_treats_shell_tokens_as_literal_args() {
     assert_eq!(waited.status, ProcessResultStatus::Exited);
     assert_eq!(waited.exit_code, Some(0));
     assert_eq!(waited.stdout, "left|right\n");
+}
+
+#[test]
+fn exec_start_blocks_host_level_vpn_commands() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let workspace = WorkspaceRef::new(temp.path());
+    let mut runtime = ToolRuntime::new(workspace);
+
+    let error = runtime
+        .invoke(ToolCall::ExecStart(ExecStartInput {
+            executable: "docker".to_string(),
+            args: vec![
+                "run".to_string(),
+                "--rm".to_string(),
+                "--network".to_string(),
+                "host".to_string(),
+                "--cap-add".to_string(),
+                "NET_ADMIN".to_string(),
+                "openconnect-vpn".to_string(),
+            ],
+            cwd: None,
+        }))
+        .expect_err("host network docker run must be blocked");
+
+    assert!(
+        error
+            .to_string()
+            .contains("host-level VPN or network reconfiguration commands are blocked"),
+        "{error}"
+    );
+}
+
+#[test]
+fn exec_start_blocks_shell_wrapped_vpn_commands() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let workspace = WorkspaceRef::new(temp.path());
+    let mut runtime = ToolRuntime::new(workspace);
+
+    let error = runtime
+        .invoke(ToolCall::ExecStart(ExecStartInput {
+            executable: "/bin/sh".to_string(),
+            args: vec![
+                "-c".to_string(),
+                "docker run --network=host openconnect-vpn".to_string(),
+            ],
+            cwd: None,
+        }))
+        .expect_err("shell wrapped host network docker run must be blocked");
+
+    assert!(
+        error
+            .to_string()
+            .contains("host-level VPN or network reconfiguration commands are blocked"),
+        "{error}"
+    );
 }
 
 #[test]
@@ -1840,6 +1913,106 @@ fn exec_kill_terminates_structured_processes() {
     assert_eq!(killed.status, ProcessResultStatus::Killed);
 }
 
+#[cfg(unix)]
+#[test]
+fn exec_kill_terminates_process_group_descendants() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let child_pid_path = temp.path().join("child.pid");
+    let workspace = WorkspaceRef::new(temp.path());
+    let mut runtime = ToolRuntime::new(workspace);
+
+    let started = runtime
+        .invoke(ToolCall::ExecStart(ExecStartInput {
+            executable: "/bin/sh".to_string(),
+            args: vec![
+                "-c".to_string(),
+                "sleep 30 & echo $! > child.pid; wait".to_string(),
+            ],
+            cwd: None,
+        }))
+        .expect("exec_start")
+        .into_process_start()
+        .expect("process start");
+
+    let deadline = Instant::now() + Duration::from_secs(2);
+    while !child_pid_path.exists() {
+        assert!(Instant::now() < deadline, "timed out waiting for child pid");
+        thread::sleep(Duration::from_millis(25));
+    }
+    let child_pid: libc::pid_t = std::fs::read_to_string(&child_pid_path)
+        .expect("read child pid")
+        .trim()
+        .parse()
+        .expect("parse child pid");
+
+    let killed = runtime
+        .invoke(ToolCall::ExecKill(ProcessKillInput {
+            process_id: started.process_id,
+        }))
+        .expect("exec_kill")
+        .into_process_result()
+        .expect("process result");
+
+    let child_still_alive = process_exists(child_pid);
+    if child_still_alive {
+        unsafe {
+            libc::kill(child_pid, libc::SIGKILL);
+        }
+    }
+
+    assert_eq!(killed.status, ProcessResultStatus::Killed);
+    assert!(
+        !child_still_alive,
+        "exec_kill must terminate descendants in the exec process group"
+    );
+}
+
+#[test]
+fn exec_wait_times_out_and_kills_process() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let workspace = WorkspaceRef::new(temp.path());
+    let mut runtime = ToolRuntime::new(workspace);
+
+    let started = runtime
+        .invoke(ToolCall::ExecStart(ExecStartInput {
+            executable: "/bin/sleep".to_string(),
+            args: vec!["30".to_string()],
+            cwd: None,
+        }))
+        .expect("exec_start")
+        .into_process_start()
+        .expect("process start");
+
+    let started_at = Instant::now();
+    let waited = runtime
+        .invoke(ToolCall::ExecWait(ProcessWaitInput {
+            process_id: started.process_id.clone(),
+            timeout_ms: Some(100),
+        }))
+        .expect("exec_wait")
+        .into_process_result()
+        .expect("process result");
+
+    assert!(
+        started_at.elapsed() < Duration::from_secs(2),
+        "exec_wait timeout should return promptly"
+    );
+    assert_eq!(waited.status, ProcessResultStatus::TimedOut);
+    assert!(
+        matches!(
+            runtime.invoke(ToolCall::ExecReadOutput(ProcessReadOutputInput {
+                process_id: started.process_id,
+                stream: None,
+                cursor: None,
+                max_bytes: None,
+                max_lines: None,
+            })),
+            Err(super::ToolError::UnknownProcess { .. })
+        ),
+        "timed-out process should be removed from the registry"
+    );
+}
+
 #[test]
 fn structured_exec_processes_survive_runtime_recreation_with_shared_registry() {
     let temp = tempfile::tempdir().expect("tempdir");
@@ -1861,6 +2034,7 @@ fn structured_exec_processes_survive_runtime_recreation_with_shared_registry() {
     let waited = second_runtime
         .invoke(ToolCall::ExecWait(ProcessWaitInput {
             process_id: started.process_id,
+            timeout_ms: None,
         }))
         .expect("exec_wait")
         .into_process_result()
@@ -1894,6 +2068,7 @@ fn exec_wait_returns_when_shell_exits_even_if_background_child_keeps_pipe_open()
     let waited = runtime
         .invoke(ToolCall::ExecWait(ProcessWaitInput {
             process_id: started.process_id,
+            timeout_ms: None,
         }))
         .expect("exec_wait")
         .into_process_result()
@@ -1962,6 +2137,7 @@ fn structured_exec_can_read_live_output_with_cursor_and_merged_stream() {
     let waited = second_runtime
         .invoke(ToolCall::ExecWait(ProcessWaitInput {
             process_id: started.process_id.clone(),
+            timeout_ms: None,
         }))
         .expect("exec_wait")
         .into_process_result()
@@ -1993,6 +2169,7 @@ fn structured_exec_disconnects_child_stdin_from_the_terminal() {
     let waited = runtime
         .invoke(ToolCall::ExecWait(ProcessWaitInput {
             process_id: started.process_id,
+            timeout_ms: None,
         }))
         .expect("exec_wait")
         .into_process_result()
@@ -2031,6 +2208,7 @@ fn structured_exec_detaches_from_the_parent_controlling_tty_when_one_exists() {
     let waited = runtime
         .invoke(ToolCall::ExecWait(ProcessWaitInput {
             process_id: started.process_id,
+            timeout_ms: None,
         }))
         .expect("exec_wait")
         .into_process_result()

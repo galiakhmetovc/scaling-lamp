@@ -557,7 +557,7 @@ impl ToolRuntime {
                 let process_id = input.process_id.clone();
                 self.read_process_output(&process_id, ProcessKind::Exec, input)
             }
-            ToolCall::ExecWait(input) => self.wait_process(&input.process_id, ProcessKind::Exec),
+            ToolCall::ExecWait(input) => self.wait_process(input, ProcessKind::Exec),
             ToolCall::ExecKill(input) => self.kill_process(&input.process_id, ProcessKind::Exec),
             ToolCall::PlanRead(_)
             | ToolCall::PlanWrite(_)
@@ -671,6 +671,7 @@ impl ToolRuntime {
                 reason: "executable must not be empty",
             });
         }
+        validate_exec_start_is_safe_for_host(executable, args)?;
 
         let mut command = Command::new(executable);
         command
@@ -761,25 +762,26 @@ impl ToolRuntime {
 
     fn wait_process(
         &mut self,
-        process_id: &str,
+        input: ProcessWaitInput,
         expected_kind: ProcessKind,
     ) -> Result<ToolOutput, ToolError> {
+        let process_id = input.process_id.as_str();
         let managed = self.lookup_process(process_id, expected_kind)?;
-        let exit_status = {
-            let mut child = managed.child.lock().expect("managed child poisoned");
-            child.wait().map_err(|source| ToolError::ProcessIo {
-                process_id: process_id.to_string(),
-                source,
-            })?
+        let timeout = normalize_process_wait_timeout(input.timeout_ms);
+        let deadline = Instant::now() + timeout;
+        let terminal_status = loop {
+            if managed.try_record_exit(process_id)? {
+                break ProcessResultStatus::Exited;
+            }
+            if Instant::now() >= deadline {
+                managed.terminate(process_id, ProcessResultStatus::TimedOut)?;
+                break ProcessResultStatus::TimedOut;
+            }
+            thread::sleep(
+                PROCESS_WAIT_POLL_INTERVAL.min(deadline.saturating_duration_since(Instant::now())),
+            );
         };
-        {
-            let mut output = managed
-                .output
-                .lock()
-                .expect("managed process output poisoned");
-            output.finished_status = Some(ProcessResultStatus::Exited);
-            output.exit_code = exit_status.code();
-        }
+
         managed.drain_readers(PROCESS_READER_DRAIN_GRACE);
         self.remove_process(process_id);
         let output = managed
@@ -789,7 +791,7 @@ impl ToolRuntime {
 
         Ok(ToolOutput::ProcessResult(ProcessResult {
             process_id: process_id.to_string(),
-            status: ProcessResultStatus::Exited,
+            status: terminal_status,
             exit_code: output.exit_code,
             stdout: output.stdout.clone(),
             stderr: output.stderr.clone(),
@@ -802,23 +804,7 @@ impl ToolRuntime {
         expected_kind: ProcessKind,
     ) -> Result<ToolOutput, ToolError> {
         let managed = self.lookup_process(process_id, expected_kind)?;
-        {
-            let mut child = managed.child.lock().expect("managed child poisoned");
-            child.kill().map_err(|source| ToolError::ProcessIo {
-                process_id: process_id.to_string(),
-                source,
-            })?;
-            let exit_status = child.wait().map_err(|source| ToolError::ProcessIo {
-                process_id: process_id.to_string(),
-                source,
-            })?;
-            let mut output = managed
-                .output
-                .lock()
-                .expect("managed process output poisoned");
-            output.finished_status = Some(ProcessResultStatus::Killed);
-            output.exit_code = exit_status.code();
-        }
+        managed.terminate(process_id, ProcessResultStatus::Killed)?;
         managed.drain_readers(PROCESS_READER_DRAIN_GRACE);
         self.remove_process(process_id);
         let output = managed
@@ -874,10 +860,19 @@ impl ManagedProcess {
                 return Ok(match status {
                     ProcessResultStatus::Exited => ProcessOutputStatus::Exited,
                     ProcessResultStatus::Killed => ProcessOutputStatus::Killed,
+                    ProcessResultStatus::TimedOut => ProcessOutputStatus::TimedOut,
                 });
             }
         }
 
+        if self.try_record_exit(process_id)? {
+            return Ok(ProcessOutputStatus::Exited);
+        }
+
+        Ok(ProcessOutputStatus::Running)
+    }
+
+    fn try_record_exit(&self, process_id: &str) -> Result<bool, ToolError> {
         if let Ok(mut child) = self.child.try_lock()
             && let Some(exit_status) = child.try_wait().map_err(|source| ToolError::ProcessIo {
                 process_id: process_id.to_string(),
@@ -887,10 +882,64 @@ impl ManagedProcess {
             let mut output = self.output.lock().expect("managed process output poisoned");
             output.finished_status = Some(ProcessResultStatus::Exited);
             output.exit_code = exit_status.code();
-            return Ok(ProcessOutputStatus::Exited);
+            return Ok(true);
+        }
+        Ok(false)
+    }
+
+    fn terminate(
+        &self,
+        process_id: &str,
+        terminal_status: ProcessResultStatus,
+    ) -> Result<(), ToolError> {
+        let mut child = self.child.lock().expect("managed child poisoned");
+        if let Some(exit_status) = child.try_wait().map_err(|source| ToolError::ProcessIo {
+            process_id: process_id.to_string(),
+            source,
+        })? {
+            let mut output = self.output.lock().expect("managed process output poisoned");
+            output.finished_status = Some(ProcessResultStatus::Exited);
+            output.exit_code = exit_status.code();
+            return Ok(());
         }
 
-        Ok(ProcessOutputStatus::Running)
+        terminate_child_process_group(&mut child, false).map_err(|source| {
+            ToolError::ProcessIo {
+                process_id: process_id.to_string(),
+                source,
+            }
+        })?;
+        let deadline = Instant::now() + PROCESS_TERMINATE_GRACE;
+        loop {
+            if let Some(exit_status) = child.try_wait().map_err(|source| ToolError::ProcessIo {
+                process_id: process_id.to_string(),
+                source,
+            })? {
+                let mut output = self.output.lock().expect("managed process output poisoned");
+                output.finished_status = Some(terminal_status);
+                output.exit_code = exit_status.code();
+                return Ok(());
+            }
+            if Instant::now() >= deadline {
+                break;
+            }
+            thread::sleep(
+                PROCESS_WAIT_POLL_INTERVAL.min(deadline.saturating_duration_since(Instant::now())),
+            );
+        }
+
+        terminate_child_process_group(&mut child, true).map_err(|source| ToolError::ProcessIo {
+            process_id: process_id.to_string(),
+            source,
+        })?;
+        let exit_status = child.wait().map_err(|source| ToolError::ProcessIo {
+            process_id: process_id.to_string(),
+            source,
+        })?;
+        let mut output = self.output.lock().expect("managed process output poisoned");
+        output.finished_status = Some(terminal_status);
+        output.exit_code = exit_status.code();
+        Ok(())
     }
 
     fn drain_readers(&self, max_wait: Duration) {
@@ -1040,6 +1089,73 @@ fn normalize_process_output_max_lines(limit: Option<usize>) -> usize {
         .clamp(1, MAX_PROCESS_OUTPUT_READ_MAX_LINES)
 }
 
+fn normalize_process_wait_timeout(timeout_ms: Option<u64>) -> Duration {
+    timeout_ms
+        .map(Duration::from_millis)
+        .unwrap_or(DEFAULT_PROCESS_WAIT_TIMEOUT)
+        .clamp(Duration::from_millis(1), MAX_PROCESS_WAIT_TIMEOUT)
+}
+
+fn validate_exec_start_is_safe_for_host(
+    executable: &str,
+    args: &[String],
+) -> Result<(), ToolError> {
+    let executable_name = executable
+        .rsplit(['/', '\\'])
+        .next()
+        .unwrap_or(executable)
+        .to_ascii_lowercase();
+    let lowered_args: Vec<String> = args.iter().map(|arg| arg.to_ascii_lowercase()).collect();
+
+    if is_vpn_executable(executable_name.as_str())
+        || shell_invocation_contains_host_network_change(executable_name.as_str(), &lowered_args)
+        || docker_invocation_contains_host_network_change(executable_name.as_str(), &lowered_args)
+    {
+        return Err(ToolError::InvalidExec {
+            reason: "host-level VPN or network reconfiguration commands are blocked in exec_start; run them outside teamD or through an operator-controlled deployment step",
+        });
+    }
+    Ok(())
+}
+
+fn is_vpn_executable(executable_name: &str) -> bool {
+    matches!(
+        executable_name,
+        "openconnect" | "openvpn" | "vpnc" | "wg" | "wg-quick" | "tailscale" | "tailscaled"
+    )
+}
+
+fn shell_invocation_contains_host_network_change(executable_name: &str, args: &[String]) -> bool {
+    if !matches!(executable_name, "sh" | "bash" | "dash" | "zsh") {
+        return false;
+    }
+    let script = args.join(" ");
+    contains_host_network_change(script.as_str())
+}
+
+fn docker_invocation_contains_host_network_change(executable_name: &str, args: &[String]) -> bool {
+    if !matches!(executable_name, "docker" | "podman") {
+        return false;
+    }
+    contains_host_network_change(args.join(" ").as_str())
+}
+
+fn contains_host_network_change(command_text: &str) -> bool {
+    command_text.contains("openconnect")
+        || command_text.contains("openvpn")
+        || command_text.contains("wg-quick")
+        || command_text.contains("tailscale")
+        || command_text.contains("--network host")
+        || command_text.contains("--network=host")
+        || command_text.contains("--net host")
+        || command_text.contains("--net=host")
+        || command_text.contains("--privileged")
+        || command_text.contains("net_admin")
+        || command_text.contains("ip route")
+        || command_text.contains("resolvectl")
+        || command_text.contains("systemd-resolved")
+}
+
 fn clamp_utf8_boundary(text: &str, offset: usize) -> usize {
     let mut clamped = offset.min(text.len());
     while clamped > 0 && !text.is_char_boundary(clamped) {
@@ -1158,6 +1274,26 @@ fn detach_command_from_terminal(command: &mut Command) {
 
 #[cfg(not(unix))]
 fn detach_command_from_terminal(_command: &mut Command) {}
+
+#[cfg(unix)]
+fn terminate_child_process_group(child: &mut Child, force: bool) -> io::Result<()> {
+    let signal = if force { libc::SIGKILL } else { libc::SIGTERM };
+    let pid = child.id() as libc::pid_t;
+    let rc = unsafe { libc::kill(-pid, signal) };
+    if rc == 0 {
+        return Ok(());
+    }
+    let error = io::Error::last_os_error();
+    if error.raw_os_error() == Some(libc::ESRCH) {
+        return Ok(());
+    }
+    Err(error)
+}
+
+#[cfg(not(unix))]
+fn terminate_child_process_group(child: &mut Child, _force: bool) -> io::Result<()> {
+    child.kill()
+}
 
 impl SharedProcessRegistry {
     fn lock(&self) -> std::sync::MutexGuard<'_, ProcessRegistryState> {

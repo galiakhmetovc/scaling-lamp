@@ -567,11 +567,13 @@ exec_start({
 - запускает structured process `executable + args`;
 - не опирается на shell snippets как на основной API;
 - возвращает `process_id`.
+- блокирует host-level VPN/network reconfiguration команды (`openconnect`, `openvpn`, `wg-quick`, `tailscale`, `docker/podman --network host`, `--privileged`, `NET_ADMIN`, изменение routes/DNS), потому что они могут сломать связность самого runtime node.
 
 Когда использовать:
 
 - для запуска тестов, сборки, git, rg, ls и прочих CLI;
 - если нужен дальнейший контроль процесса.
+- не использовать для подключения корпоративного VPN или изменения сетевого состояния хоста; такие операции должен выполнять оператор вне `teamD` или отдельный контролируемый deployment step.
 
 ### `exec_read_output`
 
@@ -602,17 +604,20 @@ exec_read_output({
 Сигнатура:
 
 ```text
-exec_wait({ process_id: string })
+exec_wait({ process_id: string, timeout_ms?: integer | null })
 ```
 
 Что делает:
 
 - ждёт завершения процесса;
+- имеет hard timeout: по умолчанию 10 минут, максимум 60 минут;
+- при timeout завершает process group и возвращает `status=timed_out`;
 - возвращает итоговый статус и bounded output summary.
 
 Когда использовать:
 
 - когда процесс уже запущен и нужно дождаться результата.
+- для долгих процессов сначала используйте `exec_read_output`, а не blocking wait.
 
 ### `exec_kill`
 

@@ -32,6 +32,10 @@ const DEFAULT_PROCESS_OUTPUT_READ_MAX_BYTES: usize = 4 * 1024;
 const MAX_PROCESS_OUTPUT_READ_MAX_BYTES: usize = 32 * 1024;
 const DEFAULT_PROCESS_OUTPUT_READ_MAX_LINES: usize = 20;
 const MAX_PROCESS_OUTPUT_READ_MAX_LINES: usize = 200;
+const DEFAULT_PROCESS_WAIT_TIMEOUT: Duration = Duration::from_secs(10 * 60);
+const MAX_PROCESS_WAIT_TIMEOUT: Duration = Duration::from_secs(60 * 60);
+const PROCESS_WAIT_POLL_INTERVAL: Duration = Duration::from_millis(50);
+const PROCESS_TERMINATE_GRACE: Duration = Duration::from_millis(500);
 const PROCESS_READER_DRAIN_GRACE: Duration = Duration::from_millis(200);
 
 #[derive(Debug)]

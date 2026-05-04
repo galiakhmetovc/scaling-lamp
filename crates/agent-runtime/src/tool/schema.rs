@@ -340,7 +340,20 @@ impl ToolName {
                 "required": ["process_id"],
                 "additionalProperties": false,
             }),
-            Self::ExecWait | Self::ExecKill => json!({
+            Self::ExecWait => json!({
+                "type": "object",
+                "properties": {
+                    "process_id": { "type": "string" },
+                    "timeout_ms": {
+                        "type": ["integer", "null"],
+                        "minimum": 1,
+                        "description": "Optional hard wait timeout in milliseconds. Defaults to 10 minutes and is capped by the runtime."
+                    }
+                },
+                "required": ["process_id"],
+                "additionalProperties": false,
+            }),
+            Self::ExecKill => json!({
                 "type": "object",
                 "properties": {
                     "process_id": { "type": "string" }
