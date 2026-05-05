@@ -10,6 +10,10 @@ fn runtime_timing_policy_is_explicit_and_centralized() {
         Duration::from_secs(15)
     );
     assert_eq!(
+        config.runtime_timing.sqlite_lock_retry_delay(),
+        Duration::from_millis(250)
+    );
+    assert_eq!(
         config.runtime_timing.daemon_http_connect_timeout(),
         Duration::from_secs(2)
     );
@@ -86,6 +90,7 @@ fn runtime_limits_defaults_are_explicit_and_centralized() {
     let config = AppConfig::default();
 
     assert_eq!(config.runtime_limits.diagnostic_tail_lines, 80);
+    assert_eq!(config.runtime_limits.sqlite_lock_retry_attempts, 4);
     assert_eq!(config.runtime_limits.transcript_tail_run_limit, 32);
     assert_eq!(config.runtime_limits.agent_list_default_limit, 100);
     assert_eq!(config.runtime_limits.agent_list_max_limit, 1_000);

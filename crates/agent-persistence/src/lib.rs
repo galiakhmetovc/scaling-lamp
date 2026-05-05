@@ -7,9 +7,9 @@ pub mod store;
 
 pub use config::{
     A2APeerConfig, AppConfig, BrowserConfig, BrowserlessConfig, ConfigEnv, ConfigError,
-    DaemonConfig, KnowledgeConfig, McpConnectorSeedConfig, Mem0Config, MemoryCuratorConfig,
-    MemoryRecallConfig, RuntimeLimitsConfig, RuntimeTimingConfig, TelegramConfig, WorkspaceConfig,
-    normalize_absolute_path, validate_workspace_root_path,
+    DaemonConfig, KnowledgeConfig, KnowledgeSourcePathConfig, McpConnectorSeedConfig, Mem0Config,
+    MemoryCuratorConfig, MemoryRecallConfig, RuntimeLimitsConfig, RuntimeTimingConfig,
+    TelegramConfig, WorkspaceConfig, normalize_absolute_path, validate_workspace_root_path,
 };
 pub use records::{
     AgentChainContinuationRecord, AgentProfileRecord, AgentScheduleRecord, ArtifactRecord,

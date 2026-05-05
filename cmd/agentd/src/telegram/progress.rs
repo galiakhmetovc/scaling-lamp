@@ -1,8 +1,6 @@
 use crate::execution::{ChatExecutionEvent, ToolExecutionStatus};
 use std::collections::BTreeMap;
 
-const TELEGRAM_STATUS_DETAIL_CHAR_CAP: usize = 700;
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct TelegramProgressState {
     phase: TelegramProgressPhase,
@@ -104,7 +102,10 @@ impl TelegramProgressTracker {
     }
 }
 
-pub(super) fn render_temporary_status_html(state: &TelegramProgressState) -> String {
+pub(super) fn render_temporary_status_html(
+    state: &TelegramProgressState,
+    detail_char_cap: usize,
+) -> String {
     let (title, phase_label) = match (&state.phase, state.current_tool_status.as_ref()) {
         (TelegramProgressPhase::Starting, _) => ("⏳ Работаю", "запуск"),
         (TelegramProgressPhase::Thinking, _) => ("🧠 Анализирую", "анализ"),
@@ -145,10 +146,16 @@ pub(super) fn render_temporary_status_html(state: &TelegramProgressState) -> Str
         lines.push(format!("Статус: {}", render_tool_status_label(status)));
     }
     if let Some(context) = state.current_context_summary.as_deref() {
-        lines.push(format!("Контекст: {}", render_status_detail(context)));
+        lines.push(format!(
+            "Контекст: {}",
+            render_status_detail(context, detail_char_cap)
+        ));
     }
     if let Some(summary) = state.current_tool_summary.as_deref() {
-        lines.push(format!("Деталь: {}", render_status_detail(summary)));
+        lines.push(format!(
+            "Деталь: {}",
+            render_status_detail(summary, detail_char_cap)
+        ));
     }
 
     lines.join("\n")
@@ -199,21 +206,18 @@ fn render_tool_status_label(status: &ToolExecutionStatus) -> &'static str {
     }
 }
 
-fn render_status_detail(summary: &str) -> String {
+fn render_status_detail(summary: &str, detail_char_cap: usize) -> String {
     let compact = summary.split_whitespace().collect::<Vec<_>>().join(" ");
     let total_chars = compact.chars().count();
-    if total_chars <= TELEGRAM_STATUS_DETAIL_CHAR_CAP {
+    if total_chars <= detail_char_cap {
         return escape_telegram_html(&compact);
     }
 
-    let visible: String = compact
-        .chars()
-        .take(TELEGRAM_STATUS_DETAIL_CHAR_CAP)
-        .collect();
+    let visible: String = compact.chars().take(detail_char_cap).collect();
     format!(
         "{}… (обрезано, ещё {} симв.)",
         escape_telegram_html(&visible),
-        total_chars.saturating_sub(TELEGRAM_STATUS_DETAIL_CHAR_CAP)
+        total_chars.saturating_sub(detail_char_cap)
     )
 }
 
@@ -223,7 +227,11 @@ fn escape_telegram_html(text: &str) -> String {
         .replace('>', "&gt;")
 }
 
-pub(super) fn render_file_delivery_failed_html(file_name: &str, error: &str) -> String {
+pub(super) fn render_file_delivery_failed_html(
+    file_name: &str,
+    error: &str,
+    detail_char_cap: usize,
+) -> String {
     [
         "<b>⚠️ Файл не отправлен</b>".to_string(),
         "Не удалось отправить файл через Telegram.".to_string(),
@@ -231,7 +239,7 @@ pub(super) fn render_file_delivery_failed_html(file_name: &str, error: &str) -> 
             "Файл: <code>{}</code>",
             escape_telegram_html(file_name.trim())
         ),
-        format!("Деталь: {}", render_status_detail(error)),
+        format!("Деталь: {}", render_status_detail(error, detail_char_cap)),
         "Запрос доставки помечен как failed; файл остался artifact'ом текущей session.".to_string(),
     ]
     .join("\n")
@@ -249,7 +257,7 @@ mod tests {
             summary: "Использую skills: mem0-memory (auto)".to_string(),
         }));
 
-        let rendered = render_temporary_status_html(tracker.state());
+        let rendered = render_temporary_status_html(tracker.state(), 700);
 
         assert!(rendered.contains("Собираю контекст"));
         assert!(rendered.contains("Контекст: Использую skills"));
@@ -265,7 +273,7 @@ mod tests {
             summary: "memory_search query=погода".to_string(),
             status: ToolExecutionStatus::Running,
         });
-        let rendered_memory = render_temporary_status_html(tracker.state());
+        let rendered_memory = render_temporary_status_html(tracker.state(), 700);
         assert!(rendered_memory.contains("Работаю с памятью"));
 
         tracker.apply(&ChatExecutionEvent::ToolStatus {
@@ -274,7 +282,7 @@ mod tests {
             summary: "kv_get scope=operator key=selected_agent".to_string(),
             status: ToolExecutionStatus::Running,
         });
-        let rendered_kv = render_temporary_status_html(tracker.state());
+        let rendered_kv = render_temporary_status_html(tracker.state(), 700);
         assert!(rendered_kv.contains("Работаю с KV"));
         assert!(rendered_kv.contains("Вызовы: 2"));
     }

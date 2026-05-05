@@ -10,9 +10,6 @@ use agent_runtime::run::RunStatus;
 use agent_runtime::session::{Session, TranscriptEntry};
 use std::collections::BTreeSet;
 
-const DAEMON_WORKER_LEASE_OWNER: &str = "daemon";
-const DAEMON_WORKER_LEASE_SECONDS: i64 = 60;
-
 impl ExecutionService {
     pub fn background_worker_tick(
         &self,
@@ -217,8 +214,13 @@ impl ExecutionService {
         now: i64,
     ) -> Result<(), ExecutionError> {
         let mut job = self.load_job(store, job_id)?;
-        job.lease_owner = Some(DAEMON_WORKER_LEASE_OWNER.to_string());
-        job.lease_expires_at = Some(now + DAEMON_WORKER_LEASE_SECONDS);
+        job.lease_owner = Some(self.config.worker_lease_owner.clone());
+        job.lease_expires_at = Some(
+            now + self
+                .config
+                .runtime_timing
+                .daemon_background_worker_lease_seconds,
+        );
         job.heartbeat_at = Some(now);
         job.attempt_count = job.attempt_count.saturating_add(1);
         if job.last_progress_message.is_none() {

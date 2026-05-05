@@ -1,8 +1,8 @@
 use super::*;
 use agent_runtime::agent::AgentChainContinuationGrant;
 use agent_runtime::interagent::{
-    AgentMessageChain, AgentMessageError, AgentMessageRequest, continued_chain_from_grant,
-    format_agent_input_message,
+    AgentChainState, AgentMessageChain, AgentMessageError, AgentMessageRequest,
+    continued_chain_from_grant, format_agent_input_message,
 };
 use agent_runtime::mission::{JobSpec, JobStatus};
 use agent_runtime::run::RunStatus;
@@ -32,10 +32,14 @@ impl ExecutionService {
         let active_chain = self
             .load_session_interagent_chain(store, &source_session.id)?
             .unwrap_or_else(|| {
-                AgentMessageChain::root(
+                AgentMessageChain::new(
                     format!("chain-{}-{}", source_session.id, unique_execution_token()),
                     source_session.id.clone(),
                     source_session.agent_profile_id.clone(),
+                    0,
+                    self.config.runtime_limits.interagent_default_max_hops,
+                    None,
+                    AgentChainState::Active,
                 )
                 .expect("valid root interagent chain")
             });

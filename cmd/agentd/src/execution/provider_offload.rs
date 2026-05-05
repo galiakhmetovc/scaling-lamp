@@ -11,12 +11,6 @@ use agent_runtime::tool::{
     ArtifactSearchResult, ToolCall, ToolError, ToolOutput,
 };
 
-const MAX_CONTEXT_OFFLOAD_REFS: usize = 16;
-const INLINE_TOOL_OUTPUT_TOKEN_LIMIT: u32 = 512;
-const INLINE_FIND_IN_FILES_PREVIEW_LIMIT: usize = 6;
-const DEFAULT_ARTIFACT_READ_MAX_BYTES: usize = 8 * 1024;
-const MAX_ARTIFACT_READ_MAX_BYTES: usize = 32 * 1024;
-
 type OffloadableToolOutput = (String, String, Vec<u8>, String);
 
 impl ExecutionService {
@@ -85,7 +79,12 @@ impl ExecutionService {
         let payload_text = String::from_utf8_lossy(&payload_bytes).to_string();
         let token_estimate = approximate_token_count(&payload_text);
 
-        if token_estimate <= INLINE_TOOL_OUTPUT_TOKEN_LIMIT {
+        if token_estimate
+            <= self
+                .config
+                .runtime_limits
+                .offload_inline_tool_output_token_limit
+        {
             return Ok(inline_output);
         }
 
@@ -122,7 +121,9 @@ impl ExecutionService {
                 .cmp(&left.created_at)
                 .then_with(|| left.id.cmp(&right.id))
         });
-        snapshot.refs.truncate(MAX_CONTEXT_OFFLOAD_REFS);
+        snapshot
+            .refs
+            .truncate(self.config.runtime_limits.offload_max_context_refs);
         snapshot.updated_at = now;
 
         let mut retained_refs = Vec::with_capacity(snapshot.refs.len());
@@ -233,7 +234,11 @@ impl ExecutionService {
                 let preview_matches = result
                     .matches
                     .iter()
-                    .take(INLINE_FIND_IN_FILES_PREVIEW_LIMIT)
+                    .take(
+                        self.config
+                            .runtime_limits
+                            .offload_inline_find_in_files_preview_limit,
+                    )
                     .map(|entry| {
                         serde_json::json!({
                             "path": entry.path,
@@ -389,8 +394,8 @@ impl ExecutionService {
             &full_content,
             input.offset,
             input.max_bytes,
-            DEFAULT_ARTIFACT_READ_MAX_BYTES,
-            MAX_ARTIFACT_READ_MAX_BYTES,
+            self.config.runtime_limits.artifact_read_default_max_bytes,
+            self.config.runtime_limits.artifact_read_max_bytes,
         );
         let content_byte_len = content.len();
 

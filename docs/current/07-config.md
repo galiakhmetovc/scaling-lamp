@@ -96,12 +96,24 @@ export TEAMD_PROVIDER_API_KEY='replace-with-zai-key'
 - `default_autoapprove`
 - `inbound_queue_default_mode`
 - `inbound_coalesce_window_ms`
+- `inbound_min_coalesce_window_ms`
+- `message_text_soft_cap`
+- `caption_soft_cap`
+- `status_detail_char_cap`
+- `status_ttl_seconds`
+- `typing_initial_delay_ms`
+- `typing_heartbeat_interval_seconds`
+- `delivery_retry_attempts`
+- `delivery_retry_base_delay_ms`
+- `chat_turn_fast_settle_ms`
 
 Рекомендуемое правило: `telegram.bot_token` не хранить в `config.toml`, а задавать через `TEAMD_TELEGRAM_BOT_TOKEN` в `.env` или environment.
 
 `group_require_mention = true` означает строгий режим для неактивированных Telegram users. Если user уже прошёл pairing и запись activated, worker принимает его обычный текст в group/supergroup chat без mention и routes его в выбранную group session.
 
-`inbound_queue_default_mode` управляет тем, что Telegram worker делает с обычным сообщением, если в выбранной session уже выполняется turn. Допустимые значения: `reject`, `queue`, `coalesce`, `restart`. Default — `coalesce`. `inbound_coalesce_window_ms` задаёт окно объединения входящих сообщений; минимум валидируется как `5000`.
+`inbound_queue_default_mode` управляет тем, что Telegram worker делает с обычным сообщением, если в выбранной session уже выполняется turn. Допустимые значения: `reject`, `queue`, `coalesce`, `restart`. Default — `coalesce`. `inbound_coalesce_window_ms` задаёт окно объединения входящих сообщений; минимум задаётся явно через `inbound_min_coalesce_window_ms` и применяется при сохранении `/queue coalesce ...`.
+
+Telegram rendering/delivery limits тоже являются config policy: `message_text_soft_cap`, `caption_soft_cap`, `status_detail_char_cap`, `status_ttl_seconds`, typing heartbeat и retry-настройки delivery. Это важно для hotfix'ов вроде `MESSAGE_TOO_LONG`: оператор меняет policy в `config.toml`, а не правит Rust-код.
 
 ### `[session_defaults]`
 
@@ -356,6 +368,7 @@ Backend deploy через `scripts/deploy-teamd-containers.sh --with-mem0`:
 - поднимает `teamd-mem0` на `127.0.0.1:18888` и `teamd-mem0-postgres`;
 - использует local `fastembed` для embeddings, default `sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2`, 384 dimensions;
 - использует OpenAI-compatible LLM endpoint для extraction, default `glm-4.5-air` через Z.ai;
+- патчит self-hosted Mem0 `pgvector` adapter: raw cosine distance из PostgreSQL нормализуется в similarity score (`1 - distance`), иначе Mem0 ранжирует semantic results в неправильную сторону;
 - генерирует `ADMIN_API_KEY`, `JWT_SECRET`, `POSTGRES_PASSWORD` в `/opt/teamd/containers/mem0/mem0.env`;
 - upsert'ит `TEAMD_MEM0_*`, `TEAMD_MEMORY_CURATOR_*` и `TEAMD_MEMORY_RECALL_*` в `/etc/teamd/teamd.env`.
 
@@ -400,6 +413,10 @@ export TEAMD_MEM0_COLLECTION_NAME='teamd_memories_fastembed_384'
 - `silverbullet_base_url` — optional browser URL; сейчас используется как операторская подсказка/документация, а не как источник runtime state.
 - `silverbullet_journal_context_enabled` — включает bounded чтение `journals/<today>.md` и `journals/<yesterday>.md` в `SessionHead`.
 - `silverbullet_mirror_enabled` — включает best-effort запись runtime mirror pages в SilverBullet Space.
+- `silverbullet_session_area_path` — относительный путь index page для зеркал сессий.
+- `silverbullet_text_artifact_extensions` и `silverbullet_script_artifact_extensions` — какие artifact-файлы можно inline'ить в mirror page как текст/скрипт.
+- `source_files`, `source_dirs`, `allowed_extensions` — канонические корни для `knowledge_search`/`knowledge_read`. Это больше не зашито в коде: можно менять, какие файлы и папки workspace индексируются как project knowledge.
+- `knowledge_search` использует SQLite FTS только по этим configured roots. Это не произвольный filesystem search; если в root попал недоступный файл, индексатор пропускает его, а не валит весь tool.
 
 Default:
 
@@ -410,6 +427,43 @@ silverbullet_space_dir = "/var/lib/teamd/knowledge/silverbullet/teamd"
 # silverbullet_base_url = "https://teamd.example/sb"
 silverbullet_journal_context_enabled = true
 silverbullet_mirror_enabled = true
+silverbullet_session_area_path = "a/teamd-agents.md"
+silverbullet_text_artifact_extensions = [
+  "bash", "css", "csv", "html", "js", "json", "lua", "md", "py", "rs",
+  "sh", "sql", "toml", "ts", "txt", "xml", "yaml", "yml",
+]
+silverbullet_script_artifact_extensions = ["bash", "js", "lua", "py", "rs", "sh", "ts"]
+allowed_extensions = ["md", "txt", "json", "yaml", "yml", "toml"]
+
+[[knowledge.source_files]]
+path = "README.md"
+root = "root_docs"
+kind = "root_doc"
+
+[[knowledge.source_files]]
+path = "SYSTEM.md"
+root = "root_docs"
+kind = "root_doc"
+
+[[knowledge.source_files]]
+path = "AGENTS.md"
+root = "root_docs"
+kind = "root_doc"
+
+[[knowledge.source_dirs]]
+path = "docs"
+root = "docs"
+kind = "project_doc"
+
+[[knowledge.source_dirs]]
+path = "projects"
+root = "projects"
+kind = "project_doc"
+
+[[knowledge.source_dirs]]
+path = "notes"
+root = "notes"
+kind = "project_note"
 ```
 
 Env:
@@ -427,7 +481,9 @@ export TEAMD_SILVERBULLET_MIRROR_ENABLED='true'
 - `data_dir/USER.md` создаётся из встроенного template при первом чтении и потом редактируется оператором без пересборки бинаря;
 - `USER.md` попадает в `SessionHead` bounded-блоком `Operator Context`;
 - если включён journal context и space существует, runtime читает today/yesterday daily notes из `journals/YYYY-MM-DD.md` с учётом `operator_timezone`;
-- если включён mirror и space существует, runtime после успешных chat/wakeup/inter-agent/approval turns и compaction пишет человекочитаемые pages `a/teamd-agents.md` и `p/teamd-session-<session_id>.md`;
+- если включён mirror и space существует, runtime после успешных chat/wakeup/inter-agent/approval turns и compaction пишет человекочитаемые pages в `silverbullet_session_area_path` и `p/teamd-session-<session_id>.md`;
+- `knowledge_search` индексирует только `source_files` и файлы из `source_dirs` с расширениями из `allowed_extensions`, затем ищет по SQLite FTS;
+- unreadable/stale/non-UTF8 файлы в этих roots пропускаются при обновлении индекса;
 - SilverBullet mirror не является источником истины: plan, transcript, tool calls, artifacts и schedules остаются в `agentd` state, а page нужен для прозрачного просмотра и ручных заметок.
 
 ### `[observability]`
@@ -466,12 +522,14 @@ export TEAMD_OTLP_TIMEOUT_MS='2000'
 Это теперь каноническое место для всех operator-facing timing policies:
 
 - SQLite busy timeout
+- SQLite lock retry delay
 - daemon HTTP connect/request timeouts
 - A2A connect timeout
 - autospawn polling
 - shutdown/restart polling
 - server request poll interval
 - background worker tick interval
+- background worker job lease duration
 - TUI event polling
 - MCP stdio polling
 - provider retry delay
@@ -483,6 +541,7 @@ export TEAMD_OTLP_TIMEOUT_MS='2000'
 Здесь собраны operator/runtime-facing лимиты:
 
 - diagnostic tail size
+- SQLite lock retry attempts
 - active run step preview limits
 - transcript tail run limit
 - agent/schedule/MCP/session search limits
@@ -493,6 +552,18 @@ export TEAMD_OTLP_TIMEOUT_MS='2000'
 - SilverBullet text artifact/script mirror limits
 - timeline preview chars
 - session warm idle seconds
+- filesystem listing/page caps для `fs_list`/`fs_glob`
+- process output and wait/kill timing limits для `exec_*`
+- provider transient retry count
+- provider loop guard для одинаковых tool-call подряд
+- provider empty-response recovery count
+- tool-call result preview cap before offloading full output into artifact
+- context offload/artifact read caps
+- KV key/value/list caps
+- skill list/read caps
+- autonomy state read caps
+- SessionHead activity/tree limits
+- default max hops for new inter-agent chains
 
 Идея та же: убрать магические числа из runtime path и сделать policy явно конфигурируемой.
 

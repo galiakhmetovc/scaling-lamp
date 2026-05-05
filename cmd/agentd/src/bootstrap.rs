@@ -10,7 +10,8 @@ pub(crate) use mcp_ops::{render_mcp_connector_view, render_mcp_connectors_view};
 
 use crate::diagnostics::DiagnosticEventBuilder;
 use crate::store_retry::{
-    SQLITE_LOCK_RETRY_ATTEMPTS, SQLITE_LOCK_RETRY_DELAY_MS, retry_store_sync,
+    configure_sqlite_lock_retry, retry_store_sync, sqlite_lock_retry_attempts,
+    sqlite_lock_retry_delay,
 };
 use crate::{about::RuntimeReleaseUpdater, cli, execution, mcp::SharedMcpRegistry, prompting};
 use agent_persistence::{
@@ -295,6 +296,7 @@ impl App {
                     .auto_compaction_trigger_ratio,
                 context_window_tokens_override: self.config.context.context_window_tokens_override,
                 skills_dir: self.config.daemon.skills_dir.clone(),
+                worker_lease_owner: self.config.daemon.worker_lease_owner.clone(),
                 a2a_public_base_url: self.config.daemon.public_base_url.clone(),
                 a2a_callback_bearer_token: self.config.daemon.bearer_token.clone(),
                 a2a_peers: self.config.daemon.a2a_peers.clone(),
@@ -345,8 +347,8 @@ impl App {
 
     pub fn store(&self) -> Result<PersistenceStore, BootstrapError> {
         retry_store_sync(
-            SQLITE_LOCK_RETRY_ATTEMPTS,
-            Duration::from_millis(SQLITE_LOCK_RETRY_DELAY_MS),
+            sqlite_lock_retry_attempts(),
+            sqlite_lock_retry_delay(),
             || PersistenceStore::open_runtime(&self.persistence),
         )
         .map_err(BootstrapError::Store)
@@ -980,6 +982,10 @@ fn build_from_config_inner(
 ) -> Result<App, BootstrapError> {
     let started = Instant::now();
     config.validate()?;
+    configure_sqlite_lock_retry(
+        config.runtime_limits.sqlite_lock_retry_attempts,
+        config.runtime_timing.sqlite_lock_retry_delay_ms,
+    );
 
     let persistence = PersistenceScaffold::from_config(config.clone());
     DiagnosticEventBuilder::new(

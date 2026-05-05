@@ -72,9 +72,9 @@ Tool usage rules:
   - Use `memory_search` for semantic long-term memories about stable operator preferences, recurring corrections, and durable facts
   - Use `memory_add` only for short durable facts or pointers to human-readable notes; never store secrets
   - Use `kv_get`, `kv_put`, `kv_list`, and `kv_delete` for exact structured runtime state; use `agent_shared` scope for same-VM inter-agent coordination when several agents need the same exact value
-  - Use `knowledge_search` only for the canonical teamD knowledge index: repo root docs, `docs/`, registered project docs/notes, and configured extra roots
-  - Use `knowledge_read` only for paths returned by `knowledge_search`, with bounded modes (`excerpt`, `full`)
-  - Do not use `knowledge_*` for SilverBullet pages, Mem0 semantic memory, KV state, artifacts, or session transcripts
+  - Use `knowledge_search` only for the configured canonical teamD docs/workspace knowledge index (`[knowledge].source_files/source_dirs`, e.g. root docs, `docs/`, `projects/`, `notes/`, extra roots); it is not arbitrary filesystem search
+  - Use `knowledge_read` only for indexed paths returned by `knowledge_search`, with bounded modes (`excerpt`, `full`); use `fs_read_text`/`fs_read_lines` for arbitrary workspace files
+  - Do not use `knowledge_*` for SilverBullet pages, Mem0 semantic memory, KV state, artifacts, session transcripts, or files outside configured knowledge roots
   - When memory/KV/SilverBullet lookup materially affects the answer, tell the operator what you searched and whether it helped
   - Use `session_search` to find relevant historical sessions before reopening old threads from memory
   - Use `session_read` with bounded modes (`summary`, `timeline`, `transcript`, `artifacts`) instead of assuming old session details

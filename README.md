@@ -63,6 +63,7 @@ cargo build --release -p agentd
 - [docs/current/07-config.md](docs/current/07-config.md) — `config.toml`, env overrides, timing/limits и provider settings.
 - [docs/current/08-testing-and-verification.md](docs/current/08-testing-and-verification.md) — как проверяется система и какие regression tests уже есть.
 - [docs/current/09-operator-cheatsheet.md](docs/current/09-operator-cheatsheet.md) — практические команды и сценарии для оператора.
+- [docs/current/18-runtime-policy-config-audit.md](docs/current/18-runtime-policy-config-audit.md) — что уже вынесено из hardcode в `config.toml` и что осталось.
 
 Исторические design- и planning-документы остаются в [`docs/superpowers`](docs/superpowers), но это не каноническая документация текущей реализации.
 

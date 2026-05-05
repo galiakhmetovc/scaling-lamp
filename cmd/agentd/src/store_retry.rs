@@ -1,10 +1,28 @@
 use agent_persistence::StoreError;
 use rusqlite::{Error as SqliteError, ErrorCode};
 use std::future::Future;
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::time::Duration;
 
-pub const SQLITE_LOCK_RETRY_ATTEMPTS: usize = 4;
-pub const SQLITE_LOCK_RETRY_DELAY_MS: u64 = 250;
+pub const DEFAULT_SQLITE_LOCK_RETRY_ATTEMPTS: usize = 4;
+pub const DEFAULT_SQLITE_LOCK_RETRY_DELAY_MS: u64 = 250;
+
+static SQLITE_LOCK_RETRY_ATTEMPTS: AtomicUsize =
+    AtomicUsize::new(DEFAULT_SQLITE_LOCK_RETRY_ATTEMPTS);
+static SQLITE_LOCK_RETRY_DELAY_MS: AtomicU64 = AtomicU64::new(DEFAULT_SQLITE_LOCK_RETRY_DELAY_MS);
+
+pub fn configure_sqlite_lock_retry(attempts: usize, delay_ms: u64) {
+    SQLITE_LOCK_RETRY_ATTEMPTS.store(attempts.max(1), Ordering::Relaxed);
+    SQLITE_LOCK_RETRY_DELAY_MS.store(delay_ms.max(1), Ordering::Relaxed);
+}
+
+pub fn sqlite_lock_retry_attempts() -> usize {
+    SQLITE_LOCK_RETRY_ATTEMPTS.load(Ordering::Relaxed).max(1)
+}
+
+pub fn sqlite_lock_retry_delay() -> Duration {
+    Duration::from_millis(SQLITE_LOCK_RETRY_DELAY_MS.load(Ordering::Relaxed).max(1))
+}
 
 pub fn is_transient_sqlite_lock(error: &StoreError) -> bool {
     match error {
@@ -62,8 +80,8 @@ where
 #[cfg(test)]
 mod tests {
     use super::{
-        SQLITE_LOCK_RETRY_ATTEMPTS, SQLITE_LOCK_RETRY_DELAY_MS, is_transient_sqlite_lock,
-        retry_store_async, retry_store_sync,
+        DEFAULT_SQLITE_LOCK_RETRY_ATTEMPTS, DEFAULT_SQLITE_LOCK_RETRY_DELAY_MS,
+        is_transient_sqlite_lock, retry_store_async, retry_store_sync,
     };
     use agent_persistence::StoreError;
     use rusqlite::{Error as SqliteError, ErrorCode, ffi};
@@ -100,27 +118,26 @@ mod tests {
     #[test]
     fn retries_sync_store_operation_until_lock_clears() {
         let attempts = AtomicUsize::new(0);
-        let result =
-            retry_store_sync(
-                SQLITE_LOCK_RETRY_ATTEMPTS,
-                Duration::from_millis(0),
-                || match attempts.fetch_add(1, Ordering::SeqCst) {
-                    0 | 1 => Err(sqlite_failure(ErrorCode::DatabaseBusy)),
-                    _ => Ok("ok"),
-                },
-            )
-            .expect("retry succeeds");
+        let result = retry_store_sync(
+            DEFAULT_SQLITE_LOCK_RETRY_ATTEMPTS,
+            Duration::from_millis(0),
+            || match attempts.fetch_add(1, Ordering::SeqCst) {
+                0 | 1 => Err(sqlite_failure(ErrorCode::DatabaseBusy)),
+                _ => Ok("ok"),
+            },
+        )
+        .expect("retry succeeds");
 
         assert_eq!(result, "ok");
         assert_eq!(attempts.load(Ordering::SeqCst), 3);
-        assert_eq!(SQLITE_LOCK_RETRY_DELAY_MS, 250);
+        assert_eq!(DEFAULT_SQLITE_LOCK_RETRY_DELAY_MS, 250);
     }
 
     #[tokio::test]
     async fn retries_async_store_operation_until_lock_clears() {
         let attempts = AtomicUsize::new(0);
         let result = retry_store_async(
-            SQLITE_LOCK_RETRY_ATTEMPTS,
+            DEFAULT_SQLITE_LOCK_RETRY_ATTEMPTS,
             Duration::from_millis(0),
             || async {
                 match attempts.fetch_add(1, Ordering::SeqCst) {
@@ -139,12 +156,15 @@ mod tests {
     #[test]
     fn does_not_retry_non_transient_errors() {
         let attempts = AtomicUsize::new(0);
-        let error =
-            retry_store_sync::<(), _>(SQLITE_LOCK_RETRY_ATTEMPTS, Duration::from_millis(0), || {
+        let error = retry_store_sync::<(), _>(
+            DEFAULT_SQLITE_LOCK_RETRY_ATTEMPTS,
+            Duration::from_millis(0),
+            || {
                 attempts.fetch_add(1, Ordering::SeqCst);
                 Err::<(), StoreError>(sqlite_failure(ErrorCode::ReadOnly))
-            })
-            .expect_err("read-only failure should escape");
+            },
+        )
+        .expect_err("read-only failure should escape");
 
         assert!(!is_transient_sqlite_lock(&error));
         assert_eq!(attempts.load(Ordering::SeqCst), 1);

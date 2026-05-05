@@ -1,7 +1,5 @@
 use super::{ExecutionError, ToolExecutionStatus};
-use crate::store_retry::{
-    SQLITE_LOCK_RETRY_ATTEMPTS, SQLITE_LOCK_RETRY_DELAY_MS, retry_store_sync,
-};
+use crate::store_retry::{retry_store_sync, sqlite_lock_retry_attempts, sqlite_lock_retry_delay};
 use crate::trace::RuntimeTraceContext;
 use agent_persistence::{
     ArtifactRecord, ArtifactRepository, PersistenceStore, ToolCallRecord, ToolCallRepository,
@@ -9,11 +7,8 @@ use agent_persistence::{
 };
 use agent_runtime::provider::{ProviderRequest, ProviderStreamMode};
 use std::path::PathBuf;
-use std::time::Duration;
 
 use super::provider_ids::sanitize_identifier;
-
-pub(super) const TOOL_RESULT_PREVIEW_CHAR_LIMIT: usize = 16 * 1024;
 
 pub(super) struct ToolCallLedgerUpdate<'a> {
     pub(super) store: &'a PersistenceStore,
@@ -36,6 +31,7 @@ pub(super) struct ToolCallResultLedgerUpdate<'a> {
     pub(super) tool_name: &'a str,
     pub(super) result_summary: &'a str,
     pub(super) result_output: &'a str,
+    pub(super) result_preview_char_limit: usize,
     pub(super) now: i64,
 }
 
@@ -88,8 +84,8 @@ pub(super) fn record_tool_call_ledger(
     update: ToolCallLedgerUpdate<'_>,
 ) -> Result<(), ExecutionError> {
     retry_store_sync(
-        SQLITE_LOCK_RETRY_ATTEMPTS,
-        Duration::from_millis(SQLITE_LOCK_RETRY_DELAY_MS),
+        sqlite_lock_retry_attempts(),
+        sqlite_lock_retry_delay(),
         || {
             let id = tool_call_ledger_id(update.run_id, update.provider_tool_call_id);
             let existing = update.store.get_tool_call(&id)?;
@@ -147,8 +143,8 @@ pub(super) fn record_tool_call_result(
     update: ToolCallResultLedgerUpdate<'_>,
 ) -> Result<(), ExecutionError> {
     retry_store_sync(
-        SQLITE_LOCK_RETRY_ATTEMPTS,
-        Duration::from_millis(SQLITE_LOCK_RETRY_DELAY_MS),
+        sqlite_lock_retry_attempts(),
+        sqlite_lock_retry_delay(),
         || {
             let id = tool_call_ledger_id(update.run_id, update.provider_tool_call_id);
             let Some(mut record) = update.store.get_tool_call(&id)? else {
@@ -157,7 +153,8 @@ pub(super) fn record_tool_call_result(
             let trace_context =
                 RuntimeTraceContext::from_run_link_or_default(update.store, update.run_id)?;
 
-            let (result_preview, result_truncated) = tool_result_preview(update.result_output);
+            let (result_preview, result_truncated) =
+                tool_result_preview(update.result_output, update.result_preview_char_limit);
             let result_artifact_id = if result_truncated {
                 let artifact_id =
                     tool_result_artifact_id(update.run_id, update.provider_tool_call_id);
@@ -207,12 +204,9 @@ pub(super) fn record_tool_call_result(
     .map_err(ExecutionError::Store)
 }
 
-fn tool_result_preview(result_output: &str) -> (String, bool) {
+fn tool_result_preview(result_output: &str, char_limit: usize) -> (String, bool) {
     let mut chars = result_output.chars();
-    let preview = chars
-        .by_ref()
-        .take(TOOL_RESULT_PREVIEW_CHAR_LIMIT)
-        .collect::<String>();
+    let preview = chars.by_ref().take(char_limit).collect::<String>();
     let truncated = chars.next().is_some();
     if truncated {
         (

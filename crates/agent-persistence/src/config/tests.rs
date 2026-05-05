@@ -4,7 +4,7 @@ use super::{
 };
 use agent_runtime::permission::{PermissionAction, PermissionMode};
 use agent_runtime::provider::ProviderKind;
-use agent_runtime::tool::WebSearchBackend;
+use agent_runtime::tool::{KnowledgeRoot, KnowledgeSourceKind, WebSearchBackend};
 use std::collections::BTreeMap;
 use std::ffi::OsString;
 use std::fs;
@@ -368,15 +368,18 @@ fn load_merges_runtime_timing_and_limits_from_file() {
 data_dir = "/tmp/teamd-config"
 
 [runtime_timing]
+sqlite_lock_retry_delay_ms = 125
 daemon_http_connect_timeout_ms = 2500
 daemon_http_request_timeout_ms = 12000
 autospawn_status_poll_attempts = 75
 autospawn_status_poll_interval_ms = 150
 provider_loop_transient_retry_base_delay_ms = 220
 tui_active_run_heartbeat_notice_interval_seconds = 45
+daemon_background_worker_lease_seconds = 90
 
 [runtime_limits]
 diagnostic_tail_lines = 120
+sqlite_lock_retry_attempts = 6
 transcript_tail_run_limit = 48
 agent_list_default_limit = 150
 agent_list_max_limit = 1500
@@ -384,6 +387,40 @@ session_search_default_limit = 30
 session_search_max_limit = 130
 knowledge_read_default_max_bytes = 12000
 knowledge_read_max_bytes = 128000
+fs_list_default_limit = 25
+fs_list_max_limit = 250
+process_output_read_default_max_bytes = 2048
+process_output_read_max_bytes = 4096
+process_output_read_default_max_lines = 10
+process_output_read_max_lines = 40
+process_wait_default_timeout_ms = 15000
+process_wait_max_timeout_ms = 30000
+process_wait_poll_interval_ms = 25
+process_terminate_grace_ms = 300
+process_reader_drain_grace_ms = 150
+provider_loop_max_transient_retries = 4
+provider_loop_max_identical_tool_call_repeats = 5
+provider_loop_max_empty_response_recoveries = 2
+tool_result_preview_char_limit = 2222
+offload_max_context_refs = 11
+offload_inline_tool_output_token_limit = 333
+artifact_read_default_max_bytes = 4096
+artifact_read_max_bytes = 8192
+kv_list_default_limit = 12
+kv_list_max_limit = 34
+kv_key_max_bytes = 256
+kv_value_max_bytes = 32768
+kv_metadata_max_bytes = 8192
+skill_list_default_limit = 7
+skill_list_max_limit = 77
+skill_read_default_max_bytes = 1234
+skill_read_max_bytes = 5678
+autonomy_state_default_max_items = 6
+autonomy_state_max_items = 60
+prompt_recent_filesystem_activity_limit = 3
+prompt_recent_process_activity_limit = 4
+prompt_workspace_tree_limit = 5
+interagent_default_max_hops = 9
 "#,
     )
     .expect("write config");
@@ -394,6 +431,7 @@ knowledge_read_max_bytes = 128000
     let config = AppConfig::load_from_env(&env).expect("load config");
 
     assert_eq!(config.runtime_timing.daemon_http_connect_timeout_ms, 2500);
+    assert_eq!(config.runtime_timing.sqlite_lock_retry_delay_ms, 125);
     assert_eq!(config.runtime_timing.daemon_http_request_timeout_ms, 12000);
     assert_eq!(config.runtime_timing.autospawn_status_poll_attempts, 75);
     assert_eq!(config.runtime_timing.autospawn_status_poll_interval_ms, 150);
@@ -409,8 +447,13 @@ knowledge_read_max_bytes = 128000
             .tui_active_run_heartbeat_notice_interval_seconds,
         45
     );
+    assert_eq!(
+        config.runtime_timing.daemon_background_worker_lease_seconds,
+        90
+    );
 
     assert_eq!(config.runtime_limits.diagnostic_tail_lines, 120);
+    assert_eq!(config.runtime_limits.sqlite_lock_retry_attempts, 6);
     assert_eq!(config.runtime_limits.transcript_tail_run_limit, 48);
     assert_eq!(config.runtime_limits.agent_list_default_limit, 150);
     assert_eq!(config.runtime_limits.agent_list_max_limit, 1500);
@@ -421,6 +464,73 @@ knowledge_read_max_bytes = 128000
         12000
     );
     assert_eq!(config.runtime_limits.knowledge_read_max_bytes, 128000);
+    assert_eq!(config.runtime_limits.fs_list_default_limit, 25);
+    assert_eq!(config.runtime_limits.fs_list_max_limit, 250);
+    assert_eq!(
+        config.runtime_limits.process_output_read_default_max_bytes,
+        2048
+    );
+    assert_eq!(config.runtime_limits.process_output_read_max_bytes, 4096);
+    assert_eq!(
+        config.runtime_limits.process_output_read_default_max_lines,
+        10
+    );
+    assert_eq!(config.runtime_limits.process_output_read_max_lines, 40);
+    assert_eq!(config.runtime_limits.process_wait_default_timeout_ms, 15000);
+    assert_eq!(config.runtime_limits.process_wait_max_timeout_ms, 30000);
+    assert_eq!(config.runtime_limits.process_wait_poll_interval_ms, 25);
+    assert_eq!(config.runtime_limits.process_terminate_grace_ms, 300);
+    assert_eq!(config.runtime_limits.process_reader_drain_grace_ms, 150);
+    assert_eq!(config.runtime_limits.provider_loop_max_transient_retries, 4);
+    assert_eq!(
+        config
+            .runtime_limits
+            .provider_loop_max_identical_tool_call_repeats,
+        5
+    );
+    assert_eq!(
+        config
+            .runtime_limits
+            .provider_loop_max_empty_response_recoveries,
+        2
+    );
+    assert_eq!(config.runtime_limits.tool_result_preview_char_limit, 2222);
+    assert_eq!(config.runtime_limits.offload_max_context_refs, 11);
+    assert_eq!(
+        config.runtime_limits.offload_inline_tool_output_token_limit,
+        333
+    );
+    assert_eq!(config.runtime_limits.artifact_read_default_max_bytes, 4096);
+    assert_eq!(config.runtime_limits.artifact_read_max_bytes, 8192);
+    assert_eq!(config.runtime_limits.kv_list_default_limit, 12);
+    assert_eq!(config.runtime_limits.kv_list_max_limit, 34);
+    assert_eq!(config.runtime_limits.kv_key_max_bytes, 256);
+    assert_eq!(config.runtime_limits.kv_value_max_bytes, 32768);
+    assert_eq!(config.runtime_limits.kv_metadata_max_bytes, 8192);
+    assert_eq!(config.runtime_limits.skill_list_default_limit, 7);
+    assert_eq!(config.runtime_limits.skill_list_max_limit, 77);
+    assert_eq!(config.runtime_limits.skill_read_default_max_bytes, 1234);
+    assert_eq!(config.runtime_limits.skill_read_max_bytes, 5678);
+    assert_eq!(config.runtime_limits.autonomy_state_default_max_items, 6);
+    assert_eq!(config.runtime_limits.autonomy_state_max_items, 60);
+    assert_eq!(
+        config
+            .runtime_limits
+            .prompt_recent_filesystem_activity_limit,
+        3
+    );
+    assert_eq!(
+        config.runtime_limits.prompt_recent_process_activity_limit,
+        4
+    );
+    assert_eq!(config.runtime_limits.prompt_workspace_tree_limit, 5);
+    assert_eq!(config.runtime_limits.interagent_default_max_hops, 9);
+
+    let tool_limits = config.runtime_limits.to_tool_runtime_limits();
+    assert_eq!(tool_limits.fs_list_default_limit, 25);
+    assert_eq!(tool_limits.fs_list_max_limit, 250);
+    assert_eq!(tool_limits.process_wait_default_timeout.as_millis(), 15000);
+    assert_eq!(tool_limits.process_wait_max_timeout.as_millis(), 30000);
 }
 
 #[test]
@@ -439,6 +549,20 @@ silverbullet_space_dir = "/tmp/teamd-silverbullet-file"
 silverbullet_base_url = "https://file.example/sb"
 silverbullet_journal_context_enabled = false
 silverbullet_mirror_enabled = false
+silverbullet_session_area_path = "areas/agents.md"
+silverbullet_text_artifact_extensions = ["md", "txt"]
+silverbullet_script_artifact_extensions = ["sh", "py"]
+allowed_extensions = ["md", "txt"]
+
+[[knowledge.source_files]]
+path = "README.md"
+root = "root_docs"
+kind = "root_doc"
+
+[[knowledge.source_dirs]]
+path = "knowledge"
+root = "notes"
+kind = "project_note"
 "#,
     )
     .expect("write config");
@@ -464,6 +588,45 @@ silverbullet_mirror_enabled = false
     );
     assert!(config.knowledge.silverbullet_journal_context_enabled);
     assert!(config.knowledge.silverbullet_mirror_enabled);
+    assert_eq!(
+        config.knowledge.silverbullet_session_area_path,
+        PathBuf::from("areas/agents.md")
+    );
+    assert_eq!(
+        config.knowledge.silverbullet_text_artifact_extensions,
+        vec!["md".to_string(), "txt".to_string()]
+    );
+    assert_eq!(
+        config.knowledge.silverbullet_script_artifact_extensions,
+        vec!["sh".to_string(), "py".to_string()]
+    );
+    assert_eq!(
+        config.knowledge.allowed_extensions,
+        vec!["md".to_string(), "txt".to_string()]
+    );
+    assert_eq!(config.knowledge.source_files.len(), 1);
+    assert_eq!(
+        config.knowledge.source_files[0].path,
+        PathBuf::from("README.md")
+    );
+    assert_eq!(
+        config.knowledge.source_files[0].root,
+        KnowledgeRoot::RootDocs
+    );
+    assert_eq!(
+        config.knowledge.source_files[0].kind,
+        KnowledgeSourceKind::RootDoc
+    );
+    assert_eq!(config.knowledge.source_dirs.len(), 1);
+    assert_eq!(
+        config.knowledge.source_dirs[0].path,
+        PathBuf::from("knowledge")
+    );
+    assert_eq!(config.knowledge.source_dirs[0].root, KnowledgeRoot::Notes);
+    assert_eq!(
+        config.knowledge.source_dirs[0].kind,
+        KnowledgeSourceKind::ProjectNote
+    );
 }
 
 #[test]
@@ -488,7 +651,17 @@ private_chat_auto_create_session = true
 group_require_mention = true
 default_autoapprove = true
 inbound_queue_default_mode = "coalesce"
-inbound_coalesce_window_ms = 5000
+inbound_coalesce_window_ms = 6000
+inbound_min_coalesce_window_ms = 5000
+message_text_soft_cap = 3000
+caption_soft_cap = 700
+status_detail_char_cap = 500
+status_ttl_seconds = 1200
+typing_initial_delay_ms = 250
+typing_heartbeat_interval_seconds = 3
+delivery_retry_attempts = 5
+delivery_retry_base_delay_ms = 150
+chat_turn_fast_settle_ms = 25
 "#,
     )
     .expect("write config");
@@ -514,7 +687,17 @@ inbound_coalesce_window_ms = 5000
     assert!(config.telegram.group_require_mention);
     assert!(config.telegram.default_autoapprove);
     assert_eq!(config.telegram.inbound_queue_default_mode, "coalesce");
-    assert_eq!(config.telegram.inbound_coalesce_window_ms, 5000);
+    assert_eq!(config.telegram.inbound_coalesce_window_ms, 6000);
+    assert_eq!(config.telegram.inbound_min_coalesce_window_ms, 5000);
+    assert_eq!(config.telegram.message_text_soft_cap, 3000);
+    assert_eq!(config.telegram.caption_soft_cap, 700);
+    assert_eq!(config.telegram.status_detail_char_cap, 500);
+    assert_eq!(config.telegram.status_ttl_seconds, 1200);
+    assert_eq!(config.telegram.typing_initial_delay_ms, 250);
+    assert_eq!(config.telegram.typing_heartbeat_interval_seconds, 3);
+    assert_eq!(config.telegram.delivery_retry_attempts, 5);
+    assert_eq!(config.telegram.delivery_retry_base_delay_ms, 150);
+    assert_eq!(config.telegram.chat_turn_fast_settle_ms, 25);
 }
 
 #[test]

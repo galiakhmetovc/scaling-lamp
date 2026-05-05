@@ -1017,10 +1017,27 @@ if old_search in s:
     s = s.replace(old_search, new_search)
 main.write_text(s)
 
+pgvector = src / "mem0" / "vector_stores" / "pgvector.py"
+s = pgvector.read_text()
+old_pgvector_score = "        return [OutputData(id=str(r[0]), score=float(r[1]), payload=r[2]) for r in results]\n"
+new_pgvector_score = """        # pgvector's <=> operator returns cosine distance, where lower is better.
+        # Mem0's ranking layer treats OutputData.score as similarity, where higher
+        # is better, so expose 1 - distance for semantic vector search.
+        return [
+            OutputData(id=str(r[0]), score=max(0.0, min(1.0, 1.0 - float(r[1]))), payload=r[2])
+            for r in results
+        ]
+"""
+if old_pgvector_score in s:
+    s = s.replace(old_pgvector_score, new_pgvector_score, 1)
+elif "1.0 - float(r[1])" not in s:
+    raise SystemExit("Mem0 pgvector score patch target was not found")
+pgvector.write_text(s)
+
 dockerfile = server / "Dockerfile"
 s = dockerfile.read_text()
-patch = """RUN python - <<'PATCHPY'\nfrom pathlib import Path\np = Path('/usr/local/lib/python3.12/site-packages/mem0/embeddings/fastembed.py')\ns = p.read_text()\ns = s.replace('        return embeddings[0]\\\\n', '        return embeddings[0].tolist() if hasattr(embeddings[0], \\\\\\"tolist\\\\\\") else embeddings[0]\\\\n')\np.write_text(s)\nPATCHPY\n"""
-if "embeddings[0].tolist()" not in s:
+patch = """RUN python - <<'PATCHPY'\nfrom pathlib import Path\n\nfastembed = Path('/usr/local/lib/python3.12/site-packages/mem0/embeddings/fastembed.py')\ns = fastembed.read_text()\ns = s.replace('        return embeddings[0]\\\\n', '        return embeddings[0].tolist() if hasattr(embeddings[0], \\\\\\"tolist\\\\\\") else embeddings[0]\\\\n')\nfastembed.write_text(s)\n\npgvector = Path('/usr/local/lib/python3.12/site-packages/mem0/vector_stores/pgvector.py')\ns = pgvector.read_text()\nold = '        return [OutputData(id=str(r[0]), score=float(r[1]), payload=r[2]) for r in results]\\\\n'\nnew = '''        # pgvector <=> returns cosine distance, where lower is better.\n        # Mem0 ranking treats OutputData.score as similarity, where higher is better.\n        return [\n            OutputData(id=str(r[0]), score=max(0.0, min(1.0, 1.0 - float(r[1]))), payload=r[2])\n            for r in results\n        ]\n'''\nif old in s:\n    s = s.replace(old, new, 1)\nelif '1.0 - float(r[1])' not in s:\n    raise SystemExit('Mem0 site-package pgvector score patch target was not found')\npgvector.write_text(s)\nPATCHPY\n"""
+if "embeddings[0].tolist()" not in s or "1.0 - float(r[1])" not in s:
     s = s.replace("RUN pip install --no-cache-dir -r requirements.txt\n", "RUN pip install --no-cache-dir -r requirements.txt\n\n" + patch)
 dockerfile.write_text(s)
 PY
@@ -1048,7 +1065,7 @@ write_mem0_files() {
     print_cmd mkdir -p "$MEM0_DIR" "$MEM0_HISTORY_DIR" "$MEM0_POSTGRES_DATA_DIR" "$MEM0_CACHE_DIR"
     print_cmd chown -R "$MEM0_POSTGRES_UID:$MEM0_POSTGRES_GID" "$MEM0_POSTGRES_DATA_DIR"
     print_cmd git clone "$MEM0_REPOSITORY" "$MEM0_SRC_DIR"
-    print_cmd sh -c "patch Mem0 server for bundled fastembed, psycopg[binary], pgvector ndarray adaptation, and search filters"
+    print_cmd sh -c "patch Mem0 server for bundled fastembed, psycopg[binary], pgvector score normalization, ndarray adaptation, and search filters"
     print_cmd sh -c "seed Mem0 ADMIN_API_KEY, JWT_SECRET and POSTGRES_PASSWORD in $MEM0_ENV_FILE"
     print_cmd sh -c "write $MEM0_COMPOSE for teamd-mem0 and teamd-mem0-postgres"
     print_cmd sh -c "configure Mem0 server at $MEM0_API_BASE/configure with fastembed model $MEM0_FASTEMBED_MODEL and LLM $MEM0_LLM_MODEL"

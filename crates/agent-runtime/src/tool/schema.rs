@@ -676,7 +676,7 @@ impl ToolName {
             Self::KnowledgeSearch => json!({
                 "type": "object",
                 "properties": {
-                    "query": { "type": "string", "description": "Search query across canonical teamD knowledge roots: repo root docs, docs/, registered project docs/notes, and extra configured roots. Not SilverBullet, Mem0, or KV." },
+                    "query": { "type": "string", "description": "SQLite FTS query terms for the configured canonical teamD docs/workspace knowledge index. Sources are only [knowledge].source_files/source_dirs inside the agent workspace; this is not arbitrary filesystem search, not SilverBullet, not Mem0, and not KV." },
                     "limit": { "type": ["integer", "null"], "minimum": 1, "description": "Optional maximum number of search results to return" },
                     "offset": { "type": ["integer", "null"], "minimum": 0, "description": "Optional pagination offset" },
                     "kinds": {
@@ -696,7 +696,7 @@ impl ToolName {
             Self::KnowledgeRead => json!({
                 "type": "object",
                 "properties": {
-                    "path": { "type": "string", "description": "Relative knowledge source path returned by knowledge_search. Do not pass arbitrary SilverBullet paths here." },
+                    "path": { "type": "string", "description": "Relative indexed knowledge source path returned by knowledge_search. Do not pass arbitrary filesystem or SilverBullet paths here; use fs_read_text/fs_read_lines or SilverBullet tools for those." },
                     "mode": { "type": ["string", "null"], "enum": ["excerpt", "full", null], "description": "Optional view mode as a quoted JSON string; use \"excerpt\" or \"full\". Defaults to excerpt" },
                     "cursor": { "type": ["integer", "null"], "minimum": 0, "description": "Optional zero-based line cursor returned by a previous knowledge_read call" },
                     "max_bytes": { "type": ["integer", "null"], "minimum": 1, "description": "Optional maximum UTF-8 bytes to return" },

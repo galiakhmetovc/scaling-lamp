@@ -335,4 +335,32 @@ impl KnowledgeRepository for PersistenceStore {
 
         Ok(docs)
     }
+
+    fn search_knowledge_search_docs(
+        &self,
+        fts_query: &str,
+    ) -> Result<Vec<KnowledgeSearchDocRecord>, StoreError> {
+        let mut statement = self.connection.prepare(
+            "SELECT d.doc_id, d.source_id, d.path, d.kind, d.body, d.updated_at
+             FROM knowledge_search_fts
+             JOIN knowledge_search_docs d ON d.doc_id = knowledge_search_fts.doc_id
+             WHERE knowledge_search_fts MATCH ?1
+             ORDER BY bm25(knowledge_search_fts), d.path ASC, d.doc_id ASC",
+        )?;
+        let mut rows = statement.query([fts_query])?;
+        let mut docs = Vec::new();
+
+        while let Some(row) = rows.next()? {
+            docs.push(KnowledgeSearchDocRecord {
+                doc_id: row.get(0)?,
+                source_id: row.get(1)?,
+                path: row.get(2)?,
+                kind: row.get(3)?,
+                body: row.get(4)?,
+                updated_at: row.get(5)?,
+            });
+        }
+
+        Ok(docs)
+    }
 }

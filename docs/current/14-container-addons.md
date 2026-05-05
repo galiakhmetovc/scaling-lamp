@@ -427,6 +427,7 @@ Curator отвечает за post-turn запись durable facts. `memory_reca
 - `teamd-mem0-postgres` — Postgres + pgvector;
 - local embeddings — `fastembed`, default model `sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2`, 384 dimensions;
 - LLM extraction — OpenAI-compatible endpoint, default `glm-4.5-air` через `https://api.z.ai/api/coding/paas/v4`;
+- bundled Mem0 source patch — `pgvector` cosine distance (`<=>`) конвертируется в similarity score (`1 - distance`) до общего Mem0 reranking;
 - secrets — `/opt/teamd/containers/mem0/mem0.env`, в git не попадают.
 
 Команда:

@@ -8,9 +8,6 @@ use agent_runtime::run::{
 };
 use agent_runtime::tool::ToolName;
 
-const MAX_CONSECUTIVE_IDENTICAL_TOOL_SIGNATURES: usize = 3;
-pub(super) const MAX_EMPTY_RESPONSE_RECOVERIES: usize = 1;
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) enum ToolSignatureObservation {
     Accepted,
@@ -180,6 +177,7 @@ impl ProviderLoopCursor {
     pub(super) fn remember_tool_signature(
         &mut self,
         response: &ProviderResponse,
+        max_consecutive_identical_tool_signatures: usize,
     ) -> ToolSignatureObservation {
         let signature = response
             .tool_calls
@@ -196,7 +194,7 @@ impl ProviderLoopCursor {
             }
         }
         self.seen_tool_signatures.push(signature.clone());
-        if consecutive_repeats >= MAX_CONSECUTIVE_IDENTICAL_TOOL_SIGNATURES
+        if consecutive_repeats >= max_consecutive_identical_tool_signatures.max(1)
             && !Self::permits_repeated_tool_signature(response)
         {
             return ToolSignatureObservation::RepeatedSuppressed {
@@ -317,8 +315,11 @@ impl ProviderLoopCursor {
         self.completion_nudges_used += 1;
     }
 
-    pub(super) fn can_recover_from_empty_response(&self) -> bool {
-        self.empty_response_recoveries_used < MAX_EMPTY_RESPONSE_RECOVERIES
+    pub(super) fn can_recover_from_empty_response(
+        &self,
+        max_empty_response_recoveries: usize,
+    ) -> bool {
+        self.empty_response_recoveries_used < max_empty_response_recoveries
             && (!self.pending_tool_outputs.is_empty() || !self.continuation_messages.is_empty())
     }
 

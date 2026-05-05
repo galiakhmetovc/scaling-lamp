@@ -5,7 +5,6 @@ pub(super) const TELEGRAM_INBOUND_QUEUE_MODE_REJECT: &str = "reject";
 pub(super) const TELEGRAM_INBOUND_QUEUE_MODE_QUEUE: &str = "queue";
 pub(super) const TELEGRAM_INBOUND_QUEUE_MODE_COALESCE: &str = "coalesce";
 pub(super) const TELEGRAM_INBOUND_QUEUE_MODE_RESTART: &str = "restart";
-pub(super) const TELEGRAM_MIN_COALESCE_WINDOW_MS: u64 = 5_000;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) enum ParsedTelegramCommand {
@@ -340,11 +339,6 @@ fn parse_queue_action(args: &str) -> Result<TelegramQueueAction, String> {
                     "[reject|queue|coalesce [5000ms|5s]|restart|flush|clear]",
                 ));
             }
-            if let Some(value) = coalesce_window_ms
-                && value < TELEGRAM_MIN_COALESCE_WINDOW_MS
-            {
-                return Err("Usage: /queue coalesce <duration>. Minimum is 5s.".to_string());
-            }
             Ok(TelegramQueueAction::Set {
                 mode: command,
                 coalesce_window_ms,
@@ -414,10 +408,7 @@ pub(super) fn is_valid_telegram_queue_mode(value: &str) -> bool {
 }
 
 pub(super) fn coalesce_window_seconds(window_ms: u64) -> i64 {
-    let seconds = window_ms
-        .max(TELEGRAM_MIN_COALESCE_WINDOW_MS)
-        .saturating_add(999)
-        / 1_000;
+    let seconds = window_ms.saturating_add(999) / 1_000;
     i64::try_from(seconds).unwrap_or(i64::MAX)
 }
 
@@ -506,10 +497,15 @@ mod tests {
                 }
             })
         );
-        assert!(matches!(
+        assert_eq!(
             parse_command("/queue coalesce 4s"),
-            Some(ParsedTelegramCommand::InvalidUsage(_))
-        ));
+            Some(ParsedTelegramCommand::Queue {
+                action: TelegramQueueAction::Set {
+                    mode: "coalesce".to_string(),
+                    coalesce_window_ms: Some(4_000)
+                }
+            })
+        );
         assert_eq!(
             parse_command("/queue stop"),
             Some(ParsedTelegramCommand::Queue {

@@ -1339,11 +1339,14 @@ knowledge_search({
 
 Что делает:
 
-- ищет по canonical teamD knowledge index: root docs, `docs/`, registered project docs/notes и configured extra roots;
+- ищет через SQLite FTS по configured canonical teamD docs/workspace knowledge index;
+- источники строго задаются в `[knowledge].source_files` и `[knowledge].source_dirs` внутри agent workspace: например `README.md`, `SYSTEM.md`, `AGENTS.md`, `docs/`, `projects/`, `notes/`, extra roots;
+- unreadable/stale/non-UTF8 файлы при обновлении индекса пропускаются и не должны валить весь tool;
 - возвращает source metadata и bounded results.
 
 Что это не делает:
 
+- не делает произвольный поиск по файловой системе и не должен использоваться вместо `fs_find_in_files`/`fs_search_text`;
 - не ищет в Mem0 semantic memory: для этого есть `memory_search`;
 - не читает scoped exact state: для этого есть `kv_get`/`kv_list`;
 - не читает artifacts, transcripts или tool-call ledger: для этого есть session/debug/artifact surfaces;
@@ -1365,13 +1368,14 @@ knowledge_read({
 
 Что делает:
 
-- читает один source из canonical teamD knowledge index в bounded excerpt/full режиме.
+- читает один source из canonical teamD docs/workspace knowledge index в bounded excerpt/full режиме.
+- это не замена `fs_read_text`/`fs_read_lines`: `knowledge_read` принимает только indexed source path, обычно найденный через `knowledge_search`, и дополнительно проверяет canonical knowledge roots.
 
 Важно:
 
 - enum-like аргументы должны быть quoted JSON strings;
 - то есть `"mode": "full"`, а не `"mode": full`.
-- `path` должен быть путём knowledge source, обычно полученным из `knowledge_search`; произвольные SilverBullet paths сюда не передаются.
+- `path` должен быть путём knowledge source, обычно полученным из `knowledge_search`; произвольные filesystem или SilverBullet paths сюда не передаются.
 
 ### `session_search`
 

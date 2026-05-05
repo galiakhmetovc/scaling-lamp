@@ -913,7 +913,7 @@ fn active_run_step_tail<'a>(
 fn render_active_process_output_tail(app: &App, process_id: &str) -> Option<Vec<String>> {
     let output = app
         .processes
-        .read_exec_output(
+        .read_exec_output_with_limits(
             process_id,
             ProcessOutputStream::Merged,
             None,
@@ -927,6 +927,7 @@ fn render_active_process_output_tail(app: &App, process_id: &str) -> Option<Vec<
                     .runtime_limits
                     .active_process_output_tail_max_lines,
             ),
+            &app.config.runtime_limits.to_tool_runtime_limits(),
         )
         .ok()?;
     let text = output.text.trim_end();

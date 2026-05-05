@@ -29,8 +29,7 @@ use super::queue::{
     render_queue_status_text,
 };
 use super::render::{
-    TELEGRAM_CAPTION_SOFT_CAP, TELEGRAM_MESSAGE_TEXT_SOFT_CAP, chunk_message_text,
-    render_agent_list, render_agent_selected, render_already_connected_message,
+    chunk_message_text, render_agent_list, render_agent_selected, render_already_connected_message,
     render_help_message, render_model_response_chunks, render_pairing_message,
     render_pairing_required_message, render_session_created, render_session_list,
     render_session_selected, truncate_caption,
@@ -38,9 +37,7 @@ use super::render::{
 use crate::bootstrap::{App, BootstrapError, SessionPreferencesPatch, SessionSummary};
 use crate::diagnostics::DiagnosticEventBuilder;
 use crate::execution::{ChatExecutionEvent, ChatTurnExecutionReport};
-use crate::store_retry::{
-    SQLITE_LOCK_RETRY_ATTEMPTS, SQLITE_LOCK_RETRY_DELAY_MS, retry_store_sync,
-};
+use crate::store_retry::{retry_store_sync, sqlite_lock_retry_attempts, sqlite_lock_retry_delay};
 use agent_persistence::{
     ArtifactRecord, ArtifactRepository, FileDeliveryRepository, FileDeliveryRequestRecord,
     PersistenceStore, SessionInboxRepository, StoreError, TelegramChatBindingRecord,
@@ -62,12 +59,6 @@ const TELEGRAM_PAIRING_STATUS_PENDING: &str = "pending";
 const TELEGRAM_PAIRING_STATUS_ACTIVATED: &str = "activated";
 const TELEGRAM_CHAT_STATUS_ACTIVE: &str = "active";
 const TELEGRAM_CHAT_STATUS_STALE: &str = "stale";
-const TELEGRAM_TYPING_INITIAL_DELAY_MILLIS: u64 = 750;
-const TELEGRAM_TYPING_HEARTBEAT_INTERVAL_SECONDS: u64 = 4;
-const TELEGRAM_STATUS_TTL_SECONDS: i64 = 30 * 60;
-const TELEGRAM_DELIVERY_RETRY_ATTEMPTS: usize = 3;
-const TELEGRAM_DELIVERY_RETRY_BASE_DELAY_MS: u64 = 250;
-const TELEGRAM_CHAT_TURN_FAST_SETTLE_MILLIS: u64 = 50;
 
 static TELEGRAM_PAIRING_COUNTER: AtomicU64 = AtomicU64::new(0);
 
@@ -1229,7 +1220,7 @@ where
         Fut: Future<Output = Result<T, TelegramClientError>>,
     {
         let started = Instant::now();
-        for attempt in 1..=TELEGRAM_DELIVERY_RETRY_ATTEMPTS {
+        for attempt in 1..=self.app.config.telegram.delivery_retry_attempts {
             self.wait_for_delivery_slot(chat_id).await;
             match action().await {
                 Ok(value) => {
@@ -1237,7 +1228,7 @@ where
                     return Ok(value);
                 }
                 Err(error)
-                    if attempt < TELEGRAM_DELIVERY_RETRY_ATTEMPTS
+                    if attempt < self.app.config.telegram.delivery_retry_attempts
                         && !telegram_delivery_error_is_permanent(&error) =>
                 {
                     DiagnosticEventBuilder::new(
@@ -1257,7 +1248,7 @@ where
                     .error(error.to_string())
                     .emit(&self.audit);
                     tokio::time::sleep(Duration::from_millis(
-                        TELEGRAM_DELIVERY_RETRY_BASE_DELAY_MS * attempt as u64,
+                        self.app.config.telegram.delivery_retry_base_delay_ms * attempt as u64,
                     ))
                     .await;
                 }
@@ -1363,7 +1354,7 @@ where
     }
 
     async fn send_text_chunks(&self, chat_id: i64, text: &str) -> Result<(), BootstrapError> {
-        for chunk in chunk_message_text(text, TELEGRAM_MESSAGE_TEXT_SOFT_CAP) {
+        for chunk in chunk_message_text(text, self.app.config.telegram.message_text_soft_cap) {
             self.send_text_delivered(chat_id, &chunk).await?;
         }
         Ok(())
@@ -1380,7 +1371,9 @@ where
         text: &str,
         trace: Option<&TelegramDeliveryTrace>,
     ) -> Result<(), BootstrapError> {
-        for chunk in render_model_response_chunks(text, TELEGRAM_MESSAGE_TEXT_SOFT_CAP) {
+        for chunk in
+            render_model_response_chunks(text, self.app.config.telegram.message_text_soft_cap)
+        {
             if chunk.parse_mode_html {
                 self.send_html_delivered_with_trace(chat_id, &chunk.text, trace)
                     .await?;
@@ -1399,7 +1392,13 @@ where
     ) -> Result<Message, BootstrapError> {
         let progress = TelegramProgressTracker::default();
         let message = self
-            .send_html_delivered(chat_id, &render_temporary_status_html(progress.state()))
+            .send_html_delivered(
+                chat_id,
+                &render_temporary_status_html(
+                    progress.state(),
+                    self.app.config.telegram.status_detail_char_cap,
+                ),
+            )
             .await?;
         self.put_chat_status_record(
             chat_id,
@@ -1471,7 +1470,7 @@ where
             chat_id,
             message_id,
             TELEGRAM_CHAT_STATUS_STALE,
-            Some(now + TELEGRAM_STATUS_TTL_SECONDS),
+            Some(now + self.app.config.telegram.status_ttl_seconds),
             now,
         )
     }
@@ -1564,7 +1563,11 @@ where
                 if let Err(notify_error) = self
                     .send_html_delivered_with_trace(
                         chat_id,
-                        &render_file_delivery_failed_html(&request.file_name, &error_message),
+                        &render_file_delivery_failed_html(
+                            &request.file_name,
+                            &error_message,
+                            self.app.config.telegram.status_detail_char_cap,
+                        ),
                         trace,
                     )
                     .await
@@ -1643,7 +1646,7 @@ where
         let caption = request
             .caption
             .as_deref()
-            .map(|value| truncate_caption(value, TELEGRAM_CAPTION_SOFT_CAP));
+            .map(|value| truncate_caption(value, self.app.config.telegram.caption_soft_cap));
         self.send_document_delivered_with_trace(
             chat_id,
             artifact.bytes,
@@ -2136,8 +2139,8 @@ where
         F: FnMut(&PersistenceStore) -> Result<T, StoreError>,
     {
         retry_store_sync(
-            SQLITE_LOCK_RETRY_ATTEMPTS,
-            Duration::from_millis(SQLITE_LOCK_RETRY_DELAY_MS),
+            sqlite_lock_retry_attempts(),
+            sqlite_lock_retry_delay(),
             || {
                 let store = PersistenceStore::open_runtime(&self.app.persistence)?;
                 operation(&store)
@@ -2434,7 +2437,9 @@ where
                     .emit(&self.audit);
                 }
             }
-            _ = tokio::time::sleep(Duration::from_millis(TELEGRAM_CHAT_TURN_FAST_SETTLE_MILLIS)) => {}
+            _ = tokio::time::sleep(Duration::from_millis(
+                self.app.config.telegram.chat_turn_fast_settle_ms,
+            )) => {}
         }
 
         Ok(())
@@ -2606,6 +2611,7 @@ where
             })?;
         binding.inbound_queue_mode = mode.to_string();
         if let Some(window_ms) = coalesce_window_ms {
+            let window_ms = window_ms.max(self.app.config.telegram.inbound_min_coalesce_window_ms);
             binding.inbound_coalesce_window_ms = Some(i64::try_from(window_ms).unwrap_or(i64::MAX));
         }
         binding.updated_at = unix_timestamp()?;
@@ -2701,11 +2707,15 @@ where
         effective_inbound_coalesce_window_ms(
             binding,
             self.app.config.telegram.inbound_coalesce_window_ms,
+            self.app.config.telegram.inbound_min_coalesce_window_ms,
         )
     }
 
     fn configured_inbound_coalesce_window_ms(&self) -> u64 {
-        configured_inbound_coalesce_window_ms(self.app.config.telegram.inbound_coalesce_window_ms)
+        configured_inbound_coalesce_window_ms(
+            self.app.config.telegram.inbound_coalesce_window_ms,
+            self.app.config.telegram.inbound_min_coalesce_window_ms,
+        )
     }
 
     async fn finish_chat_turn_background(
@@ -2775,13 +2785,18 @@ where
 
         let mut progress = TelegramProgressTracker::default();
         let mut pending_status_html = None::<String>;
-        let mut last_status_html = render_temporary_status_html(progress.state());
+        let mut last_status_html = render_temporary_status_html(
+            progress.state(),
+            self.app.config.telegram.status_detail_char_cap,
+        );
         let edit_interval = self.progress_update_min_interval();
         let edit_sleep = tokio::time::sleep(edit_interval);
         tokio::pin!(edit_sleep);
-        let typing_interval = Duration::from_secs(TELEGRAM_TYPING_HEARTBEAT_INTERVAL_SECONDS);
-        let typing_sleep =
-            tokio::time::sleep(Duration::from_millis(TELEGRAM_TYPING_INITIAL_DELAY_MILLIS));
+        let typing_interval =
+            Duration::from_secs(self.app.config.telegram.typing_heartbeat_interval_seconds);
+        let typing_sleep = tokio::time::sleep(Duration::from_millis(
+            self.app.config.telegram.typing_initial_delay_ms,
+        ));
         tokio::pin!(typing_sleep);
 
         loop {
@@ -2794,7 +2809,10 @@ where
                         continue;
                     };
                     if progress.apply(&event) {
-                        let status_html = render_temporary_status_html(progress.state());
+                        let status_html = render_temporary_status_html(
+                            progress.state(),
+                            self.app.config.telegram.status_detail_char_cap,
+                        );
                         if status_html != last_status_html {
                             pending_status_html = Some(status_html);
                         }

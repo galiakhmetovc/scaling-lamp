@@ -20,6 +20,7 @@ pub struct ToolRuntime {
     web: WebToolClient,
     browser: BrowserToolClient,
     processes: SharedProcessRegistry,
+    limits: ToolRuntimeLimits,
 }
 
 #[derive(Debug)]
@@ -86,6 +87,7 @@ impl ToolRuntime {
             web,
             browser: BrowserToolClient::disabled(),
             processes,
+            limits: ToolRuntimeLimits::default(),
         }
     }
 
@@ -100,7 +102,13 @@ impl ToolRuntime {
             web,
             browser,
             processes,
+            limits: ToolRuntimeLimits::default(),
         }
+    }
+
+    pub fn with_runtime_limits(mut self, limits: ToolRuntimeLimits) -> Self {
+        self.limits = limits;
+        self
     }
 
     pub fn read_file_bytes(&self, path: &str) -> Result<(String, Vec<u8>), ToolError> {
@@ -291,7 +299,7 @@ impl ToolRuntime {
                 let all_entries = self.workspace.list(&input.path, input.recursive)?;
                 let total_entries = all_entries.len();
                 let offset = input.offset.unwrap_or(0).min(total_entries);
-                let limit = normalize_fs_list_limit(input.limit);
+                let limit = normalize_fs_list_limit(input.limit, &self.limits);
                 let entries = all_entries
                     .into_iter()
                     .skip(offset)
@@ -313,7 +321,7 @@ impl ToolRuntime {
                 entries.retain(|entry| glob_matches(&input.pattern, &entry.path));
                 let total_entries = entries.len();
                 let offset = input.offset.unwrap_or(0).min(total_entries);
-                let limit = normalize_fs_list_limit(input.limit);
+                let limit = normalize_fs_list_limit(input.limit, &self.limits);
                 let entries = entries
                     .into_iter()
                     .skip(offset)
@@ -742,8 +750,8 @@ impl ToolRuntime {
             ProcessOutputStream::Stdout => output.stdout.as_str(),
             ProcessOutputStream::Stderr => output.stderr.as_str(),
         };
-        let max_bytes = normalize_process_output_max_bytes(input.max_bytes);
-        let max_lines = normalize_process_output_max_lines(input.max_lines);
+        let max_bytes = normalize_process_output_max_bytes(input.max_bytes, &self.limits);
+        let max_lines = normalize_process_output_max_lines(input.max_lines, &self.limits);
         let read = build_process_output_read(
             ProcessOutputView {
                 process_id,
@@ -766,22 +774,24 @@ impl ToolRuntime {
     ) -> Result<ToolOutput, ToolError> {
         let process_id = input.process_id.as_str();
         let managed = self.lookup_process(process_id, expected_kind)?;
-        let timeout = normalize_process_wait_timeout(input.timeout_ms);
+        let timeout = normalize_process_wait_timeout(input.timeout_ms, &self.limits);
         let deadline = Instant::now() + timeout;
         let terminal_status = loop {
             if managed.try_record_exit(process_id)? {
                 break ProcessResultStatus::Exited;
             }
             if Instant::now() >= deadline {
-                managed.terminate(process_id, ProcessResultStatus::TimedOut)?;
+                managed.terminate(process_id, ProcessResultStatus::TimedOut, &self.limits)?;
                 break ProcessResultStatus::TimedOut;
             }
             thread::sleep(
-                PROCESS_WAIT_POLL_INTERVAL.min(deadline.saturating_duration_since(Instant::now())),
+                self.limits
+                    .process_wait_poll_interval
+                    .min(deadline.saturating_duration_since(Instant::now())),
             );
         };
 
-        managed.drain_readers(PROCESS_READER_DRAIN_GRACE);
+        managed.drain_readers(self.limits.process_reader_drain_grace);
         self.remove_process(process_id);
         let output = managed
             .output
@@ -803,8 +813,8 @@ impl ToolRuntime {
         expected_kind: ProcessKind,
     ) -> Result<ToolOutput, ToolError> {
         let managed = self.lookup_process(process_id, expected_kind)?;
-        managed.terminate(process_id, ProcessResultStatus::Killed)?;
-        managed.drain_readers(PROCESS_READER_DRAIN_GRACE);
+        managed.terminate(process_id, ProcessResultStatus::Killed, &self.limits)?;
+        managed.drain_readers(self.limits.process_reader_drain_grace);
         self.remove_process(process_id);
         let output = managed
             .output
@@ -890,6 +900,7 @@ impl ManagedProcess {
         &self,
         process_id: &str,
         terminal_status: ProcessResultStatus,
+        limits: &ToolRuntimeLimits,
     ) -> Result<(), ToolError> {
         let mut child = self.child.lock().expect("managed child poisoned");
         if let Some(exit_status) = child.try_wait().map_err(|source| ToolError::ProcessIo {
@@ -908,7 +919,7 @@ impl ManagedProcess {
                 source,
             }
         })?;
-        let deadline = Instant::now() + PROCESS_TERMINATE_GRACE;
+        let deadline = Instant::now() + limits.process_terminate_grace;
         loop {
             if let Some(exit_status) = child.try_wait().map_err(|source| ToolError::ProcessIo {
                 process_id: process_id.to_string(),
@@ -923,7 +934,9 @@ impl ManagedProcess {
                 break;
             }
             thread::sleep(
-                PROCESS_WAIT_POLL_INTERVAL.min(deadline.saturating_duration_since(Instant::now())),
+                limits
+                    .process_wait_poll_interval
+                    .min(deadline.saturating_duration_since(Instant::now())),
             );
         }
 
@@ -1000,10 +1013,10 @@ where
     })
 }
 
-fn normalize_process_output_max_bytes(limit: Option<usize>) -> usize {
+fn normalize_process_output_max_bytes(limit: Option<usize>, limits: &ToolRuntimeLimits) -> usize {
     limit
-        .unwrap_or(DEFAULT_PROCESS_OUTPUT_READ_MAX_BYTES)
-        .clamp(1, MAX_PROCESS_OUTPUT_READ_MAX_BYTES)
+        .unwrap_or(limits.process_output_read_default_max_bytes)
+        .clamp(1, limits.process_output_read_max_bytes)
 }
 
 fn browser_wait_args(input: &BrowserWaitInput) -> Result<Vec<String>, ToolError> {
@@ -1082,17 +1095,17 @@ fn browser_wait_args(input: &BrowserWaitInput) -> Result<Vec<String>, ToolError>
     Ok(args)
 }
 
-fn normalize_process_output_max_lines(limit: Option<usize>) -> usize {
+fn normalize_process_output_max_lines(limit: Option<usize>, limits: &ToolRuntimeLimits) -> usize {
     limit
-        .unwrap_or(DEFAULT_PROCESS_OUTPUT_READ_MAX_LINES)
-        .clamp(1, MAX_PROCESS_OUTPUT_READ_MAX_LINES)
+        .unwrap_or(limits.process_output_read_default_max_lines)
+        .clamp(1, limits.process_output_read_max_lines)
 }
 
-fn normalize_process_wait_timeout(timeout_ms: Option<u64>) -> Duration {
+fn normalize_process_wait_timeout(timeout_ms: Option<u64>, limits: &ToolRuntimeLimits) -> Duration {
     timeout_ms
         .map(Duration::from_millis)
-        .unwrap_or(DEFAULT_PROCESS_WAIT_TIMEOUT)
-        .clamp(Duration::from_millis(1), MAX_PROCESS_WAIT_TIMEOUT)
+        .unwrap_or(limits.process_wait_default_timeout)
+        .clamp(Duration::from_millis(1), limits.process_wait_max_timeout)
 }
 
 fn clamp_utf8_boundary(text: &str, offset: usize) -> usize {
@@ -1262,6 +1275,25 @@ impl SharedProcessRegistry {
         max_bytes: Option<usize>,
         max_lines: Option<usize>,
     ) -> Result<ProcessOutputRead, ToolError> {
+        self.read_exec_output_with_limits(
+            process_id,
+            stream,
+            cursor,
+            max_bytes,
+            max_lines,
+            &ToolRuntimeLimits::default(),
+        )
+    }
+
+    pub fn read_exec_output_with_limits(
+        &self,
+        process_id: &str,
+        stream: ProcessOutputStream,
+        cursor: Option<usize>,
+        max_bytes: Option<usize>,
+        max_lines: Option<usize>,
+        limits: &ToolRuntimeLimits,
+    ) -> Result<ProcessOutputRead, ToolError> {
         let managed = self
             .lock()
             .processes
@@ -1296,8 +1328,8 @@ impl SharedProcessRegistry {
                 source,
             },
             cursor,
-            normalize_process_output_max_bytes(max_bytes),
-            normalize_process_output_max_lines(max_lines),
+            normalize_process_output_max_bytes(max_bytes, limits),
+            normalize_process_output_max_lines(max_lines, limits),
         ))
     }
 }

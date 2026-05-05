@@ -13,13 +13,8 @@ use std::path::{Path, PathBuf};
 use time::macros::format_description;
 use time::{Duration, OffsetDateTime, UtcOffset};
 
-const AREA_RELATIVE_PATH: &str = "a/teamd-agents.md";
 const MANAGED_MIRRORS_START: &str = "<!-- teamd:session-mirrors:start -->";
 const MANAGED_MIRRORS_END: &str = "<!-- teamd:session-mirrors:end -->";
-const TEXT_ARTIFACT_EXTENSIONS: &[&str] = &[
-    "bash", "css", "csv", "html", "js", "json", "lua", "md", "py", "rs", "sh", "sql", "toml", "ts",
-    "txt", "xml", "yaml", "yml",
-];
 
 pub(crate) fn operator_context_block(
     data_dir: &Path,
@@ -124,6 +119,7 @@ pub(crate) fn mirror_session_snapshot(
         fs::create_dir_all(parent).map_err(|source| source.to_string())?;
     }
     let markdown = render_session_mirror(
+        knowledge,
         session,
         &relative_path,
         reason,
@@ -136,8 +132,13 @@ pub(crate) fn mirror_session_snapshot(
         limits,
     );
     fs::write(&absolute_path, markdown).map_err(|source| source.to_string())?;
-    update_area_index(space_dir, now, knowledge.operator_timezone.as_str())
-        .map_err(|source| source.to_string())?;
+    update_area_index(
+        knowledge,
+        space_dir,
+        now,
+        knowledge.operator_timezone.as_str(),
+    )
+    .map_err(|source| source.to_string())?;
     Ok(Some(absolute_path))
 }
 
@@ -193,6 +194,7 @@ fn datetime_string(now: i64, timezone: &str) -> String {
 
 #[allow(clippy::too_many_arguments)]
 fn render_session_mirror(
+    knowledge: &KnowledgeConfig,
     session: &Session,
     relative_path: &Path,
     reason: &str,
@@ -230,7 +232,7 @@ fn render_session_mirror(
     lines.extend(render_plan_section(plan));
     lines.extend(render_context_summary_section(context_summary));
     lines.extend(render_tool_activity_section(tool_calls));
-    lines.extend(render_artifacts_section(artifacts, limits));
+    lines.extend(render_artifacts_section(knowledge, artifacts, limits));
 
     lines.join("\n")
 }
@@ -327,6 +329,7 @@ fn render_tool_activity_section(tool_calls: &[agent_persistence::ToolCallRecord]
 }
 
 fn render_artifacts_section(
+    knowledge: &KnowledgeConfig,
     artifacts: &[ArtifactRecord],
     limits: &RuntimeLimitsConfig,
 ) -> Vec<String> {
@@ -344,8 +347,8 @@ fn render_artifacts_section(
         ));
         lines.push(format!("- Path: `{}`", artifact.path.display()));
         lines.push(format!("- Bytes: `{}`", artifact.bytes.len()));
-        if should_inline_artifact(artifact) {
-            let max_chars = if is_script_artifact(artifact) {
+        if should_inline_artifact(artifact, knowledge) {
+            let max_chars = if is_script_artifact(artifact, knowledge) {
                 limits.silverbullet_mirror_script_max_chars
             } else {
                 limits.silverbullet_mirror_text_artifact_max_chars
@@ -367,8 +370,13 @@ fn render_artifacts_section(
     lines
 }
 
-fn update_area_index(space_dir: &Path, now: i64, timezone: &str) -> io::Result<()> {
-    let area_path = space_dir.join(AREA_RELATIVE_PATH);
+fn update_area_index(
+    knowledge: &KnowledgeConfig,
+    space_dir: &Path,
+    now: i64,
+    timezone: &str,
+) -> io::Result<()> {
+    let area_path = space_dir.join(&knowledge.silverbullet_session_area_path);
     if let Some(parent) = area_path.parent() {
         fs::create_dir_all(parent)?;
     }
@@ -434,7 +442,7 @@ fn replace_managed_section(existing: &str, replacement: &str) -> String {
     format!("{}{}{}", &existing[..start], section, &existing[end..])
 }
 
-fn should_inline_artifact(artifact: &ArtifactRecord) -> bool {
+fn should_inline_artifact(artifact: &ArtifactRecord, knowledge: &KnowledgeConfig) -> bool {
     if artifact.kind.contains("text") || artifact.kind.contains("script") {
         return true;
     }
@@ -443,14 +451,15 @@ fn should_inline_artifact(artifact: &ArtifactRecord) -> bool {
         .extension()
         .and_then(|extension| extension.to_str())
         .map(|extension| {
-            TEXT_ARTIFACT_EXTENSIONS
+            knowledge
+                .silverbullet_text_artifact_extensions
                 .iter()
                 .any(|known| extension.eq_ignore_ascii_case(known))
         })
         .unwrap_or(false)
 }
 
-fn is_script_artifact(artifact: &ArtifactRecord) -> bool {
+fn is_script_artifact(artifact: &ArtifactRecord, knowledge: &KnowledgeConfig) -> bool {
     if artifact.kind.contains("script") {
         return true;
     }
@@ -459,7 +468,8 @@ fn is_script_artifact(artifact: &ArtifactRecord) -> bool {
         .extension()
         .and_then(|extension| extension.to_str())
         .map(|extension| {
-            ["bash", "js", "lua", "py", "rs", "sh", "ts"]
+            knowledge
+                .silverbullet_script_artifact_extensions
                 .iter()
                 .any(|known| extension.eq_ignore_ascii_case(known))
         })

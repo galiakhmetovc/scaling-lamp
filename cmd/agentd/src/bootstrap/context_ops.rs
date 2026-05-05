@@ -243,6 +243,7 @@ impl App {
                         &self.config.knowledge,
                         &session,
                     ),
+                runtime_limits: &self.config.runtime_limits,
             },
         ))
     }
@@ -521,6 +522,7 @@ impl App {
                 &self.config.knowledge,
                 &session,
             ),
+            runtime_limits: &self.config.runtime_limits,
         });
         let policy = self.compaction_policy();
         let uncovered_messages = transcripts.len().saturating_sub(
@@ -666,6 +668,7 @@ impl App {
                 &self.config.knowledge,
                 &session,
             ),
+            runtime_limits: &self.config.runtime_limits,
         });
         let system_prompt =
             prompting::load_system_prompt(&self.config.data_dir, &session.agent_profile_id);

@@ -1,5 +1,5 @@
 use crate::agents;
-use agent_persistence::TranscriptRecord;
+use agent_persistence::{RuntimeLimitsConfig, TranscriptRecord};
 use agent_runtime::context::{ContextSummary, approximate_token_count};
 use agent_runtime::prompt::{
     SessionHead, SessionHeadFsActivity, SessionHeadJournalBlock, SessionHeadProcessActivity,
@@ -16,10 +16,6 @@ use std::fs;
 use std::io::ErrorKind;
 use std::path::Path;
 
-const RECENT_FILESYSTEM_ACTIVITY_LIMIT: usize = 6;
-const RECENT_PROCESS_ACTIVITY_LIMIT: usize = 6;
-const WORKSPACE_TREE_LIMIT: usize = 12;
-
 pub(crate) struct BuildSessionHeadInput<'a> {
     pub session: &'a Session,
     pub agent_name: &'a str,
@@ -33,6 +29,7 @@ pub(crate) struct BuildSessionHeadInput<'a> {
     pub operator_context: Option<SessionHeadTextBlock>,
     pub silverbullet_journals: Vec<SessionHeadJournalBlock>,
     pub silverbullet_session_mirror_path: Option<String>,
+    pub runtime_limits: &'a RuntimeLimitsConfig,
 }
 
 pub(crate) fn build_session_head(input: BuildSessionHeadInput<'_>) -> SessionHead {
@@ -49,6 +46,7 @@ pub(crate) fn build_session_head(input: BuildSessionHeadInput<'_>) -> SessionHea
         operator_context,
         silverbullet_journals,
         silverbullet_session_mirror_path,
+        runtime_limits,
     } = input;
     let message_count = transcripts.len();
     let covered_message_count = context_summary
@@ -84,7 +82,8 @@ pub(crate) fn build_session_head(input: BuildSessionHeadInput<'_>) -> SessionHea
         .map(|run| run.pending_approvals.len())
         .sum::<usize>();
 
-    let (workspace_tree, workspace_tree_truncated) = build_workspace_tree(workspace);
+    let (workspace_tree, workspace_tree_truncated) =
+        build_workspace_tree(workspace, runtime_limits.prompt_workspace_tree_limit);
 
     let runtime = runtime.unwrap_or(SessionHeadRuntime {
         provider_name: None,
@@ -127,8 +126,16 @@ pub(crate) fn build_session_head(input: BuildSessionHeadInput<'_>) -> SessionHea
             .rev()
             .find(|record| record.kind == "assistant")
             .map(|record| preview_text(record.content.as_str(), 96)),
-        recent_filesystem_activity: build_recent_filesystem_activity(session, runs),
-        recent_process_activity: build_recent_process_activity(session, runs),
+        recent_filesystem_activity: build_recent_filesystem_activity(
+            session,
+            runs,
+            runtime_limits.prompt_recent_filesystem_activity_limit,
+        ),
+        recent_process_activity: build_recent_process_activity(
+            session,
+            runs,
+            runtime_limits.prompt_recent_process_activity_limit,
+        ),
         workspace_tree,
         workspace_tree_truncated,
         operator_context,
@@ -210,6 +217,7 @@ fn read_prompt_file(path: &Path) -> Option<String> {
 fn build_recent_filesystem_activity(
     session: &Session,
     runs: &[RunSnapshot],
+    limit: usize,
 ) -> Vec<SessionHeadFsActivity> {
     let mut activity = runs
         .iter()
@@ -225,18 +233,21 @@ fn build_recent_filesystem_activity(
             .cmp(&left.recorded_at)
             .then_with(|| left.detail.cmp(&right.detail))
     });
-    activity.truncate(RECENT_FILESYSTEM_ACTIVITY_LIMIT);
+    activity.truncate(limit);
     activity
 }
 
-fn build_workspace_tree(workspace: &WorkspaceRef) -> (Vec<SessionHeadWorkspaceEntry>, bool) {
+fn build_workspace_tree(
+    workspace: &WorkspaceRef,
+    limit: usize,
+) -> (Vec<SessionHeadWorkspaceEntry>, bool) {
     let Ok(entries) = workspace.list("", false) else {
         return (Vec::new(), false);
     };
-    let truncated = entries.len() > WORKSPACE_TREE_LIMIT;
+    let truncated = entries.len() > limit;
     let rendered = entries
         .into_iter()
-        .take(WORKSPACE_TREE_LIMIT)
+        .take(limit)
         .map(|entry| SessionHeadWorkspaceEntry {
             path: entry.path,
             kind: match entry.kind {
@@ -251,6 +262,7 @@ fn build_workspace_tree(workspace: &WorkspaceRef) -> (Vec<SessionHeadWorkspaceEn
 fn build_recent_process_activity(
     session: &Session,
     runs: &[RunSnapshot],
+    limit: usize,
 ) -> Vec<SessionHeadProcessActivity> {
     let mut activity = runs
         .iter()
@@ -266,7 +278,7 @@ fn build_recent_process_activity(
             .cmp(&left.recorded_at)
             .then_with(|| left.detail.cmp(&right.detail))
     });
-    activity.truncate(RECENT_PROCESS_ACTIVITY_LIMIT);
+    activity.truncate(limit);
     activity
 }
 

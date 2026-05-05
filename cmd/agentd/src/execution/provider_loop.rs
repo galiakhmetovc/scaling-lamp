@@ -2,12 +2,8 @@ use super::provider_completion::{
     CompletionGateDecision, build_completion_nudge_message, completion_continuation_messages,
     empty_response_continuation_messages,
 };
-use super::provider_cursor::{
-    MAX_EMPTY_RESPONSE_RECOVERIES, ProviderLoopCursor, ToolSignatureObservation,
-};
+use super::provider_cursor::{ProviderLoopCursor, ToolSignatureObservation};
 use super::provider_ids::sanitize_identifier;
-#[cfg(test)]
-use super::provider_ledger::TOOL_RESULT_PREVIEW_CHAR_LIMIT;
 use super::provider_ledger::{
     ToolCallLedgerUpdate, ToolCallResultLedgerUpdate, record_provider_round_trace,
     record_tool_call_ledger, record_tool_call_result,
@@ -23,9 +19,7 @@ use super::provider_tool_dispatch::{
 use super::*;
 use crate::agents;
 use crate::prompting;
-use crate::store_retry::{
-    SQLITE_LOCK_RETRY_ATTEMPTS, SQLITE_LOCK_RETRY_DELAY_MS, retry_store_sync,
-};
+use crate::store_retry::{retry_store_sync, sqlite_lock_retry_attempts, sqlite_lock_retry_delay};
 use agent_persistence::{
     ArtifactRecord, ArtifactRepository, ContextOffloadRepository, FileDeliveryRepository,
     FileDeliveryRequestRecord, ToolCallRepository,
@@ -60,25 +54,40 @@ use agent_runtime::workspace::WorkspaceRef;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread;
-use std::time::Duration;
-
-const MAX_TRANSIENT_PROVIDER_RETRIES: usize = 3;
-const DEFAULT_SKILL_LIST_LIMIT: usize = 64;
-const MAX_SKILL_LIST_LIMIT: usize = 256;
-const DEFAULT_SKILL_READ_MAX_BYTES: usize = 16 * 1024;
-const MAX_SKILL_READ_MAX_BYTES: usize = 128 * 1024;
 
 #[cfg(unix)]
-fn signal_process_group(pid: libc::pid_t, signal: libc::c_int) -> std::io::Result<()> {
-    let rc = unsafe { libc::kill(-pid, signal) };
+fn signal_process(pid: libc::pid_t, signal: libc::c_int) -> std::io::Result<bool> {
+    let rc = unsafe { libc::kill(pid, signal) };
     if rc == 0 {
-        return Ok(());
+        return Ok(true);
     }
     let error = std::io::Error::last_os_error();
     if error.raw_os_error() == Some(libc::ESRCH) {
-        return Ok(());
+        return Ok(false);
     }
     Err(error)
+}
+
+#[cfg(unix)]
+fn signal_process_group(pid: libc::pid_t, signal: libc::c_int) -> std::io::Result<bool> {
+    let rc = unsafe { libc::kill(-pid, signal) };
+    if rc == 0 {
+        return Ok(true);
+    }
+    let error = std::io::Error::last_os_error();
+    if error.raw_os_error() == Some(libc::ESRCH) {
+        return Ok(false);
+    }
+    Err(error)
+}
+
+#[cfg(unix)]
+fn process_exists(pid: libc::pid_t) -> bool {
+    let rc = unsafe { libc::kill(pid, 0) };
+    if rc == 0 {
+        return true;
+    }
+    std::io::Error::last_os_error().raw_os_error() != Some(libc::ESRCH)
 }
 
 #[cfg(unix)]
@@ -796,8 +805,8 @@ impl ExecutionService {
             results.len(),
             input.offset,
             input.limit,
-            DEFAULT_SKILL_LIST_LIMIT,
-            MAX_SKILL_LIST_LIMIT,
+            self.config.runtime_limits.skill_list_default_limit,
+            self.config.runtime_limits.skill_list_max_limit,
         );
         let end = offset.saturating_add(limit).min(results.len());
         Ok(SkillListOutput {
@@ -851,8 +860,8 @@ impl ExecutionService {
         })?;
         let max_bytes = input
             .max_bytes
-            .unwrap_or(DEFAULT_SKILL_READ_MAX_BYTES)
-            .clamp(1, MAX_SKILL_READ_MAX_BYTES);
+            .unwrap_or(self.config.runtime_limits.skill_read_default_max_bytes)
+            .clamp(1, self.config.runtime_limits.skill_read_max_bytes);
         let (body, body_truncated) = truncate_utf8_bytes(&document.body, max_bytes);
         Ok(SkillReadOutput {
             session_id: session.id,
@@ -1230,6 +1239,7 @@ impl ExecutionService {
             operator_context,
             silverbullet_journals,
             silverbullet_session_mirror_path,
+            runtime_limits: &self.config.runtime_limits,
         });
         let prompt_budget = PromptAssemblyBudget {
             policy: prompt_budget_policy,
@@ -1364,8 +1374,8 @@ impl ExecutionService {
         let record =
             RunRecord::try_from(run.snapshot()).map_err(ExecutionError::RecordConversion)?;
         retry_store_sync(
-            SQLITE_LOCK_RETRY_ATTEMPTS,
-            Duration::from_millis(SQLITE_LOCK_RETRY_DELAY_MS),
+            sqlite_lock_retry_attempts(),
+            sqlite_lock_retry_delay(),
             || store.put_run(&record),
         )
         .map_err(ExecutionError::Store)
@@ -1578,8 +1588,8 @@ impl ExecutionService {
         job.last_progress_message = Some(reason.to_string());
         let record = JobRecord::try_from(&*job).map_err(ExecutionError::RecordConversion)?;
         retry_store_sync(
-            SQLITE_LOCK_RETRY_ATTEMPTS,
-            Duration::from_millis(SQLITE_LOCK_RETRY_DELAY_MS),
+            sqlite_lock_retry_attempts(),
+            sqlite_lock_retry_delay(),
             || store.put_job(&record),
         )
         .map_err(ExecutionError::Store)
@@ -1612,8 +1622,6 @@ impl ExecutionService {
     fn terminate_pid_ref(&self, pid_ref: &str) -> Result<(), ExecutionError> {
         #[cfg(unix)]
         {
-            const TERMINATE_GRACE: Duration = Duration::from_millis(500);
-
             let Some(pid_text) = pid_ref.strip_prefix("pid:") else {
                 return Err(ExecutionError::ProviderLoop {
                     reason: format!("invalid pid_ref {pid_ref}"),
@@ -1625,16 +1633,36 @@ impl ExecutionService {
                     .map_err(|_| ExecutionError::ProviderLoop {
                         reason: format!("invalid pid_ref {pid_ref}"),
                     })?;
-            signal_process_group(pid, libc::SIGTERM).map_err(|error| {
+            let signalled_group = signal_process_group(pid, libc::SIGTERM).map_err(|error| {
                 ExecutionError::ProviderLoop {
                     reason: format!("failed to stop process group for {pid_ref}: {error}"),
                 }
             })?;
-            thread::sleep(TERMINATE_GRACE);
-            if process_group_exists(pid) {
+            if !signalled_group {
+                signal_process(pid, libc::SIGTERM).map_err(|error| {
+                    ExecutionError::ProviderLoop {
+                        reason: format!("failed to stop process for {pid_ref}: {error}"),
+                    }
+                })?;
+            }
+
+            thread::sleep(
+                self.config
+                    .runtime_limits
+                    .to_tool_runtime_limits()
+                    .process_terminate_grace,
+            );
+
+            if signalled_group && process_group_exists(pid) {
                 signal_process_group(pid, libc::SIGKILL).map_err(|error| {
                     ExecutionError::ProviderLoop {
                         reason: format!("failed to kill process group for {pid_ref}: {error}"),
+                    }
+                })?;
+            } else if process_exists(pid) {
+                signal_process(pid, libc::SIGKILL).map_err(|error| {
+                    ExecutionError::ProviderLoop {
+                        reason: format!("failed to kill process for {pid_ref}: {error}"),
                     }
                 })?;
             }
@@ -1835,7 +1863,9 @@ impl ExecutionService {
             "provider retryable error: {}; retrying request ({}/{})",
             error.approval_summary(),
             attempt,
-            MAX_TRANSIENT_PROVIDER_RETRIES
+            self.config
+                .runtime_limits
+                .provider_loop_max_transient_retries
         );
         run.record_system_note(detail, at)
             .map_err(ExecutionError::RunTransition)?;
@@ -1856,7 +1886,12 @@ impl ExecutionService {
             match self.request_provider_response(provider, request, observer) {
                 Ok(observed) => return Ok(observed),
                 Err(ExecutionError::Provider(error))
-                    if error.is_transient() && attempt < MAX_TRANSIENT_PROVIDER_RETRIES =>
+                    if error.is_transient()
+                        && attempt
+                            < self
+                                .config
+                                .runtime_limits
+                                .provider_loop_max_transient_retries =>
                 {
                     attempt += 1;
                     self.note_transient_provider_retry(store, run, &error, attempt, now)?;
@@ -2000,6 +2035,7 @@ impl ExecutionService {
             tool_name: parsed.name().as_str(),
             result_summary: &output_summary,
             result_output: &model_output,
+            result_preview_char_limit: self.config.runtime_limits.tool_result_preview_char_limit,
             now: context.now,
         })?;
         self.prepare_model_tool_output(
@@ -3043,14 +3079,20 @@ impl ExecutionService {
             ) {
                 Ok(observed) => observed,
                 Err(ExecutionError::Provider(ProviderError::ResponseMissingOutputText))
-                    if cursor.can_recover_from_empty_response() =>
+                    if cursor.can_recover_from_empty_response(
+                        self.config
+                            .runtime_limits
+                            .provider_loop_max_empty_response_recoveries,
+                    ) =>
                 {
                     cursor.record_empty_response_recovery();
                     run.record_system_note(
                         format!(
                             "provider returned an empty response after tool results; retrying with explicit continuation ({}/{})",
                             cursor.empty_response_recoveries_used,
-                            MAX_EMPTY_RESPONSE_RECOVERIES
+                            self.config
+                                .runtime_limits
+                                .provider_loop_max_empty_response_recoveries
                         ),
                         now,
                     )
@@ -3143,7 +3185,12 @@ impl ExecutionService {
                     max_rounds: cursor.max_rounds,
                 },
             );
-            let tool_signature_observation = cursor.remember_tool_signature(&response);
+            let tool_signature_observation = cursor.remember_tool_signature(
+                &response,
+                self.config
+                    .runtime_limits
+                    .provider_loop_max_identical_tool_call_repeats,
+            );
             cursor.note_assistant_tool_calls(&response);
             cursor.begin_tool_round();
             if let ToolSignatureObservation::RepeatedSuppressed {
@@ -3208,6 +3255,10 @@ impl ExecutionService {
                         tool_name: &tool_call.name,
                         result_summary: &reason,
                         result_output: &model_output,
+                        result_preview_char_limit: self
+                            .config
+                            .runtime_limits
+                            .tool_result_preview_char_limit,
                         now,
                     })?;
                     cursor.record_tool_output(&tool_call.call_id, model_output);
@@ -3665,14 +3716,14 @@ mod tests {
         );
 
         assert_eq!(
-            cursor.remember_tool_signature(&response),
+            cursor.remember_tool_signature(&response, 3),
             ToolSignatureObservation::Accepted
         );
         assert_eq!(
-            cursor.remember_tool_signature(&response),
+            cursor.remember_tool_signature(&response, 3),
             ToolSignatureObservation::Accepted
         );
-        let observation = cursor.remember_tool_signature(&response);
+        let observation = cursor.remember_tool_signature(&response, 3);
         assert!(matches!(
             observation,
             ToolSignatureObservation::RepeatedSuppressed {
@@ -3692,14 +3743,14 @@ mod tests {
         );
 
         assert_eq!(
-            cursor.remember_tool_signature(&response),
+            cursor.remember_tool_signature(&response, 3),
             ToolSignatureObservation::Accepted
         );
         assert_eq!(
-            cursor.remember_tool_signature(&response),
+            cursor.remember_tool_signature(&response, 3),
             ToolSignatureObservation::Accepted
         );
-        let observation = cursor.remember_tool_signature(&response);
+        let observation = cursor.remember_tool_signature(&response, 3);
         assert!(matches!(
             observation,
             ToolSignatureObservation::RepeatedSuppressed {
@@ -3911,7 +3962,8 @@ mod tests {
         })
         .expect("record ledger");
 
-        let output = "x".repeat(TOOL_RESULT_PREVIEW_CHAR_LIMIT + 32);
+        let result_preview_char_limit = 128;
+        let output = "x".repeat(result_preview_char_limit + 32);
         record_tool_call_result(ToolCallResultLedgerUpdate {
             store: &store,
             session_id: "session-1",
@@ -3920,6 +3972,7 @@ mod tests {
             tool_name: "exec_wait",
             result_summary: "process_result process_id=exec-1 status=exited exit_code=Some(0)",
             result_output: &output,
+            result_preview_char_limit,
             now: 4,
         })
         .expect("record result");

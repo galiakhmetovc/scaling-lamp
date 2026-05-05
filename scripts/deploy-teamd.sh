@@ -527,6 +527,7 @@ data_dir = "$DATA_DIR"
 bind_host = "127.0.0.1"
 bind_port = 5140
 skills_dir = "skills"
+worker_lease_owner = "daemon"
 
 [telegram]
 enabled = true
@@ -538,6 +539,16 @@ private_chat_send_min_interval_ms = 1250
 group_chat_send_min_interval_ms = 3750
 inbound_queue_default_mode = "coalesce"
 inbound_coalesce_window_ms = 5000
+inbound_min_coalesce_window_ms = 5000
+message_text_soft_cap = 3276
+caption_soft_cap = 819
+status_detail_char_cap = 700
+status_ttl_seconds = 1800
+typing_initial_delay_ms = 750
+typing_heartbeat_interval_seconds = 4
+delivery_retry_attempts = 3
+delivery_retry_base_delay_ms = 250
+chat_turn_fast_settle_ms = 50
 pairing_token_ttl_seconds = 900
 max_upload_bytes = 16777216
 max_download_bytes = 41943040
@@ -556,6 +567,9 @@ max_tool_rounds = 24
 [web]
 search_backend = "duckduckgo_html"
 search_url = "https://duckduckgo.com/html/"
+
+[runtime_timing]
+daemon_background_worker_lease_seconds = 60
 
 [permissions]
 mode = "default"

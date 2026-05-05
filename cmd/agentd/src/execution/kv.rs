@@ -7,12 +7,6 @@ use agent_runtime::tool::{
 };
 use serde_json::Value;
 
-const DEFAULT_KV_LIST_LIMIT: usize = 50;
-const MAX_KV_LIST_LIMIT: usize = 500;
-const MAX_KV_KEY_BYTES: usize = 512;
-const MAX_KV_VALUE_BYTES: usize = 64 * 1024;
-const MAX_KV_METADATA_BYTES: usize = 16 * 1024;
-
 impl ExecutionService {
     pub(super) fn get_kv_entry(
         &self,
@@ -22,7 +16,8 @@ impl ExecutionService {
         now: i64,
     ) -> Result<KvGetOutput, ExecutionError> {
         let session = self.load_session(store, session_id)?;
-        let key = normalized_kv_key(&input.key)?;
+        let key =
+            normalized_kv_key_with_limit(&input.key, self.config.runtime_limits.kv_key_max_bytes)?;
         let (scope, namespace_id) = kv_namespace_id(
             &session,
             self.config.mem0.default_user_id.as_str(),
@@ -48,16 +43,24 @@ impl ExecutionService {
         now: i64,
     ) -> Result<KvPutOutput, ExecutionError> {
         let session = self.load_session(store, session_id)?;
-        let key = normalized_kv_key(&input.key)?;
+        let key =
+            normalized_kv_key_with_limit(&input.key, self.config.runtime_limits.kv_key_max_bytes)?;
         let (scope, namespace_id) = kv_namespace_id(
             &session,
             self.config.mem0.default_user_id.as_str(),
             input.scope.as_deref(),
         )?;
-        let value_json = bounded_json_string("kv_put value", &input.value, MAX_KV_VALUE_BYTES)?;
+        let value_json = bounded_json_string(
+            "kv_put value",
+            &input.value,
+            self.config.runtime_limits.kv_value_max_bytes,
+        )?;
         validate_kv_metadata(&input.metadata)?;
-        let metadata_json =
-            bounded_json_string("kv_put metadata", &input.metadata, MAX_KV_METADATA_BYTES)?;
+        let metadata_json = bounded_json_string(
+            "kv_put metadata",
+            &input.metadata,
+            self.config.runtime_limits.kv_metadata_max_bytes,
+        )?;
         let expires_at = match input.ttl_seconds {
             Some(ttl_seconds) if ttl_seconds <= 0 => {
                 return Err(invalid_kv_tool(
@@ -107,13 +110,17 @@ impl ExecutionService {
             .map(str::trim)
             .filter(|value| !value.is_empty());
         if let Some(prefix) = prefix {
-            validate_kv_key_length(prefix, "kv_list prefix")?;
+            validate_kv_key_length(
+                prefix,
+                "kv_list prefix",
+                self.config.runtime_limits.kv_key_max_bytes,
+            )?;
         }
         let offset = input.offset.unwrap_or(0);
         let limit = input
             .limit
-            .unwrap_or(DEFAULT_KV_LIST_LIMIT)
-            .clamp(1, MAX_KV_LIST_LIMIT);
+            .unwrap_or(self.config.runtime_limits.kv_list_default_limit)
+            .clamp(1, self.config.runtime_limits.kv_list_max_limit);
         let mut records = store
             .list_kv_entries(
                 scope.as_str(),
@@ -153,7 +160,8 @@ impl ExecutionService {
         input: &KvDeleteInput,
     ) -> Result<KvDeleteOutput, ExecutionError> {
         let session = self.load_session(store, session_id)?;
-        let key = normalized_kv_key(&input.key)?;
+        let key =
+            normalized_kv_key_with_limit(&input.key, self.config.runtime_limits.kv_key_max_bytes)?;
         let (scope, namespace_id) = kv_namespace_id(
             &session,
             self.config.mem0.default_user_id.as_str(),
@@ -171,21 +179,25 @@ impl ExecutionService {
     }
 }
 
-fn normalized_kv_key(raw: &str) -> Result<String, ExecutionError> {
+fn normalized_kv_key_with_limit(raw: &str, max_bytes: usize) -> Result<String, ExecutionError> {
     let key = raw.trim();
     if key.is_empty() {
         return Err(invalid_kv_tool("kv key must not be empty"));
     }
-    validate_kv_key_length(key, "kv key")?;
+    validate_kv_key_length(key, "kv key", max_bytes)?;
     Ok(key.to_string())
 }
 
-fn validate_kv_key_length(value: &str, label: &str) -> Result<(), ExecutionError> {
-    if value.len() > MAX_KV_KEY_BYTES {
+fn validate_kv_key_length(
+    value: &str,
+    label: &str,
+    max_bytes: usize,
+) -> Result<(), ExecutionError> {
+    if value.len() > max_bytes {
         return Err(invalid_kv_tool(format!(
             "{label} is too large: {} bytes > {}",
             value.len(),
-            MAX_KV_KEY_BYTES
+            max_bytes
         )));
     }
     Ok(())

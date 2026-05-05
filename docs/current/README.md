@@ -36,6 +36,7 @@
 12. [14-container-addons.md](14-container-addons.md)
 13. [15-tool-reference.md](15-tool-reference.md)
 14. [16-refactoring-audit-and-plan.md](16-refactoring-audit-and-plan.md)
+15. [18-runtime-policy-config-audit.md](18-runtime-policy-config-audit.md)
 
 ## Словарь
 

@@ -792,7 +792,7 @@ impl ToolCatalog {
             ToolDefinition {
                 name: ToolName::KnowledgeSearch,
                 family: ToolFamily::Memory,
-                description: "Search the canonical teamD knowledge index (repo root docs, docs/, registered project docs/notes, extra roots) with bounded pagination and source metadata. This is not Mem0 semantic memory, scoped KV, or the SilverBullet Space.",
+                description: "Search the configured canonical teamD docs/workspace knowledge index with SQLite FTS. Sources are only [knowledge].source_files/source_dirs inside the agent workspace (for example README.md, SYSTEM.md, AGENTS.md, docs/, projects/, notes/, extra roots); unreadable files are skipped. This is not arbitrary filesystem search, not Mem0 semantic memory, not scoped KV, and not the SilverBullet Space.",
                 policy: ToolPolicy {
                     read_only: true,
                     destructive: false,
@@ -802,7 +802,7 @@ impl ToolCatalog {
             ToolDefinition {
                 name: ToolName::KnowledgeRead,
                 family: ToolFamily::Memory,
-                description: "Read one source returned by knowledge_search from the canonical teamD knowledge index in bounded excerpt/full mode. Use SilverBullet MCP/filesystem for SilverBullet pages, memory_search for Mem0, and kv_get/kv_list for exact runtime KV.",
+                description: "Read one indexed docs/workspace knowledge source returned by knowledge_search in bounded excerpt/full mode. This is a safe canonical-index reader, not a general file reader; use fs_read_text/fs_read_lines for arbitrary workspace files, SilverBullet MCP/filesystem for SilverBullet pages, memory_search for Mem0, and kv_get/kv_list for exact runtime KV.",
                 policy: ToolPolicy {
                     read_only: true,
                     destructive: false,

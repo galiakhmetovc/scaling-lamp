@@ -1,9 +1,10 @@
 use super::*;
 use agent_persistence::{
     AgentRepository, ArtifactRecord, ContextSummaryRecord, ContextSummaryRepository,
-    KnowledgeRepository, KnowledgeSearchDocRecord, KnowledgeSourceRecord, PlanRepository,
-    SessionRepository, SessionRetentionRecord, SessionRetentionRepository, SessionSearchDocRecord,
-    SessionSearchRepository, TranscriptRecord, TranscriptRepository,
+    KnowledgeConfig, KnowledgeRepository, KnowledgeSearchDocRecord, KnowledgeSourcePathConfig,
+    KnowledgeSourceRecord, PlanRepository, SessionRepository, SessionRetentionRecord,
+    SessionRetentionRepository, SessionSearchDocRecord, SessionSearchRepository, TranscriptRecord,
+    TranscriptRepository,
 };
 use agent_runtime::archive::{ArchivedArtifactEntry, ArchivedSummary, ArchivedTranscriptEntry};
 use agent_runtime::memory::{SessionRetentionState, SessionRetentionTier};
@@ -21,40 +22,6 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::Path;
 use std::time::UNIX_EPOCH;
-
-const CANONICAL_KNOWLEDGE_FILES: &[(&str, KnowledgeRoot, KnowledgeSourceKind)] = &[
-    (
-        "README.md",
-        KnowledgeRoot::RootDocs,
-        KnowledgeSourceKind::RootDoc,
-    ),
-    (
-        "SYSTEM.md",
-        KnowledgeRoot::RootDocs,
-        KnowledgeSourceKind::RootDoc,
-    ),
-    (
-        "AGENTS.md",
-        KnowledgeRoot::RootDocs,
-        KnowledgeSourceKind::RootDoc,
-    ),
-];
-
-const CANONICAL_KNOWLEDGE_DIRS: &[(&str, KnowledgeRoot, KnowledgeSourceKind)] = &[
-    ("docs", KnowledgeRoot::Docs, KnowledgeSourceKind::ProjectDoc),
-    (
-        "projects",
-        KnowledgeRoot::Projects,
-        KnowledgeSourceKind::ProjectDoc,
-    ),
-    (
-        "notes",
-        KnowledgeRoot::Notes,
-        KnowledgeSourceKind::ProjectNote,
-    ),
-];
-
-const ALLOWED_KNOWLEDGE_EXTENSIONS: &[&str] = &["md", "txt", "json", "yaml", "yml", "toml"];
 
 #[derive(Debug, Clone, Copy)]
 struct SessionReadWindow {
@@ -406,6 +373,8 @@ impl ExecutionService {
 
         self.refresh_knowledge_index(store)?;
         let query_lower = query.to_lowercase();
+        let query_terms = knowledge_search_terms(query);
+        let fts_query = knowledge_fts_query(query_terms.as_slice());
         let kinds = input.kinds.clone();
         let roots = input.roots.clone();
         let sources_by_id = store
@@ -415,14 +384,22 @@ impl ExecutionService {
             .map(|source| (source.source_id.clone(), source))
             .collect::<BTreeMap<_, _>>();
 
-        let mut results = store
-            .list_knowledge_search_docs()
-            .map_err(ExecutionError::Store)?
+        let docs = match fts_query.as_deref() {
+            Some(fts_query) => store
+                .search_knowledge_search_docs(fts_query)
+                .map_err(ExecutionError::Store)?,
+            None => store
+                .list_knowledge_search_docs()
+                .map_err(ExecutionError::Store)?,
+        };
+
+        let results = docs
             .into_iter()
             .filter_map(|doc| {
                 let source = sources_by_id.get(&doc.source_id)?;
                 let kind = parse_knowledge_source_kind(&source.kind).ok()?;
-                let root = classify_knowledge_root(doc.path.as_str()).ok()?;
+                let root =
+                    classify_knowledge_root(doc.path.as_str(), &self.config.knowledge).ok()?;
                 if let Some(filter) = kinds.as_ref()
                     && !filter.contains(&kind)
                 {
@@ -434,6 +411,7 @@ impl ExecutionService {
                     return None;
                 }
                 let snippet = excerpt_for_query(doc.body.as_str(), query, &query_lower)
+                    .or_else(|| excerpt_for_query_terms(doc.body.as_str(), query_terms.as_slice()))
                     .or_else(|| excerpt_for_query(doc.path.as_str(), query, &query_lower))?;
                 Some(KnowledgeSearchResultOutput {
                     path: doc.path,
@@ -444,12 +422,6 @@ impl ExecutionService {
                 })
             })
             .collect::<Vec<_>>();
-        results.sort_by(|left, right| {
-            right
-                .mtime
-                .cmp(&left.mtime)
-                .then(left.path.cmp(&right.path))
-        });
 
         let (offset, limit, next_offset) = normalized_pagination(
             results.len(),
@@ -493,7 +465,7 @@ impl ExecutionService {
                 invalid_memory_tool(format!("knowledge source {normalized_path} not found"))
             })?;
         let kind = parse_knowledge_source_kind(&source.kind)?;
-        ensure_canonical_knowledge_path(normalized_path.as_str())?;
+        ensure_canonical_knowledge_path(normalized_path.as_str(), &self.config.knowledge)?;
 
         let content = self
             .workspace
@@ -651,7 +623,8 @@ impl ExecutionService {
     }
 
     fn refresh_knowledge_index(&self, store: &PersistenceStore) -> Result<(), ExecutionError> {
-        let scanned = collect_knowledge_sources(self.workspace.root.as_path())?;
+        let scanned =
+            collect_knowledge_sources(self.workspace.root.as_path(), &self.config.knowledge)?;
         let scanned_ids = scanned
             .iter()
             .map(|source| source.record.source_id.clone())
@@ -706,24 +679,30 @@ impl ExecutionService {
 
 fn collect_knowledge_sources(
     workspace_root: &Path,
+    knowledge: &KnowledgeConfig,
 ) -> Result<Vec<ScannedKnowledgeSource>, ExecutionError> {
     let mut sources = Vec::new();
 
-    for (path, _root, kind) in CANONICAL_KNOWLEDGE_FILES {
-        let absolute = workspace_root.join(path);
-        if absolute.is_file() {
-            sources.push(scan_knowledge_file(
-                workspace_root,
-                absolute.as_path(),
-                *kind,
-            )?);
+    for source in &knowledge.source_files {
+        let absolute = workspace_root.join(&source.path);
+        if absolute.is_file()
+            && let Some(scanned) =
+                scan_knowledge_file(workspace_root, absolute.as_path(), source.kind)?
+        {
+            sources.push(scanned);
         }
     }
 
-    for (dir, _root, kind) in CANONICAL_KNOWLEDGE_DIRS {
-        let absolute = workspace_root.join(dir);
+    for source in &knowledge.source_dirs {
+        let absolute = workspace_root.join(&source.path);
         if absolute.is_dir() {
-            collect_knowledge_dir(workspace_root, absolute.as_path(), *kind, &mut sources)?;
+            collect_knowledge_dir(
+                workspace_root,
+                absolute.as_path(),
+                source,
+                knowledge,
+                &mut sources,
+            )?;
         }
     }
 
@@ -734,43 +713,60 @@ fn collect_knowledge_sources(
 fn collect_knowledge_dir(
     workspace_root: &Path,
     current: &Path,
-    kind: KnowledgeSourceKind,
+    source: &KnowledgeSourcePathConfig,
+    knowledge: &KnowledgeConfig,
     output: &mut Vec<ScannedKnowledgeSource>,
 ) -> Result<(), ExecutionError> {
-    let mut entries = fs::read_dir(current)
-        .map_err(|source| {
-            ExecutionError::Tool(ToolError::Workspace(
+    let read_dir = match fs::read_dir(current) {
+        Ok(read_dir) => read_dir,
+        Err(source) if is_skippable_knowledge_io_error(&source) => return Ok(()),
+        Err(source) => {
+            return Err(ExecutionError::Tool(ToolError::Workspace(
                 agent_runtime::workspace::WorkspaceError::Io {
                     path: current.to_path_buf(),
                     source,
                 },
-            ))
-        })?
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(|source| {
-            ExecutionError::Tool(ToolError::Workspace(
-                agent_runtime::workspace::WorkspaceError::Io {
-                    path: current.to_path_buf(),
-                    source,
-                },
-            ))
-        })?;
+            )));
+        }
+    };
+    let mut entries = Vec::new();
+    for entry in read_dir {
+        match entry {
+            Ok(entry) => entries.push(entry),
+            Err(source) if is_skippable_knowledge_io_error(&source) => continue,
+            Err(source) => {
+                return Err(ExecutionError::Tool(ToolError::Workspace(
+                    agent_runtime::workspace::WorkspaceError::Io {
+                        path: current.to_path_buf(),
+                        source,
+                    },
+                )));
+            }
+        }
+    }
     entries.sort_by_key(|entry| entry.path());
 
     for entry in entries {
         let path = entry.path();
-        let file_type = entry.file_type().map_err(|source| {
-            ExecutionError::Tool(ToolError::Workspace(
-                agent_runtime::workspace::WorkspaceError::Io {
-                    path: path.clone(),
-                    source,
-                },
-            ))
-        })?;
+        let file_type = match entry.file_type() {
+            Ok(file_type) => file_type,
+            Err(source) if is_skippable_knowledge_io_error(&source) => continue,
+            Err(source) => {
+                return Err(ExecutionError::Tool(ToolError::Workspace(
+                    agent_runtime::workspace::WorkspaceError::Io {
+                        path: path.clone(),
+                        source,
+                    },
+                )));
+            }
+        };
         if file_type.is_dir() {
-            collect_knowledge_dir(workspace_root, path.as_path(), kind, output)?;
-        } else if file_type.is_file() && is_allowed_knowledge_extension(path.as_path()) {
-            output.push(scan_knowledge_file(workspace_root, path.as_path(), kind)?);
+            collect_knowledge_dir(workspace_root, path.as_path(), source, knowledge, output)?;
+        } else if file_type.is_file()
+            && is_allowed_knowledge_extension(path.as_path(), knowledge)
+            && let Some(scanned) = scan_knowledge_file(workspace_root, path.as_path(), source.kind)?
+        {
+            output.push(scanned);
         }
     }
 
@@ -781,23 +777,31 @@ fn scan_knowledge_file(
     workspace_root: &Path,
     path: &Path,
     kind: KnowledgeSourceKind,
-) -> Result<ScannedKnowledgeSource, ExecutionError> {
-    let content = fs::read_to_string(path).map_err(|source| {
-        ExecutionError::Tool(ToolError::Workspace(
-            agent_runtime::workspace::WorkspaceError::Io {
-                path: path.to_path_buf(),
-                source,
-            },
-        ))
-    })?;
-    let metadata = fs::metadata(path).map_err(|source| {
-        ExecutionError::Tool(ToolError::Workspace(
-            agent_runtime::workspace::WorkspaceError::Io {
-                path: path.to_path_buf(),
-                source,
-            },
-        ))
-    })?;
+) -> Result<Option<ScannedKnowledgeSource>, ExecutionError> {
+    let content = match fs::read_to_string(path) {
+        Ok(content) => content,
+        Err(source) if is_skippable_knowledge_io_error(&source) => return Ok(None),
+        Err(source) => {
+            return Err(ExecutionError::Tool(ToolError::Workspace(
+                agent_runtime::workspace::WorkspaceError::Io {
+                    path: path.to_path_buf(),
+                    source,
+                },
+            )));
+        }
+    };
+    let metadata = match fs::metadata(path) {
+        Ok(metadata) => metadata,
+        Err(source) if is_skippable_knowledge_io_error(&source) => return Ok(None),
+        Err(source) => {
+            return Err(ExecutionError::Tool(ToolError::Workspace(
+                agent_runtime::workspace::WorkspaceError::Io {
+                    path: path.to_path_buf(),
+                    source,
+                },
+            )));
+        }
+    };
     let relative = path.strip_prefix(workspace_root).map_err(|_| {
         invalid_memory_tool(format!(
             "knowledge path {} escaped workspace",
@@ -814,7 +818,7 @@ fn scan_knowledge_file(
     let digest = Sha256::digest(content.as_bytes());
     let sha256 = format!("{digest:x}");
     let indexed_at = mtime.max(0);
-    Ok(ScannedKnowledgeSource {
+    Ok(Some(ScannedKnowledgeSource {
         record: KnowledgeSourceRecord {
             source_id: relative_path.clone(),
             path: relative_path.clone(),
@@ -832,23 +836,25 @@ fn scan_knowledge_file(
             body: content,
             updated_at: indexed_at,
         },
-    })
+    }))
 }
 
 fn ensure_canonical_knowledge_path(
     path: &str,
+    knowledge: &KnowledgeConfig,
 ) -> Result<(KnowledgeRoot, KnowledgeSourceKind), ExecutionError> {
     let normalized = normalize_memory_path(path);
-    for (candidate, root, kind) in CANONICAL_KNOWLEDGE_FILES {
-        if normalized == *candidate {
-            return Ok((*root, *kind));
+    for source in &knowledge.source_files {
+        if normalized == normalized_config_path(&source.path) {
+            return Ok((source.root, source.kind));
         }
     }
-    for (prefix, root, kind) in CANONICAL_KNOWLEDGE_DIRS {
+    for source in &knowledge.source_dirs {
+        let prefix = normalized_config_path(&source.path);
         if normalized.starts_with(&format!("{prefix}/"))
-            && is_allowed_knowledge_extension(Path::new(&normalized))
+            && is_allowed_knowledge_extension(Path::new(&normalized), knowledge)
         {
-            return Ok((*root, *kind));
+            return Ok((source.root, source.kind));
         }
     }
     Err(invalid_memory_tool(format!(
@@ -856,8 +862,11 @@ fn ensure_canonical_knowledge_path(
     )))
 }
 
-fn classify_knowledge_root(path: &str) -> Result<KnowledgeRoot, ExecutionError> {
-    ensure_canonical_knowledge_path(path).map(|(root, _)| root)
+fn classify_knowledge_root(
+    path: &str,
+    knowledge: &KnowledgeConfig,
+) -> Result<KnowledgeRoot, ExecutionError> {
+    ensure_canonical_knowledge_path(path, knowledge).map(|(root, _)| root)
 }
 
 fn parse_knowledge_source_kind(value: &str) -> Result<KnowledgeSourceKind, ExecutionError> {
@@ -872,14 +881,31 @@ fn parse_knowledge_source_kind(value: &str) -> Result<KnowledgeSourceKind, Execu
     }
 }
 
-fn is_allowed_knowledge_extension(path: &Path) -> bool {
+fn is_allowed_knowledge_extension(path: &Path, knowledge: &KnowledgeConfig) -> bool {
     path.extension()
         .and_then(|value| value.to_str())
         .map(|value| {
             let lowered = value.to_ascii_lowercase();
-            ALLOWED_KNOWLEDGE_EXTENSIONS.contains(&lowered.as_str())
+            knowledge
+                .allowed_extensions
+                .iter()
+                .any(|extension| extension.eq_ignore_ascii_case(&lowered))
         })
         .unwrap_or(false)
+}
+
+fn is_skippable_knowledge_io_error(source: &std::io::Error) -> bool {
+    matches!(
+        source.kind(),
+        std::io::ErrorKind::PermissionDenied
+            | std::io::ErrorKind::NotFound
+            | std::io::ErrorKind::InvalidData
+            | std::io::ErrorKind::UnexpectedEof
+    )
+}
+
+fn normalized_config_path(path: &Path) -> String {
+    normalize_memory_path(path.to_string_lossy().as_ref())
 }
 
 fn normalize_memory_path(path: &str) -> String {
@@ -1350,6 +1376,52 @@ fn excerpt_for_query(text: &str, query: &str, query_lower: &str) -> Option<Strin
     Some(extract_char_range(trimmed, excerpt_start, excerpt_end))
 }
 
+fn excerpt_for_query_terms(text: &str, terms: &[String]) -> Option<String> {
+    for term in terms {
+        let term_lower = term.to_lowercase();
+        if let Some(excerpt) = excerpt_for_query(text, term.as_str(), term_lower.as_str()) {
+            return Some(excerpt);
+        }
+    }
+    None
+}
+
+fn knowledge_search_terms(query: &str) -> Vec<String> {
+    let mut terms = Vec::new();
+    let mut current = String::new();
+    for ch in query.chars() {
+        if ch.is_alphanumeric() || ch == '_' {
+            current.push(ch);
+        } else if !current.is_empty() {
+            push_unique_term(&mut terms, &mut current);
+        }
+    }
+    if !current.is_empty() {
+        push_unique_term(&mut terms, &mut current);
+    }
+    terms
+}
+
+fn push_unique_term(terms: &mut Vec<String>, current: &mut String) {
+    let term = std::mem::take(current);
+    if !terms.iter().any(|existing| existing == &term) {
+        terms.push(term);
+    }
+}
+
+fn knowledge_fts_query(terms: &[String]) -> Option<String> {
+    if terms.is_empty() {
+        return None;
+    }
+    Some(
+        terms
+            .iter()
+            .map(|term| format!("\"{}\"", term.replace('"', "\"\"")))
+            .collect::<Vec<_>>()
+            .join(" AND "),
+    )
+}
+
 fn find_query_start(text: &str, query: &str, query_lower: &str) -> Option<usize> {
     if let Some(index) = text.find(query) {
         return Some(index);
@@ -1417,6 +1489,8 @@ mod tests {
     };
     use agent_runtime::workspace::WorkspaceRef;
     use std::fs;
+    #[cfg(unix)]
+    use std::os::unix::fs::PermissionsExt;
     use std::path::PathBuf;
 
     #[test]
@@ -1864,6 +1938,102 @@ mod tests {
         assert_eq!(search.results.len(), 1);
         assert_eq!(search.results[0].path, "docs/architecture.md");
         assert_eq!(search.results[0].kind, KnowledgeSourceKind::ProjectDoc);
+    }
+
+    #[test]
+    fn knowledge_search_uses_fts_for_non_contiguous_terms() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let workspace = temp.path().join("workspace");
+        fs::create_dir_all(workspace.join("docs")).expect("create docs");
+        fs::write(
+            workspace.join("docs/runtime.md"),
+            "Offline ADQM memory architecture is documented here.\n",
+        )
+        .expect("write docs");
+
+        let scaffold = PersistenceScaffold::from_config(AppConfig {
+            data_dir: temp.path().join("state-root"),
+            ..AppConfig::default()
+        });
+        let store = PersistenceStore::open(&scaffold).expect("open store");
+        let service = ExecutionService::new(
+            PermissionConfig::default(),
+            WorkspaceRef::new(&workspace),
+            SharedProcessRegistry::default(),
+            crate::mcp::SharedMcpRegistry::default(),
+            ExecutionServiceConfig::default(),
+        );
+
+        let search = service
+            .search_knowledge(
+                &store,
+                &KnowledgeSearchInput {
+                    query: "ADQM architecture".to_string(),
+                    limit: Some(10),
+                    offset: Some(0),
+                    kinds: Some(vec![KnowledgeSourceKind::ProjectDoc]),
+                    roots: Some(vec![KnowledgeRoot::Docs]),
+                },
+            )
+            .expect("knowledge search");
+
+        assert_eq!(search.results.len(), 1);
+        assert_eq!(search.results[0].path, "docs/runtime.md");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn knowledge_search_skips_unreadable_files_in_canonical_roots() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let workspace = temp.path().join("workspace");
+        fs::create_dir_all(workspace.join("docs")).expect("create docs");
+        fs::write(
+            workspace.join("docs/visible.md"),
+            "Visible searchable runtime note.\n",
+        )
+        .expect("write visible doc");
+        let protected = workspace.join("docs/protected.md");
+        fs::write(&protected, "Protected content should not break indexing.\n")
+            .expect("write protected doc");
+        let mut locked_permissions = fs::metadata(&protected)
+            .expect("protected metadata")
+            .permissions();
+        locked_permissions.set_mode(0o000);
+        fs::set_permissions(&protected, locked_permissions).expect("lock protected doc");
+
+        let scaffold = PersistenceScaffold::from_config(AppConfig {
+            data_dir: temp.path().join("state-root"),
+            ..AppConfig::default()
+        });
+        let store = PersistenceStore::open(&scaffold).expect("open store");
+        let service = ExecutionService::new(
+            PermissionConfig::default(),
+            WorkspaceRef::new(&workspace),
+            SharedProcessRegistry::default(),
+            crate::mcp::SharedMcpRegistry::default(),
+            ExecutionServiceConfig::default(),
+        );
+
+        let result = service.search_knowledge(
+            &store,
+            &KnowledgeSearchInput {
+                query: "Visible searchable".to_string(),
+                limit: Some(10),
+                offset: Some(0),
+                kinds: Some(vec![KnowledgeSourceKind::ProjectDoc]),
+                roots: Some(vec![KnowledgeRoot::Docs]),
+            },
+        );
+
+        let mut restored_permissions = fs::metadata(&protected)
+            .expect("protected metadata after search")
+            .permissions();
+        restored_permissions.set_mode(0o600);
+        fs::set_permissions(&protected, restored_permissions).expect("restore protected doc");
+
+        let search = result.expect("knowledge search should skip unreadable docs");
+        assert_eq!(search.results.len(), 1);
+        assert_eq!(search.results[0].path, "docs/visible.md");
     }
 
     #[test]

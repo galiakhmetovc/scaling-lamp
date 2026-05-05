@@ -10,8 +10,8 @@ use super::{
     ProcessOutputStatus, ProcessOutputStream, ProcessReadOutputInput, ProcessResultStatus,
     ProcessWaitInput, PromptBudgetLayerPercentagesInput, PromptBudgetUpdateScope, SessionReadInput,
     SessionReadMode, SessionSearchInput, SessionWaitInput, SharedProcessRegistry, ToolCall,
-    ToolCatalog, ToolFamily, ToolName, ToolRuntime, WebFetchInput, WebSearchBackend,
-    WebSearchInput, WebToolClient,
+    ToolCatalog, ToolFamily, ToolName, ToolRuntime, ToolRuntimeLimits, WebFetchInput,
+    WebSearchBackend, WebSearchInput, WebToolClient,
 };
 use crate::memory::SessionRetentionTier;
 use crate::workspace::WorkspaceRef;
@@ -1712,6 +1712,57 @@ fn filesystem_tools_list_results_are_bounded_and_paginated() {
 }
 
 #[test]
+fn filesystem_tools_list_uses_runtime_limits() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let workspace = WorkspaceRef::new(temp.path());
+    let mut runtime = ToolRuntime::new(workspace).with_runtime_limits(ToolRuntimeLimits {
+        fs_list_default_limit: 2,
+        fs_list_max_limit: 3,
+        ..ToolRuntimeLimits::default()
+    });
+
+    for index in 0..5 {
+        runtime
+            .invoke(ToolCall::FsWriteText(FsWriteTextInput {
+                path: format!("bounded/file-{index}.txt"),
+                content: "payload\n".to_string(),
+                mode: FsWriteMode::Upsert,
+            }))
+            .expect("seed file");
+    }
+
+    let default_page = runtime
+        .invoke(ToolCall::FsList(FsListInput {
+            path: "bounded".to_string(),
+            recursive: true,
+            limit: None,
+            offset: None,
+        }))
+        .expect("fs_list default page")
+        .into_fs_list()
+        .expect("fs_list output");
+
+    assert_eq!(default_page.entries.len(), 2);
+    assert_eq!(default_page.limit, 2);
+    assert_eq!(default_page.next_offset, Some(2));
+
+    let clamped_page = runtime
+        .invoke(ToolCall::FsList(FsListInput {
+            path: "bounded".to_string(),
+            recursive: true,
+            limit: Some(99),
+            offset: None,
+        }))
+        .expect("fs_list clamped page")
+        .into_fs_list()
+        .expect("fs_list output");
+
+    assert_eq!(clamped_page.entries.len(), 3);
+    assert_eq!(clamped_page.limit, 3);
+    assert_eq!(clamped_page.next_offset, Some(3));
+}
+
+#[test]
 fn filesystem_tools_glob_results_are_bounded_and_paginated() {
     let temp = tempfile::tempdir().expect("tempdir");
     let workspace = WorkspaceRef::new(temp.path());
@@ -1956,6 +2007,41 @@ fn exec_wait_times_out_and_kills_process() {
         ),
         "timed-out process should be removed from the registry"
     );
+}
+
+#[test]
+fn exec_wait_uses_configured_default_timeout() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let workspace = WorkspaceRef::new(temp.path());
+    let mut runtime = ToolRuntime::new(workspace).with_runtime_limits(ToolRuntimeLimits {
+        process_wait_default_timeout: Duration::from_millis(50),
+        process_wait_max_timeout: Duration::from_secs(5),
+        process_wait_poll_interval: Duration::from_millis(5),
+        process_terminate_grace: Duration::from_millis(20),
+        process_reader_drain_grace: Duration::from_millis(20),
+        ..ToolRuntimeLimits::default()
+    });
+
+    let started = runtime
+        .invoke(ToolCall::ExecStart(ExecStartInput {
+            executable: "/bin/sleep".to_string(),
+            args: vec!["5".to_string()],
+            cwd: None,
+        }))
+        .expect("exec_start")
+        .into_process_start()
+        .expect("process start");
+
+    let waited = runtime
+        .invoke(ToolCall::ExecWait(ProcessWaitInput {
+            process_id: started.process_id,
+            timeout_ms: None,
+        }))
+        .expect("exec_wait")
+        .into_process_result()
+        .expect("process result");
+
+    assert_eq!(waited.status, ProcessResultStatus::TimedOut);
 }
 
 #[test]

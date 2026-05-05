@@ -75,6 +75,10 @@ pub trait KnowledgeRepository {
         docs: &[KnowledgeSearchDocRecord],
     ) -> Result<(), StoreError>;
     fn list_knowledge_search_docs(&self) -> Result<Vec<KnowledgeSearchDocRecord>, StoreError>;
+    fn search_knowledge_search_docs(
+        &self,
+        fts_query: &str,
+    ) -> Result<Vec<KnowledgeSearchDocRecord>, StoreError>;
 }
 
 pub trait KvRepository {

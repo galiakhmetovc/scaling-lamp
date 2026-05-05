@@ -1,7 +1,9 @@
 use agent_runtime::mcp::McpConnectorTransport;
 use agent_runtime::permission::{PermissionConfig, PermissionMode};
 use agent_runtime::provider::{ConfiguredProvider, ProviderKind};
-use agent_runtime::tool::{BrowserToolConfig, WebSearchBackend};
+use agent_runtime::tool::{
+    BrowserToolConfig, KnowledgeRoot, KnowledgeSourceKind, ToolRuntimeLimits, WebSearchBackend,
+};
 use agent_runtime::{context::CompactionPolicy, session::SessionSettings};
 use serde::Deserialize;
 use std::collections::BTreeMap;
@@ -71,6 +73,7 @@ pub struct DaemonConfig {
     pub bearer_token: Option<String>,
     pub skills_dir: PathBuf,
     pub public_base_url: Option<String>,
+    pub worker_lease_owner: String,
     pub a2a_peers: BTreeMap<String, A2APeerConfig>,
     pub mcp_connectors: BTreeMap<String, McpConnectorSeedConfig>,
 }
@@ -94,6 +97,16 @@ pub struct TelegramConfig {
     pub default_autoapprove: bool,
     pub inbound_queue_default_mode: String,
     pub inbound_coalesce_window_ms: u64,
+    pub inbound_min_coalesce_window_ms: u64,
+    pub message_text_soft_cap: usize,
+    pub caption_soft_cap: usize,
+    pub status_detail_char_cap: usize,
+    pub status_ttl_seconds: i64,
+    pub typing_initial_delay_ms: u64,
+    pub typing_heartbeat_interval_seconds: u64,
+    pub delivery_retry_attempts: usize,
+    pub delivery_retry_base_delay_ms: u64,
+    pub chat_turn_fast_settle_ms: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
@@ -135,6 +148,19 @@ pub struct KnowledgeConfig {
     pub silverbullet_base_url: Option<String>,
     pub silverbullet_journal_context_enabled: bool,
     pub silverbullet_mirror_enabled: bool,
+    pub silverbullet_session_area_path: PathBuf,
+    pub silverbullet_text_artifact_extensions: Vec<String>,
+    pub silverbullet_script_artifact_extensions: Vec<String>,
+    pub source_files: Vec<KnowledgeSourcePathConfig>,
+    pub source_dirs: Vec<KnowledgeSourcePathConfig>,
+    pub allowed_extensions: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct KnowledgeSourcePathConfig {
+    pub path: PathBuf,
+    pub root: KnowledgeRoot,
+    pub kind: KnowledgeSourceKind,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
@@ -225,6 +251,7 @@ pub struct ObservabilityConfig {
 #[serde(default)]
 pub struct RuntimeTimingConfig {
     pub sqlite_busy_timeout_ms: u64,
+    pub sqlite_lock_retry_delay_ms: u64,
     pub daemon_http_connect_timeout_ms: u64,
     pub daemon_http_request_timeout_ms: u64,
     pub a2a_http_connect_timeout_ms: u64,
@@ -239,6 +266,7 @@ pub struct RuntimeTimingConfig {
     pub daemon_test_startup_probe_attempts: usize,
     pub daemon_test_startup_probe_interval_ms: u64,
     pub daemon_background_worker_tick_interval_ms: u64,
+    pub daemon_background_worker_lease_seconds: i64,
     pub tui_event_poll_interval_ms: u64,
     pub tui_active_run_heartbeat_notice_interval_seconds: u64,
     pub mcp_stdio_command_poll_interval_ms: u64,
@@ -249,6 +277,7 @@ pub struct RuntimeTimingConfig {
 #[serde(default)]
 pub struct RuntimeLimitsConfig {
     pub diagnostic_tail_lines: usize,
+    pub sqlite_lock_retry_attempts: usize,
     pub active_run_step_tail_limit: usize,
     pub active_process_output_tail_max_bytes: usize,
     pub active_process_output_tail_max_lines: usize,
@@ -278,6 +307,41 @@ pub struct RuntimeLimitsConfig {
     pub silverbullet_mirror_script_max_chars: usize,
     pub session_warm_idle_seconds: u64,
     pub timeline_preview_chars: usize,
+    pub fs_list_default_limit: usize,
+    pub fs_list_max_limit: usize,
+    pub process_output_read_default_max_bytes: usize,
+    pub process_output_read_max_bytes: usize,
+    pub process_output_read_default_max_lines: usize,
+    pub process_output_read_max_lines: usize,
+    pub process_wait_default_timeout_ms: u64,
+    pub process_wait_max_timeout_ms: u64,
+    pub process_wait_poll_interval_ms: u64,
+    pub process_terminate_grace_ms: u64,
+    pub process_reader_drain_grace_ms: u64,
+    pub provider_loop_max_transient_retries: usize,
+    pub provider_loop_max_identical_tool_call_repeats: usize,
+    pub provider_loop_max_empty_response_recoveries: usize,
+    pub tool_result_preview_char_limit: usize,
+    pub offload_max_context_refs: usize,
+    pub offload_inline_tool_output_token_limit: u32,
+    pub offload_inline_find_in_files_preview_limit: usize,
+    pub artifact_read_default_max_bytes: usize,
+    pub artifact_read_max_bytes: usize,
+    pub kv_list_default_limit: usize,
+    pub kv_list_max_limit: usize,
+    pub kv_key_max_bytes: usize,
+    pub kv_value_max_bytes: usize,
+    pub kv_metadata_max_bytes: usize,
+    pub skill_list_default_limit: usize,
+    pub skill_list_max_limit: usize,
+    pub skill_read_default_max_bytes: usize,
+    pub skill_read_max_bytes: usize,
+    pub autonomy_state_default_max_items: usize,
+    pub autonomy_state_max_items: usize,
+    pub prompt_recent_filesystem_activity_limit: usize,
+    pub prompt_recent_process_activity_limit: usize,
+    pub prompt_workspace_tree_limit: usize,
+    pub interagent_default_max_hops: u32,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
@@ -432,6 +496,7 @@ impl Default for DaemonConfig {
             bearer_token: None,
             skills_dir: PathBuf::from(DEFAULT_DAEMON_SKILLS_DIR),
             public_base_url: None,
+            worker_lease_owner: "daemon".to_string(),
             a2a_peers: BTreeMap::new(),
             mcp_connectors: BTreeMap::new(),
         }
@@ -457,6 +522,16 @@ impl Default for TelegramConfig {
             default_autoapprove: true,
             inbound_queue_default_mode: "coalesce".to_string(),
             inbound_coalesce_window_ms: 5_000,
+            inbound_min_coalesce_window_ms: 5_000,
+            message_text_soft_cap: 3_276,
+            caption_soft_cap: 819,
+            status_detail_char_cap: 700,
+            status_ttl_seconds: 30 * 60,
+            typing_initial_delay_ms: 750,
+            typing_heartbeat_interval_seconds: 4,
+            delivery_retry_attempts: 3,
+            delivery_retry_base_delay_ms: 250,
+            chat_turn_fast_settle_ms: 50,
         }
     }
 }
@@ -469,6 +544,78 @@ impl Default for KnowledgeConfig {
             silverbullet_base_url: None,
             silverbullet_journal_context_enabled: true,
             silverbullet_mirror_enabled: true,
+            silverbullet_session_area_path: PathBuf::from("a/teamd-agents.md"),
+            silverbullet_text_artifact_extensions: vec![
+                "bash".to_string(),
+                "css".to_string(),
+                "csv".to_string(),
+                "html".to_string(),
+                "js".to_string(),
+                "json".to_string(),
+                "lua".to_string(),
+                "md".to_string(),
+                "py".to_string(),
+                "rs".to_string(),
+                "sh".to_string(),
+                "sql".to_string(),
+                "toml".to_string(),
+                "ts".to_string(),
+                "txt".to_string(),
+                "xml".to_string(),
+                "yaml".to_string(),
+                "yml".to_string(),
+            ],
+            silverbullet_script_artifact_extensions: vec![
+                "bash".to_string(),
+                "js".to_string(),
+                "lua".to_string(),
+                "py".to_string(),
+                "rs".to_string(),
+                "sh".to_string(),
+                "ts".to_string(),
+            ],
+            source_files: vec![
+                KnowledgeSourcePathConfig {
+                    path: PathBuf::from("README.md"),
+                    root: KnowledgeRoot::RootDocs,
+                    kind: KnowledgeSourceKind::RootDoc,
+                },
+                KnowledgeSourcePathConfig {
+                    path: PathBuf::from("SYSTEM.md"),
+                    root: KnowledgeRoot::RootDocs,
+                    kind: KnowledgeSourceKind::RootDoc,
+                },
+                KnowledgeSourcePathConfig {
+                    path: PathBuf::from("AGENTS.md"),
+                    root: KnowledgeRoot::RootDocs,
+                    kind: KnowledgeSourceKind::RootDoc,
+                },
+            ],
+            source_dirs: vec![
+                KnowledgeSourcePathConfig {
+                    path: PathBuf::from("docs"),
+                    root: KnowledgeRoot::Docs,
+                    kind: KnowledgeSourceKind::ProjectDoc,
+                },
+                KnowledgeSourcePathConfig {
+                    path: PathBuf::from("projects"),
+                    root: KnowledgeRoot::Projects,
+                    kind: KnowledgeSourceKind::ProjectDoc,
+                },
+                KnowledgeSourcePathConfig {
+                    path: PathBuf::from("notes"),
+                    root: KnowledgeRoot::Notes,
+                    kind: KnowledgeSourceKind::ProjectNote,
+                },
+            ],
+            allowed_extensions: vec![
+                "md".to_string(),
+                "txt".to_string(),
+                "json".to_string(),
+                "yaml".to_string(),
+                "yml".to_string(),
+                "toml".to_string(),
+            ],
         }
     }
 }
@@ -602,6 +749,7 @@ impl Default for RuntimeTimingConfig {
     fn default() -> Self {
         Self {
             sqlite_busy_timeout_ms: 15_000,
+            sqlite_lock_retry_delay_ms: 250,
             daemon_http_connect_timeout_ms: 2_000,
             daemon_http_request_timeout_ms: 5_000,
             a2a_http_connect_timeout_ms: 2_000,
@@ -616,6 +764,7 @@ impl Default for RuntimeTimingConfig {
             daemon_test_startup_probe_attempts: 50,
             daemon_test_startup_probe_interval_ms: 20,
             daemon_background_worker_tick_interval_ms: 100,
+            daemon_background_worker_lease_seconds: 60,
             tui_event_poll_interval_ms: 100,
             tui_active_run_heartbeat_notice_interval_seconds: 30,
             mcp_stdio_command_poll_interval_ms: 100,
@@ -627,6 +776,10 @@ impl Default for RuntimeTimingConfig {
 impl RuntimeTimingConfig {
     pub fn sqlite_busy_timeout(&self) -> Duration {
         Duration::from_millis(self.sqlite_busy_timeout_ms)
+    }
+
+    pub fn sqlite_lock_retry_delay(&self) -> Duration {
+        Duration::from_millis(self.sqlite_lock_retry_delay_ms)
     }
 
     pub fn daemon_http_connect_timeout(&self) -> Duration {
@@ -687,6 +840,7 @@ impl Default for RuntimeLimitsConfig {
     fn default() -> Self {
         Self {
             diagnostic_tail_lines: 80,
+            sqlite_lock_retry_attempts: 4,
             active_run_step_tail_limit: 3,
             active_process_output_tail_max_bytes: 2 * 1024,
             active_process_output_tail_max_lines: 8,
@@ -716,8 +870,79 @@ impl Default for RuntimeLimitsConfig {
             silverbullet_mirror_script_max_chars: 24 * 1024,
             session_warm_idle_seconds: 60 * 60,
             timeline_preview_chars: 160,
+            fs_list_default_limit: agent_runtime::tool::DEFAULT_FS_LIST_LIMIT,
+            fs_list_max_limit: agent_runtime::tool::MAX_FS_LIST_LIMIT,
+            process_output_read_default_max_bytes:
+                agent_runtime::tool::DEFAULT_PROCESS_OUTPUT_READ_MAX_BYTES,
+            process_output_read_max_bytes: agent_runtime::tool::MAX_PROCESS_OUTPUT_READ_MAX_BYTES,
+            process_output_read_default_max_lines:
+                agent_runtime::tool::DEFAULT_PROCESS_OUTPUT_READ_MAX_LINES,
+            process_output_read_max_lines: agent_runtime::tool::MAX_PROCESS_OUTPUT_READ_MAX_LINES,
+            process_wait_default_timeout_ms: duration_millis_u64(
+                agent_runtime::tool::DEFAULT_PROCESS_WAIT_TIMEOUT,
+            ),
+            process_wait_max_timeout_ms: duration_millis_u64(
+                agent_runtime::tool::MAX_PROCESS_WAIT_TIMEOUT,
+            ),
+            process_wait_poll_interval_ms: duration_millis_u64(
+                agent_runtime::tool::PROCESS_WAIT_POLL_INTERVAL,
+            ),
+            process_terminate_grace_ms: duration_millis_u64(
+                agent_runtime::tool::PROCESS_TERMINATE_GRACE,
+            ),
+            process_reader_drain_grace_ms: duration_millis_u64(
+                agent_runtime::tool::PROCESS_READER_DRAIN_GRACE,
+            ),
+            provider_loop_max_transient_retries: 3,
+            provider_loop_max_identical_tool_call_repeats: 3,
+            provider_loop_max_empty_response_recoveries: 1,
+            tool_result_preview_char_limit: 16 * 1024,
+            offload_max_context_refs: 16,
+            offload_inline_tool_output_token_limit: 512,
+            offload_inline_find_in_files_preview_limit: 6,
+            artifact_read_default_max_bytes: 8 * 1024,
+            artifact_read_max_bytes: 32 * 1024,
+            kv_list_default_limit: 50,
+            kv_list_max_limit: 500,
+            kv_key_max_bytes: 512,
+            kv_value_max_bytes: 64 * 1024,
+            kv_metadata_max_bytes: 16 * 1024,
+            skill_list_default_limit: 64,
+            skill_list_max_limit: 256,
+            skill_read_default_max_bytes: 16 * 1024,
+            skill_read_max_bytes: 128 * 1024,
+            autonomy_state_default_max_items: 8,
+            autonomy_state_max_items: 50,
+            prompt_recent_filesystem_activity_limit: 6,
+            prompt_recent_process_activity_limit: 6,
+            prompt_workspace_tree_limit: 12,
+            interagent_default_max_hops: agent_runtime::interagent::DEFAULT_MAX_HOPS,
         }
     }
+}
+
+impl RuntimeLimitsConfig {
+    pub fn to_tool_runtime_limits(&self) -> ToolRuntimeLimits {
+        ToolRuntimeLimits {
+            fs_list_default_limit: self.fs_list_default_limit,
+            fs_list_max_limit: self.fs_list_max_limit,
+            process_output_read_default_max_bytes: self.process_output_read_default_max_bytes,
+            process_output_read_max_bytes: self.process_output_read_max_bytes,
+            process_output_read_default_max_lines: self.process_output_read_default_max_lines,
+            process_output_read_max_lines: self.process_output_read_max_lines,
+            process_wait_default_timeout: Duration::from_millis(
+                self.process_wait_default_timeout_ms,
+            ),
+            process_wait_max_timeout: Duration::from_millis(self.process_wait_max_timeout_ms),
+            process_wait_poll_interval: Duration::from_millis(self.process_wait_poll_interval_ms),
+            process_terminate_grace: Duration::from_millis(self.process_terminate_grace_ms),
+            process_reader_drain_grace: Duration::from_millis(self.process_reader_drain_grace_ms),
+        }
+    }
+}
+
+fn duration_millis_u64(duration: Duration) -> u64 {
+    u64::try_from(duration.as_millis()).unwrap_or(u64::MAX)
 }
 
 impl fmt::Display for ConfigError {
@@ -1328,6 +1553,13 @@ impl AppConfig {
                 reason: "must not be empty",
             });
         }
+        if self.daemon.worker_lease_owner.trim().is_empty() {
+            return Err(ConfigError::InvalidProviderValue {
+                name: "daemon.worker_lease_owner",
+                value: self.daemon.worker_lease_owner.clone(),
+                reason: "must not be empty",
+            });
+        }
 
         if let Some(public_base_url) = &self.daemon.public_base_url
             && public_base_url.trim().is_empty()
@@ -1472,6 +1704,24 @@ impl AppConfig {
                 reason: "must not be empty when configured",
             });
         }
+        validate_relative_config_path(
+            "knowledge.silverbullet_session_area_path",
+            &self.knowledge.silverbullet_session_area_path,
+        )?;
+        validate_extension_list(
+            "knowledge.silverbullet_text_artifact_extensions",
+            &self.knowledge.silverbullet_text_artifact_extensions,
+        )?;
+        validate_extension_list(
+            "knowledge.silverbullet_script_artifact_extensions",
+            &self.knowledge.silverbullet_script_artifact_extensions,
+        )?;
+        validate_knowledge_source_paths("knowledge.source_files", &self.knowledge.source_files)?;
+        validate_knowledge_source_paths("knowledge.source_dirs", &self.knowledge.source_dirs)?;
+        validate_extension_list(
+            "knowledge.allowed_extensions",
+            &self.knowledge.allowed_extensions,
+        )?;
         if self.observability.otlp_endpoint.trim().is_empty() {
             return Err(ConfigError::InvalidProviderValue {
                 name: "observability.otlp_endpoint",
@@ -1556,13 +1806,50 @@ impl AppConfig {
             "telegram.inbound_queue_default_mode",
             self.telegram.inbound_queue_default_mode.as_str(),
         )?;
-        if self.telegram.inbound_coalesce_window_ms < 5_000 {
+        validate_positive_u64_value(
+            "telegram.inbound_min_coalesce_window_ms",
+            self.telegram.inbound_min_coalesce_window_ms,
+        )?;
+        if self.telegram.inbound_coalesce_window_ms < self.telegram.inbound_min_coalesce_window_ms {
             return Err(ConfigError::InvalidProviderValue {
                 name: "telegram.inbound_coalesce_window_ms",
                 value: self.telegram.inbound_coalesce_window_ms.to_string(),
-                reason: "must be at least 5000",
+                reason: "must be at least telegram.inbound_min_coalesce_window_ms",
             });
         }
+        validate_positive_usize_value(
+            "telegram.message_text_soft_cap",
+            self.telegram.message_text_soft_cap,
+        )?;
+        validate_positive_usize_value("telegram.caption_soft_cap", self.telegram.caption_soft_cap)?;
+        validate_positive_usize_value(
+            "telegram.status_detail_char_cap",
+            self.telegram.status_detail_char_cap,
+        )?;
+        validate_positive_i64_value(
+            "telegram.status_ttl_seconds",
+            self.telegram.status_ttl_seconds,
+        )?;
+        validate_positive_u64_value(
+            "telegram.typing_initial_delay_ms",
+            self.telegram.typing_initial_delay_ms,
+        )?;
+        validate_positive_u64_value(
+            "telegram.typing_heartbeat_interval_seconds",
+            self.telegram.typing_heartbeat_interval_seconds,
+        )?;
+        validate_positive_usize_value(
+            "telegram.delivery_retry_attempts",
+            self.telegram.delivery_retry_attempts,
+        )?;
+        validate_positive_u64_value(
+            "telegram.delivery_retry_base_delay_ms",
+            self.telegram.delivery_retry_base_delay_ms,
+        )?;
+        validate_positive_u64_value(
+            "telegram.chat_turn_fast_settle_ms",
+            self.telegram.chat_turn_fast_settle_ms,
+        )?;
         validate_positive_usize_value(
             "context.compaction_min_messages",
             self.context.compaction_min_messages,
@@ -1635,6 +1922,10 @@ impl AppConfig {
             self.runtime_timing.sqlite_busy_timeout_ms,
         )?;
         validate_positive_u64_value(
+            "runtime_timing.sqlite_lock_retry_delay_ms",
+            self.runtime_timing.sqlite_lock_retry_delay_ms,
+        )?;
+        validate_positive_u64_value(
             "runtime_timing.daemon_http_connect_timeout_ms",
             self.runtime_timing.daemon_http_connect_timeout_ms,
         )?;
@@ -1691,6 +1982,10 @@ impl AppConfig {
             self.runtime_timing
                 .daemon_background_worker_tick_interval_ms,
         )?;
+        validate_positive_i64_value(
+            "runtime_timing.daemon_background_worker_lease_seconds",
+            self.runtime_timing.daemon_background_worker_lease_seconds,
+        )?;
         validate_positive_u64_value(
             "runtime_timing.tui_event_poll_interval_ms",
             self.runtime_timing.tui_event_poll_interval_ms,
@@ -1712,6 +2007,10 @@ impl AppConfig {
         validate_positive_usize_value(
             "runtime_limits.diagnostic_tail_lines",
             self.runtime_limits.diagnostic_tail_lines,
+        )?;
+        validate_positive_usize_value(
+            "runtime_limits.sqlite_lock_retry_attempts",
+            self.runtime_limits.sqlite_lock_retry_attempts,
         )?;
         validate_positive_usize_value(
             "runtime_limits.active_run_step_tail_limit",
@@ -1831,6 +2130,144 @@ impl AppConfig {
             "runtime_limits.timeline_preview_chars",
             self.runtime_limits.timeline_preview_chars,
         )?;
+        validate_positive_usize_value(
+            "runtime_limits.fs_list_default_limit",
+            self.runtime_limits.fs_list_default_limit,
+        )?;
+        validate_positive_usize_value(
+            "runtime_limits.fs_list_max_limit",
+            self.runtime_limits.fs_list_max_limit,
+        )?;
+        validate_positive_usize_value(
+            "runtime_limits.process_output_read_default_max_bytes",
+            self.runtime_limits.process_output_read_default_max_bytes,
+        )?;
+        validate_positive_usize_value(
+            "runtime_limits.process_output_read_max_bytes",
+            self.runtime_limits.process_output_read_max_bytes,
+        )?;
+        validate_positive_usize_value(
+            "runtime_limits.process_output_read_default_max_lines",
+            self.runtime_limits.process_output_read_default_max_lines,
+        )?;
+        validate_positive_usize_value(
+            "runtime_limits.process_output_read_max_lines",
+            self.runtime_limits.process_output_read_max_lines,
+        )?;
+        validate_positive_u64_value(
+            "runtime_limits.process_wait_default_timeout_ms",
+            self.runtime_limits.process_wait_default_timeout_ms,
+        )?;
+        validate_positive_u64_value(
+            "runtime_limits.process_wait_max_timeout_ms",
+            self.runtime_limits.process_wait_max_timeout_ms,
+        )?;
+        validate_positive_u64_value(
+            "runtime_limits.process_wait_poll_interval_ms",
+            self.runtime_limits.process_wait_poll_interval_ms,
+        )?;
+        validate_positive_u64_value(
+            "runtime_limits.process_terminate_grace_ms",
+            self.runtime_limits.process_terminate_grace_ms,
+        )?;
+        validate_positive_u64_value(
+            "runtime_limits.process_reader_drain_grace_ms",
+            self.runtime_limits.process_reader_drain_grace_ms,
+        )?;
+        validate_positive_usize_value(
+            "runtime_limits.provider_loop_max_transient_retries",
+            self.runtime_limits.provider_loop_max_transient_retries,
+        )?;
+        validate_positive_usize_value(
+            "runtime_limits.provider_loop_max_identical_tool_call_repeats",
+            self.runtime_limits
+                .provider_loop_max_identical_tool_call_repeats,
+        )?;
+        validate_positive_usize_value(
+            "runtime_limits.tool_result_preview_char_limit",
+            self.runtime_limits.tool_result_preview_char_limit,
+        )?;
+        validate_positive_usize_value(
+            "runtime_limits.offload_max_context_refs",
+            self.runtime_limits.offload_max_context_refs,
+        )?;
+        validate_positive_u32_value(
+            "runtime_limits.offload_inline_tool_output_token_limit",
+            self.runtime_limits.offload_inline_tool_output_token_limit,
+        )?;
+        validate_positive_usize_value(
+            "runtime_limits.offload_inline_find_in_files_preview_limit",
+            self.runtime_limits
+                .offload_inline_find_in_files_preview_limit,
+        )?;
+        validate_positive_usize_value(
+            "runtime_limits.artifact_read_default_max_bytes",
+            self.runtime_limits.artifact_read_default_max_bytes,
+        )?;
+        validate_positive_usize_value(
+            "runtime_limits.artifact_read_max_bytes",
+            self.runtime_limits.artifact_read_max_bytes,
+        )?;
+        validate_positive_usize_value(
+            "runtime_limits.kv_list_default_limit",
+            self.runtime_limits.kv_list_default_limit,
+        )?;
+        validate_positive_usize_value(
+            "runtime_limits.kv_list_max_limit",
+            self.runtime_limits.kv_list_max_limit,
+        )?;
+        validate_positive_usize_value(
+            "runtime_limits.kv_key_max_bytes",
+            self.runtime_limits.kv_key_max_bytes,
+        )?;
+        validate_positive_usize_value(
+            "runtime_limits.kv_value_max_bytes",
+            self.runtime_limits.kv_value_max_bytes,
+        )?;
+        validate_positive_usize_value(
+            "runtime_limits.kv_metadata_max_bytes",
+            self.runtime_limits.kv_metadata_max_bytes,
+        )?;
+        validate_positive_usize_value(
+            "runtime_limits.skill_list_default_limit",
+            self.runtime_limits.skill_list_default_limit,
+        )?;
+        validate_positive_usize_value(
+            "runtime_limits.skill_list_max_limit",
+            self.runtime_limits.skill_list_max_limit,
+        )?;
+        validate_positive_usize_value(
+            "runtime_limits.skill_read_default_max_bytes",
+            self.runtime_limits.skill_read_default_max_bytes,
+        )?;
+        validate_positive_usize_value(
+            "runtime_limits.skill_read_max_bytes",
+            self.runtime_limits.skill_read_max_bytes,
+        )?;
+        validate_positive_usize_value(
+            "runtime_limits.autonomy_state_default_max_items",
+            self.runtime_limits.autonomy_state_default_max_items,
+        )?;
+        validate_positive_usize_value(
+            "runtime_limits.autonomy_state_max_items",
+            self.runtime_limits.autonomy_state_max_items,
+        )?;
+        validate_positive_usize_value(
+            "runtime_limits.prompt_recent_filesystem_activity_limit",
+            self.runtime_limits.prompt_recent_filesystem_activity_limit,
+        )?;
+        validate_positive_usize_value(
+            "runtime_limits.prompt_recent_process_activity_limit",
+            self.runtime_limits.prompt_recent_process_activity_limit,
+        )?;
+        validate_positive_usize_value(
+            "runtime_limits.prompt_workspace_tree_limit",
+            self.runtime_limits.prompt_workspace_tree_limit,
+        )?;
+        validate_positive_u32_value(
+            "runtime_limits.interagent_default_max_hops",
+            self.runtime_limits.interagent_default_max_hops,
+        )?;
         if self.context.compaction_keep_tail_messages > self.context.compaction_min_messages {
             return Err(ConfigError::InvalidProviderValue {
                 name: "context.compaction_keep_tail_messages",
@@ -1897,6 +2334,60 @@ impl AppConfig {
             self.runtime_limits.knowledge_read_default_max_bytes,
             "runtime_limits.knowledge_read_max_bytes",
             self.runtime_limits.knowledge_read_max_bytes,
+        )?;
+        validate_limit_bounds(
+            "runtime_limits.fs_list_default_limit",
+            self.runtime_limits.fs_list_default_limit,
+            "runtime_limits.fs_list_max_limit",
+            self.runtime_limits.fs_list_max_limit,
+        )?;
+        validate_limit_bounds(
+            "runtime_limits.process_output_read_default_max_bytes",
+            self.runtime_limits.process_output_read_default_max_bytes,
+            "runtime_limits.process_output_read_max_bytes",
+            self.runtime_limits.process_output_read_max_bytes,
+        )?;
+        validate_limit_bounds(
+            "runtime_limits.process_output_read_default_max_lines",
+            self.runtime_limits.process_output_read_default_max_lines,
+            "runtime_limits.process_output_read_max_lines",
+            self.runtime_limits.process_output_read_max_lines,
+        )?;
+        validate_limit_bounds_u64(
+            "runtime_limits.process_wait_default_timeout_ms",
+            self.runtime_limits.process_wait_default_timeout_ms,
+            "runtime_limits.process_wait_max_timeout_ms",
+            self.runtime_limits.process_wait_max_timeout_ms,
+        )?;
+        validate_limit_bounds(
+            "runtime_limits.artifact_read_default_max_bytes",
+            self.runtime_limits.artifact_read_default_max_bytes,
+            "runtime_limits.artifact_read_max_bytes",
+            self.runtime_limits.artifact_read_max_bytes,
+        )?;
+        validate_limit_bounds(
+            "runtime_limits.kv_list_default_limit",
+            self.runtime_limits.kv_list_default_limit,
+            "runtime_limits.kv_list_max_limit",
+            self.runtime_limits.kv_list_max_limit,
+        )?;
+        validate_limit_bounds(
+            "runtime_limits.skill_list_default_limit",
+            self.runtime_limits.skill_list_default_limit,
+            "runtime_limits.skill_list_max_limit",
+            self.runtime_limits.skill_list_max_limit,
+        )?;
+        validate_limit_bounds(
+            "runtime_limits.skill_read_default_max_bytes",
+            self.runtime_limits.skill_read_default_max_bytes,
+            "runtime_limits.skill_read_max_bytes",
+            self.runtime_limits.skill_read_max_bytes,
+        )?;
+        validate_limit_bounds(
+            "runtime_limits.autonomy_state_default_max_items",
+            self.runtime_limits.autonomy_state_default_max_items,
+            "runtime_limits.autonomy_state_max_items",
+            self.runtime_limits.autonomy_state_max_items,
         )?;
 
         Ok(())
@@ -2190,6 +2681,17 @@ fn validate_positive_u64_value(name: &'static str, value: u64) -> Result<(), Con
     Ok(())
 }
 
+fn validate_positive_i64_value(name: &'static str, value: i64) -> Result<(), ConfigError> {
+    if value <= 0 {
+        return Err(ConfigError::InvalidProviderValue {
+            name,
+            value: value.to_string(),
+            reason: "must be greater than zero",
+        });
+    }
+    Ok(())
+}
+
 fn validate_telegram_inbound_queue_mode(
     name: &'static str,
     value: &str,
@@ -2238,6 +2740,58 @@ fn validate_memory_recall_scopes(scopes: &[String]) -> Result<(), ConfigError> {
     Ok(())
 }
 
+fn validate_knowledge_source_paths(
+    name: &'static str,
+    paths: &[KnowledgeSourcePathConfig],
+) -> Result<(), ConfigError> {
+    if paths.is_empty() {
+        return Err(ConfigError::InvalidProviderValue {
+            name,
+            value: String::new(),
+            reason: "must contain at least one path",
+        });
+    }
+    for source in paths {
+        validate_relative_config_path(name, &source.path)?;
+    }
+    Ok(())
+}
+
+fn validate_relative_config_path(name: &'static str, path: &Path) -> Result<(), ConfigError> {
+    if path.as_os_str().is_empty() || path.is_absolute() || has_parent_component(path) {
+        return Err(ConfigError::InvalidProviderValue {
+            name,
+            value: path.display().to_string(),
+            reason: "must be a non-empty relative path without parent components",
+        });
+    }
+    Ok(())
+}
+
+fn validate_extension_list(name: &'static str, extensions: &[String]) -> Result<(), ConfigError> {
+    if extensions.is_empty() {
+        return Err(ConfigError::InvalidProviderValue {
+            name,
+            value: String::new(),
+            reason: "must contain at least one extension",
+        });
+    }
+    for extension in extensions {
+        if extension.trim().is_empty()
+            || extension.contains('/')
+            || extension.contains('\\')
+            || extension.starts_with('.')
+        {
+            return Err(ConfigError::InvalidProviderValue {
+                name,
+                value: extension.clone(),
+                reason: "must contain plain extension names without separators or leading dot",
+            });
+        }
+    }
+    Ok(())
+}
+
 fn validate_ratio_value(name: &'static str, value: f64) -> Result<(), ConfigError> {
     if !(value > 0.0 && value <= 1.0) {
         return Err(ConfigError::InvalidProviderValue {
@@ -2254,6 +2808,22 @@ fn validate_limit_bounds(
     value: usize,
     max_name: &'static str,
     max_value: usize,
+) -> Result<(), ConfigError> {
+    if value > max_value {
+        return Err(ConfigError::InvalidProviderValue {
+            name,
+            value: value.to_string(),
+            reason: max_name,
+        });
+    }
+    Ok(())
+}
+
+fn validate_limit_bounds_u64(
+    name: &'static str,
+    value: u64,
+    max_name: &'static str,
+    max_value: u64,
 ) -> Result<(), ConfigError> {
     if value > max_value {
         return Err(ConfigError::InvalidProviderValue {

@@ -26,17 +26,50 @@ pub use runtime::{SharedProcessRegistry, ToolRuntime};
 use web::parse_search_results;
 pub use web::{WebSearchBackend, WebToolClient};
 
-const DEFAULT_FS_LIST_LIMIT: usize = 200;
-const MAX_FS_LIST_LIMIT: usize = 1_000;
-const DEFAULT_PROCESS_OUTPUT_READ_MAX_BYTES: usize = 4 * 1024;
-const MAX_PROCESS_OUTPUT_READ_MAX_BYTES: usize = 32 * 1024;
-const DEFAULT_PROCESS_OUTPUT_READ_MAX_LINES: usize = 20;
-const MAX_PROCESS_OUTPUT_READ_MAX_LINES: usize = 200;
-const DEFAULT_PROCESS_WAIT_TIMEOUT: Duration = Duration::from_secs(10 * 60);
-const MAX_PROCESS_WAIT_TIMEOUT: Duration = Duration::from_secs(60 * 60);
-const PROCESS_WAIT_POLL_INTERVAL: Duration = Duration::from_millis(50);
-const PROCESS_TERMINATE_GRACE: Duration = Duration::from_millis(500);
-const PROCESS_READER_DRAIN_GRACE: Duration = Duration::from_millis(200);
+pub const DEFAULT_FS_LIST_LIMIT: usize = 200;
+pub const MAX_FS_LIST_LIMIT: usize = 1_000;
+pub const DEFAULT_PROCESS_OUTPUT_READ_MAX_BYTES: usize = 4 * 1024;
+pub const MAX_PROCESS_OUTPUT_READ_MAX_BYTES: usize = 32 * 1024;
+pub const DEFAULT_PROCESS_OUTPUT_READ_MAX_LINES: usize = 20;
+pub const MAX_PROCESS_OUTPUT_READ_MAX_LINES: usize = 200;
+pub const DEFAULT_PROCESS_WAIT_TIMEOUT: Duration = Duration::from_secs(10 * 60);
+pub const MAX_PROCESS_WAIT_TIMEOUT: Duration = Duration::from_secs(60 * 60);
+pub const PROCESS_WAIT_POLL_INTERVAL: Duration = Duration::from_millis(50);
+pub const PROCESS_TERMINATE_GRACE: Duration = Duration::from_millis(500);
+pub const PROCESS_READER_DRAIN_GRACE: Duration = Duration::from_millis(200);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ToolRuntimeLimits {
+    pub fs_list_default_limit: usize,
+    pub fs_list_max_limit: usize,
+    pub process_output_read_default_max_bytes: usize,
+    pub process_output_read_max_bytes: usize,
+    pub process_output_read_default_max_lines: usize,
+    pub process_output_read_max_lines: usize,
+    pub process_wait_default_timeout: Duration,
+    pub process_wait_max_timeout: Duration,
+    pub process_wait_poll_interval: Duration,
+    pub process_terminate_grace: Duration,
+    pub process_reader_drain_grace: Duration,
+}
+
+impl Default for ToolRuntimeLimits {
+    fn default() -> Self {
+        Self {
+            fs_list_default_limit: DEFAULT_FS_LIST_LIMIT,
+            fs_list_max_limit: MAX_FS_LIST_LIMIT,
+            process_output_read_default_max_bytes: DEFAULT_PROCESS_OUTPUT_READ_MAX_BYTES,
+            process_output_read_max_bytes: MAX_PROCESS_OUTPUT_READ_MAX_BYTES,
+            process_output_read_default_max_lines: DEFAULT_PROCESS_OUTPUT_READ_MAX_LINES,
+            process_output_read_max_lines: MAX_PROCESS_OUTPUT_READ_MAX_LINES,
+            process_wait_default_timeout: DEFAULT_PROCESS_WAIT_TIMEOUT,
+            process_wait_max_timeout: MAX_PROCESS_WAIT_TIMEOUT,
+            process_wait_poll_interval: PROCESS_WAIT_POLL_INTERVAL,
+            process_terminate_grace: PROCESS_TERMINATE_GRACE,
+            process_reader_drain_grace: PROCESS_READER_DRAIN_GRACE,
+        }
+    }
+}
 
 #[derive(Debug)]
 pub enum ToolError {
@@ -400,10 +433,10 @@ fn join_lines(lines: Vec<String>) -> String {
     }
 }
 
-fn normalize_fs_list_limit(limit: Option<usize>) -> usize {
+fn normalize_fs_list_limit(limit: Option<usize>, limits: &ToolRuntimeLimits) -> usize {
     limit
-        .unwrap_or(DEFAULT_FS_LIST_LIMIT)
-        .clamp(1, MAX_FS_LIST_LIMIT)
+        .unwrap_or(limits.fs_list_default_limit)
+        .clamp(1, limits.fs_list_max_limit)
 }
 
 impl TryFrom<PlanWriteItemInput> for PlanItem {

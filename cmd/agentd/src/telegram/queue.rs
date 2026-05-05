@@ -1,4 +1,4 @@
-use super::commands::{TELEGRAM_MIN_COALESCE_WINDOW_MS, is_valid_telegram_queue_mode};
+use super::commands::is_valid_telegram_queue_mode;
 use agent_persistence::{
     RecordConversionError, SessionInboxEventRecord, TelegramChatBindingRecord,
 };
@@ -47,19 +47,20 @@ pub(super) fn effective_inbound_queue_mode(
     }
 }
 
-pub(super) fn configured_inbound_coalesce_window_ms(configured_ms: u64) -> u64 {
-    configured_ms.max(TELEGRAM_MIN_COALESCE_WINDOW_MS)
+pub(super) fn configured_inbound_coalesce_window_ms(configured_ms: u64, min_ms: u64) -> u64 {
+    configured_ms.max(min_ms)
 }
 
 pub(super) fn effective_inbound_coalesce_window_ms(
     binding: &TelegramChatBindingRecord,
     configured_ms: u64,
+    min_ms: u64,
 ) -> u64 {
     binding
         .inbound_coalesce_window_ms
         .and_then(|value| u64::try_from(value).ok())
-        .unwrap_or_else(|| configured_inbound_coalesce_window_ms(configured_ms))
-        .max(TELEGRAM_MIN_COALESCE_WINDOW_MS)
+        .unwrap_or_else(|| configured_inbound_coalesce_window_ms(configured_ms, min_ms))
+        .max(min_ms)
 }
 
 pub(super) fn render_queue_status_text(

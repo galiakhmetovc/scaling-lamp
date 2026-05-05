@@ -206,6 +206,7 @@ pub struct ExecutionServiceConfig {
     pub context_auto_compaction_trigger_ratio: f64,
     pub context_window_tokens_override: Option<u32>,
     pub skills_dir: PathBuf,
+    pub worker_lease_owner: String,
     pub a2a_public_base_url: Option<String>,
     pub a2a_callback_bearer_token: Option<String>,
     pub a2a_peers: BTreeMap<String, A2APeerConfig>,
@@ -239,6 +240,7 @@ impl Default for ExecutionServiceConfig {
             context_auto_compaction_trigger_ratio: 0.7,
             context_window_tokens_override: None,
             skills_dir: PathBuf::new(),
+            worker_lease_owner: "daemon".to_string(),
             a2a_public_base_url: None,
             a2a_callback_bearer_token: None,
             a2a_peers: BTreeMap::new(),
@@ -370,6 +372,7 @@ impl ExecutionService {
             BrowserToolClient::new(self.config.browser.to_tool_config(browser_session_name)),
             self.processes.clone(),
         )
+        .with_runtime_limits(self.config.runtime_limits.to_tool_runtime_limits())
     }
 
     fn browser_session_name(&self, session_id: &str) -> String {

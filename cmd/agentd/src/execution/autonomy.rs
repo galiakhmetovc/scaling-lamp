@@ -16,9 +16,6 @@ use agent_runtime::tool::{
 };
 use std::path::{Path, PathBuf};
 
-const DEFAULT_AUTONOMY_STATE_LIMIT: usize = 8;
-const MAX_AUTONOMY_STATE_LIMIT: usize = 50;
-
 impl ExecutionService {
     pub(crate) fn read_autonomy_state_tool(
         &self,
@@ -29,8 +26,8 @@ impl ExecutionService {
         let session = load_session_or_internal(store, session_id)?;
         let max_items = input
             .max_items
-            .unwrap_or(DEFAULT_AUTONOMY_STATE_LIMIT)
-            .clamp(1, MAX_AUTONOMY_STATE_LIMIT);
+            .unwrap_or(self.config.runtime_limits.autonomy_state_default_max_items)
+            .clamp(1, self.config.runtime_limits.autonomy_state_max_items);
         let include_inactive_schedules = input.include_inactive_schedules.unwrap_or(false);
         let current_workspace = current_workspace_root(self.workspace.root.as_path());
 
