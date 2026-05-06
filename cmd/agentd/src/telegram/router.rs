@@ -5,9 +5,9 @@ use super::bindings::{
 use super::client::{TelegramClient, TelegramClientError};
 use super::commands::{
     ParsedTelegramCommand, TELEGRAM_INBOUND_QUEUE_MODE_COALESCE, TELEGRAM_INBOUND_QUEUE_MODE_QUEUE,
-    TELEGRAM_INBOUND_QUEUE_MODE_REJECT, TELEGRAM_INBOUND_QUEUE_MODE_RESTART, TelegramQueueAction,
-    coalesce_window_seconds, default_command_specs, is_session_operator_command, parse_command,
-    parse_command_for_bot,
+    TELEGRAM_INBOUND_QUEUE_MODE_REJECT, TELEGRAM_INBOUND_QUEUE_MODE_RESTART, TelegramOutputsAction,
+    TelegramQueueAction, coalesce_window_seconds, default_command_specs,
+    is_session_operator_command, parse_command, parse_command_for_bot,
 };
 use super::delivery::{
     DeliveryCursor, TelegramDeliveryLimiter, TelegramDeliveryScope, TelegramDeliveryTrace,
@@ -33,7 +33,11 @@ use super::render::{
     render_pairing_required_message, render_session_created, render_session_list,
     render_session_selected, truncate_caption,
 };
-use crate::bootstrap::{App, BootstrapError, SessionPreferencesPatch, SessionSummary};
+use crate::bootstrap::{
+    App, BootstrapError, DeliveryTargetCreateOptions, DeliveryTargetView,
+    SessionOutputRouteCreateOptions, SessionOutputRouteView, SessionPreferencesPatch,
+    SessionSummary,
+};
 use crate::diagnostics::DiagnosticEventBuilder;
 use crate::execution::{ChatExecutionEvent, ChatTurnExecutionReport};
 use crate::store_retry::{retry_store_sync, store_retry_attempts, store_retry_delay};
@@ -495,6 +499,22 @@ where
                 self.send_chat_artifact_file(chat_id, artifact_id.as_str())
                     .await
             }
+            ParsedTelegramCommand::Target => {
+                if self.load_activated_pairing(telegram_user_id)?.is_none() {
+                    self.send_text_chunks(chat_id, &render_pairing_required_message())
+                        .await?;
+                    return Ok(());
+                }
+                let target = self
+                    .register_current_chat_delivery_target(
+                        chat_id,
+                        Some(telegram_user_id),
+                        telegram_chat_scope(message),
+                    )
+                    .await?;
+                self.send_text_chunks(chat_id, &render_delivery_target_registered(&target.id))
+                    .await
+            }
             ParsedTelegramCommand::Judge { message } => {
                 if self.load_activated_pairing(telegram_user_id)?.is_none() {
                     self.send_text_chunks(chat_id, &render_pairing_required_message())
@@ -535,6 +555,7 @@ where
             | ParsedTelegramCommand::Jobs
             | ParsedTelegramCommand::Plan
             | ParsedTelegramCommand::Queue { .. }
+            | ParsedTelegramCommand::Outputs { .. }
             | ParsedTelegramCommand::Stop
             | ParsedTelegramCommand::Cancel
             | ParsedTelegramCommand::Model { .. }
@@ -713,6 +734,22 @@ where
                 self.send_chat_artifact_file(chat_id, artifact_id.as_str())
                     .await
             }
+            ParsedTelegramCommand::Target => {
+                if self.load_activated_pairing(telegram_user_id)?.is_none() {
+                    self.send_text_chunks(chat_id, &render_pairing_required_message())
+                        .await?;
+                    return Ok(());
+                }
+                let target = self
+                    .register_current_chat_delivery_target(
+                        chat_id,
+                        Some(telegram_user_id),
+                        telegram_chat_scope(message),
+                    )
+                    .await?;
+                self.send_text_chunks(chat_id, &render_delivery_target_registered(&target.id))
+                    .await
+            }
             ParsedTelegramCommand::Judge { message } => {
                 if self.load_activated_pairing(telegram_user_id)?.is_none() {
                     self.send_text_chunks(chat_id, &render_pairing_required_message())
@@ -757,6 +794,7 @@ where
             | ParsedTelegramCommand::Jobs
             | ParsedTelegramCommand::Plan
             | ParsedTelegramCommand::Queue { .. }
+            | ParsedTelegramCommand::Outputs { .. }
             | ParsedTelegramCommand::Stop
             | ParsedTelegramCommand::Cancel
             | ParsedTelegramCommand::Model { .. }
@@ -930,6 +968,69 @@ where
         Ok(())
     }
 
+    async fn register_current_chat_delivery_target(
+        &self,
+        chat_id: i64,
+        telegram_user_id: Option<i64>,
+        scope: &'static str,
+    ) -> Result<DeliveryTargetView, BootstrapError> {
+        let target_id = telegram_delivery_target_id(chat_id);
+        let app = self.app.clone();
+        let scope = scope.to_string();
+        tokio::task::spawn_blocking(move || {
+            app.create_delivery_target(
+                &target_id,
+                DeliveryTargetCreateOptions {
+                    kind: "telegram".to_string(),
+                    address: chat_id.to_string(),
+                    scope,
+                    owner_user_id: telegram_user_id.map(|id| format!("telegram:{id}")),
+                    allowed_agent_ids: Vec::new(),
+                    allowed_session_ids: Vec::new(),
+                    send_policy_json: "null".to_string(),
+                    format_policy: "full_text".to_string(),
+                },
+            )
+        })
+        .await
+        .map_err(map_join_error)?
+    }
+
+    async fn handle_outputs_command(
+        &self,
+        session_id: String,
+        action: TelegramOutputsAction,
+    ) -> Result<String, BootstrapError> {
+        let app = self.app.clone();
+        tokio::task::spawn_blocking(move || match action {
+            TelegramOutputsAction::Show => {
+                let routes = app.list_enabled_session_output_routes(&session_id)?;
+                Ok(render_session_output_routes(&session_id, &routes))
+            }
+            TelegramOutputsAction::Attach {
+                target_id,
+                format_policy,
+            } => {
+                let route = app.attach_session_output_route(
+                    &session_id,
+                    &target_id,
+                    SessionOutputRouteCreateOptions {
+                        route_id: None,
+                        filter_json: r#"{"kind":"assistant"}"#.to_string(),
+                        format_policy,
+                        enabled: true,
+                    },
+                )?;
+                Ok(format!(
+                    "Output route attached: {} -> {} format={}",
+                    route.session_id, route.target_id, route.format_policy
+                ))
+            }
+        })
+        .await
+        .map_err(map_join_error)?
+    }
+
     async fn handle_session_operator_command(
         &self,
         chat_id: i64,
@@ -1000,6 +1101,10 @@ where
                 let response = self
                     .handle_queue_command(chat_id, session_id, action)
                     .await?;
+                self.send_text_chunks(chat_id, &response).await
+            }
+            ParsedTelegramCommand::Outputs { action } => {
+                let response = self.handle_outputs_command(session_id, action).await?;
                 self.send_text_chunks(chat_id, &response).await
             }
             ParsedTelegramCommand::Stop => {
@@ -3106,6 +3211,46 @@ fn normalize_session_title(title: &str) -> Result<String, BootstrapError> {
         });
     }
     Ok(title.to_string())
+}
+
+fn telegram_chat_scope(message: &Message) -> &'static str {
+    if message.chat.is_private() {
+        "private"
+    } else if message.chat.is_group() || message.chat.is_supergroup() {
+        "group"
+    } else {
+        "chat"
+    }
+}
+
+fn telegram_delivery_target_id(chat_id: i64) -> String {
+    if chat_id < 0 {
+        format!("telegram-n{}", chat_id.saturating_abs())
+    } else {
+        format!("telegram-{chat_id}")
+    }
+}
+
+fn render_delivery_target_registered(target_id: &str) -> String {
+    format!(
+        "Delivery target registered: {target_id}\nUse from another chat/session: /outputs attach {target_id} summary"
+    )
+}
+
+fn render_session_output_routes(session_id: &str, routes: &[SessionOutputRouteView]) -> String {
+    if routes.is_empty() {
+        return format!(
+            "Session outputs for {session_id}: <empty>\nAttach one: /outputs attach <target_id> summary"
+        );
+    }
+    let mut lines = vec![format!("Session outputs for {session_id}:")];
+    for route in routes {
+        lines.push(format!(
+            "- {} -> {} format={} enabled={}",
+            route.id, route.target_id, route.format_policy, route.enabled
+        ));
+    }
+    lines.join("\n")
 }
 
 fn map_client_error(error: TelegramClientError) -> BootstrapError {
