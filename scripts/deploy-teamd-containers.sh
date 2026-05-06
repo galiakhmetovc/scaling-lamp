@@ -191,6 +191,7 @@ else
   CADDY_HTTPS_PORT=
 fi
 CADDY_IMAGE=${TEAMD_CADDY_IMAGE:-docker.io/library/caddy:2}
+CADDY_DAEMON_UPSTREAM=${TEAMD_CADDY_DAEMON_UPSTREAM:-host.docker.internal:5140}
 CADDY_DIR=$CONTAINERS_ROOT/caddy
 CADDY_DATA_DIR=$DATA_ROOT/caddy/data
 CADDY_CONFIG_DIR=$DATA_ROOT/caddy/config
@@ -386,6 +387,8 @@ Environment overrides:
   TEAMD_CADDY_HTTP_PORT          Caddy HTTP host port, default: $CADDY_HTTP_PORT.
   TEAMD_CADDY_HTTPS_PORT         Caddy HTTPS host port. Default: 443 with TEAMD_CADDY_DOMAIN,
                                  otherwise disabled.
+  TEAMD_CADDY_DAEMON_UPSTREAM    Upstream for daemon routes from Caddy,
+                                 default: $CADDY_DAEMON_UPSTREAM.
 EOF
 }
 
@@ -2040,6 +2043,8 @@ services:
     restart: unless-stopped
     ports:
 $ports_block
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     volumes:
 $caddy_volumes
     networks:
@@ -2085,6 +2090,10 @@ files.$CADDY_DOMAIN {
   }"
     fi
   fi
+
+  webhook_handle="  handle /v1/telegram/webhook/* {
+    reverse_proxy $CADDY_DAEMON_UPSTREAM
+  }"
 
 	  silverbullet_domain_block=
 	  silverbullet_https_block=
@@ -2166,6 +2175,7 @@ $silverbullet_compat_redirects
       header_up X-Script-Name /searxng
     }
   }
+$webhook_handle
 $jaeger_handle
 $filebrowser_handle
 $silverbullet_single_handle
@@ -2177,6 +2187,11 @@ EOF
 	      cat > "$tmp_caddyfile" <<EOF
 search.$CADDY_DOMAIN {
   reverse_proxy teamd-searxng:8080
+}
+
+$CADDY_DOMAIN {
+$webhook_handle
+  respond / "teamD core edge"
 }
 $jaeger_domain_block
 $silverbullet_domain_block
@@ -2197,6 +2212,7 @@ $filebrowser_http_redirect
       header_up X-Script-Name /searxng
     }
   }
+$webhook_handle
 $jaeger_handle
 $filebrowser_handle
 
@@ -2211,6 +2227,7 @@ https://$CADDY_HOST {
       header_up X-Script-Name /searxng
     }
   }
+$webhook_handle
 $jaeger_handle
 $filebrowser_handle
 
@@ -2231,6 +2248,7 @@ $filebrowser_http_redirect
       header_up X-Script-Name /searxng
     }
   }
+$webhook_handle
 $jaeger_handle
 $filebrowser_handle
 
