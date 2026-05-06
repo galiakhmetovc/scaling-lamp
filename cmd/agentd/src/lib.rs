@@ -9,6 +9,7 @@ pub mod diagnostics;
 pub mod event_bus;
 pub mod event_errors;
 pub mod event_runtime;
+pub mod event_runtime_runner;
 pub mod execution;
 pub mod help;
 pub mod http;

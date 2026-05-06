@@ -36,6 +36,7 @@ dependencies = [
  "async-nats",
  "crossterm",
  "encoding_rs",
+ "futures-util",
  "libc",
  "postgres",
  "pulldown-cmark",

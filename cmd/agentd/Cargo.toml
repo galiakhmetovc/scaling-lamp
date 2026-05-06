@@ -12,6 +12,7 @@ agent-runtime = { path = "../../crates/agent-runtime" }
 async-nats.workspace = true
 crossterm.workspace = true
 encoding_rs.workspace = true
+futures-util.workspace = true
 libc = "0.2"
 pulldown-cmark.workspace = true
 ratatui = { workspace = true, features = ["unstable-rendered-line-info"] }

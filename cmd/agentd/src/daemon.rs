@@ -27,9 +27,14 @@ pub fn serve(app: App) -> std::io::Result<()> {
     let diagnostic_app = app.clone();
     let shutdown = Arc::new(AtomicBool::new(false));
     let worker = spawn_background_worker(app.clone(), shutdown.clone());
+    let event_runtime =
+        crate::event_runtime_runner::spawn_event_runtime(app.clone(), shutdown.clone());
     let result = server::serve(app, shutdown.clone());
     shutdown.store(true, Ordering::Relaxed);
     let _ = worker.join();
+    if let Some(event_runtime) = event_runtime {
+        let _ = event_runtime.join();
+    }
     let finish = match &result {
         Ok(()) => DiagnosticEventBuilder::new(
             &diagnostic_app.config,
@@ -78,11 +83,16 @@ pub fn spawn_for_test(app: App) -> std::io::Result<DaemonHandle> {
     let worker_app = app.clone();
     let worker_shutdown = shutdown.clone();
     let worker = spawn_background_worker(worker_app, worker_shutdown);
+    let event_runtime =
+        crate::event_runtime_runner::spawn_event_runtime(app.clone(), shutdown.clone());
     let thread_shutdown = shutdown.clone();
     let thread = thread::spawn(move || {
         let result = server::serve(app, thread_shutdown.clone());
         thread_shutdown.store(true, Ordering::Relaxed);
         let _ = worker.join();
+        if let Some(event_runtime) = event_runtime {
+            let _ = event_runtime.join();
+        }
         result
     });
 

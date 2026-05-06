@@ -175,7 +175,7 @@ where
             .map_err(map_client_error)
     }
 
-    async fn handle_update(&self, update: Update) -> Result<(), BootstrapError> {
+    pub async fn handle_update(&self, update: Update) -> Result<(), BootstrapError> {
         match update.kind {
             UpdateKind::Message(message) => self.handle_message(message).await,
             _ => Ok(()),

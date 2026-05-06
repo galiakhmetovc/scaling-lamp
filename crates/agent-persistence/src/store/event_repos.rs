@@ -120,6 +120,26 @@ impl EventRepository for PersistenceStore {
         })
     }
 
+    fn mark_inbound_event_status(
+        &self,
+        event_id: &str,
+        status: &str,
+        error: Option<&str>,
+    ) -> Result<(), StoreError> {
+        validate_identifier(event_id)?;
+        validate_non_empty("inbound event status", status)?;
+        self.with_client(|client| {
+            client.execute(
+                "UPDATE inbound_events
+                 SET status = $2,
+                     error = $3
+                 WHERE event_id = $1",
+                &[&event_id, &status, &error],
+            )?;
+            Ok(())
+        })
+    }
+
     fn put_routed_event(&self, record: &RoutedEventRecord) -> Result<(), StoreError> {
         validate_identifier(&record.routed_event_id)?;
         validate_identifier(&record.inbound_event_id)?;
@@ -285,6 +305,40 @@ impl EventRepository for PersistenceStore {
                      last_error = NULL
                  WHERE outbox_id = $1",
                 &[&outbox_id, &published_at],
+            )?;
+            Ok(())
+        })
+    }
+
+    fn mark_event_outbox_pending_retry(
+        &self,
+        outbox_id: &str,
+        next_attempt_at: i64,
+        error: &str,
+    ) -> Result<(), StoreError> {
+        validate_identifier(outbox_id)?;
+        self.with_client(|client| {
+            client.execute(
+                "UPDATE event_outbox
+                 SET status = 'pending',
+                     next_attempt_at = $2,
+                     last_error = $3
+                 WHERE outbox_id = $1",
+                &[&outbox_id, &next_attempt_at, &error],
+            )?;
+            Ok(())
+        })
+    }
+
+    fn mark_event_outbox_failed(&self, outbox_id: &str, error: &str) -> Result<(), StoreError> {
+        validate_identifier(outbox_id)?;
+        self.with_client(|client| {
+            client.execute(
+                "UPDATE event_outbox
+                 SET status = 'failed',
+                     last_error = $2
+                 WHERE outbox_id = $1",
+                &[&outbox_id, &error],
             )?;
             Ok(())
         })

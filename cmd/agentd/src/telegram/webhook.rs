@@ -141,13 +141,19 @@ pub fn handle_webhook_update(
         ));
     }
 
-    let update: TelegramUpdate = serde_json::from_str(body).map_err(|error| {
+    let raw_update: Value = serde_json::from_str(body).map_err(|error| {
         TelegramWebhookError::new(
             TelegramWebhookErrorKind::InvalidPayload,
             format!("invalid telegram update json: {error}"),
         )
     })?;
-    let normalized = normalize_update(update)?;
+    let update: TelegramUpdate = serde_json::from_value(raw_update.clone()).map_err(|error| {
+        TelegramWebhookError::new(
+            TelegramWebhookErrorKind::InvalidPayload,
+            format!("invalid telegram update json: {error}"),
+        )
+    })?;
+    let normalized = normalize_update(update, raw_update)?;
     let store = app.store().map_err(|error| {
         TelegramWebhookError::new(TelegramWebhookErrorKind::Store, error.to_string())
     })?;
@@ -228,6 +234,7 @@ pub fn handle_webhook_update(
 
 fn normalize_update(
     update: TelegramUpdate,
+    raw_update: Value,
 ) -> Result<NormalizedTelegramUpdate, TelegramWebhookError> {
     let message = update.message.ok_or_else(|| {
         TelegramWebhookError::new(
@@ -240,6 +247,7 @@ fn normalize_update(
     let source_id = source_id_for_chat(message.chat.id);
     let operator_id = message.from.as_ref().map(|user| user_id(user.id));
     let payload = json!({
+        "raw_update": raw_update,
         "update_id": update.update_id,
         "message_id": message.message_id,
         "message_thread_id": message.message_thread_id,

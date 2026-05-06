@@ -193,6 +193,12 @@ pub trait EventRepository {
         record: &InboundEventRecord,
     ) -> Result<InboundEventRecord, StoreError>;
     fn get_inbound_event(&self, event_id: &str) -> Result<Option<InboundEventRecord>, StoreError>;
+    fn mark_inbound_event_status(
+        &self,
+        event_id: &str,
+        status: &str,
+        error: Option<&str>,
+    ) -> Result<(), StoreError>;
     fn put_routed_event(&self, record: &RoutedEventRecord) -> Result<(), StoreError>;
     fn get_routed_event(
         &self,
@@ -210,6 +216,13 @@ pub trait EventRepository {
         outbox_id: &str,
         published_at: i64,
     ) -> Result<(), StoreError>;
+    fn mark_event_outbox_pending_retry(
+        &self,
+        outbox_id: &str,
+        next_attempt_at: i64,
+        error: &str,
+    ) -> Result<(), StoreError>;
+    fn mark_event_outbox_failed(&self, outbox_id: &str, error: &str) -> Result<(), StoreError>;
     fn put_event_delivery(&self, record: &EventDeliveryRecord) -> Result<(), StoreError>;
     fn get_event_delivery(
         &self,

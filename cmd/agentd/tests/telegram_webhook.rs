@@ -1,6 +1,7 @@
 use agent_persistence::{AppConfig, EventRepository, PersistenceStore, RunRepository};
 use agentd::bootstrap;
 use agentd::daemon;
+use agentd::event_runtime_runner::telegram_update_from_payload;
 use agentd::telegram::webhook::{TelegramWebhookErrorKind, handle_webhook_update};
 use reqwest::StatusCode;
 use reqwest::blocking::Client;
@@ -132,6 +133,8 @@ fn valid_update_stores_inbound_event_and_outbox_without_running_chat_turn() {
     assert_eq!(payload["text"], "hello");
     assert_eq!(payload["chat_id"], 42);
     assert_eq!(payload["message_thread_id"], 77);
+    assert_eq!(payload["raw_update"]["update_id"], 101);
+    assert_eq!(payload["raw_update"]["message"]["text"], "hello");
 
     let outbox = store
         .get_event_outbox("outbox-telegram-update-101")
@@ -176,6 +179,26 @@ fn duplicate_telegram_update_is_deduped_without_second_outbox() {
     assert_eq!(count_rows(&app, "inbound_events"), 1);
     assert_eq!(count_rows(&app, "event_outbox"), 1);
     assert_eq!(count_rows(&app, "routed_events"), 0);
+}
+
+#[test]
+fn webhook_payload_can_be_rehydrated_into_teloxide_update() {
+    let (_temp, app, _base_url) = test_app();
+    handle_webhook_update(
+        &app,
+        "webhook-secret",
+        &telegram_update(104, "rehydrate"),
+        1770000204,
+    )
+    .expect("webhook update");
+
+    let store = PersistenceStore::open(&app.persistence).expect("open store");
+    let inbound = store
+        .get_inbound_event("telegram-update-104")
+        .expect("get inbound")
+        .expect("inbound exists");
+    let update = telegram_update_from_payload(&inbound.payload_json).expect("rehydrate update");
+    assert_eq!(update.id.0, 104);
 }
 
 #[test]
