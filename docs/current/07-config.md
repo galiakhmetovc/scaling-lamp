@@ -613,12 +613,15 @@ export TEAMD_OTLP_TIMEOUT_MS='2000'
 - shutdown/restart polling
 - server request poll interval
 - background worker tick interval
+- background worker heavy memory/index maintenance interval
 - background worker job lease duration
 - TUI event polling
 - MCP stdio polling
 - provider retry delay
 
 Раньше такие числа были размазаны по коду. Теперь они собраны в одном config surface.
+
+`daemon_background_worker_tick_interval_ms` отвечает за быстрый lightweight tick: schedules, jobs, inbox wakeups. `daemon_memory_maintenance_interval_seconds` отдельно ограничивает тяжёлую maintenance-часть: session search index, knowledge index и retention recalculation. Не ставьте её равной 0 или слишком маленькой на больших workspaces: это будет постоянно перечитывать docs/projects/notes и грузить Postgres.
 
 ### `[runtime_limits]`
 

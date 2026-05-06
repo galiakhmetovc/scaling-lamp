@@ -17,8 +17,20 @@ impl ExecutionService {
         provider: &dyn ProviderDriver,
         now: i64,
     ) -> Result<BackgroundWorkerTickReport, ExecutionError> {
+        self.background_worker_tick_with_options(store, provider, now, true)
+    }
+
+    pub fn background_worker_tick_with_options(
+        &self,
+        store: &PersistenceStore,
+        provider: &dyn ProviderDriver,
+        now: i64,
+        maintain_memory: bool,
+    ) -> Result<BackgroundWorkerTickReport, ExecutionError> {
         self.maintain_mcp_connectors(store, now)?;
-        self.maintain_memory(store, now)?;
+        if maintain_memory {
+            self.maintain_memory(store, now)?;
+        }
         let fired_schedules = self.dispatch_due_agent_schedules(store, now)?;
         let supervisor = self.supervisor_tick(store, now, &[])?;
         let mut report = BackgroundWorkerTickReport {

@@ -132,8 +132,19 @@ fn unix_timestamp() -> i64 {
 
 fn spawn_background_worker(app: App, shutdown: Arc<AtomicBool>) -> JoinHandle<()> {
     thread::spawn(move || {
+        let mut last_memory_maintenance_at = 0_i64;
         while !shutdown.load(Ordering::Relaxed) {
-            let _ = app.background_worker_tick(unix_timestamp());
+            let now = unix_timestamp();
+            let maintain_memory = now.saturating_sub(last_memory_maintenance_at)
+                >= app
+                    .config
+                    .runtime_timing
+                    .daemon_memory_maintenance_interval()
+                    .as_secs() as i64;
+            if maintain_memory {
+                last_memory_maintenance_at = now;
+            }
+            let _ = app.background_worker_tick_with_options(now, maintain_memory);
             thread::sleep(
                 app.config
                     .runtime_timing

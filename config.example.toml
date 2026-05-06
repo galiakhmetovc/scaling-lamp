@@ -208,6 +208,7 @@ http_server_request_poll_interval_ms = 100
 daemon_test_startup_probe_attempts = 50
 daemon_test_startup_probe_interval_ms = 20
 daemon_background_worker_tick_interval_ms = 100
+daemon_memory_maintenance_interval_seconds = 30
 daemon_background_worker_lease_seconds = 60
 tui_event_poll_interval_ms = 100
 tui_active_run_heartbeat_notice_interval_seconds = 30

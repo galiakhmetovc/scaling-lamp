@@ -30,11 +30,20 @@ impl App {
         &self,
         now: i64,
     ) -> Result<execution::BackgroundWorkerTickReport, BootstrapError> {
+        self.background_worker_tick_with_options(now, true)
+    }
+
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub fn background_worker_tick_with_options(
+        &self,
+        now: i64,
+        maintain_memory: bool,
+    ) -> Result<execution::BackgroundWorkerTickReport, BootstrapError> {
         let store = self.store()?;
         let provider = self.provider_driver()?;
         let report = self
             .execution_service()
-            .background_worker_tick(&store, provider.as_ref(), now)
+            .background_worker_tick_with_options(&store, provider.as_ref(), now, maintain_memory)
             .map_err(BootstrapError::Execution)?;
         for run_id in &report.terminal_run_ids {
             self.export_run_trace_best_effort(&store, run_id, "background.worker");

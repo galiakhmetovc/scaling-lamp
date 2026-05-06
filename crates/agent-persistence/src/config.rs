@@ -311,6 +311,7 @@ pub struct RuntimeTimingConfig {
     pub daemon_test_startup_probe_attempts: usize,
     pub daemon_test_startup_probe_interval_ms: u64,
     pub daemon_background_worker_tick_interval_ms: u64,
+    pub daemon_memory_maintenance_interval_seconds: u64,
     pub daemon_background_worker_lease_seconds: i64,
     pub tui_event_poll_interval_ms: u64,
     pub tui_active_run_heartbeat_notice_interval_seconds: u64,
@@ -470,6 +471,7 @@ pub struct ConfigEnv {
     pub memory_recall_max_results_override: Option<usize>,
     pub memory_recall_max_query_chars_override: Option<usize>,
     pub memory_recall_max_memory_chars_override: Option<usize>,
+    pub daemon_memory_maintenance_interval_seconds_override: Option<u64>,
     pub operator_timezone_override: Option<String>,
     pub silverbullet_space_dir_override: Option<PathBuf>,
     pub silverbullet_base_url_override: Option<String>,
@@ -852,6 +854,7 @@ impl Default for RuntimeTimingConfig {
             daemon_test_startup_probe_attempts: 50,
             daemon_test_startup_probe_interval_ms: 20,
             daemon_background_worker_tick_interval_ms: 100,
+            daemon_memory_maintenance_interval_seconds: 30,
             daemon_background_worker_lease_seconds: 60,
             tui_event_poll_interval_ms: 100,
             tui_active_run_heartbeat_notice_interval_seconds: 30,
@@ -900,6 +903,10 @@ impl RuntimeTimingConfig {
 
     pub fn daemon_background_worker_tick_interval(&self) -> Duration {
         Duration::from_millis(self.daemon_background_worker_tick_interval_ms)
+    }
+
+    pub fn daemon_memory_maintenance_interval(&self) -> Duration {
+        Duration::from_secs(self.daemon_memory_maintenance_interval_seconds)
     }
 
     pub fn tui_event_poll_interval(&self) -> Duration {
@@ -1238,6 +1245,10 @@ impl ConfigEnv {
                 "TEAMD_MEMORY_RECALL_MAX_MEMORY_CHARS",
                 &dotenv,
             )?,
+            daemon_memory_maintenance_interval_seconds_override: read_u64_var(
+                "TEAMD_DAEMON_MEMORY_MAINTENANCE_INTERVAL_SECONDS",
+                &dotenv,
+            )?,
             operator_timezone_override: read_string_var("TEAMD_OPERATOR_TIMEZONE", &dotenv),
             silverbullet_space_dir_override: read_path_var(
                 "TEAMD_SILVERBULLET_SPACE_DIR",
@@ -1402,7 +1413,7 @@ impl AppConfig {
             .as_ref()
             .and_then(|config| config.observability.clone())
             .unwrap_or_default();
-        let runtime_timing = file_config
+        let mut runtime_timing = file_config
             .as_ref()
             .and_then(|config| config.runtime_timing.clone())
             .unwrap_or_default();
@@ -1623,6 +1634,9 @@ impl AppConfig {
         }
         if let Some(chars) = env.memory_recall_max_memory_chars_override {
             memory_recall.max_memory_chars = chars;
+        }
+        if let Some(seconds) = env.daemon_memory_maintenance_interval_seconds_override {
+            runtime_timing.daemon_memory_maintenance_interval_seconds = seconds;
         }
         if let Some(timezone) = &env.operator_timezone_override {
             knowledge.operator_timezone = timezone.clone();
@@ -2239,6 +2253,11 @@ impl AppConfig {
             "runtime_timing.daemon_background_worker_tick_interval_ms",
             self.runtime_timing
                 .daemon_background_worker_tick_interval_ms,
+        )?;
+        validate_positive_u64_value(
+            "runtime_timing.daemon_memory_maintenance_interval_seconds",
+            self.runtime_timing
+                .daemon_memory_maintenance_interval_seconds,
         )?;
         validate_positive_i64_value(
             "runtime_timing.daemon_background_worker_lease_seconds",
