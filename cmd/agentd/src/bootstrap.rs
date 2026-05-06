@@ -260,7 +260,7 @@ pub struct SessionPreferencesPatch {
 }
 
 impl App {
-    fn execution_service(&self) -> execution::ExecutionService {
+    pub(crate) fn execution_service(&self) -> execution::ExecutionService {
         execution::ExecutionService::new(
             self.config.permissions.clone(),
             self.runtime.workspace.clone(),

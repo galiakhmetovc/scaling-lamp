@@ -160,6 +160,7 @@ fn spawn_background_worker(app: App, shutdown: Arc<AtomicBool>) -> JoinHandle<()
         };
         let mut last_mcp_maintenance_at = 0_i64;
         let mut last_memory_maintenance_at = 0_i64;
+        let execution_service = app.execution_service();
         while !shutdown.load(Ordering::Relaxed) {
             let now = unix_timestamp();
             let maintain_mcp = now.saturating_sub(last_mcp_maintenance_at)
@@ -181,7 +182,8 @@ fn spawn_background_worker(app: App, shutdown: Arc<AtomicBool>) -> JoinHandle<()
                 last_memory_maintenance_at = now;
             }
             if app
-                .background_worker_tick_with_resources(
+                .background_worker_tick_with_service_and_resources(
+                    &execution_service,
                     &store,
                     provider.as_ref(),
                     now,

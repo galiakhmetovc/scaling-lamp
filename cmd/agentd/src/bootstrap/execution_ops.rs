@@ -59,8 +59,27 @@ impl App {
         maintain_mcp: bool,
         maintain_memory: bool,
     ) -> Result<execution::BackgroundWorkerTickReport, BootstrapError> {
-        let report = self
-            .execution_service()
+        let service = self.execution_service();
+        self.background_worker_tick_with_service_and_resources(
+            &service,
+            store,
+            provider,
+            now,
+            maintain_mcp,
+            maintain_memory,
+        )
+    }
+
+    pub(crate) fn background_worker_tick_with_service_and_resources(
+        &self,
+        service: &execution::ExecutionService,
+        store: &PersistenceStore,
+        provider: &dyn ProviderDriver,
+        now: i64,
+        maintain_mcp: bool,
+        maintain_memory: bool,
+    ) -> Result<execution::BackgroundWorkerTickReport, BootstrapError> {
+        let report = service
             .background_worker_tick_with_options(
                 store,
                 provider,

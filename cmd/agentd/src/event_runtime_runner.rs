@@ -84,16 +84,19 @@ async fn run_event_runtime(app: App, shutdown: Arc<AtomicBool>) -> Result<(), St
     let bus = NatsEventBus::connect(&app.config.event_bus)
         .await
         .map_err(|error| error.to_string())?;
+    let store = open_runtime_store(&app).await?;
 
-    let publisher_app = app.clone();
     let publisher_bus = bus.clone();
+    let publisher_store = store.clone();
     let publisher_shutdown = shutdown.clone();
     let publisher = tokio::spawn(async move {
-        outbox_publisher_loop(publisher_app, publisher_bus, publisher_shutdown).await
+        outbox_publisher_loop(publisher_bus, publisher_store, publisher_shutdown).await
     });
 
     let telegram =
-        tokio::spawn(async move { telegram_webhook_consumer_loop(app, bus, shutdown).await });
+        tokio::spawn(
+            async move { telegram_webhook_consumer_loop(app, bus, store, shutdown).await },
+        );
 
     let (publisher_result, telegram_result) = tokio::join!(publisher, telegram);
     publisher_result.map_err(|error| format!("outbox publisher task join error: {error}"))??;
@@ -102,12 +105,13 @@ async fn run_event_runtime(app: App, shutdown: Arc<AtomicBool>) -> Result<(), St
 }
 
 async fn outbox_publisher_loop(
-    app: App,
     bus: NatsEventBus,
+    store: Arc<PersistenceStore>,
     shutdown: Arc<AtomicBool>,
 ) -> Result<(), String> {
     while !shutdown.load(Ordering::Relaxed) {
-        let published_count = publish_pending_outbox_once(&app, &bus, unix_timestamp()).await?;
+        let published_count =
+            publish_pending_outbox_once(&bus, store.clone(), unix_timestamp()).await?;
         let sleep_for = if published_count == 0 {
             OUTBOX_IDLE_PUBLISH_INTERVAL
         } else {
@@ -119,11 +123,11 @@ async fn outbox_publisher_loop(
 }
 
 async fn publish_pending_outbox_once(
-    app: &App,
     bus: &NatsEventBus,
+    store: Arc<PersistenceStore>,
     now: i64,
 ) -> Result<usize, String> {
-    let outboxes = with_store(app, move |store| {
+    let outboxes = with_store(store.clone(), move |store| {
         store.claim_pending_event_outbox(OUTBOX_PUBLISH_BATCH, now)
     })
     .await?;
@@ -135,7 +139,7 @@ async fn publish_pending_outbox_once(
         {
             Ok(()) => {
                 let outbox_id = outbox.outbox_id.clone();
-                with_store(app, move |store| {
+                with_store(store.clone(), move |store| {
                     store.mark_event_outbox_published(&outbox_id, now)
                 })
                 .await?;
@@ -144,7 +148,7 @@ async fn publish_pending_outbox_once(
                 let retry_at = now + retry_delay_seconds(outbox.attempt_count);
                 let outbox_id = outbox.outbox_id.clone();
                 let error = error.to_string();
-                with_store(app, move |store| {
+                with_store(store.clone(), move |store| {
                     store.mark_event_outbox_pending_retry(&outbox_id, retry_at, &error)
                 })
                 .await?;
@@ -162,6 +166,7 @@ fn retry_delay_seconds(attempt_count: i64) -> i64 {
 async fn telegram_webhook_consumer_loop(
     app: App,
     bus: NatsEventBus,
+    store: Arc<PersistenceStore>,
     shutdown: Arc<AtomicBool>,
 ) -> Result<(), String> {
     let token = app
@@ -203,7 +208,8 @@ async fn telegram_webhook_consumer_loop(
             continue;
         };
         let message = message.map_err(|error| error.to_string())?;
-        if let Err(error) = handle_telegram_webhook_message(&app, &worker, &message).await {
+        if let Err(error) = handle_telegram_webhook_message(&worker, store.clone(), &message).await
+        {
             log_event_runtime_error(&app, "telegram.consumer.error", &error);
         }
         message.ack().await.map_err(|error| error.to_string())?;
@@ -212,8 +218,8 @@ async fn telegram_webhook_consumer_loop(
 }
 
 async fn handle_telegram_webhook_message<B>(
-    app: &App,
     worker: &TelegramWorker<B>,
+    store: Arc<PersistenceStore>,
     message: &JetStreamMessage,
 ) -> Result<(), String>
 where
@@ -232,8 +238,10 @@ where
     }
 
     let inbound_event_id = envelope.payload_ref.id.clone();
-    let Some(inbound) =
-        with_store(app, move |store| store.get_inbound_event(&inbound_event_id)).await?
+    let Some(inbound) = with_store(store.clone(), move |store| {
+        store.get_inbound_event(&inbound_event_id)
+    })
+    .await?
     else {
         return Err(format!(
             "inbound event {} not found",
@@ -247,7 +255,7 @@ where
     match worker.handle_update(update).await {
         Ok(()) => {
             let inbound_event_id = inbound.event_id.clone();
-            with_store(app, move |store| {
+            with_store(store.clone(), move |store| {
                 store.mark_inbound_event_status(&inbound_event_id, "processed", None)
             })
             .await
@@ -256,7 +264,7 @@ where
             let message = error.to_string();
             let inbound_event_id = inbound.event_id.clone();
             let error_message = message.clone();
-            let _ = with_store(app, move |store| {
+            let _ = with_store(store.clone(), move |store| {
                 store.mark_inbound_event_status(&inbound_event_id, "failed", Some(&error_message))
             })
             .await;
@@ -286,19 +294,23 @@ fn log_event_runtime_error(app: &App, op: &str, error: &str) {
     .emit(&AuditLogConfig::from_config(&app.config));
 }
 
-async fn with_store<T, F>(app: &App, operation: F) -> Result<T, String>
+async fn open_runtime_store(app: &App) -> Result<Arc<PersistenceStore>, String> {
+    let persistence = app.persistence.clone();
+    tokio::task::spawn_blocking(move || PersistenceStore::open_runtime(&persistence).map(Arc::new))
+        .await
+        .map_err(|error| error.to_string())?
+        .map_err(|error| error.to_string())
+}
+
+async fn with_store<T, F>(store: Arc<PersistenceStore>, operation: F) -> Result<T, String>
 where
     T: Send + 'static,
     F: FnOnce(&PersistenceStore) -> Result<T, StoreError> + Send + 'static,
 {
-    let persistence = app.persistence.clone();
-    tokio::task::spawn_blocking(move || {
-        let store = PersistenceStore::open_runtime(&persistence)?;
-        operation(&store)
-    })
-    .await
-    .map_err(|error| error.to_string())?
-    .map_err(|error| error.to_string())
+    tokio::task::spawn_blocking(move || operation(&store))
+        .await
+        .map_err(|error| error.to_string())?
+        .map_err(|error| error.to_string())
 }
 
 fn unix_timestamp() -> i64 {
