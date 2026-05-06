@@ -163,6 +163,10 @@ fn spawn_background_worker(app: App, shutdown: Arc<AtomicBool>) -> JoinHandle<()
         let execution_service = app.execution_service();
         while !shutdown.load(Ordering::Relaxed) {
             let now = unix_timestamp();
+            let mut next_tick_interval = app
+                .config
+                .runtime_timing
+                .daemon_background_worker_idle_tick_interval();
             let maintain_mcp = now.saturating_sub(last_mcp_maintenance_at)
                 >= app
                     .config
@@ -190,16 +194,25 @@ fn spawn_background_worker(app: App, shutdown: Arc<AtomicBool>) -> JoinHandle<()
                     maintain_mcp,
                     maintain_memory,
                 )
+                .map(|report| {
+                    if report.has_activity() {
+                        next_tick_interval = app
+                            .config
+                            .runtime_timing
+                            .daemon_background_worker_tick_interval();
+                    }
+                })
                 .is_err()
-                && let Ok(reopened) = app.store()
             {
-                store = reopened;
-            }
-            thread::sleep(
-                app.config
+                next_tick_interval = app
+                    .config
                     .runtime_timing
-                    .daemon_background_worker_tick_interval(),
-            );
+                    .daemon_background_worker_tick_interval();
+                if let Ok(reopened) = app.store() {
+                    store = reopened;
+                }
+            }
+            thread::sleep(next_tick_interval);
         }
     })
 }

@@ -130,6 +130,18 @@ pub struct BackgroundWorkerTickReport {
     pub terminal_run_ids: Vec<String>,
 }
 
+impl BackgroundWorkerTickReport {
+    pub fn has_activity(&self) -> bool {
+        self.queued_jobs > 0
+            || self.dispatched_jobs > 0
+            || self.executed_jobs > 0
+            || self.emitted_inbox_events > 0
+            || self.woken_sessions > 0
+            || self.failed_jobs > 0
+            || !self.terminal_run_ids.is_empty()
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub struct SessionWorkCancellationReport {
     pub session_count: usize,
