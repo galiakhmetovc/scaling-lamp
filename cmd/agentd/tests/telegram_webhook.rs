@@ -123,6 +123,10 @@ fn valid_update_stores_inbound_event_and_outbox_without_running_chat_turn() {
     assert_eq!(inbound.operator_id.as_deref(), Some("telegram-user-7"));
     assert_eq!(inbound.status, "pending");
 
+    let metadata: serde_json::Value =
+        serde_json::from_str(&inbound.metadata_json).expect("metadata json");
+    assert_eq!(metadata["trace_id"], "trace-telegram-update-101");
+
     let payload: serde_json::Value =
         serde_json::from_str(&inbound.payload_json).expect("payload json");
     assert_eq!(payload["text"], "hello");

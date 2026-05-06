@@ -109,7 +109,9 @@ pub fn route_inbound_event(
     let routed_event_id = format!("routed-{}", inbound.event_id);
     let subjects = EventSubjects::from_config(&app.config.event_bus);
     let subject = subjects.session_input(&decision.session_id);
+    let trace_id = trace_id_from_metadata(&inbound.metadata_json);
     let route_metadata = json!({
+        "trace_id": trace_id,
         "matched_rule_id": decision.matched_rule_id,
         "output_targets": decision.output_targets,
         "format_policy": decision.format_policy,
@@ -139,7 +141,7 @@ pub fn route_inbound_event(
     let envelope = build_event_envelope(EventEnvelope {
         event_id: routed_event_id.clone(),
         event_type: "session.input.routed".to_string(),
-        trace_id: trace_id_from_metadata(&inbound.metadata_json),
+        trace_id,
         source_kind: "router".to_string(),
         source_id: rule.rule_id.clone(),
         subject: subject.clone(),

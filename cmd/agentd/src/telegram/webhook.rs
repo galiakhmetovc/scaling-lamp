@@ -256,6 +256,7 @@ fn normalize_update(
         "document": document_payload(message.document),
     });
     let metadata = json!({
+        "trace_id": format!("trace-telegram-update-{}", update.update_id),
         "telegram_update_id": update.update_id,
         "telegram_chat_id": message.chat.id,
         "telegram_message_id": message.message_id,

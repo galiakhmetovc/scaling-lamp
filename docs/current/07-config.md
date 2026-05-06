@@ -111,6 +111,9 @@ export TEAMD_PROVIDER_API_KEY='replace-with-zai-key'
 
 - `enabled`
 - `bot_token`
+- `mode`
+- `webhook_public_url`
+- `webhook_secret`
 - `poll_interval_ms`
 - `poll_request_timeout_seconds`
 - `progress_update_min_interval_ms`
@@ -135,11 +138,67 @@ export TEAMD_PROVIDER_API_KEY='replace-with-zai-key'
 
 Рекомендуемое правило: `telegram.bot_token` не хранить в `config.toml`, а задавать через `TEAMD_TELEGRAM_BOT_TOKEN` в `.env` или environment.
 
+`mode = "polling"` запускает legacy long polling worker через `agentd telegram run`. `mode = "webhook"` отключает polling и принимает Telegram updates через daemon HTTP route `/v1/telegram/webhook/<secret>`. Webhook mode требует `telegram.webhook_public_url`, `telegram.webhook_secret` и `event_bus.required = true`.
+
+Env overrides:
+
+```bash
+TEAMD_TELEGRAM_MODE=webhook
+TEAMD_TELEGRAM_WEBHOOK_PUBLIC_URL=https://teamd.example/v1/telegram/webhook/...
+TEAMD_TELEGRAM_WEBHOOK_SECRET=...
+```
+
 `group_require_mention = true` означает строгий режим для неактивированных Telegram users. Если user уже прошёл pairing и запись activated, worker принимает его обычный текст в group/supergroup chat без mention и routes его в выбранную group session.
 
 `inbound_queue_default_mode` управляет тем, что Telegram worker делает с обычным сообщением, если в выбранной session уже выполняется turn. Допустимые значения: `reject`, `queue`, `coalesce`, `restart`. Default — `coalesce`. `inbound_coalesce_window_ms` задаёт окно объединения входящих сообщений; минимум задаётся явно через `inbound_min_coalesce_window_ms` и применяется при сохранении `/queue coalesce ...`.
 
 Telegram rendering/delivery limits тоже являются config policy: `message_text_soft_cap`, `caption_soft_cap`, `status_detail_char_cap`, `status_ttl_seconds`, typing heartbeat и retry-настройки delivery. Это важно для hotfix'ов вроде `MESSAGE_TOO_LONG`: оператор меняет policy в `config.toml`, а не правит Rust-код.
+
+### `[event_bus]`
+
+Управляет event backbone для MIMO/webhook runtime. PostgreSQL остаётся source of truth, а NATS JetStream используется для durable delivery, replay, backpressure и независимых workers.
+
+Параметры:
+
+- `required`
+- `backend`
+- `nats_url`
+- `input_stream`
+- `session_stream`
+- `delivery_stream`
+- `task_stream`
+- `dlq_stream`
+
+Единственный поддерживаемый backend сейчас — `nats_jetstream`.
+
+Пример:
+
+```toml
+[event_bus]
+required = true
+backend = "nats_jetstream"
+nats_url = "nats://127.0.0.1:4222"
+input_stream = "TEAMD_INPUT"
+session_stream = "TEAMD_SESSION"
+delivery_stream = "TEAMD_DELIVERY"
+task_stream = "TEAMD_TASK"
+dlq_stream = "TEAMD_DLQ"
+```
+
+Env overrides:
+
+```bash
+TEAMD_EVENT_BUS_REQUIRED=true
+TEAMD_EVENT_BUS_BACKEND=nats_jetstream
+TEAMD_NATS_URL=nats://127.0.0.1:4222
+TEAMD_EVENT_BUS_INPUT_STREAM=TEAMD_INPUT
+TEAMD_EVENT_BUS_SESSION_STREAM=TEAMD_SESSION
+TEAMD_EVENT_BUS_DELIVERY_STREAM=TEAMD_DELIVERY
+TEAMD_EVENT_BUS_TASK_STREAM=TEAMD_TASK
+TEAMD_EVENT_BUS_DLQ_STREAM=TEAMD_DLQ
+```
+
+Если `event_bus.required = true` и Telegram включён, runtime валидирует `telegram.mode = "webhook"`. Это защита от двух конкурирующих ingestion paths для одного bot token.
 
 ### `[session_defaults]`
 

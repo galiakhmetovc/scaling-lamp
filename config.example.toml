@@ -19,6 +19,11 @@ application_name = "teamd"
 [telegram]
 enabled = false
 # bot_token = "prefer TEAMD_TELEGRAM_BOT_TOKEN in .env"
+# mode = "polling" keeps the legacy long polling worker. mode = "webhook"
+# requires event_bus.required = true plus webhook_public_url/webhook_secret.
+mode = "polling"
+# webhook_public_url = "https://teamd.example/v1/telegram/webhook/replace-with-secret"
+# webhook_secret = "replace-with-secret"
 poll_interval_ms = 1000
 poll_request_timeout_seconds = 50
 progress_update_min_interval_ms = 1250
@@ -43,6 +48,18 @@ typing_heartbeat_interval_seconds = 4
 delivery_retry_attempts = 3
 delivery_retry_base_delay_ms = 250
 chat_turn_fast_settle_ms = 50
+
+[event_bus]
+# PostgreSQL remains the source of truth; NATS JetStream is the durable
+# event backbone for webhook/MIMO runtime workers.
+required = false
+backend = "nats_jetstream"
+# nats_url = "nats://127.0.0.1:4222"
+input_stream = "TEAMD_INPUT"
+session_stream = "TEAMD_SESSION"
+delivery_stream = "TEAMD_DELIVERY"
+task_stream = "TEAMD_TASK"
+dlq_stream = "TEAMD_DLQ"
 
 [provider]
 kind = "openai_responses"

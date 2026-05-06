@@ -62,6 +62,14 @@ Core `agentd` ставится отдельно от контейнерной о
 ./scripts/deploy-teamd-containers.sh --with-filebrowser
 ```
 
+По умолчанию контейнерная обвязка также поднимает local NATS JetStream для event runtime:
+
+```bash
+./scripts/deploy-teamd-containers.sh --no-nats
+```
+
+NATS слушает только localhost: `nats://127.0.0.1:4222`, monitor endpoint `http://127.0.0.1:8222`. Скрипт upsert-ит `TEAMD_EVENT_BUS_BACKEND=nats_jetstream` и `TEAMD_NATS_URL=...` в `/etc/teamd/teamd.env`, но не включает `TEAMD_EVENT_BUS_REQUIRED=true` автоматически, чтобы не сломать существующий polling-режим.
+
 Проверка без изменений:
 
 ```bash
@@ -243,6 +251,18 @@ Pairing:
 - `teamd-telegram.service` держит Telegram long polling worker;
 - оба читают `/etc/teamd/teamd.env`;
 - оба используют один `TEAMD_DATA_DIR`, например `/var/lib/teamd/state`.
+
+Для webhook/NATS runtime `teamd-telegram.service` не запускается: Telegram updates принимает `teamd-daemon.service` через HTTP route `/v1/telegram/webhook/<secret>`, а обработка идёт через event bus workers. В этом режиме нужны:
+
+```bash
+TEAMD_TELEGRAM_MODE=webhook
+TEAMD_TELEGRAM_WEBHOOK_PUBLIC_URL=https://<domain>/v1/telegram/webhook/<secret>
+TEAMD_TELEGRAM_WEBHOOK_SECRET=<secret>
+TEAMD_EVENT_BUS_REQUIRED=true
+TEAMD_NATS_URL=nats://127.0.0.1:4222
+```
+
+Polling и webhook нельзя держать одновременно на одном bot token.
 
 Автозапуск и старт:
 
