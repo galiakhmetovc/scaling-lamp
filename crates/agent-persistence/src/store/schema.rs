@@ -336,6 +336,33 @@ pub(super) fn bootstrap_schema(client: &mut Client) -> Result<(), StoreError> {
             error TEXT
         );
 
+        CREATE TABLE IF NOT EXISTS delivery_targets (
+            target_id TEXT PRIMARY KEY,
+            kind TEXT NOT NULL,
+            address TEXT NOT NULL,
+            scope TEXT NOT NULL,
+            owner_user_id TEXT,
+            allowed_agent_ids_json TEXT NOT NULL DEFAULT '[]',
+            allowed_session_ids_json TEXT NOT NULL DEFAULT '[]',
+            send_policy_json TEXT NOT NULL DEFAULT 'null',
+            format_policy TEXT NOT NULL DEFAULT 'full_text',
+            created_at BIGINT NOT NULL,
+            updated_at BIGINT NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS session_output_routes (
+            route_id TEXT PRIMARY KEY,
+            session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+            target_id TEXT NOT NULL REFERENCES delivery_targets(target_id) ON DELETE CASCADE,
+            filter_json TEXT NOT NULL DEFAULT 'null',
+            format_policy TEXT NOT NULL DEFAULT 'full_text',
+            enabled BOOLEAN NOT NULL DEFAULT TRUE,
+            last_delivered_transcript_created_at BIGINT,
+            last_delivered_transcript_id TEXT,
+            created_at BIGINT NOT NULL,
+            updated_at BIGINT NOT NULL
+        );
+
         CREATE INDEX IF NOT EXISTS idx_missions_session_id ON missions(session_id);
         CREATE INDEX IF NOT EXISTS idx_runs_session_id ON runs(session_id);
         CREATE INDEX IF NOT EXISTS idx_runs_mission_id ON runs(mission_id);
@@ -371,6 +398,9 @@ pub(super) fn bootstrap_schema(client: &mut Client) -> Result<(), StoreError> {
         CREATE INDEX IF NOT EXISTS idx_knowledge_search_docs_body_fts ON knowledge_search_docs USING GIN (to_tsvector('simple', body));
         CREATE INDEX IF NOT EXISTS idx_artifacts_session_id ON artifacts(session_id);
         CREATE INDEX IF NOT EXISTS idx_file_delivery_requests_session_status ON file_delivery_requests(session_id, status, created_at);
+        CREATE INDEX IF NOT EXISTS idx_delivery_targets_kind_scope ON delivery_targets(kind, scope, updated_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_session_output_routes_session_enabled ON session_output_routes(session_id, enabled, updated_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_session_output_routes_target_id ON session_output_routes(target_id);
         ",
     )?;
 
@@ -455,6 +485,9 @@ const REQUIRED_COLUMNS: &[(&str, &str, bool)] = &[
     ("artifacts", "session_id", true),
     ("file_delivery_requests", "id", true),
     ("file_delivery_requests", "session_id", true),
+    ("delivery_targets", "target_id", true),
+    ("session_output_routes", "route_id", true),
+    ("session_output_routes", "session_id", true),
 ];
 
 fn validate_column(

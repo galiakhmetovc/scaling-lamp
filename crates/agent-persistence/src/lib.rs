@@ -14,20 +14,20 @@ pub use config::{
 };
 pub use records::{
     AgentChainContinuationRecord, AgentProfileRecord, AgentScheduleRecord, ArtifactRecord,
-    ContextOffloadRecord, ContextSummaryRecord, FileDeliveryRequestRecord, JobRecord,
-    KnowledgeSearchDocRecord, KnowledgeSourceRecord, KvEntryRecord, McpConnectorRecord,
+    ContextOffloadRecord, ContextSummaryRecord, DeliveryTargetRecord, FileDeliveryRequestRecord,
+    JobRecord, KnowledgeSearchDocRecord, KnowledgeSourceRecord, KvEntryRecord, McpConnectorRecord,
     MissionRecord, PlanRecord, RecordConversionError, RunRecord, SessionInboxEventRecord,
-    SessionRecord, SessionRetentionRecord, SessionSearchDocRecord, TelegramChatBindingRecord,
-    TelegramChatStatusRecord, TelegramUpdateCursorRecord, TelegramUserPairingRecord,
-    ToolCallRecord, TraceLinkRecord, TranscriptRecord,
+    SessionOutputRouteRecord, SessionRecord, SessionRetentionRecord, SessionSearchDocRecord,
+    TelegramChatBindingRecord, TelegramChatStatusRecord, TelegramUpdateCursorRecord,
+    TelegramUserPairingRecord, ToolCallRecord, TraceLinkRecord, TranscriptRecord,
 };
 pub use repository::{
     AgentRepository, ArtifactRepository, ContextOffloadRepository, ContextSummaryRepository,
-    FileDeliveryRepository, JobRepository, KnowledgeRepository, KvRepository, McpRepository,
-    MissionRepository, PlanRepository, RunRepository, RunSummaryRollup, SessionActiveJobCounts,
-    SessionInboxRepository, SessionRepository, SessionRetentionRepository, SessionSearchRepository,
-    TelegramRepository, ToolCallRepository, TraceRepository, TranscriptRepository,
-    TranscriptSessionStats,
+    DeliveryRepository, FileDeliveryRepository, JobRepository, KnowledgeRepository, KvRepository,
+    McpRepository, MissionRepository, PlanRepository, RunRepository, RunSummaryRollup,
+    SessionActiveJobCounts, SessionInboxRepository, SessionRepository, SessionRetentionRepository,
+    SessionSearchRepository, TelegramRepository, ToolCallRepository, TraceRepository,
+    TranscriptRepository, TranscriptSessionStats,
 };
 pub use store::{ExecutionStateSnapshot, PersistenceStore, StoreError, StoreLayout};
 

@@ -1,9 +1,9 @@
 use crate::records::{
     AgentChainContinuationRecord, AgentProfileRecord, AgentScheduleRecord, ArtifactRecord,
-    ContextOffloadRecord, ContextSummaryRecord, FileDeliveryRequestRecord, JobRecord,
-    KnowledgeSearchDocRecord, KnowledgeSourceRecord, KvEntryRecord, McpConnectorRecord,
-    MissionRecord, PlanRecord, RunRecord, SessionInboxEventRecord, SessionRecord,
-    SessionRetentionRecord, SessionSearchDocRecord, TelegramChatBindingRecord,
+    ContextOffloadRecord, ContextSummaryRecord, DeliveryTargetRecord, FileDeliveryRequestRecord,
+    JobRecord, KnowledgeSearchDocRecord, KnowledgeSourceRecord, KvEntryRecord, McpConnectorRecord,
+    MissionRecord, PlanRecord, RunRecord, SessionInboxEventRecord, SessionOutputRouteRecord,
+    SessionRecord, SessionRetentionRecord, SessionSearchDocRecord, TelegramChatBindingRecord,
     TelegramChatStatusRecord, TelegramUpdateCursorRecord, TelegramUserPairingRecord,
     ToolCallRecord, TraceLinkRecord, TranscriptRecord,
 };
@@ -158,6 +158,25 @@ pub trait TelegramRepository {
         &self,
         consumer: &str,
     ) -> Result<Option<TelegramUpdateCursorRecord>, StoreError>;
+}
+
+pub trait DeliveryRepository {
+    fn put_delivery_target(&self, record: &DeliveryTargetRecord) -> Result<(), StoreError>;
+    fn get_delivery_target(
+        &self,
+        target_id: &str,
+    ) -> Result<Option<DeliveryTargetRecord>, StoreError>;
+    fn list_delivery_targets(&self) -> Result<Vec<DeliveryTargetRecord>, StoreError>;
+    fn put_session_output_route(&self, record: &SessionOutputRouteRecord)
+    -> Result<(), StoreError>;
+    fn get_session_output_route(
+        &self,
+        route_id: &str,
+    ) -> Result<Option<SessionOutputRouteRecord>, StoreError>;
+    fn list_enabled_session_output_routes(
+        &self,
+        session_id: &str,
+    ) -> Result<Vec<SessionOutputRouteRecord>, StoreError>;
 }
 
 pub trait AgentRepository {

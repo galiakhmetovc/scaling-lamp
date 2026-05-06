@@ -1,5 +1,6 @@
 mod agent_repos;
 mod context_repos;
+mod delivery_repos;
 mod execution_repos;
 mod file_delivery_repos;
 mod inbox_repos;
@@ -24,9 +25,10 @@ use crate::records::{
 };
 use crate::repository::{
     AgentRepository, ArtifactRepository, ContextOffloadRepository, ContextSummaryRepository,
-    FileDeliveryRepository, JobRepository, McpRepository, MissionRepository, PlanRepository,
-    RunRepository, SessionInboxRepository, SessionRepository, SessionRetentionRepository,
-    TelegramRepository, ToolCallRepository, TraceRepository, TranscriptRepository,
+    DeliveryRepository, FileDeliveryRepository, JobRepository, McpRepository, MissionRepository,
+    PlanRepository, RunRepository, SessionInboxRepository, SessionRepository,
+    SessionRetentionRepository, TelegramRepository, ToolCallRepository, TraceRepository,
+    TranscriptRepository,
 };
 use agent_runtime::archive::{
     ArchivedArtifactEntry, ArchivedSummary, ArchivedTranscriptEntry, SessionArchiveManifest,

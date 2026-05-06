@@ -378,6 +378,35 @@ pub struct FileDeliveryRequestRecord {
     pub error: Option<String>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DeliveryTargetRecord {
+    pub target_id: String,
+    pub kind: String,
+    pub address: String,
+    pub scope: String,
+    pub owner_user_id: Option<String>,
+    pub allowed_agent_ids_json: String,
+    pub allowed_session_ids_json: String,
+    pub send_policy_json: String,
+    pub format_policy: String,
+    pub created_at: i64,
+    pub updated_at: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SessionOutputRouteRecord {
+    pub route_id: String,
+    pub session_id: String,
+    pub target_id: String,
+    pub filter_json: String,
+    pub format_policy: String,
+    pub enabled: bool,
+    pub last_delivered_transcript_created_at: Option<i64>,
+    pub last_delivered_transcript_id: Option<String>,
+    pub created_at: i64,
+    pub updated_at: i64,
+}
+
 #[derive(Debug)]
 pub enum RecordConversionError {
     InvalidJobInput(serde_json::Error),

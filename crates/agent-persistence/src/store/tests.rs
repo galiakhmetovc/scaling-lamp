@@ -29,6 +29,7 @@ use std::sync::{Arc, Barrier};
 use std::thread;
 use std::time::Duration;
 
+mod delivery;
 mod telegram;
 mod tool_calls;
 mod trace;
