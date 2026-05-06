@@ -2138,9 +2138,11 @@ where
     where
         F: FnMut(&PersistenceStore) -> Result<T, StoreError>,
     {
-        retry_store_sync(store_retry_attempts(), store_retry_delay(), || {
-            let store = PersistenceStore::open_runtime(&self.app.persistence)?;
-            operation(&store)
+        tokio::task::block_in_place(|| {
+            retry_store_sync(store_retry_attempts(), store_retry_delay(), || {
+                let store = PersistenceStore::open_runtime(&self.app.persistence)?;
+                operation(&store)
+            })
         })
         .map_err(BootstrapError::Store)
     }

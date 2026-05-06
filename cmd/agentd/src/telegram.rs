@@ -48,7 +48,8 @@ pub(crate) fn run(app: &App) -> Result<(), BootstrapError> {
     })
     .map_err(|error| BootstrapError::Stream(std::io::Error::other(error.to_string())))?;
     let worker = TelegramWorker::new(app.clone(), backend, client);
-    let runtime = tokio::runtime::Builder::new_current_thread()
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(2)
         .enable_all()
         .build()
         .map_err(BootstrapError::Stream)?;
