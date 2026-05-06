@@ -15,6 +15,7 @@ pub mod nats;
 pub mod otel;
 pub mod prompting;
 pub mod router_worker;
+pub mod session_worker;
 pub mod store_retry;
 pub mod telegram;
 pub mod trace;
