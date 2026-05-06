@@ -30,6 +30,7 @@ use std::thread;
 use std::time::Duration;
 
 mod delivery;
+mod event_bus;
 mod telegram;
 mod tool_calls;
 mod trace;

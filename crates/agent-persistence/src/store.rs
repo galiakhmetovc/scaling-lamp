@@ -1,6 +1,7 @@
 mod agent_repos;
 mod context_repos;
 mod delivery_repos;
+mod event_repos;
 mod execution_repos;
 mod file_delivery_repos;
 mod inbox_repos;
@@ -8,8 +9,10 @@ mod kv_repos;
 mod mcp_repos;
 mod memory_repos;
 mod payloads;
+mod router_repos;
 mod schema;
 mod session_mission;
+mod task_registry_repos;
 mod telegram_repos;
 mod tool_call_repos;
 mod trace_repos;
@@ -19,16 +22,18 @@ use crate::audit::{AuditLogConfig, DiagnosticEvent};
 use crate::config::AppConfig;
 use crate::records::{
     AgentChainContinuationRecord, AgentProfileRecord, AgentScheduleRecord, ArtifactRecord,
-    ContextOffloadRecord, ContextSummaryRecord, FileDeliveryRequestRecord, JobRecord,
-    McpConnectorRecord, MissionRecord, PlanRecord, RunRecord, SessionInboxEventRecord,
-    SessionRecord, SessionRetentionRecord, ToolCallRecord, TraceLinkRecord, TranscriptRecord,
+    ContextOffloadRecord, ContextSummaryRecord, EventDeliveryRecord, EventOutboxRecord,
+    EventSourceRecord, FileDeliveryRequestRecord, InboundEventRecord, JobRecord,
+    McpConnectorRecord, MissionRecord, PlanRecord, RoutedEventRecord, RouterRuleRecord, RunRecord,
+    SessionInboxEventRecord, SessionRecord, SessionRetentionRecord, TaskRegistryRecord,
+    ToolCallRecord, TraceLinkRecord, TranscriptRecord,
 };
 use crate::repository::{
     AgentRepository, ArtifactRepository, ContextOffloadRepository, ContextSummaryRepository,
-    DeliveryRepository, FileDeliveryRepository, JobRepository, McpRepository, MissionRepository,
-    PlanRepository, RunRepository, SessionInboxRepository, SessionRepository,
-    SessionRetentionRepository, TelegramRepository, ToolCallRepository, TraceRepository,
-    TranscriptRepository,
+    DeliveryRepository, EventRepository, FileDeliveryRepository, JobRepository, McpRepository,
+    MissionRepository, PlanRepository, RouterRepository, RunRepository, SessionInboxRepository,
+    SessionRepository, SessionRetentionRepository, TaskRegistryRepository, TelegramRepository,
+    ToolCallRepository, TraceRepository, TranscriptRepository,
 };
 use agent_runtime::archive::{
     ArchivedArtifactEntry, ArchivedSummary, ArchivedTranscriptEntry, SessionArchiveManifest,

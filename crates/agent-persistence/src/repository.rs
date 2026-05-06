@@ -1,9 +1,11 @@
 use crate::records::{
     AgentChainContinuationRecord, AgentProfileRecord, AgentScheduleRecord, ArtifactRecord,
-    ContextOffloadRecord, ContextSummaryRecord, DeliveryTargetRecord, FileDeliveryRequestRecord,
-    JobRecord, KnowledgeSearchDocRecord, KnowledgeSourceRecord, KvEntryRecord, McpConnectorRecord,
-    MissionRecord, PlanRecord, RunRecord, SessionInboxEventRecord, SessionOutputRouteRecord,
-    SessionRecord, SessionRetentionRecord, SessionSearchDocRecord, TelegramChatBindingRecord,
+    ContextOffloadRecord, ContextSummaryRecord, DeliveryTargetRecord, EventDeliveryRecord,
+    EventOutboxRecord, EventSourceRecord, FileDeliveryRequestRecord, InboundEventRecord, JobRecord,
+    KnowledgeSearchDocRecord, KnowledgeSourceRecord, KvEntryRecord, McpConnectorRecord,
+    MissionRecord, PlanRecord, RoutedEventRecord, RouterRuleRecord, RunRecord,
+    SessionInboxEventRecord, SessionOutputRouteRecord, SessionRecord, SessionRetentionRecord,
+    SessionSearchDocRecord, TaskRegistryRecord, TelegramChatBindingRecord,
     TelegramChatStatusRecord, TelegramUpdateCursorRecord, TelegramUserPairingRecord,
     ToolCallRecord, TraceLinkRecord, TranscriptRecord,
 };
@@ -181,6 +183,49 @@ pub trait DeliveryRepository {
         &self,
         target_kind: &str,
     ) -> Result<Vec<SessionOutputRouteRecord>, StoreError>;
+}
+
+pub trait EventRepository {
+    fn put_event_source(&self, record: &EventSourceRecord) -> Result<(), StoreError>;
+    fn get_event_source(&self, source_id: &str) -> Result<Option<EventSourceRecord>, StoreError>;
+    fn put_inbound_event(
+        &self,
+        record: &InboundEventRecord,
+    ) -> Result<InboundEventRecord, StoreError>;
+    fn get_inbound_event(&self, event_id: &str) -> Result<Option<InboundEventRecord>, StoreError>;
+    fn put_routed_event(&self, record: &RoutedEventRecord) -> Result<(), StoreError>;
+    fn get_routed_event(
+        &self,
+        routed_event_id: &str,
+    ) -> Result<Option<RoutedEventRecord>, StoreError>;
+    fn put_event_outbox(&self, record: &EventOutboxRecord) -> Result<(), StoreError>;
+    fn get_event_outbox(&self, outbox_id: &str) -> Result<Option<EventOutboxRecord>, StoreError>;
+    fn claim_pending_event_outbox(
+        &self,
+        limit: i64,
+        now: i64,
+    ) -> Result<Vec<EventOutboxRecord>, StoreError>;
+    fn mark_event_outbox_published(
+        &self,
+        outbox_id: &str,
+        published_at: i64,
+    ) -> Result<(), StoreError>;
+    fn put_event_delivery(&self, record: &EventDeliveryRecord) -> Result<(), StoreError>;
+    fn get_event_delivery(
+        &self,
+        delivery_event_id: &str,
+    ) -> Result<Option<EventDeliveryRecord>, StoreError>;
+}
+
+pub trait RouterRepository {
+    fn put_router_rule(&self, record: &RouterRuleRecord) -> Result<(), StoreError>;
+    fn get_router_rule(&self, rule_id: &str) -> Result<Option<RouterRuleRecord>, StoreError>;
+    fn list_enabled_router_rules(&self) -> Result<Vec<RouterRuleRecord>, StoreError>;
+}
+
+pub trait TaskRegistryRepository {
+    fn put_task_registry(&self, record: &TaskRegistryRecord) -> Result<(), StoreError>;
+    fn get_task_registry(&self, task_id: &str) -> Result<Option<TaskRegistryRecord>, StoreError>;
 }
 
 pub trait AgentRepository {

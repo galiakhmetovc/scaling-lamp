@@ -7,26 +7,29 @@ pub mod store;
 
 pub use config::{
     A2APeerConfig, AppConfig, BrowserConfig, BrowserlessConfig, ConfigEnv, ConfigError,
-    DaemonConfig, DatabaseConfig, KnowledgeConfig, KnowledgeSourcePathConfig,
+    DaemonConfig, DatabaseConfig, EventBusConfig, KnowledgeConfig, KnowledgeSourcePathConfig,
     McpConnectorSeedConfig, Mem0Config, MemoryCuratorConfig, MemoryRecallConfig,
     RuntimeLimitsConfig, RuntimeTimingConfig, TelegramConfig, WorkspaceConfig,
     normalize_absolute_path, redacted_database_url, validate_workspace_root_path,
 };
 pub use records::{
     AgentChainContinuationRecord, AgentProfileRecord, AgentScheduleRecord, ArtifactRecord,
-    ContextOffloadRecord, ContextSummaryRecord, DeliveryTargetRecord, FileDeliveryRequestRecord,
-    JobRecord, KnowledgeSearchDocRecord, KnowledgeSourceRecord, KvEntryRecord, McpConnectorRecord,
-    MissionRecord, PlanRecord, RecordConversionError, RunRecord, SessionInboxEventRecord,
-    SessionOutputRouteRecord, SessionRecord, SessionRetentionRecord, SessionSearchDocRecord,
-    TelegramChatBindingRecord, TelegramChatStatusRecord, TelegramUpdateCursorRecord,
-    TelegramUserPairingRecord, ToolCallRecord, TraceLinkRecord, TranscriptRecord,
+    ContextOffloadRecord, ContextSummaryRecord, DeliveryTargetRecord, EventDeliveryRecord,
+    EventOutboxRecord, EventSourceRecord, FileDeliveryRequestRecord, InboundEventRecord, JobRecord,
+    KnowledgeSearchDocRecord, KnowledgeSourceRecord, KvEntryRecord, McpConnectorRecord,
+    MissionRecord, PlanRecord, RecordConversionError, RoutedEventRecord, RouterRuleRecord,
+    RunRecord, SessionInboxEventRecord, SessionOutputRouteRecord, SessionRecord,
+    SessionRetentionRecord, SessionSearchDocRecord, TaskRegistryRecord, TelegramChatBindingRecord,
+    TelegramChatStatusRecord, TelegramUpdateCursorRecord, TelegramUserPairingRecord,
+    ToolCallRecord, TraceLinkRecord, TranscriptRecord,
 };
 pub use repository::{
     AgentRepository, ArtifactRepository, ContextOffloadRepository, ContextSummaryRepository,
-    DeliveryRepository, FileDeliveryRepository, JobRepository, KnowledgeRepository, KvRepository,
-    McpRepository, MissionRepository, PlanRepository, RunRepository, RunSummaryRollup,
-    SessionActiveJobCounts, SessionInboxRepository, SessionRepository, SessionRetentionRepository,
-    SessionSearchRepository, TelegramRepository, ToolCallRepository, TraceRepository,
+    DeliveryRepository, EventRepository, FileDeliveryRepository, JobRepository,
+    KnowledgeRepository, KvRepository, McpRepository, MissionRepository, PlanRepository,
+    RouterRepository, RunRepository, RunSummaryRollup, SessionActiveJobCounts,
+    SessionInboxRepository, SessionRepository, SessionRetentionRepository, SessionSearchRepository,
+    TaskRegistryRepository, TelegramRepository, ToolCallRepository, TraceRepository,
     TranscriptRepository, TranscriptSessionStats,
 };
 pub use store::{ExecutionStateSnapshot, PersistenceStore, StoreError, StoreLayout};

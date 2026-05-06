@@ -363,6 +363,111 @@ pub(super) fn bootstrap_schema(client: &mut Client) -> Result<(), StoreError> {
             updated_at BIGINT NOT NULL
         );
 
+        CREATE TABLE IF NOT EXISTS event_sources (
+            source_id TEXT PRIMARY KEY,
+            kind TEXT NOT NULL,
+            address TEXT NOT NULL,
+            display_name TEXT,
+            owner_user_id TEXT,
+            auth_policy_json TEXT NOT NULL DEFAULT '{}',
+            default_route_policy_json TEXT NOT NULL DEFAULT '{}',
+            enabled BOOLEAN NOT NULL DEFAULT TRUE,
+            created_at BIGINT NOT NULL,
+            updated_at BIGINT NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS router_rules (
+            rule_id TEXT PRIMARY KEY,
+            priority BIGINT NOT NULL,
+            enabled BOOLEAN NOT NULL DEFAULT TRUE,
+            source_filter_json TEXT NOT NULL DEFAULT '{}',
+            operator_filter_json TEXT NOT NULL DEFAULT '{}',
+            condition_json TEXT NOT NULL DEFAULT '{}',
+            route_policy_json TEXT NOT NULL,
+            created_at BIGINT NOT NULL,
+            updated_at BIGINT NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS inbound_events (
+            event_id TEXT PRIMARY KEY,
+            dedupe_key TEXT NOT NULL UNIQUE,
+            source_kind TEXT NOT NULL,
+            source_id TEXT NOT NULL,
+            operator_id TEXT,
+            payload_json TEXT NOT NULL,
+            metadata_json TEXT NOT NULL DEFAULT '{}',
+            status TEXT NOT NULL,
+            received_at BIGINT NOT NULL,
+            published_at BIGINT,
+            error TEXT
+        );
+
+        CREATE TABLE IF NOT EXISTS routed_events (
+            routed_event_id TEXT PRIMARY KEY,
+            inbound_event_id TEXT NOT NULL REFERENCES inbound_events(event_id) ON DELETE CASCADE,
+            rule_id TEXT REFERENCES router_rules(rule_id) ON DELETE SET NULL,
+            session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+            agent_id TEXT NOT NULL,
+            queue_policy TEXT NOT NULL,
+            priority BIGINT NOT NULL,
+            payload_json TEXT NOT NULL,
+            metadata_json TEXT NOT NULL DEFAULT '{}',
+            status TEXT NOT NULL,
+            routed_at BIGINT NOT NULL,
+            published_at BIGINT,
+            error TEXT
+        );
+
+        CREATE TABLE IF NOT EXISTS event_outbox (
+            outbox_id TEXT PRIMARY KEY,
+            subject TEXT NOT NULL,
+            payload_json TEXT NOT NULL,
+            status TEXT NOT NULL,
+            attempt_count BIGINT NOT NULL DEFAULT 0,
+            next_attempt_at BIGINT NOT NULL,
+            created_at BIGINT NOT NULL,
+            published_at BIGINT,
+            last_error TEXT
+        );
+
+        CREATE TABLE IF NOT EXISTS event_deliveries (
+            delivery_event_id TEXT PRIMARY KEY,
+            source_event_id TEXT NOT NULL,
+            target_id TEXT NOT NULL,
+            status TEXT NOT NULL,
+            attempt_count BIGINT NOT NULL DEFAULT 0,
+            created_at BIGINT NOT NULL,
+            updated_at BIGINT NOT NULL,
+            delivered_at BIGINT,
+            last_error TEXT
+        );
+
+        CREATE TABLE IF NOT EXISTS task_registry (
+            task_id TEXT PRIMARY KEY,
+            kind TEXT NOT NULL,
+            source_session_id TEXT,
+            owner_agent_id TEXT,
+            executor_agent_id TEXT,
+            parent_task_id TEXT,
+            status TEXT NOT NULL,
+            dependency_json TEXT NOT NULL DEFAULT '[]',
+            context_ref_json TEXT NOT NULL DEFAULT '[]',
+            result_ref_json TEXT,
+            retry_policy_json TEXT NOT NULL DEFAULT '{}',
+            attempt_count BIGINT NOT NULL DEFAULT 0,
+            max_attempts BIGINT NOT NULL DEFAULT 1,
+            timeout_at BIGINT,
+            chain_id TEXT,
+            hop_count BIGINT,
+            max_hops BIGINT,
+            trace_id TEXT,
+            created_at BIGINT NOT NULL,
+            updated_at BIGINT NOT NULL,
+            started_at BIGINT,
+            finished_at BIGINT,
+            error TEXT
+        );
+
         CREATE INDEX IF NOT EXISTS idx_missions_session_id ON missions(session_id);
         CREATE INDEX IF NOT EXISTS idx_runs_session_id ON runs(session_id);
         CREATE INDEX IF NOT EXISTS idx_runs_mission_id ON runs(mission_id);
@@ -401,6 +506,15 @@ pub(super) fn bootstrap_schema(client: &mut Client) -> Result<(), StoreError> {
         CREATE INDEX IF NOT EXISTS idx_delivery_targets_kind_scope ON delivery_targets(kind, scope, updated_at DESC);
         CREATE INDEX IF NOT EXISTS idx_session_output_routes_session_enabled ON session_output_routes(session_id, enabled, updated_at DESC);
         CREATE INDEX IF NOT EXISTS idx_session_output_routes_target_id ON session_output_routes(target_id);
+        CREATE INDEX IF NOT EXISTS idx_event_sources_kind_enabled ON event_sources(kind, enabled, updated_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_router_rules_enabled_priority ON router_rules(enabled, priority ASC, updated_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_inbound_events_source_received_at ON inbound_events(source_kind, source_id, received_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_inbound_events_status_received_at ON inbound_events(status, received_at);
+        CREATE INDEX IF NOT EXISTS idx_routed_events_session_status ON routed_events(session_id, status, routed_at);
+        CREATE INDEX IF NOT EXISTS idx_event_outbox_status_next_attempt ON event_outbox(status, next_attempt_at, created_at);
+        CREATE INDEX IF NOT EXISTS idx_event_deliveries_target_status ON event_deliveries(target_id, status, updated_at);
+        CREATE INDEX IF NOT EXISTS idx_task_registry_status_updated_at ON task_registry(status, updated_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_task_registry_chain_id ON task_registry(chain_id);
         ",
     )?;
 
@@ -488,6 +602,13 @@ const REQUIRED_COLUMNS: &[(&str, &str, bool)] = &[
     ("delivery_targets", "target_id", true),
     ("session_output_routes", "route_id", true),
     ("session_output_routes", "session_id", true),
+    ("event_sources", "source_id", true),
+    ("router_rules", "rule_id", true),
+    ("inbound_events", "event_id", true),
+    ("routed_events", "routed_event_id", true),
+    ("event_outbox", "outbox_id", true),
+    ("event_deliveries", "delivery_event_id", true),
+    ("task_registry", "task_id", true),
 ];
 
 fn validate_column(
