@@ -6,6 +6,7 @@ pub mod cli;
 pub mod daemon;
 pub mod diagnostics;
 pub mod event_bus;
+pub mod event_errors;
 pub mod execution;
 pub mod help;
 pub mod http;
