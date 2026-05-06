@@ -1,5 +1,7 @@
 use super::{App, BootstrapError, unix_timestamp};
-use agent_persistence::{DeliveryRepository, DeliveryTargetRecord, SessionOutputRouteRecord};
+use agent_persistence::{
+    DeliveryRepository, DeliveryTargetRecord, SessionOutputRouteRecord, TranscriptRepository,
+};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -138,6 +140,7 @@ impl App {
                 id: target_id.to_string(),
             });
         }
+        let latest_transcript = store.get_latest_transcript_for_session(session_id)?;
         let now = unix_timestamp()?;
         let route_id = options
             .route_id
@@ -153,8 +156,13 @@ impl App {
             filter_json: options.filter_json,
             format_policy: options.format_policy.trim().to_string(),
             enabled: options.enabled,
-            last_delivered_transcript_created_at: None,
-            last_delivered_transcript_id: None,
+            last_delivered_transcript_created_at: latest_transcript
+                .as_ref()
+                .map(|transcript| transcript.created_at)
+                .or(Some(0)),
+            last_delivered_transcript_id: latest_transcript
+                .map(|transcript| transcript.id)
+                .or_else(|| Some(String::new())),
             created_at: now,
             updated_at: now,
         };

@@ -1808,6 +1808,108 @@ fn telegram_worker_registers_current_chat_target_and_attaches_session_output() {
 }
 
 #[test]
+fn telegram_worker_delivers_assistant_transcripts_to_session_output_routes_once() {
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(8)
+        .enable_all()
+        .build()
+        .expect("runtime");
+    let (_temp, app) = telegram_test_app();
+    let session = app
+        .create_session_auto(Some("Server Watcher"))
+        .expect("create session");
+    app.create_delivery_target(
+        "telegram-n9000",
+        agentd::bootstrap::DeliveryTargetCreateOptions {
+            kind: "telegram".to_string(),
+            address: "-9000".to_string(),
+            scope: "group".to_string(),
+            owner_user_id: Some("telegram:777".to_string()),
+            allowed_agent_ids: Vec::new(),
+            allowed_session_ids: Vec::new(),
+            send_policy_json: "null".to_string(),
+            format_policy: "full_text".to_string(),
+        },
+    )
+    .expect("create target");
+    app.attach_session_output_route(
+        &session.id,
+        "telegram-n9000",
+        agentd::bootstrap::SessionOutputRouteCreateOptions {
+            route_id: Some("route-server-watcher-ops".to_string()),
+            filter_json: r#"{"kind":"assistant"}"#.to_string(),
+            format_policy: "summary".to_string(),
+            enabled: true,
+        },
+    )
+    .expect("attach route");
+    app.store()
+        .expect("open store")
+        .put_transcript(&TranscriptRecord {
+            id: "transcript-route-1".to_string(),
+            session_id: session.id.clone(),
+            run_id: None,
+            kind: "assistant".to_string(),
+            content: "Server status: OK".to_string(),
+            created_at: 200,
+        })
+        .expect("put assistant transcript");
+
+    let backend = RecordingTelegramBackend::default();
+    let (api_url, requests, handle) = spawn_routed_telegram_api(|request| {
+        if request.path.ends_with("/GetUpdates") {
+            json_response(r#"{"ok":true,"result":[]}"#)
+        } else {
+            json_response(
+                r#"{"ok":true,"result":{"message_id":220,"date":0,"chat":{"id":-9000,"type":"group"},"text":"delivered"}}"#,
+            )
+        }
+    });
+    let client = TelegramClient::new(TelegramClientConfig {
+        token: "test-token".to_string(),
+        api_url: Some(api_url),
+        poll_request_timeout_seconds: 40,
+    })
+    .expect("telegram client");
+    let worker = TelegramWorker::with_consumer(app.clone(), backend, client, "telegram-test");
+
+    let processed = runtime.block_on(worker.poll_once()).expect("poll once");
+    assert_eq!(processed, 0);
+
+    let route = app
+        .store()
+        .expect("open store")
+        .get_session_output_route("route-server-watcher-ops")
+        .expect("get route")
+        .expect("route exists");
+    assert_eq!(route.last_delivered_transcript_created_at, Some(200));
+    assert_eq!(
+        route.last_delivered_transcript_id.as_deref(),
+        Some("transcript-route-1")
+    );
+
+    let captured = drain_requests_for(&requests, Duration::from_secs(2));
+    let sends = captured
+        .iter()
+        .filter(|request| request.path.ends_with("/SendMessage"))
+        .collect::<Vec<_>>();
+    assert_eq!(sends.len(), 1, "captured requests: {captured:?}");
+    assert!(sends[0].body.contains("\"chat_id\":-9000"));
+    assert!(sends[0].body.contains("Server status"));
+
+    runtime.block_on(worker.poll_once()).expect("second poll");
+    let duplicate_check = drain_requests_for(&requests, Duration::from_millis(500));
+    assert!(
+        duplicate_check
+            .iter()
+            .all(|request| !request.path.ends_with("/SendMessage")),
+        "unexpected duplicate delivery: {duplicate_check:?}"
+    );
+
+    handle.stop().expect("stop fake api");
+}
+
+#[test]
 fn telegram_worker_sends_queued_file_delivery_requests_after_chat_turn() {
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .worker_threads(8)

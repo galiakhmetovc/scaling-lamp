@@ -98,4 +98,13 @@ fn delivery_repository_round_trips_targets_and_session_routes() {
             .len(),
         1
     );
+    assert_eq!(
+        store
+            .list_enabled_session_output_routes_for_target_kind("telegram")
+            .expect("list enabled telegram routes")
+            .into_iter()
+            .map(|route| route.route_id)
+            .collect::<Vec<_>>(),
+        vec!["route-session-monitor-ops-status".to_string()]
+    );
 }

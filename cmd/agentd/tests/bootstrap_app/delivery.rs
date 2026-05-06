@@ -12,6 +12,17 @@ fn app_manages_delivery_targets_and_session_output_routes() {
     let session = app
         .create_session_auto(Some("Server Watcher"))
         .expect("create session");
+    app.store()
+        .expect("open store")
+        .put_transcript(&agent_persistence::TranscriptRecord {
+            id: "transcript-before-route".to_string(),
+            session_id: session.id.clone(),
+            run_id: None,
+            kind: "assistant".to_string(),
+            content: "existing answer".to_string(),
+            created_at: 100,
+        })
+        .expect("put existing transcript");
 
     let target = app
         .create_delivery_target(
@@ -52,6 +63,11 @@ fn app_manages_delivery_targets_and_session_output_routes() {
     assert_eq!(route.target_id, "ops-status");
     assert_eq!(route.format_policy, "summary");
     assert!(route.enabled);
+    assert_eq!(route.last_delivered_transcript_created_at, Some(100));
+    assert_eq!(
+        route.last_delivered_transcript_id.as_deref(),
+        Some("transcript-before-route")
+    );
 
     let targets = app.list_delivery_targets().expect("list targets");
     assert_eq!(targets.len(), 1);

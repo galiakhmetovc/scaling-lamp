@@ -42,11 +42,11 @@ use crate::diagnostics::DiagnosticEventBuilder;
 use crate::execution::{ChatExecutionEvent, ChatTurnExecutionReport};
 use crate::store_retry::{retry_store_sync, store_retry_attempts, store_retry_delay};
 use agent_persistence::{
-    ArtifactRecord, ArtifactRepository, FileDeliveryRepository, FileDeliveryRequestRecord,
-    PersistenceStore, SessionInboxRepository, StoreError, TelegramChatBindingRecord,
-    TelegramChatStatusRecord, TelegramRepository, TelegramUpdateCursorRecord,
-    TelegramUserPairingRecord, TraceRepository, TranscriptRecord, TranscriptRepository,
-    audit::AuditLogConfig,
+    ArtifactRecord, ArtifactRepository, DeliveryRepository, FileDeliveryRepository,
+    FileDeliveryRequestRecord, PersistenceStore, SessionInboxRepository, SessionOutputRouteRecord,
+    StoreError, TelegramChatBindingRecord, TelegramChatStatusRecord, TelegramRepository,
+    TelegramUpdateCursorRecord, TelegramUserPairingRecord, TraceRepository, TranscriptRecord,
+    TranscriptRepository, audit::AuditLogConfig,
 };
 use serde_json::json;
 use std::collections::HashSet;
@@ -2188,6 +2188,45 @@ where
                 )?;
             }
         }
+        self.deliver_pending_session_output_routes().await?;
+        Ok(())
+    }
+
+    async fn deliver_pending_session_output_routes(&self) -> Result<(), BootstrapError> {
+        let routes = self.with_store_retry(|store| {
+            store.list_enabled_session_output_routes_for_target_kind("telegram")
+        })?;
+        for route in routes {
+            let Some(target) =
+                self.with_store_retry(|store| store.get_delivery_target(&route.target_id))?
+            else {
+                continue;
+            };
+            let chat_id = match target.address.parse::<i64>() {
+                Ok(chat_id) => chat_id,
+                Err(error) => {
+                    DiagnosticEventBuilder::new(
+                        &self.app.config,
+                        "error",
+                        "telegram",
+                        "delivery_route.invalid_target",
+                        "telegram delivery route target address is invalid",
+                    )
+                    .error(error.to_string())
+                    .field("route_id", route.route_id.as_str())
+                    .field("target_id", route.target_id.as_str())
+                    .field("address", target.address.as_str())
+                    .emit(&self.audit);
+                    continue;
+                }
+            };
+            let pending = self.pending_assistant_transcripts_for_output_route(&route)?;
+            for transcript in pending {
+                self.send_model_text_chunks(chat_id, &transcript.content)
+                    .await?;
+                self.mark_output_route_delivered_to_transcript(&route.route_id, &transcript)?;
+            }
+        }
         Ok(())
     }
 
@@ -2214,6 +2253,60 @@ where
             .filter(|transcript| transcript.kind == "assistant")
             .filter(|transcript| transcript_is_after_binding_cursor(transcript, binding))
             .collect())
+    }
+
+    fn pending_assistant_transcripts_for_output_route(
+        &self,
+        route: &SessionOutputRouteRecord,
+    ) -> Result<Vec<TranscriptRecord>, BootstrapError> {
+        if route.last_delivered_transcript_created_at.is_none()
+            && route.last_delivered_transcript_id.is_none()
+        {
+            self.update_output_route_delivery_cursor(
+                &route.route_id,
+                self.latest_delivery_cursor(&route.session_id)?,
+            )?;
+            return Ok(Vec::new());
+        }
+
+        let transcripts =
+            self.with_store_retry(|store| store.list_transcripts_for_session(&route.session_id))?;
+        Ok(transcripts
+            .into_iter()
+            .filter(|transcript| transcript.kind == "assistant")
+            .filter(|transcript| transcript_is_after_output_route_cursor(transcript, route))
+            .collect())
+    }
+
+    fn mark_output_route_delivered_to_transcript(
+        &self,
+        route_id: &str,
+        transcript: &TranscriptRecord,
+    ) -> Result<(), BootstrapError> {
+        self.update_output_route_delivery_cursor(
+            route_id,
+            DeliveryCursor {
+                created_at: Some(transcript.created_at),
+                transcript_id: Some(transcript.id.clone()),
+            },
+        )
+    }
+
+    fn update_output_route_delivery_cursor(
+        &self,
+        route_id: &str,
+        cursor: DeliveryCursor,
+    ) -> Result<(), BootstrapError> {
+        let Some(mut route) =
+            self.with_store_retry(|store| store.get_session_output_route(route_id))?
+        else {
+            return Ok(());
+        };
+        route.last_delivered_transcript_created_at = cursor.created_at.or(Some(0));
+        route.last_delivered_transcript_id = cursor.transcript_id.or_else(|| Some(String::new()));
+        route.updated_at = unix_timestamp()?;
+        self.with_store_retry(|store| store.put_session_output_route(&route))?;
+        Ok(())
     }
 
     fn create_or_refresh_pairing(
@@ -3251,6 +3344,16 @@ fn render_session_output_routes(session_id: &str, routes: &[SessionOutputRouteVi
         ));
     }
     lines.join("\n")
+}
+
+fn transcript_is_after_output_route_cursor(
+    transcript: &TranscriptRecord,
+    route: &SessionOutputRouteRecord,
+) -> bool {
+    let cursor_created_at = route.last_delivered_transcript_created_at.unwrap_or(0);
+    let cursor_id = route.last_delivered_transcript_id.as_deref().unwrap_or("");
+    transcript.created_at > cursor_created_at
+        || (transcript.created_at == cursor_created_at && transcript.id.as_str() > cursor_id)
 }
 
 fn map_client_error(error: TelegramClientError) -> BootstrapError {

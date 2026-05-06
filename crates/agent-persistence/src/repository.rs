@@ -177,6 +177,10 @@ pub trait DeliveryRepository {
         &self,
         session_id: &str,
     ) -> Result<Vec<SessionOutputRouteRecord>, StoreError>;
+    fn list_enabled_session_output_routes_for_target_kind(
+        &self,
+        target_kind: &str,
+    ) -> Result<Vec<SessionOutputRouteRecord>, StoreError>;
 }
 
 pub trait AgentRepository {

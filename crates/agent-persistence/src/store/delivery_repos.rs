@@ -149,6 +149,23 @@ impl DeliveryRepository for PersistenceStore {
             &[&session_id],
         )
     }
+
+    fn list_enabled_session_output_routes_for_target_kind(
+        &self,
+        target_kind: &str,
+    ) -> Result<Vec<SessionOutputRouteRecord>, StoreError> {
+        validate_non_empty("delivery target kind", target_kind)?;
+        self.query_session_output_routes(
+            "SELECT r.route_id, r.session_id, r.target_id, r.filter_json, r.format_policy, r.enabled,
+                    r.last_delivered_transcript_created_at, r.last_delivered_transcript_id,
+                    r.created_at, r.updated_at
+             FROM session_output_routes r
+             JOIN delivery_targets t ON t.target_id = r.target_id
+             WHERE r.enabled = TRUE AND t.kind = $1
+             ORDER BY r.updated_at ASC, r.route_id ASC",
+            &[&target_kind],
+        )
+    }
 }
 
 impl PersistenceStore {
