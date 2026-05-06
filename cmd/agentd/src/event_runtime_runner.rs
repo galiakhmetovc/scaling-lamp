@@ -18,7 +18,8 @@ use teloxide::types::Update;
 
 const TELEGRAM_WEBHOOK_CONSUMER: &str = "teamd-telegram-webhook";
 const OUTBOX_PUBLISH_BATCH: i64 = 64;
-const OUTBOX_PUBLISH_INTERVAL: Duration = Duration::from_millis(100);
+const OUTBOX_ACTIVE_PUBLISH_INTERVAL: Duration = Duration::from_millis(50);
+const OUTBOX_IDLE_PUBLISH_INTERVAL: Duration = Duration::from_secs(1);
 const CONSUMER_IDLE_TIMEOUT: Duration = Duration::from_millis(500);
 
 pub fn spawn_event_runtime(app: App, shutdown: Arc<AtomicBool>) -> Option<JoinHandle<()>> {
@@ -106,8 +107,13 @@ async fn outbox_publisher_loop(
     shutdown: Arc<AtomicBool>,
 ) -> Result<(), String> {
     while !shutdown.load(Ordering::Relaxed) {
-        publish_pending_outbox_once(&app, &bus, unix_timestamp()).await?;
-        tokio::time::sleep(OUTBOX_PUBLISH_INTERVAL).await;
+        let published_count = publish_pending_outbox_once(&app, &bus, unix_timestamp()).await?;
+        let sleep_for = if published_count == 0 {
+            OUTBOX_IDLE_PUBLISH_INTERVAL
+        } else {
+            OUTBOX_ACTIVE_PUBLISH_INTERVAL
+        };
+        tokio::time::sleep(sleep_for).await;
     }
     Ok(())
 }
@@ -116,11 +122,12 @@ async fn publish_pending_outbox_once(
     app: &App,
     bus: &NatsEventBus,
     now: i64,
-) -> Result<(), String> {
+) -> Result<usize, String> {
     let outboxes = with_store(app, move |store| {
         store.claim_pending_event_outbox(OUTBOX_PUBLISH_BATCH, now)
     })
     .await?;
+    let claimed_count = outboxes.len();
     for outbox in outboxes {
         match bus
             .publish_json(&outbox.subject, &outbox.payload_json)
@@ -144,7 +151,7 @@ async fn publish_pending_outbox_once(
             }
         }
     }
-    Ok(())
+    Ok(claimed_count)
 }
 
 fn retry_delay_seconds(attempt_count: i64) -> i64 {
