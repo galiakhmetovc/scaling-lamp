@@ -4,6 +4,7 @@ pub mod agents;
 pub mod bootstrap;
 pub mod cli;
 pub mod daemon;
+pub mod delivery_worker;
 pub mod diagnostics;
 pub mod event_bus;
 pub mod event_errors;
