@@ -38,6 +38,7 @@ use sha2::{Digest, Sha256};
 use std::error::Error;
 use std::fmt;
 use std::fs;
+use std::ops::{Deref, DerefMut};
 use std::path::{Path, PathBuf};
 use std::process;
 use std::str::FromStr;
@@ -116,7 +117,46 @@ pub enum StoreError {
 
 pub struct PersistenceStore {
     layout: StoreLayout,
-    client: Mutex<Client>,
+    client: Mutex<Option<Client>>,
+}
+
+pub(crate) struct StoreClientGuard<'a> {
+    guard: MutexGuard<'a, Option<Client>>,
+}
+
+impl Deref for StoreClientGuard<'_> {
+    type Target = Client;
+
+    fn deref(&self) -> &Self::Target {
+        self.guard
+            .as_ref()
+            .expect("store client guard contains client")
+    }
+}
+
+impl DerefMut for StoreClientGuard<'_> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        self.guard
+            .as_mut()
+            .expect("store client guard contains client")
+    }
+}
+
+impl Drop for PersistenceStore {
+    fn drop(&mut self) {
+        let Ok(mut guard) = self.client.lock() else {
+            return;
+        };
+        let Some(client) = guard.take() else {
+            return;
+        };
+        if let Ok(handle) = std::thread::Builder::new()
+            .name("teamd-postgres-drop".to_string())
+            .spawn(move || drop(client))
+        {
+            let _ = handle.join();
+        }
+    }
 }
 
 impl fmt::Debug for PersistenceStore {
@@ -291,7 +331,7 @@ impl PersistenceStore {
 
         let store = Self {
             layout: scaffold.stores.clone(),
-            client: Mutex::new(client),
+            client: Mutex::new(Some(client)),
         };
         if mode == OpenMode::BootstrapAndReconcile {
             store.reconcile_orphan_payloads()?;
@@ -804,13 +844,19 @@ impl PersistenceStore {
             .client
             .lock()
             .map_err(|_| StoreError::StoreLockPoisoned)?;
-        operation(&mut client)
+        let client = client.as_mut().ok_or(StoreError::StoreLockPoisoned)?;
+        operation(client)
     }
 
-    pub(crate) fn client(&self) -> Result<MutexGuard<'_, Client>, StoreError> {
-        self.client
+    pub(crate) fn client(&self) -> Result<StoreClientGuard<'_>, StoreError> {
+        let guard = self
+            .client
             .lock()
-            .map_err(|_| StoreError::StoreLockPoisoned)
+            .map_err(|_| StoreError::StoreLockPoisoned)?;
+        if guard.is_none() {
+            return Err(StoreError::StoreLockPoisoned);
+        }
+        Ok(StoreClientGuard { guard })
     }
 }
 
