@@ -9,6 +9,7 @@ pub(crate) mod progress;
 pub(crate) mod queue;
 pub mod render;
 pub mod router;
+pub mod webhook;
 
 use crate::bootstrap::{App, BootstrapError};
 use crate::http::client::{DaemonConnectOptions, connect_or_autospawn_detailed};

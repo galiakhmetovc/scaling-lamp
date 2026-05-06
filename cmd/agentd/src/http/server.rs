@@ -4,6 +4,7 @@ mod chat;
 mod mcp;
 mod sessions;
 mod status;
+mod telegram;
 
 use crate::bootstrap::{App, BootstrapError};
 use crate::http::types::{DaemonStopResponse, ErrorResponse};
@@ -42,6 +43,10 @@ pub fn serve(app: App, shutdown: Arc<AtomicBool>) -> std::io::Result<()> {
 }
 
 fn handle_request(app: &App, shutdown: &Arc<AtomicBool>, request: Request) -> std::io::Result<()> {
+    if telegram::is_telegram_webhook_request(&request) {
+        return telegram::handle_telegram_webhook(app, request);
+    }
+
     if !is_authorized(app, &request) {
         return respond_json(
             request,
@@ -169,7 +174,11 @@ fn is_authorized(app: &App, request: &Request) -> bool {
     })
 }
 
-fn respond_json<T>(request: Request, status: StatusCode, payload: &T) -> std::io::Result<()>
+pub(super) fn respond_json<T>(
+    request: Request,
+    status: StatusCode,
+    payload: &T,
+) -> std::io::Result<()>
 where
     T: Serialize,
 {
