@@ -428,9 +428,7 @@ where
                     return Ok(());
                 }
                 let selected = self
-                    .app
-                    .store()?
-                    .get_telegram_chat_binding(chat_id)?
+                    .with_store_retry(|store| store.get_telegram_chat_binding(chat_id))?
                     .and_then(|record| record.selected_session_id);
                 let summaries = self.list_session_summaries().await?;
                 self.send_text_chunks(
@@ -641,9 +639,7 @@ where
                     return Ok(());
                 }
                 let selected = self
-                    .app
-                    .store()?
-                    .get_telegram_chat_binding(chat_id)?
+                    .with_store_retry(|store| store.get_telegram_chat_binding(chat_id))?
                     .and_then(|record| record.selected_session_id);
                 let summaries = self.list_session_summaries().await?;
                 self.send_text_chunks(
@@ -1698,9 +1694,7 @@ where
         now: i64,
     ) -> Result<SessionSummary, BootstrapError> {
         let selected_session_id = self
-            .app
-            .store()?
-            .get_telegram_chat_binding(chat_id)?
+            .with_store_retry(|store| store.get_telegram_chat_binding(chat_id))?
             .and_then(|record| record.selected_session_id);
         if let Some(session_id) = selected_session_id {
             self.ensure_chat_delivery_cursor_initialized(chat_id, session_id.as_str())?;
@@ -1801,9 +1795,7 @@ where
         now: i64,
     ) -> Result<SessionSummary, BootstrapError> {
         let selected_session_id = self
-            .app
-            .store()?
-            .get_telegram_chat_binding(chat_id)?
+            .with_store_retry(|store| store.get_telegram_chat_binding(chat_id))?
             .and_then(|record| record.selected_session_id);
         if let Some(session_id) = selected_session_id {
             self.ensure_chat_delivery_cursor_initialized(chat_id, session_id.as_str())?;
