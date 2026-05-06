@@ -273,6 +273,7 @@ pub trait RunRepository {
     fn put_run(&self, record: &RunRecord) -> Result<(), StoreError>;
     fn get_run(&self, id: &str) -> Result<Option<RunRecord>, StoreError>;
     fn list_runs(&self) -> Result<Vec<RunRecord>, StoreError>;
+    fn session_has_active_run(&self, session_id: &str) -> Result<bool, StoreError>;
     fn list_runs_for_session(&self, session_id: &str) -> Result<Vec<RunRecord>, StoreError>;
     fn list_recent_runs_for_session(
         &self,

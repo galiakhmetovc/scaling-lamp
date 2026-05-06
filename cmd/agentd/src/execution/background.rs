@@ -6,7 +6,6 @@ use agent_runtime::agent::{
 use agent_runtime::delegation::DelegateResultPackage;
 use agent_runtime::inbox::SessionInboxEvent;
 use agent_runtime::mission::{JobExecutionInput, JobKind, JobStatus};
-use agent_runtime::run::RunStatus;
 use agent_runtime::session::{Session, TranscriptEntry};
 use std::collections::BTreeSet;
 
@@ -895,25 +894,9 @@ impl ExecutionService {
         store: &PersistenceStore,
         session_id: &str,
     ) -> Result<bool, ExecutionError> {
-        Ok(store
-            .list_runs()
-            .map_err(ExecutionError::Store)?
-            .into_iter()
-            .map(RunSnapshot::try_from)
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(ExecutionError::RecordConversion)?
-            .into_iter()
-            .any(|run| {
-                run.session_id == session_id
-                    && matches!(
-                        run.status,
-                        RunStatus::Queued
-                            | RunStatus::Running
-                            | RunStatus::WaitingApproval
-                            | RunStatus::WaitingProcess
-                            | RunStatus::Resuming
-                    )
-            }))
+        store
+            .session_has_active_run(session_id)
+            .map_err(ExecutionError::Store)
     }
 
     fn cancel_background_job(
