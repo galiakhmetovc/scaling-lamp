@@ -173,6 +173,7 @@ impl TelegramBackend for RecordingTelegramBackend {
         let model = patch.model.clone();
         let reasoning_visible = patch.reasoning_visible;
         let think_level = patch.think_level.clone();
+        let title = patch.title.clone();
         {
             let summary = state.session_lookup.get_mut(session_id).ok_or_else(|| {
                 BootstrapError::MissingRecord {
@@ -192,6 +193,9 @@ impl TelegramBackend for RecordingTelegramBackend {
             if let Some(think_level) = think_level.clone() {
                 summary.think_level = think_level;
             }
+            if let Some(title) = title.clone() {
+                summary.title = title;
+            }
         }
         if let Some(listed) = state
             .listed_sessions
@@ -209,6 +213,9 @@ impl TelegramBackend for RecordingTelegramBackend {
             }
             if let Some(think_level) = think_level {
                 listed.think_level = think_level;
+            }
+            if let Some(title) = title {
+                listed.title = title;
             }
         }
         Ok(state
@@ -823,42 +830,50 @@ fn telegram_worker_routes_session_operator_commands_to_backend() {
         json_response(
             r#"{"ok":true,"result":[
                 {"update_id":140,"message":{"message_id":109,"date":0,"chat":{"id":42,"type":"private"},"from":{"id":777,"is_bot":false,"first_name":"Alice","username":"alice"},"text":"/status"}},
-                {"update_id":141,"message":{"message_id":110,"date":0,"chat":{"id":42,"type":"private"},"from":{"id":777,"is_bot":false,"first_name":"Alice","username":"alice"},"text":"/jobs"}},
-                {"update_id":142,"message":{"message_id":111,"date":0,"chat":{"id":42,"type":"private"},"from":{"id":777,"is_bot":false,"first_name":"Alice","username":"alice"},"text":"/plan"}},
-                {"update_id":143,"message":{"message_id":112,"date":0,"chat":{"id":42,"type":"private"},"from":{"id":777,"is_bot":false,"first_name":"Alice","username":"alice"},"text":"/stop"}},
-                {"update_id":144,"message":{"message_id":113,"date":0,"chat":{"id":42,"type":"private"},"from":{"id":777,"is_bot":false,"first_name":"Alice","username":"alice"},"text":"/cancel"}},
-                {"update_id":145,"message":{"message_id":114,"date":0,"chat":{"id":42,"type":"private"},"from":{"id":777,"is_bot":false,"first_name":"Alice","username":"alice"},"text":"/skills"}},
-                {"update_id":146,"message":{"message_id":115,"date":0,"chat":{"id":42,"type":"private"},"from":{"id":777,"is_bot":false,"first_name":"Alice","username":"alice"},"text":"/enable silverbullet-space"}},
-                {"update_id":147,"message":{"message_id":116,"date":0,"chat":{"id":42,"type":"private"},"from":{"id":777,"is_bot":false,"first_name":"Alice","username":"alice"},"text":"/disable silverbullet-space"}},
-                {"update_id":148,"message":{"message_id":117,"date":0,"chat":{"id":42,"type":"private"},"from":{"id":777,"is_bot":false,"first_name":"Alice","username":"alice"},"text":"/compact"}}
+                {"update_id":141,"message":{"message_id":110,"date":0,"chat":{"id":42,"type":"private"},"from":{"id":777,"is_bot":false,"first_name":"Alice","username":"alice"},"text":"/lifecycle"}},
+                {"update_id":142,"message":{"message_id":111,"date":0,"chat":{"id":42,"type":"private"},"from":{"id":777,"is_bot":false,"first_name":"Alice","username":"alice"},"text":"/rename Renamed Operator"}},
+                {"update_id":143,"message":{"message_id":112,"date":0,"chat":{"id":42,"type":"private"},"from":{"id":777,"is_bot":false,"first_name":"Alice","username":"alice"},"text":"/jobs"}},
+                {"update_id":144,"message":{"message_id":113,"date":0,"chat":{"id":42,"type":"private"},"from":{"id":777,"is_bot":false,"first_name":"Alice","username":"alice"},"text":"/plan"}},
+                {"update_id":145,"message":{"message_id":114,"date":0,"chat":{"id":42,"type":"private"},"from":{"id":777,"is_bot":false,"first_name":"Alice","username":"alice"},"text":"/stop"}},
+                {"update_id":146,"message":{"message_id":115,"date":0,"chat":{"id":42,"type":"private"},"from":{"id":777,"is_bot":false,"first_name":"Alice","username":"alice"},"text":"/cancel"}},
+                {"update_id":147,"message":{"message_id":116,"date":0,"chat":{"id":42,"type":"private"},"from":{"id":777,"is_bot":false,"first_name":"Alice","username":"alice"},"text":"/skills"}},
+                {"update_id":148,"message":{"message_id":117,"date":0,"chat":{"id":42,"type":"private"},"from":{"id":777,"is_bot":false,"first_name":"Alice","username":"alice"},"text":"/enable silverbullet-space"}},
+                {"update_id":149,"message":{"message_id":118,"date":0,"chat":{"id":42,"type":"private"},"from":{"id":777,"is_bot":false,"first_name":"Alice","username":"alice"},"text":"/disable silverbullet-space"}},
+                {"update_id":150,"message":{"message_id":119,"date":0,"chat":{"id":42,"type":"private"},"from":{"id":777,"is_bot":false,"first_name":"Alice","username":"alice"},"text":"/compact"}}
             ]}"#,
         ),
         json_response(
-            r#"{"ok":true,"result":{"message_id":117,"date":0,"chat":{"id":42,"type":"private"},"text":"status"}}"#,
+            r#"{"ok":true,"result":{"message_id":120,"date":0,"chat":{"id":42,"type":"private"},"text":"status"}}"#,
         ),
         json_response(
-            r#"{"ok":true,"result":{"message_id":118,"date":0,"chat":{"id":42,"type":"private"},"text":"jobs"}}"#,
+            r#"{"ok":true,"result":{"message_id":121,"date":0,"chat":{"id":42,"type":"private"},"text":"lifecycle"}}"#,
         ),
         json_response(
-            r#"{"ok":true,"result":{"message_id":119,"date":0,"chat":{"id":42,"type":"private"},"text":"plan"}}"#,
+            r#"{"ok":true,"result":{"message_id":122,"date":0,"chat":{"id":42,"type":"private"},"text":"rename"}}"#,
         ),
         json_response(
-            r#"{"ok":true,"result":{"message_id":120,"date":0,"chat":{"id":42,"type":"private"},"text":"stop"}}"#,
+            r#"{"ok":true,"result":{"message_id":123,"date":0,"chat":{"id":42,"type":"private"},"text":"jobs"}}"#,
         ),
         json_response(
-            r#"{"ok":true,"result":{"message_id":121,"date":0,"chat":{"id":42,"type":"private"},"text":"cancel"}}"#,
+            r#"{"ok":true,"result":{"message_id":124,"date":0,"chat":{"id":42,"type":"private"},"text":"plan"}}"#,
         ),
         json_response(
-            r#"{"ok":true,"result":{"message_id":122,"date":0,"chat":{"id":42,"type":"private"},"text":"skills"}}"#,
+            r#"{"ok":true,"result":{"message_id":125,"date":0,"chat":{"id":42,"type":"private"},"text":"stop"}}"#,
         ),
         json_response(
-            r#"{"ok":true,"result":{"message_id":123,"date":0,"chat":{"id":42,"type":"private"},"text":"enable"}}"#,
+            r#"{"ok":true,"result":{"message_id":126,"date":0,"chat":{"id":42,"type":"private"},"text":"cancel"}}"#,
         ),
         json_response(
-            r#"{"ok":true,"result":{"message_id":124,"date":0,"chat":{"id":42,"type":"private"},"text":"disable"}}"#,
+            r#"{"ok":true,"result":{"message_id":127,"date":0,"chat":{"id":42,"type":"private"},"text":"skills"}}"#,
         ),
         json_response(
-            r#"{"ok":true,"result":{"message_id":125,"date":0,"chat":{"id":42,"type":"private"},"text":"compact"}}"#,
+            r#"{"ok":true,"result":{"message_id":128,"date":0,"chat":{"id":42,"type":"private"},"text":"enable"}}"#,
+        ),
+        json_response(
+            r#"{"ok":true,"result":{"message_id":129,"date":0,"chat":{"id":42,"type":"private"},"text":"disable"}}"#,
+        ),
+        json_response(
+            r#"{"ok":true,"result":{"message_id":130,"date":0,"chat":{"id":42,"type":"private"},"text":"compact"}}"#,
         ),
     ]);
     let client = TelegramClient::new(TelegramClientConfig {
@@ -871,7 +886,7 @@ fn telegram_worker_routes_session_operator_commands_to_backend() {
         TelegramWorker::with_consumer(app.clone(), backend.clone(), client, "telegram-test");
 
     let processed = runtime.block_on(worker.poll_once()).expect("poll once");
-    assert_eq!(processed, 9);
+    assert_eq!(processed, 11);
 
     let state = backend_state.lock().expect("backend state");
     assert_eq!(state.cancelled_active_runs, vec!["session-operator"]);
@@ -891,6 +906,16 @@ fn telegram_worker_routes_session_operator_commands_to_backend() {
         )]
     );
     assert_eq!(state.compacted_sessions, vec!["session-operator"]);
+    assert_eq!(
+        state.updated_preferences,
+        vec![(
+            "session-operator".to_string(),
+            SessionPreferencesPatch {
+                title: Some("Renamed Operator".to_string()),
+                ..SessionPreferencesPatch::default()
+            }
+        )]
+    );
     assert!(state.executed_turns.is_empty());
     drop(state);
 
@@ -903,6 +928,20 @@ fn telegram_worker_routes_session_operator_commands_to_backend() {
     assert!(status.body.contains("Current session"));
     assert!(status.body.contains("Ход"));
     assert!(status.body.contains("lifecycle"));
+    let lifecycle = requests
+        .recv_timeout(Duration::from_secs(2))
+        .expect("captured lifecycle response");
+    assert!(lifecycle.body.contains("Session lifecycle"));
+    assert!(
+        lifecycle
+            .body
+            .contains("no silent cleanup of project directories")
+    );
+    let rename = requests
+        .recv_timeout(Duration::from_secs(2))
+        .expect("captured rename response");
+    assert!(rename.body.contains("Renamed session"));
+    assert!(rename.body.contains("Renamed Operator"));
     let jobs = requests
         .recv_timeout(Duration::from_secs(2))
         .expect("captured jobs response");

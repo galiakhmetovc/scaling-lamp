@@ -114,7 +114,15 @@ Session — durable business entity. Она не удаляется и не ар
 - не удаляет artifacts/transcripts из-за неактивности без отдельной retention policy;
 - не считает SilverBullet mirror источником истины для plan/tool calls.
 
-Операторский `/status` в Telegram показывает lifecycle summary, чтобы было понятно, что session ждёт явного действия, schedule/job или нового сообщения.
+Операторский `/status` в Telegram показывает короткий lifecycle summary, чтобы было понятно, что session ждёт явного действия, schedule/job или нового сообщения. Для полного объяснения используйте `/lifecycle`: там явно указано, что `/stop` отменяет активный turn, `/cancel` отменяет активную и queued работу session, а project directories не удаляются session maintenance.
+
+Переименование session не создаёт новую session и не переносит workspace. В Telegram это делается командой:
+
+```text
+/rename Новое имя сессии
+```
+
+Runtime меняет только `sessions.title`; `session_id`, transcript, tool ledger, artifacts и workspace остаются теми же.
 
 ## Session artifacts и operator-readable mirror
 

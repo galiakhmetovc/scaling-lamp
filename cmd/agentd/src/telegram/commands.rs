@@ -37,6 +37,10 @@ pub(super) enum ParsedTelegramCommand {
         message: String,
     },
     Status,
+    Lifecycle,
+    Rename {
+        title: String,
+    },
     Jobs,
     Plan,
     Queue {
@@ -136,6 +140,27 @@ fn parse_command_parts(command: &str, args: &str) -> Option<ParsedTelegramComman
             }
         }
         "status" => Some(ParsedTelegramCommand::Status),
+        "lifecycle" => {
+            if args.is_empty() {
+                Some(ParsedTelegramCommand::Lifecycle)
+            } else {
+                Some(ParsedTelegramCommand::InvalidUsage(render_usage(
+                    "lifecycle",
+                    "",
+                )))
+            }
+        }
+        "rename" => {
+            if args.is_empty() {
+                Some(ParsedTelegramCommand::InvalidUsage(render_usage(
+                    "rename", "<title>",
+                )))
+            } else {
+                Some(ParsedTelegramCommand::Rename {
+                    title: args.to_string(),
+                })
+            }
+        }
         "jobs" => Some(ParsedTelegramCommand::Jobs),
         "plan" => Some(ParsedTelegramCommand::Plan),
         "queue" => match parse_queue_action(args) {
@@ -381,6 +406,8 @@ pub(super) fn is_session_operator_command(command: &ParsedTelegramCommand) -> bo
     matches!(
         command,
         ParsedTelegramCommand::Status
+            | ParsedTelegramCommand::Lifecycle
+            | ParsedTelegramCommand::Rename { .. }
             | ParsedTelegramCommand::Jobs
             | ParsedTelegramCommand::Plan
             | ParsedTelegramCommand::Queue { .. }
@@ -423,6 +450,8 @@ pub(super) fn default_command_specs() -> Vec<TelegramCommandSpec> {
         TelegramCommandSpec::new("agents", "List agent profiles"),
         TelegramCommandSpec::new("agentuse", "Set chat default agent"),
         TelegramCommandSpec::new("status", "Show current session status"),
+        TelegramCommandSpec::new("lifecycle", "Show current session lifecycle"),
+        TelegramCommandSpec::new("rename", "Rename current session"),
         TelegramCommandSpec::new("jobs", "Show current session jobs"),
         TelegramCommandSpec::new("plan", "Show current session plan"),
         TelegramCommandSpec::new("queue", "Show or set inbound queue mode"),
@@ -482,6 +511,20 @@ mod tests {
             parse_command("/status"),
             Some(ParsedTelegramCommand::Status)
         );
+        assert_eq!(
+            parse_command("/lifecycle"),
+            Some(ParsedTelegramCommand::Lifecycle)
+        );
+        assert_eq!(
+            parse_command("/rename Leads triage"),
+            Some(ParsedTelegramCommand::Rename {
+                title: "Leads triage".to_string()
+            })
+        );
+        assert!(matches!(
+            parse_command("/rename"),
+            Some(ParsedTelegramCommand::InvalidUsage(_))
+        ));
         assert_eq!(parse_command("/jobs"), Some(ParsedTelegramCommand::Jobs));
         assert_eq!(parse_command("/plan"), Some(ParsedTelegramCommand::Plan));
         assert_eq!(
@@ -577,6 +620,8 @@ mod tests {
 
         for expected in [
             "status",
+            "lifecycle",
+            "rename",
             "jobs",
             "queue",
             "stop",

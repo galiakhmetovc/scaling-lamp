@@ -291,6 +291,8 @@ pub fn render_help_message() -> String {
         "/agents - list agent profiles",
         "/agentuse <agent_id> - set chat default agent for new sessions",
         "/status - show current session status",
+        "/lifecycle - explain current session lifecycle",
+        "/rename <title> - rename current session",
         "/jobs - show current session background jobs",
         "/plan - show current session plan",
         "/queue [reject|queue|coalesce 5s|restart|flush|clear] - control inbound messages during active turns",

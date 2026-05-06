@@ -220,7 +220,9 @@ Pairing:
 
 Основные Telegram-команды после pairing:
 
-- `/status` — состояние выбранной session, активный run, очередь входящих сообщений и lifecycle.
+- `/status` — состояние выбранной session, активный run, очередь входящих сообщений и короткий lifecycle.
+- `/lifecycle` — подробное объяснение жизненного цикла выбранной session: что запускает работу, что делает `/stop`, что делает `/cancel`, когда session удаляется/архивируется.
+- `/rename <title>` — переименовать выбранную session без смены `session_id`, workspace, transcript или artifacts.
 - `/sessions` (`/session`) — 5 последних sessions с датой обновления, количеством сообщений и готовой командой `/use <session_id>`.
 - `/use <session_id>` — выбрать session для этого чата.
 - `/plan` — показать текущий structured plan выбранной session.

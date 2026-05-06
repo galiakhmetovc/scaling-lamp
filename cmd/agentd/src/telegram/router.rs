@@ -542,6 +542,8 @@ where
             | ParsedTelegramCommand::Reasoning { .. }
             | ParsedTelegramCommand::AutoApprove { .. }
             | ParsedTelegramCommand::Compact
+            | ParsedTelegramCommand::Lifecycle
+            | ParsedTelegramCommand::Rename { .. }
             | ParsedTelegramCommand::Skills
             | ParsedTelegramCommand::EnableSkill { .. }
             | ParsedTelegramCommand::DisableSkill { .. } => {
@@ -762,6 +764,8 @@ where
             | ParsedTelegramCommand::Reasoning { .. }
             | ParsedTelegramCommand::AutoApprove { .. }
             | ParsedTelegramCommand::Compact
+            | ParsedTelegramCommand::Lifecycle
+            | ParsedTelegramCommand::Rename { .. }
             | ParsedTelegramCommand::Skills
             | ParsedTelegramCommand::EnableSkill { .. }
             | ParsedTelegramCommand::DisableSkill { .. } => unreachable!(
@@ -943,7 +947,7 @@ where
         match command {
             ParsedTelegramCommand::Status => {
                 let summary = self.session_summary(session_id.clone()).await?;
-                let active_run = self.render_active_run(session_id).await?;
+                let active_run = self.render_active_run(session_id.clone()).await?;
                 let queue_status = self.render_queue_status_async(chat_id).await?;
                 let default_agent = self.chat_default_agent_profile_id(chat_id)?;
                 self.send_text_chunks(
@@ -954,6 +958,33 @@ where
                         &active_run,
                         &queue_status,
                     ),
+                )
+                .await
+            }
+            ParsedTelegramCommand::Lifecycle => {
+                let summary = self.session_summary(session_id.clone()).await?;
+                let active_run = self.render_active_run(session_id).await?;
+                let queue_status = self.render_queue_status_async(chat_id).await?;
+                self.send_text_chunks(
+                    chat_id,
+                    &render_session_lifecycle(&summary, &active_run, &queue_status),
+                )
+                .await
+            }
+            ParsedTelegramCommand::Rename { title } => {
+                let title = normalize_session_title(&title)?;
+                let summary = self
+                    .update_session_preferences(
+                        session_id,
+                        SessionPreferencesPatch {
+                            title: Some(title),
+                            ..SessionPreferencesPatch::default()
+                        },
+                    )
+                    .await?;
+                self.send_text_chunks(
+                    chat_id,
+                    &format!("Renamed session: {} ({})", summary.title, summary.id),
                 )
                 .await
             }
@@ -3005,7 +3036,9 @@ fn render_session_operator_status(
         format!("- messages: {}", summary.message_count),
         format!("- context_tokens: {}", summary.context_tokens),
         format!("- updated_at: {}", summary.updated_at),
-        "- lifecycle: active until explicit archive/delete; background workers process queued turns, schedules, wakeups, and delivery; unfinished plans are not auto-run without queued or scheduled work".to_string(),
+        format!("- lifecycle: {}", session_lifecycle_state(summary)),
+        "- lifecycle_policy: durable until explicit delete/archive policy; no auto-delete by inactivity; projects are not deleted with session maintenance".to_string(),
+        "- lifecycle_details: use /lifecycle".to_string(),
         format!(
             "- background_jobs: {} total, {} running, {} queued",
             summary.background_job_count,
@@ -3021,6 +3054,58 @@ fn render_session_operator_status(
     lines.push(String::new());
     lines.push(active_run.to_string());
     lines.join("\n")
+}
+
+fn render_session_lifecycle(
+    summary: &SessionSummary,
+    active_run: &str,
+    queue_status: &str,
+) -> String {
+    [
+        "Session lifecycle:".to_string(),
+        format!("- title: {}", summary.title),
+        format!("- id: {}", summary.id),
+        format!("- current_state: {}", session_lifecycle_state(summary)),
+        format!("- created_at: {}", summary.created_at),
+        format!("- updated_at: {}", summary.updated_at),
+        "- policy: sessions are durable runtime entities; they are not deleted or archived just because the operator is inactive".to_string(),
+        "- transitions: new/select -> active turn -> idle/waiting; schedules, continue_later, queued jobs, approvals, and inter-agent delivery can wake or update the session".to_string(),
+        "- stop/cancel: /stop cancels the active turn; /cancel cancels active and queued work for this session".to_string(),
+        "- delete/archive: explicit operator action or a configured retention/prune policy; no silent cleanup of project directories".to_string(),
+        "- storage: PostgreSQL rows plus transcript/artifact payload files; delete_session removes session-owned transcripts/artifacts, not workspace projects".to_string(),
+        String::new(),
+        active_run.to_string(),
+        String::new(),
+        queue_status.to_string(),
+    ]
+    .join("\n")
+}
+
+fn session_lifecycle_state(summary: &SessionSummary) -> &'static str {
+    if summary.has_pending_approval {
+        "waiting_for_approval"
+    } else if summary.running_background_job_count > 0 {
+        "running_background_work"
+    } else if summary.queued_background_job_count > 0 {
+        "queued_background_work"
+    } else {
+        "idle_waiting_for_user_or_schedule"
+    }
+}
+
+fn normalize_session_title(title: &str) -> Result<String, BootstrapError> {
+    let title = title.trim();
+    if title.is_empty() {
+        return Err(BootstrapError::Usage {
+            reason: "rename title cannot be empty".to_string(),
+        });
+    }
+    if title.chars().count() > 160 {
+        return Err(BootstrapError::Usage {
+            reason: "rename title must be at most 160 characters".to_string(),
+        });
+    }
+    Ok(title.to_string())
 }
 
 fn map_client_error(error: TelegramClientError) -> BootstrapError {
