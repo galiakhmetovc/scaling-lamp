@@ -198,6 +198,10 @@ impl KnowledgeRepository for PersistenceStore {
         )?;
 
         for doc in docs {
+            if doc.body.len() > MAX_KNOWLEDGE_SEARCH_DOC_BODY_BYTES {
+                continue;
+            }
+
             transaction.execute(
                 "INSERT INTO knowledge_search_docs (
                     doc_id, source_id, path, kind, body, updated_at
@@ -252,6 +256,8 @@ impl KnowledgeRepository for PersistenceStore {
         })
     }
 }
+
+const MAX_KNOWLEDGE_SEARCH_DOC_BODY_BYTES: usize = 1_000_000;
 
 impl PersistenceStore {
     fn query_session_retentions(

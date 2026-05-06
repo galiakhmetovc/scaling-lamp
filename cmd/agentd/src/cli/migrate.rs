@@ -132,6 +132,10 @@ fn copy_table(
     let mut count = 0;
 
     while let Some(row) = rows.next().map_err(StoreError::from)? {
+        if should_skip_migration_row(table, &selected_columns, row)? {
+            continue;
+        }
+
         let mut insert_columns = Vec::new();
         let mut insert_values = Vec::new();
         for (index, column) in selected_columns.iter().enumerate() {
@@ -170,6 +174,27 @@ fn copy_table(
     }
 
     Ok(count)
+}
+
+fn should_skip_migration_row(
+    table: &str,
+    selected_columns: &[String],
+    row: &rusqlite::Row<'_>,
+) -> Result<bool, StoreError> {
+    if table != "knowledge_search_docs" {
+        return Ok(false);
+    }
+
+    let Some(body_index) = selected_columns.iter().position(|column| column == "body") else {
+        return Ok(false);
+    };
+
+    match row.get_ref(body_index).map_err(StoreError::from)? {
+        ValueRef::Text(bytes) | ValueRef::Blob(bytes) => {
+            Ok(bytes.len() > MAX_MIGRATED_KNOWLEDGE_SEARCH_DOC_BYTES)
+        }
+        _ => Ok(false),
+    }
 }
 
 fn sqlite_table_exists(sqlite: &rusqlite::Connection, table: &str) -> Result<bool, StoreError> {
@@ -306,3 +331,5 @@ const MIGRATION_TABLES: &[&str] = &[
     "plans",
     "file_delivery_requests",
 ];
+
+const MAX_MIGRATED_KNOWLEDGE_SEARCH_DOC_BYTES: usize = 1_000_000;
