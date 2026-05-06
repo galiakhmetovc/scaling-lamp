@@ -17,6 +17,14 @@ fn base_env(root: &Path) -> ConfigEnv {
         database_url_override: None,
         database_connect_timeout_override: None,
         database_application_name_override: None,
+        event_bus_required_override: None,
+        event_bus_backend_override: None,
+        event_bus_nats_url_override: None,
+        event_bus_input_stream_override: None,
+        event_bus_session_stream_override: None,
+        event_bus_delivery_stream_override: None,
+        event_bus_task_stream_override: None,
+        event_bus_dlq_stream_override: None,
         daemon_bearer_token_override: None,
         daemon_bind_host_override: None,
         daemon_bind_port_override: None,
@@ -24,6 +32,9 @@ fn base_env(root: &Path) -> ConfigEnv {
         daemon_skills_dir_override: None,
         home_dir: Some(root.join("home")),
         telegram_bot_token_override: None,
+        telegram_mode_override: None,
+        telegram_webhook_public_url_override: None,
+        telegram_webhook_secret_override: None,
         context_compaction_keep_tail_messages_override: None,
         context_compaction_max_output_tokens_override: None,
         context_compaction_max_summary_chars_override: None,
@@ -163,6 +174,7 @@ fn validate_rejects_enabled_browser_without_command() {
     let config = AppConfig {
         data_dir: PathBuf::from("/tmp/teamd"),
         database: Default::default(),
+        event_bus: Default::default(),
         daemon: Default::default(),
         telegram: Default::default(),
         permissions: Default::default(),
@@ -252,6 +264,7 @@ fn validate_rejects_empty_database_url() {
             url: "   ".to_string(),
             ..Default::default()
         },
+        event_bus: Default::default(),
         daemon: Default::default(),
         telegram: Default::default(),
         permissions: Default::default(),
@@ -296,6 +309,7 @@ fn validate_rejects_relative_data_dir() {
     let config = AppConfig {
         data_dir: PathBuf::from("relative/teamd"),
         database: Default::default(),
+        event_bus: Default::default(),
         daemon: Default::default(),
         telegram: Default::default(),
         permissions: Default::default(),
@@ -772,6 +786,164 @@ chat_turn_fast_settle_ms = 25
 }
 
 #[test]
+fn config_requires_nats_for_webhook_event_runtime() {
+    let mut config = AppConfig {
+        data_dir: PathBuf::from("/tmp/teamd"),
+        database: Default::default(),
+        daemon: Default::default(),
+        telegram: super::TelegramConfig {
+            enabled: true,
+            bot_token: Some("telegram-secret-token".to_string()),
+            mode: "webhook".to_string(),
+            webhook_public_url: Some(
+                "https://teamd.example/v1/telegram/webhook/secret".to_string(),
+            ),
+            webhook_secret: Some("secret".to_string()),
+            ..Default::default()
+        },
+        event_bus: super::EventBusConfig {
+            required: true,
+            backend: "nats_jetstream".to_string(),
+            nats_url: None,
+            ..Default::default()
+        },
+        permissions: Default::default(),
+        provider: Default::default(),
+        session_defaults: Default::default(),
+        context: Default::default(),
+        workspace: Default::default(),
+        web: Default::default(),
+        browser: Default::default(),
+        mem0: Default::default(),
+        memory_curator: Default::default(),
+        memory_recall: Default::default(),
+        knowledge: Default::default(),
+        observability: Default::default(),
+        runtime_timing: Default::default(),
+        runtime_limits: Default::default(),
+    };
+
+    let error = config
+        .validate()
+        .expect_err("webhook event runtime must require nats url");
+
+    assert!(matches!(
+        error,
+        ConfigError::InvalidProviderValue {
+            name: "event_bus.nats_url",
+            ..
+        }
+    ));
+
+    config.event_bus.nats_url = Some("nats://127.0.0.1:4222".to_string());
+
+    config
+        .validate()
+        .expect("nats-backed webhook config is valid");
+}
+
+#[test]
+fn config_rejects_polling_when_event_bus_is_required() {
+    let config = AppConfig {
+        data_dir: PathBuf::from("/tmp/teamd"),
+        database: Default::default(),
+        daemon: Default::default(),
+        telegram: super::TelegramConfig {
+            enabled: true,
+            bot_token: Some("telegram-secret-token".to_string()),
+            mode: "polling".to_string(),
+            ..Default::default()
+        },
+        event_bus: super::EventBusConfig {
+            required: true,
+            backend: "nats_jetstream".to_string(),
+            nats_url: Some("nats://127.0.0.1:4222".to_string()),
+            ..Default::default()
+        },
+        permissions: Default::default(),
+        provider: Default::default(),
+        session_defaults: Default::default(),
+        context: Default::default(),
+        workspace: Default::default(),
+        web: Default::default(),
+        browser: Default::default(),
+        mem0: Default::default(),
+        memory_curator: Default::default(),
+        memory_recall: Default::default(),
+        knowledge: Default::default(),
+        observability: Default::default(),
+        runtime_timing: Default::default(),
+        runtime_limits: Default::default(),
+    };
+
+    let error = config
+        .validate()
+        .expect_err("required event bus must not allow telegram polling");
+
+    assert!(matches!(
+        error,
+        ConfigError::InvalidProviderValue {
+            name: "telegram.mode",
+            ..
+        }
+    ));
+}
+
+#[test]
+fn load_merges_event_bus_and_telegram_webhook_config() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let config_path = temp.path().join("teamd.toml");
+
+    fs::write(
+        &config_path,
+        r#"
+data_dir = "/tmp/teamd-config"
+
+[event_bus]
+required = true
+backend = "nats_jetstream"
+nats_url = "nats://127.0.0.1:4222"
+input_stream = "TEAMD_INPUT_CUSTOM"
+session_stream = "TEAMD_SESSION_CUSTOM"
+delivery_stream = "TEAMD_DELIVERY_CUSTOM"
+task_stream = "TEAMD_TASKS_CUSTOM"
+dlq_stream = "TEAMD_DLQ_CUSTOM"
+
+[telegram]
+enabled = true
+mode = "webhook"
+webhook_public_url = "https://teamd.example/v1/telegram/webhook/secret"
+webhook_secret = "secret"
+"#,
+    )
+    .expect("write config");
+
+    let mut env = base_env(temp.path());
+    env.config_path = Some(config_path);
+    env.telegram_bot_token_override = Some("telegram-secret-token".to_string());
+
+    let config = AppConfig::load_from_env(&env).expect("load config");
+
+    assert_eq!(config.event_bus.backend, "nats_jetstream");
+    assert!(config.event_bus.required);
+    assert_eq!(
+        config.event_bus.nats_url.as_deref(),
+        Some("nats://127.0.0.1:4222")
+    );
+    assert_eq!(config.event_bus.input_stream, "TEAMD_INPUT_CUSTOM");
+    assert_eq!(config.event_bus.session_stream, "TEAMD_SESSION_CUSTOM");
+    assert_eq!(config.event_bus.delivery_stream, "TEAMD_DELIVERY_CUSTOM");
+    assert_eq!(config.event_bus.task_stream, "TEAMD_TASKS_CUSTOM");
+    assert_eq!(config.event_bus.dlq_stream, "TEAMD_DLQ_CUSTOM");
+    assert_eq!(config.telegram.mode, "webhook");
+    assert_eq!(
+        config.telegram.webhook_public_url.as_deref(),
+        Some("https://teamd.example/v1/telegram/webhook/secret")
+    );
+    assert_eq!(config.telegram.webhook_secret.as_deref(), Some("secret"));
+}
+
+#[test]
 fn config_example_toml_loads() {
     let temp = tempfile::tempdir().expect("tempdir");
     let config_path = temp.path().join("config.example.toml");
@@ -978,6 +1150,7 @@ fn validate_rejects_invalid_runtime_limit_bounds() {
     let config = AppConfig {
         data_dir: PathBuf::from("/tmp/teamd"),
         database: Default::default(),
+        event_bus: Default::default(),
         daemon: Default::default(),
         telegram: Default::default(),
         permissions: Default::default(),
@@ -1074,6 +1247,7 @@ fn validate_rejects_invalid_auto_compaction_ratio() {
     let config = AppConfig {
         data_dir: PathBuf::from("/tmp/teamd"),
         database: Default::default(),
+        event_bus: Default::default(),
         daemon: Default::default(),
         telegram: Default::default(),
         permissions: Default::default(),
