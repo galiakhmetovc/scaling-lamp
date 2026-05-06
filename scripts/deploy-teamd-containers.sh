@@ -8,9 +8,6 @@ NON_INTERACTIVE=0
 SKIP_START=0
 INSTALL_DOCKER=${TEAMD_CONTAINERS_INSTALL_DOCKER:-1}
 ENABLE_SEARXNG=1
-ENABLE_OBSIDIAN=0
-ENABLE_OBSIDIAN_MCP=0
-WRITE_OBSIDIAN_MCP_EXAMPLE=0
 ENABLE_JAEGER=0
 ENABLE_MEM0=0
 ENABLE_SILVERBULLET=0
@@ -18,9 +15,6 @@ ENABLE_SILVERBULLET_MCP=0
 WRITE_SILVERBULLET_MCP_EXAMPLE=0
 ENABLE_BROWSERLESS=0
 INSTALL_AGENT_BROWSER=0
-ENABLE_LIGHTPANDA=0
-ENABLE_LIGHTPANDA_MCP=0
-WRITE_LIGHTPANDA_MCP_EXAMPLE=0
 ENABLE_FILEBROWSER=0
 ENABLE_CADDY=1
 RESTART_TEAMD_SERVICES=1
@@ -44,22 +38,6 @@ SEARXNG_COMPOSE=$SEARXNG_DIR/docker-compose.yml
 SEARXNG_SETTINGS=$SEARXNG_CONFIG_DIR/settings.yml
 SEARXNG_MCP_EXAMPLE=$SEARXNG_DIR/mcp-searxng.example.json
 
-OBSIDIAN_PORT=${TEAMD_OBSIDIAN_PORT:-8080}
-OBSIDIAN_CONTAINER_PORT=${TEAMD_OBSIDIAN_CONTAINER_PORT:-3000}
-OBSIDIAN_IMAGE=${TEAMD_OBSIDIAN_IMAGE:-lscr.io/linuxserver/obsidian:latest}
-OBSIDIAN_DIR=$CONTAINERS_ROOT/obsidian
-OBSIDIAN_VAULTS_DIR=${TEAMD_OBSIDIAN_VAULTS_DIR:-/var/lib/teamd/vaults}
-OBSIDIAN_VAULT_NAME=${TEAMD_OBSIDIAN_VAULT_NAME:-teamd}
-OBSIDIAN_VAULT_DIR=${TEAMD_OBSIDIAN_VAULT_DIR:-$OBSIDIAN_VAULTS_DIR/$OBSIDIAN_VAULT_NAME}
-OBSIDIAN_LEGACY_VAULT_LINK=${TEAMD_OBSIDIAN_LEGACY_VAULT_LINK:-/var/lib/teamd/vault}
-OBSIDIAN_CONFIG_DIR=${TEAMD_OBSIDIAN_CONFIG_DIR:-$DATA_ROOT/obsidian/config}
-OBSIDIAN_COMPOSE=$OBSIDIAN_DIR/docker-compose.yml
-OBSIDIAN_MCP_EXAMPLE=$OBSIDIAN_DIR/obsidian-mcp.example.toml
-OBSIDIAN_MCP_PACKAGE=${TEAMD_OBSIDIAN_MCP_PACKAGE:-@bitbonsai/mcpvault@latest}
-OBSIDIAN_MCP_NODE_IMAGE=${TEAMD_OBSIDIAN_MCP_NODE_IMAGE:-docker.io/library/node:22-alpine}
-OBSIDIAN_PUID=${TEAMD_OBSIDIAN_PUID:-}
-OBSIDIAN_PGID=${TEAMD_OBSIDIAN_PGID:-}
-
 SILVERBULLET_IMAGE=${TEAMD_SILVERBULLET_IMAGE:-ghcr.io/silverbulletmd/silverbullet:latest}
 SILVERBULLET_PORT=${TEAMD_SILVERBULLET_PORT:-8091}
 SILVERBULLET_CONTAINER_PORT=${TEAMD_SILVERBULLET_CONTAINER_PORT:-3000}
@@ -79,7 +57,6 @@ SILVERBULLET_MCP_CONTAINER_PORT=${TEAMD_SILVERBULLET_MCP_CONTAINER_PORT:-4000}
 SILVERBULLET_MCP_NODE_IMAGE=${TEAMD_SILVERBULLET_MCP_NODE_IMAGE:-docker.io/library/node:22-alpine}
 SILVERBULLET_MCP_STDIO_WRAPPER=$SILVERBULLET_DIR/silverbullet-mcp-stdio.sh
 SILVERBULLET_MCP_EXAMPLE=$SILVERBULLET_DIR/silverbullet-mcp.example.toml
-LEGACY_LOGSEQ_GRAPH_DIR=${TEAMD_LEGACY_LOGSEQ_GRAPH_DIR:-${TEAMD_LOGSEQ_GRAPH_DIR:-/var/lib/teamd/knowledge/logseq/teamd}}
 
 BROWSERLESS_IMAGE=${TEAMD_BROWSERLESS_IMAGE:-ghcr.io/browserless/chromium:latest}
 BROWSERLESS_PORT=${TEAMD_BROWSERLESS_PORT:-3000}
@@ -102,16 +79,6 @@ AGENT_BROWSER_PATH_LINK=${TEAMD_AGENT_BROWSER_PATH_LINK:-/usr/local/bin/agent-br
 AGENT_BROWSER_SESSION_PREFIX=${TEAMD_AGENT_BROWSER_SESSION_PREFIX:-teamd}
 AGENT_BROWSER_DEFAULT_TIMEOUT_MS=${TEAMD_AGENT_BROWSER_DEFAULT_TIMEOUT_MS:-30000}
 AGENT_BROWSER_MAX_OUTPUT_CHARS=${TEAMD_AGENT_BROWSER_MAX_OUTPUT_CHARS:-20000}
-
-LIGHTPANDA_RELEASE_TAG=${TEAMD_LIGHTPANDA_RELEASE_TAG:-nightly}
-LIGHTPANDA_DOWNLOAD_URL=${TEAMD_LIGHTPANDA_DOWNLOAD_URL:-}
-LIGHTPANDA_BIN=${TEAMD_LIGHTPANDA_BIN:-/opt/teamd/bin/lightpanda}
-LIGHTPANDA_PATH_LINK=${TEAMD_LIGHTPANDA_PATH_LINK:-/usr/local/bin/lightpanda}
-LIGHTPANDA_DIR=$CONTAINERS_ROOT/lightpanda
-LIGHTPANDA_MCP_STDIO_WRAPPER=${TEAMD_LIGHTPANDA_MCP_STDIO_WRAPPER:-$LIGHTPANDA_DIR/lightpanda-mcp-stdio.sh}
-LIGHTPANDA_MCP_EXAMPLE=$LIGHTPANDA_DIR/lightpanda-mcp.example.toml
-# Default wrapper behavior: LIGHTPANDA_DISABLE_TELEMETRY=true.
-LIGHTPANDA_DISABLE_TELEMETRY=${TEAMD_LIGHTPANDA_DISABLE_TELEMETRY:-true}
 
 FILEBROWSER_IMAGE=${TEAMD_FILEBROWSER_IMAGE:-docker.io/filebrowser/filebrowser:s6}
 FILEBROWSER_PORT=${TEAMD_FILEBROWSER_PORT:-8092}
@@ -201,13 +168,6 @@ OTLP_EXPORT_TIMEOUT_MS=${TEAMD_OTLP_TIMEOUT_MS:-2000}
 CADDY_DOMAIN=${TEAMD_CADDY_DOMAIN:-}
 CADDY_SINGLE_DOMAIN=${TEAMD_CADDY_SINGLE_DOMAIN:-0}
 CADDY_HOST=${TEAMD_CADDY_HOST:-}
-if [ "${TEAMD_OBSIDIAN_SUBFOLDER+x}" ]; then
-  OBSIDIAN_SUBFOLDER=$TEAMD_OBSIDIAN_SUBFOLDER
-elif [ -n "$CADDY_DOMAIN" ]; then
-  OBSIDIAN_SUBFOLDER=
-else
-  OBSIDIAN_SUBFOLDER=/obsidian/
-fi
 if [ -n "${TEAMD_CADDY_HTTP_PORT:-}" ]; then
   CADDY_HTTP_PORT=$TEAMD_CADDY_HTTP_PORT
 elif [ -n "$CADDY_DOMAIN" ]; then
@@ -248,7 +208,7 @@ Deploy teamD container add-ons without changing the main agentd deploy path.
 
 By default this installs/uses Docker Engine, deploys a local SearXNG instance
 bound to 127.0.0.1:$SEARXNG_PORT, and starts Caddy as an edge reverse proxy.
-Obsidian legacy, SilverBullet, SilverBullet MCP, Browserless, Lightpanda MCP, Mem0, File Browser, and Jaeger are opt-in.
+SilverBullet, SilverBullet MCP, Browserless, Mem0, File Browser, and Jaeger are opt-in.
 
 Options:
   --dry-run             Print actions without changing the system.
@@ -257,10 +217,6 @@ Options:
   --no-start            Write files but do not start containers.
   --no-searxng          Do not deploy SearXNG.
   --no-caddy            Do not deploy Caddy reverse proxy.
-  --with-obsidian       Legacy: deploy browser-accessible Obsidian container.
-  --with-obsidian-mcp   Legacy: deploy Obsidian and an agentd MCP connector for the vault.
-  --with-obsidian-mcp-example
-                         Write an agentd stdio MCP connector example for the vault.
   --with-jaeger         Also deploy Jaeger UI and enable agentd OTLP auto-export.
   --with-mem0           Deploy Mem0/OpenMemory REST API and configure agentd memory_* tools.
   --with-silverbullet   Deploy SilverBullet editor over the canonical Markdown space.
@@ -270,17 +226,12 @@ Options:
                          Write an agentd stdio MCP connector example for SilverBullet.
   --with-browserless     Deploy Browserless and install/configure agent-browser.
   --with-agent-browser   Install/configure agent-browser without deploying Browserless.
-  --with-lightpanda      Install the Lightpanda headless browser binary.
-  --with-lightpanda-mcp  Install Lightpanda and an agentd MCP connector.
-  --with-lightpanda-mcp-example
-                         Write an agentd stdio MCP connector example for Lightpanda.
   --with-filebrowser     Deploy File Browser for operator editing of agent homes,
                          skills, approved workspaces, artifacts, and knowledge files.
   --single-domain       With TEAMD_CADDY_DOMAIN, publish all add-ons on that
                          exact host: /sb/, /searxng/, /jaeger/, /files/.
   --no-restart-teamd    Do not restart teamd systemd services after writing MCP config.
   --searxng-port PORT   Local SearXNG port, default: $SEARXNG_PORT.
-  --obsidian-port PORT  Local Obsidian port, default: $OBSIDIAN_PORT.
   --jaeger-ui-port PORT Local Jaeger UI port, default: $JAEGER_UI_PORT.
   --silverbullet-port PORT
                          Local SilverBullet port, default: $SILVERBULLET_PORT.
@@ -299,27 +250,6 @@ Environment overrides:
                                  Auto-install Docker when missing, default: $INSTALL_DOCKER.
   TEAMD_SEARXNG_IMAGE            SearXNG image, default: $SEARXNG_IMAGE.
   TEAMD_SEARXNG_PORT             SearXNG localhost port, default: $SEARXNG_PORT.
-  TEAMD_OBSIDIAN_IMAGE           Obsidian image, default: $OBSIDIAN_IMAGE.
-  TEAMD_OBSIDIAN_PORT            Obsidian localhost port, default: $OBSIDIAN_PORT.
-  TEAMD_OBSIDIAN_CONTAINER_PORT  Obsidian web port inside container,
-                                 default: $OBSIDIAN_CONTAINER_PORT.
-  TEAMD_OBSIDIAN_VAULTS_DIR      Vaults directory, default: $OBSIDIAN_VAULTS_DIR.
-  TEAMD_OBSIDIAN_VAULT_NAME      Default managed vault name, default: $OBSIDIAN_VAULT_NAME.
-  TEAMD_OBSIDIAN_VAULT_DIR       Managed vault directory, default: $OBSIDIAN_VAULT_DIR.
-  TEAMD_OBSIDIAN_LEGACY_VAULT_LINK
-                                 Compatibility symlink for agents using ~/vault,
-                                 default: $OBSIDIAN_LEGACY_VAULT_LINK.
-                                 Set empty to disable.
-  TEAMD_OBSIDIAN_CONFIG_DIR      Obsidian config directory, default: $OBSIDIAN_CONFIG_DIR.
-  TEAMD_OBSIDIAN_SUBFOLDER       Obsidian reverse-proxy subfolder.
-                                 Default: "$OBSIDIAN_SUBFOLDER".
-                                 Use empty value with a dedicated domain.
-  TEAMD_OBSIDIAN_MCP_PACKAGE     npm package for Obsidian vault MCP,
-                                 default: $OBSIDIAN_MCP_PACKAGE.
-  TEAMD_OBSIDIAN_MCP_NODE_IMAGE  Docker image used to run the MCP package,
-                                 default: $OBSIDIAN_MCP_NODE_IMAGE.
-  TEAMD_LEGACY_LOGSEQ_GRAPH_DIR  Optional migration source from the old Logseq graph,
-                                 default: $LEGACY_LOGSEQ_GRAPH_DIR.
   TEAMD_SILVERBULLET_IMAGE       SilverBullet image, default: $SILVERBULLET_IMAGE.
   TEAMD_SILVERBULLET_PORT        SilverBullet localhost port, default: $SILVERBULLET_PORT.
   TEAMD_SILVERBULLET_CONTAINER_PORT
@@ -367,15 +297,6 @@ Environment overrides:
                                  Browser tool timeout, default: $AGENT_BROWSER_DEFAULT_TIMEOUT_MS.
   TEAMD_AGENT_BROWSER_MAX_OUTPUT_CHARS
                                  Browser tool output cap, default: $AGENT_BROWSER_MAX_OUTPUT_CHARS.
-  TEAMD_LIGHTPANDA_RELEASE_TAG   Lightpanda GitHub release tag, default: $LIGHTPANDA_RELEASE_TAG.
-  TEAMD_LIGHTPANDA_DOWNLOAD_URL  Explicit Lightpanda binary URL. Overrides release tag/platform detection.
-  TEAMD_LIGHTPANDA_BIN           Installed Lightpanda binary path, default: $LIGHTPANDA_BIN.
-  TEAMD_LIGHTPANDA_PATH_LINK     PATH symlink for Lightpanda, default: $LIGHTPANDA_PATH_LINK.
-  TEAMD_LIGHTPANDA_MCP_STDIO_WRAPPER
-                                 Wrapper used by agentd MCP connector,
-                                 default: $LIGHTPANDA_MCP_STDIO_WRAPPER.
-  TEAMD_LIGHTPANDA_DISABLE_TELEMETRY
-                                 Exported by the MCP wrapper, default: $LIGHTPANDA_DISABLE_TELEMETRY.
   TEAMD_MEM0_API_BASE            Mem0/OpenMemory REST base URL for agentd,
                                  default: $MEM0_API_BASE.
   TEAMD_MEM0_PORT                Local Mem0 API port when deploying the bundled
@@ -444,16 +365,14 @@ Environment overrides:
   TEAMD_DEPLOY_USER              teamd system user, default: $SERVICE_USER.
   TEAMD_DEPLOY_GROUP             teamd system group, default: $SERVICE_GROUP.
   TEAMD_CADDY_DOMAIN             Optional domain. By default creates search.<domain>,
-                                 obsidian.<domain>, notes.<domain>, and jaeger.<domain>
-                                 when enabled.
+                                 notes.<domain>, files.<domain>, and jaeger.<domain> when enabled.
   TEAMD_CADDY_SINGLE_DOMAIN      Set to 1 to use TEAMD_CADDY_DOMAIN as one exact host:
-                                 / for SilverBullet, plus /searxng/, /jaeger/,
-                                 and /obsidian/ when enabled.
+                                 / or /sb/ for SilverBullet, plus /searxng/,
+                                 /jaeger/, and /files/ when enabled.
   TEAMD_CADDY_HOST               Hostname or IP for internal TLS without a dedicated domain.
                                  If unset, deploy script tries to detect the primary IPv4 address.
   TEAMD_CADDY_HTTP_PORT          Caddy HTTP host port, default: $CADDY_HTTP_PORT.
   TEAMD_CADDY_HTTPS_PORT         Caddy HTTPS host port. Default: 443 with TEAMD_CADDY_DOMAIN,
-                                 8443 when Obsidian is enabled without a domain,
                                  otherwise disabled.
 EOF
 }
@@ -601,18 +520,6 @@ ensure_npm() {
   command -v node >/dev/null 2>&1 || fail "node is still unavailable after apt install"
 }
 
-validate_obsidian_subfolder() {
-  [ "$ENABLE_OBSIDIAN" -eq 1 ] || return 0
-  [ -n "$OBSIDIAN_SUBFOLDER" ] || return 0
-
-  case "$OBSIDIAN_SUBFOLDER" in
-    /*/) ;;
-    *)
-      fail "TEAMD_OBSIDIAN_SUBFOLDER must be empty or use leading and trailing slashes, e.g. /obsidian/"
-      ;;
-  esac
-}
-
 validate_caddy_domain_mode() {
   case "$CADDY_SINGLE_DOMAIN" in
     0|1) ;;
@@ -622,15 +529,6 @@ validate_caddy_domain_mode() {
   if [ "$CADDY_SINGLE_DOMAIN" -eq 1 ] && [ "$JAEGER_BASE_PATH_EXPLICIT" -eq 0 ]; then
     JAEGER_BASE_PATH=/jaeger
   fi
-}
-
-ensure_obsidian_https_port() {
-  [ "$ENABLE_OBSIDIAN" -eq 1 ] || return 0
-  [ "$ENABLE_CADDY" -eq 1 ] || return 0
-  [ -n "$CADDY_DOMAIN" ] && return 0
-  [ -n "$CADDY_HTTPS_PORT" ] && return 0
-
-  CADDY_HTTPS_PORT=8443
 }
 
 ensure_silverbullet_https_port() {
@@ -681,9 +579,6 @@ ensure_caddy_host() {
   [ "$ENABLE_CADDY" -eq 1 ] || return 0
   [ -n "$CADDY_DOMAIN" ] && return 0
   need_host=0
-  if [ "$ENABLE_OBSIDIAN" -eq 1 ] && [ -n "$CADDY_HTTPS_PORT" ]; then
-    need_host=1
-  fi
   if [ "$ENABLE_SILVERBULLET" -eq 1 ] && [ -n "$SILVERBULLET_HTTPS_PORT" ]; then
     need_host=1
   fi
@@ -713,7 +608,6 @@ ensure_edge_network() {
 
 docker_components_enabled() {
   [ "$ENABLE_SEARXNG" -eq 1 ] ||
-    [ "$ENABLE_OBSIDIAN" -eq 1 ] ||
     [ "$ENABLE_JAEGER" -eq 1 ] ||
     [ "$ENABLE_MEM0" -eq 1 ] ||
     [ "$ENABLE_BROWSERLESS" -eq 1 ] ||
@@ -1473,310 +1367,6 @@ configure_agentd_browser_env() {
   rm -f "$tmp_env" "$tmp_new"
 }
 
-resolve_obsidian_ids() {
-  if [ -n "$OBSIDIAN_PUID" ] && [ -n "$OBSIDIAN_PGID" ]; then
-    return 0
-  fi
-
-  if id -u teamd >/dev/null 2>&1; then
-    OBSIDIAN_PUID=$(id -u teamd)
-    OBSIDIAN_PGID=$(id -g teamd)
-  else
-    OBSIDIAN_PUID=$(id -u)
-    OBSIDIAN_PGID=$(id -g)
-  fi
-}
-
-write_obsidian_files() {
-  resolve_obsidian_ids
-
-  if [ "$DRY_RUN" -eq 1 ]; then
-    print_cmd mkdir -p "$OBSIDIAN_DIR" "$OBSIDIAN_VAULTS_DIR" "$OBSIDIAN_VAULT_DIR" "$OBSIDIAN_CONFIG_DIR"
-    print_cmd sh -c "write $OBSIDIAN_COMPOSE for teamd-obsidian"
-    return 0
-  fi
-
-  run_root mkdir -p "$OBSIDIAN_DIR" "$OBSIDIAN_VAULTS_DIR" "$OBSIDIAN_VAULT_DIR" "$OBSIDIAN_CONFIG_DIR"
-  run_root chown -R "$OBSIDIAN_PUID:$OBSIDIAN_PGID" "$OBSIDIAN_VAULT_DIR" "$OBSIDIAN_CONFIG_DIR"
-  tmp_compose=$(mktemp)
-  trap 'rm -f "$tmp_compose"' EXIT INT TERM
-
-  cat > "$tmp_compose" <<EOF
-services:
-  obsidian:
-    image: $OBSIDIAN_IMAGE
-    container_name: teamd-obsidian
-    restart: unless-stopped
-    shm_size: "1gb"
-    ports:
-      - "127.0.0.1:$OBSIDIAN_PORT:$OBSIDIAN_CONTAINER_PORT"
-    networks:
-      - $EDGE_NETWORK
-    volumes:
-      - "$OBSIDIAN_VAULTS_DIR:/vaults:rw"
-      - "$OBSIDIAN_CONFIG_DIR:/config:rw"
-    environment:
-      - PUID=$OBSIDIAN_PUID
-      - PGID=$OBSIDIAN_PGID
-      - TZ=Etc/UTC
-      - SUBFOLDER=$OBSIDIAN_SUBFOLDER
-      - DOCKER_MODS=linuxserver/mods:universal-git
-
-networks:
-  $EDGE_NETWORK:
-    external: true
-EOF
-
-  run_root install -m 0644 -o root -g root "$tmp_compose" "$OBSIDIAN_COMPOSE"
-}
-
-write_obsidian_vault_config() {
-  config_dir=$OBSIDIAN_VAULT_DIR/.obsidian
-  app_vault_file=$OBSIDIAN_CONFIG_DIR/.config/obsidian/obsidian.json
-
-  if [ "$DRY_RUN" -eq 1 ]; then
-    print_cmd mkdir -p "$config_dir" "$OBSIDIAN_CONFIG_DIR/.config/obsidian"
-    print_cmd sh -c "seed Obsidian vault registry at $app_vault_file"
-    print_cmd sh -c "write managed vault welcome note when missing"
-    return 0
-  fi
-
-  run_root mkdir -p "$config_dir" "$OBSIDIAN_CONFIG_DIR/.config/obsidian"
-
-  if [ ! -e "$app_vault_file" ]; then
-    vault_ts=$(date +%s)
-    tmp_app_vault=$(mktemp)
-    cat > "$tmp_app_vault" <<EOF
-{
-  "vaults": {
-    "$OBSIDIAN_VAULT_NAME": {
-      "path": "/vaults/$OBSIDIAN_VAULT_NAME",
-      "ts": $vault_ts,
-      "open": true
-    }
-  }
-}
-EOF
-    run_root install -m 0644 -o "$OBSIDIAN_PUID" -g "$OBSIDIAN_PGID" "$tmp_app_vault" "$app_vault_file"
-    rm -f "$tmp_app_vault"
-  fi
-
-  welcome_file=$OBSIDIAN_VAULT_DIR/teamd.md
-  if [ ! -e "$welcome_file" ]; then
-    tmp_welcome=$(mktemp)
-    cat > "$tmp_welcome" <<EOF
-# teamD vault
-
-Этот vault создан deploy script'ом teamD.
-
-- Obsidian UI редактирует заметки здесь.
-- agentd обращается к vault через Obsidian MCP connector.
-- Прямые filesystem writes нужны только для аварийной миграции или восстановления.
-EOF
-    run_root install -m 0644 -o "$OBSIDIAN_PUID" -g "$OBSIDIAN_PGID" "$tmp_welcome" "$welcome_file"
-    rm -f "$tmp_welcome"
-  fi
-
-  run_root chown -R "$OBSIDIAN_PUID:$OBSIDIAN_PGID" "$OBSIDIAN_VAULT_DIR/.obsidian"
-  run_root chown -R "$OBSIDIAN_PUID:$OBSIDIAN_PGID" "$OBSIDIAN_CONFIG_DIR/.config"
-}
-
-ensure_obsidian_legacy_vault_link() {
-  [ -n "$OBSIDIAN_LEGACY_VAULT_LINK" ] || return 0
-  [ "$OBSIDIAN_LEGACY_VAULT_LINK" != "$OBSIDIAN_VAULT_DIR" ] || return 0
-
-  if [ "$DRY_RUN" -eq 1 ]; then
-    print_cmd sh -c "create compatibility symlink $OBSIDIAN_LEGACY_VAULT_LINK -> $OBSIDIAN_VAULT_DIR when path is absent"
-    return 0
-  fi
-
-  target_real=$(readlink -f "$OBSIDIAN_VAULT_DIR")
-
-  if [ -L "$OBSIDIAN_LEGACY_VAULT_LINK" ]; then
-    link_real=$(readlink -f "$OBSIDIAN_LEGACY_VAULT_LINK" || true)
-    if [ "$link_real" = "$target_real" ]; then
-      return 0
-    fi
-    printf 'Warning: %s is a symlink to %s, not %s; leaving it unchanged.\n' \
-      "$OBSIDIAN_LEGACY_VAULT_LINK" "${link_real:-unknown}" "$OBSIDIAN_VAULT_DIR" >&2
-    return 0
-  fi
-
-  if [ -e "$OBSIDIAN_LEGACY_VAULT_LINK" ]; then
-    printf 'Warning: %s already exists and is not a symlink; not migrating automatically. Move it into %s manually, then replace it with a symlink.\n' \
-      "$OBSIDIAN_LEGACY_VAULT_LINK" "$OBSIDIAN_VAULT_DIR" >&2
-    return 0
-  fi
-
-  legacy_parent=$(dirname "$OBSIDIAN_LEGACY_VAULT_LINK")
-  run_root mkdir -p "$legacy_parent"
-  run_root ln -s "$OBSIDIAN_VAULT_DIR" "$OBSIDIAN_LEGACY_VAULT_LINK"
-  run_root chown -h "$OBSIDIAN_PUID:$OBSIDIAN_PGID" "$OBSIDIAN_LEGACY_VAULT_LINK"
-}
-
-write_obsidian_mcp_example() {
-  if [ "$DRY_RUN" -eq 1 ]; then
-    print_cmd mkdir -p "$OBSIDIAN_DIR"
-    print_cmd sh -c "write $OBSIDIAN_MCP_EXAMPLE for filesystem-backed Obsidian MCP"
-    return 0
-  fi
-
-  run_root mkdir -p "$OBSIDIAN_DIR"
-  tmp_config=$(mktemp)
-  trap 'rm -f "$tmp_config"' EXIT INT TERM
-
-  cat > "$tmp_config" <<EOF
-# Copy this block into /etc/teamd/config.toml under [daemon.mcp_connectors]
-#
-# This is the primary supported path for agent access to Obsidian:
-# agentd -> stdio MCP -> docker run node -> $OBSIDIAN_MCP_PACKAGE -> vault.
-# It does not require the Obsidian desktop app, a community plugin, or REST API.
-
-[daemon.mcp_connectors.obsidian]
-transport = "stdio"
-command = "docker"
-args = [
-  "run",
-  "-i",
-  "--rm",
-  "-v", "$OBSIDIAN_VAULT_DIR:/vault:rw",
-  "$OBSIDIAN_MCP_NODE_IMAGE",
-  "npx",
-  "-y",
-  "$OBSIDIAN_MCP_PACKAGE",
-  "/vault",
-]
-enabled = false
-EOF
-
-  run_root install -m 0644 -o root -g root "$tmp_config" "$OBSIDIAN_MCP_EXAMPLE"
-}
-
-append_obsidian_mcp_connector_config() {
-  config_parent=$(dirname "$CONFIG_FILE")
-
-  if [ "$DRY_RUN" -eq 1 ]; then
-    print_cmd mkdir -p "$config_parent"
-    print_cmd sh -c "upsert enabled filesystem-backed Obsidian MCP connector in $CONFIG_FILE"
-    return 0
-  fi
-
-  run_root mkdir -p "$config_parent"
-
-  tmp_block=$(mktemp)
-  tmp_config=$(mktemp)
-  trap 'rm -f "$tmp_block" "$tmp_config"' EXIT INT TERM
-  cat > "$tmp_block" <<EOF
-[daemon.mcp_connectors.obsidian]
-transport = "stdio"
-command = "docker"
-args = [
-  "run",
-  "-i",
-  "--rm",
-  "-v", "$OBSIDIAN_VAULT_DIR:/vault:rw",
-  "$OBSIDIAN_MCP_NODE_IMAGE",
-  "npx",
-  "-y",
-  "$OBSIDIAN_MCP_PACKAGE",
-  "/vault",
-]
-enabled = true
-EOF
-
-  if [ -e "$CONFIG_FILE" ]; then
-    if grep -F "[daemon.mcp_connectors.obsidian]" "$CONFIG_FILE" >/dev/null 2>&1; then
-      awk -v block="$tmp_block" '
-        function print_block() {
-          while ((getline line < block) > 0) print line
-          close(block)
-        }
-        /^\[daemon\.mcp_connectors\.obsidian\][[:space:]]*$/ {
-          print_block()
-          in_obsidian = 1
-          next
-        }
-        in_obsidian && /^\[/ {
-          in_obsidian = 0
-        }
-        !in_obsidian {
-          print
-        }
-      ' "$CONFIG_FILE" > "$tmp_config"
-    else
-      {
-        cat "$CONFIG_FILE"
-        printf '\n'
-        cat "$tmp_block"
-      } > "$tmp_config"
-    fi
-  else
-    cat "$tmp_block" > "$tmp_config"
-  fi
-
-  run_root install -m 0644 -o root -g root "$tmp_config" "$CONFIG_FILE"
-}
-
-disable_obsidian_mcp_connector_config() {
-  if [ "$DRY_RUN" -eq 1 ]; then
-    print_cmd sh -c "disable legacy Obsidian MCP connector in $CONFIG_FILE"
-    return 0
-  fi
-
-  tmp_block=$(mktemp)
-  tmp_config=$(mktemp)
-  trap 'rm -f "$tmp_block" "$tmp_config"' EXIT INT TERM
-  cat > "$tmp_block" <<EOF
-[daemon.mcp_connectors.obsidian]
-transport = "stdio"
-command = "docker"
-args = [
-  "run",
-  "-i",
-  "--rm",
-  "-v", "$OBSIDIAN_VAULT_DIR:/vault:rw",
-  "$OBSIDIAN_MCP_NODE_IMAGE",
-  "npx",
-  "-y",
-  "$OBSIDIAN_MCP_PACKAGE",
-  "/vault",
-]
-enabled = false
-EOF
-
-  if [ -e "$CONFIG_FILE" ]; then
-    if grep -F "[daemon.mcp_connectors.obsidian]" "$CONFIG_FILE" >/dev/null 2>&1; then
-      awk -v block="$tmp_block" '
-        function print_block() {
-          while ((getline line < block) > 0) print line
-          close(block)
-        }
-        /^\[daemon\.mcp_connectors\.obsidian\][[:space:]]*$/ {
-          print_block()
-          in_obsidian = 1
-          next
-        }
-        in_obsidian && /^\[/ {
-          in_obsidian = 0
-        }
-        !in_obsidian {
-          print
-        }
-      ' "$CONFIG_FILE" > "$tmp_config"
-    else
-      {
-        cat "$CONFIG_FILE"
-        printf '\n'
-        cat "$tmp_block"
-      } > "$tmp_config"
-    fi
-  else
-    cat "$tmp_block" > "$tmp_config"
-  fi
-
-  run_root install -m 0644 -o root -g root "$tmp_config" "$CONFIG_FILE"
-}
-
 write_silverbullet_mcp_example() {
   if [ "$DRY_RUN" -eq 1 ]; then
     print_cmd mkdir -p "$SILVERBULLET_DIR"
@@ -1859,203 +1449,6 @@ EOF
   run_root install -m 0644 -o root -g root "$tmp_config" "$CONFIG_FILE"
 }
 
-lightpanda_asset_name() {
-  os_name=$(uname -s)
-  arch_name=$(uname -m)
-
-  case "$os_name:$arch_name" in
-    Linux:x86_64) printf 'lightpanda-x86_64-linux' ;;
-    Linux:aarch64|Linux:arm64) printf 'lightpanda-aarch64-linux' ;;
-    Darwin:x86_64) printf 'lightpanda-x86_64-macos' ;;
-    Darwin:arm64|Darwin:aarch64) printf 'lightpanda-aarch64-macos' ;;
-    *) fail "unsupported Lightpanda platform: $os_name $arch_name" ;;
-  esac
-}
-
-lightpanda_download_url() {
-  if [ -n "$LIGHTPANDA_DOWNLOAD_URL" ]; then
-    printf '%s' "$LIGHTPANDA_DOWNLOAD_URL"
-    return 0
-  fi
-
-  printf 'https://github.com/lightpanda-io/browser/releases/download/%s/%s' \
-    "$LIGHTPANDA_RELEASE_TAG" "$(lightpanda_asset_name)"
-}
-
-install_lightpanda_binary() {
-  bin_parent=$(dirname "$LIGHTPANDA_BIN")
-  link_parent=$(dirname "$LIGHTPANDA_PATH_LINK")
-  download_url=$(lightpanda_download_url)
-
-  if [ "$DRY_RUN" -eq 1 ]; then
-    print_cmd mkdir -p "$bin_parent" "$link_parent"
-    print_cmd sh -c "install Lightpanda browser binary from $download_url to $LIGHTPANDA_BIN"
-    print_cmd ln -sf "$LIGHTPANDA_BIN" "$LIGHTPANDA_PATH_LINK"
-    print_cmd "$LIGHTPANDA_BIN" version
-    return 0
-  fi
-
-  need_command curl
-  run_root mkdir -p "$bin_parent" "$link_parent"
-
-  tmp_bin=$(mktemp)
-  trap 'rm -f "$tmp_bin"' EXIT INT TERM
-  curl -fsSL -o "$tmp_bin" "$download_url"
-  chmod 0755 "$tmp_bin"
-  run_root install -m 0755 -o root -g root "$tmp_bin" "$LIGHTPANDA_BIN"
-  run_root ln -sf "$LIGHTPANDA_BIN" "$LIGHTPANDA_PATH_LINK"
-  "$LIGHTPANDA_BIN" version >/dev/null 2>&1 || "$LIGHTPANDA_BIN" --help >/dev/null
-}
-
-write_lightpanda_mcp_wrapper() {
-  wrapper_parent=$(dirname "$LIGHTPANDA_MCP_STDIO_WRAPPER")
-
-  if [ "$DRY_RUN" -eq 1 ]; then
-    print_cmd mkdir -p "$wrapper_parent"
-    print_cmd sh -c "write $LIGHTPANDA_MCP_STDIO_WRAPPER for lightpanda mcp"
-    return 0
-  fi
-
-  run_root mkdir -p "$wrapper_parent"
-  tmp_wrapper=$(mktemp)
-  trap 'rm -f "$tmp_wrapper"' EXIT INT TERM
-  cat > "$tmp_wrapper" <<EOF
-#!/bin/sh
-set -eu
-export LIGHTPANDA_DISABLE_TELEMETRY=$LIGHTPANDA_DISABLE_TELEMETRY
-exec "$LIGHTPANDA_BIN" mcp
-EOF
-
-  wrapper_group=root
-  if getent group "$SERVICE_GROUP" >/dev/null 2>&1; then
-    wrapper_group=$SERVICE_GROUP
-  fi
-  run_root install -m 0750 -o root -g "$wrapper_group" "$tmp_wrapper" "$LIGHTPANDA_MCP_STDIO_WRAPPER"
-}
-
-write_lightpanda_mcp_example() {
-  if [ "$DRY_RUN" -eq 1 ]; then
-    print_cmd mkdir -p "$LIGHTPANDA_DIR"
-    print_cmd sh -c "write $LIGHTPANDA_MCP_EXAMPLE for Lightpanda MCP stdio wrapper"
-    return 0
-  fi
-
-  run_root mkdir -p "$LIGHTPANDA_DIR"
-  tmp_config=$(mktemp)
-  trap 'rm -f "$tmp_config"' EXIT INT TERM
-  cat > "$tmp_config" <<EOF
-# Copy this block into /etc/teamd/config.toml under [daemon.mcp_connectors].
-#
-# agentd -> stdio wrapper -> lightpanda mcp.
-# Lightpanda is a headless browser for JS-capable extraction and automation.
-
-[daemon.mcp_connectors.lightpanda]
-transport = "stdio"
-command = "$LIGHTPANDA_MCP_STDIO_WRAPPER"
-args = []
-enabled = false
-EOF
-
-  run_root install -m 0644 -o root -g root "$tmp_config" "$LIGHTPANDA_MCP_EXAMPLE"
-}
-
-append_lightpanda_mcp_connector_config() {
-  config_parent=$(dirname "$CONFIG_FILE")
-
-  if [ "$DRY_RUN" -eq 1 ]; then
-    print_cmd mkdir -p "$config_parent"
-    print_cmd sh -c "upsert enabled Lightpanda MCP connector in $CONFIG_FILE"
-    return 0
-  fi
-
-  run_root mkdir -p "$config_parent"
-
-  tmp_block=$(mktemp)
-  tmp_config=$(mktemp)
-  trap 'rm -f "$tmp_block" "$tmp_config"' EXIT INT TERM
-  cat > "$tmp_block" <<EOF
-[daemon.mcp_connectors.lightpanda]
-transport = "stdio"
-command = "$LIGHTPANDA_MCP_STDIO_WRAPPER"
-args = []
-enabled = true
-EOF
-
-  if [ -e "$CONFIG_FILE" ]; then
-    if grep -F "[daemon.mcp_connectors.lightpanda]" "$CONFIG_FILE" >/dev/null 2>&1; then
-      awk -v block="$tmp_block" '
-        function print_block() {
-          while ((getline line < block) > 0) print line
-          close(block)
-        }
-        /^\[daemon\.mcp_connectors\.lightpanda\][[:space:]]*$/ {
-          print_block()
-          in_lightpanda = 1
-          next
-        }
-        in_lightpanda && /^\[/ {
-          in_lightpanda = 0
-        }
-        !in_lightpanda {
-          print
-        }
-      ' "$CONFIG_FILE" > "$tmp_config"
-    else
-      {
-        cat "$CONFIG_FILE"
-        printf '\n'
-        cat "$tmp_block"
-      } > "$tmp_config"
-    fi
-  else
-    cat "$tmp_block" > "$tmp_config"
-  fi
-
-  run_root install -m 0644 -o root -g root "$tmp_config" "$CONFIG_FILE"
-}
-
-disable_lightpanda_mcp_connector_config() {
-  if [ "$DRY_RUN" -eq 1 ]; then
-    print_cmd sh -c "disable legacy Lightpanda MCP connector in $CONFIG_FILE"
-    return 0
-  fi
-
-  [ -e "$CONFIG_FILE" ] || return 0
-  grep -F "[daemon.mcp_connectors.lightpanda]" "$CONFIG_FILE" >/dev/null 2>&1 || return 0
-
-  tmp_config=$(mktemp)
-  trap 'rm -f "$tmp_config"' EXIT INT TERM
-  awk '
-    function emit_disabled_if_missing() {
-      if (in_lightpanda && !saw_enabled) {
-        print "enabled = false"
-      }
-    }
-    /^\[daemon\.mcp_connectors\.lightpanda\][[:space:]]*$/ {
-      emit_disabled_if_missing()
-      in_lightpanda = 1
-      saw_enabled = 0
-      print
-      next
-    }
-    in_lightpanda && /^\[/ {
-      emit_disabled_if_missing()
-      in_lightpanda = 0
-    }
-    in_lightpanda && /^[[:space:]]*enabled[[:space:]]*=/ {
-      print "enabled = false"
-      saw_enabled = 1
-      next
-    }
-    { print }
-    END {
-      emit_disabled_if_missing()
-    }
-  ' "$CONFIG_FILE" > "$tmp_config"
-  run_root install -m 0644 -o root -g root "$tmp_config" "$CONFIG_FILE"
-  rm -f "$tmp_config"
-}
-
 resolve_service_ids() {
   if id -u "$SERVICE_USER" >/dev/null 2>&1; then
     SERVICE_UID=$(id -u "$SERVICE_USER")
@@ -2116,22 +1509,6 @@ seed_silverbullet_credentials() {
   rm -f "$tmp_env"
 }
 
-migrate_legacy_logseq_space() {
-  resolve_service_ids
-
-  if [ "$DRY_RUN" -eq 1 ]; then
-    print_cmd mkdir -p "$SILVERBULLET_SPACE_DIR"
-    print_cmd sh -c "copy legacy Logseq graph from $LEGACY_LOGSEQ_GRAPH_DIR to $SILVERBULLET_SPACE_DIR when the SilverBullet space is empty"
-    return 0
-  fi
-
-  run_root mkdir -p "$SILVERBULLET_SPACE_DIR"
-  if [ -d "$LEGACY_LOGSEQ_GRAPH_DIR" ] && [ -z "$(find "$SILVERBULLET_SPACE_DIR" -mindepth 1 -maxdepth 1 -print -quit)" ]; then
-    run_root sh -c "cp -a $(quote_arg "$LEGACY_LOGSEQ_GRAPH_DIR")/. $(quote_arg "$SILVERBULLET_SPACE_DIR")/"
-  fi
-  run_root chown -R "$SERVICE_UID:$SERVICE_GID" "$SILVERBULLET_SPACE_DIR"
-}
-
 seed_silverbullet_space() {
   welcome_file=$SILVERBULLET_SPACE_DIR/teamD.md
 
@@ -2155,7 +1532,6 @@ tags: [teamd, silverbullet]
 
 - SilverBullet является основным browser UI для заметок.
 - agentd может работать с этим Space через SilverBullet MCP connector и штатные filesystem tools.
-- Старый Logseq Publish больше не является runtime-компонентом.
 EOF
     run_root install -m 0644 -o "$SERVICE_UID" -g "$SERVICE_GID" "$tmp_welcome" "$welcome_file"
     rm -f "$tmp_welcome"
@@ -2185,14 +1561,13 @@ write_silverbullet_files() {
       print_cmd sh -c "include teamd-silverbullet-mcp service built from $SILVERBULLET_MCP_REPOSITORY#$SILVERBULLET_MCP_REF"
       print_cmd sh -c "write $SILVERBULLET_MCP_STDIO_WRAPPER for agentd stdio MCP bridge"
     fi
-    migrate_legacy_logseq_space
     seed_silverbullet_space
     seed_silverbullet_credentials
     return 0
   fi
 
   run_root mkdir -p "$SILVERBULLET_DIR" "$SILVERBULLET_SPACE_DIR"
-  migrate_legacy_logseq_space
+  run_root chown -R "$SERVICE_UID:$SERVICE_GID" "$SILVERBULLET_SPACE_DIR"
   seed_silverbullet_space
   seed_silverbullet_credentials
 
@@ -2488,19 +1863,6 @@ EOF
   run_root install -m 0644 -o root -g root "$tmp_compose" "$FILEBROWSER_COMPOSE"
 }
 
-remove_legacy_logseq_runtime() {
-  if [ "$DRY_RUN" -eq 1 ]; then
-    print_cmd sh -c "remove legacy Logseq Publish containers if present: teamd-logseq-publish logseq-publish"
-    return 0
-  fi
-
-  for container in teamd-logseq-publish logseq-publish; do
-    if run_root docker ps -a --format '{{.Names}}' | grep -Fx "$container" >/dev/null 2>&1; then
-      run_root docker rm -f "$container" >/dev/null
-    fi
-  done
-}
-
 remove_legacy_manual_mcp_runtime() {
   if [ "$DRY_RUN" -eq 1 ]; then
     print_cmd sh -c "remove legacy anonymous Node MCP containers using mcp-remote or mcpvault"
@@ -2694,21 +2056,6 @@ https://$CADDY_HOST:$SILVERBULLET_HTTPS_PORT {
 "
 	  fi
 
-	  obsidian_domain_block=
-	  if [ "$ENABLE_OBSIDIAN" -eq 1 ] && [ -n "$CADDY_DOMAIN" ] && [ "$CADDY_SINGLE_DOMAIN" -eq 0 ]; then
-	    obsidian_domain_block="
-obsidian.$CADDY_DOMAIN {
-  reverse_proxy teamd-obsidian:$OBSIDIAN_CONTAINER_PORT
-}
-"
-	  fi
-
-	  obsidian_single_handle=
-	  if [ "$ENABLE_OBSIDIAN" -eq 1 ]; then
-	    obsidian_single_handle="  handle /obsidian/* {
-    reverse_proxy teamd-obsidian:$OBSIDIAN_CONTAINER_PORT
-  }"
-	  fi
 	  single_domain_root_handle='  respond / "teamD container edge: /searxng/, /jaeger/ and optional add-ons"'
 	  if [ "$ENABLE_SILVERBULLET" -eq 1 ] && [ -z "$silverbullet_single_handle" ]; then
 	    single_domain_root_handle="  handle {
@@ -2736,7 +2083,6 @@ $silverbullet_compat_redirects
 $jaeger_handle
 $filebrowser_handle
 $silverbullet_single_handle
-$obsidian_single_handle
 
 $single_domain_root_handle
 }
@@ -2746,36 +2092,17 @@ EOF
 search.$CADDY_DOMAIN {
   reverse_proxy teamd-searxng:8080
 }
-$obsidian_domain_block
 $jaeger_domain_block
 $silverbullet_domain_block
 $filebrowser_domain_block
 EOF
 	    fi
 	  else
-	    obsidian_http_redirects=
-	    obsidian_handle=
-	    if [ "$ENABLE_OBSIDIAN" -eq 1 ]; then
-	      if [ -n "$OBSIDIAN_SUBFOLDER" ]; then
-	        obsidian_route='handle /obsidian/*'
-	      else
-	        obsidian_route='handle_path /obsidian/*'
-	      fi
-	      obsidian_handle="  $obsidian_route {
-    reverse_proxy teamd-obsidian:$OBSIDIAN_CONTAINER_PORT
-  }"
-	      if [ -n "$CADDY_HTTPS_PORT" ]; then
-	        obsidian_http_redirects="  redir /obsidian https://$CADDY_HOST:$CADDY_HTTPS_PORT/obsidian/ 308
-  redir /obsidian/* https://$CADDY_HOST:$CADDY_HTTPS_PORT{uri} 308"
-	      fi
-	    fi
-
 	    if [ -n "$CADDY_HTTPS_PORT" ]; then
       cat > "$tmp_caddyfile" <<EOF
 $caddy_global_options
 :80 {
   redir /searxng /searxng/ 308
-$obsidian_http_redirects
 $jaeger_http_redirect
 $filebrowser_http_redirect
 
@@ -2801,8 +2128,6 @@ https://$CADDY_HOST {
 $jaeger_handle
 $filebrowser_handle
 
-$obsidian_handle
-
   respond / "teamD container edge (TLS): /searxng/ and optional add-ons"
 }
 $silverbullet_https_block
@@ -2822,8 +2147,6 @@ $filebrowser_http_redirect
   }
 $jaeger_handle
 $filebrowser_handle
-
-$obsidian_handle
 
   respond / "teamD container edge: /searxng/ and optional add-ons"
 }
@@ -2909,19 +2232,8 @@ while [ "$#" -gt 0 ]; do
     --no-start) SKIP_START=1 ;;
     --no-searxng) ENABLE_SEARXNG=0 ;;
     --no-caddy) ENABLE_CADDY=0 ;;
-    --with-obsidian) ENABLE_OBSIDIAN=1 ;;
-    --with-obsidian-mcp)
-      ENABLE_OBSIDIAN=1
-      ENABLE_OBSIDIAN_MCP=1
-      WRITE_OBSIDIAN_MCP_EXAMPLE=1
-      ;;
-    --with-obsidian-mcp-example)
-      ENABLE_OBSIDIAN=1
-      WRITE_OBSIDIAN_MCP_EXAMPLE=1
-      ;;
     --with-jaeger) ENABLE_JAEGER=1 ;;
     --with-mem0) ENABLE_MEM0=1 ;;
-    --with-logseq) fail "Logseq Publish has been removed; use --with-silverbullet or --with-silverbullet-mcp" ;;
     --with-silverbullet)
       ENABLE_SILVERBULLET=1
       ;;
@@ -2941,18 +2253,6 @@ while [ "$#" -gt 0 ]; do
     --with-agent-browser)
       INSTALL_AGENT_BROWSER=1
       ;;
-    --with-lightpanda)
-      ENABLE_LIGHTPANDA=1
-      ;;
-    --with-lightpanda-mcp)
-      ENABLE_LIGHTPANDA=1
-      ENABLE_LIGHTPANDA_MCP=1
-      WRITE_LIGHTPANDA_MCP_EXAMPLE=1
-      ;;
-    --with-lightpanda-mcp-example)
-      ENABLE_LIGHTPANDA=1
-      WRITE_LIGHTPANDA_MCP_EXAMPLE=1
-      ;;
     --with-filebrowser)
       ENABLE_FILEBROWSER=1
       ;;
@@ -2963,12 +2263,6 @@ while [ "$#" -gt 0 ]; do
       [ "$#" -gt 0 ] || fail "--searxng-port requires a value"
       valid_port "$1" || fail "invalid --searxng-port: $1"
       SEARXNG_PORT=$1
-      ;;
-    --obsidian-port)
-      shift
-      [ "$#" -gt 0 ] || fail "--obsidian-port requires a value"
-      valid_port "$1" || fail "invalid --obsidian-port: $1"
-      OBSIDIAN_PORT=$1
       ;;
     --jaeger-ui-port)
       shift
@@ -3012,9 +2306,7 @@ fi
 need_command id
 need_command sed
 resolve_filebrowser_base_url
-validate_obsidian_subfolder
 validate_caddy_domain_mode
-ensure_obsidian_https_port
 ensure_silverbullet_https_port
 validate_silverbullet_url_prefix
 ensure_caddy_host
@@ -3025,14 +2317,13 @@ if [ "$(id -u)" -ne 0 ] && [ "$DRY_RUN" -eq 0 ]; then
   need_command sudo
 fi
 
-if [ "$ENABLE_SEARXNG" -eq 0 ] && [ "$ENABLE_OBSIDIAN" -eq 0 ] && [ "$ENABLE_JAEGER" -eq 0 ] && [ "$ENABLE_MEM0" -eq 0 ] && [ "$ENABLE_SILVERBULLET" -eq 0 ] && [ "$ENABLE_BROWSERLESS" -eq 0 ] && [ "$INSTALL_AGENT_BROWSER" -eq 0 ] && [ "$ENABLE_LIGHTPANDA" -eq 0 ] && [ "$ENABLE_FILEBROWSER" -eq 0 ] && [ "$ENABLE_CADDY" -eq 0 ]; then
-  fail "nothing to deploy: SearXNG disabled, Obsidian not enabled, Jaeger not enabled, Mem0 not enabled, SilverBullet not enabled, Browserless/agent-browser not enabled, Lightpanda not enabled, File Browser not enabled, and Caddy disabled"
+if [ "$ENABLE_SEARXNG" -eq 0 ] && [ "$ENABLE_JAEGER" -eq 0 ] && [ "$ENABLE_MEM0" -eq 0 ] && [ "$ENABLE_SILVERBULLET" -eq 0 ] && [ "$ENABLE_BROWSERLESS" -eq 0 ] && [ "$INSTALL_AGENT_BROWSER" -eq 0 ] && [ "$ENABLE_FILEBROWSER" -eq 0 ] && [ "$ENABLE_CADDY" -eq 0 ]; then
+  fail "nothing to deploy: SearXNG disabled, Jaeger not enabled, Mem0 not enabled, SilverBullet not enabled, Browserless/agent-browser not enabled, File Browser not enabled, and Caddy disabled"
 fi
 
 if docker_components_enabled; then
   ensure_docker
   ensure_edge_network
-  remove_legacy_logseq_runtime
   remove_legacy_manual_mcp_runtime
 fi
 
@@ -3040,13 +2331,6 @@ if [ "$ENABLE_SEARXNG" -eq 1 ]; then
   write_searxng_files
   configure_agentd_web_search_env
   compose_up "$SEARXNG_COMPOSE"
-fi
-
-if [ "$ENABLE_OBSIDIAN" -eq 1 ]; then
-  write_obsidian_files
-  ensure_obsidian_legacy_vault_link
-  write_obsidian_vault_config
-  compose_up "$OBSIDIAN_COMPOSE"
 fi
 
 if [ "$ENABLE_JAEGER" -eq 1 ]; then
@@ -3085,42 +2369,14 @@ if [ "$WRITE_SILVERBULLET_MCP_EXAMPLE" -eq 1 ]; then
   write_silverbullet_mcp_example
 fi
 
-if [ "$WRITE_OBSIDIAN_MCP_EXAMPLE" -eq 1 ]; then
-  write_obsidian_mcp_example
-fi
-
-if [ "$ENABLE_LIGHTPANDA" -eq 1 ]; then
-  install_lightpanda_binary
-  if [ "$ENABLE_LIGHTPANDA_MCP" -eq 1 ] || [ "$WRITE_LIGHTPANDA_MCP_EXAMPLE" -eq 1 ]; then
-    write_lightpanda_mcp_wrapper
-  fi
-fi
-
 if [ "$ENABLE_FILEBROWSER" -eq 1 ]; then
   write_filebrowser_files
   compose_up_filebrowser
 fi
 
-if [ "$WRITE_LIGHTPANDA_MCP_EXAMPLE" -eq 1 ]; then
-  write_lightpanda_mcp_example
-fi
-
 if [ "$ENABLE_SILVERBULLET_MCP" -eq 1 ]; then
   append_silverbullet_mcp_connector_config
   ensure_teamd_docker_access
-fi
-
-if [ "$ENABLE_OBSIDIAN_MCP" -eq 1 ]; then
-  append_obsidian_mcp_connector_config
-  ensure_teamd_docker_access
-else
-  disable_obsidian_mcp_connector_config
-fi
-
-if [ "$ENABLE_LIGHTPANDA_MCP" -eq 1 ]; then
-  append_lightpanda_mcp_connector_config
-else
-  disable_lightpanda_mcp_connector_config
 fi
 
 if [ "$ENABLE_CADDY" -eq 1 ]; then
@@ -3129,7 +2385,7 @@ if [ "$ENABLE_CADDY" -eq 1 ]; then
   reload_caddy_if_running
 fi
 
-if [ "$ENABLE_SEARXNG" -eq 1 ] || [ "$ENABLE_OBSIDIAN_MCP" -eq 1 ] || [ "$ENABLE_SILVERBULLET_MCP" -eq 1 ] || [ "$ENABLE_LIGHTPANDA_MCP" -eq 1 ] || [ "$ENABLE_JAEGER" -eq 1 ] || [ "$ENABLE_MEM0" -eq 1 ] || [ "$ENABLE_FILEBROWSER" -eq 1 ] || [ "$INSTALL_AGENT_BROWSER" -eq 1 ]; then
+if [ "$ENABLE_SEARXNG" -eq 1 ] || [ "$ENABLE_SILVERBULLET_MCP" -eq 1 ] || [ "$ENABLE_JAEGER" -eq 1 ] || [ "$ENABLE_MEM0" -eq 1 ] || [ "$ENABLE_FILEBROWSER" -eq 1 ] || [ "$INSTALL_AGENT_BROWSER" -eq 1 ]; then
   restart_teamd_services
 fi
 
@@ -3165,54 +2421,6 @@ EOF
   elif [ "$ENABLE_CADDY" -eq 1 ]; then
     cat <<EOF
     Caddy URL: http://127.0.0.1:$CADDY_HTTP_PORT/searxng/
-EOF
-  fi
-fi
-
-if [ "$ENABLE_OBSIDIAN" -eq 1 ]; then
-  cat <<EOF
-  Obsidian:
-    Container: teamd-obsidian
-    Local URL: http://127.0.0.1:$OBSIDIAN_PORT$OBSIDIAN_SUBFOLDER
-    Compose: $OBSIDIAN_COMPOSE
-    Start command: docker compose -f $OBSIDIAN_COMPOSE up -d
-    Vaults: $OBSIDIAN_VAULTS_DIR
-    Managed vault: $OBSIDIAN_VAULT_DIR
-EOF
-	  if [ -n "$CADDY_DOMAIN" ] && [ "$CADDY_SINGLE_DOMAIN" -eq 1 ]; then
-	    cat <<EOF
-    Caddy URL: https://$CADDY_DOMAIN/obsidian/
-EOF
-	  elif [ -n "$CADDY_DOMAIN" ]; then
-	    cat <<EOF
-    Caddy URL: https://obsidian.$CADDY_DOMAIN/
-EOF
-  elif [ -n "$CADDY_HTTPS_PORT" ]; then
-    cat <<EOF
-    Caddy URL: https://$CADDY_HOST:$CADDY_HTTPS_PORT/obsidian/
-EOF
-  fi
-  if [ "$ENABLE_OBSIDIAN_MCP" -eq 1 ]; then
-    cat <<EOF
-    Automated MCP:
-      Package: $OBSIDIAN_MCP_PACKAGE
-      Runtime image: $OBSIDIAN_MCP_NODE_IMAGE
-      Vault mount: $OBSIDIAN_VAULT_DIR:/vault:rw
-      agentd config: $CONFIG_FILE
-      Service user Docker access: $SERVICE_USER -> docker group
-      Restarted services unless absent/no-start: $DAEMON_SERVICE, $TELEGRAM_SERVICE
-EOF
-  else
-    cat <<EOF
-    Agent access:
-      run again with --with-obsidian-mcp to add filesystem-backed Obsidian MCP
-EOF
-  fi
-  if [ "$WRITE_OBSIDIAN_MCP_EXAMPLE" -eq 1 ]; then
-    cat <<EOF
-    MCP example: $OBSIDIAN_MCP_EXAMPLE
-    MCP package: $OBSIDIAN_MCP_PACKAGE
-    MCP runtime image: $OBSIDIAN_MCP_NODE_IMAGE
 EOF
   fi
 fi
@@ -3356,7 +2564,6 @@ if [ "$ENABLE_SILVERBULLET" -eq 1 ]; then
     Local URL: http://127.0.0.1:$SILVERBULLET_PORT
     URL prefix: ${silverbullet_summary_prefix:-<none>}
     Space: $SILVERBULLET_SPACE_DIR
-    Legacy migration source: $LEGACY_LOGSEQ_GRAPH_DIR
     Compose: $SILVERBULLET_COMPOSE
     Start command: docker compose -f $SILVERBULLET_COMPOSE up -d
     SB_USER credentials file: $SILVERBULLET_ENV_FILE
@@ -3392,29 +2599,6 @@ EOF
   fi
 fi
 
-if [ "$ENABLE_LIGHTPANDA" -eq 1 ]; then
-  cat <<EOF
-  Lightpanda:
-    Binary: $LIGHTPANDA_BIN
-    PATH symlink: $LIGHTPANDA_PATH_LINK
-    Release tag: $LIGHTPANDA_RELEASE_TAG
-    Download URL: $(lightpanda_download_url)
-    Telemetry disabled: $LIGHTPANDA_DISABLE_TELEMETRY
-EOF
-  if [ "$ENABLE_LIGHTPANDA_MCP" -eq 1 ]; then
-    cat <<EOF
-    MCP stdio wrapper: $LIGHTPANDA_MCP_STDIO_WRAPPER
-    MCP connector: [daemon.mcp_connectors.lightpanda] in $CONFIG_FILE
-    Restarted services unless absent/no-start: $DAEMON_SERVICE, $TELEGRAM_SERVICE
-EOF
-  fi
-  if [ "$WRITE_LIGHTPANDA_MCP_EXAMPLE" -eq 1 ]; then
-    cat <<EOF
-    MCP example: $LIGHTPANDA_MCP_EXAMPLE
-EOF
-  fi
-fi
-
 if [ "$ENABLE_CADDY" -eq 1 ]; then
   cat <<EOF
   Caddy:
@@ -3427,11 +2611,11 @@ EOF
 	  if [ -n "$CADDY_DOMAIN" ] && [ "$CADDY_SINGLE_DOMAIN" -eq 1 ]; then
 	    cat <<EOF
     Single-domain mode: yes
-    Routes with TEAMD_CADDY_DOMAIN single-domain: /sb/ for SilverBullet, /searxng/, /jaeger/, /files/ when enabled, and legacy /obsidian/ when enabled
+    Routes with TEAMD_CADDY_DOMAIN single-domain: /sb/ for SilverBullet, /searxng/, /jaeger/, /files/ when enabled
 EOF
 	  elif [ -n "$CADDY_DOMAIN" ]; then
 	    cat <<EOF
-    Routes with TEAMD_CADDY_DOMAIN: search.<domain> plus enabled notes.<domain>, jaeger.<domain>, files.<domain>, and legacy obsidian.<domain>
+    Routes with TEAMD_CADDY_DOMAIN: search.<domain> plus enabled notes.<domain>, jaeger.<domain>, files.<domain>
 EOF
 	  elif [ -n "$CADDY_HTTPS_PORT" ]; then
 	    cat <<EOF
@@ -3439,12 +2623,11 @@ EOF
       HTTP: /searxng/
       HTTP: /jaeger/ when enabled
       HTTP/HTTPS: /files/ when File Browser is enabled
-      HTTPS: https://$CADDY_HOST:$CADDY_HTTPS_PORT/obsidian/ when legacy Obsidian is enabled
       HTTPS: https://$CADDY_HOST:$SILVERBULLET_HTTPS_PORT/ when SilverBullet is enabled
 EOF
 	  else
 	    cat <<EOF
-    Routes without TEAMD_CADDY_DOMAIN: /searxng/ plus enabled /jaeger/, /files/ and legacy /obsidian/; SilverBullet uses https://$CADDY_HOST:$SILVERBULLET_HTTPS_PORT/ when enabled
+    Routes without TEAMD_CADDY_DOMAIN: /searxng/ plus enabled /jaeger/ and /files/; SilverBullet uses https://$CADDY_HOST:$SILVERBULLET_HTTPS_PORT/ when enabled
 EOF
 	  fi
 fi

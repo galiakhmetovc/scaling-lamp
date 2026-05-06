@@ -2011,7 +2011,7 @@ impl ToolOutput {
                 "file_name": output.file_name,
                 "caption": output.caption,
                 "status": output.status,
-                "delivery_note": "queued for the current operator surface; queued is success, not final delivery; Telegram sends queued files as documents after the current turn and reports delivery failures to the chat; tell the user the file was queued/sent as a document, do not mention internal artifact ids, and do not invent Obsidian/vault fallback paths"
+                "delivery_note": "queued for the current operator surface; queued is success, not final delivery; Telegram sends queued files as documents after the current turn and reports delivery failures to the chat; tell the user the file was queued/sent as a document, do not mention internal artifact ids, and do not invent alternate storage fallback paths"
             })
             .to_string(),
             Self::MemoryAdd(output) => json!({

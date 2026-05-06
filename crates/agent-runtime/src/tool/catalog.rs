@@ -130,36 +130,6 @@ impl ToolCatalog {
     fn definitions() -> Vec<ToolDefinition> {
         vec![
             ToolDefinition {
-                name: ToolName::FsRead,
-                family: ToolFamily::Filesystem,
-                description: "Read a UTF-8 text file from the workspace",
-                policy: ToolPolicy {
-                    read_only: true,
-                    destructive: false,
-                    requires_approval: false,
-                },
-            },
-            ToolDefinition {
-                name: ToolName::FsWrite,
-                family: ToolFamily::Filesystem,
-                description: "Write a UTF-8 text file inside the workspace",
-                policy: ToolPolicy {
-                    read_only: false,
-                    destructive: true,
-                    requires_approval: true,
-                },
-            },
-            ToolDefinition {
-                name: ToolName::FsPatch,
-                family: ToolFamily::Filesystem,
-                description: "Apply exact text edits to a UTF-8 text file inside the workspace",
-                policy: ToolPolicy {
-                    read_only: false,
-                    destructive: true,
-                    requires_approval: true,
-                },
-            },
-            ToolDefinition {
                 name: ToolName::FsReadText,
                 family: ToolFamily::Filesystem,
                 description: "Read a UTF-8 text file from the workspace",
@@ -283,16 +253,6 @@ impl ToolCatalog {
                 name: ToolName::FsGlob,
                 family: ToolFamily::Filesystem,
                 description: "Match workspace paths with glob-style patterns",
-                policy: ToolPolicy {
-                    read_only: true,
-                    destructive: false,
-                    requires_approval: false,
-                },
-            },
-            ToolDefinition {
-                name: ToolName::FsSearch,
-                family: ToolFamily::Filesystem,
-                description: "Search text content inside the workspace",
                 policy: ToolPolicy {
                     read_only: true,
                     destructive: false,
@@ -692,7 +652,7 @@ impl ToolCatalog {
             ToolDefinition {
                 name: ToolName::DeliverFile,
                 family: ToolFamily::Offload,
-                description: "Queue a file for delivery to the current operator surface. Prefer workspace_path for normal files created or found in the current workspace; use artifact_id only for an existing session artifact such as a user-uploaded file or offloaded output. Do not read file contents before delivery when the path is already known. Do not create or mention artifacts just to send a workspace file. A successful tool result means status=queued, not delivered yet; Telegram sends queued files as documents after the current turn and reports delivery failures to the chat. Do not invent Obsidian/vault fallback paths.",
+                description: "Queue a file for delivery to the current operator surface. Prefer workspace_path for normal files created or found in the current workspace; use artifact_id only for an existing session artifact such as a user-uploaded file or offloaded output. Do not read file contents before delivery when the path is already known. Do not create or mention artifacts just to send a workspace file. A successful tool result means status=queued, not delivered yet; Telegram sends queued files as documents after the current turn and reports delivery failures to the chat. Do not invent alternate storage fallback paths.",
                 policy: ToolPolicy {
                     read_only: false,
                     destructive: false,

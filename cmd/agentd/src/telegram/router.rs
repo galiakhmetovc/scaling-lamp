@@ -1,7 +1,6 @@
 use super::backend::TelegramBackend;
 use super::bindings::{
-    TELEGRAM_SCOPE_GROUP, group_binding_record, private_binding_record,
-    transcript_is_after_binding_cursor,
+    group_binding_record, private_binding_record, transcript_is_after_binding_cursor,
 };
 use super::client::{TelegramClient, TelegramClientError};
 use super::commands::{
@@ -841,7 +840,7 @@ where
     }
 
     async fn send_chat_files_list(&self, chat_id: i64) -> Result<(), BootstrapError> {
-        let Some(session_id) = self.selected_session_id_for_chat(chat_id)? else {
+        let Some(session_id) = self.selected_session_id_for_chat_async(chat_id).await? else {
             self.send_text_chunks(
                 chat_id,
                 "No selected session. Use /new or /use <session_id>.",
@@ -945,7 +944,7 @@ where
             ParsedTelegramCommand::Status => {
                 let summary = self.session_summary(session_id.clone()).await?;
                 let active_run = self.render_active_run(session_id).await?;
-                let queue_status = self.render_queue_status(chat_id)?;
+                let queue_status = self.render_queue_status_async(chat_id).await?;
                 let default_agent = self.chat_default_agent_profile_id(chat_id)?;
                 self.send_text_chunks(
                     chat_id,
@@ -1074,6 +1073,16 @@ where
     fn selected_session_id_for_chat(&self, chat_id: i64) -> Result<Option<String>, BootstrapError> {
         Ok(self
             .with_store_retry(|store| store.get_telegram_chat_binding(chat_id))?
+            .and_then(|binding| binding.selected_session_id))
+    }
+
+    async fn selected_session_id_for_chat_async(
+        &self,
+        chat_id: i64,
+    ) -> Result<Option<String>, BootstrapError> {
+        Ok(self
+            .with_store_retry_async(move |store| store.get_telegram_chat_binding(chat_id))
+            .await?
             .and_then(|binding| binding.selected_session_id))
     }
 
@@ -1291,12 +1300,6 @@ where
     }
 
     fn delivery_scope_for_chat(&self, chat_id: i64) -> TelegramDeliveryScope {
-        if let Ok(Some(binding)) =
-            self.with_store_retry(|store| store.get_telegram_chat_binding(chat_id))
-            && binding.scope == TELEGRAM_SCOPE_GROUP
-        {
-            return TelegramDeliveryScope::Group;
-        }
         if chat_id < 0 {
             TelegramDeliveryScope::Group
         } else {
@@ -1396,13 +1399,14 @@ where
                 ),
             )
             .await?;
-        self.put_chat_status_record(
+        self.put_chat_status_record_async(
             chat_id,
             message.id.0,
             TELEGRAM_CHAT_STATUS_ACTIVE,
             None,
             now,
-        )?;
+        )
+        .await?;
         Ok(message)
     }
 
@@ -1448,6 +1452,32 @@ where
         .map(|_| ())
     }
 
+    async fn put_chat_status_record_async(
+        &self,
+        chat_id: i64,
+        message_id: i32,
+        state: &'static str,
+        expires_at: Option<i64>,
+        now: i64,
+    ) -> Result<(), BootstrapError> {
+        self.with_store_retry_async(move |store| {
+            let created_at = store
+                .get_telegram_chat_status(chat_id)?
+                .map(|record| record.created_at)
+                .unwrap_or(now);
+            store.put_telegram_chat_status(&TelegramChatStatusRecord {
+                telegram_chat_id: chat_id,
+                message_id,
+                state: state.to_string(),
+                expires_at,
+                created_at,
+                updated_at: now,
+            })
+        })
+        .await
+        .map(|_| ())
+    }
+
     fn mark_chat_status_stale(
         &self,
         chat_id: i64,
@@ -1472,15 +1502,33 @@ where
     }
 
     async fn cleanup_chat_status_for_new_input(&self, chat_id: i64) -> Result<(), BootstrapError> {
-        let Some(status) =
-            self.with_store_retry(|store| store.get_telegram_chat_status(chat_id))?
+        let Some(status) = self
+            .with_store_retry_async(move |store| store.get_telegram_chat_status(chat_id))
+            .await?
         else {
             return Ok(());
         };
         let _ = self
             .delete_message_delivered(chat_id, status.message_id)
             .await;
-        self.with_store_retry(|store| store.delete_telegram_chat_status(chat_id))?;
+        let worker = self.clone();
+        tokio::spawn(async move {
+            if let Err(error) = worker
+                .with_store_retry_async(move |store| store.delete_telegram_chat_status(chat_id))
+                .await
+            {
+                DiagnosticEventBuilder::new(
+                    &worker.app.config,
+                    "warn",
+                    "telegram",
+                    "chat_status.cleanup_error",
+                    "telegram chat status cleanup failed",
+                )
+                .error(error.to_string())
+                .field("chat_id", chat_id)
+                .emit(&worker.audit);
+            }
+        });
         Ok(())
     }
 
@@ -2139,6 +2187,23 @@ where
         .map_err(BootstrapError::Store)
     }
 
+    async fn with_store_retry_async<T, F>(&self, mut operation: F) -> Result<T, BootstrapError>
+    where
+        T: Send + 'static,
+        F: FnMut(&PersistenceStore) -> Result<T, StoreError> + Send + 'static,
+    {
+        let persistence = self.app.persistence.clone();
+        tokio::task::spawn_blocking(move || {
+            retry_store_sync(store_retry_attempts(), store_retry_delay(), || {
+                let store = PersistenceStore::open_runtime(&persistence)?;
+                operation(&store)
+            })
+        })
+        .await
+        .map_err(map_join_error)?
+        .map_err(BootstrapError::Store)
+    }
+
     fn poll_interval(&self) -> Duration {
         Duration::from_millis(self.app.config.telegram.poll_interval_ms)
     }
@@ -2412,26 +2477,22 @@ where
             }
         });
 
-        tokio::select! {
-            result = task => {
-                if let Err(error) = result {
-                    DiagnosticEventBuilder::new(
-                        &self.app.config,
-                        "error",
-                        "telegram",
-                        "chat_turn.background_join_error",
-                        "telegram chat turn background task failed",
-                    )
-                    .error(error.to_string())
-                    .field("chat_id", chat_id)
-                    .emit(&self.audit);
-                }
-            }
-            _ = tokio::time::sleep(Duration::from_millis(
-                self.app.config.telegram.chat_turn_fast_settle_ms,
-            )) => {}
+        let settle = Duration::from_millis(self.app.config.telegram.chat_turn_fast_settle_ms);
+        let _ = tokio::task::spawn_blocking(move || std::thread::sleep(settle)).await;
+        if task.is_finished()
+            && let Err(error) = task.await
+        {
+            DiagnosticEventBuilder::new(
+                &self.app.config,
+                "error",
+                "telegram",
+                "chat_turn.background_join_error",
+                "telegram chat turn background task failed",
+            )
+            .error(error.to_string())
+            .field("chat_id", chat_id)
+            .emit(&self.audit);
         }
-
         Ok(())
     }
 
@@ -2443,8 +2504,9 @@ where
         message: String,
         now: i64,
     ) -> Result<(), BootstrapError> {
-        let Some(binding) =
-            self.with_store_retry(|store| store.get_telegram_chat_binding(chat_id))?
+        let Some(binding) = self
+            .with_store_retry_async(move |store| store.get_telegram_chat_binding(chat_id))
+            .await?
         else {
             self.send_text_chunks(
                 chat_id,
@@ -2463,15 +2525,18 @@ where
                 .await
             }
             TELEGRAM_INBOUND_QUEUE_MODE_QUEUE => {
-                self.queue_telegram_inbound_message(
+                self.queue_telegram_inbound_message_async(
                     &session_id,
                     chat_id,
                     telegram_message_id,
                     &message,
                     now,
                     now,
-                )?;
-                let queued_count = self.queued_telegram_inbox_count(&session_id)?;
+                )
+                .await?;
+                let queued_count = self
+                    .queued_telegram_inbox_count_async(session_id.clone())
+                    .await?;
                 self.send_text_chunks(
                     chat_id,
                     &format!(
@@ -2484,16 +2549,18 @@ where
                 let window_ms = self.effective_inbound_coalesce_window_ms(&binding);
                 let window_seconds = coalesce_window_seconds(window_ms);
                 let available_at = now.saturating_add(window_seconds);
-                self.queue_telegram_inbound_message(
+                self.queue_telegram_inbound_message_async(
                     &session_id,
                     chat_id,
                     telegram_message_id,
                     &message,
                     now,
                     available_at,
-                )?;
+                )
+                .await?;
                 let queued_count =
-                    self.refresh_queued_telegram_inbox_available_at(&session_id, available_at)?;
+                    self.refresh_queued_telegram_inbox_available_at_async(session_id.clone(), available_at)
+                        .await?;
                 self.send_text_chunks(
                     chat_id,
                     &format!(
@@ -2504,15 +2571,18 @@ where
             }
             TELEGRAM_INBOUND_QUEUE_MODE_RESTART => {
                 let _ = self.cancel_active_run(session_id.clone()).await?;
-                self.queue_telegram_inbound_message(
+                self.queue_telegram_inbound_message_async(
                     &session_id,
                     chat_id,
                     telegram_message_id,
                     &message,
                     now,
                     now,
-                )?;
-                let queued_count = self.queued_telegram_inbox_count(&session_id)?;
+                )
+                .await?;
+                let queued_count = self
+                    .queued_telegram_inbox_count_async(session_id.clone())
+                    .await?;
                 self.send_text_chunks(
                     chat_id,
                     &format!(
@@ -2547,6 +2617,33 @@ where
             .map(|session_id| self.queued_telegram_inbox_count(session_id))
             .transpose()?
             .unwrap_or_default();
+        Ok(render_queue_status_text(
+            &mode,
+            queued_count,
+            coalesce_window_ms,
+        ))
+    }
+
+    async fn render_queue_status_async(&self, chat_id: i64) -> Result<String, BootstrapError> {
+        let binding = self
+            .with_store_retry_async(move |store| store.get_telegram_chat_binding(chat_id))
+            .await?;
+        let mode = binding
+            .as_ref()
+            .map(|binding| self.effective_inbound_queue_mode(binding))
+            .unwrap_or_else(|| self.app.config.telegram.inbound_queue_default_mode.clone());
+        let coalesce_window_ms = binding
+            .as_ref()
+            .map(|binding| self.effective_inbound_coalesce_window_ms(binding))
+            .unwrap_or_else(|| self.configured_inbound_coalesce_window_ms());
+        let queued_count = if let Some(session_id) = binding
+            .as_ref()
+            .and_then(|binding| binding.selected_session_id.clone())
+        {
+            self.queued_telegram_inbox_count_async(session_id).await?
+        } else {
+            0
+        };
         Ok(render_queue_status_text(
             &mode,
             queued_count,
@@ -2609,7 +2706,7 @@ where
         Ok(())
     }
 
-    fn queue_telegram_inbound_message(
+    async fn queue_telegram_inbound_message_async(
         &self,
         session_id: &str,
         chat_id: i64,
@@ -2627,7 +2724,8 @@ where
             available_at,
         )
         .map_err(BootstrapError::RecordConversion)?;
-        self.with_store_retry(|store| store.put_session_inbox_event(&record))?;
+        self.with_store_retry_async(move |store| store.put_session_inbox_event(&record))
+            .await?;
         Ok(())
     }
 
@@ -2635,6 +2733,21 @@ where
         let records = self.with_store_retry(|store| {
             store.list_queued_session_inbox_events_for_session(session_id)
         })?;
+        Ok(records
+            .iter()
+            .filter(|record| is_telegram_inbox_event(record))
+            .count())
+    }
+
+    async fn queued_telegram_inbox_count_async(
+        &self,
+        session_id: String,
+    ) -> Result<usize, BootstrapError> {
+        let records = self
+            .with_store_retry_async(move |store| {
+                store.list_queued_session_inbox_events_for_session(&session_id)
+            })
+            .await?;
         Ok(records
             .iter()
             .filter(|record| is_telegram_inbox_event(record))
@@ -2662,6 +2775,30 @@ where
             }
             Ok(count)
         })
+    }
+
+    async fn refresh_queued_telegram_inbox_available_at_async(
+        &self,
+        session_id: String,
+        available_at: i64,
+    ) -> Result<usize, BootstrapError> {
+        self.with_store_retry_async(move |store| {
+            let mut count = 0usize;
+            for mut record in store.list_queued_session_inbox_events_for_session(&session_id)? {
+                if !is_telegram_inbox_event(&record) {
+                    continue;
+                }
+                record.status = "queued".to_string();
+                record.available_at = available_at;
+                record.claimed_at = None;
+                record.processed_at = None;
+                record.error = None;
+                store.put_session_inbox_event(&record)?;
+                count += 1;
+            }
+            Ok(count)
+        })
+        .await
     }
 
     fn clear_queued_telegram_inbox_events(

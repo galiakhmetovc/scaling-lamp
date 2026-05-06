@@ -65,7 +65,7 @@ cargo build --release -p agentd
 - [docs/current/09-operator-cheatsheet.md](docs/current/09-operator-cheatsheet.md) — практические команды и сценарии для оператора.
 - [docs/current/18-runtime-policy-config-audit.md](docs/current/18-runtime-policy-config-audit.md) — что уже вынесено из hardcode в `config.toml` и что осталось.
 
-Исторические design- и planning-документы остаются в [`docs/superpowers`](docs/superpowers), но это не каноническая документация текущей реализации.
+Исторические design- и planning-документы старых релизов удалены из canonical branch. Текущая документация живёт в [`docs/current`](docs/current).
 
 ## Базовые инварианты
 

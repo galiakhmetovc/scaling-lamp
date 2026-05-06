@@ -35,21 +35,16 @@ assert_contains "$binary_help_output" "root@31.130.128.89"
 
 containers_help_output=$("$CONTAINERS_DEPLOY_SCRIPT" --help)
 assert_contains "$containers_help_output" "container add-ons"
-assert_contains "$containers_help_output" "--with-obsidian"
-assert_contains "$containers_help_output" "--with-obsidian-mcp"
 assert_contains "$containers_help_output" "--with-jaeger"
 assert_contains "$containers_help_output" "--with-mem0"
 assert_contains "$containers_help_output" "--with-silverbullet"
 assert_contains "$containers_help_output" "--with-silverbullet-mcp"
 assert_contains "$containers_help_output" "--with-browserless"
 assert_contains "$containers_help_output" "--with-agent-browser"
-assert_contains "$containers_help_output" "--with-lightpanda-mcp"
 assert_contains "$containers_help_output" "--single-domain"
 assert_contains "$containers_help_output" "--no-searxng"
 assert_contains "$containers_help_output" "--no-caddy"
-assert_contains "$containers_help_output" "--with-obsidian-mcp-example"
 assert_contains "$containers_help_output" "--with-silverbullet-mcp-example"
-assert_contains "$containers_help_output" "--with-lightpanda-mcp-example"
 
 diagnostics_help_output=$("$DIAGNOSTICS_SCRIPT" --help)
 assert_contains "$diagnostics_help_output" "collects production diagnostics"
@@ -71,22 +66,13 @@ assert_contains "$dry_run_output" "telegram pair"
 assert_contains "$dry_run_output" "session list"
 
 containers_dry_run_output=$(
-  "$CONTAINERS_DEPLOY_SCRIPT" --dry-run --non-interactive --no-start --with-obsidian-mcp 2>&1
+  "$CONTAINERS_DEPLOY_SCRIPT" --dry-run --non-interactive --no-start 2>&1
 )
 
 assert_contains "$containers_dry_run_output" "DRY RUN"
 assert_contains "$containers_dry_run_output" "teamd-searxng"
 assert_contains "$containers_dry_run_output" "127.0.0.1:8888"
 assert_contains "$containers_dry_run_output" "mcp-searxng"
-assert_contains "$containers_dry_run_output" "teamd-obsidian"
-assert_contains "$containers_dry_run_output" "URL: http://127.0.0.1:8080/obsidian/"
-assert_contains "$containers_dry_run_output" "compatibility symlink /var/lib/teamd/vault -> /var/lib/teamd/vaults/teamd"
-assert_contains "$containers_dry_run_output" "seed Obsidian vault registry"
-assert_contains "$containers_dry_run_output" "upsert enabled filesystem-backed Obsidian MCP connector"
-assert_contains "$containers_dry_run_output" "obsidian-mcp.example.toml"
-assert_contains "$containers_dry_run_output" "@bitbonsai/mcpvault@latest"
-assert_contains "$containers_dry_run_output" "docker.io/library/node:22-alpine"
-assert_contains "$containers_dry_run_output" "usermod"
 assert_contains "$containers_dry_run_output" "teamd-caddy"
 assert_contains "$containers_dry_run_output" "docker compose"
 assert_contains "$containers_dry_run_output" "upsert SearXNG web_search defaults in /etc/teamd/teamd.env"
@@ -129,11 +115,9 @@ containers_silverbullet_dry_run_output=$(
   "$CONTAINERS_DEPLOY_SCRIPT" --dry-run --non-interactive --no-start --with-silverbullet-mcp 2>&1
 )
 
-assert_contains "$containers_silverbullet_dry_run_output" "remove legacy Logseq Publish containers"
 assert_contains "$containers_silverbullet_dry_run_output" "teamd-silverbullet"
 assert_contains "$containers_silverbullet_dry_run_output" "teamd-silverbullet-mcp"
 assert_contains "$containers_silverbullet_dry_run_output" "/var/lib/teamd/knowledge/silverbullet/teamd"
-assert_contains "$containers_silverbullet_dry_run_output" "/var/lib/teamd/knowledge/logseq/teamd"
 assert_contains "$containers_silverbullet_dry_run_output" "write /opt/teamd/containers/silverbullet/docker-compose.yml for teamd-silverbullet"
 assert_contains "$containers_silverbullet_dry_run_output" "seed SilverBullet credentials and API/MCP tokens"
 assert_contains "$containers_silverbullet_dry_run_output" "upsert enabled SilverBullet MCP connector"
@@ -151,20 +135,6 @@ assert_contains "$containers_single_domain_silverbullet_dry_run_output" "set Sil
 assert_contains "$containers_single_domain_silverbullet_dry_run_output" "URL prefix: /sb"
 assert_contains "$containers_single_domain_silverbullet_dry_run_output" "Caddy URL: https://teamd.qlbc.ru/sb/"
 
-containers_lightpanda_dry_run_output=$(
-  "$CONTAINERS_DEPLOY_SCRIPT" --dry-run --non-interactive --no-start --no-searxng --no-caddy --with-lightpanda-mcp 2>&1
-)
-
-assert_contains "$containers_lightpanda_dry_run_output" "DRY RUN"
-assert_contains "$containers_lightpanda_dry_run_output" "install Lightpanda browser binary"
-assert_contains "$containers_lightpanda_dry_run_output" "/opt/teamd/bin/lightpanda"
-assert_contains "$containers_lightpanda_dry_run_output" "/usr/local/bin/lightpanda"
-assert_contains "$containers_lightpanda_dry_run_output" "write /opt/teamd/containers/lightpanda/lightpanda-mcp-stdio.sh"
-assert_contains "$containers_lightpanda_dry_run_output" "upsert enabled Lightpanda MCP connector"
-assert_contains "$containers_lightpanda_dry_run_output" "lightpanda-mcp.example.toml"
-assert_contains "$containers_lightpanda_dry_run_output" "MCP connector: [daemon.mcp_connectors.lightpanda]"
-assert_contains "$containers_lightpanda_dry_run_output" "Telemetry disabled: true"
-
 containers_browserless_dry_run_output=$(
   "$CONTAINERS_DEPLOY_SCRIPT" --dry-run --non-interactive --no-start --no-searxng --no-caddy --with-browserless 2>&1
 )
@@ -181,7 +151,6 @@ assert_contains "$containers_browserless_dry_run_output" "TEAMD_BROWSER_ENABLED=
 assert_contains "$containers_browserless_dry_run_output" "TEAMD_BROWSER_PROVIDER=cdp"
 assert_contains "$containers_browserless_dry_run_output" "TEAMD_BROWSERLESS_API_URL=http://127.0.0.1:3000"
 assert_contains "$containers_browserless_dry_run_output" "TEAMD_BROWSERLESS_CDP_URL=ws://127.0.0.1:3000/chromium?token="
-assert_contains "$containers_browserless_dry_run_output" "disable legacy Lightpanda MCP connector"
 
 containers_single_domain_dry_run_output=$(
   TEAMD_CADDY_DOMAIN='teamd.qlbc.ru' \
@@ -193,10 +162,10 @@ assert_contains "$containers_single_domain_dry_run_output" "UI URL: http://127.0
 assert_contains "$containers_single_domain_dry_run_output" "Caddy URL: https://teamd.qlbc.ru/searxng/"
 assert_contains "$containers_single_domain_dry_run_output" "Caddy URL: https://teamd.qlbc.ru/jaeger/"
 assert_contains "$containers_single_domain_dry_run_output" "Caddy URL: https://teamd.qlbc.ru/"
-assert_contains "$containers_single_domain_dry_run_output" "Routes with TEAMD_CADDY_DOMAIN single-domain: /sb/ for SilverBullet, /searxng/, /jaeger/, /files/ when enabled, and legacy /obsidian/ when enabled"
+assert_contains "$containers_single_domain_dry_run_output" "Routes with TEAMD_CADDY_DOMAIN single-domain: /sb/ for SilverBullet, /searxng/, /jaeger/, /files/ when enabled"
 
 containers_dry_run_start_output=$(
-  "$CONTAINERS_DEPLOY_SCRIPT" --dry-run --non-interactive --with-obsidian-mcp 2>&1
+  "$CONTAINERS_DEPLOY_SCRIPT" --dry-run --non-interactive --with-jaeger 2>&1
 )
 
 assert_contains "$containers_dry_run_start_output" "'caddy' 'reload'"
@@ -206,16 +175,6 @@ grep -q 'redir /searxng /searxng/ 308' "$CONTAINERS_DEPLOY_SCRIPT" \
   || fail "expected SearXNG slash redirect in Caddyfile template"
 grep -q 'header_up X-Script-Name /searxng' "$CONTAINERS_DEPLOY_SCRIPT" \
   || fail "expected SearXNG X-Script-Name header in Caddyfile template"
-grep -q 'OBSIDIAN_IMAGE=${TEAMD_OBSIDIAN_IMAGE:-lscr.io/linuxserver/obsidian:latest}' "$CONTAINERS_DEPLOY_SCRIPT" \
-  || fail "expected linuxserver Obsidian image default"
-grep -q '"127.0.0.1:$OBSIDIAN_PORT:$OBSIDIAN_CONTAINER_PORT"' "$CONTAINERS_DEPLOY_SCRIPT" \
-  || fail "expected configurable Obsidian container port mapping"
-grep -q 'reverse_proxy teamd-obsidian:$OBSIDIAN_CONTAINER_PORT' "$CONTAINERS_DEPLOY_SCRIPT" \
-  || fail "expected Caddy to proxy to configurable Obsidian container port"
-grep -q 'tls internal' "$CONTAINERS_DEPLOY_SCRIPT" \
-  || fail "expected internal TLS support for Obsidian without a dedicated domain"
-grep -q 'redir /obsidian/\* https://$CADDY_HOST:$CADDY_HTTPS_PORT{uri} 308' "$CONTAINERS_DEPLOY_SCRIPT" \
-  || fail "expected HTTP Obsidian traffic to redirect to HTTPS"
 grep -q 'TEAMD_CADDY_HOST' "$CONTAINERS_DEPLOY_SCRIPT" \
   || fail "expected configurable Caddy host for internal TLS"
 grep -q 'https://$CADDY_HOST {' "$CONTAINERS_DEPLOY_SCRIPT" \
@@ -248,12 +207,6 @@ grep -q 'teamd-silverbullet-mcp' "$CONTAINERS_DEPLOY_SCRIPT" \
   || fail "expected SilverBullet MCP container support"
 grep -q 'mcp-remote' "$CONTAINERS_DEPLOY_SCRIPT" \
   || fail "expected MCP stdio bridge through mcp-remote"
-grep -q 'LIGHTPANDA_RELEASE_TAG=${TEAMD_LIGHTPANDA_RELEASE_TAG:-nightly}' "$CONTAINERS_DEPLOY_SCRIPT" \
-  || fail "expected configurable Lightpanda release tag"
-grep -q 'lightpanda mcp' "$CONTAINERS_DEPLOY_SCRIPT" \
-  || fail "expected Lightpanda MCP support"
-grep -q 'LIGHTPANDA_DISABLE_TELEMETRY=true' "$CONTAINERS_DEPLOY_SCRIPT" \
-  || fail "expected Lightpanda telemetry disabled by default"
 grep -q 'BROWSERLESS_IMAGE=${TEAMD_BROWSERLESS_IMAGE:-ghcr.io/browserless/chromium:latest}' "$CONTAINERS_DEPLOY_SCRIPT" \
   || fail "expected Browserless chromium image default"
 grep -q 'TOKEN=$BROWSERLESS_TOKEN' "$CONTAINERS_DEPLOY_SCRIPT" \
@@ -295,6 +248,7 @@ mkdir -p "$existing_env_dir"
 : > "$existing_env"
 
 existing_env_output=$(
+  TEAMD_DATABASE_URL='postgresql://teamd:secret@127.0.0.1:5432/teamd' \
   TEAMD_DEPLOY_ENV_FILE="$existing_env" \
     "$DEPLOY_SCRIPT" --dry-run --non-interactive --no-build --no-start 2>&1
 )
@@ -348,6 +302,7 @@ old_rust_output=$(
     RUSTUP_HOME="$fake_rustup_home" \
     TEAMD_TELEGRAM_BOT_TOKEN='123456789:test-token' \
     TEAMD_PROVIDER_API_KEY='zai-test-key' \
+    TEAMD_DATABASE_URL='postgresql://teamd:secret@127.0.0.1:5432/teamd' \
     "$DEPLOY_SCRIPT" --dry-run --non-interactive --no-start 2>&1
 )
 
@@ -377,9 +332,10 @@ EOF
 chmod +x "$deps_bin/pkg-config"
 
 deps_output=$(
-  PATH="$deps_bin:/usr/bin:/bin" \
+    PATH="$deps_bin:/usr/bin:/bin" \
     TEAMD_TELEGRAM_BOT_TOKEN='123456789:test-token' \
     TEAMD_PROVIDER_API_KEY='zai-test-key' \
+    TEAMD_DATABASE_URL='postgresql://teamd:secret@127.0.0.1:5432/teamd' \
     "$DEPLOY_SCRIPT" --dry-run --non-interactive --no-start 2>&1
 )
 

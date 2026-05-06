@@ -1185,11 +1185,7 @@ pub(super) fn render_daemon_status(status: &StatusResponse) -> Result<String, Bo
         status.run_count,
         status.job_count,
         status.components,
-        status
-            .database
-            .as_deref()
-            .or(status.state_db.as_deref())
-            .unwrap_or("<unknown>")
+        status.database.as_deref().unwrap_or("<unknown>")
     ))
 }
 

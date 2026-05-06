@@ -16,7 +16,7 @@ When this skill is active and the user asks to work with notes, knowledge, docs,
 - If the `silverbullet` MCP connector is available, prefer it for note reads/searches/writes.
 - Discover available MCP resources/tools with `mcp_search_resources` when unsure.
 - If the MCP connector is unavailable, use canonical filesystem tools inside the space path only, and only after reading existing content first.
-- Do not write knowledge notes into project roots, `/root`, `/var/lib/teamd/vault`, the legacy Logseq path, or old Obsidian paths.
+- Do not write knowledge notes into project roots, `/root`, or any path outside the canonical SilverBullet space unless the operator explicitly asks.
 
 ## Source guides
 
@@ -71,7 +71,7 @@ Use one-level namespaces for actual notes:
 
 Do not create new top-level folder systems such as `01-Projects/`, `02-Areas/`, `03-Resources/`, `04-Archive/`, `06-Tasks/`, `daily/`, `zettel/`, or nested paths like `p/project/backend/db`. Namespace depth is one level.
 
-Existing legacy or miscellaneous root notes may remain. Do not move or rename them unless the operator asks.
+Existing miscellaneous root notes may remain. Do not move or rename them unless the operator asks.
 
 ## Tags and queries
 

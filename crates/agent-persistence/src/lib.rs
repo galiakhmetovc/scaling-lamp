@@ -73,13 +73,15 @@ mod tests {
             Some(OsStr::new("teamd"))
         );
         assert!(scaffold.stores.root_dir.ends_with("teamd"));
+        assert!(scaffold.stores.artifacts_dir.ends_with("teamd/artifacts"));
+        assert!(scaffold.stores.archives_dir.ends_with("teamd/archives"));
+        assert!(scaffold.stores.runs_dir.ends_with("teamd/runs"));
         assert!(
             scaffold
                 .stores
-                .legacy_sqlite_db
-                .ends_with("teamd/state.sqlite")
+                .transcripts_dir
+                .ends_with("teamd/transcripts")
         );
-        assert!(scaffold.stores.runs_dir.ends_with("teamd/runs"));
         assert!(scaffold.audit.path.ends_with("teamd/audit/runtime.jsonl"));
     }
 }

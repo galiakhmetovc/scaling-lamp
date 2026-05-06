@@ -24,14 +24,7 @@
 - `teamd-filebrowser` — browser UI для редактирования agent homes, `SYSTEM.md`, `AGENTS.md`, `skills/`, workspaces, artifacts и knowledge files;
 - `teamd-jaeger` — Jaeger UI и OTLP receiver для traces;
 - `teamd-browserless` + `agent-browser` — recommended browser automation backend для built-in `browser_*` tools;
-- Mem0/OpenMemory REST endpoint — optional semantic long-term memory backend для built-in `memory_*` tools;
-- `lightpanda` MCP connector — legacy optional headless browser для JS-страниц, форм, кликов и DOM/content extraction;
-- `teamd-obsidian` — legacy browser Obsidian для восстановления старых vault workflows;
-- `obsidian` MCP connector — legacy filesystem-backed MCP для старого vault.
-
-Logseq Publish больше не является runtime-компонентом. Deploy script удаляет legacy containers `teamd-logseq-publish` и `logseq-publish`, если они остались на хосте. Также удаляются старые anonymous Node MCP containers, запущенные через `mcp-remote` или `mcpvault`, потому что они создают неучтённый MCP surface вне managed stack. Старые Markdown-файлы не удаляются: путь `/var/lib/teamd/knowledge/logseq/teamd` используется только как migration source при первом создании SilverBullet Space.
-
-Если `--with-obsidian-mcp` не указан явно, deploy script отключает legacy connector `[daemon.mcp_connectors.obsidian]` в `/etc/teamd/config.toml`. То же правило действует для legacy Lightpanda MCP. Это нужно, чтобы модель не видела старые dynamic MCP tools в обычном production tool surface.
+- Mem0/OpenMemory REST endpoint — optional semantic long-term memory backend для built-in `memory_*` tools.
 
 ## Recommended install
 
@@ -60,12 +53,6 @@ TEAMD_MEM0_DEFAULT_USER_ID='anton' \
 
 ```bash
 ./scripts/deploy-teamd-containers.sh --no-searxng --no-caddy --with-agent-browser
-```
-
-Если нужен legacy Lightpanda MCP без контейнерной обвязки:
-
-```bash
-./scripts/deploy-teamd-containers.sh --no-searxng --no-caddy --with-lightpanda-mcp
 ```
 
 Если нужен только SilverBullet без MCP:
@@ -139,30 +126,6 @@ where p.tag == "page" and p.name:startsWith("p/") and table.includes(p.tags, "do
 order by p.name
 ]], templates.pageItem)}
 ```
-
-## Migration from old Logseq graph
-
-По умолчанию legacy source:
-
-```text
-/var/lib/teamd/knowledge/logseq/teamd
-```
-
-При запуске `--with-silverbullet` или `--with-silverbullet-mcp` deploy script:
-
-1. создаёт `/var/lib/teamd/knowledge/silverbullet/teamd`;
-2. если legacy Logseq graph существует и новый SilverBullet Space пустой, копирует содержимое legacy graph в новый space;
-3. выставляет ownership под `teamd`;
-4. оставляет legacy директорию на диске как backup/migration source.
-
-Legacy source можно переопределить:
-
-```bash
-TEAMD_LEGACY_LOGSEQ_GRAPH_DIR='/path/to/old/graph' \
-  ./scripts/deploy-teamd-containers.sh --with-silverbullet-mcp
-```
-
-Повторный запуск не перетирает уже заполненный SilverBullet Space.
 
 ## SilverBullet credentials and tokens
 
@@ -303,8 +266,7 @@ Built-in default agent получает skills текущего production stack
 
 1. Открыть `/srv/state/agent-templates/default/skills/<skill-name>/SKILL.md`, если нужно поменять template для будущих/synced profiles.
 2. Открыть `/srv/state/agents/<agent_id>/skills/<skill-name>/SKILL.md`, если нужно поменять только конкретный agent profile.
-3. Не править generated legacy skills `logseq-graph`, `obsidian-vault`, `lightpanda-browser`, если они не используются явно.
-4. После правки проверить catalog и activation:
+3. После правки проверить catalog и activation:
 
 ```bash
 teamdctl session skills <session_id>
@@ -321,8 +283,6 @@ teamdctl session enable-skill <session_id> silverbullet-space
 teamdctl session skills <session_id>
 ```
 
-`logseq-graph`, `obsidian-vault` и `lightpanda-browser` больше не остаются видимыми default skills, если их содержимое совпадает с generated/legacy вариантом. Если оператор создал custom skill с таким именем и изменил его вручную, runtime не удаляет его автоматически.
-
 ## Caddy routes
 
 Без dedicated domain:
@@ -330,8 +290,7 @@ teamdctl session skills <session_id>
 - SearXNG: `http://127.0.0.1:8088/searxng/`;
 - Jaeger через Caddy: `http://127.0.0.1:8088/jaeger/`, если включён `--with-jaeger`;
 - File Browser: `http://127.0.0.1:8088/files/`, если включён `--with-filebrowser`;
-- SilverBullet: `https://<host>:8444/`, если включён `--with-silverbullet` или `--with-silverbullet-mcp`;
-- legacy Obsidian: `https://<host>:8443/obsidian/`, если включён `--with-obsidian`.
+- SilverBullet: `https://<host>:8444/`, если включён `--with-silverbullet` или `--with-silverbullet-mcp`.
 
 С dedicated domain:
 
@@ -345,8 +304,7 @@ Routes:
 - `https://search.example.com/` -> SearXNG;
 - `https://notes.example.com/` -> SilverBullet;
 - `https://jaeger.example.com/` -> Jaeger, если включён;
-- `https://files.example.com/` -> File Browser, если включён;
-- `https://obsidian.example.com/` -> legacy Obsidian, если включён.
+- `https://files.example.com/` -> File Browser, если включён.
 
 Single-domain mode:
 
@@ -360,8 +318,7 @@ Routes:
 - `https://teamd.qlbc.ru/sb/` -> SilverBullet;
 - `https://teamd.qlbc.ru/searxng/` -> SearXNG;
 - `https://teamd.qlbc.ru/jaeger/` -> Jaeger;
-- `https://teamd.qlbc.ru/files/` -> File Browser;
-- `https://teamd.qlbc.ru/obsidian/` -> legacy Obsidian, если включён.
+- `https://teamd.qlbc.ru/files/` -> File Browser.
 
 В single-domain mode deploy script автоматически выставляет `SB_URL_PREFIX=/sb` и настраивает SilverBullet MCP на `http://silverbullet:3000/sb`, чтобы браузерный UI и агентский MCP работали через один и тот же prefixed SilverBullet server. Переопределить prefix можно через `TEAMD_SILVERBULLET_URL_PREFIX`; значение должно начинаться с `/` и не должно заканчиваться `/`.
 
@@ -555,85 +512,6 @@ Agent workflow:
 - Browserless open-source deployment: <https://docs.browserless.io/enterprise/open-source>
 - agent-browser package: <https://www.npmjs.com/package/agent-browser>
 
-## Legacy Lightpanda
-
-Lightpanda — legacy optional MCP-first браузерный add-on. Для новых задач предпочтительнее `agent-browser` + Browserless и built-in `browser_*`.
-
-Lightpanda может быть полезен, когда обычных `web_search` и `web_fetch` недостаточно и вы сознательно тестируете lightweight browser engine:
-
-- страница рендерится JavaScript;
-- нужен переход по ссылкам, click/fill/scroll/wait;
-- нужно достать semantic DOM, markdown view, links или structured data после загрузки страницы;
-- нужно проверить форму или интерактивный flow без полноценного screenshot/browser UI.
-
-Он не заменяет канонические `web_search` и `web_fetch`:
-
-- поиск источников по-прежнему начинается с `web_search`;
-- прямой fetch известного URL по-прежнему делает `web_fetch`;
-- Lightpanda включается как discovered MCP tools через общий provider/tool loop;
-- для Lightpanda не создаётся отдельный prompt path, отдельный daemon или второй web extraction loop.
-
-Команды:
-
-```bash
-./scripts/deploy-teamd-containers.sh --with-lightpanda
-./scripts/deploy-teamd-containers.sh --with-lightpanda-mcp
-./scripts/deploy-teamd-containers.sh --with-lightpanda-mcp-example
-```
-
-Deploy script ставит:
-
-```text
-/opt/teamd/bin/lightpanda
-/usr/local/bin/lightpanda
-/opt/teamd/containers/lightpanda/lightpanda-mcp-stdio.sh
-/opt/teamd/containers/lightpanda/lightpanda-mcp.example.toml
-```
-
-`--with-lightpanda-mcp` добавляет enabled connector в `/etc/teamd/config.toml`:
-
-```toml
-[daemon.mcp_connectors.lightpanda]
-transport = "stdio"
-command = "/opt/teamd/containers/lightpanda/lightpanda-mcp-stdio.sh"
-args = []
-enabled = true
-```
-
-Если deploy запускается без `--with-lightpanda-mcp`, скрипт переводит существующий legacy connector в `enabled = false`. Это нужно, чтобы обычный production agent видел canonical `browser_*` tools через Browserless, а не старые `mcp__lightpanda__*` tools.
-
-Wrapper запускает:
-
-```bash
-/opt/teamd/bin/lightpanda mcp
-```
-
-и по умолчанию выставляет:
-
-```bash
-LIGHTPANDA_DISABLE_TELEMETRY=true
-```
-
-Release tag и download URL можно переопределить:
-
-```bash
-TEAMD_LIGHTPANDA_RELEASE_TAG='nightly' \
-  ./scripts/deploy-teamd-containers.sh --with-lightpanda-mcp
-
-TEAMD_LIGHTPANDA_DOWNLOAD_URL='https://example.invalid/lightpanda' \
-  ./scripts/deploy-teamd-containers.sh --with-lightpanda-mcp
-```
-
-Ожидаемая модель работы агента:
-
-1. Найти candidate URL через `web_search`, если URL не задан пользователем.
-2. Открыть выбранный URL через discovered Lightpanda MCP tool вроде `mcp__lightpanda__goto`.
-3. Снять markdown/semantic tree/links/structured data через discovered MCP tools.
-4. Для интерактива использовать discovered tools вроде click/fill/scroll/waitForSelector.
-5. Если connector недоступен, явно сказать об этом и не выдумывать browser result.
-
-Важно: Lightpanda сейчас стоит как nightly/beta browser binary. Это нормальный add-on для automation, но не гарантия, что каждая публичная страница примет его как обычный Chrome.
-
 ## Jaeger
 
 `--with-jaeger` поднимает `teamd-jaeger` и включает best-effort OTLP export:
@@ -658,37 +536,11 @@ https://jaeger.<domain>/
 https://<single-domain>/jaeger/
 ```
 
-## Legacy Obsidian
-
-Obsidian остаётся только legacy/recovery path.
-
-Команды:
-
-```bash
-./scripts/deploy-teamd-containers.sh --with-obsidian
-./scripts/deploy-teamd-containers.sh --with-obsidian-mcp
-```
-
-Canonical legacy vault:
-
-```text
-/var/lib/teamd/vaults/teamd
-```
-
-Compatibility symlink:
-
-```text
-/var/lib/teamd/vault -> /var/lib/teamd/vaults/teamd
-```
-
-Новые knowledge notes должны идти в SilverBullet Space, а не в Obsidian vault.
-
 ## Security model
 
 - SilverBullet защищается `SB_USER`.
 - SearXNG и Jaeger в этой схеме не имеют пользовательской авторизации. Не публикуйте их наружу без reverse-proxy auth/firewall/VPN, если сервер доступен не только вам.
 - MCP wrappers требуют Docker access для `teamd`, потому что `agentd` запускает stdio bridge через Docker. Это сильное право; выдавайте его только trusted runtime user.
-- Lightpanda MCP wrapper запускает локальный browser binary от имени runtime user. Не используйте его для обхода access controls и не передавайте ему секреты страниц без явного намерения.
 - Secrets лежат в env files под `/opt/teamd/containers/*/*.env`, а не в git.
 
 ## Проверка после deploy
@@ -729,13 +581,6 @@ grep 'TEAMD_BROWSER_' /etc/teamd/teamd.env
 systemctl restart teamd-daemon teamd-telegram
 ```
 
-Legacy Logseq runtime должен отсутствовать:
-
-```bash
-docker ps -a --format '{{.Names}}' | grep -E 'logseq|Logseq' || true
-docker ps -a --no-trunc --format '{{.Names}} {{.Image}} {{.Command}}' | grep -E 'mcp-remote|mcpvault' || true
-```
-
 ## Troubleshooting
 
 Если SilverBullet открывается, но агент не видит MCP:
@@ -767,21 +612,12 @@ docker exec teamd-caddy caddy reload --config /etc/caddy/Caddyfile
 4. проверьте Browserless token в `/opt/teamd/containers/browserless/browserless.env`;
 5. перезапустите `teamd-daemon` и `teamd-telegram`.
 
-Если Lightpanda MCP не появился в tools:
-
-1. проверьте `/etc/teamd/config.toml`;
-2. проверьте `/opt/teamd/containers/lightpanda/lightpanda-mcp-stdio.sh`;
-3. проверьте `lightpanda --help` и `lightpanda mcp`;
-4. перезапустите `teamd-daemon` и `teamd-telegram`.
-
 ## Ссылки
 
 - SilverBullet: <https://silverbullet.md/>
 - SilverBullet community MCP: <https://github.com/Ahmad-A0/silverbullet-mcp>
 - Browserless open-source deployment: <https://docs.browserless.io/enterprise/open-source>
 - agent-browser npm package: <https://www.npmjs.com/package/agent-browser>
-- Lightpanda browser: <https://github.com/lightpanda-io/browser>
-- Lightpanda docs: <https://lightpanda.io/docs>
 - SearXNG: <https://docs.searxng.org/>
 - Jaeger: <https://www.jaegertracing.io/>
 - Caddy: <https://caddyserver.com/docs/>

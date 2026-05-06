@@ -50,7 +50,6 @@ pub struct StoreLayout {
     pub root_dir: PathBuf,
     pub artifacts_dir: PathBuf,
     pub archives_dir: PathBuf,
-    pub legacy_sqlite_db: PathBuf,
     pub runs_dir: PathBuf,
     pub transcripts_dir: PathBuf,
 }
@@ -63,7 +62,6 @@ impl StoreLayout {
             root_dir: root.clone(),
             artifacts_dir: root.join("artifacts"),
             archives_dir: root.join("archives"),
-            legacy_sqlite_db: root.join("state.sqlite"),
             runs_dir: root.join("runs"),
             transcripts_dir: root.join("transcripts"),
         }
@@ -112,7 +110,6 @@ pub enum StoreError {
     },
     StoreLockPoisoned,
     Postgres(postgres::Error),
-    Sqlite(rusqlite::Error),
 }
 
 pub struct PersistenceStore {
@@ -189,13 +186,9 @@ type TranscriptRow = (
 );
 
 #[cfg(test)]
-const DEFAULT_MISSION_EXECUTION_INTENT: &str = "autonomous";
-#[cfg(test)]
 const DEFAULT_MISSION_SCHEDULE_JSON: &str = r#"{"not_before":null,"interval_seconds":null}"#;
 #[cfg(test)]
 const DEFAULT_MISSION_ACCEPTANCE_JSON: &str = "[]";
-#[cfg(test)]
-const LEGACY_MISSION_PREFIX: &str = "legacy-mission-";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum OpenMode {
@@ -270,7 +263,6 @@ impl fmt::Display for StoreError {
             }
             Self::StoreLockPoisoned => write!(formatter, "store client lock poisoned"),
             Self::Postgres(source) => write!(formatter, "postgres error: {source}"),
-            Self::Sqlite(source) => write!(formatter, "sqlite error: {source}"),
         }
     }
 }
@@ -280,7 +272,6 @@ impl Error for StoreError {
         match self {
             Self::Io { source, .. } => Some(source),
             Self::Postgres(source) => Some(source),
-            Self::Sqlite(source) => Some(source),
             Self::ImmutableSessionAgentProfile { .. }
             | Self::InvalidIdentifier { .. }
             | Self::InvalidContextOffload { .. }
@@ -297,12 +288,6 @@ impl Error for StoreError {
 impl From<postgres::Error> for StoreError {
     fn from(source: postgres::Error) -> Self {
         Self::Postgres(source)
-    }
-}
-
-impl From<rusqlite::Error> for StoreError {
-    fn from(source: rusqlite::Error) -> Self {
-        Self::Sqlite(source)
     }
 }
 

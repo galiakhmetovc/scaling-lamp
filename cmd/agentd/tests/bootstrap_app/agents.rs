@@ -287,7 +287,7 @@ fn create_agent_from_template_copies_template_files_independently() {
 }
 
 #[test]
-fn build_from_config_refreshes_legacy_default_prompts_but_preserves_custom_edits() {
+fn build_from_config_seeds_current_default_prompts_and_preserves_custom_edits() {
     let temp = tempfile::tempdir().expect("tempdir");
     let data_dir = temp.path().join("state-root");
     let app = build_from_config(AppConfig {
@@ -297,27 +297,10 @@ fn build_from_config_refreshes_legacy_default_prompts_but_preserves_custom_edits
     .expect("build app");
 
     let default_home = app.agent_home_path("default").expect("default home");
-    fs::write(
-        default_home.join("SYSTEM.md"),
-        "You are the default autonomous coding agent runtime profile.\n\nWork directly, preserve the canonical runtime path, and keep outputs concise and operational.\n",
-    )
-    .expect("write legacy system");
-    fs::write(
-        default_home.join("AGENTS.md"),
-        "Default agent profile.\n\n- Primary role: general-purpose coding agent\n- Prefer direct execution over unnecessary planning\n- Keep tool usage explicit and minimal\n",
-    )
-    .expect("write legacy agents");
-
-    let _ = build_from_config(AppConfig {
-        data_dir: data_dir.clone(),
-        ..AppConfig::default()
-    })
-    .expect("rebuild app");
-
     let refreshed_system =
-        fs::read_to_string(default_home.join("SYSTEM.md")).expect("read refreshed system");
+        fs::read_to_string(default_home.join("SYSTEM.md")).expect("read seeded system");
     let refreshed_agents =
-        fs::read_to_string(default_home.join("AGENTS.md")).expect("read refreshed agents");
+        fs::read_to_string(default_home.join("AGENTS.md")).expect("read seeded agents");
     assert!(refreshed_system.contains("general-purpose autonomous agent running inside teamD"));
     assert!(refreshed_system.contains("Self-learning"));
     assert!(refreshed_system.contains("Do not rely on hidden memory"));
@@ -364,8 +347,6 @@ fn build_from_config_refreshes_legacy_default_prompts_but_preserves_custom_edits
         assert!(skill.contains(&format!("name: {skill_name}")));
         assert!(skill.contains(expected_fragment));
     }
-    assert!(!default_home.join("skills/logseq-graph/SKILL.md").exists());
-    assert!(!default_home.join("skills/obsidian-vault/SKILL.md").exists());
 
     fs::write(default_home.join("AGENTS.md"), "custom prompt preserved\n")
         .expect("write custom agents");

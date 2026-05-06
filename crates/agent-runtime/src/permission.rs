@@ -162,7 +162,7 @@ impl PermissionRule {
 mod tests {
     use super::{PermissionAction, PermissionConfig, PermissionMode, PermissionRule};
     use crate::tool::{
-        ExecStartInput, FsPatchEdit, FsPatchInput, FsReadInput, FsWriteInput, ToolCall,
+        ExecStartInput, FsPatchTextInput, FsReadTextInput, FsWriteMode, FsWriteTextInput, ToolCall,
         ToolCatalog, ToolName,
     };
 
@@ -171,10 +171,13 @@ mod tests {
         let config = PermissionConfig::default();
         let catalog = ToolCatalog::default();
         let decision = config.resolve(
-            catalog.definition(ToolName::FsWrite).expect("fs_write"),
-            &ToolCall::FsWrite(FsWriteInput {
+            catalog
+                .definition(ToolName::FsWriteText)
+                .expect("fs_write_text"),
+            &ToolCall::FsWriteText(FsWriteTextInput {
                 path: "notes/out.txt".to_string(),
                 content: "hello".to_string(),
+                mode: FsWriteMode::Overwrite,
             }),
         );
 
@@ -191,14 +194,13 @@ mod tests {
         let catalog = ToolCatalog::default();
 
         let write = config.resolve(
-            catalog.definition(ToolName::FsPatch).expect("fs_patch"),
-            &ToolCall::FsPatch(FsPatchInput {
+            catalog
+                .definition(ToolName::FsPatchText)
+                .expect("fs_patch_text"),
+            &ToolCall::FsPatchText(FsPatchTextInput {
                 path: "src/main.rs".to_string(),
-                edits: vec![FsPatchEdit {
-                    old: "old".to_string(),
-                    new: "new".to_string(),
-                    replace_all: false,
-                }],
+                search: "old".to_string(),
+                replace: "new".to_string(),
             }),
         );
         let exec = config.resolve(
@@ -223,16 +225,21 @@ mod tests {
         let catalog = ToolCatalog::default();
 
         let read = config.resolve(
-            catalog.definition(ToolName::FsRead).expect("fs_read"),
-            &ToolCall::FsRead(FsReadInput {
+            catalog
+                .definition(ToolName::FsReadText)
+                .expect("fs_read_text"),
+            &ToolCall::FsReadText(FsReadTextInput {
                 path: "docs/readme.md".to_string(),
             }),
         );
         let write = config.resolve(
-            catalog.definition(ToolName::FsWrite).expect("fs_write"),
-            &ToolCall::FsWrite(FsWriteInput {
+            catalog
+                .definition(ToolName::FsWriteText)
+                .expect("fs_write_text"),
+            &ToolCall::FsWriteText(FsWriteTextInput {
                 path: "docs/readme.md".to_string(),
                 content: "updated".to_string(),
+                mode: FsWriteMode::Overwrite,
             }),
         );
 
@@ -268,7 +275,7 @@ mod tests {
             mode: PermissionMode::Plan,
             rules: vec![PermissionRule {
                 action: PermissionAction::Allow,
-                tool: Some("fs_write".to_string()),
+                tool: Some("fs_write_text".to_string()),
                 family: None,
                 path_prefix: Some("notes/".to_string()),
             }],
@@ -276,17 +283,23 @@ mod tests {
         let catalog = ToolCatalog::default();
 
         let allowed = config.resolve(
-            catalog.definition(ToolName::FsWrite).expect("fs_write"),
-            &ToolCall::FsWrite(FsWriteInput {
+            catalog
+                .definition(ToolName::FsWriteText)
+                .expect("fs_write_text"),
+            &ToolCall::FsWriteText(FsWriteTextInput {
                 path: "notes/out.txt".to_string(),
                 content: "ok".to_string(),
+                mode: FsWriteMode::Overwrite,
             }),
         );
         let denied = config.resolve(
-            catalog.definition(ToolName::FsWrite).expect("fs_write"),
-            &ToolCall::FsWrite(FsWriteInput {
+            catalog
+                .definition(ToolName::FsWriteText)
+                .expect("fs_write_text"),
+            &ToolCall::FsWriteText(FsWriteTextInput {
                 path: "secrets/out.txt".to_string(),
                 content: "no".to_string(),
+                mode: FsWriteMode::Overwrite,
             }),
         );
 

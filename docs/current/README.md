@@ -53,7 +53,7 @@
 - **SessionHead** — сжатая сводка о состоянии сессии, которую модель получает перед transcript tail.
 - **Prompt contract** — договорённость о том, какие runtime/user/history blocks модель получает, в каком порядке и с какими ограничениями размера.
 - **Trace / span** — локальная observability-модель для причинной связи между surface event, run, provider round, transcript, tool call, artifact и delivery; см. [13-observability-tracing-plan.md](13-observability-tracing-plan.md).
-- **Container add-ons** — внешняя обвязка вокруг host `agentd`: Docker, SearXNG, SilverBullet, SilverBullet MCP, Browserless, Mem0, Jaeger, Caddy и legacy Obsidian; см. [14-container-addons.md](14-container-addons.md).
+- **Container add-ons** — внешняя обвязка вокруг host `agentd`: Docker, SearXNG, SilverBullet, SilverBullet MCP, Browserless, Mem0, File Browser, Jaeger и Caddy; см. [14-container-addons.md](14-container-addons.md).
 - **Runtime mental model** — сквозная цепочка `Operator -> Surface -> App -> Session -> Run -> ProviderLoop -> ToolCall -> Artifact/Delivery`; см. [17-runtime-mental-model.md](17-runtime-mental-model.md).
 
 ## Где искать код
@@ -75,5 +75,5 @@ C4-модель хранится отдельно в [`docs/architecture`](../ar
 ## Что важно помнить
 
 - Эта документация описывает **текущее состояние**, а не целевую архитектуру “когда-нибудь”.
-- Исторические design notes лежат в [`docs/superpowers`](../superpowers), но они не заменяют описание текущего поведения.
+- Исторические design notes старых релизов не являются частью canonical docs 1.2.0.
 - Если факты в документации и коде расходятся, источником истины остаётся код. В документах ниже даны ссылки на реальные файлы, чтобы быстро перепроверять детали.

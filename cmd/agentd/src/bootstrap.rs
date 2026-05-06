@@ -949,15 +949,7 @@ where
     I: IntoIterator<Item = S>,
     S: AsRef<str>,
 {
-    let args = args
-        .into_iter()
-        .map(|value| value.as_ref().to_string())
-        .collect::<Vec<_>>();
-    if is_sqlite_to_postgres_migration_args(&args) {
-        let mut config = AppConfig::load()?;
-        apply_migration_bootstrap_overrides(&mut config, &args)?;
-        build_from_config_inner(config, false, false)
-    } else if should_reconcile_recovery_for_args(&args) {
+    if should_reconcile_recovery_for_args(args) {
         build()
     } else {
         build_without_recovery()
@@ -1066,52 +1058,6 @@ where
     args.into_iter()
         .next()
         .is_some_and(|arg| arg.as_ref() == "daemon")
-}
-
-fn is_sqlite_to_postgres_migration_args(args: &[String]) -> bool {
-    matches!(args, [scope, action, ..] if scope == "migrate" && action == "sqlite-to-postgres")
-}
-
-fn apply_migration_bootstrap_overrides(
-    config: &mut AppConfig,
-    args: &[String],
-) -> Result<(), BootstrapError> {
-    if !is_sqlite_to_postgres_migration_args(args) {
-        return Ok(());
-    }
-
-    let mut index = 2;
-    while index < args.len() {
-        match args[index].as_str() {
-            "--database-url" => {
-                let value = args.get(index + 1).ok_or_else(|| BootstrapError::Usage {
-                    reason: "--database-url requires a value".to_string(),
-                })?;
-                config.database.url = value.clone();
-                index += 2;
-            }
-            "--data-dir" => {
-                let value = args.get(index + 1).ok_or_else(|| BootstrapError::Usage {
-                    reason: "--data-dir requires a value".to_string(),
-                })?;
-                config.data_dir = PathBuf::from(value);
-                index += 2;
-            }
-            "--sqlite" => {
-                if args.get(index + 1).is_none() {
-                    return Err(BootstrapError::Usage {
-                        reason: "--sqlite requires a value".to_string(),
-                    });
-                }
-                index += 2;
-            }
-            _ => {
-                index += 1;
-            }
-        }
-    }
-
-    Ok(())
 }
 
 fn ensure_runtime_layout(persistence: &PersistenceScaffold) -> Result<(), BootstrapError> {

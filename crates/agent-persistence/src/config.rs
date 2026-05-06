@@ -272,7 +272,6 @@ pub struct ObservabilityConfig {
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(default)]
 pub struct RuntimeTimingConfig {
-    #[serde(alias = "sqlite_lock_retry_delay_ms")]
     pub store_retry_delay_ms: u64,
     pub daemon_http_connect_timeout_ms: u64,
     pub daemon_http_request_timeout_ms: u64,
@@ -299,7 +298,6 @@ pub struct RuntimeTimingConfig {
 #[serde(default)]
 pub struct RuntimeLimitsConfig {
     pub diagnostic_tail_lines: usize,
-    #[serde(alias = "sqlite_lock_retry_attempts")]
     pub store_retry_attempts: usize,
     pub active_run_step_tail_limit: usize,
     pub active_process_output_tail_max_bytes: usize,

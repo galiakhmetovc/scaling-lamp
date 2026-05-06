@@ -659,7 +659,6 @@ export TEAMD_OTLP_TIMEOUT_MS='2000'
 
 ```bash
 TEAMD_SILVERBULLET_SPACE_DIR='/var/lib/teamd/knowledge/silverbullet/teamd'
-TEAMD_LEGACY_LOGSEQ_GRAPH_DIR='/var/lib/teamd/knowledge/logseq/teamd'
 TEAMD_SILVERBULLET_PORT='8091'
 TEAMD_SILVERBULLET_HTTPS_PORT='8444'
 TEAMD_SILVERBULLET_USER='username:password'
@@ -670,27 +669,9 @@ TEAMD_CADDY_HOST='31.130.128.89'
 
 Без dedicated domain SilverBullet публикуется как отдельный HTTPS site `https://<host>:8444/`. С `TEAMD_CADDY_DOMAIN` используется `https://notes.<domain>/`, а в `--single-domain` mode — `https://<domain>/`.
 
-Legacy Obsidian vault MCP connector всё ещё можно добавить вторым deploy script:
-
-```bash
-./scripts/deploy-teamd-containers.sh --with-obsidian-mcp
-```
-
-Этот connector работает через `stdio`: `agentd` запускает `docker run -i --rm ... node:22-alpine npx -y @bitbonsai/mcpvault@latest /vault`, где `/vault` — mount на `/var/lib/teamd/vaults/teamd`. Он нужен только для старых Obsidian vault workflows.
-
-По умолчанию без dedicated domain legacy Obsidian запускается с `TEAMD_OBSIDIAN_SUBFOLDER=/obsidian/`. Значение должно быть пустым или иметь ведущий и завершающий `/`, иначе web route у контейнера будет некорректным.
-
-Если Obsidian включён без `TEAMD_CADDY_DOMAIN`, deploy script автоматически включает `TEAMD_CADDY_HTTPS_PORT=8443` и переводит внешний доступ к `/obsidian/` на HTTPS, потому что Selkies/WebCodecs не работает в plain HTTP origin.
-
 Для self-signed HTTPS без домена deploy script использует `TEAMD_CADDY_HOST`. Если переменная не задана, он пытается определить primary IPv4 автоматически. Если снаружи нужен другой адрес, задайте `TEAMD_CADDY_HOST` явно.
 
-Если нужен только шаблон без изменения `/etc/teamd/config.toml`, используйте:
-
-```bash
-./scripts/deploy-teamd-containers.sh --with-obsidian-mcp-example
-```
-
-Шаблон `stdio`-коннектора лежит в `/opt/teamd/containers/obsidian/obsidian-mcp.example.toml`. Подробный runbook: [14-container-addons.md](14-container-addons.md).
+Устаревшие add-ons удалены из supported deploy path. Для заметок используйте SilverBullet, для браузера — Browserless/agent-browser.
 
 ## A2A peers в конфиге
 

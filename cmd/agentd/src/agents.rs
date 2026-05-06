@@ -15,19 +15,6 @@ const OPERATOR_USER_MD: &str = include_str!("../../../agent-templates/operator/U
 const MEMORY_CURATOR_SYSTEM_MD: &str =
     include_str!("../../../agent-templates/system/memory-curator/SYSTEM.md");
 
-const LEGACY_DEFAULT_SYSTEM_MD: &str =
-    include_str!("../../../agent-templates/default/legacy/default-legacy.SYSTEM.md");
-const PRE_SELF_LEARNING_DEFAULT_SYSTEM_MD: &str =
-    include_str!("../../../agent-templates/default/legacy/default-pre-self-learning.SYSTEM.md");
-const LEGACY_DEFAULT_AGENTS_MD: &str =
-    include_str!("../../../agent-templates/default/legacy/default-legacy.AGENTS.md");
-const PRE_INTERAGENT_GUIDANCE_DEFAULT_AGENTS_MD: &str =
-    include_str!("../../../agent-templates/default/legacy/default-pre-interagent.AGENTS.md");
-const PRE_REMINDER_GUIDANCE_DEFAULT_AGENTS_MD: &str =
-    include_str!("../../../agent-templates/default/legacy/default-pre-reminder.AGENTS.md");
-const PRE_SELF_LEARNING_JUDGE_SYSTEM_MD: &str =
-    include_str!("../../../agent-templates/judge/legacy/judge-pre-self-learning.SYSTEM.md");
-
 const DEFAULT_SILVERBULLET_SPACE_SKILL_MD: &str =
     include_str!("../../../agent-templates/default/skills/silverbullet-space/SKILL.md");
 const DEFAULT_MEM0_MEMORY_SKILL_MD: &str =
@@ -45,20 +32,6 @@ const DEFAULT_PLANNING_SESSION_LIFECYCLE_SKILL_MD: &str =
 const DEFAULT_AGENT_BROWSER_SKILL_MD: &str =
     include_str!("../../../agent-templates/default/skills/agent-browser/SKILL.md");
 
-const DEFAULT_LIGHTPANDA_BROWSER_SKILL_MD: &str =
-    include_str!("../../../agent-templates/default/deprecated-skills/lightpanda-browser/SKILL.md");
-const DEPRECATED_LOGSEQ_GRAPH_SKILL_MD: &str =
-    include_str!("../../../agent-templates/default/deprecated-skills/logseq-graph/SKILL.md");
-const DEPRECATED_OBSIDIAN_VAULT_SKILL_MD: &str =
-    include_str!("../../../agent-templates/default/deprecated-skills/obsidian-vault/SKILL.md");
-const DEFAULT_OBSIDIAN_VAULT_SKILL_MD: &str =
-    include_str!("../../../agent-templates/default/legacy/obsidian-vault-default.SKILL.md");
-const PRE_WORKING_KNOWLEDGE_OBSIDIAN_VAULT_SKILL_MD: &str = include_str!(
-    "../../../agent-templates/default/legacy/obsidian-vault-pre-working-knowledge.SKILL.md"
-);
-const PRE_PARA_OBSIDIAN_VAULT_SKILL_MD: &str =
-    include_str!("../../../agent-templates/default/legacy/obsidian-vault-pre-para.SKILL.md");
-
 #[derive(Debug, Clone, Copy)]
 struct BundledTemplateFile {
     relative_path: &'static str,
@@ -70,15 +43,6 @@ struct BuiltinSkillTemplate {
     name: &'static str,
     relative_path: &'static str,
     bundled_content: &'static str,
-}
-
-#[derive(Debug, Clone, Copy)]
-struct DeprecatedBuiltinSkillTemplate {
-    name: &'static str,
-    relative_path: &'static str,
-    bundled_content: &'static str,
-    legacy_variants: &'static [&'static str],
-    legacy_markers: &'static [&'static str],
 }
 
 const BUNDLED_TEMPLATE_FILES: &[BundledTemplateFile] = &[
@@ -105,30 +69,6 @@ const BUNDLED_TEMPLATE_FILES: &[BundledTemplateFile] = &[
     BundledTemplateFile {
         relative_path: "system/memory-curator/SYSTEM.md",
         content: MEMORY_CURATOR_SYSTEM_MD,
-    },
-    BundledTemplateFile {
-        relative_path: "default/legacy/default-legacy.SYSTEM.md",
-        content: LEGACY_DEFAULT_SYSTEM_MD,
-    },
-    BundledTemplateFile {
-        relative_path: "default/legacy/default-pre-self-learning.SYSTEM.md",
-        content: PRE_SELF_LEARNING_DEFAULT_SYSTEM_MD,
-    },
-    BundledTemplateFile {
-        relative_path: "default/legacy/default-legacy.AGENTS.md",
-        content: LEGACY_DEFAULT_AGENTS_MD,
-    },
-    BundledTemplateFile {
-        relative_path: "default/legacy/default-pre-interagent.AGENTS.md",
-        content: PRE_INTERAGENT_GUIDANCE_DEFAULT_AGENTS_MD,
-    },
-    BundledTemplateFile {
-        relative_path: "default/legacy/default-pre-reminder.AGENTS.md",
-        content: PRE_REMINDER_GUIDANCE_DEFAULT_AGENTS_MD,
-    },
-    BundledTemplateFile {
-        relative_path: "judge/legacy/judge-pre-self-learning.SYSTEM.md",
-        content: PRE_SELF_LEARNING_JUDGE_SYSTEM_MD,
     },
     BundledTemplateFile {
         relative_path: "default/skills/silverbullet-space/SKILL.md",
@@ -161,30 +101,6 @@ const BUNDLED_TEMPLATE_FILES: &[BundledTemplateFile] = &[
     BundledTemplateFile {
         relative_path: "default/skills/agent-browser/SKILL.md",
         content: DEFAULT_AGENT_BROWSER_SKILL_MD,
-    },
-    BundledTemplateFile {
-        relative_path: "default/deprecated-skills/lightpanda-browser/SKILL.md",
-        content: DEFAULT_LIGHTPANDA_BROWSER_SKILL_MD,
-    },
-    BundledTemplateFile {
-        relative_path: "default/deprecated-skills/logseq-graph/SKILL.md",
-        content: DEPRECATED_LOGSEQ_GRAPH_SKILL_MD,
-    },
-    BundledTemplateFile {
-        relative_path: "default/deprecated-skills/obsidian-vault/SKILL.md",
-        content: DEPRECATED_OBSIDIAN_VAULT_SKILL_MD,
-    },
-    BundledTemplateFile {
-        relative_path: "default/legacy/obsidian-vault-default.SKILL.md",
-        content: DEFAULT_OBSIDIAN_VAULT_SKILL_MD,
-    },
-    BundledTemplateFile {
-        relative_path: "default/legacy/obsidian-vault-pre-working-knowledge.SKILL.md",
-        content: PRE_WORKING_KNOWLEDGE_OBSIDIAN_VAULT_SKILL_MD,
-    },
-    BundledTemplateFile {
-        relative_path: "default/legacy/obsidian-vault-pre-para.SKILL.md",
-        content: PRE_PARA_OBSIDIAN_VAULT_SKILL_MD,
     },
 ];
 
@@ -228,46 +144,6 @@ const DEFAULT_ACTIVE_SKILL_TEMPLATES: &[BuiltinSkillTemplate] = &[
         name: "agent-browser",
         relative_path: "default/skills/agent-browser/SKILL.md",
         bundled_content: DEFAULT_AGENT_BROWSER_SKILL_MD,
-    },
-];
-
-const DEFAULT_DEPRECATED_SKILL_TEMPLATES: &[DeprecatedBuiltinSkillTemplate] = &[
-    DeprecatedBuiltinSkillTemplate {
-        name: "lightpanda-browser",
-        relative_path: "default/deprecated-skills/lightpanda-browser/SKILL.md",
-        bundled_content: DEFAULT_LIGHTPANDA_BROWSER_SKILL_MD,
-        legacy_variants: &[],
-        legacy_markers: &[
-            "# Lightpanda Browser",
-            "mcp__lightpanda__",
-            "Lightpanda is exposed",
-        ],
-    },
-    DeprecatedBuiltinSkillTemplate {
-        name: "logseq-graph",
-        relative_path: "default/deprecated-skills/logseq-graph/SKILL.md",
-        bundled_content: DEPRECATED_LOGSEQ_GRAPH_SKILL_MD,
-        legacy_variants: &[],
-        legacy_markers: &[
-            "# Logseq Graph",
-            "/var/lib/teamd/knowledge/logseq/teamd",
-            "Logseq Publish",
-        ],
-    },
-    DeprecatedBuiltinSkillTemplate {
-        name: "obsidian-vault",
-        relative_path: "default/deprecated-skills/obsidian-vault/SKILL.md",
-        bundled_content: DEPRECATED_OBSIDIAN_VAULT_SKILL_MD,
-        legacy_variants: &[
-            DEFAULT_OBSIDIAN_VAULT_SKILL_MD,
-            PRE_WORKING_KNOWLEDGE_OBSIDIAN_VAULT_SKILL_MD,
-            PRE_PARA_OBSIDIAN_VAULT_SKILL_MD,
-        ],
-        legacy_markers: &[
-            "# Obsidian Vault",
-            "/var/lib/teamd/vaults/teamd",
-            "mcp__obsidian__",
-        ],
     },
 ];
 
@@ -456,24 +332,8 @@ pub fn ensure_builtin_agent_home_layout(
     ensure_runtime_agent_templates_layout(data_dir)?;
     let content = load_builtin_template_content(data_dir, template)?;
     fs::create_dir_all(agent_home.join("skills"))?;
-    sync_builtin_prompt_file(
-        &agent_home.join("SYSTEM.md"),
-        &content.system_md,
-        builtin_legacy_system_variants(template.id),
-    )?;
-    if template.id == DEFAULT_AGENT_ID {
-        sync_builtin_default_agents_prompt_file(
-            &agent_home.join("AGENTS.md"),
-            &content.agents_md,
-            builtin_legacy_agents_variants(template.id),
-        )?;
-    } else {
-        sync_builtin_prompt_file(
-            &agent_home.join("AGENTS.md"),
-            &content.agents_md,
-            builtin_legacy_agents_variants(template.id),
-        )?;
-    }
+    sync_builtin_prompt_file(&agent_home.join("SYSTEM.md"), &content.system_md)?;
+    sync_builtin_prompt_file(&agent_home.join("AGENTS.md"), &content.agents_md)?;
     if template.id == DEFAULT_AGENT_ID {
         for skill in DEFAULT_ACTIVE_SKILL_TEMPLATES {
             let skill_content = read_runtime_template_or_bundled(
@@ -481,21 +341,7 @@ pub fn ensure_builtin_agent_home_layout(
                 skill.relative_path,
                 skill.bundled_content,
             )?;
-            sync_builtin_default_skill(agent_home, skill.name, &skill_content, &[])?;
-        }
-        for skill in DEFAULT_DEPRECATED_SKILL_TEMPLATES {
-            let skill_content = read_runtime_template_or_bundled(
-                data_dir,
-                skill.relative_path,
-                skill.bundled_content,
-            )?;
-            remove_builtin_default_skill_with_legacy_markers(
-                agent_home,
-                skill.name,
-                &skill_content,
-                skill.legacy_variants,
-                skill.legacy_markers,
-            )?;
+            sync_builtin_default_skill(agent_home, skill.name, &skill_content)?;
         }
     }
     Ok(())
@@ -505,42 +351,10 @@ fn sync_builtin_default_skill(
     agent_home: &Path,
     skill_name: &str,
     content: &str,
-    legacy_variants: &[&str],
 ) -> io::Result<()> {
     let skill_dir = agent_home.join("skills").join(skill_name);
     fs::create_dir_all(&skill_dir)?;
-    sync_builtin_prompt_file(&skill_dir.join("SKILL.md"), content, legacy_variants)
-}
-
-fn remove_builtin_default_skill_with_legacy_markers(
-    agent_home: &Path,
-    skill_name: &str,
-    current_generated_content: &str,
-    legacy_variants: &[&str],
-    legacy_markers: &[&str],
-) -> io::Result<()> {
-    let skill_dir = agent_home.join("skills").join(skill_name);
-    let path = skill_dir.join("SKILL.md");
-    let existing = match fs::read_to_string(&path) {
-        Ok(existing) => existing,
-        Err(source) if source.kind() == io::ErrorKind::NotFound => return Ok(()),
-        Err(source) => return Err(source),
-    };
-
-    let existing_normalized = normalize_prompt_contents(&existing);
-    let current = normalize_prompt_contents(current_generated_content);
-    let is_generated = existing_normalized == current
-        || legacy_variants
-            .iter()
-            .any(|candidate| existing_normalized == normalize_prompt_contents(candidate))
-        || legacy_markers
-            .iter()
-            .all(|marker| existing.contains(marker));
-
-    if is_generated {
-        fs::remove_dir_all(skill_dir)?;
-    }
-    Ok(())
+    sync_builtin_prompt_file(&skill_dir.join("SKILL.md"), content)
 }
 
 pub fn clone_agent_home(
@@ -597,44 +411,12 @@ pub fn normalize_agent_id(name: &str) -> String {
     }
 }
 
-fn sync_builtin_prompt_file(
-    path: &Path,
-    current: &str,
-    legacy_variants: &[&str],
-) -> io::Result<()> {
+fn sync_builtin_prompt_file(path: &Path, current: &str) -> io::Result<()> {
     match fs::read_to_string(path) {
         Ok(existing) => {
             let existing = normalize_prompt_contents(&existing);
             let current = normalize_prompt_contents(current);
-            if existing == current
-                || legacy_variants
-                    .iter()
-                    .any(|candidate| existing == normalize_prompt_contents(candidate))
-            {
-                fs::write(path, current)
-            } else {
-                Ok(())
-            }
-        }
-        Err(source) if source.kind() == io::ErrorKind::NotFound => fs::write(path, current),
-        Err(source) => Err(source),
-    }
-}
-
-fn sync_builtin_default_agents_prompt_file(
-    path: &Path,
-    current: &str,
-    legacy_variants: &[&str],
-) -> io::Result<()> {
-    match fs::read_to_string(path) {
-        Ok(existing) => {
-            let existing = normalize_prompt_contents(&existing);
-            let current = normalize_prompt_contents(current);
-            if existing == current
-                || legacy_variants
-                    .iter()
-                    .any(|candidate| existing == normalize_prompt_contents(candidate))
-            {
+            if existing == current {
                 fs::write(path, current)
             } else {
                 Ok(())
@@ -666,28 +448,6 @@ fn read_runtime_template_or_bundled(
             Ok(normalize_prompt_contents(bundled))
         }
         Err(source) => Err(source),
-    }
-}
-
-fn builtin_legacy_system_variants(agent_id: &str) -> &'static [&'static str] {
-    match agent_id {
-        DEFAULT_AGENT_ID => &[
-            LEGACY_DEFAULT_SYSTEM_MD,
-            PRE_SELF_LEARNING_DEFAULT_SYSTEM_MD,
-        ],
-        JUDGE_AGENT_ID => &[PRE_SELF_LEARNING_JUDGE_SYSTEM_MD],
-        _ => &[],
-    }
-}
-
-fn builtin_legacy_agents_variants(agent_id: &str) -> &'static [&'static str] {
-    match agent_id {
-        DEFAULT_AGENT_ID => &[
-            LEGACY_DEFAULT_AGENTS_MD,
-            PRE_INTERAGENT_GUIDANCE_DEFAULT_AGENTS_MD,
-            PRE_REMINDER_GUIDANCE_DEFAULT_AGENTS_MD,
-        ],
-        _ => &[],
     }
 }
 
@@ -803,30 +563,10 @@ mod tests {
     }
 
     #[test]
-    fn builtin_agent_home_seeds_current_stack_skills_and_removes_legacy_skills() {
+    fn builtin_agent_home_seeds_current_stack_skills() {
         let temp = tempfile::tempdir().expect("tempdir");
         let data_dir = temp.path().join("state");
         let default_home = agent_home(&data_dir, DEFAULT_AGENT_ID);
-        fs::create_dir_all(default_home.join("skills/lightpanda-browser"))
-            .expect("create default home");
-        fs::write(
-            default_home.join("skills/lightpanda-browser/SKILL.md"),
-            DEFAULT_LIGHTPANDA_BROWSER_SKILL_MD,
-        )
-        .expect("write generated lightpanda skill");
-        fs::create_dir_all(default_home.join("skills/logseq-graph")).expect("create logseq skill");
-        fs::write(
-            default_home.join("skills/logseq-graph/SKILL.md"),
-            DEPRECATED_LOGSEQ_GRAPH_SKILL_MD,
-        )
-        .expect("write generated logseq skill");
-        fs::create_dir_all(default_home.join("skills/obsidian-vault"))
-            .expect("create obsidian skill");
-        fs::write(
-            default_home.join("skills/obsidian-vault/SKILL.md"),
-            DEFAULT_OBSIDIAN_VAULT_SKILL_MD,
-        )
-        .expect("write generated obsidian skill");
 
         ensure_builtin_agent_home_layout(
             &data_dir,
@@ -858,13 +598,5 @@ mod tests {
             assert!(skill.contains(&format!("name: {skill_name}")));
             assert!(skill.contains(expected_fragment));
         }
-
-        assert!(
-            !default_home
-                .join("skills/lightpanda-browser/SKILL.md")
-                .exists()
-        );
-        assert!(!default_home.join("skills/logseq-graph/SKILL.md").exists());
-        assert!(!default_home.join("skills/obsidian-vault/SKILL.md").exists());
     }
 }

@@ -67,9 +67,9 @@ Tools не попадают в prompt как большой текстовый R
 
 - `mcp_call` определён в каталоге, но обычно не показывается модели как обычный tool id.
   Вместо него модель видит уже обнаруженные MCP tools по их `exposed_name`.
-- legacy ids вроде `fs_read`, `fs_write`, `fs_patch`, `fs_search` живут в каталоге, но не входят в канонический automatic model-facing surface.
+- old short filesystem ids удалены из каталога в 1.2.0; используйте typed `fs_*` variants из model-facing surface.
 - `plan_read` и `plan_write` определены, но для обычного model-driven loop вместо них используются более узкие typed planning tools.
-- legacy Obsidian/Lightpanda MCP tools не должны появляться в production surface, если соответствующие connectors не включены явно. Контейнерный deploy отключает `[daemon.mcp_connectors.obsidian]` и `[daemon.mcp_connectors.lightpanda]`, когда operator не просит их через legacy flags.
+- Legacy add-ons не входят в production surface. Для заметок используйте SilverBullet/SilverBullet MCP, для браузера — built-in `browser_*` через `agent-browser`/Browserless.
 
 ## Канонический model-facing tool surface
 
@@ -531,23 +531,9 @@ browser_close({ all?: boolean | null })
 - нужно просто найти текущий источник;
 - задача похожа на высокочастотный scraping, bypass access controls или игнорирование правил сайта.
 
-### Legacy browser MCP add-ons
+### Dynamic MCP add-ons
 
-Dynamic MCP browser tools допустимы только для явно включённых legacy/экспериментов. В обычном production deploy старый Lightpanda connector выключается, чтобы модель использовала built-in `browser_*`. Пример старого Lightpanda connector:
-
-```text
-mcp__lightpanda__goto({ url: string })
-mcp__lightpanda__markdown({})
-mcp__lightpanda__semantic_tree({})
-mcp__lightpanda__links({})
-mcp__lightpanda__interactiveElements({})
-mcp__lightpanda__click({ ... })
-mcp__lightpanda__fill({ ... })
-mcp__lightpanda__waitForSelector({ ... })
-```
-
-Точные имена и schemas приходят от MCP connector во время discovery. Архитектурное правило сохраняется: MCP connector расширяет canonical provider tool surface, но не создаёт отдельный prompt path, chat loop или debug ledger.
-
+Dynamic MCP tools допустимы только для явно включённых connectors текущего стека, например SilverBullet MCP. Браузерный workflow использует built-in `browser_*`, а не отдельный browser MCP connector.
 ## Exec
 
 ### `exec_start`
@@ -1029,7 +1015,7 @@ deliver_file({
 - `caption`;
 - `status = "queued"`.
 
-`queued` означает успешную постановку в очередь, а не финальную доставку. Telegram отправляет queued files после текущего ответа модели через `sendDocument`. Если `sendDocument` падает, Telegram worker помечает request как `failed`, пишет ошибку в audit и отправляет в чат отдельное сообщение о неудачной доставке. Агент не должен объявлять `queued` ошибкой и не должен придумывать fallback вроде “сохранил в Obsidian vault”.
+`queued` означает успешную постановку в очередь, а не финальную доставку. Telegram отправляет queued files после текущего ответа модели через `sendDocument`. Если `sendDocument` падает, Telegram worker помечает request как `failed`, пишет ошибку в audit и отправляет в чат отдельное сообщение о неудачной доставке. Агент не должен объявлять `queued` ошибкой и не должен придумывать fallback storage path.
 
 Когда использовать:
 
@@ -1518,9 +1504,7 @@ mcp_get_prompt({
 
 То есть provider получает их как обычные полноценные tools, а runtime потом маршрутизирует вызов во внутренний `mcp_call`.
 
-Пример: если оператор явно включил legacy connector `[daemon.mcp_connectors.lightpanda]`, модель может увидеть browser tools с exposed names вида `mcp__lightpanda__goto`, `mcp__lightpanda__markdown`, `mcp__lightpanda__semantic_tree`, `mcp__lightpanda__click`, `mcp__lightpanda__fill`. Для нового браузерного workflow предпочтительны built-in `browser_*` tools.
-
-Legacy Obsidian connector `[daemon.mcp_connectors.obsidian]` аналогично должен быть disabled в текущем production stack. Основной путь для заметок: `silverbullet-space` skill, SilverBullet MCP when enabled, или bounded filesystem tools в canonical Markdown space.
+Основной путь для заметок: `silverbullet-space` skill, SilverBullet MCP when enabled, или bounded filesystem tools в canonical Markdown space.
 
 Правило архитектуры: MCP connector расширяет canonical provider tool surface, но не создаёт отдельную модель prompt assembly, отдельный chat loop или отдельный debug ledger. Вызовы MCP tools должны попадать в тот же tool-call ledger, что и built-in tools.
 
@@ -1738,24 +1722,6 @@ grant_agent_chain_continuation({
 - только после подтверждённого `max_hops` block.
 
 ## Tools, которые определены, но обычно не показываются модели напрямую
-
-### Legacy filesystem ids
-
-- `fs_read`
-- `fs_write`
-- `fs_patch`
-- `fs_search`
-
-Это compatibility layer. Канонический model-facing surface использует typed variants:
-
-- `fs_read_text`
-- `fs_read_lines`
-- `fs_search_text`
-- `fs_find_in_files`
-- `fs_write_text`
-- `fs_patch_text`
-- `fs_replace_lines`
-- `fs_insert_text`
 
 ### Planning low-level compatibility ids
 

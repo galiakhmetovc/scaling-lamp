@@ -265,11 +265,7 @@ SilverBullet Space — текущий canonical knowledge add-on:
 
 SilverBullet не заменяет PostgreSQL, transcripts, tool calls, runs, jobs или artifacts.
 
-Obsidian и Logseq сейчас compatibility-only:
-
-- Obsidian используется только как legacy/recovery path;
-- Logseq Publish не является runtime component;
-- старый Logseq graph может быть migration source для SilverBullet Space.
+Устаревшие note-taking add-ons не входят в supported runtime stack 1.2.0. Заметки ведутся через SilverBullet Space, а старые vault/graph директории не должны автоматически попадать в prompt или tool surface.
 
 ## Prompt path
 
@@ -340,10 +336,9 @@ Container layer не является вторым runtime. Он добавля�
 - SilverBullet и SilverBullet MCP для notes/knowledge;
 - Browserless для built-in `browser_*` automation через `agent-browser`;
 - Mem0/OpenMemory REST endpoint для optional built-in `memory_*` semantic memory tools;
-- Lightpanda MCP только как legacy/experimental browser automation;
 - Jaeger для traces;
-- Caddy для routes;
-- legacy Obsidian только для recovery.
+- File Browser для operator editing;
+- Caddy для routes.
 
 Host `agentd` остаётся владельцем:
 

@@ -50,7 +50,7 @@ fn catalog_exposes_distinct_families_and_policy_flags() {
         .expect("artifact_search");
     let exec_start = catalog.definition(ToolName::ExecStart).expect("exec_start");
     let fs_glob = catalog.definition(ToolName::FsGlob).expect("fs_glob");
-    let fs_patch = catalog
+    let fs_patch_text = catalog
         .definition(ToolName::FsPatchText)
         .expect("fs_patch_text");
     let fs_read_lines = catalog
@@ -73,8 +73,6 @@ fn catalog_exposes_distinct_families_and_policy_flags() {
         .expect("schedule_read");
     let web_fetch = catalog.definition(ToolName::WebFetch).expect("web_fetch");
     let web_search = catalog.definition(ToolName::WebSearch).expect("web_search");
-    let fs_read = catalog.definition(ToolName::FsRead).expect("fs_read");
-    let fs_write = catalog.definition(ToolName::FsWrite).expect("fs_write");
 
     assert_eq!(
         catalog.families,
@@ -107,7 +105,7 @@ fn catalog_exposes_distinct_families_and_policy_flags() {
     assert_eq!(fs_mkdir.family, ToolFamily::Filesystem);
     assert_eq!(fs_move.family, ToolFamily::Filesystem);
     assert_eq!(fs_trash.family, ToolFamily::Filesystem);
-    assert_eq!(fs_patch.family, ToolFamily::Filesystem);
+    assert_eq!(fs_patch_text.family, ToolFamily::Filesystem);
     assert_eq!(plan_read.family, ToolFamily::Planning);
     assert_eq!(plan_write.family, ToolFamily::Planning);
     assert_eq!(schedule_read.family, ToolFamily::Agent);
@@ -122,7 +120,7 @@ fn catalog_exposes_distinct_families_and_policy_flags() {
     assert!(fs_glob.policy.read_only);
     assert!(fs_read_lines.policy.read_only);
     assert!(fs_find_in_files.policy.read_only);
-    assert!(fs_patch.policy.destructive);
+    assert!(fs_patch_text.policy.destructive);
     assert!(fs_mkdir.policy.destructive);
     assert!(fs_move.policy.destructive);
     assert!(fs_trash.policy.destructive);
@@ -131,8 +129,10 @@ fn catalog_exposes_distinct_families_and_policy_flags() {
     assert!(!plan_write.policy.requires_approval);
     assert!(web_fetch.policy.read_only);
     assert!(web_search.policy.read_only);
-    assert!(fs_read.policy.read_only);
-    assert!(fs_write.policy.destructive);
+    assert!(catalog.definition(ToolName::FsRead).is_none());
+    assert!(catalog.definition(ToolName::FsWrite).is_none());
+    assert!(catalog.definition(ToolName::FsPatch).is_none());
+    assert!(catalog.definition(ToolName::FsSearch).is_none());
 }
 
 #[test]
@@ -433,7 +433,11 @@ fn automatic_model_definitions_include_file_delivery_tool() {
     );
     assert!(definition.description.contains("Do not read file contents"));
     assert!(definition.description.contains("status=queued"));
-    assert!(definition.description.contains("Do not invent Obsidian"));
+    assert!(
+        definition
+            .description
+            .contains("Do not invent alternate storage")
+    );
     let schema = definition.openai_function_schema().to_string();
     assert!(schema.contains("artifact_id"));
     assert!(schema.contains("workspace_path"));

@@ -51,16 +51,15 @@ TEAMD_TELEGRAM_BOT_TOKEN='123456789:test-token' \
 
 Полная инструкция: [14-container-addons.md](14-container-addons.md).
 
-Core `agentd` ставится отдельно от контейнерной обвязки. Второй скрипт поднимает SearXNG/Caddy и опционально SilverBullet, SilverBullet MCP, Browserless/agent-browser, Jaeger, legacy Lightpanda MCP и legacy Obsidian:
+Core `agentd` ставится отдельно от контейнерной обвязки. Второй скрипт поднимает SearXNG/Caddy и опционально SilverBullet, SilverBullet MCP, Browserless/agent-browser, Jaeger, Mem0 и File Browser:
 
 ```bash
 ./scripts/deploy-teamd-containers.sh
 ./scripts/deploy-teamd-containers.sh --with-silverbullet-mcp
 ./scripts/deploy-teamd-containers.sh --with-browserless
 ./scripts/deploy-teamd-containers.sh --with-jaeger
-./scripts/deploy-teamd-containers.sh --with-lightpanda-mcp
-./scripts/deploy-teamd-containers.sh --with-obsidian
-./scripts/deploy-teamd-containers.sh --with-obsidian-mcp
+./scripts/deploy-teamd-containers.sh --with-mem0
+./scripts/deploy-teamd-containers.sh --with-filebrowser
 ```
 
 Проверка без изменений:
@@ -68,15 +67,12 @@ Core `agentd` ставится отдельно от контейнерной о
 ```bash
 ./scripts/deploy-teamd-containers.sh --dry-run --non-interactive --no-start --with-silverbullet-mcp
 ./scripts/deploy-teamd-containers.sh --dry-run --non-interactive --no-start --no-searxng --no-caddy --with-browserless
-./scripts/deploy-teamd-containers.sh --dry-run --non-interactive --no-start --no-searxng --no-caddy --with-lightpanda-mcp
 ./scripts/deploy-teamd-containers.sh --dry-run --non-interactive --no-start --with-jaeger
-./scripts/deploy-teamd-containers.sh --dry-run --non-interactive --no-start --with-obsidian-mcp
 ```
 
 `--with-silverbullet-mcp` ставит текущий recommended knowledge path:
 
 - canonical space: `/var/lib/teamd/knowledge/silverbullet/teamd`;
-- legacy migration source: `/var/lib/teamd/knowledge/logseq/teamd`, если старый graph существует и новый space пустой;
 - SilverBullet editor: `https://<host>:8444/` без домена, `https://notes.<domain>/` с `TEAMD_CADDY_DOMAIN` или `https://<domain>/` в `--single-domain` mode;
 - credentials/tokens: `/opt/teamd/containers/silverbullet/silverbullet.env`, формат `SB_USER=username:password`, плюс `SB_AUTH_TOKEN` и `MCP_TOKEN`;
 - MCP connector: `[daemon.mcp_connectors.silverbullet]` в `/etc/teamd/config.toml`.
@@ -114,16 +110,6 @@ AGENT_BROWSER_CDP="$TEAMD_BROWSERLESS_CDP_URL" agent-browser open https://exampl
 AGENT_BROWSER_CDP="$TEAMD_BROWSERLESS_CDP_URL" agent-browser snapshot -i -c
 ```
 
-`--with-lightpanda-mcp` остаётся legacy/experimental JS-capable headless browser как MCP connector:
-
-- binary: `/opt/teamd/bin/lightpanda`;
-- PATH symlink: `/usr/local/bin/lightpanda`;
-- stdio wrapper: `/opt/teamd/containers/lightpanda/lightpanda-mcp-stdio.sh`;
-- MCP connector: `[daemon.mcp_connectors.lightpanda]` в `/etc/teamd/config.toml`;
-- telemetry в wrapper выключена по умолчанию через `LIGHTPANDA_DISABLE_TELEMETRY=true`.
-
-Lightpanda нужен только для legacy/экспериментов. Для новой browser automation используйте `agent-browser` skill и built-in `browser_*`; для обычного поиска и прямого чтения URL оставляйте `web_search` и `web_fetch`. Если deploy запускается без `--with-lightpanda-mcp`, скрипт выключает старый `[daemon.mcp_connectors.lightpanda]`, чтобы модель не видела `mcp__lightpanda__*` tools.
-
 `--with-jaeger` ставит `teamd-jaeger`, включает OTLP receiver и прописывает в `/etc/teamd/teamd.env`:
 
 ```bash
@@ -133,16 +119,6 @@ TEAMD_OTLP_TIMEOUT_MS='2000'
 ```
 
 После этого completed run traces автоматически экспортируются best-effort. UI без домена: `http://127.0.0.1:16686/jaeger/` напрямую или `http://127.0.0.1:8088/jaeger/` через Caddy. С `TEAMD_CADDY_DOMAIN` используется `https://jaeger.<domain>/`.
-
-`--with-obsidian-mcp` — legacy path. Он ставит Obsidian, добавляет enabled filesystem-backed MCP connector для vault в `/etc/teamd/config.toml` и перезапускает `teamd` сервисы, если они уже установлены. Новые knowledge notes должны идти в SilverBullet Space, а Obsidian остаётся для старых vault и восстановления.
-
-Legacy canonical vault path: `/var/lib/teamd/vaults/teamd`. Compatibility path `/var/lib/teamd/vault` должен быть symlink на canonical vault, чтобы старые инструкции вида `~/vault` не создавали второй vault.
-
-`--with-obsidian-mcp-example` дополнительно пишет шаблон MCP connector для filesystem-backed Obsidian vault access:
-
-```text
-/opt/teamd/containers/obsidian/obsidian-mcp.example.toml
-```
 
 Если SearXNG включён, `deploy-teamd-containers.sh` сам upsert-ит в `/etc/teamd/teamd.env`:
 

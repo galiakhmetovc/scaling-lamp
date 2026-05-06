@@ -555,15 +555,15 @@ mod tests {
             })
         );
         assert_eq!(
-            parse_command("/enable obsidian-vault"),
+            parse_command("/enable silverbullet-space"),
             Some(ParsedTelegramCommand::EnableSkill {
-                skill_name: "obsidian-vault".to_string()
+                skill_name: "silverbullet-space".to_string()
             })
         );
         assert_eq!(
-            parse_command("/disable obsidian-vault"),
+            parse_command("/disable silverbullet-space"),
             Some(ParsedTelegramCommand::DisableSkill {
-                skill_name: "obsidian-vault".to_string()
+                skill_name: "silverbullet-space".to_string()
             })
         );
     }

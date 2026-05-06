@@ -38,7 +38,7 @@
 - `fs_list`
 - `fs_glob`
 
-Есть и legacy-имена (`fs_read`, `fs_write`, `fs_patch`, `fs_search`), но канонический surface ориентирован на более точные typed variants.
+В 1.2.0 catalog больше не публикует старые short filesystem ids. Для чтения, поиска и изменений используйте только typed variants из списка выше.
 
 ### Exec
 

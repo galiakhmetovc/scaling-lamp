@@ -1726,9 +1726,10 @@ fn tool_execution_pauses_for_approval_then_resumes_and_records_evidence() {
         .put_job(&JobRecord::try_from(&job).expect("job record"))
         .expect("put job");
 
-    let tool_call = ToolCall::FsWrite(FsWriteInput {
+    let tool_call = ToolCall::FsWriteText(FsWriteTextInput {
         path: "notes/out.txt".to_string(),
         content: "tool output\n".to_string(),
+        mode: FsWriteMode::Upsert,
     });
 
     let approval = app
@@ -1737,7 +1738,7 @@ fn tool_execution_pauses_for_approval_then_resumes_and_records_evidence() {
     assert_eq!(approval.run_status, RunStatus::WaitingApproval);
     assert_eq!(
         approval.approval_id.as_deref(),
-        Some("approval-job-tool-fs_write")
+        Some("approval-job-tool-fs_write_text")
     );
 
     let waiting_run = RunSnapshot::try_from(
@@ -1783,7 +1784,7 @@ fn tool_execution_pauses_for_approval_then_resumes_and_records_evidence() {
     assert_eq!(resumed.run_status, RunStatus::Completed);
     assert_eq!(
         resumed.output_summary.as_deref(),
-        Some("fs_write path=notes/out.txt bytes=12")
+        Some("fs_write_text path=notes/out.txt mode=upsert bytes=12")
     );
     assert!(
         resumed
@@ -1815,7 +1816,7 @@ fn tool_execution_pauses_for_approval_then_resumes_and_records_evidence() {
     assert!(completed_run.pending_approvals.is_empty());
     assert_eq!(
         completed_run.result.as_deref(),
-        Some("fs_write path=notes/out.txt bytes=12")
+        Some("fs_write_text path=notes/out.txt mode=upsert bytes=12")
     );
     assert!(
         completed_run
@@ -1830,7 +1831,7 @@ fn tool_execution_pauses_for_approval_then_resumes_and_records_evidence() {
     assert_eq!(completed_job.status, "completed");
     assert_eq!(
         completed_job.result_json.as_deref(),
-        Some(r#"{"Summary":{"outcome":"fs_write path=notes/out.txt bytes=12"}}"#)
+        Some(r#"{"Summary":{"outcome":"fs_write_text path=notes/out.txt mode=upsert bytes=12"}}"#,)
     );
 
     let mission = store
@@ -1910,9 +1911,10 @@ fn accept_edits_mode_skips_approval_for_filesystem_edits() {
         .put_job(&JobRecord::try_from(&job).expect("job record"))
         .expect("put job");
 
-    let tool_call = ToolCall::FsWrite(FsWriteInput {
+    let tool_call = ToolCall::FsWriteText(FsWriteTextInput {
         path: "notes/out.txt".to_string(),
         content: "allowed\n".to_string(),
+        mode: FsWriteMode::Upsert,
     });
 
     let report = app
@@ -1941,7 +1943,7 @@ fn deny_rule_fails_tool_execution_before_approval_is_created() {
             mode: PermissionMode::AcceptEdits,
             rules: vec![PermissionRule {
                 action: PermissionAction::Deny,
-                tool: Some("fs_write".to_string()),
+                tool: Some("fs_write_text".to_string()),
                 family: None,
                 path_prefix: Some("secrets/".to_string()),
             }],
@@ -2006,9 +2008,10 @@ fn deny_rule_fails_tool_execution_before_approval_is_created() {
         .put_job(&JobRecord::try_from(&job).expect("job record"))
         .expect("put job");
 
-    let tool_call = ToolCall::FsWrite(FsWriteInput {
+    let tool_call = ToolCall::FsWriteText(FsWriteTextInput {
         path: "secrets/out.txt".to_string(),
         content: "denied\n".to_string(),
+        mode: FsWriteMode::Upsert,
     });
 
     let error = app

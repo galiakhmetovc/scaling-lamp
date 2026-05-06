@@ -323,7 +323,7 @@ fn execute_chat_turn_includes_relevant_memory_recall_before_provider_response() 
         )]);
     let (mem0_api_base, mem0_requests, mem0_handle) = spawn_json_server_sequence(vec![
         r#"{"results":[{"id":"mem_green","memory":"Пользователю нравится зелёный цвет.","score":0.93,"metadata":{"teamd_source":"memory_curator"}}]}"#.to_string(),
-        r#"{"results":[{"id":"mem_project","memory":"В этом workspace предпочитают SilverBullet вместо Obsidian.","score":0.88,"metadata":{"teamd_source":"memory_add"}}]}"#.to_string(),
+        r#"{"results":[{"id":"mem_project","memory":"В этом workspace предпочитают SilverBullet для заметок.","score":0.88,"metadata":{"teamd_source":"memory_add"}}]}"#.to_string(),
     ]);
     let temp = tempfile::tempdir().expect("tempdir");
     let app = build_from_config(AppConfig {

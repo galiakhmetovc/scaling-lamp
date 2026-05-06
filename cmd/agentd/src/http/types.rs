@@ -30,8 +30,6 @@ pub struct StatusResponse {
     pub data_dir: String,
     #[serde(default)]
     pub database: Option<String>,
-    #[serde(default)]
-    pub state_db: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

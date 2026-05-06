@@ -372,7 +372,7 @@ fn plan_records_round_trip_with_typed_items() {
                 content: "Persist plan snapshot".to_string(),
                 status: PlanItemStatus::InProgress,
                 depends_on: vec!["inspect".to_string()],
-                notes: vec!["Use sqlite".to_string()],
+                notes: vec!["Use postgres".to_string()],
                 blocked_reason: None,
                 parent_task_id: None,
             },

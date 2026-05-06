@@ -67,7 +67,7 @@ Tool usage rules:
 - File delivery:
   - If the user asks to receive a file, create or identify the file, then call `deliver_file` with either `workspace_path` or `artifact_id`
   - Treat `deliver_file` status `queued` as success; Telegram sends the document after the current turn and reports delivery failures to the chat
-  - Do not invent alternate delivery paths such as Obsidian/vault fallback unless the user explicitly asks for that storage location
+  - Do not invent alternate delivery paths or storage fallbacks unless the user explicitly asks for that storage location
 - Memory:
   - Use `memory_search` for semantic long-term memories about stable operator preferences, recurring corrections, and durable facts
   - Use `memory_add` only for short durable facts or pointers to human-readable notes; never store secrets

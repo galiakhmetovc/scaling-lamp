@@ -25,7 +25,7 @@ pub(crate) use agent_runtime::scheduler::{MissionVerificationSummary, Supervisor
 pub(crate) use agent_runtime::session::{
     Session, SessionSettings, TranscriptEntry, scheduled_input_metadata,
 };
-pub(crate) use agent_runtime::tool::{FsWriteInput, ToolCall};
+pub(crate) use agent_runtime::tool::{FsWriteMode, FsWriteTextInput, ToolCall};
 pub(crate) use agent_runtime::verification::VerificationStatus;
 pub(crate) use agent_runtime::verification::{CheckOutcome, EvidenceBundle};
 pub(crate) use agent_runtime::workspace::WorkspaceRef;
