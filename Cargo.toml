@@ -10,6 +10,7 @@ rust-version = "1.95"
 version = "1.2.0"
 
 [workspace.dependencies]
+async-nats = "0.47"
 crossterm = "0.28"
 encoding_rs = "0.8"
 html-to-markdown-rs = "3.3.3"
