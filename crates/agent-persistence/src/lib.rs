@@ -7,9 +7,10 @@ pub mod store;
 
 pub use config::{
     A2APeerConfig, AppConfig, BrowserConfig, BrowserlessConfig, ConfigEnv, ConfigError,
-    DaemonConfig, KnowledgeConfig, KnowledgeSourcePathConfig, McpConnectorSeedConfig, Mem0Config,
-    MemoryCuratorConfig, MemoryRecallConfig, RuntimeLimitsConfig, RuntimeTimingConfig,
-    TelegramConfig, WorkspaceConfig, normalize_absolute_path, validate_workspace_root_path,
+    DaemonConfig, DatabaseConfig, KnowledgeConfig, KnowledgeSourcePathConfig,
+    McpConnectorSeedConfig, Mem0Config, MemoryCuratorConfig, MemoryRecallConfig,
+    RuntimeLimitsConfig, RuntimeTimingConfig, TelegramConfig, WorkspaceConfig,
+    normalize_absolute_path, redacted_database_url, validate_workspace_root_path,
 };
 pub use records::{
     AgentChainContinuationRecord, AgentProfileRecord, AgentScheduleRecord, ArtifactRecord,
@@ -71,7 +72,13 @@ mod tests {
             scaffold.config.data_dir.file_name(),
             Some(OsStr::new("teamd"))
         );
-        assert!(scaffold.stores.metadata_db.ends_with("teamd/state.sqlite"));
+        assert!(scaffold.stores.root_dir.ends_with("teamd"));
+        assert!(
+            scaffold
+                .stores
+                .legacy_sqlite_db
+                .ends_with("teamd/state.sqlite")
+        );
         assert!(scaffold.stores.runs_dir.ends_with("teamd/runs"));
         assert!(scaffold.audit.path.ends_with("teamd/audit/runtime.jsonl"));
     }

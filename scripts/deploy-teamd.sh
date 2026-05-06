@@ -11,6 +11,7 @@ SKIP_BUILD=0
 SKIP_START=0
 INSTALL_RUST=${TEAMD_DEPLOY_INSTALL_RUST:-1}
 INSTALL_SYSTEM_DEPS=${TEAMD_DEPLOY_INSTALL_SYSTEM_DEPS:-1}
+INSTALL_POSTGRES=${TEAMD_DEPLOY_INSTALL_POSTGRES:-1}
 MIN_RUST_VERSION=${TEAMD_DEPLOY_MIN_RUST_VERSION:-1.85.0}
 OVERWRITE_CONFIG=0
 OVERWRITE_ENV=0
@@ -34,6 +35,12 @@ PROVIDER_API_BASE=${TEAMD_PROVIDER_API_BASE:-https://api.z.ai/api/coding/paas/v4
 PROVIDER_MODEL=${TEAMD_PROVIDER_MODEL:-glm-5-turbo}
 TELEGRAM_TOKEN=${TEAMD_TELEGRAM_BOT_TOKEN:-}
 PROVIDER_KEY=${TEAMD_PROVIDER_API_KEY:-}
+DATABASE_URL=${TEAMD_DATABASE_URL:-}
+DATABASE_NAME=${TEAMD_DATABASE_NAME:-teamd}
+DATABASE_USER=${TEAMD_DATABASE_USER:-teamd}
+DATABASE_PASSWORD=${TEAMD_DATABASE_PASSWORD:-}
+DATABASE_HOST=${TEAMD_DATABASE_HOST:-127.0.0.1}
+DATABASE_PORT=${TEAMD_DATABASE_PORT:-5432}
 CARGO_HOME=${CARGO_HOME:-$HOME/.cargo}
 RUSTUP_HOME=${RUSTUP_HOME:-$HOME/.rustup}
 RUSTUP_INIT_URL=${TEAMD_DEPLOY_RUSTUP_INIT_URL:-https://sh.rustup.rs}
@@ -57,6 +64,8 @@ Options:
   --no-install-rust   Fail if cargo/rustc are missing instead of installing Rust.
   --no-install-system-deps
                       Fail if native build dependencies are missing.
+  --no-install-postgres
+                      Fail if PostgreSQL is missing instead of installing local PostgreSQL.
   --no-start          Install files but do not enable/start services.
   --overwrite-config  Replace existing $CONFIG_FILE.
   --overwrite-env     Replace existing $ENV_FILE.
@@ -69,9 +78,16 @@ Environment overrides:
   TEAMD_PROVIDER_KIND            Provider kind, default: $PROVIDER_KIND.
   TEAMD_PROVIDER_API_BASE        Provider API base, default: $PROVIDER_API_BASE.
   TEAMD_PROVIDER_MODEL           Provider model, default: $PROVIDER_MODEL.
+  TEAMD_DATABASE_URL             PostgreSQL URL. If set, deploy script will not create a local DB.
+  TEAMD_DATABASE_NAME            Local PostgreSQL database name, default: $DATABASE_NAME.
+  TEAMD_DATABASE_USER            Local PostgreSQL role, default: $DATABASE_USER.
+  TEAMD_DATABASE_PASSWORD        Local PostgreSQL password. If omitted, a random password is generated.
+  TEAMD_DATABASE_HOST            Local PostgreSQL host, default: $DATABASE_HOST.
+  TEAMD_DATABASE_PORT            Local PostgreSQL port, default: $DATABASE_PORT.
   TEAMD_DEPLOY_INSTALL_RUST      Auto-install Rust when missing, default: $INSTALL_RUST.
   TEAMD_DEPLOY_INSTALL_SYSTEM_DEPS
                                  Auto-install pkg-config/OpenSSL/build deps, default: $INSTALL_SYSTEM_DEPS.
+  TEAMD_DEPLOY_INSTALL_POSTGRES  Auto-install local PostgreSQL when TEAMD_DATABASE_URL is unset, default: $INSTALL_POSTGRES.
   TEAMD_DEPLOY_MIN_RUST_VERSION  Minimum cargo/rustc version, default: $MIN_RUST_VERSION.
   TEAMD_DEPLOY_RUSTUP_INIT_URL   rustup installer URL, default: $RUSTUP_INIT_URL.
   TEAMD_DEPLOY_INSTALL_PREFIX    Install prefix, default: $INSTALL_PREFIX.
@@ -114,6 +130,36 @@ run_root() {
     run_cmd "$@"
   else
     run_cmd sudo "$@"
+  fi
+}
+
+run_postgres() {
+  if [ "$DRY_RUN" -eq 1 ]; then
+    print_cmd sudo -u postgres "$@"
+  elif [ "$(id -u)" -eq 0 ]; then
+    if command -v runuser >/dev/null 2>&1; then
+      run_cmd runuser -u postgres -- "$@"
+    else
+      fail "runuser not found; install util-linux or run deploy as a sudo-capable user"
+    fi
+  else
+    run_cmd sudo -u postgres "$@"
+  fi
+}
+
+postgres_query_scalar() {
+  if [ "$DRY_RUN" -eq 1 ]; then
+    return 1
+  fi
+
+  if [ "$(id -u)" -eq 0 ]; then
+    if command -v runuser >/dev/null 2>&1; then
+      runuser -u postgres -- psql -tAc "$1" 2>/dev/null || true
+    else
+      return 1
+    fi
+  else
+    sudo -u postgres psql -tAc "$1" 2>/dev/null || true
   fi
 }
 
@@ -254,6 +300,35 @@ detect_package_manager() {
   fi
 }
 
+generate_password() {
+  if command -v openssl >/dev/null 2>&1; then
+    openssl rand -hex 24
+    return 0
+  fi
+  if command -v od >/dev/null 2>&1; then
+    od -An -N24 -tx1 /dev/urandom | tr -d ' \n'
+    return 0
+  fi
+  fail "cannot generate database password; install openssl or set TEAMD_DATABASE_PASSWORD"
+}
+
+validate_sql_identifier() {
+  value=$1
+  name=$2
+  case "$value" in
+    ''|*[!A-Za-z0-9_]*)
+      fail "$name must contain only ASCII letters, digits and underscore"
+      ;;
+    [0-9]*)
+      fail "$name must not start with a digit"
+      ;;
+  esac
+}
+
+sql_literal() {
+  printf "'%s'" "$(printf '%s' "$1" | sed "s/'/''/g")"
+}
+
 install_system_build_deps() {
   reason=$1
 
@@ -289,6 +364,72 @@ install_system_build_deps() {
       ;;
     *) fail "unsupported package manager: $manager" ;;
   esac
+}
+
+install_postgres_package() {
+  if [ "$INSTALL_POSTGRES" != "1" ]; then
+    fail "PostgreSQL client/server not found; install PostgreSQL or set TEAMD_DATABASE_URL"
+  fi
+
+  manager=$(detect_package_manager || true)
+  [ -n "$manager" ] || fail "PostgreSQL not found and supported package manager not found"
+
+  printf 'Installing PostgreSQL with %s.\n' "$manager"
+  case "$manager" in
+    apt)
+      run_root env DEBIAN_FRONTEND=noninteractive apt-get update
+      run_root env DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends postgresql postgresql-client
+      ;;
+    dnf)
+      run_root dnf install -y postgresql-server postgresql
+      ;;
+    yum)
+      run_root yum install -y postgresql-server postgresql
+      ;;
+    apk)
+      run_root apk add --no-cache postgresql postgresql-client
+      ;;
+    pacman)
+      run_root pacman -Sy --noconfirm --needed postgresql
+      ;;
+    zypper)
+      run_root zypper --non-interactive install postgresql-server postgresql
+      ;;
+    *) fail "unsupported package manager: $manager" ;;
+  esac
+}
+
+ensure_postgres_service() {
+  if [ -n "$DATABASE_URL" ]; then
+    return 0
+  fi
+
+  validate_sql_identifier "$DATABASE_NAME" TEAMD_DATABASE_NAME
+  validate_sql_identifier "$DATABASE_USER" TEAMD_DATABASE_USER
+
+  if ! command -v psql >/dev/null 2>&1 || ! command -v createdb >/dev/null 2>&1; then
+    install_postgres_package
+  fi
+
+  if command -v systemctl >/dev/null 2>&1; then
+    run_root systemctl enable --now postgresql || run_root systemctl start postgresql || true
+  fi
+
+  if [ -z "$DATABASE_PASSWORD" ]; then
+    DATABASE_PASSWORD=$(generate_password)
+  fi
+  DATABASE_URL="postgresql://$DATABASE_USER:$DATABASE_PASSWORD@$DATABASE_HOST:$DATABASE_PORT/$DATABASE_NAME"
+
+  role_literal=$(sql_literal "$DATABASE_USER")
+  password_literal=$(sql_literal "$DATABASE_PASSWORD")
+  role_sql="DO \$\$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = $role_literal) THEN CREATE ROLE \"$DATABASE_USER\" LOGIN PASSWORD $password_literal; ELSE ALTER ROLE \"$DATABASE_USER\" WITH LOGIN PASSWORD $password_literal; END IF; END \$\$;"
+
+  run_postgres psql -v ON_ERROR_STOP=1 -c "$role_sql"
+
+  db_exists=$(postgres_query_scalar "SELECT 1 FROM pg_database WHERE datname = $(sql_literal "$DATABASE_NAME")")
+  if [ "$db_exists" != "1" ]; then
+    run_postgres createdb -O "$DATABASE_USER" "$DATABASE_NAME"
+  fi
 }
 
 ensure_system_build_deps() {
@@ -435,6 +576,7 @@ while [ "$#" -gt 0 ]; do
     --no-build) SKIP_BUILD=1 ;;
     --no-install-rust) INSTALL_RUST=0 ;;
     --no-install-system-deps) INSTALL_SYSTEM_DEPS=0 ;;
+    --no-install-postgres) INSTALL_POSTGRES=0 ;;
     --no-start) SKIP_START=1 ;;
     --overwrite-config) OVERWRITE_CONFIG=1 ;;
     --overwrite-env) OVERWRITE_ENV=1 ;;
@@ -467,6 +609,7 @@ fi
 
 ensure_system_build_deps
 ensure_rust_toolchain
+ensure_postgres_service
 
 if [ "$SKIP_BUILD" -eq 0 ]; then
   run_cmd sh -c "cd $(quote_arg "$REPO_ROOT") && $(quote_arg "$CARGO_BIN") build --release -p agentd"
@@ -529,6 +672,10 @@ bind_port = 5140
 skills_dir = "skills"
 worker_lease_owner = "daemon"
 
+[database]
+connect_timeout_seconds = 5
+application_name = "teamd"
+
 [telegram]
 enabled = true
 poll_interval_ms = 1000
@@ -578,6 +725,7 @@ EOF
   {
     printf 'TEAMD_CONFIG=%s\n' "$(quote_arg "$CONFIG_FILE")"
     printf 'TEAMD_DATA_DIR=%s\n' "$(quote_arg "$DATA_DIR")"
+    printf 'TEAMD_DATABASE_URL=%s\n' "$(quote_arg "$DATABASE_URL")"
     printf 'TEAMD_TELEGRAM_BOT_TOKEN=%s\n' "$(quote_arg "$TELEGRAM_TOKEN")"
     printf 'TEAMD_PROVIDER_API_KEY=%s\n' "$(quote_arg "$PROVIDER_KEY")"
   } > "$ENV_TMP"

@@ -113,6 +113,7 @@ fn run_agentd(
     let output = Command::new(env!("CARGO_BIN_EXE_agentd"))
         .args(args)
         .env("TEAMD_DATA_DIR", data_dir)
+        .env("TEAMD_FORCE_TEST_DATABASE", "1")
         .env("TEAMD_DAEMON_BIND_PORT", daemon_port.to_string())
         .env("TEAMD_PROVIDER_KIND", "openai_responses")
         .env("TEAMD_PROVIDER_API_BASE", format!("{api_base}/v1"))
@@ -197,7 +198,7 @@ fn spawn_json_server(body: &'static str) -> (String, Receiver<String>, thread::J
                 Ok(pair) => pair,
                 Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
                     let idle_limit = if served_requests == 0 {
-                        Duration::from_secs(5)
+                        Duration::from_secs(30)
                     } else {
                         Duration::from_millis(250)
                     };

@@ -7,12 +7,10 @@ impl KvRepository for PersistenceStore {
         record: &KvEntryRecord,
         expected_revision: Option<i64>,
     ) -> Result<KvEntryRecord, StoreError> {
-        let transaction = rusqlite::Transaction::new_unchecked(
-            &self.connection,
-            rusqlite::TransactionBehavior::Immediate,
-        )?;
-        let existing = select_kv_entry(
-            &transaction,
+        let mut client = self.client()?;
+        let mut transaction = client.transaction()?;
+        let existing = select_kv_entry_for_update(
+            &mut transaction,
             record.scope.as_str(),
             record.namespace_id.as_str(),
             record.key.as_str(),
@@ -47,23 +45,23 @@ impl KvRepository for PersistenceStore {
             "INSERT INTO kv_entries (
                 scope, namespace_id, key, value_json, metadata_json, revision,
                 created_at, updated_at, expires_at
-             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+             ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
              ON CONFLICT(scope, namespace_id, key) DO UPDATE SET
                 value_json = excluded.value_json,
                 metadata_json = excluded.metadata_json,
                 revision = excluded.revision,
                 updated_at = excluded.updated_at,
                 expires_at = excluded.expires_at",
-            params![
-                stored.scope,
-                stored.namespace_id,
-                stored.key,
-                stored.value_json,
-                stored.metadata_json,
-                stored.revision,
-                stored.created_at,
-                stored.updated_at,
-                stored.expires_at,
+            &[
+                &stored.scope,
+                &stored.namespace_id,
+                &stored.key,
+                &stored.value_json,
+                &stored.metadata_json,
+                &stored.revision,
+                &stored.created_at,
+                &stored.updated_at,
+                &stored.expires_at,
             ],
         )?;
         transaction.commit()?;
@@ -77,20 +75,21 @@ impl KvRepository for PersistenceStore {
         key: &str,
         now: i64,
     ) -> Result<Option<KvEntryRecord>, StoreError> {
-        self.connection
-            .query_row(
-                "SELECT scope, namespace_id, key, value_json, metadata_json, revision,
-                        created_at, updated_at, expires_at
-                 FROM kv_entries
-                 WHERE scope = ?1
-                   AND namespace_id = ?2
-                   AND key = ?3
-                   AND (expires_at IS NULL OR expires_at > ?4)",
-                params![scope, namespace_id, key, now],
-                kv_entry_from_row,
-            )
-            .optional()
-            .map_err(StoreError::from)
+        self.with_client(|client| {
+            client
+                .query_opt(
+                    "SELECT scope, namespace_id, key, value_json, metadata_json, revision,
+                            created_at, updated_at, expires_at
+                     FROM kv_entries
+                     WHERE scope = $1
+                       AND namespace_id = $2
+                       AND key = $3
+                       AND (expires_at IS NULL OR expires_at > $4)",
+                    &[&scope, &namespace_id, &key, &now],
+                )
+                .map(|row| row.map(|row| kv_entry_from_row(&row)))
+                .map_err(StoreError::from)
+        })
     }
 
     fn list_kv_entries(
@@ -102,26 +101,26 @@ impl KvRepository for PersistenceStore {
         offset: usize,
         now: i64,
     ) -> Result<Vec<KvEntryRecord>, StoreError> {
-        let prefix = prefix.unwrap_or("");
-        let mut statement = self.connection.prepare(
-            "SELECT scope, namespace_id, key, value_json, metadata_json, revision,
-                    created_at, updated_at, expires_at
-             FROM kv_entries
-             WHERE scope = ?1
-               AND namespace_id = ?2
-               AND key LIKE ?3 ESCAPE '\\'
-               AND (expires_at IS NULL OR expires_at > ?4)
-             ORDER BY key ASC
-             LIMIT ?5 OFFSET ?6",
-        )?;
-        let pattern = format!("{}%", escape_like(prefix));
-        let mut rows =
-            statement.query(params![scope, namespace_id, pattern, now, limit, offset])?;
-        let mut entries = Vec::new();
-        while let Some(row) = rows.next()? {
-            entries.push(kv_entry_from_row(row)?);
-        }
-        Ok(entries)
+        let pattern = format!("{}%", escape_like(prefix.unwrap_or("")));
+        let limit = limit as i64;
+        let offset = offset as i64;
+        self.with_client(|client| {
+            client
+                .query(
+                    "SELECT scope, namespace_id, key, value_json, metadata_json, revision,
+                            created_at, updated_at, expires_at
+                     FROM kv_entries
+                     WHERE scope = $1
+                       AND namespace_id = $2
+                       AND key LIKE $3 ESCAPE '\\'
+                       AND (expires_at IS NULL OR expires_at > $4)
+                     ORDER BY key ASC
+                     LIMIT $5 OFFSET $6",
+                    &[&scope, &namespace_id, &pattern, &now, &limit, &offset],
+                )
+                .map(|rows| rows.iter().map(kv_entry_from_row).collect())
+                .map_err(StoreError::from)
+        })
     }
 
     fn delete_kv_entry(
@@ -131,11 +130,9 @@ impl KvRepository for PersistenceStore {
         key: &str,
         expected_revision: Option<i64>,
     ) -> Result<bool, StoreError> {
-        let transaction = rusqlite::Transaction::new_unchecked(
-            &self.connection,
-            rusqlite::TransactionBehavior::Immediate,
-        )?;
-        let existing = select_kv_entry(&transaction, scope, namespace_id, key)?;
+        let mut client = self.client()?;
+        let mut transaction = client.transaction()?;
+        let existing = select_kv_entry_for_update(&mut transaction, scope, namespace_id, key)?;
         if let Some(expected_revision) = expected_revision {
             let actual_revision = existing.as_ref().map(|entry| entry.revision);
             if actual_revision.unwrap_or(0) != expected_revision {
@@ -150,45 +147,45 @@ impl KvRepository for PersistenceStore {
         }
         let changed = transaction.execute(
             "DELETE FROM kv_entries
-             WHERE scope = ?1 AND namespace_id = ?2 AND key = ?3",
-            params![scope, namespace_id, key],
+             WHERE scope = $1 AND namespace_id = $2 AND key = $3",
+            &[&scope, &namespace_id, &key],
         )?;
         transaction.commit()?;
         Ok(changed > 0)
     }
 }
 
-fn select_kv_entry(
-    connection: &rusqlite::Connection,
+fn select_kv_entry_for_update(
+    client: &mut impl postgres::GenericClient,
     scope: &str,
     namespace_id: &str,
     key: &str,
 ) -> Result<Option<KvEntryRecord>, StoreError> {
-    connection
-        .query_row(
+    client
+        .query_opt(
             "SELECT scope, namespace_id, key, value_json, metadata_json, revision,
                     created_at, updated_at, expires_at
              FROM kv_entries
-             WHERE scope = ?1 AND namespace_id = ?2 AND key = ?3",
-            params![scope, namespace_id, key],
-            kv_entry_from_row,
+             WHERE scope = $1 AND namespace_id = $2 AND key = $3
+             FOR UPDATE",
+            &[&scope, &namespace_id, &key],
         )
-        .optional()
+        .map(|row| row.map(|row| kv_entry_from_row(&row)))
         .map_err(StoreError::from)
 }
 
-fn kv_entry_from_row(row: &rusqlite::Row<'_>) -> Result<KvEntryRecord, rusqlite::Error> {
-    Ok(KvEntryRecord {
-        scope: row.get(0)?,
-        namespace_id: row.get(1)?,
-        key: row.get(2)?,
-        value_json: row.get(3)?,
-        metadata_json: row.get(4)?,
-        revision: row.get(5)?,
-        created_at: row.get(6)?,
-        updated_at: row.get(7)?,
-        expires_at: row.get(8)?,
-    })
+fn kv_entry_from_row(row: &Row) -> KvEntryRecord {
+    KvEntryRecord {
+        scope: row.get(0),
+        namespace_id: row.get(1),
+        key: row.get(2),
+        value_json: row.get(3),
+        metadata_json: row.get(4),
+        revision: row.get(5),
+        created_at: row.get(6),
+        updated_at: row.get(7),
+        expires_at: row.get(8),
+    }
 }
 
 fn escape_like(value: &str) -> String {

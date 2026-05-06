@@ -26,6 +26,7 @@ help_output=$("$DEPLOY_SCRIPT" --help)
 assert_contains "$help_output" "Usage:"
 assert_contains "$help_output" "--dry-run"
 assert_contains "$help_output" "--non-interactive"
+assert_contains "$help_output" "--no-install-postgres"
 
 binary_help_output=$("$BINARY_DEPLOY_SCRIPT" --help)
 assert_contains "$binary_help_output" "already built local agentd binary"
@@ -56,8 +57,9 @@ assert_contains "$diagnostics_help_output" "--session"
 
 dry_run_output=$(
   TEAMD_TELEGRAM_BOT_TOKEN='123456789:test-token' \
+    TEAMD_DATABASE_URL='postgresql://teamd:secret@127.0.0.1:5432/teamd' \
     TEAMD_PROVIDER_API_KEY='zai-test-key' \
-    "$DEPLOY_SCRIPT" --dry-run --non-interactive --no-build --no-start 2>&1
+    "$DEPLOY_SCRIPT" --dry-run --non-interactive --no-build --no-start --no-install-postgres 2>&1
 )
 
 assert_contains "$dry_run_output" "DRY RUN"
@@ -281,7 +283,7 @@ grep -q 'users update "$FILEBROWSER_ADMIN_USER" --password "$password"' "$CONTAI
 grep -q 'chown_work_dir()' "$DEPLOY_SCRIPT" \
   || fail "expected resilient work-dir ownership helper"
 grep -q 'Retrying ownership update' "$DEPLOY_SCRIPT" \
-  || fail "expected retry for transient SQLite WAL/SHM ownership races"
+  || fail "expected retry for transient work-dir ownership races"
 grep -q 'inbound_queue_default_mode = "coalesce"' "$DEPLOY_SCRIPT" \
   || fail "expected Telegram inbound queue mode in generated config"
 grep -q 'inbound_coalesce_window_ms = 5000' "$DEPLOY_SCRIPT" \

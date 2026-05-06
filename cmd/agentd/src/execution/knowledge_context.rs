@@ -219,7 +219,7 @@ fn render_session_mirror(
         String::new(),
         format!("# TeamD Session: {}", markdown_inline(&session.title)),
         String::new(),
-        "> This page is a human-readable mirror. The canonical runtime state remains in agentd SQLite, transcripts, artifacts and tool-call ledgers.".to_string(),
+        "> This page is a human-readable mirror. The canonical runtime state remains in agentd PostgreSQL, transcripts, artifacts and tool-call ledgers.".to_string(),
         String::new(),
         format!("- Session: `{}`", session.id),
         format!("- Agent Profile: `{}`", session.agent_profile_id),

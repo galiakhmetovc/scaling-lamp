@@ -11,8 +11,8 @@
 - `DiagnosticEvent` получил first-class поля `trace_id`, `span_id`, `parent_span_id`, `surface`, `entrypoint`;
 - Telegram delivery пишет audit events `component=telegram`, `op=delivery.request`/`delivery.retry`, `surface=telegram`;
 - появился локальный CLI-срез `agentd analytics [N]` / `teamdctl analytics [N]`;
-- analytics читает tail `audit/runtime.jsonl` и tool ledger из SQLite;
-- SQLite получил таблицу `trace_links`, которая связывает `run`, `provider_round`, `transcript`, `tool_call`, `artifact` с `trace_id`/`span_id`;
+- analytics читает tail `audit/runtime.jsonl` и tool ledger из PostgreSQL;
+- PostgreSQL хранит таблицу `trace_links`, которая связывает `run`, `provider_round`, `transcript`, `tool_call`, `artifact` с `trace_id`/`span_id`;
 - chat turns создают root run span, provider round spans, transcript spans и tool call spans в одном canonical execution path;
 - Telegram final delivery audit events могут наследовать `trace_id`/`parent_span_id` от run;
 - появились команды `agentd trace run <run_id>`, `agentd trace show <trace_id>`, `agentd trace export <trace_id>`, `agentd trace push <trace_id>`;

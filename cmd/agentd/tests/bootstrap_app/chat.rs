@@ -120,6 +120,84 @@ fn execute_chat_turn_creates_a_run_and_appends_transcript_history() {
 }
 
 #[test]
+fn execute_chat_turn_retries_initial_store_writes_after_transient_store_lock() {
+    let (api_base, requests, handle) =
+        spawn_json_server_sequence(vec![openai_message_response_json(
+            "resp_store_retry",
+            "Recovered after lock",
+        )]);
+    let temp = tempfile::tempdir().expect("tempdir");
+    let runtime_timing = agent_persistence::RuntimeTimingConfig {
+        store_retry_delay_ms: 25,
+        ..agent_persistence::RuntimeTimingConfig::default()
+    };
+    let runtime_limits = agent_persistence::RuntimeLimitsConfig {
+        store_retry_attempts: 40,
+        ..agent_persistence::RuntimeLimitsConfig::default()
+    };
+    let app = build_from_config(AppConfig {
+        data_dir: temp.path().join("state-root"),
+        daemon: Default::default(),
+        provider: ConfiguredProvider {
+            kind: ProviderKind::OpenAiResponses,
+            api_base: Some(format!("{api_base}/v1")),
+            api_key: Some("test-key".to_string()),
+            default_model: Some("gpt-5.4".to_string()),
+            ..ConfiguredProvider::default()
+        },
+        runtime_timing,
+        runtime_limits,
+        ..AppConfig::default()
+    })
+    .expect("build app");
+    let store = PersistenceStore::open(&app.persistence).expect("open store");
+    store
+        .put_session(&SessionRecord {
+            id: "session-store-retry".to_string(),
+            title: "Store retry session".to_string(),
+            prompt_override: None,
+            settings_json: serde_json::to_string(&SessionSettings::default())
+                .expect("serialize settings"),
+            workspace_root: app.runtime.workspace.root.display().to_string(),
+            agent_profile_id: "default".to_string(),
+            active_mission_id: None,
+            parent_session_id: None,
+            parent_job_id: None,
+            delegation_label: None,
+            created_at: 1,
+            updated_at: 1,
+        })
+        .expect("put session");
+    drop(store);
+
+    let (lock_ready_tx, lock_ready_rx) = mpsc::channel();
+    let lock_app = app.clone();
+    let release_handle = thread::spawn(move || {
+        let lock_store = PersistenceStore::open(&lock_app.persistence).expect("open lock store");
+        lock_store
+            .with_postgres_client(|client| {
+                let mut transaction = client.transaction()?;
+                transaction.batch_execute("LOCK TABLE sessions IN ACCESS EXCLUSIVE MODE;")?;
+                lock_ready_tx.send(()).expect("send lock ready");
+                thread::sleep(Duration::from_millis(750));
+                transaction.commit()?;
+                Ok(())
+            })
+            .expect("hold postgres table lock");
+    });
+    lock_ready_rx.recv().expect("lock ready");
+
+    let report = app
+        .execute_chat_turn("session-store-retry", "Please answer", 10)
+        .expect("execute chat turn after transient lock");
+
+    release_handle.join().expect("join lock releaser");
+    let _raw_request = requests.recv().expect("provider request");
+    handle.join().expect("join server");
+    assert_eq!(report.output_text, "Recovered after lock");
+}
+
+#[test]
 fn execute_chat_turn_runs_memory_curator_after_assistant_response() {
     let curator_output = serde_json::json!({
         "candidates": [

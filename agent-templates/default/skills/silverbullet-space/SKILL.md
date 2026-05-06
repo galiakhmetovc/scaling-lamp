@@ -30,7 +30,7 @@ If the structure, naming, or query behavior is unclear, read these notes before 
 ## Space contract
 
 - Treat the space as the shared working knowledge layer for the agent and operator.
-- Do not use the space as runtime state: transcripts, runs, tool calls, artifacts, schedules, approvals, audit logs, and SQLite state remain in `agentd`.
+- Do not use the space as runtime state: transcripts, runs, tool calls, artifacts, schedules, approvals, audit logs, PostgreSQL control-plane state, and payload files remain in `agentd`.
 - `agentd` may mirror runtime state into the space for transparency. Mirror pages are readable/editable notes for the operator, but edits do not mutate runtime state until a tool explicitly imports or applies them.
 - Do not treat space notes as canonical repository documentation. Stable documentation still belongs in git under `docs/`; use space notes for working notes, drafts, decisions, research, and project logs before promoting stable material to repo docs.
 - Future semantic search may index this space. Write notes so they are useful for humans and indexing: clear title, concise summary, stable headings, explicit links, and frontmatter when useful.

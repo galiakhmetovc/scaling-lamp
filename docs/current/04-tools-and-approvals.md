@@ -115,7 +115,7 @@
 
 Это важно для TUI и REPL: интерфейс показывает не “сырой шум”, а компактный статус каждого tool step.
 
-Кроме event stream, runtime пишет persistent tool-call ledger в таблицу `tool_calls`. Там фиксируется сам факт вызова: `session_id`, `run_id`, provider call id, tool name, arguments JSON, summary, status, error, timestamps и bounded preview результата. Полный большой результат tool’а не кладётся в SQLite целиком; он сохраняется как artifact `tool_output`, а ledger хранит `result_artifact_id`.
+Кроме event stream, runtime пишет persistent tool-call ledger в таблицу `tool_calls`. Там фиксируется сам факт вызова: `session_id`, `run_id`, provider call id, tool name, arguments JSON, summary, status, error, timestamps и bounded preview результата. Полный большой результат tool’а не кладётся в PostgreSQL row целиком; он сохраняется как artifact `tool_output`, а ledger хранит `result_artifact_id`.
 
 Операторская команда:
 
@@ -206,7 +206,7 @@ Approval — это не отдельная мини-сессия. Это сос
 Для файлов есть отдельный generic delivery tool `deliver_file`:
 
 - модель передаёт `artifact_id` текущей session или `workspace_path` внутри текущего workspace;
-- runtime ставит delivery request в SQLite, а не вызывает Telegram напрямую из provider loop;
+- runtime ставит delivery request в PostgreSQL, а не вызывает Telegram напрямую из provider loop;
 - Telegram surface после финального ответа отправляет queued request через `sendDocument`;
 - `status=queued` в tool output — это успех постановки в очередь, не ошибка и не доказательство финальной доставки;
 - если `sendDocument` падает, Telegram worker помечает request как `failed`, пишет audit event и отправляет оператору отдельное сообщение о неудачной доставке;

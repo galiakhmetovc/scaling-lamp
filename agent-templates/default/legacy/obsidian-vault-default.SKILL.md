@@ -21,7 +21,7 @@ Use this skill for Obsidian knowledge-base and personal knowledge management wor
 - Compatibility path: `/var/lib/teamd/vault`; it must remain a symlink to the canonical vault.
 - Do not create a second vault at `~/vault`, `/root/vault`, or another ad-hoc path.
 - Treat the vault as the shared working knowledge layer for the agent and operator.
-- Do not use the vault as runtime state: transcripts, runs, tool calls, artifacts, schedules, approvals, audit logs, and SQLite state remain in `agentd`.
+- Do not use the vault as runtime state: transcripts, runs, tool calls, artifacts, schedules, approvals, audit logs, PostgreSQL control-plane state, and payload files remain in `agentd`.
 - Do not treat vault notes as canonical repository documentation. Stable documentation still belongs in git under `docs/`; use vault notes for working notes, drafts, decisions, research, and project logs before promoting stable material to repo docs.
 - Future semantic search may index this vault. Write notes so they are useful for both humans and indexing: clear title, concise summary, stable headings, explicit links, and frontmatter when useful.
 

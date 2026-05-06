@@ -14,6 +14,9 @@ fn base_env(root: &Path) -> ConfigEnv {
     ConfigEnv {
         config_path: None,
         data_dir_override: None,
+        database_url_override: None,
+        database_connect_timeout_override: None,
+        database_application_name_override: None,
         daemon_bearer_token_override: None,
         daemon_bind_host_override: None,
         daemon_bind_port_override: None,
@@ -159,6 +162,7 @@ stealth = true
 fn validate_rejects_enabled_browser_without_command() {
     let config = AppConfig {
         data_dir: PathBuf::from("/tmp/teamd"),
+        database: Default::default(),
         daemon: Default::default(),
         telegram: Default::default(),
         permissions: Default::default(),
@@ -206,6 +210,72 @@ fn load_prefers_explicit_data_dir_override() {
 }
 
 #[test]
+fn load_merges_database_config_from_file_and_env() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let config_path = temp.path().join("teamd.toml");
+
+    fs::write(
+        &config_path,
+        r#"
+data_dir = "/tmp/teamd-config"
+
+[database]
+url = "postgresql://file-user:file-pass@127.0.0.1:5432/file-teamd"
+connect_timeout_seconds = 7
+application_name = "teamd-file"
+"#,
+    )
+    .expect("write config");
+
+    let mut env = base_env(temp.path());
+    env.config_path = Some(config_path);
+    env.database_url_override =
+        Some("postgresql://env-user:env-pass@127.0.0.1:5432/env-teamd".to_string());
+    env.database_connect_timeout_override = Some(11);
+    env.database_application_name_override = Some("teamd-env".to_string());
+
+    let config = AppConfig::load_from_env(&env).expect("load config");
+
+    assert_eq!(
+        config.database.url,
+        "postgresql://env-user:env-pass@127.0.0.1:5432/env-teamd"
+    );
+    assert_eq!(config.database.connect_timeout_seconds, 11);
+    assert_eq!(config.database.application_name, "teamd-env");
+}
+
+#[test]
+fn validate_rejects_empty_database_url() {
+    let config = AppConfig {
+        data_dir: PathBuf::from("/tmp/teamd"),
+        database: super::DatabaseConfig {
+            url: "   ".to_string(),
+            ..Default::default()
+        },
+        daemon: Default::default(),
+        telegram: Default::default(),
+        permissions: Default::default(),
+        provider: Default::default(),
+        session_defaults: Default::default(),
+        context: Default::default(),
+        workspace: Default::default(),
+        web: Default::default(),
+        browser: Default::default(),
+        mem0: Default::default(),
+        memory_curator: Default::default(),
+        memory_recall: Default::default(),
+        knowledge: Default::default(),
+        observability: Default::default(),
+        runtime_timing: Default::default(),
+        runtime_limits: Default::default(),
+    };
+
+    let error = config.validate().expect_err("empty database URL must fail");
+
+    assert!(matches!(error, ConfigError::InvalidProviderValue { .. }));
+}
+
+#[test]
 fn load_uses_xdg_state_home_before_home() {
     let temp = tempfile::tempdir().expect("tempdir");
     let xdg_state_home = temp.path().join("xdg-state");
@@ -225,6 +295,7 @@ fn load_uses_xdg_state_home_before_home() {
 fn validate_rejects_relative_data_dir() {
     let config = AppConfig {
         data_dir: PathBuf::from("relative/teamd"),
+        database: Default::default(),
         daemon: Default::default(),
         telegram: Default::default(),
         permissions: Default::default(),
@@ -368,7 +439,7 @@ fn load_merges_runtime_timing_and_limits_from_file() {
 data_dir = "/tmp/teamd-config"
 
 [runtime_timing]
-sqlite_lock_retry_delay_ms = 125
+store_retry_delay_ms = 125
 daemon_http_connect_timeout_ms = 2500
 daemon_http_request_timeout_ms = 12000
 autospawn_status_poll_attempts = 75
@@ -379,7 +450,7 @@ daemon_background_worker_lease_seconds = 90
 
 [runtime_limits]
 diagnostic_tail_lines = 120
-sqlite_lock_retry_attempts = 6
+store_retry_attempts = 6
 transcript_tail_run_limit = 48
 agent_list_default_limit = 150
 agent_list_max_limit = 1500
@@ -431,7 +502,7 @@ interagent_default_max_hops = 9
     let config = AppConfig::load_from_env(&env).expect("load config");
 
     assert_eq!(config.runtime_timing.daemon_http_connect_timeout_ms, 2500);
-    assert_eq!(config.runtime_timing.sqlite_lock_retry_delay_ms, 125);
+    assert_eq!(config.runtime_timing.store_retry_delay_ms, 125);
     assert_eq!(config.runtime_timing.daemon_http_request_timeout_ms, 12000);
     assert_eq!(config.runtime_timing.autospawn_status_poll_attempts, 75);
     assert_eq!(config.runtime_timing.autospawn_status_poll_interval_ms, 150);
@@ -453,7 +524,7 @@ interagent_default_max_hops = 9
     );
 
     assert_eq!(config.runtime_limits.diagnostic_tail_lines, 120);
-    assert_eq!(config.runtime_limits.sqlite_lock_retry_attempts, 6);
+    assert_eq!(config.runtime_limits.store_retry_attempts, 6);
     assert_eq!(config.runtime_limits.transcript_tail_run_limit, 48);
     assert_eq!(config.runtime_limits.agent_list_default_limit, 150);
     assert_eq!(config.runtime_limits.agent_list_max_limit, 1500);
@@ -906,6 +977,7 @@ max_memory_chars = 400
 fn validate_rejects_invalid_runtime_limit_bounds() {
     let config = AppConfig {
         data_dir: PathBuf::from("/tmp/teamd"),
+        database: Default::default(),
         daemon: Default::default(),
         telegram: Default::default(),
         permissions: Default::default(),
@@ -1001,6 +1073,7 @@ fn load_applies_context_auto_compaction_env_overrides() {
 fn validate_rejects_invalid_auto_compaction_ratio() {
     let config = AppConfig {
         data_dir: PathBuf::from("/tmp/teamd"),
+        database: Default::default(),
         daemon: Default::default(),
         telegram: Default::default(),
         permissions: Default::default(),

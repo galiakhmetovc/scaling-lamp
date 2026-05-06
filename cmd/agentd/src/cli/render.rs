@@ -882,14 +882,14 @@ pub(super) fn format_supervisor_action(
 }
 
 pub(super) fn render_status(app: &App) -> Result<String, BootstrapError> {
-    let connection = Connection::open(&app.persistence.stores.metadata_db)?;
-    let session_count = count_rows(&connection, "sessions")?;
-    let mission_count = count_rows(&connection, "missions")?;
-    let run_count = count_rows(&connection, "runs")?;
-    let job_count = count_rows(&connection, "jobs")?;
+    let store = PersistenceStore::open_runtime(&app.persistence)?;
+    let session_count = store.count_sessions()?;
+    let mission_count = store.count_missions()?;
+    let run_count = store.count_runs()?;
+    let job_count = store.count_jobs()?;
 
     Ok(format!(
-        "status data_dir={} permission_mode={} sessions={} missions={} runs={} jobs={} components={} state_db={}",
+        "status data_dir={} permission_mode={} sessions={} missions={} runs={} jobs={} components={} database={}",
         app.config.data_dir.display(),
         app.config.permissions.mode.as_str(),
         session_count,
@@ -897,7 +897,7 @@ pub(super) fn render_status(app: &App) -> Result<String, BootstrapError> {
         run_count,
         job_count,
         app.runtime.component_count(),
-        app.persistence.stores.metadata_db.display()
+        agent_persistence::redacted_database_url(&app.config.database.url)
     ))
 }
 
@@ -1177,7 +1177,7 @@ fn map_audit_error(error: agent_persistence::audit::AuditLogError) -> BootstrapE
 
 pub(super) fn render_daemon_status(status: &StatusResponse) -> Result<String, BootstrapError> {
     Ok(format!(
-        "status data_dir={} permission_mode={} sessions={} missions={} runs={} jobs={} components={} state_db={}",
+        "status data_dir={} permission_mode={} sessions={} missions={} runs={} jobs={} components={} database={}",
         status.data_dir,
         status.permission_mode,
         status.session_count,
@@ -1185,16 +1185,12 @@ pub(super) fn render_daemon_status(status: &StatusResponse) -> Result<String, Bo
         status.run_count,
         status.job_count,
         status.components,
-        status.state_db
+        status
+            .database
+            .as_deref()
+            .or(status.state_db.as_deref())
+            .unwrap_or("<unknown>")
     ))
-}
-
-pub(super) fn count_rows(connection: &Connection, table: &str) -> Result<i64, BootstrapError> {
-    connection
-        .query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |row| {
-            row.get(0)
-        })
-        .map_err(BootstrapError::Sqlite)
 }
 
 pub(super) fn load_run_snapshot(

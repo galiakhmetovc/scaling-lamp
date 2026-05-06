@@ -12,97 +12,70 @@ impl SessionRepository for PersistenceStore {
             });
         }
 
-        self.connection.execute(
-            "INSERT INTO sessions (
-                id, title, prompt_override, settings_json, workspace_root, agent_profile_id, active_mission_id,
-                parent_session_id, parent_job_id, delegation_label, created_at, updated_at
-             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)
-             ON CONFLICT(id) DO UPDATE SET
-                title = excluded.title,
-                prompt_override = excluded.prompt_override,
-                settings_json = excluded.settings_json,
-                workspace_root = excluded.workspace_root,
-                agent_profile_id = excluded.agent_profile_id,
-                active_mission_id = excluded.active_mission_id,
-                parent_session_id = excluded.parent_session_id,
-                parent_job_id = excluded.parent_job_id,
-                delegation_label = excluded.delegation_label,
-                created_at = excluded.created_at,
-                updated_at = excluded.updated_at",
-            params![
-                record.id,
-                record.title,
-                record.prompt_override,
-                &record.settings_json,
-                &record.workspace_root,
-                &record.agent_profile_id,
-                record.active_mission_id,
-                record.parent_session_id,
-                record.parent_job_id,
-                record.delegation_label,
-                record.created_at,
-                record.updated_at
-            ],
-        )?;
-        Ok(())
+        self.with_client(|client| {
+            client.execute(
+                "INSERT INTO sessions (
+                    id, title, prompt_override, settings_json, workspace_root, agent_profile_id, active_mission_id,
+                    parent_session_id, parent_job_id, delegation_label, created_at, updated_at
+                 ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+                 ON CONFLICT(id) DO UPDATE SET
+                    title = excluded.title,
+                    prompt_override = excluded.prompt_override,
+                    settings_json = excluded.settings_json,
+                    workspace_root = excluded.workspace_root,
+                    agent_profile_id = excluded.agent_profile_id,
+                    active_mission_id = excluded.active_mission_id,
+                    parent_session_id = excluded.parent_session_id,
+                    parent_job_id = excluded.parent_job_id,
+                    delegation_label = excluded.delegation_label,
+                    created_at = excluded.created_at,
+                    updated_at = excluded.updated_at",
+                &[
+                    &record.id,
+                    &record.title,
+                    &record.prompt_override,
+                    &record.settings_json,
+                    &record.workspace_root,
+                    &record.agent_profile_id,
+                    &record.active_mission_id,
+                    &record.parent_session_id,
+                    &record.parent_job_id,
+                    &record.delegation_label,
+                    &record.created_at,
+                    &record.updated_at,
+                ],
+            )?;
+            Ok(())
+        })
     }
 
     fn get_session(&self, id: &str) -> Result<Option<SessionRecord>, StoreError> {
-        self.connection
-            .query_row(
-                "SELECT id, title, prompt_override, settings_json, workspace_root, agent_profile_id, active_mission_id,
-                        parent_session_id, parent_job_id, delegation_label, created_at, updated_at
-                 FROM sessions WHERE id = ?1",
-                [id],
-                |row| {
-                    Ok(SessionRecord {
-                        id: row.get(0)?,
-                        title: row.get(1)?,
-                        prompt_override: row.get(2)?,
-                        settings_json: row.get(3)?,
-                        workspace_root: row.get(4)?,
-                        agent_profile_id: row.get(5)?,
-                        active_mission_id: row.get(6)?,
-                        parent_session_id: row.get(7)?,
-                        parent_job_id: row.get(8)?,
-                        delegation_label: row.get(9)?,
-                        created_at: row.get(10)?,
-                        updated_at: row.get(11)?,
-                    })
-                },
-            )
-            .optional()
-            .map_err(StoreError::from)
+        self.with_client(|client| {
+            client
+                .query_opt(
+                    "SELECT id, title, prompt_override, settings_json, workspace_root, agent_profile_id, active_mission_id,
+                            parent_session_id, parent_job_id, delegation_label, created_at, updated_at
+                     FROM sessions WHERE id = $1",
+                    &[&id],
+                )
+                .map(|row| row.map(|row| session_record_from_row(&row)))
+                .map_err(StoreError::from)
+        })
     }
 
     fn list_sessions(&self) -> Result<Vec<SessionRecord>, StoreError> {
-        let mut statement = self.connection.prepare(
-            "SELECT id, title, prompt_override, settings_json, workspace_root, agent_profile_id, active_mission_id,
-                    parent_session_id, parent_job_id, delegation_label, created_at, updated_at
-             FROM sessions
-             ORDER BY created_at ASC, id ASC",
-        )?;
-        let mut rows = statement.query([])?;
-        let mut sessions = Vec::new();
-
-        while let Some(row) = rows.next()? {
-            sessions.push(SessionRecord {
-                id: row.get(0)?,
-                title: row.get(1)?,
-                prompt_override: row.get(2)?,
-                settings_json: row.get(3)?,
-                workspace_root: row.get(4)?,
-                agent_profile_id: row.get(5)?,
-                active_mission_id: row.get(6)?,
-                parent_session_id: row.get(7)?,
-                parent_job_id: row.get(8)?,
-                delegation_label: row.get(9)?,
-                created_at: row.get(10)?,
-                updated_at: row.get(11)?,
-            });
-        }
-
-        Ok(sessions)
+        self.with_client(|client| {
+            client
+                .query(
+                    "SELECT id, title, prompt_override, settings_json, workspace_root, agent_profile_id, active_mission_id,
+                            parent_session_id, parent_job_id, delegation_label, created_at, updated_at
+                     FROM sessions
+                     ORDER BY created_at ASC, id ASC",
+                    &[],
+                )
+                .map(|rows| rows.iter().map(session_record_from_row).collect())
+                .map_err(StoreError::from)
+        })
     }
 
     fn delete_session(&self, id: &str) -> Result<bool, StoreError> {
@@ -123,18 +96,12 @@ impl SessionRepository for PersistenceStore {
                 ),
             ]),
         );
-        let transaction = rusqlite::Transaction::new_unchecked(
-            &self.connection,
-            rusqlite::TransactionBehavior::Immediate,
-        )?;
-        transaction.execute(
-            "DELETE FROM session_search_fts
-             WHERE doc_id IN (
-                 SELECT doc_id FROM session_search_docs WHERE session_id = ?1
-             )",
-            [id],
-        )?;
-        let deleted = transaction.execute("DELETE FROM sessions WHERE id = ?1", [id])?;
+
+        let deleted = self.with_client(|client| {
+            client
+                .execute("DELETE FROM sessions WHERE id = $1", &[&id])
+                .map_err(StoreError::from)
+        })?;
 
         if deleted == 0 {
             self.append_diagnostic_event(
@@ -145,7 +112,6 @@ impl SessionRepository for PersistenceStore {
             );
             return Ok(false);
         }
-        transaction.commit()?;
 
         for path in transcript_paths.into_iter().chain(artifact_paths) {
             remove_payload_if_exists(&path)?;
@@ -165,89 +131,66 @@ impl SessionRepository for PersistenceStore {
 
 impl MissionRepository for PersistenceStore {
     fn put_mission(&self, record: &MissionRecord) -> Result<(), StoreError> {
-        self.connection.execute(
-            "INSERT INTO missions (
-                id, session_id, objective, status, execution_intent, schedule_json, acceptance_json,
-                created_at, updated_at, completed_at
-             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
-             ON CONFLICT(id) DO UPDATE SET
-                session_id = excluded.session_id,
-                objective = excluded.objective,
-                status = excluded.status,
-                execution_intent = excluded.execution_intent,
-                schedule_json = excluded.schedule_json,
-                acceptance_json = excluded.acceptance_json,
-                created_at = excluded.created_at,
-                updated_at = excluded.updated_at,
-                completed_at = excluded.completed_at",
-            params![
-                record.id,
-                record.session_id,
-                record.objective,
-                record.status,
-                record.execution_intent,
-                record.schedule_json,
-                record.acceptance_json,
-                record.created_at,
-                record.updated_at,
-                record.completed_at
-            ],
-        )?;
-        Ok(())
+        self.with_client(|client| {
+            client.execute(
+                "INSERT INTO missions (
+                    id, session_id, objective, status, execution_intent, schedule_json, acceptance_json,
+                    created_at, updated_at, completed_at
+                 ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+                 ON CONFLICT(id) DO UPDATE SET
+                    session_id = excluded.session_id,
+                    objective = excluded.objective,
+                    status = excluded.status,
+                    execution_intent = excluded.execution_intent,
+                    schedule_json = excluded.schedule_json,
+                    acceptance_json = excluded.acceptance_json,
+                    created_at = excluded.created_at,
+                    updated_at = excluded.updated_at,
+                    completed_at = excluded.completed_at",
+                &[
+                    &record.id,
+                    &record.session_id,
+                    &record.objective,
+                    &record.status,
+                    &record.execution_intent,
+                    &record.schedule_json,
+                    &record.acceptance_json,
+                    &record.created_at,
+                    &record.updated_at,
+                    &record.completed_at,
+                ],
+            )?;
+            Ok(())
+        })
     }
 
     fn get_mission(&self, id: &str) -> Result<Option<MissionRecord>, StoreError> {
-        self.connection
-            .query_row(
-                "SELECT id, session_id, objective, status, execution_intent, schedule_json,
-                        acceptance_json, created_at, updated_at, completed_at
-                 FROM missions WHERE id = ?1",
-                [id],
-                |row| {
-                    Ok(MissionRecord {
-                        id: row.get(0)?,
-                        session_id: row.get(1)?,
-                        objective: row.get(2)?,
-                        status: row.get(3)?,
-                        execution_intent: row.get(4)?,
-                        schedule_json: row.get(5)?,
-                        acceptance_json: row.get(6)?,
-                        created_at: row.get(7)?,
-                        updated_at: row.get(8)?,
-                        completed_at: row.get(9)?,
-                    })
-                },
-            )
-            .optional()
-            .map_err(StoreError::from)
+        self.with_client(|client| {
+            client
+                .query_opt(
+                    "SELECT id, session_id, objective, status, execution_intent, schedule_json,
+                            acceptance_json, created_at, updated_at, completed_at
+                     FROM missions WHERE id = $1",
+                    &[&id],
+                )
+                .map(|row| row.map(|row| mission_record_from_row(&row)))
+                .map_err(StoreError::from)
+        })
     }
 
     fn list_missions(&self) -> Result<Vec<MissionRecord>, StoreError> {
-        let mut statement = self.connection.prepare(
-            "SELECT id, session_id, objective, status, execution_intent, schedule_json,
-                    acceptance_json, created_at, updated_at, completed_at
-             FROM missions
-             ORDER BY created_at ASC, id ASC",
-        )?;
-        let mut rows = statement.query([])?;
-        let mut missions = Vec::new();
-
-        while let Some(row) = rows.next()? {
-            missions.push(MissionRecord {
-                id: row.get(0)?,
-                session_id: row.get(1)?,
-                objective: row.get(2)?,
-                status: row.get(3)?,
-                execution_intent: row.get(4)?,
-                schedule_json: row.get(5)?,
-                acceptance_json: row.get(6)?,
-                created_at: row.get(7)?,
-                updated_at: row.get(8)?,
-                completed_at: row.get(9)?,
-            });
-        }
-
-        Ok(missions)
+        self.with_client(|client| {
+            client
+                .query(
+                    "SELECT id, session_id, objective, status, execution_intent, schedule_json,
+                            acceptance_json, created_at, updated_at, completed_at
+                     FROM missions
+                     ORDER BY created_at ASC, id ASC",
+                    &[],
+                )
+                .map(|rows| rows.iter().map(mission_record_from_row).collect())
+                .map_err(StoreError::from)
+        })
     }
 }
 
@@ -258,11 +201,11 @@ impl TranscriptRepository for PersistenceStore {
         let sha256 = sha256_hex(record.content.as_bytes());
 
         persist_payload_with_commit(&path, record.content.as_bytes(), || {
-            self.connection
-                .execute(
+            self.with_client(|client| {
+                client.execute(
                     "INSERT INTO transcripts (
                         id, session_id, run_id, kind, storage_key, byte_len, sha256, created_at
-                     ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+                     ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
                      ON CONFLICT(id) DO UPDATE SET
                         session_id = excluded.session_id,
                         run_id = excluded.run_id,
@@ -271,164 +214,128 @@ impl TranscriptRepository for PersistenceStore {
                         byte_len = excluded.byte_len,
                         sha256 = excluded.sha256,
                         created_at = excluded.created_at",
-                    params![
-                        record.id,
-                        record.session_id,
-                        record.run_id,
-                        record.kind,
-                        storage_key,
-                        record.content.len() as i64,
-                        sha256,
-                        record.created_at
+                    &[
+                        &record.id,
+                        &record.session_id,
+                        &record.run_id,
+                        &record.kind,
+                        &storage_key,
+                        &(record.content.len() as i64),
+                        &sha256,
+                        &record.created_at,
                     ],
-                )
-                .map(|_| ())
-                .map_err(StoreError::from)
+                )?;
+                Ok(())
+            })
         })
     }
 
     fn get_transcript(&self, id: &str) -> Result<Option<TranscriptRecord>, StoreError> {
-        let row = self
-            .connection
-            .query_row(
-                "SELECT id, session_id, run_id, kind, storage_key, byte_len, sha256, created_at
-                 FROM transcripts WHERE id = ?1",
-                [id],
-                |row| {
-                    Ok((
-                        row.get::<_, String>(0)?,
-                        row.get::<_, String>(1)?,
-                        row.get::<_, Option<String>>(2)?,
-                        row.get::<_, String>(3)?,
-                        row.get::<_, String>(4)?,
-                        row.get::<_, i64>(5)?,
-                        row.get::<_, String>(6)?,
-                        row.get::<_, i64>(7)?,
-                    ))
-                },
-            )
-            .optional()?;
+        let row = self.with_client(|client| {
+            client
+                .query_opt(
+                    "SELECT id, session_id, run_id, kind, storage_key, byte_len, sha256, created_at
+                     FROM transcripts WHERE id = $1",
+                    &[&id],
+                )
+                .map(|row| row.map(|row| transcript_row_from_row(&row)))
+                .map_err(StoreError::from)
+        })?;
 
-        match row {
-            Some(row) => Ok(Some(self.hydrate_transcript_record(row)?)),
-            None => Ok(None),
-        }
+        row.map(|row| self.hydrate_transcript_record(row))
+            .transpose()
     }
 
     fn list_transcript_session_stats(
         &self,
     ) -> Result<Vec<crate::repository::TranscriptSessionStats>, StoreError> {
-        let mut statement = self.connection.prepare(
-            "SELECT session_id, COUNT(*), MAX(created_at)
-             FROM transcripts
-             GROUP BY session_id
-             ORDER BY session_id ASC",
-        )?;
-        let mut rows = statement.query([])?;
-        let mut stats = Vec::new();
-
-        while let Some(row) = rows.next()? {
-            stats.push(crate::repository::TranscriptSessionStats {
-                session_id: row.get(0)?,
-                transcript_count: row.get::<_, i64>(1)?.max(0) as usize,
-                latest_transcript_created_at: row.get(2)?,
-            });
-        }
-
-        Ok(stats)
+        self.with_client(|client| {
+            client
+                .query(
+                    "SELECT session_id, COUNT(*), MAX(created_at)
+                     FROM transcripts
+                     GROUP BY session_id
+                     ORDER BY session_id ASC",
+                    &[],
+                )
+                .map(|rows| {
+                    rows.iter()
+                        .map(|row| crate::repository::TranscriptSessionStats {
+                            session_id: row.get(0),
+                            transcript_count: row.get::<_, i64>(1).max(0) as usize,
+                            latest_transcript_created_at: row.get(2),
+                        })
+                        .collect()
+                })
+                .map_err(StoreError::from)
+        })
     }
 
     fn get_latest_transcript_for_session(
         &self,
         session_id: &str,
     ) -> Result<Option<TranscriptRecord>, StoreError> {
-        let row = self
-            .connection
-            .query_row(
-                "SELECT id, session_id, run_id, kind, storage_key, byte_len, sha256, created_at
-                 FROM transcripts
-                 WHERE session_id = ?1
-                 ORDER BY created_at DESC, id DESC
-                 LIMIT 1",
-                [session_id],
-                |row| {
-                    Ok((
-                        row.get::<_, String>(0)?,
-                        row.get::<_, String>(1)?,
-                        row.get::<_, Option<String>>(2)?,
-                        row.get::<_, String>(3)?,
-                        row.get::<_, String>(4)?,
-                        row.get::<_, i64>(5)?,
-                        row.get::<_, String>(6)?,
-                        row.get::<_, i64>(7)?,
-                    ))
-                },
-            )
-            .optional()?;
+        let row = self.with_client(|client| {
+            client
+                .query_opt(
+                    "SELECT id, session_id, run_id, kind, storage_key, byte_len, sha256, created_at
+                     FROM transcripts
+                     WHERE session_id = $1
+                     ORDER BY created_at DESC, id DESC
+                     LIMIT 1",
+                    &[&session_id],
+                )
+                .map(|row| row.map(|row| transcript_row_from_row(&row)))
+                .map_err(StoreError::from)
+        })?;
 
-        match row {
-            Some(row) => Ok(Some(self.hydrate_transcript_record(row)?)),
-            None => Ok(None),
-        }
+        row.map(|row| self.hydrate_transcript_record(row))
+            .transpose()
     }
 
     fn get_latest_transcript_created_at_for_session(
         &self,
         session_id: &str,
     ) -> Result<Option<i64>, StoreError> {
-        self.connection
-            .query_row(
-                "SELECT created_at
-                 FROM transcripts
-                 WHERE session_id = ?1
-                 ORDER BY created_at DESC, id DESC
-                 LIMIT 1",
-                [session_id],
-                |row| row.get::<_, i64>(0),
-            )
-            .optional()
-            .map_err(StoreError::from)
+        self.with_client(|client| {
+            client
+                .query_opt(
+                    "SELECT created_at
+                     FROM transcripts
+                     WHERE session_id = $1
+                     ORDER BY created_at DESC, id DESC
+                     LIMIT 1",
+                    &[&session_id],
+                )
+                .map(|row| row.map(|row| row.get(0)))
+                .map_err(StoreError::from)
+        })
     }
 
     fn count_transcripts_for_session(&self, session_id: &str) -> Result<usize, StoreError> {
-        self.connection
-            .query_row(
-                "SELECT COUNT(*) FROM transcripts WHERE session_id = ?1",
-                [session_id],
-                |row| row.get::<_, i64>(0),
-            )
-            .map(|count| count.max(0) as usize)
-            .map_err(StoreError::from)
+        self.with_client(|client| {
+            client
+                .query_one(
+                    "SELECT COUNT(*) FROM transcripts WHERE session_id = $1",
+                    &[&session_id],
+                )
+                .map(|row| row.get::<_, i64>(0).max(0) as usize)
+                .map_err(StoreError::from)
+        })
     }
 
     fn list_transcripts_for_session(
         &self,
         session_id: &str,
     ) -> Result<Vec<TranscriptRecord>, StoreError> {
-        let mut statement = self.connection.prepare(
+        self.query_transcripts(
             "SELECT id, session_id, run_id, kind, storage_key, byte_len, sha256, created_at
              FROM transcripts
-             WHERE session_id = ?1
+             WHERE session_id = $1
              ORDER BY created_at ASC, id ASC",
-        )?;
-        let mut rows = statement.query([session_id])?;
-        let mut transcripts = Vec::new();
-
-        while let Some(row) = rows.next()? {
-            let row: TranscriptRow = (
-                row.get(0)?,
-                row.get(1)?,
-                row.get(2)?,
-                row.get(3)?,
-                row.get(4)?,
-                row.get(5)?,
-                row.get(6)?,
-                row.get(7)?,
-            );
-            transcripts.push(self.hydrate_transcript_record(row)?);
-        }
-
-        Ok(transcripts)
+            &[&session_id],
+            false,
+        )
     }
 
     fn list_transcripts_tail_for_session(
@@ -440,31 +347,84 @@ impl TranscriptRepository for PersistenceStore {
             return Ok(Vec::new());
         }
 
-        let mut statement = self.connection.prepare(
+        let limit = limit as i64;
+        self.query_transcripts(
             "SELECT id, session_id, run_id, kind, storage_key, byte_len, sha256, created_at
              FROM transcripts
-             WHERE session_id = ?1
+             WHERE session_id = $1
              ORDER BY created_at DESC, id DESC
-             LIMIT ?2",
-        )?;
-        let mut rows = statement.query(params![session_id, limit as i64])?;
-        let mut transcripts = Vec::new();
+             LIMIT $2",
+            &[&session_id, &limit],
+            true,
+        )
+    }
+}
 
-        while let Some(row) = rows.next()? {
-            let row: TranscriptRow = (
-                row.get(0)?,
-                row.get(1)?,
-                row.get(2)?,
-                row.get(3)?,
-                row.get(4)?,
-                row.get(5)?,
-                row.get(6)?,
-                row.get(7)?,
-            );
-            transcripts.push(self.hydrate_transcript_record(row)?);
+impl PersistenceStore {
+    fn query_transcripts(
+        &self,
+        sql: &str,
+        params: &[&(dyn ToSql + Sync)],
+        reverse: bool,
+    ) -> Result<Vec<TranscriptRecord>, StoreError> {
+        let rows = self.with_client(|client| {
+            client
+                .query(sql, params)
+                .map(|rows| rows.iter().map(transcript_row_from_row).collect::<Vec<_>>())
+                .map_err(StoreError::from)
+        })?;
+        let mut transcripts = rows
+            .into_iter()
+            .map(|row| self.hydrate_transcript_record(row))
+            .collect::<Result<Vec<_>, _>>()?;
+        if reverse {
+            transcripts.reverse();
         }
-
-        transcripts.reverse();
         Ok(transcripts)
     }
+}
+
+fn session_record_from_row(row: &Row) -> SessionRecord {
+    SessionRecord {
+        id: row.get(0),
+        title: row.get(1),
+        prompt_override: row.get(2),
+        settings_json: row.get(3),
+        workspace_root: row.get(4),
+        agent_profile_id: row.get(5),
+        active_mission_id: row.get(6),
+        parent_session_id: row.get(7),
+        parent_job_id: row.get(8),
+        delegation_label: row.get(9),
+        created_at: row.get(10),
+        updated_at: row.get(11),
+    }
+}
+
+fn mission_record_from_row(row: &Row) -> MissionRecord {
+    MissionRecord {
+        id: row.get(0),
+        session_id: row.get(1),
+        objective: row.get(2),
+        status: row.get(3),
+        execution_intent: row.get(4),
+        schedule_json: row.get(5),
+        acceptance_json: row.get(6),
+        created_at: row.get(7),
+        updated_at: row.get(8),
+        completed_at: row.get(9),
+    }
+}
+
+fn transcript_row_from_row(row: &Row) -> TranscriptRow {
+    (
+        row.get(0),
+        row.get(1),
+        row.get(2),
+        row.get(3),
+        row.get(4),
+        row.get(5),
+        row.get(6),
+        row.get(7),
+    )
 }

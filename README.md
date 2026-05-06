@@ -8,7 +8,7 @@
 
 - [`cmd/agentd`](cmd/agentd) — бинарь `agentd`, daemon, CLI, HTTP API, TUI, bootstrap и orchestration.
 - [`crates/agent-runtime`](crates/agent-runtime) — runtime-модель: provider contracts, prompt assembly, tools, sessions, plans, runs, permissions, inter-agent primitives.
-- [`crates/agent-persistence`](crates/agent-persistence) — конфиг, SQLite-хранилище, артефакты, recovery, audit и репозитории доступа к данным.
+- [`crates/agent-persistence`](crates/agent-persistence) — конфиг, PostgreSQL-backed runtime store, payload-файлы, recovery, audit и репозитории доступа к данным.
 
 ## Быстрый старт
 
@@ -37,7 +37,7 @@ cargo run -p agentd -- tui
 ./scripts/deploy-teamd.sh
 ```
 
-Он проверит native build dependencies, `cargo` и `rustc`; при необходимости поставит системные build-пакеты и stable Rust через `rustup`; интерактивно спросит Telegram bot token и Z.ai/API key, соберёт release binary, установит `agentd` в `/opt/teamd/bin`, добавит `/usr/local/bin/agentd`, установит `/usr/local/bin/teamdctl`, создаст `/etc/teamd/config.toml`, `/etc/teamd/teamd.env` и systemd services `teamd-daemon.service`/`teamd-telegram.service`.
+Он проверит native build dependencies, `cargo`, `rustc` и PostgreSQL; при необходимости поставит системные build-пакеты, local PostgreSQL и stable Rust через `rustup`; интерактивно спросит Telegram bot token и Z.ai/API key, соберёт release binary, установит `agentd` в `/opt/teamd/bin`, добавит `/usr/local/bin/agentd`, установит `/usr/local/bin/teamdctl`, создаст `/etc/teamd/config.toml`, `/etc/teamd/teamd.env` и systemd services `teamd-daemon.service`/`teamd-telegram.service`.
 
 Если сервер уже установлен и нужно только обновить бинарь без сборки на production host:
 
@@ -59,7 +59,7 @@ cargo build --release -p agentd
 - [docs/current/03-surfaces.md](docs/current/03-surfaces.md) — CLI, daemon, HTTP API и TUI как тонкие клиенты одного runtime.
 - [docs/current/04-tools-and-approvals.md](docs/current/04-tools-and-approvals.md) — structured tool surface, approval semantics и частые ошибки использования.
 - [docs/current/05-interagent-background-and-schedules.md](docs/current/05-interagent-background-and-schedules.md) — judge, межагентные цепочки, background jobs, wakeups и расписания.
-- [docs/current/06-storage-recovery-and-diagnostics.md](docs/current/06-storage-recovery-and-diagnostics.md) — SQLite/store layout, recovery, diagnostics и отладка.
+- [docs/current/06-storage-recovery-and-diagnostics.md](docs/current/06-storage-recovery-and-diagnostics.md) — PostgreSQL store, payload layout, recovery, diagnostics и отладка.
 - [docs/current/07-config.md](docs/current/07-config.md) — `config.toml`, env overrides, timing/limits и provider settings.
 - [docs/current/08-testing-and-verification.md](docs/current/08-testing-and-verification.md) — как проверяется система и какие regression tests уже есть.
 - [docs/current/09-operator-cheatsheet.md](docs/current/09-operator-cheatsheet.md) — практические команды и сценарии для оператора.

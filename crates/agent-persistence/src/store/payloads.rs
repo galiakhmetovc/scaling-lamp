@@ -1,12 +1,7 @@
 use super::*;
 
 pub(super) fn prepare_layout(layout: &StoreLayout) -> Result<(), StoreError> {
-    create_directory(
-        layout
-            .metadata_db
-            .parent()
-            .unwrap_or(layout.metadata_db.as_path()),
-    )?;
+    create_directory(&layout.root_dir)?;
     create_directory(&layout.runs_dir)?;
     create_directory(&layout.transcripts_dir)?;
     create_directory(&layout.artifacts_dir)?;
@@ -15,18 +10,17 @@ pub(super) fn prepare_layout(layout: &StoreLayout) -> Result<(), StoreError> {
 }
 
 pub(super) fn reconcile_directory(
-    connection: &Connection,
+    client: &mut Client,
     query: &str,
     directory: &Path,
 ) -> Result<(), StoreError> {
-    let mut statement = connection.prepare(query)?;
-    let mut rows = statement.query([])?;
+    let rows = client.query(query, &[])?;
     let mut expected = std::collections::BTreeMap::new();
 
-    while let Some(row) = rows.next()? {
-        let stored_path: String = row.get(0)?;
-        let byte_len: i64 = row.get(1)?;
-        let sha256: String = row.get(2)?;
+    for row in rows {
+        let stored_path: String = row.get(0);
+        let byte_len: i64 = row.get(1);
+        let sha256: String = row.get(2);
 
         if let Some(storage_key) = expected_storage_key(directory, &stored_path) {
             expected.insert(storage_key, (byte_len as u64, sha256));

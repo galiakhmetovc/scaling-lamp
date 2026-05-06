@@ -19,7 +19,7 @@ use super::provider_tool_dispatch::{
 use super::*;
 use crate::agents;
 use crate::prompting;
-use crate::store_retry::{retry_store_sync, sqlite_lock_retry_attempts, sqlite_lock_retry_delay};
+use crate::store_retry::{retry_store_sync, store_retry_attempts, store_retry_delay};
 use agent_persistence::{
     ArtifactRecord, ArtifactRepository, ContextOffloadRepository, FileDeliveryRepository,
     FileDeliveryRequestRecord, ToolCallRepository,
@@ -1373,11 +1373,9 @@ impl ExecutionService {
     ) -> Result<(), ExecutionError> {
         let record =
             RunRecord::try_from(run.snapshot()).map_err(ExecutionError::RecordConversion)?;
-        retry_store_sync(
-            sqlite_lock_retry_attempts(),
-            sqlite_lock_retry_delay(),
-            || store.put_run(&record),
-        )
+        retry_store_sync(store_retry_attempts(), store_retry_delay(), || {
+            store.put_run(&record)
+        })
         .map_err(ExecutionError::Store)
     }
 
@@ -1587,11 +1585,9 @@ impl ExecutionService {
         job.heartbeat_at = Some(now);
         job.last_progress_message = Some(reason.to_string());
         let record = JobRecord::try_from(&*job).map_err(ExecutionError::RecordConversion)?;
-        retry_store_sync(
-            sqlite_lock_retry_attempts(),
-            sqlite_lock_retry_delay(),
-            || store.put_job(&record),
-        )
+        retry_store_sync(store_retry_attempts(), store_retry_delay(), || {
+            store.put_job(&record)
+        })
         .map_err(ExecutionError::Store)
     }
 

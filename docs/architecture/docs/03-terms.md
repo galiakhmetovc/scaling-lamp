@@ -78,8 +78,8 @@
 | `Built-in Tool` | Tool, реализованный внутри `agentd`: filesystem, execution, planning, schedules, inter-agent operations и другие runtime capabilities. |
 | `MCP Tool` | Tool, предоставленный MCP capability provider. |
 | `Artifact` | Вынесенный payload: большой tool output, файл, результат выполнения или другое содержимое, которое не надо держать целиком в prompt. |
-| `Payload file` | Файл с содержимым artifact или крупного runtime payload рядом с SQLite metadata. |
-| `Runtime Store` | Implementation-level persistence: SQLite metadata и связанные payload-файлы. Это не C4 container в текущей модели. |
+| `Payload file` | Файл с содержимым artifact или крупного runtime payload рядом с PostgreSQL metadata. |
+| `Runtime Store` | Implementation-level persistence: PostgreSQL control-plane metadata и связанные payload-файлы. Это не C4 container в текущей модели. |
 | `Prompt Assembly` | Сборка prompt в каноническом порядке: `SYSTEM.md`, `AGENTS.md`, `SessionHead`, `Plan`, `ContextSummary`, offload refs, uncovered transcript tail. |
 | `Provider Loop` | Цикл взаимодействия с LLM provider: отправить request, принять assistant output/tool calls, выполнить tools, продолжить до завершения или остановки. |
 | `ContextSummary` | Сжатое представление старого контекста session, которое добавляется в prompt вместо полного transcript. |

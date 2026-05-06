@@ -22,7 +22,7 @@ flowchart LR
     Loop[ProviderLoop]
     Provider[LLM Provider]
     Tool[Tool Runtime / MCP]
-    Store[(SQLite + payload files)]
+    Store[(PostgreSQL + payload files)]
     Artifact[Artifact / Delivery]
 
     Operator --> Surface
@@ -183,7 +183,7 @@ Session закреплена за `Agent profile` и `workspace_root`. Это в
 
 ### Artifact и Delivery
 
-`Artifact` — durable payload, который не стоит держать целиком в prompt или SQLite row. Примеры:
+`Artifact` — durable payload, который не стоит держать целиком в prompt или PostgreSQL row. Примеры:
 
 - большой stdout/stderr tool output;
 - скачанный файл;
@@ -208,7 +208,6 @@ Production layout сейчас такой:
 ├── artifacts/                      # payload files
 ├── audit/runtime.jsonl             # daemon/runtime audit events
 ├── runs/                           # run payloads
-├── state.sqlite                    # durable metadata
 └── transcripts/                    # transcript payload files
 
 /var/lib/teamd/workspaces/
@@ -264,7 +263,7 @@ SilverBullet Space — текущий canonical knowledge add-on:
 - агент через SilverBullet MCP, если он включён;
 - агент через filesystem tools как fallback.
 
-SilverBullet не заменяет `state.sqlite`, transcripts, tool calls, runs, jobs или artifacts.
+SilverBullet не заменяет PostgreSQL, transcripts, tool calls, runs, jobs или artifacts.
 
 Obsidian и Logseq сейчас compatibility-only:
 
@@ -305,7 +304,7 @@ Semantic memory scopes не смешивают разные сущности:
 - `workspace` — проектная память, привязанная к workspace path-derived `agent_id = teamd-workspace-<hash>`;
 - `session` — короткоживущая память конкретной сессии.
 
-Mem0 нельзя использовать как скрытый KV. Для точных ключей, блокировок, счётчиков и runtime-очередей есть built-in `kv_*` tools поверх `state.sqlite`; Mem0 отвечает только за семантический поиск по durable facts.
+Mem0 нельзя использовать как скрытый KV. Для точных ключей, блокировок, счётчиков и runtime-очередей есть built-in `kv_*` tools поверх PostgreSQL table `kv_entries`; Mem0 отвечает только за семантический поиск по durable facts.
 
 Optional post-turn `memory_curator` может записывать durable facts автоматически после ответа. В связке получается полный inspectable цикл: pre-turn recall читает релевантную память, обычный turn отвечает пользователю, post-turn curator сохраняет новые durable lessons.
 
@@ -354,7 +353,7 @@ Host `agentd` остаётся владельцем:
 - tools;
 - schedules;
 - Telegram delivery;
-- SQLite state;
+- PostgreSQL state;
 - artifacts;
 - audit logs.
 

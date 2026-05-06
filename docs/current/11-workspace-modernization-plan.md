@@ -88,7 +88,7 @@ agent templates -> agent profiles -> session/schedule workspaces
 │       ├── SYSTEM.md
 │       ├── AGENTS.md
 │       └── skills/
-├── state.sqlite
+├── PostgreSQL runtime store
 └── ...
 
 /var/lib/teamd/workspaces/

@@ -285,6 +285,7 @@ fn process_cli_shuts_down_autospawned_local_daemon_after_one_shot_command() {
     let output = Command::new(env!("CARGO_BIN_EXE_agentd"))
         .args(["session", "create", "session-auto", "Auto", "Spawned"])
         .env("TEAMD_DATA_DIR", &data_dir)
+        .env("TEAMD_FORCE_TEST_DATABASE", "1")
         .env("TEAMD_DAEMON_BIND_HOST", "127.0.0.1")
         .env("TEAMD_DAEMON_BIND_PORT", daemon_port.to_string())
         .output()

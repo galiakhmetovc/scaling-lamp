@@ -12,7 +12,7 @@
 - вызывает provider;
 - provider может попросить инструменты;
 - runtime исполняет инструменты, approval’ы и фоновые jobs;
-- результаты сохраняются в SQLite и связанных payload-файлах: sessions, runs, jobs, approvals, tool-call ledger, indexes, transcripts, artifacts, context summaries, schedules, Telegram bindings и diagnostic events;
+- результаты сохраняются в PostgreSQL и связанных payload-файлах: sessions, runs, jobs, approvals, tool-call ledger, indexes, transcripts, artifacts, context summaries, schedules, Telegram bindings и diagnostic events;
 - CLI/TUI/HTTP просто показывают одно и то же состояние разными способами.
 
 ## System Context
@@ -106,7 +106,7 @@ flowchart LR
 
 Главная идея: модель не должна изобретать shell snippets. Она вызывает named tool с typed input, а runtime сам решает, как это выполнить и как отдать результат обратно.
 
-Runtime отдельно пишет ledger вызовов tools в таблицу `tool_calls`: tool name, arguments JSON, status, error, timestamps и bounded preview результата. Это audit trail “что модель просила сделать” и “что runtime вернул”. Полный крупный output не раздувает SQLite: он сохраняется в `artifacts` как `tool_output`, а `tool_calls.result_artifact_id` указывает на payload.
+Runtime отдельно пишет ledger вызовов tools в таблицу `tool_calls`: tool name, arguments JSON, status, error, timestamps и bounded preview результата. Это audit trail “что модель просила сделать” и “что runtime вернул”. Полный крупный output не раздувает PostgreSQL row: он сохраняется в `artifacts` как `tool_output`, а `tool_calls.result_artifact_id` указывает на payload.
 
 ### Artifact
 

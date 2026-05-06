@@ -29,7 +29,7 @@
 | `Operator Device` | Телефон или desktop оператора с Telegram client. |
 | `Telegram Cloud` | Внешняя инфраструктура Telegram и `Telegram Bot API`. |
 | `Execution Node` | Машина или окружение, где запущен `agentd` с Telegram long polling. |
-| `Local State` | SQLite metadata, payload files, config и `.env` этого node. |
+| `Local State` | PostgreSQL control-plane metadata, payload files, config и `.env` этого node. |
 | `Local Target Resources` | Workspace, filesystem, OS processes и local tools. |
 | `LLM Provider` | Внешний API модели. |
 

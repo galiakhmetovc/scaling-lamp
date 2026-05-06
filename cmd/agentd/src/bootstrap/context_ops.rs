@@ -1177,7 +1177,10 @@ impl App {
             format!("version={}", crate::about::APP_VERSION),
             format!("workspace_root={}", session_record.workspace_root),
             format!("data_dir={}", self.config.data_dir.display()),
-            format!("state_db={}", self.persistence.stores.metadata_db.display()),
+            format!(
+                "database={}",
+                agent_persistence::redacted_database_url(&self.config.database.url)
+            ),
             String::new(),
             "Session Summary:".to_string(),
             format!("session_id={}", summary.id),

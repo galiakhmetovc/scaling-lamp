@@ -2062,7 +2062,7 @@ impl ToolOutput {
             Self::KvPut(output) => json!({
                 "tool": "kv_put",
                 "entry": kv_entry_json(&output.entry),
-                "note": "kv is exact scoped runtime state in state.sqlite, not semantic memory"
+                "note": "kv is exact scoped runtime state in the PostgreSQL-backed runtime store, not semantic memory"
             })
             .to_string(),
             Self::KvList(output) => json!({

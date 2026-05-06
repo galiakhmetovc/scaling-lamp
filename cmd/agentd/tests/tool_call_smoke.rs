@@ -104,6 +104,7 @@ fn run_agentd(
     command
         .args(args)
         .env("TEAMD_DATA_DIR", data_dir)
+        .env("TEAMD_FORCE_TEST_DATABASE", "1")
         .env("TEAMD_DAEMON_BIND_PORT", daemon_port.to_string())
         .env("TEAMD_PROVIDER_KIND", "openai_responses")
         .env("TEAMD_PROVIDER_API_BASE", format!("{api_base}/v1"))

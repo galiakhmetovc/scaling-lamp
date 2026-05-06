@@ -19,7 +19,7 @@ Workspace состоит из трёх Rust packages:
 | Package | Назначение |
 | --- | --- |
 | `agent-runtime` | Типы runtime, prompt assembly, tool definitions/runtime, provider abstractions, план, память, skills, workspace. |
-| `agent-persistence` | Конфигурация, SQLite schema, repositories, payload/artifact storage, audit. |
+| `agent-persistence` | Конфигурация, PostgreSQL schema, repositories, payload/artifact storage, audit. |
 | `agentd` | App/bootstrap, execution loop, daemon, CLI, TUI, Telegram, HTTP, MCP, OTLP/trace. |
 
 Baseline-команда:
@@ -317,7 +317,7 @@ CARGO_INCREMENTAL=0 cargo test -p agentd --test daemon_tui
 
 ### P2. Разделить persistence tests и schema helpers
 
-Цель: снизить стоимость изменений SQLite schema/repositories.
+Цель: снизить стоимость изменений PostgreSQL schema/repositories.
 
 Статус: частично выполнено. Вынесены доменные тесты:
 

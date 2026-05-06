@@ -752,7 +752,7 @@ impl ToolCatalog {
             ToolDefinition {
                 name: ToolName::KvGet,
                 family: ToolFamily::Memory,
-                description: "Read one exact key from the scoped runtime KV store in state.sqlite. Use for deterministic state, not semantic recall.",
+                description: "Read one exact key from the scoped PostgreSQL-backed runtime KV store. Use for deterministic state, not semantic recall.",
                 policy: ToolPolicy {
                     read_only: true,
                     destructive: false,
@@ -762,7 +762,7 @@ impl ToolCatalog {
             ToolDefinition {
                 name: ToolName::KvPut,
                 family: ToolFamily::Memory,
-                description: "Store one exact JSON value in the scoped runtime KV store in state.sqlite. Supports optional expected_revision compare-and-set and ttl_seconds.",
+                description: "Store one exact JSON value in the scoped PostgreSQL-backed runtime KV store. Supports optional expected_revision compare-and-set and ttl_seconds.",
                 policy: ToolPolicy {
                     read_only: false,
                     destructive: false,
@@ -792,7 +792,7 @@ impl ToolCatalog {
             ToolDefinition {
                 name: ToolName::KnowledgeSearch,
                 family: ToolFamily::Memory,
-                description: "Search the configured canonical teamD docs/workspace knowledge index with SQLite FTS. Sources are only [knowledge].source_files/source_dirs inside the agent workspace (for example README.md, SYSTEM.md, AGENTS.md, docs/, projects/, notes/, extra roots); unreadable files are skipped. This is not arbitrary filesystem search, not Mem0 semantic memory, not scoped KV, and not the SilverBullet Space.",
+                description: "Search the configured canonical teamD docs/workspace knowledge index with PostgreSQL full-text search. Sources are only [knowledge].source_files/source_dirs inside the agent workspace (for example README.md, SYSTEM.md, AGENTS.md, docs/, projects/, notes/, extra roots); unreadable files are skipped. This is not arbitrary filesystem search, not Mem0 semantic memory, not scoped KV, and not the SilverBullet Space.",
                 policy: ToolPolicy {
                     read_only: true,
                     destructive: false,

@@ -12,7 +12,7 @@
 - команды `/files` и `/file <artifact_id>`;
 - отправка artifact обратно в Telegram через `sendDocument`;
 - generic model-facing tool `deliver_file`;
-- очередь `file_delivery_requests` в SQLite;
+- очередь `file_delivery_requests` в PostgreSQL;
 - доставка queued requests в Telegram после текущего chat turn;
 - защита от произвольных host paths: отправлять можно только artifact bytes.
 
@@ -38,13 +38,13 @@
 
 - в prompt;
 - в transcript body;
-- в SQLite как большой blob;
+- в PostgreSQL как большой blob;
 - в рабочую директорию без явного решения агента.
 
 `Artifact` уже является правильной абстракцией для больших payload:
 
 - payload лежит в `data_dir/artifacts`;
-- metadata лежит в SQLite;
+- metadata лежит в PostgreSQL;
 - transcript хранит короткую ссылку;
 - debug/TUI/CLI могут показать файл;
 - agent tools могут читать artifact явно.

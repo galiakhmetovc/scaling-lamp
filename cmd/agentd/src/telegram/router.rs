@@ -37,7 +37,7 @@ use super::render::{
 use crate::bootstrap::{App, BootstrapError, SessionPreferencesPatch, SessionSummary};
 use crate::diagnostics::DiagnosticEventBuilder;
 use crate::execution::{ChatExecutionEvent, ChatTurnExecutionReport};
-use crate::store_retry::{retry_store_sync, sqlite_lock_retry_attempts, sqlite_lock_retry_delay};
+use crate::store_retry::{retry_store_sync, store_retry_attempts, store_retry_delay};
 use agent_persistence::{
     ArtifactRecord, ArtifactRepository, FileDeliveryRepository, FileDeliveryRequestRecord,
     PersistenceStore, SessionInboxRepository, StoreError, TelegramChatBindingRecord,
@@ -2138,14 +2138,10 @@ where
     where
         F: FnMut(&PersistenceStore) -> Result<T, StoreError>,
     {
-        retry_store_sync(
-            sqlite_lock_retry_attempts(),
-            sqlite_lock_retry_delay(),
-            || {
-                let store = PersistenceStore::open_runtime(&self.app.persistence)?;
-                operation(&store)
-            },
-        )
+        retry_store_sync(store_retry_attempts(), store_retry_delay(), || {
+            let store = PersistenceStore::open_runtime(&self.app.persistence)?;
+            operation(&store)
+        })
         .map_err(BootstrapError::Store)
     }
 

@@ -1413,13 +1413,7 @@ fn knowledge_fts_query(terms: &[String]) -> Option<String> {
     if terms.is_empty() {
         return None;
     }
-    Some(
-        terms
-            .iter()
-            .map(|term| format!("\"{}\"", term.replace('"', "\"\"")))
-            .collect::<Vec<_>>()
-            .join(" AND "),
-    )
+    Some(terms.join(" "))
 }
 
 fn find_query_start(text: &str, query: &str, query_lower: &str) -> Option<usize> {

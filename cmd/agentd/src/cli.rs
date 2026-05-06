@@ -1,3 +1,4 @@
+mod migrate;
 mod parse;
 mod process;
 mod render;
@@ -20,7 +21,6 @@ use agent_runtime::provider::{FinishReason, ProviderMessage, ProviderRequest, Pr
 use agent_runtime::run::RunSnapshot;
 use agent_runtime::session::{MessageRole, Session, SessionSettings};
 use encoding_rs::Encoding;
-use rusqlite::Connection;
 use std::env;
 use std::io::{BufRead, Write};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -58,6 +58,11 @@ enum Command {
     Version,
     Update {
         tag: Option<String>,
+    },
+    MigrateSqliteToPostgres {
+        sqlite_path: String,
+        database_url: Option<String>,
+        data_dir: Option<String>,
     },
     ProviderSmoke {
         prompt: String,
@@ -225,6 +230,16 @@ where
         Command::TracePush { trace_id } => render::push_trace_to_otlp(app, &trace_id),
         Command::Version => app.render_version_info(),
         Command::Update { tag } => app.update_runtime_binary(tag.as_deref()),
+        Command::MigrateSqliteToPostgres {
+            sqlite_path,
+            database_url,
+            data_dir,
+        } => migrate::migrate_sqlite_to_postgres(
+            app,
+            &sqlite_path,
+            database_url.as_deref(),
+            data_dir.as_deref(),
+        ),
         Command::ProviderSmoke { prompt } => render::run_provider_smoke(app, &prompt),
         Command::AgentList => app.render_agents(),
         Command::AgentShow { identifier } => app.render_agent_profile(identifier.as_deref()),

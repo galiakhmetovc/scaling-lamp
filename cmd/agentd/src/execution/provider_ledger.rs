@@ -1,5 +1,5 @@
 use super::{ExecutionError, ToolExecutionStatus};
-use crate::store_retry::{retry_store_sync, sqlite_lock_retry_attempts, sqlite_lock_retry_delay};
+use crate::store_retry::{retry_store_sync, store_retry_attempts, store_retry_delay};
 use crate::trace::RuntimeTraceContext;
 use agent_persistence::{
     ArtifactRecord, ArtifactRepository, PersistenceStore, ToolCallRecord, ToolCallRepository,
@@ -83,124 +83,115 @@ pub(super) fn record_provider_round_trace(
 pub(super) fn record_tool_call_ledger(
     update: ToolCallLedgerUpdate<'_>,
 ) -> Result<(), ExecutionError> {
-    retry_store_sync(
-        sqlite_lock_retry_attempts(),
-        sqlite_lock_retry_delay(),
-        || {
-            let id = tool_call_ledger_id(update.run_id, update.provider_tool_call_id);
-            let existing = update.store.get_tool_call(&id)?;
-            let requested_at = existing
+    retry_store_sync(store_retry_attempts(), store_retry_delay(), || {
+        let id = tool_call_ledger_id(update.run_id, update.provider_tool_call_id);
+        let existing = update.store.get_tool_call(&id)?;
+        let requested_at = existing
+            .as_ref()
+            .map(|record| record.requested_at)
+            .unwrap_or(update.now);
+        let trace_context =
+            RuntimeTraceContext::from_run_link_or_default(update.store, update.run_id)?;
+        update.store.put_tool_call(&ToolCallRecord {
+            id: id.clone(),
+            session_id: update.session_id.to_string(),
+            run_id: update.run_id.to_string(),
+            provider_tool_call_id: update.provider_tool_call_id.to_string(),
+            tool_name: update.tool_name.to_string(),
+            arguments_json: update.arguments_json.to_string(),
+            summary: update.summary.to_string(),
+            status: update.status.as_str().to_string(),
+            error: update.error.clone(),
+            result_summary: existing
                 .as_ref()
-                .map(|record| record.requested_at)
-                .unwrap_or(update.now);
-            let trace_context =
-                RuntimeTraceContext::from_run_link_or_default(update.store, update.run_id)?;
-            update.store.put_tool_call(&ToolCallRecord {
-                id: id.clone(),
-                session_id: update.session_id.to_string(),
-                run_id: update.run_id.to_string(),
-                provider_tool_call_id: update.provider_tool_call_id.to_string(),
-                tool_name: update.tool_name.to_string(),
-                arguments_json: update.arguments_json.to_string(),
-                summary: update.summary.to_string(),
-                status: update.status.as_str().to_string(),
-                error: update.error.clone(),
-                result_summary: existing
-                    .as_ref()
-                    .and_then(|record| record.result_summary.clone()),
-                result_preview: existing
-                    .as_ref()
-                    .and_then(|record| record.result_preview.clone()),
-                result_artifact_id: existing
-                    .as_ref()
-                    .and_then(|record| record.result_artifact_id.clone()),
-                result_truncated: existing
-                    .as_ref()
-                    .is_some_and(|record| record.result_truncated),
-                result_byte_len: existing.as_ref().and_then(|record| record.result_byte_len),
-                requested_at,
-                updated_at: update.now,
-            })?;
-            update.store.put_trace_link(&trace_context.child_link(
-                "tool_call",
-                &id,
-                serde_json::json!({
-                    "session_id": update.session_id,
-                    "run_id": update.run_id,
-                    "provider_tool_call_id": update.provider_tool_call_id,
-                    "tool_name": update.tool_name,
-                    "status": update.status.as_str(),
-                    "summary": update.summary,
-                }),
-                requested_at,
-            ))
-        },
-    )
+                .and_then(|record| record.result_summary.clone()),
+            result_preview: existing
+                .as_ref()
+                .and_then(|record| record.result_preview.clone()),
+            result_artifact_id: existing
+                .as_ref()
+                .and_then(|record| record.result_artifact_id.clone()),
+            result_truncated: existing
+                .as_ref()
+                .is_some_and(|record| record.result_truncated),
+            result_byte_len: existing.as_ref().and_then(|record| record.result_byte_len),
+            requested_at,
+            updated_at: update.now,
+        })?;
+        update.store.put_trace_link(&trace_context.child_link(
+            "tool_call",
+            &id,
+            serde_json::json!({
+                "session_id": update.session_id,
+                "run_id": update.run_id,
+                "provider_tool_call_id": update.provider_tool_call_id,
+                "tool_name": update.tool_name,
+                "status": update.status.as_str(),
+                "summary": update.summary,
+            }),
+            requested_at,
+        ))
+    })
     .map_err(ExecutionError::Store)
 }
 
 pub(super) fn record_tool_call_result(
     update: ToolCallResultLedgerUpdate<'_>,
 ) -> Result<(), ExecutionError> {
-    retry_store_sync(
-        sqlite_lock_retry_attempts(),
-        sqlite_lock_retry_delay(),
-        || {
-            let id = tool_call_ledger_id(update.run_id, update.provider_tool_call_id);
-            let Some(mut record) = update.store.get_tool_call(&id)? else {
-                return Ok(());
-            };
-            let trace_context =
-                RuntimeTraceContext::from_run_link_or_default(update.store, update.run_id)?;
+    retry_store_sync(store_retry_attempts(), store_retry_delay(), || {
+        let id = tool_call_ledger_id(update.run_id, update.provider_tool_call_id);
+        let Some(mut record) = update.store.get_tool_call(&id)? else {
+            return Ok(());
+        };
+        let trace_context =
+            RuntimeTraceContext::from_run_link_or_default(update.store, update.run_id)?;
 
-            let (result_preview, result_truncated) =
-                tool_result_preview(update.result_output, update.result_preview_char_limit);
-            let result_artifact_id = if result_truncated {
-                let artifact_id =
-                    tool_result_artifact_id(update.run_id, update.provider_tool_call_id);
-                update.store.put_artifact(&ArtifactRecord {
-                    id: artifact_id.clone(),
-                    session_id: update.session_id.to_string(),
-                    kind: "tool_output".to_string(),
-                    metadata_json: serde_json::json!({
-                        "tool_call_id": id,
-                        "run_id": update.run_id,
-                        "provider_tool_call_id": update.provider_tool_call_id,
-                        "tool_name": update.tool_name,
-                        "summary": update.result_summary,
-                        "created_at": update.now,
-                    })
-                    .to_string(),
-                    path: PathBuf::from("artifacts").join(format!("{artifact_id}.bin")),
-                    bytes: update.result_output.as_bytes().to_vec(),
-                    created_at: update.now,
-                })?;
-                update.store.put_trace_link(&trace_context.child_link(
-                    "artifact",
-                    &artifact_id,
-                    serde_json::json!({
-                        "session_id": update.session_id,
-                        "run_id": update.run_id,
-                        "tool_call_id": id,
-                        "kind": "tool_output",
-                        "byte_len": update.result_output.len(),
-                    }),
-                    update.now,
-                ))?;
-                Some(artifact_id)
-            } else {
-                None
-            };
+        let (result_preview, result_truncated) =
+            tool_result_preview(update.result_output, update.result_preview_char_limit);
+        let result_artifact_id = if result_truncated {
+            let artifact_id = tool_result_artifact_id(update.run_id, update.provider_tool_call_id);
+            update.store.put_artifact(&ArtifactRecord {
+                id: artifact_id.clone(),
+                session_id: update.session_id.to_string(),
+                kind: "tool_output".to_string(),
+                metadata_json: serde_json::json!({
+                    "tool_call_id": id,
+                    "run_id": update.run_id,
+                    "provider_tool_call_id": update.provider_tool_call_id,
+                    "tool_name": update.tool_name,
+                    "summary": update.result_summary,
+                    "created_at": update.now,
+                })
+                .to_string(),
+                path: PathBuf::from("artifacts").join(format!("{artifact_id}.bin")),
+                bytes: update.result_output.as_bytes().to_vec(),
+                created_at: update.now,
+            })?;
+            update.store.put_trace_link(&trace_context.child_link(
+                "artifact",
+                &artifact_id,
+                serde_json::json!({
+                    "session_id": update.session_id,
+                    "run_id": update.run_id,
+                    "tool_call_id": id,
+                    "kind": "tool_output",
+                    "byte_len": update.result_output.len(),
+                }),
+                update.now,
+            ))?;
+            Some(artifact_id)
+        } else {
+            None
+        };
 
-            record.result_summary = Some(update.result_summary.to_string());
-            record.result_preview = Some(result_preview);
-            record.result_artifact_id = result_artifact_id;
-            record.result_truncated = result_truncated;
-            record.result_byte_len = Some(update.result_output.len() as i64);
-            record.updated_at = update.now;
-            update.store.put_tool_call(&record)
-        },
-    )
+        record.result_summary = Some(update.result_summary.to_string());
+        record.result_preview = Some(result_preview);
+        record.result_artifact_id = result_artifact_id;
+        record.result_truncated = result_truncated;
+        record.result_byte_len = Some(update.result_output.len() as i64);
+        record.updated_at = update.now;
+        update.store.put_tool_call(&record)
+    })
     .map_err(ExecutionError::Store)
 }
 

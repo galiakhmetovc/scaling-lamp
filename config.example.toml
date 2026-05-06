@@ -9,6 +9,13 @@ worker_lease_owner = "daemon"
 # bearer_token = "replace-me"
 # public_base_url = "https://teamd.example"
 
+[database]
+# PostgreSQL is the canonical runtime control-plane store.
+# Keep secrets in TEAMD_DATABASE_URL when possible.
+url = "postgresql://teamd:teamd@127.0.0.1:5432/teamd"
+connect_timeout_seconds = 5
+application_name = "teamd"
+
 [telegram]
 enabled = false
 # bot_token = "prefer TEAMD_TELEGRAM_BOT_TOKEN in .env"
@@ -169,8 +176,7 @@ ttl_ms = 300000
 stealth = true
 
 [runtime_timing]
-sqlite_busy_timeout_ms = 15000
-sqlite_lock_retry_delay_ms = 250
+store_retry_delay_ms = 250
 daemon_http_connect_timeout_ms = 2000
 daemon_http_request_timeout_ms = 5000
 a2a_http_connect_timeout_ms = 2000
@@ -193,7 +199,7 @@ provider_loop_transient_retry_base_delay_ms = 100
 
 [runtime_limits]
 diagnostic_tail_lines = 80
-sqlite_lock_retry_attempts = 4
+store_retry_attempts = 4
 active_run_step_tail_limit = 3
 active_process_output_tail_max_bytes = 2048
 active_process_output_tail_max_lines = 8

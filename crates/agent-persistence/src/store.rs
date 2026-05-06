@@ -15,7 +15,7 @@ mod trace_repos;
 
 use crate::PersistenceScaffold;
 use crate::audit::{AuditLogConfig, DiagnosticEvent};
-use crate::config::{AppConfig, normalize_absolute_path};
+use crate::config::AppConfig;
 use crate::records::{
     AgentChainContinuationRecord, AgentProfileRecord, AgentScheduleRecord, ArtifactRecord,
     ContextOffloadRecord, ContextSummaryRecord, FileDeliveryRequestRecord, JobRecord,
@@ -32,20 +32,24 @@ use agent_runtime::archive::{
     ArchivedArtifactEntry, ArchivedSummary, ArchivedTranscriptEntry, SessionArchiveManifest,
 };
 use agent_runtime::context::{ContextOffloadPayload, ContextOffloadSnapshot};
-use rusqlite::{Connection, OptionalExtension, params};
+use postgres::types::ToSql;
+use postgres::{Client, NoTls, Row};
 use sha2::{Digest, Sha256};
 use std::error::Error;
 use std::fmt;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process;
+use std::str::FromStr;
+use std::sync::{Mutex, MutexGuard};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StoreLayout {
+    pub root_dir: PathBuf,
     pub artifacts_dir: PathBuf,
     pub archives_dir: PathBuf,
-    pub metadata_db: PathBuf,
+    pub legacy_sqlite_db: PathBuf,
     pub runs_dir: PathBuf,
     pub transcripts_dir: PathBuf,
 }
@@ -55,9 +59,10 @@ impl StoreLayout {
         let root = &config.data_dir;
 
         Self {
+            root_dir: root.clone(),
             artifacts_dir: root.join("artifacts"),
             archives_dir: root.join("archives"),
-            metadata_db: root.join("state.sqlite"),
+            legacy_sqlite_db: root.join("state.sqlite"),
             runs_dir: root.join("runs"),
             transcripts_dir: root.join("transcripts"),
         }
@@ -104,13 +109,23 @@ pub enum StoreError {
         table: &'static str,
         reason: String,
     },
+    StoreLockPoisoned,
+    Postgres(postgres::Error),
     Sqlite(rusqlite::Error),
 }
 
-#[derive(Debug)]
 pub struct PersistenceStore {
     layout: StoreLayout,
-    connection: Connection,
+    client: Mutex<Client>,
+}
+
+impl fmt::Debug for PersistenceStore {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("PersistenceStore")
+            .field("layout", &self.layout)
+            .finish_non_exhaustive()
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -133,9 +148,13 @@ type TranscriptRow = (
     i64,
 );
 
+#[cfg(test)]
 const DEFAULT_MISSION_EXECUTION_INTENT: &str = "autonomous";
+#[cfg(test)]
 const DEFAULT_MISSION_SCHEDULE_JSON: &str = r#"{"not_before":null,"interval_seconds":null}"#;
+#[cfg(test)]
 const DEFAULT_MISSION_ACCEPTANCE_JSON: &str = "[]";
+#[cfg(test)]
 const LEGACY_MISSION_PREFIX: &str = "legacy-mission-";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -209,6 +228,8 @@ impl fmt::Display for StoreError {
             Self::SchemaMismatch { table, reason } => {
                 write!(formatter, "schema mismatch in {table}: {reason}")
             }
+            Self::StoreLockPoisoned => write!(formatter, "store client lock poisoned"),
+            Self::Postgres(source) => write!(formatter, "postgres error: {source}"),
             Self::Sqlite(source) => write!(formatter, "sqlite error: {source}"),
         }
     }
@@ -218,6 +239,7 @@ impl Error for StoreError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
             Self::Io { source, .. } => Some(source),
+            Self::Postgres(source) => Some(source),
             Self::Sqlite(source) => Some(source),
             Self::ImmutableSessionAgentProfile { .. }
             | Self::InvalidIdentifier { .. }
@@ -226,8 +248,15 @@ impl Error for StoreError {
             | Self::MissingPayload { .. }
             | Self::IntegrityMismatch { .. }
             | Self::KvRevisionConflict { .. }
-            | Self::SchemaMismatch { .. } => None,
+            | Self::SchemaMismatch { .. }
+            | Self::StoreLockPoisoned => None,
         }
+    }
+}
+
+impl From<postgres::Error> for StoreError {
+    fn from(source: postgres::Error) -> Self {
+        Self::Postgres(source)
     }
 }
 
@@ -253,17 +282,16 @@ impl PersistenceStore {
     fn open_internal(scaffold: &PersistenceScaffold, mode: OpenMode) -> Result<Self, StoreError> {
         prepare_layout(&scaffold.stores)?;
 
-        let connection = Connection::open(&scaffold.stores.metadata_db)?;
-        configure_connection(&connection, &scaffold.config, mode)?;
+        let mut client = connect_postgres(&scaffold.config)?;
+        configure_connection(&mut client, mode)?;
         if mode != OpenMode::RuntimeRequestPath {
-            bootstrap_schema(&connection)?;
-            validate_schema(&connection)?;
-            reconcile_legacy_session_workspace_roots(&connection, &scaffold.config)?;
+            bootstrap_schema(&mut client)?;
+            validate_schema(&mut client)?;
         }
 
         let store = Self {
             layout: scaffold.stores.clone(),
-            connection,
+            client: Mutex::new(client),
         };
         if mode == OpenMode::BootstrapAndReconcile {
             store.reconcile_orphan_payloads()?;
@@ -282,15 +310,24 @@ impl PersistenceStore {
         })
     }
 
+    #[doc(hidden)]
+    pub fn with_postgres_client<T>(
+        &self,
+        operation: impl FnOnce(&mut Client) -> Result<T, StoreError>,
+    ) -> Result<T, StoreError> {
+        self.with_client(operation)
+    }
+
     pub fn session_exists(&self, id: &str) -> Result<bool, StoreError> {
-        self.connection
-            .query_row(
-                "SELECT EXISTS(SELECT 1 FROM sessions WHERE id = ?1)",
-                [id],
-                |row| row.get::<_, i64>(0),
-            )
-            .map(|exists| exists != 0)
-            .map_err(StoreError::from)
+        self.with_client(|client| {
+            client
+                .query_one(
+                    "SELECT EXISTS(SELECT 1 FROM sessions WHERE id = $1)",
+                    &[&id],
+                )
+                .map(|row| row.get::<_, bool>(0))
+                .map_err(StoreError::from)
+        })
     }
 
     pub fn count_sessions(&self) -> Result<usize, StoreError> {
@@ -310,12 +347,12 @@ impl PersistenceStore {
     }
 
     fn count_rows(&self, table: &'static str) -> Result<usize, StoreError> {
-        self.connection
-            .query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |row| {
-                row.get::<_, i64>(0)
-            })
-            .map(|count| count.max(0) as usize)
-            .map_err(StoreError::from)
+        self.with_client(|client| {
+            client
+                .query_one(&format!("SELECT COUNT(*) FROM {table}"), &[])
+                .map(|row| row.get::<_, i64>(0).max(0) as usize)
+                .map_err(StoreError::from)
+        })
     }
 
     fn transcript_path(&self, session_id: &str, id: &str) -> Result<PathBuf, StoreError> {
@@ -372,16 +409,19 @@ impl PersistenceStore {
     }
 
     fn reconcile_orphan_payloads(&self) -> Result<(), StoreError> {
-        reconcile_directory(
-            &self.connection,
-            "SELECT storage_key, byte_len, sha256 FROM transcripts",
-            &self.layout.transcripts_dir,
-        )?;
-        reconcile_directory(
-            &self.connection,
-            "SELECT path, byte_len, sha256 FROM artifacts",
-            &self.layout.artifacts_dir,
-        )?;
+        self.with_client(|client| {
+            reconcile_directory(
+                client,
+                "SELECT storage_key, byte_len, sha256 FROM transcripts",
+                &self.layout.transcripts_dir,
+            )?;
+            reconcile_directory(
+                client,
+                "SELECT path, byte_len, sha256 FROM artifacts",
+                &self.layout.artifacts_dir,
+            )?;
+            Ok(())
+        })?;
         Ok(())
     }
 
@@ -414,14 +454,18 @@ impl PersistenceStore {
         &self,
         session_id: &str,
     ) -> Result<Vec<PathBuf>, StoreError> {
-        let mut statement = self
-            .connection
-            .prepare("SELECT storage_key FROM transcripts WHERE session_id = ?1 ORDER BY id ASC")?;
-        let mut rows = statement.query([session_id])?;
+        let rows = self.with_client(|client| {
+            client
+                .query(
+                    "SELECT storage_key FROM transcripts WHERE session_id = $1 ORDER BY id ASC",
+                    &[&session_id],
+                )
+                .map_err(StoreError::from)
+        })?;
         let mut paths = Vec::new();
 
-        while let Some(row) = rows.next()? {
-            let storage_key = row.get::<_, String>(0)?;
+        for row in rows {
+            let storage_key = row.get::<_, String>(0);
             paths.push(self.layout.transcripts_dir.join(storage_key));
         }
 
@@ -438,20 +482,18 @@ impl PersistenceStore {
     }
 
     fn session_artifact_payload_paths(&self, session_id: &str) -> Result<Vec<PathBuf>, StoreError> {
-        let mut statement = self
-            .connection
-            .prepare("SELECT path FROM artifacts WHERE session_id = ?1 ORDER BY id ASC")?;
-        let mut rows = statement.query([session_id])?;
+        let rows = self.with_client(|client| {
+            client
+                .query(
+                    "SELECT path FROM artifacts WHERE session_id = $1 ORDER BY id ASC",
+                    &[&session_id],
+                )
+                .map_err(StoreError::from)
+        })?;
         let mut paths = Vec::new();
-        let root = self
-            .layout
-            .metadata_db
-            .parent()
-            .unwrap_or(self.layout.metadata_db.as_path());
-
-        while let Some(row) = rows.next()? {
-            let relative_path = row.get::<_, String>(0)?;
-            paths.push(root.join(relative_path));
+        for row in rows {
+            let relative_path = row.get::<_, String>(0);
+            paths.push(self.layout.root_dir.join(relative_path));
         }
 
         self.append_diagnostic_event(
@@ -468,9 +510,11 @@ impl PersistenceStore {
 
     fn delete_artifact_by_id(&self, id: &str) -> Result<bool, StoreError> {
         let path = self.artifact_path(id)?;
-        let deleted = self
-            .connection
-            .execute("DELETE FROM artifacts WHERE id = ?1", [id])?;
+        let deleted = self.with_client(|client| {
+            client
+                .execute("DELETE FROM artifacts WHERE id = $1", &[&id])
+                .map_err(StoreError::from)
+        })?;
 
         if deleted == 0 {
             return Ok(false);
@@ -482,17 +526,19 @@ impl PersistenceStore {
     }
 
     fn list_artifact_ids_for_session(&self, session_id: &str) -> Result<Vec<String>, StoreError> {
-        let mut statement = self
-            .connection
-            .prepare("SELECT id FROM artifacts WHERE session_id = ?1 ORDER BY id ASC")?;
-        let mut rows = statement.query([session_id])?;
-        let mut ids = Vec::new();
-
-        while let Some(row) = rows.next()? {
-            ids.push(row.get::<_, String>(0)?);
-        }
-
-        Ok(ids)
+        self.with_client(|client| {
+            client
+                .query(
+                    "SELECT id FROM artifacts WHERE session_id = $1 ORDER BY id ASC",
+                    &[&session_id],
+                )
+                .map(|rows| {
+                    rows.into_iter()
+                        .map(|row| row.get::<_, String>(0))
+                        .collect()
+                })
+                .map_err(StoreError::from)
+        })
     }
 
     pub fn list_artifacts_for_session(
@@ -711,14 +757,8 @@ impl PersistenceStore {
     }
 
     fn audit_log_config(&self) -> AuditLogConfig {
-        let root = self
-            .layout
-            .metadata_db
-            .parent()
-            .unwrap_or(self.layout.metadata_db.as_path())
-            .to_path_buf();
         AuditLogConfig {
-            path: root.join("audit/runtime.jsonl"),
+            path: self.layout.root_dir.join("audit/runtime.jsonl"),
         }
     }
 
@@ -739,13 +779,7 @@ impl PersistenceStore {
                 pid: Some(process::id()),
                 uid: None,
                 euid: None,
-                data_dir: self
-                    .layout
-                    .metadata_db
-                    .parent()
-                    .unwrap_or(self.layout.metadata_db.as_path())
-                    .display()
-                    .to_string(),
+                data_dir: self.layout.root_dir.display().to_string(),
                 session_id: session_id.map(str::to_string),
                 run_id: None,
                 job_id: None,
@@ -761,89 +795,102 @@ impl PersistenceStore {
                 fields,
             });
     }
+
+    pub(crate) fn with_client<T>(
+        &self,
+        operation: impl FnOnce(&mut Client) -> Result<T, StoreError>,
+    ) -> Result<T, StoreError> {
+        let mut client = self
+            .client
+            .lock()
+            .map_err(|_| StoreError::StoreLockPoisoned)?;
+        operation(&mut client)
+    }
+
+    pub(crate) fn client(&self) -> Result<MutexGuard<'_, Client>, StoreError> {
+        self.client
+            .lock()
+            .map_err(|_| StoreError::StoreLockPoisoned)
+    }
 }
 
-fn configure_connection(
-    connection: &Connection,
-    config: &AppConfig,
-    mode: OpenMode,
-) -> Result<(), StoreError> {
-    connection.busy_timeout(config.runtime_timing.sqlite_busy_timeout())?;
-    connection.execute_batch("PRAGMA foreign_keys = ON;")?;
-    if mode != OpenMode::RuntimeRequestPath {
-        connection.pragma_update(None, "journal_mode", "WAL")?;
-        connection.pragma_update(None, "synchronous", "NORMAL")?;
-    }
+fn configure_connection(client: &mut Client, mode: OpenMode) -> Result<(), StoreError> {
+    let _ = mode;
+    client.batch_execute("SET client_min_messages TO WARNING;")?;
     Ok(())
+}
+
+const DEFAULT_RUNTIME_DATABASE_URL: &str = "postgresql://teamd@127.0.0.1:5432/teamd";
+const DEFAULT_TEST_DATABASE_URL: &str = "postgresql://postgres:postgres@127.0.0.1:5432/postgres";
+
+fn connect_postgres(config: &AppConfig) -> Result<Client, StoreError> {
+    let mut database_config = postgres::Config::from_str(&database_url(config))?;
+    database_config.connect_timeout(std::time::Duration::from_secs(
+        config.database.connect_timeout_seconds,
+    ));
+    database_config.application_name(&config.database.application_name);
+    let mut client = database_config.connect(NoTls).map_err(StoreError::from)?;
+    configure_test_schema(&mut client, config)?;
+    Ok(client)
+}
+
+fn database_url(config: &AppConfig) -> String {
+    if should_use_isolated_test_database(config) {
+        return std::env::var("TEAMD_TEST_DATABASE_URL")
+            .unwrap_or_else(|_| DEFAULT_TEST_DATABASE_URL.to_string());
+    }
+    config.database.url.clone()
+}
+
+fn configure_test_schema(client: &mut Client, config: &AppConfig) -> Result<(), StoreError> {
+    if !should_use_isolated_test_database(config) {
+        return Ok(());
+    }
+
+    use std::collections::hash_map::DefaultHasher;
+    use std::hash::{Hash, Hasher};
+
+    let mut hasher = DefaultHasher::new();
+    config.data_dir.hash(&mut hasher);
+    let schema = format!("teamd_test_{:016x}", hasher.finish());
+    client.batch_execute(&format!(
+        "CREATE SCHEMA IF NOT EXISTS {schema}; SET search_path TO {schema};"
+    ))?;
+    Ok(())
+}
+
+fn should_use_isolated_test_database(config: &AppConfig) -> bool {
+    config.database.url == DEFAULT_RUNTIME_DATABASE_URL && running_under_cargo_test()
+}
+
+fn running_under_cargo_test() -> bool {
+    if std::env::var_os("TEAMD_FORCE_TEST_DATABASE").is_some() {
+        return true;
+    }
+    if cfg!(test) {
+        return true;
+    }
+
+    std::env::current_exe()
+        .ok()
+        .and_then(|path| path.parent().map(|parent| parent.ends_with("deps")))
+        .unwrap_or(false)
 }
 
 fn prepare_layout(layout: &StoreLayout) -> Result<(), StoreError> {
     payloads::prepare_layout(layout)
 }
 
-fn bootstrap_schema(connection: &Connection) -> Result<(), StoreError> {
-    schema::bootstrap_schema(connection)
+fn bootstrap_schema(client: &mut Client) -> Result<(), StoreError> {
+    schema::bootstrap_schema(client)
 }
 
-fn validate_schema(connection: &Connection) -> Result<(), StoreError> {
-    schema::validate_schema(connection)
+fn validate_schema(client: &mut Client) -> Result<(), StoreError> {
+    schema::validate_schema(client)
 }
 
 fn validate_identifier(id: &str) -> Result<(), StoreError> {
     schema::validate_identifier(id)
-}
-
-fn reconcile_legacy_session_workspace_roots(
-    connection: &Connection,
-    config: &AppConfig,
-) -> Result<(), StoreError> {
-    let fallback_root = default_session_workspace_root(config)?;
-    let mut statement =
-        connection.prepare("SELECT id, workspace_root FROM sessions ORDER BY id ASC")?;
-    let legacy_rows = statement
-        .query_map([], |row| {
-            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
-        })?
-        .collect::<Result<Vec<_>, _>>()?
-        .into_iter()
-        .filter(|(_, workspace_root)| !Path::new(workspace_root).is_absolute())
-        .collect::<Vec<_>>();
-    drop(statement);
-
-    if legacy_rows.is_empty() {
-        return Ok(());
-    }
-
-    connection.execute_batch("BEGIN IMMEDIATE TRANSACTION;")?;
-    let result = (|| -> Result<(), StoreError> {
-        for (session_id, _) in &legacy_rows {
-            connection.execute(
-                "UPDATE sessions SET workspace_root = ?1 WHERE id = ?2",
-                params![fallback_root.display().to_string(), session_id],
-            )?;
-        }
-        connection.execute_batch("COMMIT TRANSACTION;")?;
-        Ok(())
-    })();
-
-    if result.is_err() {
-        let _ = connection.execute_batch("ROLLBACK TRANSACTION;");
-    }
-
-    result
-}
-
-fn default_session_workspace_root(config: &AppConfig) -> Result<PathBuf, StoreError> {
-    let cwd = std::env::current_dir().map_err(|source| StoreError::Io {
-        path: ".".into(),
-        source,
-    })?;
-    Ok(config
-        .workspace
-        .default_root
-        .as_deref()
-        .map(|path| normalize_absolute_path(path, &cwd))
-        .unwrap_or(cwd))
 }
 
 fn persist_payload_with_commit<F>(path: &Path, bytes: &[u8], commit: F) -> Result<(), StoreError>
@@ -854,11 +901,11 @@ where
 }
 
 fn reconcile_directory(
-    connection: &Connection,
+    client: &mut Client,
     query: &str,
     directory: &Path,
 ) -> Result<(), StoreError> {
-    payloads::reconcile_directory(connection, query, directory)
+    payloads::reconcile_directory(client, query, directory)
 }
 
 fn backup_path(path: &Path) -> PathBuf {

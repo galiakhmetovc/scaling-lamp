@@ -1060,7 +1060,7 @@ enabled = true
 api_base = "http://127.0.0.1:18888"
 ```
 
-Они работают через тот же canonical provider loop и tool ledger, а не через MCP и не через отдельный prompt path. Mem0 хранит только явно записанные durable memories. Он не заменяет `state.sqlite`, transcript, tool-call ledger, artifacts, `ContextSummary` или SilverBullet/docs.
+Они работают через тот же canonical provider loop и tool ledger, а не через MCP и не через отдельный prompt path. Mem0 хранит только явно записанные durable memories. Он не заменяет PostgreSQL runtime store, transcript, tool-call ledger, artifacts, `ContextSummary` или SilverBullet/docs.
 
 Scope:
 
@@ -1070,11 +1070,11 @@ Scope:
 - `workspace` — default scope, память текущего workspace, `agent_id = teamd-workspace-<sha256(workspace_root)[0..16]>`;
 - `session` — память текущей session, только `run_id=session_id`.
 
-Runtime добавляет в metadata provenance поля `teamd_scope`, `teamd_session_id`, `teamd_agent_profile_id`, `teamd_workspace_root` и `teamd_source`. Это не KV-хранилище: Mem0 используется для семантических durable facts/lessons, а точные ключи, очереди, locks, counters и runtime state должны оставаться во встроенном KV/runtime-store слое `state.sqlite`.
+Runtime добавляет в metadata provenance поля `teamd_scope`, `teamd_session_id`, `teamd_agent_profile_id`, `teamd_workspace_root` и `teamd_source`. Это не KV-хранилище: Mem0 используется для семантических durable facts/lessons, а точные ключи, очереди, locks, counters и runtime state должны оставаться во встроенном PostgreSQL-backed KV/runtime-store слое.
 
-### Runtime KV через `state.sqlite`
+### Runtime KV через PostgreSQL
 
-`kv_*` tools всегда идут через тот же canonical provider loop, tool ledger и approval layer. Они не используют Mem0, MCP, Redis или отдельный сервис. Данные лежат в `state.sqlite` в таблице `kv_entries`.
+`kv_*` tools всегда идут через тот же canonical provider loop, tool ledger и approval layer. Они не используют Mem0, MCP, Redis или отдельный сервис. Данные лежат в PostgreSQL в таблице `kv_entries`.
 
 KV хранит exact JSON values. Он не делает embeddings, ranking, inference или semantic search.
 
@@ -1339,7 +1339,7 @@ knowledge_search({
 
 Что делает:
 
-- ищет через SQLite FTS по configured canonical teamD docs/workspace knowledge index;
+- ищет через PostgreSQL full-text search по configured canonical teamD docs/workspace knowledge index;
 - источники строго задаются в `[knowledge].source_files` и `[knowledge].source_dirs` внутри agent workspace: например `README.md`, `SYSTEM.md`, `AGENTS.md`, `docs/`, `projects/`, `notes/`, extra roots;
 - unreadable/stale/non-UTF8 файлы при обновлении индекса пропускаются и не должны валить весь tool;
 - возвращает source metadata и bounded results.

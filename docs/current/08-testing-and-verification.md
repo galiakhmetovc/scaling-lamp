@@ -5,7 +5,7 @@
 `teamD` — это не библиотека с одной функцией. Здесь баги обычно возникают на стыке:
 
 - provider loop;
-- SQLite request path;
+- PostgreSQL request path;
 - daemon client/server;
 - TUI event flow;
 - inter-agent chains;
@@ -116,7 +116,7 @@ cargo build --release -p agentd
 | TUI local/debug | TUI state, render, debug browser, session/tool/artifact views. | `CARGO_INCREMENTAL=0 cargo test -p agentd --test tui_app` |
 | TUI через daemon | `TUI -> daemon client -> HTTP daemon -> runtime` contract. | `CARGO_INCREMENTAL=0 cargo test -p agentd --test daemon_tui` |
 | TUI module split smoke | Внутренние TUI helpers: browser items, debug bundle, command parsing, render/debug flows. | `CARGO_INCREMENTAL=0 cargo test -p agentd tui` |
-| Persistence/schema | SQLite schema, migrations, repositories, payload/artifact storage, busy/concurrency behavior. | `CARGO_INCREMENTAL=0 cargo test -p agent-persistence` |
+| Persistence/schema | PostgreSQL schema, migration importer, repositories, payload/artifact storage, transaction/concurrency behavior. | `CARGO_INCREMENTAL=0 cargo test -p agent-persistence` |
 | Persistence tool-call ledger | Запись arguments/result preview/artifact refs/status/error для tools. | `CARGO_INCREMENTAL=0 cargo test -p agent-persistence tool_calls` |
 | Persistence Telegram state | Pairing, bindings, queue/status/cursor/file delivery records. | `CARGO_INCREMENTAL=0 cargo test -p agent-persistence telegram` |
 | Persistence trace state | Trace links/spans для observability/debug. | `CARGO_INCREMENTAL=0 cargo test -p agent-persistence trace` |

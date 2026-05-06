@@ -61,6 +61,9 @@ impl Command {
                     tag: Some(tag.clone()),
                 })
             }
+            [scope, action, rest @ ..] if scope == "migrate" && action == "sqlite-to-postgres" => {
+                parse_sqlite_to_postgres_migration(rest)
+            }
             [command] if command == "tui" => Ok(Self::Tui {
                 host: None,
                 port: None,
@@ -503,6 +506,60 @@ pub(super) fn parse_global_connect_options(
         }
     }
     Ok(DaemonConnectOptions { host, port })
+}
+
+fn parse_sqlite_to_postgres_migration(args: &[String]) -> Result<Command, BootstrapError> {
+    let mut sqlite_path = None;
+    let mut database_url = None;
+    let mut data_dir = None;
+    let mut index = 0;
+
+    while index < args.len() {
+        match args[index].as_str() {
+            "--sqlite" => {
+                index += 1;
+                sqlite_path = Some(required_option_value(args, index, "--sqlite")?.to_string());
+            }
+            "--database-url" => {
+                index += 1;
+                database_url =
+                    Some(required_option_value(args, index, "--database-url")?.to_string());
+            }
+            "--data-dir" => {
+                index += 1;
+                data_dir = Some(required_option_value(args, index, "--data-dir")?.to_string());
+            }
+            unknown => {
+                return Err(BootstrapError::Usage {
+                    reason: format!("unknown migrate sqlite-to-postgres option: {unknown}"),
+                });
+            }
+        }
+        index += 1;
+    }
+
+    let sqlite_path = sqlite_path.ok_or_else(|| BootstrapError::Usage {
+        reason: "migrate sqlite-to-postgres requires --sqlite <path>".to_string(),
+    })?;
+
+    Ok(Command::MigrateSqliteToPostgres {
+        sqlite_path,
+        database_url,
+        data_dir,
+    })
+}
+
+fn required_option_value<'a>(
+    args: &'a [String],
+    index: usize,
+    option: &str,
+) -> Result<&'a str, BootstrapError> {
+    args.get(index)
+        .map(|value| value.as_str())
+        .filter(|value| !value.starts_with("--"))
+        .ok_or_else(|| BootstrapError::Usage {
+            reason: format!("{option} requires a value"),
+        })
 }
 
 pub(super) fn parse_tui_command(args: &[String]) -> Result<Command, BootstrapError> {

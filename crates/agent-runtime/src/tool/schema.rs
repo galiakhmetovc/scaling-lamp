@@ -635,7 +635,7 @@ impl ToolName {
                 "type": "object",
                 "properties": {
                     "key": { "type": "string", "description": "Exact key inside the selected KV scope, for example state/current_task. Must not be empty." },
-                    "scope": { "type": ["string", "null"], "enum": ["operator", "agent", "agent_shared", "workspace", "session", null], "description": "KV scope. Defaults to workspace. Uses the same logical scopes as semantic memory but stores exact state in state.sqlite." }
+                    "scope": { "type": ["string", "null"], "enum": ["operator", "agent", "agent_shared", "workspace", "session", null], "description": "KV scope. Defaults to workspace. Uses the same logical scopes as semantic memory but stores exact state in the PostgreSQL-backed runtime store." }
                 },
                 "required": ["key"],
                 "additionalProperties": false,
@@ -676,7 +676,7 @@ impl ToolName {
             Self::KnowledgeSearch => json!({
                 "type": "object",
                 "properties": {
-                    "query": { "type": "string", "description": "SQLite FTS query terms for the configured canonical teamD docs/workspace knowledge index. Sources are only [knowledge].source_files/source_dirs inside the agent workspace; this is not arbitrary filesystem search, not SilverBullet, not Mem0, and not KV." },
+                    "query": { "type": "string", "description": "Plain search terms for the PostgreSQL full-text canonical teamD docs/workspace knowledge index. Sources are only [knowledge].source_files/source_dirs inside the agent workspace; this is not arbitrary filesystem search, not SilverBullet, not Mem0, and not KV." },
                     "limit": { "type": ["integer", "null"], "minimum": 1, "description": "Optional maximum number of search results to return" },
                     "offset": { "type": ["integer", "null"], "minimum": 0, "description": "Optional pagination offset" },
                     "kinds": {

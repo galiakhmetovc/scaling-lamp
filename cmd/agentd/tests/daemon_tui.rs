@@ -1073,7 +1073,8 @@ fn daemon_client_restarts_incompatible_local_daemon_build() {
                         job_count: 0,
                         components: 0,
                         data_dir: old_data_dir.clone(),
-                        state_db: format!("{old_data_dir}/state.sqlite"),
+                        database: None,
+                        state_db: Some(format!("{old_data_dir}/state.sqlite")),
                     })
                     .expect("serialize status");
                     let response = Response::from_string(payload)
@@ -1176,7 +1177,8 @@ fn daemon_client_restarts_local_daemon_when_data_dir_mismatches() {
                         job_count: 0,
                         components: 0,
                         data_dir: old_data_dir.clone(),
-                        state_db: format!("{old_data_dir}/state.sqlite"),
+                        database: None,
+                        state_db: Some(format!("{old_data_dir}/state.sqlite")),
                     })
                     .expect("serialize status");
                     let response = Response::from_string(payload)

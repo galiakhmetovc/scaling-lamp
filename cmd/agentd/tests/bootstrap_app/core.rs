@@ -52,91 +52,84 @@ fn runtime_status_snapshot_reports_counts_without_loading_full_execution_state()
     })
     .expect("build app");
 
-    let connection =
-        rusqlite::Connection::open(&app.persistence.stores.metadata_db).expect("open sqlite");
-    connection
-        .execute(
+    with_raw_postgres(&app, |client| {
+        client.execute(
             "INSERT INTO sessions (
                 id, title, prompt_override, settings_json, agent_profile_id,
                 active_mission_id, parent_session_id, parent_job_id, delegation_label,
                 created_at, updated_at
-            ) VALUES (?1, ?2, NULL, ?3, ?4, NULL, NULL, NULL, NULL, ?5, ?6)",
-            rusqlite::params![
-                "session-status",
-                "Status Session",
-                serde_json::to_string(&SessionSettings::default()).expect("serialize settings"),
-                "default",
-                10i64,
-                10i64
+            ) VALUES ($1, $2, NULL, $3, $4, NULL, NULL, NULL, NULL, $5, $6)",
+            &[
+                &"session-status",
+                &"Status Session",
+                &serde_json::to_string(&SessionSettings::default()).expect("serialize settings"),
+                &"default",
+                &10i64,
+                &10i64,
             ],
-        )
-        .expect("insert session");
-    connection
-        .execute(
+        )?;
+        client.execute(
             "INSERT INTO missions (
                 id, session_id, objective, status, execution_intent, schedule_json,
                 acceptance_json, created_at, updated_at, completed_at
-            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, NULL)",
-            rusqlite::params![
-                "mission-status",
-                "session-status",
-                "Count rows only",
-                MissionStatus::Ready.as_str(),
-                MissionExecutionIntent::Autonomous.as_str(),
-                serde_json::to_string(&MissionSchedule::once()).expect("serialize schedule"),
-                "[]",
-                11i64,
-                11i64
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NULL)",
+            &[
+                &"mission-status",
+                &"session-status",
+                &"Count rows only",
+                &MissionStatus::Ready.as_str(),
+                &MissionExecutionIntent::Autonomous.as_str(),
+                &serde_json::to_string(&MissionSchedule::once()).expect("serialize schedule"),
+                &"[]",
+                &11i64,
+                &11i64,
             ],
-        )
-        .expect("insert mission");
-    connection
-        .execute(
+        )?;
+        client.execute(
             "INSERT INTO runs (
                 id, session_id, mission_id, status, error, result, provider_usage_json,
                 active_processes_json, recent_steps_json, evidence_refs_json,
                 pending_approvals_json, provider_loop_json, delegate_runs_json,
                 started_at, updated_at, finished_at
-            ) VALUES (?1, ?2, ?3, ?4, NULL, NULL, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, NULL)",
-            rusqlite::params![
-                "run-status",
-                "session-status",
-                "mission-status",
-                RunStatus::Running.as_str(),
-                "null",
-                "[]",
-                "[]",
-                "[]",
-                "[]",
-                "{not-json",
-                "[]",
-                12i64,
-                12i64
+            ) VALUES ($1, $2, $3, $4, NULL, NULL, $5, $6, $7, $8, $9, $10, $11, $12, $13, NULL)",
+            &[
+                &"run-status",
+                &"session-status",
+                &"mission-status",
+                &RunStatus::Running.as_str(),
+                &"null",
+                &"[]",
+                &"[]",
+                &"[]",
+                &"[]",
+                &"{not-json",
+                &"[]",
+                &12i64,
+                &12i64,
             ],
-        )
-        .expect("insert run");
-    connection
-        .execute(
+        )?;
+        client.execute(
             "INSERT INTO jobs (
                 id, session_id, mission_id, run_id, parent_job_id, kind, status, input_json,
                 result_json, error, created_at, updated_at, started_at, finished_at,
                 attempt_count, max_attempts, lease_owner, lease_expires_at, heartbeat_at,
                 cancel_requested_at, last_progress_message, callback_json, callback_sent_at
-            ) VALUES (?1, ?2, ?3, ?4, NULL, ?5, ?6, ?7, NULL, NULL, ?8, ?9, NULL, NULL, 0, 3, NULL, NULL, NULL, NULL, NULL, ?10, NULL)",
-            rusqlite::params![
-                "job-status",
-                "session-status",
-                "mission-status",
-                "run-status",
-                agent_runtime::mission::JobKind::ChatTurn.as_str(),
-                agent_runtime::mission::JobStatus::Queued.as_str(),
-                r#"{"message":"status"}"#,
-                13i64,
-                13i64,
-                "{not-json"
+            ) VALUES ($1, $2, $3, $4, NULL, $5, $6, $7, NULL, NULL, $8, $9, NULL, NULL, 0, 3, NULL, NULL, NULL, NULL, NULL, $10, NULL)",
+            &[
+                &"job-status",
+                &"session-status",
+                &"mission-status",
+                &"run-status",
+                &agent_runtime::mission::JobKind::ChatTurn.as_str(),
+                &agent_runtime::mission::JobStatus::Queued.as_str(),
+                &r#"{"message":"status"}"#,
+                &13i64,
+                &13i64,
+                &"{not-json",
             ],
-        )
-        .expect("insert job");
+        )?;
+        Ok(())
+    });
 
     let status = app
         .runtime_status_snapshot()
@@ -467,25 +460,7 @@ fn session_summary_ignores_corrupt_unrelated_session_records() {
         })
         .expect("put good session");
 
-    let connection =
-        rusqlite::Connection::open(&app.persistence.stores.metadata_db).expect("open sqlite");
-    connection
-        .execute(
-            "INSERT INTO sessions (
-                id, title, prompt_override, settings_json, agent_profile_id,
-                active_mission_id, parent_session_id, parent_job_id, delegation_label,
-                created_at, updated_at
-            ) VALUES (?1, ?2, NULL, ?3, ?4, NULL, NULL, NULL, NULL, ?5, ?6)",
-            rusqlite::params![
-                "session-bad",
-                "Broken Session",
-                "{not-json",
-                "default",
-                11i64,
-                11i64
-            ],
-        )
-        .expect("insert corrupt session row");
+    insert_raw_session_with_settings(&app, "session-bad", "Broken Session", "{not-json", 11, 11);
 
     let summary = app
         .session_summary("session-good")
@@ -571,25 +546,7 @@ fn create_session_succeeds_even_with_corrupt_unrelated_session_records() {
     })
     .expect("build app");
 
-    let connection =
-        rusqlite::Connection::open(&app.persistence.stores.metadata_db).expect("open sqlite");
-    connection
-        .execute(
-            "INSERT INTO sessions (
-                id, title, prompt_override, settings_json, agent_profile_id,
-                active_mission_id, parent_session_id, parent_job_id, delegation_label,
-                created_at, updated_at
-            ) VALUES (?1, ?2, NULL, ?3, ?4, NULL, NULL, NULL, NULL, ?5, ?6)",
-            rusqlite::params![
-                "session-bad",
-                "Broken Session",
-                "{not-json",
-                "default",
-                11i64,
-                11i64
-            ],
-        )
-        .expect("insert corrupt session row");
+    insert_raw_session_with_settings(&app, "session-bad", "Broken Session", "{not-json", 11, 11);
 
     let summary = app
         .create_session("session-new", "Fresh Session")
@@ -641,49 +598,20 @@ fn pending_approvals_ignores_corrupt_unrelated_run_records() {
         .put_run(&RunRecord::try_from(run.snapshot()).expect("run record"))
         .expect("put good run");
 
-    let connection =
-        rusqlite::Connection::open(&app.persistence.stores.metadata_db).expect("open sqlite");
-    connection
-        .execute(
-            "INSERT INTO sessions (
-                id, title, prompt_override, settings_json, agent_profile_id,
-                active_mission_id, parent_session_id, parent_job_id, delegation_label,
-                created_at, updated_at
-            ) VALUES (?1, ?2, NULL, ?3, ?4, NULL, NULL, NULL, NULL, ?5, ?6)",
-            rusqlite::params![
-                "session-bad",
-                "Broken Session",
-                serde_json::to_string(&SessionSettings::default()).expect("serialize settings"),
-                "default",
-                11i64,
-                11i64
-            ],
-        )
-        .expect("insert unrelated session");
-    connection
-        .execute(
-            "INSERT INTO runs (
-                id, session_id, mission_id, status, error, result, provider_usage_json,
-                active_processes_json, recent_steps_json, evidence_refs_json,
-                pending_approvals_json, provider_loop_json, delegate_runs_json,
-                started_at, updated_at, finished_at
-            ) VALUES (?1, ?2, NULL, ?3, NULL, NULL, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, NULL)",
-            rusqlite::params![
-                "run-bad",
-                "session-bad",
-                "waiting_approval",
-                "null",
-                "[]",
-                "[]",
-                "[]",
-                "{not-json",
-                "null",
-                "[]",
-                12i64,
-                12i64
-            ],
-        )
-        .expect("insert corrupt unrelated run row");
+    insert_raw_session(&app, "session-bad", "Broken Session");
+    insert_raw_run_fixture(
+        &app,
+        RawRunFixture {
+            id: "run-bad",
+            session_id: "session-bad",
+            status: "waiting_approval",
+            provider_usage_json: "null",
+            pending_approvals_json: "{not-json",
+            provider_loop_json: "null",
+            started_at: 12,
+            updated_at: 12,
+        },
+    );
 
     let pending = app
         .pending_approvals("session-good")
@@ -722,25 +650,7 @@ fn list_session_summaries_ignores_corrupt_unrelated_session_records() {
         })
         .expect("put good session");
 
-    let connection =
-        rusqlite::Connection::open(&app.persistence.stores.metadata_db).expect("open sqlite");
-    connection
-        .execute(
-            "INSERT INTO sessions (
-                id, title, prompt_override, settings_json, agent_profile_id,
-                active_mission_id, parent_session_id, parent_job_id, delegation_label,
-                created_at, updated_at
-            ) VALUES (?1, ?2, NULL, ?3, ?4, NULL, NULL, NULL, NULL, ?5, ?6)",
-            rusqlite::params![
-                "session-bad",
-                "Broken Session",
-                "{not-json",
-                "default",
-                11i64,
-                11i64
-            ],
-        )
-        .expect("insert corrupt session row");
+    insert_raw_session_with_settings(&app, "session-bad", "Broken Session", "{not-json", 11, 11);
 
     let summaries = app
         .list_session_summaries()
@@ -847,32 +757,19 @@ fn list_session_summaries_uses_run_rollups_without_full_run_record_conversion() 
         })
         .expect("put good session");
 
-    let connection =
-        rusqlite::Connection::open(&app.persistence.stores.metadata_db).expect("open sqlite");
-    connection
-        .execute(
-            "INSERT INTO runs (
-                id, session_id, mission_id, status, error, result, provider_usage_json,
-                active_processes_json, recent_steps_json, evidence_refs_json,
-                pending_approvals_json, provider_loop_json, delegate_runs_json,
-                started_at, updated_at, finished_at
-            ) VALUES (?1, ?2, NULL, ?3, NULL, NULL, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, NULL)",
-            rusqlite::params![
-                "run-heavy",
-                "session-good",
-                agent_runtime::run::RunStatus::Running.as_str(),
-                r#"{"input_tokens":123,"output_tokens":9,"total_tokens":132}"#,
-                "[]",
-                "[]",
-                "[]",
-                r#"[{"id":"approval-1","tool_call_id":"tool-1","summary":"need approval","requested_at":12}]"#,
-                "{not-json",
-                "[]",
-                11i64,
-                12i64
-            ],
-        )
-        .expect("insert partially corrupt run row");
+    insert_raw_run_fixture(
+        &app,
+        RawRunFixture {
+            id: "run-heavy",
+            session_id: "session-good",
+            status: agent_runtime::run::RunStatus::Running.as_str(),
+            provider_usage_json: r#"{"input_tokens":123,"output_tokens":9,"total_tokens":132}"#,
+            pending_approvals_json: r#"[{"id":"approval-1","tool_call_id":"tool-1","summary":"need approval","requested_at":12}]"#,
+            provider_loop_json: "{not-json",
+            started_at: 11,
+            updated_at: 12,
+        },
+    );
 
     let summaries = app
         .list_session_summaries()
@@ -913,29 +810,20 @@ fn list_session_summaries_uses_job_counts_without_full_job_record_conversion() {
         })
         .expect("put good session");
 
-    let connection =
-        rusqlite::Connection::open(&app.persistence.stores.metadata_db).expect("open sqlite");
-    connection
-        .execute(
-            "INSERT INTO jobs (
-                id, session_id, mission_id, run_id, parent_job_id, kind, status, input_json,
-                result_json, error, created_at, updated_at, started_at, finished_at,
-                attempt_count, max_attempts, lease_owner, lease_expires_at, heartbeat_at,
-                cancel_requested_at, last_progress_message, callback_json, callback_sent_at
-            ) VALUES (?1, ?2, NULL, NULL, NULL, ?3, ?4, ?5, NULL, NULL, ?6, ?7, ?8, NULL, 0, 3, NULL, NULL, NULL, NULL, NULL, ?9, NULL)",
-            rusqlite::params![
-                "job-heavy",
-                "session-good",
-                agent_runtime::mission::JobKind::ChatTurn.as_str(),
-                agent_runtime::mission::JobStatus::Running.as_str(),
-                r#"{"message":"hello"}"#,
-                11i64,
-                12i64,
-                12i64,
-                "{not-json"
-            ],
-        )
-        .expect("insert partially corrupt job row");
+    insert_raw_job_fixture(
+        &app,
+        RawJobFixture {
+            id: "job-heavy",
+            session_id: "session-good",
+            kind: agent_runtime::mission::JobKind::ChatTurn.as_str(),
+            status: agent_runtime::mission::JobStatus::Running.as_str(),
+            input_json: r#"{"message":"hello"}"#,
+            callback_json: "{not-json",
+            created_at: 11,
+            updated_at: 12,
+            started_at: Some(12),
+        },
+    );
 
     let summaries = app
         .list_session_summaries()
@@ -976,32 +864,19 @@ fn session_summary_uses_run_rollups_without_full_run_record_conversion() {
         })
         .expect("put good session");
 
-    let connection =
-        rusqlite::Connection::open(&app.persistence.stores.metadata_db).expect("open sqlite");
-    connection
-        .execute(
-            "INSERT INTO runs (
-                id, session_id, mission_id, status, error, result, provider_usage_json,
-                active_processes_json, recent_steps_json, evidence_refs_json,
-                pending_approvals_json, provider_loop_json, delegate_runs_json,
-                started_at, updated_at, finished_at
-            ) VALUES (?1, ?2, NULL, ?3, NULL, NULL, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, NULL)",
-            rusqlite::params![
-                "run-heavy",
-                "session-good",
-                agent_runtime::run::RunStatus::Running.as_str(),
-                r#"{"input_tokens":123,"output_tokens":9,"total_tokens":132}"#,
-                "[]",
-                "[]",
-                "[]",
-                r#"[{"id":"approval-1","tool_call_id":"tool-1","summary":"need approval","requested_at":12}]"#,
-                "{not-json",
-                "[]",
-                11i64,
-                12i64
-            ],
-        )
-        .expect("insert partially corrupt run row");
+    insert_raw_run_fixture(
+        &app,
+        RawRunFixture {
+            id: "run-heavy",
+            session_id: "session-good",
+            status: agent_runtime::run::RunStatus::Running.as_str(),
+            provider_usage_json: r#"{"input_tokens":123,"output_tokens":9,"total_tokens":132}"#,
+            pending_approvals_json: r#"[{"id":"approval-1","tool_call_id":"tool-1","summary":"need approval","requested_at":12}]"#,
+            provider_loop_json: "{not-json",
+            started_at: 11,
+            updated_at: 12,
+        },
+    );
 
     let summary = app
         .session_summary("session-good")
@@ -2580,49 +2455,20 @@ fn session_transcript_ignores_corrupt_unrelated_run_records() {
         })
         .expect("put user transcript");
 
-    let connection =
-        rusqlite::Connection::open(&app.persistence.stores.metadata_db).expect("open sqlite");
-    connection
-        .execute(
-            "INSERT INTO sessions (
-                id, title, prompt_override, settings_json, agent_profile_id,
-                active_mission_id, parent_session_id, parent_job_id, delegation_label,
-                created_at, updated_at
-            ) VALUES (?1, ?2, NULL, ?3, ?4, NULL, NULL, NULL, NULL, ?5, ?6)",
-            rusqlite::params![
-                "session-bad",
-                "Broken Session",
-                serde_json::to_string(&SessionSettings::default()).expect("serialize settings"),
-                "default",
-                11i64,
-                11i64
-            ],
-        )
-        .expect("insert unrelated session");
-    connection
-        .execute(
-            "INSERT INTO runs (
-                id, session_id, mission_id, status, error, result, provider_usage_json,
-                active_processes_json, recent_steps_json, evidence_refs_json,
-                pending_approvals_json, provider_loop_json, delegate_runs_json,
-                started_at, updated_at, finished_at
-            ) VALUES (?1, ?2, NULL, ?3, NULL, NULL, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, NULL)",
-            rusqlite::params![
-                "run-bad",
-                "session-bad",
-                "running",
-                "null",
-                "[]",
-                "[]",
-                "[]",
-                "[]",
-                "{not-json",
-                "[]",
-                12i64,
-                12i64
-            ],
-        )
-        .expect("insert corrupt unrelated run row");
+    insert_raw_session(&app, "session-bad", "Broken Session");
+    insert_raw_run_fixture(
+        &app,
+        RawRunFixture {
+            id: "run-bad",
+            session_id: "session-bad",
+            status: "running",
+            provider_usage_json: "null",
+            pending_approvals_json: "[]",
+            provider_loop_json: "{not-json",
+            started_at: 12,
+            updated_at: 12,
+        },
+    );
 
     let transcript = app
         .session_transcript("session-good")
@@ -2677,49 +2523,20 @@ fn session_transcript_tail_limits_entries_and_ignores_corrupt_unrelated_run_reco
             .expect("put transcript");
     }
 
-    let connection =
-        rusqlite::Connection::open(&app.persistence.stores.metadata_db).expect("open sqlite");
-    connection
-        .execute(
-            "INSERT INTO sessions (
-                id, title, prompt_override, settings_json, agent_profile_id,
-                active_mission_id, parent_session_id, parent_job_id, delegation_label,
-                created_at, updated_at
-            ) VALUES (?1, ?2, NULL, ?3, ?4, NULL, NULL, NULL, NULL, ?5, ?6)",
-            rusqlite::params![
-                "session-bad",
-                "Broken Session",
-                serde_json::to_string(&SessionSettings::default()).expect("serialize settings"),
-                "default",
-                11i64,
-                11i64
-            ],
-        )
-        .expect("insert unrelated session");
-    connection
-        .execute(
-            "INSERT INTO runs (
-                id, session_id, mission_id, status, error, result, provider_usage_json,
-                active_processes_json, recent_steps_json, evidence_refs_json,
-                pending_approvals_json, provider_loop_json, delegate_runs_json,
-                started_at, updated_at, finished_at
-            ) VALUES (?1, ?2, NULL, ?3, NULL, NULL, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, NULL)",
-            rusqlite::params![
-                "run-bad",
-                "session-bad",
-                "running",
-                "null",
-                "[]",
-                "[]",
-                "[]",
-                "[]",
-                "{not-json",
-                "[]",
-                12i64,
-                12i64
-            ],
-        )
-        .expect("insert corrupt unrelated run row");
+    insert_raw_session(&app, "session-bad", "Broken Session");
+    insert_raw_run_fixture(
+        &app,
+        RawRunFixture {
+            id: "run-bad",
+            session_id: "session-bad",
+            status: "running",
+            provider_usage_json: "null",
+            pending_approvals_json: "[]",
+            provider_loop_json: "{not-json",
+            started_at: 12,
+            updated_at: 12,
+        },
+    );
 
     let transcript = app
         .session_transcript_tail("session-good", 2)

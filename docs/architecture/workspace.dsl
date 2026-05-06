@@ -95,7 +95,7 @@ workspace "teamD" "C4-модель архитектуры локальной с�
 
             executionNode = deploymentNode "Execution Node" "Машина или окружение, где запущен agentd daemon с Telegram long polling." "Linux/WSL/server" {
                 agentdTelegram = containerInstance executionMesh.agentd
-                localState = infrastructureNode "Local State" "SQLite metadata, payload files, config and .env for this node." "SQLite + files" "Resource Boundary"
+                localState = infrastructureNode "Local State" "PostgreSQL control-plane metadata, payload files, config and .env for this node." "PostgreSQL + files" "Resource Boundary"
                 localResources = infrastructureNode "Local Target Resources" "Workspace, filesystem, OS processes and local tools." "Local resources" "Resource Boundary"
             }
 

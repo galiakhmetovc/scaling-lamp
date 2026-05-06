@@ -160,7 +160,7 @@ Prompt получает только ссылку и summary, а не весь a
 
 `SilverBullet Session Mirror` — человекочитаемая Markdown page под `p/teamd-session-<session_id>.md`.
 
-Runtime пишет туда best-effort snapshot: plan, context summary, recent tool activity и artifacts. Mirror не является runtime source of truth и не заменяет SQLite/transcripts/artifacts/tool-call ledger.
+Runtime пишет туда best-effort snapshot: plan, context summary, recent tool activity и artifacts. Mirror не является runtime source of truth и не заменяет PostgreSQL/transcripts/artifacts/tool-call ledger.
 
 ## Инварианты, которые стоит закрепить
 

@@ -10,8 +10,7 @@ pub(crate) use mcp_ops::{render_mcp_connector_view, render_mcp_connectors_view};
 
 use crate::diagnostics::DiagnosticEventBuilder;
 use crate::store_retry::{
-    configure_sqlite_lock_retry, retry_store_sync, sqlite_lock_retry_attempts,
-    sqlite_lock_retry_delay,
+    configure_store_retry, retry_store_sync, store_retry_attempts, store_retry_delay,
 };
 use crate::{about::RuntimeReleaseUpdater, cli, execution, mcp::SharedMcpRegistry, prompting};
 use agent_persistence::{
@@ -65,7 +64,6 @@ pub enum BootstrapError {
     Recovery(recovery::RecoveryError),
     RecordConversion(RecordConversionError),
     RunTransition(RunTransitionError),
-    Sqlite(rusqlite::Error),
     Store(StoreError),
     Usage {
         reason: String,
@@ -219,7 +217,7 @@ pub struct RuntimeStatusSnapshot {
     pub job_count: usize,
     pub components: usize,
     pub data_dir: String,
-    pub state_db: String,
+    pub database: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -346,11 +344,9 @@ impl App {
     }
 
     pub fn store(&self) -> Result<PersistenceStore, BootstrapError> {
-        retry_store_sync(
-            sqlite_lock_retry_attempts(),
-            sqlite_lock_retry_delay(),
-            || PersistenceStore::open_runtime(&self.persistence),
-        )
+        retry_store_sync(store_retry_attempts(), store_retry_delay(), || {
+            PersistenceStore::open_runtime(&self.persistence)
+        })
         .map_err(BootstrapError::Store)
     }
 
@@ -364,7 +360,7 @@ impl App {
             job_count: store.count_jobs()?,
             components: self.runtime.component_count(),
             data_dir: self.config.data_dir.display().to_string(),
-            state_db: self.persistence.stores.metadata_db.display().to_string(),
+            database: agent_persistence::redacted_database_url(&self.config.database.url),
         })
     }
 
@@ -877,7 +873,6 @@ impl fmt::Display for BootstrapError {
                 write!(formatter, "record conversion error: {source}")
             }
             Self::RunTransition(source) => write!(formatter, "{source}"),
-            Self::Sqlite(source) => write!(formatter, "sqlite error: {source}"),
             Self::Store(source) => write!(formatter, "{source}"),
             Self::Usage { reason } => write!(formatter, "{reason}"),
         }
@@ -897,7 +892,6 @@ impl Error for BootstrapError {
             Self::Recovery(source) => Some(source),
             Self::RecordConversion(source) => Some(source),
             Self::RunTransition(source) => Some(source),
-            Self::Sqlite(source) => Some(source),
             Self::Store(source) => Some(source),
             Self::InvalidPath { .. } | Self::MissingRecord { .. } | Self::Usage { .. } => None,
         }
@@ -907,12 +901,6 @@ impl Error for BootstrapError {
 impl From<ConfigError> for BootstrapError {
     fn from(source: ConfigError) -> Self {
         Self::Config(source)
-    }
-}
-
-impl From<rusqlite::Error> for BootstrapError {
-    fn from(source: rusqlite::Error) -> Self {
-        Self::Sqlite(source)
     }
 }
 
@@ -961,7 +949,15 @@ where
     I: IntoIterator<Item = S>,
     S: AsRef<str>,
 {
-    if should_reconcile_recovery_for_args(args) {
+    let args = args
+        .into_iter()
+        .map(|value| value.as_ref().to_string())
+        .collect::<Vec<_>>();
+    if is_sqlite_to_postgres_migration_args(&args) {
+        let mut config = AppConfig::load()?;
+        apply_migration_bootstrap_overrides(&mut config, &args)?;
+        build_from_config_inner(config, false, false)
+    } else if should_reconcile_recovery_for_args(&args) {
         build()
     } else {
         build_without_recovery()
@@ -969,22 +965,23 @@ where
 }
 
 pub fn build_from_config(config: AppConfig) -> Result<App, BootstrapError> {
-    build_from_config_inner(config, true)
+    build_from_config_inner(config, true, true)
 }
 
 pub fn build_from_config_without_recovery(config: AppConfig) -> Result<App, BootstrapError> {
-    build_from_config_inner(config, false)
+    build_from_config_inner(config, false, true)
 }
 
 fn build_from_config_inner(
     config: AppConfig,
     reconcile_recovery: bool,
+    bootstrap_runtime_store: bool,
 ) -> Result<App, BootstrapError> {
     let started = Instant::now();
     config.validate()?;
-    configure_sqlite_lock_retry(
-        config.runtime_limits.sqlite_lock_retry_attempts,
-        config.runtime_timing.sqlite_lock_retry_delay_ms,
+    configure_store_retry(
+        config.runtime_limits.store_retry_attempts,
+        config.runtime_timing.store_retry_delay_ms,
     );
 
     let persistence = PersistenceScaffold::from_config(config.clone());
@@ -1003,10 +1000,12 @@ fn build_from_config_inner(
     .field("teamd_data_dir", std::env::var("TEAMD_DATA_DIR").ok())
     .emit(&persistence.audit);
     ensure_runtime_layout(&persistence)?;
-    if reconcile_recovery {
-        reconcile_recovery_state(&persistence)?;
-    } else {
-        initialize_metadata_schema(&persistence)?;
+    if bootstrap_runtime_store {
+        if reconcile_recovery {
+            reconcile_recovery_state(&persistence)?;
+        } else {
+            initialize_metadata_schema(&persistence)?;
+        }
     }
     let mcp = SharedMcpRegistry::from_runtime_timing(&config.runtime_timing);
 
@@ -1022,8 +1021,10 @@ fn build_from_config_inner(
         mcp,
         updater: RuntimeReleaseUpdater::github_default()?,
     };
-    app.ensure_builtin_agents_bootstrapped()?;
-    app.ensure_mcp_connectors_bootstrapped()?;
+    if bootstrap_runtime_store {
+        app.ensure_builtin_agents_bootstrapped()?;
+        app.ensure_mcp_connectors_bootstrapped()?;
+    }
     DiagnosticEventBuilder::new(
         &app.config,
         "info",
@@ -1067,6 +1068,52 @@ where
         .is_some_and(|arg| arg.as_ref() == "daemon")
 }
 
+fn is_sqlite_to_postgres_migration_args(args: &[String]) -> bool {
+    matches!(args, [scope, action, ..] if scope == "migrate" && action == "sqlite-to-postgres")
+}
+
+fn apply_migration_bootstrap_overrides(
+    config: &mut AppConfig,
+    args: &[String],
+) -> Result<(), BootstrapError> {
+    if !is_sqlite_to_postgres_migration_args(args) {
+        return Ok(());
+    }
+
+    let mut index = 2;
+    while index < args.len() {
+        match args[index].as_str() {
+            "--database-url" => {
+                let value = args.get(index + 1).ok_or_else(|| BootstrapError::Usage {
+                    reason: "--database-url requires a value".to_string(),
+                })?;
+                config.database.url = value.clone();
+                index += 2;
+            }
+            "--data-dir" => {
+                let value = args.get(index + 1).ok_or_else(|| BootstrapError::Usage {
+                    reason: "--data-dir requires a value".to_string(),
+                })?;
+                config.data_dir = PathBuf::from(value);
+                index += 2;
+            }
+            "--sqlite" => {
+                if args.get(index + 1).is_none() {
+                    return Err(BootstrapError::Usage {
+                        reason: "--sqlite requires a value".to_string(),
+                    });
+                }
+                index += 2;
+            }
+            _ => {
+                index += 1;
+            }
+        }
+    }
+
+    Ok(())
+}
+
 fn ensure_runtime_layout(persistence: &PersistenceScaffold) -> Result<(), BootstrapError> {
     let audit_dir = persistence
         .audit
@@ -1083,7 +1130,6 @@ fn ensure_runtime_layout(persistence: &PersistenceScaffold) -> Result<(), Bootst
     ensure_directory_target(&persistence.stores.transcripts_dir)?;
     ensure_directory_target(audit_dir)?;
 
-    ensure_file_target(&persistence.stores.metadata_db)?;
     ensure_file_target(&persistence.audit.path)?;
 
     create_directory(&persistence.config.data_dir)?;

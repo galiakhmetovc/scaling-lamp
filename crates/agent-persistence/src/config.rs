@@ -43,10 +43,24 @@ const DEFAULT_MEMORY_RECALL_MAX_QUERY_CHARS: usize = 512;
 const DEFAULT_MEMORY_RECALL_MAX_MEMORY_CHARS: usize = 800;
 const DEFAULT_OPERATOR_TIMEZONE: &str = "Europe/Moscow";
 const DEFAULT_SILVERBULLET_SPACE_DIR: &str = "/var/lib/teamd/knowledge/silverbullet/teamd";
+const DEFAULT_DATABASE_URL: &str = "postgresql://teamd@127.0.0.1:5432/teamd";
+const DEFAULT_DATABASE_CONNECT_TIMEOUT_SECONDS: u64 = 5;
+const DEFAULT_DATABASE_APPLICATION_NAME: &str = "teamd";
+
+pub fn redacted_database_url(url: &str) -> String {
+    let Some((scheme, rest)) = url.split_once("://") else {
+        return url.to_string();
+    };
+    let Some(at_index) = rest.find('@') else {
+        return url.to_string();
+    };
+    format!("{scheme}://<redacted>@{}", &rest[at_index + 1..])
+}
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct AppConfig {
     pub data_dir: PathBuf,
+    pub database: DatabaseConfig,
     pub daemon: DaemonConfig,
     pub telegram: TelegramConfig,
     pub permissions: PermissionConfig,
@@ -63,6 +77,14 @@ pub struct AppConfig {
     pub observability: ObservabilityConfig,
     pub runtime_timing: RuntimeTimingConfig,
     pub runtime_limits: RuntimeLimitsConfig,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(default)]
+pub struct DatabaseConfig {
+    pub url: String,
+    pub connect_timeout_seconds: u64,
+    pub application_name: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
@@ -250,8 +272,8 @@ pub struct ObservabilityConfig {
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(default)]
 pub struct RuntimeTimingConfig {
-    pub sqlite_busy_timeout_ms: u64,
-    pub sqlite_lock_retry_delay_ms: u64,
+    #[serde(alias = "sqlite_lock_retry_delay_ms")]
+    pub store_retry_delay_ms: u64,
     pub daemon_http_connect_timeout_ms: u64,
     pub daemon_http_request_timeout_ms: u64,
     pub a2a_http_connect_timeout_ms: u64,
@@ -277,7 +299,8 @@ pub struct RuntimeTimingConfig {
 #[serde(default)]
 pub struct RuntimeLimitsConfig {
     pub diagnostic_tail_lines: usize,
-    pub sqlite_lock_retry_attempts: usize,
+    #[serde(alias = "sqlite_lock_retry_attempts")]
+    pub store_retry_attempts: usize,
     pub active_run_step_tail_limit: usize,
     pub active_process_output_tail_max_bytes: usize,
     pub active_process_output_tail_max_lines: usize,
@@ -366,6 +389,9 @@ pub struct McpConnectorSeedConfig {
 pub struct ConfigEnv {
     pub config_path: Option<PathBuf>,
     pub data_dir_override: Option<PathBuf>,
+    pub database_url_override: Option<String>,
+    pub database_connect_timeout_override: Option<u64>,
+    pub database_application_name_override: Option<String>,
     pub daemon_bearer_token_override: Option<String>,
     pub daemon_bind_host_override: Option<String>,
     pub daemon_bind_port_override: Option<u16>,
@@ -470,6 +496,7 @@ pub enum ConfigError {
 #[derive(Debug, Clone, Deserialize)]
 struct FileConfig {
     data_dir: Option<PathBuf>,
+    database: Option<DatabaseConfig>,
     daemon: Option<DaemonConfig>,
     telegram: Option<TelegramConfig>,
     permissions: Option<PermissionConfig>,
@@ -499,6 +526,16 @@ impl Default for DaemonConfig {
             worker_lease_owner: "daemon".to_string(),
             a2a_peers: BTreeMap::new(),
             mcp_connectors: BTreeMap::new(),
+        }
+    }
+}
+
+impl Default for DatabaseConfig {
+    fn default() -> Self {
+        Self {
+            url: DEFAULT_DATABASE_URL.to_string(),
+            connect_timeout_seconds: DEFAULT_DATABASE_CONNECT_TIMEOUT_SECONDS,
+            application_name: DEFAULT_DATABASE_APPLICATION_NAME.to_string(),
         }
     }
 }
@@ -748,8 +785,7 @@ impl Default for ContextConfig {
 impl Default for RuntimeTimingConfig {
     fn default() -> Self {
         Self {
-            sqlite_busy_timeout_ms: 15_000,
-            sqlite_lock_retry_delay_ms: 250,
+            store_retry_delay_ms: 250,
             daemon_http_connect_timeout_ms: 2_000,
             daemon_http_request_timeout_ms: 5_000,
             a2a_http_connect_timeout_ms: 2_000,
@@ -774,12 +810,8 @@ impl Default for RuntimeTimingConfig {
 }
 
 impl RuntimeTimingConfig {
-    pub fn sqlite_busy_timeout(&self) -> Duration {
-        Duration::from_millis(self.sqlite_busy_timeout_ms)
-    }
-
-    pub fn sqlite_lock_retry_delay(&self) -> Duration {
-        Duration::from_millis(self.sqlite_lock_retry_delay_ms)
+    pub fn store_retry_delay(&self) -> Duration {
+        Duration::from_millis(self.store_retry_delay_ms)
     }
 
     pub fn daemon_http_connect_timeout(&self) -> Duration {
@@ -840,7 +872,7 @@ impl Default for RuntimeLimitsConfig {
     fn default() -> Self {
         Self {
             diagnostic_tail_lines: 80,
-            sqlite_lock_retry_attempts: 4,
+            store_retry_attempts: 4,
             active_run_step_tail_limit: 3,
             active_process_output_tail_max_bytes: 2 * 1024,
             active_process_output_tail_max_lines: 8,
@@ -1013,6 +1045,15 @@ impl ConfigEnv {
         Ok(Self {
             config_path: read_path_var("TEAMD_CONFIG", &dotenv)?,
             data_dir_override: read_path_var("TEAMD_DATA_DIR", &dotenv)?,
+            database_url_override: read_string_var("TEAMD_DATABASE_URL", &dotenv),
+            database_connect_timeout_override: read_u64_var(
+                "TEAMD_DATABASE_CONNECT_TIMEOUT_SECONDS",
+                &dotenv,
+            )?,
+            database_application_name_override: read_string_var(
+                "TEAMD_DATABASE_APPLICATION_NAME",
+                &dotenv,
+            ),
             daemon_bearer_token_override: read_string_var("TEAMD_DAEMON_BEARER_TOKEN", &dotenv),
             daemon_bind_host_override: read_string_var("TEAMD_DAEMON_BIND_HOST", &dotenv),
             daemon_bind_port_override: read_u16_var("TEAMD_DAEMON_BIND_PORT", &dotenv)?,
@@ -1222,6 +1263,10 @@ impl AppConfig {
                     .and_then(|config| config.data_dir.clone())
             })
             .unwrap_or_else(|| env.default_data_dir());
+        let mut database = file_config
+            .as_ref()
+            .and_then(|config| config.database.clone())
+            .unwrap_or_default();
         let mut daemon = file_config
             .as_ref()
             .and_then(|config| config.daemon.clone())
@@ -1333,6 +1378,15 @@ impl AppConfig {
         }
         if let Some(mode) = env.permission_mode_override.as_deref() {
             permissions.mode = parse_permission_mode(mode)?;
+        }
+        if let Some(url) = &env.database_url_override {
+            database.url = url.clone();
+        }
+        if let Some(seconds) = env.database_connect_timeout_override {
+            database.connect_timeout_seconds = seconds;
+        }
+        if let Some(application_name) = &env.database_application_name_override {
+            database.application_name = application_name.clone();
         }
         if let Some(limit) = env.session_working_memory_limit_override {
             session_defaults.working_memory_limit = limit;
@@ -1487,6 +1541,7 @@ impl AppConfig {
 
         let config = Self {
             data_dir,
+            database,
             daemon,
             telegram,
             permissions,
@@ -1529,6 +1584,25 @@ impl AppConfig {
                 reason: "must point to a directory",
             });
         }
+
+        if self.database.url.trim().is_empty() {
+            return Err(ConfigError::InvalidProviderValue {
+                name: "database.url",
+                value: self.database.url.clone(),
+                reason: "must not be empty",
+            });
+        }
+        if self.database.application_name.trim().is_empty() {
+            return Err(ConfigError::InvalidProviderValue {
+                name: "database.application_name",
+                value: self.database.application_name.clone(),
+                reason: "must not be empty",
+            });
+        }
+        validate_positive_u64_value(
+            "database.connect_timeout_seconds",
+            self.database.connect_timeout_seconds,
+        )?;
 
         if self.daemon.bind_host.trim().is_empty() {
             return Err(ConfigError::InvalidProviderValue {
@@ -1918,12 +1992,8 @@ impl AppConfig {
             self.memory_recall.max_memory_chars,
         )?;
         validate_positive_u64_value(
-            "runtime_timing.sqlite_busy_timeout_ms",
-            self.runtime_timing.sqlite_busy_timeout_ms,
-        )?;
-        validate_positive_u64_value(
-            "runtime_timing.sqlite_lock_retry_delay_ms",
-            self.runtime_timing.sqlite_lock_retry_delay_ms,
+            "runtime_timing.store_retry_delay_ms",
+            self.runtime_timing.store_retry_delay_ms,
         )?;
         validate_positive_u64_value(
             "runtime_timing.daemon_http_connect_timeout_ms",
@@ -2009,8 +2079,8 @@ impl AppConfig {
             self.runtime_limits.diagnostic_tail_lines,
         )?;
         validate_positive_usize_value(
-            "runtime_limits.sqlite_lock_retry_attempts",
-            self.runtime_limits.sqlite_lock_retry_attempts,
+            "runtime_limits.store_retry_attempts",
+            self.runtime_limits.store_retry_attempts,
         )?;
         validate_positive_usize_value(
             "runtime_limits.active_run_step_tail_limit",
@@ -2407,6 +2477,7 @@ fn load_file_config(path: &Path, required: bool) -> Result<FileConfig, ConfigErr
         Err(source) if !required && source.kind() == std::io::ErrorKind::NotFound => {
             return Ok(FileConfig {
                 data_dir: None,
+                database: None,
                 daemon: None,
                 telegram: None,
                 permissions: None,
@@ -2970,6 +3041,7 @@ impl Default for AppConfig {
     fn default() -> Self {
         Self {
             data_dir: default_data_dir(),
+            database: DatabaseConfig::default(),
             daemon: DaemonConfig::default(),
             telegram: TelegramConfig::default(),
             permissions: PermissionConfig::default(),

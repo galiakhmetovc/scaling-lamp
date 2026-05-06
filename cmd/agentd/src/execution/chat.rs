@@ -1,6 +1,7 @@
 use super::provider_completion::completion_continuation_messages;
 use super::provider_tool_dispatch::{ProviderToolCallInvocation, ProviderToolExecutionContext};
 use super::*;
+use crate::store_retry::{retry_store_sync, store_retry_attempts, store_retry_delay};
 use agent_runtime::interagent::AgentMessageChain;
 use agent_runtime::mission::{JobResult, MissionStatus};
 use agent_runtime::provider::{
@@ -91,11 +92,7 @@ impl ExecutionService {
         let mut run = RunEngine::new(run_id.clone(), session.id.clone(), None, now);
         let trace_context = RuntimeTraceContext::for_run(&run_id, trace_source.as_ref());
         run.start(now).map_err(ExecutionError::RunTransition)?;
-        store
-            .put_run(
-                &RunRecord::try_from(run.snapshot()).map_err(ExecutionError::RecordConversion)?,
-            )
-            .map_err(ExecutionError::Store)?;
+        self.persist_run(store, &run)?;
         self.record_run_trace(store, &trace_context, &run_id, &session.id, now)?;
 
         let user_entry = TranscriptEntry::user(
@@ -105,15 +102,11 @@ impl ExecutionService {
             message,
             now,
         );
-        store
-            .put_transcript(&TranscriptRecord::from(&user_entry))
-            .map_err(ExecutionError::Store)?;
+        self.put_transcript_with_retry(store, &TranscriptRecord::from(&user_entry))?;
         self.record_transcript_trace(store, &trace_context, &user_entry)?;
 
         session_record.updated_at = now;
-        store
-            .put_session(&session_record)
-            .map_err(ExecutionError::Store)?;
+        self.put_session_with_retry(store, &session_record)?;
 
         let response = match self.execute_provider_turn_loop(
             store,
@@ -160,9 +153,7 @@ impl ExecutionService {
             &response.output_text,
             assistant_at,
         );
-        store
-            .put_transcript(&TranscriptRecord::from(&assistant_entry))
-            .map_err(ExecutionError::Store)?;
+        self.put_transcript_with_retry(store, &TranscriptRecord::from(&assistant_entry))?;
         self.record_transcript_trace(store, &trace_context, &assistant_entry)?;
 
         self.run_memory_curator_after_chat_turn(
@@ -682,6 +673,28 @@ impl ExecutionService {
         self.record_transcript_trace(store, trace_context, &user_entry)
     }
 
+    fn put_session_with_retry(
+        &self,
+        store: &PersistenceStore,
+        record: &agent_persistence::SessionRecord,
+    ) -> Result<(), ExecutionError> {
+        retry_store_sync(store_retry_attempts(), store_retry_delay(), || {
+            store.put_session(record)
+        })
+        .map_err(ExecutionError::Store)
+    }
+
+    fn put_transcript_with_retry(
+        &self,
+        store: &PersistenceStore,
+        record: &TranscriptRecord,
+    ) -> Result<(), ExecutionError> {
+        retry_store_sync(store_retry_attempts(), store_retry_delay(), || {
+            store.put_transcript(record)
+        })
+        .map_err(ExecutionError::Store)
+    }
+
     fn record_run_trace(
         &self,
         store: &PersistenceStore,
@@ -690,9 +703,11 @@ impl ExecutionService {
         session_id: &str,
         now: i64,
     ) -> Result<(), ExecutionError> {
-        store
-            .put_trace_link(&trace_context.run_link(run_id, session_id, now))
-            .map_err(ExecutionError::Store)
+        let record = trace_context.run_link(run_id, session_id, now);
+        retry_store_sync(store_retry_attempts(), store_retry_delay(), || {
+            store.put_trace_link(&record)
+        })
+        .map_err(ExecutionError::Store)
     }
 
     fn record_transcript_trace(
@@ -701,19 +716,21 @@ impl ExecutionService {
         trace_context: &RuntimeTraceContext,
         entry: &TranscriptEntry,
     ) -> Result<(), ExecutionError> {
-        store
-            .put_trace_link(&trace_context.child_link(
-                "transcript",
-                &entry.id,
-                serde_json::json!({
-                    "session_id": entry.session_id,
-                    "run_id": entry.run_id,
-                    "role": entry.role.as_str(),
-                    "byte_len": entry.content.len(),
-                }),
-                entry.created_at,
-            ))
-            .map_err(ExecutionError::Store)
+        let record = trace_context.child_link(
+            "transcript",
+            &entry.id,
+            serde_json::json!({
+                "session_id": entry.session_id,
+                "run_id": entry.run_id,
+                "role": entry.role.as_str(),
+                "byte_len": entry.content.len(),
+            }),
+            entry.created_at,
+        );
+        retry_store_sync(store_retry_attempts(), store_retry_delay(), || {
+            store.put_trace_link(&record)
+        })
+        .map_err(ExecutionError::Store)
     }
 
     pub fn execute_background_approval_job(

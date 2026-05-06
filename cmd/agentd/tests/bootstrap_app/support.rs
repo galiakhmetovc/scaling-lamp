@@ -3,7 +3,8 @@ pub(crate) use agent_persistence::{
     ArtifactRepository, ConfigError, ContextOffloadRepository, ContextSummaryRepository,
     FileDeliveryRepository, JobRecord, JobRepository, MissionRecord, MissionRepository,
     PersistenceStore, PlanRecord, PlanRepository, RunRecord, RunRepository, SessionInboxRepository,
-    SessionRecord, SessionRepository, ToolCallRepository, TranscriptRepository, WorkspaceConfig,
+    SessionRecord, SessionRepository, StoreError, ToolCallRepository, TranscriptRepository,
+    WorkspaceConfig,
 };
 pub(crate) use agent_runtime::context::{
     ContextOffloadPayload, ContextOffloadRef, ContextOffloadSnapshot,
@@ -42,6 +43,126 @@ pub(crate) use std::thread;
 pub(crate) use std::time::Duration;
 
 const TEST_SERVER_READ_TIMEOUT: Duration = Duration::from_secs(15);
+
+pub(crate) fn with_raw_postgres<T>(
+    app: &agentd::bootstrap::App,
+    operation: impl FnOnce(&mut postgres::Client) -> Result<T, StoreError>,
+) -> T {
+    let store = PersistenceStore::open(&app.persistence).expect("open raw postgres store");
+    store
+        .with_postgres_client(operation)
+        .expect("execute raw postgres fixture")
+}
+
+pub(crate) fn insert_raw_session_with_settings(
+    app: &agentd::bootstrap::App,
+    id: &str,
+    title: &str,
+    settings_json: &str,
+    created_at: i64,
+    updated_at: i64,
+) {
+    with_raw_postgres(app, |client| {
+        client.execute(
+            "INSERT INTO sessions (
+                id, title, prompt_override, settings_json, agent_profile_id,
+                active_mission_id, parent_session_id, parent_job_id, delegation_label,
+                created_at, updated_at
+            ) VALUES ($1, $2, NULL, $3, $4, NULL, NULL, NULL, NULL, $5, $6)",
+            &[
+                &id,
+                &title,
+                &settings_json,
+                &"default",
+                &created_at,
+                &updated_at,
+            ],
+        )?;
+        Ok(())
+    });
+}
+
+pub(crate) fn insert_raw_session(app: &agentd::bootstrap::App, id: &str, title: &str) {
+    let settings_json =
+        serde_json::to_string(&SessionSettings::default()).expect("serialize settings");
+    insert_raw_session_with_settings(app, id, title, &settings_json, 11, 11);
+}
+
+pub(crate) struct RawRunFixture<'a> {
+    pub(crate) id: &'a str,
+    pub(crate) session_id: &'a str,
+    pub(crate) status: &'a str,
+    pub(crate) provider_usage_json: &'a str,
+    pub(crate) pending_approvals_json: &'a str,
+    pub(crate) provider_loop_json: &'a str,
+    pub(crate) started_at: i64,
+    pub(crate) updated_at: i64,
+}
+
+pub(crate) fn insert_raw_run_fixture(app: &agentd::bootstrap::App, fixture: RawRunFixture<'_>) {
+    with_raw_postgres(app, |client| {
+        client.execute(
+            "INSERT INTO runs (
+                id, session_id, mission_id, status, error, result, provider_usage_json,
+                active_processes_json, recent_steps_json, evidence_refs_json,
+                pending_approvals_json, provider_loop_json, delegate_runs_json,
+                started_at, updated_at, finished_at
+            ) VALUES ($1, $2, NULL, $3, NULL, NULL, $4, $5, $6, $7, $8, $9, $10, $11, $12, NULL)",
+            &[
+                &fixture.id,
+                &fixture.session_id,
+                &fixture.status,
+                &fixture.provider_usage_json,
+                &"[]",
+                &"[]",
+                &"[]",
+                &fixture.pending_approvals_json,
+                &fixture.provider_loop_json,
+                &"[]",
+                &fixture.started_at,
+                &fixture.updated_at,
+            ],
+        )?;
+        Ok(())
+    });
+}
+
+pub(crate) struct RawJobFixture<'a> {
+    pub(crate) id: &'a str,
+    pub(crate) session_id: &'a str,
+    pub(crate) kind: &'a str,
+    pub(crate) status: &'a str,
+    pub(crate) input_json: &'a str,
+    pub(crate) callback_json: &'a str,
+    pub(crate) created_at: i64,
+    pub(crate) updated_at: i64,
+    pub(crate) started_at: Option<i64>,
+}
+
+pub(crate) fn insert_raw_job_fixture(app: &agentd::bootstrap::App, fixture: RawJobFixture<'_>) {
+    with_raw_postgres(app, |client| {
+        client.execute(
+            "INSERT INTO jobs (
+                id, session_id, mission_id, run_id, parent_job_id, kind, status, input_json,
+                result_json, error, created_at, updated_at, started_at, finished_at,
+                attempt_count, max_attempts, lease_owner, lease_expires_at, heartbeat_at,
+                cancel_requested_at, last_progress_message, callback_json, callback_sent_at
+            ) VALUES ($1, $2, NULL, NULL, NULL, $3, $4, $5, NULL, NULL, $6, $7, $8, NULL, 0, 3, NULL, NULL, NULL, NULL, NULL, $9, NULL)",
+            &[
+                &fixture.id,
+                &fixture.session_id,
+                &fixture.kind,
+                &fixture.status,
+                &fixture.input_json,
+                &fixture.created_at,
+                &fixture.updated_at,
+                &fixture.started_at,
+                &fixture.callback_json,
+            ],
+        )?;
+        Ok(())
+    });
+}
 
 pub(crate) fn openai_stream_message_response(response_id: &str, text: &str) -> String {
     let text = serde_json::to_string(text).expect("serialize text");

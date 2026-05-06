@@ -16,6 +16,7 @@
 - если не хватает `pkg-config`, OpenSSL dev headers или C toolchain, ставит системные пакеты через доступный package manager;
 - проверяет `cargo`/`rustc`;
 - если Rust отсутствует или слишком старый для edition 2024, ставит/обновляет stable Rust через `rustup`;
+- если `TEAMD_DATABASE_URL` не задан, ставит/использует local PostgreSQL, создаёт роль/БД `teamd`, генерирует пароль и пишет URL в `/etc/teamd/teamd.env`;
 - собирает `agentd` в release mode;
 - ставит binary в `/opt/teamd/bin/agentd`;
 - регистрирует `agentd` в `PATH` через `/usr/local/bin/agentd`;
@@ -30,8 +31,9 @@
 
 ```bash
 TEAMD_TELEGRAM_BOT_TOKEN='123456789:test-token' \
+  TEAMD_DATABASE_URL='postgresql://teamd:secret@127.0.0.1:5432/teamd' \
   TEAMD_PROVIDER_API_KEY='zai-test-key' \
-  ./scripts/deploy-teamd.sh --dry-run --non-interactive --no-build --no-start
+  ./scripts/deploy-teamd.sh --dry-run --non-interactive --no-build --no-start --no-install-postgres
 ```
 
 Если Rust ставить автоматически нельзя, используйте:
@@ -55,10 +57,27 @@ sudo apt-get update
 sudo apt-get install -y pkg-config libssl-dev build-essential ca-certificates curl
 ```
 
+Если PostgreSQL ставить автоматически нельзя, заранее задайте внешний или уже созданный URL:
+
+```bash
+export TEAMD_DATABASE_URL='postgresql://teamd:password@127.0.0.1:5432/teamd'
+./scripts/deploy-teamd.sh --no-install-postgres
+```
+
+Для Ubuntu/Debian локальный PostgreSQL вручную:
+
+```bash
+sudo apt-get update
+sudo apt-get install -y postgresql postgresql-client
+sudo -u postgres psql -c "CREATE ROLE teamd LOGIN PASSWORD 'replace-with-password';"
+sudo -u postgres createdb -O teamd teamd
+```
+
 Если секреты уже есть в environment, можно запустить без интерактивного ввода:
 
 ```bash
 TEAMD_TELEGRAM_BOT_TOKEN='123456789:real-token' \
+  TEAMD_DATABASE_URL='postgresql://teamd:password@127.0.0.1:5432/teamd' \
   TEAMD_PROVIDER_API_KEY='real-provider-key' \
   ./scripts/deploy-teamd.sh --non-interactive
 ```
@@ -156,6 +175,10 @@ default_autoapprove = true
 inbound_queue_default_mode = "coalesce"
 inbound_coalesce_window_ms = 5000
 
+[database]
+connect_timeout_seconds = 5
+application_name = "teamd"
+
 [provider]
 kind = "zai_chat_completions"
 
@@ -163,7 +186,7 @@ kind = "zai_chat_completions"
 mode = "default"
 ```
 
-`telegram.bot_token` лучше не писать в `config.toml`; храните его в `.env` или в environment.
+`telegram.bot_token`, `provider.api_key` и `database.url` лучше не писать в `config.toml`; храните их в `.env`, `/etc/teamd/teamd.env` или environment.
 
 Параметры `*_send_min_interval_ms` задают delivery budget для Bot API:
 
