@@ -8,6 +8,8 @@ mod chat;
 mod context;
 #[path = "bootstrap_app/core.rs"]
 mod core;
+#[path = "bootstrap_app/delivery.rs"]
+mod delivery;
 #[path = "bootstrap_app/interagent.rs"]
 mod interagent;
 #[path = "bootstrap_app/mcp.rs"]

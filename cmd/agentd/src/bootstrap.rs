@@ -1,10 +1,15 @@
 mod agent_ops;
 mod context_ops;
+mod delivery_ops;
 mod execution_ops;
 mod mcp_ops;
 mod session_ops;
 
 pub use agent_ops::{AgentScheduleCreateOptions, AgentScheduleUpdatePatch, AgentScheduleView};
+pub use delivery_ops::{
+    DeliveryTargetCreateOptions, DeliveryTargetView, SessionOutputRouteCreateOptions,
+    SessionOutputRouteView,
+};
 pub use mcp_ops::{McpConnectorCreateOptions, McpConnectorUpdatePatch, McpConnectorView};
 pub(crate) use mcp_ops::{render_mcp_connector_view, render_mcp_connectors_view};
 
