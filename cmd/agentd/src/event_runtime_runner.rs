@@ -6,7 +6,7 @@ use crate::nats::NatsEventBus;
 use crate::telegram::backend::DaemonTelegramBackend;
 use crate::telegram::client::{TelegramClient, TelegramClientConfig};
 use crate::telegram::router::TelegramWorker;
-use agent_persistence::{EventRepository, audit::AuditLogConfig};
+use agent_persistence::{EventRepository, PersistenceStore, StoreError, audit::AuditLogConfig};
 use async_nats::jetstream::Message as JetStreamMessage;
 use futures_util::StreamExt;
 use serde_json::Value;
@@ -117,27 +117,30 @@ async fn publish_pending_outbox_once(
     bus: &NatsEventBus,
     now: i64,
 ) -> Result<(), String> {
-    let store = app.store().map_err(|error| error.to_string())?;
-    let outboxes = store
-        .claim_pending_event_outbox(OUTBOX_PUBLISH_BATCH, now)
-        .map_err(|error| error.to_string())?;
+    let outboxes = with_store(app, move |store| {
+        store.claim_pending_event_outbox(OUTBOX_PUBLISH_BATCH, now)
+    })
+    .await?;
     for outbox in outboxes {
         match bus
             .publish_json(&outbox.subject, &outbox.payload_json)
             .await
         {
-            Ok(()) => store
-                .mark_event_outbox_published(&outbox.outbox_id, now)
-                .map_err(|error| error.to_string())?,
+            Ok(()) => {
+                let outbox_id = outbox.outbox_id.clone();
+                with_store(app, move |store| {
+                    store.mark_event_outbox_published(&outbox_id, now)
+                })
+                .await?;
+            }
             Err(error) => {
                 let retry_at = now + retry_delay_seconds(outbox.attempt_count);
-                store
-                    .mark_event_outbox_pending_retry(
-                        &outbox.outbox_id,
-                        retry_at,
-                        &error.to_string(),
-                    )
-                    .map_err(|store_error| store_error.to_string())?;
+                let outbox_id = outbox.outbox_id.clone();
+                let error = error.to_string();
+                with_store(app, move |store| {
+                    store.mark_event_outbox_pending_retry(&outbox_id, retry_at, &error)
+                })
+                .await?;
             }
         }
     }
@@ -221,10 +224,9 @@ where
         ));
     }
 
-    let store = app.store().map_err(|error| error.to_string())?;
-    let Some(inbound) = store
-        .get_inbound_event(&envelope.payload_ref.id)
-        .map_err(|error| error.to_string())?
+    let inbound_event_id = envelope.payload_ref.id.clone();
+    let Some(inbound) =
+        with_store(app, move |store| store.get_inbound_event(&inbound_event_id)).await?
     else {
         return Err(format!(
             "inbound event {} not found",
@@ -236,12 +238,21 @@ where
     }
     let update = telegram_update_from_payload(&inbound.payload_json)?;
     match worker.handle_update(update).await {
-        Ok(()) => store
-            .mark_inbound_event_status(&inbound.event_id, "processed", None)
-            .map_err(|error| error.to_string()),
+        Ok(()) => {
+            let inbound_event_id = inbound.event_id.clone();
+            with_store(app, move |store| {
+                store.mark_inbound_event_status(&inbound_event_id, "processed", None)
+            })
+            .await
+        }
         Err(error) => {
             let message = error.to_string();
-            let _ = store.mark_inbound_event_status(&inbound.event_id, "failed", Some(&message));
+            let inbound_event_id = inbound.event_id.clone();
+            let error_message = message.clone();
+            let _ = with_store(app, move |store| {
+                store.mark_inbound_event_status(&inbound_event_id, "failed", Some(&error_message))
+            })
+            .await;
             Err(message)
         }
     }
@@ -266,6 +277,21 @@ fn log_event_runtime_error(app: &App, op: &str, error: &str) {
     )
     .error(error.to_string())
     .emit(&AuditLogConfig::from_config(&app.config));
+}
+
+async fn with_store<T, F>(app: &App, operation: F) -> Result<T, String>
+where
+    T: Send + 'static,
+    F: FnOnce(&PersistenceStore) -> Result<T, StoreError> + Send + 'static,
+{
+    let persistence = app.persistence.clone();
+    tokio::task::spawn_blocking(move || {
+        let store = PersistenceStore::open_runtime(&persistence)?;
+        operation(&store)
+    })
+    .await
+    .map_err(|error| error.to_string())?
+    .map_err(|error| error.to_string())
 }
 
 fn unix_timestamp() -> i64 {
