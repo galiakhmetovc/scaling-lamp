@@ -12,6 +12,8 @@ Status: approved baseline for implementation planning.
 - Router configuration is stored in PostgreSQL because it must later be editable from a web UI.
 - PostgreSQL remains the source of truth for durable state. JetStream transports events and provides backpressure/replay.
 - The session/runtime core remains canonical. Webhook, NATS, router and workers must not create a second chat path or a second prompt path.
+- Agent-agent and subagent work are one delegation plane. Subagent is bounded delegation with stricter context/tool/write-scope policy.
+- Delivery targets are routing/fan-out, not an agent interaction mechanism.
 
 ## Goal
 
@@ -30,6 +32,20 @@ The purpose is to make `teamD` a real MIMO runtime: one session can receive from
 - Do not introduce a special Telegram model loop.
 - Do not route Telegram updates directly into provider execution from the webhook handler.
 - Do not build the web UI in this phase.
+- Do not add an unbounded synchronous agent-agent RPC path.
+
+## Interaction Model
+
+The architecture has two planes:
+
+1. `Delegation`: agent -> agent and agent -> subagent.
+2. `Routing/Delivery`: session output -> delivery targets.
+
+`Subagent` is not a separate transport. It is delegation with bounded context, explicit write scope, limited tools, timeout and structured return format.
+
+`Delivery Target` is not agent communication. It is fan-out of already-created session outputs.
+
+Human-facing input remains conversational. Agent-facing input must be structured.
 
 ## High-Level Flow
 
@@ -174,6 +190,9 @@ updated_at BIGINT NOT NULL
 - `priority`
 - `output_targets`
 - `format_policy`
+- `tool_policy`
+- `retry_policy`
+- `quiet_hours`
 - `labels`
 
 ### `inbound_events`
@@ -195,6 +214,59 @@ received_at BIGINT NOT NULL
 published_at BIGINT
 error TEXT
 ```
+
+### `task_registry`
+
+Unified async work registry.
+
+Suggested fields:
+
+```text
+task_id TEXT PRIMARY KEY
+kind TEXT NOT NULL
+source_session_id TEXT
+owner_agent_id TEXT
+executor_agent_id TEXT
+parent_task_id TEXT
+status TEXT NOT NULL
+dependency_json TEXT NOT NULL DEFAULT '[]'
+context_ref_json TEXT NOT NULL DEFAULT '[]'
+result_ref_json TEXT
+retry_policy_json TEXT NOT NULL DEFAULT '{}'
+attempt_count BIGINT NOT NULL DEFAULT 0
+max_attempts BIGINT NOT NULL DEFAULT 1
+timeout_at BIGINT
+chain_id TEXT
+hop_count BIGINT
+max_hops BIGINT
+trace_id TEXT
+created_at BIGINT NOT NULL
+updated_at BIGINT NOT NULL
+started_at BIGINT
+finished_at BIGINT
+error TEXT
+```
+
+Task kinds:
+
+- `agent_task`
+- `delegate`
+- `schedule_fire`
+- `delivery`
+- `tool_background`
+- `webhook`
+
+Task status:
+
+- `queued`
+- `running`
+- `waiting_dependency`
+- `waiting_input`
+- `completed`
+- `failed`
+- `timed_out`
+- `cancelled`
+- `dead_lettered`
 
 ### `routed_events`
 
@@ -302,6 +374,26 @@ Recommended message envelope:
 
 NATS payloads should be small pointers or bounded normalized payloads. Large raw updates, files and artifacts stay in PostgreSQL/artifact storage.
 
+## Idempotency
+
+Every external or cross-worker event must have a deterministic `dedupe_key`.
+
+Examples:
+
+```text
+telegram:update:<update_id>
+schedule:<schedule_id>:<planned_fire_at>
+task:<task_id>:completed:<attempt>
+delivery:<route_id>:<output_event_id>
+```
+
+Rules:
+
+- duplicate inbound event returns existing event status;
+- duplicate routed event does not create a second session input;
+- duplicate output event does not send the same Telegram message twice for one route cursor;
+- dedupe is enforced in PostgreSQL, not only in JetStream consumers.
+
 ## Ack Rules
 
 - Webhook returns `200` only after the inbound event is durably stored and either published to JetStream or recorded in `event_outbox`.
@@ -309,6 +401,69 @@ NATS payloads should be small pointers or bounded normalized payloads. Large raw
 - Agent worker acks only after the canonical run state is durable.
 - Delivery worker acks only after delivery status is durable.
 - Poison events go to `TEAMD_DLQ` with reason and original event reference.
+
+## Error Handling
+
+Retryable failures:
+
+- transient NATS publish error;
+- transient Telegram send error;
+- temporary PostgreSQL connection error;
+- worker shutdown before ack.
+
+Non-retryable failures:
+
+- invalid webhook secret;
+- invalid event payload;
+- no matching route and no default route;
+- unauthorized operator/source;
+- invalid result contract from delegated task.
+
+Policies:
+
+- retryable events use exponential backoff with `max_attempts`;
+- non-retryable events go to `failed` or `dead_lettered` with a reason;
+- DLQ events retain original `event_id`, `trace_id`, `source_id` and payload ref;
+- delivery failure never rolls back a completed agent run;
+- route failure never deletes the inbound event.
+
+## Delegation, Dependencies And Chains
+
+Delegation creates `task_registry` entries and publishes task events.
+
+Parent execution must not block a worker thread while another agent runs. Dependencies are represented by:
+
+- `dependency_json` in `task_registry`;
+- `task_completed` events routed back into the parent session;
+- explicit bounded wait tools only when the model needs the result immediately.
+
+Chain metadata is mandatory for agent-agent hops:
+
+- `chain_id`;
+- `hop_count`;
+- `max_hops`.
+
+`grant_agent_chain_continuation` remains the explicit operator/runtime mechanism for increasing chain budget. Any worker that receives an event above `max_hops` must reject it as non-retryable and persist the error.
+
+## Context Isolation
+
+Agent-agent and subagent tasks do not receive the parent transcript by default.
+
+Allowed transfer:
+
+- `goal`;
+- `constraints`;
+- `expected_output`;
+- `bounded_context`;
+- `context_refs`;
+- `artifact_refs`;
+- `allowed_tools`;
+- `write_scope`;
+- `return_format`.
+
+For subagent code/file work, `write_scope` is required. Missing write scope is a validation error.
+
+Secrets and operator-private files are never copied into delegated context unless an explicit policy permits it.
 
 ## Router Rules
 
@@ -345,9 +500,16 @@ Session strategies:
 Queue policies:
 
 - `fifo`
+- `priority`
 - `coalesce`
 - `restart`
 - `reject`
+
+Priority mechanics:
+
+- implementation must choose and document whether lower or higher numeric priority wins;
+- ties are broken by `received_at`, then deterministic `event_id`;
+- critical monitoring alerts must be able to bypass routine chat messages.
 
 ## Deployment
 
@@ -408,4 +570,6 @@ Suggested phases:
 4. Add session input worker using the canonical chat path.
 5. Add output/delivery worker.
 6. Switch deploy stack from polling to webhook.
+7. Remove Telegram long polling worker after webhook runtime is stable.
 
+Compatibility rule during migration: there may be two transport adapters temporarily, but there must never be two session/runtime chat paths.

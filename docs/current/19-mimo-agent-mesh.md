@@ -52,21 +52,32 @@ Session хранит контекст, память, transcript, jobs, plan, art
 
 У session может быть много inputs и много outputs. Задача из Telegram group A может породить результат в Telegram group B, archive channel и webhook.
 
-4. Родитель не блокируется на делегации.
+4. Делегация не блокирует runtime.
 
-Любая agent-agent или delegate работа возвращает `task_id` сразу. Родитель продолжает обрабатывать входы. Результат возвращается через result bus и task registry.
+Любая agent-agent или delegate работа возвращает `task_id` сразу. Runtime не держит provider loop в ожидании чужой работы. Если агенту логически нужен результат до следующего шага, это выражается зависимостью task graph, callback event или явным `session_wait`, но не блокировкой worker thread и не скрытым synchronous RPC.
 
 5. Единое состояние session.
 
 Несколько каналов могут писать в одну session queue. Это не создаёт несколько prompt histories. Порядок обработки определяется queue policy.
 
-6. Modular monolith first.
+6. Контракт зависит от адресата.
+
+Для человека диалог остаётся первичным интерфейсом. Для agent-agent/subagent взаимодействий первичным является structured contract. Свободный текст между агентами допустим только как человекочитаемая часть payload, а не как единственный источник состояния.
+
+7. Modular monolith first, then JetStream.
 
 Phase 1 реализуется внутри текущего `agentd`: PostgreSQL + background worker + typed repositories. NATS или другая шина появляется только в Phase 2.
 
-## Три независимых механизма
+## Две плоскости взаимодействия
 
-### Agent -> Agent
+В архитектуре есть две основные плоскости:
+
+1. `Delegation`: agent -> agent и agent -> subagent.
+2. `Routing/Delivery`: session output -> delivery targets.
+
+`Subagent` не является отдельной шиной или третьим видом транспорта. Это bounded-режим делегации: отдельный контекст, ограниченный scope, явный return contract. `Delivery Target` тоже не является взаимодействием агентов; это fan-out результатов.
+
+### Delegation: Agent -> Agent
 
 Используется для асинхронной делегации между равноправными agent profiles.
 
@@ -85,6 +96,8 @@ agent_task {
   reply_policy,
   priority,
   timeout,
+  retry_policy,
+  fallback_policy,
   trace_id
 }
 ```
@@ -96,12 +109,13 @@ agent_task {
 - результат публикуется в result bus;
 - task registry обновляется независимо от того, читает ли родитель результат прямо сейчас;
 - родитель получает `task_completed` event в свою input queue или видит результат по `/tasks`.
+- зависимости между задачами хранятся в task registry/task graph, а не в call stack.
 
 Текущий `message_agent` близок к этому, но пока отдаёт `recipient_session_id`/`recipient_job_id`, а не единый `task_id`/result package contract.
 
-### Agent -> Subagent
+### Delegation: Agent -> Subagent
 
-Используется для рабочей подзадачи под контролем parent run.
+Используется для рабочей подзадачи под контролем parent run. Это специализация `agent_task`, а не отдельный механизм.
 
 Контракт:
 
@@ -116,6 +130,7 @@ delegate {
   write_scope,
   allowed_tools,
   timeout,
+  retry_policy,
   return_format
 }
 ```
@@ -127,10 +142,11 @@ delegate {
 - parent остаётся владельцем итогового ответа;
 - результат возвращается как package: `summary`, `changed_paths`, `artifact_refs`, `errors`, `next_actions`;
 - write scope обязателен для code/file tasks.
+- subagent видит только `bounded_context`, `context_refs` и разрешённые artifacts; полный transcript родителя не передаётся по умолчанию.
 
 Текущие `Delegate` jobs и `parent_session_id` уже дают основу, но нужны единый task registry и явное отображение результата.
 
-### Session -> Delivery Target
+### Routing/Delivery: Session -> Delivery Target
 
 Используется для маршрутизации результата во внешние каналы.
 
@@ -163,6 +179,18 @@ delivery_target {
 - доставка не меняет selected input session;
 - ошибка доставки не должна ломать run, она должна попадать в delivery/task status.
 
+## Зависимости и ожидание результатов
+
+Неблокирующая делегация не означает, что у задач нет зависимостей.
+
+Поддерживаются три модели:
+
+- `callback`: результат подзадачи публикуется как `task_completed` event в очередь родительской session;
+- `query`: оператор или агент читает task registry через `/tasks`, `/task <id>` или tool;
+- `wait`: агент явно вызывает bounded wait (`session_wait`/future task wait) с timeout, когда без результата нельзя продолжать.
+
+Правило: ожидание должно быть явным, ограниченным по timeout и видимым в task registry. Нельзя прятать ожидание внутри транспорта или webhook handler.
+
 ## Fan-in layer
 
 Input adapter принимает внешний сигнал и нормализует его в одно из:
@@ -170,14 +198,15 @@ Input adapter принимает внешний сигнал и нормализ
 ```text
 input_event {
   event_id,
+  dedupe_key,
   source_id,
   source_kind,
   session_id,
   operator_id,
   priority,
+  queue_policy,
   payload,
   metadata,
-  dedupe_key,
   created_at
 }
 ```
@@ -191,7 +220,21 @@ input_event {
 - task_completed event;
 - будущий NATS topic.
 
-Все inputs пишутся в session queue. Очередь имеет policy: `fifo`, `priority`, `coalesce`, `rate_limited`, `restart`.
+Все inputs пишутся в session queue, но не обязательно исполняются в порядке поступления. Очередь сортируется по:
+
+1. priority;
+2. created_at;
+3. deterministic event id.
+
+Queue policy задаёт поведение при активном run:
+
+- `fifo`: поставить в очередь;
+- `priority`: поставить в очередь с приоритетом;
+- `coalesce`: объединить сообщения в окне;
+- `restart`: прервать текущий run и начать новый;
+- `reject`: отказать с операторским статусом.
+
+Critical events, например monitoring alert severity=critical, должны иметь priority выше routine-запросов.
 
 ## Session Core
 
@@ -290,6 +333,14 @@ task_registry_entry {
   result_ref,
   error,
   delivery_state,
+  dependency_json,
+  retry_policy_json,
+  attempt_count,
+  max_attempts,
+  timeout_at,
+  chain_id,
+  hop_count,
+  max_hops,
   trace_id
 }
 ```
@@ -311,7 +362,22 @@ Status:
 - `completed`;
 - `failed`;
 - `cancelled`;
-- `blocked`.
+- `blocked`;
+- `timed_out`;
+- `dead_lettered`.
+
+Ошибки:
+
+- timeout переводит task в `timed_out`;
+- превышение retry policy переводит task в `failed` или `dead_lettered`;
+- invalid result contract сохраняется как `failed` с `result_validation_error`;
+- delivery failure не откатывает completed run, а создаёт failed delivery task/event.
+
+Chains:
+
+- `chain_id`, `hop_count`, `max_hops` остаются обязательными для agent-agent цепочек;
+- `grant_agent_chain_continuation` должен работать как явное увеличение budget по chain;
+- result events должны сохранять chain metadata, чтобы audit показывал путь задачи.
 
 Операторские команды:
 
@@ -352,7 +418,38 @@ Result bus обязан доставить событие:
 - в настроенные output routes;
 - в observability trace.
 
-В Phase 2 result bus может стать NATS:
+## Idempotency
+
+Каждый внешний input имеет `dedupe_key`.
+
+Примеры:
+
+- Telegram webhook: `telegram:update:<update_id>`;
+- schedule fire: `schedule:<schedule_id>:<planned_fire_at>`;
+- A2A/task callback: `task:<task_id>:completed:<attempt>`;
+- delivery: `delivery:<route_id>:<output_event_id>`.
+
+Повторный input с тем же `dedupe_key` не создаёт новый run. Он возвращает существующий event/task status.
+
+JetStream ack не является source of truth. Ack выполняется только после durable write в PostgreSQL.
+
+## Context Isolation
+
+Agent-agent и subagent work не получают полный контекст родителя по умолчанию.
+
+Передаются только:
+
+- `goal`;
+- `constraints`;
+- `bounded_context`;
+- `context_refs`;
+- `allowed_tools`;
+- `write_scope`;
+- `return_format`.
+
+Доступ к секретам, workspace и artifacts должен быть явно разрешён. Для subagent code/file tasks `write_scope` обязателен.
+
+В Phase 2 result bus переносится на NATS JetStream:
 
 - `teamd.session.<id>.input`;
 - `teamd.task.<id>.events`;
@@ -412,17 +509,31 @@ schedule_create {
 
 Цель: вынести result bus/input bus на шину без переписывания core.
 
-Рекомендуемая шина: NATS.
+Шина: NATS JetStream.
 
 Причины:
 
 - простая операционная модель;
-- lightweight pub/sub;
+- lightweight pub/sub и queue consumers;
 - request/reply;
-- JetStream для durability;
+- JetStream для durability, ack/replay/backpressure;
 - хорошая fit-модель для локального mesh и нескольких узлов.
 
-На этом этапе PostgreSQL остаётся source of truth, а NATS — delivery/notification backbone.
+На этом этапе PostgreSQL остаётся source of truth, а NATS — обязательный event backbone. Telegram long polling заменяется на webhook ingress внутри `agentd`; webhook только сохраняет/publish input event и не запускает модель напрямую.
+
+Phase 2 data flow:
+
+```text
+Telegram webhook
+  -> inbound_events
+  -> NATS teamd.input.telegram
+  -> rule router
+  -> routed_events
+  -> NATS teamd.session.<session_id>.input
+  -> session worker
+  -> NATS teamd.session.<session_id>.output
+  -> delivery worker
+```
 
 ### Phase 3: Autonomous Mesh
 
@@ -445,6 +556,20 @@ schedule_create {
 - Не делаем route expression language до registry/output routes.
 - Не даём subagent прямой доступ писать пользователю.
 - Не смешиваем session state и delivery target state.
+
+## Миграция от Telegram-centric runtime
+
+Переход должен быть staged, но без второго chat path:
+
+1. Ввести event/router таблицы и NATS health без изменения текущего поведения.
+2. Включить webhook ingress в тестовом окружении и проверить dedupe по Telegram `update_id`.
+3. Подключить rule router, который воспроизводит текущую привязку private chat -> selected session/default agent.
+4. Подключить session worker к canonical App/runtime chat path.
+5. Подключить delivery worker к существующим `delivery_targets`/`session_output_routes`.
+6. Перевести production Telegram bot с long polling на webhook.
+7. Удалить polling worker как legacy после стабилизации webhook runtime.
+
+На каждом шаге invariant: один session transcript, один provider loop, один prompt assembly path.
 
 ## Открытые решения
 

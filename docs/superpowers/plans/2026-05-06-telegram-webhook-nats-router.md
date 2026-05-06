@@ -29,12 +29,13 @@ Expected files to create or modify:
 - Modify `crates/agent-persistence/src/repository.rs`: add repository traits.
 - Create `crates/agent-persistence/src/store/event_repos.rs`: inbound/routed/outbox/delivery repository implementation.
 - Create `crates/agent-persistence/src/store/router_repos.rs`: router rule repository implementation.
+- Create `crates/agent-persistence/src/store/task_registry_repos.rs`: async task registry implementation.
 - Modify `crates/agent-persistence/src/store.rs`: export new repositories.
 - Create `cmd/agentd/src/nats.rs`: NATS JetStream connection, stream bootstrap, publish/subscribe helpers.
 - Create `cmd/agentd/src/event_bus.rs`: canonical event envelopes and publishing interfaces.
 - Create `cmd/agentd/src/telegram/webhook.rs`: Telegram webhook parsing and ingress handler.
 - Modify `cmd/agentd/src/http/router.rs` or equivalent HTTP route module: add webhook endpoint.
-- Create `cmd/agentd/src/router_worker.rs`: rule-based router consumer.
+- Create `cmd/agentd/src/router_worker.rs`: rule-based router consumer with priority and DLQ behavior.
 - Create `cmd/agentd/src/session_worker.rs`: session input consumer that invokes canonical chat execution.
 - Create `cmd/agentd/src/delivery_worker.rs`: output consumer that sends Telegram delivery.
 - Modify `cmd/agentd/src/telegram.rs`: disable long polling in webhook mode and start webhook/event workers.
@@ -113,6 +114,7 @@ git commit -m "feat: require nats for webhook event runtime"
 - Modify `crates/agent-persistence/src/repository.rs`
 - Create `crates/agent-persistence/src/store/event_repos.rs`
 - Create `crates/agent-persistence/src/store/router_repos.rs`
+- Create `crates/agent-persistence/src/store/task_registry_repos.rs`
 - Modify `crates/agent-persistence/src/store.rs`
 - Tests: `crates/agent-persistence/src/store/tests/event_bus.rs`
 
@@ -125,6 +127,7 @@ Test cases:
 - routed event round-trips by id;
 - outbox event can be claimed and marked published;
 - delivery event status can be updated.
+- task registry records agent_task/delegate status, dependencies, retry policy, chain metadata and result refs.
 
 Run:
 
@@ -142,6 +145,7 @@ Add tables:
 - `routed_events`
 - `event_outbox`
 - `event_deliveries`
+- `task_registry`
 
 Use the field set from the design spec.
 
@@ -184,6 +188,7 @@ Test cases:
 - stream subjects are computed correctly;
 - message envelope includes `event_id`, `trace_id`, `source_kind`, `source_id`, `payload_ref`;
 - publish errors are surfaced without marking outbox published.
+- DLQ envelope includes original event ref and failure reason.
 
 - [ ] **Step 2: Add NATS client wrapper**
 
@@ -192,6 +197,7 @@ Use an async NATS crate with JetStream support. The wrapper must:
 - connect to configured NATS URL;
 - create/verify required streams;
 - publish JSON envelopes;
+- publish DLQ envelopes;
 - expose consumer subscription helpers.
 
 - [ ] **Step 3: Add optional integration test gated by env**
@@ -215,6 +221,40 @@ git add cmd/agentd/src/nats.rs cmd/agentd/src/event_bus.rs cmd/agentd/tests/nats
 git commit -m "feat: add nats jetstream event bus"
 ```
 
+## Task 3.5: Error Policy And Dead Letter Semantics
+
+**Files:**
+
+- Create `cmd/agentd/src/event_errors.rs`
+- Modify `cmd/agentd/src/event_bus.rs`
+- Tests: `cmd/agentd/tests/event_error_policy.rs`
+
+- [ ] **Step 1: Write failing policy tests**
+
+Test cases:
+
+- transient NATS/Telegram/Postgres errors are retryable;
+- invalid webhook secret, invalid payload and unauthorized source are non-retryable;
+- exceeding `max_attempts` produces a DLQ event;
+- DLQ event preserves `event_id`, `trace_id`, `source_id`, payload ref and reason.
+
+- [ ] **Step 2: Implement shared event error classification**
+
+Workers must use one shared classification instead of ad-hoc string matching.
+
+- [ ] **Step 3: Run tests**
+
+```bash
+cargo test -p agentd --test event_error_policy
+```
+
+- [ ] **Step 4: Commit**
+
+```bash
+git add cmd/agentd/src/event_errors.rs cmd/agentd/src/event_bus.rs cmd/agentd/tests/event_error_policy.rs
+git commit -m "feat: add event runtime error policy"
+```
+
 ## Task 4: Telegram Webhook Ingress
 
 **Files:**
@@ -231,6 +271,7 @@ Test cases:
 - wrong secret returns unauthorized/forbidden and does not persist event;
 - valid update stores exactly one inbound event;
 - repeated Telegram `update_id` is deduped;
+- duplicate update returns success without creating a second run or second routed event;
 - valid update publishes one JetStream envelope or outbox row;
 - webhook handler does not execute a chat turn.
 
@@ -290,7 +331,9 @@ Test cases:
 - operator rule applies when no chat rule matches;
 - global default applies last;
 - higher priority rule wins;
+- priority tie breaks by `received_at`, then deterministic `event_id`;
 - disabled rules are ignored;
+- no matching route without default writes non-retryable route failure;
 - routed event is persisted before publishing session input.
 
 - [ ] **Step 2: Implement route resolution**
@@ -304,6 +347,8 @@ queue_policy
 priority
 output_targets
 format_policy
+tool_policy
+retry_policy
 labels
 matched_rule_id
 ```
@@ -311,6 +356,8 @@ matched_rule_id
 - [ ] **Step 3: Implement worker**
 
 Consume `teamd.input.*`, load inbound event by payload ref, resolve route, persist `routed_events`, publish `teamd.session.<session_id>.input`.
+
+For unauthorized/no-route/invalid-policy cases, persist failure and publish DLQ according to `event_errors`.
 
 - [ ] **Step 4: Run tests**
 
@@ -342,6 +389,8 @@ Test cases:
 - records assistant transcript from provider response;
 - does not know Telegram chat id;
 - publishes session output event after durable transcript write.
+- creates/updates task registry entry for session work;
+- explicit task dependencies can leave work in `waiting_dependency` instead of running immediately.
 
 - [ ] **Step 2: Implement input conversion**
 
@@ -350,6 +399,8 @@ Convert routed event payload into the same input format used by current CLI/TUI/
 - [ ] **Step 3: Implement worker loop**
 
 Ack only after durable run/transcript state and output event publish/outbox.
+
+Do not pass parent agent transcripts into delegated task context unless the routed payload contains explicit `context_refs` or `bounded_context`.
 
 - [ ] **Step 4: Run tests**
 
@@ -484,6 +535,9 @@ Assertions:
 - one delivery;
 - trace ids present across events;
 - duplicate webhook update does not duplicate run.
+- task registry shows completed session work;
+- route decision is explainable by matched rule id;
+- DLQ remains empty for the happy path.
 
 - [ ] **Step 2: Add optional real NATS e2e**
 
@@ -507,4 +561,3 @@ git push
 ```
 
 Do not deploy to production unless the operator explicitly asks for deployment.
-
