@@ -29,6 +29,10 @@ pub(super) fn handle_status(app: &App, request: Request) -> std::io::Result<()> 
         components: status_snapshot.components,
         data_dir: status_snapshot.data_dir,
         database: Some(status_snapshot.database),
+        telegram_mode: app.config.telegram.mode.clone(),
+        event_bus_required: app.config.event_bus.required,
+        event_bus_backend: app.config.event_bus.backend.clone(),
+        event_bus_nats_configured: app.config.event_bus.nats_url.is_some(),
     };
     respond_json(request, StatusCode(200), &response)
 }

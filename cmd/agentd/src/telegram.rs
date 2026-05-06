@@ -28,6 +28,16 @@ pub(crate) fn run(app: &App) -> Result<(), BootstrapError> {
             reason: "telegram is disabled in config".to_string(),
         });
     }
+    let plan = crate::event_runtime::build_event_runtime_plan(&app.config).map_err(|error| {
+        BootstrapError::Usage {
+            reason: error.to_string(),
+        }
+    })?;
+    if !plan.starts_telegram_polling {
+        return Err(BootstrapError::Usage {
+            reason: "telegram.mode=webhook is served by the daemon event runtime; long polling is disabled".to_string(),
+        });
+    }
 
     let token = app
         .config

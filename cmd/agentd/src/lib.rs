@@ -8,6 +8,7 @@ pub mod delivery_worker;
 pub mod diagnostics;
 pub mod event_bus;
 pub mod event_errors;
+pub mod event_runtime;
 pub mod execution;
 pub mod help;
 pub mod http;

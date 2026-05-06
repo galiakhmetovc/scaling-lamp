@@ -34,7 +34,9 @@ PROVIDER_KIND=${TEAMD_PROVIDER_KIND:-zai_chat_completions}
 PROVIDER_API_BASE=${TEAMD_PROVIDER_API_BASE:-https://api.z.ai/api/coding/paas/v4}
 PROVIDER_MODEL=${TEAMD_PROVIDER_MODEL:-glm-5-turbo}
 TELEGRAM_TOKEN=${TEAMD_TELEGRAM_BOT_TOKEN:-}
+TELEGRAM_MODE=${TEAMD_TELEGRAM_MODE:-polling}
 PROVIDER_KEY=${TEAMD_PROVIDER_API_KEY:-}
+NATS_URL=${TEAMD_NATS_URL:-nats://127.0.0.1:4222}
 DATABASE_URL=${TEAMD_DATABASE_URL:-}
 DATABASE_NAME=${TEAMD_DATABASE_NAME:-teamd}
 DATABASE_USER=${TEAMD_DATABASE_USER:-teamd}
@@ -74,6 +76,8 @@ Options:
 
 Environment overrides:
   TEAMD_TELEGRAM_BOT_TOKEN       Telegram bot token.
+  TEAMD_TELEGRAM_MODE            Telegram runtime mode: polling or webhook, default: $TELEGRAM_MODE.
+  TEAMD_NATS_URL                 NATS JetStream URL for event runtime, default: $NATS_URL.
   TEAMD_PROVIDER_API_KEY         Z.ai/API provider key.
   TEAMD_PROVIDER_KIND            Provider kind, default: $PROVIDER_KIND.
   TEAMD_PROVIDER_API_BASE        Provider API base, default: $PROVIDER_API_BASE.
@@ -676,8 +680,19 @@ worker_lease_owner = "daemon"
 connect_timeout_seconds = 5
 application_name = "teamd"
 
+[event_bus]
+required = false
+backend = "nats_jetstream"
+nats_url = "$NATS_URL"
+input_stream = "TEAMD_INPUT"
+session_stream = "TEAMD_SESSION"
+delivery_stream = "TEAMD_DELIVERY"
+task_stream = "TEAMD_TASKS"
+dlq_stream = "TEAMD_DLQ"
+
 [telegram]
 enabled = true
+mode = "$TELEGRAM_MODE"
 poll_interval_ms = 1000
 poll_request_timeout_seconds = 50
 progress_update_min_interval_ms = 1250

@@ -30,6 +30,10 @@ pub struct StatusResponse {
     pub data_dir: String,
     #[serde(default)]
     pub database: Option<String>,
+    pub telegram_mode: String,
+    pub event_bus_required: bool,
+    pub event_bus_backend: String,
+    pub event_bus_nats_configured: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
