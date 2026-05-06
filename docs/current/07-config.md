@@ -500,8 +500,9 @@ export TEAMD_MEM0_COLLECTION_NAME='teamd_memories_fastembed_384'
 - `silverbullet_mirror_enabled` — включает best-effort запись runtime mirror pages в SilverBullet Space.
 - `silverbullet_session_area_path` — относительный путь index page для зеркал сессий.
 - `silverbullet_text_artifact_extensions` и `silverbullet_script_artifact_extensions` — какие artifact-файлы можно inline'ить в mirror page как текст/скрипт.
-- `source_files`, `source_dirs`, `allowed_extensions` — канонические корни для `knowledge_search`/`knowledge_read`. Это больше не зашито в коде: можно менять, какие файлы и папки workspace индексируются как project knowledge.
+- `source_files`, `source_dirs`, `allowed_extensions`, `max_file_bytes` — канонические корни и размерный лимит для `knowledge_search`/`knowledge_read`. Это больше не зашито в коде: можно менять, какие файлы и папки workspace индексируются как project knowledge.
 - `knowledge_search` использует PostgreSQL full-text search только по этим configured roots. Это не произвольный filesystem search; если в root попал недоступный файл, индексатор пропускает его, а не валит весь tool.
+- `max_file_bytes` защищает daemon от индексации больших generated outputs вроде `result.json`; такие файлы нужно читать через filesystem/artifact tools, а не через global FTS.
 
 Default:
 
@@ -519,6 +520,7 @@ silverbullet_text_artifact_extensions = [
 ]
 silverbullet_script_artifact_extensions = ["bash", "js", "lua", "py", "rs", "sh", "ts"]
 allowed_extensions = ["md", "txt", "json", "yaml", "yml", "toml"]
+max_file_bytes = 1048576
 
 [[knowledge.source_files]]
 path = "README.md"

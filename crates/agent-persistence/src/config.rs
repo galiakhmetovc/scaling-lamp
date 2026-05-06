@@ -200,6 +200,7 @@ pub struct KnowledgeConfig {
     pub source_files: Vec<KnowledgeSourcePathConfig>,
     pub source_dirs: Vec<KnowledgeSourcePathConfig>,
     pub allowed_extensions: Vec<String>,
+    pub max_file_bytes: usize,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
@@ -474,6 +475,7 @@ pub struct ConfigEnv {
     pub memory_recall_max_memory_chars_override: Option<usize>,
     pub daemon_mcp_maintenance_interval_seconds_override: Option<u64>,
     pub daemon_memory_maintenance_interval_seconds_override: Option<u64>,
+    pub knowledge_max_file_bytes_override: Option<usize>,
     pub operator_timezone_override: Option<String>,
     pub silverbullet_space_dir_override: Option<PathBuf>,
     pub silverbullet_base_url_override: Option<String>,
@@ -709,6 +711,7 @@ impl Default for KnowledgeConfig {
                 "yml".to_string(),
                 "toml".to_string(),
             ],
+            max_file_bytes: 1_048_576,
         }
     }
 }
@@ -1260,6 +1263,10 @@ impl ConfigEnv {
                 "TEAMD_DAEMON_MEMORY_MAINTENANCE_INTERVAL_SECONDS",
                 &dotenv,
             )?,
+            knowledge_max_file_bytes_override: read_usize_var(
+                "TEAMD_KNOWLEDGE_MAX_FILE_BYTES",
+                &dotenv,
+            )?,
             operator_timezone_override: read_string_var("TEAMD_OPERATOR_TIMEZONE", &dotenv),
             silverbullet_space_dir_override: read_path_var(
                 "TEAMD_SILVERBULLET_SPACE_DIR",
@@ -1652,6 +1659,9 @@ impl AppConfig {
         if let Some(seconds) = env.daemon_memory_maintenance_interval_seconds_override {
             runtime_timing.daemon_memory_maintenance_interval_seconds = seconds;
         }
+        if let Some(max_file_bytes) = env.knowledge_max_file_bytes_override {
+            knowledge.max_file_bytes = max_file_bytes;
+        }
         if let Some(timezone) = &env.operator_timezone_override {
             knowledge.operator_timezone = timezone.clone();
         }
@@ -2012,6 +2022,7 @@ impl AppConfig {
             "knowledge.allowed_extensions",
             &self.knowledge.allowed_extensions,
         )?;
+        validate_positive_usize_value("knowledge.max_file_bytes", self.knowledge.max_file_bytes)?;
         if self.observability.otlp_endpoint.trim().is_empty() {
             return Err(ConfigError::InvalidProviderValue {
                 name: "observability.otlp_endpoint",

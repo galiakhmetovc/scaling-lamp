@@ -74,6 +74,7 @@ fn base_env(root: &Path) -> ConfigEnv {
         memory_recall_max_memory_chars_override: None,
         daemon_mcp_maintenance_interval_seconds_override: None,
         daemon_memory_maintenance_interval_seconds_override: None,
+        knowledge_max_file_bytes_override: None,
         operator_timezone_override: None,
         silverbullet_space_dir_override: None,
         silverbullet_base_url_override: None,
@@ -654,6 +655,7 @@ silverbullet_session_area_path = "areas/agents.md"
 silverbullet_text_artifact_extensions = ["md", "txt"]
 silverbullet_script_artifact_extensions = ["sh", "py"]
 allowed_extensions = ["md", "txt"]
+max_file_bytes = 2048
 
 [[knowledge.source_files]]
 path = "README.md"
@@ -675,6 +677,7 @@ kind = "project_note"
     env.silverbullet_base_url_override = Some("https://env.example/sb".to_string());
     env.silverbullet_journal_context_enabled_override = Some(true);
     env.silverbullet_mirror_enabled_override = Some(true);
+    env.knowledge_max_file_bytes_override = Some(4096);
 
     let config = AppConfig::load_from_env(&env).expect("load config");
 
@@ -705,6 +708,7 @@ kind = "project_note"
         config.knowledge.allowed_extensions,
         vec!["md".to_string(), "txt".to_string()]
     );
+    assert_eq!(config.knowledge.max_file_bytes, 4096);
     assert_eq!(config.knowledge.source_files.len(), 1);
     assert_eq!(
         config.knowledge.source_files[0].path,

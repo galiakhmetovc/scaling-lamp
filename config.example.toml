@@ -130,7 +130,7 @@ max_limit = 50
 # knowledge_search/knowledge_read use only the configured source_files/source_dirs
 # below, relative to the agent workspace. They are a canonical docs/workspace
 # knowledge index, not arbitrary filesystem search, not Mem0, and not SilverBullet.
-# Unreadable/stale/non-UTF8 files are skipped during indexing.
+# Unreadable/stale/non-UTF8/oversized files are skipped during indexing.
 operator_timezone = "Europe/Moscow"
 silverbullet_space_dir = "/var/lib/teamd/knowledge/silverbullet/teamd"
 # silverbullet_base_url = "https://teamd.example/sb"
@@ -143,6 +143,7 @@ silverbullet_text_artifact_extensions = [
 ]
 silverbullet_script_artifact_extensions = ["bash", "js", "lua", "py", "rs", "sh", "ts"]
 allowed_extensions = ["md", "txt", "json", "yaml", "yml", "toml"]
+max_file_bytes = 1048576
 
 [[knowledge.source_files]]
 path = "README.md"

@@ -1327,6 +1327,7 @@ knowledge_search({
 
 - ищет через PostgreSQL full-text search по configured canonical teamD docs/workspace knowledge index;
 - источники строго задаются в `[knowledge].source_files` и `[knowledge].source_dirs` внутри agent workspace: например `README.md`, `SYSTEM.md`, `AGENTS.md`, `docs/`, `projects/`, `notes/`, extra roots;
+- файлы больше `[knowledge].max_file_bytes` не индексируются, чтобы generated JSON/log/results не перегружали daemon и PostgreSQL FTS;
 - unreadable/stale/non-UTF8 файлы при обновлении индекса пропускаются и не должны валить весь tool;
 - возвращает source metadata и bounded results.
 
