@@ -613,6 +613,7 @@ export TEAMD_OTLP_TIMEOUT_MS='2000'
 - shutdown/restart polling
 - server request poll interval
 - background worker tick interval
+- background worker MCP connector maintenance interval
 - background worker heavy memory/index maintenance interval
 - background worker job lease duration
 - TUI event polling
@@ -621,7 +622,7 @@ export TEAMD_OTLP_TIMEOUT_MS='2000'
 
 Раньше такие числа были размазаны по коду. Теперь они собраны в одном config surface.
 
-`daemon_background_worker_tick_interval_ms` отвечает за быстрый lightweight tick: schedules, jobs, inbox wakeups. `daemon_memory_maintenance_interval_seconds` отдельно ограничивает тяжёлую maintenance-часть: session search index, knowledge index и retention recalculation. Не ставьте её равной 0 или слишком маленькой на больших workspaces: это будет постоянно перечитывать docs/projects/notes и грузить Postgres.
+`daemon_background_worker_tick_interval_ms` отвечает за быстрый lightweight tick: schedules, jobs, inbox wakeups. `daemon_mcp_maintenance_interval_seconds` отдельно ограничивает проверку и автозапуск MCP connectors. `daemon_memory_maintenance_interval_seconds` отдельно ограничивает тяжёлую maintenance-часть: session search index, knowledge index и retention recalculation. Не ставьте maintenance-интервалы равными 0 или слишком маленькими на больших workspaces: это будет постоянно перечитывать docs/projects/notes, перезапроверять MCP и грузить Postgres/CPU.
 
 ### `[runtime_limits]`
 

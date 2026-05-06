@@ -72,6 +72,7 @@ fn base_env(root: &Path) -> ConfigEnv {
         memory_recall_max_results_override: None,
         memory_recall_max_query_chars_override: None,
         memory_recall_max_memory_chars_override: None,
+        daemon_mcp_maintenance_interval_seconds_override: None,
         daemon_memory_maintenance_interval_seconds_override: None,
         operator_timezone_override: None,
         silverbullet_space_dir_override: None,
@@ -462,6 +463,7 @@ autospawn_status_poll_interval_ms = 150
 provider_loop_transient_retry_base_delay_ms = 220
 tui_active_run_heartbeat_notice_interval_seconds = 45
 daemon_background_worker_lease_seconds = 90
+daemon_mcp_maintenance_interval_seconds = 15
 daemon_memory_maintenance_interval_seconds = 45
 
 [runtime_limits]
@@ -537,6 +539,12 @@ interagent_default_max_hops = 9
     assert_eq!(
         config.runtime_timing.daemon_background_worker_lease_seconds,
         90
+    );
+    assert_eq!(
+        config
+            .runtime_timing
+            .daemon_mcp_maintenance_interval_seconds,
+        15
     );
     assert_eq!(
         config

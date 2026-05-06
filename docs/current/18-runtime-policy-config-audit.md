@@ -86,11 +86,12 @@ Background worker lease больше не держит policy только в `b
 
 - `runtime_timing.store_retry_delay_ms`
 - `runtime_timing.daemon_background_worker_tick_interval_ms`
+- `runtime_timing.daemon_mcp_maintenance_interval_seconds`
 - `runtime_timing.daemon_memory_maintenance_interval_seconds`
 - `runtime_timing.daemon_background_worker_lease_seconds`
 - `daemon.worker_lease_owner`
 
-Практический эффект: частота lightweight tick, частота тяжёлой переиндексации памяти/knowledge, длительность lease и owner, который пишет daemon в job records, меняются через конфиг.
+Практический эффект: частота lightweight tick, частота MCP maintenance, частота тяжёлой переиндексации памяти/knowledge, длительность lease и owner, который пишет daemon в job records, меняются через конфиг.
 
 ### `[knowledge]`
 
