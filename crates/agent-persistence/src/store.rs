@@ -824,6 +824,19 @@ const DEFAULT_RUNTIME_DATABASE_URL: &str = "postgresql://teamd@127.0.0.1:5432/te
 const DEFAULT_TEST_DATABASE_URL: &str = "postgresql://postgres:postgres@127.0.0.1:5432/postgres";
 
 fn connect_postgres(config: &AppConfig) -> Result<Client, StoreError> {
+    let config = config.clone();
+    std::thread::Builder::new()
+        .name("teamd-postgres-connect".to_string())
+        .spawn(move || connect_postgres_inner(&config))
+        .map_err(|source| StoreError::Io {
+            path: PathBuf::from("<postgres-connect-thread>"),
+            source,
+        })?
+        .join()
+        .map_err(|_| StoreError::StoreLockPoisoned)?
+}
+
+fn connect_postgres_inner(config: &AppConfig) -> Result<Client, StoreError> {
     let mut database_config = postgres::Config::from_str(&database_url(config))?;
     database_config.connect_timeout(std::time::Duration::from_secs(
         config.database.connect_timeout_seconds,
