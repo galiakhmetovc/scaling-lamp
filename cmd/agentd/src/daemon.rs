@@ -132,6 +132,32 @@ fn unix_timestamp() -> i64 {
 
 fn spawn_background_worker(app: App, shutdown: Arc<AtomicBool>) -> JoinHandle<()> {
     thread::spawn(move || {
+        let provider = loop {
+            if shutdown.load(Ordering::Relaxed) {
+                return;
+            }
+            match app.provider_driver() {
+                Ok(provider) => break provider,
+                Err(_) => thread::sleep(
+                    app.config
+                        .runtime_timing
+                        .daemon_background_worker_tick_interval(),
+                ),
+            }
+        };
+        let mut store = loop {
+            if shutdown.load(Ordering::Relaxed) {
+                return;
+            }
+            match app.store() {
+                Ok(store) => break store,
+                Err(_) => thread::sleep(
+                    app.config
+                        .runtime_timing
+                        .daemon_background_worker_tick_interval(),
+                ),
+            }
+        };
         let mut last_mcp_maintenance_at = 0_i64;
         let mut last_memory_maintenance_at = 0_i64;
         while !shutdown.load(Ordering::Relaxed) {
@@ -154,7 +180,19 @@ fn spawn_background_worker(app: App, shutdown: Arc<AtomicBool>) -> JoinHandle<()
             if maintain_memory {
                 last_memory_maintenance_at = now;
             }
-            let _ = app.background_worker_tick_with_options(now, maintain_mcp, maintain_memory);
+            if app
+                .background_worker_tick_with_resources(
+                    &store,
+                    provider.as_ref(),
+                    now,
+                    maintain_mcp,
+                    maintain_memory,
+                )
+                .is_err()
+                && let Ok(reopened) = app.store()
+            {
+                store = reopened;
+            }
             thread::sleep(
                 app.config
                     .runtime_timing
