@@ -336,6 +336,11 @@ pub trait ToolCallRepository {
         &self,
         session_id: &str,
     ) -> Result<Vec<ToolCallRecord>, StoreError>;
+    fn list_recent_tool_calls_for_session(
+        &self,
+        session_id: &str,
+        limit: usize,
+    ) -> Result<Vec<ToolCallRecord>, StoreError>;
     fn list_tool_calls_for_run(&self, run_id: &str) -> Result<Vec<ToolCallRecord>, StoreError>;
 }
 

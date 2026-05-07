@@ -480,6 +480,7 @@ pub(super) fn bootstrap_schema(client: &mut Client) -> Result<(), StoreError> {
         CREATE INDEX IF NOT EXISTS idx_tool_calls_session_id ON tool_calls(session_id);
         CREATE INDEX IF NOT EXISTS idx_tool_calls_run_id ON tool_calls(run_id);
         CREATE INDEX IF NOT EXISTS idx_tool_calls_status ON tool_calls(status);
+        CREATE INDEX IF NOT EXISTS idx_tool_calls_session_updated_at ON tool_calls(session_id, updated_at DESC, requested_at DESC);
         CREATE INDEX IF NOT EXISTS idx_trace_links_trace_id ON trace_links(trace_id);
         CREATE INDEX IF NOT EXISTS idx_trace_links_created_at ON trace_links(created_at DESC);
         CREATE INDEX IF NOT EXISTS idx_session_inbox_events_session_id ON session_inbox_events(session_id);

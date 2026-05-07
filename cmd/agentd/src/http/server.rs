@@ -5,6 +5,7 @@ mod mcp;
 mod sessions;
 mod status;
 mod telegram;
+mod web;
 
 use crate::bootstrap::{App, BootstrapError};
 use crate::http::types::{DaemonStopResponse, ErrorResponse};
@@ -47,6 +48,10 @@ fn handle_request(app: &App, shutdown: &Arc<AtomicBool>, request: Request) -> st
         return telegram::handle_telegram_webhook(app, request);
     }
 
+    if web::is_web_console_request(&request) {
+        return web::handle_web_console(request);
+    }
+
     if !is_authorized(app, &request) {
         return respond_json(
             request,
@@ -60,6 +65,7 @@ fn handle_request(app: &App, shutdown: &Arc<AtomicBool>, request: Request) -> st
     match (request.method(), request.url()) {
         (&tiny_http::Method::Get, "/v1/status") => status::handle_status(app, request),
         (&tiny_http::Method::Get, "/v1/about") => status::handle_about(app, request),
+        (&tiny_http::Method::Get, "/v1/web/snapshot") => web::handle_web_snapshot(app, request),
         (&tiny_http::Method::Post, "/v1/diagnostics/tail") => {
             status::handle_diagnostics_tail(app, request)
         }

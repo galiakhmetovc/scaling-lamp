@@ -90,6 +90,34 @@ impl ToolCallRepository for PersistenceStore {
         })
     }
 
+    fn list_recent_tool_calls_for_session(
+        &self,
+        session_id: &str,
+        limit: usize,
+    ) -> Result<Vec<ToolCallRecord>, StoreError> {
+        validate_identifier(session_id)?;
+        if limit == 0 {
+            return Ok(Vec::new());
+        }
+
+        let limit = limit as i64;
+        self.with_client(|client| {
+            client
+                .query(
+                    "SELECT id, session_id, run_id, provider_tool_call_id, tool_name, arguments_json,
+                            summary, status, error, result_summary, result_preview, result_artifact_id,
+                            result_truncated, result_byte_len, requested_at, updated_at
+                     FROM tool_calls
+                     WHERE session_id = $1
+                     ORDER BY updated_at DESC, requested_at DESC, id DESC
+                     LIMIT $2",
+                    &[&session_id, &limit],
+                )
+                .map(|rows| rows.iter().map(tool_call_record_from_row).collect())
+                .map_err(StoreError::from)
+        })
+    }
+
     fn list_tool_calls_for_run(&self, run_id: &str) -> Result<Vec<ToolCallRecord>, StoreError> {
         validate_identifier(run_id)?;
         self.with_client(|client| {

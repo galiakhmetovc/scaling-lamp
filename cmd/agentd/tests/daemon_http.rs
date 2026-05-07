@@ -1,7 +1,8 @@
 use agent_persistence::{
     A2APeerConfig, AppConfig, JobRecord, JobRepository, MissionRecord, MissionRepository,
-    PersistenceStore, SessionInboxRepository, SessionRecord, SessionRepository, TranscriptRecord,
-    TranscriptRepository, audit::DiagnosticEvent,
+    PersistenceStore, RunRepository, SessionInboxRepository, SessionRecord, SessionRepository,
+    ToolCallRecord, ToolCallRepository, TranscriptRecord, TranscriptRepository,
+    audit::DiagnosticEvent,
 };
 use agent_runtime::mission::{
     JobExecutionInput, JobResult, JobSpec, JobStatus, MissionExecutionIntent, MissionSchedule,
@@ -104,6 +105,145 @@ fn daemon_http_requires_bearer_token_when_configured() {
         .expect("authorized response");
 
     assert_eq!(authorized.status(), StatusCode::OK);
+
+    handle.stop().expect("stop daemon");
+}
+
+#[test]
+fn daemon_http_serves_read_only_web_console_without_exposing_data() {
+    let (_temp, app, base_url) = test_app(Some("secret-token"));
+    let handle = daemon::spawn_for_test(app).expect("spawn daemon");
+    let client = Client::new();
+
+    let page = client
+        .get(format!("{base_url}/web"))
+        .send()
+        .expect("web console response");
+
+    assert_eq!(page.status(), StatusCode::OK);
+    let content_type = page
+        .headers()
+        .get(reqwest::header::CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or_default()
+        .to_string();
+    assert!(content_type.contains("text/html"));
+    let body = page.text().expect("web console html");
+    assert!(body.contains("teamD Read-only Console"));
+    assert!(body.contains("/v1/web/snapshot"));
+
+    let unauthorized_snapshot = client
+        .get(format!("{base_url}/v1/web/snapshot"))
+        .send()
+        .expect("unauthorized snapshot response");
+    assert_eq!(unauthorized_snapshot.status(), StatusCode::UNAUTHORIZED);
+
+    handle.stop().expect("stop daemon");
+}
+
+#[test]
+fn daemon_http_web_snapshot_reads_runtime_data() {
+    let (_temp, app, base_url) = test_app(Some("secret-token"));
+    let store = app.store().expect("open store");
+    store
+        .put_session(&SessionRecord {
+            id: "session-web-old".to_string(),
+            title: "Old Web Session".to_string(),
+            prompt_override: None,
+            settings_json: "{}".to_string(),
+            workspace_root: app.runtime.workspace.root.display().to_string(),
+            agent_profile_id: "default".to_string(),
+            active_mission_id: None,
+            parent_session_id: None,
+            parent_job_id: None,
+            delegation_label: None,
+            created_at: 10,
+            updated_at: 20,
+        })
+        .expect("put old session");
+    store
+        .put_session(&SessionRecord {
+            id: "session-web-new".to_string(),
+            title: "New Web Session".to_string(),
+            prompt_override: None,
+            settings_json: "{}".to_string(),
+            workspace_root: app.runtime.workspace.root.display().to_string(),
+            agent_profile_id: "default".to_string(),
+            active_mission_id: None,
+            parent_session_id: None,
+            parent_job_id: None,
+            delegation_label: None,
+            created_at: 11,
+            updated_at: 30,
+        })
+        .expect("put new session");
+    store
+        .put_run(&agent_persistence::RunRecord {
+            id: "run-web-new".to_string(),
+            session_id: "session-web-new".to_string(),
+            mission_id: None,
+            status: "running".to_string(),
+            error: None,
+            result: None,
+            provider_usage_json: "{\"input_tokens\":12,\"output_tokens\":3,\"total_tokens\":15}"
+                .to_string(),
+            active_processes_json: "[]".to_string(),
+            recent_steps_json: "[]".to_string(),
+            evidence_refs_json: "[]".to_string(),
+            pending_approvals_json: "[]".to_string(),
+            provider_loop_json: "{}".to_string(),
+            delegate_runs_json: "[]".to_string(),
+            started_at: 32,
+            updated_at: 33,
+            finished_at: None,
+        })
+        .expect("put run");
+    store
+        .put_transcript(&TranscriptRecord {
+            id: "transcript-web-new-user".to_string(),
+            session_id: "session-web-new".to_string(),
+            run_id: Some("run-web-new".to_string()),
+            kind: "user".to_string(),
+            content: "show web snapshot".to_string(),
+            created_at: 31,
+        })
+        .expect("put transcript");
+    store
+        .put_tool_call(&ToolCallRecord {
+            id: "toolcall-web-new".to_string(),
+            session_id: "session-web-new".to_string(),
+            run_id: "run-web-new".to_string(),
+            provider_tool_call_id: "call_web_new".to_string(),
+            tool_name: "web_fetch".to_string(),
+            arguments_json: "{\"url\":\"https://example.com\"}".to_string(),
+            summary: "web_fetch url=https://example.com".to_string(),
+            status: "completed".to_string(),
+            error: None,
+            result_summary: Some("status=200".to_string()),
+            result_preview: Some("Example Domain".to_string()),
+            result_artifact_id: None,
+            result_truncated: false,
+            result_byte_len: Some(14),
+            requested_at: 34,
+            updated_at: 35,
+        })
+        .expect("put tool call");
+
+    let handle = daemon::spawn_for_test(app).expect("spawn daemon");
+    let client = Client::new();
+    let response = client
+        .get(format!("{base_url}/v1/web/snapshot"))
+        .bearer_auth("secret-token")
+        .send()
+        .expect("snapshot response");
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let snapshot: serde_json::Value = response.json().expect("snapshot json");
+    assert_eq!(snapshot["status"]["ok"], true);
+    assert_eq!(snapshot["sessions"][0]["id"], "session-web-new");
+    assert_eq!(snapshot["recent_runs"][0]["id"], "run-web-new");
+    assert_eq!(snapshot["recent_tool_calls"][0]["tool_name"], "web_fetch");
+    assert_eq!(snapshot["event_bus"]["backend"], "nats_jetstream");
 
     handle.stop().expect("stop daemon");
 }

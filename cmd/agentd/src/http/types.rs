@@ -37,6 +37,114 @@ pub struct StatusResponse {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WebSnapshotResponse {
+    pub generated_at: i64,
+    pub status: WebRuntimeStatusResponse,
+    pub event_bus: WebEventBusResponse,
+    pub agents: Vec<WebAgentResponse>,
+    pub sessions: Vec<SessionSummaryResponse>,
+    pub recent_runs: Vec<WebRunResponse>,
+    pub recent_tool_calls: Vec<WebToolCallResponse>,
+    pub delivery_targets: Vec<WebDeliveryTargetResponse>,
+    pub telegram_chats: Vec<WebTelegramChatResponse>,
+    pub recent_traces: Vec<WebTraceResponse>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WebRuntimeStatusResponse {
+    pub ok: bool,
+    pub version: Option<String>,
+    pub commit: Option<String>,
+    pub tree_state: Option<String>,
+    pub build_id: Option<String>,
+    pub data_dir: String,
+    pub database: String,
+    pub permission_mode: String,
+    pub session_count: usize,
+    pub mission_count: usize,
+    pub run_count: usize,
+    pub job_count: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WebEventBusResponse {
+    pub backend: String,
+    pub required: bool,
+    pub nats_configured: bool,
+    pub input_stream: String,
+    pub session_stream: String,
+    pub delivery_stream: String,
+    pub task_stream: String,
+    pub dlq_stream: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WebAgentResponse {
+    pub id: String,
+    pub name: String,
+    pub template_kind: String,
+    pub default_workspace_root: Option<String>,
+    pub updated_at: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WebRunResponse {
+    pub id: String,
+    pub session_id: String,
+    pub status: String,
+    pub error: Option<String>,
+    pub started_at: i64,
+    pub updated_at: i64,
+    pub finished_at: Option<i64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WebToolCallResponse {
+    pub id: String,
+    pub session_id: String,
+    pub run_id: String,
+    pub tool_name: String,
+    pub status: String,
+    pub summary: String,
+    pub error: Option<String>,
+    pub result_summary: Option<String>,
+    pub result_artifact_id: Option<String>,
+    pub requested_at: i64,
+    pub updated_at: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WebDeliveryTargetResponse {
+    pub target_id: String,
+    pub kind: String,
+    pub scope: String,
+    pub format_policy: String,
+    pub updated_at: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WebTelegramChatResponse {
+    pub telegram_chat_id: i64,
+    pub scope: String,
+    pub selected_session_id: Option<String>,
+    pub default_agent_profile_id: Option<String>,
+    pub inbound_queue_mode: String,
+    pub inbound_coalesce_window_ms: Option<i64>,
+    pub updated_at: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WebTraceResponse {
+    pub trace_id: String,
+    pub span_id: String,
+    pub entity_kind: String,
+    pub entity_id: String,
+    pub surface: Option<String>,
+    pub entrypoint: Option<String>,
+    pub created_at: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ErrorResponse {
     pub error: String,
 }
