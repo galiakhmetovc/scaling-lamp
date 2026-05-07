@@ -409,7 +409,12 @@ where
             }
         }
     } else {
-        route_input_event_envelope(app, envelope, unix_timestamp()).map(|_| ())
+        let app = app.clone();
+        tokio::task::spawn_blocking(move || {
+            route_input_event_envelope(&app, envelope, unix_timestamp()).map(|_| ())
+        })
+        .await
+        .map_err(|error| error.to_string())?
     }
 }
 
@@ -437,9 +442,17 @@ async fn session_input_consumer_loop(
             continue;
         };
         let message = message.map_err(|error| error.to_string())?;
-        match event_envelope_from_message(&message).and_then(|envelope| {
-            execute_session_input_event_envelope(&app, envelope, unix_timestamp())
-        }) {
+        let app_for_event = app.clone();
+        let payload = message.message.payload.clone();
+        let result = tokio::task::spawn_blocking(move || {
+            let envelope: EventEnvelope =
+                serde_json::from_slice(&payload).map_err(|error| error.to_string())?;
+            execute_session_input_event_envelope(&app_for_event, envelope, unix_timestamp())
+        })
+        .await
+        .map_err(|error| error.to_string())
+        .and_then(|result| result);
+        match result {
             Ok(_) => {}
             Err(error) => log_event_runtime_error(&app, "session.consumer.error", &error),
         }
@@ -485,9 +498,23 @@ async fn session_output_consumer_loop(
             continue;
         };
         let message = message.map_err(|error| error.to_string())?;
-        match event_envelope_from_message(&message).and_then(|envelope| {
-            deliver_session_output_event_envelope(&app, &sender, envelope, unix_timestamp())
-        }) {
+        let app_for_event = app.clone();
+        let sender_for_event = sender.clone();
+        let payload = message.message.payload.clone();
+        let result = tokio::task::spawn_blocking(move || {
+            let envelope: EventEnvelope =
+                serde_json::from_slice(&payload).map_err(|error| error.to_string())?;
+            deliver_session_output_event_envelope(
+                &app_for_event,
+                &sender_for_event,
+                envelope,
+                unix_timestamp(),
+            )
+        })
+        .await
+        .map_err(|error| error.to_string())
+        .and_then(|result| result);
+        match result {
             Ok(_) => {}
             Err(error) => log_event_runtime_error(&app, "delivery.consumer.error", &error),
         }
@@ -520,19 +547,23 @@ async fn task_consumer_loop(
             continue;
         };
         let message = message.map_err(|error| error.to_string())?;
-        match event_envelope_from_message(&message).and_then(|envelope| {
-            execute_task_event_runtime_envelope(&app, envelope, unix_timestamp())
-        }) {
+        let app_for_event = app.clone();
+        let payload = message.message.payload.clone();
+        let result = tokio::task::spawn_blocking(move || {
+            let envelope: EventEnvelope =
+                serde_json::from_slice(&payload).map_err(|error| error.to_string())?;
+            execute_task_event_runtime_envelope(&app_for_event, envelope, unix_timestamp())
+        })
+        .await
+        .map_err(|error| error.to_string())
+        .and_then(|result| result);
+        match result {
             Ok(_) => {}
             Err(error) => log_event_runtime_error(&app, "task.consumer.error", &error),
         }
         message.ack().await.map_err(|error| error.to_string())?;
     }
     Ok(())
-}
-
-fn event_envelope_from_message(message: &JetStreamMessage) -> Result<EventEnvelope, String> {
-    serde_json::from_slice(&message.message.payload).map_err(|error| error.to_string())
 }
 
 fn telegram_inbound_is_control_command(payload_json: &str) -> bool {
