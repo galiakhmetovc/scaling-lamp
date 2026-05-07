@@ -44,6 +44,7 @@ pub fn render(frame: &mut Frame<'_>, state: &TuiAppState) {
         TuiScreen::Agents
         | TuiScreen::Schedules
         | TuiScreen::Mcp
+        | TuiScreen::Tasks
         | TuiScreen::Artifacts
         | TuiScreen::Debug => render_inspector_screen(frame, state),
     }
@@ -94,7 +95,7 @@ fn render_session_screen(frame: &mut Frame<'_>, state: &TuiAppState) {
     let list = List::new(items).block(
         Block::default()
             .title(format!(
-                "Сессии | {} | Enter открыть | Д debug | Н новая | У удалить | П переименовать | А агенты | Р расписания | Esc назад",
+                "Сессии | {} | Enter открыть | Д debug | З задачи | Н новая | У удалить | П переименовать | А агенты | Р расписания | Esc назад",
                 short_version_label()
             ))
             .borders(Borders::ALL),
@@ -115,6 +116,7 @@ fn render_inspector_screen(frame: &mut Frame<'_>, state: &TuiAppState) {
             TuiScreen::Agents => "Агенты",
             TuiScreen::Schedules => "Расписания",
             TuiScreen::Mcp => "MCP",
+            TuiScreen::Tasks => "Задачи",
             TuiScreen::Artifacts => "Артефакты",
             TuiScreen::Debug => "Debug",
             _ => "Просмотр",

@@ -4,7 +4,7 @@ use super::browser_items::{
     parse_agent_browser_items, parse_artifact_browser_items, parse_mcp_browser_items,
     parse_schedule_browser_items,
 };
-use crate::bootstrap::BootstrapError;
+use crate::bootstrap::{BootstrapError, SessionTask};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 pub(super) fn open_agents_browser<B>(
@@ -173,6 +173,51 @@ where
     Ok(())
 }
 
+pub(super) fn open_task_browser<B>(
+    app: &B,
+    state: &mut TuiAppState,
+    session_id: &str,
+    preferred_id: Option<&str>,
+) -> Result<(), BootstrapError>
+where
+    B: TuiBackend,
+{
+    let tasks = app.session_tasks(session_id)?;
+    if tasks.is_empty() {
+        state.open_task_browser(
+            format!("Задачи {session_id}"),
+            "↑↓ выбор | Enter полный | / поиск | n/N | PgUp/PgDn".to_string(),
+            Vec::new(),
+            0,
+            "Задачи".to_string(),
+            "Делегированные задачи: нет".to_string(),
+        );
+        return Ok(());
+    }
+    let items = tasks
+        .iter()
+        .map(|task| BrowserItem::new(task.id.clone(), task_browser_label(task)))
+        .collect::<Vec<_>>();
+    let selected_index = preferred_id
+        .and_then(|id| items.iter().position(|item| item.id == id))
+        .unwrap_or(0);
+    let selected_id = items
+        .get(selected_index)
+        .map(|item| item.id.as_str())
+        .unwrap_or_default()
+        .to_string();
+    let preview_content = app.render_task(selected_id.as_str())?;
+    state.open_task_browser(
+        format!("Задачи {session_id}"),
+        "↑↓ выбор | Enter полный | / поиск | n/N | PgUp/PgDn".to_string(),
+        items,
+        selected_index,
+        format!("Задача {selected_id}"),
+        preview_content,
+    );
+    Ok(())
+}
+
 pub(super) fn open_debug_browser<B>(app: &B, state: &mut TuiAppState) -> Result<(), BootstrapError>
 where
     B: TuiBackend,
@@ -253,6 +298,10 @@ where
             format!("MCP {}", selected.id),
             app.render_mcp_connector(selected.id.as_str())?,
         ),
+        BrowserKind::Tasks => (
+            format!("Задача {}", selected.id),
+            app.render_task(selected.id.as_str())?,
+        ),
         BrowserKind::Artifacts => {
             let session_id = state
                 .current_session_id()
@@ -304,7 +353,9 @@ where
         BrowserKind::Mcp => {
             refresh_browser_preview(app, state)?;
         }
-        BrowserKind::Artifacts | BrowserKind::Debug => state.toggle_browser_full_preview(),
+        BrowserKind::Tasks | BrowserKind::Artifacts | BrowserKind::Debug => {
+            state.toggle_browser_full_preview()
+        }
     }
     Ok(())
 }
@@ -327,9 +378,11 @@ where
             let home = app.open_agent_home(Some(selected_id.as_str()))?;
             state.set_browser_preview(format!("Дом агента {selected_id}"), home);
         }
-        BrowserKind::Schedules | BrowserKind::Mcp | BrowserKind::Artifacts | BrowserKind::Debug => {
-            refresh_browser_preview(app, state)?;
-        }
+        BrowserKind::Schedules
+        | BrowserKind::Mcp
+        | BrowserKind::Tasks
+        | BrowserKind::Artifacts
+        | BrowserKind::Debug => refresh_browser_preview(app, state)?,
     }
     Ok(())
 }
@@ -339,7 +392,7 @@ pub(super) fn open_browser_create_dialog(state: &mut TuiAppState) {
         Some(BrowserKind::Agents) => state.open_create_agent_dialog(),
         Some(BrowserKind::Schedules) => state.open_create_schedule_dialog(),
         Some(BrowserKind::Mcp) => state.open_create_mcp_connector_dialog(),
-        Some(BrowserKind::Artifacts | BrowserKind::Debug) | None => {}
+        Some(BrowserKind::Tasks | BrowserKind::Artifacts | BrowserKind::Debug) | None => {}
     }
 }
 
@@ -452,10 +505,22 @@ where
 pub(super) fn open_browser_search_dialog(state: &mut TuiAppState) {
     if matches!(
         state.browser_state().map(|browser| browser.kind()),
-        Some(BrowserKind::Artifacts | BrowserKind::Debug)
+        Some(BrowserKind::Tasks | BrowserKind::Artifacts | BrowserKind::Debug)
     ) {
         state.open_browser_search_dialog();
     }
+}
+
+fn task_browser_label(task: &SessionTask) -> String {
+    let executor = task
+        .executor_agent_id
+        .as_deref()
+        .map(|value| format!(" executor={value}"))
+        .unwrap_or_default();
+    format!(
+        "[{}] {} ({}){} updated={}",
+        task.status, task.id, task.kind, executor, task.updated_at
+    )
 }
 
 fn unix_timestamp() -> Result<i64, BootstrapError> {

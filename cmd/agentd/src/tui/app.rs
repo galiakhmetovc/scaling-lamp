@@ -4,7 +4,7 @@ use crate::tui::worker::{
     ActiveRunHandle, ActiveRunPhase, ComposerQueue, QueuedDraft, QueuedDraftMode,
 };
 
-const COMMAND_HINTS: [&str; 60] = [
+const COMMAND_HINTS: &[&str] = &[
     "\\сессии",
     "\\новая",
     "\\агенты",
@@ -52,6 +52,8 @@ const COMMAND_HINTS: [&str; 60] = [
     "\\стоп",
     "\\отмена",
     "\\задачи",
+    "\\задача",
+    "\\фоновые",
     "\\артефакты",
     "\\артефакт",
     "\\доводка",
@@ -66,7 +68,7 @@ const COMMAND_HINTS: [&str; 60] = [
     "\\компакт",
     "\\выход",
 ];
-const COMMAND_STEMS: [&str; 60] = [
+const COMMAND_STEMS: &[&str] = &[
     "сессии",
     "новая",
     "агенты",
@@ -114,6 +116,8 @@ const COMMAND_STEMS: [&str; 60] = [
     "стоп",
     "отмена",
     "задачи",
+    "задача",
+    "фоновые",
     "артефакты",
     "артефакт",
     "доводка",
@@ -137,6 +141,7 @@ pub enum TuiScreen {
     Agents,
     Schedules,
     Mcp,
+    Tasks,
     Artifacts,
     Debug,
 }
@@ -146,6 +151,7 @@ pub enum BrowserKind {
     Agents,
     Schedules,
     Mcp,
+    Tasks,
     Artifacts,
     Debug,
 }
@@ -1285,6 +1291,10 @@ impl TuiAppState {
         self.open_inspector_screen(TuiScreen::Mcp, title, content);
     }
 
+    pub fn open_task_screen(&mut self, title: String, content: String) {
+        self.open_inspector_screen(TuiScreen::Tasks, title, content);
+    }
+
     pub fn open_artifact_screen(&mut self, title: String, content: String) {
         self.open_inspector_screen(TuiScreen::Artifacts, title, content);
     }
@@ -1387,6 +1397,33 @@ impl TuiAppState {
             TuiScreen::Mcp,
             BrowserState {
                 kind: BrowserKind::Mcp,
+                title,
+                action_hint,
+                items,
+                selected_index,
+                preview_title,
+                preview_content,
+                preview_scroll: 0,
+                full_preview: false,
+                search_query: None,
+                search_match_index: 0,
+            },
+        );
+    }
+
+    pub fn open_task_browser(
+        &mut self,
+        title: String,
+        action_hint: String,
+        items: Vec<BrowserItem>,
+        selected_index: usize,
+        preview_title: String,
+        preview_content: String,
+    ) {
+        self.open_browser_screen(
+            TuiScreen::Tasks,
+            BrowserState {
+                kind: BrowserKind::Tasks,
                 title,
                 action_hint,
                 items,
@@ -1626,6 +1663,7 @@ impl TuiAppState {
             TuiScreen::Agents
             | TuiScreen::Schedules
             | TuiScreen::Mcp
+            | TuiScreen::Tasks
             | TuiScreen::Artifacts
             | TuiScreen::Debug => {
                 self.active_screen = self.previous_screen.take().unwrap_or_else(|| {
@@ -1866,7 +1904,7 @@ impl TuiAppState {
     }
 
     pub fn command_hints(&self) -> &'static [&'static str] {
-        &COMMAND_HINTS
+        COMMAND_HINTS
     }
 
     pub fn current_phase(&self) -> Option<&ActiveRunPhase> {

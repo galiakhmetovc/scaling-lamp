@@ -187,7 +187,7 @@ delivery_target {
 
 - `callback`: результат подзадачи публикуется как `task_completed` event в очередь родительской session;
 - `follow`: оператор подписывает delivery target на конкретную задачу через Telegram `/follow <task_id>` или CLI `agentd task follow <task_id> <target_id>`; при `agent_task.completed|failed|blocked` результат уходит в этот target и фиксируется в `event_deliveries`;
-- `query`: оператор или агент читает task registry через Telegram `/tasks`, CLI `agentd session tasks <session_id>`, CLI `agentd task show <task_id>`, HTTP `GET /v1/sessions/{id}/tasks` или будущий tool;
+- `query`: оператор или агент читает task registry через Telegram `/tasks`, TUI `\задачи`, CLI `agentd session tasks <session_id>`, CLI `agentd task show <task_id>`, HTTP `GET /v1/sessions/{id}/tasks` или будущий tool;
 - `wait`: агент явно вызывает bounded wait (`session_wait`/future task wait) с timeout, когда без результата нельзя продолжать.
 
 Правило: ожидание должно быть явным, ограниченным по timeout и видимым в task registry. Нельзя прятать ожидание внутри транспорта или webhook handler.
@@ -206,7 +206,9 @@ Task registry — это не внутренняя таблица “для ра
 - `CLI agentd session tasks <session_id>` показывает тот же список локально; поддерживает `--limit`, `--offset`, `--raw`.
 - `CLI agentd task show <task_id>` показывает полную карточку задачи: followers, dependency/context/result/retry JSON, trace, chain/hops, timestamps и ошибку.
 - `CLI agentd task follow <task_id> <target_id>`, `agentd task unfollow <task_id> <target_id>`, `agentd task cancel <task_id>` управляют подпиской и отменой локально.
-- `HTTP GET /v1/sessions/{session_id}/tasks` отдаёт структурированный список для будущего web UI/TUI.
+- `TUI \задачи` открывает task browser текущей или выбранной session; `\задача <task_id>` показывает карточку, `\задача отменить <task_id>` отменяет task.
+- `HTTP GET /v1/sessions/{session_id}/tasks` отдаёт структурированный список для web UI/TUI.
+- `HTTP GET /v1/tasks/{task_id}` и `POST /v1/tasks/{task_id}/cancel` дают daemon-backed TUI тот же task detail/cancel path.
 
 Граница ответственности:
 

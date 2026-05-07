@@ -54,7 +54,7 @@ pub fn handle_key(state: &mut TuiAppState, key: KeyEvent) -> Result<TuiAction, B
         KeyCode::Char('/')
             if matches!(
                 state.browser_state().map(|browser| browser.kind()),
-                Some(BrowserKind::Artifacts | BrowserKind::Debug)
+                Some(BrowserKind::Tasks | BrowserKind::Artifacts | BrowserKind::Debug)
             ) =>
         {
             TuiAction::BrowserSearch
@@ -63,7 +63,7 @@ pub fn handle_key(state: &mut TuiAppState, key: KeyEvent) -> Result<TuiAction, B
             if key.modifiers == crossterm::event::KeyModifiers::CONTROL
                 && matches!(
                     state.browser_state().map(|browser| browser.kind()),
-                    Some(BrowserKind::Artifacts | BrowserKind::Debug)
+                    Some(BrowserKind::Tasks | BrowserKind::Artifacts | BrowserKind::Debug)
                 ) =>
         {
             TuiAction::BrowserSearch
@@ -71,7 +71,7 @@ pub fn handle_key(state: &mut TuiAppState, key: KeyEvent) -> Result<TuiAction, B
         KeyCode::Char('n')
             if matches!(
                 state.browser_state().map(|browser| browser.kind()),
-                Some(BrowserKind::Artifacts | BrowserKind::Debug)
+                Some(BrowserKind::Tasks | BrowserKind::Artifacts | BrowserKind::Debug)
             ) =>
         {
             TuiAction::BrowserSearchNext
@@ -79,7 +79,7 @@ pub fn handle_key(state: &mut TuiAppState, key: KeyEvent) -> Result<TuiAction, B
         KeyCode::Char('N')
             if matches!(
                 state.browser_state().map(|browser| browser.kind()),
-                Some(BrowserKind::Artifacts | BrowserKind::Debug)
+                Some(BrowserKind::Tasks | BrowserKind::Artifacts | BrowserKind::Debug)
             ) =>
         {
             TuiAction::BrowserSearchPrevious

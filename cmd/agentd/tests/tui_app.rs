@@ -1,6 +1,7 @@
 use agent_persistence::{
     AppConfig, JobRecord, JobRepository, MissionRecord, MissionRepository, PersistenceStore,
-    PlanRecord, PlanRepository, RunRecord, RunRepository, TranscriptRepository,
+    PlanRecord, PlanRepository, RunRecord, RunRepository, TaskRegistryRecord,
+    TaskRegistryRepository, TranscriptRepository,
 };
 use agent_runtime::mission::JobExecutionInput;
 use agent_runtime::plan::{PlanItem, PlanItemStatus, PlanSnapshot};
@@ -557,6 +558,107 @@ fn tui_chat_commands_and_timeline_plan_renders_current_plan() {
         rendered_entries.contains("[pending] render-plan: Show the current plan in the timeline")
     );
     assert!(rendered_entries.contains("заметка: Keep it read-only"));
+}
+
+#[test]
+fn tui_chat_commands_open_and_cancel_delegated_tasks() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let app = build_from_config(AppConfig {
+        data_dir: temp.path().join("state-root"),
+        ..AppConfig::default()
+    })
+    .expect("build app");
+    let session = app
+        .create_session_auto(Some("Task Registry Session"))
+        .expect("create session");
+    let store = PersistenceStore::open(&app.persistence).expect("open store");
+    store
+        .put_task_registry(&TaskRegistryRecord {
+            task_id: "task-agent-1".to_string(),
+            kind: "agent_task".to_string(),
+            status: "queued".to_string(),
+            source_session_id: Some(session.id.clone()),
+            owner_agent_id: Some("default".to_string()),
+            executor_agent_id: Some("judge".to_string()),
+            parent_task_id: None,
+            dependency_json: "[]".to_string(),
+            context_ref_json: r#"{"goal":"review docs"}"#.to_string(),
+            result_ref_json: None,
+            retry_policy_json: r#"{"max_attempts":1}"#.to_string(),
+            attempt_count: 0,
+            max_attempts: 1,
+            timeout_at: None,
+            chain_id: Some("chain-1".to_string()),
+            hop_count: Some(1),
+            max_hops: Some(3),
+            trace_id: Some("trace-1".to_string()),
+            created_at: 10,
+            updated_at: 20,
+            started_at: None,
+            finished_at: None,
+            error: None,
+        })
+        .expect("put task");
+
+    let mut state = TuiAppState::new(
+        app.list_session_summaries().expect("list sessions"),
+        Some(session.id.clone()),
+    );
+    let mut render = |_state: &TuiAppState| Ok::<_, agentd::bootstrap::BootstrapError>(());
+
+    dispatch_action(
+        &app,
+        &mut state,
+        TuiAction::SubmitChatInput("/tasks".to_string()),
+        &mut render,
+    )
+    .expect("dispatch /tasks");
+
+    assert_eq!(state.active_screen(), TuiScreen::Tasks);
+    assert_eq!(
+        state.browser_selected_item().map(|item| item.id.as_str()),
+        Some("task-agent-1")
+    );
+    assert!(
+        state
+            .browser_state()
+            .expect("tasks browser")
+            .preview_content()
+            .contains("executor_agent_id: judge")
+    );
+
+    dispatch_action(
+        &app,
+        &mut state,
+        TuiAction::SubmitChatInput("/task task-agent-1".to_string()),
+        &mut render,
+    )
+    .expect("dispatch /task");
+    assert_eq!(state.active_screen(), TuiScreen::Tasks);
+    assert!(
+        state
+            .browser_state()
+            .expect("tasks browser")
+            .preview_content()
+            .contains("context_ref_json")
+    );
+
+    dispatch_action(
+        &app,
+        &mut state,
+        TuiAction::SubmitChatInput("/task cancel task-agent-1".to_string()),
+        &mut render,
+    )
+    .expect("dispatch /task cancel");
+    let task = store
+        .get_task_registry("task-agent-1")
+        .expect("get task")
+        .expect("task exists");
+    assert_eq!(task.status, "cancelled");
+    assert!(state.timeline().entries(true).iter().any(|entry| {
+        matches!(entry.kind, TimelineEntryKind::System)
+            && entry.content.contains("cancelled task-agent-1")
+    }));
 }
 
 #[test]

@@ -29,8 +29,8 @@ use browser::{
     activate_browser_selection, handle_browser_message_action, open_agents_browser,
     open_artifact_browser, open_browser_create_dialog, open_browser_delete_dialog,
     open_browser_edit_dialog, open_browser_search_dialog, open_browser_selection,
-    open_debug_browser, open_mcp_browser, open_schedule_browser, refresh_browser_preview,
-    toggle_browser_schedule,
+    open_debug_browser, open_mcp_browser, open_schedule_browser, open_task_browser,
+    refresh_browser_preview, toggle_browser_schedule,
 };
 use command_parse::{
     canonical_command, describe_completion_mode, is_command_input, option_arg, parse_auto_approve,
@@ -158,6 +158,7 @@ fn dispatch_terminal_event(
                 TuiScreen::Agents
                 | TuiScreen::Schedules
                 | TuiScreen::Mcp
+                | TuiScreen::Tasks
                 | TuiScreen::Artifacts
                 | TuiScreen::Debug => screens::inspector::handle_key(state, key)?,
             };
@@ -196,6 +197,9 @@ where
         }
         TuiAction::OpenDebugScreen => {
             open_debug_browser(app, state)?;
+        }
+        TuiAction::OpenTasksScreen => {
+            open_tasks_for_current_or_selected_session(app, state, None)?;
         }
         TuiAction::BrowserSelectPrevious => {
             state.browser_select_previous();
@@ -636,6 +640,12 @@ where
                 "/jobs" => {
                     let jobs = app.render_active_jobs(&current_session_id)?;
                     state.timeline_mut().push_system(&jobs, unix_timestamp()?);
+                }
+                "/tasks" => {
+                    open_task_browser(app, state, &current_session_id, None)?;
+                }
+                "/task" => {
+                    handle_task_command(app, state, &current_session_id, rest)?;
                 }
                 "/memory" => {
                     let memory = handle_memory_command(app, rest)?;
@@ -1208,6 +1218,64 @@ where
     let transcript = app.session_transcript_tail(session_id, TUI_TRANSCRIPT_TAIL_LIMIT)?;
     let pending = app.pending_approvals(session_id)?;
     Ok(Timeline::from_session_view(&transcript, &pending))
+}
+
+fn open_tasks_for_current_or_selected_session<B>(
+    app: &B,
+    state: &mut TuiAppState,
+    preferred_id: Option<&str>,
+) -> Result<(), BootstrapError>
+where
+    B: TuiBackend,
+{
+    let session_id = if state.active_screen() == TuiScreen::Sessions {
+        state
+            .selected_session()
+            .map(|session| session.id.clone())
+            .ok_or_else(|| BootstrapError::Usage {
+                reason: "не выбрана сессия для списка задач".to_string(),
+            })?
+    } else {
+        state
+            .current_session_id()
+            .map(str::to_string)
+            .ok_or_else(|| BootstrapError::Usage {
+                reason: "не выбрана текущая сессия".to_string(),
+            })?
+    };
+    open_task_browser(app, state, session_id.as_str(), preferred_id)
+}
+
+fn handle_task_command<B>(
+    app: &B,
+    state: &mut TuiAppState,
+    session_id: &str,
+    raw: &str,
+) -> Result<(), BootstrapError>
+where
+    B: TuiBackend,
+{
+    let trimmed = raw.trim();
+    let (action, tail) = match trimmed.split_once(' ') {
+        Some((action, tail)) => (action.trim(), tail.trim()),
+        None => (trimmed, ""),
+    };
+
+    match action {
+        "" => open_task_browser(app, state, session_id, None),
+        "cancel" | "отмена" | "отменить" => {
+            let task_id = require_arg(tail, "/task cancel")?;
+            let message = app.cancel_task(task_id.as_str())?;
+            state
+                .timeline_mut()
+                .push_system(&message, unix_timestamp()?);
+            if matches!(state.active_screen(), TuiScreen::Tasks) {
+                open_task_browser(app, state, session_id, Some(task_id.as_str()))?;
+            }
+            Ok(())
+        }
+        task_id => open_task_browser(app, state, session_id, Some(task_id)),
+    }
 }
 
 fn handle_agent_command<B>(
@@ -3511,6 +3579,15 @@ mod tests {
         assert_eq!(canonical_command("\\настройки"), Some("/settings"));
         assert_eq!(canonical_command("\\пауза"), Some("/pause"));
         assert_eq!(canonical_command("\\отмена"), Some("/cancel"));
+    }
+
+    #[test]
+    fn canonical_command_accepts_task_registry_aliases() {
+        assert_eq!(canonical_command("/tasks"), Some("/tasks"));
+        assert_eq!(canonical_command("\\задачи"), Some("/tasks"));
+        assert_eq!(canonical_command("/task"), Some("/task"));
+        assert_eq!(canonical_command("\\задача"), Some("/task"));
+        assert_eq!(canonical_command("/jobs"), Some("/jobs"));
     }
 
     #[test]

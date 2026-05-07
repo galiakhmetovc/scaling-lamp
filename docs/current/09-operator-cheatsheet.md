@@ -235,6 +235,8 @@ Pairing:
 - `/use <session_id>` — выбрать session для этого чата.
 - `/plan` — показать текущий structured plan выбранной session.
 - `/jobs` — показать фоновые jobs выбранной session.
+- `/tasks` — показать delegated/MIMO task registry выбранной session.
+- `/task <task_id>` — показать карточку task; `/cancel <task_id>` отменяет delegated task в Telegram.
 - `/queue` — показать или настроить режим очереди входящих сообщений во время активного run.
 - `/files` — показать session artifacts, полученные из Telegram documents или созданные tools.
 - `/file <artifact_id>` — отправить artifact обратно в Telegram как document.
@@ -414,6 +416,8 @@ agentd tui
 - `\статус`
 - `\процессы`
 - `\задачи`
+- `\задача <task_id>`
+- `\фоновые`
 - `\артефакты`
 - `\дебаг`
 - `\апрув [id]`

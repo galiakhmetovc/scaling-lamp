@@ -2,7 +2,8 @@ use crate::bootstrap::{
     AgentScheduleCreateOptions, AgentScheduleUpdatePatch, AgentScheduleView, App, BootstrapError,
     McpConnectorCreateOptions, McpConnectorUpdatePatch, McpConnectorView, SessionDebugEntry,
     SessionDebugView, SessionPendingApproval, SessionPreferencesPatch, SessionSkillStatus,
-    SessionSummary, SessionTranscriptView, render_mcp_connector_view, render_mcp_connectors_view,
+    SessionSummary, SessionTask, SessionTranscriptView, render_mcp_connector_view,
+    render_mcp_connectors_view,
 };
 use crate::execution::{ApprovalContinuationReport, ChatExecutionEvent, ChatTurnExecutionReport};
 use crate::http::client::DaemonClient;
@@ -163,6 +164,52 @@ pub trait TuiBackend: Clone + Send + Sync + 'static {
     fn render_plan(&self, session_id: &str) -> Result<String, BootstrapError>;
     fn render_artifacts(&self, session_id: &str) -> Result<String, BootstrapError>;
     fn read_artifact(&self, session_id: &str, artifact_id: &str) -> Result<String, BootstrapError>;
+    fn session_tasks(&self, _session_id: &str) -> Result<Vec<SessionTask>, BootstrapError> {
+        Err(BootstrapError::Usage {
+            reason: "task registry is not available through this TUI backend".to_string(),
+        })
+    }
+    fn render_session_tasks(&self, session_id: &str) -> Result<String, BootstrapError> {
+        let tasks = self.session_tasks(session_id)?;
+        if tasks.is_empty() {
+            return Ok("Делегированные задачи: нет".to_string());
+        }
+        let mut lines = vec!["Делегированные задачи:".to_string()];
+        for task in tasks {
+            lines.push(format!("- [{}] {} ({})", task.status, task.id, task.kind));
+            if let Some(owner) = task.owner_agent_id.as_deref() {
+                lines.push(format!("  owner_agent_id: {owner}"));
+            }
+            if let Some(executor) = task.executor_agent_id.as_deref() {
+                lines.push(format!("  executor_agent_id: {executor}"));
+            }
+            lines.push(format!(
+                "  attempts: {}/{}",
+                task.attempt_count, task.max_attempts
+            ));
+            lines.push(format!("  updated: {}", task.updated_at));
+            if let Some(chain_id) = task.chain_id.as_deref() {
+                lines.push(format!("  chain_id: {chain_id}"));
+            }
+            if let Some(error) = task.error.as_deref() {
+                lines.push(format!("  error: {error}"));
+            }
+            if let Some(result_ref_json) = task.result_ref_json.as_deref() {
+                lines.push(format!("  result_ref: {result_ref_json}"));
+            }
+        }
+        Ok(lines.join("\n"))
+    }
+    fn render_task(&self, _task_id: &str) -> Result<String, BootstrapError> {
+        Err(BootstrapError::Usage {
+            reason: "task details are not available through this TUI backend".to_string(),
+        })
+    }
+    fn cancel_task(&self, _task_id: &str) -> Result<String, BootstrapError> {
+        Err(BootstrapError::Usage {
+            reason: "task cancellation is not available through this TUI backend".to_string(),
+        })
+    }
     fn render_session_memory_search(
         &self,
         input: SessionSearchInput,
@@ -516,6 +563,22 @@ impl TuiBackend for App {
 
     fn read_artifact(&self, session_id: &str, artifact_id: &str) -> Result<String, BootstrapError> {
         App::read_session_artifact(self, session_id, artifact_id)
+    }
+
+    fn session_tasks(&self, session_id: &str) -> Result<Vec<SessionTask>, BootstrapError> {
+        App::session_tasks(self, session_id)
+    }
+
+    fn render_session_tasks(&self, session_id: &str) -> Result<String, BootstrapError> {
+        App::render_session_tasks(self, session_id)
+    }
+
+    fn render_task(&self, task_id: &str) -> Result<String, BootstrapError> {
+        App::render_task(self, task_id)
+    }
+
+    fn cancel_task(&self, task_id: &str) -> Result<String, BootstrapError> {
+        App::cancel_task(self, task_id)
     }
 
     fn render_session_memory_search(
@@ -898,6 +961,22 @@ impl TuiBackend for DaemonClient {
 
     fn read_artifact(&self, session_id: &str, artifact_id: &str) -> Result<String, BootstrapError> {
         DaemonClient::read_session_artifact(self, session_id, artifact_id)
+    }
+
+    fn session_tasks(&self, session_id: &str) -> Result<Vec<SessionTask>, BootstrapError> {
+        DaemonClient::session_tasks(self, session_id)
+    }
+
+    fn render_session_tasks(&self, session_id: &str) -> Result<String, BootstrapError> {
+        DaemonClient::render_session_tasks(self, session_id)
+    }
+
+    fn render_task(&self, task_id: &str) -> Result<String, BootstrapError> {
+        DaemonClient::render_task(self, task_id)
+    }
+
+    fn cancel_task(&self, task_id: &str) -> Result<String, BootstrapError> {
+        DaemonClient::cancel_task(self, task_id)
     }
 
     fn render_session_memory_search(

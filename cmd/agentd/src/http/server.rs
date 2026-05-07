@@ -141,6 +141,7 @@ fn handle_request(app: &App, shutdown: &Arc<AtomicBool>, request: Request) -> st
         _ if request.url().starts_with("/v1/mcp/connectors/") => {
             mcp::handle_mcp_connector_nested_routes(app, request)
         }
+        _ if request.url().starts_with("/v1/tasks/") => sessions::handle_task_routes(app, request),
         _ => sessions::handle_nested_routes(app, request),
     }
 }

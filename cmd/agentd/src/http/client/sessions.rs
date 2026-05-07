@@ -7,7 +7,8 @@ use crate::http::types::{
     DebugBundleResponse, MemoryRenderResponse, SessionAgentMessageRequest, SessionArtifactResponse,
     SessionArtifactsResponse, SessionBackgroundJobsResponse, SessionChainGrantRequest,
     SessionDetailResponse, SessionRunControlResponse, SessionRunStatusResponse,
-    SessionSystemResponse, SessionTasksResponse, SkillCommandRequest,
+    SessionSystemResponse, SessionTasksResponse, SkillCommandRequest, TaskControlResponse,
+    TaskRenderResponse,
 };
 use agent_runtime::tool::{
     KnowledgeReadInput, KnowledgeSearchInput, SessionReadInput, SessionSearchInput,
@@ -516,6 +517,19 @@ impl DaemonClient {
             }
         }
         Ok(lines.join("\n"))
+    }
+
+    pub fn render_task(&self, task_id: &str) -> Result<String, BootstrapError> {
+        let response: TaskRenderResponse = self.get_json(&format!("/v1/tasks/{task_id}"))?;
+        Ok(response.task)
+    }
+
+    pub fn cancel_task(&self, task_id: &str) -> Result<String, BootstrapError> {
+        let response: TaskControlResponse = self.post_json(
+            &format!("/v1/tasks/{task_id}/cancel"),
+            &serde_json::json!({}),
+        )?;
+        Ok(response.message)
     }
 
     pub fn write_debug_bundle(&self, session_id: &str) -> Result<String, BootstrapError> {

@@ -7,6 +7,7 @@ use crate::http::types::{
     SessionPendingApprovalsResponse, SessionPreferencesRequest, SessionRunControlResponse,
     SessionRunStatusResponse, SessionSkillsResponse, SessionSummaryResponse, SessionSystemResponse,
     SessionTaskResponse, SessionTasksResponse, SessionTranscriptResponse, SkillCommandRequest,
+    TaskControlResponse, TaskRenderResponse,
 };
 use agent_persistence::{AgentRepository, SessionRepository};
 use agent_runtime::tool::{
@@ -269,6 +270,39 @@ pub(super) fn handle_nested_routes(app: &App, request: Request) -> std::io::Resu
     }
 }
 
+pub(super) fn handle_task_routes(app: &App, request: Request) -> std::io::Result<()> {
+    let path = request
+        .url()
+        .split('?')
+        .next()
+        .unwrap_or_default()
+        .to_string();
+    let method = request.method().clone();
+    let Some(task_tail) = path.strip_prefix("/v1/tasks/") else {
+        return respond_json(
+            request,
+            StatusCode(404),
+            &ErrorResponse {
+                error: "route not found".to_string(),
+            },
+        );
+    };
+    let segments = task_tail.split('/').map(str::to_string).collect::<Vec<_>>();
+    match (method, segments.as_slice()) {
+        (Method::Get, [task_id]) => handle_task(app, request, task_id.as_str()),
+        (Method::Post, [task_id, action]) if action == "cancel" => {
+            handle_cancel_task(app, request, task_id.as_str())
+        }
+        _ => respond_json(
+            request,
+            StatusCode(404),
+            &ErrorResponse {
+                error: "route not found".to_string(),
+            },
+        ),
+    }
+}
+
 fn handle_session_detail(app: &App, request: Request, session_id: &str) -> std::io::Result<()> {
     let store = match app.store() {
         Ok(store) => store,
@@ -421,6 +455,26 @@ fn handle_session_tasks(app: &App, request: Request, session_id: &str) -> std::i
                 .collect::<Vec<_>>();
             respond_json::<SessionTasksResponse>(request, StatusCode(200), &response)
         }
+        Err(error) => {
+            let (status, payload) = map_bootstrap_error(error);
+            respond_json(request, status, &payload)
+        }
+    }
+}
+
+fn handle_task(app: &App, request: Request, task_id: &str) -> std::io::Result<()> {
+    match app.render_task(task_id) {
+        Ok(task) => respond_json(request, StatusCode(200), &TaskRenderResponse { task }),
+        Err(error) => {
+            let (status, payload) = map_bootstrap_error(error);
+            respond_json(request, status, &payload)
+        }
+    }
+}
+
+fn handle_cancel_task(app: &App, request: Request, task_id: &str) -> std::io::Result<()> {
+    match app.cancel_task(task_id) {
+        Ok(message) => respond_json(request, StatusCode(200), &TaskControlResponse { message }),
         Err(error) => {
             let (status, payload) = map_bootstrap_error(error);
             respond_json(request, status, &payload)

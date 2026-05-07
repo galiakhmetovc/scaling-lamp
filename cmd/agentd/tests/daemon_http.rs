@@ -1,8 +1,8 @@
 use agent_persistence::{
     A2APeerConfig, AppConfig, JobRecord, JobRepository, MissionRecord, MissionRepository,
     PersistenceStore, RunRepository, SessionInboxRepository, SessionRecord, SessionRepository,
-    ToolCallRecord, ToolCallRepository, TranscriptRecord, TranscriptRepository,
-    audit::DiagnosticEvent,
+    TaskRegistryRecord, TaskRegistryRepository, ToolCallRecord, ToolCallRepository,
+    TranscriptRecord, TranscriptRepository, audit::DiagnosticEvent,
 };
 use agent_runtime::mission::{
     JobExecutionInput, JobResult, JobSpec, JobStatus, MissionExecutionIntent, MissionSchedule,
@@ -20,7 +20,8 @@ use agentd::http::types::{
     DaemonStopResponse, DiagnosticsTailRequest, DiagnosticsTailResponse, ErrorResponse,
     McpConnectorCreateRequest, McpConnectorDetailResponse, McpConnectorUpdateRequest,
     MemoryRenderResponse, SessionBackgroundJobResponse, SessionDebugResponse,
-    SessionSummaryResponse, SkillCommandRequest, StatusResponse,
+    SessionSummaryResponse, SkillCommandRequest, StatusResponse, TaskControlResponse,
+    TaskRenderResponse,
 };
 use reqwest::StatusCode;
 use reqwest::blocking::Client;
@@ -345,6 +346,67 @@ fn daemon_http_can_render_session_debug_view() {
     assert_eq!(debug.entries.len(), 1);
     assert_eq!(debug.entries[0].kind, "message");
     assert!(debug.entries[0].detail.contains("debug me"));
+
+    handle.stop().expect("stop daemon");
+}
+
+#[test]
+fn daemon_http_can_render_and_cancel_task_registry_entries() {
+    let (_temp, app, base_url) = test_app(Some("secret-token"));
+    let session = app
+        .create_session_auto(Some("Task HTTP Session"))
+        .expect("create session");
+    let store = app.store().expect("open store");
+    store
+        .put_task_registry(&TaskRegistryRecord {
+            task_id: "task-http-1".to_string(),
+            kind: "agent_task".to_string(),
+            status: "queued".to_string(),
+            source_session_id: Some(session.id),
+            owner_agent_id: Some("default".to_string()),
+            executor_agent_id: Some("judge".to_string()),
+            parent_task_id: None,
+            dependency_json: "[]".to_string(),
+            context_ref_json: r#"{"goal":"http task"}"#.to_string(),
+            result_ref_json: None,
+            retry_policy_json: r#"{"max_attempts":1}"#.to_string(),
+            attempt_count: 0,
+            max_attempts: 1,
+            timeout_at: None,
+            chain_id: None,
+            hop_count: None,
+            max_hops: None,
+            trace_id: None,
+            created_at: 10,
+            updated_at: 20,
+            started_at: None,
+            finished_at: None,
+            error: None,
+        })
+        .expect("put task");
+
+    let handle = daemon::spawn_for_test(app).expect("spawn daemon");
+    let client = Client::new();
+    let rendered = client
+        .get(format!("{base_url}/v1/tasks/task-http-1"))
+        .bearer_auth("secret-token")
+        .send()
+        .expect("task response");
+
+    assert_eq!(rendered.status(), StatusCode::OK);
+    let rendered: TaskRenderResponse = rendered.json().expect("task json");
+    assert!(rendered.task.contains("executor_agent_id: judge"));
+
+    let cancelled = client
+        .post(format!("{base_url}/v1/tasks/task-http-1/cancel"))
+        .bearer_auth("secret-token")
+        .json(&serde_json::json!({}))
+        .send()
+        .expect("cancel task response");
+
+    assert_eq!(cancelled.status(), StatusCode::OK);
+    let cancelled: TaskControlResponse = cancelled.json().expect("cancel json");
+    assert_eq!(cancelled.message, "cancelled task-http-1");
 
     handle.stop().expect("stop daemon");
 }

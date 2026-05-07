@@ -86,6 +86,9 @@ pub(super) trait ChatReplBackend {
     fn cancel_active_run(&self, session_id: &str) -> Result<String, BootstrapError>;
     fn cancel_all_session_work(&self, session_id: &str) -> Result<String, BootstrapError>;
     fn render_active_jobs(&self, session_id: &str) -> Result<String, BootstrapError>;
+    fn render_session_tasks(&self, session_id: &str) -> Result<String, BootstrapError>;
+    fn render_task(&self, task_id: &str) -> Result<String, BootstrapError>;
+    fn cancel_task(&self, task_id: &str) -> Result<String, BootstrapError>;
     fn write_debug_bundle(&self, session_id: &str) -> Result<String, BootstrapError>;
     fn render_session_skills(&self, session_id: &str) -> Result<String, BootstrapError>;
     fn enable_session_skill(
@@ -353,6 +356,18 @@ impl ChatReplBackend for App {
 
     fn render_active_jobs(&self, session_id: &str) -> Result<String, BootstrapError> {
         self.render_session_background_jobs(session_id)
+    }
+
+    fn render_session_tasks(&self, session_id: &str) -> Result<String, BootstrapError> {
+        App::render_session_tasks(self, session_id)
+    }
+
+    fn render_task(&self, task_id: &str) -> Result<String, BootstrapError> {
+        App::render_task(self, task_id)
+    }
+
+    fn cancel_task(&self, task_id: &str) -> Result<String, BootstrapError> {
+        App::cancel_task(self, task_id)
     }
 
     fn write_debug_bundle(&self, session_id: &str) -> Result<String, BootstrapError> {
@@ -623,6 +638,18 @@ impl ChatReplBackend for DaemonClient {
 
     fn render_active_jobs(&self, session_id: &str) -> Result<String, BootstrapError> {
         self.render_session_background_jobs(session_id)
+    }
+
+    fn render_session_tasks(&self, session_id: &str) -> Result<String, BootstrapError> {
+        DaemonClient::render_session_tasks(self, session_id)
+    }
+
+    fn render_task(&self, task_id: &str) -> Result<String, BootstrapError> {
+        DaemonClient::render_task(self, task_id)
+    }
+
+    fn cancel_task(&self, task_id: &str) -> Result<String, BootstrapError> {
+        DaemonClient::cancel_task(self, task_id)
     }
 
     fn write_debug_bundle(&self, session_id: &str) -> Result<String, BootstrapError> {
@@ -1022,6 +1049,16 @@ where
                     let jobs = backend.render_active_jobs(session_id)?;
                     writeln!(renderer.output, "{jobs}").map_err(BootstrapError::Stream)?;
                 }
+                Some("/tasks") => {
+                    renderer.finish_turn()?;
+                    let tasks = backend.render_session_tasks(session_id)?;
+                    writeln!(renderer.output, "{tasks}").map_err(BootstrapError::Stream)?;
+                }
+                Some("/task") => {
+                    renderer.finish_turn()?;
+                    let message = handle_task_command(backend, split_command_arg(trimmed))?;
+                    writeln!(renderer.output, "{message}").map_err(BootstrapError::Stream)?;
+                }
                 Some("/artifacts") => {
                     renderer.finish_turn()?;
                     let artifacts = backend.render_artifacts(session_id)?;
@@ -1383,7 +1420,9 @@ fn canonical_repl_command(raw: &str) -> Option<&'static str> {
         "/pause" | "\\пауза" => Some("/pause"),
         "/stop" | "\\стоп" => Some("/stop"),
         "/cancel" | "\\отмена" => Some("/cancel"),
-        "/jobs" | "\\задачи" => Some("/jobs"),
+        "/jobs" | "\\фоновые" => Some("/jobs"),
+        "/tasks" | "\\задачи" => Some("/tasks"),
+        "/task" | "\\задача" => Some("/task"),
         "/memory" | "/память" | "\\память" => Some("/memory"),
         "/artifacts" | "/артефакты" | "\\артефакты" => Some("/artifacts"),
         "/artifact" | "/артефакт" | "\\артефакт" => Some("/artifact"),
@@ -1692,6 +1731,27 @@ where
                 "неизвестная подкоманда памяти; ожидается сессии|сессия|знания|файл",
             ),
         }),
+    }
+}
+
+fn handle_task_command<B>(backend: &B, raw: Option<&str>) -> Result<String, BootstrapError>
+where
+    B: ChatReplBackend,
+{
+    let raw = raw.unwrap_or_default().trim();
+    let (action, tail) = match raw.split_once(' ') {
+        Some((action, tail)) => (action.trim(), tail.trim()),
+        None => (raw, ""),
+    };
+
+    match action {
+        "" => Err(BootstrapError::Usage {
+            reason: render_command_usage_error("/task", "не хватает task_id"),
+        }),
+        "cancel" | "отмена" | "отменить" => {
+            backend.cancel_task(&require_arg(tail, "/task")?)
+        }
+        task_id => backend.render_task(task_id),
     }
 }
 
