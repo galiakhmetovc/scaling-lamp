@@ -14,7 +14,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
-use teloxide::types::Update;
+use teloxide::types::{Message, Update, UpdateId, UpdateKind};
 
 const TELEGRAM_WEBHOOK_CONSUMER: &str = "teamd-telegram-webhook";
 const OUTBOX_PUBLISH_BATCH: i64 = 64;
@@ -279,6 +279,25 @@ pub fn telegram_update_from_payload(payload_json: &str) -> Result<Update, String
         .get("raw_update")
         .cloned()
         .ok_or_else(|| "telegram inbound payload missing raw_update".to_string())?;
+    telegram_update_from_raw_value(raw_update)
+}
+
+fn telegram_update_from_raw_value(raw_update: Value) -> Result<Update, String> {
+    let update_id = raw_update
+        .get("update_id")
+        .and_then(Value::as_u64)
+        .ok_or_else(|| "telegram raw update missing update_id".to_string())
+        .and_then(|value| {
+            u32::try_from(value).map_err(|_| format!("telegram update_id {value} overflows u32"))
+        })?;
+    if let Some(message) = raw_update.get("message").cloned() {
+        return Ok(Update {
+            id: UpdateId(update_id),
+            kind: UpdateKind::Message(
+                serde_json::from_value::<Message>(message).map_err(|error| error.to_string())?,
+            ),
+        });
+    }
     serde_json::from_value(raw_update).map_err(|error| error.to_string())
 }
 

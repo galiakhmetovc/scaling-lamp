@@ -8,6 +8,7 @@ use reqwest::blocking::Client;
 use serde_json::json;
 use std::net::TcpListener;
 use std::time::Duration;
+use teloxide::types::UpdateKind;
 
 fn free_port() -> u16 {
     TcpListener::bind("127.0.0.1:0")
@@ -45,7 +46,6 @@ fn telegram_update(update_id: i64, text: &str) -> String {
         "update_id": update_id,
         "message": {
             "message_id": 55,
-            "message_thread_id": 77,
             "date": 1770000200,
             "chat": {
                 "id": 42,
@@ -132,7 +132,7 @@ fn valid_update_stores_inbound_event_and_outbox_without_running_chat_turn() {
         serde_json::from_str(&inbound.payload_json).expect("payload json");
     assert_eq!(payload["text"], "hello");
     assert_eq!(payload["chat_id"], 42);
-    assert_eq!(payload["message_thread_id"], 77);
+    assert_eq!(payload["message_thread_id"], serde_json::Value::Null);
     assert_eq!(payload["raw_update"]["update_id"], 101);
     assert_eq!(payload["raw_update"]["message"]["text"], "hello");
 
@@ -199,6 +199,13 @@ fn webhook_payload_can_be_rehydrated_into_teloxide_update() {
         .expect("inbound exists");
     let update = telegram_update_from_payload(&inbound.payload_json).expect("rehydrate update");
     assert_eq!(update.id.0, 104);
+    let UpdateKind::Message(message) = update.kind else {
+        panic!("webhook payload must rehydrate into a message update");
+    };
+    assert_eq!(message.chat.id.0, 42);
+    assert!(message.chat.is_private());
+    assert_eq!(message.from.as_ref().expect("message sender").id.0, 7);
+    assert_eq!(message.text(), Some("rehydrate"));
 }
 
 #[test]
