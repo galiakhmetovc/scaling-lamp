@@ -687,7 +687,7 @@ fn collect_knowledge_sources(
         let absolute = workspace_root.join(&source.path);
         if absolute.is_file()
             && let Some(scanned) =
-                scan_knowledge_file(workspace_root, absolute.as_path(), source.kind)?
+                scan_knowledge_file(workspace_root, absolute.as_path(), source.kind, knowledge)?
         {
             sources.push(scanned);
         }
@@ -764,7 +764,8 @@ fn collect_knowledge_dir(
             collect_knowledge_dir(workspace_root, path.as_path(), source, knowledge, output)?;
         } else if file_type.is_file()
             && is_allowed_knowledge_extension(path.as_path(), knowledge)
-            && let Some(scanned) = scan_knowledge_file(workspace_root, path.as_path(), source.kind)?
+            && let Some(scanned) =
+                scan_knowledge_file(workspace_root, path.as_path(), source.kind, knowledge)?
         {
             output.push(scanned);
         }
@@ -777,9 +778,10 @@ fn scan_knowledge_file(
     workspace_root: &Path,
     path: &Path,
     kind: KnowledgeSourceKind,
+    knowledge: &KnowledgeConfig,
 ) -> Result<Option<ScannedKnowledgeSource>, ExecutionError> {
-    let content = match fs::read_to_string(path) {
-        Ok(content) => content,
+    let metadata = match fs::metadata(path) {
+        Ok(metadata) => metadata,
         Err(source) if is_skippable_knowledge_io_error(&source) => return Ok(None),
         Err(source) => {
             return Err(ExecutionError::Tool(ToolError::Workspace(
@@ -790,8 +792,11 @@ fn scan_knowledge_file(
             )));
         }
     };
-    let metadata = match fs::metadata(path) {
-        Ok(metadata) => metadata,
+    if metadata.len() > knowledge.max_file_bytes as u64 {
+        return Ok(None);
+    }
+    let content = match fs::read_to_string(path) {
+        Ok(content) => content,
         Err(source) if is_skippable_knowledge_io_error(&source) => return Ok(None),
         Err(source) => {
             return Err(ExecutionError::Tool(ToolError::Workspace(
@@ -1973,6 +1978,53 @@ mod tests {
 
         assert_eq!(search.results.len(), 1);
         assert_eq!(search.results[0].path, "docs/runtime.md");
+    }
+
+    #[test]
+    fn knowledge_search_skips_oversized_files() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let workspace = temp.path().join("workspace");
+        fs::create_dir_all(workspace.join("docs")).expect("create docs");
+        fs::write(
+            workspace.join("docs/small.md"),
+            "Small searchable runtime note.\n",
+        )
+        .expect("write small doc");
+        fs::write(
+            workspace.join("docs/generated.json"),
+            format!("{{\"payload\":\"{} oversized sentinel\"}}", "x".repeat(256)),
+        )
+        .expect("write generated doc");
+
+        let scaffold = PersistenceScaffold::from_config(AppConfig {
+            data_dir: temp.path().join("state-root"),
+            ..AppConfig::default()
+        });
+        let store = PersistenceStore::open(&scaffold).expect("open store");
+        let mut config = ExecutionServiceConfig::default();
+        config.knowledge.max_file_bytes = 128;
+        let service = ExecutionService::new(
+            PermissionConfig::default(),
+            WorkspaceRef::new(&workspace),
+            SharedProcessRegistry::default(),
+            crate::mcp::SharedMcpRegistry::default(),
+            config,
+        );
+
+        let search = service
+            .search_knowledge(
+                &store,
+                &KnowledgeSearchInput {
+                    query: "oversized sentinel".to_string(),
+                    limit: Some(10),
+                    offset: Some(0),
+                    kinds: Some(vec![KnowledgeSourceKind::ProjectDoc]),
+                    roots: Some(vec![KnowledgeRoot::Docs]),
+                },
+            )
+            .expect("knowledge search");
+
+        assert!(search.results.is_empty());
     }
 
     #[cfg(unix)]

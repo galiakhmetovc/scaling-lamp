@@ -378,6 +378,147 @@ pub struct FileDeliveryRequestRecord {
     pub error: Option<String>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DeliveryTargetRecord {
+    pub target_id: String,
+    pub kind: String,
+    pub address: String,
+    pub scope: String,
+    pub owner_user_id: Option<String>,
+    pub allowed_agent_ids_json: String,
+    pub allowed_session_ids_json: String,
+    pub send_policy_json: String,
+    pub format_policy: String,
+    pub created_at: i64,
+    pub updated_at: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SessionOutputRouteRecord {
+    pub route_id: String,
+    pub session_id: String,
+    pub target_id: String,
+    pub filter_json: String,
+    pub format_policy: String,
+    pub enabled: bool,
+    pub last_delivered_transcript_created_at: Option<i64>,
+    pub last_delivered_transcript_id: Option<String>,
+    pub created_at: i64,
+    pub updated_at: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EventSourceRecord {
+    pub source_id: String,
+    pub kind: String,
+    pub address: String,
+    pub display_name: Option<String>,
+    pub owner_user_id: Option<String>,
+    pub auth_policy_json: String,
+    pub default_route_policy_json: String,
+    pub enabled: bool,
+    pub created_at: i64,
+    pub updated_at: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RouterRuleRecord {
+    pub rule_id: String,
+    pub priority: i64,
+    pub enabled: bool,
+    pub source_filter_json: String,
+    pub operator_filter_json: String,
+    pub condition_json: String,
+    pub route_policy_json: String,
+    pub created_at: i64,
+    pub updated_at: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InboundEventRecord {
+    pub event_id: String,
+    pub dedupe_key: String,
+    pub source_kind: String,
+    pub source_id: String,
+    pub operator_id: Option<String>,
+    pub payload_json: String,
+    pub metadata_json: String,
+    pub status: String,
+    pub received_at: i64,
+    pub published_at: Option<i64>,
+    pub error: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RoutedEventRecord {
+    pub routed_event_id: String,
+    pub inbound_event_id: String,
+    pub rule_id: Option<String>,
+    pub session_id: String,
+    pub agent_id: String,
+    pub queue_policy: String,
+    pub priority: i64,
+    pub payload_json: String,
+    pub metadata_json: String,
+    pub status: String,
+    pub routed_at: i64,
+    pub published_at: Option<i64>,
+    pub error: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EventOutboxRecord {
+    pub outbox_id: String,
+    pub subject: String,
+    pub payload_json: String,
+    pub status: String,
+    pub attempt_count: i64,
+    pub next_attempt_at: i64,
+    pub created_at: i64,
+    pub published_at: Option<i64>,
+    pub last_error: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EventDeliveryRecord {
+    pub delivery_event_id: String,
+    pub source_event_id: String,
+    pub target_id: String,
+    pub status: String,
+    pub attempt_count: i64,
+    pub created_at: i64,
+    pub updated_at: i64,
+    pub delivered_at: Option<i64>,
+    pub last_error: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TaskRegistryRecord {
+    pub task_id: String,
+    pub kind: String,
+    pub source_session_id: Option<String>,
+    pub owner_agent_id: Option<String>,
+    pub executor_agent_id: Option<String>,
+    pub parent_task_id: Option<String>,
+    pub status: String,
+    pub dependency_json: String,
+    pub context_ref_json: String,
+    pub result_ref_json: Option<String>,
+    pub retry_policy_json: String,
+    pub attempt_count: i64,
+    pub max_attempts: i64,
+    pub timeout_at: Option<i64>,
+    pub chain_id: Option<String>,
+    pub hop_count: Option<i64>,
+    pub max_hops: Option<i64>,
+    pub trace_id: Option<String>,
+    pub created_at: i64,
+    pub updated_at: i64,
+    pub started_at: Option<i64>,
+    pub finished_at: Option<i64>,
+    pub error: Option<String>,
+}
+
 #[derive(Debug)]
 pub enum RecordConversionError {
     InvalidJobInput(serde_json::Error),

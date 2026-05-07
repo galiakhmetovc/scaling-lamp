@@ -33,11 +33,11 @@ use crate::mcp::SharedMcpRegistry;
 use crate::trace::{RuntimeTraceContext, TurnTraceSource};
 use agent_persistence::{
     A2APeerConfig, AgentRepository, BrowserConfig, ContextOffloadRepository,
-    ContextSummaryRepository, JobRecord, JobRepository, McpRepository, Mem0Config,
+    ContextSummaryRepository, EventBusConfig, JobRecord, JobRepository, McpRepository, Mem0Config,
     MemoryCuratorConfig, MemoryRecallConfig, MissionRecord, MissionRepository, PersistenceStore,
     PlanRecord, PlanRepository, RecordConversionError, RunRecord, RunRepository,
     RuntimeLimitsConfig, RuntimeTimingConfig, SessionInboxRepository, SessionRepository,
-    StoreError, TraceRepository, TranscriptRecord, TranscriptRepository,
+    StoreError, TaskRegistryRepository, TraceRepository, TranscriptRecord, TranscriptRepository,
 };
 use agent_runtime::agent::AgentProfile;
 use agent_runtime::inbox::SessionInboxEvent;
@@ -130,6 +130,18 @@ pub struct BackgroundWorkerTickReport {
     pub terminal_run_ids: Vec<String>,
 }
 
+impl BackgroundWorkerTickReport {
+    pub fn has_activity(&self) -> bool {
+        self.queued_jobs > 0
+            || self.dispatched_jobs > 0
+            || self.executed_jobs > 0
+            || self.emitted_inbox_events > 0
+            || self.woken_sessions > 0
+            || self.failed_jobs > 0
+            || !self.terminal_run_ids.is_empty()
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub struct SessionWorkCancellationReport {
     pub session_count: usize,
@@ -217,6 +229,7 @@ pub struct ExecutionServiceConfig {
     pub memory_curator: MemoryCuratorConfig,
     pub memory_recall: MemoryRecallConfig,
     pub knowledge: agent_persistence::KnowledgeConfig,
+    pub event_bus: EventBusConfig,
     pub runtime_timing: RuntimeTimingConfig,
     pub runtime_limits: RuntimeLimitsConfig,
 }
@@ -251,6 +264,7 @@ impl Default for ExecutionServiceConfig {
             memory_curator: MemoryCuratorConfig::default(),
             memory_recall: MemoryRecallConfig::default(),
             knowledge: agent_persistence::KnowledgeConfig::default(),
+            event_bus: EventBusConfig::default(),
             runtime_timing: RuntimeTimingConfig::default(),
             runtime_limits: RuntimeLimitsConfig::default(),
         }

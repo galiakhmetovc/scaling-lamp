@@ -149,7 +149,11 @@ fi
 if [ "$RESTART_SERVICES" -eq 1 ]; then
   \$SUDO systemctl daemon-reload
   \$SUDO systemctl restart "\$daemon_service"
-  \$SUDO systemctl restart "\$telegram_service"
+  if \$SUDO systemctl is-enabled --quiet "\$telegram_service" 2>/dev/null || \$SUDO systemctl is-active --quiet "\$telegram_service" 2>/dev/null; then
+    \$SUDO systemctl restart "\$telegram_service"
+  else
+    echo "telegram service restart skipped: \$telegram_service is disabled and inactive"
+  fi
   \$SUDO systemctl --no-pager --lines=0 status "\$daemon_service" "\$telegram_service"
 else
   echo "service restart skipped"

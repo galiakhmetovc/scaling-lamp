@@ -1074,6 +1074,10 @@ fn daemon_client_restarts_incompatible_local_daemon_build() {
                         components: 0,
                         data_dir: old_data_dir.clone(),
                         database: None,
+                        telegram_mode: "polling".to_string(),
+                        event_bus_required: false,
+                        event_bus_backend: "nats_jetstream".to_string(),
+                        event_bus_nats_configured: false,
                     })
                     .expect("serialize status");
                     let response = Response::from_string(payload)
@@ -1177,6 +1181,10 @@ fn daemon_client_restarts_local_daemon_when_data_dir_mismatches() {
                         components: 0,
                         data_dir: old_data_dir.clone(),
                         database: None,
+                        telegram_mode: "polling".to_string(),
+                        event_bus_required: false,
+                        event_bus_backend: "nats_jetstream".to_string(),
+                        event_bus_nats_configured: false,
                     })
                     .expect("serialize status");
                     let response = Response::from_string(payload)

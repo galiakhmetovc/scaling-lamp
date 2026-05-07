@@ -43,6 +43,7 @@ pub trait TelegramBackend: Clone + Send + Sync + 'static {
     fn cancel_active_run(&self, session_id: &str) -> Result<String, BootstrapError>;
     fn cancel_all_session_work(&self, session_id: &str) -> Result<String, BootstrapError>;
     fn render_session_background_jobs(&self, session_id: &str) -> Result<String, BootstrapError>;
+    fn render_session_tasks(&self, session_id: &str) -> Result<String, BootstrapError>;
     fn render_plan(&self, session_id: &str) -> Result<String, BootstrapError>;
     fn render_session_skills(&self, session_id: &str) -> Result<String, BootstrapError>;
     fn enable_session_skill(
@@ -164,6 +165,10 @@ impl TelegramBackend for DaemonTelegramBackend {
 
     fn render_session_background_jobs(&self, session_id: &str) -> Result<String, BootstrapError> {
         self.client.render_session_background_jobs(session_id)
+    }
+
+    fn render_session_tasks(&self, session_id: &str) -> Result<String, BootstrapError> {
+        self.client.render_session_tasks(session_id)
     }
 
     fn render_plan(&self, session_id: &str) -> Result<String, BootstrapError> {

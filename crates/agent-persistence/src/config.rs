@@ -46,6 +46,13 @@ const DEFAULT_SILVERBULLET_SPACE_DIR: &str = "/var/lib/teamd/knowledge/silverbul
 const DEFAULT_DATABASE_URL: &str = "postgresql://teamd@127.0.0.1:5432/teamd";
 const DEFAULT_DATABASE_CONNECT_TIMEOUT_SECONDS: u64 = 5;
 const DEFAULT_DATABASE_APPLICATION_NAME: &str = "teamd";
+const DEFAULT_EVENT_BUS_BACKEND: &str = "nats_jetstream";
+const DEFAULT_EVENT_BUS_INPUT_STREAM: &str = "TEAMD_INPUT";
+const DEFAULT_EVENT_BUS_SESSION_STREAM: &str = "TEAMD_SESSION";
+const DEFAULT_EVENT_BUS_DELIVERY_STREAM: &str = "TEAMD_DELIVERY";
+const DEFAULT_EVENT_BUS_TASK_STREAM: &str = "TEAMD_TASKS";
+const DEFAULT_EVENT_BUS_DLQ_STREAM: &str = "TEAMD_DLQ";
+const DEFAULT_TELEGRAM_MODE: &str = "polling";
 
 pub fn redacted_database_url(url: &str) -> String {
     let Some((scheme, rest)) = url.split_once("://") else {
@@ -61,6 +68,7 @@ pub fn redacted_database_url(url: &str) -> String {
 pub struct AppConfig {
     pub data_dir: PathBuf,
     pub database: DatabaseConfig,
+    pub event_bus: EventBusConfig,
     pub daemon: DaemonConfig,
     pub telegram: TelegramConfig,
     pub permissions: PermissionConfig,
@@ -89,6 +97,19 @@ pub struct DatabaseConfig {
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(default)]
+pub struct EventBusConfig {
+    pub required: bool,
+    pub backend: String,
+    pub nats_url: Option<String>,
+    pub input_stream: String,
+    pub session_stream: String,
+    pub delivery_stream: String,
+    pub task_stream: String,
+    pub dlq_stream: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(default)]
 pub struct DaemonConfig {
     pub bind_host: String,
     pub bind_port: u16,
@@ -105,6 +126,9 @@ pub struct DaemonConfig {
 pub struct TelegramConfig {
     pub enabled: bool,
     pub bot_token: Option<String>,
+    pub mode: String,
+    pub webhook_public_url: Option<String>,
+    pub webhook_secret: Option<String>,
     pub poll_interval_ms: u64,
     pub poll_request_timeout_seconds: u64,
     pub progress_update_min_interval_ms: u64,
@@ -176,6 +200,7 @@ pub struct KnowledgeConfig {
     pub source_files: Vec<KnowledgeSourcePathConfig>,
     pub source_dirs: Vec<KnowledgeSourcePathConfig>,
     pub allowed_extensions: Vec<String>,
+    pub max_file_bytes: usize,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
@@ -287,6 +312,9 @@ pub struct RuntimeTimingConfig {
     pub daemon_test_startup_probe_attempts: usize,
     pub daemon_test_startup_probe_interval_ms: u64,
     pub daemon_background_worker_tick_interval_ms: u64,
+    pub daemon_background_worker_idle_tick_interval_ms: u64,
+    pub daemon_mcp_maintenance_interval_seconds: u64,
+    pub daemon_memory_maintenance_interval_seconds: u64,
     pub daemon_background_worker_lease_seconds: i64,
     pub tui_event_poll_interval_ms: u64,
     pub tui_active_run_heartbeat_notice_interval_seconds: u64,
@@ -390,6 +418,14 @@ pub struct ConfigEnv {
     pub database_url_override: Option<String>,
     pub database_connect_timeout_override: Option<u64>,
     pub database_application_name_override: Option<String>,
+    pub event_bus_required_override: Option<bool>,
+    pub event_bus_backend_override: Option<String>,
+    pub event_bus_nats_url_override: Option<String>,
+    pub event_bus_input_stream_override: Option<String>,
+    pub event_bus_session_stream_override: Option<String>,
+    pub event_bus_delivery_stream_override: Option<String>,
+    pub event_bus_task_stream_override: Option<String>,
+    pub event_bus_dlq_stream_override: Option<String>,
     pub daemon_bearer_token_override: Option<String>,
     pub daemon_bind_host_override: Option<String>,
     pub daemon_bind_port_override: Option<u16>,
@@ -397,6 +433,9 @@ pub struct ConfigEnv {
     pub daemon_skills_dir_override: Option<PathBuf>,
     pub home_dir: Option<PathBuf>,
     pub telegram_bot_token_override: Option<String>,
+    pub telegram_mode_override: Option<String>,
+    pub telegram_webhook_public_url_override: Option<String>,
+    pub telegram_webhook_secret_override: Option<String>,
     pub workspace_default_root_override: Option<PathBuf>,
     pub context_compaction_keep_tail_messages_override: Option<usize>,
     pub context_compaction_max_output_tokens_override: Option<u32>,
@@ -435,6 +474,10 @@ pub struct ConfigEnv {
     pub memory_recall_max_results_override: Option<usize>,
     pub memory_recall_max_query_chars_override: Option<usize>,
     pub memory_recall_max_memory_chars_override: Option<usize>,
+    pub daemon_background_worker_idle_tick_interval_ms_override: Option<u64>,
+    pub daemon_mcp_maintenance_interval_seconds_override: Option<u64>,
+    pub daemon_memory_maintenance_interval_seconds_override: Option<u64>,
+    pub knowledge_max_file_bytes_override: Option<usize>,
     pub operator_timezone_override: Option<String>,
     pub silverbullet_space_dir_override: Option<PathBuf>,
     pub silverbullet_base_url_override: Option<String>,
@@ -495,6 +538,7 @@ pub enum ConfigError {
 struct FileConfig {
     data_dir: Option<PathBuf>,
     database: Option<DatabaseConfig>,
+    event_bus: Option<EventBusConfig>,
     daemon: Option<DaemonConfig>,
     telegram: Option<TelegramConfig>,
     permissions: Option<PermissionConfig>,
@@ -538,11 +582,29 @@ impl Default for DatabaseConfig {
     }
 }
 
+impl Default for EventBusConfig {
+    fn default() -> Self {
+        Self {
+            required: false,
+            backend: DEFAULT_EVENT_BUS_BACKEND.to_string(),
+            nats_url: None,
+            input_stream: DEFAULT_EVENT_BUS_INPUT_STREAM.to_string(),
+            session_stream: DEFAULT_EVENT_BUS_SESSION_STREAM.to_string(),
+            delivery_stream: DEFAULT_EVENT_BUS_DELIVERY_STREAM.to_string(),
+            task_stream: DEFAULT_EVENT_BUS_TASK_STREAM.to_string(),
+            dlq_stream: DEFAULT_EVENT_BUS_DLQ_STREAM.to_string(),
+        }
+    }
+}
+
 impl Default for TelegramConfig {
     fn default() -> Self {
         Self {
             enabled: false,
             bot_token: None,
+            mode: DEFAULT_TELEGRAM_MODE.to_string(),
+            webhook_public_url: None,
+            webhook_secret: None,
             poll_interval_ms: 1_000,
             poll_request_timeout_seconds: 50,
             progress_update_min_interval_ms: 1_250,
@@ -651,6 +713,7 @@ impl Default for KnowledgeConfig {
                 "yml".to_string(),
                 "toml".to_string(),
             ],
+            max_file_bytes: 1_048_576,
         }
     }
 }
@@ -798,6 +861,9 @@ impl Default for RuntimeTimingConfig {
             daemon_test_startup_probe_attempts: 50,
             daemon_test_startup_probe_interval_ms: 20,
             daemon_background_worker_tick_interval_ms: 100,
+            daemon_background_worker_idle_tick_interval_ms: 1_000,
+            daemon_mcp_maintenance_interval_seconds: 10,
+            daemon_memory_maintenance_interval_seconds: 30,
             daemon_background_worker_lease_seconds: 60,
             tui_event_poll_interval_ms: 100,
             tui_active_run_heartbeat_notice_interval_seconds: 30,
@@ -846,6 +912,18 @@ impl RuntimeTimingConfig {
 
     pub fn daemon_background_worker_tick_interval(&self) -> Duration {
         Duration::from_millis(self.daemon_background_worker_tick_interval_ms)
+    }
+
+    pub fn daemon_background_worker_idle_tick_interval(&self) -> Duration {
+        Duration::from_millis(self.daemon_background_worker_idle_tick_interval_ms)
+    }
+
+    pub fn daemon_mcp_maintenance_interval(&self) -> Duration {
+        Duration::from_secs(self.daemon_mcp_maintenance_interval_seconds)
+    }
+
+    pub fn daemon_memory_maintenance_interval(&self) -> Duration {
+        Duration::from_secs(self.daemon_memory_maintenance_interval_seconds)
     }
 
     pub fn tui_event_poll_interval(&self) -> Duration {
@@ -1052,6 +1130,24 @@ impl ConfigEnv {
                 "TEAMD_DATABASE_APPLICATION_NAME",
                 &dotenv,
             ),
+            event_bus_required_override: read_bool_var("TEAMD_EVENT_BUS_REQUIRED", &dotenv)?,
+            event_bus_backend_override: read_string_var("TEAMD_EVENT_BUS_BACKEND", &dotenv),
+            event_bus_nats_url_override: read_string_var("TEAMD_NATS_URL", &dotenv)
+                .or_else(|| read_string_var("TEAMD_EVENT_BUS_NATS_URL", &dotenv)),
+            event_bus_input_stream_override: read_string_var(
+                "TEAMD_EVENT_BUS_INPUT_STREAM",
+                &dotenv,
+            ),
+            event_bus_session_stream_override: read_string_var(
+                "TEAMD_EVENT_BUS_SESSION_STREAM",
+                &dotenv,
+            ),
+            event_bus_delivery_stream_override: read_string_var(
+                "TEAMD_EVENT_BUS_DELIVERY_STREAM",
+                &dotenv,
+            ),
+            event_bus_task_stream_override: read_string_var("TEAMD_EVENT_BUS_TASK_STREAM", &dotenv),
+            event_bus_dlq_stream_override: read_string_var("TEAMD_EVENT_BUS_DLQ_STREAM", &dotenv),
             daemon_bearer_token_override: read_string_var("TEAMD_DAEMON_BEARER_TOKEN", &dotenv),
             daemon_bind_host_override: read_string_var("TEAMD_DAEMON_BIND_HOST", &dotenv),
             daemon_bind_port_override: read_u16_var("TEAMD_DAEMON_BIND_PORT", &dotenv)?,
@@ -1062,6 +1158,15 @@ impl ConfigEnv {
             daemon_skills_dir_override: read_path_var("TEAMD_DAEMON_SKILLS_DIR", &dotenv)?,
             home_dir: read_path_var("HOME", &dotenv)?,
             telegram_bot_token_override: read_string_var("TEAMD_TELEGRAM_BOT_TOKEN", &dotenv),
+            telegram_mode_override: read_string_var("TEAMD_TELEGRAM_MODE", &dotenv),
+            telegram_webhook_public_url_override: read_string_var(
+                "TEAMD_TELEGRAM_WEBHOOK_PUBLIC_URL",
+                &dotenv,
+            ),
+            telegram_webhook_secret_override: read_string_var(
+                "TEAMD_TELEGRAM_WEBHOOK_SECRET",
+                &dotenv,
+            ),
             workspace_default_root_override: read_path_var(
                 "TEAMD_WORKSPACE_DEFAULT_ROOT",
                 &dotenv,
@@ -1155,6 +1260,22 @@ impl ConfigEnv {
             )?,
             memory_recall_max_memory_chars_override: read_usize_var(
                 "TEAMD_MEMORY_RECALL_MAX_MEMORY_CHARS",
+                &dotenv,
+            )?,
+            daemon_background_worker_idle_tick_interval_ms_override: read_u64_var(
+                "TEAMD_DAEMON_BACKGROUND_WORKER_IDLE_TICK_INTERVAL_MS",
+                &dotenv,
+            )?,
+            daemon_mcp_maintenance_interval_seconds_override: read_u64_var(
+                "TEAMD_DAEMON_MCP_MAINTENANCE_INTERVAL_SECONDS",
+                &dotenv,
+            )?,
+            daemon_memory_maintenance_interval_seconds_override: read_u64_var(
+                "TEAMD_DAEMON_MEMORY_MAINTENANCE_INTERVAL_SECONDS",
+                &dotenv,
+            )?,
+            knowledge_max_file_bytes_override: read_usize_var(
+                "TEAMD_KNOWLEDGE_MAX_FILE_BYTES",
                 &dotenv,
             )?,
             operator_timezone_override: read_string_var("TEAMD_OPERATOR_TIMEZONE", &dotenv),
@@ -1265,6 +1386,10 @@ impl AppConfig {
             .as_ref()
             .and_then(|config| config.database.clone())
             .unwrap_or_default();
+        let mut event_bus = file_config
+            .as_ref()
+            .and_then(|config| config.event_bus.clone())
+            .unwrap_or_default();
         let mut daemon = file_config
             .as_ref()
             .and_then(|config| config.daemon.clone())
@@ -1317,7 +1442,7 @@ impl AppConfig {
             .as_ref()
             .and_then(|config| config.observability.clone())
             .unwrap_or_default();
-        let runtime_timing = file_config
+        let mut runtime_timing = file_config
             .as_ref()
             .and_then(|config| config.runtime_timing.clone())
             .unwrap_or_default();
@@ -1385,6 +1510,39 @@ impl AppConfig {
         }
         if let Some(application_name) = &env.database_application_name_override {
             database.application_name = application_name.clone();
+        }
+        if let Some(required) = env.event_bus_required_override {
+            event_bus.required = required;
+        }
+        if let Some(backend) = &env.event_bus_backend_override {
+            event_bus.backend = backend.clone();
+        }
+        if let Some(nats_url) = &env.event_bus_nats_url_override {
+            event_bus.nats_url = Some(nats_url.clone());
+        }
+        if let Some(stream) = &env.event_bus_input_stream_override {
+            event_bus.input_stream = stream.clone();
+        }
+        if let Some(stream) = &env.event_bus_session_stream_override {
+            event_bus.session_stream = stream.clone();
+        }
+        if let Some(stream) = &env.event_bus_delivery_stream_override {
+            event_bus.delivery_stream = stream.clone();
+        }
+        if let Some(stream) = &env.event_bus_task_stream_override {
+            event_bus.task_stream = stream.clone();
+        }
+        if let Some(stream) = &env.event_bus_dlq_stream_override {
+            event_bus.dlq_stream = stream.clone();
+        }
+        if let Some(mode) = &env.telegram_mode_override {
+            telegram.mode = mode.clone();
+        }
+        if let Some(webhook_public_url) = &env.telegram_webhook_public_url_override {
+            telegram.webhook_public_url = Some(webhook_public_url.clone());
+        }
+        if let Some(webhook_secret) = &env.telegram_webhook_secret_override {
+            telegram.webhook_secret = Some(webhook_secret.clone());
         }
         if let Some(limit) = env.session_working_memory_limit_override {
             session_defaults.working_memory_limit = limit;
@@ -1506,6 +1664,18 @@ impl AppConfig {
         if let Some(chars) = env.memory_recall_max_memory_chars_override {
             memory_recall.max_memory_chars = chars;
         }
+        if let Some(ms) = env.daemon_background_worker_idle_tick_interval_ms_override {
+            runtime_timing.daemon_background_worker_idle_tick_interval_ms = ms;
+        }
+        if let Some(seconds) = env.daemon_mcp_maintenance_interval_seconds_override {
+            runtime_timing.daemon_mcp_maintenance_interval_seconds = seconds;
+        }
+        if let Some(seconds) = env.daemon_memory_maintenance_interval_seconds_override {
+            runtime_timing.daemon_memory_maintenance_interval_seconds = seconds;
+        }
+        if let Some(max_file_bytes) = env.knowledge_max_file_bytes_override {
+            knowledge.max_file_bytes = max_file_bytes;
+        }
         if let Some(timezone) = &env.operator_timezone_override {
             knowledge.operator_timezone = timezone.clone();
         }
@@ -1540,6 +1710,7 @@ impl AppConfig {
         let config = Self {
             data_dir,
             database,
+            event_bus,
             daemon,
             telegram,
             permissions,
@@ -1601,6 +1772,43 @@ impl AppConfig {
             "database.connect_timeout_seconds",
             self.database.connect_timeout_seconds,
         )?;
+        validate_event_bus_backend("event_bus.backend", self.event_bus.backend.as_str())?;
+        validate_non_empty_config_string(
+            "event_bus.input_stream",
+            self.event_bus.input_stream.as_str(),
+        )?;
+        validate_non_empty_config_string(
+            "event_bus.session_stream",
+            self.event_bus.session_stream.as_str(),
+        )?;
+        validate_non_empty_config_string(
+            "event_bus.delivery_stream",
+            self.event_bus.delivery_stream.as_str(),
+        )?;
+        validate_non_empty_config_string(
+            "event_bus.task_stream",
+            self.event_bus.task_stream.as_str(),
+        )?;
+        validate_non_empty_config_string(
+            "event_bus.dlq_stream",
+            self.event_bus.dlq_stream.as_str(),
+        )?;
+        if let Some(nats_url) = &self.event_bus.nats_url
+            && nats_url.trim().is_empty()
+        {
+            return Err(ConfigError::InvalidProviderValue {
+                name: "event_bus.nats_url",
+                value: nats_url.clone(),
+                reason: "must not be empty when configured",
+            });
+        }
+        if self.event_bus.required && self.event_bus.nats_url.is_none() {
+            return Err(ConfigError::InvalidProviderValue {
+                name: "event_bus.nats_url",
+                value: String::new(),
+                reason: "must be set when event_bus.required is true",
+            });
+        }
 
         if self.daemon.bind_host.trim().is_empty() {
             return Err(ConfigError::InvalidProviderValue {
@@ -1667,6 +1875,40 @@ impl AppConfig {
                 value: bot_token.clone(),
                 reason: "must not be empty",
             });
+        }
+        validate_telegram_mode("telegram.mode", self.telegram.mode.as_str())?;
+        if self.event_bus.required && self.telegram.enabled && self.telegram.mode != "webhook" {
+            return Err(ConfigError::InvalidProviderValue {
+                name: "telegram.mode",
+                value: self.telegram.mode.clone(),
+                reason: "must be webhook when event_bus.required is true",
+            });
+        }
+        if self.telegram.enabled && self.telegram.mode == "webhook" {
+            if self
+                .telegram
+                .webhook_public_url
+                .as_deref()
+                .is_none_or(|value| value.trim().is_empty())
+            {
+                return Err(ConfigError::InvalidProviderValue {
+                    name: "telegram.webhook_public_url",
+                    value: self.telegram.webhook_public_url.clone().unwrap_or_default(),
+                    reason: "must be set when telegram.mode is webhook",
+                });
+            }
+            if self
+                .telegram
+                .webhook_secret
+                .as_deref()
+                .is_none_or(|value| value.trim().is_empty())
+            {
+                return Err(ConfigError::InvalidProviderValue {
+                    name: "telegram.webhook_secret",
+                    value: self.telegram.webhook_secret.clone().unwrap_or_default(),
+                    reason: "must be set when telegram.mode is webhook",
+                });
+            }
         }
 
         if self.web.search_url.trim().is_empty() {
@@ -1794,6 +2036,7 @@ impl AppConfig {
             "knowledge.allowed_extensions",
             &self.knowledge.allowed_extensions,
         )?;
+        validate_positive_usize_value("knowledge.max_file_bytes", self.knowledge.max_file_bytes)?;
         if self.observability.otlp_endpoint.trim().is_empty() {
             return Err(ConfigError::InvalidProviderValue {
                 name: "observability.otlp_endpoint",
@@ -2049,6 +2292,20 @@ impl AppConfig {
             "runtime_timing.daemon_background_worker_tick_interval_ms",
             self.runtime_timing
                 .daemon_background_worker_tick_interval_ms,
+        )?;
+        validate_positive_u64_value(
+            "runtime_timing.daemon_background_worker_idle_tick_interval_ms",
+            self.runtime_timing
+                .daemon_background_worker_idle_tick_interval_ms,
+        )?;
+        validate_positive_u64_value(
+            "runtime_timing.daemon_mcp_maintenance_interval_seconds",
+            self.runtime_timing.daemon_mcp_maintenance_interval_seconds,
+        )?;
+        validate_positive_u64_value(
+            "runtime_timing.daemon_memory_maintenance_interval_seconds",
+            self.runtime_timing
+                .daemon_memory_maintenance_interval_seconds,
         )?;
         validate_positive_i64_value(
             "runtime_timing.daemon_background_worker_lease_seconds",
@@ -2476,6 +2733,7 @@ fn load_file_config(path: &Path, required: bool) -> Result<FileConfig, ConfigErr
             return Ok(FileConfig {
                 data_dir: None,
                 database: None,
+                event_bus: None,
                 daemon: None,
                 telegram: None,
                 permissions: None,
@@ -2775,6 +3033,39 @@ fn validate_telegram_inbound_queue_mode(
     }
 }
 
+fn validate_telegram_mode(name: &'static str, value: &str) -> Result<(), ConfigError> {
+    match value {
+        "polling" | "webhook" => Ok(()),
+        other => Err(ConfigError::InvalidProviderValue {
+            name,
+            value: other.to_string(),
+            reason: "must be one of polling, webhook",
+        }),
+    }
+}
+
+fn validate_event_bus_backend(name: &'static str, value: &str) -> Result<(), ConfigError> {
+    match value {
+        "nats_jetstream" => Ok(()),
+        other => Err(ConfigError::InvalidProviderValue {
+            name,
+            value: other.to_string(),
+            reason: "must be nats_jetstream",
+        }),
+    }
+}
+
+fn validate_non_empty_config_string(name: &'static str, value: &str) -> Result<(), ConfigError> {
+    if value.trim().is_empty() {
+        return Err(ConfigError::InvalidProviderValue {
+            name,
+            value: value.to_string(),
+            reason: "must not be empty",
+        });
+    }
+    Ok(())
+}
+
 fn validate_memory_curator_mode(name: &'static str, value: &str) -> Result<(), ConfigError> {
     match value {
         "auto" | "review" | "off" => Ok(()),
@@ -3040,6 +3331,7 @@ impl Default for AppConfig {
         Self {
             data_dir: default_data_dir(),
             database: DatabaseConfig::default(),
+            event_bus: EventBusConfig::default(),
             daemon: DaemonConfig::default(),
             telegram: TelegramConfig::default(),
             permissions: PermissionConfig::default(),

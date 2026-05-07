@@ -330,6 +330,20 @@ cargo run -p agentd -- telegram run
 
 Процесс должен оставаться запущенным, пока нужен Telegram-доступ.
 
+Webhook/NATS mode работает иначе: `agentd telegram run` не запускается и намеренно завершится ошибкой, если `telegram.mode = "webhook"`. Updates принимает daemon HTTP route `/v1/telegram/webhook/<secret>`, дальше событие идёт через `inbound_events`, NATS JetStream, rule router, session worker и delivery worker.
+
+Минимальные env overrides для webhook mode:
+
+```bash
+TEAMD_TELEGRAM_MODE=webhook
+TEAMD_TELEGRAM_WEBHOOK_PUBLIC_URL=https://<domain>/v1/telegram/webhook/<secret>
+TEAMD_TELEGRAM_WEBHOOK_SECRET=<secret>
+TEAMD_EVENT_BUS_REQUIRED=true
+TEAMD_NATS_URL=nats://127.0.0.1:4222
+```
+
+В этом режиме не запускайте `teamd-telegram.service` для того же bot token.
+
 ## 9. Настроить systemd вручную
 
 Для постоянного сервера лучше запускать два systemd unit’а:

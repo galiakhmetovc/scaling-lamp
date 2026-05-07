@@ -3,12 +3,14 @@ pub(crate) mod bindings;
 pub mod client;
 pub(crate) mod commands;
 pub(crate) mod delivery;
+pub(crate) mod event_delivery;
 pub(crate) mod files;
 pub mod polling;
 pub(crate) mod progress;
 pub(crate) mod queue;
 pub mod render;
 pub mod router;
+pub mod webhook;
 
 use crate::bootstrap::{App, BootstrapError};
 use crate::http::client::{DaemonConnectOptions, connect_or_autospawn_detailed};
@@ -25,6 +27,16 @@ pub(crate) fn run(app: &App) -> Result<(), BootstrapError> {
     if !app.config.telegram.enabled {
         return Err(BootstrapError::Usage {
             reason: "telegram is disabled in config".to_string(),
+        });
+    }
+    let plan = crate::event_runtime::build_event_runtime_plan(&app.config).map_err(|error| {
+        BootstrapError::Usage {
+            reason: error.to_string(),
+        }
+    })?;
+    if !plan.starts_telegram_polling {
+        return Err(BootstrapError::Usage {
+            reason: "telegram.mode=webhook is served by the daemon event runtime; long polling is disabled".to_string(),
         });
     }
 

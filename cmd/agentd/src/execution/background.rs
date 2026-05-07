@@ -6,7 +6,6 @@ use agent_runtime::agent::{
 use agent_runtime::delegation::DelegateResultPackage;
 use agent_runtime::inbox::SessionInboxEvent;
 use agent_runtime::mission::{JobExecutionInput, JobKind, JobStatus};
-use agent_runtime::run::RunStatus;
 use agent_runtime::session::{Session, TranscriptEntry};
 use std::collections::BTreeSet;
 
@@ -17,8 +16,23 @@ impl ExecutionService {
         provider: &dyn ProviderDriver,
         now: i64,
     ) -> Result<BackgroundWorkerTickReport, ExecutionError> {
-        self.maintain_mcp_connectors(store, now)?;
-        self.maintain_memory(store, now)?;
+        self.background_worker_tick_with_options(store, provider, now, true, true)
+    }
+
+    pub fn background_worker_tick_with_options(
+        &self,
+        store: &PersistenceStore,
+        provider: &dyn ProviderDriver,
+        now: i64,
+        maintain_mcp: bool,
+        maintain_memory: bool,
+    ) -> Result<BackgroundWorkerTickReport, ExecutionError> {
+        if maintain_mcp {
+            self.maintain_mcp_connectors(store, now)?;
+        }
+        if maintain_memory {
+            self.maintain_memory(store, now)?;
+        }
         let fired_schedules = self.dispatch_due_agent_schedules(store, now)?;
         let supervisor = self.supervisor_tick(store, now, &[])?;
         let mut report = BackgroundWorkerTickReport {
@@ -201,10 +215,71 @@ impl ExecutionService {
         store: &PersistenceStore,
         job: &JobSpec,
     ) -> Result<bool, ExecutionError> {
+        if self.config.event_bus.required
+            && matches!(job.kind, JobKind::InterAgentMessage | JobKind::Delegate)
+            && store
+                .get_task_registry(&format!("task-{}", job.id))
+                .map_err(ExecutionError::Store)?
+                .is_some()
+        {
+            return Ok(true);
+        }
         match job.kind {
             JobKind::ScheduledChatTurn => self.session_has_active_run(store, &job.session_id),
             _ => Ok(false),
         }
+    }
+
+    pub(crate) fn execute_task_backed_job(
+        &self,
+        store: &PersistenceStore,
+        provider: &dyn ProviderDriver,
+        job_id: &str,
+        now: i64,
+    ) -> Result<JobSpec, ExecutionError> {
+        let mut job = self.load_job(store, job_id)?;
+        if matches!(
+            job.status,
+            JobStatus::Completed | JobStatus::Failed | JobStatus::Blocked | JobStatus::Cancelled
+        ) {
+            return Ok(job);
+        }
+        if job.cancel_requested_at.is_some() {
+            self.cancel_background_job(store, &job.id, now)?;
+            return self.load_job(store, &job.id);
+        }
+        if job.status == JobStatus::Queued {
+            job.status = JobStatus::Running;
+            job.started_at.get_or_insert(now);
+            job.updated_at = now;
+            store
+                .put_job(&JobRecord::try_from(&job).map_err(ExecutionError::RecordConversion)?)
+                .map_err(ExecutionError::Store)?;
+        }
+        let job = self.load_job(store, job_id)?;
+        if job.status == JobStatus::Running
+            && let Some(lease_expires_at) = job.lease_expires_at
+            && lease_expires_at > now
+            && job.lease_owner.as_deref() != Some(self.config.worker_lease_owner.as_str())
+        {
+            return Ok(job);
+        }
+
+        self.claim_background_job(store, job_id, now)?;
+        let execution_result = self.execute_background_job(store, provider, job_id, now);
+        match execution_result {
+            Ok(())
+            | Err(ExecutionError::CancelledByOperator)
+            | Err(ExecutionError::ApprovalRequired { .. }) => {}
+            Err(error) => return Err(error),
+        }
+
+        let updated_job = self.load_job(store, job_id)?;
+        self.sync_schedule_state_from_job(store, &updated_job, now)?;
+        self.deliver_callback_for_job(store, &updated_job, now)?;
+        let updated_job = self.load_job(store, job_id)?;
+        self.emit_inbox_event_for_job(store, &updated_job, now)?;
+        self.load_job(store, job_id)
     }
 
     fn claim_background_job(
@@ -880,25 +955,9 @@ impl ExecutionService {
         store: &PersistenceStore,
         session_id: &str,
     ) -> Result<bool, ExecutionError> {
-        Ok(store
-            .list_runs()
-            .map_err(ExecutionError::Store)?
-            .into_iter()
-            .map(RunSnapshot::try_from)
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(ExecutionError::RecordConversion)?
-            .into_iter()
-            .any(|run| {
-                run.session_id == session_id
-                    && matches!(
-                        run.status,
-                        RunStatus::Queued
-                            | RunStatus::Running
-                            | RunStatus::WaitingApproval
-                            | RunStatus::WaitingProcess
-                            | RunStatus::Resuming
-                    )
-            }))
+        store
+            .session_has_active_run(session_id)
+            .map_err(ExecutionError::Store)
     }
 
     fn cancel_background_job(

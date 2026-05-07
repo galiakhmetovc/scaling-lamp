@@ -7,7 +7,7 @@ use crate::http::types::{
     DebugBundleResponse, MemoryRenderResponse, SessionAgentMessageRequest, SessionArtifactResponse,
     SessionArtifactsResponse, SessionBackgroundJobsResponse, SessionChainGrantRequest,
     SessionDetailResponse, SessionRunControlResponse, SessionRunStatusResponse,
-    SessionSystemResponse, SkillCommandRequest,
+    SessionSystemResponse, SessionTasksResponse, SkillCommandRequest,
 };
 use agent_runtime::tool::{
     KnowledgeReadInput, KnowledgeSearchInput, SessionReadInput, SessionSearchInput,
@@ -474,6 +474,45 @@ impl DaemonClient {
             }
             if let Some(progress) = job.last_progress_message {
                 lines.push(format!("  прогресс: {progress}"));
+            }
+        }
+        Ok(lines.join("\n"))
+    }
+
+    pub fn session_tasks(&self, session_id: &str) -> Result<Vec<SessionTask>, BootstrapError> {
+        let tasks: SessionTasksResponse =
+            self.get_json(&format!("/v1/sessions/{session_id}/tasks"))?;
+        Ok(tasks.into_iter().map(SessionTask::from).collect())
+    }
+
+    pub fn render_session_tasks(&self, session_id: &str) -> Result<String, BootstrapError> {
+        let tasks = self.session_tasks(session_id)?;
+        if tasks.is_empty() {
+            return Ok("Делегированные задачи: нет".to_string());
+        }
+
+        let mut lines = vec!["Делегированные задачи:".to_string()];
+        for task in tasks {
+            lines.push(format!("- [{}] {} ({})", task.status, task.id, task.kind));
+            if let Some(owner) = task.owner_agent_id.as_deref() {
+                lines.push(format!("  owner_agent_id: {owner}"));
+            }
+            if let Some(executor) = task.executor_agent_id.as_deref() {
+                lines.push(format!("  executor_agent_id: {executor}"));
+            }
+            lines.push(format!(
+                "  attempts: {}/{}",
+                task.attempt_count, task.max_attempts
+            ));
+            lines.push(format!("  updated: {}", task.updated_at));
+            if let Some(chain_id) = task.chain_id.as_deref() {
+                lines.push(format!("  chain_id: {chain_id}"));
+            }
+            if let Some(error) = task.error.as_deref() {
+                lines.push(format!("  error: {error}"));
+            }
+            if let Some(result_ref_json) = task.result_ref_json.as_deref() {
+                lines.push(format!("  result_ref: {result_ref_json}"));
             }
         }
         Ok(lines.join("\n"))

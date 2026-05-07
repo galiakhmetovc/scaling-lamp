@@ -5,9 +5,9 @@ use super::bindings::{
 use super::client::{TelegramClient, TelegramClientError};
 use super::commands::{
     ParsedTelegramCommand, TELEGRAM_INBOUND_QUEUE_MODE_COALESCE, TELEGRAM_INBOUND_QUEUE_MODE_QUEUE,
-    TELEGRAM_INBOUND_QUEUE_MODE_REJECT, TELEGRAM_INBOUND_QUEUE_MODE_RESTART, TelegramQueueAction,
-    coalesce_window_seconds, default_command_specs, is_session_operator_command, parse_command,
-    parse_command_for_bot,
+    TELEGRAM_INBOUND_QUEUE_MODE_REJECT, TELEGRAM_INBOUND_QUEUE_MODE_RESTART, TelegramOutputsAction,
+    TelegramQueueAction, coalesce_window_seconds, default_command_specs,
+    is_session_operator_command, parse_command, parse_command_for_bot,
 };
 use super::delivery::{
     DeliveryCursor, TelegramDeliveryLimiter, TelegramDeliveryScope, TelegramDeliveryTrace,
@@ -33,16 +33,20 @@ use super::render::{
     render_pairing_required_message, render_session_created, render_session_list,
     render_session_selected, truncate_caption,
 };
-use crate::bootstrap::{App, BootstrapError, SessionPreferencesPatch, SessionSummary};
+use crate::bootstrap::{
+    App, BootstrapError, DeliveryTargetCreateOptions, DeliveryTargetView,
+    SessionOutputRouteCreateOptions, SessionOutputRouteView, SessionPreferencesPatch,
+    SessionSummary,
+};
 use crate::diagnostics::DiagnosticEventBuilder;
 use crate::execution::{ChatExecutionEvent, ChatTurnExecutionReport};
 use crate::store_retry::{retry_store_sync, store_retry_attempts, store_retry_delay};
 use agent_persistence::{
-    ArtifactRecord, ArtifactRepository, FileDeliveryRepository, FileDeliveryRequestRecord,
-    PersistenceStore, SessionInboxRepository, StoreError, TelegramChatBindingRecord,
-    TelegramChatStatusRecord, TelegramRepository, TelegramUpdateCursorRecord,
-    TelegramUserPairingRecord, TraceRepository, TranscriptRecord, TranscriptRepository,
-    audit::AuditLogConfig,
+    ArtifactRecord, ArtifactRepository, DeliveryRepository, FileDeliveryRepository,
+    FileDeliveryRequestRecord, PersistenceStore, SessionInboxRepository, SessionOutputRouteRecord,
+    StoreError, TelegramChatBindingRecord, TelegramChatStatusRecord, TelegramRepository,
+    TelegramUpdateCursorRecord, TelegramUserPairingRecord, TraceRepository, TranscriptRecord,
+    TranscriptRepository, audit::AuditLogConfig,
 };
 use serde_json::json;
 use std::collections::HashSet;
@@ -171,7 +175,7 @@ where
             .map_err(map_client_error)
     }
 
-    async fn handle_update(&self, update: Update) -> Result<(), BootstrapError> {
+    pub async fn handle_update(&self, update: Update) -> Result<(), BootstrapError> {
         match update.kind {
             UpdateKind::Message(message) => self.handle_message(message).await,
             _ => Ok(()),
@@ -495,6 +499,22 @@ where
                 self.send_chat_artifact_file(chat_id, artifact_id.as_str())
                     .await
             }
+            ParsedTelegramCommand::Target => {
+                if self.load_activated_pairing(telegram_user_id)?.is_none() {
+                    self.send_text_chunks(chat_id, &render_pairing_required_message())
+                        .await?;
+                    return Ok(());
+                }
+                let target = self
+                    .register_current_chat_delivery_target(
+                        chat_id,
+                        Some(telegram_user_id),
+                        telegram_chat_scope(message),
+                    )
+                    .await?;
+                self.send_text_chunks(chat_id, &render_delivery_target_registered(&target.id))
+                    .await
+            }
             ParsedTelegramCommand::Judge { message } => {
                 if self.load_activated_pairing(telegram_user_id)?.is_none() {
                     self.send_text_chunks(chat_id, &render_pairing_required_message())
@@ -533,8 +553,10 @@ where
             }
             ParsedTelegramCommand::Status
             | ParsedTelegramCommand::Jobs
+            | ParsedTelegramCommand::Tasks
             | ParsedTelegramCommand::Plan
             | ParsedTelegramCommand::Queue { .. }
+            | ParsedTelegramCommand::Outputs { .. }
             | ParsedTelegramCommand::Stop
             | ParsedTelegramCommand::Cancel
             | ParsedTelegramCommand::Model { .. }
@@ -713,6 +735,22 @@ where
                 self.send_chat_artifact_file(chat_id, artifact_id.as_str())
                     .await
             }
+            ParsedTelegramCommand::Target => {
+                if self.load_activated_pairing(telegram_user_id)?.is_none() {
+                    self.send_text_chunks(chat_id, &render_pairing_required_message())
+                        .await?;
+                    return Ok(());
+                }
+                let target = self
+                    .register_current_chat_delivery_target(
+                        chat_id,
+                        Some(telegram_user_id),
+                        telegram_chat_scope(message),
+                    )
+                    .await?;
+                self.send_text_chunks(chat_id, &render_delivery_target_registered(&target.id))
+                    .await
+            }
             ParsedTelegramCommand::Judge { message } => {
                 if self.load_activated_pairing(telegram_user_id)?.is_none() {
                     self.send_text_chunks(chat_id, &render_pairing_required_message())
@@ -755,8 +793,10 @@ where
             }
             ParsedTelegramCommand::Status
             | ParsedTelegramCommand::Jobs
+            | ParsedTelegramCommand::Tasks
             | ParsedTelegramCommand::Plan
             | ParsedTelegramCommand::Queue { .. }
+            | ParsedTelegramCommand::Outputs { .. }
             | ParsedTelegramCommand::Stop
             | ParsedTelegramCommand::Cancel
             | ParsedTelegramCommand::Model { .. }
@@ -930,6 +970,69 @@ where
         Ok(())
     }
 
+    async fn register_current_chat_delivery_target(
+        &self,
+        chat_id: i64,
+        telegram_user_id: Option<i64>,
+        scope: &'static str,
+    ) -> Result<DeliveryTargetView, BootstrapError> {
+        let target_id = telegram_delivery_target_id(chat_id);
+        let app = self.app.clone();
+        let scope = scope.to_string();
+        tokio::task::spawn_blocking(move || {
+            app.create_delivery_target(
+                &target_id,
+                DeliveryTargetCreateOptions {
+                    kind: "telegram".to_string(),
+                    address: chat_id.to_string(),
+                    scope,
+                    owner_user_id: telegram_user_id.map(|id| format!("telegram:{id}")),
+                    allowed_agent_ids: Vec::new(),
+                    allowed_session_ids: Vec::new(),
+                    send_policy_json: "null".to_string(),
+                    format_policy: "full_text".to_string(),
+                },
+            )
+        })
+        .await
+        .map_err(map_join_error)?
+    }
+
+    async fn handle_outputs_command(
+        &self,
+        session_id: String,
+        action: TelegramOutputsAction,
+    ) -> Result<String, BootstrapError> {
+        let app = self.app.clone();
+        tokio::task::spawn_blocking(move || match action {
+            TelegramOutputsAction::Show => {
+                let routes = app.list_enabled_session_output_routes(&session_id)?;
+                Ok(render_session_output_routes(&session_id, &routes))
+            }
+            TelegramOutputsAction::Attach {
+                target_id,
+                format_policy,
+            } => {
+                let route = app.attach_session_output_route(
+                    &session_id,
+                    &target_id,
+                    SessionOutputRouteCreateOptions {
+                        route_id: None,
+                        filter_json: r#"{"kind":"assistant"}"#.to_string(),
+                        format_policy,
+                        enabled: true,
+                    },
+                )?;
+                Ok(format!(
+                    "Output route attached: {} -> {} format={}",
+                    route.session_id, route.target_id, route.format_policy
+                ))
+            }
+        })
+        .await
+        .map_err(map_join_error)?
+    }
+
     async fn handle_session_operator_command(
         &self,
         chat_id: i64,
@@ -992,6 +1095,10 @@ where
                 let jobs = self.render_session_background_jobs(session_id).await?;
                 self.send_text_chunks(chat_id, &jobs).await
             }
+            ParsedTelegramCommand::Tasks => {
+                let tasks = self.render_session_tasks(session_id).await?;
+                self.send_text_chunks(chat_id, &tasks).await
+            }
             ParsedTelegramCommand::Plan => {
                 let plan = self.render_plan(session_id).await?;
                 self.send_text_chunks(chat_id, &plan).await
@@ -1000,6 +1107,10 @@ where
                 let response = self
                     .handle_queue_command(chat_id, session_id, action)
                     .await?;
+                self.send_text_chunks(chat_id, &response).await
+            }
+            ParsedTelegramCommand::Outputs { action } => {
+                let response = self.handle_outputs_command(session_id, action).await?;
                 self.send_text_chunks(chat_id, &response).await
             }
             ParsedTelegramCommand::Stop => {
@@ -2066,7 +2177,7 @@ where
         Ok(())
     }
 
-    async fn deliver_pending_session_notifications(&self) -> Result<(), BootstrapError> {
+    pub(crate) async fn deliver_pending_session_notifications(&self) -> Result<(), BootstrapError> {
         let bindings = self.with_store_retry(|store| store.list_telegram_chat_bindings())?;
         for binding in bindings {
             let Some(session_id) = binding.selected_session_id.as_deref() else {
@@ -2081,6 +2192,45 @@ where
                     session_id,
                     &transcript,
                 )?;
+            }
+        }
+        self.deliver_pending_session_output_routes().await?;
+        Ok(())
+    }
+
+    async fn deliver_pending_session_output_routes(&self) -> Result<(), BootstrapError> {
+        let routes = self.with_store_retry(|store| {
+            store.list_enabled_session_output_routes_for_target_kind("telegram")
+        })?;
+        for route in routes {
+            let Some(target) =
+                self.with_store_retry(|store| store.get_delivery_target(&route.target_id))?
+            else {
+                continue;
+            };
+            let chat_id = match target.address.parse::<i64>() {
+                Ok(chat_id) => chat_id,
+                Err(error) => {
+                    DiagnosticEventBuilder::new(
+                        &self.app.config,
+                        "error",
+                        "telegram",
+                        "delivery_route.invalid_target",
+                        "telegram delivery route target address is invalid",
+                    )
+                    .error(error.to_string())
+                    .field("route_id", route.route_id.as_str())
+                    .field("target_id", route.target_id.as_str())
+                    .field("address", target.address.as_str())
+                    .emit(&self.audit);
+                    continue;
+                }
+            };
+            let pending = self.pending_assistant_transcripts_for_output_route(&route)?;
+            for transcript in pending {
+                self.send_model_text_chunks(chat_id, &transcript.content)
+                    .await?;
+                self.mark_output_route_delivered_to_transcript(&route.route_id, &transcript)?;
             }
         }
         Ok(())
@@ -2109,6 +2259,60 @@ where
             .filter(|transcript| transcript.kind == "assistant")
             .filter(|transcript| transcript_is_after_binding_cursor(transcript, binding))
             .collect())
+    }
+
+    fn pending_assistant_transcripts_for_output_route(
+        &self,
+        route: &SessionOutputRouteRecord,
+    ) -> Result<Vec<TranscriptRecord>, BootstrapError> {
+        if route.last_delivered_transcript_created_at.is_none()
+            && route.last_delivered_transcript_id.is_none()
+        {
+            self.update_output_route_delivery_cursor(
+                &route.route_id,
+                self.latest_delivery_cursor(&route.session_id)?,
+            )?;
+            return Ok(Vec::new());
+        }
+
+        let transcripts =
+            self.with_store_retry(|store| store.list_transcripts_for_session(&route.session_id))?;
+        Ok(transcripts
+            .into_iter()
+            .filter(|transcript| transcript.kind == "assistant")
+            .filter(|transcript| transcript_is_after_output_route_cursor(transcript, route))
+            .collect())
+    }
+
+    fn mark_output_route_delivered_to_transcript(
+        &self,
+        route_id: &str,
+        transcript: &TranscriptRecord,
+    ) -> Result<(), BootstrapError> {
+        self.update_output_route_delivery_cursor(
+            route_id,
+            DeliveryCursor {
+                created_at: Some(transcript.created_at),
+                transcript_id: Some(transcript.id.clone()),
+            },
+        )
+    }
+
+    fn update_output_route_delivery_cursor(
+        &self,
+        route_id: &str,
+        cursor: DeliveryCursor,
+    ) -> Result<(), BootstrapError> {
+        let Some(mut route) =
+            self.with_store_retry(|store| store.get_session_output_route(route_id))?
+        else {
+            return Ok(());
+        };
+        route.last_delivered_transcript_created_at = cursor.created_at.or(Some(0));
+        route.last_delivered_transcript_id = cursor.transcript_id.or_else(|| Some(String::new()));
+        route.updated_at = unix_timestamp()?;
+        self.with_store_retry(|store| store.put_session_output_route(&route))?;
+        Ok(())
     }
 
     fn create_or_refresh_pairing(
@@ -2349,6 +2553,13 @@ where
     ) -> Result<String, BootstrapError> {
         let backend = self.backend.clone();
         tokio::task::spawn_blocking(move || backend.render_session_background_jobs(&session_id))
+            .await
+            .map_err(map_join_error)?
+    }
+
+    async fn render_session_tasks(&self, session_id: String) -> Result<String, BootstrapError> {
+        let backend = self.backend.clone();
+        tokio::task::spawn_blocking(move || backend.render_session_tasks(&session_id))
             .await
             .map_err(map_join_error)?
     }
@@ -3106,6 +3317,56 @@ fn normalize_session_title(title: &str) -> Result<String, BootstrapError> {
         });
     }
     Ok(title.to_string())
+}
+
+fn telegram_chat_scope(message: &Message) -> &'static str {
+    if message.chat.is_private() {
+        "private"
+    } else if message.chat.is_group() || message.chat.is_supergroup() {
+        "group"
+    } else {
+        "chat"
+    }
+}
+
+fn telegram_delivery_target_id(chat_id: i64) -> String {
+    if chat_id < 0 {
+        format!("telegram-n{}", chat_id.saturating_abs())
+    } else {
+        format!("telegram-{chat_id}")
+    }
+}
+
+fn render_delivery_target_registered(target_id: &str) -> String {
+    format!(
+        "Delivery target registered: {target_id}\nUse from another chat/session: /outputs attach {target_id} summary"
+    )
+}
+
+fn render_session_output_routes(session_id: &str, routes: &[SessionOutputRouteView]) -> String {
+    if routes.is_empty() {
+        return format!(
+            "Session outputs for {session_id}: <empty>\nAttach one: /outputs attach <target_id> summary"
+        );
+    }
+    let mut lines = vec![format!("Session outputs for {session_id}:")];
+    for route in routes {
+        lines.push(format!(
+            "- {} -> {} format={} enabled={}",
+            route.id, route.target_id, route.format_policy, route.enabled
+        ));
+    }
+    lines.join("\n")
+}
+
+fn transcript_is_after_output_route_cursor(
+    transcript: &TranscriptRecord,
+    route: &SessionOutputRouteRecord,
+) -> bool {
+    let cursor_created_at = route.last_delivered_transcript_created_at.unwrap_or(0);
+    let cursor_id = route.last_delivered_transcript_id.as_deref().unwrap_or("");
+    transcript.created_at > cursor_created_at
+        || (transcript.created_at == cursor_created_at && transcript.id.as_str() > cursor_id)
 }
 
 fn map_client_error(error: TelegramClientError) -> BootstrapError {

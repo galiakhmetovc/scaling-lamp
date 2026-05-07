@@ -29,6 +29,8 @@ use std::sync::{Arc, Barrier};
 use std::thread;
 use std::time::Duration;
 
+mod delivery;
+mod event_bus;
 mod telegram;
 mod tool_calls;
 mod trace;
@@ -1843,6 +1845,92 @@ fn list_execution_records_orders_sessions_missions_jobs_and_runs_stably() {
             .map(|record| record.id.as_str())
             .collect::<Vec<_>>(),
         vec!["run-a", "run-b"]
+    );
+}
+
+#[test]
+fn session_has_active_run_uses_session_and_active_statuses() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let scaffold = PersistenceScaffold::from_config(crate::AppConfig {
+        data_dir: temp.path().join("state-root"),
+        ..crate::AppConfig::default()
+    });
+    let store = super::PersistenceStore::open(&scaffold).expect("open store");
+
+    for session_id in ["session-active", "session-terminal", "session-empty"] {
+        store
+            .put_session(&SessionRecord {
+                id: session_id.to_string(),
+                title: session_id.to_string(),
+                prompt_override: None,
+                settings_json: "{}".to_string(),
+                workspace_root: "/workspace/test".to_string(),
+                agent_profile_id: "default".to_string(),
+                active_mission_id: None,
+                parent_session_id: None,
+                parent_job_id: None,
+                delegation_label: None,
+                created_at: 1,
+                updated_at: 1,
+            })
+            .expect("put session");
+    }
+
+    store
+        .put_run(&RunRecord {
+            id: "run-active".to_string(),
+            session_id: "session-active".to_string(),
+            mission_id: None,
+            status: "waiting_process".to_string(),
+            error: None,
+            result: None,
+            provider_usage_json: "null".to_string(),
+            active_processes_json: "[]".to_string(),
+            recent_steps_json: "[]".to_string(),
+            evidence_refs_json: "[]".to_string(),
+            pending_approvals_json: "[]".to_string(),
+            provider_loop_json: r#"{"large":"payload intentionally not needed"}"#.to_string(),
+            delegate_runs_json: "[]".to_string(),
+            started_at: 2,
+            updated_at: 2,
+            finished_at: None,
+        })
+        .expect("put active run");
+    store
+        .put_run(&RunRecord {
+            id: "run-terminal".to_string(),
+            session_id: "session-terminal".to_string(),
+            mission_id: None,
+            status: "completed".to_string(),
+            error: None,
+            result: None,
+            provider_usage_json: "null".to_string(),
+            active_processes_json: "[]".to_string(),
+            recent_steps_json: "[]".to_string(),
+            evidence_refs_json: "[]".to_string(),
+            pending_approvals_json: "[]".to_string(),
+            provider_loop_json: r#"{"large":"payload intentionally not needed"}"#.to_string(),
+            delegate_runs_json: "[]".to_string(),
+            started_at: 3,
+            updated_at: 3,
+            finished_at: Some(4),
+        })
+        .expect("put terminal run");
+
+    assert!(
+        store
+            .session_has_active_run("session-active")
+            .expect("active session query")
+    );
+    assert!(
+        !store
+            .session_has_active_run("session-terminal")
+            .expect("terminal session query")
+    );
+    assert!(
+        !store
+            .session_has_active_run("session-empty")
+            .expect("empty session query")
     );
 }
 

@@ -29,6 +29,10 @@ pub(super) enum ParsedTelegramCommand {
     File {
         artifact_id: String,
     },
+    Target,
+    Outputs {
+        action: TelegramOutputsAction,
+    },
     Judge {
         message: String,
     },
@@ -42,6 +46,7 @@ pub(super) enum ParsedTelegramCommand {
         title: String,
     },
     Jobs,
+    Tasks,
     Plan,
     Queue {
         action: TelegramQueueAction,
@@ -80,6 +85,15 @@ pub(super) enum TelegramQueueAction {
     },
     Flush,
     Clear,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) enum TelegramOutputsAction {
+    Show,
+    Attach {
+        target_id: String,
+        format_policy: String,
+    },
 }
 
 pub(super) fn parse_command(text: &str) -> Option<ParsedTelegramCommand> {
@@ -162,6 +176,7 @@ fn parse_command_parts(command: &str, args: &str) -> Option<ParsedTelegramComman
             }
         }
         "jobs" => Some(ParsedTelegramCommand::Jobs),
+        "tasks" => Some(ParsedTelegramCommand::Tasks),
         "plan" => Some(ParsedTelegramCommand::Plan),
         "queue" => match parse_queue_action(args) {
             Ok(action) => Some(ParsedTelegramCommand::Queue { action }),
@@ -246,6 +261,19 @@ fn parse_command_parts(command: &str, args: &str) -> Option<ParsedTelegramComman
                 })
             }
         }
+        "target" => {
+            if args.is_empty() {
+                Some(ParsedTelegramCommand::Target)
+            } else {
+                Some(ParsedTelegramCommand::InvalidUsage(render_usage(
+                    "target", "",
+                )))
+            }
+        }
+        "outputs" => match parse_outputs_action(args) {
+            Ok(action) => Some(ParsedTelegramCommand::Outputs { action }),
+            Err(usage) => Some(ParsedTelegramCommand::InvalidUsage(usage)),
+        },
         "use" => {
             if args.is_empty() {
                 Some(ParsedTelegramCommand::InvalidUsage(render_usage(
@@ -291,6 +319,39 @@ fn parse_command_parts(command: &str, args: &str) -> Option<ParsedTelegramComman
             })
         }
         _ => None,
+    }
+}
+
+fn parse_outputs_action(args: &str) -> Result<TelegramOutputsAction, String> {
+    let trimmed = args.trim();
+    if trimmed.is_empty() {
+        return Ok(TelegramOutputsAction::Show);
+    }
+    let mut parts = trimmed.split_whitespace();
+    match parts.next().unwrap_or_default() {
+        "attach" => {
+            let Some(target_id) = parts.next() else {
+                return Err(render_usage(
+                    "outputs",
+                    "[attach <target_id> [full_text|summary|status_only|errors_only]]",
+                ));
+            };
+            let format_policy = parts.next().unwrap_or("summary");
+            if parts.next().is_some() {
+                return Err(render_usage(
+                    "outputs",
+                    "[attach <target_id> [full_text|summary|status_only|errors_only]]",
+                ));
+            }
+            Ok(TelegramOutputsAction::Attach {
+                target_id: target_id.to_string(),
+                format_policy: format_policy.to_string(),
+            })
+        }
+        _ => Err(render_usage(
+            "outputs",
+            "[attach <target_id> [full_text|summary|status_only|errors_only]]",
+        )),
     }
 }
 
@@ -409,6 +470,7 @@ pub(super) fn is_session_operator_command(command: &ParsedTelegramCommand) -> bo
             | ParsedTelegramCommand::Lifecycle
             | ParsedTelegramCommand::Rename { .. }
             | ParsedTelegramCommand::Jobs
+            | ParsedTelegramCommand::Tasks
             | ParsedTelegramCommand::Plan
             | ParsedTelegramCommand::Queue { .. }
             | ParsedTelegramCommand::Stop
@@ -418,6 +480,7 @@ pub(super) fn is_session_operator_command(command: &ParsedTelegramCommand) -> bo
             | ParsedTelegramCommand::Reasoning { .. }
             | ParsedTelegramCommand::AutoApprove { .. }
             | ParsedTelegramCommand::Compact
+            | ParsedTelegramCommand::Outputs { .. }
             | ParsedTelegramCommand::Skills
             | ParsedTelegramCommand::EnableSkill { .. }
             | ParsedTelegramCommand::DisableSkill { .. }
@@ -453,6 +516,7 @@ pub(super) fn default_command_specs() -> Vec<TelegramCommandSpec> {
         TelegramCommandSpec::new("lifecycle", "Show current session lifecycle"),
         TelegramCommandSpec::new("rename", "Rename current session"),
         TelegramCommandSpec::new("jobs", "Show current session jobs"),
+        TelegramCommandSpec::new("tasks", "Show current session delegated tasks"),
         TelegramCommandSpec::new("plan", "Show current session plan"),
         TelegramCommandSpec::new("queue", "Show or set inbound queue mode"),
         TelegramCommandSpec::new("stop", "Stop the active turn"),
@@ -468,6 +532,8 @@ pub(super) fn default_command_specs() -> Vec<TelegramCommandSpec> {
         TelegramCommandSpec::new("disable", "Disable a session skill"),
         TelegramCommandSpec::new("files", "List files in the current session"),
         TelegramCommandSpec::new("file", "Send a session file by artifact id"),
+        TelegramCommandSpec::new("target", "Register current chat as delivery target"),
+        TelegramCommandSpec::new("outputs", "Show or attach session output routes"),
         TelegramCommandSpec::new("judge", "Send a message to Judge"),
         TelegramCommandSpec::new("agent", "Send a message to another agent"),
     ]
@@ -526,7 +592,21 @@ mod tests {
             Some(ParsedTelegramCommand::InvalidUsage(_))
         ));
         assert_eq!(parse_command("/jobs"), Some(ParsedTelegramCommand::Jobs));
+        assert_eq!(parse_command("/tasks"), Some(ParsedTelegramCommand::Tasks));
         assert_eq!(parse_command("/plan"), Some(ParsedTelegramCommand::Plan));
+        assert_eq!(
+            parse_command("/target"),
+            Some(ParsedTelegramCommand::Target)
+        );
+        assert_eq!(
+            parse_command("/outputs attach telegram-n9000 summary"),
+            Some(ParsedTelegramCommand::Outputs {
+                action: TelegramOutputsAction::Attach {
+                    target_id: "telegram-n9000".to_string(),
+                    format_policy: "summary".to_string(),
+                }
+            })
+        );
         assert_eq!(
             parse_command("/session"),
             Some(ParsedTelegramCommand::Sessions)
@@ -623,6 +703,7 @@ mod tests {
             "lifecycle",
             "rename",
             "jobs",
+            "tasks",
             "queue",
             "stop",
             "pause",

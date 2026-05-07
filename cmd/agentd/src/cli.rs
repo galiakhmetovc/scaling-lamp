@@ -13,7 +13,8 @@ use crate::telegram;
 use crate::tui;
 use agent_persistence::{
     ArtifactRepository, JobRepository, MissionRecord, MissionRepository, PersistenceStore,
-    RunRepository, SessionRecord, SessionRepository, ToolCallRepository, TraceRepository,
+    RunRepository, SessionRecord, SessionRepository, TaskRegistryRepository, ToolCallRepository,
+    TraceRepository,
 };
 use agent_runtime::mission::{MissionExecutionIntent, MissionSchedule, MissionSpec, MissionStatus};
 use agent_runtime::provider::{FinishReason, ProviderMessage, ProviderRequest, ProviderStreamMode};
@@ -87,6 +88,15 @@ enum Command {
         offset: usize,
         format: SessionToolsFormat,
         include_results: bool,
+    },
+    SessionTasks {
+        id: String,
+        limit: Option<usize>,
+        offset: usize,
+        format: SessionTasksFormat,
+    },
+    TaskShow {
+        id: String,
     },
     SessionToolResult {
         tool_call_id: String,
@@ -180,6 +190,12 @@ enum SessionToolsFormat {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SessionTasksFormat {
+    Human,
+    Raw,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum SessionListFormat {
     Human,
     Raw,
@@ -253,6 +269,13 @@ where
             format,
             include_results,
         } => render::show_session_tools(&app.store()?, &id, limit, offset, format, include_results),
+        Command::SessionTasks {
+            id,
+            limit,
+            offset,
+            format,
+        } => render::show_session_tasks(&app.store()?, &id, limit, offset, format),
+        Command::TaskShow { id } => render::show_task(&app.store()?, &id),
         Command::SessionToolResult { tool_call_id, raw } => {
             render::show_session_tool_result(&app.store()?, &tool_call_id, raw)
         }

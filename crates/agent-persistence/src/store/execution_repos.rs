@@ -69,6 +69,24 @@ impl RunRepository for PersistenceStore {
         )
     }
 
+    fn session_has_active_run(&self, session_id: &str) -> Result<bool, StoreError> {
+        self.with_client(|client| {
+            client
+                .query_one(
+                    "SELECT EXISTS(
+                        SELECT 1
+                        FROM runs
+                        WHERE session_id = $1
+                          AND status IN ('queued', 'running', 'waiting_approval', 'waiting_process', 'resuming')
+                        LIMIT 1
+                    )",
+                    &[&session_id],
+                )
+                .map(|row| row.get::<_, bool>(0))
+                .map_err(StoreError::from)
+        })
+    }
+
     fn list_runs_for_session(&self, session_id: &str) -> Result<Vec<RunRecord>, StoreError> {
         self.query_runs(
             "SELECT id, session_id, mission_id, status, error, result, provider_usage_json, active_processes_json, recent_steps_json, evidence_refs_json,

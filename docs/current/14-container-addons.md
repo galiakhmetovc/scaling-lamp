@@ -14,6 +14,7 @@
 
 По умолчанию поднимает:
 
+- `teamd-nats` — local NATS JetStream для MIMO/webhook event runtime;
 - `teamd-searxng` — локальный search backend для `web_search`;
 - `teamd-caddy` — edge reverse proxy.
 
@@ -72,6 +73,35 @@ Dry-run без изменений на сервере:
 ```bash
 ./scripts/deploy-teamd-containers.sh --dry-run --non-interactive --no-start --with-silverbullet-mcp
 ```
+
+## NATS JetStream
+
+NATS — обязательная внешняя зависимость для webhook/MIMO event runtime, но не source of truth. Source of truth остаётся PostgreSQL; NATS доставляет события между ingress/router/session/delivery workers.
+
+Default deployment:
+
+```text
+container: teamd-nats
+client:    nats://127.0.0.1:4222
+monitor:   http://127.0.0.1:8222
+data:      /var/lib/teamd/containers/nats
+compose:   /opt/teamd/containers/nats/docker-compose.yml
+```
+
+Отключить NATS, если нужен только legacy polling stack:
+
+```bash
+./scripts/deploy-teamd-containers.sh --no-nats
+```
+
+Скрипт пишет в `/etc/teamd/teamd.env`:
+
+```bash
+TEAMD_EVENT_BUS_BACKEND=nats_jetstream
+TEAMD_NATS_URL=nats://127.0.0.1:4222
+```
+
+Он не включает `TEAMD_EVENT_BUS_REQUIRED=true` автоматически. Это делает оператор отдельно, когда переводит Telegram с polling на webhook.
 
 ## SilverBullet Space
 

@@ -7,13 +7,13 @@ mod status;
 use crate::about::{APP_BUILD_ID, APP_COMMIT, APP_TREE_STATE, APP_VERSION};
 use crate::bootstrap::{
     BootstrapError, SessionBackgroundJob, SessionPendingApproval, SessionPreferencesPatch,
-    SessionScheduleSummary, SessionSkillStatus, SessionSummary, SessionTranscriptView,
+    SessionScheduleSummary, SessionSkillStatus, SessionSummary, SessionTask, SessionTranscriptView,
 };
 use crate::diagnostics::DiagnosticEventBuilder;
 use crate::execution::{ApprovalContinuationReport, ChatExecutionEvent, ChatTurnExecutionReport};
 use crate::http::types::{
     AboutResponse, DaemonStopResponse, ErrorResponse, SessionBackgroundJobResponse,
-    SessionSummaryResponse, StatusResponse, UpdateRuntimeResponse,
+    SessionSummaryResponse, SessionTaskResponse, StatusResponse, UpdateRuntimeResponse,
 };
 use agent_persistence::RuntimeTimingConfig;
 use agent_persistence::{AppConfig, audit::AuditLogConfig};
@@ -464,6 +464,36 @@ impl From<SessionBackgroundJobResponse> for SessionBackgroundJob {
             queued_at: value.queued_at,
             started_at: value.started_at,
             last_progress_message: value.last_progress_message,
+        }
+    }
+}
+
+impl From<SessionTaskResponse> for SessionTask {
+    fn from(value: SessionTaskResponse) -> Self {
+        Self {
+            id: value.id,
+            kind: value.kind,
+            status: value.status,
+            source_session_id: value.source_session_id,
+            owner_agent_id: value.owner_agent_id,
+            executor_agent_id: value.executor_agent_id,
+            parent_task_id: value.parent_task_id,
+            dependency_json: value.dependency_json,
+            context_ref_json: value.context_ref_json,
+            result_ref_json: value.result_ref_json,
+            retry_policy_json: value.retry_policy_json,
+            attempt_count: value.attempt_count,
+            max_attempts: value.max_attempts,
+            timeout_at: value.timeout_at,
+            chain_id: value.chain_id,
+            hop_count: value.hop_count,
+            max_hops: value.max_hops,
+            trace_id: value.trace_id,
+            created_at: value.created_at,
+            updated_at: value.updated_at,
+            started_at: value.started_at,
+            finished_at: value.finished_at,
+            error: value.error,
         }
     }
 }

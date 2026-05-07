@@ -1,10 +1,15 @@
 mod agent_ops;
 mod context_ops;
+mod delivery_ops;
 mod execution_ops;
 mod mcp_ops;
 mod session_ops;
 
 pub use agent_ops::{AgentScheduleCreateOptions, AgentScheduleUpdatePatch, AgentScheduleView};
+pub use delivery_ops::{
+    DeliveryTargetCreateOptions, DeliveryTargetView, SessionOutputRouteCreateOptions,
+    SessionOutputRouteView,
+};
 pub use mcp_ops::{McpConnectorCreateOptions, McpConnectorUpdatePatch, McpConnectorView};
 pub(crate) use mcp_ops::{render_mcp_connector_view, render_mcp_connectors_view};
 
@@ -201,6 +206,33 @@ pub struct SessionBackgroundJob {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SessionTask {
+    pub id: String,
+    pub kind: String,
+    pub status: String,
+    pub source_session_id: Option<String>,
+    pub owner_agent_id: Option<String>,
+    pub executor_agent_id: Option<String>,
+    pub parent_task_id: Option<String>,
+    pub dependency_json: String,
+    pub context_ref_json: String,
+    pub result_ref_json: Option<String>,
+    pub retry_policy_json: String,
+    pub attempt_count: i64,
+    pub max_attempts: i64,
+    pub timeout_at: Option<i64>,
+    pub chain_id: Option<String>,
+    pub hop_count: Option<i64>,
+    pub max_hops: Option<i64>,
+    pub trace_id: Option<String>,
+    pub created_at: i64,
+    pub updated_at: i64,
+    pub started_at: Option<i64>,
+    pub finished_at: Option<i64>,
+    pub error: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SessionPendingApproval {
     pub run_id: String,
     pub approval_id: String,
@@ -255,7 +287,7 @@ pub struct SessionPreferencesPatch {
 }
 
 impl App {
-    fn execution_service(&self) -> execution::ExecutionService {
+    pub(crate) fn execution_service(&self) -> execution::ExecutionService {
         execution::ExecutionService::new(
             self.config.permissions.clone(),
             self.runtime.workspace.clone(),
@@ -305,6 +337,7 @@ impl App {
                 memory_curator: self.config.memory_curator.clone(),
                 memory_recall: self.config.memory_recall.clone(),
                 knowledge: self.config.knowledge.clone(),
+                event_bus: self.config.event_bus.clone(),
                 runtime_timing: self.config.runtime_timing.clone(),
                 runtime_limits: self.config.runtime_limits.clone(),
             },

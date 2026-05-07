@@ -30,14 +30,66 @@ impl App {
         &self,
         now: i64,
     ) -> Result<execution::BackgroundWorkerTickReport, BootstrapError> {
+        self.background_worker_tick_with_options(now, true, true)
+    }
+
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub fn background_worker_tick_with_options(
+        &self,
+        now: i64,
+        maintain_mcp: bool,
+        maintain_memory: bool,
+    ) -> Result<execution::BackgroundWorkerTickReport, BootstrapError> {
         let store = self.store()?;
         let provider = self.provider_driver()?;
-        let report = self
-            .execution_service()
-            .background_worker_tick(&store, provider.as_ref(), now)
+        self.background_worker_tick_with_resources(
+            &store,
+            provider.as_ref(),
+            now,
+            maintain_mcp,
+            maintain_memory,
+        )
+    }
+
+    pub(crate) fn background_worker_tick_with_resources(
+        &self,
+        store: &PersistenceStore,
+        provider: &dyn ProviderDriver,
+        now: i64,
+        maintain_mcp: bool,
+        maintain_memory: bool,
+    ) -> Result<execution::BackgroundWorkerTickReport, BootstrapError> {
+        let service = self.execution_service();
+        self.background_worker_tick_with_service_and_resources(
+            &service,
+            store,
+            provider,
+            now,
+            maintain_mcp,
+            maintain_memory,
+        )
+    }
+
+    pub(crate) fn background_worker_tick_with_service_and_resources(
+        &self,
+        service: &execution::ExecutionService,
+        store: &PersistenceStore,
+        provider: &dyn ProviderDriver,
+        now: i64,
+        maintain_mcp: bool,
+        maintain_memory: bool,
+    ) -> Result<execution::BackgroundWorkerTickReport, BootstrapError> {
+        let report = service
+            .background_worker_tick_with_options(
+                store,
+                provider,
+                now,
+                maintain_mcp,
+                maintain_memory,
+            )
             .map_err(BootstrapError::Execution)?;
         for run_id in &report.terminal_run_ids {
-            self.export_run_trace_best_effort(&store, run_id, "background.worker");
+            self.export_run_trace_best_effort(store, run_id, "background.worker");
         }
         Ok(report)
     }

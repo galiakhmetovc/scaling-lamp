@@ -2,7 +2,7 @@
 
 Этот документ фиксирует целевую архитектуру MIMO-взаимодействий в `teamD`.
 
-Статус: design baseline для следующей волны работ. Это не описание полностью реализованного состояния.
+Статус: design baseline + первый реализованный vertical slice. Уже есть PostgreSQL event tables, Telegram webhook ingress, NATS JetStream adapter, rule router, session worker, delivery worker и task worker для `message_agent`/`agent_task`. Production может оставаться на polling, пока webhook runtime не включён конфигом.
 
 ## Зачем это нужно
 
@@ -46,27 +46,38 @@ Inputs -> Session Core -> Outputs
 
 2. Session не равна transport.
 
-Session хранит контекст, память, transcript, jobs, plan, artifacts и workspace. Telegram, TUI, CLI, HTTP, webhook или будущая event bus — это поверхности и каналы доставки.
+Session хранит контекст, память, transcript, jobs, plan, artifacts и workspace. Telegram, TUI, CLI, HTTP, webhook и event bus — это поверхности и каналы доставки.
 
 3. MIMO по умолчанию.
 
 У session может быть много inputs и много outputs. Задача из Telegram group A может породить результат в Telegram group B, archive channel и webhook.
 
-4. Родитель не блокируется на делегации.
+4. Делегация не блокирует runtime.
 
-Любая agent-agent или delegate работа возвращает `task_id` сразу. Родитель продолжает обрабатывать входы. Результат возвращается через result bus и task registry.
+Любая agent-agent или delegate работа возвращает `task_id` сразу. Runtime не держит provider loop в ожидании чужой работы. Если агенту логически нужен результат до следующего шага, это выражается зависимостью task graph, callback event или явным `session_wait`, но не блокировкой worker thread и не скрытым synchronous RPC.
 
 5. Единое состояние session.
 
 Несколько каналов могут писать в одну session queue. Это не создаёт несколько prompt histories. Порядок обработки определяется queue policy.
 
-6. Modular monolith first.
+6. Контракт зависит от адресата.
 
-Phase 1 реализуется внутри текущего `agentd`: PostgreSQL + background worker + typed repositories. NATS или другая шина появляется только в Phase 2.
+Для человека диалог остаётся первичным интерфейсом. Для agent-agent/subagent взаимодействий первичным является structured contract. Свободный текст между агентами допустим только как человекочитаемая часть payload, а не как единственный источник состояния.
 
-## Три независимых механизма
+7. PostgreSQL source of truth, NATS event backbone.
 
-### Agent -> Agent
+Все durable состояния пишутся в PostgreSQL до publish/ack. NATS JetStream не заменяет store; он доставляет события между workers, даёт replay/backpressure и готовит mesh-эволюцию.
+
+## Две плоскости взаимодействия
+
+В архитектуре есть две основные плоскости:
+
+1. `Delegation`: agent -> agent и agent -> subagent.
+2. `Routing/Delivery`: session output -> delivery targets.
+
+`Subagent` не является отдельной шиной или третьим видом транспорта. Это bounded-режим делегации: отдельный контекст, ограниченный scope, явный return contract. `Delivery Target` тоже не является взаимодействием агентов; это fan-out результатов.
+
+### Delegation: Agent -> Agent
 
 Используется для асинхронной делегации между равноправными agent profiles.
 
@@ -85,6 +96,8 @@ agent_task {
   reply_policy,
   priority,
   timeout,
+  retry_policy,
+  fallback_policy,
   trace_id
 }
 ```
@@ -96,12 +109,13 @@ agent_task {
 - результат публикуется в result bus;
 - task registry обновляется независимо от того, читает ли родитель результат прямо сейчас;
 - родитель получает `task_completed` event в свою input queue или видит результат по `/tasks`.
+- зависимости между задачами хранятся в task registry/task graph, а не в call stack.
 
-Текущий `message_agent` близок к этому, но пока отдаёт `recipient_session_id`/`recipient_job_id`, а не единый `task_id`/result package contract.
+Текущий `message_agent` уже создаёт `task_registry` запись вида `agent_task` и публикует событие `agent_task.created` в `teamd.task.<task_id>`. Для совместимости tool output пока всё ещё отдаёт `recipient_session_id`/`recipient_job_id`; единый user-facing `task_id`/result package contract остаётся следующим API-слоем.
 
-### Agent -> Subagent
+### Delegation: Agent -> Subagent
 
-Используется для рабочей подзадачи под контролем parent run.
+Используется для рабочей подзадачи под контролем parent run. Это специализация `agent_task`, а не отдельный механизм.
 
 Контракт:
 
@@ -116,6 +130,7 @@ delegate {
   write_scope,
   allowed_tools,
   timeout,
+  retry_policy,
   return_format
 }
 ```
@@ -127,10 +142,11 @@ delegate {
 - parent остаётся владельцем итогового ответа;
 - результат возвращается как package: `summary`, `changed_paths`, `artifact_refs`, `errors`, `next_actions`;
 - write scope обязателен для code/file tasks.
+- subagent видит только `bounded_context`, `context_refs` и разрешённые artifacts; полный transcript родителя не передаётся по умолчанию.
 
 Текущие `Delegate` jobs и `parent_session_id` уже дают основу, но нужны единый task registry и явное отображение результата.
 
-### Session -> Delivery Target
+### Routing/Delivery: Session -> Delivery Target
 
 Используется для маршрутизации результата во внешние каналы.
 
@@ -163,6 +179,35 @@ delivery_target {
 - доставка не меняет selected input session;
 - ошибка доставки не должна ломать run, она должна попадать в delivery/task status.
 
+## Зависимости и ожидание результатов
+
+Неблокирующая делегация не означает, что у задач нет зависимостей.
+
+Поддерживаются три модели:
+
+- `callback`: результат подзадачи публикуется как `task_completed` event в очередь родительской session;
+- `query`: оператор или агент читает task registry через Telegram `/tasks`, CLI `agentd session tasks <session_id>`, CLI `agentd task show <task_id>`, HTTP `GET /v1/sessions/{id}/tasks` или будущий tool;
+- `wait`: агент явно вызывает bounded wait (`session_wait`/future task wait) с timeout, когда без результата нельзя продолжать.
+
+Правило: ожидание должно быть явным, ограниченным по timeout и видимым в task registry. Нельзя прятать ожидание внутри транспорта или webhook handler.
+
+## Операторская видимость task registry
+
+Task registry — это не внутренняя таблица “для разработчика”, а пользовательский слой наблюдаемости MIMO.
+
+Минимальный реализованный контракт:
+
+- `Telegram /tasks` показывает делегированные задачи текущей session: `task_id`, `status`, `kind`, owner/executor, попытки, последний update, chain/error/result ref.
+- `CLI agentd session tasks <session_id>` показывает тот же список локально; поддерживает `--limit`, `--offset`, `--raw`.
+- `CLI agentd task show <task_id>` показывает полную карточку задачи: dependency/context/result/retry JSON, trace, chain/hops, timestamps и ошибку.
+- `HTTP GET /v1/sessions/{session_id}/tasks` отдаёт структурированный список для будущего web UI/TUI.
+
+Граница ответственности:
+
+- `/jobs` показывает активные runtime/background jobs внутри session.
+- `/tasks` показывает MIMO/delegation tasks из `task_registry`, включая завершённые и упавшие задачи.
+- `session_wait` остаётся bounded wait, но оператор не обязан ждать: состояние задачи можно посмотреть отдельно.
+
 ## Fan-in layer
 
 Input adapter принимает внешний сигнал и нормализует его в одно из:
@@ -170,14 +215,15 @@ Input adapter принимает внешний сигнал и нормализ
 ```text
 input_event {
   event_id,
+  dedupe_key,
   source_id,
   source_kind,
   session_id,
   operator_id,
   priority,
+  queue_policy,
   payload,
   metadata,
-  dedupe_key,
   created_at
 }
 ```
@@ -189,9 +235,23 @@ input_event {
 - webhook;
 - schedule;
 - task_completed event;
-- будущий NATS topic.
+- NATS topic.
 
-Все inputs пишутся в session queue. Очередь имеет policy: `fifo`, `priority`, `coalesce`, `rate_limited`, `restart`.
+Все inputs пишутся в session queue, но не обязательно исполняются в порядке поступления. Очередь сортируется по:
+
+1. priority;
+2. created_at;
+3. deterministic event id.
+
+Queue policy задаёт поведение при активном run:
+
+- `fifo`: поставить в очередь;
+- `priority`: поставить в очередь с приоритетом;
+- `coalesce`: объединить сообщения в окне;
+- `restart`: прервать текущий run и начать новый;
+- `reject`: отказать с операторским статусом.
+
+Critical events, например monitoring alert severity=critical, должны иметь priority выше routine-запросов.
 
 ## Session Core
 
@@ -290,6 +350,14 @@ task_registry_entry {
   result_ref,
   error,
   delivery_state,
+  dependency_json,
+  retry_policy_json,
+  attempt_count,
+  max_attempts,
+  timeout_at,
+  chain_id,
+  hop_count,
+  max_hops,
   trace_id
 }
 ```
@@ -311,7 +379,22 @@ Status:
 - `completed`;
 - `failed`;
 - `cancelled`;
-- `blocked`.
+- `blocked`;
+- `timed_out`;
+- `dead_lettered`.
+
+Ошибки:
+
+- timeout переводит task в `timed_out`;
+- превышение retry policy переводит task в `failed` или `dead_lettered`;
+- invalid result contract сохраняется как `failed` с `result_validation_error`;
+- delivery failure не откатывает completed run, а создаёт failed delivery task/event.
+
+Chains:
+
+- `chain_id`, `hop_count`, `max_hops` остаются обязательными для agent-agent цепочек;
+- `grant_agent_chain_continuation` должен работать как явное увеличение budget по chain;
+- result events должны сохранять chain metadata, чтобы audit показывал путь задачи.
 
 Операторские команды:
 
@@ -320,9 +403,24 @@ Status:
 - `/cancel <id>` — отменить task;
 - `/follow <id>` — подписаться на updates.
 
-## Result Bus
+## Event/Result Bus
 
-В Phase 1 result bus — это не NATS. Это contract поверх PostgreSQL:
+Event bus состоит из двух слоёв:
+
+- PostgreSQL — durable source of truth;
+- NATS JetStream — delivery backbone для workers.
+
+PostgreSQL-таблицы текущего vertical slice:
+
+- `event_sources` — зарегистрированные входы;
+- `router_rules` — декларативные правила маршрутизации;
+- `inbound_events` — нормализованные входящие события с `dedupe_key`;
+- `routed_events` — привязка input event к session/agent;
+- `event_outbox` — durable publish queue;
+- `event_deliveries` — результат доставки output в target;
+- `task_registry` — состояние async/background work.
+
+Существующие runtime records также остаются частью bus contract:
 
 - terminal job result;
 - `session_inbox_events`;
@@ -352,12 +450,78 @@ Result bus обязан доставить событие:
 - в настроенные output routes;
 - в observability trace.
 
-В Phase 2 result bus может стать NATS:
+Webhook/runtime flow сейчас:
 
+```text
+Telegram webhook
+  -> inbound_events + event_outbox(teamd.input.telegram)
+  -> rule router
+  -> routed_events + event_outbox(teamd.session.<session_id>.input)
+  -> session worker
+  -> canonical App::execute_chat_turn(...)
+  -> runs/transcripts + task_registry + event_outbox(teamd.session.<session_id>.output)
+  -> delivery worker
+  -> event_deliveries + delivery target cursor
+```
+
+Agent-agent task flow сейчас:
+
+```text
+message_agent
+  -> recipient session + interagent_message job
+  -> task_registry(kind=agent_task, status=queued)
+  -> event_outbox(teamd.task.<task_id>, agent_task.created)
+  -> task worker
+  -> canonical background job executor
+  -> target session run/transcript
+  -> task_registry(status=completed|failed|blocked, result_ref)
+  -> event_outbox(teamd.task.<task_id>, agent_task.completed|failed|blocked)
+  -> parent session inbox event
+```
+
+Если `event_bus.required = true`, обычный background worker не исполняет task-backed `interagent_message`/`delegate` jobs напрямую. Это защищает от гонки: task исполняется через `teamd.task.*` consumer.
+
+Webhook handler не запускает модель и не пишет transcript. Он только валидирует secret, нормализует update, дедуплицирует `telegram:update:<update_id>`, сохраняет inbound event и outbox envelope.
+
+## Idempotency
+
+Каждый внешний input имеет `dedupe_key`.
+
+Примеры:
+
+- Telegram webhook: `telegram:update:<update_id>`;
+- schedule fire: `schedule:<schedule_id>:<planned_fire_at>`;
+- A2A/task callback: `task:<task_id>:completed:<attempt>`;
+- delivery: `delivery:<route_id>:<output_event_id>`.
+
+Повторный input с тем же `dedupe_key` не создаёт новый run. Он возвращает существующий event/task status.
+
+JetStream ack не является source of truth. Ack выполняется только после durable write в PostgreSQL.
+
+## Context Isolation
+
+Agent-agent и subagent work не получают полный контекст родителя по умолчанию.
+
+Передаются только:
+
+- `goal`;
+- `constraints`;
+- `bounded_context`;
+- `context_refs`;
+- `allowed_tools`;
+- `write_scope`;
+- `return_format`.
+
+Доступ к секретам, workspace и artifacts должен быть явно разрешён. Для subagent code/file tasks `write_scope` обязателен.
+
+NATS subjects текущего backbone:
+
+- `teamd.input.<source_kind>`;
 - `teamd.session.<id>.input`;
-- `teamd.task.<id>.events`;
-- `teamd.agent.<id>.tasks`;
-- `teamd.delivery.<target_id>.requests`.
+- `teamd.session.<id>.output`;
+- `teamd.task.<task_id>`;
+- `teamd.delivery.<target_id>`;
+- `teamd.dlq`.
 
 Контракты при этом не меняются.
 
@@ -399,7 +563,7 @@ schedule_create {
 
 Цель: MIMO внутри одного `agentd`.
 
-Минимальный vertical slice:
+Базовый vertical slice:
 
 1. Ввести delivery target registry.
 2. Ввести session output routes с отдельными cursors.
@@ -412,17 +576,48 @@ schedule_create {
 
 Цель: вынести result bus/input bus на шину без переписывания core.
 
-Рекомендуемая шина: NATS.
+Шина: NATS JetStream.
 
 Причины:
 
 - простая операционная модель;
-- lightweight pub/sub;
+- lightweight pub/sub и queue consumers;
 - request/reply;
-- JetStream для durability;
+- JetStream для durability, ack/replay/backpressure;
 - хорошая fit-модель для локального mesh и нескольких узлов.
 
-На этом этапе PostgreSQL остаётся source of truth, а NATS — delivery/notification backbone.
+На этом этапе PostgreSQL остаётся source of truth, а NATS — обязательный event backbone. Telegram long polling заменяется на webhook ingress внутри `agentd`; webhook только сохраняет/publish input event и не запускает модель напрямую.
+
+Реализованный vertical slice:
+
+1. обязательная конфигурация `event_bus`/`telegram.mode = "webhook"` для event runtime;
+2. NATS JetStream client и stream setup;
+3. Telegram webhook ingress;
+4. rule router;
+5. session input worker поверх canonical `App::execute_chat_turn`;
+6. delivery worker поверх `delivery_targets`/`session_output_routes`;
+7. task worker поверх `task_registry`/`teamd.task.*` для `message_agent`;
+8. e2e smoke `cmd/agentd/tests/event_runtime_smoke.rs`.
+
+Phase 2 data flow:
+
+```text
+Telegram webhook
+  -> inbound_events
+  -> NATS teamd.input.telegram
+  -> rule router
+  -> routed_events
+  -> NATS teamd.session.<session_id>.input
+  -> session worker
+  -> NATS teamd.session.<session_id>.output
+  -> delivery worker
+
+message_agent inside session worker
+  -> task_registry + NATS teamd.task.<task_id>
+  -> task worker
+  -> target agent session
+  -> task result + parent inbox event
+```
 
 ### Phase 3: Autonomous Mesh
 
@@ -437,14 +632,29 @@ schedule_create {
 - remote A2A adapters;
 - mesh health/status UI.
 
-## Что не делаем в Phase 1
+## Что не делаем
 
-- Не внедряем NATS сразу.
 - Не переписываем provider loop.
 - Не создаём отдельный Telegram chat loop.
 - Не делаем route expression language до registry/output routes.
 - Не даём subagent прямой доступ писать пользователю.
 - Не смешиваем session state и delivery target state.
+- Не считаем NATS source of truth: durable state сначала PostgreSQL, потом publish/ack.
+
+## Миграция от Telegram-centric runtime
+
+Переход staged, но без второго chat path:
+
+1. Ввести event/router таблицы и NATS health без изменения текущего polling-поведения.
+2. Включить webhook ingress в тестовом окружении и проверить dedupe по Telegram `update_id`.
+3. Подключить rule router, который воспроизводит текущую привязку private chat -> selected session/default agent.
+4. Подключить session worker к canonical App/runtime chat path.
+5. Подключить delivery worker к существующим `delivery_targets`/`session_output_routes`.
+6. Подключить task worker к `task_registry`/`teamd.task.*` для agent-agent/delegate работы.
+7. Перевести production Telegram bot с long polling на webhook.
+8. Удалить polling worker как legacy после стабилизации webhook runtime.
+
+На каждом шаге invariant: один session transcript, один provider loop, один prompt assembly path.
 
 ## Открытые решения
 
@@ -456,9 +666,7 @@ schedule_create {
 
 ## Решение на сейчас
 
-Начинаем с Phase 1.
-
-Первый production-worthy slice:
+Текущий production-safe путь:
 
 ```text
 Telegram delivery target registry
@@ -469,3 +677,13 @@ Telegram delivery target registry
 ```
 
 Это закрывает основной пользовательский кейс: агент работает в одной session, а результаты может отправлять в другой Telegram chat/group по явной регистрации и route policy.
+
+Следующий experimental путь:
+
+```text
+Telegram webhook
+  -> NATS JetStream
+  -> router/session/delivery workers
+```
+
+Его включают только через `telegram.mode = "webhook"` и `event_bus.required = true`.

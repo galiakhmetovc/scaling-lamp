@@ -1,9 +1,11 @@
 use crate::records::{
     AgentChainContinuationRecord, AgentProfileRecord, AgentScheduleRecord, ArtifactRecord,
-    ContextOffloadRecord, ContextSummaryRecord, FileDeliveryRequestRecord, JobRecord,
+    ContextOffloadRecord, ContextSummaryRecord, DeliveryTargetRecord, EventDeliveryRecord,
+    EventOutboxRecord, EventSourceRecord, FileDeliveryRequestRecord, InboundEventRecord, JobRecord,
     KnowledgeSearchDocRecord, KnowledgeSourceRecord, KvEntryRecord, McpConnectorRecord,
-    MissionRecord, PlanRecord, RunRecord, SessionInboxEventRecord, SessionRecord,
-    SessionRetentionRecord, SessionSearchDocRecord, TelegramChatBindingRecord,
+    MissionRecord, PlanRecord, RoutedEventRecord, RouterRuleRecord, RunRecord,
+    SessionInboxEventRecord, SessionOutputRouteRecord, SessionRecord, SessionRetentionRecord,
+    SessionSearchDocRecord, TaskRegistryRecord, TelegramChatBindingRecord,
     TelegramChatStatusRecord, TelegramUpdateCursorRecord, TelegramUserPairingRecord,
     ToolCallRecord, TraceLinkRecord, TranscriptRecord,
 };
@@ -160,6 +162,89 @@ pub trait TelegramRepository {
     ) -> Result<Option<TelegramUpdateCursorRecord>, StoreError>;
 }
 
+pub trait DeliveryRepository {
+    fn put_delivery_target(&self, record: &DeliveryTargetRecord) -> Result<(), StoreError>;
+    fn get_delivery_target(
+        &self,
+        target_id: &str,
+    ) -> Result<Option<DeliveryTargetRecord>, StoreError>;
+    fn list_delivery_targets(&self) -> Result<Vec<DeliveryTargetRecord>, StoreError>;
+    fn put_session_output_route(&self, record: &SessionOutputRouteRecord)
+    -> Result<(), StoreError>;
+    fn get_session_output_route(
+        &self,
+        route_id: &str,
+    ) -> Result<Option<SessionOutputRouteRecord>, StoreError>;
+    fn list_enabled_session_output_routes(
+        &self,
+        session_id: &str,
+    ) -> Result<Vec<SessionOutputRouteRecord>, StoreError>;
+    fn list_enabled_session_output_routes_for_target_kind(
+        &self,
+        target_kind: &str,
+    ) -> Result<Vec<SessionOutputRouteRecord>, StoreError>;
+}
+
+pub trait EventRepository {
+    fn put_event_source(&self, record: &EventSourceRecord) -> Result<(), StoreError>;
+    fn get_event_source(&self, source_id: &str) -> Result<Option<EventSourceRecord>, StoreError>;
+    fn put_inbound_event(
+        &self,
+        record: &InboundEventRecord,
+    ) -> Result<InboundEventRecord, StoreError>;
+    fn get_inbound_event(&self, event_id: &str) -> Result<Option<InboundEventRecord>, StoreError>;
+    fn mark_inbound_event_status(
+        &self,
+        event_id: &str,
+        status: &str,
+        error: Option<&str>,
+    ) -> Result<(), StoreError>;
+    fn put_routed_event(&self, record: &RoutedEventRecord) -> Result<(), StoreError>;
+    fn get_routed_event(
+        &self,
+        routed_event_id: &str,
+    ) -> Result<Option<RoutedEventRecord>, StoreError>;
+    fn put_event_outbox(&self, record: &EventOutboxRecord) -> Result<(), StoreError>;
+    fn get_event_outbox(&self, outbox_id: &str) -> Result<Option<EventOutboxRecord>, StoreError>;
+    fn claim_pending_event_outbox(
+        &self,
+        limit: i64,
+        now: i64,
+    ) -> Result<Vec<EventOutboxRecord>, StoreError>;
+    fn mark_event_outbox_published(
+        &self,
+        outbox_id: &str,
+        published_at: i64,
+    ) -> Result<(), StoreError>;
+    fn mark_event_outbox_pending_retry(
+        &self,
+        outbox_id: &str,
+        next_attempt_at: i64,
+        error: &str,
+    ) -> Result<(), StoreError>;
+    fn mark_event_outbox_failed(&self, outbox_id: &str, error: &str) -> Result<(), StoreError>;
+    fn put_event_delivery(&self, record: &EventDeliveryRecord) -> Result<(), StoreError>;
+    fn get_event_delivery(
+        &self,
+        delivery_event_id: &str,
+    ) -> Result<Option<EventDeliveryRecord>, StoreError>;
+}
+
+pub trait RouterRepository {
+    fn put_router_rule(&self, record: &RouterRuleRecord) -> Result<(), StoreError>;
+    fn get_router_rule(&self, rule_id: &str) -> Result<Option<RouterRuleRecord>, StoreError>;
+    fn list_enabled_router_rules(&self) -> Result<Vec<RouterRuleRecord>, StoreError>;
+}
+
+pub trait TaskRegistryRepository {
+    fn put_task_registry(&self, record: &TaskRegistryRecord) -> Result<(), StoreError>;
+    fn get_task_registry(&self, task_id: &str) -> Result<Option<TaskRegistryRecord>, StoreError>;
+    fn list_task_registry_for_session(
+        &self,
+        session_id: &str,
+    ) -> Result<Vec<TaskRegistryRecord>, StoreError>;
+}
+
 pub trait AgentRepository {
     fn put_agent_profile(&self, record: &AgentProfileRecord) -> Result<(), StoreError>;
     fn get_agent_profile(&self, id: &str) -> Result<Option<AgentProfileRecord>, StoreError>;
@@ -192,6 +277,7 @@ pub trait RunRepository {
     fn put_run(&self, record: &RunRecord) -> Result<(), StoreError>;
     fn get_run(&self, id: &str) -> Result<Option<RunRecord>, StoreError>;
     fn list_runs(&self) -> Result<Vec<RunRecord>, StoreError>;
+    fn session_has_active_run(&self, session_id: &str) -> Result<bool, StoreError>;
     fn list_runs_for_session(&self, session_id: &str) -> Result<Vec<RunRecord>, StoreError>;
     fn list_recent_runs_for_session(
         &self,
@@ -253,6 +339,11 @@ pub trait ToolCallRepository {
     fn list_tool_calls_for_session(
         &self,
         session_id: &str,
+    ) -> Result<Vec<ToolCallRecord>, StoreError>;
+    fn list_recent_tool_calls_for_session(
+        &self,
+        session_id: &str,
+        limit: usize,
     ) -> Result<Vec<ToolCallRecord>, StoreError>;
     fn list_tool_calls_for_run(&self, run_id: &str) -> Result<Vec<ToolCallRecord>, StoreError>;
 }

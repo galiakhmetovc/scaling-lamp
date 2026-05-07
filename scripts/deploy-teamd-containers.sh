@@ -7,6 +7,7 @@ DRY_RUN=0
 NON_INTERACTIVE=0
 SKIP_START=0
 INSTALL_DOCKER=${TEAMD_CONTAINERS_INSTALL_DOCKER:-1}
+ENABLE_NATS=1
 ENABLE_SEARXNG=1
 ENABLE_JAEGER=0
 ENABLE_MEM0=0
@@ -28,6 +29,13 @@ SERVICE_USER=${TEAMD_DEPLOY_USER:-teamd}
 SERVICE_GROUP=${TEAMD_DEPLOY_GROUP:-$SERVICE_USER}
 DAEMON_SERVICE=${TEAMD_DEPLOY_DAEMON_SERVICE:-teamd-daemon.service}
 TELEGRAM_SERVICE=${TEAMD_DEPLOY_TELEGRAM_SERVICE:-teamd-telegram.service}
+
+NATS_PORT=${TEAMD_NATS_PORT:-4222}
+NATS_MONITOR_PORT=${TEAMD_NATS_MONITOR_PORT:-8222}
+NATS_IMAGE=${TEAMD_NATS_IMAGE:-docker.io/library/nats:2-alpine}
+NATS_DIR=$CONTAINERS_ROOT/nats
+NATS_DATA_DIR=$DATA_ROOT/nats
+NATS_COMPOSE=$NATS_DIR/docker-compose.yml
 
 SEARXNG_PORT=${TEAMD_SEARXNG_PORT:-8888}
 SEARXNG_IMAGE=${TEAMD_SEARXNG_IMAGE:-docker.io/searxng/searxng:latest}
@@ -183,6 +191,7 @@ else
   CADDY_HTTPS_PORT=
 fi
 CADDY_IMAGE=${TEAMD_CADDY_IMAGE:-docker.io/library/caddy:2}
+CADDY_DAEMON_UPSTREAM=${TEAMD_CADDY_DAEMON_UPSTREAM:-host.docker.internal:5140}
 CADDY_DIR=$CONTAINERS_ROOT/caddy
 CADDY_DATA_DIR=$DATA_ROOT/caddy/data
 CADDY_CONFIG_DIR=$DATA_ROOT/caddy/config
@@ -215,6 +224,7 @@ Options:
   --non-interactive     Do not prompt.
   --no-install-docker   Fail if Docker Engine or Docker Compose plugin is missing.
   --no-start            Write files but do not start containers.
+  --no-nats             Do not deploy local NATS JetStream.
   --no-searxng          Do not deploy SearXNG.
   --no-caddy            Do not deploy Caddy reverse proxy.
   --with-jaeger         Also deploy Jaeger UI and enable agentd OTLP auto-export.
@@ -248,6 +258,9 @@ Environment overrides:
   TEAMD_CONTAINERS_EDGE_NETWORK  Shared Docker network, default: $EDGE_NETWORK.
   TEAMD_CONTAINERS_INSTALL_DOCKER
                                  Auto-install Docker when missing, default: $INSTALL_DOCKER.
+  TEAMD_NATS_IMAGE               NATS image, default: $NATS_IMAGE.
+  TEAMD_NATS_PORT                Local NATS client port, default: $NATS_PORT.
+  TEAMD_NATS_MONITOR_PORT        Local NATS monitor port, default: $NATS_MONITOR_PORT.
   TEAMD_SEARXNG_IMAGE            SearXNG image, default: $SEARXNG_IMAGE.
   TEAMD_SEARXNG_PORT             SearXNG localhost port, default: $SEARXNG_PORT.
   TEAMD_SILVERBULLET_IMAGE       SilverBullet image, default: $SILVERBULLET_IMAGE.
@@ -374,6 +387,8 @@ Environment overrides:
   TEAMD_CADDY_HTTP_PORT          Caddy HTTP host port, default: $CADDY_HTTP_PORT.
   TEAMD_CADDY_HTTPS_PORT         Caddy HTTPS host port. Default: 443 with TEAMD_CADDY_DOMAIN,
                                  otherwise disabled.
+  TEAMD_CADDY_DAEMON_UPSTREAM    Upstream for daemon routes from Caddy,
+                                 default: $CADDY_DAEMON_UPSTREAM.
 EOF
 }
 
@@ -607,6 +622,7 @@ ensure_edge_network() {
 }
 
 docker_components_enabled() {
+  [ "$ENABLE_NATS" -eq 1 ] ||
   [ "$ENABLE_SEARXNG" -eq 1 ] ||
     [ "$ENABLE_JAEGER" -eq 1 ] ||
     [ "$ENABLE_MEM0" -eq 1 ] ||
@@ -614,6 +630,79 @@ docker_components_enabled() {
     [ "$ENABLE_SILVERBULLET" -eq 1 ] ||
     [ "$ENABLE_FILEBROWSER" -eq 1 ] ||
     [ "$ENABLE_CADDY" -eq 1 ]
+}
+
+write_nats_files() {
+  if [ "$DRY_RUN" -eq 1 ]; then
+    print_cmd mkdir -p "$NATS_DIR" "$NATS_DATA_DIR"
+    print_cmd sh -c "write $NATS_COMPOSE for teamd-nats JetStream"
+    return 0
+  fi
+
+  run_root mkdir -p "$NATS_DIR" "$NATS_DATA_DIR"
+  tmp_compose=$(mktemp)
+  trap 'rm -f "$tmp_compose"' EXIT INT TERM
+
+  cat > "$tmp_compose" <<EOF
+services:
+  nats:
+    image: $NATS_IMAGE
+    container_name: teamd-nats
+    restart: unless-stopped
+    command: ["-js", "-sd", "/data", "-m", "8222"]
+    ports:
+      - "127.0.0.1:$NATS_PORT:4222"
+      - "127.0.0.1:$NATS_MONITOR_PORT:8222"
+    volumes:
+      - "$NATS_DATA_DIR:/data:rw"
+    networks:
+      - $EDGE_NETWORK
+
+networks:
+  $EDGE_NETWORK:
+    external: true
+EOF
+
+  run_root install -m 0644 -o root -g root "$tmp_compose" "$NATS_COMPOSE"
+}
+
+configure_agentd_nats_env() {
+  env_parent=$(dirname "$ENV_FILE")
+  nats_url="nats://127.0.0.1:$NATS_PORT"
+
+  if [ "$DRY_RUN" -eq 1 ]; then
+    print_cmd mkdir -p "$env_parent"
+    print_cmd sh -c "upsert NATS event bus defaults in $ENV_FILE"
+    return 0
+  fi
+
+  run_root mkdir -p "$env_parent"
+
+  tmp_env=$(mktemp)
+  tmp_new=$(mktemp)
+  if [ -e "$ENV_FILE" ]; then
+    awk '
+      !/^(export[[:space:]]+)?TEAMD_EVENT_BUS_BACKEND=/ &&
+      !/^(export[[:space:]]+)?TEAMD_NATS_URL=/ &&
+      !/^(export[[:space:]]+)?TEAMD_EVENT_BUS_NATS_URL=/
+    ' "$ENV_FILE" > "$tmp_env"
+  else
+    : > "$tmp_env"
+  fi
+
+  {
+    cat "$tmp_env"
+    [ ! -s "$tmp_env" ] || printf '\n'
+    printf 'TEAMD_EVENT_BUS_BACKEND=%s\n' "$(quote_arg "nats_jetstream")"
+    printf 'TEAMD_NATS_URL=%s\n' "$(quote_arg "$nats_url")"
+  } > "$tmp_new"
+
+  env_group=root
+  if getent group "$SERVICE_GROUP" >/dev/null 2>&1; then
+    env_group=$SERVICE_GROUP
+  fi
+  run_root install -m 0640 -o root -g "$env_group" "$tmp_new" "$ENV_FILE"
+  rm -f "$tmp_env" "$tmp_new"
 }
 
 generate_secret_key() {
@@ -1954,6 +2043,8 @@ services:
     restart: unless-stopped
     ports:
 $ports_block
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     volumes:
 $caddy_volumes
     networks:
@@ -1999,6 +2090,17 @@ files.$CADDY_DOMAIN {
   }"
     fi
   fi
+
+  webhook_handle="  handle /v1/telegram/webhook/* {
+    reverse_proxy $CADDY_DAEMON_UPSTREAM
+  }"
+  core_web_handle="  handle /web* {
+    reverse_proxy $CADDY_DAEMON_UPSTREAM
+  }
+
+  handle /v1/web/* {
+    reverse_proxy $CADDY_DAEMON_UPSTREAM
+  }"
 
 	  silverbullet_domain_block=
 	  silverbullet_https_block=
@@ -2080,6 +2182,8 @@ $silverbullet_compat_redirects
       header_up X-Script-Name /searxng
     }
   }
+$webhook_handle
+$core_web_handle
 $jaeger_handle
 $filebrowser_handle
 $silverbullet_single_handle
@@ -2091,6 +2195,12 @@ EOF
 	      cat > "$tmp_caddyfile" <<EOF
 search.$CADDY_DOMAIN {
   reverse_proxy teamd-searxng:8080
+}
+
+$CADDY_DOMAIN {
+$webhook_handle
+$core_web_handle
+  respond / "teamD core edge"
 }
 $jaeger_domain_block
 $silverbullet_domain_block
@@ -2111,6 +2221,8 @@ $filebrowser_http_redirect
       header_up X-Script-Name /searxng
     }
   }
+$webhook_handle
+$core_web_handle
 $jaeger_handle
 $filebrowser_handle
 
@@ -2125,6 +2237,8 @@ https://$CADDY_HOST {
       header_up X-Script-Name /searxng
     }
   }
+$webhook_handle
+$core_web_handle
 $jaeger_handle
 $filebrowser_handle
 
@@ -2145,6 +2259,8 @@ $filebrowser_http_redirect
       header_up X-Script-Name /searxng
     }
   }
+$webhook_handle
+$core_web_handle
 $jaeger_handle
 $filebrowser_handle
 
@@ -2230,6 +2346,7 @@ while [ "$#" -gt 0 ]; do
     --non-interactive) NON_INTERACTIVE=1 ;;
     --no-install-docker) INSTALL_DOCKER=0 ;;
     --no-start) SKIP_START=1 ;;
+    --no-nats) ENABLE_NATS=0 ;;
     --no-searxng) ENABLE_SEARXNG=0 ;;
     --no-caddy) ENABLE_CADDY=0 ;;
     --with-jaeger) ENABLE_JAEGER=1 ;;
@@ -2310,6 +2427,8 @@ validate_caddy_domain_mode
 ensure_silverbullet_https_port
 validate_silverbullet_url_prefix
 ensure_caddy_host
+valid_port "$NATS_PORT" || fail "invalid TEAMD_NATS_PORT: $NATS_PORT"
+valid_port "$NATS_MONITOR_PORT" || fail "invalid TEAMD_NATS_MONITOR_PORT: $NATS_MONITOR_PORT"
 valid_port "$MEM0_PORT" || fail "invalid TEAMD_MEM0_PORT: $MEM0_PORT"
 valid_port "$FILEBROWSER_PORT" || fail "invalid TEAMD_FILEBROWSER_PORT: $FILEBROWSER_PORT"
 
@@ -2317,14 +2436,20 @@ if [ "$(id -u)" -ne 0 ] && [ "$DRY_RUN" -eq 0 ]; then
   need_command sudo
 fi
 
-if [ "$ENABLE_SEARXNG" -eq 0 ] && [ "$ENABLE_JAEGER" -eq 0 ] && [ "$ENABLE_MEM0" -eq 0 ] && [ "$ENABLE_SILVERBULLET" -eq 0 ] && [ "$ENABLE_BROWSERLESS" -eq 0 ] && [ "$INSTALL_AGENT_BROWSER" -eq 0 ] && [ "$ENABLE_FILEBROWSER" -eq 0 ] && [ "$ENABLE_CADDY" -eq 0 ]; then
-  fail "nothing to deploy: SearXNG disabled, Jaeger not enabled, Mem0 not enabled, SilverBullet not enabled, Browserless/agent-browser not enabled, File Browser not enabled, and Caddy disabled"
+if [ "$ENABLE_NATS" -eq 0 ] && [ "$ENABLE_SEARXNG" -eq 0 ] && [ "$ENABLE_JAEGER" -eq 0 ] && [ "$ENABLE_MEM0" -eq 0 ] && [ "$ENABLE_SILVERBULLET" -eq 0 ] && [ "$ENABLE_BROWSERLESS" -eq 0 ] && [ "$INSTALL_AGENT_BROWSER" -eq 0 ] && [ "$ENABLE_FILEBROWSER" -eq 0 ] && [ "$ENABLE_CADDY" -eq 0 ]; then
+  fail "nothing to deploy: NATS disabled, SearXNG disabled, Jaeger not enabled, Mem0 not enabled, SilverBullet not enabled, Browserless/agent-browser not enabled, File Browser not enabled, and Caddy disabled"
 fi
 
 if docker_components_enabled; then
   ensure_docker
   ensure_edge_network
   remove_legacy_manual_mcp_runtime
+fi
+
+if [ "$ENABLE_NATS" -eq 1 ]; then
+  write_nats_files
+  configure_agentd_nats_env
+  compose_up "$NATS_COMPOSE"
 fi
 
 if [ "$ENABLE_SEARXNG" -eq 1 ]; then
@@ -2385,7 +2510,7 @@ if [ "$ENABLE_CADDY" -eq 1 ]; then
   reload_caddy_if_running
 fi
 
-if [ "$ENABLE_SEARXNG" -eq 1 ] || [ "$ENABLE_SILVERBULLET_MCP" -eq 1 ] || [ "$ENABLE_JAEGER" -eq 1 ] || [ "$ENABLE_MEM0" -eq 1 ] || [ "$ENABLE_FILEBROWSER" -eq 1 ] || [ "$INSTALL_AGENT_BROWSER" -eq 1 ]; then
+if [ "$ENABLE_NATS" -eq 1 ] || [ "$ENABLE_SEARXNG" -eq 1 ] || [ "$ENABLE_SILVERBULLET_MCP" -eq 1 ] || [ "$ENABLE_JAEGER" -eq 1 ] || [ "$ENABLE_MEM0" -eq 1 ] || [ "$ENABLE_FILEBROWSER" -eq 1 ] || [ "$INSTALL_AGENT_BROWSER" -eq 1 ]; then
   restart_teamd_services
 fi
 
@@ -2393,6 +2518,22 @@ cat <<EOF
 
 Container add-ons:
 EOF
+
+if [ "$ENABLE_NATS" -eq 1 ]; then
+  cat <<EOF
+  NATS JetStream:
+    Container: teamd-nats
+    Client URL: nats://127.0.0.1:$NATS_PORT
+    Monitor URL: http://127.0.0.1:$NATS_MONITOR_PORT
+    Compose: $NATS_COMPOSE
+    Start command: docker compose -f $NATS_COMPOSE up -d
+    Data: $NATS_DATA_DIR
+    agentd event bus:
+      Env file: $ENV_FILE
+      TEAMD_EVENT_BUS_BACKEND=nats_jetstream
+      TEAMD_NATS_URL=nats://127.0.0.1:$NATS_PORT
+EOF
+fi
 
 if [ "$ENABLE_SEARXNG" -eq 1 ]; then
   cat <<EOF

@@ -12,6 +12,7 @@ use teloxide::types::{
     BotCommand, ChatAction, ChatId, File, FileId, InputFile, Me, Message, MessageId, ParseMode,
     Update,
 };
+use tokio::io::AsyncWriteExt;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TelegramClientConfig {
@@ -229,6 +230,12 @@ impl TelegramClient {
             .download_file(path, &mut file)
             .await
             .map_err(TelegramClientError::Download)?;
+        file.flush()
+            .await
+            .map_err(|source| TelegramClientError::Io {
+                context: "flush telegram download temp file",
+                source,
+            })?;
         drop(file);
 
         let bytes =

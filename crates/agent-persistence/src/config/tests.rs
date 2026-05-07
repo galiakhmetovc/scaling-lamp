@@ -17,6 +17,14 @@ fn base_env(root: &Path) -> ConfigEnv {
         database_url_override: None,
         database_connect_timeout_override: None,
         database_application_name_override: None,
+        event_bus_required_override: None,
+        event_bus_backend_override: None,
+        event_bus_nats_url_override: None,
+        event_bus_input_stream_override: None,
+        event_bus_session_stream_override: None,
+        event_bus_delivery_stream_override: None,
+        event_bus_task_stream_override: None,
+        event_bus_dlq_stream_override: None,
         daemon_bearer_token_override: None,
         daemon_bind_host_override: None,
         daemon_bind_port_override: None,
@@ -24,6 +32,9 @@ fn base_env(root: &Path) -> ConfigEnv {
         daemon_skills_dir_override: None,
         home_dir: Some(root.join("home")),
         telegram_bot_token_override: None,
+        telegram_mode_override: None,
+        telegram_webhook_public_url_override: None,
+        telegram_webhook_secret_override: None,
         context_compaction_keep_tail_messages_override: None,
         context_compaction_max_output_tokens_override: None,
         context_compaction_max_summary_chars_override: None,
@@ -61,6 +72,10 @@ fn base_env(root: &Path) -> ConfigEnv {
         memory_recall_max_results_override: None,
         memory_recall_max_query_chars_override: None,
         memory_recall_max_memory_chars_override: None,
+        daemon_background_worker_idle_tick_interval_ms_override: None,
+        daemon_mcp_maintenance_interval_seconds_override: None,
+        daemon_memory_maintenance_interval_seconds_override: None,
+        knowledge_max_file_bytes_override: None,
         operator_timezone_override: None,
         silverbullet_space_dir_override: None,
         silverbullet_base_url_override: None,
@@ -163,6 +178,7 @@ fn validate_rejects_enabled_browser_without_command() {
     let config = AppConfig {
         data_dir: PathBuf::from("/tmp/teamd"),
         database: Default::default(),
+        event_bus: Default::default(),
         daemon: Default::default(),
         telegram: Default::default(),
         permissions: Default::default(),
@@ -252,6 +268,7 @@ fn validate_rejects_empty_database_url() {
             url: "   ".to_string(),
             ..Default::default()
         },
+        event_bus: Default::default(),
         daemon: Default::default(),
         telegram: Default::default(),
         permissions: Default::default(),
@@ -296,6 +313,7 @@ fn validate_rejects_relative_data_dir() {
     let config = AppConfig {
         data_dir: PathBuf::from("relative/teamd"),
         database: Default::default(),
+        event_bus: Default::default(),
         daemon: Default::default(),
         telegram: Default::default(),
         permissions: Default::default(),
@@ -447,6 +465,9 @@ autospawn_status_poll_interval_ms = 150
 provider_loop_transient_retry_base_delay_ms = 220
 tui_active_run_heartbeat_notice_interval_seconds = 45
 daemon_background_worker_lease_seconds = 90
+daemon_background_worker_idle_tick_interval_ms = 1500
+daemon_mcp_maintenance_interval_seconds = 15
+daemon_memory_maintenance_interval_seconds = 45
 
 [runtime_limits]
 diagnostic_tail_lines = 120
@@ -521,6 +542,24 @@ interagent_default_max_hops = 9
     assert_eq!(
         config.runtime_timing.daemon_background_worker_lease_seconds,
         90
+    );
+    assert_eq!(
+        config
+            .runtime_timing
+            .daemon_background_worker_idle_tick_interval_ms,
+        1500
+    );
+    assert_eq!(
+        config
+            .runtime_timing
+            .daemon_mcp_maintenance_interval_seconds,
+        15
+    );
+    assert_eq!(
+        config
+            .runtime_timing
+            .daemon_memory_maintenance_interval_seconds,
+        45
     );
 
     assert_eq!(config.runtime_limits.diagnostic_tail_lines, 120);
@@ -624,6 +663,7 @@ silverbullet_session_area_path = "areas/agents.md"
 silverbullet_text_artifact_extensions = ["md", "txt"]
 silverbullet_script_artifact_extensions = ["sh", "py"]
 allowed_extensions = ["md", "txt"]
+max_file_bytes = 2048
 
 [[knowledge.source_files]]
 path = "README.md"
@@ -645,6 +685,7 @@ kind = "project_note"
     env.silverbullet_base_url_override = Some("https://env.example/sb".to_string());
     env.silverbullet_journal_context_enabled_override = Some(true);
     env.silverbullet_mirror_enabled_override = Some(true);
+    env.knowledge_max_file_bytes_override = Some(4096);
 
     let config = AppConfig::load_from_env(&env).expect("load config");
 
@@ -675,6 +716,7 @@ kind = "project_note"
         config.knowledge.allowed_extensions,
         vec!["md".to_string(), "txt".to_string()]
     );
+    assert_eq!(config.knowledge.max_file_bytes, 4096);
     assert_eq!(config.knowledge.source_files.len(), 1);
     assert_eq!(
         config.knowledge.source_files[0].path,
@@ -769,6 +811,164 @@ chat_turn_fast_settle_ms = 25
     assert_eq!(config.telegram.delivery_retry_attempts, 5);
     assert_eq!(config.telegram.delivery_retry_base_delay_ms, 150);
     assert_eq!(config.telegram.chat_turn_fast_settle_ms, 25);
+}
+
+#[test]
+fn config_requires_nats_for_webhook_event_runtime() {
+    let mut config = AppConfig {
+        data_dir: PathBuf::from("/tmp/teamd"),
+        database: Default::default(),
+        daemon: Default::default(),
+        telegram: super::TelegramConfig {
+            enabled: true,
+            bot_token: Some("telegram-secret-token".to_string()),
+            mode: "webhook".to_string(),
+            webhook_public_url: Some(
+                "https://teamd.example/v1/telegram/webhook/secret".to_string(),
+            ),
+            webhook_secret: Some("secret".to_string()),
+            ..Default::default()
+        },
+        event_bus: super::EventBusConfig {
+            required: true,
+            backend: "nats_jetstream".to_string(),
+            nats_url: None,
+            ..Default::default()
+        },
+        permissions: Default::default(),
+        provider: Default::default(),
+        session_defaults: Default::default(),
+        context: Default::default(),
+        workspace: Default::default(),
+        web: Default::default(),
+        browser: Default::default(),
+        mem0: Default::default(),
+        memory_curator: Default::default(),
+        memory_recall: Default::default(),
+        knowledge: Default::default(),
+        observability: Default::default(),
+        runtime_timing: Default::default(),
+        runtime_limits: Default::default(),
+    };
+
+    let error = config
+        .validate()
+        .expect_err("webhook event runtime must require nats url");
+
+    assert!(matches!(
+        error,
+        ConfigError::InvalidProviderValue {
+            name: "event_bus.nats_url",
+            ..
+        }
+    ));
+
+    config.event_bus.nats_url = Some("nats://127.0.0.1:4222".to_string());
+
+    config
+        .validate()
+        .expect("nats-backed webhook config is valid");
+}
+
+#[test]
+fn config_rejects_polling_when_event_bus_is_required() {
+    let config = AppConfig {
+        data_dir: PathBuf::from("/tmp/teamd"),
+        database: Default::default(),
+        daemon: Default::default(),
+        telegram: super::TelegramConfig {
+            enabled: true,
+            bot_token: Some("telegram-secret-token".to_string()),
+            mode: "polling".to_string(),
+            ..Default::default()
+        },
+        event_bus: super::EventBusConfig {
+            required: true,
+            backend: "nats_jetstream".to_string(),
+            nats_url: Some("nats://127.0.0.1:4222".to_string()),
+            ..Default::default()
+        },
+        permissions: Default::default(),
+        provider: Default::default(),
+        session_defaults: Default::default(),
+        context: Default::default(),
+        workspace: Default::default(),
+        web: Default::default(),
+        browser: Default::default(),
+        mem0: Default::default(),
+        memory_curator: Default::default(),
+        memory_recall: Default::default(),
+        knowledge: Default::default(),
+        observability: Default::default(),
+        runtime_timing: Default::default(),
+        runtime_limits: Default::default(),
+    };
+
+    let error = config
+        .validate()
+        .expect_err("required event bus must not allow telegram polling");
+
+    assert!(matches!(
+        error,
+        ConfigError::InvalidProviderValue {
+            name: "telegram.mode",
+            ..
+        }
+    ));
+}
+
+#[test]
+fn load_merges_event_bus_and_telegram_webhook_config() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let config_path = temp.path().join("teamd.toml");
+
+    fs::write(
+        &config_path,
+        r#"
+data_dir = "/tmp/teamd-config"
+
+[event_bus]
+required = true
+backend = "nats_jetstream"
+nats_url = "nats://127.0.0.1:4222"
+input_stream = "TEAMD_INPUT_CUSTOM"
+session_stream = "TEAMD_SESSION_CUSTOM"
+delivery_stream = "TEAMD_DELIVERY_CUSTOM"
+task_stream = "TEAMD_TASKS_CUSTOM"
+dlq_stream = "TEAMD_DLQ_CUSTOM"
+
+[telegram]
+enabled = true
+mode = "webhook"
+webhook_public_url = "https://teamd.example/v1/telegram/webhook/secret"
+webhook_secret = "secret"
+"#,
+    )
+    .expect("write config");
+
+    let mut env = base_env(temp.path());
+    env.config_path = Some(config_path);
+    env.telegram_bot_token_override = Some("telegram-secret-token".to_string());
+
+    let config = AppConfig::load_from_env(&env).expect("load config");
+
+    assert_eq!(config.event_bus.backend, "nats_jetstream");
+    assert!(config.event_bus.required);
+    assert_eq!(
+        config.event_bus.nats_url.as_deref(),
+        Some("nats://127.0.0.1:4222")
+    );
+    assert_eq!(config.event_bus.input_stream, "TEAMD_INPUT_CUSTOM");
+    assert_eq!(config.event_bus.session_stream, "TEAMD_SESSION_CUSTOM");
+    assert_eq!(config.event_bus.delivery_stream, "TEAMD_DELIVERY_CUSTOM");
+    assert_eq!(config.event_bus.task_stream, "TEAMD_TASKS_CUSTOM");
+    assert_eq!(config.event_bus.dlq_stream, "TEAMD_DLQ_CUSTOM");
+    assert_eq!(config.telegram.mode, "webhook");
+    assert_eq!(
+        config.telegram.webhook_public_url.as_deref(),
+        Some("https://teamd.example/v1/telegram/webhook/secret")
+    );
+    assert_eq!(config.telegram.webhook_secret.as_deref(), Some("secret"));
 }
 
 #[test]
@@ -978,6 +1178,7 @@ fn validate_rejects_invalid_runtime_limit_bounds() {
     let config = AppConfig {
         data_dir: PathBuf::from("/tmp/teamd"),
         database: Default::default(),
+        event_bus: Default::default(),
         daemon: Default::default(),
         telegram: Default::default(),
         permissions: Default::default(),
@@ -1074,6 +1275,7 @@ fn validate_rejects_invalid_auto_compaction_ratio() {
     let config = AppConfig {
         data_dir: PathBuf::from("/tmp/teamd"),
         database: Default::default(),
+        event_bus: Default::default(),
         daemon: Default::default(),
         telegram: Default::default(),
         permissions: Default::default(),

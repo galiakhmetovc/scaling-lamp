@@ -27,9 +27,14 @@ pub fn serve(app: App) -> std::io::Result<()> {
     let diagnostic_app = app.clone();
     let shutdown = Arc::new(AtomicBool::new(false));
     let worker = spawn_background_worker(app.clone(), shutdown.clone());
+    let event_runtime =
+        crate::event_runtime_runner::spawn_event_runtime(app.clone(), shutdown.clone());
     let result = server::serve(app, shutdown.clone());
     shutdown.store(true, Ordering::Relaxed);
     let _ = worker.join();
+    if let Some(event_runtime) = event_runtime {
+        let _ = event_runtime.join();
+    }
     let finish = match &result {
         Ok(()) => DiagnosticEventBuilder::new(
             &diagnostic_app.config,
@@ -78,11 +83,16 @@ pub fn spawn_for_test(app: App) -> std::io::Result<DaemonHandle> {
     let worker_app = app.clone();
     let worker_shutdown = shutdown.clone();
     let worker = spawn_background_worker(worker_app, worker_shutdown);
+    let event_runtime =
+        crate::event_runtime_runner::spawn_event_runtime(app.clone(), shutdown.clone());
     let thread_shutdown = shutdown.clone();
     let thread = thread::spawn(move || {
         let result = server::serve(app, thread_shutdown.clone());
         thread_shutdown.store(true, Ordering::Relaxed);
         let _ = worker.join();
+        if let Some(event_runtime) = event_runtime {
+            let _ = event_runtime.join();
+        }
         result
     });
 
@@ -122,13 +132,87 @@ fn unix_timestamp() -> i64 {
 
 fn spawn_background_worker(app: App, shutdown: Arc<AtomicBool>) -> JoinHandle<()> {
     thread::spawn(move || {
+        let provider = loop {
+            if shutdown.load(Ordering::Relaxed) {
+                return;
+            }
+            match app.provider_driver() {
+                Ok(provider) => break provider,
+                Err(_) => thread::sleep(
+                    app.config
+                        .runtime_timing
+                        .daemon_background_worker_tick_interval(),
+                ),
+            }
+        };
+        let mut store = loop {
+            if shutdown.load(Ordering::Relaxed) {
+                return;
+            }
+            match app.store() {
+                Ok(store) => break store,
+                Err(_) => thread::sleep(
+                    app.config
+                        .runtime_timing
+                        .daemon_background_worker_tick_interval(),
+                ),
+            }
+        };
+        let mut last_mcp_maintenance_at = 0_i64;
+        let mut last_memory_maintenance_at = 0_i64;
+        let execution_service = app.execution_service();
         while !shutdown.load(Ordering::Relaxed) {
-            let _ = app.background_worker_tick(unix_timestamp());
-            thread::sleep(
-                app.config
+            let now = unix_timestamp();
+            let mut next_tick_interval = app
+                .config
+                .runtime_timing
+                .daemon_background_worker_idle_tick_interval();
+            let maintain_mcp = now.saturating_sub(last_mcp_maintenance_at)
+                >= app
+                    .config
                     .runtime_timing
-                    .daemon_background_worker_tick_interval(),
-            );
+                    .daemon_mcp_maintenance_interval()
+                    .as_secs() as i64;
+            let maintain_memory = now.saturating_sub(last_memory_maintenance_at)
+                >= app
+                    .config
+                    .runtime_timing
+                    .daemon_memory_maintenance_interval()
+                    .as_secs() as i64;
+            if maintain_mcp {
+                last_mcp_maintenance_at = now;
+            }
+            if maintain_memory {
+                last_memory_maintenance_at = now;
+            }
+            if app
+                .background_worker_tick_with_service_and_resources(
+                    &execution_service,
+                    &store,
+                    provider.as_ref(),
+                    now,
+                    maintain_mcp,
+                    maintain_memory,
+                )
+                .map(|report| {
+                    if report.has_activity() {
+                        next_tick_interval = app
+                            .config
+                            .runtime_timing
+                            .daemon_background_worker_tick_interval();
+                    }
+                })
+                .is_err()
+            {
+                next_tick_interval = app
+                    .config
+                    .runtime_timing
+                    .daemon_background_worker_tick_interval();
+                if let Ok(reopened) = app.store() {
+                    store = reopened;
+                }
+            }
+            thread::sleep(next_tick_interval);
         }
     })
 }
