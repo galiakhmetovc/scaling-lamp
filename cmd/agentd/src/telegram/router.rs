@@ -2171,7 +2171,7 @@ where
         Ok(())
     }
 
-    async fn deliver_pending_session_notifications(&self) -> Result<(), BootstrapError> {
+    pub(crate) async fn deliver_pending_session_notifications(&self) -> Result<(), BootstrapError> {
         let bindings = self.with_store_retry(|store| store.list_telegram_chat_bindings())?;
         for binding in bindings {
             let Some(session_id) = binding.selected_session_id.as_deref() else {
