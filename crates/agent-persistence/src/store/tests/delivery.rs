@@ -1,5 +1,8 @@
 use super::*;
-use crate::{DeliveryRepository, DeliveryTargetRecord, SessionOutputRouteRecord};
+use crate::{
+    DeliveryRepository, DeliveryTargetRecord, SessionOutputRouteRecord, TaskFollowerRecord,
+    TaskRegistryRecord, TaskRegistryRepository,
+};
 
 #[test]
 fn delivery_repository_round_trips_targets_and_session_routes() {
@@ -42,6 +45,33 @@ fn delivery_repository_round_trips_targets_and_session_routes() {
     store
         .put_delivery_target(&target)
         .expect("put delivery target");
+    store
+        .put_task_registry(&TaskRegistryRecord {
+            task_id: "task-agent-1".to_string(),
+            kind: "agent_task".to_string(),
+            source_session_id: None,
+            owner_agent_id: Some("default".to_string()),
+            executor_agent_id: Some("judge".to_string()),
+            parent_task_id: None,
+            status: "running".to_string(),
+            dependency_json: "[]".to_string(),
+            context_ref_json: "{}".to_string(),
+            result_ref_json: None,
+            retry_policy_json: "{}".to_string(),
+            attempt_count: 0,
+            max_attempts: 1,
+            timeout_at: None,
+            chain_id: None,
+            hop_count: None,
+            max_hops: None,
+            trace_id: None,
+            created_at: 100,
+            updated_at: 100,
+            started_at: None,
+            finished_at: None,
+            error: None,
+        })
+        .expect("put task");
 
     let route = SessionOutputRouteRecord {
         route_id: "route-session-monitor-ops-status".to_string(),
@@ -106,5 +136,109 @@ fn delivery_repository_round_trips_targets_and_session_routes() {
             .map(|route| route.route_id)
             .collect::<Vec<_>>(),
         vec!["route-session-monitor-ops-status".to_string()]
+    );
+}
+
+#[test]
+fn delivery_repository_round_trips_task_followers() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let scaffold = PersistenceScaffold::from_config(crate::AppConfig {
+        data_dir: temp.path().join("state-root"),
+        ..crate::AppConfig::default()
+    });
+    let store = super::super::PersistenceStore::open(&scaffold).expect("open store");
+
+    let target = DeliveryTargetRecord {
+        target_id: "ops-status".to_string(),
+        kind: "telegram".to_string(),
+        address: "-100100200300".to_string(),
+        scope: "group".to_string(),
+        owner_user_id: Some("telegram:42".to_string()),
+        allowed_agent_ids_json: "[]".to_string(),
+        allowed_session_ids_json: "[]".to_string(),
+        send_policy_json: "{}".to_string(),
+        format_policy: "full_text".to_string(),
+        created_at: 100,
+        updated_at: 100,
+    };
+    store
+        .put_delivery_target(&target)
+        .expect("put delivery target");
+    store
+        .put_task_registry(&TaskRegistryRecord {
+            task_id: "task-agent-1".to_string(),
+            kind: "agent_task".to_string(),
+            source_session_id: None,
+            owner_agent_id: Some("default".to_string()),
+            executor_agent_id: Some("judge".to_string()),
+            parent_task_id: None,
+            status: "running".to_string(),
+            dependency_json: "[]".to_string(),
+            context_ref_json: "{}".to_string(),
+            result_ref_json: None,
+            retry_policy_json: "{}".to_string(),
+            attempt_count: 0,
+            max_attempts: 1,
+            timeout_at: None,
+            chain_id: None,
+            hop_count: None,
+            max_hops: None,
+            trace_id: None,
+            created_at: 100,
+            updated_at: 100,
+            started_at: None,
+            finished_at: None,
+            error: None,
+        })
+        .expect("put task");
+
+    let follower = TaskFollowerRecord {
+        follower_id: "follow-task-agent-1-ops-status".to_string(),
+        task_id: "task-agent-1".to_string(),
+        target_id: "ops-status".to_string(),
+        enabled: true,
+        created_by_user_id: Some("telegram:42".to_string()),
+        created_at: 110,
+        updated_at: 120,
+        delivered_at: None,
+        last_error: None,
+    };
+    store
+        .put_task_follower(&follower)
+        .expect("put task follower");
+
+    assert_eq!(
+        store
+            .get_task_follower("follow-task-agent-1-ops-status")
+            .expect("get follower"),
+        Some(follower.clone())
+    );
+    assert_eq!(
+        store
+            .list_enabled_task_followers("task-agent-1")
+            .expect("list enabled followers"),
+        vec![follower.clone()]
+    );
+
+    let disabled = TaskFollowerRecord {
+        enabled: false,
+        updated_at: 130,
+        ..follower
+    };
+    store
+        .put_task_follower(&disabled)
+        .expect("disable task follower");
+
+    assert_eq!(
+        store
+            .list_enabled_task_followers("task-agent-1")
+            .expect("list enabled followers after disable"),
+        Vec::<TaskFollowerRecord>::new()
+    );
+    assert_eq!(
+        store
+            .list_task_followers("task-agent-1")
+            .expect("list all followers"),
+        vec![disabled]
     );
 }

@@ -1049,11 +1049,23 @@ fn telegram_worker_renders_delegated_task_details() {
     let (api_url, requests, handle) = spawn_fake_telegram_api(vec![
         json_response(
             r#"{"ok":true,"result":[
-                {"update_id":157,"message":{"message_id":125,"date":0,"chat":{"id":42,"type":"private"},"from":{"id":777,"is_bot":false,"first_name":"Alice","username":"alice"},"text":"/task task-agent-1"}}
+                {"update_id":157,"message":{"message_id":125,"date":0,"chat":{"id":42,"type":"private"},"from":{"id":777,"is_bot":false,"first_name":"Alice","username":"alice"},"text":"/follow task-agent-1"}},
+                {"update_id":158,"message":{"message_id":126,"date":0,"chat":{"id":42,"type":"private"},"from":{"id":777,"is_bot":false,"first_name":"Alice","username":"alice"},"text":"/task task-agent-1"}},
+                {"update_id":159,"message":{"message_id":127,"date":0,"chat":{"id":42,"type":"private"},"from":{"id":777,"is_bot":false,"first_name":"Alice","username":"alice"},"text":"/unfollow task-agent-1"}},
+                {"update_id":160,"message":{"message_id":128,"date":0,"chat":{"id":42,"type":"private"},"from":{"id":777,"is_bot":false,"first_name":"Alice","username":"alice"},"text":"/cancel task-agent-1"}}
             ]}"#,
         ),
         json_response(
-            r#"{"ok":true,"result":{"message_id":126,"date":0,"chat":{"id":42,"type":"private"},"text":"task"}}"#,
+            r#"{"ok":true,"result":{"message_id":129,"date":0,"chat":{"id":42,"type":"private"},"text":"follow"}}"#,
+        ),
+        json_response(
+            r#"{"ok":true,"result":{"message_id":130,"date":0,"chat":{"id":42,"type":"private"},"text":"task"}}"#,
+        ),
+        json_response(
+            r#"{"ok":true,"result":{"message_id":131,"date":0,"chat":{"id":42,"type":"private"},"text":"unfollow"}}"#,
+        ),
+        json_response(
+            r#"{"ok":true,"result":{"message_id":132,"date":0,"chat":{"id":42,"type":"private"},"text":"cancel"}}"#,
         ),
     ]);
     let client = TelegramClient::new(TelegramClientConfig {
@@ -1062,14 +1074,18 @@ fn telegram_worker_renders_delegated_task_details() {
         poll_request_timeout_seconds: 40,
     })
     .expect("telegram client");
-    let worker = TelegramWorker::with_consumer(app, backend, client, "telegram-test");
+    let worker = TelegramWorker::with_consumer(app.clone(), backend, client, "telegram-test");
 
     let processed = runtime.block_on(worker.poll_once()).expect("poll once");
-    assert_eq!(processed, 1);
+    assert_eq!(processed, 4);
 
     let _ = requests
         .recv_timeout(Duration::from_secs(2))
         .expect("captured getUpdates");
+    let follow_response = requests
+        .recv_timeout(Duration::from_secs(2))
+        .expect("captured follow response");
+    assert!(follow_response.body.contains("following task-agent-1"));
     let task_response = requests
         .recv_timeout(Duration::from_secs(2))
         .expect("captured task response");
@@ -1077,6 +1093,28 @@ fn telegram_worker_renders_delegated_task_details() {
     assert!(task_response.body.contains("agent_task"));
     assert!(task_response.body.contains("judge"));
     assert!(task_response.body.contains("goal"));
+    assert!(task_response.body.contains("telegram-42"));
+    let unfollow_response = requests
+        .recv_timeout(Duration::from_secs(2))
+        .expect("captured unfollow response");
+    assert!(unfollow_response.body.contains("unfollowed task-agent-1"));
+    let cancel_response = requests
+        .recv_timeout(Duration::from_secs(2))
+        .expect("captured cancel response");
+    assert!(cancel_response.body.contains("cancelled task-agent-1"));
+
+    let store = app.store().expect("open store");
+    let task = store
+        .get_task_registry("task-agent-1")
+        .expect("get task")
+        .expect("task exists");
+    assert_eq!(task.status, "cancelled");
+    let followers = store
+        .list_task_followers("task-agent-1")
+        .expect("list followers");
+    assert_eq!(followers.len(), 1);
+    assert_eq!(followers[0].target_id, "telegram-42");
+    assert!(!followers[0].enabled);
 
     handle.join().expect("join fake api");
 }

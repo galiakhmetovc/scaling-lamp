@@ -186,6 +186,7 @@ delivery_target {
 Поддерживаются три модели:
 
 - `callback`: результат подзадачи публикуется как `task_completed` event в очередь родительской session;
+- `follow`: оператор подписывает delivery target на конкретную задачу через Telegram `/follow <task_id>` или CLI `agentd task follow <task_id> <target_id>`; при `agent_task.completed|failed|blocked` результат уходит в этот target и фиксируется в `event_deliveries`;
 - `query`: оператор или агент читает task registry через Telegram `/tasks`, CLI `agentd session tasks <session_id>`, CLI `agentd task show <task_id>`, HTTP `GET /v1/sessions/{id}/tasks` или будущий tool;
 - `wait`: агент явно вызывает bounded wait (`session_wait`/future task wait) с timeout, когда без результата нельзя продолжать.
 
@@ -198,8 +199,13 @@ Task registry — это не внутренняя таблица “для ра
 Минимальный реализованный контракт:
 
 - `Telegram /tasks` показывает делегированные задачи текущей session: `task_id`, `status`, `kind`, owner/executor, попытки, последний update, chain/error/result ref.
+- `Telegram /task <task_id>` показывает полную карточку задачи и followers.
+- `Telegram /follow <task_id>` регистрирует текущий чат как delivery target и включает доставку результата этой task в этот чат.
+- `Telegram /unfollow <task_id>` отключает такую доставку для текущего чата.
+- `Telegram /cancel <task_id>` отменяет конкретную task, переводит её в `cancelled` и создаёт task-result event для подписчиков.
 - `CLI agentd session tasks <session_id>` показывает тот же список локально; поддерживает `--limit`, `--offset`, `--raw`.
-- `CLI agentd task show <task_id>` показывает полную карточку задачи: dependency/context/result/retry JSON, trace, chain/hops, timestamps и ошибку.
+- `CLI agentd task show <task_id>` показывает полную карточку задачи: followers, dependency/context/result/retry JSON, trace, chain/hops, timestamps и ошибку.
+- `CLI agentd task follow <task_id> <target_id>`, `agentd task unfollow <task_id> <target_id>`, `agentd task cancel <task_id>` управляют подпиской и отменой локально.
 - `HTTP GET /v1/sessions/{session_id}/tasks` отдаёт структурированный список для будущего web UI/TUI.
 
 Граница ответственности:

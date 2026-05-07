@@ -533,6 +533,42 @@ where
                 let task = self.render_task(task_id).await?;
                 self.send_text_chunks(chat_id, &task).await
             }
+            ParsedTelegramCommand::Follow { task_id } => {
+                if self.load_activated_pairing(telegram_user_id)?.is_none() {
+                    self.send_text_chunks(chat_id, &render_pairing_required_message())
+                        .await?;
+                    return Ok(());
+                }
+                let response = self
+                    .follow_task_in_current_chat(
+                        chat_id,
+                        telegram_user_id,
+                        telegram_chat_scope(message),
+                        task_id,
+                    )
+                    .await?;
+                self.send_text_chunks(chat_id, &response).await
+            }
+            ParsedTelegramCommand::Unfollow { task_id } => {
+                if self.load_activated_pairing(telegram_user_id)?.is_none() {
+                    self.send_text_chunks(chat_id, &render_pairing_required_message())
+                        .await?;
+                    return Ok(());
+                }
+                let response = self.unfollow_task_in_current_chat(chat_id, task_id).await?;
+                self.send_text_chunks(chat_id, &response).await
+            }
+            ParsedTelegramCommand::Cancel {
+                task_id: Some(task_id),
+            } => {
+                if self.load_activated_pairing(telegram_user_id)?.is_none() {
+                    self.send_text_chunks(chat_id, &render_pairing_required_message())
+                        .await?;
+                    return Ok(());
+                }
+                let response = self.cancel_task(task_id).await?;
+                self.send_text_chunks(chat_id, &response).await
+            }
             ParsedTelegramCommand::Judge { message } => {
                 if self.load_activated_pairing(telegram_user_id)?.is_none() {
                     self.send_text_chunks(chat_id, &render_pairing_required_message())
@@ -577,7 +613,7 @@ where
             | ParsedTelegramCommand::Outputs { .. }
             | ParsedTelegramCommand::Routes
             | ParsedTelegramCommand::Stop
-            | ParsedTelegramCommand::Cancel
+            | ParsedTelegramCommand::Cancel { task_id: None }
             | ParsedTelegramCommand::Model { .. }
             | ParsedTelegramCommand::Think { .. }
             | ParsedTelegramCommand::Reasoning { .. }
@@ -788,6 +824,42 @@ where
                 let task = self.render_task(task_id).await?;
                 self.send_text_chunks(chat_id, &task).await
             }
+            ParsedTelegramCommand::Follow { task_id } => {
+                if self.load_activated_pairing(telegram_user_id)?.is_none() {
+                    self.send_text_chunks(chat_id, &render_pairing_required_message())
+                        .await?;
+                    return Ok(());
+                }
+                let response = self
+                    .follow_task_in_current_chat(
+                        chat_id,
+                        telegram_user_id,
+                        telegram_chat_scope(message),
+                        task_id,
+                    )
+                    .await?;
+                self.send_text_chunks(chat_id, &response).await
+            }
+            ParsedTelegramCommand::Unfollow { task_id } => {
+                if self.load_activated_pairing(telegram_user_id)?.is_none() {
+                    self.send_text_chunks(chat_id, &render_pairing_required_message())
+                        .await?;
+                    return Ok(());
+                }
+                let response = self.unfollow_task_in_current_chat(chat_id, task_id).await?;
+                self.send_text_chunks(chat_id, &response).await
+            }
+            ParsedTelegramCommand::Cancel {
+                task_id: Some(task_id),
+            } => {
+                if self.load_activated_pairing(telegram_user_id)?.is_none() {
+                    self.send_text_chunks(chat_id, &render_pairing_required_message())
+                        .await?;
+                    return Ok(());
+                }
+                let response = self.cancel_task(task_id).await?;
+                self.send_text_chunks(chat_id, &response).await
+            }
             ParsedTelegramCommand::Judge { message } => {
                 if self.load_activated_pairing(telegram_user_id)?.is_none() {
                     self.send_text_chunks(chat_id, &render_pairing_required_message())
@@ -836,7 +908,7 @@ where
             | ParsedTelegramCommand::Outputs { .. }
             | ParsedTelegramCommand::Routes
             | ParsedTelegramCommand::Stop
-            | ParsedTelegramCommand::Cancel
+            | ParsedTelegramCommand::Cancel { task_id: None }
             | ParsedTelegramCommand::Model { .. }
             | ParsedTelegramCommand::Think { .. }
             | ParsedTelegramCommand::Reasoning { .. }
@@ -1095,6 +1167,55 @@ where
             .map_err(map_join_error)?
     }
 
+    async fn follow_task_in_current_chat(
+        &self,
+        chat_id: i64,
+        telegram_user_id: i64,
+        scope: &'static str,
+        task_id: String,
+    ) -> Result<String, BootstrapError> {
+        let target = self
+            .register_current_chat_delivery_target(chat_id, Some(telegram_user_id), scope)
+            .await?;
+        let app = self.app.clone();
+        let created_by_user_id = format!("telegram:{telegram_user_id}");
+        tokio::task::spawn_blocking(move || {
+            let follower =
+                app.follow_task(&task_id, &target.id, Some(created_by_user_id.as_str()))?;
+            Ok(format!(
+                "following {} -> {}\nUse /unfollow {} to stop.",
+                follower.task_id, follower.target_id, follower.task_id
+            ))
+        })
+        .await
+        .map_err(map_join_error)?
+    }
+
+    async fn unfollow_task_in_current_chat(
+        &self,
+        chat_id: i64,
+        task_id: String,
+    ) -> Result<String, BootstrapError> {
+        let target_id = telegram_delivery_target_id(chat_id);
+        let app = self.app.clone();
+        tokio::task::spawn_blocking(move || {
+            let follower = app.unfollow_task(&task_id, &target_id)?;
+            Ok(format!(
+                "unfollowed {} -> {} enabled={}",
+                follower.task_id, follower.target_id, follower.enabled
+            ))
+        })
+        .await
+        .map_err(map_join_error)?
+    }
+
+    async fn cancel_task(&self, task_id: String) -> Result<String, BootstrapError> {
+        let app = self.app.clone();
+        tokio::task::spawn_blocking(move || app.cancel_task(&task_id))
+            .await
+            .map_err(map_join_error)?
+    }
+
     async fn handle_session_operator_command(
         &self,
         chat_id: i64,
@@ -1185,8 +1306,14 @@ where
                 let response = self.cancel_active_run(session_id).await?;
                 self.send_text_chunks(chat_id, &response).await
             }
-            ParsedTelegramCommand::Cancel => {
+            ParsedTelegramCommand::Cancel { task_id: None } => {
                 let response = self.cancel_all_session_work(session_id).await?;
+                self.send_text_chunks(chat_id, &response).await
+            }
+            ParsedTelegramCommand::Cancel {
+                task_id: Some(task_id),
+            } => {
+                let response = self.cancel_task(task_id).await?;
                 self.send_text_chunks(chat_id, &response).await
             }
             ParsedTelegramCommand::Model { model } => {

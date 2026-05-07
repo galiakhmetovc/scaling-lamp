@@ -1,12 +1,14 @@
 use crate::bootstrap::App;
-use crate::delivery_worker::{DeliverySender, DeliveryWorkerReport, deliver_session_output_event};
+use crate::delivery_worker::{
+    DeliverySender, DeliveryWorkerReport, deliver_session_output_event, deliver_task_result_event,
+};
 use crate::diagnostics::DiagnosticEventBuilder;
 use crate::event_bus::EventEnvelope;
 use crate::http::client::{DaemonClient, DaemonConnectOptions};
 use crate::nats::NatsEventBus;
 use crate::router_worker::{RouteDecision, route_inbound_event};
 use crate::session_worker::{SessionWorkerReport, execute_routed_session_event};
-use crate::task_worker::{TaskWorkerReport, execute_task_event_envelope};
+use crate::task_worker::{TaskWorkerReport, TaskWorkerStatus, execute_task_event_envelope};
 use crate::telegram::backend::DaemonTelegramBackend;
 use crate::telegram::client::{TelegramClient, TelegramClientConfig};
 use crate::telegram::event_delivery::TelegramEventDeliverySender;
@@ -175,6 +177,25 @@ where
     }
     let outbox_id = format!("outbox-{}", envelope.event_id);
     deliver_session_output_event(app, sender, &outbox_id, now).map_err(|error| error.to_string())
+}
+
+pub fn deliver_task_result_event_envelope<S>(
+    app: &App,
+    sender: &S,
+    envelope: EventEnvelope,
+    now: i64,
+) -> Result<DeliveryWorkerReport, String>
+where
+    S: DeliverySender,
+{
+    if !is_task_result_event_type(&envelope.event_type) {
+        return Err(format!(
+            "task result event {} has unsupported event_type {}",
+            envelope.event_id, envelope.event_type
+        ));
+    }
+    let outbox_id = format!("outbox-{}", envelope.event_id);
+    deliver_task_result_event(app, sender, &outbox_id, now).map_err(|error| error.to_string())
 }
 
 async fn run_event_runtime(app: App, shutdown: Arc<AtomicBool>) -> Result<(), String> {
@@ -528,6 +549,19 @@ async fn task_consumer_loop(
     bus: NatsEventBus,
     shutdown: Arc<AtomicBool>,
 ) -> Result<(), String> {
+    let token = app
+        .config
+        .telegram
+        .bot_token
+        .clone()
+        .ok_or_else(|| "telegram.bot_token is not configured".to_string())?;
+    let telegram_client = TelegramClient::new(TelegramClientConfig {
+        token,
+        api_url: None,
+        poll_request_timeout_seconds: app.config.telegram.poll_request_timeout_seconds,
+    })
+    .map_err(|error| error.to_string())?;
+    let sender = TelegramEventDeliverySender::new(app.clone(), telegram_client);
     let consumer = bus
         .pull_consumer(
             &app.config.event_bus.task_stream,
@@ -548,11 +582,29 @@ async fn task_consumer_loop(
         };
         let message = message.map_err(|error| error.to_string())?;
         let app_for_event = app.clone();
+        let sender_for_event = sender.clone();
         let payload = message.message.payload.clone();
         let result = tokio::task::spawn_blocking(move || {
             let envelope: EventEnvelope =
                 serde_json::from_slice(&payload).map_err(|error| error.to_string())?;
-            execute_task_event_runtime_envelope(&app_for_event, envelope, unix_timestamp())
+            if is_task_result_event_type(&envelope.event_type) {
+                let task_id = envelope.payload_ref.id.clone();
+                deliver_task_result_event_envelope(
+                    &app_for_event,
+                    &sender_for_event,
+                    envelope,
+                    unix_timestamp(),
+                )
+                .map(|_| TaskWorkerReport {
+                    task_id,
+                    job_id: None,
+                    status: TaskWorkerStatus::Ignored,
+                    run_id: None,
+                    result_outbox_id: None,
+                })
+            } else {
+                execute_task_event_runtime_envelope(&app_for_event, envelope, unix_timestamp())
+            }
         })
         .await
         .map_err(|error| error.to_string())
@@ -564,6 +616,13 @@ async fn task_consumer_loop(
         message.ack().await.map_err(|error| error.to_string())?;
     }
     Ok(())
+}
+
+fn is_task_result_event_type(event_type: &str) -> bool {
+    matches!(
+        event_type,
+        "agent_task.completed" | "agent_task.failed" | "agent_task.blocked"
+    )
 }
 
 fn telegram_inbound_is_control_command(payload_json: &str) -> bool {

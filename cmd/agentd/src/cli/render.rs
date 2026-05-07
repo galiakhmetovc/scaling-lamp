@@ -533,6 +533,7 @@ pub(super) fn show_task(store: &PersistenceStore, task_id: &str) -> Result<Strin
             id: task_id.to_string(),
         });
     };
+    let followers = store.list_task_followers(task_id)?;
 
     let mut lines = vec![
         "Task".to_string(),
@@ -588,8 +589,26 @@ pub(super) fn show_task(store: &PersistenceStore, task_id: &str) -> Result<Strin
                 .unwrap_or_else(|| "<none>".to_string())
         ),
         format!("error: {}", task.error.as_deref().unwrap_or("<none>")),
-        "dependency_json:".to_string(),
+        "followers:".to_string(),
     ];
+    if followers.is_empty() {
+        lines.push("  <none>".to_string());
+    } else {
+        for follower in followers {
+            lines.push(format!(
+                "  {} target_id={} enabled={} delivered_at={} error={}",
+                follower.follower_id,
+                follower.target_id,
+                follower.enabled,
+                follower
+                    .delivered_at
+                    .map(format_unix_timestamp)
+                    .unwrap_or_else(|| "<none>".to_string()),
+                follower.last_error.as_deref().unwrap_or("<none>")
+            ));
+        }
+    }
+    lines.push("dependency_json:".to_string());
     lines.extend(indent_lines(
         &pretty_json_or_raw(&task.dependency_json),
         "  ",

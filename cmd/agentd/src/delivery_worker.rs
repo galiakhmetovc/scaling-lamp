@@ -1,7 +1,8 @@
 use crate::bootstrap::App;
 use agent_persistence::{
     DeliveryRepository, DeliveryTargetRecord, EventDeliveryRecord, EventOutboxRecord,
-    EventRepository, SessionOutputRouteRecord, TranscriptRecord, TranscriptRepository,
+    EventRepository, SessionOutputRouteRecord, TaskRegistryRecord, TaskRegistryRepository,
+    TranscriptRecord, TranscriptRepository,
 };
 use serde_json::Value;
 use std::fmt;
@@ -168,11 +169,184 @@ where
     Ok(report)
 }
 
+pub fn deliver_task_result_event<S>(
+    app: &App,
+    sender: &S,
+    outbox_id: &str,
+    now: i64,
+) -> Result<DeliveryWorkerReport, DeliveryWorkerError>
+where
+    S: DeliverySender,
+{
+    let store = app.store().map_err(|error| {
+        DeliveryWorkerError::new(DeliveryWorkerErrorKind::Store, error.to_string())
+    })?;
+    let outbox = store
+        .get_event_outbox(outbox_id)
+        .map_err(|error| {
+            DeliveryWorkerError::new(DeliveryWorkerErrorKind::Store, error.to_string())
+        })?
+        .ok_or_else(|| {
+            DeliveryWorkerError::new(
+                DeliveryWorkerErrorKind::MissingOutbox,
+                format!("event outbox {outbox_id} not found"),
+            )
+        })?;
+    let envelope = TaskResultEnvelope::from_outbox(&outbox)?;
+    let task = store
+        .get_task_registry(&envelope.task_id)
+        .map_err(|error| {
+            DeliveryWorkerError::new(DeliveryWorkerErrorKind::Store, error.to_string())
+        })?
+        .ok_or_else(|| {
+            DeliveryWorkerError::new(
+                DeliveryWorkerErrorKind::InvalidEnvelope,
+                format!("task {} not found", envelope.task_id),
+            )
+        })?;
+    let followers = store
+        .list_enabled_task_followers(&envelope.task_id)
+        .map_err(|error| {
+            DeliveryWorkerError::new(DeliveryWorkerErrorKind::Store, error.to_string())
+        })?;
+
+    let mut report = DeliveryWorkerReport {
+        outbox_id: outbox_id.to_string(),
+        delivered: 0,
+        failed: 0,
+        skipped: 0,
+    };
+
+    for follower in followers {
+        if follower.delivered_at.is_some() {
+            report.skipped += 1;
+            continue;
+        }
+        let Some(target) = store
+            .get_delivery_target(&follower.target_id)
+            .map_err(|error| {
+                DeliveryWorkerError::new(DeliveryWorkerErrorKind::Store, error.to_string())
+            })?
+        else {
+            persist_event_delivery(
+                &store,
+                &envelope.event_id,
+                &follower.target_id,
+                "failed",
+                Some("delivery target not found".to_string()),
+                now,
+            )?;
+            let mut updated_follower = follower;
+            updated_follower.updated_at = now;
+            updated_follower.last_error = Some("delivery target not found".to_string());
+            store
+                .put_task_follower(&updated_follower)
+                .map_err(|error| {
+                    DeliveryWorkerError::new(DeliveryWorkerErrorKind::Store, error.to_string())
+                })?;
+            report.failed += 1;
+            continue;
+        };
+        let text = render_task_result_text(&task, &target);
+        match sender.send_text(&target, &text) {
+            Ok(()) => {
+                persist_event_delivery(
+                    &store,
+                    &envelope.event_id,
+                    &target.target_id,
+                    "delivered",
+                    None,
+                    now,
+                )?;
+                let mut updated_follower = follower;
+                updated_follower.updated_at = now;
+                updated_follower.delivered_at = Some(now);
+                updated_follower.last_error = None;
+                store
+                    .put_task_follower(&updated_follower)
+                    .map_err(|error| {
+                        DeliveryWorkerError::new(DeliveryWorkerErrorKind::Store, error.to_string())
+                    })?;
+                report.delivered += 1;
+            }
+            Err(error) => {
+                persist_event_delivery(
+                    &store,
+                    &envelope.event_id,
+                    &target.target_id,
+                    "failed",
+                    Some(error.to_string()),
+                    now,
+                )?;
+                let mut updated_follower = follower;
+                updated_follower.updated_at = now;
+                updated_follower.last_error = Some(error.to_string());
+                store
+                    .put_task_follower(&updated_follower)
+                    .map_err(|error| {
+                        DeliveryWorkerError::new(DeliveryWorkerErrorKind::Store, error.to_string())
+                    })?;
+                report.failed += 1;
+            }
+        }
+    }
+
+    Ok(report)
+}
+
 #[derive(Debug)]
 struct OutputEnvelope {
     event_id: String,
     session_id: String,
     run_id: String,
+}
+
+#[derive(Debug)]
+struct TaskResultEnvelope {
+    event_id: String,
+    task_id: String,
+}
+
+impl TaskResultEnvelope {
+    fn from_outbox(outbox: &EventOutboxRecord) -> Result<Self, DeliveryWorkerError> {
+        let value: Value = serde_json::from_str(&outbox.payload_json).map_err(|error| {
+            DeliveryWorkerError::new(
+                DeliveryWorkerErrorKind::InvalidEnvelope,
+                format!("invalid task result envelope json: {error}"),
+            )
+        })?;
+        let event_type = value
+            .get("event_type")
+            .and_then(Value::as_str)
+            .unwrap_or("");
+        if !matches!(
+            event_type,
+            "agent_task.completed" | "agent_task.failed" | "agent_task.blocked"
+        ) {
+            return Err(DeliveryWorkerError::new(
+                DeliveryWorkerErrorKind::InvalidEnvelope,
+                format!("unsupported task result event_type {event_type}"),
+            ));
+        }
+        let task_id = value
+            .get("payload_ref")
+            .and_then(|payload_ref| {
+                let table = payload_ref.get("table").and_then(Value::as_str)?;
+                (table == "task_registry").then(|| payload_ref.get("id"))?
+            })
+            .and_then(Value::as_str)
+            .map(str::to_string)
+            .ok_or_else(|| {
+                DeliveryWorkerError::new(
+                    DeliveryWorkerErrorKind::InvalidEnvelope,
+                    "task result envelope missing task_registry payload_ref.id",
+                )
+            })?;
+        Ok(Self {
+            event_id: required_string(&value, "event_id")?,
+            task_id,
+        })
+    }
 }
 
 impl OutputEnvelope {
@@ -279,6 +453,37 @@ fn render_delivery_text(
     }
 }
 
+fn render_task_result_text(task: &TaskRegistryRecord, target: &DeliveryTargetRecord) -> String {
+    match target.format_policy.as_str() {
+        "status_only" => format!(
+            "Task {} finished with status {}.",
+            task.task_id, task.status
+        ),
+        _ => {
+            let mut lines = vec![
+                "Task result:".to_string(),
+                format!("- id: {}", task.task_id),
+                format!("- status: {}", task.status),
+                format!("- kind: {}", task.kind),
+            ];
+            if let Some(source_session_id) = task.source_session_id.as_deref() {
+                lines.push(format!("- source_session_id: {source_session_id}"));
+            }
+            if let Some(executor_agent_id) = task.executor_agent_id.as_deref() {
+                lines.push(format!("- executor_agent_id: {executor_agent_id}"));
+            }
+            if let Some(error) = task.error.as_deref() {
+                lines.push(format!("- error: {error}"));
+            }
+            if let Some(result_ref_json) = task.result_ref_json.as_deref() {
+                lines.push("- result_ref_json:".to_string());
+                lines.extend(indent_lines(&pretty_json_str(result_ref_json), "  "));
+            }
+            lines.join("\n")
+        }
+    }
+}
+
 fn persist_delivery(
     store: &agent_persistence::PersistenceStore,
     envelope: &OutputEnvelope,
@@ -287,10 +492,21 @@ fn persist_delivery(
     error: Option<String>,
     now: i64,
 ) -> Result<(), DeliveryWorkerError> {
+    persist_event_delivery(store, &envelope.event_id, target_id, status, error, now)
+}
+
+fn persist_event_delivery(
+    store: &agent_persistence::PersistenceStore,
+    event_id: &str,
+    target_id: &str,
+    status: &str,
+    error: Option<String>,
+    now: i64,
+) -> Result<(), DeliveryWorkerError> {
     store
         .put_event_delivery(&EventDeliveryRecord {
-            delivery_event_id: format!("delivery-{}-{target_id}", envelope.event_id),
-            source_event_id: envelope.event_id.clone(),
+            delivery_event_id: format!("delivery-{event_id}-{target_id}"),
+            source_event_id: event_id.to_string(),
             target_id: target_id.to_string(),
             status: status.to_string(),
             attempt_count: 1,
@@ -306,6 +522,19 @@ fn persist_delivery(
         .map_err(|error| {
             DeliveryWorkerError::new(DeliveryWorkerErrorKind::Store, error.to_string())
         })
+}
+
+fn pretty_json_str(raw: &str) -> String {
+    serde_json::from_str::<Value>(raw)
+        .map(|value| serde_json::to_string_pretty(&value).unwrap_or_else(|_| value.to_string()))
+        .unwrap_or_else(|_| raw.to_string())
+}
+
+fn indent_lines(value: &str, prefix: &str) -> Vec<String> {
+    value
+        .lines()
+        .map(|line| format!("{prefix}{line}"))
+        .collect()
 }
 
 fn required_string(value: &Value, field: &'static str) -> Result<String, DeliveryWorkerError> {

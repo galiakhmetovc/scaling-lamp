@@ -1,5 +1,5 @@
 use super::*;
-use crate::records::{DeliveryTargetRecord, SessionOutputRouteRecord};
+use crate::records::{DeliveryTargetRecord, SessionOutputRouteRecord, TaskFollowerRecord};
 
 impl DeliveryRepository for PersistenceStore {
     fn put_delivery_target(&self, record: &DeliveryTargetRecord) -> Result<(), StoreError> {
@@ -166,6 +166,87 @@ impl DeliveryRepository for PersistenceStore {
             &[&target_kind],
         )
     }
+
+    fn put_task_follower(&self, record: &TaskFollowerRecord) -> Result<(), StoreError> {
+        validate_identifier(&record.follower_id)?;
+        validate_identifier(&record.task_id)?;
+        validate_identifier(&record.target_id)?;
+        self.with_client(|client| {
+            client.execute(
+                "INSERT INTO task_followers (
+                    follower_id, task_id, target_id, enabled, created_by_user_id,
+                    created_at, updated_at, delivered_at, last_error
+                 ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+                 ON CONFLICT(follower_id) DO UPDATE SET
+                    task_id = excluded.task_id,
+                    target_id = excluded.target_id,
+                    enabled = excluded.enabled,
+                    created_by_user_id = excluded.created_by_user_id,
+                    created_at = excluded.created_at,
+                    updated_at = excluded.updated_at,
+                    delivered_at = excluded.delivered_at,
+                    last_error = excluded.last_error",
+                &[
+                    &record.follower_id,
+                    &record.task_id,
+                    &record.target_id,
+                    &record.enabled,
+                    &record.created_by_user_id,
+                    &record.created_at,
+                    &record.updated_at,
+                    &record.delivered_at,
+                    &record.last_error,
+                ],
+            )?;
+            Ok(())
+        })
+    }
+
+    fn get_task_follower(
+        &self,
+        follower_id: &str,
+    ) -> Result<Option<TaskFollowerRecord>, StoreError> {
+        validate_identifier(follower_id)?;
+        self.with_client(|client| {
+            client
+                .query_opt(
+                    "SELECT follower_id, task_id, target_id, enabled, created_by_user_id,
+                            created_at, updated_at, delivered_at, last_error
+                     FROM task_followers
+                     WHERE follower_id = $1",
+                    &[&follower_id],
+                )
+                .map(|row| row.map(|row| task_follower_from_row(&row)))
+                .map_err(StoreError::from)
+        })
+    }
+
+    fn list_task_followers(&self, task_id: &str) -> Result<Vec<TaskFollowerRecord>, StoreError> {
+        validate_identifier(task_id)?;
+        self.query_task_followers(
+            "SELECT follower_id, task_id, target_id, enabled, created_by_user_id,
+                    created_at, updated_at, delivered_at, last_error
+             FROM task_followers
+             WHERE task_id = $1
+             ORDER BY updated_at DESC, follower_id ASC",
+            &[&task_id],
+        )
+    }
+
+    fn list_enabled_task_followers(
+        &self,
+        task_id: &str,
+    ) -> Result<Vec<TaskFollowerRecord>, StoreError> {
+        validate_identifier(task_id)?;
+        self.query_task_followers(
+            "SELECT follower_id, task_id, target_id, enabled, created_by_user_id,
+                    created_at, updated_at, delivered_at, last_error
+             FROM task_followers
+             WHERE task_id = $1 AND enabled = TRUE
+             ORDER BY updated_at DESC, follower_id ASC",
+            &[&task_id],
+        )
+    }
 }
 
 impl PersistenceStore {
@@ -191,6 +272,19 @@ impl PersistenceStore {
             client
                 .query(sql, params)
                 .map(|rows| rows.iter().map(session_output_route_from_row).collect())
+                .map_err(StoreError::from)
+        })
+    }
+
+    fn query_task_followers(
+        &self,
+        sql: &str,
+        params: &[&(dyn ToSql + Sync)],
+    ) -> Result<Vec<TaskFollowerRecord>, StoreError> {
+        self.with_client(|client| {
+            client
+                .query(sql, params)
+                .map(|rows| rows.iter().map(task_follower_from_row).collect())
                 .map_err(StoreError::from)
         })
     }
@@ -224,6 +318,20 @@ fn session_output_route_from_row(row: &Row) -> SessionOutputRouteRecord {
         last_delivered_transcript_id: row.get(7),
         created_at: row.get(8),
         updated_at: row.get(9),
+    }
+}
+
+fn task_follower_from_row(row: &Row) -> TaskFollowerRecord {
+    TaskFollowerRecord {
+        follower_id: row.get(0),
+        task_id: row.get(1),
+        target_id: row.get(2),
+        enabled: row.get(3),
+        created_by_user_id: row.get(4),
+        created_at: row.get(5),
+        updated_at: row.get(6),
+        delivered_at: row.get(7),
+        last_error: row.get(8),
     }
 }
 

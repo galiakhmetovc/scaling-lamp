@@ -38,6 +38,12 @@ pub(super) enum ParsedTelegramCommand {
     Task {
         task_id: String,
     },
+    Follow {
+        task_id: String,
+    },
+    Unfollow {
+        task_id: String,
+    },
     Judge {
         message: String,
     },
@@ -57,7 +63,9 @@ pub(super) enum ParsedTelegramCommand {
         action: TelegramQueueAction,
     },
     Stop,
-    Cancel,
+    Cancel {
+        task_id: Option<String>,
+    },
     Model {
         model: Option<String>,
     },
@@ -191,7 +199,15 @@ fn parse_command_parts(command: &str, args: &str) -> Option<ParsedTelegramComman
             Err(usage) => Some(ParsedTelegramCommand::InvalidUsage(usage)),
         },
         "stop" | "pause" => Some(ParsedTelegramCommand::Stop),
-        "cancel" => Some(ParsedTelegramCommand::Cancel),
+        "cancel" => {
+            if args.is_empty() {
+                Some(ParsedTelegramCommand::Cancel { task_id: None })
+            } else {
+                Some(ParsedTelegramCommand::Cancel {
+                    task_id: Some(args.to_string()),
+                })
+            }
+        }
         "model" => {
             if args.is_empty() {
                 Some(ParsedTelegramCommand::InvalidUsage(render_usage(
@@ -308,6 +324,30 @@ fn parse_command_parts(command: &str, args: &str) -> Option<ParsedTelegramComman
                 )))
             } else {
                 Some(ParsedTelegramCommand::Task {
+                    task_id: args.to_string(),
+                })
+            }
+        }
+        "follow" => {
+            if args.is_empty() {
+                Some(ParsedTelegramCommand::InvalidUsage(render_usage(
+                    "follow",
+                    "<task_id>",
+                )))
+            } else {
+                Some(ParsedTelegramCommand::Follow {
+                    task_id: args.to_string(),
+                })
+            }
+        }
+        "unfollow" => {
+            if args.is_empty() {
+                Some(ParsedTelegramCommand::InvalidUsage(render_usage(
+                    "unfollow",
+                    "<task_id>",
+                )))
+            } else {
+                Some(ParsedTelegramCommand::Unfollow {
                     task_id: args.to_string(),
                 })
             }
@@ -517,7 +557,7 @@ pub(super) fn is_session_operator_command(command: &ParsedTelegramCommand) -> bo
             | ParsedTelegramCommand::Plan
             | ParsedTelegramCommand::Queue { .. }
             | ParsedTelegramCommand::Stop
-            | ParsedTelegramCommand::Cancel
+            | ParsedTelegramCommand::Cancel { task_id: None }
             | ParsedTelegramCommand::Model { .. }
             | ParsedTelegramCommand::Think { .. }
             | ParsedTelegramCommand::Reasoning { .. }
@@ -561,11 +601,16 @@ pub(super) fn default_command_specs() -> Vec<TelegramCommandSpec> {
         TelegramCommandSpec::new("jobs", "Show current session jobs"),
         TelegramCommandSpec::new("tasks", "Show current session delegated tasks"),
         TelegramCommandSpec::new("task", "Show delegated task details"),
+        TelegramCommandSpec::new("follow", "Follow delegated task result in this chat"),
+        TelegramCommandSpec::new(
+            "unfollow",
+            "Stop following delegated task result in this chat",
+        ),
         TelegramCommandSpec::new("plan", "Show current session plan"),
         TelegramCommandSpec::new("queue", "Show or set inbound queue mode"),
         TelegramCommandSpec::new("stop", "Stop the active turn"),
         TelegramCommandSpec::new("pause", "Alias for stop"),
-        TelegramCommandSpec::new("cancel", "Cancel current session work"),
+        TelegramCommandSpec::new("cancel", "Cancel current session work or /cancel <task_id>"),
         TelegramCommandSpec::new("model", "Set session model"),
         TelegramCommandSpec::new("think", "Set session think level"),
         TelegramCommandSpec::new("reasoning", "Toggle reasoning visibility"),
@@ -672,6 +717,18 @@ mod tests {
             })
         );
         assert_eq!(
+            parse_command("/follow task-agent-1"),
+            Some(ParsedTelegramCommand::Follow {
+                task_id: "task-agent-1".to_string()
+            })
+        );
+        assert_eq!(
+            parse_command("/unfollow task-agent-1"),
+            Some(ParsedTelegramCommand::Unfollow {
+                task_id: "task-agent-1".to_string()
+            })
+        );
+        assert_eq!(
             parse_command("/targets"),
             Some(ParsedTelegramCommand::Targets)
         );
@@ -711,7 +768,13 @@ mod tests {
         assert_eq!(parse_command("/stop"), Some(ParsedTelegramCommand::Stop));
         assert_eq!(
             parse_command("/cancel"),
-            Some(ParsedTelegramCommand::Cancel)
+            Some(ParsedTelegramCommand::Cancel { task_id: None })
+        );
+        assert_eq!(
+            parse_command("/cancel task-agent-1"),
+            Some(ParsedTelegramCommand::Cancel {
+                task_id: Some("task-agent-1".to_string())
+            })
         );
         assert_eq!(
             parse_command("/compact"),

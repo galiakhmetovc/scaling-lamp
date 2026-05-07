@@ -19,9 +19,9 @@ pub use records::{
     KnowledgeSearchDocRecord, KnowledgeSourceRecord, KvEntryRecord, McpConnectorRecord,
     MissionRecord, PlanRecord, RecordConversionError, RoutedEventRecord, RouterRuleRecord,
     RunRecord, SessionInboxEventRecord, SessionOutputRouteRecord, SessionRecord,
-    SessionRetentionRecord, SessionSearchDocRecord, TaskRegistryRecord, TelegramChatBindingRecord,
-    TelegramChatStatusRecord, TelegramUpdateCursorRecord, TelegramUserPairingRecord,
-    ToolCallRecord, TraceLinkRecord, TranscriptRecord,
+    SessionRetentionRecord, SessionSearchDocRecord, TaskFollowerRecord, TaskRegistryRecord,
+    TelegramChatBindingRecord, TelegramChatStatusRecord, TelegramUpdateCursorRecord,
+    TelegramUserPairingRecord, ToolCallRecord, TraceLinkRecord, TranscriptRecord,
 };
 pub use repository::{
     AgentRepository, ArtifactRepository, ContextOffloadRepository, ContextSummaryRepository,

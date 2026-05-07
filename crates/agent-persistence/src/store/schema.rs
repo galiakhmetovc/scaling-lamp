@@ -468,6 +468,19 @@ pub(super) fn bootstrap_schema(client: &mut Client) -> Result<(), StoreError> {
             error TEXT
         );
 
+        CREATE TABLE IF NOT EXISTS task_followers (
+            follower_id TEXT PRIMARY KEY,
+            task_id TEXT NOT NULL REFERENCES task_registry(task_id) ON DELETE CASCADE,
+            target_id TEXT NOT NULL REFERENCES delivery_targets(target_id) ON DELETE CASCADE,
+            enabled BOOLEAN NOT NULL DEFAULT TRUE,
+            created_by_user_id TEXT,
+            created_at BIGINT NOT NULL,
+            updated_at BIGINT NOT NULL,
+            delivered_at BIGINT,
+            last_error TEXT,
+            UNIQUE(task_id, target_id)
+        );
+
         CREATE INDEX IF NOT EXISTS idx_missions_session_id ON missions(session_id);
         CREATE INDEX IF NOT EXISTS idx_runs_session_id ON runs(session_id);
         CREATE INDEX IF NOT EXISTS idx_runs_mission_id ON runs(mission_id);
@@ -516,6 +529,8 @@ pub(super) fn bootstrap_schema(client: &mut Client) -> Result<(), StoreError> {
         CREATE INDEX IF NOT EXISTS idx_event_deliveries_target_status ON event_deliveries(target_id, status, updated_at);
         CREATE INDEX IF NOT EXISTS idx_task_registry_status_updated_at ON task_registry(status, updated_at DESC);
         CREATE INDEX IF NOT EXISTS idx_task_registry_chain_id ON task_registry(chain_id);
+        CREATE INDEX IF NOT EXISTS idx_task_followers_task_enabled ON task_followers(task_id, enabled, updated_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_task_followers_target_id ON task_followers(target_id);
         ",
     )?;
 
@@ -610,6 +625,9 @@ const REQUIRED_COLUMNS: &[(&str, &str, bool)] = &[
     ("event_outbox", "outbox_id", true),
     ("event_deliveries", "delivery_event_id", true),
     ("task_registry", "task_id", true),
+    ("task_followers", "follower_id", true),
+    ("task_followers", "task_id", true),
+    ("task_followers", "target_id", true),
 ];
 
 fn validate_column(

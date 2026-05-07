@@ -1,12 +1,14 @@
 use agent_persistence::{
     AppConfig, DeliveryRepository, DeliveryTargetRecord, EventOutboxRecord, EventRepository,
     PersistenceStore, RunRecord, RunRepository, SessionOutputRouteRecord, SessionRecord,
-    SessionRepository, TranscriptRecord, TranscriptRepository,
+    SessionRepository, TaskRegistryRecord, TaskRegistryRepository, TranscriptRecord,
+    TranscriptRepository,
 };
 use agent_runtime::session::SessionSettings;
 use agentd::bootstrap;
 use agentd::delivery_worker::{
     DeliverySendError, DeliverySender, DeliveryWorkerReport, deliver_session_output_event,
+    deliver_task_result_event,
 };
 use serde_json::json;
 use std::sync::{Arc, Mutex};
@@ -263,4 +265,99 @@ fn status_only_format_policy_does_not_send_full_text() {
     assert_eq!(sent.len(), 1);
     assert!(!sent[0].1.contains("assistant full text"));
     assert!(sent[0].1.contains("session-delivery"));
+}
+
+#[test]
+fn task_result_event_sends_status_to_task_followers() {
+    let (_temp, app) = test_app();
+    let store = store(&app);
+    store
+        .put_delivery_target(&DeliveryTargetRecord {
+            target_id: "telegram-main".to_string(),
+            kind: "telegram".to_string(),
+            address: "42".to_string(),
+            scope: "private".to_string(),
+            owner_user_id: Some("telegram-user-7".to_string()),
+            allowed_agent_ids_json: "[]".to_string(),
+            allowed_session_ids_json: "[]".to_string(),
+            send_policy_json: "{}".to_string(),
+            format_policy: "full_text".to_string(),
+            created_at: 100,
+            updated_at: 100,
+        })
+        .expect("put target");
+    store
+        .put_task_registry(&TaskRegistryRecord {
+            task_id: "task-agent-1".to_string(),
+            kind: "agent_task".to_string(),
+            source_session_id: Some("session-parent".to_string()),
+            owner_agent_id: Some("default".to_string()),
+            executor_agent_id: Some("judge".to_string()),
+            parent_task_id: None,
+            status: "completed".to_string(),
+            dependency_json: "[]".to_string(),
+            context_ref_json: r#"{"goal":"review"}"#.to_string(),
+            result_ref_json: Some(r#"{"run_id":"run-child","summary":"approved"}"#.to_string()),
+            retry_policy_json: "{}".to_string(),
+            attempt_count: 1,
+            max_attempts: 1,
+            timeout_at: None,
+            chain_id: Some("chain-1".to_string()),
+            hop_count: Some(1),
+            max_hops: Some(3),
+            trace_id: Some("trace-1".to_string()),
+            created_at: 100,
+            updated_at: 120,
+            started_at: Some(101),
+            finished_at: Some(120),
+            error: None,
+        })
+        .expect("put task");
+    app.follow_task("task-agent-1", "telegram-main", Some("telegram-user-7"))
+        .expect("follow task");
+    store
+        .put_event_outbox(&EventOutboxRecord {
+            outbox_id: "outbox-task-result-task-agent-1".to_string(),
+            subject: "teamd.task.task-agent-1".to_string(),
+            payload_json: json!({
+                "event_id": "task-result-task-agent-1",
+                "event_type": "agent_task.completed",
+                "trace_id": "trace-1",
+                "source_kind": "task_worker",
+                "source_id": "task-agent-1",
+                "subject": "teamd.task.task-agent-1",
+                "payload_ref": {"table": "task_registry", "id": "task-agent-1"},
+                "created_at": 121,
+                "metadata": {}
+            })
+            .to_string(),
+            status: "pending".to_string(),
+            attempt_count: 0,
+            next_attempt_at: 121,
+            created_at: 121,
+            published_at: None,
+            last_error: None,
+        })
+        .expect("put task result outbox");
+    let sender = RecordingSender::new();
+
+    let report = deliver_task_result_event(&app, &sender, "outbox-task-result-task-agent-1", 130)
+        .expect("deliver task result");
+
+    assert_eq!(report.delivered, 1);
+    let sent = sender.sent();
+    assert_eq!(sent.len(), 1);
+    assert_eq!(sent[0].0, "telegram-main");
+    assert!(sent[0].1.contains("task-agent-1"));
+    assert!(sent[0].1.contains("completed"));
+    assert!(sent[0].1.contains("approved"));
+    let delivery = store
+        .get_event_delivery("delivery-task-result-task-agent-1-telegram-main")
+        .expect("get delivery")
+        .expect("delivery exists");
+    assert_eq!(delivery.status, "delivered");
+    let followers = store
+        .list_task_followers("task-agent-1")
+        .expect("followers");
+    assert_eq!(followers[0].delivered_at, Some(130));
 }

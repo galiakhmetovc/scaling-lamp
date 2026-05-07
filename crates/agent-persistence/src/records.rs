@@ -408,6 +408,19 @@ pub struct SessionOutputRouteRecord {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TaskFollowerRecord {
+    pub follower_id: String,
+    pub task_id: String,
+    pub target_id: String,
+    pub enabled: bool,
+    pub created_by_user_id: Option<String>,
+    pub created_at: i64,
+    pub updated_at: i64,
+    pub delivered_at: Option<i64>,
+    pub last_error: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EventSourceRecord {
     pub source_id: String,
     pub kind: String,

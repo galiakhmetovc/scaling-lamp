@@ -153,6 +153,21 @@ impl Command {
             [scope, action, id] if scope == "task" && action == "show" => {
                 Ok(Self::TaskShow { id: id.clone() })
             }
+            [scope, action, id, target_id] if scope == "task" && action == "follow" => {
+                Ok(Self::TaskFollow {
+                    id: id.clone(),
+                    target_id: target_id.clone(),
+                })
+            }
+            [scope, action, id, target_id] if scope == "task" && action == "unfollow" => {
+                Ok(Self::TaskUnfollow {
+                    id: id.clone(),
+                    target_id: target_id.clone(),
+                })
+            }
+            [scope, action, id] if scope == "task" && action == "cancel" => {
+                Ok(Self::TaskCancel { id: id.clone() })
+            }
             [scope, action, tool_call_id, rest @ ..]
                 if (scope == "session" || scope == "сессия")
                     && (action == "tool-result"
@@ -233,7 +248,7 @@ impl Command {
                 })
             }
             _ => Err(BootstrapError::Usage {
-                reason: "expected one of: status | logs [max_lines] | analytics [max_lines] | trace show|run|export|push | version | update [tag] | tui | telegram run|pair|pairings | daemon | daemon stop | provider smoke | agent list/show/select/create/open | chat show/send/repl | mission create/show/tick | sessions | session create/list/show/transcript/tools/tasks/skills/enable-skill/disable-skill | task show | run show | job show/execute | approval list/approve | delegate list | verification show".to_string(),
+                reason: "expected one of: status | logs [max_lines] | analytics [max_lines] | trace show|run|export|push | version | update [tag] | tui | telegram run|pair|pairings | daemon | daemon stop | provider smoke | agent list/show/select/create/open | chat show/send/repl | mission create/show/tick | sessions | session create/list/show/transcript/tools/tasks/skills/enable-skill/disable-skill | task show/follow/unfollow/cancel | run show | job show/execute | approval list/approve | delegate list | verification show".to_string(),
             }),
         }
     }

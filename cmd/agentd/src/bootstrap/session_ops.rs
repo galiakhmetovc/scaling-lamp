@@ -1,7 +1,11 @@
 use super::*;
 use crate::agents;
 use crate::diagnostics::DiagnosticEventBuilder;
-use agent_persistence::{JobRepository, RunRepository, TaskRegistryRepository, ToolCallRepository};
+use crate::event_bus::{EventEnvelope, EventPayloadRef, EventSubjects, build_event_envelope};
+use agent_persistence::{
+    DeliveryRepository, EventOutboxRecord, EventRepository, JobRepository, RunRepository,
+    TaskRegistryRepository, ToolCallRepository,
+};
 use agent_runtime::interagent::{AgentChainState, AgentMessageChain};
 use agent_runtime::mission::JobSpec;
 use agent_runtime::run::{RunSnapshot, RunStatus, RunStepKind};
@@ -631,6 +635,25 @@ impl App {
         if let Some(trace_id) = task.trace_id.as_deref() {
             lines.push(format!("- trace_id: {trace_id}"));
         }
+        let followers = store.list_task_followers(task_id)?;
+        if followers.is_empty() {
+            lines.push("- followers: <none>".to_string());
+        } else {
+            lines.push("- followers:".to_string());
+            for follower in followers {
+                lines.push(format!(
+                    "  - {} target={} enabled={} delivered_at={} error={}",
+                    follower.follower_id,
+                    follower.target_id,
+                    follower.enabled,
+                    follower
+                        .delivered_at
+                        .map(format_background_job_time)
+                        .unwrap_or_else(|| "<none>".to_string()),
+                    follower.last_error.as_deref().unwrap_or("<none>")
+                ));
+            }
+        }
         if let Some(started_at) = task.started_at {
             lines.push(format!(
                 "- started: {}",
@@ -656,6 +679,58 @@ impl App {
         lines.extend(indent_lines(&pretty_json_str(&task.dependency_json), "  "));
 
         Ok(lines.join("\n"))
+    }
+
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub fn cancel_task(&self, task_id: &str) -> Result<String, BootstrapError> {
+        let store = self.store()?;
+        let Some(mut task) = store.get_task_registry(task_id)? else {
+            return Err(BootstrapError::MissingRecord {
+                kind: "task",
+                id: task_id.to_string(),
+            });
+        };
+        if is_terminal_task_status(&task.status) {
+            return Ok(format!("task {} already {}", task.task_id, task.status));
+        }
+        let now = unix_timestamp()?;
+        task.status = "cancelled".to_string();
+        task.updated_at = now;
+        task.finished_at = Some(now);
+        task.error = Some("cancelled by operator".to_string());
+        store.put_task_registry(&task)?;
+        let subjects = EventSubjects::from_config(&self.config.event_bus);
+        let subject = subjects.task(&task.task_id);
+        let event_id = format!("task-result-{}", task.task_id);
+        let envelope = build_event_envelope(EventEnvelope {
+            event_id: event_id.clone(),
+            event_type: "agent_task.failed".to_string(),
+            trace_id: task.trace_id.clone(),
+            source_kind: "operator".to_string(),
+            source_id: task.task_id.clone(),
+            subject: subject.clone(),
+            payload_ref: EventPayloadRef {
+                table: "task_registry".to_string(),
+                id: task.task_id.clone(),
+            },
+            created_at: now,
+            metadata: serde_json::json!({"status":"cancelled"}),
+        })
+        .map_err(|error| BootstrapError::Usage {
+            reason: format!("task result event encode failed: {error}"),
+        })?;
+        store.put_event_outbox(&EventOutboxRecord {
+            outbox_id: format!("outbox-{event_id}"),
+            subject,
+            payload_json: envelope.to_string(),
+            status: "pending".to_string(),
+            attempt_count: 0,
+            next_attempt_at: now,
+            created_at: now,
+            published_at: None,
+            last_error: None,
+        })?;
+        Ok(format!("cancelled {}", task.task_id))
     }
 
     #[cfg_attr(not(test), allow(dead_code))]
@@ -1612,6 +1687,10 @@ fn indent_lines(value: &str, prefix: &str) -> Vec<String> {
         .lines()
         .map(|line| format!("{prefix}{line}"))
         .collect()
+}
+
+fn is_terminal_task_status(status: &str) -> bool {
+    matches!(status, "completed" | "failed" | "blocked" | "cancelled")
 }
 
 fn resolve_session_workspace_root(

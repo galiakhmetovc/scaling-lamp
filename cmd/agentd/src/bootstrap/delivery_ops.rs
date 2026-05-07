@@ -1,6 +1,7 @@
 use super::{App, BootstrapError, unix_timestamp};
 use agent_persistence::{
-    DeliveryRepository, DeliveryTargetRecord, SessionOutputRouteRecord, TranscriptRepository,
+    DeliveryRepository, DeliveryTargetRecord, SessionOutputRouteRecord, TaskFollowerRecord,
+    TaskRegistryRepository, TranscriptRepository,
 };
 use serde::{Deserialize, Serialize};
 
@@ -51,6 +52,19 @@ pub struct SessionOutputRouteView {
     pub last_delivered_transcript_id: Option<String>,
     pub created_at: i64,
     pub updated_at: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TaskFollowerView {
+    pub id: String,
+    pub task_id: String,
+    pub target_id: String,
+    pub enabled: bool,
+    pub created_by_user_id: Option<String>,
+    pub created_at: i64,
+    pub updated_at: i64,
+    pub delivered_at: Option<i64>,
+    pub last_error: Option<String>,
 }
 
 impl App {
@@ -225,6 +239,92 @@ impl App {
         routes.sort_by(|left, right| left.id.cmp(&right.id));
         Ok(routes)
     }
+
+    pub fn follow_task(
+        &self,
+        task_id: &str,
+        target_id: &str,
+        created_by_user_id: Option<&str>,
+    ) -> Result<TaskFollowerView, BootstrapError> {
+        validate_non_blank("task id", task_id)?;
+        validate_non_blank("delivery target id", target_id)?;
+        let store = self.store()?;
+        if store.get_task_registry(task_id)?.is_none() {
+            return Err(BootstrapError::MissingRecord {
+                kind: "task",
+                id: task_id.to_string(),
+            });
+        }
+        if store.get_delivery_target(target_id)?.is_none() {
+            return Err(BootstrapError::MissingRecord {
+                kind: "delivery target",
+                id: target_id.to_string(),
+            });
+        }
+        let follower_id = task_follower_id(task_id, target_id);
+        let existing = store.get_task_follower(&follower_id)?;
+        let now = unix_timestamp()?;
+        let record = TaskFollowerRecord {
+            follower_id,
+            task_id: task_id.to_string(),
+            target_id: target_id.to_string(),
+            enabled: true,
+            created_by_user_id: created_by_user_id
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(str::to_string)
+                .or_else(|| {
+                    existing
+                        .as_ref()
+                        .and_then(|record| record.created_by_user_id.clone())
+                }),
+            created_at: existing
+                .as_ref()
+                .map(|record| record.created_at)
+                .unwrap_or(now),
+            updated_at: now,
+            delivered_at: existing.as_ref().and_then(|record| record.delivered_at),
+            last_error: None,
+        };
+        store.put_task_follower(&record)?;
+        Ok(task_follower_view(record))
+    }
+
+    pub fn unfollow_task(
+        &self,
+        task_id: &str,
+        target_id: &str,
+    ) -> Result<TaskFollowerView, BootstrapError> {
+        validate_non_blank("task id", task_id)?;
+        validate_non_blank("delivery target id", target_id)?;
+        let store = self.store()?;
+        let follower_id = task_follower_id(task_id, target_id);
+        let mut record = store.get_task_follower(&follower_id)?.ok_or_else(|| {
+            BootstrapError::MissingRecord {
+                kind: "task follower",
+                id: follower_id.clone(),
+            }
+        })?;
+        record.enabled = false;
+        record.updated_at = unix_timestamp()?;
+        store.put_task_follower(&record)?;
+        Ok(task_follower_view(record))
+    }
+
+    pub fn list_task_followers(
+        &self,
+        task_id: &str,
+    ) -> Result<Vec<TaskFollowerView>, BootstrapError> {
+        validate_non_blank("task id", task_id)?;
+        let store = self.store()?;
+        let mut followers = store
+            .list_task_followers(task_id)?
+            .into_iter()
+            .map(task_follower_view)
+            .collect::<Vec<_>>();
+        followers.sort_by(|left, right| left.id.cmp(&right.id));
+        Ok(followers)
+    }
 }
 
 fn delivery_target_view(
@@ -260,6 +360,24 @@ fn session_output_route_view(record: SessionOutputRouteRecord) -> SessionOutputR
         created_at: record.created_at,
         updated_at: record.updated_at,
     }
+}
+
+fn task_follower_view(record: TaskFollowerRecord) -> TaskFollowerView {
+    TaskFollowerView {
+        id: record.follower_id,
+        task_id: record.task_id,
+        target_id: record.target_id,
+        enabled: record.enabled,
+        created_by_user_id: record.created_by_user_id,
+        created_at: record.created_at,
+        updated_at: record.updated_at,
+        delivered_at: record.delivered_at,
+        last_error: record.last_error,
+    }
+}
+
+pub(crate) fn task_follower_id(task_id: &str, target_id: &str) -> String {
+    format!("follow-{task_id}-{target_id}")
 }
 
 fn validate_non_blank(label: &'static str, value: &str) -> Result<(), BootstrapError> {

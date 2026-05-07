@@ -90,6 +90,21 @@ pub(super) fn execute_command(app: &App, command: Command) -> Result<String, Boo
             format,
         } => render::show_session_tasks(&app.store()?, &id, limit, offset, format),
         Command::TaskShow { id } => render::show_task(&app.store()?, &id),
+        Command::TaskFollow { id, target_id } => {
+            let follower = app.follow_task(&id, &target_id, None)?;
+            Ok(format!(
+                "following {} -> {} enabled={}",
+                follower.task_id, follower.target_id, follower.enabled
+            ))
+        }
+        Command::TaskUnfollow { id, target_id } => {
+            let follower = app.unfollow_task(&id, &target_id)?;
+            Ok(format!(
+                "unfollowed {} -> {} enabled={}",
+                follower.task_id, follower.target_id, follower.enabled
+            ))
+        }
+        Command::TaskCancel { id } => app.cancel_task(&id),
         Command::SessionToolResult { tool_call_id, raw } => {
             render::show_session_tool_result(&app.store()?, &tool_call_id, raw)
         }
@@ -210,6 +225,9 @@ pub(super) fn execute_daemon_command(
         | Command::TraceExport { .. }
         | Command::SessionTools { .. }
         | Command::TaskShow { .. }
+        | Command::TaskFollow { .. }
+        | Command::TaskUnfollow { .. }
+        | Command::TaskCancel { .. }
         | Command::SessionToolResult { .. } => Err(BootstrapError::Usage {
             reason: "this command is local-only".to_string(),
         }),

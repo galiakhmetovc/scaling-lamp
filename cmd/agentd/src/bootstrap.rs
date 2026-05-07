@@ -8,7 +8,7 @@ mod session_ops;
 pub use agent_ops::{AgentScheduleCreateOptions, AgentScheduleUpdatePatch, AgentScheduleView};
 pub use delivery_ops::{
     DeliveryTargetCreateOptions, DeliveryTargetView, SessionOutputRouteCreateOptions,
-    SessionOutputRouteView,
+    SessionOutputRouteView, TaskFollowerView,
 };
 pub use mcp_ops::{McpConnectorCreateOptions, McpConnectorUpdatePatch, McpConnectorView};
 pub(crate) use mcp_ops::{render_mcp_connector_view, render_mcp_connectors_view};

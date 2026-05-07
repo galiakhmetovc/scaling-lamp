@@ -171,6 +171,13 @@ fn process_cli_accepts_session_transcript_and_tool_commands() {
     .expect("parse raw tasks");
     let task_show =
         super::ProcessInvocation::parse(["task", "show", "task-agent-1"]).expect("parse task");
+    let task_follow = super::ProcessInvocation::parse(["task", "follow", "task-agent-1", "ops"])
+        .expect("parse task follow");
+    let task_unfollow =
+        super::ProcessInvocation::parse(["task", "unfollow", "task-agent-1", "ops"])
+            .expect("parse task unfollow");
+    let task_cancel = super::ProcessInvocation::parse(["task", "cancel", "task-agent-1"])
+        .expect("parse task cancel");
     let russian_transcript = super::ProcessInvocation::parse(["сессия", "транскрипт", "session-1"])
         .expect("parse russian transcript");
     let russian_tools = super::ProcessInvocation::parse(["сессия", "инструменты", "session-1"])
@@ -201,6 +208,18 @@ fn process_cli_accepts_session_transcript_and_tool_commands() {
     assert!(matches!(
         task_show.command,
         super::Command::TaskShow { ref id } if id == "task-agent-1"
+    ));
+    assert!(matches!(
+        task_follow.command,
+        super::Command::TaskFollow { ref id, ref target_id } if id == "task-agent-1" && target_id == "ops"
+    ));
+    assert!(matches!(
+        task_unfollow.command,
+        super::Command::TaskUnfollow { ref id, ref target_id } if id == "task-agent-1" && target_id == "ops"
+    ));
+    assert!(matches!(
+        task_cancel.command,
+        super::Command::TaskCancel { ref id } if id == "task-agent-1"
     ));
     assert!(matches!(
         russian_transcript.command,
@@ -425,8 +444,10 @@ fn execute_renders_session_tool_calls() {
 
 #[test]
 fn execute_renders_session_tasks() {
+    use crate::bootstrap::DeliveryTargetCreateOptions;
     use agent_persistence::{
-        SessionRecord, SessionRepository, TaskRegistryRecord, TaskRegistryRepository,
+        DeliveryRepository, EventRepository, SessionRecord, SessionRepository, TaskRegistryRecord,
+        TaskRegistryRepository,
     };
 
     let temp = tempfile::tempdir().expect("tempdir");
@@ -479,6 +500,20 @@ fn execute_renders_session_tasks() {
             error: None,
         })
         .expect("put task");
+    app.create_delivery_target(
+        "ops-status",
+        DeliveryTargetCreateOptions {
+            kind: "telegram".to_string(),
+            address: "-100100200300".to_string(),
+            scope: "group".to_string(),
+            owner_user_id: None,
+            allowed_agent_ids: Vec::new(),
+            allowed_session_ids: Vec::new(),
+            send_policy_json: "null".to_string(),
+            format_policy: "full_text".to_string(),
+        },
+    )
+    .expect("create target");
 
     let rendered = super::execute(&app, ["session", "tasks", "session-1"]).expect("render tasks");
     assert!(rendered.contains("Session tasks"));
@@ -500,6 +535,31 @@ fn execute_renders_session_tasks() {
     assert!(single.contains("Task"));
     assert!(single.contains("task_id: task-agent-1"));
     assert!(single.contains("source_session_id: session-1"));
+
+    let follow =
+        super::execute(&app, ["task", "follow", "task-agent-1", "ops-status"]).expect("follow");
+    assert!(follow.contains("following task-agent-1 -> ops-status"));
+    let followed =
+        super::execute(&app, ["task", "show", "task-agent-1"]).expect("render followed task");
+    assert!(followed.contains("followers:"));
+    assert!(followed.contains("ops-status"));
+
+    let cancel = super::execute(&app, ["task", "cancel", "task-agent-1"]).expect("cancel");
+    assert!(cancel.contains("cancelled task-agent-1"));
+    let outbox = store
+        .get_event_outbox("outbox-task-result-task-agent-1")
+        .expect("get task result outbox")
+        .expect("task result outbox exists");
+    assert!(outbox.payload_json.contains("agent_task.failed"));
+
+    let unfollow =
+        super::execute(&app, ["task", "unfollow", "task-agent-1", "ops-status"]).expect("unfollow");
+    assert!(unfollow.contains("unfollowed task-agent-1 -> ops-status"));
+    let followers = store
+        .list_task_followers("task-agent-1")
+        .expect("list followers");
+    assert_eq!(followers.len(), 1);
+    assert!(!followers[0].enabled);
 }
 
 #[test]

@@ -12,9 +12,9 @@ use crate::http::types::{SessionDetailResponse, StatusResponse};
 use crate::telegram;
 use crate::tui;
 use agent_persistence::{
-    ArtifactRepository, JobRepository, MissionRecord, MissionRepository, PersistenceStore,
-    RunRepository, SessionRecord, SessionRepository, TaskRegistryRepository, ToolCallRepository,
-    TraceRepository,
+    ArtifactRepository, DeliveryRepository, JobRepository, MissionRecord, MissionRepository,
+    PersistenceStore, RunRepository, SessionRecord, SessionRepository, TaskRegistryRepository,
+    ToolCallRepository, TraceRepository,
 };
 use agent_runtime::mission::{MissionExecutionIntent, MissionSchedule, MissionSpec, MissionStatus};
 use agent_runtime::provider::{FinishReason, ProviderMessage, ProviderRequest, ProviderStreamMode};
@@ -96,6 +96,17 @@ enum Command {
         format: SessionTasksFormat,
     },
     TaskShow {
+        id: String,
+    },
+    TaskFollow {
+        id: String,
+        target_id: String,
+    },
+    TaskUnfollow {
+        id: String,
+        target_id: String,
+    },
+    TaskCancel {
         id: String,
     },
     SessionToolResult {
@@ -276,6 +287,21 @@ where
             format,
         } => render::show_session_tasks(&app.store()?, &id, limit, offset, format),
         Command::TaskShow { id } => render::show_task(&app.store()?, &id),
+        Command::TaskFollow { id, target_id } => {
+            let follower = app.follow_task(&id, &target_id, None)?;
+            Ok(format!(
+                "following {} -> {} enabled={}",
+                follower.task_id, follower.target_id, follower.enabled
+            ))
+        }
+        Command::TaskUnfollow { id, target_id } => {
+            let follower = app.unfollow_task(&id, &target_id)?;
+            Ok(format!(
+                "unfollowed {} -> {} enabled={}",
+                follower.task_id, follower.target_id, follower.enabled
+            ))
+        }
+        Command::TaskCancel { id } => app.cancel_task(&id),
         Command::SessionToolResult { tool_call_id, raw } => {
             render::show_session_tool_result(&app.store()?, &tool_call_id, raw)
         }

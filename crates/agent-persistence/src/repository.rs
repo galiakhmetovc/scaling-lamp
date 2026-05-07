@@ -5,7 +5,7 @@ use crate::records::{
     KnowledgeSearchDocRecord, KnowledgeSourceRecord, KvEntryRecord, McpConnectorRecord,
     MissionRecord, PlanRecord, RoutedEventRecord, RouterRuleRecord, RunRecord,
     SessionInboxEventRecord, SessionOutputRouteRecord, SessionRecord, SessionRetentionRecord,
-    SessionSearchDocRecord, TaskRegistryRecord, TelegramChatBindingRecord,
+    SessionSearchDocRecord, TaskFollowerRecord, TaskRegistryRecord, TelegramChatBindingRecord,
     TelegramChatStatusRecord, TelegramUpdateCursorRecord, TelegramUserPairingRecord,
     ToolCallRecord, TraceLinkRecord, TranscriptRecord,
 };
@@ -183,6 +183,16 @@ pub trait DeliveryRepository {
         &self,
         target_kind: &str,
     ) -> Result<Vec<SessionOutputRouteRecord>, StoreError>;
+    fn put_task_follower(&self, record: &TaskFollowerRecord) -> Result<(), StoreError>;
+    fn get_task_follower(
+        &self,
+        follower_id: &str,
+    ) -> Result<Option<TaskFollowerRecord>, StoreError>;
+    fn list_task_followers(&self, task_id: &str) -> Result<Vec<TaskFollowerRecord>, StoreError>;
+    fn list_enabled_task_followers(
+        &self,
+        task_id: &str,
+    ) -> Result<Vec<TaskFollowerRecord>, StoreError>;
 }
 
 pub trait EventRepository {
