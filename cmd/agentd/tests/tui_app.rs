@@ -626,6 +626,13 @@ fn tui_chat_commands_open_and_cancel_delegated_tasks() {
             .preview_content()
             .contains("executor_agent_id: judge")
     );
+    assert!(
+        state
+            .browser_state()
+            .expect("tasks browser")
+            .preview_content()
+            .contains("created:")
+    );
 
     dispatch_action(
         &app,

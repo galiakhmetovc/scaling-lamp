@@ -565,6 +565,10 @@ impl App {
                 task.attempt_count, task.max_attempts
             ));
             lines.push(format!(
+                "  created: {}",
+                format_background_job_time(task.created_at)
+            ));
+            lines.push(format!(
                 "  updated: {}",
                 format_background_job_time(task.updated_at)
             ));
@@ -613,6 +617,7 @@ impl App {
                 task.parent_task_id.as_deref().unwrap_or("<none>")
             ),
             format!("- attempts: {}/{}", task.attempt_count, task.max_attempts),
+            format!("- created: {}", format_background_job_time(task.created_at)),
             format!("- updated: {}", format_background_job_time(task.updated_at)),
         ];
         if let Some(timeout_at) = task.timeout_at {

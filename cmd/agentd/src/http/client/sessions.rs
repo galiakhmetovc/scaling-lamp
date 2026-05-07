@@ -505,6 +505,7 @@ impl DaemonClient {
                 "  attempts: {}/{}",
                 task.attempt_count, task.max_attempts
             ));
+            lines.push(format!("  created: {}", task.created_at));
             lines.push(format!("  updated: {}", task.updated_at));
             if let Some(chain_id) = task.chain_id.as_deref() {
                 lines.push(format!("  chain_id: {chain_id}"));
