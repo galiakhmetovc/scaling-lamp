@@ -578,6 +578,87 @@ impl App {
     }
 
     #[cfg_attr(not(test), allow(dead_code))]
+    pub fn render_task(&self, task_id: &str) -> Result<String, BootstrapError> {
+        let store = self.store()?;
+        let Some(task) = store.get_task_registry(task_id)? else {
+            return Err(BootstrapError::MissingRecord {
+                kind: "task",
+                id: task_id.to_string(),
+            });
+        };
+
+        let mut lines = vec![
+            "Делегированная задача:".to_string(),
+            format!("- id: {}", task.task_id),
+            format!("- kind: {}", task.kind),
+            format!("- status: {}", task.status),
+            format!(
+                "- source_session_id: {}",
+                task.source_session_id.as_deref().unwrap_or("<none>")
+            ),
+            format!(
+                "- owner_agent_id: {}",
+                task.owner_agent_id.as_deref().unwrap_or("<none>")
+            ),
+            format!(
+                "- executor_agent_id: {}",
+                task.executor_agent_id.as_deref().unwrap_or("<none>")
+            ),
+            format!(
+                "- parent_task_id: {}",
+                task.parent_task_id.as_deref().unwrap_or("<none>")
+            ),
+            format!("- attempts: {}/{}", task.attempt_count, task.max_attempts),
+            format!("- updated: {}", format_background_job_time(task.updated_at)),
+        ];
+        if let Some(timeout_at) = task.timeout_at {
+            lines.push(format!(
+                "- timeout_at: {}",
+                format_background_job_time(timeout_at)
+            ));
+        }
+        if let Some(chain_id) = task.chain_id.as_deref() {
+            lines.push(format!(
+                "- chain: {chain_id} hop={}/{}",
+                task.hop_count
+                    .map(|value| value.to_string())
+                    .unwrap_or_else(|| "<none>".to_string()),
+                task.max_hops
+                    .map(|value| value.to_string())
+                    .unwrap_or_else(|| "<none>".to_string())
+            ));
+        }
+        if let Some(trace_id) = task.trace_id.as_deref() {
+            lines.push(format!("- trace_id: {trace_id}"));
+        }
+        if let Some(started_at) = task.started_at {
+            lines.push(format!(
+                "- started: {}",
+                format_background_job_time(started_at)
+            ));
+        }
+        if let Some(finished_at) = task.finished_at {
+            lines.push(format!(
+                "- finished: {}",
+                format_background_job_time(finished_at)
+            ));
+        }
+        if let Some(error) = task.error.as_deref() {
+            lines.push(format!("- error: {error}"));
+        }
+        if let Some(result_ref_json) = task.result_ref_json.as_deref() {
+            lines.push("- result_ref_json:".to_string());
+            lines.extend(indent_lines(&pretty_json_str(result_ref_json), "  "));
+        }
+        lines.push("- context_ref_json:".to_string());
+        lines.extend(indent_lines(&pretty_json_str(&task.context_ref_json), "  "));
+        lines.push("- dependency_json:".to_string());
+        lines.extend(indent_lines(&pretty_json_str(&task.dependency_json), "  "));
+
+        Ok(lines.join("\n"))
+    }
+
+    #[cfg_attr(not(test), allow(dead_code))]
     pub fn render_active_run(&self, session_id: &str) -> Result<String, BootstrapError> {
         let store = self.store()?;
         if store.get_session(session_id)?.is_none() {
@@ -1524,6 +1605,13 @@ fn pretty_json_str(raw: &str) -> String {
 
 fn pretty_json_value(value: &serde_json::Value) -> String {
     serde_json::to_string_pretty(value).unwrap_or_else(|_| value.to_string())
+}
+
+fn indent_lines(value: &str, prefix: &str) -> Vec<String> {
+    value
+        .lines()
+        .map(|line| format!("{prefix}{line}"))
+        .collect()
 }
 
 fn resolve_session_workspace_root(

@@ -515,6 +515,24 @@ where
                 self.send_text_chunks(chat_id, &render_delivery_target_registered(&target.id))
                     .await
             }
+            ParsedTelegramCommand::Targets => {
+                if self.load_activated_pairing(telegram_user_id)?.is_none() {
+                    self.send_text_chunks(chat_id, &render_pairing_required_message())
+                        .await?;
+                    return Ok(());
+                }
+                let targets = self.render_delivery_targets().await?;
+                self.send_text_chunks(chat_id, &targets).await
+            }
+            ParsedTelegramCommand::Task { task_id } => {
+                if self.load_activated_pairing(telegram_user_id)?.is_none() {
+                    self.send_text_chunks(chat_id, &render_pairing_required_message())
+                        .await?;
+                    return Ok(());
+                }
+                let task = self.render_task(task_id).await?;
+                self.send_text_chunks(chat_id, &task).await
+            }
             ParsedTelegramCommand::Judge { message } => {
                 if self.load_activated_pairing(telegram_user_id)?.is_none() {
                     self.send_text_chunks(chat_id, &render_pairing_required_message())
@@ -557,6 +575,7 @@ where
             | ParsedTelegramCommand::Plan
             | ParsedTelegramCommand::Queue { .. }
             | ParsedTelegramCommand::Outputs { .. }
+            | ParsedTelegramCommand::Routes
             | ParsedTelegramCommand::Stop
             | ParsedTelegramCommand::Cancel
             | ParsedTelegramCommand::Model { .. }
@@ -751,6 +770,24 @@ where
                 self.send_text_chunks(chat_id, &render_delivery_target_registered(&target.id))
                     .await
             }
+            ParsedTelegramCommand::Targets => {
+                if self.load_activated_pairing(telegram_user_id)?.is_none() {
+                    self.send_text_chunks(chat_id, &render_pairing_required_message())
+                        .await?;
+                    return Ok(());
+                }
+                let targets = self.render_delivery_targets().await?;
+                self.send_text_chunks(chat_id, &targets).await
+            }
+            ParsedTelegramCommand::Task { task_id } => {
+                if self.load_activated_pairing(telegram_user_id)?.is_none() {
+                    self.send_text_chunks(chat_id, &render_pairing_required_message())
+                        .await?;
+                    return Ok(());
+                }
+                let task = self.render_task(task_id).await?;
+                self.send_text_chunks(chat_id, &task).await
+            }
             ParsedTelegramCommand::Judge { message } => {
                 if self.load_activated_pairing(telegram_user_id)?.is_none() {
                     self.send_text_chunks(chat_id, &render_pairing_required_message())
@@ -797,6 +834,7 @@ where
             | ParsedTelegramCommand::Plan
             | ParsedTelegramCommand::Queue { .. }
             | ParsedTelegramCommand::Outputs { .. }
+            | ParsedTelegramCommand::Routes
             | ParsedTelegramCommand::Stop
             | ParsedTelegramCommand::Cancel
             | ParsedTelegramCommand::Model { .. }
@@ -1028,9 +1066,33 @@ where
                     route.session_id, route.target_id, route.format_policy
                 ))
             }
+            TelegramOutputsAction::Detach { target_id } => {
+                let route = app.detach_session_output_route(&session_id, &target_id)?;
+                Ok(format!(
+                    "Output route detached: {} -> {} enabled={}",
+                    route.session_id, route.target_id, route.enabled
+                ))
+            }
         })
         .await
         .map_err(map_join_error)?
+    }
+
+    async fn render_delivery_targets(&self) -> Result<String, BootstrapError> {
+        let app = self.app.clone();
+        tokio::task::spawn_blocking(move || {
+            let targets = app.list_delivery_targets()?;
+            Ok(render_delivery_targets(&targets))
+        })
+        .await
+        .map_err(map_join_error)?
+    }
+
+    async fn render_task(&self, task_id: String) -> Result<String, BootstrapError> {
+        let app = self.app.clone();
+        tokio::task::spawn_blocking(move || app.render_task(&task_id))
+            .await
+            .map_err(map_join_error)?
     }
 
     async fn handle_session_operator_command(
@@ -1098,6 +1160,12 @@ where
             ParsedTelegramCommand::Tasks => {
                 let tasks = self.render_session_tasks(session_id).await?;
                 self.send_text_chunks(chat_id, &tasks).await
+            }
+            ParsedTelegramCommand::Routes => {
+                let response = self
+                    .handle_outputs_command(session_id, TelegramOutputsAction::Show)
+                    .await?;
+                self.send_text_chunks(chat_id, &response).await
             }
             ParsedTelegramCommand::Plan => {
                 let plan = self.render_plan(session_id).await?;
@@ -3341,6 +3409,24 @@ fn render_delivery_target_registered(target_id: &str) -> String {
     format!(
         "Delivery target registered: {target_id}\nUse from another chat/session: /outputs attach {target_id} summary"
     )
+}
+
+fn render_delivery_targets(targets: &[DeliveryTargetView]) -> String {
+    if targets.is_empty() {
+        return "Delivery targets: <empty>\nRegister this chat: /target".to_string();
+    }
+    let mut lines = vec!["Delivery targets:".to_string()];
+    for target in targets {
+        lines.push(format!(
+            "- {} kind={} scope={} address={} format={}",
+            target.id, target.kind, target.scope, target.address, target.format_policy
+        ));
+        lines.push(format!(
+            "  attach current session: /outputs attach {} summary",
+            target.id
+        ));
+    }
+    lines.join("\n")
 }
 
 fn render_session_output_routes(session_id: &str, routes: &[SessionOutputRouteView]) -> String {

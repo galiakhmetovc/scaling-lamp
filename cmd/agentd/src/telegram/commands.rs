@@ -30,8 +30,13 @@ pub(super) enum ParsedTelegramCommand {
         artifact_id: String,
     },
     Target,
+    Targets,
     Outputs {
         action: TelegramOutputsAction,
+    },
+    Routes,
+    Task {
+        task_id: String,
     },
     Judge {
         message: String,
@@ -93,6 +98,9 @@ pub(super) enum TelegramOutputsAction {
     Attach {
         target_id: String,
         format_policy: String,
+    },
+    Detach {
+        target_id: String,
     },
 }
 
@@ -270,10 +278,40 @@ fn parse_command_parts(command: &str, args: &str) -> Option<ParsedTelegramComman
                 )))
             }
         }
+        "targets" => {
+            if args.is_empty() {
+                Some(ParsedTelegramCommand::Targets)
+            } else {
+                Some(ParsedTelegramCommand::InvalidUsage(render_usage(
+                    "targets", "",
+                )))
+            }
+        }
         "outputs" => match parse_outputs_action(args) {
             Ok(action) => Some(ParsedTelegramCommand::Outputs { action }),
             Err(usage) => Some(ParsedTelegramCommand::InvalidUsage(usage)),
         },
+        "routes" => {
+            if args.is_empty() {
+                Some(ParsedTelegramCommand::Routes)
+            } else {
+                Some(ParsedTelegramCommand::InvalidUsage(render_usage(
+                    "routes", "",
+                )))
+            }
+        }
+        "task" => {
+            if args.is_empty() {
+                Some(ParsedTelegramCommand::InvalidUsage(render_usage(
+                    "task",
+                    "<task_id>",
+                )))
+            } else {
+                Some(ParsedTelegramCommand::Task {
+                    task_id: args.to_string(),
+                })
+            }
+        }
         "use" => {
             if args.is_empty() {
                 Some(ParsedTelegramCommand::InvalidUsage(render_usage(
@@ -323,6 +361,8 @@ fn parse_command_parts(command: &str, args: &str) -> Option<ParsedTelegramComman
 }
 
 fn parse_outputs_action(args: &str) -> Result<TelegramOutputsAction, String> {
+    const USAGE: &str =
+        "[attach <target_id> [full_text|summary|status_only|errors_only]|detach <target_id>]";
     let trimmed = args.trim();
     if trimmed.is_empty() {
         return Ok(TelegramOutputsAction::Show);
@@ -331,27 +371,29 @@ fn parse_outputs_action(args: &str) -> Result<TelegramOutputsAction, String> {
     match parts.next().unwrap_or_default() {
         "attach" => {
             let Some(target_id) = parts.next() else {
-                return Err(render_usage(
-                    "outputs",
-                    "[attach <target_id> [full_text|summary|status_only|errors_only]]",
-                ));
+                return Err(render_usage("outputs", USAGE));
             };
             let format_policy = parts.next().unwrap_or("summary");
             if parts.next().is_some() {
-                return Err(render_usage(
-                    "outputs",
-                    "[attach <target_id> [full_text|summary|status_only|errors_only]]",
-                ));
+                return Err(render_usage("outputs", USAGE));
             }
             Ok(TelegramOutputsAction::Attach {
                 target_id: target_id.to_string(),
                 format_policy: format_policy.to_string(),
             })
         }
-        _ => Err(render_usage(
-            "outputs",
-            "[attach <target_id> [full_text|summary|status_only|errors_only]]",
-        )),
+        "detach" => {
+            let Some(target_id) = parts.next() else {
+                return Err(render_usage("outputs", USAGE));
+            };
+            if parts.next().is_some() {
+                return Err(render_usage("outputs", USAGE));
+            }
+            Ok(TelegramOutputsAction::Detach {
+                target_id: target_id.to_string(),
+            })
+        }
+        _ => Err(render_usage("outputs", USAGE)),
     }
 }
 
@@ -471,6 +513,7 @@ pub(super) fn is_session_operator_command(command: &ParsedTelegramCommand) -> bo
             | ParsedTelegramCommand::Rename { .. }
             | ParsedTelegramCommand::Jobs
             | ParsedTelegramCommand::Tasks
+            | ParsedTelegramCommand::Routes
             | ParsedTelegramCommand::Plan
             | ParsedTelegramCommand::Queue { .. }
             | ParsedTelegramCommand::Stop
@@ -517,6 +560,7 @@ pub(super) fn default_command_specs() -> Vec<TelegramCommandSpec> {
         TelegramCommandSpec::new("rename", "Rename current session"),
         TelegramCommandSpec::new("jobs", "Show current session jobs"),
         TelegramCommandSpec::new("tasks", "Show current session delegated tasks"),
+        TelegramCommandSpec::new("task", "Show delegated task details"),
         TelegramCommandSpec::new("plan", "Show current session plan"),
         TelegramCommandSpec::new("queue", "Show or set inbound queue mode"),
         TelegramCommandSpec::new("stop", "Stop the active turn"),
@@ -533,7 +577,9 @@ pub(super) fn default_command_specs() -> Vec<TelegramCommandSpec> {
         TelegramCommandSpec::new("files", "List files in the current session"),
         TelegramCommandSpec::new("file", "Send a session file by artifact id"),
         TelegramCommandSpec::new("target", "Register current chat as delivery target"),
+        TelegramCommandSpec::new("targets", "List registered delivery targets"),
         TelegramCommandSpec::new("outputs", "Show or attach session output routes"),
+        TelegramCommandSpec::new("routes", "Alias for outputs"),
         TelegramCommandSpec::new("judge", "Send a message to Judge"),
         TelegramCommandSpec::new("agent", "Send a message to another agent"),
     ]
@@ -606,6 +652,28 @@ mod tests {
                     format_policy: "summary".to_string(),
                 }
             })
+        );
+        assert_eq!(
+            parse_command("/outputs detach telegram-n9000"),
+            Some(ParsedTelegramCommand::Outputs {
+                action: TelegramOutputsAction::Detach {
+                    target_id: "telegram-n9000".to_string(),
+                }
+            })
+        );
+        assert_eq!(
+            parse_command("/routes"),
+            Some(ParsedTelegramCommand::Routes)
+        );
+        assert_eq!(
+            parse_command("/task task-agent-1"),
+            Some(ParsedTelegramCommand::Task {
+                task_id: "task-agent-1".to_string()
+            })
+        );
+        assert_eq!(
+            parse_command("/targets"),
+            Some(ParsedTelegramCommand::Targets)
         );
         assert_eq!(
             parse_command("/session"),
@@ -704,6 +772,9 @@ mod tests {
             "rename",
             "jobs",
             "tasks",
+            "task",
+            "targets",
+            "routes",
             "queue",
             "stop",
             "pause",

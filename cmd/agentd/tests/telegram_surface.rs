@@ -1,7 +1,7 @@
 use agent_persistence::{
     AppConfig, ArtifactRecord, ArtifactRepository, DeliveryRepository, FileDeliveryRepository,
-    FileDeliveryRequestRecord, SessionInboxRepository, TelegramRepository,
-    TelegramUserPairingRecord, TranscriptRecord, TranscriptRepository,
+    FileDeliveryRequestRecord, SessionInboxRepository, TaskRegistryRecord, TaskRegistryRepository,
+    TelegramRepository, TelegramUserPairingRecord, TranscriptRecord, TranscriptRepository,
 };
 use agent_runtime::provider::ProviderKind;
 use agentd::bootstrap;
@@ -1005,6 +1005,83 @@ fn telegram_worker_routes_session_operator_commands_to_backend() {
 }
 
 #[test]
+fn telegram_worker_renders_delegated_task_details() {
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(8)
+        .enable_all()
+        .build()
+        .expect("runtime");
+    let (_temp, app) = telegram_test_app();
+    seed_activated_pairing(&app, "pair-task", 777, 42);
+    let session = app
+        .create_session_auto(Some("Task owner"))
+        .expect("create session");
+    seed_binding(&app, 42, 777, Some(session.id.as_str()));
+    app.store()
+        .expect("open store")
+        .put_task_registry(&TaskRegistryRecord {
+            task_id: "task-agent-1".to_string(),
+            kind: "agent_task".to_string(),
+            source_session_id: Some(session.id),
+            owner_agent_id: Some("default".to_string()),
+            executor_agent_id: Some("judge".to_string()),
+            parent_task_id: None,
+            status: "queued".to_string(),
+            dependency_json: "[]".to_string(),
+            context_ref_json: r#"{"goal":"review"}"#.to_string(),
+            result_ref_json: None,
+            retry_policy_json: r#"{"max_attempts":3}"#.to_string(),
+            attempt_count: 0,
+            max_attempts: 3,
+            timeout_at: Some(99),
+            chain_id: Some("chain-1".to_string()),
+            hop_count: Some(1),
+            max_hops: Some(3),
+            trace_id: Some("trace-1".to_string()),
+            created_at: 2,
+            updated_at: 2,
+            started_at: None,
+            finished_at: None,
+            error: None,
+        })
+        .expect("put task");
+    let backend = RecordingTelegramBackend::default();
+    let (api_url, requests, handle) = spawn_fake_telegram_api(vec![
+        json_response(
+            r#"{"ok":true,"result":[
+                {"update_id":157,"message":{"message_id":125,"date":0,"chat":{"id":42,"type":"private"},"from":{"id":777,"is_bot":false,"first_name":"Alice","username":"alice"},"text":"/task task-agent-1"}}
+            ]}"#,
+        ),
+        json_response(
+            r#"{"ok":true,"result":{"message_id":126,"date":0,"chat":{"id":42,"type":"private"},"text":"task"}}"#,
+        ),
+    ]);
+    let client = TelegramClient::new(TelegramClientConfig {
+        token: "test-token".to_string(),
+        api_url: Some(api_url),
+        poll_request_timeout_seconds: 40,
+    })
+    .expect("telegram client");
+    let worker = TelegramWorker::with_consumer(app, backend, client, "telegram-test");
+
+    let processed = runtime.block_on(worker.poll_once()).expect("poll once");
+    assert_eq!(processed, 1);
+
+    let _ = requests
+        .recv_timeout(Duration::from_secs(2))
+        .expect("captured getUpdates");
+    let task_response = requests
+        .recv_timeout(Duration::from_secs(2))
+        .expect("captured task response");
+    assert!(task_response.body.contains("task-agent-1"));
+    assert!(task_response.body.contains("agent_task"));
+    assert!(task_response.body.contains("judge"));
+    assert!(task_response.body.contains("goal"));
+
+    handle.join().expect("join fake api");
+}
+
+#[test]
 fn telegram_worker_configures_queue_mode_and_reports_it_in_status() {
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .worker_threads(8)
@@ -1781,14 +1858,30 @@ fn telegram_worker_registers_current_chat_target_and_attaches_session_output() {
         json_response(
             r#"{"ok":true,"result":[
                 {"update_id":151,"message":{"message_id":119,"date":0,"chat":{"id":-9000,"type":"group","title":"Ops"},"from":{"id":777,"is_bot":false,"first_name":"Alice","username":"alice"},"text":"/target"}},
-                {"update_id":152,"message":{"message_id":120,"date":0,"chat":{"id":42,"type":"private"},"from":{"id":777,"is_bot":false,"first_name":"Alice","username":"alice"},"text":"/outputs attach telegram-n9000 summary"}}
+                {"update_id":152,"message":{"message_id":120,"date":0,"chat":{"id":42,"type":"private"},"from":{"id":777,"is_bot":false,"first_name":"Alice","username":"alice"},"text":"/targets"}},
+                {"update_id":153,"message":{"message_id":121,"date":0,"chat":{"id":42,"type":"private"},"from":{"id":777,"is_bot":false,"first_name":"Alice","username":"alice"},"text":"/outputs attach telegram-n9000 summary"}},
+                {"update_id":154,"message":{"message_id":122,"date":0,"chat":{"id":42,"type":"private"},"from":{"id":777,"is_bot":false,"first_name":"Alice","username":"alice"},"text":"/routes"}},
+                {"update_id":155,"message":{"message_id":123,"date":0,"chat":{"id":42,"type":"private"},"from":{"id":777,"is_bot":false,"first_name":"Alice","username":"alice"},"text":"/outputs detach telegram-n9000"}},
+                {"update_id":156,"message":{"message_id":124,"date":0,"chat":{"id":42,"type":"private"},"from":{"id":777,"is_bot":false,"first_name":"Alice","username":"alice"},"text":"/routes"}}
             ]}"#,
         ),
         json_response(
-            r#"{"ok":true,"result":{"message_id":121,"date":0,"chat":{"id":-9000,"type":"group"},"text":"target"}}"#,
+            r#"{"ok":true,"result":{"message_id":125,"date":0,"chat":{"id":-9000,"type":"group"},"text":"target"}}"#,
         ),
         json_response(
-            r#"{"ok":true,"result":{"message_id":122,"date":0,"chat":{"id":42,"type":"private"},"text":"outputs"}}"#,
+            r#"{"ok":true,"result":{"message_id":126,"date":0,"chat":{"id":42,"type":"private"},"text":"targets"}}"#,
+        ),
+        json_response(
+            r#"{"ok":true,"result":{"message_id":127,"date":0,"chat":{"id":42,"type":"private"},"text":"outputs"}}"#,
+        ),
+        json_response(
+            r#"{"ok":true,"result":{"message_id":128,"date":0,"chat":{"id":42,"type":"private"},"text":"routes"}}"#,
+        ),
+        json_response(
+            r#"{"ok":true,"result":{"message_id":129,"date":0,"chat":{"id":42,"type":"private"},"text":"detach"}}"#,
+        ),
+        json_response(
+            r#"{"ok":true,"result":{"message_id":130,"date":0,"chat":{"id":42,"type":"private"},"text":"routes-empty"}}"#,
         ),
     ]);
     let client = TelegramClient::new(TelegramClientConfig {
@@ -1800,7 +1893,7 @@ fn telegram_worker_registers_current_chat_target_and_attaches_session_output() {
     let worker = TelegramWorker::with_consumer(app.clone(), backend, client, "telegram-test");
 
     let processed = runtime.block_on(worker.poll_once()).expect("poll once");
-    assert_eq!(processed, 2);
+    assert_eq!(processed, 6);
 
     let store = app.store().expect("open store");
     let target = store
@@ -1814,9 +1907,14 @@ fn telegram_worker_registers_current_chat_target_and_attaches_session_output() {
     let routes = store
         .list_enabled_session_output_routes(&session.id)
         .expect("list routes");
-    assert_eq!(routes.len(), 1);
-    assert_eq!(routes[0].target_id, "telegram-n9000");
-    assert_eq!(routes[0].format_policy, "summary");
+    assert!(routes.is_empty());
+    let detached_route = store
+        .get_session_output_route(&format!("route-{}-telegram-n9000", session.id))
+        .expect("get detached route")
+        .expect("route exists");
+    assert!(!detached_route.enabled);
+    assert_eq!(detached_route.target_id, "telegram-n9000");
+    assert_eq!(detached_route.format_policy, "summary");
 
     let _ = requests
         .recv_timeout(Duration::from_secs(2))
@@ -1825,10 +1923,28 @@ fn telegram_worker_registers_current_chat_target_and_attaches_session_output() {
         .recv_timeout(Duration::from_secs(2))
         .expect("captured target response");
     assert!(target_response.body.contains("telegram-n9000"));
+    let targets_response = requests
+        .recv_timeout(Duration::from_secs(2))
+        .expect("captured targets response");
+    assert!(targets_response.body.contains("Delivery targets"));
+    assert!(targets_response.body.contains("telegram-n9000"));
     let outputs_response = requests
         .recv_timeout(Duration::from_secs(2))
         .expect("captured outputs response");
     assert!(outputs_response.body.contains("attached"));
+    let routes_response = requests
+        .recv_timeout(Duration::from_secs(2))
+        .expect("captured routes response");
+    assert!(routes_response.body.contains("Session outputs"));
+    assert!(routes_response.body.contains("telegram-n9000"));
+    let detach_response = requests
+        .recv_timeout(Duration::from_secs(2))
+        .expect("captured detach response");
+    assert!(detach_response.body.contains("detached"));
+    let routes_empty_response = requests
+        .recv_timeout(Duration::from_secs(2))
+        .expect("captured empty routes response");
+    assert!(routes_empty_response.body.contains("<empty>"));
 
     handle.join().expect("join fake api");
 }

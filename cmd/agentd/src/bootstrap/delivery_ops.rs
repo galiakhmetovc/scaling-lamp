@@ -170,6 +170,34 @@ impl App {
         self.session_output_route(&route_id)
     }
 
+    pub fn detach_session_output_route(
+        &self,
+        session_id: &str,
+        target_id: &str,
+    ) -> Result<SessionOutputRouteView, BootstrapError> {
+        validate_non_blank("session id", session_id)?;
+        validate_non_blank("delivery target id", target_id)?;
+        let store = self.store()?;
+        let route_id = format!("route-{session_id}-{target_id}");
+        let mut record = store.get_session_output_route(&route_id)?.ok_or_else(|| {
+            BootstrapError::MissingRecord {
+                kind: "session output route",
+                id: route_id.clone(),
+            }
+        })?;
+        if record.session_id != session_id || record.target_id != target_id {
+            return Err(BootstrapError::Usage {
+                reason: format!(
+                    "session output route {route_id} does not connect {session_id} to {target_id}"
+                ),
+            });
+        }
+        record.enabled = false;
+        record.updated_at = unix_timestamp()?;
+        store.put_session_output_route(&record)?;
+        self.session_output_route(&route_id)
+    }
+
     pub fn session_output_route(
         &self,
         route_id: &str,
