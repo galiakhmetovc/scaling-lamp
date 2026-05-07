@@ -1,4 +1,8 @@
 use super::*;
+use crate::event_bus::{EventEnvelope, EventPayloadRef, EventSubjects, build_event_envelope};
+use agent_persistence::{
+    EventOutboxRecord, EventRepository, TaskRegistryRecord, TaskRegistryRepository,
+};
 use agent_runtime::agent::AgentChainContinuationGrant;
 use agent_runtime::interagent::{
     AgentChainState, AgentMessageChain, AgentMessageError, AgentMessageRequest,
@@ -11,8 +15,19 @@ use agent_runtime::tool::{
     GrantAgentChainContinuationOutput, MessageAgentOutput, SessionReadInput, SessionReadMode,
     SessionWaitOutput,
 };
+use serde_json::json;
 use std::thread;
 use std::time::Instant;
+
+struct InteragentTaskEvent<'a> {
+    recipient_job_id: &'a str,
+    recipient_session_id: &'a str,
+    source_session_id: &'a str,
+    source_agent_id: &'a str,
+    target_agent_id: &'a str,
+    chain: &'a AgentMessageChain,
+    now: i64,
+}
 
 impl ExecutionService {
     pub(crate) fn queue_interagent_message(
@@ -141,6 +156,18 @@ impl ExecutionService {
         store
             .put_job(&JobRecord::try_from(&job).map_err(ExecutionError::RecordConversion)?)
             .map_err(ExecutionError::Store)?;
+        self.persist_interagent_task_event(
+            store,
+            InteragentTaskEvent {
+                recipient_job_id: &recipient_job_id,
+                recipient_session_id: &recipient_session_id,
+                source_session_id: &source_session.id,
+                source_agent_id: &source_profile.id,
+                target_agent_id: &target_profile.id,
+                chain: &next_chain,
+                now,
+            },
+        )?;
 
         let started_entry = TranscriptEntry::system(
             format!("transcript-{recipient_job_id}-interagent-started"),
@@ -167,6 +194,121 @@ impl ExecutionService {
             chain_id: next_chain.chain_id,
             hop_count: next_chain.hop_count,
         })
+    }
+
+    fn persist_interagent_task_event(
+        &self,
+        store: &PersistenceStore,
+        event: InteragentTaskEvent<'_>,
+    ) -> Result<(), ExecutionError> {
+        let InteragentTaskEvent {
+            recipient_job_id,
+            recipient_session_id,
+            source_session_id,
+            source_agent_id,
+            target_agent_id,
+            chain,
+            now,
+        } = event;
+        let task_id = format!("task-{recipient_job_id}");
+        let trace_id = format!("trace-{task_id}");
+        let task = TaskRegistryRecord {
+            task_id: task_id.clone(),
+            kind: "agent_task".to_string(),
+            source_session_id: Some(source_session_id.to_string()),
+            owner_agent_id: Some(source_agent_id.to_string()),
+            executor_agent_id: Some(target_agent_id.to_string()),
+            parent_task_id: None,
+            status: "queued".to_string(),
+            dependency_json: "[]".to_string(),
+            context_ref_json: json!([
+                {
+                    "table": "jobs",
+                    "id": recipient_job_id,
+                    "role": "execution_job"
+                },
+                {
+                    "table": "sessions",
+                    "id": recipient_session_id,
+                    "role": "recipient_session"
+                },
+                {
+                    "table": "sessions",
+                    "id": source_session_id,
+                    "role": "source_session"
+                }
+            ])
+            .to_string(),
+            result_ref_json: None,
+            retry_policy_json: json!({
+                "max_attempts": 1,
+                "strategy": "runtime_job_policy"
+            })
+            .to_string(),
+            attempt_count: 0,
+            max_attempts: 1,
+            timeout_at: None,
+            chain_id: Some(chain.chain_id.clone()),
+            hop_count: Some(i64::from(chain.hop_count)),
+            max_hops: Some(i64::from(chain.max_hops)),
+            trace_id: Some(trace_id.clone()),
+            created_at: now,
+            updated_at: now,
+            started_at: None,
+            finished_at: None,
+            error: None,
+        };
+        store
+            .put_task_registry(&task)
+            .map_err(ExecutionError::Store)?;
+
+        let subjects = EventSubjects::from_config(&self.config.event_bus);
+        let subject = subjects.task(&task_id);
+        let envelope = build_event_envelope(EventEnvelope {
+            event_id: format!("agent-task-created-{recipient_job_id}"),
+            event_type: "agent_task.created".to_string(),
+            trace_id: Some(trace_id),
+            source_kind: "message_agent".to_string(),
+            source_id: recipient_job_id.to_string(),
+            subject: subject.clone(),
+            payload_ref: EventPayloadRef {
+                table: "task_registry".to_string(),
+                id: task_id.clone(),
+            },
+            created_at: now,
+            metadata: json!({
+                "task_id": task_id,
+                "job_id": recipient_job_id,
+                "recipient_session_id": recipient_session_id,
+                "source_session_id": source_session_id,
+                "source_agent_id": source_agent_id,
+                "target_agent_id": target_agent_id,
+                "chain_id": chain.chain_id,
+                "hop_count": chain.hop_count,
+                "max_hops": chain.max_hops
+            }),
+        })
+        .map_err(|error| ExecutionError::ProviderLoop {
+            reason: error.to_string(),
+        })?;
+        let outbox = EventOutboxRecord {
+            outbox_id: format!("outbox-{task_id}"),
+            subject,
+            payload_json: serde_json::to_string(&envelope).map_err(|error| {
+                ExecutionError::ProviderLoop {
+                    reason: error.to_string(),
+                }
+            })?,
+            status: "pending".to_string(),
+            attempt_count: 0,
+            next_attempt_at: now,
+            created_at: now,
+            published_at: None,
+            last_error: None,
+        };
+        store
+            .put_event_outbox(&outbox)
+            .map_err(ExecutionError::Store)
     }
 
     pub(crate) fn wait_for_session(

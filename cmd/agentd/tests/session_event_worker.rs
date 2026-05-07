@@ -146,7 +146,10 @@ fn routed_session_input_executes_canonical_chat_and_publishes_output_event() {
         serde_json::from_str(&outbox.payload_json).expect("output envelope");
     assert_eq!(envelope["event_type"], "session.output.created");
     assert_eq!(envelope["payload_ref"]["table"], "runs");
-    assert_eq!(envelope["payload_ref"]["id"], report.run_id.unwrap());
+    assert_eq!(
+        envelope["payload_ref"]["id"],
+        report.run_id.clone().unwrap()
+    );
 
     let provider_request = provider_requests
         .recv_timeout(Duration::from_secs(2))
@@ -155,6 +158,20 @@ fn routed_session_input_executes_canonical_chat_and_publishes_output_event() {
     assert!(
         !provider_request.contains("chat_id"),
         "session worker must pass normalized message text, not Telegram transport metadata"
+    );
+
+    let replay =
+        execute_routed_session_event(&app, "routed-worker-1", 140).expect("replay routed event");
+    assert_eq!(replay.status, SessionWorkerStatus::Completed);
+    assert_eq!(replay.run_id.as_deref(), report.run_id.as_deref());
+    assert_eq!(
+        store
+            .list_transcripts_for_session("session-worker")
+            .expect("session transcripts after replay")
+            .into_iter()
+            .filter(|entry| entry.kind == "assistant")
+            .count(),
+        1
     );
     provider_handle.join().expect("provider thread");
 }

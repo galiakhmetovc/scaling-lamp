@@ -79,6 +79,22 @@ pub fn execute_routed_session_event(
     let dependencies = dependencies_from_metadata(&metadata);
     let task_id = format!("task-{routed_event_id}");
 
+    if routed.status == "completed" {
+        let run_id = store
+            .get_task_registry(&task_id)
+            .map_err(|error| {
+                SessionWorkerError::new(SessionWorkerErrorKind::Store, error.to_string())
+            })?
+            .and_then(|task| run_id_from_result_ref(task.result_ref_json.as_deref()));
+        return Ok(SessionWorkerReport {
+            routed_event_id: routed_event_id.to_string(),
+            session_id: routed.session_id,
+            status: SessionWorkerStatus::Completed,
+            run_id,
+            output_outbox_id: None,
+        });
+    }
+
     if !dependencies.is_empty() {
         store
             .put_task_registry(&task_record(
@@ -240,6 +256,14 @@ fn dependencies_from_metadata(metadata: &Value) -> Vec<String> {
                 .collect::<Vec<_>>()
         })
         .unwrap_or_default()
+}
+
+fn run_id_from_result_ref(result_ref_json: Option<&str>) -> Option<String> {
+    let value: Value = serde_json::from_str(result_ref_json?).ok()?;
+    value
+        .get("run_id")
+        .and_then(Value::as_str)
+        .map(str::to_string)
 }
 
 fn task_record(

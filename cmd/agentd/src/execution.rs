@@ -33,11 +33,11 @@ use crate::mcp::SharedMcpRegistry;
 use crate::trace::{RuntimeTraceContext, TurnTraceSource};
 use agent_persistence::{
     A2APeerConfig, AgentRepository, BrowserConfig, ContextOffloadRepository,
-    ContextSummaryRepository, JobRecord, JobRepository, McpRepository, Mem0Config,
+    ContextSummaryRepository, EventBusConfig, JobRecord, JobRepository, McpRepository, Mem0Config,
     MemoryCuratorConfig, MemoryRecallConfig, MissionRecord, MissionRepository, PersistenceStore,
     PlanRecord, PlanRepository, RecordConversionError, RunRecord, RunRepository,
     RuntimeLimitsConfig, RuntimeTimingConfig, SessionInboxRepository, SessionRepository,
-    StoreError, TraceRepository, TranscriptRecord, TranscriptRepository,
+    StoreError, TaskRegistryRepository, TraceRepository, TranscriptRecord, TranscriptRepository,
 };
 use agent_runtime::agent::AgentProfile;
 use agent_runtime::inbox::SessionInboxEvent;
@@ -229,6 +229,7 @@ pub struct ExecutionServiceConfig {
     pub memory_curator: MemoryCuratorConfig,
     pub memory_recall: MemoryRecallConfig,
     pub knowledge: agent_persistence::KnowledgeConfig,
+    pub event_bus: EventBusConfig,
     pub runtime_timing: RuntimeTimingConfig,
     pub runtime_limits: RuntimeLimitsConfig,
 }
@@ -263,6 +264,7 @@ impl Default for ExecutionServiceConfig {
             memory_curator: MemoryCuratorConfig::default(),
             memory_recall: MemoryRecallConfig::default(),
             knowledge: agent_persistence::KnowledgeConfig::default(),
+            event_bus: EventBusConfig::default(),
             runtime_timing: RuntimeTimingConfig::default(),
             runtime_limits: RuntimeLimitsConfig::default(),
         }

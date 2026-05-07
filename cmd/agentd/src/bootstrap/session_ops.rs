@@ -1,7 +1,7 @@
 use super::*;
 use crate::agents;
 use crate::diagnostics::DiagnosticEventBuilder;
-use agent_persistence::{JobRepository, RunRepository, ToolCallRepository};
+use agent_persistence::{JobRepository, RunRepository, TaskRegistryRepository, ToolCallRepository};
 use agent_runtime::interagent::{AgentChainState, AgentMessageChain};
 use agent_runtime::mission::JobSpec;
 use agent_runtime::run::{RunSnapshot, RunStatus, RunStepKind};
@@ -494,6 +494,84 @@ impl App {
             }
             if let Some(progress) = job.last_progress_message {
                 lines.push(format!("  прогресс: {progress}"));
+            }
+        }
+        Ok(lines.join("\n"))
+    }
+
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub fn session_tasks(&self, session_id: &str) -> Result<Vec<SessionTask>, BootstrapError> {
+        let store = self.store()?;
+        if store.get_session(session_id)?.is_none() {
+            return Err(BootstrapError::MissingRecord {
+                kind: "session",
+                id: session_id.to_string(),
+            });
+        }
+
+        Ok(store
+            .list_task_registry_for_session(session_id)?
+            .into_iter()
+            .map(|task| SessionTask {
+                id: task.task_id,
+                kind: task.kind,
+                status: task.status,
+                source_session_id: task.source_session_id,
+                owner_agent_id: task.owner_agent_id,
+                executor_agent_id: task.executor_agent_id,
+                parent_task_id: task.parent_task_id,
+                dependency_json: task.dependency_json,
+                context_ref_json: task.context_ref_json,
+                result_ref_json: task.result_ref_json,
+                retry_policy_json: task.retry_policy_json,
+                attempt_count: task.attempt_count,
+                max_attempts: task.max_attempts,
+                timeout_at: task.timeout_at,
+                chain_id: task.chain_id,
+                hop_count: task.hop_count,
+                max_hops: task.max_hops,
+                trace_id: task.trace_id,
+                created_at: task.created_at,
+                updated_at: task.updated_at,
+                started_at: task.started_at,
+                finished_at: task.finished_at,
+                error: task.error,
+            })
+            .collect())
+    }
+
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub fn render_session_tasks(&self, session_id: &str) -> Result<String, BootstrapError> {
+        let tasks = self.session_tasks(session_id)?;
+        if tasks.is_empty() {
+            return Ok("Делегированные задачи: нет".to_string());
+        }
+
+        let mut lines = vec!["Делегированные задачи:".to_string()];
+        for task in tasks {
+            lines.push(format!("- [{}] {} ({})", task.status, task.id, task.kind));
+            if let Some(owner) = task.owner_agent_id.as_deref() {
+                lines.push(format!("  owner_agent_id: {owner}"));
+            }
+            if let Some(executor) = task.executor_agent_id.as_deref() {
+                lines.push(format!("  executor_agent_id: {executor}"));
+            }
+            lines.push(format!(
+                "  attempts: {}/{}",
+                task.attempt_count, task.max_attempts
+            ));
+            lines.push(format!(
+                "  updated: {}",
+                format_background_job_time(task.updated_at)
+            ));
+            if let Some(chain_id) = task.chain_id.as_deref() {
+                lines.push(format!("  chain_id: {chain_id}"));
+            }
+            if let Some(error) = task.error.as_deref() {
+                lines.push(format!("  error: {error}"));
+            }
+            if let Some(result_ref_json) = task.result_ref_json.as_deref() {
+                lines.push(format!("  result_ref: {result_ref_json}"));
             }
         }
         Ok(lines.join("\n"))

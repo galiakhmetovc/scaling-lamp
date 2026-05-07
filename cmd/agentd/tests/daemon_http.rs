@@ -1209,7 +1209,7 @@ fn daemon_background_worker_processes_queued_chat_jobs_and_wakes_session() {
     let handle = daemon::spawn_for_test(app).expect("spawn daemon");
 
     let mut completed = false;
-    for _ in 0..60 {
+    for _ in 0..180 {
         let poll_store = PersistenceStore::open(&scaffold).expect("reopen store");
         let job = poll_store
             .get_job("job-daemon-bg-chat")

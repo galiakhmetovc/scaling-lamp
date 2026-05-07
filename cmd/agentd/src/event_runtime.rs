@@ -8,6 +8,7 @@ pub enum EventRuntimeWorker {
     Router,
     Session,
     Delivery,
+    Task,
     OutboxPublisher,
 }
 
@@ -77,6 +78,7 @@ pub fn build_event_runtime_plan(
                     EventRuntimeWorker::Router,
                     EventRuntimeWorker::Session,
                     EventRuntimeWorker::Delivery,
+                    EventRuntimeWorker::Task,
                     EventRuntimeWorker::OutboxPublisher,
                 ],
                 nats_url: Some(nats_url),

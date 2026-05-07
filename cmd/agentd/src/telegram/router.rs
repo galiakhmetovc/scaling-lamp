@@ -553,6 +553,7 @@ where
             }
             ParsedTelegramCommand::Status
             | ParsedTelegramCommand::Jobs
+            | ParsedTelegramCommand::Tasks
             | ParsedTelegramCommand::Plan
             | ParsedTelegramCommand::Queue { .. }
             | ParsedTelegramCommand::Outputs { .. }
@@ -792,6 +793,7 @@ where
             }
             ParsedTelegramCommand::Status
             | ParsedTelegramCommand::Jobs
+            | ParsedTelegramCommand::Tasks
             | ParsedTelegramCommand::Plan
             | ParsedTelegramCommand::Queue { .. }
             | ParsedTelegramCommand::Outputs { .. }
@@ -1092,6 +1094,10 @@ where
             ParsedTelegramCommand::Jobs => {
                 let jobs = self.render_session_background_jobs(session_id).await?;
                 self.send_text_chunks(chat_id, &jobs).await
+            }
+            ParsedTelegramCommand::Tasks => {
+                let tasks = self.render_session_tasks(session_id).await?;
+                self.send_text_chunks(chat_id, &tasks).await
             }
             ParsedTelegramCommand::Plan => {
                 let plan = self.render_plan(session_id).await?;
@@ -2547,6 +2553,13 @@ where
     ) -> Result<String, BootstrapError> {
         let backend = self.backend.clone();
         tokio::task::spawn_blocking(move || backend.render_session_background_jobs(&session_id))
+            .await
+            .map_err(map_join_error)?
+    }
+
+    async fn render_session_tasks(&self, session_id: String) -> Result<String, BootstrapError> {
+        let backend = self.backend.clone();
+        tokio::task::spawn_blocking(move || backend.render_session_tasks(&session_id))
             .await
             .map_err(map_join_error)?
     }

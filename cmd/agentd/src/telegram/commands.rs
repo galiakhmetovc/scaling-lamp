@@ -46,6 +46,7 @@ pub(super) enum ParsedTelegramCommand {
         title: String,
     },
     Jobs,
+    Tasks,
     Plan,
     Queue {
         action: TelegramQueueAction,
@@ -175,6 +176,7 @@ fn parse_command_parts(command: &str, args: &str) -> Option<ParsedTelegramComman
             }
         }
         "jobs" => Some(ParsedTelegramCommand::Jobs),
+        "tasks" => Some(ParsedTelegramCommand::Tasks),
         "plan" => Some(ParsedTelegramCommand::Plan),
         "queue" => match parse_queue_action(args) {
             Ok(action) => Some(ParsedTelegramCommand::Queue { action }),
@@ -468,6 +470,7 @@ pub(super) fn is_session_operator_command(command: &ParsedTelegramCommand) -> bo
             | ParsedTelegramCommand::Lifecycle
             | ParsedTelegramCommand::Rename { .. }
             | ParsedTelegramCommand::Jobs
+            | ParsedTelegramCommand::Tasks
             | ParsedTelegramCommand::Plan
             | ParsedTelegramCommand::Queue { .. }
             | ParsedTelegramCommand::Stop
@@ -513,6 +516,7 @@ pub(super) fn default_command_specs() -> Vec<TelegramCommandSpec> {
         TelegramCommandSpec::new("lifecycle", "Show current session lifecycle"),
         TelegramCommandSpec::new("rename", "Rename current session"),
         TelegramCommandSpec::new("jobs", "Show current session jobs"),
+        TelegramCommandSpec::new("tasks", "Show current session delegated tasks"),
         TelegramCommandSpec::new("plan", "Show current session plan"),
         TelegramCommandSpec::new("queue", "Show or set inbound queue mode"),
         TelegramCommandSpec::new("stop", "Stop the active turn"),
@@ -588,6 +592,7 @@ mod tests {
             Some(ParsedTelegramCommand::InvalidUsage(_))
         ));
         assert_eq!(parse_command("/jobs"), Some(ParsedTelegramCommand::Jobs));
+        assert_eq!(parse_command("/tasks"), Some(ParsedTelegramCommand::Tasks));
         assert_eq!(parse_command("/plan"), Some(ParsedTelegramCommand::Plan));
         assert_eq!(
             parse_command("/target"),
@@ -698,6 +703,7 @@ mod tests {
             "lifecycle",
             "rename",
             "jobs",
+            "tasks",
             "queue",
             "stop",
             "pause",

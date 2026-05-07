@@ -20,6 +20,7 @@ pub mod prompting;
 pub mod router_worker;
 pub mod session_worker;
 pub mod store_retry;
+pub mod task_worker;
 pub mod telegram;
 pub mod trace;
 pub mod tui;

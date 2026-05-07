@@ -6,7 +6,7 @@ use crate::http::types::{
     SessionChainGrantRequest, SessionDebugResponse, SessionDetailResponse,
     SessionPendingApprovalsResponse, SessionPreferencesRequest, SessionRunControlResponse,
     SessionRunStatusResponse, SessionSkillsResponse, SessionSummaryResponse, SessionSystemResponse,
-    SessionTranscriptResponse, SkillCommandRequest,
+    SessionTaskResponse, SessionTasksResponse, SessionTranscriptResponse, SkillCommandRequest,
 };
 use agent_persistence::{AgentRepository, SessionRepository};
 use agent_runtime::tool::{
@@ -200,6 +200,9 @@ pub(super) fn handle_nested_routes(app: &App, request: Request) -> std::io::Resu
         }
         (Method::Get, [session_id, jobs]) if jobs == "jobs" => {
             handle_session_background_jobs(app, request, session_id.as_str())
+        }
+        (Method::Get, [session_id, tasks]) if tasks == "tasks" => {
+            handle_session_tasks(app, request, session_id.as_str())
         }
         (Method::Get, [session_id, skills]) if skills == "skills" => {
             handle_session_skills(app, request, session_id.as_str())
@@ -401,6 +404,22 @@ fn handle_session_background_jobs(
                 .map(SessionBackgroundJobResponse::from)
                 .collect::<Vec<_>>();
             respond_json::<SessionBackgroundJobsResponse>(request, StatusCode(200), &response)
+        }
+        Err(error) => {
+            let (status, payload) = map_bootstrap_error(error);
+            respond_json(request, status, &payload)
+        }
+    }
+}
+
+fn handle_session_tasks(app: &App, request: Request, session_id: &str) -> std::io::Result<()> {
+    match app.session_tasks(session_id) {
+        Ok(tasks) => {
+            let response = tasks
+                .into_iter()
+                .map(SessionTaskResponse::from)
+                .collect::<Vec<_>>();
+            respond_json::<SessionTasksResponse>(request, StatusCode(200), &response)
         }
         Err(error) => {
             let (status, payload) = map_bootstrap_error(error);

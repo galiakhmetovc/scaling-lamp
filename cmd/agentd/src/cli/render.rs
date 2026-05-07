@@ -3,6 +3,7 @@ use std::collections::BTreeMap;
 use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 
 const DEFAULT_SESSION_TOOL_PAGE_LIMIT: usize = 50;
+const DEFAULT_SESSION_TASK_PAGE_LIMIT: usize = 50;
 
 pub(super) fn show_session_via_client(
     client: &DaemonClient,
@@ -474,6 +475,310 @@ fn append_human_tool_result_preview(
         }
         None => lines.push("       <none>".to_string()),
     }
+}
+
+pub(super) fn show_session_tasks(
+    store: &PersistenceStore,
+    session_id: &str,
+    limit: Option<usize>,
+    offset: usize,
+    format: SessionTasksFormat,
+) -> Result<String, BootstrapError> {
+    if store.get_session(session_id)?.is_none() {
+        return Err(BootstrapError::MissingRecord {
+            kind: "session",
+            id: session_id.to_string(),
+        });
+    }
+
+    let tasks = store.list_task_registry_for_session(session_id)?;
+    let total = tasks.len();
+    let limit = limit.unwrap_or(DEFAULT_SESSION_TASK_PAGE_LIMIT);
+    let page_start = offset.min(total);
+    let page_end = page_start.saturating_add(limit).min(total);
+    let showing = if page_start < page_end {
+        format!("{}-{}", page_start + 1, page_end)
+    } else {
+        "0-0".to_string()
+    };
+    let next_offset = if page_end < total {
+        page_end.to_string()
+    } else {
+        "<none>".to_string()
+    };
+    let page = SessionTasksPage {
+        session_id,
+        total,
+        showing,
+        limit,
+        offset,
+        next_offset,
+    };
+
+    if page_start == page_end {
+        return Ok(render_empty_session_tasks(&page, format));
+    }
+
+    let page_tasks = &tasks[page_start..page_end];
+    Ok(match format {
+        SessionTasksFormat::Human => render_human_session_tasks(&page, page_tasks),
+        SessionTasksFormat::Raw => render_raw_session_tasks(&page, page_tasks),
+    })
+}
+
+pub(super) fn show_task(store: &PersistenceStore, task_id: &str) -> Result<String, BootstrapError> {
+    let Some(task) = store.get_task_registry(task_id)? else {
+        return Err(BootstrapError::MissingRecord {
+            kind: "task",
+            id: task_id.to_string(),
+        });
+    };
+
+    let mut lines = vec![
+        "Task".to_string(),
+        format!("task_id: {}", task.task_id),
+        format!("kind: {}", task.kind),
+        format!("status: {}", task.status),
+        format!(
+            "source_session_id: {}",
+            task.source_session_id.as_deref().unwrap_or("<none>")
+        ),
+        format!(
+            "owner_agent_id: {}",
+            task.owner_agent_id.as_deref().unwrap_or("<none>")
+        ),
+        format!(
+            "executor_agent_id: {}",
+            task.executor_agent_id.as_deref().unwrap_or("<none>")
+        ),
+        format!(
+            "parent_task_id: {}",
+            task.parent_task_id.as_deref().unwrap_or("<none>")
+        ),
+        format!("attempts: {}/{}", task.attempt_count, task.max_attempts),
+        format!(
+            "timeout_at: {}",
+            task.timeout_at
+                .map(format_unix_timestamp)
+                .unwrap_or_else(|| "<none>".to_string())
+        ),
+        format!(
+            "chain: {} hop={}/{}",
+            task.chain_id.as_deref().unwrap_or("<none>"),
+            task.hop_count
+                .map(|value| value.to_string())
+                .unwrap_or_else(|| "<none>".to_string()),
+            task.max_hops
+                .map(|value| value.to_string())
+                .unwrap_or_else(|| "<none>".to_string())
+        ),
+        format!("trace_id: {}", task.trace_id.as_deref().unwrap_or("<none>")),
+        format!("created: {}", format_unix_timestamp(task.created_at)),
+        format!("updated: {}", format_unix_timestamp(task.updated_at)),
+        format!(
+            "started: {}",
+            task.started_at
+                .map(format_unix_timestamp)
+                .unwrap_or_else(|| "<none>".to_string())
+        ),
+        format!(
+            "finished: {}",
+            task.finished_at
+                .map(format_unix_timestamp)
+                .unwrap_or_else(|| "<none>".to_string())
+        ),
+        format!("error: {}", task.error.as_deref().unwrap_or("<none>")),
+        "dependency_json:".to_string(),
+    ];
+    lines.extend(indent_lines(
+        &pretty_json_or_raw(&task.dependency_json),
+        "  ",
+    ));
+    lines.push("context_ref_json:".to_string());
+    lines.extend(indent_lines(
+        &pretty_json_or_raw(&task.context_ref_json),
+        "  ",
+    ));
+    lines.push("retry_policy_json:".to_string());
+    lines.extend(indent_lines(
+        &pretty_json_or_raw(&task.retry_policy_json),
+        "  ",
+    ));
+    lines.push("result_ref_json:".to_string());
+    match task.result_ref_json.as_deref() {
+        Some(result_ref_json) => {
+            lines.extend(indent_lines(&pretty_json_or_raw(result_ref_json), "  "));
+        }
+        None => lines.push("  <none>".to_string()),
+    }
+
+    Ok(lines.join("\n"))
+}
+
+struct SessionTasksPage<'a> {
+    session_id: &'a str,
+    total: usize,
+    showing: String,
+    limit: usize,
+    offset: usize,
+    next_offset: String,
+}
+
+fn render_empty_session_tasks(page: &SessionTasksPage<'_>, format: SessionTasksFormat) -> String {
+    match format {
+        SessionTasksFormat::Human => format!(
+            "Session tasks\nsession: {}\ntotal: {} | showing: {} | limit: {} | offset: {} | next_offset: {}\n\n<empty>",
+            page.session_id, page.total, page.showing, page.limit, page.offset, page.next_offset
+        ),
+        SessionTasksFormat::Raw if page.total == 0 => format!(
+            "session tasks session_id={} total=0 showing=0-0 next_offset=<none>\n<empty>",
+            page.session_id
+        ),
+        SessionTasksFormat::Raw => format!(
+            "session tasks session_id={} total={} showing={} limit={} offset={} next_offset={}\n<empty-page>",
+            page.session_id, page.total, page.showing, page.limit, page.offset, page.next_offset
+        ),
+    }
+}
+
+fn render_raw_session_tasks(
+    page: &SessionTasksPage<'_>,
+    tasks: &[agent_persistence::TaskRegistryRecord],
+) -> String {
+    let header = format!(
+        "session tasks session_id={} total={} showing={} limit={} offset={} next_offset={}",
+        page.session_id, page.total, page.showing, page.limit, page.offset, page.next_offset
+    );
+    let lines = tasks
+        .iter()
+        .map(|task| {
+            format!(
+                "task id={} kind={} status={} source_session_id={} owner_agent_id={} executor_agent_id={} parent_task_id={} attempts={}/{} timeout_at={} chain_id={} hop={}/{} trace_id={} created_at={} updated_at={} started_at={} finished_at={} dependency_json={} context_ref_json={} retry_policy_json={} result_ref_json={} error={}",
+                task.task_id,
+                task.kind,
+                task.status,
+                raw_optional_string(task.source_session_id.as_deref()),
+                raw_optional_string(task.owner_agent_id.as_deref()),
+                raw_optional_string(task.executor_agent_id.as_deref()),
+                raw_optional_string(task.parent_task_id.as_deref()),
+                task.attempt_count,
+                task.max_attempts,
+                task.timeout_at
+                    .map(|value| value.to_string())
+                    .unwrap_or_else(|| "<none>".to_string()),
+                raw_optional_string(task.chain_id.as_deref()),
+                task.hop_count
+                    .map(|value| value.to_string())
+                    .unwrap_or_else(|| "<none>".to_string()),
+                task.max_hops
+                    .map(|value| value.to_string())
+                    .unwrap_or_else(|| "<none>".to_string()),
+                raw_optional_string(task.trace_id.as_deref()),
+                task.created_at,
+                task.updated_at,
+                task.started_at
+                    .map(|value| value.to_string())
+                    .unwrap_or_else(|| "<none>".to_string()),
+                task.finished_at
+                    .map(|value| value.to_string())
+                    .unwrap_or_else(|| "<none>".to_string()),
+                task.dependency_json,
+                task.context_ref_json,
+                task.retry_policy_json,
+                raw_optional_string(task.result_ref_json.as_deref()),
+                raw_optional_string(task.error.as_deref())
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    format!("{header}\n{lines}")
+}
+
+fn render_human_session_tasks(
+    page: &SessionTasksPage<'_>,
+    tasks: &[agent_persistence::TaskRegistryRecord],
+) -> String {
+    let mut lines = vec![
+        "Session tasks".to_string(),
+        format!("session: {}", page.session_id),
+        format!(
+            "total: {} | showing: {} | limit: {} | offset: {} | next_offset: {}",
+            page.total, page.showing, page.limit, page.offset, page.next_offset
+        ),
+    ];
+
+    for (index, task) in tasks.iter().enumerate() {
+        lines.push(String::new());
+        lines.push(format!(
+            "{}. {} [{}]",
+            page.offset + index + 1,
+            task.task_id,
+            task.status
+        ));
+        lines.push(format!("   kind: {}", task.kind));
+        lines.push(format!(
+            "   source_session_id: {}",
+            task.source_session_id.as_deref().unwrap_or("<none>")
+        ));
+        lines.push(format!(
+            "   owner_agent_id: {}",
+            task.owner_agent_id.as_deref().unwrap_or("<none>")
+        ));
+        lines.push(format!(
+            "   executor_agent_id: {}",
+            task.executor_agent_id.as_deref().unwrap_or("<none>")
+        ));
+        lines.push(format!(
+            "   parent_task_id: {}",
+            task.parent_task_id.as_deref().unwrap_or("<none>")
+        ));
+        lines.push(format!(
+            "   attempts: {}/{}",
+            task.attempt_count, task.max_attempts
+        ));
+        lines.push(format!(
+            "   created: {}",
+            format_unix_timestamp(task.created_at)
+        ));
+        lines.push(format!(
+            "   updated: {}",
+            format_unix_timestamp(task.updated_at)
+        ));
+        if let Some(started_at) = task.started_at {
+            lines.push(format!("   started: {}", format_unix_timestamp(started_at)));
+        }
+        if let Some(finished_at) = task.finished_at {
+            lines.push(format!(
+                "   finished: {}",
+                format_unix_timestamp(finished_at)
+            ));
+        }
+        if let Some(chain_id) = task.chain_id.as_deref() {
+            lines.push(format!(
+                "   chain: {chain_id} hop={}/{}",
+                task.hop_count
+                    .map(|value| value.to_string())
+                    .unwrap_or_else(|| "<none>".to_string()),
+                task.max_hops
+                    .map(|value| value.to_string())
+                    .unwrap_or_else(|| "<none>".to_string())
+            ));
+        }
+        if let Some(error) = task.error.as_deref() {
+            lines.push(format!("   error: {error}"));
+        }
+        lines.push("   context_ref_json:".to_string());
+        lines.extend(indent_lines(
+            &pretty_json_or_raw(&task.context_ref_json),
+            "     ",
+        ));
+        if let Some(result_ref_json) = task.result_ref_json.as_deref() {
+            lines.push("   result_ref_json:".to_string());
+            lines.extend(indent_lines(&pretty_json_or_raw(result_ref_json), "     "));
+        }
+    }
+
+    lines.join("\n")
 }
 
 fn load_tool_result_text(

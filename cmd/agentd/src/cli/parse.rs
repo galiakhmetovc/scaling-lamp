@@ -144,6 +144,15 @@ impl Command {
             {
                 parse_session_tools_command(id, rest)
             }
+            [scope, action, id, rest @ ..]
+                if (scope == "session" || scope == "сессия")
+                    && (action == "tasks" || action == "задачи" || action == "таски") =>
+            {
+                parse_session_tasks_command(id, rest)
+            }
+            [scope, action, id] if scope == "task" && action == "show" => {
+                Ok(Self::TaskShow { id: id.clone() })
+            }
             [scope, action, tool_call_id, rest @ ..]
                 if (scope == "session" || scope == "сессия")
                     && (action == "tool-result"
@@ -224,7 +233,7 @@ impl Command {
                 })
             }
             _ => Err(BootstrapError::Usage {
-                reason: "expected one of: status | logs [max_lines] | analytics [max_lines] | trace show|run|export|push | version | update [tag] | tui | telegram run|pair|pairings | daemon | daemon stop | provider smoke | agent list/show/select/create/open | chat show/send/repl | mission create/show/tick | sessions | session create/list/show/transcript/tools/skills/enable-skill/disable-skill | run show | job show/execute | approval list/approve | delegate list | verification show".to_string(),
+                reason: "expected one of: status | logs [max_lines] | analytics [max_lines] | trace show|run|export|push | version | update [tag] | tui | telegram run|pair|pairings | daemon | daemon stop | provider smoke | agent list/show/select/create/open | chat show/send/repl | mission create/show/tick | sessions | session create/list/show/transcript/tools/tasks/skills/enable-skill/disable-skill | task show | run show | job show/execute | approval list/approve | delegate list | verification show".to_string(),
             }),
         }
     }
@@ -431,12 +440,80 @@ fn parse_session_tool_result_command(
     })
 }
 
+fn parse_session_tasks_command(id: &str, args: &[String]) -> Result<Command, BootstrapError> {
+    let mut limit = None;
+    let mut offset = 0;
+    let mut format = SessionTasksFormat::Human;
+    let mut index = 0;
+    while index < args.len() {
+        match args[index].as_str() {
+            "--raw" => {
+                format = SessionTasksFormat::Raw;
+                index += 1;
+            }
+            "--human" => {
+                format = SessionTasksFormat::Human;
+                index += 1;
+            }
+            "--format" => {
+                let Some(value) = args.get(index + 1) else {
+                    return Err(BootstrapError::Usage {
+                        reason: "session tasks --format requires a value".to_string(),
+                    });
+                };
+                format = parse_session_tasks_format(value)?;
+                index += 2;
+            }
+            "--limit" => {
+                let Some(value) = args.get(index + 1) else {
+                    return Err(BootstrapError::Usage {
+                        reason: "session tasks --limit requires a value".to_string(),
+                    });
+                };
+                limit = Some(parse_positive_usize(value, "session tasks --limit")?);
+                index += 2;
+            }
+            "--offset" => {
+                let Some(value) = args.get(index + 1) else {
+                    return Err(BootstrapError::Usage {
+                        reason: "session tasks --offset requires a value".to_string(),
+                    });
+                };
+                offset = parse_usize(value, "session tasks --offset")?;
+                index += 2;
+            }
+            other => {
+                return Err(BootstrapError::Usage {
+                    reason: format!("unsupported session tasks argument {other}"),
+                });
+            }
+        }
+    }
+
+    Ok(Command::SessionTasks {
+        id: id.to_string(),
+        limit,
+        offset,
+        format,
+    })
+}
+
 fn parse_session_tools_format(raw: &str) -> Result<SessionToolsFormat, BootstrapError> {
     match raw {
         "human" | "человек" => Ok(SessionToolsFormat::Human),
         "raw" | "line" | "lines" | "сырой" => Ok(SessionToolsFormat::Raw),
         other => Err(BootstrapError::Usage {
             reason: format!("unsupported session tools format {other}; expected human|raw"),
+        }),
+    }
+}
+
+fn parse_session_tasks_format(raw: &str) -> Result<SessionTasksFormat, BootstrapError> {
+    match raw {
+        "human" | "человек" => Ok(SessionTasksFormat::Human),
+        "raw" | "line" | "lines" | "сырой" => Ok(SessionTasksFormat::Raw),
+        other => Err(BootstrapError::Usage {
+            reason: format!("unsupported session tasks format {other}; expected human|raw"),
         }),
     }
 }

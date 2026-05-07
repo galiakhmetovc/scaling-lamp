@@ -27,6 +27,7 @@ pub(super) fn daemon_supports_command(command: &Command) -> bool {
             | Command::SessionCreate { .. }
             | Command::SessionList { .. }
             | Command::SessionShow { .. }
+            | Command::SessionTasks { .. }
             | Command::SessionSkills { .. }
             | Command::SessionEnableSkill { .. }
             | Command::SessionDisableSkill { .. }
@@ -82,6 +83,13 @@ pub(super) fn execute_command(app: &App, command: Command) -> Result<String, Boo
             format,
             include_results,
         } => render::show_session_tools(&app.store()?, &id, limit, offset, format, include_results),
+        Command::SessionTasks {
+            id,
+            limit,
+            offset,
+            format,
+        } => render::show_session_tasks(&app.store()?, &id, limit, offset, format),
+        Command::TaskShow { id } => render::show_task(&app.store()?, &id),
         Command::SessionToolResult { tool_call_id, raw } => {
             render::show_session_tool_result(&app.store()?, &tool_call_id, raw)
         }
@@ -182,6 +190,7 @@ pub(super) fn execute_daemon_command(
             render::show_session_list(&client.list_session_summaries()?, format)
         }
         Command::SessionShow { id } => render::show_session_via_client(client, &id),
+        Command::SessionTasks { id, .. } => client.render_session_tasks(&id),
         Command::SessionSkills { id } => {
             render::render_session_skills_list(client.session_skills(&id)?)
         }
@@ -200,6 +209,7 @@ pub(super) fn execute_daemon_command(
         | Command::TraceRun { .. }
         | Command::TraceExport { .. }
         | Command::SessionTools { .. }
+        | Command::TaskShow { .. }
         | Command::SessionToolResult { .. } => Err(BootstrapError::Usage {
             reason: "this command is local-only".to_string(),
         }),

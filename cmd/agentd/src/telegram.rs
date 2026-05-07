@@ -3,6 +3,7 @@ pub(crate) mod bindings;
 pub mod client;
 pub(crate) mod commands;
 pub(crate) mod delivery;
+pub(crate) mod event_delivery;
 pub(crate) mod files;
 pub mod polling;
 pub(crate) mod progress;

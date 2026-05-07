@@ -37,6 +37,7 @@ fn webhook_mode_runtime_plan_starts_event_workers_and_disables_polling() {
             EventRuntimeWorker::Router,
             EventRuntimeWorker::Session,
             EventRuntimeWorker::Delivery,
+            EventRuntimeWorker::Task,
             EventRuntimeWorker::OutboxPublisher,
         ]
     );

@@ -1,9 +1,12 @@
 use super::support::*;
+use agent_persistence::{EventRepository, TaskRegistryRepository};
 use agent_runtime::interagent::{AgentChainState, AgentMessageChain, DEFAULT_MAX_HOPS};
 use agent_runtime::session::TranscriptEntry;
 use agent_runtime::tool::{
     GrantAgentChainContinuationInput, MessageAgentInput, SessionReadMode, SessionWaitInput,
 };
+use agentd::event_bus::EventEnvelope;
+use agentd::task_worker::{TaskWorkerStatus, execute_task_event_envelope};
 
 fn seed_session(store: &PersistenceStore, session_id: &str, agent_profile_id: &str) {
     store
@@ -245,6 +248,38 @@ fn message_agent_direct_tool_execution_queues_recipient_session_and_job() {
         .expect("recipient job");
     assert_eq!(recipient_job.kind, "interagent_message");
     assert_eq!(recipient_job.status, "running");
+
+    let task_id = format!("task-{}", recipient_job.id);
+    let task = store
+        .get_task_registry(&task_id)
+        .expect("get task registry")
+        .expect("message_agent task registry record");
+    assert_eq!(task.kind, "agent_task");
+    assert_eq!(task.status, "queued");
+    assert_eq!(
+        task.source_session_id.as_deref(),
+        Some("session-interagent-origin")
+    );
+    assert_eq!(task.owner_agent_id.as_deref(), Some("default"));
+    assert_eq!(task.executor_agent_id.as_deref(), Some("judge"));
+    assert!(
+        task.chain_id
+            .as_deref()
+            .unwrap_or_default()
+            .starts_with("chain-session-interagent-origin-")
+    );
+    assert_eq!(task.hop_count, Some(1));
+
+    let outbox = store
+        .get_event_outbox(&format!("outbox-{task_id}"))
+        .expect("get task outbox")
+        .expect("message_agent task outbox");
+    assert_eq!(outbox.subject, format!("teamd.task.{task_id}"));
+    let envelope: EventEnvelope =
+        serde_json::from_str(&outbox.payload_json).expect("decode task envelope");
+    assert_eq!(envelope.event_type, "agent_task.created");
+    assert_eq!(envelope.payload_ref.table, "task_registry");
+    assert_eq!(envelope.payload_ref.id, task_id);
     assert!(
         report
             .output_summary
@@ -369,6 +404,170 @@ fn background_worker_routes_interagent_reply_back_to_origin_session() {
     assert!(child_request.contains("[agent:Ассистент]"));
     let wake_request = wake_request.to_ascii_lowercase();
     assert!(wake_request.contains("[agent:judge]"));
+}
+
+#[test]
+fn task_worker_executes_message_agent_task_and_records_result() {
+    let (api_base, requests, handle) = spawn_json_server_sequence(vec![
+        r#"{
+                "id":"resp_agent_judge_task",
+                "model":"gpt-5.4",
+                "output":[
+                    {
+                        "id":"msg_agent_judge_task",
+                        "type":"message",
+                        "status":"completed",
+                        "role":"assistant",
+                        "content":[
+                            {
+                                "type":"output_text",
+                                "text":"Проверил: замечаний нет."
+                            }
+                        ]
+                    }
+                ],
+                "usage":{"input_tokens":18,"output_tokens":8,"total_tokens":26}
+            }"#
+        .to_string(),
+    ]);
+    let temp = tempfile::tempdir().expect("tempdir");
+    let app = build_from_config(AppConfig {
+        data_dir: temp.path().join("state-root"),
+        daemon: Default::default(),
+        provider: ConfiguredProvider {
+            kind: ProviderKind::OpenAiResponses,
+            api_base: Some(format!("{api_base}/v1")),
+            api_key: Some("test-key".to_string()),
+            default_model: Some("gpt-5.4".to_string()),
+            ..ConfiguredProvider::default()
+        },
+        permissions: PermissionConfig {
+            mode: PermissionMode::AcceptEdits,
+            rules: Vec::new(),
+        },
+        ..AppConfig::default()
+    })
+    .expect("build app");
+    let store = PersistenceStore::open(&app.persistence).expect("open store");
+    seed_running_tool_context(
+        &store,
+        "session-task-origin",
+        "default",
+        "mission-task-origin",
+        "job-task-origin",
+        "run-task-origin",
+    );
+
+    app.request_tool_approval(
+        "job-task-origin",
+        "run-task-origin",
+        &ToolCall::MessageAgent(MessageAgentInput {
+            target_agent_id: "judge".to_string(),
+            message: "Дай короткий вердикт.".to_string(),
+        }),
+        20,
+    )
+    .expect("queue agent message");
+
+    let job = store
+        .list_jobs()
+        .expect("list jobs")
+        .into_iter()
+        .find(|record| record.kind == "interagent_message")
+        .expect("interagent job");
+    let task_id = format!("task-{}", job.id);
+    let outbox = store
+        .get_event_outbox(&format!("outbox-{task_id}"))
+        .expect("get task outbox")
+        .expect("task outbox");
+    let envelope: EventEnvelope =
+        serde_json::from_str(&outbox.payload_json).expect("decode task envelope");
+
+    let report = execute_task_event_envelope(&app, envelope, 40).expect("execute task event");
+    let child_request = requests.recv().expect("child request");
+    handle.join().expect("join server");
+
+    assert_eq!(report.task_id, task_id);
+    assert_eq!(report.status, TaskWorkerStatus::Completed);
+    assert!(report.run_id.is_some());
+    assert!(child_request.contains("[agent:Ассистент]"));
+
+    let task = store
+        .get_task_registry(&report.task_id)
+        .expect("get task")
+        .expect("task");
+    assert_eq!(task.status, "completed");
+    assert!(task.result_ref_json.unwrap_or_default().contains("run_id"));
+
+    let inbox = store
+        .list_session_inbox_events_for_session("session-task-origin")
+        .expect("list inbox");
+    assert_eq!(inbox.len(), 1);
+    assert_eq!(inbox[0].kind, "external_input_received");
+    assert_eq!(inbox[0].status, "queued");
+}
+
+#[test]
+fn required_event_bus_defers_task_backed_interagent_job_to_task_worker() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let mut config = AppConfig {
+        data_dir: temp.path().join("state-root"),
+        daemon: Default::default(),
+        provider: ConfiguredProvider {
+            kind: ProviderKind::OpenAiResponses,
+            api_base: Some("http://127.0.0.1:9/v1".to_string()),
+            api_key: Some("test-key".to_string()),
+            default_model: Some("gpt-5.4".to_string()),
+            ..ConfiguredProvider::default()
+        },
+        permissions: PermissionConfig {
+            mode: PermissionMode::AcceptEdits,
+            rules: Vec::new(),
+        },
+        ..AppConfig::default()
+    };
+    config.event_bus.required = true;
+    config.event_bus.nats_url = Some("nats://127.0.0.1:4222".to_string());
+    let app = build_from_config(config).expect("build app");
+    let store = PersistenceStore::open(&app.persistence).expect("open store");
+    seed_running_tool_context(
+        &store,
+        "session-event-bus-origin",
+        "default",
+        "mission-event-bus-origin",
+        "job-event-bus-origin",
+        "run-event-bus-origin",
+    );
+
+    app.request_tool_approval(
+        "job-event-bus-origin",
+        "run-event-bus-origin",
+        &ToolCall::MessageAgent(MessageAgentInput {
+            target_agent_id: "judge".to_string(),
+            message: "Дай короткий вердикт.".to_string(),
+        }),
+        20,
+    )
+    .expect("queue agent message");
+
+    let report = app
+        .background_worker_tick_with_options(40, false, false)
+        .expect("background tick should not execute task-backed job");
+
+    assert_eq!(report.executed_jobs, 0);
+    let job = store
+        .list_jobs()
+        .expect("list jobs")
+        .into_iter()
+        .find(|record| record.kind == "interagent_message")
+        .expect("interagent job");
+    assert_eq!(job.status, "running");
+    assert!(
+        store
+            .get_task_registry(&format!("task-{}", job.id))
+            .expect("get task")
+            .is_some()
+    );
 }
 
 #[test]

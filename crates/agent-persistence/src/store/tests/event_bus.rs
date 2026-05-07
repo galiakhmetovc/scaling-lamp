@@ -235,6 +235,29 @@ fn event_bus_repository_round_trips_events_routes_outbox_and_tasks() {
     store.put_task_registry(&task).expect("put task");
     assert_eq!(
         store.get_task_registry("task-agent-1").expect("get task"),
-        Some(task)
+        Some(task.clone())
+    );
+
+    let second_task = TaskRegistryRecord {
+        task_id: "task-agent-2".to_string(),
+        status: "completed".to_string(),
+        updated_at: 150,
+        finished_at: Some(150),
+        result_ref_json: Some(r#"{"kind":"event","id":"result-1"}"#.to_string()),
+        ..task.clone()
+    };
+    store
+        .put_task_registry(&second_task)
+        .expect("put second task");
+
+    let listed = store
+        .list_task_registry_for_session("session-router")
+        .expect("list session tasks");
+    assert_eq!(
+        listed
+            .iter()
+            .map(|task| task.task_id.as_str())
+            .collect::<Vec<_>>(),
+        vec!["task-agent-2", "task-agent-1"]
     );
 }

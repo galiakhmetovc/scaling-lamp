@@ -94,6 +94,33 @@ impl TaskRegistryRepository for PersistenceStore {
                 .map_err(StoreError::from)
         })
     }
+
+    fn list_task_registry_for_session(
+        &self,
+        session_id: &str,
+    ) -> Result<Vec<TaskRegistryRecord>, StoreError> {
+        validate_identifier(session_id)?;
+        self.with_client(|client| {
+            client
+                .query(
+                    "SELECT task_id, kind, source_session_id, owner_agent_id, executor_agent_id,
+                            parent_task_id, status, dependency_json, context_ref_json, result_ref_json,
+                            retry_policy_json, attempt_count, max_attempts, timeout_at, chain_id,
+                            hop_count, max_hops, trace_id, created_at, updated_at, started_at,
+                            finished_at, error
+                     FROM task_registry
+                     WHERE source_session_id = $1
+                     ORDER BY updated_at DESC, task_id ASC",
+                    &[&session_id],
+                )
+                .map(|rows| {
+                    rows.into_iter()
+                        .map(|row| task_registry_from_row(&row))
+                        .collect()
+                })
+                .map_err(StoreError::from)
+        })
+    }
 }
 
 fn task_registry_from_row(row: &Row) -> TaskRegistryRecord {

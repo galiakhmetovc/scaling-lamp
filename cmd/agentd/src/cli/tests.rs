@@ -158,10 +158,25 @@ fn process_cli_accepts_session_transcript_and_tool_commands() {
     .expect("parse paged tools");
     let raw_tools = super::ProcessInvocation::parse(["session", "tools", "session-1", "--raw"])
         .expect("parse raw tools");
+    let raw_tasks = super::ProcessInvocation::parse([
+        "session",
+        "tasks",
+        "session-1",
+        "--limit",
+        "10",
+        "--offset",
+        "5",
+        "--raw",
+    ])
+    .expect("parse raw tasks");
+    let task_show =
+        super::ProcessInvocation::parse(["task", "show", "task-agent-1"]).expect("parse task");
     let russian_transcript = super::ProcessInvocation::parse(["сессия", "транскрипт", "session-1"])
         .expect("parse russian transcript");
     let russian_tools = super::ProcessInvocation::parse(["сессия", "инструменты", "session-1"])
         .expect("parse russian tools");
+    let russian_tasks =
+        super::ProcessInvocation::parse(["сессия", "задачи", "session-1"]).expect("parse tasks");
 
     assert!(matches!(
         transcript.command,
@@ -180,12 +195,24 @@ fn process_cli_accepts_session_transcript_and_tool_commands() {
         super::Command::SessionTools { ref id, limit: None, offset: 0, format: super::SessionToolsFormat::Raw, include_results: false } if id == "session-1"
     ));
     assert!(matches!(
+        raw_tasks.command,
+        super::Command::SessionTasks { ref id, limit: Some(10), offset: 5, format: super::SessionTasksFormat::Raw } if id == "session-1"
+    ));
+    assert!(matches!(
+        task_show.command,
+        super::Command::TaskShow { ref id } if id == "task-agent-1"
+    ));
+    assert!(matches!(
         russian_transcript.command,
         super::Command::SessionTranscript { ref id } if id == "session-1"
     ));
     assert!(matches!(
         russian_tools.command,
         super::Command::SessionTools { ref id, limit: None, offset: 0, format: super::SessionToolsFormat::Human, include_results: false } if id == "session-1"
+    ));
+    assert!(matches!(
+        russian_tasks.command,
+        super::Command::SessionTasks { ref id, limit: None, offset: 0, format: super::SessionTasksFormat::Human } if id == "session-1"
     ));
 }
 
@@ -394,6 +421,85 @@ fn execute_renders_session_tool_calls() {
     assert!(rendered.contains("updated: 1970-01-01T00:00:06Z (6)"));
     assert!(rendered.contains("error: process not found"));
     assert!(!rendered.contains("tool_call id="));
+}
+
+#[test]
+fn execute_renders_session_tasks() {
+    use agent_persistence::{
+        SessionRecord, SessionRepository, TaskRegistryRecord, TaskRegistryRepository,
+    };
+
+    let temp = tempfile::tempdir().expect("tempdir");
+    let app = crate::bootstrap::build_from_config(agent_persistence::AppConfig {
+        data_dir: temp.path().join("state-root"),
+        ..agent_persistence::AppConfig::default()
+    })
+    .expect("build app");
+    let store = app.store().expect("open store");
+    store
+        .put_session(&SessionRecord {
+            id: "session-1".to_string(),
+            title: "Tasks".to_string(),
+            prompt_override: None,
+            settings_json: "{}".to_string(),
+            workspace_root: app.runtime.workspace.root.display().to_string(),
+            agent_profile_id: "default".to_string(),
+            active_mission_id: None,
+            parent_session_id: None,
+            parent_job_id: None,
+            delegation_label: None,
+            created_at: 1,
+            updated_at: 1,
+        })
+        .expect("put session");
+    store
+        .put_task_registry(&TaskRegistryRecord {
+            task_id: "task-agent-1".to_string(),
+            kind: "agent_task".to_string(),
+            source_session_id: Some("session-1".to_string()),
+            owner_agent_id: Some("default".to_string()),
+            executor_agent_id: Some("judge".to_string()),
+            parent_task_id: None,
+            status: "queued".to_string(),
+            dependency_json: "[]".to_string(),
+            context_ref_json: r#"{"goal":"review"}"#.to_string(),
+            result_ref_json: None,
+            retry_policy_json: r#"{"max_attempts":3}"#.to_string(),
+            attempt_count: 0,
+            max_attempts: 3,
+            timeout_at: Some(99),
+            chain_id: Some("chain-1".to_string()),
+            hop_count: Some(1),
+            max_hops: Some(3),
+            trace_id: Some("trace-1".to_string()),
+            created_at: 2,
+            updated_at: 2,
+            started_at: None,
+            finished_at: None,
+            error: None,
+        })
+        .expect("put task");
+
+    let rendered = super::execute(&app, ["session", "tasks", "session-1"]).expect("render tasks");
+    assert!(rendered.contains("Session tasks"));
+    assert!(rendered.contains("session: session-1"));
+    assert!(rendered.contains("1. task-agent-1 [queued]"));
+    assert!(rendered.contains("kind: agent_task"));
+    assert!(rendered.contains("owner_agent_id: default"));
+    assert!(rendered.contains("executor_agent_id: judge"));
+    assert!(rendered.contains("attempts: 0/3"));
+    assert!(rendered.contains("\"goal\": \"review\""));
+
+    let raw =
+        super::execute(&app, ["session", "tasks", "session-1", "--raw"]).expect("render raw tasks");
+    assert!(raw.contains("session tasks session_id=session-1 total=1 showing=1-1"));
+    assert!(raw.contains("task id=task-agent-1"));
+    assert!(raw.contains("status=queued"));
+
+    let single = super::execute(&app, ["task", "show", "task-agent-1"]).expect("render task");
+    assert!(single.contains("Task"));
+    assert!(single.contains("task_id: task-agent-1"));
+    assert!(single.contains("source_session_id: session-1"));
 }
 
 #[test]

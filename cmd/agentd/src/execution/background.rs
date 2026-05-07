@@ -215,10 +215,71 @@ impl ExecutionService {
         store: &PersistenceStore,
         job: &JobSpec,
     ) -> Result<bool, ExecutionError> {
+        if self.config.event_bus.required
+            && matches!(job.kind, JobKind::InterAgentMessage | JobKind::Delegate)
+            && store
+                .get_task_registry(&format!("task-{}", job.id))
+                .map_err(ExecutionError::Store)?
+                .is_some()
+        {
+            return Ok(true);
+        }
         match job.kind {
             JobKind::ScheduledChatTurn => self.session_has_active_run(store, &job.session_id),
             _ => Ok(false),
         }
+    }
+
+    pub(crate) fn execute_task_backed_job(
+        &self,
+        store: &PersistenceStore,
+        provider: &dyn ProviderDriver,
+        job_id: &str,
+        now: i64,
+    ) -> Result<JobSpec, ExecutionError> {
+        let mut job = self.load_job(store, job_id)?;
+        if matches!(
+            job.status,
+            JobStatus::Completed | JobStatus::Failed | JobStatus::Blocked | JobStatus::Cancelled
+        ) {
+            return Ok(job);
+        }
+        if job.cancel_requested_at.is_some() {
+            self.cancel_background_job(store, &job.id, now)?;
+            return self.load_job(store, &job.id);
+        }
+        if job.status == JobStatus::Queued {
+            job.status = JobStatus::Running;
+            job.started_at.get_or_insert(now);
+            job.updated_at = now;
+            store
+                .put_job(&JobRecord::try_from(&job).map_err(ExecutionError::RecordConversion)?)
+                .map_err(ExecutionError::Store)?;
+        }
+        let job = self.load_job(store, job_id)?;
+        if job.status == JobStatus::Running
+            && let Some(lease_expires_at) = job.lease_expires_at
+            && lease_expires_at > now
+            && job.lease_owner.as_deref() != Some(self.config.worker_lease_owner.as_str())
+        {
+            return Ok(job);
+        }
+
+        self.claim_background_job(store, job_id, now)?;
+        let execution_result = self.execute_background_job(store, provider, job_id, now);
+        match execution_result {
+            Ok(())
+            | Err(ExecutionError::CancelledByOperator)
+            | Err(ExecutionError::ApprovalRequired { .. }) => {}
+            Err(error) => return Err(error),
+        }
+
+        let updated_job = self.load_job(store, job_id)?;
+        self.sync_schedule_state_from_job(store, &updated_job, now)?;
+        self.deliver_callback_for_job(store, &updated_job, now)?;
+        let updated_job = self.load_job(store, job_id)?;
+        self.emit_inbox_event_for_job(store, &updated_job, now)?;
+        self.load_job(store, job_id)
     }
 
     fn claim_background_job(

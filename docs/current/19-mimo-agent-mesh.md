@@ -2,7 +2,7 @@
 
 Этот документ фиксирует целевую архитектуру MIMO-взаимодействий в `teamD`.
 
-Статус: design baseline + первый реализованный vertical slice. Уже есть PostgreSQL event tables, Telegram webhook ingress, NATS JetStream adapter, rule router, session worker и delivery worker. Production может оставаться на polling, пока webhook runtime не включён конфигом.
+Статус: design baseline + первый реализованный vertical slice. Уже есть PostgreSQL event tables, Telegram webhook ingress, NATS JetStream adapter, rule router, session worker, delivery worker и task worker для `message_agent`/`agent_task`. Production может оставаться на polling, пока webhook runtime не включён конфигом.
 
 ## Зачем это нужно
 
@@ -111,7 +111,7 @@ agent_task {
 - родитель получает `task_completed` event в свою input queue или видит результат по `/tasks`.
 - зависимости между задачами хранятся в task registry/task graph, а не в call stack.
 
-Текущий `message_agent` близок к этому, но пока отдаёт `recipient_session_id`/`recipient_job_id`, а не единый `task_id`/result package contract.
+Текущий `message_agent` уже создаёт `task_registry` запись вида `agent_task` и публикует событие `agent_task.created` в `teamd.task.<task_id>`. Для совместимости tool output пока всё ещё отдаёт `recipient_session_id`/`recipient_job_id`; единый user-facing `task_id`/result package contract остаётся следующим API-слоем.
 
 ### Delegation: Agent -> Subagent
 
@@ -186,10 +186,27 @@ delivery_target {
 Поддерживаются три модели:
 
 - `callback`: результат подзадачи публикуется как `task_completed` event в очередь родительской session;
-- `query`: оператор или агент читает task registry через `/tasks`, `/task <id>` или tool;
+- `query`: оператор или агент читает task registry через Telegram `/tasks`, CLI `agentd session tasks <session_id>`, CLI `agentd task show <task_id>`, HTTP `GET /v1/sessions/{id}/tasks` или будущий tool;
 - `wait`: агент явно вызывает bounded wait (`session_wait`/future task wait) с timeout, когда без результата нельзя продолжать.
 
 Правило: ожидание должно быть явным, ограниченным по timeout и видимым в task registry. Нельзя прятать ожидание внутри транспорта или webhook handler.
+
+## Операторская видимость task registry
+
+Task registry — это не внутренняя таблица “для разработчика”, а пользовательский слой наблюдаемости MIMO.
+
+Минимальный реализованный контракт:
+
+- `Telegram /tasks` показывает делегированные задачи текущей session: `task_id`, `status`, `kind`, owner/executor, попытки, последний update, chain/error/result ref.
+- `CLI agentd session tasks <session_id>` показывает тот же список локально; поддерживает `--limit`, `--offset`, `--raw`.
+- `CLI agentd task show <task_id>` показывает полную карточку задачи: dependency/context/result/retry JSON, trace, chain/hops, timestamps и ошибку.
+- `HTTP GET /v1/sessions/{session_id}/tasks` отдаёт структурированный список для будущего web UI/TUI.
+
+Граница ответственности:
+
+- `/jobs` показывает активные runtime/background jobs внутри session.
+- `/tasks` показывает MIMO/delegation tasks из `task_registry`, включая завершённые и упавшие задачи.
+- `session_wait` остаётся bounded wait, но оператор не обязан ждать: состояние задачи можно посмотреть отдельно.
 
 ## Fan-in layer
 
@@ -447,6 +464,23 @@ Telegram webhook
   -> event_deliveries + delivery target cursor
 ```
 
+Agent-agent task flow сейчас:
+
+```text
+message_agent
+  -> recipient session + interagent_message job
+  -> task_registry(kind=agent_task, status=queued)
+  -> event_outbox(teamd.task.<task_id>, agent_task.created)
+  -> task worker
+  -> canonical background job executor
+  -> target session run/transcript
+  -> task_registry(status=completed|failed|blocked, result_ref)
+  -> event_outbox(teamd.task.<task_id>, agent_task.completed|failed|blocked)
+  -> parent session inbox event
+```
+
+Если `event_bus.required = true`, обычный background worker не исполняет task-backed `interagent_message`/`delegate` jobs напрямую. Это защищает от гонки: task исполняется через `teamd.task.*` consumer.
+
 Webhook handler не запускает модель и не пишет transcript. Он только валидирует secret, нормализует update, дедуплицирует `telegram:update:<update_id>`, сохраняет inbound event и outbox envelope.
 
 ## Idempotency
@@ -485,9 +519,8 @@ NATS subjects текущего backbone:
 - `teamd.input.<source_kind>`;
 - `teamd.session.<id>.input`;
 - `teamd.session.<id>.output`;
-- `teamd.task.<id>.events`;
-- `teamd.agent.<id>.tasks`;
-- `teamd.delivery.<target_id>.requests`.
+- `teamd.task.<task_id>`;
+- `teamd.delivery.<target_id>`;
 - `teamd.dlq`.
 
 Контракты при этом не меняются.
@@ -563,7 +596,8 @@ schedule_create {
 4. rule router;
 5. session input worker поверх canonical `App::execute_chat_turn`;
 6. delivery worker поверх `delivery_targets`/`session_output_routes`;
-7. e2e smoke `cmd/agentd/tests/event_runtime_smoke.rs`.
+7. task worker поверх `task_registry`/`teamd.task.*` для `message_agent`;
+8. e2e smoke `cmd/agentd/tests/event_runtime_smoke.rs`.
 
 Phase 2 data flow:
 
@@ -577,6 +611,12 @@ Telegram webhook
   -> session worker
   -> NATS teamd.session.<session_id>.output
   -> delivery worker
+
+message_agent inside session worker
+  -> task_registry + NATS teamd.task.<task_id>
+  -> task worker
+  -> target agent session
+  -> task result + parent inbox event
 ```
 
 ### Phase 3: Autonomous Mesh
@@ -610,8 +650,9 @@ Telegram webhook
 3. Подключить rule router, который воспроизводит текущую привязку private chat -> selected session/default agent.
 4. Подключить session worker к canonical App/runtime chat path.
 5. Подключить delivery worker к существующим `delivery_targets`/`session_output_routes`.
-6. Перевести production Telegram bot с long polling на webhook.
-7. Удалить polling worker как legacy после стабилизации webhook runtime.
+6. Подключить task worker к `task_registry`/`teamd.task.*` для agent-agent/delegate работы.
+7. Перевести production Telegram bot с long polling на webhook.
+8. Удалить polling worker как legacy после стабилизации webhook runtime.
 
 На каждом шаге invariant: один session transcript, один provider loop, один prompt assembly path.
 

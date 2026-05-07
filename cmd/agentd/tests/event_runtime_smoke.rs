@@ -1,12 +1,16 @@
 use agent_persistence::{
     AppConfig, DeliveryRepository, DeliveryTargetRecord, EventRepository, PersistenceStore,
     RouterRepository, RouterRuleRecord, SessionOutputRouteRecord, SessionRecord, SessionRepository,
-    TaskRegistryRepository, TranscriptRepository,
+    TaskRegistryRepository, TelegramChatBindingRecord, TelegramRepository, TranscriptRepository,
 };
 use agent_runtime::provider::{ConfiguredProvider, ProviderKind};
 use agent_runtime::session::SessionSettings;
 use agentd::bootstrap;
 use agentd::delivery_worker::{DeliverySendError, DeliverySender, deliver_session_output_event};
+use agentd::event_runtime_runner::{
+    deliver_session_output_event_envelope, execute_session_input_event_envelope,
+    route_input_event_envelope,
+};
 use agentd::router_worker::route_inbound_event;
 use agentd::session_worker::execute_routed_session_event;
 use agentd::telegram::webhook::handle_webhook_update;
@@ -127,6 +131,94 @@ fn telegram_webhook_event_runtime_happy_path_smoke() {
     provider_handle.join().expect("provider thread");
 }
 
+#[test]
+fn telegram_webhook_envelopes_flow_through_router_session_and_delivery_helpers() {
+    let (provider_api_base, provider_handle) = spawn_json_server(openai_message_response_json(
+        "resp_runner",
+        "runner response",
+    ));
+    let (_temp, app) = test_app(&provider_api_base);
+    let store = store(&app);
+    seed_session_route_and_delivery(&store);
+
+    let webhook = handle_webhook_update(&app, "secret", &telegram_update(901, "runner hello"), 300)
+        .expect("webhook");
+    let input_outbox = store
+        .get_event_outbox(webhook.outbox_id.as_deref().expect("input outbox id"))
+        .expect("input outbox")
+        .expect("input outbox exists");
+    let input_envelope = serde_json::from_str(&input_outbox.payload_json).expect("input envelope");
+
+    let route = route_input_event_envelope(&app, input_envelope, 301).expect("route envelope");
+    assert_eq!(route.session_id, "session-e2e");
+
+    let session_input_outbox = store
+        .get_event_outbox("outbox-routed-telegram-update-901")
+        .expect("session input outbox")
+        .expect("session input outbox exists");
+    let session_input_envelope =
+        serde_json::from_str(&session_input_outbox.payload_json).expect("session input envelope");
+
+    let session =
+        execute_session_input_event_envelope(&app, session_input_envelope, 302).expect("session");
+    assert_eq!(session.session_id, "session-e2e");
+
+    let output_outbox = store
+        .get_event_outbox("outbox-output-routed-telegram-update-901")
+        .expect("output outbox")
+        .expect("output outbox exists");
+    let output_envelope = serde_json::from_str(&output_outbox.payload_json).expect("output event");
+    let sender = RecordingSender::default();
+
+    let delivery = deliver_session_output_event_envelope(&app, &sender, output_envelope, 303)
+        .expect("delivery");
+    assert_eq!(delivery.delivered, 1);
+    assert_eq!(
+        sender.sent.lock().expect("sent").as_slice(),
+        &[("telegram-main".to_string(), "runner response".to_string())]
+    );
+
+    provider_handle.join().expect("provider thread");
+}
+
+#[test]
+fn telegram_binding_materializes_compat_route_when_router_rule_is_missing() {
+    let (_temp, app) = test_app("http://127.0.0.1:9");
+    let store = store(&app);
+    seed_session_and_telegram_binding(&store);
+
+    let webhook =
+        handle_webhook_update(&app, "secret", &telegram_update(902, "binding hello"), 400)
+            .expect("webhook");
+    let input_outbox = store
+        .get_event_outbox(webhook.outbox_id.as_deref().expect("input outbox id"))
+        .expect("input outbox")
+        .expect("input outbox exists");
+    let input_envelope = serde_json::from_str(&input_outbox.payload_json).expect("input envelope");
+
+    let route = route_input_event_envelope(&app, input_envelope, 401).expect("route envelope");
+
+    assert_eq!(route.session_id, "session-e2e");
+    assert_eq!(route.agent_id, "default");
+    assert_eq!(route.output_targets, vec!["telegram-42"]);
+    assert_eq!(
+        route.matched_rule_id.as_deref(),
+        Some("rule-telegram-binding-42")
+    );
+    assert!(
+        store
+            .get_delivery_target("telegram-42")
+            .expect("target")
+            .is_some()
+    );
+    assert!(
+        store
+            .get_session_output_route("route-session-e2e-telegram-42")
+            .expect("output route")
+            .is_some()
+    );
+}
+
 fn test_app(provider_api_base: &str) -> (tempfile::TempDir, bootstrap::App) {
     let temp = tempfile::tempdir().expect("tempdir");
     let mut config = AppConfig {
@@ -157,22 +249,7 @@ fn store(app: &bootstrap::App) -> PersistenceStore {
 }
 
 fn seed_session_route_and_delivery(store: &PersistenceStore) {
-    store
-        .put_session(&SessionRecord {
-            id: "session-e2e".to_string(),
-            title: "session-e2e".to_string(),
-            prompt_override: None,
-            settings_json: serde_json::to_string(&SessionSettings::default()).unwrap(),
-            workspace_root: ".".to_string(),
-            agent_profile_id: "default".to_string(),
-            active_mission_id: None,
-            parent_session_id: None,
-            parent_job_id: None,
-            delegation_label: None,
-            created_at: 100,
-            updated_at: 100,
-        })
-        .expect("put session");
+    seed_session(store);
     store
         .put_router_rule(&RouterRuleRecord {
             rule_id: "rule-e2e".to_string(),
@@ -215,6 +292,44 @@ fn seed_session_route_and_delivery(store: &PersistenceStore) {
             updated_at: 100,
         })
         .expect("put output route");
+}
+
+fn seed_session_and_telegram_binding(store: &PersistenceStore) {
+    seed_session(store);
+    store
+        .put_telegram_chat_binding(&TelegramChatBindingRecord {
+            telegram_chat_id: 42,
+            scope: "private".to_string(),
+            owner_telegram_user_id: Some(7),
+            selected_session_id: Some("session-e2e".to_string()),
+            default_agent_profile_id: Some("default".to_string()),
+            last_delivered_transcript_created_at: None,
+            last_delivered_transcript_id: None,
+            inbound_queue_mode: "queue".to_string(),
+            inbound_coalesce_window_ms: Some(5000),
+            created_at: 100,
+            updated_at: 100,
+        })
+        .expect("put binding");
+}
+
+fn seed_session(store: &PersistenceStore) {
+    store
+        .put_session(&SessionRecord {
+            id: "session-e2e".to_string(),
+            title: "session-e2e".to_string(),
+            prompt_override: None,
+            settings_json: serde_json::to_string(&SessionSettings::default()).unwrap(),
+            workspace_root: ".".to_string(),
+            agent_profile_id: "default".to_string(),
+            active_mission_id: None,
+            parent_session_id: None,
+            parent_job_id: None,
+            delegation_label: None,
+            created_at: 100,
+            updated_at: 100,
+        })
+        .expect("put session");
 }
 
 fn telegram_update(update_id: i64, text: &str) -> String {
