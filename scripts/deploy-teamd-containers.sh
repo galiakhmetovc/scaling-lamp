@@ -2094,6 +2094,13 @@ files.$CADDY_DOMAIN {
   webhook_handle="  handle /v1/telegram/webhook/* {
     reverse_proxy $CADDY_DAEMON_UPSTREAM
   }"
+  core_web_handle="  handle /web* {
+    reverse_proxy $CADDY_DAEMON_UPSTREAM
+  }
+
+  handle /v1/web/* {
+    reverse_proxy $CADDY_DAEMON_UPSTREAM
+  }"
 
 	  silverbullet_domain_block=
 	  silverbullet_https_block=
@@ -2176,6 +2183,7 @@ $silverbullet_compat_redirects
     }
   }
 $webhook_handle
+$core_web_handle
 $jaeger_handle
 $filebrowser_handle
 $silverbullet_single_handle
@@ -2191,6 +2199,7 @@ search.$CADDY_DOMAIN {
 
 $CADDY_DOMAIN {
 $webhook_handle
+$core_web_handle
   respond / "teamD core edge"
 }
 $jaeger_domain_block
@@ -2213,6 +2222,7 @@ $filebrowser_http_redirect
     }
   }
 $webhook_handle
+$core_web_handle
 $jaeger_handle
 $filebrowser_handle
 
@@ -2228,6 +2238,7 @@ https://$CADDY_HOST {
     }
   }
 $webhook_handle
+$core_web_handle
 $jaeger_handle
 $filebrowser_handle
 
@@ -2249,6 +2260,7 @@ $filebrowser_http_redirect
     }
   }
 $webhook_handle
+$core_web_handle
 $jaeger_handle
 $filebrowser_handle
 
